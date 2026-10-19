@@ -213,7 +213,8 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
 
   toggleHighlightedLocalTaskMark() {
     const item = this.visibleItems[this.selectedIndex];
-    if (!item || item.kind !== "local-task") {
+    // CURRENT rows keep their builder's `kind` and mark as − remove (§6.4 / §15.5).
+    if (!item || (item.kind !== "local-task" && item.stageSection !== "current")) {
       return;
     }
     if (item.disabled) {

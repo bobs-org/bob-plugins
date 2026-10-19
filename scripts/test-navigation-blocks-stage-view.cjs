@@ -771,3 +771,59 @@ test("🔑 tooltip and 🍅 tooltip render on badges", () => {
     ),
   );
 });
+
+function pressTab(modal) {
+  modal.handleKeydown({
+    key: "Tab",
+    preventDefault() {},
+    stopPropagation() {},
+  });
+}
+
+test("Tab marks Blocks CURRENT rows and Enter removes both dependents", async () => {
+  const notes = {
+    "N.md": [
+      nContent(),
+      "- [?] #task Same-note dependent ^same",
+      "  - ⛓️ **DEPENDS ON:** [[#^n]]",
+    ].join("\n"),
+    "T.md": [
+      "- [?] #task Cross-note dependent ^t",
+      "  - ⛓️ **DEPENDS ON:** [[N#^n]]",
+    ].join("\n"),
+  };
+  const { plugin, modal } = openBlocks(notes, "N.md", 0);
+  modal.visibleItems = modal.items;
+  modal.renderResults = () => {};
+  const currentRows = modal.visibleItems.filter(
+    (row) => row && row.stageSection === "current",
+  );
+  assert.equal(currentRows.length, 2, "same-note and cross-note CURRENT rows");
+  const firstIndex = modal.visibleItems.indexOf(currentRows[0]);
+  modal.selectedIndex = firstIndex;
+  pressTab(modal);
+  assert.equal(modal.getMarkedCount(), 1);
+  assert.notEqual(modal.selectedIndex, firstIndex);
+  const applyHint = modal.getBlocksStageFooterHints().find(
+    (hint) =>
+      hint &&
+      Array.isArray(hint.keys) &&
+      (hint.keys.includes("↵") || hint.keys.includes("\u21b5")),
+  );
+  assert.ok(applyHint);
+  assert.match(applyHint.label, /apply 1/);
+  modal.selectedIndex = modal.visibleItems.indexOf(currentRows[1]);
+  pressTab(modal);
+  assert.equal(modal.getMarkedCount(), 2);
+  const applied = await modal.commitMarkedDependencies();
+  assert.equal(applied, true);
+  const leafContent = (path) => {
+    const leaf = plugin.app.workspace
+      .getLeavesOfType("markdown")
+      .find((entry) => entry.view.file.path === path);
+    return leaf ? String(leaf.view.editor.getValue() || "") : "";
+  };
+  assert.doesNotMatch(leafContent("N.md"), /DEPENDS ON:.*\^n/);
+  assert.doesNotMatch(leafContent("T.md"), /DEPENDS ON:.*\^n/);
+});
+

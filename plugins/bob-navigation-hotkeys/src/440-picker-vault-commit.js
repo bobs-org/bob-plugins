@@ -473,10 +473,11 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       }
       addRefs.push(preparation.addition);
     }
-    // Removal marks carry the field value; cross-note removals resolve
-    // through the staged block id, same-note removals through the existing
-    // note scan. Field-only values need no link edit: the planner sets the
-    // field from the line, so they fall out on their own.
+    // Removal marks carry the row's own block id first; cross-note
+    // removals resolve through the staged block id, same-note removals
+    // through that id then the existing note scan. Field-only values need
+    // no link edit: the planner sets the field from the line, so they fall
+    // out on their own.
     const noteLines = String(this.editor.getValue() || "").split(/\r?\n/);
     const removeRefs = [];
     for (const removal of batch.removals) {
@@ -489,6 +490,11 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
         } else {
           counters.other += 1;
         }
+        continue;
+      }
+      const directBlockId = normalizeBulletPropertyValue(removal.blockId || "");
+      if (directBlockId) {
+        removeRefs.push({ path: ownerPath, blockId: directBlockId });
         continue;
       }
       const candidates = [

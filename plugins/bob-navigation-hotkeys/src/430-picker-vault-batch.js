@@ -505,12 +505,18 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
       return this.refuseDependencyStale();
     }
 
-    // Removal marks carry the field value; resolve each to its `^block-id`
-    // in this note. Field-only values need no link edit: the planner sets
-    // the field from the line, so they fall out on their own.
+    // Removal marks carry the row's own block id first, then the field
+    // value; resolve each to its `^block-id` in this note. Field-only
+    // values need no link edit: the planner sets the field from the line,
+    // so they fall out on their own.
     const noteLines = originalContent.split(/\r?\n/);
     const removeRefs = [];
     removals.forEach((removal) => {
+      const directBlockId = normalizeBulletPropertyValue(removal.blockId || "");
+      if (directBlockId) {
+        removeRefs.push({ path: filePath, blockId: directBlockId });
+        return;
+      }
       const candidates = [
         removal.linkBlockId,
         removal.depValue,

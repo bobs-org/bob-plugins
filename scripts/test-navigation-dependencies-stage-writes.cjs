@@ -544,3 +544,227 @@ test("stage same-note marked batch stamps the dependent and keeps its cursor", a
   assert.equal(applied, true);
   assertParentStampedAndCursorKept(editor);
 });
+
+function warmEmptyTasksCache(plugin) {
+  plugin.app.plugins = {
+    plugins: {
+      "obsidian-tasks-plugin": { getState: () => "Warm", getTasks: () => [] },
+    },
+  };
+}
+
+function pressTab(modal) {
+  modal.handleKeydown({
+    key: "Tab",
+    preventDefault() {},
+    stopPropagation() {},
+  });
+}
+
+function stubResultsRender(modal) {
+  modal.renderResults = () => {};
+}
+
+function pluginWithOpenNotes(notes) {
+  const { plugin } = stubPlugin(notes);
+  const leaves = Object.entries(notes).map(([path, content]) => ({
+    view: {
+      file: { path, extension: "md" },
+      editor: new TransactionEditor(String(content), { line: 0, ch: 0 }),
+    },
+  }));
+  plugin.app.workspace.getLeavesOfType = (type) =>
+    type === "markdown" ? leaves : [];
+  return { plugin, leaves };
+}
+
+function enterHintLabel(modal) {
+  const hints =
+    typeof modal.getLocalTaskFooterHints === "function"
+      ? modal.getLocalTaskFooterHints()
+      : [];
+  const hint = hints.find(
+    (entry) =>
+      entry &&
+      Array.isArray(entry.keys) &&
+      (entry.keys.includes("↵") || entry.keys.includes("\u21b5")),
+  );
+  return hint ? hint.label : "";
+}
+
+function highlightBlock(modal, blockId) {
+  const index = modal.visibleItems.findIndex(
+    (entry) => entry && entry.blockId === blockId,
+  );
+  assert.ok(index >= 0, `row ^${blockId} is visible`);
+  modal.selectedIndex = index;
+  return index;
+}
+
+async function openDependsOn(notes, filePath, cursorLine, options = {}) {
+  const { plugin } = options.openNotes
+    ? pluginWithOpenNotes(notes)
+    : stubPlugin(notes);
+  warmEmptyTasksCache(plugin);
+  const editor = new TransactionEditor(String(notes[filePath] || ""), {
+    line: cursorLine,
+    ch: 0,
+  });
+  plugin.getActiveMarkdownView = () => ({
+    editor,
+    file: { path: filePath },
+  });
+  const modal = stubStageModal(plugin, editor, filePath, cursorLine);
+  modal.showValueStage(modal.selectedPropertyItem);
+  await sleep(25);
+  stubResultsRender(modal);
+  return { plugin, editor, modal };
+}
+
+const WRITE_INTRO = [
+  "- [?] #task Write introduction! [id:: B__write] [dependsOn:: B__outline, B__read] ^write",
+  "  - ⛓️ **DEPENDS ON:** [[#^outline]] • [[#^read]]",
+  "- [ ] #task Outline the post [id:: B__outline] ^outline",
+  "- [ ] #task Read sources [id:: B__read] ^read",
+].join("\n");
+
+test("Tab marks a same-note CURRENT row and Enter removes it", async () => {
+  const { editor, modal } = await openDependsOn(
+    { "sase_blog.md": WRITE_INTRO },
+    "sase_blog.md",
+    0,
+  );
+  const current = modal.visibleItems.find(
+    (entry) => entry && entry.blockId === "read" && entry.stageSection === "current",
+  );
+  assert.ok(current, "CURRENT ^read is on the stage");
+  const startIndex = highlightBlock(modal, "read");
+  pressTab(modal);
+  assert.equal(modal.getMarkedCount(), 1);
+  assert.equal(modal.selectedIndex, (startIndex + 1) % modal.visibleItems.length);
+  assert.match(
+    modal.getVaultStageSubtitle(modal.visibleItems, modal.items),
+    /1 to remove/,
+  );
+  assert.equal(enterHintLabel(modal), "apply 1");
+  const rowEl = stubRowEl();
+  modal.renderTaskValueItem(current, rowEl, "");
+  assert.ok(
+    rowEl.classes.includes("is-marked-remove"),
+    `CURRENT row is marked for removal, got ${JSON.stringify(rowEl.classes)}`,
+  );
+  const applied = await modal.commitMarkedDependencies();
+  assert.equal(applied, true);
+  assert.doesNotMatch(editor.content, /\[\[#\^read\]\]/);
+  assert.match(editor.content, /\[\[#\^outline\]\]/);
+  const writeLine = String(editor.getLine(0) || "");
+  assert.match(writeLine, /\[dependsOn::[^\]]*B__outline/);
+  assert.doesNotMatch(writeLine, /B__read/);
+  assert.equal(editor.undoGroups, 1);
+});
+
+test("Tab twice unmarks a CURRENT row", async () => {
+  const { modal } = await openDependsOn(
+    { "sase_blog.md": WRITE_INTRO },
+    "sase_blog.md",
+    0,
+  );
+  const startIndex = highlightBlock(modal, "read");
+  pressTab(modal);
+  assert.equal(modal.getMarkedCount(), 1);
+  modal.selectedIndex = startIndex;
+  pressTab(modal);
+  assert.equal(modal.getMarkedCount(), 0);
+});
+
+test("Tab mixed CURRENT removal and RESULTS add apply in one commit", async () => {
+  const content = [
+    WRITE_INTRO,
+    "- [ ] #task Extra candidate [id:: B__extra] ^extra",
+  ].join("\n");
+  const { editor, modal } = await openDependsOn(
+    { "sase_blog.md": content },
+    "sase_blog.md",
+    0,
+  );
+  highlightBlock(modal, "read");
+  pressTab(modal);
+  const extra = modal.visibleItems.find(
+    (entry) =>
+      entry && entry.blockId === "extra" && entry.stageSection === "results",
+  );
+  assert.ok(extra, "RESULTS ^extra is on the stage");
+  highlightBlock(modal, "extra");
+  pressTab(modal);
+  assert.equal(modal.getMarkedCount(), 2);
+  const applied = await modal.commitMarkedDependencies();
+  assert.equal(applied, true);
+  assert.doesNotMatch(editor.content, /\[\[#\^read\]\]/);
+  assert.match(editor.content, /\[\[#\^outline\]\]/);
+  assert.match(editor.content, /\[\[#\^extra\]\]/);
+  assert.equal(editor.undoGroups, 1);
+});
+
+test("Tab marks a missing CURRENT target and the batch removes it", async () => {
+  const content = [
+    "- [?] #task Write introduction! [id:: B__write] [dependsOn:: B__gone] ^write",
+    "  - ⛓️ **DEPENDS ON:** [[#^gone]]",
+    "- [ ] #task Outline the post [id:: B__outline] ^outline",
+  ].join("\n");
+  const { editor, modal } = await openDependsOn(
+    { "sase_blog.md": content },
+    "sase_blog.md",
+    0,
+  );
+  const missing = modal.visibleItems.find(
+    (entry) =>
+      entry &&
+      entry.stageSection === "current" &&
+      (entry.blockId === "gone" || /not found/.test(entry.displayText || "")),
+  );
+  assert.ok(missing, "missing CURRENT ^gone is on the stage");
+  modal.selectedIndex = modal.visibleItems.indexOf(missing);
+  pressTab(modal);
+  assert.equal(modal.getMarkedCount(), 1);
+  const applied = await modal.commitMarkedDependencies();
+  assert.equal(applied, true);
+  assert.doesNotMatch(editor.content, /\[\[#\^gone\]\]/);
+  assert.doesNotMatch(editor.content, /B__gone/);
+});
+
+test("Tab same-note and cross-note CURRENT removals apply in one vault batch", async () => {
+  const notes = {
+    "sase_blog.md": [
+      "- [?] #task Write introduction! [id:: B__write] [dependsOn:: B__outline, Other__x] ^write",
+      "  - ⛓️ **DEPENDS ON:** [[#^outline]] • [[Other#^x]]",
+      "- [ ] #task Outline the post [id:: B__outline] ^outline",
+    ].join("\n"),
+    "Other.md": "- [ ] #task Cross note prereq [id:: Other__x] ^x",
+  };
+  const { editor, modal } = await openDependsOn(
+    notes,
+    "sase_blog.md",
+    0,
+    { openNotes: true },
+  );
+  const sameNote = modal.visibleItems.find(
+    (entry) =>
+      entry && entry.blockId === "outline" && entry.stageSection === "current",
+  );
+  const crossNote = modal.visibleItems.find(
+    (entry) =>
+      entry && entry.blockId === "x" && entry.stageSection === "current",
+  );
+  assert.ok(sameNote, "same-note CURRENT ^outline is on the stage");
+  assert.ok(crossNote, "cross-note CURRENT ^x is on the stage");
+  modal.selectedIndex = modal.visibleItems.indexOf(sameNote);
+  pressTab(modal);
+  modal.selectedIndex = modal.visibleItems.indexOf(crossNote);
+  pressTab(modal);
+  assert.equal(modal.getMarkedCount(), 2);
+  const applied = await modal.commitMarkedDependencies();
+  assert.equal(applied, true);
+  assert.doesNotMatch(editor.content, /\[\[#\^outline\]\]/);
+  assert.doesNotMatch(editor.content, /\[\[Other#\^x\]\]/);
+});
+

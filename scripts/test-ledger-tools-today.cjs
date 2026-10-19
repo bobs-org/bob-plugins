@@ -81,7 +81,14 @@ const {
   defaultPlanCaps,
   laneBudgetFromTasks,
   resolveTodayKeys,
+  resolveTodayLinkKeys,
   todayDailyPath,
+  todayDetailsSignature,
+  todayIdsByPathFromKeys,
+  todayKeyParts,
+  todayLinkDetails,
+  todayOpenEntries,
+  todayRunningEntryLine,
 } = helpers;
 
 const DAILY = "2026/20261001.md";
@@ -554,6 +561,456 @@ test("cache rebuilds once on resolved and at midnight rollover", async () => {
       await Promise.resolve();
       await Promise.resolve();
       assert.deepEqual(plugin.api.todayKeys(), []);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("computeTodayLinks records entry range and placeholder", () => {
+  const placeholder = computeTodayLinks(
+    "## Pomodoros\n\n- [ ] () — GTD\n    - [[#^gtd]]\n",
+    DAILY,
+  );
+  assert.equal(placeholder[0].entryPlaceholder, true);
+  assert.equal(placeholder[0].entryRange, null);
+  const timed = computeTodayLinks(
+    "## Pomodoros\n\n- [ ] (**0725-0815** [t:: 50m]) — GTD\n    - [[a#^x]]\n",
+    DAILY,
+  );
+  assert.equal(timed[0].entryPlaceholder, false);
+  assert.equal(timed[0].entryRange, "0725-0815");
+  assert.equal(timed[0].entryName, "GTD");
+});
+
+test("todayOpenEntries and todayRunningEntryLine follow the unique timed rule", () => {
+  const content =
+    "## Pomodoros\n\n" +
+    "- [ ] () — BLOG\n" +
+    "    - [[a#^x]]\n" +
+    "- [ ] (**0900-0930** [t:: 30m]) — GTD\n" +
+    "    - [[a#^y]]\n" +
+    "- [x] (**1000-1030** [t:: 30m]) — DONE\n" +
+    "    - [[a#^z]]\n";
+  const entries = todayOpenEntries(content);
+  assert.deepEqual(
+    entries.map((entry) => [
+      entry.entryLine,
+      entry.name,
+      entry.range,
+      entry.placeholder,
+    ]),
+    [
+      [3, "BLOG", null, true],
+      [5, "GTD", "0900-0930", false],
+    ],
+  );
+  assert.equal(todayRunningEntryLine(entries), 5);
+  const twoTimed =
+    "## Pomodoros\n\n" +
+    "- [ ] (**0900-0930** [t:: 30m]) — ONE\n" +
+    "- [ ] (**1000-1030** [t:: 30m]) — TWO\n";
+  assert.equal(todayRunningEntryLine(todayOpenEntries(twoTimed)), null);
+  assert.equal(
+    todayRunningEntryLine(todayOpenEntries("## Pomodoros\n\n- [ ] () — BLOG\n")),
+    null,
+  );
+});
+
+test("resolveTodayLinkKeys keeps duplicates; resolveTodayKeys is first-occurrence", () => {
+  const content =
+    "## Pomodoros\n\n" +
+    "- [ ] () — ONE\n" +
+    "    - [[a#^x]]\n" +
+    "- [ ] () — TWO\n" +
+    "    - [[a#^x]]\n" +
+    "    - [[dir/a#^x]]\n";
+  const links = computeTodayLinks(content, DAILY);
+  const resolve = stubResolve({ a: "dir/a.md", "dir/a": "dir/a.md" });
+  const resolved = resolveTodayLinkKeys(links, DAILY, resolve);
+  assert.deepEqual(
+    resolved.map((item) => item.key),
+    ["dir/a.md#x", "dir/a.md#x", "dir/a.md#x"],
+  );
+  assert.deepEqual(resolveTodayKeys(links, DAILY, resolve), ["dir/a.md#x"]);
+});
+
+test("todayLinkDetails: named running, placeholder, unnamed home, unnamed none", () => {
+  const runningLink = {
+    entryLine: 3,
+    entryName: "GTD",
+    entryRange: "0725-0815",
+    entryPlaceholder: false,
+    ledgerLine: 4,
+    embedded: false,
+  };
+  const placeholderLink = {
+    entryLine: 6,
+    entryName: "BLOG",
+    entryRange: null,
+    entryPlaceholder: true,
+    ledgerLine: 7,
+    embedded: false,
+  };
+  const unnamedHomeLink = {
+    entryLine: 9,
+    entryName: null,
+    entryRange: "0940-1010",
+    entryPlaceholder: false,
+    ledgerLine: 10,
+    embedded: true,
+  };
+  const unnamedNoneLink = {
+    entryLine: 12,
+    entryName: null,
+    entryRange: null,
+    entryPlaceholder: true,
+    ledgerLine: 13,
+    embedded: false,
+  };
+  const details = todayLinkDetails(
+    [
+      { key: "a.md#run", link: runningLink },
+      { key: "a.md#queued", link: placeholderLink },
+      { key: "a.md#home", link: unnamedHomeLink },
+      { key: "a.md#none", link: unnamedNoneLink },
+    ],
+    {
+      runningEntryLine: 3,
+      homeLabels: new Map([[9, "bob · dev +1"]]),
+    },
+  );
+  assert.deepEqual(details.get("a.md#run"), [
+    {
+      entryLine: 3,
+      ledgerLine: 4,
+      name: "GTD",
+      range: "0725-0815",
+      placeholder: false,
+      running: true,
+      label: "GTD",
+      embedded: false,
+    },
+  ]);
+  assert.deepEqual(details.get("a.md#queued"), [
+    {
+      entryLine: 6,
+      ledgerLine: 7,
+      name: "BLOG",
+      range: null,
+      placeholder: true,
+      running: false,
+      label: "BLOG",
+      embedded: false,
+    },
+  ]);
+  assert.deepEqual(details.get("a.md#home"), [
+    {
+      entryLine: 9,
+      ledgerLine: 10,
+      name: null,
+      range: "0940-1010",
+      placeholder: false,
+      running: false,
+      label: "bob · dev +1",
+      embedded: true,
+    },
+  ]);
+  assert.deepEqual(details.get("a.md#none"), [
+    {
+      entryLine: 12,
+      ledgerLine: 13,
+      name: null,
+      range: null,
+      placeholder: true,
+      running: false,
+      label: null,
+      embedded: false,
+    },
+  ]);
+});
+
+test("todayLinkDetails orders running first and keeps one detail per key+entry", () => {
+  const queued = {
+    entryLine: 3,
+    entryName: "BLOG",
+    entryRange: null,
+    entryPlaceholder: true,
+    ledgerLine: 4,
+    embedded: false,
+  };
+  const running = {
+    entryLine: 6,
+    entryName: "GTD",
+    entryRange: "0900-0930",
+    entryPlaceholder: false,
+    ledgerLine: 7,
+    embedded: false,
+  };
+  const duplicate = {
+    entryLine: 3,
+    entryName: "BLOG",
+    entryRange: null,
+    entryPlaceholder: true,
+    ledgerLine: 5,
+    embedded: false,
+  };
+  const details = todayLinkDetails(
+    [
+      { key: "a.md#x", link: queued },
+      { key: "a.md#x", link: duplicate },
+      { key: "a.md#x", link: running },
+    ],
+    { runningEntryLine: 6 },
+  );
+  const list = details.get("a.md#x");
+  assert.equal(list.length, 2);
+  assert.equal(list[0].running, true);
+  assert.equal(list[0].entryLine, 6);
+  assert.equal(list[1].entryLine, 3);
+  assert.equal(list[1].ledgerLine, 4);
+});
+
+test("todayKeyParts splits at the last hash; idsByPath groups block ids", () => {
+  assert.deepEqual(todayKeyParts("notes/a.md#x"), {
+    path: "notes/a.md",
+    blockId: "x",
+  });
+  const ids = todayIdsByPathFromKeys(["a.md#x", "a.md#z", "b.md#y"]);
+  assert.deepEqual([...ids.get("a.md")].sort(), ["x", "z"]);
+  assert.deepEqual([...ids.get("b.md")], ["y"]);
+});
+
+test("todayDetailsSignature changes only when details change", () => {
+  const link = {
+    entryLine: 3,
+    entryName: "BLOG",
+    entryRange: null,
+    entryPlaceholder: true,
+    ledgerLine: 4,
+    embedded: false,
+  };
+  const first = todayLinkDetails([{ key: "a.md#x", link }], {
+    runningEntryLine: null,
+  });
+  const same = todayLinkDetails([{ key: "a.md#x", link }], {
+    runningEntryLine: null,
+  });
+  const running = todayLinkDetails(
+    [
+      {
+        key: "a.md#x",
+        link: {
+          ...link,
+          entryRange: "0900-0930",
+          entryPlaceholder: false,
+        },
+      },
+    ],
+    { runningEntryLine: 3 },
+  );
+  assert.equal(todayDetailsSignature(first), todayDetailsSignature(same));
+  assert.notEqual(todayDetailsSignature(first), todayDetailsSignature(running));
+});
+
+test("idsByPath and details accessors follow the rebuilt cache", () => {
+  withMissingConfig(() => {
+    const now = new Date(2026, 9, 1, 8, 0, 0);
+    const dailyPath = todayDailyPath(now, {});
+    const app = makeTodayApp({
+      files: {},
+      targets: { a: "a.md", b: "b.md" },
+      triggers: [],
+    });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      const content =
+        "## Pomodoros\n\n" +
+        "- [ ] (**0725-0815** [t:: 50m]) — GTD\n" +
+        "    - [[a#^x]]\n" +
+        "    - [[b#^y]]\n";
+      plugin.rebuildTodayCache(content, dailyPath, now);
+      assert.deepEqual([...plugin.todayIdsForPath("a.md")], ["x"]);
+      assert.deepEqual([...plugin.todayIdsForPath("b")], ["y"]);
+      assert.equal(plugin.todayIdsForPath("missing.md").size, 0);
+      const details = plugin.todayDetailsForKey("a.md#x");
+      assert.equal(details.length, 1);
+      assert.equal(details[0].running, true);
+      assert.equal(details[0].label, "GTD");
+      assert.equal(details[0].range, "0725-0815");
+      assert.deepEqual(plugin.todayDetailsForKey("missing.md#q"), []);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("details-only change refreshes marks without a Tasks reload", () => {
+  withMissingConfig(() => {
+    const now = new Date(2026, 9, 1, 8, 0, 0);
+    const dailyPath = todayDailyPath(now, {});
+    const triggers = [];
+    const app = makeTodayApp({ files: {}, targets: { a: "a.md" }, triggers });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      const marks = [];
+      const plans = [];
+      plugin.scheduleTodayMarksRefresh = () => marks.push("marks");
+      plugin.schedulePlanBlockRerender = () => plans.push("plan");
+      const queued =
+        "## Pomodoros\n\n- [ ] () — BLOG\n    - [[a#^x]]\n";
+      const running =
+        "## Pomodoros\n\n- [ ] (**0900-0930** [t:: 30m]) — BLOG\n    - [[a#^x]]\n";
+      plugin.rebuildTodayCache(queued, dailyPath, now);
+      triggers.length = 0;
+      marks.length = 0;
+      plans.length = 0;
+      assert.equal(plugin.rebuildTodayCache(running, dailyPath, now), false);
+      assert.deepEqual(triggers, []);
+      assert.deepEqual(plans, []);
+      assert.deepEqual(marks, ["marks"]);
+      const details = plugin.todayDetailsForKey("a.md#x");
+      assert.equal(details[0].running, true);
+      assert.equal(details[0].placeholder, false);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("entered stamps only when the cache was already ready, then prune", () => {
+  withMissingConfig(() => {
+    const now = new Date(2026, 9, 1, 8, 0, 0);
+    const dailyPath = todayDailyPath(now, {});
+    const app = makeTodayApp({ files: {}, targets: { a: "a.md" }, triggers: [] });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      plugin.rebuildTodayCache(LEDGER, dailyPath, now);
+      assert.equal(plugin.todayMarkEnteredAt("a.md#x"), null);
+      const joined = new Date(now.getTime() + 100);
+      const extra =
+        "## Pomodoros\n\n- [ ] () — GOALS\n    - [[a#^x]]\n    - [[a#^y]]\n";
+      plugin.rebuildTodayCache(extra, dailyPath, joined);
+      assert.equal(plugin.todayMarkEnteredAt("a.md#x"), null);
+      assert.equal(plugin.todayMarkEnteredAt("a.md#y"), joined.getTime());
+      const pruned = new Date(joined.getTime() + 2001);
+      plugin.rebuildTodayCache(extra, dailyPath, pruned);
+      assert.equal(plugin.todayMarkEnteredAt("a.md#y"), null);
+      const next = new Date(2026, 9, 2, 8, 0, 0);
+      const nextPath = todayDailyPath(next, {});
+      plugin.rebuildTodayCache(LEDGER, nextPath, next);
+      assert.equal(plugin.todayMarkEnteredAt("a.md#x"), null);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("generation guard: reverse-order async reads keep the newer", async () => {
+  await withMissingConfig(async () => {
+    const now = new Date(2026, 9, 1, 8, 0, 0);
+    const app = makeTodayApp({ files: {}, targets: { a: "a.md" }, triggers: [] });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      const waits = [];
+      plugin.readPlanBlockContent = () =>
+        new Promise((resolve) => waits.push(resolve));
+      const first = plugin.refreshTodayCacheFromDaily(now);
+      const second = plugin.refreshTodayCacheFromDaily(now);
+      assert.equal(waits.length, 2);
+      waits[1]("## Pomodoros\n\n- [ ] () — TWO\n    - [[a#^z]]\n");
+      waits[0]("## Pomodoros\n\n- [ ] () — ONE\n    - [[a#^x]]\n");
+      await first;
+      await second;
+      assert.deepEqual(plugin.api.todayKeys(), ["a.md#z"]);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("generation guard: a sync rebuild wins over an in-flight async read", async () => {
+  await withMissingConfig(async () => {
+    const now = new Date(2026, 9, 1, 8, 0, 0);
+    const dailyPath = todayDailyPath(now, {});
+    const app = makeTodayApp({ files: {}, targets: { a: "a.md" }, triggers: [] });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      const waits = [];
+      plugin.readPlanBlockContent = () =>
+        new Promise((resolve) => waits.push(resolve));
+      const pending = plugin.refreshTodayCacheFromDaily(now);
+      assert.equal(
+        plugin.refreshTodayCacheForChangedFile(
+          { path: dailyPath },
+          LEDGER,
+          now,
+        ),
+        true,
+      );
+      assert.deepEqual(plugin.api.todayKeys(), ["a.md#x"]);
+      waits[0]("## Pomodoros\n\n- [ ] () — STALE\n    - [[a#^z]]\n");
+      assert.equal(await pending, false);
+      assert.deepEqual(plugin.api.todayKeys(), ["a.md#x"]);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("revalidateTodayCache is throttled and refreshes when not ready", () => {
+  withMissingConfig(() => {
+    const now = new Date(2026, 9, 1, 8, 0, 0);
+    const app = makeTodayApp({ files: {}, targets: {}, triggers: [] });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      let rollover = 0;
+      let fromDaily = 0;
+      plugin.refreshTodayCacheForRollover = () => {
+        rollover += 1;
+        return false;
+      };
+      plugin.refreshTodayCacheFromDaily = () => {
+        fromDaily += 1;
+        return Promise.resolve(false);
+      };
+      plugin.isTodayCacheReady = () => false;
+      assert.equal(plugin.revalidateTodayCache(now), true);
+      assert.equal(rollover, 1);
+      assert.equal(fromDaily, 1);
+      assert.equal(
+        plugin.revalidateTodayCache(new Date(now.getTime() + 500)),
+        false,
+      );
+      assert.equal(rollover, 1);
+      assert.equal(fromDaily, 1);
+      assert.equal(
+        plugin.revalidateTodayCache(new Date(now.getTime() + 1000)),
+        true,
+      );
+      assert.equal(rollover, 2);
+      assert.equal(fromDaily, 2);
+      plugin.isTodayCacheReady = () => true;
+      assert.equal(
+        plugin.revalidateTodayCache(new Date(now.getTime() + 2500)),
+        false,
+      );
+      assert.equal(fromDaily, 2);
+      plugin.refreshTodayCacheForRollover = () => {
+        rollover += 1;
+        return true;
+      };
+      assert.equal(
+        plugin.revalidateTodayCache(new Date(now.getTime() + 4000)),
+        true,
+      );
+      assert.equal(fromDaily, 2);
     } finally {
       plugin.onunload();
     }

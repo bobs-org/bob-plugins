@@ -14,37 +14,141 @@ class BobLedgerToolsTodayLocationMixin {
     }
   }
 
+  todayHomeLabelsForCache(content, dailyPath, resolved) {
+    const labels = new Map();
+    const list = Array.isArray(resolved) ? resolved : [];
+    const needsHomes = list.some(
+      (item) => item && item.link && !item.link.entryName,
+    );
+    if (!needsHomes) {
+      return labels;
+    }
+    try {
+      let exempt = ["GTD"];
+      try {
+        const loaded = loadPlanCaps();
+        const caps = loaded && loaded.caps ? loaded.caps : null;
+        if (caps && Array.isArray(caps.exempt)) {
+          exempt = caps.exempt;
+        }
+      } catch (error) {
+        exempt = ["GTD"];
+      }
+      const app = this.app || {};
+      const model = pomodoroHomeModels(
+        content,
+        dailyPath,
+        app.metadataCache,
+        app.vault,
+        exempt,
+      );
+      const sessions = model && Array.isArray(model.entries) ? model.entries : [];
+      for (const session of sessions) {
+        if (!session || typeof session.line !== "number") {
+          continue;
+        }
+        const label =
+          typeof session.label === "string" ? session.label.trim() : "";
+        if (!label) {
+          continue;
+        }
+        labels.set(session.line + 1, label);
+      }
+    } catch (error) {
+      return new Map();
+    }
+    return labels;
+  }
+
   // Rebuild the cache from daily-note text. When the key set changes,
   // every open Tasks query re-reads via TODAY_RELOAD_EVENT and the
   // bob-plan blocks re-render (debounced, like the existing re-render).
   // Becoming ready for the current day (including an empty TODAY set)
   // also schedules that refresh so daily section badges can leave `–`.
+  // A details-only change refreshes Today marks without a Tasks reload.
   // Returns true when the membership keys changed.
   rebuildTodayCache(content, dailyPath, now = new Date()) {
     if (!this.todayCache || !(this.todayCache.rank instanceof Map)) {
-      this.todayCache = {
-        date: null,
-        dailyPath: null,
-        keys: [],
-        rank: new Map(),
-      };
+      this.todayCache = emptyTodayCache();
     }
-    const wasReady = this.isTodayCacheReady(now);
+    if (!(this.todayEnteredAt instanceof Map)) {
+      this.todayEnteredAt = new Map();
+    }
+    const clock = now instanceof Date ? now : new Date();
+    const nowMs = clock.getTime();
+    const wasReady = this.isTodayCacheReady(clock);
+    const previousDate = this.todayCache.date;
+    const previousPath = this.todayCache.dailyPath;
+    const previousKeys = Array.isArray(this.todayCache.keys)
+      ? this.todayCache.keys
+      : [];
+    const previousSignature =
+      typeof this.todayCache.detailsSignature === "string"
+        ? this.todayCache.detailsSignature
+        : "";
+    const previousReadySame =
+      wasReady &&
+      previousDate === this.todayLocalDate(clock) &&
+      sameVaultPath(previousPath || "", dailyPath);
     const links = computeTodayLinks(content, dailyPath);
-    const keys = resolveTodayKeys(links, dailyPath, (target, daily) =>
+    const resolved = resolveTodayLinkKeys(links, dailyPath, (target, daily) =>
       this.resolveTodayLink(target, daily),
     );
-    const previous = this.todayCache.keys || [];
+    const keys = [];
+    const seenKeys = new Set();
+    for (const item of resolved) {
+      if (!item || typeof item.key !== "string" || !item.key) {
+        continue;
+      }
+      if (seenKeys.has(item.key)) {
+        continue;
+      }
+      seenKeys.add(item.key);
+      keys.push(item.key);
+    }
+    const openEntries = todayOpenEntries(content);
+    const runningEntryLine = todayRunningEntryLine(openEntries);
+    const homeLabels = this.todayHomeLabelsForCache(
+      content,
+      dailyPath,
+      resolved,
+    );
+    const details = todayLinkDetails(resolved, {
+      runningEntryLine,
+      homeLabels,
+    });
+    const detailsSignature = todayDetailsSignature(details);
+    const idsByPath = todayIdsByPathFromKeys(keys);
     const changed =
-      previous.length !== keys.length ||
-      previous.some((key, index) => key !== keys[index]);
+      previousKeys.length !== keys.length ||
+      previousKeys.some((key, index) => key !== keys[index]);
+    const detailsChanged = detailsSignature !== previousSignature;
+    const dateOrPathChanged =
+      previousDate !== this.todayLocalDate(clock) ||
+      !sameVaultPath(previousPath || "", dailyPath);
+    if (previousReadySame) {
+      const previousSet = new Set(previousKeys);
+      for (const key of keys) {
+        if (!previousSet.has(key)) {
+          this.todayEnteredAt.set(key, nowMs);
+        }
+      }
+    }
+    for (const [key, stamped] of Array.from(this.todayEnteredAt.entries())) {
+      if (!seenKeys.has(key) || nowMs - stamped > 2000) {
+        this.todayEnteredAt.delete(key);
+      }
+    }
     this.todayCache = {
-      date: this.todayLocalDate(now),
+      date: this.todayLocalDate(clock),
       dailyPath,
       keys,
       rank: new Map(keys.map((key, index) => [key, index])),
+      details,
+      detailsSignature,
+      idsByPath,
     };
-    const becameReady = !wasReady && this.isTodayCacheReady(now);
+    const becameReady = !wasReady && this.isTodayCacheReady(clock);
     if (changed || becameReady) {
       try {
         const workspace = this.app && this.app.workspace;
@@ -63,6 +167,16 @@ class BobLedgerToolsTodayLocationMixin {
         this.repaintReadingBoardBlocks();
       }
     }
+    if (
+      (changed || becameReady || detailsChanged || dateOrPathChanged) &&
+      typeof this.scheduleTodayMarksRefresh === "function"
+    ) {
+      try {
+        this.scheduleTodayMarksRefresh();
+      } catch (error) {
+        // Marks refresh is best-effort; the cache is still correct.
+      }
+    }
     return changed;
   }
 
@@ -79,8 +193,12 @@ class BobLedgerToolsTodayLocationMixin {
     if (!dailyPath) {
       return Promise.resolve(false);
     }
+    const gen = (this.todayCacheGen = (this.todayCacheGen || 0) + 1);
     return Promise.resolve(this.readPlanBlockContent(dailyPath)).then(
       (content) => {
+        if (gen !== this.todayCacheGen) {
+          return false;
+        }
         // A missing daily note means an empty Today, not an error.
         if (typeof content !== "string") {
           return this.rebuildTodayCache("", dailyPath, now);
@@ -100,11 +218,31 @@ class BobLedgerToolsTodayLocationMixin {
       return false;
     }
     if (typeof data === "string") {
+      this.todayCacheGen = (this.todayCacheGen || 0) + 1;
       this.rebuildTodayCache(data, changedPath, now);
       return true;
     }
     this.refreshTodayCacheFromDaily(now);
     return true;
+  }
+
+  revalidateTodayCache(now = new Date()) {
+    const clock = now instanceof Date ? now : new Date();
+    const nowMs = clock.getTime();
+    const last =
+      typeof this.todayRevalidateAt === "number" ? this.todayRevalidateAt : 0;
+    if (last && nowMs - last < 1000) {
+      return false;
+    }
+    this.todayRevalidateAt = nowMs;
+    if (this.refreshTodayCacheForRollover(clock)) {
+      return true;
+    }
+    if (!this.isTodayCacheReady(clock)) {
+      this.refreshTodayCacheFromDaily(clock);
+      return true;
+    }
+    return false;
   }
 
   refreshTodayCacheForVaultEvent(file, now = new Date()) {

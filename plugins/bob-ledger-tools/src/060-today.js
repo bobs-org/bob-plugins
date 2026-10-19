@@ -194,17 +194,28 @@ function todayLinkFromBody(body) {
   return token;
 }
 
-// Every dedicated Task Link under today's open entries, in ledger order.
-// `dailyPath` canonicalizes empty targets only for key building in
-// `resolveTodayKeys`; the recorded `target` is the written path part.
-function computeTodayLinks(content, dailyPath) {
+function emptyTodayCache() {
+  return {
+    date: null,
+    dailyPath: null,
+    keys: [],
+    rank: new Map(),
+    details: new Map(),
+    detailsSignature: "",
+    idsByPath: new Map(),
+  };
+}
+
+function todayEachOpenEntry(content, visit) {
+  if (typeof visit !== "function") {
+    return;
+  }
   const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
   const section = planSectionRange(lines);
   if (!section) {
-    return [];
+    return;
   }
   const fenced = planFencedLines(lines, section.start, section.end);
-  const links = [];
   for (let index = section.start; index <= section.end; index += 1) {
     if (fenced.has(index)) {
       continue;
@@ -229,22 +240,39 @@ function computeTodayLinks(content, dailyPath) {
       }
       range.push(sub);
     }
-    if (range.length === 0) {
-      continue;
+    const leading = planLeadingRange(parsed.body);
+    const entryName =
+      leading.length === null
+        ? null
+        : planParseNameTail(parsed.body.slice(leading.length));
+    visit({
+      index,
+      lines,
+      fenced,
+      parsed,
+      leading,
+      entryName,
+      range,
+    });
+  }
+}
+
+// Every dedicated Task Link under today's open entries, in ledger order.
+// `dailyPath` canonicalizes empty targets only for key building in
+// `resolveTodayKeys`; the recorded `target` is the written path part.
+function computeTodayLinks(content, dailyPath) {
+  const links = [];
+  todayEachOpenEntry(content, (entry) => {
+    const range = entry.range;
+    if (!range || range.length === 0) {
+      return;
     }
-    const childIndent = todayIndentLen(lines[range[0]]);
-    const entryName = (() => {
-      const leading = planLeadingRange(parsed.body);
-      if (leading.length === null) {
-        return null;
-      }
-      return planParseNameTail(parsed.body.slice(leading.length));
-    })();
+    const childIndent = todayIndentLen(entry.lines[range[0]]);
     for (const sub of range) {
-      if (todayIndentLen(lines[sub]) !== childIndent) {
+      if (todayIndentLen(entry.lines[sub]) !== childIndent) {
         continue;
       }
-      const bullet = todayBulletBody(lines[sub]);
+      const bullet = todayBulletBody(entry.lines[sub]);
       if (!bullet) {
         continue;
       }
@@ -253,57 +281,220 @@ function computeTodayLinks(content, dailyPath) {
         continue;
       }
       links.push({
-        entryLine: index + 1,
-        entryName,
+        entryLine: entry.index + 1,
+        entryName: entry.entryName,
+        entryRange: entry.leading.timeRange,
+        entryPlaceholder: entry.leading.placeholder === true,
         ledgerLine: sub + 1,
         target: token.pathPart,
         blockId: token.blockId,
         embedded: token.embedded,
       });
     }
-  }
+  });
   return links;
+}
+
+function todayOpenEntries(content) {
+  const entries = [];
+  todayEachOpenEntry(content, (entry) => {
+    entries.push(
+      Object.freeze({
+        entryLine: entry.index + 1,
+        name: entry.entryName,
+        range: entry.leading.timeRange,
+        placeholder: entry.leading.placeholder === true,
+      }),
+    );
+  });
+  return Object.freeze(entries);
+}
+
+function todayRunningEntryLine(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const timed = [];
+  for (const entry of list) {
+    if (!entry || entry.placeholder === true) {
+      continue;
+    }
+    if (typeof entry.range === "string" && entry.range) {
+      timed.push(entry);
+    }
+  }
+  if (timed.length !== 1) {
+    return null;
+  }
+  const line = timed[0].entryLine;
+  return typeof line === "number" ? line : null;
+}
+
+function todayResolveLinkKey(link, dailyPath, resolve) {
+  if (!link || typeof link.blockId !== "string" || !link.blockId) {
+    return null;
+  }
+  let resolved = null;
+  const target = typeof link.target === "string" ? link.target : "";
+  if (target === "") {
+    resolved = typeof dailyPath === "string" ? dailyPath : null;
+  } else if (typeof resolve === "function") {
+    try {
+      const file = resolve(target, dailyPath);
+      resolved = file && typeof file.path === "string" ? file.path : null;
+    } catch (error) {
+      resolved = null;
+    }
+  }
+  if (typeof resolved !== "string" || !resolved) {
+    return null;
+  }
+  const withExtension = /\.md$/i.test(resolved) ? resolved : `${resolved}.md`;
+  return `${withExtension}#${link.blockId}`;
+}
+
+// Every resolved Today link in ledger order, without dedupe.
+function resolveTodayLinkKeys(links, dailyPath, resolve) {
+  const out = [];
+  const list = Array.isArray(links) ? links : [];
+  for (const link of list) {
+    const key = todayResolveLinkKey(link, dailyPath, resolve);
+    if (!key) {
+      continue;
+    }
+    out.push(Object.freeze({ link, key }));
+  }
+  return out;
 }
 
 // Ordered, unique Today keys (`"<vault path with .md>#<block id>"`).
 // `resolve(target, dailyPath)` wraps
 // `app.metadataCache.getFirstLinkpathDest`; an empty target is the daily
-// note itself. Unresolved targets are skipped.
+// note itself. Unresolved targets are skipped. First-occurrence dedupe of
+// `resolveTodayLinkKeys`.
 function resolveTodayKeys(links, dailyPath, resolve) {
   const seen = new Set();
   const keys = [];
-  const list = Array.isArray(links) ? links : [];
-  for (const link of list) {
-    if (!link || typeof link.blockId !== "string" || !link.blockId) {
+  for (const item of resolveTodayLinkKeys(links, dailyPath, resolve)) {
+    if (!item || typeof item.key !== "string" || seen.has(item.key)) {
       continue;
     }
-    let resolved = null;
-    const target = typeof link.target === "string" ? link.target : "";
-    if (target === "") {
-      resolved = typeof dailyPath === "string" ? dailyPath : null;
-    } else if (typeof resolve === "function") {
-      try {
-        const file = resolve(target, dailyPath);
-        resolved =
-          file && typeof file.path === "string" ? file.path : null;
-      } catch (error) {
-        resolved = null;
-      }
-    }
-    if (typeof resolved !== "string" || !resolved) {
-      continue;
-    }
-    const withExtension = /\.md$/i.test(resolved)
-      ? resolved
-      : `${resolved}.md`;
-    const key = `${withExtension}#${link.blockId}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    keys.push(key);
+    seen.add(item.key);
+    keys.push(item.key);
   }
   return keys;
+}
+
+function todayKeyParts(key) {
+  const text = typeof key === "string" ? key : "";
+  const hash = text.lastIndexOf("#");
+  if (hash === -1) {
+    return { path: text, blockId: "" };
+  }
+  return {
+    path: text.slice(0, hash),
+    blockId: text.slice(hash + 1),
+  };
+}
+
+function todayIdsByPathFromKeys(keys) {
+  const map = new Map();
+  for (const key of Array.isArray(keys) ? keys : []) {
+    const parts = todayKeyParts(key);
+    if (!parts.path || !parts.blockId) {
+      continue;
+    }
+    let ids = map.get(parts.path);
+    if (!(ids instanceof Set)) {
+      ids = new Set();
+      map.set(parts.path, ids);
+    }
+    ids.add(parts.blockId);
+  }
+  return map;
+}
+
+function todayLinkDetails(resolved, options) {
+  const runningEntryLine =
+    options && typeof options.runningEntryLine === "number"
+      ? options.runningEntryLine
+      : null;
+  const homeLabels =
+    options && options.homeLabels instanceof Map ? options.homeLabels : new Map();
+  const map = new Map();
+  const seen = new Set();
+  const list = Array.isArray(resolved) ? resolved : [];
+  for (const item of list) {
+    if (!item || typeof item.key !== "string" || !item.key || !item.link) {
+      continue;
+    }
+    const link = item.link;
+    const entryLine = link.entryLine;
+    const seenKey = `${item.key}\0${String(entryLine)}`;
+    if (seen.has(seenKey)) {
+      continue;
+    }
+    seen.add(seenKey);
+    const name =
+      typeof link.entryName === "string" && link.entryName
+        ? link.entryName
+        : null;
+    const home = homeLabels.get(entryLine);
+    const label =
+      name || (typeof home === "string" && home ? home : null);
+    const detail = Object.freeze({
+      entryLine,
+      ledgerLine: link.ledgerLine,
+      name,
+      range: typeof link.entryRange === "string" ? link.entryRange : null,
+      placeholder: link.entryPlaceholder === true,
+      running: entryLine === runningEntryLine,
+      label,
+      embedded: link.embedded === true,
+    });
+    const existing = map.get(item.key);
+    if (existing) {
+      existing.push(detail);
+    } else {
+      map.set(item.key, [detail]);
+    }
+  }
+  for (const [key, details] of map) {
+    details.sort((left, right) => {
+      if (left.running !== right.running) {
+        return left.running ? -1 : 1;
+      }
+      const leftLine =
+        typeof left.entryLine === "number" ? left.entryLine : 0;
+      const rightLine =
+        typeof right.entryLine === "number" ? right.entryLine : 0;
+      return leftLine - rightLine;
+    });
+    map.set(key, Object.freeze(details.slice()));
+  }
+  return map;
+}
+
+function todayDetailsSignature(details) {
+  if (!(details instanceof Map)) {
+    return "";
+  }
+  const rows = [];
+  for (const [key, list] of details) {
+    const items = Array.isArray(list) ? list : [];
+    rows.push([
+      key,
+      items.map((detail) => ({
+        entryLine: detail ? detail.entryLine : null,
+        ledgerLine: detail ? detail.ledgerLine : null,
+        name: detail ? detail.name : null,
+        range: detail ? detail.range : null,
+        placeholder: !!(detail && detail.placeholder),
+        running: !!(detail && detail.running),
+        label: detail ? detail.label : null,
+        embedded: !!(detail && detail.embedded),
+      })),
+    ]);
+  }
+  return JSON.stringify(rows);
 }
 
 function planTaskBlockId(task) {

@@ -199,10 +199,14 @@ class BobLedgerToolsPlugin extends Plugin {
     this.liveWidgetRefreshTimer = null;
     this.planPaintGen = 0;
     this.planPaintGens = new Map();
-    // Synchronous Today cache: `{ date, dailyPath, keys, rank }`. Built
-    // from the daily note's text (never awaited inside the api); before
-    // the first build `isToday` returns false for every task.
-    this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
+    // Synchronous Today cache: `{ date, dailyPath, keys, rank, details,
+    // detailsSignature, idsByPath }`. Built from the daily note's text
+    // (never awaited inside the api); before the first build `isToday`
+    // returns false for every task.
+    this.todayCache = emptyTodayCache();
+    this.todayCacheGen = 0;
+    this.todayEnteredAt = new Map();
+    this.todayRevalidateAt = 0;
     this.statsAppendQueue = Promise.resolve();
     this.api = Object.freeze({
       version: 3,
@@ -486,6 +490,24 @@ class BobLedgerToolsPlugin extends Plugin {
       }
     }
     try {
+      if (typeof this.registerDomEvent === "function") {
+        if (typeof window !== "undefined" && window) {
+          this.registerDomEvent(window, "focus", () =>
+            this.revalidateTodayCache(),
+          );
+        }
+        if (typeof document !== "undefined" && document) {
+          this.registerDomEvent(document, "visibilitychange", () => {
+            if (document.visibilityState === "visible") {
+              this.revalidateTodayCache();
+            }
+          });
+        }
+      }
+    } catch (error) {
+      // Focus/visibility revalidation is best-effort on test hosts.
+    }
+    try {
       void this.dashboardCollectionsEnsureBaseContracts();
     } catch (error) {
       // Base contracts load asynchronously; the snapshot stays
@@ -713,7 +735,10 @@ class BobLedgerToolsPlugin extends Plugin {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
+    this.todayCache = emptyTodayCache();
+    this.todayCacheGen = 0;
+    this.todayEnteredAt = new Map();
+    this.todayRevalidateAt = 0;
     if (
       this.freshnessStatusTimer !== null &&
       this.freshnessStatusTimer !== undefined &&

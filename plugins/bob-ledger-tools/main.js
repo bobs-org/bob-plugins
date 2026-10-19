@@ -2988,17 +2988,28 @@ function todayLinkFromBody(body) {
   return token;
 }
 
-// Every dedicated Task Link under today's open entries, in ledger order.
-// `dailyPath` canonicalizes empty targets only for key building in
-// `resolveTodayKeys`; the recorded `target` is the written path part.
-function computeTodayLinks(content, dailyPath) {
+function emptyTodayCache() {
+  return {
+    date: null,
+    dailyPath: null,
+    keys: [],
+    rank: new Map(),
+    details: new Map(),
+    detailsSignature: "",
+    idsByPath: new Map(),
+  };
+}
+
+function todayEachOpenEntry(content, visit) {
+  if (typeof visit !== "function") {
+    return;
+  }
   const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
   const section = planSectionRange(lines);
   if (!section) {
-    return [];
+    return;
   }
   const fenced = planFencedLines(lines, section.start, section.end);
-  const links = [];
   for (let index = section.start; index <= section.end; index += 1) {
     if (fenced.has(index)) {
       continue;
@@ -3023,22 +3034,39 @@ function computeTodayLinks(content, dailyPath) {
       }
       range.push(sub);
     }
-    if (range.length === 0) {
-      continue;
+    const leading = planLeadingRange(parsed.body);
+    const entryName =
+      leading.length === null
+        ? null
+        : planParseNameTail(parsed.body.slice(leading.length));
+    visit({
+      index,
+      lines,
+      fenced,
+      parsed,
+      leading,
+      entryName,
+      range,
+    });
+  }
+}
+
+// Every dedicated Task Link under today's open entries, in ledger order.
+// `dailyPath` canonicalizes empty targets only for key building in
+// `resolveTodayKeys`; the recorded `target` is the written path part.
+function computeTodayLinks(content, dailyPath) {
+  const links = [];
+  todayEachOpenEntry(content, (entry) => {
+    const range = entry.range;
+    if (!range || range.length === 0) {
+      return;
     }
-    const childIndent = todayIndentLen(lines[range[0]]);
-    const entryName = (() => {
-      const leading = planLeadingRange(parsed.body);
-      if (leading.length === null) {
-        return null;
-      }
-      return planParseNameTail(parsed.body.slice(leading.length));
-    })();
+    const childIndent = todayIndentLen(entry.lines[range[0]]);
     for (const sub of range) {
-      if (todayIndentLen(lines[sub]) !== childIndent) {
+      if (todayIndentLen(entry.lines[sub]) !== childIndent) {
         continue;
       }
-      const bullet = todayBulletBody(lines[sub]);
+      const bullet = todayBulletBody(entry.lines[sub]);
       if (!bullet) {
         continue;
       }
@@ -3047,57 +3075,220 @@ function computeTodayLinks(content, dailyPath) {
         continue;
       }
       links.push({
-        entryLine: index + 1,
-        entryName,
+        entryLine: entry.index + 1,
+        entryName: entry.entryName,
+        entryRange: entry.leading.timeRange,
+        entryPlaceholder: entry.leading.placeholder === true,
         ledgerLine: sub + 1,
         target: token.pathPart,
         blockId: token.blockId,
         embedded: token.embedded,
       });
     }
-  }
+  });
   return links;
+}
+
+function todayOpenEntries(content) {
+  const entries = [];
+  todayEachOpenEntry(content, (entry) => {
+    entries.push(
+      Object.freeze({
+        entryLine: entry.index + 1,
+        name: entry.entryName,
+        range: entry.leading.timeRange,
+        placeholder: entry.leading.placeholder === true,
+      }),
+    );
+  });
+  return Object.freeze(entries);
+}
+
+function todayRunningEntryLine(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const timed = [];
+  for (const entry of list) {
+    if (!entry || entry.placeholder === true) {
+      continue;
+    }
+    if (typeof entry.range === "string" && entry.range) {
+      timed.push(entry);
+    }
+  }
+  if (timed.length !== 1) {
+    return null;
+  }
+  const line = timed[0].entryLine;
+  return typeof line === "number" ? line : null;
+}
+
+function todayResolveLinkKey(link, dailyPath, resolve) {
+  if (!link || typeof link.blockId !== "string" || !link.blockId) {
+    return null;
+  }
+  let resolved = null;
+  const target = typeof link.target === "string" ? link.target : "";
+  if (target === "") {
+    resolved = typeof dailyPath === "string" ? dailyPath : null;
+  } else if (typeof resolve === "function") {
+    try {
+      const file = resolve(target, dailyPath);
+      resolved = file && typeof file.path === "string" ? file.path : null;
+    } catch (error) {
+      resolved = null;
+    }
+  }
+  if (typeof resolved !== "string" || !resolved) {
+    return null;
+  }
+  const withExtension = /\.md$/i.test(resolved) ? resolved : `${resolved}.md`;
+  return `${withExtension}#${link.blockId}`;
+}
+
+// Every resolved Today link in ledger order, without dedupe.
+function resolveTodayLinkKeys(links, dailyPath, resolve) {
+  const out = [];
+  const list = Array.isArray(links) ? links : [];
+  for (const link of list) {
+    const key = todayResolveLinkKey(link, dailyPath, resolve);
+    if (!key) {
+      continue;
+    }
+    out.push(Object.freeze({ link, key }));
+  }
+  return out;
 }
 
 // Ordered, unique Today keys (`"<vault path with .md>#<block id>"`).
 // `resolve(target, dailyPath)` wraps
 // `app.metadataCache.getFirstLinkpathDest`; an empty target is the daily
-// note itself. Unresolved targets are skipped.
+// note itself. Unresolved targets are skipped. First-occurrence dedupe of
+// `resolveTodayLinkKeys`.
 function resolveTodayKeys(links, dailyPath, resolve) {
   const seen = new Set();
   const keys = [];
-  const list = Array.isArray(links) ? links : [];
-  for (const link of list) {
-    if (!link || typeof link.blockId !== "string" || !link.blockId) {
+  for (const item of resolveTodayLinkKeys(links, dailyPath, resolve)) {
+    if (!item || typeof item.key !== "string" || seen.has(item.key)) {
       continue;
     }
-    let resolved = null;
-    const target = typeof link.target === "string" ? link.target : "";
-    if (target === "") {
-      resolved = typeof dailyPath === "string" ? dailyPath : null;
-    } else if (typeof resolve === "function") {
-      try {
-        const file = resolve(target, dailyPath);
-        resolved =
-          file && typeof file.path === "string" ? file.path : null;
-      } catch (error) {
-        resolved = null;
-      }
-    }
-    if (typeof resolved !== "string" || !resolved) {
-      continue;
-    }
-    const withExtension = /\.md$/i.test(resolved)
-      ? resolved
-      : `${resolved}.md`;
-    const key = `${withExtension}#${link.blockId}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    keys.push(key);
+    seen.add(item.key);
+    keys.push(item.key);
   }
   return keys;
+}
+
+function todayKeyParts(key) {
+  const text = typeof key === "string" ? key : "";
+  const hash = text.lastIndexOf("#");
+  if (hash === -1) {
+    return { path: text, blockId: "" };
+  }
+  return {
+    path: text.slice(0, hash),
+    blockId: text.slice(hash + 1),
+  };
+}
+
+function todayIdsByPathFromKeys(keys) {
+  const map = new Map();
+  for (const key of Array.isArray(keys) ? keys : []) {
+    const parts = todayKeyParts(key);
+    if (!parts.path || !parts.blockId) {
+      continue;
+    }
+    let ids = map.get(parts.path);
+    if (!(ids instanceof Set)) {
+      ids = new Set();
+      map.set(parts.path, ids);
+    }
+    ids.add(parts.blockId);
+  }
+  return map;
+}
+
+function todayLinkDetails(resolved, options) {
+  const runningEntryLine =
+    options && typeof options.runningEntryLine === "number"
+      ? options.runningEntryLine
+      : null;
+  const homeLabels =
+    options && options.homeLabels instanceof Map ? options.homeLabels : new Map();
+  const map = new Map();
+  const seen = new Set();
+  const list = Array.isArray(resolved) ? resolved : [];
+  for (const item of list) {
+    if (!item || typeof item.key !== "string" || !item.key || !item.link) {
+      continue;
+    }
+    const link = item.link;
+    const entryLine = link.entryLine;
+    const seenKey = `${item.key}\0${String(entryLine)}`;
+    if (seen.has(seenKey)) {
+      continue;
+    }
+    seen.add(seenKey);
+    const name =
+      typeof link.entryName === "string" && link.entryName
+        ? link.entryName
+        : null;
+    const home = homeLabels.get(entryLine);
+    const label =
+      name || (typeof home === "string" && home ? home : null);
+    const detail = Object.freeze({
+      entryLine,
+      ledgerLine: link.ledgerLine,
+      name,
+      range: typeof link.entryRange === "string" ? link.entryRange : null,
+      placeholder: link.entryPlaceholder === true,
+      running: entryLine === runningEntryLine,
+      label,
+      embedded: link.embedded === true,
+    });
+    const existing = map.get(item.key);
+    if (existing) {
+      existing.push(detail);
+    } else {
+      map.set(item.key, [detail]);
+    }
+  }
+  for (const [key, details] of map) {
+    details.sort((left, right) => {
+      if (left.running !== right.running) {
+        return left.running ? -1 : 1;
+      }
+      const leftLine =
+        typeof left.entryLine === "number" ? left.entryLine : 0;
+      const rightLine =
+        typeof right.entryLine === "number" ? right.entryLine : 0;
+      return leftLine - rightLine;
+    });
+    map.set(key, Object.freeze(details.slice()));
+  }
+  return map;
+}
+
+function todayDetailsSignature(details) {
+  if (!(details instanceof Map)) {
+    return "";
+  }
+  const rows = [];
+  for (const [key, list] of details) {
+    const items = Array.isArray(list) ? list : [];
+    rows.push([
+      key,
+      items.map((detail) => ({
+        entryLine: detail ? detail.entryLine : null,
+        ledgerLine: detail ? detail.ledgerLine : null,
+        name: detail ? detail.name : null,
+        range: detail ? detail.range : null,
+        placeholder: !!(detail && detail.placeholder),
+        running: !!(detail && detail.running),
+        label: detail ? detail.label : null,
+        embedded: !!(detail && detail.embedded),
+      })),
+    ]);
+  }
+  return JSON.stringify(rows);
 }
 
 function planTaskBlockId(task) {
@@ -14736,10 +14927,14 @@ class BobLedgerToolsPlugin extends Plugin {
     this.liveWidgetRefreshTimer = null;
     this.planPaintGen = 0;
     this.planPaintGens = new Map();
-    // Synchronous Today cache: `{ date, dailyPath, keys, rank }`. Built
-    // from the daily note's text (never awaited inside the api); before
-    // the first build `isToday` returns false for every task.
-    this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
+    // Synchronous Today cache: `{ date, dailyPath, keys, rank, details,
+    // detailsSignature, idsByPath }`. Built from the daily note's text
+    // (never awaited inside the api); before the first build `isToday`
+    // returns false for every task.
+    this.todayCache = emptyTodayCache();
+    this.todayCacheGen = 0;
+    this.todayEnteredAt = new Map();
+    this.todayRevalidateAt = 0;
     this.statsAppendQueue = Promise.resolve();
     this.api = Object.freeze({
       version: 3,
@@ -15023,6 +15218,24 @@ class BobLedgerToolsPlugin extends Plugin {
       }
     }
     try {
+      if (typeof this.registerDomEvent === "function") {
+        if (typeof window !== "undefined" && window) {
+          this.registerDomEvent(window, "focus", () =>
+            this.revalidateTodayCache(),
+          );
+        }
+        if (typeof document !== "undefined" && document) {
+          this.registerDomEvent(document, "visibilitychange", () => {
+            if (document.visibilityState === "visible") {
+              this.revalidateTodayCache();
+            }
+          });
+        }
+      }
+    } catch (error) {
+      // Focus/visibility revalidation is best-effort on test hosts.
+    }
+    try {
       void this.dashboardCollectionsEnsureBaseContracts();
     } catch (error) {
       // Base contracts load asynchronously; the snapshot stays
@@ -15250,7 +15463,10 @@ class BobLedgerToolsPlugin extends Plugin {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    this.todayCache = { date: null, dailyPath: null, keys: [], rank: new Map() };
+    this.todayCache = emptyTodayCache();
+    this.todayCacheGen = 0;
+    this.todayEnteredAt = new Map();
+    this.todayRevalidateAt = 0;
     if (
       this.freshnessStatusTimer !== null &&
       this.freshnessStatusTimer !== undefined &&
@@ -15540,6 +15756,56 @@ class BobLedgerToolsPlanAndReadyMixin {
     }
     const rank = this.todayCache.rank.get(key);
     return typeof rank === "number" ? rank : Number.MAX_SAFE_INTEGER;
+  }
+
+  todayDetailsForKey(key) {
+    try {
+      if (typeof key !== "string" || !key) {
+        return [];
+      }
+      const cache = this.todayCache;
+      if (!cache || !(cache.details instanceof Map)) {
+        return [];
+      }
+      const details = cache.details.get(key);
+      return Array.isArray(details) ? details.slice() : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  todayIdsForPath(path) {
+    try {
+      const raw = typeof path === "string" ? path : "";
+      if (!raw) {
+        return new Set();
+      }
+      const cache = this.todayCache;
+      if (!cache || !(cache.idsByPath instanceof Map)) {
+        return new Set();
+      }
+      const withExtension = /\.md$/i.test(raw) ? raw : `${raw}.md`;
+      const ids =
+        cache.idsByPath.get(withExtension) || cache.idsByPath.get(raw);
+      return ids instanceof Set ? new Set(ids) : new Set();
+    } catch (error) {
+      return new Set();
+    }
+  }
+
+  todayMarkEnteredAt(key) {
+    try {
+      if (typeof key !== "string" || !key) {
+        return null;
+      }
+      if (!(this.todayEnteredAt instanceof Map)) {
+        return null;
+      }
+      const value = this.todayEnteredAt.get(key);
+      return typeof value === "number" ? value : null;
+    } catch (error) {
+      return null;
+    }
   }
 
   // --- READY backlog (api v3, additive) ----------------------------------
@@ -37141,37 +37407,141 @@ class BobLedgerToolsTodayLocationMixin {
     }
   }
 
+  todayHomeLabelsForCache(content, dailyPath, resolved) {
+    const labels = new Map();
+    const list = Array.isArray(resolved) ? resolved : [];
+    const needsHomes = list.some(
+      (item) => item && item.link && !item.link.entryName,
+    );
+    if (!needsHomes) {
+      return labels;
+    }
+    try {
+      let exempt = ["GTD"];
+      try {
+        const loaded = loadPlanCaps();
+        const caps = loaded && loaded.caps ? loaded.caps : null;
+        if (caps && Array.isArray(caps.exempt)) {
+          exempt = caps.exempt;
+        }
+      } catch (error) {
+        exempt = ["GTD"];
+      }
+      const app = this.app || {};
+      const model = pomodoroHomeModels(
+        content,
+        dailyPath,
+        app.metadataCache,
+        app.vault,
+        exempt,
+      );
+      const sessions = model && Array.isArray(model.entries) ? model.entries : [];
+      for (const session of sessions) {
+        if (!session || typeof session.line !== "number") {
+          continue;
+        }
+        const label =
+          typeof session.label === "string" ? session.label.trim() : "";
+        if (!label) {
+          continue;
+        }
+        labels.set(session.line + 1, label);
+      }
+    } catch (error) {
+      return new Map();
+    }
+    return labels;
+  }
+
   // Rebuild the cache from daily-note text. When the key set changes,
   // every open Tasks query re-reads via TODAY_RELOAD_EVENT and the
   // bob-plan blocks re-render (debounced, like the existing re-render).
   // Becoming ready for the current day (including an empty TODAY set)
   // also schedules that refresh so daily section badges can leave `–`.
+  // A details-only change refreshes Today marks without a Tasks reload.
   // Returns true when the membership keys changed.
   rebuildTodayCache(content, dailyPath, now = new Date()) {
     if (!this.todayCache || !(this.todayCache.rank instanceof Map)) {
-      this.todayCache = {
-        date: null,
-        dailyPath: null,
-        keys: [],
-        rank: new Map(),
-      };
+      this.todayCache = emptyTodayCache();
     }
-    const wasReady = this.isTodayCacheReady(now);
+    if (!(this.todayEnteredAt instanceof Map)) {
+      this.todayEnteredAt = new Map();
+    }
+    const clock = now instanceof Date ? now : new Date();
+    const nowMs = clock.getTime();
+    const wasReady = this.isTodayCacheReady(clock);
+    const previousDate = this.todayCache.date;
+    const previousPath = this.todayCache.dailyPath;
+    const previousKeys = Array.isArray(this.todayCache.keys)
+      ? this.todayCache.keys
+      : [];
+    const previousSignature =
+      typeof this.todayCache.detailsSignature === "string"
+        ? this.todayCache.detailsSignature
+        : "";
+    const previousReadySame =
+      wasReady &&
+      previousDate === this.todayLocalDate(clock) &&
+      sameVaultPath(previousPath || "", dailyPath);
     const links = computeTodayLinks(content, dailyPath);
-    const keys = resolveTodayKeys(links, dailyPath, (target, daily) =>
+    const resolved = resolveTodayLinkKeys(links, dailyPath, (target, daily) =>
       this.resolveTodayLink(target, daily),
     );
-    const previous = this.todayCache.keys || [];
+    const keys = [];
+    const seenKeys = new Set();
+    for (const item of resolved) {
+      if (!item || typeof item.key !== "string" || !item.key) {
+        continue;
+      }
+      if (seenKeys.has(item.key)) {
+        continue;
+      }
+      seenKeys.add(item.key);
+      keys.push(item.key);
+    }
+    const openEntries = todayOpenEntries(content);
+    const runningEntryLine = todayRunningEntryLine(openEntries);
+    const homeLabels = this.todayHomeLabelsForCache(
+      content,
+      dailyPath,
+      resolved,
+    );
+    const details = todayLinkDetails(resolved, {
+      runningEntryLine,
+      homeLabels,
+    });
+    const detailsSignature = todayDetailsSignature(details);
+    const idsByPath = todayIdsByPathFromKeys(keys);
     const changed =
-      previous.length !== keys.length ||
-      previous.some((key, index) => key !== keys[index]);
+      previousKeys.length !== keys.length ||
+      previousKeys.some((key, index) => key !== keys[index]);
+    const detailsChanged = detailsSignature !== previousSignature;
+    const dateOrPathChanged =
+      previousDate !== this.todayLocalDate(clock) ||
+      !sameVaultPath(previousPath || "", dailyPath);
+    if (previousReadySame) {
+      const previousSet = new Set(previousKeys);
+      for (const key of keys) {
+        if (!previousSet.has(key)) {
+          this.todayEnteredAt.set(key, nowMs);
+        }
+      }
+    }
+    for (const [key, stamped] of Array.from(this.todayEnteredAt.entries())) {
+      if (!seenKeys.has(key) || nowMs - stamped > 2000) {
+        this.todayEnteredAt.delete(key);
+      }
+    }
     this.todayCache = {
-      date: this.todayLocalDate(now),
+      date: this.todayLocalDate(clock),
       dailyPath,
       keys,
       rank: new Map(keys.map((key, index) => [key, index])),
+      details,
+      detailsSignature,
+      idsByPath,
     };
-    const becameReady = !wasReady && this.isTodayCacheReady(now);
+    const becameReady = !wasReady && this.isTodayCacheReady(clock);
     if (changed || becameReady) {
       try {
         const workspace = this.app && this.app.workspace;
@@ -37190,6 +37560,16 @@ class BobLedgerToolsTodayLocationMixin {
         this.repaintReadingBoardBlocks();
       }
     }
+    if (
+      (changed || becameReady || detailsChanged || dateOrPathChanged) &&
+      typeof this.scheduleTodayMarksRefresh === "function"
+    ) {
+      try {
+        this.scheduleTodayMarksRefresh();
+      } catch (error) {
+        // Marks refresh is best-effort; the cache is still correct.
+      }
+    }
     return changed;
   }
 
@@ -37206,8 +37586,12 @@ class BobLedgerToolsTodayLocationMixin {
     if (!dailyPath) {
       return Promise.resolve(false);
     }
+    const gen = (this.todayCacheGen = (this.todayCacheGen || 0) + 1);
     return Promise.resolve(this.readPlanBlockContent(dailyPath)).then(
       (content) => {
+        if (gen !== this.todayCacheGen) {
+          return false;
+        }
         // A missing daily note means an empty Today, not an error.
         if (typeof content !== "string") {
           return this.rebuildTodayCache("", dailyPath, now);
@@ -37227,11 +37611,31 @@ class BobLedgerToolsTodayLocationMixin {
       return false;
     }
     if (typeof data === "string") {
+      this.todayCacheGen = (this.todayCacheGen || 0) + 1;
       this.rebuildTodayCache(data, changedPath, now);
       return true;
     }
     this.refreshTodayCacheFromDaily(now);
     return true;
+  }
+
+  revalidateTodayCache(now = new Date()) {
+    const clock = now instanceof Date ? now : new Date();
+    const nowMs = clock.getTime();
+    const last =
+      typeof this.todayRevalidateAt === "number" ? this.todayRevalidateAt : 0;
+    if (last && nowMs - last < 1000) {
+      return false;
+    }
+    this.todayRevalidateAt = nowMs;
+    if (this.refreshTodayCacheForRollover(clock)) {
+      return true;
+    }
+    if (!this.isTodayCacheReady(clock)) {
+      this.refreshTodayCacheFromDaily(clock);
+      return true;
+    }
+    return false;
   }
 
   refreshTodayCacheForVaultEvent(file, now = new Date()) {
@@ -40206,7 +40610,15 @@ module.exports.helpers = {
   planBlockLinks,
   emptyPlanBudget,
   computeTodayLinks,
+  emptyTodayCache,
   resolveTodayKeys,
+  resolveTodayLinkKeys,
+  todayOpenEntries,
+  todayRunningEntryLine,
+  todayLinkDetails,
+  todayDetailsSignature,
+  todayKeyParts,
+  todayIdsByPathFromKeys,
   laneBudgetFromTasks,
   dashboardLaneBudgetFromTasks,
   dashboardLaneBadgeModel,

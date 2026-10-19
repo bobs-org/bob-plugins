@@ -99,6 +99,56 @@ class BobLedgerToolsPlanAndReadyMixin {
     return typeof rank === "number" ? rank : Number.MAX_SAFE_INTEGER;
   }
 
+  todayDetailsForKey(key) {
+    try {
+      if (typeof key !== "string" || !key) {
+        return [];
+      }
+      const cache = this.todayCache;
+      if (!cache || !(cache.details instanceof Map)) {
+        return [];
+      }
+      const details = cache.details.get(key);
+      return Array.isArray(details) ? details.slice() : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  todayIdsForPath(path) {
+    try {
+      const raw = typeof path === "string" ? path : "";
+      if (!raw) {
+        return new Set();
+      }
+      const cache = this.todayCache;
+      if (!cache || !(cache.idsByPath instanceof Map)) {
+        return new Set();
+      }
+      const withExtension = /\.md$/i.test(raw) ? raw : `${raw}.md`;
+      const ids =
+        cache.idsByPath.get(withExtension) || cache.idsByPath.get(raw);
+      return ids instanceof Set ? new Set(ids) : new Set();
+    } catch (error) {
+      return new Set();
+    }
+  }
+
+  todayMarkEnteredAt(key) {
+    try {
+      if (typeof key !== "string" || !key) {
+        return null;
+      }
+      if (!(this.todayEnteredAt instanceof Map)) {
+        return null;
+      }
+      const value = this.todayEnteredAt.get(key);
+      return typeof value === "number" ? value : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
   // --- READY backlog (api v3, additive) ----------------------------------
   // Synchronous, guarded `{ count, cap, over }`. `count` is `null` when
   // unavailable (no Tasks data, a non-Warm cache, no initial Today build,

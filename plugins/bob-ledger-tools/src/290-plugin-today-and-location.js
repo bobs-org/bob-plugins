@@ -580,6 +580,13 @@ class BobLedgerToolsTodayLocationMixin {
     this.refreshDailyScrollCaptureTarget();
     this.captureActiveDailyLocation();
     this.scheduleFreshnessFooterContext();
+    try {
+      if (typeof this.refreshDailyNoteViewClasses === "function") {
+        this.refreshDailyNoteViewClasses();
+      }
+    } catch (error) {
+      // Daily-view class refresh is best-effort.
+    }
   }
 
   refreshDailyScrollCaptureTarget(view = getActiveMarkdownView(this.app)) {

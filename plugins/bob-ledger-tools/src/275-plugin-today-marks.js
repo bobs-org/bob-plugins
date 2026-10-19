@@ -52,6 +52,26 @@ class BobLedgerToolsTodayMarksMixin {
       } catch (error) {
         // Live Preview marks are best-effort.
       }
+      try {
+        if (
+          typeof this.registerMarkdownPostProcessor === "function" &&
+          typeof this.renderTodayMarksIn === "function"
+        ) {
+          this.registerMarkdownPostProcessor(
+            (el, ctx) => this.renderTodayMarksIn(el, ctx),
+            60,
+          );
+        }
+      } catch (error) {
+        // Rendered-view marks are best-effort.
+      }
+      try {
+        if (typeof this.setupTodayMarksReading === "function") {
+          this.setupTodayMarksReading();
+        }
+      } catch (error) {
+        // Reading-view wiring is best-effort.
+      }
       this.scheduleTodayMarksRefresh();
     } catch (error) {
       // Setup never breaks plugin startup.
@@ -423,15 +443,30 @@ class BobLedgerToolsTodayMarksMixin {
             ? setTimeout
             : null;
       if (!schedule) {
-        this.refreshTodayMarkEditors();
+        this.applyTodayMarksRefresh();
         return;
       }
       this.todayMarksTimer = schedule(() => {
         this.todayMarksTimer = null;
-        this.refreshTodayMarkEditors();
+        this.applyTodayMarksRefresh();
       }, 150);
     } catch (error) {
+      this.applyTodayMarksRefresh();
+    }
+  }
+
+  applyTodayMarksRefresh() {
+    try {
       this.refreshTodayMarkEditors();
+    } catch (error) {
+      // Editor refresh is best-effort.
+    }
+    try {
+      if (typeof this.sweepTodayMarksReading === "function") {
+        this.sweepTodayMarksReading();
+      }
+    } catch (error) {
+      // Reading sweep is best-effort.
     }
   }
 
@@ -452,7 +487,7 @@ class BobLedgerToolsTodayMarksMixin {
       } catch (error) {
         // JavaScript gating remains authoritative.
       }
-      this.refreshTodayMarkEditors();
+      this.applyTodayMarksRefresh();
       try {
         new Notice(enabled ? "Today marks on" : "Today marks off");
       } catch (error) {
@@ -570,6 +605,10 @@ class BobLedgerToolsTodayMarksMixin {
 
   goToTodayTaskLink(editor, markdownView) {
     try {
+      if (typeof editor === "string") {
+        void this.jumpTodayTaskLink(editor);
+        return true;
+      }
       const task = this.todayMarksTaskAtCursor(editor, markdownView);
       if (!task) {
         new Notice("No task on this line");

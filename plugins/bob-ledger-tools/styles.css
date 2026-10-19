@@ -1800,6 +1800,12 @@ body.bob-today-marks-off .bob-today-mark {
   }
 }
 
+/* Daily-view suppression (reading): every canonical daily note, and
+   anything rendered inside one (task embeds, TM13). Date-independent. */
+.bob-daily-note-view .bob-today-mark {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bob-progress-mark {
     animation: none;

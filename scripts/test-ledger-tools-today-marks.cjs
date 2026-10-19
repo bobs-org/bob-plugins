@@ -882,16 +882,16 @@ test("Live Preview applies the TM1-TM22 line, cache, and refresh vectors", () =>
   assert.match(viewPlugin.decorations[0].decoration.spec.widget.tooltip, /running in/);
 });
 
-test("Today mark lifecycle registers the toggle and keyboard command only", () => {
+test("Today mark lifecycle registers the toggle, keyboard command, and reading processor", () => {
   const LivePlugin = loadPluginModule({ livePreview: true });
   const instance = makeLiveMarkPlugin(LivePlugin);
   const commands = [];
   const extensions = [];
-  let postProcessors = 0;
+  const postProcessors = [];
   instance.addCommand = (command) => commands.push(command);
   instance.registerEditorExtension = (extension) => extensions.push(extension);
-  instance.registerMarkdownPostProcessor = () => {
-    postProcessors += 1;
+  instance.registerMarkdownPostProcessor = (handler, order) => {
+    postProcessors.push({ handler, order });
   };
   instance.scheduleTodayMarksRefresh = () => {};
   instance.setupTodayMarks();
@@ -903,7 +903,8 @@ test("Today mark lifecycle registers the toggle and keyboard command only", () =
   assert.equal(Object.hasOwn(commands[1], "hotkeys"), false);
   assert.equal(extensions.length, 1);
   assert.equal(typeof commands[1].editorCallback, "function");
-  assert.equal(postProcessors, 0);
+  assert.equal(postProcessors.length, 1);
+  assert.equal(postProcessors[0].order, 60);
 });
 
 test("keyboard jump uses the task under the cursor and reports non-membership", () => {

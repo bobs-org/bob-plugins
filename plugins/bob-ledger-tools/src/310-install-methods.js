@@ -50,5 +50,6 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBlocksRenderMixin,
   BobLedgerToolsTodayLocationMixin,
   BobLedgerToolsTodayMarksMixin,
+  BobLedgerToolsTodayMarksReadingMixin,
   BobLedgerToolsVimSnippetsMixin,
 ]);

@@ -660,6 +660,19 @@ class BobLedgerToolsPlugin extends Plugin {
     }
     this.todayMarksTimer = null;
     this.todayJumpInFlight = false;
+    try {
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-today-marks-off");
+      }
+    } catch (error) {
+      // Body class cleanup is best-effort.
+    }
     if (
       this.planBlockRerenderTimer !== null &&
       this.planBlockRerenderTimer !== undefined &&

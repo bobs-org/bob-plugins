@@ -758,12 +758,7 @@ class BobLedgerToolsStatsChartMixin {
     state.pinnedBucket = { start, end };
     view.hoverBucket = null;
     if (view.chartLive) view.chartLive.textContent = "Pinned " + statsChartTooltip(metric, point, report).replace(/\n/g, ", ");
-    this.statsUpdateChartDayDetail(doc, view, report, metric, view.chartDayDetail);
-    for (const hit of view.chartHitNodes || []) {
-      const hitDate = hit.getAttribute("data-date") || "";
-      const hitEnd = hit.getAttribute("data-end") || hitDate;
-      hit.setAttribute("aria-pressed", state.pinnedDay && state.pinnedDay >= hitDate && state.pinnedDay <= hitEnd ? "true" : "false");
-    }
+    this.statsRenderLocally(view, "chart:" + statsChartPointKey(point));
   }
 
   statsRenderDefinition(doc, view, metric) {

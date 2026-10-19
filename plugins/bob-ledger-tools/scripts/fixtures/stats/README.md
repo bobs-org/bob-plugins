@@ -20,7 +20,7 @@ cargo run --locked --quiet -- stats show -a -f json -r 4w \
 
 The captured report has `schema_version: 1`. `canonical.meta.json` pins its fixture
 version, bob-cli version/revision, clock, and requested range; its source is the
-committed golden vault. The renderer is `bob-ledger-tools@1.57.0`.
+committed golden vault. The renderer is `bob-ledger-tools@1.58.0`.
 
 The `synthetic-*.json` files are explicitly synthetic **presentation** fixtures. They
 cover week/month groups, signed values, populated rolling medians and prior ticks, long

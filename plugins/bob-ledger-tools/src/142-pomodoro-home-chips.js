@@ -36,7 +36,11 @@ function pomodoroHomeLinkTarget(value) {
   if (!match) {
     return "";
   }
-  const raw = match[1].split("|")[0].trim();
+  return pomodoroHomePathInner(match[1]);
+}
+
+function pomodoroHomePathInner(inner) {
+  const raw = String(inner || "").split("|")[0].trim();
   const hash = raw.indexOf("#");
   let path = (hash === -1 ? raw : raw.slice(0, hash)).trim();
   if (/\.md$/i.test(path)) {
@@ -45,16 +49,155 @@ function pomodoroHomeLinkTarget(value) {
   return path;
 }
 
+function pomodoroHomeFrontmatterScalar(value) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (Array.isArray(value)) {
+    if (value.length !== 1) {
+      return "";
+    }
+    return pomodoroHomeFrontmatterScalar(value[0]);
+  }
+  return "";
+}
+
+function pomodoroHomeCollectStrings(value, into) {
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text) {
+      into.push(text);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      pomodoroHomeCollectStrings(item, into);
+    }
+  }
+}
+
+function pomodoroHomeTypeName(raw) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return "";
+  }
+  const linked = pomodoroHomeLinkTarget(text);
+  if (linked) {
+    return linked.toLowerCase();
+  }
+  return pomodoroHomePathInner(text.replace(/^\[+|\]+$/g, "")).toLowerCase();
+}
+
 function pomodoroHomeType(frontmatter) {
   if (!frontmatter || typeof frontmatter !== "object") {
     return "other";
   }
-  const raw = frontmatter.type;
-  if (typeof raw !== "string") {
-    return "other";
+  const names = [];
+  pomodoroHomeCollectStrings(frontmatter.type, names);
+  const normalized = names.map(pomodoroHomeTypeName).filter(Boolean);
+  if (normalized.includes("area")) {
+    return "area";
   }
-  const value = pomodoroHomeLinkTarget(raw).toLowerCase();
-  return value === "area" || value === "project" ? value : "other";
+  if (normalized.includes("project")) {
+    return "project";
+  }
+  return "other";
+}
+
+function pomodoroHomeParentTarget(raw) {
+  if (raw == null) {
+    return "";
+  }
+  if (Array.isArray(raw)) {
+    if (raw.length !== 1) {
+      return "";
+    }
+    return pomodoroHomeParentTarget(raw[0]);
+  }
+  if (typeof raw !== "string") {
+    return "";
+  }
+  const linked = pomodoroHomeLinkTarget(raw);
+  if (linked) {
+    return linked;
+  }
+  return pomodoroHomePathInner(raw);
+}
+
+function pomodoroHomeRollupValue(raw) {
+  const text = String(raw == null ? "" : raw).trim();
+  const unquoted =
+    text.length >= 2 &&
+    ((text.startsWith('"') && text.endsWith('"')) ||
+      (text.startsWith("'") && text.endsWith("'")))
+      ? text.slice(1, -1).trim()
+      : text;
+  const lowered = unquoted.toLowerCase();
+  if (lowered === "off") {
+    return "off";
+  }
+  if (lowered === "subprojects") {
+    return "subprojects";
+  }
+  return "invalid";
+}
+
+function pomodoroHomePercentages(weights) {
+  const values = Array.isArray(weights) ? weights.map((weight) => Number(weight) || 0) : [];
+  const total = values.reduce((sum, weight) => sum + weight, 0);
+  if (total <= 0) {
+    return values.map(() => 0);
+  }
+  const result = [];
+  const remainders = [];
+  let assigned = 0;
+  values.forEach((weight, index) => {
+    const numerator = weight * 100;
+    const floor = Math.floor(numerator / total);
+    result.push(floor);
+    assigned += floor;
+    remainders.push({ index, remainder: numerator % total });
+  });
+  remainders.sort((left, right) => {
+    if (right.remainder !== left.remainder) {
+      return right.remainder - left.remainder;
+    }
+    return left.index - right.index;
+  });
+  const leftover = Math.max(0, 100 - assigned);
+  for (let index = 0; index < leftover && index < remainders.length; index += 1) {
+    result[remainders[index].index] += 1;
+  }
+  return result;
+}
+
+function pomodoroHomeDisplayLabel(parts) {
+  const ranked = (Array.isArray(parts) ? parts : []).slice().sort((left, right) => {
+    const shareDelta = (right.share || 0) - (left.share || 0);
+    if (shareDelta !== 0) {
+      return shareDelta;
+    }
+    return (left._order || 0) - (right._order || 0);
+  });
+  const shown = ranked.slice(0, 2).map((part) => part.label);
+  if (shown.length === 0) {
+    return "";
+  }
+  return ranked.length > shown.length
+    ? `${shown.join(" · ")} +${ranked.length - shown.length}`
+    : shown.join(" · ");
+}
+
+function pomodoroHomeLineMinutes(line, timeRange) {
+  const field = durationField(line);
+  if (field) {
+    const fieldMinutes = parseDurationMinutes(field.value);
+    if (fieldMinutes !== null) {
+      return fieldMinutes;
+    }
+  }
+  return pomodoroHomeDuration(timeRange);
 }
 
 function pomodoroHomeCacheFor(file, metadataCache, vault) {
@@ -215,7 +358,6 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
     visited.add(path.toLowerCase());
     const { frontmatter } = pomodoroHomeReadFrontmatter(current, metadataCache, vault);
     const type = pomodoroHomeType(frontmatter);
-    const rawRollup = frontmatter.rollup;
     const rollupPresent = Object.prototype.hasOwnProperty.call(frontmatter, "rollup");
     let rollup = "off";
     if (rollupPresent) {
@@ -227,26 +369,23 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
           path,
           `Rollup is only valid on project notes: ${path}.`,
         );
-      } else if (rawRollup === "subprojects") {
-        rollup = "subprojects";
-      } else if (rawRollup === "off") {
-        rollup = "off";
       } else {
-        pomodoroHomeWarning(
-          warnings,
-          seen,
-          "rollup_invalid",
-          path,
-          `Invalid rollup on ${path}; treating it as off.`,
-        );
+        const parsed = pomodoroHomeRollupValue(frontmatter.rollup);
+        if (parsed === "invalid") {
+          pomodoroHomeWarning(
+            warnings,
+            seen,
+            "rollup_invalid",
+            path,
+            `Invalid rollup on ${path}; treating it as off.`,
+          );
+        } else {
+          rollup = parsed;
+        }
       }
     }
     chain.push({ file: current, path, frontmatter, type, rollup });
-    const parent = frontmatter.parent;
-    if (typeof parent !== "string") {
-      break;
-    }
-    const parentTarget = pomodoroHomeLinkTarget(parent);
+    const parentTarget = pomodoroHomeParentTarget(frontmatter.parent);
     if (!parentTarget || pomodoroHomePathEqual(parentTarget, path)) {
       break;
     }
@@ -307,14 +446,15 @@ function pomodoroHomeBucket(name, metadataCache, vault, dailyPath, warnings, see
     warnings,
     seen,
   );
+  const usable = Boolean(home && home.area && home.area !== "@unfiled");
   return {
     key: `@review:${name}`,
     label,
     kind: "bucket",
-    area: home && home.kind === "area" ? home.key : home ? home.area : `@review:${name}`,
-    area_label: home && home.kind === "area" ? home.label : home ? home.area_label : label,
+    area: usable ? home.area : `@review:${name}`,
+    area_label: usable ? home.area_label : label,
     subarea: null,
-    hue: home ? home.hue : null,
+    hue: usable ? home.hue : null,
   };
 }
 
@@ -416,7 +556,7 @@ function pomodoroHomeParseEntries(content) {
         line: index,
         status: parsed.state,
         name: name || "",
-        minutes: pomodoroHomeDuration(leading.timeRange),
+        minutes: pomodoroHomeLineMinutes(lines[index], leading.timeRange),
         links,
       });
     }
@@ -441,6 +581,7 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
     nameComponents.every((name) => exemptSet.has(normalizePlanComponent(name)));
   const resolved = [];
   const distinct = new Set();
+  let sameDayReview = false;
   for (const link of namedReview ? [] : Array.isArray(entry.links) ? entry.links : []) {
     const file = pomodoroHomeResolveFile(
       link.target,
@@ -459,8 +600,11 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
     const isDailyGtd =
       path &&
       PLAN_DAILY_PATH_RE.test(path) &&
-      pomodoroHomePathEqual(path, dailyPath) &&
       String(link.blockId || "").toLowerCase() === "gtd";
+    const sameDayGtd = isDailyGtd && pomodoroHomePathEqual(path, dailyPath);
+    if (sameDayGtd) {
+      sameDayReview = true;
+    }
     if (isDailyGtd) {
       const bucketName = firstExemptName;
       resolved.push({
@@ -472,11 +616,10 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
     const home = file
       ? pomodoroHomeResolve(path, dailyPath, metadataCache, vault, warnings, seen)
       : null;
-    if (home) {
+    if (home && home.key !== "@unfiled") {
       resolved.push(home);
     } else {
       if (file) {
-        // A resolved note without an area/project is still an unfiled link.
         if (health) {
           health.unfiled_links += 1;
         }
@@ -485,6 +628,7 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
         const ambiguous = pomodoroHomeAmbiguousTarget(link.target, vault);
         if (health) {
           health[ambiguous ? "ambiguous_links" : "unresolved_links"] += 1;
+          health.unfiled_links += 1;
         }
         pomodoroHomeWarning(
           warnings,
@@ -508,7 +652,7 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
   const bridge =
     nameComponents.length === 0 &&
     normalizedExempt.length > 0 &&
-    resolved.some((home) => home.key === `@review:${firstExemptName}`);
+    sameDayReview;
   const review = namedReview || bridge;
   if (review) {
     const components = namedReview ? nameComponents : [firstExemptName];
@@ -571,54 +715,62 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt
     health,
   );
   const attributed = entry.status === "completed";
-  const parts = aggregate.parts.map((part) => {
-    const numericShare = attributed
-      ? part.minutes
-      : part.tasks;
-    return {
-      key: part.key,
-      label: part.label,
-      kind: part.kind,
-      area: part.area || "@unfiled",
-      area_label: part.area_label || "unfiled",
-      hue: part.hue || null,
-      tasks: part.tasks,
-      _value: numericShare,
-      _order: part.sourceOrder,
-      ...(attributed ? { minutes: part.minutes } : {}),
-    };
-  });
-  const totalValue = parts.reduce((sum, part) => sum + part._value, 0);
-  let left = 100;
-  const scored = parts.map((part) => ({ ...part }));
-  scored.forEach((part, index) => {
-    part.share = index === scored.length - 1
-      ? left
-      : totalValue > 0
-        ? Math.floor((part._value * 100) / totalValue)
-        : scored.length > 0
-          ? Math.floor(100 / scored.length)
-          : 0;
-    left -= part.share;
-  });
-  scored.sort((leftPart, rightPart) => {
-    if (rightPart._value !== leftPart._value) {
-      return rightPart._value - leftPart._value;
+  const minutesKnown = attributed && Number.isInteger(entry.minutes);
+  const parts = aggregate.parts.map((part, index) => ({
+    key: part.key,
+    label: part.label,
+    kind: part.kind,
+    area: part.area || "@unfiled",
+    area_label: part.area_label || "unfiled",
+    hue: part.hue || null,
+    tasks: part.tasks,
+    _order: Number.isInteger(part.sourceOrder) ? part.sourceOrder : index,
+    ...(attributed ? { minutes: Number.isInteger(part.minutes) ? part.minutes : 0 } : {}),
+  }));
+  let weights = parts.map((part) => {
+    if (minutesKnown) {
+      return Number(part.minutes) || 0;
     }
-    return leftPart._order - rightPart._order;
+    if (aggregate.review) {
+      return 1;
+    }
+    return Number(part.tasks) || 0;
   });
-  const labels = scored.map((part) => part.label);
-  const label = aggregate.review
-    ? "GTD review"
-    : aggregate.kind === "unlinked"
-      ? ""
-      : labels.length > 2
-        ? `${labels.slice(0, 2).join(" · ")} +${labels.length - 2}`
-        : labels.join(" · ");
-  const lead = scored[0] || null;
+  if (weights.reduce((sum, weight) => sum + weight, 0) === 0) {
+    weights = parts.map((part) => {
+      if (aggregate.review) {
+        return 1;
+      }
+      const tasks = Number(part.tasks) || 0;
+      return tasks > 0 ? tasks : 1;
+    });
+  }
+  const shares = pomodoroHomePercentages(weights);
+  parts.forEach((part, index) => {
+    part.share = shares[index] || 0;
+    part._order = Number.isInteger(part._order) ? part._order : index;
+  });
+  const label = aggregate.kind === "unlinked" ? "" : pomodoroHomeDisplayLabel(parts);
+  let lead = null;
+  if (aggregate.review) {
+    lead = parts[0] || null;
+  } else if (parts.length > 0) {
+    lead = parts.reduce((best, part) => {
+      if (!best) {
+        return part;
+      }
+      if ((part.tasks || 0) > (best.tasks || 0)) {
+        return part;
+      }
+      if ((part.tasks || 0) === (best.tasks || 0) && (part._order || 0) < (best._order || 0)) {
+        return part;
+      }
+      return best;
+    }, null);
+  }
   const namedReview = aggregate.review && aggregate.nameComponents.length > 0;
   const nameKeys = new Set(aggregate.nameComponents.map((name) => normalizePlanComponent(name)));
-  const homeKeys = new Set(labels.map((name) => normalizePlanComponent(name)));
+  const homeKeys = new Set(parts.map((part) => normalizePlanComponent(part.label)));
   const nameMatchesHomes =
     nameKeys.size > 0 &&
     nameKeys.size === homeKeys.size &&
@@ -632,9 +784,9 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt
     label,
     chip,
     hue: lead ? lead.hue : null,
-    parts: scored.map(({ _value, _order, ...part }) => part),
+    parts: parts.map(({ _order, ...part }) => part),
     lead_home: lead ? lead.key : "@unlinked",
-    tooltip: scored
+    tooltip: parts
       .filter((part) => part.tasks > 0)
       .map((part) => `${part.label} · ${part.tasks} ${part.tasks === 1 ? "task" : "tasks"}${attributed ? ` · ${part.minutes}m` : ""}`)
       .join("\n"),

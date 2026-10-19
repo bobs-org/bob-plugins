@@ -57,15 +57,26 @@ function statsPanelSummaryEntry(entry) {
 // Ranked theme rows for pomodoro metrics plus the supplied period total.
 // Rust already keeps top-five-plus-other; this preserves that order for
 // ties and sorts strictly by value otherwise.
-function statsPanelThemeRows(metric) {
+function statsPanelThemeRows(metric, point) {
   const safe = metric && typeof metric === "object" ? metric : {};
   const summary = safe.parts_summary && typeof safe.parts_summary === "object" ? safe.parts_summary : {};
-  const raw = Array.isArray(summary.theme) ? summary.theme : [];
+  const raw = point && point.parts && point.parts.theme && typeof point.parts.theme === "object" && !Array.isArray(point.parts.theme)
+    ? Object.entries(point.parts.theme).map(([key, value]) => ({
+      key,
+      value,
+      display: point.parts_display && point.parts_display.theme && point.parts_display.theme[key],
+      share: "",
+    }))
+    : Array.isArray(summary.theme) ? summary.theme : [];
   const rows = raw.map(statsPanelSummaryEntry).filter(Boolean);
   rows.sort((a, b) => (b.value === null ? -1 : a.value === null ? 1 : 0) || ((b.value || 0) - (a.value || 0)));
-  const total = safe.summary && typeof safe.summary === "object" ? safe.summary.total : null;
+  const total = point && typeof point.display === "string" && point.display
+    ? point.display
+    : safe.summary && typeof safe.summary === "object" && safe.summary.total && typeof safe.summary.total.display === "string"
+      ? safe.summary.total.display
+      : "";
   return {
-    total: total && typeof total.display === "string" && total.display ? total.display : "",
+    total,
     rows,
   };
 }
@@ -99,10 +110,23 @@ function statsPanelHomeLabel(report, dimension, key, part) {
 }
 
 function statsPanelHomeHue(report, key, bucketGray = true) {
-  if (bucketGray && typeof key === "string" && key.startsWith("@")) {
+  if (bucketGray && typeof key === "string" && (key === "@unlinked" || key === "@unfiled")) {
     return "gray";
   }
-  const entry = statsPanelHomeCatalog(report)[key];
+  if (bucketGray && typeof key === "string" && key.startsWith("@") && !key.startsWith("@review:")) {
+    return "gray";
+  }
+  const catalog = statsPanelHomeCatalog(report);
+  const entry = catalog[key];
+  if (typeof key === "string" && key.startsWith("@review:")) {
+    if (entry && STATS_PANEL_HOME_HUES.includes(entry.hue)) {
+      return entry.hue;
+    }
+    const area = entry && typeof entry.area === "string" ? catalog[entry.area] : null;
+    if (area && STATS_PANEL_HOME_HUES.includes(area.hue)) {
+      return area.hue;
+    }
+  }
   return entry && STATS_PANEL_HOME_HUES.includes(entry.hue) ? entry.hue : "gray";
 }
 

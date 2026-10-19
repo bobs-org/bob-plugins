@@ -278,6 +278,8 @@ function homesPanelReport() {
     "job_resume.md": { label: "job_resume", kind: "project", area: "job.md", path: "job_resume.md", hue: "aqua" },
     "job_more.md": { label: "job_more", kind: "project", area: "job.md", path: "job_more.md", hue: "aqua" },
     "@unfiled": { label: "unfiled", kind: "bucket", area: "@unfiled", path: null, hue: null },
+    "@review:GTD": { label: "GTD review", kind: "bucket", area: "gtd.md", path: null, hue: "orange" },
+    "gtd.md": { label: "gtd", kind: "area", area: "gtd.md", path: "gtd.md", hue: "orange", project_label: "gtd · area tasks" },
   };
   const worked = report.metrics.find((metric) => metric.id === "worked");
   worked.summary.total = { value: 75, display: "1h 15m" };
@@ -331,7 +333,7 @@ function homesPanelReport() {
       { key: "sase.md", label: "sase", kind: "project", area: "dev.md", share: 67, minutes: 17 },
       { key: "bob.md", label: "bob", kind: "project", area: "dev.md", share: 33, minutes: 8 },
     ] } },
-    { date: "2026-10-10", path: "2026/20261010.md", line: 12, time_range: "1000-1015", minutes: 15, minutes_display: "15m", name: null, homes: { parts: [
+    { date: "2026-10-10", path: "2026/20261010.md", line: 12, time_range: "1000-1015", minutes: 15, minutes_display: "15m", name: null, homes: { label: "job_2026_apply_29", parts: [
       { key: "job_2026_apply_29.md", label: "job_2026_apply_29", kind: "project", area: "job.md", share: 100, minutes: 15 },
     ] } },
   ];
@@ -514,6 +516,7 @@ test("areas panel toggles Themes, pins spans, expands projects, and opens home l
       assert.match(el.text, /1 more/);
       assert.match(panel.querySelector(".bob-stats-home-area-bar").getAttribute("aria-label"), /dev 45m/);
       assert.match(panel.textContent + " " + panel.children.map((node) => node.text).join(" "), /from Task Links/);
+      assert.match(el.text, /file the task in an area or project/);
       assert.ok(panel.querySelectorAll(".bob-stats-home-area-segment").some((node) =>
         (node.getAttribute("class") || "").split(/\s+/).includes("bob-stats-home-blue")));
       assert.ok(panel.querySelectorAll(".bob-stats-home-area-row").some((node) =>
@@ -537,6 +540,13 @@ test("areas panel toggles Themes, pins spans, expands projects, and opens home l
       saseLink.dispatch("click", { ctrlKey: true });
       assert.deepEqual(opened.at(-1), { path: "sase.md", sourcePath: "dash_stats.md", newLeaf: true });
 
+      const jobSessions = findByFocus(el.querySelector(".bob-stats-panel"), "panel-home-sessions-project:job_2026_apply_29.md");
+      jobSessions.dispatch("click");
+      const unnamed = el.querySelectorAll(".bob-stats-home-session-link").find((node) =>
+        String(node.textContent || "").includes("2026-10-10"));
+      assert.match(unnamed.textContent, /job_2026_apply_29/);
+      assert.equal(unnamed.textContent.includes("(unnamed)"), false);
+
       plugin.statsPanelPinDay(doc, view, report, "2026-10-09");
       assert.equal(plugin.statsViewStateFor("dash_stats.md").pinnedDay, "2026-10-09");
       assert.match(el.text, /2026-10-09 · 20m/);
@@ -555,7 +565,57 @@ test("areas panel toggles Themes, pins spans, expands projects, and opens home l
   });
 });
 
-test("task home table uses catalog labels and count rows without hue tint", async () => {
+test("chart pin refreshes Where the time went and Themes honor the pinned span", async () => {
+  await withMissingConfig(async () => {
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
+    plugin.onload();
+    try {
+      const report = homesPanelReport();
+      const { doc, el, view } = renderWithFocus("worked");
+      plugin.renderStatsResult(view, { report });
+      const hit = findByFocus(el, "chart:2026-10-09:2026-10-09");
+      assert.ok(hit, "the Worked chart exposes a pin target");
+      hit.dispatch("click");
+      assert.equal(plugin.statsViewStateFor("dash_stats.md").pinnedDay, "2026-10-09");
+      assert.match(el.text, /Where the time went · 2026-10-09/);
+      assert.match(el.text, /2026-10-09 · 20m/);
+      assert.equal(el.text.includes("job_2026_apply_29"), false);
+
+      const themeToggle = findByFocus(el.querySelector(".bob-stats-panel"), "panel-home-view-themes");
+      themeToggle.dispatch("click");
+      assert.match(el.text, /SASE — 20m/);
+      assert.equal(el.text.includes("GTD — 29m"), false, "the pinned day's theme rows replace the period split");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("review rows keep their area hue and a missing homes report keeps the saved view", async () => {
+  await withMissingConfig(async () => {
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
+    plugin.onload();
+    try {
+      const report = homesPanelReport();
+      assert.equal(helpers.statsPanelHomeHue(report, "@review:GTD"), "orange");
+      assert.equal(helpers.statsPanelHomeHue(report, "@unfiled"), "gray");
+      assert.equal(helpers.statsPanelHomeHue(report, "@unlinked"), "gray");
+
+      const { el, view } = renderWithFocus("worked");
+      plugin.renderStatsResult(view, { report });
+      plugin.statsViewStateFor("dash_stats.md").homesView = "areas";
+      const bare = panelReport();
+      plugin.renderStatsResult(view, { report: bare });
+      assert.equal(plugin.statsViewStateFor("dash_stats.md").homesView, "areas");
+      assert.match(el.text, /Update bob for areas & projects/);
+      assert.match(el.text, /GTD — 29m/);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("task home table uses catalog labels and keeps hue dots and mini-bars", async () => {
   await withMissingConfig(async () => {
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
     plugin.onload();
@@ -564,9 +624,10 @@ test("task home table uses catalog labels and count rows without hue tint", asyn
       plugin.renderStatsResult(view, { report: homesPanelReport() });
       assert.match(el.text, /Done by area & project/);
       assert.match(el.text, /job_2026_apply_29/);
-      assert.equal(el.querySelector(".bob-stats-home-mini-track"), null);
+      assert.ok(el.querySelector(".bob-stats-home-mini-track"), "count metrics keep mini-bars");
+      assert.equal(el.querySelector(".bob-stats-home-mini-apportioned"), null, "count metrics drop only the apportioned tint");
       assert.ok(el.querySelectorAll(".bob-stats-home-area-row").some((row) =>
-        (row.getAttribute("class") || "").split(/\s+/).includes("bob-stats-home-gray")));
+        (row.getAttribute("class") || "").split(/\s+/).includes("bob-stats-home-blue")));
       assert.equal(el.querySelector(".bob-stats-home-sessions-toggle"), null);
     } finally {
       plugin.onunload();

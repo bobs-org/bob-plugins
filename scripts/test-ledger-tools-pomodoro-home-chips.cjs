@@ -86,6 +86,53 @@ const fixturePath = path.join(
 );
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
 
+function parseYamlFlow(text, start) {
+  let index = start;
+  if (text[index] !== "[") {
+    return { value: "", next: start };
+  }
+  index += 1;
+  const items = [];
+  while (index < text.length) {
+    while (text[index] === " " || text[index] === "\t") {
+      index += 1;
+    }
+    if (text[index] === "]") {
+      return { value: items, next: index + 1 };
+    }
+    if (text[index] === "[") {
+      const inner = parseYamlFlow(text, index);
+      items.push(inner.value);
+      index = inner.next;
+    } else if (text[index] === '"' || text[index] === "'") {
+      const quote = text[index];
+      index += 1;
+      let raw = "";
+      while (index < text.length && text[index] !== quote) {
+        raw += text[index];
+        index += 1;
+      }
+      if (text[index] === quote) {
+        index += 1;
+      }
+      items.push(raw);
+    } else {
+      const from = index;
+      while (index < text.length && text[index] !== "," && text[index] !== "]") {
+        index += 1;
+      }
+      items.push(text.slice(from, index).trim());
+    }
+    while (text[index] === " " || text[index] === "\t") {
+      index += 1;
+    }
+    if (text[index] === ",") {
+      index += 1;
+    }
+  }
+  return { value: items, next: index };
+}
+
 function parseFrontmatter(note) {
   const match = /^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/.exec(String(note || ""));
   const values = {};
@@ -94,17 +141,22 @@ function parseFrontmatter(note) {
   }
   for (const line of match[1].split("\n")) {
     const field = /^([A-Za-z0-9_-]+):\s*(.*?)\s*$/.exec(line);
-    if (field) {
-      let value = field[2];
-      if (
-        value.length >= 2 &&
-        ((value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'")))
-      ) {
-        value = value.slice(1, -1);
-      }
-      values[field[1]] = value;
+    if (!field) {
+      continue;
     }
+    let value = field[2];
+    if (value.startsWith("[")) {
+      values[field[1]] = parseYamlFlow(value, 0).value;
+      continue;
+    }
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    values[field[1]] = value;
   }
   return values;
 }
@@ -446,4 +498,163 @@ test("Live Preview places a chip widget at the end of the Pomodoro line", () => 
   assert.equal(decorations[0].from, lines[0].length + 1 + lines[1].length);
   assert.equal(decorations[0].value.widget.model.chip, "sase");
   assert.equal(decorations[0].value.widget.model.state, "forecast");
+});
+
+test("Live Preview skips chips in Source mode", () => {
+  const { metadataCache, vault } = fakeVault(fixture.notes);
+  const plugin = new LedgerToolsPlugin({ metadataCache, vault }, {});
+  plugin.pomodoroHomeChipsEnabled = true;
+  const content =
+    "## Pomodoros\n- [ ] (1350-1405) — BLOG\n  - [[sase_blog#^home-chip]]\n";
+  const lines = content.split("\n");
+  const state = {
+    field(field) {
+      if (field === EDITOR_INFO_FIELD) {
+        return { file: { path: "2026/20261018.md" } };
+      }
+      if (field === LIVE_PREVIEW_FIELD) {
+        return false;
+      }
+      return true;
+    },
+    doc: {
+      toString: () => content,
+      line(number) {
+        const text = lines[number - 1];
+        const from = lines.slice(0, number - 1).join("\n").length + (number > 1 ? 1 : 0);
+        return { from, to: from + text.length };
+      },
+    },
+  };
+  const decorations = plugin.buildPomodoroHomeChipDecorations({ state });
+  assert.equal(Array.isArray(decorations) ? decorations.length : 0, 0);
+});
+
+test("Reading view finds embedded Task Links via src", () => {
+  class Node {
+    constructor(tagName, nodeType = 1, text = "") {
+      this.tagName = tagName;
+      this.nodeName = tagName;
+      this.nodeType = nodeType;
+      this.childNodes = [];
+      this.attributes = {};
+      this.dataset = {};
+      this.parentNode = null;
+      this.previousSibling = null;
+      this.nextSibling = null;
+      this.ownerDocument = doc;
+      this.isConnected = true;
+      this._text = text;
+      this.nodeValue = nodeType === 3 ? text : null;
+    }
+
+    get children() {
+      return this.childNodes.filter((node) => node.nodeType === 1);
+    }
+
+    get textContent() {
+      return this._text + this.childNodes.map((node) => node.textContent || "").join("");
+    }
+
+    set textContent(value) {
+      this._text = String(value);
+      this.childNodes = [];
+    }
+
+    appendChild(node) {
+      node.parentNode = this;
+      this.childNodes.push(node);
+      this.relink();
+      return node;
+    }
+
+    insertBefore(node, before) {
+      const index = this.childNodes.indexOf(before);
+      node.parentNode = this;
+      this.childNodes.splice(index < 0 ? this.childNodes.length : index, 0, node);
+      this.relink();
+      return node;
+    }
+
+    removeChild(node) {
+      const index = this.childNodes.indexOf(node);
+      if (index >= 0) {
+        this.childNodes.splice(index, 1);
+        node.parentNode = null;
+        this.relink();
+      }
+      return node;
+    }
+
+    relink() {
+      this.childNodes.forEach((node, index) => {
+        node.previousSibling = this.childNodes[index - 1] || null;
+        node.nextSibling = this.childNodes[index + 1] || null;
+      });
+    }
+
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+      if (name.startsWith("data-")) {
+        const key = name
+          .slice(5)
+          .replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+        this.dataset[key] = String(value);
+      }
+    }
+
+    getAttribute(name) {
+      return this.attributes[name] || null;
+    }
+
+    querySelectorAll(selector) {
+      const result = [];
+      const matches = (node) => {
+        if (selector === "li") {
+          return node.tagName === "LI";
+        }
+        return (
+          (node.tagName === "A" && String(node.attributes.class || "").split(/\s+/).includes("internal-link")) ||
+          String(node.attributes.class || "").split(/\s+/).includes("internal-embed")
+        );
+      };
+      const visit = (node) => {
+        for (const child of node.childNodes || []) {
+          if (child.nodeType === 1 && matches(child)) {
+            result.push(child);
+          }
+          if (child.nodeType === 1) {
+            visit(child);
+          }
+        }
+      };
+      visit(this);
+      return result;
+    }
+  }
+  const doc = {
+    createElement: (tagName) => new Node(String(tagName).toUpperCase()),
+    createTextNode: (text) => new Node("#text", 3, String(text)),
+  };
+  const task = doc.createElement("LI");
+  const embed = doc.createElement("DIV");
+  embed.setAttribute("class", "internal-embed");
+  embed.setAttribute("src", "sase_blog#^home-chip");
+  task.appendChild(embed);
+  const { metadataCache, vault } = fakeVault(fixture.notes);
+  const plugin = new LedgerToolsPlugin({ metadataCache, vault }, {});
+  assert.deepEqual(plugin.pomodoroHomeReadingLinkFromRow(task), {
+    target: "sase_blog",
+    blockId: "home-chip",
+  });
+});
+
+test("Obsidian frontmatter shapes unwrap nested wikilink arrays", () => {
+  const values = parseFrontmatter("---\ntype: [[project]]\nparent: [[dev]]\nrollup: subprojects\n---\n");
+  assert.deepEqual(values.type, [["project"]]);
+  assert.deepEqual(values.parent, [["dev"]]);
+  assert.equal(values.rollup, "subprojects");
+  assert.equal(LedgerToolsPlugin.helpers.pomodoroHomeType(values), "project");
+  assert.equal(LedgerToolsPlugin.helpers.pomodoroHomeParentTarget(values.parent), "dev");
+  assert.deepEqual(LedgerToolsPlugin.helpers.pomodoroHomePercentages([1, 1, 1]), [34, 33, 33]);
 });

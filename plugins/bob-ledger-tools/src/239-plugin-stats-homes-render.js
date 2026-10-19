@@ -7,7 +7,6 @@ class BobLedgerToolsStatsHomesMixin {
     if (state.homesView !== "areas" && state.homesView !== "themes") {
       state.homesView = available ? "areas" : "themes";
     }
-    if (!available) state.homesView = "themes";
     const point = statsPanelSelectedHomePoint(metric, report, state);
     const total = point && typeof point.display === "string"
       ? point.display
@@ -42,8 +41,8 @@ class BobLedgerToolsStatsHomesMixin {
   }
 
   statsPanelHomeFixCopy(key) {
-    if (key === "@unlinked") return "Link tasks under these sessions to show where the time went.";
-    if (key === "@unfiled") return "File linked tasks under an area or project.";
+    if (key === "@unlinked") return "link the task to attribute it";
+    if (key === "@unfiled") return "file the task in an area or project";
     if (typeof key === "string" && key.startsWith("@review:")) {
       return "GTD review stays grouped here; name mixed work to attribute it separately.";
     }
@@ -123,7 +122,7 @@ class BobLedgerToolsStatsHomesMixin {
         const label = statsPanelHomeLabel(report, "project", part.key, part);
         return label + " " + (typeof part.share === "number" ? part.share : 0) + "%";
       }).join(" · ");
-      const name = session.name || "(unnamed)";
+      const name = session.name || (session.homes && session.homes.label) || "(unnamed)";
       const range = session.time_range || "time unavailable";
       const text = [session.date || "date unavailable", range, session.minutes_display || "–", name, shares]
         .filter(Boolean).join(" · ");
@@ -158,7 +157,7 @@ class BobLedgerToolsStatsHomesMixin {
 
   statsPanelHomeGroupRow(doc, view, report, metric, row, dimension, point, tint) {
     const isBucket = row.key.startsWith("@");
-    const hue = tint && !isBucket ? row.hue : "gray";
+    const hue = row.hue || "gray";
     const group = statsEl(doc, "div", {
       class: "bob-stats-home-row " + (dimension === "area" ? "bob-stats-home-area-row" : "bob-stats-home-project-row") +
         (isBucket ? " bob-stats-home-bucket" : "") + " bob-stats-home-" + hue,
@@ -186,13 +185,12 @@ class BobLedgerToolsStatsHomesMixin {
   }
 
   statsPanelHomeMiniBar(doc, row, maxValue, metric, tint) {
-    if (!tint || metric.unit !== "minutes") return null;
     const width = maxValue > 0 ? Math.max(0, Math.min(100, (row.value / maxValue) * 100)) : 0;
-    const apportioned = Math.max(0, Math.min(row.value, row.apportioned || 0));
+    const apportioned = tint ? Math.max(0, Math.min(row.value, row.apportioned || 0)) : 0;
     const directShare = row.value > 0 ? ((row.value - apportioned) / row.value) * 100 : 0;
     const apportionedShare = row.value > 0 ? (apportioned / row.value) * 100 : 0;
     const outer = statsEl(doc, "span", {
-      class: "bob-stats-home-mini-track bob-stats-home-" + (row.key.startsWith("@") ? "gray" : row.hue),
+      class: "bob-stats-home-mini-track bob-stats-home-" + (row.hue || "gray"),
       "aria-hidden": "true",
     });
     const bar = statsEl(doc, "span", { class: "bob-stats-home-mini-fill", style: "width: " + width + "%" });
@@ -209,7 +207,7 @@ class BobLedgerToolsStatsHomesMixin {
 
   statsPanelHomeProjectRow(doc, view, report, metric, row, point, maxValue, tint) {
     const item = statsEl(doc, "div", { class: "bob-stats-home-project" + (row.key.startsWith("@") ? " bob-stats-home-bucket" : "") });
-    const top = statsEl(doc, "div", { class: "bob-stats-home-project-top bob-stats-home-" + (tint && !row.key.startsWith("@") ? row.hue : "gray") });
+    const top = statsEl(doc, "div", { class: "bob-stats-home-project-top bob-stats-home-" + (row.hue || "gray") });
     top.appendChild(this.statsPanelHomeLink(doc, view, row, "project"));
     top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, row.display + (row.share ? " · " + row.share : "")));
     const sessions = metric.kind === "pomodoro"

@@ -335,6 +335,15 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
       if (!this.pomodoroHomeChipAvailable() || !Decoration || !RangeSetBuilder) {
         return Decoration ? Decoration.none : null;
       }
+      try {
+        if (editorLivePreviewField && view && view.state) {
+          if (!view.state.field(editorLivePreviewField)) {
+            return Decoration.none;
+          }
+        }
+      } catch (error) {
+        return Decoration.none;
+      }
       const info = view && view.state ? view.state.field(editorInfoField) : null;
       const dailyPath = info && info.file && info.file.path;
       if (!this.pomodoroHomeChipDailyPath(dailyPath)) {

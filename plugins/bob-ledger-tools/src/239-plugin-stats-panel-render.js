@@ -192,7 +192,8 @@ class BobLedgerToolsStatsPanelsMixin {
     if (!viewModel.available) {
       section.appendChild(this.statsPanelNote(doc, "Update bob for areas & projects."));
     }
-    const model = statsPanelThemeRows(metric);
+    const point = statsPanelSelectedHomePoint(metric, report, viewModel.state);
+    const model = statsPanelThemeRows(metric, point);
     if (!model.rows.length) {
       section.appendChild(this.statsPanelNote(doc, "No theme breakdown is in this report."));
       return true;

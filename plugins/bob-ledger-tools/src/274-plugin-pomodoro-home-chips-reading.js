@@ -30,7 +30,9 @@ class BobLedgerToolsPomodoroHomeChipsReadingMixin {
           const getAttr = typeof node.getAttribute === "function"
             ? (name) => node.getAttribute(name)
             : () => null;
-          const raw = String(getAttr("data-href") || getAttr("href") || "").trim();
+          const raw = String(
+            getAttr("data-href") || getAttr("href") || getAttr("src") || getAttr("data-src") || "",
+          ).trim();
           const unaliased = raw.split("|")[0];
           const marker = unaliased.indexOf("#^");
           if (marker < 0 || unaliased.indexOf("#") !== marker) {
@@ -163,7 +165,7 @@ class BobLedgerToolsPomodoroHomeChipsReadingMixin {
         entry: {
           status: parsed.state,
           name,
-          minutes: pomodoroHomeDuration(leading.timeRange),
+          minutes: pomodoroHomeLineMinutes(`- [${status}] ${ownText.trim()}`, leading.timeRange),
           links,
         },
         listElement,

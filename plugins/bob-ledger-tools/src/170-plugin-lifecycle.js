@@ -87,6 +87,11 @@ class BobLedgerToolsPlugin extends Plugin {
     this.unblockedGlyphEnabled = true;
     this.unblockedGlyphTimer = null;
     this.unblockedGlyphDay = null;
+    // Today marks are session-only and remain hidden until the Today
+    // cache is ready for the current local day.
+    this.todayMarksEnabled = true;
+    this.todayMarksTimer = null;
+    this.todayJumpInFlight = false;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -634,6 +639,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupPriorityMarks();
     this.setupDateMarks();
     this.setupProgressMarks();
+    this.setupTodayMarks();
     this.setupPomodoroHomeChips();
     this.setupUnblockedGlyph();
     this.scheduleFreshnessMarksRefresh();
@@ -645,6 +651,15 @@ class BobLedgerToolsPlugin extends Plugin {
   }
 
   onunload() {
+    if (
+      this.todayMarksTimer !== null &&
+      this.todayMarksTimer !== undefined &&
+      typeof clearTimeout === "function"
+    ) {
+      clearTimeout(this.todayMarksTimer);
+    }
+    this.todayMarksTimer = null;
+    this.todayJumpInFlight = false;
     if (
       this.planBlockRerenderTimer !== null &&
       this.planBlockRerenderTimer !== undefined &&

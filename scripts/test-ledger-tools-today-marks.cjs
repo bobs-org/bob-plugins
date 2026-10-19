@@ -41,11 +41,48 @@ class TestNotice {
 }
 TestNotice.messages = [];
 
-function installStubs() {
+let livePreviewFields = null;
+
+function installStubs(options = {}) {
+  const livePreview = options.livePreview === true;
   const originalLoad = Module._load;
+  const editorInfoField = {};
+  const editorLivePreviewField = {};
+  class TestRangeSetBuilder {
+    constructor() {
+      this.ranges = [];
+    }
+
+    add(from, to, decoration) {
+      this.ranges.push({ from, to, decoration });
+    }
+
+    finish() {
+      return this.ranges.slice();
+    }
+  }
+  const decoration = livePreview
+    ? {
+        none: Object.freeze({ kind: "none" }),
+        widget: (spec) => ({ kind: "widget", spec }),
+      }
+    : null;
+  const viewPlugin = livePreview
+    ? {
+        fromClass: (pluginClass, options) => ({ pluginClass, options }),
+      }
+    : null;
+  livePreviewFields = {
+    editorInfoField,
+    editorLivePreviewField,
+    decoration,
+    viewPlugin,
+  };
   Module._load = function loadWithTodayMarkStubs(request) {
     if (request === "obsidian") {
       return {
+        editorInfoField,
+        editorLivePreviewField,
         MarkdownView: TestMarkdownView,
         Notice: TestNotice,
         Platform: {},
@@ -58,20 +95,26 @@ function installStubs() {
       return {
         Prec: { highest: (value) => value },
         StateEffect: StubStateEffect,
-        RangeSetBuilder: null,
+        RangeSetBuilder: livePreview ? TestRangeSetBuilder : null,
       };
     }
     if (request === "@codemirror/view") {
       return {
-        EditorView: {},
+        EditorView: {
+          scrollIntoView: (position, options) => ({ position, options }),
+        },
         keymap: { of: (value) => value },
-        ViewPlugin: null,
-        Decoration: null,
+        ViewPlugin: viewPlugin,
+        Decoration: decoration,
         WidgetType: StubWidgetType,
       };
     }
     if (request === "@codemirror/language") {
-      return { syntaxTree: () => null };
+      return {
+        syntaxTree: livePreview
+          ? (state) => state && state.tree
+          : () => null,
+      };
     }
     return originalLoad.call(this, request, ...Array.prototype.slice.call(arguments, 1));
   };
@@ -80,8 +123,8 @@ function installStubs() {
 
 const MAIN_PATH = require.resolve("../plugins/bob-ledger-tools/main.js");
 
-function loadPluginModule() {
-  const originalLoad = installStubs();
+function loadPluginModule(options = {}) {
+  const originalLoad = installStubs(options);
   try {
     delete require.cache[MAIN_PATH];
     return require(MAIN_PATH);
@@ -138,6 +181,118 @@ function fakeElementDoc() {
     createElement: (tag) => el(tag),
     createElementNS: (ns, tag) => el(tag),
     createTextNode: (value) => ({ text: String(value) }),
+  };
+}
+
+function textDocument(text) {
+  const source = String(text || "");
+  const rawLines = source.split("\n");
+  const lines = [];
+  let from = 0;
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const lineText = rawLines[index];
+    const to = from + lineText.length;
+    lines.push({ number: index + 1, from, to, text: lineText });
+    from = to + (index + 1 < rawLines.length ? 1 : 0);
+  }
+  function byNumber(number) {
+    return lines[number - 1] || null;
+  }
+  function byPosition(position) {
+    const safe = Math.max(0, Math.min(Number(position) || 0, source.length));
+    return (
+      lines.find((line) => safe >= line.from && safe <= line.to) ||
+      lines[lines.length - 1]
+    );
+  }
+  return {
+    lines: lines.length,
+    length: source.length,
+    line: byNumber,
+    lineAt: byPosition,
+    toString: () => source,
+  };
+}
+
+function codeTree(codeRanges = []) {
+  return {
+    resolveInner(position) {
+      const range = codeRanges.find(
+        (item) => position >= item.from && position < item.to,
+      );
+      return range ? { name: range.name || "inline-code", parent: null } : null;
+    },
+  };
+}
+
+function liveView(text, filePath, fields, options = {}) {
+  const doc = textDocument(text);
+  const state = {
+    doc,
+    tree: codeTree(options.codeRanges),
+    field(field) {
+      if (field === fields.editorInfoField) {
+        return { file: { path: filePath } };
+      }
+      if (field === fields.editorLivePreviewField) {
+        return options.live !== false;
+      }
+      return null;
+    },
+  };
+  return {
+    state,
+    visibleRanges:
+      options.visibleRanges || [{ from: 0, to: doc.length }],
+    dispatch: () => {},
+  };
+}
+
+function makeLiveMarkPlugin(Plugin, details = [], options = {}) {
+  const instance = Object.create(Plugin.prototype);
+  const key = "area.md#fix";
+  instance.todayMarksEnabled = true;
+  instance.todayMarksTimer = null;
+  instance.todayJumpInFlight = false;
+  instance.todayEnteredAt = new Map();
+  instance.todayCache = {
+    rank: new Map(options.keys === undefined ? [[key, 0]] : options.keys.map((value, index) => [value, index])),
+    details: new Map([[key, details]]),
+    dailyPath: "2026/20261019.md",
+  };
+  instance.isTodayCacheReady = () => options.ready !== false;
+  return instance;
+}
+
+function setTodayFromLedger(plugin, helpers, content) {
+  const dailyPath = "2026/20261019.md";
+  const links = helpers.computeTodayLinks(content, dailyPath);
+  const resolved = helpers.resolveTodayLinkKeys(
+    links,
+    dailyPath,
+    (target) => (target === "T" ? { path: "area.md" } : null),
+  );
+  const keys = Array.from(new Set(resolved.map((item) => item.key)));
+  plugin.todayCache.rank = new Map(
+    keys.map((key, index) => [key, index]),
+  );
+  plugin.todayCache.details = helpers.todayLinkDetails(resolved, {
+    runningEntryLine: helpers.todayRunningEntryLine(
+      helpers.todayOpenEntries(content),
+    ),
+  });
+}
+
+function liveMarkRanges(plugin, text, fields, options = {}) {
+  const view = liveView(text, options.filePath || "area.md", fields, options);
+  const result = plugin.buildTodayMarkDecorations(view);
+  return {
+    result,
+    view,
+    ranges: Array.isArray(result) ? result : [],
+    widgets: Array.isArray(result)
+      ? result.map((range) => range.decoration.spec.widget)
+      : [],
   };
 }
 
@@ -492,4 +647,402 @@ test("styles.css implements the glyph anatomy contract", () => {
   assert.ok(css.indexOf("@media (prefers-reduced-motion: reduce)") !== -1);
   assert.ok(css.indexOf("@media (forced-colors: active)") !== -1);
   assert.ok(css.indexOf("outline: 1px solid CanvasText") !== -1);
+});
+
+test("Live Preview applies the TM1-TM22 line, cache, and refresh vectors", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const fields = livePreviewFields;
+  const openTask = "- [*] #task Fix ^fix";
+  const markPlugin = makeLiveMarkPlugin(LivePlugin);
+  const tm1Ledger =
+    "## Pomodoros\n\n" +
+    "- [ ] (**0725-0815** [t:: 50m]) — GTD\n" +
+    "    - [[T#^fix]]\n";
+  setTodayFromLedger(markPlugin, LivePlugin.helpers, tm1Ledger);
+
+  // TM1: the unique timed running entry supplies the first tooltip line.
+  const tm1 = liveMarkRanges(markPlugin, openTask, fields);
+  assert.equal(tm1.ranges.length, 1);
+  assert.equal(
+    tm1.widgets[0].tooltip,
+    "Today · running in GTD 0725–0815\nCtrl-click to open in today's note",
+  );
+
+  // TM2 and TM3: queued links mark; sticky lanes without ledger membership do not.
+  setTodayFromLedger(
+    markPlugin,
+    LivePlugin.helpers,
+    "## Pomodoros\n\n- [ ] () — BLOG\n    - [[T#^fix]]\n",
+  );
+  assert.equal(liveMarkRanges(markPlugin, openTask, fields).ranges.length, 1);
+  setTodayFromLedger(
+    markPlugin,
+    LivePlugin.helpers,
+    "## Pomodoros\n\n- [ ] () — BLOG\n",
+  );
+  assert.equal(liveMarkRanges(markPlugin, openTask, fields).ranges.length, 0);
+
+  // TM4-TM7: closed Pomodoros do not add membership, but an open plain,
+  // tomato-prefixed, or embedded Task Link all mark the source task row.
+  setTodayFromLedger(
+    markPlugin,
+    LivePlugin.helpers,
+    "## Pomodoros\n\n- [x] () — GTD\n    - 🍅 [[T#^fix]]\n",
+  );
+  assert.equal(
+    liveMarkRanges(markPlugin, openTask, fields).ranges.length,
+    0,
+  );
+  const liveLinks = [
+    "    - [[T#^fix]]",
+    "    - 🍅 [[T#^fix]]",
+    "    - ![[T#^fix]]",
+  ];
+  for (const ledgerLink of liveLinks) {
+    setTodayFromLedger(
+      markPlugin,
+      LivePlugin.helpers,
+      "## Pomodoros\n\n- [ ] () — GTD\n" + ledgerLink + "\n",
+    );
+    assert.equal(liveMarkRanges(markPlugin, openTask, fields).ranges.length, 1);
+  }
+
+  // TM8-TM11: the ledger mirror excludes struck, nested, mixed-text,
+  // move-only, fenced, and out-of-section links; closed Pomodoros and
+  // closed task states also stay neutral.
+  const fence = "\x60\x60\x60";
+  const tm8Ledgers = [
+    "## Pomodoros\n\n- [ ] () — GTD\n    - ~~[[T#^fix]]~~\n",
+    "## Pomodoros\n\n- [ ] () — GTD\n    - Parent\n        - [[T#^fix]]\n",
+    "## Pomodoros\n\n- [ ] () — GTD\n    - Link [[T#^fix]] mixed text\n",
+    "## Pomodoros\n\n- [ ] () — GTD\n    - [[T#^fix]]#\n",
+    "## Pomodoros\n\n- [ ] () — GTD\n    - " + fence + "\n        - [[T#^fix]]\n    - " + fence + "\n",
+    "## Other\n\n- [ ] () — GTD\n    - [[T#^fix]]\n",
+    "## Pomodoros\n\n- [x] () — GTD\n    - [[T#^fix]]\n",
+  ];
+  for (const ledger of tm8Ledgers) {
+    setTodayFromLedger(markPlugin, LivePlugin.helpers, ledger);
+    assert.equal(liveMarkRanges(markPlugin, openTask, fields).ranges.length, 0);
+  }
+  for (const status of ["x", "X", "-"]) {
+    setTodayFromLedger(
+      markPlugin,
+      LivePlugin.helpers,
+      "## Pomodoros\n\n- [ ] () — GTD\n    - [[T#^fix]]\n",
+    );
+    assert.equal(
+      liveMarkRanges(
+        markPlugin,
+        "- [" + status + "] #task Fix ^fix",
+        fields,
+      ).ranges.length,
+      0,
+    );
+  }
+  setTodayFromLedger(
+    markPlugin,
+    LivePlugin.helpers,
+    "## Pomodoros\n\n- [ ] () — GTD\n    - [[T#^fix]]\n",
+  );
+  for (const status of ["?", " "]) {
+    assert.equal(
+      liveMarkRanges(
+        markPlugin,
+        "- [" + status + "] #task Fix ^fix",
+        fields,
+      ).ranges.length,
+      1,
+    );
+  }
+  for (const invalid of [
+    "- [ ] #tasks Fix ^fix",
+    "- [ ] #Task Fix ^fix",
+    "- [ ] #task Fix",
+    "- [ ] ~~#task Fix~~ ^fix",
+  ]) {
+    assert.equal(liveMarkRanges(markPlugin, invalid, fields).ranges.length, 0);
+  }
+
+  // TM12: detail-only changes update the tooltip while membership stays put.
+  setTodayFromLedger(
+    markPlugin,
+    LivePlugin.helpers,
+    "## Pomodoros\n\n" +
+      "- [ ] (**0725-0815** [t:: 50m]) — GTD\n" +
+      "    - [[T#^fix]]\n" +
+      "- [ ] () — BLOG\n" +
+      "    - [[T#^fix]]\n",
+  );
+  const tm12 = liveMarkRanges(markPlugin, openTask, fields);
+  assert.match(tm12.widgets[0].tooltip, /running in GTD 0725–0815 \+1 more/);
+  setTodayFromLedger(markPlugin, LivePlugin.helpers, tm1Ledger);
+  assert.doesNotMatch(
+    liveMarkRanges(markPlugin, openTask, fields).widgets[0].tooltip,
+    /\+1 more/,
+  );
+
+  // TM13-TM15: daily notes, an unready cache, and duplicate ids never mark.
+  assert.equal(
+    liveMarkRanges(markPlugin, openTask, fields, {
+      filePath: "2026/20261019.md",
+    }).ranges.length,
+    0,
+  );
+  const unready = makeLiveMarkPlugin(LivePlugin, [], { ready: false });
+  assert.equal(liveMarkRanges(unready, openTask, fields).ranges.length, 0);
+  const duplicated = liveMarkRanges(
+    markPlugin,
+    openTask + "\n- [ ] #task Another ^fix",
+    fields,
+    { visibleRanges: [{ from: 0, to: openTask.length }] },
+  );
+  assert.equal(duplicated.ranges.length, 0);
+
+  // TM16-TM17: placement follows the identity slot, and cursor-only
+  // updates do not rebuild or hide the zero-width widget.
+  assert.equal(
+    liveMarkRanges(markPlugin, "- [ ] #task #ref Read ^fix", fields)
+      .ranges[0].from,
+    17,
+  );
+  assert.equal(
+    liveMarkRanges(markPlugin, "- [ ] #task #prj Work ^fix", fields)
+      .ranges[0].from,
+    12,
+  );
+  assert.equal(
+    markPlugin.todayMarkShouldRebuild({ selectionSet: true }),
+    false,
+  );
+  assert.equal(tm1.widgets[0].entering, false);
+
+  // TM18: only recently entered cache keys get the pop, and unlinking
+  // removes the decoration.
+  markPlugin.todayEnteredAt.set("area.md#fix", Date.now() - 100);
+  assert.equal(
+    liveMarkRanges(markPlugin, openTask, fields).widgets[0].entering,
+    true,
+  );
+  markPlugin.todayCache.rank.delete("area.md#fix");
+  assert.equal(liveMarkRanges(markPlugin, openTask, fields).ranges.length, 0);
+  markPlugin.todayCache.rank.set("area.md#fix", 0);
+
+  // TM20: the session toggle gates Live Preview immediately and restores
+  // marks without changing the source document.
+  const sourceBefore = textDocument(openTask).toString();
+  const togglePlugin = makeLiveMarkPlugin(LivePlugin);
+  setTodayFromLedger(togglePlugin, LivePlugin.helpers, tm1Ledger);
+  togglePlugin.app = {
+    workspace: {
+      getLeavesOfType: () => [],
+    },
+  };
+  assert.equal(liveMarkRanges(togglePlugin, openTask, fields).ranges.length, 1);
+  assert.equal(togglePlugin.toggleTodayMarks(), false);
+  assert.equal(liveMarkRanges(togglePlugin, openTask, fields).ranges.length, 0);
+  assert.equal(togglePlugin.toggleTodayMarks(), true);
+  assert.equal(liveMarkRanges(togglePlugin, openTask, fields).ranges.length, 1);
+  assert.equal(textDocument(openTask).toString(), sourceBefore);
+
+  // TM21: both inline code and a fenced code node stay neutral.
+  const lineStart = "- [ ] Note code #task Fix ^fix";
+  const inlineTag = lineStart.indexOf("#task") + 1;
+  const inline = liveMarkRanges(markPlugin, lineStart, fields, {
+    codeRanges: [{ from: inlineTag, to: inlineTag + 5, name: "inline-code" }],
+  });
+  assert.equal(inline.ranges.length, 0);
+  const fenced = liveMarkRanges(markPlugin, openTask, fields, {
+    codeRanges: [{ from: 0, to: openTask.length, name: "HyperMD-codeblock" }],
+  });
+  assert.equal(fenced.ranges.length, 0);
+
+  // TM22: a refresh effect redraws tooltip details without changing keys.
+  const refreshPlugin = makeLiveMarkPlugin(LivePlugin);
+  setTodayFromLedger(
+    refreshPlugin,
+    LivePlugin.helpers,
+    "## Pomodoros\n\n- [ ] () — BLOG\n    - [[T#^fix]]\n",
+  );
+  const extension = refreshPlugin.createTodayMarkExtension();
+  const view = liveView(openTask, "area.md", fields);
+  const viewPlugin = new extension.pluginClass(view);
+  assert.match(viewPlugin.decorations[0].decoration.spec.widget.tooltip, /queued in/);
+  setTodayFromLedger(
+    refreshPlugin,
+    LivePlugin.helpers,
+    "## Pomodoros\n\n- [ ] (**0900-0930** [t:: 30m]) — BLOG\n" +
+      "    - [[T#^fix]]\n",
+  );
+  viewPlugin.update({
+    view,
+    transactions: [
+      { effects: [LivePlugin.helpers.ensureTodayMarksRefresh().of(null)] },
+    ],
+  });
+  assert.match(viewPlugin.decorations[0].decoration.spec.widget.tooltip, /running in/);
+});
+
+test("Today mark lifecycle registers the toggle and keyboard command only", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const instance = makeLiveMarkPlugin(LivePlugin);
+  const commands = [];
+  const extensions = [];
+  let postProcessors = 0;
+  instance.addCommand = (command) => commands.push(command);
+  instance.registerEditorExtension = (extension) => extensions.push(extension);
+  instance.registerMarkdownPostProcessor = () => {
+    postProcessors += 1;
+  };
+  instance.scheduleTodayMarksRefresh = () => {};
+  instance.setupTodayMarks();
+  assert.deepEqual(
+    commands.map((command) => command.id),
+    ["toggle-today-marks", "go-to-today-task-link"],
+  );
+  assert.equal(commands[1].name, "Go to today's Task Link");
+  assert.equal(Object.hasOwn(commands[1], "hotkeys"), false);
+  assert.equal(extensions.length, 1);
+  assert.equal(typeof commands[1].editorCallback, "function");
+  assert.equal(postProcessors, 0);
+});
+
+test("keyboard jump uses the task under the cursor and reports non-membership", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const fields = livePreviewFields;
+  const instance = makeLiveMarkPlugin(LivePlugin);
+  const editorLine = "- [*] #task Fix ^fix";
+  const cmView = liveView(editorLine, "area.md", fields);
+  const editor = {
+    cm: cmView,
+    getCursor: () => ({ line: 0, ch: 0 }),
+    getLine: () => editorLine,
+  };
+  const markdownView = { file: { path: "area.md" } };
+  const jumped = [];
+  instance.jumpTodayTaskLink = (key) => {
+    jumped.push(key);
+    return Promise.resolve(true);
+  };
+  assert.equal(instance.goToTodayTaskLink(editor, markdownView), true);
+  assert.deepEqual(jumped, ["area.md#fix"]);
+  instance.todayCache.rank.clear();
+  TestNotice.messages = [];
+  assert.equal(instance.goToTodayTaskLink(editor, markdownView), false);
+  assert.equal(TestNotice.messages.at(-1), "Not on today's plan");
+  TestNotice.messages = [];
+  assert.equal(
+    instance.goToTodayTaskLink(
+      { getCursor: () => ({ line: 0 }), getLine: () => "- [ ] Pack charger" },
+      markdownView,
+    ),
+    false,
+  );
+  assert.equal(TestNotice.messages.at(-1), "No task on this line");
+});
+
+test("Mod-click and keyboard jumps land on the current running Task Link", async () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const fields = livePreviewFields;
+  const dailyPath = "2026/20261019.md";
+  const content = [
+    "## Pomodoros",
+    "",
+    "- [ ] (**0725-0815** [t:: 50m]) — GTD",
+    "    - [[area#^fix]]",
+    "- [ ] () — BLOG",
+    "    - [[area#^fix]]",
+  ].join("\n");
+  const doc = textDocument(content);
+  const dispatched = [];
+  const cmView = {
+    state: {
+      doc,
+      selection: {},
+    },
+    dispatch: (transaction) => dispatched.push(transaction),
+  };
+  const cursorCalls = [];
+  let focused = 0;
+  const editor = {
+    cm: cmView,
+    getValue: () => content,
+    setCursor: (cursor) => cursorCalls.push(cursor),
+    focus: () => (focused += 1),
+  };
+  const markdownView = Object.assign(new TestMarkdownView(), {
+    file: { path: dailyPath, extension: "md" },
+    editor,
+  });
+  const leaf = { view: markdownView };
+  const instance = makeLiveMarkPlugin(LivePlugin, [
+    {
+      entryLine: 3,
+      ledgerLine: 4,
+      name: "GTD",
+      range: "0725-0815",
+      running: true,
+      label: "GTD",
+    },
+    {
+      entryLine: 5,
+      ledgerLine: 6,
+      name: "BLOG",
+      range: null,
+      running: false,
+      label: "BLOG",
+    },
+  ]);
+  instance.todayCache.dailyPath = dailyPath;
+  instance.app = {
+    metadataCache: {
+      getFirstLinkpathDest: (target) =>
+        target === "area" ? { path: "area.md" } : null,
+    },
+    workspace: {
+      iterateAllLeaves: (callback) => callback(leaf),
+      revealLeaf: async () => {},
+      setActiveLeaf: async () => {},
+    },
+  };
+
+  // The detail line is stale, so the current open daily note is rescanned.
+  instance.todayCache.details.set("area.md#fix", [
+    { ledgerLine: 99, entryLine: 3, running: true },
+  ]);
+  assert.equal(await instance.jumpTodayTaskLink("area.md#fix"), true);
+  assert.deepEqual(cursorCalls[0], { line: 3, ch: 6 });
+  assert.equal(focused, 1);
+  assert.ok(dispatched.length > 0);
+
+  // The keyboard command identifies the same task key from T's cursor line.
+  const taskLine = "- [*] #task Fix ^fix";
+  const taskView = liveView(taskLine, "area.md", fields);
+  const taskEditor = {
+    cm: taskView,
+    getCursor: () => ({ line: 0, ch: 0 }),
+    getLine: () => taskLine,
+  };
+  assert.equal(
+    instance.todayMarksTaskAtCursor(
+      taskEditor,
+      { file: { path: "area.md" } },
+    ).key,
+    "area.md#fix",
+  );
+
+  // Once the live link is gone, the user gets the specified notice.
+  editor.getValue = () => "## Pomodoros\n\n- [ ] () — GTD\n";
+  TestNotice.messages = [];
+  assert.equal(await instance.jumpTodayTaskLink("area.md#fix"), false);
+  assert.equal(
+    TestNotice.messages.at(-1),
+    "This task's Task Link is no longer in today's note",
+  );
+  TestNotice.messages = [];
+  instance.todayCache.rank.clear();
+  assert.equal(await instance.jumpTodayTaskLink("area.md#fix"), false);
+  assert.equal(
+    TestNotice.messages.at(-1),
+    "This task's Task Link is no longer in today's note",
+  );
 });

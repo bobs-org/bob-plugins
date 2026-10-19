@@ -298,22 +298,6 @@ class BobLedgerToolsTodayMarksReadingMixin {
     }
   }
 
-  todayMarkInsertAnchor(li) {
-    try {
-      const tag = this.todayMarkTaskTagAnchor(li);
-      if (tag) {
-        const partner = this.todayMarkNextElementSkippingWhitespace(tag);
-        if (partner && this.todayMarkIsRefAnchor(partner)) {
-          return partner;
-        }
-        return tag;
-      }
-      return this.todayMarkCheckbox(li);
-    } catch (error) {
-      return null;
-    }
-  }
-
   todayMarkInsertAfter(anchor, mark) {
     try {
       if (!anchor || !mark) {
@@ -520,7 +504,19 @@ class BobLedgerToolsTodayMarksReadingMixin {
           return null;
         }
       }
-      const rendered = this.todayMarkCandidateRows(el);
+      let rendered = null;
+      try {
+        if (el && typeof el.querySelectorAll === "function") {
+          rendered = Array.from(el.querySelectorAll("li"));
+        } else {
+          rendered = this.todayMarkCandidateRows(el);
+        }
+      } catch (error) {
+        rendered = this.todayMarkCandidateRows(el);
+      }
+      if (!Array.isArray(rendered)) {
+        rendered = this.todayMarkCandidateRows(el);
+      }
       const itemLines = this.todayMarkSectionItemLines(lines, info);
       if (rendered.length !== itemLines.length) {
         return null;
@@ -603,9 +599,21 @@ class BobLedgerToolsTodayMarksReadingMixin {
       if (!this.todayMarksEnabled) {
         return null;
       }
+      let clock = null;
+      try {
+        clock =
+          typeof this.todayMarksNow === "function"
+            ? this.todayMarksNow()
+            : new Date();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) {
+        clock = new Date();
+      }
       if (
         typeof this.isTodayCacheReady !== "function" ||
-        !this.isTodayCacheReady(new Date())
+        !this.isTodayCacheReady(clock)
       ) {
         return null;
       }
@@ -644,6 +652,18 @@ class BobLedgerToolsTodayMarksReadingMixin {
         } catch (error) {
           // Tooltip update is best-effort.
         }
+        try {
+          if (existing.dataset) {
+            existing.dataset.bobTodayKey = key;
+          }
+        } catch (error) {
+          // Dataset update is best-effort.
+        }
+        try {
+          existing.setAttribute("data-bob-today-key", key);
+        } catch (error) {
+          // Attribute update is best-effort.
+        }
         return;
       }
       const doc =
@@ -676,6 +696,22 @@ class BobLedgerToolsTodayMarksReadingMixin {
       if (!candidate) {
         return;
       }
+      let inCode = false;
+      try {
+        inCode = todayMarkPosInInlineCode(sourceLine, candidate.tagFrom);
+      } catch (error) {
+        inCode = false;
+      }
+      if (inCode) {
+        return;
+      }
+      let atBody = false;
+      try {
+        atBody = candidate.tagFrom !== todayMarkBodyStart(sourceLine);
+      } catch (error) {
+        atBody = false;
+      }
+      this.todayMarkSetRowPlace(li, atBody);
       const rowStatus = this.todayMarkRenderedStatus(li);
       if (
         !this.todayMarkStatusIsOpen(candidate.status) ||
@@ -737,12 +773,90 @@ class BobLedgerToolsTodayMarksReadingMixin {
     }
   }
 
+  todayMarkDuplicateSet(lines, ids) {
+    try {
+      const dups = todayMarkDuplicateIds(lines, ids);
+      return new Set(Array.isArray(dups) ? dups : []);
+    } catch (error) {
+      return new Set();
+    }
+  }
+
   renderTodayMarksInWithText(el, ctx, info, text) {
     try {
       const lines = this.todayMarkSplitLines(text);
       const rows = this.todayMarkCandidateRows(el);
+      const resolved = [];
+      const allIds = [];
       for (const li of rows) {
-        this.todayMarkRenderRow(li, el, ctx, info, lines);
+        try {
+          const sourceLine = this.todayMarkResolveSourceLine(li, el, info, lines);
+          if (typeof sourceLine !== "string") {
+            continue;
+          }
+          const candidate = todayMarkLineCandidate(sourceLine);
+          if (!candidate) {
+            continue;
+          }
+          let inCode = false;
+          try {
+            inCode = todayMarkPosInInlineCode(sourceLine, candidate.tagFrom);
+          } catch (error) {
+            inCode = false;
+          }
+          if (inCode) {
+            continue;
+          }
+          let atBody = false;
+          try {
+            atBody = candidate.tagFrom !== todayMarkBodyStart(sourceLine);
+          } catch (error) {
+            atBody = false;
+          }
+          this.todayMarkSetRowPlace(li, atBody);
+          const rowStatus = this.todayMarkRenderedStatus(li);
+          if (
+            !this.todayMarkStatusIsOpen(candidate.status) ||
+            !this.todayMarkStatusIsOpen(rowStatus)
+          ) {
+            continue;
+          }
+          resolved.push({ li, candidate });
+          if (allIds.indexOf(candidate.blockId) === -1) {
+            allIds.push(candidate.blockId);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      let duplicateSet = new Set();
+      try {
+        if (typeof this.todayMarkDuplicateSet === "function") {
+          const computed = this.todayMarkDuplicateSet(lines, allIds);
+          duplicateSet = computed instanceof Set ? computed : new Set();
+        } else {
+          const dups = todayMarkDuplicateIds(lines, allIds);
+          duplicateSet = new Set(Array.isArray(dups) ? dups : []);
+        }
+      } catch (error) {
+        duplicateSet = new Set();
+      }
+      for (const item of resolved) {
+        try {
+          if (duplicateSet.has(item.candidate.blockId)) {
+            continue;
+          }
+          const path = this.todayMarkHostPath(ctx && ctx.sourcePath);
+          if (!path) {
+            continue;
+          }
+          const key = path + "#" + item.candidate.blockId;
+          this.todayMarkStampRow(item.li, key);
+          const tooltip = this.todayMarkDesiredForRow(item.li, key);
+          this.todayMarkApplyToRow(item.li, key, tooltip);
+        } catch (error) {
+          continue;
+        }
       }
     } catch (error) {
       // Rendered-view marks never throw.
@@ -877,88 +991,4 @@ class BobLedgerToolsTodayMarksReadingMixin {
     }
   }
 
-  todayMarksBindReadingClicks(doc) {
-    try {
-      if (!doc) {
-        return;
-      }
-      if (!this.todayMarksClickDocs) {
-        this.todayMarksClickDocs = typeof WeakSet === "function" ? new WeakSet() : new Set();
-      }
-      if (this.todayMarksClickDocs.has(doc)) {
-        return;
-      }
-      this.todayMarksClickDocs.add(doc);
-      const handler = (event) => this.handleTodayMarkReadingClick(event);
-      if (typeof this.registerDomEvent === "function") {
-        this.registerDomEvent(doc, "click", handler, { capture: true });
-        return;
-      }
-      if (typeof doc.addEventListener === "function") {
-        doc.addEventListener("click", handler, true);
-      }
-    } catch (error) {
-      // Click binding is best-effort.
-    }
-  }
-
-  setupTodayMarksReadingClicks() {
-    try {
-      if (typeof document !== "undefined") {
-        this.todayMarksBindReadingClicks(document);
-      }
-      for (const doc of this.todayMarksReadingDocuments()) {
-        this.todayMarksBindReadingClicks(doc);
-      }
-    } catch (error) {
-      // Click setup never throws.
-    }
-  }
-
-  handleTodayMarkReadingClick(event) {
-    try {
-      if (!event) {
-        return;
-      }
-      let node = event.target || event.srcElement || null;
-      let mark = null;
-      let guard = 0;
-      while (node && guard < 40) {
-        guard += 1;
-        if (this.todayMarkHasClass(node, "bob-today-mark")) {
-          mark = node;
-          break;
-        }
-        node = node.parentNode || node.parentElement || null;
-      }
-      if (!mark) {
-        return;
-      }
-      let isMac = false;
-      try {
-        isMac = Boolean(Platform && Platform.isMacOS);
-      } catch (error) {
-        isMac = false;
-      }
-      if (!todayMarkModifierPressed(event, isMac)) {
-        return;
-      }
-      try {
-        if (typeof event.preventDefault === "function") {
-          event.preventDefault();
-        }
-        if (typeof event.stopPropagation === "function") {
-          event.stopPropagation();
-        }
-      } catch (error) {
-        // Event cancellation is best-effort.
-      }
-      const key = this.todayMarkRowKey(mark);
-      if (key && typeof this.goToTodayTaskLink === "function") {
-        void this.goToTodayTaskLink(key);
-      }
-    } catch (error) {
-      // Delegated clicks never throw.
-    }
-  }
 }

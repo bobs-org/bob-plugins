@@ -248,11 +248,64 @@ function todayMarkDuplicateIds(lines, ids) {
   }
 }
 
+// Whether UTF-16 offset `pos` falls inside a CommonMark inline code
+// span of `lineText`, backticks included. A backtick run of length n
+// opens a span that closes at the next run of exactly n backticks;
+// an unmatched opener is literal text. Never throws.
+function todayMarkPosInInlineCode(lineText, pos) {
+  try {
+    if (typeof lineText !== "string" || lineText === "") {
+      return false;
+    }
+    if (typeof pos !== "number" || !Number.isInteger(pos)) {
+      return false;
+    }
+    if (pos < 0 || pos >= lineText.length) {
+      return false;
+    }
+    const runs = [];
+    let index = 0;
+    while (index < lineText.length) {
+      if (lineText[index] !== "`") {
+        index += 1;
+        continue;
+      }
+      let end = index + 1;
+      while (lineText[end] === "`") {
+        end += 1;
+      }
+      runs.push({ start: index, end, length: end - index });
+      index = end;
+    }
+    if (runs.length === 0) {
+      return false;
+    }
+    let opener = null;
+    for (const run of runs) {
+      if (opener === null) {
+        opener = run;
+        continue;
+      }
+      if (run.length === opener.length) {
+        if (pos >= opener.start && pos < run.end) {
+          return true;
+        }
+        opener = null;
+        continue;
+      }
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
 // The `<session>` half of the tooltip for one Today detail
 // (`{ name, range, label }` from `todayLinkDetails`): the entry name
 // plus its range when timed, else the derived Pomodoro home label
 // plus its range when timed, else the range alone, else `unnamed
-// Pomodoro`. Ranges use an en dash. Never throws.
+// Pomodoro`. Ranges use an en dash. Runs of `:` collapse to one,
+// so the result never contains `::`. Never throws.
 function todayMarkSessionText(detail) {
   try {
     let name = null;
@@ -281,13 +334,14 @@ function todayMarkSessionText(detail) {
       label = null;
       range = null;
     }
+    const collapse = (value) => String(value).replace(/:{2,}/g, ":");
     const base = name || label;
     const rangeText = range ? String(range).replace("-", "\u2013") : null;
     if (base) {
-      return rangeText ? base + " " + rangeText : base;
+      return collapse(rangeText ? base + " " + rangeText : base);
     }
     if (rangeText) {
-      return rangeText;
+      return collapse(rangeText);
     }
     return "unnamed Pomodoro";
   } catch (error) {
@@ -347,13 +401,13 @@ function todayMarkTooltip(details, options) {
       first += " +" + (list.length - 1) + " more";
     }
     if (platform === "mobile") {
-      return first;
+      return String(first).replace(/:{2,}/g, ":");
     }
     const second =
       platform === "mac"
         ? "\u2318-click to open in today's note"
         : "Ctrl-click to open in today's note";
-    return first + "\n" + second;
+    return String(first + "\n" + second).replace(/:{2,}/g, ":");
   } catch (error) {
     return "Today";
   }

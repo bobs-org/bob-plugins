@@ -2,7 +2,72 @@
 // The Today cache is the sole membership source. This mixin only
 // decorates exact task lines in Live Preview and opens the existing
 // daily note for an explicit click or command.
+
+// Duplicate-id memo, keyed on the immutable CodeMirror doc. The stored
+// value is `{ signature, duplicates }`, where `signature` is the
+// sorted Today id list for the host note joined with `\n`.
+const TODAY_MARK_DUPLICATE_MEMO =
+  typeof WeakMap === "function" ? new WeakMap() : new Map();
+
+function todayMarkAllDocLines(doc) {
+  try {
+    if (doc && typeof doc.iterLines === "function") {
+      const out = [];
+      try {
+        const iter = doc.iterLines();
+        if (iter && typeof iter[Symbol.iterator] === "function") {
+          for (const line of iter) {
+            out.push(typeof line === "string" ? line : String(line ?? ""));
+          }
+          return out;
+        }
+        if (iter && typeof iter.next === "function") {
+          let guard = 0;
+          while (guard < 100000) {
+            guard += 1;
+            const step = iter.next();
+            if (!step || step.done) {
+              break;
+            }
+            const value = step.value;
+            out.push(typeof value === "string" ? value : String(value ?? ""));
+          }
+          return out;
+        }
+      } catch (error) {
+        // Fall through to the line-array fallback.
+      }
+    }
+  } catch (error) {
+    // Fall through to the line-array fallback.
+  }
+  const lines = [];
+  try {
+    if (!doc || typeof doc.line !== "function" || !Number.isInteger(doc.lines)) {
+      return lines;
+    }
+    for (let number = 1; number <= doc.lines; number += 1) {
+      try {
+        const line = doc.line(number);
+        lines.push(line && typeof line.text === "string" ? line.text : "");
+      } catch (error) {
+        lines.push("");
+      }
+    }
+  } catch (error) {
+    // Best-effort line list.
+  }
+  return lines;
+}
+
 class BobLedgerToolsTodayMarksMixin {
+  todayMarksNow() {
+    try {
+      return new Date();
+    } catch (error) {
+      return new Date();
+    }
+  }
   setupTodayMarks() {
     try {
       if (typeof this.todayMarksEnabled !== "boolean") {
@@ -200,21 +265,20 @@ class BobLedgerToolsTodayMarksMixin {
     }
   }
 
-  buildTodayMarkDecorations(view) {
+  buildTodayMarkDecorations(view, now) {
     try {
+      if (!this.todayMarksEnabled) {
+        return Decoration.none;
+      }
+      if (!view || !view.state) {
+        return Decoration.none;
+      }
       if (
-        !this.todayMarksEnabled ||
-        !this.todayCache ||
-        !(this.todayCache.rank instanceof Map) ||
-        typeof this.isTodayCacheReady !== "function" ||
-        !this.isTodayCacheReady(new Date()) ||
         !Decoration ||
         !RangeSetBuilder ||
         !TodayMarkWidget ||
         !editorInfoField ||
-        !editorLivePreviewField ||
-        !view ||
-        !view.state
+        !editorLivePreviewField
       ) {
         return Decoration.none;
       }
@@ -234,6 +298,36 @@ class BobLedgerToolsTodayMarksMixin {
           ? info.file.path
           : "";
       if (!filePath || PLAN_DAILY_PATH_RE.test(filePath)) {
+        return Decoration.none;
+      }
+      let clock = null;
+      try {
+        clock = now instanceof Date ? now : this.todayMarksNow();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) {
+        clock = new Date();
+      }
+      if (
+        !this.todayCache ||
+        !(this.todayCache.rank instanceof Map) ||
+        typeof this.isTodayCacheReady !== "function" ||
+        !this.isTodayCacheReady(clock)
+      ) {
+        return Decoration.none;
+      }
+      const path = /\.md$/i.test(filePath) ? filePath : filePath + ".md";
+      let ids = null;
+      try {
+        ids =
+          typeof this.todayIdsForPath === "function"
+            ? this.todayIdsForPath(path)
+            : new Set();
+      } catch (error) {
+        ids = new Set();
+      }
+      if (!(ids instanceof Set) || ids.size === 0) {
         return Decoration.none;
       }
 
@@ -260,7 +354,6 @@ class BobLedgerToolsTodayMarksMixin {
       if (
         !doc ||
         typeof doc.lineAt !== "function" ||
-        typeof doc.line !== "function" ||
         !Number.isInteger(doc.lines) ||
         doc.lines < 1
       ) {
@@ -269,7 +362,6 @@ class BobLedgerToolsTodayMarksMixin {
       const visible = (view.visibleRanges || []).slice();
       const candidates = [];
       const seenLines = new Set();
-      const wantedIds = [];
       for (const range of visible) {
         if (!range || typeof range.from !== "number") {
           continue;
@@ -294,10 +386,20 @@ class BobLedgerToolsTodayMarksMixin {
           if (!seenLines.has(line.from)) {
             seenLines.add(line.from);
             if (line.text.indexOf("#task") !== -1) {
-              const candidate = todayMarkLineCandidate(line.text);
-              if (candidate) {
-                candidates.push({ line, candidate });
-                wantedIds.push(candidate.blockId);
+              let trailing = null;
+              try {
+                trailing = todayMarkTrailingBlockId(line.text);
+              } catch (error) {
+                trailing = null;
+              }
+              if (!trailing || !ids.has(trailing)) {
+                // Not in Today's id set for this note: skip before the
+                // candidate parse.
+              } else {
+                const candidate = todayMarkLineCandidate(line.text);
+                if (candidate) {
+                  candidates.push({ line, candidate });
+                }
               }
             }
           }
@@ -315,28 +417,50 @@ class BobLedgerToolsTodayMarksMixin {
         return Decoration.none;
       }
 
-      const allLines = [];
-      for (let number = 1; number <= doc.lines; number += 1) {
-        try {
-          const line = doc.line(number);
-          allLines.push(line && typeof line.text === "string" ? line.text : "");
-        } catch (error) {
-          allLines.push("");
-        }
-      }
-      const duplicateIds = new Set(
-        todayMarkDuplicateIds(allLines, wantedIds),
-      );
       const builder = new RangeSetBuilder();
-      const path = /\.md$/i.test(filePath) ? filePath : filePath + ".md";
-      const nowMs = Date.now();
+      const nowMs = clock.getTime();
+      const idsArray = Array.from(ids);
+      let duplicateIds = null;
+      const ensureDuplicates = () => {
+        if (duplicateIds) {
+          return duplicateIds;
+        }
+        const signature = idsArray.slice().sort().join("\n");
+        try {
+          const cached = TODAY_MARK_DUPLICATE_MEMO.get(doc);
+          if (
+            cached &&
+            cached.signature === signature &&
+            cached.duplicates instanceof Set
+          ) {
+            duplicateIds = cached.duplicates;
+            return duplicateIds;
+          }
+        } catch (error) {
+          // A failed memo read recomputes below.
+        }
+        const allLines = todayMarkAllDocLines(doc);
+        let list = [];
+        try {
+          list = todayMarkDuplicateIds(allLines, idsArray);
+        } catch (error) {
+          list = [];
+        }
+        duplicateIds = new Set(Array.isArray(list) ? list : []);
+        try {
+          TODAY_MARK_DUPLICATE_MEMO.set(doc, {
+            signature,
+            duplicates: duplicateIds,
+          });
+        } catch (error) {
+          // Memo storage is best-effort.
+        }
+        return duplicateIds;
+      };
       for (const item of candidates) {
         try {
           const line = item.line;
           const candidate = item.candidate;
-          if (duplicateIds.has(candidate.blockId)) {
-            continue;
-          }
           if (
             freshnessMarkPosInCode(
               tree,
@@ -353,6 +477,13 @@ class BobLedgerToolsTodayMarksMixin {
             typeof this.todayDetailsForKey === "function"
               ? this.todayDetailsForKey(key)
               : [];
+          if (!Array.isArray(details) || details.length === 0) {
+            continue;
+          }
+          const dups = ensureDuplicates();
+          if (dups.has(candidate.blockId)) {
+            continue;
+          }
           const tooltip = todayMarkTooltip(details, {
             platform: Platform && Platform.isMobile
               ? "mobile"
@@ -410,6 +541,14 @@ class BobLedgerToolsTodayMarksMixin {
       }
       for (const leaf of leaves) {
         try {
+          const leafPath =
+            leaf && leaf.view && leaf.view.file &&
+            typeof leaf.view.file.path === "string"
+              ? leaf.view.file.path
+              : "";
+          if (leafPath && PLAN_DAILY_PATH_RE.test(leafPath)) {
+            continue;
+          }
           const cm =
             leaf && leaf.view && leaf.view.editor
               ? leaf.view.editor.cm
@@ -449,7 +588,7 @@ class BobLedgerToolsTodayMarksMixin {
       this.todayMarksTimer = schedule(() => {
         this.todayMarksTimer = null;
         this.applyTodayMarksRefresh();
-      }, 150);
+      }, 16);
     } catch (error) {
       this.applyTodayMarksRefresh();
     }
@@ -577,6 +716,15 @@ class BobLedgerToolsTodayMarksMixin {
       ) {
         return null;
       }
+      let candidate = null;
+      try {
+        candidate = todayMarkLineCandidate(lineText);
+      } catch (error) {
+        candidate = null;
+      }
+      if (!candidate) {
+        return { ambiguous: true };
+      }
       const duplicates = todayMarkDuplicateIds(
         this.todayMarksDocumentLines(cm),
         [blockId],
@@ -596,6 +744,9 @@ class BobLedgerToolsTodayMarksMixin {
       if (!filePath) {
         return null;
       }
+      if (PLAN_DAILY_PATH_RE.test(filePath)) {
+        return { ambiguous: true };
+      }
       const path = /\.md$/i.test(filePath) ? filePath : filePath + ".md";
       return { key: path + "#" + blockId };
     } catch (error) {
@@ -614,12 +765,21 @@ class BobLedgerToolsTodayMarksMixin {
         new Notice("No task on this line");
         return false;
       }
+      let clock = null;
+      try {
+        clock = this.todayMarksNow();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) {
+        clock = new Date();
+      }
       if (
         task.ambiguous ||
         !this.todayCache ||
         !(this.todayCache.rank instanceof Map) ||
         typeof this.isTodayCacheReady !== "function" ||
-        !this.isTodayCacheReady(new Date()) ||
+        !this.isTodayCacheReady(clock) ||
         !this.todayCache.rank.has(task.key)
       ) {
         new Notice("Not on today's plan");
@@ -682,13 +842,22 @@ class BobLedgerToolsTodayMarksMixin {
     }
     this.todayJumpInFlight = true;
     try {
+      let clock = null;
+      try {
+        clock = this.todayMarksNow();
+      } catch (error) {
+        clock = new Date();
+      }
+      if (!(clock instanceof Date)) {
+        clock = new Date();
+      }
       if (
         typeof key !== "string" ||
         !key ||
         !this.todayCache ||
         !(this.todayCache.rank instanceof Map) ||
         typeof this.isTodayCacheReady !== "function" ||
-        !this.isTodayCacheReady(new Date())
+        !this.isTodayCacheReady(clock)
       ) {
         return false;
       }

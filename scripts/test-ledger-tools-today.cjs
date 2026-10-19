@@ -1016,3 +1016,39 @@ test("revalidateTodayCache is throttled and refreshes when not ready", () => {
     }
   });
 });
+
+test("revalidateTodayCache respects layoutReady and backwards clock steps", () => {
+  withMissingConfig(() => {
+    const now = new Date(2026, 9, 1, 8, 0, 0);
+    const app = makeTodayApp({ files: {}, targets: {}, triggers: [] });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      let rollover = 0;
+      let fromDaily = 0;
+      plugin.refreshTodayCacheForRollover = () => {
+        rollover += 1;
+        return false;
+      };
+      plugin.refreshTodayCacheFromDaily = () => {
+        fromDaily += 1;
+        return Promise.resolve(false);
+      };
+      plugin.isTodayCacheReady = () => false;
+      app.workspace.layoutReady = false;
+      assert.equal(plugin.revalidateTodayCache(now), false);
+      assert.equal(rollover, 0);
+      assert.equal(fromDaily, 0);
+      delete app.workspace.layoutReady;
+      assert.equal(plugin.revalidateTodayCache(now), true);
+      assert.equal(rollover, 1);
+      assert.equal(fromDaily, 1);
+      const hourBack = new Date(now.getTime() - 3600000);
+      assert.equal(plugin.revalidateTodayCache(hourBack), true);
+      assert.equal(rollover, 2);
+      assert.equal(fromDaily, 2);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});

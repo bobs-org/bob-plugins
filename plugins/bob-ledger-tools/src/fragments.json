@@ -61,6 +61,7 @@
   "274-plugin-pomodoro-home-chips-reading.js",
   "275-plugin-today-marks.js",
   "276-plugin-today-marks-reading.js",
+  "277-plugin-today-marks-reading-clicks.js",
   "280-plugin-dependency-render.js",
   "281-plugin-blocks-render.js",
   "290-plugin-today-and-location.js",

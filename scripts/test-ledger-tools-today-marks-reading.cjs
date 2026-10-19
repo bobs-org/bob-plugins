@@ -797,3 +797,180 @@ test("styles.css daily-view suppression is present", () => {
   assert.match(css, /\.bob-daily-note-view \.bob-today-mark\s*\{/);
   assert.match(css, /display:\s*none;/);
 });
+
+test("Live Preview marks do not double-jump in Reading view", () => {
+  const doc = readingDoc();
+  const plugin = makePlugin();
+  plugin.app.workspace.getLeavesOfType = () => [
+    { containerEl: doc.body, view: { containerEl: doc.body } },
+  ];
+  const row = taskRow(doc, { dataLine: "0" });
+  const root = section(doc, [row]);
+  doc.body.appendChild(root);
+  plugin.renderTodayMarksIn(root, ctxFor("area.md", INFO));
+  const mark = marksIn(row)[0];
+  assert.ok(mark);
+  const editor = readingEl(doc, "div", { class: "cm-editor" });
+  const inner = readingEl(doc, "div");
+  editor.appendChild(inner);
+  inner.appendChild(mark);
+  plugin.setupTodayMarksReadingClicks();
+  const bound = (plugin.domEvents || []).find((entry) => entry.type === "click");
+  assert.ok(bound);
+  let prevented = false;
+  bound.handler({
+    target: mark,
+    button: 0,
+    ctrlKey: true,
+    preventDefault() {
+      prevented = true;
+    },
+    stopPropagation() {},
+  });
+  assert.equal(prevented, false);
+  assert.deepEqual(plugin.jumped, []);
+});
+
+test("mid-body #task goes at the body start", () => {
+  const doc = readingDoc();
+  const plugin = makePlugin({
+    rank: [["area.md#mid", 0]],
+    details: [["area.md#mid", [{ name: "GTD", running: false }]]],
+  });
+  const source = "- [*] Fix the build #task ^mid";
+  const row = taskRow(doc, { dataLine: "0", tag: false, title: "Fix the build #task", id: "mid" });
+  const root = section(doc, [row]);
+  plugin.renderTodayMarksIn(
+    root,
+    ctxFor("area.md", { text: source, lineStart: 0, lineEnd: 0 }),
+  );
+  assert.equal(row.getAttribute("data-bob-today-place"), "body");
+  const mark = marksIn(row)[0];
+  assert.ok(mark);
+  const checkbox = row.querySelectorAll("input.task-list-item-checkbox")[0];
+  assert.equal(checkbox.nextSibling.nodeType, 3);
+  assert.equal(checkbox.nextSibling.nextSibling, mark);
+  const doc2 = readingDoc();
+  const plugin2 = makePlugin({
+    rank: [["area.md#mid", 0]],
+    details: [["area.md#mid", [{ name: "GTD", running: false }]]],
+  });
+  plugin2.app.workspace.getLeavesOfType = () => [
+    { containerEl: doc2.body, view: { containerEl: doc2.body } },
+  ];
+  const row2 = taskRow(doc2, { dataLine: "0", tag: false, title: "Fix the build #task", id: "mid" });
+  const root2 = section(doc2, [row2]);
+  doc2.body.appendChild(root2);
+  plugin2.renderTodayMarksIn(
+    root2,
+    ctxFor("area.md", { text: source, lineStart: 0, lineEnd: 0 }),
+  );
+  const mark2 = marksIn(row2)[0];
+  assert.ok(mark2);
+  plugin2.sweepTodayMarksReading();
+  const swept = marksIn(row2)[0];
+  assert.ok(swept);
+  const checkbox2 = row2.querySelectorAll("input.task-list-item-checkbox")[0];
+  assert.equal(checkbox2.nextSibling.nextSibling, swept);
+});
+
+test("#task inside inline code stays neutral", () => {
+  const doc = readingDoc();
+  const plugin = makePlugin({
+    rank: [["area.md#fix", 0]],
+    details: [["area.md#fix", [{ name: "GTD", running: false }]]],
+  });
+  const source = "- [*] `x #task` Fix ^fix";
+  const row = taskRow(doc, { dataLine: "0", title: "`x #task` Fix", id: "fix" });
+  const root = section(doc, [row]);
+  plugin.renderTodayMarksIn(
+    root,
+    ctxFor("area.md", { text: source, lineStart: 0, lineEnd: 0 }),
+  );
+  assert.equal(marksIn(root).length, 0);
+  assert.equal(row.getAttribute("data-bob-today-key"), null);
+});
+
+test("re-render with a new path refreshes the mark key", () => {
+  const doc = readingDoc();
+  const plugin = makePlugin({
+    rank: [
+      ["area.md#fix", 0],
+      ["other.md#fix", 1],
+    ],
+    details: [
+      ["area.md#fix", [{ name: "GTD", running: false }]],
+      ["other.md#fix", [{ name: "BLOG", running: false }]],
+    ],
+  });
+  const row = taskRow(doc, { dataLine: "0" });
+  const root = section(doc, [row]);
+  plugin.renderTodayMarksIn(root, ctxFor("area.md", INFO));
+  const first = marksIn(row)[0];
+  assert.ok(first);
+  assert.equal(first.getAttribute("data-bob-today-key"), "area.md#fix");
+  plugin.renderTodayMarksIn(root, ctxFor("other.md", INFO));
+  const second = marksIn(row)[0];
+  assert.ok(second);
+  assert.equal(second.getAttribute("data-bob-today-key"), "other.md#fix");
+});
+
+test("one duplicate scan per render", () => {
+  const doc = readingDoc();
+  const plugin = makePlugin({
+    rank: [
+      ["area.md#fix", 0],
+      ["area.md#other", 1],
+    ],
+    details: [
+      ["area.md#fix", [{ name: "GTD", running: false }]],
+      ["area.md#other", [{ name: "BLOG", running: false }]],
+    ],
+  });
+  const source = "- [*] #task Fix ^fix\n- [/] #task Other ^other";
+  const first = taskRow(doc, { title: "Fix", id: "fix" });
+  const second = taskRow(doc, { status: "/", title: "Other", id: "other" });
+  const root = section(doc, [first, second]);
+  const info = { text: source, lineStart: 0, lineEnd: 1 };
+  let scans = 0;
+  const original = plugin.todayMarkDuplicateSet.bind(plugin);
+  plugin.todayMarkDuplicateSet = (lines, ids) => {
+    scans += 1;
+    return original(lines, ids);
+  };
+  plugin.renderTodayMarksIn(root, ctxFor("area.md", info));
+  assert.equal(marksIn(root).length, 2);
+  assert.equal(scans, 1);
+});
+
+test("row-index fallback uses every list item", () => {
+  const doc = readingDoc();
+  const plugin = makePlugin();
+  const plain = readingEl(doc, "li");
+  plain.appendChild(doc.createTextNode("Depends-On: foo"));
+  const task = taskRow(doc, { title: "Fix", id: "fix" });
+  task.appendChild(readingEl(doc, "ul"));
+  task.childNodes[task.childNodes.length - 1].appendChild(plain);
+  const list = readingEl(doc, "ul");
+  list.appendChild(task);
+  const root = readingEl(doc, "div");
+  root.appendChild(list);
+  const source = "- [*] #task Fix ^fix\n  - Depends-On: foo";
+  const info = { text: source, lineStart: 0, lineEnd: 1 };
+  plugin.renderTodayMarksIn(root, ctxFor("area.md", info));
+  assert.equal(task.getAttribute("data-bob-today-key"), "area.md#fix");
+  assert.equal(marksIn(task).length, 1);
+  const doc2 = readingDoc();
+  const plugin2 = makePlugin();
+  const ghost = taskRow(doc2, { title: "Ghost", id: "ghost" });
+  const task2 = taskRow(doc2, { title: "Fix", id: "fix" });
+  const extra = taskRow(doc2, { status: "/", title: "Other", id: "other" });
+  const list2 = readingEl(doc2, "ul");
+  list2.appendChild(ghost);
+  list2.appendChild(task2);
+  list2.appendChild(extra);
+  const root2 = readingEl(doc2, "div");
+  root2.appendChild(list2);
+  plugin2.renderTodayMarksIn(root2, ctxFor("area.md", info));
+  assert.equal(marksIn(root2).length, 0);
+});

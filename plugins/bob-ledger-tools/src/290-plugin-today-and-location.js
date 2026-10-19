@@ -229,9 +229,13 @@ class BobLedgerToolsTodayLocationMixin {
   revalidateTodayCache(now = new Date()) {
     const clock = now instanceof Date ? now : new Date();
     const nowMs = clock.getTime();
+    const workspace = this.app && this.app.workspace;
+    if (workspace && workspace.layoutReady === false) {
+      return false;
+    }
     const last =
       typeof this.todayRevalidateAt === "number" ? this.todayRevalidateAt : 0;
-    if (last && nowMs - last < 1000) {
+    if (last && Math.abs(nowMs - last) < 1000) {
       return false;
     }
     this.todayRevalidateAt = nowMs;

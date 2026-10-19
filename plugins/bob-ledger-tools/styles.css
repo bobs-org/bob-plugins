@@ -1787,7 +1787,7 @@ body.bob-today-marks-off .bob-today-mark {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .bob-today-mark {
+  .bob-today-mark, .bob-today-mark.is-entering {
     animation: none;
     transition: none;
   }

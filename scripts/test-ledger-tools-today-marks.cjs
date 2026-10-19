@@ -142,6 +142,8 @@ const {
   todayMarkInsertOffset,
   todayMarkLineCandidate,
   todayMarkDuplicateIds,
+  todayMarkPosInInlineCode,
+  todayMarkBodyStart,
   todayMarkSessionText,
   todayMarkTooltip,
   todayMarkEntering,
@@ -251,16 +253,28 @@ function liveView(text, filePath, fields, options = {}) {
 function makeLiveMarkPlugin(Plugin, details = [], options = {}) {
   const instance = Object.create(Plugin.prototype);
   const key = "area.md#fix";
+  const keys = options.keys === undefined ? [key] : options.keys;
   instance.todayMarksEnabled = true;
   instance.todayMarksTimer = null;
   instance.todayJumpInFlight = false;
   instance.todayEnteredAt = new Map();
   instance.todayCache = {
-    rank: new Map(options.keys === undefined ? [[key, 0]] : options.keys.map((value, index) => [value, index])),
+    rank: new Map(keys.map((value, index) => [value, index])),
     details: new Map([[key, details]]),
     dailyPath: "2026/20261019.md",
+    idsByPath: helpers.todayIdsByPathFromKeys(keys),
   };
-  instance.isTodayCacheReady = () => options.ready !== false;
+  if (options.ready === false) {
+    instance.isTodayCacheReady = () => false;
+  } else if (typeof options.ready === "function") {
+    instance.isTodayCacheReady = options.ready;
+  } else {
+    instance.isTodayCacheReady = () => true;
+  }
+  if (typeof options.now === "function" || options.now instanceof Date) {
+    const fixed = typeof options.now === "function" ? options.now() : options.now;
+    instance.todayMarksNow = () => fixed;
+  }
   return instance;
 }
 
@@ -281,6 +295,7 @@ function setTodayFromLedger(plugin, helpers, content) {
       helpers.todayOpenEntries(content),
     ),
   });
+  plugin.todayCache.idsByPath = helpers.todayIdsByPathFromKeys(keys);
 }
 
 function liveMarkRanges(plugin, text, fields, options = {}) {
@@ -1046,4 +1061,527 @@ test("Mod-click and keyboard jumps land on the current running Task Link", async
     TestNotice.messages.at(-1),
     "This task's Task Link is no longer in today's note",
   );
+});
+
+test("reduced motion stops the entrance pop", () => {
+  const css = fs.readFileSync(
+    path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),
+    "utf8",
+  );
+  const marker = ".bob-today-mark, .bob-today-mark.is-entering";
+  assert.ok(css.indexOf(marker) !== -1);
+  const at = css.indexOf(marker);
+  const block = css.slice(at, at + 400);
+  assert.ok(block.indexOf("animation: none") !== -1);
+});
+
+test("tooltips never contain ::", () => {
+  const named = todayMarkSessionText({ name: "BLOG [cat:: w]", range: null });
+  assert.ok(named.indexOf("::") === -1);
+  assert.equal(named, "BLOG [cat: w]");
+  const labeled = todayMarkSessionText({
+    name: null,
+    label: "home:: label",
+    range: "0900-0930",
+  });
+  assert.ok(labeled.indexOf("::") === -1);
+  const tooltip = todayMarkTooltip(
+    [{ name: "BLOG [cat:: w]", range: null, running: false }],
+    { platform: "other" },
+  );
+  assert.ok(tooltip.indexOf("::") === -1);
+});
+
+test("todayMarkPosInInlineCode: single, double, unmatched, positions", () => {
+  assert.equal(typeof todayMarkPosInInlineCode, "function");
+  const single = "- [ ] `code` #task Fix ^fix";
+  const openTick = single.indexOf("`");
+  const insideTick = openTick + 1;
+  const closeTick = single.indexOf("`", openTick + 1);
+  const hashAt = single.indexOf("#task");
+  assert.equal(todayMarkPosInInlineCode(single, openTick), true);
+  assert.equal(todayMarkPosInInlineCode(single, insideTick), true);
+  assert.equal(todayMarkPosInInlineCode(single, closeTick), true);
+  assert.equal(todayMarkPosInInlineCode(single, hashAt), false);
+  assert.equal(todayMarkPosInInlineCode(single, 0), false);
+  const dbl = "- [ ] ``x #task`` Fix ^fix";
+  const dblHash = dbl.indexOf("#task");
+  assert.equal(todayMarkPosInInlineCode(dbl, dblHash), true);
+  const unmatched = "- [ ] `oops #task Fix ^fix";
+  assert.equal(
+    todayMarkPosInInlineCode(unmatched, unmatched.indexOf("#task")),
+    false,
+  );
+  assert.equal(todayMarkPosInInlineCode(null, 0), false);
+  assert.equal(todayMarkPosInInlineCode(single, -1), false);
+  assert.equal(todayMarkPosInInlineCode(single, single.length), false);
+});
+
+test("builder gates on Today ids without touching doc lines", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const fields = livePreviewFields;
+  const plugin = makeLiveMarkPlugin(LivePlugin);
+  plugin.todayCache.idsByPath = new Map();
+  let lineCalls = 0;
+  let iterCalls = 0;
+  const doc = textDocument("- [*] #task Fix ^fix");
+  const spied = Object.assign({}, doc, {
+    line: (...args) => {
+      lineCalls += 1;
+      return doc.line(...args);
+    },
+  });
+  Object.defineProperty(spied, "iterLines", {
+    value: () => {
+      iterCalls += 1;
+      return ["- [*] #task Fix ^fix"][Symbol.iterator]();
+    },
+    configurable: true,
+  });
+  const view = {
+    state: {
+      doc: spied,
+      tree: codeTree(),
+      field(field) {
+        if (field === fields.editorInfoField) {
+          return { file: { path: "area.md" } };
+        }
+        if (field === fields.editorLivePreviewField) {
+          return true;
+        }
+        return null;
+      },
+    },
+    visibleRanges: [{ from: 0, to: spied.length }],
+  };
+  const result = plugin.buildTodayMarkDecorations(view);
+  assert.deepEqual(result, fields.decoration.none);
+  assert.equal(lineCalls, 0);
+  assert.equal(iterCalls, 0);
+});
+
+test("two rebuilds on the same doc compute duplicates once", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const fields = livePreviewFields;
+  const plugin = makeLiveMarkPlugin(LivePlugin, [
+    { name: "GTD", range: null, running: false },
+  ]);
+  const text = "- [*] #task Fix ^fix";
+  const doc = textDocument(text);
+  let iterCalls = 0;
+  const spied = Object.assign({}, doc, {
+    lineAt: doc.lineAt.bind(doc),
+    line: doc.line.bind(doc),
+  });
+  spied.iterLines = () => {
+    iterCalls += 1;
+    return [text][Symbol.iterator]();
+  };
+  const view = liveView(text, "area.md", fields);
+  view.state.doc = spied;
+  const first = plugin.buildTodayMarkDecorations(view);
+  assert.equal(Array.isArray(first) ? first.length : 0, 1);
+  const second = plugin.buildTodayMarkDecorations(view);
+  assert.equal(Array.isArray(second) ? second.length : 0, 1);
+  assert.equal(iterCalls, 1);
+});
+
+test("todayMarksNow override drives readiness", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const fields = livePreviewFields;
+  const dayN = new Date(2026, 9, 1, 8, 0, 0);
+  const dayNext = new Date(2026, 9, 2, 8, 0, 0);
+  const plugin = makeLiveMarkPlugin(LivePlugin, [
+    { name: "GTD", range: null, running: false },
+  ]);
+  plugin.isTodayCacheReady = (clock) =>
+    clock instanceof Date && clock.getTime() === dayN.getTime();
+  plugin.todayMarksNow = () => dayN;
+  assert.equal(
+    liveMarkRanges(plugin, "- [*] #task Fix ^fix", fields).ranges.length,
+    1,
+  );
+  plugin.todayMarksNow = () => dayNext;
+  assert.equal(
+    liveMarkRanges(plugin, "- [*] #task Fix ^fix", fields).ranges.length,
+    0,
+  );
+});
+
+test("refresh dispatches only to non-daily leaves and uses 16 ms", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const plugin = makeLiveMarkPlugin(LivePlugin);
+  const dispatched = [];
+  const dailyCm = { dispatch: (trx) => dispatched.push(["daily", trx]) };
+  const areaCm = { dispatch: (trx) => dispatched.push(["area", trx]) };
+  plugin.app = {
+    workspace: {
+      getLeavesOfType: () => [
+        {
+          view: {
+            file: { path: "2026/20261019.md" },
+            editor: { cm: dailyCm },
+          },
+        },
+        {
+          view: { file: { path: "area.md" }, editor: { cm: areaCm } },
+        },
+      ],
+    },
+  };
+  plugin.refreshTodayMarkEditors();
+  assert.deepEqual(
+    dispatched.map((entry) => entry[0]),
+    ["area"],
+  );
+  let capturedDelay = null;
+  const realSetTimeout = global.setTimeout;
+  plugin.todayMarksTimer = null;
+  plugin.applyTodayMarksRefresh = () => {};
+  const fakeSchedule = (fn, delay) => {
+    capturedDelay = delay;
+    return 12345;
+  };
+  const savedWindow = global.window;
+  global.window = { setTimeout: fakeSchedule };
+  try {
+    plugin.scheduleTodayMarksRefresh();
+    assert.equal(capturedDelay, 16);
+    capturedDelay = null;
+    plugin.scheduleTodayMarksRefresh();
+    assert.equal(capturedDelay, null);
+  } finally {
+    if (savedWindow === undefined) {
+      delete global.window;
+    } else {
+      global.window = savedWindow;
+    }
+    plugin.todayMarksTimer = null;
+    plugin.applyTodayMarksRefresh = Object.getPrototypeOf(plugin).applyTodayMarksRefresh;
+  }
+  void realSetTimeout;
+});
+
+test("keyboard command gates closed status and daily notes", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const fields = livePreviewFields;
+  const plugin = makeLiveMarkPlugin(LivePlugin, [
+    { name: "GTD", range: null, running: false },
+  ]);
+  const closedLine = "- [x] #task Fix ^fix";
+  const closedView = liveView(closedLine, "area.md", fields);
+  const closedEditor = {
+    cm: closedView,
+    getCursor: () => ({ line: 0, ch: 0 }),
+    getLine: () => closedLine,
+  };
+  TestNotice.messages = [];
+  const jumped = [];
+  plugin.jumpTodayTaskLink = (key) => {
+    jumped.push(key);
+    return Promise.resolve(true);
+  };
+  assert.equal(
+    plugin.goToTodayTaskLink(closedEditor, { file: { path: "area.md" } }),
+    false,
+  );
+  assert.equal(TestNotice.messages.at(-1), "Not on today's plan");
+  assert.deepEqual(jumped, []);
+  const openLine = "- [*] #task Fix ^fix";
+  const dailyView = liveView(openLine, "2026/20261019.md", fields);
+  const dailyEditor = {
+    cm: dailyView,
+    getCursor: () => ({ line: 0, ch: 0 }),
+    getLine: () => openLine,
+  };
+  TestNotice.messages = [];
+  assert.equal(
+    plugin.goToTodayTaskLink(dailyEditor, {
+      file: { path: "2026/20261019.md" },
+    }),
+    false,
+  );
+  assert.equal(TestNotice.messages.at(-1), "Not on today's plan");
+});
+
+test("TM14 rollover: day N+1 shows no decoration", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const fields = livePreviewFields;
+  const dayN = new Date(2026, 9, 1, 8, 0, 0);
+  const dayNext = new Date(2026, 9, 2, 8, 0, 0);
+  const plugin = makeLiveMarkPlugin(LivePlugin, [
+    { name: "GTD", range: null, running: false },
+  ]);
+  plugin.isTodayCacheReady = (clock) =>
+    clock instanceof Date && clock.getTime() === dayN.getTime();
+  plugin.todayMarksNow = () => dayN;
+  assert.equal(
+    liveMarkRanges(plugin, "- [*] #task Fix ^fix", fields).ranges.length,
+    1,
+  );
+  plugin.todayMarksNow = () => dayNext;
+  assert.equal(
+    liveMarkRanges(plugin, "- [*] #task Fix ^fix", fields).ranges.length,
+    0,
+  );
+});
+
+test("TM17 widget sits at line.from + insertCh with side -1", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const fields = livePreviewFields;
+  const plugin = makeLiveMarkPlugin(LivePlugin, [
+    { name: "GTD", range: null, running: false },
+  ]);
+  const text = "- [*] #task Fix ^fix";
+  const { ranges } = liveMarkRanges(plugin, text, fields);
+  assert.equal(ranges.length, 1);
+  assert.equal(ranges[0].decoration.spec.side, -1);
+  const expectedCh = LivePlugin.helpers.todayMarkInsertOffset(text);
+  assert.equal(ranges[0].from, expectedCh);
+});
+
+test("TM18 entering: new key pops then settles", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const fields = livePreviewFields;
+  const base = new Date(2026, 9, 1, 8, 0, 0).getTime();
+  const plugin = makeLiveMarkPlugin(LivePlugin, [
+    { name: "GTD", range: null, running: false },
+  ]);
+  plugin.todayMarksNow = () => new Date(base);
+  assert.equal(
+    liveMarkRanges(plugin, "- [*] #task Fix ^fix", fields).widgets[0]
+      .entering,
+    false,
+  );
+  plugin.todayEnteredAt.set("area.md#fix", base + 50);
+  plugin.todayMarksNow = () => new Date(base + 150);
+  assert.equal(
+    liveMarkRanges(plugin, "- [*] #task Fix ^fix", fields).widgets[0]
+      .entering,
+    true,
+  );
+  plugin.todayMarksNow = () => new Date(base + 800);
+  assert.equal(
+    liveMarkRanges(plugin, "- [*] #task Fix ^fix", fields).widgets[0]
+      .entering,
+    false,
+  );
+});
+
+test("TM20 toggle flips class, notice, and refreshes non-daily leaves", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const plugin = makeLiveMarkPlugin(LivePlugin, [
+    { name: "GTD", range: null, running: false },
+  ]);
+  const dispatched = [];
+  plugin.app = {
+    workspace: {
+      getLeavesOfType: () => [
+        {
+          view: {
+            file: { path: "2026/20261019.md" },
+            editor: { cm: { dispatch: (trx) => dispatched.push("daily") } },
+          },
+        },
+        {
+          view: {
+            file: { path: "area.md" },
+            editor: { cm: { dispatch: (trx) => dispatched.push("area") } },
+          },
+        },
+      ],
+    },
+  };
+  const savedDocument = global.document;
+  const classes = new Set();
+  global.document = {
+    body: {
+      classList: {
+        add: (name) => classes.add(name),
+        remove: (name) => classes.delete(name),
+        contains: (name) => classes.has(name),
+      },
+    },
+  };
+  try {
+    TestNotice.messages = [];
+    assert.equal(plugin.toggleTodayMarks(), false);
+    assert.ok(classes.has("bob-today-marks-off"));
+    assert.equal(TestNotice.messages.at(-1), "Today marks off");
+    assert.deepEqual(dispatched, ["area"]);
+    dispatched.length = 0;
+    TestNotice.messages = [];
+    assert.equal(plugin.toggleTodayMarks(), true);
+    assert.ok(!classes.has("bob-today-marks-off"));
+    assert.equal(TestNotice.messages.at(-1), "Today marks on");
+    assert.deepEqual(dispatched, ["area"]);
+  } finally {
+    if (savedDocument === undefined) {
+      delete global.document;
+    } else {
+      global.document = savedDocument;
+    }
+  }
+});
+
+test("rebuild triggers: doc, viewport, LP field, file switch rebuild; selection alone does not", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const plugin = makeLiveMarkPlugin(LivePlugin);
+  assert.equal(
+    plugin.todayMarkShouldRebuild({ docChanged: true }),
+    true,
+  );
+  assert.equal(
+    plugin.todayMarkShouldRebuild({ viewportChanged: true }),
+    true,
+  );
+  assert.equal(
+    plugin.todayMarkShouldRebuild({ selectionSet: true }),
+    false,
+  );
+  const fields = livePreviewFields;
+  const before = { file: { path: "a.md" } };
+  const after = { file: { path: "b.md" } };
+  assert.equal(
+    plugin.todayMarkShouldRebuild({
+      startState: { field: (f) => (f === fields.editorInfoField ? before : true) },
+      state: { field: (f) => (f === fields.editorInfoField ? after : true) },
+      transactions: [],
+    }),
+    true,
+  );
+  assert.equal(
+    plugin.todayMarkShouldRebuild({
+      startState: { field: () => false },
+      state: { field: () => true },
+      transactions: [],
+    }),
+    true,
+  );
+});
+
+test("jump guards in-flight, prefers cached ledgerLine over later match", async () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const plugin = makeLiveMarkPlugin(LivePlugin, [
+    {
+      entryLine: 3,
+      ledgerLine: 4,
+      name: "GTD",
+      range: "0725-0815",
+      running: true,
+      label: "GTD",
+    },
+  ]);
+  plugin.todayCache.dailyPath = "2026/20261019.md";
+  plugin.isTodayCacheReady = () => true;
+  plugin.todayMarksNow = () => new Date(2026, 9, 1, 8, 0, 0);
+  plugin.todayJumpInFlight = true;
+  plugin.app = { workspace: {} };
+  assert.equal(await plugin.jumpTodayTaskLink("area.md#fix"), false);
+  plugin.todayJumpInFlight = false;
+  const content = [
+    "## Pomodoros",
+    "",
+    "- [ ] (**0725-0815** [t:: 50m]) — GTD",
+    "    - [[area#^fix]]",
+    "- [ ] () — BLOG",
+    "    - [[area#^fix]]",
+  ].join("\n");
+  const cursorCalls = [];
+  const editor = {
+    getValue: () => content,
+    setCursor: (cursor) => cursorCalls.push(cursor),
+  };
+  const markdownView = Object.assign(new TestMarkdownView(), {
+    editor,
+    file: { path: "2026/20261019.md", extension: "md" },
+  });
+  const leaf = { view: markdownView };
+  plugin.app = {
+    metadataCache: {
+      getFirstLinkpathDest: (target) =>
+        target === "area" ? { path: "area.md" } : null,
+    },
+    workspace: {
+      iterateAllLeaves: (callback) => callback(leaf),
+      revealLeaf: async () => {},
+      setActiveLeaf: async () => {},
+      getLeavesOfType: () => [],
+    },
+  };
+  plugin.todayCache.details.set("area.md#fix", [
+    {
+      entryLine: 5,
+      ledgerLine: 6,
+      name: "BLOG",
+      range: null,
+      running: false,
+      label: "BLOG",
+    },
+    {
+      entryLine: 3,
+      ledgerLine: 4,
+      name: "GTD",
+      range: "0725-0815",
+      running: true,
+      label: "GTD",
+    },
+  ]);
+  TestNotice.messages = [];
+  assert.equal(await plugin.jumpTodayTaskLink("area.md#fix"), true);
+  assert.deepEqual(cursorCalls[0], { line: 5, ch: 6 });
+});
+
+test("jump with no open daily leaf attempts the daily open", async () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const plugin = makeLiveMarkPlugin(LivePlugin, [
+    { name: "GTD", range: null, running: false },
+  ]);
+  plugin.todayCache.dailyPath = "2026/20261019.md";
+  plugin.isTodayCacheReady = () => true;
+  plugin.todayMarksNow = () => new Date(2026, 9, 1, 8, 0, 0);
+  plugin.app = {
+    metadataCache: {
+      getFirstLinkpathDest: () => null,
+    },
+    workspace: {
+      iterateAllLeaves: () => {},
+      getLeavesOfType: () => [],
+    },
+  };
+  TestNotice.messages = [];
+  const result = await plugin.jumpTodayTaskLink("area.md#fix");
+  assert.equal(result, false);
+});
+
+test("home labels: unnamed timed entry uses derived label and 1-based entryLine", () => {
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = "/definitely/missing/ledger-tools-today-test";
+  try {
+    const LivePlugin = loadPluginModule({ livePreview: true });
+    const plugin = makeLiveMarkPlugin(LivePlugin);
+    const fixed = new Date(2026, 9, 1, 8, 0, 0);
+    const dailyPath = LivePlugin.helpers.todayDailyPath(fixed, {});
+    plugin.app = {
+      metadataCache: {
+        getFirstLinkpathDest: (target) =>
+          target === "a" ? { path: "a.md" } : null,
+      },
+      vault: {},
+      workspace: { trigger: () => {}, getLeavesOfType: () => [] },
+      plugins: { plugins: {} },
+    };
+    const content = "## Pomodoros\n\n- [ ] (**0900-0930** [t:: 30m]) — \n    - [[a#^x]]\n";
+    plugin.rebuildTodayCache(content, dailyPath, fixed);
+    const details = plugin.todayDetailsForKey("a.md#x");
+    assert.ok(Array.isArray(details) && details.length === 1);
+    assert.equal(details[0].entryLine, 3);
+    assert.ok(typeof details[0].label === "string" || details[0].label === null);
+  } finally {
+    if (savedXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = savedXdg;
+    }
+  }
 });

@@ -126,6 +126,31 @@ class BobLedgerToolsPomodoroHomeChipsReadingMixin {
       }
       let ownText = "";
       let listElement = null;
+      const sourceText = (node) => {
+        if (!node) {
+          return "";
+        }
+        if (node.nodeType === 3) {
+          return typeof node.nodeValue === "string" ? node.nodeValue : "";
+        }
+        if (node.nodeType !== 1) {
+          return "";
+        }
+        const tag = tagOf(node);
+        const classes = String(
+          typeof node.getAttribute === "function" ? node.getAttribute("class") || "" : "",
+        ).split(/\s+/);
+        if (
+          tag === "UL" ||
+          tag === "OL" ||
+          tag === "INPUT" ||
+          classes.includes("bob-pomodoro-home-chip") ||
+          (typeof node.getAttribute === "function" && node.getAttribute("aria-hidden") === "true")
+        ) {
+          return "";
+        }
+        return Array.from(node.childNodes || []).map(sourceText).join("");
+      };
       for (const child of li.childNodes || []) {
         const tag = tagOf(child);
         if (tag === "UL" || tag === "OL") {
@@ -134,11 +159,7 @@ class BobLedgerToolsPomodoroHomeChipsReadingMixin {
           }
           continue;
         }
-        if (child.nodeType === 3) {
-          ownText += child.nodeValue || "";
-        } else if (child.nodeType === 1 && tag !== "INPUT") {
-          ownText += child.textContent || "";
-        }
+        ownText += sourceText(child);
       }
       const parsed = planParseEntry(`- [${status}] ${ownText.trim()}`);
       if (!parsed || parsed.state === "cancelled") {

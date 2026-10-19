@@ -185,10 +185,18 @@ function fakeVault(notes) {
   };
   const metadataCache = {
     getFirstLinkpathDest,
-    getCache(file) {
-      const filePath = typeof file === "string" ? file : file && file.path;
+    getCache(filePath) {
+      assert.equal(typeof filePath, "string", "metadataCache.getCache expects a vault path");
       return files.has(filePath)
         ? { frontmatter: parseFrontmatter(notes[filePath]) }
+        : null;
+    },
+    getFileCache(file) {
+      assert.equal(typeof file, "object", "metadataCache.getFileCache expects a TFile");
+      assert.equal(typeof file.path, "string", "metadataCache.getFileCache expects a TFile path");
+      assert.strictEqual(files.get(file.path), file, "cache lookup must use the resolved vault file");
+      return files.has(file.path)
+        ? { frontmatter: parseFrontmatter(notes[file.path]) }
         : null;
     },
   };
@@ -272,7 +280,8 @@ test("FNV-1a fallback for job maps to the pinned magenta slot", () => {
 });
 
 test("rollup and area-color lints are reported once per note", () => {
-  const { metadataCache, vault } = fakeVault(fixture.notes);
+  const notes = { ...fixture.notes };
+  const { metadataCache, vault } = fakeVault(notes);
   const result = pomodoroHomeModels(
     "## Pomodoros\n- [x] (1000-1002)\n  - [[invalid_project#^one]]\n  - [[invalid_project#^two]]\n",
     "2026/20261018.md",
@@ -445,7 +454,8 @@ test("Reading view appends a forecast chip before its Task Link list", () => {
   entry.appendChild(taskList);
   topList.appendChild(entry);
 
-  const { metadataCache, vault } = fakeVault(fixture.notes);
+  const notes = { ...fixture.notes };
+  const { metadataCache, vault } = fakeVault(notes);
   const plugin = new LedgerToolsPlugin({ metadataCache, vault }, {});
   plugin.pomodoroHomeChipsEnabled = true;
   plugin.pomodoroHomeChipReadingWidgets = new Set();
@@ -461,6 +471,68 @@ test("Reading view appends a forecast chip before its Task Link list", () => {
   assert.equal(record.chip.getAttribute("data-home-hue"), "blue");
   assert.equal(record.chip.children[1].textContent, "sase");
   assert.equal(entry.children.at(-2), record.chip);
+  assert.equal(plugin.pomodoroHomeReadingEntry(entry, "2026/20261018.md").entry.name, "BLOG");
+  assert.equal(
+    entry.children.filter((child) => child.getAttribute("class") === "bob-pomodoro-home-chip").length,
+    1,
+  );
+
+  anchor.setAttribute("data-href", "bob#^home-chip");
+  assert.equal(plugin.renderPomodoroHomeReadingRecord(record), true);
+  assert.equal(record.chip.children[1].textContent, "bob");
+  assert.equal(plugin.pomodoroHomeReadingEntry(entry, "2026/20261018.md").entry.name, "BLOG");
+  assert.equal(
+    entry.children.filter((child) => child.getAttribute("class") === "bob-pomodoro-home-chip").length,
+    1,
+  );
+
+  notes["sase_blog.md"] = notes["sase_blog.md"].replace("parent: [[sase]]", "parent: [[dev]]");
+  anchor.setAttribute("data-href", "sase_blog#^home-chip");
+  assert.equal(plugin.renderPomodoroHomeReadingRecord(record), true);
+  assert.equal(record.chip.children[1].textContent, "sase_blog");
+  assert.equal(plugin.pomodoroHomeReadingEntry(entry, "2026/20261018.md").entry.name, "BLOG");
+  assert.equal(
+    entry.children.filter((child) => child.getAttribute("class") === "bob-pomodoro-home-chip").length,
+    1,
+  );
+
+  const makeEntry = (text, href) => {
+    const row = doc.createElement("LI");
+    row.setAttribute("data-task", " ");
+    row.appendChild(doc.createTextNode(text));
+    const rowList = doc.createElement("UL");
+    const taskRow = doc.createElement("LI");
+    const taskLink = doc.createElement("A");
+    taskLink.setAttribute("class", "internal-link");
+    taskLink.setAttribute("data-href", href);
+    taskRow.appendChild(taskLink);
+    rowList.appendChild(taskRow);
+    row.appendChild(rowList);
+    topList.appendChild(row);
+    return row;
+  };
+  const reviewEntry = makeEntry(" (1400-1410)", "2026/20261018#^gtd");
+  const reviewRecord = { el: reviewEntry, path: "2026/20261018.md", chip: null };
+  assert.equal(plugin.renderPomodoroHomeReadingRecord(reviewRecord), true);
+  const reviewContext = plugin.pomodoroHomeReadingEntry(reviewEntry, "2026/20261018.md");
+  assert.equal(reviewContext.entry.name, "");
+  assert.equal(plugin.pomodoroHomeChipModelForEntry(reviewContext.entry, "2026/20261018.md").kind, "review");
+  assert.equal(reviewRecord.chip.children[1].textContent, "GTD review");
+  assert.equal(plugin.renderPomodoroHomeReadingRecord(reviewRecord), true);
+  assert.equal(
+    reviewEntry.children.filter((child) => child.getAttribute("class") === "bob-pomodoro-home-chip").length,
+    1,
+  );
+
+  const namedReviewEntry = makeEntry(" (1410-1420) — GTD", "2026/20261018#^gtd");
+  const namedReviewRecord = { el: namedReviewEntry, path: "2026/20261018.md", chip: null };
+  assert.equal(plugin.renderPomodoroHomeReadingRecord(namedReviewRecord), true);
+  const namedReviewContext = plugin.pomodoroHomeReadingEntry(namedReviewEntry, "2026/20261018.md");
+  const namedReviewModel = plugin.pomodoroHomeChipModelForEntry(namedReviewContext.entry, "2026/20261018.md");
+  assert.equal(namedReviewContext.entry.name, "GTD");
+  assert.equal(namedReviewModel.kind, "review");
+  assert.equal(namedReviewModel.chip, null);
+  assert.equal(namedReviewRecord.chip, null);
 
   const css = fs.readFileSync(
     path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"),
@@ -656,5 +728,8 @@ test("Obsidian frontmatter shapes unwrap nested wikilink arrays", () => {
   assert.equal(values.rollup, "subprojects");
   assert.equal(LedgerToolsPlugin.helpers.pomodoroHomeType(values), "project");
   assert.equal(LedgerToolsPlugin.helpers.pomodoroHomeParentTarget(values.parent), "dev");
+  assert.equal(LedgerToolsPlugin.helpers.pomodoroHomeParentTarget("[[dev]]"), "dev");
+  assert.equal(LedgerToolsPlugin.helpers.pomodoroHomeParentTarget(["[[dev]]"]), "");
+  assert.equal(LedgerToolsPlugin.helpers.pomodoroHomeParentTarget("dev"), "");
   assert.deepEqual(LedgerToolsPlugin.helpers.pomodoroHomePercentages([1, 1, 1]), [34, 33, 33]);
 });

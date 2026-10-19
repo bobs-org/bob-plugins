@@ -110,19 +110,25 @@ function pomodoroHomeParentTarget(raw) {
     return "";
   }
   if (Array.isArray(raw)) {
-    if (raw.length !== 1) {
+    // Obsidian parses the unquoted scalar `parent: [[dev]]` as `[ ["dev"] ]`.
+    // A YAML sequence such as `parent: ["[[dev]]"]` is `["[[dev]]"]` and
+    // does not satisfy Rust's scalar-wikilink parent contract.
+    if (
+      raw.length !== 1 ||
+      !Array.isArray(raw[0]) ||
+      raw[0].length !== 1 ||
+      typeof raw[0][0] !== "string"
+    ) {
       return "";
     }
-    return pomodoroHomeParentTarget(raw[0]);
+    return pomodoroHomePathInner(raw[0][0]);
   }
   if (typeof raw !== "string") {
     return "";
   }
-  const linked = pomodoroHomeLinkTarget(raw);
-  if (linked) {
-    return linked;
-  }
-  return pomodoroHomePathInner(raw);
+  // Quoted scalar wikilinks remain strings in Obsidian's parsed frontmatter.
+  // Bare strings and single-item YAML sequences are not parent wikilinks.
+  return pomodoroHomeLinkTarget(raw);
 }
 
 function pomodoroHomeRollupValue(raw) {
@@ -202,25 +208,23 @@ function pomodoroHomeLineMinutes(line, timeRange) {
 
 function pomodoroHomeCacheFor(file, metadataCache, vault) {
   try {
-    if (!file || typeof file !== "object") {
+    if (!file || typeof file !== "object" || typeof file.path !== "string") {
       return null;
     }
-    if (metadataCache && typeof metadataCache.getCache === "function") {
-      const cache = metadataCache.getCache(file);
-      if (cache && typeof cache === "object") {
-        return cache;
-      }
+    if (!metadataCache || typeof metadataCache.getFileCache !== "function") {
+      return null;
     }
+    let actual = file;
     if (vault && typeof vault.getAbstractFileByPath === "function") {
-      const actual = vault.getAbstractFileByPath(file.path);
-      if (actual && metadataCache && typeof metadataCache.getCache === "function") {
-        return metadataCache.getCache(actual);
-      }
+      actual = vault.getAbstractFileByPath(file.path);
     }
+    if (!actual || typeof actual.path !== "string") {
+      return null;
+    }
+    return metadataCache.getFileCache(actual) || null;
   } catch (error) {
     return null;
   }
-  return null;
 }
 
 function pomodoroHomeResolveFile(target, sourcePath, dailyPath, metadataCache, vault) {

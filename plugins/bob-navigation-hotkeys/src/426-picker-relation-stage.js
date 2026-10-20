@@ -784,7 +784,8 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     const raw = this.getRawQuery ? String(this.getRawQuery() || "") : "";
     let label = null;
     if (item && item.kind === "relation-label" && !item.plain) {
-      label = item.typed || item.label ? normalizeRelationLabel(item.typed || item.label || "") : null;
+      // Relation-label text is always item.label; item.typed is a boolean flag.
+      label = item.label ? normalizeRelationLabel(item.label) : null;
       if (!label) {
         new Notice(describeRelationLabelRefusal(raw) || "That relation cannot be used");
         return false;

@@ -258,6 +258,132 @@ function makeRelationPicker(plugin, direction, sources, notes) {
   return picker;
 }
 
+function beginRelationLabel(picker, targets, raw, mode = "add") {
+  picker.getRawQuery = () => raw;
+  picker.showRelationLabelStage(targets, { mode });
+  // The lightweight picker harness does not mount the modal DOM, so stage
+  // fields normally set by applyOptions are supplied explicitly.
+  picker.stage = "relation-label";
+  picker.relationLabelTargets = targets;
+  picker.relationLabelMode = mode;
+}
+
+test("LG3: typed relation labels commit their text through the relation field", async (t) => {
+  await t.test("add writes the typed label and mirror", async () => {
+    const notes = {
+      "Source.md": "- [ ] #task Source ^source",
+      "Target.md": "- [ ] #task Target ^target",
+    };
+    const harness = makePlugin(notes);
+    const sourceEditor = new TestEditor(notes["Source.md"]);
+    const targetEditor = new TestEditor(notes["Target.md"]);
+    harness.openEditors.set("Source.md", sourceEditor);
+    harness.openEditors.set("Target.md", targetEditor);
+    const target = { path: "Target.md", line: 0, blockId: "target", displayText: "Target" };
+    const picker = makeRelationPicker(harness.plugin, "to", [
+      { path: "Source.md", line: 0, blockId: "source", displayText: "Source" },
+    ], notes);
+    beginRelationLabel(picker, [target], "son of");
+    const row = picker.getRelationLabelPreviewItems()[0];
+    assert.equal(row.typed, true);
+    assert.equal(await picker.commitRelationLabel(row), true);
+    assert.match(sourceEditor.getValue(), /son of \[\[Target#\^target\]\]/);
+    assert.match(targetEditor.getValue(), /LINKED FROM:\*\* \[\[Source#\^source\]\] \(son of\)/);
+    assert.doesNotMatch(sourceEditor.getValue() + targetEditor.getValue(), /\btrue\b/);
+  });
+
+  await t.test("typed text is normalized before commit", async () => {
+    const notes = {
+      "Source.md": "- [ ] #task Source ^source",
+      "Target.md": "- [ ] #task Target ^target",
+    };
+    const harness = makePlugin(notes);
+    const sourceEditor = new TestEditor(notes["Source.md"]);
+    harness.openEditors.set("Source.md", sourceEditor);
+    const picker = makeRelationPicker(harness.plugin, "to", [
+      { path: "Source.md", line: 0, blockId: "source" },
+    ], notes);
+    const target = { path: "Target.md", line: 0, blockId: "target" };
+    beginRelationLabel(picker, [target], "son   of:");
+    assert.equal(await picker.commitRelationLabel(picker.getRelationLabelPreviewItems()[0]), true);
+    assert.match(sourceEditor.getValue(), /son of \[\[Target#\^target\]\]/);
+  });
+
+  await t.test("relabel replaces an existing label and its mirror", async () => {
+    const notes = {
+      "Source.md": ["- [ ] #task Source ^source", "  - 🪢 **LINKS:** see [[Target#^target]]"].join("\n"),
+      "Target.md": ["- [ ] #task Target ^target", "  - 🪢 **LINKED FROM:** [[Source#^source]] (see)"].join("\n"),
+    };
+    const harness = makePlugin(notes);
+    const sourceEditor = new TestEditor(notes["Source.md"]);
+    const targetEditor = new TestEditor(notes["Target.md"]);
+    harness.openEditors.set("Source.md", sourceEditor);
+    harness.openEditors.set("Target.md", targetEditor);
+    const target = relationStageHarness(notes, "Source.md", [0]).current[0];
+    const picker = makeRelationPicker(harness.plugin, "to", [
+      { path: "Source.md", line: 0, blockId: "source", displayText: "Source" },
+    ], notes);
+    beginRelationLabel(picker, [target], "son of", "relabel");
+    assert.equal(await picker.commitRelationLabel(picker.getRelationLabelPreviewItems()[0]), true);
+    assert.match(sourceEditor.getValue(), /son of \[\[Target#\^target\]\]/);
+    assert.match(targetEditor.getValue(), /\(son of\)/);
+    assert.doesNotMatch(sourceEditor.getValue(), /see \[\[Target/);
+  });
+
+  await t.test("Linked from labels the other task's LINKS line", async () => {
+    const notes = {
+      "Source.md": "- [ ] #task Source ^source",
+      "Target.md": "- [ ] #task Target ^target",
+    };
+    const harness = makePlugin(notes);
+    const sourceEditor = new TestEditor(notes["Source.md"]);
+    const targetEditor = new TestEditor(notes["Target.md"]);
+    harness.openEditors.set("Source.md", sourceEditor);
+    harness.openEditors.set("Target.md", targetEditor);
+    const picker = makeRelationPicker(harness.plugin, "from", [
+      { path: "Source.md", line: 0, blockId: "source", displayText: "Source" },
+    ], notes);
+    const target = { path: "Target.md", line: 0, blockId: "target", displayText: "Target" };
+    beginRelationLabel(picker, [target], "son of");
+    assert.equal(await picker.commitRelationLabel(picker.getRelationLabelPreviewItems()[0]), true);
+    assert.match(sourceEditor.getValue(), /son of \[\[Target#\^target\]\]/);
+    assert.match(targetEditor.getValue(), /LINKED FROM:\*\* \[\[Source#\^source\]\] \(son of\)/);
+  });
+
+  await t.test("suggestion, plain, and raw-input paths remain supported", async () => {
+    const notes = {
+      "Source.md": "- [ ] #task Source ^source",
+      "Target.md": "- [ ] #task Target ^target",
+    };
+    const target = { path: "Target.md", line: 0, blockId: "target" };
+    const createPicker = () => {
+      const harness = makePlugin(notes);
+      const editor = new TestEditor(notes["Source.md"]);
+      harness.openEditors.set("Source.md", editor);
+      const picker = makeRelationPicker(harness.plugin, "to", [
+        { path: "Source.md", line: 0, blockId: "source" },
+      ], notes);
+      return { picker, editor };
+    };
+
+    const suggestion = createPicker();
+    beginRelationLabel(suggestion.picker, [target], "see");
+    assert.equal(await suggestion.picker.commitRelationLabel({ kind: "relation-label", typed: false, label: "see also" }), true);
+    assert.match(suggestion.editor.getValue(), /see also \[\[Target#\^target\]\]/);
+
+    const plain = createPicker();
+    beginRelationLabel(plain.picker, [target], "");
+    assert.equal(await plain.picker.commitRelationLabel(plain.picker.getRelationLabelPreviewItems()[0]), true);
+    assert.match(plain.editor.getValue(), /LINKS:\*\* \[\[Target#\^target\]\]/);
+    assert.doesNotMatch(plain.editor.getValue(), /LINKS:\*\* [^\n]+\[\[Target/);
+
+    const raw = createPicker();
+    beginRelationLabel(raw.picker, [target], "son of");
+    assert.equal(await raw.picker.commitRelationLabel(undefined), true);
+    assert.match(raw.editor.getValue(), /son of \[\[Target#\^target\]\]/);
+  });
+});
+
 test("links-to row follows blocks with N, first label, cut target, and +K", () => {
   const content = [
     "- [ ] #task Ship report ^ship",

@@ -17,6 +17,9 @@ const TASK_RELATION_BULLET_RE =
   /^(?<indent>[ \t]*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?:(?<emoji>🪢|🔗)[ \t]+)?\*\*(?<label>LINKS|LINKS TO|LINKED FROM|BACKLINKS):\*\*[ \t]*(?<body>.*)$/u;
 
 function normalizeRelationLabel(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
   const label = String(value || "")
     .trim()
     .replace(/\s+/gu, " ")

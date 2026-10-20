@@ -32,6 +32,9 @@ test("nav LK14–LK19 context and cross-parse rules", () => {
   assert.equal(helpers.parseBlocksLine("  - 🪢 **LINKS:** [[#^a]]").verdict, "not-a-line"); // LK19
   assert.equal(helpers.normalizeRelationLabel("  follow-up:  "), "follow-up");
   assert.equal(helpers.normalizeRelationLabel("too | wide"), null);
+  assert.equal(helpers.normalizeRelationLabel(true), null);
+  assert.equal(helpers.normalizeRelationLabel(1), null);
+  assert.equal(helpers.normalizeRelationLabel(null), null);
 });
 
 test("nav MC5 refuses relation embeds and MC16 keeps LINKS while dropping LINKED FROM", () => {

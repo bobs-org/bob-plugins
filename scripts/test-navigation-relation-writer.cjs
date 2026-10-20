@@ -209,6 +209,12 @@ test("LW11 normalises and refuses labels", () => {
     add: [{ link: "[[#^t]]", label: "see (old)" }],
   });
   assert.equal(badChar.ok, false);
+  const nonString = helpers.planLinksEdit("- [ ] #task T ^t", 0, {
+    add: [{ link: "[[#^t]]", label: true }],
+  });
+  assert.equal(nonString.ok, false);
+  assert.equal(nonString.reason, "invalid-label");
+  assert.equal(nonString.nextContent, "- [ ] #task T ^t");
 });
 
 test("LW12 reuses a 4-space child indent", () => {

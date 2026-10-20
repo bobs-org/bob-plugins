@@ -44,6 +44,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsPomodoroHomeChipsMixin,
   BobLedgerToolsPomodoroHomeChipsReadingMixin,
   BobLedgerToolsDependencyModelMixin,
+  BobLedgerToolsRelationIndexMixin,
   BobLedgerToolsBlocksModelMixin,
   BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsDependencyRenderMixin,

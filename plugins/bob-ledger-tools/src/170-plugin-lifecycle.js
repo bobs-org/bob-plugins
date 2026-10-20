@@ -1,5 +1,6 @@
 class BobLedgerToolsPlugin extends Plugin {
   onload() {
+    this.initializeRelationIndex();
     this.vimMappingsRegistered = false;
     this.pendingCenterDeferred = null;
     this.dailyLocations = new Map();
@@ -155,6 +156,11 @@ class BobLedgerToolsPlugin extends Plugin {
         EditorView.updateListener.of((update) =>
           this.trackFreshnessFooterUpdate(update),
         ),
+      );
+      this.registerEditorExtension(
+        EditorView.updateListener.of((update) => {
+          if (update && update.docChanged) this.scheduleRelationIndexOverlayRefresh();
+        }),
       );
     }
 
@@ -398,6 +404,9 @@ class BobLedgerToolsPlugin extends Plugin {
       // never throws: guard calls with try/catch as well as
       // optional chaining.
       unblockedGlyph: this.unblockedGlyphApi(),
+      // Live source-authoritative task relations. The namespace is additive;
+      // the root api stays v3 while this index evolves under its own v1.
+      relationIndex: this.relationIndexApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
@@ -620,6 +629,7 @@ class BobLedgerToolsPlugin extends Plugin {
       this.refreshDailyScrollCaptureTarget();
       this.captureActiveDailyLocation();
       this.refreshTodayCacheFromDaily();
+      this.startRelationIndexScan();
       if (this.registerVimMappings()) {
         return;
       }
@@ -645,12 +655,14 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();
+    this.setupRelationIndex();
     this.setupStatsBlock();
     this.setupReadingBoardData();
     this.setupReadingBoardBlock();
   }
 
   onunload() {
+    this.teardownRelationIndex();
     if (
       this.todayMarksTimer !== null &&
       this.todayMarksTimer !== undefined &&

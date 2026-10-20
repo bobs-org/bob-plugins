@@ -50,6 +50,27 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | `dateMarks` | 1 | Model and render canonical date marks. |
 | `progressMarks` | 1 | Refresh the display-only In Progress Task Link mark. |
 | `unblockedGlyph` | 1 | Refresh the display-only unblocked hand-off glyph. |
+| `relationIndex` | 1 | Read the live, source-authoritative task relation index and label suggestions. |
+
+`relationIndex.ready()` reports whether the chunked initial scan is complete;
+`generation` increases whenever a complete pair of forward and reverse maps
+is published. `outgoing(path, blockIdOrLine)` accepts a block ID, a 1-based
+task line number, or the source task's line text, and returns its relation
+rows, including unresolved targets. `incoming(path, blockId)` returns
+only rows whose target path and block ID resolve. Each row contains `source`
+and `target` task records (`path`, `blockId`, `line`, `text`, and `status`),
+the optional `label`, relation line number and raw text, plus `resolved`,
+`archived`, `embedded`, and `struck` flags. `labelSuggestions(prefix?)` returns
+case-insensitively deduplicated `{ label, count }` rows ordered by count, then
+Unicode code point. `onChange(callback)` subscribes to atomic map publications
+and returns an unsubscribe function. Task text and status prefer the Tasks
+cache and fall back to indexed note text, including read-only `done/` notes.
+
+The index scans relation-bearing Markdown files in idle chunks, including
+`done/`, and updates from metadata changes, vault create/delete/rename events,
+and the active editor's unsaved text. Relation targets are resolved with
+Obsidian's link resolver and cached block IDs. Consumers render from this live
+index; they do not read the generated `LINKED FROM` mirror as source data.
 
 The read-only `readyBudget()` returns
 `{ count, cap, over }`; unavailable Tasks data or an unready cache

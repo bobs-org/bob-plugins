@@ -1173,7 +1173,11 @@ test("the startup storm is linear", () => {
   assert.equal(typeof handlers.onLayoutReady, "function");
   handlers.onLayoutReady();
   const snapshot = plugin.api.noteReady.snapshot();
-  assert.equal(walks.scans, 1);
+  assert.equal(
+    walks.scans,
+    2,
+    "one note-ready eligibility scan plus one relation-index prefilter scan",
+  );
   assert.equal(snapshot.available, true);
   for (const path of typed) {
     assert.ok(plugin.api.noteReady.forNote(path), path);

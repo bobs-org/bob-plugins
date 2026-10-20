@@ -505,6 +505,9 @@ test("plugin exposes the versioned api and registers the bob-plan block", async 
   try {
     plugin.onload();
     assert.equal(plugin.api.version, 3);
+    assert.equal(plugin.api.relationIndex.version, 1);
+    assert.equal(plugin.api.relationIndex.ready(), false);
+    assert.deepEqual(plugin.api.relationIndex.outgoing("notes/missing.md", "missing"), []);
     assert.equal(plugin.api.nowBudget, undefined);
     assert.deepEqual(plugin.api.caps(), defaultPlanCaps());
     assert.equal(typeof plugin.codeBlocks["bob-plan"], "function");

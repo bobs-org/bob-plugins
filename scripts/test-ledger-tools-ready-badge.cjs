@@ -1288,8 +1288,8 @@ test("lane lints appear in NEXT, PENDING, READY order", () => {
     isToday: () => false,
   });
   assert.deepEqual(model.lints, [
-    "NEXT whole lane has 16/15 tasks (including TODAY); release some with Alt+N  next_cap_exceeded",
-    "PENDING whole lane has 11/10 tasks (including TODAY); release some with Alt+N  pending_cap_exceeded",
+    "NEXT has 16/15 tasks; release some with Alt+N  next_cap_exceeded",
+    "PENDING has 11/10 tasks; release some with Alt+N  pending_cap_exceeded",
     "READY has 101/100 tasks; prune at the weekly review  ready_cap_exceeded",
   ]);
 });

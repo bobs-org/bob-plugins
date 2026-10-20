@@ -472,7 +472,7 @@ test("planBlockModel adds lane cap lints when a lane is over", () => {
   );
   assert.match(
     model.lints[0],
-    /NEXT whole lane has 16\/15 tasks \(including TODAY\)/,
+    /NEXT has 16\/15 tasks; release some with Alt\+N/,
   );
 });
 
@@ -635,9 +635,10 @@ test("planBlockModel daily badges follow dashboard section counts", () => {
   assert.equal(screenshotNext.next.count, 17);
   assert.equal(screenshotNext.nextModel.over, false);
   assert.equal(screenshotNext.over, false);
-  assert.match(
-    screenshotNext.lints[0],
-    /NEXT whole lane has 17\/15 tasks \(including TODAY\)/,
+  assert.equal(screenshotNext.next.over, true);
+  assert.equal(
+    screenshotNext.lints.some((lint) => lint.endsWith("next_cap_exceeded")),
+    false,
   );
   const screenshotPending = modelOf(pendingTasks(4, 4), (task) => {
     const n = Number(String(task.blockLink).replace(" ^p", ""));
@@ -652,10 +653,12 @@ test("planBlockModel daily badges follow dashboard section counts", () => {
     return n >= 4;
   });
   assert.equal(pendingLaneOver.pendingText, "PENDING 4/10");
+  assert.equal(pendingLaneOver.pending.count, 11);
+  assert.equal(pendingLaneOver.pending.over, true);
   assert.equal(pendingLaneOver.pendingModel.over, false);
-  assert.match(
-    pendingLaneOver.lints[0],
-    /PENDING whole lane has 11\/10 tasks \(including TODAY\)/,
+  assert.equal(
+    pendingLaneOver.lints.some((lint) => lint.endsWith("pending_cap_exceeded")),
+    false,
   );
   const atCap = modelOf(nextTasks(15, 1), (task) => {
     const n = Number(String(task.blockLink).replace(" ^n", ""));
@@ -663,20 +666,38 @@ test("planBlockModel daily badges follow dashboard section counts", () => {
   });
   assert.equal(atCap.nextText, "NEXT 15/15");
   assert.equal(atCap.nextModel.over, false);
+  assert.equal(
+    atCap.lints.some((lint) => lint.endsWith("next_cap_exceeded")),
+    false,
+  );
   const sectionOver = modelOf(nextTasks(16, 0), () => false);
   assert.equal(sectionOver.nextText, "NEXT 16/15");
   assert.equal(sectionOver.nextModel.over, true);
+  assert.match(sectionOver.lints[0], /NEXT has 16\/15 tasks; release some with Alt\+N/);
+  const screenshotPendingWholeLane = modelOf(
+    pendingTasks(5, 4),
+    (task) => Number(String(task.blockLink).replace(" ^p", "")) >= 5,
+    { maxPending: 8, maxNext: 16 },
+  );
+  assert.equal(screenshotPendingWholeLane.pendingText, "PENDING 5/8");
+  assert.equal(screenshotPendingWholeLane.pending.count, 9);
+  assert.equal(screenshotPendingWholeLane.pending.over, true);
+  assert.equal(
+    screenshotPendingWholeLane.lints.some((lint) => lint.endsWith("pending_cap_exceeded")),
+    false,
+  );
   const empty = modelOf([], () => false, { maxNext: 20, maxPending: 8 });
   assert.equal(empty.nextText, "NEXT 0/20");
   assert.equal(empty.pendingText, "PENDING 0/8");
 });
 
 test("planBlockModel keeps a supplied unavailable dashboard budget", () => {
-  const tasks = [
+  const tasks = Array.from({ length: 16 }, (_, index) =>
     laneTask({
+      description: `next ${index}`,
       status: { type: "ON_HOLD", name: "Next", symbol: "*" },
     }),
-  ];
+  );
   const unavailable = {
     section: null,
     lane: null,
@@ -698,7 +719,12 @@ test("planBlockModel keeps a supplied unavailable dashboard budget", () => {
   assert.equal(model.pendingText, "PENDING –");
   assert.equal(model.nextModel.placeholder, true);
   assert.equal(model.nextModel.over, false);
-  assert.equal(model.next.count, 1);
+  assert.equal(model.next.count, 16);
+  assert.equal(model.next.over, true);
+  assert.equal(
+    model.lints.some((lint) => /(?:next|pending)_cap_exceeded$/.test(lint)),
+    false,
+  );
 });
 
 test("work tones: TODAY override and unavailable stay neutral in planBlockModel", () => {

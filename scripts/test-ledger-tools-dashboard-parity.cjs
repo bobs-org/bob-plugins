@@ -874,15 +874,39 @@ test("daily paint matches dashboard section badges on screenshot fixtures", asyn
     const container = dailyEl.children[0];
     assert.match(container.attrs["aria-label"], /NEXT 10\/15/);
     assert.doesNotMatch(container.attrs["aria-label"], /over plan/);
-    const lint = container.children.find((child) =>
-      String(child.cls || "").includes("bob-plan-lint"),
-    );
-    assert.match(
-      lint.text,
-      /NEXT whole lane has 17\/15 tasks \(including TODAY\)/,
+    assert.equal(
+      container.children.some((child) =>
+        String(child.cls || "").includes("bob-plan-lint") &&
+        String(child.text || "").includes("next_cap_exceeded"),
+      ),
+      false,
     );
     assert.equal(plugin.dashboardLaneWidgets.size, 0);
   }, { todayIds });
+});
+
+test("daily paint lane lint matches a red badge section count", async () => {
+  const tasks = Array.from({ length: 16 }, (_, index) =>
+    nextTask({
+      path: `notes/over-${index}.md`,
+      blockLink: ` ^over${index}`,
+      description: `next ${index}`,
+    }),
+  );
+  await withParityPlugin(tasks, async (plugin) => {
+    const dailyEl = paintNode("div");
+    plugin.paintPlanBlock(dailyEl, "2026/20260930.md");
+    await new Promise((resolve) => setImmediate(resolve));
+    const daily = findLaneAnchor(dailyEl, "next");
+    assert.equal(laneValue(daily), "16/15");
+    assert.match(daily.cls, /bob-plan-over/);
+    const lint = dailyEl.children[0].children.find((child) =>
+      String(child.cls || "").includes("bob-plan-lint") &&
+      String(child.text || "").includes("next_cap_exceeded"),
+    );
+    assert.ok(lint, "expected the red NEXT badge's cap lint");
+    assert.match(lint.text, /NEXT has 16\/15 tasks; release some with Alt\+N/);
+  });
 });
 
 test("daily and dashboard membership agree for exclusions and custom IN_PROGRESS", async () => {

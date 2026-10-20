@@ -45676,9 +45676,9 @@ function resolvePlanDashboardBudget(
 // (the plugin passes its synchronous cache); it still feeds READY.
 // READY is the shared live current backlog (Today excluded); it never
 // changes what the ledger's PLAN status means.
-// Daily NEXT/PENDING badges follow dashboard section counts. Whole-lane
-// `next`/`pending` remain for cap lints. Optional `nextDashboard` /
-// `pendingDashboard` are prepared guarded budgets from the paint path.
+// Daily NEXT/PENDING badges and their cap lints follow dashboard section
+// counts. Whole-lane `next`/`pending` remain available to callers. Optional
+// `nextDashboard` / `pendingDashboard` are guarded budgets from the paint path.
 function planBlockModel({
   content,
   tasks,
@@ -45760,16 +45760,16 @@ function planBlockModel({
   const over =
     budget.status === "over" || (hasTasks && ready && ready.over);
   const lintWarnings = budget.warnings.slice();
-  if (hasTasks && next.over) {
+  if (nextModel.placeholder === false && nextModel.sectionOver) {
     lintWarnings.push({
       code: PLAN_LINT_NEXT_CAP,
-      message: `NEXT whole lane has ${next.count}/${next.cap} tasks (including TODAY); release some with Alt+N`,
+      message: `NEXT has ${nextModel.section}/${nextModel.cap} tasks; release some with Alt+N`,
     });
   }
-  if (hasTasks && pending.over) {
+  if (pendingModel.placeholder === false && pendingModel.sectionOver) {
     lintWarnings.push({
       code: PLAN_LINT_PENDING_CAP,
-      message: `PENDING whole lane has ${pending.count}/${pending.cap} tasks (including TODAY); release some with Alt+N`,
+      message: `PENDING has ${pendingModel.section}/${pendingModel.cap} tasks; release some with Alt+N`,
     });
   }
   if (

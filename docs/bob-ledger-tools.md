@@ -12,7 +12,7 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.60.2 |
+| Version | 1.60.3 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Expand Bob daily-note snippets and ledger time ranges, navigate and adjust Pomodoro entries, render the live plan-budget bob-plan block, track task freshness including [unblocked::] TICKLERs, render [priority::] fields as signal-bar priority marks, render created/scheduled/completion/cancelled dates as compact date marks (including in Tasks query results), render `#task` tags as a teal hash task-tag mark (hidden in Tasks query results) and `#task #ref` pairs as an open-book ref mark, and render Depends-On lines as live dependency chips plus generated BLOCKS rows with live dependents, last-blocker keys, stale-entry styling, and frees-N summaries. Open BLOCKS rows add ＋ / hover × through nav api.blocks when present. Index raw task LINKS rows through api.relationIndex v1, with unsaved editor overlays and label suggestions. Render Task Links under today's open Pomodoros with In Progress half-ring marks and read-time unblocked hand-off glyphs. Fetch `bob stats` JSON with stale-while-revalidate caching and render the responsive Stats page `bob-stats` block with metric-family context, accessible daily drill-down, definition disclosures, tiles, and table. Fetch `bob ref list` JSON with a bounded stale-while-revalidate cache, decode audio paths, and provide pure Reading Board lane, card, Snoozed group, ordering, and validated fence models. Render the read-only `bob-reading-board` code block, a Reading / Next / Ready / Snoozed kanban of the reading queue drawn entirely from `bob ref list` JSON (wake dates and waiting-on reasons from bob, never from vault text), with keyed background refresh errors, repaint-safe navigation, roving keyboard focus, click and modifier routing to Obsidian navigation, the optional Highlights PDF hand-off through nav `openReferencePdf`, and the Open Reading Board command. Derive quiet lowercase Pomodoro home chips from linked task notes in Live Preview and Reading view, with area-hue dots, a tooltip, and a toggle. Show a display-only 🍅 Today mark on open task lines linked under today's open Pomodoros in Live Preview and Reading view, with a session toggle and jumps to the Task Link. Task relation lines are excluded from the plan Task Link count. Render 🪢 LINKS and LINKED FROM rows as live relation chips from that index, with label pills, inverse phrases, stale and broken styling, closed-row collapse, and ＋ / hover × through nav api.relations v1 when present. |
@@ -61,8 +61,9 @@ starred, and one muted line per lint. READY is the shared live current backlog
 `ready_cap_exceeded` lint line. PENDING and NEXT show the live dashboard section
 counts (Today excluded; `–` when Tasks or the current-day Today cache is
 unready) and turn red only for a strict section excess, while whole-lane
-pressure stays in the tooltip and in `next_cap_exceeded` / `pending_cap_exceeded`
-lints that name the whole lane, including TODAY. Older daily notes follow
+pressure stays in the tooltip. `next_cap_exceeded` / `pending_cap_exceeded`
+lint lines appear only when the matching badge is red and quote its section
+count. Older daily notes follow
 today's live lanes while keeping their own TODAY theme and link budget.
 
 Today is read from the ledger at render time — the open tasks with a dedicated

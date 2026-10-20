@@ -193,5 +193,5 @@ glyphs.
   model.
 - [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) — the review walk and
   Task Card this plugin feeds.
-- [Cross-plugin APIs](develop/plugin-apis.md) — the versioned planning,
+- [Cross-plugin APIs](https://bobs-org.github.io/develop/plugins/plugin-apis/) — the versioned planning,
   freshness, stats, and mark interfaces.

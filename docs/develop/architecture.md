@@ -86,5 +86,6 @@ requirements. Preserve handwritten prose outside those regions.
 Generate facts with `npm run docs:gen` and check drift with
 `npm run docs:inventory:check`. Check mode reports missing or stale
 output without writing. The full npm gates include this drift check.
-See [Validation](validation.md) for the complete workflow and
-[the plugin index](../index.md) for the generated inventory.
+Preview the mounted site with `npm run docs:check` from a bob-cli
+checkout; see [Validation](validation.md). See
+[the plugin index](https://bobs-org.github.io/reference/plugins/) for the generated inventory.

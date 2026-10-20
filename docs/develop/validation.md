@@ -27,6 +27,18 @@ required manifest fields, the folder/ID match, semantic version format, and
 `main.js` syntax with `node --check`; it does not execute
 plugin code.
 
+Preview the mounted plugin docs through bob-cli. This does not run as
+part of `npm test` and does not call npm:
+
+```bash
+BOB_CLI_DIR=<bob-cli-checkout> npm run docs:check
+```
+
+`docs:check` resolves bob-cli from `BOB_CLI_DIR`, then `../bob-cli`,
+then a managed cache clone of bob-cli origin `master`. It runs
+`just docs-check` with `BOB_DOCS_BOB_PLUGINS_DIR` set to this
+repository. Set `BOB_CLI_DIR` to the checkout you are working in.
+
 ## Focused suites
 
 Navigation Hotkeys, Task Status Cycler, and Block ID Prompt tests are

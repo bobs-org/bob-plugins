@@ -113,7 +113,7 @@ target task's headline and need no configuration.
 ## Related
 
 - [Block ID defaults](block-id-defaults.md) — generated suggestions and collision handling.
-- [Cross-plugin APIs](develop/plugin-apis.md) — the Pomodoro link-picker interface.
+- [Cross-plugin APIs](https://bobs-org.github.io/develop/plugins/plugin-apis/) — the Pomodoro link-picker interface.
 - [Task dependencies](https://bobs-org.github.io/task-dependencies/) — the
   Depends-On line this plugin's guards defer to.
 - [Plan](https://bobs-org.github.io/plan/) — the plan budget appended to link

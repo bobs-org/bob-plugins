@@ -138,8 +138,8 @@ than rejecting. `taskLinkLane.matches` is synchronous and
 
 ## Related
 
-- [Block ID Prompt](../block-id-prompt.md)
-- [Bob Ledger Tools](../bob-ledger-tools.md)
-- [Bob Navigation Hotkeys](../bob-navigation-hotkeys.md)
-- [Task Status Cycler](../task-status-cycler.md)
+- [Block ID Prompt](https://bobs-org.github.io/reference/plugins/block-id-prompt/)
+- [Bob Ledger Tools](https://bobs-org.github.io/reference/plugins/bob-ledger-tools/)
+- [Bob Navigation Hotkeys](https://bobs-org.github.io/reference/plugins/bob-navigation-hotkeys/)
+- [Task Status Cycler](https://bobs-org.github.io/reference/plugins/task-status-cycler/)
 - [Plugin architecture](architecture.md) — generated sources and module boundaries.

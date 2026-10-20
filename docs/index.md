@@ -5,6 +5,17 @@ description: "Browse Bob’s Obsidian plugins and their generated command refere
 
 Browse Bob's Obsidian plugins and their current versions and command defaults.
 
+## Install
+
+Deploy the plugins into a Bob vault with Bob CLI:
+
+```bash
+bob plugins sync
+```
+
+See [plugin deployment](https://bobs-org.github.io/develop/plugins/deployment/) for
+`--repo` and `--no-pull` when working from this checkout.
+
 <!-- BEGIN GENERATED: inventory -->
 | Plugin | Version | Minimum Obsidian version | Desktop only |
 | --- | ---: | ---: | --- |

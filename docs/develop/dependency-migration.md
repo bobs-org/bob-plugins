@@ -28,5 +28,5 @@ hooks' responsibility.
 ## Related
 
 - [Task dependencies](https://bobs-org.github.io/task-dependencies/) — the canonical dependency contract.
-- [BLOCKS dependency mirrors](../blocks-mirrors.md) — the generated reverse view.
+- [BLOCKS dependency mirrors](https://bobs-org.github.io/reference/plugins/blocks-mirrors/) — the generated reverse view.
 - [Validation](validation.md) — test and repository checks.

@@ -256,7 +256,7 @@ This plugin adds no settings tab. It honors the shared bob config file
 - [Open notes URI](open-notes-uri.md) — open a batch of notes.
 - [Open reference PDF in Highlights](highlights.md) — open reading PDFs.
 - [Templater new-note trigger](templater-trigger.md) — device-local trigger handling.
-- [Cross-plugin APIs](develop/plugin-apis.md) — navigation and successor interfaces.
+- [Cross-plugin APIs](https://bobs-org.github.io/develop/plugins/plugin-apis/) — navigation and successor interfaces.
 - [Task move](https://bobs-org.github.io/task-move/) — the move semantics
   behind `Ctrl+Shift+M`.
 - [Task dependencies](https://bobs-org.github.io/task-dependencies/) — the

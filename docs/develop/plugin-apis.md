@@ -120,6 +120,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `notice` | 1 | Show the Unblocked card. |
 | `successors` | 1 | Ask which offered successor links to add. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
+| `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` settles `{ ok: false }` until both stage directions ship. |
 | `openReferencePdf(path)` | Additive member | Open a vault-relative PDF in Highlights; resolves `{ ok, reason? }`. |
 | `openDependencyStage(ref)` | Root method | Open the task's dependency stage. |
 | `removeDependency(parentRef, target)` | Root method | Remove the requested prerequisite. |
@@ -133,7 +134,13 @@ to a result object. `successors.pick(model)` resolves to a result
 with a `picks` array or `null` when no choice is made.
 `blocks.openStage(ref)` and
 `blocks.removeDependent(ownerRef, target)` resolve to result
-objects. `notice.showUnblocked(model)` presents the Unblocked card.
+objects. `relations.removeLink(sourceRef, targetRef)` removes the
+authored LINKS edge from the source and best-effort-updates the
+target's LINKED FROM mirror; `relations.openStage({path, line,
+direction})` is reserved for the Links / Linked-from stages and
+currently settles `{ ok: false, reason: "unavailable" }`. Callers
+feature-detect `api.relations?.version >= 1` before showing chip
+controls. `notice.showUnblocked(model)` presents the Unblocked card.
 
 Async navigation methods settle to result objects or `null` rather
 than rejecting. `taskLinkLane.matches` is synchronous and

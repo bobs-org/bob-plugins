@@ -43,6 +43,48 @@ function loadBlocksLinesEnabled(options = {}) {
   return enabled;
 }
 
+let relationsLinkedFromLinesConfigCache = { key: null, value: true };
+
+function resetRelationsLinkedFromLinesConfigCache() {
+  relationsLinkedFromLinesConfigCache = { key: null, value: true };
+}
+
+// LINKED FROM kill switch (`docs/task-relations.md` §12). Missing, invalid,
+// or unreadable values stay enabled so the switch is lossless; cache by
+// mtime/size so a config edit takes effect on the next gesture (LG14).
+function loadRelationsLinkedFromLinesEnabled(options = {}) {
+  const env = options.env || (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule = options.osModule === undefined ? requireOptionalNodeModule("os") : options.osModule;
+  const fsModule = options.fsModule === undefined ? requireOptionalNodeModule("fs") : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") return true;
+  const configPath = options.configPath || getBulletPropertyConfigPath({ env, osModule });
+  const statKey = blocksLinesConfigStatKey(fsModule, configPath);
+  const key = statKey == null ? null : `${configPath}|${statKey}`;
+  if (key != null && relationsLinkedFromLinesConfigCache.key === key) {
+    return relationsLinkedFromLinesConfigCache.value;
+  }
+  let enabled = true;
+  try {
+    const parse = options.parseYaml === undefined ? parseYaml : options.parseYaml;
+    if (typeof parse === "function") {
+      const config = parse(fsModule.readFileSync(configPath, "utf8"));
+      const value = config && config.relations && config.relations.linked_from_lines;
+      if (typeof value === "boolean") {
+        enabled = value;
+      } else if (value !== undefined && value !== null) {
+        enabled = true;
+        if (typeof console !== "undefined" && typeof console.warn === "function") {
+          console.warn("relations.linked_from_lines is invalid; treating as true");
+        }
+      }
+    }
+  } catch (_error) {
+    enabled = true;
+  }
+  if (key != null) relationsLinkedFromLinesConfigCache = { key, value: enabled };
+  return enabled;
+}
+
 function loadBulletPropertyConfig(options = {}) {
   const fsModule =
     options.fsModule === undefined

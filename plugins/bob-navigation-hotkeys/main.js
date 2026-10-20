@@ -1411,6 +1411,48 @@ function loadBlocksLinesEnabled(options = {}) {
   return enabled;
 }
 
+let relationsLinkedFromLinesConfigCache = { key: null, value: true };
+
+function resetRelationsLinkedFromLinesConfigCache() {
+  relationsLinkedFromLinesConfigCache = { key: null, value: true };
+}
+
+// LINKED FROM kill switch (`docs/task-relations.md` §12). Missing, invalid,
+// or unreadable values stay enabled so the switch is lossless; cache by
+// mtime/size so a config edit takes effect on the next gesture (LG14).
+function loadRelationsLinkedFromLinesEnabled(options = {}) {
+  const env = options.env || (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule = options.osModule === undefined ? requireOptionalNodeModule("os") : options.osModule;
+  const fsModule = options.fsModule === undefined ? requireOptionalNodeModule("fs") : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") return true;
+  const configPath = options.configPath || getBulletPropertyConfigPath({ env, osModule });
+  const statKey = blocksLinesConfigStatKey(fsModule, configPath);
+  const key = statKey == null ? null : `${configPath}|${statKey}`;
+  if (key != null && relationsLinkedFromLinesConfigCache.key === key) {
+    return relationsLinkedFromLinesConfigCache.value;
+  }
+  let enabled = true;
+  try {
+    const parse = options.parseYaml === undefined ? parseYaml : options.parseYaml;
+    if (typeof parse === "function") {
+      const config = parse(fsModule.readFileSync(configPath, "utf8"));
+      const value = config && config.relations && config.relations.linked_from_lines;
+      if (typeof value === "boolean") {
+        enabled = value;
+      } else if (value !== undefined && value !== null) {
+        enabled = true;
+        if (typeof console !== "undefined" && typeof console.warn === "function") {
+          console.warn("relations.linked_from_lines is invalid; treating as true");
+        }
+      }
+    }
+  } catch (_error) {
+    enabled = true;
+  }
+  if (key != null) relationsLinkedFromLinesConfigCache = { key, value: enabled };
+  return enabled;
+}
+
 function loadBulletPropertyConfig(options = {}) {
   const fsModule =
     options.fsModule === undefined
@@ -7498,14 +7540,18 @@ function blocksDesiredAfterDelta(existing, resolve, add, remove) {
 }
 // ---- src/085-relation-line-grammar.js ----
 // LINKS / LINKED FROM recognisers. This is the navigation plugin's pure
-// mirror of bob-cli's docs/task-relations.md LK contract; writers and the
-// live relation API arrive in nav-writer. Keep these parsers independent of
+// mirror of bob-cli's docs/task-relations.md LK contract; planners and
+// applyRelationEdit live in 086 / 594. Keep these parsers independent of
 // the dependency grammar so each managed-line family rejects the others.
 const TASK_RELATION_EMOJI = "🪢";
 const TASK_RELATION_LINE_NOTICE =
   "🪢 LINKS entries are relations, not Task Links · edit them with Ctrl+Shift+L";
 const TASK_LINKED_FROM_LINE_NOTICE =
   "🪢 LINKED FROM is generated from other tasks' LINKS lines · change it with Ctrl+Shift+Alt+L";
+const RELATIONS_MACHINE_WRITE_ANNOTATION = "bob-relations-machine-write";
+const TASK_RELATION_SEPARATOR = " • ";
+const TASK_LINKS_LABEL = "LINKS";
+const TASK_LINKED_FROM_LABEL = "LINKED FROM";
 const TASK_RELATION_LINK_RE = /(?:~~)?!?\[\[([^\]\n]*)\]\](?:~~)?/g;
 const TASK_RELATION_LABEL_FORBIDDEN_RE = /[\[\]()"\\|•*~\u0000-\u001f\u007f-\u009f]/u;
 const TASK_RELATION_BULLET_RE =
@@ -7792,6 +7838,800 @@ function taskRelationOnlyHandEdit(before, after, baselineLine, currentOwnerLine)
     taskDependencyHandEditState(before, baselineLine) ===
     taskDependencyHandEditState(after, currentOwnerLine)
   );
+}
+// ---- src/086-relation-line-plan.js ----
+// LINKS / LINKED FROM planners. JS twin of bob-cli
+// `src/native/task_relations/{format,plan}.rs`, pinned by docs/task-relations.md
+// LW1–LW14, LK20, and the Rule 6 mirror table. Identity on the planner is
+// canonical link text, matching Rust; the writer resolves path+id first.
+
+function relationLineEnding(content) {
+  return String(content || "").includes("\r\n") ? "\r\n" : "\n";
+}
+
+function relationLeadingWhitespace(line) {
+  const match = /^[ \t]*/.exec(String(line || ""));
+  return match ? match[0] : "";
+}
+
+function relationLinkRef(entry) {
+  if (typeof entry === "string") return entry;
+  if (entry && typeof entry === "object") {
+    if (entry.link) return String(entry.link);
+    return relationLinkText({
+      note: entry.note || "",
+      blockId: entry.blockId || "",
+    });
+  }
+  return "";
+}
+
+function formatLinksLine(indent, entries) {
+  const indentText = typeof indent === "string" ? indent : "";
+  const body = (Array.isArray(entries) ? entries : [])
+    .map((entry) => {
+      const link = relationLinkRef(entry);
+      const label = entry && typeof entry === "object" ? entry.label : null;
+      return label ? `${label} ${link}` : link;
+    })
+    .filter(Boolean)
+    .join(TASK_RELATION_SEPARATOR);
+  return `${indentText}- ${TASK_RELATION_EMOJI} **${TASK_LINKS_LABEL}:** ${body}`;
+}
+
+function sortLinkedFromEntries(entries) {
+  const rows = (Array.isArray(entries) ? entries.slice() : []).map((entry) => {
+    if (typeof entry === "string") return { link: entry, label: null };
+    const link = relationLinkRef(entry);
+    const label = entry && entry.label ? String(entry.label) : null;
+    return { link, label };
+  });
+  rows.sort((left, right) => {
+    const byLink = compareBlocksLinksByCodePoint(left.link, right.link);
+    if (byLink !== 0) return byLink;
+    const leftLabel = left.label || "";
+    const rightLabel = right.label || "";
+    return compareBlocksStringsByCodePoint(leftLabel, rightLabel);
+  });
+  return rows;
+}
+
+function formatLinkedFromLine(indent, entries) {
+  const indentText = typeof indent === "string" ? indent : "";
+  const body = sortLinkedFromEntries(entries)
+    .map((entry) =>
+      entry.label ? `${entry.link} (${entry.label})` : entry.link,
+    )
+    .filter((part) => part)
+    .join(TASK_RELATION_SEPARATOR);
+  return `${indentText}- ${TASK_RELATION_EMOJI} **${TASK_LINKED_FROM_LABEL}:** ${body}`;
+}
+
+function relationChildContexts(lines) {
+  try {
+    return getMarkdownLineContextsForLines(lines);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function findRelationChildren(lines, taskLine, parser) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const parentIndex = Math.floor(Number(taskLine));
+  if (!Number.isFinite(parentIndex) || parentIndex < 0) {
+    return Object.freeze([]);
+  }
+  const block = findCurrentBulletChildBlock(sourceLines, parentIndex);
+  const contexts = relationChildContexts(sourceLines);
+  const found = [];
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    if (findNearestParentListItem(sourceLines, index) !== parentIndex) continue;
+    if (contexts[index] && contexts[index].inFence) continue;
+    const parsed = parser(String(sourceLines[index] || ""), {
+      isDirectChildOfTask: true,
+    });
+    if (parsed.verdict !== "not-a-line") found.push(index);
+  }
+  return Object.freeze(found);
+}
+
+function findLinksChildren(lines, taskLine) {
+  return findRelationChildren(lines, taskLine, parseLinksLine);
+}
+
+function findLinkedFromChildren(lines, taskLine) {
+  return findRelationChildren(lines, taskLine, parseLinkedFromLine);
+}
+
+function isRelationSlotAnchor(lineText) {
+  const text = String(lineText || "");
+  return Boolean(
+    parseCancelLogParentBullet(text) ||
+      parseDependencyLine(text, { isDirectChildOfTask: true }).verdict !==
+        "not-a-line" ||
+      isTaskBlocksLine(text) ||
+      isProjectSubprojectsLine(text),
+  );
+}
+
+function relationSubtreeEnd(lines, lineIndex) {
+  return findCurrentBulletChildBlock(lines, lineIndex).endLineExclusive;
+}
+
+// Insert slot for a missing LINKS or LINKED FROM child (Rule 3 / LW7 / LW8).
+function relationInsertSlot(lines, taskLine, kind) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const parentIndex = Math.floor(Number(taskLine));
+  const parentIndent = relationLeadingWhitespace(
+    String(sourceLines[parentIndex] || ""),
+  );
+  const fallbackIndent = `${parentIndent}\t`;
+  const block = findCurrentBulletChildBlock(sourceLines, parentIndex);
+  const children = [];
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    if (findNearestParentListItem(sourceLines, index) === parentIndex) {
+      children.push(index);
+    }
+  }
+  const childIndent = children.length
+    ? relationLeadingWhitespace(String(sourceLines[children[0]] || ""))
+    : fallbackIndent;
+
+  if (kind === "linked-from") {
+    const links = findLinksChildren(sourceLines, parentIndex);
+    if (links.length > 0) {
+      return Object.freeze({
+        lineIndex: relationSubtreeEnd(sourceLines, links[0]),
+        indent: childIndent,
+      });
+    }
+  }
+
+  let lastAnchor = null;
+  for (const index of children) {
+    if (isRelationSlotAnchor(String(sourceLines[index] || ""))) {
+      lastAnchor = index;
+    }
+  }
+  if (lastAnchor !== null) {
+    return Object.freeze({
+      lineIndex: relationSubtreeEnd(sourceLines, lastAnchor),
+      indent: childIndent,
+    });
+  }
+  if (children.length > 0) {
+    return Object.freeze({ lineIndex: children[0], indent: childIndent });
+  }
+  return Object.freeze({
+    lineIndex: parentIndex + 1,
+    indent: childIndent,
+  });
+}
+
+function relationInsertLine(lines, taskLine, kind) {
+  return relationInsertSlot(lines, taskLine, kind).lineIndex;
+}
+
+function normalizeOptionalRelationLabel(label) {
+  if (label === undefined || label === null || label === "") {
+    return { ok: true, label: null };
+  }
+  const normalized = normalizeRelationLabel(label);
+  if (!normalized) {
+    const length = Array.from(
+      String(label || "")
+        .trim()
+        .replace(/\s+/gu, " ")
+        .replace(/:$/, "")
+        .trim(),
+    ).length;
+    return {
+      ok: false,
+      reason: length > 40 ? "too-long" : "forbidden-character",
+    };
+  }
+  return { ok: true, label: normalized };
+}
+
+function linksEditEntries(edit) {
+  const add = [];
+  for (const entry of Array.isArray(edit && edit.add) ? edit.add : []) {
+    const link = relationLinkRef(entry);
+    if (!link) continue;
+    const normalized = normalizeOptionalRelationLabel(
+      entry && typeof entry === "object" ? entry.label : null,
+    );
+    if (!normalized.ok) return { error: normalized.reason };
+    add.push({ link, label: normalized.label });
+  }
+  const remove = new Set(
+    (Array.isArray(edit && edit.remove) ? edit.remove : [])
+      .map((entry) => relationLinkRef(entry))
+      .filter(Boolean),
+  );
+  const relabel = new Map();
+  const rawRelabel = edit && edit.relabel;
+  const relabelPairs =
+    rawRelabel instanceof Map
+      ? [...rawRelabel]
+      : rawRelabel && typeof rawRelabel === "object" && !Array.isArray(rawRelabel)
+        ? Object.entries(rawRelabel)
+        : Array.isArray(rawRelabel)
+          ? rawRelabel.map((entry) => [
+              relationLinkRef(entry),
+              entry && entry.label,
+            ])
+          : [];
+  for (const [identity, label] of relabelPairs) {
+    const link = String(identity || "");
+    if (!link) continue;
+    const normalized = normalizeOptionalRelationLabel(label);
+    if (!normalized.ok) return { error: normalized.reason };
+    relabel.set(link, normalized.label);
+  }
+  return { add, remove, relabel };
+}
+
+function applyRelationLineMutations(lines, lineEnding, mutations) {
+  const nextLines = lines.slice();
+  const lineEdits = [];
+  const sorted = mutations
+    .slice()
+    .sort((left, right) => right.index - left.index);
+  for (const mutation of sorted) {
+    if (mutation.kind === "remove") {
+      nextLines.splice(mutation.index, 1);
+      lineEdits.push({ deleteAt: mutation.index });
+    } else if (mutation.kind === "replace") {
+      nextLines[mutation.index] = mutation.text;
+    } else if (mutation.kind === "insert") {
+      nextLines.splice(mutation.index, 0, mutation.text);
+      lineEdits.push({ insertAt: mutation.index });
+    }
+  }
+  return {
+    nextContent: nextLines.join(lineEnding),
+    lineEdits: Object.freeze(lineEdits.reverse()),
+  };
+}
+
+function planLinksEdit(content, ownerLine, edit = {}) {
+  const text = String(content || "");
+  const lineEnding = relationLineEnding(text);
+  const lines = text.split(/\r?\n/);
+  const lineIndex = Math.floor(Number(ownerLine));
+  if (
+    !Number.isFinite(lineIndex) ||
+    lineIndex < 0 ||
+    lineIndex >= lines.length ||
+    !isObsidianTaskAtLine(text, lineIndex)
+  ) {
+    return Object.freeze({
+      ok: false,
+      reason: "not-task",
+      changed: false,
+      nextContent: text,
+      lineEdits: Object.freeze([]),
+    });
+  }
+
+  const parsedEdit = linksEditEntries(edit);
+  if (parsedEdit.error) {
+    return Object.freeze({
+      ok: false,
+      reason: "invalid-label",
+      labelReason: parsedEdit.error,
+      changed: false,
+      nextContent: text,
+      lineEdits: Object.freeze([]),
+    });
+  }
+
+  const children = findLinksChildren(lines, lineIndex);
+  const parsed = children.map((index) =>
+    parseLinksLine(lines[index], { isDirectChildOfTask: true }),
+  );
+  if (parsed.some((entry) => entry.verdict === "malformed")) {
+    return Object.freeze({
+      ok: false,
+      reason: "malformed-links-line",
+      changed: false,
+      nextContent: text,
+      lineEdits: Object.freeze([]),
+      notice: "its LINKS line is malformed",
+    });
+  }
+
+  const entries = [];
+  const seen = new Set();
+  for (const child of parsed) {
+    if (child.verdict !== "accept") continue;
+    for (const entry of child.entries) {
+      const identity = relationLinkText(entry);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      entries.push({ link: identity, label: entry.label || null });
+    }
+  }
+  const original = entries.map((entry) => ({ ...entry }));
+
+  const nextEntries = entries.filter(
+    (entry) => !parsedEdit.remove.has(entry.link),
+  );
+  for (const [identity, label] of parsedEdit.relabel) {
+    const match = nextEntries.find((entry) => entry.link === identity);
+    if (match) match.label = label;
+  }
+
+  const added = [];
+  const relabeled = [];
+  const unchanged = [];
+  for (const row of parsedEdit.add) {
+    const match = nextEntries.find((entry) => entry.link === row.link);
+    if (match) {
+      if (match.label === row.label) {
+        unchanged.push(row.link);
+      } else {
+        match.label = row.label;
+        relabeled.push(row.link);
+      }
+    } else {
+      nextEntries.push({ link: row.link, label: row.label });
+      added.push(row.link);
+    }
+  }
+  for (const [identity, label] of parsedEdit.relabel) {
+    if (
+      original.some(
+        (entry) => entry.link === identity && entry.label !== label,
+      ) &&
+      !relabeled.includes(identity)
+    ) {
+      relabeled.push(identity);
+    }
+  }
+  const removed = original
+    .filter(
+      (entry) => !nextEntries.some((current) => current.link === entry.link),
+    )
+    .map((entry) => entry.link);
+  const report = Object.freeze({
+    added: Object.freeze(added),
+    relabeled: Object.freeze(relabeled),
+    unchanged: Object.freeze(unchanged),
+    removed: Object.freeze(removed),
+  });
+
+  if (nextEntries.length === 0) {
+    if (children.length === 0) {
+      return Object.freeze({
+        ok: true,
+        reason: null,
+        changed: false,
+        nextContent: text,
+        lineEdits: Object.freeze([]),
+        report,
+      });
+    }
+    const applied = applyRelationLineMutations(
+      lines,
+      lineEnding,
+      children.map((index) => ({ kind: "remove", index })),
+    );
+    return Object.freeze({
+      ok: true,
+      reason: null,
+      changed: true,
+      nextContent: applied.nextContent,
+      lineEdits: applied.lineEdits,
+      report,
+    });
+  }
+
+  if (children.length === 0) {
+    const slot = relationInsertSlot(lines, lineIndex, "links");
+    const applied = applyRelationLineMutations(lines, lineEnding, [
+      {
+        kind: "insert",
+        index: slot.lineIndex,
+        text: formatLinksLine(slot.indent, nextEntries),
+      },
+    ]);
+    return Object.freeze({
+      ok: true,
+      reason: null,
+      changed: true,
+      nextContent: applied.nextContent,
+      lineEdits: applied.lineEdits,
+      report,
+    });
+  }
+
+  const first = children[0];
+  const formatted = formatLinksLine(
+    relationLeadingWhitespace(lines[first]),
+    nextEntries,
+  );
+  const extras = children.slice(1);
+  if (extras.length === 0 && lines[first] === formatted) {
+    return Object.freeze({
+      ok: true,
+      reason: null,
+      changed: false,
+      nextContent: text,
+      lineEdits: Object.freeze([]),
+      report,
+    });
+  }
+  const mutations = [{ kind: "replace", index: first, text: formatted }];
+  for (const index of extras) mutations.push({ kind: "remove", index });
+  const applied = applyRelationLineMutations(lines, lineEnding, mutations);
+  return Object.freeze({
+    ok: true,
+    reason: null,
+    changed: true,
+    nextContent: applied.nextContent,
+    lineEdits: applied.lineEdits,
+    report,
+  });
+}
+
+function linkedFromDesiredAfterDelta(existing, resolve, add, remove) {
+  const desired = new Map();
+  const removals = new Set(
+    (remove instanceof Set
+      ? [...remove]
+      : Array.isArray(remove)
+        ? remove
+        : []
+    ).map((entry) => String(entry || "")).filter(Boolean),
+  );
+  for (const entry of Array.isArray(existing) ? existing : []) {
+    let resolved = null;
+    try {
+      resolved = typeof resolve === "function" ? resolve(entry) : null;
+    } catch (_error) {
+      resolved = null;
+    }
+    let identity = null;
+    let canonicalText = null;
+    if (Array.isArray(resolved)) {
+      identity = resolved[0];
+      canonicalText = resolved[1];
+    } else if (resolved && typeof resolved === "object") {
+      identity = resolved.identity;
+      canonicalText = resolved.link || resolved.canonicalText;
+    }
+    if (!identity || removals.has(String(identity))) continue;
+    desired.set(String(identity), {
+      link: String(canonicalText || relationLinkRef(entry)),
+      label: entry && entry.label ? entry.label : null,
+    });
+  }
+  const additions =
+    add instanceof Map
+      ? [...add].map(([identity, value]) => {
+          if (Array.isArray(value)) {
+            return { identity, link: value[0], label: value[1] };
+          }
+          return {
+            identity,
+            link: value && value.link,
+            label: value && value.label,
+          };
+        })
+      : Array.isArray(add)
+        ? add
+        : [];
+  for (const entry of additions) {
+    const identity = String((entry && entry.identity) || "");
+    if (!identity || removals.has(identity)) continue;
+    desired.set(identity, {
+      link: String((entry && entry.link) || ""),
+      label: entry && entry.label ? entry.label : null,
+    });
+  }
+  return Object.freeze(
+    sortLinkedFromEntries([...desired.values()]).map((entry) =>
+      Object.freeze({ link: entry.link, label: entry.label }),
+    ),
+  );
+}
+
+function planLinkedFromLine(content, ownerLine, desiredEntries) {
+  const text = String(content || "");
+  const lineEnding = relationLineEnding(text);
+  const lines = text.split(/\r?\n/);
+  const lineIndex = Math.floor(Number(ownerLine));
+  if (
+    !Number.isFinite(lineIndex) ||
+    lineIndex < 0 ||
+    lineIndex >= lines.length ||
+    !isObsidianTaskAtLine(text, lineIndex)
+  ) {
+    return Object.freeze({
+      ok: false,
+      reason: "not-task",
+      kind: "malformed",
+      changed: false,
+      nextContent: text,
+      lineEdits: Object.freeze([]),
+    });
+  }
+
+  const children = findLinkedFromChildren(lines, lineIndex);
+  const parsed = children.map((index) =>
+    parseLinkedFromLine(lines[index], { isDirectChildOfTask: true }),
+  );
+  if (parsed.some((entry) => entry.verdict === "malformed")) {
+    return Object.freeze({
+      ok: false,
+      reason: "malformed-linked-from-line",
+      kind: "malformed",
+      changed: false,
+      nextContent: text,
+      lineEdits: Object.freeze([]),
+    });
+  }
+
+  const desired = sortLinkedFromEntries(
+    Array.isArray(desiredEntries) ? desiredEntries : [],
+  ).filter((entry) => entry.link);
+  const desiredKey = (entry) => `${entry.link}\u0000${entry.label || ""}`;
+  const desiredSet = new Set(desired.map(desiredKey));
+
+  const existingLines = [];
+  for (let index = 0; index < children.length; index += 1) {
+    const child = parsed[index];
+    const entries =
+      child.verdict === "accept"
+        ? child.entries.map((entry) => ({
+            link: relationLinkText(entry),
+            label: entry.label || null,
+          }))
+        : [];
+    existingLines.push({
+      lineIndex: children[index],
+      entries,
+      canonical: child.canonical === true,
+    });
+  }
+
+  const currentSet = new Set();
+  for (const row of existingLines) {
+    for (const entry of row.entries) currentSet.add(desiredKey(entry));
+  }
+  const added = desired
+    .filter((entry) => !currentSet.has(desiredKey(entry)))
+    .map((entry) => entry.link);
+  const removed = [...currentSet]
+    .filter((key) => !desiredSet.has(key))
+    .map((key) => key.split("\u0000")[0]);
+
+  const finish = (kind, mutations) => {
+    if (!mutations || mutations.length === 0) {
+      return Object.freeze({
+        ok: true,
+        reason: null,
+        kind: "noop",
+        changed: false,
+        nextContent: text,
+        lineEdits: Object.freeze([]),
+        added: Object.freeze(added),
+        removed: Object.freeze(removed),
+      });
+    }
+    const applied = applyRelationLineMutations(lines, lineEnding, mutations);
+    return Object.freeze({
+      ok: true,
+      reason: null,
+      kind,
+      changed: applied.nextContent !== text,
+      nextContent: applied.nextContent,
+      lineEdits: applied.lineEdits,
+      added: Object.freeze(added),
+      removed: Object.freeze(removed),
+    });
+  };
+
+  if (desired.length === 0) {
+    if (existingLines.length === 0) return finish("noop", []);
+    return finish(
+      existingLines.length > 1 ? "deduplicated" : "removed",
+      existingLines.map((row) => ({ kind: "remove", index: row.lineIndex })),
+    );
+  }
+
+  if (existingLines.length === 0) {
+    const slot = relationInsertSlot(lines, lineIndex, "linked-from");
+    return finish("inserted", [
+      {
+        kind: "insert",
+        index: slot.lineIndex,
+        text: formatLinkedFromLine(slot.indent, desired),
+      },
+    ]);
+  }
+
+  const first = existingLines[0];
+  const firstSet = new Set(first.entries.map(desiredKey));
+  const exactEntries =
+    firstSet.size === desiredSet.size &&
+    [...desiredSet].every((key) => firstSet.has(key)) &&
+    first.entries.length === desired.length;
+  const hasDuplicates =
+    existingLines.length > 1 || first.entries.length !== firstSet.size;
+  const canonicalLine = formatLinkedFromLine(
+    relationLeadingWhitespace(lines[first.lineIndex]),
+    desired,
+  );
+  if (hasDuplicates) {
+    return finish("deduplicated", [
+      { kind: "replace", index: first.lineIndex, text: canonicalLine },
+      ...existingLines.slice(1).map((row) => ({
+        kind: "remove",
+        index: row.lineIndex,
+      })),
+    ]);
+  }
+  if (!exactEntries) {
+    return finish("rewritten", [
+      { kind: "replace", index: first.lineIndex, text: canonicalLine },
+    ]);
+  }
+  if (!first.canonical) {
+    return finish("canonicalized", [
+      { kind: "replace", index: first.lineIndex, text: canonicalLine },
+    ]);
+  }
+  return finish("noop", []);
+}
+
+function quoteRelationNoticeName(name) {
+  return `\u201c${truncateBlocksNoticeName(name)}\u201d`;
+}
+
+function relationNoticeNameFromLine(lineText) {
+  return blocksDependentDescription(lineText);
+}
+
+function relationPathIsWritable(path, previousDailyPath) {
+  const normalized = normalizeVaultRelativePath(path);
+  return Boolean(
+    normalized &&
+      !/^done\//i.test(normalized) &&
+      normalized !== normalizeVaultRelativePath(previousDailyPath || ""),
+  );
+}
+
+function relationLinksRows(ownerPath, lineText, resolveLinkpath, vaultFiles) {
+  const parsed = parseLinksLine(lineText, { isDirectChildOfTask: true });
+  return (parsed.entries || []).map((entry) => {
+    const targetPath = dependencyPathForLinkNote(
+      entry.note,
+      ownerPath,
+      resolveLinkpath,
+    );
+    const identity = blocksIdentity(targetPath, entry.blockId);
+    const link = targetPath
+      ? canonicalDependencyLink(
+          { path: targetPath, blockId: entry.blockId },
+          ownerPath,
+          vaultFiles,
+        ).text
+      : relationLinkText(entry);
+    return Object.freeze({
+      note: entry.note,
+      blockId: entry.blockId,
+      identity,
+      link: relationLinkText(entry),
+      canonicalLink: link,
+      label: entry.label || null,
+    });
+  });
+}
+
+function relationLinkedFromRows(ownerPath, lineText, resolveLinkpath, vaultFiles) {
+  const parsed = parseLinkedFromLine(lineText, { isDirectChildOfTask: true });
+  return (parsed.entries || []).map((entry) => {
+    const targetPath = dependencyPathForLinkNote(
+      entry.note,
+      ownerPath,
+      resolveLinkpath,
+    );
+    const identity = blocksIdentity(targetPath, entry.blockId);
+    const link = targetPath
+      ? canonicalDependencyLink(
+          { path: targetPath, blockId: entry.blockId },
+          ownerPath,
+          vaultFiles,
+        ).text
+      : relationLinkText(entry);
+    return Object.freeze({
+      note: entry.note,
+      blockId: entry.blockId,
+      identity,
+      link,
+      storedLink: relationLinkText(entry),
+      label: entry.label || null,
+    });
+  });
+}
+
+function storedRelationLinkForTarget(existingRows, target, ownerPath, vaultFiles) {
+  const identity = blocksIdentity(target.path, target.blockId);
+  const existing = (Array.isArray(existingRows) ? existingRows : []).find(
+    (row) => row.identity === identity,
+  );
+  if (existing && existing.link) return existing.link;
+  return canonicalDependencyLink(
+    { path: target.path, blockId: target.blockId },
+    ownerPath,
+    vaultFiles,
+  ).text;
+}
+
+function withLinkedFromFollowUpNotice(notice, failedPaths) {
+  const failed = Array.isArray(failedPaths)
+    ? failedPaths.length > 0
+    : Boolean(
+        failedPaths &&
+          Array.isArray(failedPaths.failed) &&
+          failedPaths.failed.length > 0,
+      );
+  if (!failed || !notice) return notice;
+  return `${notice} · 🪢 LINKED FROM not updated`;
+}
+
+function withArchivedRelationNotice(notice, archived) {
+  if (!archived || !notice) return notice;
+  return `${notice} \u00b7 archived: shown live only`;
+}
+
+function buildRelationEditNotice(details = {}) {
+  const added = Array.isArray(details.added) ? details.added : [];
+  const removed = Array.isArray(details.removed) ? details.removed : [];
+  const relabeled = Array.isArray(details.relabeled) ? details.relabeled : [];
+  const direction = details.direction === "from" ? "from" : "to";
+  const parts = [];
+  const nameOf = (row) =>
+    quoteRelationNoticeName(row && (row.description || row.name || row.blockId || "task"));
+  const labelOf = (row) => (row && row.label ? ` \u00b7 ${row.label}` : "");
+  if (added.length === 1 && removed.length === 0 && relabeled.length === 0) {
+    parts.push(
+      direction === "from"
+        ? `🪢 ${nameOf(added[0])} now links here${labelOf(added[0])}`
+        : `🪢 Linked to ${nameOf(added[0])}${labelOf(added[0])}`,
+    );
+  } else if (removed.length === 1 && added.length === 0 && relabeled.length === 0) {
+    parts.push(`🪢 Unlinked ${nameOf(removed[0])}`);
+  } else if (relabeled.length === 1 && added.length === 0 && removed.length === 0) {
+    parts.push(
+      `🪢 Relabeled ${nameOf(relabeled[0])}${labelOf(relabeled[0])}`,
+    );
+  } else if (added.length + removed.length + relabeled.length > 0) {
+    const chunks = [];
+    if (added.length > 0) {
+      chunks.push(`Linked ${formatCountLabel(added.length, "task")}`);
+    }
+    if (removed.length > 0) {
+      chunks.push(`${removed.length} unlinked`);
+    }
+    if (relabeled.length > 0) {
+      chunks.push(`${relabeled.length} relabeled`);
+    }
+    parts.push(`🪢 ${chunks.join(" · ")}`);
+  } else {
+    parts.push("🪢 No relation changes");
+  }
+  let notice = parts.join("");
+  notice = withArchivedRelationNotice(notice, details.archived);
+  notice = withLinkedFromFollowUpNotice(notice, details.mirrorFailed);
+  return notice;
 }
 // ---- src/082-blocks-mint.js ----
 // BLOCKS dependent-id minting, ported from task-status-cycler's
@@ -50122,6 +50962,9 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // task-status-cycler feature-detects `api?.taskLinkLane?.version >= 1`.
 // `notice` is the additive Unblocked card (`api.notice` v1, §12.6);
 // callers feature-detect `api.notice?.version >= 1`.
+// `relations` is the additive LINKS writer (`api.relations` v0): `removeLink`
+// works now; `openStage` settles `{ok: false}` until both stage directions
+// land and the namespace rises to v1.
 // `openReferencePdf(path)` is the additive Highlights hand-off used by the
 // bob-ledger-tools Reading Board: it opens a vault-relative `source_pdf`
 // (macOS only, no vault writes) and settles to `{ok, reason?}`. Callers
@@ -50154,6 +50997,7 @@ function createDependencyNavApi(plugin) {
     notice: createNoticeApi(plugin),
     successors: createSuccessorPickerApi(plugin),
     blocks: createBlocksNavApi(plugin),
+    relations: createRelationsNavApi(plugin),
     openReferencePdf(path) {
       if (!plugin || typeof plugin.openReferencePdfPath !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });
@@ -50228,6 +51072,42 @@ function createBlocksNavApi(plugin) {
       }
       return settle(() =>
         plugin.removeBlocksDependentByRef(ownerRef || {}, target || {}),
+      );
+    },
+  });
+}
+// ---- src/486-relations-nav-api.js ----
+// Additive relation capability for bob-ledger-tools (`docs/task-relations.md`
+// §10). Ships at version 0: `removeLink` works, `openStage` settles false
+// until nav-linked-from raises the namespace to v1 once both stage
+// directions open. Calls settle and never throw.
+function createRelationsNavApi(plugin) {
+  const settle = (call) => {
+    try {
+      return Promise.resolve()
+        .then(call)
+        .then(
+          (result) =>
+            result && typeof result === "object" && "ok" in result
+              ? result
+              : { ok: false, reason: "unexpected-result" },
+          () => ({ ok: false, reason: "api-failed" }),
+        );
+    } catch (_error) {
+      return Promise.resolve({ ok: false, reason: "api-failed" });
+    }
+  };
+  return Object.freeze({
+    version: 0,
+    openStage(_ref) {
+      return Promise.resolve({ ok: false, reason: "unavailable" });
+    },
+    removeLink(sourceRef, targetRef) {
+      if (!plugin || typeof plugin.removeRelationLinkByRef !== "function") {
+        return Promise.resolve({ ok: false, reason: "unavailable" });
+      }
+      return settle(() =>
+        plugin.removeRelationLinkByRef(sourceRef || {}, targetRef || {}),
       );
     },
   });
@@ -63716,6 +64596,774 @@ class BobNavigationHotkeysBlocksApiMixin {
     }
   }
 }
+// ---- src/594-plugin-relation-edit.js ----
+// Relation orchestrator (`docs/task-relations.md` Rule 7): write each source
+// LINKS line, mint the source id inside that transaction when a mirror will
+// be stored, then send best-effort LINKED FROM follow-ups. Same-note S and T
+// share one undo group. The writer never stamps, routes inbox tasks, or
+// touches Pomodoros (LG13).
+class BobNavigationHotkeysRelationEditMixin {
+  findRelationEditOpenEditor(filePath) {
+    const path = normalizeVaultRelativePath(filePath || "");
+    const workspace = this.app && this.app.workspace;
+    if (!path || !workspace || typeof workspace.getLeavesOfType !== "function") {
+      return null;
+    }
+    for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+      const view = leaf && leaf.view;
+      if (
+        view &&
+        view.file &&
+        normalizeVaultRelativePath(view.file.path) === path &&
+        view.editor &&
+        typeof view.editor.getValue === "function"
+      ) {
+        return view.editor;
+      }
+    }
+    return null;
+  }
+
+  async writeRelationEditNote(filePath, preimage, nextContent) {
+    const path = normalizeVaultRelativePath(filePath || "");
+    const before = String(preimage || "");
+    const after = String(nextContent || "");
+    if (!path) {
+      return Object.freeze({ ok: false, reason: "invalid-path" });
+    }
+    if (after === before) {
+      return Object.freeze({ ok: true, reason: "unchanged", via: "none" });
+    }
+    const editor = this.findRelationEditOpenEditor(path);
+    if (editor) {
+      if (String(editor.getValue() || "") !== before) {
+        return Object.freeze({ ok: false, reason: "changed" });
+      }
+      const committed = applyEditorContentTransaction(
+        editor,
+        before,
+        after,
+        null,
+        RELATIONS_MACHINE_WRITE_ANNOTATION,
+      );
+      return committed
+        ? Object.freeze({ ok: true, reason: null, via: "editor" })
+        : Object.freeze({ ok: false, reason: "commit-failed" });
+    }
+    const vault = this.app && this.app.vault;
+    const file =
+      vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+    if (!file || !vault || typeof vault.process !== "function") {
+      return Object.freeze({ ok: false, reason: "target-unavailable" });
+    }
+    let applied = false;
+    try {
+      await vault.process(file, (data) => {
+        if (String(data || "") !== before) return data;
+        applied = true;
+        return after;
+      });
+    } catch (_error) {
+      applied = false;
+    }
+    return applied
+      ? Object.freeze({ ok: true, reason: null, via: "vault" })
+      : Object.freeze({ ok: false, reason: "changed" });
+  }
+
+  locateRelationEditRef(ref, content) {
+    if (!ref || typeof content !== "string") return null;
+    const relocated = relocateBlocksEditRef(ref, content);
+    if (!relocated) return null;
+    const lines = content.split(/\r?\n/);
+    let line = Math.floor(numericOrDefault(relocated.line, Number.NaN));
+    const blockId = normalizeBulletPropertyValue(relocated.blockId || "");
+    if (!Number.isFinite(line) || line < 0 || line >= lines.length) {
+      if (!blockId) return null;
+      const found = findTaskLineByTrailingBlockId(lines, blockId);
+      if (found === null) return null;
+      line = found;
+    } else if (!isObsidianTaskAtLine(content, line)) {
+      const owning = findOwningTaskLine(lines, line);
+      if (owning === null) return null;
+      line = owning;
+    }
+    if (!isObsidianTaskAtLine(content, line)) return null;
+    return Object.freeze({
+      path: normalizeVaultRelativePath(relocated.path || ref.path),
+      line,
+      blockId: getTrailingBlockId(lines[line]) || blockId,
+      label: relocated.label,
+      description: relationNoticeNameFromLine(lines[line]),
+      rawLine: String(lines[line] || ""),
+    });
+  }
+
+  async applyRelationEdit(args = {}) {
+    const stale = "changed — reopen";
+    const refuse = (reason, notice = null) =>
+      Object.freeze({
+        ok: false,
+        reason,
+        notice,
+        committed: Object.freeze([]),
+        failed: Object.freeze([]),
+        mirrorFailed: Object.freeze([]),
+      });
+    try {
+      const today = args.today || new Date();
+      const sources = Array.isArray(args.sources) ? args.sources : [];
+      const add = Array.isArray(args.add) ? args.add : [];
+      const remove = Array.isArray(args.remove) ? args.remove : [];
+      const relabel = Array.isArray(args.relabel)
+        ? args.relabel
+        : args.relabel && typeof args.relabel === "object"
+          ? Object.entries(args.relabel).map(([key, label]) => ({
+              target: key,
+              label,
+            }))
+          : [];
+      const direction = args.direction === "from" ? "from" : "to";
+      const resolveLinkpath = this.dependencyLinkpathResolver();
+      const linkedFromLinesEnabled =
+        args.linkedFromLinesEnabled !== undefined
+          ? args.linkedFromLinesEnabled === true
+          : loadRelationsLinkedFromLinesEnabled();
+
+      const files = new Map();
+      const collectRef = (ref) => {
+        const path = normalizeVaultRelativePath(
+          ref && (ref.path || (typeof ref.target === "object" && ref.target.path)),
+        );
+        return path;
+      };
+      for (const ref of [...sources, ...add, ...remove, ...relabel]) {
+        const path = collectRef(ref && ref.target ? ref.target : ref);
+        if (!path || files.has(path)) continue;
+        const loaded = await this.readDependencyNoteContent(path, null, "");
+        if (loaded === null) return refuse("target-not-found");
+        files.set(path, loaded);
+      }
+      const vaultFiles = this.readDependencyVaultFileList() || [...files.keys()];
+      const dailyPaths = scheduledRecoveryDailyPaths(
+        vaultFiles.map((path) => ({ path })),
+        today,
+      );
+      const previousDailyPath = dailyPaths && dailyPaths.previous;
+      const expected =
+        args.expected instanceof Map
+          ? args.expected
+          : args.expected && typeof args.expected === "object"
+            ? new Map(Object.entries(args.expected))
+            : new Map();
+      for (const [filePath, expectedContent] of expected) {
+        const live = files.get(normalizeVaultRelativePath(filePath));
+        if (live !== undefined && live !== String(expectedContent || "")) {
+          return refuse(stale, stale);
+        }
+      }
+
+      const locateList = (refs) => {
+        const located = [];
+        for (const ref of refs) {
+          const raw = ref && ref.target ? { ...ref.target, label: ref.label } : ref;
+          const path = normalizeVaultRelativePath(raw && raw.path);
+          const row = this.locateRelationEditRef(raw, files.get(path));
+          if (!row) return null;
+          located.push(
+            Object.freeze({
+              ...row,
+              label: raw && raw.label !== undefined ? raw.label : row.label,
+            }),
+          );
+        }
+        return located;
+      };
+      const liveSources = locateList(sources);
+      const liveAdd = locateList(add);
+      const liveRemove = locateList(remove);
+      const liveRelabel = locateList(relabel);
+      if (!liveSources || !liveAdd || !liveRemove || !liveRelabel) {
+        return refuse(stale, stale);
+      }
+      if (liveSources.length === 0) {
+        return refuse("invalid-ref");
+      }
+      for (const target of [...liveAdd, ...liveRelabel]) {
+        if (!target.blockId) return refuse("target-needs-id");
+      }
+      for (const source of liveSources) {
+        for (const target of [...liveAdd, ...liveRemove, ...liveRelabel]) {
+          if (
+            source.path === target.path &&
+            source.blockId &&
+            target.blockId &&
+            source.blockId === target.blockId
+          ) {
+            return refuse("self-relation");
+          }
+        }
+      }
+
+      const sourceWrites = new Map();
+      const followUps = [];
+      const committed = [];
+      const noticeAdded = [];
+      const noticeRemoved = [];
+      const noticeRelabeled = [];
+      const mirrorFailed = [];
+      let archived = false;
+      const contentOf = (path) =>
+        sourceWrites.has(path)
+          ? sourceWrites.get(path).nextContent
+          : String(files.get(path) || "");
+      const stageWrite = (path, original, nextContent) => {
+        const current = sourceWrites.get(path);
+        sourceWrites.set(path, {
+          path,
+          original: current ? current.original : original,
+          nextContent,
+        });
+      };
+
+      for (const source of liveSources) {
+        let content = contentOf(source.path);
+        const original = sourceWrites.has(source.path)
+          ? sourceWrites.get(source.path).original
+          : String(files.get(source.path) || "");
+        let sourceLine = source.line;
+        const liveLines = content.split(/\r?\n/);
+        if (source.blockId) {
+          const found = findTaskLineByTrailingBlockId(liveLines, source.blockId);
+          if (found !== null) sourceLine = found;
+        }
+        const children = findLinksChildren(liveLines, sourceLine);
+        const existingRows = children.flatMap((index) =>
+          relationLinksRows(
+            source.path,
+            liveLines[index],
+            resolveLinkpath,
+            vaultFiles,
+          ),
+        );
+        const addEdit = liveAdd.map((target) => ({
+          link: storedRelationLinkForTarget(
+            existingRows,
+            target,
+            source.path,
+            vaultFiles,
+          ),
+          label: target.label,
+        }));
+        const removeEdit = liveRemove.map((target) =>
+          storedRelationLinkForTarget(
+            existingRows,
+            target,
+            source.path,
+            vaultFiles,
+          ),
+        );
+        const relabelEdit = liveRelabel.map((target) => ({
+          link: storedRelationLinkForTarget(
+            existingRows,
+            target,
+            source.path,
+            vaultFiles,
+          ),
+          label: target.label,
+        }));
+        const planned = planLinksEdit(content, sourceLine, {
+          add: addEdit,
+          remove: removeEdit,
+          relabel: relabelEdit,
+        });
+        if (!planned.ok) {
+          return refuse(
+            planned.reason,
+            planned.notice ||
+              (planned.reason === "malformed-links-line"
+                ? "its LINKS line is malformed"
+                : null),
+          );
+        }
+        content = planned.nextContent;
+        if (planned.report) {
+          for (const target of liveAdd) {
+            const link = storedRelationLinkForTarget(
+              existingRows,
+              target,
+              source.path,
+              vaultFiles,
+            );
+            if (planned.report.added.includes(link)) noticeAdded.push(target);
+            if (planned.report.relabeled.includes(link)) {
+              noticeRelabeled.push(target);
+            }
+          }
+          for (const target of liveRelabel) {
+            const link = storedRelationLinkForTarget(
+              existingRows,
+              target,
+              source.path,
+              vaultFiles,
+            );
+            if (
+              planned.report.relabeled.includes(link) &&
+              !noticeRelabeled.includes(target)
+            ) {
+              noticeRelabeled.push(target);
+            }
+          }
+          for (const target of liveRemove) {
+            const link = storedRelationLinkForTarget(
+              existingRows,
+              target,
+              source.path,
+              vaultFiles,
+            );
+            if (planned.report.removed.includes(link)) noticeRemoved.push(target);
+          }
+        }
+
+        const mirrorTargets = [...liveAdd, ...liveRemove, ...liveRelabel].filter(
+          (target, index, list) =>
+            list.findIndex(
+              (entry) =>
+                entry.path === target.path && entry.blockId === target.blockId,
+            ) === index,
+        );
+        const writableMirrors = [];
+        for (const target of mirrorTargets) {
+          if (!relationPathIsWritable(target.path, previousDailyPath)) {
+            archived = true;
+            continue;
+          }
+          writableMirrors.push(target);
+        }
+
+        let sourceBlockId = getTrailingBlockId(content.split(/\r?\n/)[sourceLine]);
+        const needsMirror =
+          linkedFromLinesEnabled &&
+          writableMirrors.length > 0 &&
+          (planned.report.added.length > 0 ||
+            planned.report.relabeled.length > 0 ||
+            planned.report.removed.length > 0);
+        if (needsMirror && !sourceBlockId) {
+          const used = new Set();
+          for (const match of String(content).matchAll(
+            /\^([A-Za-z0-9-]+)(?=\s|$)/g,
+          )) {
+            used.add(match[1]);
+          }
+          sourceBlockId = mintDependentBlockId(
+            content.split(/\r?\n/)[sourceLine],
+            used,
+          );
+          const mintedLines = content.split(/\r?\n/);
+          mintedLines[sourceLine] = appendBlockIdToLine(
+            mintedLines[sourceLine],
+            sourceBlockId,
+          );
+          content = mintedLines.join(relationLineEnding(content));
+        }
+        stageWrite(source.path, original, content);
+        if (!needsMirror || !sourceBlockId) continue;
+
+        const sourceIdentity = blocksIdentity(source.path, sourceBlockId);
+        for (const target of writableMirrors) {
+          const targetContent = contentOf(target.path);
+          const targetLines = targetContent.split(/\r?\n/);
+          let targetLine = target.line;
+          if (target.blockId) {
+            const found = findTaskLineByTrailingBlockId(
+              targetLines,
+              target.blockId,
+            );
+            if (found !== null) targetLine = found;
+          }
+          const mirrorChildren = findLinkedFromChildren(targetLines, targetLine);
+          const parsedMirror = mirrorChildren.map((index) =>
+            parseLinkedFromLine(targetLines[index], {
+              isDirectChildOfTask: true,
+            }),
+          );
+          if (parsedMirror.some((entry) => entry.verdict === "malformed")) {
+            mirrorFailed.push(target.path);
+            continue;
+          }
+          const existingMirror = mirrorChildren.flatMap((index) =>
+            relationLinkedFromRows(
+              target.path,
+              targetLines[index],
+              resolveLinkpath,
+              vaultFiles,
+            ),
+          );
+          const isRemove = liveRemove.some(
+            (entry) =>
+              entry.path === target.path && entry.blockId === target.blockId,
+          );
+          const addLabel = (
+            liveAdd.find(
+              (entry) =>
+                entry.path === target.path && entry.blockId === target.blockId,
+            ) ||
+            liveRelabel.find(
+              (entry) =>
+                entry.path === target.path && entry.blockId === target.blockId,
+            )
+          );
+          const canonical = canonicalDependencyLink(
+            { path: source.path, blockId: sourceBlockId },
+            target.path,
+            vaultFiles,
+          ).text;
+          const addRows = isRemove
+            ? []
+            : [
+                {
+                  identity: sourceIdentity,
+                  link: canonical,
+                  label: addLabel ? addLabel.label || null : null,
+                },
+              ];
+          const removeIds = isRemove ? [sourceIdentity] : [];
+          if (target.path === source.path) {
+            const desired = linkedFromDesiredAfterDelta(
+              existingMirror,
+              (entry) => ({ identity: entry.identity, link: entry.link }),
+              addRows,
+              removeIds,
+            );
+            const mirrorPlan = planLinkedFromLine(
+              contentOf(source.path),
+              targetLine,
+              desired,
+            );
+            if (!mirrorPlan.ok) {
+              mirrorFailed.push(target.path);
+              continue;
+            }
+            stageWrite(
+              source.path,
+              sourceWrites.get(source.path).original,
+              mirrorPlan.nextContent,
+            );
+          } else {
+            followUps.push(
+              Object.freeze({
+                path: target.path,
+                ownerBlockId: target.blockId,
+                add: Object.freeze(addRows),
+                remove: Object.freeze(removeIds),
+                preimage: String(files.get(target.path) || ""),
+                today,
+              }),
+            );
+          }
+        }
+      }
+
+      const failed = [];
+      for (const write of sourceWrites.values()) {
+        const result = await this.writeRelationEditNote(
+          write.path,
+          write.original,
+          write.nextContent,
+        );
+        if (!result.ok) {
+          return refuse(stale, stale);
+        }
+        committed.push(write.path);
+      }
+
+      let followFailed = [];
+      if (followUps.length > 0) {
+        try {
+          const result = await this.applyRelationFollowUps(followUps);
+          followFailed = (result && result.failed) || [];
+        } catch (_error) {
+          followFailed = followUps.map((entry) => entry.path);
+        }
+      }
+      mirrorFailed.push(...followFailed);
+
+      const unchanged =
+        noticeAdded.length === 0 &&
+        noticeRemoved.length === 0 &&
+        noticeRelabeled.length === 0 &&
+        committed.every((path) => {
+          const write = sourceWrites.get(path);
+          return write && write.original === write.nextContent;
+        });
+      const notice = unchanged
+        ? null
+        : buildRelationEditNotice({
+            added: noticeAdded,
+            removed: noticeRemoved,
+            relabeled: noticeRelabeled,
+            direction,
+            archived,
+            mirrorFailed,
+          });
+      return Object.freeze({
+        ok: true,
+        reason: followFailed.length > 0 ? "partial" : unchanged ? "unchanged" : null,
+        notice,
+        committed: Object.freeze(committed),
+        failed: Object.freeze(failed),
+        mirrorFailed: Object.freeze([...new Set(mirrorFailed)]),
+      });
+    } catch (_error) {
+      return refuse("apply-failed");
+    }
+  }
+
+  async removeRelationLinkByRef(sourceRef = {}, targetRef = {}) {
+    try {
+      const sourcePath = normalizeVaultRelativePath(sourceRef.path || "");
+      const targetPath = normalizeVaultRelativePath(targetRef.path || "");
+      const targetBlockId = normalizeBulletPropertyValue(targetRef.blockId || "");
+      if (!sourcePath || !targetPath || !targetBlockId) {
+        return Object.freeze({ ok: false, reason: "invalid-ref" });
+      }
+      const sourceContent = await this.readDependencyNoteContent(
+        sourcePath,
+        null,
+        "",
+      );
+      const targetContent = await this.readDependencyNoteContent(
+        targetPath,
+        null,
+        "",
+      );
+      if (sourceContent === null || targetContent === null) {
+        return Object.freeze({ ok: false, reason: "target-not-found" });
+      }
+      const sourceHit = Math.floor(numericOrDefault(sourceRef.line, Number.NaN));
+      const sourceLines = sourceContent.split(/\r?\n/);
+      let sourceLine = Number.isFinite(sourceHit) ? sourceHit : null;
+      if (sourceRef.blockId) {
+        const found = findTaskLineByTrailingBlockId(
+          sourceLines,
+          sourceRef.blockId,
+        );
+        if (found !== null) sourceLine = found;
+      }
+      if (!Number.isFinite(sourceLine) || sourceLine < 0) {
+        return Object.freeze({ ok: false, reason: "invalid-ref" });
+      }
+      const ownerLine = findOwningTaskLine(sourceLines, sourceLine);
+      if (ownerLine === null) {
+        return Object.freeze({ ok: false, reason: "no-owning-task" });
+      }
+      const expected = new Map([
+        [sourcePath, sourceContent],
+        [targetPath, targetContent],
+      ]);
+      const outcome = await this.applyRelationEdit({
+        sources: [
+          {
+            path: sourcePath,
+            line: ownerLine,
+            blockId: getTrailingBlockId(sourceLines[ownerLine]),
+          },
+        ],
+        add: [],
+        remove: [{ path: targetPath, blockId: targetBlockId }],
+        expected,
+      });
+      if (!outcome.ok) {
+        if (outcome.notice) new Notice(outcome.notice);
+        return Object.freeze({ ok: false, reason: outcome.reason });
+      }
+      if (outcome.notice) new Notice(outcome.notice);
+      return Object.freeze({ ok: true, notice: outcome.notice });
+    } catch (_error) {
+      return Object.freeze({ ok: false, reason: "remove-failed" });
+    }
+  }
+}
+// ---- src/595-relation-follow-ups.js ----
+// Cross-note LINKED FROM courtesy writes. Each note is planned once from
+// its preimage and committed after the source LINKS transaction; an open
+// editor receives its own undo entry annotated as a machine write, while
+// vault.process protects a closed note (Rule 7).
+class BobNavigationHotkeysRelationFollowUpsMixin {
+  async applyRelationFollowUps(followUps) {
+    const entries = Array.isArray(followUps) ? followUps : [];
+    if (entries.length === 0) {
+      return Object.freeze({ ok: true, failed: Object.freeze([]) });
+    }
+    const vault = this.app && this.app.vault;
+    const workspace = this.app && this.app.workspace;
+    const resolver = this.dependencyLinkpathResolver();
+    const vaultFiles = this.readDependencyVaultFileList() || [];
+    const dateEntry = entries.find((entry) => entry && entry.today);
+    const today = dateEntry ? dateEntry.today : new Date();
+    const dailyPaths = scheduledRecoveryDailyPaths(
+      vaultFiles.map((path) => ({ path })),
+      today,
+    );
+    const grouped = new Map();
+    for (const entry of entries) {
+      const path = normalizeVaultRelativePath(entry && entry.path);
+      if (
+        !path ||
+        /^done\//i.test(path) ||
+        path === (dailyPaths && dailyPaths.previous)
+      ) {
+        continue;
+      }
+      if (!grouped.has(path)) {
+        grouped.set(path, { path, preimage: entry.preimage, owners: new Map() });
+      }
+      const note = grouped.get(path);
+      if (note.preimage !== entry.preimage) note.preimage = null;
+      const id = normalizeBulletPropertyValue(entry.ownerBlockId);
+      if (!id) continue;
+      if (!note.owners.has(id)) {
+        note.owners.set(id, { add: [], remove: [] });
+      }
+      const owner = note.owners.get(id);
+      owner.add.push(...(Array.isArray(entry.add) ? entry.add : []));
+      owner.remove.push(...(Array.isArray(entry.remove) ? entry.remove : []));
+    }
+
+    const failed = new Set();
+    for (const note of grouped.values()) {
+      if (typeof note.preimage !== "string") {
+        failed.add(note.path);
+        continue;
+      }
+      let editor = null;
+      if (workspace && typeof workspace.getLeavesOfType === "function") {
+        for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+          const view = leaf && leaf.view;
+          if (
+            view &&
+            view.file &&
+            normalizeVaultRelativePath(view.file.path) === note.path &&
+            view.editor &&
+            typeof view.editor.getValue === "function"
+          ) {
+            editor = view.editor;
+            break;
+          }
+        }
+      }
+      let current = null;
+      if (editor) {
+        current = String(editor.getValue() || "");
+      } else {
+        try {
+          const file =
+            vault && typeof vault.getAbstractFileByPath === "function"
+              ? vault.getAbstractFileByPath(note.path)
+              : null;
+          if (file && vault && typeof vault.cachedRead === "function") {
+            current = String(await vault.cachedRead(file));
+          } else if (file && vault && typeof vault.read === "function") {
+            current = String(await vault.read(file));
+          }
+        } catch (_error) {
+          current = null;
+        }
+      }
+      if (current === null || current !== note.preimage) {
+        failed.add(note.path);
+        continue;
+      }
+
+      let nextContent = note.preimage;
+      let noteFailed = false;
+      for (const [ownerBlockId, delta] of note.owners) {
+        const lines = nextContent.split(/\r?\n/);
+        const ownerLine = findTaskLineByTrailingBlockId(lines, ownerBlockId);
+        if (ownerLine === null) {
+          noteFailed = true;
+          continue;
+        }
+        const children = findLinkedFromChildren(lines, ownerLine);
+        const parsed = children.map((index) =>
+          parseLinkedFromLine(lines[index], { isDirectChildOfTask: true }),
+        );
+        if (parsed.some((item) => item.verdict === "malformed")) {
+          noteFailed = true;
+          continue;
+        }
+        const existing = children.flatMap((index) =>
+          relationLinkedFromRows(
+            note.path,
+            lines[index],
+            resolver,
+            vaultFiles,
+          ),
+        );
+        const desired = linkedFromDesiredAfterDelta(
+          existing,
+          (entry) => ({ identity: entry.identity, link: entry.link }),
+          delta.add,
+          [...new Set(delta.remove)],
+        );
+        const planned = planLinkedFromLine(nextContent, ownerLine, desired);
+        if (!planned.ok) {
+          noteFailed = true;
+          continue;
+        }
+        nextContent = planned.nextContent;
+      }
+
+      if (nextContent !== note.preimage) {
+        if (editor) {
+          if (
+            String(editor.getValue() || "") !== note.preimage ||
+            !applyEditorContentTransaction(
+              editor,
+              note.preimage,
+              nextContent,
+              null,
+              RELATIONS_MACHINE_WRITE_ANNOTATION,
+            )
+          ) {
+            failed.add(note.path);
+            continue;
+          }
+        } else {
+          const file =
+            vault && typeof vault.getAbstractFileByPath === "function"
+              ? vault.getAbstractFileByPath(note.path)
+              : null;
+          if (!file || !vault || typeof vault.process !== "function") {
+            failed.add(note.path);
+            continue;
+          }
+          let applied = false;
+          try {
+            await vault.process(file, (data) => {
+              if (String(data || "") !== note.preimage) return data;
+              applied = true;
+              return nextContent;
+            });
+          } catch (_error) {
+            applied = false;
+          }
+          if (!applied) {
+            failed.add(note.path);
+            continue;
+          }
+        }
+      }
+      if (noteFailed) failed.add(note.path);
+    }
+    return Object.freeze({
+      ok: failed.size === 0,
+      failed: Object.freeze([...failed]),
+    });
+  }
+}
 // ---- src/600-plugin-dependency-mirror.js ----
 class BobNavigationHotkeysDependencyMirrorMixin {
 
@@ -64356,15 +66004,19 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     if (!update || !update.docChanged) {
       return;
     }
-    const annotatedBlocksWrite = Array.isArray(update.transactions) && update.transactions.some((transaction) =>
-      transaction && transaction.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION,
+    const annotatedMachineWrite = Array.isArray(update.transactions) && update.transactions.some((transaction) =>
+      transaction &&
+      (transaction.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION ||
+        transaction.annotation === RELATIONS_MACHINE_WRITE_ANNOTATION),
     );
     if (
       update &&
       typeof update === "object" &&
       (update.blocksMachineWrite === true ||
+        update.relationsMachineWrite === true ||
         update.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION ||
-        annotatedBlocksWrite)
+        update.annotation === RELATIONS_MACHINE_WRITE_ANNOTATION ||
+        annotatedMachineWrite)
     ) {
       return;
     }
@@ -74934,6 +76586,8 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysBlocksFollowUpsMixin,
   BobNavigationHotkeysBlocksEditMixin,
   BobNavigationHotkeysBlocksApiMixin,
+  BobNavigationHotkeysRelationEditMixin,
+  BobNavigationHotkeysRelationFollowUpsMixin,
   BobNavigationHotkeysDependencyMirrorMixin,
   BobNavigationHotkeysJumpKeyMixin,
   BobNavigationHotkeysCountedTaskMoveMixin,
@@ -75224,6 +76878,8 @@ module.exports.helpers = {
   loadBulletPropertyConfig,
   loadBlocksLinesEnabled,
   resetBlocksLinesConfigCache,
+  loadRelationsLinkedFromLinesEnabled,
+  resetRelationsLinkedFromLinesConfigCache,
   validateBulletPropertyConfig,
   isValidBulletPropertyName,
   isBulletLine,
@@ -75553,6 +77209,7 @@ module.exports.helpers = {
   TASK_RELATION_EMOJI,
   TASK_RELATION_LINE_NOTICE,
   TASK_LINKED_FROM_LINE_NOTICE,
+  RELATIONS_MACHINE_WRITE_ANNOTATION,
   normalizeRelationLabel,
   parseLinksLine,
   parseLinkedFromLine,
@@ -75560,6 +77217,19 @@ module.exports.helpers = {
   isTaskLinkedFromLine,
   taskRelationLinesChanged,
   taskRelationOnlyHandEdit,
+  formatLinksLine,
+  formatLinkedFromLine,
+  sortLinkedFromEntries,
+  relationInsertSlot,
+  relationInsertLine,
+  findLinksChildren,
+  findLinkedFromChildren,
+  planLinksEdit,
+  planLinkedFromLine,
+  linkedFromDesiredAfterDelta,
+  buildRelationEditNotice,
+  withLinkedFromFollowUpNotice,
+  relationPathIsWritable,
   formatBlocksLine,
   formatBlocksLinkRef,
   sortBlocksLinks,
@@ -75653,6 +77323,7 @@ module.exports.helpers = {
   recoveryDependencyReferences,
   isArchivedRecoveryTarget,
   createDependencyNavApi,
+  createRelationsNavApi,
   findCurrentBulletChildBlock,
   getDependencyChildIndent,
   MANAGED_TASK_LOG_KIND_SCHEDULE,

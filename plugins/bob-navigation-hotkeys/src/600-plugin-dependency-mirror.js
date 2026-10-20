@@ -637,15 +637,19 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     if (!update || !update.docChanged) {
       return;
     }
-    const annotatedBlocksWrite = Array.isArray(update.transactions) && update.transactions.some((transaction) =>
-      transaction && transaction.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION,
+    const annotatedMachineWrite = Array.isArray(update.transactions) && update.transactions.some((transaction) =>
+      transaction &&
+      (transaction.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION ||
+        transaction.annotation === RELATIONS_MACHINE_WRITE_ANNOTATION),
     );
     if (
       update &&
       typeof update === "object" &&
       (update.blocksMachineWrite === true ||
+        update.relationsMachineWrite === true ||
         update.annotation === BLOCKS_MACHINE_WRITE_ANNOTATION ||
-        annotatedBlocksWrite)
+        update.annotation === RELATIONS_MACHINE_WRITE_ANNOTATION ||
+        annotatedMachineWrite)
     ) {
       return;
     }

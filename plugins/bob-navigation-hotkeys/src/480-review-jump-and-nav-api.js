@@ -907,6 +907,9 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // task-status-cycler feature-detects `api?.taskLinkLane?.version >= 1`.
 // `notice` is the additive Unblocked card (`api.notice` v1, §12.6);
 // callers feature-detect `api.notice?.version >= 1`.
+// `relations` is the additive LINKS writer (`api.relations` v0): `removeLink`
+// works now; `openStage` settles `{ok: false}` until both stage directions
+// land and the namespace rises to v1.
 // `openReferencePdf(path)` is the additive Highlights hand-off used by the
 // bob-ledger-tools Reading Board: it opens a vault-relative `source_pdf`
 // (macOS only, no vault writes) and settles to `{ok, reason?}`. Callers
@@ -939,6 +942,7 @@ function createDependencyNavApi(plugin) {
     notice: createNoticeApi(plugin),
     successors: createSuccessorPickerApi(plugin),
     blocks: createBlocksNavApi(plugin),
+    relations: createRelationsNavApi(plugin),
     openReferencePdf(path) {
       if (!plugin || typeof plugin.openReferencePdfPath !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });

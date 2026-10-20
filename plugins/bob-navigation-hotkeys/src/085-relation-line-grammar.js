@@ -1,12 +1,16 @@
 // LINKS / LINKED FROM recognisers. This is the navigation plugin's pure
-// mirror of bob-cli's docs/task-relations.md LK contract; writers and the
-// live relation API arrive in nav-writer. Keep these parsers independent of
+// mirror of bob-cli's docs/task-relations.md LK contract; planners and
+// applyRelationEdit live in 086 / 594. Keep these parsers independent of
 // the dependency grammar so each managed-line family rejects the others.
 const TASK_RELATION_EMOJI = "🪢";
 const TASK_RELATION_LINE_NOTICE =
   "🪢 LINKS entries are relations, not Task Links · edit them with Ctrl+Shift+L";
 const TASK_LINKED_FROM_LINE_NOTICE =
   "🪢 LINKED FROM is generated from other tasks' LINKS lines · change it with Ctrl+Shift+Alt+L";
+const RELATIONS_MACHINE_WRITE_ANNOTATION = "bob-relations-machine-write";
+const TASK_RELATION_SEPARATOR = " • ";
+const TASK_LINKS_LABEL = "LINKS";
+const TASK_LINKED_FROM_LABEL = "LINKED FROM";
 const TASK_RELATION_LINK_RE = /(?:~~)?!?\[\[([^\]\n]*)\]\](?:~~)?/g;
 const TASK_RELATION_LABEL_FORBIDDEN_RE = /[\[\]()"\\|•*~\u0000-\u001f\u007f-\u009f]/u;
 const TASK_RELATION_BULLET_RE =

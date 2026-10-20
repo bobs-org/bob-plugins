@@ -7,6 +7,12 @@ community plugins and personal notes. This repo extracts the Bryan-authored plug
 versioned, validated, and reviewed independently of the vault. The plugins are deployed back into the vault with
 [`bob plugins sync`](#deploying-to-the-vault).
 
+<!-- BEGIN GENERATED: requirements -->
+## Requirements
+
+The plugins require Obsidian 1.8.7 or later.
+<!-- END GENERATED: requirements -->
+
 ## Plugins
 
 | Plugin                  | id                       | Version | Description                                                            |

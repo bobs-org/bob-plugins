@@ -17066,6 +17066,8 @@ class BobLedgerToolsPlugin extends Plugin {
       this.refreshDailyScrollCaptureTarget();
       this.captureActiveDailyLocation();
       this.refreshTodayCacheFromDaily();
+      // Obsidian replays vault create for every existing file before layout-ready, so relation listeners must register after it, and the scan covers the files that exist at startup.
+      this.setupRelationIndex();
       this.startRelationIndexScan();
       if (this.registerVimMappings()) {
         return;
@@ -17092,7 +17094,6 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();
-    this.setupRelationIndex();
     this.setupStatsBlock();
     this.setupReadingBoardData();
     this.setupReadingBoardBlock();
@@ -17408,6 +17409,7 @@ class BobLedgerToolsPlugin extends Plugin {
 // ---- src/171-relation-index-lifecycle.js ----
 class BobLedgerToolsRelationIndexMixin {
   initializeRelationIndex() {
+    this.relationIndexTornDown = false;
     this.relationIndexFiles = new Map();
     this.relationIndexVersions = new Map();
     this.relationIndexListeners = new Set();
@@ -17451,6 +17453,11 @@ class BobLedgerToolsRelationIndexMixin {
     } catch (error) {
       return String(path || "").replace(/^\//u, "");
     }
+  }
+
+  relationIndexIsMarkdownFile(fileOrPath) {
+    const path = typeof fileOrPath === "string" ? fileOrPath : fileOrPath && fileOrPath.path;
+    return typeof path === "string" && /\.md$/iu.test(path);
   }
 
   relationIndexOnChange(listener) {
@@ -17580,6 +17587,7 @@ class BobLedgerToolsRelationIndexMixin {
 
   relationIndexScheduleTargetRead(file) {
     if (!file || typeof file.path !== "string") return;
+    if (!this.relationIndexIsMarkdownFile(file)) return;
     const path = this.relationIndexNormalizePath(file.path);
     if (!path || this.relationIndexFiles.has(path) || this.relationIndexPendingTargetReads.has(path)) return;
     const vault = this.app && this.app.vault;
@@ -17599,6 +17607,7 @@ class BobLedgerToolsRelationIndexMixin {
 
   relationIndexScheduleFileRead(file) {
     if (!file || typeof file.path !== "string") return;
+    if (!this.relationIndexIsMarkdownFile(file)) return;
     const path = this.relationIndexNormalizePath(file.path);
     const version = (this.relationIndexVersions.get(path) || 0) + 1;
     this.relationIndexVersions.set(path, version);
@@ -17667,7 +17676,7 @@ class BobLedgerToolsRelationIndexMixin {
   }
 
   relationIndexPrefilter(file) {
-    if (!file || typeof file.path !== "string" || !/\.md$/iu.test(file.path)) return false;
+    if (!this.relationIndexIsMarkdownFile(file)) return false;
     return this.relationIndexHasBlockLinks(file);
   }
 
@@ -17675,10 +17684,14 @@ class BobLedgerToolsRelationIndexMixin {
   // copy of ~/bob (6,432 notes; 3,162 block-link-prefilter candidates) took
   // 256.87 ms; the current vault copy had no relation edges yet. A warm update
   // of a 292,989-byte copy of its largest daily note, padded with 250 synthetic
-  // same-note relations, took 13.21 ms. Re-run
+  // same-note relations, took 13.21 ms. That sample did not include Obsidian's
+  // vault-load create replay, which in 1.60.0 read every vault file (about
+  // 3.5 GB on the MacBook) and OOM-crashed the renderer. Relation listeners
+  // are therefore registered at layout-ready. Re-run
   // scripts/measure-ledger-tools-relation-index.cjs after parser/lifecycle work.
   // Keep the scan chunked as vault size grows, despite this sample staying below 1s.
   startRelationIndexScan() {
+    if (this.relationIndexTornDown) return;
     const vault = this.app && this.app.vault;
     if (!vault || typeof vault.getMarkdownFiles !== "function") return;
     const token = ++this.relationIndexScanToken;
@@ -17804,9 +17817,11 @@ class BobLedgerToolsRelationIndexMixin {
   }
 
   setupRelationIndex() {
+    if (this.relationIndexTornDown) return;
     const metadata = this.app && this.app.metadataCache;
     if (metadata && typeof metadata.on === "function") {
       this.registerEvent(metadata.on("changed", (file, data) => {
+        if (!this.relationIndexIsMarkdownFile(file)) return;
         const path = this.relationIndexNormalizePath(file && file.path);
         if (!path) return;
         const version = (this.relationIndexVersions.get(path) || 0) + 1;
@@ -17830,6 +17845,7 @@ class BobLedgerToolsRelationIndexMixin {
   }
 
   teardownRelationIndex() {
+    this.relationIndexTornDown = true;
     this.relationIndexScanToken = (this.relationIndexScanToken || 0) + 1;
     if (
       this.relationIndexOverlayTimer !== null &&

@@ -82,6 +82,57 @@ async function waitUntil(predicate, message) {
   assert.equal(predicate(), true, message);
 }
 
+function makeOnloadApp(files, tasks = []) {
+  const vaultEvents = new Events();
+  const metadataEvents = new Events();
+  const workspaceEvents = new Events();
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  const aliases = new Map();
+  const reads = [];
+  let layoutReadyCallback = null;
+  const app = {
+    workspace: {
+      on: workspaceEvents.on.bind(workspaceEvents),
+      offref: () => {},
+      onLayoutReady: (callback) => {
+        layoutReadyCallback = callback;
+      },
+      getActiveViewOfType: () => app.activeView || null,
+      getActiveFile: () => null,
+    },
+    metadataCache: {
+      on: metadataEvents.on.bind(metadataEvents),
+      getFileCache: (file) => (typeof file === "string" ? byPath.get(file) : file)?.cache || null,
+      getCache: (path) => byPath.get(path)?.cache || null,
+      getFirstLinkpathDest: (target, sourcePath) => {
+        if (!target) return byPath.get(sourcePath) || null;
+        const candidate = aliases.get(target) || (target.endsWith(".md") ? target : target + ".md");
+        return byPath.get(candidate) || null;
+      },
+    },
+    vault: {
+      on: vaultEvents.on.bind(vaultEvents),
+      getMarkdownFiles: () => Array.from(byPath.values()),
+      getAbstractFileByPath: (path) => byPath.get(path) || null,
+      cachedRead: async (file) => {
+        reads.push(file && file.path);
+        return file.content;
+      },
+      read: async (file) => {
+        reads.push(file && file.path);
+        return file.content;
+      },
+    },
+    plugins: { plugins: { "obsidian-tasks-plugin": { getTasks: () => tasks } } },
+    _events: { vaultEvents, metadataEvents, workspaceEvents },
+    _files: byPath,
+    _aliases: aliases,
+    _reads: reads,
+    _getLayoutReadyCallback: () => layoutReadyCallback,
+  };
+  return app;
+}
+
 test("ledger parser agrees with shared LK vectors and parses source task children", () => {
   for (const vector of vectors.managed) {
     const line = vectors.asLine(vector.line);
@@ -201,4 +252,97 @@ test("relationIndex applies changed, delete, rename, and unsaved editor overlays
   await waitUntil(() => api.outgoing("notes/source-renamed.md", "source").length === 1, "renamed source should be re-read");
   assert.equal(api.incoming("notes/renamed.md", "new")[0].source.path, "notes/source-renamed.md");
   plugin.teardownRelationIndex();
+});
+
+test("relationIndex registers after layout-ready and never reads non-markdown during startup replay", async () => {
+  const source = makeFile("notes/source.md", "- [ ] #task Source ^source\n  - 🪢 **LINKS:** [[notes/target#^target]]", { links: [{ link: "notes/target#^target" }], blocks: { source: {} } });
+  const target = makeFile("notes/target.md", "- [ ] #task Target ^target", { blocks: { target: {} } });
+  const plain = makeFile("notes/plain.md", "- [ ] #task Plain ^plain", { blocks: { plain: {} } });
+  const pdf = makeFile("lit_review/huge.pdf", "%PDF-binary", {});
+  const png = makeFile("img.png", "png-binary", {});
+  const mp3 = makeFile("audio.mp3", "mp3-binary", {});
+  const files = [source, target, plain, pdf, png, mp3];
+  const app = makeOnloadApp(files);
+  app._aliases.set("notes/target", "notes/target.md");
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.onload();
+  const layoutReady = app._getLayoutReadyCallback();
+  assert.equal(typeof layoutReady, "function", "onload must defer relation setup to onLayoutReady");
+  for (const file of files) {
+    app._events.vaultEvents.emit("create", file);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(app._reads.length, 0, "no vault reads before layout-ready");
+  assert.equal(plugin.relationIndexFiles.size, 0, "no files indexed before layout-ready");
+  layoutReady();
+  const api = plugin.relationIndexApi();
+  await waitUntil(() => api.ready(), "relation scan should finish after layout-ready");
+  for (const readPath of app._reads) {
+    assert.match(readPath, /\.md$/i, `only markdown files are read, got ${readPath}`);
+  }
+  assert.equal(app._reads.includes("lit_review/huge.pdf"), false);
+  assert.equal(app._reads.includes("img.png"), false);
+  assert.equal(app._reads.includes("audio.mp3"), false);
+  for (const key of plugin.relationIndexFiles.keys()) {
+    assert.match(key, /\.md$/i, `only markdown files are stored, got ${key}`);
+  }
+  assert.equal(api.outgoing("notes/source.md", "source").length, 1);
+  assert.equal(api.incoming("notes/target.md", "target").length, 1);
+  plugin.onunload();
+});
+
+test("relationIndex ignores non-markdown live events", async () => {
+  const source = makeFile("notes/source.md", "- [ ] #task Source ^source\n  - 🪢 **LINKS:** [[notes/target#^target]]", { links: [{ link: "notes/target#^target" }], blocks: { source: {} } });
+  const target = makeFile("notes/target.md", "- [ ] #task Target ^target", { blocks: { target: {} } });
+  const app = makeApp([source, target]);
+  app._aliases.set("notes/target", "notes/target.md");
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.initializeRelationIndex();
+  plugin.setupRelationIndex();
+  plugin.startRelationIndexScan();
+  const api = plugin.relationIndexApi();
+  await waitUntil(() => api.ready(), "initial relation scan should finish");
+  const reads = [];
+  const originalCachedRead = app.vault.cachedRead;
+  app.vault.cachedRead = async (file) => {
+    reads.push(file && file.path);
+    return originalCachedRead(file);
+  };
+  app.vault.read = async (file) => {
+    reads.push(file && file.path);
+    return file.content;
+  };
+  const pdf = makeFile("lit_review/huge.pdf", "%PDF-binary", {});
+  app._files.set(pdf.path, pdf);
+  app._events.vaultEvents.emit("create", pdf);
+  app._events.vaultEvents.emit("modify", pdf);
+  app._events.metadataEvents.emit("changed", pdf, "%PDF-binary");
+  plugin.relationIndexScheduleTargetRead(pdf);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(reads.length, 0, "non-markdown create/modify/changed/target reads cause no vault read");
+  assert.equal(plugin.relationIndexFiles.has("lit_review/huge.pdf"), false);
+  const fresh = makeFile("notes/fresh.md", "- [ ] #task Fresh ^fresh\n  - 🪢 **LINKS:** [[notes/target#^target]]", { links: [{ link: "notes/target#^target" }], blocks: { fresh: {} } });
+  app._files.set(fresh.path, fresh);
+  app._events.vaultEvents.emit("create", fresh);
+  await waitUntil(() => api.outgoing("notes/fresh.md", "fresh").length === 1, "new markdown create should be read and indexed");
+  assert.equal(reads.includes("notes/fresh.md"), true);
+  plugin.teardownRelationIndex();
+});
+
+test("relationIndex layout-ready after unload registers nothing", async () => {
+  const source = makeFile("notes/source.md", "- [ ] #task Source ^source\n  - 🪢 **LINKS:** [[notes/target#^target]]", { links: [{ link: "notes/target#^target" }], blocks: { source: {} } });
+  const target = makeFile("notes/target.md", "- [ ] #task Target ^target", { blocks: { target: {} } });
+  const app = makeOnloadApp([source, target]);
+  app._aliases.set("notes/target", "notes/target.md");
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.onload();
+  const layoutReady = app._getLayoutReadyCallback();
+  assert.equal(typeof layoutReady, "function");
+  plugin.onunload();
+  layoutReady();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(plugin.relationIndexListeners.size, 0, "no relation listeners after unload");
+  assert.equal(plugin.relationIndexFiles.size, 0, "no scan started after unload");
+  assert.equal(plugin.relationIndexApi().ready(), false);
+  assert.equal(app._reads.length, 0, "no vault reads after unload");
 });

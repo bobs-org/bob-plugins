@@ -72,6 +72,10 @@ and the active editor's unsaved text. Relation targets are resolved with
 Obsidian's link resolver and cached block IDs. Consumers render from this live
 index; they do not read the generated `LINKED FROM` mirror as source data.
 
+- Register `vault` `create` / `modify` listeners inside `workspace.onLayoutReady`,
+  because Obsidian replays `create` for every vault file (PDFs included) during load.
+- Never `read` / `cachedRead` non-Markdown files from a vault event.
+
 The read-only `readyBudget()` returns
 `{ count, cap, over }`; unavailable Tasks data or an unready cache
 returns a null count. `dashboardLaneBudget(lane)` returns

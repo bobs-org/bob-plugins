@@ -629,6 +629,8 @@ class BobLedgerToolsPlugin extends Plugin {
       this.refreshDailyScrollCaptureTarget();
       this.captureActiveDailyLocation();
       this.refreshTodayCacheFromDaily();
+      // Obsidian replays vault create for every existing file before layout-ready, so relation listeners must register after it, and the scan covers the files that exist at startup.
+      this.setupRelationIndex();
       this.startRelationIndexScan();
       if (this.registerVimMappings()) {
         return;
@@ -655,7 +657,6 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();
-    this.setupRelationIndex();
     this.setupStatsBlock();
     this.setupReadingBoardData();
     this.setupReadingBoardBlock();

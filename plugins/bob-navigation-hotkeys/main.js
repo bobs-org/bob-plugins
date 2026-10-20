@@ -49932,6 +49932,7 @@ function createBlocksNavApi(plugin) {
 class BobNavigationHotkeysPlugin extends Plugin {
   onload() {
     this.taskCardPluginUnloading = false;
+    this.activeImageZoomModal = null;
     this.reviewJournalPending = [];
     this.reviewJournalDraining = false;
     this.reviewJournalRetryTimer = null;
@@ -49999,6 +50000,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
       id: "open-reference-pdf-in-highlights",
       name: "Open reference PDF in Highlights (or link in new tab)",
       callback: () => void this.openReferencePdfInHighlightsOrLink(),
+    });
+
+    // The vault vimrc maps normal-mode Z to this command; it has no default hotkey.
+    this.addCommand({
+      id: "zoom-image-on-line",
+      name: "Zoom image on cursor line",
+      editorCallback: (editor, view) => this.zoomImageOnLine(editor, view),
     });
 
     this.addCommand({
@@ -50354,6 +50362,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
   onunload() {
     this.taskCardPluginUnloading = true;
+    if (this.activeImageZoomModal) {
+      try {
+        this.activeImageZoomModal.close();
+      } catch (_error) {
+        this.activeImageZoomModal = null;
+      }
+      this.activeImageZoomModal = null;
+    }
     this.successorPickerUnavailable = true;
     try {
       this.closeSuccessorPickerForUnload();
@@ -73727,6 +73743,137 @@ function imageZoomExtensionOfPath(pathText) {
 }
 
 class BobNavigationHotkeysImageZoomMixin {
+  zoomImageOnLine(editor, view) {
+    if (
+      !view ||
+      !view.file ||
+      !editor ||
+      typeof editor.getCursor !== "function" ||
+      typeof editor.getLine !== "function" ||
+      typeof editor.getValue !== "function"
+    ) {
+      return;
+    }
+    if (typeof view.getMode === "function" && view.getMode() !== "source") {
+      new Notice("Zoom image needs the editor; in Reading view, click the image");
+      return;
+    }
+    if (this.activeImageZoomModal && !this.activeImageZoomModal.imageZoomClosed) {
+      return;
+    }
+
+    const head = editor.getCursor("head");
+    if (!head || !Number.isInteger(head.line) || !Number.isFinite(head.ch)) {
+      return;
+    }
+    const lineText = editor.getLine(head.line);
+    if (typeof lineText !== "string") {
+      return;
+    }
+    const contexts = getMarkdownLineContexts(editor.getValue());
+    const target = this.resolveImageZoomTargetOnLine({
+      lineText,
+      ch: head.ch,
+      sourcePath: view.file.path,
+      inCodeFence: Boolean(contexts[head.line] && contexts[head.line].inFence),
+    });
+    if (target.kind === "notice") {
+      new Notice(target.message);
+      return;
+    }
+
+    const anchor = editor.getCursor("anchor") || head;
+    const snapshot = {
+      view,
+      filePath: view.file.path,
+      editor,
+      anchor: { line: anchor.line, ch: anchor.ch },
+      head: { line: head.line, ch: head.ch },
+      scroll:
+        typeof editor.getScrollInfo === "function"
+          ? editor.getScrollInfo()
+          : null,
+    };
+    let modal = null;
+    modal = new ImageZoomModal(this.app, {
+      src: target.src,
+      title: target.title,
+      onClosed: () => {
+        if (this.activeImageZoomModal === modal) {
+          this.activeImageZoomModal = null;
+        }
+        this.restoreImageZoomSourceEditor(snapshot);
+      },
+    });
+    this.activeImageZoomModal = modal;
+    try {
+      modal.open();
+    } catch (error) {
+      if (this.activeImageZoomModal === modal) {
+        this.activeImageZoomModal = null;
+      }
+      throw error;
+    }
+  }
+
+  restoreImageZoomSourceEditor(snapshot) {
+    const defer =
+      typeof window !== "undefined" && typeof window.setTimeout === "function"
+        ? window.setTimeout.bind(window)
+        : (callback) => callback();
+    defer(() => {
+      if (this.taskCardPluginUnloading || !snapshot) {
+        return;
+      }
+      const workspace = this.app && this.app.workspace;
+      const activeView =
+        workspace && typeof workspace.getActiveViewOfType === "function"
+          ? workspace.getActiveViewOfType(MarkdownView)
+          : null;
+      if (
+        activeView !== snapshot.view ||
+        !activeView.file ||
+        activeView.file.path !== snapshot.filePath
+      ) {
+        return;
+      }
+
+      const editor = snapshot.editor;
+      const samePosition = (left, right) =>
+        Boolean(
+          left &&
+            right &&
+            left.line === right.line &&
+            left.ch === right.ch,
+        );
+      if (typeof editor.getCursor === "function") {
+        const anchor = editor.getCursor("anchor");
+        const head = editor.getCursor("head");
+        if (
+          (!samePosition(anchor, snapshot.anchor) ||
+            !samePosition(head, snapshot.head)) &&
+          typeof editor.setSelection === "function"
+        ) {
+          editor.setSelection(snapshot.anchor, snapshot.head);
+        }
+      }
+      if (snapshot.scroll && typeof editor.getScrollInfo === "function") {
+        const current = editor.getScrollInfo();
+        if (
+          current &&
+          (current.left !== snapshot.scroll.left ||
+            current.top !== snapshot.scroll.top) &&
+          typeof editor.scrollTo === "function"
+        ) {
+          editor.scrollTo(snapshot.scroll.left, snapshot.scroll.top);
+        }
+      }
+      if (typeof editor.focus === "function") {
+        editor.focus();
+      }
+    }, 0);
+  }
+
   findInlineCodeSpans(line) {
     const text = String(line || "");
     const runs = [];

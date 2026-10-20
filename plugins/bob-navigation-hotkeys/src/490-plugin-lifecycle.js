@@ -1,6 +1,7 @@
 class BobNavigationHotkeysPlugin extends Plugin {
   onload() {
     this.taskCardPluginUnloading = false;
+    this.activeImageZoomModal = null;
     this.reviewJournalPending = [];
     this.reviewJournalDraining = false;
     this.reviewJournalRetryTimer = null;
@@ -68,6 +69,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
       id: "open-reference-pdf-in-highlights",
       name: "Open reference PDF in Highlights (or link in new tab)",
       callback: () => void this.openReferencePdfInHighlightsOrLink(),
+    });
+
+    // The vault vimrc maps normal-mode Z to this command; it has no default hotkey.
+    this.addCommand({
+      id: "zoom-image-on-line",
+      name: "Zoom image on cursor line",
+      editorCallback: (editor, view) => this.zoomImageOnLine(editor, view),
     });
 
     this.addCommand({
@@ -423,6 +431,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
   onunload() {
     this.taskCardPluginUnloading = true;
+    if (this.activeImageZoomModal) {
+      try {
+        this.activeImageZoomModal.close();
+      } catch (_error) {
+        this.activeImageZoomModal = null;
+      }
+      this.activeImageZoomModal = null;
+    }
     this.successorPickerUnavailable = true;
     try {
       this.closeSuccessorPickerForUnload();

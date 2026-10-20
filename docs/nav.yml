@@ -24,5 +24,7 @@
   path: open-notes-uri.md
 - title: Open reference PDF in Highlights
   path: highlights.md
+- title: Zoom an image on the cursor line
+  path: image-zoom.md
 - title: Templater new-note trigger
   path: templater-trigger.md

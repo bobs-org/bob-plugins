@@ -70,3 +70,201 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Yank parent directory | `yank-parent-directory` | — |
 | Yank relative path | `yank-relative-path` | — |
 <!-- END GENERATED: commands -->
+
+## Task Card
+
+`Ctrl+Shift+P` always opens the Task Card: a focused first screen with exact
+priority previews that closes on `Esc`, `q`, or `Ctrl+[`. There is no plugin
+setting, no activation date, and no filtered property list — the card is the
+only surface, and its actions open the existing stages and writers. On an inbox
+task every non-closing answer asks where the task goes before writing and moves
+there.
+
+`Ctrl+Shift+B` is `Ctrl+Shift+P` then `b`: it opens the Task Card's Depends on
+stage for the task under the cursor, a dedicated Task Link's linked task, or a
+counted batch. `Ctrl+Shift+Alt+B` is `Ctrl+Shift+P` then `⇧B`: it opens the
+Blocks stage for a task or Task Link, supports counted batches, and works from
+Depends-On and BLOCKS lines, where `Ctrl+Shift+P` on a BLOCKS line opens the
+owner's stage directly.
+
+Any card gesture that writes closes the card. The card's Cancel action (`x`)
+closes the task as Cancelled with an optional reason kept in a first-child
+Cancel Log, pruning its links from today's open Pomodoros. The card level strip
+and priority notices render the shared signal-bar priority mark, falling back
+to Lucide signal icons without the ledger-tools namespace.
+
+## Navigation and counts
+
+`Ctrl+Shift+J/K` navigates Ready, In Progress, and Next `#task` lines while
+skipping Blocked `[?]` tasks — except on an open current or future Pomodoro
+entry, where the same chord instead moves that Pomodoro and everything it owns
+down or up among adjacent future Pomodoros, keeping the current slot's time
+range with whichever entry is promoted there and refusing (with a notice,
+without jumping) to cross the current/history boundary or the last future
+Pomodoro. A `N<Ctrl+Shift+J/K>` count moves a current or future Pomodoro
+exactly N positions atomically, or jumps to the Nth circular navigation target
+elsewhere.
+
+Normal-mode Enter on a link records a file-aware jump in a 100-entry session
+history shared with native jumps: `Ctrl+O` returns to the originating note and
+exact cursor, `Ctrl+I` goes forward without undoing the move, counts traverse
+multiple entries, new jumps replace the forward branch, and same-note
+heading/block and already-open tabs round-trip. Tab, insert, and visual Vim
+behavior is unchanged.
+
+## Pomodoro gestures
+
+The same move keymap on a Pomodoro sub-bullet moves that bullet plus the next N
+siblings, each carrying its descendants, into another open Pomodoro in the same
+note — or into a new `- [ ] () — NAME` Pomodoro created directly below the
+current one from a typed, uppercased, em-dash-stripped picker name. Typing `=`
+creates a fresh destination with the source Pomodoro's normalized name when the
+source is named; typing `=NAME` peels every matching `NAME` component from a
+merged source into a new placeholder containing the selected bullet subtrees.
+Exact duplicate destination bullets merge away, and moving out a source's last
+owned content deletes that Pomodoro entry instead of leaving it behind. Nested
+`#task` lines under Pomodoro entries route to the Pomodoro move.
+
+On a Pomodoro entry line itself the keymap opens a picker: Enter on another
+open Pomodoro keeps the existing whole-entry move/delete behavior, typing a new
+name renames the entry in place, and `Ctrl+X` on a highlighted open
+current/future Pomodoro merges entries in one undoable edit (a current timed
+entry survives and absorbs the selected future one; names combine
+survivor-first with ` + ` up to 48 characters). Any count is accepted but
+ignored since the operation is whole-entry.
+
+## Task properties, dependencies, and moves
+
+`Ctrl+Shift+P` edits scheduled, dependency, and priority task properties, with
+priority levels that roll scheduled dates, report the exact rolled ISO
+date/span and its distance from today, and offer date-picker re-roll
+suggestions. Choosing a `scheduled` date opens one combined Reason/Work summary
+review that records the optional reason as a nested entry under a Schedule Log
+child bullet — an empty reason on a task that already keeps a log records `🤷
+no reason given`, while a task with no log yet is left untouched. Choosing a
+priority level or the pinned roll suggestion writes immediately with its own
+deterministic reason. Giving a task a strictly future `scheduled` date removes
+its live links from today's open Pomodoro entries. `N<Ctrl+Shift+P>` edits the
+current task plus the next N real tasks; on a dedicated Task Link bullet the
+same keymap edits the linked task in its own note instead.
+
+Dependency writes go through one managed ⛓️ **DEPENDS ON:** first-child line
+per task, committed in one undoable edit: adding an open prerequisite marks
+the dependent Blocked, raises the target to its lane, and removes the
+dependent's live links from today's open Pomodoros together with any emptied
+entry; removing the last open prerequisite recovers it immediately. The Depends
+on value stage searches every open task in the vault, reachable from a task
+line, the Depends-On line itself, a chip, a Task Link, or the `Edit task
+dependencies` palette command. Blockquoted tasks refuse dependency edits.
+Answering the landed review row advances the walk once to the next remaining
+item.
+
+Bare `Ctrl+Shift+M` moves the current task and focuses the destination note on
+the moved task; `N<Ctrl+Shift+M>` moves it plus the next N movable tasks. A
+move never advances the review walk, even from a landed row: the next `]s` /
+`[s` resumes at the moved row's walk neighbour, with `Ctrl+O` returning to the
+post-removal source seam and `Ctrl+I` returning to the first moved task without
+undoing the move.
+
+Project conversion and reversal keep Depends-On and inline dates on task lines.
+Promoting a task with real project tasks expands each live dedicated Pomodoro
+Task Link into one sibling link per new project task, while history, past
+dates, struck links, and prose rewrite one-to-one to `^prj`. Project schedules
+propagate to task-level `scheduled` properties and Blocked status, and
+`#prj_is_blocked` follows `^prj`'s post-gesture status. Dependency additions
+and removals update the generated 🧱 BLOCKS mirrors, governed by
+`dependencies.blocks_lines` in the shared bob config file (default on; set it
+to `false` to stop navigation gestures from writing BLOCKS lines).
+
+`Alt+N` commits Ready to Next or releases Next/In Progress to Ready on the
+current task plus the next N tasks (or the linked task plus the next N sibling
+Task Links), unlinking released tasks from today and reporting the NEXT/PENDING
+counts with the weekly-review hint when over the cap. `Alt+[` / `Alt+]` on a
+Pomodoro Task Link toggles the linked task between Next and In Progress,
+asking once for an optional Work Log summary when moving back to Next.
+
+## Review walk
+
+`Ctrl+Alt+J/K` walks the tiered freshness review queue PRE → NEW → PROJECTS →
+PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST vault-wide, wrapping with
+a notice. `N]s` / `N[s` jump N review-queue entries in one landing. `]s` /
+`[s` (and `Ctrl+Alt+J/K`) away from the current review task first return to it
+with a `Back to current review task` toast; `<C-o>` goes back, and the next
+press steps from the task. `[S` / `]S` jump to the first/last queue entries
+without wrapping.
+
+On the exact PRE/POST row the walk just landed on, `Ctrl+Enter` completes
+through the cycler and advances within the group. `Alt+F` completes a
+checklist row in place; `Ctrl+Alt+F` completes and advances. On a landed
+RECURRING row both write nothing, show the recurring-tier notice, and stay;
+`Ctrl+Enter` completes and `Ctrl+Shift+Enter` links to Today, each advancing
+once. POST multi-row reviews advance with `Ctrl+Enter` or `Ctrl+Alt+F`, and the
+review closes on the last row. A resolving commit on a landed review row
+advances the walk once to the next remaining item. In the successor picker,
+`Ctrl+Shift+Enter` retargets the marked rows through the Block ID Prompt
+picker.
+
+`Alt+N`, the Task Card property rows, and `Ctrl+Shift+M` moves stamp every
+rewritten open task through the ledger-tools stamper. The Task Card's Review
+every action sets or clears `[refresh:: N]` through the same namespace,
+reading lane intervals with the task's own refresh kept as the once-Ready
+return value.
+
+## Notes, tabs, and keyboard layers
+
+The plugin opens and manages related notes and tabs, including pinned-tab
+preserving sibling closes, and registers the read-only `obsidian://bob-goto-task`
+and `obsidian://bob-open-notes` protocol handlers so external picks land the
+caret without writing the vault. `Cmd+Enter` on a reading task, Task Link, or
+managed embed opens its PDF in Highlights without vault writes; other targets
+keep Obsidian's new-tab behavior. Bare and counted `!` only toggle
+transclusion markers and are refused on dependency lines with a notice pointing
+to `Ctrl+Shift+P`.
+
+Three keyboard layers are in play, and they are not the same thing:
+
+- **Registered palette commands with defaults** are listed in the generated
+  table above (`Alt+N`, `Ctrl+0`, `Ctrl+Alt+J/K`,
+  `Ctrl+Shift+M`, `Ctrl+Shift+B`, `Ctrl+Shift+Alt+B`, `Mod+Y`, `Alt+F`,
+  `Ctrl+Alt+F`). An absent `hotkeys` field means no registered default, not an
+  absence of all keyboard behavior.
+- **Custom vault bindings** live in the vault's `.obsidian/hotkeys.json`, not
+  in this plugin. In particular, the vault binds
+  `bob-navigation-hotkeys:open-reference-pdf-in-highlights` to `Meta+Enter`;
+  that binding is custom vault configuration, not a registered plugin default.
+  A registered default would lose to Obsidian's built-in `Mod+Enter`. Do not
+  re-record the binding in Obsidian Settings on a Mac: Obsidian may save `Mod`,
+  which would claim `Ctrl+Enter` on other platforms.
+- **Editor and Vim handlers** act below the palette layer. The plugin maps
+  `\s` in Vim normal mode to toggling the current tab pin (Bob Ledger Tools
+  owns the distinct `\p` mapping for Pomodoro increments), and its
+  editor/Vim-aware dispatch narrows capture-phase fallbacks to match the
+  vault's bindings exactly.
+
+## Settings
+
+This plugin adds no settings tab. It honors the shared bob config file
+(`plan:` lane caps, `freshness:` decay and intervals, and
+`dependencies.blocks_lines` for BLOCKS mirror writes) and per-note
+`task_refresh` frontmatter.
+
+## Related
+
+- [Task move](https://bobs-org.github.io/task-move/) — the move semantics
+  behind `Ctrl+Shift+M`.
+- [Task dependencies](https://bobs-org.github.io/task-dependencies/) — the
+  Depends-On line and BLOCKS mirrors.
+- [Task status hooks](https://bobs-org.github.io/task-status-hooks/) — how
+  lane changes reconcile.
+- [Projects](https://bobs-org.github.io/projects/) — project notes and
+  `^prj` scheduling.
+- [Freshness](https://bobs-org.github.io/freshness/) — the review queue and
+  stamp model.
+- [Plan](https://bobs-org.github.io/plan/) — the NEXT/PENDING caps reported by
+  lane toggles.
+- [Block ID Prompt](block-id-prompt.md) — the Today-link picker this plugin
+  retargets.
+- [Task Status Cycler](task-status-cycler.md) — the completion gestures the
+  walk hands off to.
+- [Bob Ledger Tools](bob-ledger-tools.md) — the marks, chips, and freshness
+  state this plugin renders through.

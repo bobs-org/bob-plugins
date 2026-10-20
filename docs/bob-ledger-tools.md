@@ -39,3 +39,155 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | Toggle task tag marks | `toggle-task-tag-marks` | — |
 | Toggle unblocked hand-off glyph | `toggle-unblocked-glyph` | — |
 <!-- END GENERATED: commands -->
+
+## Snippets and the plan block
+
+The **Expand Bob snippet** command (or Tab) expands editor snippets. Date
+calculation uses local calendar days: `d[-]<N>` (for example `d0`) expands to
+the bare ISO date, while `D[-]<N>` (for example `D0`) expands to the emphasized
+local date, an em dash, and a trailing space, with the cursor placed after that
+space. One isolated `-` immediately before the cursor expands exactly that
+hyphen to an em dash plus a trailing space; existing suffix whitespace is left
+alone, and `--`, `---`, and longer hyphen runs are untouched so Markdown
+thematic breaks, YAML frontmatter delimiters, and other multi-hyphen text keep
+Obsidian's normal Tab behavior.
+
+The plugin also renders a live `bob-plan` block: a `TODAY 3/3 · 7/10` chip with
+the theme and link budget (its tooltip lists each theme with its link count),
+`PENDING n/10`, `NEXT n/15`, and `READY n/100` chips that open the matching
+dashboard sections, the `★ GOALS · DECKS · BOB` theme line with the highlight
+starred, and one muted line per lint. READY is the shared live current backlog
+(Today excluded) and never changes the PLAN status; READY over its cap adds a
+`ready_cap_exceeded` lint line. PENDING and NEXT show the live dashboard section
+counts (Today excluded; `–` when Tasks or the current-day Today cache is
+unready) and turn red only for a strict section excess, while whole-lane
+pressure stays in the tooltip and in `next_cap_exceeded` / `pending_cap_exceeded`
+lints that name the whole lane, including TODAY. Older daily notes follow
+today's live lanes while keeping their own TODAY theme and link budget.
+
+Today is read from the ledger at render time — the open tasks with a dedicated
+Task Link under today's open Pomodoros — and kept in a synchronous cache that
+rebuilds on layout ready, on daily-note change, create, delete, and rename, and
+at local-midnight rollover. Caps come from the `plan:` block in the shared bob
+config file (`max_next`, `max_pending`, `max_ready`, `max_ready_per_note`; a
+legacy `max_now` loads without error), with built-in defaults when the file,
+the block, or a value is missing or invalid. The block re-renders live when the
+daily note or the Tasks cache changes and shows `–` placeholders, never an
+error, when there is no daily note, no Pomodoros section, or no Tasks plugin.
+
+The plugin shows a desktop review footer in the native status bar: nonempty
+current walk groups only (PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING →
+TICKLER → ROTTEN → POST, with TICKS split from ROTTEN). The footer omits the
+current review group from its trailing summary and shows the full summary when
+no review row is current; it hides when the queue is empty or Tasks is
+unavailable. The main button jumps to the next due task, falling back to
+rotten.
+
+## Marks and rendered blocks
+
+Marks are display-only: nothing writes them, and each has a session toggle that
+restores the unmarked rendering:
+
+- The freshness mark renders each canonical `[fresh:: YYYY-MM-DD]` stamp as a
+  compact mark (`✓ today`, a draining lease ring with its age, `⟳ Nd` when due)
+  in Live Preview and rendered views. Resolution is exact or neutral: an exact
+  memo match or unanimous consensus drives the tone, otherwise the mark shows
+  only the neutral lease and never a guessed due.
+- The priority mark renders each canonical `[priority:: …]` field as one
+  signal-bar glyph (4/3/2/1 filled bars for P1–P4, a solid `!` square for
+  off-ladder `highest`) in Live Preview and rendered views. The glyph follows
+  the stored Tasks value, never the ladder position; an unknown ladder omits
+  P-labels instead of guessing.
+- The date mark renders each canonical `created`/`scheduled`/`completion`/
+  `cancelled` field as one monochrome glyph plus a calendar label (`today`,
+  `tomorrow`, `Fri`, `Oct 22`) in Live Preview and rendered views, including
+  Tasks query results. Malformed fields get a dashed repair flag, and labels
+  roll over at local midnight without a reload.
+- The task tag mark renders each exact `#task` tag on a task line as one small
+  teal identity hash glyph; Tasks query results hide the tag entirely because
+  every row is already a task. Adjacent `#task #ref` pairs render as one teal
+  open-book mark.
+
+The plugin also renders the TODAY/PENDING/NEXT/READY badges on dashboard and
+daily `bob-plan` blocks as live section-over-cap counts that agree with their
+Tasks sections (the BLOCKED badge stays informational and neutral with no
+cap), the CROWDED chip, the `bob-ready-notes` ranked-bar block, `## Tasks`
+heading chips, Pomodoro home chips (quiet lowercase chips with area-hue dots
+derived from linked task notes), and the display-only 🍅 Today mark on open
+task lines linked under today's open Pomodoros, with a session toggle and a
+jump to the Task Link.
+
+`DEPENDS ON` lines render as live dependency chips plus generated `BLOCKS` rows
+with live dependents, last-blocker 🔑 badges, stale-entry styling, and `frees
+N` summaries. Chips render in Live Preview and Reading view on owned
+Depends-On rows only, with a session toggle; `waiting on N` counts open
+prerequisites only. Open BLOCKS rows add ＋ to open the reverse Blocks stage
+and hover × to remove a dependent. The Stats `bob-stats` block renders the
+responsive area and project panel with home and Themes views, bucket and
+session drill-down, and task counts. The read-only `bob-reading-board` block
+renders a Reading / Next / Ready / Snoozed kanban of the reading queue drawn
+entirely from `bob ref list` JSON — wake dates and waiting-on reasons come from
+`bob`, never from vault text — with the Highlights PDF hand-off and the Open
+Reading Board command.
+
+## Freshness, review, and readiness
+
+The plugin tracks task freshness from `[fresh:: YYYY-MM-DD]` / `[refresh:: N]`
+/ `[keeps:: N]` stamps: the tiered PRE → NEW → PROJECTS → PENDING → NEXT →
+RECURRING → TICKLER → ROTTEN → POST walk with ordinary reference freshness,
+daily lane review, checklist tiers, and project reminders, plus the
+freshness-gated READY lane, NEW/ROTTEN review models and chips, the review
+queue, counts, lints, and the status bar. Folded keep pips always render in the
+freshness mark; the leaf plus `Alt+F to decide` appears only when the
+navigation decay-card capability is present and decay is on. READY counts gate
+on the read-time bucket so NEW and ROTTEN review stay out of READY.
+
+Other plugins never place `fresh` stamps themselves: navigation, the cycler,
+and Block ID Prompt call the shared stamper instead. `keepLine` is the sole
+increment helper (a counted keep stamps and increments once, saturating at 999,
+with a valid prior `fresh` before today required; uncounted keeps preserve),
+and every generic stamper clears `keeps`.
+
+The `noteReady` surface backs the read-only per-note Ready cap: each
+area/project note's Ready lane against `plan.max_ready_per_note` (default 5)
+with per-note `ready_cap` overrides and crowded/full/room states.
+
+## Session toggles
+
+Every `Toggle …` command in the generated table above is a session-only toggle
+(default on) that restores the unmarked rendering while the session lasts. The
+jump and open commands (`Jump to current Pomodoro line` on `Ctrl+9`, `Go to
+today's Task Link`, `Open today's daily note`, `Open Stats`, `Open Reading
+Board`) are the only commands in this plugin with lasting effects; `Ctrl+9` is
+its only registered default hotkey.
+
+## Settings
+
+This plugin adds no settings tab. It reads the shared bob config file: the
+`plan:` block for lane caps, the `freshness:` block for decay and intervals,
+and per-note `task_refresh` frontmatter for note overrides. It also serves its
+rendered state to the other plugins through a versioned `api` surface
+(`planBudget`, `todayKeys`, freshness, readiness, badge, and mark namespaces)
+so the dash and sibling plugins share one budget, one Today set, and one set of
+glyphs.
+
+## Related
+
+- [Plan](https://bobs-org.github.io/plan/) — the lane model behind the plan
+  block and badges.
+- [Freshness](https://bobs-org.github.io/freshness/) — the stamp model behind
+  freshness marks and review.
+- [Task dependencies](https://bobs-org.github.io/task-dependencies/) — the
+  Depends-On lines behind chips and BLOCKS rows.
+- [Task tag marks](https://bobs-org.github.io/task-tag-marks/) — the tag-mark
+  rendering contract.
+- [Date marks](https://bobs-org.github.io/date-marks/) — the date-mark
+  rendering contract.
+- [Today marks](https://bobs-org.github.io/today-marks/) — the Today-mark
+  rendering contract.
+- [Dashboard](https://bobs-org.github.io/dashboard/) — the dashboard badges.
+- [Stats](https://bobs-org.github.io/stats/) — the Stats block data.
+- [Pomodoro homes](https://bobs-org.github.io/pomodoro-homes/) — the home-chip
+  model.
+- [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) — the review walk and
+  Task Card this plugin feeds.

@@ -28,6 +28,7 @@
   "200-filtered-picker-modals.js",
   "205-inbox-route-picker-modal.js",
   "206-successor-picker-modal.js",
+  "207-image-zoom-modal.js",
   "210-rename-and-line-context.js",
   "212-project-conversion.js",
   "215-project-blocking.js",

@@ -704,6 +704,7 @@ module.exports.helpers = {
   blocksStageGuard,
   relationStageRowKey,
   inverseRelationPhrase,
+  relationStageEdgeStatusSymbol,
   relationStageIncomingRowsFromEdges,
   collectRelationStageIncomingFromSnapshots,
   isRelationStageExcludedPath,

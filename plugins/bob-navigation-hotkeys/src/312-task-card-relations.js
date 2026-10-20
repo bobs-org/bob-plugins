@@ -195,8 +195,9 @@ function taskCardLinkedFromSummary(session, context = {}) {
     return Object.freeze({ count: 0, detail: "" });
   }
   const first = incoming[0] && incoming[0].source;
+  const cleaned = first && first.text ? cleanTaskDisplayText(first.text) : "";
   const name = String(
-    (first && first.text) ||
+    cleaned ||
       (first && first.blockId ? `^${first.blockId}` : "source task"),
   ).trim();
   return Object.freeze({

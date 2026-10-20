@@ -38818,6 +38818,20 @@ function relationStageIncomingRow(source, label, options = {}) {
   });
 }
 
+function relationStageEdgeStatusSymbol(source) {
+  const text = source && source.text != null ? String(source.text) : "";
+  const match = OBSIDIAN_TASK_LINE_RE.exec(text);
+  if (match) return match[1];
+  const word = String((source && source.status) || "").trim().toUpperCase();
+  if (word === "TODO") return " ";
+  if (word === "NEXT") return "*";
+  if (word === "IN_PROGRESS") return "/";
+  if (word === "BLOCKED") return "?";
+  if (word === "DONE") return "x";
+  if (word === "CANCELLED") return "-";
+  return " ";
+}
+
 function relationStageIncomingRowsFromEdges(edges, index, previousDailyPath) {
   const rows = [];
   const seen = new Set();
@@ -38830,23 +38844,43 @@ function relationStageIncomingRowsFromEdges(edges, index, previousDailyPath) {
     if (seen.has(key)) continue;
     seen.add(key);
     const record = index && index.byKey instanceof Map ? index.byKey.get(key) : null;
-    const text = String((record && (record.displayText || record.text)) || (source && source.text) || `^${blockId}`);
     const archived = isRelationStageArchivedPath(path);
-    rows.push(relationStageIncomingRow({
-      path,
-      blockId,
-      line: Number.isInteger(record && record.line) ? record.line : Number.isInteger(source && source.line) ? source.line : -1,
-      rawLine: record && record.rawLine ? record.rawLine : null,
-      status: record && record.status ? record.status : (source && source.status) || " ",
-      displayText: text,
-      text,
-      open: record ? record.open === true : OPEN_OBSIDIAN_TASK_STATUSES.has((source && source.status) || " "),
-      closed: record ? record.open !== true : !OPEN_OBSIDIAN_TASK_STATUSES.has((source && source.status) || " "),
-      archived,
-      note: dependencyStageBasenameOf(path),
-      route: dependencyStageRouteOf(path),
-      hidden: record ? record.hidden === true : false,
-    }, edge && edge.label, {
+    let rowSource;
+    if (record) {
+      rowSource = {
+        ...record,
+        path,
+        blockId,
+        archived,
+        note: dependencyStageBasenameOf(path),
+        route: dependencyStageRouteOf(path),
+      };
+    } else {
+      const line =
+        Number.isInteger(source && source.line) && source.line >= 1
+          ? source.line - 1
+          : -1;
+      const rawText = source && source.text != null ? String(source.text) : "";
+      const cleaned = rawText ? cleanTaskDisplayText(rawText) : "";
+      const text = cleaned || `^${blockId}`;
+      const status = relationStageEdgeStatusSymbol(source);
+      rowSource = {
+        path,
+        blockId,
+        line,
+        rawLine: null,
+        status,
+        displayText: text,
+        text,
+        open: OPEN_OBSIDIAN_TASK_STATUSES.has(status),
+        closed: !OPEN_OBSIDIAN_TASK_STATUSES.has(status),
+        archived,
+        note: dependencyStageBasenameOf(path),
+        route: dependencyStageRouteOf(path),
+        hidden: false,
+      };
+    }
+    rows.push(relationStageIncomingRow(rowSource, edge && edge.label, {
       readOnly: archived || path === normalizeVaultRelativePath(previousDailyPath || ""),
     }));
   }
@@ -40737,8 +40771,9 @@ function taskCardLinkedFromSummary(session, context = {}) {
     return Object.freeze({ count: 0, detail: "" });
   }
   const first = incoming[0] && incoming[0].source;
+  const cleaned = first && first.text ? cleanTaskDisplayText(first.text) : "";
   const name = String(
-    (first && first.text) ||
+    cleaned ||
       (first && first.blockId ? `^${first.blockId}` : "source task"),
   ).trim();
   return Object.freeze({
@@ -80575,6 +80610,7 @@ module.exports.helpers = {
   blocksStageGuard,
   relationStageRowKey,
   inverseRelationPhrase,
+  relationStageEdgeStatusSymbol,
   relationStageIncomingRowsFromEdges,
   collectRelationStageIncomingFromSnapshots,
   isRelationStageExcludedPath,

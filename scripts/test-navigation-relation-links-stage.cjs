@@ -510,6 +510,82 @@ test("card ⇧L shows live incoming detail and routes Ctrl+D by direction", () =
   assert.match(reverseClear.reason, /LINKED FROM is generated/);
 });
 
+test("index-only Linked-from rows convert 1-based edges into nav records", () => {
+  const rows = helpers.relationStageIncomingRowsFromEdges(
+    [
+      {
+        source: {
+          path: "Tasks.md",
+          blockId: "bar",
+          line: 4,
+          text: "- [*] #task bar baz buz [created::2026-10-20] ^bar",
+          status: "NEXT",
+        },
+        label: "son of",
+      },
+    ],
+    { byKey: new Map() },
+    "",
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].line, 3);
+  assert.equal(rows[0].displayText, "bar baz buz");
+  assert.equal(rows[0].text, "bar baz buz");
+  assert.equal(rows[0].status, "*");
+  assert.equal(rows[0].open, true);
+  assert.equal(rows[0].closed, false);
+
+  const done = helpers.relationStageIncomingRowsFromEdges(
+    [
+      {
+        source: {
+          path: "Tasks.md",
+          blockId: "done",
+          line: 1,
+          text: "#task Done source",
+          status: "DONE",
+        },
+      },
+    ],
+    { byKey: new Map() },
+    "",
+  );
+  assert.equal(done[0].status, "x");
+  assert.equal(done[0].closed, true);
+  assert.equal(done[0].open, false);
+});
+
+test("card ⇧L detail cleans a raw index task line", () => {
+  const content = "- [ ] #task Target task ^target";
+  const incoming = [
+    {
+      source: {
+        path: "Other.md",
+        blockId: "source",
+        text: "- [*] #task Source task ^source",
+      },
+    },
+  ];
+  const app = {
+    plugins: {
+      plugins: {
+        "bob-ledger-tools": {
+          api: {
+            relationIndex: {
+              version: 1,
+              ready: () => true,
+              incoming: () => incoming,
+            },
+          },
+        },
+      },
+    },
+  };
+  const model = makeCardModel({ content, app });
+  const row = model.rows.find((entry) => entry.id === "linked-from");
+  assert.equal(row.detail, "1 · Source task");
+});
+
 test("Linked-from scans source LINKS, reverses built-in phrases, and ignores stored mirrors", () => {
   const notes = {
     "Tasks.md": [

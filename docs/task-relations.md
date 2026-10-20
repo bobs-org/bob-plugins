@@ -55,8 +55,9 @@ mirrors follow best-effort with a `· 🪢 LINKED FROM not updated` suffix when
 they cannot.
 
 Linked from lists incoming sources in CURRENT from `api.relationIndex`, or
-from a generation-guarded vault scan while that index is unavailable. Its
-RESULTS are editable source tasks that can link here; Enter applies or
+from a generation-guarded vault scan while that index is unavailable.
+Sources of every task status count, including Next `[*]` and Blocked `[?]`.
+Its RESULTS are editable source tasks that can link here; Enter applies or
 removes the selected source, and `Shift+Enter` adds or changes the relation
 label. Built-in labels use their inverse phrase in CURRENT. `N<Ctrl+Shift+L>`
 applies one Links-to target and label to each of N+1 source tasks;

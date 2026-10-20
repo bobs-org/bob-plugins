@@ -222,18 +222,27 @@ function relationListMarker(line) {
   return /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/u.test(String(line || ""));
 }
 
+function relationTaskStatusWord(symbol) {
+  if (symbol === "x" || symbol === "X") return "DONE";
+  if (symbol === "/") return "IN_PROGRESS";
+  if (symbol === "-") return "CANCELLED";
+  if (symbol === "*") return "NEXT";
+  if (symbol === "?") return "BLOCKED";
+  return "TODO";
+}
+
 function relationTaskInfo(line, lineNumber) {
   const text = String(line || "");
-  if (!relationListMarker(text) || !/\[[ xX/-]\]/u.test(text) || !/(?:^|\s)#task(?:\s|$)/u.test(text)) return null;
+  if (!dependencyChipIsTaskLine(text)) return null;
   const match = text.match(/(?:^|\s)\^([A-Za-z0-9-]+)(?=\s|$)/u);
   if (match && !RELATION_BLOCK_ID_RE.test(match[1])) return null;
-  const statusMatch = text.match(/\[([ xX/-])\]/u);
+  const statusMatch = text.match(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[([^\]\n])\]/u);
   const symbol = statusMatch ? statusMatch[1] : " ";
   return {
     blockId: match ? match[1] : "",
     line: lineNumber + 1,
     text,
-    status: symbol === "x" || symbol === "X" ? "DONE" : symbol === "/" ? "IN_PROGRESS" : symbol === "-" ? "CANCELLED" : "TODO",
+    status: relationTaskStatusWord(symbol),
   };
 }
 

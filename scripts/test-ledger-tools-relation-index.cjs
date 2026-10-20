@@ -346,3 +346,141 @@ test("relationIndex layout-ready after unload registers nothing", async () => {
   assert.equal(plugin.relationIndexApi().ready(), false);
   assert.equal(app._reads.length, 0, "no vault reads after unload");
 });
+
+test("parseTaskRelationFile indexes every checkbox status as a task", () => {
+  const parsed = helpers.parseTaskRelationFile(
+    [
+      "- [ ] #task Todo source ^todo",
+      "  - 🪢 **LINKS:** [[#^target]]",
+      "- [*] #task Next source ^next",
+      "  - 🪢 **LINKS:** [[#^target]]",
+      "- [/] #task Progress source ^progress",
+      "  - 🪢 **LINKS:** [[#^target]]",
+      "- [?] #task Blocked source ^blocked",
+      "  - 🪢 **LINKS:** [[#^target]]",
+      "- [x] #task Done source ^done",
+      "  - 🪢 **LINKS:** [[#^target]]",
+      "- [-] #task Cancelled source ^cancelled",
+      "  - 🪢 **LINKS:** [[#^target]]",
+      "- [>] #task Scheduled source ^sched",
+      "  - 🪢 **LINKS:** [[#^target]]",
+      "- #task text [x] ^stray",
+      "  - 🪢 **LINKS:** [[#^ignored-stray]]",
+      "- [ ] untagged ^plain",
+      "  - 🪢 **LINKS:** [[#^ignored-plain]]",
+    ].join("\n"),
+    "notes/source.md",
+  );
+  const expected = [
+    ["todo", "TODO"],
+    ["next", "NEXT"],
+    ["progress", "IN_PROGRESS"],
+    ["blocked", "BLOCKED"],
+    ["done", "DONE"],
+    ["cancelled", "CANCELLED"],
+    ["sched", "TODO"],
+  ];
+  assert.equal(parsed.outgoing.length, expected.length);
+  assert.deepEqual(
+    parsed.outgoing.map((edge) => edge.source.blockId),
+    expected.map(([id]) => id),
+  );
+  for (const [blockId, status] of expected) {
+    const task = parsed.tasks.get(blockId);
+    assert.ok(task, `${blockId} should be in tasks`);
+    assert.equal(task.status, status, `${blockId} status`);
+    assert.equal(task.blockId, blockId);
+  }
+  assert.equal(parsed.tasks.has("stray"), false);
+  assert.equal(parsed.tasks.has("plain"), false);
+  assert.equal(
+    parsed.outgoing.some((edge) => edge.targetRef.blockId === "ignored-stray"),
+    false,
+  );
+  assert.equal(
+    parsed.outgoing.some((edge) => edge.targetRef.blockId === "ignored-plain"),
+    false,
+  );
+});
+
+test("relationIndex incoming and suggestions include Next and Blocked sources", async () => {
+  const nextSource = makeFile(
+    "notes/next.md",
+    [
+      "- [*] #task Next source ^next",
+      "  - 🪢 **LINKS:** follow-up of [[notes/target#^target]]",
+    ].join("\n"),
+    { links: [{ link: "notes/target#^target" }], blocks: { next: {} } },
+  );
+  const blockedSource = makeFile(
+    "notes/blocked.md",
+    [
+      "- [?] #task Blocked source ^blocked",
+      "  - 🪢 **LINKS:** [[notes/target#^target]]",
+    ].join("\n"),
+    { links: [{ link: "notes/target#^target" }], blocks: { blocked: {} } },
+  );
+  const target = makeFile(
+    "notes/target.md",
+    "- [ ] #task Target ^target",
+    { links: [{ link: "notes/next#^next" }], blocks: { target: {} } },
+  );
+  const questionTarget = makeFile(
+    "notes/question.md",
+    [
+      "- [?] #task Question target ^question",
+      "  - 🪢 **LINKS:** [[notes/other#^other]]",
+    ].join("\n"),
+    { links: [{ link: "notes/other#^other" }] },
+  );
+  const other = makeFile("notes/other.md", "- [ ] #task Other ^other", {
+    blocks: { other: {} },
+    links: [{ link: "notes/question#^question" }],
+  });
+  const questionSource = makeFile(
+    "notes/from-question.md",
+    [
+      "- [ ] #task Points at question ^from-q",
+      "  - 🪢 **LINKS:** [[notes/question#^question]]",
+    ].join("\n"),
+    { links: [{ link: "notes/question#^question" }], blocks: { "from-q": {} } },
+  );
+  const app = makeApp([
+    nextSource,
+    blockedSource,
+    target,
+    questionTarget,
+    other,
+    questionSource,
+  ]);
+  app._aliases.set("notes/target", "notes/target.md");
+  app._aliases.set("notes/question", "notes/question.md");
+  app._aliases.set("notes/other", "notes/other.md");
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.initializeRelationIndex();
+  plugin.setupRelationIndex();
+  plugin.startRelationIndexScan();
+  const api = plugin.relationIndexApi();
+  await waitUntil(() => api.ready(), "relation scan should finish");
+
+  const incoming = api.incoming("notes/target.md", "target");
+  assert.equal(incoming.length, 2);
+  const incomingIds = incoming.map((edge) => edge.source.blockId).sort();
+  assert.deepEqual(incomingIds, ["blocked", "next"]);
+  assert.equal(api.outgoing("notes/next.md", "next").length, 1);
+  assert.equal(api.outgoing("notes/blocked.md", "blocked").length, 1);
+  assert.equal(api.outgoing("notes/next.md", "next")[0].target.blockId, "target");
+  assert.equal(api.outgoing("notes/blocked.md", "blocked")[0].target.blockId, "target");
+
+  const questionIncoming = api.incoming("notes/question.md", "question");
+  assert.equal(questionIncoming.length, 1, "a [?] target with no cached block resolves from text");
+  assert.equal(questionIncoming[0].source.blockId, "from-q");
+  assert.equal(questionIncoming[0].target.resolved, true);
+
+  assert.deepEqual(
+    api.labelSuggestions().map((row) => [row.label, row.count]),
+    [["follow-up of", 1]],
+  );
+  plugin.teardownRelationIndex();
+});
+

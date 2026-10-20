@@ -849,9 +849,7 @@ class BobNavigationHotkeysDependencyStageMixin {
     }
   }
 
-  // Palette command `edit-task-dependencies` (no default hotkey, Q6): the
-  // task under the cursor. Prose with several links, or a selection
-  // spanning tasks, is refused with a short reason.
+  // Palette command `edit-task-dependencies`: the task under the cursor.
   openDependencyStageAtCursor(editor) {
     const cursor = getEditorCursor(editor);
     if (!cursor) {
@@ -868,6 +866,8 @@ class BobNavigationHotkeysDependencyStageMixin {
       if (entry.parentLine !== cursor.line) {
         setEditorCursorSafely(editor, entry.parentLine, 0);
       }
+      if (entry.lineKind === "links") return this.openLinksStageAtCursor(editor);
+      if (entry.lineKind === "linked-from") return this.openLinkedFromStageAtCursor(editor);
       if (entry.lineKind === "blocks") {
         return this.openBulletPropertyPicker(editor, {
           reopenBlocksStage: true,

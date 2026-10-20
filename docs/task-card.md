@@ -18,6 +18,14 @@ chords open the owning task's stage directly; `Ctrl+Shift+P` on a
 BLOCKS line does the same. In the reverse stage, Enter toggles whether the
 selected dependent waits on the source task.
 
+`Ctrl+Shift+L` (command
+`bob-navigation-hotkeys:task-card-links`) opens Links to for the task
+under the cursor. `Ctrl+Shift+Alt+L` (command
+`bob-navigation-hotkeys:task-card-linked-from`) opens Linked from. See
+[Task relations](task-relations.md). On either relation line,
+`Ctrl+Shift+P`, `Ctrl+Shift+L`, and `Ctrl+Shift+Alt+L` open that task's
+matching stage directly.
+
 ## Card gestures
 
 | Gesture | Outcome |
@@ -29,10 +37,12 @@ selected dependent waits on the source task.
 | `Enter` | Open the selected action; Schedule is the default. |
 | `b` | Open Blocked by (Depends on). |
 | `⇧B` | Open Blocks (reverse Depends on). |
+| `l` | Open Links to (task relations). |
+| `⇧L` | Open Linked from (task relations). |
 | `f` | Open Review every (Refresh). |
 | `x` | Open the cancel-reason stage; the key alone never cancels. |
 | `Alt+N` | Commit to Next or release to Ready. |
-| `Ctrl+D` | Delete the selected property; Schedule is selected by default. |
+| `Ctrl+D` | Delete the selected property; Schedule is selected by default. On Links to, clear all outgoing relations; Linked from is generated and refuses clearing. |
 | Backspace on an empty field or Back | Return to the card without writing. |
 | Escape, `q`, `Q` | Close and discard uncommitted state. `q` does not close while a text field is focused. |
 | `Ctrl+[` | Close the card or a stage it opened, including a focused date, reason, or Work summary field. |

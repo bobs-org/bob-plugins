@@ -519,9 +519,9 @@ test("LG14 kill switch writes LINKS without a mirror or source mint", async () =
   assert.equal(editor.getValue().split("\n")[0].includes("^"), false);
 });
 
-test("api.relations v0: removeLink works and openStage settles false", async () => {
+test("api.relations v1: removeLink works and openStage settles false without a plugin", async () => {
   const api = helpers.createRelationsNavApi(null);
-  assert.equal(api.version, 0);
+  assert.equal(api.version, 1);
   const opened = await api.openStage({ path: "Tasks.md", line: 0, direction: "to" });
   assert.equal(opened.ok, false);
   const missing = await api.removeLink({}, {});
@@ -548,7 +548,101 @@ test("api.relations v0: removeLink works and openStage settles false", async () 
 
 test("createDependencyNavApi mounts relations beside blocks", () => {
   const api = helpers.createDependencyNavApi(null);
-  assert.equal(api.relations.version, 0);
+  assert.equal(api.relations.version, 1);
   assert.equal(typeof api.relations.removeLink, "function");
   assert.equal(typeof api.relations.openStage, "function");
+});
+
+test("LG10: hand-edited LINKS mirrors to LINKED FROM and re-fires after undo", async () => {
+  const before = [
+    "- [ ] #task Source ^source",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const after = [
+    "- [ ] #task Source ^source",
+    "  - 🪢 **LINKS:** follow-up of [[#^target]]",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const harness = makePlugin({ "Tasks.md": before });
+  const editor = new TestEditor(after);
+  harness.openEditors.set("Tasks.md", editor);
+  const mirrored = await harness.plugin.mirrorDependencyHandEdit(
+    editor,
+    "Tasks.md",
+    before,
+    0,
+    "",
+    { baselineLine: 0 },
+  );
+  assert.equal(mirrored.mirrored, true);
+  assert.equal(editor.lastAnnotation, helpers.RELATIONS_MACHINE_WRITE_ANNOTATION);
+  assert.match(editor.getValue(), /LINKED FROM:\*\* \[\[#\^source\]\] \(follow-up of\)/);
+
+  // Undo removes the authored edge. The next cursor-leave reconciliation
+  // sees that inverse delta and removes the generated source line again.
+  editor.content = before;
+  const undone = await harness.plugin.mirrorDependencyHandEdit(
+    editor,
+    "Tasks.md",
+    after,
+    0,
+    "",
+    { baselineLine: 0 },
+  );
+  assert.equal(undone.mirrored, true);
+  assert.doesNotMatch(editor.getValue(), /LINKED FROM/);
+});
+
+test("LG11: hand-editing generated LINKED FROM only shows its notice", async () => {
+  const before = [
+    "- [ ] #task Source ^source",
+    "- [ ] #task Target ^target",
+  ].join("\n");
+  const after = [
+    "- [ ] #task Source ^source",
+    "- [ ] #task Target ^target",
+    "  - 🪢 **LINKED FROM:** [[#^source]]",
+  ].join("\n");
+  const harness = makePlugin({ "Tasks.md": before });
+  const editor = new TestEditor(after);
+  harness.openEditors.set("Tasks.md", editor);
+  notices.length = 0;
+  const outcome = await harness.plugin.mirrorDependencyHandEdit(
+    editor,
+    "Tasks.md",
+    before,
+    1,
+    "",
+    { baselineLine: 1 },
+  );
+  assert.equal(outcome.mirrored, false);
+  assert.match(notices.join("\n"), /LINKED FROM is generated/);
+  assert.doesNotMatch(editor.getValue(), /LINKS:/);
+});
+
+test("LG9: Ctrl+D's writer clears outgoing links and their generated mirrors", async () => {
+  const source = [
+    "- [ ] #task Source ^source",
+    "  - 🪢 **LINKS:** see [[Other#^target]] • [[Other#^second]]",
+  ].join("\n");
+  const harness = makePlugin({
+    "Tasks.md": source,
+    "Other.md": [
+      "- [ ] #task Target ^target",
+      "  - 🪢 **LINKED FROM:** [[Tasks#^source]] (see)",
+      "- [ ] #task Second ^second",
+      "  - 🪢 **LINKED FROM:** [[Tasks#^source]]",
+    ].join("\n"),
+  });
+  const editor = new TestEditor(source);
+  harness.openEditors.set("Tasks.md", editor);
+  const cleared = await harness.plugin.removeAllRelationLinksByRef({
+    path: "Tasks.md",
+    line: 0,
+    blockId: "source",
+  });
+  assert.equal(cleared.ok, true);
+  assert.equal(cleared.removed, 2);
+  assert.doesNotMatch(editor.getValue(), /LINKS/);
+  assert.doesNotMatch(harness.store.get("Other.md"), /LINKED FROM/);
 });

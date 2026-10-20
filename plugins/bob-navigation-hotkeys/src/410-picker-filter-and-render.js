@@ -93,6 +93,10 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       ];
     }
 
+    if (this.stage === "relation-label") {
+      return this.getRelationLabelPreviewItems();
+    }
+
     if (this.stage === "blockid") {
       // Uniqueness is checked against the target's note: cross-note `+ id`
       // rows prompt for an id that must be fresh in that note, not this one.
@@ -199,6 +203,11 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       this.renderFooter();
       this.refreshBlocksConsequenceStrip();
     }
+    if (this.relationStage && this.isLocalTaskStage()) {
+      this.footerHints = this.getRelationStageFooterHints();
+      this.renderFooter();
+      this.refreshRelationConsequenceStrip();
+    }
   }
 
   renderValueItem(item, rowEl, query) {
@@ -259,7 +268,7 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     // CURRENT / RESULTS / BLOCKED section headers for the vault-wide stage
     // (`docs/task-dependencies.md` §6).
     if (item && item.stageSection && item.firstInSection) {
-      const sectionNames = { current: "CURRENT", results: "RESULTS", blocked: "BLOCKED" };
+      const sectionNames = { current: "CURRENT", results: "RESULTS", blocked: "BLOCKED", closed: "CLOSED" };
       rowEl.createDiv({
         cls: "bob-cnp-section-header",
         text: sectionNames[item.stageSection] || item.stageSection,
@@ -335,6 +344,9 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     }
     if (Number.isInteger(item.line) && item.line >= 0) {
       metaBits.push(`Line ${item.line + 1}`);
+    }
+    if (item.relationKind === true && item.archived === true) {
+      metaBits.push("Archived · LINKED FROM shows live only");
     }
     if (item.cycle && item.cycle.length > 0) {
       metaBits.push(`⟲ ${item.cycle.length - 1} back-link${item.cycle.length - 1 === 1 ? "" : "s"}`);
@@ -426,6 +438,45 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     } else {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋" });
     }
+    // Links stage badges (`docs/task-relations.md` Rule 8): the label pill,
+    // `⛓ prerequisite` (information only), and 🍅 for rows linked under
+    // today's open Pomodoros (display only — relations never consume them).
+    if (item && item.relationKind === true) {
+      if (item.label) {
+        badgeEl.createSpan({
+          cls: "bob-cnp-task-badge-extra bob-cnp-relation-label",
+          text: String(item.label),
+        });
+      }
+      if (item.prerequisite) {
+        const prerequisiteEl = badgeEl.createSpan({
+          cls: "bob-cnp-task-badge-extra bob-cnp-relation-prerequisite",
+          text: "⛓ prerequisite",
+        });
+        prerequisiteEl.setAttribute(
+          "title",
+          "Also a prerequisite · linking stays inert",
+        );
+      }
+      if (item.todayLink) {
+        const link = item.todayLink;
+        const range = link.range ? ` ${link.range}` : "";
+        const tomato = badgeEl.createSpan({
+          cls: "bob-cnp-task-badge-extra bob-cnp-relation-today",
+          text: link.running ? "🍅 running" : "🍅",
+        });
+        tomato.setAttribute(
+          "title",
+          `Linked under ${link.label}${range} · linking stays inert`,
+        );
+      }
+      if (item.archived === true) {
+        badgeEl.createSpan({
+          cls: "bob-cnp-task-badge-extra bob-cnp-relation-archived",
+          text: "Archived",
+        });
+      }
+    }
     if (this.blocksStage && item.lastReason) {
       const keyEl = badgeEl.createSpan({
         cls: "bob-cnp-task-badge-extra bob-cnp-blocks-last",
@@ -492,6 +543,9 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
   async chooseTaskDependency(item) {
     if (this.blocksStage) {
       return this.chooseBlocksTask(item);
+    }
+    if (this.relationStage) {
+      return this.chooseRelationTask(item);
     }
     if (!this.selectedPropertyItem) {
       return false;

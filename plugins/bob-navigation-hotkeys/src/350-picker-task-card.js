@@ -289,6 +289,10 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     this.pendingCountedDependency = null;
     this.pendingBlocks = null;
     this.blocksStage = false;
+    this.relationStage = false;
+    this.pendingRelation = null;
+    this.relationLabelTargets = null;
+    this.relationLabelMode = null;
     this.consequenceStripEl = null;
     this.scheduleReviewFormEl = null;
     this.scheduleReviewReasonEl = null;
@@ -395,6 +399,8 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
         result = await this.clearTaskCardPriority();
       } else if (intent.type === "delete-property") {
         result = await this.deleteTaskCardProperty(intent.propertyName);
+      } else if (intent.type === "clear-relations") {
+        result = await this.clearTaskCardRelations(intent.rowId);
       } else if (intent.type === "open-action") {
         result = await this.openTaskCardAction(intent.rowId, intent.action);
       } else if (intent.type === "open-property") {
@@ -436,6 +442,14 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
         return true;
       }
       this.openTaskCardStage(() => this.showBlocksStage());
+      return false;
+    }
+    if (rowId === "links-to" || action === "links") {
+      this.openTaskCardStage(() => this.showRelationStage());
+      return false;
+    }
+    if (rowId === "linked-from" || action === "linked-from") {
+      this.openTaskCardStage(() => this.showLinkedFromStage());
       return false;
     }
     this.refreshPropertyItems();
@@ -546,6 +560,37 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   async clearTaskCardPriority() {
     const name = this.taskCardModel && this.taskCardModel.priorityStrip && this.taskCardModel.priorityStrip.propertyName;
     return await this.deleteTaskCardProperty(name);
+  }
+
+  async clearTaskCardRelations(rowId) {
+    if (rowId === "linked-from") {
+      new Notice(TASK_LINKED_FROM_LINE_NOTICE);
+      return false;
+    }
+    if (rowId !== "links-to") {
+      new Notice("Select Links to before clearing relations");
+      return false;
+    }
+    const targets = this.taskSession && this.taskSession.explicit
+      ? this.taskSession.targets || []
+      : [{ path: this.filePath, line: this.cursor.line }];
+    let removed = 0;
+    const mirrorFailures = new Set();
+    for (const target of targets) {
+      const outcome = await this.plugin.removeAllRelationLinksByRef({
+        path: target.path || this.filePath,
+        line: target.line,
+        blockId: target.blockId || getTrailingBlockId(target.rawLine || ""),
+      });
+      if (!outcome || outcome.ok !== true) {
+        new Notice(`🪢 Could not remove links${outcome && outcome.reason ? ` (${outcome.reason})` : ""}`);
+        return false;
+      }
+      removed += Math.max(0, Math.floor(numericOrDefault(outcome.removed, 0)));
+      if (outcome.notice) mirrorFailures.add(outcome.notice);
+    }
+    new Notice(`🪢 Removed ${removed} links${mirrorFailures.size ? ` · ${[...mirrorFailures].join(" · ")}` : ""}`);
+    return true;
   }
 
   async deleteTaskCardProperty(propertyName) {

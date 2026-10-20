@@ -703,6 +703,33 @@ function resolveDependencyStageEntry(content, line) {
       reason: null,
     });
   }
+  // Task relations Rule 8 (LG8): either relation line acts on its owner,
+  // never on the chip under the cursor. The direction-specific caller opens
+  // the matching stage.
+  if (
+    parseLinksLine(String(lines[at] || ""), { isDirectChildOfTask: true })
+      .verdict !== "not-a-line"
+  ) {
+    return Object.freeze({
+      ok: true,
+      parentLine: owning,
+      lineKind: "links",
+      skipPropertyStep: false,
+      reason: null,
+    });
+  }
+  if (
+    parseLinkedFromLine(String(lines[at] || ""), { isDirectChildOfTask: true })
+      .verdict !== "not-a-line"
+  ) {
+    return Object.freeze({
+      ok: true,
+      parentLine: owning,
+      lineKind: "linked-from",
+      skipPropertyStep: false,
+      reason: null,
+    });
+  }
   return Object.freeze({
     ok: true,
     parentLine: owning,

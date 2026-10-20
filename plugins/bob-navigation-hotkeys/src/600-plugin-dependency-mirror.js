@@ -471,12 +471,25 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       removedText,
       baselineLine,
     );
+    if (relationChange.linksChanged && relationOnly) {
+      const relationMirror = await this.mirrorRelationHandEdit(
+        editor,
+        parentPath,
+        before,
+        baselineLine,
+        editedLine,
+      );
+      if (relationChange.linkedFromChanged) {
+        new Notice(TASK_LINKED_FROM_LINE_NOTICE);
+      }
+      return relationMirror;
+    }
     if (relationChange.linkedFromChanged) {
       new Notice(TASK_LINKED_FROM_LINE_NOTICE);
     }
     if (relationChange.changed && !plan) {
-      // Authored LINKS edits are deliberately inert here until nav-linked-from
-      // lands; a LINKED FROM edit only gets the generated-line notice above.
+      // A LINKED FROM edit is generated data: show the notice and let the
+      // reconcile path restore it. Authored LINKS edits are handled above.
       return Object.freeze({ mirrored: false, reason: "relation-only" });
     }
     if (!plan) {

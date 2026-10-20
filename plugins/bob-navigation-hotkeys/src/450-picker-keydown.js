@@ -4,6 +4,62 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       this.handleTaskCardKeydown(event);
       return;
     }
+    // The relation field (⇧↵ from the Links stage): Escape and an empty
+    // Backspace return to the list and write nothing (LG3); ↵ commits
+    // through the list's openItem path.
+    if (this.stage === "relation-label" && event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.restoreRelationList();
+        return;
+      }
+      if (
+        event.key === "Backspace" &&
+        event.target === this.inputEl &&
+        this.inputEl &&
+        !String(this.inputEl.value || "")
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.restoreRelationList();
+        return;
+      }
+    }
+    // ⇧↵ on the Links stage opens the relation field (or relabels on
+    // CURRENT); plain ↵ keeps the list's toggle behavior (LG3, LG4).
+    if (
+      this.relationStage &&
+      this.stage === "value" &&
+      event &&
+      event.key === "Enter" &&
+      event.shiftKey === true &&
+      event.ctrlKey !== true &&
+      event.metaKey !== true &&
+      event.altKey !== true
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (this.opening) {
+        return;
+      }
+      const item = (this.visibleItems || [])[this.selectedIndex];
+      if (!item) {
+        return;
+      }
+      this.opening = true;
+      Promise.resolve(this.chooseRelationTask(item, { withLabel: true }))
+        .then((applied) => {
+          if (applied === true) {
+            this.close();
+          }
+        })
+        .catch(() => false)
+        .finally(() => {
+          this.opening = false;
+        });
+      return;
+    }
     // Ctrl+[ closes from every stage, including a focused date, filter,
     // reason, or Work summary field. Closing discards uncommitted state and
     // writes nothing, exactly as Escape does.

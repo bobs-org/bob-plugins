@@ -7790,6 +7790,7 @@ function taskRelationLineSnapshot(content) {
   const lines = text.split(/\r?\n/u);
   const all = [];
   const linkedFrom = [];
+  const links = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (!isTaskRelationLine(line)) continue;
@@ -7800,8 +7801,9 @@ function taskRelationLineSnapshot(content) {
     const signature = `${owner}\u0000${line}`;
     all.push(signature);
     if (isTaskLinkedFromLine(line)) linkedFrom.push(signature);
+    if (parseLinksLine(line).verdict !== "not-a-line") links.push(signature);
   }
-  return { all: all.sort(), linkedFrom: linkedFrom.sort() };
+  return { all: all.sort(), linkedFrom: linkedFrom.sort(), links: links.sort() };
 }
 
 function taskRelationLinesChanged(before, after) {
@@ -7811,6 +7813,7 @@ function taskRelationLinesChanged(before, after) {
     changed: JSON.stringify(oldLines.all) !== JSON.stringify(newLines.all),
     linkedFromChanged:
       JSON.stringify(oldLines.linkedFrom) !== JSON.stringify(newLines.linkedFrom),
+    linksChanged: JSON.stringify(oldLines.links) !== JSON.stringify(newLines.links),
   });
 }
 
@@ -37065,6 +37068,33 @@ function resolveDependencyStageEntry(content, line) {
       reason: null,
     });
   }
+  // Task relations Rule 8 (LG8): either relation line acts on its owner,
+  // never on the chip under the cursor. The direction-specific caller opens
+  // the matching stage.
+  if (
+    parseLinksLine(String(lines[at] || ""), { isDirectChildOfTask: true })
+      .verdict !== "not-a-line"
+  ) {
+    return Object.freeze({
+      ok: true,
+      parentLine: owning,
+      lineKind: "links",
+      skipPropertyStep: false,
+      reason: null,
+    });
+  }
+  if (
+    parseLinkedFromLine(String(lines[at] || ""), { isDirectChildOfTask: true })
+      .verdict !== "not-a-line"
+  ) {
+    return Object.freeze({
+      ok: true,
+      parentLine: owning,
+      lineKind: "linked-from",
+      skipPropertyStep: false,
+      reason: null,
+    });
+  }
   return Object.freeze({
     ok: true,
     parentLine: owning,
@@ -38407,6 +38437,971 @@ function blocksStageSubtitle(stage, markedDiff, options = {}) {
   // \u21e5 marks are off in counted sessions, so the hint is dropped there.
   return options.counted === true ? head : `${head} \u00b7 \u21e5 to mark several`;
 }
+// ---- src/304-relation-stage-view.js ----
+// Links… stage view (`docs/task-relations.md` Rules 7–8). Pool, sources,
+// CURRENT, and ranking over the vault-wide candidate set: the
+// dependency-stage pool plus closed tasks and `done/` archives (ranked
+// last). Only the owner's own LINKS line feeds CURRENT; nothing here reads
+// a LINKED FROM line.
+
+function relationStageRowKey(path, blockId) {
+  return dependencyStageRowKey(path, blockId);
+}
+
+// RESULTS exclusions mirror `isDependencyStageExcludedPath` except that
+// `done/` archives stay: they are linkable targets whose LINKED FROM shows
+// live only (LG6). Daily notes, `_templates`, `_generated`, `_conflicts`,
+// dot-directories, and unsafe paths stay excluded.
+function isRelationStageExcludedPath(path) {
+  const normalized = String(path || "").replace(/\\/g, "");
+  if (!normalized || isUnsafeVaultPath(normalized)) {
+    return true;
+  }
+  if (/^\d{4}\/\d{8}\.md$/i.test(normalized)) {
+    return true;
+  }
+  const segments = normalized.split("/");
+  if (
+    segments.some(
+      (segment) =>
+        segment.startsWith(".") ||
+        segment === "_templates" ||
+        segment === "_generated" ||
+        segment === "_conflicts",
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isRelationStageArchivedPath(path) {
+  return /^done\//i.test(String(path || ""));
+}
+
+function relationStageCandidateFromEntry(path, entry) {
+  const route = dependencyStageRouteOf(path);
+  const archived = isRelationStageArchivedPath(path);
+  return Object.freeze({
+    path,
+    route,
+    note: dependencyStageBasenameOf(path),
+    line: entry.line,
+    rawLine: entry.rawLine,
+    status: entry.status,
+    displayText: entry.text,
+    text: entry.text,
+    blockId: entry.blockId,
+    existingBlockId: entry.blockId,
+    idField: entry.idField,
+    existingIdField: entry.idField,
+    section: entry.section,
+    open: entry.open === true,
+    closed: entry.open !== true,
+    archived,
+    blocked: entry.blocked === true,
+    hidden: entry.hidden === true,
+  });
+}
+
+function collectVaultRelationCandidatesFromSnapshots(snapshots, options = {}) {
+  const dependentPath = normalizeVaultRelativePath(options.dependentPath || "");
+  const dependentLines =
+    options.dependentLines instanceof Set
+      ? options.dependentLines
+      : new Set(options.dependentLines || []);
+  const out = [];
+  for (const [path, snapshot] of snapshots) {
+    if (!path || isRelationStageExcludedPath(path)) {
+      continue;
+    }
+    const entries = Array.isArray(snapshot && snapshot.entries)
+      ? snapshot.entries
+      : [];
+    for (const entry of entries) {
+      if (!entry || entry.isTask !== true) {
+        continue;
+      }
+      if (path === dependentPath && dependentLines.has(entry.line)) {
+        continue;
+      }
+      out.push(relationStageCandidateFromEntry(path, entry));
+    }
+  }
+  return Object.freeze(out);
+}
+
+// Merge Tasks cache records under open-buffer notes: buffers win per note
+// (unsaved edits count), cache-only notes fill the rest. Unlike the
+// dependency pool, closed tasks and `done/` archives stay — they are
+// linkable relation targets (LG6).
+function mergeRelationStageCacheCandidates(cacheTasks, notes, options = {}) {
+  const dependentPath = normalizeVaultRelativePath(options.dependentPath || "");
+  const dependentLines =
+    options.dependentLines instanceof Set
+      ? options.dependentLines
+      : new Set(options.dependentLines || []);
+  const buffered = new Set(
+    (Array.isArray(notes) ? notes : []).map((note) =>
+      normalizeVaultRelativePath(note.path || ""),
+    ),
+  );
+  const out = collectVaultRelationCandidatesFromSnapshots(
+    createDependencySnapshotMap(notes),
+    { dependentPath, dependentLines },
+  ).slice();
+  for (const record of cacheTasks || []) {
+    if (!record || buffered.has(record.path)) {
+      continue;
+    }
+    if (isRelationStageExcludedPath(record.path)) {
+      continue;
+    }
+    if (
+      record.path === dependentPath &&
+      dependentLines.has(record.line)
+    ) {
+      continue;
+    }
+    out.push(
+      Object.freeze({
+        ...record,
+        closed: record.open !== true,
+        archived: isRelationStageArchivedPath(record.path),
+      }),
+    );
+  }
+  return Object.freeze(out);
+}
+
+// CURRENT rows: the owner's LINKS entries in authored order, resolved
+// against everything, so closed, archived, hidden, and missing targets stay
+// removable. Returns `{ok, rows}` or `{ok: false, reason}` for a malformed
+// line (left alone, never projected).
+function resolveRelationStageCurrent(
+  content,
+  parentLine,
+  parentPath,
+  index,
+  snapshot = null,
+) {
+  const text = String(content || "");
+  const lines = snapshot && Array.isArray(snapshot.lines)
+    ? snapshot.lines
+    : text.split(/\r?\n/);
+  const at = Math.floor(numericOrDefault(parentLine, Number.NaN));
+  if (!Number.isFinite(at) || at < 0 || at >= lines.length) {
+    return Object.freeze({ ok: false, reason: "parent-out-of-range", rows: [] });
+  }
+  const children = findLinksChildren(lines, at);
+  const entries = [];
+  for (const child of children) {
+    const parsed = parseLinksLine(String(lines[child] || ""), {
+      isDirectChildOfTask: true,
+    });
+    if (parsed.verdict === "malformed") {
+      return Object.freeze({ ok: false, reason: "malformed-links-line", rows: [] });
+    }
+    if (parsed.verdict !== "accept") {
+      continue;
+    }
+    for (const entry of parsed.entries || []) {
+      entries.push(entry);
+    }
+  }
+  const rows = [];
+  for (const entry of entries) {
+    const targetPath = resolveDependencyStageLinkTarget(
+      entry.note,
+      entry.blockId,
+      parentPath,
+      index,
+    );
+    const key =
+      targetPath && entry.blockId
+        ? relationStageRowKey(targetPath, entry.blockId)
+        : null;
+    const record = (key && index && index.byKey.get(key)) || null;
+    if (!record) {
+      rows.push(
+        Object.freeze({
+          kind: "current",
+          path: targetPath,
+          blockId: entry.blockId,
+          status: "?",
+          displayText: `^${entry.blockId} not found`,
+          text: `^${entry.blockId} not found`,
+          label: entry.label || null,
+          missing: true,
+          open: true,
+          closed: false,
+          archived: false,
+          rawLine: null,
+          line: null,
+          section: null,
+        }),
+      );
+      continue;
+    }
+    rows.push(
+      Object.freeze({
+        kind: "current",
+        path: record.path,
+        blockId: record.blockId,
+        status: record.status,
+        displayText: record.text,
+        text: record.text,
+        label: entry.label || null,
+        missing: false,
+        nonTask: record.isTask === false,
+        open: record.open === true,
+        closed: record.open !== true,
+        archived: isRelationStageArchivedPath(record.path),
+        rawLine: record.rawLine,
+        line: record.line,
+        section: record.section,
+      }),
+    );
+  }
+  return Object.freeze({ ok: true, reason: null, rows: Object.freeze(rows) });
+}
+
+// Owner's Depends-On identities, so the stage can badge a candidate that is
+// also a prerequisite (`⛓ prerequisite`, information only).
+function relationStagePrerequisiteIdentities(content, parentLine, parentPath, index) {
+  try {
+    const resolved = resolveDependencyStageCurrent(
+      content,
+      parentLine,
+      parentPath,
+      index,
+    );
+    const out = new Set();
+    if (!resolved || resolved.ok !== true) {
+      return out;
+    }
+    for (const row of resolved.rows || []) {
+      if (row && row.path && row.blockId && !row.missing) {
+        out.add(blocksIdentity(row.path, row.blockId));
+      }
+    }
+    return out;
+  } catch (_error) {
+    return new Set();
+  }
+}
+
+function relationStageSourceFromLine(content, path, line) {
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  const at = Math.floor(numericOrDefault(line, Number.NaN));
+  if (!Number.isFinite(at) || at < 0 || at >= lines.length) {
+    return null;
+  }
+  const rawLine = String(lines[at] || "");
+  const blockId = getTrailingBlockId(rawLine);
+  const idFieldRaw = findBulletPropertyField(rawLine, "id");
+  const idField = idFieldRaw
+    ? normalizeBulletPropertyValue(idFieldRaw.value)
+    : null;
+  const displayText = cleanTaskDisplayText(rawLine);
+  const key =
+    (blockId && relationStageRowKey(path, blockId)) ||
+    (idField ? `id:${idField}` : `${normalizeVaultRelativePath(path)}#line:${at}`);
+  return Object.freeze({
+    path: normalizeVaultRelativePath(path),
+    line: at,
+    rawLine,
+    text: rawLine,
+    blockId: blockId ? normalizeBulletPropertyValue(blockId) : null,
+    idField,
+    displayText,
+    textDisplay: displayText,
+    key,
+    status: getObsidianTaskCheckboxStatus(rawLine),
+    needsBlockId: !blockId,
+  });
+}
+
+function collectRelationStageSources(stage) {
+  const path = normalizeVaultRelativePath(
+    (stage && stage.dependent && stage.dependent.path) || "",
+  );
+  const content =
+    (stage && stage.files instanceof Map && stage.files.get(path)) || "";
+  const lines = Array.isArray(stage && stage.parentLines)
+    ? stage.parentLines
+    : [];
+  const sources = [];
+  for (const line of lines) {
+    const source = relationStageSourceFromLine(content, path, line);
+    if (source) {
+      sources.push(source);
+    }
+  }
+  return Object.freeze(sources);
+}
+
+function decorateRelationVaultStage(stage, options = {}) {
+  if (!stage) {
+    return null;
+  }
+  const sources =
+    Array.isArray(options.sources) && options.sources.length > 0
+      ? options.sources
+      : collectRelationStageSources(stage);
+  const current = Array.isArray(options.current)
+    ? options.current
+    : Array.isArray(stage.current)
+      ? stage.current
+      : [];
+  const linkedKeys = new Set();
+  for (const row of current) {
+    const key =
+      row && row.path && row.blockId
+        ? relationStageRowKey(row.path, row.blockId)
+        : null;
+    if (key) {
+      linkedKeys.add(key);
+    }
+  }
+  const primary = sources[0];
+  const title = stage.direction === "from"
+    ? `🪢 Linked from · ${String(
+        (primary && primary.displayText) || "",
+      ).slice(0, 44)}`
+    : `🪢 Links · ${String(
+    (primary && primary.displayText) || "",
+  ).slice(0, 48)}`;
+  return {
+    ...stage,
+    relationStage: true,
+    sources: Object.freeze(sources),
+    current: Object.freeze(current),
+    linkedKeys,
+    title,
+    openCount: current.length,
+    poolSize: Array.isArray(stage.candidates) ? stage.candidates.length : 0,
+  };
+}
+
+const RELATION_INVERSE_PHRASES = Object.freeze({
+  "merged into": "merged from",
+  "duplicate of": "duplicated by",
+  "follow-up of": "followed up by",
+  "superseded by": "supersedes",
+  "split from": "split into",
+});
+
+function inverseRelationPhrase(label) {
+  const raw = String(label || "").trim();
+  if (!raw) return "";
+  return RELATION_INVERSE_PHRASES[raw.toLocaleLowerCase("en-US")] || `${raw} → this`;
+}
+
+function relationStageIncomingRow(source, label, options = {}) {
+  const rawLabel = label ? String(label) : null;
+  const displayText = String(source.displayText || source.text || "task");
+  return Object.freeze({
+    ...source,
+    searchText: [displayText, source.route, source.blockId, source.note].filter(Boolean).join(" "),
+    kind: "current",
+    label: inverseRelationPhrase(rawLabel),
+    storedLabel: rawLabel,
+    incoming: true,
+    readOnly: options.readOnly === true,
+    disabled: options.readOnly === true,
+    disabledReason: options.readOnly ? "This source task is in a read-only note" : null,
+  });
+}
+
+function relationStageIncomingRowsFromEdges(edges, index, previousDailyPath) {
+  const rows = [];
+  const seen = new Set();
+  for (const edge of Array.isArray(edges) ? edges : []) {
+    const source = edge && edge.source;
+    const path = normalizeVaultRelativePath((source && source.path) || "");
+    const blockId = normalizeBulletPropertyValue((source && source.blockId) || "");
+    if (!path || !blockId) continue;
+    const key = relationStageRowKey(path, blockId);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const record = index && index.byKey instanceof Map ? index.byKey.get(key) : null;
+    const text = String((record && (record.displayText || record.text)) || (source && source.text) || `^${blockId}`);
+    const archived = isRelationStageArchivedPath(path);
+    rows.push(relationStageIncomingRow({
+      path,
+      blockId,
+      line: Number.isInteger(record && record.line) ? record.line : Number.isInteger(source && source.line) ? source.line : -1,
+      rawLine: record && record.rawLine ? record.rawLine : null,
+      status: record && record.status ? record.status : (source && source.status) || " ",
+      displayText: text,
+      text,
+      open: record ? record.open === true : OPEN_OBSIDIAN_TASK_STATUSES.has((source && source.status) || " "),
+      closed: record ? record.open !== true : !OPEN_OBSIDIAN_TASK_STATUSES.has((source && source.status) || " "),
+      archived,
+      note: dependencyStageBasenameOf(path),
+      route: dependencyStageRouteOf(path),
+      hidden: record ? record.hidden === true : false,
+    }, edge && edge.label, {
+      readOnly: archived || path === normalizeVaultRelativePath(previousDailyPath || ""),
+    }));
+  }
+  return Object.freeze(rows);
+}
+
+function collectRelationStageIncomingFromSnapshots(snapshots, index, target, previousDailyPath = "") {
+  const targetPath = normalizeVaultRelativePath((target && target.path) || "");
+  const targetBlockId = normalizeBulletPropertyValue((target && target.blockId) || "");
+  if (!targetPath || !targetBlockId) return Object.freeze([]);
+  const rows = [];
+  const seen = new Set();
+  const previous = normalizeVaultRelativePath(previousDailyPath || "");
+  for (const [path, snapshot] of snapshots || []) {
+    if (!path || (isRelationStageExcludedPath(path) && path !== previous)) continue;
+    const lines = Array.isArray(snapshot && snapshot.lines)
+      ? snapshot.lines
+      : String((snapshot && snapshot.text) || "").split(/\r?\n/);
+    const content = String((snapshot && snapshot.text) || lines.join("\n"));
+    for (const entry of Array.isArray(snapshot && snapshot.entries) ? snapshot.entries : []) {
+      if (!entry || entry.isTask !== true) continue;
+      const ownerLine = Math.floor(numericOrDefault(entry.line, -1));
+      if (ownerLine < 0 || ownerLine >= lines.length) continue;
+      for (const child of findLinksChildren(lines, ownerLine)) {
+        const parsed = parseLinksLine(String(lines[child] || ""), { isDirectChildOfTask: true });
+        if (parsed.verdict !== "accept") continue;
+        for (const relation of parsed.entries || []) {
+          const resolvedPath = resolveDependencyStageLinkTarget(
+            relation.note,
+            relation.blockId,
+            path,
+            index,
+          );
+          if (
+            normalizeVaultRelativePath(resolvedPath || "") !== targetPath ||
+            normalizeBulletPropertyValue(relation.blockId || "") !== targetBlockId
+          ) continue;
+          const source = relationStageSourceFromLine(content, path, ownerLine);
+          if (!source || !source.blockId) continue;
+          const key = relationStageRowKey(source.path, source.blockId);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          rows.push(relationStageIncomingRow({
+            ...source,
+            note: dependencyStageBasenameOf(path),
+            route: dependencyStageRouteOf(path),
+            closed: !OPEN_OBSIDIAN_TASK_STATUSES.has(source.status),
+            archived: isRelationStageArchivedPath(path),
+          }, relation.label, {
+            readOnly: isRelationStageArchivedPath(path),
+          }));
+        }
+      }
+    }
+  }
+  return Object.freeze(rows);
+}
+
+// The Links stage list: CURRENT (outgoing, authored order), RESULTS
+// (open), CLOSED (closed, then archived). `prerequisiteIds` marks rows that
+// are also prerequisites; `todayMap` marks rows linked under today's open
+// Pomodoros (🍅, display only).
+function planRelationStageView(args = {}) {
+  const sources = Array.isArray(args.sources) ? args.sources : [];
+  const current = Array.isArray(args.current) ? args.current : [];
+  const pool = Array.isArray(args.candidates) ? args.candidates : [];
+  const query = String(args.query || "");
+  const source = sources[0] || {};
+  const sourcePath = normalizeVaultRelativePath(source.path || "");
+  const sourceBlockId = normalizeBulletPropertyValue(source.blockId || "");
+  const linkedKeys = args.linkedKeys instanceof Set ? args.linkedKeys : new Set();
+  const prerequisiteIds =
+    args.prerequisiteIds instanceof Set ? args.prerequisiteIds : new Set();
+  const todayMap = args.todayMap instanceof Map ? args.todayMap : new Map();
+  const maxRows = Math.max(
+    1,
+    Math.floor(numericOrDefault(args.maxRows, DEPENDENCY_STAGE_MAX_ROWS)),
+  );
+  const markedCurrent = current.map((row, index) =>
+    Object.freeze({
+      ...row,
+      kind: "local-task",
+      relationKind: true,
+      stageSection: "current",
+      alreadyLinked: true,
+      firstInSection: index === 0,
+      markKey:
+        row.markKey ||
+        (row.path
+          ? `${normalizeVaultRelativePath(row.path)}#${row.blockId || `line:${row.line}`}`
+          : row.line),
+    }),
+  );
+  const seen = new Set(linkedKeys);
+  const fresh = [];
+  for (const candidate of pool) {
+    const key =
+      candidate.path && candidate.blockId
+        ? relationStageRowKey(candidate.path, candidate.blockId)
+        : null;
+    // The owner itself is never a pool row (LG vectors: self links refuse).
+    if (
+      candidate.path === sourcePath &&
+      (candidate.line === source.line ||
+        (sourceBlockId &&
+          normalizeBulletPropertyValue(candidate.blockId || "") === sourceBlockId))
+    ) {
+      continue;
+    }
+    if (key && seen.has(key)) {
+      continue;
+    }
+    if (key) {
+      seen.add(key);
+    }
+    fresh.push({ candidate, key });
+  }
+  let ordered;
+  if (!query.trim()) {
+    // Empty query shows only what the design lists: CURRENT is separate,
+    // RESULTS is same-note tasks plus the In Progress and Next lanes, and
+    // CLOSED is closed tasks plus `done/` archives. Ready tasks from other
+    // notes need typing.
+    const emptyPool = fresh.filter(
+      (entry) =>
+        entry.candidate.path === sourcePath ||
+        entry.candidate.status === "/" ||
+        entry.candidate.status === "*" ||
+        entry.candidate.closed === true ||
+        entry.candidate.archived === true,
+    );
+    ordered = emptyPool
+      .slice()
+      .sort((left, right) =>
+        compareRelationStageCanonical(left.candidate, right.candidate, sourcePath),
+      )
+      .map((entry) => entry.candidate);
+  } else {
+    const ranked = dependencyStageRank(
+      fresh.map((entry) => entry.candidate),
+      query,
+    );
+    const rankIndex = new Map(ranked.map((candidate, index) => [candidate, index]));
+    ordered = fresh
+      .slice()
+      .sort((left, right) => {
+        const leftRank = rankIndex.has(left.candidate)
+          ? rankIndex.get(left.candidate)
+          : Number.POSITIVE_INFINITY;
+        const rightRank = rankIndex.has(right.candidate)
+          ? rankIndex.get(right.candidate)
+          : Number.POSITIVE_INFINITY;
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+        return compareRelationStageCanonical(
+          left.candidate,
+          right.candidate,
+          sourcePath,
+        );
+      })
+      .map((entry) => entry.candidate)
+      .filter((candidate) => rankIndex.has(candidate));
+  }
+  const results = [];
+  const closed = [];
+  for (const candidate of ordered) {
+    if (candidate.closed === true || candidate.archived === true) {
+      closed.push(candidate);
+    } else {
+      results.push(candidate);
+    }
+  }
+  const room = Math.max(0, maxRows - markedCurrent.length);
+  const picked = [...results, ...closed].slice(0, room);
+  const shape = (candidate, section, first) => {
+    const key =
+      candidate.path && candidate.blockId
+        ? relationStageRowKey(candidate.path, candidate.blockId)
+        : null;
+    const self =
+      candidate.path === sourcePath &&
+      sourceBlockId &&
+      normalizeBulletPropertyValue(candidate.blockId || "") === sourceBlockId;
+    const todayLink = (key && todayMap.get(key)) || null;
+    const prerequisite =
+      Boolean(key) && prerequisiteIds.has(blocksIdentity(candidate.path, candidate.blockId));
+    return Object.freeze({
+      kind: "local-task",
+      relationKind: true,
+      stageSection: section,
+      firstInSection: first,
+      path: candidate.path,
+      blockId: candidate.blockId,
+      route: candidate.route,
+      note: candidate.note,
+      noteLabel:
+        candidate.path && candidate.path !== sourcePath
+          ? dependencyStageBasenameOf(candidate.path)
+          : null,
+      line: candidate.line,
+      rawLine: candidate.rawLine,
+      status: candidate.status,
+      displayText: candidate.displayText,
+      text: candidate.text,
+      searchText: [
+        candidate.displayText,
+        candidate.route,
+        candidate.blockId
+          ? `${candidate.route}:${candidate.blockId}`
+          : "",
+        candidate.blockId || "",
+        candidate.section || "",
+        candidate.note || "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      alreadyLinked: false,
+      needsBlockIdPrompt: !candidate.blockId,
+      needsPromptForAdd: !candidate.blockId,
+      hidden: candidate.hidden,
+      section: candidate.section,
+      markKey: `${candidate.path}#${candidate.line >= 0 ? candidate.line : (candidate.blockId || candidate.displayText)}`,
+      disabled: self,
+      disabledReason: self ? "this task" : null,
+      label: null,
+      archived: candidate.archived === true,
+      closed: candidate.closed === true,
+      prerequisite,
+      todayLink,
+    });
+  };
+  const out = [...markedCurrent];
+  const pickedResults = picked.filter(
+    (candidate) => candidate.closed !== true && candidate.archived !== true,
+  );
+  const pickedClosed = picked.filter(
+    (candidate) => candidate.closed === true || candidate.archived === true,
+  );
+  pickedResults.forEach((candidate, index) =>
+    out.push(shape(candidate, "results", index === 0)),
+  );
+  pickedClosed.forEach((candidate, index) =>
+    out.push(shape(candidate, "closed", index === 0)),
+  );
+  const totalOrdered = [...results, ...closed].length;
+  const hiddenCount = Math.max(0, totalOrdered - picked.length);
+  if (hiddenCount > 0) {
+    out.push(
+      Object.freeze({
+        kind: "stage-more",
+        stageSection: pickedClosed.length > 0 ? "closed" : "results",
+        firstInSection: false,
+        path: null,
+        blockId: null,
+        displayText: `type to search ${hiddenCount} more`,
+        text: `type to search ${hiddenCount} more`,
+        searchText: "",
+        hiddenCount,
+        disabled: true,
+        disabledReason: `type to search ${hiddenCount} more`,
+        cycle: null,
+        cycleLabels: null,
+        waitsOn: null,
+      }),
+    );
+  }
+  return Object.freeze(out);
+}
+
+function planLinkedFromStageView(args = {}) {
+  const owner = (Array.isArray(args.sources) && args.sources[0]) || {};
+  const ownerPath = normalizeVaultRelativePath(owner.path || "");
+  const ownerBlockId = normalizeBulletPropertyValue(owner.blockId || "");
+  const current = Array.isArray(args.current) ? args.current : [];
+  const pool = Array.isArray(args.candidates) ? args.candidates : [];
+  const linkedKeys = args.linkedKeys instanceof Set ? args.linkedKeys : new Set();
+  const query = String(args.query || "");
+  const previousDailyPath = normalizeVaultRelativePath(args.previousDailyPath || "");
+  const maxRows = Math.max(1, Math.floor(numericOrDefault(args.maxRows, DEPENDENCY_STAGE_MAX_ROWS)));
+  const out = current.map((row, index) => Object.freeze({
+    ...row,
+    kind: "local-task",
+    relationKind: true,
+    stageSection: "current",
+    alreadyLinked: true,
+    firstInSection: index === 0,
+    markKey: row.markKey || `${normalizeVaultRelativePath(row.path || "")}#${row.blockId || `line:${row.line}`}`,
+  }));
+  const seen = new Set(linkedKeys);
+  const fresh = [];
+  for (const candidate of pool) {
+    if (!candidate || candidate.archived === true) continue;
+    const path = normalizeVaultRelativePath(candidate.path || "");
+    if (!path || path === previousDailyPath) continue;
+    const blockId = normalizeBulletPropertyValue(candidate.blockId || "");
+    if (path === ownerPath && (candidate.line === owner.line || (ownerBlockId && ownerBlockId === blockId))) continue;
+    const key = blockId ? relationStageRowKey(path, blockId) : null;
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    fresh.push(candidate);
+  }
+  let ordered = fresh.slice();
+  if (query.trim()) {
+    const ranked = dependencyStageRank(fresh, query);
+    const rank = new Map(ranked.map((candidate, index) => [candidate, index]));
+    ordered = ordered.filter((candidate) => rank.has(candidate)).sort((left, right) =>
+      rank.get(left) - rank.get(right) || compareDependencyStageCanonical(left, right, ownerPath),
+    );
+  } else {
+    ordered.sort((left, right) => {
+      const openOrder = Number(right.open === true) - Number(left.open === true);
+      return openOrder || compareDependencyStageCanonical(left, right, ownerPath);
+    });
+  }
+  const room = Math.max(0, maxRows - out.length);
+  const picked = ordered.slice(0, room);
+  picked.forEach((candidate, index) => {
+    out.push(Object.freeze({
+      kind: "local-task",
+      relationKind: true,
+      stageSection: "results",
+      firstInSection: index === 0,
+      path: normalizeVaultRelativePath(candidate.path || ""),
+      blockId: candidate.blockId || null,
+      line: candidate.line,
+      rawLine: candidate.rawLine,
+      status: candidate.status,
+      displayText: candidate.displayText || candidate.text || "task",
+      text: candidate.text || candidate.displayText || "task",
+      route: candidate.route,
+      note: candidate.note,
+      noteLabel: candidate.path !== ownerPath ? dependencyStageBasenameOf(candidate.path) : null,
+      searchText: [candidate.displayText, candidate.route, candidate.blockId, candidate.note].filter(Boolean).join(" "),
+      alreadyLinked: false,
+      needsBlockIdPrompt: false,
+      needsPromptForAdd: false,
+      hidden: candidate.hidden,
+      section: candidate.section,
+      markKey: `${candidate.path}#${candidate.line >= 0 ? candidate.line : (candidate.blockId || candidate.displayText)}`,
+      disabled: false,
+      label: null,
+      archived: false,
+      closed: candidate.closed === true,
+      prerequisite: false,
+      todayLink: null,
+    }));
+  });
+  const hiddenCount = Math.max(0, ordered.length - picked.length);
+  if (hiddenCount > 0) {
+    out.push(Object.freeze({
+      kind: "stage-more",
+      stageSection: "results",
+      firstInSection: false,
+      path: null,
+      blockId: null,
+      displayText: `type to search ${hiddenCount} more`,
+      text: `type to search ${hiddenCount} more`,
+      searchText: "",
+      hiddenCount,
+      disabled: true,
+      disabledReason: `type to search ${hiddenCount} more`,
+    }));
+  }
+  return Object.freeze(out);
+}
+
+// Archived rows sink below closed rows; open rows float above both. Within
+// a tier the owner's note wins, then code-point order.
+function compareRelationStageCanonical(first, second, ownerPath) {
+  const firstArchived = first && first.archived === true ? 1 : 0;
+  const secondArchived = second && second.archived === true ? 1 : 0;
+  if (firstArchived !== secondArchived) {
+    return firstArchived - secondArchived;
+  }
+  const firstClosed = first && first.closed === true ? 1 : 0;
+  const secondClosed = second && second.closed === true ? 1 : 0;
+  if (firstClosed !== secondClosed) {
+    return firstClosed - secondClosed;
+  }
+  return compareDependencyStageCanonical(first, second, ownerPath);
+}
+
+function planRelationStageItemsFromVault(stage, query) {
+  if (!stage) {
+    return Object.freeze([]);
+  }
+  if (stage.direction === "from") {
+    return planLinkedFromStageView({
+      sources: stage.sources,
+      current: stage.current,
+      candidates: stage.candidates,
+      query: query || "",
+      linkedKeys: stage.linkedKeys,
+      previousDailyPath: stage.previousDailyPath,
+    });
+  }
+  return planRelationStageView({
+    sources: stage.sources,
+    current: stage.current,
+    candidates: stage.candidates,
+    query: query || "",
+    linkedKeys: stage.linkedKeys,
+    prerequisiteIds: stage.prerequisiteIds,
+    todayMap: stage.todayMap,
+  });
+}
+
+// Pure commit plan for one Links stage gesture (LG15): marked and chosen
+// rows become one `applyRelationEdit` call with one notice. CURRENT rows
+// unlink; every other row links plain (the relation field adds labels).
+function planRelationStageCommit(items) {
+  const list = Array.isArray(items) ? items : [];
+  const add = [];
+  const remove = [];
+  const seen = new Set();
+  for (const item of list) {
+    if (!item || item.kind === "stage-more" || item.disabled) {
+      continue;
+    }
+    const key = `${normalizeVaultRelativePath(item.path || "")}\u0000${normalizeBulletPropertyValue(item.blockId || "")}\u0000${item.stageSection === "current" ? "remove" : "add"}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const ref = {
+      path: normalizeVaultRelativePath(item.path || ""),
+      line: item.line,
+      blockId: item.blockId || item.existingBlockId || null,
+      rawLine: typeof item.rawLine === "string" ? item.rawLine : undefined,
+    };
+    if (item.alreadyLinked || item.stageSection === "current") {
+      remove.push(ref);
+    } else {
+      add.push(ref);
+    }
+  }
+  return Object.freeze({
+    add: Object.freeze(add),
+    remove: Object.freeze(remove),
+  });
+}
+// ---- src/305-relation-stage-copy.js ----
+// Links… stage copy: subtitle, consequence strip, and the live relation
+// sentence (`docs/task-relations.md` Rules 7–8).
+
+function relationStageSubtitle(stage, markedDiff, options = {}) {
+  const currentCount = Array.isArray(stage && stage.current)
+    ? stage.current.length
+    : 0;
+  const pool = Math.max(
+    0,
+    Math.floor(numericOrDefault(stage && stage.poolSize, 0)),
+  );
+  const marked = markedDiff && typeof markedDiff === "object" ? markedDiff : null;
+  if (marked && (marked.add > 0 || marked.remove > 0 || marked.needId > 0)) {
+    const parts = [];
+    if (marked.add > 0) {
+      parts.push(`${marked.add} to link`);
+    }
+    if (marked.remove > 0) {
+      parts.push(`${marked.remove} to unlink`);
+    }
+    parts.push("↵ to apply");
+    return parts.join(" · ");
+  }
+  const head = stage && stage.direction === "from"
+    ? currentCount === 0
+      ? `Nothing links here yet · searching ${pool} tasks`
+      : `Linked from ${currentCount} · searching ${pool} tasks`
+    : currentCount === 0
+      ? `Links to nothing yet · searching ${pool} tasks`
+      : `Links to ${currentCount} · searching ${pool} tasks`;
+  return `${head} · ⇥ to mark several · does not block`;
+}
+
+function relationStageConsequenceStrip(item, context = {}) {
+  const marked = Array.isArray(context.marked) ? context.marked : [];
+  if (marked.length > 0) {
+    let add = 0;
+    let remove = 0;
+    for (const row of marked) {
+      if (row.alreadyLinked || row.stageSection === "current") {
+        remove += 1;
+      } else {
+        add += 1;
+      }
+    }
+    const parts = [];
+    if (add > 0) {
+      parts.push(`↵ links ${add}`);
+    }
+    if (remove > 0) {
+      parts.push(`↵ unlinks ${remove}`);
+    }
+    parts.push("never blocks, schedules, or changes status");
+    return parts.join(" · ");
+  }
+  if (!item || item.kind === "stage-more") {
+    return "";
+  }
+  if (item.disabled) {
+    return item.disabledReason || "";
+  }
+  if (item.archived === true) {
+    return "Archived · its LINKED FROM shows live only";
+  }
+  if (item.stageSection === "current") {
+    return context.direction === "from"
+      ? "↵ removes this source · ⇧↵ relabels"
+      : "↵ unlinks · ⇧↵ relabels";
+  }
+  return "Links only · never blocks, schedules, or changes status";
+}
+
+// The live relation sentence for the label field: `S — ‹label› → T`.
+function relationStageLiveSentence(sourceText, label, targetText) {
+  const source = String(sourceText || "").trim() || "This task";
+  const target = String(targetText || "").trim() || "that task";
+  const middle = String(label || "").trim();
+  return middle ? `${source} — ${middle} → ${target}` : `${source} → ${target}`;
+}
+
+// Inline validation reason for the relation field, mirroring
+// `normalizeRelationLabel` (empty / too long / forbidden character).
+// Returns null when the label commits.
+function describeRelationLabelRefusal(value) {
+  const text = String(value || "")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .replace(/:$/, "")
+    .trim();
+  if (!text) {
+    return null;
+  }
+  const length = Array.from(text).length;
+  if (length > 40) {
+    return "Keep the relation to 40 characters";
+  }
+  if (/[[\]()"\\|•*~]/.test(text)) {
+    return "A relation cannot contain brackets, quotes, |, •, * or ~";
+  }
+  if (/^[·,]/.test(text)) {
+    return "A relation cannot start with · or ,";
+  }
+  return null;
+}
+
+function relationStageLabelPlaceholder(suggestions) {
+  const list = Array.isArray(suggestions) ? suggestions : [];
+  if (list.length === 0) {
+    return "Relation (optional) — e.g. see also";
+  }
+  const first = list[0] && list[0].label ? String(list[0].label) : "";
+  return first
+    ? `Relation (optional) — e.g. ${first}`
+    : "Relation (optional) — e.g. see also";
+}
 // ---- src/310-task-card-previews.js ----
 function buildTaskCardPriorityPreviews(options = {}) {
   const config = options.config || null;
@@ -38846,6 +39841,25 @@ function planTaskCard(context = {}) {
     context.taskCache,
     context.baseDate,
   );
+  const linksToUnavailableReason = taskCardLinksToAvailabilityReason(
+    session,
+    context,
+  );
+  const linksToSummary =
+    session.type === "single" && session.valid
+      ? taskCardLinksToSummary(session, context)
+      : null;
+  const linksToDetail = linksToSummary ? linksToSummary.detail : "";
+  const linksToAvailable = !linksToUnavailableReason;
+  const linkedFromUnavailableReason = taskCardLinkedFromAvailabilityReason(
+    session,
+    context,
+  );
+  const linkedFromSummary =
+    session.type === "single" && session.valid
+      ? taskCardLinkedFromSummary(session, context)
+      : null;
+  const linkedFromAvailable = !linkedFromUnavailableReason;
   const blocksDetail = blocksSummary
     ? `${formatCountLabel(blocksSummary.count, "task")}${
         blocksSummary.frees > 0 ? ` · frees ${blocksSummary.frees}` : ""
@@ -38902,6 +39916,28 @@ function planTaskCard(context = {}) {
       enabled: blocksAvailable,
       unavailableReason: blocksAvailable ? null : blocksUnavailableReason,
       detail: blocksDetail,
+      targetCount: session.targetCount,
+      deletable: false,
+    }),
+    row({
+      id: "links-to",
+      kind: "action",
+      action: "links",
+      label: "Links to",
+      enabled: linksToAvailable,
+      unavailableReason: linksToAvailable ? null : linksToUnavailableReason,
+      detail: linksToDetail,
+      targetCount: session.targetCount,
+      deletable: false,
+    }),
+    row({
+      id: "linked-from",
+      kind: "action",
+      action: "linked-from",
+      label: "Linked from",
+      enabled: linkedFromAvailable,
+      unavailableReason: linkedFromAvailable ? null : linkedFromUnavailableReason,
+      detail: linkedFromSummary ? linkedFromSummary.detail : "",
       targetCount: session.targetCount,
       deletable: false,
     }),
@@ -39039,6 +40075,8 @@ function planTaskCard(context = {}) {
       recommendation: Boolean(recommendation && recommendation.available),
       dependencies: dependencyAvailable,
       blocks: blocksAvailable,
+      linksTo: linksToAvailable,
+      linkedFrom: linkedFromAvailable,
       refresh: refreshAvailable,
       cancel: cancelAvailable,
       lane: laneAvailable,
@@ -39108,8 +40146,8 @@ function resolveTaskCardKey(model, event) {
   const movement = (direction) =>
     Object.freeze({ type: "move-selection", direction, fromRowId: model.selectedRowId });
   const actionKey =
-    (!modified && /^[0-9bfx]$/i.test(key)) ||
-    (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || key === "B")) ||
+    (!modified && /^[0-9bflx]$/i.test(key)) ||
+    (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || event.code === "KeyL" || key === "B" || key === "L")) ||
     (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
     (meta && !ctrl && !shift && !alt && key === "Enter") ||
     (alt && !ctrl && !meta && !shift && lower === "n");
@@ -39160,6 +40198,19 @@ function resolveTaskCardKey(model, event) {
     return taskCardIntentForRow(rowById("lane"));
   }
   if (ctrl && !meta && !shift && !alt && lower === "d") {
+    if (selected && selected.id === "links-to") {
+      return Object.freeze({
+        type: "clear-relations",
+        rowId: selected.id,
+        targetCount: model.session.targetCount,
+      });
+    }
+    if (selected && selected.id === "linked-from") {
+      return unavailable(
+        "clear-relations",
+        TASK_LINKED_FROM_LINE_NOTICE,
+      );
+    }
     if (!selected || selected.kind !== "property" || !selected.deletable) {
       return unavailable("delete-property", "Only a selected property can be deleted");
     }
@@ -39211,6 +40262,9 @@ function resolveTaskCardKey(model, event) {
   if (!modified && lower === "b") {
     return taskCardIntentForRow(rowById("depends-on"));
   }
+  if (!modified && lower === "l") {
+    return taskCardIntentForRow(rowById("links-to"));
+  }
   if (
     shift &&
     !ctrl &&
@@ -39219,6 +40273,15 @@ function resolveTaskCardKey(model, event) {
     (event.code === "KeyB" || key === "B")
   ) {
     return taskCardIntentForRow(rowById("blocks"));
+  }
+  if (
+    shift &&
+    !ctrl &&
+    !meta &&
+    !alt &&
+    (event.code === "KeyL" || key === "L")
+  ) {
+    return taskCardIntentForRow(rowById("linked-from"));
   }
   if (!modified && lower === "f") {
     return taskCardIntentForRow(rowById("review-every"));
@@ -39242,6 +40305,8 @@ const TASK_CARD_ROW_ORDER = Object.freeze([
   "schedule",
   "depends-on",
   "blocks",
+  "links-to",
+  "linked-from",
   "review-every",
   "lane",
   "cancel",
@@ -39251,6 +40316,8 @@ const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
   schedule: "Enter",
   "depends-on": "b",
   blocks: "⇧B",
+  "links-to": "l",
+  "linked-from": "⇧L",
   "review-every": "f",
   lane: "Alt+N",
   cancel: "x",
@@ -39468,6 +40535,213 @@ function taskCardBlocksSummary(session, taskCache, baseDate = new Date()) {
     return !otherOpenPrerequisite && !futureScheduled && !projectBlocked;
   }).length;
   return Object.freeze({ count: dependents.length, frees });
+}
+// ---- src/312-task-card-relations.js ----
+// Task Card Links to… row (`docs/task-relations.md` Rule 8). The detail
+// reads the owner's own LINKS line, never the stored mirror and never the
+// live index: `N · <first label> <first target, cut> +K`. The row is
+// available on open and closed tasks; it is unavailable for non-tasks and
+// in read-only notes (done/ and the previous daily note).
+
+function taskCardLinksToAvailabilityReason(session, context = {}) {
+  if (!session || session.valid !== true) {
+    return (session && session.error) || "Task context is unavailable";
+  }
+  const targets = Array.isArray(session.targets) ? session.targets : [];
+  if (targets.length === 0) {
+    return "No task targets are available";
+  }
+  if (session.type !== "single" && session.type !== "counted") {
+    return "Links to needs a single task";
+  }
+  if (targets.some((target) => !isObsidianTaskLine(target && target.rawLine))) {
+    return "Links require a #task checkbox";
+  }
+  if (
+    targets.some((target) => isBlockquotedMarkdownLine(target && target.rawLine))
+  ) {
+    return "🪢 Links can't be edited inside a blockquote";
+  }
+
+  const paths = targets
+    .map((target) => normalizeVaultRelativePath(target && target.path))
+    .filter(Boolean);
+  const filePaths = paths.length > 0
+    ? paths
+    : [normalizeVaultRelativePath(context.filePath || "")].filter(Boolean);
+  if (filePaths.some((path) => isArchivedRecoveryTarget(path))) {
+    return "This task is in a read-only note";
+  }
+  const today =
+    context.baseDate instanceof Date ? context.baseDate : new Date();
+  const vaultFiles = Array.isArray(context.vaultFiles)
+    ? context.vaultFiles.map((path) => ({ path }))
+    : [];
+  const dailyPaths = scheduledRecoveryDailyPaths(vaultFiles, today);
+  if (
+    dailyPaths &&
+    filePaths.includes(normalizeVaultRelativePath(dailyPaths.previous || ""))
+  ) {
+    return "The previous daily note is read-only";
+  }
+  return null;
+}
+
+function taskCardLinksToEntryRefusal(context = {}) {
+  const session = taskCardSessionContext(context);
+  return taskCardLinksToAvailabilityReason(session, context);
+}
+
+// One owner's outgoing relation entries from its own LINKS children, in
+// authored order. Closed tasks count: the row is available on open and
+// closed tasks alike (LG vectors).
+function taskCardLinksToEntries(content, taskLine) {
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  const at = Math.floor(numericOrDefault(taskLine, Number.NaN));
+  if (!Number.isFinite(at) || at < 0 || at >= lines.length) {
+    return Object.freeze([]);
+  }
+  const owner = findOwningTaskLine(lines, at) ?? at;
+  if (!isObsidianTaskAtLine(text, owner, null, lines)) {
+    return Object.freeze([]);
+  }
+  const children = findLinksChildren(lines, owner);
+  const out = [];
+  for (const index of children) {
+    const parsed = parseLinksLine(String(lines[index] || ""), {
+      isDirectChildOfTask: true,
+    });
+    if (parsed.verdict !== "accept") {
+      continue;
+    }
+    for (const entry of parsed.entries || []) {
+      out.push(entry);
+    }
+  }
+  return Object.freeze(out);
+}
+
+function taskCardLinksToTargetName(entry, taskCache) {
+  const blockId = normalizeBulletPropertyValue(entry && entry.blockId);
+  if (
+    taskCache &&
+    taskCache.ready === true &&
+    Array.isArray(taskCache.tasks) &&
+    blockId
+  ) {
+    for (const task of taskCache.tasks) {
+      if (!task) {
+        continue;
+      }
+      const candidate =
+        normalizeBulletPropertyValue(task.blockId || "") === blockId ||
+        normalizeBulletPropertyValue(task.existingBlockId || "") === blockId;
+      if (!candidate) {
+        continue;
+      }
+      const text = String(task.displayText || task.text || "").trim();
+      if (text) {
+        return text;
+      }
+    }
+  }
+  return blockId ? `^${blockId}` : "";
+}
+
+function taskCardLinksToDetail(entries, taskCache) {
+  const list = Array.isArray(entries) ? entries : [];
+  if (list.length === 0) {
+    return "";
+  }
+  const first = list[0];
+  const label = String((first && first.label) || "").trim();
+  const target = taskCardLinksToTargetName(first, taskCache);
+  const cut = target.length > 24 ? `${target.slice(0, 23)}…` : target;
+  const middle = [label, cut].filter(Boolean).join(" ");
+  const rest = list.length > 1 ? ` +${list.length - 1}` : "";
+  return `${list.length} · ${middle}${rest}`.trim();
+}
+
+function taskCardLinksToSummary(session, context = {}) {
+  if (!session || session.valid !== true || session.type !== "single") {
+    return null;
+  }
+  const content = String(
+    (session && session.content) || context.content || "",
+  );
+  const line = Math.floor(numericOrDefault(session.cursorLine, Number.NaN));
+  if (!Number.isFinite(line)) {
+    return null;
+  }
+  const entries = taskCardLinksToEntries(content, line);
+  if (entries.length === 0) {
+    return Object.freeze({ count: 0, detail: "" });
+  }
+  return Object.freeze({
+    count: entries.length,
+    detail: taskCardLinksToDetail(entries, context.taskCache),
+  });
+}
+
+// Linked from… is a live-index summary. It deliberately has no stored-line
+// fallback: LINKED FROM is a generated mirror, and the Task Card only shows
+// this detail when the live index is ready.
+function taskCardLinkedFromAvailabilityReason(session, context = {}) {
+  if (session && session.type !== "single") {
+    return "Linked from needs a single task";
+  }
+  return taskCardLinksToAvailabilityReason(session, context);
+}
+
+function taskCardRelationIndex(context = {}) {
+  try {
+    const plugins = context.app && context.app.plugins && context.app.plugins.plugins;
+    const holder = plugins && plugins["bob-ledger-tools"];
+    const api = holder && holder.api && holder.api.relationIndex;
+    if (!api || Number(api.version) < 1 || typeof api.incoming !== "function") {
+      return null;
+    }
+    if (typeof api.ready === "function" && api.ready() !== true) {
+      return null;
+    }
+    return api;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function taskCardLinkedFromSummary(session, context = {}) {
+  if (!session || session.valid !== true || session.type !== "single") {
+    return null;
+  }
+  const target = (session.targets || [])[0];
+  const path = normalizeVaultRelativePath((target && target.path) || context.filePath || "");
+  const blockId = normalizeBulletPropertyValue(
+    getTrailingBlockId((target && target.rawLine) || "") || "",
+  );
+  const index = taskCardRelationIndex(context);
+  if (!path || !blockId || !index) {
+    return null;
+  }
+  let incoming = [];
+  try {
+    incoming = index.incoming(path, blockId);
+  } catch (_error) {
+    incoming = [];
+  }
+  if (!Array.isArray(incoming) || incoming.length === 0) {
+    return Object.freeze({ count: 0, detail: "" });
+  }
+  const first = incoming[0] && incoming[0].source;
+  const name = String(
+    (first && first.text) ||
+      (first && first.blockId ? `^${first.blockId}` : "source task"),
+  ).trim();
+  return Object.freeze({
+    count: incoming.length,
+    detail: `${incoming.length} · ${name}`,
+  });
 }
 // ---- src/320-task-card-header.js ----
 function buildTaskCardHeader(details = {}) {
@@ -39715,6 +40989,10 @@ function presentTaskCardRow(row) {
     label = "Blocked by…";
   } else if (row.id === "blocks") {
     label = "Blocks…";
+  } else if (row.id === "links-to") {
+    label = "Links to…";
+  } else if (row.id === "linked-from") {
+    label = "Linked from…";
   } else if (row.id === "review-every") {
     label = "Review every…";
   } else if (row.id === "cancel" && label && !label.endsWith("…")) {
@@ -40893,6 +42171,10 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     this.pendingCountedDependency = null;
     this.pendingBlocks = null;
     this.blocksStage = false;
+    this.relationStage = false;
+    this.pendingRelation = null;
+    this.relationLabelTargets = null;
+    this.relationLabelMode = null;
     this.consequenceStripEl = null;
     this.scheduleReviewFormEl = null;
     this.scheduleReviewReasonEl = null;
@@ -40999,6 +42281,8 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
         result = await this.clearTaskCardPriority();
       } else if (intent.type === "delete-property") {
         result = await this.deleteTaskCardProperty(intent.propertyName);
+      } else if (intent.type === "clear-relations") {
+        result = await this.clearTaskCardRelations(intent.rowId);
       } else if (intent.type === "open-action") {
         result = await this.openTaskCardAction(intent.rowId, intent.action);
       } else if (intent.type === "open-property") {
@@ -41040,6 +42324,14 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
         return true;
       }
       this.openTaskCardStage(() => this.showBlocksStage());
+      return false;
+    }
+    if (rowId === "links-to" || action === "links") {
+      this.openTaskCardStage(() => this.showRelationStage());
+      return false;
+    }
+    if (rowId === "linked-from" || action === "linked-from") {
+      this.openTaskCardStage(() => this.showLinkedFromStage());
       return false;
     }
     this.refreshPropertyItems();
@@ -41150,6 +42442,37 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   async clearTaskCardPriority() {
     const name = this.taskCardModel && this.taskCardModel.priorityStrip && this.taskCardModel.priorityStrip.propertyName;
     return await this.deleteTaskCardProperty(name);
+  }
+
+  async clearTaskCardRelations(rowId) {
+    if (rowId === "linked-from") {
+      new Notice(TASK_LINKED_FROM_LINE_NOTICE);
+      return false;
+    }
+    if (rowId !== "links-to") {
+      new Notice("Select Links to before clearing relations");
+      return false;
+    }
+    const targets = this.taskSession && this.taskSession.explicit
+      ? this.taskSession.targets || []
+      : [{ path: this.filePath, line: this.cursor.line }];
+    let removed = 0;
+    const mirrorFailures = new Set();
+    for (const target of targets) {
+      const outcome = await this.plugin.removeAllRelationLinksByRef({
+        path: target.path || this.filePath,
+        line: target.line,
+        blockId: target.blockId || getTrailingBlockId(target.rawLine || ""),
+      });
+      if (!outcome || outcome.ok !== true) {
+        new Notice(`🪢 Could not remove links${outcome && outcome.reason ? ` (${outcome.reason})` : ""}`);
+        return false;
+      }
+      removed += Math.max(0, Math.floor(numericOrDefault(outcome.removed, 0)));
+      if (outcome.notice) mirrorFailures.add(outcome.notice);
+    }
+    new Notice(`🪢 Removed ${removed} links${mirrorFailures.size ? ` · ${[...mirrorFailures].join(" · ")}` : ""}`);
+    return true;
   }
 
   async deleteTaskCardProperty(propertyName) {
@@ -43877,6 +45200,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     this.pendingVaultSingle = null;
     this.pendingVaultCounted = null;
     this.pendingBlocks = null;
+    this.pendingRelation = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
@@ -43947,6 +45271,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     // `apply N` when rows are marked.
     if (this.blocksStage) {
       return this.getBlocksStageFooterHints();
+    }
+    if (this.relationStage) {
+      return this.getRelationStageFooterHints();
     }
     if (this.vaultStage) {
       const marked = this.getMarkedCount();
@@ -44125,7 +45452,11 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
   // Swap in the vault-scan pool, keeping marks across the refresh: mark keys
   // are stable (`path#line`), so marked rows survive the pool replacement.
   applyVaultStageItems(stage) {
-    const seed = this.blocksStage ? this.blocksStageSeed : this.vaultStage;
+    const seed = this.blocksStage
+      ? this.blocksStageSeed
+      : this.relationStage
+        ? this.relationStageSeed
+        : this.vaultStage;
     if (!stage || seed !== stage.refreshOf) {
       return;
     }
@@ -44144,7 +45475,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     }
     const items = this.blocksStage
       ? planBlocksStageItemsFromVault(this.vaultStage, this.getQuery())
-      : planDependencyStageView({
+      : this.relationStage
+        ? planRelationStageItemsFromVault(this.vaultStage, this.getQuery())
+        : planDependencyStageView({
           current: stage.current,
           candidates: stage.candidates,
           query: this.getQuery(),
@@ -44168,6 +45501,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
   getVaultStageSubtitle(visibleItems, allItems) {
     if (this.blocksStage) {
       return this.getBlocksStageSubtitle(visibleItems, allItems);
+    }
+    if (this.relationStage) {
+      return this.getRelationStageSubtitle(visibleItems, allItems);
     }
     const stage = this.vaultStage;
     if (!stage) {
@@ -44278,6 +45614,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     if (this.blockIdMode === "blocks-source" && this.pendingBlocks) {
       return this.pendingBlocks.reservedIds || new Set();
     }
+    if (this.blockIdMode === "relation-target" && this.pendingRelation) {
+      return this.pendingRelation.reservedIds || new Set();
+    }
     return new Set();
   }
 
@@ -44293,6 +45632,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       "vault-single",
       "vault-counted",
       "blocks-source",
+      "relation-target",
     ].includes(options.mode)
       ? options.mode
       : "single";
@@ -44484,6 +45824,10 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       ];
     }
 
+    if (this.stage === "relation-label") {
+      return this.getRelationLabelPreviewItems();
+    }
+
     if (this.stage === "blockid") {
       // Uniqueness is checked against the target's note: cross-note `+ id`
       // rows prompt for an id that must be fresh in that note, not this one.
@@ -44590,6 +45934,11 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       this.renderFooter();
       this.refreshBlocksConsequenceStrip();
     }
+    if (this.relationStage && this.isLocalTaskStage()) {
+      this.footerHints = this.getRelationStageFooterHints();
+      this.renderFooter();
+      this.refreshRelationConsequenceStrip();
+    }
   }
 
   renderValueItem(item, rowEl, query) {
@@ -44650,7 +45999,7 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     // CURRENT / RESULTS / BLOCKED section headers for the vault-wide stage
     // (`docs/task-dependencies.md` §6).
     if (item && item.stageSection && item.firstInSection) {
-      const sectionNames = { current: "CURRENT", results: "RESULTS", blocked: "BLOCKED" };
+      const sectionNames = { current: "CURRENT", results: "RESULTS", blocked: "BLOCKED", closed: "CLOSED" };
       rowEl.createDiv({
         cls: "bob-cnp-section-header",
         text: sectionNames[item.stageSection] || item.stageSection,
@@ -44726,6 +46075,9 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     }
     if (Number.isInteger(item.line) && item.line >= 0) {
       metaBits.push(`Line ${item.line + 1}`);
+    }
+    if (item.relationKind === true && item.archived === true) {
+      metaBits.push("Archived · LINKED FROM shows live only");
     }
     if (item.cycle && item.cycle.length > 0) {
       metaBits.push(`⟲ ${item.cycle.length - 1} back-link${item.cycle.length - 1 === 1 ? "" : "s"}`);
@@ -44817,6 +46169,45 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     } else {
       badgeEl.createSpan({ cls: "bob-cnp-task-badge-action", text: "＋" });
     }
+    // Links stage badges (`docs/task-relations.md` Rule 8): the label pill,
+    // `⛓ prerequisite` (information only), and 🍅 for rows linked under
+    // today's open Pomodoros (display only — relations never consume them).
+    if (item && item.relationKind === true) {
+      if (item.label) {
+        badgeEl.createSpan({
+          cls: "bob-cnp-task-badge-extra bob-cnp-relation-label",
+          text: String(item.label),
+        });
+      }
+      if (item.prerequisite) {
+        const prerequisiteEl = badgeEl.createSpan({
+          cls: "bob-cnp-task-badge-extra bob-cnp-relation-prerequisite",
+          text: "⛓ prerequisite",
+        });
+        prerequisiteEl.setAttribute(
+          "title",
+          "Also a prerequisite · linking stays inert",
+        );
+      }
+      if (item.todayLink) {
+        const link = item.todayLink;
+        const range = link.range ? ` ${link.range}` : "";
+        const tomato = badgeEl.createSpan({
+          cls: "bob-cnp-task-badge-extra bob-cnp-relation-today",
+          text: link.running ? "🍅 running" : "🍅",
+        });
+        tomato.setAttribute(
+          "title",
+          `Linked under ${link.label}${range} · linking stays inert`,
+        );
+      }
+      if (item.archived === true) {
+        badgeEl.createSpan({
+          cls: "bob-cnp-task-badge-extra bob-cnp-relation-archived",
+          text: "Archived",
+        });
+      }
+    }
     if (this.blocksStage && item.lastReason) {
       const keyEl = badgeEl.createSpan({
         cls: "bob-cnp-task-badge-extra bob-cnp-blocks-last",
@@ -44883,6 +46274,9 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
   async chooseTaskDependency(item) {
     if (this.blocksStage) {
       return this.chooseBlocksTask(item);
+    }
+    if (this.relationStage) {
+      return this.chooseRelationTask(item);
     }
     if (!this.selectedPropertyItem) {
       return false;
@@ -45693,6 +47087,9 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     if (this.blocksStage) {
       return this.commitMarkedBlocks();
     }
+    if (this.relationStage) {
+      return this.commitMarkedRelations();
+    }
     if (!this.selectedPropertyItem || this.getMarkedCount() === 0) {
       return false;
     }
@@ -46297,6 +47694,1441 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
     return this.commitBlocksEdit({ add, remove }, overrides);
   }
 }
+// ---- src/426-picker-relation-stage.js ----
+// Links… stage picker (`docs/task-relations.md` Rules 7–8) and its vault
+// pool builders. Commits through `plugin.applyRelationEdit`, so one gesture
+// writes the source LINKS line, mints the source id, and follows up the
+// LINKED FROM mirrors with one notice. Never stamps, routes inbox tasks,
+// or touches Pomodoros (LG13).
+
+class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
+  isRelationStage() {
+    return this.relationStage === true && this.isLocalTaskStage();
+  }
+
+  isLinkedFromStage() {
+    return this.isRelationStage() && this.relationStageDirection === "from";
+  }
+
+  relationStageDummyProperty() {
+    return {
+      kind: "property",
+      property: { name: "linksTo", values: "local_task_id" },
+      currentValue: "",
+    };
+  }
+
+  relationStageSourceLines() {
+    if (this.isCountedSession()) {
+      return (this.taskSession.targets || []).map((target) => target.line);
+    }
+    return [this.cursor.line];
+  }
+
+  showRelationStage(direction = "to") {
+    this.stage = "value";
+    this.blocksStage = false;
+    this.relationStage = true;
+    this.relationStageDirection = direction === "from" ? "from" : "to";
+    this.relationLabel = null;
+    this.selectedPropertyItem = this.relationStageDummyProperty();
+    this.pendingTask = null;
+    this.pendingRelation = null;
+    this.clearPendingBatch();
+    this.selectedIndex = 0;
+    const parentLines = this.relationStageSourceLines();
+    let stage = null;
+    try {
+      stage =
+        this.plugin &&
+        typeof this.plugin.buildVaultRelationStage === "function"
+          ? this.plugin.buildVaultRelationStage({
+              filePath: this.filePath,
+              content: this.getEditorContent(),
+              parentLines,
+              direction: this.relationStageDirection,
+            })
+          : null;
+    } catch (_stageError) {
+      stage = null;
+    }
+    this.relationStageSeed = stage;
+    this.vaultStage = stage;
+    const items = this.vaultStage
+      ? planRelationStageItemsFromVault(this.vaultStage, "")
+      : [];
+    this.resetLocalTaskMarks(items);
+    this.applyOptions(this.relationStageListOptions());
+    if (this.headerIconEl) {
+      this.headerIconEl.empty();
+      applyIcon(this.headerIconEl, "link-2");
+      if (
+        this.headerIconEl.children &&
+        this.headerIconEl.children.length === 0
+      ) {
+        applyIcon(this.headerIconEl, "link");
+      }
+    }
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+    this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
+    this.ensureRelationConsequenceStrip();
+    this.refreshRelationConsequenceStrip();
+    if (
+      stage &&
+      (this.isLinkedFromStage() ? stage.incomingNeedsScan : !stage.cacheReady) &&
+      this.plugin &&
+      typeof this.plugin.refreshVaultRelationStage === "function"
+    ) {
+      if (!this.isLinkedFromStage()) {
+        void this.plugin.refreshVaultRelationStage(this, stage);
+      } else if (stage.cacheReady) {
+        void this.plugin.refreshVaultLinkedFromIncoming(this, stage);
+      } else {
+        void this.plugin.refreshVaultRelationStage(this, stage);
+      }
+    }
+    void this.refreshRelationStageTodayLinks();
+  }
+
+  showLinkedFromStage() {
+    return this.showRelationStage("from");
+  }
+
+  relationStageListOptions() {
+    const title =
+      (this.vaultStage && this.vaultStage.title) || "🪢 Links";
+    return {
+      items: this.vaultStage
+        ? planRelationStageItemsFromVault(
+            this.vaultStage,
+            this.getQuery ? this.getQuery() : "",
+          )
+        : [],
+      title,
+      headerIcon: "link-2",
+      inputLabel: "Filter tasks",
+      placeholder: "Filter tasks",
+      resultsLabel: this.isLinkedFromStage()
+        ? "Tasks that could link here"
+        : "Tasks this could link to",
+      emptyText: this.isLinkedFromStage()
+        ? "No matching editable tasks in the vault"
+        : "No matching tasks in the vault",
+      footerHints: this.getRelationStageFooterHints(),
+      getSubtitle: (visibleItems, allItems) =>
+        this.getRelationStageSubtitle(visibleItems, allItems),
+      filterItem: (item, query) => fuzzyMatchesText(item.searchText, query),
+      renderItem: (item, rowEl, query) =>
+        this.renderTaskValueItem(item, rowEl, query),
+      openItem: (item) => this.chooseRelationTask(item),
+    };
+  }
+
+  getRelationStageFooterHints() {
+    if (!this.isRelationStage()) {
+      return this.getLocalTaskFooterHints();
+    }
+    const marked = this.getMarkedCount();
+    const item = (this.visibleItems || [])[this.selectedIndex];
+    let verb = this.isLinkedFromStage() ? "link here" : "link";
+    if (marked > 0) {
+      verb = `apply ${marked}`;
+    } else if (item && item.stageSection === "current") {
+      verb = this.isLinkedFromStage() ? "remove source" : "unlink";
+    }
+    return [
+      { keys: ["↑", "↓"], label: "navigate" },
+      { keys: ["⇥"], label: "mark" },
+      { keys: ["↵"], label: verb },
+      { keys: ["⇧↵"], label: "with a relation" },
+      { keys: ["esc"], label: "dismiss" },
+    ];
+  }
+
+  getRelationStageSubtitle(_visibleItems, _allItems) {
+    const stage = this.vaultStage;
+    if (this.getMarkedCount() > 0) {
+      return relationStageSubtitle(stage, this.getMarkedTaskDiff(), {});
+    }
+    return relationStageSubtitle(stage, null, {});
+  }
+
+  ensureRelationConsequenceStrip() {
+    if (!this.contentEl || !this.footerEl) {
+      return null;
+    }
+    if (
+      this.consequenceStripEl &&
+      this.consequenceStripEl.parentElement === this.contentEl
+    ) {
+      return this.consequenceStripEl;
+    }
+    const el = this.contentEl.createDiv({
+      cls: "bob-cnp-consequence-strip",
+      attr: { "aria-live": "polite" },
+    });
+    try {
+      if (
+        this.footerEl.parentElement === this.contentEl &&
+        typeof this.contentEl.insertBefore === "function"
+      ) {
+        this.contentEl.insertBefore(el, this.footerEl);
+      }
+    } catch (_error) {
+      // Best-effort placement between the list and the footer.
+    }
+    this.consequenceStripEl = el;
+    return el;
+  }
+
+  refreshRelationConsequenceStrip() {
+    if (!this.isRelationStage()) {
+      if (this.consequenceStripEl) {
+        this.consequenceStripEl.setText("");
+      }
+      return;
+    }
+    const el = this.ensureRelationConsequenceStrip();
+    if (!el) {
+      return;
+    }
+    const marked = this.getMarkedTaskItems();
+    const item = (this.visibleItems || [])[this.selectedIndex] || null;
+    const text = relationStageConsequenceStrip(item, {
+      marked,
+      direction: this.relationStageDirection,
+    });
+    el.empty();
+    el.createSpan({ cls: "bob-cnp-consequence-strip-text", text });
+  }
+
+  // 🍅 badge (display only): today's Pomodoro links over the current pool.
+  // Relations never consume them; the badge only informs (LG13).
+  async refreshRelationStageTodayLinks() {
+    const stage = this.vaultStage;
+    if (!stage || !this.relationStage) {
+      return;
+    }
+    const files = stage.files instanceof Map ? stage.files : new Map();
+    let dailyPath = null;
+    try {
+      const listed =
+        this.plugin && typeof this.plugin.readDependencyVaultFileList === "function"
+          ? this.plugin.readDependencyVaultFileList()
+          : [...files.keys()];
+      dailyPath = scheduledRecoveryDailyPaths(
+        (Array.isArray(listed) ? listed : [...files.keys()]).map((path) => ({
+          path,
+        })),
+      ).current;
+    } catch (_error) {
+      dailyPath = null;
+    }
+    if (!dailyPath) {
+      return;
+    }
+    let dailyContent = files.has(dailyPath) ? files.get(dailyPath) : null;
+    if (dailyContent === null) {
+      const open = this.getOpenTargetNoteContent(dailyPath);
+      if (typeof open === "string") {
+        dailyContent = open;
+      } else if (
+        this.plugin &&
+        typeof this.plugin.readDependencyNoteContent === "function"
+      ) {
+        dailyContent = await this.plugin.readDependencyNoteContent(
+          dailyPath,
+          null,
+          "",
+        );
+      }
+    }
+    const current = this.vaultStage;
+    if (!current || !this.relationStage || dailyContent === null) {
+      return;
+    }
+    if (current.files instanceof Map) {
+      current.files.set(dailyPath, dailyContent);
+    }
+    const todayLinks = collectBlocksStageTodayLinks(
+      dailyContent,
+      dailyPath,
+      current.index,
+    );
+    const todayMap = new Map();
+    for (const link of todayLinks || []) {
+      if (link && link.key && !todayMap.has(link.key)) {
+        todayMap.set(link.key, link);
+      }
+    }
+    current.todayMap = todayMap;
+    const marked = this.markedLines instanceof Set ? new Set(this.markedLines) : new Set();
+    const items = planRelationStageItemsFromVault(
+      current,
+      this.getQuery ? this.getQuery() : "",
+    );
+    this.resetLocalTaskMarks(items);
+    for (const key of marked) {
+      if (this.taskItemsByLine.has(key)) {
+        this.markedLines.add(key);
+      }
+    }
+    this.items = items;
+    if (this.resultsEl) {
+      this.renderResults();
+    }
+  }
+
+  relationStageSourceRefs(overrides = new Map()) {
+    const sources =
+      this.vaultStage && Array.isArray(this.vaultStage.sources)
+        ? this.vaultStage.sources
+        : [];
+    return sources.map((source) => {
+      const key = `${source.path}\x00${source.line}`;
+      const extra = overrides.get(key) || {};
+      return {
+        path: source.path,
+        line: source.line,
+        blockId: extra.blockId || source.blockId || null,
+        rawLine: typeof source.rawLine === "string" ? source.rawLine : undefined,
+      };
+    });
+  }
+
+  relationStageExpectedMap(refs) {
+    const expected = new Map();
+    if (this.vaultStage && this.vaultStage.files instanceof Map) {
+      for (const ref of refs || []) {
+        const path = normalizeVaultRelativePath(ref.path || "");
+        if (path && this.vaultStage.files.has(path) && !expected.has(path)) {
+          expected.set(path, String(this.vaultStage.files.get(path) || ""));
+        }
+      }
+    }
+    return expected;
+  }
+
+  chooseRelationTask(item, options = {}) {
+    if (this.getMarkedCount() > 0 && !options.withLabel) {
+      return this.commitMarkedRelations();
+    }
+    if (!item || item.kind === "stage-more") {
+      return false;
+    }
+    if (item.disabled) {
+      new Notice(item.disabledReason || "That task cannot be linked");
+      return false;
+    }
+    if (item.stageSection === "current" && item.alreadyLinked) {
+      if (options.withLabel) {
+        return this.showRelationLabelStage([item], { mode: "relabel" });
+      }
+      return this.commitRelationEdit({ add: [], remove: [item], relabel: [] });
+    }
+    if (options.withLabel) {
+      return this.showRelationLabelStage([item], { mode: "add" });
+    }
+    if (this.getMarkedCount() > 0) {
+      return this.commitMarkedRelations();
+    }
+    return this.commitRelationEdit({ add: [item], remove: [], relabel: [] });
+  }
+
+  commitMarkedRelations() {
+    if (this.getMarkedCount() === 0) {
+      return false;
+    }
+    const planned = planRelationStageCommit(this.getMarkedTaskItems());
+    if (planned.add.length === 0 && planned.remove.length === 0) {
+      return false;
+    }
+    if (this.isLinkedFromStage() && planned.add.length > 0 && planned.remove.length > 0) {
+      new Notice("Apply incoming links or remove current sources in separate gestures");
+      return false;
+    }
+    return this.commitRelationEdit(planned);
+  }
+
+  async commitRelationEdit({ add, remove, relabel }, targetOverrides = new Map()) {
+    const additions = Array.isArray(add) ? add : [];
+    const removals = Array.isArray(remove) ? remove : [];
+    const relabels = Array.isArray(relabel) ? relabel : [];
+    const linkedFrom = this.isLinkedFromStage();
+    const owner = linkedFrom ? this.relationStageSourceRefs()[0] || null : null;
+    const ownerKey = owner
+      ? `${normalizeVaultRelativePath(owner.path || "")}\x00${owner.line}`
+      : "";
+    // LG5: id-less targets run the block-ID prompt once on apply. Escape
+    // closes the prompt and writes and mints nothing.
+    const missing = linkedFrom
+      ? additions.length + relabels.length > 0 &&
+        owner &&
+        !normalizeBulletPropertyValue(owner.blockId || "") &&
+        !targetOverrides.get(ownerKey)
+        ? [owner]
+        : []
+      : [...additions, ...relabels].filter(
+          (target) =>
+            !normalizeBulletPropertyValue(target.blockId || "") &&
+            !targetOverrides.get(
+              `${normalizeVaultRelativePath(target.path || "")}\x00${target.line}`,
+            ),
+        );
+    if (missing.length > 0) {
+      const reservedIds = new Set();
+      for (const extra of targetOverrides.values()) {
+        if (extra && extra.blockId) {
+          reservedIds.add(extra.blockId);
+        }
+      }
+      this.pendingRelation = {
+        add: additions,
+        remove: removals,
+        relabel: relabels,
+        overrides: targetOverrides,
+        queue: missing.slice(),
+        reservedIds,
+        reverseOwner: linkedFrom ? owner : null,
+      };
+      return this.promptNextRelationTargetId();
+    }
+    const sources = this.relationStageSourceRefs();
+    const toRef = (item) => ({
+      path: normalizeVaultRelativePath(item.path || ""),
+      line: item.line,
+      blockId:
+        targetOverrides.get(
+          `${normalizeVaultRelativePath(item.path || "")}\x00${item.line}`,
+        )?.blockId ||
+        item.blockId ||
+        item.existingBlockId ||
+        null,
+      label: item.label !== undefined ? item.label : undefined,
+      rawLine: typeof item.rawLine === "string" ? item.rawLine : undefined,
+    });
+    // The open-time snapshot of the touched notes only; the writer reads
+    // live content and compares, so a changed note refuses with
+    // "changed — reopen".
+    const expected = this.relationStageExpectedMap([
+      ...sources,
+      ...additions.map(toRef),
+      ...removals.map(toRef),
+      ...relabels.map(toRef),
+    ]);
+    if (linkedFrom) {
+      if (!owner) {
+        new Notice("This task could not be resolved");
+        return false;
+      }
+      const ownerRef = toRef(owner);
+      const groups = [
+        { mode: "add", items: additions },
+        { mode: "remove", items: removals },
+        { mode: "relabel", items: relabels },
+      ].filter((group) => group.items.length > 0);
+      const notices = [];
+      for (const group of groups) {
+        const sourceRefs = group.items.map(toRef);
+        const label = group.items[0].label || null;
+        const outcome = await this.plugin.applyRelationEdit({
+          sources: sourceRefs,
+          add: group.mode === "add" ? [{ ...ownerRef, label }] : [],
+          remove: group.mode === "remove" ? [ownerRef] : [],
+          relabel: group.mode === "relabel" ? [{ ...ownerRef, label }] : [],
+          direction: "from",
+          expected: this.relationStageExpectedMap([...sourceRefs, ownerRef]),
+        });
+        if (!outcome.ok) {
+          if (outcome.reason === "changed — reopen" || outcome.reason === "changed") {
+            return this.refuseDependencyStale();
+          }
+          new Notice(outcome.notice || `🪢 Could not update links (${outcome.reason})`);
+          return false;
+        }
+        if (outcome.notice) notices.push(outcome.notice);
+      }
+      if (notices.length === 1) new Notice(notices[0]);
+      else if (notices.length > 1) new Notice(notices.join(" · "));
+      this.clearPendingBatch();
+      this.pendingRelation = null;
+      return true;
+    }
+    const write = async () => {
+      const outcome = await this.plugin.applyRelationEdit({
+        sources,
+        add: additions.map(toRef),
+        remove: removals.map(toRef),
+        relabel: relabels.map(toRef),
+        expected,
+      });
+      if (!outcome.ok) {
+        if (
+          outcome.reason === "changed — reopen" ||
+          outcome.reason === "changed"
+        ) {
+          return this.refuseDependencyStale();
+        }
+        new Notice(
+          outcome.notice || `🪢 Could not update links (${outcome.reason})`,
+        );
+        return false;
+      }
+      if (outcome.notice) {
+        new Notice(outcome.notice);
+      }
+      this.clearPendingBatch();
+      this.pendingRelation = null;
+      return true;
+    };
+    return write();
+  }
+
+  promptNextRelationTargetId() {
+    const pending = this.pendingRelation;
+    if (!pending || !Array.isArray(pending.queue) || pending.queue.length === 0) {
+      return this.commitRelationEdit(
+        { add: pending && pending.add, remove: pending && pending.remove, relabel: pending && pending.relabel },
+        pending && pending.overrides,
+      );
+    }
+    const target = pending.reverseOwner || pending.queue[0];
+    const snapshot = {
+      path: target.path,
+      line: target.line,
+      rawLine: typeof target.rawLine === "string" ? target.rawLine : null,
+      displayText: target.displayText || target.path,
+      existingIdField: target.existingIdField || target.idField || null,
+      blockId: null,
+    };
+    if (this.vaultStage && this.vaultStage.files instanceof Map) {
+      const content = this.vaultStage.files.get(
+        normalizeVaultRelativePath(target.path),
+      );
+      if (typeof content === "string" && Number.isInteger(target.line)) {
+        snapshot.rawLine = String(content.split(/\r?\n/)[target.line] || "");
+        snapshot.displayText = cleanTaskDisplayText(snapshot.rawLine);
+        snapshot.existingIdField =
+          (findBulletPropertyField(snapshot.rawLine, "id") || {}).value || null;
+      }
+    }
+    this.showBlockIdStage(snapshot, { mode: "relation-target" });
+    return false;
+  }
+
+  async confirmRelationTargetBlockId(item) {
+    const pending = this.pendingRelation;
+    if (!pending || !item || !item.valid) {
+      return false;
+    }
+    const target = pending.reverseOwner || pending.queue[0];
+    if (!target) {
+      return false;
+    }
+    const targetPath = normalizeVaultRelativePath(target.path || "");
+    const files = await this.readVaultStageFiles([targetPath]);
+    if (!files) {
+      return false;
+    }
+    const targetContent = files.get(targetPath);
+    const validation = validateBlockIdCandidate(item.id, targetContent, {
+      reservedIds: pending.reservedIds || new Set(),
+    });
+    if (!validation.valid || !tryDependencyId(targetPath, validation.id)) {
+      new Notice(
+        validation.message || "That block ID cannot be used in the target note",
+      );
+      return false;
+    }
+    const targetLines = String(targetContent).split(/\r?\n/);
+    if (
+      targetLines[target.line] !== target.rawLine ||
+      !isObsidianTaskAtLine(targetContent, target.line, null, targetLines)
+    ) {
+      return this.refuseDependencyStale();
+    }
+    // The planner resolves targets by `^block-id`, so the confirmed id is
+    // written to the target before the single commit below runs.
+    const updatedLine = applyPromptedBlockIdPreservingLegacyId(
+      targetLines[target.line],
+      validation.id,
+      targetPath,
+    );
+    if (updatedLine === null) {
+      new Notice(
+        "Link not added: this note path cannot be encoded as a block ID",
+      );
+      return false;
+    }
+    const prepared = await this.plugin.prepareDependencyTargetNote(
+      targetPath,
+      {
+        line: target.line,
+        from: targetLines[target.line],
+        text: updatedLine,
+      },
+    );
+    if (!prepared.ok) {
+      new Notice(`🪢 Could not prepare ${targetPath} (${prepared.reason})`);
+      return false;
+    }
+    pending.reservedIds.add(validation.id);
+    pending.overrides.set(`${target.path}\x00${target.line}`, {
+      blockId: validation.id,
+    });
+    pending.queue.shift();
+    if (pending.queue.length > 0) {
+      return this.promptNextRelationTargetId();
+    }
+    const add = pending.add;
+    const remove = pending.remove;
+    const relabel = pending.relabel;
+    const overrides = pending.overrides;
+    this.pendingRelation = null;
+    this.clearPendingBatch();
+    return this.commitRelationEdit({ add, remove, relabel }, overrides);
+  }
+
+  // The relation field (⇧↵): one input, suggestion chips from the live
+  // relation index, a live `S — ‹label› → T` sentence, and inline
+  // validation. ↵ commits (empty commits plain, LG3); Escape returns to
+  // the list and writes nothing.
+  showRelationLabelStage(targets, options = {}) {
+    const list = (Array.isArray(targets) ? targets : []).filter(
+      (target) => target && target.path,
+    );
+    if (list.length === 0) {
+      return false;
+    }
+    this.relationLabelTargets = list;
+    this.relationLabelMode = options.mode === "relabel" ? "relabel" : "add";
+    this.stage = "relation-label";
+    this.selectedIndex = 0;
+    const suggestions = this.readRelationLabelSuggestions("");
+    this.applyOptions({
+      items: suggestions.map((row) => ({
+        kind: "relation-label",
+        label: row.label,
+        count: row.count,
+        typed: false,
+      })),
+      title:
+        this.relationLabelMode === "relabel"
+          ? "🪢 Relabel the relation"
+          : "🪢 Link with a relation",
+      headerIcon: "link-2",
+      inputLabel: "Relation",
+      placeholder: relationStageLabelPlaceholder(suggestions),
+      resultsLabel: "Suggestions",
+      emptyText: "Type a relation, or leave it empty for a plain link",
+      footerHints: [
+        { keys: ["↵"], label: "link" },
+        { keys: ["esc"], label: "back to list" },
+      ],
+      getSubtitle: () => this.getRelationLabelSubtitle(),
+      filterItem: (item, query) =>
+        !item || item.kind !== "relation-label" || !item.label
+          ? true
+          : fuzzyMatchesText(item.label, query),
+      renderItem: (item, rowEl, query) =>
+        this.renderRelationLabelItem(item, rowEl, query),
+      openItem: (item) => this.commitRelationLabel(item),
+    });
+    if (this.headerIconEl) {
+      this.headerIconEl.empty();
+      applyIcon(this.headerIconEl, "link-2");
+      if (
+        this.headerIconEl.children &&
+        this.headerIconEl.children.length === 0
+      ) {
+        applyIcon(this.headerIconEl, "link");
+      }
+    }
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+    return false;
+  }
+
+  getRelationLabelSubtitle() {
+    const sources =
+      this.vaultStage && Array.isArray(this.vaultStage.sources)
+        ? this.vaultStage.sources
+        : [];
+    const targets = Array.isArray(this.relationLabelTargets)
+      ? this.relationLabelTargets
+      : [];
+    const sourceText = this.isLinkedFromStage()
+      ? (targets[0] && targets[0].displayText) || "This task"
+      : (sources[0] && sources[0].displayText) || "This task";
+    const firstText =
+      (targets[0] &&
+        (targets[0].displayText || targets[0].text || targets[0].blockId)) ||
+      "that task";
+    const targetText = this.isLinkedFromStage()
+      ? "this"
+      : targets.length > 1
+        ? `${firstText} +${targets.length - 1} more`
+        : firstText;
+    const raw = this.getRawQuery ? this.getRawQuery() : "";
+    return relationStageLiveSentence(sourceText, raw, targetText);
+  }
+
+  getRelationLabelPreviewItems() {
+    const raw = this.getRawQuery ? String(this.getRawQuery() || "") : "";
+    const typed = normalizeRelationLabel(raw);
+    const suggestions = this.readRelationLabelSuggestions(raw);
+    const out = [];
+    if (!raw.trim()) {
+      out.push(
+        Object.freeze({
+          kind: "relation-label",
+          label: null,
+          typed: false,
+          plain: true,
+          displayText: "Plain link (no relation)",
+          searchText: "",
+        }),
+      );
+    } else if (typed) {
+      out.push(
+        Object.freeze({
+          kind: "relation-label",
+          label: typed,
+          typed: true,
+          displayText: typed,
+          searchText: typed,
+        }),
+      );
+    } else {
+      return Object.freeze([
+        Object.freeze({
+          kind: "relation-label-invalid",
+          label: null,
+          reason: describeRelationLabelRefusal(raw) || "That relation cannot be used",
+          displayText: describeRelationLabelRefusal(raw) || "That relation cannot be used",
+          searchText: "",
+          disabled: true,
+        }),
+      ]);
+    }
+    for (const row of suggestions) {
+      if (!row || !row.label) {
+        continue;
+      }
+      if (typed && normalizeBulletPropertyValue(row.label) === normalizeBulletPropertyValue(typed)) {
+        continue;
+      }
+      out.push(
+        Object.freeze({
+          kind: "relation-label",
+          label: String(row.label),
+          count: Math.max(0, Math.floor(numericOrDefault(row.count, 0))),
+          typed: false,
+          displayText: String(row.label),
+          searchText: String(row.label),
+        }),
+      );
+      if (out.length >= 12) {
+        break;
+      }
+    }
+    return Object.freeze(out);
+  }
+
+  renderRelationLabelItem(item, rowEl, query) {
+    if (!item || item.kind === "relation-label-invalid") {
+      addElementClasses(rowEl, "bob-cnp-task-value-row", "is-disabled");
+      rowEl.setAttribute("aria-disabled", "true");
+      const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+      textEl.createDiv({
+        cls: "bob-cnp-row-title",
+        text: (item && item.reason) || "That relation cannot be used",
+      });
+      return;
+    }
+    addElementClasses(
+      rowEl,
+      "bob-cnp-task-value-row",
+      item.typed ? "is-create" : "is-existing",
+    );
+    const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
+    applyIcon(rowIcon, item.plain ? "link" : "link-2");
+    const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+    appendHighlighted(titleEl, item.plain ? "Plain link (no relation)" : item.label, query);
+    if (!item.plain && Number.isInteger(item.count) && item.count > 0) {
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta",
+        text: `used ${item.count}×`,
+      });
+    }
+  }
+
+  commitRelationLabel(item) {
+    const targets = Array.isArray(this.relationLabelTargets)
+      ? this.relationLabelTargets
+      : [];
+    if (targets.length === 0) {
+      return false;
+    }
+    if (item && item.kind === "relation-label-invalid") {
+      new Notice(item.reason || "That relation cannot be used");
+      return false;
+    }
+    const raw = this.getRawQuery ? String(this.getRawQuery() || "") : "";
+    let label = null;
+    if (item && item.kind === "relation-label" && !item.plain) {
+      label = item.typed || item.label ? normalizeRelationLabel(item.typed || item.label || "") : null;
+      if (!label) {
+        new Notice(describeRelationLabelRefusal(raw) || "That relation cannot be used");
+        return false;
+      }
+    } else if (item && item.plain) {
+      label = null;
+    } else {
+      // ↵ with a typed value and no selected suggestion: the input commits.
+      if (raw.trim() === "") {
+        label = null;
+      } else {
+        label = normalizeRelationLabel(raw);
+        if (!label) {
+          new Notice(describeRelationLabelRefusal(raw) || "That relation cannot be used");
+          return false;
+        }
+      }
+    }
+    const withLabel = targets.map((target) => ({ ...target, label }));
+    if (this.relationLabelMode === "relabel") {
+      return this.commitRelationEdit({ add: [], remove: [], relabel: withLabel });
+    }
+    return this.commitRelationEdit({ add: withLabel, remove: [], relabel: [] });
+  }
+
+  restoreRelationList() {
+    this.relationLabelTargets = null;
+    this.relationLabelMode = null;
+    this.stage = "value";
+    this.selectedIndex = 0;
+    const items = this.vaultStage
+      ? planRelationStageItemsFromVault(
+          this.vaultStage,
+          this.getQuery ? this.getQuery() : "",
+        )
+      : [];
+    this.resetLocalTaskMarks(items);
+    this.applyOptions(this.relationStageListOptions());
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+    this.refreshRelationConsequenceStrip();
+    return true;
+  }
+
+  readRelationLabelSuggestions(prefix) {
+    try {
+      const plugins =
+        (this.app && this.app.plugins && this.app.plugins.plugins) || {};
+      const holder = plugins["bob-ledger-tools"];
+      const api = holder && holder.api;
+      const index = api && api.relationIndex;
+      if (
+        !index ||
+        Number(index.version) < 1 ||
+        typeof index.labelSuggestions !== "function"
+      ) {
+        return [];
+      }
+      const rows = index.labelSuggestions(prefix || "");
+      if (rows && typeof rows.then === "function") {
+        return [];
+      }
+      if (!Array.isArray(rows)) {
+        return [];
+      }
+      return rows
+        .filter((row) => row && row.label)
+        .map((row) =>
+          Object.freeze({
+            label: String(row.label),
+            count: Math.max(0, Math.floor(numericOrDefault(row.count, 0))),
+          }),
+        )
+        .slice(0, 12);
+    } catch (_error) {
+      return [];
+    }
+  }
+}
+
+// ---- src/427-relation-stage-plugin.js ----
+// Links stage vault pool (`docs/task-relations.md` Rules 7-8).
+class BobNavigationHotkeysRelationStageMixin {
+  buildVaultRelationStage(args = {}) {
+    const notes = [];
+    for (const [path, content] of this.collectStageBufferNotes()) {
+      notes.push({ path, content });
+    }
+    return this.buildVaultRelationStageFromNotes(notes, args);
+  }
+
+  relationStageLiveIndex() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-ledger-tools"];
+      const api = holder && holder.api && holder.api.relationIndex;
+      if (!api || Number(api.version) < 1 || typeof api.incoming !== "function") return null;
+      if (typeof api.ready === "function" && api.ready() !== true) return null;
+      return api;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  decorateLinkedFromVaultStage(stage) {
+    if (!stage) return null;
+    const owner = (stage.sources || [])[0] || null;
+    let previousDailyPath = "";
+    try {
+      const paths = this.readDependencyVaultFileList() || [];
+      const daily = scheduledRecoveryDailyPaths(paths.map((path) => ({ path })));
+      previousDailyPath = normalizeVaultRelativePath(daily.previous || "");
+    } catch (_error) {
+      previousDailyPath = "";
+    }
+    const api = this.relationStageLiveIndex();
+    let current = [];
+    if (api && owner && owner.blockId) {
+      let incoming = [];
+      try {
+        incoming = api.incoming(owner.path, owner.blockId);
+      } catch (_error) {
+        incoming = [];
+      }
+      current = relationStageIncomingRowsFromEdges(
+        incoming,
+        stage.index,
+        previousDailyPath,
+      );
+    }
+    const linkedKeys = new Set(
+      current.map((row) => relationStageRowKey(row.path, row.blockId)),
+    );
+    return {
+      ...stage,
+      direction: "from",
+      current: Object.freeze(current),
+      linkedKeys,
+      previousDailyPath,
+      incomingNeedsScan: !api && Boolean(owner && owner.blockId),
+      title: `🪢 Linked from · ${String((owner && owner.displayText) || "this task").slice(0, 44)}`,
+    };
+  }
+
+  buildVaultRelationStageFromNotes(bufferNotes, args = {}) {
+    const ownerPath = normalizeVaultRelativePath(args.filePath || "");
+    const text = String(args.content || "");
+    const lines = text.split(/\r?\n/);
+    const parents = (Array.isArray(args.parentLines) ? args.parentLines : [])
+      .map((line) => Math.floor(numericOrDefault(line, Number.NaN)))
+      .filter((line) => Number.isFinite(line) && line >= 0 && line < lines.length);
+    const primary = parents.length > 0 ? parents[0] : -1;
+    const notes = (Array.isArray(bufferNotes) ? bufferNotes : []).slice();
+    const seen = new Set(notes.map((note) => normalizeVaultRelativePath(note.path || "")));
+    if (ownerPath && !seen.has(ownerPath)) {
+      notes.push({ path: ownerPath, content: text });
+      seen.add(ownerPath);
+    } else if (ownerPath) {
+      for (const note of notes) {
+        if (normalizeVaultRelativePath(note.path || "") === ownerPath) {
+          note.content = text;
+        }
+      }
+    }
+    const files = new Map(
+      notes.map((note) => [
+        normalizeVaultRelativePath(note.path || ""),
+        String(note.content || ""),
+      ]),
+    );
+    const cache = this.readStageTasksCache();
+    const dependentLines = new Set(parents);
+    const snapshots = createDependencySnapshotMap(notes);
+    const ownerSnapshot = ownerPath ? snapshots.get(ownerPath) : null;
+    let candidates = collectVaultRelationCandidatesFromSnapshots(snapshots, {
+      dependentPath: ownerPath,
+      dependentLines,
+    });
+    let cacheReady = false;
+    if (cache.ready) {
+      candidates = mergeRelationStageCacheCandidates(cache.tasks, notes, {
+        dependentPath: ownerPath,
+        dependentLines,
+      });
+      cacheReady = true;
+    }
+    const index = indexDependencyStageNotesFromSnapshots(snapshots);
+    registerStageCacheRecords(index, cache.ready ? cache.tasks : []);
+    const currentRows = [];
+    const linkedKeys = new Set();
+    for (const parentLine of parents) {
+      const resolved = resolveRelationStageCurrent(
+        text,
+        parentLine,
+        ownerPath,
+        index,
+        ownerSnapshot,
+      );
+      for (const row of resolved.ok ? resolved.rows : []) {
+        const key =
+          row.path && row.blockId
+            ? relationStageRowKey(row.path, row.blockId)
+            : `missing:${normalizeVaultRelativePath(row.path || "")}#^${row.blockId || ""}`;
+        if (row.path && row.blockId) {
+          linkedKeys.add(key);
+        }
+        if (!currentRows.some((entry) => entry.dedupeKey === key)) {
+          currentRows.push({ ...row, dedupeKey: key });
+        }
+      }
+    }
+    const current = currentRows.map(({ dedupeKey, ...row }) => Object.freeze(row));
+    const prerequisiteIds =
+      primary >= 0
+        ? relationStagePrerequisiteIdentities(text, primary, ownerPath, index)
+        : new Set();
+    let dependentKey = null;
+    let parentText = "";
+    if (primary >= 0) {
+      parentText = String(lines[primary] || "");
+      const parentBlockId = getTrailingBlockId(parentText);
+      dependentKey = parentBlockId
+        ? relationStageRowKey(ownerPath, parentBlockId)
+        : null;
+    }
+    const raw = {
+      candidates,
+      current: Object.freeze(current),
+      linkedKeys,
+      files,
+      index,
+      cacheReady,
+      prerequisiteIds,
+      todayMap: new Map(),
+      dependent: Object.freeze({
+        path: ownerPath,
+        line: primary,
+        key: dependentKey,
+        displayText: cleanTaskDisplayText(parentText) || null,
+        text: cleanTaskDisplayText(parentText) || null,
+      }),
+      parentLines: Object.freeze(parents.slice()),
+      poolSize: candidates.length,
+      refreshOf: null,
+    };
+    const decorated = decorateRelationVaultStage(raw);
+    return args.direction === "from"
+      ? this.decorateLinkedFromVaultStage(decorated)
+      : decorated;
+  }
+
+  // One-time vault scan for Links stages that opened while the Tasks cache
+  // was not Warm. Mirrors `refreshVaultDependencyStage`: bounded chunks with
+  // a real event-loop yield, tied to a request generation.
+  async refreshVaultRelationStage(modal, stage) {
+    const requestId = (this._vaultRelationRefreshSeq =
+      (this._vaultRelationRefreshSeq || 0) + 1);
+    if (modal) {
+      modal.vaultStageRefreshId = requestId;
+    }
+    const isLive = () =>
+      Boolean(
+        modal &&
+          modal.vaultStage === stage &&
+          modal.vaultStageRefreshId === requestId &&
+          typeof modal.isLocalTaskStage === "function" &&
+          modal.isLocalTaskStage(),
+      );
+    try {
+      if (!isLive()) {
+        return;
+      }
+      const vault = this.app && this.app.vault;
+      if (
+        !vault ||
+        typeof vault.getMarkdownFiles !== "function" ||
+        typeof vault.cachedRead !== "function"
+      ) {
+        return;
+      }
+      const files = vault.getMarkdownFiles() || [];
+      const snapshots = new Map();
+      let batchStart = Date.now();
+      for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+        const file = files[fileIndex];
+        if (!file || !file.path || !/\.md$/i.test(file.path)) {
+          continue;
+        }
+        if (!isLive()) {
+          return;
+        }
+        let content = null;
+        try {
+          content = String((await vault.cachedRead(file)) || "");
+        } catch (_readError) {
+          content = null;
+        }
+        if (!isLive()) {
+          return;
+        }
+        if (content !== null) {
+          const path = normalizeVaultRelativePath(file.path || "");
+          if (path) {
+            try {
+              snapshots.set(path, createDependencyNoteSnapshot(content));
+            } catch (_parseError) {
+              // Best effort: skip unparsable notes, keep the sync pool.
+            }
+          }
+        }
+        const elapsed = Date.now() - batchStart;
+        const atBatchEnd = (fileIndex + 1) % 12 === 0 || elapsed >= 10;
+        if (atBatchEnd && fileIndex + 1 < files.length) {
+          await vaultStageYield();
+          batchStart = Date.now();
+          if (!isLive()) {
+            return;
+          }
+        }
+      }
+      if (!isLive()) {
+        return;
+      }
+      for (const [path, content] of this.collectStageBufferNotes()) {
+        if (!isLive()) {
+          return;
+        }
+        const normalized = normalizeVaultRelativePath(path || "");
+        if (!normalized) {
+          continue;
+        }
+        try {
+          snapshots.set(normalized, createDependencyNoteSnapshot(content));
+        } catch (_parseError) {
+          // Best effort: keep any vault-scan snapshot already prepared.
+        }
+        if (snapshots.size % 12 === 0) {
+          await vaultStageYield();
+          if (!isLive()) {
+            return;
+          }
+        }
+      }
+      if (!isLive()) {
+        return;
+      }
+      const parentLines = Array.isArray(stage.parentLines) && stage.parentLines.length > 0
+        ? stage.parentLines.slice()
+        : [stage.dependent.line];
+      const request = {
+        filePath: stage.dependent.path,
+        content:
+          modal.editor && typeof modal.editor.getValue === "function"
+            ? String(modal.editor.getValue() || "")
+            : "",
+        parentLines,
+        direction: stage.direction || "to",
+      };
+      try {
+        snapshots.set(
+          normalizeVaultRelativePath(request.filePath || ""),
+          createDependencyNoteSnapshot(request.content),
+        );
+      } catch (_parseError) {
+        // Best effort: keep the buffer snapshot already prepared.
+      }
+      const fresh = this.buildVaultRelationStageFromSnapshots(
+        snapshots,
+        request,
+        { ready: false, tasks: [] },
+      );
+      fresh.refreshOf = stage;
+      fresh.cacheReady = true;
+      if (!isLive()) {
+        return;
+      }
+      modal.applyVaultStageItems(fresh);
+      if (fresh.direction === "from" && fresh.incomingNeedsScan) {
+        void this.refreshVaultLinkedFromIncoming(modal, fresh);
+      }
+    } catch (_error) {
+      // Best effort: the sync pool stays in place.
+    }
+  }
+
+  buildVaultRelationStageFromSnapshots(snapshots, args = {}, cache = null) {
+    const resolvedCache = cache || { ready: false, tasks: [] };
+    const ownerPath = normalizeVaultRelativePath(args.filePath || "");
+    const text = String(args.content || "");
+    const lines = text.split(/\r?\n/);
+    const parents = (Array.isArray(args.parentLines) ? args.parentLines : [])
+      .map((line) => Math.floor(numericOrDefault(line, Number.NaN)))
+      .filter((line) => Number.isFinite(line) && line >= 0 && line < lines.length);
+    const primary = parents.length > 0 ? parents[0] : -1;
+    const ownerSnapshot = ownerPath ? snapshots.get(ownerPath) : null;
+    let candidates = collectVaultRelationCandidatesFromSnapshots(snapshots, {
+      dependentPath: ownerPath,
+      dependentLines: new Set(parents),
+    });
+    let cacheReady = false;
+    if (resolvedCache.ready) {
+      const notes = [...snapshots].map(([path, snapshot]) => ({
+        path,
+        content: snapshot.text,
+      }));
+      candidates = mergeRelationStageCacheCandidates(resolvedCache.tasks, notes, {
+        dependentPath: ownerPath,
+        dependentLines: new Set(parents),
+      });
+      cacheReady = true;
+    }
+    const files = new Map(
+      [...snapshots].map(([path, snapshot]) => [path, String(snapshot.text || "")]),
+    );
+    const index = indexDependencyStageNotesFromSnapshots(snapshots);
+    registerStageCacheRecords(index, resolvedCache.ready ? resolvedCache.tasks : []);
+    const currentRows = [];
+    const linkedKeys = new Set();
+    for (const parentLine of parents) {
+      const resolved = resolveRelationStageCurrent(
+        text,
+        parentLine,
+        ownerPath,
+        index,
+        ownerSnapshot,
+      );
+      for (const row of resolved.ok ? resolved.rows : []) {
+        const key =
+          row.path && row.blockId
+            ? relationStageRowKey(row.path, row.blockId)
+            : `missing:${normalizeVaultRelativePath(row.path || "")}#^${row.blockId || ""}`;
+        if (row.path && row.blockId) {
+          linkedKeys.add(key);
+        }
+        if (!currentRows.some((entry) => entry.dedupeKey === key)) {
+          currentRows.push({ ...row, dedupeKey: key });
+        }
+      }
+    }
+    const current = currentRows.map(({ dedupeKey, ...row }) => Object.freeze(row));
+    const prerequisiteIds =
+      primary >= 0
+        ? relationStagePrerequisiteIdentities(text, primary, ownerPath, index)
+        : new Set();
+    let parentText = "";
+    if (primary >= 0) {
+      parentText = String(lines[primary] || "");
+    }
+    const decorated = decorateRelationVaultStage({
+      candidates,
+      current: Object.freeze(current),
+      linkedKeys,
+      files,
+      index,
+      cacheReady,
+      prerequisiteIds,
+      todayMap: new Map(),
+      dependent: Object.freeze({
+        path: ownerPath,
+        line: primary,
+        key:
+          primary >= 0 && getTrailingBlockId(parentText)
+            ? relationStageRowKey(ownerPath, getTrailingBlockId(parentText))
+            : null,
+        displayText: cleanTaskDisplayText(parentText) || null,
+        text: cleanTaskDisplayText(parentText) || null,
+      }),
+      parentLines: Object.freeze(parents.slice()),
+      poolSize: candidates.length,
+      refreshOf: null,
+    });
+    return args.direction === "from"
+      ? this.decorateLinkedFromVaultStage(decorated)
+      : decorated;
+  }
+
+  // The reverse stage's CURRENT is a raw-text scan only when the live index
+  // is unavailable or still warming. Each result is generation-guarded so a
+  // late vault read cannot overwrite a newer stage or an unsaved buffer.
+  async refreshVaultLinkedFromIncoming(modal, stage) {
+    const requestId = (this._linkedFromRefreshSeq = (this._linkedFromRefreshSeq || 0) + 1);
+    if (modal) modal.linkedFromRefreshId = requestId;
+    const isLive = () => Boolean(
+      modal &&
+      modal.vaultStage === stage &&
+      modal.linkedFromRefreshId === requestId &&
+      typeof modal.isLinkedFromStage === "function" &&
+      modal.isLinkedFromStage(),
+    );
+    try {
+      const owner = (stage.sources || [])[0] || null;
+      if (!owner || !owner.blockId || !isLive()) return;
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.getMarkdownFiles !== "function" || typeof vault.cachedRead !== "function") return;
+      const files = vault.getMarkdownFiles() || [];
+      const snapshots = new Map();
+      let batchStart = Date.now();
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        if (!file || !file.path || !/\.md$/i.test(file.path)) continue;
+        if (!isLive()) return;
+        let content = null;
+        try { content = String((await vault.cachedRead(file)) || ""); } catch (_error) { content = null; }
+        if (!isLive()) return;
+        if (content !== null) {
+          const path = normalizeVaultRelativePath(file.path);
+          if (path) {
+            try { snapshots.set(path, createDependencyNoteSnapshot(content)); } catch (_error) { /* skip */ }
+          }
+        }
+        if ((index + 1) % 12 === 0 || Date.now() - batchStart >= 10) {
+          await vaultStageYield();
+          batchStart = Date.now();
+          if (!isLive()) return;
+        }
+      }
+      for (const [path, content] of this.collectStageBufferNotes()) {
+        if (!isLive()) return;
+        const normalized = normalizeVaultRelativePath(path || "");
+        if (!normalized) continue;
+        try { snapshots.set(normalized, createDependencyNoteSnapshot(content)); } catch (_error) { /* skip */ }
+      }
+      if (modal.editor && typeof modal.editor.getValue === "function") {
+        const ownerPath = normalizeVaultRelativePath(owner.path || "");
+        try { snapshots.set(ownerPath, createDependencyNoteSnapshot(String(modal.editor.getValue() || ""))); } catch (_error) { /* keep */ }
+      }
+      if (!isLive()) return;
+      const index = indexDependencyStageNotesFromSnapshots(snapshots);
+      let previousDailyPath = stage.previousDailyPath || "";
+      let current = collectRelationStageIncomingFromSnapshots(
+        snapshots,
+        index,
+        owner,
+        previousDailyPath,
+      ).map((row) => {
+        const readOnly = row.archived === true || row.path === previousDailyPath;
+        return Object.freeze({
+          ...row,
+          readOnly,
+          disabled: readOnly,
+          disabledReason: readOnly ? "This source task is in a read-only note" : null,
+        });
+      });
+      const linkedKeys = new Set(current.map((row) => relationStageRowKey(row.path, row.blockId)));
+      const fresh = {
+        ...stage,
+        current: Object.freeze(current),
+        linkedKeys,
+        index,
+        incomingNeedsScan: false,
+      };
+      if (!isLive()) return;
+      modal.applyVaultStageItems(fresh);
+    } catch (_error) {
+      // The stage remains usable with an empty CURRENT list if scanning fails.
+    }
+  }
+
+  // Palette/chord entry for Ctrl+Shift+L: on a LINKS line open the owner's
+  // stage directly (LG8), else open the card one-shot on the Links to row.
+  openLinksStageAtCursor(editor) {
+    const cursor = getEditorCursor(editor);
+    if (!cursor) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const content = String(editor.getValue() || "");
+    if (editorSelectionSpansTasks(editor, content)) {
+      new Notice("Selection spans several tasks; put the cursor on one task");
+      return false;
+    }
+    const entry = resolveDependencyStageEntry(content, cursor.line);
+    if (entry.ok && (entry.lineKind === "links" || entry.lineKind === "linked-from")) {
+      setEditorCursorSafely(editor, entry.parentLine, 0);
+      return this.openBulletPropertyPicker(editor, {
+        reopenLinksStage: true,
+      });
+    }
+    return this.openBulletPropertyPicker(editor, {
+      initialTaskCardRow: "links-to",
+    });
+  }
+
+  // Reverse-stage chord/palette entry (`Ctrl+Shift+Alt+L`): line gestures
+  // always resolve to the owning task, then open Linked from… there.
+  openLinkedFromStageAtCursor(editor) {
+    const cursor = getEditorCursor(editor);
+    if (!cursor) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const content = String(editor.getValue() || "");
+    if (editorSelectionSpansTasks(editor, content)) {
+      new Notice("Selection spans several tasks; put the cursor on one task");
+      return false;
+    }
+    const entry = resolveDependencyStageEntry(content, cursor.line);
+    if (entry.ok && (entry.lineKind === "links" || entry.lineKind === "linked-from")) {
+      setEditorCursorSafely(editor, entry.parentLine, 0);
+      return this.openBulletPropertyPicker(editor, {
+        reopenLinkedFromStage: true,
+      });
+    }
+    return this.openBulletPropertyPicker(editor, {
+      initialTaskCardRow: "linked-from",
+    });
+  }
+
+  // nav api.relations.openStage for the Links ("to") direction. The reverse
+  // direction stays unavailable until nav-linked-from lands.
+  async openRelationStageForRef(ref = {}) {
+    try {
+      const path = normalizeVaultRelativePath(ref.path || "");
+      const hitLine = Math.floor(numericOrDefault(ref.line, Number.NaN));
+      if (!path || !Number.isFinite(hitLine)) {
+        return Object.freeze({ ok: false, reason: "invalid-ref" });
+      }
+      const view = this.getActiveMarkdownView();
+      const fileMatches =
+        view && view.file && normalizeVaultRelativePath(view.file.path) === path;
+      if (!fileMatches || !view.editor) {
+        return Object.freeze({ ok: false, reason: "note-not-open" });
+      }
+      const content = String(view.editor.getValue() || "");
+      const lines = content.split(/\r?\n/);
+      if (hitLine < 0 || hitLine >= lines.length) {
+        return Object.freeze({ ok: false, reason: "line-out-of-range" });
+      }
+      const owning = findOwningTaskLine(lines, hitLine);
+      if (owning === null) {
+        return Object.freeze({ ok: false, reason: "no-owning-task" });
+      }
+      setEditorCursorSafely(view.editor, owning, 0);
+      const from = ref.direction === "from";
+      const opened = this.openBulletPropertyPicker(view.editor, from
+        ? { reopenLinkedFromStage: true }
+        : { reopenLinksStage: true });
+      if (!opened) {
+        return Object.freeze({ ok: false, reason: "picker-not-opened" });
+      }
+      return Object.freeze({ ok: true });
+    } catch (_error) {
+      return Object.freeze({ ok: false, reason: "open-failed" });
+    }
+  }
+}
 // ---- src/430-picker-vault-batch.js ----
 class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
   async prepareVaultBatch(batch) {
@@ -46399,6 +49231,10 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
 
     if (this.blockIdMode === "blocks-source" && this.pendingBlocks) {
       return this.confirmBlocksSourceBlockId(item);
+    }
+
+    if (this.blockIdMode === "relation-target" && this.pendingRelation) {
+      return this.confirmRelationTargetBlockId(item);
     }
 
     return this.confirmSingleBlockId(item);
@@ -47880,6 +50716,62 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       this.handleTaskCardKeydown(event);
       return;
     }
+    // The relation field (⇧↵ from the Links stage): Escape and an empty
+    // Backspace return to the list and write nothing (LG3); ↵ commits
+    // through the list's openItem path.
+    if (this.stage === "relation-label" && event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.restoreRelationList();
+        return;
+      }
+      if (
+        event.key === "Backspace" &&
+        event.target === this.inputEl &&
+        this.inputEl &&
+        !String(this.inputEl.value || "")
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.restoreRelationList();
+        return;
+      }
+    }
+    // ⇧↵ on the Links stage opens the relation field (or relabels on
+    // CURRENT); plain ↵ keeps the list's toggle behavior (LG3, LG4).
+    if (
+      this.relationStage &&
+      this.stage === "value" &&
+      event &&
+      event.key === "Enter" &&
+      event.shiftKey === true &&
+      event.ctrlKey !== true &&
+      event.metaKey !== true &&
+      event.altKey !== true
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (this.opening) {
+        return;
+      }
+      const item = (this.visibleItems || [])[this.selectedIndex];
+      if (!item) {
+        return;
+      }
+      this.opening = true;
+      Promise.resolve(this.chooseRelationTask(item, { withLabel: true }))
+        .then((applied) => {
+          if (applied === true) {
+            this.close();
+          }
+        })
+        .catch(() => false)
+        .finally(() => {
+          this.opening = false;
+        });
+      return;
+    }
     // Ctrl+[ closes from every stage, including a focused date, filter,
     // reason, or Work summary field. Closing discards uncommitted state and
     // writes nothing, exactly as Escape does.
@@ -49111,6 +52003,7 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerFilterRenderMixin,
   BulletPropertyPickerCountedDependencyMixin,
   BulletPropertyPickerBlocksStageMixin,
+  BulletPropertyPickerRelationStageMixin,
   BulletPropertyPickerVaultBatchMixin,
   BulletPropertyPickerVaultCommitMixin,
   BulletPropertyPickerKeydownMixin,
@@ -51078,9 +53971,8 @@ function createBlocksNavApi(plugin) {
 }
 // ---- src/486-relations-nav-api.js ----
 // Additive relation capability for bob-ledger-tools (`docs/task-relations.md`
-// §10). Ships at version 0: `removeLink` works, `openStage` settles false
-// until nav-linked-from raises the namespace to v1 once both stage
-// directions open. Calls settle and never throw.
+// §10). Both stage directions and live chip removal are now available. Calls
+// settle and never throw.
 function createRelationsNavApi(plugin) {
   const settle = (call) => {
     try {
@@ -51098,9 +53990,17 @@ function createRelationsNavApi(plugin) {
     }
   };
   return Object.freeze({
-    version: 0,
-    openStage(_ref) {
-      return Promise.resolve({ ok: false, reason: "unavailable" });
+    version: 1,
+    openStage(ref) {
+      const direction = ref && ref.direction;
+      if (
+        (!direction || direction === "to" || direction === "from") &&
+        plugin &&
+        typeof plugin.openRelationStageForRef === "function"
+      ) {
+        return settle(() => plugin.openRelationStageForRef(ref || {}));
+      }
+      return Promise.resolve({ ok: false, reason: "invalid-direction" });
     },
     removeLink(sourceRef, targetRef) {
       if (!plugin || typeof plugin.removeRelationLinkByRef !== "function") {
@@ -51259,6 +54159,23 @@ class BobNavigationHotkeysPlugin extends Plugin {
       hotkeys: [{ modifiers: ["Ctrl", "Shift", "Alt"], key: "B" }],
       editorCallback: (editor) =>
         this.openBulletPropertyPicker(editor, { initialTaskCardRow: "blocks" }),
+    });
+
+    // Neither Obsidian core nor this repo binds Ctrl+Shift+L: the vault
+    // hotkeys.json carries no Shift+L chord and `⇧L` means "Less often"
+    // only on the separate decay card, never as an app chord.
+    this.addCommand({
+      id: "task-card-links",
+      name: "Task card: Links to (task relation)",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "L" }],
+      editorCallback: (editor) => this.openLinksStageAtCursor(editor),
+    });
+
+    this.addCommand({
+      id: "task-card-linked-from",
+      name: "Task card: Linked from (task relation)",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift", "Alt"], key: "L" }],
+      editorCallback: (editor) => this.openLinkedFromStageAtCursor(editor),
     });
 
     // No default hotkey (Q6): the vault-wide Depends on stage for the task
@@ -59741,12 +62658,28 @@ class BobNavigationHotkeysCancelPropertyMixin {
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : "";
-    // Only a managed Depends-On or BLOCKS line moves to its owning task
-    // first, so a direction-specific one-shot row never opens on the link
-    // bullet (`docs/task-dependencies.md` §6.1, §15.2). Every other line,
-    // including a plain child bullet or a nested Task Link, is unchanged.
+    // Only a managed Depends-On, BLOCKS, LINKS, or LINKED FROM line moves to its owning
+    // task first, so a direction-specific one-shot row never opens on the
+    // link bullet (`docs/task-dependencies.md` §6.1, §15.2). Every other
+    // line, including a plain child bullet or a nested Task Link, is
+    // unchanged.
     if (!options.taskSession && !options.initialProperty) {
       const entry = resolveDependencyStageEntry(content, cursor.line);
+      if (
+        entry.ok &&
+        (entry.lineKind === "links" || entry.lineKind === "linked-from")
+      ) {
+        setEditorCursorSafely(cm, entry.parentLine, 0);
+        const requestedRow = options.initialTaskCardRow || null;
+        const openLinkedFrom = requestedRow
+          ? requestedRow === "linked-from"
+          : entry.lineKind === "linked-from";
+        return this.openBulletPropertyPicker(cm, {
+          ...options,
+          reopenLinksStage: !openLinkedFrom,
+          reopenLinkedFromStage: openLinkedFrom,
+        });
+      }
       if (
         entry.ok &&
         (entry.lineKind === "depends-on" || entry.lineKind === "blocks")
@@ -59864,6 +62797,48 @@ class BobNavigationHotkeysCancelPropertyMixin {
         return false;
       }
     }
+    if (options.reopenLinksStage) {
+      let vaultFiles = [];
+      try {
+        vaultFiles = this.readDependencyVaultFileList() || [];
+      } catch (_error) {
+        vaultFiles = [];
+      }
+      const refusal = taskCardLinksToEntryRefusal({
+        content,
+        lineText,
+        cursorLine: cursor.line,
+        filePath,
+        taskSession,
+        baseDate: options.baseDate,
+        vaultFiles,
+      });
+      if (refusal) {
+        new Notice(refusal);
+        return false;
+      }
+    }
+    if (options.reopenLinkedFromStage) {
+      let vaultFiles = [];
+      try {
+        vaultFiles = this.readDependencyVaultFileList() || [];
+      } catch (_error) {
+        vaultFiles = [];
+      }
+      const refusal = taskCardLinkedFromAvailabilityReason(
+        taskSession || taskCardSessionContext({
+          content,
+          lineText,
+          cursorLine: cursor.line,
+          filePath,
+        }),
+        { content, lineText, cursorLine: cursor.line, filePath, baseDate: options.baseDate, vaultFiles },
+      );
+      if (refusal) {
+        new Notice(refusal);
+        return false;
+      }
+    }
     // Inbox routing (task-card-gate): arm once per card. Armed when the
     // file is an inbox note and the cursor task (counted: the first
     // target) is an open #task. Never armed for link sessions, non-task
@@ -59918,7 +62893,10 @@ class BobNavigationHotkeysCancelPropertyMixin {
         initialProperty: options.initialProperty || null,
         initialTaskCardRow: options.initialTaskCardRow || null,
         directStage:
-          options.directStage === true || options.reopenBlocksStage === true,
+          options.directStage === true ||
+          options.reopenBlocksStage === true ||
+          options.reopenLinksStage === true ||
+          options.reopenLinkedFromStage === true,
         random: options.random,
         baseDate: options.baseDate,
         reviewOrigin,
@@ -59942,6 +62920,16 @@ class BobNavigationHotkeysCancelPropertyMixin {
     // so a Depends-On-line redirect stays a direct stage.
     if (options.reopenBlocksStage && typeof picker.showBlocksStage === "function") {
       picker.showBlocksStage();
+    } else if (
+      options.reopenLinksStage &&
+      typeof picker.showRelationStage === "function"
+    ) {
+      picker.showRelationStage();
+    } else if (
+      options.reopenLinkedFromStage &&
+      typeof picker.showLinkedFromStage === "function"
+    ) {
+      picker.showLinkedFromStage();
     } else if (options.initialProperty) {
       const wanted = (picker.propertyItems || []).find(
         (item) =>
@@ -63520,9 +66508,7 @@ class BobNavigationHotkeysDependencyStageMixin {
     }
   }
 
-  // Palette command `edit-task-dependencies` (no default hotkey, Q6): the
-  // task under the cursor. Prose with several links, or a selection
-  // spanning tasks, is refused with a short reason.
+  // Palette command `edit-task-dependencies`: the task under the cursor.
   openDependencyStageAtCursor(editor) {
     const cursor = getEditorCursor(editor);
     if (!cursor) {
@@ -63539,6 +66525,8 @@ class BobNavigationHotkeysDependencyStageMixin {
       if (entry.parentLine !== cursor.line) {
         setEditorCursorSafely(editor, entry.parentLine, 0);
       }
+      if (entry.lineKind === "links") return this.openLinksStageAtCursor(editor);
+      if (entry.lineKind === "linked-from") return this.openLinkedFromStageAtCursor(editor);
       if (entry.lineKind === "blocks") {
         return this.openBulletPropertyPicker(editor, {
           reopenBlocksStage: true,
@@ -65121,6 +68109,252 @@ class BobNavigationHotkeysRelationEditMixin {
     }
   }
 
+  async mirrorRelationHandEdit(editor, parentPath, oldContent, baselineLine, currentOwnerLine) {
+    const path = normalizeVaultRelativePath(parentPath || "");
+    if (!editor || typeof editor.getValue !== "function" || !path) {
+      return Object.freeze({ mirrored: false, reason: "editor-unavailable" });
+    }
+    const before = String(oldContent || "");
+    const after = String(editor.getValue() || "");
+    if (!taskRelationLinesChanged(before, after).linksChanged) {
+      return Object.freeze({ mirrored: false, reason: "no-links-change" });
+    }
+    const oldLines = before.split(/\r?\n/);
+    const currentLines = after.split(/\r?\n/);
+    const oldHint = Math.max(0, Math.min(Math.floor(numericOrDefault(baselineLine, 0)), oldLines.length - 1));
+    const newHint = Math.max(0, Math.min(Math.floor(numericOrDefault(currentOwnerLine, oldHint)), currentLines.length - 1));
+    const oldOwner = findOwningTaskLine(oldLines, oldHint);
+    let owner = findOwningTaskLine(currentLines, newHint);
+    if (oldOwner === null || owner === null) {
+      return Object.freeze({ mirrored: false, reason: "owner-not-found" });
+    }
+    const oldId = getTrailingBlockId(oldLines[oldOwner]);
+    if (oldId) {
+      const relocated = findTaskLineByTrailingBlockId(currentLines, oldId);
+      if (relocated !== null) owner = relocated;
+    }
+    const resolveLinkpath = this.dependencyLinkpathResolver();
+    const vaultFiles = this.readDependencyVaultFileList() || [];
+    const collect = (content, ownerLine) => {
+      const lines = String(content || "").split(/\r?\n/);
+      const children = findLinksChildren(lines, ownerLine);
+      const entries = [];
+      for (const child of children) {
+        const parsed = parseLinksLine(String(lines[child] || ""), { isDirectChildOfTask: true });
+        if (parsed.verdict === "malformed") return null;
+        if (parsed.verdict === "accept") entries.push(...(parsed.entries || []));
+      }
+      const rows = new Map();
+      for (const entry of entries) {
+        const targetPath = normalizeVaultRelativePath(
+          dependencyPathForLinkNote(entry.note, path, resolveLinkpath) || "",
+        );
+        const blockId = normalizeBulletPropertyValue(entry.blockId || "");
+        if (!targetPath || !blockId) continue;
+        const identity = blocksIdentity(targetPath, blockId);
+        rows.set(identity, {
+          path: targetPath,
+          blockId,
+          label: entry.label || null,
+          link: relationLinkText(entry),
+        });
+      }
+      return rows;
+    };
+    const oldEdges = collect(before, oldOwner);
+    const newEdges = collect(after, owner);
+    if (!oldEdges || !newEdges) {
+      return Object.freeze({ mirrored: false, reason: "malformed-links-line" });
+    }
+    const changes = [];
+    for (const [identity, oldEdge] of oldEdges) {
+      if (!newEdges.has(identity)) changes.push({ kind: "remove", ...oldEdge });
+      else if ((newEdges.get(identity).label || null) !== (oldEdge.label || null)) {
+        changes.push({ kind: "relabel", ...newEdges.get(identity) });
+      }
+    }
+    for (const [identity, edge] of newEdges) {
+      if (!oldEdges.has(identity)) changes.push({ kind: "add", ...edge });
+    }
+    if (changes.length === 0) return Object.freeze({ mirrored: false, reason: "unchanged" });
+
+    const mirrorEnabled = loadRelationsLinkedFromLinesEnabled();
+    let currentContent = after;
+    let liveLines = currentContent.split(/\r?\n/);
+    let sourceBlockId = getTrailingBlockId(liveLines[owner]);
+    if (mirrorEnabled && newEdges.size > 0 && !sourceBlockId) {
+      const used = new Set();
+      for (const match of currentContent.matchAll(/\^([A-Za-z0-9-]+)(?=\s|$)/g)) used.add(match[1]);
+      sourceBlockId = mintDependentBlockId(liveLines[owner], used);
+      liveLines[owner] = appendBlockIdToLine(liveLines[owner], sourceBlockId);
+      currentContent = liveLines.join(relationLineEnding(currentContent));
+    }
+    const sourceIdentity = sourceBlockId ? blocksIdentity(path, sourceBlockId) : null;
+    const daily = scheduledRecoveryDailyPaths(vaultFiles.map((entry) => ({ path: typeof entry === "string" ? entry : entry.path })));
+    const previousDailyPath = normalizeVaultRelativePath((daily && daily.previous) || "");
+    const followUps = [];
+    const failed = new Set();
+    if (mirrorEnabled && sourceIdentity) {
+      for (const change of changes) {
+        if (!relationPathIsWritable(change.path, previousDailyPath)) continue;
+        let targetContent = change.path === path
+          ? currentContent
+          : await this.readDependencyNoteContent(change.path, null, "");
+        if (targetContent === null) {
+          failed.add(change.path);
+          continue;
+        }
+        const targetLines = targetContent.split(/\r?\n/);
+        const targetLine = findTaskLineByTrailingBlockId(targetLines, change.blockId);
+        if (targetLine === null) {
+          failed.add(change.path);
+          continue;
+        }
+        const children = findLinkedFromChildren(targetLines, targetLine);
+        const parsed = children.map((index) => parseLinkedFromLine(targetLines[index], { isDirectChildOfTask: true }));
+        if (parsed.some((entry) => entry.verdict === "malformed")) {
+          failed.add(change.path);
+          continue;
+        }
+        const existing = children.flatMap((index) => relationLinkedFromRows(change.path, targetLines[index], resolveLinkpath, vaultFiles));
+        const canonical = canonicalDependencyLink({ path, blockId: sourceBlockId }, change.path, vaultFiles).text;
+        const add = change.kind === "remove" ? [] : [{ identity: sourceIdentity, link: canonical, label: change.label || null }];
+        const remove = change.kind === "remove" ? [sourceIdentity] : [];
+        const desired = linkedFromDesiredAfterDelta(existing, (entry) => ({ identity: entry.identity, link: entry.link }), add, remove);
+        const planned = planLinkedFromLine(targetContent, targetLine, desired);
+        if (!planned.ok) {
+          failed.add(change.path);
+          continue;
+        }
+        if (change.path === path) {
+          currentContent = planned.nextContent;
+        } else if (planned.nextContent !== targetContent) {
+          followUps.push(Object.freeze({
+            path: change.path,
+            ownerBlockId: change.blockId,
+            add: Object.freeze(add),
+            remove: Object.freeze(remove),
+            preimage: targetContent,
+            today: new Date(),
+          }));
+        }
+      }
+    }
+    if (currentContent !== after) {
+      const written = await this.writeRelationEditNote(path, after, currentContent);
+      if (!written.ok) return Object.freeze({ mirrored: false, reason: "changed" });
+    }
+    if (followUps.length > 0) {
+      const result = await this.applyRelationFollowUps(followUps);
+      for (const failedPath of result.failed || []) failed.add(failedPath);
+    }
+    if (failed.size > 0) new Notice("🪢 LINKED FROM not updated");
+    return Object.freeze({ mirrored: true, failed: Object.freeze([...failed]) });
+  }
+
+  async removeAllRelationLinksByRef(sourceRef = {}) {
+    try {
+      const path = normalizeVaultRelativePath(sourceRef.path || "");
+      if (!path) return Object.freeze({ ok: false, reason: "invalid-ref" });
+      const original = await this.readDependencyNoteContent(path, null, "");
+      if (original === null) return Object.freeze({ ok: false, reason: "target-not-found" });
+      const lines = original.split(/\r?\n/);
+      let owner = Math.floor(numericOrDefault(sourceRef.line, Number.NaN));
+      if (sourceRef.blockId) {
+        const byId = findTaskLineByTrailingBlockId(lines, sourceRef.blockId);
+        if (byId !== null) owner = byId;
+      }
+      if (!Number.isFinite(owner) || owner < 0 || owner >= lines.length || !isObsidianTaskAtLine(original, owner)) {
+        return Object.freeze({ ok: false, reason: "not-task" });
+      }
+      const children = findLinksChildren(lines, owner);
+      const entries = [];
+      for (const child of children) {
+        const parsed = parseLinksLine(String(lines[child] || ""), { isDirectChildOfTask: true });
+        if (parsed.verdict === "malformed") {
+          return Object.freeze({ ok: false, reason: "malformed-links-line", notice: "its LINKS line is malformed" });
+        }
+        if (parsed.verdict === "accept") entries.push(...(parsed.entries || []));
+      }
+      if (entries.length === 0) return Object.freeze({ ok: true, removed: 0, mirrorFailed: [] });
+      const planned = planLinksEdit(original, owner, {
+        remove: entries.map((entry) => relationLinkText(entry)),
+      });
+      if (!planned.ok) return Object.freeze({ ok: false, reason: planned.reason });
+      let nextContent = planned.nextContent;
+      const sourceBlockId = getTrailingBlockId(lines[owner]);
+      const followUps = [];
+      const mirrorFailed = new Set();
+      const enabled = loadRelationsLinkedFromLinesEnabled();
+      const vaultFiles = this.readDependencyVaultFileList() || [];
+      const daily = scheduledRecoveryDailyPaths(vaultFiles.map((entry) => ({ path: typeof entry === "string" ? entry : entry.path })));
+      const previousDailyPath = normalizeVaultRelativePath((daily && daily.previous) || "");
+      const resolveLinkpath = this.dependencyLinkpathResolver();
+      if (enabled && sourceBlockId) {
+        const sourceIdentity = blocksIdentity(path, sourceBlockId);
+        const targets = new Map();
+        for (const entry of entries) {
+          const targetPath = normalizeVaultRelativePath(dependencyPathForLinkNote(entry.note, path, resolveLinkpath) || "");
+          const blockId = normalizeBulletPropertyValue(entry.blockId || "");
+          if (targetPath && blockId) targets.set(`${targetPath}\x00${blockId}`, { path: targetPath, blockId });
+        }
+        for (const target of targets.values()) {
+          if (!relationPathIsWritable(target.path, previousDailyPath)) continue;
+          const targetContent = target.path === path
+            ? nextContent
+            : await this.readDependencyNoteContent(target.path, null, "");
+          if (targetContent === null) {
+            mirrorFailed.add(target.path);
+            continue;
+          }
+          const targetLines = targetContent.split(/\r?\n/);
+          const targetLine = findTaskLineByTrailingBlockId(targetLines, target.blockId);
+          if (targetLine === null) continue;
+          const mirrors = findLinkedFromChildren(targetLines, targetLine);
+          const parsedMirrors = mirrors.map((index) => parseLinkedFromLine(targetLines[index], { isDirectChildOfTask: true }));
+          if (parsedMirrors.some((entry) => entry.verdict === "malformed")) {
+            mirrorFailed.add(target.path);
+            continue;
+          }
+          const existing = mirrors.flatMap((index) => relationLinkedFromRows(target.path, targetLines[index], resolveLinkpath, vaultFiles));
+          const desired = linkedFromDesiredAfterDelta(existing, (entry) => ({ identity: entry.identity, link: entry.link }), [], [sourceIdentity]);
+          const mirrorPlan = planLinkedFromLine(targetContent, targetLine, desired);
+          if (!mirrorPlan.ok) {
+            mirrorFailed.add(target.path);
+            continue;
+          }
+          if (target.path === path) nextContent = mirrorPlan.nextContent;
+          else if (mirrorPlan.nextContent !== targetContent) {
+            followUps.push(Object.freeze({
+              path: target.path,
+              ownerBlockId: target.blockId,
+              add: Object.freeze([]),
+              remove: Object.freeze([sourceIdentity]),
+              preimage: targetContent,
+              today: new Date(),
+            }));
+          }
+        }
+      }
+      if (nextContent !== original) {
+        const write = await this.writeRelationEditNote(path, original, nextContent);
+        if (!write.ok) return Object.freeze({ ok: false, reason: "changed — reopen" });
+      }
+      if (followUps.length > 0) {
+        const outcome = await this.applyRelationFollowUps(followUps);
+        for (const failedPath of outcome.failed || []) mirrorFailed.add(failedPath);
+      }
+      return Object.freeze({
+        ok: true,
+        removed: entries.length,
+        mirrorFailed: Object.freeze([...mirrorFailed]),
+        notice: mirrorFailed.size > 0 ? "🪢 LINKED FROM not updated" : null,
+      });
+    } catch (_error) {
+      return Object.freeze({ ok: false, reason: "remove-failed" });
+    }
+  }
+
   async removeRelationLinkByRef(sourceRef = {}, targetRef = {}) {
     try {
       const sourcePath = normalizeVaultRelativePath(sourceRef.path || "");
@@ -65838,12 +69072,25 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       removedText,
       baselineLine,
     );
+    if (relationChange.linksChanged && relationOnly) {
+      const relationMirror = await this.mirrorRelationHandEdit(
+        editor,
+        parentPath,
+        before,
+        baselineLine,
+        editedLine,
+      );
+      if (relationChange.linkedFromChanged) {
+        new Notice(TASK_LINKED_FROM_LINE_NOTICE);
+      }
+      return relationMirror;
+    }
     if (relationChange.linkedFromChanged) {
       new Notice(TASK_LINKED_FROM_LINE_NOTICE);
     }
     if (relationChange.changed && !plan) {
-      // Authored LINKS edits are deliberately inert here until nav-linked-from
-      // lands; a LINKED FROM edit only gets the generated-line notice above.
+      // A LINKED FROM edit is generated data: show the notice and let the
+      // reconcile path restore it. Authored LINKS edits are handled above.
       return Object.freeze({ mirrored: false, reason: "relation-only" });
     }
     if (!plan) {
@@ -66833,6 +70080,11 @@ class BobNavigationHotkeysJumpKeyMixin {
       options.initialTaskCardRow = "depends-on";
     } else if (chord === "blocks") {
       options.initialTaskCardRow = "blocks";
+    } else if (chord === "links-to") {
+      options.initialTaskCardRow = "links-to";
+    } else if (chord === "linked-from") {
+      new Notice("Count works with Links to (Ctrl+Shift+L)");
+      return false;
     }
     return this.openBulletPropertyPicker(view.editor, options);
   }
@@ -66847,14 +70099,19 @@ class BobNavigationHotkeysJumpKeyMixin {
       return null;
     }
     if (event.altKey) {
-      // Option may change `key` on macOS; the physical key identity remains B.
-      return event.code === "KeyB" ? "blocks" : null;
+      // Option may change `key` on macOS; physical identity remains stable.
+      if (event.code === "KeyB") return "blocks";
+      if (event.code === "KeyL") return "linked-from";
+      return null;
     }
     if (event.code === "KeyP" || event.key === "p" || event.key === "P") {
       return "property";
     }
     if (event.code === "KeyB" || event.key === "b" || event.key === "B") {
       return "depends-on";
+    }
+    if (event.code === "KeyL" || event.key === "l" || event.key === "L") {
+      return "links-to";
     }
     return null;
   }
@@ -76588,6 +79845,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysBlocksApiMixin,
   BobNavigationHotkeysRelationEditMixin,
   BobNavigationHotkeysRelationFollowUpsMixin,
+  BobNavigationHotkeysRelationStageMixin,
   BobNavigationHotkeysDependencyMirrorMixin,
   BobNavigationHotkeysJumpKeyMixin,
   BobNavigationHotkeysCountedTaskMoveMixin,
@@ -76956,6 +80214,8 @@ module.exports.helpers = {
   planTaskCard,
   taskCardBlocksAvailabilityReason,
   taskCardBlocksSummary,
+  TASK_CARD_ROW_ORDER,
+  TASK_CARD_ROW_SHORTCUTS,
   resolveTaskCardKey,
   renderTaskCardView,
   orderedTaskCardRows,
@@ -77309,6 +80569,32 @@ module.exports.helpers = {
   blocksStageConsequenceStrip,
   blocksStageSubtitle,
   blocksStageGuard,
+  relationStageRowKey,
+  inverseRelationPhrase,
+  relationStageIncomingRowsFromEdges,
+  collectRelationStageIncomingFromSnapshots,
+  isRelationStageExcludedPath,
+  isRelationStageArchivedPath,
+  collectVaultRelationCandidatesFromSnapshots,
+  mergeRelationStageCacheCandidates,
+  resolveRelationStageCurrent,
+  relationStagePrerequisiteIdentities,
+  collectRelationStageSources,
+  decorateRelationVaultStage,
+  planRelationStageView,
+  planLinkedFromStageView,
+  compareRelationStageCanonical,
+  planRelationStageItemsFromVault,
+  planRelationStageCommit,
+  relationStageSubtitle,
+  relationStageConsequenceStrip,
+  relationStageLiveSentence,
+  describeRelationLabelRefusal,
+  taskCardLinksToAvailabilityReason,
+  taskCardLinksToEntryRefusal,
+  taskCardLinksToEntries,
+  taskCardLinksToSummary,
+  taskCardLinksToDetail,
   resolveDependencyStageEntry,
   normalizeStageCacheTask,
   mergeStageCacheCandidates,

@@ -596,7 +596,7 @@ test("physical counted property chord consumes only explicit normal-mode Vim cou
   assert.equal(opens.length, 1);
 });
 
-test("physical counted Ctrl+Shift+B and Ctrl+Shift+Alt+B route to their Task Card rows", () => {
+test("physical counted relation and dependency chords route or refuse by direction", () => {
   const makeEvent = (overrides = {}) => {
     const calls = { prevent: 0, stop: 0, immediate: 0 };
     return {
@@ -682,6 +682,35 @@ test("physical counted Ctrl+Shift+B and Ctrl+Shift+Alt+B route to their Task Car
     initialTaskCardRow: "blocks",
   });
   assert.deepEqual(countedBlocks.calls, { prevent: 1, stop: 1, immediate: 1 });
+
+  inputState.keyBuffer = ["2"];
+  inputState.repeat = 2;
+  inputState.getRepeat = () => 2;
+  plugin.handledCountedBulletPropertyEvents = new WeakSet();
+  const countedLinks = makeEvent({ key: "L", code: "KeyL" });
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(countedLinks), true);
+  assert.deepEqual(opens[3], {
+    countExplicit: true,
+    additionalTaskCount: 2,
+    initialTaskCardRow: "links-to",
+  });
+
+  inputState.keyBuffer = ["2"];
+  inputState.repeat = 2;
+  inputState.getRepeat = () => 2;
+  plugin.handledCountedBulletPropertyEvents = new WeakSet();
+  notices.length = 0;
+  const countedLinkedFrom = makeEvent({ key: "ø", code: "KeyL", altKey: true });
+  assert.equal(plugin.isCountedBulletPropertyKeydown(countedLinkedFrom), true);
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(countedLinkedFrom), false);
+  assert.deepEqual(opens, [
+    { countExplicit: true, additionalTaskCount: 2, initialTaskCardRow: "depends-on" },
+    { countExplicit: true, additionalTaskCount: 2 },
+    { countExplicit: true, additionalTaskCount: 2, initialTaskCardRow: "blocks" },
+    { countExplicit: true, additionalTaskCount: 2, initialTaskCardRow: "links-to" },
+  ]);
+  assert.deepEqual(notices, ["Count works with Links to (Ctrl+Shift+L)"]);
+  assert.deepEqual(countedLinkedFrom.calls, { prevent: 1, stop: 1, immediate: 1 });
 
   inputState.getRepeat = () => null;
   const bare = makeEvent();

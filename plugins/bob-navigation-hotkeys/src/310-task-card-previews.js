@@ -436,6 +436,25 @@ function planTaskCard(context = {}) {
     context.taskCache,
     context.baseDate,
   );
+  const linksToUnavailableReason = taskCardLinksToAvailabilityReason(
+    session,
+    context,
+  );
+  const linksToSummary =
+    session.type === "single" && session.valid
+      ? taskCardLinksToSummary(session, context)
+      : null;
+  const linksToDetail = linksToSummary ? linksToSummary.detail : "";
+  const linksToAvailable = !linksToUnavailableReason;
+  const linkedFromUnavailableReason = taskCardLinkedFromAvailabilityReason(
+    session,
+    context,
+  );
+  const linkedFromSummary =
+    session.type === "single" && session.valid
+      ? taskCardLinkedFromSummary(session, context)
+      : null;
+  const linkedFromAvailable = !linkedFromUnavailableReason;
   const blocksDetail = blocksSummary
     ? `${formatCountLabel(blocksSummary.count, "task")}${
         blocksSummary.frees > 0 ? ` · frees ${blocksSummary.frees}` : ""
@@ -492,6 +511,28 @@ function planTaskCard(context = {}) {
       enabled: blocksAvailable,
       unavailableReason: blocksAvailable ? null : blocksUnavailableReason,
       detail: blocksDetail,
+      targetCount: session.targetCount,
+      deletable: false,
+    }),
+    row({
+      id: "links-to",
+      kind: "action",
+      action: "links",
+      label: "Links to",
+      enabled: linksToAvailable,
+      unavailableReason: linksToAvailable ? null : linksToUnavailableReason,
+      detail: linksToDetail,
+      targetCount: session.targetCount,
+      deletable: false,
+    }),
+    row({
+      id: "linked-from",
+      kind: "action",
+      action: "linked-from",
+      label: "Linked from",
+      enabled: linkedFromAvailable,
+      unavailableReason: linkedFromAvailable ? null : linkedFromUnavailableReason,
+      detail: linkedFromSummary ? linkedFromSummary.detail : "",
       targetCount: session.targetCount,
       deletable: false,
     }),
@@ -629,6 +670,8 @@ function planTaskCard(context = {}) {
       recommendation: Boolean(recommendation && recommendation.available),
       dependencies: dependencyAvailable,
       blocks: blocksAvailable,
+      linksTo: linksToAvailable,
+      linkedFrom: linkedFromAvailable,
       refresh: refreshAvailable,
       cancel: cancelAvailable,
       lane: laneAvailable,
@@ -698,8 +741,8 @@ function resolveTaskCardKey(model, event) {
   const movement = (direction) =>
     Object.freeze({ type: "move-selection", direction, fromRowId: model.selectedRowId });
   const actionKey =
-    (!modified && /^[0-9bfx]$/i.test(key)) ||
-    (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || key === "B")) ||
+    (!modified && /^[0-9bflx]$/i.test(key)) ||
+    (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || event.code === "KeyL" || key === "B" || key === "L")) ||
     (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
     (meta && !ctrl && !shift && !alt && key === "Enter") ||
     (alt && !ctrl && !meta && !shift && lower === "n");
@@ -750,6 +793,19 @@ function resolveTaskCardKey(model, event) {
     return taskCardIntentForRow(rowById("lane"));
   }
   if (ctrl && !meta && !shift && !alt && lower === "d") {
+    if (selected && selected.id === "links-to") {
+      return Object.freeze({
+        type: "clear-relations",
+        rowId: selected.id,
+        targetCount: model.session.targetCount,
+      });
+    }
+    if (selected && selected.id === "linked-from") {
+      return unavailable(
+        "clear-relations",
+        TASK_LINKED_FROM_LINE_NOTICE,
+      );
+    }
     if (!selected || selected.kind !== "property" || !selected.deletable) {
       return unavailable("delete-property", "Only a selected property can be deleted");
     }
@@ -801,6 +857,9 @@ function resolveTaskCardKey(model, event) {
   if (!modified && lower === "b") {
     return taskCardIntentForRow(rowById("depends-on"));
   }
+  if (!modified && lower === "l") {
+    return taskCardIntentForRow(rowById("links-to"));
+  }
   if (
     shift &&
     !ctrl &&
@@ -809,6 +868,15 @@ function resolveTaskCardKey(model, event) {
     (event.code === "KeyB" || key === "B")
   ) {
     return taskCardIntentForRow(rowById("blocks"));
+  }
+  if (
+    shift &&
+    !ctrl &&
+    !meta &&
+    !alt &&
+    (event.code === "KeyL" || key === "L")
+  ) {
+    return taskCardIntentForRow(rowById("linked-from"));
   }
   if (!modified && lower === "f") {
     return taskCardIntentForRow(rowById("review-every"));
@@ -832,6 +900,8 @@ const TASK_CARD_ROW_ORDER = Object.freeze([
   "schedule",
   "depends-on",
   "blocks",
+  "links-to",
+  "linked-from",
   "review-every",
   "lane",
   "cancel",
@@ -841,6 +911,8 @@ const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
   schedule: "Enter",
   "depends-on": "b",
   blocks: "⇧B",
+  "links-to": "l",
+  "linked-from": "⇧L",
   "review-every": "f",
   lane: "Alt+N",
   cancel: "x",

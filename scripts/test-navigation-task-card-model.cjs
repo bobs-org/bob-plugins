@@ -117,7 +117,7 @@ test("card model builds stable rows, scope metadata, and an existing recommendat
   assert.equal(model.selectedRowId, "schedule");
   assert.deepEqual(
     model.rows.map((row) => row.id),
-    ["schedule", "depends-on", "blocks", "review-every", "cancel", "lane"],
+    ["schedule", "depends-on", "blocks", "links-to", "linked-from", "review-every", "cancel", "lane"],
   );
   assert.ok(model.rows.find((row) => row.id === "schedule").enabled);
   assert.ok(model.rows.find((row) => row.id === "depends-on").enabled);

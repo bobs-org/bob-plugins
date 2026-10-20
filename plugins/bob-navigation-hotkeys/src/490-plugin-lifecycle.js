@@ -146,6 +146,23 @@ class BobNavigationHotkeysPlugin extends Plugin {
         this.openBulletPropertyPicker(editor, { initialTaskCardRow: "blocks" }),
     });
 
+    // Neither Obsidian core nor this repo binds Ctrl+Shift+L: the vault
+    // hotkeys.json carries no Shift+L chord and `⇧L` means "Less often"
+    // only on the separate decay card, never as an app chord.
+    this.addCommand({
+      id: "task-card-links",
+      name: "Task card: Links to (task relation)",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "L" }],
+      editorCallback: (editor) => this.openLinksStageAtCursor(editor),
+    });
+
+    this.addCommand({
+      id: "task-card-linked-from",
+      name: "Task card: Linked from (task relation)",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift", "Alt"], key: "L" }],
+      editorCallback: (editor) => this.openLinkedFromStageAtCursor(editor),
+    });
+
     // No default hotkey (Q6): the vault-wide Depends on stage for the task
     // under the cursor (`docs/task-dependencies.md` §6.1).
     this.addCommand({

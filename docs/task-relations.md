@@ -1,6 +1,6 @@
 ---
 title: "Task relations"
-description: "How 🪢 LINKS and LINKED FROM rows render as live chips."
+description: "How 🪢 LINKS and LINKED FROM rows render as live chips, and how the Task Card links tasks."
 ---
 
 A task relates to another task with an entry on its `🪢 **LINKS:**` line. The
@@ -29,6 +29,44 @@ relation index (`api.relationIndex`), never the stored mirror:
 - The shared `toggle-dependency-chips` command covers both rows.
 
 Without this plugin, both lines still read as English.
+
+## Linking from the Task Card
+
+The Task Card's `Links to…` row (`l`, after `Blocks…`) shows
+`N · <first label> <first target> +K` from the owner's LINKS line. Its
+`Linked from…` row (`⇧L`) shows the counted source tasks from the live
+relation index when ready; its detail stays empty while unavailable. Both
+actions work on open and closed tasks. `Ctrl+Shift+L` (command
+`bob-navigation-hotkeys:task-card-links`) opens Links to, and
+`Ctrl+Shift+Alt+L` (command
+`bob-navigation-hotkeys:task-card-linked-from`) opens Linked from. On
+either relation line, `Ctrl+Shift+P` opens the owner's matching stage.
+
+The Links stage title reads `🪢 Links · <task>` with the subtitle
+`Links to K · searching P tasks · ⇥ to mark several · does not block`.
+CURRENT holds the outgoing links with label pills in authored order,
+RESULTS holds open tasks, and CLOSED holds closed tasks then `done/`
+archives. `↵` links (or unlinks on CURRENT), `⇧↵` opens the relation field
+(or relabels on CURRENT), `⇥` marks several, and id-less targets run the
+block-ID prompt once on apply. The relation field offers suggestions from
+the live index with a live `S — ‹label› → T` sentence; an empty field
+commits a plain link. Same-note writes share one undo entry; cross-note
+mirrors follow best-effort with a `· 🪢 LINKED FROM not updated` suffix when
+they cannot.
+
+Linked from lists incoming sources in CURRENT from `api.relationIndex`, or
+from a generation-guarded vault scan while that index is unavailable. Its
+RESULTS are editable source tasks that can link here; Enter applies or
+removes the selected source, and `Shift+Enter` adds or changes the relation
+label. Built-in labels use their inverse phrase in CURRENT. `N<Ctrl+Shift+L>`
+applies one Links-to target and label to each of N+1 source tasks;
+`N<Ctrl+Shift+Alt+L>` is refused because one target cannot be chosen for a
+reverse batch. `Ctrl+D` on Links to removes every outgoing relation and
+updates generated mirrors; Linked from refuses `Ctrl+D` because its row is
+generated. Hand edits to LINKS update LINKED FROM with the same-note undo
+transaction or checked cross-note mirrors; `Ctrl+Z` runs the mirror again.
+Editing LINKED FROM shows the generated-line notice and does not change an
+edge.
 
 ## Related
 

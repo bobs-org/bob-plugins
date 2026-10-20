@@ -249,6 +249,7 @@ function taskRelationLineSnapshot(content) {
   const lines = text.split(/\r?\n/u);
   const all = [];
   const linkedFrom = [];
+  const links = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (!isTaskRelationLine(line)) continue;
@@ -259,8 +260,9 @@ function taskRelationLineSnapshot(content) {
     const signature = `${owner}\u0000${line}`;
     all.push(signature);
     if (isTaskLinkedFromLine(line)) linkedFrom.push(signature);
+    if (parseLinksLine(line).verdict !== "not-a-line") links.push(signature);
   }
-  return { all: all.sort(), linkedFrom: linkedFrom.sort() };
+  return { all: all.sort(), linkedFrom: linkedFrom.sort(), links: links.sort() };
 }
 
 function taskRelationLinesChanged(before, after) {
@@ -270,6 +272,7 @@ function taskRelationLinesChanged(before, after) {
     changed: JSON.stringify(oldLines.all) !== JSON.stringify(newLines.all),
     linkedFromChanged:
       JSON.stringify(oldLines.linkedFrom) !== JSON.stringify(newLines.linkedFrom),
+    linksChanged: JSON.stringify(oldLines.links) !== JSON.stringify(newLines.links),
   });
 }
 

@@ -365,6 +365,7 @@ test("card renderer paints header, banner, strip, stable rows, more, and footer 
   assert.match(text, /Schedule…/);
   assert.match(text, /Blocked by…/);
   assert.match(text, /Blocks…/);
+  assert.match(text, /Linked from…/);
   assert.match(text, /Review every…/);
   assert.match(text, /Cancel/);
   assert.match(text, /effort/);
@@ -380,6 +381,8 @@ test("card renderer paints header, banner, strip, stable rows, more, and footer 
     "schedule",
     "depends-on",
     "blocks",
+    "links-to",
+    "linked-from",
     "review-every",
     "lane",
     "cancel",

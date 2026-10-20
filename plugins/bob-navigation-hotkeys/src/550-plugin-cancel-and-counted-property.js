@@ -308,12 +308,28 @@ class BobNavigationHotkeysCancelPropertyMixin {
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : "";
-    // Only a managed Depends-On or BLOCKS line moves to its owning task
-    // first, so a direction-specific one-shot row never opens on the link
-    // bullet (`docs/task-dependencies.md` §6.1, §15.2). Every other line,
-    // including a plain child bullet or a nested Task Link, is unchanged.
+    // Only a managed Depends-On, BLOCKS, LINKS, or LINKED FROM line moves to its owning
+    // task first, so a direction-specific one-shot row never opens on the
+    // link bullet (`docs/task-dependencies.md` §6.1, §15.2). Every other
+    // line, including a plain child bullet or a nested Task Link, is
+    // unchanged.
     if (!options.taskSession && !options.initialProperty) {
       const entry = resolveDependencyStageEntry(content, cursor.line);
+      if (
+        entry.ok &&
+        (entry.lineKind === "links" || entry.lineKind === "linked-from")
+      ) {
+        setEditorCursorSafely(cm, entry.parentLine, 0);
+        const requestedRow = options.initialTaskCardRow || null;
+        const openLinkedFrom = requestedRow
+          ? requestedRow === "linked-from"
+          : entry.lineKind === "linked-from";
+        return this.openBulletPropertyPicker(cm, {
+          ...options,
+          reopenLinksStage: !openLinkedFrom,
+          reopenLinkedFromStage: openLinkedFrom,
+        });
+      }
       if (
         entry.ok &&
         (entry.lineKind === "depends-on" || entry.lineKind === "blocks")
@@ -431,6 +447,48 @@ class BobNavigationHotkeysCancelPropertyMixin {
         return false;
       }
     }
+    if (options.reopenLinksStage) {
+      let vaultFiles = [];
+      try {
+        vaultFiles = this.readDependencyVaultFileList() || [];
+      } catch (_error) {
+        vaultFiles = [];
+      }
+      const refusal = taskCardLinksToEntryRefusal({
+        content,
+        lineText,
+        cursorLine: cursor.line,
+        filePath,
+        taskSession,
+        baseDate: options.baseDate,
+        vaultFiles,
+      });
+      if (refusal) {
+        new Notice(refusal);
+        return false;
+      }
+    }
+    if (options.reopenLinkedFromStage) {
+      let vaultFiles = [];
+      try {
+        vaultFiles = this.readDependencyVaultFileList() || [];
+      } catch (_error) {
+        vaultFiles = [];
+      }
+      const refusal = taskCardLinkedFromAvailabilityReason(
+        taskSession || taskCardSessionContext({
+          content,
+          lineText,
+          cursorLine: cursor.line,
+          filePath,
+        }),
+        { content, lineText, cursorLine: cursor.line, filePath, baseDate: options.baseDate, vaultFiles },
+      );
+      if (refusal) {
+        new Notice(refusal);
+        return false;
+      }
+    }
     // Inbox routing (task-card-gate): arm once per card. Armed when the
     // file is an inbox note and the cursor task (counted: the first
     // target) is an open #task. Never armed for link sessions, non-task
@@ -485,7 +543,10 @@ class BobNavigationHotkeysCancelPropertyMixin {
         initialProperty: options.initialProperty || null,
         initialTaskCardRow: options.initialTaskCardRow || null,
         directStage:
-          options.directStage === true || options.reopenBlocksStage === true,
+          options.directStage === true ||
+          options.reopenBlocksStage === true ||
+          options.reopenLinksStage === true ||
+          options.reopenLinkedFromStage === true,
         random: options.random,
         baseDate: options.baseDate,
         reviewOrigin,
@@ -509,6 +570,16 @@ class BobNavigationHotkeysCancelPropertyMixin {
     // so a Depends-On-line redirect stays a direct stage.
     if (options.reopenBlocksStage && typeof picker.showBlocksStage === "function") {
       picker.showBlocksStage();
+    } else if (
+      options.reopenLinksStage &&
+      typeof picker.showRelationStage === "function"
+    ) {
+      picker.showRelationStage();
+    } else if (
+      options.reopenLinkedFromStage &&
+      typeof picker.showLinkedFromStage === "function"
+    ) {
+      picker.showLinkedFromStage();
     } else if (options.initialProperty) {
       const wanted = (picker.propertyItems || []).find(
         (item) =>

@@ -141,7 +141,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `notice` | 1 | Show the Unblocked card. |
 | `successors` | 1 | Ask which offered successor links to add. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
-| `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` settles `{ ok: false }` until both stage directions ship. |
+| `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` opens the Links direction; the reverse direction settles `{ ok: false }` until both stage directions ship. |
 | `openReferencePdf(path)` | Additive member | Open a vault-relative PDF in Highlights; resolves `{ ok, reason? }`. |
 | `openDependencyStage(ref)` | Root method | Open the task's dependency stage. |
 | `removeDependency(parentRef, target)` | Root method | Remove the requested prerequisite. |
@@ -158,8 +158,9 @@ with a `picks` array or `null` when no choice is made.
 objects. `relations.removeLink(sourceRef, targetRef)` removes the
 authored LINKS edge from the source and best-effort-updates the
 target's LINKED FROM mirror; `relations.openStage({path, line,
-direction})` is reserved for the Links / Linked-from stages and
-currently settles `{ ok: false, reason: "unavailable" }`. Callers
+direction})` opens the owner's Links stage for `direction: "to"` (or an
+absent direction) and settles `{ ok: false, reason: "unavailable" }`
+otherwise. Callers
 feature-detect `api.relations?.version >= 1` before showing chip
 controls. `notice.showUnblocked(model)` presents the Unblocked card.
 

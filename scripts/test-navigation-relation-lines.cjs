@@ -53,7 +53,7 @@ test("nav MC5 refuses relation embeds and MC16 keeps LINKS while dropping LINKED
   assert.equal(helpers.TASK_LINKED_FROM_LINE_NOTICE, "🪢 LINKED FROM is generated from other tasks' LINKS lines · change it with Ctrl+Shift+Alt+L");
 });
 
-test("nav MC15 hand-edit mirror ignores relation-only bursts and notices LINKED FROM once", async () => {
+test("nav MC15 hands LINKS edits to the relation mirror and notices generated lines once", async () => {
   const before = [
     "- [ ] #task T [dependsOn:: n__d] ^t",
     "  - ⛓️ **DEPENDS ON:** [[#^d]]",
@@ -65,10 +65,15 @@ test("nav MC15 hand-edit mirror ignores relation-only bursts and notices LINKED 
     notices.length = 0;
     const after = `${before}\n${row}`;
     let dependencyWrites = 0;
+    let relationWrites = 0;
     const plugin = Object.create(NavigationHotkeysPlugin.prototype);
     plugin.applyDependencyEdit = async () => {
       dependencyWrites += 1;
       return { ok: true };
+    };
+    plugin.mirrorRelationHandEdit = async () => {
+      relationWrites += 1;
+      return { mirrored: true, reason: "relation-edit" };
     };
     const result = await plugin.mirrorDependencyHandEdit(
       { getValue: () => after },
@@ -78,8 +83,9 @@ test("nav MC15 hand-edit mirror ignores relation-only bursts and notices LINKED 
       "",
       { baselineLine: 1 },
     );
-    assert.equal(result.reason, "relation-only");
+    assert.equal(result.reason, expectedNotice ? "relation-only" : "relation-edit");
     assert.equal(dependencyWrites, 0);
+    assert.equal(relationWrites, expectedNotice ? 0 : 1);
     assert.equal(notices.length, expectedNotice ? 1 : 0);
     if (expectedNotice) assert.equal(notices[0], helpers.TASK_LINKED_FROM_LINE_NOTICE);
   }

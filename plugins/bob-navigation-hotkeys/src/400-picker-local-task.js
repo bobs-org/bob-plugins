@@ -92,6 +92,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     this.pendingVaultSingle = null;
     this.pendingVaultCounted = null;
     this.pendingBlocks = null;
+    this.pendingRelation = null;
     this.blockIdMode = "single";
     this.blockIdContext = null;
     this.pendingScheduleReason = null;
@@ -162,6 +163,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     // `apply N` when rows are marked.
     if (this.blocksStage) {
       return this.getBlocksStageFooterHints();
+    }
+    if (this.relationStage) {
+      return this.getRelationStageFooterHints();
     }
     if (this.vaultStage) {
       const marked = this.getMarkedCount();
@@ -340,7 +344,11 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
   // Swap in the vault-scan pool, keeping marks across the refresh: mark keys
   // are stable (`path#line`), so marked rows survive the pool replacement.
   applyVaultStageItems(stage) {
-    const seed = this.blocksStage ? this.blocksStageSeed : this.vaultStage;
+    const seed = this.blocksStage
+      ? this.blocksStageSeed
+      : this.relationStage
+        ? this.relationStageSeed
+        : this.vaultStage;
     if (!stage || seed !== stage.refreshOf) {
       return;
     }
@@ -359,7 +367,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     }
     const items = this.blocksStage
       ? planBlocksStageItemsFromVault(this.vaultStage, this.getQuery())
-      : planDependencyStageView({
+      : this.relationStage
+        ? planRelationStageItemsFromVault(this.vaultStage, this.getQuery())
+        : planDependencyStageView({
           current: stage.current,
           candidates: stage.candidates,
           query: this.getQuery(),
@@ -383,6 +393,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
   getVaultStageSubtitle(visibleItems, allItems) {
     if (this.blocksStage) {
       return this.getBlocksStageSubtitle(visibleItems, allItems);
+    }
+    if (this.relationStage) {
+      return this.getRelationStageSubtitle(visibleItems, allItems);
     }
     const stage = this.vaultStage;
     if (!stage) {
@@ -493,6 +506,9 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     if (this.blockIdMode === "blocks-source" && this.pendingBlocks) {
       return this.pendingBlocks.reservedIds || new Set();
     }
+    if (this.blockIdMode === "relation-target" && this.pendingRelation) {
+      return this.pendingRelation.reservedIds || new Set();
+    }
     return new Set();
   }
 
@@ -508,6 +524,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       "vault-single",
       "vault-counted",
       "blocks-source",
+      "relation-target",
     ].includes(options.mode)
       ? options.mode
       : "single";

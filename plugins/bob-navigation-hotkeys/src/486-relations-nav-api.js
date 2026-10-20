@@ -1,7 +1,6 @@
 // Additive relation capability for bob-ledger-tools (`docs/task-relations.md`
-// §10). Ships at version 0: `removeLink` works, `openStage` settles false
-// until nav-linked-from raises the namespace to v1 once both stage
-// directions open. Calls settle and never throw.
+// §10). Both stage directions and live chip removal are now available. Calls
+// settle and never throw.
 function createRelationsNavApi(plugin) {
   const settle = (call) => {
     try {
@@ -19,9 +18,17 @@ function createRelationsNavApi(plugin) {
     }
   };
   return Object.freeze({
-    version: 0,
-    openStage(_ref) {
-      return Promise.resolve({ ok: false, reason: "unavailable" });
+    version: 1,
+    openStage(ref) {
+      const direction = ref && ref.direction;
+      if (
+        (!direction || direction === "to" || direction === "from") &&
+        plugin &&
+        typeof plugin.openRelationStageForRef === "function"
+      ) {
+        return settle(() => plugin.openRelationStageForRef(ref || {}));
+      }
+      return Promise.resolve({ ok: false, reason: "invalid-direction" });
     },
     removeLink(sourceRef, targetRef) {
       if (!plugin || typeof plugin.removeRelationLinkByRef !== "function") {

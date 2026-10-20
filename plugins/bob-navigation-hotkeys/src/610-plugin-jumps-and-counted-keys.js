@@ -524,6 +524,11 @@ class BobNavigationHotkeysJumpKeyMixin {
       options.initialTaskCardRow = "depends-on";
     } else if (chord === "blocks") {
       options.initialTaskCardRow = "blocks";
+    } else if (chord === "links-to") {
+      options.initialTaskCardRow = "links-to";
+    } else if (chord === "linked-from") {
+      new Notice("Count works with Links to (Ctrl+Shift+L)");
+      return false;
     }
     return this.openBulletPropertyPicker(view.editor, options);
   }
@@ -538,14 +543,19 @@ class BobNavigationHotkeysJumpKeyMixin {
       return null;
     }
     if (event.altKey) {
-      // Option may change `key` on macOS; the physical key identity remains B.
-      return event.code === "KeyB" ? "blocks" : null;
+      // Option may change `key` on macOS; physical identity remains stable.
+      if (event.code === "KeyB") return "blocks";
+      if (event.code === "KeyL") return "linked-from";
+      return null;
     }
     if (event.code === "KeyP" || event.key === "p" || event.key === "P") {
       return "property";
     }
     if (event.code === "KeyB" || event.key === "b" || event.key === "B") {
       return "depends-on";
+    }
+    if (event.code === "KeyL" || event.key === "l" || event.key === "L") {
+      return "links-to";
     }
     return null;
   }

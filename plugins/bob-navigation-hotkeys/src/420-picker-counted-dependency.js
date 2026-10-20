@@ -696,6 +696,9 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     if (this.blocksStage) {
       return this.commitMarkedBlocks();
     }
+    if (this.relationStage) {
+      return this.commitMarkedRelations();
+    }
     if (!this.selectedPropertyItem || this.getMarkedCount() === 0) {
       return false;
     }

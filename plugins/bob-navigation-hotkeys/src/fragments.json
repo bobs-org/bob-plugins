@@ -109,6 +109,7 @@
   "676-plugin-open-notes-uri.js",
   "677-plugin-ref-pdf-open.js",
   "678-plugin-templater-trigger.js",
+  "679-plugin-image-zoom.js",
   "680-plugin-link-parse.js",
   "690-install-plugin-mixins.js",
   "700-exports.js"

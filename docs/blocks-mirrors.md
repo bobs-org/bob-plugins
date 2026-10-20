@@ -27,3 +27,4 @@ controls; the reverse line is rebuilt from those links.
 
 - [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) — dependency stages and gestures.
 - [Task dependencies](https://bobs-org.github.io/task-dependencies/) — dependency storage and behavior.
+- [Task relations](task-relations.md) — live LINKS and LINKED FROM chips.

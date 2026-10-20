@@ -14761,6 +14761,602 @@ function relationLabelSuggestionRows(edges, prefix) {
     .sort((a, b) => b.count - a.count || relationCodepointCompare(a.label, b.label))
     .map((item) => ({ label: item.label, count: item.count }));
 }
+// ---- src/146-relation-chip-model.js ----
+// Task relation chips (bob-cli-a2 chips). Pure model and element builder
+// for live LINKS and LINKED FROM rows. Chips render the live relation
+// index, never the stored mirror: a stored entry with no live edge is
+// stale (LC8), a live edge missing from the text is appended in canonical
+// order (LC7), and an unresolvable LINKS target is broken (LC4). Reuses
+// the `bob-dep-*` DOM family with no new palette. Labels are muted
+// small-caps pills on the arrow side; inverse phrases are display-only
+// (decision `inverse_phrases = builtin`); three or more closed chips
+// collapse to `✓×N` (LC9). Never throws.
+const RELATION_STALE_TOOLTIP =
+  "No longer links here · refreshes on the next reconcile";
+const RELATION_LINKS_ROW_TOOLTIP =
+  "Related tasks · live from the relation index";
+const RELATION_LINKED_FROM_ROW_TOOLTIP =
+  "Tasks linking here · live from the relation index";
+
+// Display-only inverse phrases (docs/task-relations.md §10). Storage
+// stays verbatim; matching is case-insensitive.
+const RELATION_INVERSE_PHRASES = [
+  ["merged into", "merged from"],
+  ["duplicate of", "duplicated by"],
+  ["follow-up of", "followed up by"],
+  ["superseded by", "supersedes"],
+  ["split from", "split into"],
+];
+
+function relationInversePhrase(label) {
+  try {
+    const needle = String(label || "").trim().toLocaleLowerCase();
+    if (!needle) return null;
+    for (const pair of RELATION_INVERSE_PHRASES) {
+      if (String(pair[0]).toLocaleLowerCase() === needle) return pair[1];
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function relationShortText(fullText) {
+  const text = String(fullText || "");
+  return text.length > 40 ? text.slice(0, 40) + "…" : text;
+}
+
+function relationNoteStem(path) {
+  try {
+    const stem = String(path || "").split("/").pop() || "";
+    return stem.replace(/\.md$/i, "");
+  } catch (error) {
+    return "";
+  }
+}
+
+// Status → chip state. Memo tasks resolve through their status symbol
+// first (the dep-chip mapping); raw index records carry a status word.
+function relationStateFromTask(task) {
+  try {
+    if (task && typeof task === "object") {
+      let symbol = "";
+      try {
+        symbol = planTaskStatusSymbol(task) || "";
+      } catch (error) {
+        symbol = "";
+      }
+      if (symbol) return dependencyStateFromSymbol(symbol, task);
+      const raw = task.status && typeof task.status === "object"
+        ? task.status.type || task.status.name || ""
+        : task.status;
+      const word = String(raw || "").trim().toUpperCase();
+      if (word === "DONE" || word === "X") return "done";
+      if (word === "CANCELLED" || word === "-") return "cancelled";
+      if (word === "IN_PROGRESS" || word === "/") return "in-progress";
+      if (word === "ON_HOLD" || word === "?" || word === "BLOCKED") return "blocked";
+      if (word === "NEXT" || word === "*") return "next";
+    }
+    return "todo";
+  } catch (error) {
+    return "todo";
+  }
+}
+
+function relationFullTextFor(task, blockId) {
+  try {
+    let raw = null;
+    try {
+      raw = planTaskDescription(task) || null;
+    } catch (error) {
+      raw = null;
+    }
+    if (typeof raw !== "string" || !raw) {
+      if (task && typeof task.text === "string" && task.text) raw = task.text;
+      else return "^" + String(blockId || "");
+    }
+    // Raw index records carry the whole task line; memo descriptions do
+    // not. Strip a leading list marker and checkbox either way.
+    const line = String(raw).replace(/^\s*(?:[-*+]|\d+[.)])\s+\[[^\]\n]\]\s+/u, "");
+    return dependencyCleanTaskText(line) || ("^" + String(blockId || ""));
+  } catch (error) {
+    return "^" + String(blockId || "");
+  }
+}
+
+// Canonical link text for sorting appended live chips (docs/task-relations.md
+// §4: ASCII case-fold, Unicode code-point order, raw tie-break — exactly
+// BK21). Same-note entries sort first on the `#` prefix.
+function relationEdgeLinktext(otherPath, blockId, sourcePath) {
+  const id = String(blockId || "");
+  const target = String(otherPath || "");
+  const source = String(sourcePath || "");
+  if (!target || target === source) return "#^" + id;
+  const withoutMd = target.replace(/\.md$/i, "");
+  if (/^done\//i.test(withoutMd)) return withoutMd + "#^" + id;
+  const stem = withoutMd.split("/").pop() || withoutMd;
+  return stem + "#^" + id;
+}
+
+function relationFoldLinktext(linktext) {
+  return String(linktext || "").replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
+function relationCompareLinktext(left, right) {
+  const folded = relationCodepointCompare(relationFoldLinktext(left), relationFoldLinktext(right));
+  if (folded !== 0) return folded;
+  return relationCodepointCompare(String(left || ""), String(right || ""));
+}
+
+function relationBuildChip({ direction, linkpath, blockId, label, task, otherPath, live, stale, resolved, sourcePath }) {
+  try {
+    const id = String(blockId || "");
+    const known = task && typeof task === "object" ? task : null;
+    const resolvedPath = known
+      ? (planTaskPath(known) || String(otherPath || ""))
+      : String(otherPath || "");
+    // Broken means the target cannot be resolved to a task: no record
+    // and (when live) an unresolved edge. A stale entry whose target
+    // still resolves shows its status, dashed.
+    const broken = !known && (!live || resolved !== true);
+    const archived = Boolean(resolvedPath && /(^|\/)done\//i.test(resolvedPath));
+    const state = broken ? "broken" : relationStateFromTask(known);
+    const symbol = broken ? "⚠" : dependencySymbolForState(state);
+    const fullText = broken ? "^" + id + " not found" : relationFullTextFor(known, id);
+    const crossNote = Boolean(resolvedPath && resolvedPath !== String(sourcePath || ""));
+    const noteLabel = crossNote ? "↗ " + (relationNoteStem(linkpath || resolvedPath) || relationNoteStem(resolvedPath)) : null;
+    let hidden = false;
+    try {
+      hidden = Boolean(known && blocksTagPresent(known, "hide"));
+    } catch (error) {
+      hidden = false;
+    }
+    const storedLinkpath = String(linkpath || "");
+    const linktext = storedLinkpath
+      ? storedLinkpath.replace(/\.md$/i, "") + "#^" + id
+      : relationEdgeLinktext(resolvedPath, id, sourcePath);
+    const inverse = direction === "from" ? relationInversePhrase(label) : null;
+    const tooltipParts = broken
+      ? ["⚠ ^" + id + " not found"]
+      : [fullText, resolvedPath || String(sourcePath || ""), dependencyStatusName(state)];
+    if (stale && !broken) tooltipParts.push(RELATION_STALE_TOOLTIP);
+    const tooltip = tooltipParts.filter(Boolean).join(" — ");
+    let removeLabel = null;
+    if (direction === "to") removeLabel = "Unlink " + fullText;
+    else removeLabel = "Remove the link from " + fullText;
+    return {
+      direction,
+      blockId: id,
+      linkpath: storedLinkpath,
+      linktext,
+      path: resolvedPath,
+      label: label || null,
+      inverse,
+      // Stale chips keep their underlying state; the `is-stale` class
+      // (dashed, muted) carries the staleness. Colour carries status.
+      state,
+      symbol,
+      text: broken ? "^" + id + " not found" : relationShortText(fullText),
+      fullText,
+      noteLabel,
+      tooltip,
+      ariaLabel: stale && !broken ? fullText + " · stale" : fullText,
+      removeLabel,
+      live: Boolean(live),
+      stale: Boolean(stale),
+      broken,
+      archived,
+      hidden,
+      collapsed: false,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+// Merge one relation row's stored entries with its live index edges.
+// `stored` are `parseTaskRelationLine` entries `{ target, blockId, label }`;
+// `live` are index edges whose `other` is the displayed end (the target for
+// LINKS, the source for LINKED FROM) with `{ path, blockId, task }` plus
+// the edge `label`. `lookup(path, blockId)` resolves a stored link to a
+// task record or null; `resolve(linkpath)` maps a stored linkpath to a
+// vault-relative path. Returns null unless the line parses as the
+// requested direction (LC13).
+function relationChipModelForRow({ direction, lineText, sourcePath, live, lookup, resolve }) {
+  try {
+    const parsed = parseTaskRelationLine(String(lineText || ""));
+    // An empty row still renders live edges appended in canonical order
+    // (LC7); malformed and not-a-line rows never get chips (LC13).
+    if (!parsed || (parsed.verdict !== "accepted" && parsed.verdict !== "empty")) return null;
+    if (direction === "to" && parsed.kind !== "links") return null;
+    if (direction === "from" && parsed.kind !== "linkedFrom") return null;
+    const source = String(sourcePath || "");
+    const lookupFn = typeof lookup === "function" ? lookup : () => null;
+    const resolveFn = typeof resolve === "function"
+      ? resolve
+      : (linkpath) => (String(linkpath || "").trim() ? String(linkpath).replace(/\.md$/i, "") + ".md" : source);
+    const liveRows = Array.isArray(live) ? live : [];
+    const liveByKey = new Map();
+    for (const edge of liveRows) {
+      try {
+        if (!edge || typeof edge !== "object") continue;
+        const other = edge.other && typeof edge.other === "object" ? edge.other : null;
+        const otherPath = other ? String(other.path || "") : "";
+        const otherId = other ? String(other.blockId || "") : "";
+        if (!otherId) continue;
+        const key = otherPath ? otherPath + "\u0000" + otherId : "\u0000" + otherId;
+        if (!liveByKey.has(key)) liveByKey.set(key, edge);
+      } catch (error) {
+        continue;
+      }
+    }
+    const chips = [];
+    const consumed = new Set();
+    const stored = Array.isArray(parsed.entries) ? parsed.entries : [];
+    for (const entry of stored) {
+      try {
+        const entryId = String((entry && entry.blockId) || "");
+        if (!entryId) continue;
+        let entryPath = "";
+        try {
+          entryPath = String(resolveFn((entry && entry.target) || "", source) || "");
+        } catch (error) {
+          entryPath = "";
+        }
+        const exact = entryPath ? entryPath + "\u0000" + entryId : null;
+        let edge = exact && liveByKey.has(exact) && !consumed.has(exact) ? liveByKey.get(exact) : null;
+        if (!edge) {
+          const loose = "\u0000" + entryId;
+          if (liveByKey.has(loose) && !consumed.has(loose)) edge = liveByKey.get(loose);
+        }
+        let task = null;
+        let otherPath = entryPath;
+        let label = (entry && entry.label) || null;
+        let resolved = false;
+        if (edge) {
+          const key = (edge.other && edge.other.path ? String(edge.other.path) + "\u0000" : "\u0000") + entryId;
+          consumed.add(exact && liveByKey.get(exact) === edge ? exact : key);
+          consumed.add(key);
+          const other = edge.other || {};
+          otherPath = String(other.path || entryPath || "");
+          if (edge.label) label = edge.label;
+          resolved = typeof other.resolved === "boolean" ? other.resolved : Boolean(other.path);
+          task = (other.task && typeof other.task === "object" ? other.task : null)
+            || lookupFn(otherPath, entryId);
+        } else {
+          task = lookupFn(entryPath, entryId);
+        }
+        const chip = relationBuildChip({
+          direction, linkpath: (entry && entry.target) || "", blockId: entryId,
+          label, task, otherPath, live: Boolean(edge), stale: !edge, resolved, sourcePath: source,
+        });
+        if (chip) chips.push(chip);
+      } catch (error) {
+        continue;
+      }
+    }
+    const missing = [];
+    for (const [key, edge] of liveByKey) {
+      if (!consumed.has(key)) missing.push(edge);
+    }
+    missing.sort((a, b) => relationCompareLinktext(
+      relationEdgeLinktext(a && a.other && a.other.path, a && a.other && a.other.blockId, source),
+      relationEdgeLinktext(b && b.other && b.other.path, b && b.other && b.other.blockId, source),
+    ));
+    for (const edge of missing) {
+      try {
+        const other = (edge && edge.other) || {};
+        const otherId = String(other.blockId || "");
+        if (!otherId) continue;
+        const otherPath = String(other.path || "");
+        const task = (other.task && typeof other.task === "object" ? other.task : null)
+          || lookupFn(otherPath, otherId);
+        // An unresolvable live edge with no task record is broken, not
+        // appended: only the stored text can name it (LC4).
+        if (!otherPath && !task) continue;
+        const chip = relationBuildChip({
+          direction, linkpath: "", blockId: otherId, label: (edge && edge.label) || null,
+          task, otherPath, live: true, stale: false, sourcePath: source,
+        });
+        if (chip) chips.push(chip);
+      } catch (error) {
+        continue;
+      }
+    }
+    const closed = chips.filter((chip) => chip && chip.live && !chip.broken && chip.state === "done");
+    let collapsed = null;
+    if (closed.length >= 3) {
+      for (const chip of closed) chip.collapsed = true;
+      collapsed = { count: closed.length };
+    }
+    const labelled = chips.some((chip) => chip && chip.label);
+    const liveCount = chips.filter((chip) => chip && chip.live).length;
+    return {
+      direction,
+      kind: parsed.kind,
+      label: direction === "to" ? "🪢 links to" : "🪢 linked from",
+      tooltip: direction === "to" ? RELATION_LINKS_ROW_TOOLTIP : RELATION_LINKED_FROM_ROW_TOOLTIP,
+      chips,
+      collapsed,
+      labelled,
+      liveCount,
+      storedCount: chips.length,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+function relationAttachChipRemove(el, chip, doc, onRemove) {
+  try {
+    if (!el || !chip || !doc || typeof doc.createElement !== "function") return;
+    const remove = doc.createElement("span");
+    remove.setAttribute("class", "bob-dep-chip-remove");
+    remove.setAttribute("role", "button");
+    remove.setAttribute("tabindex", "0");
+    remove.setAttribute("aria-label", String(chip.removeLabel || ("Remove " + (chip.fullText || ""))));
+    remove.setAttribute("title", String(chip.removeLabel || "Remove"));
+    remove.appendChild(doc.createTextNode("×"));
+    if (typeof remove.addEventListener === "function") {
+      const fire = (event) => {
+        try {
+          if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+          if (event && typeof event.preventDefault === "function") event.preventDefault();
+          if (typeof onRemove === "function") onRemove(chip, event);
+        } catch (error) {
+          // Best-effort only.
+        }
+      };
+      remove.addEventListener("click", fire);
+      remove.addEventListener("keydown", (event) => {
+        if (event && (event.key === "Enter" || event.key === " ")) fire(event);
+      });
+    }
+    el.appendChild(remove);
+  } catch (error) {
+    // Listener-free remove still renders.
+  }
+}
+
+function relationAttachAddControl(row, doc, model, onAdd) {
+  try {
+    if (!row || !doc || typeof doc.createElement !== "function") return;
+    const add = doc.createElement("span");
+    add.setAttribute("class", "bob-dep-add");
+    add.setAttribute("role", "button");
+    add.setAttribute("tabindex", "0");
+    const addLabel = model && model.direction === "from"
+      ? "Choose a task that links here"
+      : "Link this task to another";
+    add.setAttribute("aria-label", addLabel);
+    add.setAttribute("title", addLabel);
+    add.appendChild(doc.createTextNode("＋"));
+    if (typeof add.addEventListener === "function") {
+      const fire = (event) => {
+        try {
+          if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+          if (typeof onAdd === "function") onAdd(event);
+        } catch (error) {
+          // Best-effort only.
+        }
+      };
+      add.addEventListener("click", fire);
+      add.addEventListener("keydown", (event) => {
+        if (event && (event.key === "Enter" || event.key === " ")) {
+          if (event && typeof event.preventDefault === "function") event.preventDefault();
+          fire(event);
+        }
+      });
+    }
+    row.appendChild(add);
+  } catch (error) {
+    // Add button is best-effort.
+  }
+}
+
+function relationChipAriaLabel(chip) {
+  try {
+    if (!chip || typeof chip !== "object") return "relation";
+    const parts = [String(chip.fullText || chip.text || "relation")];
+    if (chip.direction === "from" && chip.inverse) parts.push("· " + chip.inverse);
+    else if (chip.label) parts.push("· " + chip.label);
+    if (chip.stale) parts.push("· stale");
+    if (chip.broken) parts.push("· missing");
+    return parts.join(" ");
+  } catch (error) {
+    return "relation";
+  }
+}
+
+// Live Preview row element. `model` is `relationChipModelForRow(...)`;
+// `options` carries `{ sourcePath, interactive, onOpen(linktext, event,
+// chip), onHover(linktext, event, chipEl), onRemove(chip, event),
+// onAdd(event) }`. Labelled rows wrap one entry per visual row;
+// unlabelled rows wrap between chips; entries never change line height
+// (LC10). Closed and archived targets are dimmed and never struck;
+// `#hide` targets are muted. Never throws.
+function buildRelationChipElement(doc, model, options) {
+  try {
+    if (!doc || !model || typeof model !== "object") return null;
+    const opts = options && typeof options === "object" ? options : {};
+    const interactive = Boolean(opts.interactive);
+    const chips = Array.isArray(model.chips) ? model.chips : [];
+    const row = doc.createElement("span");
+    const rowClasses = ["bob-dep-row", "bob-relation-row"];
+    if (model.direction === "from") rowClasses.push("is-incoming");
+    if (model.labelled) rowClasses.push("is-labelled");
+    row.setAttribute("class", rowClasses.join(" "));
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", String(model.label || "relations") + ", " + model.liveCount + " live");
+    if (model.tooltip) row.setAttribute("title", String(model.tooltip));
+    const label = doc.createElement("span");
+    label.setAttribute("class", "bob-dep-label bob-relation-label");
+    label.setAttribute("aria-hidden", "true");
+    label.appendChild(doc.createTextNode(String(model.label || "🪢 relations")));
+    row.appendChild(label);
+    const buildChipEl = (chip) => {
+      const el = doc.createElement("span");
+      const classes = ["bob-dep-chip", "bob-relation-chip", "is-" + String(chip.state || "todo")];
+      if (chip.stale) classes.push("is-stale");
+      if (chip.broken) classes.push("is-broken");
+      if (chip.archived) classes.push("is-archived");
+      if (chip.hidden) classes.push("is-muted");
+      el.setAttribute("class", classes.join(" "));
+      el.setAttribute("data-state", String(chip.state || "todo"));
+      el.setAttribute("role", "link");
+      el.setAttribute("tabindex", "0");
+      el.setAttribute("aria-label", relationChipAriaLabel(chip));
+      if (chip.tooltip) el.setAttribute("title", String(chip.tooltip));
+      const box = doc.createElement("span");
+      box.setAttribute("class", "bob-dep-chip-box");
+      box.setAttribute("data-task", String(chip.state || "todo"));
+      box.setAttribute("aria-hidden", "true");
+      box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
+      el.appendChild(box);
+      const text = doc.createElement("span");
+      text.setAttribute("class", "bob-dep-chip-text");
+      text.appendChild(doc.createTextNode(String(chip.text || "")));
+      el.appendChild(text);
+      if (chip.noteLabel) {
+        const note = doc.createElement("span");
+        note.setAttribute("class", "bob-dep-chip-note");
+        note.appendChild(doc.createTextNode(String(chip.noteLabel)));
+        el.appendChild(note);
+      }
+      if (interactive && chip.live && !chip.broken) {
+        relationAttachChipRemove(el, chip, doc, opts.onRemove);
+      }
+      if (typeof el.addEventListener === "function") {
+        const open = (event) => {
+          try {
+            if (event && event.target && event.target.classList && typeof event.target.classList.contains === "function") {
+              try {
+                if (event.target.classList.contains("bob-dep-chip-remove")) return;
+              } catch (inner) {
+                // Fall through to open.
+              }
+            }
+            if (typeof opts.onOpen === "function" && chip.linktext) opts.onOpen(chip.linktext, event, chip);
+          } catch (error) {
+            // A failed open never breaks other chips.
+          }
+        };
+        el.addEventListener("click", open);
+        el.addEventListener("keydown", (event) => {
+          if (event && (event.key === "Enter" || event.key === " ")) {
+            if (typeof event.preventDefault === "function") event.preventDefault();
+            open(event);
+          }
+        });
+        el.addEventListener("mouseover", (event) => {
+          try {
+            if (typeof opts.onHover === "function" && chip.linktext) opts.onHover(chip.linktext, event, el);
+          } catch (error) {
+            // Hover preview is best-effort.
+          }
+        });
+      }
+      return el;
+    };
+    const buildPill = (text) => {
+      const pill = doc.createElement("span");
+      pill.setAttribute("class", "bob-relation-pill");
+      pill.appendChild(doc.createTextNode(String(text || "")));
+      return pill;
+    };
+    const buildArrow = (text) => {
+      const arrow = doc.createElement("span");
+      arrow.setAttribute("class", "bob-relation-arrow");
+      arrow.setAttribute("aria-hidden", "true");
+      arrow.appendChild(doc.createTextNode(String(text === undefined ? "→" : text)));
+      return arrow;
+    };
+    const visible = chips.filter((chip) => chip && !chip.collapsed);
+    const appendChipEntry = (host, chip) => {
+      try {
+        if (model.labelled) {
+          const entry = doc.createElement("span");
+          entry.setAttribute("class", "bob-relation-entry");
+          if (model.direction === "to") {
+            if (chip.label) {
+              entry.appendChild(buildPill(chip.label));
+              entry.appendChild(buildArrow());
+            }
+            entry.appendChild(buildChipEl(chip));
+          } else if (chip.inverse) {
+            entry.appendChild(buildPill(chip.inverse));
+            entry.appendChild(buildChipEl(chip));
+          } else if (chip.label) {
+            entry.appendChild(buildChipEl(chip));
+            const sep = doc.createElement("span");
+            sep.setAttribute("class", "bob-relation-sep");
+            sep.setAttribute("aria-hidden", "true");
+            sep.appendChild(doc.createTextNode("·"));
+            entry.appendChild(sep);
+            entry.appendChild(buildPill(chip.label));
+            entry.appendChild(buildArrow("→ this"));
+          } else {
+            entry.appendChild(buildChipEl(chip));
+          }
+          host.appendChild(entry);
+        } else {
+          host.appendChild(buildChipEl(chip));
+        }
+      } catch (error) {
+        // One bad entry never breaks the row.
+      }
+    };
+    if (!model.labelled && model.direction === "to") {
+      // LC1: an unlabelled LINKS row reads `🪢 links to → (chip)`.
+      row.appendChild(buildArrow());
+    }
+    for (const chip of visible) appendChipEntry(row, chip);
+    if (model.collapsed && Number(model.collapsed.count) > 0) {
+      const count = Number(model.collapsed.count);
+      const collapsed = doc.createElement("span");
+      collapsed.setAttribute("class", "bob-dep-chip is-done-collapsed bob-relation-collapsed");
+      collapsed.setAttribute("role", "button");
+      collapsed.setAttribute("tabindex", "0");
+      collapsed.setAttribute("aria-label", "Show " + count + " closed relations");
+      collapsed.setAttribute("title", "✓×" + count + " closed");
+      collapsed.appendChild(doc.createTextNode("✓×" + count));
+      const expand = () => {
+        try {
+          for (const chip of chips) {
+            if (chip && chip.collapsed) appendChipEntry(row, { ...chip, collapsed: false });
+          }
+          if (typeof collapsed.remove === "function") collapsed.remove();
+          else if (collapsed.parentNode && typeof collapsed.parentNode.removeChild === "function") {
+            collapsed.parentNode.removeChild(collapsed);
+          }
+        } catch (error) {
+          // An unexpanded row never breaks the chips.
+        }
+      };
+      if (typeof collapsed.addEventListener === "function") {
+        collapsed.addEventListener("click", expand);
+        collapsed.addEventListener("keydown", (event) => {
+          if (event && (event.key === "Enter" || event.key === " ")) {
+            if (typeof event.preventDefault === "function") event.preventDefault();
+            expand();
+          }
+        });
+      }
+      if (model.labelled) {
+        const entry = doc.createElement("span");
+        entry.setAttribute("class", "bob-relation-entry");
+        entry.appendChild(collapsed);
+        row.appendChild(entry);
+      } else {
+        row.appendChild(collapsed);
+      }
+    }
+    if (interactive) relationAttachAddControl(row, doc, model, opts.onAdd);
+    return row;
+  } catch (error) {
+    return null;
+  }
+}
 // ---- src/150-dependency-element.js ----
 // Dependency chips: Live Preview row element. `model` is
 // `dependencyChipModel(...)`; `options` carries `{ sourcePath,
@@ -15024,6 +15620,148 @@ if (WidgetType && typeof WidgetType === "function") {
             try {
               if (plugin && typeof plugin.blocksOpenStage === "function") {
                 plugin.blocksOpenStage(sourcePath, this.meta);
+              }
+            } catch (error) {
+              // Best-effort only.
+            }
+          },
+        },
+      );
+      if (!dom) {
+        try {
+          return typeof document !== "undefined" && document
+            ? document.createElement("span")
+            : null;
+        } catch (error) {
+          return null;
+        }
+      }
+      try {
+        if (typeof dom.addEventListener === "function") {
+          dom.addEventListener("mousedown", (event) => {
+            try {
+              const target = event && event.target ? event.target : null;
+              let interactiveTarget = false;
+              try {
+                if (target && typeof target.closest === "function") {
+                  interactiveTarget = Boolean(target.closest(".bob-dep-chip,.bob-dep-add,.bob-dep-chip-remove"));
+                } else {
+                  let node = target;
+                  let guard = 0;
+                  while (node && node !== dom && guard < 6) {
+                    guard += 1;
+                    const cls = node.className || "";
+                    if (typeof cls === "string" && (cls.indexOf("bob-dep-chip") !== -1 || cls.indexOf("bob-dep-add") !== -1)) {
+                      interactiveTarget = true;
+                      break;
+                    }
+                    node = node.parentNode || null;
+                  }
+                }
+              } catch (error) {
+                interactiveTarget = false;
+              }
+              if (interactiveTarget) {
+                return;
+              }
+              if (event && typeof event.preventDefault === "function") {
+                event.preventDefault();
+              }
+              let anchor = null;
+              try {
+                anchor = view && typeof view.posAtDOM === "function" ? view.posAtDOM(dom) : null;
+              } catch (error) {
+                anchor = null;
+              }
+              if (typeof anchor === "number" && view && typeof view.dispatch === "function") {
+                view.dispatch({ selection: { anchor } });
+              }
+              if (view && typeof view.focus === "function") {
+                view.focus();
+              }
+            } catch (error) {
+              // Reveal is best-effort.
+            }
+          });
+        }
+      } catch (error) {
+        // A listener-free row still renders.
+      }
+      return dom;
+    }
+  };
+}
+// ---- src/153-relation-widget.js ----
+// Live Preview widget for one relation row (LINKS or LINKED FROM).
+// Navigation (click / Mod-click / hover preview) always works; ＋ /
+// hover × appear only when `meta.interactive` is set (nav
+// `api.relations` v1). Stale, broken, archived, and muted chips stay
+// navigation-only.
+let RelationChipWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  RelationChipWidget = class extends WidgetType {
+    constructor(model, meta) {
+      super();
+      this.model = model;
+      this.meta = meta && typeof meta === "object" ? meta : {};
+      try {
+        this.key = JSON.stringify([
+          model,
+          this.meta.sourcePath || "",
+          this.meta.lineNumber === undefined ? null : this.meta.lineNumber,
+          Boolean(this.meta.interactive),
+        ]);
+      } catch (error) {
+        this.key = String((model && model.label) || "");
+      }
+    }
+
+    eq(other) {
+      return Boolean(other && other instanceof RelationChipWidget && other.key === this.key);
+    }
+
+    toDOM(view) {
+      const plugin = this.meta.plugin;
+      const sourcePath = this.meta.sourcePath || "";
+      const interactive = Boolean(this.meta.interactive);
+      const dom = buildRelationChipElement(
+        typeof document !== "undefined" ? document : null,
+        this.model,
+        {
+          plugin,
+          sourcePath,
+          interactive,
+          onOpen: (linktext, event) => {
+            try {
+              if (plugin && typeof plugin.dependencyOpenTarget === "function") {
+                plugin.dependencyOpenTarget(linktext, sourcePath, event);
+              }
+            } catch (error) {
+              // Best-effort only.
+            }
+          },
+          onHover: (linktext, event, chipEl) => {
+            try {
+              if (plugin && typeof plugin.dependencyHoverTarget === "function") {
+                plugin.dependencyHoverTarget(linktext, sourcePath, event, chipEl || dom, dom);
+              }
+            } catch (error) {
+              // Best-effort only.
+            }
+          },
+          onRemove: (chip) => {
+            try {
+              if (plugin && typeof plugin.relationRemoveLink === "function") {
+                plugin.relationRemoveLink(chip, sourcePath, this.meta);
+              }
+            } catch (error) {
+              // Best-effort only.
+            }
+          },
+          onAdd: () => {
+            try {
+              if (plugin && typeof plugin.relationOpenStage === "function") {
+                plugin.relationOpenStage(sourcePath, this.meta);
               }
             } catch (error) {
               // Best-effort only.
@@ -39784,6 +40522,420 @@ class BobLedgerToolsTodayMarksReadingClicksMixin {
     }
   }
 }
+// ---- src/278-plugin-relation-model.js ----
+class BobLedgerToolsRelationModelMixin {
+  // Feature-detect nav `api.relations` v1. The real namespace ships at
+  // v0 (`removeLink` works, `openStage` settles unavailable) until
+  // nav-linked-from raises it; chips stay navigation-only until then
+  // (LC11). Tests exercise controls against a fake v1 api.
+  relationsNavApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const nav = plugins ? plugins["bob-navigation-hotkeys"] : null;
+      const api = nav ? nav.api : null;
+      const relations = api && api.relations;
+      if (relations && typeof relations === "object" && Number(relations.version) >= 1) {
+        return relations;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  relationLookupTask(path, blockId) {
+    try {
+      const id = String(blockId || "").trim().replace(/^\^/u, "");
+      if (!path || !id) return null;
+      const index = this.dependencyTasksIndex();
+      const task = index.get(String(path) + "\u0000" + id) || null;
+      return task && task.isTask === false ? null : task;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  relationResolveLinkpath(linkpath, sourcePath) {
+    try {
+      const raw = String(linkpath || "").trim();
+      if (!raw) return String(sourcePath || "");
+      const resolved = this.dependencyResolveLink(raw, sourcePath);
+      return String((resolved && resolved.path) || "");
+    } catch (error) {
+      return String(sourcePath || "");
+    }
+  }
+
+  // Row model for one stored relation line. `owner` is the parent task
+  // `{ blockId, text, line }` (line 1-based) or null. Live edges come
+  // from `api.relationIndex`, never the stored mirror. Returns null for
+  // malformed and not-a-line rows (LC13).
+  relationChipModelForLine({ path, text, owner }) {
+    try {
+      const sourcePath = String(path || "");
+      if (!sourcePath || typeof text !== "string") return null;
+      const parsed = parseTaskRelationLine(text);
+      if (!parsed || (parsed.verdict !== "accepted" && parsed.verdict !== "empty")) return null;
+      const direction = parsed.kind === "links" ? "to" : "from";
+      let api = null;
+      try {
+        api = typeof this.relationIndexApi === "function" ? this.relationIndexApi() : null;
+      } catch (error) {
+        api = null;
+      }
+      const self = this;
+      const lookup = (linkpath, blockId) => self.relationLookupTask(linkpath, blockId);
+      const resolve = (linkpath) => self.relationResolveLinkpath(linkpath, sourcePath);
+      let live = [];
+      try {
+        if (api) {
+          if (direction === "to") {
+            const rows = self.relationIndexOutgoingForOwner(api, sourcePath, owner);
+            live = rows.map((edge) => ({
+              label: edge && edge.label,
+              other: {
+                path: edge && edge.target ? edge.target.path : "",
+                blockId: edge && edge.target ? edge.target.blockId : "",
+                resolved: edge && edge.target ? Boolean(edge.target.resolved) : false,
+                task: edge && edge.target && edge.target.path
+                  ? self.relationLookupTask(edge.target.path, edge.target.blockId)
+                  : null,
+                fallback: edge && edge.target ? edge.target : null,
+              },
+            }));
+          } else {
+            const rows = owner && owner.blockId ? api.incoming(sourcePath, owner.blockId) : [];
+            live = (Array.isArray(rows) ? rows : []).map((edge) => ({
+              label: edge && edge.label,
+              other: {
+                path: edge && edge.source ? edge.source.path : "",
+                blockId: edge && edge.source ? edge.source.blockId : "",
+                // Incoming rows only contain resolved targets.
+                resolved: true,
+                task: edge && edge.source && edge.source.path
+                  ? self.relationLookupTask(edge.source.path, edge.source.blockId)
+                  : null,
+                fallback: edge && edge.source ? edge.source : null,
+              },
+            }));
+          }
+        }
+      } catch (error) {
+        live = [];
+      }
+      // Index rows carry raw note text when the Tasks memo omits the
+      // note (done/ archives); surface it when memo lookup misses.
+      for (const row of live) {
+        try {
+          if (row && row.other && !row.other.task && row.other.fallback) {
+            const fallback = row.other.fallback;
+            if (fallback && (fallback.text || fallback.status)) {
+              row.other.task = { path: fallback.path, blockId: fallback.blockId, text: fallback.text, status: fallback.status };
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return relationChipModelForRow({ direction, lineText: text, sourcePath, live, lookup, resolve });
+    } catch (error) {
+      return null;
+    }
+  }
+
+  relationIndexOutgoingForOwner(api, sourcePath, owner) {
+    try {
+      if (!api || typeof api.outgoing !== "function") return [];
+      if (owner && owner.blockId) {
+        const rows = api.outgoing(sourcePath, owner.blockId);
+        if (Array.isArray(rows)) return rows;
+      }
+      if (owner && typeof owner.text === "string" && owner.text) {
+        const rows = api.outgoing(sourcePath, owner.text);
+        if (Array.isArray(rows) && rows.length > 0) return rows;
+      }
+      if (owner && Number.isInteger(owner.line)) {
+        const rows = api.outgoing(sourcePath, owner.line);
+        if (Array.isArray(rows)) return rows;
+      }
+      return [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  relationChipsAvailable() {
+    try {
+      return Boolean(ViewPlugin && Decoration && WidgetType && RangeSetBuilder && editorInfoField && editorLivePreviewField && RelationChipWidget);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createRelationChipExtension() {
+    try {
+      if (!this.relationChipsAvailable() || !ViewPlugin || typeof ViewPlugin.fromClass !== "function" || typeof Prec.highest !== "function") {
+        return null;
+      }
+      const plugin = this;
+      const RelationPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildRelationChipDecorations(view);
+          } catch (error) {
+            this.decorations = Decoration.none;
+          }
+        }
+
+        update(update) {
+          try {
+            if (plugin.relationChipShouldRebuild(update)) {
+              this.decorations = plugin.buildRelationChipDecorations(update.view);
+            }
+          } catch (error) {
+            // Keep the previous decorations if a single refresh fails.
+          }
+        }
+      };
+      return Prec.highest(ViewPlugin.fromClass(RelationPluginClass, { decorations: (value) => value.decorations }));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  relationChipShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") return false;
+      if (update.docChanged || update.viewportChanged || update.selectionSet) return true;
+      const refresh = ensureDependencyChipsRefresh();
+      const transactions = update.transactions || [];
+      for (const transaction of transactions) {
+        const effects = transaction && transaction.effects;
+        for (const effect of Array.isArray(effects) ? effects : (effects ? [effects] : [])) {
+          if (effect === refresh || (refresh && effect && typeof effect.is === "function" && effect.is(refresh))) {
+            return true;
+          }
+        }
+      }
+      if (editorLivePreviewField && update.startState && update.state) {
+        try {
+          if (update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField)) {
+            return true;
+          }
+        } catch (error) {
+          // A missing field is not a reason to force a rebuild.
+        }
+      }
+      if (editorInfoField && update.startState && update.state) {
+        try {
+          const before = update.startState.field(editorInfoField);
+          const after = update.state.field(editorInfoField);
+          if ((before && before.file && before.file.path) !== (after && after.file && after.file.path)) {
+            return true;
+          }
+        } catch (error) {
+          // A missing field is not a reason to force a rebuild.
+        }
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildRelationChipDecorations(view) {
+    try {
+      if (!this.dependencyChipsEnabled || !Decoration || !RangeSetBuilder || !RelationChipWidget || !editorInfoField || !editorLivePreviewField) {
+        return Decoration.none;
+      }
+      const live = view.state.field(editorLivePreviewField);
+      if (!live) {
+        return Decoration.none;
+      }
+      const info = view.state.field(editorInfoField);
+      const path = info && info.file && typeof info.file.path === "string" ? info.file.path : "";
+      if (!path) {
+        return Decoration.none;
+      }
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") {
+        return Decoration.none;
+      }
+      const builder = new RangeSetBuilder();
+      const ranges = Array.isArray(view.visibleRanges) ? view.visibleRanges : [];
+      const selections = (view.state.selection && view.state.selection.ranges) || [];
+      const docLength = typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      let tree = null;
+      try {
+        tree = syntaxTree && typeof syntaxTree === "function" ? syntaxTree(view.state) : syntaxTree;
+      } catch (error) {
+        tree = null;
+      }
+      for (const range of ranges) {
+        if (!range || typeof range.from !== "number") {
+          continue;
+        }
+        let pos = Math.max(0, range.from);
+        const end = Math.min(typeof range.to === "number" ? range.to : docLength, docLength);
+        let guard = 0;
+        while (pos <= end && guard < 10000) {
+          guard += 1;
+          let line = null;
+          try {
+            line = doc.lineAt(pos);
+          } catch (error) {
+            break;
+          }
+          if (!line || typeof line.text !== "string") {
+            break;
+          }
+          try {
+            // Cheap prefilter before the line parser (Rule 9 wiring).
+            if (line.text.indexOf("🪢") !== -1 || line.text.indexOf("LINKS") !== -1 || line.text.indexOf("LINKED FROM") !== -1 || line.text.indexOf("BACKLINKS") !== -1) {
+              const parsed = parseTaskRelationLine(line.text);
+              if (parsed && (parsed.verdict === "accepted" || parsed.verdict === "empty")) {
+                const number = typeof line.number === "number" ? line.number : null;
+                const owner = number !== null ? relationOwnerTaskLineAtDoc(doc, number) : null;
+                const revealed = selections.some((selection) => selection && selection.from <= line.to && selection.to >= line.from);
+                const inCode = tree ? freshnessMarkPosInCode(tree, line.from) : false;
+                if (owner && !revealed && !inCode) {
+                  const model = this.relationChipModelForLine({ path, text: line.text, owner });
+                  if (model && model.chips.length > 0) {
+                    const marker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(line.text);
+                    const from = line.from + (marker ? marker[0].length : 0);
+                    const lineNumber = number === null ? null : number - 1;
+                    const interactive = Boolean(this.relationsNavApi());
+                    builder.add(from, line.to, Decoration.replace({
+                      widget: new RelationChipWidget(model, {
+                        plugin: this,
+                        sourcePath: path,
+                        lineNumber,
+                        interactive,
+                        direction: model.direction,
+                        ownerBlockId: owner.blockId || null,
+                      }),
+                    }));
+                  }
+                }
+              }
+            }
+          } catch (error) {
+            // Ignore a single row and continue through the visible range.
+          }
+          if (typeof line.to !== "number" || line.to >= end || line.to < pos) {
+            break;
+          }
+          pos = line.to + 1;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  relationRemoveLink(chip, sourcePath, meta) {
+    try {
+      const api = this.relationsNavApi();
+      if (!api || typeof api.removeLink !== "function") return;
+      const info = meta && typeof meta === "object" ? meta : {};
+      let sourceRef = null;
+      let targetRef = null;
+      if (chip && chip.direction === "from") {
+        // LINKED FROM × removes the edge from the other task's LINKS
+        // line (decision `linked_from_remove = yes`); the notice names
+        // the source note.
+        sourceRef = { path: String(chip.path || ""), line: null, blockId: chip.blockId || null };
+        targetRef = { path: String(sourcePath || ""), line: Number.isInteger(info.lineNumber) ? info.lineNumber : null, blockId: info.ownerBlockId || null };
+      } else {
+        sourceRef = { path: String(sourcePath || ""), line: Number.isInteger(info.lineNumber) ? info.lineNumber : null, blockId: info.ownerBlockId || null };
+        targetRef = { path: chip ? String(chip.path || "") : "", blockId: chip ? chip.blockId || null : null };
+      }
+      Promise.resolve(api.removeLink(sourceRef, targetRef)).then((result) => {
+        if (result && result.ok === false && result.reason) {
+          try {
+            new Notice(String(result.reason));
+          } catch (noticeError) {
+            // Success notices come from nav.
+          }
+        }
+      });
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+
+  relationOpenStage(sourcePath, meta) {
+    try {
+      const api = this.relationsNavApi();
+      if (!api || typeof api.openStage !== "function") return;
+      const info = meta && typeof meta === "object" ? meta : {};
+      const ref = {
+        path: String(sourcePath || ""),
+        line: Number.isInteger(info.lineNumber) ? info.lineNumber : null,
+        direction: info.direction === "from" ? "from" : "to",
+      };
+      Promise.resolve(api.openStage(ref));
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+}
+
+// Nearest list-item parent line for a relation row: only a direct child
+// of a `#task` line counts (docs/task-relations.md §3.5). Returns
+// `{ text, blockId, line }` (line 1-based) or null.
+function relationOwnerTaskLineAtDoc(doc, lineNumber) {
+  try {
+    if (!doc || typeof doc.line !== "function" || !Number.isInteger(lineNumber)) return null;
+    const child = doc.line(lineNumber);
+    const childIndent = /^\s*/.exec(child.text)[0].replace(/\t/g, "    ").length;
+    for (let current = lineNumber - 1; current >= 1; current -= 1) {
+      const line = doc.line(current);
+      if (!/^\s*(?:[-*+]|\d+[.)])\s+/.test(line.text)) continue;
+      const indent = /^\s*/.exec(line.text)[0].replace(/\t/g, "    ").length;
+      if (indent < childIndent) {
+        // Sources are checkbox `#task` lines, as the live index requires.
+        if (!dependencyChipIsTaskLine(line.text)) return null;
+        const match = /(?:^|\s)\^([A-Za-z0-9-]+)\s*$/.exec(line.text);
+        const blockId = match && RELATION_BLOCK_ID_RE.test(match[1]) ? match[1] : null;
+        return { text: line.text, blockId, line: current };
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Raw-lines twin for the Reading view. `lines` is the note split on
+// `\n`; `childIndex` is 0-based.
+function relationOwnerTaskLine(lines, childIndex) {
+  try {
+    if (!Array.isArray(lines) || !Number.isInteger(childIndex)) return null;
+    const child = String(lines[childIndex] || "");
+    const childIndent = /^\s*/.exec(child)[0].replace(/\t/g, "    ").length;
+    for (let index = childIndex - 1; index >= 0; index -= 1) {
+      const line = String(lines[index] || "");
+      if (!/^\s*(?:[-*+]|\d+[.)])\s+/.test(line)) continue;
+      const indent = /^\s*/.exec(line)[0].replace(/\t/g, "    ").length;
+      if (indent < childIndent) {
+        // Sources are checkbox `#task` lines, as the live index requires.
+        if (!dependencyChipIsTaskLine(line)) return null;
+        const match = /(?:^|\s)\^([A-Za-z0-9-]+)\s*$/.exec(line);
+        const blockId = match && RELATION_BLOCK_ID_RE.test(match[1]) ? match[1] : null;
+        return { text: line, blockId, line: index + 1 };
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
 // ---- src/280-plugin-dependency-render.js ----
 class BobLedgerToolsDependencyRenderMixin {
   renderDependencyChipsIn(el, ctx) {
@@ -40521,6 +41673,15 @@ class BobLedgerToolsDependencyRenderMixin {
         // Rendered-view chips are best-effort.
       }
       this.setupBlocksChips();
+      // Relation rows share the toggle and the refresh: one command and
+      // one effect cover dependency, BLOCKS, and relation rows (LC12).
+      try {
+        if (typeof this.setupRelationChips === "function") {
+          this.setupRelationChips();
+        }
+      } catch (error) {
+        // Relation chips are best-effort.
+      }
     } catch (error) {
       // Chips setup never throws.
     }
@@ -40963,6 +42124,544 @@ function blocksReadingLabelElement(li) {
         const tag = String(node.tagName || node.nodeName || "").toUpperCase();
         if (tag === "UL" || tag === "OL" || tag === "LI") continue;
         if ((tag === "STRONG" || tag === "B") && /^(?:BLOCKS|BLOCKING):?$/.test(String(node.textContent || "").trim())) return node;
+      }
+      for (const child of Array.from(node.childNodes || []).reverse()) stack.push(child);
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+// ---- src/282-plugin-relation-render.js ----
+class BobLedgerToolsRelationRenderMixin {
+  setupRelationChips() {
+    try {
+      const extension = this.createRelationChipExtension();
+      if (extension && typeof this.registerEditorExtension === "function") {
+        this.registerEditorExtension(extension);
+      }
+      if (typeof this.registerMarkdownPostProcessor === "function") {
+        this.registerMarkdownPostProcessor((el, ctx) => this.renderRelationChipsIn(el, ctx), 50);
+      }
+      // LC14: an entry typed in the editor before save refreshes the
+      // target's chip row in the same session. The overlay updates the
+      // index; this refresh rebuilds every chip decoration on it.
+      try {
+        if (!this.relationIndexRefreshSubscribed && typeof this.relationIndexApi === "function") {
+          const api = this.relationIndexApi();
+          if (api && typeof api.onChange === "function") {
+            const self = this;
+            api.onChange(() => {
+              try {
+                self.scheduleDependencyChipsRefresh();
+              } catch (error) {
+                // Refresh is best-effort.
+              }
+            });
+            this.relationIndexRefreshSubscribed = true;
+          }
+        }
+      } catch (error) {
+        // Index refresh is best-effort.
+      }
+    } catch (error) {
+      // Relation chips are read-only decoration and never block startup.
+    }
+  }
+
+  async renderRelationChipsIn(el, ctx) {
+    try {
+      if (!this.dependencyChipsEnabled || !el || !ctx) {
+        return;
+      }
+      const path = typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      if (!path) {
+        return;
+      }
+      let items = [];
+      try {
+        if (typeof el.querySelectorAll === "function") {
+          items = Array.from(el.querySelectorAll("li"));
+        } else if (Array.isArray(el.children)) {
+          items = el.children.slice();
+        }
+      } catch (error) {
+        return;
+      }
+      const candidates = [];
+      for (const li of items) {
+        try {
+          if (!li || li.nodeType !== 1 || (li.dataset && li.dataset.bobRelationProcessed === "1")) {
+            continue;
+          }
+          if (this.dependencyExcludedAncestor(li, el)) {
+            continue;
+          }
+          let ownText = "";
+          try {
+            ownText = dependencyReadingOwnText(li);
+          } catch (error) {
+            ownText = "";
+          }
+          // Cheap prefilter; the raw-line parse below is authoritative
+          // (malformed and not-a-line rows never get chips, LC13).
+          if (!/🪢|🔗|LINKS|LINKED FROM|BACKLINKS/.test(ownText)) {
+            continue;
+          }
+          if (!dependencyReadingOwningTask(li, el)) {
+            continue;
+          }
+          const anchors = [];
+          const found = li.querySelectorAll ? li.querySelectorAll("a.internal-link") : [];
+          for (const anchor of Array.from(found || [])) {
+            if (dependencyReadingAnchorOwner(anchor, el) === li) {
+              anchors.push(anchor);
+            }
+          }
+          let section = null;
+          try {
+            if (typeof ctx.getSectionInfo === "function") {
+              section = ctx.getSectionInfo(el) || null;
+            }
+          } catch (error) {
+            section = null;
+          }
+          candidates.push({ li, anchors, rowIndex: items.indexOf(li), rowCount: items.length, section });
+        } catch (error) {
+          continue;
+        }
+      }
+      if (candidates.length === 0) {
+        return;
+      }
+      const sections = new Map();
+      for (const candidate of candidates) {
+        try {
+          const section = candidate.section;
+          const key = section && Number.isInteger(section.lineStart) && Number.isInteger(section.lineEnd)
+            ? section.lineStart + ":" + section.lineEnd
+            : "none";
+          if (!sections.has(key)) {
+            sections.set(key, await this.relationReadSectionLines(path, section));
+          }
+          const source = sections.get(key);
+          if (!source) {
+            continue;
+          }
+          const rowLine = relationReadingMappedLine(source.lines, source.low, source.high, candidate.rowIndex, candidate.rowCount);
+          if (rowLine === null) {
+            continue;
+          }
+          const rawLine = source.lines[rowLine];
+          const parsed = parseTaskRelationLine(rawLine);
+          if (!parsed || (parsed.verdict !== "accepted" && parsed.verdict !== "empty")) {
+            continue;
+          }
+          const owner = relationOwnerTaskLine(source.lines, rowLine);
+          if (!owner) {
+            continue;
+          }
+          const model = this.relationChipModelForLine({ path, text: rawLine, owner });
+          if (!model || model.chips.length === 0) {
+            continue;
+          }
+          const docNode = candidate.li.ownerDocument || (typeof document !== "undefined" ? document : null);
+          if (!docNode) {
+            continue;
+          }
+          this.relationDecorateReadingRow(candidate.li, candidate.anchors, model, docNode, path, rowLine, owner);
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // One reading-view row never breaks the post-processor.
+    }
+  }
+
+  async relationReadSectionLines(path, section) {
+    try {
+      if (!section || !Number.isInteger(section.lineStart) || !Number.isInteger(section.lineEnd)) {
+        return null;
+      }
+      const vault = this.app && this.app.vault;
+      const file = vault && typeof vault.getAbstractFileByPath === "function" ? vault.getAbstractFileByPath(path) : null;
+      if (!file || !vault || typeof vault.cachedRead !== "function") {
+        return null;
+      }
+      const text = await vault.cachedRead(file);
+      if (typeof text !== "string") {
+        return null;
+      }
+      const lines = text.split("\n");
+      return { lines, low: Math.max(0, section.lineStart), high: Math.min(lines.length - 1, section.lineEnd) };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  relationDecorateReadingRow(li, anchors, model, doc, sourcePath, lineNumber, owner) {
+    try {
+      const interactive = Boolean(this.relationsNavApi());
+      const label = relationReadingLabelElement(li);
+      if (label) {
+        try {
+          label.style.display = "none";
+        } catch (styleError) {
+          // Attribute fallback for style-free DOMs.
+        }
+        try {
+          label.setAttribute("data-bob-relation-hidden", "1");
+        } catch (attrError) {
+          // Best-effort.
+        }
+      }
+      const rowClasses = ["bob-dep-row", "bob-relation-row"];
+      if (model.direction === "from") rowClasses.push("is-incoming");
+      if (model.labelled) rowClasses.push("is-labelled");
+      for (const name of rowClasses) {
+        try {
+          li.classList.add(name);
+        } catch (error) {
+          // Best-effort.
+        }
+      }
+      li.setAttribute("role", "group");
+      li.setAttribute("aria-label", String(model.label || "relations") + ", " + model.liveCount + " live");
+      li.setAttribute("title", String(model.tooltip || ""));
+      if (li.dataset) li.dataset.bobRelationProcessed = "1";
+      const meta = { lineNumber, direction: model.direction, ownerBlockId: (owner && owner.blockId) || null };
+
+      const available = anchors.slice();
+      const closedAnchors = [];
+      for (const chip of model.chips) {
+        let anchor = null;
+        const foundAt = available.findIndex((candidate) => {
+          try {
+            return dependencyReadingBlockId(candidate) === chip.blockId;
+          } catch (error) {
+            return false;
+          }
+        });
+        if (foundAt >= 0) {
+          anchor = available.splice(foundAt, 1)[0];
+          this.relationDecorateReadingAnchor(anchor, chip, doc, model);
+        } else if (chip.live && !chip.broken) {
+          // LC7: a live edge missing from the stored text is appended
+          // in canonical order; placement happens below.
+          anchor = this.relationCreateReadingAnchor(chip, doc, model, sourcePath);
+          if (!anchor) {
+            continue;
+          }
+        } else {
+          // Stale chips with no stored anchor, and live-but-broken
+          // edges with none, name nothing to decorate.
+          continue;
+        }
+        if (chip.collapsed) {
+          closedAnchors.push(anchor);
+        }
+        if (model.labelled) {
+          // Each labelled entry gets its own visual row with its pill
+          // and arrow (LC10); processing in chip order keeps stored
+          // order with live appends last (LC7).
+          const entry = doc.createElement("span");
+          entry.setAttribute("class", "bob-relation-entry");
+          try {
+            if (anchor.parentNode) anchor.parentNode.removeChild(anchor);
+          } catch (removeError) {
+            // Fresh anchors have no parent yet.
+          }
+          entry.appendChild(anchor);
+          this.relationAppendReadingEntryContent(entry, anchor, chip, doc, model);
+          li.appendChild(entry);
+        } else if (!anchor.parentNode) {
+          // Unlabelled rows keep stored anchors in place; fresh live
+          // appends go last (LC7).
+          li.appendChild(anchor);
+        }
+        if (interactive && chip.live && !chip.broken && anchor) {
+          this.relationAttachReadingRemove(anchor, chip, doc, sourcePath, meta);
+        }
+      }
+      // Hide the source glyph, header words, label words, and raw
+      // separators: every direct text child of an accepted row is
+      // chrome the chips replace. Nested lists are elements, so child
+      // tasks are untouched.
+      for (const node of Array.from(li.childNodes || [])) {
+        try {
+          if (node.nodeType !== 3) continue;
+          if (node.parentNode !== li) continue;
+          const value = String(node.nodeValue || node.textContent || "");
+          if (value.trim() === "" || /[🪢🔗]/.test(value)) {
+            try {
+              node.nodeValue = "";
+            } catch (clearError) {
+              // Best-effort.
+            }
+            try {
+              node.textContent = "";
+            } catch (clearError) {
+              // Best-effort.
+            }
+          } else {
+            // Label words (`follow-up of`) and `(labels)` duplicate
+            // the pills; blank them too on accepted rows.
+            try {
+              node.nodeValue = "";
+            } catch (clearError) {
+              // Best-effort.
+            }
+            try {
+              node.textContent = "";
+            } catch (clearError) {
+              // Best-effort.
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      if (model.collapsed && Number(model.collapsed.count) > 0) {
+        this.relationAppendReadingCollapsed(li, closedAnchors, model, doc);
+      }
+      if (interactive && !(li.dataset && li.dataset.bobRelationAdd === "1")) {
+        const self = this;
+        relationAttachAddControl(li, doc, model, () => {
+          try {
+            self.relationOpenStage(sourcePath, meta);
+          } catch (error) {
+            // Best-effort.
+          }
+        });
+        if (li.dataset) li.dataset.bobRelationAdd = "1";
+      }
+    } catch (error) {
+      // The raw Markdown stays usable if a DOM implementation rejects a decoration.
+    }
+  }
+
+  relationAppendReadingEntryContent(host, anchor, chip, doc, model) {
+    try {
+      if (!host || !anchor) return;
+      if (!model.labelled) return;
+      if (model.direction === "to") {
+        if (chip.label) {
+          const pill = doc.createElement("span");
+          pill.setAttribute("class", "bob-relation-pill");
+          pill.appendChild(doc.createTextNode(String(chip.label)));
+          host.insertBefore(pill, anchor);
+          const arrow = doc.createElement("span");
+          arrow.setAttribute("class", "bob-relation-arrow");
+          arrow.setAttribute("aria-hidden", "true");
+          arrow.appendChild(doc.createTextNode("→"));
+          host.insertBefore(arrow, anchor);
+        }
+      } else if (chip.inverse) {
+        const pill = doc.createElement("span");
+        pill.setAttribute("class", "bob-relation-pill");
+        pill.appendChild(doc.createTextNode(String(chip.inverse)));
+        host.insertBefore(pill, anchor);
+      } else if (chip.label) {
+        const sep = doc.createElement("span");
+        sep.setAttribute("class", "bob-relation-sep");
+        sep.setAttribute("aria-hidden", "true");
+        sep.appendChild(doc.createTextNode("·"));
+        host.appendChild(sep);
+        const pill = doc.createElement("span");
+        pill.setAttribute("class", "bob-relation-pill");
+        pill.appendChild(doc.createTextNode(String(chip.label)));
+        host.appendChild(pill);
+        const arrow = doc.createElement("span");
+        arrow.setAttribute("class", "bob-relation-arrow");
+        arrow.setAttribute("aria-hidden", "true");
+        arrow.appendChild(doc.createTextNode("→ this"));
+        host.appendChild(arrow);
+      }
+    } catch (error) {
+      // Pill and arrow are best-effort.
+    }
+  }
+
+  relationAppendReadingCollapsed(li, closedAnchors, model, doc) {
+    try {
+      const count = Number(model.collapsed.count) || 0;
+      if (count <= 0 || closedAnchors.length === 0) return;
+      for (const anchor of closedAnchors) {
+        try {
+          anchor.style.display = "none";
+        } catch (styleError) {
+          // Attribute fallback for style-free DOMs.
+        }
+        try {
+          anchor.setAttribute("data-bob-relation-collapsed", "1");
+        } catch (attrError) {
+          // Best-effort.
+        }
+      }
+      const collapsed = doc.createElement("span");
+      collapsed.setAttribute("class", "bob-dep-chip is-done-collapsed bob-relation-collapsed");
+      collapsed.setAttribute("role", "button");
+      collapsed.setAttribute("tabindex", "0");
+      collapsed.setAttribute("aria-label", "Show " + count + " closed relations");
+      collapsed.setAttribute("title", "✓×" + count + " closed");
+      collapsed.appendChild(doc.createTextNode("✓×" + count));
+      const expand = () => {
+        try {
+          for (const anchor of closedAnchors) {
+            try {
+              anchor.style.display = "";
+            } catch (styleError) {
+              // Best-effort.
+            }
+            try {
+              anchor.removeAttribute("data-bob-relation-collapsed");
+            } catch (attrError) {
+              // Best-effort.
+            }
+          }
+          if (typeof collapsed.remove === "function") collapsed.remove();
+          else if (collapsed.parentNode && typeof collapsed.parentNode.removeChild === "function") {
+            collapsed.parentNode.removeChild(collapsed);
+          }
+        } catch (error) {
+          // An unexpanded row never breaks the chips.
+        }
+      };
+      if (typeof collapsed.addEventListener === "function") {
+        collapsed.addEventListener("click", expand);
+        collapsed.addEventListener("keydown", (event) => {
+          if (event && (event.key === "Enter" || event.key === " ")) {
+            if (typeof event.preventDefault === "function") event.preventDefault();
+            expand();
+          }
+        });
+      }
+      li.appendChild(collapsed);
+    } catch (error) {
+      // An uncollapsed row never breaks the chips.
+    }
+  }
+
+  relationAttachReadingRemove(anchor, chip, doc, sourcePath, meta) {
+    try {
+      if (!anchor || (anchor.getAttribute && anchor.getAttribute("data-bob-relation-actions") === "1")) {
+        return;
+      }
+      const self = this;
+      relationAttachChipRemove(anchor, chip, doc, (item) => {
+        try {
+          self.relationRemoveLink(item, sourcePath, meta);
+        } catch (error) {
+          // Best-effort.
+        }
+      });
+      try {
+        anchor.setAttribute("data-bob-relation-actions", "1");
+      } catch (error) {
+        // Best-effort.
+      }
+    } catch (error) {
+      // Leave the existing internal link navigable.
+    }
+  }
+
+  relationDecorateReadingAnchor(anchor, chip, doc, model) {
+    try {
+      const classes = ["bob-dep-chip", "bob-relation-chip", "is-" + String(chip.state || "todo")];
+      if (chip.stale) classes.push("is-stale");
+      if (chip.broken) classes.push("is-broken");
+      if (chip.archived) classes.push("is-archived");
+      if (chip.hidden) classes.push("is-muted");
+      anchor.classList.add(...classes);
+      anchor.setAttribute("role", "link");
+      anchor.setAttribute("aria-label", relationChipAriaLabel(chip));
+      if (chip.tooltip) anchor.setAttribute("title", chip.tooltip);
+      anchor.setAttribute("data-state", String(chip.state || "todo"));
+      for (const child of Array.from(anchor.childNodes || [])) {
+        if (child.nodeType === 1 && child.classList && child.classList.contains("bob-dep-chip-box")) {
+          child.remove();
+        }
+      }
+      while (anchor.firstChild) anchor.removeChild(anchor.firstChild);
+      this.relationAppendAnchorContent(anchor, chip, doc);
+    } catch (error) {
+      // Leave the existing internal link navigable.
+    }
+  }
+
+  relationCreateReadingAnchor(chip, doc, model, sourcePath) {
+    try {
+      const anchor = doc.createElement("a");
+      const target = String(chip.linktext || "").replace(/^#/, "");
+      anchor.setAttribute("class", "internal-link");
+      anchor.setAttribute("data-href", target);
+      anchor.setAttribute("href", target.indexOf("#") === -1 ? "#" + target : target);
+      anchor.setAttribute("aria-label", relationChipAriaLabel(chip));
+      anchor.setAttribute("title", String(chip.tooltip || ""));
+      this.relationDecorateReadingAnchor(anchor, chip, doc, model);
+      return anchor;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  relationAppendAnchorContent(anchor, chip, doc) {
+    try {
+      const box = doc.createElement("span");
+      box.setAttribute("class", "bob-dep-chip-box");
+      box.setAttribute("data-task", String(chip.state || "todo"));
+      box.setAttribute("aria-hidden", "true");
+      box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
+      anchor.appendChild(box);
+      const text = doc.createElement("span");
+      text.setAttribute("class", "bob-dep-chip-text");
+      text.appendChild(doc.createTextNode(String(chip.text || "")));
+      anchor.appendChild(text);
+      if (chip.noteLabel) {
+        const note = doc.createElement("span");
+        note.setAttribute("class", "bob-dep-chip-note");
+        note.appendChild(doc.createTextNode(String(chip.noteLabel)));
+        anchor.appendChild(note);
+      }
+    } catch (error) {
+      // Content is best-effort.
+    }
+  }
+}
+
+function relationReadingMappedLine(lines, low, high, rowIndex, rowCount) {
+  try {
+    const fenced = planFencedLines(lines, low, high);
+    const items = [];
+    for (let index = low; index <= high; index += 1) {
+      if (!fenced.has(index) && dependencyChipHasMarker(lines[index])) {
+        items.push(index);
+      }
+    }
+    if (items.length !== rowCount || !Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= items.length) {
+      return null;
+    }
+    const line = items[rowIndex];
+    const parsed = parseTaskRelationLine(lines[line]);
+    return parsed && (parsed.verdict === "accepted" || parsed.verdict === "empty") && relationOwnerTaskLine(lines, line) ? line : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function relationReadingLabelElement(li) {
+  try {
+    const stack = [li];
+    let guard = 0;
+    while (stack.length > 0 && guard < 500) {
+      guard += 1;
+      const node = stack.pop();
+      if (!node || node.nodeType !== 1) continue;
+      if (node !== li) {
+        const tag = String(node.tagName || node.nodeName || "").toUpperCase();
+        if (tag === "UL" || tag === "OL" || tag === "LI") continue;
+        if ((tag === "STRONG" || tag === "B") && /LINKS|LINKED FROM|BACKLINKS/.test(String(node.textContent || ""))) return node;
       }
       for (const child of Array.from(node.childNodes || []).reverse()) stack.push(child);
     }
@@ -42207,10 +43906,12 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsPomodoroHomeChipsReadingMixin,
   BobLedgerToolsDependencyModelMixin,
   BobLedgerToolsRelationIndexMixin,
+  BobLedgerToolsRelationModelMixin,
   BobLedgerToolsBlocksModelMixin,
   BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,
+  BobLedgerToolsRelationRenderMixin,
   BobLedgerToolsTodayLocationMixin,
   BobLedgerToolsTodayMarksMixin,
   BobLedgerToolsTodayMarksReadingMixin,
@@ -44208,6 +45909,17 @@ module.exports.helpers = {
   parseTaskRelationLine,
   parseTaskRelationFile,
   relationLabelSuggestionRows,
+  relationInversePhrase,
+  relationChipModelForRow,
+  buildRelationChipElement,
+  relationAttachChipRemove,
+  relationAttachAddControl,
+  relationOwnerTaskLine,
+  relationOwnerTaskLineAtDoc,
+  relationReadingMappedLine,
+  relationReadingLabelElement,
+  RELATION_INVERSE_PHRASES,
+  RELATION_STALE_TOOLTIP,
   emptyPlanBudget,
   computeTodayLinks,
   emptyTodayCache,

@@ -348,8 +348,8 @@ test("Live Preview, Reading view, shared toggle, and malformed rows (BC12, BC14,
   assert.ok(anchor.childNodes.some((child) => child.className.includes("bob-blocks-key")));
 
   plugin.setupDependencyChips();
-  assert.equal(plugin.editorExtensions.length, 2, "one dependency extension and one BLOCKS extension");
-  assert.equal(plugin.postProcessors.length, 2, "one toggle owns both rendered rows");
+  assert.equal(plugin.editorExtensions.length, 3, "one dependency extension, one BLOCKS extension, and one relation extension");
+  assert.equal(plugin.postProcessors.length, 3, "one toggle owns all three rendered rows");
   const toggle = plugin.commands.find((command) => command.id === "toggle-dependency-chips");
   assert.ok(toggle);
   assert.equal(toggle.callback(), false);

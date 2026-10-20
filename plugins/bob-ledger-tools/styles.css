@@ -900,6 +900,80 @@ body.bob-fresh-marks .markdown-source-view.is-live-preview .dataview.inline-fiel
   font-variant-numeric: tabular-nums;
 }
 
+/* Task relation chips (bob-cli-a2 chips): live LINKS and LINKED FROM
+   rows in Live Preview and Reading view. Reuses the `bob-dep-*` family
+   with no new palette: colour carries status, never direction. Labelled
+   rows wrap one entry per visual row; unlabelled rows wrap between
+   chips. Entries never change line height. Motion respects
+   `prefers-reduced-motion`. */
+.bob-relation-row {
+  flex-wrap: wrap;
+}
+
+.bob-relation-label {
+  color: var(--text-muted);
+}
+
+.bob-relation-entry {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3em;
+  max-width: 100%;
+  line-height: inherit;
+}
+
+.bob-relation-row.is-labelled .bob-relation-entry {
+  flex-basis: 100%;
+}
+
+.bob-relation-pill {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  font-variant: small-caps;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.bob-relation-arrow {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.bob-relation-sep {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.bob-relation-chip.is-stale {
+  border-style: dashed;
+  color: var(--text-muted);
+}
+
+.bob-relation-chip.is-broken {
+  border-style: dashed;
+}
+
+.bob-relation-chip.is-archived {
+  opacity: 0.72;
+}
+
+.bob-relation-chip.is-muted {
+  opacity: 0.58;
+}
+
+@media (max-width: 480px) {
+  .bob-relation-entry {
+    gap: 0.25em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-relation-row .bob-dep-chip:hover {
+    transform: none;
+  }
+}
+
 /* Task priority marks (bob-cli-4p ledger-marks): one compact signal-bar
    glyph for each canonical `[priority:: …]` task field. Display-only;
    nothing ever writes it. The glyph is a 4-bar signal staircase in a

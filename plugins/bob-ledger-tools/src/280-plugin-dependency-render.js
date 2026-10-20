@@ -734,6 +734,15 @@ class BobLedgerToolsDependencyRenderMixin {
         // Rendered-view chips are best-effort.
       }
       this.setupBlocksChips();
+      // Relation rows share the toggle and the refresh: one command and
+      // one effect cover dependency, BLOCKS, and relation rows (LC12).
+      try {
+        if (typeof this.setupRelationChips === "function") {
+          this.setupRelationChips();
+        }
+      } catch (error) {
+        // Relation chips are best-effort.
+      }
     } catch (error) {
       // Chips setup never throws.
     }

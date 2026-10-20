@@ -16,6 +16,8 @@
   path: block-id-defaults.md
 - title: BLOCKS dependency mirrors
   path: blocks-mirrors.md
+- title: Task relations
+  path: task-relations.md
 - title: Task Card
   path: task-card.md
 - title: Go to task URI

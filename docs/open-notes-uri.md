@@ -4,17 +4,19 @@ description: "Open a bounded batch of notes and optionally land the caret with a
 ---
 
 Bob Navigation Hotkeys registers the read-only `obsidian://bob-open-notes`
-handler for a batch of notes. It processes entries serially and never writes
+handler for a batch of notes. It queues whole URLs and starts each URL only
+after the previous URL finishes. Within one URL, entries open in parameter
+order; the first successful entry becomes primary. The handler never writes
 the vault.
 
 An already open note is reused in any window, including a background tab
 Obsidian has not loaded yet. Main-area tabs take precedence over sidebar tabs.
 If the first entry is not open and the active leaf is empty, it opens there.
 Otherwise, the handler appends a new tab at the far right of the active tab
-group. Entry 1 is primary; secondary notes open in the background, and the
-primary tab ends active. A supplied line receives a caret at column 0 and a
-brief accent highlight. The handler waits up to two seconds for Bob's writes
-to appear in Obsidian.
+group. The first successfully opened entry is primary; other notes open in
+the background, and the primary tab ends active. A supplied line receives a
+caret at column 0 and a brief accent highlight. The handler waits up to two
+seconds for Bob's writes to appear in Obsidian.
 
 ## URI v1
 

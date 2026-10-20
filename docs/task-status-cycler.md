@@ -56,7 +56,7 @@ reopens the transcluded source task too.
 
 The empty-placeholder toggle `Ctrl+Alt+]` toggles empty Pomodoro
 placeholders and sub-bullets, including named empty placeholders. The Obsidian
-task toggle `Ctrl+Shift+]>` / `Ctrl+}>` converts a task to or from a normal
+task toggle `Ctrl+Shift+]` / `Ctrl+}` converts a task to or from a normal
 bullet; a Vim count `N<Ctrl+Shift+]>` toggles the cursor item and the next N
 sibling items together, prompting at most once and sending the whole group to
 one section. Every eligible plain-bullet promotion in a note with an exact

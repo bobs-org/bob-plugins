@@ -34,8 +34,10 @@ planning data and presentation helpers: `caps`,
 `renderReviewChip`. With `content` supplied,
 `planBudget({ path?, content? })` measures post-write content
 synchronously; without it, the API reads the target note asynchronously.
-`isToday` uses the task path and Tasks block link, and is false
-before its first cache build.
+`isToday` uses the task path and Tasks block link; it returns false when
+either identity field is missing or the Today ledger cache is not ready.
+`todayRank(task)` returns that task's zero-based index in the cached Today
+ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 
 | Namespace | Version | Purpose |
 | --- | ---: | --- |
@@ -53,8 +55,13 @@ The read-only `readyBudget()` returns
 `{ count, cap, over }`; unavailable Tasks data or an unready cache
 returns a null count. `dashboardLaneBudget(lane)` returns
 `{ section, lane, cap, over, today }` with null section/lane when
-unavailable. Render helpers accept a host and optional source-path/component
-context so mounted views can refresh with their lifecycle.
+unavailable. Here `pending` selects Tasks status `IN_PROGRESS` and `next`
+selects status symbol `*`. The section count excludes Today; badges use it
+for color and turn over only when `section > cap`. Whole-lane pressure remains
+in the tooltip. The no-argument `pendingBudget()` and `nextBudget()` keep
+whole-lane counts for existing callers. Render helpers accept a host and
+optional source-path/component context so mounted views can refresh with their
+lifecycle.
 
 The `freshness` namespace advertises
 `trackerReview`, `checklistTiers`, and
@@ -67,7 +74,20 @@ The `freshness` namespace advertises
 `queue`, `counts`, `lints`, and
 `reviewEntryView`. These calls are synchronous and do not throw;
 `keepLine` is the sole helper that increments the keep streak.
-Generic freshness stampers clear that count.
+Generic freshness stampers clear that count. A counted keep saturates at 999
+and increments only when the line has a valid `[fresh::]` date before today;
+missing, malformed, or same-day freshness does not add to the streak.
+
+Navigation Hotkeys exposes `freshnessDecayCard.version >= 2` as a capability
+for the approved decay decision card. Ledger Tools shows the decision-card
+leaf and `Alt+F to decide` hint only when that capability is present and decay
+is enabled. Without either condition, freshness marks use counting-only
+wording.
+
+Navigation Hotkeys, Task Status Cycler, and Block ID Prompt delegate freshness
+placement to Ledger Tools with
+`api?.freshness?.stampLine?.(line, dateText) ?? line` when the Ledger Tools
+root API is version 3 or later. They do not place `[fresh::]` themselves.
 
 `noteReady` provides `snapshot(now?)`,
 `forNote(path)`, `counted(task)`,
@@ -130,9 +150,11 @@ than rejecting. `taskLinkLane.matches` is synchronous and
   resolves to `{ reopened, failures }`; tasks with a strictly
   future `scheduled` date remain Blocked.
   Each identity has `path` and at least one of
-  `blockId` or `taskId`.
+  `blockId` or `taskId`. The method never throws; failures are returned in
+  the result.
 - `completeTaskAtCursor(editor)` completes the cursor task through
-  the Tasks command so recurrence can run. It returns
+  Tasks' `set-status-symbol-to-x` command so recurrence can run; it never
+  writes `[x]` directly. It returns
   `{ ok: true, lineDelta, successorNotice }` or
   `{ ok: false, reason }` and does not stamp the task.
 

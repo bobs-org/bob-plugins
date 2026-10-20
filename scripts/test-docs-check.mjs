@@ -22,6 +22,14 @@ function writeExecutable(file, body) {
 
 function writeJustfile(root) {
   fs.writeFileSync(path.join(root, "justfile"), "docs-check:\n  echo ok\n");
+  fs.mkdirSync(path.join(root, "tools", "docs"), { recursive: true });
+  fs.writeFileSync(path.join(root, "tools", "docs", "pyproject.toml"), "[project]\nname = 'bob-docs'\n");
+  fs.mkdirSync(path.join(root, "docs", "_meta"), { recursive: true });
+  fs.writeFileSync(path.join(root, "docs", "_meta", "mounts.yml"), "mounts: []\n");
+}
+
+function writeJustfileOnly(root) {
+  fs.writeFileSync(path.join(root, "justfile"), "docs-check:\n  echo ok\n");
 }
 
 function fixtureRoot() {
@@ -61,6 +69,13 @@ function stubGit(bin, logDir) {
       '  dest="${@: -1}"',
       '  mkdir -p "$dest"',
       '  printf "docs-check:\\n  echo cached\\n" > "$dest/justfile"',
+      '  mkdir -p "$dest/tools/docs" "$dest/docs/_meta"',
+      '  printf "[project]\\nname = \'bob-docs\'\\n" > "$dest/tools/docs/pyproject.toml"',
+      '  printf "mounts: []\\n" > "$dest/docs/_meta/mounts.yml"',
+      "  exit 0",
+      "fi",
+      'if [[ "$1" == "-C" && "$3" == "remote" && "$4" == "get-url" && "$5" == "origin" ]]; then',
+      '  printf "%s\\n" "${BOB_STUB_ORIGIN:-https://github.com/bobs-org/bob-cli}"',
       "  exit 0",
       "fi",
       'if [[ "$1" == "-C" && "$3" == "fetch" ]]; then',
@@ -73,6 +88,7 @@ function stubGit(bin, logDir) {
       "fi",
       'if [[ "$1" == "-C" && "$3" == "reset" ]]; then',
       `  printf '%s\\n' "$2" > ${JSON.stringify(path.join(logDir, "reset_dir"))}`,
+      '  printf "HEAD is now at aaaaaaa init\\n"',
       "  exit 0",
       "fi",
       'echo "unexpected git $*" >&2',
@@ -193,6 +209,81 @@ test("cache clone is used when no user-owned checkout exists", () => {
   assert.match(gitArgs, /https:\/\/github.com\/bobs-org\/bob-cli/);
   assert.match(gitArgs, /^--branch$/m);
   assert.match(gitArgs, /^master$/m);
+});
+
+test("refreshing an existing cache keeps git chatter off stdout and forwards exact paths", () => {
+  const root = fixtureRoot();
+  const realPluginRoot = installPlugin(path.join(root, "workspace", "plugins source"));
+  const pluginAlias = path.join(root, "workspace", "plugin alias");
+  fs.symlinkSync(realPluginRoot, pluginAlias, "dir");
+  const cache = makeDir(root, "cache home", "bob-plugins-docs", "bob-cli");
+  writeJustfile(cache);
+  const logDir = makeDir(root, "log");
+  const bin = makeDir(root, "bin");
+  stubJust(bin, logDir);
+  stubGit(bin, logDir);
+
+  const result = runScript(pluginAlias, {
+    bin,
+    env: {
+      HOME: root,
+      XDG_CACHE_HOME: path.join(root, "cache home"),
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /HEAD is now at/);
+  assert.equal(fs.readFileSync(path.join(logDir, "cwd"), "utf8").trim(), cache);
+  assert.equal(fs.readFileSync(path.join(logDir, "plugins_dir"), "utf8").trim(), fs.realpathSync(realPluginRoot));
+  assert.match(fs.readFileSync(path.join(logDir, "git_args"), "utf8"), /remote\nget-url\norigin/);
+  assert.equal(fs.readFileSync(path.join(logDir, "fetch_dir"), "utf8").trim(), cache);
+  assert.equal(fs.readFileSync(path.join(logDir, "reset_dir"), "utf8").trim(), cache);
+});
+
+test("a cache clone with a foreign origin fails before fetch or reset", () => {
+  const root = fixtureRoot();
+  const pluginRoot = installPlugin(path.join(root, "workspace"));
+  const cache = makeDir(root, "cache", "bob-plugins-docs", "bob-cli");
+  writeJustfile(cache);
+  const logDir = makeDir(root, "log");
+  const bin = makeDir(root, "bin");
+  stubJust(bin, logDir);
+  stubGit(bin, logDir);
+
+  const result = runScript(pluginRoot, {
+    bin,
+    env: {
+      HOME: root,
+      XDG_CACHE_HOME: path.join(root, "cache"),
+      BOB_STUB_ORIGIN: "https://example.invalid/other.git/",
+    },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /unexpected origin/);
+  assert.match(result.stderr, /refusing to fetch or reset/);
+  const gitArgs = fs.readFileSync(path.join(logDir, "git_args"), "utf8");
+  assert.match(gitArgs, /remote\nget-url\norigin/);
+  assert.doesNotMatch(gitArgs, /fetch|reset/);
+  assert.equal(fs.existsSync(path.join(logDir, "fetch_dir")), false);
+  assert.equal(fs.existsSync(path.join(logDir, "reset_dir")), false);
+});
+
+test("a justfile alone is rejected as an explicit bob-cli checkout", () => {
+  const root = fixtureRoot();
+  const pluginRoot = installPlugin(path.join(root, "workspace"));
+  const partial = makeDir(root, "partial-cli");
+  writeJustfileOnly(partial);
+  const logDir = makeDir(root, "log");
+  const bin = makeDir(root, "bin");
+  stubJust(bin, logDir);
+
+  const result = runScript(pluginRoot, {
+    bin,
+    env: { BOB_CLI_DIR: partial, HOME: root },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /tools\/docs\/pyproject\.toml/);
+  assert.equal(fs.existsSync(path.join(logDir, "args")), false);
 });
 
 test("just failures propagate", () => {

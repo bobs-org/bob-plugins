@@ -11,7 +11,7 @@ aware, so it can be accepted immediately or replaced by typing.
 | --- | --- |
 | `Fix flaky sync test` | `fix-flaky-sync` |
 | `Add support for new %hold directive` | `hold` |
-| `Review [[project-notes#^fix-apollo|apollo fix]] notes` | `apollo-fix` |
+| `Review [[project-notes#^fix-sample\|sample fix]] notes` | `sample-fix` |
 | `Réparer café` | `reparer-cafe` |
 
 Press Enter to accept the suggestion. Typing replaces it; cancelling does

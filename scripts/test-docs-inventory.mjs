@@ -57,6 +57,35 @@ test("scans multiline, one-line, and guarded literal registrations", () => {
   assert.deepEqual(commands.find(({ id }) => id === "one-line").hotkeys, []);
 });
 
+test("scans an optional addCommand call", () => {
+  const commands = scanCommands([{
+    path: "optional.js",
+    content: 'this.addCommand?.({ id: "optional", name: "Optional" });',
+  }]);
+  assert.deepEqual(commands.map(({ id }) => id), ["optional"]);
+});
+
+test("allows addCommand references only in a typeof guard", () => {
+  const source = [
+    'if (typeof this.addCommand === "function") this.addCommand({ id: "this-guard", name: "This guard" });',
+    'if (typeof plugin.addCommand === "function") plugin.addCommand?.({ id: "plugin-guard", name: "Plugin guard" });',
+  ].join("\n");
+  assert.deepEqual(scanCommands([{ path: "guards.js", content: source }]).map(({ id }) => id), ["plugin-guard", "this-guard"]);
+});
+
+test("rejects bind, call, and aliased addCommand references with source locations", () => {
+  for (const [label, expression] of [
+    ["bind", "this.addCommand.bind(this)"],
+    ["call", "this.addCommand.call(this, {})"],
+    ["alias", "const add = this.addCommand"],
+  ]) {
+    assert.throws(
+      () => scanCommands([{ path: label + ".js", content: expression }]),
+      new RegExp(label + "\\.js:1:\\d+: unsupported non-call addCommand reference"),
+    );
+  }
+});
+
 test("expands literal command data from a constant-array forEach across source files", () => {
   const table = [
     "const YANK_PATH_COMMANDS = [",
@@ -128,6 +157,14 @@ test("fails with source locations for dynamic metadata, hotkeys, and malformed t
       { path: "plugin.js", content: 'COMMANDS.forEach((command) => { this.addCommand({ id: command.id, name: command.name }); });' },
     ]),
     /table\.js:1:.*command name/,
+  );
+  assert.throws(
+    () => scanCommands([{ path: "empty-id.js", content: 'this.addCommand({ id: "", name: "Empty" });' }]),
+    /empty-id\.js:1:.*command id cannot be empty/,
+  );
+  assert.throws(
+    () => scanCommands([{ path: "empty-name.js", content: 'this.addCommand({ id: "x", name: "" });' }]),
+    /empty-name\.js:1:.*command name cannot be empty/,
   );
 });
 
@@ -203,6 +240,21 @@ test("checks drift without writes, preserves prose, and generates deterministica
   const drift = await generateInventory(root, { check: true });
   assert.ok(drift.stale.includes("docs/example-plugin.md"));
   assert.equal(fs.readFileSync(pagePath, "utf8"), staleCheckBytes);
+});
+
+test("code-span table cells preserve backslashes and use a safe backtick fence", async (t) => {
+  const root = temporaryDirectory();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "README.md"), "# Bob plugins\n\n## Plugins\n");
+  const ticks = "`".repeat(3);
+  writeManifest(root, "code-plugin", manifest("code-plugin"), {
+    main: 'this.addCommand({ id: "back\\\\slash|pipe' + ticks + 'value", name: "Code" });',
+  });
+
+  await generateInventory(root);
+  const page = fs.readFileSync(path.join(root, "docs", "code-plugin.md"), "utf8");
+  const fence = "`".repeat(4);
+  assert.ok(page.includes("| " + fence + "back\\slash\\|pipe" + ticks + "value" + fence + " |"));
 });
 
 test("does not write any output when source validation fails", async (t) => {

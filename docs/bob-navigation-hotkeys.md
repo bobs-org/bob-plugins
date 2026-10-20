@@ -152,8 +152,16 @@ Dependency writes go through one managed ⛓️ **DEPENDS ON:** first-child line
 per task, committed in one undoable edit: adding an open prerequisite marks
 the dependent Blocked, raises the target to its lane, and removes the
 dependent's live links from today's open Pomodoros together with any emptied
-entry; removing the last open prerequisite recovers it immediately. The Depends
-on value stage searches every open task in the vault, reachable from a task
+entry. Cleanup deletes an open Pomodoro entry it empties, while entries with
+prose children and untouched placeholders remain. Removing the last open
+prerequisite recovers the dependent immediately when it has no future
+`scheduled` date. `Ctrl+D` on the Depends-On row deletes that line, the
+`[dependsOn::]` field, and legacy dependency children in one writer
+transaction, with immediate recovery. Hand edits are mirrored once the cursor
+leaves the edited line; malformed lines are left alone. BLOCKED stage rows
+show `🔒 waits on N` for one or more open prerequisites, otherwise
+`🔒 scheduled YYYY-MM-DD` when a date blocks the task, otherwise `🔒 blocked`.
+The Depends on value stage searches every open task in the vault, reachable from a task
 line, the Depends-On line itself, a chip, a Task Link, or the `Edit task
 dependencies` palette command. Blockquoted tasks refuse dependency edits.
 Answering the landed review row advances the walk once to the next remaining
@@ -176,6 +184,26 @@ and removals update the generated 🧱 BLOCKS mirrors, governed by
 `dependencies.blocks_lines` in the shared bob config file (default on; set it
 to `false` to stop navigation gestures from writing BLOCKS lines).
 
+**Create project note from task** converts an open task in an area or project
+note. Its `Ctrl+Shift+Alt+N` shortcut from the original README is a custom
+vault binding, not a registered default or a plugin keydown handler. The same
+command on a project's `^prj` task converts the note back into a parent-task
+block in the parent's `## Tasks` section, carrying its tasks, section bullets,
+and project-task subtree, repointing `#^prj` links, then trashing the project
+note. If backlink rewriting fails, the restored task remains and the project
+note is kept with a notice.
+
+When promoting a task, an unchecked, ALL-CAPS direct child bullet becomes a
+title-cased `##` section only when it has its own nested list items. The
+converter reuses a matching heading case-insensitively or appends a new one;
+it copies descendants as notes rather than `#task` lines. Other eligible
+child bullets become tasks. Managed Schedule Log and Work Log subtrees move
+under the new `^prj` task in source order. If child content cannot be moved
+losslessly, the source task is kept and a notice explains the partial result.
+Task Card Depends on and Schedule edits on a `^prj` with sub-projects cascade
+top-down with preimage-checked writes and report
+`· N sub-projects Blocked / Ready again / not updated`.
+
 `Alt+N` commits Ready to Next or releases Next/In Progress to Ready on the
 current task plus the next N tasks (or the linked task plus the next N sibling
 Task Links), unlinking released tasks from today and reporting the NEXT/PENDING
@@ -192,6 +220,13 @@ a notice. `N]s` / `N[s` jump N review-queue entries in one landing. `]s` /
 with a `Back to current review task` toast; `<C-o>` goes back, and the next
 press steps from the task. `[S` / `]S` jump to the first/last queue entries
 without wrapping.
+
+`Alt+F` and `Ctrl+Alt+F` stamp the cursor task, or the target of a dedicated
+Task Link, through Ledger Tools' `keepLine`; a count also includes the next N
+targets. An exact due Ready keep counts once, while other stamps clear
+`keeps`. A single exact, due, at-limit source task opens the approved decay
+decision card and writes nothing. Counted and Task Link sessions skip such
+targets and report `1 needs a decision` (or the corresponding count).
 
 On the exact PRE/POST row the walk just landed on, `Ctrl+Enter` completes
 through the cycler and advances within the group. `Alt+F` completes a
@@ -219,7 +254,9 @@ caret without writing the vault. `Cmd+Enter` on a reading task, Task Link, or
 managed embed opens its PDF in Highlights without vault writes; other targets
 keep Obsidian's new-tab behavior. Bare and counted `!` only toggle
 transclusion markers and are refused on dependency lines with a notice pointing
-to `Ctrl+Shift+P`.
+to `Ctrl+Shift+P`. Managed reference notes under `ref/` with a nonempty
+`source_pdf` must be renamed with `bob ref rename`; ordinary file rename does
+not move their PDF, reading task, and links together.
 
 Three keyboard layers are in play, and they are not the same thing:
 

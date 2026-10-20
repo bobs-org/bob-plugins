@@ -32,8 +32,8 @@ if [[ "$#" -ne 0 ]]; then
   exit 2
 fi
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-plugin_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+plugin_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 
 cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/bob-plugins-docs"
 cache_cli="$cache_root/bob-cli"
@@ -47,6 +47,8 @@ is_bob_cli() {
   local candidate=$1
   [[ -d "$candidate" ]] || return 1
   [[ -f "$candidate/justfile" || -f "$candidate/Justfile" ]] || return 1
+  [[ -f "$candidate/tools/docs/pyproject.toml" ]] || return 1
+  [[ -f "$candidate/docs/_meta/mounts.yml" ]] || return 1
   return 0
 }
 
@@ -58,9 +60,21 @@ describe_invalid() {
     printf 'is not a directory'
   elif [[ ! -f "$candidate/justfile" && ! -f "$candidate/Justfile" ]]; then
     printf 'has no justfile'
+  elif [[ ! -f "$candidate/tools/docs/pyproject.toml" ]]; then
+    printf 'is missing bob-cli marker tools/docs/pyproject.toml'
+  elif [[ ! -f "$candidate/docs/_meta/mounts.yml" ]]; then
+    printf 'is missing bob-cli marker docs/_meta/mounts.yml'
   else
     printf 'is not a usable bob-cli checkout'
   fi
+}
+
+normalize_remote() {
+  local remote=$1
+  remote=${remote%/}
+  remote=${remote%.git}
+  remote=${remote%/}
+  printf '%s' "$remote"
 }
 
 validate_user_owned() {
@@ -74,18 +88,24 @@ validate_user_owned() {
 clone_cache() {
   local dest=$1
   mkdir -p "$(dirname -- "$dest")"
-  GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "$CLI_BRANCH" "$CLI_REMOTE" "$dest" ||
+  GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "$CLI_BRANCH" "$CLI_REMOTE" "$dest" >&2 ||
     fail "could not clone $CLI_REMOTE branch $CLI_BRANCH into $dest"
 }
 
 refresh_cache() {
   local dest=$1
-  GIT_TERMINAL_PROMPT=0 git -C "$dest" fetch --depth 1 origin "+refs/heads/${CLI_BRANCH}:refs/remotes/origin/${CLI_BRANCH}" ||
+  local origin
+  origin=$(GIT_TERMINAL_PROMPT=0 git -C "$dest" remote get-url origin) ||
+    fail "could not read origin URL for cached bob-cli clone at $dest"
+  if [[ "$(normalize_remote "$origin")" != "$(normalize_remote "$CLI_REMOTE")" ]]; then
+    fail "cached bob-cli clone at $dest has unexpected origin $origin (expected $CLI_REMOTE); refusing to fetch or reset it"
+  fi
+  GIT_TERMINAL_PROMPT=0 git -C "$dest" fetch --depth 1 origin "+refs/heads/${CLI_BRANCH}:refs/remotes/origin/${CLI_BRANCH}" >&2 ||
     fail "could not refresh cached bob-cli clone at $dest"
   local fetched
   fetched=$(GIT_TERMINAL_PROMPT=0 git -C "$dest" rev-parse --verify FETCH_HEAD) ||
     fail "cached bob-cli clone at $dest has no FETCH_HEAD after refresh"
-  GIT_TERMINAL_PROMPT=0 git -C "$dest" reset --hard "$fetched" ||
+  GIT_TERMINAL_PROMPT=0 git -C "$dest" reset --hard "$fetched" >&2 ||
     fail "could not reset cached bob-cli clone at $dest"
 }
 

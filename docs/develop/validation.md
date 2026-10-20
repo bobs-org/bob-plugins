@@ -21,7 +21,9 @@ includes inventory scanner tests; keeping it explicit makes suite membership
 reviewable. It also runs focused tests for plugin behavior, source builds, API
 boundaries, and navigation and picker workflows.
 
-`npm run validate` checks bundle and inventory drift, then runs
+`npm run validate` exits non-zero if any plugin's bundle, inventory, or
+manifest validation fails, so it is safe to use in CI or a pre-commit
+hook. It checks bundle and inventory drift, then runs
 `scripts/validate-manifests.mjs` across every plugin. It verifies
 required manifest fields, the folder/ID match, semantic version format, and
 `main.js` syntax with `node --check`; it does not execute
@@ -68,8 +70,8 @@ node --test scripts/test-navigation-dependencies-stage-ranker-and-pool.cjs scrip
 The source-build suite is `scripts/test-plugin-build.cjs`. It
 covers fragment manifests, deterministic output, read-only freshness checks,
 and parity comparison. The full test command also checks that Ledger Tools
-owns the `\\p` Pomodoro-increment mapping and Navigation Hotkeys
-owns `\\s` for tab pinning.
+owns the `\p` Pomodoro-increment mapping and Navigation Hotkeys
+owns `\s` for tab pinning.
 
 ## Related
 

@@ -1,6 +1,9 @@
 Source-of-truth monorepo for bob (Bugyi's Obsidian) plugins, deployed to the vault
 (in the ~/bob/ directory) via `bob plugins sync`.
 
+The `docs/` tree is mounted into the Bob site; keep the inventory generated and run
+`npm run docs:check`.
+
 Plugins with `src/fragments.json` use the committed source build. Edit their `src/`
 fragments, run `npm run build`, and never hand-edit their generated `main.js`. The
 manifest array is the source order; fragments share one script scope and each hand-edited

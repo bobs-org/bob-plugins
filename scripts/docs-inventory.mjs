@@ -511,7 +511,15 @@ function parseCommandObject(parsed, openIndex, closeIndex, mode) {
   const sourceLocation = location(parsed.file, parsed.tokens[openIndex]);
 
   if (idValue.kind === "literal" && nameValue.kind === "literal") {
-    return { kind: "literal", id: idValue.value, name: nameValue.value, hotkeys, location: sourceLocation };
+    return {
+      kind: "literal",
+      id: idValue.value,
+      name: nameValue.value,
+      hotkeys,
+      location: sourceLocation,
+      file: parsed.file,
+      token: parsed.tokens[openIndex],
+    };
   }
   if (
     idValue.kind === "member" &&
@@ -520,7 +528,14 @@ function parseCommandObject(parsed, openIndex, closeIndex, mode) {
     idValue.property === "id" &&
     nameValue.property === "name"
   ) {
-    return { kind: "table-row", parameter: idValue.object, hotkeys, location: sourceLocation };
+    return {
+      kind: "table-row",
+      parameter: idValue.object,
+      hotkeys,
+      location: sourceLocation,
+      file: parsed.file,
+      token: parsed.tokens[openIndex],
+    };
   }
   fail("command id and name must be string literals or matching table fields", parsed.file, parsed.tokens[openIndex]);
 }
@@ -641,8 +656,27 @@ function findCommandCalls(parsed) {
       tokens[index - 1]?.value === "[" &&
       tokens[index + 1]?.value === "]";
     if (!isName && !isComputedName) continue;
-    const openIndex = isComputedName ? index + 2 : index + 1;
-    if (tokens[openIndex]?.value !== "(") continue;
+    const isMember =
+      isComputedName ||
+      tokens[index - 1]?.value === "." ||
+      tokens[index - 1]?.value === "?.";
+    if (!isMember) {
+      if (tokens[index + 1]?.value === "(") fail("addCommand must be called as a member method", parsed.file, token);
+      continue;
+    }
+
+    let openIndex = isComputedName ? index + 2 : index + 1;
+    if (tokens[openIndex]?.value === "?." && tokens[openIndex + 1]?.value === "(") openIndex += 1;
+    if (tokens[openIndex]?.value !== "(") {
+      const isTypeofGuard =
+        !isComputedName &&
+        tokens[index - 1]?.value === "." &&
+        tokens[index - 2]?.type === "identifier" &&
+        (tokens[index - 2].value === "this" || tokens[index - 2].value === "plugin") &&
+        tokens[index - 3]?.value === "typeof";
+      if (isTypeofGuard) continue;
+      fail("unsupported non-call addCommand reference", parsed.file, token);
+    }
     if (!isComputedName && tokens[index - 1]?.value !== "." && tokens[index - 1]?.value !== "?.") {
       fail("addCommand must be called as a member method", parsed.file, token);
     }
@@ -682,10 +716,21 @@ export function scanCommands(sourceFiles) {
         .sort((left, right) => (left.bodyEnd - left.bodyStart) - (right.bodyEnd - right.bodyStart))[0];
       const registration = call.registration;
       if (registration.kind === "literal") {
+        if (!registration.id.trim()) {
+          fail("command id cannot be empty", parsed.file, registration.token);
+        }
+        if (!registration.name.trim()) {
+          fail("command name cannot be empty", parsed.file, registration.token);
+        }
         if (enclosing) {
           fail("literal command registrations inside forEach loops are unsupported", parsed.file, call.token);
         }
-        allCalls.push({ ...registration, location: location(parsed.file, call.token) });
+        allCalls.push({
+          id: registration.id,
+          name: registration.name,
+          hotkeys: registration.hotkeys,
+          location: location(parsed.file, call.token),
+        });
         continue;
       }
       if (!enclosing || registration.parameter !== enclosing.parameter) {
@@ -693,6 +738,12 @@ export function scanCommands(sourceFiles) {
       }
       const tableRows = findConstantArray(enclosing.arrayName, sources, { parsed, token: enclosing.token });
       for (const row of tableRows) {
+        if (!row.id.trim()) {
+          fail("command id cannot be empty", row.file, row.token);
+        }
+        if (!row.name.trim()) {
+          fail("command name cannot be empty", row.file, row.token);
+        }
         allCalls.push({
           id: row.id,
           name: row.name,
@@ -705,8 +756,6 @@ export function scanCommands(sourceFiles) {
 
   const ids = new Map();
   for (const command of allCalls) {
-    if (!command.id.trim()) fail("command id cannot be empty", command.location.split(":")[0], { line: 1, column: 1 });
-    if (!command.name.trim()) fail("command name cannot be empty", command.location.split(":")[0], { line: 1, column: 1 });
     const previous = ids.get(command.id);
     if (previous) {
       throw new Error("duplicate command id " + JSON.stringify(command.id) + " at " + command.location + "; first registered at " + previous);
@@ -764,8 +813,11 @@ function escapeTable(value) {
     .trim();
 }
 
-function escapeCode(value) {
-  return BT + String(value).replaceAll(BT, "\\" + BT) + BT;
+function escapeCodeCell(value) {
+  const source = String(value);
+  const runs = [...source.matchAll(/`+/g)].map(([run]) => run.length);
+  const fence = BT.repeat(Math.max(1, ...runs) + (runs.length ? 1 : 0));
+  return fence + source.replace(/\|/g, "\\|") + fence;
 }
 
 function validateManifest(manifest, manifestPath) {
@@ -932,7 +984,7 @@ function renderFacts(plugin) {
   const desktop = plugin.isDesktopOnly ? "Yes" : "No";
   const rows = [
     ["Name", plugin.name],
-    ["ID", escapeCode(plugin.id)],
+    ["ID", escapeCodeCell(plugin.id), true],
     ["Version", plugin.version],
     ["Minimum Obsidian version", plugin.minAppVersion],
     ["Desktop only", desktop],
@@ -943,7 +995,7 @@ function renderFacts(plugin) {
     "",
     "| Fact | Value |",
     "| --- | --- |",
-    ...rows.map(([label, value]) => "| " + escapeTable(label) + " | " + escapeTable(value) + " |"),
+    ...rows.map(([label, value, isCode = false]) => "| " + escapeTable(label) + " | " + (isCode ? value : escapeTable(value)) + " |"),
   ].join("\n");
 }
 
@@ -962,7 +1014,7 @@ function renderCommands(plugin) {
     "| --- | --- | --- |",
     ...plugin.commands.map((command) => {
       const hotkeys = command.hotkeys.length ? command.hotkeys.join(", ") : "—";
-      return "| " + escapeTable(command.name) + " | " + escapeTable(escapeCode(command.id)) + " | " + escapeTable(hotkeys) + " |";
+      return "| " + escapeTable(command.name) + " | " + escapeCodeCell(command.id) + " | " + escapeTable(hotkeys) + " |";
     }),
   ].join("\n");
 }

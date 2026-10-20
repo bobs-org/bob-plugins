@@ -22,9 +22,9 @@ bob-plugins checkout. It leaves runtime settings and data files alone.
 
 ## Documentation
 
-- [Get started](https://bobs-org.github.io/getting-started/)
-- [Reference](https://bobs-org.github.io/reference/)
-- [Develop](https://bobs-org.github.io/develop/)
+- [Get started](https://bobs-org.github.io/start/obsidian/)
+- [Reference](https://bobs-org.github.io/reference/plugins/)
+- [Develop](https://bobs-org.github.io/develop/plugins/)
 
 Source navigation is available on GitHub even when the site is unavailable:
 

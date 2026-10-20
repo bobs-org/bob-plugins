@@ -1,0 +1,10 @@
+- title: Architecture
+  path: architecture.md
+- title: Validation
+  path: validation.md
+- title: Cross-plugin APIs
+  path: plugin-apis.md
+- title: Dependency-line migration
+  path: dependency-migration.md
+- title: Deployment
+  path: deployment.md

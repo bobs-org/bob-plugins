@@ -16,3 +16,12 @@ Browse Bob's Obsidian plugins and their current versions and command defaults.
 | [Bob Vim Surround](bob-vim-surround.md) | 1.5.2 | 1.8.7 | No |
 | [Task Status Cycler](task-status-cycler.md) | 1.42.1 | 1.8.7 | No |
 <!-- END GENERATED: inventory -->
+
+## Shared reference topics
+
+- [Block ID prompt defaults](block-id-defaults.md) — how suggested IDs are formed and accepted.
+- [BLOCKS dependency mirrors](blocks-mirrors.md) — when Navigation Hotkeys writes the reverse dependency line.
+- [Task Card](task-card.md) — property editing, previews, scheduling input, and key behavior.
+- [Go to task URI](goto-task-uri.md) and [Open notes URI](open-notes-uri.md) — read-only links for opening notes and landing the caret.
+- [Open a reference PDF in Highlights](highlights.md) — reading-task PDF handoff.
+- [Templater new-note trigger](templater-trigger.md) — how new notes receive the folder template.

@@ -68,7 +68,9 @@ today's live lanes while keeping their own TODAY theme and link budget.
 Today is read from the ledger at render time — the open tasks with a dedicated
 Task Link under today's open Pomodoros — and kept in a synchronous cache that
 rebuilds on layout ready, on daily-note change, create, delete, and rename, and
-at local-midnight rollover. Caps come from the `plan:` block in the shared bob
+at local-midnight rollover. When the cached Today key set changes, open Tasks
+queries reload their results through the Tasks plugin's
+`reload-open-search-results` event. Caps come from the `plan:` block in the shared bob
 config file (`max_next`, `max_pending`, `max_ready`, `max_ready_per_note`; a
 legacy `max_now` loads without error), with built-in defaults when the file,
 the block, or a value is missing or invalid. The block re-renders live when the
@@ -191,3 +193,5 @@ glyphs.
   model.
 - [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) — the review walk and
   Task Card this plugin feeds.
+- [Cross-plugin APIs](develop/plugin-apis.md) — the versioned planning,
+  freshness, stats, and mark interfaces.

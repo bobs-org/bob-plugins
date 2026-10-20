@@ -1,0 +1,145 @@
+---
+title: "Cross-plugin APIs"
+description: "Reference for the versioned runtime interfaces shared by Bob plugins."
+---
+
+Plugins communicate through a loaded plugin's `api` object,
+available under `app.plugins.plugins["<plugin-id>"]`. They do not
+import one another's generated `main.js` files. Consumers should
+feature-detect both the provider and the method or namespace they need; an
+unloaded plugin is not a usable dependency.
+
+API objects are additive compatibility surfaces. Check a namespace's own
+`version` when it has one instead of assuming every namespace
+changes with the root version. Guard cross-plugin calls and handle failure
+results.
+
+## Block ID Prompt
+
+`block-id-prompt.api.pomodoroLinkPicker` is namespace version 1.
+`pick(request)` resolves to a selected open Pomodoro
+(`{ kind: "existing", entryLine, entryText, title }`), a new
+destination (`{ kind: "new", name }`), or `null` when
+cancelled, unavailable, or unable to resolve today's Pomodoros. The promise
+does not reject. Navigation Hotkeys uses this picker for successor offers.
+
+## Bob Ledger Tools
+
+The root `bob-ledger-tools.api` is version 3. It shares live
+planning data and presentation helpers: `caps`,
+`planBudget`, `todayKeys`, `isToday`,
+`todayRank`, `nextBudget`, `pendingBudget`,
+`dashboardLaneBudget`, `renderDashboardLaneBadge`,
+`readyBudget`, `renderReadyBadge`, and
+`renderReviewChip`. With `content` supplied,
+`planBudget({ path?, content? })` measures post-write content
+synchronously; without it, the API reads the target note asynchronously.
+`isToday` uses the task path and Tasks block link, and is false
+before its first cache build.
+
+| Namespace | Version | Purpose |
+| --- | ---: | --- |
+| `stats` | 2 | Append validated review events; `host`, `fetch`, and `bobPath` support Stats and consumers. |
+| `workBadges` | 2 | Return count-to-limit badge tones through `tone` and `todayTone`. |
+| `freshness` | 12 | Read or update freshness, refresh intervals, keep counts, review queue, and unblocked metadata. |
+| `noteReady` | 1 | Read per-note Ready-lane counts and render the crowded-note chip. |
+| `dashboardCollections` | 1 | Snapshot or render PROJECTS and REFERENCES badges. |
+| `priorityMarks` | 1 | Model and render priority marks. |
+| `dateMarks` | 1 | Model and render canonical date marks. |
+| `progressMarks` | 1 | Refresh the display-only In Progress Task Link mark. |
+| `unblockedGlyph` | 1 | Refresh the display-only unblocked hand-off glyph. |
+
+The read-only `readyBudget()` returns
+`{ count, cap, over }`; unavailable Tasks data or an unready cache
+returns a null count. `dashboardLaneBudget(lane)` returns
+`{ section, lane, cap, over, today }` with null section/lane when
+unavailable. Render helpers accept a host and optional source-path/component
+context so mounted views can refresh with their lifecycle.
+
+The `freshness` namespace advertises
+`trackerReview`, `checklistTiers`, and
+`recurringTier`. Its methods include `config`,
+`stampLine`, `setRefreshLine`,
+`keepLine`, `markUnblockedLine`,
+`state`, `returnedBy`, `bucket`,
+`reviewModel`, `isDue`, `tier`,
+`rank`, `intervalFor`, `intervalForLine`,
+`queue`, `counts`, `lints`, and
+`reviewEntryView`. These calls are synchronous and do not throw;
+`keepLine` is the sole helper that increments the keep streak.
+Generic freshness stampers clear that count.
+
+`noteReady` provides `snapshot(now?)`,
+`forNote(path)`, `counted(task)`,
+`inCrowdedNote(task)`, `groupLabel(task)`, and
+`renderCrowdedChip(host, options?)`. It reads the area/project
+note's Ready lane against the shared cap and is synchronous.
+`dashboardCollections` provides `snapshot()` and
+`renderChip(host, options?)` for live PROJECTS/REFERENCES badges.
+
+`priorityMarks` exposes `model(value)` and
+`render(host, value, { decorative?, inheritColor? })`.
+`dateMarks` exposes `model(field, dateText)` and
+`render(host, field, dateText, { decorative?, inheritColor? })`;
+its fields are `created`, `scheduled`,
+`completion`, and `cancelled`. These glyphs are
+display-only. `progressMarks` exposes `expect(entries)`,
+`refresh()`, and `isEnabled()`; the
+`unblockedGlyph` namespace exposes `refresh()` and
+`isEnabled()`.
+
+## Bob Navigation Hotkeys
+
+The root `bob-navigation-hotkeys.api` is version 3:
+
+| Namespace or method | Version | Purpose |
+| --- | ---: | --- |
+| `reviewWalk` | 1 | Capture a review landing with `capture(editor)`, then continue it after a gesture with `continue(origin, outcome)`. |
+| `inboxRoute` | 1 | Test an inbox path and prompt or commit a route. |
+| `taskLinkLane` | 1 | Match a Pomodoro Task Link and toggle its Next/In Progress lane. |
+| `notice` | 1 | Show the Unblocked card. |
+| `successors` | 1 | Ask which offered successor links to add. |
+| `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
+| `openReferencePdf(path)` | Additive member | Open a vault-relative PDF in Highlights; resolves `{ ok, reason? }`. |
+| `openDependencyStage(ref)` | Root method | Open the task's dependency stage. |
+| `removeDependency(parentRef, target)` | Root method | Remove the requested prerequisite. |
+| `claimReviewWalkCompletion(editor)` | Root method | Claim completion handoff for a landed review row. |
+
+`inboxRoute` has `isInboxNote(path)`,
+`prompt(request)`, and `commit(request)`.
+`taskLinkLane.matches({ content, line, path })` is synchronous;
+`toggle(args)` performs the Next/In Progress change and resolves
+to a result object. `successors.pick(model)` resolves to a result
+with a `picks` array or `null` when no choice is made.
+`blocks.openStage(ref)` and
+`blocks.removeDependent(ownerRef, target)` resolve to result
+objects. `notice.showUnblocked(model)` presents the Unblocked card.
+
+Async navigation methods settle to result objects or `null` rather
+than rejecting. `taskLinkLane.matches` is synchronous and
+`toggle` settles its result. `reviewWalk.capture` returns
+`null` when there is no current landing;
+`reviewWalk.continue` resolves its advance result.
+
+## Task Status Cycler
+
+`task-status-cycler.api` is version 2:
+
+- `recoverBlockedDependents(identities, context?)` runs the same
+  dependent recovery as task completion without retiring references. It
+  resolves to `{ reopened, failures }`; tasks with a strictly
+  future `scheduled` date remain Blocked.
+  Each identity has `path` and at least one of
+  `blockId` or `taskId`.
+- `completeTaskAtCursor(editor)` completes the cursor task through
+  the Tasks command so recurrence can run. It returns
+  `{ ok: true, lineDelta, successorNotice }` or
+  `{ ok: false, reason }` and does not stamp the task.
+
+## Related
+
+- [Block ID Prompt](../block-id-prompt.md)
+- [Bob Ledger Tools](../bob-ledger-tools.md)
+- [Bob Navigation Hotkeys](../bob-navigation-hotkeys.md)
+- [Task Status Cycler](../task-status-cycler.md)
+- [Plugin architecture](architecture.md) — generated sources and module boundaries.

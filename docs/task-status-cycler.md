@@ -153,3 +153,4 @@ shared bob config file.
   lane toggle this plugin hands off to.
 - [Bob Ledger Tools](bob-ledger-tools.md) — the freshness stamper and
   successor-reporting surfaces.
+- [Cross-plugin APIs](develop/plugin-apis.md) — the completion and blocked-dependent interface.

@@ -58,3 +58,4 @@ membership comes from the note's own frontmatter.
   counts summarize.
 - [Reference notes](https://bobs-org.github.io/ref/) — what a snapshot
   becomes.
+- [Cross-plugin APIs](develop/plugin-apis.md) — versioned runtime interfaces.

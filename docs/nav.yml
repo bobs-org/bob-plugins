@@ -1,0 +1,28 @@
+- title: Block ID Prompt
+  path: block-id-prompt.md
+- title: Bob Articles
+  path: bob-articles.md
+- title: Bob Ledger Tools
+  path: bob-ledger-tools.md
+- title: Bob Navigation Hotkeys
+  path: bob-navigation-hotkeys.md
+- title: Bob Project Tasks
+  path: bob-project-tasks.md
+- title: Bob Vim Surround
+  path: bob-vim-surround.md
+- title: Task Status Cycler
+  path: task-status-cycler.md
+- title: Block ID defaults
+  path: block-id-defaults.md
+- title: BLOCKS dependency mirrors
+  path: blocks-mirrors.md
+- title: Task Card
+  path: task-card.md
+- title: Go to task URI
+  path: goto-task-uri.md
+- title: Open notes URI
+  path: open-notes-uri.md
+- title: Open reference PDF in Highlights
+  path: highlights.md
+- title: Templater new-note trigger
+  path: templater-trigger.md

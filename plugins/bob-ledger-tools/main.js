@@ -2535,9 +2535,11 @@ function planBlockLinks(line, dailyPath) {
   try {
     const dependency = typeof parseDependencyLine === "function" ? parseDependencyLine(text) : null;
     const blocks = typeof parseBlocksLine === "function" ? parseBlocksLine(text) : null;
+    const relation = typeof isTaskRelationLine === "function" ? isTaskRelationLine(text) : false;
     if (
       (dependency && dependency.verdict !== "not-a-line") ||
-      (blocks && blocks.verdict !== "not-a-line")
+      (blocks && blocks.verdict !== "not-a-line") ||
+      relation
     ) {
       return [];
     }
@@ -14408,6 +14410,24 @@ if (WidgetType && typeof WidgetType === "function") {
       return dom;
     }
   };
+}
+// ---- src/144-relation-line-grammar.js ----
+// Task relation rows are inert metadata, never Pomodoro Task Links or plan
+// budget items. Recognize empty and malformed shapes too, so their wikilinks
+// cannot leak into `maxLinks` accounting while a line is being repaired.
+const TASK_RELATION_LINE_RE =
+  /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:(?:🪢|🔗)[ \t]+)?\*\*(?:LINKS|LINKS TO|LINKED FROM|BACKLINKS):\*\*/u;
+
+function isTaskRelationLine(lineText, options = {}) {
+  const line = String(lineText || "");
+  if (
+    /^[ \t]*>/.test(line) ||
+    options.inFence === true ||
+    options.isDirectChildOfTask === false
+  ) {
+    return false;
+  }
+  return TASK_RELATION_LINE_RE.test(line);
 }
 // ---- src/150-dependency-element.js ----
 // Dependency chips: Live Preview row element. `model` is
@@ -43400,6 +43420,7 @@ module.exports.helpers = {
   splitPlanComponents,
   computePlanBudget,
   planBlockLinks,
+  isTaskRelationLine,
   emptyPlanBudget,
   computeTodayLinks,
   emptyTodayCache,

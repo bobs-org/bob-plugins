@@ -673,7 +673,8 @@ function retireClosedTaskReferencesInText(
       fenced.has(lineNumber) ||
       !lines[lineNumber].includes("![[") ||
       isTaskDependencyLine(lines[lineNumber]) ||
-      isTaskBlocksLine(lines[lineNumber])
+      isTaskBlocksLine(lines[lineNumber]) ||
+      isTaskRelationLine(lines[lineNumber])
     ) {
       continue;
     }
@@ -754,7 +755,8 @@ function restoreReopenedTaskReferencesInText(
       fenced.has(lineNumber) ||
       !lines[lineNumber].includes("[[") ||
       isTaskDependencyLine(lines[lineNumber]) ||
-      isTaskBlocksLine(lines[lineNumber])
+      isTaskBlocksLine(lines[lineNumber]) ||
+      isTaskRelationLine(lines[lineNumber])
     ) {
       continue;
     }

@@ -60,9 +60,9 @@ function isProjectSubprojectsLine(lineText) {
 }
 
 // On reversal, the managed dependency child moves first. The machine-owned
-// Sub-projects child and its nested links describe note hierarchy, not task
-// content, so it is dropped with its whole subtree. A BLOCKS mirror line is
-// generated (Rule 1, BW18): it is never copied as a user child either.
+// Sub-projects and LINKED FROM children describe note hierarchy or a generated
+// projection, so each is dropped with its whole subtree. Authored LINKS stays
+// with the task that owns it; reconcile regenerates incoming mirrors later.
 function splitProjectLifecycleChildren(parentLine, childLines) {
   const children = Array.isArray(childLines) ? childLines.map(String) : [];
   const synthetic = [String(parentLine || ""), ...children];
@@ -99,6 +99,10 @@ function splitProjectLifecycleChildren(parentLine, childLines) {
     // like Sub-projects. Owners naming the converted source are left to
     // reconcile.
     if (parseBlocksLine(line, {}).verdict !== "not-a-line") {
+      for (let index = start; index < end; index += 1) skipped.add(index);
+      continue;
+    }
+    if (parseLinkedFromLine(line, { isDirectChildOfTask: true }).verdict !== "not-a-line") {
       for (let index = start; index < end; index += 1) skipped.add(index);
       continue;
     }

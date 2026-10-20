@@ -475,7 +475,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
       continue;
     }
     // MC1/MC2: neither managed dependency line is ever a Task Link.
-    if (isManagedDependencyLine(lines[reference.line] || "")) {
+    if (isTaskLinkExclusionLine(lines[reference.line] || "")) {
       continue;
     }
 

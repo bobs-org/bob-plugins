@@ -455,13 +455,30 @@ class BobNavigationHotkeysDependencyMirrorMixin {
       return Object.freeze({ mirrored: false });
     }
     const opts = options && typeof options === "object" ? options : {};
-    const plan = planDependencyHandEditMirror(
-      oldContent === undefined ? content : oldContent,
+    const before = oldContent === undefined ? content : String(oldContent || "");
+    const relationChange = taskRelationLinesChanged(before, content);
+    const baselineLine = Number.isInteger(opts.baselineLine) ? opts.baselineLine : editedLine;
+    const relationOnly = taskRelationOnlyHandEdit(
+      before,
+      content,
+      baselineLine,
+      editedLine,
+    );
+    const plan = relationOnly ? null : planDependencyHandEditMirror(
+      before,
       content,
       editedLine,
       removedText,
-      Number.isInteger(opts.baselineLine) ? opts.baselineLine : editedLine,
+      baselineLine,
     );
+    if (relationChange.linkedFromChanged) {
+      new Notice(TASK_LINKED_FROM_LINE_NOTICE);
+    }
+    if (relationChange.changed && !plan) {
+      // Authored LINKS edits are deliberately inert here until nav-linked-from
+      // lands; a LINKED FROM edit only gets the generated-line notice above.
+      return Object.freeze({ mirrored: false, reason: "relation-only" });
+    }
     if (!plan) {
       return Object.freeze({ mirrored: false });
     }

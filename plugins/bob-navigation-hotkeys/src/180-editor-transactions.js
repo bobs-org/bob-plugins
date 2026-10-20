@@ -428,6 +428,9 @@ function findTransclusionToggleTargets(line) {
   if (parseBlocksLine(text, {}).verdict !== "not-a-line") {
     return [];
   }
+  if (isTaskRelationLine(text)) {
+    return [];
+  }
   const dependencyBullet = parseDependencyTransclusionBulletDetails(text);
   if (dependencyBullet && dependencyBullet.terminal) {
     return [];

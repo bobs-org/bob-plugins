@@ -582,7 +582,7 @@ function getPlainBulletFormatToggle(lineText, direction) {
   // Managed dependency lines are managed elsewhere; Alt+]/Alt+[ cycle the
   // link under the cursor there and must never reformat the bullet (MC:
   // BLOCKS cycles the dependent like Depends-On).
-  if (isManagedDependencyLine(line)) {
+  if (isTaskLinkExclusionLine(line)) {
     return null;
   }
   const target = getPlainListItemFormattingTarget(line);

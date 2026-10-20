@@ -543,7 +543,7 @@ function classifyPomodoroSubBullets(lines, range) {
     }
     // MC1/MC2: neither managed dependency line is ever a Task Link (this
     // also fixes the latent Depends-On miscount).
-    if (isManagedDependencyLine(lineText)) {
+    if (isTaskLinkExclusionLine(lineText)) {
       noteBullets.push({ line, lineText });
       continue;
     }

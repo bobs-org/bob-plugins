@@ -3785,7 +3785,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
       continue;
     }
     // MC1/MC2: neither managed dependency line is ever a Task Link.
-    if (isManagedDependencyLine(lines[reference.line] || "")) {
+    if (isTaskLinkExclusionLine(lines[reference.line] || "")) {
       continue;
     }
 
@@ -4292,6 +4292,46 @@ function isDependencyTransclusionLink(lines, lineNumber, link) {
 // destination-entry selection/insertion planning.
 // ---------------------------------------------------------------------------
 
+// ---- src/061-relation-line-grammar.js ----
+// Task relations are separate from Pomodoro Task Links. This shape recogniser
+// includes empty and malformed lines so link-open, cleanup, and deletion paths
+// cannot consume a relation while it is being repaired.
+const TASK_RELATION_LINE_RE =
+  /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:(?:🪢|🔗)[ \t]+)?\*\*(?:LINKS|LINKS TO|LINKED FROM|BACKLINKS):\*\*/u;
+const TASK_LINKS_LINE_NOTICE =
+  "🪢 LINKS entries are relations, not Task Links · edit them with Ctrl+Shift+L";
+const TASK_LINKED_FROM_LINE_NOTICE =
+  "🪢 LINKED FROM is generated from other tasks' LINKS lines · change it with Ctrl+Shift+Alt+L";
+
+function isTaskRelationLine(lineText, options = {}) {
+  const line = String(lineText || "");
+  if (
+    /^[ \t]*>/.test(line) ||
+    options.inFence === true ||
+    options.isDirectChildOfTask === false
+  ) {
+    return false;
+  }
+  return TASK_RELATION_LINE_RE.test(line);
+}
+
+function isTaskLinkedFromLine(lineText, options = {}) {
+  const line = String(lineText || "");
+  return (
+    isTaskRelationLine(line, options) &&
+    /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:(?:🪢|🔗)[ \t]+)?\*\*(?:LINKED FROM|BACKLINKS):\*\*/u.test(line)
+  );
+}
+
+function taskRelationLineNotice(lineText) {
+  return isTaskLinkedFromLine(lineText)
+    ? TASK_LINKED_FROM_LINE_NOTICE
+    : TASK_LINKS_LINE_NOTICE;
+}
+
+function isTaskLinkExclusionLine(lineText) {
+  return isManagedDependencyLine(lineText) || isTaskRelationLine(lineText);
+}
 // ---- src/070-daily-and-activation-plans.js ----
 function dailyDateFormatTokens(value) {
   const date = value instanceof Date ? value : new Date(value);
@@ -5118,7 +5158,7 @@ function collectPomodoroEntryBlockLinks(lines, entryLine, entryEndLine) {
   for (let line = entryLine; line <= entryEndLine; line += 1) {
     const lineText = normalizeMarkdownLine(lines[line] || "");
     // MC1/MC2: neither managed dependency line is ever a Task Link.
-    if (isManagedDependencyLine(lineText)) {
+    if (isTaskLinkExclusionLine(lineText)) {
       continue;
     }
     let match = null;
@@ -9041,6 +9081,16 @@ class BlockIdPromptPomodoroLinksMixin {
   // the work-summary prompt (which applies on submit). The reentrancy guard is
   // held while resolving/applying and handed to the modal for the prompt.
   async startTaskLinkOpen(editor, file) {
+    const cursor = editor && typeof editor.getCursor === "function"
+      ? editor.getCursor()
+      : null;
+    const currentLineText = cursor && typeof editor.getLine === "function"
+      ? editor.getLine(cursor.line)
+      : "";
+    if (isTaskRelationLine(currentLineText)) {
+      new Notice(taskRelationLineNotice(currentLineText));
+      return;
+    }
     const selection = this.resolveSelectedTaskLinkFromEditor(editor);
     if (selection.error) {
       new Notice(selection.error);
@@ -9059,6 +9109,10 @@ class BlockIdPromptPomodoroLinksMixin {
       // with the generated-line notice, never a Task Link open.
       if (isTaskBlocksLine(lineText) || isMalformedTaskBlocksLine(lineText)) {
         new Notice(TASK_BLOCKS_LINE_NOTICE);
+        return;
+      }
+      if (isTaskRelationLine(lineText)) {
+        new Notice(taskRelationLineNotice(lineText));
         return;
       }
       if (
@@ -10057,6 +10111,10 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     // MC5 + Rule 8: refuse with the generated-line notice on a BLOCKS mirror.
     if (isTaskBlocksLine(activeLineText) || isMalformedTaskBlocksLine(activeLineText)) {
       new Notice(TASK_BLOCKS_LINE_NOTICE);
+      return false;
+    }
+    if (isTaskRelationLine(activeLineText)) {
+      new Notice(taskRelationLineNotice(activeLineText));
       return false;
     }
     if (isDependencyTransclusionLink(activeContent.split("\n"), source.line, link)) {
@@ -11401,6 +11459,12 @@ module.exports.helpers = {
   isMalformedTaskBlocksLine,
   isManagedDependencyLine,
   TASK_BLOCKS_LINE_NOTICE,
+  isTaskRelationLine,
+  isTaskLinkedFromLine,
+  isTaskLinkExclusionLine,
+  taskRelationLineNotice,
+  TASK_LINKS_LINE_NOTICE,
+  TASK_LINKED_FROM_LINE_NOTICE,
   lineIsInsideCodeFence,
   listItemBodyBounds,
   localTodayParts,

@@ -2623,7 +2623,7 @@ function collectEmbeddedTranscludedTaskTargetsInListItemBlock(sourceText, taskLi
     // Depends-On lines hold the dependent's prerequisites, which closing the
     // dependent must never close. BLOCKS lines hold the reverse mirror
     // (MC3): closing T must never close D through `![[#^d]]` there.
-    if (isTaskDependencyLine(lines[line]) || isTaskBlocksLine(lines[line])) {
+    if (isTaskLinkExclusionLine(lines[line])) {
       continue;
     }
     for (const target of parseEmbeddedBlockTransclusions(lines[line])) {
@@ -3123,6 +3123,37 @@ function isManagedDependencyLine(lineText) {
   return isTaskDependencyLine(text) || isTaskBlocksLine(text);
 }
 
+// ---- src/051-relation-line-grammar.js ----
+// Shape-only relation recogniser for inert LINKS and generated LINKED FROM
+// children. The source/target meaning is deliberately separate from the two
+// cycler uses below: relations never enter Pomodoro Task Link scanners, but
+// Ctrl+Enter and Alt+] may act on a selected relation target root-only.
+const TASK_RELATION_LINE_RE =
+  /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:(?:🪢|🔗)[ \t]+)?\*\*(?:LINKS|LINKS TO|LINKED FROM|BACKLINKS):\*\*/u;
+
+function isTaskRelationLine(lineText, options = {}) {
+  const line = String(lineText || "");
+  if (
+    /^[ \t]*>/.test(line) ||
+    options.inFence === true ||
+    options.isDirectChildOfTask === false
+  ) {
+    return false;
+  }
+  return TASK_RELATION_LINE_RE.test(line);
+}
+
+// Used only by Pomodoro / successor collection: any recognized dependency,
+// BLOCKS, or relation line is not a Task Link source.
+function isTaskLinkExclusionLine(lineText) {
+  return isManagedDependencyLine(lineText) || isTaskRelationLine(lineText);
+}
+
+// Used only by Ctrl+Enter and Alt+]/Alt+[: the same line families get the
+// root-only link gesture and never strike, embed, tree-close, or reformat.
+function isTaskLinkGestureLine(lineText) {
+  return isManagedDependencyLine(lineText) || isTaskRelationLine(lineText);
+}
 // ---- src/055-obsidian-task-toggle-ranges.js ----
 // Counts reach sibling items, not physical lines. Children travel with their
 // item; loose continuations and blank separators do not spend the count.
@@ -3800,7 +3831,7 @@ function classifyPomodoroSubBullets(lines, range) {
     }
     // MC1/MC2: neither managed dependency line is ever a Task Link (this
     // also fixes the latent Depends-On miscount).
-    if (isManagedDependencyLine(lineText)) {
+    if (isTaskLinkExclusionLine(lineText)) {
       noteBullets.push({ line, lineText });
       continue;
     }
@@ -5339,7 +5370,8 @@ function retireClosedTaskReferencesInText(
       fenced.has(lineNumber) ||
       !lines[lineNumber].includes("![[") ||
       isTaskDependencyLine(lines[lineNumber]) ||
-      isTaskBlocksLine(lines[lineNumber])
+      isTaskBlocksLine(lines[lineNumber]) ||
+      isTaskRelationLine(lines[lineNumber])
     ) {
       continue;
     }
@@ -5420,7 +5452,8 @@ function restoreReopenedTaskReferencesInText(
       fenced.has(lineNumber) ||
       !lines[lineNumber].includes("[[") ||
       isTaskDependencyLine(lines[lineNumber]) ||
-      isTaskBlocksLine(lines[lineNumber])
+      isTaskBlocksLine(lines[lineNumber]) ||
+      isTaskRelationLine(lines[lineNumber])
     ) {
       continue;
     }
@@ -5870,7 +5903,7 @@ function successorTokenSpansListBody(lineText, startIndex, endIndex) {
 // `{ pathPart, blockId, embedded }` or null.
 function parseSuccessorLiveLink(lineText) {
   const stripped = stripPomodoroMarkersFromLine(lineText);
-  if (isManagedDependencyLine(stripped)) {
+  if (isTaskLinkExclusionLine(stripped)) {
     return null;
   }
   const spans = getStrikethroughSpans(stripped);
@@ -10907,7 +10940,7 @@ function getPlainBulletFormatToggle(lineText, direction) {
   // Managed dependency lines are managed elsewhere; Alt+]/Alt+[ cycle the
   // link under the cursor there and must never reformat the bullet (MC:
   // BLOCKS cycles the dependent like Depends-On).
-  if (isManagedDependencyLine(line)) {
+  if (isTaskLinkExclusionLine(line)) {
     return null;
   }
   const target = getPlainListItemFormattingTarget(line);
@@ -16950,7 +16983,7 @@ class TaskStatusCyclerCommandsMixin {
       // (cursor-ch only on the start line; a lone link is unambiguous
       // elsewhere), with the same resolve-and-cycle worker as transcluded
       // targets. On a BLOCKS line this is the dependent (Rule 8).
-      const target = isManagedDependencyLine(lineText)
+      const target = isTaskLinkGestureLine(lineText)
         ? getTaskBlockLinkTargetFromLine(
             lineText,
             activePath,
@@ -16966,7 +16999,7 @@ class TaskStatusCyclerCommandsMixin {
       if (!target) {
         // As in the single form, a managed-dependency start line with the
         // cursor off every link reports instead of silently doing nothing.
-        if (line === startLine && isManagedDependencyLine(lineText)) {
+        if (line === startLine && isTaskLinkGestureLine(lineText)) {
           startDepLineUntargeted = true;
         }
         continue;
@@ -17639,7 +17672,7 @@ class TaskStatusCyclerCompletionMixin {
     // runs, but nothing is ever struck, restored, or embedded on the line and
     // no transcluded tree is closed. On a BLOCKS line this is the dependent
     // under the cursor (Rule 8).
-    const onDependencyLine = isManagedDependencyLine(candidate.activeLineText);
+    const onDependencyLine = isTaskLinkGestureLine(candidate.activeLineText);
 
     const context = {
       editor,
@@ -19774,10 +19807,9 @@ class TaskStatusCyclerTargetsMixin {
     );
   }
 
-  // Whether the cursor sits on a managed dependency line (Depends-On or
-  // BLOCKS). Gestures key off the line shape; the fenced-code and
-  // task-parentage rules stay hooks concerns. BLOCKS cycles the dependent
-  // under the cursor without reformatting (Rule 8).
+  // Whether the cursor sits on a managed dependency, BLOCKS, or relation
+  // line. Ctrl+Enter and Alt+] act on the selected target root-only; the
+  // bullet is never struck, restored, embedded, tree-closed, or reformatted.
   isActiveTaskDependencyLine(editor) {
     if (
       !editor ||
@@ -19792,7 +19824,7 @@ class TaskStatusCyclerTargetsMixin {
       return false;
     }
 
-    return isManagedDependencyLine(editor.getLine(cursor.line));
+    return isTaskLinkGestureLine(editor.getLine(cursor.line));
   }
 
   // The dependency link under the cursor on a managed dependency line
@@ -19815,7 +19847,7 @@ class TaskStatusCyclerTargetsMixin {
     }
 
     const lineText = editor.getLine(cursor.line);
-    if (!isManagedDependencyLine(lineText)) {
+    if (!isTaskLinkGestureLine(lineText)) {
       return null;
     }
 
@@ -20825,6 +20857,9 @@ module.exports.helpers = {
   isTaskDependencyLine,
   isTaskBlocksLine,
   isManagedDependencyLine,
+  isTaskRelationLine,
+  isTaskLinkExclusionLine,
+  isTaskLinkGestureLine,
   isCanonicalDailyNotePath,
   isProjectBlockedResidentTaskInDocument,
   projectBlockedResidentNotice,

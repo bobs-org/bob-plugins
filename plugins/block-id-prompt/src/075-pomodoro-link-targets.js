@@ -208,7 +208,7 @@ function collectPomodoroEntryBlockLinks(lines, entryLine, entryEndLine) {
   for (let line = entryLine; line <= entryEndLine; line += 1) {
     const lineText = normalizeMarkdownLine(lines[line] || "");
     // MC1/MC2: neither managed dependency line is ever a Task Link.
-    if (isManagedDependencyLine(lineText)) {
+    if (isTaskLinkExclusionLine(lineText)) {
       continue;
     }
     let match = null;

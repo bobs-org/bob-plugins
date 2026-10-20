@@ -455,6 +455,16 @@ class BlockIdPromptPomodoroLinksMixin {
   // the work-summary prompt (which applies on submit). The reentrancy guard is
   // held while resolving/applying and handed to the modal for the prompt.
   async startTaskLinkOpen(editor, file) {
+    const cursor = editor && typeof editor.getCursor === "function"
+      ? editor.getCursor()
+      : null;
+    const currentLineText = cursor && typeof editor.getLine === "function"
+      ? editor.getLine(cursor.line)
+      : "";
+    if (isTaskRelationLine(currentLineText)) {
+      new Notice(taskRelationLineNotice(currentLineText));
+      return;
+    }
     const selection = this.resolveSelectedTaskLinkFromEditor(editor);
     if (selection.error) {
       new Notice(selection.error);
@@ -473,6 +483,10 @@ class BlockIdPromptPomodoroLinksMixin {
       // with the generated-line notice, never a Task Link open.
       if (isTaskBlocksLine(lineText) || isMalformedTaskBlocksLine(lineText)) {
         new Notice(TASK_BLOCKS_LINE_NOTICE);
+        return;
+      }
+      if (isTaskRelationLine(lineText)) {
+        new Notice(taskRelationLineNotice(lineText));
         return;
       }
       if (

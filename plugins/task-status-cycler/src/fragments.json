@@ -4,6 +4,7 @@
   "030-task-toggles.js",
   "040-sections.js",
   "050-picker-and-links.js",
+  "051-relation-line-grammar.js",
   "055-obsidian-task-toggle-ranges.js",
   "060-pomodoro.js",
   "070-block-links.js",

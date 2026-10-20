@@ -28,6 +28,10 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       new Notice(TASK_BLOCKS_LINE_NOTICE);
       return false;
     }
+    if (isTaskRelationLine(activeLineText)) {
+      new Notice(taskRelationLineNotice(activeLineText));
+      return false;
+    }
     if (isDependencyTransclusionLink(activeContent.split("\n"), source.line, link)) {
       new Notice(TASK_LINK_DEPENDENCY_NOTICE);
       return false;

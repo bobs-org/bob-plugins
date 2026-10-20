@@ -6,6 +6,7 @@
   "040-editor-pomodoro-and-logs.js",
   "050-source-discovery-and-edits.js",
   "060-link-cleanup-and-deletion.js",
+  "061-relation-line-grammar.js",
   "070-daily-and-activation-plans.js",
   "075-pomodoro-link-targets.js",
   "080-picker-ui-and-task-link-modal.js",

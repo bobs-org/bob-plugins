@@ -519,9 +519,11 @@ function planBlockLinks(line, dailyPath) {
   try {
     const dependency = typeof parseDependencyLine === "function" ? parseDependencyLine(text) : null;
     const blocks = typeof parseBlocksLine === "function" ? parseBlocksLine(text) : null;
+    const relation = typeof isTaskRelationLine === "function" ? isTaskRelationLine(text) : false;
     if (
       (dependency && dependency.verdict !== "not-a-line") ||
-      (blocks && blocks.verdict !== "not-a-line")
+      (blocks && blocks.verdict !== "not-a-line") ||
+      relation
     ) {
       return [];
     }

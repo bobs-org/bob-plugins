@@ -73,6 +73,7 @@ module.exports.helpers = {
   splitPlanComponents,
   computePlanBudget,
   planBlockLinks,
+  isTaskRelationLine,
   emptyPlanBudget,
   computeTodayLinks,
   emptyTodayCache,

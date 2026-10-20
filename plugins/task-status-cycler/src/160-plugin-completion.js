@@ -493,7 +493,7 @@ class TaskStatusCyclerCompletionMixin {
     // runs, but nothing is ever struck, restored, or embedded on the line and
     // no transcluded tree is closed. On a BLOCKS line this is the dependent
     // under the cursor (Rule 8).
-    const onDependencyLine = isManagedDependencyLine(candidate.activeLineText);
+    const onDependencyLine = isTaskLinkGestureLine(candidate.activeLineText);
 
     const context = {
       editor,

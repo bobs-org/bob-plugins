@@ -9,6 +9,7 @@
   "070-recommended-roll-batch.js",
   "080-dependency-identity.js",
   "081-blocks-line-grammar.js",
+  "085-relation-line-grammar.js",
   "082-blocks-mint.js",
   "083-blocks-dependency-plan.js",
   "084-blocks-stage-plan.js",

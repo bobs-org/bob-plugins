@@ -385,7 +385,7 @@ function collectEmbeddedTranscludedTaskTargetsInListItemBlock(sourceText, taskLi
     // Depends-On lines hold the dependent's prerequisites, which closing the
     // dependent must never close. BLOCKS lines hold the reverse mirror
     // (MC3): closing T must never close D through `![[#^d]]` there.
-    if (isTaskDependencyLine(lines[line]) || isTaskBlocksLine(lines[line])) {
+    if (isTaskLinkExclusionLine(lines[line])) {
       continue;
     }
     for (const target of parseEmbeddedBlockTransclusions(lines[line])) {

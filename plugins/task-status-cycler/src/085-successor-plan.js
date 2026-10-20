@@ -198,7 +198,7 @@ function successorTokenSpansListBody(lineText, startIndex, endIndex) {
 // `{ pathPart, blockId, embedded }` or null.
 function parseSuccessorLiveLink(lineText) {
   const stripped = stripPomodoroMarkersFromLine(lineText);
-  if (isManagedDependencyLine(stripped)) {
+  if (isTaskLinkExclusionLine(stripped)) {
     return null;
   }
   const spans = getStrikethroughSpans(stripped);

@@ -381,3 +381,151 @@ test("http embed passes through and non-image urls are not candidates", () => {
   assert.equal(viaUrl.src, "https://e.com/render?id=1");
   assert.equal(viaUrl.title, "render");
 });
+
+test("remote URLs keep original bytes while titles decode once", () => {
+  const plugin = Object.create(NavigationHotkeysPlugin.prototype);
+  const encoded = plugin.findImageZoomRefs(
+    "![](https://e.com/a%252Fb.png?sig=%252B%20x)",
+  )[0];
+  assert.equal(
+    encoded.rawTarget,
+    "https://e.com/a%252Fb.png?sig=%252B%20x",
+  );
+  assert.equal(encoded.target, "https://e.com/a%252Fb.png?sig=%252B%20x");
+  assert.equal(plugin.isImageZoomCandidate(encoded), true);
+
+  const { plugin: urlPlugin } = makeResolver({});
+  const viaEncoded = resolveOn(
+    urlPlugin,
+    "![](https://e.com/a%252Fb.png?sig=%252B%20x)",
+    2,
+    "notes/note.md",
+  );
+  assert.equal(viaEncoded.src, "https://e.com/a%252Fb.png?sig=%252B%20x");
+  assert.equal(viaEncoded.title, "a%2Fb.png");
+
+  const reserved = resolveOn(
+    urlPlugin,
+    "![](https://e.com/a%23b.png)",
+    2,
+    "notes/note.md",
+  );
+  assert.equal(reserved.src, "https://e.com/a%23b.png");
+  assert.equal(reserved.title, "a#b.png");
+
+  const angled = resolveOn(
+    urlPlugin,
+    '![](<https://e.com/a%20b.png> "t")',
+    2,
+    "notes/note.md",
+  );
+  assert.equal(angled.src, "https://e.com/a%20b.png");
+  assert.equal(angled.title, "a b.png");
+
+  const malformed = resolveOn(
+    urlPlugin,
+    "![](https://e.com/a%ZZb.png)",
+    2,
+    "notes/note.md",
+  );
+  assert.equal(malformed.src, "https://e.com/a%ZZb.png");
+  assert.equal(malformed.title, "a%ZZb.png");
+
+  const withQuery = resolveOn(
+    urlPlugin,
+    "![](https://e.com/a%20b.png?x=%2520#frag%20y)",
+    2,
+    "notes/note.md",
+  );
+  assert.equal(withQuery.src, "https://e.com/a%20b.png?x=%2520#frag%20y");
+  assert.equal(withQuery.title, "a b.png");
+
+  const hostname = resolveOn(urlPlugin, "![](https://e.com/)", 2, "notes/note.md");
+  assert.equal(hostname.src, "https://e.com/");
+  assert.equal(hostname.title, "e.com");
+});
+
+test("escaped Markdown parentheses resolve to the unescaped vault file", () => {
+  const plugin = Object.create(NavigationHotkeysPlugin.prototype);
+  const ref = plugin.findImageZoomRefs("![](img/a\\(1\\).png)")[0];
+  assert.equal(ref.rawTarget, "img/a\\(1\\).png");
+  assert.equal(ref.target, "img/a(1).png");
+  assert.equal(plugin.isImageZoomCandidate(ref), true);
+
+  const { plugin: resolver, seen } = makeResolver({ "img/a(1).png": {} });
+  const result = resolveOn(
+    resolver,
+    "![](img/a\\(1\\).png)",
+    2,
+    "notes/note.md",
+  );
+  assert.equal(result.kind, "image");
+  assert.equal(result.path, "img/a(1).png");
+  assert.equal(result.src, "resource://img/a(1).png");
+  assert.deepEqual(
+    seen.map((entry) => entry.lookup),
+    ["img/a(1).png"],
+  );
+});
+
+test("vault percent escapes decode exactly once", () => {
+  const { plugin, seen } = makeResolver({
+    "img/a%20b.png": {},
+    "img/a b.png": {},
+    "notes/note.md": {},
+  });
+  const double = resolveOn(
+    plugin,
+    "![](img/a%2520b.png)",
+    2,
+    "notes/note.md",
+  );
+  assert.equal(double.kind, "image");
+  assert.equal(double.path, "img/a%20b.png");
+  assert.equal(double.src, "resource://img/a%20b.png");
+
+  const single = resolveOn(plugin, "![](img/a%20b.png)", 2, "notes/note.md");
+  assert.equal(single.kind, "image");
+  assert.equal(single.path, "img/a b.png");
+
+  assert.deepEqual(
+    seen.map((entry) => entry.lookup),
+    ["img/a%20b.png", "img/a b.png"],
+  );
+  assert.deepEqual(
+    seen.map((entry) => entry.sourcePath),
+    ["notes/note.md", "notes/note.md"],
+  );
+});
+
+test("extensionless http(s) needs Markdown image syntax", () => {
+  const plugin = Object.create(NavigationHotkeysPlugin.prototype);
+  const wikiEmbed = plugin.findImageZoomRefs("![[https://e.com/page]]")[0];
+  assert.equal(plugin.isImageZoomCandidate(wikiEmbed), false);
+
+  const wikiPlain = plugin.findImageZoomRefs("[[https://e.com/page]]")[0];
+  assert.equal(plugin.isImageZoomCandidate(wikiPlain), false);
+
+  const plainLink = plugin.findImageZoomRefs("[x](https://e.com/page)")[0];
+  assert.equal(plugin.isImageZoomCandidate(plainLink), false);
+
+  const mdEmbed = plugin.findImageZoomRefs("![](https://e.com/page)")[0];
+  assert.equal(plugin.isImageZoomCandidate(mdEmbed), true);
+
+  const wikiPng = plugin.findImageZoomRefs("![[https://e.com/a.png]]")[0];
+  assert.equal(plugin.isImageZoomCandidate(wikiPng), true);
+
+  const wikiPlainPng = plugin.findImageZoomRefs("[[https://e.com/a.png]]")[0];
+  assert.equal(plugin.isImageZoomCandidate(wikiPlainPng), true);
+
+  const { plugin: urlPlugin } = makeResolver({});
+  const viaMd = resolveOn(
+    urlPlugin,
+    "![](https://e.com/page)",
+    2,
+    "notes/note.md",
+  );
+  assert.equal(viaMd.kind, "image");
+  assert.equal(viaMd.src, "https://e.com/page");
+  assert.equal(viaMd.title, "page");
+});

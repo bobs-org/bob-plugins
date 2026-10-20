@@ -16,6 +16,14 @@ function imageZoomExtensionOfPath(pathText) {
   return base.slice(dotIndex + 1).toLowerCase();
 }
 
+// Unescape CommonMark backslash escapes so `a\(1\).png` resolves to `a(1).png`.
+function unescapeImageZoomDestination(value) {
+  return String(value || "").replace(
+    /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g,
+    "$1",
+  );
+}
+
 class BobNavigationHotkeysImageZoomMixin {
   zoomImageOnLine(editor, view) {
     if (
@@ -223,6 +231,64 @@ class BobNavigationHotkeysImageZoomMixin {
     return Object.freeze(refs.map((ref) => Object.freeze(ref)));
   }
 
+  // Remove Markdown delimiters and titles without URI decoding, so an
+  // http(s) destination keeps its original percent escapes for loading.
+  stripImageZoomWrapping(value) {
+    let target = String(value || "").trim();
+    if (!target) {
+      return "";
+    }
+    if (
+      target.length >= 2 &&
+      ((target[0] === '"' && target[target.length - 1] === '"') ||
+        (target[0] === "'" && target[target.length - 1] === "'"))
+    ) {
+      target = target.slice(1, -1).trim();
+    }
+    if (target.startsWith("<") && target.endsWith(">")) {
+      target = target.slice(1, -1).trim();
+    }
+    return target;
+  }
+
+  extractRawImageZoomDestination(destination) {
+    const text = String(destination || "").trim();
+    if (!text) {
+      return null;
+    }
+    if (text.startsWith("<")) {
+      const endIndex = text.indexOf(">");
+      if (endIndex === -1) {
+        return null;
+      }
+      const inner = text.slice(1, endIndex).trim();
+      return inner || null;
+    }
+    const titleMatch = text.match(/^(\S+)\s+["'(].*["')]$/);
+    const token = titleMatch ? titleMatch[1] : text;
+    const stripped = this.stripImageZoomWrapping(token);
+    return stripped || null;
+  }
+
+  // Normalize a vault target exactly once: unescape Markdown punctuation,
+  // decode percent escapes, then drop any subpath. External targets skip this.
+  normalizeImageZoomVaultTarget(raw) {
+    const unescaped = unescapeImageZoomDestination(raw);
+    const decoded = this.safeDecodeUri(unescaped);
+    const withoutMd = typeof this.stripMarkdownExtension === "function"
+      ? this.stripMarkdownExtension(decoded)
+      : decoded;
+    return this.stripLinkSubpath(withoutMd);
+  }
+
+  safeDecodeImageZoomTitle(value) {
+    try {
+      return decodeURIComponent(value);
+    } catch (_error) {
+      return value;
+    }
+  }
+
   buildImageZoomRef(line, parsed) {
     const text = String(line || "");
     const embed = parsed.transcluded === true;
@@ -232,20 +298,21 @@ class BobNavigationHotkeysImageZoomMixin {
       const inner = text.slice(parsed.startIndex + 2, parsed.endIndex - 2);
       const pipeIndex = inner.indexOf("|");
       const beforePipe = pipeIndex === -1 ? inner : inner.slice(0, pipeIndex);
-      const normalized = this.normalizeLinkTarget(beforePipe);
-      if (!normalized) {
+      const raw = this.stripImageZoomWrapping(beforePipe);
+      if (!raw) {
         return null;
       }
-      const external = isExternalLinkTarget(normalized);
-      const target = external
-        ? normalized
-        : this.stripLinkSubpath(normalized);
+      const external = isExternalLinkTarget(raw);
+      const target = external ? raw : this.normalizeImageZoomVaultTarget(raw);
+      if (!target) {
+        return null;
+      }
       return {
         form: "wiki",
         embed,
         start,
         end,
-        rawTarget: normalized,
+        rawTarget: raw,
         target,
         external,
       };
@@ -260,20 +327,23 @@ class BobNavigationHotkeysImageZoomMixin {
       if (destEnd === -1) {
         return null;
       }
-      const decoded = this.extractMarkdownDestination(
+      const raw = this.extractRawImageZoomDestination(
         text.slice(destStart, destEnd),
       );
-      if (!decoded) {
+      if (!raw) {
         return null;
       }
-      const external = isExternalLinkTarget(decoded);
-      const target = external ? decoded : this.stripLinkSubpath(decoded);
+      const external = isExternalLinkTarget(raw);
+      const target = external ? raw : this.normalizeImageZoomVaultTarget(raw);
+      if (!target) {
+        return null;
+      }
       return {
         form: "markdown",
         embed,
         start,
         end,
-        rawTarget: decoded,
+        rawTarget: raw,
         target,
         external,
       };
@@ -296,8 +366,8 @@ class BobNavigationHotkeysImageZoomMixin {
       if (protocol !== "http:" && protocol !== "https:") {
         return false;
       }
-      // An http(s) embed is an image even when the pathname has no extension.
-      if (ref.embed) {
+      // Only Markdown image syntax allows an extensionless http(s) URL.
+      if (ref.form === "markdown" && ref.embed) {
         return true;
       }
       return IMAGE_ZOOM_EXTENSIONS.has(
@@ -350,26 +420,37 @@ class BobNavigationHotkeysImageZoomMixin {
     const picked = this.pickImageZoomRef(candidates, pos);
     if (picked) {
       if (picked.external) {
-        let title = picked.target;
+        const src = picked.rawTarget || picked.target;
+        let title = src;
         try {
-          const url = new URL(picked.target);
+          const url = new URL(src);
           const segments = String(url.pathname || "")
             .split("/")
             .filter(Boolean);
           const last = segments.length > 0 ? segments[segments.length - 1] : "";
-          const decoded = last ? this.safeDecodeUri(last) : "";
-          title = decoded || url.hostname || picked.target;
+          const decoded = last ? this.safeDecodeImageZoomTitle(last) : "";
+          title = decoded || url.hostname || src;
         } catch (_error) {
-          title = picked.target;
+          title = src;
         }
         return Object.freeze({
           kind: "image",
           source: "url",
-          src: picked.target,
+          src,
           title,
         });
       }
-      const resolved = this.resolveLinkTargetFile(picked.target, sourcePath);
+      // The vault target is already normalized once in buildImageZoomRef, so
+      // look it up directly instead of calling resolveLinkTargetFile again.
+      const resolved =
+        this.app &&
+        this.app.metadataCache &&
+        typeof this.app.metadataCache.getFirstLinkpathDest === "function"
+          ? this.app.metadataCache.getFirstLinkpathDest(
+              picked.target,
+              sourcePath,
+            ) || null
+          : null;
       if (!resolved) {
         return Object.freeze({
           kind: "notice",

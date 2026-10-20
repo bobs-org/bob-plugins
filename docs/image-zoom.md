@@ -13,7 +13,8 @@ The command recognizes `![[image.png]]`, `[[image.png]]`,
 size hints, Markdown titles, and supported image URLs. It picks the reference
 containing the cursor, otherwise the next reference on the line, otherwise the
 previous one. It never searches beyond the current line. Code spans and fenced
-code are skipped. A non-image link under the cursor shows a notice.
+code are skipped. When the line has no image candidates, a non-image link
+under the cursor shows a notice; otherwise the image pick rule still applies.
 
 The viewer opens fitted without enlarging a small image. `1` shows device-pixel
 1:1; `0` restores fit. It supports keyboard and pointer zoom and pan:

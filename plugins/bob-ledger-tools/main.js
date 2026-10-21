@@ -16241,91 +16241,6 @@ function relationCodepointCompare(left, right) {
   return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
 }
 
-// Pair key for one unordered task pair {owner, other}. Both ends are
-// `path + "\0" + blockId`; the two identities sort so either end
-// computes the same key (docs/task-relations.md §5).
-function relationPairKey(ownerPath, ownerBlockId, otherPath, otherBlockId) {
-  const left = String(ownerPath || "") + "\u0000" + String(ownerBlockId || "");
-  const right = String(otherPath || "") + "\u0000" + String(otherBlockId || "");
-  return relationCodepointCompare(left, right) <= 0 ? left + "\u0001" + right : right + "\u0001" + left;
-}
-
-function relationRelatedOtherIdentity(edge, side) {
-  try {
-    const other = edge && edge.other && typeof edge.other === "object" ? edge.other : null;
-    return { path: String((other && other.path) || ""), blockId: String((other && other.blockId) || "") };
-  } catch (error) {
-    return { path: "", blockId: "" };
-  }
-}
-
-// Additive per-task pair view shared by `api.relationIndex.related()` and
-// the per-task links block. `outgoing` are this task's authored edges,
-// `incoming` the edges other tasks author naming this task; each entry is
-// `{ label, other: { path, blockId, ... } }`. Returns
-// `{ plain, outgoing, incoming }` where plain holds one entry per plainly
-// related task (deduped by pair, `storedOn: "this" | "other" | "both"`),
-// outgoing/incoming hold the labelled statements, and redundant plain
-// records (a pair that also has a statement) are hidden. Plain entries
-// merge both records' `other` display fields, preferring the one that
-// already resolved a task. Plain and incoming entries sort canonical;
-// outgoing keeps the authored order of this task's LINKS line.
-function relationGroupRelatedEdges(ownerPath, ownerBlockId, outgoing, incoming) {
-  const owner = String(ownerPath || "");
-  const ownerId = String(ownerBlockId || "");
-  const outgoingRows = Array.isArray(outgoing) ? outgoing : [];
-  const incomingRows = Array.isArray(incoming) ? incoming : [];
-  const pairs = new Map();
-  const remember = (rows, side) => {
-    for (const edge of rows) {
-      if (!edge || typeof edge !== "object") continue;
-      const identity = relationRelatedOtherIdentity(edge, side);
-      if (!identity.blockId) continue;
-      const key = relationPairKey(owner, ownerId, identity.path, identity.blockId);
-      if (!pairs.has(key)) pairs.set(key, { identity, outgoing: [], incoming: [] });
-      const pair = pairs.get(key);
-      if (!pair.identity.path && identity.path) pair.identity = identity;
-      pair[side].push(edge);
-    }
-  };
-  remember(outgoingRows, "outgoing");
-  remember(incomingRows, "incoming");
-  const plain = [];
-  for (const pair of pairs.values()) {
-    const edges = [...pair.outgoing, ...pair.incoming];
-    if (!edges.some((edge) => edge && typeof edge.label === "string" && edge.label)) {
-      plain.push(pair);
-    }
-  }
-  const pickOther = (pair) => {
-    const candidates = [...pair.outgoing, ...pair.incoming]
-      .map((edge) => (edge && edge.other && typeof edge.other === "object" ? edge.other : null))
-      .filter(Boolean);
-    return candidates.find((other) => other && other.task) || candidates[0] || { path: pair.identity.path, blockId: pair.identity.blockId };
-  };
-  const plainEntries = plain.map((pair) => {
-    const storedOn = pair.outgoing.length && pair.incoming.length ? "both" : pair.outgoing.length ? "this" : "other";
-    return { other: pickOther(pair), storedOn, label: null, edges: [...pair.outgoing, ...pair.incoming] };
-  });
-  plainEntries.sort((a, b) => relationCompareLinktext(
-    relationEdgeLinktext(a.other && a.other.path, a.other && a.other.blockId, owner),
-    relationEdgeLinktext(b.other && b.other.path, b.other && b.other.blockId, owner),
-  ));
-  const outgoingStatements = [];
-  for (const edge of outgoingRows) {
-    if (edge && typeof edge.label === "string" && edge.label) outgoingStatements.push(edge);
-  }
-  const incomingStatements = [];
-  for (const edge of incomingRows) {
-    if (edge && typeof edge.label === "string" && edge.label) incomingStatements.push(edge);
-  }
-  incomingStatements.sort((a, b) => relationCompareLinktext(
-    relationEdgeLinktext(a.other && a.other.path, a.other && a.other.blockId, owner),
-    relationEdgeLinktext(b.other && b.other.path, b.other && b.other.blockId, owner),
-  ));
-  return { plain: plainEntries, outgoing: outgoingStatements, incoming: incomingStatements };
-}
-
 function relationLabelSuggestionRows(edges, prefix) {
   const needle = String(prefix || "").trim().toLocaleLowerCase();
   const counts = new Map();
@@ -16343,20 +16258,21 @@ function relationLabelSuggestionRows(edges, prefix) {
     .map((item) => ({ label: item.label, count: item.count }));
 }
 // ---- src/146-relation-chip-model.js ----
-// Task relation chips (ledger-chips). Pure model and element builder
-// for one aggregated `🪢 links` block per task. Chips render the live
-// relation index, never the stored mirror: a stored entry with no live
-// edge is stale (LC8), a live edge missing from the text is appended in
-// canonical order (LC7), and an unresolvable target is broken (LC4).
-// Redundant plain records (a pair that also has a statement) render
-// nothing. Reuses the `bob-dep-*` DOM family with no new palette. Plain
-// chips carry no arrow (LC1); statements are one entry per visual row
-// (LC10) with muted small-caps label pills; inverse phrases are
-// display-only. Three or more closed chips collapse to `✓×N` (LC9).
-// Never throws.
+// Task relation chips (bob-cli-a2 chips). Pure model and element builder
+// for live LINKS and LINKED FROM rows. Chips render the live relation
+// index, never the stored mirror: a stored entry with no live edge is
+// stale (LC8), a live edge missing from the text is appended in canonical
+// order (LC7), and an unresolvable LINKS target is broken (LC4). Reuses
+// the `bob-dep-*` DOM family with no new palette. Labels are muted
+// small-caps pills on the arrow side; inverse phrases are display-only
+// (decision `inverse_phrases = builtin`); three or more closed chips
+// collapse to `✓×N` (LC9). Never throws.
 const RELATION_STALE_TOOLTIP =
   "No longer links here · refreshes on the next reconcile";
-const RELATION_BLOCK_ROW_TOOLTIP = "Related tasks · live";
+const RELATION_LINKS_ROW_TOOLTIP =
+  "Related tasks · live from the relation index";
+const RELATION_LINKED_FROM_ROW_TOOLTIP =
+  "Tasks linking here · live from the relation index";
 
 // Display-only inverse phrases (docs/task-relations.md §10). Storage
 // stays verbatim; matching is case-insensitive.
@@ -16468,7 +16384,7 @@ function relationCompareLinktext(left, right) {
   return relationCodepointCompare(String(left || ""), String(right || ""));
 }
 
-function relationBuildChip({ direction, linkpath, blockId, label, task, otherPath, live, stale, resolved, sourcePath, relKind, peer, storedOn }) {
+function relationBuildChip({ direction, linkpath, blockId, label, task, otherPath, live, stale, resolved, sourcePath }) {
   try {
     const id = String(blockId || "");
     const known = task && typeof task === "object" ? task : null;
@@ -16501,29 +16417,11 @@ function relationBuildChip({ direction, linkpath, blockId, label, task, otherPat
       : [fullText, resolvedPath || String(sourcePath || ""), dependencyStatusName(state)];
     if (stale && !broken) tooltipParts.push(RELATION_STALE_TOOLTIP);
     const tooltip = tooltipParts.filter(Boolean).join(" — ");
-    const kind = relKind === "statement" ? "statement" : relKind === "plain" ? "plain" : direction === "from" ? "statement" : "plain";
     let removeLabel = null;
-    if (kind === "plain") removeLabel = "Unlink " + fullText;
-    else removeLabel = "Remove '" + String(label || "") + "'";
-    let relAction = null;
-    try {
-      const peerRef = peer && typeof peer === "object"
-        ? { path: String(peer.path || ""), blockId: String(peer.blockId || "") }
-        : { path: String(resolvedPath || ""), blockId: id };
-      if (kind === "plain") {
-        relAction = { kind: "plain", storedOn: storedOn || null, peer: peerRef };
-      } else {
-        relAction = { kind: "statement", label: label || null, source: null, target: null, peer: peerRef };
-      }
-    } catch (error) {
-      relAction = null;
-    }
+    if (direction === "to") removeLabel = "Unlink " + fullText;
+    else removeLabel = "Remove the link from " + fullText;
     return {
       direction,
-      relKind: kind,
-      relAction,
-      storedOn: storedOn || null,
-      peer: peer && typeof peer === "object" ? { path: String(peer.path || ""), blockId: String(peer.blockId || "") } : null,
       blockId: id,
       linkpath: storedLinkpath,
       linktext,
@@ -16552,160 +16450,115 @@ function relationBuildChip({ direction, linkpath, blockId, label, task, otherPat
   }
 }
 
-// One aggregated `🪢 links` block for a task, built from the live pair
-// view plus both stored relation lines. `outgoing` / `incoming` are full
-// live edge arrays (`{ label, other: { path, blockId, ... } }`) whose
-// `other` is the displayed end; group them with
-// `relationGroupRelatedEdges` (same helper as `api.relationIndex.related`).
-// `linksText` / `linkedFromText` are the task's stored relation lines
-// (null when absent). `lookup(path, blockId)` resolves a link to a task
-// record or null; `resolve(linkpath)` maps a stored linkpath to a
-// vault-relative path. `owner` is `{ blockId, line, text }` (line 1-based,
-// blockId possibly null). A stored entry covered by a grouped entry
-// renders through that entry; an uncovered stored entry is stale (LC8) and
-// a redundant plain record renders nothing (LC17). Returns null unless at
-// least one stored line parses (LC13), or when the task has no relations
-// at all so the raw lines stay as-is.
-function relationBlockModelForTask({ sourcePath, owner, linksText, linkedFromText, outgoing, incoming, grouped: providedGrouped, lookup, resolve }) {
+// Merge one relation row's stored entries with its live index edges.
+// `stored` are `parseTaskRelationLine` entries `{ target, blockId, label }`;
+// `live` are index edges whose `other` is the displayed end (the target for
+// LINKS, the source for LINKED FROM) with `{ path, blockId, task }` plus
+// the edge `label`. `lookup(path, blockId)` resolves a stored link to a
+// task record or null; `resolve(linkpath)` maps a stored linkpath to a
+// vault-relative path. Returns null unless the line parses as the
+// requested direction (LC13).
+function relationChipModelForRow({ direction, lineText, sourcePath, live, lookup, resolve }) {
   try {
+    const parsed = parseTaskRelationLine(String(lineText || ""));
+    // An empty row still renders live edges appended in canonical order
+    // (LC7); malformed and not-a-line rows never get chips (LC13).
+    if (!parsed || (parsed.verdict !== "accepted" && parsed.verdict !== "empty")) return null;
+    if (direction === "to" && parsed.kind !== "links") return null;
+    if (direction === "from" && parsed.kind !== "linkedFrom") return null;
     const source = String(sourcePath || "");
-    const ownerId = owner && owner.blockId ? String(owner.blockId) : "";
     const lookupFn = typeof lookup === "function" ? lookup : () => null;
     const resolveFn = typeof resolve === "function"
       ? resolve
       : (linkpath) => (String(linkpath || "").trim() ? String(linkpath).replace(/\.md$/i, "") + ".md" : source);
-    const parseLine = (text, kind) => {
-      if (text === null || text === undefined) return null;
-      const parsed = parseTaskRelationLine(String(text));
-      if (!parsed || (parsed.verdict !== "accepted" && parsed.verdict !== "empty")) return null;
-      if (parsed.kind !== kind) return null;
-      return parsed;
-    };
-    const links = parseLine(linksText, "links");
-    const linkedFrom = parseLine(linkedFromText, "linkedFrom");
-    if (!links && !linkedFrom) return null;
-    const outgoingRows = Array.isArray(outgoing) ? outgoing : [];
-    const incomingRows = Array.isArray(incoming) ? incoming : [];
-    // Mount code passes the `api.relationIndex.related()` view straight
-    // through so plain, outgoing, and incoming come from one generation;
-    // tests and the no-`related` fallback pass raw edge arrays instead.
-    const grouped = providedGrouped && typeof providedGrouped === "object"
-      ? {
-        plain: Array.isArray(providedGrouped.plain) ? providedGrouped.plain : [],
-        outgoing: Array.isArray(providedGrouped.outgoing) ? providedGrouped.outgoing : [],
-        incoming: Array.isArray(providedGrouped.incoming) ? providedGrouped.incoming : [],
-      }
-      : relationGroupRelatedEdges(source, ownerId, outgoingRows, incomingRows);
-    // Coverage: a stored entry is live when a grouped entry names the
-    // same other task (exact path match, or blockId-only when either
-    // side has no path). A redundant plain record is covered by the
-    // pair's statement, so it renders nothing.
-    const covers = (entries, entryPath, entryId) => entries.some((item) => {
-      const other = item && item.other ? item.other : null;
-      if (!other || String(other.blockId || "") !== String(entryId || "")) return false;
-      const otherPath = String(other.path || "");
-      return !otherPath || !entryPath || otherPath === entryPath;
-    });
-    // Only a rendered entry covers its stored row: an unresolvable live
-    // edge with no task record (LC4) leaves the stored entry to render
-    // as broken instead of swallowing it.
-    const renderable = (item) => {
-      const other = item && item.other ? item.other : null;
-      if (!other) return false;
-      return Boolean(other.path)
-        || (other.task && typeof other.task === "object")
-        || Boolean(other.text) || Boolean(other.status);
-    };
-    const allRelated = [...grouped.plain, ...grouped.outgoing, ...grouped.incoming].filter(renderable);
-    const taskFor = (other, entryPath, entryId) => {
-      if (other && other.task && typeof other.task === "object") return other.task;
-      const path = String((other && other.path) || entryPath || "");
-      const id = String((other && other.blockId) || entryId || "");
-      let found = null;
+    const liveRows = Array.isArray(live) ? live : [];
+    const liveByKey = new Map();
+    for (const edge of liveRows) {
       try {
-        found = lookupFn(path, id);
+        if (!edge || typeof edge !== "object") continue;
+        const other = edge.other && typeof edge.other === "object" ? edge.other : null;
+        const otherPath = other ? String(other.path || "") : "";
+        const otherId = other ? String(other.blockId || "") : "";
+        if (!otherId) continue;
+        const key = otherPath ? otherPath + "\u0000" + otherId : "\u0000" + otherId;
+        if (!liveByKey.has(key)) liveByKey.set(key, edge);
       } catch (error) {
-        found = null;
+        continue;
       }
-      if (found && typeof found === "object") return found;
-      // Index rows carry raw note text when the Tasks memo omits the
-      // note (done/ archives); surface it when memo lookup misses.
-      if (other && (other.text || other.status)) {
-        return { path, blockId: id, text: other.text || null, status: other.status || null };
-      }
-      return null;
-    };
-    const chipForRelated = (item, direction, relKind, storedOn) => {
-      const other = item && item.other ? item.other : {};
-      const otherPath = String(other.path || "");
-      const otherId = String(other.blockId || "");
-      if (!otherId) return null;
-      const task = taskFor(other, otherPath, otherId);
-      // An unresolvable live edge with no task record is broken, not
-      // appended: only the stored text can name it (LC4).
-      if (!otherPath && !task) return null;
-      return relationBuildChip({
-        direction, linkpath: "", blockId: otherId, label: item.label || null,
-        task, otherPath, live: true, stale: false,
-        resolved: typeof other.resolved === "boolean" ? other.resolved : Boolean(otherPath),
-        sourcePath: source, relKind, peer: { path: otherPath, blockId: otherId }, storedOn: storedOn || null,
-      });
-    };
-    const plain = [];
-    for (const item of grouped.plain) {
-      const chip = chipForRelated(item, "to", "plain", item.storedOn);
-      if (chip) plain.push(chip);
     }
-    const outgoingChips = [];
-    for (const edge of grouped.outgoing) {
-      const chip = chipForRelated(edge, "to", "statement", "this");
-      if (chip) outgoingChips.push(chip);
-    }
-    const incomingChips = [];
-    for (const edge of grouped.incoming) {
-      const chip = chipForRelated(edge, "from", "statement", "other");
-      if (chip) incomingChips.push(chip);
-    }
-    // Stale leftovers: stored entries no grouped entry covers, in stored
-    // order (LINKS leftovers join the plain or outgoing section by label,
-    // LINKED FROM leftovers join the plain or incoming section).
-    const stalePlain = [];
-    const staleOutgoing = [];
-    const staleIncoming = [];
-    const collectStale = (parsed, section) => {
-      for (const entry of Array.isArray(parsed && parsed.entries) ? parsed.entries : []) {
+    const chips = [];
+    const consumed = new Set();
+    const stored = Array.isArray(parsed.entries) ? parsed.entries : [];
+    for (const entry of stored) {
+      try {
+        const entryId = String((entry && entry.blockId) || "");
+        if (!entryId) continue;
+        let entryPath = "";
         try {
-          const entryId = String((entry && entry.blockId) || "");
-          if (!entryId) continue;
-          let entryPath = "";
-          try {
-            entryPath = String(resolveFn((entry && entry.target) || "", source) || "");
-          } catch (error) {
-            entryPath = "";
-          }
-          if (covers(allRelated, entryPath, entryId)) continue;
-          const label = (entry && entry.label) || null;
-          const task = taskFor(null, entryPath, entryId);
-          const chip = relationBuildChip({
-            direction: section === "incoming" ? "from" : "to",
-            linkpath: (entry && entry.target) || "", blockId: entryId,
-            label, task, otherPath: entryPath, live: false, stale: true,
-            resolved: Boolean(task), sourcePath: source,
-            relKind: label ? "statement" : "plain",
-            peer: { path: entryPath, blockId: entryId }, storedOn: null,
-          });
-          if (!chip) continue;
-          if (label) (section === "incoming" ? staleIncoming : staleOutgoing).push(chip);
-          else stalePlain.push(chip);
+          entryPath = String(resolveFn((entry && entry.target) || "", source) || "");
         } catch (error) {
-          continue;
+          entryPath = "";
         }
+        const exact = entryPath ? entryPath + "\u0000" + entryId : null;
+        let edge = exact && liveByKey.has(exact) && !consumed.has(exact) ? liveByKey.get(exact) : null;
+        if (!edge) {
+          const loose = "\u0000" + entryId;
+          if (liveByKey.has(loose) && !consumed.has(loose)) edge = liveByKey.get(loose);
+        }
+        let task = null;
+        let otherPath = entryPath;
+        let label = (entry && entry.label) || null;
+        let resolved = false;
+        if (edge) {
+          const key = (edge.other && edge.other.path ? String(edge.other.path) + "\u0000" : "\u0000") + entryId;
+          consumed.add(exact && liveByKey.get(exact) === edge ? exact : key);
+          consumed.add(key);
+          const other = edge.other || {};
+          otherPath = String(other.path || entryPath || "");
+          if (edge.label) label = edge.label;
+          resolved = typeof other.resolved === "boolean" ? other.resolved : Boolean(other.path);
+          task = (other.task && typeof other.task === "object" ? other.task : null)
+            || lookupFn(otherPath, entryId);
+        } else {
+          task = lookupFn(entryPath, entryId);
+        }
+        const chip = relationBuildChip({
+          direction, linkpath: (entry && entry.target) || "", blockId: entryId,
+          label, task, otherPath, live: Boolean(edge), stale: !edge, resolved, sourcePath: source,
+        });
+        if (chip) chips.push(chip);
+      } catch (error) {
+        continue;
       }
-    };
-    collectStale(links, "outgoing");
-    collectStale(linkedFrom, "incoming");
-    const chips = [...plain, ...stalePlain, ...outgoingChips, ...staleOutgoing, ...incomingChips, ...staleIncoming];
-    if (!chips.length) return null;
+    }
+    const missing = [];
+    for (const [key, edge] of liveByKey) {
+      if (!consumed.has(key)) missing.push(edge);
+    }
+    missing.sort((a, b) => relationCompareLinktext(
+      relationEdgeLinktext(a && a.other && a.other.path, a && a.other && a.other.blockId, source),
+      relationEdgeLinktext(b && b.other && b.other.path, b && b.other && b.other.blockId, source),
+    ));
+    for (const edge of missing) {
+      try {
+        const other = (edge && edge.other) || {};
+        const otherId = String(other.blockId || "");
+        if (!otherId) continue;
+        const otherPath = String(other.path || "");
+        const task = (other.task && typeof other.task === "object" ? other.task : null)
+          || lookupFn(otherPath, otherId);
+        // An unresolvable live edge with no task record is broken, not
+        // appended: only the stored text can name it (LC4).
+        if (!otherPath && !task) continue;
+        const chip = relationBuildChip({
+          direction, linkpath: "", blockId: otherId, label: (edge && edge.label) || null,
+          task, otherPath, live: true, stale: false, sourcePath: source,
+        });
+        if (chip) chips.push(chip);
+      } catch (error) {
+        continue;
+      }
+    }
     const closed = chips.filter((chip) => chip && chip.live && !chip.broken && chip.state === "done");
     let collapsed = null;
     if (closed.length >= 3) {
@@ -16715,13 +16568,10 @@ function relationBlockModelForTask({ sourcePath, owner, linksText, linkedFromTex
     const labelled = chips.some((chip) => chip && chip.label);
     const liveCount = chips.filter((chip) => chip && chip.live).length;
     return {
-      kind: "block",
-      label: "🪢 links",
-      tooltip: RELATION_BLOCK_ROW_TOOLTIP,
-      hasContinuation: Boolean(links && linkedFrom),
-      plain: [...plain, ...stalePlain],
-      outgoing: [...outgoingChips, ...staleOutgoing],
-      incoming: [...incomingChips, ...staleIncoming],
+      direction,
+      kind: parsed.kind,
+      label: direction === "to" ? "🪢 links to" : "🪢 linked from",
+      tooltip: direction === "to" ? RELATION_LINKS_ROW_TOOLTIP : RELATION_LINKED_FROM_ROW_TOOLTIP,
       chips,
       collapsed,
       labelled,
@@ -16771,7 +16621,9 @@ function relationAttachAddControl(row, doc, model, onAdd) {
     add.setAttribute("class", "bob-dep-add");
     add.setAttribute("role", "button");
     add.setAttribute("tabindex", "0");
-    const addLabel = "Link another task";
+    const addLabel = model && model.direction === "from"
+      ? "Choose a task that links here"
+      : "Link this task to another";
     add.setAttribute("aria-label", addLabel);
     add.setAttribute("title", addLabel);
     add.appendChild(doc.createTextNode("＋"));
@@ -16812,39 +16664,32 @@ function relationChipAriaLabel(chip) {
   }
 }
 
-// Live Preview block element. `model` is `relationBlockModelForTask(...)`;
-// `options` carries `{ mode: "full" | "continuation", sourcePath,
-// interactive, onOpen(linktext, event, chip), onHover(linktext, event,
-// chipEl), onRemove(chip, event), onAdd(event) }`. Full mode renders the
-// `🪢 links` heading, plain chips, and outgoing statements (plus incoming
-// statements when the task has no second relation line); continuation
-// mode renders only the incoming statements under no heading (LC18
-// fallback: a block replace decoration must come from a StateField, which
-// the refresh fan-out cannot drive yet). Statements wrap one entry per
-// visual row (LC10); entries never change line height. Closed and
-// archived targets are dimmed and never struck; `#hide` targets are
-// muted. Never throws.
-function buildRelationBlockElement(doc, model, options) {
+// Live Preview row element. `model` is `relationChipModelForRow(...)`;
+// `options` carries `{ sourcePath, interactive, onOpen(linktext, event,
+// chip), onHover(linktext, event, chipEl), onRemove(chip, event),
+// onAdd(event) }`. Labelled rows wrap one entry per visual row;
+// unlabelled rows wrap between chips; entries never change line height
+// (LC10). Closed and archived targets are dimmed and never struck;
+// `#hide` targets are muted. Never throws.
+function buildRelationChipElement(doc, model, options) {
   try {
     if (!doc || !model || typeof model !== "object") return null;
     const opts = options && typeof options === "object" ? options : {};
     const interactive = Boolean(opts.interactive);
-    const continuation = opts.mode === "continuation";
+    const chips = Array.isArray(model.chips) ? model.chips : [];
     const row = doc.createElement("span");
-    const rowClasses = ["bob-dep-row", "bob-relation-row", "bob-relation-block"];
-    if (continuation) rowClasses.push("bob-relation-continuation");
+    const rowClasses = ["bob-dep-row", "bob-relation-row"];
+    if (model.direction === "from") rowClasses.push("is-incoming");
     if (model.labelled) rowClasses.push("is-labelled");
     row.setAttribute("class", rowClasses.join(" "));
     row.setAttribute("role", "group");
-    row.setAttribute("aria-label", String(model.label || "🪢 links") + ", " + model.liveCount + " live");
+    row.setAttribute("aria-label", String(model.label || "relations") + ", " + model.liveCount + " live");
     if (model.tooltip) row.setAttribute("title", String(model.tooltip));
-    if (!continuation) {
-      const label = doc.createElement("span");
-      label.setAttribute("class", "bob-dep-label bob-relation-label");
-      label.setAttribute("aria-hidden", "true");
-      label.appendChild(doc.createTextNode(String(model.label || "🪢 links")));
-      row.appendChild(label);
-    }
+    const label = doc.createElement("span");
+    label.setAttribute("class", "bob-dep-label bob-relation-label");
+    label.setAttribute("aria-hidden", "true");
+    label.appendChild(doc.createTextNode(String(model.label || "🪢 relations")));
+    row.appendChild(label);
     const buildChipEl = (chip) => {
       const el = doc.createElement("span");
       const classes = ["bob-dep-chip", "bob-relation-chip", "is-" + String(chip.state || "todo")];
@@ -16922,12 +16767,19 @@ function buildRelationBlockElement(doc, model, options) {
       arrow.appendChild(doc.createTextNode(String(text === undefined ? "→" : text)));
       return arrow;
     };
-    const appendStatementEntry = (host, chip) => {
+    const visible = chips.filter((chip) => chip && !chip.collapsed);
+    const appendChipEntry = (host, chip) => {
       try {
-        const entry = doc.createElement("span");
-        entry.setAttribute("class", "bob-relation-entry");
-        if (chip.direction === "from") {
-          if (chip.inverse) {
+        if (model.labelled) {
+          const entry = doc.createElement("span");
+          entry.setAttribute("class", "bob-relation-entry");
+          if (model.direction === "to") {
+            if (chip.label) {
+              entry.appendChild(buildPill(chip.label));
+              entry.appendChild(buildArrow());
+            }
+            entry.appendChild(buildChipEl(chip));
+          } else if (chip.inverse) {
             entry.appendChild(buildPill(chip.inverse));
             entry.appendChild(buildChipEl(chip));
           } else if (chip.label) {
@@ -16942,39 +16794,19 @@ function buildRelationBlockElement(doc, model, options) {
           } else {
             entry.appendChild(buildChipEl(chip));
           }
+          host.appendChild(entry);
         } else {
-          if (chip.label) {
-            entry.appendChild(buildPill(chip.label));
-            entry.appendChild(buildArrow());
-          }
-          entry.appendChild(buildChipEl(chip));
+          host.appendChild(buildChipEl(chip));
         }
-        host.appendChild(entry);
       } catch (error) {
-        // One bad entry never breaks the block.
+        // One bad entry never breaks the row.
       }
     };
-    const plain = Array.isArray(model.plain) ? model.plain : [];
-    const outgoing = Array.isArray(model.outgoing) ? model.outgoing : [];
-    const incoming = Array.isArray(model.incoming) ? model.incoming : [];
-    // Continuation mode shows the incoming statements only; full mode
-    // shows them too unless a second relation line carries them.
-    const sections = continuation
-      ? [incoming]
-      : (model.hasContinuation ? [plain, outgoing] : [plain, outgoing, incoming]);
-    for (const section of sections) {
-      for (const chip of section) {
-        if (!chip || chip.collapsed) continue;
-        if (chip.label) appendStatementEntry(row, chip);
-        else {
-          try {
-            row.appendChild(buildChipEl(chip));
-          } catch (error) {
-            // One bad chip never breaks the block.
-          }
-        }
-      }
+    if (!model.labelled && model.direction === "to") {
+      // LC1: an unlabelled LINKS row reads `🪢 links to → (chip)`.
+      row.appendChild(buildArrow());
     }
+    for (const chip of visible) appendChipEntry(row, chip);
     if (model.collapsed && Number(model.collapsed.count) > 0) {
       const count = Number(model.collapsed.count);
       const collapsed = doc.createElement("span");
@@ -16986,18 +16818,15 @@ function buildRelationBlockElement(doc, model, options) {
       collapsed.appendChild(doc.createTextNode("✓×" + count));
       const expand = () => {
         try {
-          for (const chip of (Array.isArray(model.chips) ? model.chips : [])) {
-            if (!chip || !chip.collapsed) continue;
-            const fresh = { ...chip, collapsed: false };
-            if (fresh.label) appendStatementEntry(row, fresh);
-            else row.insertBefore(buildChipEl(fresh), collapsed);
+          for (const chip of chips) {
+            if (chip && chip.collapsed) appendChipEntry(row, { ...chip, collapsed: false });
           }
           if (typeof collapsed.remove === "function") collapsed.remove();
           else if (collapsed.parentNode && typeof collapsed.parentNode.removeChild === "function") {
             collapsed.parentNode.removeChild(collapsed);
           }
         } catch (error) {
-          // An unexpanded block never breaks the chips.
+          // An unexpanded row never breaks the chips.
         }
       };
       if (typeof collapsed.addEventListener === "function") {
@@ -17009,9 +16838,16 @@ function buildRelationBlockElement(doc, model, options) {
           }
         });
       }
-      row.appendChild(collapsed);
+      if (model.labelled) {
+        const entry = doc.createElement("span");
+        entry.setAttribute("class", "bob-relation-entry");
+        entry.appendChild(collapsed);
+        row.appendChild(entry);
+      } else {
+        row.appendChild(collapsed);
+      }
     }
-    if (interactive && !continuation) relationAttachAddControl(row, doc, model, opts.onAdd);
+    if (interactive) relationAttachAddControl(row, doc, model, opts.onAdd);
     return row;
   } catch (error) {
     return null;
@@ -17352,11 +17188,10 @@ if (WidgetType && typeof WidgetType === "function") {
   };
 }
 // ---- src/153-relation-widget.js ----
-// Live Preview widget for one task's aggregated `🪢 links` block (full
-// mode on the first relation line, continuation mode on the second).
+// Live Preview widget for one relation row (LINKS or LINKED FROM).
 // Navigation (click / Mod-click / hover preview) always works; ＋ /
 // hover × appear only when `meta.interactive` is set (nav
-// `api.relations`). Stale, broken, archived, and muted chips stay
+// `api.relations` v1). Stale, broken, archived, and muted chips stay
 // navigation-only.
 let RelationChipWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
@@ -17371,7 +17206,6 @@ if (WidgetType && typeof WidgetType === "function") {
           this.meta.sourcePath || "",
           this.meta.lineNumber === undefined ? null : this.meta.lineNumber,
           Boolean(this.meta.interactive),
-          this.meta.mode || "full",
         ]);
       } catch (error) {
         this.key = String((model && model.label) || "");
@@ -17386,13 +17220,12 @@ if (WidgetType && typeof WidgetType === "function") {
       const plugin = this.meta.plugin;
       const sourcePath = this.meta.sourcePath || "";
       const interactive = Boolean(this.meta.interactive);
-      const dom = buildRelationBlockElement(
+      const dom = buildRelationChipElement(
         typeof document !== "undefined" ? document : null,
         this.model,
         {
           plugin,
           sourcePath,
-          mode: this.meta.mode === "continuation" ? "continuation" : "full",
           interactive,
           onOpen: (linktext, event) => {
             try {
@@ -19099,8 +18932,6 @@ class BobLedgerToolsRelationIndexMixin {
       outgoing: (path, blockIdOrLine) =>
         plugin.relationIndexOutgoing(path, blockIdOrLine),
       incoming: (path, blockId) => plugin.relationIndexIncoming(path, blockId),
-      related: (path, blockIdOrLine) =>
-        plugin.relationIndexRelated(path, blockIdOrLine),
       labelSuggestions: (prefix) => plugin.relationIndexLabelSuggestions(prefix),
       onChange: (listener) => plugin.relationIndexOnChange(listener),
     });
@@ -19158,107 +18989,6 @@ class BobLedgerToolsRelationIndexMixin {
       return (this.relationIndexState.reverse.get(relationIdentity(normalized, id)) || []).slice();
     } catch (error) {
       return [];
-    }
-  }
-
-  // Additive per-task pair view (ledger-chips): one entry per plainly
-  // related task (deduped by pair, `storedOn: "this" | "other" | "both"`),
-  // then the labelled statements, with redundant plain records hidden.
-  // Same generation as `outgoing` / `incoming`, which behave exactly as
-  // before. `api.relationIndex` stays `version: 1`; callers
-  // feature-detect `typeof api.related === "function"`. The result
-  // carries `generation` and `ready` so callers tell loading from none.
-  relationIndexRelated(path, blockIdOrLine) {
-    const empty = () => ({
-      generation: this.relationIndexState.generation,
-      ready: this.relationIndexState.ready,
-      plain: [],
-      outgoing: [],
-      incoming: [],
-    });
-    try {
-      const normalized = this.relationIndexNormalizePath(path);
-      let ownerId = "";
-      let forwardEdges = [];
-      let reverseEdges = [];
-      if (typeof blockIdOrLine === "number" && Number.isFinite(blockIdOrLine)) {
-        ownerId = "line-number:" + String(blockIdOrLine);
-        forwardEdges = (this.relationIndexState.forward.get(
-          relationTaskLineNumberIdentity(normalized, blockIdOrLine),
-        ) || []).slice();
-      } else {
-        let blockId = String(blockIdOrLine || "").trim();
-        if (/^(?:[-*+]|\d+[.)])[ \t]+/u.test(blockId) || blockId.includes("#task") || blockId.includes("\n")) {
-          const match = blockId.match(/(?:^|\s)\^([A-Za-z0-9-]+)(?=\s|$)/u);
-          if (match) {
-            blockId = match[1];
-          } else {
-            ownerId = "line:" + blockId.trim();
-            forwardEdges = (this.relationIndexState.forward.get(
-              relationTaskLineIdentity(normalized, blockId),
-            ) || []).slice();
-          }
-        }
-        if (!ownerId) {
-          if (blockId.startsWith("^")) blockId = blockId.slice(1);
-          if (!blockId) return empty();
-          ownerId = blockId;
-          forwardEdges = (this.relationIndexState.forward.get(
-            relationIdentity(normalized, blockId),
-          ) || []).slice();
-          reverseEdges = (this.relationIndexState.reverse.get(
-            relationIdentity(normalized, blockId),
-          ) || []).slice();
-        }
-      }
-      const mapOutgoing = (edge) => {
-        if (!edge || typeof edge !== "object") return null;
-        const target = edge.target && typeof edge.target === "object" ? edge.target : {};
-        if (!target.blockId) return null;
-        return {
-          label: typeof edge.label === "string" && edge.label ? edge.label : null,
-          other: {
-            path: String(target.path || ""),
-            blockId: String(target.blockId || ""),
-            line: target.line === undefined ? null : target.line,
-            text: target.text === undefined ? null : target.text,
-            status: target.status === undefined ? null : target.status,
-            resolved: Boolean(target.resolved),
-            archived: Boolean(target.archived),
-          },
-          relationLine: edge.relationLine === undefined ? null : edge.relationLine,
-        };
-      };
-      const mapIncoming = (edge) => {
-        if (!edge || typeof edge !== "object") return null;
-        const source = edge.source && typeof edge.source === "object" ? edge.source : {};
-        if (!source.blockId) return null;
-        return {
-          label: typeof edge.label === "string" && edge.label ? edge.label : null,
-          other: {
-            path: String(source.path || ""),
-            blockId: String(source.blockId || ""),
-            line: source.line === undefined ? null : source.line,
-            text: source.text === undefined ? null : source.text,
-            status: source.status === undefined ? null : source.status,
-            resolved: true,
-            archived: false,
-          },
-          relationLine: edge.relationLine === undefined ? null : edge.relationLine,
-        };
-      };
-      const outgoing = forwardEdges.map(mapOutgoing).filter(Boolean);
-      const incoming = reverseEdges.map(mapIncoming).filter(Boolean);
-      const grouped = relationGroupRelatedEdges(normalized, ownerId, outgoing, incoming);
-      return {
-        generation: this.relationIndexState.generation,
-        ready: this.relationIndexState.ready,
-        plain: grouped.plain,
-        outgoing: grouped.outgoing,
-        incoming: grouped.incoming,
-      };
-    } catch (error) {
-      return empty();
     }
   }
 
@@ -42448,33 +42178,17 @@ class BobLedgerToolsRelationModelMixin {
     }
   }
 
-  // Block model for one task's stored relation lines. `owner` is the
-  // parent task `{ blockId, text, line }` (line 1-based, blockId possibly
-  // null); `lines` are the task's stored relation lines
-  // `[{ text, lineNumber }]` (0-based doc positions in Live Preview,
-  // 0-based source indexes in Reading view). Live edges come from
-  // `api.relationIndex`, never the stored mirror: one `related()` call
-  // per task keeps plain, outgoing, and incoming on the same generation,
-  // falling back to `outgoing()` / `incoming()` when `related` is
-  // missing. Returns null when no stored line parses (LC13) or the task
-  // has no relations at all.
-  relationBlockModelForOwner({ path, owner, lines }) {
+  // Row model for one stored relation line. `owner` is the parent task
+  // `{ blockId, text, line }` (line 1-based) or null. Live edges come
+  // from `api.relationIndex`, never the stored mirror. Returns null for
+  // malformed and not-a-line rows (LC13).
+  relationChipModelForLine({ path, text, owner }) {
     try {
       const sourcePath = String(path || "");
-      if (!sourcePath || !owner || !Array.isArray(lines) || !lines.length) return null;
-      let linksText = null;
-      let linkedFromText = null;
-      for (const row of lines) {
-        if (!row || typeof row.text !== "string") continue;
-        const parsed = parseTaskRelationLine(row.text);
-        if (!parsed || (parsed.verdict !== "accepted" && parsed.verdict !== "empty")) continue;
-        if (parsed.kind === "links") {
-          if (linksText === null) linksText = row.text;
-        } else if (linkedFromText === null) {
-          linkedFromText = row.text;
-        }
-      }
-      if (linksText === null && linkedFromText === null) return null;
+      if (!sourcePath || typeof text !== "string") return null;
+      const parsed = parseTaskRelationLine(text);
+      if (!parsed || (parsed.verdict !== "accepted" && parsed.verdict !== "empty")) return null;
+      const direction = parsed.kind === "links" ? "to" : "from";
       let api = null;
       try {
         api = typeof this.relationIndexApi === "function" ? this.relationIndexApi() : null;
@@ -42484,51 +42198,12 @@ class BobLedgerToolsRelationModelMixin {
       const self = this;
       const lookup = (linkpath, blockId) => self.relationLookupTask(linkpath, blockId);
       const resolve = (linkpath) => self.relationResolveLinkpath(linkpath, sourcePath);
-      let grouped = null;
-      if (api && typeof api.related === "function") {
-        try {
-          const ownerKey = (owner && owner.blockId)
-            || (owner && owner.text)
-            || (owner && Number.isInteger(owner.line) ? owner.line : "");
-          const related = api.related(sourcePath, ownerKey);
-          if (related && typeof related === "object") {
-            const enrich = (item) => {
-              const other = item && item.other ? item.other : null;
-              if (!other) return null;
-              return {
-                label: item.label || null,
-                storedOn: item.storedOn || null,
-                other: {
-                  path: String(other.path || ""),
-                  blockId: String(other.blockId || ""),
-                  line: other.line === undefined ? null : other.line,
-                  text: other.text === undefined ? null : other.text,
-                  status: other.status === undefined ? null : other.status,
-                  resolved: other.resolved !== false,
-                  archived: Boolean(other.archived),
-                  task: self.relationLookupTask(other.path, other.blockId),
-                },
-              };
-            };
-            grouped = {
-              plain: (Array.isArray(related.plain) ? related.plain : []).map(enrich).filter(Boolean),
-              outgoing: (Array.isArray(related.outgoing) ? related.outgoing : []).map(enrich).filter(Boolean),
-              incoming: (Array.isArray(related.incoming) ? related.incoming : []).map(enrich).filter(Boolean),
-            };
-          }
-        } catch (error) {
-          grouped = null;
-        }
-      }
-      if (!grouped) {
-        // No `related()` (older ledger): same view from the per-direction
-        // calls. The block model groups them identically.
-        let outgoing = [];
-        let incoming = [];
-        try {
-          if (api) {
+      let live = [];
+      try {
+        if (api) {
+          if (direction === "to") {
             const rows = self.relationIndexOutgoingForOwner(api, sourcePath, owner);
-            outgoing = (Array.isArray(rows) ? rows : []).map((edge) => ({
+            live = rows.map((edge) => ({
               label: edge && edge.label,
               other: {
                 path: edge && edge.target ? edge.target.path : "",
@@ -42540,14 +42215,14 @@ class BobLedgerToolsRelationModelMixin {
                 fallback: edge && edge.target ? edge.target : null,
               },
             }));
-            const back = owner && owner.blockId && typeof api.incoming === "function"
-              ? api.incoming(sourcePath, owner.blockId)
-              : [];
-            incoming = (Array.isArray(back) ? back : []).map((edge) => ({
+          } else {
+            const rows = owner && owner.blockId ? api.incoming(sourcePath, owner.blockId) : [];
+            live = (Array.isArray(rows) ? rows : []).map((edge) => ({
               label: edge && edge.label,
               other: {
                 path: edge && edge.source ? edge.source.path : "",
                 blockId: edge && edge.source ? edge.source.blockId : "",
+                // Incoming rows only contain resolved targets.
                 resolved: true,
                 task: edge && edge.source && edge.source.path
                   ? self.relationLookupTask(edge.source.path, edge.source.blockId)
@@ -42556,27 +42231,25 @@ class BobLedgerToolsRelationModelMixin {
               },
             }));
           }
-        } catch (error) {
-          outgoing = [];
-          incoming = [];
         }
-        // Index rows carry raw note text when the Tasks memo omits the
-        // note (done/ archives); surface it when memo lookup misses.
-        for (const row of [...outgoing, ...incoming]) {
-          try {
-            if (row && row.other && !row.other.task && row.other.fallback) {
-              const fallback = row.other.fallback;
-              if (fallback && (fallback.text || fallback.status)) {
-                row.other.task = { path: fallback.path, blockId: fallback.blockId, text: fallback.text, status: fallback.status };
-              }
-            }
-          } catch (error) {
-            continue;
-          }
-        }
-        return relationBlockModelForTask({ sourcePath, owner, linksText, linkedFromText, outgoing, incoming, lookup, resolve });
+      } catch (error) {
+        live = [];
       }
-      return relationBlockModelForTask({ sourcePath, owner, linksText, linkedFromText, grouped, lookup, resolve });
+      // Index rows carry raw note text when the Tasks memo omits the
+      // note (done/ archives); surface it when memo lookup misses.
+      for (const row of live) {
+        try {
+          if (row && row.other && !row.other.task && row.other.fallback) {
+            const fallback = row.other.fallback;
+            if (fallback && (fallback.text || fallback.status)) {
+              row.other.task = { path: fallback.path, blockId: fallback.blockId, text: fallback.text, status: fallback.status };
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return relationChipModelForRow({ direction, lineText: text, sourcePath, live, lookup, resolve });
     } catch (error) {
       return null;
     }
@@ -42710,8 +42383,6 @@ class BobLedgerToolsRelationModelMixin {
       } catch (error) {
         tree = null;
       }
-      // First pass: collect every parsed relation line with its owner.
-      const hits = [];
       for (const range of ranges) {
         if (!range || typeof range.from !== "number") {
           continue;
@@ -42737,8 +42408,26 @@ class BobLedgerToolsRelationModelMixin {
               if (parsed && (parsed.verdict === "accepted" || parsed.verdict === "empty")) {
                 const number = typeof line.number === "number" ? line.number : null;
                 const owner = number !== null ? relationOwnerTaskLineAtDoc(doc, number) : null;
-                if (owner) {
-                  hits.push({ line, number, owner, parsed });
+                const revealed = selections.some((selection) => selection && selection.from <= line.to && selection.to >= line.from);
+                const inCode = tree ? freshnessMarkPosInCode(tree, line.from) : false;
+                if (owner && !revealed && !inCode) {
+                  const model = this.relationChipModelForLine({ path, text: line.text, owner });
+                  if (model && model.chips.length > 0) {
+                    const marker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(line.text);
+                    const from = line.from + (marker ? marker[0].length : 0);
+                    const lineNumber = number === null ? null : number - 1;
+                    const interactive = Boolean(this.relationsNavApi());
+                    builder.add(from, line.to, Decoration.replace({
+                      widget: new RelationChipWidget(model, {
+                        plugin: this,
+                        sourcePath: path,
+                        lineNumber,
+                        interactive,
+                        direction: model.direction,
+                        ownerBlockId: owner.blockId || null,
+                      }),
+                    }));
+                  }
                 }
               }
             }
@@ -42751,54 +42440,6 @@ class BobLedgerToolsRelationModelMixin {
           pos = line.to + 1;
         }
       }
-      // Second pass: one aggregated block per owner. The first relation
-      // line carries the full block; the second carries the incoming
-      // statements as a continuation with no heading (LC18 fallback: a
-      // block replace decoration must come from a StateField, which the
-      // refresh fan-out cannot drive yet). Selecting either line reveals
-      // both raw lines.
-      const groups = relationGroupOwnerLines(hits, (hit) => relationIdentity(path, (hit.owner && hit.owner.blockId) || ("line:" + String(hit.owner && hit.owner.line))));
-      for (const group of groups.values()) {
-        try {
-          const ordered = group.slice().sort((a, b) => (a.number || 0) - (b.number || 0));
-          const revealed = ordered.some((hit) => selections.some((selection) => selection && selection.from <= hit.line.to && selection.to >= hit.line.from));
-          if (revealed) continue;
-          const owner = ordered[0].owner;
-          const model = this.relationBlockModelForOwner({
-            path,
-            owner,
-            lines: ordered.map((hit) => ({ text: hit.line.text, lineNumber: hit.number === null ? null : hit.number - 1 })),
-          });
-          if (!model || model.chips.length === 0) continue;
-          const interactive = Boolean(this.relationsNavApi());
-          const parsedLines = ordered.filter((hit) => hit.parsed && (hit.parsed.verdict === "accepted" || hit.parsed.verdict === "empty"));
-          const first = parsedLines[0];
-          const second = model.hasContinuation ? parsedLines[1] : null;
-          const place = (hit, mode) => {
-            if (!hit) return;
-            const inCode = tree ? freshnessMarkPosInCode(tree, hit.line.from) : false;
-            if (inCode) return;
-            const marker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(hit.line.text);
-            const from = hit.line.from + (marker ? marker[0].length : 0);
-            const lineNumber = hit.number === null ? null : hit.number - 1;
-            builder.add(from, hit.line.to, Decoration.replace({
-              widget: new RelationChipWidget(model, {
-                plugin: this,
-                sourcePath: path,
-                lineNumber,
-                interactive,
-                mode,
-                ownerBlockId: owner.blockId || null,
-                ownerLine: Number.isInteger(owner.line) ? owner.line : null,
-              }),
-            }));
-          };
-          place(first, "full");
-          place(second, "continuation");
-        } catch (error) {
-          // Ignore a single task and continue through the visible range.
-        }
-      }
       return builder.finish();
     } catch (error) {
       try {
@@ -42809,63 +42450,32 @@ class BobLedgerToolsRelationModelMixin {
     }
   }
 
-  // v2-aware × handler. A plain chip unlinks the pair through v2
-  // `unlink(this, other)`; a statement chip removes that statement through
-  // v2 `removeStatement(source, target)`. With nav v1 only, both fall back
-  // to v1 `removeLink` on the storing side (plain chips at the
-  // non-storing end remove the peer's record; a both-sides plain removes
-  // each writable record in turn). Without nav there are no controls.
   relationRemoveLink(chip, sourcePath, meta) {
     try {
       const api = this.relationsNavApi();
-      if (!api) return;
+      if (!api || typeof api.removeLink !== "function") return;
       const info = meta && typeof meta === "object" ? meta : {};
-      const act = chip && chip.relAction && typeof chip.relAction === "object" ? chip.relAction : null;
-      const viewer = {
-        path: String(sourcePath || ""),
-        line: Number.isInteger(info.lineNumber) ? info.lineNumber : null,
-        blockId: info.ownerBlockId || null,
-      };
-      const peerPath = act && act.peer ? String(act.peer.path || "") : String((chip && chip.path) || "");
-      const peerId = act && act.peer ? act.peer.blockId || null : (chip && chip.blockId) || null;
-      const peer = { path: peerPath, line: null, blockId: peerId };
-      const report = (promise) => {
-        Promise.resolve(promise).then((result) => {
-          if (result && result.ok === false && result.reason) {
-            try {
-              new Notice(String(result.reason));
-            } catch (noticeError) {
-              // Success notices come from nav.
-            }
-          }
-        });
-      };
-      if (act && act.kind === "plain" && typeof api.unlink === "function") {
-        report(api.unlink(viewer, peer));
-        return;
-      }
-      if (act && act.kind === "statement" && typeof api.removeStatement === "function") {
-        const outgoing = chip.direction !== "from";
-        report(api.removeStatement(outgoing ? viewer : peer, outgoing ? peer : viewer));
-        return;
-      }
-      if (typeof api.removeLink !== "function") return;
-      const storingPeerSide = act
-        ? (act.kind === "plain" ? act.storedOn === "other" : chip.direction === "from")
-        : chip && chip.direction === "from";
-      if (act && act.kind === "plain" && act.storedOn === "both") {
-        // v1 removes one record per call; unlink both writable records.
-        report(api.removeLink(viewer, peer));
-        report(api.removeLink(peer, viewer));
-        return;
-      }
-      if (storingPeerSide) {
-        // × at the non-storing end removes the edge from the other
-        // task's LINKS line; the notice names the source note.
-        report(api.removeLink(peer, viewer));
+      let sourceRef = null;
+      let targetRef = null;
+      if (chip && chip.direction === "from") {
+        // LINKED FROM × removes the edge from the other task's LINKS
+        // line (decision `linked_from_remove = yes`); the notice names
+        // the source note.
+        sourceRef = { path: String(chip.path || ""), line: null, blockId: chip.blockId || null };
+        targetRef = { path: String(sourcePath || ""), line: Number.isInteger(info.lineNumber) ? info.lineNumber : null, blockId: info.ownerBlockId || null };
       } else {
-        report(api.removeLink(viewer, peer));
+        sourceRef = { path: String(sourcePath || ""), line: Number.isInteger(info.lineNumber) ? info.lineNumber : null, blockId: info.ownerBlockId || null };
+        targetRef = { path: chip ? String(chip.path || "") : "", blockId: chip ? chip.blockId || null : null };
       }
+      Promise.resolve(api.removeLink(sourceRef, targetRef)).then((result) => {
+        if (result && result.ok === false && result.reason) {
+          try {
+            new Notice(String(result.reason));
+          } catch (noticeError) {
+            // Success notices come from nav.
+          }
+        }
+      });
     } catch (error) {
       // Best-effort.
     }
@@ -42879,34 +42489,13 @@ class BobLedgerToolsRelationModelMixin {
       const ref = {
         path: String(sourcePath || ""),
         line: Number.isInteger(info.lineNumber) ? info.lineNumber : null,
-        direction: "to",
+        direction: info.direction === "from" ? "from" : "to",
       };
       Promise.resolve(api.openStage(ref));
     } catch (error) {
       // Best-effort.
     }
   }
-}
-
-
-// Group relation-line hits by owner task, preserving document order
-// within each group. Shared by the Live Preview decorations and the
-// Reading view renderer (LC18).
-function relationGroupOwnerLines(items, keyFn) {
-  const groups = new Map();
-  const keyFor = typeof keyFn === "function" ? keyFn : () => "";
-  for (const item of Array.isArray(items) ? items : []) {
-    if (!item) continue;
-    let key = "";
-    try {
-      key = String(keyFor(item) || "");
-    } catch (error) {
-      key = "";
-    }
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(item);
-  }
-  return groups;
 }
 
 // Nearest list-item parent line for a relation row: only a direct child
@@ -44257,7 +43846,6 @@ class BobLedgerToolsRelationRenderMixin {
       if (candidates.length === 0) {
         return;
       }
-      const mapped = [];
       const sections = new Map();
       for (const candidate of candidates) {
         try {
@@ -44285,48 +43873,15 @@ class BobLedgerToolsRelationRenderMixin {
           if (!owner) {
             continue;
           }
-          mapped.push({ ...candidate, rowLine, rawLine, parsed, owner });
-        } catch (error) {
-          continue;
-        }
-      }
-      if (mapped.length === 0) {
-        return;
-      }
-      // One aggregated block per owner (LC18): the first relation li
-      // carries the full block; every further relation li of the same task
-      // hides. Malformed lines never join a group (LC13).
-      const groups = relationGroupOwnerLines(
-        mapped,
-        (item) => relationIdentity(path, (item.owner && item.owner.blockId) || ("line:" + String(item.owner && item.owner.line))),
-      );
-      for (const group of groups.values()) {
-        try {
-          const ordered = group.slice().sort((a, b) => a.rowLine - b.rowLine);
-          const first = ordered[0];
-          const owner = first.owner;
-          const model = this.relationBlockModelForOwner({
-            path,
-            owner,
-            lines: ordered.map((item) => ({ text: item.rawLine, lineNumber: item.rowLine })),
-          });
+          const model = this.relationChipModelForLine({ path, text: rawLine, owner });
           if (!model || model.chips.length === 0) {
             continue;
           }
-          const docNode = first.li.ownerDocument || (typeof document !== "undefined" ? document : null);
+          const docNode = candidate.li.ownerDocument || (typeof document !== "undefined" ? document : null);
           if (!docNode) {
             continue;
           }
-          const anchors = [];
-          for (const item of ordered) {
-            for (const anchor of item.anchors || []) {
-              anchors.push(anchor);
-            }
-          }
-          this.relationDecorateReadingBlock(first.li, anchors, model, docNode, path, first.rowLine, owner);
-          for (const extra of ordered.slice(1)) {
-            this.relationHideReadingRow(extra.li);
-          }
+          this.relationDecorateReadingRow(candidate.li, candidate.anchors, model, docNode, path, rowLine, owner);
         } catch (error) {
           continue;
         }
@@ -44356,12 +43911,8 @@ class BobLedgerToolsRelationRenderMixin {
       return null;
     }
   }
-  // One aggregated `🪢 links` block on the task's first relation li.
-  // `anchors` pools every stored anchor of the task's relation lines
-  // (including the hidden continuation li). Anchors are detached and
-  // re-appended in block order: plain chips, then one visual row per
-  // statement (LC10); stale and broken entries keep their dashed style.
-  relationDecorateReadingBlock(li, anchors, model, doc, sourcePath, lineNumber, owner) {
+
+  relationDecorateReadingRow(li, anchors, model, doc, sourcePath, lineNumber, owner) {
     try {
       const interactive = Boolean(this.relationsNavApi());
       const label = relationReadingLabelElement(li);
@@ -44377,7 +43928,8 @@ class BobLedgerToolsRelationRenderMixin {
           // Best-effort.
         }
       }
-      const rowClasses = ["bob-dep-row", "bob-relation-row", "bob-relation-block"];
+      const rowClasses = ["bob-dep-row", "bob-relation-row"];
+      if (model.direction === "from") rowClasses.push("is-incoming");
       if (model.labelled) rowClasses.push("is-labelled");
       for (const name of rowClasses) {
         try {
@@ -44387,25 +43939,14 @@ class BobLedgerToolsRelationRenderMixin {
         }
       }
       li.setAttribute("role", "group");
-      li.setAttribute("aria-label", String(model.label || "🪢 links") + ", " + model.liveCount + " live");
+      li.setAttribute("aria-label", String(model.label || "relations") + ", " + model.liveCount + " live");
       li.setAttribute("title", String(model.tooltip || ""));
       if (li.dataset) li.dataset.bobRelationProcessed = "1";
-      const meta = { lineNumber, direction: "to", ownerBlockId: (owner && owner.blockId) || null };
+      const meta = { lineNumber, direction: model.direction, ownerBlockId: (owner && owner.blockId) || null };
 
-      const available = (Array.isArray(anchors) ? anchors : []).slice();
+      const available = anchors.slice();
       const closedAnchors = [];
-      const sections = [
-        Array.isArray(model.plain) ? model.plain : [],
-        Array.isArray(model.outgoing) ? model.outgoing : [],
-        Array.isArray(model.incoming) ? model.incoming : [],
-      ];
-      const ordered = [];
-      for (const section of sections) {
-        for (const chip of section) {
-          if (chip && !chip.collapsed) ordered.push(chip);
-        }
-      }
-      for (const chip of ordered) {
+      for (const chip of model.chips) {
         let anchor = null;
         const foundAt = available.findIndex((candidate) => {
           try {
@@ -44418,7 +43959,8 @@ class BobLedgerToolsRelationRenderMixin {
           anchor = available.splice(foundAt, 1)[0];
           this.relationDecorateReadingAnchor(anchor, chip, doc, model);
         } else if (chip.live && !chip.broken) {
-          // LC7: a live edge missing from the stored text is appended.
+          // LC7: a live edge missing from the stored text is appended
+          // in canonical order; placement happens below.
           anchor = this.relationCreateReadingAnchor(chip, doc, model, sourcePath);
           if (!anchor) {
             continue;
@@ -44431,20 +43973,23 @@ class BobLedgerToolsRelationRenderMixin {
         if (chip.collapsed) {
           closedAnchors.push(anchor);
         }
-        try {
-          if (anchor.parentNode) anchor.parentNode.removeChild(anchor);
-        } catch (removeError) {
-          // Fresh anchors have no parent yet.
-        }
-        if (chip.label) {
-          // Each statement gets its own visual row with its pill and
-          // arrow (LC10); plain chips wrap in the block row (LC1).
+        if (model.labelled) {
+          // Each labelled entry gets its own visual row with its pill
+          // and arrow (LC10); processing in chip order keeps stored
+          // order with live appends last (LC7).
           const entry = doc.createElement("span");
           entry.setAttribute("class", "bob-relation-entry");
+          try {
+            if (anchor.parentNode) anchor.parentNode.removeChild(anchor);
+          } catch (removeError) {
+            // Fresh anchors have no parent yet.
+          }
           entry.appendChild(anchor);
-          this.relationAppendReadingEntryContent(entry, anchor, chip, doc);
+          this.relationAppendReadingEntryContent(entry, anchor, chip, doc, model);
           li.appendChild(entry);
-        } else {
+        } else if (!anchor.parentNode) {
+          // Unlabelled rows keep stored anchors in place; fresh live
+          // appends go last (LC7).
           li.appendChild(anchor);
         }
         if (interactive && chip.live && !chip.broken && anchor) {
@@ -44452,10 +43997,9 @@ class BobLedgerToolsRelationRenderMixin {
         }
       }
       // Hide the source glyph, header words, label words, and raw
-      // separators: every direct text child of the block li is chrome
-      // the chips replace. Nested lists are elements, so child tasks
-      // are untouched. The heading span below is an element child, so
-      // it survives.
+      // separators: every direct text child of an accepted row is
+      // chrome the chips replace. Nested lists are elements, so child
+      // tasks are untouched.
       for (const node of Array.from(li.childNodes || [])) {
         try {
           if (node.nodeType !== 3) continue;
@@ -44490,16 +44034,6 @@ class BobLedgerToolsRelationRenderMixin {
           continue;
         }
       }
-      try {
-        const heading = doc.createElement("span");
-        heading.setAttribute("class", "bob-dep-label bob-relation-label");
-        heading.setAttribute("aria-hidden", "true");
-        heading.appendChild(doc.createTextNode(String(model.label || "🪢 links")));
-        if (typeof li.insertBefore === "function" && li.firstChild) li.insertBefore(heading, li.firstChild);
-        else li.appendChild(heading);
-      } catch (error) {
-        // A heading-free block still navigates.
-      }
       if (model.collapsed && Number(model.collapsed.count) > 0) {
         this.relationAppendReadingCollapsed(li, closedAnchors, model, doc);
       }
@@ -44519,45 +44053,22 @@ class BobLedgerToolsRelationRenderMixin {
     }
   }
 
-  // Hide a continuation relation li: its entries render in the task's
-  // first-li block (LC18). The raw line returns when the toggle is off
-  // because the post-processor skips the whole note then.
-  relationHideReadingRow(li) {
-    try {
-      if (!li) return;
-      try {
-        li.style.display = "none";
-      } catch (styleError) {
-        // Attribute fallback for style-free DOMs.
-      }
-      try {
-        li.setAttribute("data-bob-relation-hidden", "1");
-      } catch (attrError) {
-        // Best-effort.
-      }
-      if (li.dataset) {
-        li.dataset.bobRelationProcessed = "1";
-        li.dataset.bobRelationHidden = "1";
-      }
-    } catch (error) {
-      // Best-effort.
-    }
-  }
-
-  relationAppendReadingEntryContent(host, anchor, chip, doc) {
+  relationAppendReadingEntryContent(host, anchor, chip, doc, model) {
     try {
       if (!host || !anchor) return;
-      if (!chip.label) return;
-      if (chip.direction !== "from") {
-        const pill = doc.createElement("span");
-        pill.setAttribute("class", "bob-relation-pill");
-        pill.appendChild(doc.createTextNode(String(chip.label)));
-        host.insertBefore(pill, anchor);
-        const arrow = doc.createElement("span");
-        arrow.setAttribute("class", "bob-relation-arrow");
-        arrow.setAttribute("aria-hidden", "true");
-        arrow.appendChild(doc.createTextNode("→"));
-        host.insertBefore(arrow, anchor);
+      if (!model.labelled) return;
+      if (model.direction === "to") {
+        if (chip.label) {
+          const pill = doc.createElement("span");
+          pill.setAttribute("class", "bob-relation-pill");
+          pill.appendChild(doc.createTextNode(String(chip.label)));
+          host.insertBefore(pill, anchor);
+          const arrow = doc.createElement("span");
+          arrow.setAttribute("class", "bob-relation-arrow");
+          arrow.setAttribute("aria-hidden", "true");
+          arrow.appendChild(doc.createTextNode("→"));
+          host.insertBefore(arrow, anchor);
+        }
       } else if (chip.inverse) {
         const pill = doc.createElement("span");
         pill.setAttribute("class", "bob-relation-pill");
@@ -48011,20 +47522,16 @@ module.exports.helpers = {
   parseTaskRelationFile,
   relationLabelSuggestionRows,
   relationInversePhrase,
-  relationPairKey,
-  relationGroupRelatedEdges,
-  relationBlockModelForTask,
-  buildRelationBlockElement,
+  relationChipModelForRow,
+  buildRelationChipElement,
   relationAttachChipRemove,
   relationAttachAddControl,
   relationOwnerTaskLine,
   relationOwnerTaskLineAtDoc,
-  relationGroupOwnerLines,
   relationReadingMappedLine,
   relationReadingLabelElement,
   RELATION_INVERSE_PHRASES,
   RELATION_STALE_TOOLTIP,
-  RELATION_BLOCK_ROW_TOOLTIP,
   emptyPlanBudget,
   computeTodayLinks,
   emptyTodayCache,

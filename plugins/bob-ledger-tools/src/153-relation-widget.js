@@ -1,8 +1,7 @@
-// Live Preview widget for one task's aggregated `🪢 links` block (full
-// mode on the first relation line, continuation mode on the second).
+// Live Preview widget for one relation row (LINKS or LINKED FROM).
 // Navigation (click / Mod-click / hover preview) always works; ＋ /
 // hover × appear only when `meta.interactive` is set (nav
-// `api.relations`). Stale, broken, archived, and muted chips stay
+// `api.relations` v1). Stale, broken, archived, and muted chips stay
 // navigation-only.
 let RelationChipWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
@@ -17,7 +16,6 @@ if (WidgetType && typeof WidgetType === "function") {
           this.meta.sourcePath || "",
           this.meta.lineNumber === undefined ? null : this.meta.lineNumber,
           Boolean(this.meta.interactive),
-          this.meta.mode || "full",
         ]);
       } catch (error) {
         this.key = String((model && model.label) || "");
@@ -32,13 +30,12 @@ if (WidgetType && typeof WidgetType === "function") {
       const plugin = this.meta.plugin;
       const sourcePath = this.meta.sourcePath || "";
       const interactive = Boolean(this.meta.interactive);
-      const dom = buildRelationBlockElement(
+      const dom = buildRelationChipElement(
         typeof document !== "undefined" ? document : null,
         this.model,
         {
           plugin,
           sourcePath,
-          mode: this.meta.mode === "continuation" ? "continuation" : "full",
           interactive,
           onOpen: (linktext, event) => {
             try {

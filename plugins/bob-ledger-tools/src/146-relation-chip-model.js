@@ -1,17 +1,18 @@
-// Task relation chips (ledger-chips). Pure model and element builder
-// for one aggregated `🪢 links` block per task. Chips render the live
-// relation index, never the stored mirror: a stored entry with no live
-// edge is stale (LC8), a live edge missing from the text is appended in
-// canonical order (LC7), and an unresolvable target is broken (LC4).
-// Redundant plain records (a pair that also has a statement) render
-// nothing. Reuses the `bob-dep-*` DOM family with no new palette. Plain
-// chips carry no arrow (LC1); statements are one entry per visual row
-// (LC10) with muted small-caps label pills; inverse phrases are
-// display-only. Three or more closed chips collapse to `✓×N` (LC9).
-// Never throws.
+// Task relation chips (bob-cli-a2 chips). Pure model and element builder
+// for live LINKS and LINKED FROM rows. Chips render the live relation
+// index, never the stored mirror: a stored entry with no live edge is
+// stale (LC8), a live edge missing from the text is appended in canonical
+// order (LC7), and an unresolvable LINKS target is broken (LC4). Reuses
+// the `bob-dep-*` DOM family with no new palette. Labels are muted
+// small-caps pills on the arrow side; inverse phrases are display-only
+// (decision `inverse_phrases = builtin`); three or more closed chips
+// collapse to `✓×N` (LC9). Never throws.
 const RELATION_STALE_TOOLTIP =
   "No longer links here · refreshes on the next reconcile";
-const RELATION_BLOCK_ROW_TOOLTIP = "Related tasks · live";
+const RELATION_LINKS_ROW_TOOLTIP =
+  "Related tasks · live from the relation index";
+const RELATION_LINKED_FROM_ROW_TOOLTIP =
+  "Tasks linking here · live from the relation index";
 
 // Display-only inverse phrases (docs/task-relations.md §10). Storage
 // stays verbatim; matching is case-insensitive.
@@ -123,7 +124,7 @@ function relationCompareLinktext(left, right) {
   return relationCodepointCompare(String(left || ""), String(right || ""));
 }
 
-function relationBuildChip({ direction, linkpath, blockId, label, task, otherPath, live, stale, resolved, sourcePath, relKind, peer, storedOn }) {
+function relationBuildChip({ direction, linkpath, blockId, label, task, otherPath, live, stale, resolved, sourcePath }) {
   try {
     const id = String(blockId || "");
     const known = task && typeof task === "object" ? task : null;
@@ -156,29 +157,11 @@ function relationBuildChip({ direction, linkpath, blockId, label, task, otherPat
       : [fullText, resolvedPath || String(sourcePath || ""), dependencyStatusName(state)];
     if (stale && !broken) tooltipParts.push(RELATION_STALE_TOOLTIP);
     const tooltip = tooltipParts.filter(Boolean).join(" — ");
-    const kind = relKind === "statement" ? "statement" : relKind === "plain" ? "plain" : direction === "from" ? "statement" : "plain";
     let removeLabel = null;
-    if (kind === "plain") removeLabel = "Unlink " + fullText;
-    else removeLabel = "Remove '" + String(label || "") + "'";
-    let relAction = null;
-    try {
-      const peerRef = peer && typeof peer === "object"
-        ? { path: String(peer.path || ""), blockId: String(peer.blockId || "") }
-        : { path: String(resolvedPath || ""), blockId: id };
-      if (kind === "plain") {
-        relAction = { kind: "plain", storedOn: storedOn || null, peer: peerRef };
-      } else {
-        relAction = { kind: "statement", label: label || null, source: null, target: null, peer: peerRef };
-      }
-    } catch (error) {
-      relAction = null;
-    }
+    if (direction === "to") removeLabel = "Unlink " + fullText;
+    else removeLabel = "Remove the link from " + fullText;
     return {
       direction,
-      relKind: kind,
-      relAction,
-      storedOn: storedOn || null,
-      peer: peer && typeof peer === "object" ? { path: String(peer.path || ""), blockId: String(peer.blockId || "") } : null,
       blockId: id,
       linkpath: storedLinkpath,
       linktext,
@@ -207,160 +190,115 @@ function relationBuildChip({ direction, linkpath, blockId, label, task, otherPat
   }
 }
 
-// One aggregated `🪢 links` block for a task, built from the live pair
-// view plus both stored relation lines. `outgoing` / `incoming` are full
-// live edge arrays (`{ label, other: { path, blockId, ... } }`) whose
-// `other` is the displayed end; group them with
-// `relationGroupRelatedEdges` (same helper as `api.relationIndex.related`).
-// `linksText` / `linkedFromText` are the task's stored relation lines
-// (null when absent). `lookup(path, blockId)` resolves a link to a task
-// record or null; `resolve(linkpath)` maps a stored linkpath to a
-// vault-relative path. `owner` is `{ blockId, line, text }` (line 1-based,
-// blockId possibly null). A stored entry covered by a grouped entry
-// renders through that entry; an uncovered stored entry is stale (LC8) and
-// a redundant plain record renders nothing (LC17). Returns null unless at
-// least one stored line parses (LC13), or when the task has no relations
-// at all so the raw lines stay as-is.
-function relationBlockModelForTask({ sourcePath, owner, linksText, linkedFromText, outgoing, incoming, grouped: providedGrouped, lookup, resolve }) {
+// Merge one relation row's stored entries with its live index edges.
+// `stored` are `parseTaskRelationLine` entries `{ target, blockId, label }`;
+// `live` are index edges whose `other` is the displayed end (the target for
+// LINKS, the source for LINKED FROM) with `{ path, blockId, task }` plus
+// the edge `label`. `lookup(path, blockId)` resolves a stored link to a
+// task record or null; `resolve(linkpath)` maps a stored linkpath to a
+// vault-relative path. Returns null unless the line parses as the
+// requested direction (LC13).
+function relationChipModelForRow({ direction, lineText, sourcePath, live, lookup, resolve }) {
   try {
+    const parsed = parseTaskRelationLine(String(lineText || ""));
+    // An empty row still renders live edges appended in canonical order
+    // (LC7); malformed and not-a-line rows never get chips (LC13).
+    if (!parsed || (parsed.verdict !== "accepted" && parsed.verdict !== "empty")) return null;
+    if (direction === "to" && parsed.kind !== "links") return null;
+    if (direction === "from" && parsed.kind !== "linkedFrom") return null;
     const source = String(sourcePath || "");
-    const ownerId = owner && owner.blockId ? String(owner.blockId) : "";
     const lookupFn = typeof lookup === "function" ? lookup : () => null;
     const resolveFn = typeof resolve === "function"
       ? resolve
       : (linkpath) => (String(linkpath || "").trim() ? String(linkpath).replace(/\.md$/i, "") + ".md" : source);
-    const parseLine = (text, kind) => {
-      if (text === null || text === undefined) return null;
-      const parsed = parseTaskRelationLine(String(text));
-      if (!parsed || (parsed.verdict !== "accepted" && parsed.verdict !== "empty")) return null;
-      if (parsed.kind !== kind) return null;
-      return parsed;
-    };
-    const links = parseLine(linksText, "links");
-    const linkedFrom = parseLine(linkedFromText, "linkedFrom");
-    if (!links && !linkedFrom) return null;
-    const outgoingRows = Array.isArray(outgoing) ? outgoing : [];
-    const incomingRows = Array.isArray(incoming) ? incoming : [];
-    // Mount code passes the `api.relationIndex.related()` view straight
-    // through so plain, outgoing, and incoming come from one generation;
-    // tests and the no-`related` fallback pass raw edge arrays instead.
-    const grouped = providedGrouped && typeof providedGrouped === "object"
-      ? {
-        plain: Array.isArray(providedGrouped.plain) ? providedGrouped.plain : [],
-        outgoing: Array.isArray(providedGrouped.outgoing) ? providedGrouped.outgoing : [],
-        incoming: Array.isArray(providedGrouped.incoming) ? providedGrouped.incoming : [],
-      }
-      : relationGroupRelatedEdges(source, ownerId, outgoingRows, incomingRows);
-    // Coverage: a stored entry is live when a grouped entry names the
-    // same other task (exact path match, or blockId-only when either
-    // side has no path). A redundant plain record is covered by the
-    // pair's statement, so it renders nothing.
-    const covers = (entries, entryPath, entryId) => entries.some((item) => {
-      const other = item && item.other ? item.other : null;
-      if (!other || String(other.blockId || "") !== String(entryId || "")) return false;
-      const otherPath = String(other.path || "");
-      return !otherPath || !entryPath || otherPath === entryPath;
-    });
-    // Only a rendered entry covers its stored row: an unresolvable live
-    // edge with no task record (LC4) leaves the stored entry to render
-    // as broken instead of swallowing it.
-    const renderable = (item) => {
-      const other = item && item.other ? item.other : null;
-      if (!other) return false;
-      return Boolean(other.path)
-        || (other.task && typeof other.task === "object")
-        || Boolean(other.text) || Boolean(other.status);
-    };
-    const allRelated = [...grouped.plain, ...grouped.outgoing, ...grouped.incoming].filter(renderable);
-    const taskFor = (other, entryPath, entryId) => {
-      if (other && other.task && typeof other.task === "object") return other.task;
-      const path = String((other && other.path) || entryPath || "");
-      const id = String((other && other.blockId) || entryId || "");
-      let found = null;
+    const liveRows = Array.isArray(live) ? live : [];
+    const liveByKey = new Map();
+    for (const edge of liveRows) {
       try {
-        found = lookupFn(path, id);
+        if (!edge || typeof edge !== "object") continue;
+        const other = edge.other && typeof edge.other === "object" ? edge.other : null;
+        const otherPath = other ? String(other.path || "") : "";
+        const otherId = other ? String(other.blockId || "") : "";
+        if (!otherId) continue;
+        const key = otherPath ? otherPath + "\u0000" + otherId : "\u0000" + otherId;
+        if (!liveByKey.has(key)) liveByKey.set(key, edge);
       } catch (error) {
-        found = null;
+        continue;
       }
-      if (found && typeof found === "object") return found;
-      // Index rows carry raw note text when the Tasks memo omits the
-      // note (done/ archives); surface it when memo lookup misses.
-      if (other && (other.text || other.status)) {
-        return { path, blockId: id, text: other.text || null, status: other.status || null };
-      }
-      return null;
-    };
-    const chipForRelated = (item, direction, relKind, storedOn) => {
-      const other = item && item.other ? item.other : {};
-      const otherPath = String(other.path || "");
-      const otherId = String(other.blockId || "");
-      if (!otherId) return null;
-      const task = taskFor(other, otherPath, otherId);
-      // An unresolvable live edge with no task record is broken, not
-      // appended: only the stored text can name it (LC4).
-      if (!otherPath && !task) return null;
-      return relationBuildChip({
-        direction, linkpath: "", blockId: otherId, label: item.label || null,
-        task, otherPath, live: true, stale: false,
-        resolved: typeof other.resolved === "boolean" ? other.resolved : Boolean(otherPath),
-        sourcePath: source, relKind, peer: { path: otherPath, blockId: otherId }, storedOn: storedOn || null,
-      });
-    };
-    const plain = [];
-    for (const item of grouped.plain) {
-      const chip = chipForRelated(item, "to", "plain", item.storedOn);
-      if (chip) plain.push(chip);
     }
-    const outgoingChips = [];
-    for (const edge of grouped.outgoing) {
-      const chip = chipForRelated(edge, "to", "statement", "this");
-      if (chip) outgoingChips.push(chip);
-    }
-    const incomingChips = [];
-    for (const edge of grouped.incoming) {
-      const chip = chipForRelated(edge, "from", "statement", "other");
-      if (chip) incomingChips.push(chip);
-    }
-    // Stale leftovers: stored entries no grouped entry covers, in stored
-    // order (LINKS leftovers join the plain or outgoing section by label,
-    // LINKED FROM leftovers join the plain or incoming section).
-    const stalePlain = [];
-    const staleOutgoing = [];
-    const staleIncoming = [];
-    const collectStale = (parsed, section) => {
-      for (const entry of Array.isArray(parsed && parsed.entries) ? parsed.entries : []) {
+    const chips = [];
+    const consumed = new Set();
+    const stored = Array.isArray(parsed.entries) ? parsed.entries : [];
+    for (const entry of stored) {
+      try {
+        const entryId = String((entry && entry.blockId) || "");
+        if (!entryId) continue;
+        let entryPath = "";
         try {
-          const entryId = String((entry && entry.blockId) || "");
-          if (!entryId) continue;
-          let entryPath = "";
-          try {
-            entryPath = String(resolveFn((entry && entry.target) || "", source) || "");
-          } catch (error) {
-            entryPath = "";
-          }
-          if (covers(allRelated, entryPath, entryId)) continue;
-          const label = (entry && entry.label) || null;
-          const task = taskFor(null, entryPath, entryId);
-          const chip = relationBuildChip({
-            direction: section === "incoming" ? "from" : "to",
-            linkpath: (entry && entry.target) || "", blockId: entryId,
-            label, task, otherPath: entryPath, live: false, stale: true,
-            resolved: Boolean(task), sourcePath: source,
-            relKind: label ? "statement" : "plain",
-            peer: { path: entryPath, blockId: entryId }, storedOn: null,
-          });
-          if (!chip) continue;
-          if (label) (section === "incoming" ? staleIncoming : staleOutgoing).push(chip);
-          else stalePlain.push(chip);
+          entryPath = String(resolveFn((entry && entry.target) || "", source) || "");
         } catch (error) {
-          continue;
+          entryPath = "";
         }
+        const exact = entryPath ? entryPath + "\u0000" + entryId : null;
+        let edge = exact && liveByKey.has(exact) && !consumed.has(exact) ? liveByKey.get(exact) : null;
+        if (!edge) {
+          const loose = "\u0000" + entryId;
+          if (liveByKey.has(loose) && !consumed.has(loose)) edge = liveByKey.get(loose);
+        }
+        let task = null;
+        let otherPath = entryPath;
+        let label = (entry && entry.label) || null;
+        let resolved = false;
+        if (edge) {
+          const key = (edge.other && edge.other.path ? String(edge.other.path) + "\u0000" : "\u0000") + entryId;
+          consumed.add(exact && liveByKey.get(exact) === edge ? exact : key);
+          consumed.add(key);
+          const other = edge.other || {};
+          otherPath = String(other.path || entryPath || "");
+          if (edge.label) label = edge.label;
+          resolved = typeof other.resolved === "boolean" ? other.resolved : Boolean(other.path);
+          task = (other.task && typeof other.task === "object" ? other.task : null)
+            || lookupFn(otherPath, entryId);
+        } else {
+          task = lookupFn(entryPath, entryId);
+        }
+        const chip = relationBuildChip({
+          direction, linkpath: (entry && entry.target) || "", blockId: entryId,
+          label, task, otherPath, live: Boolean(edge), stale: !edge, resolved, sourcePath: source,
+        });
+        if (chip) chips.push(chip);
+      } catch (error) {
+        continue;
       }
-    };
-    collectStale(links, "outgoing");
-    collectStale(linkedFrom, "incoming");
-    const chips = [...plain, ...stalePlain, ...outgoingChips, ...staleOutgoing, ...incomingChips, ...staleIncoming];
-    if (!chips.length) return null;
+    }
+    const missing = [];
+    for (const [key, edge] of liveByKey) {
+      if (!consumed.has(key)) missing.push(edge);
+    }
+    missing.sort((a, b) => relationCompareLinktext(
+      relationEdgeLinktext(a && a.other && a.other.path, a && a.other && a.other.blockId, source),
+      relationEdgeLinktext(b && b.other && b.other.path, b && b.other && b.other.blockId, source),
+    ));
+    for (const edge of missing) {
+      try {
+        const other = (edge && edge.other) || {};
+        const otherId = String(other.blockId || "");
+        if (!otherId) continue;
+        const otherPath = String(other.path || "");
+        const task = (other.task && typeof other.task === "object" ? other.task : null)
+          || lookupFn(otherPath, otherId);
+        // An unresolvable live edge with no task record is broken, not
+        // appended: only the stored text can name it (LC4).
+        if (!otherPath && !task) continue;
+        const chip = relationBuildChip({
+          direction, linkpath: "", blockId: otherId, label: (edge && edge.label) || null,
+          task, otherPath, live: true, stale: false, sourcePath: source,
+        });
+        if (chip) chips.push(chip);
+      } catch (error) {
+        continue;
+      }
+    }
     const closed = chips.filter((chip) => chip && chip.live && !chip.broken && chip.state === "done");
     let collapsed = null;
     if (closed.length >= 3) {
@@ -370,13 +308,10 @@ function relationBlockModelForTask({ sourcePath, owner, linksText, linkedFromTex
     const labelled = chips.some((chip) => chip && chip.label);
     const liveCount = chips.filter((chip) => chip && chip.live).length;
     return {
-      kind: "block",
-      label: "🪢 links",
-      tooltip: RELATION_BLOCK_ROW_TOOLTIP,
-      hasContinuation: Boolean(links && linkedFrom),
-      plain: [...plain, ...stalePlain],
-      outgoing: [...outgoingChips, ...staleOutgoing],
-      incoming: [...incomingChips, ...staleIncoming],
+      direction,
+      kind: parsed.kind,
+      label: direction === "to" ? "🪢 links to" : "🪢 linked from",
+      tooltip: direction === "to" ? RELATION_LINKS_ROW_TOOLTIP : RELATION_LINKED_FROM_ROW_TOOLTIP,
       chips,
       collapsed,
       labelled,
@@ -426,7 +361,9 @@ function relationAttachAddControl(row, doc, model, onAdd) {
     add.setAttribute("class", "bob-dep-add");
     add.setAttribute("role", "button");
     add.setAttribute("tabindex", "0");
-    const addLabel = "Link another task";
+    const addLabel = model && model.direction === "from"
+      ? "Choose a task that links here"
+      : "Link this task to another";
     add.setAttribute("aria-label", addLabel);
     add.setAttribute("title", addLabel);
     add.appendChild(doc.createTextNode("＋"));
@@ -467,39 +404,32 @@ function relationChipAriaLabel(chip) {
   }
 }
 
-// Live Preview block element. `model` is `relationBlockModelForTask(...)`;
-// `options` carries `{ mode: "full" | "continuation", sourcePath,
-// interactive, onOpen(linktext, event, chip), onHover(linktext, event,
-// chipEl), onRemove(chip, event), onAdd(event) }`. Full mode renders the
-// `🪢 links` heading, plain chips, and outgoing statements (plus incoming
-// statements when the task has no second relation line); continuation
-// mode renders only the incoming statements under no heading (LC18
-// fallback: a block replace decoration must come from a StateField, which
-// the refresh fan-out cannot drive yet). Statements wrap one entry per
-// visual row (LC10); entries never change line height. Closed and
-// archived targets are dimmed and never struck; `#hide` targets are
-// muted. Never throws.
-function buildRelationBlockElement(doc, model, options) {
+// Live Preview row element. `model` is `relationChipModelForRow(...)`;
+// `options` carries `{ sourcePath, interactive, onOpen(linktext, event,
+// chip), onHover(linktext, event, chipEl), onRemove(chip, event),
+// onAdd(event) }`. Labelled rows wrap one entry per visual row;
+// unlabelled rows wrap between chips; entries never change line height
+// (LC10). Closed and archived targets are dimmed and never struck;
+// `#hide` targets are muted. Never throws.
+function buildRelationChipElement(doc, model, options) {
   try {
     if (!doc || !model || typeof model !== "object") return null;
     const opts = options && typeof options === "object" ? options : {};
     const interactive = Boolean(opts.interactive);
-    const continuation = opts.mode === "continuation";
+    const chips = Array.isArray(model.chips) ? model.chips : [];
     const row = doc.createElement("span");
-    const rowClasses = ["bob-dep-row", "bob-relation-row", "bob-relation-block"];
-    if (continuation) rowClasses.push("bob-relation-continuation");
+    const rowClasses = ["bob-dep-row", "bob-relation-row"];
+    if (model.direction === "from") rowClasses.push("is-incoming");
     if (model.labelled) rowClasses.push("is-labelled");
     row.setAttribute("class", rowClasses.join(" "));
     row.setAttribute("role", "group");
-    row.setAttribute("aria-label", String(model.label || "🪢 links") + ", " + model.liveCount + " live");
+    row.setAttribute("aria-label", String(model.label || "relations") + ", " + model.liveCount + " live");
     if (model.tooltip) row.setAttribute("title", String(model.tooltip));
-    if (!continuation) {
-      const label = doc.createElement("span");
-      label.setAttribute("class", "bob-dep-label bob-relation-label");
-      label.setAttribute("aria-hidden", "true");
-      label.appendChild(doc.createTextNode(String(model.label || "🪢 links")));
-      row.appendChild(label);
-    }
+    const label = doc.createElement("span");
+    label.setAttribute("class", "bob-dep-label bob-relation-label");
+    label.setAttribute("aria-hidden", "true");
+    label.appendChild(doc.createTextNode(String(model.label || "🪢 relations")));
+    row.appendChild(label);
     const buildChipEl = (chip) => {
       const el = doc.createElement("span");
       const classes = ["bob-dep-chip", "bob-relation-chip", "is-" + String(chip.state || "todo")];
@@ -577,12 +507,19 @@ function buildRelationBlockElement(doc, model, options) {
       arrow.appendChild(doc.createTextNode(String(text === undefined ? "→" : text)));
       return arrow;
     };
-    const appendStatementEntry = (host, chip) => {
+    const visible = chips.filter((chip) => chip && !chip.collapsed);
+    const appendChipEntry = (host, chip) => {
       try {
-        const entry = doc.createElement("span");
-        entry.setAttribute("class", "bob-relation-entry");
-        if (chip.direction === "from") {
-          if (chip.inverse) {
+        if (model.labelled) {
+          const entry = doc.createElement("span");
+          entry.setAttribute("class", "bob-relation-entry");
+          if (model.direction === "to") {
+            if (chip.label) {
+              entry.appendChild(buildPill(chip.label));
+              entry.appendChild(buildArrow());
+            }
+            entry.appendChild(buildChipEl(chip));
+          } else if (chip.inverse) {
             entry.appendChild(buildPill(chip.inverse));
             entry.appendChild(buildChipEl(chip));
           } else if (chip.label) {
@@ -597,39 +534,19 @@ function buildRelationBlockElement(doc, model, options) {
           } else {
             entry.appendChild(buildChipEl(chip));
           }
+          host.appendChild(entry);
         } else {
-          if (chip.label) {
-            entry.appendChild(buildPill(chip.label));
-            entry.appendChild(buildArrow());
-          }
-          entry.appendChild(buildChipEl(chip));
+          host.appendChild(buildChipEl(chip));
         }
-        host.appendChild(entry);
       } catch (error) {
-        // One bad entry never breaks the block.
+        // One bad entry never breaks the row.
       }
     };
-    const plain = Array.isArray(model.plain) ? model.plain : [];
-    const outgoing = Array.isArray(model.outgoing) ? model.outgoing : [];
-    const incoming = Array.isArray(model.incoming) ? model.incoming : [];
-    // Continuation mode shows the incoming statements only; full mode
-    // shows them too unless a second relation line carries them.
-    const sections = continuation
-      ? [incoming]
-      : (model.hasContinuation ? [plain, outgoing] : [plain, outgoing, incoming]);
-    for (const section of sections) {
-      for (const chip of section) {
-        if (!chip || chip.collapsed) continue;
-        if (chip.label) appendStatementEntry(row, chip);
-        else {
-          try {
-            row.appendChild(buildChipEl(chip));
-          } catch (error) {
-            // One bad chip never breaks the block.
-          }
-        }
-      }
+    if (!model.labelled && model.direction === "to") {
+      // LC1: an unlabelled LINKS row reads `🪢 links to → (chip)`.
+      row.appendChild(buildArrow());
     }
+    for (const chip of visible) appendChipEntry(row, chip);
     if (model.collapsed && Number(model.collapsed.count) > 0) {
       const count = Number(model.collapsed.count);
       const collapsed = doc.createElement("span");
@@ -641,18 +558,15 @@ function buildRelationBlockElement(doc, model, options) {
       collapsed.appendChild(doc.createTextNode("✓×" + count));
       const expand = () => {
         try {
-          for (const chip of (Array.isArray(model.chips) ? model.chips : [])) {
-            if (!chip || !chip.collapsed) continue;
-            const fresh = { ...chip, collapsed: false };
-            if (fresh.label) appendStatementEntry(row, fresh);
-            else row.insertBefore(buildChipEl(fresh), collapsed);
+          for (const chip of chips) {
+            if (chip && chip.collapsed) appendChipEntry(row, { ...chip, collapsed: false });
           }
           if (typeof collapsed.remove === "function") collapsed.remove();
           else if (collapsed.parentNode && typeof collapsed.parentNode.removeChild === "function") {
             collapsed.parentNode.removeChild(collapsed);
           }
         } catch (error) {
-          // An unexpanded block never breaks the chips.
+          // An unexpanded row never breaks the chips.
         }
       };
       if (typeof collapsed.addEventListener === "function") {
@@ -664,9 +578,16 @@ function buildRelationBlockElement(doc, model, options) {
           }
         });
       }
-      row.appendChild(collapsed);
+      if (model.labelled) {
+        const entry = doc.createElement("span");
+        entry.setAttribute("class", "bob-relation-entry");
+        entry.appendChild(collapsed);
+        row.appendChild(entry);
+      } else {
+        row.appendChild(collapsed);
+      }
     }
-    if (interactive && !continuation) relationAttachAddControl(row, doc, model, opts.onAdd);
+    if (interactive) relationAttachAddControl(row, doc, model, opts.onAdd);
     return row;
   } catch (error) {
     return null;

@@ -41,17 +41,33 @@ class BobLedgerToolsRelationModelMixin {
     }
   }
 
-  // Row model for one stored relation line. `owner` is the parent task
-  // `{ blockId, text, line }` (line 1-based) or null. Live edges come
-  // from `api.relationIndex`, never the stored mirror. Returns null for
-  // malformed and not-a-line rows (LC13).
-  relationChipModelForLine({ path, text, owner }) {
+  // Block model for one task's stored relation lines. `owner` is the
+  // parent task `{ blockId, text, line }` (line 1-based, blockId possibly
+  // null); `lines` are the task's stored relation lines
+  // `[{ text, lineNumber }]` (0-based doc positions in Live Preview,
+  // 0-based source indexes in Reading view). Live edges come from
+  // `api.relationIndex`, never the stored mirror: one `related()` call
+  // per task keeps plain, outgoing, and incoming on the same generation,
+  // falling back to `outgoing()` / `incoming()` when `related` is
+  // missing. Returns null when no stored line parses (LC13) or the task
+  // has no relations at all.
+  relationBlockModelForOwner({ path, owner, lines }) {
     try {
       const sourcePath = String(path || "");
-      if (!sourcePath || typeof text !== "string") return null;
-      const parsed = parseTaskRelationLine(text);
-      if (!parsed || (parsed.verdict !== "accepted" && parsed.verdict !== "empty")) return null;
-      const direction = parsed.kind === "links" ? "to" : "from";
+      if (!sourcePath || !owner || !Array.isArray(lines) || !lines.length) return null;
+      let linksText = null;
+      let linkedFromText = null;
+      for (const row of lines) {
+        if (!row || typeof row.text !== "string") continue;
+        const parsed = parseTaskRelationLine(row.text);
+        if (!parsed || (parsed.verdict !== "accepted" && parsed.verdict !== "empty")) continue;
+        if (parsed.kind === "links") {
+          if (linksText === null) linksText = row.text;
+        } else if (linkedFromText === null) {
+          linkedFromText = row.text;
+        }
+      }
+      if (linksText === null && linkedFromText === null) return null;
       let api = null;
       try {
         api = typeof this.relationIndexApi === "function" ? this.relationIndexApi() : null;
@@ -61,12 +77,51 @@ class BobLedgerToolsRelationModelMixin {
       const self = this;
       const lookup = (linkpath, blockId) => self.relationLookupTask(linkpath, blockId);
       const resolve = (linkpath) => self.relationResolveLinkpath(linkpath, sourcePath);
-      let live = [];
-      try {
-        if (api) {
-          if (direction === "to") {
+      let grouped = null;
+      if (api && typeof api.related === "function") {
+        try {
+          const ownerKey = (owner && owner.blockId)
+            || (owner && owner.text)
+            || (owner && Number.isInteger(owner.line) ? owner.line : "");
+          const related = api.related(sourcePath, ownerKey);
+          if (related && typeof related === "object") {
+            const enrich = (item) => {
+              const other = item && item.other ? item.other : null;
+              if (!other) return null;
+              return {
+                label: item.label || null,
+                storedOn: item.storedOn || null,
+                other: {
+                  path: String(other.path || ""),
+                  blockId: String(other.blockId || ""),
+                  line: other.line === undefined ? null : other.line,
+                  text: other.text === undefined ? null : other.text,
+                  status: other.status === undefined ? null : other.status,
+                  resolved: other.resolved !== false,
+                  archived: Boolean(other.archived),
+                  task: self.relationLookupTask(other.path, other.blockId),
+                },
+              };
+            };
+            grouped = {
+              plain: (Array.isArray(related.plain) ? related.plain : []).map(enrich).filter(Boolean),
+              outgoing: (Array.isArray(related.outgoing) ? related.outgoing : []).map(enrich).filter(Boolean),
+              incoming: (Array.isArray(related.incoming) ? related.incoming : []).map(enrich).filter(Boolean),
+            };
+          }
+        } catch (error) {
+          grouped = null;
+        }
+      }
+      if (!grouped) {
+        // No `related()` (older ledger): same view from the per-direction
+        // calls. The block model groups them identically.
+        let outgoing = [];
+        let incoming = [];
+        try {
+          if (api) {
             const rows = self.relationIndexOutgoingForOwner(api, sourcePath, owner);
-            live = rows.map((edge) => ({
+            outgoing = (Array.isArray(rows) ? rows : []).map((edge) => ({
               label: edge && edge.label,
               other: {
                 path: edge && edge.target ? edge.target.path : "",
@@ -78,14 +133,14 @@ class BobLedgerToolsRelationModelMixin {
                 fallback: edge && edge.target ? edge.target : null,
               },
             }));
-          } else {
-            const rows = owner && owner.blockId ? api.incoming(sourcePath, owner.blockId) : [];
-            live = (Array.isArray(rows) ? rows : []).map((edge) => ({
+            const back = owner && owner.blockId && typeof api.incoming === "function"
+              ? api.incoming(sourcePath, owner.blockId)
+              : [];
+            incoming = (Array.isArray(back) ? back : []).map((edge) => ({
               label: edge && edge.label,
               other: {
                 path: edge && edge.source ? edge.source.path : "",
                 blockId: edge && edge.source ? edge.source.blockId : "",
-                // Incoming rows only contain resolved targets.
                 resolved: true,
                 task: edge && edge.source && edge.source.path
                   ? self.relationLookupTask(edge.source.path, edge.source.blockId)
@@ -94,25 +149,27 @@ class BobLedgerToolsRelationModelMixin {
               },
             }));
           }
-        }
-      } catch (error) {
-        live = [];
-      }
-      // Index rows carry raw note text when the Tasks memo omits the
-      // note (done/ archives); surface it when memo lookup misses.
-      for (const row of live) {
-        try {
-          if (row && row.other && !row.other.task && row.other.fallback) {
-            const fallback = row.other.fallback;
-            if (fallback && (fallback.text || fallback.status)) {
-              row.other.task = { path: fallback.path, blockId: fallback.blockId, text: fallback.text, status: fallback.status };
-            }
-          }
         } catch (error) {
-          continue;
+          outgoing = [];
+          incoming = [];
         }
+        // Index rows carry raw note text when the Tasks memo omits the
+        // note (done/ archives); surface it when memo lookup misses.
+        for (const row of [...outgoing, ...incoming]) {
+          try {
+            if (row && row.other && !row.other.task && row.other.fallback) {
+              const fallback = row.other.fallback;
+              if (fallback && (fallback.text || fallback.status)) {
+                row.other.task = { path: fallback.path, blockId: fallback.blockId, text: fallback.text, status: fallback.status };
+              }
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+        return relationBlockModelForTask({ sourcePath, owner, linksText, linkedFromText, outgoing, incoming, lookup, resolve });
       }
-      return relationChipModelForRow({ direction, lineText: text, sourcePath, live, lookup, resolve });
+      return relationBlockModelForTask({ sourcePath, owner, linksText, linkedFromText, grouped, lookup, resolve });
     } catch (error) {
       return null;
     }
@@ -246,6 +303,8 @@ class BobLedgerToolsRelationModelMixin {
       } catch (error) {
         tree = null;
       }
+      // First pass: collect every parsed relation line with its owner.
+      const hits = [];
       for (const range of ranges) {
         if (!range || typeof range.from !== "number") {
           continue;
@@ -271,26 +330,8 @@ class BobLedgerToolsRelationModelMixin {
               if (parsed && (parsed.verdict === "accepted" || parsed.verdict === "empty")) {
                 const number = typeof line.number === "number" ? line.number : null;
                 const owner = number !== null ? relationOwnerTaskLineAtDoc(doc, number) : null;
-                const revealed = selections.some((selection) => selection && selection.from <= line.to && selection.to >= line.from);
-                const inCode = tree ? freshnessMarkPosInCode(tree, line.from) : false;
-                if (owner && !revealed && !inCode) {
-                  const model = this.relationChipModelForLine({ path, text: line.text, owner });
-                  if (model && model.chips.length > 0) {
-                    const marker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(line.text);
-                    const from = line.from + (marker ? marker[0].length : 0);
-                    const lineNumber = number === null ? null : number - 1;
-                    const interactive = Boolean(this.relationsNavApi());
-                    builder.add(from, line.to, Decoration.replace({
-                      widget: new RelationChipWidget(model, {
-                        plugin: this,
-                        sourcePath: path,
-                        lineNumber,
-                        interactive,
-                        direction: model.direction,
-                        ownerBlockId: owner.blockId || null,
-                      }),
-                    }));
-                  }
+                if (owner) {
+                  hits.push({ line, number, owner, parsed });
                 }
               }
             }
@@ -303,6 +344,54 @@ class BobLedgerToolsRelationModelMixin {
           pos = line.to + 1;
         }
       }
+      // Second pass: one aggregated block per owner. The first relation
+      // line carries the full block; the second carries the incoming
+      // statements as a continuation with no heading (LC18 fallback: a
+      // block replace decoration must come from a StateField, which the
+      // refresh fan-out cannot drive yet). Selecting either line reveals
+      // both raw lines.
+      const groups = relationGroupOwnerLines(hits, (hit) => relationIdentity(path, (hit.owner && hit.owner.blockId) || ("line:" + String(hit.owner && hit.owner.line))));
+      for (const group of groups.values()) {
+        try {
+          const ordered = group.slice().sort((a, b) => (a.number || 0) - (b.number || 0));
+          const revealed = ordered.some((hit) => selections.some((selection) => selection && selection.from <= hit.line.to && selection.to >= hit.line.from));
+          if (revealed) continue;
+          const owner = ordered[0].owner;
+          const model = this.relationBlockModelForOwner({
+            path,
+            owner,
+            lines: ordered.map((hit) => ({ text: hit.line.text, lineNumber: hit.number === null ? null : hit.number - 1 })),
+          });
+          if (!model || model.chips.length === 0) continue;
+          const interactive = Boolean(this.relationsNavApi());
+          const parsedLines = ordered.filter((hit) => hit.parsed && (hit.parsed.verdict === "accepted" || hit.parsed.verdict === "empty"));
+          const first = parsedLines[0];
+          const second = model.hasContinuation ? parsedLines[1] : null;
+          const place = (hit, mode) => {
+            if (!hit) return;
+            const inCode = tree ? freshnessMarkPosInCode(tree, hit.line.from) : false;
+            if (inCode) return;
+            const marker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(hit.line.text);
+            const from = hit.line.from + (marker ? marker[0].length : 0);
+            const lineNumber = hit.number === null ? null : hit.number - 1;
+            builder.add(from, hit.line.to, Decoration.replace({
+              widget: new RelationChipWidget(model, {
+                plugin: this,
+                sourcePath: path,
+                lineNumber,
+                interactive,
+                mode,
+                ownerBlockId: owner.blockId || null,
+                ownerLine: Number.isInteger(owner.line) ? owner.line : null,
+              }),
+            }));
+          };
+          place(first, "full");
+          place(second, "continuation");
+        } catch (error) {
+          // Ignore a single task and continue through the visible range.
+        }
+      }
       return builder.finish();
     } catch (error) {
       try {
@@ -313,32 +402,63 @@ class BobLedgerToolsRelationModelMixin {
     }
   }
 
+  // v2-aware × handler. A plain chip unlinks the pair through v2
+  // `unlink(this, other)`; a statement chip removes that statement through
+  // v2 `removeStatement(source, target)`. With nav v1 only, both fall back
+  // to v1 `removeLink` on the storing side (plain chips at the
+  // non-storing end remove the peer's record; a both-sides plain removes
+  // each writable record in turn). Without nav there are no controls.
   relationRemoveLink(chip, sourcePath, meta) {
     try {
       const api = this.relationsNavApi();
-      if (!api || typeof api.removeLink !== "function") return;
+      if (!api) return;
       const info = meta && typeof meta === "object" ? meta : {};
-      let sourceRef = null;
-      let targetRef = null;
-      if (chip && chip.direction === "from") {
-        // LINKED FROM × removes the edge from the other task's LINKS
-        // line (decision `linked_from_remove = yes`); the notice names
-        // the source note.
-        sourceRef = { path: String(chip.path || ""), line: null, blockId: chip.blockId || null };
-        targetRef = { path: String(sourcePath || ""), line: Number.isInteger(info.lineNumber) ? info.lineNumber : null, blockId: info.ownerBlockId || null };
-      } else {
-        sourceRef = { path: String(sourcePath || ""), line: Number.isInteger(info.lineNumber) ? info.lineNumber : null, blockId: info.ownerBlockId || null };
-        targetRef = { path: chip ? String(chip.path || "") : "", blockId: chip ? chip.blockId || null : null };
-      }
-      Promise.resolve(api.removeLink(sourceRef, targetRef)).then((result) => {
-        if (result && result.ok === false && result.reason) {
-          try {
-            new Notice(String(result.reason));
-          } catch (noticeError) {
-            // Success notices come from nav.
+      const act = chip && chip.relAction && typeof chip.relAction === "object" ? chip.relAction : null;
+      const viewer = {
+        path: String(sourcePath || ""),
+        line: Number.isInteger(info.lineNumber) ? info.lineNumber : null,
+        blockId: info.ownerBlockId || null,
+      };
+      const peerPath = act && act.peer ? String(act.peer.path || "") : String((chip && chip.path) || "");
+      const peerId = act && act.peer ? act.peer.blockId || null : (chip && chip.blockId) || null;
+      const peer = { path: peerPath, line: null, blockId: peerId };
+      const report = (promise) => {
+        Promise.resolve(promise).then((result) => {
+          if (result && result.ok === false && result.reason) {
+            try {
+              new Notice(String(result.reason));
+            } catch (noticeError) {
+              // Success notices come from nav.
+            }
           }
-        }
-      });
+        });
+      };
+      if (act && act.kind === "plain" && typeof api.unlink === "function") {
+        report(api.unlink(viewer, peer));
+        return;
+      }
+      if (act && act.kind === "statement" && typeof api.removeStatement === "function") {
+        const outgoing = chip.direction !== "from";
+        report(api.removeStatement(outgoing ? viewer : peer, outgoing ? peer : viewer));
+        return;
+      }
+      if (typeof api.removeLink !== "function") return;
+      const storingPeerSide = act
+        ? (act.kind === "plain" ? act.storedOn === "other" : chip.direction === "from")
+        : chip && chip.direction === "from";
+      if (act && act.kind === "plain" && act.storedOn === "both") {
+        // v1 removes one record per call; unlink both writable records.
+        report(api.removeLink(viewer, peer));
+        report(api.removeLink(peer, viewer));
+        return;
+      }
+      if (storingPeerSide) {
+        // × at the non-storing end removes the edge from the other
+        // task's LINKS line; the notice names the source note.
+        report(api.removeLink(peer, viewer));
+      } else {
+        report(api.removeLink(viewer, peer));
+      }
     } catch (error) {
       // Best-effort.
     }
@@ -352,13 +472,34 @@ class BobLedgerToolsRelationModelMixin {
       const ref = {
         path: String(sourcePath || ""),
         line: Number.isInteger(info.lineNumber) ? info.lineNumber : null,
-        direction: info.direction === "from" ? "from" : "to",
+        direction: "to",
       };
       Promise.resolve(api.openStage(ref));
     } catch (error) {
       // Best-effort.
     }
   }
+}
+
+
+// Group relation-line hits by owner task, preserving document order
+// within each group. Shared by the Live Preview decorations and the
+// Reading view renderer (LC18).
+function relationGroupOwnerLines(items, keyFn) {
+  const groups = new Map();
+  const keyFor = typeof keyFn === "function" ? keyFn : () => "";
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item) continue;
+    let key = "";
+    try {
+      key = String(keyFor(item) || "");
+    } catch (error) {
+      key = "";
+    }
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return groups;
 }
 
 // Nearest list-item parent line for a relation row: only a direct child

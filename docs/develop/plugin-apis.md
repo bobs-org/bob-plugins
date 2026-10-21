@@ -63,7 +63,15 @@ the optional `label`, relation line number and raw text, plus `resolved`,
 `archived`, `embedded`, and `struck` flags. `labelSuggestions(prefix?)` returns
 case-insensitively deduplicated `{ label, count }` rows ordered by count, then
 Unicode code point. `onChange(callback)` subscribes to atomic map publications
-and returns an unsubscribe function. Task text and status prefer the Tasks
+and returns an unsubscribe function. `related(path, blockIdOrLine)` is the
+additive per-task pair view on the same generation (feature-detect it with
+`typeof api.related === "function"`; the namespace stays version 1): it
+returns `{ generation, ready, plain, outgoing, incoming }`, where `plain`
+holds one entry per plainly related task deduped by pair with
+`storedOn: "this" | "other" | "both"`, `outgoing` / `incoming` hold the
+labelled statements (authored order / canonical order), and redundant plain
+records are hidden. The result carries `generation` and `ready` so callers
+tell loading from none. Task text and status prefer the Tasks
 cache and fall back to indexed note text, including read-only `done/` notes.
 
 The index scans relation-bearing Markdown files in idle chunks, including

@@ -484,3 +484,62 @@ test("relationIndex incoming and suggestions include Next and Blocked sources", 
   plugin.teardownRelationIndex();
 });
 
+
+
+test("related() dedupes plain pairs, hides redundant plains, and shares a generation", async () => {
+  const hub = makeFile("notes/hub.md", [
+    "- [ ] #task Hub ^hub",
+    "  - 🪢 **LINKS:** [[notes/hub2#^both]] • [[notes/other#^single]] • follow-up of [[notes/other#^labelled]] • [[notes/other#^subsumed]]",
+    "  - 🪢 **LINKED FROM:** [[notes/hub2#^both]] • [[notes/other#^mirror]] • [[notes/other#^subsumed]] (merged into)",
+  ].join("\n"), { links: [{ link: "notes/hub2#^both" }, { link: "notes/other#^single" }, { link: "notes/other#^labelled" }, { link: "notes/other#^subsumed" }], blocks: { hub: {} } });
+  const both = makeFile("notes/hub2.md", [
+    "- [ ] #task Both ^both",
+    "  - 🪢 **LINKS:** [[notes/hub#^hub]]",
+  ].join("\n"), { links: [{ link: "notes/hub#^hub" }], blocks: { both: {} } });
+  const other = makeFile("notes/other.md", [
+    "- [ ] #task Single ^single",
+    "  - 🪢 **LINKS:** [[notes/hub#^hub]]",
+    "- [ ] #task Subsumed ^subsumed",
+    "  - 🪢 **LINKS:** merged into [[notes/hub#^hub]]",
+    "- [ ] #task Labelled ^labelled",
+    "- [ ] #task Mirror ^mirror",
+    "  - 🪢 **LINKS:** [[notes/hub#^hub]]",
+  ].join("\n"), { links: [{ link: "notes/hub#^hub" }], blocks: { single: {}, subsumed: {}, labelled: {}, mirror: {} } });
+  const app = makeApp([hub, both, other]);
+  app._aliases.set("notes/other", "notes/other.md");
+  app._aliases.set("notes/hub", "notes/hub.md");
+  app._aliases.set("notes/hub2", "notes/hub2.md");
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.initializeRelationIndex();
+  plugin.setupRelationIndex();
+  plugin.startRelationIndexScan();
+  const api = plugin.relationIndexApi();
+  await waitUntil(() => api.ready(), "relation scan should finish");
+  assert.equal(typeof api.related, "function", "related() is additive on version 1");
+  assert.equal(api.version, 1);
+
+  const related = api.related("notes/hub.md", "hub");
+  assert.equal(related.ready, true);
+  assert.equal(related.generation, api.generation, "same generation as outgoing/incoming");
+
+  // Plain pairs dedupe: reciprocal records are one entry each.
+  const plainIds = related.plain.map((item) => item.other.blockId).sort();
+  assert.deepEqual(plainIds, ["both", "mirror", "single"]);
+  assert.equal(related.plain.find((item) => item.other.blockId === "both").storedOn, "both");
+  assert.equal(related.plain.find((item) => item.other.blockId === "single").storedOn, "both");
+  assert.equal(related.plain.find((item) => item.other.blockId === "mirror").storedOn, "other");
+
+  // Labelled statements; the redundant hub→subsumed plain hides.
+  assert.deepEqual(related.outgoing.map((edge) => [edge.other.blockId, edge.label]), [["labelled", "follow-up of"]]);
+  assert.deepEqual(related.incoming.map((edge) => [edge.other.blockId, edge.label]), [["subsumed", "merged into"]]);
+  assert.ok(!related.plain.some((item) => item.other.blockId === "subsumed"), "subsumed plain renders nothing");
+
+  // outgoing()/incoming() behave exactly as before.
+  assert.equal(api.outgoing("notes/hub.md", "hub").length, 4);
+  assert.equal(api.incoming("notes/hub.md", "hub").length, 4);
+
+  // Loading vs none: an unknown owner is an empty view, not an error.
+  const missing = api.related("notes/hub.md", "nope");
+  assert.deepEqual([missing.plain, missing.outgoing, missing.incoming], [[], [], []]);
+  plugin.teardownRelationIndex();
+});

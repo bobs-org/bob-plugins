@@ -27,6 +27,8 @@ class BobLedgerToolsRelationIndexMixin {
       outgoing: (path, blockIdOrLine) =>
         plugin.relationIndexOutgoing(path, blockIdOrLine),
       incoming: (path, blockId) => plugin.relationIndexIncoming(path, blockId),
+      related: (path, blockIdOrLine) =>
+        plugin.relationIndexRelated(path, blockIdOrLine),
       labelSuggestions: (prefix) => plugin.relationIndexLabelSuggestions(prefix),
       onChange: (listener) => plugin.relationIndexOnChange(listener),
     });
@@ -84,6 +86,107 @@ class BobLedgerToolsRelationIndexMixin {
       return (this.relationIndexState.reverse.get(relationIdentity(normalized, id)) || []).slice();
     } catch (error) {
       return [];
+    }
+  }
+
+  // Additive per-task pair view (ledger-chips): one entry per plainly
+  // related task (deduped by pair, `storedOn: "this" | "other" | "both"`),
+  // then the labelled statements, with redundant plain records hidden.
+  // Same generation as `outgoing` / `incoming`, which behave exactly as
+  // before. `api.relationIndex` stays `version: 1`; callers
+  // feature-detect `typeof api.related === "function"`. The result
+  // carries `generation` and `ready` so callers tell loading from none.
+  relationIndexRelated(path, blockIdOrLine) {
+    const empty = () => ({
+      generation: this.relationIndexState.generation,
+      ready: this.relationIndexState.ready,
+      plain: [],
+      outgoing: [],
+      incoming: [],
+    });
+    try {
+      const normalized = this.relationIndexNormalizePath(path);
+      let ownerId = "";
+      let forwardEdges = [];
+      let reverseEdges = [];
+      if (typeof blockIdOrLine === "number" && Number.isFinite(blockIdOrLine)) {
+        ownerId = "line-number:" + String(blockIdOrLine);
+        forwardEdges = (this.relationIndexState.forward.get(
+          relationTaskLineNumberIdentity(normalized, blockIdOrLine),
+        ) || []).slice();
+      } else {
+        let blockId = String(blockIdOrLine || "").trim();
+        if (/^(?:[-*+]|\d+[.)])[ \t]+/u.test(blockId) || blockId.includes("#task") || blockId.includes("\n")) {
+          const match = blockId.match(/(?:^|\s)\^([A-Za-z0-9-]+)(?=\s|$)/u);
+          if (match) {
+            blockId = match[1];
+          } else {
+            ownerId = "line:" + blockId.trim();
+            forwardEdges = (this.relationIndexState.forward.get(
+              relationTaskLineIdentity(normalized, blockId),
+            ) || []).slice();
+          }
+        }
+        if (!ownerId) {
+          if (blockId.startsWith("^")) blockId = blockId.slice(1);
+          if (!blockId) return empty();
+          ownerId = blockId;
+          forwardEdges = (this.relationIndexState.forward.get(
+            relationIdentity(normalized, blockId),
+          ) || []).slice();
+          reverseEdges = (this.relationIndexState.reverse.get(
+            relationIdentity(normalized, blockId),
+          ) || []).slice();
+        }
+      }
+      const mapOutgoing = (edge) => {
+        if (!edge || typeof edge !== "object") return null;
+        const target = edge.target && typeof edge.target === "object" ? edge.target : {};
+        if (!target.blockId) return null;
+        return {
+          label: typeof edge.label === "string" && edge.label ? edge.label : null,
+          other: {
+            path: String(target.path || ""),
+            blockId: String(target.blockId || ""),
+            line: target.line === undefined ? null : target.line,
+            text: target.text === undefined ? null : target.text,
+            status: target.status === undefined ? null : target.status,
+            resolved: Boolean(target.resolved),
+            archived: Boolean(target.archived),
+          },
+          relationLine: edge.relationLine === undefined ? null : edge.relationLine,
+        };
+      };
+      const mapIncoming = (edge) => {
+        if (!edge || typeof edge !== "object") return null;
+        const source = edge.source && typeof edge.source === "object" ? edge.source : {};
+        if (!source.blockId) return null;
+        return {
+          label: typeof edge.label === "string" && edge.label ? edge.label : null,
+          other: {
+            path: String(source.path || ""),
+            blockId: String(source.blockId || ""),
+            line: source.line === undefined ? null : source.line,
+            text: source.text === undefined ? null : source.text,
+            status: source.status === undefined ? null : source.status,
+            resolved: true,
+            archived: false,
+          },
+          relationLine: edge.relationLine === undefined ? null : edge.relationLine,
+        };
+      };
+      const outgoing = forwardEdges.map(mapOutgoing).filter(Boolean);
+      const incoming = reverseEdges.map(mapIncoming).filter(Boolean);
+      const grouped = relationGroupRelatedEdges(normalized, ownerId, outgoing, incoming);
+      return {
+        generation: this.relationIndexState.generation,
+        ready: this.relationIndexState.ready,
+        plain: grouped.plain,
+        outgoing: grouped.outgoing,
+        incoming: grouped.incoming,
+      };
+    } catch (error) {
+      return empty();
     }
   }
 

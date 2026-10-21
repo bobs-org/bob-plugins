@@ -99,6 +99,7 @@ class BobLedgerToolsRelationRenderMixin {
       if (candidates.length === 0) {
         return;
       }
+      const mapped = [];
       const sections = new Map();
       for (const candidate of candidates) {
         try {
@@ -126,15 +127,48 @@ class BobLedgerToolsRelationRenderMixin {
           if (!owner) {
             continue;
           }
-          const model = this.relationChipModelForLine({ path, text: rawLine, owner });
+          mapped.push({ ...candidate, rowLine, rawLine, parsed, owner });
+        } catch (error) {
+          continue;
+        }
+      }
+      if (mapped.length === 0) {
+        return;
+      }
+      // One aggregated block per owner (LC18): the first relation li
+      // carries the full block; every further relation li of the same task
+      // hides. Malformed lines never join a group (LC13).
+      const groups = relationGroupOwnerLines(
+        mapped,
+        (item) => relationIdentity(path, (item.owner && item.owner.blockId) || ("line:" + String(item.owner && item.owner.line))),
+      );
+      for (const group of groups.values()) {
+        try {
+          const ordered = group.slice().sort((a, b) => a.rowLine - b.rowLine);
+          const first = ordered[0];
+          const owner = first.owner;
+          const model = this.relationBlockModelForOwner({
+            path,
+            owner,
+            lines: ordered.map((item) => ({ text: item.rawLine, lineNumber: item.rowLine })),
+          });
           if (!model || model.chips.length === 0) {
             continue;
           }
-          const docNode = candidate.li.ownerDocument || (typeof document !== "undefined" ? document : null);
+          const docNode = first.li.ownerDocument || (typeof document !== "undefined" ? document : null);
           if (!docNode) {
             continue;
           }
-          this.relationDecorateReadingRow(candidate.li, candidate.anchors, model, docNode, path, rowLine, owner);
+          const anchors = [];
+          for (const item of ordered) {
+            for (const anchor of item.anchors || []) {
+              anchors.push(anchor);
+            }
+          }
+          this.relationDecorateReadingBlock(first.li, anchors, model, docNode, path, first.rowLine, owner);
+          for (const extra of ordered.slice(1)) {
+            this.relationHideReadingRow(extra.li);
+          }
         } catch (error) {
           continue;
         }
@@ -164,8 +198,12 @@ class BobLedgerToolsRelationRenderMixin {
       return null;
     }
   }
-
-  relationDecorateReadingRow(li, anchors, model, doc, sourcePath, lineNumber, owner) {
+  // One aggregated `🪢 links` block on the task's first relation li.
+  // `anchors` pools every stored anchor of the task's relation lines
+  // (including the hidden continuation li). Anchors are detached and
+  // re-appended in block order: plain chips, then one visual row per
+  // statement (LC10); stale and broken entries keep their dashed style.
+  relationDecorateReadingBlock(li, anchors, model, doc, sourcePath, lineNumber, owner) {
     try {
       const interactive = Boolean(this.relationsNavApi());
       const label = relationReadingLabelElement(li);
@@ -181,8 +219,7 @@ class BobLedgerToolsRelationRenderMixin {
           // Best-effort.
         }
       }
-      const rowClasses = ["bob-dep-row", "bob-relation-row"];
-      if (model.direction === "from") rowClasses.push("is-incoming");
+      const rowClasses = ["bob-dep-row", "bob-relation-row", "bob-relation-block"];
       if (model.labelled) rowClasses.push("is-labelled");
       for (const name of rowClasses) {
         try {
@@ -192,14 +229,25 @@ class BobLedgerToolsRelationRenderMixin {
         }
       }
       li.setAttribute("role", "group");
-      li.setAttribute("aria-label", String(model.label || "relations") + ", " + model.liveCount + " live");
+      li.setAttribute("aria-label", String(model.label || "🪢 links") + ", " + model.liveCount + " live");
       li.setAttribute("title", String(model.tooltip || ""));
       if (li.dataset) li.dataset.bobRelationProcessed = "1";
-      const meta = { lineNumber, direction: model.direction, ownerBlockId: (owner && owner.blockId) || null };
+      const meta = { lineNumber, direction: "to", ownerBlockId: (owner && owner.blockId) || null };
 
-      const available = anchors.slice();
+      const available = (Array.isArray(anchors) ? anchors : []).slice();
       const closedAnchors = [];
-      for (const chip of model.chips) {
+      const sections = [
+        Array.isArray(model.plain) ? model.plain : [],
+        Array.isArray(model.outgoing) ? model.outgoing : [],
+        Array.isArray(model.incoming) ? model.incoming : [],
+      ];
+      const ordered = [];
+      for (const section of sections) {
+        for (const chip of section) {
+          if (chip && !chip.collapsed) ordered.push(chip);
+        }
+      }
+      for (const chip of ordered) {
         let anchor = null;
         const foundAt = available.findIndex((candidate) => {
           try {
@@ -212,8 +260,7 @@ class BobLedgerToolsRelationRenderMixin {
           anchor = available.splice(foundAt, 1)[0];
           this.relationDecorateReadingAnchor(anchor, chip, doc, model);
         } else if (chip.live && !chip.broken) {
-          // LC7: a live edge missing from the stored text is appended
-          // in canonical order; placement happens below.
+          // LC7: a live edge missing from the stored text is appended.
           anchor = this.relationCreateReadingAnchor(chip, doc, model, sourcePath);
           if (!anchor) {
             continue;
@@ -226,23 +273,20 @@ class BobLedgerToolsRelationRenderMixin {
         if (chip.collapsed) {
           closedAnchors.push(anchor);
         }
-        if (model.labelled) {
-          // Each labelled entry gets its own visual row with its pill
-          // and arrow (LC10); processing in chip order keeps stored
-          // order with live appends last (LC7).
+        try {
+          if (anchor.parentNode) anchor.parentNode.removeChild(anchor);
+        } catch (removeError) {
+          // Fresh anchors have no parent yet.
+        }
+        if (chip.label) {
+          // Each statement gets its own visual row with its pill and
+          // arrow (LC10); plain chips wrap in the block row (LC1).
           const entry = doc.createElement("span");
           entry.setAttribute("class", "bob-relation-entry");
-          try {
-            if (anchor.parentNode) anchor.parentNode.removeChild(anchor);
-          } catch (removeError) {
-            // Fresh anchors have no parent yet.
-          }
           entry.appendChild(anchor);
-          this.relationAppendReadingEntryContent(entry, anchor, chip, doc, model);
+          this.relationAppendReadingEntryContent(entry, anchor, chip, doc);
           li.appendChild(entry);
-        } else if (!anchor.parentNode) {
-          // Unlabelled rows keep stored anchors in place; fresh live
-          // appends go last (LC7).
+        } else {
           li.appendChild(anchor);
         }
         if (interactive && chip.live && !chip.broken && anchor) {
@@ -250,9 +294,10 @@ class BobLedgerToolsRelationRenderMixin {
         }
       }
       // Hide the source glyph, header words, label words, and raw
-      // separators: every direct text child of an accepted row is
-      // chrome the chips replace. Nested lists are elements, so child
-      // tasks are untouched.
+      // separators: every direct text child of the block li is chrome
+      // the chips replace. Nested lists are elements, so child tasks
+      // are untouched. The heading span below is an element child, so
+      // it survives.
       for (const node of Array.from(li.childNodes || [])) {
         try {
           if (node.nodeType !== 3) continue;
@@ -287,6 +332,16 @@ class BobLedgerToolsRelationRenderMixin {
           continue;
         }
       }
+      try {
+        const heading = doc.createElement("span");
+        heading.setAttribute("class", "bob-dep-label bob-relation-label");
+        heading.setAttribute("aria-hidden", "true");
+        heading.appendChild(doc.createTextNode(String(model.label || "🪢 links")));
+        if (typeof li.insertBefore === "function" && li.firstChild) li.insertBefore(heading, li.firstChild);
+        else li.appendChild(heading);
+      } catch (error) {
+        // A heading-free block still navigates.
+      }
       if (model.collapsed && Number(model.collapsed.count) > 0) {
         this.relationAppendReadingCollapsed(li, closedAnchors, model, doc);
       }
@@ -306,22 +361,45 @@ class BobLedgerToolsRelationRenderMixin {
     }
   }
 
-  relationAppendReadingEntryContent(host, anchor, chip, doc, model) {
+  // Hide a continuation relation li: its entries render in the task's
+  // first-li block (LC18). The raw line returns when the toggle is off
+  // because the post-processor skips the whole note then.
+  relationHideReadingRow(li) {
+    try {
+      if (!li) return;
+      try {
+        li.style.display = "none";
+      } catch (styleError) {
+        // Attribute fallback for style-free DOMs.
+      }
+      try {
+        li.setAttribute("data-bob-relation-hidden", "1");
+      } catch (attrError) {
+        // Best-effort.
+      }
+      if (li.dataset) {
+        li.dataset.bobRelationProcessed = "1";
+        li.dataset.bobRelationHidden = "1";
+      }
+    } catch (error) {
+      // Best-effort.
+    }
+  }
+
+  relationAppendReadingEntryContent(host, anchor, chip, doc) {
     try {
       if (!host || !anchor) return;
-      if (!model.labelled) return;
-      if (model.direction === "to") {
-        if (chip.label) {
-          const pill = doc.createElement("span");
-          pill.setAttribute("class", "bob-relation-pill");
-          pill.appendChild(doc.createTextNode(String(chip.label)));
-          host.insertBefore(pill, anchor);
-          const arrow = doc.createElement("span");
-          arrow.setAttribute("class", "bob-relation-arrow");
-          arrow.setAttribute("aria-hidden", "true");
-          arrow.appendChild(doc.createTextNode("→"));
-          host.insertBefore(arrow, anchor);
-        }
+      if (!chip.label) return;
+      if (chip.direction !== "from") {
+        const pill = doc.createElement("span");
+        pill.setAttribute("class", "bob-relation-pill");
+        pill.appendChild(doc.createTextNode(String(chip.label)));
+        host.insertBefore(pill, anchor);
+        const arrow = doc.createElement("span");
+        arrow.setAttribute("class", "bob-relation-arrow");
+        arrow.setAttribute("aria-hidden", "true");
+        arrow.appendChild(doc.createTextNode("→"));
+        host.insertBefore(arrow, anchor);
       } else if (chip.inverse) {
         const pill = doc.createElement("span");
         pill.setAttribute("class", "bob-relation-pill");

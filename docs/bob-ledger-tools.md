@@ -136,12 +136,25 @@ entirely from `bob ref list` JSON — wake dates and waiting-on reasons come fro
 Reading Board command.
 
 `🪢 **LINKS:**` and `🪢 **LINKED FROM:**` rows are relation metadata. Their
-wikilinks are excluded from the live plan Task Link count. Both rows render as
-live relation chips in Live Preview and Reading view from the relation index,
-never the stored mirror: label pills with arrows, inverse phrases on
-LINKED FROM, dashed stale and broken chips, `✓×N` collapse for three or more
-closed chips, and ＋ / hover × through nav `api.relations` v1 when present.
-The shared `toggle-dependency-chips` command covers both rows. See
+wikilinks are excluded from the live plan Task Link count. Each task renders
+one aggregated `🪢 links` block from the index `related()` view, never the
+stored mirror: plain chips first with no arrow, then outgoing statements as
+`‹label› → (task)`, then incoming statements as `‹inverse› (task)` or
+`(task) · ‹label› → this`. A redundant plain record (a pair that also has a
+statement) renders nothing. Dashed stale and broken chips, `✓×N` collapse for
+three or more closed chips, dimmed closed and archived targets, and muted
+`#hide` targets all carry over; colour carries status, never direction. The
+block sits on the task's first relation line in Live Preview; a second
+relation line carries the incoming statements as a continuation with no
+heading (a true collapse needs a StateField block decoration, which the
+refresh fan-out cannot drive yet). In Reading view the block sits on the
+first relation `li` and the second hides. Selecting either line reveals both
+raw lines. One trailing ＋ opens the Links stage; × on a plain chip unlinks
+the pair and × on a statement removes it (through nav `api.relations` v2
+`unlink` / `removeStatement` when present, else v1 `removeLink` on the
+storing side). Without nav the block stays navigation-only. The shared
+`toggle-dependency-chips` command covers the block. The display-only inverse
+table is pinned by `scripts/relation-inverse-vectors.cjs`. See
 [Task relations](task-relations.md).
 
 ## Freshness, review, and readiness

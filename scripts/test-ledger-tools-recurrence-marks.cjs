@@ -285,6 +285,17 @@ test("RM8 unknown rules stay verbatim", () => {
     recurrenceMarkLabel("every April and December on the 1st and 24th"),
     "every April and December on the 1st and 24th",
   );
+  for (const rule of [
+    "every constructor",
+    "every week on constructor",
+    "every constructor on the 1st",
+  ]) {
+    assert.equal(recurrenceMarkLabel(rule), rule);
+    assert.equal(recurrenceMarkLabel(rule + " when done"), rule);
+    const model = recurrenceMarkModel(rule + " when done");
+    assert.equal(model.label, rule);
+    assert.equal(model.tooltip, "Repeats " + rule + " when done\nNext date counts from completion");
+  }
 });
 
 test("RM9 parens and padded brackets are canonical", () => {
@@ -335,6 +346,14 @@ test("RN1 unreadable rules get no mark", () => {
   assert.equal(recurrenceMarkModel("weekly"), null);
   assert.equal(recurrenceMarkModel("every day; x"), null);
   assert.equal(recurrenceMarkModel("every"), null);
+  for (const rule of ["every\tday", "every\u00a0day"]) {
+    assert.equal(recurrenceMarkModel(rule), null);
+    assert.equal(recurrenceMarkCanonicalField("[repeat:: " + rule + "]"), null);
+  }
+  assert.equal(recurrenceMarkCanonicalField("[repeat::\tevery day]"), null);
+  assert.equal(recurrenceMarkCanonicalField("[repeat:: every day\t]"), null);
+  assert.equal(recurrenceMarkModel("every  day").label, "daily");
+  assert.equal(recurrenceMarkModel("Every Day").label, "daily");
 });
 
 test("RN2 the checklist guard follows membership, not the glyph slot", () => {
@@ -706,6 +725,38 @@ test("RR1 reading view honors the guard, RO2 rollover skips repeat", () => {
   li.appendChild(guardedFx.text("Brush [repeat:: every day]", guardedFx.doc));
   plugin.renderDateMarksIn(guardedFx.root, { sourcePath: "a.md" });
   assert.equal(countMarks(guardedFx.root), 0);
+  // Obsidian may invoke the real postprocessor with the task li itself as
+  // the root. Root tasks still use their own status and tag membership.
+  for (const [status, tags, textValue, expected] of [
+    ["?", ["#task", "#gtd", "#pre"], "Brush [repeat:: every day]", 0],
+    ["?", ["#task", "#gtd", "#post"], "Brush [repeat:: every day]", 0],
+    ["?", ["#task", "#gtd", "#pre"], "Brush [repeat:: every day when done]", 1],
+    ["x", ["#task", "#gtd", "#pre"], "Brush [repeat:: every day]", 1],
+  ]) {
+    const rootFx = fakeRenderEl();
+    const { li: rootLi } = renderTaskLi(rootFx, { status, tags, text: textValue });
+    plugin.renderDateMarksIn(rootLi, { sourcePath: "a.md" });
+    assert.equal(countMarks(rootLi), expected, textValue + " / " + status);
+  }
+  // A containing wrapper keeps the same guard behavior.
+  const nestedFx = fakeRenderEl();
+  const nestedPara = nestedFx.doc.createElement("div");
+  nestedFx.root.appendChild(nestedPara);
+  const nestedLi = nestedFx.doc.createElement("li");
+  nestedLi.setAttribute("class", "task-list-item");
+  nestedLi.setAttribute("data-task", "?");
+  nestedPara.appendChild(nestedLi);
+  for (const tag of ["#task", "#gtd", "#post"]) {
+    const anchor = nestedFx.doc.createElement("a");
+    anchor.setAttribute("class", "tag");
+    anchor.textContent = tag;
+    anchor.appendChild(nestedFx.text(tag, nestedFx.doc));
+    nestedLi.appendChild(anchor);
+    nestedLi.appendChild(nestedFx.text(" ", nestedFx.doc));
+  }
+  nestedLi.appendChild(nestedFx.text("Brush [repeat:: every day]", nestedFx.doc));
+  plugin.renderDateMarksIn(nestedFx.root, { sourcePath: "a.md" });
+  assert.equal(countMarks(nestedFx.root), 0);
   const plain = fakeRenderEl();
   textPara(plain, "Water plants [repeat:: every day]");
   plugin.renderDateMarksIn(plain.root, { sourcePath: "a.md" });

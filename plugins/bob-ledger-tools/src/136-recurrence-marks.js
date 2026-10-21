@@ -140,6 +140,9 @@ function recurrenceMarkCanonicalField(text) {
     }
     const entry = found[0];
     const raw = entry.match[1] !== undefined ? entry.match[1] : "";
+    if (!RECURRENCE_MARK_VALUE_RE.test(raw)) {
+      return null;
+    }
     const collapsed = recurrenceCollapseRule(raw);
     if (collapsed === "" || !RECURRENCE_MARK_VALUE_RE.test(collapsed)) {
       return null;
@@ -173,6 +176,10 @@ function recurrenceMarkCanonicalField(text) {
 // `every ` (both preserving case). Never throws.
 function recurrenceRuleParts(rule) {
   try {
+    const raw = String(rule || "");
+    if (raw === "" || !RECURRENCE_MARK_VALUE_RE.test(raw)) {
+      return null;
+    }
     const collapsed = recurrenceCollapseRule(rule);
     if (collapsed === "" || !RECURRENCE_MARK_VALUE_RE.test(collapsed)) {
       return null;
@@ -209,7 +216,9 @@ function recurrenceRuleParts(rule) {
 function recurrenceWeekdayEntry(token) {
   try {
     const key = String(token || "").trim().toLowerCase();
-    return RECURRENCE_MARK_WEEKDAYS[key] || null;
+    return Object.prototype.hasOwnProperty.call(RECURRENCE_MARK_WEEKDAYS, key)
+      ? RECURRENCE_MARK_WEEKDAYS[key]
+      : null;
   } catch (error) {
     return null;
   }
@@ -218,7 +227,9 @@ function recurrenceWeekdayEntry(token) {
 function recurrenceMonthAbbrev(token) {
   try {
     const key = String(token || "").trim().toLowerCase();
-    return RECURRENCE_MARK_MONTHS[key] || null;
+    return Object.prototype.hasOwnProperty.call(RECURRENCE_MARK_MONTHS, key)
+      ? RECURRENCE_MARK_MONTHS[key]
+      : null;
   } catch (error) {
     return null;
   }
@@ -705,9 +716,6 @@ function recurrenceMarkRenderedGuard(textNode, root) {
     }
     const li = recurrenceRenderedTaskItem(textNode);
     if (!li) {
-      return false;
-    }
-    if (root && li === root) {
       return false;
     }
     let status = null;

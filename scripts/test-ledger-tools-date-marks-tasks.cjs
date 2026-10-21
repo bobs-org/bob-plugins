@@ -833,6 +833,16 @@ test("RT2 recurring labels use the shared cadence grammar", () => {
   }
 });
 
+test("RT2a unknown inherited-name rules stay readable in Tasks results", () => {
+  const plugin = pluginWithToday();
+  const fx = fakeTasksDom();
+  const row = recurringTasksRow(fx, " 🔁 every constructor", "");
+  assert.equal(plugin.decorateTasksResultDates(row.li, TODAY), 1);
+  const mark = markRootsIn(row.host)[0];
+  assert.equal(markLabel(mark), "every constructor");
+  assert.equal(mark.getAttribute("aria-label"), "Repeats every constructor\nNext date follows the schedule");
+});
+
 test("RT3 short-mode recurring spans stay native to JS and use the CSS loop", () => {
   const plugin = pluginWithToday();
   const fx = fakeTasksDom();
@@ -872,6 +882,13 @@ test("RT5 invalid recurrence stays native and incomplete rows are retried", () =
   const fx = fakeTasksDom();
   const invalid = recurringTasksRow(fx, " 🔁 every day; x", "");
   assert.equal(plugin.decorateTasksResultDates(invalid.li, TODAY), 0);
+  for (const rule of ["every\tday", "every\u00a0day"]) {
+    const invalidFx = fakeTasksDom();
+    const invalidRow = recurringTasksRow(invalidFx, " 🔁 " + rule, "");
+    assert.equal(plugin.decorateTasksResultDates(invalidRow.li, TODAY), 0, JSON.stringify(rule));
+    assert.equal(markRootsIn(invalidRow.host).length, 0, JSON.stringify(rule));
+    assert.equal(invalidRow.host.getAttribute("data-bob-date-mark"), null);
+  }
 
   const frames = manualScheduler(plugin);
   const pendingFx = fakeTasksDom();

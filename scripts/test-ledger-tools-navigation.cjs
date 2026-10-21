@@ -255,24 +255,65 @@ function makeView(path, content, cursor, scrollOptions) {
   return view;
 }
 
-function makeLeaf(view) {
-  return {
-    view,
+function makeLeaf(view, options = {}) {
+  const leaf = {
+    view: options.deferred || options.viewWithoutFile ? {} : view,
+    loadedView: view,
+    isDeferred: Boolean(options.deferred),
+    pinned: Boolean(options.pinned),
+    sidebar: Boolean(options.sidebar),
+    loadIfDeferredCalls: 0,
+    savedViewState: {
+      type: options.savedType || (view && view.file ? "markdown" : "empty"),
+      state: {
+        file:
+          options.savedPath ||
+          (view && view.file && view.file.path) ||
+          null,
+      },
+      pinned: Boolean(options.savedPinned),
+    },
+    getRoot() {
+      return this.sidebar && this.workspace
+        ? this.workspace.leftSplit
+        : this.workspace && this.workspace.rootSplit;
+    },
+    getViewState() {
+      if (options.viewStateThrows) {
+        throw new Error("saved state unavailable");
+      }
+      return this.savedViewState;
+    },
+    async loadIfDeferred() {
+      this.loadIfDeferredCalls += 1;
+      if (this.isDeferred) {
+        this.isDeferred = false;
+        this.view = this.loadedView;
+      }
+    },
     focusCalls: 0,
     focus() {
       this.focusCalls += 1;
     },
   };
+  return leaf;
 }
 
 class TestWorkspace {
   constructor(activeLeaf, leaves = [activeLeaf]) {
+    this.leftSplit = {};
+    this.rightSplit = {};
+    this.rootSplit = {};
     this.activeLeaf = activeLeaf;
     this.focusedLeaf = activeLeaf;
     this.leaves = leaves.filter(Boolean);
+    this.leaves.forEach((leaf) => {
+      leaf.workspace = this;
+    });
     this.handlers = new Map();
     this.revealLeafCalls = [];
     this.setActiveLeafCalls = [];
+    this.getLeafCalls = 0;
   }
 
   getActiveFile() {
@@ -290,6 +331,9 @@ class TestWorkspace {
 
   async revealLeaf(leaf) {
     this.revealLeafCalls.push(leaf);
+    if (leaf && leaf.isDeferred && typeof leaf.loadIfDeferred === "function") {
+      await leaf.loadIfDeferred();
+    }
   }
 
   async setActiveLeaf(leaf, options = {}) {
@@ -304,6 +348,7 @@ class TestWorkspace {
     if (!this.leaves.includes(leaf)) {
       this.leaves.push(leaf);
     }
+    leaf.workspace = this;
     this.activeLeaf = leaf;
     this.emit("active-leaf-change", leaf);
     this.emit("file-open", leaf.view.file);
@@ -320,6 +365,7 @@ class TestWorkspace {
   }
 
   getLeaf() {
+    this.getLeafCalls += 1;
     return {
       openFile: async (file) => {
         if (!file || !file.view) {
@@ -530,6 +576,146 @@ test("the standalone daily-note command activates a reused daily leaf", async (t
 
   assert.equal(workspace.activeLeaf, dailyLeaf);
   assert.equal(workspace.focusedLeaf, dailyLeaf);
+  assert.deepEqual(notices, []);
+});
+
+test("Ctrl+9 loads and reuses a deferred pinned daily tab before falling back", async (t) => {
+  const workLeaf = makeLeaf(makeView("Work.md", "# Work", { line: 0, ch: 0 }));
+  const dailyView = makeView("Daily.md", POMODORO_NOTE, { line: 1, ch: 4 });
+  const dailyLeaf = makeLeaf(dailyView, { deferred: true, pinned: true });
+  const workspace = new TestWorkspace(workLeaf, [workLeaf, dailyLeaf]);
+  const app = makeApp(workspace, dailyView);
+  const { plugin, frames } = setupPlugin(t, app);
+
+  assert.equal(await plugin.jumpToCurrentPomodoro(workLeaf.view.editor), true);
+  assert.equal(workspace.activeLeaf, dailyLeaf);
+  assert.equal(dailyLeaf.isDeferred, false);
+  assert.equal(dailyLeaf.loadIfDeferredCalls, 1);
+  assert.equal(app.dailyCommandCalls, 0);
+  assert.equal(workspace.getLeafCalls, 0);
+  assert.equal(dailyView.editor.focusCalls, 1);
+  assert.deepEqual(dailyView.editor.setCursorCalls, []);
+
+  assert.equal(plugin.jumpToCurrentPomodoro(dailyView.editor), true);
+  assert.deepEqual(dailyView.editor.setCursorCalls, [{ line: 3, ch: 0 }]);
+  frames.flushAll();
+  assert.deepEqual(notices, []);
+});
+
+test("pinned daily tabs win over earlier unpinned tabs", async (t) => {
+  const workLeaf = makeLeaf(makeView("Work.md", "# Work", { line: 0, ch: 0 }));
+  const unpinnedLeaf = makeLeaf(
+    makeView("Daily.md", POMODORO_NOTE, { line: 1, ch: 0 }),
+  );
+  const pinnedLeaf = makeLeaf(
+    makeView("Daily.md", POMODORO_NOTE, { line: 2, ch: 0 }),
+    { pinned: true },
+  );
+  const workspace = new TestWorkspace(workLeaf, [workLeaf, unpinnedLeaf, pinnedLeaf]);
+  const app = makeApp(workspace, pinnedLeaf.view);
+  const { plugin } = setupPlugin(t, app);
+
+  assert.equal(await plugin.jumpToCurrentPomodoro(workLeaf.view.editor), true);
+  assert.equal(workspace.activeLeaf, pinnedLeaf);
+  assert.notEqual(workspace.activeLeaf, unpinnedLeaf);
+  assert.deepEqual(notices, []);
+});
+
+test("a deferred sidebar daily tab is reused only without a main-area match", async (t) => {
+  const workLeaf = makeLeaf(makeView("Work.md", "# Work", { line: 0, ch: 0 }));
+  const sidebarLeaf = makeLeaf(
+    makeView("Daily.md", POMODORO_NOTE, { line: 1, ch: 0 }),
+    { deferred: true, sidebar: true, pinned: true },
+  );
+  const mainLeaf = makeLeaf(
+    makeView("Daily.md", POMODORO_NOTE, { line: 2, ch: 0 }),
+  );
+  const workspace = new TestWorkspace(workLeaf, [workLeaf, sidebarLeaf, mainLeaf]);
+  const app = makeApp(workspace, mainLeaf.view);
+  const { plugin } = setupPlugin(t, app);
+
+  assert.equal(await plugin.jumpToCurrentPomodoro(workLeaf.view.editor), true);
+  assert.equal(workspace.activeLeaf, mainLeaf);
+  assert.equal(sidebarLeaf.isDeferred, true);
+  assert.equal(sidebarLeaf.loadIfDeferredCalls, 0);
+  assert.deepEqual(notices, []);
+});
+
+test("a deferred sidebar daily tab is reused when there is no main-area match", async (t) => {
+  const workLeaf = makeLeaf(makeView("Work.md", "# Work", { line: 0, ch: 0 }));
+  const sidebarLeaf = makeLeaf(
+    makeView("Daily.md", POMODORO_NOTE, { line: 1, ch: 0 }),
+    { deferred: true, sidebar: true },
+  );
+  const workspace = new TestWorkspace(workLeaf, [workLeaf, sidebarLeaf]);
+  const app = makeApp(workspace, sidebarLeaf.loadedView);
+  const { plugin } = setupPlugin(t, app);
+
+  assert.equal(await plugin.jumpToCurrentPomodoro(workLeaf.view.editor), true);
+  assert.equal(workspace.activeLeaf, sidebarLeaf);
+  assert.equal(sidebarLeaf.isDeferred, false);
+  assert.equal(sidebarLeaf.loadIfDeferredCalls, 1);
+  assert.equal(app.dailyCommandCalls, 0);
+  assert.deepEqual(notices, []);
+});
+
+test("a deferred non-Markdown daily path is ignored and uses the daily-note fallback", async (t) => {
+  const workLeaf = makeLeaf(makeView("Work.md", "# Work", { line: 0, ch: 0 }));
+  const dailyView = makeView("Daily.md", POMODORO_NOTE, { line: 0, ch: 0 });
+  const nonMarkdownLeaf = makeLeaf(dailyView, {
+    deferred: true,
+    savedType: "pdf",
+    savedPath: "Daily.md",
+  });
+  const workspace = new TestWorkspace(workLeaf, [workLeaf, nonMarkdownLeaf]);
+  const app = makeApp(workspace, dailyView);
+  const { plugin } = setupPlugin(t, app);
+
+  assert.equal(await plugin.jumpToCurrentPomodoro(workLeaf.view.editor), true);
+  assert.notEqual(workspace.activeLeaf, nonMarkdownLeaf);
+  assert.equal(workspace.getActiveFile().path, "Daily.md");
+  assert.equal(nonMarkdownLeaf.isDeferred, true);
+  assert.equal(nonMarkdownLeaf.loadIfDeferredCalls, 0);
+  assert.equal(app.dailyCommandCalls, 1);
+  assert.deepEqual(notices, []);
+});
+
+test("the standalone daily-note command reuses a deferred pinned tab", async (t) => {
+  const workLeaf = makeLeaf(makeView("Work.md", "# Work", { line: 0, ch: 0 }));
+  const dailyView = makeView("Daily.md", POMODORO_NOTE, { line: 2, ch: 0 });
+  const dailyLeaf = makeLeaf(dailyView, { deferred: true, savedPinned: true });
+  const workspace = new TestWorkspace(workLeaf, [workLeaf, dailyLeaf]);
+  const app = makeApp(workspace, dailyView);
+  const { plugin } = setupPlugin(t, app);
+  const command = plugin.commands.find(
+    (candidate) => candidate.id === "open-today-daily-note",
+  );
+
+  await command.callback();
+
+  assert.equal(workspace.activeLeaf, dailyLeaf);
+  assert.equal(dailyLeaf.loadIfDeferredCalls, 1);
+  assert.equal(app.dailyCommandCalls, 0);
+  assert.equal(workspace.getLeafCalls, 0);
+  assert.deepEqual(notices, []);
+});
+
+test("Ctrl+9 opens the pinned daily tab from a non-Markdown active leaf", async (t) => {
+  const pdfLeaf = makeLeaf({ file: { path: "Reference.pdf", extension: "pdf" } });
+  const dailyView = makeView("Daily.md", POMODORO_NOTE, { line: 0, ch: 0 });
+  const dailyLeaf = makeLeaf(dailyView, { deferred: true, pinned: true });
+  const workspace = new TestWorkspace(pdfLeaf, [pdfLeaf, dailyLeaf]);
+  const app = makeApp(workspace, dailyView);
+  const { plugin } = setupPlugin(t, app);
+  const command = plugin.commands.find(
+    (candidate) => candidate.id === "jump-to-current-pomodoro",
+  );
+
+  await command.callback();
+
+  assert.equal(workspace.activeLeaf, dailyLeaf);
+  assert.equal(dailyLeaf.loadIfDeferredCalls, 1);
+  assert.equal(app.dailyCommandCalls, 0);
   assert.deepEqual(notices, []);
 });
 

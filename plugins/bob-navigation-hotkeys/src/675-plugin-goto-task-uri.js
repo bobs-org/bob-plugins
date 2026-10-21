@@ -268,16 +268,44 @@ function leafShowsPath(plugin, workspace, leaf, path, markdownOnly) {
   }
 
   const loadedFile = leaf.view && leaf.view.file;
+  if (markdownOnly) {
+    if (loadedFile) {
+      const loadedView = leaf.view;
+      let isMarkdownView = loadedView instanceof MarkdownView;
+      if (!isMarkdownView && typeof loadedView.getViewType === "function") {
+        try {
+          isMarkdownView = loadedView.getViewType() === "markdown";
+        } catch (error) {
+          isMarkdownView = false;
+        }
+      }
+      return (
+        isMarkdownView &&
+        loadedFile.path === path &&
+        (!plugin ||
+          typeof plugin.isMarkdownFile !== "function" ||
+          plugin.isMarkdownFile(loadedFile))
+      );
+    }
+
+    let viewState = null;
+    if (typeof leaf.getViewState === "function") {
+      try {
+        viewState = leaf.getViewState();
+      } catch (error) {
+        viewState = null;
+      }
+    }
+    return Boolean(
+      viewState &&
+        viewState.type === "markdown" &&
+        viewState.state &&
+        viewState.state.file === path,
+    );
+  }
+
   if (loadedFile) {
     if (loadedFile.path !== path) {
-      return false;
-    }
-    if (
-      markdownOnly &&
-      plugin &&
-      typeof plugin.isMarkdownFile === "function" &&
-      !plugin.isMarkdownFile(loadedFile)
-    ) {
       return false;
     }
     return true;
@@ -299,9 +327,6 @@ function leafShowsPath(plugin, workspace, leaf, path, markdownOnly) {
   if (stateFile !== path) {
     return false;
   }
-  if (markdownOnly && (!viewState || viewState.type !== "markdown")) {
-    return false;
-  }
   return true;
 }
 
@@ -312,6 +337,56 @@ function findLeafShowingPath(plugin, path, options) {
   }
 
   const markdownOnly = Boolean(options && options.markdownOnly);
+  const preferPinned = Boolean(options && options.preferPinned);
+  if (preferPinned) {
+    const isPinned = (leaf) => {
+      if (plugin && typeof plugin.isWorkspaceLeafPinned === "function") {
+        try {
+          return Boolean(plugin.isWorkspaceLeafPinned(leaf));
+        } catch (error) {
+          // Read the leaf state directly if the plugin helper fails.
+        }
+      }
+
+      try {
+        if (leaf.pinned) {
+          return true;
+        }
+      } catch (error) {
+        // Continue with the saved state.
+      }
+
+      if (typeof leaf.getViewState !== "function") {
+        return false;
+      }
+      try {
+        const viewState = leaf.getViewState();
+        return Boolean(viewState && viewState.pinned);
+      } catch (error) {
+        return false;
+      }
+    };
+
+    let matchingLeaf = null;
+    let matchingRank = Number.POSITIVE_INFINITY;
+    try {
+      workspace.iterateAllLeaves((leaf) => {
+        if (!leafShowsPath(plugin, workspace, leaf, path, markdownOnly)) {
+          return;
+        }
+        const sidebar = leafIsInSidebar(workspace, leaf);
+        const rank = sidebar ? (isPinned(leaf) ? 2 : 3) : isPinned(leaf) ? 0 : 1;
+        if (rank < matchingRank) {
+          matchingLeaf = leaf;
+          matchingRank = rank;
+        }
+      });
+    } catch (error) {
+      return null;
+    }
+    return matchingLeaf;
+  }
+
   let mainMatch = null;
   let sidebarMatch = null;
   try {

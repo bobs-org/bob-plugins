@@ -124,8 +124,7 @@ class BobLedgerToolsPlugin extends Plugin {
       callback: () => {
         const view = getActiveMarkdownView(this.app);
         if (!view || !view.editor) {
-          new Notice("No active markdown editor");
-          return;
+          return this.openDailyFallbackFromCommand();
         }
         this.jumpToCurrentPomodoro(view.editor);
       },

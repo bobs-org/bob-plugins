@@ -123,6 +123,13 @@ class BobLedgerToolsVimSnippetsMixin {
     return true;
   }
 
+  async openDailyFallbackFromCommand() {
+    this.dailyNavigationActionId =
+      Math.floor(numericOrDefault(this.dailyNavigationActionId, 0)) + 1;
+    const actionId = this.dailyNavigationActionId;
+    return this.openDailyFallbackOnly(null, actionId);
+  }
+
   scheduleCenterOnLine(cm, line, options = {}) {
     cancelDeferred(this.pendingCenterDeferred);
     const attempts = Math.max(

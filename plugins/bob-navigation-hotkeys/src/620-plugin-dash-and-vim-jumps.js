@@ -23,7 +23,9 @@ class BobNavigationHotkeysVimJumpMixin {
     const rememberedDashLocation = this.getRememberedDashLocation();
 
     try {
-      const existingLeaf = this.findMarkdownLeafByPath(file.path);
+      const existingLeaf = this.findMarkdownLeafByPath(file.path, {
+        preferPinned: true,
+      });
       if (existingLeaf && (await this.activateWorkspaceLeaf(existingLeaf))) {
         // dash.md is already open in a tab; leave its live scroll untouched.
         this.cancelPendingDashTasksJump();
@@ -50,8 +52,11 @@ class BobNavigationHotkeysVimJumpMixin {
     return true;
   }
 
-  findMarkdownLeafByPath(filePath) {
-    return findLeafShowingPath(this, filePath, { markdownOnly: true });
+  findMarkdownLeafByPath(filePath, options = {}) {
+    return findLeafShowingPath(this, filePath, {
+      ...options,
+      markdownOnly: true,
+    });
   }
 
   async activateWorkspaceLeaf(leaf) {
@@ -77,6 +82,17 @@ class BobNavigationHotkeysVimJumpMixin {
         }
       }
     };
+
+    if (
+      leaf.isDeferred === true &&
+      typeof leaf.loadIfDeferred === "function"
+    ) {
+      try {
+        await leaf.loadIfDeferred();
+      } catch (error) {
+        // revealLeaf may still load the deferred tab.
+      }
+    }
 
     if (typeof workspace.revealLeaf === "function") {
       try {

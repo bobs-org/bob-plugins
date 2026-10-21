@@ -268,6 +268,63 @@ function getMarkdownLeafViewByPath(leaf, path = "") {
   return !expectedPath || sameVaultPath(file.path, expectedPath) ? view : null;
 }
 
+function leafIsInSidebar(workspace, leaf) {
+  if (!workspace || !leaf || typeof leaf.getRoot !== "function") {
+    return false;
+  }
+
+  try {
+    const root = leaf.getRoot();
+    return root === workspace.leftSplit || root === workspace.rightSplit;
+  } catch (error) {
+    return false;
+  }
+}
+
+function markdownLeafPathInfo(leaf) {
+  if (!leaf) {
+    return null;
+  }
+
+  const view = leaf.view;
+  const loadedFile = view && view.file;
+  let viewState = null;
+  if (typeof leaf.getViewState === "function") {
+    try {
+      viewState = leaf.getViewState();
+    } catch (error) {
+      viewState = null;
+    }
+  }
+
+  const pinned = (() => {
+    try {
+      return Boolean(leaf.pinned || (viewState && viewState.pinned));
+    } catch (error) {
+      return Boolean(viewState && viewState.pinned);
+    }
+  })();
+
+  if (loadedFile) {
+    if (!(view instanceof MarkdownView) || !isMarkdownFileLike(loadedFile)) {
+      return null;
+    }
+    return { path: normalizeVaultPath(loadedFile.path), pinned };
+  }
+
+  const stateFile = viewState && viewState.state && viewState.state.file;
+  if (
+    !viewState ||
+    viewState.type !== "markdown" ||
+    typeof stateFile !== "string"
+  ) {
+    return null;
+  }
+
+  const path = normalizeVaultPath(stateFile);
+  return path ? { path, pinned } : null;
+}
+
 function findOpenMarkdownLeafByPath(app, path) {
   const workspace = app && app.workspace;
   const expectedPath = normalizeVaultPath(path);
@@ -280,15 +337,23 @@ function findOpenMarkdownLeafByPath(app, path) {
   }
 
   let matchingLeaf = null;
+  let matchingRank = Number.POSITIVE_INFINITY;
   try {
     workspace.iterateAllLeaves((leaf) => {
-      if (matchingLeaf) {
+      if (!leaf) {
         return;
       }
 
-      const file = getMarkdownLeafFile(leaf);
-      if (file && sameVaultPath(file.path, expectedPath)) {
+      const info = markdownLeafPathInfo(leaf);
+      if (!info || !sameVaultPath(info.path, expectedPath)) {
+        return;
+      }
+
+      const sidebar = leafIsInSidebar(workspace, leaf);
+      const rank = sidebar ? (info.pinned ? 2 : 3) : info.pinned ? 0 : 1;
+      if (rank < matchingRank) {
         matchingLeaf = leaf;
+        matchingRank = rank;
       }
     });
   } catch (error) {
@@ -327,6 +392,17 @@ async function activateMarkdownLeaf(app, leaf, options = {}) {
   const workspace = app && app.workspace;
   if (!workspace || !leaf) {
     return null;
+  }
+
+  if (
+    leaf.isDeferred === true &&
+    typeof leaf.loadIfDeferred === "function"
+  ) {
+    try {
+      await leaf.loadIfDeferred();
+    } catch (error) {
+      // revealLeaf may still load the deferred tab.
+    }
   }
 
   if (typeof workspace.revealLeaf === "function") {

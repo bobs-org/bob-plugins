@@ -310,7 +310,7 @@ class BobLedgerToolsDateMarksMixin {
             }
             try {
               if (line.text.indexOf("::") !== -1) {
-                const sources = dateMarkSources(line.text);
+                const sources = dateFamilyMarkSources(line.text);
                 for (const source of sources) {
                   try {
                     const absFrom = line.from + source.fieldStart;
@@ -337,11 +337,7 @@ class BobLedgerToolsDateMarksMixin {
                     if (inCode) {
                       continue;
                     }
-                    const model = dateMarkModel(
-                      source.field,
-                      source.date,
-                      today,
-                    );
+                    const model = dateFamilyMarkModel(source, today);
                     if (!model) {
                       continue;
                     }
@@ -598,7 +594,11 @@ class BobLedgerToolsDateMarksMixin {
             continue;
           }
           // No line-type gate: any canonical field outside code marks.
-          const sources = dateMarkSourcesInText(value);
+          // The repeat guard resolves lazily, only for text holding a
+          // repeat source.
+          const sources = dateFamilyMarkSourcesInText(value, () =>
+            recurrenceMarkRenderedGuard(textNode, el),
+          );
           if (!sources || sources.length === 0) {
             continue;
           }
@@ -616,11 +616,7 @@ class BobLedgerToolsDateMarksMixin {
           let usable = true;
           for (const source of sources) {
             try {
-              const model = dateMarkModel(
-                source.field,
-                source.date,
-                today,
-              );
+              const model = dateFamilyMarkModel(source, today);
               if (!model) {
                 usable = false;
                 break;

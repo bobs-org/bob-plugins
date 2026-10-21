@@ -471,6 +471,16 @@ function buildDateMarkElement(doc, model, options) {
     if (!doc || !model || typeof model !== "object") {
       return null;
     }
+    if (model.field === "repeat") {
+      try {
+        if (typeof buildRecurrenceMarkElement === "function") {
+          return buildRecurrenceMarkElement(doc, model, options);
+        }
+      } catch (error) {
+        return null;
+      }
+      return null;
+    }
     let known = false;
     for (const entry of DATE_MARK_FIELDS) {
       if (entry.key === model.field) {

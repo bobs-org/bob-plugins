@@ -15,6 +15,7 @@
   "130-freshness-marks.js",
   "135-priority-marks.js",
   "136-date-marks.js",
+  "136-recurrence-marks.js",
   "137-progress-marks.js",
   "138-task-tag-marks.js",
   "138-checklist-task-marks.js",

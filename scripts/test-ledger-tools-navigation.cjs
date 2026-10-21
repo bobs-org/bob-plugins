@@ -476,6 +476,119 @@ test("an active-note Pomodoro target still jumps and centers immediately", (t) =
   assert.deepEqual(notices, []);
 });
 
+test("Ctrl+9 from an unpinned daily copy switches to the pinned home tab", async (t) => {
+  const copyView = makeView("Daily.md", POMODORO_NOTE, { line: 1, ch: 4 });
+  const copyLeaf = makeLeaf(copyView);
+  const homeView = makeView("Daily.md", POMODORO_NOTE, { line: 2, ch: 6 });
+  const homeLeaf = makeLeaf(homeView, { deferred: true, pinned: true });
+  const workspace = new TestWorkspace(copyLeaf, [copyLeaf, homeLeaf]);
+  const app = makeApp(workspace, homeView);
+  const { plugin } = setupPlugin(t, app);
+  const dailyPath = plugin.currentDailyPath();
+  copyView.file.path = dailyPath;
+  homeView.file.path = dailyPath;
+  homeLeaf.savedViewState.state.file = dailyPath;
+  assert.equal(helpers.isTodayDailyFile(app, workspace.getActiveFile()), true);
+  assert.equal(plugin.findDailyHomeLeafAwayFromActive(), homeLeaf);
+  const command = plugin.commands.find(
+    (candidate) => candidate.id === "jump-to-current-pomodoro",
+  );
+
+  await command.callback();
+  assert.equal(workspace.activeLeaf, homeLeaf);
+  assert.equal(homeLeaf.loadIfDeferredCalls, 1);
+  assert.equal(workspace.revealLeafCalls.at(-1), homeLeaf);
+  assert.equal(workspace.setActiveLeafCalls.at(-1).leaf, homeLeaf);
+  assert.deepEqual(workspace.setActiveLeafCalls.at(-1).options, { focus: true });
+  assert.deepEqual(copyView.editor.setCursorCalls, []);
+  assert.deepEqual(homeView.editor.setCursorCalls, []);
+  assert.equal(app.dailyCommandCalls, 0);
+  assert.equal(workspace.getLeafCalls, 0);
+  assert.deepEqual(notices, []);
+
+  assert.equal(plugin.jumpToCurrentPomodoro(homeView.editor), true);
+  assert.deepEqual(homeView.editor.setCursorCalls, [{ line: 3, ch: 0 }]);
+});
+
+test("Ctrl+9 on the pinned daily tab jumps in place when a copy exists", async (t) => {
+  const copyView = makeView("Daily.md", POMODORO_NOTE, { line: 0, ch: 0 });
+  const copyLeaf = makeLeaf(copyView);
+  const pinnedView = makeView("Daily.md", POMODORO_NOTE, { line: 1, ch: 4 });
+  const pinnedLeaf = makeLeaf(pinnedView, { pinned: true });
+  const workspace = new TestWorkspace(pinnedLeaf, [copyLeaf, pinnedLeaf]);
+  const app = makeApp(workspace, pinnedView);
+  const { plugin } = setupPlugin(t, app);
+  const dailyPath = plugin.currentDailyPath();
+  copyView.file.path = dailyPath;
+  pinnedView.file.path = dailyPath;
+  const command = plugin.commands.find(
+    (candidate) => candidate.id === "jump-to-current-pomodoro",
+  );
+
+  await command.callback();
+  assert.equal(workspace.activeLeaf, pinnedLeaf);
+  assert.deepEqual(pinnedView.editor.setCursorCalls, [{ line: 3, ch: 0 }]);
+  assert.deepEqual(copyView.editor.setCursorCalls, []);
+  assert.equal(app.dailyCommandCalls, 0);
+  assert.equal(workspace.getLeafCalls, 0);
+  assert.deepEqual(notices, []);
+});
+
+test("Ctrl+9 switches daily copies without a Pomodoros section and stays quiet", async (t) => {
+  const copyLeaf = makeLeaf(makeView("Daily.md", "# Daily", { line: 0, ch: 0 }));
+  const homeView = makeView("Daily.md", "# Daily", { line: 0, ch: 0 });
+  const homeLeaf = makeLeaf(homeView, { deferred: true, pinned: true });
+  const workspace = new TestWorkspace(copyLeaf, [copyLeaf, homeLeaf]);
+  const app = makeApp(workspace, homeView);
+  const { plugin } = setupPlugin(t, app);
+  const dailyPath = plugin.currentDailyPath();
+  copyLeaf.view.file.path = dailyPath;
+  homeView.file.path = dailyPath;
+  homeLeaf.savedViewState.state.file = dailyPath;
+  const command = plugin.commands.find(
+    (candidate) => candidate.id === "jump-to-current-pomodoro",
+  );
+
+  await command.callback();
+  assert.equal(workspace.activeLeaf, homeLeaf);
+  assert.deepEqual(notices, []);
+});
+
+test("Ctrl+9 keeps the active daily tab when equal-ranked copies exist", async (t) => {
+  const earlierLeaf = makeLeaf(makeView("Daily.md", POMODORO_NOTE, { line: 1, ch: 1 }));
+  const activeView = makeView("Daily.md", POMODORO_NOTE, { line: 1, ch: 4 });
+  const activeLeaf = makeLeaf(activeView);
+  const workspace = new TestWorkspace(activeLeaf, [earlierLeaf, activeLeaf]);
+  const app = makeApp(workspace, activeView);
+  const { plugin } = setupPlugin(t, app);
+  const dailyPath = plugin.currentDailyPath();
+  earlierLeaf.view.file.path = dailyPath;
+  activeView.file.path = dailyPath;
+
+  assert.equal(plugin.jumpToCurrentPomodoro(activeView.editor), true);
+  assert.equal(workspace.activeLeaf, activeLeaf);
+  assert.deepEqual(activeView.editor.setCursorCalls, [{ line: 3, ch: 0 }]);
+  assert.deepEqual(earlierLeaf.view.editor.setCursorCalls, []);
+});
+
+test("Ctrl+9 from a sidebar daily copy switches to a main-area home tab", async (t) => {
+  const sidebarView = makeView("Daily.md", POMODORO_NOTE, { line: 1, ch: 4 });
+  const sidebarLeaf = makeLeaf(sidebarView, { sidebar: true });
+  const mainView = makeView("Daily.md", POMODORO_NOTE, { line: 2, ch: 6 });
+  const mainLeaf = makeLeaf(mainView);
+  const workspace = new TestWorkspace(sidebarLeaf, [sidebarLeaf, mainLeaf]);
+  const app = makeApp(workspace, mainView);
+  const { plugin } = setupPlugin(t, app);
+  const dailyPath = plugin.currentDailyPath();
+  sidebarView.file.path = dailyPath;
+  mainView.file.path = dailyPath;
+
+  assert.equal(await plugin.jumpToCurrentPomodoro(sidebarView.editor), true);
+  assert.equal(workspace.activeLeaf, mainLeaf);
+  assert.deepEqual(sidebarView.editor.setCursorCalls, []);
+  assert.deepEqual(mainView.editor.setCursorCalls, []);
+});
+
 test("the first fallback press only opens daily and the second press jumps", async (t) => {
   const workView = makeView("Work.md", "# Work", { line: 0, ch: 0 });
   const dailyView = makeView("Daily.md", POMODORO_NOTE, { line: 1, ch: 4 });

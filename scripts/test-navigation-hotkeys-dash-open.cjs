@@ -130,6 +130,58 @@ test("Ctrl+0 loads and focuses a deferred pinned dash tab without jumping or res
   assert.deepEqual(harness.plugin.restoreCalls, []);
 });
 
+test("Ctrl+0 from an unpinned dash copy switches to the pinned home tab", async () => {
+  const harness = makeDashHarness({
+    activeFile: { path: "dash.md", extension: "md" },
+  });
+  const homeLeaf = harness.makeLeaf(harness.dashFile, {
+    deferred: true,
+    pinned: true,
+  });
+
+  assert.equal(await harness.plugin.openDashTasks(), true);
+  assert.equal(harness.workspace.activeLeaf, homeLeaf);
+  assert.equal(homeLeaf.isDeferred, false);
+  assert.equal(homeLeaf.loadIfDeferredCalls, 1);
+  assert.deepEqual(harness.openCalls, []);
+  assert.deepEqual(harness.revealLeafCalls, [homeLeaf]);
+  assert.deepEqual(harness.setActiveLeafCalls, [
+    { leaf: homeLeaf, options: { focus: true } },
+  ]);
+  assert.equal(harness.plugin.jumpCalls, 0);
+  assert.deepEqual(harness.plugin.restoreCalls, []);
+});
+
+test("Ctrl+0 stays on the pinned dash tab when an unpinned copy exists", async () => {
+  const harness = makeDashHarness({
+    activeFile: { path: "dash.md", extension: "md" },
+  });
+  const activeLeaf = harness.workspace.activeLeaf;
+  activeLeaf.pinned = true;
+  const copyLeaf = harness.makeLeaf(harness.dashFile);
+
+  assert.equal(await harness.plugin.openDashTasks(), true);
+  assert.equal(harness.workspace.activeLeaf, activeLeaf);
+  assert.notEqual(harness.workspace.activeLeaf, copyLeaf);
+  assert.deepEqual(harness.openCalls, []);
+  assert.deepEqual(harness.revealLeafCalls, []);
+  assert.equal(harness.plugin.jumpCalls, 0);
+});
+
+test("Ctrl+0 keeps the active dash tab when equal-ranked copies exist", async () => {
+  const harness = makeDashHarness({
+    activeFile: { path: "dash.md", extension: "md" },
+  });
+  const activeLeaf = harness.workspace.activeLeaf;
+  const earlierLeaf = harness.makeLeaf(harness.dashFile);
+
+  assert.equal(await harness.plugin.openDashTasks(), true);
+  assert.equal(harness.workspace.activeLeaf, activeLeaf);
+  assert.notEqual(harness.workspace.activeLeaf, earlierLeaf);
+  assert.deepEqual(harness.openCalls, []);
+  assert.deepEqual(harness.revealLeafCalls, []);
+});
+
 test("a pinned dash tab wins over an earlier unpinned tab", async () => {
   const harness = makeDashHarness();
   const unpinnedLeaf = harness.makeLeaf(harness.dashFile);

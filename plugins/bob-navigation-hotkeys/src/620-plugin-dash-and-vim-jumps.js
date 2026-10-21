@@ -9,6 +9,24 @@ class BobNavigationHotkeysVimJumpMixin {
 
     const activeView = this.getActiveMarkdownView();
     if (activeView && activeView.file.path === file.path) {
+      const activeLeaf = this.app.workspace.activeLeaf;
+      const homeLeaf = this.findMarkdownLeafByPath(file.path, {
+        preferPinned: true,
+      });
+      if (activeLeaf && homeLeaf && homeLeaf !== activeLeaf) {
+        this.captureActiveFilePosition();
+        try {
+          if (await this.activateWorkspaceLeaf(homeLeaf)) {
+            this.cancelPendingDashTasksJump();
+            this.cancelPendingDashLocationRestore();
+            this.refreshDashScrollCaptureTarget();
+            return true;
+          }
+        } catch (error) {
+          new Notice(`Could not open ${DASH_FILE_PATH}`);
+          return false;
+        }
+      }
       // dash.md already focused: keep it fresh for capture, do not disturb scroll.
       this.cancelPendingDashTasksJump();
       this.cancelPendingDashLocationRestore();

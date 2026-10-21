@@ -126,7 +126,7 @@ class BobLedgerToolsPlugin extends Plugin {
         if (!view || !view.editor) {
           return this.openDailyFallbackFromCommand();
         }
-        this.jumpToCurrentPomodoro(view.editor);
+        return this.jumpToCurrentPomodoro(view.editor);
       },
     });
 

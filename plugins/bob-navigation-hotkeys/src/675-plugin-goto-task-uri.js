@@ -369,6 +369,7 @@ function findLeafShowingPath(plugin, path, options) {
 
     let matchingLeaf = null;
     let matchingRank = Number.POSITIVE_INFINITY;
+    const activeLeaf = workspace.activeLeaf;
     try {
       workspace.iterateAllLeaves((leaf) => {
         if (!leafShowsPath(plugin, workspace, leaf, path, markdownOnly)) {
@@ -376,7 +377,7 @@ function findLeafShowingPath(plugin, path, options) {
         }
         const sidebar = leafIsInSidebar(workspace, leaf);
         const rank = sidebar ? (isPinned(leaf) ? 2 : 3) : isPinned(leaf) ? 0 : 1;
-        if (rank < matchingRank) {
+        if (rank < matchingRank || (rank === matchingRank && leaf === activeLeaf)) {
           matchingLeaf = leaf;
           matchingRank = rank;
         }

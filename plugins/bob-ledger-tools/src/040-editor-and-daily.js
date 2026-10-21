@@ -338,6 +338,7 @@ function findOpenMarkdownLeafByPath(app, path) {
 
   let matchingLeaf = null;
   let matchingRank = Number.POSITIVE_INFINITY;
+  const activeLeaf = workspace.activeLeaf;
   try {
     workspace.iterateAllLeaves((leaf) => {
       if (!leaf) {
@@ -351,7 +352,7 @@ function findOpenMarkdownLeafByPath(app, path) {
 
       const sidebar = leafIsInSidebar(workspace, leaf);
       const rank = sidebar ? (info.pinned ? 2 : 3) : info.pinned ? 0 : 1;
-      if (rank < matchingRank) {
+      if (rank < matchingRank || (rank === matchingRank && leaf === activeLeaf)) {
         matchingLeaf = leaf;
         matchingRank = rank;
       }

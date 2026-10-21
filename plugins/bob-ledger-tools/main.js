@@ -1565,6 +1565,7 @@ function findOpenMarkdownLeafByPath(app, path) {
 
   let matchingLeaf = null;
   let matchingRank = Number.POSITIVE_INFINITY;
+  const activeLeaf = workspace.activeLeaf;
   try {
     workspace.iterateAllLeaves((leaf) => {
       if (!leaf) {
@@ -1578,7 +1579,7 @@ function findOpenMarkdownLeafByPath(app, path) {
 
       const sidebar = leafIsInSidebar(workspace, leaf);
       const rank = sidebar ? (info.pinned ? 2 : 3) : info.pinned ? 0 : 1;
-      if (rank < matchingRank) {
+      if (rank < matchingRank || (rank === matchingRank && leaf === activeLeaf)) {
         matchingLeaf = leaf;
         matchingRank = rank;
       }
@@ -18135,7 +18136,7 @@ class BobLedgerToolsPlugin extends Plugin {
         if (!view || !view.editor) {
           return this.openDailyFallbackFromCommand();
         }
-        this.jumpToCurrentPomodoro(view.editor);
+        return this.jumpToCurrentPomodoro(view.editor);
       },
     });
 
@@ -45307,6 +45308,10 @@ class BobLedgerToolsVimSnippetsMixin {
     this.dailyNavigationActionId =
       Math.floor(numericOrDefault(this.dailyNavigationActionId, 0)) + 1;
     const actionId = this.dailyNavigationActionId;
+    const dailyCopyLeaf = this.findDailyHomeLeafAwayFromActive();
+    if (dailyCopyLeaf) {
+      return this.openDailyFallbackOnly(null, actionId, { leavingDailyCopy: true });
+    }
     const lines = getEditorLines(cm);
     if (!lines) {
       new Notice("No active markdown editor");
@@ -45319,6 +45324,20 @@ class BobLedgerToolsVimSnippetsMixin {
     }
 
     return this.jumpToPomodoroTarget(cm, target);
+  }
+
+  findDailyHomeLeafAwayFromActive() {
+    const workspace = this.app && this.app.workspace;
+    const activeLeaf = workspace && workspace.activeLeaf;
+    if (
+      !activeLeaf ||
+      !isTodayDailyFile(this.app, getActiveFile(this.app))
+    ) {
+      return null;
+    }
+
+    const homeLeaf = findOpenMarkdownLeafByPath(this.app, this.currentDailyPath());
+    return homeLeaf && homeLeaf !== activeLeaf ? homeLeaf : null;
   }
 
   jumpToPomodoroTarget(cm, target) {
@@ -45337,8 +45356,11 @@ class BobLedgerToolsVimSnippetsMixin {
     return true;
   }
 
-  async openDailyFallbackOnly(error, actionId) {
-    if (isTodayDailyFile(this.app, getActiveFile(this.app))) {
+  async openDailyFallbackOnly(error, actionId, options = {}) {
+    if (
+      !options.leavingDailyCopy &&
+      isTodayDailyFile(this.app, getActiveFile(this.app))
+    ) {
       new Notice(error || "No active Pomodoro line found");
       return false;
     }

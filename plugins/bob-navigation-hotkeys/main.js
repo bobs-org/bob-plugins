@@ -70633,6 +70633,24 @@ class BobNavigationHotkeysVimJumpMixin {
 
     const activeView = this.getActiveMarkdownView();
     if (activeView && activeView.file.path === file.path) {
+      const activeLeaf = this.app.workspace.activeLeaf;
+      const homeLeaf = this.findMarkdownLeafByPath(file.path, {
+        preferPinned: true,
+      });
+      if (activeLeaf && homeLeaf && homeLeaf !== activeLeaf) {
+        this.captureActiveFilePosition();
+        try {
+          if (await this.activateWorkspaceLeaf(homeLeaf)) {
+            this.cancelPendingDashTasksJump();
+            this.cancelPendingDashLocationRestore();
+            this.refreshDashScrollCaptureTarget();
+            return true;
+          }
+        } catch (error) {
+          new Notice(`Could not open ${DASH_FILE_PATH}`);
+          return false;
+        }
+      }
       // dash.md already focused: keep it fresh for capture, do not disturb scroll.
       this.cancelPendingDashTasksJump();
       this.cancelPendingDashLocationRestore();
@@ -77741,6 +77759,7 @@ function findLeafShowingPath(plugin, path, options) {
 
     let matchingLeaf = null;
     let matchingRank = Number.POSITIVE_INFINITY;
+    const activeLeaf = workspace.activeLeaf;
     try {
       workspace.iterateAllLeaves((leaf) => {
         if (!leafShowsPath(plugin, workspace, leaf, path, markdownOnly)) {
@@ -77748,7 +77767,7 @@ function findLeafShowingPath(plugin, path, options) {
         }
         const sidebar = leafIsInSidebar(workspace, leaf);
         const rank = sidebar ? (isPinned(leaf) ? 2 : 3) : isPinned(leaf) ? 0 : 1;
-        if (rank < matchingRank) {
+        if (rank < matchingRank || (rank === matchingRank && leaf === activeLeaf)) {
           matchingLeaf = leaf;
           matchingRank = rank;
         }

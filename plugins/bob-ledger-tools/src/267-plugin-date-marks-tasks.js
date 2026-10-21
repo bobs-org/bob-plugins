@@ -3,7 +3,8 @@
 // Tasks 8.4.0 always renders query-result date components with its emoji
 // serializer: each date component is a direct-child span of
 // `li.plugin-tasks-list-item > .tasks-list-text` carrying one of the
-// `task-created`, `task-scheduled`, `task-done`, or `task-cancelled`
+// `task-created`, `task-scheduled`, `task-done`, `task-cancelled`, or
+// `task-recurring`
 // classes (plus a `data-task-…` attribute), wrapping a single inner span
 // whose text is `" ⏳ 2026-10-09"` (full mode) or `" ⏳"` (short mode).
 // CSS cannot split the emoji from the date, so unlike the priority mark
@@ -21,10 +22,12 @@ const TASKS_DATE_MARK_HOSTS = Object.freeze([
   Object.freeze({ cls: "task-scheduled", field: "scheduled" }),
   Object.freeze({ cls: "task-done", field: "completion" }),
   Object.freeze({ cls: "task-cancelled", field: "cancelled" }),
+  Object.freeze({ cls: "task-recurring", field: "repeat" }),
 ]);
 
 // The trailing ISO date in a Tasks component's inner text.
 const TASKS_DATE_MARK_PATTERN = /(\d{4}-\d{2}-\d{2})\s*$/;
+const TASKS_RECURRENCE_MARK_PATTERN = /^\s*🔁\uFE0F?\s*(.*?)\s*$/u;
 // A still-detached element is retried this many frames before the pass
 // drops it silently (Tasks' native emoji dates stay).
 const TASKS_DATE_MARK_DETACHED_RETRIES = 3;
@@ -117,6 +120,74 @@ function tasksDateMarkInnerText(node) {
     return out;
   } catch (error) {
     return "";
+  }
+}
+
+// Exact checklist membership for a Tasks query result. Read only tag
+// pills under its own task-description, skipping nested lists and code.
+function tasksDateMarkChecklistTags(li) {
+  try {
+    const stack = Array.from(li && li.childNodes ? li.childNodes : []);
+    let description = null;
+    let guard = 0;
+    while (stack.length > 0 && guard < 10000) {
+      guard += 1;
+      const node = stack.pop();
+      if (!node || node.nodeType !== 1) continue;
+      if (tasksDateMarkHasClass(node, "task-description")) {
+        description = node;
+        break;
+      }
+      const name = String(node.tagName || node.nodeName || "").toUpperCase();
+      if (["UL", "OL", "CODE", "PRE"].includes(name)) continue;
+      for (const child of node.childNodes || []) stack.push(child);
+    }
+    if (!description) return Object.freeze([]);
+    const tags = [];
+    const nodes = Array.from(description.childNodes || []);
+    guard = 0;
+    while (nodes.length > 0 && guard < 10000) {
+      guard += 1;
+      const node = nodes.pop();
+      if (!node || node.nodeType !== 1) continue;
+      const name = String(node.tagName || node.nodeName || "").toUpperCase();
+      if (["UL", "OL", "CODE", "PRE"].includes(name)) continue;
+      if (name === "A" && tasksDateMarkHasClass(node, "tag")) {
+        let value = "";
+        try {
+          value = node.getAttribute("data-tag-name") || node.getAttribute("href") || node.textContent || "";
+        } catch (error) {
+          value = node.textContent || "";
+        }
+        tags.push(String(value));
+        continue;
+      }
+      for (const child of node.childNodes || []) nodes.push(child);
+    }
+    return Object.freeze(tags);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+// Open checklist rows without `when done` keep Tasks' native recurrence
+// rule visible, matching the Live Preview repair guard.
+function tasksDateMarkRecurrenceGuarded(li, rule) {
+  try {
+    const model = recurrenceMarkModel(rule);
+    if (!model || model.whenDone) return false;
+    const status = li && typeof li.getAttribute === "function"
+      ? li.getAttribute("data-task")
+      : null;
+    if (typeof status !== "string") return true;
+    if (typeof freshnessIsClosedStatus === "function") {
+      if (freshnessIsClosedStatus(status)) return false;
+    } else if (["x", "X", "-"].includes(status)) {
+      return false;
+    }
+    return Boolean(freshnessChecklistForTags(tasksDateMarkChecklistTags(li)));
+  } catch (error) {
+    return true;
   }
 }
 
@@ -354,17 +425,15 @@ class BobLedgerToolsDateMarksTasksMixin {
   }
 
   // Append one date mark to each undecorated Tasks date component in a
-  // complete row. Each `task-created`, `task-scheduled`, `task-done`,
-  // and `task-cancelled` span without `data-bob-date-mark` whose inner
-  // text ends in a canonical ISO date gets
-  // `buildDateMarkElement(…, { foldSpace: true, rendered: true })`
+  // complete row. Each date component and `task-recurring` span without
+  // `data-bob-date-mark` gets its matching date or recurrence mark
   // with `data-host="tasks"` appended inside the span; the span is then
-  // flagged `data-bob-date-mark="true"`. Spans with no date (short
-  // mode), an invalid date, or an unknown shape are left untouched, as
-  // are `task-due` and `task-start`. The pass is idempotent, and the
-  // appended mark keeps Tasks' click (date editor) and contextmenu
-  // (postpone) listeners working, because the click bubbles to Tasks'
-  // span. Returns the decorated count. Never throws.
+  // flagged `data-bob-date-mark="true"`. Spans with no date/rule (short
+  // mode), invalid values, guarded recurrence rules, or unknown shapes
+  // are left untouched, as are `task-due` and `task-start`. The pass is
+  // idempotent, and Tasks' click/contextmenu listeners keep working
+  // because events bubble to the host span. Returns the decorated count.
+  // Never throws.
   decorateTasksResultDates(li, todayText) {
     try {
       if (!li || typeof li !== "object") {
@@ -438,22 +507,33 @@ class BobLedgerToolsDateMarksTasksMixin {
             continue;
           }
           const inner = tasksDateMarkInnerText(host.node);
-          const match = TASKS_DATE_MARK_PATTERN.exec(inner);
-          if (!match) {
-            continue;
+          let model = null;
+          if (host.field === "repeat") {
+            const match = TASKS_RECURRENCE_MARK_PATTERN.exec(inner);
+            if (!match || !match[1]) {
+              continue;
+            }
+            model = recurrenceMarkModel(match[1]);
+            if (!model || tasksDateMarkRecurrenceGuarded(li, match[1])) {
+              continue;
+            }
+          } else {
+            const match = TASKS_DATE_MARK_PATTERN.exec(inner);
+            if (!match) {
+              continue;
+            }
+            const date = match[1];
+            if (parseFreshDateStrict(date) === null) {
+              continue;
+            }
+            model = dateMarkModel(host.field, date, today);
           }
-          const date = match[1];
-          if (parseFreshDateStrict(date) === null) {
-            continue;
-          }
-          const model = dateMarkModel(host.field, date, today);
           if (!model) {
             continue;
           }
-          const markEl = buildDateMarkElement(docNode, model, {
-            foldSpace: true,
-            rendered: true,
-          });
+          const markEl = host.field === "repeat"
+            ? buildRecurrenceMarkElement(docNode, model, { foldSpace: true, rendered: true })
+            : buildDateMarkElement(docNode, model, { foldSpace: true, rendered: true });
           if (!markEl) {
             continue;
           }

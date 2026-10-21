@@ -451,6 +451,22 @@ function tasksRow(fx, tasksClass, innerText, dataTask = "") {
   return { li, body, host, inner };
 }
 
+function recurringTasksRow(fx, innerText, dataTask = "", tags = []) {
+  const row = tasksRow(fx, "task-recurring", innerText, dataTask);
+  const description = fx.doc.createElement("div");
+  description.setAttribute("class", "task-description");
+  for (const tagName of tags) {
+    const tag = fx.doc.createElement("a");
+    tag.setAttribute("class", "tag");
+    tag.setAttribute("data-tag-name", tagName);
+    tag.setAttribute("href", tagName);
+    tag.appendChild(fx.doc.createTextNode(tagName));
+    description.appendChild(tag);
+  }
+  row.body.appendChild(description);
+  return row;
+}
+
 test("T1 scheduled full-mode row gets a Fri mark inside the span", () => {
   const plugin = pluginWithToday();
   const frames = manualScheduler(plugin);
@@ -788,6 +804,87 @@ test("T13 unloading before a callback runs writes nothing", () => {
   assert.equal(markLabel(markRootsIn(revived.host)[0]), "Fri");
 });
 
+test("RT1 full-mode recurring result gets a daily mark and stays idempotent", () => {
+  const plugin = pluginWithToday();
+  const fx = fakeTasksDom();
+  const row = recurringTasksRow(fx, " 🔁 every day when done", "");
+  assert.equal(plugin.decorateTasksResultDates(row.li, TODAY), 1);
+  assert.equal(row.host.getAttribute("data-bob-date-mark"), "true");
+  const marks = markRootsIn(row.host);
+  assert.equal(marks.length, 1);
+  assert.equal(markLabel(marks[0]), "daily");
+  assert.equal(marks[0].getAttribute("data-field"), "repeat");
+  assert.equal(marks[0].getAttribute("data-rule"), "every day when done");
+  assert.equal(marks[0].getAttribute("data-host"), "tasks");
+  assert.equal(marks[0].getAttribute("data-rendered"), "true");
+  assert.equal(plugin.decorateTasksResultDates(row.li, TODAY), 0);
+});
+
+test("RT2 recurring labels use the shared cadence grammar", () => {
+  const plugin = pluginWithToday();
+  for (const [rule, expected] of [
+    ["every week on Monday when done", "Mondays"],
+    ["every month on the 1st", "monthly · 1st"],
+  ]) {
+    const fx = fakeTasksDom();
+    const row = recurringTasksRow(fx, ` 🔁 ${rule}`, "");
+    assert.equal(plugin.decorateTasksResultDates(row.li, TODAY), 1);
+    assert.equal(markLabel(markRootsIn(row.host)[0]), expected);
+  }
+});
+
+test("RT3 short-mode recurring spans stay native to JS and use the CSS loop", () => {
+  const plugin = pluginWithToday();
+  const fx = fakeTasksDom();
+  const row = recurringTasksRow(fx, " 🔁", "");
+  assert.equal(plugin.decorateTasksResultDates(row.li, TODAY), 0);
+  assert.equal(row.host.getAttribute("data-bob-date-mark"), null);
+  assert.equal(markRootsIn(row.host).length, 0);
+  const css = fs.readFileSync(
+    path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),
+    "utf8",
+  );
+  assert.ok(css.includes(".tasks-layout-short-mode .plugin-tasks-list-item .task-recurring::before"));
+  assert.ok(css.includes("mask-image: var(--bob-date-glyph-repeat)"));
+});
+
+test("RT4 open checklist members keep recurrence pills without `when done`", () => {
+  const plugin = pluginWithToday();
+  const fx = fakeTasksDom();
+  const row = recurringTasksRow(fx, " 🔁 every day", "", ["#gtd", "#pre"]);
+  assert.equal(plugin.decorateTasksResultDates(row.li, TODAY), 0);
+  assert.equal(row.host.getAttribute("data-bob-date-mark"), null);
+  assert.equal(markRootsIn(row.host).length, 0);
+
+  const closedFx = fakeTasksDom();
+  const closed = recurringTasksRow(
+    closedFx,
+    " 🔁 every day",
+    "x",
+    ["#gtd", "#pre"],
+  );
+  assert.equal(plugin.decorateTasksResultDates(closed.li, TODAY), 1);
+  assert.equal(markLabel(markRootsIn(closed.host)[0]), "daily");
+});
+
+test("RT5 invalid recurrence stays native and incomplete rows are retried", () => {
+  const plugin = pluginWithToday();
+  const fx = fakeTasksDom();
+  const invalid = recurringTasksRow(fx, " 🔁 every day; x", "");
+  assert.equal(plugin.decorateTasksResultDates(invalid.li, TODAY), 0);
+
+  const frames = manualScheduler(plugin);
+  const pendingFx = fakeTasksDom();
+  const pending = recurringTasksRow(pendingFx, " 🔁 every day when done", null);
+  plugin.scheduleTasksResultDateMarks(pending.body);
+  frames.shift()();
+  assert.equal(markRootsIn(pending.host).length, 0);
+  assert.ok(frames.length > 0);
+  pending.li.setAttribute("data-task", "");
+  runFrames(frames);
+  assert.equal(markLabel(markRootsIn(pending.host)[0]), "daily");
+});
+
 test("styles.css covers the Tasks hosts: hide, toggle-off, and short-mode glyphs", () => {
   const cssPath = path.join(
     __dirname,
@@ -813,6 +910,7 @@ test("styles.css covers the Tasks hosts: hide, toggle-off, and short-mode glyphs
     ["task-scheduled", "--bob-date-glyph-scheduled"],
     ["task-done", "--bob-date-glyph-completion"],
     ["task-cancelled", "--bob-date-glyph-cancelled"],
+    ["task-recurring", "--bob-date-glyph-repeat"],
   ];
   for (const [cls, glyph] of pairs) {
     const selector = `.tasks-layout-short-mode .plugin-tasks-list-item .${cls}::before`;
@@ -835,4 +933,8 @@ test("styles.css covers the Tasks hosts: hide, toggle-off, and short-mode glyphs
       `short-mode resting derives from data-task="${status}"`,
     );
   }
+  assert.ok(
+    css.includes('body:not(.bob-date-marks) .bob-date-mark[data-host="tasks"]'),
+    "RT6 toggle-off cover hides stale recurrence marks from Tasks",
+  );
 });

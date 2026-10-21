@@ -1414,7 +1414,7 @@ body:not(.bob-date-marks) .bob-date-mark[data-host="tasks"] {
 /* Short mode: glyph boxes with the shared masks at the default ink,
    resting from the row's `data-task`. */
 
-body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item :is(.task-created, .task-scheduled, .task-done, .task-cancelled) {
+body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item :is(.task-created, .task-scheduled, .task-done, .task-cancelled, .task-recurring) {
   position: relative;
   display: inline-block;
   width: 1.08em;
@@ -1424,7 +1424,7 @@ body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item :is(.task-c
   opacity: 0.85;
 }
 
-body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item :is(.task-created, .task-scheduled, .task-done, .task-cancelled) > span {
+body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item :is(.task-created, .task-scheduled, .task-done, .task-cancelled, .task-recurring) > span {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -1436,7 +1436,7 @@ body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item :is(.task-c
   border: 0;
 }
 
-body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item :is(.task-created, .task-scheduled, .task-done, .task-cancelled)::before {
+body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item :is(.task-created, .task-scheduled, .task-done, .task-cancelled, .task-recurring)::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -1467,9 +1467,14 @@ body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item .task-cance
   mask-image: var(--bob-date-glyph-cancelled);
 }
 
-body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task="x"] :is(.task-created, .task-scheduled, .task-done, .task-cancelled)::before,
-body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task="X"] :is(.task-created, .task-scheduled, .task-done, .task-cancelled)::before,
-body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task="-"] :is(.task-created, .task-scheduled, .task-done, .task-cancelled)::before {
+body.bob-date-marks .tasks-layout-short-mode .plugin-tasks-list-item .task-recurring::before {
+  -webkit-mask-image: var(--bob-date-glyph-repeat);
+  mask-image: var(--bob-date-glyph-repeat);
+}
+
+body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task="x"] :is(.task-created, .task-scheduled, .task-done, .task-cancelled, .task-recurring)::before,
+body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task="X"] :is(.task-created, .task-scheduled, .task-done, .task-cancelled, .task-recurring)::before,
+body.bob-date-marks .tasks-layout-short-mode li.plugin-tasks-list-item[data-task="-"] :is(.task-created, .task-scheduled, .task-done, .task-cancelled, .task-recurring)::before {
   background-color: var(--text-faint, var(--text-muted));
 }
 

@@ -48,6 +48,10 @@ class BobLedgerToolsTodayMarksReadingClicksMixin {
         if (partner && this.todayMarkIsRefAnchor(partner)) {
           return partner;
         }
+        const checklistRun = checklistTaskRunAnchors(tag);
+        if (checklistRun) {
+          return checklistRun.anchors[1];
+        }
         return tag;
       }
       return this.todayMarkCheckbox(li);

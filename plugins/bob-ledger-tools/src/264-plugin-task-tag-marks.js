@@ -77,7 +77,8 @@ class BobLedgerToolsTaskTagMarksMixin {
           editorInfoField &&
           editorLivePreviewField &&
           TaskTagMarkWidget &&
-          RefTaskMarkWidget,
+          RefTaskMarkWidget &&
+          ChecklistTaskMarkWidget,
       );
     } catch (error) {
       return false;
@@ -358,9 +359,11 @@ class BobLedgerToolsTaskTagMarksMixin {
                     // so one open-book decoration replaces both tags
                     // and one cursor touch reveals both.
                     const widget =
-                      source && source.kind === "ref"
-                        ? new RefTaskMarkWidget()
-                        : new TaskTagMarkWidget();
+                      source && (source.kind === "pre" || source.kind === "post")
+                        ? new ChecklistTaskMarkWidget(source.kind)
+                        : source && source.kind === "ref"
+                          ? new RefTaskMarkWidget()
+                          : new TaskTagMarkWidget();
                     builder.add(
                       absFrom,
                       absTo,
@@ -456,10 +459,9 @@ class BobLedgerToolsTaskTagMarksMixin {
     }
   }
 
-  // Annotate one eligible `#task` anchor: a `#task #ref` pair
-  // becomes the open-book mark (and hides the `#ref` partner), any
-  // other eligible anchor becomes the hash. Returns true on success,
-  // false otherwise. Never throws.
+  // Annotate one eligible `#task` anchor: ref pairs take precedence,
+  // then canonical checklist runs, then the ordinary hash. Returns
+  // true on success, false otherwise. Never throws.
   annotateTaskTagAnchor(anchor) {
     try {
       if (!anchor || typeof anchor !== "object") {
@@ -473,6 +475,10 @@ class BobLedgerToolsTaskTagMarksMixin {
       }
       if (partner) {
         return annotateRefTaskMark(anchor, partner);
+      }
+      const checklistRun = checklistTaskRunAnchors(anchor);
+      if (checklistRun) {
+        return annotateChecklistTaskMark(anchor, checklistRun);
       }
       return annotateTaskTagMark(anchor);
     } catch (error) {
@@ -554,6 +560,11 @@ class BobLedgerToolsTaskTagMarksMixin {
           hidden = Array.prototype.slice.call(
             root.querySelectorAll("a.tag." + REF_TASK_HIDDEN_CLASS),
           );
+          hidden = hidden.concat(
+            Array.prototype.slice.call(
+              root.querySelectorAll("a.tag." + CHECKLIST_TASK_HIDDEN_CLASS),
+            ),
+          );
         } else if (
           typeof document.querySelectorAll === "function" &&
           root === document.body
@@ -563,6 +574,11 @@ class BobLedgerToolsTaskTagMarksMixin {
           );
           hidden = Array.prototype.slice.call(
             document.querySelectorAll("a.tag." + REF_TASK_HIDDEN_CLASS),
+          );
+          hidden = hidden.concat(
+            Array.prototype.slice.call(
+              document.querySelectorAll("a.tag." + CHECKLIST_TASK_HIDDEN_CLASS),
+            ),
           );
         }
       } catch (error) {
@@ -594,7 +610,10 @@ class BobLedgerToolsTaskTagMarksMixin {
                     const parts = classText.split(/\s+/);
                     if (parts.indexOf("bob-task-tag-mark") !== -1) {
                       candidates.push(child);
-                    } else if (parts.indexOf(REF_TASK_HIDDEN_CLASS) !== -1) {
+                    } else if (
+                      parts.indexOf(REF_TASK_HIDDEN_CLASS) !== -1 ||
+                      parts.indexOf(CHECKLIST_TASK_HIDDEN_CLASS) !== -1
+                    ) {
                       hidden.push(child);
                     }
                   }
@@ -621,12 +640,13 @@ class BobLedgerToolsTaskTagMarksMixin {
           continue;
         }
       }
-      // A book-annotated `#task` anchor is restored by the loop above
-      // (it carries `bob-task-tag-mark` too); its hidden `#ref`
-      // partner needs its own reveal.
+      // Ref and checklist partner anchors stay in the DOM and need
+      // their hidden class removed separately.
       for (const partner of hidden) {
         try {
-          if (stripRefTaskHidden(partner)) {
+          const strippedRef = stripRefTaskHidden(partner);
+          const strippedChecklist = stripChecklistTaskHidden(partner);
+          if (strippedRef || strippedChecklist) {
             count += 1;
           }
         } catch (error) {

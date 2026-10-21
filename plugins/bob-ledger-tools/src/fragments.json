@@ -17,6 +17,7 @@
   "136-date-marks.js",
   "137-progress-marks.js",
   "138-task-tag-marks.js",
+  "138-checklist-task-marks.js",
   "139-unblocked-glyph.js",
   "140-dependency-model.js",
   "141-blocks-model.js",

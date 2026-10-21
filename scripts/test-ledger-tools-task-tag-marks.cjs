@@ -183,9 +183,20 @@ const {
   REF_TASK_MARK_LABEL,
   REF_TASK_MARK_CLASS,
   REF_TASK_HIDDEN_CLASS,
+  CHECKLIST_TASK_MARK_CLASSES,
+  CHECKLIST_TASK_MARK_LABELS,
+  CHECKLIST_TASK_MARK_TOOLTIPS,
+  CHECKLIST_TASK_HIDDEN_CLASS,
   refTaskPairEnd,
   taskTagMarkTokenRanges,
   taskTagMarkRanges,
+  checklistTagTokens,
+  checklistKindForText,
+  checklistTagConflict,
+  checklistTaskRunEnd,
+  checklistTaskRunAnchors,
+  annotateChecklistTaskMark,
+  stripChecklistTaskHidden,
   taskTagMarkElementEligible,
   isRefTaskTagAnchor,
   refTaskPairAnchor,
@@ -195,6 +206,7 @@ const {
   stripRefTaskHidden,
   buildTaskTagMarkElement,
   ensureTaskTagMarksRefresh,
+  todayMarkInsertOffset,
   priorityMarkSource,
   dateMarkSources,
 } = helpers;
@@ -1356,4 +1368,245 @@ test("styles.css contract for reference reading tasks: glyph, variant, resting, 
   assert.ok(tasksRefBlock.indexOf("color: transparent") !== -1);
   const tasksRefBefore = css.slice(tasksRefAt, tasksRefAt + 2500);
   assert.ok(tasksRefBefore.indexOf("mask-image: var(--bob-ref-task-glyph)") !== -1);
+});
+
+function checklistRangeList(line) {
+  return taskTagMarkRanges(line).map((range) => [range.from, range.to, range.kind]);
+}
+
+test("CK vectors: canonical PRE/POST checklist runs share membership semantics", () => {
+  assert.deepEqual(checklistTagTokens("#GTD #Pre, #pressed_juice #gtd/pre"), [
+    "#gtd",
+    "#pre",
+    "#pressed_juice",
+    "#gtd/pre",
+  ]);
+  assert.equal(checklistKindForText("#gtd #pre"), "pre");
+  assert.equal(checklistKindForText("#GTD #Post"), "post");
+  assert.equal(checklistKindForText("#gtd #pre #post"), "pre");
+  assert.equal(checklistKindForText("#gtd/pre"), null);
+  assert.equal(checklistKindForText("#pre, #gtd"), "pre");
+  assert.equal(checklistTagConflict("- [ ] #task #gtd #pre #post"), true);
+  assert.equal(checklistTagConflict("- [ ] #task #gtd #pre #post"), true);
+  assert.equal(checklistTagConflict("- [ ] #task #gtd #pre"), false);
+
+  const cases = [
+    ["- [ ] #task #gtd #pre Brush teeth", [[6, 21, "pre"]]],
+    ["- [?] #task #gtd #post Morning review", [[6, 22, "post"]]],
+    ["- [x] #task #gtd #pre Check weather [completion:: 2026-10-21]", [[6, 21, "pre"]]],
+    ["- [ ] #task #pre #gtd Swapped", [[6, 21, "pre"]]],
+    ["- [ ] #task #GTD #Pre Loud", [[6, 21, "pre"]]],
+    ["- [ ] #task  #gtd   #post Extra spaces", [[6, 25, "post"]]],
+    ["- [ ] #task #gtd #pre #post Conflict", [[6, 11, "task"]]],
+    ["- [ ] #task #gtd #pre Brush #post", [[6, 11, "task"]]],
+    ["- [ ] #task #gtd Topic only", [[6, 11, "task"]]],
+    ["- [ ] #task #pre Missing gtd", [[6, 11, "task"]]],
+    ["- [ ] #task #gtd #prep Typo", [[6, 11, "task"]]],
+    ["- [ ] #task #gtd/pre Nested", [[6, 11, "task"]]],
+    ["- [ ] #task Brush teeth #gtd #pre", [[6, 11, "task"]]],
+    ["- [ ] #task #ref #gtd #pre Odd", [[6, 16, "ref"]]],
+    ["- #task #gtd #pre Not a task", []],
+  ];
+  for (const [line, expected] of cases) {
+    assert.deepEqual(checklistRangeList(line), expected, line);
+  }
+  assert.equal(
+    todayMarkInsertOffset("- [ ] #task #gtd #pre Brush teeth ^teeth"),
+    22,
+  );
+  assert.equal(
+    pluginWithTaskTag().buildTaskTagMarkDecorations(
+      makeView({ lines: ["- [ ] Note `#task #gtd #pre`"], treeTag: "inline" }),
+    ).adds.length,
+    0,
+  );
+  assert.equal(checklistTaskRunEnd("- [ ] #task #pre #gtd Brush", 11).kind, "pre");
+  assert.equal(checklistTaskRunEnd("- [ ] #task #gtd #post Brush", 11).kind, "post");
+  assert.equal(checklistTaskRunEnd("- [ ] #task #gtd #pre #post Brush", 11), null);
+});
+
+test("CK live preview and widget vectors: one stable glyph replaces the full run", () => {
+  const plugin = pluginWithTaskTag();
+  const lines = [
+    "- [ ] #task #gtd #pre Brush teeth",
+    "- [?] #task #gtd #post Morning review",
+  ];
+  const built = plugin.buildTaskTagMarkDecorations(makeView({ lines }));
+  assert.deepEqual(
+    built.adds.map((add) => [add.from, add.to, add.value.widget.key]),
+    [
+      [6, 21, "pre-task-mark"],
+      [40, 56, "post-task-mark"],
+    ],
+  );
+  const rebuilt = plugin.buildTaskTagMarkDecorations(makeView({ lines }));
+  assert.equal(
+    built.adds[0].value.widget.eq(rebuilt.adds[0].value.widget),
+    true,
+  );
+  assert.equal(
+    built.adds[1].value.widget.eq(rebuilt.adds[1].value.widget),
+    true,
+  );
+  assert.equal(
+    built.adds[0].value.widget.eq(built.adds[1].value.widget),
+    false,
+  );
+  for (const selection of [
+    { from: 6, to: 6 },
+    { from: 11, to: 11 },
+    { from: 16, to: 16 },
+    { from: 20, to: 20 },
+  ]) {
+    assert.equal(
+      plugin.buildTaskTagMarkDecorations(
+        makeView({ lines: [lines[0]], selection: [selection] }),
+      ).adds.length,
+      0,
+      JSON.stringify(selection),
+    );
+  }
+  const doc = fakeElementDoc();
+  for (const kind of ["pre", "post"]) {
+    const span = buildTaskTagMarkElement(doc, kind);
+    assert.equal(
+      span.attrs.class,
+      "bob-task-tag-mark " + CHECKLIST_TASK_MARK_CLASSES[kind],
+    );
+    assert.equal(span.attrs["aria-label"], CHECKLIST_TASK_MARK_LABELS[kind]);
+    assert.equal(span.attrs.title, CHECKLIST_TASK_MARK_TOOLTIPS[kind]);
+    assert.equal(span.attrs["data-tooltip-position"], "top");
+    assert.equal(span.attrs["aria-label"].includes("::"), false);
+  }
+});
+
+function makeChecklistTree({ tags = ["#task", "#gtd", "#pre"], gaps = [] } = {}) {
+  const fx = fakeRenderTree();
+  const li = fx.makeEl("li");
+  li.className = "task-list-item";
+  fx.root.appendChild(li);
+  const anchors = [];
+  for (let index = 0; index < tags.length; index += 1) {
+    if (index > 0) {
+      li.appendChild(fx.doc.createTextNode(gaps[index - 1] || " "));
+    }
+    const anchor = makeAnchor(fx, { text: tags[index], href: tags[index] });
+    li.appendChild(anchor);
+    anchors.push(anchor);
+  }
+  return { fx, li, anchors };
+}
+
+test("CR vectors: rendered checklist anchors annotate in place, conflict stays native", () => {
+  const plugin = pluginWithTaskTag();
+  const pre = makeChecklistTree();
+  assert.deepEqual(checklistTaskRunAnchors(pre.anchors[0]), {
+    kind: "pre",
+    anchors: pre.anchors.slice(1),
+  });
+  plugin.renderTaskTagMarksIn(pre.fx.root, { sourcePath: "gtd_daily.md" });
+  assert.ok(pre.anchors[0].className.includes(CHECKLIST_TASK_MARK_CLASSES.pre));
+  assert.equal(pre.anchors[0].getAttribute("aria-label"), CHECKLIST_TASK_MARK_LABELS.pre);
+  assert.equal(pre.anchors[0].getAttribute("title"), CHECKLIST_TASK_MARK_TOOLTIPS.pre);
+  assert.ok(pre.anchors[1].className.includes(CHECKLIST_TASK_HIDDEN_CLASS));
+  assert.ok(pre.anchors[2].className.includes(CHECKLIST_TASK_HIDDEN_CLASS));
+  plugin.renderTaskTagMarksIn(pre.fx.root, { sourcePath: "gtd_daily.md" });
+  assert.equal(annotatedAnchors(pre.fx).length, 1);
+
+  const post = makeChecklistTree({ tags: ["#task", "#post", "#gtd"] });
+  plugin.renderTaskTagMarksIn(post.fx.root, { sourcePath: "gtd_daily.md" });
+  assert.ok(post.anchors[0].className.includes(CHECKLIST_TASK_MARK_CLASSES.post));
+
+  const conflict = makeChecklistTree({
+    tags: ["#task", "#gtd", "#pre", "#post"],
+  });
+  assert.equal(checklistTaskRunAnchors(conflict.anchors[0]), null);
+  plugin.renderTaskTagMarksIn(conflict.fx.root, { sourcePath: "gtd_daily.md" });
+  assert.ok(conflict.anchors[0].className.includes("bob-task-tag-mark"));
+  assert.equal(conflict.anchors[0].className.includes("bob-pre-task-mark"), false);
+  assert.equal(conflict.anchors[0].className.includes("bob-post-task-mark"), false);
+  assert.equal(conflict.anchors.slice(1).some((anchor) =>
+    anchor.className.includes(CHECKLIST_TASK_HIDDEN_CLASS)), false);
+
+  const brokenGap = makeChecklistTree({
+    tags: ["#task", "#gtd", "#pre"],
+    gaps: [" ", " and "],
+  });
+  assert.equal(checklistTaskRunAnchors(brokenGap.anchors[0]), null);
+  plugin.renderTaskTagMarksIn(brokenGap.fx.root, { sourcePath: "gtd_daily.md" });
+  assert.equal(brokenGap.anchors[0].className.includes("bob-pre-task-mark"), false);
+  assert.equal(brokenGap.anchors[1].className.includes(CHECKLIST_TASK_HIDDEN_CLASS), false);
+});
+
+test("CR3 toggle restores all checklist pills and re-annotates them", () => {
+  const savedDocument = global.document;
+  const { fx, anchors } = makeChecklistTree();
+  global.document = {
+    body: fx.root,
+    createElement: fx.doc.createElement.bind(fx.doc),
+  };
+  try {
+    const plugin = pluginWithTaskTag();
+    plugin.renderTaskTagMarksIn(fx.root, { sourcePath: "gtd_daily.md" });
+    assert.equal(anchors[0].className.includes(CHECKLIST_TASK_MARK_CLASSES.pre), true);
+    assert.equal(anchors[2].className.includes(CHECKLIST_TASK_HIDDEN_CLASS), true);
+    assert.equal(plugin.toggleTaskTagMarks(), false);
+    assert.equal(anchors[0].className.includes("bob-task-tag-mark"), false);
+    assert.equal(anchors[0].className.includes(CHECKLIST_TASK_MARK_CLASSES.pre), false);
+    assert.equal(anchors[0].getAttribute("aria-label"), null);
+    assert.equal(anchors[0].getAttribute("title"), null);
+    assert.equal(anchors[1].className.includes(CHECKLIST_TASK_HIDDEN_CLASS), false);
+    assert.equal(anchors[2].className.includes(CHECKLIST_TASK_HIDDEN_CLASS), false);
+    assert.equal(plugin.toggleTaskTagMarks(), true);
+    assert.equal(anchors[0].className.includes(CHECKLIST_TASK_MARK_CLASSES.pre), true);
+    assert.equal(anchors[2].className.includes(CHECKLIST_TASK_HIDDEN_CLASS), true);
+  } finally {
+    if (savedDocument === undefined) {
+      delete global.document;
+    } else {
+      global.document = savedDocument;
+    }
+  }
+});
+
+test("CR4 Today reading-view anchor follows the second checklist tag", () => {
+  const plugin = pluginWithTaskTag();
+  const { li, anchors } = makeChecklistTree();
+  plugin.renderTaskTagMarksIn(li, { sourcePath: "gtd_daily.md" });
+  assert.equal(plugin.todayMarkInsertAnchor(li), anchors[2]);
+});
+
+test("checklist task mark CSS contract covers glyphs, conflict gates, Tasks rows, and resting", () => {
+  const css = fs.readFileSync(
+    path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),
+    "utf8",
+  );
+  for (const [variable, pathText] of [
+    ["--bob-pre-task-glyph:", "M1.4 12.2h13.2"],
+    ["--bob-post-task-glyph:", "M3.6 14.2V2.3"],
+  ]) {
+    assert.equal(css.split(variable).length - 1, 1);
+    const at = css.indexOf(variable);
+    const declaration = css.slice(at, css.indexOf(";", at) + 1);
+    assert.ok(declaration.includes("viewBox='0 0 16 16'"));
+    assert.ok(declaration.includes("stroke-width='1.8'"));
+    assert.ok(declaration.includes("stroke-linecap='round'"));
+    assert.ok(declaration.includes("stroke-linejoin='round'"));
+    assert.ok(declaration.includes(pathText));
+  }
+  assert.ok(css.includes(".bob-task-tag-mark.bob-pre-task-mark::before"));
+  assert.ok(css.includes(".bob-task-tag-mark.bob-post-task-mark::before"));
+  assert.ok(css.includes("body.bob-task-tag-marks a.tag.bob-checklist-task-hidden"));
+  assert.ok(css.includes('[data-tag-name="#gtd" i]'));
+  assert.ok(css.includes('[href="#gtd" i]'));
+  assert.ok(css.includes('[data-tag-name="#pre" i]'));
+  assert.ok(css.includes('[data-tag-name="#post" i]'));
+  assert.ok(css.includes("mask-image: var(--bob-pre-task-glyph)"));
+  assert.ok(css.includes("mask-image: var(--bob-post-task-glyph)"));
+  assert.ok(css.includes(":not(:has(a.tag:is([data-tag-name=\"#pre\" i]"));
+  assert.ok(css.includes("li.plugin-tasks-list-item[data-task=\"x\"]"));
+  assert.ok(css.includes("li.plugin-tasks-list-item[data-task=\"X\"]"));
+  assert.ok(css.includes("li.plugin-tasks-list-item[data-task=\"-\"]"));
+  assert.ok(css.includes("[data-tag-name=\"#ref\" i]"));
+  assert.ok(css.includes("opacity: 0.75"));
 });

@@ -10107,8 +10107,8 @@ if (WidgetType && typeof WidgetType === "function") {
 // fragments. The mark is truthful, never guessing: only exact, whole
 // `#task` tags on task lines get a mark. A `#task` tag immediately
 // followed by one whitespace run and `#ref` (any case) is a reference
-// reading task and gets the open-book mark instead (contract:
-// bob-cli `docs/task-tag-marks.md` "Reference reading tasks").
+// reading task and gets the open-book mark instead; a canonical
+// `#task #gtd #pre|#post` run gets its checklist identity glyph.
 
 // The exact, case-sensitive tracked-task tag.
 const TASK_TAG_MARK_TEXT = "#task";
@@ -10252,17 +10252,12 @@ function refTaskPairEnd(text, taskTo) {
 // A Live Preview line's task-tag-mark ranges, in line order: the
 // boundary tokens gated by the task-line check
 // (`freshnessTaskStatus(lineText) !== null`, quote-aware, so
-// callouts and numbered lists count). Every eligible token on the
-// line gets its own mark, except an exact `#task` token immediately
-// followed by one whitespace run and `#ref` (any case): that pair
-// yields one `ref` range spanning both tokens, so Live Preview draws
-// a single open-book glyph (TT20-TT23). Code exclusion is NOT applied
-// here: the decoration builder drops tokens inside code via
-// `freshnessMarkPosInCode`, so ``- [ ] Note `the #task tag` here``
-// still reports `[16,21)` from the core (TT10). Plain bullets,
-// paragraphs, and headings yield no ranges. Returns a frozen array
-// of frozen `{ from, to, kind }` in UTF-16 line offsets, where `kind`
-// is `"task"` or `"ref"`. Never throws.
+// callouts and numbered lists count). Ref pairs keep precedence;
+// canonical `#gtd` plus `#pre`/`#post` partner runs become one range
+// over the three tags. Code exclusion is applied by the decoration
+// builder via `freshnessMarkPosInCode`. Returns frozen
+// `{ from, to, kind }` ranges, where kind is `task | ref | pre | post`.
+// Never throws.
 function taskTagMarkRanges(lineText) {
   try {
     if (typeof lineText !== "string" || lineText === "") {
@@ -10289,7 +10284,14 @@ function taskTagMarkRanges(lineText) {
         if (pairEnd !== -1) {
           found.push(Object.freeze({ from: token.from, to: pairEnd, kind: "ref" }));
         } else {
-          found.push(Object.freeze({ from: token.from, to: token.to, kind: "task" }));
+          const checklistRun = checklistTaskRunEnd(lineText, token.to);
+          found.push(
+            Object.freeze({
+              from: token.from,
+              to: checklistRun ? checklistRun.to : token.to,
+              kind: checklistRun ? checklistRun.kind : "task",
+            }),
+          );
         }
       } catch (error) {
         // One bad token never breaks the scan.
@@ -10711,6 +10713,8 @@ function stripTaskTagMark(el) {
       if (el.classList && typeof el.classList.remove === "function") {
         el.classList.remove("bob-task-tag-mark");
         el.classList.remove(REF_TASK_MARK_CLASS);
+        el.classList.remove(CHECKLIST_TASK_MARK_CLASSES.pre);
+        el.classList.remove(CHECKLIST_TASK_MARK_CLASSES.post);
       } else if (typeof el.className === "string") {
         el.className = el.className
           .split(/\s+/)
@@ -10718,7 +10722,9 @@ function stripTaskTagMark(el) {
             (part) =>
               part !== "" &&
               part !== "bob-task-tag-mark" &&
-              part !== REF_TASK_MARK_CLASS,
+              part !== REF_TASK_MARK_CLASS &&
+              part !== CHECKLIST_TASK_MARK_CLASSES.pre &&
+              part !== CHECKLIST_TASK_MARK_CLASSES.post,
           )
           .join(" ");
       }
@@ -10760,9 +10766,8 @@ function stripTaskTagMark(el) {
 // round-trip. Produces an empty
 // `span.bob-task-tag-mark[role="img"]` with the tooltip `aria-label`
 // and `data-tooltip-position="top"` (the glyph itself is drawn by
-// the single CSS-mask definition). With `kind === "ref"` the span
-// also carries `bob-ref-task-mark` (the book), the reference
-// accessible label, and the reference tooltip as `title`.
+// the single CSS-mask definition). Ref and checklist kinds add a
+// variant class, accessible label, and tooltip as `title`.
 // `doc` provides `createElement` so tests can pass a fake document.
 // Never throws: bad input yields null.
 function buildTaskTagMarkElement(doc, kind) {
@@ -10775,7 +10780,16 @@ function buildTaskTagMarkElement(doc, kind) {
       return null;
     }
     try {
-      if (kind === "ref") {
+      if (kind === "pre" || kind === "post") {
+        span.setAttribute(
+          "class",
+          "bob-task-tag-mark " + CHECKLIST_TASK_MARK_CLASSES[kind],
+        );
+        span.setAttribute("role", "img");
+        span.setAttribute("aria-label", CHECKLIST_TASK_MARK_LABELS[kind]);
+        span.setAttribute("title", CHECKLIST_TASK_MARK_TOOLTIPS[kind]);
+        span.setAttribute("data-tooltip-position", "top");
+      } else if (kind === "ref") {
         span.setAttribute("class", "bob-task-tag-mark " + REF_TASK_MARK_CLASS);
         span.setAttribute("role", "img");
         span.setAttribute("aria-label", REF_TASK_MARK_LABEL);
@@ -10900,6 +10914,482 @@ if (WidgetType && typeof WidgetType === "function") {
             ? document.createElement("span")
             : null;
         return fallback;
+      }
+      addTaskTagMarkReveal(dom, view);
+      return dom;
+    }
+  };
+}
+// ---- src/138-checklist-task-marks.js ----
+// --- PRE/POST checklist task marks: shared membership and glyph core --------
+// Owned by `docs/task-tag-marks.md` in bob-cli. These helpers recognize
+// exact checklist tags and the canonical identity run used by the task
+// tag mark and recurrence display contracts. They are synchronous,
+// defensive, and never mutate source text.
+
+const CHECKLIST_TAG_TOKEN_RE = /(^|\s)(#[\p{L}\p{N}_/-]+)/gu;
+const CHECKLIST_TASK_MARK_CLASSES = Object.freeze({
+  pre: "bob-pre-task-mark",
+  post: "bob-post-task-mark",
+});
+const CHECKLIST_TASK_MARK_LABELS = Object.freeze({
+  pre: "PRE opening checklist task",
+  post: "POST closing checklist task",
+});
+const CHECKLIST_TASK_MARK_TOOLTIPS = Object.freeze({
+  pre: "#task #gtd #pre \u00b7 PRE opening checklist\nOpens the ]s walk \u00b7 Ctrl+Enter when done",
+  post: "#task #gtd #post \u00b7 POST closing checklist\nCloses the ]s walk (]S) \u00b7 Ctrl+Enter when done",
+});
+const CHECKLIST_TASK_HIDDEN_CLASS = "bob-checklist-task-hidden";
+
+// Whole-tag tokens in `text`, lowercased. A token begins at the text
+// start or after whitespace and consumes letters, numbers, `_`, `/`,
+// and `-`, matching the task-tag mark grammar. Never throws.
+function checklistTagTokens(text) {
+  try {
+    if (typeof text !== "string" || text === "") {
+      return Object.freeze([]);
+    }
+    const tokens = [];
+    const matcher = new RegExp(CHECKLIST_TAG_TOKEN_RE.source, "gu");
+    let match = null;
+    while ((match = matcher.exec(text)) !== null) {
+      try {
+        if (typeof match[2] === "string") {
+          tokens.push(match[2].toLowerCase());
+        }
+      } catch (error) {
+        // Skip one malformed token and keep scanning.
+      }
+      if (match[0] === "") {
+        matcher.lastIndex += 1;
+      }
+    }
+    return Object.freeze(tokens);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+// The checklist membership evaluator is the authority: PRE wins a
+// conflict and nested tags such as `#gtd/pre` are not membership.
+function checklistKindForText(text) {
+  try {
+    return freshnessChecklistForTags(checklistTagTokens(text));
+  } catch (error) {
+    return null;
+  }
+}
+
+// True when the text contains both exact PRE and POST tags. Never
+// throws.
+function checklistTagConflict(text) {
+  try {
+    const tokens = new Set(checklistTagTokens(text));
+    return tokens.has("#pre") && tokens.has("#post");
+  } catch (error) {
+    return false;
+  }
+}
+
+function checklistReadTagToken(text, from) {
+  try {
+    if (typeof text !== "string" || typeof from !== "number" || text[from] !== "#") {
+      return null;
+    }
+    let to = from + 1;
+    while (to < text.length) {
+      try {
+        if (!TASK_TAG_MARK_TAG_CHAR_RE.test(text[to])) {
+          break;
+        }
+      } catch (error) {
+        return null;
+      }
+      to += 1;
+    }
+    if (to === from + 1) {
+      return null;
+    }
+    return Object.freeze({ text: text.slice(from, to).toLowerCase(), to });
+  } catch (error) {
+    return null;
+  }
+}
+
+function checklistSkipWhitespace(text, from) {
+  try {
+    let to = from;
+    while (to < text.length && /\s/.test(text[to])) {
+      to += 1;
+    }
+    return to > from ? to : -1;
+  } catch (error) {
+    return -1;
+  }
+}
+
+// Match the two checklist partner tags immediately after `#task`.
+// There must be one whitespace run between each token, either tag
+// order is accepted, and any PRE/POST conflict on the line rejects it.
+// Returns the exclusive end and kind, or null. Never throws.
+function checklistTaskRunEnd(lineText, taskTo) {
+  try {
+    if (
+      typeof lineText !== "string" ||
+      typeof taskTo !== "number" ||
+      taskTo < TASK_TAG_MARK_TEXT.length ||
+      lineText.slice(taskTo - TASK_TAG_MARK_TEXT.length, taskTo) !== TASK_TAG_MARK_TEXT ||
+      checklistTagConflict(lineText)
+    ) {
+      return null;
+    }
+    const firstStart = checklistSkipWhitespace(lineText, taskTo);
+    if (firstStart < 0) {
+      return null;
+    }
+    const first = checklistReadTagToken(lineText, firstStart);
+    if (!first) {
+      return null;
+    }
+    const secondStart = checklistSkipWhitespace(lineText, first.to);
+    if (secondStart < 0) {
+      return null;
+    }
+    const second = checklistReadTagToken(lineText, secondStart);
+    if (!second) {
+      return null;
+    }
+    const pair = new Set([first.text, second.text]);
+    if (pair.size !== 2 || !pair.has("#gtd")) {
+      return null;
+    }
+    const kind = pair.has("#pre") ? "pre" : pair.has("#post") ? "post" : null;
+    return kind ? Object.freeze({ to: second.to, kind }) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function checklistAnchorIsTag(anchor, expected) {
+  try {
+    if (!anchor || typeof anchor !== "object") {
+      return false;
+    }
+    const tagName = String(anchor.tagName || anchor.nodeName || "").toUpperCase();
+    if (tagName !== "A") {
+      return false;
+    }
+    let isTag = false;
+    try {
+      isTag = Boolean(
+        anchor.classList &&
+          typeof anchor.classList.contains === "function" &&
+          anchor.classList.contains("tag"),
+      );
+    } catch (error) {
+      isTag = false;
+    }
+    if (!isTag) {
+      const classes = String(anchor.className || "").split(/\s+/);
+      isTag = classes.indexOf("tag") !== -1;
+    }
+    if (!isTag || String(anchor.textContent || "").trim().toLowerCase() !== expected) {
+      return false;
+    }
+    if (typeof anchor.getAttribute === "function") {
+      const href = anchor.getAttribute("href");
+      if (href !== null && href !== undefined && href !== "") {
+        return String(href).toLowerCase() === expected;
+      }
+    } else if (anchor.href !== undefined && anchor.href !== null && anchor.href !== "") {
+      return String(anchor.href).toLowerCase() === expected;
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function checklistNextAnchorSibling(anchor) {
+  try {
+    const parent = anchor && anchor.parentNode;
+    const children = parent && parent.childNodes;
+    if (!children) {
+      return null;
+    }
+    let index = -1;
+    for (let at = 0; at < children.length; at += 1) {
+      if (children[at] === anchor) {
+        index = at;
+        break;
+      }
+    }
+    if (index < 0) {
+      return null;
+    }
+    for (let at = index + 1; at < children.length && at < index + 8; at += 1) {
+      const sibling = children[at];
+      if (!sibling || typeof sibling !== "object") {
+        return null;
+      }
+      if (sibling.nodeType === 3) {
+        const value =
+          sibling.nodeValue !== undefined && sibling.nodeValue !== null
+            ? String(sibling.nodeValue)
+            : String(sibling.textContent || "");
+        if (/^\s*$/.test(value)) {
+          continue;
+        }
+        return null;
+      }
+      return sibling.nodeType === 1 ? sibling : null;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function checklistNearestTaskItem(anchor) {
+  try {
+    let current = anchor && anchor.parentNode;
+    let guard = 0;
+    while (current && guard < 100) {
+      guard += 1;
+      if (String(current.tagName || current.nodeName || "").toUpperCase() === "LI") {
+        let hasClass = false;
+        try {
+          hasClass = Boolean(
+            current.classList &&
+              typeof current.classList.contains === "function" &&
+              current.classList.contains("task-list-item"),
+          );
+        } catch (error) {
+          hasClass = false;
+        }
+        if (!hasClass) {
+          hasClass = String(current.className || "").split(/\s+/).indexOf("task-list-item") !== -1;
+        }
+        return hasClass ? current : null;
+      }
+      current = current.parentNode || null;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function checklistLiHasConflict(li) {
+  try {
+    if (!li) {
+      return false;
+    }
+    let hasPre = false;
+    let hasPost = false;
+    const stack = [];
+    for (const child of li.childNodes || []) {
+      stack.push(child);
+    }
+    let guard = 0;
+    while (stack.length > 0 && guard < 10000) {
+      guard += 1;
+      const node = stack.pop();
+      if (!node || typeof node !== "object") {
+        continue;
+      }
+      if (node.nodeType === 1) {
+        const tagName = String(node.tagName || node.nodeName || "").toUpperCase();
+        if (tagName === "UL" || tagName === "OL" || tagName === "CODE" || tagName === "PRE") {
+          continue;
+        }
+        let isTag = false;
+        try {
+          isTag = Boolean(
+            node.classList &&
+              typeof node.classList.contains === "function" &&
+              node.classList.contains("tag"),
+          );
+        } catch (error) {
+          isTag = false;
+        }
+        if (!isTag) {
+          isTag = String(node.className || "").split(/\s+/).indexOf("tag") !== -1;
+        }
+        if (tagName === "A" && isTag) {
+          const text = String(node.textContent || "").trim().toLowerCase();
+          if (text === "#pre") {
+            hasPre = true;
+          } else if (text === "#post") {
+            hasPost = true;
+          }
+          if (hasPre && hasPost) {
+            return true;
+          }
+        }
+      }
+      for (const child of node.childNodes || []) {
+        stack.push(child);
+      }
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Reading-view twin of `checklistTaskRunEnd`: the `#task` anchor is
+// followed by the partner anchors in either order. Whitespace-only
+// text nodes may separate them; any other intervening node rejects the
+// run. Conflict detection reads the nearest task item's own tag text,
+// skipping nested lists and code. Returns the partners as well as the
+// kind so callers can hide them in place. Never throws.
+function checklistTaskRunAnchors(taskAnchor) {
+  try {
+    if (!checklistAnchorIsTag(taskAnchor, TASK_TAG_MARK_TEXT)) {
+      return null;
+    }
+    const first = checklistNextAnchorSibling(taskAnchor);
+    const second = first ? checklistNextAnchorSibling(first) : null;
+    if (!first || !second) {
+      return null;
+    }
+    const firstText = String(first.textContent || "").trim().toLowerCase();
+    const secondText = String(second.textContent || "").trim().toLowerCase();
+    const pair = new Set([firstText, secondText]);
+    if (!checklistAnchorIsTag(first, firstText) || !checklistAnchorIsTag(second, secondText)) {
+      return null;
+    }
+    if (pair.size !== 2 || !pair.has("#gtd")) {
+      return null;
+    }
+    const kind = pair.has("#pre") ? "pre" : pair.has("#post") ? "post" : null;
+    if (!kind || checklistLiHasConflict(checklistNearestTaskItem(taskAnchor))) {
+      return null;
+    }
+    return Object.freeze({ kind, anchors: Object.freeze([first, second]) });
+  } catch (error) {
+    return null;
+  }
+}
+
+function checklistAddClass(el, className) {
+  try {
+    if (!el || typeof el !== "object") {
+      return false;
+    }
+    if (el.classList && typeof el.classList.add === "function") {
+      el.classList.add(className);
+      return true;
+    }
+    if (typeof el.className === "string") {
+      const parts = el.className.split(/\s+/).filter((part) => part !== "");
+      if (parts.indexOf(className) === -1) {
+        parts.push(className);
+      }
+      el.className = parts.join(" ");
+      return true;
+    }
+    if (typeof el.setAttribute === "function") {
+      const parts = String(el.getAttribute("class") || "").split(/\s+/).filter(Boolean);
+      if (parts.indexOf(className) === -1) {
+        parts.push(className);
+      }
+      el.setAttribute("class", parts.join(" "));
+      return true;
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Annotate the task hash as the PRE sunrise or POST flag and hide both
+// partner anchors in place, retaining their text for copy, Dataview,
+// and toggle restore. Never creates or removes nodes.
+function annotateChecklistTaskMark(taskAnchor, run) {
+  try {
+    const kind = run && run.kind;
+    if (!CHECKLIST_TASK_MARK_CLASSES[kind] || !annotateTaskTagMark(taskAnchor)) {
+      return false;
+    }
+    if (!checklistAddClass(taskAnchor, CHECKLIST_TASK_MARK_CLASSES[kind])) {
+      return false;
+    }
+    const label = CHECKLIST_TASK_MARK_LABELS[kind];
+    const tooltip = CHECKLIST_TASK_MARK_TOOLTIPS[kind];
+    try {
+      if (typeof taskAnchor.setAttribute === "function") {
+        taskAnchor.setAttribute("aria-label", label);
+        taskAnchor.setAttribute("title", tooltip);
+      } else {
+        taskAnchor["aria-label"] = label;
+        taskAnchor.title = tooltip;
+      }
+    } catch (error) {
+      return false;
+    }
+    for (const partner of run.anchors || []) {
+      checklistAddClass(partner, CHECKLIST_TASK_HIDDEN_CLASS);
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function checklistRemoveClass(el, className) {
+  try {
+    if (!el || typeof el !== "object") {
+      return false;
+    }
+    if (el.classList && typeof el.classList.remove === "function") {
+      el.classList.remove(className);
+    } else if (typeof el.className === "string") {
+      el.className = el.className
+        .split(/\s+/)
+        .filter((part) => part !== "" && part !== className)
+        .join(" ");
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function stripChecklistTaskHidden(el) {
+  return checklistRemoveClass(el, CHECKLIST_TASK_HIDDEN_CLASS);
+}
+
+// Live Preview widgets use the same listener-free host as task and ref
+// marks. The constant kind key keeps decorations stable across rebuilds.
+let ChecklistTaskMarkWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  ChecklistTaskMarkWidget = class extends WidgetType {
+    constructor(kind) {
+      super();
+      this.kind = kind === "post" ? "post" : "pre";
+      this.key = this.kind + "-task-mark";
+    }
+
+    eq(other) {
+      return (
+        Boolean(other) &&
+        other instanceof ChecklistTaskMarkWidget &&
+        other.key === this.key
+      );
+    }
+
+    toDOM(view) {
+      const dom = buildTaskTagMarkElement(
+        typeof document !== "undefined" ? document : null,
+        this.kind,
+      );
+      if (!dom) {
+        return typeof document !== "undefined" && document
+          ? document.createElement("span")
+          : null;
       }
       addTaskTagMarkReveal(dom, view);
       return dom;
@@ -31782,7 +32272,8 @@ class BobLedgerToolsTaskTagMarksMixin {
           editorInfoField &&
           editorLivePreviewField &&
           TaskTagMarkWidget &&
-          RefTaskMarkWidget,
+          RefTaskMarkWidget &&
+          ChecklistTaskMarkWidget,
       );
     } catch (error) {
       return false;
@@ -32063,9 +32554,11 @@ class BobLedgerToolsTaskTagMarksMixin {
                     // so one open-book decoration replaces both tags
                     // and one cursor touch reveals both.
                     const widget =
-                      source && source.kind === "ref"
-                        ? new RefTaskMarkWidget()
-                        : new TaskTagMarkWidget();
+                      source && (source.kind === "pre" || source.kind === "post")
+                        ? new ChecklistTaskMarkWidget(source.kind)
+                        : source && source.kind === "ref"
+                          ? new RefTaskMarkWidget()
+                          : new TaskTagMarkWidget();
                     builder.add(
                       absFrom,
                       absTo,
@@ -32161,10 +32654,9 @@ class BobLedgerToolsTaskTagMarksMixin {
     }
   }
 
-  // Annotate one eligible `#task` anchor: a `#task #ref` pair
-  // becomes the open-book mark (and hides the `#ref` partner), any
-  // other eligible anchor becomes the hash. Returns true on success,
-  // false otherwise. Never throws.
+  // Annotate one eligible `#task` anchor: ref pairs take precedence,
+  // then canonical checklist runs, then the ordinary hash. Returns
+  // true on success, false otherwise. Never throws.
   annotateTaskTagAnchor(anchor) {
     try {
       if (!anchor || typeof anchor !== "object") {
@@ -32178,6 +32670,10 @@ class BobLedgerToolsTaskTagMarksMixin {
       }
       if (partner) {
         return annotateRefTaskMark(anchor, partner);
+      }
+      const checklistRun = checklistTaskRunAnchors(anchor);
+      if (checklistRun) {
+        return annotateChecklistTaskMark(anchor, checklistRun);
       }
       return annotateTaskTagMark(anchor);
     } catch (error) {
@@ -32259,6 +32755,11 @@ class BobLedgerToolsTaskTagMarksMixin {
           hidden = Array.prototype.slice.call(
             root.querySelectorAll("a.tag." + REF_TASK_HIDDEN_CLASS),
           );
+          hidden = hidden.concat(
+            Array.prototype.slice.call(
+              root.querySelectorAll("a.tag." + CHECKLIST_TASK_HIDDEN_CLASS),
+            ),
+          );
         } else if (
           typeof document.querySelectorAll === "function" &&
           root === document.body
@@ -32268,6 +32769,11 @@ class BobLedgerToolsTaskTagMarksMixin {
           );
           hidden = Array.prototype.slice.call(
             document.querySelectorAll("a.tag." + REF_TASK_HIDDEN_CLASS),
+          );
+          hidden = hidden.concat(
+            Array.prototype.slice.call(
+              document.querySelectorAll("a.tag." + CHECKLIST_TASK_HIDDEN_CLASS),
+            ),
           );
         }
       } catch (error) {
@@ -32299,7 +32805,10 @@ class BobLedgerToolsTaskTagMarksMixin {
                     const parts = classText.split(/\s+/);
                     if (parts.indexOf("bob-task-tag-mark") !== -1) {
                       candidates.push(child);
-                    } else if (parts.indexOf(REF_TASK_HIDDEN_CLASS) !== -1) {
+                    } else if (
+                      parts.indexOf(REF_TASK_HIDDEN_CLASS) !== -1 ||
+                      parts.indexOf(CHECKLIST_TASK_HIDDEN_CLASS) !== -1
+                    ) {
                       hidden.push(child);
                     }
                   }
@@ -32326,12 +32835,13 @@ class BobLedgerToolsTaskTagMarksMixin {
           continue;
         }
       }
-      // A book-annotated `#task` anchor is restored by the loop above
-      // (it carries `bob-task-tag-mark` too); its hidden `#ref`
-      // partner needs its own reveal.
+      // Ref and checklist partner anchors stay in the DOM and need
+      // their hidden class removed separately.
       for (const partner of hidden) {
         try {
-          if (stripRefTaskHidden(partner)) {
+          const strippedRef = stripRefTaskHidden(partner);
+          const strippedChecklist = stripChecklistTaskHidden(partner);
+          if (strippedRef || strippedChecklist) {
             count += 1;
           }
         } catch (error) {
@@ -40442,6 +40952,10 @@ class BobLedgerToolsTodayMarksReadingClicksMixin {
         if (partner && this.todayMarkIsRefAnchor(partner)) {
           return partner;
         }
+        const checklistRun = checklistTaskRunAnchors(tag);
+        if (checklistRun) {
+          return checklistRun.anchors[1];
+        }
         return tag;
       }
       return this.todayMarkCheckbox(li);
@@ -46076,6 +46590,18 @@ module.exports.helpers = {
   freshnessMarkPosInCode,
   TASK_TAG_MARK_TEXT,
   TASK_TAG_MARK_TOOLTIP,
+  CHECKLIST_TASK_MARK_CLASSES,
+  CHECKLIST_TASK_MARK_LABELS,
+  CHECKLIST_TASK_MARK_TOOLTIPS,
+  CHECKLIST_TASK_HIDDEN_CLASS,
+  ChecklistTaskMarkWidget,
+  checklistTagTokens,
+  checklistKindForText,
+  checklistTagConflict,
+  checklistTaskRunEnd,
+  checklistTaskRunAnchors,
+  annotateChecklistTaskMark,
+  stripChecklistTaskHidden,
   REF_TASK_TAG_TEXT,
   REF_TASK_MARK_TOOLTIP,
   REF_TASK_MARK_LABEL,

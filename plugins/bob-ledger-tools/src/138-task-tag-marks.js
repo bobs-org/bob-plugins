@@ -10,8 +10,8 @@
 // fragments. The mark is truthful, never guessing: only exact, whole
 // `#task` tags on task lines get a mark. A `#task` tag immediately
 // followed by one whitespace run and `#ref` (any case) is a reference
-// reading task and gets the open-book mark instead (contract:
-// bob-cli `docs/task-tag-marks.md` "Reference reading tasks").
+// reading task and gets the open-book mark instead; a canonical
+// `#task #gtd #pre|#post` run gets its checklist identity glyph.
 
 // The exact, case-sensitive tracked-task tag.
 const TASK_TAG_MARK_TEXT = "#task";
@@ -155,17 +155,12 @@ function refTaskPairEnd(text, taskTo) {
 // A Live Preview line's task-tag-mark ranges, in line order: the
 // boundary tokens gated by the task-line check
 // (`freshnessTaskStatus(lineText) !== null`, quote-aware, so
-// callouts and numbered lists count). Every eligible token on the
-// line gets its own mark, except an exact `#task` token immediately
-// followed by one whitespace run and `#ref` (any case): that pair
-// yields one `ref` range spanning both tokens, so Live Preview draws
-// a single open-book glyph (TT20-TT23). Code exclusion is NOT applied
-// here: the decoration builder drops tokens inside code via
-// `freshnessMarkPosInCode`, so ``- [ ] Note `the #task tag` here``
-// still reports `[16,21)` from the core (TT10). Plain bullets,
-// paragraphs, and headings yield no ranges. Returns a frozen array
-// of frozen `{ from, to, kind }` in UTF-16 line offsets, where `kind`
-// is `"task"` or `"ref"`. Never throws.
+// callouts and numbered lists count). Ref pairs keep precedence;
+// canonical `#gtd` plus `#pre`/`#post` partner runs become one range
+// over the three tags. Code exclusion is applied by the decoration
+// builder via `freshnessMarkPosInCode`. Returns frozen
+// `{ from, to, kind }` ranges, where kind is `task | ref | pre | post`.
+// Never throws.
 function taskTagMarkRanges(lineText) {
   try {
     if (typeof lineText !== "string" || lineText === "") {
@@ -192,7 +187,14 @@ function taskTagMarkRanges(lineText) {
         if (pairEnd !== -1) {
           found.push(Object.freeze({ from: token.from, to: pairEnd, kind: "ref" }));
         } else {
-          found.push(Object.freeze({ from: token.from, to: token.to, kind: "task" }));
+          const checklistRun = checklistTaskRunEnd(lineText, token.to);
+          found.push(
+            Object.freeze({
+              from: token.from,
+              to: checklistRun ? checklistRun.to : token.to,
+              kind: checklistRun ? checklistRun.kind : "task",
+            }),
+          );
         }
       } catch (error) {
         // One bad token never breaks the scan.
@@ -614,6 +616,8 @@ function stripTaskTagMark(el) {
       if (el.classList && typeof el.classList.remove === "function") {
         el.classList.remove("bob-task-tag-mark");
         el.classList.remove(REF_TASK_MARK_CLASS);
+        el.classList.remove(CHECKLIST_TASK_MARK_CLASSES.pre);
+        el.classList.remove(CHECKLIST_TASK_MARK_CLASSES.post);
       } else if (typeof el.className === "string") {
         el.className = el.className
           .split(/\s+/)
@@ -621,7 +625,9 @@ function stripTaskTagMark(el) {
             (part) =>
               part !== "" &&
               part !== "bob-task-tag-mark" &&
-              part !== REF_TASK_MARK_CLASS,
+              part !== REF_TASK_MARK_CLASS &&
+              part !== CHECKLIST_TASK_MARK_CLASSES.pre &&
+              part !== CHECKLIST_TASK_MARK_CLASSES.post,
           )
           .join(" ");
       }
@@ -663,9 +669,8 @@ function stripTaskTagMark(el) {
 // round-trip. Produces an empty
 // `span.bob-task-tag-mark[role="img"]` with the tooltip `aria-label`
 // and `data-tooltip-position="top"` (the glyph itself is drawn by
-// the single CSS-mask definition). With `kind === "ref"` the span
-// also carries `bob-ref-task-mark` (the book), the reference
-// accessible label, and the reference tooltip as `title`.
+// the single CSS-mask definition). Ref and checklist kinds add a
+// variant class, accessible label, and tooltip as `title`.
 // `doc` provides `createElement` so tests can pass a fake document.
 // Never throws: bad input yields null.
 function buildTaskTagMarkElement(doc, kind) {
@@ -678,7 +683,16 @@ function buildTaskTagMarkElement(doc, kind) {
       return null;
     }
     try {
-      if (kind === "ref") {
+      if (kind === "pre" || kind === "post") {
+        span.setAttribute(
+          "class",
+          "bob-task-tag-mark " + CHECKLIST_TASK_MARK_CLASSES[kind],
+        );
+        span.setAttribute("role", "img");
+        span.setAttribute("aria-label", CHECKLIST_TASK_MARK_LABELS[kind]);
+        span.setAttribute("title", CHECKLIST_TASK_MARK_TOOLTIPS[kind]);
+        span.setAttribute("data-tooltip-position", "top");
+      } else if (kind === "ref") {
         span.setAttribute("class", "bob-task-tag-mark " + REF_TASK_MARK_CLASS);
         span.setAttribute("role", "img");
         span.setAttribute("aria-label", REF_TASK_MARK_LABEL);

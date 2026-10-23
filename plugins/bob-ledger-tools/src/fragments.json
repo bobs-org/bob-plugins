@@ -13,6 +13,7 @@
   "110-freshness-queue.js",
   "120-freshness-footer.js",
   "130-freshness-marks.js",
+  "135-freshness-rotten-log.js",
   "135-priority-marks.js",
   "136-date-marks.js",
   "136-recurrence-marks.js",

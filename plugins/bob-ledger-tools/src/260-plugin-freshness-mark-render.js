@@ -157,6 +157,12 @@ class BobLedgerToolsFreshnessMarkRenderMixin {
       if (!doc || typeof doc.lineAt !== "function") {
         return builder.finish();
       }
+      let noteText = "";
+      try {
+        noteText = typeof doc.toString === "function" ? doc.toString() : "";
+      } catch (error) {
+        noteText = "";
+      }
       const docLength =
         typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
       for (const range of ranges) {
@@ -224,6 +230,7 @@ class BobLedgerToolsFreshnessMarkRenderMixin {
                             ? line.number - 1
                             : null,
                         text: line.text,
+                        noteText,
                         source,
                       });
                       if (model) {
@@ -492,6 +499,11 @@ class BobLedgerToolsFreshnessMarkRenderMixin {
           const model = this.freshnessMarkModelForText({ path, source });
           if (!model) {
             continue;
+          }
+          if (!freshnessMarkInTaskQuery(textNode, el)) {
+            const taskItem = freshnessMarkTaskListItem(textNode, el);
+            const rottenLog = freshnessMarkRottenLogSummaryFromListItem(taskItem);
+            if (rottenLog) model.tooltip += "\n" + rottenLog;
           }
           const parent = textNode.parentNode;
           if (!parent) {

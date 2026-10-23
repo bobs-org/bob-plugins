@@ -252,9 +252,15 @@ class BobLedgerToolsFreshnessMarkModelMixin {
       const text = typeof input.text === "string" ? input.text : "";
       const path = typeof input.path === "string" ? input.path : "";
       const lineNumber = input.lineNumber;
+      const buildModel = (modelArgs) =>
+        freshnessMarkModelWithRottenLog(
+          modelArgs,
+          input.noteText,
+          lineNumber,
+        );
       const snapshot = this.freshnessMarkEnsureSnapshot();
       if (!snapshot) {
-        return freshnessMarkModel({
+        return buildModel({
           source,
           today: freshnessTodayFallback(),
           interval: { days: 7, source: "default" },
@@ -274,7 +280,7 @@ class BobLedgerToolsFreshnessMarkModelMixin {
               cardCapable: freshnessDecayCardCapable(this.app),
             });
             if (resolution) {
-              const model = freshnessMarkModel({
+              const model = buildModel({
                 source,
                 today: dateText,
                 interval: this.freshnessMarkUnresolvedInterval(
@@ -317,7 +323,7 @@ class BobLedgerToolsFreshnessMarkModelMixin {
             const resolution = freshnessMarkResolution(row, dateText, config, {
               cardCapable: freshnessDecayCardCapable(this.app),
             });
-            const model = freshnessMarkModel({
+            const model = buildModel({
               source,
               today: dateText,
               interval: this.freshnessMarkUnresolvedInterval(
@@ -343,7 +349,7 @@ class BobLedgerToolsFreshnessMarkModelMixin {
       } catch (error) {
         // Fall through to unresolved.
       }
-      return freshnessMarkModel({
+      return buildModel({
         source,
         today: dateText,
         interval: this.freshnessMarkUnresolvedInterval(
@@ -361,13 +367,13 @@ class BobLedgerToolsFreshnessMarkModelMixin {
         if (!input || !input.source) {
           return null;
         }
-        return freshnessMarkModel({
+        return freshnessMarkModelWithRottenLog({
           source: input.source,
           today: freshnessTodayFallback(),
           interval: { days: 7, source: "default" },
           status: null,
           resolution: null,
-        });
+        }, input.noteText, input.lineNumber);
       } catch (inner) {
         return null;
       }

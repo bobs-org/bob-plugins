@@ -160,8 +160,10 @@ function makeEditor(initial, cursorLine = 0) {
       state.lines[from.line] = String(text);
     },
     transaction(tx) {
-      for (const change of tx.changes || []) {
-        state.lines[change.from.line] = String(change.text);
+      const offset = (pos) => state.lines.slice(0, pos.line).reduce((n, line) => n + line.length + 1, 0) + pos.ch;
+      for (const change of [...(tx.changes || [])].sort((a, b) => offset(b.from) - offset(a.from))) {
+        const text = state.lines.join("\n");
+        state.lines = (text.slice(0, offset(change.from)) + String(change.text) + text.slice(offset(change.to || change.from))).split("\n");
       }
     },
     getScrollInfo: () => null,
@@ -1683,4 +1685,24 @@ test("return: a RECURRING landing rearms the current-task return", async () => {
   assert.equal(await plugin.jumpToDueTask(1), true, "returns first");
   assert.equal(editor.getCursor().line, 0, "back on the RECURRING row");
   assert.match(notices[0], /^Back to current review task\n/);
+});
+
+
+test("Ctrl+Alt+F after a Rotten Log insertion lands on the shifted successor exactly once", async () => {
+  const rows = ["One", "Two", "Three"].map((text, index) => laneEntry({
+    tier: "rotten", line: index + 1, text, rank: index + 1, tierRank: index + 1, tierTotal: 3,
+    extra: { originalMarkdown: `- [ ] #task ${text} [fresh:: 2026-10-01] [keeps:: 1]` },
+  }));
+  const fixture = makePlugin({ rows, activePath: "walk.md", freshnessOptions: {
+    keepLine: (line, date, options) => line.replace(/fresh:: [^\]]+/, `fresh:: ${date}`)
+      .replace(/keeps:: (\d+)/, (_, n) => `keeps:: ${Number(n) + (options.counted ? 1 : 0)}`),
+  } });
+  await land(fixture, "first");
+  const { plugin, editor } = fixture;
+  assert.equal(await plugin.refreshTaskFreshness(editor, { advance: true, dateText: DATE, keepReason: "still needed" }), true);
+  assert.match(editor.getLine(editor.getCursor().line), /#task Two/);
+  assert.equal(editor.getCursor().line, 3, "two inserted log lines shift the successor");
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /Rotten Log updated/);
+  assert.equal(helpers.readRottenLog(editor.getValue(), 0).entries.length, 1);
 });

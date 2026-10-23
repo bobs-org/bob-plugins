@@ -3,6 +3,10 @@ module.exports = BobNavigationHotkeysPlugin;
 module.exports.helpers = {
   FilteredPickerModal,
   FreshnessRefreshSummaryModal,
+  RottenKeepReasonStage,
+  buildRottenKeepPromptModel,
+  classifyRottenKeepTarget,
+  planFreshStampBatchWithLogs,
   TaskLinkLanePromptModal,
   ChildNotePickerModal,
   TaskMoveDestinationPickerModal,

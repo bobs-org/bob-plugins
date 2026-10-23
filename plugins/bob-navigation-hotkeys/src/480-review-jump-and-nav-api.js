@@ -493,6 +493,9 @@ function classifyFreshStampTarget(rawLine) {
 }
 
 function freshStampRefusalNotice(refusal) {
+  if (refusal === "rotten-keep-mismatch") return REVIEW_QUEUE_CHANGED_NOTICE;
+  if (refusal === "rotten-log-ambiguous") return "Multiple Rotten Logs found; no tasks were updated";
+  if (refusal === "rotten-log-invalid") return "Could not update Rotten Log; no tasks were updated";
   if (refusal === "recurring") {
     return "recurring · not reviewed";
   }
@@ -610,32 +613,8 @@ function planFreshStampBatchWithWorkLogs(
   dateText,
   summary,
 ) {
-  const stampPlan = planFreshStampBatch(content, targetLines, stamper, dateText);
-  if (!stampPlan.ok) {
-    return Object.freeze({ ...stampPlan, workLogWrittenCount: 0 });
-  }
-  const normalized = normalizeLaneWorkSummary(summary);
-  if (!normalized) {
-    return Object.freeze({ ...stampPlan, workLogWrittenCount: 0 });
-  }
-  const { lines, lineEnding } = splitMarkdownContent(stampPlan.content);
-  const pendingLines = Array.from(
-    new Set(
-      stampPlan.stamped
-        .filter((entry) => isPendingWorkLogTargetRawLine(entry.before))
-        .map((entry) => entry.line),
-    ),
-  ).sort((a, b) => b - a);
-  let workLogWrittenCount = 0;
-  for (const line of pendingLines) {
-    if (insertLaneWorkLogEntry(lines, line, normalized, dateText)) {
-      workLogWrittenCount += 1;
-    }
-  }
-  return Object.freeze({
-    ...stampPlan,
-    content: lines.join(lineEnding),
-    workLogWrittenCount,
+  return planFreshStampBatchWithLogs(content, targetLines, stamper, dateText, {
+    workSummary: summary,
   });
 }
 
@@ -759,7 +738,10 @@ function buildFreshStampNotice(details = {}) {
   const workLogTail = workLogWrittenCount > 0
     ? ` · ${formatCountLabel(workLogWrittenCount, "Work Log")}`
     : "";
-  return `Fresh ✓ ${changed} ${tasks} · ${dueAfter} due (${newAfter} new) · ${tail}${done}${keptTail}${workLogTail}`;
+  const rottenCount = Math.max(0, Math.floor(numericOrDefault(details.rottenLogWrittenCount, 0)));
+  const rottenTail = rottenCount === 1 ? " · Rotten Log updated"
+    : rottenCount > 1 ? ` · ${rottenCount} Rotten Logs updated` : "";
+  return `Fresh ✓ ${changed} ${tasks} · ${dueAfter} due (${newAfter} new) · ${tail}${done}${keptTail}${workLogTail}${rottenTail}`;
 }
 
 // True when the freshness api can count keeps: namespace v5 with the sole

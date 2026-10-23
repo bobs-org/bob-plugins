@@ -403,10 +403,11 @@ test("namespace v5 with decide true stamps counted and opens no card", async () 
     }),
     dateText: BEFORE,
   });
-  const ok = await plugin.refreshTaskFreshness(editor, { dateText: BEFORE });
+  const ok = await plugin.refreshTaskFreshness(editor, { dateText: BEFORE, keepReason: "still needed" });
   assert.equal(ok, true);
   assert.match(editor.state.lines[2], /\[fresh:: 2026-10-18\]/);
   assert.match(editor.state.lines[2], /\[keeps:: 4\]/);
+  assert.match(editor.getValue(), /still needed · kept 4×/);
   assert.equal(plugin.openedCards.length, 0);
   assert.equal(Boolean(plugin.activeFreshnessDecayCard), false);
 });

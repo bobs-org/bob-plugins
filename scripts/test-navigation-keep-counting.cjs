@@ -590,7 +590,7 @@ test("single Alt+F increments an exact due-Ready ROTTEN task", async () => {
     editor,
     freshness: freshnessV5([rottenEntry()], BASE_COUNTS),
   });
-  const ok = await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const ok = await plugin.refreshTaskFreshness(editor, { keepReason: "", dateText: DATE });
   assert.equal(ok, true);
   assert.equal(
     editor.state.lines[2],
@@ -648,7 +648,7 @@ test("single Alt+F preserves NEW, lane, and early tasks without counting", async
       editor,
       freshness: freshnessV5([entry], BASE_COUNTS),
     });
-    const ok = await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+    const ok = await plugin.refreshTaskFreshness(editor, { keepReason: "", dateText: DATE });
     assert.equal(ok, true, name);
     assert.match(editor.state.lines[0], /\[fresh:: 2026-10-08\]/, name);
     assert.doesNotMatch(editor.state.lines[0], /keeps::/, name);
@@ -676,7 +676,7 @@ test("same-day repeat stays identical and counts nothing", async () => {
       BASE_COUNTS,
     ),
   });
-  const ok = await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const ok = await plugin.refreshTaskFreshness(editor, { keepReason: "", dateText: DATE });
   assert.equal(ok, true);
   assert.equal(editor.state.lines[0], stamped);
   assert.doesNotMatch(notices[notices.length - 1], /kept \d+×/);
@@ -691,7 +691,7 @@ test("Pending Alt+F writes its summary with the stamp in one edit", async () => 
     freshness: freshnessV5([], BASE_COUNTS),
   });
   const ok = await plugin.refreshTaskFreshness(editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
     summary: "Finished the review",
   });
   assert.equal(ok, true);
@@ -719,7 +719,7 @@ test("counted Pending refresh shares one summary only with Pending targets", asy
     freshness: freshnessV5([], BASE_COUNTS),
   });
   const ok = await plugin.refreshTaskFreshness(editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
     countExplicit: true,
     additionalTaskCount: 1,
     summary: "Shared work",
@@ -750,7 +750,7 @@ test("a refusing counted target refuses before the Pending Work Log prompt", asy
     return { cancelled: false, summary: "Should not be asked" };
   };
   const ok = await plugin.refreshTaskFreshness(editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
     countExplicit: true,
     additionalTaskCount: 1,
   });
@@ -775,7 +775,7 @@ test("blank Pending refresh advances; cancelled or stale prompts write nothing",
   };
   assert.equal(
     await blankPlugin.refreshTaskFreshness(blankEditor, {
-      dateText: DATE,
+      keepReason: "", dateText: DATE,
       summary: "",
       advance: true,
     }),
@@ -809,7 +809,7 @@ test("blank Pending refresh advances; cancelled or stale prompts write nothing",
       return { cancelled: true, summary: "" };
     };
     const ok = await plugin.refreshTaskFreshness(editor, {
-      dateText: DATE,
+      keepReason: "", dateText: DATE,
       advance: true,
     });
     assert.equal(ok, false, mode);
@@ -828,7 +828,7 @@ test("stale queue match stamps uncounted and never inflates", async () => {
     editor,
     freshness: freshnessV5([rottenEntry()], BASE_COUNTS),
   });
-  const ok = await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const ok = await plugin.refreshTaskFreshness(editor, { keepReason: "", dateText: DATE });
   assert.equal(ok, true);
   assert.equal(
     editor.state.lines[1],
@@ -867,7 +867,7 @@ test("counted Alt+F increments every exact target once", async () => {
     ),
   });
   const ok = await plugin.refreshTaskFreshness(editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
     countExplicit: true,
     additionalTaskCount: 1,
   });
@@ -890,7 +890,7 @@ test("stale editor source refuses with no write", async () => {
     editor,
     freshness: freshnessV5([rottenEntry({ line: 1 })], BASE_COUNTS),
   });
-  const ok = await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const ok = await plugin.refreshTaskFreshness(editor, { keepReason: "", dateText: DATE });
   assert.equal(ok, false);
   assert.equal(editor.state.transactions.length, 0);
   assert.equal(
@@ -910,7 +910,7 @@ test("single-note write lands in one editor transaction and keeps CRLF", async (
     editor,
     freshness: freshnessV5([rottenEntry()], BASE_COUNTS),
   });
-  const ok = await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const ok = await plugin.refreshTaskFreshness(editor, { keepReason: "", dateText: DATE });
   assert.equal(ok, true);
   assert.equal(editor.state.transactions.length, 1);
   const after = editor.state.lines.join("\r\n");
@@ -932,7 +932,7 @@ test("v5 without keepLine fails without writing", async () => {
       stampLine: realStamp,
     },
   });
-  const ok = await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const ok = await plugin.refreshTaskFreshness(editor, { keepReason: "", dateText: DATE });
   assert.equal(ok, false);
   assert.equal(editor.state.lines[0], ROTTEN_LINE);
   assert.equal(
@@ -962,7 +962,7 @@ test("throwing v5 keepLine refuses the batch with no partial write", async () =>
     },
   });
   const ok = await plugin.refreshTaskFreshness(editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
     countExplicit: true,
     additionalTaskCount: 1,
   });
@@ -987,7 +987,7 @@ test("pre-v5 ledger stamps uncounted through the old stamper", async () => {
       stampLine: realStamp,
     },
   });
-  const ok = await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const ok = await plugin.refreshTaskFreshness(editor, { keepReason: "", dateText: DATE });
   assert.equal(ok, true);
   assert.match(editor.state.lines[0], /\[fresh:: 2026-10-08\]/);
   assert.doesNotMatch(editor.state.lines[0], /keeps::/);
@@ -1063,7 +1063,7 @@ test("Task Link session skips an at-limit decide target", async () => {
     ),
   });
   const ok = await plugin.refreshTaskFreshness(plugin.view.editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
   });
   assert.equal(ok, true);
   assert.equal(noteMap.get("Target.md"), atLimit);
@@ -1081,7 +1081,7 @@ test("Task Link refresh counts one exact target", async () => {
     freshness: freshnessV5(linkQueue(), BASE_COUNTS),
   });
   const ok = await plugin.refreshTaskFreshness(plugin.view.editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
   });
   assert.equal(ok, true);
   assert.match(
@@ -1101,7 +1101,7 @@ test("duplicate Task Links to one target stamp and count once", async () => {
     freshness: freshnessV5(linkQueue(), BASE_COUNTS),
   });
   const ok = await plugin.refreshTaskFreshness(plugin.view.editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
     countExplicit: true,
     additionalTaskCount: 1,
   });
@@ -1133,7 +1133,7 @@ test("counted Task Links dedupe targets and log only the Pending target", async 
     freshness: freshnessV5([], BASE_COUNTS),
   });
   const ok = await plugin.refreshTaskFreshness(plugin.view.editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
     countExplicit: true,
     additionalTaskCount: 2,
     summary: "Linked work",
@@ -1190,7 +1190,7 @@ test("multi-note stale preimage refuses with no writes", async () => {
     return before(path, file);
   };
   const ok = await plugin.refreshTaskFreshness(plugin.view.editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
     countExplicit: true,
     additionalTaskCount: 1,
   });
@@ -1237,7 +1237,7 @@ test("multi-note write failure rolls back the first note", async () => {
   });
   plugin.failWrites.add("Two.md");
   const ok = await plugin.refreshTaskFreshness(plugin.view.editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
     countExplicit: true,
     additionalTaskCount: 1,
   });
@@ -1289,7 +1289,7 @@ test("one physical key through two routes stamps once", async () => {
   const inner = plugin.refreshTaskFreshness.bind(plugin);
   plugin.refreshTaskFreshness = async (...args) => {
     seen.push(args[1] || {});
-    pending = inner(...args);
+    pending = inner(args[0], { ...args[1], keepReason: "", dateText: DATE });
     return pending;
   };
   const event = reviewRefreshKeyEvent();
@@ -1302,7 +1302,7 @@ test("one physical key through two routes stamps once", async () => {
   await pending;
   // A racing second route (hotkey dispatcher) with the lagging queue still
   // preserves the same-day streak instead of double-counting.
-  const ok = await inner(editor, { dateText: DATE });
+  const ok = await inner(editor, { keepReason: "", dateText: DATE });
   assert.equal(ok, true);
   assert.match(editor.state.lines[2], /\[keeps:: 3\]/);
   assert.doesNotMatch(notices[notices.length - 1], /kept \d+×/);
@@ -1450,7 +1450,7 @@ test("live Ctrl+Alt+F double dispatch asks once on a Pending task", async () => 
   };
   // Obsidian's hotkey dispatcher runs the command route first.
   const pending = plugin.refreshTaskFreshness(editor, {
-    dateText: DATE,
+    keepReason: "", dateText: DATE,
     advance: true,
   });
   await waitForPrompt(() => promptCalls);
@@ -1507,7 +1507,7 @@ test("live Alt+F double dispatch asks once on a Pending task", async () => {
       resolvePrompt = resolve;
     });
   };
-  const pending = plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const pending = plugin.refreshTaskFreshness(editor, { keepReason: "", dateText: DATE });
   await waitForPrompt(() => promptCalls);
   const event = reviewRefreshKeyEvent({ defaultPrevented: true });
   assert.equal(plugin.handleReviewRefreshPhysicalKeydown(event), false);

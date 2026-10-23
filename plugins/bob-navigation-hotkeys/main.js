@@ -20131,6 +20131,23 @@ class FreshnessRefreshSummaryModal extends Modal {
     contentEl.empty();
     this.modalEl.addClass("bob-cnp-modal");
     contentEl.addClass("bob-cnp");
+    if (this.options.keep) {
+      this.keepStage = new RottenKeepReasonStage(contentEl, {
+        ...this.options.keep,
+        dateText: this.options.dateText,
+        onSubmit: () => this.submit(),
+        onCancel: () => this.close(),
+      });
+      this.inputEl = this.keepStage.inputEl;
+      this.previewEl = this.keepStage.previewEl;
+      const actions = contentEl.createDiv({ cls: "bob-cnp-modal-actions" });
+      actions.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+      this.refreshButton = actions.createEl("button", { text: "Keep & log" });
+      this.refreshButton.disabled = buildRottenKeepPromptModel(this.options.keep).disabled;
+      this.refreshButton.addEventListener("click", () => this.submit());
+      window.setTimeout(() => { if (this.keepStage) this.keepStage.focus(); }, 0);
+      return;
+    }
     const totalCount = Math.max(
       1,
       Math.floor(numericOrDefault(this.options.totalCount, 1)),
@@ -20254,7 +20271,7 @@ class FreshnessRefreshSummaryModal extends Modal {
   }
 
   submit() {
-    if (this.completed) {
+    if (this.completed || (this.options.keep && buildRottenKeepPromptModel(this.options.keep).disabled)) {
       return;
     }
     this.completed = true;
@@ -20269,6 +20286,8 @@ class FreshnessRefreshSummaryModal extends Modal {
   }
 
   onClose() {
+    if (this.keepStage) this.keepStage.destroy();
+    this.keepStage = null;
     contentElCleanup(this.contentEl);
     if (!this.completed && typeof this.onDone === "function") {
       try {
@@ -20323,6 +20342,183 @@ function formatSchedulingWorkLogDateSpan(dates) {
   return `scheduled → ${values[0]} → ${values[values.length - 1]}`;
 }
 
+// ---- src/195-rotten-keep.js ----
+// A counted keep is predicted by the same pure helper that will stamp it.
+// Callers gate this on freshnessSupportsKeeps; legacy stampers never log.
+function classifyRottenKeepTarget({ match, raw, stamper, dateText } = {}) {
+  const keepsBefore = parseKeepsCount(raw);
+  const uncounted = { counted: false, keepsBefore, keepsAfter: keepsBefore };
+  if (!match || !match.ok || !match.entry || match.entry.lane !== "ready" ||
+      !["rotten", "tickler"].includes(reviewEntryMachineTier(match.entry)) ||
+      match.entry.returnedBy === "unblocked" || freshStampLineHasToday(raw, dateText) ||
+      !classifyFreshStampTarget(raw).ok || typeof stamper !== "function") return uncounted;
+  try {
+    const after = String(stamper(raw, dateText, { counted: true }) ?? raw);
+    const keepsAfter = parseKeepsCount(after);
+    return after !== raw && keepsAfter === Math.min(keepsBefore + 1, 999)
+      ? { counted: true, keepsBefore, keepsAfter } : uncounted;
+  } catch (error) {
+    return uncounted;
+  }
+}
+
+// Stamps and child entries form a single plan. No caller can commit a stamp
+// when its predicted keep cannot be logged. Line coordinates are pre-write.
+function planFreshStampBatchWithLogs(content, targets, stamper, dateText, options = {}) {
+  const plan = planFreshStampBatch(content, targets, stamper, dateText);
+  const refuse = (refusal) => ({ ok: false, refusal, content, stamped: [],
+    workLogWrittenCount: 0, rottenLogWrittenCount: 0 });
+  if (!plan.ok) return { ...plan, workLogWrittenCount: 0, rottenLogWrittenCount: 0 };
+  const rottenLines = new Set(options.rottenLines || []);
+  for (const line of rottenLines) {
+    const entries = plan.stamped.filter((entry) => entry.line === line);
+    if (entries.length !== 1 || entries[0].before === entries[0].after ||
+        freshStampLineHasToday(entries[0].before, dateText) ||
+        !freshStampLineHasToday(entries[0].after, dateText) ||
+        countFreshStampKept(entries) !== 1) return refuse("rotten-keep-mismatch");
+  }
+  const { lines, lineEnding } = splitMarkdownContent(plan.content);
+  const summary = normalizeLaneWorkSummary(options.workSummary);
+  let workLogWrittenCount = 0;
+  let rottenLogWrittenCount = 0;
+  const entries = [...plan.stamped].sort((a, b) => b.line - a.line);
+  const seen = new Set();
+  for (const entry of entries) {
+    if (seen.has(entry.line)) continue;
+    seen.add(entry.line);
+    if (rottenLines.has(entry.line)) {
+      const insertion = planManagedTaskLogEntry(lines.join(lineEnding), entry.line, {
+        kind: MANAGED_TASK_LOG_KIND_ROTTEN,
+        entryText: formatRottenLogEntryText({ date: dateText, reason: options.keepReason,
+          keeps: parseKeepsCount(entry.after) }),
+      });
+      if (!insertion.valid) return refuse(insertion.reason === "ambiguous-markers"
+        ? "rotten-log-ambiguous" : "rotten-log-invalid");
+      if (!applyManagedTaskLogEntryToLines(lines, insertion)) return refuse("rotten-log-invalid");
+      rottenLogWrittenCount += 1;
+    } else if (summary && isPendingWorkLogTargetRawLine(entry.before)) {
+      if (insertLaneWorkLogEntry(lines, entry.line, summary, dateText)) workLogWrittenCount += 1;
+    }
+  }
+  return { ...plan, content: lines.join(lineEnding), workLogWrittenCount, rottenLogWrittenCount };
+}
+
+function buildRottenKeepPromptModel(options = {}) {
+  const history = options.history || { status: "missing", entries: [] };
+  const entries = history.entries || [];
+  const ambiguous = history.status === "unknown" || history.status === "ambiguous";
+  const count = entries.length;
+  const logged = ambiguous ? "log unreadable" : count === 0 ? "none logged yet"
+    : `${count} ${count === 1 ? "keep" : "keeps"} logged`;
+  const keepsBefore = options.keepsBefore || 0;
+  const keepsAfter = options.keepsAfter || Math.min(keepsBefore + 1, 999);
+  const entry = options.entry || {};
+  const today = reviewParseDayNumber(options.dateText);
+  const fresh = reviewParseDayNumber(entry.fresh);
+  const age = Number.isFinite(entry.ageDays) ? entry.ageDays
+    : today !== null && fresh !== null ? Math.max(0, today - fresh) : null;
+  const subtitle = [cleanTaskDisplayText(options.raw || entry.originalMarkdown || entry.text || ""),
+    String(entry.tierLabel || entry.tier || "ROTTEN").toUpperCase(),
+    age === null ? "" : `${age}d`].filter(Boolean).join(" · ");
+  const reason = normalizeLaneWorkSummary(options.reason);
+  return {
+    title: "Keep as written?",
+    subtitleLines: [subtitle, [keepsBefore ? `kept ${keepsBefore} in a row` : "", logged].filter(Boolean).join(" · ")],
+    placeholder: "Why keep it as written? (optional · ↵ logs 🤷)",
+    previewEntryText: formatRottenLogEntryText({ date: options.dateText, reason, keeps: keepsAfter }),
+    empty: !reason,
+    warning: reason.includes("::") ? '"::" creates a Dataview inline field on this bullet' : "",
+    destinationText: history.status === "missing" || history.status === "none"
+      ? "Adds 🥀 ROTTEN LOG as the task's last child" : "Prepends under 🥀 ROTTEN LOG",
+    historyRows: entries.slice(0, 3).map((item) => ({
+      date: reviewShortDate(item.date), reason: item.reason,
+      kept: `kept ${item.keeps ?? item.kept}×`,
+      empty: item.reason === SCHEDULE_LOG_SKIPPED_REASON_TEXT,
+    })),
+    olderCount: Math.max(0, count - 3),
+    enterHint: options.advance ? "Keep, log & next" : "Keep & log",
+    escapeHint: "Cancel",
+    disabled: ambiguous,
+  };
+}
+
+// Shared by the refresh modal and the decay card. The stage owns only its
+// subtree and input; its host owns closing, committing, and returning to choices.
+class RottenKeepReasonStage {
+  constructor(container, options = {}) {
+    this.options = options;
+    this.completed = false;
+    this.root = container.createDiv({ cls: "bob-rotten-stage" });
+    const model = buildRottenKeepPromptModel(options);
+    const header = this.root.createDiv({ cls: "bob-cnp-header" });
+    header.createDiv({ cls: "bob-cnp-header-icon bob-rotten-icon", text: "🥀" });
+    const text = header.createDiv({ cls: "bob-cnp-header-text" });
+    text.createDiv({ cls: "bob-cnp-title", text: model.title });
+    for (const line of model.subtitleLines) text.createDiv({ cls: "bob-cnp-subtitle", text: line });
+    const inputWrap = this.root.createDiv({ cls: "bob-cnp-search" });
+    inputWrap.createDiv({ cls: "bob-cnp-search-icon", text: "✎" });
+    this.inputEl = inputWrap.createEl("input", { cls: "bob-cnp-input", attr: {
+      type: "text", "aria-label": "Keep reason", placeholder: model.placeholder,
+    } });
+    this.previewEl = this.root.createDiv({ cls: "bob-cnp-results", attr: { "aria-live": "polite" } });
+    if (model.historyRows.length) {
+      this.root.createDiv({ cls: "bob-rotten-history-title", text: "EARLIER KEEPS" });
+      const history = this.root.createDiv({ cls: "bob-rotten-history", attr: { role: "list" } });
+      for (const item of model.historyRows) {
+        const row = history.createDiv({ cls: `bob-rotten-history-row${item.empty ? " is-empty" : ""}`, attr: { role: "listitem" } });
+        row.createSpan({ cls: "bob-rotten-date", text: item.date });
+        const detail = row.createDiv({ cls: "bob-rotten-history-detail" });
+        detail.createSpan({ cls: "bob-rotten-reason", text: item.reason, attr: { title: item.reason } });
+        detail.createSpan({ cls: "bob-rotten-kept", text: item.kept });
+      }
+      if (model.olderCount) this.root.createDiv({ cls: "bob-cnp-row-meta", text: `+ ${model.olderCount} older` });
+    }
+    const hints = this.root.createDiv({ cls: "bob-cnp-footer" });
+    for (const [key, label] of [["↵", model.enterHint], ["esc", model.escapeHint]]) {
+      const hint = hints.createSpan({ cls: "bob-cnp-hint" });
+      hint.createEl("kbd", { cls: "bob-cnp-kbd", text: key });
+      hint.createSpan({ cls: "bob-cnp-hint-label", text: label });
+    }
+    this.inputEl.addEventListener("input", () => this.renderPreview());
+    this.inputEl.addEventListener("keydown", (event) => {
+      if (isReviewRefreshKeydown(event, false) || isReviewRefreshKeydown(event, true)) {
+        event.preventDefault(); event.stopPropagation();
+      } else if (event.key === "Enter") {
+        if (event.isComposing) return;
+        event.preventDefault(); event.stopPropagation(); this.submit();
+      } else if (event.key === "Escape") {
+        event.preventDefault(); event.stopPropagation();
+        if (typeof this.options.onCancel === "function") this.options.onCancel();
+      }
+    });
+    this.renderPreview();
+  }
+
+  value() { return this.inputEl ? String(this.inputEl.value || "") : ""; }
+  focus() { if (this.inputEl) this.inputEl.focus(); }
+  renderPreview() {
+    if (!this.previewEl) return;
+    const model = buildRottenKeepPromptModel({ ...this.options, reason: this.value() });
+    this.previewEl.empty();
+    const row = this.previewEl.createDiv({ cls: `bob-cnp-row bob-cnp-schedule-reason-row ${model.empty ? "is-empty" : model.warning ? "is-warning" : "is-valid"}` });
+    row.createDiv({ cls: "bob-cnp-row-icon", text: "✓" });
+    const text = row.createDiv({ cls: "bob-cnp-row-text" });
+    text.createDiv({ cls: "bob-cnp-row-title", text: model.previewEntryText });
+    if (model.warning) text.createDiv({ cls: "bob-cnp-row-meta", text: model.warning });
+    text.createDiv({ cls: "bob-cnp-schedule-reason-preview", text: model.destinationText });
+  }
+  submit() {
+    if (this.completed || buildRottenKeepPromptModel(this.options).disabled) return;
+    this.completed = true;
+    if (typeof this.options.onSubmit === "function") this.options.onSubmit(this.value());
+  }
+  destroy() {
+    this.completed = true;
+    contentElCleanup(this.root);
+    this.inputEl = null;
+    this.previewEl = null;
+  }
+}
 // ---- src/196-task-link-lane-modal.js ----
 // Move to Next prompt for the Task Link lane toggle (plan
 // 202610/in_progress_task_link_marks.md D8). Styled like block-id-prompt's
@@ -54100,6 +54296,9 @@ function classifyFreshStampTarget(rawLine) {
 }
 
 function freshStampRefusalNotice(refusal) {
+  if (refusal === "rotten-keep-mismatch") return REVIEW_QUEUE_CHANGED_NOTICE;
+  if (refusal === "rotten-log-ambiguous") return "Multiple Rotten Logs found; no tasks were updated";
+  if (refusal === "rotten-log-invalid") return "Could not update Rotten Log; no tasks were updated";
   if (refusal === "recurring") {
     return "recurring · not reviewed";
   }
@@ -54217,32 +54416,8 @@ function planFreshStampBatchWithWorkLogs(
   dateText,
   summary,
 ) {
-  const stampPlan = planFreshStampBatch(content, targetLines, stamper, dateText);
-  if (!stampPlan.ok) {
-    return Object.freeze({ ...stampPlan, workLogWrittenCount: 0 });
-  }
-  const normalized = normalizeLaneWorkSummary(summary);
-  if (!normalized) {
-    return Object.freeze({ ...stampPlan, workLogWrittenCount: 0 });
-  }
-  const { lines, lineEnding } = splitMarkdownContent(stampPlan.content);
-  const pendingLines = Array.from(
-    new Set(
-      stampPlan.stamped
-        .filter((entry) => isPendingWorkLogTargetRawLine(entry.before))
-        .map((entry) => entry.line),
-    ),
-  ).sort((a, b) => b - a);
-  let workLogWrittenCount = 0;
-  for (const line of pendingLines) {
-    if (insertLaneWorkLogEntry(lines, line, normalized, dateText)) {
-      workLogWrittenCount += 1;
-    }
-  }
-  return Object.freeze({
-    ...stampPlan,
-    content: lines.join(lineEnding),
-    workLogWrittenCount,
+  return planFreshStampBatchWithLogs(content, targetLines, stamper, dateText, {
+    workSummary: summary,
   });
 }
 
@@ -54366,7 +54541,10 @@ function buildFreshStampNotice(details = {}) {
   const workLogTail = workLogWrittenCount > 0
     ? ` · ${formatCountLabel(workLogWrittenCount, "Work Log")}`
     : "";
-  return `Fresh ✓ ${changed} ${tasks} · ${dueAfter} due (${newAfter} new) · ${tail}${done}${keptTail}${workLogTail}`;
+  const rottenCount = Math.max(0, Math.floor(numericOrDefault(details.rottenLogWrittenCount, 0)));
+  const rottenTail = rottenCount === 1 ? " · Rotten Log updated"
+    : rottenCount > 1 ? ` · ${rottenCount} Rotten Logs updated` : "";
+  return `Fresh ✓ ${changed} ${tasks} · ${dueAfter} due (${newAfter} new) · ${tail}${done}${keptTail}${workLogTail}${rottenTail}`;
 }
 
 // True when the freshness api can count keeps: namespace v5 with the sole
@@ -57306,7 +57484,7 @@ class BobNavigationHotkeysLaneReviewMixin {
   async refreshTaskFreshness(cm, options = {}) {
     // While an answer is in flight or settling, Alt+F / Ctrl+Alt+F are
     // swallowed silently with no write.
-    if (this.reviewWalkBusy()) {
+    if (this.reviewWalkBusy() || this.rottenKeepPromptPending) {
       return false;
     }
     const advance = options.advance === true;
@@ -57387,6 +57565,7 @@ class BobNavigationHotkeysLaneReviewMixin {
         dateText,
         advance,
         summary: options.summary,
+        keepReason: options.keepReason,
       });
     }
     if (parseLinkPickerTaskLink(lineText)) {
@@ -57397,6 +57576,7 @@ class BobNavigationHotkeysLaneReviewMixin {
         dateText,
         advance,
         summary: options.summary,
+        keepReason: options.keepReason,
         linkDiscovery: options.linkDiscovery || null,
       });
     }
@@ -57405,12 +57585,21 @@ class BobNavigationHotkeysLaneReviewMixin {
   }
 
   async requestFreshnessRefreshSummary(options = {}) {
-    if (typeof options.summary === "string") {
-      return { cancelled: false, summary: options.summary };
-    }
+    const result = await this.requestFreshnessRefreshAnswers(options);
+    return { cancelled: result.cancelled, ...(result.failed ? { failed: true } : {}), summary: result.summary };
+  }
+
+  async requestFreshnessRefreshAnswers(options = {}) {
+    const keepMode = Boolean(options.keep);
+    const answer = (value, extra = {}) => ({ cancelled: false, failed: false,
+      summary: keepMode ? "" : String(value || ""),
+      keepReason: keepMode ? String(value || "") : "", ...extra });
+    const supplied = keepMode ? options.keepReason : options.summary;
+    if (typeof supplied === "string") return answer(supplied);
     if (typeof FreshnessRefreshSummaryModal !== "function") {
-      return { cancelled: false, failed: true, summary: "" };
+      return answer("", { failed: true });
     }
+    if (keepMode) this.rottenKeepPromptPending = true;
     return await new Promise((resolve) => {
       let settled = false;
       const finish = (result) => {
@@ -57418,24 +57607,26 @@ class BobNavigationHotkeysLaneReviewMixin {
           return;
         }
         settled = true;
+        if (keepMode) this.rottenKeepPromptPending = false;
         resolve(result);
       };
       let modal;
       try {
         modal = new FreshnessRefreshSummaryModal(this.app, {
           dateText: options.dateText,
+          keep: options.keep,
           totalCount: options.totalCount,
           eligibleCount: options.eligibleCount,
           onDone: (result) => {
             if (result === null) {
-              finish({ cancelled: true, summary: "" });
+              finish(answer("", { cancelled: true }));
             } else {
-              finish({ cancelled: false, summary: String(result || "") });
+              finish(answer(result));
             }
           },
         });
         if (!modal || typeof modal.open !== "function") {
-          finish({ cancelled: false, failed: true, summary: "" });
+          finish(answer("", { failed: true }));
           return;
         }
         modal.open();
@@ -57450,7 +57641,7 @@ class BobNavigationHotkeysLaneReviewMixin {
             // The prompt failure still refuses the refresh below.
           }
         }
-        finish({ cancelled: false, failed: true, summary: "" });
+        finish(answer("", { failed: true }));
       }
     });
   }
@@ -57480,6 +57671,9 @@ class BobNavigationHotkeysLaneReviewMixin {
     // Every other explicit keep still goes through `keepLine` uncounted so
     // the streak is preserved, never reset.
     const contentLines = splitMarkdownContent(content).lines;
+    const localDayBefore = this.laneReleaseDateText();
+    const singleKeep = options.countExplicit !== true && session.targets.length === 1;
+    let cardFallback = false;
     const resolved = deduplicateFreshStampTargets(
       session.targets.map((target) => ({
         path: filePath,
@@ -57493,12 +57687,16 @@ class BobNavigationHotkeysLaneReviewMixin {
         line: target.line,
         raw,
       });
+      const keep = singleKeep && freshnessSupportsKeeps(api)
+        ? classifyRottenKeepTarget({ match, raw, stamper: options.stamper, dateText: options.dateText })
+        : { counted: false };
       return Object.freeze({
+        keep,
         target: Object.freeze({
           line: target.line,
           path: target.path,
           raw,
-          counted: match.ok,
+          counted: singleKeep ? keep.counted : match.ok,
         }),
         match,
       });
@@ -57572,72 +57770,8 @@ class BobNavigationHotkeysLaneReviewMixin {
       if (opened) {
         return true;
       }
-      // The card cannot render (mixed versions, unusable plan): fall
-      // through to counting so the streak still counts.
-      const fallback = resolved.map((item) => item.target);
-      const fallbackPlan = planFreshStampBatch(
-        content,
-        fallback,
-        options.stamper,
-        options.dateText,
-      );
-      if (!fallbackPlan.ok) {
-        new Notice(freshStampRefusalNotice(fallbackPlan.refusal));
-        return false;
-      }
-      if (
-        cm &&
-        typeof cm.getValue === "function" &&
-        String(cm.getValue() || "") !== content
-      ) {
-        new Notice("Current note changed; no tasks were updated");
-        return false;
-      }
-      const fallbackGuarded = this.getCountedTaskWriteContext(cm, filePath, session);
-      if (!fallbackGuarded.valid || fallbackGuarded.content !== content) {
-        new Notice(
-          fallbackGuarded.valid
-            ? "Active note changed; no tasks were updated"
-            : fallbackGuarded.error,
-        );
-        return false;
-      }
-      if (fallbackPlan.content !== content) {
-        const nextLines = fallbackPlan.content.split(/\r?\n/);
-        const applied = applyEditorContentTransaction(cm, content, fallbackPlan.content, {
-          line: cursor.line,
-          ch: Math.min(
-            Math.max(cursor.ch, 0),
-            String(nextLines[cursor.line] || "").length,
-          ),
-        });
-        if (!applied) {
-          new Notice("Could not update task; no tasks were updated");
-          return false;
-        }
-      }
-      // Ctrl+Alt+F advances through the shared tail with the stamp text
-      // as its preamble, giving one composed toast.
-      const fallbackPreamble = this.finishFreshStamp(
-        queueBefore,
-        countsBefore,
-        fallbackPlan.stamped.map((entry) => ({
-          path: filePath,
-          line: entry.line,
-          raw: entry.before,
-        })),
-        fallbackPlan.stamped,
-        options.dateText,
-        { deferNotice: options.advance === true },
-      );
-      if (options.advance === true) {
-        return await this.jumpToDueTask(1, {
-          fromStamp: this.reviewAnchor,
-          fromAdvance: true,
-          preamble: fallbackPreamble,
-        });
-      }
-      return true;
+      // An unavailable card uses the same reason prompt and combined write.
+      cardFallback = true;
     }
     // Batch path: counted sessions skip exact at-limit targets without
     // changing fresh/count; skipped tasks stay due for the walk later.
@@ -57649,7 +57783,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       queueBefore,
     );
     const partition = partitionFreshStampDecisionSkips(checklistPart.stamp, {
-      enabled: freshnessSupportsDecayDecisions(api),
+      enabled: !cardFallback && freshnessSupportsDecayDecisions(api),
     });
     const keepTargets = partition.stamp;
     const skipTail =
@@ -57681,6 +57815,28 @@ class BobNavigationHotkeysLaneReviewMixin {
     const eligibleTargets = keepTargets.filter((target) =>
       isPendingWorkLogTargetRawLine(target.raw),
     );
+    const rottenTargets = singleKeep ? resolved.filter((item) => item.keep.counted &&
+      keepTargets.some((target) => target.line === item.target.line)) : [];
+    let keepReason = "";
+    if (rottenTargets.length) {
+      const item = rottenTargets[0];
+      const result = await this.requestFreshnessRefreshAnswers({
+        keepReason: options.keepReason,
+        dateText: options.dateText,
+        keep: { raw: item.target.raw, entry: item.match.entry, ...item.keep,
+          history: readRottenLog(content, item.target.line), advance: options.advance === true },
+      });
+      if (result.failed) {
+        new Notice("Could not open Keep reason prompt; no tasks were updated");
+        return false;
+      }
+      if (result.cancelled) return false;
+      keepReason = result.keepReason;
+      if (this.laneReleaseDateText() !== localDayBefore) {
+        new Notice("Day changed while the prompt was open; nothing was written");
+        return false;
+      }
+    }
     let summary = "";
     if (eligibleTargets.length > 0) {
       const result = await this.requestFreshnessRefreshSummary({
@@ -57715,12 +57871,12 @@ class BobNavigationHotkeysLaneReviewMixin {
       );
       return false;
     }
-    const plan = planFreshStampBatchWithWorkLogs(
+    const plan = planFreshStampBatchWithLogs(
       content,
       keepTargets,
       options.stamper,
       options.dateText,
-      summary,
+      { workSummary: summary, keepReason, rottenLines: rottenTargets.map((item) => item.target.line) },
     );
     if (!plan.ok) {
       new Notice(freshStampRefusalNotice(plan.refusal));
@@ -57755,6 +57911,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       {
         skipTail,
         workLogWrittenCount: plan.workLogWrittenCount,
+        rottenLogWrittenCount: plan.rottenLogWrittenCount,
         deferNotice: options.advance === true,
       },
     );
@@ -58408,6 +58565,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
             : counts.budget,
         kept,
         workLogWrittenCount: extra && extra.workLogWrittenCount,
+        rottenLogWrittenCount: extra && extra.rottenLogWrittenCount,
       }) + skipTail;
     if (extra && extra.deferNotice === true) {
       return message;
@@ -80724,6 +80882,10 @@ module.exports = BobNavigationHotkeysPlugin;
 module.exports.helpers = {
   FilteredPickerModal,
   FreshnessRefreshSummaryModal,
+  RottenKeepReasonStage,
+  buildRottenKeepPromptModel,
+  classifyRottenKeepTarget,
+  planFreshStampBatchWithLogs,
   TaskLinkLanePromptModal,
   ChildNotePickerModal,
   TaskMoveDestinationPickerModal,

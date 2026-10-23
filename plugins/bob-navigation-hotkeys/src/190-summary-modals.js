@@ -676,6 +676,23 @@ class FreshnessRefreshSummaryModal extends Modal {
     contentEl.empty();
     this.modalEl.addClass("bob-cnp-modal");
     contentEl.addClass("bob-cnp");
+    if (this.options.keep) {
+      this.keepStage = new RottenKeepReasonStage(contentEl, {
+        ...this.options.keep,
+        dateText: this.options.dateText,
+        onSubmit: () => this.submit(),
+        onCancel: () => this.close(),
+      });
+      this.inputEl = this.keepStage.inputEl;
+      this.previewEl = this.keepStage.previewEl;
+      const actions = contentEl.createDiv({ cls: "bob-cnp-modal-actions" });
+      actions.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+      this.refreshButton = actions.createEl("button", { text: "Keep & log" });
+      this.refreshButton.disabled = buildRottenKeepPromptModel(this.options.keep).disabled;
+      this.refreshButton.addEventListener("click", () => this.submit());
+      window.setTimeout(() => { if (this.keepStage) this.keepStage.focus(); }, 0);
+      return;
+    }
     const totalCount = Math.max(
       1,
       Math.floor(numericOrDefault(this.options.totalCount, 1)),
@@ -799,7 +816,7 @@ class FreshnessRefreshSummaryModal extends Modal {
   }
 
   submit() {
-    if (this.completed) {
+    if (this.completed || (this.options.keep && buildRottenKeepPromptModel(this.options.keep).disabled)) {
       return;
     }
     this.completed = true;
@@ -814,6 +831,8 @@ class FreshnessRefreshSummaryModal extends Modal {
   }
 
   onClose() {
+    if (this.keepStage) this.keepStage.destroy();
+    this.keepStage = null;
     contentElCleanup(this.contentEl);
     if (!this.completed && typeof this.onDone === "function") {
       try {

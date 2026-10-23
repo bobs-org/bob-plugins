@@ -297,6 +297,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
             : counts.budget,
         kept,
         workLogWrittenCount: extra && extra.workLogWrittenCount,
+        rottenLogWrittenCount: extra && extra.rottenLogWrittenCount,
       }) + skipTail;
     if (extra && extra.deferNotice === true) {
       return message;

@@ -2646,3 +2646,27 @@
   font-variant-numeric: tabular-nums;
   color: rgba(255, 255, 255, 0.8);
 }
+
+/* Keep reasons share the command prompt layout in both modal hosts. */
+.bob-rotten-icon {
+  background: color-mix(in srgb, var(--color-red) 14%, transparent);
+  color: var(--text-normal);
+  border-radius: 50%;
+}
+.bob-rotten-history-title {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-top: var(--size-4-3);
+}
+.bob-rotten-history-row {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: var(--size-4-2);
+  padding: var(--size-4-1) 0;
+  color: var(--text-muted);
+}
+.bob-rotten-history-detail { display: flex; gap: var(--size-4-2); min-width: 0; }
+.bob-rotten-date { font-variant-numeric: tabular-nums; }
+.bob-rotten-reason { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; }
+.bob-rotten-kept { white-space: nowrap; border-radius: var(--radius-s); font-size: var(--font-ui-smaller); }
+.bob-rotten-history-row.is-empty { color: var(--text-faint); }

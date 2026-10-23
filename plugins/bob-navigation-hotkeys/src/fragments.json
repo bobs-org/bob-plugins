@@ -26,6 +26,7 @@
   "180-editor-transactions.js",
   "181-editor-line-diff.js",
   "190-summary-modals.js",
+  "195-rotten-keep.js",
   "196-task-link-lane-modal.js",
   "200-filtered-picker-modals.js",
   "205-inbox-route-picker-modal.js",

@@ -20,6 +20,7 @@ function installBobNavigationHotkeysMixins(pluginClass, mixins) {
 installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysTransclusionLinkMixin,
   BobNavigationHotkeysQuickRollMixin,
+  BobNavigationHotkeysQuickRollPreviewMixin,
   BobNavigationHotkeysLinkCommitLaneMixin,
   BobNavigationHotkeysLaneReviewMixin,
   BobNavigationHotkeysTaskLinkLaneMixin,

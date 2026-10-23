@@ -1,4 +1,6 @@
 class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
+  // Thin wrapper over the shared planner (396): identical behavior, and
+  // parity is pinned by scripts/test-navigation-quick-roll-preview.cjs.
   computePriorityRollRecommendation() {
     if (this.isCountedSession() || this.isLinkSession()) {
       return null;
@@ -7,61 +9,13 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
     if (!cursor || !Number.isInteger(cursor.line)) {
       return null;
     }
-    const content = this.getEditorContent();
-    if (!isObsidianTaskAtLine(content, cursor.line)) {
-      return null;
-    }
-    const lines = splitMarkdownContent(content).lines;
-    const lineText = lines[cursor.line] || "";
-    if (!OPEN_OBSIDIAN_TASK_STATUSES.has(getObsidianTaskCheckboxStatus(lineText))) {
-      return null;
-    }
-    const properties =
-      this.config && Array.isArray(this.config.properties)
-        ? this.config.properties
-        : [];
-    const liveContext = getProjectNotePropertyContext(content, cursor.line);
-    for (const priorityProperty of properties) {
-      if (!priorityProperty || priorityProperty.values !== "priority") {
-        continue;
-      }
-      const schedulesName = normalizeBulletPropertyName(
-        priorityProperty.schedules,
-      );
-      if (!schedulesName) {
-        continue;
-      }
-      const scheduledTarget = resolveBulletPropertyTarget(
-        schedulesName,
-        liveContext,
-      );
-      let currentScheduled = "";
-      if (scheduledTarget.kind === "project-inline") {
-        const scheduledField = findBulletPropertyField(lineText, schedulesName);
-        currentScheduled = scheduledField ? scheduledField.value : "";
-      } else {
-        const scheduledField = findBulletPropertyField(lineText, schedulesName);
-        currentScheduled = scheduledField ? scheduledField.value : "";
-      }
-      const planned = planPriorityRollRecommendation({
-        property: priorityProperty,
-        content,
-        taskLine: cursor.line,
-        currentScheduled,
-        baseDate: this.valueBaseDate,
-        random: this.priorityRandom,
-      });
-      if (!planned) {
-        continue;
-      }
-      return Object.freeze({
-        ...planned,
-        priorityName: priorityProperty.name,
-        schedulesName,
-        taskLine: cursor.line,
-      });
-    }
-    return null;
+    return planPriorityRollRecommendationAtLine({
+      config: this.config,
+      content: this.getEditorContent(),
+      line: cursor.line,
+      baseDate: this.valueBaseDate,
+      random: this.priorityRandom,
+    });
   }
 
   refreshPriorityRollRecommendation() {

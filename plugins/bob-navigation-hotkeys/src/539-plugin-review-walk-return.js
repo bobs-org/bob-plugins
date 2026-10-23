@@ -258,6 +258,10 @@ class BobNavigationHotkeysReviewReturnMixin {
         } catch (error) {
           // The return toast without the POST tail still lands.
         }
+        landingNotice = appendQuickRollLine(
+          landingNotice,
+          await this.reviewQuickRollLine(plan.entry),
+        );
         try {
           new Notice(`${REVIEW_RETURN_NOTICE_HEAD}\n${landingNotice}`);
         } catch (error) {

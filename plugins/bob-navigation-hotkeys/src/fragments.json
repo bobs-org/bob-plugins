@@ -66,6 +66,7 @@
   "370-picker-schedule-work-log.js",
   "380-picker-cancel-and-lane.js",
   "390-picker-roll-write.js",
+  "396-quick-roll-preview.js",
   "400-picker-local-task.js",
   "410-picker-filter-and-render.js",
   "420-picker-counted-dependency.js",

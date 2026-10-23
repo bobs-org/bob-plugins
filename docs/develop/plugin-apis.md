@@ -141,6 +141,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | --- | ---: | --- |
 | `reviewWalk` | 1 | Capture a review landing with `capture(editor)`, then continue it after a gesture with `continue(origin, outcome)`. |
 | `inboxRoute` | 1 | Test an inbox path and prompt or commit a route. |
+| `quickRoll` | 1 | Preview the `Alt+P` roll for a review row. |
 | `taskLinkLane` | 1 | Match a Pomodoro Task Link and toggle its Next/In Progress lane. |
 | `notice` | 1 | Show the Unblocked card. |
 | `successors` | 1 | Ask which offered successor links to add. |
@@ -153,6 +154,13 @@ The root `bob-navigation-hotkeys.api` is version 3:
 
 `inboxRoute` has `isInboxNote(path)`,
 `prompt(request)`, and `commit(request)`.
+`quickRoll` has `keyLabel` (`Alt+P`) and
+`preview({ content | lines, line, tier })`. `preview` is synchronous
+and never throws: it plans the same recommendation `Alt+P` would use
+and returns the frozen `{ ok, kind, line, compact, detail }` preview,
+or `{ ok: false, reason }` for PRE/POST rows and lines with no
+recommendation. With a null plugin (after unload) it returns
+`{ ok: false, reason: "unavailable" }`; the root api `version` stays 3.
 `taskLinkLane.matches({ content, line, path })` is synchronous;
 `toggle(args)` performs the Next/In Progress change and resolves
 to a result object. `successors.pick(model)` resolves to a result

@@ -650,6 +650,10 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       if (destTier === "post") {
         landingNotice = appendReviewPostLandingTail(landingNotice, remaining);
       }
+      landingNotice = appendQuickRollLine(
+        landingNotice,
+        await this.reviewQuickRollLine(plan.entry),
+      );
       new Notice(
         this.composeReviewAdvanceNotice(preamble, boundary, landingNotice),
       );
@@ -970,6 +974,10 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     if (destTier === "post") {
       notice = appendReviewPostLandingTail(notice, remaining);
     }
+    notice = appendQuickRollLine(
+      notice,
+      await this.reviewQuickRollLine(plan.entry),
+    );
     new Notice(notice);
     return true;
   }

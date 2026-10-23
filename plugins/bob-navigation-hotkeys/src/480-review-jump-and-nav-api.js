@@ -938,6 +938,7 @@ function createDependencyNavApi(plugin) {
     ...(plugin ? { freshnessDecayCard: FRESHNESS_DECAY_CARD_CAPABILITY } : null),
     reviewWalk: createReviewWalkApi(plugin),
     inboxRoute: createInboxRouteApi(plugin),
+    quickRoll: createQuickRollApi(plugin),
     taskLinkLane: createTaskLinkLaneApi(plugin),
     notice: createNoticeApi(plugin),
     successors: createSuccessorPickerApi(plugin),

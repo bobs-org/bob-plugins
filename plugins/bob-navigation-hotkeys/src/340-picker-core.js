@@ -55,6 +55,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.initialTaskCardIntent = context.initialTaskCardIntent || null;
     this.quickRollCardPending =
       this.initialTaskCardIntent === "apply-recommendation";
+    if (this.quickRollCardPending) {
+      setQuickRollPendingClass(this, true);
+    }
     this.propertyItems = [];
     this.vaultStage = null;
     this.vaultStageRefreshId = 0;

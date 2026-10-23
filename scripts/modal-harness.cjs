@@ -239,8 +239,13 @@ class ModalStub {
     // Mirror Obsidian >= 1.14 native Modal: isOpen owns open/close.
     this.isOpen = false;
     this.attached = false;
+    this.containerEl = new ElementStub({ cls: "modal-container" });
+    this.containerEl.isConnected = false;
+    this.backdropEl = new ElementStub({ cls: "modal-bg" });
     this.modalEl = new ElementStub();
     this.contentEl = new ElementStub();
+    this.containerEl.appendChild(this.backdropEl);
+    this.containerEl.appendChild(this.modalEl);
     this.modalEl.appendChild(this.contentEl);
   }
 
@@ -248,7 +253,8 @@ class ModalStub {
     if (this.isOpen) return this;
     this.isOpen = true;
     this.attached = true;
-    body.appendChild(this.modalEl);
+    this.containerEl.isConnected = true;
+    body.appendChild(this.containerEl);
     this.onOpen();
     const initialFocus = firstFocusableDescendant(this.modalEl);
     if (initialFocus) initialFocus.focus();
@@ -259,9 +265,10 @@ class ModalStub {
   close() {
     if (!this.isOpen) return this;
     this.isOpen = false;
-    const parent = this.modalEl.parent;
-    if (parent) parent.children = parent.children.filter((child) => child !== this.modalEl);
-    this.modalEl.parent = null;
+    const parent = this.containerEl.parent;
+    if (parent) parent.children = parent.children.filter((child) => child !== this.containerEl);
+    this.containerEl.parent = null;
+    this.containerEl.isConnected = false;
     if (isWithin(activeElement, this.modalEl)) body.focus();
     this.attached = false;
     this.onClose();

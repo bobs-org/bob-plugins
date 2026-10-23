@@ -1716,6 +1716,7 @@
 
 .bob-key-card-key.is-alias {
   border-style: dashed;
+  opacity: 0.68;
 }
 
 .bob-key-card-row {
@@ -1757,8 +1758,15 @@
   max-width: 960px;
 }
 
+.modal-container.bob-task-card-quick-pending,
 .modal.bob-cnp-modal.bob-task-card-quick-pending {
   visibility: hidden;
+  animation: none !important;
+  transition: none !important;
+}
+
+.bob-task-card-quick-pending,
+.bob-task-card-quick-pending * {
   animation: none !important;
   transition: none !important;
 }

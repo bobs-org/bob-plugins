@@ -2,10 +2,18 @@ const QUICK_ROLL_KEY_LABEL = "Alt+P";
 
 class BobNavigationHotkeysQuickRollMixin {
   rollByRecommendation(cm, options = {}) {
+    let activePicker = this.activeBulletPropertyPicker;
     if (
-      this.activeBulletPropertyPicker &&
-      this.activeBulletPropertyPicker.pickerOpen === true
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
     ) {
+      if (this.activeBulletPropertyPicker === activePicker) {
+        this.activeBulletPropertyPicker = null;
+      }
+      activePicker = null;
+    }
+    if (activePicker && activePicker.pickerOpen === true) {
       return true;
     }
 

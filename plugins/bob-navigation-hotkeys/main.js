@@ -41879,6 +41879,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.initialTaskCardIntent = context.initialTaskCardIntent || null;
     this.quickRollCardPending =
       this.initialTaskCardIntent === "apply-recommendation";
+    if (this.quickRollCardPending) {
+      setQuickRollPendingClass(this, true);
+    }
     this.propertyItems = [];
     this.vaultStage = null;
     this.vaultStageRefreshId = 0;
@@ -52403,21 +52406,30 @@ function isQuickRollKeydown(event) {
   );
 }
 
+function setQuickRollPendingClass(picker, pending) {
+  const element = picker && (picker.containerEl || picker.modalEl);
+  if (!element) return;
+  try {
+    if (typeof element.addClass === "function" && pending) {
+      element.addClass("bob-task-card-quick-pending");
+    } else if (typeof element.removeClass === "function" && !pending) {
+      element.removeClass("bob-task-card-quick-pending");
+    } else if (element.classList) {
+      if (pending) element.classList.add("bob-task-card-quick-pending");
+      else element.classList.remove("bob-task-card-quick-pending");
+    }
+  } catch (_error) {
+    // Visibility is best-effort for older modal hosts.
+  }
+}
+
 class BulletPropertyPickerQuickRollMixin extends FilteredPickerModal {
   revealQuickRollCard() {
     if (this.quickRollCardPending !== true) {
       return false;
     }
     this.quickRollCardPending = false;
-    try {
-      if (this.modalEl && typeof this.modalEl.removeClass === "function") {
-        this.modalEl.removeClass("bob-task-card-quick-pending");
-      } else if (this.modalEl && this.modalEl.classList) {
-        this.modalEl.classList.remove("bob-task-card-quick-pending");
-      }
-    } catch (_error) {
-      // Revealing is best-effort; it never blocks the pending action.
-    }
+    setQuickRollPendingClass(this, false);
     return true;
   }
 
@@ -52460,12 +52472,28 @@ class BulletPropertyPickerQuickRollMixin extends FilteredPickerModal {
     const effects = recommendation.effects || {};
     if (Number(effects.cancel || 0) > 0) {
       this.revealQuickRollCard();
+      const priorityStrip = this.taskCardModel.priorityStrip || null;
+      const levels = Array.isArray(priorityStrip && priorityStrip.levels)
+        ? priorityStrip.levels
+        : [];
+      const lastLevel = levels[levels.length - 1];
+      const label =
+        (lastLevel && lastLevel.label) ||
+        (recommendation.source && recommendation.source.level && recommendation.source.level.label) ||
+        "last level";
+      const cancelCount = Math.max(1, Math.floor(Number(effects.cancel) || 1));
+      const targetCount = Math.max(1, Math.floor(Number(recommendation.targetCount) || 1));
+      const message = cancelCount === 1 && targetCount === 1
+        ? `Decayed past ${label} — ${QUICK_ROLL_KEY_LABEL} again cancels it, Esc keeps it`
+        : cancelCount === 1
+          ? `One task in this batch decayed past ${label} — ${QUICK_ROLL_KEY_LABEL} again cancels it, Esc keeps it`
+          : `${cancelCount} tasks in this batch decayed past ${label} — ${QUICK_ROLL_KEY_LABEL} again cancels them, Esc keeps them`;
+      new Notice(message);
       return;
     }
 
-    Promise.resolve(
-      this.dispatchTaskCardIntent({ type: "apply-recommendation" }),
-    )
+    Promise.resolve()
+      .then(() => this.dispatchTaskCardIntent({ type: "apply-recommendation" }))
       .catch(() => {
         new Notice("Could not apply Task Card action");
       })
@@ -80453,10 +80481,18 @@ const QUICK_ROLL_KEY_LABEL = "Alt+P";
 
 class BobNavigationHotkeysQuickRollMixin {
   rollByRecommendation(cm, options = {}) {
+    let activePicker = this.activeBulletPropertyPicker;
     if (
-      this.activeBulletPropertyPicker &&
-      this.activeBulletPropertyPicker.pickerOpen === true
+      activePicker &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(activePicker)
     ) {
+      if (this.activeBulletPropertyPicker === activePicker) {
+        this.activeBulletPropertyPicker = null;
+      }
+      activePicker = null;
+    }
+    if (activePicker && activePicker.pickerOpen === true) {
       return true;
     }
 

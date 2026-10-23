@@ -270,12 +270,45 @@ class BobLedgerToolsFreshnessStatusMixin {
         }
       }
       const current = this.freshnessFooterCurrentEntry(queue);
+      // Additive roll preview from nav `api.quickRoll` v1 (plan
+      // 202610/quick_roll_alt_p.md, phase footer-preview). Only a queue row
+      // with a v1 namespace previews; anything else leaves the footer
+      // byte-identical to today. The footer never throws.
+      let quickRoll = null;
+      try {
+        const nav =
+          typeof this.dependencyNavApi === "function"
+            ? this.dependencyNavApi()
+            : null;
+        const namespace =
+          nav && nav.quickRoll && typeof nav.quickRoll === "object"
+            ? nav.quickRoll
+            : null;
+        if (
+          current &&
+          namespace &&
+          Number(namespace.version) >= 1 &&
+          typeof namespace.preview === "function"
+        ) {
+          const cursor = this.freshnessFooterCursor(true);
+          if (cursor && Array.isArray(cursor.sourceLines)) {
+            quickRoll = namespace.preview({
+              lines: cursor.sourceLines,
+              line: cursor.line0,
+              tier: freshnessReviewMachineTier(current),
+            });
+          }
+        }
+      } catch (error) {
+        quickRoll = null;
+      }
       const view = freshnessFooterView(memo, {
         current,
         navAvailable: this.freshnessNavigationAvailable(),
         todayText: memo.dateText,
         mostOverdue,
         queue,
+        quickRoll,
       });
       const paintKey = [
         view.visible ? "1" : "0",

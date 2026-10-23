@@ -7409,6 +7409,20 @@ function freshnessFooterView(memo, options = {}) {
     let contextText = "";
     let detailText = "";
     let hintText = "";
+    // Additive roll preview from nav `api.quickRoll` v1 (plan
+    // 202610/quick_roll_alt_p.md, phase footer-preview). Only a queue row
+    // with an available preview takes the hint slot; anything else leaves
+    // the footer byte-identical to today.
+    const quickRollOption =
+      options && options.quickRoll && typeof options.quickRoll === "object"
+        ? options.quickRoll
+        : null;
+    const quickRollReady =
+      current !== null &&
+      quickRollOption !== null &&
+      quickRollOption.ok === true &&
+      typeof quickRollOption.compact === "string" &&
+      quickRollOption.compact.trim() !== "";
     if (current) {
       if (
         current.label &&
@@ -7420,6 +7434,9 @@ function freshnessFooterView(memo, options = {}) {
         contextText = current.label;
       }
       detailText = current.compact || "";
+      if (quickRollReady) {
+        hintText = quickRollOption.compact;
+      }
     } else if (read.commitments > 0) {
       contextText =
         read.commitments === 1
@@ -7479,6 +7496,13 @@ function freshnessFooterView(memo, options = {}) {
     ];
     if (current && current.detail && current.detail !== current.compact) {
       tooltipLines.splice(1, 0, current.detail);
+    }
+    if (
+      quickRollReady &&
+      typeof quickRollOption.detail === "string" &&
+      quickRollOption.detail.trim() !== ""
+    ) {
+      tooltipLines.push(quickRollOption.detail);
     }
     if (current && current.actionHint) {
       tooltipLines.push(current.actionHint);
@@ -29285,12 +29309,45 @@ class BobLedgerToolsFreshnessStatusMixin {
         }
       }
       const current = this.freshnessFooterCurrentEntry(queue);
+      // Additive roll preview from nav `api.quickRoll` v1 (plan
+      // 202610/quick_roll_alt_p.md, phase footer-preview). Only a queue row
+      // with a v1 namespace previews; anything else leaves the footer
+      // byte-identical to today. The footer never throws.
+      let quickRoll = null;
+      try {
+        const nav =
+          typeof this.dependencyNavApi === "function"
+            ? this.dependencyNavApi()
+            : null;
+        const namespace =
+          nav && nav.quickRoll && typeof nav.quickRoll === "object"
+            ? nav.quickRoll
+            : null;
+        if (
+          current &&
+          namespace &&
+          Number(namespace.version) >= 1 &&
+          typeof namespace.preview === "function"
+        ) {
+          const cursor = this.freshnessFooterCursor(true);
+          if (cursor && Array.isArray(cursor.sourceLines)) {
+            quickRoll = namespace.preview({
+              lines: cursor.sourceLines,
+              line: cursor.line0,
+              tier: freshnessReviewMachineTier(current),
+            });
+          }
+        }
+      } catch (error) {
+        quickRoll = null;
+      }
       const view = freshnessFooterView(memo, {
         current,
         navAvailable: this.freshnessNavigationAvailable(),
         todayText: memo.dateText,
         mostOverdue,
         queue,
+        quickRoll,
       });
       const paintKey = [
         view.visible ? "1" : "0",

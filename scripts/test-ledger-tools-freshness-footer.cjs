@@ -1088,3 +1088,263 @@ test("legend line lists only current abbreviated tiers", () => {
     /Footer splits TICKS from ROTTEN; dashboard ROTTEN chips still fold both\./,
   );
 });
+
+const QUICK_ROLL_OK = Object.freeze({
+  ok: true,
+  kind: "roll",
+  line: "Alt+P roll P2 1/1 · 8–30d",
+  compact: "Alt+P roll P2 1/1",
+  detail: "Alt+P: roll P2 again (1 of 1), 8–30 days out",
+});
+
+function rottenQuickRollEntry(overrides = {}) {
+  return queueEntry({
+    key: "r.md:1",
+    path: "r.md",
+    line: 1,
+    lineNumber: 0,
+    originalMarkdown: "- [ ] #task Rotten",
+    tier: "rotten",
+    tierLabel: "ROTTEN",
+    lane: "ready",
+    state: "rotten",
+    fresh: "2026-09-20",
+    dueOn: null,
+    daysOverdue: 18,
+    interval: 7,
+    rank: 14,
+    tierRank: 2,
+    tierTotal: 9,
+    ...overrides,
+  });
+}
+
+function quickRollMemo(entry) {
+  return {
+    counts: {
+      walk: 31,
+      upkeepToday: 4,
+      budget: 15,
+      budgetMet: false,
+      byTier: {
+        pre: 0,
+        new: 0,
+        projects: 0,
+        pending: 0,
+        next: 0,
+        tickler: 2,
+        rotten: 29,
+        post: 0,
+      },
+    },
+    queue: [entry],
+    tasksAvailable: true,
+  };
+}
+
+test("queue-row quickRoll preview takes the hint slot, tooltip, and aria", () => {
+  const rotten = rottenQuickRollEntry();
+  const memo = quickRollMemo(rotten);
+  const options = { current: rotten, todayText: D, navAvailable: true };
+  const plain = freshnessFooterView(memo, options);
+  assert.equal(plain.hintText, "");
+  const view = freshnessFooterView(memo, { ...options, quickRoll: QUICK_ROLL_OK });
+  assert.equal(view.hintText, "Alt+P roll P2 1/1");
+  assert.ok(
+    view.tooltip.includes("Alt+P: roll P2 again (1 of 1), 8–30 days out"),
+    "tooltip carries the full preview sentence",
+  );
+  assert.ok(
+    view.tooltip.split("\n")[0].includes("Alt+P roll P2 1/1"),
+    "first tooltip line carries the compact preview",
+  );
+  assert.ok(view.ariaLabel.includes("Alt+P roll P2 1/1"));
+});
+
+test("quickRoll detail sits next to the action hint on lane rows", () => {
+  const next = queueEntry({
+    key: "n.md:1",
+    path: "n.md",
+    line: 1,
+    lineNumber: 0,
+    originalMarkdown: "- [ ] #task Next",
+    tier: "next",
+    tierLabel: "NEXT",
+    lane: "next",
+    fresh: "2026-10-07",
+    interval: 1,
+    daysOverdue: 0,
+    rank: 5,
+    tierRank: 1,
+    tierTotal: 3,
+  });
+  const view = freshnessFooterView(quickRollMemo(next), {
+    current: next,
+    todayText: D,
+    navAvailable: true,
+    quickRoll: QUICK_ROLL_OK,
+  });
+  assert.equal(view.hintText, "Alt+P roll P2 1/1");
+  const lines = view.tooltip.split("\n");
+  const detailAt = lines.indexOf(QUICK_ROLL_OK.detail);
+  assert.notEqual(detailAt, -1);
+  assert.equal(lines[detailAt + 1], view.current.actionHint);
+  assert.ok(view.current.actionHint.includes("Alt+N release"));
+});
+
+test("missing, failed, or off-row quickRoll leaves the footer byte-identical", () => {
+  const rotten = rottenQuickRollEntry();
+  const memo = quickRollMemo(rotten);
+  const options = { current: rotten, todayText: D, navAvailable: true };
+  const plain = freshnessFooterView(memo, options);
+  assert.deepEqual(freshnessFooterView(memo, { ...options, quickRoll: null }), plain);
+  assert.deepEqual(
+    freshnessFooterView(memo, { ...options, quickRoll: { ok: false } }),
+    plain,
+  );
+  assert.deepEqual(
+    freshnessFooterView(memo, { ...options, quickRoll: { ok: false, reason: "no-config" } }),
+    plain,
+  );
+  const offRow = freshnessFooterView(memo, {
+    todayText: D,
+    navAvailable: true,
+    quickRoll: QUICK_ROLL_OK,
+  });
+  assert.equal(offRow.hintText, "]s next");
+  assert.equal(offRow.tooltip.includes(QUICK_ROLL_OK.detail), false);
+});
+
+test("PRE rows stay unchanged under the nav checklist-tier contract", () => {
+  const pre = queueEntry({
+    tier: "pre",
+    tierLabel: "PRE",
+    lane: "ready",
+    state: null,
+    bucket: null,
+    rank: 1,
+    tierRank: 1,
+    tierTotal: 1,
+  });
+  const memo = {
+    counts: { walk: 2, byTier: { pre: 1, post: 1 } },
+    queue: [pre, queueEntry({ key: "post", tier: "post", tierLabel: "POST" })],
+    tasksAvailable: true,
+  };
+  const options = { current: pre, todayText: D, navAvailable: true };
+  const plain = freshnessFooterView(memo, options);
+  assert.deepEqual(
+    freshnessFooterView(memo, {
+      ...options,
+      quickRoll: { ok: false, reason: "checklist-tier" },
+    }),
+    plain,
+    "nav reports checklist tiers as unavailable, so the footer never changes",
+  );
+  assert.equal(plain.hintText, "");
+});
+
+function quickRollPluginApp({ navApi, cursor } = {}) {
+  const app = makeFreshnessApp({ tasks: [makeFreshnessTask()] });
+  app.plugins.plugins["bob-navigation-hotkeys"] = { api: navApi === undefined ? null : navApi };
+  if (cursor !== undefined) {
+    app.workspace.getActiveViewOfType = () => cursor;
+  }
+  return app;
+}
+
+function quickRollCursor() {
+  const view = new TestMarkdownView();
+  view.editor = {
+    getCursor: () => ({ line: 0 }),
+    getLine: () => "- [ ] #task Do it",
+    getValue: () => "- [ ] #task Do it",
+  };
+  view.file = { path: "notes/a.md" };
+  return view;
+}
+
+test("status bar wires nav api.quickRoll into the hint slot", () => {
+  withMissingConfig(() => {
+    const seen = [];
+    const navApi = {
+      version: 3,
+      quickRoll: {
+        version: 1,
+        preview: (args) => {
+          seen.push(args);
+          return { ...QUICK_ROLL_OK };
+        },
+      },
+    };
+    const app = quickRollPluginApp({ navApi, cursor: quickRollCursor() });
+    const el = makeStatusEl();
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.addStatusBarItem = () => el;
+    plugin.onload();
+    try {
+      plugin.updateFreshnessStatusBar();
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0].line, 0);
+      assert.deepEqual(seen[0].lines, ["- [ ] #task Do it"]);
+      assert.equal(typeof seen[0].tier, "string");
+      assert.ok(seen[0].tier.length > 0);
+      assert.equal(findChild(el, "bob-freshness-hint").textContent, "Alt+P roll P2 1/1");
+      const firstKey = plugin.freshnessFooterPaintKey;
+      assert.ok(firstKey.includes("Alt+P roll P2 1/1"));
+      navApi.quickRoll.preview = () => ({
+        ok: true,
+        kind: "decay",
+        line: "Alt+P decay P2→P3 · 31–90d",
+        compact: "Alt+P decay P2→P3",
+        detail: "Alt+P: decay P2 → P3, 31–90 days out",
+      });
+      plugin.updateFreshnessStatusBar();
+      assert.notEqual(plugin.freshnessFooterPaintKey, firstKey);
+      assert.equal(findChild(el, "bob-freshness-hint").textContent, "Alt+P decay P2→P3");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("status bar ignores missing, v0, or throwing quickRoll namespaces", () => {
+  withMissingConfig(() => {
+    for (const [name, quickRoll] of [
+      ["missing namespace", undefined],
+      ["v0 namespace", { version: 0, preview: () => ({ ...QUICK_ROLL_OK }) }],
+      [
+        "throwing preview",
+        {
+          version: 1,
+          preview: () => {
+            throw new Error("preview boom");
+          },
+        },
+      ],
+      ["unavailable preview", { version: 1, preview: () => ({ ok: false }) }],
+    ]) {
+      const navApi = quickRoll === undefined ? { version: 3 } : { version: 3, quickRoll };
+      const app = quickRollPluginApp({ navApi, cursor: quickRollCursor() });
+      const el = makeStatusEl();
+      const plugin = new LedgerToolsPlugin(app, {});
+      plugin.addStatusBarItem = () => el;
+      plugin.onload();
+      try {
+        plugin.updateFreshnessStatusBar();
+        assert.equal(
+          findChild(el, "bob-freshness-hint").textContent,
+          "",
+          `${name} leaves the hint slot empty`,
+        );
+        assert.equal(
+          findChild(el, "bob-freshness-due").textContent.includes("Review"),
+          true,
+          `${name} still paints the footer`,
+        );
+      } finally {
+        plugin.onunload();
+      }
+    }
+  });
+});

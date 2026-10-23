@@ -15,8 +15,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     const pomodoroSnapshot = options.pomodoroSnapshot || null;
     const dailyCleanupPlan = options.dailyCleanupPlan || null;
     const foldedDailyPath = options.foldedDailyPath || null;
-    const failed = (reason) =>
-      Object.freeze({ ok: false, reason, pomodoroPruneFailed: false });
+    const failed = (reason, extra = {}) =>
+      Object.freeze({ ok: false, reason, pomodoroPruneFailed: false, ...extra });
 
     // Re-verify every preimage before writing anything.
     for (const { group } of planned) {
@@ -74,6 +74,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         }
       }
     } catch (error) {
+      const rollbackFailures = [];
       for (const entry of written.slice().reverse()) {
         try {
           await this.writeLinkPickerNoteChange(
@@ -83,10 +84,13 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
             entry.before,
           );
         } catch (rollbackError) {
-          // Best effort: the original error stays authoritative.
+          rollbackFailures.push(entry.path);
         }
       }
-      return failed("write");
+      return failed(rollbackFailures.length > 0 ? "partial-write" : "write", {
+        partial: rollbackFailures.length > 0,
+        rollbackFailures,
+      });
     }
 
     let pomodoroPruneFailed = false;

@@ -789,14 +789,22 @@ test("counted session skips at-limit and counts below-limit", async () => {
     ),
     dateText: DATE,
   });
+  let promptCalls = 0;
+  plugin.requestFreshnessRefreshAnswers = async (options) => {
+    promptCalls += 1;
+    assert.equal(options.keepTargets.length, 1);
+    return { cancelled: false, failed: false, summary: "", keepReason: "still relevant" };
+  };
   const ok = await plugin.refreshTaskFreshness(editor, {
     dateText: DATE,
     countExplicit: true,
     additionalTaskCount: 1,
   });
   assert.equal(ok, true);
+  assert.equal(promptCalls, 1);
   assert.equal(editor.state.lines[0], atLimit);
   assert.match(editor.state.lines[1], /\[keeps:: 2\]/);
+  assert.equal(helpers.readRottenLog(editor.state.lines.join("\n"), 1).entries.length, 1);
   assert.match(notices[notices.length - 1], /1 needs a decision/);
 });
 
@@ -818,15 +826,23 @@ test("counted session skips at-limit on an early date", async () => {
     ),
     dateText: BEFORE,
   });
+  let promptCalls = 0;
+  plugin.requestFreshnessRefreshAnswers = async (options) => {
+    promptCalls += 1;
+    assert.equal(options.keepTargets.length, 1);
+    return { cancelled: false, failed: false, summary: "", keepReason: "still relevant" };
+  };
   const ok = await plugin.refreshTaskFreshness(editor, {
     dateText: BEFORE,
     countExplicit: true,
     additionalTaskCount: 1,
   });
   assert.equal(ok, true);
+  assert.equal(promptCalls, 1);
   assert.equal(editor.state.lines[0], atLimit);
   assert.match(editor.state.lines[1], /\[keeps:: 2\]/);
   assert.match(editor.state.lines[1], /\[fresh:: 2026-10-18\]/);
+  assert.equal(helpers.readRottenLog(editor.state.lines.join("\n"), 1).entries.length, 1);
   assert.match(notices[notices.length - 1], /1 needs a decision/);
 });
 

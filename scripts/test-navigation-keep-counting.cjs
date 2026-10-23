@@ -872,8 +872,13 @@ test("counted Alt+F increments every exact target once", async () => {
     additionalTaskCount: 1,
   });
   assert.equal(ok, true);
-  assert.match(editor.state.lines[0], /\[keeps:: 3\]/);
-  assert.match(editor.state.lines[1], /\[keeps:: 2\]/);
+  const after = editor.state.lines.join("\n");
+  const taskLines = editor.state.lines.filter((line) => line.includes("#task"));
+  assert.match(taskLines[0], /\[keeps:: 3\]/);
+  assert.match(taskLines[1], /\[keeps:: 2\]/);
+  assert.equal(helpers.readRottenLog(after, 0).entries.length, 1);
+  const secondLine = editor.state.lines.findIndex((line) => line.includes("Walk dog"));
+  assert.equal(helpers.readRottenLog(after, secondLine).entries.length, 1);
   assert.match(notices[notices.length - 1], /kept 2×/);
 });
 
@@ -1003,10 +1008,14 @@ function makeLinkPlugin({ cursorContent, cursorLine, noteMap, freshness }) {
     freshness,
   });
   plugin.noteMap = noteMap;
+  plugin.initialNoteMap = new Map(noteMap);
   plugin.readLinkPickerNoteContent = async (path) =>
     plugin.noteMap.has(path) ? plugin.noteMap.get(path) : null;
   plugin.writeLinkPickerNoteChange = async (path, file, before, after) => {
     plugin.writes.push({ path, before, after });
+    if (plugin.failRollbackWrites.has(path) && after === plugin.initialNoteMap.get(path)) {
+      throw new Error(`rollback failed: ${path}`);
+    }
     if (plugin.failWrites.has(path)) {
       throw new Error(`write failed: ${path}`);
     }
@@ -1019,6 +1028,7 @@ function makeLinkPlugin({ cursorContent, cursorLine, noteMap, freshness }) {
   };
   plugin.writes = [];
   plugin.failWrites = new Set();
+  plugin.failRollbackWrites = new Set();
   return plugin;
 }
 
@@ -1088,6 +1098,7 @@ test("Task Link refresh counts one exact target", async () => {
     noteMap.get("Target.md"),
     /\[fresh:: 2026-10-08\] \[keeps:: 3\]/,
   );
+  assert.equal(helpers.readRottenLog(noteMap.get("Target.md"), 0).entries.length, 1);
   assert.match(notices[notices.length - 1], /kept 1×/);
 });
 
@@ -1107,7 +1118,57 @@ test("duplicate Task Links to one target stamp and count once", async () => {
   });
   assert.equal(ok, true);
   assert.match(noteMap.get("Target.md"), /\[keeps:: 3\]/);
+  assert.equal(helpers.readRottenLog(noteMap.get("Target.md"), 0).entries.length, 1);
   assert.match(notices[notices.length - 1], /kept 1×/);
+});
+
+test("counted Task Link sessions combine Pending work and Rotten keep logs", async () => {
+  clearNotices();
+  const rottenRaw = TARGET_LINE;
+  const pendingRaw = "- [/] #task Pending linked work ^p";
+  const noteMap = new Map([["Target.md", [rottenRaw, pendingRaw].join("\n")]]);
+  const pendingEntry = rottenEntry({
+    key: "Target.md:2", path: "Target.md", line: 2,
+    originalMarkdown: pendingRaw, text: "Pending linked work",
+    state: "pending", tier: "pending", tierLabel: "PENDING", lane: "pending",
+    fresh: null, keeps: 0,
+  });
+  const freshness = freshnessV5([
+    rottenEntry({
+      key: "Target.md:1", path: "Target.md", line: 1,
+      originalMarkdown: rottenRaw, text: "Linked keep",
+    }),
+    pendingEntry,
+  ], BASE_COUNTS);
+  const plugin = makeLinkPlugin({
+    cursorContent: ["- [ ] [[Target#^abc]]", "- [ ] [[Target#^p]]"].join("\n"),
+    cursorLine: 0,
+    noteMap,
+    freshness,
+  });
+  let promptCalls = 0;
+  const originalPrompt = plugin.requestFreshnessRefreshAnswers.bind(plugin);
+  plugin.requestFreshnessRefreshAnswers = async (options) => {
+    promptCalls += 1;
+    assert.equal(options.showWorkField, true);
+    assert.equal(options.keepTargets.length, 1);
+    return await originalPrompt({
+      ...options,
+      summary: "Reviewed the intro",
+      keepReason: "still useful",
+    });
+  };
+  const ok = await plugin.refreshTaskFreshness(plugin.view.editor, {
+    dateText: DATE, countExplicit: true, additionalTaskCount: 1,
+  });
+  assert.equal(ok, true);
+  assert.equal(promptCalls, 1);
+  const after = noteMap.get("Target.md");
+  assert.equal((after.match(/Reviewed the intro/g) || []).length, 1);
+  assert.equal((after.match(/still useful · kept 3×/g) || []).length, 1);
+  assert.match(after, /WORK LOG/);
+  assert.match(after, /ROTTEN LOG/);
+  assert.equal(plugin.writes.length, 1);
 });
 
 test("counted Task Links dedupe targets and log only the Pending target", async () => {
@@ -1202,6 +1263,25 @@ test("multi-note stale preimage refuses with no writes", async () => {
   );
 });
 
+test("a linked note changed during the Keep prompt refuses before any write", async () => {
+  clearNotices();
+  const noteMap = new Map([["Target.md", TARGET_LINE]]);
+  const plugin = makeLinkPlugin({
+    cursorContent: LINK_LINE,
+    cursorLine: 0,
+    noteMap,
+    freshness: freshnessV5(linkQueue(), BASE_COUNTS),
+  });
+  plugin.requestFreshnessRefreshAnswers = async () => {
+    noteMap.set("Target.md", `${TARGET_LINE}\nexternal edit`);
+    return { cancelled: false, failed: false, summary: "", keepReason: "still useful" };
+  };
+  const ok = await plugin.refreshTaskFreshness(plugin.view.editor, { dateText: DATE });
+  assert.equal(ok, false);
+  assert.equal(plugin.writes.length, 0);
+  assert.equal(notices.at(-1), "A linked note changed; no tasks were updated");
+});
+
 test("multi-note write failure rolls back the first note", async () => {
   clearNotices();
   const one = TARGET_LINE.replace("Target", "One");
@@ -1246,6 +1326,56 @@ test("multi-note write failure rolls back the first note", async () => {
   assert.ok(plugin.writes.length >= 3);
   assert.equal(noteMap.get("One.md"), one);
   assert.equal(noteMap.get("Two.md"), two);
+});
+
+test("partial rollback is reported and a same-day retry does not duplicate the logged keep", async () => {
+  clearNotices();
+  const one = TARGET_LINE.replace("Target", "One");
+  const two = TARGET_LINE.replace("Target", "Two");
+  const noteMap = new Map([["One.md", one], ["Two.md", two]]);
+  const oneEntry = rottenEntry({
+    key: "One.md:1", path: "One.md", line: 1, originalMarkdown: one, keeps: 2,
+  });
+  const twoEntry = rottenEntry({
+    key: "Two.md:1", path: "Two.md", line: 1, originalMarkdown: two, keeps: 2, rank: 2,
+  });
+  const freshness = freshnessV5([oneEntry, twoEntry], BASE_COUNTS);
+  const plugin = makeLinkPlugin({
+    cursorContent: ["- [ ] [[One#^abc]]", "- [ ] [[Two#^abc]]"].join("\n"),
+    cursorLine: 0,
+    noteMap,
+    freshness,
+  });
+  plugin.failWrites.add("Two.md");
+  plugin.failRollbackWrites.add("One.md");
+  const failed = await plugin.refreshTaskFreshness(plugin.view.editor, {
+    dateText: DATE, countExplicit: true, additionalTaskCount: 1, keepReason: "still useful",
+  });
+  assert.equal(failed, false);
+  assert.match(notices.at(-1), /Some linked notes may have changed/);
+  assert.equal(helpers.readRottenLog(noteMap.get("One.md"), 0).entries.length, 1);
+  assert.equal(noteMap.get("Two.md"), two);
+
+  const liveOne = noteMap.get("One.md").split("\n")[0];
+  freshness.queue = () => [
+    rottenEntry({
+      ...oneEntry,
+      originalMarkdown: liveOne,
+      fresh: DATE,
+      keeps: 3,
+    }),
+    twoEntry,
+  ];
+  plugin.failWrites.clear();
+  plugin.failRollbackWrites.clear();
+  plugin.writes.length = 0;
+  const retried = await plugin.refreshTaskFreshness(plugin.view.editor, {
+    dateText: DATE, countExplicit: true, additionalTaskCount: 1, keepReason: "still useful",
+  });
+  assert.equal(retried, true);
+  assert.equal(helpers.readRottenLog(noteMap.get("One.md"), 0).entries.length, 1);
+  assert.equal(helpers.readRottenLog(noteMap.get("Two.md"), 0).entries.length, 1);
+  assert.ok(plugin.writes.every((write) => write.path === "Two.md"));
 });
 
 // --- physical-key dispatch ----------------------------------------------------
@@ -1315,6 +1445,12 @@ test("Ctrl+Alt+F capture advances once and consumes a Vim prefix", async () => {
     filePath: "a.md",
     editor,
     freshness: freshnessV5([rottenEntry()], BASE_COUNTS),
+  });
+  plugin.requestFreshnessRefreshAnswers = async () => ({
+    cancelled: false,
+    failed: false,
+    summary: "",
+    keepReason: "",
   });
   const cm = {
     getCursor: () => ({ line: 2, ch: 0 }),

@@ -144,6 +144,57 @@ test("Pending retains its Work summary prompt", async () => {
   assert.doesNotMatch(f.editor.content, /ROTTEN LOG/);
 });
 
+test("counted mixed sessions use one Work-first prompt and route each answer to its log", async () => {
+  const pendingRaw = "- [/] #task Finish intro ^pending";
+  const content = [pendingRaw, RAW].join("\n");
+  const f = fixture({ content, entry: null });
+  f.freshness.queue = () => [
+    row(pendingRaw, {
+      key: "a.md:1", line: 1, tier: "pending", tierLabel: "PENDING",
+      state: "pending", lane: "pending", fresh: null, keeps: 0,
+    }),
+    row(RAW, { key: "a.md:2", line: 2 }),
+  ];
+  const pending = f.run({ countExplicit: true, additionalTaskCount: 1 });
+  assert.equal(modals.length, 1);
+  const modal = modals[0];
+  assert.ok(modal.workInputEl);
+  assert.ok(modal.keepInputEl);
+  assert.equal(modal.workInputEl.getAttribute("aria-label"), "Work summary");
+  assert.equal(modal.keepInputEl.getAttribute("aria-label"), "Keep reason");
+  assert.match(text(modal.keepPreviewEl), /Read primer #ref · kept 3× · 0 logged/);
+  assert.equal(modal.workInputEl.focused, true);
+
+  modal.workInputEl.value = "Finished the intro";
+  modal.workInputEl.listeners.input();
+  modal.keepInputEl.value = "still the primer";
+  modal.keepInputEl.listeners.input();
+  const tab = pressKey(modal, "Tab");
+  assert.equal(tab.defaultPrevented, true);
+  assert.equal(modal.keepInputEl.focused, true);
+  const reverseTab = pressKey(modal, "Tab", { shiftKey: true });
+  assert.equal(reverseTab.defaultPrevented, true);
+  assert.equal(modal.workInputEl.focused, true);
+  modal.keepInputEl.focus();
+  pressKey(modal, "Enter");
+
+  assert.equal(await pending, true);
+  assert.equal(f.editor.transactions.length, 1);
+  assert.match(f.editor.content, /\n\t- 🛠️ \*\*WORK LOG\*\*\n\t\t- \*2026-10-23\* — Finished the intro/);
+  assert.match(f.editor.content, /\n\t- 🥀 \*\*ROTTEN LOG\*\*\n\t\t- \*2026-10-23\* — still the primer · kept 3×/);
+});
+
+test("counted at-limit Rotten targets skip without opening a prompt or logging", async () => {
+  const atLimit = RAW.replace("keeps:: 2", "keeps:: 3");
+  const f = fixture({ content: atLimit, entry: row(atLimit, { decide: true, keeps: 3 }) });
+  assert.equal(await f.run({ countExplicit: true }), true);
+  assert.equal(modals.length, 0);
+  assert.equal(f.editor.transactions.length, 0);
+  assert.equal(f.editor.content, atLimit);
+  assert.match(notices.at(-1), /needs a decision/);
+  assert.doesNotMatch(f.editor.content, /ROTTEN LOG/);
+});
+
 test("unavailable decay card falls through the reason planner", async () => {
   const f = fixture({ entry: row(RAW, { decide: true }) });
   let opened = 0; f.plugin.maybeOpenFreshnessDecayCard = async () => { opened++; return false; };

@@ -20270,6 +20270,50 @@ class LaneReleaseSummaryModal extends Modal {
 // Alt+F / Ctrl+Alt+F summary stage for Pending tasks. This is deliberately
 // separate from both lane release and scheduling: the refresh gesture only
 // stamps the task and optionally prepends a Work Log entry.
+
+function contentElCleanup(contentEl) {
+  try {
+    if (contentEl && typeof contentEl.empty === "function") {
+      contentEl.empty();
+    }
+  } catch (error) {
+    // Best effort.
+  }
+}
+
+// Footer hints for the lane-release reason stage: Enter confirms (releasing
+// plus a Work Log entry when a summary was typed), Esc cancels the release.
+function getLaneReleaseReasonHints(options = {}) {
+  const enter = options.empty ? "Release without a summary" : "Release & log summary";
+  return [
+    { keys: ["↵"], label: enter },
+    { keys: ["esc"], label: "Cancel" },
+  ];
+}
+
+function getSchedulingWorkLogHints(options = {}) {
+  const enter = options.empty ? "Schedule without a summary" : "Schedule & log summary";
+  return [
+    { keys: ["↵"], label: enter },
+    { keys: ["esc"], label: "Cancel" },
+  ];
+}
+
+function formatSchedulingWorkLogDateSpan(dates) {
+  const values = Array.from(dates || [])
+    .map((date) => normalizeBulletPropertyValue(date))
+    .filter(Boolean)
+    .sort();
+  if (values.length === 0) {
+    return "";
+  }
+  if (values.length === 1 || values[0] === values[values.length - 1]) {
+    return `scheduled → ${values[0]}`;
+  }
+  return `scheduled → ${values[0]} → ${values[values.length - 1]}`;
+}
+
+// ---- src/192-freshness-refresh-summary-modal.js ----
 class FreshnessRefreshSummaryModal extends Modal {
   constructor(app, options = {}) {
     super(app);
@@ -20287,6 +20331,10 @@ class FreshnessRefreshSummaryModal extends Modal {
     contentEl.empty();
     this.modalEl.addClass("bob-cnp-modal");
     contentEl.addClass("bob-cnp");
+    if (Array.isArray(this.options.keepTargets)) {
+      this.renderBatchFields(contentEl);
+      return;
+    }
     if (this.options.keep) {
       this.keepStage = new RottenKeepReasonStage(contentEl, {
         ...this.options.keep,
@@ -20368,6 +20416,212 @@ class FreshnessRefreshSummaryModal extends Modal {
     }, 0);
   }
 
+  renderBatchFields(contentEl) {
+    const keepTargets = this.options.keepTargets || [];
+    const showWorkField = this.options.showWorkField === true;
+    const totalCount = Math.max(
+      1,
+      Math.floor(numericOrDefault(this.options.totalCount, keepTargets.length)),
+    );
+    const taskWord = totalCount === 1 ? "task" : "tasks";
+    const header = contentEl.createDiv({ cls: "bob-cnp-header" });
+    const headerIcon = header.createDiv({ cls: "bob-cnp-header-icon" });
+    applyIcon(headerIcon, "refresh-cw");
+    const headerText = header.createDiv({ cls: "bob-cnp-header-text" });
+    headerText.createDiv({
+      cls: "bob-cnp-title",
+      text: totalCount === 1 ? "Refresh task" : `Refresh ${totalCount} tasks`,
+    });
+    headerText.createDiv({
+      cls: "bob-cnp-subtitle",
+      text: "nothing written yet",
+    });
+
+    if (showWorkField) {
+      const field = contentEl.createDiv({ cls: "bob-cnp-field bob-cnp-work-field" });
+      field.createDiv({ cls: "bob-cnp-field-title", text: "Work summary" });
+      const inputWrap = field.createDiv({ cls: "bob-cnp-search" });
+      const inputIcon = inputWrap.createDiv({ cls: "bob-cnp-search-icon" });
+      applyIcon(inputIcon, "briefcase");
+      this.workInputEl = inputWrap.createEl("input", {
+        cls: "bob-cnp-input",
+        attr: {
+          "aria-label": "Work summary",
+          placeholder: "What did you get done? (optional · ↵ to skip)",
+          type: "text",
+        },
+      });
+      this.workPreviewEl = field.createDiv({ cls: "bob-cnp-results" });
+    }
+
+    if (keepTargets.length > 0) {
+      const field = contentEl.createDiv({ cls: "bob-cnp-field bob-cnp-rotten-field" });
+      field.createDiv({ cls: "bob-cnp-field-title", text: "Keep reason" });
+      const inputWrap = field.createDiv({ cls: "bob-cnp-search" });
+      inputWrap.createDiv({ cls: "bob-cnp-search-icon", text: "🥀" });
+      this.keepInputEl = inputWrap.createEl("input", {
+        cls: "bob-cnp-input",
+        attr: {
+          "aria-label": "Keep reason",
+          placeholder: "Why keep them as written? (optional · ↵ logs 🤷)",
+          type: "text",
+        },
+      });
+      this.keepPreviewEl = field.createDiv({ cls: "bob-cnp-results" });
+    }
+
+    this.inputEl = this.workInputEl || this.keepInputEl;
+    this.hintsEl = contentEl.createDiv({ cls: "bob-cnp-footer" });
+    for (const input of [this.workInputEl, this.keepInputEl].filter(Boolean)) {
+      input.addEventListener("input", () => this.renderBatchPreview());
+      input.addEventListener("keydown", (event) => {
+        if (isReviewRefreshKeydown(event, false) || isReviewRefreshKeydown(event, true)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        if (event.key === "Enter") {
+          if (event.isComposing) return;
+          event.preventDefault();
+          event.stopPropagation();
+          this.submit();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          this.close();
+        } else if (
+          event.key === "Tab" &&
+          this.workInputEl &&
+          this.keepInputEl
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          const next = event.shiftKey
+            ? (input === this.keepInputEl ? this.workInputEl : this.keepInputEl)
+            : (input === this.workInputEl ? this.keepInputEl : this.workInputEl);
+          next.focus();
+        }
+      });
+    }
+    const actions = contentEl.createDiv({ cls: "bob-cnp-modal-actions" });
+    actions.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+    this.refreshButton = actions.createEl("button", {
+      text: showWorkField && keepTargets.length ? "Refresh & log" : keepTargets.length ? "Keep & log" : "Refresh",
+    });
+    this.refreshButton.disabled = keepTargets.some((target) => {
+      const history = target && target.history;
+      return history && ["unknown", "ambiguous"].includes(history.status);
+    });
+    this.refreshButton.addEventListener("click", () => this.submit());
+    this.renderBatchPreview();
+    window.setTimeout(() => {
+      const first = this.workInputEl || this.keepInputEl;
+      if (first) first.focus();
+    }, 0);
+  }
+
+  renderBatchPreview() {
+    if (this.workPreviewEl && this.workInputEl) {
+      const summary = normalizeLaneWorkSummary(this.workInputEl.value);
+      const hasInlineField = summary.includes("::");
+      this.workPreviewEl.empty();
+      const row = this.workPreviewEl.createDiv({
+        cls: "bob-cnp-row bob-cnp-schedule-reason-row",
+      });
+      addElementClasses(
+        row,
+        summary ? (hasInlineField ? "is-warning" : "is-valid") : "is-empty",
+      );
+      const icon = row.createDiv({ cls: "bob-cnp-row-icon" });
+      applyIcon(icon, summary ? (hasInlineField ? "alert-triangle" : "check-circle-2") : "minus-circle");
+      const text = row.createDiv({ cls: "bob-cnp-row-text" });
+      text.createDiv({
+        cls: "bob-cnp-row-title",
+        text: summary
+          ? formatLaneWorkLogEntry(summary, String(this.options.dateText || ""))
+          : "No summary",
+      });
+      if (hasInlineField) {
+        text.createDiv({
+          cls: "bob-cnp-row-meta",
+          text: '"::" creates a Dataview inline field on this bullet',
+        });
+      }
+      const eligibleCount = Math.max(
+        1,
+        Math.floor(numericOrDefault(this.options.eligibleCount, 1)),
+      );
+      text.createDiv({
+        cls: "bob-cnp-schedule-reason-preview",
+        text: summary
+          ? eligibleCount === 1
+            ? "Prepends under 🛠️ **WORK LOG** on the qualifying task"
+            : `Prepends under 🛠️ **WORK LOG** on each of the ${eligibleCount} qualifying tasks`
+          : "Refresh only; no Work Log entry",
+      });
+    }
+    if (this.keepPreviewEl && this.keepInputEl) {
+      const reason = normalizeLaneWorkSummary(this.keepInputEl.value);
+      this.keepPreviewEl.empty();
+      const targets = Array.isArray(this.options.keepTargets)
+        ? this.options.keepTargets
+        : [];
+      for (const target of targets) {
+        const entry = target.entry || {};
+        const title = cleanTaskDisplayText(
+          target.raw || entry.originalMarkdown || entry.text || "Task",
+        );
+        const keeps = target.keep && Number.isInteger(target.keep.keepsAfter)
+          ? target.keep.keepsAfter
+          : parseKeepsCount(target.raw || entry.originalMarkdown || "");
+        const history = target.history || { status: "missing", entries: [] };
+        const count = Array.isArray(history.entries) ? history.entries.length : 0;
+        const logged = ["unknown", "ambiguous"].includes(history.status)
+          ? "log unreadable"
+          : `${count} logged`;
+        const row = this.keepPreviewEl.createDiv({
+          cls: "bob-cnp-row bob-cnp-schedule-reason-row",
+        });
+        const text = row.createDiv({ cls: "bob-cnp-row-text" });
+        text.createDiv({
+          cls: "bob-cnp-row-title",
+          text: `${title} · kept ${keeps}× · ${logged}`,
+        });
+        text.createDiv({
+          cls: "bob-cnp-row-meta",
+          text: formatRottenLogEntryText({
+            date: this.options.dateText,
+            reason,
+            keeps,
+          }),
+        });
+      }
+      const destination = this.keepPreviewEl.createDiv({
+        cls: "bob-cnp-row-meta bob-cnp-schedule-reason-preview",
+        text: `Writes one entry under 🥀 **ROTTEN LOG** on each of the ${targets.length} qualifying ${targets.length === 1 ? "task" : "tasks"}`,
+      });
+      if (destination && typeof destination.setAttribute === "function") {
+        destination.setAttribute("aria-live", "polite");
+      }
+    }
+    if (this.hintsEl) {
+      this.hintsEl.empty();
+      const enter = this.hintsEl.createSpan({ cls: "bob-cnp-hint" });
+      enter.createEl("kbd", { cls: "bob-cnp-kbd", text: "↵" });
+      enter.createSpan({
+        cls: "bob-cnp-hint-label",
+        text: this.options.showWorkField && this.options.keepTargets.length
+          ? "Refresh, log & continue"
+          : this.options.keepTargets.length
+            ? "Keep & log"
+            : "Refresh",
+      });
+      const escape = this.hintsEl.createSpan({ cls: "bob-cnp-hint" });
+      escape.createEl("kbd", { cls: "bob-cnp-kbd", text: "esc" });
+      escape.createSpan({ cls: "bob-cnp-hint-label", text: "Cancel" });
+    }
+  }
+
   renderPreview() {
     if (!this.previewEl || !this.inputEl) {
       return;
@@ -20427,6 +20681,21 @@ class FreshnessRefreshSummaryModal extends Modal {
   }
 
   submit() {
+    if (Array.isArray(this.options.keepTargets)) {
+      if (this.completed || (this.refreshButton && this.refreshButton.disabled)) return;
+      this.completed = true;
+      try {
+        if (typeof this.onDone === "function") {
+          this.onDone({
+            summary: this.workInputEl ? String(this.workInputEl.value || "") : "",
+            keepReason: this.keepInputEl ? String(this.keepInputEl.value || "") : "",
+          });
+        }
+      } finally {
+        this.close();
+      }
+      return;
+    }
     if (this.completed || (this.options.keep && buildRottenKeepPromptModel(this.options.keep).disabled)) {
       return;
     }
@@ -20454,48 +20723,6 @@ class FreshnessRefreshSummaryModal extends Modal {
     }
     this.onDone = null;
   }
-}
-
-function contentElCleanup(contentEl) {
-  try {
-    if (contentEl && typeof contentEl.empty === "function") {
-      contentEl.empty();
-    }
-  } catch (error) {
-    // Best effort.
-  }
-}
-
-// Footer hints for the lane-release reason stage: Enter confirms (releasing
-// plus a Work Log entry when a summary was typed), Esc cancels the release.
-function getLaneReleaseReasonHints(options = {}) {
-  const enter = options.empty ? "Release without a summary" : "Release & log summary";
-  return [
-    { keys: ["↵"], label: enter },
-    { keys: ["esc"], label: "Cancel" },
-  ];
-}
-
-function getSchedulingWorkLogHints(options = {}) {
-  const enter = options.empty ? "Schedule without a summary" : "Schedule & log summary";
-  return [
-    { keys: ["↵"], label: enter },
-    { keys: ["esc"], label: "Cancel" },
-  ];
-}
-
-function formatSchedulingWorkLogDateSpan(dates) {
-  const values = Array.from(dates || [])
-    .map((date) => normalizeBulletPropertyValue(date))
-    .filter(Boolean)
-    .sort();
-  if (values.length === 0) {
-    return "";
-  }
-  if (values.length === 1 || values[0] === values[values.length - 1]) {
-    return `scheduled → ${values[0]}`;
-  }
-  return `scheduled → ${values[0]} → ${values[values.length - 1]}`;
 }
 
 // ---- src/195-rotten-keep.js ----
@@ -56490,8 +56717,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     const pomodoroSnapshot = options.pomodoroSnapshot || null;
     const dailyCleanupPlan = options.dailyCleanupPlan || null;
     const foldedDailyPath = options.foldedDailyPath || null;
-    const failed = (reason) =>
-      Object.freeze({ ok: false, reason, pomodoroPruneFailed: false });
+    const failed = (reason, extra = {}) =>
+      Object.freeze({ ok: false, reason, pomodoroPruneFailed: false, ...extra });
 
     // Re-verify every preimage before writing anything.
     for (const { group } of planned) {
@@ -56549,6 +56776,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         }
       }
     } catch (error) {
+      const rollbackFailures = [];
       for (const entry of written.slice().reverse()) {
         try {
           await this.writeLinkPickerNoteChange(
@@ -56558,10 +56786,13 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
             entry.before,
           );
         } catch (rollbackError) {
-          // Best effort: the original error stays authoritative.
+          rollbackFailures.push(entry.path);
         }
       }
-      return failed("write");
+      return failed(rollbackFailures.length > 0 ? "partial-write" : "write", {
+        partial: rollbackFailures.length > 0,
+        rollbackFailures,
+      });
     }
 
     let pomodoroPruneFailed = false;
@@ -57759,15 +57990,38 @@ class BobNavigationHotkeysLaneReviewMixin {
 
   async requestFreshnessRefreshAnswers(options = {}) {
     const keepMode = Boolean(options.keep);
-    const answer = (value, extra = {}) => ({ cancelled: false, failed: false,
-      summary: keepMode ? "" : String(value || ""),
-      keepReason: keepMode ? String(value || "") : "", ...extra });
+    const batchMode = Array.isArray(options.keepTargets);
+    const answer = (value, extra = {}) => ({
+      cancelled: false,
+      failed: false,
+      summary: batchMode
+        ? String((value && value.summary) || "")
+        : keepMode ? "" : String(value || ""),
+      keepReason: batchMode
+        ? String((value && value.keepReason) || "")
+        : keepMode ? String(value || "") : "",
+      ...extra,
+    });
     const supplied = keepMode ? options.keepReason : options.summary;
-    if (typeof supplied === "string") return answer(supplied);
+    if (batchMode) {
+      const needsWork = options.showWorkField === true;
+      const hasSummary = typeof options.summary === "string";
+      const hasKeepReason = typeof options.keepReason === "string";
+      if ((!needsWork || hasSummary) &&
+        (options.keepTargets.length === 0 || hasKeepReason)) {
+        return answer({
+          summary: hasSummary ? options.summary : "",
+          keepReason: hasKeepReason ? options.keepReason : "",
+        });
+      }
+    } else if (typeof supplied === "string") {
+      return answer(supplied);
+    }
     if (typeof FreshnessRefreshSummaryModal !== "function") {
       return answer("", { failed: true });
     }
-    if (keepMode) this.rottenKeepPromptPending = true;
+    const keepPrompt = keepMode || (batchMode && options.keepTargets.length > 0);
+    if (keepPrompt) this.rottenKeepPromptPending = true;
     return await new Promise((resolve) => {
       let settled = false;
       const finish = (result) => {
@@ -57775,7 +58029,7 @@ class BobNavigationHotkeysLaneReviewMixin {
           return;
         }
         settled = true;
-        if (keepMode) this.rottenKeepPromptPending = false;
+        if (keepPrompt) this.rottenKeepPromptPending = false;
         resolve(result);
       };
       let modal;
@@ -57783,6 +58037,8 @@ class BobNavigationHotkeysLaneReviewMixin {
         modal = new FreshnessRefreshSummaryModal(this.app, {
           dateText: options.dateText,
           keep: options.keep,
+          keepTargets: batchMode ? options.keepTargets : undefined,
+          showWorkField: options.showWorkField,
           totalCount: options.totalCount,
           eligibleCount: options.eligibleCount,
           onDone: (result) => {
@@ -57855,7 +58111,7 @@ class BobNavigationHotkeysLaneReviewMixin {
         line: target.line,
         raw,
       });
-      const keep = singleKeep && freshnessSupportsKeeps(api)
+      const keep = freshnessSupportsKeeps(api)
         ? classifyRottenKeepTarget({ match, raw, stamper: options.stamper, dateText: options.dateText })
         : { counted: false };
       return Object.freeze({
@@ -57983,16 +58239,27 @@ class BobNavigationHotkeysLaneReviewMixin {
     const eligibleTargets = keepTargets.filter((target) =>
       isPendingWorkLogTargetRawLine(target.raw),
     );
-    const rottenTargets = singleKeep ? resolved.filter((item) => item.keep.counted &&
-      keepTargets.some((target) => target.line === item.target.line)) : [];
+    const rottenTargets = resolved
+      .filter((item) => item.keep.counted &&
+        keepTargets.some((target) => target.line === item.target.line))
+      .map((item) => ({
+        ...item,
+        history: readRottenLog(content, item.target.line),
+      }));
     let keepReason = "";
-    if (rottenTargets.length) {
+    let summary = "";
+    if (singleKeep && rottenTargets.length) {
       const item = rottenTargets[0];
       const result = await this.requestFreshnessRefreshAnswers({
         keepReason: options.keepReason,
         dateText: options.dateText,
-        keep: { raw: item.target.raw, entry: item.match.entry, ...item.keep,
-          history: readRottenLog(content, item.target.line), advance: options.advance === true },
+        keep: {
+          raw: item.target.raw,
+          entry: item.match.entry,
+          ...item.keep,
+          history: item.history,
+          advance: options.advance === true,
+        },
       });
       if (result.failed) {
         new Notice("Could not open Keep reason prompt; no tasks were updated");
@@ -58000,13 +58267,49 @@ class BobNavigationHotkeysLaneReviewMixin {
       }
       if (result.cancelled) return false;
       keepReason = result.keepReason;
-      if (this.laneReleaseDateText() !== localDayBefore) {
-        new Notice("Day changed while the prompt was open; nothing was written");
+    } else if (rottenTargets.length && eligibleTargets.length) {
+      const result = await this.requestFreshnessRefreshAnswers({
+        keepTargets: rottenTargets.map((item) => ({
+          raw: item.target.raw,
+          entry: item.match.entry,
+          keep: item.keep,
+          history: item.history,
+        })),
+        showWorkField: true,
+        keepReason: options.keepReason,
+        summary: options.summary,
+        dateText: options.dateText,
+        totalCount: keepTargets.length,
+        eligibleCount: eligibleTargets.length,
+      });
+      if (result.failed) {
+        new Notice("Could not open combined refresh prompt; no tasks were updated");
         return false;
       }
-    }
-    let summary = "";
-    if (eligibleTargets.length > 0) {
+      if (result.cancelled) return false;
+      keepReason = result.keepReason;
+      summary = result.summary;
+    } else if (rottenTargets.length) {
+      const result = await this.requestFreshnessRefreshAnswers({
+        keepTargets: rottenTargets.map((item) => ({
+          raw: item.target.raw,
+          entry: item.match.entry,
+          keep: item.keep,
+          history: item.history,
+        })),
+        showWorkField: false,
+        keepReason: options.keepReason,
+        dateText: options.dateText,
+        totalCount: keepTargets.length,
+        eligibleCount: 0,
+      });
+      if (result.failed) {
+        new Notice("Could not open Keep reason prompt; no tasks were updated");
+        return false;
+      }
+      if (result.cancelled) return false;
+      keepReason = result.keepReason;
+    } else if (eligibleTargets.length > 0) {
       const result = await this.requestFreshnessRefreshSummary({
         summary: options.summary,
         dateText: options.dateText,
@@ -58021,6 +58324,12 @@ class BobNavigationHotkeysLaneReviewMixin {
         return false;
       }
       summary = result.summary;
+    }
+    if (rottenTargets.length > 0 || eligibleTargets.length > 0) {
+      if (this.laneReleaseDateText() !== localDayBefore) {
+        new Notice("Day changed while the prompt was open; nothing was written");
+        return false;
+      }
     }
     if (
       cm &&
@@ -58436,224 +58745,6 @@ function createTaskLinkLaneApi(plugin) {
 // ---- src/530-plugin-freshness-refresh-and-decay.js ----
 class BobNavigationHotkeysFreshnessDecayMixin {
 
-  async refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
-    const discovery =
-      options.linkDiscovery ||
-      discoverLinkPickerTargets(
-        content,
-        cursor.line,
-        options.countExplicit ? options.additionalTaskCount : 0,
-      );
-    if (!discovery.valid) {
-      new Notice(
-        discovery.notLink
-          ? "Cursor is not on a task or Task Link"
-          : discovery.error,
-      );
-      return false;
-    }
-    const activeView = this.getActiveMarkdownView();
-    if (!activeView || activeView.editor !== cm || !activeView.file) {
-      new Notice("No active markdown note");
-      return false;
-    }
-    const api = getReviewFreshnessApi(this.app);
-    if (!api) {
-      new Notice(REVIEW_FRESHNESS_API_REQUIRED_NOTICE);
-      return false;
-    }
-    const resolution = await this.resolveLinkPickerTargets(
-      activeView.file.path,
-      discovery,
-    );
-    if (resolution.error) {
-      new Notice(resolution.error);
-      return false;
-    }
-    if (
-      cm &&
-      typeof cm.getValue === "function" &&
-      String(cm.getValue() || "") !== content
-    ) {
-      new Notice("Current note changed; no tasks were updated");
-      return false;
-    }
-    const queueBefore = this.readFreshnessQueue(api);
-    const countsBefore = this.readFreshnessCounts(api);
-    // Duplicate references to the same source target stamp and count once:
-    // dedupe before planning so a repeated Task Link cannot inflate keeps.
-    const deduped = deduplicateFreshStampTargets(resolution.targets);
-    const groups = groupLinkPickerTargetsByNote(deduped);
-    if (groups.length === 0) {
-      new Notice("Could not update task; no tasks were updated");
-      return false;
-    }
-    // Task Link sessions never open cards — even a single link. Exact
-    // at-limit targets skip without changing fresh/count; below
-    // threshold they count normally. Skipped targets stay due for the
-    // walk and never enter anchor exclusions.
-    const linkResolved = groups.map((group) => {
-      const groupLines = splitMarkdownContent(group.content).lines;
-      return {
-        group,
-        resolved: group.session.targets.map((target) => {
-          const raw = String(groupLines[target.line] || "");
-          const match = matchFreshStampExactEntry(queueBefore, {
-            path: group.path,
-            line: target.line,
-            raw,
-          });
-          return Object.freeze({
-            target: Object.freeze({
-              line: target.line,
-              path: group.path,
-              raw,
-              counted: match.ok,
-            }),
-            match,
-          });
-        }),
-      };
-    });
-    const skipDecisions = freshnessSupportsDecayDecisions(api);
-    let linkDecisionSkipped = 0;
-    let linkChecklistSkipped = 0;
-    const stampTargetsByGroup = [];
-    for (const { group, resolved } of linkResolved) {
-      const checklistPart = partitionFreshStampChecklistSkips(
-        resolved,
-        queueBefore,
-      );
-      linkChecklistSkipped += checklistPart.skipped.length;
-      const partition = partitionFreshStampDecisionSkips(checklistPart.stamp, {
-        enabled: skipDecisions,
-      });
-      linkDecisionSkipped += partition.skipped.length;
-      stampTargetsByGroup.push({ group, targets: partition.stamp });
-    }
-    const linkStamped = stampTargetsByGroup.reduce(
-      (count, item) => count + item.targets.length,
-      0,
-    );
-    const linkSkipTail =
-      formatFreshStampSkipTail(linkDecisionSkipped) +
-      formatFreshStampChecklistSkipTail(linkChecklistSkipped);
-    if (
-      linkStamped === 0 &&
-      (linkDecisionSkipped > 0 || linkChecklistSkipped > 0)
-    ) {
-      if (linkDecisionSkipped > 0) {
-        new Notice(
-          formatFreshStampSkippedNotice(linkDecisionSkipped) +
-            formatFreshStampChecklistSkipTail(linkChecklistSkipped),
-        );
-      } else {
-        new Notice(formatFreshStampChecklistSkippedNotice(linkChecklistSkipped));
-      }
-      return true;
-    }
-    for (const { targets } of stampTargetsByGroup) {
-      for (const target of targets) {
-        const check = classifyFreshStampTarget(target.raw);
-        if (!check.ok) {
-          new Notice(freshStampRefusalNotice(check.refusal));
-          return false;
-        }
-      }
-    }
-    const eligibleTargets = stampTargetsByGroup.flatMap(({ targets }) =>
-      targets.filter((target) => isPendingWorkLogTargetRawLine(target.raw)),
-    );
-    let summary = "";
-    if (eligibleTargets.length > 0) {
-      const result = await this.requestFreshnessRefreshSummary({
-        summary: options.summary,
-        dateText: options.dateText,
-        totalCount: linkStamped,
-        eligibleCount: eligibleTargets.length,
-      });
-      if (result.failed) {
-        new Notice("Could not open Work Log prompt; no tasks were updated");
-        return false;
-      }
-      if (result.cancelled) {
-        return false;
-      }
-      summary = result.summary;
-      if (
-        cm &&
-        typeof cm.getValue === "function" &&
-        String(cm.getValue() || "") !== content
-      ) {
-        new Notice("Current note changed; no tasks were updated");
-        return false;
-      }
-      for (const { group } of stampTargetsByGroup) {
-        const live = await this.readLinkPickerNoteContent(
-          group.path,
-          group.file,
-        );
-        if (live !== group.content) {
-          new Notice("A linked note changed; no tasks were updated");
-          return false;
-        }
-      }
-    }
-    const planned = [];
-    const refs = [];
-    const stampedAll = [];
-    let workLogWrittenCount = 0;
-    for (const { group, targets } of stampTargetsByGroup) {
-      const plan = planFreshStampBatchWithWorkLogs(
-        group.content,
-        targets,
-        options.stamper,
-        options.dateText,
-        summary,
-      );
-      if (!plan.ok) {
-        new Notice(freshStampRefusalNotice(plan.refusal));
-        return false;
-      }
-      workLogWrittenCount += plan.workLogWrittenCount;
-      for (const entry of plan.stamped) {
-        refs.push({ path: group.path, line: entry.line, raw: entry.before });
-        stampedAll.push(entry);
-      }
-      if (plan.content !== group.content) {
-        planned.push({ group, plan });
-      }
-    }
-    if (planned.length > 0) {
-      const commit = await this.commitLinkPickerNoteWrites(planned, {});
-      if (!commit.ok) {
-        new Notice("A linked note changed; no tasks were updated");
-        return false;
-      }
-    }
-    // Ctrl+Alt+F advances through the shared tail with the stamp text
-    // as its preamble, giving one composed toast.
-    const linkPreamble = this.finishFreshStamp(
-      queueBefore,
-      countsBefore,
-      refs,
-      stampedAll,
-      options.dateText,
-      {
-        skipTail: linkSkipTail,
-        workLogWrittenCount,
-        deferNotice: options.advance === true,
-      },
-    );
-    if (options.advance === true) {
-      return await this.jumpToDueTask(1, {
-        fromStamp: this.reviewAnchor,
-        fromAdvance: true,
-        preamble: linkPreamble,
-      });
-    }
-    return true;
-  }
 
   // Remember the walk anchor for the session (the Tasks cache lags, so
   // the jump reads the queue fresh but continues from the handled entry's
@@ -59374,6 +59465,314 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     }
   }
 }
+// ---- src/532-plugin-freshness-link-refresh.js ----
+async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
+    const discovery =
+      options.linkDiscovery ||
+      discoverLinkPickerTargets(
+        content,
+        cursor.line,
+        options.countExplicit ? options.additionalTaskCount : 0,
+      );
+    if (!discovery.valid) {
+      new Notice(
+        discovery.notLink
+          ? "Cursor is not on a task or Task Link"
+          : discovery.error,
+      );
+      return false;
+    }
+    const activeView = this.getActiveMarkdownView();
+    if (!activeView || activeView.editor !== cm || !activeView.file) {
+      new Notice("No active markdown note");
+      return false;
+    }
+    const api = getReviewFreshnessApi(this.app);
+    if (!api) {
+      new Notice(REVIEW_FRESHNESS_API_REQUIRED_NOTICE);
+      return false;
+    }
+    const resolution = await this.resolveLinkPickerTargets(
+      activeView.file.path,
+      discovery,
+    );
+    if (resolution.error) {
+      new Notice(resolution.error);
+      return false;
+    }
+    if (
+      cm &&
+      typeof cm.getValue === "function" &&
+      String(cm.getValue() || "") !== content
+    ) {
+      new Notice("Current note changed; no tasks were updated");
+      return false;
+    }
+    const queueBefore = this.readFreshnessQueue(api);
+    const countsBefore = this.readFreshnessCounts(api);
+    // Duplicate references to the same source target stamp and count once:
+    // dedupe before planning so a repeated Task Link cannot inflate keeps.
+    const deduped = deduplicateFreshStampTargets(resolution.targets);
+    const groups = groupLinkPickerTargetsByNote(deduped);
+    if (groups.length === 0) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+    const localDayBefore = this.laneReleaseDateText();
+    const canCountKeeps = freshnessSupportsKeeps(api);
+    // Task Link sessions never open cards — even a single link. Exact
+    // at-limit targets skip without changing fresh/count; below
+    // threshold they count normally. Skipped targets stay due for the
+    // walk and never enter anchor exclusions.
+    const linkResolved = groups.map((group) => {
+      const groupLines = splitMarkdownContent(group.content).lines;
+      return {
+        group,
+        resolved: group.session.targets.map((target) => {
+          const raw = String(groupLines[target.line] || "");
+          const match = matchFreshStampExactEntry(queueBefore, {
+            path: group.path,
+            line: target.line,
+            raw,
+          });
+          const keep = canCountKeeps
+            ? classifyRottenKeepTarget({
+              match,
+              raw,
+              stamper: options.stamper,
+              dateText: options.dateText,
+            })
+            : { counted: false };
+          return Object.freeze({
+            target: Object.freeze({
+              line: target.line,
+              path: group.path,
+              raw,
+              counted: match.ok,
+            }),
+            keep,
+            match,
+          });
+        }),
+      };
+    });
+    const skipDecisions = freshnessSupportsDecayDecisions(api);
+    let linkDecisionSkipped = 0;
+    let linkChecklistSkipped = 0;
+    const stampTargetsByGroup = [];
+    for (const { group, resolved } of linkResolved) {
+      const checklistPart = partitionFreshStampChecklistSkips(
+        resolved,
+        queueBefore,
+      );
+      linkChecklistSkipped += checklistPart.skipped.length;
+      const partition = partitionFreshStampDecisionSkips(checklistPart.stamp, {
+        enabled: skipDecisions,
+      });
+      linkDecisionSkipped += partition.skipped.length;
+      stampTargetsByGroup.push({ group, targets: partition.stamp });
+    }
+    const linkStamped = stampTargetsByGroup.reduce(
+      (count, item) => count + item.targets.length,
+      0,
+    );
+    const linkSkipTail =
+      formatFreshStampSkipTail(linkDecisionSkipped) +
+      formatFreshStampChecklistSkipTail(linkChecklistSkipped);
+    if (
+      linkStamped === 0 &&
+      (linkDecisionSkipped > 0 || linkChecklistSkipped > 0)
+    ) {
+      if (linkDecisionSkipped > 0) {
+        new Notice(
+          formatFreshStampSkippedNotice(linkDecisionSkipped) +
+            formatFreshStampChecklistSkipTail(linkChecklistSkipped),
+        );
+      } else {
+        new Notice(formatFreshStampChecklistSkippedNotice(linkChecklistSkipped));
+      }
+      return true;
+    }
+    for (const { targets } of stampTargetsByGroup) {
+      for (const target of targets) {
+        const check = classifyFreshStampTarget(target.raw);
+        if (!check.ok) {
+          new Notice(freshStampRefusalNotice(check.refusal));
+          return false;
+        }
+      }
+    }
+    const eligibleTargets = stampTargetsByGroup.flatMap(({ targets }) =>
+      targets.filter((target) => isPendingWorkLogTargetRawLine(target.raw)),
+    );
+    const rottenTargets = linkResolved.flatMap(({ group, resolved }) => {
+      const stampGroup = stampTargetsByGroup.find((item) => item.group === group);
+      const stampLines = new Set((stampGroup && stampGroup.targets || []).map((target) => target.line));
+      return resolved
+        .filter((item) => item.keep.counted && stampLines.has(item.target.line))
+        .map((item) => ({
+          ...item,
+          group,
+          history: readRottenLog(group.content, item.target.line),
+        }));
+    });
+    let summary = "";
+    let keepReason = "";
+    if (rottenTargets.length > 0 && eligibleTargets.length > 0) {
+      const result = await this.requestFreshnessRefreshAnswers({
+        keepTargets: rottenTargets.map((item) => ({
+          raw: item.target.raw,
+          entry: item.match.entry,
+          keep: item.keep,
+          history: item.history,
+        })),
+        showWorkField: true,
+        summary: options.summary,
+        keepReason: options.keepReason,
+        dateText: options.dateText,
+        totalCount: linkStamped,
+        eligibleCount: eligibleTargets.length,
+      });
+      if (result.failed) {
+        new Notice("Could not open combined refresh prompt; no tasks were updated");
+        return false;
+      }
+      if (result.cancelled) return false;
+      summary = result.summary;
+      keepReason = result.keepReason;
+    } else if (rottenTargets.length > 0) {
+      const result = await this.requestFreshnessRefreshAnswers({
+        keepTargets: rottenTargets.map((item) => ({
+          raw: item.target.raw,
+          entry: item.match.entry,
+          keep: item.keep,
+          history: item.history,
+        })),
+        showWorkField: false,
+        keepReason: options.keepReason,
+        dateText: options.dateText,
+        totalCount: linkStamped,
+        eligibleCount: 0,
+      });
+      if (result.failed) {
+        new Notice("Could not open Keep reason prompt; no tasks were updated");
+        return false;
+      }
+      if (result.cancelled) return false;
+      keepReason = result.keepReason;
+    } else if (eligibleTargets.length > 0) {
+      const result = await this.requestFreshnessRefreshSummary({
+        summary: options.summary,
+        dateText: options.dateText,
+        totalCount: linkStamped,
+        eligibleCount: eligibleTargets.length,
+      });
+      if (result.failed) {
+        new Notice("Could not open Work Log prompt; no tasks were updated");
+        return false;
+      }
+      if (result.cancelled) {
+        return false;
+      }
+      summary = result.summary;
+    }
+    const promptShown = rottenTargets.length > 0 || eligibleTargets.length > 0;
+    if (promptShown) {
+      if (this.laneReleaseDateText() !== localDayBefore) {
+        new Notice("Day changed while the prompt was open; nothing was written");
+        return false;
+      }
+      if (
+        cm &&
+        typeof cm.getValue === "function" &&
+        String(cm.getValue() || "") !== content
+      ) {
+        new Notice("Current note changed; no tasks were updated");
+        return false;
+      }
+      for (const { group } of linkResolved) {
+        const live = await this.readLinkPickerNoteContent(
+          group.path,
+          group.file,
+        );
+        if (live !== group.content) {
+          new Notice("A linked note changed; no tasks were updated");
+          return false;
+        }
+      }
+    }
+    const planned = [];
+    const refs = [];
+    const stampedAll = [];
+    let workLogWrittenCount = 0;
+    let rottenLogWrittenCount = 0;
+    for (const { group, targets } of stampTargetsByGroup) {
+      const groupRottenLines = rottenTargets
+        .filter((item) => item.group === group)
+        .map((item) => item.target.line);
+      const plan = planFreshStampBatchWithLogs(
+        group.content,
+        targets,
+        options.stamper,
+        options.dateText,
+        {
+          workSummary: summary,
+          keepReason,
+          rottenLines: groupRottenLines,
+        },
+      );
+      if (!plan.ok) {
+        new Notice(freshStampRefusalNotice(plan.refusal));
+        return false;
+      }
+      workLogWrittenCount += plan.workLogWrittenCount;
+      rottenLogWrittenCount += plan.rottenLogWrittenCount;
+      for (const entry of plan.stamped) {
+        refs.push({ path: group.path, line: entry.line, raw: entry.before });
+        stampedAll.push(entry);
+      }
+      if (plan.content !== group.content) {
+        planned.push({ group, plan });
+      }
+    }
+    if (planned.length > 0) {
+      const commit = await this.commitLinkPickerNoteWrites(planned, {});
+      if (!commit.ok) {
+        new Notice(
+          commit.partial
+            ? "Some linked notes may have changed; review them before retrying"
+            : "A linked note changed; no tasks were updated",
+        );
+        return false;
+      }
+    }
+    // Ctrl+Alt+F advances through the shared tail with the stamp text
+    // as its preamble, giving one composed toast.
+    const linkPreamble = this.finishFreshStamp(
+      queueBefore,
+      countsBefore,
+      refs,
+      stampedAll,
+      options.dateText,
+      {
+        skipTail: linkSkipTail,
+        workLogWrittenCount,
+        rottenLogWrittenCount,
+        deferNotice: options.advance === true,
+      },
+    );
+    if (options.advance === true) {
+      return await this.jumpToDueTask(1, {
+        fromStamp: this.reviewAnchor,
+        fromAdvance: true,
+        preamble: linkPreamble,
+      });
+    }
+    return true;
+  }
+
+
+BobNavigationHotkeysFreshnessDecayMixin.prototype.refreshTaskFreshnessOnLinks = refreshTaskFreshnessOnLinks;
 // ---- src/535-plugin-review-checklist-walk.js ----
 function reviewChecklistGroupScan(queue, entry, handledKeys) {
   const list = Array.isArray(queue) ? queue : [];

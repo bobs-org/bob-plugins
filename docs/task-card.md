@@ -113,7 +113,9 @@ Direct Depends-On or BLOCKS-line entries, dependency chips, the dependency
 palette command, and decay-card **Less often** entries open their stage
 without first showing the Task Card. The decay card accepts `x` as
 an alias for `d` (Drop). Freshness-decay `Alt+F` cards
-are a separate surface.
+are a separate surface: their header shows the logged keeps, and Keep swaps
+the rows for an in-card reason stage that commits the stamp, increment, and
+Rotten Log entry in one undo.
 
 ## Related
 

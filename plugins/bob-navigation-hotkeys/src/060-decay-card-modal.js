@@ -9,8 +9,21 @@ class FreshnessDecayCardModal extends Modal {
       typeof settings.onChoose === "function" ? settings.onChoose : null;
     this.onDismiss =
       typeof settings.onDismiss === "function" ? settings.onDismiss : null;
+    this.onKeepReason =
+      typeof settings.onKeepReason === "function"
+        ? settings.onKeepReason
+        : null;
+    this.rottenHeader =
+      typeof settings.rottenHeader === "string" ? settings.rottenHeader : "";
+    this.rottenKeep =
+      settings.rotten && typeof settings.rotten === "object"
+        ? settings.rotten
+        : null;
+    this.keepStageActive = false;
+    this.keepStage = null;
     this.settled = false;
     this.rowEls = [];
+    this.rowsEl = null;
   }
 
   onOpen() {
@@ -33,9 +46,47 @@ class FreshnessDecayCardModal extends Modal {
         text: this.decaySubtitle,
       });
     }
-    const list = contentEl.createDiv({ cls: "bob-decay-card-rows" });
+    if (this.rottenHeader) {
+      headerText.createDiv({
+        cls: "bob-decay-card-rotten",
+        text: this.rottenHeader,
+      });
+    }
+    this.rowsEl = contentEl.createDiv({ cls: "bob-decay-card-rows" });
+    this.renderRows();
+    contentEl.createDiv({
+      cls: "bob-decay-card-footer bob-key-card-footer",
+      text: "Esc changes nothing · D / X drops · 1–4 pick a P-level instead",
+    });
+    contentEl.addEventListener("keydown", (event) => this.handleKey(event));
+    window.setTimeout(() => {
+      this.focusKeepRowOrFirst();
+    }, 0);
+  }
+
+  focusKeepRowOrFirst() {
+    const keepIndex = this.decayRows.findIndex(
+      (row) => row && row.action === "keep" && row.available,
+    );
+    const ordered =
+      keepIndex >= 0
+        ? [this.rowEls[keepIndex], ...this.rowEls]
+        : this.rowEls;
+    for (const rowEl of ordered) {
+      if (rowEl && typeof rowEl.focus === "function") {
+        rowEl.focus();
+        return;
+      }
+    }
+  }
+
+  renderRows() {
+    if (!this.rowsEl) {
+      return;
+    }
+    this.rowsEl.empty();
     this.rowEls = this.decayRows.map((row) => {
-      const rowEl = list.createDiv({
+      const rowEl = this.rowsEl.createDiv({
         cls:
           "bob-decay-card-row bob-key-card-row" +
           (row.available ? "" : " is-unavailable"),
@@ -82,24 +133,111 @@ class FreshnessDecayCardModal extends Modal {
       }
       return rowEl;
     });
-    contentEl.createDiv({
-      cls: "bob-decay-card-footer bob-key-card-footer",
-      text: "Esc changes nothing · D / X drops · 1–4 pick a P-level instead",
+  }
+
+  canKeepStage() {
+    return Boolean(this.rottenKeep && this.onKeepReason && !this.settled);
+  }
+
+  showKeepStage() {
+    if (!this.canKeepStage() || !this.rowsEl) {
+      return false;
+    }
+    this.keepStageActive = true;
+    this.rowsEl.empty();
+    this.rowEls = [];
+    this.keepStage = new RottenKeepReasonStage(this.rowsEl, {
+      ...this.rottenKeep,
+      onSubmit: (reason) => this.submitKeepStage(reason),
+      onCancel: () => this.showRows(),
     });
-    contentEl.addEventListener("keydown", (event) => this.handleKey(event));
     window.setTimeout(() => {
-      const first = this.rowEls.find((rowEl, index) => {
-        const row = this.decayRows[index];
-        return row && row.available;
-      });
-      if (first && typeof first.focus === "function") {
-        first.focus();
+      if (this.keepStage) {
+        this.keepStage.focus();
       }
     }, 0);
+    return true;
+  }
+
+  showRows() {
+    if (!this.keepStageActive) {
+      return false;
+    }
+    if (this.keepStage) {
+      try {
+        this.keepStage.destroy();
+      } catch (error) {
+        // Best effort: the rows re-render below regardless.
+      }
+    }
+    this.keepStage = null;
+    this.keepStageActive = false;
+    this.renderRows();
+    window.setTimeout(() => {
+      this.focusKeepRowOrFirst();
+    }, 0);
+    return true;
+  }
+
+  submitKeepStage(reason) {
+    if (this.settled || !this.keepStageActive || !this.keepStage) {
+      return;
+    }
+    const value = typeof reason === "string" ? reason : this.keepStage.value();
+    try {
+      if (
+        buildRottenKeepPromptModel({ ...this.rottenKeep, reason: value })
+          .disabled
+      ) {
+        return;
+      }
+    } catch (error) {
+      return;
+    }
+    this.settled = true;
+    const callback = this.onKeepReason;
+    this.onChoose = null;
+    this.onDismiss = null;
+    this.onKeepReason = null;
+    try {
+      if (typeof callback === "function") {
+        callback(value);
+      }
+    } finally {
+      this.close();
+    }
   }
 
   handleKey(event) {
     if (!event || this.settled) {
+      return;
+    }
+    if (this.keepStageActive) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.showRows();
+        return;
+      }
+      // The opening refresh chord (and any held-key repeat) must never
+      // submit the stage: only an explicit Enter does.
+      if (
+        isReviewRefreshKeydown(event, false) ||
+        isReviewRefreshKeydown(event, true)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.key === "Enter") {
+        if (event.isComposing || event.repeat) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        this.submitKeepStage();
+        return;
+      }
       return;
     }
     if (event.key === "Escape") {
@@ -164,6 +302,13 @@ class FreshnessDecayCardModal extends Modal {
     if (this.settled) {
       return;
     }
+    if (action === "keep" && this.keepStageActive) {
+      return;
+    }
+    if (action === "keep" && this.canKeepStage()) {
+      this.showKeepStage();
+      return;
+    }
     const row = this.decayRows.find((candidate) => candidate && candidate.action === action);
     if (!row || !row.available) {
       return;
@@ -172,6 +317,7 @@ class FreshnessDecayCardModal extends Modal {
     const callback = this.onChoose;
     this.onChoose = null;
     this.onDismiss = null;
+    this.onKeepReason = null;
     try {
       if (typeof callback === "function") {
         callback(action);
@@ -182,6 +328,15 @@ class FreshnessDecayCardModal extends Modal {
   }
 
   onClose() {
+    if (this.keepStage) {
+      try {
+        this.keepStage.destroy();
+      } catch (error) {
+        // Best effort: dismissal writes nothing by construction.
+      }
+    }
+    this.keepStage = null;
+    this.keepStageActive = false;
     contentElCleanup(this.contentEl);
     if (!this.settled && typeof this.onDismiss === "function") {
       try {
@@ -192,5 +347,6 @@ class FreshnessDecayCardModal extends Modal {
     }
     this.onChoose = null;
     this.onDismiss = null;
+    this.onKeepReason = null;
   }
 }

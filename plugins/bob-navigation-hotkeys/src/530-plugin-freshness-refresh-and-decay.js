@@ -421,6 +421,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       const subtitle = age
         ? `${taskText} · ${noteBase} · ${age}`
         : `${taskText} · ${noteBase}`;
+      const rottenHistory = readRottenLog(String(content || ""), line);
+      const keepsAfter = Math.min(keeps + 1, 999);
       return Object.freeze({
         cm,
         filePath: String(filePath || ""),
@@ -432,6 +434,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         queueBefore: Array.isArray(queueBefore) ? queueBefore : [],
         entry,
         keeps,
+        keepsAfter,
+        rottenHistory,
         limit: decay.keeps,
         intervalDays,
         currentScheduled,
@@ -484,9 +488,27 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         title: cardCtx.plan.title || `Kept ${cardCtx.keeps} reviews in a row`,
         subtitle: cardCtx.subtitle,
         rows: cardCtx.rows,
+        rottenHeader: buildFreshnessDecayRottenHeaderLine(cardCtx.rottenHistory),
+        rotten: {
+          raw: cardCtx.rawLine,
+          entry: cardCtx.entry,
+          keepsBefore: cardCtx.keeps,
+          keepsAfter: cardCtx.keepsAfter,
+          history: cardCtx.rottenHistory,
+          dateText: cardCtx.dateText,
+          advance: cardCtx.advance,
+        },
         onChoose: (action) => {
           this.activeFreshnessDecayCard = null;
           void this.applyFreshnessDecayCardChoice(cardCtx, action);
+        },
+        onKeepReason: (reason) => {
+          // The Keep stage submits asynchronously, so the card context is
+          // revalidated again at submit inside the choice path.
+          this.activeFreshnessDecayCard = null;
+          void this.applyFreshnessDecayCardChoice(cardCtx, "keep", {
+            reason,
+          });
         },
         onDismiss: () => {
           // Esc changes nothing: no writes, no log entries, no
@@ -649,7 +671,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     }
   }
 
-  async applyFreshnessDecayCardChoice(cardCtx, action) {
+  async applyFreshnessDecayCardChoice(cardCtx, action, options = {}) {
     this.activeFreshnessDecayCard = null;
     try {
       const check = this.revalidateFreshnessDecayCard(cardCtx);
@@ -684,7 +706,13 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       } else if (key === "drop") {
         applied = await this.applyFreshnessDecayCardDrop(cardCtx, check.live);
       } else if (key === "keep") {
-        applied = await this.applyFreshnessDecayCardKeep(cardCtx, check.live);
+        const reason =
+          options && typeof options.reason === "string" ? options.reason : "";
+        applied = await this.applyFreshnessDecayCardKeep(
+          cardCtx,
+          check.live,
+          reason,
+        );
       }
       if (applied) {
         this.recordFreshnessDecayReviewAnswer(cardCtx, key);

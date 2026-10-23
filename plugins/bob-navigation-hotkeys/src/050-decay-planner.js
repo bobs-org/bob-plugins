@@ -920,7 +920,7 @@ function buildFreshnessDecayCardRows(plan) {
         key: "Alt+F",
         action: "keep",
         label: "Keep",
-        detail: "still right · asks again next review",
+        detail: "say why · logs 🥀 · asks again next review",
         available: true,
         unavailableReason: null,
         recommended: false,

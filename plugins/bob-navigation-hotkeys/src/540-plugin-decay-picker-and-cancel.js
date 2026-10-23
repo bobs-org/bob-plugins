@@ -199,9 +199,10 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
   }
 
-  // Keep (Alt+F): a counted keep with saturation — stamp, do not reset.
-  // The next due review asks again.
-  async applyFreshnessDecayCardKeep(cardCtx, live) {
+  // Keep (Alt+F): the in-card reason stage commits the stamp, the
+  // counted increment, and one Rotten Log entry in a single editor
+  // transaction. The next due review asks again.
+  async applyFreshnessDecayCardKeep(cardCtx, live, reason = "") {
     try {
       const api = getReviewFreshnessApi(this.app);
       if (!freshnessSupportsKeeps(api)) {
@@ -212,23 +213,70 @@ class BobNavigationHotkeysDecayCancelMixin {
         new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
         return false;
       }
-      let nextLine = null;
-      try {
-        nextLine = String(
-          api.keepLine(live.lineText, cardCtx.dateText, { counted: true }) ??
-            live.lineText,
+      const keepReason = typeof reason === "string" ? reason : "";
+      const stamper = (line, date, decision) =>
+        String(
+          api.keepLine(line, date, {
+            counted: Boolean(decision && decision.counted),
+          }) ?? line,
         );
-      } catch (error) {
-        new Notice("Could not update task; no tasks were updated");
+      const plan = planFreshStampBatchWithLogs(
+        live.content,
+        [
+          {
+            line: cardCtx.line,
+            path: cardCtx.filePath,
+            raw: live.lineText,
+            counted: true,
+          },
+        ],
+        stamper,
+        cardCtx.dateText,
+        { keepReason, rottenLines: [cardCtx.line] },
+      );
+      if (!plan.ok) {
+        new Notice(freshStampRefusalNotice(plan.refusal));
         return false;
       }
-      if (!replaceEditorLine(cardCtx.cm, cardCtx.line, live.lineText, nextLine)) {
-        new Notice("Could not update task; no tasks were updated");
-        return false;
+      if (plan.content !== live.content) {
+        const editorCursor = getEditorCursor(cardCtx.cm) || {
+          line: cardCtx.line,
+          ch: 0,
+        };
+        const nextLines = String(plan.content).split(/\r?\n/);
+        const cursorLine = Math.max(
+          0,
+          Math.min(
+            Math.floor(numericOrDefault(editorCursor.line, cardCtx.line)),
+            nextLines.length - 1,
+          ),
+        );
+        const cursorCh = Math.max(
+          0,
+          Math.min(
+            Math.floor(numericOrDefault(editorCursor.ch, 0)),
+            String(nextLines[cursorLine] || "").length,
+          ),
+        );
+        const applied = applyEditorContentTransaction(
+          cardCtx.cm,
+          live.content,
+          plan.content,
+          { line: cursorLine, ch: cursorCh },
+        );
+        if (!applied) {
+          new Notice("Could not update task; no tasks were updated");
+          return false;
+        }
       }
       this.rememberFreshnessDecayCardAnchor(cardCtx);
-      const nextKeeps = Math.min(999, cardCtx.keeps + 1);
-      new Notice(`Kept ${nextKeeps}× · next review asks`);
+      const stamped = Array.isArray(plan.stamped)
+        ? plan.stamped.find((entry) => entry.line === cardCtx.line)
+        : null;
+      const nextKeeps = stamped
+        ? parseKeepsCount(stamped.after)
+        : Math.min(999, cardCtx.keeps + 1);
+      new Notice(`Kept ${nextKeeps}× · Rotten Log updated · next review asks`);
       await this.maybeAdvanceFreshnessDecayWalk(cardCtx, "keep");
       return true;
     } catch (error) {

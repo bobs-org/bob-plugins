@@ -5112,7 +5112,7 @@ function buildFreshnessDecayCardRows(plan) {
         key: "Alt+F",
         action: "keep",
         label: "Keep",
-        detail: "still right · asks again next review",
+        detail: "say why · logs 🥀 · asks again next review",
         available: true,
         unavailableReason: null,
         recommended: false,
@@ -5173,8 +5173,21 @@ class FreshnessDecayCardModal extends Modal {
       typeof settings.onChoose === "function" ? settings.onChoose : null;
     this.onDismiss =
       typeof settings.onDismiss === "function" ? settings.onDismiss : null;
+    this.onKeepReason =
+      typeof settings.onKeepReason === "function"
+        ? settings.onKeepReason
+        : null;
+    this.rottenHeader =
+      typeof settings.rottenHeader === "string" ? settings.rottenHeader : "";
+    this.rottenKeep =
+      settings.rotten && typeof settings.rotten === "object"
+        ? settings.rotten
+        : null;
+    this.keepStageActive = false;
+    this.keepStage = null;
     this.settled = false;
     this.rowEls = [];
+    this.rowsEl = null;
   }
 
   onOpen() {
@@ -5197,9 +5210,47 @@ class FreshnessDecayCardModal extends Modal {
         text: this.decaySubtitle,
       });
     }
-    const list = contentEl.createDiv({ cls: "bob-decay-card-rows" });
+    if (this.rottenHeader) {
+      headerText.createDiv({
+        cls: "bob-decay-card-rotten",
+        text: this.rottenHeader,
+      });
+    }
+    this.rowsEl = contentEl.createDiv({ cls: "bob-decay-card-rows" });
+    this.renderRows();
+    contentEl.createDiv({
+      cls: "bob-decay-card-footer bob-key-card-footer",
+      text: "Esc changes nothing · D / X drops · 1–4 pick a P-level instead",
+    });
+    contentEl.addEventListener("keydown", (event) => this.handleKey(event));
+    window.setTimeout(() => {
+      this.focusKeepRowOrFirst();
+    }, 0);
+  }
+
+  focusKeepRowOrFirst() {
+    const keepIndex = this.decayRows.findIndex(
+      (row) => row && row.action === "keep" && row.available,
+    );
+    const ordered =
+      keepIndex >= 0
+        ? [this.rowEls[keepIndex], ...this.rowEls]
+        : this.rowEls;
+    for (const rowEl of ordered) {
+      if (rowEl && typeof rowEl.focus === "function") {
+        rowEl.focus();
+        return;
+      }
+    }
+  }
+
+  renderRows() {
+    if (!this.rowsEl) {
+      return;
+    }
+    this.rowsEl.empty();
     this.rowEls = this.decayRows.map((row) => {
-      const rowEl = list.createDiv({
+      const rowEl = this.rowsEl.createDiv({
         cls:
           "bob-decay-card-row bob-key-card-row" +
           (row.available ? "" : " is-unavailable"),
@@ -5246,24 +5297,111 @@ class FreshnessDecayCardModal extends Modal {
       }
       return rowEl;
     });
-    contentEl.createDiv({
-      cls: "bob-decay-card-footer bob-key-card-footer",
-      text: "Esc changes nothing · D / X drops · 1–4 pick a P-level instead",
+  }
+
+  canKeepStage() {
+    return Boolean(this.rottenKeep && this.onKeepReason && !this.settled);
+  }
+
+  showKeepStage() {
+    if (!this.canKeepStage() || !this.rowsEl) {
+      return false;
+    }
+    this.keepStageActive = true;
+    this.rowsEl.empty();
+    this.rowEls = [];
+    this.keepStage = new RottenKeepReasonStage(this.rowsEl, {
+      ...this.rottenKeep,
+      onSubmit: (reason) => this.submitKeepStage(reason),
+      onCancel: () => this.showRows(),
     });
-    contentEl.addEventListener("keydown", (event) => this.handleKey(event));
     window.setTimeout(() => {
-      const first = this.rowEls.find((rowEl, index) => {
-        const row = this.decayRows[index];
-        return row && row.available;
-      });
-      if (first && typeof first.focus === "function") {
-        first.focus();
+      if (this.keepStage) {
+        this.keepStage.focus();
       }
     }, 0);
+    return true;
+  }
+
+  showRows() {
+    if (!this.keepStageActive) {
+      return false;
+    }
+    if (this.keepStage) {
+      try {
+        this.keepStage.destroy();
+      } catch (error) {
+        // Best effort: the rows re-render below regardless.
+      }
+    }
+    this.keepStage = null;
+    this.keepStageActive = false;
+    this.renderRows();
+    window.setTimeout(() => {
+      this.focusKeepRowOrFirst();
+    }, 0);
+    return true;
+  }
+
+  submitKeepStage(reason) {
+    if (this.settled || !this.keepStageActive || !this.keepStage) {
+      return;
+    }
+    const value = typeof reason === "string" ? reason : this.keepStage.value();
+    try {
+      if (
+        buildRottenKeepPromptModel({ ...this.rottenKeep, reason: value })
+          .disabled
+      ) {
+        return;
+      }
+    } catch (error) {
+      return;
+    }
+    this.settled = true;
+    const callback = this.onKeepReason;
+    this.onChoose = null;
+    this.onDismiss = null;
+    this.onKeepReason = null;
+    try {
+      if (typeof callback === "function") {
+        callback(value);
+      }
+    } finally {
+      this.close();
+    }
   }
 
   handleKey(event) {
     if (!event || this.settled) {
+      return;
+    }
+    if (this.keepStageActive) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.showRows();
+        return;
+      }
+      // The opening refresh chord (and any held-key repeat) must never
+      // submit the stage: only an explicit Enter does.
+      if (
+        isReviewRefreshKeydown(event, false) ||
+        isReviewRefreshKeydown(event, true)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.key === "Enter") {
+        if (event.isComposing || event.repeat) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        this.submitKeepStage();
+        return;
+      }
       return;
     }
     if (event.key === "Escape") {
@@ -5328,6 +5466,13 @@ class FreshnessDecayCardModal extends Modal {
     if (this.settled) {
       return;
     }
+    if (action === "keep" && this.keepStageActive) {
+      return;
+    }
+    if (action === "keep" && this.canKeepStage()) {
+      this.showKeepStage();
+      return;
+    }
     const row = this.decayRows.find((candidate) => candidate && candidate.action === action);
     if (!row || !row.available) {
       return;
@@ -5336,6 +5481,7 @@ class FreshnessDecayCardModal extends Modal {
     const callback = this.onChoose;
     this.onChoose = null;
     this.onDismiss = null;
+    this.onKeepReason = null;
     try {
       if (typeof callback === "function") {
         callback(action);
@@ -5346,6 +5492,15 @@ class FreshnessDecayCardModal extends Modal {
   }
 
   onClose() {
+    if (this.keepStage) {
+      try {
+        this.keepStage.destroy();
+      } catch (error) {
+        // Best effort: dismissal writes nothing by construction.
+      }
+    }
+    this.keepStage = null;
+    this.keepStageActive = false;
     contentElCleanup(this.contentEl);
     if (!this.settled && typeof this.onDismiss === "function") {
       try {
@@ -5356,6 +5511,7 @@ class FreshnessDecayCardModal extends Modal {
     }
     this.onChoose = null;
     this.onDismiss = null;
+    this.onKeepReason = null;
   }
 }
 // ---- src/070-recommended-roll-batch.js ----
@@ -20401,6 +20557,18 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
     }
   }
   return { ...plan, content: lines.join(lineEnding), workLogWrittenCount, rottenLogWrittenCount };
+}
+
+// Display-only card header for the logged keeps, or "" when nothing is
+// logged. Ambiguous markers report unreadable; the stage submit stays
+// disabled because the planner would refuse anyway.
+function buildFreshnessDecayRottenHeaderLine(history) {
+  const entries = history && Array.isArray(history.entries) ? history.entries : [];
+  if (entries.length === 0) return "";
+  if (history.status === "unknown" || history.status === "ambiguous") return "🥀 log unreadable";
+  const count = entries.length;
+  const last = entries[0] || {};
+  return `🥀 ${count} ${count === 1 ? "keep" : "keeps"} logged · last ${reviewShortDate(last.date)} — ${last.reason}`;
 }
 
 function buildRottenKeepPromptModel(options = {}) {
@@ -58689,6 +58857,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       const subtitle = age
         ? `${taskText} · ${noteBase} · ${age}`
         : `${taskText} · ${noteBase}`;
+      const rottenHistory = readRottenLog(String(content || ""), line);
+      const keepsAfter = Math.min(keeps + 1, 999);
       return Object.freeze({
         cm,
         filePath: String(filePath || ""),
@@ -58700,6 +58870,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         queueBefore: Array.isArray(queueBefore) ? queueBefore : [],
         entry,
         keeps,
+        keepsAfter,
+        rottenHistory,
         limit: decay.keeps,
         intervalDays,
         currentScheduled,
@@ -58752,9 +58924,27 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         title: cardCtx.plan.title || `Kept ${cardCtx.keeps} reviews in a row`,
         subtitle: cardCtx.subtitle,
         rows: cardCtx.rows,
+        rottenHeader: buildFreshnessDecayRottenHeaderLine(cardCtx.rottenHistory),
+        rotten: {
+          raw: cardCtx.rawLine,
+          entry: cardCtx.entry,
+          keepsBefore: cardCtx.keeps,
+          keepsAfter: cardCtx.keepsAfter,
+          history: cardCtx.rottenHistory,
+          dateText: cardCtx.dateText,
+          advance: cardCtx.advance,
+        },
         onChoose: (action) => {
           this.activeFreshnessDecayCard = null;
           void this.applyFreshnessDecayCardChoice(cardCtx, action);
+        },
+        onKeepReason: (reason) => {
+          // The Keep stage submits asynchronously, so the card context is
+          // revalidated again at submit inside the choice path.
+          this.activeFreshnessDecayCard = null;
+          void this.applyFreshnessDecayCardChoice(cardCtx, "keep", {
+            reason,
+          });
         },
         onDismiss: () => {
           // Esc changes nothing: no writes, no log entries, no
@@ -58917,7 +59107,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     }
   }
 
-  async applyFreshnessDecayCardChoice(cardCtx, action) {
+  async applyFreshnessDecayCardChoice(cardCtx, action, options = {}) {
     this.activeFreshnessDecayCard = null;
     try {
       const check = this.revalidateFreshnessDecayCard(cardCtx);
@@ -58952,7 +59142,13 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       } else if (key === "drop") {
         applied = await this.applyFreshnessDecayCardDrop(cardCtx, check.live);
       } else if (key === "keep") {
-        applied = await this.applyFreshnessDecayCardKeep(cardCtx, check.live);
+        const reason =
+          options && typeof options.reason === "string" ? options.reason : "";
+        applied = await this.applyFreshnessDecayCardKeep(
+          cardCtx,
+          check.live,
+          reason,
+        );
       }
       if (applied) {
         this.recordFreshnessDecayReviewAnswer(cardCtx, key);
@@ -62170,9 +62366,10 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
   }
 
-  // Keep (Alt+F): a counted keep with saturation — stamp, do not reset.
-  // The next due review asks again.
-  async applyFreshnessDecayCardKeep(cardCtx, live) {
+  // Keep (Alt+F): the in-card reason stage commits the stamp, the
+  // counted increment, and one Rotten Log entry in a single editor
+  // transaction. The next due review asks again.
+  async applyFreshnessDecayCardKeep(cardCtx, live, reason = "") {
     try {
       const api = getReviewFreshnessApi(this.app);
       if (!freshnessSupportsKeeps(api)) {
@@ -62183,23 +62380,70 @@ class BobNavigationHotkeysDecayCancelMixin {
         new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
         return false;
       }
-      let nextLine = null;
-      try {
-        nextLine = String(
-          api.keepLine(live.lineText, cardCtx.dateText, { counted: true }) ??
-            live.lineText,
+      const keepReason = typeof reason === "string" ? reason : "";
+      const stamper = (line, date, decision) =>
+        String(
+          api.keepLine(line, date, {
+            counted: Boolean(decision && decision.counted),
+          }) ?? line,
         );
-      } catch (error) {
-        new Notice("Could not update task; no tasks were updated");
+      const plan = planFreshStampBatchWithLogs(
+        live.content,
+        [
+          {
+            line: cardCtx.line,
+            path: cardCtx.filePath,
+            raw: live.lineText,
+            counted: true,
+          },
+        ],
+        stamper,
+        cardCtx.dateText,
+        { keepReason, rottenLines: [cardCtx.line] },
+      );
+      if (!plan.ok) {
+        new Notice(freshStampRefusalNotice(plan.refusal));
         return false;
       }
-      if (!replaceEditorLine(cardCtx.cm, cardCtx.line, live.lineText, nextLine)) {
-        new Notice("Could not update task; no tasks were updated");
-        return false;
+      if (plan.content !== live.content) {
+        const editorCursor = getEditorCursor(cardCtx.cm) || {
+          line: cardCtx.line,
+          ch: 0,
+        };
+        const nextLines = String(plan.content).split(/\r?\n/);
+        const cursorLine = Math.max(
+          0,
+          Math.min(
+            Math.floor(numericOrDefault(editorCursor.line, cardCtx.line)),
+            nextLines.length - 1,
+          ),
+        );
+        const cursorCh = Math.max(
+          0,
+          Math.min(
+            Math.floor(numericOrDefault(editorCursor.ch, 0)),
+            String(nextLines[cursorLine] || "").length,
+          ),
+        );
+        const applied = applyEditorContentTransaction(
+          cardCtx.cm,
+          live.content,
+          plan.content,
+          { line: cursorLine, ch: cursorCh },
+        );
+        if (!applied) {
+          new Notice("Could not update task; no tasks were updated");
+          return false;
+        }
       }
       this.rememberFreshnessDecayCardAnchor(cardCtx);
-      const nextKeeps = Math.min(999, cardCtx.keeps + 1);
-      new Notice(`Kept ${nextKeeps}× · next review asks`);
+      const stamped = Array.isArray(plan.stamped)
+        ? plan.stamped.find((entry) => entry.line === cardCtx.line)
+        : null;
+      const nextKeeps = stamped
+        ? parseKeepsCount(stamped.after)
+        : Math.min(999, cardCtx.keeps + 1);
+      new Notice(`Kept ${nextKeeps}× · Rotten Log updated · next review asks`);
       await this.maybeAdvanceFreshnessDecayWalk(cardCtx, "keep");
       return true;
     } catch (error) {
@@ -80883,6 +81127,7 @@ module.exports.helpers = {
   FilteredPickerModal,
   FreshnessRefreshSummaryModal,
   RottenKeepReasonStage,
+  buildFreshnessDecayRottenHeaderLine,
   buildRottenKeepPromptModel,
   classifyRottenKeepTarget,
   planFreshStampBatchWithLogs,

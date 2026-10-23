@@ -58,6 +58,18 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
   return { ...plan, content: lines.join(lineEnding), workLogWrittenCount, rottenLogWrittenCount };
 }
 
+// Display-only card header for the logged keeps, or "" when nothing is
+// logged. Ambiguous markers report unreadable; the stage submit stays
+// disabled because the planner would refuse anyway.
+function buildFreshnessDecayRottenHeaderLine(history) {
+  const entries = history && Array.isArray(history.entries) ? history.entries : [];
+  if (entries.length === 0) return "";
+  if (history.status === "unknown" || history.status === "ambiguous") return "🥀 log unreadable";
+  const count = entries.length;
+  const last = entries[0] || {};
+  return `🥀 ${count} ${count === 1 ? "keep" : "keeps"} logged · last ${reviewShortDate(last.date)} — ${last.reason}`;
+}
+
 function buildRottenKeepPromptModel(options = {}) {
   const history = options.history || { status: "missing", entries: [] };
   const entries = history.entries || [];

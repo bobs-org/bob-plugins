@@ -247,7 +247,7 @@ test("rows: P0 entry shows the recommended Not now with a clean window", () => {
   assert.ok(!notNow.detail.includes("**"));
   assert.ok(!notNow.detail.includes("**"));
   const keep = rows.find((row) => row.action === "keep");
-  assert.equal(keep.detail, "still right · asks again next review");
+  assert.equal(keep.detail, "say why · logs 🥀 · asks again next review");
   const drop = rows.find((row) => row.action === "drop");
   assert.equal(drop.detail, "cancel · dropped after 3 keeps");
   const reword = rows.find((row) => row.action === "reword");

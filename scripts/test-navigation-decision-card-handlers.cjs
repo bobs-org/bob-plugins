@@ -545,11 +545,12 @@ test("Not now stamps, clears keeps, and advances exactly once", async () => {
 // --- 5. Keep increments through keepLine and saturates at 999 ---
 
 test("Keep counts once and saturates at 999 without reset", async () => {
-  for (const [start, expected] of [
-    [ROTTEN_AT_LIMIT, /\[keeps:: 4\]/],
+  for (const [start, expected, keptTail] of [
+    [ROTTEN_AT_LIMIT, /\[keeps:: 4\]/, /🤷 no reason given · kept 4×/],
     [
       "- [ ] #task Buy milk [fresh:: 2026-09-30] [keeps:: 999]",
       /\[keeps:: 999\]/,
+      /🤷 no reason given · kept 999×/,
     ],
   ]) {
     clearNotices();
@@ -563,12 +564,117 @@ test("Keep counts once and saturates at 999 without reset", async () => {
     });
     await plugin.refreshTaskFreshness(editor, { dateText: DATE });
     const cardCtx = plugin.openedCards[0];
+    const txBefore = editor.state.transactions.length;
     const ok = await plugin.applyFreshnessDecayCardChoice(cardCtx, "keep");
     assert.equal(ok, true, start);
     assert.match(editor.state.lines[2], expected, start);
     assert.match(editor.state.lines[2], /\[fresh:: 2026-10-20\]/, start);
-    assert.match(notices[notices.length - 1], /Kept \d+× · next review asks/, start);
+    assert.match(editor.state.lines.join("\n"), /🥀 \*\*ROTTEN LOG\*\*/, start);
+    assert.match(editor.state.lines.join("\n"), keptTail, start);
+    assert.equal(editor.state.transactions.length, txBefore + 1, start);
+    assert.match(
+      notices.join("\n"),
+      /Kept \d+× · Rotten Log updated · next review asks/,
+      start,
+    );
   }
+});
+
+test("Keep with a reason logs that reason in the Rotten Log entry", async () => {
+  clearNotices();
+  const editor = makeEditor(["# Tasks", "", ROTTEN_AT_LIMIT].join("\n"), 2);
+  const entry = rottenEntry({ line: 3, originalMarkdown: ROTTEN_AT_LIMIT });
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessCapable([entry], BASE_COUNTS),
+    dateText: DATE,
+  });
+  await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const cardCtx = plugin.openedCards[0];
+  const ok = await plugin.applyFreshnessDecayCardChoice(cardCtx, "keep", {
+    reason: "still the primer",
+  });
+  assert.equal(ok, true);
+  assert.match(editor.state.lines[2], /\[keeps:: 4\]/);
+  assert.match(
+    editor.state.lines.join("\n"),
+    /\*2026-10-20\* — still the primer · kept 4×/,
+  );
+  assert.match(
+    notices.join("\n"),
+    /Kept 4× · Rotten Log updated · next review asks/,
+  );
+});
+
+test("Keep carries the logged history and preview keeps in its context", async () => {
+  clearNotices();
+  const editor = makeEditor(["# Tasks", "", ROTTEN_AT_LIMIT].join("\n"), 2);
+  const entry = rottenEntry({ line: 3, originalMarkdown: ROTTEN_AT_LIMIT });
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessCapable([entry], BASE_COUNTS),
+    dateText: DATE,
+  });
+  await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const cardCtx = plugin.openedCards[0];
+  assert.deepEqual(cardCtx.rottenHistory.entries, []);
+  assert.equal(cardCtx.keepsAfter, 4);
+  assert.doesNotMatch(editor.state.lines.join("\n"), /ROTTEN LOG/);
+});
+
+test("Keep with a stale child log during the stage refuses and rebuilds", async () => {
+  const { editor, plugin } = await openCard();
+  const cardCtx = plugin.openedCards[0];
+  editor.state.lines.splice(
+    3,
+    0,
+    "\t- 📅 **SCHEDULE LOG**",
+    "\t\t- *2026-10-19* — 🎲 P0 → P2 decay · kept 3×",
+  );
+  const before = editor.state.lines.join("\n");
+  const txBefore = editor.state.transactions.length;
+  const openedBefore = plugin.openedCards.length;
+  const ok = await plugin.applyFreshnessDecayCardChoice(cardCtx, "keep", {
+    reason: "still needed",
+  });
+  assert.equal(ok, false);
+  assert.equal(editor.state.lines.join("\n"), before);
+  assert.equal(editor.state.transactions.length, txBefore);
+  assert.match(notices[notices.length - 1], /Review queue changed/);
+  assert.equal(plugin.openedCards.length, openedBefore + 1);
+  assert.doesNotMatch(before, /ROTTEN LOG/);
+});
+
+test("Keep with advance commits once and advances exactly once", async () => {
+  clearNotices();
+  openedModals.length = 0;
+  const editor = makeEditor(["# Tasks", "", ROTTEN_AT_LIMIT].join("\n"), 2);
+  const entry = rottenEntry({ line: 3, originalMarkdown: ROTTEN_AT_LIMIT });
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessCapable([entry], BASE_COUNTS),
+    dateText: DATE,
+  });
+  const opened = await plugin.refreshTaskFreshness(editor, {
+    dateText: DATE,
+    advance: true,
+  });
+  assert.equal(opened, true);
+  const cardCtx = plugin.openedCards[0];
+  assert.equal(cardCtx.advance, true);
+  const ok = await plugin.applyFreshnessDecayCardChoice(cardCtx, "keep", {
+    reason: "still needed",
+  });
+  assert.equal(ok, true);
+  assert.match(editor.state.lines[2], /\[keeps:: 4\]/);
+  assert.match(
+    editor.state.lines.join("\n"),
+    /still needed · kept 4×/,
+  );
+  assert.equal(plugin.jumpCalls, 1);
 });
 
 // --- 6. Reword stamps, logs, places the cursor, and never advances ---

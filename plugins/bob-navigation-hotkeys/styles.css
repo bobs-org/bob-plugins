@@ -1604,6 +1604,13 @@
   overflow-wrap: anywhere;
 }
 
+.bob-decay-card-rotten {
+  color: var(--text-muted);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
 .bob-decay-card-rows {
   display: flex;
   flex-direction: column;

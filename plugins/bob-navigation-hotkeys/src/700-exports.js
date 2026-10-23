@@ -4,6 +4,7 @@ module.exports.helpers = {
   FilteredPickerModal,
   FreshnessRefreshSummaryModal,
   RottenKeepReasonStage,
+  buildFreshnessDecayRottenHeaderLine,
   buildRottenKeepPromptModel,
   classifyRottenKeepTarget,
   planFreshStampBatchWithLogs,

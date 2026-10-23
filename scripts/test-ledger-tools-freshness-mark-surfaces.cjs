@@ -173,6 +173,8 @@ const {
   freshnessMarkModel,
   freshnessMarkConsensus,
   freshnessTaskStatus,
+  freshnessMarkRottenLogLine,
+  freshnessMarkInTaskQuery,
 } = helpers;
 
 const D = "2026-10-08";
@@ -847,6 +849,152 @@ test("session toggle flips the body class and notifies", () => {
       global.document = savedDocument;
     }
   }
+});
+
+function makeRottenDoc(taskText, childLines) {
+  const all = [taskText, ...childLines];
+  return {
+    lines: all.length,
+    line(n) {
+      if (n < 1 || n > all.length) throw new Error("out of range");
+      return { text: all[n - 1], number: n };
+    },
+  };
+}
+
+test("Live Preview reads only the child block and never calls doc.toString", () => {
+  const task = "- [ ] #task T [fresh:: 2026-10-01]";
+  const doc = makeRottenDoc(task, [
+    "\t- 🥀 **ROTTEN LOG**",
+    "\t\t- *2026-10-16* — old reason · kept 2×",
+    "unrelated trailing",
+  ]);
+  let toStringCalls = 0;
+  doc.toString = () => {
+    toStringCalls += 1;
+    return "should never be read";
+  };
+  const plugin = pluginWithSnapshot([sRow({ rawLine: task })]);
+  const source = freshnessMarkSource(task, D);
+  const model = plugin.freshnessMarkModelForLine({
+    path: "a.md",
+    lineNumber: 0,
+    text: task,
+    doc,
+    source,
+  });
+  assert.ok(model);
+  assert.match(model.tooltip, /🥀 1 keep logged · last Oct 16 — old reason/);
+  assert.match(model.tooltip, /Alt\+F to confirm$/);
+  const lines = model.tooltip.split("\n");
+  assert.equal(lines[lines.length - 2], "🥀 1 keep logged · last Oct 16 — old reason");
+  assert.equal(toStringCalls, 0);
+});
+
+test("Live Preview stops at the first nonblank line at or above the task", () => {
+  const task = "- [ ] #task T [fresh:: 2026-10-01]";
+  const doc = makeRottenDoc(task, [
+    "\t- child",
+    "- [ ] #task Next",
+    "\t- 🥀 **ROTTEN LOG**",
+    "\t\t- *2026-10-16* — wrong task · kept 1×",
+  ]);
+  const plugin = pluginWithSnapshot([sRow({ rawLine: task })]);
+  const source = freshnessMarkSource(task, D);
+  const model = plugin.freshnessMarkModelForLine({
+    path: "a.md",
+    lineNumber: 0,
+    text: task,
+    doc,
+    source,
+  });
+  assert.ok(model);
+  assert.doesNotMatch(model.tooltip, /🥀/);
+});
+
+test("Live Preview performance stays bounded on a large child block", () => {
+  const task = "- [ ] #task T [fresh:: 2026-10-01]";
+  const kids = [];
+  for (let i = 0; i < 5000; i += 1) kids.push("\t- filler " + i);
+  kids.push("\t- 🥀 **ROTTEN LOG**", "\t\t- *2026-10-16* — old · kept 1×");
+  const doc = makeRottenDoc(task, kids);
+  let toStringCalls = 0;
+  doc.toString = () => {
+    toStringCalls += 1;
+    return "";
+  };
+  const plugin = pluginWithSnapshot([sRow({ rawLine: task })]);
+  const source = freshnessMarkSource(task, D);
+  const start = Date.now();
+  const model = plugin.freshnessMarkModelForLine({
+    path: "a.md",
+    lineNumber: 0,
+    text: task,
+    doc,
+    source,
+  });
+  const elapsed = Date.now() - start;
+  assert.ok(model);
+  assert.equal(toStringCalls, 0);
+  assert.ok(elapsed < 5000, "bounded build, got " + elapsed + "ms");
+});
+
+test("reading view shows the rotten line and excludes Tasks and Dataview rows", () => {
+  function queryNode(className) {
+    return {
+      className,
+      getAttribute: (name) => (name === "class" ? className : null),
+      parentNode: null,
+    };
+  }
+  const root = { parentNode: null };
+  for (const cls of [
+    "block-language-tasks",
+    "plugin-tasks-query-result",
+    "block-language-dataview",
+    "dataview-result-list",
+    "dataview-result-table",
+  ]) {
+    assert.equal(freshnessMarkInTaskQuery(queryNode(cls), root), true, cls);
+  }
+  assert.equal(freshnessMarkInTaskQuery(queryNode("plain"), root), false);
+
+  const plugin = pluginWithSnapshot([
+    sRow({ rawLine: "Buy milk [fresh:: 2026-10-05]" }),
+  ]);
+  const { root: okRoot, doc, text, el } = fakeRenderEl();
+  const para = el("p");
+  okRoot.appendChild(para);
+  para.appendChild(text("Buy milk [fresh:: 2026-10-05] done", doc));
+  plugin.renderFreshnessMarksIn(okRoot, { sourcePath: "a.md" });
+  assert.equal(countMarks(okRoot), 1);
+
+  const tasks = fakeRenderEl();
+  const wrap = tasks.el("div");
+  wrap.className = "plugin-tasks-query-result";
+  tasks.root.appendChild(wrap);
+  wrap.appendChild(tasks.text("Buy milk [fresh:: 2026-10-05] done", tasks.doc));
+  plugin.renderFreshnessMarksIn(tasks.root, { sourcePath: "a.md" });
+  assert.equal(countMarks(tasks.root), 1);
+});
+
+test("query-row consensus stays byte-identical with and without a Rotten Log", () => {
+  const readyLine = "- [ ] #task A [fresh:: 2026-10-01]";
+  const readySource = freshnessMarkSourceInText(
+    "see [fresh:: 2026-10-01] here",
+    D,
+  );
+  const pair = pluginWithSnapshot([
+    sRow({ path: "a.md", lineNumber: 0, rawLine: readyLine }),
+    sRow({ path: "a.md", lineNumber: 1, rawLine: readyLine }),
+  ]);
+  const before = pair.freshnessMarkModelForText({
+    path: "a.md",
+    source: readySource,
+  });
+  assert.ok(before);
+  assert.doesNotMatch(before.tooltip, /🥀/);
+  assert.equal(freshnessMarkConsensus([before, before]), before);
 });
 
 test("onload registers the toggle, extension, and post-processor", () => {

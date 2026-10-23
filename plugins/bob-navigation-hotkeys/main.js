@@ -5312,6 +5312,7 @@ class FreshnessDecayCardModal extends Modal {
     this.rowEls = [];
     this.keepStage = new RottenKeepReasonStage(this.rowsEl, {
       ...this.rottenKeep,
+      decayCard: true,
       onSubmit: (reason) => this.submitKeepStage(reason),
       onCancel: () => this.showRows(),
     });
@@ -20790,9 +20791,9 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
 // logged. Ambiguous markers report unreadable; the stage submit stays
 // disabled because the planner would refuse anyway.
 function buildFreshnessDecayRottenHeaderLine(history) {
+  if (history && (history.status === "unknown" || history.status === "ambiguous")) return "🥀 log unreadable";
   const entries = history && Array.isArray(history.entries) ? history.entries : [];
   if (entries.length === 0) return "";
-  if (history.status === "unknown" || history.status === "ambiguous") return "🥀 log unreadable";
   const count = entries.length;
   const last = entries[0] || {};
   return `🥀 ${count} ${count === 1 ? "keep" : "keeps"} logged · last ${reviewShortDate(last.date)} — ${last.reason}`;
@@ -20816,9 +20817,12 @@ function buildRottenKeepPromptModel(options = {}) {
     String(entry.tierLabel || entry.tier || "ROTTEN").toUpperCase(),
     age === null ? "" : `${age}d`].filter(Boolean).join(" · ");
   const reason = normalizeLaneWorkSummary(options.reason);
+  const streak = options.decayCard
+    ? `Kept ${keepsBefore} reviews in a row · this keep makes ${keepsAfter}`
+    : keepsBefore ? `kept ${keepsBefore} in a row` : "";
   return {
     title: "Keep as written?",
-    subtitleLines: [subtitle, [keepsBefore ? `kept ${keepsBefore} in a row` : "", logged].filter(Boolean).join(" · ")],
+    subtitleLines: [subtitle, [streak, logged].filter(Boolean).join(" · ")],
     placeholder: "Why keep it as written? (optional · ↵ logs 🤷)",
     previewEntryText: formatRottenLogEntryText({ date: options.dateText, reason, keeps: keepsAfter }),
     empty: !reason,

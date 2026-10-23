@@ -252,10 +252,11 @@ class BobLedgerToolsFreshnessMarkModelMixin {
       const text = typeof input.text === "string" ? input.text : "";
       const path = typeof input.path === "string" ? input.path : "";
       const lineNumber = input.lineNumber;
+      const rottenDoc = input.doc !== undefined ? input.doc : input.noteText;
       const buildModel = (modelArgs) =>
         freshnessMarkModelWithRottenLog(
           modelArgs,
-          input.noteText,
+          rottenDoc,
           lineNumber,
         );
       const snapshot = this.freshnessMarkEnsureSnapshot();
@@ -373,7 +374,7 @@ class BobLedgerToolsFreshnessMarkModelMixin {
           interval: { days: 7, source: "default" },
           status: null,
           resolution: null,
-        }, input.noteText, input.lineNumber);
+        }, input.doc !== undefined ? input.doc : input.noteText, input.lineNumber);
       } catch (inner) {
         return null;
       }

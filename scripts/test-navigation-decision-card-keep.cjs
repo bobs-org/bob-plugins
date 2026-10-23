@@ -487,6 +487,39 @@ test("the card header shows the logged count and last reason", async () => {
   assert.equal(header, "🥀 1 keep logged · last Oct 16 — old reason");
 });
 
+test("an unreadable log shows the header even with no countable entries", () => {
+  assert.equal(
+    helpers.buildFreshnessDecayRottenHeaderLine({ status: "unknown", entries: [] }),
+    "🥀 log unreadable",
+  );
+  assert.equal(
+    helpers.buildFreshnessDecayRottenHeaderLine({ status: "ambiguous", entries: [] }),
+    "🥀 log unreadable",
+  );
+  assert.equal(
+    helpers.buildFreshnessDecayRottenHeaderLine({ status: "missing", entries: [] }),
+    "",
+  );
+});
+
+test("the decay card Keep stage uses the reviews streak copy", () => {
+  const base = {
+    raw: ROTTEN_AT_LIMIT,
+    entry: rottenEntry(),
+    dateText: DATE,
+    keepsBefore: 3,
+    keepsAfter: 4,
+    history: { status: "missing", entries: [] },
+  };
+  const card = helpers.buildRottenKeepPromptModel({ ...base, decayCard: true });
+  assert.equal(
+    card.subtitleLines[1],
+    "Kept 3 reviews in a row · this keep makes 4 · none logged yet",
+  );
+  const modal = helpers.buildRottenKeepPromptModel(base);
+  assert.equal(modal.subtitleLines[1], "kept 3 in a row · none logged yet");
+});
+
 test("ambiguous Rotten Logs refuse the Keep write", async () => {
   clearNotices();
   modals.length = 0;

@@ -85,6 +85,9 @@ const {
   freshnessMarkSourceInText,
   freshnessShortDate,
   freshnessTaskStatus,
+  freshnessMarkRottenLogHistory,
+  freshnessMarkRottenLogLine,
+  freshnessMarkRottenLogSummary,
 } = helpers;
 
 const D = "2026-10-08";
@@ -701,5 +704,146 @@ test("every mark helper is synchronous and never throws on bad input", () => {
     buildFreshnessMarkElement(makeFakeDoc(), { tone: "loud" }),
     null,
   );
+});
+
+test("rotten line wording covers 0, 1, and many entries", () => {
+  assert.equal(
+    freshnessMarkRottenLogLine({ status: "missing", entries: [] }, D),
+    null,
+  );
+  assert.equal(
+    freshnessMarkRottenLogLine({ status: "empty", entries: [] }, D),
+    null,
+  );
+  assert.equal(
+    freshnessMarkRottenLogLine({ status: "unknown", entries: [] }, D),
+    null,
+  );
+  const one = freshnessMarkRottenLogLine(
+    { status: "ok", entries: [{ date: "2026-10-16", reason: "old reason" }] },
+    "2026-10-23",
+  );
+  assert.equal(one, "🥀 1 keep logged · last Oct 16 — old reason");
+  const many = freshnessMarkRottenLogLine(
+    {
+      status: "ok",
+      entries: [
+        { date: "2026-10-16", reason: "newest" },
+        { date: "2026-10-10", reason: "older" },
+        { date: "2026-10-01", reason: "oldest" },
+      ],
+    },
+    "2026-10-23",
+  );
+  assert.equal(many, "🥀 3 keeps logged · last Oct 16 — newest");
+});
+
+test("rotten line date format includes the year only when it differs", () => {
+  const sameYear = freshnessMarkRottenLogLine(
+    { status: "ok", entries: [{ date: "2026-10-16", reason: "r" }] },
+    "2026-10-23",
+  );
+  assert.match(sameYear, /Oct 16/);
+  assert.doesNotMatch(sameYear, /2026/);
+  const otherYear = freshnessMarkRottenLogLine(
+    { status: "ok", entries: [{ date: "2025-12-30", reason: "r" }] },
+    "2026-10-23",
+  );
+  assert.equal(otherYear, "🥀 1 keep logged · last Dec 30, 2025 — r");
+});
+
+test("rotten line truncates the reason to 48 code points without splitting emoji", () => {
+  const long = "a".repeat(50);
+  const line = freshnessMarkRottenLogLine(
+    { status: "ok", entries: [{ date: "2026-10-16", reason: long }] },
+    "2026-10-23",
+  );
+  assert.equal(line, `🥀 1 keep logged · last Oct 16 — ${"a".repeat(48)}…`);
+  const emojiReason = "😀".repeat(48) + "XY";
+  const emojiLine = freshnessMarkRottenLogLine(
+    { status: "ok", entries: [{ date: "2026-10-16", reason: emojiReason }] },
+    "2026-10-23",
+  );
+  assert.equal(
+    emojiLine,
+    `🥀 1 keep logged · last Oct 16 — ${"😀".repeat(48)}…`,
+  );
+  const shrug = freshnessMarkRottenLogLine(
+    { status: "ok", entries: [{ date: "2026-10-16", reason: "🤷 no reason given" }] },
+    "2026-10-23",
+  );
+  assert.equal(shrug, "🥀 1 keep logged · last Oct 16 — 🤷 no reason given");
+});
+
+test("rotten history rejects ambiguous, invalid, and nested entries", () => {
+  const ambiguous = freshnessMarkRottenLogHistory(
+    "- [ ] #task T\n\t- 🥀 **ROTTEN LOG**\n\t- 🥀 **ROTTEN LOG**\n".split("\n"),
+    0,
+  );
+  assert.equal(ambiguous.status, "unknown");
+  assert.equal(
+    freshnessMarkRottenLogLine(ambiguous, "2026-10-23"),
+    null,
+  );
+  const invalid = freshnessMarkRottenLogHistory(
+    "- [ ] #task T\n\t- 🥀 **ROTTEN LOG**\n\t\t- *2026-10-16* — r · kept 0×\n".split("\n"),
+    0,
+  );
+  assert.equal(invalid.status, "empty");
+  const nested = freshnessMarkRottenLogHistory(
+    "- [ ] #task T\n\t- 🥀 **ROTTEN LOG**\n\t\t- parent\n\t\t\t- *2026-10-16* — nested · kept 1×\n".split("\n"),
+    0,
+  );
+  assert.equal(nested.status, "empty");
+  const bare = freshnessMarkRottenLogHistory(
+    "- [ ] #task T\n\t- 🥀 **ROTTEN LOG**\n\t\t- 2026-10-16 — bare · kept 1×\n".split("\n"),
+    0,
+  );
+  assert.equal(bare.status, "empty");
+  const underscore = freshnessMarkRottenLogHistory(
+    "- [ ] #task T\n\t- 🥀 **ROTTEN LOG**\n\t\t- _2026-10-16_ — u · kept 1×\n".split("\n"),
+    0,
+  );
+  assert.equal(underscore.status, "empty");
+});
+
+test("rotten marker vectors reject mismatched emoji and missing spaces", () => {
+  for (const bad of [
+    "- [ ] #task T\n\t- 🗓️ **ROTTEN LOG**\n\t\t- *2026-10-16* — r · kept 1×\n",
+    "- [ ] #task T\n\t- 🥀**ROTTEN LOG**\n\t\t- *2026-10-16* — r · kept 1×\n",
+    "- [ ] #task T\n\t- **rotten log**\n\t\t- *2026-10-16* — r · kept 1×\n",
+    "- [ ] #task T\n\t- **Rotten Log:**\n\t\t- *2026-10-16* — r · kept 1×\n",
+  ]) {
+    const history = freshnessMarkRottenLogHistory(bad.split("\n"), 0);
+    assert.ok(history.status !== "ok", "expected no log for: " + bad);
+    assert.equal(freshnessMarkRottenLogSummary(bad.split("\n"), 0, "2026-10-23"), null);
+  }
+  const good = "- [ ] #task T [fresh:: 2026-10-01]\n\t- 🥀 **ROTTEN LOG**\n\t\t- *2026-10-16* — old reason · kept 2×\n";
+  assert.equal(
+    freshnessMarkRottenLogSummary(good.split("\n"), 0, "2026-10-23"),
+    "🥀 1 keep logged · last Oct 16 — old reason",
+  );
+});
+
+test("rotten line splices before the action line and reaches aria-label", () => {
+  const line = "- [ ] #task T [fresh:: 2026-10-01]";
+  const model = markModel(line);
+  assert.match(model.tooltip, /Alt\+F to confirm$/);
+  const history = {
+    status: "ok",
+    entries: [{ date: "2026-10-16", reason: "old reason" }],
+  };
+  const rotten = freshnessMarkRottenLogLine(history, D);
+  const { freshnessMarkWithRottenLine } = helpers;
+  const withRotten = freshnessMarkWithRottenLine(
+    { ...model, tooltip: model.tooltip },
+    rotten,
+  );
+  const parts = withRotten.tooltip.split("\n");
+  assert.equal(parts[parts.length - 2], rotten);
+  assert.match(parts[parts.length - 1], /Alt\+F to confirm/);
+  const doc = makeFakeDoc();
+  const el = buildFreshnessMarkElement(doc, withRotten, { foldSpace: true });
+  assert.equal(el.attrs["aria-label"], withRotten.tooltip);
 });
 // __FRESHNESS_MARK_TEST_END__

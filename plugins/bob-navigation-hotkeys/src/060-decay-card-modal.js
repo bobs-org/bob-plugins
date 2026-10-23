@@ -148,6 +148,7 @@ class FreshnessDecayCardModal extends Modal {
     this.rowEls = [];
     this.keepStage = new RottenKeepReasonStage(this.rowsEl, {
       ...this.rottenKeep,
+      decayCard: true,
       onSubmit: (reason) => this.submitKeepStage(reason),
       onCancel: () => this.showRows(),
     });

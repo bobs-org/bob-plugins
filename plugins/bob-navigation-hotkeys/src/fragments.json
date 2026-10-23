@@ -76,6 +76,7 @@
   "440-picker-vault-commit.js",
   "450-picker-keydown.js",
   "455-picker-inbox-route-gate.js",
+  "457-picker-quick-roll.js",
   "460-install-picker-mixins.js",
   "470-keydown-and-freshness.js",
   "480-review-jump-and-nav-api.js",
@@ -122,6 +123,7 @@
   "678-plugin-templater-trigger.js",
   "679-plugin-image-zoom.js",
   "680-plugin-link-parse.js",
+  "681-plugin-quick-roll.js",
   "690-install-plugin-mixins.js",
   "700-exports.js"
 ]

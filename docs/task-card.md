@@ -9,6 +9,9 @@ The Task Card is the property-editing surface opened by
 setting or activation date. It opens for the task under the cursor, a
 dedicated Task Link's target, or a counted batch.
 
+`Alt+P` (command `bob-navigation-hotkeys:roll-by-recommendation`) applies the
+Task Card's recommended roll, decay, or confirmed cancel in one key.
+
 `Ctrl+Shift+B` (command
 `bob-navigation-hotkeys:task-card-depends-on`) opens the Depends-On
 stage. `Ctrl+Shift+Alt+B` (command
@@ -33,6 +36,7 @@ matching stage directly.
 | `1`–`4` | Set that configured priority level and its frozen displayed date; extra configured levels receive unique digits through `9`. |
 | `0` | Clear priority to implicit P0 and keep the scheduled date. |
 | `Ctrl+Enter` | Apply the cached recommendation (with a `Cmd+Enter` alias). |
+| `Alt+P` | Apply the cached recommendation; it aliases Ctrl+Enter. |
 | `Ctrl+R` | Regenerate the recommendation and priority previews without writing. |
 | `Enter` | Open the selected action; Schedule is the default. |
 | `b` | Open Blocked by (Depends on). |
@@ -51,6 +55,18 @@ A resolving edit on a row just landed on by the review walk advances that
 walk once. Every card gesture that writes closes the card. For a Next or
 Pending task, choosing a priority level or recommendation first opens the
 Schedule task Work summary stage.
+
+## One-key roll
+
+| Situation | Alt+P behavior |
+| --- | --- |
+| A roll or decay is available | Writes through the Ctrl+Enter path without showing the card, then shows the usual priority notice. |
+| A Next or Pending task needs a Work summary | Shows the summary stage; Enter, blank Enter, or a second Alt+P submits. |
+| The recommendation is cancel | Shows the danger banner without writing. A second Alt+P or Ctrl+Enter cancels; Escape keeps the task. |
+| No priority can roll or a recommendation is unavailable | Shows the card and a notice without writing. |
+| The task is in an inbox | Opens the route prompt before writing; backing out returns to the visible card. |
+| A counted batch or Task Link batch includes a cancel | Waits on the card for confirmation before changing any target. |
+| The cursor is on a Depends-On, BLOCKS, LINKS, or LINKED FROM line | Applies the recommendation to the owning task. |
 
 ## Scope and previews
 

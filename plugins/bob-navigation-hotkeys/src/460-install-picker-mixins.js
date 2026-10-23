@@ -19,6 +19,7 @@ function installBulletPropertyPickerMixins(pluginClass, mixins) {
 
 installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerTaskCardMixin,
+  BulletPropertyPickerQuickRollMixin,
   BulletPropertyPickerScheduleReviewMixin,
   BulletPropertyPickerScheduleWorkLogMixin,
   BulletPropertyPickerCancelLaneMixin,

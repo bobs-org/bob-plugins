@@ -327,12 +327,12 @@ function currentTaskCardPriorityValue(model) {
   );
 }
 
-function appendTaskCardKeycap(parent, text) {
+function appendTaskCardKeycap(parent, text, extraClass = "") {
   if (!parent || !text) {
     return null;
   }
   return parent.createEl("kbd", {
-    cls: "bob-key-card-key bob-task-card-key",
+    cls: `bob-key-card-key bob-task-card-key${extraClass ? ` ${extraClass}` : ""}`,
     text,
   });
 }

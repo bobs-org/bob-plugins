@@ -733,6 +733,8 @@ function resolveTaskCardKey(model, event) {
   const alt = event.altKey === true;
   const modified = ctrl || meta || shift || alt;
   const repeatedAction = event.repeat === true;
+  const quickRollKey =
+    alt && !ctrl && !meta && !shift && event.code === "KeyP";
   const rows = Array.isArray(model.rows) ? model.rows : [];
   const selected = rows.find((row) => row.id === model.selectedRowId) || null;
   const rowById = (id) => rows.find((row) => row.id === id) || null;
@@ -745,7 +747,8 @@ function resolveTaskCardKey(model, event) {
     (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || event.code === "KeyL" || key === "B" || key === "L")) ||
     (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
     (meta && !ctrl && !shift && !alt && key === "Enter") ||
-    (alt && !ctrl && !meta && !shift && lower === "n");
+    (alt && !ctrl && !meta && !shift && lower === "n") ||
+    quickRollKey;
   if (repeatedAction && actionKey) {
     return Object.freeze({ type: "ignored", reason: "repeated-action-key" });
   }
@@ -761,7 +764,7 @@ function resolveTaskCardKey(model, event) {
   ) {
     return movement("next");
   }
-  if ((ctrl || meta) && !shift && !alt && key === "Enter") {
+  if (quickRollKey || ((ctrl || meta) && !shift && !alt && key === "Enter")) {
     const recommendation = model.recommendation;
     if (!recommendation || !recommendation.available) {
       return unavailable(

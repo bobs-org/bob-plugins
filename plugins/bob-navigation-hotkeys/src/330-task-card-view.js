@@ -199,6 +199,7 @@ function renderTaskCardView(container, model, options = {}) {
     });
     const bannerMain = banner.createDiv({ cls: "bob-task-card-banner-main" });
     appendTaskCardKeycap(bannerMain, "Ctrl+Enter");
+    appendTaskCardKeycap(bannerMain, QUICK_ROLL_KEY_LABEL, "is-alias");
     const actionText =
       preview.kind === "cancel" ||
       (recommendation.source && recommendation.source.kind === "cancel")

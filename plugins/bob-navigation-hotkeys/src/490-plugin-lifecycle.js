@@ -131,6 +131,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "roll-by-recommendation",
+      name: "Task card: Roll by recommendation",
+      hotkeys: [{ modifiers: ["Alt"], key: "P" }],
+      editorCallback: (editor) => this.rollByRecommendation(editor),
+    });
+
+    this.addCommand({
       id: "task-card-depends-on",
       name: "Task card: Blocked by (Depends on)",
       hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "B" }],

@@ -4,6 +4,14 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       this.handleTaskCardKeydown(event);
       return;
     }
+    if (this.stage === "schedule-work-log" && isQuickRollKeydown(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat !== true) {
+        this.openSelectedItem();
+      }
+      return;
+    }
     // The relation field (⇧↵ from the Links stage): Escape and an empty
     // Backspace return to the list and write nothing (LG3); ↵ commits
     // through the list's openItem path.

@@ -317,6 +317,16 @@ class BobNavigationHotkeysCancelPropertyMixin {
       const entry = resolveDependencyStageEntry(content, cursor.line);
       if (
         entry.ok &&
+        options.initialTaskCardIntent &&
+        ["depends-on", "blocks", "links", "linked-from"].includes(
+          entry.lineKind,
+        )
+      ) {
+        setEditorCursorSafely(cm, entry.parentLine, 0);
+        return this.openBulletPropertyPicker(cm, { ...options });
+      }
+      if (
+        entry.ok &&
         (entry.lineKind === "links" || entry.lineKind === "linked-from")
       ) {
         setEditorCursorSafely(cm, entry.parentLine, 0);
@@ -542,6 +552,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
         taskSession,
         initialProperty: options.initialProperty || null,
         initialTaskCardRow: options.initialTaskCardRow || null,
+        initialTaskCardIntent: options.initialTaskCardIntent || null,
         directStage:
           options.directStage === true ||
           options.reopenBlocksStage === true ||
@@ -596,6 +607,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
       }
       picker.showValueStage(wanted);
     } else {
+      picker.dispatchInitialTaskCardIntent();
       picker.dispatchInitialTaskCardRow();
     }
     return true;

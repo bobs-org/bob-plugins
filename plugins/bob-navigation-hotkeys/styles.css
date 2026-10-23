@@ -1714,6 +1714,10 @@
   white-space: nowrap;
 }
 
+.bob-key-card-key.is-alias {
+  border-style: dashed;
+}
+
 .bob-key-card-row {
   border-radius: 8px;
 }
@@ -1751,6 +1755,12 @@
 .modal.bob-cnp-modal.bob-task-card-modal.bob-task-card-wide {
   width: min(92vw, 960px);
   max-width: 960px;
+}
+
+.modal.bob-cnp-modal.bob-task-card-quick-pending {
+  visibility: hidden;
+  animation: none !important;
+  transition: none !important;
 }
 
 .bob-task-card,

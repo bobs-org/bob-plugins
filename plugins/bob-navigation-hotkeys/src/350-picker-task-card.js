@@ -277,6 +277,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   }
 
   returnToTaskCard(options = {}) {
+    this.revealQuickRollCard();
     this.pendingScheduleReason = null;
     this.pendingScheduleReview = null;
     this.pendingCancel = null;
@@ -691,6 +692,9 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
 
   onOpen() {
     this.bindCloseChord();
+    if (this.quickRollCardPending && this.modalEl) {
+      this.modalEl.addClass("bob-task-card-quick-pending");
+    }
     if (this.stage === "task-card") {
       this.contentEl.empty();
       this.modalEl.addClass("bob-cnp-modal");

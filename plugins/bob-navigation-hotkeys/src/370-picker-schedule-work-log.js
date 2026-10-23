@@ -226,6 +226,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
     if (!pending || typeof pending.resume !== "function") {
       return;
     }
+    this.revealQuickRollCard();
     this.ensureTaskCardStageChrome();
     this.stage = "schedule-work-log";
     this.pendingScheduleWorkLog = pending;

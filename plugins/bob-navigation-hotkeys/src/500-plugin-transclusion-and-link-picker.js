@@ -516,6 +516,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
         linkSession,
         linkResolving: true,
         initialTaskCardRow: options.initialTaskCardRow || null,
+        initialTaskCardIntent: options.initialTaskCardIntent || null,
         random: options.random,
         baseDate: options.baseDate,
       },
@@ -584,6 +585,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     picker.refreshLinkRollBatch();
     picker.refreshPropertyItems();
     picker.showTaskCard({ rebuild: true });
+    picker.dispatchInitialTaskCardIntent();
     picker.dispatchInitialTaskCardRow();
     return true;
   }

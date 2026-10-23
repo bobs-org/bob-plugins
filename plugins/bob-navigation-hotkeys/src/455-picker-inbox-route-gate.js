@@ -71,6 +71,7 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
       },
       hide: () => {
         try {
+          this.revealQuickRollCard();
           if (modalEl && typeof modalEl.addClass === "function") {
             modalEl.addClass("bob-task-card-suspended");
           } else if (modalEl && modalEl.classList) {
@@ -81,6 +82,7 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
         }
       },
       restore: () => {
+        this.revealQuickRollCard();
         try {
           if (modalEl && typeof modalEl.removeClass === "function") {
             modalEl.removeClass("bob-task-card-suspended");

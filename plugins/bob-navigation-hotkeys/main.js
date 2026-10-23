@@ -40175,6 +40175,8 @@ function resolveTaskCardKey(model, event) {
   const alt = event.altKey === true;
   const modified = ctrl || meta || shift || alt;
   const repeatedAction = event.repeat === true;
+  const quickRollKey =
+    alt && !ctrl && !meta && !shift && event.code === "KeyP";
   const rows = Array.isArray(model.rows) ? model.rows : [];
   const selected = rows.find((row) => row.id === model.selectedRowId) || null;
   const rowById = (id) => rows.find((row) => row.id === id) || null;
@@ -40187,7 +40189,8 @@ function resolveTaskCardKey(model, event) {
     (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || event.code === "KeyL" || key === "B" || key === "L")) ||
     (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
     (meta && !ctrl && !shift && !alt && key === "Enter") ||
-    (alt && !ctrl && !meta && !shift && lower === "n");
+    (alt && !ctrl && !meta && !shift && lower === "n") ||
+    quickRollKey;
   if (repeatedAction && actionKey) {
     return Object.freeze({ type: "ignored", reason: "repeated-action-key" });
   }
@@ -40203,7 +40206,7 @@ function resolveTaskCardKey(model, event) {
   ) {
     return movement("next");
   }
-  if ((ctrl || meta) && !shift && !alt && key === "Enter") {
+  if (quickRollKey || ((ctrl || meta) && !shift && !alt && key === "Enter")) {
     const recommendation = model.recommendation;
     if (!recommendation || !recommendation.available) {
       return unavailable(
@@ -41111,12 +41114,12 @@ function currentTaskCardPriorityValue(model) {
   );
 }
 
-function appendTaskCardKeycap(parent, text) {
+function appendTaskCardKeycap(parent, text, extraClass = "") {
   if (!parent || !text) {
     return null;
   }
   return parent.createEl("kbd", {
-    cls: "bob-key-card-key bob-task-card-key",
+    cls: `bob-key-card-key bob-task-card-key${extraClass ? ` ${extraClass}` : ""}`,
     text,
   });
 }
@@ -41395,6 +41398,7 @@ function renderTaskCardView(container, model, options = {}) {
     });
     const bannerMain = banner.createDiv({ cls: "bob-task-card-banner-main" });
     appendTaskCardKeycap(bannerMain, "Ctrl+Enter");
+    appendTaskCardKeycap(bannerMain, QUICK_ROLL_KEY_LABEL, "is-alias");
     const actionText =
       preview.kind === "cancel" ||
       (recommendation.source && recommendation.source.kind === "cancel")
@@ -41872,6 +41876,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // Depends on value stage straight from the cursor entry points.
     this.initialProperty = context.initialProperty || null;
     this.initialTaskCardRow = context.initialTaskCardRow || null;
+    this.initialTaskCardIntent = context.initialTaskCardIntent || null;
+    this.quickRollCardPending =
+      this.initialTaskCardIntent === "apply-recommendation";
     this.propertyItems = [];
     this.vaultStage = null;
     this.vaultStageRefreshId = 0;
@@ -42197,6 +42204,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   }
 
   returnToTaskCard(options = {}) {
+    this.revealQuickRollCard();
     this.pendingScheduleReason = null;
     this.pendingScheduleReview = null;
     this.pendingCancel = null;
@@ -42611,6 +42619,9 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
 
   onOpen() {
     this.bindCloseChord();
+    if (this.quickRollCardPending && this.modalEl) {
+      this.modalEl.addClass("bob-task-card-quick-pending");
+    }
     if (this.stage === "task-card") {
       this.contentEl.empty();
       this.modalEl.addClass("bob-cnp-modal");
@@ -43704,6 +43715,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
     if (!pending || typeof pending.resume !== "function") {
       return;
     }
+    this.revealQuickRollCard();
     this.ensureTaskCardStageChrome();
     this.stage = "schedule-work-log";
     this.pendingScheduleWorkLog = pending;
@@ -50755,6 +50767,14 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       this.handleTaskCardKeydown(event);
       return;
     }
+    if (this.stage === "schedule-work-log" && isQuickRollKeydown(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat !== true) {
+        this.openSelectedItem();
+      }
+      return;
+    }
     // The relation field (⇧↵ from the Links stage): Escape and an empty
     // Backspace return to the list and write nothing (LG3); ↵ commits
     // through the list's openItem path.
@@ -51424,6 +51444,7 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
       },
       hide: () => {
         try {
+          this.revealQuickRollCard();
           if (modalEl && typeof modalEl.addClass === "function") {
             modalEl.addClass("bob-task-card-suspended");
           } else if (modalEl && modalEl.classList) {
@@ -51434,6 +51455,7 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
         }
       },
       restore: () => {
+        this.revealQuickRollCard();
         try {
           if (modalEl && typeof modalEl.removeClass === "function") {
             modalEl.removeClass("bob-task-card-suspended");
@@ -52012,6 +52034,93 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
     return await write();
   }
 }
+// ---- src/457-picker-quick-roll.js ----
+function isQuickRollKeydown(event) {
+  return Boolean(
+    event &&
+      event.isComposing !== true &&
+      event.keyCode !== 229 &&
+      event.altKey === true &&
+      event.ctrlKey !== true &&
+      event.metaKey !== true &&
+      event.shiftKey !== true &&
+      event.code === "KeyP",
+  );
+}
+
+class BulletPropertyPickerQuickRollMixin extends FilteredPickerModal {
+  revealQuickRollCard() {
+    if (this.quickRollCardPending !== true) {
+      return false;
+    }
+    this.quickRollCardPending = false;
+    try {
+      if (this.modalEl && typeof this.modalEl.removeClass === "function") {
+        this.modalEl.removeClass("bob-task-card-quick-pending");
+      } else if (this.modalEl && this.modalEl.classList) {
+        this.modalEl.classList.remove("bob-task-card-quick-pending");
+      }
+    } catch (_error) {
+      // Revealing is best-effort; it never blocks the pending action.
+    }
+    return true;
+  }
+
+  dispatchInitialTaskCardIntent() {
+    if (this.initialTaskCardIntent !== "apply-recommendation") {
+      return;
+    }
+    this.initialTaskCardIntent = null;
+    if (
+      !this.hasTaskCard ||
+      !this.pickerOpen ||
+      this.stage !== "task-card" ||
+      !this.taskCardModel ||
+      this.linkResolving
+    ) {
+      this.revealQuickRollCard();
+      return;
+    }
+
+    const recommendation = this.taskCardModel.recommendation;
+    if (!recommendation || recommendation.available !== true) {
+      this.revealQuickRollCard();
+      const priorityStrip = this.taskCardModel.priorityStrip || null;
+      const targets = Array.isArray(priorityStrip && priorityStrip.targets)
+        ? priorityStrip.targets
+        : [];
+      const hasNoPriority =
+        Boolean(priorityStrip && priorityStrip.propertyName) &&
+        targets.length > 0 &&
+        targets.every((target) => !String((target && target.currentValue) || "").trim());
+      const reason = hasNoPriority
+        ? "No priority to roll — pick a level (1–4)"
+        : (recommendation && recommendation.unavailableReason) ||
+          (priorityStrip && priorityStrip.unavailableReason) ||
+          "No recommendation is available";
+      new Notice(reason);
+      return;
+    }
+
+    const effects = recommendation.effects || {};
+    if (Number(effects.cancel || 0) > 0) {
+      this.revealQuickRollCard();
+      return;
+    }
+
+    Promise.resolve(
+      this.dispatchTaskCardIntent({ type: "apply-recommendation" }),
+    )
+      .catch(() => {
+        new Notice("Could not apply Task Card action");
+      })
+      .finally(() => {
+        if (this.pickerOpen) {
+          this.revealQuickRollCard();
+        }
+      });
+  }
+}
 // ---- src/460-install-picker-mixins.js ----
 function installBulletPropertyPickerMixins(pluginClass, mixins) {
   const installedNames = new Set(
@@ -52034,6 +52143,7 @@ function installBulletPropertyPickerMixins(pluginClass, mixins) {
 
 installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerTaskCardMixin,
+  BulletPropertyPickerQuickRollMixin,
   BulletPropertyPickerScheduleReviewMixin,
   BulletPropertyPickerScheduleWorkLogMixin,
   BulletPropertyPickerCancelLaneMixin,
@@ -54185,6 +54295,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "roll-by-recommendation",
+      name: "Task card: Roll by recommendation",
+      hotkeys: [{ modifiers: ["Alt"], key: "P" }],
+      editorCallback: (editor) => this.rollByRecommendation(editor),
+    });
+
+    this.addCommand({
       id: "task-card-depends-on",
       name: "Task card: Blocked by (Depends on)",
       hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "B" }],
@@ -55097,6 +55214,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
         linkSession,
         linkResolving: true,
         initialTaskCardRow: options.initialTaskCardRow || null,
+        initialTaskCardIntent: options.initialTaskCardIntent || null,
         random: options.random,
         baseDate: options.baseDate,
       },
@@ -55165,6 +55283,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     picker.refreshLinkRollBatch();
     picker.refreshPropertyItems();
     picker.showTaskCard({ rebuild: true });
+    picker.dispatchInitialTaskCardIntent();
     picker.dispatchInitialTaskCardRow();
     return true;
   }
@@ -62706,6 +62825,16 @@ class BobNavigationHotkeysCancelPropertyMixin {
       const entry = resolveDependencyStageEntry(content, cursor.line);
       if (
         entry.ok &&
+        options.initialTaskCardIntent &&
+        ["depends-on", "blocks", "links", "linked-from"].includes(
+          entry.lineKind,
+        )
+      ) {
+        setEditorCursorSafely(cm, entry.parentLine, 0);
+        return this.openBulletPropertyPicker(cm, { ...options });
+      }
+      if (
+        entry.ok &&
         (entry.lineKind === "links" || entry.lineKind === "linked-from")
       ) {
         setEditorCursorSafely(cm, entry.parentLine, 0);
@@ -62931,6 +63060,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
         taskSession,
         initialProperty: options.initialProperty || null,
         initialTaskCardRow: options.initialTaskCardRow || null,
+        initialTaskCardIntent: options.initialTaskCardIntent || null,
         directStage:
           options.directStage === true ||
           options.reopenBlocksStage === true ||
@@ -62985,6 +63115,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
       }
       picker.showValueStage(wanted);
     } else {
+      picker.dispatchInitialTaskCardIntent();
       picker.dispatchInitialTaskCardRow();
     }
     return true;
@@ -79949,6 +80080,47 @@ class BobNavigationHotkeysLinkParseMixin {
     return value.charAt(0).toUpperCase() + value.slice(1);
   }
 }
+// ---- src/681-plugin-quick-roll.js ----
+const QUICK_ROLL_KEY_LABEL = "Alt+P";
+
+class BobNavigationHotkeysQuickRollMixin {
+  rollByRecommendation(cm, options = {}) {
+    if (
+      this.activeBulletPropertyPicker &&
+      this.activeBulletPropertyPicker.pickerOpen === true
+    ) {
+      return true;
+    }
+
+    let countExplicit = options.countExplicit === true;
+    let additionalTaskCount = Math.max(
+      0,
+      Math.floor(numericOrDefault(options.additionalTaskCount, 0)),
+    );
+    if (!countExplicit) {
+      const view = this.getActiveMarkdownView();
+      const editorForVim = view && view.editor === cm ? view.editor : cm;
+      if (this.isVimNormalModeEditor(editorForVim, view)) {
+        const vimCm = this.resolveVimCodeMirror(editorForVim, view);
+        const pending = getPendingVimRepeat(vimCm);
+        if (pending.explicit) {
+          countExplicit = true;
+          additionalTaskCount = Math.max(
+            0,
+            Math.floor(numericOrDefault(pending.repeat, 0)),
+          );
+          resetPendingVimInputState(vimCm, "quick-roll-recommendation");
+        }
+      }
+    }
+    return this.openBulletPropertyPicker(cm, {
+      ...options,
+      initialTaskCardIntent: "apply-recommendation",
+      countExplicit,
+      additionalTaskCount,
+    });
+  }
+}
 // ---- src/690-install-plugin-mixins.js ----
 function installBobNavigationHotkeysMixins(pluginClass, mixins) {
   const installedNames = new Set(
@@ -79971,6 +80143,7 @@ function installBobNavigationHotkeysMixins(pluginClass, mixins) {
 
 installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysTransclusionLinkMixin,
+  BobNavigationHotkeysQuickRollMixin,
   BobNavigationHotkeysLinkCommitLaneMixin,
   BobNavigationHotkeysLaneReviewMixin,
   BobNavigationHotkeysTaskLinkLaneMixin,

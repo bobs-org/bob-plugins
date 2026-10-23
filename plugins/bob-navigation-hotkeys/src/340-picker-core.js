@@ -52,6 +52,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // Depends on value stage straight from the cursor entry points.
     this.initialProperty = context.initialProperty || null;
     this.initialTaskCardRow = context.initialTaskCardRow || null;
+    this.initialTaskCardIntent = context.initialTaskCardIntent || null;
+    this.quickRollCardPending =
+      this.initialTaskCardIntent === "apply-recommendation";
     this.propertyItems = [];
     this.vaultStage = null;
     this.vaultStageRefreshId = 0;

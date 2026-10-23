@@ -334,6 +334,7 @@ const MANAGED_TASK_LOG_INDENT_UNIT = "\t";
 const MANAGED_TASK_LOG_KIND_SCHEDULE = "schedule";
 const MANAGED_TASK_LOG_KIND_WORK = "work";
 const MANAGED_TASK_LOG_KIND_CANCEL = "cancel";
+const MANAGED_TASK_LOG_KIND_ROTTEN = "rotten";
 
 // Managed "schedule log" child bullet, e.g. `  - 🗓️ **SCHEDULE LOG**`, with a
 // newest-first list of `*<from> → <to>* — <reason>` entries nested one level
@@ -398,6 +399,16 @@ const CANCEL_LOG_MARKER_TEXT = `${CANCEL_LOG_EMOJI} **${CANCEL_LOG_LABEL}**`;
 const CANCEL_LOG_PARENT_RE = buildManagedTaskLogParentRe(
   `${CANCEL_LOG_EMOJI}\uFE0F?`,
   [CANCEL_LOG_LABEL],
+);
+const ROTTEN_LOG_EMOJI = "🥀";
+const ROTTEN_LOG_LABEL = "ROTTEN LOG";
+const ROTTEN_LOG_MARKER_TEXT = `${ROTTEN_LOG_EMOJI} **${ROTTEN_LOG_LABEL}**`;
+const ROTTEN_LOG_PARENT_RE = buildManagedTaskLogParentRe(
+  `${ROTTEN_LOG_EMOJI}\\uFE0F?`,
+  [ROTTEN_LOG_LABEL, "Rotten log"],
+);
+const ROTTEN_LOG_ENTRY_RE = new RegExp(
+  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+\\*(?<date>\\d{4}-\\d{2}-\\d{2})\\*${SCHEDULE_LOG_SEPARATOR}(?<reason>.+) · kept (?<keeps>\\d{1,3})×$`,
 );
 const SCHEDULE_LOG_ENTRY_RE = new RegExp(
   `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emphasis>\\*\\*?)(?:(?<from>.+?)${SCHEDULE_LOG_TRANSITION})?(?<to>.+?)\\k<emphasis>${SCHEDULE_LOG_SEPARATOR}(?<reason>.+)$`,
@@ -2494,7 +2505,120 @@ function parseManagedTaskLogParentBullet(line) {
     });
   }
 
+  const rottenMatch = ROTTEN_LOG_PARENT_RE.exec(text);
+  if (rottenMatch) {
+    const { indent, marker, emoji } = rottenMatch.groups;
+    return Object.freeze({
+      indent,
+      marker,
+      hasEmoji: Boolean(emoji),
+      kind: MANAGED_TASK_LOG_KIND_ROTTEN,
+    });
+  }
+
   return null;
+}
+
+function formatRottenLogEntryText({ date, reason, keeps }) {
+  const normalized = normalizeScheduleReasonText(reason);
+  const safeReason = normalized.empty ? SCHEDULE_LOG_SKIPPED_REASON_TEXT : normalized.reason;
+  const day = String(date || "");
+  const count = Math.floor(numericOrDefault(keeps, 0));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || count < 1 || count > 999) {
+    return "";
+  }
+  return `*${day}*${SCHEDULE_LOG_SEPARATOR}${safeReason} · kept ${count}×`;
+}
+
+function parseRottenLogEntryBullet(line) {
+  const match = ROTTEN_LOG_ENTRY_RE.exec(String(line || ""));
+  if (!match) return null;
+  const { indent, marker, date, reason, keeps } = match.groups;
+  const count = Number(keeps);
+  if (count < 1 || count > 999) return null;
+  return Object.freeze({ indent, marker, date, reason, keeps: count });
+}
+
+function findManagedTaskLogParents(lines, taskLine, kind) {
+  const source = Array.isArray(lines) ? lines : String(lines || "").split(/\r?\n/);
+  const taskIndex = Math.floor(numericOrDefault(taskLine, Number.NaN));
+  if (!Number.isFinite(taskIndex) || taskIndex < 0) return Object.freeze([]);
+  const block = findCurrentBulletChildBlock(source, taskIndex);
+  const parents = [];
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    if (findNearestParentListItem(source, index) !== taskIndex) continue;
+    const parsed = parseManagedTaskLogParentBullet(source[index]);
+    if (parsed && parsed.kind === kind) {
+      parents.push(Object.freeze({ line: index, indent: parsed.indent, marker: parsed.marker }));
+    }
+  }
+  return Object.freeze(parents);
+}
+
+function planManagedTaskLogEntry(content, taskLine, { kind, entryText } = {}) {
+  const lines = String(content || "").split(/\r?\n/);
+  const taskIndex = Math.floor(numericOrDefault(taskLine, Number.NaN));
+  const guard = (reason) => Object.freeze({ valid: false, reason, changed: false, lineTexts: Object.freeze([]), insertLine: null });
+  if (!Number.isFinite(taskIndex) || taskIndex < 0 || taskIndex >= lines.length) return guard("task-out-of-range");
+  if (!isBulletLine(lines[taskIndex])) return guard("not-list-item");
+  if (!String(entryText || "").trim()) return guard("empty-entry");
+  const markerText = kind === MANAGED_TASK_LOG_KIND_ROTTEN ? ROTTEN_LOG_MARKER_TEXT
+    : kind === MANAGED_TASK_LOG_KIND_SCHEDULE ? SCHEDULE_LOG_MARKER_TEXT
+      : kind === MANAGED_TASK_LOG_KIND_WORK ? `${WORK_LOG_EMOJI} **${WORK_LOG_LABEL}**`
+        : kind === MANAGED_TASK_LOG_KIND_CANCEL ? CANCEL_LOG_MARKER_TEXT : "";
+  if (!markerText) return guard("unknown-kind");
+  const parents = findManagedTaskLogParents(lines, taskIndex, kind);
+  if (parents.length > 1) return guard("ambiguous-markers");
+  if (parents.length === 1) {
+    const parent = parents[0];
+    const entryIndent = getScheduleLogEntryIndent(lines, parent.line);
+    let entryMarker = parent.marker;
+    const childBlock = findCurrentBulletChildBlock(lines, parent.line);
+    for (let index = childBlock.startLine; index < childBlock.endLineExclusive; index += 1) {
+      if (findNearestParentListItem(lines, index) !== parent.line) continue;
+      const match = /^(?:\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+/.exec(lines[index]);
+      if (match) { entryMarker = match.groups.marker; break; }
+    }
+    return Object.freeze({ valid: true, reason: null, changed: true, createdParent: false,
+      insertLine: parent.line + 1,
+      lineTexts: Object.freeze([`${entryIndent}${entryMarker} ${entryText}`]),
+    });
+  }
+  const block = findCurrentBulletChildBlock(lines, taskIndex);
+  const markerIndent = getDependencyChildIndent(lines, taskIndex);
+  const entryIndent = `${markerIndent}${MANAGED_TASK_LOG_INDENT_UNIT}`;
+  const insertLine = kind === MANAGED_TASK_LOG_KIND_CANCEL
+    ? taskIndex + 1
+    : block.endLineExclusive;
+  return Object.freeze({ valid: true, reason: null, changed: true, createdParent: true,
+    insertLine,
+    lineTexts: Object.freeze([`${markerIndent}- ${markerText}`, `${entryIndent}- ${entryText}`]),
+  });
+}
+
+function applyManagedTaskLogEntryToLines(lines, plan) {
+  if (!plan || !plan.valid || !plan.changed || !Array.isArray(lines)) return 0;
+  const line = Math.floor(numericOrDefault(plan.insertLine, Number.NaN));
+  if (!Number.isFinite(line) || line < 0) return 0;
+  const entries = Array.isArray(plan.lineTexts) ? plan.lineTexts : [];
+  lines.splice(line, 0, ...entries);
+  return entries.length;
+}
+
+function readRottenLog(content, taskLine) {
+  const lines = String(content || "").split(/\r?\n/);
+  const parents = findManagedTaskLogParents(lines, taskLine, MANAGED_TASK_LOG_KIND_ROTTEN);
+  if (parents.length > 1) return Object.freeze({ status: "unknown", entries: Object.freeze([]) });
+  if (parents.length === 0) return Object.freeze({ status: "missing", entries: Object.freeze([]) });
+  const parent = parents[0];
+  const block = findCurrentBulletChildBlock(lines, parent.line);
+  const entries = [];
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    if (findNearestParentListItem(lines, index) !== parent.line) continue;
+    const parsed = parseRottenLogEntryBullet(lines[index]);
+    if (parsed) entries.push(parsed);
+  }
+  return Object.freeze({ status: entries.length ? "ok" : "empty", entries: Object.freeze(entries) });
 }
 
 function parseScheduleLogParentBullet(line) {
@@ -12599,6 +12723,9 @@ function getProjectFromTaskNoticeText(
   }
   if (kindSet.has(MANAGED_TASK_LOG_KIND_CANCEL)) {
     details.push("cancel log moved");
+  }
+  if (kindSet.has(MANAGED_TASK_LOG_KIND_ROTTEN)) {
+    details.push("rotten log moved");
   }
 
   return `Created project${projectSuffix} from task "${taskText}" (${details.join("; ")})`;
@@ -81343,16 +81470,28 @@ module.exports.helpers = {
   MANAGED_TASK_LOG_KIND_SCHEDULE,
   MANAGED_TASK_LOG_KIND_WORK,
   MANAGED_TASK_LOG_KIND_CANCEL,
+  MANAGED_TASK_LOG_KIND_ROTTEN,
   SCHEDULE_LOG_EMOJI,
   SCHEDULE_LOG_LABEL,
   CANCEL_LOG_EMOJI,
   CANCEL_LOG_LABEL,
   CANCEL_LOG_MARKER_TEXT,
   CANCEL_LOG_PARENT_RE,
+  ROTTEN_LOG_EMOJI,
+  ROTTEN_LOG_LABEL,
+  ROTTEN_LOG_MARKER_TEXT,
+  ROTTEN_LOG_PARENT_RE,
+  ROTTEN_LOG_ENTRY_RE,
   formatScheduleLogParentBullet,
   formatScheduleLogEntryText,
   formatScheduleLogEntryBullet,
   parseManagedTaskLogParentBullet,
+  formatRottenLogEntryText,
+  parseRottenLogEntryBullet,
+  findManagedTaskLogParents,
+  planManagedTaskLogEntry,
+  applyManagedTaskLogEntryToLines,
+  readRottenLog,
   parseScheduleLogParentBullet,
   parseScheduleLogEntryBullet,
   normalizeScheduleReasonText,

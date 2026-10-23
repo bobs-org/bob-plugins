@@ -270,13 +270,15 @@ test("buildProjectSeedFromChildBullets moves an empty work log without forcing t
   assert.deepEqual(empty.managedLogLines, ["\t- 🛠️ **WORK LOG**"]);
 });
 
-test("buildProjectSeedFromChildBullets moves both logs in source order without sorting by kind", () => {
+test("buildProjectSeedFromChildBullets moves managed logs in source order without sorting by kind", () => {
   const result = helpers.buildProjectSeedFromChildBullets(
     [
       "\t- 🛠️ **WORK LOG**",
       "\t\t- *2026-08-15* — Added coverage for the parser",
       "\t- 🗓️ **SCHEDULE LOG**",
       "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
+      "\t- 🥀 **ROTTEN LOG**",
+      "\t\t- *2026-08-16* — weekend reading · kept 3×",
     ],
     "2026-08-12",
   );
@@ -289,6 +291,8 @@ test("buildProjectSeedFromChildBullets moves both logs in source order without s
     "\t\t- *2026-08-15* — Added coverage for the parser",
     "\t- 🗓️ **SCHEDULE LOG**",
     "\t\t- *2026-08-05 → 2026-08-20* — rolled from priority",
+    "\t- 🥀 **ROTTEN LOG**",
+    "\t\t- *2026-08-16* — weekend reading · kept 3×",
   ]);
 });
 
@@ -375,6 +379,53 @@ test("parseManagedTaskLogParentBullet accepts sixteen spellings, blockquotes, an
     helpers.parseManagedTaskLogParentBullet("\t- 🛠️ **WORK LOG** trailing"),
     null,
   );
+});
+
+test("Rotten Log markers, history reading, formatting, and generic insertion", () => {
+  const spellings = [
+    "\t- 🥀 **ROTTEN LOG**",
+    "\t- 🥀️ **ROTTEN LOG:**",
+    "\t- **ROTTEN LOG**",
+    "\t- **Rotten log:**",
+  ];
+  for (const line of spellings) {
+    const parsed = helpers.parseManagedTaskLogParentBullet(line);
+    assert.equal(parsed.kind, helpers.MANAGED_TASK_LOG_KIND_ROTTEN, line);
+  }
+  assert.equal(helpers.parseManagedTaskLogParentBullet("\t- 🛠️ **ROTTEN LOG**"), null);
+  assert.equal(
+    helpers.formatRottenLogEntryText({ date: "2026-10-23", reason: "  kept\nfor weekend ", keeps: 3 }),
+    "*2026-10-23* — kept for weekend · kept 3×",
+  );
+
+  const task = "- [ ] #task Reading ^a";
+  const content = `${task}\n\t- Child note\n\t- 🥀 **ROTTEN LOG**\n\t\t- *2026-10-16* — 🤷 no reason given · kept 2×\n\t\t- extra nested note`;
+  const history = helpers.readRottenLog(content, 0);
+  assert.equal(history.status, "ok");
+  assert.deepEqual(history.entries.map(({ date, keeps }) => ({ date, keeps })), [
+    { date: "2026-10-16", keeps: 2 },
+  ]);
+
+  const entry = helpers.formatRottenLogEntryText({ date: "2026-10-23", reason: "weekend", keeps: 3 });
+  const plan = helpers.planManagedTaskLogEntry(content, 0, {
+    kind: helpers.MANAGED_TASK_LOG_KIND_ROTTEN,
+    entryText: entry,
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.createdParent, false);
+  assert.deepEqual(plan.lineTexts, ["\t\t- *2026-10-23* — weekend · kept 3×"]);
+  const ambiguous = helpers.readRottenLog(`${content}\n\t- **ROTTEN LOG**`, 0);
+  assert.equal(ambiguous.status, "unknown");
+
+  const newPlan = helpers.planManagedTaskLogEntry(task, 0, {
+    kind: helpers.MANAGED_TASK_LOG_KIND_ROTTEN,
+    entryText: entry,
+  });
+  assert.equal(newPlan.createdParent, true);
+  assert.deepEqual(newPlan.lineTexts, [
+    "\t- 🥀 **ROTTEN LOG**",
+    "\t\t- *2026-10-23* — weekend · kept 3×",
+  ]);
 });
 
 test("parseManagedTaskLogParentBullet rejects emoji/label mismatches like parse_managed_task_log_marker", () => {
@@ -989,9 +1040,9 @@ test("getProjectFromTaskNoticeText reports moved log kinds in a fixed order", ()
       "Ship_widget",
       0,
       0,
-      ["work", "schedule", "work", "unknown"],
+      ["work", "schedule", "work", "rotten", "unknown"],
     ),
-    'Created project Ship_widget from task "Ship the widget" (task removed from Area; schedule log moved; work log moved)',
+    'Created project Ship_widget from task "Ship the widget" (task removed from Area; schedule log moved; work log moved; rotten log moved)',
   );
   assert.equal(
     helpers.getProjectFromTaskNoticeText(

@@ -332,6 +332,7 @@ const MANAGED_TASK_LOG_INDENT_UNIT = "\t";
 const MANAGED_TASK_LOG_KIND_SCHEDULE = "schedule";
 const MANAGED_TASK_LOG_KIND_WORK = "work";
 const MANAGED_TASK_LOG_KIND_CANCEL = "cancel";
+const MANAGED_TASK_LOG_KIND_ROTTEN = "rotten";
 
 // Managed "schedule log" child bullet, e.g. `  - 🗓️ **SCHEDULE LOG**`, with a
 // newest-first list of `*<from> → <to>* — <reason>` entries nested one level
@@ -396,6 +397,16 @@ const CANCEL_LOG_MARKER_TEXT = `${CANCEL_LOG_EMOJI} **${CANCEL_LOG_LABEL}**`;
 const CANCEL_LOG_PARENT_RE = buildManagedTaskLogParentRe(
   `${CANCEL_LOG_EMOJI}\uFE0F?`,
   [CANCEL_LOG_LABEL],
+);
+const ROTTEN_LOG_EMOJI = "🥀";
+const ROTTEN_LOG_LABEL = "ROTTEN LOG";
+const ROTTEN_LOG_MARKER_TEXT = `${ROTTEN_LOG_EMOJI} **${ROTTEN_LOG_LABEL}**`;
+const ROTTEN_LOG_PARENT_RE = buildManagedTaskLogParentRe(
+  `${ROTTEN_LOG_EMOJI}\\uFE0F?`,
+  [ROTTEN_LOG_LABEL, "Rotten log"],
+);
+const ROTTEN_LOG_ENTRY_RE = new RegExp(
+  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+\\*(?<date>\\d{4}-\\d{2}-\\d{2})\\*${SCHEDULE_LOG_SEPARATOR}(?<reason>.+) · kept (?<keeps>\\d{1,3})×$`,
 );
 const SCHEDULE_LOG_ENTRY_RE = new RegExp(
   `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emphasis>\\*\\*?)(?:(?<from>.+?)${SCHEDULE_LOG_TRANSITION})?(?<to>.+?)\\k<emphasis>${SCHEDULE_LOG_SEPARATOR}(?<reason>.+)$`,

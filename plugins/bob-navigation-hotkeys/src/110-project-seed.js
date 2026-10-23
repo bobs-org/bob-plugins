@@ -870,6 +870,9 @@ function getProjectFromTaskNoticeText(
   if (kindSet.has(MANAGED_TASK_LOG_KIND_CANCEL)) {
     details.push("cancel log moved");
   }
+  if (kindSet.has(MANAGED_TASK_LOG_KIND_ROTTEN)) {
+    details.push("rotten log moved");
+  }
 
   return `Created project${projectSuffix} from task "${taskText}" (${details.join("; ")})`;
 }

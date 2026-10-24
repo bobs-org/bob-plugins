@@ -48888,6 +48888,12 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     return this.isRelationStage() && this.relationStageDirection === "from";
   }
 
+  isLinkedFromSession() {
+    // The ⇧↵ relation field and the block-ID prompt leave the list stage
+    // but still commit the gesture started in Linked from.
+    return this.relationStage === true && this.relationStageDirection === "from";
+  }
+
   relationStageDummyProperty() {
     return {
       kind: "property",
@@ -49234,7 +49240,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     const additions = Array.isArray(add) ? add : [];
     const removals = Array.isArray(remove) ? remove : [];
     const relabels = Array.isArray(relabel) ? relabel : [];
-    const linkedFrom = this.isLinkedFromStage();
+    const linkedFrom = this.isLinkedFromSession();
     const owner = linkedFrom ? this.relationStageSourceRefs()[0] || null : null;
     const ownerKey = owner
       ? `${normalizeVaultRelativePath(owner.path || "")}\x00${owner.line}`
@@ -49274,19 +49280,27 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       return this.promptNextRelationTargetId();
     }
     const sources = this.relationStageSourceRefs();
-    const toRef = (item) => ({
-      path: normalizeVaultRelativePath(item.path || ""),
-      line: item.line,
-      blockId:
-        targetOverrides.get(
-          `${normalizeVaultRelativePath(item.path || "")}\x00${item.line}`,
-        )?.blockId ||
-        item.blockId ||
-        item.existingBlockId ||
-        null,
-      label: item.label !== undefined ? item.label : undefined,
-      rawLine: typeof item.rawLine === "string" ? item.rawLine : undefined,
-    });
+    const toRef = (item) => {
+      const extra = targetOverrides.get(
+        `${normalizeVaultRelativePath(item.path || "")}\x00${item.line}`,
+      );
+      return {
+        path: normalizeVaultRelativePath(item.path || ""),
+        line: item.line,
+        blockId:
+          (extra && extra.blockId) ||
+          item.blockId ||
+          item.existingBlockId ||
+          null,
+        label: item.label !== undefined ? item.label : undefined,
+        rawLine:
+          extra && typeof extra.rawLine === "string"
+            ? extra.rawLine
+            : typeof item.rawLine === "string"
+              ? item.rawLine
+              : undefined,
+      };
+    };
     // The open-time snapshot of the touched notes only; the writer reads
     // live content and compares, so a changed note refuses with
     // "changed — reopen".
@@ -49453,8 +49467,17 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       return false;
     }
     pending.reservedIds.add(validation.id);
+    if (this.vaultStage && this.vaultStage.files instanceof Map) {
+      const nextLines = targetLines.slice();
+      nextLines[target.line] = updatedLine;
+      this.vaultStage.files.set(
+        targetPath,
+        nextLines.join(relationLineEnding(String(targetContent))),
+      );
+    }
     pending.overrides.set(`${target.path}\x00${target.line}`, {
       blockId: validation.id,
+      rawLine: updatedLine,
     });
     pending.queue.shift();
     if (pending.queue.length > 0) {
@@ -49538,14 +49561,14 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     const targets = Array.isArray(this.relationLabelTargets)
       ? this.relationLabelTargets
       : [];
-    const sourceText = this.isLinkedFromStage()
+    const sourceText = this.isLinkedFromSession()
       ? (targets[0] && targets[0].displayText) || "This task"
       : (sources[0] && sources[0].displayText) || "This task";
     const firstText =
       (targets[0] &&
         (targets[0].displayText || targets[0].text || targets[0].blockId)) ||
       "that task";
-    const targetText = this.isLinkedFromStage()
+    const targetText = this.isLinkedFromSession()
       ? "this"
       : targets.length > 1
         ? `${firstText} +${targets.length - 1} more`
@@ -69424,6 +69447,10 @@ class BobNavigationHotkeysRelationEditMixin {
         }
         content = planned.nextContent;
         if (planned.report) {
+          const noticeRow = (target) =>
+            direction === "from"
+              ? { ...source, label: target.label }
+              : target;
           for (const target of liveAdd) {
             const link = storedRelationLinkForTarget(
               existingRows,
@@ -69431,9 +69458,11 @@ class BobNavigationHotkeysRelationEditMixin {
               source.path,
               vaultFiles,
             );
-            if (planned.report.added.includes(link)) noticeAdded.push(target);
+            if (planned.report.added.includes(link)) {
+              noticeAdded.push(noticeRow(target));
+            }
             if (planned.report.relabeled.includes(link)) {
-              noticeRelabeled.push(target);
+              noticeRelabeled.push(noticeRow(target));
             }
           }
           for (const target of liveRelabel) {
@@ -69443,11 +69472,15 @@ class BobNavigationHotkeysRelationEditMixin {
               source.path,
               vaultFiles,
             );
+            const row = noticeRow(target);
             if (
               planned.report.relabeled.includes(link) &&
-              !noticeRelabeled.includes(target)
+              !noticeRelabeled.some(
+                (entry) =>
+                  entry.path === row.path && entry.blockId === row.blockId,
+              )
             ) {
-              noticeRelabeled.push(target);
+              noticeRelabeled.push(row);
             }
           }
           for (const target of liveRemove) {
@@ -69457,7 +69490,9 @@ class BobNavigationHotkeysRelationEditMixin {
               source.path,
               vaultFiles,
             );
-            if (planned.report.removed.includes(link)) noticeRemoved.push(target);
+            if (planned.report.removed.includes(link)) {
+              noticeRemoved.push(noticeRow(target));
+            }
           }
         }
 

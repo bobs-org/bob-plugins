@@ -59,7 +59,9 @@ from a generation-guarded vault scan while that index is unavailable.
 Sources of every task status count, including Next `[*]` and Blocked `[?]`.
 Its RESULTS are editable source tasks that can link here; Enter applies or
 removes the selected source, and `Shift+Enter` adds or changes the relation
-label. Built-in labels use their inverse phrase in CURRENT. `N<Ctrl+Shift+L>`
+label. `Shift+Enter` labels the selected source's LINKS line, and the
+relation field's live sentence reads `‹source› — ‹label› → this`. Built-in
+labels use their inverse phrase in CURRENT. `N<Ctrl+Shift+L>`
 applies one Links-to target and label to each of N+1 source tasks;
 `N<Ctrl+Shift+Alt+L>` is refused because one target cannot be chosen for a
 reverse batch. `Ctrl+D` on Links to removes every outgoing relation and

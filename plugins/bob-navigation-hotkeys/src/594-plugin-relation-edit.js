@@ -291,6 +291,10 @@ class BobNavigationHotkeysRelationEditMixin {
         }
         content = planned.nextContent;
         if (planned.report) {
+          const noticeRow = (target) =>
+            direction === "from"
+              ? { ...source, label: target.label }
+              : target;
           for (const target of liveAdd) {
             const link = storedRelationLinkForTarget(
               existingRows,
@@ -298,9 +302,11 @@ class BobNavigationHotkeysRelationEditMixin {
               source.path,
               vaultFiles,
             );
-            if (planned.report.added.includes(link)) noticeAdded.push(target);
+            if (planned.report.added.includes(link)) {
+              noticeAdded.push(noticeRow(target));
+            }
             if (planned.report.relabeled.includes(link)) {
-              noticeRelabeled.push(target);
+              noticeRelabeled.push(noticeRow(target));
             }
           }
           for (const target of liveRelabel) {
@@ -310,11 +316,15 @@ class BobNavigationHotkeysRelationEditMixin {
               source.path,
               vaultFiles,
             );
+            const row = noticeRow(target);
             if (
               planned.report.relabeled.includes(link) &&
-              !noticeRelabeled.includes(target)
+              !noticeRelabeled.some(
+                (entry) =>
+                  entry.path === row.path && entry.blockId === row.blockId,
+              )
             ) {
-              noticeRelabeled.push(target);
+              noticeRelabeled.push(row);
             }
           }
           for (const target of liveRemove) {
@@ -324,7 +334,9 @@ class BobNavigationHotkeysRelationEditMixin {
               source.path,
               vaultFiles,
             );
-            if (planned.report.removed.includes(link)) noticeRemoved.push(target);
+            if (planned.report.removed.includes(link)) {
+              noticeRemoved.push(noticeRow(target));
+            }
           }
         }
 

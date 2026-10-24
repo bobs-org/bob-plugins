@@ -268,6 +268,62 @@ function beginRelationLabel(picker, targets, raw, mode = "add") {
   picker.relationLabelMode = mode;
 }
 
+function currentOtherNotes(overrides = {}) {
+  return {
+    "Current.md":
+      overrides.current || "- [ ] #task Current ^current",
+    "Other.md": overrides.other || "- [ ] #task Other ^other",
+  };
+}
+
+function makeCurrentOtherPicker(direction, notes, extra = {}) {
+  const harness = makePlugin(notes);
+  const currentEditor = new TestEditor(notes["Current.md"]);
+  const otherEditor = new TestEditor(notes["Other.md"]);
+  harness.openEditors.set("Current.md", currentEditor);
+  harness.openEditors.set("Other.md", otherEditor);
+  const currentLine = String(notes["Current.md"] || "").split(/\r?\n/)[0];
+  const otherLine = String(notes["Other.md"] || "").split(/\r?\n/)[0];
+  const picker = makeRelationPicker(
+    harness.plugin,
+    direction,
+    [
+      {
+        path: "Current.md",
+        line: 0,
+        blockId: extra.currentBlockId,
+        displayText: "Current",
+        rawLine: currentLine,
+      },
+    ],
+    notes,
+  );
+  picker.editor = currentEditor;
+  const other = {
+    path: "Other.md",
+    line: 0,
+    blockId: extra.otherBlockId,
+    displayText: "Other",
+    rawLine: otherLine,
+    stageSection: extra.stageSection || "results",
+    alreadyLinked: extra.alreadyLinked === true,
+  };
+  return { harness, picker, currentEditor, otherEditor, other };
+}
+
+function stubRelationBlockIdPrompt(picker) {
+  const prompts = [];
+  picker.showBlockIdStage = (snapshot, options) => {
+    prompts.push({ snapshot, options });
+    picker.stage = "blockid";
+    return false;
+  };
+  picker.refuseDependencyStale = (message = "changed — reopen") => {
+    assert.fail(`stale refusal: ${message}`);
+  };
+  return prompts;
+}
+
 test("LG3: typed relation labels commit their text through the relation field", async (t) => {
   await t.test("add writes the typed label and mirror", async () => {
     const notes = {
@@ -332,22 +388,23 @@ test("LG3: typed relation labels commit their text through the relation field", 
 
   await t.test("Linked from labels the other task's LINKS line", async () => {
     const notes = {
-      "Source.md": "- [ ] #task Source ^source",
-      "Target.md": "- [ ] #task Target ^target",
+      "Current.md": "- [ ] #task Current ^current",
+      "Other.md": "- [ ] #task Other ^other",
     };
     const harness = makePlugin(notes);
-    const sourceEditor = new TestEditor(notes["Source.md"]);
-    const targetEditor = new TestEditor(notes["Target.md"]);
-    harness.openEditors.set("Source.md", sourceEditor);
-    harness.openEditors.set("Target.md", targetEditor);
+    const currentEditor = new TestEditor(notes["Current.md"]);
+    const otherEditor = new TestEditor(notes["Other.md"]);
+    harness.openEditors.set("Current.md", currentEditor);
+    harness.openEditors.set("Other.md", otherEditor);
     const picker = makeRelationPicker(harness.plugin, "from", [
-      { path: "Source.md", line: 0, blockId: "source", displayText: "Source" },
+      { path: "Current.md", line: 0, blockId: "current", displayText: "Current" },
     ], notes);
-    const target = { path: "Target.md", line: 0, blockId: "target", displayText: "Target" };
-    beginRelationLabel(picker, [target], "son of");
+    const other = { path: "Other.md", line: 0, blockId: "other", displayText: "Other" };
+    beginRelationLabel(picker, [other], "son of");
     assert.equal(await picker.commitRelationLabel(picker.getRelationLabelPreviewItems()[0]), true);
-    assert.match(sourceEditor.getValue(), /son of \[\[Target#\^target\]\]/);
-    assert.match(targetEditor.getValue(), /LINKED FROM:\*\* \[\[Source#\^source\]\] \(son of\)/);
+    assert.match(otherEditor.getValue(), /son of \[\[Current#\^current\]\]/);
+    assert.match(currentEditor.getValue(), /LINKED FROM:\*\* \[\[Other#\^other\]\] \(son of\)/);
+    assert.doesNotMatch(currentEditor.getValue(), /\*\*LINKS:\*\*/);
   });
 
   await t.test("suggestion, plain, and raw-input paths remain supported", async () => {
@@ -382,6 +439,261 @@ test("LG3: typed relation labels commit their text through the relation field", 
     assert.equal(await raw.picker.commitRelationLabel(undefined), true);
     assert.match(raw.editor.getValue(), /son of \[\[Target#\^target\]\]/);
   });
+});
+
+test("Linked from Shift+Enter goes through the relation field and labels the source", async () => {
+  const notes = currentOtherNotes();
+  const { picker, currentEditor, otherEditor, other } = makeCurrentOtherPicker(
+    "from",
+    notes,
+    { currentBlockId: "current", otherBlockId: "other" },
+  );
+  assert.equal(picker.stage, "value");
+  picker.getRawQuery = () => "son of";
+  assert.equal(picker.chooseRelationTask(other, { withLabel: true }), false);
+  assert.equal(picker.stage, "relation-label");
+  assert.equal(picker.getRelationLabelSubtitle(), "Other — son of → this");
+  assert.equal(
+    await picker.commitRelationLabel(picker.getRelationLabelPreviewItems()[0]),
+    true,
+  );
+  assert.match(otherEditor.getValue(), /son of \[\[Current#\^current\]\]/);
+  assert.match(
+    currentEditor.getValue(),
+    /LINKED FROM:\*\* \[\[Other#\^other\]\] \(son of\)/,
+  );
+  assert.doesNotMatch(currentEditor.getValue(), /\*\*LINKS:\*\*/);
+});
+
+test("Linked from Shift+Enter relabels a CURRENT source", async () => {
+  const notes = currentOtherNotes({
+    current: [
+      "- [ ] #task Current ^current",
+      "  - 🪢 **LINKED FROM:** [[Other#^other]] (see)",
+    ].join("\n"),
+    other: [
+      "- [ ] #task Other ^other",
+      "  - 🪢 **LINKS:** see [[Current#^current]]",
+    ].join("\n"),
+  });
+  const { picker, currentEditor, otherEditor, other } = makeCurrentOtherPicker(
+    "from",
+    notes,
+    {
+      currentBlockId: "current",
+      otherBlockId: "other",
+      stageSection: "current",
+      alreadyLinked: true,
+    },
+  );
+  picker.getRawQuery = () => "son of";
+  assert.equal(picker.chooseRelationTask(other, { withLabel: true }), false);
+  assert.equal(picker.stage, "relation-label");
+  assert.equal(
+    await picker.commitRelationLabel(picker.getRelationLabelPreviewItems()[0]),
+    true,
+  );
+  assert.match(otherEditor.getValue(), /son of \[\[Current#\^current\]\]/);
+  assert.doesNotMatch(otherEditor.getValue(), /see \[\[Current/);
+  assert.match(currentEditor.getValue(), /\(son of\)/);
+  assert.doesNotMatch(currentEditor.getValue(), /\*\*LINKS:\*\*/);
+});
+
+test("Linked from prompts for the owner's id then links", async (t) => {
+  await t.test("plain Enter writes the owner id and the reverse link", async () => {
+    const notes = currentOtherNotes({
+      current: "- [ ] #task Current",
+    });
+    const { picker, currentEditor, otherEditor, other } = makeCurrentOtherPicker(
+      "from",
+      notes,
+      { otherBlockId: "other" },
+    );
+    const prompts = stubRelationBlockIdPrompt(picker);
+    assert.equal(
+      await picker.commitRelationEdit({
+        add: [other],
+        remove: [],
+        relabel: [],
+      }),
+      false,
+    );
+    assert.equal(prompts.length, 1);
+    assert.equal(prompts[0].options.mode, "relation-target");
+    assert.equal(prompts[0].snapshot.path, "Current.md");
+    assert.equal(picker.stage, "blockid");
+    assert.equal(
+      await picker.confirmRelationTargetBlockId({ valid: true, id: "current" }),
+      true,
+    );
+    assert.match(currentEditor.getValue(), /\^current/);
+    assert.match(
+      currentEditor.getValue(),
+      /LINKED FROM:\*\* \[\[Other#\^other\]\]/,
+    );
+    assert.match(otherEditor.getValue(), /LINKS:\*\* \[\[Current#\^current\]\]/);
+  });
+
+  await t.test("Shift+Enter labels the source after the owner id prompt", async () => {
+    const notes = currentOtherNotes({
+      current: "- [ ] #task Current",
+    });
+    const { picker, currentEditor, otherEditor, other } = makeCurrentOtherPicker(
+      "from",
+      notes,
+      { otherBlockId: "other" },
+    );
+    const prompts = stubRelationBlockIdPrompt(picker);
+    picker.getRawQuery = () => "son of";
+    assert.equal(picker.chooseRelationTask(other, { withLabel: true }), false);
+    assert.equal(picker.stage, "relation-label");
+    assert.equal(
+      await picker.commitRelationLabel(picker.getRelationLabelPreviewItems()[0]),
+      false,
+    );
+    assert.equal(prompts.length, 1);
+    assert.equal(prompts[0].snapshot.path, "Current.md");
+    assert.equal(picker.stage, "blockid");
+    assert.equal(
+      await picker.confirmRelationTargetBlockId({ valid: true, id: "current" }),
+      true,
+    );
+    assert.match(currentEditor.getValue(), /\^current/);
+    assert.match(
+      currentEditor.getValue(),
+      /LINKED FROM:\*\* \[\[Other#\^other\]\] \(son of\)/,
+    );
+    assert.match(
+      otherEditor.getValue(),
+      /son of \[\[Current#\^current\]\]/,
+    );
+  });
+});
+
+test("Links to prompts for the selected task's id then links", async () => {
+  const notes = currentOtherNotes({
+    other: "- [ ] #task Other",
+  });
+  const { picker, currentEditor, otherEditor, other } = makeCurrentOtherPicker(
+    "to",
+    notes,
+    { currentBlockId: "current" },
+  );
+  const prompts = stubRelationBlockIdPrompt(picker);
+  assert.equal(
+    await picker.commitRelationEdit({
+      add: [other],
+      remove: [],
+      relabel: [],
+    }),
+    false,
+  );
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].options.mode, "relation-target");
+  assert.equal(prompts[0].snapshot.path, "Other.md");
+  assert.equal(
+    await picker.confirmRelationTargetBlockId({ valid: true, id: "other" }),
+    true,
+  );
+  assert.match(currentEditor.getValue(), /LINKS:\*\* \[\[Other#\^other\]\]/);
+  assert.match(
+    otherEditor.getValue(),
+    /LINKED FROM:\*\* \[\[Current#\^current\]\]/,
+  );
+});
+
+test("Linked-from toasts name the source task", async () => {
+  const addNotes = currentOtherNotes();
+  const added = makeCurrentOtherPicker("from", addNotes, {
+    currentBlockId: "current",
+    otherBlockId: "other",
+  });
+  const addStart = notices.length;
+  added.picker.getRawQuery = () => "son of";
+  beginRelationLabel(added.picker, [added.other], "son of");
+  assert.equal(
+    await added.picker.commitRelationLabel(
+      added.picker.getRelationLabelPreviewItems()[0],
+    ),
+    true,
+  );
+  assert.equal(
+    notices[notices.length - 1],
+    "🪢 “Other” now links here · son of",
+  );
+  assert.equal(notices.length, addStart + 1);
+
+  const relabelNotes = currentOtherNotes({
+    current: [
+      "- [ ] #task Current ^current",
+      "  - 🪢 **LINKED FROM:** [[Other#^other]] (see)",
+    ].join("\n"),
+    other: [
+      "- [ ] #task Other ^other",
+      "  - 🪢 **LINKS:** see [[Current#^current]]",
+    ].join("\n"),
+  });
+  const relabeled = makeCurrentOtherPicker("from", relabelNotes, {
+    currentBlockId: "current",
+    otherBlockId: "other",
+    stageSection: "current",
+    alreadyLinked: true,
+  });
+  const relabelStart = notices.length;
+  beginRelationLabel(relabeled.picker, [relabeled.other], "son of", "relabel");
+  assert.equal(
+    await relabeled.picker.commitRelationLabel(
+      relabeled.picker.getRelationLabelPreviewItems()[0],
+    ),
+    true,
+  );
+  assert.equal(notices[notices.length - 1], "🪢 Relabeled “Other” · son of");
+  assert.equal(notices.length, relabelStart + 1);
+
+  const removeNotes = currentOtherNotes({
+    current: [
+      "- [ ] #task Current ^current",
+      "  - 🪢 **LINKED FROM:** [[Other#^other]]",
+    ].join("\n"),
+    other: [
+      "- [ ] #task Other ^other",
+      "  - 🪢 **LINKS:** [[Current#^current]]",
+    ].join("\n"),
+  });
+  const removed = makeCurrentOtherPicker("from", removeNotes, {
+    currentBlockId: "current",
+    otherBlockId: "other",
+    stageSection: "current",
+    alreadyLinked: true,
+  });
+  const removeStart = notices.length;
+  assert.equal(
+    await removed.picker.commitRelationEdit({
+      add: [],
+      remove: [removed.other],
+      relabel: [],
+    }),
+    true,
+  );
+  assert.equal(notices[notices.length - 1], "🪢 Unlinked “Other”");
+  assert.equal(notices.length, removeStart + 1);
+
+  const linksToNotes = currentOtherNotes();
+  const linksTo = makeCurrentOtherPicker("to", linksToNotes, {
+    currentBlockId: "current",
+    otherBlockId: "other",
+  });
+  const linksToStart = notices.length;
+  assert.equal(
+    await linksTo.picker.commitRelationEdit({
+      add: [linksTo.other],
+      remove: [],
+      relabel: [],
+    }),
+    true,
+  );
+  assert.equal(notices[notices.length - 1], "🪢 Linked to “Other”");
+  assert.equal(notices.length, linksToStart + 1);
 });
 
 test("links-to row follows blocks with N, first label, cut target, and +K", () => {

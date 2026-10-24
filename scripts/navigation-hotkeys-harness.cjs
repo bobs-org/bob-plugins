@@ -295,7 +295,7 @@ function createPomodoroMovePickerHarness(harnessOptions = {}) {
   );
   const view = { editor, file: sourceFile };
   const plugin = new NavigationHotkeysPlugin();
-  plugin.app = {};
+  plugin.app = harnessOptions.app || {};
   plugin.getActiveMarkdownView = () => view;
   return { editor, plugin, sourceFile, view };
 }

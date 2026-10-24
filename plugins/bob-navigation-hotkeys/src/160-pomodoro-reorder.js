@@ -407,7 +407,12 @@ function createPomodoroBulletMovePickerRows(
     );
   }
 
-  return Object.freeze(rows);
+  return Object.freeze(
+    withNavigationPomodoroThemeRows(allEntries, queryText, rows, {
+      ...options,
+      mode,
+    }),
+  );
 }
 
 function buildPomodoroBulletMoveNotice(plan = {}, discovery = {}, destinationLabel) {

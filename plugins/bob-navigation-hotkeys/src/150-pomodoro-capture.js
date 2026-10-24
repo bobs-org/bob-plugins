@@ -130,7 +130,9 @@ function planPomodoroBulletMove(content, options = {}) {
       return invalid("Destination Pomodoro entry could not be found");
     }
   } else if (destination.kind === "new" && scope !== "entry") {
-    const nameResult = normalizePomodoroName(destination.name);
+    const nameResult = destination.preserveSpelling === true
+      ? preserveNavigationPomodoroThemeName(destination.name)
+      : normalizePomodoroName(destination.name);
     if (!nameResult.valid) {
       return invalid(nameResult.error);
     }
@@ -393,7 +395,9 @@ function planPomodoroEntryRename(content, options = {}) {
       unchanged: false,
     });
 
-  const nameResult = normalizePomodoroName(options.name);
+  const nameResult = options.preserveSpelling === true
+    ? preserveNavigationPomodoroThemeName(options.name)
+    : normalizePomodoroName(options.name);
   if (!nameResult.valid) {
     return invalid(nameResult.error);
   }

@@ -9,6 +9,7 @@
   "061-relation-line-grammar.js",
   "070-daily-and-activation-plans.js",
   "075-pomodoro-link-targets.js",
+  "076-pomodoro-theme-picker.js",
   "080-picker-ui-and-task-link-modal.js",
   "085-pomodoro-link-picker-modal.js",
   "090-prompt-modals.js",

@@ -34,6 +34,147 @@ function createPomodoroEntryMoveSession(harness, cursorLine, overrides = {}) {
   };
 }
 
+function createThemesApi(initialThemes) {
+  const themes = initialThemes.map((theme) => ({ ...theme }));
+  const hidden = new Set(themes.filter((theme) => theme.hidden).map((theme) => theme.key));
+  const listeners = new Set();
+  const writes = [];
+  const notify = () => listeners.forEach((listener) => listener({ reason: "test" }));
+  return {
+    version: 1,
+    available: () => ({ available: true }),
+    fetch: () => Promise.resolve({ report: { themes }, stale: false, error: null }),
+    snapshot: () => ({ themes: themes.map((theme) => ({ ...theme, hidden: hidden.has(theme.key) })) }),
+    componentsOf: (name) => String(name || "").split("+").map((raw) => raw.trim()).filter(Boolean).map((raw) => ({ raw, key: raw.toLowerCase().replace(/\s+/g, " ") })),
+    historyRows: ({ query = "", limit = 5, exclusions = new Set() } = {}) => {
+      const needle = String(query).trim().toLowerCase();
+      return themes
+        .filter((theme) => !hidden.has(theme.key) && !exclusions.has(theme.key))
+        .filter((theme) => !needle || theme.name.toLowerCase().includes(needle))
+        .slice(0, limit);
+    },
+    hueFor: (key) => ({ hue: String(key).startsWith("focus") ? "aqua" : "blue" }),
+    similarTo: (name) => String(name).toLowerCase() === "focus" ? ["Focus Flow"] : [],
+    onChange: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+    hide: (name) => {
+      writes.push(["hide", name]);
+      const theme = themes.find((row) => row.name === name);
+      if (theme) hidden.add(theme.key);
+      notify();
+      return Promise.resolve({ ok: true });
+    },
+    unhide: (name) => {
+      writes.push(["unhide", name]);
+      const theme = themes.find((row) => row.name === name);
+      if (theme) hidden.delete(theme.key);
+      notify();
+      return Promise.resolve({ ok: true });
+    },
+    isHidden: (name) => {
+      const theme = themes.find((row) => row.name === name);
+      return Boolean(theme && hidden.has(theme.key));
+    },
+    writes,
+  };
+}
+
+function findAllByClass(root, cls) {
+  const rows = [];
+  (function walk(element) {
+    if (element && element.classes && element.classes.includes(cls)) rows.push(element);
+    (element && element.children || []).forEach(walk);
+  })(root);
+  return rows;
+}
+
+function textOf(element) {
+  return (element && element.textContent || "") +
+    ((element && element.children) || []).map(textOf).join("");
+}
+
+function pressCtrlD(picker) {
+  const event = {
+    key: "d",
+    ctrlKey: true,
+    altKey: false,
+    metaKey: false,
+    defaultPrevented: false,
+    propagationStopped: false,
+    preventDefault() { this.defaultPrevented = true; },
+    stopPropagation() { this.propagationStopped = true; },
+  };
+  picker.handleKeydown(event);
+  return event;
+}
+
+function tick() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+test("navigation Pomodoro picker renders theme accents and Ctrl+D only changes Recent suggestions", async () => {
+  notices.length = 0;
+  const themesApi = createThemesApi([
+    { key: "focus flow", name: "Focus Flow", last_used: "2026-08-14", days_used: 4 },
+    { key: "destination", name: "DESTINATION", last_used: "2026-08-15", days_used: 2 },
+  ]);
+  const app = { plugins: { plugins: { "bob-ledger-tools": { api: { themes: themesApi } } } } };
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- [[Tasks#^one]]",
+    "- [ ] () — DESTINATION",
+    "\t- [[Tasks#^two]]",
+  ].join("\n");
+  const harness = createPomodoroMovePickerHarness({
+    app,
+    content,
+    cursor: { line: 1, ch: 0 },
+  });
+  const { session } = createPomodoroEntryMoveSession(harness, 1);
+  const picker = new helpers.PomodoroEntryMovePickerModal(app, harness.plugin, session);
+  picker.open();
+
+  assert.deepEqual(picker.visibleItems.map((row) => row.kind), ["existing", "recent"]);
+  assert.equal(picker.visibleItems[1].name, "Focus Flow");
+  assert.equal(picker.visibleItems.some((row) => row.name === "DESTINATION"), false);
+  const swatch = findAllByClass(picker.resultsEl.children[1], "bob-cnp-theme-swatch")[0];
+  assert.ok(swatch.classes.includes("is-aqua"));
+
+  pressCtrlD(picker);
+  await tick();
+  assert.deepEqual(themesApi.writes, []);
+  assert.match(notices.at(-1), /Today's Pomodoros stay visible/);
+
+  picker.selectedIndex = 1;
+  picker.renderResults();
+  const hide = pressCtrlD(picker);
+  assert.equal(hide.defaultPrevented, true);
+  await tick();
+  assert.equal(themesApi.isHidden("Focus Flow"), true);
+  assert.equal(picker.visibleItems[1].hidden, true);
+  assert.match(textOf(picker.resultsEl), /Hidden/);
+
+  pressCtrlD(picker);
+  await tick();
+  assert.equal(themesApi.isHidden("Focus Flow"), false);
+  assert.equal(picker.visibleItems[1].hidden, false);
+
+  picker.inputEl.value = "focus";
+  picker.renderResults();
+  const rename = findAllByClass(picker.resultsEl, "is-rename")[0];
+  assert.ok(rename);
+  assert.match(textOf(rename), /like Focus Flow/);
+
+  picker.inputEl.value = "focus flow";
+  picker.renderResults();
+  assert.deepEqual(picker.visibleItems.map((row) => [row.kind, row.name]), [
+    ["recent", "Focus Flow"],
+  ]);
+  await picker.openItem(picker.visibleItems[0]);
+  assert.equal(harness.editor.getLine(1), "- [ ] () — Focus Flow");
+  picker.close();
+});
+
 test("Pomodoro entry move picker opens sessions, ignores counts, and clears the shared move picker slot", () => {
   const harness = createPomodoroMovePickerHarness({
     cursor: { line: 9, ch: 0 },
@@ -204,7 +345,7 @@ test("Pomodoro entry picker Ctrl+X merges the highlighted existing row and close
   };
   assert.deepEqual(
     picker.visibleItems.map((row) => row.kind),
-    ["rename", "existing"],
+    ["existing", "rename"],
   );
 
   const originalCommit = plugin.commitPomodoroEntryMergeSession.bind(plugin);
@@ -230,10 +371,11 @@ test("Pomodoro entry picker Ctrl+X merges the highlighted existing row and close
       this.stopped = true;
     },
   };
+  picker.selectedIndex = 1;
   picker.handleKeydown(navEvent);
   assert.equal(navEvent.prevented, true);
   assert.equal(navEvent.stopped, true);
-  assert.equal(picker.selectedIndex, 1);
+  assert.equal(picker.selectedIndex, 0);
 
   const mergeEvent = {
     key: "x",

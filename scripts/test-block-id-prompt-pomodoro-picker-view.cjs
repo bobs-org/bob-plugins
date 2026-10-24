@@ -106,15 +106,64 @@ function openPicker(options = {}) {
     needsBlockId = false,
     now = NOW,
     budget = null,
+    themesApi = null,
   } = options;
   const model = helpers.buildPomodoroLinkPickerModel(daily, { now });
   assert.equal(model.ok, true);
   const modal = new helpers.PomodoroLinkPickerModal(
-    {},
+    themesApi
+      ? { plugins: { plugins: { "bob-ledger-tools": { api: { themes: themesApi } } } } }
+      : {},
     { model, task, needsBlockId, now, budget },
   );
   modal.open();
   return modal;
+}
+
+function createThemesApi(initialThemes) {
+  const themes = initialThemes.map((theme) => ({ ...theme }));
+  const hidden = new Set(themes.filter((theme) => theme.hidden).map((theme) => theme.key));
+  const listeners = new Set();
+  const writes = [];
+  const notify = () => listeners.forEach((listener) => listener({ reason: "test" }));
+  const api = {
+    version: 1,
+    available: () => ({ available: true }),
+    fetch: () => Promise.resolve({ report: { themes }, stale: false, error: null }),
+    snapshot: () => ({ themes: themes.map((theme) => ({ ...theme, hidden: hidden.has(theme.key) })) }),
+    componentsOf: (name) => String(name || "").split("+").map((raw) => raw.trim()).filter(Boolean).map((raw) => ({ raw, key: raw.toLowerCase().replace(/\s+/g, " ") })),
+    historyRows: ({ query = "", limit = 5, exclusions = new Set() } = {}) => {
+      const needle = String(query).trim().toLowerCase();
+      return themes
+        .filter((theme) => !hidden.has(theme.key) && !exclusions.has(theme.key))
+        .filter((theme) => !needle || theme.name.toLowerCase().includes(needle))
+        .sort((left, right) => right.last_used.localeCompare(left.last_used))
+        .slice(0, limit);
+    },
+    hueFor: (key) => ({ hue: String(key).startsWith("focus") ? "aqua" : "blue", hue_source: "test" }),
+    similarTo: (name) => String(name).toLowerCase().startsWith("fix") ? ["FIXES"] : [],
+    onChange: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+    hide: (name) => {
+      writes.push(["hide", name]);
+      const theme = themes.find((row) => row.name === name);
+      if (theme) hidden.add(theme.key);
+      notify();
+      return Promise.resolve({ ok: true });
+    },
+    unhide: (name) => {
+      writes.push(["unhide", name]);
+      const theme = themes.find((row) => row.name === name);
+      if (theme) hidden.delete(theme.key);
+      notify();
+      return Promise.resolve({ ok: true });
+    },
+    isHidden: (name) => {
+      const theme = themes.find((row) => row.name === name);
+      return Boolean(theme && hidden.has(theme.key));
+    },
+    writes,
+  };
+  return api;
 }
 
 function type(modal, value) {
@@ -193,6 +242,96 @@ test("rows render in document order with the default selected", () => {
   assert.ok(findByClass(rows[0], "bid-ppk-glyph").classes.includes("is-running"));
   assert.ok(findByClass(rows[1], "bid-ppk-glyph").classes.includes("is-next-up"));
   assert.ok(findByClass(rows[0], "bid-ppk-keycap"));
+  modal.close();
+});
+
+test("recent theme rows follow today's rows and render component swatches", () => {
+  const themesApi = createThemesApi([
+    { key: "focus flow", name: "Focus flow", last_used: "2026-08-14", days_used: 4 },
+  ]);
+  const modal = openPicker({ themesApi });
+  assert.deepEqual(rowTitles(modal), [
+    "CAPTURE",
+    "LATER",
+    "New Pomodoro Focus flow",
+  ]);
+  const rows = findAllByClass(modal.contentEl, "bid-ppk-row");
+  assert.ok(rows[0].classes.includes("is-existing"));
+  assert.ok(rows[2].classes.includes("is-recent"));
+  assert.ok(findByClass(rows[2], "bid-ppk-theme-swatch").classes.includes("is-aqua"));
+  modal.close();
+});
+
+test("exact recent themes suppress generic creation and preserve catalog spelling", async () => {
+  const themesApi = createThemesApi([
+    { key: "focus flow", name: "Focus flow", last_used: "2026-08-14", days_used: 4 },
+  ]);
+  const modal = openPicker({ themesApi });
+  type(modal, "focus flow");
+  assert.deepEqual(rowTitles(modal), ["New Pomodoro Focus flow"]);
+  assert.ok(findAllByClass(modal.contentEl, "bid-ppk-row")[0].classes.includes("is-recent"));
+
+  const choicePromise = modal.waitForChoice();
+  pressKey(modal, "Enter", { shiftKey: true });
+  assert.deepEqual(await choicePromise, {
+    kind: "new",
+    name: "Focus flow",
+    preserveSpelling: true,
+  });
+});
+
+test("Ctrl+D hides a Recent suggestion as an undoable ghost and leaves Today unchanged", async () => {
+  const themesApi = createThemesApi([
+    { key: "focus flow", name: "Focus flow", last_used: "2026-08-14", days_used: 4 },
+  ]);
+  const modal = openPicker({ themesApi });
+  const todayKeyEvent = pressKey(modal, "d", { ctrlKey: true });
+  assert.equal(todayKeyEvent.defaultPrevented, true);
+  assert.deepEqual(themesApi.writes, []);
+
+  modal.moveSelection(1);
+  modal.moveSelection(1);
+  assert.equal(modal.rows[modal.selectedIndex].kind, "recent");
+  pressKey(modal, "d", { ctrlKey: true });
+  await tick();
+  assert.equal(themesApi.isHidden("Focus flow"), true);
+  const hiddenIndex = modal.rows.findIndex((row) => row.kind === "recent" && row.hidden);
+  assert.notEqual(hiddenIndex, -1);
+  assert.equal(modal.selectedIndex, hiddenIndex);
+  modal.selectedIndex = hiddenIndex;
+
+  pressKey(modal, "d", { ctrlKey: true });
+  await tick();
+  assert.equal(themesApi.isHidden("Focus flow"), false);
+  assert.equal(modal.rows.some((row) => row.kind === "recent" && row.hidden), false);
+  modal.close();
+});
+
+test("new-name rows show near-duplicate and hidden-theme hints", async () => {
+  const themesApi = createThemesApi([
+    { key: "fixes", name: "FIXES", last_used: "2026-08-14", days_used: 4, hidden: true },
+  ]);
+  const modal = openPicker({ themesApi });
+  type(modal, "fix");
+  const create = findAllByClass(modal.contentEl, "bid-ppk-row").find((row) =>
+    row.classes.includes("is-new"),
+  );
+  assert.ok(create);
+  assert.match(textOf(create), /like FIXES/);
+  assert.equal(modal.rows[modal.selectedIndex].kind, "new");
+
+  // The hidden exact name is offered on an otherwise normal create row.
+  type(modal, "fixes");
+  const candidateIndex = modal.rows.findIndex((row) => row.kind === "new");
+  assert.notEqual(candidateIndex, -1);
+  const candidate = findAllByClass(modal.contentEl, "bid-ppk-row").find((row) =>
+    row.classes.includes("is-new"),
+  );
+  assert.match(textOf(candidate), /Hidden/);
+  modal.selectedIndex = candidateIndex;
+  pressKey(modal, "d", { ctrlKey: true });
+  await tick();
+  assert.equal(themesApi.isHidden("FIXES"), false);
   modal.close();
 });
 

@@ -31,7 +31,11 @@ function normalizePomodoroLinkPickerChoice(choice) {
       if (!name || /[\r\n]/.test(name)) {
         return null;
       }
-      return { kind: "new", name };
+      return {
+        kind: "new",
+        name,
+        ...(choice.preserveSpelling === true ? { preserveSpelling: true } : {}),
+      };
     }
     return null;
   } catch (_error) {

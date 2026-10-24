@@ -21,7 +21,9 @@ results.
 (`{ kind: "existing", entryLine, entryText, title }`), a new
 destination (`{ kind: "new", name }`), or `null` when
 cancelled, unavailable, or unable to resolve today's Pomodoros. The promise
-does not reject. Navigation Hotkeys uses this picker for successor offers.
+does not reject. A new choice made from Recent may include the additive
+`preserveSpelling: true` field so the caller keeps the catalog's display name.
+Navigation Hotkeys uses this picker for successor offers.
 
 ## Bob Ledger Tools
 

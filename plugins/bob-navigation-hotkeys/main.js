@@ -15947,7 +15947,9 @@ function planPomodoroBulletMove(content, options = {}) {
       return invalid("Destination Pomodoro entry could not be found");
     }
   } else if (destination.kind === "new" && scope !== "entry") {
-    const nameResult = normalizePomodoroName(destination.name);
+    const nameResult = destination.preserveSpelling === true
+      ? preserveNavigationPomodoroThemeName(destination.name)
+      : normalizePomodoroName(destination.name);
     if (!nameResult.valid) {
       return invalid(nameResult.error);
     }
@@ -16210,7 +16212,9 @@ function planPomodoroEntryRename(content, options = {}) {
       unchanged: false,
     });
 
-  const nameResult = normalizePomodoroName(options.name);
+  const nameResult = options.preserveSpelling === true
+    ? preserveNavigationPomodoroThemeName(options.name)
+    : normalizePomodoroName(options.name);
   if (!nameResult.valid) {
     return invalid(nameResult.error);
   }
@@ -17107,7 +17111,12 @@ function createPomodoroBulletMovePickerRows(
     );
   }
 
-  return Object.freeze(rows);
+  return Object.freeze(
+    withNavigationPomodoroThemeRows(allEntries, queryText, rows, {
+      ...options,
+      mode,
+    }),
+  );
 }
 
 function buildPomodoroBulletMoveNotice(plan = {}, discovery = {}, destinationLabel) {
@@ -17670,6 +17679,420 @@ function getOpenTaskNavigationLines(lines) {
 // Returns null only when there are no matching targets, or when the sole
 // matching target is already on the cursor line (so the caller can show its
 // no-target notice and leave the editor untouched).
+// ---- src/165-pomodoro-theme-picker.js ----
+// Recent Pomodoro theme rows shared by nav's bullet and whole-entry pickers.
+// Ledger Tools api.themes owns catalog scanning, ranking, hue, and writes.
+const NAV_POMODORO_THEME_HUES = [
+  "blue",
+  "orange",
+  "aqua",
+  "yellow",
+  "magenta",
+  "green",
+  "violet",
+  "red",
+];
+
+const POMODORO_BULLET_MOVE_HINTS = [
+  { keys: ["↑", "↓"], label: "Navigate" },
+  { keys: ["^N", "^P"], label: "Move" },
+  { keys: ["^D"], label: "Hide / undo" },
+  { keys: ["↵"], label: "Move" },
+  { keys: ["esc"], label: "Dismiss" },
+];
+
+function preserveNavigationPomodoroThemeName(raw) {
+  const validated = normalizePomodoroName(raw);
+  if (!validated.valid) {
+    return validated;
+  }
+  return {
+    valid: true,
+    name: String(raw || "").replace(/\s+/g, " ").trim(),
+    error: null,
+  };
+}
+
+function getNavigationPomodoroThemesApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const api = plugins && plugins["bob-ledger-tools"] && plugins["bob-ledger-tools"].api;
+    const themes = api && api.themes;
+    return themes && themes.version >= 1 ? themes : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function navigationPomodoroThemeAvailable(api) {
+  try {
+    if (!api || typeof api.available !== "function") {
+      return false;
+    }
+    const state = api.available();
+    return Boolean(state && state.available === true);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function navigationPomodoroThemeComponents(api, name) {
+  try {
+    if (api && typeof api.componentsOf === "function") {
+      const rows = api.componentsOf(name);
+      if (Array.isArray(rows)) {
+        return rows.filter(
+          (row) => row && typeof row.raw === "string" && typeof row.key === "string",
+        );
+      }
+    }
+  } catch (_error) {
+    // Theme display remains optional.
+  }
+  return String(name || "")
+    .split("+")
+    .map((raw) => raw.trim())
+    .filter(Boolean)
+    .map((raw) => ({
+      raw,
+      key: raw.toLowerCase().replace(/\s+/g, " "),
+    }));
+}
+
+function navigationPomodoroThemeKeysInToday(api, entries) {
+  const keys = new Set();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    for (const component of navigationPomodoroThemeComponents(api, entry && entry.name)) {
+      if (component.key) {
+        keys.add(component.key);
+      }
+    }
+  }
+  return keys;
+}
+
+function navigationPomodoroThemeSlug(value) {
+  return String(value || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .join("-")
+    .replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
+function navigationPomodoroThemeTier(theme, query) {
+  const trimmed = String(query || "").trim();
+  if (!trimmed) {
+    return 0;
+  }
+  const queryKey = trimmed.toLowerCase().replace(/\s+/g, " ");
+  const querySlug = navigationPomodoroThemeSlug(trimmed);
+  const key = String(theme && theme.key || "");
+  const slug = navigationPomodoroThemeSlug(theme && theme.name);
+  if (key === queryKey || slug === querySlug) {
+    return 0;
+  }
+  if ((queryKey && key.startsWith(queryKey)) || (querySlug && slug.startsWith(querySlug))) {
+    return 1;
+  }
+  return 2;
+}
+
+function navigationPomodoroThemeMatchesQuery(theme, query) {
+  const trimmed = String(query || "").trim();
+  if (!trimmed) {
+    return true;
+  }
+  const queryKey = trimmed.toLowerCase().replace(/\s+/g, " ");
+  const querySlug = navigationPomodoroThemeSlug(trimmed);
+  return String(theme && theme.key || "").includes(queryKey) ||
+    navigationPomodoroThemeSlug(theme && theme.name).includes(querySlug);
+}
+
+function navigationPomodoroThemeCompareRecent(left, right) {
+  const leftDate = String(left && left.last_used || "");
+  const rightDate = String(right && right.last_used || "");
+  if (leftDate !== rightDate) {
+    return rightDate < leftDate ? -1 : 1;
+  }
+  const days = Number(right && right.days_used || 0) - Number(left && left.days_used || 0);
+  if (days !== 0) {
+    return days;
+  }
+  const leftName = String(left && left.name || "");
+  const rightName = String(right && right.name || "");
+  return leftName < rightName ? -1 : leftName > rightName ? 1 : 0;
+}
+
+function navigationPomodoroThemeHistory(api, query, exclusions, hiddenRows) {
+  if (!navigationPomodoroThemeAvailable(api) || typeof api.historyRows !== "function") {
+    return [];
+  }
+  const trimmed = String(query || "").trim();
+  const limit = trimmed ? 12 : 5;
+  let visible = [];
+  try {
+    visible = api.historyRows({ query: trimmed, limit: 100, exclusions });
+  } catch (_error) {
+    visible = [];
+  }
+  const byKey = new Map();
+  for (const theme of Array.isArray(visible) ? visible : []) {
+    if (theme && theme.key && theme.name && !exclusions.has(theme.key)) {
+      byKey.set(theme.key, theme);
+    }
+  }
+  if (hiddenRows instanceof Map) {
+    for (const [key, theme] of hiddenRows) {
+      if (
+        theme && theme.name && !exclusions.has(key) &&
+        navigationPomodoroThemeMatchesQuery(theme, trimmed)
+      ) {
+        byKey.set(key, { ...theme, hidden: true });
+      }
+    }
+  }
+  return [...byKey.values()]
+    .sort((left, right) => {
+      const tier = navigationPomodoroThemeTier(left, trimmed) - navigationPomodoroThemeTier(right, trimmed);
+      return tier || navigationPomodoroThemeCompareRecent(left, right);
+    })
+    .slice(0, limit);
+}
+
+function navigationPomodoroThemeKnown(api, key) {
+  try {
+    const report = api && typeof api.snapshot === "function" ? api.snapshot() : null;
+    const themes = report && Array.isArray(report.themes) ? report.themes : [];
+    return themes.find((theme) => theme && theme.key === key) || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function navigationPomodoroThemeSimilar(api, name) {
+  if (!api || typeof api.similarTo !== "function") {
+    return [];
+  }
+  const names = new Set();
+  for (const component of navigationPomodoroThemeComponents(api, name)) {
+    try {
+      for (const similar of api.similarTo(component.raw) || []) {
+        if (typeof similar === "string" && similar) {
+          names.add(similar);
+        }
+      }
+    } catch (_error) {
+      // Near-duplicate hints are advisory only.
+    }
+  }
+  return [...names].slice(0, 2);
+}
+
+function withNavigationPomodoroThemeRows(entries, query, baseRows, options = {}) {
+  if (String(query || "").startsWith("=")) {
+    return baseRows;
+  }
+  const api = options && options.themesApi;
+  const exclusions = navigationPomodoroThemeKeysInToday(api, entries);
+  const history = navigationPomodoroThemeHistory(
+    api,
+    query,
+    exclusions,
+    options && options.hiddenRows,
+  );
+  const todayRows = baseRows.filter((row) => row.kind === "existing");
+  const candidateSource = baseRows.find((row) => row.kind === "new" || row.kind === "rename") || null;
+  const candidate = candidateSource ? { ...candidateSource } : null;
+  const otherRows = baseRows.filter((row) => row.kind !== "existing" && row !== candidateSource);
+  const candidateKey = candidate
+    ? candidate.name.trim().replace(/\s+/g, " ").toLowerCase()
+    : "";
+  const exactRecent = history.find((theme) => theme.key === candidateKey) || null;
+  if (candidate) {
+    const similarTo = navigationPomodoroThemeSimilar(api, candidate.name);
+    if (similarTo.length > 0) {
+      candidate.similarTo = similarTo;
+    }
+    const hiddenThemes = navigationPomodoroThemeComponents(api, candidate.name)
+      .map((component) => navigationPomodoroThemeKnown(api, component.key))
+      .filter((theme) => theme && theme.hidden === true);
+    if (hiddenThemes.length > 0) {
+      candidate.hiddenThemes = hiddenThemes;
+    }
+  }
+  const operation = options && options.mode === "entry" ? "rename" : "new";
+  const recentRows = history.map((theme) => ({
+    kind: "recent",
+    key: `recent-${theme.key}`,
+    name: theme.name,
+    theme,
+    operation,
+    hidden: theme.hidden === true,
+    title: operation === "rename" ? `Rename to ${theme.name}` : `New Pomodoro ${theme.name}`,
+    meta: formatNavigationPomodoroThemeRecentMeta(theme),
+    badge: "Recent",
+  }));
+  const prefixRows = recentRows.filter((row) => navigationPomodoroThemeTier(row.theme, query) < 2);
+  const substringRows = recentRows.filter((row) => navigationPomodoroThemeTier(row.theme, query) === 2);
+  const ordered = [
+    ...todayRows,
+    ...prefixRows,
+    ...(candidate && !exactRecent ? [candidate] : []),
+    ...substringRows,
+    ...otherRows,
+  ];
+  return ordered;
+}
+
+function formatNavigationPomodoroThemeRecentMeta(theme) {
+  const date = String(theme && theme.last_used || "");
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  let shortDate = "Recent";
+  if (match) {
+    shortDate = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])))
+      .toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+  }
+  const days = Math.max(0, Number(theme && theme.days_used) || 0);
+  return `${shortDate} · ${days} ${days === 1 ? "day" : "days"}`;
+}
+
+function navigationPomodoroThemeHue(api, key, name) {
+  try {
+    const result = api && typeof api.hueFor === "function" ? api.hueFor(key, name) : null;
+    return result && NAV_POMODORO_THEME_HUES.includes(result.hue) ? result.hue : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function renderNavigationPomodoroThemeSwatches(host, api, name) {
+  const components = navigationPomodoroThemeComponents(api, name);
+  if (!api || typeof api.hueFor !== "function" || components.length === 0) {
+    return;
+  }
+  const group = host.createSpan({
+    cls: "bob-cnp-theme-swatches",
+    attr: { "aria-hidden": "true" },
+  });
+  for (const component of components) {
+    const hue = navigationPomodoroThemeHue(api, component.key, component.raw);
+    group.createSpan({
+      cls: `bob-cnp-theme-swatch${hue ? ` is-${hue}` : " is-muted"}`,
+      attr: { title: component.raw },
+    });
+  }
+}
+
+function startNavigationPomodoroThemePicker(modal) {
+  const api = getNavigationPomodoroThemesApi(modal && modal.app);
+  if (!modal || !api) {
+    return;
+  }
+  modal.themesApi = api;
+  try {
+    if (typeof api.onChange === "function") {
+      modal.themesUnsubscribe = api.onChange(() => {
+        if (modal.pickerOpen) {
+          modal.renderResults();
+        }
+      });
+    }
+  } catch (_error) {
+    modal.themesUnsubscribe = null;
+  }
+  if (navigationPomodoroThemeAvailable(api) && typeof api.fetch === "function") {
+    Promise.resolve(api.fetch())
+      .then(() => {
+        if (modal.pickerOpen) {
+          modal.renderResults();
+        }
+      })
+      .catch(() => {});
+  }
+}
+
+function stopNavigationPomodoroThemePicker(modal) {
+  if (modal && typeof modal.themesUnsubscribe === "function") {
+    try {
+      modal.themesUnsubscribe();
+    } catch (_error) {
+      // Unsubscription is best effort during close.
+    }
+    modal.themesUnsubscribe = null;
+  }
+}
+
+async function toggleNavigationPomodoroThemeVisibility(modal) {
+  const row = modal && modal.visibleItems && modal.visibleItems[modal.selectedIndex];
+  const api = modal && modal.themesApi;
+  if (!row) {
+    return;
+  }
+  if (row.kind === "existing") {
+    new Notice("Today's Pomodoros stay visible; Ctrl+D hides Recent themes");
+    return;
+  }
+  const hiddenNames = row.kind === "recent" && row.hidden
+    ? [row.name]
+    : row.kind === "new" || row.kind === "rename"
+      ? (row.hiddenThemes || []).map((theme) => theme.name).filter(Boolean)
+      : [];
+  const hideName = row.kind === "recent" && !row.hidden ? row.name : null;
+  const method = hideName ? "hide" : hiddenNames.length ? "unhide" : null;
+  if (!method || !api || typeof api[method] !== "function") {
+    new Notice("Ctrl+D hides Recent themes; this row has nothing to change");
+    return;
+  }
+  if (modal.themeWriteInFlight) {
+    return;
+  }
+  modal.themeWriteInFlight = true;
+  try {
+    const names = hideName ? [hideName] : hiddenNames;
+    const results = await Promise.all(names.map((name) => api[method](name)));
+    const failure = results.find((result) => !result || result.ok !== true);
+    if (failure) {
+      new Notice(failure.message || "Could not update the theme suggestion");
+      return;
+    }
+    if (method === "hide") {
+      const theme = row.theme || {};
+      modal.hiddenThemeRows.set(theme.key || row.name, {
+        ...theme,
+        key: theme.key,
+        name: row.name,
+        hidden: true,
+      });
+    } else {
+      for (const [key, hidden] of modal.hiddenThemeRows) {
+        if (hiddenNames.includes(hidden.name)) {
+          modal.hiddenThemeRows.delete(key);
+        }
+      }
+    }
+    modal.renderResults();
+    const selectedIndex = modal.visibleItems.findIndex((candidate) => candidate.key === row.key);
+    if (selectedIndex >= 0) {
+      modal.selectedIndex = selectedIndex;
+      modal.renderResults();
+    }
+  } catch (_error) {
+    new Notice("Could not update the theme suggestion");
+  } finally {
+    modal.themeWriteInFlight = false;
+  }
+}
+
+function handleNavigationPomodoroThemeKeydown(modal, event) {
+  if (!isCtrlKey(event, "d")) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  void toggleNavigationPomodoroThemeVisibility(modal);
+  return true;
+}
 // ---- src/170-open-task-jump.js ----
 function getOpenObsidianTaskJumpLine(
   lines,
@@ -19387,6 +19810,7 @@ const POMODORO_ENTRY_MOVE_HINTS = [
   { keys: ["↑", "↓"], label: "Navigate" },
   { keys: ["^N", "^P"], label: "Move" },
   { keys: ["^X"], label: "Merge" },
+  { keys: ["^D"], label: "Hide / undo" },
   { keys: ["↵"], label: "Move/rename" },
   { keys: ["esc"], label: "Dismiss" },
 ];
@@ -21737,84 +22161,6 @@ function renderTypedNotePickerRow(file, noteInfo, rowEl, query) {
   appendHighlighted(statusEl, statusText, query);
 }
 
-function addPickerRowClasses(rowEl, classes) {
-  const list = Array.isArray(classes) ? classes : [classes];
-  if (rowEl && rowEl.classList && typeof rowEl.classList.add === "function") {
-    rowEl.classList.add(...list.filter(Boolean));
-    return;
-  }
-  if (rowEl && typeof rowEl.addClass === "function") {
-    list.filter(Boolean).forEach((cls) => rowEl.addClass(cls));
-  }
-}
-
-function renderPomodoroBulletMovePickerRow(row, rowEl, query) {
-  const kind = row && row.kind ? row.kind : "invalid";
-  addPickerRowClasses(rowEl, ["bob-cnp-pomodoro-row", `is-${kind}`]);
-
-  const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
-  applyIcon(
-    rowIcon,
-    kind === "new"
-      ? "plus"
-      : kind === "rename"
-        ? "pencil"
-        : kind === "split"
-          ? "split"
-        : kind === "invalid"
-          ? "circle-alert"
-          : "timer",
-  );
-
-  const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
-  const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
-  appendHighlighted(
-    titleEl,
-    kind === "invalid" ? row.statusText : row.title,
-    query,
-  );
-  const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-  appendHighlighted(
-    pathEl,
-    kind === "invalid" ? "Type a valid Pomodoro name" : row.meta,
-    query,
-  );
-
-  const badgesEl = rowEl.createDiv({ cls: "bob-cnp-row-badges" });
-  if (kind === "new" || kind === "rename" || kind === "split") {
-    const statusEl = badgesEl.createDiv({
-      cls: "bob-cnp-row-status is-create",
-    });
-    appendHighlighted(statusEl, row.badge || "New", query);
-    return;
-  }
-  if (kind === "invalid") {
-    const statusEl = badgesEl.createDiv({
-      cls: "bob-cnp-row-status is-unavailable",
-    });
-    appendHighlighted(statusEl, "Not selectable", query);
-    return;
-  }
-  if (!row.statusLabel) {
-    return;
-  }
-
-  const statusClass =
-    row.statusLabel === "Unscheduled" ? " is-status-unscheduled" : "";
-  const statusEl = badgesEl.createDiv({
-    cls: `bob-cnp-row-status${statusClass}`,
-    attr: {
-      "aria-label": row.statusLabel,
-      title: row.statusLabel,
-    },
-  });
-  appendHighlighted(
-    statusEl,
-    [row.statusEmoji, row.statusLabel].filter(Boolean).join(" "),
-    query,
-  );
-}
-
 class ChildNotePickerModal extends FilteredPickerModal {
   constructor(app, plugin, childFiles, parentFile, noteContentByPath = new Map()) {
     const now = new Date();
@@ -21935,6 +22281,7 @@ class TaskMoveDestinationPickerModal extends FilteredPickerModal {
 
 class PomodoroBulletMovePickerModal extends FilteredPickerModal {
   constructor(app, plugin, session) {
+    const themesApi = getNavigationPomodoroThemesApi(app);
     const discovery = session && session.discovery ? session.discovery : {};
     const sourceEntry = session && session.sourceEntry ? session.sourceEntry : null;
     const destinationCount = (session && Array.isArray(session.entries)
@@ -21968,10 +22315,11 @@ class PomodoroBulletMovePickerModal extends FilteredPickerModal {
       placeholder: "Filter open Pomodoros, type a name, = same, or =NAME split",
       resultsLabel: "Pomodoro destinations",
       emptyText: "Type a name to create a new Pomodoro",
+      footerHints: POMODORO_BULLET_MOVE_HINTS,
       getSubtitle: () =>
         `${selectedCount} bullet${selectedCount === 1 ? "" : "s"} from Pomodoro #${sourcePosition} · ${destinationCount} destination${destinationCount === 1 ? "" : "s"} · = same name · =NAME split${clampedText}`,
       renderItem: (row, rowEl, query) =>
-        renderPomodoroBulletMovePickerRow(row, rowEl, query),
+        renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi),
       closeBeforeOpenItem: true,
       openItem: (row) => {
         if (!row || row.kind === "invalid") {
@@ -21980,24 +22328,66 @@ class PomodoroBulletMovePickerModal extends FilteredPickerModal {
         if (row.kind === "split") {
           return plugin.commitPomodoroBulletSplitSession(session, row);
         }
-        return plugin.commitPomodoroBulletMoveSession(session, row);
+        return plugin.commitPomodoroBulletMoveSession(
+          session,
+          row.kind === "recent"
+            ? {
+                ...row,
+                kind: row.operation === "rename" ? "rename" : "new",
+                preserveSpelling: true,
+              }
+            : row,
+        );
       },
     });
     this.plugin = plugin;
     this.session = session;
+    this.themeEntryMode = false;
+    this.themesApi = themesApi;
+    this.hiddenThemeRows = new Map();
+    this.themeWriteInFlight = false;
+    this.lastThemeQuery = undefined;
+  }
+
+  onOpen() {
+    super.onOpen();
+    startNavigationPomodoroThemePicker(this);
+  }
+
+  themePickerCommitRow(row) {
+    return row && row.kind === "recent"
+      ? { ...row, kind: row.operation === "rename" ? "rename" : "new" }
+      : row;
+  }
+
+  handleKeydown(event) {
+    if (handleNavigationPomodoroThemeKeydown(this, event)) {
+      return;
+    }
+    super.handleKeydown(event);
   }
 
   getFilteredItems() {
+    const query = this.getRawQuery();
+    if (this.lastThemeQuery !== undefined && query !== this.lastThemeQuery) {
+      this.hiddenThemeRows.clear();
+    }
+    this.lastThemeQuery = query;
     return createPomodoroBulletMovePickerRows(
       this.session && this.session.entries,
       this.session && this.session.sourceEntry
         ? this.session.sourceEntry.entryLine
         : null,
-      this.getRawQuery(),
+      query,
+      {
+        themesApi: this.themesApi,
+        hiddenRows: this.hiddenThemeRows,
+      },
     );
   }
 
   onClose() {
+    stopNavigationPomodoroThemePicker(this);
     if (
       this.plugin &&
       this.plugin.activeTaskMoveDestinationPicker === this
@@ -22010,6 +22400,7 @@ class PomodoroBulletMovePickerModal extends FilteredPickerModal {
 
 class PomodoroEntryMovePickerModal extends FilteredPickerModal {
   constructor(app, plugin, session) {
+    const themesApi = getNavigationPomodoroThemesApi(app);
     const discovery = session && session.discovery ? session.discovery : {};
     const sourceEntry = session && session.sourceEntry ? session.sourceEntry : null;
     const destinationCount = (session && Array.isArray(session.entries)
@@ -22047,21 +22438,43 @@ class PomodoroEntryMovePickerModal extends FilteredPickerModal {
       getSubtitle: () =>
         `Pomodoro #${sourcePosition} (${bulletCount} bullet${bulletCount === 1 ? "" : "s"}) · ${destinationCount} destination${destinationCount === 1 ? "" : "s"} · ${mergeDirectionText}${ignoredCountText}`,
       renderItem: (row, rowEl, query) =>
-        renderPomodoroBulletMovePickerRow(row, rowEl, query),
+        renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi),
       footerHints: POMODORO_ENTRY_MOVE_HINTS,
       closeBeforeOpenItem: true,
       openItem: (row) => {
         if (!row || row.kind === "invalid") {
           return false;
         }
-        return plugin.commitPomodoroEntryMoveSession(session, row);
+        return plugin.commitPomodoroEntryMoveSession(
+          session,
+          row.kind === "recent"
+            ? { ...row, kind: "rename", preserveSpelling: true }
+            : row,
+        );
       },
     });
     this.plugin = plugin;
     this.session = session;
+    this.themeEntryMode = true;
+    this.themesApi = themesApi;
+    this.hiddenThemeRows = new Map();
+    this.themeWriteInFlight = false;
+    this.lastThemeQuery = undefined;
+  }
+
+  onOpen() {
+    super.onOpen();
+    startNavigationPomodoroThemePicker(this);
+  }
+
+  themePickerCommitRow(row) {
+    return row && row.kind === "recent" ? { ...row, kind: "rename" } : row;
   }
 
   handleKeydown(event) {
+    if (handleNavigationPomodoroThemeKeydown(this, event)) {
+      return;
+    }
     if (isCtrlKey(event, "x")) {
       event.preventDefault();
       event.stopPropagation();
@@ -22108,17 +22521,27 @@ class PomodoroEntryMovePickerModal extends FilteredPickerModal {
   }
 
   getFilteredItems() {
+    const query = this.getRawQuery();
+    if (this.lastThemeQuery !== undefined && query !== this.lastThemeQuery) {
+      this.hiddenThemeRows.clear();
+    }
+    this.lastThemeQuery = query;
     return createPomodoroBulletMovePickerRows(
       this.session && this.session.entries,
       this.session && this.session.sourceEntry
         ? this.session.sourceEntry.entryLine
         : null,
-      this.getRawQuery(),
-      { mode: "entry" },
+      query,
+      {
+        mode: "entry",
+        themesApi: this.themesApi,
+        hiddenRows: this.hiddenThemeRows,
+      },
     );
   }
 
   onClose() {
+    stopNavigationPomodoroThemePicker(this);
     if (
       this.plugin &&
       this.plugin.activeTaskMoveDestinationPicker === this
@@ -22243,6 +22666,121 @@ class YankPathPickerModal extends FilteredPickerModal {
   }
 }
 
+// ---- src/201-pomodoro-theme-picker-rows.js ----
+function addPickerRowClasses(rowEl, classes) {
+  const list = Array.isArray(classes) ? classes : [classes];
+  if (rowEl && rowEl.classList && typeof rowEl.classList.add === "function") {
+    rowEl.classList.add(...list.filter(Boolean));
+    return;
+  }
+  if (rowEl && typeof rowEl.addClass === "function") {
+    list.filter(Boolean).forEach((cls) => rowEl.addClass(cls));
+  }
+}
+
+function renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi) {
+  const kind = row && row.kind ? row.kind : "invalid";
+  addPickerRowClasses(rowEl, [
+    "bob-cnp-pomodoro-row",
+    `is-${kind}`,
+    row && row.hidden ? "is-hidden-theme" : "",
+  ]);
+
+  const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
+  const iconName =
+    kind === "new" || (kind === "recent" && row.operation === "new")
+      ? "plus"
+      : kind === "rename" || (kind === "recent" && row.operation === "rename")
+        ? "pencil"
+        : kind === "split"
+          ? "split"
+          : kind === "invalid"
+            ? "circle-alert"
+            : "timer";
+  applyIcon(rowIcon, iconName);
+
+  const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+  const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
+  if (kind === "recent" || kind === "new" || kind === "rename") {
+    const rename = kind === "rename" || (kind === "recent" && row.operation === "rename");
+    titleEl.appendText(rename ? "Rename to " : "New Pomodoro ");
+    renderNavigationPomodoroThemeSwatches(titleEl, themesApi, row.name);
+    appendHighlighted(titleEl, row.name, query);
+  } else {
+    if (kind === "existing") {
+      renderNavigationPomodoroThemeSwatches(
+        titleEl,
+        themesApi,
+        row.entry && row.entry.name,
+      );
+    }
+    appendHighlighted(titleEl, kind === "invalid" ? row.statusText : row.title, query);
+  }
+  const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
+  appendHighlighted(
+    pathEl,
+    kind === "invalid" ? "Type a valid Pomodoro name" : row.meta,
+    query,
+  );
+
+  const badgesEl = rowEl.createDiv({ cls: "bob-cnp-row-badges" });
+  if (kind === "recent") {
+    badgesEl.createDiv({
+      cls: `bob-cnp-row-status is-recent-theme${row.hidden ? " is-hidden-theme" : ""}`,
+      text: row.hidden ? "Hidden" : "Recent",
+      attr: {
+        title: row.hidden ? "Hidden from Recent; Ctrl+D to unhide" : "Recent Pomodoro theme",
+        "aria-label": row.hidden ? "Hidden theme" : "Recent theme",
+      },
+    });
+    return;
+  }
+  if (kind === "new" || kind === "rename" || kind === "split") {
+    const statusEl = badgesEl.createDiv({
+      cls: "bob-cnp-row-status is-create",
+    });
+    appendHighlighted(statusEl, row.badge || "New", query);
+    for (const similar of row.similarTo || []) {
+      badgesEl.createDiv({
+        cls: "bob-cnp-row-status is-similar-theme",
+        text: `like ${similar}`,
+        attr: { title: `Similar to ${similar}` },
+      });
+    }
+    if (row.hiddenThemes && row.hiddenThemes.length > 0) {
+      badgesEl.createDiv({
+        cls: "bob-cnp-row-status is-hidden-theme",
+        text: "Hidden · ^D unhide",
+      });
+    }
+    return;
+  }
+  if (kind === "invalid") {
+    const statusEl = badgesEl.createDiv({
+      cls: "bob-cnp-row-status is-unavailable",
+    });
+    appendHighlighted(statusEl, "Not selectable", query);
+    return;
+  }
+  if (!row.statusLabel) {
+    return;
+  }
+
+  const statusClass =
+    row.statusLabel === "Unscheduled" ? " is-status-unscheduled" : "";
+  const statusEl = badgesEl.createDiv({
+    cls: `bob-cnp-row-status${statusClass}`,
+    attr: {
+      "aria-label": row.statusLabel,
+      title: row.statusLabel,
+    },
+  });
+  appendHighlighted(
+    statusEl,
+    [row.statusEmoji, row.statusLabel].filter(Boolean).join(" "),
+    query,
+  );
+}
 // ---- src/205-inbox-route-picker-modal.js ----
 // Inbox route picker modal (route-core): asks where an inbox task goes as
 // the last step before a Ctrl+Shift+P or Ctrl+Shift+Enter write. Built on
@@ -75465,7 +76003,11 @@ class BobNavigationHotkeysMoveCommitMixin {
       };
       destinationLabel = getPomodoroBulletMoveDestinationLabel(row.entry);
     } else if (row && row.kind === "new") {
-      destination = { kind: "new", name: row.name };
+      destination = {
+        kind: "new",
+        name: row.name,
+        preserveSpelling: row.preserveSpelling === true,
+      };
       destinationLabel = row.name;
     } else {
       return false;
@@ -75644,6 +76186,7 @@ class BobNavigationHotkeysMoveCommitMixin {
           sourceEntryLine,
           sourceRawLine,
           name: row.name,
+          preserveSpelling: row.preserveSpelling === true,
         });
 
     if (!plan.valid) {

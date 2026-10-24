@@ -167,6 +167,10 @@ class PomodoroLinkPickerModal extends Modal {
     this.inputEl = null;
     this.resultsEl = null;
     this.shiftHintEl = null;
+    this.themesApi = null;
+    this.themesUnsubscribe = null;
+    this.hiddenThemeRows = new Map();
+    this.themeWriteInFlight = false;
     this.choicePromise = new Promise((resolve) => {
       this.resolveChoice = resolve;
     });
@@ -205,6 +209,7 @@ class PomodoroLinkPickerModal extends Modal {
       },
     });
     this.renderFooter(contentEl);
+    startBlockPomodoroThemePicker(this);
     this.updateQuery("");
 
     window.setTimeout(() => {
@@ -215,6 +220,7 @@ class PomodoroLinkPickerModal extends Modal {
   }
 
   onClose() {
+    stopBlockPomodoroThemePicker(this);
     this.modalEl.removeClass("bid-ppk-modal");
     this.contentEl.empty();
 
@@ -290,6 +296,7 @@ class PomodoroLinkPickerModal extends Modal {
     const hintsEl = footerEl.createDiv({ cls: "bid-ppk-hints" });
     this.renderHint(hintsEl, ["↑↓"], "select");
     this.renderHint(hintsEl, ["↵"], "link");
+    this.renderHint(hintsEl, ["⌃D"], "hide / undo");
     this.shiftHintEl = this.renderHint(hintsEl, ["⇧↵"], "new NAME");
     this.renderHint(hintsEl, ["esc"], "cancel");
 
@@ -311,6 +318,13 @@ class PomodoroLinkPickerModal extends Modal {
   }
 
   handleKeydown(event) {
+    if (isCtrlKey(event, "d")) {
+      event.preventDefault();
+      event.stopPropagation();
+      void toggleBlockPomodoroThemeVisibility(this);
+      return;
+    }
+
     if (event.key === "ArrowDown" || isCtrlKey(event, "n")) {
       event.preventDefault();
       event.stopPropagation();
@@ -371,8 +385,15 @@ class PomodoroLinkPickerModal extends Modal {
   }
 
   updateQuery(query) {
-    this.query = String(query === null || query === undefined ? "" : query);
-    const built = buildPomodoroLinkPickerRows(this.model, this.query);
+    const nextQuery = String(query === null || query === undefined ? "" : query);
+    if (nextQuery !== this.query && this.hiddenThemeRows.size > 0) {
+      this.hiddenThemeRows.clear();
+    }
+    this.query = nextQuery;
+    const built = buildPomodoroLinkPickerRows(this.model, this.query, {
+      themesApi: this.themesApi,
+      hiddenRows: this.hiddenThemeRows,
+    });
     this.rows = built.rows;
     this.selectedIndex = built.selectedIndex;
     this.renderRows();
@@ -422,7 +443,7 @@ class PomodoroLinkPickerModal extends Modal {
         .join(" "),
       attr: {
         id: `bid-ppk-row-${index}`,
-        role: "option",
+        role: row.kind === "section" ? "presentation" : "option",
         "aria-selected": isSelected ? "true" : "false",
         "aria-label": this.rowLabel(row),
       },
@@ -430,6 +451,8 @@ class PomodoroLinkPickerModal extends Modal {
 
     if (row.kind === "existing") {
       this.renderExistingRow(rowEl, row, isSelected);
+    } else if (row.kind === "recent") {
+      this.renderRecentRow(rowEl, row, isSelected);
     } else if (row.kind === "new") {
       this.renderCreateRow(rowEl, row, isSelected, index);
     } else {
@@ -450,6 +473,10 @@ class PomodoroLinkPickerModal extends Modal {
       return pomodoroLinkPickerRowLabel(row.entry, this.now);
     }
 
+    if (row.kind === "recent") {
+      return `New Pomodoro ${row.name}, Recent, ${formatBlockPomodoroThemeRecentMeta(row.theme)}`;
+    }
+
     if (row.kind === "new") {
       return `New Pomodoro ${row.name}`;
     }
@@ -465,6 +492,7 @@ class PomodoroLinkPickerModal extends Modal {
     const titleEl = textEl.createDiv({
       cls: `bid-ppk-row-title${entry.name ? "" : " is-unnamed"}`,
     });
+    renderBlockPomodoroThemeSwatches(titleEl, this.themesApi, entry.name);
     appendHighlighted(titleEl, entry.title, this.query);
     this.renderExistingMeta(textEl, entry);
 
@@ -561,6 +589,7 @@ class PomodoroLinkPickerModal extends Modal {
     const titleEl = textEl.createDiv({ cls: "bid-ppk-row-title" });
     titleEl.appendText("New Pomodoro ");
     const nameEl = titleEl.createSpan({ cls: "bid-ppk-create-name" });
+    renderBlockPomodoroThemeSwatches(nameEl, this.themesApi, row.name);
     appendHighlighted(nameEl, row.name, this.query);
     textEl.createDiv({
       cls: "bid-ppk-row-meta",
@@ -569,11 +598,51 @@ class PomodoroLinkPickerModal extends Modal {
 
     const rightEl = rowEl.createDiv({ cls: "bid-ppk-row-right" });
     rightEl.createDiv({ cls: "bid-ppk-pill is-new", text: "New" });
+    if (row.hiddenThemes && row.hiddenThemes.length > 0) {
+      rightEl.createDiv({
+        cls: "bid-ppk-pill is-hidden-theme",
+        text: "Hidden · ⌃D unhide",
+      });
+    }
+    for (const similar of row.similarTo || []) {
+      rightEl.createDiv({
+        cls: "bid-ppk-pill is-similar-theme",
+        text: `like ${similar}`,
+      });
+    }
     rightEl.createDiv({
       cls: `bid-ppk-theme${this.createThemeOver(row) ? " is-over" : ""}`,
       text: this.createThemeText(row),
     });
 
+    if (isSelected) {
+      const keycap = rightEl.createDiv({ cls: "bid-ppk-keycap" });
+      applyIcon(keycap, "corner-down-left");
+    }
+  }
+
+  renderRecentRow(rowEl, row, isSelected) {
+    const glyph = rowEl.createDiv({ cls: "bid-ppk-glyph is-create is-recent" });
+    applyIcon(glyph, "plus");
+
+    const textEl = rowEl.createDiv({ cls: "bid-ppk-row-text" });
+    const titleEl = textEl.createDiv({ cls: "bid-ppk-row-title" });
+    titleEl.appendText("New Pomodoro ");
+    const nameEl = titleEl.createSpan({ cls: "bid-ppk-create-name" });
+    renderBlockPomodoroThemeSwatches(nameEl, this.themesApi, row.name);
+    appendHighlighted(nameEl, row.name, this.query);
+    textEl.createDiv({
+      cls: "bid-ppk-row-meta",
+      text: row.hidden
+        ? `${formatBlockPomodoroThemeRecentMeta(row.theme)} · Hidden · ⌃D undo`
+        : formatBlockPomodoroThemeRecentMeta(row.theme),
+    });
+
+    const rightEl = rowEl.createDiv({ cls: "bid-ppk-row-right" });
+    rightEl.createDiv({
+      cls: `bid-ppk-pill is-recent-theme${row.hidden ? " is-hidden-theme" : ""}`,
+      text: row.hidden ? "Hidden" : "Recent",
+    });
     if (isSelected) {
       const keycap = rightEl.createDiv({ cls: "bid-ppk-keycap" });
       applyIcon(keycap, "corner-down-left");
@@ -653,6 +722,11 @@ class PomodoroLinkPickerModal extends Modal {
       return;
     }
 
+    if (row.kind === "recent") {
+      this.settleChoice({ kind: "new", name: row.name, preserveSpelling: true });
+      return;
+    }
+
     if (row.kind === "existing") {
       this.settleChoice({
         kind: "existing",
@@ -668,6 +742,20 @@ class PomodoroLinkPickerModal extends Modal {
   commitCreateIntent() {
     const intent = resolvePomodoroLinkCreateIntent(this.model, this.query);
     if (intent.kind === "new") {
+      const canonicalKey = asciiLowercasePomodoroText(
+        intent.name.replace(/\s+/g, " "),
+      );
+      const exactRecent = this.rows.find(
+        (row) => row.kind === "recent" && row.theme && row.theme.key === canonicalKey,
+      );
+      if (exactRecent) {
+        this.settleChoice({
+          kind: "new",
+          name: exactRecent.name,
+          preserveSpelling: true,
+        });
+        return;
+      }
       this.settleChoice({ kind: "new", name: intent.name });
       return;
     }

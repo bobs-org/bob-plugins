@@ -823,6 +823,7 @@ const POMODORO_ENTRY_MOVE_HINTS = [
   { keys: ["↑", "↓"], label: "Navigate" },
   { keys: ["^N", "^P"], label: "Move" },
   { keys: ["^X"], label: "Merge" },
+  { keys: ["^D"], label: "Hide / undo" },
   { keys: ["↵"], label: "Move/rename" },
   { keys: ["esc"], label: "Dismiss" },
 ];

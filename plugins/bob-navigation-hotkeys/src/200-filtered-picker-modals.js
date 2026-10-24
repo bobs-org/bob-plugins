@@ -427,84 +427,6 @@ function renderTypedNotePickerRow(file, noteInfo, rowEl, query) {
   appendHighlighted(statusEl, statusText, query);
 }
 
-function addPickerRowClasses(rowEl, classes) {
-  const list = Array.isArray(classes) ? classes : [classes];
-  if (rowEl && rowEl.classList && typeof rowEl.classList.add === "function") {
-    rowEl.classList.add(...list.filter(Boolean));
-    return;
-  }
-  if (rowEl && typeof rowEl.addClass === "function") {
-    list.filter(Boolean).forEach((cls) => rowEl.addClass(cls));
-  }
-}
-
-function renderPomodoroBulletMovePickerRow(row, rowEl, query) {
-  const kind = row && row.kind ? row.kind : "invalid";
-  addPickerRowClasses(rowEl, ["bob-cnp-pomodoro-row", `is-${kind}`]);
-
-  const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
-  applyIcon(
-    rowIcon,
-    kind === "new"
-      ? "plus"
-      : kind === "rename"
-        ? "pencil"
-        : kind === "split"
-          ? "split"
-        : kind === "invalid"
-          ? "circle-alert"
-          : "timer",
-  );
-
-  const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
-  const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
-  appendHighlighted(
-    titleEl,
-    kind === "invalid" ? row.statusText : row.title,
-    query,
-  );
-  const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-  appendHighlighted(
-    pathEl,
-    kind === "invalid" ? "Type a valid Pomodoro name" : row.meta,
-    query,
-  );
-
-  const badgesEl = rowEl.createDiv({ cls: "bob-cnp-row-badges" });
-  if (kind === "new" || kind === "rename" || kind === "split") {
-    const statusEl = badgesEl.createDiv({
-      cls: "bob-cnp-row-status is-create",
-    });
-    appendHighlighted(statusEl, row.badge || "New", query);
-    return;
-  }
-  if (kind === "invalid") {
-    const statusEl = badgesEl.createDiv({
-      cls: "bob-cnp-row-status is-unavailable",
-    });
-    appendHighlighted(statusEl, "Not selectable", query);
-    return;
-  }
-  if (!row.statusLabel) {
-    return;
-  }
-
-  const statusClass =
-    row.statusLabel === "Unscheduled" ? " is-status-unscheduled" : "";
-  const statusEl = badgesEl.createDiv({
-    cls: `bob-cnp-row-status${statusClass}`,
-    attr: {
-      "aria-label": row.statusLabel,
-      title: row.statusLabel,
-    },
-  });
-  appendHighlighted(
-    statusEl,
-    [row.statusEmoji, row.statusLabel].filter(Boolean).join(" "),
-    query,
-  );
-}
-
 class ChildNotePickerModal extends FilteredPickerModal {
   constructor(app, plugin, childFiles, parentFile, noteContentByPath = new Map()) {
     const now = new Date();
@@ -625,6 +547,7 @@ class TaskMoveDestinationPickerModal extends FilteredPickerModal {
 
 class PomodoroBulletMovePickerModal extends FilteredPickerModal {
   constructor(app, plugin, session) {
+    const themesApi = getNavigationPomodoroThemesApi(app);
     const discovery = session && session.discovery ? session.discovery : {};
     const sourceEntry = session && session.sourceEntry ? session.sourceEntry : null;
     const destinationCount = (session && Array.isArray(session.entries)
@@ -658,10 +581,11 @@ class PomodoroBulletMovePickerModal extends FilteredPickerModal {
       placeholder: "Filter open Pomodoros, type a name, = same, or =NAME split",
       resultsLabel: "Pomodoro destinations",
       emptyText: "Type a name to create a new Pomodoro",
+      footerHints: POMODORO_BULLET_MOVE_HINTS,
       getSubtitle: () =>
         `${selectedCount} bullet${selectedCount === 1 ? "" : "s"} from Pomodoro #${sourcePosition} · ${destinationCount} destination${destinationCount === 1 ? "" : "s"} · = same name · =NAME split${clampedText}`,
       renderItem: (row, rowEl, query) =>
-        renderPomodoroBulletMovePickerRow(row, rowEl, query),
+        renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi),
       closeBeforeOpenItem: true,
       openItem: (row) => {
         if (!row || row.kind === "invalid") {
@@ -670,24 +594,66 @@ class PomodoroBulletMovePickerModal extends FilteredPickerModal {
         if (row.kind === "split") {
           return plugin.commitPomodoroBulletSplitSession(session, row);
         }
-        return plugin.commitPomodoroBulletMoveSession(session, row);
+        return plugin.commitPomodoroBulletMoveSession(
+          session,
+          row.kind === "recent"
+            ? {
+                ...row,
+                kind: row.operation === "rename" ? "rename" : "new",
+                preserveSpelling: true,
+              }
+            : row,
+        );
       },
     });
     this.plugin = plugin;
     this.session = session;
+    this.themeEntryMode = false;
+    this.themesApi = themesApi;
+    this.hiddenThemeRows = new Map();
+    this.themeWriteInFlight = false;
+    this.lastThemeQuery = undefined;
+  }
+
+  onOpen() {
+    super.onOpen();
+    startNavigationPomodoroThemePicker(this);
+  }
+
+  themePickerCommitRow(row) {
+    return row && row.kind === "recent"
+      ? { ...row, kind: row.operation === "rename" ? "rename" : "new" }
+      : row;
+  }
+
+  handleKeydown(event) {
+    if (handleNavigationPomodoroThemeKeydown(this, event)) {
+      return;
+    }
+    super.handleKeydown(event);
   }
 
   getFilteredItems() {
+    const query = this.getRawQuery();
+    if (this.lastThemeQuery !== undefined && query !== this.lastThemeQuery) {
+      this.hiddenThemeRows.clear();
+    }
+    this.lastThemeQuery = query;
     return createPomodoroBulletMovePickerRows(
       this.session && this.session.entries,
       this.session && this.session.sourceEntry
         ? this.session.sourceEntry.entryLine
         : null,
-      this.getRawQuery(),
+      query,
+      {
+        themesApi: this.themesApi,
+        hiddenRows: this.hiddenThemeRows,
+      },
     );
   }
 
   onClose() {
+    stopNavigationPomodoroThemePicker(this);
     if (
       this.plugin &&
       this.plugin.activeTaskMoveDestinationPicker === this
@@ -700,6 +666,7 @@ class PomodoroBulletMovePickerModal extends FilteredPickerModal {
 
 class PomodoroEntryMovePickerModal extends FilteredPickerModal {
   constructor(app, plugin, session) {
+    const themesApi = getNavigationPomodoroThemesApi(app);
     const discovery = session && session.discovery ? session.discovery : {};
     const sourceEntry = session && session.sourceEntry ? session.sourceEntry : null;
     const destinationCount = (session && Array.isArray(session.entries)
@@ -737,21 +704,43 @@ class PomodoroEntryMovePickerModal extends FilteredPickerModal {
       getSubtitle: () =>
         `Pomodoro #${sourcePosition} (${bulletCount} bullet${bulletCount === 1 ? "" : "s"}) · ${destinationCount} destination${destinationCount === 1 ? "" : "s"} · ${mergeDirectionText}${ignoredCountText}`,
       renderItem: (row, rowEl, query) =>
-        renderPomodoroBulletMovePickerRow(row, rowEl, query),
+        renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi),
       footerHints: POMODORO_ENTRY_MOVE_HINTS,
       closeBeforeOpenItem: true,
       openItem: (row) => {
         if (!row || row.kind === "invalid") {
           return false;
         }
-        return plugin.commitPomodoroEntryMoveSession(session, row);
+        return plugin.commitPomodoroEntryMoveSession(
+          session,
+          row.kind === "recent"
+            ? { ...row, kind: "rename", preserveSpelling: true }
+            : row,
+        );
       },
     });
     this.plugin = plugin;
     this.session = session;
+    this.themeEntryMode = true;
+    this.themesApi = themesApi;
+    this.hiddenThemeRows = new Map();
+    this.themeWriteInFlight = false;
+    this.lastThemeQuery = undefined;
+  }
+
+  onOpen() {
+    super.onOpen();
+    startNavigationPomodoroThemePicker(this);
+  }
+
+  themePickerCommitRow(row) {
+    return row && row.kind === "recent" ? { ...row, kind: "rename" } : row;
   }
 
   handleKeydown(event) {
+    if (handleNavigationPomodoroThemeKeydown(this, event)) {
+      return;
+    }
     if (isCtrlKey(event, "x")) {
       event.preventDefault();
       event.stopPropagation();
@@ -798,17 +787,27 @@ class PomodoroEntryMovePickerModal extends FilteredPickerModal {
   }
 
   getFilteredItems() {
+    const query = this.getRawQuery();
+    if (this.lastThemeQuery !== undefined && query !== this.lastThemeQuery) {
+      this.hiddenThemeRows.clear();
+    }
+    this.lastThemeQuery = query;
     return createPomodoroBulletMovePickerRows(
       this.session && this.session.entries,
       this.session && this.session.sourceEntry
         ? this.session.sourceEntry.entryLine
         : null,
-      this.getRawQuery(),
-      { mode: "entry" },
+      query,
+      {
+        mode: "entry",
+        themesApi: this.themesApi,
+        hiddenRows: this.hiddenThemeRows,
+      },
     );
   }
 
   onClose() {
+    stopNavigationPomodoroThemePicker(this);
     if (
       this.plugin &&
       this.plugin.activeTaskMoveDestinationPicker === this

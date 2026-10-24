@@ -145,6 +145,56 @@ test("createPomodoroBulletMovePickerRows excludes ineligible entries and handles
   assert.match(overLengthRows[0].statusText, /exceed/);
 });
 
+test("Pomodoro move pickers place recent themes around typed names and exclude today's themes", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- [[Tasks#^one]]",
+    "- [ ] () — TODAY",
+    "\t- [[Tasks#^two]]",
+  ].join("\n");
+  const { entries } = helpers.collectPomodoroEntries(content);
+  const catalog = [
+    { key: "focus flow", name: "Focus flow", last_used: "2026-08-14", days_used: 4 },
+    { key: "today", name: "TODAY", last_used: "2026-08-15", days_used: 2 },
+  ];
+  const themesApi = {
+    available: () => ({ available: true }),
+    componentsOf: (name) => String(name || "").split("+").map((raw) => raw.trim()).filter(Boolean).map((raw) => ({ raw, key: raw.toLowerCase().replace(/\s+/g, " ") })),
+    historyRows: ({ query = "", exclusions = new Set() } = {}) => {
+      const needle = String(query).trim().toLowerCase();
+      return catalog.filter((theme) =>
+        !exclusions.has(theme.key) && (!needle || theme.name.toLowerCase().includes(needle)),
+      );
+    },
+    snapshot: () => ({ themes: catalog }),
+    hueFor: () => ({ hue: "aqua" }),
+    similarTo: (name) => String(name).toLowerCase() === "focus" ? ["Focus flow"] : [],
+  };
+  const sourceEntryLine = entries[0].entryLine;
+
+  const rows = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "focus",
+    { themesApi },
+  );
+  assert.deepEqual(rows.map((row) => row.kind), ["recent", "new"]);
+  assert.equal(rows[0].name, "Focus flow");
+  assert.deepEqual(rows[1].similarTo, ["Focus flow"]);
+  assert.equal(rows.some((row) => row.name === "TODAY"), false);
+
+  const exact = helpers.createPomodoroBulletMovePickerRows(
+    entries,
+    sourceEntryLine,
+    "focus flow",
+    { mode: "entry", themesApi },
+  );
+  assert.deepEqual(exact.map((row) => [row.kind, row.operation, row.name]), [
+    ["recent", "rename", "Focus flow"],
+  ]);
+});
+
 test("createPomodoroBulletMovePickerRows maps = to a fresh source-name Pomodoro in bullet mode only", () => {
   const content = [
     "## Pomodoros",
@@ -189,8 +239,9 @@ test("createPomodoroBulletMovePickerRows maps = to a fresh source-name Pomodoro 
     sourceEntryLine,
     "+",
   );
-  assert.equal(plusRows[0].kind, "new");
-  assert.equal(plusRows[0].name, "+");
+  const plusCreate = plusRows.find((row) => row.kind === "new");
+  assert.ok(plusCreate);
+  assert.equal(plusCreate.name, "+");
   assert.equal(
     plusRows.some((row) => row.kind === "split" || row.kind === "invalid"),
     false,
@@ -218,8 +269,9 @@ test("createPomodoroBulletMovePickerRows maps = to a fresh source-name Pomodoro 
     "+",
     { mode: "entry" },
   );
-  assert.equal(entryModeRows[0].kind, "rename");
-  assert.equal(entryModeRows[0].name, "+");
+  const plusRename = entryModeRows.find((row) => row.kind === "rename");
+  assert.ok(plusRename);
+  assert.equal(plusRename.name, "+");
   assert.equal(
     entryModeRows.some((row) => row.kind === "existing" && row.title === "PLUS"),
     true,
@@ -231,8 +283,9 @@ test("createPomodoroBulletMovePickerRows maps = to a fresh source-name Pomodoro 
     "=",
     { mode: "entry" },
   );
-  assert.equal(entryEqualsRows[0].kind, "rename");
-  assert.equal(entryEqualsRows[0].name, "=");
+  const equalsRename = entryEqualsRows.find((row) => row.kind === "rename");
+  assert.ok(equalsRename);
+  assert.equal(equalsRename.name, "=");
 });
 
 test("createPomodoroBulletMovePickerRows = shortcut resolves named closed sources and rejects unnamed, missing, and invalid sources", () => {

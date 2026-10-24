@@ -525,7 +525,7 @@ function rankPomodoroLinkEntry(entry, needle, query) {
 // otherwise ranked rows with `selectedIndex` = first selectable row (−1 when
 // none). The create row is appended when the canonical name is valid and no
 // open entry has that exact canonical name.
-function buildPomodoroLinkPickerRows(model, rawQuery) {
+function buildPomodoroLinkPickerRows(model, rawQuery, options = {}) {
   if (!model || model.ok !== true) {
     return { rows: [], selectedIndex: -1 };
   }
@@ -540,7 +540,13 @@ function buildPomodoroLinkPickerRows(model, rawQuery) {
       isDefault: index === model.defaultIndex,
       match: null,
     }));
-    return { rows, selectedIndex: model.defaultIndex };
+    return withPomodoroThemeHistoryRows(
+      model,
+      "",
+      rows,
+      model.defaultIndex,
+      options,
+    );
   }
 
   const needle = pomodoroLinkSelectorSlug(query);
@@ -609,7 +615,13 @@ function buildPomodoroLinkPickerRows(model, rawQuery) {
     });
   }
 
-  return { rows, selectedIndex: rows.findIndex((row) => row.selectable) };
+  return withPomodoroThemeHistoryRows(
+    model,
+    query,
+    rows,
+    rows.findIndex((row) => row.selectable),
+    options,
+  );
 }
 
 // The ⇧↵ behavior: create from the typed text even when other rows match;
@@ -782,9 +794,10 @@ function planNewPomodoroLinkInsertion(
   linkOptions,
 ) {
   const { blockId, targetPath, sourcePath, resolveTarget, linkText } = linkOptions;
+  const canonicalName = canonicalPomodoroEntryName(name);
   const collected = collectPomodoroLinkEntries(snapshot);
   const race = collected.entries.find(
-    (entry) => entry.open && canonicalPomodoroEntryName(entry.name) === name,
+    (entry) => entry.open && canonicalPomodoroEntryName(entry.name) === canonicalName,
   );
   if (race) {
     return planExistingPomodoroLinkInsertion(
@@ -865,7 +878,7 @@ function planNewPomodoroLinkInsertion(
   // Located by content: the insertion may have been folded into an emptied
   // neighbouring entry's deletion, taking that block's place.
   const createdLine = findCreatedPomodoroEntryLine(nextContent, {
-    name,
+    name: canonicalName,
     targetPath,
     blockId,
     resolveTarget,
@@ -928,7 +941,9 @@ function planExplicitPomodoroLinkInsertion(content, options = {}) {
   const linkOptions = { blockId, targetPath, sourcePath, resolveTarget, linkText };
 
   if (target.kind === "new") {
-    const canonical = canonicalizePomodoroLinkName(target.name);
+    const canonical = target.preserveSpelling === true
+      ? preserveBlockPomodoroThemeName(target.name)
+      : canonicalizePomodoroLinkName(target.name);
     if (!canonical.valid) {
       return { error: "invalid-name" };
     }

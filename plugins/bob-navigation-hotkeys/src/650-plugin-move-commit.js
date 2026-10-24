@@ -25,7 +25,11 @@ class BobNavigationHotkeysMoveCommitMixin {
       };
       destinationLabel = getPomodoroBulletMoveDestinationLabel(row.entry);
     } else if (row && row.kind === "new") {
-      destination = { kind: "new", name: row.name };
+      destination = {
+        kind: "new",
+        name: row.name,
+        preserveSpelling: row.preserveSpelling === true,
+      };
       destinationLabel = row.name;
     } else {
       return false;
@@ -204,6 +208,7 @@ class BobNavigationHotkeysMoveCommitMixin {
           sourceEntryLine,
           sourceRawLine,
           name: row.name,
+          preserveSpelling: row.preserveSpelling === true,
         });
 
     if (!plan.valid) {

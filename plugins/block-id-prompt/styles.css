@@ -693,6 +693,9 @@
 }
 
 .bid-ppk-row-title {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
   color: var(--text-normal);
   font-size: var(--font-ui-medium);
   font-weight: var(--font-semibold);
@@ -767,6 +770,51 @@
 .bid-ppk-pill.is-new {
   color: var(--text-muted);
   border: 1px solid var(--background-modifier-border);
+  background-color: var(--background-secondary);
+}
+
+.bid-ppk-pill.is-recent-theme {
+  color: var(--text-muted);
+  border: 1px solid var(--background-modifier-border);
+  background-color: var(--background-secondary);
+}
+
+.bid-ppk-pill.is-hidden-theme {
+  color: var(--text-muted);
+  border: 1px dashed var(--background-modifier-border);
+  background-color: var(--background-secondary);
+}
+
+.bid-ppk-pill.is-similar-theme {
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 34%, transparent);
+  background-color: color-mix(in srgb, var(--interactive-accent) 7%, transparent);
+}
+
+.bid-ppk-theme-swatches {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.bid-ppk-theme-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background-color: var(--bob-hue-blue, var(--text-faint));
+}
+
+.bid-ppk-theme-swatch.is-blue { background-color: var(--bob-hue-blue, var(--text-faint)); }
+.bid-ppk-theme-swatch.is-orange { background-color: var(--bob-hue-orange, var(--text-faint)); }
+.bid-ppk-theme-swatch.is-aqua { background-color: var(--bob-hue-aqua, var(--text-faint)); }
+.bid-ppk-theme-swatch.is-yellow { background-color: var(--bob-hue-yellow, var(--text-faint)); }
+.bid-ppk-theme-swatch.is-magenta { background-color: var(--bob-hue-magenta, var(--text-faint)); }
+.bid-ppk-theme-swatch.is-green { background-color: var(--bob-hue-green, var(--text-faint)); }
+.bid-ppk-theme-swatch.is-violet { background-color: var(--bob-hue-violet, var(--text-faint)); }
+.bid-ppk-theme-swatch.is-red { background-color: var(--bob-hue-red, var(--text-faint)); }
+.bid-ppk-theme-swatch.is-muted {
+  border: 1px solid var(--text-faint);
   background-color: var(--background-secondary);
 }
 

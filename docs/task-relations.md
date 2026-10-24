@@ -71,6 +71,20 @@ transaction or checked cross-note mirrors; `Ctrl+Z` runs the mirror again.
 Editing LINKED FROM shows the generated-line notice and does not change an
 edge.
 
+In the relation-label stage, row zero is the typed label (or plain link), so
+`Tab` accepts the top visible match while `Enter` uses the typed value. Arrow
+keys and `Ctrl+N` / `Ctrl+P` move the highlight. `Ctrl+D` on a label row hides
+or unhides that label from suggestions and leaves a ghost row for undo; on row
+zero it toggles one-off for the next relation. Typing `|` also turns one-off
+on. `Ctrl+H` opens or closes the Hidden section. A one-off relation is written
+first, then bob hides its label; if that hide fails, the relation remains and
+the notice gives the retry command. Hiding changes suggestions only: existing
+links and typed use remain unchanged.
+
+The read-only `api.relationLabels` v1 exposes catalog rows and hidden state on
+desktop and mobile. Its desktop `hide` and `unhide` methods delegate writes to
+`bob relations`.
+
 ## Related
 
 - [BLOCKS dependency mirrors](blocks-mirrors.md) — the reverse-dependency

@@ -208,6 +208,11 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       this.renderFooter();
       this.refreshRelationConsequenceStrip();
     }
+    if (this.stage === "relation-label") {
+      this.footerHints = this.getRelationLabelFooterHints();
+      this.renderFooter();
+      this.refreshRelationLabelHeader();
+    }
   }
 
   renderValueItem(item, rowEl, query) {

@@ -4,6 +4,9 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       this.handleTaskCardKeydown(event);
       return;
     }
+    if (this.stage === "relation-label" && this.handleRelationLabelKeydown(event)) {
+      return;
+    }
     if (this.stage === "schedule-work-log" && isQuickRollKeydown(event)) {
       event.preventDefault();
       event.stopPropagation();

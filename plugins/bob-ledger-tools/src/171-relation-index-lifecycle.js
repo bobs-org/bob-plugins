@@ -30,6 +30,7 @@ class BobLedgerToolsRelationIndexMixin {
       labelSuggestions: (prefix) => plugin.relationIndexLabelSuggestions(prefix),
       onChange: (listener) => plugin.relationIndexOnChange(listener),
     });
+    this.initializeRelationLabels();
   }
 
   relationIndexApi() {
@@ -89,7 +90,10 @@ class BobLedgerToolsRelationIndexMixin {
 
   relationIndexLabelSuggestions(prefix) {
     try {
-      return relationLabelSuggestionRows(this.relationIndexState.edges, prefix);
+      return this.relationLabelsRows(prefix, { hidden: "exclude" }).map((row) => ({
+        label: row.name,
+        count: row.count,
+      }));
     } catch (error) {
       return [];
     }
@@ -405,6 +409,7 @@ class BobLedgerToolsRelationIndexMixin {
         // One consumer cannot interrupt the shared index.
       }
     }
+    this.relationLabelsNotifyChanged("catalog");
   }
 
   setupRelationIndex() {
@@ -433,10 +438,12 @@ class BobLedgerToolsRelationIndexMixin {
       this.registerEvent(workspace.on("active-leaf-change", () => this.scheduleRelationIndexOverlayRefresh()));
       this.registerEvent(workspace.on("file-open", () => this.scheduleRelationIndexOverlayRefresh()));
     }
+    this.setupRelationLabelsJournal();
   }
 
   teardownRelationIndex() {
     this.relationIndexTornDown = true;
+    this.teardownRelationLabelsJournal();
     this.relationIndexScanToken = (this.relationIndexScanToken || 0) + 1;
     if (
       this.relationIndexOverlayTimer !== null &&

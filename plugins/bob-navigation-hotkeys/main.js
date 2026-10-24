@@ -49074,6 +49074,11 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
       this.renderFooter();
       this.refreshRelationConsequenceStrip();
     }
+    if (this.stage === "relation-label") {
+      this.footerHints = this.getRelationLabelFooterHints();
+      this.renderFooter();
+      this.refreshRelationLabelHeader();
+    }
   }
 
   renderValueItem(item, rowEl, query) {
@@ -51509,7 +51514,17 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationLabelMode = options.mode === "relabel" ? "relabel" : "add";
     this.stage = "relation-label";
     this.selectedIndex = 0;
-    const suggestions = this.readRelationLabelSuggestions("");
+    this.relationLabelShowHidden = false;
+    this.relationLabelOneOff = false;
+    this.relationLabelLastQuery = "";
+    this.relationLabelTabNoMatch = false;
+    this.relationLabelGhosts = new Map();
+    this.relationLabelWrites = new Set();
+    const suggestions = this.readRelationLabelSuggestions("", { hidden: "exclude" });
+    const hiddenCount = this.readRelationLabelHiddenCount();
+    this.relationLabelTitleBase = this.relationLabelMode === "relabel"
+      ? "🪢 Relabel the relation"
+      : "🪢 Link with a relation";
     this.applyOptions({
       items: suggestions.map((row) => ({
         kind: "relation-label",
@@ -51517,19 +51532,13 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         count: row.count,
         typed: false,
       })),
-      title:
-        this.relationLabelMode === "relabel"
-          ? "🪢 Relabel the relation"
-          : "🪢 Link with a relation",
+      title: `${this.relationLabelTitleBase}${hiddenCount > 0 ? ` · ◌ ${hiddenCount} hidden ⌃H` : ""}`,
       headerIcon: "link-2",
       inputLabel: "Relation",
       placeholder: relationStageLabelPlaceholder(suggestions),
       resultsLabel: "Suggestions",
       emptyText: "Type a relation, or leave it empty for a plain link",
-      footerHints: [
-        { keys: ["↵"], label: "link" },
-        { keys: ["esc"], label: "back to list" },
-      ],
+      footerHints: this.getRelationLabelFooterHints(),
       getSubtitle: () => this.getRelationLabelSubtitle(),
       filterItem: (item, query) =>
         !item || item.kind !== "relation-label" || !item.label
@@ -51581,8 +51590,25 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
 
   getRelationLabelPreviewItems() {
     const raw = this.getRawQuery ? String(this.getRawQuery() || "") : "";
+    if (raw !== this.relationLabelLastQuery) {
+      this.relationLabelLastQuery = raw;
+      this.relationLabelGhosts = new Map();
+      this.relationLabelOneOff = false;
+      this.relationLabelTabNoMatch = false;
+      this.selectedIndex = 0;
+    }
     const typed = normalizeRelationLabel(raw);
-    const suggestions = this.readRelationLabelSuggestions(raw);
+    const suggestions = this.readRelationLabelSuggestions(raw, { hidden: "include" });
+    const ghosts = this.relationLabelGhosts instanceof Map
+      ? this.relationLabelGhosts
+      : new Map();
+    const effective = suggestions.map((row) => {
+      const ghost = ghosts.get(row.key);
+      return ghost
+        ? { ...row, hidden: ghost.hidden, ghost: true }
+        : { ...row, ghost: false };
+    });
+    this.relationLabelTopMatchKey = (effective.find((row) => row.hidden !== true && row.ghost !== true) || {}).key || "";
     const out = [];
     if (!raw.trim()) {
       out.push(
@@ -51593,16 +51619,31 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
           plain: true,
           displayText: "Plain link (no relation)",
           searchText: "",
+          oneOff: false,
         }),
       );
     } else if (typed) {
+      const key = normalizeRelationLabel(typed).toLowerCase();
+      const existing = suggestions.find((row) => row.key === key) || null;
+      const label = existing ? existing.label : typed;
+      const hidden = existing ? existing.hidden === true : false;
+      const warning = Boolean(this.relationLabelOneOff && existing && !hidden && existing.count > 0);
       out.push(
         Object.freeze({
           kind: "relation-label",
-          label: typed,
-          typed: true,
-          displayText: typed,
-          searchText: typed,
+          key,
+          label,
+          typed: !existing,
+          existing: Boolean(existing),
+          count: existing ? existing.count : 0,
+          hidden,
+          oneOff: this.relationLabelOneOff === true,
+          warning,
+          warningText: warning
+            ? `⚠ Capturing also hides “${label}” (${existing.count} links) from suggestions. Existing links keep their label.`
+            : "",
+          displayText: label,
+          searchText: label,
         }),
       );
     } else {
@@ -51617,31 +51658,52 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         }),
       ]);
     }
-    for (const row of suggestions) {
-      if (!row || !row.label) {
-        continue;
+    const typedKey = typed ? normalizeRelationLabel(typed).toLowerCase() : "";
+    const visibleRows = effective.filter((row) => row.hidden !== true && row.key !== typedKey);
+    const hiddenRows = effective.filter((row) => row.hidden === true && row.key !== typedKey);
+    const toItem = (row) => Object.freeze({
+      kind: "relation-label",
+      key: row.key,
+      label: row.label,
+      count: Math.max(0, Math.floor(numericOrDefault(row.count, 0))),
+      inverse: row.inverse || null,
+      hidden: row.hidden === true,
+      ghost: row.ghost === true,
+      typed: false,
+      displayText: row.label,
+      searchText: row.label,
+    });
+    for (const row of visibleRows) {
+      out.push(toItem(row));
+      if (out.length >= 12) break;
+    }
+    if (this.relationLabelShowHidden === true && hiddenRows.length > 0 && out.length < 13) {
+      out.push(Object.freeze({
+        kind: "relation-label-heading",
+        displayText: "Hidden",
+        searchText: "",
+        nonSelectable: true,
+      }));
+      for (const row of hiddenRows) {
+        out.push(toItem(row));
+        if (out.length >= 24) break;
       }
-      if (typed && normalizeBulletPropertyValue(row.label) === normalizeBulletPropertyValue(typed)) {
-        continue;
-      }
-      out.push(
-        Object.freeze({
-          kind: "relation-label",
-          label: String(row.label),
-          count: Math.max(0, Math.floor(numericOrDefault(row.count, 0))),
-          typed: false,
-          displayText: String(row.label),
-          searchText: String(row.label),
-        }),
-      );
-      if (out.length >= 12) {
-        break;
+    } else if (this.relationLabelShowHidden !== true) {
+      for (const row of hiddenRows.filter((entry) => entry.ghost)) {
+        out.push(toItem(row));
+        if (out.length >= 24) break;
       }
     }
     return Object.freeze(out);
   }
 
   renderRelationLabelItem(item, rowEl, query) {
+    if (item && item.kind === "relation-label-heading") {
+      addElementClasses(rowEl, "bob-cnp-task-value-row", "is-disabled", "is-relation-label-heading");
+      rowEl.setAttribute("aria-disabled", "true");
+      rowEl.createDiv({ cls: "bob-cnp-section-header", text: "── Hidden ──" });
+      return;
+    }
     if (!item || item.kind === "relation-label-invalid") {
       addElementClasses(rowEl, "bob-cnp-task-value-row", "is-disabled");
       rowEl.setAttribute("aria-disabled", "true");
@@ -51656,13 +51718,27 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       rowEl,
       "bob-cnp-task-value-row",
       item.typed ? "is-create" : "is-existing",
+      item.hidden ? "is-relation-label-hidden" : "",
+      item.ghost ? "is-relation-label-ghost" : "",
+      item.warning ? "is-relation-label-warning" : "",
     );
     const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
     applyIcon(rowIcon, item.plain ? "link" : "link-2");
     const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
     const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
     appendHighlighted(titleEl, item.plain ? "Plain link (no relation)" : item.label, query);
-    if (!item.plain && Number.isInteger(item.count) && item.count > 0) {
+    if (item.oneOff) {
+      textEl.createDiv({ cls: "bob-cnp-row-meta bob-cnp-relation-label-one-off", text: "◌ one-off · will stay hidden" });
+    } else if (item.warning) {
+      textEl.createDiv({ cls: "bob-cnp-row-meta bob-cnp-relation-label-warning", text: item.warningText });
+    } else if (item.ghost) {
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta bob-cnp-relation-label-ghost-meta",
+        text: item.hidden ? "hidden everywhere · ⌃D undo" : "visible everywhere · ⌃D hide",
+      });
+    } else if (item.hidden) {
+      textEl.createDiv({ cls: "bob-cnp-row-meta bob-cnp-relation-label-hidden-meta", text: "hidden everywhere · ⌃D unhide" });
+    } else if (!item.plain && Number.isInteger(item.count) && item.count > 0) {
       textEl.createDiv({
         cls: "bob-cnp-row-meta",
         text: `used ${item.count}×`,
@@ -51670,14 +51746,14 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     }
   }
 
-  commitRelationLabel(item) {
+  async commitRelationLabel(item) {
     const targets = Array.isArray(this.relationLabelTargets)
       ? this.relationLabelTargets
       : [];
     if (targets.length === 0) {
       return false;
     }
-    if (item && item.kind === "relation-label-invalid") {
+    if (item && (item.kind === "relation-label-invalid" || item.kind === "relation-label-heading")) {
       new Notice(item.reason || "That relation cannot be used");
       return false;
     }
@@ -51705,15 +51781,37 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       }
     }
     const withLabel = targets.map((target) => ({ ...target, label }));
+    let committed = false;
     if (this.relationLabelMode === "relabel") {
-      return this.commitRelationEdit({ add: [], remove: [], relabel: withLabel });
+      committed = await this.commitRelationEdit({ add: [], remove: [], relabel: withLabel });
+    } else {
+      committed = await this.commitRelationEdit({ add: withLabel, remove: [], relabel: [] });
     }
-    return this.commitRelationEdit({ add: withLabel, remove: [], relabel: [] });
+    if (committed && label && this.relationLabelOneOff === true) {
+      try {
+        const api = this.relationLabelsApi();
+        const hidden = api && typeof api.hide === "function"
+          ? await api.hide(label, { allowUnused: true })
+          : { ok: false, message: "Bob Ledger Tools api.relationLabels is required." };
+        if (!hidden || hidden.ok !== true) {
+          const quoted = `'${String(label).replace(/'/gu, "'\\''")}'`;
+          new Notice(`Relation saved, but it could not be hidden. Retry: bob relations hide ${quoted}`);
+        }
+      } catch (_error) {
+        const quoted = `'${String(label).replace(/'/gu, "'\\''")}'`;
+        new Notice(`Relation saved, but it could not be hidden. Retry: bob relations hide ${quoted}`);
+      }
+    }
+    return committed;
   }
 
   restoreRelationList() {
     this.relationLabelTargets = null;
     this.relationLabelMode = null;
+    this.relationLabelShowHidden = false;
+    this.relationLabelOneOff = false;
+    this.relationLabelGhosts = new Map();
+    this.relationLabelWrites = new Set();
     this.stage = "value";
     this.selectedIndex = 0;
     const items = this.vaultStage
@@ -51731,40 +51829,6 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     return true;
   }
 
-  readRelationLabelSuggestions(prefix) {
-    try {
-      const plugins =
-        (this.app && this.app.plugins && this.app.plugins.plugins) || {};
-      const holder = plugins["bob-ledger-tools"];
-      const api = holder && holder.api;
-      const index = api && api.relationIndex;
-      if (
-        !index ||
-        Number(index.version) < 1 ||
-        typeof index.labelSuggestions !== "function"
-      ) {
-        return [];
-      }
-      const rows = index.labelSuggestions(prefix || "");
-      if (rows && typeof rows.then === "function") {
-        return [];
-      }
-      if (!Array.isArray(rows)) {
-        return [];
-      }
-      return rows
-        .filter((row) => row && row.label)
-        .map((row) =>
-          Object.freeze({
-            label: String(row.label),
-            count: Math.max(0, Math.floor(numericOrDefault(row.count, 0))),
-          }),
-        )
-        .slice(0, 12);
-    } catch (_error) {
-      return [];
-    }
-  }
 }
 
 // ---- src/427-relation-stage-plugin.js ----
@@ -52331,6 +52395,242 @@ class BobNavigationHotkeysRelationStageMixin {
     } catch (_error) {
       return Object.freeze({ ok: false, reason: "open-failed" });
     }
+  }
+}
+// ---- src/428-picker-relation-label-vocabulary.js ----
+// Relation-label stage controls mirrored from the Bob Mac Capture card.
+class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerModal {
+  relationLabelsApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-ledger-tools"];
+      const api = holder && holder.api && holder.api.relationLabels;
+      return api && Number(api.version) >= 1 ? api : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  readRelationLabelSuggestions(prefix, options = {}) {
+    try {
+      const plugins = (this.app && this.app.plugins && this.app.plugins.plugins) || {};
+      const holder = plugins["bob-ledger-tools"];
+      const api = holder && holder.api;
+      const labels = api && api.relationLabels;
+      if (labels && Number(labels.version) >= 1 && typeof labels.rows === "function") {
+        const rows = labels.rows(prefix || "", options || { hidden: "exclude" });
+        if (rows && typeof rows.then === "function") return [];
+        if (!Array.isArray(rows)) return [];
+        return rows
+          .filter((row) => row && row.name)
+          .map((row) => ({
+            key: String(row.key || normalizeRelationLabel(row.name).toLowerCase()),
+            label: String(row.name),
+            count: Math.max(0, Math.floor(numericOrDefault(row.count, 0))),
+            hidden: row.hidden === true,
+            inverse: typeof row.inverse === "string" ? row.inverse : null,
+          }));
+      }
+      const index = api && api.relationIndex;
+      if (!index || Number(index.version) < 1 || typeof index.labelSuggestions !== "function") return [];
+      const rows = index.labelSuggestions(prefix || "");
+      if (rows && typeof rows.then === "function" || !Array.isArray(rows)) return [];
+      return rows
+        .filter((row) => row && row.label)
+        .map((row) => ({
+          key: normalizeRelationLabel(row.label).toLowerCase(),
+          label: String(row.label),
+          count: Math.max(0, Math.floor(numericOrDefault(row.count, 0))),
+          hidden: false,
+          inverse: null,
+        }))
+        .slice(0, 12);
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  readRelationLabelHiddenCount() {
+    try {
+      const api = this.relationLabelsApi();
+      return api && typeof api.hiddenCount === "function"
+        ? Math.max(0, Math.floor(numericOrDefault(api.hiddenCount(), 0)))
+        : 0;
+    } catch (_error) {
+      return 0;
+    }
+  }
+
+  refreshRelationLabelHeader() {
+    if (this.stage !== "relation-label") return;
+    const count = this.readRelationLabelHiddenCount();
+    this.title = `${this.relationLabelTitleBase || "🪢 Relation"}${count > 0 ? ` · ◌ ${count} hidden ⌃H` : ""}`;
+    if (this.titleEl) this.titleEl.textContent = this.title;
+  }
+
+  getRelationLabelFooterHints() {
+    const raw = this.getRawQuery ? String(this.getRawQuery() || "") : "";
+    const item = (this.visibleItems || [])[this.selectedIndex] || null;
+    const noSelection = !item || item.typed === true || item.plain === true || this.selectedIndex === 0;
+    let tabLabel = "accept top match";
+    if (!noSelection) tabLabel = "accept selected";
+    else if (this.relationLabelTabNoMatch === true) tabLabel = "no match";
+    const hideLabel = noSelection
+      ? raw.trim()
+        ? this.relationLabelOneOff === true ? "keep visible" : "one-off"
+        : "type a label first"
+      : item.hidden === true ? "unhide" : "hide";
+    return [
+      { keys: ["⇥"], label: tabLabel },
+      { keys: ["⌃D"], label: hideLabel },
+      { keys: ["⌃H"], label: this.relationLabelShowHidden === true ? "hide list" : `Hidden ${this.readRelationLabelHiddenCount()}` },
+      { keys: ["↵"], label: this.relationLabelMode === "relabel" ? "relabel" : "link" },
+      { keys: ["esc"], label: "back to list" },
+    ];
+  }
+
+  moveRelationLabelSelection(delta) {
+    const items = Array.isArray(this.visibleItems) ? this.visibleItems : [];
+    if (items.length === 0) return;
+    let index = this.selectedIndex;
+    for (let step = 0; step < items.length; step += 1) {
+      index = (index + delta + items.length) % items.length;
+      if (items[index] && items[index].nonSelectable !== true) {
+        this.selectedIndex = index;
+        this.relationLabelTabNoMatch = false;
+        this.renderResults();
+        return;
+      }
+    }
+  }
+
+  relationLabelSelectKey(key) {
+    const items = this.getRelationLabelPreviewItems();
+    const index = items.findIndex((row) => row && row.key === key && row.typed !== true);
+    this.selectedIndex = index >= 0 ? index : 0;
+  }
+
+  async toggleRelationLabelVisibility(item) {
+    if (!item || item.kind !== "relation-label" || !item.key || item.typed === true) return false;
+    const key = String(item.key);
+    if (this.relationLabelWrites.has(key)) return false;
+    const previous = this.relationLabelGhosts.get(key);
+    const hidden = item.hidden !== true;
+    const label = String(item.label || "");
+    this.relationLabelGhosts.set(key, { hidden });
+    this.relationLabelSelectKey(key);
+    this.renderResults();
+    this.relationLabelWrites.add(key);
+    let result;
+    try {
+      const api = this.relationLabelsApi();
+      const write = hidden ? api && api.hide : api && api.unhide;
+      result = typeof write === "function"
+        ? await write(label)
+        : { ok: false, message: "Bob Ledger Tools api.relationLabels is required." };
+    } catch (_error) {
+      result = { ok: false, message: "Could not update relation-label suggestions." };
+    } finally {
+      this.relationLabelWrites.delete(key);
+    }
+    if (!result || result.ok !== true) {
+      if (previous) this.relationLabelGhosts.set(key, previous);
+      else this.relationLabelGhosts.delete(key);
+      this.relationLabelSelectKey(key);
+      this.renderResults();
+      new Notice((result && result.message) || "Could not update relation-label suggestions.");
+      return false;
+    }
+    this.relationLabelSelectKey(key);
+    this.renderResults();
+    return true;
+  }
+
+  handleRelationLabelKeydown(event) {
+    if (
+      !event || typeof event.key !== "string" || event.isComposing === true || event.keyCode === 229 ||
+      this.stage !== "relation-label"
+    ) return false;
+    const noMetaAlt = event.metaKey !== true && event.altKey !== true;
+    if (event.key === "Tab" && noMetaAlt && event.ctrlKey !== true) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.shiftKey === true) return true;
+      if (this.opening) return true;
+      const selected = (this.visibleItems || [])[this.selectedIndex];
+      let index = this.selectedIndex;
+      if (!selected || selected.typed === true || selected.plain === true || this.selectedIndex === 0) {
+        const top = selected && selected.key === this.relationLabelTopMatchKey && selected.hidden !== true
+          ? 0
+          : (this.visibleItems || []).findIndex((row, rowIndex) =>
+            rowIndex > 0 && row && row.kind === "relation-label" && row.hidden !== true && row.ghost !== true,
+          );
+        if (top < 0) {
+          this.relationLabelTabNoMatch = true;
+          this.renderResults();
+          return true;
+        }
+        index = top;
+      }
+      this.relationLabelTabNoMatch = false;
+      void this.openItemAtIndex(index);
+      return true;
+    }
+    if (
+      event.key === "ArrowDown" ||
+      (event.key.toLowerCase() === "n" && event.ctrlKey === true && noMetaAlt && event.shiftKey !== true)
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.moveRelationLabelSelection(1);
+      return true;
+    }
+    if (
+      event.key === "ArrowUp" ||
+      (event.key.toLowerCase() === "p" && event.ctrlKey === true && noMetaAlt && event.shiftKey !== true)
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.moveRelationLabelSelection(-1);
+      return true;
+    }
+    if (event.key === "|" && noMetaAlt && event.ctrlKey !== true) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (String(this.getRawQuery ? this.getRawQuery() : "").trim()) {
+        this.relationLabelOneOff = true;
+        this.relationLabelTabNoMatch = false;
+        this.renderResults();
+      }
+      return true;
+    }
+    if (event.key.toLowerCase() === "d" && event.ctrlKey === true && noMetaAlt && event.shiftKey !== true) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat === true) return true;
+      const item = (this.visibleItems || [])[this.selectedIndex] || null;
+      if (this.selectedIndex === 0 || !item || item.typed === true || item.plain === true) {
+        if (String(this.getRawQuery ? this.getRawQuery() : "").trim()) {
+          this.relationLabelOneOff = !this.relationLabelOneOff;
+          this.renderResults();
+        }
+        return true;
+      }
+      if (!item.nonSelectable) void this.toggleRelationLabelVisibility(item);
+      return true;
+    }
+    if (event.key.toLowerCase() === "h" && event.ctrlKey === true && noMetaAlt && event.shiftKey !== true) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat !== true) {
+        this.relationLabelShowHidden = this.relationLabelShowHidden !== true;
+        this.selectedIndex = 0;
+        this.relationLabelTabNoMatch = false;
+        this.renderResults();
+      }
+      return true;
+    }
+    return false;
   }
 }
 // ---- src/430-picker-vault-batch.js ----
@@ -53920,6 +54220,9 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       this.handleTaskCardKeydown(event);
       return;
     }
+    if (this.stage === "relation-label" && this.handleRelationLabelKeydown(event)) {
+      return;
+    }
     if (this.stage === "schedule-work-log" && isQuickRollKeydown(event)) {
       event.preventDefault();
       event.stopPropagation();
@@ -55341,6 +55644,7 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerCountedDependencyMixin,
   BulletPropertyPickerBlocksStageMixin,
   BulletPropertyPickerRelationStageMixin,
+  BulletPropertyPickerRelationLabelVocabularyMixin,
   BulletPropertyPickerVaultBatchMixin,
   BulletPropertyPickerVaultCommitMixin,
   BulletPropertyPickerKeydownMixin,

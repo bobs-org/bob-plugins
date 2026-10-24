@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
 const vectors = require("./relation-line-vectors.cjs");
+const relationLabelVectors = require("../plugins/bob-ledger-tools/scripts/fixtures/relation_labels/vectors.json");
 
 class TestMarkdownView {}
 class TestPlugin {
@@ -481,6 +482,97 @@ test("relationIndex incoming and suggestions include Next and Blocked sources", 
     api.labelSuggestions().map((row) => [row.label, row.count]),
     [["follow-up of", 1]],
   );
+  plugin.teardownRelationIndex();
+});
+
+test("relation-label JS mirrors match the shared bob-cli vectors", () => {
+  for (const vector of relationLabelVectors.key) {
+    assert.equal(helpers.relationLabelKey(vector.input), vector.expected, vector.name);
+  }
+
+  for (const vector of relationLabelVectors.catalog) {
+    const edges = vector.notes.flatMap((note) =>
+      helpers.parseTaskRelationFile(note.body, note.path).outgoing,
+    );
+    const rows = helpers.relationLabelCatalogRows(edges, {});
+    assert.deepEqual(
+      rows.map(({ key, name, count, spellings, inverse }) => ({ key, name, count, spellings, inverse })),
+      vector.expected,
+      vector.name,
+    );
+  }
+
+  for (const vector of relationLabelVectors.fold) {
+    const events = vector.events
+      .map((entry) => helpers.relationLabelParseJournalLine(entry.body, entry.path, entry.line))
+      .filter(Boolean);
+    const prefs = helpers.relationLabelFoldEvents(events).byKey;
+    assert.deepEqual(
+      Object.keys(prefs).filter((key) => prefs[key].hidden).sort(),
+      vector.expected_hidden,
+      vector.name,
+    );
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(prefs).map(([key, pref]) => [key, pref.name])),
+      vector.expected_names,
+      vector.name,
+    );
+  }
+
+  for (const vector of relationLabelVectors.rank) {
+    const rows = vector.labels.map((row) => ({
+      ...row,
+      key: helpers.relationLabelKey(row.name),
+    }));
+    assert.deepEqual(
+      helpers.relationLabelRankRows(rows, vector.query, vector.hidden).map((row) => row.name),
+      vector.expected,
+      vector.name,
+    );
+  }
+});
+
+test("api.relationLabels reads folded preferences and delegates desktop writes to bob", async () => {
+  const plugin = new LedgerToolsPlugin(makeApp([]), {});
+  plugin.initializeRelationIndex();
+  plugin.relationIndexState = {
+    generation: 1,
+    ready: true,
+    forward: new Map(),
+    reverse: new Map(),
+    edges: [
+      { source: { path: "tasks/a.md" }, relationLine: 2, label: "see" },
+      { source: { path: "tasks/b.md" }, relationLine: 2, label: "See" },
+      { source: { path: "_templates/daily.md" }, relationLine: 2, label: "template" },
+    ],
+  };
+  plugin.relationLabelsJournalFold = helpers.relationLabelFoldEvents([
+    helpers.relationLabelParseJournalLine(
+      '{"v":1,"ts":"2026-10-24T09:41:07-04:00","host":"mac","kind":"relation_label.hide","key":"see","name":"see"}',
+      "mac.jsonl",
+      1,
+    ),
+  ]);
+  const api = plugin.relationLabelsApi();
+  assert.equal(api.version, 1);
+  assert.deepEqual(api.rows("", { hidden: "exclude" }), []);
+  assert.deepEqual(api.rows("", { hidden: "only" }).map((row) => [row.key, row.name, row.count, row.hidden]), [
+    ["see", "see", 2, true],
+  ]);
+  assert.equal(api.hiddenCount(), 1);
+  assert.deepEqual(api.rows("", { hidden: "include" }).map((row) => row.key), ["see"]);
+
+  const writes = [];
+  const changes = [];
+  plugin.relationLabelsWriteSpawn = async (args, via) => {
+    writes.push({ args, via });
+    return { ok: true };
+  };
+  plugin.refreshRelationLabelsJournal = async () => plugin.relationLabelsPrefs();
+  api.onChange((_rows, reason) => changes.push(reason));
+  assert.equal((await api.hide("new relation", { allowUnused: true, via: "test-client" })).ok, true);
+  assert.deepEqual(writes, [{ args: ["relations", "hide", "new relation", "--allow-unused"], via: "test-client" }]);
+  assert.deepEqual(changes, ["write"]);
   plugin.teardownRelationIndex();
 });
 

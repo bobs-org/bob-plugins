@@ -424,6 +424,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // Live source-authoritative task relations. The namespace is additive;
       // the root api stays v3 while this index evolves under its own v1.
       relationIndex: this.relationIndexApi(),
+      relationLabels: this.relationLabelsApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>

@@ -323,18 +323,9 @@ function relationCodepointCompare(left, right) {
 }
 
 function relationLabelSuggestionRows(edges, prefix) {
-  const needle = String(prefix || "").trim().toLocaleLowerCase();
-  const counts = new Map();
-  for (const edge of edges || []) {
-    const label = String(edge && edge.label || "").trim();
-    if (!label) continue;
-    const key = label.toLocaleLowerCase();
-    const current = counts.get(key);
-    if (current) current.count += 1;
-    else counts.set(key, { label, count: 1 });
-  }
-  return Array.from(counts.values())
-    .filter((item) => !needle || item.label.toLocaleLowerCase().startsWith(needle))
-    .sort((a, b) => b.count - a.count || relationCodepointCompare(a.label, b.label))
-    .map((item) => ({ label: item.label, count: item.count }));
+  return relationLabelRankRows(
+    relationLabelCatalogRows(edges, {}),
+    prefix,
+    "exclude",
+  ).map((row) => ({ label: row.name, count: row.count }));
 }

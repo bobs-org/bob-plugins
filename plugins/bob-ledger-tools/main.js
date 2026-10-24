@@ -16784,20 +16784,11 @@ function relationCodepointCompare(left, right) {
 }
 
 function relationLabelSuggestionRows(edges, prefix) {
-  const needle = String(prefix || "").trim().toLocaleLowerCase();
-  const counts = new Map();
-  for (const edge of edges || []) {
-    const label = String(edge && edge.label || "").trim();
-    if (!label) continue;
-    const key = label.toLocaleLowerCase();
-    const current = counts.get(key);
-    if (current) current.count += 1;
-    else counts.set(key, { label, count: 1 });
-  }
-  return Array.from(counts.values())
-    .filter((item) => !needle || item.label.toLocaleLowerCase().startsWith(needle))
-    .sort((a, b) => b.count - a.count || relationCodepointCompare(a.label, b.label))
-    .map((item) => ({ label: item.label, count: item.count }));
+  return relationLabelRankRows(
+    relationLabelCatalogRows(edges, {}),
+    prefix,
+    "exclude",
+  ).map((row) => ({ label: row.name, count: row.count }));
 }
 // ---- src/146-relation-chip-model.js ----
 // Task relation chips (bob-cli-a2 chips). Pure model and element builder
@@ -17394,6 +17385,237 @@ function buildRelationChipElement(doc, model, options) {
   } catch (error) {
     return null;
   }
+}
+// ---- src/147-relation-label-model.js ----
+// Pure mirror of bob-cli `src/native/relation_labels/`: relation-label
+// keys, catalog spelling/order, preference journal fold, and query rank.
+// The shared vectors in `scripts/fixtures/relation_labels/` are copied from
+// bob-cli and are the parity contract for this mirror.
+const RELATION_LABELS_SCHEMA_VERSION = 1;
+const RELATION_LABELS_JOURNAL_DIR = ".bob/relations";
+const RELATION_LABELS_VIA = "bob-ledger-tools";
+const RELATION_LABEL_INVERSES = Object.freeze({
+  "merged into": "merged from",
+  "duplicate of": "duplicated by",
+  "follow-up of": "followed up by",
+  "superseded by": "supersedes",
+  "split from": "split into",
+});
+
+function relationLabelCollapseText(value) {
+  return String(value || "").trim().split(/\s+/u).filter(Boolean).join(" ");
+}
+
+// Mirrors `relation_label_key`: writer normalization followed by Unicode
+// lowercase. Do not add NFC or any other equivalence.
+function relationLabelKey(value) {
+  return relationLabelCollapseText(value).replace(/:$/u, "").trim().toLowerCase();
+}
+
+function relationLabelInversePhrase(value) {
+  return RELATION_LABEL_INVERSES[relationLabelKey(value)] || null;
+}
+
+function relationLabelCodepointCompare(left, right) {
+  const a = Array.from(String(left), (char) => char.codePointAt(0));
+  const b = Array.from(String(right), (char) => char.codePointAt(0));
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    if (a[index] !== b[index]) return a[index] < b[index] ? -1 : 1;
+  }
+  return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
+}
+
+function relationLabelPathIncluded(path) {
+  const parts = String(path || "").split("/").filter(Boolean);
+  const directories = parts.slice(0, -1);
+  return !directories.some((part) =>
+    part.startsWith(".") || part === "_conflicts" || part === "_templates",
+  );
+}
+
+function relationLabelCatalogRows(edges, prefs = {}) {
+  const orderedEdges = (Array.isArray(edges) ? edges : [])
+    .filter((edge) => relationLabelPathIncluded(edge && edge.source && edge.source.path))
+    .map((edge, index) => ({ edge, index }))
+    .sort((left, right) => {
+      const leftPath = String(left.edge && left.edge.source && left.edge.source.path || "");
+      const rightPath = String(right.edge && right.edge.source && right.edge.source.path || "");
+      return relationLabelCodepointCompare(leftPath, rightPath) ||
+        Number(left.edge && left.edge.relationLine || 0) - Number(right.edge && right.edge.relationLine || 0) ||
+        left.index - right.index;
+    });
+  const byKey = new Map();
+  let seen = 0;
+  for (const { edge } of orderedEdges) {
+    const name = relationLabelCollapseText(edge && edge.label);
+    const key = relationLabelKey(name);
+    if (!key) continue;
+    let row = byKey.get(key);
+    if (!row) {
+      row = { key, count: 0, spellings: new Map() };
+      byKey.set(key, row);
+    }
+    row.count += 1;
+    const spelling = row.spellings.get(name);
+    if (spelling) spelling.count += 1;
+    else row.spellings.set(name, { name, count: 1, firstSeen: seen });
+    seen += 1;
+  }
+
+  for (const [key, pref] of Object.entries(prefs || {})) {
+    if (!pref || pref.hidden !== true || byKey.has(key)) continue;
+    byKey.set(key, {
+      key,
+      count: 0,
+      spellings: new Map(),
+      journalName: typeof pref.name === "string" ? pref.name : "",
+    });
+  }
+
+  const rows = [];
+  for (const row of byKey.values()) {
+    const spellings = [...row.spellings.values()];
+    const display = spellings.slice().sort((left, right) =>
+      right.count - left.count || left.firstSeen - right.firstSeen,
+    )[0];
+    const name = display ? display.name : row.journalName;
+    rows.push({
+      key: row.key,
+      name,
+      count: row.count,
+      hidden: Boolean(prefs && prefs[row.key] && prefs[row.key].hidden === true),
+      inverse: relationLabelInversePhrase(name),
+      spellings: spellings
+        .sort((left, right) => right.count - left.count || relationLabelCodepointCompare(left.name, right.name))
+        .map(({ name: spellingName, count }) => ({ name: spellingName, count })),
+    });
+  }
+  rows.sort((left, right) =>
+    right.count - left.count ||
+    relationLabelCodepointCompare(left.key, right.key) ||
+    relationLabelCodepointCompare(left.name, right.name),
+  );
+  return rows;
+}
+
+function relationLabelParseJournalLine(text, path, lineNumber) {
+  try {
+    const value = JSON.parse(String(text || ""));
+    if (!value || typeof value !== "object" || Array.isArray(value) || value.v !== 1) return null;
+    const tsRaw = typeof value.ts === "string" ? value.ts : "";
+    if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/u.test(tsRaw)) return null;
+    const tsMs = Date.parse(tsRaw);
+    const host = typeof value.host === "string" ? value.host : "";
+    if (!Number.isFinite(tsMs) || !host) return null;
+    const keyOf = (field) => typeof value[field] === "string" ? relationLabelKey(value[field]) : "";
+    const nameOf = (field) => typeof value[field] === "string" ? value[field] : "";
+    const kind = value.kind;
+    if (kind === "relation_label.hide" || kind === "relation_label.unhide") {
+      const key = keyOf("key");
+      if (!key) return null;
+      return {
+        tsMs, host, path: String(path || ""), line: Number.isInteger(lineNumber) ? lineNumber : 0,
+        kind, key, name: nameOf("name"),
+      };
+    }
+    if (kind === "relation_label.rename") {
+      const from = keyOf("from");
+      const to = keyOf("to");
+      if (!from || !to) return null;
+      return {
+        tsMs, host, path: String(path || ""), line: Number.isInteger(lineNumber) ? lineNumber : 0,
+        kind, from, to, from_name: nameOf("from_name"), to_name: nameOf("to_name"),
+      };
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function relationLabelFoldEvents(events) {
+  const ordered = (Array.isArray(events) ? events : []).slice().sort((left, right) =>
+    left.tsMs - right.tsMs ||
+    relationLabelCodepointCompare(left.host, right.host) ||
+    relationLabelCodepointCompare(left.path, right.path) ||
+    (left.line || 0) - (right.line || 0),
+  );
+  const byKey = {};
+  for (const event of ordered) {
+    if (!event || typeof event.kind !== "string") continue;
+    if (event.kind === "relation_label.hide" || event.kind === "relation_label.unhide") {
+      const pref = byKey[event.key] || { hidden: false, name: "" };
+      pref.hidden = event.kind === "relation_label.hide";
+      if (event.name) pref.name = event.name;
+      byKey[event.key] = pref;
+    } else if (event.kind === "relation_label.rename" && event.from !== event.to) {
+      const source = byKey[event.from];
+      const targetHasState = Object.prototype.hasOwnProperty.call(byKey, event.to);
+      if (source && !targetHasState) {
+        byKey[event.to] = source;
+        delete byKey[event.from];
+      }
+      const target = byKey[event.to];
+      if (event.to_name && target && !target.name) target.name = event.to_name;
+    }
+  }
+  return { byKey };
+}
+
+function relationLabelRankRows(rows, query, hidden = "exclude") {
+  const filter = hidden === "only" || hidden === "include" ? hidden : "exclude";
+  const needle = relationLabelKey(query);
+  const catalog = (Array.isArray(rows) ? rows : [])
+    .filter((row) => filter === "include" || (filter === "only" ? row.hidden === true : row.hidden !== true))
+    .slice()
+    .sort((left, right) =>
+      Math.max(0, Number(right.count) || 0) - Math.max(0, Number(left.count) || 0) ||
+      relationLabelCodepointCompare(left.key || relationLabelKey(left.name), right.key || relationLabelKey(right.name)) ||
+      relationLabelCodepointCompare(left.name, right.name),
+    );
+  if (!needle) return catalog;
+  const matching = catalog.filter((row) =>
+    relationLabelKey(row.name).includes(needle),
+  );
+  return [
+    ...matching.filter((row) => relationLabelKey(row.name).startsWith(needle)),
+    ...matching.filter((row) => !relationLabelKey(row.name).startsWith(needle)),
+  ];
+}
+
+function relationLabelApiRows(edges, prefs, query, options = {}) {
+  const hidden = options && typeof options.hidden === "string" ? options.hidden : "exclude";
+  return relationLabelRankRows(relationLabelCatalogRows(edges, prefs), query, hidden).map((row) => ({
+    key: row.key,
+    name: row.name,
+    count: row.count,
+    hidden: row.hidden,
+    inverse: row.inverse,
+  }));
+}
+
+function relationLabelsDecodeWrite(stdout, stderr) {
+  let body = null;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (_error) {
+    return {
+      ok: false,
+      code: "unsupported",
+      message: "Update bob to hide relation labels.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, code: "bad-shape", message: "bob relations returned an unexpected JSON shape.", detail: statsFirstLine(stderr) };
+  }
+  if (body.ok === true) return { ok: true, report: body };
+  return {
+    ok: false,
+    code: typeof body.code === "string" && body.code ? body.code : "bob-error",
+    message: typeof body.message === "string" && body.message ? body.message : "bob relations reported an error.",
+    detail: statsFirstLine(stderr),
+  };
 }
 // ---- src/150-dependency-element.js ----
 // Dependency chips: Live Preview row element. `model` is
@@ -18899,6 +19121,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // Live source-authoritative task relations. The namespace is additive;
       // the root api stays v3 while this index evolves under its own v1.
       relationIndex: this.relationIndexApi(),
+      relationLabels: this.relationLabelsApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>
@@ -19505,6 +19728,7 @@ class BobLedgerToolsRelationIndexMixin {
       labelSuggestions: (prefix) => plugin.relationIndexLabelSuggestions(prefix),
       onChange: (listener) => plugin.relationIndexOnChange(listener),
     });
+    this.initializeRelationLabels();
   }
 
   relationIndexApi() {
@@ -19564,7 +19788,10 @@ class BobLedgerToolsRelationIndexMixin {
 
   relationIndexLabelSuggestions(prefix) {
     try {
-      return relationLabelSuggestionRows(this.relationIndexState.edges, prefix);
+      return this.relationLabelsRows(prefix, { hidden: "exclude" }).map((row) => ({
+        label: row.name,
+        count: row.count,
+      }));
     } catch (error) {
       return [];
     }
@@ -19880,6 +20107,7 @@ class BobLedgerToolsRelationIndexMixin {
         // One consumer cannot interrupt the shared index.
       }
     }
+    this.relationLabelsNotifyChanged("catalog");
   }
 
   setupRelationIndex() {
@@ -19908,10 +20136,12 @@ class BobLedgerToolsRelationIndexMixin {
       this.registerEvent(workspace.on("active-leaf-change", () => this.scheduleRelationIndexOverlayRefresh()));
       this.registerEvent(workspace.on("file-open", () => this.scheduleRelationIndexOverlayRefresh()));
     }
+    this.setupRelationLabelsJournal();
   }
 
   teardownRelationIndex() {
     this.relationIndexTornDown = true;
+    this.teardownRelationLabelsJournal();
     this.relationIndexScanToken = (this.relationIndexScanToken || 0) + 1;
     if (
       this.relationIndexOverlayTimer !== null &&
@@ -19926,6 +20156,269 @@ class BobLedgerToolsRelationIndexMixin {
     }
   }
 }
+// ---- src/172-plugin-relation-labels.js ----
+// Read-only relation-label journal mirror and api.relationLabels v1.
+// bob-cli owns all writes; this mixin only reads through Obsidian's vault
+// adapter and delegates desktop hide/unhide requests back to bob.
+class BobLedgerToolsRelationLabelsMixin {
+  initializeRelationLabels() {
+    this.relationLabelsJournalFold = relationLabelFoldEvents([]);
+    this.relationLabelsJournalWarnings = [];
+    this.relationLabelsListeners = new Set();
+    this.relationLabelsJournalTimer = null;
+    this.relationLabelsJournalReadToken = 0;
+    const plugin = this;
+    this.relationLabelsApiValue = Object.freeze({
+      version: RELATION_LABELS_SCHEMA_VERSION,
+      rows: (query, options) => plugin.relationLabelsRows(query, options),
+      hiddenCount: () => plugin.relationLabelsHiddenCount(),
+      onChange: (listener) => plugin.onRelationLabelsChange(listener),
+      hide: (label, options) => plugin.apiRelationLabelsHide(label, options),
+      unhide: (label, options) => plugin.apiRelationLabelsUnhide(label, options),
+    });
+  }
+
+  relationLabelsApi() {
+    return this.relationLabelsApiValue;
+  }
+
+  relationLabelsPrefs() {
+    const folded = this.relationLabelsJournalFold;
+    return folded && folded.byKey && typeof folded.byKey === "object"
+      ? folded.byKey
+      : {};
+  }
+
+  relationLabelsRows(query, options = {}) {
+    try {
+      const edges = this.relationIndexState && Array.isArray(this.relationIndexState.edges)
+        ? this.relationIndexState.edges
+        : [];
+      return relationLabelApiRows(
+        edges,
+        this.relationLabelsPrefs(),
+        query,
+        options,
+      );
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  relationLabelsHiddenCount() {
+    try {
+      return this.relationLabelsRows("", { hidden: "include" })
+        .filter((row) => row.hidden === true).length;
+    } catch (_error) {
+      return 0;
+    }
+  }
+
+  onRelationLabelsChange(listener) {
+    try {
+      if (typeof listener !== "function") return () => {};
+      this.relationLabelsListeners.add(listener);
+      return () => {
+        try {
+          this.relationLabelsListeners.delete(listener);
+        } catch (_error) {
+          // Unsubscribe is best-effort.
+        }
+      };
+    } catch (_error) {
+      return () => {};
+    }
+  }
+
+  relationLabelsNotifyChanged(reason) {
+    try {
+      const snapshot = this.relationLabelsRows("", { hidden: "include" });
+      for (const listener of [...this.relationLabelsListeners]) {
+        try {
+          listener(snapshot, reason);
+        } catch (_error) {
+          // One listener cannot interrupt the other subscribers.
+        }
+      }
+    } catch (_error) {
+      // Notifications are best-effort.
+    }
+  }
+
+  setupRelationLabelsJournal() {
+    try {
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.on !== "function") return;
+      const changed = (file, oldPath) => {
+        const paths = [file && file.path, oldPath].filter((path) => typeof path === "string");
+        if (paths.some((path) =>
+          path.startsWith(`${RELATION_LABELS_JOURNAL_DIR}/`) && path.endsWith(".jsonl"),
+        )) {
+          this.scheduleRelationLabelsJournalRefresh("vault");
+        }
+      };
+      for (const event of ["create", "modify", "delete"]) {
+        this.registerEvent(vault.on(event, (file) => changed(file)));
+      }
+      this.registerEvent(vault.on("rename", (file, oldPath) => changed(file, oldPath)));
+      void this.refreshRelationLabelsJournal("startup");
+    } catch (_error) {
+      // The API remains readable with an empty preference fold.
+    }
+  }
+
+  scheduleRelationLabelsJournalRefresh(reason) {
+    try {
+      if (this.relationLabelsJournalTimer !== null) return;
+      const schedule =
+        typeof window !== "undefined" && typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      this.relationLabelsJournalTimer = schedule(() => {
+        this.relationLabelsJournalTimer = null;
+        void this.refreshRelationLabelsJournal(reason || "vault");
+      }, RELATION_LABELS_JOURNAL_REFRESH_MS);
+    } catch (_error) {
+      // Scheduling is best-effort.
+    }
+  }
+
+  async refreshRelationLabelsJournal(reason) {
+    void reason;
+    const token = ++this.relationLabelsJournalReadToken;
+    try {
+      const adapter = this.app && this.app.vault && this.app.vault.adapter;
+      if (!adapter || typeof adapter.list !== "function" || typeof adapter.read !== "function") {
+        return this.relationLabelsPrefs();
+      }
+      let listed;
+      try {
+        listed = await adapter.list(RELATION_LABELS_JOURNAL_DIR);
+      } catch (_error) {
+        return this.relationLabelsPrefs();
+      }
+      const names = listed && Array.isArray(listed.files) ? listed.files.slice() : [];
+      names.sort(relationLabelCodepointCompare);
+      const events = [];
+      const warnings = [];
+      let malformed = 0;
+      for (const name of names) {
+        if (typeof name !== "string" || !name.endsWith(".jsonl")) continue;
+        const base = name.split("/").pop();
+        let text;
+        try {
+          text = await adapter.read(`${RELATION_LABELS_JOURNAL_DIR}/${base}`);
+        } catch (_error) {
+          continue;
+        }
+        String(text || "").split("\n").forEach((line, index) => {
+          if (!line.trim()) return;
+          const event = relationLabelParseJournalLine(line, base, index + 1);
+          if (event) events.push(event);
+          else {
+            malformed += 1;
+            if (warnings.length < 8) {
+              warnings.push(`skipping malformed relation journal line ${base}:${index + 1}`);
+            }
+          }
+        });
+      }
+      if (token !== this.relationLabelsJournalReadToken) return this.relationLabelsPrefs();
+      if (malformed > 8) warnings.push(`skipped ${malformed} malformed relation journal lines`);
+      this.relationLabelsJournalFold = relationLabelFoldEvents(events);
+      this.relationLabelsJournalWarnings = warnings;
+      this.relationLabelsNotifyChanged("journal");
+      return this.relationLabelsPrefs();
+    } catch (_error) {
+      return this.relationLabelsPrefs();
+    }
+  }
+
+  relationLabelsIsDesktop() {
+    try {
+      return typeof Platform !== "undefined" && Platform && Platform.isDesktopApp === true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  relationLabelsWriteSpawn(args, via) {
+    if (!this.relationLabelsIsDesktop()) {
+      return Promise.resolve({
+        ok: false,
+        code: "desktop_only",
+        message: "Relation-label writes need the desktop app.",
+        detail: "",
+      });
+    }
+    return bobSpawnJson(
+      [...args, "--via", via || RELATION_LABELS_VIA, "-f", "json"],
+      relationLabelsDecodeWrite,
+      {
+        commandLabel: "bob relations",
+        resolveBobPath: () =>
+          typeof this.apiStatsBobPath === "function"
+            ? this.apiStatsBobPath()
+            : { path: "bob", source: "path" },
+        getVaultPath: () => this.statsVaultBasePath(),
+        timeout: BOB_SPAWN_TIMEOUT_MS,
+        maxBuffer: BOB_SPAWN_MAX_BUFFER,
+        firstLine: statsFirstLine,
+      },
+    );
+  }
+
+  async apiRelationLabelsWriteAftermath(result) {
+    if (result && result.ok) {
+      try {
+        await this.refreshRelationLabelsJournal("write");
+      } catch (_error) {
+        // The bob write succeeded; the read refresh cannot roll it back.
+      }
+      this.relationLabelsNotifyChanged("write");
+    }
+    return result;
+  }
+
+  async apiRelationLabelsHide(label, options = {}) {
+    const name = String(label || "").trim();
+    if (!name) return { ok: false, code: "invalid_label", message: "Name a relation label to hide." };
+    const opts = options && typeof options === "object" ? options : {};
+    const args = ["relations", "hide", name];
+    if (opts.allowUnused === true) args.push("--allow-unused");
+    try {
+      return this.apiRelationLabelsWriteAftermath(
+        await this.relationLabelsWriteSpawn(args, opts.via),
+      );
+    } catch (_error) {
+      return { ok: false, code: "failed", message: "bob relations hide failed." };
+    }
+  }
+
+  async apiRelationLabelsUnhide(label, options = {}) {
+    const name = String(label || "").trim();
+    if (!name) return { ok: false, code: "invalid_label", message: "Name a relation label to unhide." };
+    const opts = options && typeof options === "object" ? options : {};
+    try {
+      return this.apiRelationLabelsWriteAftermath(
+        await this.relationLabelsWriteSpawn(["relations", "unhide", name], opts.via),
+      );
+    } catch (_error) {
+      return { ok: false, code: "failed", message: "bob relations unhide failed." };
+    }
+  }
+
+  teardownRelationLabelsJournal() {
+    if (this.relationLabelsJournalTimer !== null && typeof clearTimeout === "function") {
+      clearTimeout(this.relationLabelsJournalTimer);
+    }
+    this.relationLabelsJournalTimer = null;
+    this.relationLabelsJournalReadToken += 1;
+    if (this.relationLabelsListeners) this.relationLabelsListeners.clear();
+  }
+}
+
+const RELATION_LABELS_JOURNAL_REFRESH_MS = 3000;
 // ---- src/180-plugin-plan-and-ready.js ----
 class BobLedgerToolsPlanAndReadyMixin {
   currentDailyPath() {
@@ -48325,6 +48818,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsPomodoroThemeChipsMixin,
   BobLedgerToolsPomodoroThemeChipsReadingMixin,
   BobLedgerToolsDependencyModelMixin,
+  BobLedgerToolsRelationLabelsMixin,
   BobLedgerToolsRelationIndexMixin,
   BobLedgerToolsRelationModelMixin,
   BobLedgerToolsBlocksModelMixin,
@@ -50351,6 +50845,17 @@ module.exports.helpers = {
   parseTaskRelationFile,
   relationLabelSuggestionRows,
   relationInversePhrase,
+  RELATION_LABELS_SCHEMA_VERSION,
+  RELATION_LABELS_JOURNAL_DIR,
+  relationLabelCollapseText,
+  relationLabelKey,
+  relationLabelInversePhrase,
+  relationLabelCatalogRows,
+  relationLabelParseJournalLine,
+  relationLabelFoldEvents,
+  relationLabelRankRows,
+  relationLabelApiRows,
+  relationLabelsDecodeWrite,
   relationChipModelForRow,
   buildRelationChipElement,
   relationAttachChipRemove,

@@ -1419,3 +1419,128 @@ test("api.relations openStage opens both directions at v1", async () => {
   const missing = await helpers.createRelationsNavApi(null).openStage({ path: "T.md", line: 0 });
   assert.equal(missing.ok, false);
 });
+
+test("relation-label stage Tab, Ctrl+D, pipe, and Ctrl+H mirror the card", async () => {
+  const notes = currentOtherNotes();
+  const { picker } = makeCurrentOtherPicker("to", notes, {});
+  let query = "";
+  const hidden = new Set();
+  const catalog = [
+    { key: "see", name: "see", count: 3, hidden: false, inverse: null },
+    { key: "implements", name: "implements", count: 2, hidden: false, inverse: null },
+  ];
+  const writes = [];
+  picker.app = {
+    plugins: {
+      plugins: {
+        "bob-ledger-tools": {
+          api: {
+            relationLabels: {
+              version: 1,
+              rows(prefix, options = {}) {
+                const needle = String(prefix || "").trim().toLowerCase();
+                return catalog
+                  .map((row) => ({ ...row, hidden: hidden.has(row.key) }))
+                  .filter((row) => options.hidden === "include" || (options.hidden === "only" ? row.hidden : !row.hidden))
+                  .filter((row) => !needle || row.name.toLowerCase().includes(needle));
+              },
+              hiddenCount: () => hidden.size,
+              async hide(label) {
+                writes.push(["hide", label]);
+                hidden.add(String(label).toLowerCase());
+                return { ok: true };
+              },
+              async unhide(label) {
+                writes.push(["unhide", label]);
+                hidden.delete(String(label).toLowerCase());
+                return { ok: true };
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  beginRelationLabel(picker, [{ path: "Other.md", line: 0, blockId: "other" }], "");
+  picker.getRawQuery = () => query;
+  picker.renderResults = () => {
+    picker.visibleItems = picker.getRelationLabelPreviewItems();
+  };
+  const opened = [];
+  picker.openItemAtIndex = async (index) => {
+    opened.push(index);
+    return true;
+  };
+  picker.visibleItems = picker.getRelationLabelPreviewItems();
+
+  const key = (name, fields = {}) => ({
+    key: name,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    shiftKey: false,
+    repeat: false,
+    preventDefault() { this.prevented = true; },
+    stopPropagation() { this.stopped = true; },
+    ...fields,
+  });
+
+  assert.equal(picker.handleRelationLabelKeydown(key("Tab")), true);
+  assert.deepEqual(opened.pop(), 1, "row zero Tab accepts the top visible label");
+
+  assert.equal(picker.handleRelationLabelKeydown(key("n", { ctrlKey: true })), true);
+  assert.equal(picker.selectedIndex, 1, "Ctrl+N selects the first suggestion without changing the query");
+  assert.equal(query, "");
+  assert.equal(picker.handleRelationLabelKeydown(key("Tab")), true);
+  assert.deepEqual(opened.pop(), 1, "Tab accepts the selected label");
+
+  assert.equal(picker.handleRelationLabelKeydown(key("d", { ctrlKey: true })), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(writes[0], ["hide", "see"]);
+  assert.equal(picker.relationLabelGhosts.get("see").hidden, true);
+
+  assert.equal(picker.handleRelationLabelKeydown(key("h", { ctrlKey: true })), true);
+  assert.equal(picker.relationLabelShowHidden, true);
+  assert.equal(picker.visibleItems.some((row) => row.kind === "relation-label-heading"), true);
+
+  query = "a one-off label";
+  picker.selectedIndex = 0;
+  picker.renderResults();
+  assert.equal(picker.handleRelationLabelKeydown(key("d", { ctrlKey: true })), true);
+  assert.equal(picker.relationLabelOneOff, true);
+  assert.equal(picker.handleRelationLabelKeydown(key("|", { shiftKey: true })), true);
+  assert.equal(picker.relationLabelOneOff, true);
+});
+
+test("one-off labels hide through bob only after the relation commit succeeds", async () => {
+  const notes = currentOtherNotes();
+  const { picker, currentEditor } = makeCurrentOtherPicker("to", notes, {});
+  const target = { path: "Other.md", line: 0, blockId: "other" };
+  const hideCalls = [];
+  picker.app = {
+    plugins: {
+      plugins: {
+        "bob-ledger-tools": {
+          api: {
+            relationLabels: {
+              version: 1,
+              rows: () => [],
+              hiddenCount: () => 0,
+              async hide(label, options) {
+                hideCalls.push([label, options]);
+                return { ok: true };
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  beginRelationLabel(picker, [target], "prompted the purchase of");
+  picker.getRelationLabelPreviewItems();
+  picker.relationLabelOneOff = true;
+  const item = picker.getRelationLabelPreviewItems()[0];
+  assert.equal(await picker.commitRelationLabel(item), true);
+  assert.match(currentEditor.getValue(), /prompted the purchase of \[\[Other#\^other\]\]/);
+  assert.deepEqual(hideCalls, [["prompted the purchase of", { allowUnused: true }]]);
+});

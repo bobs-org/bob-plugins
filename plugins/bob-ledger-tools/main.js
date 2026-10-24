@@ -30664,6 +30664,628 @@ class BobLedgerToolsStatsHomesMixin {
     return true;
   }
 }
+// ---- src/239-plugin-day-strip-model.js ----
+// Pure model for the daily-note Stats receipt. Bob owns every displayed
+// value; this model only selects the requested day's points and arranges
+// their supplied labels, parts, and quality information for the painter.
+const DAY_STRIP_METRIC_IDS = ["worked", "reviewed", "done", "created", "review_closed"];
+const DAY_STRIP_LABELS = {
+  worked: "Worked",
+  reviewed: "Reviewed",
+  done: "Done",
+  created: "Created",
+  review_closed: "Review closed",
+};
+const DAY_STRIP_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const DAY_STRIP_WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function dayStripDateParts(day) {
+  const match = typeof day === "string" ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(day) : null;
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const date = Number(match[3]);
+  const parsed = new Date(0);
+  parsed.setHours(12, 0, 0, 0);
+  parsed.setFullYear(year, month - 1, date);
+  if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== date) return null;
+  return { year, month, date, value: parsed };
+}
+
+function dayStripShiftDay(day, amount) {
+  const parts = dayStripDateParts(day);
+  if (!parts || !Number.isInteger(amount)) return "";
+  const shifted = new Date(0);
+  shifted.setHours(12, 0, 0, 0);
+  shifted.setFullYear(parts.year, parts.month - 1, parts.date + amount);
+  return String(shifted.getFullYear()).padStart(4, "0") + "-" +
+    String(shifted.getMonth() + 1).padStart(2, "0") + "-" +
+    String(shifted.getDate()).padStart(2, "0");
+}
+
+function dayStripDateWords(day) {
+  const parts = dayStripDateParts(day);
+  if (!parts) return null;
+  return {
+    weekday: DAY_STRIP_WEEKDAYS[parts.value.getDay()],
+    weekdayShort: DAY_STRIP_WEEKDAYS[parts.value.getDay()].slice(0, 3),
+    month: DAY_STRIP_MONTHS[parts.month - 1],
+    monthShort: DAY_STRIP_MONTHS[parts.month - 1].slice(0, 3),
+    dayNumber: parts.date,
+    year: parts.year,
+    full: DAY_STRIP_WEEKDAYS[parts.value.getDay()] + ", " + DAY_STRIP_MONTHS[parts.month - 1] + " " + parts.date,
+    short: DAY_STRIP_WEEKDAYS[parts.value.getDay()].slice(0, 3) + " " + DAY_STRIP_MONTHS[parts.month - 1].slice(0, 3) + " " + parts.date,
+  };
+}
+
+function dayStripAsOf(fetchedAt, show) {
+  if (!show || fetchedAt === null || fetchedAt === undefined || fetchedAt === "") return "";
+  try {
+    const value = fetchedAt instanceof Date ? fetchedAt : new Date(fetchedAt);
+    if (!Number.isFinite(value.getTime())) return "";
+    return String(value.getHours()).padStart(2, "0") + ":" + String(value.getMinutes()).padStart(2, "0");
+  } catch (error) {
+    return "";
+  }
+}
+
+function dayStripWarningsFor(report, day, point) {
+  const messages = [];
+  const pointWarnings = point && Array.isArray(point.warnings) ? point.warnings : [];
+  for (const warning of pointWarnings) {
+    if (typeof warning === "string" && warning) messages.push(warning);
+    else if (warning && typeof warning.message === "string" && warning.message) messages.push(warning.message);
+  }
+  if (point && typeof point.warning === "string" && point.warning) messages.push(point.warning);
+  const reportWarnings = report && Array.isArray(report.warnings) ? report.warnings : [];
+  for (const warning of reportWarnings) {
+    if (!warning || typeof warning !== "object") continue;
+    const warningDay = warning.day || warning.date;
+    const inRange = typeof warning.start === "string" && typeof warning.end === "string" && warning.start <= day && day <= warning.end;
+    if (warningDay !== day && !inRange) continue;
+    if (typeof warning.message === "string" && warning.message) messages.push(warning.message);
+  }
+  return Array.from(new Set(messages));
+}
+
+function dayStripMetricPoints(metric, report) {
+  try {
+    return statsChartDailyPoints(metric, report);
+  } catch (error) {
+    const safe = metric && typeof metric === "object" ? metric : {};
+    return Array.isArray(safe.points) ? safe.points : [];
+  }
+}
+
+function dayStripMarks(metric, report, day, bool) {
+  const points = dayStripMetricPoints(metric, report);
+  const dates = Array.from({ length: 8 }, (_, index) => dayStripShiftDay(day, index - 7));
+  const byDate = new Map(points.filter((point) => point && typeof point.date === "string").map((point) => [point.date, point]));
+  const source = dates.map((date) => {
+    const point = byDate.get(date);
+    return point && typeof point.value === "number"
+      ? { value: point.value, provisional: point.provisional === true && date === day }
+      : { value: null, provisional: false };
+  });
+  const bars = statsSparkBars(source);
+  return dates.map((date, index) => {
+    const point = byDate.get(date) || null;
+    const value = point && typeof point.value === "number" ? point.value : null;
+    return {
+      date,
+      height: bars[index] ? bars[index].height : 0,
+      empty: !point || value === null,
+      zero: Boolean(point && value === 0),
+      provisional: Boolean(point && point.provisional === true && date === day),
+      isDay: date === day,
+      met: bool ? (value === null ? null : value > 0) : null,
+      display: point && typeof point.display === "string" ? point.display : "–",
+      title: dayStripDateWords(date)
+        ? dayStripDateWords(date).short + ": " + (point && typeof point.display === "string" ? point.display : "–")
+        : date,
+    };
+  });
+}
+
+function dayStripBuildTile(metric, report, day, dateWords) {
+  const points = dayStripMetricPoints(metric, report);
+  const point = points.find((candidate) => candidate && candidate.date === day) || null;
+  const unit = metric && typeof metric.unit === "string" ? metric.unit : "";
+  const quality = point && typeof point.quality === "string" ? point.quality : "missing";
+  const warnings = dayStripWarningsFor(report, day, point);
+  const warning = warnings.length
+    ? warnings.join("\n")
+    : quality === "missing"
+      ? (point && typeof point.reason === "string" && point.reason) || "No value was reported for this day."
+      : quality === "warning"
+        ? (point && typeof point.reason === "string" && point.reason) || "The report warned about this day."
+        : "";
+  const display = point && typeof point.display === "string" ? point.display : "–";
+  const label = metric && typeof metric.label === "string" && metric.label ? metric.label : DAY_STRIP_LABELS[metric && metric.id] || String(metric && metric.id || "Metric");
+  const metricId = String(metric && metric.id || "");
+  const tooltip = [
+    metric && typeof metric.definition === "string" ? metric.definition : "",
+    dateWords.short + ": " + display + (point && point.provisional ? " so far" : ""),
+    quality === "not_tracked" && metric && metric.since ? "Tracking since " + metric.since : "",
+    point && typeof point.reason === "string" && point.reason ? point.reason : "",
+    ...warnings,
+  ].filter(Boolean).join("\n");
+  return {
+    id: metricId,
+    label,
+    display,
+    quality,
+    reason: point && typeof point.reason === "string" ? point.reason : "",
+    since: metric && typeof metric.since === "string" ? metric.since : "",
+    warning,
+    definition: metric && typeof metric.definition === "string" ? metric.definition : "",
+    tooltip,
+    kind: unit === "bool" ? "dots" : "bars",
+    unit,
+    value: point && typeof point.value === "number" ? point.value : null,
+    provisional: Boolean(point && point.provisional === true),
+    point,
+    marks: dayStripMarks(metric, report, day, unit === "bool"),
+  };
+}
+
+function dayStripMix(report, worked, day) {
+  const omitted = !worked || worked.unit !== "minutes";
+  if (omitted) return { segments: [], legend: [], overflow: [], empty: false, omitted: true };
+  const points = dayStripMetricPoints(worked, report);
+  const hasAreaParts = points.some((point) => point && point.parts && point.parts.area && typeof point.parts.area === "object" && Object.keys(point.parts.area).length > 0);
+  if (!hasAreaParts) return { segments: [], legend: [], overflow: [], empty: false, omitted: true };
+  const point = points.find((candidate) => candidate && candidate.date === day) || null;
+  const rawAreas = point && point.parts && point.parts.area && typeof point.parts.area === "object" ? point.parts.area : null;
+  const rows = rawAreas ? statsPanelHomeRows(worked, report, "area", point) : [];
+  const ordered = statsPanelHomeAreaRows(rows, report);
+  const displays = point && point.parts_display && point.parts_display.area && typeof point.parts_display.area === "object"
+    ? point.parts_display.area
+    : {};
+  const segments = ordered.map((row) => ({
+    key: row.key,
+    label: row.label,
+    value: row.value,
+    display: typeof displays[row.key] === "string" ? displays[row.key] : row.display,
+    hue: statsPanelHomeHue(report, row.key),
+    bucket: row.key.startsWith("@"),
+  }));
+  const top = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label)).slice(0, 3);
+  const selected = new Set(top.map((segment) => segment.key));
+  const legend = segments.filter((segment) => selected.has(segment.key));
+  const overflow = segments.filter((segment) => !selected.has(segment.key));
+  return {
+    segments,
+    legend,
+    overflow,
+    empty: Boolean(point && point.value === 0 && point.quality === "ok"),
+    omitted: false,
+    overflowTitle: overflow.map((segment) => segment.label + " " + segment.display).join("\n"),
+    point,
+  };
+}
+
+function dayStripErrorInfo(error) {
+  if (!error || typeof error !== "object") return null;
+  if (typeof error.title === "string") {
+    return { code: error.code || "failed", title: error.title, hint: typeof error.hint === "string" ? error.hint : "" };
+  }
+  try {
+    const model = statsErrorModel(error);
+    return { code: model.code, title: model.title, hint: model.hint };
+  } catch (caught) {
+    return { code: typeof error.code === "string" ? error.code : "failed", title: typeof error.message === "string" ? error.message : "bob stats failed", hint: "" };
+  }
+}
+
+function dayStripCollapsedText(tiles) {
+  return tiles.map((tile) => ({
+    id: tile.id,
+    label: tile.label,
+    display: tile.display,
+    kind: tile.unit === "bool" ? "bool" : "value",
+  }));
+}
+
+function dayStripAriaLabel(day, dateWords, provisional, tiles, mix) {
+  const values = tiles.map((tile) => tile.label + " " + tile.display).join(", ");
+  let label = "Day stats for " + dateWords.full + (provisional ? ", so far" : "") + (values ? ": " + values : ".");
+  if (mix && !mix.omitted && mix.segments.length) {
+    label += ". Time by area: " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
+  } else if (mix && mix.empty) {
+    label += ". No Pomodoros.";
+  }
+  return label;
+}
+
+function dayStripModel(report, day, context) {
+  try {
+    const safeContext = context && typeof context === "object" ? context : {};
+    const safeReport = report && typeof report === "object" ? report : null;
+    const dateWords = dayStripDateWords(day);
+    if (!dateWords) {
+      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", tiles: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true }, collapsedText: [], ariaLabel: "", stale: false, error: null, collapsed: false };
+    }
+    const localToday = typeof safeContext.localToday === "string" ? safeContext.localToday : "";
+    if (dayStripDateParts(localToday) && day > localToday) {
+      return { state: "future", day, dateWords, provisional: false, asOf: "", tiles: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true }, collapsedText: [], ariaLabel: "", stale: false, error: null, collapsed: false };
+    }
+    const error = dayStripErrorInfo(safeContext.error);
+    if (!safeReport) {
+      if (error) {
+        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", tiles: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true }, collapsedText: [], ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error, collapsed: false };
+      }
+      const tiles = DAY_STRIP_METRIC_IDS.map((id) => ({
+        id,
+        label: DAY_STRIP_LABELS[id],
+        display: "",
+        quality: "skeleton",
+        reason: "",
+        since: "",
+        warning: "",
+        definition: "",
+        tooltip: "",
+        kind: id === "review_closed" ? "dots" : "bars",
+        unit: id === "review_closed" ? "bool" : "",
+        value: null,
+        provisional: false,
+        point: null,
+        marks: Array.from({ length: 8 }, (_, index) => ({ date: dayStripShiftDay(day, index - 7), height: 0, empty: true, zero: false, provisional: false, isDay: index === 7, met: null, display: "–", title: "" })),
+      }));
+      const mix = { segments: [], legend: [], overflow: [], empty: false, omitted: false, skeleton: true };
+      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", tiles, mix, collapsedText: dayStripCollapsedText(tiles), ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null, collapsed: safeContext.collapsed === true };
+    }
+
+    // A default report from before midnight must never be used to show a
+    // provisional point for the new local day (or a day it does not cover).
+    if (safeReport.today && localToday && safeReport.today < localToday && day >= safeReport.today) {
+      return dayStripModel(null, day, { ...safeContext, error: null });
+    }
+
+    const metrics = Array.isArray(safeReport.metrics) ? safeReport.metrics : [];
+    const tiles = DAY_STRIP_METRIC_IDS.map((id) => metrics.find((metric) => metric && metric.id === id)).filter(Boolean)
+      .map((metric) => dayStripBuildTile(metric, safeReport, day, dateWords));
+    const worked = metrics.find((metric) => metric && metric.id === "worked") || null;
+    const mix = dayStripMix(safeReport, worked, day);
+    const provisional = tiles.some((tile) => tile.provisional);
+    const asOf = day === localToday ? dayStripAsOf(safeContext.fetchedAt, true) : "";
+    const stale = safeContext.stale === true;
+    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, tiles, mix);
+    const staleTitle = stale
+      ? ((error && error.title) || (typeof safeContext.error === "string" ? safeContext.error : "Refresh failed")) +
+        " · showing the " + (asOf || "cached") + " report"
+      : "";
+    return {
+      state: "ready",
+      day,
+      dateWords,
+      provisional,
+      asOf,
+      tiles,
+      mix,
+      collapsedText: dayStripCollapsedText(tiles),
+      ariaLabel,
+      stale,
+      staleTitle,
+      error,
+      collapsed: safeContext.collapsed === true,
+    };
+  } catch (error) {
+    const safeDay = typeof day === "string" ? day : "";
+    const dateWords = dayStripDateWords(safeDay);
+    return {
+      state: "unavailable",
+      day: safeDay,
+      dateWords,
+      provisional: false,
+      asOf: "",
+      tiles: [],
+      mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true },
+      collapsedText: [],
+      ariaLabel: "Day stats unavailable — bob stats failed.",
+      stale: false,
+      error: { code: "model-error", title: "bob stats failed", hint: "" },
+      collapsed: false,
+    };
+  }
+}
+// ---- src/239-plugin-day-strip-render.js ----
+// DOM painter for the daily-note Stats receipt. The host element remains
+// stable; each update replaces only its children from the current model.
+function dayStripButton(doc, className, label, title) {
+  const button = statsEl(doc, "button", {
+    class: className,
+    type: "button",
+    title: title || null,
+    "aria-label": label,
+  });
+  return button;
+}
+
+function dayStripAppend(parent, child) {
+  if (parent && child && typeof parent.appendChild === "function") parent.appendChild(child);
+  return child;
+}
+
+function dayStripActivate(button, action) {
+  if (!button || typeof button.addEventListener !== "function") return;
+  let suppressNativeKeyboardClick = false;
+  const invoke = (event, forcedNewLeaf) => {
+    if (event && event.preventDefault && event.type === "mousedown") event.preventDefault();
+    const newLeaf = forcedNewLeaf || Boolean(event && (event.ctrlKey || event.metaKey || event.button === 1));
+    if (typeof action === "function") action(newLeaf);
+  };
+  button.addEventListener("mousedown", (event) => {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  });
+  button.addEventListener("click", (event) => {
+    if (suppressNativeKeyboardClick) {
+      suppressNativeKeyboardClick = false;
+      return;
+    }
+    invoke(event, false);
+  });
+  button.addEventListener("auxclick", (event) => {
+    if (event && event.button === 1) {
+      if (event.preventDefault) event.preventDefault();
+      invoke(event, true);
+    }
+  });
+  button.addEventListener("keydown", (event) => {
+    if (!event || (event.key !== "Enter" && event.key !== " ")) return;
+    if (event.preventDefault) event.preventDefault();
+    suppressNativeKeyboardClick = true;
+    invoke(event, false);
+  });
+}
+
+function dayStripClassForMark(mark, kind) {
+  if (!mark || mark.empty) return "bob-day-strip-mark bob-day-strip-mark-null";
+  const classes = ["bob-day-strip-mark"];
+  if (mark.isDay) classes.push("bob-day-strip-mark-day");
+  else classes.push("bob-day-strip-mark-context");
+  if (mark.provisional) classes.push("bob-day-strip-mark-provisional");
+  if (kind === "dots") {
+    classes.push(mark.met ? "bob-day-strip-mark-met" : mark.provisional ? "bob-day-strip-mark-pending" : "bob-day-strip-mark-missed");
+  } else if (mark.zero) {
+    classes.push("bob-day-strip-mark-zero");
+  }
+  return classes.join(" ");
+}
+
+function dayStripRenderMark(doc, mark, kind) {
+  const node = statsEl(doc, "span", {
+    class: dayStripClassForMark(mark, kind),
+    title: mark && mark.title ? mark.title : null,
+    "aria-hidden": "true",
+  });
+  if (kind === "bars" && mark && !mark.empty && !mark.zero && node && node.style) {
+    node.style.height = Math.max(0.08, Math.min(1, Number(mark.height) || 0)) * 14 + "px";
+  }
+  if (node && typeof node.addEventListener === "function") {
+    node.addEventListener("click", (event) => { if (event && event.stopPropagation) event.stopPropagation(); });
+    node.addEventListener("auxclick", (event) => { if (event && event.stopPropagation) event.stopPropagation(); });
+  }
+  return node;
+}
+
+function dayStripRenderTile(doc, tile, model, handlers) {
+  const skeleton = model.state === "skeleton";
+  const button = dayStripButton(
+    doc,
+    "bob-day-strip-tile" + (skeleton ? " bob-day-strip-tile-skeleton" : ""),
+    skeleton ? tile.label + ", loading" : tile.label + ": " + tile.display,
+    tile.tooltip,
+  );
+  if (button) button.setAttribute("data-day-strip-metric", tile.id);
+  const label = statsEl(doc, "span", { class: "bob-day-strip-label" }, tile.label);
+  dayStripAppend(button, label);
+
+  const valueRow = statsEl(doc, "span", { class: "bob-day-strip-value-row" });
+  const value = skeleton
+    ? statsEl(doc, "span", { class: "bob-day-strip-value bob-day-strip-value-skeleton", "aria-hidden": "true" })
+    : statsEl(doc, "span", {
+      class: "bob-day-strip-value" + (tile.display === "–" ? " bob-day-strip-value-empty" : ""),
+      title: tile.quality === "not_tracked" && tile.since ? "Tracking since " + tile.since : null,
+    }, tile.display);
+  dayStripAppend(valueRow, value);
+  const warning = statsEl(doc, "span", {
+    class: "bob-day-strip-warning",
+    title: tile.warning || null,
+    "aria-hidden": "true",
+  }, "⚠");
+  if (!tile.warning || skeleton) warning.setAttribute("hidden", "true");
+  dayStripAppend(valueRow, warning);
+  dayStripAppend(button, valueRow);
+
+  const marks = statsEl(doc, "span", { class: "bob-day-strip-marks", "aria-hidden": "true" });
+  for (const mark of tile.marks || []) dayStripAppend(marks, dayStripRenderMark(doc, mark, tile.kind));
+  dayStripAppend(button, marks);
+  dayStripActivate(button, (newLeaf) => {
+    if (typeof handlers.openStats === "function") {
+      handlers.openStats({ day: model.day, metric: tile.id, newLeaf });
+    }
+  });
+  return button;
+}
+
+function dayStripRenderMix(doc, model, handlers) {
+  const mix = model.mix || { segments: [], legend: [], overflow: [], omitted: true };
+  const skeleton = model.state === "skeleton";
+  const button = dayStripButton(doc, "bob-day-strip-mix-action", "Open Stats for time by area", mix.overflowTitle);
+  if (mix.omitted && !skeleton) button.setAttribute("hidden", "true");
+  const bar = statsEl(doc, "span", {
+    class: "bob-day-strip-mix-bar" + (mix.empty ? " bob-day-strip-mix-empty" : "") + (skeleton ? " bob-day-strip-mix-skeleton" : ""),
+    "aria-hidden": "true",
+  });
+  const segments = Array.isArray(mix.segments) ? mix.segments : [];
+  const slots = Math.max(8, segments.length);
+  for (let index = 0; index < slots; index += 1) {
+    const segment = segments[index];
+    const node = statsEl(doc, "span", {
+      class: "bob-day-strip-mix-segment" + (segment ? " bob-day-strip-hue-" + segment.hue : "") + (segment && segment.bucket ? " bob-day-strip-mix-bucket" : "") + (!segment ? " bob-day-strip-mix-segment-placeholder" : ""),
+      title: segment ? segment.label + " " + segment.display : null,
+    });
+    if (node && node.style && segment) node.style.flexGrow = String(Math.max(0, Number(segment.value) || 0));
+    if (!segment) node.setAttribute("hidden", "true");
+    dayStripAppend(bar, node);
+  }
+  dayStripAppend(button, bar);
+
+  const legend = statsEl(doc, "span", { class: "bob-day-strip-legend" });
+  const entries = Array.isArray(mix.legend) ? mix.legend : [];
+  for (let index = 0; index < 3; index += 1) {
+    const entry = entries[index];
+    const item = statsEl(doc, "span", {
+      class: "bob-day-strip-legend-item" + (entry ? "" : " bob-day-strip-legend-placeholder"),
+      title: entry ? entry.label + " " + entry.display : null,
+      "aria-hidden": skeleton && !entry ? "true" : null,
+    });
+    const dot = statsEl(doc, "span", {
+      class: "bob-day-strip-legend-dot" + (entry ? " bob-day-strip-hue-" + entry.hue : ""),
+      "aria-hidden": "true",
+    });
+    dayStripAppend(item, dot);
+    dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-label" }, entry ? entry.label : skeleton ? "Area" : ""));
+    dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-value" }, entry ? entry.display : skeleton ? "0m" : ""));
+    if (!entry && !skeleton) item.setAttribute("hidden", "true");
+    dayStripAppend(legend, item);
+  }
+  const noPomodoros = mix.empty && !skeleton;
+  const noPomodorosLabel = statsEl(doc, "span", { class: "bob-day-strip-no-pomodoros" }, noPomodoros ? "no Pomodoros" : skeleton ? "no Pomodoros" : "");
+  if (skeleton) noPomodorosLabel.setAttribute("aria-hidden", "true");
+  if (!noPomodoros && !skeleton) noPomodorosLabel.setAttribute("hidden", "true");
+  dayStripAppend(legend, noPomodorosLabel);
+  const overflow = statsEl(doc, "span", {
+    class: "bob-day-strip-overflow",
+    title: mix.overflowTitle || null,
+    "aria-hidden": skeleton ? "true" : null,
+  }, mix.overflow && mix.overflow.length ? "+" + mix.overflow.length : skeleton ? "+N" : "");
+  if (!mix.overflow || !mix.overflow.length) overflow.setAttribute("hidden", "true");
+  dayStripAppend(legend, overflow);
+  dayStripAppend(button, legend);
+  dayStripActivate(button, (newLeaf) => {
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel: "homes", newLeaf });
+  });
+  return button;
+}
+
+function dayStripRenderMeta(doc, model, handlers) {
+  const meta = statsEl(doc, "span", { class: "bob-day-strip-meta" });
+  const asOfText = model.asOf ? "so far · " + model.asOf : "so far · 00:00";
+  const asOf = statsEl(doc, "span", { class: "bob-day-strip-as-of" }, asOfText);
+  if (!model.asOf) asOf.setAttribute("hidden", "true");
+  dayStripAppend(meta, asOf);
+  const stale = statsEl(doc, "span", {
+    class: "bob-day-strip-stale-dot",
+    title: model.staleTitle || null,
+    "aria-label": model.stale ? "Showing stale Stats" : null,
+  }, "●");
+  if (!model.stale) stale.setAttribute("hidden", "true");
+  dayStripAppend(meta, stale);
+
+  const stats = dayStripButton(doc, "bob-day-strip-stats-link", "Open Stats for " + model.day, "Open Stats for " + model.day);
+  dayStripAppend(stats, statsEl(doc, "span", {}, "Stats ↗"));
+  dayStripActivate(stats, (newLeaf) => {
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, newLeaf });
+  });
+  dayStripAppend(meta, stats);
+
+  const collapsed = model.collapsed === true;
+  const toggle = dayStripButton(doc, "bob-day-strip-collapse", collapsed ? "Expand Day stats" : "Collapse Day stats");
+  toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  dayStripAppend(toggle, statsEl(doc, "span", { "aria-hidden": "true" }, collapsed ? "▸" : "▾"));
+  dayStripActivate(toggle, () => {
+    if (typeof handlers.toggleCollapsed === "function") handlers.toggleCollapsed();
+  });
+  dayStripAppend(meta, toggle);
+  return meta;
+}
+
+function dayStripRenderUnavailable(doc, model, handlers) {
+  const line = statsEl(doc, "span", { class: "bob-day-strip-unavailable" });
+  const error = model.error || { title: "bob stats failed", hint: "" };
+  const message = error.code === "bob-not-found"
+    ? "Day stats unavailable — bob was not found. Set stats.bob_path, or open Stats."
+    : "Day stats unavailable — " + error.title + ".";
+  dayStripAppend(line, statsEl(doc, "span", { class: "bob-day-strip-unavailable-message" }, message));
+  const retry = dayStripButton(doc, "bob-day-strip-retry", "Retry Day stats");
+  dayStripAppend(retry, statsEl(doc, "span", {}, "Retry"));
+  dayStripActivate(retry, () => {
+    if (typeof handlers.retry === "function") handlers.retry();
+  });
+  dayStripAppend(line, retry);
+  const stats = dayStripButton(doc, "bob-day-strip-stats-link", "Open Stats for " + model.day);
+  dayStripAppend(stats, statsEl(doc, "span", {}, "Stats ↗"));
+  dayStripActivate(stats, (newLeaf) => {
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, newLeaf });
+  });
+  dayStripAppend(line, stats);
+  return line;
+}
+
+function paintDayStrip(el, model, handlers) {
+  if (!el || !model) return el;
+  const safeModel = model && typeof model === "object" ? model : {};
+  const safeHandlers = handlers && typeof handlers === "object" ? handlers : {};
+  const doc = statsDocFor(el);
+  if (!doc) return el;
+  try {
+    if (typeof el.replaceChildren === "function") el.replaceChildren();
+    else if (Array.isArray(el.children)) {
+      for (const child of el.children) child.parentNode = null;
+      el.children.length = 0;
+      el.textContent = "";
+    } else el.textContent = "";
+    const state = ["ready", "skeleton", "unavailable", "future", "hidden"].includes(safeModel.state) ? safeModel.state : "hidden";
+    const classes = ["bob-day-strip", "bob-day-strip-state-" + state];
+    if (safeModel.collapsed) classes.push("bob-day-strip-collapsed");
+    if (safeModel.stale) classes.push("bob-day-strip-stale");
+    if (safeModel.provisional) classes.push("bob-day-strip-provisional");
+    if (el.setAttribute) {
+      el.setAttribute("class", classes.join(" "));
+      el.setAttribute("data-day", safeModel.day || "");
+      if (state !== "hidden" && state !== "future") {
+        el.setAttribute("role", "group");
+        el.setAttribute("aria-label", safeModel.ariaLabel || "Day stats for " + safeModel.day);
+      } else {
+        el.removeAttribute("role");
+        el.removeAttribute("aria-label");
+      }
+    }
+    if (state === "hidden" || state === "future") return el;
+    if (state === "unavailable") {
+      dayStripAppend(el, dayStripRenderUnavailable(doc, safeModel, safeHandlers));
+      return el;
+    }
+
+    if (safeModel.collapsed && state !== "skeleton") {
+      const summary = statsEl(doc, "span", { class: "bob-day-strip-summary" });
+      for (const part of safeModel.collapsedText || []) {
+        const item = statsEl(doc, "span", { class: "bob-day-strip-summary-item" });
+        if (part.kind === "bool") {
+          dayStripAppend(item, statsEl(doc, "strong", { class: "bob-day-strip-summary-value" }, part.label + " " + part.display));
+        } else {
+          dayStripAppend(item, statsEl(doc, "strong", { class: "bob-day-strip-summary-value" }, part.display));
+          dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-summary-label" }, " " + part.label.toLowerCase()));
+        }
+        dayStripAppend(summary, item);
+        if (part !== (safeModel.collapsedText || []).at(-1)) dayStripAppend(summary, statsEl(doc, "span", { class: "bob-day-strip-summary-separator", "aria-hidden": "true" }, " · "));
+      }
+      dayStripAppend(el, summary);
+    } else {
+      const tiles = statsEl(doc, "span", { class: "bob-day-strip-tiles" });
+      for (const tile of safeModel.tiles || []) dayStripAppend(tiles, dayStripRenderTile(doc, tile, safeModel, safeHandlers));
+      dayStripAppend(el, tiles);
+      dayStripAppend(el, dayStripRenderMix(doc, safeModel, safeHandlers));
+    }
+    dayStripAppend(el, dayStripRenderMeta(doc, safeModel, safeHandlers));
+    return el;
+  } catch (error) {
+    // A failed paint must not escape into Obsidian's render lifecycle.
+    return el;
+  }
+}
 // ---- src/240-plugin-freshness-status.js ----
 class BobLedgerToolsFreshnessStatusMixin {
   // --- Task freshness: status bar -----------------------------------------
@@ -51875,6 +52497,7 @@ module.exports.helpers = {
   statsAlignPriorPoints,
   statsResponsiveLabelDensity,
   statsChartDateLabel,
+  statsChartDailyPoints,
   statsChartParts,
   statsChartTooltip,
   STATS_PANEL_KEEP_REFERENCE,
@@ -51893,6 +52516,12 @@ module.exports.helpers = {
   statsPanelFormatMinutes,
   statsPanelHomeRows,
   statsPanelHomeAreaRows,
+  DAY_STRIP_METRIC_IDS,
+  dayStripDateParts,
+  dayStripShiftDay,
+  dayStripDateWords,
+  dayStripModel,
+  paintDayStrip,
   statsPanelSelectedHomePoint,
   statsPanelHomeSpan,
   statsPanelHomeSessions,

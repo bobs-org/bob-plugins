@@ -42,3 +42,10 @@ The preview script embeds the built `main.js`, `styles.css`, and these fixtures 
 self-contained HTML file. It discovers an installed headless Chromium and keeps its
 screenshots and `matrix-report.md` under the chosen output directory. The preview is
 dev-only and is not included in `npm test` or `npm run validate`.
+
+`day-strip-fixtures.cjs` exports synthetic presentation reports for the Day strip:
+today in progress, a past day, no Pomodoros, all-unlinked time, not-tracked and missing
+points, seven areas, a redefined `worked`, long labels, a week-grouped daily series, a
+canonical-shaped default `4w` report, and an explicit eight-day `-g day` report. These
+reports exist only to exercise the view and are not captured vault data or tests of
+`bob stats` calculations.

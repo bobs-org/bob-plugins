@@ -18737,6 +18737,24 @@ class BobLedgerToolsPlugin extends Plugin {
         fetch: (options) => this.apiStatsFetch(options),
         bobPath: () => this.apiStatsBobPath(),
       }),
+      // Themes namespace v1: cached history, sync hue/history/
+      // near-duplicate mirrors, journal writers. Unavailable on mobile.
+      // Additive: api stays v3.
+      themes: Object.freeze({
+        version: 1,
+        available: () => this.apiThemesAvailable(),
+        fetch: () => this.apiThemesFetch(),
+        snapshot: () => this.apiThemesSnapshot(),
+        hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
+        componentsOf: (name) => pomodoroThemeComponentsOf(name),
+        historyRows: (options) => this.pomodoroThemeHistoryRows(options),
+        similarTo: (name) => this.pomodoroThemeSimilarTo(name),
+        hide: (name) => this.apiThemesHide(name),
+        unhide: (name) => this.apiThemesUnhide(name),
+        color: (name, hue) => this.apiThemesColor(name, hue),
+        rename: (from, to, options) => this.apiThemesRename(from, to, options),
+        onChange: (callback) => this.onThemesChange(callback),
+      }),
       // Work badge tones (workBadges namespace v2 adds the magenta exact-cap
       // tone): shared count-to-limit colors for TODAY, PENDING, NEXT, and READY.
       // Additive: top-level api stays v3. Every member is synchronous
@@ -18962,6 +18980,13 @@ class BobLedgerToolsPlugin extends Plugin {
           vault.on(event, (file) => this.refreshTodayCacheForVaultEvent(file)),
         );
       }
+      for (const event of ["create", "modify", "delete", "rename"]) {
+        this.registerEvent(
+          vault.on(event, (file, oldPath) =>
+            this.refreshPomodoroThemesForVaultEvent(event, file, oldPath),
+          ),
+        );
+      }
       for (const event of ["create", "delete", "rename"]) {
         this.registerEvent(
           vault.on(event, (file, oldPath) =>
@@ -19103,6 +19128,10 @@ class BobLedgerToolsPlugin extends Plugin {
       this.refreshDailyScrollCaptureTarget();
       this.captureActiveDailyLocation();
       this.refreshTodayCacheFromDaily();
+      try {
+        void this.refreshPomodoroThemesJournal("startup");
+      } catch (error) {}
+      this.schedulePomodoroThemesFetch("startup");
       // Obsidian replays vault create for every existing file before layout-ready, so relation listeners must register after it, and the scan covers the files that exist at startup.
       this.setupRelationIndex();
       this.startRelationIndexScan();
@@ -28542,6 +28571,40 @@ class BobLedgerToolsStatsPanelsMixin {
     return Math.max(300, width);
   }
 
+  // Bar hue for one Themes-panel row: the theme's hue (the fetched
+  // `bob themes` report wins inside `pomodoroThemeHueFor`, else the
+  // local hash/area/journal mirror). Exempt themes and the "other"
+  // bucket render gray. When theme-json adds a stats hue map beside
+  // homes, prefer it here before the api lookup. Never throws.
+  statsPanelThemeBarHue(key) {
+    try {
+      const slots = Array.isArray(
+        typeof POMODORO_THEMES_HUE_SLOTS !== "undefined"
+          ? POMODORO_THEMES_HUE_SLOTS
+          : null,
+      )
+        ? POMODORO_THEMES_HUE_SLOTS
+        : ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
+      if (String(key || "").toLowerCase() === "other") {
+        return "gray";
+      }
+      const resolved =
+        typeof this.pomodoroThemeHueFor === "function"
+          ? this.pomodoroThemeHueFor(key)
+          : null;
+      const hue = resolved && resolved.hue ? resolved.hue : null;
+      if (!hue || !slots.includes(hue)) {
+        return "gray";
+      }
+      if (resolved.hue_source === "exempt") {
+        return "gray";
+      }
+      return hue;
+    } catch (error) {
+      return "gray";
+    }
+  }
+
   // --- Pomodoro: Areas & projects, with Themes one click away -----------
   statsPanelPomodoro(doc, view, report, metric, section) {
     const viewModel = this.statsPanelHomeToggle(doc, view, report, metric);
@@ -28563,7 +28626,7 @@ class BobLedgerToolsStatsPanelsMixin {
     for (const row of model.rows) {
       const item = statsEl(doc, "li", { class: "bob-stats-panel-bar-row" });
       const track = statsEl(doc, "span", { class: "bob-stats-panel-bar-track bob-stats-panel-bar-thin", "aria-hidden": "true" });
-      const fill = statsEl(doc, "span", { class: "bob-stats-panel-bar-fill bob-stats-svg-hue-" + statsChartMetricColor(metric), "aria-hidden": "true" });
+      const fill = statsEl(doc, "span", { class: "bob-stats-panel-bar-fill bob-stats-theme-bar-" + this.statsPanelThemeBarHue(row.key), "aria-hidden": "true" });
       try {
         fill.setAttribute("style", "width: " + (max > 0 && statsFinite(row.value) ? Math.max(4, Math.round((row.value / max) * 100)) : 0) + "%");
       } catch (error) {
@@ -40594,6 +40657,2082 @@ class BobLedgerToolsPomodoroHomeChipsReadingMixin {
     }
   }
 }
+// ---- src/279-plugin-pomodoro-theme-mirrors.js ----
+// --- Pomodoro themes: pure JS mirror of bob-cli POM1 ------------------
+// Pure mirror of bob-cli `src/native/pomodoro_themes/` (journal fold
+// PT4, hue rule PT5, rank PT7 groups B/D) plus the PT7 near-duplicate
+// rule and pill models. The desktop data path lives in
+// 279-plugin-pomodoro-themes.js; this file never spawns bob and never
+// touches the vault, so it also runs on mobile. Vectors in
+// `scripts/fixtures/pomodoro_themes/vectors.json` are copied byte-for-byte
+// from bob-cli; the Rust suite there is the source of truth.
+
+const POMODORO_THEMES_SCHEMA_VERSION = 1;
+const POMODORO_THEMES_FETCH_DEBOUNCE_MS = 3000;
+const POMODORO_THEMES_JOURNAL_DIR = ".bob/themes";
+const POMODORO_THEMES_HUE_SLOTS = [
+  "blue",
+  "orange",
+  "aqua",
+  "yellow",
+  "magenta",
+  "green",
+  "violet",
+  "red",
+];
+const POMODORO_THEMES_VIA = "bob-ledger-tools";
+
+// ASCII-only lowercase, mirroring Rust's `to_ascii_lowercase` in
+// `selector_slug`. Unicode case folding would rank non-ASCII names
+// differently from bob.
+function pomodoroThemeAsciiLower(value) {
+  return String(value || "").replace(/[A-Z]/g, (letter) =>
+    letter.toLowerCase(),
+  );
+}
+
+// Mirror of `plan_budget::normalize_component`: whitespace collapsed,
+// lowercased. The theme key.
+function pomodoroThemeNormalizeKey(value) {
+  return normalizePlanComponent(value);
+}
+
+// Mirror of `plan_budget::split_components`: one `+`-separated component
+// per theme; empty parts are dropped.
+function pomodoroThemeSplitComponents(name) {
+  return splitPlanComponents(name);
+}
+
+// Mirror of `capture_language::selector_slug`: whitespace runs become one
+// `-`, ASCII-lowercased.
+function pomodoroThemeSelectorSlug(text) {
+  const words = String(text || "")
+    .split(/\s+/)
+    .filter((word) => word.length > 0);
+  return pomodoroThemeAsciiLower(words.join("-"));
+}
+
+// Every `+`-separated component with its display spelling, key, and byte
+// offsets into the name. Quotes and `+` separators are excluded, matching
+// the `capture-parse` ThemeRef contract.
+function pomodoroThemeComponentsWithOffsets(name) {
+  const text = String(name || "");
+  const out = [];
+  let index = 0;
+  for (const part of text.split("+")) {
+    const leading = part.match(/^[ \t]*/)[0].length;
+    const trailing = part.match(/[ \t]*$/)[0].length;
+    const start = index + leading;
+    const end = index + part.length - trailing;
+    if (end > start) {
+      const raw = text.slice(start, end);
+      out.push({ raw, key: pomodoroThemeNormalizeKey(raw), start, end });
+    }
+    index += part.length + 1;
+  }
+  return out;
+}
+
+// Display spelling plus key per component, without offsets.
+function pomodoroThemeComponentsOf(name) {
+  return pomodoroThemeComponentsWithOffsets(name).map((component) => ({
+    raw: component.raw,
+    key: component.key,
+  }));
+}
+
+// Mirror of `pomodoro_homes::fallback_hue`: FNV-1a over the lowercased
+// key bytes, mod 8. Reuses the home-chip hash so both mirrors agree.
+function pomodoroThemeFallbackHue(key) {
+  return POMODORO_HOME_SLOT_ORDER[
+    pomodoroHomeFnv1a(key) % POMODORO_HOME_SLOT_ORDER.length
+  ];
+}
+
+// Mirror of `pomodoro_themes::resolve_hue` (PT5, area_hues = area): a
+// journal pin wins, then a normalized `plan.exempt` entry is muted, then
+// a top-level area stem wears that area's resolved hue, else the name
+// hash. `options` takes `{ pin, exempt, areas }` where `exempt` is an
+// array of keys and `areas` maps key to hue slot.
+function pomodoroThemeResolveHue(key, options = {}) {
+  const opts = options && typeof options === "object" ? options : {};
+  const pin =
+    typeof opts.pin === "string" && POMODORO_THEMES_HUE_SLOTS.includes(opts.pin)
+      ? opts.pin
+      : null;
+  if (pin) {
+    return { hue: pin, hue_source: "pin" };
+  }
+  const exempt = Array.isArray(opts.exempt) ? opts.exempt : [];
+  if (exempt.includes(key)) {
+    return { hue: null, hue_source: "exempt" };
+  }
+  const areas =
+    opts.areas && typeof opts.areas === "object" && !Array.isArray(opts.areas)
+      ? opts.areas
+      : {};
+  const areaHue = areas[key];
+  if (
+    typeof areaHue === "string" &&
+    POMODORO_THEMES_HUE_SLOTS.includes(areaHue)
+  ) {
+    return { hue: areaHue, hue_source: "area" };
+  }
+  return { hue: pomodoroThemeFallbackHue(key), hue_source: "hash" };
+}
+
+// Mirror of Rust's journal `parse_event`: one `.bob/themes/*.jsonl`
+// line. Returns null for malformed lines (the caller counts a bounded
+// warning). `path`/`line` ride along for the fold sort.
+function pomodoroThemeParseJournalLine(text, path, lineNumber) {
+  try {
+    const value = JSON.parse(String(text || ""));
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+    if (value.v !== 1) {
+      return null;
+    }
+    const tsRaw = typeof value.ts === "string" ? value.ts : "";
+    const tsMs = Date.parse(tsRaw);
+    if (!tsRaw || !Number.isFinite(tsMs)) {
+      return null;
+    }
+    const host =
+      typeof value.host === "string" && value.host ? value.host : "";
+    if (!host) {
+      return null;
+    }
+    const kind = value.kind;
+    const keyOf = (field) => {
+      const raw = value[field];
+      if (typeof raw !== "string" || !raw.trim()) {
+        return null;
+      }
+      return pomodoroThemeNormalizeKey(raw);
+    };
+    const nameOf = (field) =>
+      typeof value[field] === "string" ? value[field] : "";
+    let payload = null;
+    if (kind === "theme.hide") {
+      const key = keyOf("key");
+      if (!key) {
+        return null;
+      }
+      payload = { kind, key, name: nameOf("name") };
+    } else if (kind === "theme.unhide") {
+      const key = keyOf("key");
+      if (!key) {
+        return null;
+      }
+      payload = { kind, key, name: nameOf("name") };
+    } else if (kind === "theme.color") {
+      const key = keyOf("key");
+      if (!key || !Object.prototype.hasOwnProperty.call(value, "hue")) {
+        return null;
+      }
+      const hue =
+        value.hue === null
+          ? null
+          : typeof value.hue === "string" &&
+              POMODORO_THEMES_HUE_SLOTS.includes(
+                value.hue.trim().toLowerCase(),
+              )
+            ? value.hue.trim().toLowerCase()
+            : undefined;
+      if (hue === undefined) {
+        return null;
+      }
+      payload = { kind, key, name: nameOf("name"), hue };
+    } else if (kind === "theme.rename") {
+      const from = keyOf("from");
+      const to = keyOf("to");
+      if (!from || !to) {
+        return null;
+      }
+      payload = {
+        kind,
+        from,
+        to,
+        from_name: nameOf("from_name"),
+        to_name: nameOf("to_name"),
+      };
+    } else {
+      return null;
+    }
+    return {
+      tsMs,
+      tsRaw,
+      host,
+      path: typeof path === "string" ? path : "",
+      line: Number.isInteger(lineNumber) ? lineNumber : 0,
+      ...payload,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+// Mirror of Rust's journal `fold_events`: sort by (ts instant, host,
+// path, line), last writer wins per key for hidden and pin. A rename
+// moves the source key's explicit state to the target unless the target
+// already has explicit state of its own; later events on the old key
+// apply to the old key.
+function pomodoroThemeFoldEvents(events) {
+  const ordered = (Array.isArray(events) ? events : []).slice();
+  ordered.sort((left, right) => {
+    if (left.tsMs !== right.tsMs) {
+      return left.tsMs - right.tsMs;
+    }
+    if (left.host !== right.host) {
+      return left.host < right.host ? -1 : 1;
+    }
+    if (left.path !== right.path) {
+      return left.path < right.path ? -1 : 1;
+    }
+    return (left.line || 0) - (right.line || 0);
+  });
+  const byKey = {};
+  for (const event of ordered) {
+    if (!event || typeof event.kind !== "string") {
+      continue;
+    }
+    if (event.kind === "theme.hide") {
+      const pref = byKey[event.key] || { hidden: false, pin: null };
+      pref.hidden = true;
+      byKey[event.key] = pref;
+    } else if (event.kind === "theme.unhide") {
+      const pref = byKey[event.key] || { hidden: false, pin: null };
+      pref.hidden = false;
+      byKey[event.key] = pref;
+    } else if (event.kind === "theme.color") {
+      const pref = byKey[event.key] || { hidden: false, pin: null };
+      pref.pin = event.hue;
+      byKey[event.key] = pref;
+    } else if (event.kind === "theme.rename") {
+      if (event.from === event.to) {
+        continue;
+      }
+      const source = byKey[event.from];
+      const targetHasState = Object.prototype.hasOwnProperty.call(
+        byKey,
+        event.to,
+      );
+      if (source && !targetHasState) {
+        byKey[event.to] = source;
+        delete byKey[event.from];
+      }
+    }
+  }
+  return { byKey };
+}
+
+// Levenshtein distance capped at 2: anything above 1 is just "far".
+function pomodoroThemeLevenshteinCapped(left, right) {
+  const a = String(left || "");
+  const b = String(right || "");
+  if (a === b) {
+    return 0;
+  }
+  if (Math.abs(a.length - b.length) > 1) {
+    return 2;
+  }
+  let prev = [];
+  for (let j = 0; j <= b.length; j += 1) {
+    prev.push(j);
+  }
+  for (let i = 1; i <= a.length; i += 1) {
+    let curr = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const value = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      curr.push(value);
+      if (value < rowMin) {
+        rowMin = value;
+      }
+    }
+    if (rowMin > 1) {
+      return 2;
+    }
+    prev = curr;
+  }
+  return prev[b.length] > 1 ? 2 : prev[b.length];
+}
+
+function pomodoroThemeStripPunctuation(key) {
+  return String(key || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+// PT7 near-duplicate heads-up (ADJ-8): at most 2 visible known names,
+// most recent first. A name qualifies when its key equals the query
+// modulo space, hyphen, and punctuation, is its plural or singular
+// (`s`, `es`), or is within Levenshtein distance 1 when both keys have
+// at least 5 characters. Needs a query key of at least 3 characters.
+function pomodoroThemeSimilarKeys(queryKey, themes) {
+  const query = String(queryKey || "");
+  if (query.length < 3) {
+    return [];
+  }
+  const strippedQuery = pomodoroThemeStripPunctuation(query);
+  const matches = [];
+  for (const theme of Array.isArray(themes) ? themes : []) {
+    if (!theme || typeof theme.key !== "string") {
+      continue;
+    }
+    const key = theme.key;
+    if (!key || key === query) {
+      continue;
+    }
+    let qualifies = false;
+    if (
+      strippedQuery &&
+      pomodoroThemeStripPunctuation(key) === strippedQuery
+    ) {
+      qualifies = true;
+    }
+    if (
+      !qualifies &&
+      (key === `${query}s` ||
+        key === `${query}es` ||
+        query === `${key}s` ||
+        query === `${key}es`)
+    ) {
+      qualifies = true;
+    }
+    if (
+      !qualifies &&
+      query.length >= 5 &&
+      key.length >= 5 &&
+      pomodoroThemeLevenshteinCapped(query, key) <= 1
+    ) {
+      qualifies = true;
+    }
+    if (qualifies) {
+      matches.push(theme);
+    }
+  }
+  matches.sort((left, right) => {
+    const leftDate = typeof left.last_used === "string" ? left.last_used : "";
+    const rightDate = typeof right.last_used === "string" ? right.last_used : "";
+    if (rightDate !== leftDate) {
+      return rightDate < leftDate ? -1 : 1;
+    }
+    return String(left.key || "") < String(right.key || "") ? -1 : 1;
+  });
+  return matches.slice(0, 2).map((theme) => theme.key);
+}
+
+// Mirror of `pomodoro_themes::rank_history` (PT7 groups B exact/prefix
+// then D substring). Hidden filtering and today-row exclusions are the
+// caller's job. `themes` entries carry `{ key, name, last_used,
+// days_used }`; `exclusions` is an array or Set of keys.
+function pomodoroThemeRankHistory(themes, query, exclusions) {
+  const list = Array.isArray(themes) ? themes : [];
+  const excluded = new Set(
+    exclusions instanceof Set
+      ? [...exclusions]
+      : Array.isArray(exclusions)
+        ? exclusions
+        : [],
+  );
+  const compareRecent = (left, right) => {
+    const leftDate = typeof left.last_used === "string" ? left.last_used : "";
+    const rightDate =
+      typeof right.last_used === "string" ? right.last_used : "";
+    if (rightDate !== leftDate) {
+      return rightDate < leftDate ? -1 : 1;
+    }
+    const days = (Number(right.days_used) || 0) - (Number(left.days_used) || 0);
+    if (days !== 0) {
+      return days;
+    }
+    const leftName = String(left.name || "");
+    const rightName = String(right.name || "");
+    if (leftName !== rightName) {
+      return leftName < rightName ? -1 : 1;
+    }
+    const leftKey = String(left.key || "");
+    const rightKey = String(right.key || "");
+    if (leftKey !== rightKey) {
+      return leftKey < rightKey ? -1 : 1;
+    }
+    return 0;
+  };
+  const trimmed = String(query || "").trim();
+  if (!trimmed) {
+    return list
+      .filter((theme) => theme && !excluded.has(theme.key))
+      .sort(compareRecent);
+  }
+  const querySlug = pomodoroThemeSelectorSlug(trimmed);
+  const queryKey = pomodoroThemeNormalizeKey(trimmed);
+  const groupB = [];
+  const groupD = [];
+  for (const theme of list) {
+    if (!theme || excluded.has(theme.key)) {
+      continue;
+    }
+    const slug = pomodoroThemeSelectorSlug(theme.name);
+    const key = String(theme.key || "");
+    const exact = slug === querySlug || key === queryKey;
+    const prefix =
+      !exact &&
+      ((querySlug && slug.startsWith(querySlug)) ||
+        (queryKey && key.startsWith(queryKey)));
+    if (exact || prefix) {
+      groupB.push({ exact, theme });
+      continue;
+    }
+    const substring =
+      (querySlug && slug.includes(querySlug)) ||
+      (queryKey && key.includes(queryKey));
+    if (substring) {
+      groupD.push(theme);
+    }
+  }
+  groupB.sort((left, right) => {
+    if (right.exact !== left.exact) {
+      return right.exact ? 1 : -1;
+    }
+    return compareRecent(left.theme, right.theme);
+  });
+  groupD.sort(compareRecent);
+  return [...groupB.map((entry) => entry.theme), ...groupD];
+}
+
+// Display pill models for one Pomodoro name: each component gets its
+// own pill and the `+` stays neutral. `hueFor` maps a key to
+// `{ hue, hue_source }` (or null); without it every pill is neutral.
+function pomodoroThemePillModels(name, hueFor) {
+  const resolve = typeof hueFor === "function" ? hueFor : () => null;
+  const pills = [];
+  for (const component of pomodoroThemeComponentsWithOffsets(name)) {
+    let hue = null;
+    let hueSource = null;
+    try {
+      const resolved = resolve(component.key, component.raw);
+      if (resolved && typeof resolved === "object") {
+        hue = resolved.hue || null;
+        hueSource = resolved.hue_source || null;
+      }
+    } catch (error) {
+      hue = null;
+      hueSource = null;
+    }
+    pills.push({
+      text: component.raw,
+      key: component.key,
+      start: component.start,
+      end: component.end,
+      hue:
+        typeof hue === "string" &&
+        POMODORO_THEMES_HUE_SLOTS.includes(hue)
+          ? hue
+          : null,
+      hueSource,
+      muted: hueSource === "exempt",
+    });
+  }
+  return pills;
+}
+
+// Defensive decode of `bob themes list -a -f json`: accept schema 1
+// reports, reject everything else with a named error. Never throws.
+function pomodoroThemesDecodeReport(stdout, stderr) {
+  let body = null;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "bad-json",
+      message: "bob themes returned output that is not JSON.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob themes returned an unexpected JSON shape.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (body.schema_version !== POMODORO_THEMES_SCHEMA_VERSION) {
+    return {
+      ok: false,
+      code: "schema-mismatch",
+      message: `bob themes returned schema ${String(body.schema_version)}, this block reads schema ${POMODORO_THEMES_SCHEMA_VERSION}.`,
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (!Array.isArray(body.themes)) {
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob themes returned a report without themes.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  const sanitizeTheme = (entry) => {
+    if (!entry || typeof entry !== "object") {
+      return null;
+    }
+    const key =
+      typeof entry.key === "string" && entry.key ? entry.key : null;
+    const name =
+      typeof entry.name === "string" && entry.name ? entry.name : null;
+    if (!key || !name) {
+      return null;
+    }
+    const hue =
+      typeof entry.hue === "string" &&
+      POMODORO_THEMES_HUE_SLOTS.includes(entry.hue)
+        ? entry.hue
+        : null;
+    const hueSource =
+      typeof entry.hue_source === "string" && entry.hue_source
+        ? entry.hue_source
+        : "hash";
+    return {
+      key,
+      name,
+      hue,
+      hue_source: hueSource,
+      pinned: entry.pinned === true,
+      hidden: entry.hidden === true,
+      exempt: entry.exempt === true,
+      first_used: typeof entry.first_used === "string" ? entry.first_used : "",
+      last_used: typeof entry.last_used === "string" ? entry.last_used : "",
+      days_used: Number.isFinite(Number(entry.days_used))
+        ? Number(entry.days_used)
+        : 0,
+      entries: Number.isFinite(Number(entry.entries))
+        ? Number(entry.entries)
+        : 0,
+      today:
+        entry.today === "open" || entry.today === "closed"
+          ? entry.today
+          : null,
+    };
+  };
+  return {
+    ok: true,
+    report: {
+      schema_version: POMODORO_THEMES_SCHEMA_VERSION,
+      today: typeof body.today === "string" ? body.today : "",
+      window_days: Number.isFinite(Number(body.window_days))
+        ? Number(body.window_days)
+        : 90,
+      counts:
+        body.counts && typeof body.counts === "object" ? body.counts : {},
+      themes: body.themes.map(sanitizeTheme).filter(Boolean),
+      hints: Array.isArray(body.hints) ? body.hints : [],
+      renamed_reappeared: Array.isArray(body.renamed_reappeared)
+        ? body.renamed_reappeared
+        : [],
+      warnings: Array.isArray(body.warnings) ? body.warnings : [],
+    },
+  };
+}
+
+function pomodoroThemesEmptyReport() {
+  return {
+    schema_version: POMODORO_THEMES_SCHEMA_VERSION,
+    today: "",
+    window_days: 90,
+    counts: {},
+    themes: [],
+    hints: [],
+    renamed_reappeared: [],
+    warnings: [],
+  };
+}
+
+// Decode one writer call (`hide`, `unhide`, `color`, `rename`): the
+// `{ ok, ... }` shape, with `{ ok: false, code }` on refusal even at a
+// nonzero exit. A non-JSON reply means the installed bob predates the
+// writers; callers report "Update bob to hide themes".
+function pomodoroThemesDecodeWrite(stdout, stderr) {
+  let body = null;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "unsupported",
+      message: "Update bob to hide themes.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob themes returned an unexpected JSON shape.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (body.ok === true) {
+    return { ok: true, report: body };
+  }
+  return {
+    ok: false,
+    code:
+      typeof body.code === "string" && body.code ? body.code : "bob-error",
+    message:
+      typeof body.message === "string" && body.message
+        ? body.message
+        : "bob themes reported an error.",
+    detail: statsFirstLine(stderr),
+  };
+}
+
+// ---- src/279-plugin-pomodoro-themes.js ----
+// --- Pomodoro themes: api.themes v1 data path -------------------------
+// Desktop fetch (`bob themes list -a -f json`, stale-while-revalidate,
+// single flight), the journal writers (hide/unhide/color/rename), and
+// the `BobLedgerToolsPomodoroThemesMixin` behind `api.themes`. Pure
+// mirrors live in 279-plugin-pomodoro-theme-mirrors.js; this file only
+// moves JSON. bob-cli owns every hue, ranking, and history value.
+
+class BobLedgerToolsPomodoroThemesMixin {
+  // History and writes need the desktop app, where bob can spawn. On
+  // mobile the namespace stays readable: colors (hash, area, and
+  // journal pins) still render through the vault journal fold.
+  pomodoroThemesIsDesktop() {
+    try {
+      if (
+        typeof Platform !== "undefined" &&
+        Platform &&
+        Platform.isDesktopApp === true
+      ) {
+        return true;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  apiThemesAvailable() {
+    try {
+      if (!this.pomodoroThemesIsDesktop()) {
+        return { available: false, reason: "mobile" };
+      }
+      return { available: true, reason: "" };
+    } catch (error) {
+      return { available: false, reason: "unknown" };
+    }
+  }
+
+  themesCacheStore() {
+    if (!(this.pomodoroThemesCache instanceof Object)) {
+      this.pomodoroThemesCache = null;
+    }
+    return this.pomodoroThemesCache;
+  }
+
+  apiThemesSnapshot() {
+    try {
+      const cached = this.themesCacheStore();
+      if (cached && cached.report) {
+        return cached.report;
+      }
+      return pomodoroThemesEmptyReport();
+    } catch (error) {
+      return pomodoroThemesEmptyReport();
+    }
+  }
+
+  themesNotifyChanged(reason) {
+    try {
+      this.pomodoroThemesGeneration = (this.pomodoroThemesGeneration || 0) + 1;
+      const listeners = this.pomodoroThemesListeners;
+      if (listeners instanceof Set) {
+        for (const listener of [...listeners]) {
+          try {
+            listener(this.apiThemesSnapshot(), reason);
+          } catch (error) {
+            // One bad listener never breaks the fan-out.
+          }
+        }
+      }
+    } catch (error) {
+      // Notification is best-effort.
+    }
+    try {
+      this.refreshPomodoroThemeChips();
+    } catch (error) {
+      // Chips refresh is best-effort.
+    }
+    try {
+      this.schedulePomodoroThemesPlanRefresh(reason);
+    } catch (error) {
+      // Plan refresh is best-effort.
+    }
+  }
+
+  // Subscribe to theme catalog changes; returns an unsubscribe
+  // function. The callback receives `(report, reason)`.
+  onThemesChange(callback) {
+    try {
+      if (typeof callback !== "function") {
+        return () => {};
+      }
+      if (!(this.pomodoroThemesListeners instanceof Set)) {
+        this.pomodoroThemesListeners = new Set();
+      }
+      this.pomodoroThemesListeners.add(callback);
+      return () => {
+        try {
+          this.pomodoroThemesListeners.delete(callback);
+        } catch (error) {
+          // Unsubscribe is best-effort.
+        }
+      };
+    } catch (error) {
+      return () => {};
+    }
+  }
+
+  themesSpawnFetch(options = {}) {
+    try {
+      if (!this.pomodoroThemesIsDesktop()) {
+        return Promise.resolve({
+          ok: false,
+          code: "unavailable",
+          message: "Theme history needs the desktop app.",
+          detail: "",
+          tried: [],
+        });
+      }
+      return bobSpawnJson(
+        ["themes", "list", "-a", "-f", "json"],
+        pomodoroThemesDecodeReport,
+        {
+          ...options,
+          commandLabel: "bob themes",
+          resolveBobPath: () =>
+            typeof this.apiStatsBobPath === "function"
+              ? this.apiStatsBobPath()
+              : { path: "bob", source: "path" },
+          getVaultPath: () => this.statsVaultBasePath(),
+          timeout: BOB_SPAWN_TIMEOUT_MS,
+          maxBuffer: BOB_SPAWN_MAX_BUFFER,
+          firstLine: statsFirstLine,
+        },
+      );
+    } catch (error) {
+      return Promise.resolve({
+        ok: false,
+        code: "failed",
+        message:
+          error && error.message ? String(error.message) : "bob themes failed.",
+        detail: "",
+      });
+    }
+  }
+
+  // Fetch the cached `bob themes list -a -f json` report. Resolves
+  // `{ report, stale, error }`: a cached report returns immediately as
+  // stale while one background revalidation refreshes it; a miss spawns
+  // bob. At most one spawn is in flight; concurrent callers share the
+  // flight. Never rejects.
+  apiThemesFetch() {
+    try {
+      if (!this.pomodoroThemesIsDesktop()) {
+        return Promise.resolve({
+          report: pomodoroThemesEmptyReport(),
+          stale: false,
+          error: {
+            ok: false,
+            code: "unavailable",
+            message: "Theme history needs the desktop app.",
+            detail: "",
+          },
+        });
+      }
+      const cached = this.themesCacheStore();
+      if (this.pomodoroThemesFlight) {
+        return this.pomodoroThemesFlight;
+      }
+      const run = async (hadCached) => {
+        try {
+          const result = await this.themesSpawnFetch();
+          if (result && result.ok) {
+            this.pomodoroThemesCache = {
+              report: result.report,
+              fetchedAt: Date.now(),
+            };
+            if (hadCached) {
+              this.themesNotifyChanged("fetch");
+            }
+            return { report: result.report, stale: false, error: null };
+          }
+          if (hadCached && cached && cached.report) {
+            return { report: cached.report, stale: true, error: result };
+          }
+          return { report: pomodoroThemesEmptyReport(), stale: false, error: result };
+        } catch (error) {
+          const failure = {
+            ok: false,
+            code: "failed",
+            message:
+              error && error.message
+                ? String(error.message)
+                : "bob themes failed.",
+            detail: "",
+          };
+          if (hadCached && cached && cached.report) {
+            return { report: cached.report, stale: true, error: failure };
+          }
+          return { report: pomodoroThemesEmptyReport(), stale: false, error: failure };
+        }
+      };
+      const flight = run(Boolean(cached && cached.report)).finally(() => {
+        if (this.pomodoroThemesFlight === flight) {
+          this.pomodoroThemesFlight = null;
+        }
+      });
+      this.pomodoroThemesFlight = flight;
+      if (cached && cached.report) {
+        return Promise.resolve({ report: cached.report, stale: true, error: null });
+      }
+      return flight;
+    } catch (error) {
+      return Promise.resolve({
+        report: pomodoroThemesEmptyReport(),
+        stale: false,
+        error: {
+          ok: false,
+          code: "failed",
+          message: "bob themes failed.",
+          detail: "",
+        },
+      });
+    }
+  }
+
+  schedulePomodoroThemesFetch(reason) {
+    void reason;
+    try {
+      if (
+        this.pomodoroThemesFetchTimer !== null &&
+        this.pomodoroThemesFetchTimer !== undefined
+      ) {
+        return;
+      }
+      const schedule =
+        typeof window !== "undefined" && typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      this.pomodoroThemesFetchTimer = schedule(() => {
+        this.pomodoroThemesFetchTimer = null;
+        try {
+          void this.apiThemesFetch();
+        } catch (error) {
+          // Fetch is best-effort.
+        }
+      }, POMODORO_THEMES_FETCH_DEBOUNCE_MS);
+    } catch (error) {
+      // Scheduling is best-effort.
+    }
+  }
+
+  schedulePomodoroThemesPlanRefresh(reason) {
+    void reason;
+    try {
+      if (typeof this.rerenderPlanBlocks === "function") {
+        this.rerenderPlanBlocks();
+      }
+    } catch (error) {
+      // Plan refresh is best-effort.
+    }
+  }
+
+  // Normalized `plan.exempt` keys (GTD by default). Never throws.
+  pomodoroThemesExemptKeys() {
+    try {
+      const loaded = loadPlanCaps();
+      const caps = loaded && loaded.caps ? loaded.caps : null;
+      const exempt =
+        caps && Array.isArray(caps.exempt) && caps.exempt.length > 0
+          ? caps.exempt
+          : ["GTD"];
+      return exempt.map((value) => pomodoroThemeNormalizeKey(value));
+    } catch (error) {
+      return ["gtd"];
+    }
+  }
+
+  // Top-level area stems (an area whose parent is `[[area]]`) to their
+  // resolved hues: a frontmatter `color:` slot, else the stem hash. This
+  // is the JS half of the PT5 area rule; the Rust half owns the report
+  // hues on desktop. Rebuilt at most once per 60 s.
+  pomodoroThemesAreasMap() {
+    try {
+      const nowMs = Date.now();
+      const cached = this.pomodoroThemesAreasCache;
+      if (
+        cached &&
+        cached.map &&
+        Number.isFinite(cached.checkedAt) &&
+        nowMs - cached.checkedAt < 60 * 1000
+      ) {
+        return cached.map;
+      }
+      const map = {};
+      try {
+        const app = this.app || {};
+        const vault = app.vault;
+        const metadataCache = app.metadataCache;
+        const files =
+          vault && typeof vault.getMarkdownFiles === "function"
+            ? vault.getMarkdownFiles()
+            : [];
+        for (const file of Array.isArray(files) ? files : []) {
+          try {
+            const path = file && typeof file.path === "string" ? file.path : "";
+            if (!path || path.includes("/")) {
+              continue;
+            }
+            const frontmatter =
+              metadataCache &&
+              typeof metadataCache.getCache === "function"
+                ? metadataCache.getCache(path) &&
+                  metadataCache.getCache(path).frontmatter
+                : null;
+            if (!frontmatter || typeof frontmatter !== "object") {
+              continue;
+            }
+            if (pomodoroHomeType(frontmatter) !== "area") {
+              continue;
+            }
+            if (pomodoroHomeParentTarget(frontmatter.parent) !== "area") {
+              continue;
+            }
+            const stem = pomodoroHomeStem(path);
+            const key = pomodoroThemeNormalizeKey(stem);
+            if (!key || Object.prototype.hasOwnProperty.call(map, key)) {
+              continue;
+            }
+            const configured =
+              typeof frontmatter.color === "string"
+                ? frontmatter.color.trim().toLowerCase()
+                : "";
+            map[key] = POMODORO_HOME_SLOT_ORDER.includes(configured)
+              ? configured
+              : pomodoroThemeFallbackHue(key);
+          } catch (error) {
+            continue;
+          }
+        }
+      } catch (error) {
+        // A vault scan failure keeps the previous map.
+        if (cached && cached.map) {
+          return cached.map;
+        }
+      }
+      this.pomodoroThemesAreasCache = { map, checkedAt: nowMs };
+      return map;
+    } catch (error) {
+      return {};
+    }
+  }
+
+  // Folded journal prefs (`{ key: { hidden, pin } }`), from the last
+  // vault read. Never throws.
+  pomodoroThemesJournalPrefs() {
+    try {
+      const folded = this.pomodoroThemesJournalFold;
+      if (folded && folded.byKey && typeof folded.byKey === "object") {
+        return folded.byKey;
+      }
+      return {};
+    } catch (error) {
+      return {};
+    }
+  }
+
+  // Re-read `.bob/themes/*.jsonl` through the vault adapter (works on
+  // mobile), refold, and notify. Never throws.
+  async refreshPomodoroThemesJournal(reason) {
+    void reason;
+    try {
+      const app = this.app || {};
+      const adapter =
+        app.vault && app.vault.adapter ? app.vault.adapter : null;
+      if (!adapter || typeof adapter.list !== "function") {
+        return this.pomodoroThemesJournalPrefs();
+      }
+      let listed = null;
+      try {
+        listed = await adapter.list(POMODORO_THEMES_JOURNAL_DIR);
+      } catch (error) {
+        listed = null;
+      }
+      const files =
+        listed && Array.isArray(listed.files) ? listed.files : [];
+      const events = [];
+      let malformed = 0;
+      const warnings = [];
+      for (const name of files) {
+        try {
+          if (typeof name !== "string" || !name.endsWith(".jsonl")) {
+            continue;
+          }
+          const base = name.split("/").pop();
+          let text = null;
+          try {
+            text = await adapter.read(
+              `${POMODORO_THEMES_JOURNAL_DIR}/${base}`,
+            );
+          } catch (error) {
+            continue;
+          }
+          const lines = String(text === null ? "" : text).split("\n");
+          lines.forEach((raw, index) => {
+            try {
+              if (!raw || !raw.trim()) {
+                return;
+              }
+              const parsed = pomodoroThemeParseJournalLine(
+                raw,
+                base,
+                index + 1,
+              );
+              if (!parsed) {
+                malformed += 1;
+                if (warnings.length < 8) {
+                  warnings.push(`skipping malformed theme journal line ${base}:${index + 1}`);
+                }
+                return;
+              }
+              events.push(parsed);
+            } catch (error) {
+              malformed += 1;
+            }
+          });
+        } catch (error) {
+          continue;
+        }
+      }
+      if (malformed > 8) {
+        warnings.push(`skipped ${malformed} malformed theme journal lines`);
+      }
+      this.pomodoroThemesJournalFold = pomodoroThemeFoldEvents(events);
+      this.pomodoroThemesJournalWarnings = warnings;
+      this.pomodoroThemesAreasCache = null;
+      this.themesNotifyChanged("journal");
+      return this.pomodoroThemesJournalPrefs();
+    } catch (error) {
+      return this.pomodoroThemesJournalPrefs();
+    }
+  }
+
+  schedulePomodoroThemesJournalRefresh(reason) {
+    void reason;
+    try {
+      if (
+        this.pomodoroThemesJournalTimer !== null &&
+        this.pomodoroThemesJournalTimer !== undefined
+      ) {
+        return;
+      }
+      const schedule =
+        typeof window !== "undefined" && typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      this.pomodoroThemesJournalTimer = schedule(() => {
+        this.pomodoroThemesJournalTimer = null;
+        try {
+          void this.refreshPomodoroThemesJournal("vault");
+        } catch (error) {
+          // Refresh is best-effort.
+        }
+      }, POMODORO_THEMES_FETCH_DEBOUNCE_MS);
+    } catch (error) {
+      // Scheduling is best-effort.
+    }
+  }
+
+  refreshPomodoroThemesForVaultEvent(event, file, oldPath) {
+    try {
+      const paths = [];
+      if (file && typeof file.path === "string" && file.path) {
+        paths.push(file.path);
+      }
+      if (typeof oldPath === "string" && oldPath) {
+        paths.push(oldPath);
+      }
+      const touched = paths.some((path) =>
+        String(path || "").startsWith(`${POMODORO_THEMES_JOURNAL_DIR}/`),
+      );
+      if (!touched) {
+        return false;
+      }
+      void event;
+      this.schedulePomodoroThemesJournalRefresh("vault");
+      this.schedulePomodoroThemesFetch("vault");
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Synchronous hue lookup for one theme key: the fetched report wins
+  // (bob owns area resolution on desktop); otherwise the local fold
+  // (pins), exempt list, and area map decide, with the name hash as the
+  // fallback. Never throws; returns `{ hue, hue_source }` with a null
+  // hue for exempt themes.
+  pomodoroThemeHueFor(key, name) {
+    try {
+      const normalized = pomodoroThemeNormalizeKey(key);
+      if (!normalized) {
+        return { hue: null, hue_source: "hash" };
+      }
+      const report = this.apiThemesSnapshot();
+      const entry = (report.themes || []).find(
+        (theme) => theme && theme.key === normalized,
+      );
+      if (entry) {
+        return {
+          hue: entry.hue,
+          hue_source: entry.hue_source || "hash",
+        };
+      }
+      const prefs = this.pomodoroThemesJournalPrefs();
+      const pref = prefs[normalized] || { hidden: false, pin: null };
+      return pomodoroThemeResolveHue(normalized, {
+        pin: pref.pin,
+        exempt: this.pomodoroThemesExemptKeys(),
+        areas: this.pomodoroThemesAreasMap(),
+      });
+    } catch (error) {
+      return { hue: null, hue_source: "hash" };
+    }
+  }
+
+  // Synchronous hidden lookup: the fetched report wins, else the
+  // journal fold. Never throws.
+  pomodoroThemeHiddenFor(key) {
+    try {
+      const normalized = pomodoroThemeNormalizeKey(key);
+      if (!normalized) {
+        return false;
+      }
+      const report = this.apiThemesSnapshot();
+      const entry = (report.themes || []).find(
+        (theme) => theme && theme.key === normalized,
+      );
+      if (entry) {
+        return entry.hidden === true;
+      }
+      const prefs = this.pomodoroThemesJournalPrefs();
+      return Boolean(prefs[normalized] && prefs[normalized].hidden);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Synchronous history rows for pickers: visible catalog themes ranked
+  // per PT7 group B (exact/prefix) then D (substring), with today's
+  // components excluded by the caller. Options: `{ query, limit,
+  // exclusions }`. Never throws.
+  pomodoroThemeHistoryRows(options = {}) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      const query = typeof opts.query === "string" ? opts.query : "";
+      const limit = Number.isInteger(opts.limit) ? opts.limit : 12;
+      const exclusions =
+        opts.exclusions instanceof Set
+          ? opts.exclusions
+          : new Set(Array.isArray(opts.exclusions) ? opts.exclusions : []);
+      const report = this.apiThemesSnapshot();
+      const visible = (report.themes || []).filter(
+        (theme) => theme && theme.hidden !== true,
+      );
+      const ranked = pomodoroThemeRankHistory(visible, query, exclusions);
+      const capped =
+        Number.isFinite(limit) && limit >= 0 ? ranked.slice(0, limit) : ranked;
+      return capped.map((theme) => ({
+        key: theme.key,
+        name: theme.name,
+        last_used: theme.last_used,
+        days_used: theme.days_used,
+        hue: theme.hue,
+        hue_source: theme.hue_source,
+        today: theme.today,
+        themes: pomodoroThemePillModels(theme.name, (key) =>
+          this.pomodoroThemeHueFor(key),
+        ),
+      }));
+    } catch (error) {
+      return [];
+    }
+  }
+
+  // Synchronous near-duplicate heads-up for a create row. Never throws.
+  pomodoroThemeSimilarTo(name) {
+    try {
+      const queryKey = pomodoroThemeNormalizeKey(name);
+      if (queryKey.length < 3) {
+        return [];
+      }
+      const report = this.apiThemesSnapshot();
+      const keys = pomodoroThemeSimilarKeys(queryKey, report.themes || []);
+      const byKey = new Map(
+        (report.themes || [])
+          .filter((theme) => theme && typeof theme.key === "string")
+          .map((theme) => [theme.key, theme]),
+      );
+      return keys
+        .map((key) => byKey.get(key))
+        .filter(Boolean)
+        .map((theme) => theme.name);
+    } catch (error) {
+      return [];
+    }
+  }
+
+  themesWriteSpawn(args) {
+    try {
+      if (!this.pomodoroThemesIsDesktop()) {
+        return Promise.resolve({
+          ok: false,
+          code: "unavailable",
+          message: "Theme writes need the desktop app.",
+          detail: "",
+        });
+      }
+      return bobSpawnJson(
+        [...args, "--via", POMODORO_THEMES_VIA, "-f", "json"],
+        pomodoroThemesDecodeWrite,
+        {
+          commandLabel: "bob themes",
+          resolveBobPath: () =>
+            typeof this.apiStatsBobPath === "function"
+              ? this.apiStatsBobPath()
+              : { path: "bob", source: "path" },
+          getVaultPath: () => this.statsVaultBasePath(),
+          timeout: BOB_SPAWN_TIMEOUT_MS,
+          maxBuffer: BOB_SPAWN_MAX_BUFFER,
+          firstLine: statsFirstLine,
+        },
+      );
+    } catch (error) {
+      return Promise.resolve({
+        ok: false,
+        code: "failed",
+        message:
+          error && error.message ? String(error.message) : "bob themes failed.",
+        detail: "",
+      });
+    }
+  }
+
+  async apiThemesWriteAftermath(result) {
+    try {
+      if (result && result.ok) {
+        try {
+          await this.refreshPomodoroThemesJournal("write");
+        } catch (error) {
+          // Journal refresh is best-effort.
+        }
+        try {
+          await this.apiThemesFetch();
+        } catch (error) {
+          // Fetch refresh is best-effort.
+        }
+        this.themesNotifyChanged("write");
+      }
+    } catch (error) {
+      // Aftermath is best-effort.
+    }
+    return result;
+  }
+
+  // Hide a theme from Recent rows (PT9). Resolves
+  // `{ ok, code?, message? }` and never rejects.
+  async apiThemesHide(name) {
+    try {
+      const display = String(name || "").trim();
+      if (!display) {
+        return { ok: false, code: "invalid_name", message: "Name a theme to hide." };
+      }
+      const result = await this.themesWriteSpawn(["themes", "hide", display]);
+      return this.apiThemesWriteAftermath(result);
+    } catch (error) {
+      return { ok: false, code: "failed", message: "bob themes hide failed." };
+    }
+  }
+
+  // Unhide a theme. Resolves `{ ok, code?, message? }`; never rejects.
+  async apiThemesUnhide(name) {
+    try {
+      const display = String(name || "").trim();
+      if (!display) {
+        return { ok: false, code: "invalid_name", message: "Name a theme to unhide." };
+      }
+      const result = await this.themesWriteSpawn(["themes", "unhide", display]);
+      return this.apiThemesWriteAftermath(result);
+    } catch (error) {
+      return { ok: false, code: "failed", message: "bob themes unhide failed." };
+    }
+  }
+
+  // Pin a theme hue (`hue` is a slot name, or null/`auto` to unpin).
+  // Resolves `{ ok, code?, message? }`; never rejects.
+  async apiThemesColor(name, hue) {
+    try {
+      const display = String(name || "").trim();
+      if (!display) {
+        return { ok: false, code: "invalid_name", message: "Name a theme to color." };
+      }
+      const slot =
+        hue === null || hue === undefined || String(hue).toLowerCase() === "auto"
+          ? "auto"
+          : String(hue).trim().toLowerCase();
+      if (slot !== "auto" && !POMODORO_THEMES_HUE_SLOTS.includes(slot)) {
+        return { ok: false, code: "invalid_hue", message: `Unknown hue ${String(hue)}.` };
+      }
+      const result = await this.themesWriteSpawn(["themes", "color", display, slot]);
+      return this.apiThemesWriteAftermath(result);
+    } catch (error) {
+      return { ok: false, code: "failed", message: "bob themes color failed." };
+    }
+  }
+
+  // Rename a theme (`options`: `{ merge?, dryRun? }`). Resolves the
+  // writer result; never rejects.
+  async apiThemesRename(from, to, options = {}) {
+    try {
+      const source = String(from || "").trim();
+      const target = String(to || "").trim();
+      if (!source || !target) {
+        return { ok: false, code: "invalid_name", message: "Rename needs two names." };
+      }
+      const opts = options && typeof options === "object" ? options : {};
+      const args = ["themes", "rename", source, target];
+      if (opts.dryRun === true) {
+        args.push("--dry-run");
+      }
+      if (opts.merge === true) {
+        args.push("--merge");
+      }
+      const result = await this.themesWriteSpawn(args);
+      if (!opts.dryRun) {
+        return this.apiThemesWriteAftermath(result);
+      }
+      return result;
+    } catch (error) {
+      return { ok: false, code: "failed", message: "bob themes rename failed." };
+    }
+  }
+}
+// ---- src/279-plugin-pomodoro-theme-chips.js ----
+// --- Pomodoro theme pills: Live Preview --------------------------------
+// Decoration.mark per theme component of the name tail on column-0
+// `## Pomodoros` entries of canonical daily notes. The pure hue lookup
+// is in 279-plugin-pomodoro-theme-mirrors.js; this mixin renders the
+// read-time result and never edits the daily note. PT6 typing rule: a
+// name the catalog does not know stays neutral on the cursor line.
+
+let pomodoroThemeChipsRefreshEffect = null;
+function ensurePomodoroThemeChipsRefresh() {
+  if (pomodoroThemeChipsRefreshEffect) {
+    return pomodoroThemeChipsRefreshEffect;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      pomodoroThemeChipsRefreshEffect = StateEffect.define();
+    }
+  } catch (error) {
+    pomodoroThemeChipsRefreshEffect = null;
+  }
+  return pomodoroThemeChipsRefreshEffect;
+}
+
+// Absolute offsets of the name tail within one ledger line: entry
+// match, leading whitespace, the `(time)` or `(…)` placeholder range,
+// then the whitespace before `—`.
+function pomodoroThemeNameOffsetInLine(line) {
+  try {
+    const text = String(line || "");
+    const match = PLAN_ENTRY_RE.exec(text);
+    if (!match) {
+      return null;
+    }
+    const afterBracket = text.slice(match[0].length);
+    if (!/^\s/.test(afterBracket)) {
+      return null;
+    }
+    const bodyStart = match[0].length + (afterBracket.length - afterBracket.trimStart().length);
+    const body = text.slice(bodyStart);
+    const leading = planLeadingRange(body);
+    if (!leading || leading.length === null) {
+      return null;
+    }
+    const remaining = body.slice(leading.length);
+    const gap = remaining.match(/^[ \t]*/)[0].length;
+    const dashAt = bodyStart + leading.length + gap;
+    if (text.slice(dashAt, dashAt + 1) !== "—") {
+      return null;
+    }
+    const nameStart = dashAt + 1 + text.slice(dashAt + 1).match(/^[ \t]*/)[0].length;
+    return { nameStart, nameEnd: text.length };
+  } catch (error) {
+    return null;
+  }
+}
+
+class BobLedgerToolsPomodoroThemeChipsMixin {
+  setupPomodoroThemeChips() {
+    try {
+      if (typeof this.pomodoroThemeColorsEnabled !== "boolean") {
+        this.pomodoroThemeColorsEnabled = true;
+      }
+      this.setPomodoroThemeChipBodyClass();
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-pomodoro-theme-colors",
+            name: "Toggle Pomodoro theme colors",
+            callback: () => this.togglePomodoroThemeColors(),
+          });
+        }
+      } catch (error) {
+        // The command is best-effort on older hosts.
+      }
+      try {
+        const extension = this.createPomodoroThemeChipExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview is best-effort.
+      }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor(
+            (el, ctx) => this.renderPomodoroThemePillsIn(el, ctx),
+            50,
+          );
+        }
+      } catch (error) {
+        // Reading view is best-effort.
+      }
+      try {
+        const cache = this.app && this.app.metadataCache;
+        if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function") {
+          this.registerEvent(
+            cache.on("changed", () => this.schedulePomodoroThemeChipRefresh()),
+          );
+        }
+      } catch (error) {
+        // Cache invalidation is best-effort.
+      }
+    } catch (error) {
+      // Theme setup never throws.
+    }
+  }
+
+  setPomodoroThemeChipBodyClass() {
+    try {
+      const body = typeof document !== "undefined" && document ? document.body : null;
+      const classes = body && body.classList;
+      if (!classes) {
+        return false;
+      }
+      if (this.pomodoroThemeColorsEnabled) {
+        classes.add("bob-pomo-theme-colors");
+      } else {
+        classes.remove("bob-pomo-theme-colors");
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  togglePomodoroThemeColors() {
+    try {
+      this.pomodoroThemeColorsEnabled = !this.pomodoroThemeColorsEnabled;
+      this.setPomodoroThemeChipBodyClass();
+      this.refreshPomodoroThemeChips();
+      try {
+        new Notice(
+          this.pomodoroThemeColorsEnabled
+            ? "Pomodoro theme colors on"
+            : "Pomodoro theme colors off",
+        );
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return this.pomodoroThemeColorsEnabled;
+    } catch (error) {
+      return Boolean(this.pomodoroThemeColorsEnabled);
+    }
+  }
+
+  pomodoroThemeChipDailyPath(path) {
+    try {
+      return typeof path === "string" && PLAN_DAILY_PATH_RE.test(path);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  pomodoroThemeChipAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Keys the fetched catalog knows. When no report is cached (mobile
+  // before any fetch), every key counts as known so pills still tint.
+  pomodoroThemeKnownKeys() {
+    try {
+      const report = this.apiThemesSnapshot();
+      const themes = (report && report.themes) || [];
+      if (themes.length === 0) {
+        return null;
+      }
+      return new Set(
+        themes.filter((theme) => theme && theme.key).map((theme) => theme.key),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  pomodoroThemeTooltip(key, name) {
+    try {
+      const resolved = this.pomodoroThemeHueFor(key, name);
+      const hue = resolved && resolved.hue ? resolved.hue : "muted";
+      const report = this.apiThemesSnapshot();
+      const entry = ((report && report.themes) || []).find(
+        (theme) => theme && theme.key === key,
+      );
+      const days =
+        entry && Number.isFinite(Number(entry.days_used))
+          ? ` · ${entry.days_used} days`
+          : "";
+      return `${name} · ${hue}${days}`;
+    } catch (error) {
+      return String(name || key || "");
+    }
+  }
+
+  createPomodoroThemeChipExtension() {
+    try {
+      if (!this.pomodoroThemeChipAvailable()) {
+        return null;
+      }
+      if (
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        !Prec ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const ThemeChipView = class {
+        constructor(view) {
+          this.decorations = plugin.buildPomodoroThemeDecorations(view);
+        }
+
+        update(update) {
+          if (plugin.pomodoroThemeShouldRebuild(update)) {
+            this.decorations = plugin.buildPomodoroThemeDecorations(update.view);
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(ThemeChipView, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  pomodoroThemeShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") {
+        return false;
+      }
+      if (update.docChanged || update.viewportChanged) {
+        return true;
+      }
+      const refresh = ensurePomodoroThemeChipsRefresh();
+      for (const transaction of update.transactions || []) {
+        const effects = transaction && transaction.effects;
+        for (const effect of Array.isArray(effects) ? effects : effects ? [effects] : []) {
+          if (
+            effect === refresh ||
+            (refresh && effect && typeof effect.is === "function" && effect.is(refresh))
+          ) {
+            return true;
+          }
+        }
+      }
+      try {
+        if (editorLivePreviewField && update.startState && update.state) {
+          if (
+            update.startState.field(editorLivePreviewField) !==
+            update.state.field(editorLivePreviewField)
+          ) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // A missing field does not force a rebuild.
+      }
+      try {
+        if (editorInfoField && update.startState && update.state) {
+          const before = update.startState.field(editorInfoField);
+          const after = update.state.field(editorInfoField);
+          const beforePath = before && before.file ? before.file.path : null;
+          const afterPath = after && after.file ? after.file.path : null;
+          if (beforePath !== afterPath) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // A missing editor-info field does not force a rebuild.
+      }
+      return update.selectionSet === true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildPomodoroThemeDecorations(view) {
+    try {
+      if (!this.pomodoroThemeChipAvailable() || !Decoration || !RangeSetBuilder) {
+        return Decoration ? Decoration.none : null;
+      }
+      try {
+        if (editorLivePreviewField && view && view.state) {
+          if (!view.state.field(editorLivePreviewField)) {
+            return Decoration.none;
+          }
+        }
+      } catch (error) {
+        return Decoration.none;
+      }
+      const info = view && view.state ? view.state.field(editorInfoField) : null;
+      const dailyPath = info && info.file && info.file.path;
+      if (!this.pomodoroThemeChipDailyPath(dailyPath)) {
+        return Decoration.none;
+      }
+      const source = view.state.doc.toString();
+      const lines = source.split("\n");
+      const section = planSectionRange(lines);
+      if (!section) {
+        return Decoration.none;
+      }
+      const fenced = planFencedLines(lines, section.start, section.end);
+      let cursorLine = -1;
+      try {
+        const head = view.state.selection && view.state.selection.main
+          ? view.state.selection.main.head
+          : 0;
+        cursorLine = view.state.doc.lineAt(head).number - 1;
+      } catch (error) {
+        cursorLine = -1;
+      }
+      const known = this.pomodoroThemeKnownKeys();
+      // Absolute document offsets per line for decoration ranges.
+      const lineStart = [];
+      let offset = 0;
+      for (const line of lines) {
+        lineStart.push(offset);
+        offset += line.length + 1;
+      }
+      const builder = new RangeSetBuilder();
+      for (let index = section.start; index <= section.end; index += 1) {
+        try {
+          if (fenced.has(index) || /^[ \t]/.test(String(lines[index] || ""))) {
+            continue;
+          }
+          const parsed = planParseEntry(lines[index]);
+          if (!parsed || parsed.state === "cancelled") {
+            continue;
+          }
+          const slot = pomodoroThemeNameOffsetInLine(lines[index]);
+          if (!slot) {
+            continue;
+          }
+          const tail = String(lines[index]).slice(slot.nameStart, slot.nameEnd);
+          if (!tail.trim()) {
+            continue;
+          }
+          const base = lineStart[index] + slot.nameStart;
+          for (const component of pomodoroThemeComponentsWithOffsets(tail)) {
+            const resolved = this.pomodoroThemeHueFor(component.key, component.raw);
+            const onCursor = index === cursorLine;
+            const unknown =
+              known && !known.has(component.key) ? true : false;
+            const neutral = onCursor && unknown;
+            const hue = neutral
+              ? null
+              : resolved && resolved.hue
+                ? resolved.hue
+                : null;
+            const muted =
+              !neutral && resolved && resolved.hue_source === "exempt";
+            const attributes = {
+              "data-theme-key": component.key,
+              title: this.pomodoroThemeTooltip(component.key, component.raw),
+            };
+            if (hue) {
+              attributes["data-theme-hue"] = hue;
+            }
+            builder.add(
+              base + component.start,
+              base + component.end,
+              Decoration.mark({
+                class: `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}${neutral ? " bob-pomo-theme-unknown" : ""}`,
+                attributes,
+              }),
+            );
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      return Decoration ? Decoration.none : null;
+    }
+  }
+
+  refreshPomodoroThemeChipEditors() {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return false;
+      }
+      const refresh = ensurePomodoroThemeChipsRefresh();
+      if (!refresh) {
+        return false;
+      }
+      let refreshed = false;
+      for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+        try {
+          const view = leaf && leaf.view;
+          const path = view && view.file && view.file.path;
+          if (!this.pomodoroThemeChipDailyPath(path)) {
+            continue;
+          }
+          const cm = view && view.editor && view.editor.cm;
+          if (cm && typeof cm.dispatch === "function") {
+            cm.dispatch({ effects: refresh.of(null) });
+            refreshed = true;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return refreshed;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshPomodoroThemeChips() {
+    try {
+      if (typeof this.refreshPomodoroThemeReadingPills === "function") {
+        this.refreshPomodoroThemeReadingPills();
+      }
+      this.refreshPomodoroThemeChipEditors();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  schedulePomodoroThemeChipRefresh() {
+    try {
+      if (this.pomodoroThemeChipRefreshTimer !== null && this.pomodoroThemeChipRefreshTimer !== undefined) {
+        return;
+      }
+      const schedule =
+        typeof window !== "undefined" && typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      this.pomodoroThemeChipRefreshTimer = schedule(() => {
+        this.pomodoroThemeChipRefreshTimer = null;
+        this.refreshPomodoroThemeChips();
+      }, 120);
+    } catch (error) {
+      // A missing timer host simply leaves the current rendering in place.
+    }
+  }
+}
+// ---- src/279-plugin-pomodoro-theme-chips-reading.js ----
+// --- Pomodoro theme pills: Reading view --------------------------------
+// DOM counterpart to the Live Preview marks in
+// 279-plugin-pomodoro-theme-chips.js. It wraps the name-tail components
+// of column-0 `## Pomodoros` entries in pill spans. Refresh re-tints the
+// recorded spans in place, so theme writes never disturb the reading DOM.
+
+class BobLedgerToolsPomodoroThemeChipsReadingMixin {
+  renderPomodoroThemePillsIn(el, ctx) {
+    try {
+      if (!el || !ctx) {
+        return;
+      }
+      const sourcePath = typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      if (!this.pomodoroThemeChipDailyPath(sourcePath)) {
+        return;
+      }
+      if (!this.pomodoroThemeReadingRoots) {
+        this.pomodoroThemeReadingRoots = new Set();
+      }
+      let lists = [];
+      if (typeof el.querySelectorAll === "function") {
+        lists = el.querySelectorAll("ul, ol");
+      }
+      for (const list of lists || []) {
+        try {
+          this.renderPomodoroThemePillsInList(list, sourcePath);
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Reading pills never throw.
+    }
+  }
+
+  // Wrap the trailing `— NAME` of each top-level Pomodoro row. Only
+  // direct text children are touched, so nested Task Link bullets and
+  // code spans keep their rendering.
+  renderPomodoroThemePillsInList(list, sourcePath) {
+    try {
+      if (!list || list.nodeType !== 1) {
+        return;
+      }
+      const tagOf = (node) =>
+        String(node && (node.tagName || node.nodeName) || "").toUpperCase();
+      if (tagOf(list.parentNode) === "LI") {
+        return;
+      }
+      let sibling = list.previousSibling || null;
+      let guard = 0;
+      let sectionRoot = false;
+      while (sibling && guard < 100) {
+        guard += 1;
+        if (sibling.nodeType === 1 && /^H[1-6]$/.test(tagOf(sibling))) {
+          const words = String(sibling.textContent || "").trim().split(/\s+/);
+          sectionRoot = tagOf(sibling) === "H2" && words[0] === "Pomodoros";
+          break;
+        }
+        sibling = sibling.previousSibling || null;
+      }
+      if (!sectionRoot) {
+        return;
+      }
+      for (const row of list.childNodes || []) {
+        try {
+          if (!row || row.nodeType !== 1 || tagOf(row) !== "LI") {
+            continue;
+          }
+          const data = row.dataset || null;
+          if (data && data.bobPomoThemeProcessed === "1") {
+            continue;
+          }
+          if (this.pomodoroThemeWrapReadingRow(row)) {
+            if (data) {
+              data.bobPomoThemeProcessed = "1";
+            } else if (typeof row.setAttribute === "function") {
+              row.setAttribute("data-bob-pomo-theme-processed", "1");
+            }
+            if (typeof MarkdownRenderChild === "function") {
+              try {
+                const child = new MarkdownRenderChild(row);
+                const record = { row, path: sourcePath, pills: [] };
+                try {
+                  const pills = row.querySelectorAll
+                    ? row.querySelectorAll(".bob-pomo-theme")
+                    : [];
+                  record.pills = [...(pills || [])];
+                } catch (error) {
+                  record.pills = [];
+                }
+                this.pomodoroThemeReadingRoots.add(record);
+                child.onunload = () => {
+                  this.pomodoroThemeReadingRoots.delete(record);
+                };
+              } catch (error) {
+                // The registry is best-effort.
+              }
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // List wrapping never throws.
+    }
+  }
+
+  pomodoroThemeWrapReadingRow(row) {
+    try {
+      if (!row || typeof row.childNodes === "undefined") {
+        return false;
+      }
+      const doc = row.ownerDocument || (typeof document !== "undefined" ? document : null);
+      // The name tail is the trailing `— NAME` in a direct text child.
+      // Nested lists hold Task Links and are never touched.
+      const texts = [];
+      for (const child of row.childNodes || []) {
+        if (child && child.nodeType === 3) {
+          texts.push(child);
+        }
+      }
+      let wrapped = false;
+      for (const textNode of texts) {
+        try {
+          const value = typeof textNode.nodeValue === "string" ? textNode.nodeValue : "";
+          const dashAt = value.lastIndexOf("—");
+          if (dashAt === -1) {
+            continue;
+          }
+          const name = value.slice(dashAt + 1).trim();
+          const components = pomodoroThemeComponentsWithOffsets(
+            value.slice(dashAt + 1),
+          );
+          if (components.length === 0 || !name) {
+            continue;
+          }
+          const fragment = doc.createDocumentFragment();
+          fragment.appendChild(doc.createTextNode(value.slice(0, dashAt + 1) + " "));
+          components.forEach((component, index) => {
+            if (index > 0) {
+              fragment.appendChild(doc.createTextNode(" + "));
+            }
+            const pill = this.buildPomodoroThemePillElement(doc, component);
+            if (pill) {
+              fragment.appendChild(pill);
+            } else {
+              fragment.appendChild(doc.createTextNode(component.raw));
+            }
+          });
+          const tail = value.slice(dashAt + 1);
+          const kept = tail.match(/[ \t]*$/)[0];
+          if (kept) {
+            fragment.appendChild(doc.createTextNode(kept));
+          }
+          row.replaceChild(fragment, textNode);
+          wrapped = true;
+        } catch (error) {
+          continue;
+        }
+      }
+      return wrapped;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildPomodoroThemePillElement(doc, component) {
+    try {
+      if (!doc || typeof doc.createElement !== "function" || !component) {
+        return null;
+      }
+      const resolved = this.pomodoroThemeHueFor(component.key, component.raw);
+      const hue = resolved && resolved.hue ? resolved.hue : null;
+      const muted = Boolean(resolved && resolved.hue_source === "exempt");
+      const pill = doc.createElement("span");
+      pill.setAttribute(
+        "class",
+        `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}`,
+      );
+      if (hue) {
+        pill.setAttribute("data-theme-hue", hue);
+      }
+      pill.setAttribute("data-theme-key", component.key);
+      pill.setAttribute(
+        "title",
+        this.pomodoroThemeTooltip(component.key, component.raw),
+      );
+      pill.textContent = component.raw;
+      return pill;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  refreshPomodoroThemeReadingPills() {
+    try {
+      if (!(this.pomodoroThemeReadingRoots instanceof Set)) {
+        return false;
+      }
+      let refreshed = false;
+      for (const record of Array.from(this.pomodoroThemeReadingRoots)) {
+        try {
+          for (const pill of record.pills || []) {
+            try {
+              if (!pill || !pill.isConnected) {
+                continue;
+              }
+              const key = pill.getAttribute
+                ? pill.getAttribute("data-theme-key")
+                : "";
+              const name = pill.textContent || key;
+              const resolved = this.pomodoroThemeHueFor(key, name);
+              const hue = resolved && resolved.hue ? resolved.hue : null;
+              const muted = Boolean(resolved && resolved.hue_source === "exempt");
+              pill.setAttribute(
+                "class",
+                `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}`,
+              );
+              if (hue) {
+                pill.setAttribute("data-theme-hue", hue);
+              } else if (pill.removeAttribute) {
+                pill.removeAttribute("data-theme-hue");
+              }
+              if (typeof pill.setAttribute === "function") {
+                pill.setAttribute(
+                  "title",
+                  this.pomodoroThemeTooltip(key, name),
+                );
+              }
+              refreshed = true;
+            } catch (error) {
+              continue;
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return refreshed;
+    } catch (error) {
+      return false;
+    }
+  }
+}
 // ---- src/275-plugin-today-marks.js ----
 // Today marks in Live Preview (today-mark-v1).
 // The Today cache is the sole membership source. This mixin only
@@ -45234,6 +47373,44 @@ class BobLedgerToolsTodayLocationMixin {
     }
   }
 
+  // Paint the ★ theme line as pills: each component gets its own
+  // tint and the `+` stays neutral. Exempt themes wear the muted pill.
+  // Falls back to the text line when pills cannot render.
+  paintPlanThemePills(container, themePills) {
+    const line = container.createEl("span", { cls: "bob-plan-themes" });
+    line.setAttribute(
+      "aria-label",
+      `Themes: ${themePills.map((pill) => pill.name).join(", ")}`,
+    );
+    line.createEl("span", { cls: "bob-plan-themes-star", text: "★ " });
+    themePills.forEach((pill, pillIndex) => {
+      if (pillIndex > 0) {
+        line.createEl("span", { cls: "bob-plan-themes-sep", text: " · " });
+      }
+      pill.parts.forEach((part, partIndex) => {
+        if (partIndex > 0) {
+          line.createEl("span", { cls: "bob-plan-themes-sep", text: " + " });
+        }
+        const span = line.createEl("span", {
+          cls: `bob-pomo-theme${part.muted ? " bob-pomo-theme-muted" : ""}`,
+          text: part.text,
+        });
+        if (part.hue) {
+          span.setAttribute("data-theme-hue", part.hue);
+        }
+        span.setAttribute("data-theme-key", part.key);
+        try {
+          span.setAttribute(
+            "title",
+            this.pomodoroThemeTooltip(part.key, part.text),
+          );
+        } catch (error) {
+          // Tooltip is best-effort.
+        }
+      });
+    });
+  }
+
   renderPlanBlock(el, ctx) {
     if (!el) {
       return;
@@ -45342,6 +47519,7 @@ class BobLedgerToolsTodayLocationMixin {
           review: planReview,
           nextDashboard,
           pendingDashboard,
+          hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
         });
         const container = el.createDiv({ cls: "bob-plan" });
         container.setAttribute("role", "status");
@@ -45391,7 +47569,16 @@ class BobLedgerToolsTodayLocationMixin {
         } catch (error) {
           // The READY badge degrades to a placeholder; other chips stay.
         }
-        if (model.themesText) {
+        if (Array.isArray(model.themePills) && model.themePills.length > 0) {
+          try {
+            this.paintPlanThemePills(container, model.themePills);
+          } catch (error) {
+            container.createEl("span", {
+              cls: "bob-plan-themes",
+              text: model.themesText,
+            });
+          }
+        } else if (model.themesText) {
           container.createEl("span", {
             cls: "bob-plan-themes",
             text: model.themesText,
@@ -46134,6 +48321,9 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsProgressMarksReadingMixin,
   BobLedgerToolsPomodoroHomeChipsMixin,
   BobLedgerToolsPomodoroHomeChipsReadingMixin,
+  BobLedgerToolsPomodoroThemesMixin,
+  BobLedgerToolsPomodoroThemeChipsMixin,
+  BobLedgerToolsPomodoroThemeChipsReadingMixin,
   BobLedgerToolsDependencyModelMixin,
   BobLedgerToolsRelationIndexMixin,
   BobLedgerToolsRelationModelMixin,
@@ -47896,6 +50086,7 @@ function planBlockModel({
   review,
   nextDashboard,
   pendingDashboard,
+  hueFor,
 }) {
   const effective = effectivePlanCaps(caps);
   const targetPath = planBlockTargetPath(app, sourcePath);
@@ -48043,6 +50234,26 @@ function planBlockModel({
       budget.themeNames.length > 0
         ? `★ ${budget.themeNames.join(" · ")}`
         : "",
+    // Per-component pill models for the ★ theme line. Computed only
+    // when the caller supplies `hueFor` (the plan block paint does);
+    // otherwise the text fallback above carries the names.
+    themePills: (() => {
+      try {
+        if (typeof hueFor !== "function" || budget.themeNames.length === 0) {
+          return [];
+        }
+        const pills = [];
+        for (const themeName of budget.themeNames) {
+          const parts = pomodoroThemePillModels(themeName, hueFor);
+          if (parts.length > 0) {
+            pills.push({ name: themeName, parts });
+          }
+        }
+        return pills;
+      } catch (error) {
+        return [];
+      }
+    })(),
     lints: lintWarnings.map((warning) =>
       warning.line === undefined || warning.line === null
         ? `${warning.message}  ${warning.code}`
@@ -48570,4 +50781,24 @@ module.exports.helpers = {
   pomodoroHomeSessionModel,
   buildPomodoroHomeChipElement,
   ensurePomodoroHomeChipsRefresh,
+  POMODORO_THEMES_SCHEMA_VERSION,
+  POMODORO_THEMES_HUE_SLOTS,
+  pomodoroThemeNormalizeKey,
+  pomodoroThemeSplitComponents,
+  pomodoroThemeSelectorSlug,
+  pomodoroThemeComponentsWithOffsets,
+  pomodoroThemeComponentsOf,
+  pomodoroThemeFallbackHue,
+  pomodoroThemeResolveHue,
+  pomodoroThemeParseJournalLine,
+  pomodoroThemeFoldEvents,
+  pomodoroThemeLevenshteinCapped,
+  pomodoroThemeSimilarKeys,
+  pomodoroThemeRankHistory,
+  pomodoroThemePillModels,
+  pomodoroThemesDecodeReport,
+  pomodoroThemesEmptyReport,
+  pomodoroThemesDecodeWrite,
+  pomodoroThemeNameOffsetInLine,
+  ensurePomodoroThemeChipsRefresh,
 };

@@ -2213,6 +2213,18 @@ body.bob-today-marks-off .bob-today-mark {
 .bob-stats-svg-hue-blue { --bob-stats-tile-hue: var(--bob-stats-blue); }
 .bob-stats-svg-hue-gray { --bob-stats-tile-hue: var(--bob-stats-gray); }
 
+/* Themes-panel bars wear the theme hue (PT6), not the metric color.
+   Exempt themes and the "other" bucket use gray. */
+.bob-stats-theme-bar-blue { --bob-stats-tile-hue: var(--bob-hue-blue); }
+.bob-stats-theme-bar-orange { --bob-stats-tile-hue: var(--bob-hue-orange); }
+.bob-stats-theme-bar-aqua { --bob-stats-tile-hue: var(--bob-hue-aqua); }
+.bob-stats-theme-bar-yellow { --bob-stats-tile-hue: var(--bob-hue-yellow); }
+.bob-stats-theme-bar-magenta { --bob-stats-tile-hue: var(--bob-hue-magenta); }
+.bob-stats-theme-bar-green { --bob-stats-tile-hue: var(--bob-hue-green); }
+.bob-stats-theme-bar-violet { --bob-stats-tile-hue: var(--bob-hue-violet); }
+.bob-stats-theme-bar-red { --bob-stats-tile-hue: var(--bob-hue-red); }
+.bob-stats-theme-bar-gray { --bob-stats-tile-hue: var(--bob-stats-gray); }
+
 .bob-stats-chart-today {
   fill: transparent;
   stroke: var(--bob-stats-tile-hue, var(--text-muted));
@@ -3145,7 +3157,10 @@ body.bob-today-marks-off .bob-today-mark {
   }
 }
 
-/* Fixed R8 area hues shared by ledger chips and the Stats panel. */
+/* Fixed R8 theme hues (PT6): the single source for Pomodoro theme color.
+   Later picker surfaces (block-id-prompt, nav Pomodoro pickers) reuse the
+   `--bob-hue-*` tokens instead of defining their own, so one rule owns
+   every hue. They alias the `--bob-area-*` values below. */
 .theme-light {
   --bob-area-blue: #2a78d6;
   --bob-area-orange: #eb6834;
@@ -3155,6 +3170,14 @@ body.bob-today-marks-off .bob-today-mark {
   --bob-area-green: #008300;
   --bob-area-violet: #6250d6;
   --bob-area-red: #e34948;
+  --bob-hue-blue: var(--bob-area-blue);
+  --bob-hue-orange: var(--bob-area-orange);
+  --bob-hue-aqua: var(--bob-area-aqua);
+  --bob-hue-yellow: var(--bob-area-yellow);
+  --bob-hue-magenta: var(--bob-area-magenta);
+  --bob-hue-green: var(--bob-area-green);
+  --bob-hue-violet: var(--bob-area-violet);
+  --bob-hue-red: var(--bob-area-red);
 }
 
 .theme-dark {
@@ -3166,6 +3189,232 @@ body.bob-today-marks-off .bob-today-mark {
   --bob-area-green: #008300;
   --bob-area-violet: #9085e9;
   --bob-area-red: #e66767;
+  --bob-hue-blue: var(--bob-area-blue);
+  --bob-hue-orange: var(--bob-area-orange);
+  --bob-hue-aqua: var(--bob-area-aqua);
+  --bob-hue-yellow: var(--bob-area-yellow);
+  --bob-hue-magenta: var(--bob-area-magenta);
+  --bob-hue-green: var(--bob-area-green);
+  --bob-hue-violet: var(--bob-area-violet);
+  --bob-hue-red: var(--bob-area-red);
+}
+
+/* Pomodoro theme pills (PT6 visual language): names wear a tint, places
+   wear a dot. A soft tint of the hue behind normal-colored text; the hue
+   is never the text color. Tints apply only under the
+   `.bob-pomo-theme-colors` body gate (Toggle Pomodoro theme colors). */
+.bob-pomo-theme {
+  border-radius: 4px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  padding-inline: 0.3em;
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="blue"] {
+  background-color: color-mix(in srgb, var(--bob-hue-blue) 16%, transparent);
+  color: var(--text-normal);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="orange"] {
+  background-color: color-mix(in srgb, var(--bob-hue-orange) 16%, transparent);
+  color: var(--text-normal);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="aqua"] {
+  background-color: color-mix(in srgb, var(--bob-hue-aqua) 16%, transparent);
+  color: var(--text-normal);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="yellow"] {
+  background-color: color-mix(in srgb, var(--bob-hue-yellow) 16%, transparent);
+  color: var(--text-normal);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="magenta"] {
+  background-color: color-mix(in srgb, var(--bob-hue-magenta) 16%, transparent);
+  color: var(--text-normal);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="green"] {
+  background-color: color-mix(in srgb, var(--bob-hue-green) 16%, transparent);
+  color: var(--text-normal);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="violet"] {
+  background-color: color-mix(in srgb, var(--bob-hue-violet) 16%, transparent);
+  color: var(--text-normal);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"] {
+  background-color: color-mix(in srgb, var(--bob-hue-red) 16%, transparent);
+  color: var(--text-normal);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="blue"],
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="blue"] {
+  background-color: color-mix(in srgb, var(--bob-hue-blue) 24%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="orange"],
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="orange"] {
+  background-color: color-mix(in srgb, var(--bob-hue-orange) 24%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="aqua"],
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="aqua"] {
+  background-color: color-mix(in srgb, var(--bob-hue-aqua) 24%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="yellow"],
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="yellow"] {
+  background-color: color-mix(in srgb, var(--bob-hue-yellow) 24%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="magenta"],
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="magenta"] {
+  background-color: color-mix(in srgb, var(--bob-hue-magenta) 24%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="green"],
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="green"] {
+  background-color: color-mix(in srgb, var(--bob-hue-green) 24%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="violet"],
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="violet"] {
+  background-color: color-mix(in srgb, var(--bob-hue-violet) 24%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"],
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"] {
+  background-color: color-mix(in srgb, var(--bob-hue-red) 24%, transparent);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="blue"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-blue) 24%, transparent);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="orange"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-orange) 24%, transparent);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="aqua"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-aqua) 24%, transparent);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="yellow"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-yellow) 24%, transparent);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="magenta"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-magenta) 24%, transparent);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="green"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-green) 24%, transparent);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="violet"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-violet) 24%, transparent);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-red) 24%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="blue"]:hover,
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="blue"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-blue) 32%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="orange"]:hover,
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="orange"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-orange) 32%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="aqua"]:hover,
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="aqua"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-aqua) 32%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="yellow"]:hover,
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="yellow"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-yellow) 32%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="magenta"]:hover,
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="magenta"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-magenta) 32%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="green"]:hover,
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="green"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-green) 32%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="violet"]:hover,
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="violet"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-violet) 32%, transparent);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hover,
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hover {
+  background-color: color-mix(in srgb, var(--bob-hue-red) 32%, transparent);
+}
+
+/* Muted pill for exempt themes such as GTD: hover background, muted text. */
+.bob-pomo-theme-colors .bob-pomo-theme-muted {
+  background-color: transparent;
+  color: var(--text-muted);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme-muted:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+/* Swatch for dense rows: 8pt rounded square (radius 2) before the name.
+   Homes keep their ● dot, so a theme never looks like a home. */
+.bob-pomo-theme-swatch {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 8pt;
+  height: 8pt;
+  flex: 0 0 8pt;
+  border-radius: 2px;
+  background: var(--text-muted);
+}
+
+.bob-pomo-theme-swatch[data-theme-hue="blue"] {
+  background: var(--bob-hue-blue);
+}
+
+.bob-pomo-theme-swatch[data-theme-hue="orange"] {
+  background: var(--bob-hue-orange);
+}
+
+.bob-pomo-theme-swatch[data-theme-hue="aqua"] {
+  background: var(--bob-hue-aqua);
+}
+
+.bob-pomo-theme-swatch[data-theme-hue="yellow"] {
+  background: var(--bob-hue-yellow);
+}
+
+.bob-pomo-theme-swatch[data-theme-hue="magenta"] {
+  background: var(--bob-hue-magenta);
+}
+
+.bob-pomo-theme-swatch[data-theme-hue="green"] {
+  background: var(--bob-hue-green);
+}
+
+.bob-pomo-theme-swatch[data-theme-hue="violet"] {
+  background: var(--bob-hue-violet);
+}
+
+.bob-pomo-theme-swatch[data-theme-hue="red"] {
+  background: var(--bob-hue-red);
 }
 
 .bob-pomodoro-home-chips .bob-pomodoro-home-chip {

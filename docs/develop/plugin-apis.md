@@ -42,6 +42,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | Namespace | Version | Purpose |
 | --- | ---: | --- |
 | `stats` | 2 | Append validated review events; `host`, `fetch`, and `bobPath` support Stats and consumers. |
+| `themes` | 1 | Share the Pomodoro theme catalog; `hueFor`, `componentsOf`, `historyRows`, and `similarTo` are synchronous, `fetch` and `snapshot` serve the cached `bob themes list` report, `hide`/`unhide`/`color`/`rename` spawn bob with `--via`, and `onChange` subscribes to updates. |
 | `workBadges` | 2 | Return count-to-limit badge tones through `tone` and `todayTone`. |
 | `freshness` | 12 | Read or update freshness, refresh intervals, keep counts, review queue, and unblocked metadata. |
 | `noteReady` | 1 | Read per-note Ready-lane counts and render the crowded-note chip. |
@@ -119,6 +120,27 @@ root API is version 3 or later. They do not place `[fresh::]` themselves.
 `inCrowdedNote(task)`, `groupLabel(task)`, and
 `renderCrowdedChip(host, options?)`. It reads the area/project
 note's Ready lane against the shared cap and is synchronous.
+
+`themes` shares the Pomodoro theme catalog (namespace version 1). Every
+picker uses it; no plugin keeps its own hidden list or history scanner.
+`available()` is false on mobile, where pickers stay today-only but colors
+(hash, area, and journal pins from the vault `.bob/themes/` fold) still
+render. `fetch()` resolves `{ report, stale, error }` with stale-while-
+revalidate single flight over `bob themes list -a -f json`;
+`snapshot()` returns the last report without spawning. `hueFor(key, name)`
+returns `{ hue, hue_source }` (null hue for exempt themes) and never throws.
+`componentsOf(name)` returns `{ raw, key }` rows, `historyRows({ query,
+limit, exclusions })` ranks visible catalog themes per PT7 group B then D,
+and `similarTo(name)` returns up to 2 near-duplicate names. `hide`,
+`unhide`, `color`, and `rename` spawn bob with `--via bob-ledger-tools`,
+then refresh; they resolve `{ ok, code?, message? }` and never reject —
+an older bob without the writers resolves `code: "unsupported"`.
+`onChange(callback)` subscribes to catalog changes and returns an
+unsubscribe function. The `--bob-hue-*` tokens in the ledger stylesheet are
+the single source for theme color; later picker surfaces reuse them. The JS
+mirrors of the hue rule, the journal fold, and the PT7 ranking are pinned by
+`scripts/fixtures/pomodoro_themes/vectors.json`, copied byte-for-byte from
+bob-cli.
 `dashboardCollections` provides `snapshot()` and
 `renderChip(host, options?)` for live PROJECTS/REFERENCES badges.
 

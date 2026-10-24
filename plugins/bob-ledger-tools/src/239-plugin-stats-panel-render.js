@@ -182,6 +182,40 @@ class BobLedgerToolsStatsPanelsMixin {
     return Math.max(300, width);
   }
 
+  // Bar hue for one Themes-panel row: the theme's hue (the fetched
+  // `bob themes` report wins inside `pomodoroThemeHueFor`, else the
+  // local hash/area/journal mirror). Exempt themes and the "other"
+  // bucket render gray. When theme-json adds a stats hue map beside
+  // homes, prefer it here before the api lookup. Never throws.
+  statsPanelThemeBarHue(key) {
+    try {
+      const slots = Array.isArray(
+        typeof POMODORO_THEMES_HUE_SLOTS !== "undefined"
+          ? POMODORO_THEMES_HUE_SLOTS
+          : null,
+      )
+        ? POMODORO_THEMES_HUE_SLOTS
+        : ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
+      if (String(key || "").toLowerCase() === "other") {
+        return "gray";
+      }
+      const resolved =
+        typeof this.pomodoroThemeHueFor === "function"
+          ? this.pomodoroThemeHueFor(key)
+          : null;
+      const hue = resolved && resolved.hue ? resolved.hue : null;
+      if (!hue || !slots.includes(hue)) {
+        return "gray";
+      }
+      if (resolved.hue_source === "exempt") {
+        return "gray";
+      }
+      return hue;
+    } catch (error) {
+      return "gray";
+    }
+  }
+
   // --- Pomodoro: Areas & projects, with Themes one click away -----------
   statsPanelPomodoro(doc, view, report, metric, section) {
     const viewModel = this.statsPanelHomeToggle(doc, view, report, metric);
@@ -203,7 +237,7 @@ class BobLedgerToolsStatsPanelsMixin {
     for (const row of model.rows) {
       const item = statsEl(doc, "li", { class: "bob-stats-panel-bar-row" });
       const track = statsEl(doc, "span", { class: "bob-stats-panel-bar-track bob-stats-panel-bar-thin", "aria-hidden": "true" });
-      const fill = statsEl(doc, "span", { class: "bob-stats-panel-bar-fill bob-stats-svg-hue-" + statsChartMetricColor(metric), "aria-hidden": "true" });
+      const fill = statsEl(doc, "span", { class: "bob-stats-panel-bar-fill bob-stats-theme-bar-" + this.statsPanelThemeBarHue(row.key), "aria-hidden": "true" });
       try {
         fill.setAttribute("style", "width: " + (max > 0 && statsFinite(row.value) ? Math.max(4, Math.round((row.value / max) * 100)) : 0) + "%");
       } catch (error) {

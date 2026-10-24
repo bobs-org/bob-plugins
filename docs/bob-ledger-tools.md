@@ -12,10 +12,10 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.65.0 |
+| Version | 1.66.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Expand Bob daily-note snippets and ledger time ranges, navigate and adjust Pomodoro entries, render the live plan-budget bob-plan block, track task freshness including [unblocked::] TICKLERs, render [priority::] fields as signal-bar priority marks, render created/scheduled/completion/cancelled dates and `[repeat:: …]` rules as compact date-family marks (including date and recurrence marks in full and short Tasks query results), render `#task` tags as a teal hash task-tag mark (hidden in Tasks query results) and `#task #ref` pairs as an open-book ref mark, and render canonical `#task #gtd #pre` / `#task #gtd #post` runs as teal sunrise / flag identity marks across Live Preview, reading view, and Tasks rows. Render Depends-On lines as live dependency chips plus generated BLOCKS rows with live dependents, last-blocker keys, stale-entry styling, and frees-N summaries. Open BLOCKS rows add ＋ / hover × through nav api.blocks when present. Index raw task LINKS rows through api.relationIndex v1, with unsaved editor overlays and label suggestions. Render Task Links under today's open Pomodoros with In Progress half-ring marks and read-time unblocked hand-off glyphs. Fetch `bob stats` JSON with stale-while-revalidate caching and render the responsive Stats page `bob-stats` block with metric-family context, accessible daily drill-down, definition disclosures, tiles, and table. Fetch `bob ref list` JSON with a bounded stale-while-revalidate cache, decode audio paths, and provide pure Reading Board lane, card, Snoozed group, ordering, and validated fence models. Render the read-only `bob-reading-board` code block, a Reading / Next / Ready / Snoozed kanban of the reading queue drawn entirely from `bob ref list` JSON (wake dates and waiting-on reasons from bob, never from vault text), with keyed background refresh errors, repaint-safe navigation, roving keyboard focus, click and modifier routing to Obsidian navigation, the optional Highlights PDF hand-off through nav `openReferencePdf`, and the Open Reading Board command. Derive quiet lowercase Pomodoro home chips from linked task notes in Live Preview and Reading view, with area-hue dots, a tooltip, and a toggle. Show a display-only 🍅 Today mark on open task lines linked under today's open Pomodoros in Live Preview and Reading view, with a session toggle and jumps to the Task Link. Task relation lines are excluded from the plan Task Link count. Render 🪢 LINKS and LINKED FROM rows as live relation chips from that index, with label pills, inverse phrases, stale and broken styling, closed-row collapse, and ＋ / hover × through nav api.relations v1 when present. While the cursor is on a review row, the footer shows the Alt+P roll preview from nav api.quickRoll v1 in its hint slot and full sentence in its tooltip. In source-note Live Preview and Reading view, the freshness mark tooltip adds a `🥀 N keeps logged · last <date> — <reason>` line from the task's Rotten Log; Tasks and Dataview query rows never show it. |
+| Description | Expand Bob daily-note snippets and ledger time ranges, navigate and adjust Pomodoro entries, render the live plan-budget bob-plan block, track task freshness including [unblocked::] TICKLERs, render [priority::] fields as signal-bar priority marks, render created/scheduled/completion/cancelled dates and `[repeat:: …]` rules as compact date-family marks (including date and recurrence marks in full and short Tasks query results), render `#task` tags as a teal hash task-tag mark (hidden in Tasks query results) and `#task #ref` pairs as an open-book ref mark, and render canonical `#task #gtd #pre` / `#task #gtd #post` runs as teal sunrise / flag identity marks across Live Preview, reading view, and Tasks rows. Render Depends-On lines as live dependency chips plus generated BLOCKS rows with live dependents, last-blocker keys, stale-entry styling, and frees-N summaries. Open BLOCKS rows add ＋ / hover × through nav api.blocks when present. Index raw task LINKS rows through api.relationIndex v1, with unsaved editor overlays and label suggestions. Render Task Links under today's open Pomodoros with In Progress half-ring marks and read-time unblocked hand-off glyphs. Fetch `bob stats` JSON with stale-while-revalidate caching and render the responsive Stats page `bob-stats` block with metric-family context, accessible daily drill-down, definition disclosures, tiles, and table. Fetch `bob ref list` JSON with a bounded stale-while-revalidate cache, decode audio paths, and provide pure Reading Board lane, card, Snoozed group, ordering, and validated fence models. Render the read-only `bob-reading-board` code block, a Reading / Next / Ready / Snoozed kanban of the reading queue drawn entirely from `bob ref list` JSON (wake dates and waiting-on reasons from bob, never from vault text), with keyed background refresh errors, repaint-safe navigation, roving keyboard focus, click and modifier routing to Obsidian navigation, the optional Highlights PDF hand-off through nav `openReferencePdf`, and the Open Reading Board command. Derive quiet lowercase Pomodoro home chips from linked task notes in Live Preview and Reading view, with area-hue dots, a tooltip, and a toggle. Show a display-only 🍅 Today mark on open task lines linked under today's open Pomodoros in Live Preview and Reading view, with a session toggle and jumps to the Task Link. Task relation lines are excluded from the plan Task Link count. Render 🪢 LINKS and LINKED FROM rows as live relation chips from that index, with label pills, inverse phrases, stale and broken styling, closed-row collapse, and ＋ / hover × through nav api.relations v1 when present. While the cursor is on a review row, the footer shows the Alt+P roll preview from nav api.quickRoll v1 in its hint slot and full sentence in its tooltip. In source-note Live Preview and Reading view, the freshness mark tooltip adds a `🥀 N keeps logged · last <date> — <reason>` line from the task's Rotten Log; Tasks and Dataview query rows never show it. Share the Pomodoro theme catalog through api.themes v1 and render theme pills with stable hues in Live Preview, Reading view, the plan block, and the Stats Themes panel, with a session toggle. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -30,6 +30,7 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | Open Stats | `open-stats` | — |
 | Open today's daily note | `open-today-daily-note` | — |
 | Toggle Pomodoro home chips | `toggle-pomodoro-home-chips` | — |
+| Toggle Pomodoro theme colors | `toggle-pomodoro-theme-colors` | — |
 | Toggle Task Link In Progress marks | `toggle-progress-marks` | — |
 | Toggle Today marks | `toggle-today-marks` | — |
 | Toggle dependency chips | `toggle-dependency-chips` | — |
@@ -121,9 +122,13 @@ daily `bob-plan` blocks as live section-over-cap counts that agree with their
 Tasks sections (the BLOCKED badge stays informational and neutral with no
 cap), the CROWDED chip, the `bob-ready-notes` ranked-bar block, `## Tasks`
 heading chips, Pomodoro home chips (quiet lowercase chips with area-hue dots
-derived from linked task notes), and the display-only 🍅 Today mark on open
+derived from linked task notes), Pomodoro theme pills (one soft tint per
+`+`-separated component of the ` — NAME` tail, with a muted pill for exempt
+themes such as GTD, a tooltip naming the hue and day count, and a session
+toggle), and the display-only 🍅 Today mark on open
 task lines linked under today's open Pomodoros, with a session toggle and a
-jump to the Task Link.
+jump to the Task Link. A name the catalog does not know stays neutral on the
+cursor line while it is typed.
 
 `DEPENDS ON` lines render as live dependency chips plus generated `BLOCKS` rows
 with live dependents, last-blocker 🔑 badges, stale-entry styling, and `frees
@@ -132,7 +137,9 @@ Depends-On rows only, with a session toggle; `waiting on N` counts open
 prerequisites only. Open BLOCKS rows add ＋ to open the reverse Blocks stage
 and hover × to remove a dependent. The Stats `bob-stats` block renders the
 responsive area and project panel with home and Themes views, bucket and
-session drill-down, and task counts. The read-only `bob-reading-board` block
+session drill-down, and task counts; the Themes view wears each theme's hue
+on its bars, with exempt themes and `other` in gray. The `★` theme line of
+the plan block renders the same pills. The read-only `bob-reading-board` block
 renders a Reading / Next / Ready / Snoozed kanban of the reading queue drawn
 entirely from `bob ref list` JSON — wake dates and waiting-on reasons come from
 `bob`, never from vault text — with the Highlights PDF hand-off and the Open

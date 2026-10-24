@@ -262,6 +262,24 @@ class BobLedgerToolsPlugin extends Plugin {
         fetch: (options) => this.apiStatsFetch(options),
         bobPath: () => this.apiStatsBobPath(),
       }),
+      // Themes namespace v1: cached history, sync hue/history/
+      // near-duplicate mirrors, journal writers. Unavailable on mobile.
+      // Additive: api stays v3.
+      themes: Object.freeze({
+        version: 1,
+        available: () => this.apiThemesAvailable(),
+        fetch: () => this.apiThemesFetch(),
+        snapshot: () => this.apiThemesSnapshot(),
+        hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
+        componentsOf: (name) => pomodoroThemeComponentsOf(name),
+        historyRows: (options) => this.pomodoroThemeHistoryRows(options),
+        similarTo: (name) => this.pomodoroThemeSimilarTo(name),
+        hide: (name) => this.apiThemesHide(name),
+        unhide: (name) => this.apiThemesUnhide(name),
+        color: (name, hue) => this.apiThemesColor(name, hue),
+        rename: (from, to, options) => this.apiThemesRename(from, to, options),
+        onChange: (callback) => this.onThemesChange(callback),
+      }),
       // Work badge tones (workBadges namespace v2 adds the magenta exact-cap
       // tone): shared count-to-limit colors for TODAY, PENDING, NEXT, and READY.
       // Additive: top-level api stays v3. Every member is synchronous
@@ -487,6 +505,13 @@ class BobLedgerToolsPlugin extends Plugin {
           vault.on(event, (file) => this.refreshTodayCacheForVaultEvent(file)),
         );
       }
+      for (const event of ["create", "modify", "delete", "rename"]) {
+        this.registerEvent(
+          vault.on(event, (file, oldPath) =>
+            this.refreshPomodoroThemesForVaultEvent(event, file, oldPath),
+          ),
+        );
+      }
       for (const event of ["create", "delete", "rename"]) {
         this.registerEvent(
           vault.on(event, (file, oldPath) =>
@@ -628,6 +653,10 @@ class BobLedgerToolsPlugin extends Plugin {
       this.refreshDailyScrollCaptureTarget();
       this.captureActiveDailyLocation();
       this.refreshTodayCacheFromDaily();
+      try {
+        void this.refreshPomodoroThemesJournal("startup");
+      } catch (error) {}
+      this.schedulePomodoroThemesFetch("startup");
       // Obsidian replays vault create for every existing file before layout-ready, so relation listeners must register after it, and the scan covers the files that exist at startup.
       this.setupRelationIndex();
       this.startRelationIndexScan();

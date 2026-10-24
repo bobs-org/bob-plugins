@@ -359,6 +359,44 @@ class BobLedgerToolsTodayLocationMixin {
     }
   }
 
+  // Paint the ★ theme line as pills: each component gets its own
+  // tint and the `+` stays neutral. Exempt themes wear the muted pill.
+  // Falls back to the text line when pills cannot render.
+  paintPlanThemePills(container, themePills) {
+    const line = container.createEl("span", { cls: "bob-plan-themes" });
+    line.setAttribute(
+      "aria-label",
+      `Themes: ${themePills.map((pill) => pill.name).join(", ")}`,
+    );
+    line.createEl("span", { cls: "bob-plan-themes-star", text: "★ " });
+    themePills.forEach((pill, pillIndex) => {
+      if (pillIndex > 0) {
+        line.createEl("span", { cls: "bob-plan-themes-sep", text: " · " });
+      }
+      pill.parts.forEach((part, partIndex) => {
+        if (partIndex > 0) {
+          line.createEl("span", { cls: "bob-plan-themes-sep", text: " + " });
+        }
+        const span = line.createEl("span", {
+          cls: `bob-pomo-theme${part.muted ? " bob-pomo-theme-muted" : ""}`,
+          text: part.text,
+        });
+        if (part.hue) {
+          span.setAttribute("data-theme-hue", part.hue);
+        }
+        span.setAttribute("data-theme-key", part.key);
+        try {
+          span.setAttribute(
+            "title",
+            this.pomodoroThemeTooltip(part.key, part.text),
+          );
+        } catch (error) {
+          // Tooltip is best-effort.
+        }
+      });
+    });
+  }
+
   renderPlanBlock(el, ctx) {
     if (!el) {
       return;
@@ -467,6 +505,7 @@ class BobLedgerToolsTodayLocationMixin {
           review: planReview,
           nextDashboard,
           pendingDashboard,
+          hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
         });
         const container = el.createDiv({ cls: "bob-plan" });
         container.setAttribute("role", "status");
@@ -516,7 +555,16 @@ class BobLedgerToolsTodayLocationMixin {
         } catch (error) {
           // The READY badge degrades to a placeholder; other chips stay.
         }
-        if (model.themesText) {
+        if (Array.isArray(model.themePills) && model.themePills.length > 0) {
+          try {
+            this.paintPlanThemePills(container, model.themePills);
+          } catch (error) {
+            container.createEl("span", {
+              cls: "bob-plan-themes",
+              text: model.themesText,
+            });
+          }
+        } else if (model.themesText) {
           container.createEl("span", {
             cls: "bob-plan-themes",
             text: model.themesText,

@@ -806,6 +806,7 @@ function planBlockModel({
   review,
   nextDashboard,
   pendingDashboard,
+  hueFor,
 }) {
   const effective = effectivePlanCaps(caps);
   const targetPath = planBlockTargetPath(app, sourcePath);
@@ -953,6 +954,26 @@ function planBlockModel({
       budget.themeNames.length > 0
         ? `★ ${budget.themeNames.join(" · ")}`
         : "",
+    // Per-component pill models for the ★ theme line. Computed only
+    // when the caller supplies `hueFor` (the plan block paint does);
+    // otherwise the text fallback above carries the names.
+    themePills: (() => {
+      try {
+        if (typeof hueFor !== "function" || budget.themeNames.length === 0) {
+          return [];
+        }
+        const pills = [];
+        for (const themeName of budget.themeNames) {
+          const parts = pomodoroThemePillModels(themeName, hueFor);
+          if (parts.length > 0) {
+            pills.push({ name: themeName, parts });
+          }
+        }
+        return pills;
+      } catch (error) {
+        return [];
+      }
+    })(),
     lints: lintWarnings.map((warning) =>
       warning.line === undefined || warning.line === null
         ? `${warning.message}  ${warning.code}`

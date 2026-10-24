@@ -142,7 +142,8 @@ unsubscribe function. The `--bob-hue-*` tokens in the ledger stylesheet are
 the single source for theme color; later picker surfaces reuse them. The JS
 mirrors of the hue rule, the journal fold, and the PT7 ranking are pinned by
 `scripts/fixtures/pomodoro_themes/vectors.json`, copied byte-for-byte from
-bob-cli.
+bob-cli. See the [Pomodoro themes contract](https://bobs-org.github.io/pomodoro-themes/)
+for the shared catalog, hue, and menu rules.
 `dashboardCollections` provides `snapshot()` and
 `renderChip(host, options?)` for live PROJECTS/REFERENCES badges.
 

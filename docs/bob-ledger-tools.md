@@ -129,6 +129,7 @@ toggle), and the display-only 🍅 Today mark on open
 task lines linked under today's open Pomodoros, with a session toggle and a
 jump to the Task Link. A name the catalog does not know stays neutral on the
 cursor line while it is typed.
+The shared behavior and hue contract is [Pomodoro themes](https://bobs-org.github.io/pomodoro-themes/).
 
 `DEPENDS ON` lines render as live dependency chips plus generated `BLOCKS` rows
 with live dependents, last-blocker 🔑 badges, stale-entry styling, and `frees

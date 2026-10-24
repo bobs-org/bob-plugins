@@ -55,6 +55,7 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Open previous link | `open-prev-link` | — |
 | Open reference PDF in Highlights (or link in new tab) | `open-reference-pdf-in-highlights` | — |
 | Open template note | `open-template-note` | — |
+| Pomodoro themes | `open-pomodoro-themes-manager` | — |
 | Refresh task freshness (confirm it still looks right) | `refresh-task-freshness` | Alt+F |
 | Refresh task freshness and jump to the next due task | `refresh-task-freshness-and-advance` | Ctrl+Alt+F |
 | Rename current file | `rename-current-file` | — |
@@ -149,6 +150,16 @@ destinations or renames when the Ledger Tools `themes` catalog is available.
 Recent rows keep catalog spelling; `+` components show their theme swatches,
 and typed near-duplicates show a `like NAME` hint. `Ctrl+D` hides a Recent
 suggestion and leaves a reversible hidden row; on a Today row it has no effect.
+
+The **Bob: Pomodoro themes** command (no default hotkey) opens the themes
+manager, with Active, Hidden, Possible duplicates, and All views on `Tab`.
+Collision hints sit on top; rows carry today, hidden, pinned, exempt, hue, and
+reappeared badges. `Ctrl+D` hides or restores the selected theme, `Enter`
+offers rename, color, hide, and occurrences, and single keys (`r`/`c`/`h`/`o`
+with an empty filter, `1`–`8`/`a` in the color list) jump straight there.
+Rename previews the one-commit rename before applying; occurrences lists daily
+notes and opens the entry. History and writes need the desktop app, where the
+Ledger Tools `themes` catalog is available.
 
 ## Task properties, dependencies, and moves
 

@@ -33,6 +33,8 @@
   "196-task-link-lane-modal.js",
   "200-filtered-picker-modals.js",
   "201-pomodoro-theme-picker-rows.js",
+  "202-pomodoro-themes-manager.js",
+  "203-pomodoro-themes-manager-actions.js",
   "205-inbox-route-picker-modal.js",
   "206-successor-picker-modal.js",
   "207-image-zoom-modal.js",

@@ -106,6 +106,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
         this.openTaskMoveOrPomodoroBulletPicker(editor, view),
     });
 
+    // No default hotkey: the manager is a browsing surface, not a cursor action.
+    this.addCommand({
+      id: "open-pomodoro-themes-manager",
+      name: "Pomodoro themes",
+      callback: () => this.openPomodoroThemesManager(),
+    });
+
     this.addCommand({
       id: "open-next-link",
       name: "Open next link",

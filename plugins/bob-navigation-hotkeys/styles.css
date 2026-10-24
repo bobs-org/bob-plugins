@@ -379,6 +379,48 @@
   background-color: var(--background-secondary);
 }
 
+/* Pomodoro themes manager rows: hint, theme, action, color, occurrence. */
+.bob-cnp-pomodoro-row.is-hint .bob-cnp-row-title {
+  font-style: italic;
+}
+
+.bob-cnp-pomodoro-row.is-theme.is-hidden-theme .bob-cnp-row-title {
+  opacity: 0.65;
+}
+
+/* Rename modal form and preview. */
+.bob-cnp-rename-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 8px;
+}
+
+.bob-cnp-rename-form .bob-cnp-input {
+  flex: 1 1 auto;
+  min-width: 160px;
+}
+
+.bob-cnp-rename-label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.bob-cnp-rename-merge {
+  flex: 0 0 auto;
+}
+
+.bob-cnp-rename-buttons {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 8px;
+}
+
+.bob-cnp-rename-button {
+  flex: 0 0 auto;
+}
+
 .bob-cnp-row-status.is-status-wip {
   color: var(--color-orange);
   border-color: color-mix(in srgb, var(--color-orange) 45%, transparent);

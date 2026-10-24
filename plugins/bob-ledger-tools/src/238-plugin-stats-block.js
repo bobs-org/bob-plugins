@@ -120,6 +120,13 @@ class BobLedgerToolsStatsBlockMixin {
       // Rollover wiring is best-effort.
     }
     try {
+      if (typeof this.setupDayStripHosts === "function") {
+        this.setupDayStripHosts();
+      }
+    } catch (error) {
+      // Day strip setup is best-effort.
+    }
+    try {
       // The page repaint after a revalidation is a cache subscriber, so
       // every mounted view reading the updated key repaints in place.
       if (typeof this.statsOnCacheUpdate === "function") {
@@ -243,6 +250,13 @@ class BobLedgerToolsStatsBlockMixin {
 
   teardownStatsBlock() {
     try {
+      if (typeof this.teardownDayStripHosts === "function") {
+        this.teardownDayStripHosts();
+      }
+    } catch (error) {
+      // Day strip teardown is best-effort.
+    }
+    try {
       if (this.statsRevalidateTimer !== null && this.statsRevalidateTimer !== undefined) {
         const clear =
           typeof window !== "undefined" && typeof window.clearTimeout === "function"
@@ -321,6 +335,13 @@ class BobLedgerToolsStatsBlockMixin {
           // Generation bump is best-effort.
         }
         this.revalidateStatsBlocks();
+        try {
+          if (typeof this.dayStripHandleRollover === "function") {
+            this.dayStripHandleRollover();
+          }
+        } catch (error) {
+          // Day strip rollover is best-effort.
+        }
       }
     } catch (error) {
       // Rollover is best-effort.
@@ -588,6 +609,20 @@ class BobLedgerToolsStatsBlockMixin {
         const panels = this.statsRenderContextPanels(doc, view, report, focusMetric);
         if (panels) {
           root.appendChild(panels);
+        }
+        // `openStatsForDay` sets a one-shot `revealPanel`: scroll the
+        // context panel into view on this first paint, then consume it.
+        if (state.revealPanel) {
+          state.revealPanel = null;
+          if (panels) {
+            try {
+              if (typeof panels.scrollIntoView === "function") {
+                panels.scrollIntoView({ block: "start" });
+              }
+            } catch (error) {
+              // Scrolling is best-effort.
+            }
+          }
         }
       }
       if (state.table) {

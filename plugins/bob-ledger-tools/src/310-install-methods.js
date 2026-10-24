@@ -33,6 +33,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsChartMixin,
   BobLedgerToolsStatsHomesMixin,
   BobLedgerToolsStatsPanelsMixin,
+  BobLedgerToolsDayStripMixin,
+  BobLedgerToolsDayStripFenceMixin,
   BobLedgerToolsFreshnessStatusMixin,
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,

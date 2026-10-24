@@ -27043,6 +27043,13 @@ class BobLedgerToolsStatsBlockMixin {
       // Rollover wiring is best-effort.
     }
     try {
+      if (typeof this.setupDayStripHosts === "function") {
+        this.setupDayStripHosts();
+      }
+    } catch (error) {
+      // Day strip setup is best-effort.
+    }
+    try {
       // The page repaint after a revalidation is a cache subscriber, so
       // every mounted view reading the updated key repaints in place.
       if (typeof this.statsOnCacheUpdate === "function") {
@@ -27166,6 +27173,13 @@ class BobLedgerToolsStatsBlockMixin {
 
   teardownStatsBlock() {
     try {
+      if (typeof this.teardownDayStripHosts === "function") {
+        this.teardownDayStripHosts();
+      }
+    } catch (error) {
+      // Day strip teardown is best-effort.
+    }
+    try {
       if (this.statsRevalidateTimer !== null && this.statsRevalidateTimer !== undefined) {
         const clear =
           typeof window !== "undefined" && typeof window.clearTimeout === "function"
@@ -27244,6 +27258,13 @@ class BobLedgerToolsStatsBlockMixin {
           // Generation bump is best-effort.
         }
         this.revalidateStatsBlocks();
+        try {
+          if (typeof this.dayStripHandleRollover === "function") {
+            this.dayStripHandleRollover();
+          }
+        } catch (error) {
+          // Day strip rollover is best-effort.
+        }
       }
     } catch (error) {
       // Rollover is best-effort.
@@ -27511,6 +27532,20 @@ class BobLedgerToolsStatsBlockMixin {
         const panels = this.statsRenderContextPanels(doc, view, report, focusMetric);
         if (panels) {
           root.appendChild(panels);
+        }
+        // `openStatsForDay` sets a one-shot `revealPanel`: scroll the
+        // context panel into view on this first paint, then consume it.
+        if (state.revealPanel) {
+          state.revealPanel = null;
+          if (panels) {
+            try {
+              if (typeof panels.scrollIntoView === "function") {
+                panels.scrollIntoView({ block: "start" });
+              }
+            } catch (error) {
+              // Scrolling is best-effort.
+            }
+          }
         }
       }
       if (state.table) {
@@ -31284,6 +31319,1343 @@ function paintDayStrip(el, model, handlers) {
   } catch (error) {
     // A failed paint must not escape into Obsidian's render lifecycle.
     return el;
+  }
+}
+// ---- src/239-plugin-day-strip-hosts.js ----
+// Day strip hosts: day identity, report selection, the strip registry
+// with its visible/dirty/aged refresh policy and rollover, the
+// `bob-day-stats` fence host, and `openStatsForDay`, which opens Stats
+// with the day pinned. The painter (`paintDayStrip`) and the model
+// (`dayStripModel`) own every pixel and value; this file only decides
+// which day, which cache key, and when to re-run `bob stats`.
+const DAY_STRIP_RECHECK_DEBOUNCE_MS = 2000;
+const DAY_STRIP_TODAY_MIN_AGE_MS = 30 * 1000;
+const DAY_STRIP_PAST_MIN_AGE_MS = 10 * 60 * 1000;
+const DAY_STRIP_COLLAPSE_KEY = "bob-day-strip-collapsed";
+
+// Canonical daily-note identity: `YYYY/YYYYMMDD.md` where the year
+// folder equals the stem's year and the stem is a real calendar date.
+// Never the active tab, the file mtime, or `new Date("YYYY-MM-DD")`.
+// Returns `"YYYY-MM-DD"` or null. Never throws.
+function dayStripDayForPath(path) {
+  try {
+    const text = typeof path === "string" ? path : "";
+    if (!text) {
+      return null;
+    }
+    const match = /^(?:(.*)\/)?(\d{4})\/(\d{8})\.md$/.exec(text);
+    if (!match) {
+      return null;
+    }
+    const folderYear = match[2];
+    const stem = match[3];
+    if (stem.slice(0, 4) !== folderYear) {
+      return null;
+    }
+    const day =
+      stem.slice(0, 4) + "-" + stem.slice(4, 6) + "-" + stem.slice(6, 8);
+    return dayStripDateParts(day) ? day : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Local "today" as `YYYY-MM-DD` from local `getFullYear` / `getMonth` /
+// `getDate`, the same way `refreshStatsBlocksForRollover` computes it.
+// Never throws.
+function dayStripLocalToday(now) {
+  try {
+    const value = now instanceof Date ? now : new Date();
+    if (!Number.isFinite(value.getTime())) {
+      return "";
+    }
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const date = String(value.getDate()).padStart(2, "0");
+    return value.getFullYear() + "-" + month + "-" + date;
+  } catch (error) {
+    return "";
+  }
+}
+
+// Parse the optional `bob-day-stats` fence body (`day: YYYY-MM-DD`).
+// Unknown keys are ignored. Accepts a YAML mapping via `parseYaml` when
+// available and falls back to a line scan so plain `day:` bodies keep
+// working. A YAML timestamp may decode to a Date (UTC midnight), which
+// is read back in UTC. Returns `"YYYY-MM-DD"` or null. Never throws.
+function dayStripParseFenceDay(source) {
+  try {
+    if (source instanceof Date) {
+      if (!Number.isFinite(source.getTime())) {
+        return null;
+      }
+      const month = String(source.getUTCMonth() + 1).padStart(2, "0");
+      const date = String(source.getUTCDate()).padStart(2, "0");
+      const asDay = source.getUTCFullYear() + "-" + month + "-" + date;
+      return dayStripDateParts(asDay) ? asDay : null;
+    }
+    const text = typeof source === "string" ? source : "";
+    if (!text.trim()) {
+      return null;
+    }
+    let day = null;
+    try {
+      if (typeof parseYaml === "function") {
+        const parsed = parseYaml(text);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          if (parsed.day !== undefined && parsed.day !== null) {
+            day = parsed.day;
+          } else if (parsed.Day !== undefined && parsed.Day !== null) {
+            day = parsed.Day;
+          }
+        }
+      }
+    } catch (error) {
+      day = null;
+    }
+    if (day === null || day === undefined || day === "") {
+      const match = /(?:^|\n)\s*day\s*:\s*([^\s#]+)/i.exec(text);
+      day = match ? match[1].trim().replace(/^["']|["']$/g, "") : null;
+    }
+    if (day instanceof Date) {
+      if (!Number.isFinite(day.getTime())) {
+        return null;
+      }
+      const month = String(day.getUTCMonth() + 1).padStart(2, "0");
+      const date = String(day.getUTCDate()).padStart(2, "0");
+      const asDay = day.getUTCFullYear() + "-" + month + "-" + date;
+      return dayStripDateParts(asDay) ? asDay : null;
+    }
+    if (typeof day !== "string") {
+      return null;
+    }
+    const cleaned = day.trim().replace(/^["']|["']$/g, "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) {
+      return null;
+    }
+    return dayStripDateParts(cleaned) ? cleaned : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// True when the default report (the Stats page's default arguments) is
+// usable for D: its daily series contains every date D-7..D, and either
+// D < `report.today` or D === `report.today` === local today. A cached
+// report from before local today is never usable for D >=
+// `report.today`, so yesterday's provisional numbers never read "so far"
+// after midnight. Never throws.
+function dayStripDefaultReportCovers(report, day, localToday) {
+  try {
+    if (!report || typeof report !== "object") {
+      return false;
+    }
+    if (!dayStripDateParts(day)) {
+      return false;
+    }
+    const today = typeof localToday === "string" ? localToday : "";
+    const reportToday = typeof report.today === "string" ? report.today : "";
+    if (reportToday && today && reportToday < today && day >= reportToday) {
+      return false;
+    }
+    if (reportToday) {
+      const usable =
+        day < reportToday ||
+        (Boolean(today) && day === reportToday && reportToday === today);
+      if (!usable) {
+        return false;
+      }
+    } else if (today && day > today) {
+      return false;
+    }
+    const wanted = [];
+    for (let back = 7; back >= 0; back -= 1) {
+      wanted.push(dayStripShiftDay(day, -back));
+    }
+    const covered = new Set();
+    const metrics = Array.isArray(report.metrics) ? report.metrics : [];
+    for (const metric of metrics) {
+      let points = null;
+      try {
+        points = statsChartDailyPoints(metric, report);
+      } catch (error) {
+        points = metric && Array.isArray(metric.points) ? metric.points : [];
+      }
+      for (const point of points || []) {
+        if (point && typeof point.date === "string") {
+          covered.add(point.date);
+        }
+      }
+    }
+    return wanted.every((date) => covered.has(date));
+  } catch (error) {
+    return false;
+  }
+}
+
+// Report selection for one strip day: the shared default entry when it
+// is usable for D, an explicit 8-day `-g day` range otherwise, and
+// `none` for future days (which render nothing and spawn nothing). On a
+// cold cache today reads the default key so the page and every recent
+// strip share one entry; a past day fetches its own 8-day range once.
+// Never throws.
+function dayStripRequestFor(day, localToday, defaultPeek) {
+  try {
+    if (!dayStripDateParts(day)) {
+      return { source: "none" };
+    }
+    const today =
+      typeof localToday === "string" && dayStripDateParts(localToday)
+        ? localToday
+        : "";
+    if (today && day > today) {
+      return { source: "none" };
+    }
+    const peek =
+      defaultPeek && typeof defaultPeek === "object" ? defaultPeek : null;
+    const report =
+      peek && peek.report && typeof peek.report === "object"
+        ? peek.report
+        : null;
+    if (report) {
+      if (dayStripDefaultReportCovers(report, day, today)) {
+        return { source: "default" };
+      }
+      return {
+        source: "range",
+        options: { range: dayStripShiftDay(day, -7) + ".." + day, group: "day" },
+      };
+    }
+    if (!today || day === today) {
+      return { source: "default" };
+    }
+    return {
+      source: "range",
+      options: { range: dayStripShiftDay(day, -7) + ".." + day, group: "day" },
+    };
+  } catch (error) {
+    return { source: "none" };
+  }
+}
+
+// True when D lies inside a Stats report's current window, from
+// `report.range.start/end` with a fallback to the daily-points union.
+// Used by `openStatsForDay` to keep the page's window when it already
+// shows D. Never throws.
+function dayStripDayInReportWindow(day, report) {
+  try {
+    if (!dayStripDateParts(day) || !report || typeof report !== "object") {
+      return false;
+    }
+    const range =
+      report.range && typeof report.range === "object" ? report.range : {};
+    let start = typeof range.start === "string" ? range.start : "";
+    let end = typeof range.end === "string" ? range.end : "";
+    if ((!start || !end) && Array.isArray(report.metrics)) {
+      const dates = [];
+      for (const metric of report.metrics) {
+        let points = null;
+        try {
+          points = statsChartDailyPoints(metric, report);
+        } catch (error) {
+          points = [];
+        }
+        for (const point of points || []) {
+          if (point && typeof point.date === "string") {
+            dates.push(point.date);
+          }
+        }
+      }
+      if (dates.length > 0) {
+        dates.sort();
+        if (!start) {
+          start = dates[0];
+        }
+        if (!end) {
+          end = dates[dates.length - 1];
+        }
+      }
+    }
+    if (!start || !end) {
+      return false;
+    }
+    return day >= start && day <= end;
+  } catch (error) {
+    return false;
+  }
+}
+
+// ---- src/239-plugin-day-strip-registry.js ----
+// Day strip registry and refresh policy: the strip record set, the
+// synchronous cache-first paint, the visible/dirty/aged re-run gate
+// behind the shared single-flight queue, rollover, and the host setup
+// and teardown wired from `setupStatsBlock` / `teardownStatsBlock`.
+class BobLedgerToolsDayStripMixin {
+  dayStripViewsStore() {
+    if (!(this.dayStripViews instanceof Set)) {
+      this.dayStripViews = new Set();
+    }
+    return this.dayStripViews;
+  }
+
+  // False on mobile and wherever `bob` cannot spawn. Never throws.
+  dayStripCanSpawn() {
+    try {
+      if (this.dayStripSpawnDisabled === true) {
+        return false;
+      }
+      if (
+        typeof Platform !== "undefined" &&
+        Platform &&
+        Platform.isDesktopApp === false
+      ) {
+        return false;
+      }
+    } catch (error) {
+      return false;
+    }
+    try {
+      const childProcess = planRequireOptionalNodeModule("child_process");
+      if (
+        !childProcess ||
+        typeof childProcess.execFile !== "function"
+      ) {
+        return false;
+      }
+    } catch (error) {
+      return false;
+    }
+    return true;
+  }
+
+  // Local today behind a seam tests stub to simulate rollover. Never
+  // throws.
+  dayStripLocalNow() {
+    try {
+      return dayStripLocalToday(new Date());
+    } catch (error) {
+      return "";
+    }
+  }
+
+  // Per-device collapse, shared by every strip on this device. Vault
+  // reads and writes never happen here. Never throws.
+  dayStripIsCollapsed() {
+    try {
+      if (
+        this.app &&
+        typeof this.app.loadLocalStorage === "function"
+      ) {
+        const value = this.app.loadLocalStorage(DAY_STRIP_COLLAPSE_KEY);
+        return value === true || value === "true";
+      }
+    } catch (error) {
+      // Fall through to window storage below.
+    }
+    try {
+      if (
+        typeof window !== "undefined" &&
+        window &&
+        window.localStorage &&
+        typeof window.localStorage.getItem === "function"
+      ) {
+        return window.localStorage.getItem(DAY_STRIP_COLLAPSE_KEY) === "true";
+      }
+    } catch (error) {
+      // Storage is best-effort.
+    }
+    return false;
+  }
+
+  dayStripSetCollapsed(value) {
+    const collapsed = value === true;
+    try {
+      if (this.app && typeof this.app.saveLocalStorage === "function") {
+        this.app.saveLocalStorage(DAY_STRIP_COLLAPSE_KEY, collapsed);
+      }
+    } catch (error) {
+      // Storage is best-effort.
+    }
+    try {
+      if (
+        typeof window !== "undefined" &&
+        window &&
+        window.localStorage &&
+        typeof window.localStorage.setItem === "function"
+      ) {
+        window.localStorage.setItem(
+          DAY_STRIP_COLLAPSE_KEY,
+          collapsed ? "true" : "false",
+        );
+      }
+    } catch (error) {
+      // Storage is best-effort.
+    }
+    try {
+      for (const record of Array.from(this.dayStripViewsStore())) {
+        try {
+          this.dayStripPaint(record);
+        } catch (error) {
+          // One stale strip never breaks the others.
+        }
+        try {
+          if (
+            record &&
+            record.editorView &&
+            typeof record.editorView.requestMeasure === "function"
+          ) {
+            record.editorView.requestMeasure();
+          }
+        } catch (error) {
+          // Measuring is best-effort.
+        }
+      }
+    } catch (error) {
+      // Repaint is best-effort.
+    }
+  }
+
+  setupDayStripHosts() {
+    try {
+      this.dayStripViewsStore();
+    } catch (error) {
+      // Registry init is best-effort.
+    }
+    try {
+      if (this.dayStripPaintsCached === undefined) {
+        this.dayStripPaintsCached = 0;
+      }
+      if (this.dayStripPaintsSkeleton === undefined) {
+        this.dayStripPaintsSkeleton = 0;
+      }
+      if (this.dayStripSpawns === undefined) {
+        this.dayStripSpawns = 0;
+      }
+    } catch (error) {
+      // Counter init is best-effort.
+    }
+    try {
+      if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
+        this.registerMarkdownCodeBlockProcessor("bob-day-stats", (source, el, ctx) =>
+          this.renderDayStripFence(el, ctx, source),
+        );
+      }
+    } catch (error) {
+      // Fence registration is best-effort.
+    }
+    try {
+      if (typeof this.statsOnCacheUpdate === "function") {
+        try {
+          if (typeof this.dayStripCacheUnsub === "function") {
+            this.dayStripCacheUnsub();
+          }
+        } catch (error) {
+          // Resubscribe is best-effort.
+        }
+        this.dayStripCacheUnsub = this.statsOnCacheUpdate((key) => {
+          try {
+            this.dayStripRepaintForKey(key);
+          } catch (error) {
+            // Subscriber repaint is best-effort.
+          }
+        });
+      }
+    } catch (error) {
+      // Subscriber wiring is best-effort.
+    }
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.on === "function") {
+        this.registerEvent(
+          metadataCache.on("changed", () => this.dayStripNoteChange()),
+        );
+      }
+    } catch (error) {
+      // Revalidation wiring is best-effort.
+    }
+    try {
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.on === "function") {
+        for (const event of ["create", "delete", "rename"]) {
+          this.registerEvent(
+            vault.on(event, () => this.dayStripNoteChange()),
+          );
+        }
+      }
+    } catch (error) {
+      // Revalidation wiring is best-effort.
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.on === "function") {
+        this.registerEvent(
+          workspace.on("active-leaf-change", () => {
+            try {
+              this.dayStripCheckAll();
+            } catch (error) {
+              // Visibility flush is best-effort.
+            }
+          }),
+        );
+        this.registerEvent(
+          workspace.on("layout-change", () => {
+            try {
+              this.dayStripCheckAll();
+            } catch (error) {
+              // Visibility flush is best-effort.
+            }
+          }),
+        );
+      }
+    } catch (error) {
+      // Visibility wiring is best-effort.
+    }
+    try {
+      if (
+        typeof this.registerDomEvent === "function" &&
+        typeof document !== "undefined" &&
+        document
+      ) {
+        this.registerDomEvent(document, "visibilitychange", () => {
+          try {
+            if (
+              !document.visibilityState ||
+              document.visibilityState === "visible"
+            ) {
+              this.dayStripCheckAll();
+            }
+          } catch (error) {
+            // Visibility flush is best-effort.
+          }
+        });
+      }
+    } catch (error) {
+      // Visibility wiring is best-effort.
+    }
+    try {
+      if (
+        typeof this.registerDomEvent === "function" &&
+        typeof window !== "undefined" &&
+        window
+      ) {
+        this.registerDomEvent(window, "focus", () => {
+          try {
+            this.dayStripCheckAll();
+          } catch (error) {
+            // Focus flush is best-effort.
+          }
+        });
+      }
+    } catch (error) {
+      // Focus wiring is best-effort.
+    }
+  }
+
+  teardownDayStripHosts() {
+    try {
+      const clear =
+        typeof window !== "undefined" &&
+        typeof window.clearTimeout === "function"
+          ? window.clearTimeout
+          : clearTimeout;
+      if (
+        this.dayStripRecheckTimer !== null &&
+        this.dayStripRecheckTimer !== undefined
+      ) {
+        clear(this.dayStripRecheckTimer);
+      }
+    } catch (error) {
+      // Timer cleanup is best-effort.
+    }
+    this.dayStripRecheckTimer = null;
+    try {
+      if (typeof this.dayStripCacheUnsub === "function") {
+        this.dayStripCacheUnsub();
+      }
+    } catch (error) {
+      // Unsubscribe is best-effort.
+    }
+    this.dayStripCacheUnsub = null;
+    try {
+      for (const record of Array.from(this.dayStripViewsStore())) {
+        try {
+          this.dayStripReleaseRecord(record);
+        } catch (error) {
+          // One stale strip never breaks the others.
+        }
+      }
+      this.dayStripViewsStore().clear();
+    } catch (error) {
+      // Registry cleanup is best-effort.
+    }
+  }
+
+  // A vault change landed: re-check every strip after a trailing 2 s
+  // quiet window so a burst of review gestures coalesces. Never throws.
+  dayStripNoteChange() {
+    try {
+      this.dayStripScheduleRecheck();
+    } catch (error) {
+      // Scheduling is best-effort.
+    }
+  }
+
+  dayStripRecheckDelay() {
+    try {
+      const delay = Number(this.dayStripRecheckDelayMs);
+      if (Number.isFinite(delay) && delay >= 0) {
+        return delay;
+      }
+    } catch (error) {
+      // Fall through to the default below.
+    }
+    return DAY_STRIP_RECHECK_DEBOUNCE_MS;
+  }
+
+  dayStripScheduleRecheck() {
+    try {
+      const clear =
+        typeof window !== "undefined" &&
+        typeof window.clearTimeout === "function"
+          ? window.clearTimeout
+          : clearTimeout;
+      if (
+        this.dayStripRecheckTimer !== null &&
+        this.dayStripRecheckTimer !== undefined
+      ) {
+        try {
+          clear(this.dayStripRecheckTimer);
+        } catch (error) {
+          // Timer reset is best-effort.
+        }
+      }
+      const schedule =
+        typeof window !== "undefined" &&
+        typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      this.dayStripRecheckTimer = schedule(() => {
+        this.dayStripRecheckTimer = null;
+        try {
+          this.dayStripCheckAll();
+        } catch (error) {
+          // Re-checking is best-effort.
+        }
+      }, this.dayStripRecheckDelay());
+    } catch (error) {
+      // Scheduling is best-effort.
+    }
+  }
+
+  dayStripCheckAll() {
+    try {
+      for (const record of Array.from(this.dayStripViewsStore())) {
+        try {
+          this.dayStripCheck(record);
+        } catch (error) {
+          // One stale strip never breaks the others.
+        }
+      }
+    } catch (error) {
+      // Checking is best-effort.
+    }
+  }
+
+  // True when the strip is on screen: the observer reports it
+  // intersecting, the tab is visible, and its element is shown. Never
+  // throws.
+  dayStripRecordIsShown(record) {
+    try {
+      if (record && record.visible === false) {
+        return false;
+      }
+    } catch (error) {
+      // Fall through to the element checks.
+    }
+    try {
+      return statsBlockViewIsShown({ el: record && record.el });
+    } catch (error) {
+      return true;
+    }
+  }
+
+  dayStripOptionsForRecord(record, localToday) {
+    try {
+      const today =
+        typeof localToday === "string" && localToday
+          ? localToday
+          : this.dayStripLocalNow();
+      let peek = null;
+      try {
+        peek = this.statsPeek({});
+      } catch (error) {
+        peek = null;
+      }
+      const selection = dayStripRequestFor(
+        record && record.day,
+        today,
+        peek,
+      );
+      if (selection.source === "default") {
+        return { selection, options: {} };
+      }
+      if (selection.source === "range") {
+        return { selection, options: selection.options };
+      }
+      return { selection, options: null };
+    } catch (error) {
+      return { selection: { source: "none" }, options: null };
+    }
+  }
+
+  // Paint one strip synchronously from the cache in the mounting frame:
+  // the ready frame, the skeleton on a miss, the one-line error when a
+  // fetch failed with nothing cached, or nothing for future days. Never
+  // spawns and never throws. `result` is an explicit fetch outcome that
+  // wins over the cache peek.
+  dayStripPaint(record, result) {
+    try {
+      if (!record || !record.el) {
+        return null;
+      }
+      const localToday = this.dayStripLocalNow();
+      const day = record.day;
+      const collapsed = this.dayStripIsCollapsed();
+      const handlers = {
+        openStats: (opts) => {
+          try {
+            const safe = opts && typeof opts === "object" ? opts : {};
+            void this.openStatsForDay({
+              day:
+                typeof safe.day === "string" && safe.day ? safe.day : day,
+              metric: safe.metric,
+              panel: safe.panel,
+              newLeaf: safe.newLeaf,
+              sourcePath: record.path,
+            });
+          } catch (error) {
+            // Opening Stats is best-effort here; openStatsForDay Notices.
+          }
+        },
+        toggleCollapsed: () => {
+          try {
+            this.dayStripSetCollapsed(!this.dayStripIsCollapsed());
+          } catch (error) {
+            // Collapse is best-effort.
+          }
+        },
+        retry: () => {
+          try {
+            this.dayStripCheck(record, { force: true });
+          } catch (error) {
+            // Retry is best-effort.
+          }
+        },
+      };
+      const finish = (model, counter, stamp) => {
+        try {
+          const key = [
+            model.state,
+            model.day,
+            localToday,
+            String(stamp === undefined ? "" : stamp),
+            model.stale,
+            model.error ? model.error.code : "",
+            collapsed,
+            (model.tiles || []).map((tile) => tile.display).join(","),
+          ].join("|");
+          if (record.paintedKey === key) {
+            return model;
+          }
+          record.paintedKey = key;
+          paintDayStrip(record.el, model, handlers);
+          if (counter === "cached") {
+            this.dayStripPaintsCached = (Number(this.dayStripPaintsCached) || 0) + 1;
+          } else if (counter === "skeleton") {
+            this.dayStripPaintsSkeleton =
+              (Number(this.dayStripPaintsSkeleton) || 0) + 1;
+          }
+        } catch (error) {
+          // Painting is best-effort.
+        }
+        return model;
+      };
+      if (!day || !dayStripDateParts(day)) {
+        return finish(
+          dayStripModel(null, typeof day === "string" ? day : "", {
+            localToday,
+          }),
+          null,
+        );
+      }
+      if (localToday && day > localToday) {
+        return finish(dayStripModel(null, day, { localToday }), null);
+      }
+      const { selection, options } = this.dayStripOptionsForRecord(
+        record,
+        localToday,
+      );
+      if (selection.source === "none" || !options) {
+        return finish(dayStripModel(null, day, { localToday }), null);
+      }
+      const snapshot =
+        result &&
+        typeof result === "object" &&
+        ("report" in result || "error" in result)
+          ? result
+          : null;
+      let report = null;
+      let fetchedAt = null;
+      let stale = false;
+      let error = null;
+      if (snapshot) {
+        report = snapshot.report || null;
+        fetchedAt = snapshot.fetchedAt;
+        stale = snapshot.stale === true;
+        error = snapshot.error || null;
+      } else {
+        let peek = null;
+        try {
+          peek = this.statsPeek(options);
+        } catch (peekError) {
+          peek = null;
+        }
+        report = (peek && peek.report) || null;
+        fetchedAt = peek ? peek.fetchedAt : null;
+        stale = peek ? peek.stale === true : false;
+        error = null;
+      }
+      if (!report) {
+        return finish(
+          dayStripModel(null, day, {
+            localToday,
+            fetchedAt,
+            stale,
+            error,
+            collapsed,
+          }),
+          "skeleton",
+          "miss",
+        );
+      }
+      return finish(
+        dayStripModel(report, day, {
+          localToday,
+          fetchedAt,
+          stale,
+          error,
+          collapsed,
+        }),
+        "cached",
+        fetchedAt,
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // The re-run gate: spawn `bob stats` only while the strip is visible,
+  // the entry is dirty (a change landed or it aged past 10 min), and it
+  // aged past 30 s for today or 10 min for a past day. On a miss the
+  // strip fetches once. Never throws.
+  dayStripCheck(record, opts) {
+    try {
+      const force = Boolean(opts && opts.force === true);
+      if (!record || !record.el) {
+        return;
+      }
+      if (!this.dayStripCanSpawn()) {
+        return;
+      }
+      const localToday = this.dayStripLocalNow();
+      const day = record.day;
+      if (!day || !dayStripDateParts(day)) {
+        this.dayStripPaint(record);
+        return;
+      }
+      if (localToday && day > localToday) {
+        this.dayStripPaint(record);
+        return;
+      }
+      if (!this.dayStripRecordIsShown(record)) {
+        return;
+      }
+      const { selection, options } = this.dayStripOptionsForRecord(
+        record,
+        localToday,
+      );
+      if (selection.source === "none" || !options) {
+        this.dayStripPaint(record);
+        return;
+      }
+      let key = null;
+      try {
+        key = statsRequestFor(options).key;
+      } catch (error) {
+        key = null;
+      }
+      let entry = null;
+      try {
+        entry = key ? this.statsCacheGet(key) : null;
+      } catch (error) {
+        entry = null;
+      }
+      if (!entry || !entry.report) {
+        this.dayStripFetch(record, options);
+        return;
+      }
+      let now = 0;
+      try {
+        now = Date.now();
+      } catch (error) {
+        now = 0;
+      }
+      let gen = 0;
+      try {
+        gen = this.statsChangeGenValue();
+      } catch (error) {
+        gen = 0;
+      }
+      if (!statsCacheEntryIsDirty(entry, now, gen)) {
+        return;
+      }
+      const age = now - Number(entry.fetchedAt);
+      const minAge =
+        day === localToday
+          ? DAY_STRIP_TODAY_MIN_AGE_MS
+          : DAY_STRIP_PAST_MIN_AGE_MS;
+      if (force || (Number.isFinite(age) && age >= minAge)) {
+        this.dayStripFetch(record, options);
+      }
+    } catch (error) {
+      // Checking is best-effort.
+    }
+  }
+
+  // Fetch one key for one strip behind the shared single-flight queue so
+  // several strips and the page on one key cause exactly one spawn and
+  // every waiter settles. A failure keeps the cached frame with the
+  // stale dot, or the one-line error with nothing cached. Never throws.
+  dayStripFetch(record, options) {
+    try {
+      const safe = options && typeof options === "object" ? options : {};
+      let key = null;
+      let args = null;
+      try {
+        const resolved = statsRequestFor(safe);
+        key = resolved.key;
+        args = resolved.args;
+      } catch (error) {
+        key = null;
+        args = null;
+      }
+      if (!key || !args) {
+        return;
+      }
+      const settled = (result) => this.dayStripSettled(record, safe, result);
+      try {
+        if (this.statsFlight && this.statsFlight.key === key) {
+          this.statsFlight.waiters.push(settled);
+          return;
+        }
+      } catch (error) {
+        // Flight check is best-effort.
+      }
+      try {
+        const queued =
+          typeof this.statsPendingByKeyStore === "function"
+            ? this.statsPendingByKeyStore().get(key)
+            : null;
+        if (queued) {
+          queued.waiters.push(settled);
+          return;
+        }
+      } catch (error) {
+        // Queue check is best-effort.
+      }
+      let hadCached = false;
+      try {
+        const entry = this.statsCacheGet(key);
+        hadCached = Boolean(entry && entry.report);
+      } catch (error) {
+        hadCached = false;
+      }
+      try {
+        this.dayStripSpawns = (Number(this.dayStripSpawns) || 0) + 1;
+      } catch (error) {
+        this.dayStripSpawns = 1;
+      }
+      try {
+        this.statsEnqueueFetch({
+          key,
+          args,
+          opts: { ...safe },
+          waiters: [settled],
+          hadCached,
+        });
+      } catch (error) {
+        // Enqueue is best-effort; waiters settle on unload.
+      }
+    } catch (error) {
+      // Fetching is best-effort.
+    }
+  }
+
+  dayStripSettled(record, options, result) {
+    try {
+      if (!record) {
+        return;
+      }
+      try {
+        if (!this.dayStripViewsStore().has(record)) {
+          return;
+        }
+      } catch (error) {
+        return;
+      }
+      this.dayStripPaint(record, result || { report: null });
+    } catch (error) {
+      // Settling is best-effort.
+    }
+  }
+
+  // The shared-cache subscriber: every strip reading the updated key
+  // repaints in place for free. Never throws.
+  dayStripRepaintForKey(key) {
+    try {
+      if (typeof key !== "string" || !key) {
+        return;
+      }
+      const localToday = this.dayStripLocalNow();
+      for (const record of Array.from(this.dayStripViewsStore())) {
+        try {
+          const { options } = this.dayStripOptionsForRecord(
+            record,
+            localToday,
+          );
+          if (!options) {
+            continue;
+          }
+          if (statsRequestFor(options).key !== key) {
+            continue;
+          }
+          this.dayStripPaint(record);
+        } catch (error) {
+          // One stale strip never breaks the others.
+        }
+      }
+    } catch (error) {
+      // Subscriber repaint is best-effort.
+    }
+  }
+
+  // Across-midnight rollover: today becomes a past-day strip because its
+  // D is fixed by its path, so repaint every strip (which re-keys today
+  // to a past day and refetches) after the generation bump. Never
+  // throws.
+  dayStripHandleRollover() {
+    try {
+      for (const record of Array.from(this.dayStripViewsStore())) {
+        try {
+          record.paintedKey = null;
+          this.dayStripPaint(record);
+        } catch (error) {
+          // One stale strip never breaks the others.
+        }
+      }
+      this.dayStripCheckAll();
+    } catch (error) {
+      // Rollover is best-effort.
+    }
+  }
+
+  dayStripReleaseRecord(record) {
+    try {
+      try {
+        if (
+          record &&
+          record.observer &&
+          typeof record.observer.disconnect === "function"
+        ) {
+          record.observer.disconnect();
+        }
+      } catch (error) {
+        // Observer cleanup is best-effort.
+      }
+      if (record) {
+        record.observer = null;
+      }
+      this.dayStripViewsStore().delete(record);
+    } catch (error) {
+      // Release is best-effort.
+    }
+  }
+
+  dayStripObserve(record) {
+    try {
+      if (!record) {
+        return;
+      }
+      let Observer = null;
+      try {
+        Observer =
+          typeof IntersectionObserver !== "undefined"
+            ? IntersectionObserver
+            : null;
+      } catch (error) {
+        Observer = null;
+      }
+      if (typeof Observer !== "function") {
+        record.visible = true;
+        return;
+      }
+      try {
+        if (
+          record.observer &&
+          typeof record.observer.disconnect === "function"
+        ) {
+          record.observer.disconnect();
+        }
+      } catch (error) {
+        // Observer reset is best-effort.
+      }
+      const observer = new Observer((entries) => {
+        try {
+          const list = Array.isArray(entries) ? entries : [];
+          for (const entry of list) {
+            if (entry && typeof entry.isIntersecting === "boolean") {
+              record.visible = entry.isIntersecting;
+            }
+          }
+          if (record.visible !== false) {
+            record.visible = true;
+            this.dayStripCheck(record);
+          }
+        } catch (error) {
+          // Observation is best-effort.
+        }
+      });
+      record.observer = observer;
+      if (record.el && typeof observer.observe === "function") {
+        observer.observe(record.el);
+      }
+    } catch (error) {
+      try {
+        record.visible = true;
+      } catch (inner) {
+        // Visibility is best-effort.
+      }
+    }
+  }
+}
+// ---- src/239-plugin-day-strip-fence.js ----
+// Day strip fence and Stats hand-off: the `bob-day-stats` code block
+// host and `openStatsForDay`, which opens Stats with the day pinned.
+class BobLedgerToolsDayStripFenceMixin {
+  // The `bob-day-stats` fence: an optional `day: YYYY-MM-DD` body, else
+  // the note's own date. An own-day fence elsewhere stands the virtual
+  // mount down (handled by the mount phase); here every fence renders
+  // its own host. Nothing on mobile or wherever `bob` cannot spawn, and
+  // never an error card there. Never throws.
+  renderDayStripFence(el, ctx, source) {
+    if (!el) {
+      return;
+    }
+    try {
+      try {
+        if (el.closest && typeof el.closest === "function") {
+          if (el.closest(".hover-popover, .markdown-embed")) {
+            return;
+          }
+        }
+      } catch (error) {
+        // Hover/embed detection is best-effort.
+      }
+      const sourcePath =
+        ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      let day = dayStripParseFenceDay(source);
+      if (!day) {
+        day = dayStripDayForPath(sourcePath);
+      }
+      if (!day) {
+        try {
+          if (typeof el.empty === "function") {
+            el.empty();
+          } else {
+            el.textContent = "";
+          }
+          const doc = statsDocFor(el);
+          const note = statsEl(
+            doc,
+            "div",
+            { class: "bob-day-strip-fence-note" },
+            "bob-day-stats needs a daily note or a day: YYYY-MM-DD line.",
+          );
+          if (note) {
+            el.appendChild(note);
+          }
+        } catch (error) {
+          // Muted-line fallback is best-effort.
+        }
+        return;
+      }
+      if (!this.dayStripCanSpawn()) {
+        return;
+      }
+      const record = {
+        el,
+        day,
+        path: sourcePath,
+        kind: "fence",
+        observer: null,
+        visible: true,
+      };
+      this.dayStripViewsStore().add(record);
+      if (ctx && typeof ctx.addChild === "function") {
+        let child = null;
+        try {
+          if (typeof MarkdownRenderChild === "function") {
+            child = new MarkdownRenderChild(el);
+            child.onunload = () => {
+              this.dayStripReleaseRecord(record);
+            };
+          }
+        } catch (error) {
+          child = null;
+        }
+        if (!child) {
+          child = {
+            unload: () => {
+              this.dayStripReleaseRecord(record);
+            },
+          };
+        }
+        try {
+          ctx.addChild(child);
+        } catch (error) {
+          // Older hosts may reject the child; the set clears on unload.
+        }
+      }
+      this.dayStripObserve(record);
+      this.dayStripPaint(record);
+      this.dayStripCheck(record);
+    } catch (error) {
+      // Fence rendering never breaks the note.
+    }
+  }
+
+  // Open Stats with D pinned (and `metric` focused): resolve `dash_stats`
+  // against `sourcePath`, write that path's view state, keep the page's
+  // window when it already shows D (else a 28-day window ending on D),
+  // scroll a requested panel into view on first paint, repaint a mounted
+  // view, then reveal the open leaf or open it like a link click.
+  // Returns true when Stats was revealed or opened. Never throws.
+  async openStatsForDay(options) {
+    const opts = options && typeof options === "object" ? options : {};
+    const day = typeof opts.day === "string" ? opts.day : "";
+    const sourcePath =
+      typeof opts.sourcePath === "string" ? opts.sourcePath : "";
+    try {
+      if (!dayStripDateParts(day)) {
+        throw new Error("Day strip needs a valid day to open Stats.");
+      }
+      let dashPath = "dash_stats";
+      try {
+        const metadataCache = this.app && this.app.metadataCache;
+        if (
+          metadataCache &&
+          typeof metadataCache.getFirstLinkpathDest === "function"
+        ) {
+          const dest = metadataCache.getFirstLinkpathDest(
+            "dash_stats",
+            sourcePath,
+          );
+          if (dest && typeof dest.path === "string" && dest.path) {
+            dashPath = dest.path;
+          }
+        }
+      } catch (error) {
+        // Link resolution is best-effort.
+      }
+      const state = this.statsViewStateFor(dashPath);
+      state.pinnedDay = day;
+      state.pinnedBucket = null;
+      if (typeof opts.metric === "string" && opts.metric) {
+        state.focus = opts.metric;
+      }
+      let inside = false;
+      try {
+        let report = null;
+        if (this.statsBlockViews instanceof Set) {
+          for (const view of this.statsBlockViews) {
+            if (view && view.sourcePath === dashPath && view.report) {
+              report = view.report;
+              break;
+            }
+          }
+        }
+        inside = dayStripDayInReportWindow(day, report);
+      } catch (error) {
+        inside = false;
+      }
+      if (!inside) {
+        state.range = dayStripShiftDay(day, -27) + ".." + day;
+        state.offset = 0;
+      }
+      if (opts.panel === "homes") {
+        state.revealPanel = "homes";
+      }
+      try {
+        if (this.statsBlockViews instanceof Set) {
+          for (const view of Array.from(this.statsBlockViews)) {
+            if (view && view.sourcePath === dashPath) {
+              try {
+                this.paintStatsBlock(view);
+              } catch (error) {
+                // One stale block never breaks the hand-off.
+              }
+            }
+          }
+        }
+      } catch (error) {
+        // Repaint is best-effort.
+      }
+      const workspace = this.app && this.app.workspace;
+      let leaf = null;
+      try {
+        leaf = findOpenMarkdownLeafByPath(this.app, dashPath);
+      } catch (error) {
+        leaf = null;
+      }
+      if (leaf && workspace) {
+        try {
+          if (typeof workspace.revealLeaf === "function") {
+            await workspace.revealLeaf(leaf);
+          }
+          if (typeof workspace.setActiveLeaf === "function") {
+            await workspace.setActiveLeaf(leaf, { focus: true });
+          }
+          return true;
+        } catch (error) {
+          // Fall through to openLinkText below.
+        }
+      }
+      if (workspace && typeof workspace.openLinkText === "function") {
+        await workspace.openLinkText(
+          "dash_stats",
+          sourcePath,
+          opts.newLeaf === true,
+        );
+        return true;
+      }
+      throw new Error("Stats cannot be opened from here.");
+    } catch (error) {
+      try {
+        new Notice("Could not open Stats");
+      } catch (inner) {
+        // Notice is best-effort.
+      }
+      return false;
+    }
   }
 }
 // ---- src/240-plugin-freshness-status.js ----
@@ -50057,6 +51429,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsChartMixin,
   BobLedgerToolsStatsHomesMixin,
   BobLedgerToolsStatsPanelsMixin,
+  BobLedgerToolsDayStripMixin,
+  BobLedgerToolsDayStripFenceMixin,
   BobLedgerToolsFreshnessStatusMixin,
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,
@@ -52522,6 +53896,15 @@ module.exports.helpers = {
   dayStripDateWords,
   dayStripModel,
   paintDayStrip,
+  dayStripDayForPath,
+  dayStripLocalToday,
+  dayStripParseFenceDay,
+  dayStripRequestFor,
+  dayStripDayInReportWindow,
+  dayStripDefaultReportCovers,
+  DAY_STRIP_RECHECK_DEBOUNCE_MS,
+  DAY_STRIP_TODAY_MIN_AGE_MS,
+  DAY_STRIP_PAST_MIN_AGE_MS,
   statsPanelSelectedHomePoint,
   statsPanelHomeSpan,
   statsPanelHomeSessions,

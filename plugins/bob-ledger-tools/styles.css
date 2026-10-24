@@ -4373,6 +4373,11 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   font-size: 0.85em;
 }
 
+.bob-day-strip-fence-note {
+  color: var(--text-muted);
+  font-size: 0.8em;
+}
+
 .bob-day-strip-unavailable-message {
   min-width: 0;
   overflow: hidden;

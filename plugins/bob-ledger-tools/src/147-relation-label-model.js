@@ -159,15 +159,20 @@ function relationLabelFoldEvents(events) {
       pref.hidden = event.kind === "relation_label.hide";
       if (event.name) pref.name = event.name;
       byKey[event.key] = pref;
-    } else if (event.kind === "relation_label.rename" && event.from !== event.to) {
-      const source = byKey[event.from];
-      const targetHasState = Object.prototype.hasOwnProperty.call(byKey, event.to);
-      if (source && !targetHasState) {
-        byKey[event.to] = source;
-        delete byKey[event.from];
+    } else if (event.kind === "relation_label.rename") {
+      if (event.from === event.to) {
+        const slot = byKey[event.to];
+        if (slot && event.to_name) slot.name = event.to_name;
+      } else {
+        const sourceHadState = Object.prototype.hasOwnProperty.call(byKey, event.from);
+        const targetHadState = Object.prototype.hasOwnProperty.call(byKey, event.to);
+        if (byKey[event.from] && !targetHadState) {
+          byKey[event.to] = byKey[event.from];
+          delete byKey[event.from];
+        }
+        const target = byKey[event.to];
+        if (sourceHadState && !targetHadState && event.to_name && target) target.name = event.to_name;
       }
-      const target = byKey[event.to];
-      if (event.to_name && target && !target.name) target.name = event.to_name;
     }
   }
   return { byKey };

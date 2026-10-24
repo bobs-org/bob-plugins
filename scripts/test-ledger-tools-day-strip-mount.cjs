@@ -86,7 +86,7 @@ Module._load = function loadWithDayStripStubs(request, parent, isMain) {
   if (request === "@codemirror/view") {
     return {
       EditorView: {
-        decorations: { from: (field) => ({ field, fromField: true }) },
+        decorations: { from: (field, get) => ({ field, get, fromField: true }) },
         updateListener: { of: (listener) => ({ listener }) },
       },
       keymap: { of: (value) => value },
@@ -153,7 +153,16 @@ test("setup lazily registers the block StateField and Toggle Day stats", () => {
   assert.equal(stateEffectDefines, 1, "setup leaves the refresh effect lazy");
   assert.equal(plugin.editorExtensions[0], plugin.dayStripMountField);
   assert.ok(plugin.commands.some((item) => item.name === "Toggle Day stats"));
-  assert.equal(plugin.dayStripMountField.provide(plugin.dayStripMountField).fromField, true);
+  const provided = plugin.dayStripMountField.provide(plugin.dayStripMountField);
+  assert.equal(provided.fromField, true);
+  // CodeMirror's decorations facet only accepts a DecorationSet; the
+  // { path, day, decorations } field value must be unwrapped.
+  assert.equal(typeof provided.get, "function", "provider maps the field value");
+  const doc = makeDoc(["- [ ] Work"]);
+  const value = plugin.dayStripMountField.create(makeState(doc, "2026/20261024.md"));
+  assert.equal(provided.get(value), value.decorations);
+  const inactive = plugin.dayStripMountField.create(makeState(doc, "Projects/alpha.md"));
+  assert.equal(provided.get(inactive), StubDecoration.none);
 });
 
 test("canonical Live Preview daily notes get a block widget at doc.length", () => {
@@ -191,8 +200,11 @@ test("identity, Live Preview, desktop, config, toggle, and matching fence gate t
   assert.equal(noMount(doc, "2026/20261024.md"), true, "mobile or no-bob hosts stay empty");
   plugin.dayStripCanSpawn = () => true;
   plugin.dayStripConfigEnabled = () => false;
+  assert.equal(noMount(doc, "2026/20261024.md"), false, "transactions use the cached config");
+  assert.equal(plugin.dayStripCheckConfig(), true);
   assert.equal(noMount(doc, "2026/20261024.md"), true);
   plugin.dayStripConfigEnabled = () => true;
+  assert.equal(plugin.dayStripCheckConfig(), true);
   plugin.dayStripSessionEnabled = false;
   assert.equal(noMount(doc, "2026/20261024.md"), true);
   plugin.dayStripSessionEnabled = true;
@@ -208,6 +220,8 @@ test("identity, Live Preview, desktop, config, toggle, and matching fence gate t
 test("document changes update the mapped end and an own-day fence stands the mount down", () => {
   const plugin = makePlugin();
   plugin.setupDayStripMount();
+  let configReads = 0;
+  plugin.dayStripConfigEnabled = () => { configReads += 1; return true; };
   const field = plugin.dayStripMountField;
   const beforeDoc = makeDoc(["- [ ] Work"]);
   const beforeState = makeState(beforeDoc, "2026/20261024.md");
@@ -238,6 +252,7 @@ test("document changes update the mapped end and an own-day fence stands the mou
     changes: { mapPos: () => restoredDoc.length },
   });
   assert.equal(ranges(restored).length, 1);
+  assert.equal(configReads, 0, "editor transactions never read the config file");
 });
 
 test("toDOM paints/registers live hosts and suppresses popover and canvas DOM", () => {
@@ -305,4 +320,26 @@ test("toggle/config refresh effects are lazy and collapse persists with remeasur
   assert.equal(plugin.app.localStore.get("bob-day-strip-collapsed"), true);
   assert.equal(measures, 1);
   assert.equal(paints, 1);
+});
+
+test("each strip re-check cycle re-reads stats.day_strip and refreshes editors on a flip", () => {
+  const plugin = makePlugin();
+  let enabled = true;
+  let configReads = 0;
+  plugin.dayStripConfigEnabled = () => { configReads += 1; return enabled; };
+  const dispatches = [];
+  plugin.app.leaves = [{ view: { editor: { cm: { dispatch: (tr) => dispatches.push(tr) } } } }];
+  plugin.setupDayStripMount();
+  plugin.dayStripCheck = () => {};
+  configReads = 0;
+  plugin.dayStripCheckAll();
+  assert.equal(configReads, 0, "no strips, no config read");
+  plugin.dayStripViewsStore().add({ el: {} });
+  plugin.dayStripCheckAll();
+  assert.equal(configReads, 1);
+  assert.equal(dispatches.length, 0, "an unchanged config dispatches nothing");
+  enabled = false;
+  plugin.dayStripCheckAll();
+  assert.equal(plugin.dayStripConfigCached(), false);
+  assert.equal(dispatches.length, 1, "a flip refreshes every markdown editor");
 });

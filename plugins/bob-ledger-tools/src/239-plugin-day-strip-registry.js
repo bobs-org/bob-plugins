@@ -368,6 +368,14 @@ class BobLedgerToolsDayStripMixin {
 
   dayStripCheckAll() {
     try {
+      if (
+        this.dayStripViewsStore().size &&
+        typeof this.dayStripCheckConfig === "function"
+      ) {
+        // Re-read `stats.day_strip` before each strip re-check cycle; a
+        // flip refreshes the editors, which may release live records.
+        this.dayStripCheckConfig();
+      }
       for (const record of Array.from(this.dayStripViewsStore())) {
         try {
           this.dayStripCheck(record);

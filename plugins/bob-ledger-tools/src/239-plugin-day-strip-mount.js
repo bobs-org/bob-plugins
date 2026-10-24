@@ -279,6 +279,16 @@ class BobLedgerToolsDayStripMountMixin {
     }
   }
 
+  // The last `stats.day_strip` value read at setup, by the 60 s poll, or
+  // before a strip re-check cycle. Editor transactions use this cached
+  // value and never read the config file.
+  dayStripConfigCached() {
+    if (typeof this.dayStripConfigLastEnabled !== "boolean") {
+      this.dayStripConfigLastEnabled = this.dayStripConfigEnabled();
+    }
+    return this.dayStripConfigLastEnabled;
+  }
+
   dayStripCheckConfig() {
     try {
       const enabled = this.dayStripConfigEnabled();
@@ -317,7 +327,13 @@ class BobLedgerToolsDayStripMountMixin {
         update(value, transaction) {
           return plugin.dayStripMountFieldUpdate(value, transaction);
         },
-        provide: (field) => EditorView.decorations.from(field),
+        // The field value carries identity beside its decorations; the
+        // facet must receive only the DecorationSet, or CodeMirror throws
+        // while building the editor and Obsidian fails to open the note.
+        provide: (field) =>
+          EditorView.decorations.from(field, (value) =>
+            value && value.decorations ? value.decorations : Decoration.none,
+          ),
       });
       return this.dayStripMountField;
     } catch (error) {
@@ -339,7 +355,7 @@ class BobLedgerToolsDayStripMountMixin {
         dayStripMountLiveForState(state) &&
         this.dayStripCanSpawn() &&
         this.dayStripSessionEnabled !== false &&
-        this.dayStripConfigEnabled() &&
+        this.dayStripConfigCached() &&
         !dayStripMountOwnFence(doc, day),
       );
     } catch (error) {

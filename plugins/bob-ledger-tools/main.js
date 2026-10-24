@@ -25302,11 +25302,17 @@ const BOB_SPAWN_TIMEOUT_MS = 20000;
 const BOB_SPAWN_MAX_BUFFER = 32 * 1024 * 1024;
 const STATS_FETCH_TIMEOUT_MS = BOB_SPAWN_TIMEOUT_MS;
 const STATS_FETCH_MAX_BUFFER = BOB_SPAWN_MAX_BUFFER;
-const STATS_CACHE_SIZE = 8;
+const STATS_CACHE_SIZE = 16;
 const STATS_REVALIDATE_DEBOUNCE_MS = 3000;
+// A cache entry older than this is dirty even when no vault event fired.
+// It catches review-journal syncs from other hosts under hidden `.bob/`,
+// for which Obsidian fires no vault events.
+const STATS_MAX_CLEAN_AGE_MS = 10 * 60 * 1000;
+const STATS_MAX_PENDING_KEYS = 8;
 const STATS_SCHEMA_VERSION = 1;
 const STATS_RANGE_PRESETS = ["7d", "4w", "3m", "1y", "all"];
 const STATS_DEFAULT_RANGE = "4w";
+const STATS_GROUP_IDS = ["day", "week", "month"];
 // GUI Obsidian on macOS lacks the shell PATH, so desktop `bob` resolution
 // tries these before falling back to `bob` on PATH. Entries without a
 // leading `/` are relative to the home directory.
@@ -25529,6 +25535,14 @@ function statsNormalizeOffset(value) {
   return offset;
 }
 
+function statsNormalizeGroup(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (STATS_GROUP_IDS.includes(text)) {
+    return text;
+  }
+  return "";
+}
+
 // Build the argv for one fetch: always `stats show -a -f json` plus the
 // chosen flags, so one call serves tiles, focus, and panels.
 function statsBuildArgs(options = {}) {
@@ -25548,6 +25562,10 @@ function statsBuildArgs(options = {}) {
   if (options.compare === true) {
     args.push("-c");
   }
+  const group = statsNormalizeGroup(options.group);
+  if (group) {
+    args.push("-g", group);
+  }
   if (Array.isArray(options.metrics) && options.metrics.length > 0) {
     for (const id of options.metrics) {
       if (typeof id === "string" && id.trim()) {
@@ -25556,6 +25574,113 @@ function statsBuildArgs(options = {}) {
     }
   }
   return args;
+}
+
+// Resolve the configured fallback range, then build the argv and its key.
+// Both the page default and the strip default call with `{}` so they share
+// one cache entry. Never throws.
+function statsRequestFor(options = {}) {
+  try {
+    const opts = options && typeof options === "object" ? options : {};
+    let fallbackRange = STATS_DEFAULT_RANGE;
+    try {
+      const configured = statsReadConfigValue("range");
+      if (typeof configured === "string" && configured.trim()) {
+        fallbackRange = configured.trim();
+      }
+    } catch (error) {
+      // Config default is best-effort.
+    }
+    if (typeof opts.fallbackRange === "string" && opts.fallbackRange.trim()) {
+      fallbackRange = opts.fallbackRange.trim();
+    }
+    const args = statsBuildArgs({ ...opts, fallbackRange });
+    return { args, key: statsCacheKey(args) };
+  } catch (error) {
+    const args = statsBuildArgs({});
+    return { args, key: statsCacheKey(args) };
+  }
+}
+
+// True when a cache entry must revalidate: its fetch started before the
+// latest vault change, or it is older than the max clean age. Never throws.
+function statsCacheEntryIsDirty(entry, now, gen) {
+  try {
+    if (!entry || typeof entry !== "object") {
+      return true;
+    }
+    if (
+      typeof entry.gen === "number" &&
+      typeof gen === "number" &&
+      entry.gen < gen
+    ) {
+      return true;
+    }
+    const fetchedAt = Number(entry.fetchedAt);
+    const at = Number(now);
+    const base = Number.isFinite(at) ? at : Date.now();
+    if (!Number.isFinite(fetchedAt)) {
+      return true;
+    }
+    return base - fetchedAt > STATS_MAX_CLEAN_AGE_MS;
+  } catch (error) {
+    return true;
+  }
+}
+
+// True when a Stats block element is on screen: the tab is visible and the
+// element reports itself shown. Unknown hosts count as shown so first paint
+// never stalls. Never throws.
+function statsBlockViewIsShown(view) {
+  try {
+    if (
+      typeof document !== "undefined" &&
+      document &&
+      typeof document.visibilityState === "string" &&
+      document.visibilityState !== "visible"
+    ) {
+      return false;
+    }
+  } catch (error) {
+    // Fall through to the element checks.
+  }
+  try {
+    const el = view && view.el;
+    if (!el) {
+      return false;
+    }
+    if (typeof el.isShown === "function") {
+      try {
+        return el.isShown() !== false;
+      } catch (error) {
+        // Fall through below.
+      }
+    }
+    if (typeof el.checkVisibility === "function") {
+      try {
+        const shown = el.checkVisibility();
+        if (shown === false) {
+          return false;
+        }
+      } catch (error) {
+        // Fall through below.
+      }
+    }
+    if ("isConnected" in el && el.isConnected === false) {
+      return false;
+    }
+    return true;
+  } catch (error) {
+    return true;
+  }
+}
+
+function statsCancelledResult() {
+  return {
+    report: null,
+    stale: false,
+    error: { code: "cancelled", message: "Stats fetch cancelled.", detail: "" },
+  };
 }
 
 function statsCacheKey(args) {
@@ -25878,40 +26003,6 @@ class BobLedgerToolsStatsDataMixin {
     }
   }
 
-  statsCacheStore() {
-    if (!(this.statsCache instanceof Map)) {
-      this.statsCache = new Map();
-    }
-    return this.statsCache;
-  }
-
-  statsCacheGet(key) {
-    const store = this.statsCacheStore();
-    const entry = store.get(key);
-    if (!entry) {
-      return null;
-    }
-    // LRU touch: reinsert so the oldest entry evicts first.
-    store.delete(key);
-    store.set(key, entry);
-    return entry;
-  }
-
-  statsCacheSet(key, report) {
-    const store = this.statsCacheStore();
-    if (store.has(key)) {
-      store.delete(key);
-    }
-    store.set(key, { report, fetchedAt: Date.now() });
-    while (store.size > STATS_CACHE_SIZE) {
-      const oldest = store.keys().next();
-      if (oldest.done) {
-        break;
-      }
-      store.delete(oldest.value);
-    }
-  }
-
   statsSpawnFetch(args, options = {}) {
     return bobSpawnJson(args, statsDecodeReport, {
       ...options,
@@ -25927,137 +26018,64 @@ class BobLedgerToolsStatsDataMixin {
     });
   }
 
-  // Public: fetch a stats report. Resolves `{ report, stale, error }`:
-  // a cached report returns immediately as stale while one background
-  // revalidation refreshes it; a miss spawns `bob`. At most one spawn
-  // is in flight with one coalesced follow-up; concurrent callers for
-  // the same arguments share the flight. Never rejects.
+  // Public: fetch a stats report. Resolves `{ report, stale, error }`.
+  // Clean cache hits return immediately with no spawn; dirty hits return
+  // the stale frame immediately while one background refresh runs; misses
+  // queue behind the single running spawn. Each key settles with its own
+  // result, so no waiter is lost. Pass `revalidate: "never"` to skip the
+  // background refresh. Never rejects.
   apiStatsFetch(options = {}) {
     const opts = options && typeof options === "object" ? options : {};
-    let fallbackRange = STATS_DEFAULT_RANGE;
-    try {
-      const configuredRange = statsReadConfigValue("range");
-      if (typeof configuredRange === "string" && configuredRange.trim()) {
-        fallbackRange = configuredRange.trim();
-      }
-    } catch (error) {
-      // Config default is best-effort.
-    }
-    const args = statsBuildArgs({ ...opts, fallbackRange });
-    const key = statsCacheKey(args);
+    const { args, key } = statsRequestFor(opts);
     const cached = this.statsCacheGet(key);
-    // Same arguments already in flight: share the flight.
-    if (this.statsFlight && this.statsFlight.key === key) {
-      return this.statsFlight.promise;
+    if (cached && opts.revalidate === "never") {
+      return Promise.resolve({ report: cached.report, stale: false, error: null });
     }
-    if (this.statsFlight) {
-      // A different key is in flight: coalesce to the single pending
-      // follow-up (latest options win); waiters share its promise.
-      if (
-        !this.statsPendingFetch ||
-        statsCacheKey(
-          statsBuildArgs({ ...this.statsPendingFetch.opts, fallbackRange }),
-        ) !== key
-      ) {
-        this.statsPendingFetch = { opts: { ...opts }, waiters: [] };
-        this.statsPendingFetch.promise = new Promise((resolve) => {
-          this.statsPendingFetch.waiters.push(resolve);
-        });
-      }
-      const pending = this.statsPendingFetch;
-      if (cached) {
-        return Promise.resolve({ report: cached.report, stale: true, error: null });
-      }
-      return pending.promise;
+    let now = null;
+    try {
+      now = Date.now();
+    } catch (error) {
+      now = cached ? cached.fetchedAt : 0;
     }
-    const run = async (runArgs, runKey, runOpts, hadCached) => {
-      try {
-        const result = await this.statsSpawnFetch(runArgs, runOpts);
-        if (result && result.ok) {
-          this.statsCacheSet(runKey, result.report);
-          if (hadCached) {
-            // The caller already holds the stale frame; repaint views
-            // with the fresh one.
-            try {
-              this.repaintStatsBlocks();
-            } catch (error) {
-              // Repaint is best-effort.
-            }
-          }
-          return { report: result.report, stale: false, error: null };
-        }
-        if (hadCached) {
-          const staleEntry = this.statsCacheGet(runKey);
-          return {
-            report: staleEntry ? staleEntry.report : null,
-            stale: true,
-            error: result,
-          };
-        }
-        return { report: null, stale: false, error: result };
-      } catch (error) {
-        const failure = {
-          ok: false,
-          code: "failed",
-          message:
-            error && error.message ? String(error.message) : "bob stats failed.",
-          detail: "",
-        };
-        if (hadCached) {
-          const staleEntry = this.statsCacheGet(runKey);
-          return {
-            report: staleEntry ? staleEntry.report : null,
-            stale: true,
-            error: failure,
-          };
-        }
-        return { report: null, stale: false, error: failure };
-      }
-    };
-    const launch = (launchArgs, launchKey, launchOpts, hadCached) => {
-      const promise = run(launchArgs, launchKey, launchOpts, hadCached).finally(
-        () => {
-          if (this.statsFlight && this.statsFlight.promise === promise) {
-            this.statsFlight = null;
-          }
-          // One coalesced follow-up: the latest request that arrived
-          // mid-flight runs next.
-          if (this.statsPendingFetch) {
-            const pending = this.statsPendingFetch;
-            this.statsPendingFetch = null;
-            const pendingArgs = statsBuildArgs({
-              ...pending.opts,
-              fallbackRange,
-            });
-            const pendingKey = statsCacheKey(pendingArgs);
-            const pendingCached = this.statsCacheGet(pendingKey);
-            const next = launch(pendingArgs, pendingKey, pending.opts, Boolean(pendingCached));
-            for (const waiter of pending.waiters) {
-              try {
-                next.then(waiter);
-              } catch (error) {
-                // Waiter delivery is best-effort.
-              }
-            }
-          }
-        },
-      );
-      this.statsFlight = { key: launchKey, promise };
-      return promise;
-    };
-    const flight = launch(args, key, opts, Boolean(cached));
+    const dirty = statsCacheEntryIsDirty(cached, now, this.statsChangeGenValue());
+    if (cached && !dirty) {
+      return Promise.resolve({ report: cached.report, stale: false, error: null });
+    }
     if (cached) {
       // Stale-while-revalidate: hand back the stale frame now; the
-      // flight refreshes the cache and repaints.
+      // queued flight refreshes the cache and notifies subscribers.
+      this.statsEnsureQueued(key, args, opts);
       return Promise.resolve({ report: cached.report, stale: true, error: null });
     }
-    return flight;
+    if (this.statsFlight && this.statsFlight.key === key) {
+      return new Promise((resolve) => {
+        this.statsFlight.waiters.push(resolve);
+      });
+    }
+    const queued = this.statsPendingByKeyStore().get(key);
+    if (queued) {
+      return new Promise((resolve) => {
+        queued.waiters.push(resolve);
+      });
+    }
+    const entry = { key, args, opts: { ...opts }, waiters: [], hadCached: false };
+    const promise = new Promise((resolve) => {
+      entry.waiters.push(resolve);
+    });
+    this.statsEnqueueFetch(entry);
+    return promise;
   }
 
-  // Debounced revalidation: only while a Stats view is mounted, at most
-  // one timer, ~3 s after the last trigger.
+  // Debounced revalidation: bump the change generation on every trigger,
+  // then repaint ~3 s later when a Stats view is mounted. At most one
+  // timer. Hidden views never spawn; they revalidate when shown.
   scheduleStatsRevalidate(reason) {
     void reason;
+    try {
+      this.statsBumpChangeGen();
+    } catch (error) {
+      // Generation bump is best-effort.
+    }
     try {
       if (!this.statsBlockViews || this.statsBlockViews.size === 0) {
         return;
@@ -26100,6 +26118,407 @@ class BobLedgerToolsStatsDataMixin {
       this.scheduleStatsRevalidate("journal");
     } catch (error) {
       // Best-effort only.
+    }
+  }
+}
+// ---- src/236-plugin-stats-cache.js ----
+// --- Daily Stats cache and fetch queue (fetch-service) --------------------
+// Per-key in-flight promises behind a FIFO queue plus freshness-gated
+// cache entries. The data mixin (`236-plugin-stats-data.js`) owns the spawn
+// boundary and `apiStatsFetch`; this mixin owns the cache map, the change
+// generation, the listener set, the synchronous peek, and the single-flight
+// pump. Installed right after the data mixin.
+class BobLedgerToolsStatsCacheMixin {
+  statsCacheStore() {
+    if (!(this.statsCache instanceof Map)) {
+      this.statsCache = new Map();
+    }
+    return this.statsCache;
+  }
+
+  statsCacheGet(key) {
+    const store = this.statsCacheStore();
+    const entry = store.get(key);
+    if (!entry) {
+      return null;
+    }
+    // LRU touch: reinsert so the oldest entry evicts first.
+    store.delete(key);
+    store.set(key, entry);
+    return entry;
+  }
+
+  statsCacheSet(key, report, gen) {
+    const store = this.statsCacheStore();
+    if (store.has(key)) {
+      store.delete(key);
+    }
+    let generation = gen;
+    if (typeof generation !== "number") {
+      try {
+        generation = this.statsChangeGenValue();
+      } catch (error) {
+        generation = 0;
+      }
+    }
+    let fetchedAt = null;
+    try {
+      fetchedAt = Date.now();
+    } catch (error) {
+      fetchedAt = 0;
+    }
+    store.set(key, { report, fetchedAt, gen: generation });
+    while (store.size > STATS_CACHE_SIZE) {
+      const oldest = store.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      store.delete(oldest.value);
+    }
+  }
+
+  statsChangeGenValue() {
+    try {
+      const gen = Number(this.statsChangeGen);
+      if (Number.isFinite(gen) && gen >= 0) {
+        return Math.floor(gen);
+      }
+    } catch (error) {
+      // Fall through to 0 below.
+    }
+    return 0;
+  }
+
+  statsBumpChangeGen() {
+    try {
+      const next = this.statsChangeGenValue() + 1;
+      this.statsChangeGen = next;
+      return next;
+    } catch (error) {
+      this.statsChangeGen = 1;
+      return 1;
+    }
+  }
+
+  statsCacheListenersStore() {
+    if (!(this.statsCacheListeners instanceof Set)) {
+      this.statsCacheListeners = new Set();
+    }
+    return this.statsCacheListeners;
+  }
+
+  // Subscribe to successful cache stores; called with the key. Returns an
+  // unsubscribe function. Never throws.
+  statsOnCacheUpdate(listener) {
+    try {
+      if (typeof listener !== "function") {
+        return () => {};
+      }
+      const store = this.statsCacheListenersStore();
+      store.add(listener);
+      return () => {
+        try {
+          store.delete(listener);
+        } catch (error) {
+          // Unsubscribe is best-effort.
+        }
+      };
+    } catch (error) {
+      return () => {};
+    }
+  }
+
+  statsNotifyCacheUpdate(key) {
+    try {
+      const listeners = this.statsCacheListenersStore();
+      for (const listener of Array.from(listeners)) {
+        try {
+          listener(key);
+        } catch (error) {
+          // One bad listener never breaks the others.
+        }
+      }
+    } catch (error) {
+      // Notification is best-effort.
+    }
+  }
+
+  // Synchronous read for first-frame paints: null on miss. Never throws.
+  statsPeek(options = {}) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      const { key } = statsRequestFor(opts);
+      const store = this.statsCacheStore();
+      const entry = store.get(key);
+      if (!entry) {
+        return null;
+      }
+      // LRU touch so a peeked default entry stays hot.
+      try {
+        store.delete(key);
+        store.set(key, entry);
+      } catch (error) {
+        // Touch is best-effort.
+      }
+      let now = null;
+      try {
+        now = Date.now();
+      } catch (error) {
+        now = entry.fetchedAt;
+      }
+      return {
+        report: entry.report,
+        fetchedAt: entry.fetchedAt,
+        gen: entry.gen,
+        dirty: statsCacheEntryIsDirty(entry, now, this.statsChangeGenValue()),
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  statsPendingQueueStore() {
+    if (!Array.isArray(this.statsPendingQueue)) {
+      this.statsPendingQueue = [];
+    }
+    return this.statsPendingQueue;
+  }
+
+  statsPendingByKeyStore() {
+    if (!(this.statsPendingByKey instanceof Map)) {
+      this.statsPendingByKey = new Map();
+    }
+    return this.statsPendingByKey;
+  }
+
+  // Queue one spawn behind the single running flight. Distinct keys stay
+  // distinct so no waiter is lost; the oldest pending key is dropped with
+  // an explicit cancellation once the queue is full. Never throws.
+  statsEnqueueFetch(entry) {
+    try {
+      const queue = this.statsPendingQueueStore();
+      const byKey = this.statsPendingByKeyStore();
+      const existing = byKey.get(entry.key);
+      if (existing) {
+        for (const waiter of entry.waiters) {
+          existing.waiters.push(waiter);
+        }
+        return existing;
+      }
+      while (queue.length >= STATS_MAX_PENDING_KEYS) {
+        const dropped = queue.shift();
+        try {
+          byKey.delete(dropped.key);
+        } catch (error) {
+          // Map cleanup is best-effort.
+        }
+        const cancelled = statsCancelledResult();
+        for (const waiter of dropped.waiters.splice(0)) {
+          try {
+            waiter(cancelled);
+          } catch (error) {
+            // Waiter delivery is best-effort.
+          }
+        }
+      }
+      queue.push(entry);
+      byKey.set(entry.key, entry);
+      try {
+        this.statsPumpQueue();
+      } catch (error) {
+        // Pumping is best-effort; waiters settle on unload.
+      }
+      return entry;
+    } catch (error) {
+      const cancelled = statsCancelledResult();
+      for (const waiter of (entry && entry.waiters ? entry.waiters.splice(0) : [])) {
+        try {
+          waiter(cancelled);
+        } catch (inner) {
+          // Waiter delivery is best-effort.
+        }
+      }
+      return entry;
+    }
+  }
+
+  // Ensure a dirty cache entry refreshes in the background without
+  // duplicating a flight or queued entry for the same key. Never throws.
+  statsEnsureQueued(key, args, opts) {
+    try {
+      if (this.statsFlight && this.statsFlight.key === key) {
+        return;
+      }
+      if (this.statsPendingByKeyStore().has(key)) {
+        return;
+      }
+      this.statsEnqueueFetch({ key, args, opts: { ...opts }, waiters: [], hadCached: true });
+    } catch (error) {
+      // Background refresh is best-effort.
+    }
+  }
+
+  // Run the oldest queued key when no spawn is in flight. Concurrency
+  // stays at 1. The stored entry keeps the start generation so a change
+  // that lands mid-flight leaves it dirty for one follow-up. Never throws.
+  statsPumpQueue() {
+    try {
+      if (this.statsFlight) {
+        return;
+      }
+      const queue = this.statsPendingQueueStore();
+      const byKey = this.statsPendingByKeyStore();
+      if (queue.length === 0) {
+        return;
+      }
+      const entry = queue.shift();
+      try {
+        byKey.delete(entry.key);
+      } catch (error) {
+        // Map cleanup is best-effort.
+      }
+      const startGen = this.statsChangeGenValue();
+      const flight = { key: entry.key, promise: null, waiters: entry.waiters };
+      this.statsFlight = flight;
+      this.statsPendingFetch = null;
+      try {
+        this.statsSpawnCount = (Number(this.statsSpawnCount) || 0) + 1;
+      } catch (error) {
+        this.statsSpawnCount = 1;
+      }
+      try {
+        this.statsLastSpawnAt = Date.now();
+      } catch (error) {
+        // Timestamp is best-effort.
+      }
+      const outcomeFor = (result) => {
+        if (result && result.ok) {
+          return { report: result.report, stale: false, error: null };
+        }
+        if (entry.hadCached) {
+          let staleEntry = null;
+          try {
+            staleEntry = this.statsCacheGet(entry.key);
+          } catch (error) {
+            staleEntry = null;
+          }
+          return {
+            report: staleEntry ? staleEntry.report : null,
+            stale: true,
+            error: result,
+          };
+        }
+        return { report: null, stale: false, error: result };
+      };
+      const run = async () => {
+        let result = null;
+        try {
+          result = await this.statsSpawnFetch(entry.args, entry.opts);
+        } catch (error) {
+          result = {
+            ok: false,
+            code: "failed",
+            message: error && error.message ? String(error.message) : "bob stats failed.",
+            detail: "",
+          };
+        }
+        if (result && result.ok) {
+          try {
+            this.statsCacheSet(entry.key, result.report, startGen);
+          } catch (error) {
+            // Cache store is best-effort.
+          }
+          try {
+            this.statsNotifyCacheUpdate(entry.key);
+          } catch (error) {
+            // Notification is best-effort.
+          }
+        }
+        // Clear the flight and start the next queued key BEFORE settling
+        // waiters: waiter continuations run as microtasks after this
+        // returns, and they must never observe this finished flight as
+        // still running (a stale flight would swallow their refresh).
+        try {
+          if (this.statsFlight === flight) {
+            this.statsFlight = null;
+          }
+        } catch (error) {
+          // Flight cleanup is best-effort.
+        }
+        try {
+          this.statsPumpQueue();
+        } catch (error) {
+          // Follow-up pumping is best-effort.
+        }
+        const outcome = outcomeFor(result);
+        for (const waiter of flight.waiters.splice(0)) {
+          try {
+            waiter(outcome);
+          } catch (error) {
+            // Waiter delivery is best-effort.
+          }
+        }
+        return outcome;
+      };
+      const promise = run().finally(() => {
+        try {
+          if (this.statsFlight === flight) {
+            this.statsFlight = null;
+          }
+        } catch (error) {
+          // Flight cleanup is best-effort.
+        }
+        try {
+          this.statsPumpQueue();
+        } catch (error) {
+          // Follow-up pumping is best-effort.
+        }
+      });
+      flight.promise = promise;
+    } catch (error) {
+      // Pumping is best-effort; waiters settle on unload.
+    }
+  }
+
+  // Cancel every waiter with an explicit cancellation. Used on unload and
+  // when the queue overflows. Never throws.
+  statsCancelAllWaiters() {
+    try {
+      const cancelled = statsCancelledResult();
+      const flight = this.statsFlight;
+      this.statsFlight = null;
+      if (flight && Array.isArray(flight.waiters)) {
+        for (const waiter of flight.waiters.splice(0)) {
+          try {
+            waiter({ ...cancelled });
+          } catch (error) {
+            // Waiter delivery is best-effort.
+          }
+        }
+      }
+      let queue = null;
+      try {
+        queue = this.statsPendingQueueStore();
+      } catch (error) {
+        queue = [];
+      }
+      for (const entry of queue.splice(0)) {
+        for (const waiter of (entry.waiters || []).splice(0)) {
+          try {
+            waiter({ ...cancelled });
+          } catch (error) {
+            // Waiter delivery is best-effort.
+          }
+        }
+      }
+      try {
+        this.statsPendingByKeyStore().clear();
+      } catch (error) {
+        // Map cleanup is best-effort.
+      }
+      this.statsPendingFetch = null;
+    } catch (error) {
+      // Cancellation is best-effort.
     }
   }
 }
@@ -26503,6 +26922,23 @@ class BobLedgerToolsStatsBlockMixin {
 
   setupStatsBlock() {
     try {
+      if (this.statsChangeGen === null || this.statsChangeGen === undefined) {
+        this.statsChangeGen = 0;
+      }
+    } catch (error) {
+      // Generation init is best-effort.
+    }
+    try {
+      if (this.statsSpawnCount === null || this.statsSpawnCount === undefined) {
+        this.statsSpawnCount = 0;
+      }
+      if (this.statsLastSpawnAt === undefined) {
+        this.statsLastSpawnAt = null;
+      }
+    } catch (error) {
+      // Counter init is best-effort.
+    }
+    try {
       if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
         this.registerMarkdownCodeBlockProcessor("bob-stats", (source, el, ctx) =>
           this.renderStatsBlock(el, ctx, source),
@@ -26582,6 +27018,126 @@ class BobLedgerToolsStatsBlockMixin {
     } catch (error) {
       // Rollover wiring is best-effort.
     }
+    try {
+      // The page repaint after a revalidation is a cache subscriber, so
+      // every mounted view reading the updated key repaints in place.
+      if (typeof this.statsOnCacheUpdate === "function") {
+        try {
+          if (typeof this.statsCacheUpdateUnsub === "function") {
+            this.statsCacheUpdateUnsub();
+          }
+        } catch (error) {
+          // Resubscribe is best-effort.
+        }
+        this.statsCacheUpdateUnsub = this.statsOnCacheUpdate((key) => {
+          try {
+            this.statsRepaintBlocksForKey(key);
+          } catch (error) {
+            // Subscriber repaint is best-effort.
+          }
+        });
+      }
+    } catch (error) {
+      // Subscriber wiring is best-effort.
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.on === "function") {
+        this.registerEvent(
+          workspace.on("active-leaf-change", () => {
+            try {
+              this.statsVisibleViewsChanged();
+            } catch (error) {
+              // Visibility flush is best-effort.
+            }
+          }),
+        );
+        this.registerEvent(
+          workspace.on("layout-change", () => {
+            try {
+              this.statsVisibleViewsChanged();
+            } catch (error) {
+              // Visibility flush is best-effort.
+            }
+          }),
+        );
+      }
+    } catch (error) {
+      // Visibility wiring is best-effort.
+    }
+    try {
+      if (typeof this.registerDomEvent === "function" && typeof document !== "undefined" && document) {
+        this.registerDomEvent(document, "visibilitychange", () => {
+          try {
+            if (!document.visibilityState || document.visibilityState === "visible") {
+              this.statsVisibleViewsChanged();
+            }
+          } catch (error) {
+            // Visibility flush is best-effort.
+          }
+        });
+      }
+    } catch (error) {
+      // Visibility wiring is best-effort.
+    }
+  }
+
+  // Repaint the mounted views reading one cache key. Hidden views are
+  // marked for later instead of spawning. Never throws.
+  statsRepaintBlocksForKey(key) {
+    try {
+      if (!(this.statsBlockViews instanceof Set) || this.statsBlockViews.size === 0) {
+        return;
+      }
+      for (const view of Array.from(this.statsBlockViews)) {
+        try {
+          let viewKey = null;
+          try {
+            viewKey = statsRequestFor(this.statsFetchArgsFor(view)).key;
+          } catch (error) {
+            viewKey = null;
+          }
+          if (viewKey !== key) {
+            continue;
+          }
+          if (statsBlockViewIsShown(view)) {
+            view.needsRevalidate = false;
+            this.paintStatsBlock(view);
+          } else {
+            view.needsRevalidate = true;
+          }
+        } catch (error) {
+          // One stale block never breaks the others.
+        }
+      }
+    } catch (error) {
+      // Subscriber repaint is best-effort.
+    }
+  }
+
+  // Flush views that were hidden when a change landed and are shown now.
+  // Never throws.
+  statsVisibleViewsChanged() {
+    try {
+      if (!(this.statsBlockViews instanceof Set) || this.statsBlockViews.size === 0) {
+        return;
+      }
+      for (const view of Array.from(this.statsBlockViews)) {
+        try {
+          if (!view.needsRevalidate) {
+            continue;
+          }
+          if (statsBlockViewIsShown(view)) {
+            view.needsRevalidate = false;
+            this.paintStatsBlock(view);
+          }
+        } catch (error) {
+          // One stale block never breaks the others.
+        }
+      }
+    } catch (error) {
+      // Visibility flush is best-effort.
+    }
   }
 
   teardownStatsBlock() {
@@ -26597,6 +27153,21 @@ class BobLedgerToolsStatsBlockMixin {
       // Timer cleanup is best-effort.
     }
     this.statsRevalidateTimer = null;
+    try {
+      if (typeof this.statsCacheUpdateUnsub === "function") {
+        this.statsCacheUpdateUnsub();
+      }
+    } catch (error) {
+      // Unsubscribe is best-effort.
+    }
+    this.statsCacheUpdateUnsub = null;
+    try {
+      if (typeof this.statsCancelAllWaiters === "function") {
+        this.statsCancelAllWaiters();
+      }
+    } catch (error) {
+      // Waiter cancellation is best-effort.
+    }
     if (this.statsBlockViews instanceof Set) {
       for (const view of this.statsBlockViews) {
         this.statsReleaseChartView(view);
@@ -26611,6 +27182,17 @@ class BobLedgerToolsStatsBlockMixin {
     }
     if (this.statsCache instanceof Map) {
       this.statsCache.clear();
+    }
+    if (this.statsPendingQueue instanceof Array) {
+      this.statsPendingQueue.length = 0;
+    } else {
+      this.statsPendingQueue = [];
+    }
+    if (this.statsPendingByKey instanceof Map) {
+      this.statsPendingByKey.clear();
+    }
+    if (this.statsCacheListeners instanceof Set) {
+      this.statsCacheListeners.clear();
     }
     this.statsFlight = null;
     this.statsPendingFetch = null;
@@ -26632,6 +27214,11 @@ class BobLedgerToolsStatsBlockMixin {
       }
       if (this.statsBlockDay !== day) {
         this.statsBlockDay = day;
+        try {
+          this.statsBumpChangeGen();
+        } catch (error) {
+          // Generation bump is best-effort.
+        }
         this.revalidateStatsBlocks();
       }
     } catch (error) {
@@ -26766,23 +27353,43 @@ class BobLedgerToolsStatsBlockMixin {
 
   revalidateStatsBlocks() {
     // Revalidating keeps the previous frame at reduced opacity until
-    // the new one swaps in (see `renderStatsResult`).
+    // the new one swaps in (see `renderStatsResult`). Only views that
+    // are on screen re-run; hidden views are marked and repaint when
+    // they are shown again, so a background tab never spawns.
     try {
       if (!(this.statsBlockViews instanceof Set) || this.statsBlockViews.size === 0) {
         return;
       }
+      let anyShown = false;
       for (const view of Array.from(this.statsBlockViews)) {
         try {
-          if (view.el && typeof view.el.addClass === "function") {
-            view.el.addClass("bob-stats-revalidating");
-          } else if (view.el && view.el.classList) {
-            view.el.classList.add("bob-stats-revalidating");
+          if (statsBlockViewIsShown(view)) {
+            anyShown = true;
+            view.needsRevalidate = false;
+            if (view.el && typeof view.el.addClass === "function") {
+              view.el.addClass("bob-stats-revalidating");
+            } else if (view.el && view.el.classList) {
+              view.el.classList.add("bob-stats-revalidating");
+            }
+          } else {
+            view.needsRevalidate = true;
           }
         } catch (error) {
           // Opacity marking is best-effort.
         }
       }
-      this.repaintStatsBlocks();
+      if (!anyShown) {
+        return;
+      }
+      for (const view of Array.from(this.statsBlockViews)) {
+        try {
+          if (statsBlockViewIsShown(view)) {
+            this.paintStatsBlock(view);
+          }
+        } catch (error) {
+          // One stale block never breaks the others.
+        }
+      }
     } catch (error) {
       // Revalidation is best-effort.
     }
@@ -48797,6 +49404,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsFreshnessApiMixin,
   BobLedgerToolsStatsJournalMixin,
   BobLedgerToolsStatsDataMixin,
+  BobLedgerToolsStatsCacheMixin,
   BobLedgerToolsReadingBoardDataMixin,
   BobLedgerToolsReadingBoardBlockMixin,
   BobLedgerToolsStatsBlockMixin,
@@ -51150,8 +51758,11 @@ module.exports.helpers = {
   bobSpawnJson,
   STATS_FETCH_TIMEOUT_MS,
   STATS_CACHE_SIZE,
+  STATS_MAX_CLEAN_AGE_MS,
+  STATS_MAX_PENDING_KEYS,
   STATS_SCHEMA_VERSION,
   STATS_RANGE_PRESETS,
+  STATS_GROUP_IDS,
   statsExpandHome,
   statsHomeDir,
   statsBobCandidatePaths,
@@ -51160,7 +51771,11 @@ module.exports.helpers = {
   statsReadConfigValue,
   statsNormalizeRange,
   statsNormalizeOffset,
+  statsNormalizeGroup,
   statsBuildArgs,
+  statsRequestFor,
+  statsCacheEntryIsDirty,
+  statsBlockViewIsShown,
   statsCacheKey,
   statsDecodeReport,
   statsFirstLine,

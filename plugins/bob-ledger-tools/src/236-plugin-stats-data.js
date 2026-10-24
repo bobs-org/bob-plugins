@@ -8,11 +8,17 @@ const BOB_SPAWN_TIMEOUT_MS = 20000;
 const BOB_SPAWN_MAX_BUFFER = 32 * 1024 * 1024;
 const STATS_FETCH_TIMEOUT_MS = BOB_SPAWN_TIMEOUT_MS;
 const STATS_FETCH_MAX_BUFFER = BOB_SPAWN_MAX_BUFFER;
-const STATS_CACHE_SIZE = 8;
+const STATS_CACHE_SIZE = 16;
 const STATS_REVALIDATE_DEBOUNCE_MS = 3000;
+// A cache entry older than this is dirty even when no vault event fired.
+// It catches review-journal syncs from other hosts under hidden `.bob/`,
+// for which Obsidian fires no vault events.
+const STATS_MAX_CLEAN_AGE_MS = 10 * 60 * 1000;
+const STATS_MAX_PENDING_KEYS = 8;
 const STATS_SCHEMA_VERSION = 1;
 const STATS_RANGE_PRESETS = ["7d", "4w", "3m", "1y", "all"];
 const STATS_DEFAULT_RANGE = "4w";
+const STATS_GROUP_IDS = ["day", "week", "month"];
 // GUI Obsidian on macOS lacks the shell PATH, so desktop `bob` resolution
 // tries these before falling back to `bob` on PATH. Entries without a
 // leading `/` are relative to the home directory.
@@ -235,6 +241,14 @@ function statsNormalizeOffset(value) {
   return offset;
 }
 
+function statsNormalizeGroup(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (STATS_GROUP_IDS.includes(text)) {
+    return text;
+  }
+  return "";
+}
+
 // Build the argv for one fetch: always `stats show -a -f json` plus the
 // chosen flags, so one call serves tiles, focus, and panels.
 function statsBuildArgs(options = {}) {
@@ -254,6 +268,10 @@ function statsBuildArgs(options = {}) {
   if (options.compare === true) {
     args.push("-c");
   }
+  const group = statsNormalizeGroup(options.group);
+  if (group) {
+    args.push("-g", group);
+  }
   if (Array.isArray(options.metrics) && options.metrics.length > 0) {
     for (const id of options.metrics) {
       if (typeof id === "string" && id.trim()) {
@@ -262,6 +280,113 @@ function statsBuildArgs(options = {}) {
     }
   }
   return args;
+}
+
+// Resolve the configured fallback range, then build the argv and its key.
+// Both the page default and the strip default call with `{}` so they share
+// one cache entry. Never throws.
+function statsRequestFor(options = {}) {
+  try {
+    const opts = options && typeof options === "object" ? options : {};
+    let fallbackRange = STATS_DEFAULT_RANGE;
+    try {
+      const configured = statsReadConfigValue("range");
+      if (typeof configured === "string" && configured.trim()) {
+        fallbackRange = configured.trim();
+      }
+    } catch (error) {
+      // Config default is best-effort.
+    }
+    if (typeof opts.fallbackRange === "string" && opts.fallbackRange.trim()) {
+      fallbackRange = opts.fallbackRange.trim();
+    }
+    const args = statsBuildArgs({ ...opts, fallbackRange });
+    return { args, key: statsCacheKey(args) };
+  } catch (error) {
+    const args = statsBuildArgs({});
+    return { args, key: statsCacheKey(args) };
+  }
+}
+
+// True when a cache entry must revalidate: its fetch started before the
+// latest vault change, or it is older than the max clean age. Never throws.
+function statsCacheEntryIsDirty(entry, now, gen) {
+  try {
+    if (!entry || typeof entry !== "object") {
+      return true;
+    }
+    if (
+      typeof entry.gen === "number" &&
+      typeof gen === "number" &&
+      entry.gen < gen
+    ) {
+      return true;
+    }
+    const fetchedAt = Number(entry.fetchedAt);
+    const at = Number(now);
+    const base = Number.isFinite(at) ? at : Date.now();
+    if (!Number.isFinite(fetchedAt)) {
+      return true;
+    }
+    return base - fetchedAt > STATS_MAX_CLEAN_AGE_MS;
+  } catch (error) {
+    return true;
+  }
+}
+
+// True when a Stats block element is on screen: the tab is visible and the
+// element reports itself shown. Unknown hosts count as shown so first paint
+// never stalls. Never throws.
+function statsBlockViewIsShown(view) {
+  try {
+    if (
+      typeof document !== "undefined" &&
+      document &&
+      typeof document.visibilityState === "string" &&
+      document.visibilityState !== "visible"
+    ) {
+      return false;
+    }
+  } catch (error) {
+    // Fall through to the element checks.
+  }
+  try {
+    const el = view && view.el;
+    if (!el) {
+      return false;
+    }
+    if (typeof el.isShown === "function") {
+      try {
+        return el.isShown() !== false;
+      } catch (error) {
+        // Fall through below.
+      }
+    }
+    if (typeof el.checkVisibility === "function") {
+      try {
+        const shown = el.checkVisibility();
+        if (shown === false) {
+          return false;
+        }
+      } catch (error) {
+        // Fall through below.
+      }
+    }
+    if ("isConnected" in el && el.isConnected === false) {
+      return false;
+    }
+    return true;
+  } catch (error) {
+    return true;
+  }
+}
+
+function statsCancelledResult() {
+  return {
+    report: null,
+    stale: false,
+    error: { code: "cancelled", message: "Stats fetch cancelled.", detail: "" },
+  };
 }
 
 function statsCacheKey(args) {
@@ -584,40 +709,6 @@ class BobLedgerToolsStatsDataMixin {
     }
   }
 
-  statsCacheStore() {
-    if (!(this.statsCache instanceof Map)) {
-      this.statsCache = new Map();
-    }
-    return this.statsCache;
-  }
-
-  statsCacheGet(key) {
-    const store = this.statsCacheStore();
-    const entry = store.get(key);
-    if (!entry) {
-      return null;
-    }
-    // LRU touch: reinsert so the oldest entry evicts first.
-    store.delete(key);
-    store.set(key, entry);
-    return entry;
-  }
-
-  statsCacheSet(key, report) {
-    const store = this.statsCacheStore();
-    if (store.has(key)) {
-      store.delete(key);
-    }
-    store.set(key, { report, fetchedAt: Date.now() });
-    while (store.size > STATS_CACHE_SIZE) {
-      const oldest = store.keys().next();
-      if (oldest.done) {
-        break;
-      }
-      store.delete(oldest.value);
-    }
-  }
-
   statsSpawnFetch(args, options = {}) {
     return bobSpawnJson(args, statsDecodeReport, {
       ...options,
@@ -633,137 +724,64 @@ class BobLedgerToolsStatsDataMixin {
     });
   }
 
-  // Public: fetch a stats report. Resolves `{ report, stale, error }`:
-  // a cached report returns immediately as stale while one background
-  // revalidation refreshes it; a miss spawns `bob`. At most one spawn
-  // is in flight with one coalesced follow-up; concurrent callers for
-  // the same arguments share the flight. Never rejects.
+  // Public: fetch a stats report. Resolves `{ report, stale, error }`.
+  // Clean cache hits return immediately with no spawn; dirty hits return
+  // the stale frame immediately while one background refresh runs; misses
+  // queue behind the single running spawn. Each key settles with its own
+  // result, so no waiter is lost. Pass `revalidate: "never"` to skip the
+  // background refresh. Never rejects.
   apiStatsFetch(options = {}) {
     const opts = options && typeof options === "object" ? options : {};
-    let fallbackRange = STATS_DEFAULT_RANGE;
-    try {
-      const configuredRange = statsReadConfigValue("range");
-      if (typeof configuredRange === "string" && configuredRange.trim()) {
-        fallbackRange = configuredRange.trim();
-      }
-    } catch (error) {
-      // Config default is best-effort.
-    }
-    const args = statsBuildArgs({ ...opts, fallbackRange });
-    const key = statsCacheKey(args);
+    const { args, key } = statsRequestFor(opts);
     const cached = this.statsCacheGet(key);
-    // Same arguments already in flight: share the flight.
-    if (this.statsFlight && this.statsFlight.key === key) {
-      return this.statsFlight.promise;
+    if (cached && opts.revalidate === "never") {
+      return Promise.resolve({ report: cached.report, stale: false, error: null });
     }
-    if (this.statsFlight) {
-      // A different key is in flight: coalesce to the single pending
-      // follow-up (latest options win); waiters share its promise.
-      if (
-        !this.statsPendingFetch ||
-        statsCacheKey(
-          statsBuildArgs({ ...this.statsPendingFetch.opts, fallbackRange }),
-        ) !== key
-      ) {
-        this.statsPendingFetch = { opts: { ...opts }, waiters: [] };
-        this.statsPendingFetch.promise = new Promise((resolve) => {
-          this.statsPendingFetch.waiters.push(resolve);
-        });
-      }
-      const pending = this.statsPendingFetch;
-      if (cached) {
-        return Promise.resolve({ report: cached.report, stale: true, error: null });
-      }
-      return pending.promise;
+    let now = null;
+    try {
+      now = Date.now();
+    } catch (error) {
+      now = cached ? cached.fetchedAt : 0;
     }
-    const run = async (runArgs, runKey, runOpts, hadCached) => {
-      try {
-        const result = await this.statsSpawnFetch(runArgs, runOpts);
-        if (result && result.ok) {
-          this.statsCacheSet(runKey, result.report);
-          if (hadCached) {
-            // The caller already holds the stale frame; repaint views
-            // with the fresh one.
-            try {
-              this.repaintStatsBlocks();
-            } catch (error) {
-              // Repaint is best-effort.
-            }
-          }
-          return { report: result.report, stale: false, error: null };
-        }
-        if (hadCached) {
-          const staleEntry = this.statsCacheGet(runKey);
-          return {
-            report: staleEntry ? staleEntry.report : null,
-            stale: true,
-            error: result,
-          };
-        }
-        return { report: null, stale: false, error: result };
-      } catch (error) {
-        const failure = {
-          ok: false,
-          code: "failed",
-          message:
-            error && error.message ? String(error.message) : "bob stats failed.",
-          detail: "",
-        };
-        if (hadCached) {
-          const staleEntry = this.statsCacheGet(runKey);
-          return {
-            report: staleEntry ? staleEntry.report : null,
-            stale: true,
-            error: failure,
-          };
-        }
-        return { report: null, stale: false, error: failure };
-      }
-    };
-    const launch = (launchArgs, launchKey, launchOpts, hadCached) => {
-      const promise = run(launchArgs, launchKey, launchOpts, hadCached).finally(
-        () => {
-          if (this.statsFlight && this.statsFlight.promise === promise) {
-            this.statsFlight = null;
-          }
-          // One coalesced follow-up: the latest request that arrived
-          // mid-flight runs next.
-          if (this.statsPendingFetch) {
-            const pending = this.statsPendingFetch;
-            this.statsPendingFetch = null;
-            const pendingArgs = statsBuildArgs({
-              ...pending.opts,
-              fallbackRange,
-            });
-            const pendingKey = statsCacheKey(pendingArgs);
-            const pendingCached = this.statsCacheGet(pendingKey);
-            const next = launch(pendingArgs, pendingKey, pending.opts, Boolean(pendingCached));
-            for (const waiter of pending.waiters) {
-              try {
-                next.then(waiter);
-              } catch (error) {
-                // Waiter delivery is best-effort.
-              }
-            }
-          }
-        },
-      );
-      this.statsFlight = { key: launchKey, promise };
-      return promise;
-    };
-    const flight = launch(args, key, opts, Boolean(cached));
+    const dirty = statsCacheEntryIsDirty(cached, now, this.statsChangeGenValue());
+    if (cached && !dirty) {
+      return Promise.resolve({ report: cached.report, stale: false, error: null });
+    }
     if (cached) {
       // Stale-while-revalidate: hand back the stale frame now; the
-      // flight refreshes the cache and repaints.
+      // queued flight refreshes the cache and notifies subscribers.
+      this.statsEnsureQueued(key, args, opts);
       return Promise.resolve({ report: cached.report, stale: true, error: null });
     }
-    return flight;
+    if (this.statsFlight && this.statsFlight.key === key) {
+      return new Promise((resolve) => {
+        this.statsFlight.waiters.push(resolve);
+      });
+    }
+    const queued = this.statsPendingByKeyStore().get(key);
+    if (queued) {
+      return new Promise((resolve) => {
+        queued.waiters.push(resolve);
+      });
+    }
+    const entry = { key, args, opts: { ...opts }, waiters: [], hadCached: false };
+    const promise = new Promise((resolve) => {
+      entry.waiters.push(resolve);
+    });
+    this.statsEnqueueFetch(entry);
+    return promise;
   }
 
-  // Debounced revalidation: only while a Stats view is mounted, at most
-  // one timer, ~3 s after the last trigger.
+  // Debounced revalidation: bump the change generation on every trigger,
+  // then repaint ~3 s later when a Stats view is mounted. At most one
+  // timer. Hidden views never spawn; they revalidate when shown.
   scheduleStatsRevalidate(reason) {
     void reason;
+    try {
+      this.statsBumpChangeGen();
+    } catch (error) {
+      // Generation bump is best-effort.
+    }
     try {
       if (!this.statsBlockViews || this.statsBlockViews.size === 0) {
         return;

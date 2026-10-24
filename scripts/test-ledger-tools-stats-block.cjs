@@ -395,6 +395,155 @@ test("stats block registers the processor and the Open Stats command", async () 
   });
 });
 
+test("stats revalidation gates on visibility: hidden views never spawn", async () => {
+  await withMissingConfig(async () => {
+    const app = makeFreshnessApp({ tasks: [] });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      let spawns = 0;
+      plugin.statsSpawnFetch = async () => {
+        spawns += 1;
+        return { ok: true, report: sampleReport() };
+      };
+      const el = fakeContainer();
+      plugin.renderStatsBlock(el, { sourcePath: "dash_stats.md", addChild: () => {} }, "");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(spawns, 1);
+      const [view] = Array.from(plugin.statsBlockViews);
+      assert.ok(view, "mounted view registers");
+      // Hide the leaf: a vault change now marks the view but spawns nothing.
+      el.isShown = () => false;
+      plugin.scheduleStatsRevalidateForFile({});
+      if (plugin.statsRevalidateTimer !== null && plugin.statsRevalidateTimer !== undefined) {
+        clearTimeout(plugin.statsRevalidateTimer);
+        plugin.statsRevalidateTimer = null;
+      }
+      plugin.revalidateStatsBlocks();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(spawns, 1);
+      assert.equal(view.needsRevalidate, true);
+      // Showing the leaf flushes exactly one spawn for the dirty entry.
+      el.isShown = () => true;
+      plugin.statsVisibleViewsChanged();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(spawns, 2);
+      assert.equal(view.needsRevalidate, false);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(spawns, 2);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("stats background tabs never spawn until the tab is visible again", async () => {
+  await withMissingConfig(async () => {
+    const priorDocument = typeof document === "undefined" ? undefined : document;
+    const app = makeFreshnessApp({ tasks: [] });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      let spawns = 0;
+      plugin.statsSpawnFetch = async () => {
+        spawns += 1;
+        return { ok: true, report: sampleReport() };
+      };
+      const el = fakeContainer();
+      plugin.renderStatsBlock(el, { sourcePath: "dash_stats.md", addChild: () => {} }, "");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(spawns, 1);
+      const [view] = Array.from(plugin.statsBlockViews);
+      globalThis.document = { visibilityState: "hidden" };
+      plugin.statsBumpChangeGen();
+      plugin.revalidateStatsBlocks();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(spawns, 1);
+      assert.equal(view.needsRevalidate, true);
+      globalThis.document = { visibilityState: "visible" };
+      plugin.statsVisibleViewsChanged();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(view.needsRevalidate, false);
+      assert.equal(spawns, 2);
+    } finally {
+      if (priorDocument === undefined) {
+        delete globalThis.document;
+      } else {
+        globalThis.document = priorDocument;
+      }
+      plugin.onunload();
+    }
+  });
+});
+
+test("stats cache subscriber repaints only shown views reading the key", async () => {
+  await withMissingConfig(async () => {
+    const app = makeFreshnessApp({ tasks: [] });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      let spawns = 0;
+      plugin.statsSpawnFetch = async () => {
+        spawns += 1;
+        return { ok: true, report: sampleReport() };
+      };
+      // Pre-populate the default key and one ranged key with no views mounted.
+      await plugin.apiStatsFetch({});
+      plugin.statsViewStateFor("other.md").range = "7d";
+      await plugin.apiStatsFetch({ range: "7d" });
+      assert.equal(spawns, 2);
+      const shownEl = fakeContainer();
+      const hiddenEl = fakeContainer();
+      hiddenEl.isShown = () => false;
+      const otherEl = fakeContainer();
+      const shown = { el: shownEl, sourcePath: "dash_stats.md", fence: {} };
+      const hidden = { el: hiddenEl, sourcePath: "dash_stats.md", fence: {} };
+      const other = { el: otherEl, sourcePath: "other.md", fence: {} };
+      if (!(plugin.statsBlockViews instanceof Set)) {
+        plugin.statsBlockViews = new Set();
+      }
+      plugin.statsBlockViews.add(shown);
+      plugin.statsBlockViews.add(hidden);
+      plugin.statsBlockViews.add(other);
+      const painted = [];
+      const original = plugin.paintStatsBlock.bind(plugin);
+      plugin.paintStatsBlock = (view) => {
+        painted.push(view);
+        return original(view);
+      };
+      const [defaultKey] = Array.from(plugin.statsCache.keys());
+      plugin.statsRepaintBlocksForKey(defaultKey);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.ok(painted.includes(shown), "shown view reading the key repaints");
+      assert.ok(!painted.includes(hidden), "hidden view does not repaint");
+      assert.ok(!painted.includes(other), "view reading another key does not repaint");
+      assert.equal(hidden.needsRevalidate, true);
+      assert.equal(spawns, 2);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("stats local-date rollover bumps the change generation once per day", async () => {
+  await withMissingConfig(async () => {
+    const app = makeFreshnessApp({ tasks: [] });
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.onload();
+    try {
+      const before = plugin.statsChangeGenValue();
+      plugin.refreshStatsBlocksForRollover(new Date(2026, 9, 24, 12, 0, 0));
+      assert.equal(plugin.statsChangeGenValue(), before);
+      plugin.refreshStatsBlocksForRollover(new Date(2026, 9, 25, 0, 0, 1));
+      assert.equal(plugin.statsChangeGenValue(), before + 1);
+      plugin.refreshStatsBlocksForRollover(new Date(2026, 9, 25, 12, 0, 0));
+      assert.equal(plugin.statsChangeGenValue(), before + 1);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
 test("stats stylesheet contract: selectors, tabular-nums, motion, colors", () => {
   const cssPath = path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css");
   const css = fs.readFileSync(cssPath, "utf8");

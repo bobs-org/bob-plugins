@@ -23,6 +23,23 @@ class BobLedgerToolsStatsBlockMixin {
 
   setupStatsBlock() {
     try {
+      if (this.statsChangeGen === null || this.statsChangeGen === undefined) {
+        this.statsChangeGen = 0;
+      }
+    } catch (error) {
+      // Generation init is best-effort.
+    }
+    try {
+      if (this.statsSpawnCount === null || this.statsSpawnCount === undefined) {
+        this.statsSpawnCount = 0;
+      }
+      if (this.statsLastSpawnAt === undefined) {
+        this.statsLastSpawnAt = null;
+      }
+    } catch (error) {
+      // Counter init is best-effort.
+    }
+    try {
       if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
         this.registerMarkdownCodeBlockProcessor("bob-stats", (source, el, ctx) =>
           this.renderStatsBlock(el, ctx, source),
@@ -102,6 +119,126 @@ class BobLedgerToolsStatsBlockMixin {
     } catch (error) {
       // Rollover wiring is best-effort.
     }
+    try {
+      // The page repaint after a revalidation is a cache subscriber, so
+      // every mounted view reading the updated key repaints in place.
+      if (typeof this.statsOnCacheUpdate === "function") {
+        try {
+          if (typeof this.statsCacheUpdateUnsub === "function") {
+            this.statsCacheUpdateUnsub();
+          }
+        } catch (error) {
+          // Resubscribe is best-effort.
+        }
+        this.statsCacheUpdateUnsub = this.statsOnCacheUpdate((key) => {
+          try {
+            this.statsRepaintBlocksForKey(key);
+          } catch (error) {
+            // Subscriber repaint is best-effort.
+          }
+        });
+      }
+    } catch (error) {
+      // Subscriber wiring is best-effort.
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.on === "function") {
+        this.registerEvent(
+          workspace.on("active-leaf-change", () => {
+            try {
+              this.statsVisibleViewsChanged();
+            } catch (error) {
+              // Visibility flush is best-effort.
+            }
+          }),
+        );
+        this.registerEvent(
+          workspace.on("layout-change", () => {
+            try {
+              this.statsVisibleViewsChanged();
+            } catch (error) {
+              // Visibility flush is best-effort.
+            }
+          }),
+        );
+      }
+    } catch (error) {
+      // Visibility wiring is best-effort.
+    }
+    try {
+      if (typeof this.registerDomEvent === "function" && typeof document !== "undefined" && document) {
+        this.registerDomEvent(document, "visibilitychange", () => {
+          try {
+            if (!document.visibilityState || document.visibilityState === "visible") {
+              this.statsVisibleViewsChanged();
+            }
+          } catch (error) {
+            // Visibility flush is best-effort.
+          }
+        });
+      }
+    } catch (error) {
+      // Visibility wiring is best-effort.
+    }
+  }
+
+  // Repaint the mounted views reading one cache key. Hidden views are
+  // marked for later instead of spawning. Never throws.
+  statsRepaintBlocksForKey(key) {
+    try {
+      if (!(this.statsBlockViews instanceof Set) || this.statsBlockViews.size === 0) {
+        return;
+      }
+      for (const view of Array.from(this.statsBlockViews)) {
+        try {
+          let viewKey = null;
+          try {
+            viewKey = statsRequestFor(this.statsFetchArgsFor(view)).key;
+          } catch (error) {
+            viewKey = null;
+          }
+          if (viewKey !== key) {
+            continue;
+          }
+          if (statsBlockViewIsShown(view)) {
+            view.needsRevalidate = false;
+            this.paintStatsBlock(view);
+          } else {
+            view.needsRevalidate = true;
+          }
+        } catch (error) {
+          // One stale block never breaks the others.
+        }
+      }
+    } catch (error) {
+      // Subscriber repaint is best-effort.
+    }
+  }
+
+  // Flush views that were hidden when a change landed and are shown now.
+  // Never throws.
+  statsVisibleViewsChanged() {
+    try {
+      if (!(this.statsBlockViews instanceof Set) || this.statsBlockViews.size === 0) {
+        return;
+      }
+      for (const view of Array.from(this.statsBlockViews)) {
+        try {
+          if (!view.needsRevalidate) {
+            continue;
+          }
+          if (statsBlockViewIsShown(view)) {
+            view.needsRevalidate = false;
+            this.paintStatsBlock(view);
+          }
+        } catch (error) {
+          // One stale block never breaks the others.
+        }
+      }
+    } catch (error) {
+      // Visibility flush is best-effort.
+    }
   }
 
   teardownStatsBlock() {
@@ -117,6 +254,21 @@ class BobLedgerToolsStatsBlockMixin {
       // Timer cleanup is best-effort.
     }
     this.statsRevalidateTimer = null;
+    try {
+      if (typeof this.statsCacheUpdateUnsub === "function") {
+        this.statsCacheUpdateUnsub();
+      }
+    } catch (error) {
+      // Unsubscribe is best-effort.
+    }
+    this.statsCacheUpdateUnsub = null;
+    try {
+      if (typeof this.statsCancelAllWaiters === "function") {
+        this.statsCancelAllWaiters();
+      }
+    } catch (error) {
+      // Waiter cancellation is best-effort.
+    }
     if (this.statsBlockViews instanceof Set) {
       for (const view of this.statsBlockViews) {
         this.statsReleaseChartView(view);
@@ -131,6 +283,17 @@ class BobLedgerToolsStatsBlockMixin {
     }
     if (this.statsCache instanceof Map) {
       this.statsCache.clear();
+    }
+    if (this.statsPendingQueue instanceof Array) {
+      this.statsPendingQueue.length = 0;
+    } else {
+      this.statsPendingQueue = [];
+    }
+    if (this.statsPendingByKey instanceof Map) {
+      this.statsPendingByKey.clear();
+    }
+    if (this.statsCacheListeners instanceof Set) {
+      this.statsCacheListeners.clear();
     }
     this.statsFlight = null;
     this.statsPendingFetch = null;
@@ -152,6 +315,11 @@ class BobLedgerToolsStatsBlockMixin {
       }
       if (this.statsBlockDay !== day) {
         this.statsBlockDay = day;
+        try {
+          this.statsBumpChangeGen();
+        } catch (error) {
+          // Generation bump is best-effort.
+        }
         this.revalidateStatsBlocks();
       }
     } catch (error) {
@@ -286,23 +454,43 @@ class BobLedgerToolsStatsBlockMixin {
 
   revalidateStatsBlocks() {
     // Revalidating keeps the previous frame at reduced opacity until
-    // the new one swaps in (see `renderStatsResult`).
+    // the new one swaps in (see `renderStatsResult`). Only views that
+    // are on screen re-run; hidden views are marked and repaint when
+    // they are shown again, so a background tab never spawns.
     try {
       if (!(this.statsBlockViews instanceof Set) || this.statsBlockViews.size === 0) {
         return;
       }
+      let anyShown = false;
       for (const view of Array.from(this.statsBlockViews)) {
         try {
-          if (view.el && typeof view.el.addClass === "function") {
-            view.el.addClass("bob-stats-revalidating");
-          } else if (view.el && view.el.classList) {
-            view.el.classList.add("bob-stats-revalidating");
+          if (statsBlockViewIsShown(view)) {
+            anyShown = true;
+            view.needsRevalidate = false;
+            if (view.el && typeof view.el.addClass === "function") {
+              view.el.addClass("bob-stats-revalidating");
+            } else if (view.el && view.el.classList) {
+              view.el.classList.add("bob-stats-revalidating");
+            }
+          } else {
+            view.needsRevalidate = true;
           }
         } catch (error) {
           // Opacity marking is best-effort.
         }
       }
-      this.repaintStatsBlocks();
+      if (!anyShown) {
+        return;
+      }
+      for (const view of Array.from(this.statsBlockViews)) {
+        try {
+          if (statsBlockViewIsShown(view)) {
+            this.paintStatsBlock(view);
+          }
+        } catch (error) {
+          // One stale block never breaks the others.
+        }
+      }
     } catch (error) {
       // Revalidation is best-effort.
     }

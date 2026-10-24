@@ -44,6 +44,7 @@
   "230-plugin-freshness-api.js",
   "235-plugin-stats-journal.js",
   "236-plugin-stats-data.js",
+  "236-plugin-stats-cache.js",
   "237-plugin-stats-models.js",
   "238-plugin-stats-block.js",
   "239-plugin-stats-chart-models.js",

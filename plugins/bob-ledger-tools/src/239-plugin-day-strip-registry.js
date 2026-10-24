@@ -129,6 +129,13 @@ class BobLedgerToolsDayStripMixin {
 
   setupDayStripHosts() {
     try {
+      if (typeof this.setupDayStripMount === "function") {
+        this.setupDayStripMount();
+      }
+    } catch (error) {
+      // The Live Preview mount is best-effort.
+    }
+    try {
       this.dayStripViewsStore();
     } catch (error) {
       // Registry init is best-effort.
@@ -776,6 +783,9 @@ class BobLedgerToolsDayStripMixin {
         }
       }
       this.dayStripCheckAll();
+      if (typeof this.refreshDayStripMountEditors === "function") {
+        this.refreshDayStripMountEditors();
+      }
     } catch (error) {
       // Rollover is best-effort.
     }

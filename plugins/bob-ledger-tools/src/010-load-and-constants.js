@@ -28,13 +28,16 @@ try {
   WidgetType = null;
 }
 let StateEffect = null;
+let StateField = null;
 let RangeSetBuilder = null;
 try {
   const stateMod = require("@codemirror/state");
   StateEffect = stateMod.StateEffect || null;
+  StateField = stateMod.StateField || null;
   RangeSetBuilder = stateMod.RangeSetBuilder || null;
 } catch (error) {
   StateEffect = null;
+  StateField = null;
   RangeSetBuilder = null;
 }
 let editorInfoField = null;

@@ -777,3 +777,45 @@ test("full Pomodoro completion moves a marked same-note link without history", a
   assert.equal(editor.getValue().includes("🍅"), false);
 });
 
+
+test("closed-reference retirement never duplicates a daily Task Link into the completed fallback (bob-cli-2l)", () => {
+  // The completed entry already links the task and a later open untimed
+  // placeholder carries the same live link with no open timed entry. The
+  // cycler must not insert a duplicate: vault-wide retirement leaves plain
+  // daily links untouched for `bob task-status-hooks` (which dedupes into
+  // the destination), and the active strike stays in place and idempotent.
+  const day = [
+    "## Pomodoros",
+    "",
+    "- [x] Morning (0800-0830)",
+    "  - \u{1F345} [[bob#^ledger-task]]",
+    "- [ ] SASE",
+    "  - [[bob#^ledger-task]]",
+    "",
+  ].join("\n");
+  const closed = [{ path: "bob.md", blockId: "ledger-task" }];
+  const resolve = (pathPart) =>
+    pathPart === "bob" ? { path: "bob.md" } : null;
+  const result = helpers.retireClosedTaskReferencesInText(
+    day,
+    "2026/20260929.md",
+    closed,
+    resolve,
+  );
+  assert.equal(result.changed, false);
+  assert.equal(result.retired, 0);
+  assert.equal((result.text.match(/\^ledger-task/g) || []).length, 2);
+
+  const struck = helpers.strikeSelectedTaskBlockLinkInLine(
+    "  - [[bob#^ledger-task]]",
+    { pathPart: "bob", blockId: "ledger-task", embedded: false, startIndex: 5 },
+    { pomodoro: true },
+  );
+  assert.equal(struck, "  - ~~[[bob#^ledger-task]]~~");
+  const again = helpers.strikeSelectedTaskBlockLinkInLine(
+    struck,
+    { pathPart: "bob", blockId: "ledger-task", embedded: false, startIndex: 5 },
+    { pomodoro: true },
+  );
+  assert.equal(again, null);
+});

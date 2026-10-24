@@ -235,3 +235,46 @@ function mapEditorPositionThroughLineAlignment(position, oldLines, newLines, pai
   }
   return { line: Math.min(newEnd, lastNewLine), ch: 0 };
 }
+
+// Fold a Pomodoro cleanup into a counted plan while keeping the cursor on
+// the first source. Maps the pre-cleanup cursor through the final content
+// alignment so it never parks on a generated BLOCKS line.
+function withCountedPomodoroCursorMapped(plan, preCleanupContent, commitContent) {
+  if (!plan || !Number.isInteger(plan.cursorLine)) return plan;
+  if (commitContent === preCleanupContent) return { ...plan, content: commitContent };
+  try {
+    return {
+      ...plan,
+      content: commitContent,
+      cursorLine: mapCountedLineThroughCleanup(plan.cursorLine, preCleanupContent, commitContent),
+    };
+  } catch (_error) {
+    return { ...plan, content: commitContent };
+  }
+}
+
+// Follow a pre-cleanup line through the final committed content. Uses the
+// same alignment as the editor write (dependency fields, freshness fields,
+// checkbox changes, and added block ids are ignored), so a counted cursor on
+// a task survives a same-file Pomodoro fold. Returns the matched new line,
+// or the input line clamped into range when the row cannot be identified.
+function mapCountedLineThroughCleanup(oldLine, beforeContent, afterContent) {
+  const at = Math.floor(Number(oldLine));
+  if (!Number.isInteger(at)) return oldLine;
+  const beforeLines = String(beforeContent ?? "").split(/\r?\n/);
+  const afterLines = String(afterContent ?? "").split(/\r?\n/);
+  if (beforeLines.length === 0 || afterLines.length === 0) return at;
+  if (at < 0 || at >= beforeLines.length) {
+    return Math.max(0, Math.min(at, afterLines.length - 1));
+  }
+  let pairs = null;
+  try {
+    pairs = alignEditorLines(beforeLines, afterLines);
+  } catch (_error) {
+    return Math.max(0, Math.min(at, afterLines.length - 1));
+  }
+  for (const [oldIndex, newIndex] of Array.isArray(pairs) ? pairs : []) {
+    if (oldIndex === at) return newIndex;
+  }
+  return Math.max(0, Math.min(at, afterLines.length - 1));
+}

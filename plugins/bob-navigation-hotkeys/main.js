@@ -19609,6 +19609,49 @@ function mapEditorPositionThroughLineAlignment(position, oldLines, newLines, pai
   }
   return { line: Math.min(newEnd, lastNewLine), ch: 0 };
 }
+
+// Fold a Pomodoro cleanup into a counted plan while keeping the cursor on
+// the first source. Maps the pre-cleanup cursor through the final content
+// alignment so it never parks on a generated BLOCKS line.
+function withCountedPomodoroCursorMapped(plan, preCleanupContent, commitContent) {
+  if (!plan || !Number.isInteger(plan.cursorLine)) return plan;
+  if (commitContent === preCleanupContent) return { ...plan, content: commitContent };
+  try {
+    return {
+      ...plan,
+      content: commitContent,
+      cursorLine: mapCountedLineThroughCleanup(plan.cursorLine, preCleanupContent, commitContent),
+    };
+  } catch (_error) {
+    return { ...plan, content: commitContent };
+  }
+}
+
+// Follow a pre-cleanup line through the final committed content. Uses the
+// same alignment as the editor write (dependency fields, freshness fields,
+// checkbox changes, and added block ids are ignored), so a counted cursor on
+// a task survives a same-file Pomodoro fold. Returns the matched new line,
+// or the input line clamped into range when the row cannot be identified.
+function mapCountedLineThroughCleanup(oldLine, beforeContent, afterContent) {
+  const at = Math.floor(Number(oldLine));
+  if (!Number.isInteger(at)) return oldLine;
+  const beforeLines = String(beforeContent ?? "").split(/\r?\n/);
+  const afterLines = String(afterContent ?? "").split(/\r?\n/);
+  if (beforeLines.length === 0 || afterLines.length === 0) return at;
+  if (at < 0 || at >= beforeLines.length) {
+    return Math.max(0, Math.min(at, afterLines.length - 1));
+  }
+  let pairs = null;
+  try {
+    pairs = alignEditorLines(beforeLines, afterLines);
+  } catch (_error) {
+    return Math.max(0, Math.min(at, afterLines.length - 1));
+  }
+  for (const [oldIndex, newIndex] of Array.isArray(pairs) ? pairs : []) {
+    if (oldIndex === at) return newIndex;
+  }
+  return Math.max(0, Math.min(at, afterLines.length - 1));
+}
 // ---- src/190-summary-modals.js ----
 function isSamePriorityRollTarget(cached, fresh) {
   if (!cached || !fresh || cached.kind !== fresh.kind) {
@@ -34027,10 +34070,12 @@ function planCountedLocalTaskDependency(
   let nextContent = nextSource.lines.join(nextSource.lineEnding);
 
   // Freshness is the last transformation of each parent task line
-  // (nav-stamps). Process parents bottom-to-top through the pure planner so
-  // every source keeps the line, the field, status effects, and legacy
-  // folding; edits only shift lines below the current parent, so every
-  // still-pending source retains its snapshot index.
+  // (nav-stamps). Process parents bottom-to-top through the pure planner.
+  // Keep immutable source snapshots for stale checks and reporting, plus
+  // separate mutable current line positions. A same-note BLOCKS insertion
+  // above shifts every remaining source down, so every tracked source is
+  // mapped through each plan's sequential `lineEdits` (Depends-On structure
+  // plus same-note BLOCKS shifts) before the next plan reads it.
   const countedDepStamper = resolveFreshStamper(options);
   const countedDepFreshDateText = resolveFreshDateText(options);
   const countedTargetRef = Object.freeze({
@@ -34044,6 +34089,10 @@ function planCountedLocalTaskDependency(
   const orderedTargets = session.targets
     .slice()
     .sort((first, second) => second.line - first.line);
+  const trackedSources = orderedTargets.map((target) => ({
+    snapshot: target,
+    line: target.line,
+  }));
   // §13.19: counted batches process `^prj` roots with the subtree lanes
   // the writer read up front (`options.subtreeLaneStatuses`), so commitment
   // transfer sees the lanes the pass is about to block. Ordinary sources
@@ -34051,14 +34100,24 @@ function planCountedLocalTaskDependency(
   const subtreeLanes = Array.isArray(options.subtreeLaneStatuses)
     ? options.subtreeLaneStatuses
     : null;
-  for (const target of orderedTargets) {
+  for (const tracked of trackedSources) {
+    const target = tracked.snapshot;
+    if (!Number.isInteger(tracked.line)) {
+      return Object.freeze({
+        valid: false,
+        stale: false,
+        error: "Could not plan dependency navigation for every source task",
+        content: text,
+        changed: false,
+      });
+    }
     const beforeLinesForLanes = nextContent.split(/\r?\n/);
     const parentIsPrj = isProjectLifecycleTaskLine(
-      String(beforeLinesForLanes[target.line] || ""),
+      String(beforeLinesForLanes[tracked.line] || ""),
     );
     const parentPlan = planDependencyEdit({
       content: nextContent,
-      parentLine: target.line,
+      parentLine: tracked.line,
       parentPath: filePath,
       add: remove ? [] : [countedTargetRef],
       remove: remove ? [countedTargetRef] : [],
@@ -34081,23 +34140,48 @@ function planCountedLocalTaskDependency(
       });
     }
     const beforeLines = nextContent.split(/\r?\n/);
-    const currentLine = String(beforeLines[target.line] || "");
+    const currentLine = String(beforeLines[tracked.line] || "");
     let parentChanged =
       parentPlan.changed || currentLine !== target.rawLine;
     nextContent = parentPlan.nextContent;
+    const stampLine = Number.isInteger(parentPlan.parentLineNext)
+      ? parentPlan.parentLineNext
+      : tracked.line;
     if (countedDepStamper && parentChanged) {
       const afterLines = nextContent.split(/\r?\n/);
+      if (stampLine < 0 || stampLine >= afterLines.length) {
+        return Object.freeze({
+          valid: false,
+          stale: false,
+          error: "Could not plan dependency navigation for every source task",
+          content: text,
+          changed: false,
+        });
+      }
       const stamped = applyFreshStampLine(
-        afterLines[target.line],
+        afterLines[stampLine],
         countedDepStamper,
         countedDepFreshDateText,
       );
-      if (stamped !== afterLines[target.line]) {
-        afterLines[target.line] = stamped;
+      if (stamped !== afterLines[stampLine]) {
+        afterLines[stampLine] = stamped;
         const ending = nextContent.includes("\r\n") ? "\r\n" : "\n";
         nextContent = afterLines.join(ending);
         parentChanged = true;
       }
+    }
+    for (const other of trackedSources) {
+      const mapped = mapLineThroughLineEdits(other.line, parentPlan.lineEdits);
+      if (mapped === null) {
+        return Object.freeze({
+          valid: false,
+          stale: false,
+          error: "Could not plan dependency navigation for every source task",
+          content: text,
+          changed: false,
+        });
+      }
+      other.line = mapped;
     }
     if (
       parentPlan.structural.replaceLine !== null ||
@@ -34120,6 +34204,11 @@ function planCountedLocalTaskDependency(
   const changedTaskCount = sourceResults.filter(
     (entry) => entry.dependencyChanged || entry.navigationChanged,
   ).length;
+  const firstSnapshot = session.targets[0];
+  const firstTracked = trackedSources.find(
+    (entry) => entry.snapshot === firstSnapshot,
+  );
+  const mappedCursorLine = firstTracked ? firstTracked.line : firstSnapshot.line;
   return Object.freeze({
     valid: true,
     stale: false,
@@ -34135,7 +34224,7 @@ function planCountedLocalTaskDependency(
     unchangedTaskCount: session.targets.length - changedTaskCount,
     targetCount: session.targets.length,
     navigationChangedCount,
-    cursorLine: session.targets[0].line,
+    cursorLine: mappedCursorLine,
     blocksFollowUps: Object.freeze(blocksFollowUps),
     pomodoroTargets: collectDependencyPlanPomodoroTargets(parentPlans),
   });
@@ -42663,6 +42752,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // when the card opened, the cursor line it was captured on, and that
     // line's text before any write. `reviewSettleDeferred` lets the cancel
     // route close the picker first and settle after its notice.
+    // `reviewOriginContent` retains the editor text at open so the settle step
+    // can align the reviewed row through BLOCKS shifts instead of reusing a
+    // pre-write line index.
     this.reviewOrigin = context.reviewOrigin || null;
     this.reviewLineIndex = Number.isInteger(context.reviewLineIndex)
       ? context.reviewLineIndex
@@ -42671,6 +42763,17 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       typeof context.reviewBeforeLine === "string"
         ? context.reviewBeforeLine
         : "";
+    this.reviewOriginContent = null;
+    if (this.reviewOrigin) {
+      try {
+        this.reviewOriginContent =
+          this.editor && typeof this.editor.getValue === "function"
+            ? String(this.editor.getValue() || "")
+            : null;
+      } catch (_reviewSnapshotError) {
+        this.reviewOriginContent = null;
+      }
+    }
     this.reviewSettleDeferred = false;
     this.inboxRoute = context.inboxRoute || null;
     this.inboxRouteCommitInFlight = false;
@@ -43467,6 +43570,13 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     super.onClose();
   }
 
+  // Read the reviewed task's after-line through the editor alignment, not
+  // the pre-write index: a same-note BLOCKS insertion above shifts the row,
+  // so the captured index can point at a generated BLOCKS line. Returns the
+  // matched new line, or null when the reviewed row cannot be identified
+  // (deleted, missing snapshot/editor). Never substitutes a BLOCKS row or
+  // the cursor line. Uses the final editor content, so cleanup folds are
+  // included, not an intermediate `parentLineNext`.
   // Idempotent: read the after-line from the editor at the captured line
   // and continue the walk. Esc, `q`, refusals, and no-op writes read an
   // unchanged line, which stays; every committing write is judged from the
@@ -43484,16 +43594,12 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       }
       const beforeLine =
         typeof this.reviewBeforeLine === "string" ? this.reviewBeforeLine : "";
-      let afterLine = "";
-      try {
-        const live =
-          this.editor && Number.isInteger(this.reviewLineIndex)
-            ? getEditorLine(this.editor, this.reviewLineIndex)
-            : null;
-        afterLine = typeof live === "string" ? live : "";
-      } catch (error) {
-        afterLine = "";
+      const resolvedAfter = readReviewOriginAfterLine(this);
+      if (resolvedAfter === null) {
+        void plugin.continueReviewWalkAfter(origin, null);
+        return;
       }
+      const afterLine = resolvedAfter;
       let handledRefs = [
         { path: this.filePath || null, line: this.reviewLineIndex, raw: beforeLine },
       ];
@@ -43587,6 +43693,65 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     this.taskCardBackButtonEl = back;
   }
 
+}
+
+function readReviewOriginAfterLine(modal) {
+  try {
+    if (!modal || !Number.isInteger(modal.reviewLineIndex)) return null;
+    const snapshot =
+      typeof modal.reviewOriginContent === "string"
+        ? modal.reviewOriginContent
+        : null;
+    let current = null;
+    try {
+      if (
+        modal.editor &&
+        typeof modal.editor.getValue === "function"
+      ) {
+        current = String(modal.editor.getValue() || "");
+      } else if (typeof modal.getEditorContent === "function") {
+        current = String(modal.getEditorContent() || "");
+      }
+    } catch (_readError) {
+      current = null;
+    }
+    if (snapshot === null || current === null) {
+      try {
+        const live =
+          modal.editor && Number.isInteger(modal.reviewLineIndex)
+            ? getEditorLine(modal.editor, modal.reviewLineIndex)
+            : null;
+        return typeof live === "string" ? live : null;
+      } catch (_fallbackError) {
+        return null;
+      }
+    }
+    const oldLines = String(snapshot).split(/\r?\n/);
+    const newLines = String(current).split(/\r?\n/);
+    if (
+      modal.reviewLineIndex < 0 ||
+      modal.reviewLineIndex >= oldLines.length
+    ) {
+      return null;
+    }
+    let pairs = null;
+    try {
+      pairs = alignEditorLines(oldLines, newLines);
+    } catch (_alignError) {
+      return null;
+    }
+    for (const [oldIndex, newIndex] of Array.isArray(pairs) ? pairs : []) {
+      if (oldIndex === modal.reviewLineIndex) {
+        if (!Number.isInteger(newIndex) || newIndex < 0 || newIndex >= newLines.length) {
+          return null;
+        }
+        return String(newLines[newIndex] || "");
+      }
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
 }
 // ---- src/360-picker-schedule-review.js ----
 class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
@@ -47753,13 +47918,20 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         }
       }
     }
-    // One gesture plans every source on one working copy bottom-up,
-    // refuses before any write when any source fails to plan, then commits
-    // once (one Ctrl+Z) with one summary notice — the same shape as the
-    // counted add above. The notice counts only sources that changed.
+    // One gesture plans every source on one working copy, refusing before
+    // any write when any source fails to plan, then commits once (one Ctrl+Z)
+    // with one summary notice — the same shape as the counted add above. The
+    // notice counts only sources that changed. Keep immutable source snapshots
+    // for reporting plus mutable current positions: every tracked source is
+    // mapped through each plan's sequential `lineEdits` (Depends-On structure
+    // plus same-note BLOCKS shifts) before the next plan reads it.
     const ordered = (this.taskSession.targets || [])
       .slice()
       .sort((first, second) => second.line - first.line);
+    const trackedRemovals = ordered.map((target) => ({
+      snapshot: target,
+      line: target.line,
+    }));
     const originalContent = String(this.editor.getValue() || "");
     const removeRef = { path: targetPath, blockId };
     const resolveLinkpath =
@@ -47846,8 +48018,9 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     let removed = 0;
     const rawPreparations = [];
     const blocksFollowUps = [];
-    for (const target of ordered) {
-      if (!Number.isInteger(target.line)) {
+    for (const tracked of trackedRemovals) {
+      const target = tracked.snapshot;
+      if (!Number.isInteger(tracked.line)) {
         new Notice(
           `⛓ Could not update the counted task (invalid line); no tasks were updated`,
         );
@@ -47857,11 +48030,11 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       planFiles.set(ownerPath, working);
       const sourceIsPrj = sameNoteSubtreeLanes &&
         isProjectLifecycleTaskLine(
-          String(String(working).split(/\r?\n/)[target.line] || ""),
+          String(String(working).split(/\r?\n/)[tracked.line] || ""),
         );
       const plan = planDependencyEdit({
         content: working,
-        parentLine: target.line,
+        parentLine: tracked.line,
         parentPath: ownerPath,
         add: [],
         remove: [removeRef],
@@ -47887,7 +48060,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         new Notice(
           plan.reason === "in-blockquote"
             ? "⛓ Dependencies can't be edited inside a blockquote; no tasks were updated"
-            : `⛓ Could not update the task on line ${target.line + 1} (${plan.reason}); no tasks were updated`,
+            : `⛓ Could not update the task on line ${tracked.line + 1} (${plan.reason}); no tasks were updated`,
         );
         return false;
       }
@@ -47898,10 +48071,23 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       if (plan.changed) {
         removed += 1;
         let nextWorking = plan.nextContent;
+        const stampAt = Number.isInteger(plan.parentLineNext)
+          ? plan.parentLineNext
+          : tracked.line;
         if (this.plugin && typeof this.plugin.stampDependencyParentLine === "function") {
-          nextWorking = this.plugin.stampDependencyParentLine(nextWorking, target.line);
+          nextWorking = this.plugin.stampDependencyParentLine(nextWorking, stampAt);
         }
         working = nextWorking;
+      }
+      for (const other of trackedRemovals) {
+        const mapped = mapLineThroughLineEdits(other.line, plan.lineEdits);
+        if (mapped === null) {
+          new Notice(
+            `⛓ Could not update the counted task (changed — reopen); no tasks were updated`,
+          );
+          return false;
+        }
+        other.line = mapped;
       }
     }
     const preparations = mergeTargetPreparations(rawPreparations);
@@ -48060,11 +48246,16 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     }
     const ref = { path: targetPath, blockId: snapshot.blockId };
     // One gesture commits every source in one editor transaction (one
-    // Ctrl+Z): plan every source on one working copy bottom-up, refuse
-    // before any write when any source fails to plan, then commit once.
+    // Ctrl+Z): plan every source on one working copy, refuse before any
+    // write when any source fails to plan, then commit once. Keep immutable
+    // snapshots plus mutable positions through each plan's `lineEdits`.
     const orderedSources = (this.taskSession.targets || [])
       .slice()
       .sort((first, second) => second.line - first.line);
+    const trackedVaultSources = orderedSources.map((target) => ({
+      snapshot: target,
+      line: target.line,
+    }));
     const originalContent = String(this.editor.getValue() || "");
     let working = originalContent;
     let changedSources = 0;
@@ -48111,7 +48302,13 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         vaultCountedSubtreePrep.lanes.length > 0
       ? vaultCountedSubtreePrep.lanes
       : null;
-    for (const target of orderedSources) {
+    for (const tracked of trackedVaultSources) {
+      if (!Number.isInteger(tracked.line)) {
+        new Notice(
+          `⛓ Could not update the counted task (invalid line); no tasks were updated`,
+        );
+        return false;
+      }
       const targetContent = files.get(targetPath);
       const planFiles = new Map();
       planFiles.set(ownerPath, working);
@@ -48125,11 +48322,11 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       }
       const vaultSourceIsPrj = vaultCountedSubtreeLanes &&
         isProjectLifecycleTaskLine(
-          String(String(working).split(/\r?\n/)[target.line] || ""),
+          String(String(working).split(/\r?\n/)[tracked.line] || ""),
         );
       const plan = planDependencyEdit({
         content: working,
-        parentLine: target.line,
+        parentLine: tracked.line,
         parentPath: ownerPath,
         add: snapshot.remove ? [] : [ref],
         remove: snapshot.remove ? [ref] : [],
@@ -48155,7 +48352,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         new Notice(
           plan.reason === "in-blockquote"
             ? "⛓ Dependencies can't be edited inside a blockquote; no tasks were updated"
-            : `⛓ Could not update the task on line ${target.line + 1} (${plan.reason}); no tasks were updated`,
+            : `⛓ Could not update the task on line ${tracked.line + 1} (${plan.reason}); no tasks were updated`,
         );
         return false;
       }
@@ -48167,11 +48364,24 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       }
       if (plan.changed) {
         changedSources += 1;
-      }
-      if (plan.changed && this.plugin && typeof this.plugin.stampDependencyParentLine === "function") {
-        nextWorking = this.plugin.stampDependencyParentLine(nextWorking, target.line);
+        const stampAt = Number.isInteger(plan.parentLineNext)
+          ? plan.parentLineNext
+          : tracked.line;
+        if (this.plugin && typeof this.plugin.stampDependencyParentLine === "function") {
+          nextWorking = this.plugin.stampDependencyParentLine(nextWorking, stampAt);
+        }
       }
       working = nextWorking;
+      for (const other of trackedVaultSources) {
+        const mapped = mapLineThroughLineEdits(other.line, plan.lineEdits);
+        if (mapped === null) {
+          new Notice(
+            `⛓ Could not update the counted task (changed — reopen); no tasks were updated`,
+          );
+          return false;
+        }
+        other.line = mapped;
+      }
     }
     const preparations = mergeTargetPreparations(rawPreparations);
     for (const preparation of preparations) {
@@ -53083,29 +53293,39 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
             notice: String(move.notice || ""),
           });
         } else {
-          let afterLine = "";
+          const beforeFallback =
+            typeof this.reviewBeforeLine === "string"
+              ? this.reviewBeforeLine
+              : "";
+          let afterLine = null;
           try {
-            const live =
-              this.editor && Number.isInteger(this.reviewLineIndex)
-                ? getEditorLine(this.editor, this.reviewLineIndex)
+            afterLine =
+              typeof readReviewOriginAfterLine === "function"
+                ? readReviewOriginAfterLine(this)
                 : null;
-            afterLine = typeof live === "string" ? live : "";
           } catch (error) {
-            afterLine = "";
+            afterLine = null;
           }
           const partial = String(
             move.notice || `Not moved · still in ${inboxName}`,
           );
-          void plugin.continueReviewWalkAfter(origin, {
-            kind: "card",
-            beforeLine:
-              typeof this.reviewBeforeLine === "string"
-                ? this.reviewBeforeLine
-                : "",
-            afterLine,
-            handledRefs: this.inboxRouteCardFallbackRefs(),
-            notice: partial,
-          });
+          if (afterLine === null) {
+            void plugin.continueReviewWalkAfter(origin, {
+              kind: "card",
+              beforeLine: beforeFallback,
+              afterLine: beforeFallback,
+              handledRefs: this.inboxRouteCardFallbackRefs(),
+              notice: partial,
+            });
+          } else {
+            void plugin.continueReviewWalkAfter(origin, {
+              kind: "card",
+              beforeLine: beforeFallback,
+              afterLine,
+              handledRefs: this.inboxRouteCardFallbackRefs(),
+              notice: partial,
+            });
+          }
         }
       } catch (error) {
         // Settle is best-effort after the move.
@@ -66127,7 +66347,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         plan.pomodoroTargets || [],
         normalizedPath, writeContext.content, plan.content, new Date(),
       );
-      plan = { ...plan, content: countedPomodoroPrep.commitContent };
+      plan = withCountedPomodoroCursorMapped(plan, plan.content, countedPomodoroPrep.commitContent);
     }
     const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
     try {
@@ -82509,6 +82729,9 @@ module.exports.helpers = {
   alignEditorLines,
   planAlignedEditorChanges,
   mapEditorPositionThroughLineAlignment,
+  mapCountedLineThroughCleanup,
+  withCountedPomodoroCursorMapped,
+  readReviewOriginAfterLine,
   applyInlinePropertyAndScheduleLogTransaction,
   insertEditorLine,
   deleteEditorLine,

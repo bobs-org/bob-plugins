@@ -767,6 +767,13 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     super.onClose();
   }
 
+  // Read the reviewed task's after-line through the editor alignment, not
+  // the pre-write index: a same-note BLOCKS insertion above shifts the row,
+  // so the captured index can point at a generated BLOCKS line. Returns the
+  // matched new line, or null when the reviewed row cannot be identified
+  // (deleted, missing snapshot/editor). Never substitutes a BLOCKS row or
+  // the cursor line. Uses the final editor content, so cleanup folds are
+  // included, not an intermediate `parentLineNext`.
   // Idempotent: read the after-line from the editor at the captured line
   // and continue the walk. Esc, `q`, refusals, and no-op writes read an
   // unchanged line, which stays; every committing write is judged from the
@@ -784,16 +791,12 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       }
       const beforeLine =
         typeof this.reviewBeforeLine === "string" ? this.reviewBeforeLine : "";
-      let afterLine = "";
-      try {
-        const live =
-          this.editor && Number.isInteger(this.reviewLineIndex)
-            ? getEditorLine(this.editor, this.reviewLineIndex)
-            : null;
-        afterLine = typeof live === "string" ? live : "";
-      } catch (error) {
-        afterLine = "";
+      const resolvedAfter = readReviewOriginAfterLine(this);
+      if (resolvedAfter === null) {
+        void plugin.continueReviewWalkAfter(origin, null);
+        return;
       }
+      const afterLine = resolvedAfter;
       let handledRefs = [
         { path: this.filePath || null, line: this.reviewLineIndex, raw: beforeLine },
       ];
@@ -887,4 +890,63 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     this.taskCardBackButtonEl = back;
   }
 
+}
+
+function readReviewOriginAfterLine(modal) {
+  try {
+    if (!modal || !Number.isInteger(modal.reviewLineIndex)) return null;
+    const snapshot =
+      typeof modal.reviewOriginContent === "string"
+        ? modal.reviewOriginContent
+        : null;
+    let current = null;
+    try {
+      if (
+        modal.editor &&
+        typeof modal.editor.getValue === "function"
+      ) {
+        current = String(modal.editor.getValue() || "");
+      } else if (typeof modal.getEditorContent === "function") {
+        current = String(modal.getEditorContent() || "");
+      }
+    } catch (_readError) {
+      current = null;
+    }
+    if (snapshot === null || current === null) {
+      try {
+        const live =
+          modal.editor && Number.isInteger(modal.reviewLineIndex)
+            ? getEditorLine(modal.editor, modal.reviewLineIndex)
+            : null;
+        return typeof live === "string" ? live : null;
+      } catch (_fallbackError) {
+        return null;
+      }
+    }
+    const oldLines = String(snapshot).split(/\r?\n/);
+    const newLines = String(current).split(/\r?\n/);
+    if (
+      modal.reviewLineIndex < 0 ||
+      modal.reviewLineIndex >= oldLines.length
+    ) {
+      return null;
+    }
+    let pairs = null;
+    try {
+      pairs = alignEditorLines(oldLines, newLines);
+    } catch (_alignError) {
+      return null;
+    }
+    for (const [oldIndex, newIndex] of Array.isArray(pairs) ? pairs : []) {
+      if (oldIndex === modal.reviewLineIndex) {
+        if (!Number.isInteger(newIndex) || newIndex < 0 || newIndex >= newLines.length) {
+          return null;
+        }
+        return String(newLines[newIndex] || "");
+      }
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
 }

@@ -184,13 +184,20 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         }
       }
     }
-    // One gesture plans every source on one working copy bottom-up,
-    // refuses before any write when any source fails to plan, then commits
-    // once (one Ctrl+Z) with one summary notice — the same shape as the
-    // counted add above. The notice counts only sources that changed.
+    // One gesture plans every source on one working copy, refusing before
+    // any write when any source fails to plan, then commits once (one Ctrl+Z)
+    // with one summary notice — the same shape as the counted add above. The
+    // notice counts only sources that changed. Keep immutable source snapshots
+    // for reporting plus mutable current positions: every tracked source is
+    // mapped through each plan's sequential `lineEdits` (Depends-On structure
+    // plus same-note BLOCKS shifts) before the next plan reads it.
     const ordered = (this.taskSession.targets || [])
       .slice()
       .sort((first, second) => second.line - first.line);
+    const trackedRemovals = ordered.map((target) => ({
+      snapshot: target,
+      line: target.line,
+    }));
     const originalContent = String(this.editor.getValue() || "");
     const removeRef = { path: targetPath, blockId };
     const resolveLinkpath =
@@ -277,8 +284,9 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     let removed = 0;
     const rawPreparations = [];
     const blocksFollowUps = [];
-    for (const target of ordered) {
-      if (!Number.isInteger(target.line)) {
+    for (const tracked of trackedRemovals) {
+      const target = tracked.snapshot;
+      if (!Number.isInteger(tracked.line)) {
         new Notice(
           `⛓ Could not update the counted task (invalid line); no tasks were updated`,
         );
@@ -288,11 +296,11 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       planFiles.set(ownerPath, working);
       const sourceIsPrj = sameNoteSubtreeLanes &&
         isProjectLifecycleTaskLine(
-          String(String(working).split(/\r?\n/)[target.line] || ""),
+          String(String(working).split(/\r?\n/)[tracked.line] || ""),
         );
       const plan = planDependencyEdit({
         content: working,
-        parentLine: target.line,
+        parentLine: tracked.line,
         parentPath: ownerPath,
         add: [],
         remove: [removeRef],
@@ -318,7 +326,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         new Notice(
           plan.reason === "in-blockquote"
             ? "⛓ Dependencies can't be edited inside a blockquote; no tasks were updated"
-            : `⛓ Could not update the task on line ${target.line + 1} (${plan.reason}); no tasks were updated`,
+            : `⛓ Could not update the task on line ${tracked.line + 1} (${plan.reason}); no tasks were updated`,
         );
         return false;
       }
@@ -329,10 +337,23 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       if (plan.changed) {
         removed += 1;
         let nextWorking = plan.nextContent;
+        const stampAt = Number.isInteger(plan.parentLineNext)
+          ? plan.parentLineNext
+          : tracked.line;
         if (this.plugin && typeof this.plugin.stampDependencyParentLine === "function") {
-          nextWorking = this.plugin.stampDependencyParentLine(nextWorking, target.line);
+          nextWorking = this.plugin.stampDependencyParentLine(nextWorking, stampAt);
         }
         working = nextWorking;
+      }
+      for (const other of trackedRemovals) {
+        const mapped = mapLineThroughLineEdits(other.line, plan.lineEdits);
+        if (mapped === null) {
+          new Notice(
+            `⛓ Could not update the counted task (changed — reopen); no tasks were updated`,
+          );
+          return false;
+        }
+        other.line = mapped;
       }
     }
     const preparations = mergeTargetPreparations(rawPreparations);
@@ -491,11 +512,16 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
     }
     const ref = { path: targetPath, blockId: snapshot.blockId };
     // One gesture commits every source in one editor transaction (one
-    // Ctrl+Z): plan every source on one working copy bottom-up, refuse
-    // before any write when any source fails to plan, then commit once.
+    // Ctrl+Z): plan every source on one working copy, refuse before any
+    // write when any source fails to plan, then commit once. Keep immutable
+    // snapshots plus mutable positions through each plan's `lineEdits`.
     const orderedSources = (this.taskSession.targets || [])
       .slice()
       .sort((first, second) => second.line - first.line);
+    const trackedVaultSources = orderedSources.map((target) => ({
+      snapshot: target,
+      line: target.line,
+    }));
     const originalContent = String(this.editor.getValue() || "");
     let working = originalContent;
     let changedSources = 0;
@@ -542,7 +568,13 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         vaultCountedSubtreePrep.lanes.length > 0
       ? vaultCountedSubtreePrep.lanes
       : null;
-    for (const target of orderedSources) {
+    for (const tracked of trackedVaultSources) {
+      if (!Number.isInteger(tracked.line)) {
+        new Notice(
+          `⛓ Could not update the counted task (invalid line); no tasks were updated`,
+        );
+        return false;
+      }
       const targetContent = files.get(targetPath);
       const planFiles = new Map();
       planFiles.set(ownerPath, working);
@@ -556,11 +588,11 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       }
       const vaultSourceIsPrj = vaultCountedSubtreeLanes &&
         isProjectLifecycleTaskLine(
-          String(String(working).split(/\r?\n/)[target.line] || ""),
+          String(String(working).split(/\r?\n/)[tracked.line] || ""),
         );
       const plan = planDependencyEdit({
         content: working,
-        parentLine: target.line,
+        parentLine: tracked.line,
         parentPath: ownerPath,
         add: snapshot.remove ? [] : [ref],
         remove: snapshot.remove ? [ref] : [],
@@ -586,7 +618,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
         new Notice(
           plan.reason === "in-blockquote"
             ? "⛓ Dependencies can't be edited inside a blockquote; no tasks were updated"
-            : `⛓ Could not update the task on line ${target.line + 1} (${plan.reason}); no tasks were updated`,
+            : `⛓ Could not update the task on line ${tracked.line + 1} (${plan.reason}); no tasks were updated`,
         );
         return false;
       }
@@ -598,11 +630,24 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       }
       if (plan.changed) {
         changedSources += 1;
-      }
-      if (plan.changed && this.plugin && typeof this.plugin.stampDependencyParentLine === "function") {
-        nextWorking = this.plugin.stampDependencyParentLine(nextWorking, target.line);
+        const stampAt = Number.isInteger(plan.parentLineNext)
+          ? plan.parentLineNext
+          : tracked.line;
+        if (this.plugin && typeof this.plugin.stampDependencyParentLine === "function") {
+          nextWorking = this.plugin.stampDependencyParentLine(nextWorking, stampAt);
+        }
       }
       working = nextWorking;
+      for (const other of trackedVaultSources) {
+        const mapped = mapLineThroughLineEdits(other.line, plan.lineEdits);
+        if (mapped === null) {
+          new Notice(
+            `⛓ Could not update the counted task (changed — reopen); no tasks were updated`,
+          );
+          return false;
+        }
+        other.line = mapped;
+      }
     }
     const preparations = mergeTargetPreparations(rawPreparations);
     for (const preparation of preparations) {

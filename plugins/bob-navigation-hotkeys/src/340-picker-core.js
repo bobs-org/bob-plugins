@@ -69,6 +69,9 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     // when the card opened, the cursor line it was captured on, and that
     // line's text before any write. `reviewSettleDeferred` lets the cancel
     // route close the picker first and settle after its notice.
+    // `reviewOriginContent` retains the editor text at open so the settle step
+    // can align the reviewed row through BLOCKS shifts instead of reusing a
+    // pre-write line index.
     this.reviewOrigin = context.reviewOrigin || null;
     this.reviewLineIndex = Number.isInteger(context.reviewLineIndex)
       ? context.reviewLineIndex
@@ -77,6 +80,17 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
       typeof context.reviewBeforeLine === "string"
         ? context.reviewBeforeLine
         : "";
+    this.reviewOriginContent = null;
+    if (this.reviewOrigin) {
+      try {
+        this.reviewOriginContent =
+          this.editor && typeof this.editor.getValue === "function"
+            ? String(this.editor.getValue() || "")
+            : null;
+      } catch (_reviewSnapshotError) {
+        this.reviewOriginContent = null;
+      }
+    }
     this.reviewSettleDeferred = false;
     this.inboxRoute = context.inboxRoute || null;
     this.inboxRouteCommitInFlight = false;

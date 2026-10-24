@@ -172,10 +172,12 @@ function planCountedLocalTaskDependency(
   let nextContent = nextSource.lines.join(nextSource.lineEnding);
 
   // Freshness is the last transformation of each parent task line
-  // (nav-stamps). Process parents bottom-to-top through the pure planner so
-  // every source keeps the line, the field, status effects, and legacy
-  // folding; edits only shift lines below the current parent, so every
-  // still-pending source retains its snapshot index.
+  // (nav-stamps). Process parents bottom-to-top through the pure planner.
+  // Keep immutable source snapshots for stale checks and reporting, plus
+  // separate mutable current line positions. A same-note BLOCKS insertion
+  // above shifts every remaining source down, so every tracked source is
+  // mapped through each plan's sequential `lineEdits` (Depends-On structure
+  // plus same-note BLOCKS shifts) before the next plan reads it.
   const countedDepStamper = resolveFreshStamper(options);
   const countedDepFreshDateText = resolveFreshDateText(options);
   const countedTargetRef = Object.freeze({
@@ -189,6 +191,10 @@ function planCountedLocalTaskDependency(
   const orderedTargets = session.targets
     .slice()
     .sort((first, second) => second.line - first.line);
+  const trackedSources = orderedTargets.map((target) => ({
+    snapshot: target,
+    line: target.line,
+  }));
   // §13.19: counted batches process `^prj` roots with the subtree lanes
   // the writer read up front (`options.subtreeLaneStatuses`), so commitment
   // transfer sees the lanes the pass is about to block. Ordinary sources
@@ -196,14 +202,24 @@ function planCountedLocalTaskDependency(
   const subtreeLanes = Array.isArray(options.subtreeLaneStatuses)
     ? options.subtreeLaneStatuses
     : null;
-  for (const target of orderedTargets) {
+  for (const tracked of trackedSources) {
+    const target = tracked.snapshot;
+    if (!Number.isInteger(tracked.line)) {
+      return Object.freeze({
+        valid: false,
+        stale: false,
+        error: "Could not plan dependency navigation for every source task",
+        content: text,
+        changed: false,
+      });
+    }
     const beforeLinesForLanes = nextContent.split(/\r?\n/);
     const parentIsPrj = isProjectLifecycleTaskLine(
-      String(beforeLinesForLanes[target.line] || ""),
+      String(beforeLinesForLanes[tracked.line] || ""),
     );
     const parentPlan = planDependencyEdit({
       content: nextContent,
-      parentLine: target.line,
+      parentLine: tracked.line,
       parentPath: filePath,
       add: remove ? [] : [countedTargetRef],
       remove: remove ? [countedTargetRef] : [],
@@ -226,23 +242,48 @@ function planCountedLocalTaskDependency(
       });
     }
     const beforeLines = nextContent.split(/\r?\n/);
-    const currentLine = String(beforeLines[target.line] || "");
+    const currentLine = String(beforeLines[tracked.line] || "");
     let parentChanged =
       parentPlan.changed || currentLine !== target.rawLine;
     nextContent = parentPlan.nextContent;
+    const stampLine = Number.isInteger(parentPlan.parentLineNext)
+      ? parentPlan.parentLineNext
+      : tracked.line;
     if (countedDepStamper && parentChanged) {
       const afterLines = nextContent.split(/\r?\n/);
+      if (stampLine < 0 || stampLine >= afterLines.length) {
+        return Object.freeze({
+          valid: false,
+          stale: false,
+          error: "Could not plan dependency navigation for every source task",
+          content: text,
+          changed: false,
+        });
+      }
       const stamped = applyFreshStampLine(
-        afterLines[target.line],
+        afterLines[stampLine],
         countedDepStamper,
         countedDepFreshDateText,
       );
-      if (stamped !== afterLines[target.line]) {
-        afterLines[target.line] = stamped;
+      if (stamped !== afterLines[stampLine]) {
+        afterLines[stampLine] = stamped;
         const ending = nextContent.includes("\r\n") ? "\r\n" : "\n";
         nextContent = afterLines.join(ending);
         parentChanged = true;
       }
+    }
+    for (const other of trackedSources) {
+      const mapped = mapLineThroughLineEdits(other.line, parentPlan.lineEdits);
+      if (mapped === null) {
+        return Object.freeze({
+          valid: false,
+          stale: false,
+          error: "Could not plan dependency navigation for every source task",
+          content: text,
+          changed: false,
+        });
+      }
+      other.line = mapped;
     }
     if (
       parentPlan.structural.replaceLine !== null ||
@@ -265,6 +306,11 @@ function planCountedLocalTaskDependency(
   const changedTaskCount = sourceResults.filter(
     (entry) => entry.dependencyChanged || entry.navigationChanged,
   ).length;
+  const firstSnapshot = session.targets[0];
+  const firstTracked = trackedSources.find(
+    (entry) => entry.snapshot === firstSnapshot,
+  );
+  const mappedCursorLine = firstTracked ? firstTracked.line : firstSnapshot.line;
   return Object.freeze({
     valid: true,
     stale: false,
@@ -280,7 +326,7 @@ function planCountedLocalTaskDependency(
     unchangedTaskCount: session.targets.length - changedTaskCount,
     targetCount: session.targets.length,
     navigationChangedCount,
-    cursorLine: session.targets[0].line,
+    cursorLine: mappedCursorLine,
     blocksFollowUps: Object.freeze(blocksFollowUps),
     pomodoroTargets: collectDependencyPlanPomodoroTargets(parentPlans),
   });

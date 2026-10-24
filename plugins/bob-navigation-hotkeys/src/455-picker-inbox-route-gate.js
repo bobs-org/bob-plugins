@@ -559,29 +559,39 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
             notice: String(move.notice || ""),
           });
         } else {
-          let afterLine = "";
+          const beforeFallback =
+            typeof this.reviewBeforeLine === "string"
+              ? this.reviewBeforeLine
+              : "";
+          let afterLine = null;
           try {
-            const live =
-              this.editor && Number.isInteger(this.reviewLineIndex)
-                ? getEditorLine(this.editor, this.reviewLineIndex)
+            afterLine =
+              typeof readReviewOriginAfterLine === "function"
+                ? readReviewOriginAfterLine(this)
                 : null;
-            afterLine = typeof live === "string" ? live : "";
           } catch (error) {
-            afterLine = "";
+            afterLine = null;
           }
           const partial = String(
             move.notice || `Not moved · still in ${inboxName}`,
           );
-          void plugin.continueReviewWalkAfter(origin, {
-            kind: "card",
-            beforeLine:
-              typeof this.reviewBeforeLine === "string"
-                ? this.reviewBeforeLine
-                : "",
-            afterLine,
-            handledRefs: this.inboxRouteCardFallbackRefs(),
-            notice: partial,
-          });
+          if (afterLine === null) {
+            void plugin.continueReviewWalkAfter(origin, {
+              kind: "card",
+              beforeLine: beforeFallback,
+              afterLine: beforeFallback,
+              handledRefs: this.inboxRouteCardFallbackRefs(),
+              notice: partial,
+            });
+          } else {
+            void plugin.continueReviewWalkAfter(origin, {
+              kind: "card",
+              beforeLine: beforeFallback,
+              afterLine,
+              handledRefs: this.inboxRouteCardFallbackRefs(),
+              notice: partial,
+            });
+          }
         }
       } catch (error) {
         // Settle is best-effort after the move.

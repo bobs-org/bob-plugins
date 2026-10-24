@@ -455,3 +455,128 @@ test("stage counted vault remove counts only changed sources", async () => {
   assert.match(notices[before], /⛓ Removed from 1 task/);
 });
 
+test("vault counted same-note add follows BLOCKS shifts with post-plan stamps", async () => {
+  const content = [
+    "- [ ] #task Target ^target",
+    "- [ ] #task First ^first",
+    "- [ ] #task Second ^second",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    explicit: true,
+    targets: [
+      { line: 1, rawLine: "- [ ] #task First ^first" },
+      { line: 2, rawLine: "- [ ] #task Second ^second" },
+    ],
+  };
+  const stamped = [];
+  plugin.stampDependencyParentLine = (nextContent, line) => {
+    const text = String(nextContent || "").split("\n")[line] || "";
+    stamped.push({ line, text });
+    return nextContent;
+  };
+  plugin.readDependencyVaultFileList = () => ["Tasks.md"];
+  plugin.dependencyLinkpathResolver = () => () => "Tasks.md";
+  const before = notices.length;
+  const applied = await modal.applyVaultCountedDependencyRef({
+    path: "Tasks.md",
+    line: 0,
+    rawLine: "- [ ] #task Target ^target",
+    displayText: "Target",
+    blockId: "target",
+  });
+  assert.equal(applied, true, `vault same-note add failed: ${notices.slice(before)}`);
+  assert.equal(editor.undoGroups, 1, "one Ctrl+Z per counted gesture");
+  const lines = editor.content.split("\n");
+  const firstIdx = lines.findIndex((line) => /#task.*\^first/.test(line));
+  const secondIdx = lines.findIndex((line) => /#task.*\^second/.test(line));
+  assert.ok(firstIdx !== -1 && secondIdx !== -1);
+  assert.match(lines[firstIdx], /\[dependsOn:: Tasks__target\]/);
+  assert.match(lines[secondIdx], /\[dependsOn:: Tasks__target\]/);
+  const blocksRows = lines.filter((line) => /🧱 \*\*BLOCKS:\*\*/.test(line));
+  assert.equal(blocksRows.length, 1, `one reverse row, saw:\n${editor.content}`);
+  // Stamps land on the dependents at their post-plan lines, never on the
+  // prerequisite or the generated rows.
+  assert.ok(stamped.length === 2, `stamped ${JSON.stringify(stamped)}`);
+  for (const entry of stamped) {
+    assert.match(entry.text, /#task/);
+    assert.doesNotMatch(entry.text, /BLOCKS/);
+    assert.doesNotMatch(entry.text, /DEPENDS ON/);
+  }
+  assert.match(notices[before], /⛓ Linked 2 tasks/);
+});
+
+test("vault counted same-note remove follows BLOCKS deletions", async () => {
+  const content = [
+    "- [ ] #task Target [id:: Tasks__target] ^target",
+    "  - 🧱 **BLOCKS:** [[#^first]] • [[#^second]]",
+    "- [?] #task First [dependsOn:: Tasks__target] ^first",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+    "- [?] #task Second [dependsOn:: Tasks__target] ^second",
+    "  - ⛓️ **DEPENDS ON:** [[#^target]]",
+  ].join("\n");
+  const { plugin } = stubPlugin({ "Tasks.md": content });
+  const editor = new TransactionEditor(content, { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    explicit: true,
+    targets: [
+      { line: 2, rawLine: "- [?] #task First [dependsOn:: Tasks__target] ^first" },
+      { line: 4, rawLine: "- [?] #task Second [dependsOn:: Tasks__target] ^second" },
+    ],
+  };
+  plugin.readDependencyVaultFileList = () => ["Tasks.md"];
+  plugin.dependencyLinkpathResolver = () => () => "Tasks.md";
+  const before = notices.length;
+  const applied = await modal.applyVaultCountedDependencyRef({
+    path: "Tasks.md",
+    line: 0,
+    rawLine: "- [ ] #task Target [id:: Tasks__target] ^target",
+    displayText: "Target",
+    existingIdField: "Tasks__target",
+    blockId: "target",
+    remove: true,
+  });
+  assert.equal(applied, true, `vault same-note remove failed: ${notices.slice(before)}`);
+  assert.equal(editor.undoGroups, 1);
+  assert.doesNotMatch(editor.content, /dependsOn::/);
+  assert.doesNotMatch(editor.content, /BLOCKS/);
+  assert.match(notices[before], /⛓ Removed from 2 tasks/);
+});
+
+test("vault counted cross-note add keeps follow-up behavior", async () => {
+  const notes = {
+    "Tasks.md": [
+      "- [ ] #task First ^first",
+      "- [ ] #task Second ^second",
+    ].join("\n"),
+    "Other.md": "- [ ] #task Target ^target",
+  };
+  const { plugin } = stubPlugin(notes);
+  const editor = new TransactionEditor(notes["Tasks.md"], { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  modal.taskSession = {
+    explicit: true,
+    targets: [
+      { line: 0, rawLine: "- [ ] #task First ^first" },
+      { line: 1, rawLine: "- [ ] #task Second ^second" },
+    ],
+  };
+  plugin.readDependencyVaultFileList = () => ["Tasks.md", "Other.md"];
+  plugin.dependencyLinkpathResolver = () => () => "Tasks.md";
+  const before = notices.length;
+  const applied = await modal.applyVaultCountedDependencyRef({
+    path: "Other.md",
+    line: 0,
+    rawLine: "- [ ] #task Target ^target",
+    displayText: "Target",
+    blockId: "target",
+  });
+  assert.equal(applied, true, `cross-note add failed: ${notices.slice(before)}`);
+  assert.equal(editor.undoGroups, 1);
+  assert.match(editor.content, /\[dependsOn:: Other__target\]/);
+  assert.match(notices[before], /⛓ Linked 2 tasks/);
+});
+

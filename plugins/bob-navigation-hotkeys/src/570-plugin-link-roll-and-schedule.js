@@ -576,7 +576,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         plan.pomodoroTargets || [],
         normalizedPath, writeContext.content, plan.content, new Date(),
       );
-      plan = { ...plan, content: countedPomodoroPrep.commitContent };
+      plan = withCountedPomodoroCursorMapped(plan, plan.content, countedPomodoroPrep.commitContent);
     }
     const finalLine = splitMarkdownContent(plan.content).lines[plan.cursorLine] || "";
     try {

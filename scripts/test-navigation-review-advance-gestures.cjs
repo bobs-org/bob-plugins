@@ -1199,3 +1199,129 @@ test("a landed move park clears the current review task", async () => {
   assert.equal(plugin.reviewLanding.text, markFor("next", "Two"), "the next ]s resumes at the neighbour");
   assert.ok(!notices[0].startsWith("Back to current review task"), "no return after a park");
 });
+
+test("review settle follows the task through a BLOCKS insertion above (bob-cli-94)", async () => {
+  const rows = [
+    laneEntry({ tier: "next", path: "walk.md", line: 2, text: "A", rank: 1, tierRank: 1, tierTotal: 3 }),
+    laneEntry({ tier: "next", path: "walk.md", line: 3, text: "B", rank: 2, tierRank: 2, tierTotal: 3 }),
+    laneEntry({ tier: "next", path: "walk.md", line: 4, text: "C", rank: 3, tierRank: 3, tierTotal: 3 }),
+  ];
+  const fixture = makePlugin({ rows, activePath: "walk.md" });
+  const { plugin } = fixture;
+  const editor = fixture.editors.get("walk.md");
+  editor.setCursor(1, 0);
+  await land(fixture, "first");
+  assert.equal(plugin.reviewLanding.key, "walk.md:2", "landed on A");
+  const picker = openCard(fixture, priorityConfig());
+  assert.ok(picker.reviewOrigin, "origin captured");
+  assert.equal(typeof picker.reviewOriginContent, "string", "snapshot retained");
+  const beforeLine = picker.reviewBeforeLine;
+  assert.match(beforeLine, /#task.*A/);
+  // Same-note dependency commit inserting a generated BLOCKS line above the
+  // reviewed row plus a freshness stamp on the reviewed task itself.
+  const snapshotLines = String(picker.reviewOriginContent).split("\n");
+  assert.equal(snapshotLines[picker.reviewLineIndex], beforeLine);
+  constReviewedIndex = picker.reviewLineIndex;
+  const edited = snapshotLines.slice();
+  edited.splice(constReviewedIndex, 0, "\t- \u{1f9f1} **BLOCKS:** [[#^a]]");
+  const shiftedTaskIdx = constReviewedIndex + 1;
+  edited[shiftedTaskIdx] = `${edited[shiftedTaskIdx]} [fresh:: ${DATE}]`;
+  editor.content = edited.join("\n");
+  const seen = [];
+  const realContinue = plugin.continueReviewWalkAfter.bind(plugin);
+  plugin.continueReviewWalkAfter = async (origin, outcome) => {
+    seen.push({ origin, outcome });
+    return realContinue(origin, outcome);
+  };
+  picker.settleReviewOrigin();
+  await flushAll(plugin);
+  assert.equal(seen.length, 1, "settled exactly once");
+  const outcome = seen[0].outcome;
+  assert.ok(outcome && outcome.kind === "card", "card outcome");
+  assert.equal(outcome.beforeLine, beforeLine, "beforeLine stays pre-write");
+  assert.match(outcome.afterLine, /#task.*A/, "afterLine names the reviewed task, not BLOCKS");
+  assert.doesNotMatch(outcome.afterLine, /BLOCKS/);
+  assert.match(outcome.afterLine, new RegExp(`\\[fresh:: ${DATE}\\]`));
+  assert.equal(outcome.handledRefs.length, 1);
+  assert.equal(outcome.handledRefs[0].line, constReviewedIndex, "handledRefs keep original coordinates");
+  assert.equal(plugin.reviewLanding.key, "walk.md:3", "advances exactly once to B");
+  assert.match(editor.content, /BLOCKS/);
+  assert.match(editor.content, new RegExp(`A.*\\[fresh:: ${DATE}\\]`));
+  // Repeat settlement is idempotent: the origin lock is already released.
+  picker.settleReviewOrigin();
+  await flushAll(plugin);
+  assert.equal(seen.length, 1, "second settle is a no-op");
+});
+
+test("review settle follows a BLOCKS deletion above without advancing on a non-resolving edit", async () => {
+  const rows = [
+    laneEntry({ tier: "next", path: "walk.md", line: 2, text: "A", rank: 1, tierRank: 1, tierTotal: 3 }),
+    laneEntry({ tier: "next", path: "walk.md", line: 3, text: "B", rank: 2, tierRank: 2, tierTotal: 3 }),
+    laneEntry({ tier: "next", path: "walk.md", line: 4, text: "C", rank: 3, tierRank: 3, tierTotal: 3 }),
+  ];
+  const fixture = makePlugin({ rows, activePath: "walk.md" });
+  const { plugin } = fixture;
+  const editor = fixture.editors.get("walk.md");
+  editor.setCursor(1, 0);
+  await land(fixture, "first");
+  // Open the card with a BLOCKS line already above the reviewed row, then
+  // delete it (prerequisite removal): the reviewed task shifts up but stays.
+  const withBlocks = String(editor.content).split("\n");
+  withBlocks.splice(1, 0, "\t- \u{1f9f1} **BLOCKS:** [[#^a]]");
+  editor.content = withBlocks.join("\n");
+  editor.setCursor(2, 0);
+  // Re-land so the landing text matches the shifted row for capture.
+  plugin.reviewLanding = null;
+  await land(fixture, "first");
+  const picker = openCard(fixture, priorityConfig());
+  const atOpen = String(editor.content).split("\n");
+  const openIdx = picker.reviewLineIndex;
+  assert.match(atOpen[openIdx], /#task.*A/);
+  // Delete the BLOCKS line above: no freshness Write, so the edit stays.
+  const afterDelete = atOpen.slice();
+  afterDelete.splice(openIdx - 1, 1);
+  editor.content = afterDelete.join("\n");
+  const seen = [];
+  const realContinue = plugin.continueReviewWalkAfter.bind(plugin);
+  plugin.continueReviewWalkAfter = async (origin, outcome) => {
+    seen.push({ origin, outcome });
+    return realContinue(origin, outcome);
+  };
+  const landingBefore = plugin.reviewLanding.key;
+  picker.settleReviewOrigin();
+  await flushAll(plugin);
+  assert.equal(seen.length, 1);
+  const outcome = seen[0].outcome;
+  // Non-resolving deletion stays on the same landing.
+  if (outcome === null) {
+    assert.equal(plugin.reviewLanding.key, landingBefore, "unidentified deletion stays");
+  } else {
+    assert.equal(outcome.kind, "card");
+    assert.match(outcome.afterLine, /#task.*A/);
+    assert.doesNotMatch(outcome.afterLine, /BLOCKS/);
+    assert.equal(plugin.reviewLanding.key, landingBefore, "non-resolving shift stays");
+  }
+});
+
+test("review settle never substitutes the cursor line and shares the inbox fallback reader", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two"]), activePath: "walk.md" });
+  await land(fixture, "first");
+  const picker = openCard(fixture, priorityConfig());
+  const beforeLine = picker.reviewBeforeLine;
+  const snapshotLines = String(picker.reviewOriginContent).split("\n");
+  const idx = picker.reviewLineIndex;
+  // Insert BLOCKS above and move the cursor to the other task: the reader
+  // must still return the reviewed row, never the cursor line.
+  const edited = snapshotLines.slice();
+  edited.splice(idx, 0, "\t- \u{1f9f1} **BLOCKS:** [[#^one]]");
+  edited[idx + 1] = `${edited[idx + 1]} [fresh:: ${DATE}]`;
+  picker.editor.content = edited.join("\n");
+  const afterLine = helpers.readReviewOriginAfterLine(picker);
+  assert.match(afterLine, /#task.*One/);
+  assert.doesNotMatch(afterLine, /BLOCKS/);
+  // Deleting the reviewed row settles conservatively with no resolving outcome.
+  const deleted = snapshotLines.slice();
+  deleted.splice(idx, 1);
+  picker.editor.content = deleted.join("\n");
+  assert.equal(helpers.readReviewOriginAfterLine(picker), null);
+});

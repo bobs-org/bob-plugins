@@ -988,3 +988,208 @@ test("hand-edit mirror clears the owning task when its last-child line is delete
     ].join("\n"),
   );
 });
+
+test("counted add below a prerequisite follows BLOCKS shifts (bob-cli-95)", () => {
+  const stamp = (line, dateText) => `${line} [fresh:: ${dateText || "2026-10-08"}]`;
+  const content = [
+    "- [ ] #task Target ^target",
+    "- [ ] #task First ^first",
+    "- [ ] #task Second ^second",
+  ].join("\n");
+  const session = Object.freeze({
+    explicit: true,
+    targets: Object.freeze([
+      Object.freeze({ line: 1, rawLine: "- [ ] #task First ^first" }),
+      Object.freeze({ line: 2, rawLine: "- [ ] #task Second ^second" }),
+    ]),
+  });
+  const beforeSession = JSON.stringify(session);
+  const dependencyTask = Object.freeze({
+    line: 0,
+    rawLine: "- [ ] #task Target ^target",
+    existingIdField: null,
+    existingBlockId: "target",
+  });
+  for (const blocksLinesEnabled of [false, true]) {
+    const plan = helpers.planCountedLocalTaskDependency(
+      content,
+      session,
+      dependencyTask,
+      "Tasks.md",
+      {
+        blocksLinesEnabled,
+        vaultFiles: ["Tasks.md"],
+        resolveLinkpath: () => "Tasks.md",
+        stampLine: stamp,
+        freshDateText: "2026-10-08",
+      },
+    );
+    assert.equal(plan.valid, true, `${blocksLinesEnabled} ${plan.error}`);
+    assert.equal(plan.operation, "add");
+    assert.equal(plan.targetCount, 2);
+    assert.equal(plan.changedTaskCount, 2);
+    // Both sources gain the dependency and a stamp; the prerequisite never
+    // gains a source stamp.
+    const lines = plan.content.split("\n");
+    const firstIdx = lines.findIndex((line) => /#task.*\^first/.test(line));
+    const secondIdx = lines.findIndex((line) => /#task.*\^second/.test(line));
+    const targetIdx = lines.findIndex((line) => /#task.*\^target/.test(line));
+    assert.ok(firstIdx !== -1 && secondIdx !== -1 && targetIdx !== -1);
+    assert.match(lines[firstIdx], /\[dependsOn:: Tasks__target\]/);
+    assert.match(lines[secondIdx], /\[dependsOn:: Tasks__target\]/);
+    assert.match(lines[firstIdx], /\[fresh:: 2026-10-08\]/);
+    assert.match(lines[secondIdx], /\[fresh:: 2026-10-08\]/);
+    assert.doesNotMatch(lines[targetIdx], /\[fresh:: 2026-10-08\]/);
+    // Generated rows never receive source stamps.
+    for (const line of lines) {
+      if (/DEPENDS ON|🧱 \*\*BLOCKS:\*\*/.test(line)) {
+        assert.doesNotMatch(line, /\[fresh::/);
+      }
+    }
+    if (blocksLinesEnabled) {
+      const blocksRows = lines.filter((line) => /🧱 \*\*BLOCKS:\*\*/.test(line));
+      assert.equal(blocksRows.length, 1, `one reverse row, saw:\n${plan.content}`);
+      assert.match(blocksRows[0], /\[\[#\^first\]\]/);
+      assert.match(blocksRows[0], /\[\[#\^second\]\]/);
+      // The planner must not park the cursor on the generated BLOCKS line.
+      const cursorText = lines[plan.cursorLine] || "";
+      assert.match(cursorText, /\^first/);
+      assert.doesNotMatch(cursorText, /BLOCKS/);
+    } else {
+      assert.doesNotMatch(plan.content, /BLOCKS/);
+    }
+  }
+  assert.equal(JSON.stringify(session), beforeSession, "input session stays unchanged");
+});
+
+test("counted remove follows BLOCKS deletions above the sources", () => {
+  const added = [
+    "- [ ] #task Target [id:: Tasks__target] ^target",
+    "  - \u{1f9f1} **BLOCKS:** [[#^first]] \u2022 [[#^second]]",
+    "- [?] #task First [dependsOn:: Tasks__target] ^first",
+    "  - \u26d3\ufe0f **DEPENDS ON:** [[#^target]]",
+    "- [?] #task Second [dependsOn:: Tasks__target] ^second",
+    "  - \u26d3\ufe0f **DEPENDS ON:** [[#^target]]",
+  ].join("\n");
+  const session = Object.freeze({
+    explicit: true,
+    targets: Object.freeze([
+      Object.freeze({ line: 2, rawLine: "- [?] #task First [dependsOn:: Tasks__target] ^first" }),
+      Object.freeze({ line: 4, rawLine: "- [?] #task Second [dependsOn:: Tasks__target] ^second" }),
+    ]),
+  });
+  const dependencyTask = Object.freeze({
+    line: 0,
+    rawLine: "- [ ] #task Target [id:: Tasks__target] ^target",
+    existingIdField: "Tasks__target",
+    existingBlockId: "target",
+  });
+  const plan = helpers.planCountedLocalTaskDependency(
+    added,
+    session,
+    dependencyTask,
+    "Tasks.md",
+    {
+      blocksLinesEnabled: true,
+      vaultFiles: ["Tasks.md"],
+      resolveLinkpath: () => "Tasks.md",
+    },
+  );
+  assert.equal(plan.valid, true, plan.error);
+  assert.equal(plan.operation, "remove");
+  assert.equal(plan.changedTaskCount, 2);
+  assert.doesNotMatch(plan.content, /dependsOn::/);
+  assert.doesNotMatch(plan.content, /DEPENDS ON/);
+  assert.doesNotMatch(plan.content, /BLOCKS/);
+  // Partial session: the already-linked source stays, the unlinked source
+  // gains the link. The planner reports only the changed source.
+  const partial = [
+    "- [ ] #task Target [id:: Tasks__target] ^target",
+    "  - \u{1f9f1} **BLOCKS:** [[#^first]]",
+    "- [?] #task First [dependsOn:: Tasks__target] ^first",
+    "  - \u26d3\ufe0f **DEPENDS ON:** [[#^target]]",
+    "- [ ] #task Second ^second",
+  ].join("\n");
+  const partialSession = Object.freeze({
+    explicit: true,
+    targets: Object.freeze([
+      Object.freeze({ line: 2, rawLine: "- [?] #task First [dependsOn:: Tasks__target] ^first" }),
+      Object.freeze({ line: 4, rawLine: "- [ ] #task Second ^second" }),
+    ]),
+  });
+  const mixed = helpers.planCountedLocalTaskDependency(
+    partial,
+    partialSession,
+    dependencyTask,
+    "Tasks.md",
+    {
+      blocksLinesEnabled: true,
+      vaultFiles: ["Tasks.md"],
+      resolveLinkpath: () => "Tasks.md",
+    },
+  );
+  assert.equal(mixed.valid, true, mixed.error);
+  assert.equal(mixed.operation, "add");
+  assert.equal(mixed.changedTaskCount, 1);
+  assert.equal(mixed.unchangedTaskCount, 1);
+  const mixedLines = mixed.content.split("\n");
+  const mixedSecond = mixedLines.find((line) => /#task.*\^second/.test(line));
+  assert.match(mixedSecond, /\[dependsOn:: Tasks__target\]/);
+});
+
+test("counted runtime commits once with the mapped first-source cursor", async () => {
+  const content = [
+    "- [ ] #task Target ^target",
+    "- [ ] #task First ^first",
+    "- [ ] #task Second ^second",
+  ].join("\n");
+  const cursor = { line: 1, ch: 3 };
+  const editor = new TransactionEditor(content, cursor);
+  const session = helpers.discoverCountedObsidianTaskTargets(content, 1, 1);
+  assert.equal(session.targets.length, 2);
+  const dependencyTask = helpers
+    .getOpenLocalTasks(content)
+    .find((task) => task.existingBlockId === "target");
+  const file = { path: "Tasks.md", extension: "md" };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getLeavesOfType: () => [] },
+    vault: { getMarkdownFiles: () => [{ path: "Tasks.md" }] },
+  };
+  plugin.getActiveMarkdownView = () => ({ editor, file });
+  plugin.readDependencyVaultFileList = () => ["Tasks.md"];
+  plugin.dependencyLinkpathResolver = () => () => "Tasks.md";
+  plugin.readTasksStatusRegistry = async () => null;
+  const applied = await plugin.applyCountedLocalTaskDependency(
+    editor,
+    cursor,
+    file.path,
+    session,
+    dependencyTask,
+    { blocksLinesEnabled: true },
+  );
+  assert.equal(applied, true);
+  assert.equal(editor.undoGroups, 1, "one Ctrl+Z per counted gesture");
+  const lines = editor.content.split("\n");
+  assert.match(editor.content, /\[dependsOn:: Tasks__target\]/);
+  // Cursor stays on the first source (First), never on the BLOCKS line.
+  const cursorLineText = lines[editor.cursor.line] || "";
+  assert.match(cursorLineText, /\^first/);
+  assert.doesNotMatch(cursorLineText, /BLOCKS/);
+  // Stale preimage refuses with no partial commit.
+  const staleEditor = new TransactionEditor(content, cursor);
+  const stalePlugin = new NavigationHotkeysPlugin();
+  stalePlugin.app = plugin.app;
+  stalePlugin.getActiveMarkdownView = () => ({ editor: staleEditor, file });
+  staleEditor.content = content.replace("First", "First edited");
+  const refused = await stalePlugin.applyCountedLocalTaskDependency(
+    staleEditor,
+    cursor,
+    file.path,
+    session,
+    dependencyTask,
+    { blocksLinesEnabled: true },
+  );
+  assert.equal(refused, false);
+  assert.equal(staleEditor.undoGroups, 0);
+});

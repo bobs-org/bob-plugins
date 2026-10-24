@@ -508,6 +508,199 @@ test("forward promotion expands live links, persists anchors, and removes the so
   assert.match(notices.at(-1), /Created project Work_ship/);
 });
 
+test("forward promotion preserves a concurrent frontmatter write before anchoring", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  const sourceContent = [
+    "---",
+    'type: "[[area]]"',
+    "---",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it ^ship",
+    "\t- Design",
+    "\t- Test",
+  ].join("\n");
+  let frontmatterWritten = false;
+  let harness;
+  harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent,
+    today,
+    extraFiles: [
+      {
+        path: todayPath,
+        content: [
+          "## Pomodoros",
+          "",
+          "- [ ] (**0930-1000**)",
+          "  - [[Areas/Work#^ship]]",
+        ].join("\n"),
+      },
+    ],
+    backlinks: {
+      [todayPath]: [{ original: "[[Areas/Work#^ship]]", link: "Areas/Work#^ship" }],
+    },
+    process: async (file, fn) => {
+      let next = fn(harness.contents[file.path]);
+      if (file.path === "Work_ship.md" && !frontmatterWritten) {
+        frontmatterWritten = true;
+        next = [
+          "---",
+          "task_count: 2",
+          "open_task_count: 2",
+          "---",
+          "",
+          next,
+        ].join("\n");
+      }
+      harness.contents[file.path] = next;
+      return next;
+    },
+  });
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view),
+    true,
+  );
+  const projectContent = harness.contents["Work_ship.md"];
+  assert.match(projectContent, /^task_count: 2$/m);
+  assert.match(projectContent, /^open_task_count: 2$/m);
+  assert.match(projectContent, /\^design/);
+  assert.match(projectContent, /\^test/);
+  assert.match(harness.contents[todayPath], /\[\[Work_ship#\^design\]\]/);
+  assert.doesNotMatch(harness.contents["Areas/Work.md"], /Ship it/);
+  assert.match(notices.at(-1), /Created project Work_ship/);
+});
+
+test("forward promotion rebases anchors in an open project editor", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  const sourceContent = [
+    "---",
+    'type: "[[area]]"',
+    "---",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it ^ship",
+    "\t- Design",
+    "\t- Test",
+  ].join("\n");
+  const projectEditor = new TransactionEditor("", { line: 0, ch: 0 });
+  const projectLeaf = { view: { file: null, editor: projectEditor } };
+  let frontmatterWritten = false;
+  let harness;
+  harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent,
+    today,
+    leaves: [projectLeaf],
+    onCreate: (file) => {
+      projectLeaf.view.file = file;
+      projectEditor.content = harness.contents[file.path];
+    },
+    extraFiles: [
+      {
+        path: todayPath,
+        content: [
+          "## Pomodoros",
+          "",
+          "- [ ] (**0930-1000**)",
+          "  - [[Areas/Work#^ship]]",
+        ].join("\n"),
+      },
+    ],
+    backlinks: {
+      [todayPath]: [{ original: "[[Areas/Work#^ship]]", link: "Areas/Work#^ship" }],
+    },
+    process: async (file, fn) => {
+      let next = fn(harness.contents[file.path]);
+      if (file.path === "Work_ship.md" && !frontmatterWritten) {
+        frontmatterWritten = true;
+        next = [
+          "---",
+          "task_count: 2",
+          "open_task_count: 2",
+          "---",
+          "",
+          next,
+        ].join("\n");
+        projectEditor.content = next;
+      }
+      harness.contents[file.path] = next;
+      return next;
+    },
+  });
+  const openEditorResult = await harness.plugin.createProjectNoteFromTask(
+    harness.editor,
+    harness.view,
+  );
+  assert.equal(openEditorResult, true);
+  assert.match(projectEditor.getValue(), /^task_count: 2$/m);
+  assert.match(projectEditor.getValue(), /^open_task_count: 2$/m);
+  assert.match(projectEditor.getValue(), /\^design/);
+  assert.match(projectEditor.getValue(), /\^test/);
+  assert.match(harness.contents[todayPath], /\[\[Work_ship#\^test\]\]/);
+  assert.doesNotMatch(harness.contents["Areas/Work.md"], /Ship it/);
+  assert.match(notices.at(-1), /Created project Work_ship/);
+});
+
+test("forward promotion refuses a concurrent edit to a task line being anchored", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  const sourceContent = [
+    "---",
+    'type: "[[area]]"',
+    "---",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it ^ship",
+    "\t- Design",
+    "\t- Test",
+  ].join("\n");
+  const harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent,
+    today,
+    extraFiles: [
+      {
+        path: todayPath,
+        content: [
+          "## Pomodoros",
+          "",
+          "- [ ] (**0930-1000**)",
+          "  - [[Areas/Work#^ship]]",
+        ].join("\n"),
+      },
+    ],
+    backlinks: {
+      [todayPath]: [{ original: "[[Areas/Work#^ship]]", link: "Areas/Work#^ship" }],
+    },
+    process: async (file, fn) => {
+      let next = fn(harness.contents[file.path]);
+      if (file.path === "Work_ship.md") {
+        next = next.replace("#task Design", "#task Revised design");
+      }
+      harness.contents[file.path] = next;
+      return next;
+    },
+  });
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view),
+    true,
+  );
+  assert.match(notices.at(-1), /project anchors could not be persisted; source task was kept/);
+  assert.match(harness.contents["Areas/Work.md"], /Ship it/);
+  assert.match(harness.contents[todayPath], /\[\[Areas\/Work#\^ship\]\]/);
+  assert.match(harness.contents["Work_ship.md"], /#task Revised design/);
+  assert.doesNotMatch(harness.contents["Work_ship.md"], /#task Revised design \^design/);
+});
+
 test("forward promotion uses zero-task fallback and keeps reverse one-to-one", async () => {
   notices.length = 0;
   const today = new Date(2026, 8, 30);

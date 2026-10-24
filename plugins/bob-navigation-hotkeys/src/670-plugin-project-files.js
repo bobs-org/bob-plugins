@@ -169,11 +169,11 @@ class BobNavigationHotkeysProjectFileMixin {
     const updatedProjectContent = promotionPlan.content;
     if (updatedProjectContent !== seedContent) {
       try {
-        await this.writeProjectPromotionFileChange(
+        await this.writeProjectPromotionAnchors(
           createdPath,
           createdFile,
           seedContent,
-          updatedProjectContent,
+          promotionPlan,
         );
       } catch (error) {
         return Object.freeze({

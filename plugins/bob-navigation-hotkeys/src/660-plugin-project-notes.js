@@ -330,4 +330,54 @@ class BobNavigationHotkeysProjectNoteMixin {
       throw new Error(`Promotion file write failed: ${normalized}`);
     }
   }
+
+  async writeProjectPromotionAnchors(path, file, seedContent, promotionPlan) {
+    const normalized = normalizeVaultRelativePath(path);
+    if (
+      !normalized ||
+      normalizeVaultRelativePath(file && file.path) !== normalized
+    ) {
+      throw new Error(`Promotion file path changed: ${normalized}`);
+    }
+    const rebase = (content) => {
+      const result = rebaseProjectPromotionAnchorPlan(
+        seedContent,
+        String(content || ""),
+        promotionPlan,
+      );
+      if (!result.ok) {
+        throw new Error(`Promotion preimage changed: ${normalized}`);
+      }
+      return result;
+    };
+    const editor = this.getOpenMarkdownEditorForPath(normalized);
+    if (editor && typeof editor.getValue === "function") {
+      const before = String(editor.getValue() || "");
+      const result = rebase(before);
+      if (
+        result.content !== before &&
+        (!applyEditorContentTransaction(editor, before, result.content) ||
+          String(editor.getValue() || "") !== result.content)
+      ) {
+        throw new Error(`Promotion editor write failed: ${normalized}`);
+      }
+      return result;
+    }
+
+    const vault = this.app && this.app.vault;
+    if (!vault || typeof vault.process !== "function") {
+      throw new Error(`Vault content updates are unavailable: ${normalized}`);
+    }
+    let result = null;
+    let transformed = false;
+    await vault.process(file, (content) => {
+      result = rebase(content);
+      transformed = true;
+      return result.content;
+    });
+    if (!transformed || !result) {
+      throw new Error(`Promotion file write failed: ${normalized}`);
+    }
+    return result;
+  }
 }

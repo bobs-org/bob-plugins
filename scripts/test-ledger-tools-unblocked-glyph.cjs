@@ -14,6 +14,29 @@ const path = require("node:path");
 const Module = require("node:module");
 const test = require("node:test");
 
+const RealDate = Date;
+const FROZEN_NOW = new RealDate(2026, 9, 9, 12, 0, 0);
+class FrozenDate extends RealDate {
+  constructor(...args) {
+    if (args.length === 0) {
+      super(FROZEN_NOW.getTime());
+    } else {
+      super(...args);
+    }
+  }
+
+  static now() {
+    return FROZEN_NOW.getTime();
+  }
+}
+global.Date = FrozenDate;
+
+// A fixed local noon: `planDayNumber` reads local days, so Date
+// objects on the same local day are robust in every timezone.
+const TODAY = new Date(2026, 9, 9, 12, 0, 0);
+const TODAY_MORNING = new Date(2026, 9, 9, 8, 0, 0);
+const YESTERDAY = new Date(2026, 9, 8, 12, 0, 0);
+
 const editorInfoField = { _unblockedField: "info" };
 const editorLivePreviewField = { _unblockedField: "live" };
 
@@ -176,18 +199,12 @@ const {
   todayDailyPath,
 } = helpers;
 
-const DAILY = todayDailyPath(new Date(), {});
+const DAILY = todayDailyPath(TODAY, {});
 assert.ok(DAILY, "test daily path resolves");
 // Require-time eager `StateEffect.define()` calls: exactly the
 // freshness-marks refresh. Later tests may trigger this family's
 // lazy define, so the count is pinned here, before any test runs.
 const EAGER_DEFINES = stateEffectDefines;
-
-// A fixed local noon: `planDayNumber` reads local days, so Date
-// objects on the same local day are robust in every timezone.
-const TODAY = new Date(2026, 9, 9, 12, 0, 0);
-const TODAY_MORNING = new Date(2026, 9, 9, 8, 0, 0);
-const YESTERDAY = new Date(2026, 9, 8, 12, 0, 0);
 
 // --- Stub vault ------------------------------------------------------------
 

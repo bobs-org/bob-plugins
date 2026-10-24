@@ -826,6 +826,23 @@ class BobNavigationHotkeysProjectConversionMixin {
       parentContentToWrite = parentRewrite.after;
     }
 
+    const sameNoteBlocks = planProjectReverseSameNoteBlocks({
+      content: parentContentToWrite,
+      parentPath,
+      projectPath: sourceFile.path,
+      restoredBlockId: restored.blockId,
+      restoredTaskLine: restoredLines[0],
+      dependencies: dependencyRefs,
+      vaultFiles: this.readDependencyVaultFileList(),
+      resolveLinkpath: this.dependencyLinkpathResolver(),
+      blocksLinesEnabled: loadBlocksLinesEnabled(),
+    });
+    if (!sameNoteBlocks.ok) {
+      new Notice("Could not update a prerequisite's BLOCKS line; nothing was converted");
+      return false;
+    }
+    parentContentToWrite = sameNoteBlocks.content;
+
     let dailyCleanup = null;
     let dailyCleanupSnapshot = null;
     if (parentProjectBlocked) {

@@ -205,3 +205,51 @@ function planBlockIdLinkContentRewrites(
     changes,
   });
 }
+
+// Reverse conversion must re-key same-note prerequisite mirrors in the
+// restored parent buffer; the metadata backlink cache can still be stale.
+function planProjectReverseSameNoteBlocks(args = {}) {
+  const content = String(args.content || "");
+  const parentPath = normalizeVaultRelativePath(args.parentPath || "");
+  const projectPath = normalizeVaultRelativePath(args.projectPath || "");
+  const restoredBlockId = String(args.restoredBlockId || "");
+  if (
+    args.blocksLinesEnabled !== true ||
+    !parentPath ||
+    !projectPath ||
+    !restoredBlockId ||
+    !isOpenObsidianTaskLine(String(args.restoredTaskLine || ""))
+  ) {
+    return Object.freeze({ ok: true, content });
+  }
+
+  let nextContent = content;
+  for (const target of Array.isArray(args.dependencies) ? args.dependencies : []) {
+    if (normalizeVaultRelativePath(target && target.path) !== parentPath) {
+      continue;
+    }
+    const lines = nextContent.split(/\r?\n/);
+    const ownerLine = findTaskLineByTrailingBlockId(lines, target.blockId);
+    if (
+      ownerLine === null ||
+      !isOpenObsidianTaskLine(String(lines[ownerLine] || ""))
+    ) {
+      continue;
+    }
+    const mirror = planBlocksMirrorForSource({
+      content: nextContent,
+      sourcePath: parentPath,
+      sourceBlockId: target.blockId,
+      add: [{ path: parentPath, blockId: restoredBlockId }],
+      remove: [{ path: projectPath, blockId: "prj" }],
+      vaultFiles: args.vaultFiles,
+      resolveLinkpath: args.resolveLinkpath,
+      blocksLinesEnabled: true,
+    });
+    if (!mirror.ok) {
+      return Object.freeze({ ok: false, content, reason: mirror.reason });
+    }
+    nextContent = mirror.nextContent;
+  }
+  return Object.freeze({ ok: true, content: nextContent });
+}

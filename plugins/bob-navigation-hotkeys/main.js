@@ -25023,6 +25023,54 @@ function planBlockIdLinkContentRewrites(
     changes,
   });
 }
+
+// Reverse conversion must re-key same-note prerequisite mirrors in the
+// restored parent buffer; the metadata backlink cache can still be stale.
+function planProjectReverseSameNoteBlocks(args = {}) {
+  const content = String(args.content || "");
+  const parentPath = normalizeVaultRelativePath(args.parentPath || "");
+  const projectPath = normalizeVaultRelativePath(args.projectPath || "");
+  const restoredBlockId = String(args.restoredBlockId || "");
+  if (
+    args.blocksLinesEnabled !== true ||
+    !parentPath ||
+    !projectPath ||
+    !restoredBlockId ||
+    !isOpenObsidianTaskLine(String(args.restoredTaskLine || ""))
+  ) {
+    return Object.freeze({ ok: true, content });
+  }
+
+  let nextContent = content;
+  for (const target of Array.isArray(args.dependencies) ? args.dependencies : []) {
+    if (normalizeVaultRelativePath(target && target.path) !== parentPath) {
+      continue;
+    }
+    const lines = nextContent.split(/\r?\n/);
+    const ownerLine = findTaskLineByTrailingBlockId(lines, target.blockId);
+    if (
+      ownerLine === null ||
+      !isOpenObsidianTaskLine(String(lines[ownerLine] || ""))
+    ) {
+      continue;
+    }
+    const mirror = planBlocksMirrorForSource({
+      content: nextContent,
+      sourcePath: parentPath,
+      sourceBlockId: target.blockId,
+      add: [{ path: parentPath, blockId: restoredBlockId }],
+      remove: [{ path: projectPath, blockId: "prj" }],
+      vaultFiles: args.vaultFiles,
+      resolveLinkpath: args.resolveLinkpath,
+      blocksLinesEnabled: true,
+    });
+    if (!mirror.ok) {
+      return Object.freeze({ ok: false, content, reason: mirror.reason });
+    }
+    nextContent = mirror.nextContent;
+  }
+  return Object.freeze({ ok: true, content: nextContent });
+}
 // ---- src/215-project-blocking.js ----
 // Project blocking from the `^prj` line: recognition, block state, ADJ-11
 // walk-through, recovery edges, and the resident-tag signal.
@@ -77655,6 +77703,23 @@ class BobNavigationHotkeysProjectConversionMixin {
     if (parentRewrite) {
       parentContentToWrite = parentRewrite.after;
     }
+
+    const sameNoteBlocks = planProjectReverseSameNoteBlocks({
+      content: parentContentToWrite,
+      parentPath,
+      projectPath: sourceFile.path,
+      restoredBlockId: restored.blockId,
+      restoredTaskLine: restoredLines[0],
+      dependencies: dependencyRefs,
+      vaultFiles: this.readDependencyVaultFileList(),
+      resolveLinkpath: this.dependencyLinkpathResolver(),
+      blocksLinesEnabled: loadBlocksLinesEnabled(),
+    });
+    if (!sameNoteBlocks.ok) {
+      new Notice("Could not update a prerequisite's BLOCKS line; nothing was converted");
+      return false;
+    }
+    parentContentToWrite = sameNoteBlocks.content;
 
     let dailyCleanup = null;
     let dailyCleanupSnapshot = null;

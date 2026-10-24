@@ -738,3 +738,80 @@ test("forward conversion carries a Depends-On line and reverse restores it", asy
   );
 });
 
+test("reverse conversion re-keys a cross-note prerequisite BLOCKS link", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const sourceContent = [
+    "---",
+    'type: "[[area]]"',
+    "---",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task Ship it [dependsOn:: Other__Prereqs__prereq] ^ship",
+    "  - ⛓️ **DEPENDS ON:** [[Prereqs#^prereq]]",
+    "  - [ ] #task Follow up ^follow-up",
+  ].join("\n");
+  const prerequisitePath = "Other/Prereqs.md";
+  const prerequisiteContent = [
+    "---",
+    'type: "[[area]]"',
+    "---",
+    "",
+    "## Tasks",
+    "",
+    "- [ ] #task Prerequisite [id:: Other__Prereqs__prereq] ^prereq",
+  ].join("\n");
+  let harness;
+  harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent,
+    extraFiles: [{ path: prerequisitePath, content: prerequisiteContent }],
+    backlinks: {
+      [prerequisitePath]: [
+        { link: "Work_ship#^prj", original: "[[Work_ship#^prj]]" },
+      ],
+    },
+    today,
+    processFrontMatter: async (file, fn) => {
+      const frontmatter = {};
+      fn(frontmatter);
+      const yaml = Object.entries(frontmatter)
+        .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+        .join("\n");
+      const current = harness.contents[file.path] || "";
+      harness.contents[file.path] = current.startsWith("---\n")
+        ? current.replace(/^---\n/, `---\n${yaml}\n`)
+        : `---\n${yaml}\n---\n\n${current}`;
+      return frontmatter;
+    },
+  });
+  harness.plugin.app.fileManager.trashFile = async (file) => {
+    delete harness.contents[file.path];
+    delete harness.fileByPath[file.path];
+  };
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view),
+    true,
+  );
+  const createdPath = "Work_ship.md";
+  const projectContent = harness.contents[createdPath];
+  const reverseEditor = new TransactionEditor(projectContent, {
+    line: projectContent.split("\n").findIndex((line) => /\^prj(?:\s|$)/.test(line)),
+    ch: 0,
+  });
+  const reverseView = {
+    file: harness.fileByPath[createdPath],
+    editor: reverseEditor,
+    save: async () => {
+      harness.contents[createdPath] = reverseEditor.getValue();
+    },
+  };
+  assert.equal(
+    await harness.plugin.createProjectNoteFromTask(reverseEditor, reverseView),
+    true,
+  );
+  assert.match(harness.contents[prerequisitePath], /\[\[Work#\^ship\]\]/);
+  assert.doesNotMatch(harness.contents[prerequisitePath], /Work_ship#\^prj/);
+});
+

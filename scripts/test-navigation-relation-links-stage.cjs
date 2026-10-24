@@ -1430,6 +1430,8 @@ test("relation-label stage Tab, Ctrl+D, pipe, and Ctrl+H mirror the card", async
     { key: "implements", name: "implements", count: 2, hidden: false, inverse: null },
   ];
   const writes = [];
+  let relationLabelsChanged = null;
+  let relationLabelUnsubscribes = 0;
   picker.app = {
     plugins: {
       plugins: {
@@ -1445,6 +1447,10 @@ test("relation-label stage Tab, Ctrl+D, pipe, and Ctrl+H mirror the card", async
                   .filter((row) => !needle || row.name.toLowerCase().includes(needle));
               },
               hiddenCount: () => hidden.size,
+              onChange(listener) {
+                relationLabelsChanged = listener;
+                return () => { relationLabelUnsubscribes += 1; };
+              },
               async hide(label) {
                 writes.push(["hide", label]);
                 hidden.add(String(label).toLowerCase());
@@ -1463,7 +1469,9 @@ test("relation-label stage Tab, Ctrl+D, pipe, and Ctrl+H mirror the card", async
   };
   beginRelationLabel(picker, [{ path: "Other.md", line: 0, blockId: "other" }], "");
   picker.getRawQuery = () => query;
+  let renders = 0;
   picker.renderResults = () => {
+    renders += 1;
     picker.visibleItems = picker.getRelationLabelPreviewItems();
   };
   const opened = [];
@@ -1471,7 +1479,15 @@ test("relation-label stage Tab, Ctrl+D, pipe, and Ctrl+H mirror the card", async
     opened.push(index);
     return true;
   };
+  const renameRequests = [];
+  picker.openRelationLabelRenameForStage = (item) => {
+    renameRequests.push(item);
+    return true;
+  };
   picker.visibleItems = picker.getRelationLabelPreviewItems();
+  const initialRenders = renders;
+  relationLabelsChanged();
+  assert.ok(renders > initialRenders, "catalog changes refresh the open relation-label stage");
 
   const key = (name, fields = {}) => ({
     key: name,
@@ -1491,6 +1507,9 @@ test("relation-label stage Tab, Ctrl+D, pipe, and Ctrl+H mirror the card", async
   assert.equal(picker.handleRelationLabelKeydown(key("n", { ctrlKey: true })), true);
   assert.equal(picker.selectedIndex, 1, "Ctrl+N selects the first suggestion without changing the query");
   assert.equal(query, "");
+  assert.equal(picker.handleRelationLabelKeydown(key("r", { ctrlKey: true })), true);
+  assert.equal(renameRequests[0].label, "see", "Ctrl+R opens rename for the selected catalog label");
+  assert.equal(renameRequests[0].typed, false);
   assert.equal(picker.handleRelationLabelKeydown(key("Tab")), true);
   assert.deepEqual(opened.pop(), 1, "Tab accepts the selected label");
 
@@ -1510,6 +1529,121 @@ test("relation-label stage Tab, Ctrl+D, pipe, and Ctrl+H mirror the card", async
   assert.equal(picker.relationLabelOneOff, true);
   assert.equal(picker.handleRelationLabelKeydown(key("|", { shiftKey: true })), true);
   assert.equal(picker.relationLabelOneOff, true);
+  picker.clearRelationLabelSubscriptions();
+  assert.equal(relationLabelUnsubscribes, 1, "stage teardown releases the catalog listener");
+});
+
+test("relation-label rename preview reports done/ impact and checks affected editors", async () => {
+  const preview = {
+    ok: true,
+    mode: "dry_run",
+    from: { name: "see" },
+    to: { name: "reference to" },
+    merge: true,
+    files: [
+      { path: "tasks/a.md", links: 2, mirrors: 1, lines: [{ before: "see", after: "reference to" }] },
+      { path: "done/old.md", links: 1, mirrors: 0, lines: [{ before: "see", after: "reference to" }] },
+    ],
+    counts: { links: 3, notes: 2, mirrors: 1, done_links: 1 },
+  };
+  const summary = helpers.formatRelationLabelRenamePreview(preview);
+  assert.match(summary.title, /3 links in 2 notes · 1 mirror · 1 in done\//);
+  assert.deepEqual(helpers.relationLabelRenameFilePaths(preview), ["tasks/a.md", "done/old.md"]);
+  assert.equal(summary.merge, true);
+
+  const leaves = [
+    { view: { file: { path: "tasks/a.md" }, editor: { getValue: () => "disk a" } } },
+    { view: { file: { path: "done/old.md" }, editor: { getValue: () => "unsaved old" } } },
+    { view: { file: { path: "other.md" }, editor: { getValue: () => "not in the rename" } } },
+  ];
+  const app = {
+    workspace: { iterateAllLeaves(callback) { leaves.forEach(callback); } },
+    vault: { async read(file) { return file.path === "tasks/a.md" ? "disk a" : "disk old"; } },
+  };
+  assert.deepEqual(await helpers.relationLabelDirtyEditorPaths(app, preview), ["done/old.md"]);
+});
+
+test("relation-label rename modal re-previews, saves the active note, and confirms merges", async () => {
+  const calls = [];
+  let saves = 0;
+  const report = {
+    ok: true,
+    mode: "dry_run",
+    from: { key: "see", name: "see" },
+    to: { key: "reference to", name: "reference to" },
+    merge: true,
+    files: [{ path: "tasks/a.md", links: 1, mirrors: 1, lines: [] }],
+    counts: { links: 1, notes: 1, mirrors: 1, done_links: 0 },
+    state: { note: "hidden state remains hidden" },
+    inverse: { note: "no inverse change" },
+    sync: { pre: "skipped", post: "complete" },
+    warnings: [],
+  };
+  const activeView = {
+    file: { path: "tasks/a.md" },
+    editor: { getValue: () => "disk content" },
+    async save() { saves += 1; },
+  };
+  const relationLabels = {
+    version: 1,
+    async rename(from, to, options) {
+      calls.push({ from, to, options });
+      return { ok: true, report };
+    },
+  };
+  const app = {
+    plugins: { plugins: { "bob-ledger-tools": { api: { relationLabels } } } },
+    workspace: {
+      getActiveViewOfType: () => activeView,
+      iterateAllLeaves(callback) { callback({ view: activeView }); },
+    },
+    vault: { async read() { return "disk content"; } },
+  };
+  const modal = new helpers.RelationLabelRenameModal(app, "see");
+  modal.nameInput = { value: "reference to" };
+  modal.mergeToggle = { checked: true };
+  modal.mergeConfirmToggle = { checked: false };
+  modal.close = () => {};
+  const preview = await modal.previewRename();
+  assert.match(preview.title, /1 link in 1 note · 1 mirror/);
+  assert.equal(saves, 1, "active editor is saved before showing the dry-run plan");
+  assert.equal(modal.renamePreview.merge, true, "the merge is previewed before its separate confirmation");
+
+  modal.mergeConfirmToggle.checked = true;
+  modal.renderRenamePreview();
+  assert.equal(await modal.applyRename(), true);
+  assert.equal(saves, 2, "active editor is saved again immediately before apply");
+  assert.deepEqual(calls.map((call) => call.options), [
+    { dryRun: true, merge: true, via: "bob-navigation-hotkeys" },
+    { dryRun: true, merge: true, via: "bob-navigation-hotkeys" },
+    { dryRun: false, merge: true, via: "bob-navigation-hotkeys" },
+  ]);
+});
+
+test("Bob: Relation labels manager keeps hidden labels visible and delegates hide and unhide", async () => {
+  const hidden = new Set(["retired"]);
+  const writes = [];
+  const api = {
+    version: 1,
+    rows(_query, options = {}) {
+      return [
+        { key: "see", name: "see", count: 2, hidden: hidden.has("see"), inverse: null },
+        { key: "retired", name: "retired", count: 0, hidden: hidden.has("retired"), inverse: null },
+      ].filter((row) => options.hidden === "include" || (options.hidden === "only" ? row.hidden : !row.hidden));
+    },
+    async hide(name) { writes.push(["hide", name]); hidden.add(name); return { ok: true }; },
+    async unhide(name) { writes.push(["unhide", name]); hidden.delete(name); return { ok: true }; },
+  };
+  const app = { plugins: { plugins: { "bob-ledger-tools": { api: { relationLabels: api } } } } };
+  const manager = new helpers.RelationLabelManagerModal(app, {});
+  manager.renderResults = () => {};
+  await manager.refreshRelationLabelManagerRows();
+  assert.deepEqual(manager.items.map((row) => [row.name, row.hidden]), [["see", false], ["retired", true]]);
+  await manager.toggleRelationLabel(manager.items[0]);
+  assert.deepEqual(writes[0], ["hide", "see"]);
+  await manager.toggleRelationLabel(manager.items[1]);
+  assert.deepEqual(writes[1], ["unhide", "retired"]);
+  assert.equal(hidden.has("retired"), false);
 });
 
 test("one-off labels hide through bob only after the relation commit succeeds", async () => {

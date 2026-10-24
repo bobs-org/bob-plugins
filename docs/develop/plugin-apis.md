@@ -54,6 +54,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | `progressMarks` | 1 | Refresh the display-only In Progress Task Link mark. |
 | `unblockedGlyph` | 1 | Refresh the display-only unblocked hand-off glyph. |
 | `relationIndex` | 1 | Read the live, source-authoritative task relation index and label suggestions. |
+| `relationLabels` | 1 | Read the relation-label catalog and delegate hide, unhide, and previewed rename writes to bob. |
 
 `relationIndex.ready()` reports whether the chunked initial scan is complete;
 `generation` increases whenever a complete pair of forward and reverse maps
@@ -74,6 +75,13 @@ The index scans relation-bearing Markdown files in idle chunks, including
 and the active editor's unsaved text. Relation targets are resolved with
 Obsidian's link resolver and cached block IDs. Consumers render from this live
 index; they do not read the generated `LINKED FROM` mirror as source data.
+
+`relationLabels.rows(query?, { hidden })` and `hiddenCount()` expose the
+catalog and folded hidden preferences. `hide(name)`, `unhide(name)`, and
+`rename(from, to, { dryRun?, merge?, via? })` resolve `{ ok, code?, message?,
+report? }` without rejecting. Writes spawn bob with `--via` and refresh the
+read-only journal fold; rename previews return the dry-run report without
+writing.
 
 - Register `vault` `create` / `modify` listeners inside `workspace.onLayoutReady`,
   because Obsidian replays `create` for every vault file (PDFs included) during load.

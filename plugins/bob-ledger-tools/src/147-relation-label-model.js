@@ -213,7 +213,7 @@ function relationLabelsDecodeWrite(stdout, stderr) {
     return {
       ok: false,
       code: "unsupported",
-      message: "Update bob to hide relation labels.",
+      message: "Update bob to manage relation labels.",
       detail: statsFirstLine(stderr),
     };
   }

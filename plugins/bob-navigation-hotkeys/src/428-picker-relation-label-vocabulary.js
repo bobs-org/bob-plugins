@@ -11,6 +11,42 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     }
   }
 
+  subscribeRelationLabelChanges() {
+    this.clearRelationLabelSubscriptions();
+    this.relationLabelSubscriptions = [];
+    const refresh = () => {
+      if (this.stage === "relation-label" && typeof this.renderResults === "function") {
+        this.renderResults();
+      }
+    };
+    try {
+      const plugins = (this.app && this.app.plugins && this.app.plugins.plugins) || {};
+      const holder = plugins["bob-ledger-tools"];
+      const api = holder && holder.api;
+      for (const source of [api && api.relationLabels, api && api.relationIndex]) {
+        if (!source || typeof source.onChange !== "function") continue;
+        const unsubscribe = source.onChange(refresh);
+        if (typeof unsubscribe === "function") this.relationLabelSubscriptions.push(unsubscribe);
+      }
+    } catch (_error) {
+      // The stage remains usable if an older provider cannot subscribe.
+    }
+  }
+
+  clearRelationLabelSubscriptions() {
+    const subscriptions = Array.isArray(this.relationLabelSubscriptions)
+      ? this.relationLabelSubscriptions
+      : [];
+    this.relationLabelSubscriptions = [];
+    for (const unsubscribe of subscriptions) {
+      try {
+        unsubscribe();
+      } catch (_error) {
+        // Unsubscribing is best-effort during stage teardown.
+      }
+    }
+  }
+
   readRelationLabelSuggestions(prefix, options = {}) {
     try {
       const plugins = (this.app && this.app.plugins && this.app.plugins.plugins) || {};
@@ -84,6 +120,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       { keys: ["⇥"], label: tabLabel },
       { keys: ["⌃D"], label: hideLabel },
       { keys: ["⌃H"], label: this.relationLabelShowHidden === true ? "hide list" : `Hidden ${this.readRelationLabelHiddenCount()}` },
+      { keys: ["⌃R"], label: "rename selected" },
       { keys: ["↵"], label: this.relationLabelMode === "relabel" ? "relabel" : "link" },
       { keys: ["esc"], label: "back to list" },
     ];
@@ -174,6 +211,15 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       }
       this.relationLabelTabNoMatch = false;
       void this.openItemAtIndex(index);
+      return true;
+    }
+    if (event.key.toLowerCase() === "r" && event.ctrlKey === true && noMetaAlt && event.shiftKey !== true) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat !== true) {
+        const item = (this.visibleItems || [])[this.selectedIndex] || null;
+        this.openRelationLabelRenameForStage(item);
+      }
       return true;
     }
     if (

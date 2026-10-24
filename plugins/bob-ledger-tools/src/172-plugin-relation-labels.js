@@ -16,6 +16,7 @@ class BobLedgerToolsRelationLabelsMixin {
       onChange: (listener) => plugin.onRelationLabelsChange(listener),
       hide: (label, options) => plugin.apiRelationLabelsHide(label, options),
       unhide: (label, options) => plugin.apiRelationLabelsUnhide(label, options),
+      rename: (from, to, options) => plugin.apiRelationLabelsRename(from, to, options),
     });
   }
 
@@ -246,6 +247,29 @@ class BobLedgerToolsRelationLabelsMixin {
       );
     } catch (_error) {
       return { ok: false, code: "failed", message: "bob relations unhide failed." };
+    }
+  }
+
+  // Rename relation labels through bob's previewed vault rewrite. Dry runs
+  // return their report without refreshing the journal; writes refresh the
+  // read-only mirror after bob has committed.
+  async apiRelationLabelsRename(from, to, options = {}) {
+    try {
+      const source = String(from || "").trim();
+      const target = String(to || "").trim();
+      if (!source || !target) {
+        return { ok: false, code: "invalid_label", message: "Rename needs two relation labels." };
+      }
+      const opts = options && typeof options === "object" ? options : {};
+      const args = ["relations", "rename", source, target];
+      if (opts.dryRun === true) args.push("--dry-run");
+      if (opts.merge === true) args.push("--merge");
+      const result = await this.relationLabelsWriteSpawn(args, opts.via);
+      return opts.dryRun === true
+        ? result
+        : this.apiRelationLabelsWriteAftermath(result);
+    } catch (_error) {
+      return { ok: false, code: "failed", message: "bob relations rename failed." };
     }
   }
 

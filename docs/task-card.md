@@ -37,7 +37,7 @@ matching stage directly.
 | `0` | Clear priority to implicit P0 and keep the scheduled date. |
 | `Ctrl+Enter` | Apply the cached recommendation (with a `Cmd+Enter` alias). |
 | `Alt+P` | Apply the cached recommendation; it aliases Ctrl+Enter. |
-| `Ctrl+R` | Regenerate the recommendation and priority previews without writing. |
+| `Ctrl+R` | Regenerate the recommendation and priority previews without writing; in the relation-label stage, open rename mode for the selected existing label. |
 | `Enter` | Open the selected action; Schedule is the default. |
 | `b` | Open Blocked by (Depends on). |
 | `⇧B` | Open Blocks (reverse Depends on). |
@@ -47,6 +47,7 @@ matching stage directly.
 | `x` | Open the cancel-reason stage; the key alone never cancels. |
 | `Alt+N` | Commit to Next or release to Ready. |
 | `Ctrl+D` | Delete the selected property; Schedule is selected by default. On Links to, clear all outgoing relations; Linked from is generated and refuses clearing. In the relation-label stage, hide or unhide the selected label; row zero toggles one-off instead. |
+| `Ctrl+H` | In the relation-label stage, show or hide the Hidden section. |
 | Backspace on an empty field or Back | Return to the card without writing. |
 | Escape, `q`, `Q` | Close and discard uncommitted state. `q` does not close while a text field is focused. |
 | `Ctrl+[` | Close the card or a stage it opened, including a focused date, reason, or Work summary field. |

@@ -81,9 +81,23 @@ first, then bob hides its label; if that hide fails, the relation remains and
 the notice gives the retry command. Hiding changes suggestions only: existing
 links and typed use remain unchanged.
 
+`Ctrl+R` on an existing label opens a separate rename mode. The preview lists
+the affected notes, LINKS entries, generated mirrors, and `done/` history.
+Obsidian saves the active editor before previewing and refuses to continue when
+another affected open editor has unsaved text. Apply refreshes the preview and
+rechecks open editors; if the plan changed, review the new preview before
+confirming again. A merge requires its own confirmation. Bob performs the
+one-commit rename, including label spans in `done/`.
+
+The **Bob: Relation labels** command opens a manager for hiding, unhiding, and
+renaming labels without starting a link gesture. Hidden labels remain in the
+manager, including labels with no current links.
+
 The read-only `api.relationLabels` v1 exposes catalog rows and hidden state on
-desktop and mobile. Its desktop `hide` and `unhide` methods delegate writes to
-`bob relations`.
+desktop and mobile. Its desktop `hide`, `unhide`, and `rename` methods delegate
+writes to `bob relations`; `rename(from, to, { dryRun, merge, via })` returns
+Bob's preview report for dry runs and refreshes the journal mirror after a
+successful write.
 
 ## Related
 

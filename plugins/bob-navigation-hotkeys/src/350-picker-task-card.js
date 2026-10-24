@@ -724,6 +724,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   // Invalidate any pending vault-stage refresh so it never paints into the
   // closed modal.
   onClose() {
+    this.clearRelationLabelSubscriptions();
     if (this.plugin && this.plugin.activeBulletPropertyPicker === this) {
       this.plugin.activeBulletPropertyPicker = null;
     }

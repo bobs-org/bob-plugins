@@ -573,6 +573,18 @@ test("api.relationLabels reads folded preferences and delegates desktop writes t
   assert.equal((await api.hide("new relation", { allowUnused: true, via: "test-client" })).ok, true);
   assert.deepEqual(writes, [{ args: ["relations", "hide", "new relation", "--allow-unused"], via: "test-client" }]);
   assert.deepEqual(changes, ["write"]);
+  assert.equal((await api.rename("see", "reference to", { dryRun: true, merge: true, via: "test-client" })).ok, true);
+  assert.deepEqual(writes[1], {
+    args: ["relations", "rename", "see", "reference to", "--dry-run", "--merge"],
+    via: "test-client",
+  });
+  assert.deepEqual(changes, ["write"], "a preview does not refresh or emit a write notification");
+  assert.equal((await api.rename("see", "reference to", { via: "test-client" })).ok, true);
+  assert.deepEqual(writes[2], {
+    args: ["relations", "rename", "see", "reference to"],
+    via: "test-client",
+  });
+  assert.deepEqual(changes, ["write", "write"], "a committed rename refreshes the journal mirror");
   plugin.teardownRelationIndex();
 });
 

@@ -23,6 +23,7 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
+| Bob: Relation labels | `open-relation-labels-manager` | — |
 | Close other tabs | `close-other-tabs` | — |
 | Close tabs to the left | `close-tabs-left` | — |
 | Close tabs to the right | `close-tabs-right` | — |
@@ -160,6 +161,12 @@ with an empty filter, `1`–`8`/`a` in the color list) jump straight there.
 Rename previews the one-commit rename before applying; occurrences lists daily
 notes and opens the entry. History and writes need the desktop app, where the
 Ledger Tools `themes` catalog is available.
+
+The **Bob: Relation labels** command manages the relation-label vocabulary
+without a link gesture. Choose a label to hide or unhide it, or open the
+previewed rename flow. The relation-label stage also uses `Ctrl+R` to rename
+the selected existing label; it checks affected open editors before preview and
+write, and requires explicit confirmation before merging labels.
 
 ## Task properties, dependencies, and moves
 

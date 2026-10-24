@@ -114,6 +114,12 @@ class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "open-relation-labels-manager",
+      name: "Bob: Relation labels",
+      callback: () => this.openRelationLabelsManager(),
+    });
+
+    this.addCommand({
       id: "open-next-link",
       name: "Open next link",
       callback: () => this.openLabeledBodyLink("next"),

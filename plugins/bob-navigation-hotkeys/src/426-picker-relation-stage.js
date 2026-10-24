@@ -666,6 +666,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         this.renderRelationLabelItem(item, rowEl, query),
       openItem: (item) => this.commitRelationLabel(item),
     });
+    this.subscribeRelationLabelChanges();
     if (this.headerIconEl) {
       this.headerIconEl.empty();
       applyIcon(this.headerIconEl, "link-2");
@@ -924,6 +925,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
   }
 
   restoreRelationList() {
+    this.clearRelationLabelSubscriptions();
     this.relationLabelTargets = null;
     this.relationLabelMode = null;
     this.relationLabelShowHidden = false;

@@ -692,11 +692,26 @@ class BobLedgerToolsDayStripMixin {
 
   // Across-midnight rollover: today becomes a past-day strip because its
   // D is fixed by its path, so re-sync every plan-block host (a future
-  // note's block gains its strip when D becomes today) and repaint every
-  // strip after the generation bump. Never throws.
+  // note's block gains its strip when D becomes today) and synchronously
+  // invalidate/repaint every registered strip, including explicit fences.
+  // A stale ready frame becomes a skeleton immediately, before any request
+  // settles; network checks stay visibility/dirty/age gated. Never throws.
   dayStripHandleRollover() {
     try {
       if (typeof this.refreshDayStripPlanHosts === "function") {
+        // Paint explicit fences first so yesterday's ready frame stops
+        // presenting "so far" synchronously; the plan refresh below paints
+        // plan hosts once (deduplicated by paintedKey) and checks all.
+        for (const record of Array.from(this.dayStripViewsStore())) {
+          try {
+            if (record && record.kind !== "plan") {
+              record.paintedKey = null;
+              this.dayStripPaint(record);
+            }
+          } catch (error) {
+            // One stale strip never breaks the others.
+          }
+        }
         this.refreshDayStripPlanHosts();
         return;
       }

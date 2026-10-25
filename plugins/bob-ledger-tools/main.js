@@ -32182,11 +32182,26 @@ class BobLedgerToolsDayStripMixin {
 
   // Across-midnight rollover: today becomes a past-day strip because its
   // D is fixed by its path, so re-sync every plan-block host (a future
-  // note's block gains its strip when D becomes today) and repaint every
-  // strip after the generation bump. Never throws.
+  // note's block gains its strip when D becomes today) and synchronously
+  // invalidate/repaint every registered strip, including explicit fences.
+  // A stale ready frame becomes a skeleton immediately, before any request
+  // settles; network checks stay visibility/dirty/age gated. Never throws.
   dayStripHandleRollover() {
     try {
       if (typeof this.refreshDayStripPlanHosts === "function") {
+        // Paint explicit fences first so yesterday's ready frame stops
+        // presenting "so far" synchronously; the plan refresh below paints
+        // plan hosts once (deduplicated by paintedKey) and checks all.
+        for (const record of Array.from(this.dayStripViewsStore())) {
+          try {
+            if (record && record.kind !== "plan") {
+              record.paintedKey = null;
+              this.dayStripPaint(record);
+            }
+          } catch (error) {
+            // One stale strip never breaks the others.
+          }
+        }
         this.refreshDayStripPlanHosts();
         return;
       }
@@ -32585,10 +32600,26 @@ function dayStripPlanHostHasClass(el, name) {
   }
 }
 
+function dayStripPlanHostHasObserver() {
+  try {
+    return typeof IntersectionObserver === "function";
+  } catch (error) {
+    return false;
+  }
+}
+
 function dayStripPlanHostIsConnected(el) {
   try {
     if (!el) return false;
-    if (typeof el.isConnected === "boolean") return el.isConnected;
+    let node = el;
+    while (node) {
+      try {
+        if (node.isConnected === false) return false;
+      } catch (error) {
+        // Treat an unreadable flag as connected.
+      }
+      node = node.parentNode || null;
+    }
     return true;
   } catch (error) {
     return true;
@@ -32598,18 +32629,23 @@ function dayStripPlanHostIsConnected(el) {
 function dayStripPlanHostExcluded(el) {
   try {
     if (!el) return false;
-    if (typeof el.closest === "function") {
+    const selector = ".hover-popover, .markdown-embed, .canvas-node";
+    let node = el;
+    while (node) {
       try {
-        if (el.closest(".hover-popover, .markdown-embed, .canvas-node")) return true;
+        if (typeof node.closest === "function") {
+          let found = null;
+          try {
+            found = node.closest(selector);
+          } catch (error) {
+            found = null;
+          }
+          if (found) return true;
+        }
       } catch (error) {
-        // Fall through to a truthy closest() (test fakes).
+        // One unreadable ancestor never excludes.
       }
-      try {
-        const found = el.closest();
-        if (found) return true;
-      } catch (error) {
-        // closest() without args is a test-fake probe only.
-      }
+      node = node.parentNode || null;
     }
     return false;
   } catch (error) {
@@ -32771,7 +32807,11 @@ class BobLedgerToolsDayStripPlanHostMixin {
         detach();
         return;
       }
-      if (dayStripPlanHostIsConnected(el) && dayStripPlanHostExcluded(el)) {
+      if (dayStripPlanHostExcluded(el)) {
+        detach();
+        return;
+      }
+      if (!dayStripPlanHostIsConnected(el)) {
         detach();
         return;
       }
@@ -32843,6 +32883,18 @@ class BobLedgerToolsDayStripPlanHostMixin {
       } catch (error) {
         return;
       }
+      // Recheck exclusion and connectivity after attachment: processors can
+      // receive detached elements whose ancestors only resolve now.
+      if (dayStripPlanHostExcluded(el) || dayStripPlanHostExcluded(host)) {
+        dayStripPlanHostRemoveNode(host);
+        detach();
+        return;
+      }
+      if (!dayStripPlanHostIsConnected(el) || !dayStripPlanHostIsConnected(host)) {
+        dayStripPlanHostRemoveNode(host);
+        detach();
+        return;
+      }
       dayStripPlanHostAddClass(el, "bob-plan-has-day-strip");
       const record = {
         el: host,
@@ -32850,7 +32902,7 @@ class BobLedgerToolsDayStripPlanHostMixin {
         path: sourcePath,
         kind: "plan",
         observer: null,
-        visible: true,
+        visible: false,
         planView: view,
       };
       try {
@@ -32880,55 +32932,47 @@ class BobLedgerToolsDayStripPlanHostMixin {
     }
   }
 
-  // Observe a plan host: the shared observer drives visibility, and the
-  // first callback re-checks the popover/embed/canvas exclusion because
-  // processors can receive detached elements.
+  // Observe a plan host: paint happens immediately from cache, but the
+  // first fetch waits for the observer's first visibility notification.
+  // The shared registry callback drives visibility and re-checks the
+  // popover/embed/canvas exclusion. Never depends on a test-only
+  // `trigger` method or a selector-less `closest()` call.
   dayStripObservePlanHost(record, view) {
     try {
-      if (typeof this.dayStripObserve === "function") {
-        const before = record.observer;
-        this.dayStripObserve(record);
-        // Wrap the first callback so an exclusion discovered after
-        // attach stands the host down.
+      if (!record) return;
+      if (!dayStripPlanHostHasObserver()) {
+        // No-observer fallback: connected, eligible, shown hosts may fetch;
+        // disconnected or excluded hosts must not.
         try {
-          const observer = record.observer;
-          if (observer && observer !== before && typeof observer.trigger !== "function") {
-            // Real IntersectionObserver: re-check on the next frame via
-            // the record's visibility path (dayStripCheck detaches).
-            record.planExclusionArmed = true;
-          } else if (observer && typeof observer.trigger === "function") {
-            const originalTrigger = observer.trigger.bind(observer);
-            let armed = true;
-            observer.trigger = (isIntersecting) => {
-              try {
-                if (armed) {
-                  armed = false;
-                  const blockEl = (view && view.el) || null;
-                  if (blockEl && dayStripPlanHostExcluded(blockEl)) {
-                    try {
-                      this.dayStripReleasePlanHost(view);
-                    } catch (error) {
-                      // Detach is best-effort.
-                    }
-                    return originalTrigger(isIntersecting);
-                  }
-                }
-              } catch (error) {
-                // Exclusion re-check is best-effort.
-              }
-              return originalTrigger(isIntersecting);
-            };
+          const blockEl = (view && view.el) || null;
+          const hostEl = record.el || null;
+          const target = blockEl || hostEl;
+          if (!dayStripPlanHostIsConnected(target) || !dayStripPlanHostIsConnected(hostEl)) {
+            record.visible = false;
+            return;
           }
+          if (dayStripPlanHostExcluded(target) || dayStripPlanHostExcluded(hostEl)) {
+            record.visible = false;
+            return;
+          }
+          record.visible = true;
         } catch (error) {
-          // Wrapping is best-effort.
+          record.visible = true;
         }
         return;
       }
-      if (!record) return;
-      record.visible = true;
+      // Observer path: visibility is unknown until the first callback.
+      try {
+        record.visible = false;
+      } catch (error) {
+        // Visibility flag is best-effort.
+      }
+      if (typeof this.dayStripObserve === "function") {
+        this.dayStripObserve(record);
+      }
     } catch (error) {
       try {
-        if (record) record.visible = true;
+        if (record) record.visible = false;
       } catch (inner) {
         // Visibility is best-effort.
       }

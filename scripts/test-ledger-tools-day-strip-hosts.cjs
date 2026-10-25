@@ -1230,3 +1230,62 @@ test("mobile and spawn-less hosts render nothing and spawn nothing", async () =>
     }
   });
 });
+
+test("rollover synchronously skeletons visible and offscreen fences; visible refetch resolves as past", async () => {
+  await withFakeObserver(async () => {
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const tomorrow = shiftDay(today, 1);
+        const stem = today.replace(/-/g, "");
+        const folder = today.slice(0, 4);
+        const current = fixtures.createReport({ day: today, today, count: 8 });
+        let resolveRange = null;
+        const spawns = stubSpawn(plugin, (args) => {
+          if (Array.isArray(args) && args.includes("-g")) {
+            return new Promise((resolve) => {
+              resolveRange = resolve;
+            });
+          }
+          return { ok: true, report: current };
+        });
+        await seedDefault(plugin, current);
+        const before = spawns.length;
+        const visible = mountFence(plugin, { sourcePath: `${folder}/${stem}.md` });
+        const hidden = mountFence(plugin, { sourcePath: `${folder}/${stem}.md` });
+        await settle();
+        observers[observers.length - 2].trigger(true);
+        observers[observers.length - 1].trigger(false);
+        await settle(30);
+        assert.equal(asOfHidden(visible.el), false, "visible fence starts as so far");
+        assert.equal(asOfHidden(hidden.el), false, "offscreen fence still paints its cached frame");
+        plugin.dayStripLocalNow = () => tomorrow;
+        plugin.dayStripHandleRollover();
+        assert.ok(
+          visible.el.querySelector(".bob-day-strip-state-skeleton"),
+          "visible fence skeletons synchronously before the request settles",
+        );
+        assert.ok(
+          !visible.el.querySelector(".bob-day-strip-state-ready"),
+          "visible fence stops presenting ready immediately",
+        );
+        assert.ok(
+          hidden.el.querySelector(".bob-day-strip-state-skeleton"),
+          "offscreen fence skeletons synchronously",
+        );
+        assert.equal(spawns.length, before + 1, "visible rollover fetches once; offscreen spawns nothing extra");
+        await settle(30);
+        assert.equal(spawns.length, before + 1, "pending request holds; offscreen never spawns");
+        const next = fixtures.createReport({ day: today, today: tomorrow, count: 8 });
+        resolveRange({ ok: true, report: next });
+        await settle(80);
+        assert.equal(asOfHidden(visible.el), true, "resolved original day renders as past with no so far");
+        assert.match(visible.el.textContent, /Worked/, "past frame keeps its values");
+        assert.equal(asOfHidden(hidden.el), true, "offscreen stays past with no so far");
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
+});

@@ -505,6 +505,66 @@ test("rollover attaches future blocks and repaints today as a past day", async (
   });
 });
 
+test("rollover skeletons a visible automatic today host synchronously; it resolves as past", async () => {
+  await withFakeObserver(async () => {
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const tomorrow = shiftDay(today, 1);
+        const todayStem = today.replace(/-/g, "");
+        const todayPath = `${today.slice(0, 4)}/${todayStem}.md`;
+        const futureStem = tomorrow.replace(/-/g, "");
+        const futurePath = `${tomorrow.slice(0, 4)}/${futureStem}.md`;
+        const current = fixtures.createReport({ day: today, today, count: 8 });
+        let resolveRange = null;
+        const spawns = stubSpawn(plugin, (args) => {
+          if (Array.isArray(args) && args.includes("-g")) {
+            return new Promise((resolve) => {
+              resolveRange = resolve;
+            });
+          }
+          return { ok: true, report: current };
+        });
+        await seedDefault(plugin, current);
+        const todayEl = fakePlanBlock();
+        plugin.renderPlanBlock(todayEl, { sourcePath: todayPath, addChild: () => {} });
+        const futureEl = fakePlanBlock();
+        plugin.renderPlanBlock(futureEl, { sourcePath: futurePath, addChild: () => {} });
+        await settle();
+        observers[observers.length - 1].trigger(true);
+        await settle(60);
+        const todayHost = planChildren(todayEl).find((child) => child !== findPlanContainer(todayEl));
+        assert.ok(todayHost, "today host is attached");
+        assert.match(todayHost.textContent, /so far/, "today starts provisional");
+        assert.equal(planChildren(futureEl).filter((child) => child !== findPlanContainer(futureEl)).length, 0, "future starts with no host");
+        const before = spawns.length;
+        plugin.dayStripLocalNow = () => tomorrow;
+        plugin.dayStripHandleRollover();
+        assert.ok(
+          todayHost.querySelector(".bob-day-strip-state-skeleton"),
+          "visible today host skeletons synchronously before the request settles",
+        );
+        assert.ok(
+          !todayHost.querySelector(".bob-day-strip-state-ready"),
+          "yesterday's ready frame stops immediately",
+        );
+        assert.equal(planChildren(futureEl).length, 2, "future-to-today attaches synchronously");
+        await settle(30);
+        assert.ok(resolveRange, "the visible rollover fetch is pending");
+        const next = fixtures.createReport({ day: today, today: tomorrow, count: 8 });
+        resolveRange({ ok: true, report: next });
+        await settle(80);
+        assert.ok(todayHost.querySelector(".bob-day-strip-state-ready"), "original day resolves to ready");
+        assert.doesNotMatch(todayHost.textContent, /so far/, "resolved past day shows no so far");
+        assert.ok(spawns.length >= before + 1, "rollover fetches under the visibility gate");
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
+});
+
 test("plan hosts never write the vault or journals", async () => {
   await withFakeObserver(async () => {
     await withMissingConfig(async () => {
@@ -531,4 +591,190 @@ test("plan hosts never write the vault or journals", async () => {
       }
     });
   });
+});
+
+test("cold plan host waits for visibility: no spawn before callback, false stays zero, true fetches once", async () => {
+  await withFakeObserver(async () => {
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const stem = today.replace(/-/g, "");
+        const sourcePath = `${today.slice(0, 4)}/${stem}.md`;
+        const current = fixtures.createReport({ day: today, today, count: 8 });
+        const spawns = stubSpawn(plugin, () => ({ ok: true, report: current }));
+        const el = fakePlanBlock();
+        plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
+        await settle();
+        const [record] = Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan");
+        assert.ok(record, "plan record is registered");
+        assert.equal(record.visible, false, "visibility is unknown until the first callback");
+        assert.equal(spawns.length, 0, "cold host spawns nothing before the observer callback");
+        observers[observers.length - 1].trigger(false);
+        await settle();
+        assert.equal(record.visible, false, "first offscreen callback stays not-visible");
+        assert.equal(spawns.length, 0, "first false callback still spawns nothing");
+        observers[observers.length - 1].trigger(true);
+        await settle(60);
+        assert.equal(record.visible, true, "first visible callback establishes visibility");
+        assert.equal(spawns.length, 1, "first true callback fetches once");
+        observers[observers.length - 1].trigger(true);
+        await settle(30);
+        assert.equal(spawns.length, 1, "a clean second callback does not refetch");
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
+});
+
+test("plan host paints synchronously from cache with zero spawn before visibility", async () => {
+  await withFakeObserver(async () => {
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const stem = today.replace(/-/g, "");
+        const sourcePath = `${today.slice(0, 4)}/${stem}.md`;
+        const current = fixtures.createReport({ day: today, today, count: 8 });
+        const spawns = stubSpawn(plugin, () => ({ ok: true, report: current }));
+        await seedDefault(plugin, current);
+        assert.equal(spawns.length, 1, "seeding costs one spawn");
+        const el = fakePlanBlock();
+        plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
+        const host = planChildren(el).find((child) => child !== findPlanContainer(el));
+        assert.ok(host, "host is attached synchronously");
+        assert.match(host.textContent, /Worked/, "cache paints synchronously before any callback");
+        assert.equal(spawns.length, 1, "synchronous cache paint spawns nothing");
+        await settle();
+        assert.equal(spawns.length, 1, "still nothing before the observer callback");
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
+});
+
+test("detached and excluded plan blocks get no host and no fetch", async () => {
+  await withFakeObserver(async () => {
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const stem = today.replace(/-/g, "");
+        const sourcePath = `${today.slice(0, 4)}/${stem}.md`;
+        const current = fixtures.createReport({ day: today, today, count: 8 });
+        const spawns = stubSpawn(plugin, () => ({ ok: true, report: current }));
+        await seedDefault(plugin, current);
+        const before = spawns.length;
+        for (const label of ["popover", "embed", "canvas"]) {
+          const ancestorDoc = fakeDocument();
+          const ancestor = new FakeNode("div", ancestorDoc);
+          ancestor.ownerDocument = ancestorDoc;
+          ancestor.isConnected = false;
+          ancestor._closest = ancestor;
+          const el = new FakeNode("div", ancestorDoc);
+          el.ownerDocument = ancestorDoc;
+          el.isConnected = true;
+          el.parentNode = ancestor;
+          ancestor.children.push(el);
+          plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
+          await settle();
+          assert.equal(
+            planChildren(el).filter((child) => child !== findPlanContainer(el)).length,
+            0,
+            `${label} detached context gets no host`,
+          );
+          assert.equal(hasStripClass(el), false, `${label} detached context sets no spacing class`);
+        }
+        assert.equal(spawns.length, before, "detached excluded blocks spawn nothing");
+        // A child of a detached parent must not pretend to be connected,
+        // even without an exclusion marker.
+        const doc = fakeDocument();
+        const parent = new FakeNode("div", doc);
+        parent.ownerDocument = doc;
+        parent.isConnected = false;
+        const el = new FakeNode("div", doc);
+        el.ownerDocument = doc;
+        el.isConnected = true;
+        el.parentNode = parent;
+        parent.children.push(el);
+        plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
+        await settle();
+        assert.equal(
+          planChildren(el).filter((child) => child !== findPlanContainer(el)).length,
+          0,
+          "detached parent without exclusion still gets no host",
+        );
+        assert.equal(spawns.length, before, "detached parent spawns nothing");
+        assert.equal(
+          Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan").length,
+          0,
+          "detached hosts release their records",
+        );
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
+});
+
+test("no-observer fallback fetches when connected and shown, never when detached, and unloads cleanly", async () => {
+  const prior = globalThis.IntersectionObserver;
+  try {
+    delete globalThis.IntersectionObserver;
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const stem = today.replace(/-/g, "");
+        const sourcePath = `${today.slice(0, 4)}/${stem}.md`;
+        const current = fixtures.createReport({ day: today, today, count: 8 });
+        const spawns = stubSpawn(plugin, () => ({ ok: true, report: current }));
+        await seedDefault(plugin, current);
+        const before = spawns.length;
+        const el = fakePlanBlock();
+        const added = [];
+        plugin.renderPlanBlock(el, { sourcePath, addChild: (child) => added.push(child) });
+        await settle(60);
+        const [record] = Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan");
+        assert.ok(record, "fallback registers a connected host");
+        assert.equal(record.visible, true, "connected fallback is visible");
+        assert.equal(spawns.length, before, "fresh cache needs no refetch");
+        assert.match(planChildren(el)[1].textContent, /Worked/, "fallback paints from cache");
+        // Detached fallback must not fetch.
+        const doc = fakeDocument();
+        const parent = new FakeNode("div", doc);
+        parent.ownerDocument = doc;
+        parent.isConnected = false;
+        const detached = new FakeNode("div", doc);
+        detached.ownerDocument = doc;
+        detached.isConnected = true;
+        detached.parentNode = parent;
+        parent.children.push(detached);
+        plugin.renderPlanBlock(detached, { sourcePath, addChild: () => {} });
+        await settle();
+        assert.equal(
+          planChildren(detached).filter((child) => child !== findPlanContainer(detached)).length,
+          0,
+          "detached fallback gets no host",
+        );
+        assert.equal(spawns.length, before, "detached fallback spawns nothing");
+        // Unload releases the fallback record and its host.
+        assert.equal(added.length, 1, "fallback registers an unload child");
+        const size = plugin.dayStripViews.size;
+        added[0].unload();
+        assert.equal(plugin.dayStripViews.size, size - 1, "unload releases the fallback record");
+        assert.equal(planChildren(el).filter((child) => child !== findPlanContainer(el)).length, 0, "unload removes the host");
+      } finally {
+        plugin.onunload();
+      }
+    });
+  } finally {
+    if (prior === undefined) {
+      delete globalThis.IntersectionObserver;
+    } else {
+      globalThis.IntersectionObserver = prior;
+    }
+  }
 });

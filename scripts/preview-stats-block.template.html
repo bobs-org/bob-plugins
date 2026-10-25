@@ -100,6 +100,29 @@
       views = [];
     }
 
+    function stripRootParents(report) {
+      const copy = JSON.parse(JSON.stringify(report));
+      for (const metric of copy.metrics || []) {
+        if (metric.parts_summary && typeof metric.parts_summary === "object") {
+          delete metric.parts_summary.root_parent;
+        }
+        for (const point of metric.points || []) {
+          if (point.parts) delete point.parts.root_parent;
+          if (point.parts_display) delete point.parts_display.root_parent;
+          if (point.apportioned) delete point.apportioned.root_parent;
+        }
+        for (const point of metric.prior_points || []) {
+          if (point.parts) delete point.parts.root_parent;
+          if (point.parts_display) delete point.parts_display.root_parent;
+          if (point.apportioned) delete point.apportioned.root_parent;
+        }
+      }
+      for (const entry of Object.values(copy.homes || {})) {
+        if (entry && typeof entry === "object") delete entry.root_parent;
+      }
+      return copy;
+    }
+
     function makeView(report, focus, name, settings = {}) {
       const card = document.createElement("article");
       card.className = "preview-case";
@@ -117,6 +140,11 @@
       state.table = settings.table === true;
       state.definitionOpen = settings.definitionOpen === true;
       state.compare = settings.compare === true;
+      if (settings.homesView) state.homesView = settings.homesView;
+      if (settings.subsOpen) {
+        state.homeSubsExpanded = state.homeSubsExpanded || {};
+        state.homeSubsExpanded[settings.subsOpen] = true;
+      }
       plugin.statsBlockViews.add(view);
       views.push(view);
       plugin.renderStatsResult(view, { report, stale: false });
@@ -138,12 +166,16 @@
       heading.textContent = `Daily Stats · ${width}px · ${theme}`;
       shell.appendChild(heading);
       const canonical = fixtureReports.canonical;
+      const oldBob = stripRootParents(canonical);
       const cases = [
-        ["worked", canonical, "worked", { title: "Where the time went · chart, definition, tooltip, and table", table: true, definitionOpen: true }],
-        ["tasks", canonical, "done", { title: "Task breakdown" }],
+        ["worked", canonical, "worked", { title: "Where the time went · Root parents default, chart, definition, tooltip, and table", table: true, definitionOpen: true }],
+        ["tasks", canonical, "done", { title: "Task breakdown · by root parent" }],
         ["homes-long-stem", fixtureReports.homes, "worked", { title: "Synthetic homes · long stems, hue slots, apportionment, and sessions" }],
+        ["roots-open", fixtureReports.homes, "worked", { title: "Synthetic roots · sub-project disclosure open", subsOpen: "sase.md" }],
+        ["roots-themes", canonical, "worked", { title: "Root parents · Themes view", homesView: "themes" }],
+        ["roots-old-bob", oldBob, "worked", { title: "Old bob fallback · Areas & projects" }],
         ["homes-count", fixtureReports.homes, "done", { title: "Synthetic home counts · no tint" }],
-        ["homes-all-buckets", fixtureReports.homesBuckets, "worked", { title: "Synthetic homes · bucket-only split" }],
+        ["homes-all-buckets", fixtureReports.homesBuckets, "worked", { title: "Synthetic roots · bucket groups" }],
         ["flow", canonical, "net", { title: "Signed task flow" }],
         ["answers", canonical, "reviewed", { title: "Review answers" }],
         ["keep", canonical, "keep_rate", { title: "Keep rate and review-time context" }],

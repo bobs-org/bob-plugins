@@ -152,6 +152,7 @@ class BobLedgerToolsDayStripFenceMixin {
       }
       if (opts.panel === "homes") {
         state.revealPanel = "homes";
+        state.homesView = "roots";
       }
       try {
         if (this.statsBlockViews instanceof Set) {

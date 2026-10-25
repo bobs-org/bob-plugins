@@ -2731,11 +2731,37 @@ body.bob-today-marks-off .bob-today-mark {
   background: color-mix(in srgb, var(--bob-stats-home-hue, var(--text-muted)) 42%, var(--background-primary));
 }
 
-.bob-stats-home-rolled-up,
 .bob-stats-home-fix {
   margin: 0.1rem 0 0 0.95rem;
   color: var(--text-muted);
   font-size: 0.76em;
+}
+
+.bob-stats-home-subs {
+  margin: 0.1rem 0 0.18rem 0.95rem;
+  min-width: 0;
+}
+
+.bob-stats-home-subs-toggle {
+  border: 0;
+  padding: 0.1em 0.3em;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78em;
+  cursor: pointer;
+}
+
+.bob-stats-home-sub-leaf {
+  margin: 0.18rem 0 0.18rem 0.95rem;
+  min-width: 0;
+}
+
+.bob-stats-home-sub-top {
+  display: grid;
+  grid-template-columns: minmax(5rem, 1fr) auto;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
 }
 
 .bob-stats-home-sessions-wrap {
@@ -2782,7 +2808,8 @@ body.bob-today-marks-off .bob-today-mark {
     justify-self: start;
   }
 
-  .bob-stats-home-project-top {
+  .bob-stats-home-project-top,
+  .bob-stats-home-sub-top {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 

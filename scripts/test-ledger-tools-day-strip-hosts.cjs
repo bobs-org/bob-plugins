@@ -1050,6 +1050,7 @@ test("openStatsForDay keeps the page window when it already shows D", async () =
       assert.equal(state.focus, "done");
       assert.equal(state.range, null);
       assert.equal(state.revealPanel, "homes");
+      assert.equal(state.homesView, "roots");
       assert.equal(revealed.length, 1, "the open leaf is revealed and reused");
       assert.deepEqual(seen, [], "no new tab opens when a leaf is reused");
       assert.ok(spawns.length >= 1, "the mounted view repaints");

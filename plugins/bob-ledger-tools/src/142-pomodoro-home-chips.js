@@ -132,21 +132,10 @@ function pomodoroHomeParentTarget(raw) {
 }
 
 function pomodoroHomeRollupValue(raw) {
-  const text = String(raw == null ? "" : raw).trim();
-  const unquoted =
-    text.length >= 2 &&
-    ((text.startsWith('"') && text.endsWith('"')) ||
-      (text.startsWith("'") && text.endsWith("'")))
-      ? text.slice(1, -1).trim()
-      : text;
-  const lowered = unquoted.toLowerCase();
-  if (lowered === "off") {
-    return "off";
-  }
-  if (lowered === "subprojects") {
-    return "subprojects";
-  }
-  return "invalid";
+  // Retired: `rollup:` frontmatter is silently ignored. Kept as a stub so
+  // older callers fail closed without regrouping or warning.
+  void raw;
+  return "off";
 }
 
 function pomodoroHomePercentages(weights) {
@@ -362,33 +351,8 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
     visited.add(path.toLowerCase());
     const { frontmatter } = pomodoroHomeReadFrontmatter(current, metadataCache, vault);
     const type = pomodoroHomeType(frontmatter);
-    const rollupPresent = Object.prototype.hasOwnProperty.call(frontmatter, "rollup");
-    let rollup = "off";
-    if (rollupPresent) {
-      if (type !== "project") {
-        pomodoroHomeWarning(
-          warnings,
-          seen,
-          "rollup_invalid",
-          path,
-          `Rollup is only valid on project notes: ${path}.`,
-        );
-      } else {
-        const parsed = pomodoroHomeRollupValue(frontmatter.rollup);
-        if (parsed === "invalid") {
-          pomodoroHomeWarning(
-            warnings,
-            seen,
-            "rollup_invalid",
-            path,
-            `Invalid rollup on ${path}; treating it as off.`,
-          );
-        } else {
-          rollup = parsed;
-        }
-      }
-    }
-    chain.push({ file: current, path, frontmatter, type, rollup });
+    // Retired: a leftover `rollup:` key is silently ignored: no effect, no warning.
+    chain.push({ file: current, path, frontmatter, type });
     const parentTarget = pomodoroHomeParentTarget(frontmatter.parent);
     if (!parentTarget || pomodoroHomePathEqual(parentTarget, path)) {
       break;
@@ -398,18 +362,9 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
   if (chain.length === 0) {
     return null;
   }
-  let homeIndex = chain.findIndex((item) => item.type === "area" || item.type === "project");
+  const homeIndex = chain.findIndex((item) => item.type === "area" || item.type === "project");
   if (homeIndex === -1) {
     return null;
-  }
-  const rollupIndexes = [];
-  chain.forEach((item, index) => {
-    if (item.type === "project" && item.rollup === "subprojects") {
-      rollupIndexes.push(index);
-    }
-  });
-  if (rollupIndexes.length > 0) {
-    homeIndex = rollupIndexes[rollupIndexes.length - 1];
   }
   const areaIndexes = [];
   chain.forEach((item, index) => {
@@ -804,7 +759,6 @@ function pomodoroHomeModels(content, dailyPath, metadataCache, vault, exempt) {
     unfiled_links: 0,
     ambiguous_links: 0,
     unresolved_links: 0,
-    rollup_invalid: 0,
     area_color_invalid: 0,
   };
   const entries = pomodoroHomeParseEntries(content);
@@ -813,7 +767,6 @@ function pomodoroHomeModels(content, dailyPath, metadataCache, vault, exempt) {
     name: entry.name,
     ...pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt, warnings, warningKeys, health),
   }));
-  health.rollup_invalid = warnings.filter((item) => item.code === "rollup_invalid").length;
   health.area_color_invalid = warnings.filter((item) => item.code === "area_color_invalid").length;
   return { entries: sessions, warnings, health };
 }

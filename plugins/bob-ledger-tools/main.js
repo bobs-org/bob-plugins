@@ -15129,21 +15129,10 @@ function pomodoroHomeParentTarget(raw) {
 }
 
 function pomodoroHomeRollupValue(raw) {
-  const text = String(raw == null ? "" : raw).trim();
-  const unquoted =
-    text.length >= 2 &&
-    ((text.startsWith('"') && text.endsWith('"')) ||
-      (text.startsWith("'") && text.endsWith("'")))
-      ? text.slice(1, -1).trim()
-      : text;
-  const lowered = unquoted.toLowerCase();
-  if (lowered === "off") {
-    return "off";
-  }
-  if (lowered === "subprojects") {
-    return "subprojects";
-  }
-  return "invalid";
+  // Retired: `rollup:` frontmatter is silently ignored. Kept as a stub so
+  // older callers fail closed without regrouping or warning.
+  void raw;
+  return "off";
 }
 
 function pomodoroHomePercentages(weights) {
@@ -15359,33 +15348,8 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
     visited.add(path.toLowerCase());
     const { frontmatter } = pomodoroHomeReadFrontmatter(current, metadataCache, vault);
     const type = pomodoroHomeType(frontmatter);
-    const rollupPresent = Object.prototype.hasOwnProperty.call(frontmatter, "rollup");
-    let rollup = "off";
-    if (rollupPresent) {
-      if (type !== "project") {
-        pomodoroHomeWarning(
-          warnings,
-          seen,
-          "rollup_invalid",
-          path,
-          `Rollup is only valid on project notes: ${path}.`,
-        );
-      } else {
-        const parsed = pomodoroHomeRollupValue(frontmatter.rollup);
-        if (parsed === "invalid") {
-          pomodoroHomeWarning(
-            warnings,
-            seen,
-            "rollup_invalid",
-            path,
-            `Invalid rollup on ${path}; treating it as off.`,
-          );
-        } else {
-          rollup = parsed;
-        }
-      }
-    }
-    chain.push({ file: current, path, frontmatter, type, rollup });
+    // Retired: a leftover `rollup:` key is silently ignored: no effect, no warning.
+    chain.push({ file: current, path, frontmatter, type });
     const parentTarget = pomodoroHomeParentTarget(frontmatter.parent);
     if (!parentTarget || pomodoroHomePathEqual(parentTarget, path)) {
       break;
@@ -15395,18 +15359,9 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
   if (chain.length === 0) {
     return null;
   }
-  let homeIndex = chain.findIndex((item) => item.type === "area" || item.type === "project");
+  const homeIndex = chain.findIndex((item) => item.type === "area" || item.type === "project");
   if (homeIndex === -1) {
     return null;
-  }
-  const rollupIndexes = [];
-  chain.forEach((item, index) => {
-    if (item.type === "project" && item.rollup === "subprojects") {
-      rollupIndexes.push(index);
-    }
-  });
-  if (rollupIndexes.length > 0) {
-    homeIndex = rollupIndexes[rollupIndexes.length - 1];
   }
   const areaIndexes = [];
   chain.forEach((item, index) => {
@@ -15801,7 +15756,6 @@ function pomodoroHomeModels(content, dailyPath, metadataCache, vault, exempt) {
     unfiled_links: 0,
     ambiguous_links: 0,
     unresolved_links: 0,
-    rollup_invalid: 0,
     area_color_invalid: 0,
   };
   const entries = pomodoroHomeParseEntries(content);
@@ -15810,7 +15764,6 @@ function pomodoroHomeModels(content, dailyPath, metadataCache, vault, exempt) {
     name: entry.name,
     ...pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt, warnings, warningKeys, health),
   }));
-  health.rollup_invalid = warnings.filter((item) => item.code === "rollup_invalid").length;
   health.area_color_invalid = warnings.filter((item) => item.code === "area_color_invalid").length;
   return { entries: sessions, warnings, health };
 }
@@ -29161,11 +29114,23 @@ function statsPanelHasHomes(metric) {
   return Array.isArray(summary.area) || Array.isArray(summary.project);
 }
 
+function statsPanelHasRootParents(metric) {
+  const summary = metric && metric.parts_summary && typeof metric.parts_summary === "object"
+    ? metric.parts_summary
+    : {};
+  return Array.isArray(summary.root_parent);
+}
+
 function statsPanelHomeLabel(report, dimension, key, part) {
   const catalog = statsPanelHomeCatalog(report);
   const entry = catalog[key] && typeof catalog[key] === "object" ? catalog[key] : {};
   // Root parents use the bare catalog label, never a project leaf label.
+  // An area's own root sits under a header that means the whole area, so it
+  // reads `<area> · area tasks` from the catalog project_label.
   if (dimension === "root_parent" && typeof entry.label === "string" && entry.label) {
+    if (entry.kind === "area" && typeof entry.project_label === "string" && entry.project_label) {
+      return entry.project_label;
+    }
     return entry.label;
   }
   if (dimension === "project" && entry.kind === "area" && typeof entry.project_label === "string") {
@@ -29292,15 +29257,41 @@ function statsPanelHomeSessions(report, dimension, key, point) {
   const sessions = report && Array.isArray(report.sessions) ? report.sessions : [];
   const start = point && typeof point.date === "string" ? point.date : "";
   const end = point && typeof point.end === "string" ? point.end : start;
+  const catalog = statsPanelHomeCatalog(report);
   return sessions.filter((session) => {
     if (!session || typeof session !== "object") return false;
     if (start && (session.date < start || session.date > end)) return false;
     const parts = session.homes && Array.isArray(session.homes.parts) ? session.homes.parts : [];
-    return parts.some((part) => dimension === "area"
-      ? part && (part.area === key || (part.kind === "area" && part.key === key))
-      : part && part.key === key);
+    return parts.some((part) => {
+      if (!part || typeof part !== "object") return false;
+      if (dimension === "area") {
+        return part.area === key || (part.kind === "area" && part.key === key);
+      }
+      if (dimension === "root_parent") {
+        if (part.key === key) return true;
+        const entry = catalog[part.key] && typeof catalog[part.key] === "object" ? catalog[part.key] : null;
+        return Boolean(entry && entry.root_parent === key);
+      }
+      return part.key === key;
+    });
   }).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) ||
     String(a.path || "").localeCompare(String(b.path || "")) || (b.line || 0) - (a.line || 0));
+}
+
+function statsPanelRootSubRows(metric, report, rootKey, point) {
+  const catalog = statsPanelHomeCatalog(report);
+  const leaves = statsPanelHomeRows(metric, report, "project", point).filter((row) => {
+    const entry = catalog[row.key] && typeof catalog[row.key] === "object" ? catalog[row.key] : null;
+    return Boolean(entry && entry.root_parent === rootKey) || row.key === rootKey;
+  });
+  for (const row of leaves) {
+    if (row.key === rootKey) {
+      const base = typeof row.label === "string" && row.label ? row.label : row.key;
+      row.label = base + " · own tasks";
+    }
+  }
+  leaves.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  return leaves;
 }
 
 function statsPanelPointByKey(points, key) {
@@ -29784,14 +29775,19 @@ class BobLedgerToolsStatsPanelsMixin {
     }
   }
 
-  // --- Pomodoro: Areas & projects, with Themes one click away -----------
+  // --- Pomodoro: Root parents, with Themes one click away -----------
   statsPanelPomodoro(doc, view, report, metric, section) {
     const viewModel = this.statsPanelHomeToggle(doc, view, report, metric);
     section.appendChild(viewModel.header);
-    if (viewModel.state.homesView === "areas" && viewModel.available) {
+    if (viewModel.hasRoots && viewModel.state.homesView === "roots") {
       return this.statsPanelHomeTable(doc, view, report, metric, section, { areaBar: true, sessions: true });
     }
-    if (!viewModel.available) {
+    if (!viewModel.hasRoots && viewModel.state.homesView === "areas" && viewModel.available) {
+      const rendered = this.statsPanelHomeTable(doc, view, report, metric, section, { areaBar: true, sessions: true });
+      section.appendChild(this.statsPanelNote(doc, "Update bob to group by root parent."));
+      return rendered;
+    }
+    if (!viewModel.available && !viewModel.hasRoots) {
       section.appendChild(this.statsPanelNote(doc, "Update bob for areas & projects."));
     }
     const point = statsPanelSelectedHomePoint(metric, report, viewModel.state);
@@ -30384,13 +30380,30 @@ class BobLedgerToolsStatsPanelsMixin {
   }
 }
 // ---- src/239-plugin-stats-homes-render.js ----
-// Area/project Stats panel. The report owns attribution and labels; this
+// Root parents Stats panel. The report owns attribution and labels; this
 // mixin only groups supplied parts and routes links back into Obsidian.
 class BobLedgerToolsStatsHomesMixin {
   statsPanelHomeToggle(doc, view, report, metric) {
     const available = statsPanelHasHomes(metric);
+    const hasRoots = typeof statsPanelHasRootParents === "function"
+      ? statsPanelHasRootParents(metric)
+      : false;
     const state = this.statsViewStateFor(view && view.sourcePath);
-    if (state.homesView !== "areas" && state.homesView !== "themes") {
+    if (state.homesView === "areas") {
+      // Stale pre-roots view maps to the Root parents default.
+      state.homesView = hasRoots ? "roots" : "areas";
+    }
+    if (state.homesView !== "roots" && state.homesView !== "themes" && state.homesView !== "areas") {
+      if (hasRoots) {
+        state.homesView = "roots";
+      } else {
+        state.homesView = available ? "areas" : "themes";
+      }
+    }
+    if (hasRoots && state.homesView === "areas") {
+      state.homesView = "roots";
+    }
+    if (!hasRoots && state.homesView === "roots") {
       state.homesView = available ? "areas" : "themes";
     }
     const point = statsPanelSelectedHomePoint(metric, report, state);
@@ -30405,10 +30418,16 @@ class BobLedgerToolsStatsHomesMixin {
       role: "group",
       "aria-label": "Pomodoro context view",
     });
-    for (const choice of [
-      { id: "areas", label: "Areas & projects", disabled: !available },
-      { id: "themes", label: "Themes", disabled: false },
-    ]) {
+    const choices = hasRoots
+      ? [
+        { id: "roots", label: "Root parents", disabled: false },
+        { id: "themes", label: "Themes", disabled: false },
+      ]
+      : [
+        { id: "areas", label: "Areas & projects", disabled: !available },
+        { id: "themes", label: "Themes", disabled: false },
+      ];
+    for (const choice of choices) {
       const button = statsEl(doc, "button", {
         class: "bob-stats-toggle" + (state.homesView === choice.id ? " bob-stats-toggle-on" : ""),
         type: "button",
@@ -30423,7 +30442,7 @@ class BobLedgerToolsStatsHomesMixin {
       controls.appendChild(button);
     }
     header.appendChild(controls);
-    return { header, available, state };
+    return { header, available, hasRoots, state };
   }
 
   statsPanelHomeFixCopy(key) {
@@ -30610,19 +30629,13 @@ class BobLedgerToolsStatsHomesMixin {
     item.appendChild(top);
     const bar = this.statsPanelHomeMiniBar(doc, row, maxValue, metric, tint);
     if (bar) item.appendChild(bar);
-    const home = statsPanelHomeCatalog(report)[row.key];
-    if (home && Number.isInteger(home.rolled_up) && home.rolled_up > 0) {
-      const count = home.rolled_up;
-      item.appendChild(statsEl(doc, "div", { class: "bob-stats-home-rolled-up" },
-        "includes " + count + " sub-project" + (count === 1 ? "" : "s")));
-    }
     if (row.key.startsWith("@")) {
       item.appendChild(statsEl(doc, "div", { class: "bob-stats-home-fix" }, this.statsPanelHomeFixCopy(row.key)));
     }
     return item;
   }
 
-  statsPanelHomeAreaBar(doc, view, metric, report, rows) {
+  statsPanelHomeAreaBar(doc, view, metric, report, rows, ariaLabel) {
     const ordered = statsPanelHomeAreaRows(rows, report);
     const total = ordered.reduce((sum, row) => sum + Math.max(0, row.value || 0), 0);
     const wrap = statsEl(doc, "div", { class: "bob-stats-home-area-bar-wrap" });
@@ -30630,7 +30643,7 @@ class BobLedgerToolsStatsHomesMixin {
     const bar = statsEl(doc, "div", {
       class: "bob-stats-home-area-bar",
       role: "img",
-      "aria-label": "Area split: " + (summary.join(", ") || "no area data"),
+      "aria-label": (ariaLabel || "Area split") + ": " + (summary.join(", ") || "no area data"),
     });
     const width = this.statsPanelWidth(view);
     for (const [index, row] of ordered.entries()) {
@@ -30653,7 +30666,174 @@ class BobLedgerToolsStatsHomesMixin {
     return wrap;
   }
 
+  statsPanelRootRow(doc, view, report, metric, row, point, maxValue, tint) {
+    const isBucket = row.key.startsWith("@");
+    const item = statsEl(doc, "div", { class: "bob-stats-home-project" + (isBucket ? " bob-stats-home-bucket" : "") });
+    const top = statsEl(doc, "div", { class: "bob-stats-home-project-top bob-stats-home-" + (row.hue || "gray") });
+    top.appendChild(this.statsPanelHomeLink(doc, view, row, "root_parent"));
+    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, row.display + (row.share ? " · " + row.share : "")));
+    const sessions = metric.kind === "pomodoro"
+      ? this.statsPanelHomeSessionButton(doc, view, report, metric, "root_parent", row, point)
+      : null;
+    if (sessions) {
+      top.appendChild(sessions.button);
+      if (sessions.list) {
+        const wrap = statsEl(doc, "div", { class: "bob-stats-home-sessions-wrap" });
+        wrap.appendChild(sessions.list);
+        top.appendChild(wrap);
+      }
+    }
+    item.appendChild(top);
+    const bar = this.statsPanelHomeMiniBar(doc, row, maxValue, metric, tint);
+    if (bar) item.appendChild(bar);
+    if (isBucket) {
+      item.appendChild(statsEl(doc, "div", { class: "bob-stats-home-fix" }, this.statsPanelHomeFixCopy(row.key)));
+    }
+    return item;
+  }
+
+  statsPanelRootSubs(doc, view, report, metric, root, point, tint) {
+    const catalog = statsPanelHomeCatalog(report);
+    const entry = catalog[root.key] && typeof catalog[root.key] === "object" ? catalog[root.key] : null;
+    if (!entry || entry.kind !== "project") return null;
+    const leaves = typeof statsPanelRootSubRows === "function"
+      ? statsPanelRootSubRows(metric, report, root.key, point)
+      : [];
+    const others = leaves.filter((leaf) => leaf.key !== root.key);
+    if (!others.length) return null;
+    const state = this.statsViewStateFor(view && view.sourcePath);
+    if (!state.homeSubsExpanded || typeof state.homeSubsExpanded !== "object") state.homeSubsExpanded = {};
+    const expanded = state.homeSubsExpanded[root.key] === true;
+    const toggle = statsEl(doc, "button", {
+      class: "bob-stats-home-subs-toggle",
+      type: "button",
+      "aria-expanded": expanded ? "true" : "false",
+      "data-stats-focus-key": "panel-home-subs-" + root.key,
+    }, (expanded ? "▾ " : "▸ ") + others.length + " sub-project" + (others.length === 1 ? "" : "s"));
+    toggle.addEventListener("click", () => {
+      state.homeSubsExpanded[root.key] = !expanded;
+      this.statsRenderLocally(view, "panel-home-subs-" + root.key);
+    });
+    const wrap = statsEl(doc, "div", { class: "bob-stats-home-subs" });
+    wrap.appendChild(toggle);
+    if (!expanded) return wrap;
+    const list = statsEl(doc, "div", { class: "bob-stats-home-subs-list", "aria-label": "Sub-projects of " + root.label });
+    const maxValue = Math.max(0, root.value || 0);
+    for (const leaf of leaves) {
+      const row = statsEl(doc, "div", { class: "bob-stats-home-sub-leaf" + (leaf.key.startsWith("@") ? " bob-stats-home-bucket" : "") });
+      const top = statsEl(doc, "div", { class: "bob-stats-home-sub-top bob-stats-home-" + (leaf.hue || "gray") });
+      top.appendChild(this.statsPanelHomeLink(doc, view, leaf, "project"));
+      top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, leaf.display + (leaf.share ? " · " + leaf.share : "")));
+      row.appendChild(top);
+      const bar = this.statsPanelHomeMiniBar(doc, leaf, maxValue, metric, false);
+      if (bar) row.appendChild(bar);
+      list.appendChild(row);
+    }
+    wrap.appendChild(list);
+    return wrap;
+  }
+
+  statsPanelRootTable(doc, view, report, metric, section, options = {}) {
+    const state = this.statsViewStateFor(view && view.sourcePath);
+    const point = statsPanelSelectedHomePoint(metric, report, state);
+    const areaRows = statsPanelHomeRows(metric, report, "area", point);
+    const rootRows = statsPanelHomeRows(metric, report, "root_parent", point);
+    const tint = metric.unit === "minutes";
+    if (options.title) {
+      section.appendChild(this.statsPanelTitle(doc, (metric.label || metric.id) + " by root parent"));
+    }
+    if (options.rootBar !== false && !options.title) {
+      section.appendChild(this.statsPanelHomeAreaBar(doc, view, metric, report, rootRows, "Root parent split"));
+    }
+    if (!areaRows.length && !rootRows.length) {
+      section.appendChild(this.statsPanelNote(doc, "No root parent parts are in this span."));
+    } else {
+      const wrap = statsEl(doc, "div", { class: "bob-stats-home-groups", "aria-label": "Root parents" });
+      const rankedAreas = areaRows.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+      const rootsByArea = new Map();
+      for (const root of rootRows) {
+        const areaKey = root.area || root.key;
+        if (!rootsByArea.has(areaKey)) rootsByArea.set(areaKey, []);
+        rootsByArea.get(areaKey).push(root);
+      }
+      for (const list of rootsByArea.values()) {
+        list.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+      }
+      const maxRoot = Math.max(0, ...rootRows.map((row) => row.value));
+      for (const area of rankedAreas) {
+        const group = statsEl(doc, "section", { class: "bob-stats-home-group" });
+        group.appendChild(this.statsPanelHomeGroupRow(doc, view, report, metric, area, "area", point, tint));
+        if (area.key === "@unlinked" || area.key === "@unfiled") {
+          group.appendChild(statsEl(doc, "div", { class: "bob-stats-home-fix" }, this.statsPanelHomeFixCopy(area.key)));
+          wrap.appendChild(group);
+          continue;
+        }
+        const roots = rootsByArea.get(area.key) || [];
+        const id = "roots:" + area.key;
+        if (!state.homeRowsExpanded || typeof state.homeRowsExpanded !== "object") state.homeRowsExpanded = {};
+        const expanded = state.homeRowsExpanded[id] === true;
+        const visible = expanded ? roots : roots.slice(0, 3);
+        for (const root of visible) {
+          group.appendChild(this.statsPanelRootRow(doc, view, report, metric, root, point, maxRoot, tint));
+          const subs = this.statsPanelRootSubs(doc, view, report, metric, root, point, tint);
+          if (subs) group.appendChild(subs);
+        }
+        if (!expanded && roots.length > 3) {
+          const more = statsEl(doc, "button", {
+            class: "bob-stats-home-more",
+            type: "button",
+            "aria-expanded": "false",
+            "data-stats-focus-key": "panel-home-more-" + area.key,
+          }, (roots.length - 3) + " more");
+          more.addEventListener("click", () => {
+            state.homeRowsExpanded[id] = true;
+            this.statsRenderLocally(view, "panel-home-more-" + area.key);
+          });
+          group.appendChild(more);
+        } else if (expanded && roots.length > 3) {
+          const less = statsEl(doc, "button", {
+            class: "bob-stats-home-more",
+            type: "button",
+            "aria-expanded": "true",
+            "data-stats-focus-key": "panel-home-more-" + area.key,
+          }, "Show fewer");
+          less.addEventListener("click", () => {
+            state.homeRowsExpanded[id] = false;
+            this.statsRenderLocally(view, "panel-home-more-" + area.key);
+          });
+          group.appendChild(less);
+        }
+        wrap.appendChild(group);
+      }
+      // Buckets whose area row is missing still get a group so fix-it copy shows.
+      for (const root of rootRows) {
+        if (root.area && rankedAreas.some((area) => area.key === root.area)) continue;
+        const group = statsEl(doc, "section", { class: "bob-stats-home-group" });
+        group.appendChild(this.statsPanelHomeGroupRow(doc, view, report, metric, root, "root_parent", point, tint));
+        if (root.key === "@unlinked" || root.key === "@unfiled") {
+          group.appendChild(statsEl(doc, "div", { class: "bob-stats-home-fix" }, this.statsPanelHomeFixCopy(root.key)));
+        } else {
+          group.appendChild(this.statsPanelRootRow(doc, view, report, metric, root, point, maxRoot, tint));
+        }
+        wrap.appendChild(group);
+      }
+      section.appendChild(wrap);
+    }
+    if (options.sessions) {
+      section.appendChild(this.statsPanelNote(doc, "▒ split from sessions with several root parents · grouped by today's note tree · from Task Links"));
+    } else {
+      section.appendChild(this.statsPanelNote(doc, "Grouped by today's note tree."));
+    }
+    return true;
+  }
+
   statsPanelHomeTable(doc, view, report, metric, section, options = {}) {
+    const hasRoots = typeof statsPanelHasRootParents === "function"
+      ? statsPanelHasRootParents(metric)
+      : false;
+    if (hasRoots) {
+      return this.statsPanelRootTable(doc, view, report, metric, section, options);
+    }
     const state = this.statsViewStateFor(view && view.sourcePath);
     const point = statsPanelSelectedHomePoint(metric, report, state);
     const areaRows = statsPanelHomeRows(metric, report, "area", point);
@@ -32639,6 +32819,7 @@ class BobLedgerToolsDayStripFenceMixin {
       }
       if (opts.panel === "homes") {
         state.revealPanel = "homes";
+        state.homesView = "roots";
       }
       try {
         if (this.statsBlockViews instanceof Set) {
@@ -44179,7 +44360,6 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
           unfiled_links: 0,
           ambiguous_links: 0,
           unresolved_links: 0,
-          rollup_invalid: 0,
           area_color_invalid: 0,
         },
       );
@@ -44194,10 +44374,7 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
     try {
       const known = this.pomodoroHomeChipWarnings;
       for (const warning of Array.isArray(warnings) ? warnings : []) {
-        if (
-          !warning ||
-          (warning.code !== "rollup_invalid" && warning.code !== "area_color_invalid")
-        ) {
+        if (!warning || warning.code !== "area_color_invalid") {
           continue;
         }
         const key = `${warning.code}:${warning.path || ""}`;
@@ -54933,6 +55110,8 @@ module.exports.helpers = {
   STATS_PANEL_HOME_HUES,
   statsPanelHomeCatalog,
   statsPanelHasHomes,
+  statsPanelHasRootParents,
+  statsPanelRootSubRows,
   statsPanelHomeLabel,
   statsPanelHomeHue,
   statsPanelFormatMinutes,

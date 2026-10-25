@@ -94,11 +94,23 @@ function statsPanelHasHomes(metric) {
   return Array.isArray(summary.area) || Array.isArray(summary.project);
 }
 
+function statsPanelHasRootParents(metric) {
+  const summary = metric && metric.parts_summary && typeof metric.parts_summary === "object"
+    ? metric.parts_summary
+    : {};
+  return Array.isArray(summary.root_parent);
+}
+
 function statsPanelHomeLabel(report, dimension, key, part) {
   const catalog = statsPanelHomeCatalog(report);
   const entry = catalog[key] && typeof catalog[key] === "object" ? catalog[key] : {};
   // Root parents use the bare catalog label, never a project leaf label.
+  // An area's own root sits under a header that means the whole area, so it
+  // reads `<area> · area tasks` from the catalog project_label.
   if (dimension === "root_parent" && typeof entry.label === "string" && entry.label) {
+    if (entry.kind === "area" && typeof entry.project_label === "string" && entry.project_label) {
+      return entry.project_label;
+    }
     return entry.label;
   }
   if (dimension === "project" && entry.kind === "area" && typeof entry.project_label === "string") {
@@ -225,15 +237,41 @@ function statsPanelHomeSessions(report, dimension, key, point) {
   const sessions = report && Array.isArray(report.sessions) ? report.sessions : [];
   const start = point && typeof point.date === "string" ? point.date : "";
   const end = point && typeof point.end === "string" ? point.end : start;
+  const catalog = statsPanelHomeCatalog(report);
   return sessions.filter((session) => {
     if (!session || typeof session !== "object") return false;
     if (start && (session.date < start || session.date > end)) return false;
     const parts = session.homes && Array.isArray(session.homes.parts) ? session.homes.parts : [];
-    return parts.some((part) => dimension === "area"
-      ? part && (part.area === key || (part.kind === "area" && part.key === key))
-      : part && part.key === key);
+    return parts.some((part) => {
+      if (!part || typeof part !== "object") return false;
+      if (dimension === "area") {
+        return part.area === key || (part.kind === "area" && part.key === key);
+      }
+      if (dimension === "root_parent") {
+        if (part.key === key) return true;
+        const entry = catalog[part.key] && typeof catalog[part.key] === "object" ? catalog[part.key] : null;
+        return Boolean(entry && entry.root_parent === key);
+      }
+      return part.key === key;
+    });
   }).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) ||
     String(a.path || "").localeCompare(String(b.path || "")) || (b.line || 0) - (a.line || 0));
+}
+
+function statsPanelRootSubRows(metric, report, rootKey, point) {
+  const catalog = statsPanelHomeCatalog(report);
+  const leaves = statsPanelHomeRows(metric, report, "project", point).filter((row) => {
+    const entry = catalog[row.key] && typeof catalog[row.key] === "object" ? catalog[row.key] : null;
+    return Boolean(entry && entry.root_parent === rootKey) || row.key === rootKey;
+  });
+  for (const row of leaves) {
+    if (row.key === rootKey) {
+      const base = typeof row.label === "string" && row.label ? row.label : row.key;
+      row.label = base + " · own tasks";
+    }
+  }
+  leaves.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  return leaves;
 }
 
 function statsPanelPointByKey(points, key) {

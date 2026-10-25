@@ -61,10 +61,13 @@ function findChromium() {
 
 function makeHtml({ pluginSource, css, fixtures }) {
   const safeJson = (value) => JSON.stringify(value).replace(/</g, "\\u003c");
+  // Replacement functions: plugin source and fixtures contain `$``/`$&`
+  // sequences that String.replace would otherwise expand (see the day-strip
+  // preview, which already replaces this way).
   return fs.readFileSync(path.join(__dirname, "preview-stats-block.template.html"), "utf8")
-    .replace("__PRODUCTION_STATS_CSS__", css)
-    .replace("__PLUGIN_SOURCE_JSON__", safeJson(pluginSource))
-    .replace("__FIXTURE_REPORTS_JSON__", safeJson(fixtures));
+    .replace("__PRODUCTION_STATS_CSS__", () => css)
+    .replace("__PLUGIN_SOURCE_JSON__", () => safeJson(pluginSource))
+    .replace("__FIXTURE_REPORTS_JSON__", () => safeJson(fixtures));
 }
 
 class CdpClient {

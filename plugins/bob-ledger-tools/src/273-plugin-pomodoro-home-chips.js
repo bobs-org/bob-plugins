@@ -180,7 +180,6 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
           unfiled_links: 0,
           ambiguous_links: 0,
           unresolved_links: 0,
-          rollup_invalid: 0,
           area_color_invalid: 0,
         },
       );
@@ -195,10 +194,7 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
     try {
       const known = this.pomodoroHomeChipWarnings;
       for (const warning of Array.isArray(warnings) ? warnings : []) {
-        if (
-          !warning ||
-          (warning.code !== "rollup_invalid" && warning.code !== "area_color_invalid")
-        ) {
+        if (!warning || warning.code !== "area_color_invalid") {
           continue;
         }
         const key = `${warning.code}:${warning.path || ""}`;

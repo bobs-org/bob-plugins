@@ -10,7 +10,7 @@
     "days": 29,
     "includes_today": false,
     "group": "week",
-    "label": "Oct 15 – Oct 18"
+    "label": "Oct 15 \u2013 Oct 18"
   },
   "metrics": [
     {
@@ -54,11 +54,11 @@
         "prior": {
           "headline": {
             "value": null,
-            "display": "–"
+            "display": "\u2013"
           }
         },
         "delta": {
-          "display": "–",
+          "display": "\u2013",
           "words": "no comparable data",
           "sign": 0
         }
@@ -113,6 +113,27 @@
               "@review:GTD": 15,
               "@unfiled": 8,
               "@unlinked": 6
+            },
+            "root_parent": {
+              "sase.md": 68,
+              "dev.md": 12,
+              "bob.md": 30,
+              "gtd.md": 30,
+              "job_search.md": 39,
+              "job.md": 6,
+              "love_work.md": 26,
+              "love.md": 6,
+              "cash_work.md": 20,
+              "cash.md": 5,
+              "body_work.md": 16,
+              "body.md": 4,
+              "learning_work.md": 11,
+              "learning.md": 3,
+              "home_work.md": 7,
+              "home.md": 2,
+              "@review:GTD": 15,
+              "@unfiled": 8,
+              "@unlinked": 6
             }
           },
           "parts_display": {
@@ -152,6 +173,27 @@
               "@review:GTD": "15m",
               "@unfiled": "8m",
               "@unlinked": "6m"
+            },
+            "root_parent": {
+              "sase.md": "1h 08m",
+              "dev.md": "12m",
+              "bob.md": "30m",
+              "gtd.md": "30m",
+              "job_search.md": "39m",
+              "job.md": "6m",
+              "love_work.md": "26m",
+              "love.md": "6m",
+              "cash_work.md": "20m",
+              "cash.md": "5m",
+              "body_work.md": "16m",
+              "body.md": "4m",
+              "learning_work.md": "11m",
+              "learning.md": "3m",
+              "home_work.md": "7m",
+              "home.md": "2m",
+              "@review:GTD": "15m",
+              "@unfiled": "8m",
+              "@unlinked": "6m"
             }
           },
           "apportioned": {
@@ -167,6 +209,15 @@
               "job_resume.md": 1,
               "job_network.md": 2,
               "job_2026_apply_29.md": 5,
+              "love_work.md": 2,
+              "cash_work.md": 2,
+              "body_work.md": 1,
+              "learning_work.md": 1
+            },
+            "root_parent": {
+              "sase.md": 16,
+              "bob.md": 5,
+              "job_search.md": 10,
               "love_work.md": 2,
               "cash_work.md": 2,
               "body_work.md": 1,
@@ -278,7 +329,7 @@
             "value": 12,
             "display": "12m",
             "share": "4%",
-            "label": "dev · area tasks"
+            "label": "dev \u00b7 area tasks"
           },
           {
             "key": "bob.md",
@@ -294,7 +345,7 @@
             "value": 30,
             "display": "30m",
             "share": "10%",
-            "label": "gtd · area tasks"
+            "label": "gtd \u00b7 area tasks"
           },
           {
             "key": "job_search.md",
@@ -337,7 +388,7 @@
             "value": 6,
             "display": "6m",
             "share": "2%",
-            "label": "job · area tasks"
+            "label": "job \u00b7 area tasks"
           },
           {
             "key": "love_work.md",
@@ -353,7 +404,7 @@
             "value": 6,
             "display": "6m",
             "share": "2%",
-            "label": "love · area tasks"
+            "label": "love \u00b7 area tasks"
           },
           {
             "key": "cash_work.md",
@@ -369,7 +420,7 @@
             "value": 5,
             "display": "5m",
             "share": "2%",
-            "label": "cash · area tasks"
+            "label": "cash \u00b7 area tasks"
           },
           {
             "key": "body_work.md",
@@ -385,7 +436,7 @@
             "value": 4,
             "display": "4m",
             "share": "1%",
-            "label": "body · area tasks"
+            "label": "body \u00b7 area tasks"
           },
           {
             "key": "learning_work.md",
@@ -401,7 +452,7 @@
             "value": 3,
             "display": "3m",
             "share": "1%",
-            "label": "learning · area tasks"
+            "label": "learning \u00b7 area tasks"
           },
           {
             "key": "home_work.md",
@@ -415,7 +466,7 @@
             "value": 2,
             "display": "2m",
             "share": "1%",
-            "label": "home · area tasks"
+            "label": "home \u00b7 area tasks"
           },
           {
             "key": "@review:GTD",
@@ -476,6 +527,155 @@
             "display": "17m",
             "share": "10%"
           }
+        ],
+        "root_parent": [
+          {
+            "key": "sase.md",
+            "value": 68,
+            "display": "1h 08m",
+            "share": "22%",
+            "label": "sase",
+            "apportioned": 16,
+            "apportioned_display": "16m"
+          },
+          {
+            "key": "job_search.md",
+            "value": 39,
+            "display": "39m",
+            "share": "12%",
+            "label": "job_search",
+            "apportioned": 10,
+            "apportioned_display": "10m"
+          },
+          {
+            "key": "bob.md",
+            "value": 30,
+            "display": "30m",
+            "share": "10%",
+            "label": "bob",
+            "apportioned": 5,
+            "apportioned_display": "5m"
+          },
+          {
+            "key": "gtd.md",
+            "value": 30,
+            "display": "30m",
+            "share": "10%",
+            "label": "gtd \u00b7 area tasks"
+          },
+          {
+            "key": "love_work.md",
+            "value": 26,
+            "display": "26m",
+            "share": "8%",
+            "label": "love_work",
+            "apportioned": 2,
+            "apportioned_display": "2m"
+          },
+          {
+            "key": "cash_work.md",
+            "value": 20,
+            "display": "20m",
+            "share": "6%",
+            "label": "cash_work",
+            "apportioned": 2,
+            "apportioned_display": "2m"
+          },
+          {
+            "key": "body_work.md",
+            "value": 16,
+            "display": "16m",
+            "share": "5%",
+            "label": "body_work",
+            "apportioned": 1,
+            "apportioned_display": "1m"
+          },
+          {
+            "key": "@review:GTD",
+            "value": 15,
+            "display": "15m",
+            "share": "5%",
+            "label": "GTD review"
+          },
+          {
+            "key": "dev.md",
+            "value": 12,
+            "display": "12m",
+            "share": "4%",
+            "label": "dev \u00b7 area tasks"
+          },
+          {
+            "key": "learning_work.md",
+            "value": 11,
+            "display": "11m",
+            "share": "4%",
+            "label": "learning_work",
+            "apportioned": 1,
+            "apportioned_display": "1m"
+          },
+          {
+            "key": "@unfiled",
+            "value": 8,
+            "display": "8m",
+            "share": "3%",
+            "label": "unfiled"
+          },
+          {
+            "key": "home_work.md",
+            "value": 7,
+            "display": "7m",
+            "share": "2%",
+            "label": "home_work"
+          },
+          {
+            "key": "job.md",
+            "value": 6,
+            "display": "6m",
+            "share": "2%",
+            "label": "job \u00b7 area tasks"
+          },
+          {
+            "key": "love.md",
+            "value": 6,
+            "display": "6m",
+            "share": "2%",
+            "label": "love \u00b7 area tasks"
+          },
+          {
+            "key": "@unlinked",
+            "value": 6,
+            "display": "6m",
+            "share": "2%",
+            "label": "unlinked"
+          },
+          {
+            "key": "cash.md",
+            "value": 5,
+            "display": "5m",
+            "share": "2%",
+            "label": "cash \u00b7 area tasks"
+          },
+          {
+            "key": "body.md",
+            "value": 4,
+            "display": "4m",
+            "share": "1%",
+            "label": "body \u00b7 area tasks"
+          },
+          {
+            "key": "learning.md",
+            "value": 3,
+            "display": "3m",
+            "share": "1%",
+            "label": "learning \u00b7 area tasks"
+          },
+          {
+            "key": "home.md",
+            "value": 2,
+            "display": "2m",
+            "share": "1%",
+            "label": "home \u00b7 area tasks"
+          }
         ]
       },
       "warnings": [],
@@ -501,7 +701,7 @@
       "summary": {
         "headline": {
           "value": null,
-          "display": "–"
+          "display": "\u2013"
         },
         "total": null,
         "mean": null,
@@ -512,11 +712,11 @@
         "prior": {
           "headline": {
             "value": null,
-            "display": "–"
+            "display": "\u2013"
           }
         },
         "delta": {
-          "display": "–",
+          "display": "\u2013",
           "words": "no comparable data",
           "sign": 0
         }
@@ -531,7 +731,7 @@
           "date": "2026-09-20",
           "end": "2026-09-20",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -541,7 +741,7 @@
           "date": "2026-09-21",
           "end": "2026-09-21",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -551,7 +751,7 @@
           "date": "2026-09-22",
           "end": "2026-09-22",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -561,7 +761,7 @@
           "date": "2026-09-23",
           "end": "2026-09-23",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -571,7 +771,7 @@
           "date": "2026-09-24",
           "end": "2026-09-24",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -581,7 +781,7 @@
           "date": "2026-09-25",
           "end": "2026-09-25",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -591,7 +791,7 @@
           "date": "2026-09-26",
           "end": "2026-09-26",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -601,7 +801,7 @@
           "date": "2026-09-27",
           "end": "2026-09-27",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -611,7 +811,7 @@
           "date": "2026-09-28",
           "end": "2026-09-28",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -621,7 +821,7 @@
           "date": "2026-09-29",
           "end": "2026-09-29",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -631,7 +831,7 @@
           "date": "2026-09-30",
           "end": "2026-09-30",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -641,7 +841,7 @@
           "date": "2026-10-01",
           "end": "2026-10-01",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -651,7 +851,7 @@
           "date": "2026-10-02",
           "end": "2026-10-02",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -661,7 +861,7 @@
           "date": "2026-10-03",
           "end": "2026-10-03",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -671,7 +871,7 @@
           "date": "2026-10-04",
           "end": "2026-10-04",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -681,7 +881,7 @@
           "date": "2026-10-05",
           "end": "2026-10-05",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -691,7 +891,7 @@
           "date": "2026-10-06",
           "end": "2026-10-06",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -701,7 +901,7 @@
           "date": "2026-10-07",
           "end": "2026-10-07",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -711,7 +911,7 @@
           "date": "2026-10-08",
           "end": "2026-10-08",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -721,7 +921,7 @@
           "date": "2026-10-09",
           "end": "2026-10-09",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -731,7 +931,7 @@
           "date": "2026-10-10",
           "end": "2026-10-10",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -741,7 +941,7 @@
           "date": "2026-10-11",
           "end": "2026-10-11",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -751,7 +951,7 @@
           "date": "2026-10-12",
           "end": "2026-10-12",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -761,7 +961,7 @@
           "date": "2026-10-13",
           "end": "2026-10-13",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -771,7 +971,7 @@
           "date": "2026-10-14",
           "end": "2026-10-14",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -781,7 +981,7 @@
           "date": "2026-10-15",
           "end": "2026-10-15",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -791,7 +991,7 @@
           "date": "2026-10-16",
           "end": "2026-10-16",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -801,7 +1001,7 @@
           "date": "2026-10-17",
           "end": "2026-10-17",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -811,7 +1011,7 @@
           "date": "2026-10-18",
           "end": "2026-10-18",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": true,
@@ -861,11 +1061,11 @@
         "prior": {
           "headline": {
             "value": null,
-            "display": "–"
+            "display": "\u2013"
           }
         },
         "delta": {
-          "display": "–",
+          "display": "\u2013",
           "words": "no comparable data",
           "sign": 0
         }
@@ -920,6 +1120,27 @@
               "@review:GTD": 2,
               "@unfiled": 1,
               "@unlinked": 1
+            },
+            "root_parent": {
+              "sase.md": 7,
+              "dev.md": 1,
+              "bob.md": 3,
+              "gtd.md": 3,
+              "job_search.md": 5,
+              "job.md": 1,
+              "love_work.md": 3,
+              "love.md": 1,
+              "cash_work.md": 2,
+              "cash.md": 1,
+              "body_work.md": 2,
+              "body.md": 1,
+              "learning_work.md": 1,
+              "learning.md": 1,
+              "home_work.md": 1,
+              "home.md": 1,
+              "@review:GTD": 2,
+              "@unfiled": 1,
+              "@unlinked": 1
             }
           },
           "parts_display": {
@@ -945,6 +1166,27 @@
               "job_resume.md": "1",
               "job_network.md": "1",
               "job_2026_apply_29.md": "2",
+              "job.md": "1",
+              "love_work.md": "3",
+              "love.md": "1",
+              "cash_work.md": "2",
+              "cash.md": "1",
+              "body_work.md": "2",
+              "body.md": "1",
+              "learning_work.md": "1",
+              "learning.md": "1",
+              "home_work.md": "1",
+              "home.md": "1",
+              "@review:GTD": "2",
+              "@unfiled": "1",
+              "@unlinked": "1"
+            },
+            "root_parent": {
+              "sase.md": "7",
+              "dev.md": "1",
+              "bob.md": "3",
+              "gtd.md": "3",
+              "job_search.md": "5",
               "job.md": "1",
               "love_work.md": "3",
               "love.md": "1",
@@ -1105,7 +1347,7 @@
             "value": 1,
             "display": "1",
             "share": "3%",
-            "label": "dev · area tasks"
+            "label": "dev \u00b7 area tasks"
           },
           {
             "key": "bob.md",
@@ -1119,7 +1361,7 @@
             "value": 3,
             "display": "3",
             "share": "8%",
-            "label": "gtd · area tasks"
+            "label": "gtd \u00b7 area tasks"
           },
           {
             "key": "job_search.md",
@@ -1154,7 +1396,7 @@
             "value": 1,
             "display": "1",
             "share": "3%",
-            "label": "job · area tasks"
+            "label": "job \u00b7 area tasks"
           },
           {
             "key": "love_work.md",
@@ -1168,7 +1410,7 @@
             "value": 1,
             "display": "1",
             "share": "3%",
-            "label": "love · area tasks"
+            "label": "love \u00b7 area tasks"
           },
           {
             "key": "cash_work.md",
@@ -1182,7 +1424,7 @@
             "value": 1,
             "display": "1",
             "share": "3%",
-            "label": "cash · area tasks"
+            "label": "cash \u00b7 area tasks"
           },
           {
             "key": "body_work.md",
@@ -1196,7 +1438,7 @@
             "value": 1,
             "display": "1",
             "share": "3%",
-            "label": "body · area tasks"
+            "label": "body \u00b7 area tasks"
           },
           {
             "key": "learning_work.md",
@@ -1210,7 +1452,7 @@
             "value": 1,
             "display": "1",
             "share": "3%",
-            "label": "learning · area tasks"
+            "label": "learning \u00b7 area tasks"
           },
           {
             "key": "home_work.md",
@@ -1224,7 +1466,7 @@
             "value": 1,
             "display": "1",
             "share": "3%",
-            "label": "home · area tasks"
+            "label": "home \u00b7 area tasks"
           },
           {
             "key": "@review:GTD",
@@ -1232,6 +1474,141 @@
             "display": "2",
             "share": "5%",
             "label": "GTD review"
+          },
+          {
+            "key": "@unfiled",
+            "value": 1,
+            "display": "1",
+            "share": "3%",
+            "label": "unfiled"
+          },
+          {
+            "key": "@unlinked",
+            "value": 1,
+            "display": "1",
+            "share": "3%",
+            "label": "unlinked"
+          }
+        ],
+        "root_parent": [
+          {
+            "key": "sase.md",
+            "value": 7,
+            "display": "7",
+            "share": "18%",
+            "label": "sase"
+          },
+          {
+            "key": "job_search.md",
+            "value": 5,
+            "display": "5",
+            "share": "13%",
+            "label": "job_search"
+          },
+          {
+            "key": "bob.md",
+            "value": 3,
+            "display": "3",
+            "share": "8%",
+            "label": "bob"
+          },
+          {
+            "key": "gtd.md",
+            "value": 3,
+            "display": "3",
+            "share": "8%",
+            "label": "gtd \u00b7 area tasks"
+          },
+          {
+            "key": "love_work.md",
+            "value": 3,
+            "display": "3",
+            "share": "8%",
+            "label": "love_work"
+          },
+          {
+            "key": "cash_work.md",
+            "value": 2,
+            "display": "2",
+            "share": "5%",
+            "label": "cash_work"
+          },
+          {
+            "key": "body_work.md",
+            "value": 2,
+            "display": "2",
+            "share": "5%",
+            "label": "body_work"
+          },
+          {
+            "key": "@review:GTD",
+            "value": 2,
+            "display": "2",
+            "share": "5%",
+            "label": "GTD review"
+          },
+          {
+            "key": "dev.md",
+            "value": 1,
+            "display": "1",
+            "share": "3%",
+            "label": "dev \u00b7 area tasks"
+          },
+          {
+            "key": "job.md",
+            "value": 1,
+            "display": "1",
+            "share": "3%",
+            "label": "job \u00b7 area tasks"
+          },
+          {
+            "key": "love.md",
+            "value": 1,
+            "display": "1",
+            "share": "3%",
+            "label": "love \u00b7 area tasks"
+          },
+          {
+            "key": "cash.md",
+            "value": 1,
+            "display": "1",
+            "share": "3%",
+            "label": "cash \u00b7 area tasks"
+          },
+          {
+            "key": "body.md",
+            "value": 1,
+            "display": "1",
+            "share": "3%",
+            "label": "body \u00b7 area tasks"
+          },
+          {
+            "key": "learning_work.md",
+            "value": 1,
+            "display": "1",
+            "share": "3%",
+            "label": "learning_work"
+          },
+          {
+            "key": "learning.md",
+            "value": 1,
+            "display": "1",
+            "share": "3%",
+            "label": "learning \u00b7 area tasks"
+          },
+          {
+            "key": "home_work.md",
+            "value": 1,
+            "display": "1",
+            "share": "3%",
+            "label": "home_work"
+          },
+          {
+            "key": "home.md",
+            "value": 1,
+            "display": "1",
+            "share": "3%",
+            "label": "home \u00b7 area tasks"
           },
           {
             "key": "@unfiled",
@@ -1292,11 +1669,11 @@
         "prior": {
           "headline": {
             "value": null,
-            "display": "–"
+            "display": "\u2013"
           }
         },
         "delta": {
-          "display": "–",
+          "display": "\u2013",
           "words": "no comparable data",
           "sign": 0
         }
@@ -1311,7 +1688,7 @@
           "date": "2026-09-20",
           "end": "2026-09-20",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1321,7 +1698,7 @@
           "date": "2026-09-21",
           "end": "2026-09-21",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1331,7 +1708,7 @@
           "date": "2026-09-22",
           "end": "2026-09-22",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1341,7 +1718,7 @@
           "date": "2026-09-23",
           "end": "2026-09-23",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1351,7 +1728,7 @@
           "date": "2026-09-24",
           "end": "2026-09-24",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1361,7 +1738,7 @@
           "date": "2026-09-25",
           "end": "2026-09-25",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1371,7 +1748,7 @@
           "date": "2026-09-26",
           "end": "2026-09-26",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1381,7 +1758,7 @@
           "date": "2026-09-27",
           "end": "2026-09-27",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1391,7 +1768,7 @@
           "date": "2026-09-28",
           "end": "2026-09-28",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1401,7 +1778,7 @@
           "date": "2026-09-29",
           "end": "2026-09-29",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1411,7 +1788,7 @@
           "date": "2026-09-30",
           "end": "2026-09-30",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1421,7 +1798,7 @@
           "date": "2026-10-01",
           "end": "2026-10-01",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1431,7 +1808,7 @@
           "date": "2026-10-02",
           "end": "2026-10-02",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1441,7 +1818,7 @@
           "date": "2026-10-03",
           "end": "2026-10-03",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1451,7 +1828,7 @@
           "date": "2026-10-04",
           "end": "2026-10-04",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1461,7 +1838,7 @@
           "date": "2026-10-05",
           "end": "2026-10-05",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1471,7 +1848,7 @@
           "date": "2026-10-06",
           "end": "2026-10-06",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1481,7 +1858,7 @@
           "date": "2026-10-07",
           "end": "2026-10-07",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1491,7 +1868,7 @@
           "date": "2026-10-08",
           "end": "2026-10-08",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1501,7 +1878,7 @@
           "date": "2026-10-09",
           "end": "2026-10-09",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1511,7 +1888,7 @@
           "date": "2026-10-10",
           "end": "2026-10-10",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1521,7 +1898,7 @@
           "date": "2026-10-11",
           "end": "2026-10-11",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1531,7 +1908,7 @@
           "date": "2026-10-12",
           "end": "2026-10-12",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1541,7 +1918,7 @@
           "date": "2026-10-13",
           "end": "2026-10-13",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1551,7 +1928,7 @@
           "date": "2026-10-14",
           "end": "2026-10-14",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1777,14 +2154,14 @@
             "value": 1,
             "display": "1",
             "share": "14%",
-            "label": "gtd · area tasks"
+            "label": "gtd \u00b7 area tasks"
           },
           {
             "key": "job.md",
             "value": 1,
             "display": "1",
             "share": "14%",
-            "label": "job · area tasks"
+            "label": "job \u00b7 area tasks"
           },
           {
             "key": "job_apply.md",
@@ -1820,7 +2197,7 @@
       "summary": {
         "headline": {
           "value": null,
-          "display": "–"
+          "display": "\u2013"
         },
         "total": null,
         "mean": null,
@@ -1831,11 +2208,11 @@
         "prior": {
           "headline": {
             "value": null,
-            "display": "–"
+            "display": "\u2013"
           }
         },
         "delta": {
-          "display": "–",
+          "display": "\u2013",
           "words": "no comparable data",
           "sign": 0
         }
@@ -1850,7 +2227,7 @@
           "date": "2026-09-20",
           "end": "2026-09-20",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1860,7 +2237,7 @@
           "date": "2026-09-21",
           "end": "2026-09-21",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1870,7 +2247,7 @@
           "date": "2026-09-22",
           "end": "2026-09-22",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1880,7 +2257,7 @@
           "date": "2026-09-23",
           "end": "2026-09-23",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1890,7 +2267,7 @@
           "date": "2026-09-24",
           "end": "2026-09-24",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1900,7 +2277,7 @@
           "date": "2026-09-25",
           "end": "2026-09-25",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1910,7 +2287,7 @@
           "date": "2026-09-26",
           "end": "2026-09-26",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1920,7 +2297,7 @@
           "date": "2026-09-27",
           "end": "2026-09-27",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1930,7 +2307,7 @@
           "date": "2026-09-28",
           "end": "2026-09-28",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1940,7 +2317,7 @@
           "date": "2026-09-29",
           "end": "2026-09-29",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1950,7 +2327,7 @@
           "date": "2026-09-30",
           "end": "2026-09-30",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1960,7 +2337,7 @@
           "date": "2026-10-01",
           "end": "2026-10-01",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1970,7 +2347,7 @@
           "date": "2026-10-02",
           "end": "2026-10-02",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1980,7 +2357,7 @@
           "date": "2026-10-03",
           "end": "2026-10-03",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -1990,7 +2367,7 @@
           "date": "2026-10-04",
           "end": "2026-10-04",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -2000,7 +2377,7 @@
           "date": "2026-10-05",
           "end": "2026-10-05",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -2010,7 +2387,7 @@
           "date": "2026-10-06",
           "end": "2026-10-06",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -2020,7 +2397,7 @@
           "date": "2026-10-07",
           "end": "2026-10-07",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -2030,7 +2407,7 @@
           "date": "2026-10-08",
           "end": "2026-10-08",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -2040,7 +2417,7 @@
           "date": "2026-10-09",
           "end": "2026-10-09",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -2050,7 +2427,7 @@
           "date": "2026-10-10",
           "end": "2026-10-10",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -2060,7 +2437,7 @@
           "date": "2026-10-11",
           "end": "2026-10-11",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -2070,7 +2447,7 @@
           "date": "2026-10-12",
           "end": "2026-10-12",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -2080,7 +2457,7 @@
           "date": "2026-10-13",
           "end": "2026-10-13",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -2090,7 +2467,7 @@
           "date": "2026-10-14",
           "end": "2026-10-14",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -2100,7 +2477,7 @@
           "date": "2026-10-15",
           "end": "2026-10-15",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "null input from dropped",
           "provisional": false,
@@ -2110,7 +2487,7 @@
           "date": "2026-10-16",
           "end": "2026-10-16",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "null input from dropped",
           "provisional": false,
@@ -2120,7 +2497,7 @@
           "date": "2026-10-17",
           "end": "2026-10-17",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "null input from dropped",
           "provisional": false,
@@ -2130,7 +2507,7 @@
           "date": "2026-10-18",
           "end": "2026-10-18",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "null input from dropped",
           "provisional": true,
@@ -2164,7 +2541,7 @@
       "summary": {
         "headline": {
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "stat": "days"
         },
         "total": null,
@@ -2176,12 +2553,12 @@
         "prior": {
           "headline": {
             "value": null,
-            "display": "–",
+            "display": "\u2013",
             "stat": "days"
           }
         },
         "delta": {
-          "display": "–",
+          "display": "\u2013",
           "words": "no comparable data",
           "sign": 0
         }
@@ -2196,7 +2573,7 @@
           "date": "2026-09-20",
           "end": "2026-09-20",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2207,7 +2584,7 @@
           "date": "2026-09-21",
           "end": "2026-09-21",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2218,7 +2595,7 @@
           "date": "2026-09-22",
           "end": "2026-09-22",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2229,7 +2606,7 @@
           "date": "2026-09-23",
           "end": "2026-09-23",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2240,7 +2617,7 @@
           "date": "2026-09-24",
           "end": "2026-09-24",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2251,7 +2628,7 @@
           "date": "2026-09-25",
           "end": "2026-09-25",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2262,7 +2639,7 @@
           "date": "2026-09-26",
           "end": "2026-09-26",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2273,7 +2650,7 @@
           "date": "2026-09-27",
           "end": "2026-09-27",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2284,7 +2661,7 @@
           "date": "2026-09-28",
           "end": "2026-09-28",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2295,7 +2672,7 @@
           "date": "2026-09-29",
           "end": "2026-09-29",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2306,7 +2683,7 @@
           "date": "2026-09-30",
           "end": "2026-09-30",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2317,7 +2694,7 @@
           "date": "2026-10-01",
           "end": "2026-10-01",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2328,7 +2705,7 @@
           "date": "2026-10-02",
           "end": "2026-10-02",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2339,7 +2716,7 @@
           "date": "2026-10-03",
           "end": "2026-10-03",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2350,7 +2727,7 @@
           "date": "2026-10-04",
           "end": "2026-10-04",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2361,7 +2738,7 @@
           "date": "2026-10-05",
           "end": "2026-10-05",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2372,7 +2749,7 @@
           "date": "2026-10-06",
           "end": "2026-10-06",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2383,7 +2760,7 @@
           "date": "2026-10-07",
           "end": "2026-10-07",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2394,7 +2771,7 @@
           "date": "2026-10-08",
           "end": "2026-10-08",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2405,7 +2782,7 @@
           "date": "2026-10-09",
           "end": "2026-10-09",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2416,7 +2793,7 @@
           "date": "2026-10-10",
           "end": "2026-10-10",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2427,7 +2804,7 @@
           "date": "2026-10-11",
           "end": "2026-10-11",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2438,7 +2815,7 @@
           "date": "2026-10-12",
           "end": "2026-10-12",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2449,7 +2826,7 @@
           "date": "2026-10-13",
           "end": "2026-10-13",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2460,7 +2837,7 @@
           "date": "2026-10-14",
           "end": "2026-10-14",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2471,7 +2848,7 @@
           "date": "2026-10-15",
           "end": "2026-10-15",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2482,7 +2859,7 @@
           "date": "2026-10-16",
           "end": "2026-10-16",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2493,7 +2870,7 @@
           "date": "2026-10-17",
           "end": "2026-10-17",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2504,7 +2881,7 @@
           "date": "2026-10-18",
           "end": "2026-10-18",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": true,
@@ -2538,7 +2915,7 @@
       "summary": {
         "headline": {
           "value": null,
-          "display": "–"
+          "display": "\u2013"
         },
         "total": null,
         "mean": null,
@@ -2549,11 +2926,11 @@
         "prior": {
           "headline": {
             "value": null,
-            "display": "–"
+            "display": "\u2013"
           }
         },
         "delta": {
-          "display": "–",
+          "display": "\u2013",
           "words": "no comparable data",
           "sign": 0
         }
@@ -2568,7 +2945,7 @@
           "date": "2026-09-20",
           "end": "2026-09-20",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2578,7 +2955,7 @@
           "date": "2026-09-21",
           "end": "2026-09-21",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2588,7 +2965,7 @@
           "date": "2026-09-22",
           "end": "2026-09-22",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2598,7 +2975,7 @@
           "date": "2026-09-23",
           "end": "2026-09-23",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2608,7 +2985,7 @@
           "date": "2026-09-24",
           "end": "2026-09-24",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2618,7 +2995,7 @@
           "date": "2026-09-25",
           "end": "2026-09-25",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2628,7 +3005,7 @@
           "date": "2026-09-26",
           "end": "2026-09-26",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2638,7 +3015,7 @@
           "date": "2026-09-27",
           "end": "2026-09-27",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2648,7 +3025,7 @@
           "date": "2026-09-28",
           "end": "2026-09-28",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2658,7 +3035,7 @@
           "date": "2026-09-29",
           "end": "2026-09-29",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2668,7 +3045,7 @@
           "date": "2026-09-30",
           "end": "2026-09-30",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2678,7 +3055,7 @@
           "date": "2026-10-01",
           "end": "2026-10-01",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2688,7 +3065,7 @@
           "date": "2026-10-02",
           "end": "2026-10-02",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2698,7 +3075,7 @@
           "date": "2026-10-03",
           "end": "2026-10-03",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2708,7 +3085,7 @@
           "date": "2026-10-04",
           "end": "2026-10-04",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2718,7 +3095,7 @@
           "date": "2026-10-05",
           "end": "2026-10-05",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2728,7 +3105,7 @@
           "date": "2026-10-06",
           "end": "2026-10-06",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2738,7 +3115,7 @@
           "date": "2026-10-07",
           "end": "2026-10-07",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2748,7 +3125,7 @@
           "date": "2026-10-08",
           "end": "2026-10-08",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2758,7 +3135,7 @@
           "date": "2026-10-09",
           "end": "2026-10-09",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2768,7 +3145,7 @@
           "date": "2026-10-10",
           "end": "2026-10-10",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2778,7 +3155,7 @@
           "date": "2026-10-11",
           "end": "2026-10-11",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2788,7 +3165,7 @@
           "date": "2026-10-12",
           "end": "2026-10-12",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2798,7 +3175,7 @@
           "date": "2026-10-13",
           "end": "2026-10-13",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2808,7 +3185,7 @@
           "date": "2026-10-14",
           "end": "2026-10-14",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2818,7 +3195,7 @@
           "date": "2026-10-15",
           "end": "2026-10-15",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2828,7 +3205,7 @@
           "date": "2026-10-16",
           "end": "2026-10-16",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2838,7 +3215,7 @@
           "date": "2026-10-17",
           "end": "2026-10-17",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": false,
@@ -2848,7 +3225,7 @@
           "date": "2026-10-18",
           "end": "2026-10-18",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
           "provisional": true,
@@ -2881,7 +3258,7 @@
       "summary": {
         "headline": {
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "stat": "pooled"
         },
         "total": null,
@@ -2893,12 +3270,12 @@
         "prior": {
           "headline": {
             "value": null,
-            "display": "–",
+            "display": "\u2013",
             "stat": "pooled"
           }
         },
         "delta": {
-          "display": "–",
+          "display": "\u2013",
           "words": "no comparable data",
           "sign": 0
         }
@@ -2913,7 +3290,7 @@
           "date": "2026-09-20",
           "end": "2026-09-20",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2924,7 +3301,7 @@
           "date": "2026-09-21",
           "end": "2026-09-21",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2935,7 +3312,7 @@
           "date": "2026-09-22",
           "end": "2026-09-22",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2946,7 +3323,7 @@
           "date": "2026-09-23",
           "end": "2026-09-23",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2957,7 +3334,7 @@
           "date": "2026-09-24",
           "end": "2026-09-24",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2968,7 +3345,7 @@
           "date": "2026-09-25",
           "end": "2026-09-25",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2979,7 +3356,7 @@
           "date": "2026-09-26",
           "end": "2026-09-26",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -2990,7 +3367,7 @@
           "date": "2026-09-27",
           "end": "2026-09-27",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3001,7 +3378,7 @@
           "date": "2026-09-28",
           "end": "2026-09-28",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3012,7 +3389,7 @@
           "date": "2026-09-29",
           "end": "2026-09-29",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3023,7 +3400,7 @@
           "date": "2026-09-30",
           "end": "2026-09-30",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3034,7 +3411,7 @@
           "date": "2026-10-01",
           "end": "2026-10-01",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3045,7 +3422,7 @@
           "date": "2026-10-02",
           "end": "2026-10-02",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3056,7 +3433,7 @@
           "date": "2026-10-03",
           "end": "2026-10-03",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3067,7 +3444,7 @@
           "date": "2026-10-04",
           "end": "2026-10-04",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3078,7 +3455,7 @@
           "date": "2026-10-05",
           "end": "2026-10-05",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3089,7 +3466,7 @@
           "date": "2026-10-06",
           "end": "2026-10-06",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3100,7 +3477,7 @@
           "date": "2026-10-07",
           "end": "2026-10-07",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3111,7 +3488,7 @@
           "date": "2026-10-08",
           "end": "2026-10-08",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3122,7 +3499,7 @@
           "date": "2026-10-09",
           "end": "2026-10-09",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3133,7 +3510,7 @@
           "date": "2026-10-10",
           "end": "2026-10-10",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3144,7 +3521,7 @@
           "date": "2026-10-11",
           "end": "2026-10-11",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3155,7 +3532,7 @@
           "date": "2026-10-12",
           "end": "2026-10-12",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3166,7 +3543,7 @@
           "date": "2026-10-13",
           "end": "2026-10-13",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3177,7 +3554,7 @@
           "date": "2026-10-14",
           "end": "2026-10-14",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3188,7 +3565,7 @@
           "date": "2026-10-15",
           "end": "2026-10-15",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3199,7 +3576,7 @@
           "date": "2026-10-16",
           "end": "2026-10-16",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3210,7 +3587,7 @@
           "date": "2026-10-17",
           "end": "2026-10-17",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
@@ -3221,7 +3598,7 @@
           "date": "2026-10-18",
           "end": "2026-10-18",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": true,
@@ -3255,7 +3632,7 @@
       "summary": {
         "headline": {
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "stat": "pooled"
         },
         "total": null,
@@ -3267,12 +3644,12 @@
         "prior": {
           "headline": {
             "value": null,
-            "display": "–",
+            "display": "\u2013",
             "stat": "pooled"
           }
         },
         "delta": {
-          "display": "–",
+          "display": "\u2013",
           "words": "no comparable data",
           "sign": 0
         }
@@ -3287,7 +3664,7 @@
           "date": "2026-09-20",
           "end": "2026-09-20",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3297,7 +3674,7 @@
           "date": "2026-09-21",
           "end": "2026-09-21",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3307,7 +3684,7 @@
           "date": "2026-09-22",
           "end": "2026-09-22",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3317,7 +3694,7 @@
           "date": "2026-09-23",
           "end": "2026-09-23",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3327,7 +3704,7 @@
           "date": "2026-09-24",
           "end": "2026-09-24",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3337,7 +3714,7 @@
           "date": "2026-09-25",
           "end": "2026-09-25",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3347,7 +3724,7 @@
           "date": "2026-09-26",
           "end": "2026-09-26",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3357,7 +3734,7 @@
           "date": "2026-09-27",
           "end": "2026-09-27",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3367,7 +3744,7 @@
           "date": "2026-09-28",
           "end": "2026-09-28",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3377,7 +3754,7 @@
           "date": "2026-09-29",
           "end": "2026-09-29",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3387,7 +3764,7 @@
           "date": "2026-09-30",
           "end": "2026-09-30",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3397,7 +3774,7 @@
           "date": "2026-10-01",
           "end": "2026-10-01",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3407,7 +3784,7 @@
           "date": "2026-10-02",
           "end": "2026-10-02",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3417,7 +3794,7 @@
           "date": "2026-10-03",
           "end": "2026-10-03",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3427,7 +3804,7 @@
           "date": "2026-10-04",
           "end": "2026-10-04",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3437,7 +3814,7 @@
           "date": "2026-10-05",
           "end": "2026-10-05",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3447,7 +3824,7 @@
           "date": "2026-10-06",
           "end": "2026-10-06",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3457,7 +3834,7 @@
           "date": "2026-10-07",
           "end": "2026-10-07",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3467,7 +3844,7 @@
           "date": "2026-10-08",
           "end": "2026-10-08",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3477,7 +3854,7 @@
           "date": "2026-10-09",
           "end": "2026-10-09",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3487,7 +3864,7 @@
           "date": "2026-10-10",
           "end": "2026-10-10",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3497,7 +3874,7 @@
           "date": "2026-10-11",
           "end": "2026-10-11",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3507,7 +3884,7 @@
           "date": "2026-10-12",
           "end": "2026-10-12",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3517,7 +3894,7 @@
           "date": "2026-10-13",
           "end": "2026-10-13",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3527,7 +3904,7 @@
           "date": "2026-10-14",
           "end": "2026-10-14",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3537,7 +3914,7 @@
           "date": "2026-10-15",
           "end": "2026-10-15",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3547,7 +3924,7 @@
           "date": "2026-10-16",
           "end": "2026-10-16",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3557,7 +3934,7 @@
           "date": "2026-10-17",
           "end": "2026-10-17",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": false,
@@ -3567,7 +3944,7 @@
           "date": "2026-10-18",
           "end": "2026-10-18",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
           "provisional": true,
@@ -3617,11 +3994,11 @@
         "prior": {
           "headline": {
             "value": null,
-            "display": "–"
+            "display": "\u2013"
           }
         },
         "delta": {
-          "display": "–",
+          "display": "\u2013",
           "words": "no comparable data",
           "sign": 0
         }
@@ -3636,7 +4013,7 @@
           "date": "2026-09-20",
           "end": "2026-09-20",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3646,7 +4023,7 @@
           "date": "2026-09-21",
           "end": "2026-09-21",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3656,7 +4033,7 @@
           "date": "2026-09-22",
           "end": "2026-09-22",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3666,7 +4043,7 @@
           "date": "2026-09-23",
           "end": "2026-09-23",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3676,7 +4053,7 @@
           "date": "2026-09-24",
           "end": "2026-09-24",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3686,7 +4063,7 @@
           "date": "2026-09-25",
           "end": "2026-09-25",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3696,7 +4073,7 @@
           "date": "2026-09-26",
           "end": "2026-09-26",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3706,7 +4083,7 @@
           "date": "2026-09-27",
           "end": "2026-09-27",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3716,7 +4093,7 @@
           "date": "2026-09-28",
           "end": "2026-09-28",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3726,7 +4103,7 @@
           "date": "2026-09-29",
           "end": "2026-09-29",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3736,7 +4113,7 @@
           "date": "2026-09-30",
           "end": "2026-09-30",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3746,7 +4123,7 @@
           "date": "2026-10-01",
           "end": "2026-10-01",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3756,7 +4133,7 @@
           "date": "2026-10-02",
           "end": "2026-10-02",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3766,7 +4143,7 @@
           "date": "2026-10-03",
           "end": "2026-10-03",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3776,7 +4153,7 @@
           "date": "2026-10-04",
           "end": "2026-10-04",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3786,7 +4163,7 @@
           "date": "2026-10-05",
           "end": "2026-10-05",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3796,7 +4173,7 @@
           "date": "2026-10-06",
           "end": "2026-10-06",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3806,7 +4183,7 @@
           "date": "2026-10-07",
           "end": "2026-10-07",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3816,7 +4193,7 @@
           "date": "2026-10-08",
           "end": "2026-10-08",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3826,7 +4203,7 @@
           "date": "2026-10-09",
           "end": "2026-10-09",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3836,7 +4213,7 @@
           "date": "2026-10-10",
           "end": "2026-10-10",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3846,7 +4223,7 @@
           "date": "2026-10-11",
           "end": "2026-10-11",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3856,7 +4233,7 @@
           "date": "2026-10-12",
           "end": "2026-10-12",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3866,7 +4243,7 @@
           "date": "2026-10-13",
           "end": "2026-10-13",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -3876,7 +4253,7 @@
           "date": "2026-10-14",
           "end": "2026-10-14",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4040,11 +4417,11 @@
         "prior": {
           "headline": {
             "value": null,
-            "display": "–"
+            "display": "\u2013"
           }
         },
         "delta": {
-          "display": "–",
+          "display": "\u2013",
           "words": "no comparable data",
           "sign": 0
         }
@@ -4059,7 +4436,7 @@
           "date": "2026-09-20",
           "end": "2026-09-20",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4069,7 +4446,7 @@
           "date": "2026-09-21",
           "end": "2026-09-21",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4079,7 +4456,7 @@
           "date": "2026-09-22",
           "end": "2026-09-22",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4089,7 +4466,7 @@
           "date": "2026-09-23",
           "end": "2026-09-23",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4099,7 +4476,7 @@
           "date": "2026-09-24",
           "end": "2026-09-24",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4109,7 +4486,7 @@
           "date": "2026-09-25",
           "end": "2026-09-25",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4119,7 +4496,7 @@
           "date": "2026-09-26",
           "end": "2026-09-26",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4129,7 +4506,7 @@
           "date": "2026-09-27",
           "end": "2026-09-27",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4139,7 +4516,7 @@
           "date": "2026-09-28",
           "end": "2026-09-28",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4149,7 +4526,7 @@
           "date": "2026-09-29",
           "end": "2026-09-29",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4159,7 +4536,7 @@
           "date": "2026-09-30",
           "end": "2026-09-30",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4169,7 +4546,7 @@
           "date": "2026-10-01",
           "end": "2026-10-01",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4179,7 +4556,7 @@
           "date": "2026-10-02",
           "end": "2026-10-02",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4189,7 +4566,7 @@
           "date": "2026-10-03",
           "end": "2026-10-03",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4199,7 +4576,7 @@
           "date": "2026-10-04",
           "end": "2026-10-04",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4209,7 +4586,7 @@
           "date": "2026-10-05",
           "end": "2026-10-05",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4219,7 +4596,7 @@
           "date": "2026-10-06",
           "end": "2026-10-06",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4229,7 +4606,7 @@
           "date": "2026-10-07",
           "end": "2026-10-07",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4239,7 +4616,7 @@
           "date": "2026-10-08",
           "end": "2026-10-08",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4249,7 +4626,7 @@
           "date": "2026-10-09",
           "end": "2026-10-09",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4259,7 +4636,7 @@
           "date": "2026-10-10",
           "end": "2026-10-10",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4269,7 +4646,7 @@
           "date": "2026-10-11",
           "end": "2026-10-11",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4279,7 +4656,7 @@
           "date": "2026-10-12",
           "end": "2026-10-12",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4289,7 +4666,7 @@
           "date": "2026-10-13",
           "end": "2026-10-13",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4299,7 +4676,7 @@
           "date": "2026-10-14",
           "end": "2026-10-14",
           "value": null,
-          "display": "–",
+          "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
           "provisional": false,
@@ -4518,7 +4895,7 @@
             "value": 1,
             "display": "1",
             "share": "13%",
-            "label": "job · area tasks"
+            "label": "job \u00b7 area tasks"
           }
         ],
         "theme": [
@@ -4579,12 +4956,6 @@
       "unfiled_links": 1,
       "ambiguous_links": 0,
       "unresolved_links": 0,
-      "rollup_invalid": [
-        {
-          "path": "invalid.md",
-          "raw": "yes please"
-        }
-      ],
       "hue_collisions": [
         {
           "hue": "orange",
@@ -4598,10 +4969,6 @@
   },
   "warnings": [
     {
-      "code": "rollup_invalid",
-      "message": "invalid.md: invalid rollup \"yes please\"; treated as off"
-    },
-    {
       "code": "area_hue_collision",
       "message": "body and gtd share hue orange; set color: on one of them"
     }
@@ -4614,7 +4981,8 @@
       "subarea": null,
       "path": "dev.md",
       "hue": "blue",
-      "project_label": "dev · area tasks"
+      "project_label": "dev \u00b7 area tasks",
+      "root_parent": "dev.md"
     },
     "gtd.md": {
       "label": "gtd",
@@ -4623,7 +4991,8 @@
       "subarea": null,
       "path": "gtd.md",
       "hue": "orange",
-      "project_label": "gtd · area tasks"
+      "project_label": "gtd \u00b7 area tasks",
+      "root_parent": "gtd.md"
     },
     "job.md": {
       "label": "job",
@@ -4632,7 +5001,8 @@
       "subarea": null,
       "path": "job.md",
       "hue": "aqua",
-      "project_label": "job · area tasks"
+      "project_label": "job \u00b7 area tasks",
+      "root_parent": "job.md"
     },
     "love.md": {
       "label": "love",
@@ -4641,7 +5011,8 @@
       "subarea": null,
       "path": "love.md",
       "hue": "yellow",
-      "project_label": "love · area tasks"
+      "project_label": "love \u00b7 area tasks",
+      "root_parent": "love.md"
     },
     "cash.md": {
       "label": "cash",
@@ -4650,7 +5021,8 @@
       "subarea": null,
       "path": "cash.md",
       "hue": "magenta",
-      "project_label": "cash · area tasks"
+      "project_label": "cash \u00b7 area tasks",
+      "root_parent": "cash.md"
     },
     "body.md": {
       "label": "body",
@@ -4659,7 +5031,8 @@
       "subarea": null,
       "path": "body.md",
       "hue": "green",
-      "project_label": "body · area tasks"
+      "project_label": "body \u00b7 area tasks",
+      "root_parent": "body.md"
     },
     "learning.md": {
       "label": "learning",
@@ -4668,7 +5041,8 @@
       "subarea": null,
       "path": "learning.md",
       "hue": "violet",
-      "project_label": "learning · area tasks"
+      "project_label": "learning \u00b7 area tasks",
+      "root_parent": "learning.md"
     },
     "home.md": {
       "label": "home",
@@ -4677,7 +5051,8 @@
       "subarea": null,
       "path": "home.md",
       "hue": "red",
-      "project_label": "home · area tasks"
+      "project_label": "home \u00b7 area tasks",
+      "root_parent": "home.md"
     },
     "sase.md": {
       "label": "sase",
@@ -4686,7 +5061,7 @@
       "subarea": null,
       "path": "sase.md",
       "hue": "blue",
-      "rolled_up": 75
+      "root_parent": "sase.md"
     },
     "bob-tools.md": {
       "label": "bob-tools",
@@ -4694,7 +5069,8 @@
       "area": "dev.md",
       "subarea": null,
       "path": "bob-tools.md",
-      "hue": "blue"
+      "hue": "blue",
+      "root_parent": "sase.md"
     },
     "bob.md": {
       "label": "bob",
@@ -4702,7 +5078,8 @@
       "area": "gtd.md",
       "subarea": null,
       "path": "bob.md",
-      "hue": "orange"
+      "hue": "orange",
+      "root_parent": "bob.md"
     },
     "job_search.md": {
       "label": "job_search",
@@ -4710,7 +5087,8 @@
       "area": "job.md",
       "subarea": null,
       "path": "job_search.md",
-      "hue": "aqua"
+      "hue": "aqua",
+      "root_parent": "job_search.md"
     },
     "job_resume.md": {
       "label": "job_resume",
@@ -4718,7 +5096,8 @@
       "area": "job.md",
       "subarea": null,
       "path": "job_resume.md",
-      "hue": "aqua"
+      "hue": "aqua",
+      "root_parent": "job_search.md"
     },
     "job_network.md": {
       "label": "job_network",
@@ -4726,7 +5105,8 @@
       "area": "job.md",
       "subarea": null,
       "path": "job_network.md",
-      "hue": "aqua"
+      "hue": "aqua",
+      "root_parent": "job_search.md"
     },
     "job_2026_apply_29.md": {
       "label": "job_2026_apply_29",
@@ -4734,7 +5114,8 @@
       "area": "job.md",
       "subarea": null,
       "path": "job_2026_apply_29.md",
-      "hue": "aqua"
+      "hue": "aqua",
+      "root_parent": "job_search.md"
     },
     "love_work.md": {
       "label": "love_work",
@@ -4742,7 +5123,8 @@
       "area": "love.md",
       "subarea": null,
       "path": "love_work.md",
-      "hue": "yellow"
+      "hue": "yellow",
+      "root_parent": "love_work.md"
     },
     "cash_work.md": {
       "label": "cash_work",
@@ -4750,7 +5132,8 @@
       "area": "cash.md",
       "subarea": null,
       "path": "cash_work.md",
-      "hue": "magenta"
+      "hue": "magenta",
+      "root_parent": "cash_work.md"
     },
     "body_work.md": {
       "label": "body_work",
@@ -4758,7 +5141,8 @@
       "area": "body.md",
       "subarea": null,
       "path": "body_work.md",
-      "hue": "green"
+      "hue": "green",
+      "root_parent": "body_work.md"
     },
     "learning_work.md": {
       "label": "learning_work",
@@ -4766,7 +5150,8 @@
       "area": "learning.md",
       "subarea": null,
       "path": "learning_work.md",
-      "hue": "violet"
+      "hue": "violet",
+      "root_parent": "learning_work.md"
     },
     "home_work.md": {
       "label": "home_work",
@@ -4774,7 +5159,8 @@
       "area": "home.md",
       "subarea": null,
       "path": "home_work.md",
-      "hue": "red"
+      "hue": "red",
+      "root_parent": "home_work.md"
     },
     "@review:GTD": {
       "label": "GTD review",
@@ -4782,7 +5168,8 @@
       "area": "gtd.md",
       "subarea": null,
       "path": null,
-      "hue": "orange"
+      "hue": "orange",
+      "root_parent": "@review:GTD"
     },
     "@unfiled": {
       "label": "unfiled",
@@ -4790,7 +5177,8 @@
       "area": "@unfiled",
       "subarea": null,
       "path": null,
-      "hue": null
+      "hue": null,
+      "root_parent": "@unfiled"
     },
     "@unlinked": {
       "label": "unlinked",
@@ -4798,7 +5186,8 @@
       "area": "@unlinked",
       "subarea": null,
       "path": null,
-      "hue": null
+      "hue": null,
+      "root_parent": "@unlinked"
     }
   },
   "sessions": [

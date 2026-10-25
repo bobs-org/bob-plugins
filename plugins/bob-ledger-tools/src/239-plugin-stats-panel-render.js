@@ -216,14 +216,19 @@ class BobLedgerToolsStatsPanelsMixin {
     }
   }
 
-  // --- Pomodoro: Areas & projects, with Themes one click away -----------
+  // --- Pomodoro: Root parents, with Themes one click away -----------
   statsPanelPomodoro(doc, view, report, metric, section) {
     const viewModel = this.statsPanelHomeToggle(doc, view, report, metric);
     section.appendChild(viewModel.header);
-    if (viewModel.state.homesView === "areas" && viewModel.available) {
+    if (viewModel.hasRoots && viewModel.state.homesView === "roots") {
       return this.statsPanelHomeTable(doc, view, report, metric, section, { areaBar: true, sessions: true });
     }
-    if (!viewModel.available) {
+    if (!viewModel.hasRoots && viewModel.state.homesView === "areas" && viewModel.available) {
+      const rendered = this.statsPanelHomeTable(doc, view, report, metric, section, { areaBar: true, sessions: true });
+      section.appendChild(this.statsPanelNote(doc, "Update bob to group by root parent."));
+      return rendered;
+    }
+    if (!viewModel.available && !viewModel.hasRoots) {
       section.appendChild(this.statsPanelNote(doc, "Update bob for areas & projects."));
     }
     const point = statsPanelSelectedHomePoint(metric, report, viewModel.state);

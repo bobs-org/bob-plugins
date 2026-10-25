@@ -279,7 +279,7 @@ test("FNV-1a fallback for job maps to the pinned magenta slot", () => {
   assert.equal(pomodoroHomeFnv1a("job") % 8, 4);
 });
 
-test("rollup and area-color lints are reported once per note", () => {
+test("area-color lints are reported once per note", () => {
   const notes = { ...fixture.notes };
   const { metadataCache, vault } = fakeVault(notes);
   const result = pomodoroHomeModels(
@@ -289,11 +289,31 @@ test("rollup and area-color lints are reported once per note", () => {
     vault,
     ["GTD"],
   );
-  assert.equal(result.health.rollup_invalid, 2);
   assert.equal(result.health.area_color_invalid, 1);
   assert.deepEqual(
     result.warnings.map((warning) => warning.code).sort(),
-    ["area_color_invalid", "rollup_invalid", "rollup_invalid"],
+    ["area_color_invalid"],
+  );
+});
+
+test("a leftover rollup key neither regroups nor warns", () => {
+  const notes = {
+    ...fixture.notes,
+    "sase_blog.md": "---\ntype: [[project]]\nparent: [[sase]]\nrollup: subprojects\n---\n",
+  };
+  const { metadataCache, vault } = fakeVault(notes);
+  const result = pomodoroHomeModels(
+    "## Pomodoros\n- [x] (0800-0805 5m)\n  - [[sase_blog#^one]]\n",
+    "2026/20261018.md",
+    metadataCache,
+    vault,
+    ["GTD"],
+  );
+  assert.equal(result.warnings.length, 0);
+  assert.equal(result.entries.length, 1);
+  assert.deepEqual(
+    result.entries[0].parts.map((part) => part.key),
+    ["sase_blog.md"],
   );
 });
 
@@ -469,7 +489,7 @@ test("Reading view appends a forecast chip before its Task Link list", () => {
   assert.equal(plugin.renderPomodoroHomeReadingRecord(record), true);
   assert.equal(record.chip.getAttribute("data-home-state"), "forecast");
   assert.equal(record.chip.getAttribute("data-home-hue"), "blue");
-  assert.equal(record.chip.children[1].textContent, "sase");
+  assert.equal(record.chip.children[1].textContent, "sase_blog");
   assert.equal(entry.children.at(-2), record.chip);
   assert.equal(plugin.pomodoroHomeReadingEntry(entry, "2026/20261018.md").entry.name, "BLOG");
   assert.equal(
@@ -568,7 +588,7 @@ test("Live Preview places a chip widget at the end of the Pomodoro line", () => 
   const decorations = plugin.buildPomodoroHomeChipDecorations({ state });
   assert.equal(decorations.length, 1);
   assert.equal(decorations[0].from, lines[0].length + 1 + lines[1].length);
-  assert.equal(decorations[0].value.widget.model.chip, "sase");
+  assert.equal(decorations[0].value.widget.model.chip, "sase_blog");
   assert.equal(decorations[0].value.widget.model.state, "forecast");
 });
 

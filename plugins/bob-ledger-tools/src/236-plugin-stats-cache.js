@@ -269,7 +269,14 @@ class BobLedgerToolsStatsCacheMixin {
       }
       const outcomeFor = (result) => {
         if (result && result.ok) {
-          return { report: result.report, stale: false, error: null };
+          let fetchedAt = null;
+          try {
+            const stored = this.statsCacheGet(entry.key);
+            fetchedAt = stored ? stored.fetchedAt : null;
+          } catch (error) {
+            fetchedAt = null;
+          }
+          return { report: result.report, stale: false, error: null, fetchedAt };
         }
         if (entry.hadCached) {
           let staleEntry = null;
@@ -282,9 +289,10 @@ class BobLedgerToolsStatsCacheMixin {
             report: staleEntry ? staleEntry.report : null,
             stale: true,
             error: result,
+            fetchedAt: staleEntry ? staleEntry.fetchedAt : null,
           };
         }
-        return { report: null, stale: false, error: result };
+        return { report: null, stale: false, error: result, fetchedAt: null };
       };
       const run = async () => {
         let result = null;

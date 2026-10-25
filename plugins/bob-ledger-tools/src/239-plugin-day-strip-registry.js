@@ -518,6 +518,67 @@ class BobLedgerToolsDayStripMixin {
         this.dayStripPaint(record);
         return;
       }
+      // No-observer fallback decides shown at check time so a detached
+      // processor-time block fetches on the first connected check cycle.
+      try {
+        if (
+          record &&
+          record.kind === "plan" &&
+          typeof dayStripPlanHostHasObserver === "function" &&
+          !dayStripPlanHostHasObserver()
+        ) {
+          const view = record.planView || null;
+          const blockEl = (view && view.el) || null;
+          const hostEl = record.el || null;
+          const target = blockEl || hostEl;
+          let connected = false;
+          let excluded = false;
+          try {
+            connected =
+              (typeof dayStripPlanHostIsConnected === "function" &&
+                dayStripPlanHostIsConnected(target) &&
+                dayStripPlanHostIsConnected(hostEl)) ||
+              false;
+          } catch (error) {
+            connected = false;
+          }
+          try {
+            excluded =
+              (typeof dayStripPlanHostExcluded === "function" &&
+                (dayStripPlanHostExcluded(target) || dayStripPlanHostExcluded(hostEl))) ||
+              false;
+          } catch (error) {
+            excluded = false;
+          }
+          if (connected && excluded) {
+            try {
+              if (view && typeof this.dayStripReleasePlanHost === "function") {
+                this.dayStripReleasePlanHost(view);
+              } else if (typeof this.dayStripReleaseRecord === "function") {
+                this.dayStripReleaseRecord(record);
+              }
+            } catch (error) {
+              // Release is best-effort.
+            }
+            return;
+          }
+          if (!connected || excluded) {
+            try {
+              record.visible = false;
+            } catch (error) {
+              // Visibility is best-effort.
+            }
+            return;
+          }
+          try {
+            record.visible = true;
+          } catch (error) {
+            // Visibility is best-effort.
+          }
+        }
+      } catch (error) {
+        // Fallback recomputation is best-effort.
+      }
       if (!this.dayStripRecordIsShown(record)) {
         return;
       }
@@ -788,13 +849,19 @@ class BobLedgerToolsDayStripMixin {
             }
           }
           // Processors can receive detached elements: re-check the
-          // popover/embed/canvas exclusion on the first callback.
+          // popover/embed/canvas exclusion on every callback so tests and
+          // the real DOM agree.
           if (record && record.kind === "plan" && record.planView && record.planView.el) {
             try {
               const blockEl = record.planView.el;
-              const excluded = typeof blockEl.closest === "function"
-                ? Boolean(blockEl.closest(".hover-popover, .markdown-embed, .canvas-node"))
-                : false;
+              let excluded = false;
+              try {
+                excluded =
+                  typeof dayStripPlanHostExcluded === "function" &&
+                  dayStripPlanHostExcluded(blockEl);
+              } catch (error) {
+                excluded = false;
+              }
               if (excluded && typeof this.dayStripReleasePlanHost === "function") {
                 this.dayStripReleasePlanHost(record.planView);
                 return;

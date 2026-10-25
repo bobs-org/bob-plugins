@@ -406,6 +406,10 @@ class BobLedgerToolsTodayLocationMixin {
       this.planBlockViews = new Set();
     }
     const view = { el, sourcePath };
+    try {
+      const c = ctx && ctx.containerEl ? ctx.containerEl : null;
+      if (c && typeof c === "object" && (c.nodeType === 1 || typeof c.closest === "function")) view.containerEl = c;
+    } catch (error) {}
     this.planBlockViews.add(view);
     if (ctx && typeof ctx.addChild === "function") {
       // Unregister the view when the markdown preview drops the block.

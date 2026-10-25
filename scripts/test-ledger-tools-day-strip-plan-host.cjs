@@ -191,6 +191,59 @@ function fakePlanBlock() {
   return el;
 }
 
+// Obsidian's real processor-then-insert order: Live Preview calls the
+// code-block processor with a detached `block-language-bob-plan` element
+// inside a detached `cm-preview-code-block` container, and only then
+// inserts the container. Every node under the container, including the
+// host, reports isConnected === false until attach.
+function makeDetachedObsidianBlock() {
+  const doc = fakeDocument();
+  const container = new FakeNode("div", doc);
+  container.setAttribute("class", "cm-preview-code-block cm-embed-block markdown-rendered");
+  container.isConnected = false;
+  container.ownerDocument = doc;
+  const el = new FakeNode("div", doc);
+  el.setAttribute("class", "block-language-bob-plan");
+  el.ownerDocument = doc;
+  el.isConnected = false;
+  el.parentNode = container;
+  container.children.push(el);
+  return { doc, container, el };
+}
+
+function fixDetachedSubtree(container) {
+  const stack = [container];
+  while (stack.length) {
+    const node = stack.pop();
+    node.isConnected = false;
+    for (const child of node.children) stack.push(child);
+  }
+}
+
+function attachContainer(container, root) {
+  root.appendChild(container);
+  const stack = [container];
+  while (stack.length) {
+    const node = stack.pop();
+    node.isConnected = true;
+    for (const child of node.children) stack.push(child);
+  }
+}
+
+function makeConnectedRoot(doc, cls, excluded = false) {
+  const root = new FakeNode("div", doc);
+  root.setAttribute("class", cls);
+  root.isConnected = true;
+  root.ownerDocument = doc;
+  if (excluded) root._closest = root;
+  return root;
+}
+
+function formatHM(fetchedAt) {
+  const value = new Date(fetchedAt);
+  return String(value.getHours()).padStart(2, "0") + ":" + String(value.getMinutes()).padStart(2, "0");
+}
+
 const observers = [];
 class FakeIntersectionObserver {
   constructor(callback) {
@@ -655,7 +708,7 @@ test("plan host paints synchronously from cache with zero spawn before visibilit
   });
 });
 
-test("detached and excluded plan blocks get no host and no fetch", async () => {
+test("detached excluded blocks get no host; detached ordinary blocks attach synchronously", async () => {
   await withFakeObserver(async () => {
     await withMissingConfig(async () => {
       const plugin = await makePlugin();
@@ -688,30 +741,29 @@ test("detached and excluded plan blocks get no host and no fetch", async () => {
           assert.equal(hasStripClass(el), false, `${label} detached context sets no spacing class`);
         }
         assert.equal(spawns.length, before, "detached excluded blocks spawn nothing");
-        // A child of a detached parent must not pretend to be connected,
-        // even without an exclusion marker.
-        const doc = fakeDocument();
-        const parent = new FakeNode("div", doc);
-        parent.ownerDocument = doc;
-        parent.isConnected = false;
-        const el = new FakeNode("div", doc);
-        el.ownerDocument = doc;
-        el.isConnected = true;
-        el.parentNode = parent;
-        parent.children.push(el);
+        // Obsidian's normal processor-time case: a detached block without an
+        // excluded ancestor gets its host synchronously, with the spacing
+        // class, a registered record with visible:false, a skeleton paint,
+        // and zero spawns. Attachment and a true callback then fetch once.
+        plugin.statsCacheStore().clear();
+        const coldBefore = spawns.length;
+        const { container, el } = makeDetachedObsidianBlock();
         plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
+        fixDetachedSubtree(container);
         await settle();
-        assert.equal(
-          planChildren(el).filter((child) => child !== findPlanContainer(el)).length,
-          0,
-          "detached parent without exclusion still gets no host",
-        );
-        assert.equal(spawns.length, before, "detached parent spawns nothing");
-        assert.equal(
-          Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan").length,
-          0,
-          "detached hosts release their records",
-        );
+        assert.equal(planChildren(el)[0], findPlanContainer(el), ".bob-plan stays first");
+        assert.equal(planChildren(el).length, 2, "detached ordinary block attaches its host synchronously");
+        assert.equal(hasStripClass(el), true, "detached host sets the spacing class");
+        const [record] = Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan" && entry.planView && entry.planView.el === el);
+        assert.ok(record, "detached host registers a record");
+        assert.equal(record.visible, false, "visibility is unknown until the first callback");
+        assert.equal(spawns.length, coldBefore, "detached attach spawns nothing");
+        const root = makeConnectedRoot(container.ownerDocument, "markdown-source-view");
+        attachContainer(container, root);
+        observers[observers.length - 1].trigger(true);
+        await settle(60);
+        assert.equal(spawns.length, coldBefore + 1, "first true callback after attach fetches once");
+        assert.ok(planChildren(el)[1].querySelector(".bob-day-strip-state-ready"), "attached host reaches ready");
       } finally {
         plugin.onunload();
       }
@@ -719,7 +771,7 @@ test("detached and excluded plan blocks get no host and no fetch", async () => {
   });
 });
 
-test("no-observer fallback fetches when connected and shown, never when detached, and unloads cleanly", async () => {
+test("no-observer fallback attaches detached, fetches on check after connect, releases excluded", async () => {
   const prior = globalThis.IntersectionObserver;
   try {
     delete globalThis.IntersectionObserver;
@@ -742,24 +794,46 @@ test("no-observer fallback fetches when connected and shown, never when detached
         assert.equal(record.visible, true, "connected fallback is visible");
         assert.equal(spawns.length, before, "fresh cache needs no refetch");
         assert.match(planChildren(el)[1].textContent, /Worked/, "fallback paints from cache");
-        // Detached fallback must not fetch.
-        const doc = fakeDocument();
-        const parent = new FakeNode("div", doc);
-        parent.ownerDocument = doc;
-        parent.isConnected = false;
-        const detached = new FakeNode("div", doc);
-        detached.ownerDocument = doc;
-        detached.isConnected = true;
-        detached.parentNode = parent;
-        parent.children.push(detached);
+        // Detached fallback attaches and paints without spawning.
+        const { container, el: detached } = makeDetachedObsidianBlock();
         plugin.renderPlanBlock(detached, { sourcePath, addChild: () => {} });
+        fixDetachedSubtree(container);
+        await settle();
+        assert.equal(planChildren(detached).length, 2, "detached fallback attaches its host");
+        const [detachedRecord] = Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan" && entry.planView && entry.planView.el === detached);
+        assert.ok(detachedRecord, "detached fallback registers a record");
+        assert.equal(detachedRecord.visible, false, "detached fallback stays not-visible");
+        assert.equal(spawns.length, before, "detached fallback spawns nothing");
+        // Once connected, the next check cycle fetches once.
+        const cold = fixtures.createReport({ day: today, today, count: 8 });
+        plugin.statsCacheStore().clear();
+        const coldSpawns = stubSpawn(plugin, () => ({ ok: true, report: cold }));
+        const coldBefore = coldSpawns.length;
+        const { container: coldContainer, el: coldEl } = makeDetachedObsidianBlock();
+        plugin.renderPlanBlock(coldEl, { sourcePath, addChild: () => {} });
+        fixDetachedSubtree(coldContainer);
+        await settle();
+        assert.equal(coldSpawns.length, coldBefore, "cold detached fallback spawns nothing");
+        const coldRoot = makeConnectedRoot(coldContainer.ownerDocument, "markdown-source-view");
+        attachContainer(coldContainer, coldRoot);
+        plugin.dayStripCheckAll();
+        await settle(60);
+        assert.equal(coldSpawns.length, coldBefore + 1, "next check after connect fetches once");
+        // Connected excluded is released.
+        const { container: exclContainer, el: exclEl } = makeDetachedObsidianBlock();
+        plugin.renderPlanBlock(exclEl, { sourcePath, addChild: () => {} });
+        fixDetachedSubtree(exclContainer);
+        await settle();
+        const exclRoot = makeConnectedRoot(exclContainer.ownerDocument, "markdown-source-view", true);
+        attachContainer(exclContainer, exclRoot);
+        plugin.dayStripCheckAll();
         await settle();
         assert.equal(
-          planChildren(detached).filter((child) => child !== findPlanContainer(detached)).length,
+          planChildren(exclEl).filter((child) => child !== findPlanContainer(exclEl)).length,
           0,
-          "detached fallback gets no host",
+          "connected excluded fallback is released",
         );
-        assert.equal(spawns.length, before, "detached fallback spawns nothing");
+        assert.equal(hasStripClass(exclEl), false, "connected excluded fallback drops the spacing class");
         // Unload releases the fallback record and its host.
         assert.equal(added.length, 1, "fallback registers an unload child");
         const size = plugin.dayStripViews.size;
@@ -777,4 +851,208 @@ test("no-observer fallback fetches when connected and shown, never when detached
       globalThis.IntersectionObserver = prior;
     }
   }
+});
+
+test("excluded after attach releases on the first observer callback", async () => {
+  await withFakeObserver(async () => {
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const stem = today.replace(/-/g, "");
+        const sourcePath = `${today.slice(0, 4)}/${stem}.md`;
+        const current = fixtures.createReport({ day: today, today, count: 8 });
+        const spawns = stubSpawn(plugin, () => ({ ok: true, report: current }));
+        await seedDefault(plugin, current);
+        const before = spawns.length;
+        for (const cls of ["hover-popover", "markdown-embed", "canvas-node"]) {
+          const { container, el } = makeDetachedObsidianBlock();
+          plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
+          fixDetachedSubtree(container);
+          await settle();
+          assert.equal(planChildren(el).length, 2, `${cls}: detached ordinary block attaches first`);
+          const root = makeConnectedRoot(container.ownerDocument, "markdown-source-view", true);
+          root.setAttribute("class", cls);
+          attachContainer(container, root);
+          observers[observers.length - 1].trigger(true);
+          await settle();
+          assert.equal(
+            planChildren(el).filter((child) => child !== findPlanContainer(el)).length,
+            0,
+            `${cls}: attached under exclusion releases the host`,
+          );
+          assert.equal(hasStripClass(el), false, `${cls}: exclusion drops the spacing class`);
+          assert.equal(
+            Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan" && entry.planView && entry.planView.el === el).length,
+            0,
+            `${cls}: exclusion releases the record`,
+          );
+        }
+        assert.equal(spawns.length, before, "excluded-after-attach spawns nothing");
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
+});
+
+test("excluded processor container gets no host", async () => {
+  await withFakeObserver(async () => {
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const stem = today.replace(/-/g, "");
+        const sourcePath = `${today.slice(0, 4)}/${stem}.md`;
+        const current = fixtures.createReport({ day: today, today, count: 8 });
+        const spawns = stubSpawn(plugin, () => ({ ok: true, report: current }));
+        await seedDefault(plugin, current);
+        const before = spawns.length;
+        const { container, el } = makeDetachedObsidianBlock();
+        const excludedRoot = makeConnectedRoot(container.ownerDocument, "markdown-source-view", true);
+        const processorContainer = new FakeNode("div", container.ownerDocument);
+        processorContainer.isConnected = true;
+        processorContainer.ownerDocument = container.ownerDocument;
+        excludedRoot.appendChild(processorContainer);
+        plugin.renderPlanBlock(el, { sourcePath, addChild: () => {}, containerEl: processorContainer });
+        fixDetachedSubtree(container);
+        await settle();
+        assert.equal(
+          planChildren(el).filter((child) => child !== findPlanContainer(el)).length,
+          0,
+          "connected excluded processor container gets no host",
+        );
+        assert.equal(hasStripClass(el), false, "excluded container sets no spacing class");
+        assert.equal(spawns.length, before, "excluded container spawns nothing");
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
+});
+
+test("reading-view order attaches detached, virtualized stays quiet until attach", async () => {
+  await withFakeObserver(async () => {
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const stem = today.replace(/-/g, "");
+        const sourcePath = `${today.slice(0, 4)}/${stem}.md`;
+        const { container, el } = makeDetachedObsidianBlock();
+        plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
+        fixDetachedSubtree(container);
+        await settle();
+        assert.equal(planChildren(el).length, 2, "reading flow attaches detached host synchronously");
+        const [record] = Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan" && entry.planView && entry.planView.el === el);
+        assert.ok(record, "reading host registers a record");
+        assert.equal(record.visible, false, "reading host waits for visibility");
+        // A virtualized section stays detached: false gives zero spawns.
+        const { container: virtContainer, el: virtEl } = makeDetachedObsidianBlock();
+        // Cold cache so a later true must fetch.
+        const spawns = stubSpawn(plugin, () => ({ ok: true, report: fixtures.createReport({ day: today, today, count: 8 }) }));
+        const before = spawns.length;
+        plugin.renderPlanBlock(virtEl, { sourcePath, addChild: () => {} });
+        fixDetachedSubtree(virtContainer);
+        await settle();
+        const virtObserver = observers[observers.length - 1];
+        virtObserver.trigger(false);
+        await settle();
+        assert.equal(spawns.length, before, "virtualized false callback spawns nothing");
+        const previewRoot = makeConnectedRoot(virtContainer.ownerDocument, "markdown-preview-view");
+        attachContainer(virtContainer, previewRoot);
+        virtObserver.trigger(true);
+        await settle(60);
+        assert.equal(spawns.length, before + 1, "attached reading host fetches once on true");
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
+});
+
+test("today host shows so far HH:MM from the fetch stamp", async () => {
+  await withFakeObserver(async () => {
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const stem = today.replace(/-/g, "");
+        const sourcePath = `${today.slice(0, 4)}/${stem}.md`;
+        const current = fixtures.createReport({ day: today, today, count: 8 });
+        stubSpawn(plugin, () => ({ ok: true, report: current }));
+        const { container, el } = makeDetachedObsidianBlock();
+        plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
+        fixDetachedSubtree(container);
+        await settle();
+        const root = makeConnectedRoot(container.ownerDocument, "markdown-source-view");
+        attachContainer(container, root);
+        observers[observers.length - 1].trigger(true);
+        await settle(80);
+        const host = planChildren(el)[1];
+        assert.ok(host, "today host is attached");
+        const [record] = Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan" && entry.planView && entry.planView.el === el);
+        assert.ok(record, "today host registers a record");
+        const { key } = helpers.statsRequestFor({});
+        const entry = plugin.statsCacheGet(key);
+        assert.ok(entry && entry.report, "fetch stored the cache entry");
+        const expected = `so far \u00b7 ${formatHM(entry.fetchedAt)}`;
+        assert.match(host.textContent, /so far \u00b7 \d\d:\d\d/, "ready today host names the fetch time");
+        assert.ok(host.textContent.includes(expected), `meta carries the fetch stamp (${expected})`);
+        assert.ok(record.paintedKey && record.paintedKey.includes(String(entry.fetchedAt)), "paintedKey stamp equals fetchedAt");
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
+});
+
+test("failed refresh over a cached report names the HH:MM it shows", async () => {
+  await withFakeObserver(async () => {
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const stem = today.replace(/-/g, "");
+        const sourcePath = `${today.slice(0, 4)}/${stem}.md`;
+        const current = fixtures.createReport({ day: today, today, count: 8 });
+        let fail = false;
+        stubSpawn(plugin, () => {
+          if (fail) return { ok: false, code: "timeout", message: "boom", detail: "" };
+          return { ok: true, report: current };
+        });
+        await seedDefault(plugin, current);
+        const { container, el } = makeDetachedObsidianBlock();
+        plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
+        fixDetachedSubtree(container);
+        await settle();
+        const root = makeConnectedRoot(container.ownerDocument, "markdown-source-view");
+        attachContainer(container, root);
+        observers[observers.length - 1].trigger(true);
+        await settle(60);
+        const { key } = helpers.statsRequestFor({});
+        const cached = plugin.statsCacheGet(key);
+        assert.ok(cached && cached.report, "cached report is stored");
+        fail = true;
+        plugin.statsBumpChangeGen();
+        // Age the entry past the today minimum so the next check refetches.
+        try {
+          const stored = plugin.statsCacheStore().get(key);
+          if (stored) stored.fetchedAt = cached.fetchedAt - 31 * 1000;
+        } catch (error) {
+          // Age is best-effort in the fake harness.
+        }
+        const aged = plugin.statsCacheGet(key);
+        const expectedHM = formatHM(aged ? aged.fetchedAt : cached.fetchedAt);
+        plugin.dayStripCheckAll();
+        await settle(80);
+        const host = planChildren(el)[1];
+        assert.ok(host, "failed host keeps its frame");
+        assert.match(host.textContent, /so far \u00b7 \d\d:\d\d \u00b7 refresh failed/, "failed today names so far HH:MM plus refresh failed");
+        assert.ok(host.textContent.includes(expectedHM), `failed meta names the shown HH:MM (${expectedHM})`);
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
 });

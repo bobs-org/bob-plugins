@@ -280,13 +280,39 @@ class BobLedgerToolsDayStripPlanHostMixin {
         detach();
         return;
       }
+      // Obsidian calls code-block processors with a detached element
+      // that is inserted afterward, so connectivity must never gate
+      // attachment. The observer callback is the authority once the
+      // block is in the document.
       if (dayStripPlanHostExcluded(el)) {
         detach();
         return;
       }
-      if (!dayStripPlanHostIsConnected(el)) {
-        detach();
-        return;
+      try {
+        const processorContainer = view && view.containerEl ? view.containerEl : null;
+        let isElement = false;
+        try {
+          isElement =
+            (processorContainer !== null &&
+              typeof processorContainer === "object" &&
+              (processorContainer.nodeType === 1 ||
+                typeof processorContainer.closest === "function" ||
+                (typeof processorContainer.tagName === "string" &&
+                  typeof processorContainer.querySelector === "function")));
+        } catch (error) {
+          isElement = false;
+        }
+        if (isElement) {
+          if (
+            dayStripPlanHostIsConnected(processorContainer) &&
+            dayStripPlanHostExcluded(processorContainer)
+          ) {
+            detach();
+            return;
+          }
+        }
+      } catch (error) {
+        // Processor-container exclusion is best-effort early detection.
       }
       let existing = view.dayStripRecord || null;
       try {
@@ -356,14 +382,11 @@ class BobLedgerToolsDayStripPlanHostMixin {
       } catch (error) {
         return;
       }
-      // Recheck exclusion and connectivity after attachment: processors can
-      // receive detached elements whose ancestors only resolve now.
+      // Recheck exclusion after attachment: processors can receive
+      // detached elements whose ancestors only resolve now. Connectivity
+      // is never rechecked here; the observer decides once the block is
+      // in the document.
       if (dayStripPlanHostExcluded(el) || dayStripPlanHostExcluded(host)) {
-        dayStripPlanHostRemoveNode(host);
-        detach();
-        return;
-      }
-      if (!dayStripPlanHostIsConnected(el) || !dayStripPlanHostIsConnected(host)) {
         dayStripPlanHostRemoveNode(host);
         detach();
         return;
@@ -414,17 +437,31 @@ class BobLedgerToolsDayStripPlanHostMixin {
     try {
       if (!record) return;
       if (!dayStripPlanHostHasObserver()) {
-        // No-observer fallback: connected, eligible, shown hosts may fetch;
-        // disconnected or excluded hosts must not.
+        // No-observer fallback: a plan host is shown only while its block
+        // and host are connected and not excluded. Visibility is decided
+        // at check time so a detached-then-attached block still fetches;
+        // a connected excluded host is released.
         try {
           const blockEl = (view && view.el) || null;
           const hostEl = record.el || null;
           const target = blockEl || hostEl;
-          if (!dayStripPlanHostIsConnected(target) || !dayStripPlanHostIsConnected(hostEl)) {
-            record.visible = false;
+          const connected =
+            dayStripPlanHostIsConnected(target) && dayStripPlanHostIsConnected(hostEl);
+          const excluded =
+            dayStripPlanHostExcluded(target) || dayStripPlanHostExcluded(hostEl);
+          if (connected && excluded) {
+            try {
+              if (typeof this.dayStripReleasePlanHost === "function" && view) {
+                this.dayStripReleasePlanHost(view);
+              } else if (typeof this.dayStripReleaseRecord === "function") {
+                this.dayStripReleaseRecord(record);
+              }
+            } catch (error) {
+              // Release is best-effort.
+            }
             return;
           }
-          if (dayStripPlanHostExcluded(target) || dayStripPlanHostExcluded(hostEl)) {
+          if (!connected || excluded) {
             record.visible = false;
             return;
           }

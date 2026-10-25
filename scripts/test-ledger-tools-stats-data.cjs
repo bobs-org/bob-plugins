@@ -800,3 +800,50 @@ test("stats unload clears views, timers, cache, flights, and queues", async () =
     assert.equal(plugin.statsCacheListeners.size, 0);
   });
 });
+
+test("stats queue outcomes carry fetchedAt", async () => {
+  await withMissingConfig(async () => {
+    const plugin = makePlugin();
+    try {
+      const report = okReport();
+      plugin.statsSpawnFetch = async () => ({ ok: true, report });
+      const success = await plugin.apiStatsFetch({ range: "7d" });
+      assert.ok(success.report, "success carries a report");
+      assert.equal(typeof success.fetchedAt, "number", "success carries fetchedAt");
+      const { key } = statsRequestFor({ range: "7d" });
+      const stored = plugin.statsCacheGet(key);
+      assert.ok(stored, "success stored the cache entry");
+      assert.equal(success.fetchedAt, stored.fetchedAt, "success stamp equals the stored entry");
+      // Failure with a cached report carries the stale entry's stamp.
+      const staleStamp = stored.fetchedAt;
+      plugin.statsSpawnFetch = async () => ({ ok: false, code: "timeout", message: "boom", detail: "" });
+      const staleOutcome = await new Promise((resolve) => {
+        plugin.statsEnqueueFetch({
+          key,
+          args: statsRequestFor({ range: "7d" }).args,
+          opts: { range: "7d" },
+          waiters: [resolve],
+          hadCached: true,
+        });
+      });
+      assert.equal(staleOutcome.report, stored.report, "stale failure keeps the cached report");
+      assert.equal(staleOutcome.stale, true, "stale failure is marked stale");
+      assert.equal(staleOutcome.fetchedAt, staleStamp, "stale failure carries the stale stamp");
+      // Failure with nothing cached carries a null stamp.
+      plugin.statsCacheStore().clear();
+      const missOutcome = await new Promise((resolve) => {
+        plugin.statsEnqueueFetch({
+          key: "missing-key",
+          args: [],
+          opts: {},
+          waiters: [resolve],
+          hadCached: false,
+        });
+      });
+      assert.equal(missOutcome.report, null, "miss carries no report");
+      assert.equal(missOutcome.fetchedAt, null, "miss carries a null stamp");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});

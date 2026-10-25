@@ -26425,7 +26425,14 @@ class BobLedgerToolsStatsCacheMixin {
       }
       const outcomeFor = (result) => {
         if (result && result.ok) {
-          return { report: result.report, stale: false, error: null };
+          let fetchedAt = null;
+          try {
+            const stored = this.statsCacheGet(entry.key);
+            fetchedAt = stored ? stored.fetchedAt : null;
+          } catch (error) {
+            fetchedAt = null;
+          }
+          return { report: result.report, stale: false, error: null, fetchedAt };
         }
         if (entry.hadCached) {
           let staleEntry = null;
@@ -26438,9 +26445,10 @@ class BobLedgerToolsStatsCacheMixin {
             report: staleEntry ? staleEntry.report : null,
             stale: true,
             error: result,
+            fetchedAt: staleEntry ? staleEntry.fetchedAt : null,
           };
         }
-        return { report: null, stale: false, error: result };
+        return { report: null, stale: false, error: result, fetchedAt: null };
       };
       const run = async () => {
         let result = null;
@@ -32008,6 +32016,67 @@ class BobLedgerToolsDayStripMixin {
         this.dayStripPaint(record);
         return;
       }
+      // No-observer fallback decides shown at check time so a detached
+      // processor-time block fetches on the first connected check cycle.
+      try {
+        if (
+          record &&
+          record.kind === "plan" &&
+          typeof dayStripPlanHostHasObserver === "function" &&
+          !dayStripPlanHostHasObserver()
+        ) {
+          const view = record.planView || null;
+          const blockEl = (view && view.el) || null;
+          const hostEl = record.el || null;
+          const target = blockEl || hostEl;
+          let connected = false;
+          let excluded = false;
+          try {
+            connected =
+              (typeof dayStripPlanHostIsConnected === "function" &&
+                dayStripPlanHostIsConnected(target) &&
+                dayStripPlanHostIsConnected(hostEl)) ||
+              false;
+          } catch (error) {
+            connected = false;
+          }
+          try {
+            excluded =
+              (typeof dayStripPlanHostExcluded === "function" &&
+                (dayStripPlanHostExcluded(target) || dayStripPlanHostExcluded(hostEl))) ||
+              false;
+          } catch (error) {
+            excluded = false;
+          }
+          if (connected && excluded) {
+            try {
+              if (view && typeof this.dayStripReleasePlanHost === "function") {
+                this.dayStripReleasePlanHost(view);
+              } else if (typeof this.dayStripReleaseRecord === "function") {
+                this.dayStripReleaseRecord(record);
+              }
+            } catch (error) {
+              // Release is best-effort.
+            }
+            return;
+          }
+          if (!connected || excluded) {
+            try {
+              record.visible = false;
+            } catch (error) {
+              // Visibility is best-effort.
+            }
+            return;
+          }
+          try {
+            record.visible = true;
+          } catch (error) {
+            // Visibility is best-effort.
+          }
+        }
+      } catch (error) {
+        // Fallback recomputation is best-effort.
+      }
       if (!this.dayStripRecordIsShown(record)) {
         return;
       }
@@ -32278,13 +32347,19 @@ class BobLedgerToolsDayStripMixin {
             }
           }
           // Processors can receive detached elements: re-check the
-          // popover/embed/canvas exclusion on the first callback.
+          // popover/embed/canvas exclusion on every callback so tests and
+          // the real DOM agree.
           if (record && record.kind === "plan" && record.planView && record.planView.el) {
             try {
               const blockEl = record.planView.el;
-              const excluded = typeof blockEl.closest === "function"
-                ? Boolean(blockEl.closest(".hover-popover, .markdown-embed, .canvas-node"))
-                : false;
+              let excluded = false;
+              try {
+                excluded =
+                  typeof dayStripPlanHostExcluded === "function" &&
+                  dayStripPlanHostExcluded(blockEl);
+              } catch (error) {
+                excluded = false;
+              }
               if (excluded && typeof this.dayStripReleasePlanHost === "function") {
                 this.dayStripReleasePlanHost(record.planView);
                 return;
@@ -32807,13 +32882,39 @@ class BobLedgerToolsDayStripPlanHostMixin {
         detach();
         return;
       }
+      // Obsidian calls code-block processors with a detached element
+      // that is inserted afterward, so connectivity must never gate
+      // attachment. The observer callback is the authority once the
+      // block is in the document.
       if (dayStripPlanHostExcluded(el)) {
         detach();
         return;
       }
-      if (!dayStripPlanHostIsConnected(el)) {
-        detach();
-        return;
+      try {
+        const processorContainer = view && view.containerEl ? view.containerEl : null;
+        let isElement = false;
+        try {
+          isElement =
+            (processorContainer !== null &&
+              typeof processorContainer === "object" &&
+              (processorContainer.nodeType === 1 ||
+                typeof processorContainer.closest === "function" ||
+                (typeof processorContainer.tagName === "string" &&
+                  typeof processorContainer.querySelector === "function")));
+        } catch (error) {
+          isElement = false;
+        }
+        if (isElement) {
+          if (
+            dayStripPlanHostIsConnected(processorContainer) &&
+            dayStripPlanHostExcluded(processorContainer)
+          ) {
+            detach();
+            return;
+          }
+        }
+      } catch (error) {
+        // Processor-container exclusion is best-effort early detection.
       }
       let existing = view.dayStripRecord || null;
       try {
@@ -32883,14 +32984,11 @@ class BobLedgerToolsDayStripPlanHostMixin {
       } catch (error) {
         return;
       }
-      // Recheck exclusion and connectivity after attachment: processors can
-      // receive detached elements whose ancestors only resolve now.
+      // Recheck exclusion after attachment: processors can receive
+      // detached elements whose ancestors only resolve now. Connectivity
+      // is never rechecked here; the observer decides once the block is
+      // in the document.
       if (dayStripPlanHostExcluded(el) || dayStripPlanHostExcluded(host)) {
-        dayStripPlanHostRemoveNode(host);
-        detach();
-        return;
-      }
-      if (!dayStripPlanHostIsConnected(el) || !dayStripPlanHostIsConnected(host)) {
         dayStripPlanHostRemoveNode(host);
         detach();
         return;
@@ -32941,17 +33039,31 @@ class BobLedgerToolsDayStripPlanHostMixin {
     try {
       if (!record) return;
       if (!dayStripPlanHostHasObserver()) {
-        // No-observer fallback: connected, eligible, shown hosts may fetch;
-        // disconnected or excluded hosts must not.
+        // No-observer fallback: a plan host is shown only while its block
+        // and host are connected and not excluded. Visibility is decided
+        // at check time so a detached-then-attached block still fetches;
+        // a connected excluded host is released.
         try {
           const blockEl = (view && view.el) || null;
           const hostEl = record.el || null;
           const target = blockEl || hostEl;
-          if (!dayStripPlanHostIsConnected(target) || !dayStripPlanHostIsConnected(hostEl)) {
-            record.visible = false;
+          const connected =
+            dayStripPlanHostIsConnected(target) && dayStripPlanHostIsConnected(hostEl);
+          const excluded =
+            dayStripPlanHostExcluded(target) || dayStripPlanHostExcluded(hostEl);
+          if (connected && excluded) {
+            try {
+              if (typeof this.dayStripReleasePlanHost === "function" && view) {
+                this.dayStripReleasePlanHost(view);
+              } else if (typeof this.dayStripReleaseRecord === "function") {
+                this.dayStripReleaseRecord(record);
+              }
+            } catch (error) {
+              // Release is best-effort.
+            }
             return;
           }
-          if (dayStripPlanHostExcluded(target) || dayStripPlanHostExcluded(hostEl)) {
+          if (!connected || excluded) {
             record.visible = false;
             return;
           }
@@ -51095,6 +51207,10 @@ class BobLedgerToolsTodayLocationMixin {
       this.planBlockViews = new Set();
     }
     const view = { el, sourcePath };
+    try {
+      const c = ctx && ctx.containerEl ? ctx.containerEl : null;
+      if (c && typeof c === "object" && (c.nodeType === 1 || typeof c.closest === "function")) view.containerEl = c;
+    } catch (error) {}
     this.planBlockViews.add(view);
     if (ctx && typeof ctx.addChild === "function") {
       // Unregister the view when the markdown preview drops the block.

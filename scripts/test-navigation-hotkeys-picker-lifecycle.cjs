@@ -887,3 +887,22 @@ test("stale registered pickers fail open on the next key", () => {
     assert.equal(plugin.activeTaskMoveDestinationPicker, null);
   }
 });
+
+test("Task Card onClose clears card classes and resolving flags", () => {
+  const { open, plugin } = createBulletPropertyPickerHarness();
+  assert.equal(open(), true);
+  const picker = plugin.activeBulletPropertyPicker;
+  assert.equal(picker.stage, "task-card");
+  assert.ok(picker.modalEl.classes.includes("bob-task-card-modal"));
+  picker.modalEl.addClass("bob-task-card-wide");
+  picker.linkResolving = true;
+  picker.taskCardDispatching = true;
+
+  picker.close();
+
+  assert.equal(plugin.activeBulletPropertyPicker, null);
+  assert.ok(!picker.modalEl.classes.includes("bob-task-card-modal"));
+  assert.ok(!picker.modalEl.classes.includes("bob-task-card-wide"));
+  assert.equal(picker.linkResolving, false);
+  assert.equal(picker.taskCardDispatching, false);
+});

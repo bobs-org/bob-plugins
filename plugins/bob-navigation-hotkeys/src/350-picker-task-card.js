@@ -765,6 +765,12 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
         }
       }, 0);
     }
+    if (this.modalEl) {
+      this.modalEl.removeClass("bob-task-card-modal");
+      this.modalEl.removeClass("bob-task-card-wide");
+    }
+    this.linkResolving = false;
+    this.taskCardDispatching = false;
     super.onClose();
   }
 

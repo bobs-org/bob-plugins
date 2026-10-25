@@ -57,7 +57,7 @@
   "239-plugin-day-strip-hosts.js",
   "239-plugin-day-strip-registry.js",
   "239-plugin-day-strip-fence.js",
-  "239-plugin-day-strip-mount.js",
+  "239-plugin-day-strip-plan-host.js",
   "240-plugin-freshness-status.js",
   "241-plugin-reading-board-data.js",
   "242-plugin-reading-board-models.js",

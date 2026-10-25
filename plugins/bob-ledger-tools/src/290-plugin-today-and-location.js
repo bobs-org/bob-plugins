@@ -416,6 +416,13 @@ class BobLedgerToolsTodayLocationMixin {
         if (typeof MarkdownRenderChild === "function") {
           child = new MarkdownRenderChild(el);
           child.onunload = () => {
+            try {
+              if (typeof this.dayStripReleasePlanHost === "function") {
+                this.dayStripReleasePlanHost(view);
+              }
+            } catch (error) {
+              // Release is best-effort.
+            }
             if (this.planBlockViews) {
               this.planBlockViews.delete(view);
             }
@@ -430,6 +437,13 @@ class BobLedgerToolsTodayLocationMixin {
       if (!child) {
         child = {
           unload: () => {
+            try {
+              if (typeof this.dayStripReleasePlanHost === "function") {
+                this.dayStripReleasePlanHost(view);
+              }
+            } catch (error) {
+              // Release is best-effort.
+            }
             if (this.planBlockViews) {
               this.planBlockViews.delete(view);
             }
@@ -445,7 +459,23 @@ class BobLedgerToolsTodayLocationMixin {
         // Older hosts may reject the child; the Set is cleared on unload.
       }
     }
+    // Reserve one chip row synchronously so the strip never paints above
+    // the chips and never jumps when they land.
+    try {
+      if (typeof this.dayStripPlanHostEnsurePlaceholder === "function") {
+        this.dayStripPlanHostEnsurePlaceholder(el);
+      }
+    } catch (error) {
+      // Placeholder is best-effort.
+    }
     this.paintPlanBlock(el, sourcePath);
+    try {
+      if (typeof this.dayStripSyncPlanHost === "function") {
+        this.dayStripSyncPlanHost(view);
+      }
+    } catch (error) {
+      // Plan-host sync is best-effort.
+    }
   }
 
   paintPlanBlock(el, sourcePath) {
@@ -460,7 +490,7 @@ class BobLedgerToolsTodayLocationMixin {
         if (this.planPaintGens.get(el) !== paintGen) {
           return;
         }
-        if (!el || typeof el.empty !== "function") {
+        if (!el) {
           return;
         }
         const paintDay = new Date();
@@ -474,7 +504,24 @@ class BobLedgerToolsTodayLocationMixin {
         if (this.planPaintGens.get(el) !== paintGen) {
           return;
         }
-        el.empty();
+        // The host node is never detached: remove every child except the
+        // Day strip host, then insert the new `.bob-plan` before it. Its
+        // paint, observer, hover, and keyboard focus survive the repaint.
+        let stripHost = null;
+        try {
+          if (typeof this.dayStripPlanHostForRepaint === "function") {
+            stripHost = this.dayStripPlanHostForRepaint(el);
+          } else if (typeof el.empty === "function") {
+            el.empty();
+          }
+        } catch (error) {
+          stripHost = null;
+          try {
+            if (typeof el.empty === "function") el.empty();
+          } catch (inner) {
+            // Empty is best-effort.
+          }
+        }
         // Gate READY from one validated snapshot; a missing snapshot
         // keeps the legacy ungated count and tooltip.
         let planGate = null;
@@ -508,6 +555,13 @@ class BobLedgerToolsTodayLocationMixin {
           hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
         });
         const container = el.createDiv({ cls: "bob-plan" });
+        try {
+          if (stripHost && typeof this.dayStripPlanHostPlacePlanFirst === "function") {
+            this.dayStripPlanHostPlacePlanFirst(el, container, stripHost);
+          }
+        } catch (error) {
+          // Ordering is best-effort; `.bob-plan` stays first when possible.
+        }
         container.setAttribute("role", "status");
         container.setAttribute(
           "aria-label",

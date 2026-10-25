@@ -2,10 +2,9 @@
 // host and `openStatsForDay`, which opens Stats with the day pinned.
 class BobLedgerToolsDayStripFenceMixin {
   // The `bob-day-stats` fence: an optional `day: YYYY-MM-DD` body, else
-  // the note's own date. An own-day fence elsewhere stands the virtual
-  // mount down (handled by the mount phase); here every fence renders
-  // its own host. Nothing on mobile or wherever `bob` cannot spawn, and
-  // never an error card there. Never throws.
+  // the note's own date. A fence placed inside a daily note simply
+  // renders its own strip. Nothing on mobile or wherever `bob` cannot
+  // spawn, and never an error card there. Never throws.
   renderDayStripFence(el, ctx, source) {
     if (!el) {
       return;

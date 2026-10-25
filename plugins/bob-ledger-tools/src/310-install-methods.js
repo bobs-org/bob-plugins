@@ -35,7 +35,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsPanelsMixin,
   BobLedgerToolsDayStripMixin,
   BobLedgerToolsDayStripFenceMixin,
-  BobLedgerToolsDayStripMountMixin,
+  BobLedgerToolsDayStripPlanHostMixin,
   BobLedgerToolsFreshnessStatusMixin,
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,

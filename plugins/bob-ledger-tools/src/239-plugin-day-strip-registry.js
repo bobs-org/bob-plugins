@@ -50,15 +50,15 @@ class BobLedgerToolsDayStripMixin {
     }
   }
 
-  // Per-device collapse, shared by every strip on this device. Vault
+  // Plan-block hosts, shared by every strip on this device. Vault
   // reads and writes never happen here. Never throws.
   setupDayStripHosts() {
     try {
-      if (typeof this.setupDayStripMount === "function") {
-        this.setupDayStripMount();
+      if (typeof this.setupDayStripPlanHost === "function") {
+        this.setupDayStripPlanHost();
       }
     } catch (error) {
-      // The Live Preview mount is best-effort.
+      // The plan-block host setup is best-effort.
     }
     try {
       this.dayStripViewsStore();
@@ -691,11 +691,15 @@ class BobLedgerToolsDayStripMixin {
   }
 
   // Across-midnight rollover: today becomes a past-day strip because its
-  // D is fixed by its path, so repaint every strip (which re-keys today
-  // to a past day and refetches) after the generation bump. Never
-  // throws.
+  // D is fixed by its path, so re-sync every plan-block host (a future
+  // note's block gains its strip when D becomes today) and repaint every
+  // strip after the generation bump. Never throws.
   dayStripHandleRollover() {
     try {
+      if (typeof this.refreshDayStripPlanHosts === "function") {
+        this.refreshDayStripPlanHosts();
+        return;
+      }
       for (const record of Array.from(this.dayStripViewsStore())) {
         try {
           record.paintedKey = null;
@@ -705,9 +709,6 @@ class BobLedgerToolsDayStripMixin {
         }
       }
       this.dayStripCheckAll();
-      if (typeof this.refreshDayStripMountEditors === "function") {
-        this.refreshDayStripMountEditors();
-      }
     } catch (error) {
       // Rollover is best-effort.
     }
@@ -769,6 +770,22 @@ class BobLedgerToolsDayStripMixin {
           for (const entry of list) {
             if (entry && typeof entry.isIntersecting === "boolean") {
               record.visible = entry.isIntersecting;
+            }
+          }
+          // Processors can receive detached elements: re-check the
+          // popover/embed/canvas exclusion on the first callback.
+          if (record && record.kind === "plan" && record.planView && record.planView.el) {
+            try {
+              const blockEl = record.planView.el;
+              const excluded = typeof blockEl.closest === "function"
+                ? Boolean(blockEl.closest(".hover-popover, .markdown-embed, .canvas-node"))
+                : false;
+              if (excluded && typeof this.dayStripReleasePlanHost === "function") {
+                this.dayStripReleasePlanHost(record.planView);
+                return;
+              }
+            } catch (error) {
+              // Exclusion re-check is best-effort.
             }
           }
           if (record.visible !== false) {

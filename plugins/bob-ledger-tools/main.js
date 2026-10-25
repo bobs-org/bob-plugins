@@ -31540,15 +31540,15 @@ class BobLedgerToolsDayStripMixin {
     }
   }
 
-  // Per-device collapse, shared by every strip on this device. Vault
+  // Plan-block hosts, shared by every strip on this device. Vault
   // reads and writes never happen here. Never throws.
   setupDayStripHosts() {
     try {
-      if (typeof this.setupDayStripMount === "function") {
-        this.setupDayStripMount();
+      if (typeof this.setupDayStripPlanHost === "function") {
+        this.setupDayStripPlanHost();
       }
     } catch (error) {
-      // The Live Preview mount is best-effort.
+      // The plan-block host setup is best-effort.
     }
     try {
       this.dayStripViewsStore();
@@ -32181,11 +32181,15 @@ class BobLedgerToolsDayStripMixin {
   }
 
   // Across-midnight rollover: today becomes a past-day strip because its
-  // D is fixed by its path, so repaint every strip (which re-keys today
-  // to a past day and refetches) after the generation bump. Never
-  // throws.
+  // D is fixed by its path, so re-sync every plan-block host (a future
+  // note's block gains its strip when D becomes today) and repaint every
+  // strip after the generation bump. Never throws.
   dayStripHandleRollover() {
     try {
+      if (typeof this.refreshDayStripPlanHosts === "function") {
+        this.refreshDayStripPlanHosts();
+        return;
+      }
       for (const record of Array.from(this.dayStripViewsStore())) {
         try {
           record.paintedKey = null;
@@ -32195,9 +32199,6 @@ class BobLedgerToolsDayStripMixin {
         }
       }
       this.dayStripCheckAll();
-      if (typeof this.refreshDayStripMountEditors === "function") {
-        this.refreshDayStripMountEditors();
-      }
     } catch (error) {
       // Rollover is best-effort.
     }
@@ -32261,6 +32262,22 @@ class BobLedgerToolsDayStripMixin {
               record.visible = entry.isIntersecting;
             }
           }
+          // Processors can receive detached elements: re-check the
+          // popover/embed/canvas exclusion on the first callback.
+          if (record && record.kind === "plan" && record.planView && record.planView.el) {
+            try {
+              const blockEl = record.planView.el;
+              const excluded = typeof blockEl.closest === "function"
+                ? Boolean(blockEl.closest(".hover-popover, .markdown-embed, .canvas-node"))
+                : false;
+              if (excluded && typeof this.dayStripReleasePlanHost === "function") {
+                this.dayStripReleasePlanHost(record.planView);
+                return;
+              }
+            } catch (error) {
+              // Exclusion re-check is best-effort.
+            }
+          }
           if (record.visible !== false) {
             record.visible = true;
             this.dayStripCheck(record);
@@ -32287,10 +32304,9 @@ class BobLedgerToolsDayStripMixin {
 // host and `openStatsForDay`, which opens Stats with the day pinned.
 class BobLedgerToolsDayStripFenceMixin {
   // The `bob-day-stats` fence: an optional `day: YYYY-MM-DD` body, else
-  // the note's own date. An own-day fence elsewhere stands the virtual
-  // mount down (handled by the mount phase); here every fence renders
-  // its own host. Nothing on mobile or wherever `bob` cannot spawn, and
-  // never an error card there. Never throws.
+  // the note's own date. A fence placed inside a daily note simply
+  // renders its own strip. Nothing on mobile or wherever `bob` cannot
+  // spawn, and never an error card there. Never throws.
   renderDayStripFence(el, ctx, source) {
     if (!el) {
       return;
@@ -32493,258 +32509,151 @@ class BobLedgerToolsDayStripFenceMixin {
     }
   }
 }
-// ---- src/239-plugin-day-strip-mount.js ----
-// Day strip Live Preview mount: one block widget at the canonical
-// daily note's document end. The StateField and refresh effect are
-// created lazily so loading the plugin keeps the existing eager
-// StateEffect.define() count unchanged.
-let dayStripMountRefresh = null;
-const DAY_STRIP_MOUNT_FENCE_MEMO =
-  typeof WeakMap === "function" ? new WeakMap() : null;
-
-function ensureDayStripMountRefresh() {
-  if (dayStripMountRefresh) return dayStripMountRefresh;
+// ---- src/239-plugin-day-strip-plan-host.js ----
+// Day strip plan host: host the strip inside the rendered `bob-plan`
+// block of canonical daily notes, after the badges, in Live Preview and
+// Reading view. Replaces the deleted CodeMirror end-of-note mount.
+function dayStripPlanHostAddClass(el, name) {
   try {
-    if (StateEffect && typeof StateEffect.define === "function") {
-      dayStripMountRefresh = StateEffect.define();
+    if (!el || !name) return;
+    if (el.classList && typeof el.classList.add === "function") {
+      el.classList.add(name);
+      return;
+    }
+    if (typeof el.addClass === "function") {
+      el.addClass(name);
+      return;
+    }
+    const current = typeof el.getAttribute === "function"
+      ? el.getAttribute("class")
+      : (el.attrs instanceof Map ? el.attrs.get("class") : null) || el.cls || "";
+    const parts = String(current || "").split(/\s+/).filter(Boolean);
+    if (!parts.includes(name)) {
+      parts.push(name);
+      const next = parts.join(" ");
+      if (typeof el.setAttribute === "function") el.setAttribute("class", next);
+      else if (el.attrs instanceof Map) el.attrs.set("class", next);
+      else el.cls = next;
     }
   } catch (error) {
-    dayStripMountRefresh = null;
-  }
-  return dayStripMountRefresh;
-}
-
-function dayStripMountDocLine(doc, number) {
-  try {
-    if (!doc || typeof doc.line !== "function") return "";
-    const line = doc.line(number);
-    return line && typeof line.text === "string" ? line.text : "";
-  } catch (error) {
-    return "";
-  }
-}
-
-// Only scan on a new CodeMirror document. Refresh effects, path changes,
-// and Live Preview flips reuse the fence result for the same doc/day.
-function dayStripMountOwnFence(doc, day) {
-  if (!doc || typeof doc !== "object") {
-    return dayStripMountScanOwnFence(doc, day);
-  }
-  try {
-    let byDay = DAY_STRIP_MOUNT_FENCE_MEMO
-      ? DAY_STRIP_MOUNT_FENCE_MEMO.get(doc)
-      : null;
-    if (!byDay) {
-      byDay = new Map();
-      if (DAY_STRIP_MOUNT_FENCE_MEMO) DAY_STRIP_MOUNT_FENCE_MEMO.set(doc, byDay);
-    }
-    if (byDay.has(day)) return byDay.get(day);
-    const result = dayStripMountScanOwnFence(doc, day);
-    byDay.set(day, result);
-    return result;
-  } catch (error) {
-    return dayStripMountScanOwnFence(doc, day);
+    // Class assignment is cosmetic.
   }
 }
 
-function dayStripMountScanOwnFence(doc, day) {
+function dayStripPlanHostRemoveClass(el, name) {
   try {
-    const lines = doc && Number.isInteger(doc.lines) ? doc.lines : 0;
-    if (!lines || typeof doc.line !== "function") return false;
-    for (let number = 1; number <= lines; number += 1) {
-      const opener = /^ {0,3}(\x60{3,})bob-day-stats(?:[ \t]+.*)?$/.exec(
-        dayStripMountDocLine(doc, number),
-      );
-      if (!opener) continue;
-      const ticks = opener[1].length;
-      const body = [];
-      for (number += 1; number <= lines; number += 1) {
-        const text = dayStripMountDocLine(doc, number);
-        if (new RegExp("^ {0,3}\\x60{" + ticks + ",}[ \\t]*$").test(text)) break;
-        body.push(text);
-      }
-      const bodyText = body.join("\n");
-      const declaresDay = /(?:^|\n)\s*day\s*:/i.test(bodyText);
-      if (!declaresDay || dayStripParseFenceDay(bodyText) === day) return true;
+    if (!el || !name) return;
+    if (el.classList && typeof el.classList.remove === "function") {
+      el.classList.remove(name);
+      return;
     }
-    return false;
+    if (typeof el.removeClass === "function") {
+      el.removeClass(name);
+      return;
+    }
+    const current = typeof el.getAttribute === "function"
+      ? el.getAttribute("class")
+      : (el.attrs instanceof Map ? el.attrs.get("class") : null) || el.cls || "";
+    const parts = String(current || "").split(/\s+/).filter(Boolean).filter((part) => part !== name);
+    const next = parts.join(" ");
+    if (typeof el.setAttribute === "function") {
+      if (next) el.setAttribute("class", next);
+      else if (typeof el.removeAttribute === "function") el.removeAttribute("class");
+    } else if (el.attrs instanceof Map) {
+      if (next) el.attrs.set("class", next);
+      else el.attrs.delete("class");
+    } else {
+      el.cls = next;
+    }
+  } catch (error) {
+    // Class removal is best-effort.
+  }
+}
+
+function dayStripPlanHostHasClass(el, name) {
+  try {
+    if (!el || !name) return false;
+    if (el.classList && typeof el.classList.contains === "function") {
+      return el.classList.contains(name);
+    }
+    const current = typeof el.getAttribute === "function"
+      ? el.getAttribute("class")
+      : (el.attrs instanceof Map ? el.attrs.get("class") : null) || el.cls || "";
+    return String(current || "").split(/\s+/).includes(name);
   } catch (error) {
     return false;
   }
 }
 
-function dayStripMountPathForState(state) {
+function dayStripPlanHostIsConnected(el) {
   try {
-    const info = state && typeof state.field === "function"
-      ? state.field(editorInfoField)
-      : null;
-    const path = info && info.file && typeof info.file.path === "string"
-      ? info.file.path
-      : "";
-    return path || null;
+    if (!el) return false;
+    if (typeof el.isConnected === "boolean") return el.isConnected;
+    return true;
   } catch (error) {
-    return null;
-  }
-}
-
-function dayStripMountLiveForState(state) {
-  try {
-    return Boolean(
-      state && typeof state.field === "function" &&
-      state.field(editorLivePreviewField) === true,
-    );
-  } catch (error) {
-    return false;
-  }
-}
-
-function dayStripMountDecorationEnd(decorations) {
-  try {
-    if (!decorations || typeof decorations.iter !== "function") return null;
-    const cursor = decorations.iter();
-    let end = null;
-    let guard = 0;
-    while (cursor && cursor.value && guard < 10000) {
-      guard += 1;
-      end = cursor.from;
-      cursor.next();
-    }
-    return end;
-  } catch (error) {
-    return null;
-  }
-}
-
-function dayStripMountIsExcludedView(view) {
-  try {
-    const dom = view && view.dom;
-    if (!dom || typeof dom.closest !== "function") return false;
-    return Boolean(
-      dom.closest(".hover-popover, .markdown-embed, .canvas-node, .canvas-node-content"),
-    );
-  } catch (error) {
-    return false;
-  }
-}
-
-class DayStripWidget extends WidgetType {
-  constructor(plugin, path, day) {
-    super();
-    this.plugin = plugin;
-    this.path = path;
-    this.day = day;
-    this.record = null;
-  }
-
-  eq(other) {
-    const same = Boolean(
-      other instanceof DayStripWidget &&
-      other.path === this.path &&
-      other.day === this.day,
-    );
-    if (same) this.record = other.record;
-    return same;
-  }
-
-  // The two-line strip budget (16 px base): 48 px on one fact row.
-  // strip-home deletes this mount.
-  get estimatedHeight() {
-    return 48;
-  }
-
-  ignoreEvent() {
     return true;
   }
+}
 
-  toDOM(view) {
-    let doc = null;
-    try {
-      doc = view && view.dom && view.dom.ownerDocument
-        ? view.dom.ownerDocument
-        : typeof document !== "undefined"
-          ? document
-          : null;
-    } catch (error) {
-      doc = null;
-    }
-    let host = null;
-    try {
-      host = doc && typeof doc.createElement === "function"
-        ? doc.createElement("div")
-        : null;
-    } catch (error) {
-      host = null;
-    }
-    if (!host) return host;
-    try {
-      host.className = "bob-day-strip-live-host";
-    } catch (error) {
-      // Class assignment is cosmetic.
-    }
-    if (dayStripMountIsExcludedView(view)) {
+function dayStripPlanHostExcluded(el) {
+  try {
+    if (!el) return false;
+    if (typeof el.closest === "function") {
       try {
-        host.hidden = true;
-        host.setAttribute("aria-hidden", "true");
+        if (el.closest(".hover-popover, .markdown-embed, .canvas-node")) return true;
       } catch (error) {
-        // A hidden empty host is the safest fallback in unsupported DOMs.
+        // Fall through to a truthy closest() (test fakes).
       }
-      return host;
-    }
-    try {
-      const record = {
-        el: host,
-        day: this.day,
-        path: this.path,
-        kind: "live",
-        editorView: view || null,
-        observer: null,
-        visible: true,
-      };
-      this.record = record;
-      this.plugin.dayStripViewsStore().add(record);
-      this.plugin.dayStripObserve(record);
-      // The synchronous paint uses the shared cache and never spawns.
-      this.plugin.dayStripPaint(record);
-      // Any required fetch is still behind the registry's visibility,
-      // dirty, and aged gates.
-      this.plugin.dayStripCheck(record);
-    } catch (error) {
-      // A failing strip never breaks the editor.
-    }
-    return host;
-  }
-
-  destroy() {
-    try {
-      if (this.record && typeof this.plugin.dayStripReleaseRecord === "function") {
-        this.plugin.dayStripReleaseRecord(this.record);
+      try {
+        const found = el.closest();
+        if (found) return true;
+      } catch (error) {
+        // closest() without args is a test-fake probe only.
       }
-    } catch (error) {
-      // Widget cleanup is best-effort.
     }
-    this.record = null;
+    return false;
+  } catch (error) {
+    return false;
   }
 }
 
-class BobLedgerToolsDayStripMountMixin {
-  setupDayStripMount() {
+function dayStripPlanHostRemoveNode(node) {
+  try {
+    if (!node) return;
+    if (typeof node.remove === "function") {
+      node.remove();
+      return;
+    }
+    const parent = node.parentNode;
+    if (parent && typeof parent.removeChild === "function") {
+      parent.removeChild(node);
+      return;
+    }
+    if (parent && Array.isArray(parent.children)) {
+      const index = parent.children.indexOf(node);
+      if (index >= 0) parent.children.splice(index, 1);
+      node.parentNode = null;
+    }
+  } catch (error) {
+    // Removal is best-effort.
+  }
+}
+
+class BobLedgerToolsDayStripPlanHostMixin {
+  setupDayStripPlanHost() {
     try {
       if (typeof this.dayStripSessionEnabled !== "boolean") {
         this.dayStripSessionEnabled = true;
       }
-      if (this.dayStripMountSetup === true) return;
-      this.dayStripMountSetup = true;
+      if (this.dayStripPlanHostSetup === true) return;
+      this.dayStripPlanHostSetup = true;
       this.dayStripConfigLastEnabled = this.dayStripConfigEnabled();
       if (typeof this.addCommand === "function") {
         this.addCommand({
           id: "toggle-day-stats",
           name: "Toggle Day stats",
-          callback: () => this.toggleDayStripMount(),
+          callback: () => this.toggleDayStripPlanHost(),
         });
-      }
-      const extension = this.createDayStripMountExtension();
-      if (extension && typeof this.registerEditorExtension === "function") {
-        this.registerEditorExtension(extension);
       }
       try {
         if (
@@ -32758,7 +32667,7 @@ class BobLedgerToolsDayStripMountMixin {
           );
         }
       } catch (error) {
-        // Config polling is best-effort; editor transactions still read the key.
+        // Config polling is best-effort.
       }
     } catch (error) {
       // Setup never breaks plugin startup.
@@ -32774,8 +32683,7 @@ class BobLedgerToolsDayStripMountMixin {
   }
 
   // The last `stats.day_strip` value read at setup, by the 60 s poll, or
-  // before a strip re-check cycle. Editor transactions use this cached
-  // value and never read the config file.
+  // before a strip re-check cycle. Renders never read the config file.
   dayStripConfigCached() {
     if (typeof this.dayStripConfigLastEnabled !== "boolean") {
       this.dayStripConfigLastEnabled = this.dayStripConfigEnabled();
@@ -32788,162 +32696,18 @@ class BobLedgerToolsDayStripMountMixin {
       const enabled = this.dayStripConfigEnabled();
       if (enabled === this.dayStripConfigLastEnabled) return false;
       this.dayStripConfigLastEnabled = enabled;
-      this.refreshDayStripMountEditors();
+      this.refreshDayStripPlanHosts();
       return true;
     } catch (error) {
       return false;
     }
   }
 
-  createDayStripMountExtension() {
-    try {
-      if (
-        !StateField ||
-        typeof StateField.define !== "function" ||
-        !Decoration ||
-        typeof Decoration.widget !== "function" ||
-        typeof Decoration.set !== "function" ||
-        !WidgetType ||
-        !EditorView ||
-        !EditorView.decorations ||
-        typeof EditorView.decorations.from !== "function" ||
-        !editorInfoField ||
-        !editorLivePreviewField
-      ) {
-        return null;
-      }
-      if (this.dayStripMountField) return this.dayStripMountField;
-      const plugin = this;
-      this.dayStripMountField = StateField.define({
-        create(state) {
-          return plugin.dayStripMountFieldValue(null, state, null, false);
-        },
-        update(value, transaction) {
-          return plugin.dayStripMountFieldUpdate(value, transaction);
-        },
-        // The field value carries identity beside its decorations; the
-        // facet must receive only the DecorationSet, or CodeMirror throws
-        // while building the editor and Obsidian fails to open the note.
-        provide: (field) =>
-          EditorView.decorations.from(field, (value) =>
-            value && value.decorations ? value.decorations : Decoration.none,
-          ),
-      });
-      return this.dayStripMountField;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  dayStripMountFieldValue(previous, state, mapped, docChanged) {
-    const doc = state && state.doc ? state.doc : null;
-    const path = dayStripMountPathForState(state);
-    const day = path ? dayStripDayForPath(path) : null;
-    let active = false;
-    try {
-      const localToday = this.dayStripLocalNow();
-      active = Boolean(
-        day &&
-        localToday &&
-        day <= localToday &&
-        dayStripMountLiveForState(state) &&
-        this.dayStripCanSpawn() &&
-        this.dayStripSessionEnabled !== false &&
-        this.dayStripConfigCached() &&
-        !dayStripMountOwnFence(doc, day),
-      );
-    } catch (error) {
-      active = false;
-    }
-    let decorations = Decoration && Decoration.none ? Decoration.none : null;
-    if (active) {
-      const sameIdentity = Boolean(
-        previous && previous.path === path && previous.day === day,
-      );
-      const oldEnd = dayStripMountDecorationEnd(mapped);
-      if (sameIdentity && oldEnd === (doc ? doc.length : 0)) {
-        decorations = mapped;
-      } else {
-        decorations = this.dayStripMountDecoration(path, day, doc);
-      }
-    }
-    return { path, day, decorations };
-  }
-
-  dayStripMountDecoration(path, day, doc) {
-    try {
-      const widget = new DayStripWidget(this, path, day);
-      const decoration = Decoration.widget({
-        widget,
-        block: true,
-        side: 1,
-      });
-      const position = doc && Number.isInteger(doc.length) ? doc.length : 0;
-      return Decoration.set([decoration.range(position)], true);
-    } catch (error) {
-      return Decoration && Decoration.none ? Decoration.none : null;
-    }
-  }
-
-  dayStripMountFieldUpdate(value, transaction) {
-    try {
-      const tr = transaction && typeof transaction === "object" ? transaction : {};
-      const state = tr.state || null;
-      const startState = tr.startState || null;
-      const docChanged = tr.docChanged === true;
-      const nextPath = dayStripMountPathForState(state);
-      const nextDay = nextPath ? dayStripDayForPath(nextPath) : null;
-      let liveChanged = false;
-      try {
-        liveChanged =
-          dayStripMountLiveForState(startState) !==
-          dayStripMountLiveForState(state);
-      } catch (error) {
-        liveChanged = false;
-      }
-      const pathChanged = !value || value.path !== nextPath || value.day !== nextDay;
-      const refresh = this.dayStripMountHasRefresh(tr);
-      if (!docChanged && !liveChanged && !pathChanged && !refresh) return value;
-      let mapped = value && value.decorations;
-      if (docChanged && mapped && tr.changes && typeof mapped.map === "function") {
-        try {
-          mapped = mapped.map(tr.changes);
-        } catch (error) {
-          mapped = null;
-        }
-      }
-      return this.dayStripMountFieldValue(value, state, mapped, docChanged);
-    } catch (error) {
-      return value || {
-        path: null,
-        day: null,
-        decorations: Decoration && Decoration.none ? Decoration.none : null,
-      };
-    }
-  }
-
-  dayStripMountHasRefresh(transaction) {
-    try {
-      if (!dayStripMountRefresh) return false;
-      const effects = transaction && transaction.effects;
-      const list = Array.isArray(effects) ? effects : effects ? [effects] : [];
-      return list.some((effect) => {
-        try {
-          return effect && typeof effect.is === "function" && effect.is(dayStripMountRefresh);
-        } catch (error) {
-          return false;
-        }
-      });
-    } catch (error) {
-      return false;
-    }
-  }
-
-  toggleDayStripMount() {
+  toggleDayStripPlanHost() {
     try {
       this.dayStripSessionEnabled = this.dayStripSessionEnabled === false;
       const enabled = this.dayStripSessionEnabled;
-      this.refreshDayStripMountEditors();
+      this.refreshDayStripPlanHosts();
       try {
         new Notice(enabled ? "Day stats on" : "Day stats off");
       } catch (error) {
@@ -32955,33 +32719,455 @@ class BobLedgerToolsDayStripMountMixin {
     }
   }
 
-  refreshDayStripMountEditors() {
+  dayStripPlanHostViewFor(el) {
     try {
-      const refresh = ensureDayStripMountRefresh();
-      const workspace = this.app && this.app.workspace;
-      if (
-        !refresh ||
-        !workspace ||
-        typeof workspace.getLeavesOfType !== "function"
-      ) {
+      if (!el || !(this.planBlockViews instanceof Set)) return null;
+      for (const view of this.planBlockViews) {
+        if (view && view.el === el) return view;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Idempotent attach and detach for one plan-block view
+  // `{ el, sourcePath }`, following the Where-it-renders conditions.
+  dayStripSyncPlanHost(view) {
+    try {
+      const el = view && view.el ? view.el : null;
+      const sourcePath = view && typeof view.sourcePath === "string" ? view.sourcePath : "";
+      const detach = () => {
+        try {
+          this.dayStripReleasePlanHost(view);
+        } catch (error) {
+          // Detach is best-effort.
+        }
+      };
+      if (!el) {
         return;
       }
-      const leaves = workspace.getLeavesOfType("markdown") || [];
-      for (const leaf of leaves) {
+      let day = null;
+      try {
+        day = dayStripDayForPath(sourcePath);
+      } catch (error) {
+        day = null;
+      }
+      let localToday = "";
+      try {
+        localToday = this.dayStripLocalNow();
+      } catch (error) {
+        localToday = "";
+      }
+      const shouldHost = Boolean(
+        day &&
+        localToday &&
+        day <= localToday &&
+        this.dayStripCanSpawn() &&
+        this.dayStripSessionEnabled !== false &&
+        this.dayStripConfigCached(),
+      );
+      if (!shouldHost) {
+        detach();
+        return;
+      }
+      if (dayStripPlanHostIsConnected(el) && dayStripPlanHostExcluded(el)) {
+        detach();
+        return;
+      }
+      let existing = view.dayStripRecord || null;
+      try {
+        if (existing && !(this.dayStripViewsStore().has(existing))) {
+          existing = null;
+          view.dayStripRecord = null;
+          view.dayStripHost = null;
+        }
+      } catch (error) {
+        existing = view.dayStripRecord || null;
+      }
+      if (existing && existing.el && existing.el.parentNode !== el) {
+        // The plan repaint must never detach the host; a host found
+        // outside its block is stale.
         try {
-          const cm =
-            leaf && leaf.view && leaf.view.editor
-              ? leaf.view.editor.cm
-              : null;
-          if (cm && typeof cm.dispatch === "function") {
-            cm.dispatch({ effects: refresh.of(null) });
+          this.dayStripReleaseRecord(existing);
+        } catch (error) {
+          // Release is best-effort.
+        }
+        existing = null;
+        view.dayStripRecord = null;
+        view.dayStripHost = null;
+      }
+      if (existing) {
+        existing.day = day;
+        existing.path = sourcePath;
+        try {
+          this.dayStripPaint(existing);
+        } catch (error) {
+          // Paint is best-effort.
+        }
+        try {
+          this.dayStripCheck(existing);
+        } catch (error) {
+          // Check is best-effort.
+        }
+        return;
+      }
+      let host = null;
+      try {
+        const doc = statsDocFor(el);
+        host = statsEl(doc, "div", { class: "bob-day-strip-plan-host" });
+        if (!host && doc && typeof doc.createElement === "function") {
+          host = doc.createElement("div");
+        }
+      } catch (error) {
+        host = null;
+      }
+      if (!host) {
+        return;
+      }
+      try {
+        if (typeof el.appendChild === "function") {
+          el.appendChild(host);
+        } else if (typeof el.createDiv === "function") {
+          const placed = el.createDiv({ cls: "bob-day-strip-plan-host" });
+          host = placed || host;
+          if (placed !== host && host.parentNode !== el && typeof el.appendChild === "function") {
+            el.appendChild(host);
+          }
+        } else if (Array.isArray(el.children)) {
+          host.parentNode = el;
+          el.children.push(host);
+        } else {
+          return;
+        }
+      } catch (error) {
+        return;
+      }
+      dayStripPlanHostAddClass(el, "bob-plan-has-day-strip");
+      const record = {
+        el: host,
+        day,
+        path: sourcePath,
+        kind: "plan",
+        observer: null,
+        visible: true,
+        planView: view,
+      };
+      try {
+        this.dayStripViewsStore().add(record);
+      } catch (error) {
+        // Store init is best-effort.
+      }
+      view.dayStripHost = host;
+      view.dayStripRecord = record;
+      try {
+        this.dayStripObservePlanHost(record, view);
+      } catch (error) {
+        // Observation is best-effort.
+      }
+      try {
+        this.dayStripPaint(record);
+      } catch (error) {
+        // Paint is best-effort.
+      }
+      try {
+        this.dayStripCheck(record);
+      } catch (error) {
+        // Check is best-effort.
+      }
+    } catch (error) {
+      // Sync never breaks the plan block.
+    }
+  }
+
+  // Observe a plan host: the shared observer drives visibility, and the
+  // first callback re-checks the popover/embed/canvas exclusion because
+  // processors can receive detached elements.
+  dayStripObservePlanHost(record, view) {
+    try {
+      if (typeof this.dayStripObserve === "function") {
+        const before = record.observer;
+        this.dayStripObserve(record);
+        // Wrap the first callback so an exclusion discovered after
+        // attach stands the host down.
+        try {
+          const observer = record.observer;
+          if (observer && observer !== before && typeof observer.trigger !== "function") {
+            // Real IntersectionObserver: re-check on the next frame via
+            // the record's visibility path (dayStripCheck detaches).
+            record.planExclusionArmed = true;
+          } else if (observer && typeof observer.trigger === "function") {
+            const originalTrigger = observer.trigger.bind(observer);
+            let armed = true;
+            observer.trigger = (isIntersecting) => {
+              try {
+                if (armed) {
+                  armed = false;
+                  const blockEl = (view && view.el) || null;
+                  if (blockEl && dayStripPlanHostExcluded(blockEl)) {
+                    try {
+                      this.dayStripReleasePlanHost(view);
+                    } catch (error) {
+                      // Detach is best-effort.
+                    }
+                    return originalTrigger(isIntersecting);
+                  }
+                }
+              } catch (error) {
+                // Exclusion re-check is best-effort.
+              }
+              return originalTrigger(isIntersecting);
+            };
           }
         } catch (error) {
-          continue;
+          // Wrapping is best-effort.
+        }
+        return;
+      }
+      if (!record) return;
+      record.visible = true;
+    } catch (error) {
+      try {
+        if (record) record.visible = true;
+      } catch (inner) {
+        // Visibility is best-effort.
+      }
+    }
+  }
+
+  refreshDayStripPlanHosts() {
+    try {
+      if (!(this.planBlockViews instanceof Set)) return;
+      for (const view of Array.from(this.planBlockViews)) {
+        try {
+          // A rollover can turn a future block into today (attach) or
+          // today into a past day (repaint as past).
+          if (view && view.dayStripRecord) {
+            view.dayStripRecord.paintedKey = null;
+          }
+          this.dayStripSyncPlanHost(view);
+        } catch (error) {
+          // One stale block never breaks the others.
+        }
+      }
+      try {
+        this.dayStripCheckAll();
+      } catch (error) {
+        // Checking is best-effort.
+      }
+    } catch (error) {
+      // Refresh is best-effort.
+    }
+  }
+
+  dayStripReleasePlanHost(view) {
+    try {
+      const record = view && view.dayStripRecord ? view.dayStripRecord : null;
+      const host = (view && view.dayStripHost) || (record && record.el) || null;
+      const blockEl = view && view.el ? view.el : (host && host.parentNode) || null;
+      if (record) {
+        try {
+          this.dayStripReleaseRecord(record);
+        } catch (error) {
+          // Release is best-effort.
+        }
+      }
+      if (view) {
+        view.dayStripRecord = null;
+        view.dayStripHost = null;
+      }
+      if (host) {
+        // Only remove a host that still belongs to this block.
+        const belongs = !blockEl || host.parentNode === blockEl || (Array.isArray(blockEl.children) && blockEl.children.includes(host));
+        if (belongs) {
+          dayStripPlanHostRemoveNode(host);
+        }
+      }
+      if (blockEl) {
+        // Drop the spacing class when no plan host remains in the block.
+        let remaining = false;
+        try {
+          if (typeof this.dayStripViewsStore === "function") {
+            for (const entry of Array.from(this.dayStripViewsStore())) {
+              if (entry && entry.kind === "plan" && entry.el && entry.el.parentNode === blockEl) {
+                remaining = true;
+                break;
+              }
+            }
+          }
+        } catch (error) {
+          remaining = false;
+        }
+        if (!remaining) {
+          dayStripPlanHostRemoveClass(blockEl, "bob-plan-has-day-strip");
         }
       }
     } catch (error) {
-      // Editor refresh is best-effort.
+      // Release never breaks the plan block.
+    }
+  }
+
+  // Reserve one chip row synchronously so the strip never paints above
+  // the chips and never jumps when they land. Never throws.
+  dayStripPlanHostEnsurePlaceholder(el) {
+    try {
+      if (!el) return null;
+      try {
+        if (Array.isArray(el.children) && el.children.length > 0) return el.children[0];
+      } catch (error) {
+        // Fall through to creation.
+      }
+      if (typeof el.createDiv === "function") {
+        try {
+          return el.createDiv({ cls: "bob-plan" });
+        } catch (error) {
+          // Fall through to the document path.
+        }
+      }
+      try {
+        const doc = statsDocFor(el);
+        const container = statsEl(doc, "div", { class: "bob-plan" });
+        if (!container) return null;
+        if (typeof el.appendChild === "function") {
+          el.appendChild(container);
+        } else if (Array.isArray(el.children)) {
+          container.parentNode = el;
+          el.children.push(container);
+        } else {
+          return null;
+        }
+        return container;
+      } catch (error) {
+        return null;
+      }
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Preserve the strip host across the plan block's repaint: remove every
+  // child except the host and return it (or null when there is none).
+  // Never detaches the host. Never throws.
+  dayStripPlanHostForRepaint(el) {
+    try {
+      if (!el) return null;
+      let host = null;
+      try {
+        const view = this.dayStripPlanHostViewFor(el);
+        host = (view && (view.dayStripHost || (view.dayStripRecord && view.dayStripRecord.el))) || null;
+      } catch (error) {
+        host = null;
+      }
+      if (!host) {
+        try {
+          if (this.dayStripViewsStore instanceof Set) {
+            for (const entry of Array.from(this.dayStripViewsStore())) {
+              if (entry && entry.kind === "plan" && entry.el && entry.el.parentNode === el) {
+                host = entry.el;
+                break;
+              }
+            }
+          } else if (typeof this.dayStripViewsStore === "function") {
+            for (const entry of Array.from(this.dayStripViewsStore())) {
+              if (entry && entry.kind === "plan" && entry.el && entry.el.parentNode === el) {
+                host = entry.el;
+                break;
+              }
+            }
+          }
+        } catch (error) {
+          // Store scan is best-effort.
+        }
+      }
+      if (!host && Array.isArray(el.children)) {
+        for (const child of el.children) {
+          try {
+            const cls = (typeof child.getAttribute === "function" ? child.getAttribute("class") : child.cls) || "";
+            if (String(cls).split(/\s+/).includes("bob-day-strip")) {
+              host = child;
+              break;
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+      if (!host) {
+        try {
+          if (typeof el.empty === "function") el.empty();
+          else if (Array.isArray(el.children)) {
+            for (const child of el.children) child.parentNode = null;
+            el.children.length = 0;
+            el.textContent = "";
+          } else if (typeof el.replaceChildren === "function") el.replaceChildren();
+          else el.textContent = "";
+        } catch (error) {
+          // Empty is best-effort.
+        }
+        return null;
+      }
+      try {
+        const children = Array.isArray(el.children) ? Array.from(el.children) : Array.from(el.childNodes || []);
+        for (const child of children) {
+          if (child === host) continue;
+          try {
+            if (typeof el.removeChild === "function") el.removeChild(child);
+            else dayStripPlanHostRemoveNode(child);
+          } catch (error) {
+            continue;
+          }
+        }
+        // FakeNode-style children arrays need an explicit sweep when
+        // removeChild is unavailable.
+        if (Array.isArray(el.children) && !el.children.includes(host)) {
+          host.parentNode = el;
+          el.children.push(host);
+        }
+        if (Array.isArray(el.children)) {
+          el.children = el.children.filter((child) => child === host);
+          if (el.children[0] !== host) {
+            el.children.unshift(host);
+          }
+        }
+      } catch (error) {
+        // Preservation is best-effort.
+      }
+      return host;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Keep `.bob-plan` as `el.children[0]` with the strip host after it.
+  // Never throws.
+  dayStripPlanHostPlacePlanFirst(el, container, host) {
+    try {
+      if (!el || !container) return;
+      if (!host) return;
+      try {
+        if (typeof el.insertBefore === "function") {
+          el.insertBefore(container, host);
+          return;
+        }
+      } catch (error) {
+        // Fall through to the children-array path.
+      }
+      try {
+        if (Array.isArray(el.children)) {
+          el.children = el.children.filter((child) => child !== container);
+          const index = el.children.indexOf(host);
+          if (index < 0) {
+            el.children.unshift(container);
+          } else {
+            el.children.splice(index, 0, container);
+          }
+          container.parentNode = el;
+        }
+      } catch (error) {
+        // Ordering is best-effort.
+      }
+    } catch (error) {
+      // Ordering never breaks the plan block.
     }
   }
 }
@@ -50875,6 +51061,13 @@ class BobLedgerToolsTodayLocationMixin {
         if (typeof MarkdownRenderChild === "function") {
           child = new MarkdownRenderChild(el);
           child.onunload = () => {
+            try {
+              if (typeof this.dayStripReleasePlanHost === "function") {
+                this.dayStripReleasePlanHost(view);
+              }
+            } catch (error) {
+              // Release is best-effort.
+            }
             if (this.planBlockViews) {
               this.planBlockViews.delete(view);
             }
@@ -50889,6 +51082,13 @@ class BobLedgerToolsTodayLocationMixin {
       if (!child) {
         child = {
           unload: () => {
+            try {
+              if (typeof this.dayStripReleasePlanHost === "function") {
+                this.dayStripReleasePlanHost(view);
+              }
+            } catch (error) {
+              // Release is best-effort.
+            }
             if (this.planBlockViews) {
               this.planBlockViews.delete(view);
             }
@@ -50904,7 +51104,23 @@ class BobLedgerToolsTodayLocationMixin {
         // Older hosts may reject the child; the Set is cleared on unload.
       }
     }
+    // Reserve one chip row synchronously so the strip never paints above
+    // the chips and never jumps when they land.
+    try {
+      if (typeof this.dayStripPlanHostEnsurePlaceholder === "function") {
+        this.dayStripPlanHostEnsurePlaceholder(el);
+      }
+    } catch (error) {
+      // Placeholder is best-effort.
+    }
     this.paintPlanBlock(el, sourcePath);
+    try {
+      if (typeof this.dayStripSyncPlanHost === "function") {
+        this.dayStripSyncPlanHost(view);
+      }
+    } catch (error) {
+      // Plan-host sync is best-effort.
+    }
   }
 
   paintPlanBlock(el, sourcePath) {
@@ -50919,7 +51135,7 @@ class BobLedgerToolsTodayLocationMixin {
         if (this.planPaintGens.get(el) !== paintGen) {
           return;
         }
-        if (!el || typeof el.empty !== "function") {
+        if (!el) {
           return;
         }
         const paintDay = new Date();
@@ -50933,7 +51149,24 @@ class BobLedgerToolsTodayLocationMixin {
         if (this.planPaintGens.get(el) !== paintGen) {
           return;
         }
-        el.empty();
+        // The host node is never detached: remove every child except the
+        // Day strip host, then insert the new `.bob-plan` before it. Its
+        // paint, observer, hover, and keyboard focus survive the repaint.
+        let stripHost = null;
+        try {
+          if (typeof this.dayStripPlanHostForRepaint === "function") {
+            stripHost = this.dayStripPlanHostForRepaint(el);
+          } else if (typeof el.empty === "function") {
+            el.empty();
+          }
+        } catch (error) {
+          stripHost = null;
+          try {
+            if (typeof el.empty === "function") el.empty();
+          } catch (inner) {
+            // Empty is best-effort.
+          }
+        }
         // Gate READY from one validated snapshot; a missing snapshot
         // keeps the legacy ungated count and tooltip.
         let planGate = null;
@@ -50967,6 +51200,13 @@ class BobLedgerToolsTodayLocationMixin {
           hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
         });
         const container = el.createDiv({ cls: "bob-plan" });
+        try {
+          if (stripHost && typeof this.dayStripPlanHostPlacePlanFirst === "function") {
+            this.dayStripPlanHostPlacePlanFirst(el, container, stripHost);
+          }
+        } catch (error) {
+          // Ordering is best-effort; `.bob-plan` stays first when possible.
+        }
         container.setAttribute("role", "status");
         container.setAttribute(
           "aria-label",
@@ -51758,7 +51998,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsPanelsMixin,
   BobLedgerToolsDayStripMixin,
   BobLedgerToolsDayStripFenceMixin,
-  BobLedgerToolsDayStripMountMixin,
+  BobLedgerToolsDayStripPlanHostMixin,
   BobLedgerToolsFreshnessStatusMixin,
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,

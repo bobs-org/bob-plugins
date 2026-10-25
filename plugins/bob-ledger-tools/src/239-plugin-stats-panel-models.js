@@ -97,6 +97,10 @@ function statsPanelHasHomes(metric) {
 function statsPanelHomeLabel(report, dimension, key, part) {
   const catalog = statsPanelHomeCatalog(report);
   const entry = catalog[key] && typeof catalog[key] === "object" ? catalog[key] : {};
+  // Root parents use the bare catalog label, never a project leaf label.
+  if (dimension === "root_parent" && typeof entry.label === "string" && entry.label) {
+    return entry.label;
+  }
   if (dimension === "project" && entry.kind === "area" && typeof entry.project_label === "string") {
     return entry.project_label;
   }

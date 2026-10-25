@@ -1,6 +1,6 @@
-// Day strip plan hosts: the strip lives inside the rendered `bob-plan`
-// block, after the badges, in Live Preview and Reading view. The plan
-// block's repaint never touches the host.
+// Day strip plan hosts: the strip is the first child of the rendered
+// `bob-plan` block, above the badges, in Live Preview and Reading view.
+// The plan block's repaint never touches the host.
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
@@ -344,7 +344,7 @@ test("require time adds no eager StateEffect.define()", () => {
   assert.equal(stateEffectDefines, 0, "this suite defines nothing eagerly");
 });
 
-test("renderPlanBlock appends exactly one host after .bob-plan on canonical days", async () => {
+test("renderPlanBlock puts exactly one host first with .bob-plan after it on canonical days", async () => {
   await withFakeObserver(async () => {
     await withMissingConfig(async () => {
       const plugin = await makePlugin();
@@ -360,10 +360,11 @@ test("renderPlanBlock appends exactly one host after .bob-plan on canonical days
           await settle();
           const container = findPlanContainer(el);
           assert.ok(container, "expected the .bob-plan container");
-          assert.equal(planChildren(el)[0], container, ".bob-plan stays first");
-          assert.equal(planChildren(el).length, 2, "exactly one host after .bob-plan");
-          const host = planChildren(el)[1];
+          assert.equal(planChildren(el).length, 2, "exactly one host with .bob-plan");
+          const host = planChildren(el)[0];
           assert.ok(host, "expected the strip host");
+          assert.ok(host !== container, "host and .bob-plan are distinct nodes");
+          assert.ok(planChildren(el)[1] === container, ".bob-plan sits directly after the host");
           assert.equal(hasStripClass(el), true, "spacing class is set");
           assert.equal(added.length, 1, "unload child is registered");
         }
@@ -421,7 +422,7 @@ test("non-daily, future, dashboard, mobile, spawn-less, and excluded blocks get 
   });
 });
 
-test("paintPlanBlock keeps the same host node and .bob-plan first with no strip repaint or spawn", async () => {
+test("paintPlanBlock keeps the same host node first with .bob-plan after it and no strip repaint or spawn", async () => {
   await withFakeObserver(async () => {
     await withMissingConfig(async () => {
       const plugin = await makePlugin();
@@ -436,8 +437,8 @@ test("paintPlanBlock keeps the same host node and .bob-plan first with no strip 
         const el = fakePlanBlock();
         plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
         await settle(60);
-        const host = planChildren(el)[1];
-        assert.ok(host, "expected the strip host");
+        const host = planChildren(el)[0];
+        assert.ok(host, "expected the strip host first");
         const cached = plugin.dayStripPaintsCached;
         const skeleton = plugin.dayStripPaintsSkeleton;
         const spawnCount = spawns.length;
@@ -450,8 +451,8 @@ test("paintPlanBlock keeps the same host node and .bob-plan first with no strip 
         await settle(60);
         plugin.rerenderPlanBlocks();
         await settle(60);
-        assert.equal(planChildren(el)[1], host, "the host node is never detached");
-        assert.equal(planChildren(el)[0], findPlanContainer(el), ".bob-plan stays first");
+        assert.ok(planChildren(el)[0] === host, "the host node stays first and is never detached");
+        assert.ok(planChildren(el)[1] === findPlanContainer(el), ".bob-plan sits directly after the host");
         assert.ok(!el.removed.includes(host), "the host is never removed");
         assert.ok(!el.inserted.includes(host) || el.inserted.filter((node) => node === host).length === 1, "the host is never re-inserted");
         assert.equal(plugin.dayStripPaintsCached, cached, "no strip repaint on plan repaint");
@@ -549,8 +550,8 @@ test("rollover attaches future blocks and repaints today as a past day", async (
         plugin.dayStripHandleRollover();
         await settle(60);
         assert.equal(planChildren(el).length, 2, "future-to-today gains its strip");
-        const host = planChildren(el)[1];
-        assert.ok(host, "expected the rolled-over host");
+        const host = planChildren(el)[0];
+        assert.ok(host, "expected the rolled-over host first");
       } finally {
         plugin.onunload();
       }
@@ -751,7 +752,8 @@ test("detached excluded blocks get no host; detached ordinary blocks attach sync
         plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
         fixDetachedSubtree(container);
         await settle();
-        assert.equal(planChildren(el)[0], findPlanContainer(el), ".bob-plan stays first");
+        assert.ok(planChildren(el)[0] !== findPlanContainer(el), "host comes before .bob-plan");
+        assert.ok(planChildren(el)[1] === findPlanContainer(el), ".bob-plan sits directly after the host");
         assert.equal(planChildren(el).length, 2, "detached ordinary block attaches its host synchronously");
         assert.equal(hasStripClass(el), true, "detached host sets the spacing class");
         const [record] = Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan" && entry.planView && entry.planView.el === el);
@@ -763,7 +765,7 @@ test("detached excluded blocks get no host; detached ordinary blocks attach sync
         observers[observers.length - 1].trigger(true);
         await settle(60);
         assert.equal(spawns.length, coldBefore + 1, "first true callback after attach fetches once");
-        assert.ok(planChildren(el)[1].querySelector(".bob-day-strip-state-ready"), "attached host reaches ready");
+        assert.ok(planChildren(el)[0].querySelector(".bob-day-strip-state-ready"), "attached host reaches ready");
       } finally {
         plugin.onunload();
       }
@@ -793,7 +795,7 @@ test("no-observer fallback attaches detached, fetches on check after connect, re
         assert.ok(record, "fallback registers a connected host");
         assert.equal(record.visible, true, "connected fallback is visible");
         assert.equal(spawns.length, before, "fresh cache needs no refetch");
-        assert.match(planChildren(el)[1].textContent, /Worked/, "fallback paints from cache");
+        assert.match(planChildren(el)[0].textContent, /Worked/, "fallback paints from cache");
         // Detached fallback attaches and paints without spawning.
         const { container, el: detached } = makeDetachedObsidianBlock();
         plugin.renderPlanBlock(detached, { sourcePath, addChild: () => {} });
@@ -944,6 +946,7 @@ test("reading-view order attaches detached, virtualized stays quiet until attach
         fixDetachedSubtree(container);
         await settle();
         assert.equal(planChildren(el).length, 2, "reading flow attaches detached host synchronously");
+        assert.ok(planChildren(el)[1] === findPlanContainer(el), "reading host sits above the badges");
         const [record] = Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan" && entry.planView && entry.planView.el === el);
         assert.ok(record, "reading host registers a record");
         assert.equal(record.visible, false, "reading host waits for visibility");
@@ -989,8 +992,8 @@ test("today host shows so far HH:MM from the fetch stamp", async () => {
         attachContainer(container, root);
         observers[observers.length - 1].trigger(true);
         await settle(80);
-        const host = planChildren(el)[1];
-        assert.ok(host, "today host is attached");
+        const host = planChildren(el)[0];
+        assert.ok(host, "today host is attached first");
         const [record] = Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan" && entry.planView && entry.planView.el === el);
         assert.ok(record, "today host registers a record");
         const { key } = helpers.statsRequestFor({});
@@ -1046,10 +1049,43 @@ test("failed refresh over a cached report names the HH:MM it shows", async () =>
         const expectedHM = formatHM(aged ? aged.fetchedAt : cached.fetchedAt);
         plugin.dayStripCheckAll();
         await settle(80);
-        const host = planChildren(el)[1];
+        const host = planChildren(el)[0];
         assert.ok(host, "failed host keeps its frame");
         assert.match(host.textContent, /so far \u00b7 \d\d:\d\d \u00b7 refresh failed/, "failed today names so far HH:MM plus refresh failed");
         assert.ok(host.textContent.includes(expectedHM), `failed meta names the shown HH:MM (${expectedHM})`);
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
+});
+
+test("placeholder finds .bob-plan by class and toggle-off restores it first", async () => {
+  await withFakeObserver(async () => {
+    await withMissingConfig(async () => {
+      const plugin = await makePlugin();
+      try {
+        const today = plugin.dayStripLocalNow();
+        const stem = today.replace(/-/g, "");
+        const sourcePath = `${today.slice(0, 4)}/${stem}.md`;
+        const el = fakePlanBlock();
+        // A leading non-plan child must never be mistaken for the badges.
+        const decoy = el.createDiv({ cls: "bob-plan-decoy" });
+        assert.ok(planChildren(el)[0] === decoy, "decoy leads before render");
+        plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
+        await settle();
+        const container = findPlanContainer(el);
+        assert.ok(container, "placeholder still finds the .bob-plan container by class");
+        assert.ok(container !== decoy, "placeholder never returns the decoy by index");
+        assert.ok(planChildren(el)[0] !== container, "host stays first even with a leading decoy");
+        // Toggle off removes the host and leaves .bob-plan behind.
+        plugin.toggleDayStripPlanHost();
+        assert.equal(planChildren(el).filter((child) => child !== container && child !== decoy).length, 0, "toggle off removes the host");
+        assert.ok(planChildren(el).includes(container), "toggle off keeps .bob-plan");
+        plugin.toggleDayStripPlanHost();
+        await settle();
+        assert.ok(planChildren(el)[0] !== container, "toggle on restores the host first");
+        assert.ok(planChildren(el).includes(container), "toggle on keeps .bob-plan");
       } finally {
         plugin.onunload();
       }

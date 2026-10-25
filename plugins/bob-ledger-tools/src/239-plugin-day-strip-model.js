@@ -139,17 +139,46 @@ function dayStripBuildFact(metric, report, day, dateWords) {
 }
 
 function dayStripMix(report, worked, day) {
+  const emptyMix = (extra) => ({
+    segments: [],
+    legend: [],
+    overflow: [],
+    overflowWide: { count: 0, title: "" },
+    overflowNarrow: { count: 0, title: "" },
+    empty: false,
+    omitted: true,
+    dimension: null,
+    title: "",
+    ...(extra || {}),
+  });
   const omitted = !worked || worked.unit !== "minutes";
-  if (omitted) return { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" };
+  if (omitted) return emptyMix();
   const points = dayStripMetricPoints(worked, report);
-  const hasAreaParts = points.some((point) => point && point.parts && point.parts.area && typeof point.parts.area === "object" && Object.keys(point.parts.area).length > 0);
-  if (!hasAreaParts) return { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" };
+  const hasParts = (dimension) => points.some((point) =>
+    point && point.parts && point.parts[dimension] &&
+    typeof point.parts[dimension] === "object" &&
+    Object.keys(point.parts[dimension]).length > 0);
+  const hasRootParts = hasParts("root_parent");
+  const hasAreaParts = hasParts("area");
+  if (!hasRootParts && !hasAreaParts) return emptyMix();
+  // Prefer the root_parent dimension; an older bob without it falls
+  // back to area and the copy says so honestly.
+  const dimension = hasRootParts ? "root_parent" : "area";
   const point = points.find((candidate) => candidate && candidate.date === day) || null;
-  const rawAreas = point && point.parts && point.parts.area && typeof point.parts.area === "object" ? point.parts.area : null;
-  const rows = rawAreas ? statsPanelHomeRows(worked, report, "area", point) : [];
+  const raw = point && point.parts && point.parts[dimension] && typeof point.parts[dimension] === "object" ? point.parts[dimension] : null;
+  if (!raw) {
+    return emptyMix({
+      empty: Boolean(point && point.value === 0 && point.quality === "ok"),
+      omitted: false,
+      dimension,
+      title: dimension === "root_parent" ? "Time by root parent" : "Time by area",
+      point,
+    });
+  }
+  const rows = statsPanelHomeRows(worked, report, dimension, point);
   const ordered = statsPanelHomeAreaRows(rows, report);
-  const displays = point && point.parts_display && point.parts_display.area && typeof point.parts_display.area === "object"
-    ? point.parts_display.area
+  const displays = point && point.parts_display && point.parts_display[dimension] && typeof point.parts_display[dimension] === "object"
+    ? point.parts_display[dimension]
     : {};
   const segments = ordered.map((row) => ({
     key: row.key,
@@ -159,17 +188,30 @@ function dayStripMix(report, worked, day) {
     hue: statsPanelHomeHue(report, row.key),
     bucket: row.key.startsWith("@"),
   }));
-  const top = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label)).slice(0, 3);
-  const selected = new Set(top.map((segment) => segment.key));
-  const legend = segments.filter((segment) => selected.has(segment.key));
-  const overflow = segments.filter((segment) => !selected.has(segment.key));
+  // Top three by minutes; the legend keeps them in bar order.
+  const byValue = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  const topThree = byValue.slice(0, 3);
+  const topTwo = byValue.slice(0, 2);
+  const topThreeKeys = new Set(topThree.map((segment) => segment.key));
+  const topTwoKeys = new Set(topTwo.map((segment) => segment.key));
+  const rankOf = new Map(byValue.map((segment, index) => [segment.key, index + 1]));
+  const legend = segments
+    .filter((segment) => topThreeKeys.has(segment.key))
+    .map((segment) => ({ ...segment, rank: rankOf.get(segment.key) || 0 }));
+  const overflowList = segments.filter((segment) => !topThreeKeys.has(segment.key));
+  const narrowOverflowList = segments.filter((segment) => !topTwoKeys.has(segment.key));
+  const overflowTitle = (list) => list.map((segment) => segment.label + " " + segment.display).join("\n");
+  const sentence = dimension === "root_parent" ? "Time by root parent" : "Time by area";
   return {
     segments,
     legend,
-    overflow,
+    overflow: overflowList,
+    overflowWide: { count: Math.max(0, segments.length - 3), title: overflowTitle(overflowList) },
+    overflowNarrow: { count: Math.max(0, segments.length - 2), title: overflowTitle(narrowOverflowList) },
     empty: Boolean(point && point.value === 0 && point.quality === "ok"),
     omitted: false,
-    title: ["Time by area", ...segments.map((segment) => segment.label + " " + segment.display)].join("\n"),
+    dimension,
+    title: [sentence, ...segments.map((segment) => segment.label + " " + segment.display)].join("\n"),
     point,
   };
 }
@@ -204,7 +246,8 @@ function dayStripAriaLabel(day, dateWords, provisional, facts, mix) {
   const values = facts.map((fact) => fact.label + " " + fact.display).join(", ");
   let label = "Day stats for " + dateWords.full + (provisional ? ", so far" : "") + (values ? ": " + values + "." : ".");
   if (mix && !mix.omitted && mix.segments.length) {
-    label += " Time by area: " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
+    const sentence = mix.dimension === "area" ? "Time by area" : "Time by root parent";
+    label += " " + sentence + ": " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   } else if (mix && mix.empty) {
     label += " No Pomodoros.";
   }
@@ -217,16 +260,16 @@ function dayStripModel(report, day, context) {
     const safeReport = report && typeof report === "object" ? report : null;
     const dateWords = dayStripDateWords(day);
     if (!dateWords) {
-      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "", stale: false, error: null };
+      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
     }
     const localToday = typeof safeContext.localToday === "string" ? safeContext.localToday : "";
     if (dayStripDateParts(localToday) && day > localToday) {
-      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "", stale: false, error: null };
+      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
     }
     const error = dayStripErrorInfo(safeContext.error);
     if (!safeReport) {
       if (error) {
-        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
+        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
       }
       const facts = DAY_STRIP_METRIC_IDS.map((id) => ({
         id,
@@ -242,7 +285,7 @@ function dayStripModel(report, day, context) {
         value: null,
         provisional: false,
       }));
-      const mix = { segments: [], legend: [], overflow: [], empty: false, omitted: false, skeleton: true, title: "" };
+      const mix = { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "root_parent", title: "Time by root parent" };
       return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
     }
 
@@ -291,7 +334,7 @@ function dayStripModel(report, day, context) {
       asOf: "",
       metaText: "",
       facts: [],
-      mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" },
+      mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" },
       ariaLabel: "Day stats unavailable — bob stats failed.",
       stale: false,
       error: { code: "model-error", title: "bob stats failed", hint: "" },

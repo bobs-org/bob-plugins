@@ -29164,6 +29164,10 @@ function statsPanelHasHomes(metric) {
 function statsPanelHomeLabel(report, dimension, key, part) {
   const catalog = statsPanelHomeCatalog(report);
   const entry = catalog[key] && typeof catalog[key] === "object" ? catalog[key] : {};
+  // Root parents use the bare catalog label, never a project leaf label.
+  if (dimension === "root_parent" && typeof entry.label === "string" && entry.label) {
+    return entry.label;
+  }
   if (dimension === "project" && entry.kind === "area" && typeof entry.project_label === "string") {
     return entry.project_label;
   }
@@ -30857,17 +30861,46 @@ function dayStripBuildFact(metric, report, day, dateWords) {
 }
 
 function dayStripMix(report, worked, day) {
+  const emptyMix = (extra) => ({
+    segments: [],
+    legend: [],
+    overflow: [],
+    overflowWide: { count: 0, title: "" },
+    overflowNarrow: { count: 0, title: "" },
+    empty: false,
+    omitted: true,
+    dimension: null,
+    title: "",
+    ...(extra || {}),
+  });
   const omitted = !worked || worked.unit !== "minutes";
-  if (omitted) return { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" };
+  if (omitted) return emptyMix();
   const points = dayStripMetricPoints(worked, report);
-  const hasAreaParts = points.some((point) => point && point.parts && point.parts.area && typeof point.parts.area === "object" && Object.keys(point.parts.area).length > 0);
-  if (!hasAreaParts) return { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" };
+  const hasParts = (dimension) => points.some((point) =>
+    point && point.parts && point.parts[dimension] &&
+    typeof point.parts[dimension] === "object" &&
+    Object.keys(point.parts[dimension]).length > 0);
+  const hasRootParts = hasParts("root_parent");
+  const hasAreaParts = hasParts("area");
+  if (!hasRootParts && !hasAreaParts) return emptyMix();
+  // Prefer the root_parent dimension; an older bob without it falls
+  // back to area and the copy says so honestly.
+  const dimension = hasRootParts ? "root_parent" : "area";
   const point = points.find((candidate) => candidate && candidate.date === day) || null;
-  const rawAreas = point && point.parts && point.parts.area && typeof point.parts.area === "object" ? point.parts.area : null;
-  const rows = rawAreas ? statsPanelHomeRows(worked, report, "area", point) : [];
+  const raw = point && point.parts && point.parts[dimension] && typeof point.parts[dimension] === "object" ? point.parts[dimension] : null;
+  if (!raw) {
+    return emptyMix({
+      empty: Boolean(point && point.value === 0 && point.quality === "ok"),
+      omitted: false,
+      dimension,
+      title: dimension === "root_parent" ? "Time by root parent" : "Time by area",
+      point,
+    });
+  }
+  const rows = statsPanelHomeRows(worked, report, dimension, point);
   const ordered = statsPanelHomeAreaRows(rows, report);
-  const displays = point && point.parts_display && point.parts_display.area && typeof point.parts_display.area === "object"
-    ? point.parts_display.area
+  const displays = point && point.parts_display && point.parts_display[dimension] && typeof point.parts_display[dimension] === "object"
+    ? point.parts_display[dimension]
     : {};
   const segments = ordered.map((row) => ({
     key: row.key,
@@ -30877,17 +30910,30 @@ function dayStripMix(report, worked, day) {
     hue: statsPanelHomeHue(report, row.key),
     bucket: row.key.startsWith("@"),
   }));
-  const top = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label)).slice(0, 3);
-  const selected = new Set(top.map((segment) => segment.key));
-  const legend = segments.filter((segment) => selected.has(segment.key));
-  const overflow = segments.filter((segment) => !selected.has(segment.key));
+  // Top three by minutes; the legend keeps them in bar order.
+  const byValue = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  const topThree = byValue.slice(0, 3);
+  const topTwo = byValue.slice(0, 2);
+  const topThreeKeys = new Set(topThree.map((segment) => segment.key));
+  const topTwoKeys = new Set(topTwo.map((segment) => segment.key));
+  const rankOf = new Map(byValue.map((segment, index) => [segment.key, index + 1]));
+  const legend = segments
+    .filter((segment) => topThreeKeys.has(segment.key))
+    .map((segment) => ({ ...segment, rank: rankOf.get(segment.key) || 0 }));
+  const overflowList = segments.filter((segment) => !topThreeKeys.has(segment.key));
+  const narrowOverflowList = segments.filter((segment) => !topTwoKeys.has(segment.key));
+  const overflowTitle = (list) => list.map((segment) => segment.label + " " + segment.display).join("\n");
+  const sentence = dimension === "root_parent" ? "Time by root parent" : "Time by area";
   return {
     segments,
     legend,
-    overflow,
+    overflow: overflowList,
+    overflowWide: { count: Math.max(0, segments.length - 3), title: overflowTitle(overflowList) },
+    overflowNarrow: { count: Math.max(0, segments.length - 2), title: overflowTitle(narrowOverflowList) },
     empty: Boolean(point && point.value === 0 && point.quality === "ok"),
     omitted: false,
-    title: ["Time by area", ...segments.map((segment) => segment.label + " " + segment.display)].join("\n"),
+    dimension,
+    title: [sentence, ...segments.map((segment) => segment.label + " " + segment.display)].join("\n"),
     point,
   };
 }
@@ -30922,7 +30968,8 @@ function dayStripAriaLabel(day, dateWords, provisional, facts, mix) {
   const values = facts.map((fact) => fact.label + " " + fact.display).join(", ");
   let label = "Day stats for " + dateWords.full + (provisional ? ", so far" : "") + (values ? ": " + values + "." : ".");
   if (mix && !mix.omitted && mix.segments.length) {
-    label += " Time by area: " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
+    const sentence = mix.dimension === "area" ? "Time by area" : "Time by root parent";
+    label += " " + sentence + ": " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   } else if (mix && mix.empty) {
     label += " No Pomodoros.";
   }
@@ -30935,16 +30982,16 @@ function dayStripModel(report, day, context) {
     const safeReport = report && typeof report === "object" ? report : null;
     const dateWords = dayStripDateWords(day);
     if (!dateWords) {
-      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "", stale: false, error: null };
+      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
     }
     const localToday = typeof safeContext.localToday === "string" ? safeContext.localToday : "";
     if (dayStripDateParts(localToday) && day > localToday) {
-      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "", stale: false, error: null };
+      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
     }
     const error = dayStripErrorInfo(safeContext.error);
     if (!safeReport) {
       if (error) {
-        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
+        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
       }
       const facts = DAY_STRIP_METRIC_IDS.map((id) => ({
         id,
@@ -30960,7 +31007,7 @@ function dayStripModel(report, day, context) {
         value: null,
         provisional: false,
       }));
-      const mix = { segments: [], legend: [], overflow: [], empty: false, omitted: false, skeleton: true, title: "" };
+      const mix = { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "root_parent", title: "Time by root parent" };
       return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
     }
 
@@ -31009,7 +31056,7 @@ function dayStripModel(report, day, context) {
       asOf: "",
       metaText: "",
       facts: [],
-      mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" },
+      mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" },
       ariaLabel: "Day stats unavailable — bob stats failed.",
       stale: false,
       error: { code: "model-error", title: "bob stats failed", hint: "" },
@@ -31063,6 +31110,28 @@ function dayStripActivate(node, action) {
   });
 }
 
+// Mouse-only activation for the full-width bar: a second target for the
+// legend's action with no keyboard stop. Never a <button>.
+function dayStripBarActivate(node, action) {
+  if (!node || typeof node.addEventListener !== "function") return;
+  const invoke = (event, forcedNewLeaf) => {
+    const newLeaf = forcedNewLeaf || Boolean(event && (event.ctrlKey || event.metaKey || event.button === 1));
+    if (typeof action === "function") action(newLeaf);
+  };
+  node.addEventListener("mousedown", (event) => {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  });
+  node.addEventListener("click", (event) => {
+    invoke(event, false);
+  });
+  node.addEventListener("auxclick", (event) => {
+    if (event && event.button === 1) {
+      if (event.preventDefault) event.preventDefault();
+      invoke(event, true);
+    }
+  });
+}
+
 function dayStripRenderFact(doc, fact, model, handlers) {
   const skeleton = model.state === "skeleton";
   const node = dayStripLink(
@@ -31093,8 +31162,9 @@ function dayStripRenderFact(doc, fact, model, handlers) {
 }
 
 function dayStripLegendItem(doc, entry) {
+  const rank = entry && typeof entry.rank === "number" ? entry.rank : 0;
   const item = statsEl(doc, "span", {
-    class: "bob-day-strip-legend-item",
+    class: "bob-day-strip-legend-item" + (rank === 3 ? " bob-day-strip-legend-rank-3" : ""),
     title: entry ? entry.label + " " + entry.display : null,
   });
   const dot = statsEl(doc, "span", {
@@ -31108,33 +31178,27 @@ function dayStripLegendItem(doc, entry) {
   return item;
 }
 
-// Fixed slots (8 bar segments, 3 legend items) keep the skeleton and the
-// loaded strip structurally identical; missing slots stay hidden.
+function dayStripOverflowCounter(doc, className, info, skeleton) {
+  const count = info && typeof info.count === "number" ? info.count : 0;
+  const node = statsEl(doc, "span", {
+    class: "bob-day-strip-overflow " + className,
+    title: info && info.title ? info.title : null,
+  }, count > 0 && !skeleton ? "+" + count : "+N");
+  if (!count || skeleton) node.setAttribute("hidden", "true");
+  return node;
+}
+
+// The legend link: up to three root entries in bar order plus both
+// overflow counters (the container query picks the visible one).
+// Fixed slots keep the skeleton and the loaded strip identical.
 function dayStripRenderMix(doc, model, handlers) {
   const mix = model.mix || { segments: [], legend: [], overflow: [], omitted: true };
   const skeleton = model.state === "skeleton";
-  const node = dayStripLink(doc, "bob-day-strip-mix", "Time by area", mix.title);
-  const bar = statsEl(doc, "span", {
-    class: "bob-day-strip-mix-bar",
-    "aria-hidden": "true",
-  });
-  const segments = skeleton ? [] : Array.isArray(mix.segments) ? mix.segments : [];
-  const slots = Math.max(8, segments.length);
-  for (let index = 0; index < slots; index += 1) {
-    const segment = segments[index];
-    const part = statsEl(doc, "span", {
-      class: "bob-day-strip-mix-segment" + (segment ? " bob-day-strip-hue-" + segment.hue : "") + (segment && segment.bucket ? " bob-day-strip-mix-bucket" : ""),
-      title: segment ? segment.label + " " + segment.display : null,
-    });
-    if (part && part.style && segment) part.style.flexGrow = String(Math.max(0, Number(segment.value) || 0));
-    if (!segment) part.setAttribute("hidden", "true");
-    dayStripAppend(bar, part);
-  }
-  dayStripAppend(node, bar);
-
+  const sentence = mix.dimension === "area" ? "Time by area" : "Time by root parent";
+  const node = dayStripLink(doc, "bob-day-strip-mix", sentence, mix.title);
   const legend = statsEl(doc, "span", { class: "bob-day-strip-legend" });
   const entries = skeleton
-    ? [{ label: "Area", display: "0m" }, { label: "Area", display: "0m" }, { label: "Area", display: "0m" }]
+    ? [{ label: "Area", display: "0m", rank: 1 }, { label: "Area", display: "0m", rank: 2 }, { label: "Area", display: "0m", rank: 3 }]
     : Array.isArray(mix.legend) ? mix.legend : [];
   for (let index = 0; index < 3; index += 1) {
     dayStripAppend(legend, dayStripLegendItem(doc, skeleton ? entries[index] : entries[index] || null));
@@ -31142,14 +31206,40 @@ function dayStripRenderMix(doc, model, handlers) {
   const noPomodoros = statsEl(doc, "span", { class: "bob-day-strip-no-pomodoros" }, "no Pomodoros");
   if (!mix.empty && !skeleton) noPomodoros.setAttribute("hidden", "true");
   dayStripAppend(legend, noPomodoros);
-  const overflow = statsEl(doc, "span", {
-    class: "bob-day-strip-overflow",
-    title: mix.overflow && mix.overflow.length ? mix.overflow.map((segment) => segment.label + " " + segment.display).join("\n") : null,
-  }, mix.overflow && mix.overflow.length && !skeleton ? "+" + mix.overflow.length : "+N");
-  if (!mix.overflow || !mix.overflow.length || skeleton) overflow.setAttribute("hidden", "true");
-  dayStripAppend(legend, overflow);
+  const wide = mix.overflowWide || { count: Array.isArray(mix.overflow) ? mix.overflow.length : 0, title: "" };
+  const narrowInfo = mix.overflowNarrow || { count: 0, title: "" };
+  dayStripAppend(legend, dayStripOverflowCounter(doc, "bob-day-strip-overflow-wide", wide, skeleton));
+  dayStripAppend(legend, dayStripOverflowCounter(doc, "bob-day-strip-overflow-narrow", narrowInfo, skeleton));
   dayStripAppend(node, legend);
   dayStripActivate(node, (newLeaf) => {
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel: "homes", newLeaf });
+  });
+  return node;
+}
+
+// The full-width bar: one segment per root, the strip's last line and a
+// mouse-only second target for the legend's action.
+function dayStripRenderBar(doc, model, handlers) {
+  const mix = model.mix || { segments: [] };
+  const skeleton = model.state === "skeleton";
+  const node = statsEl(doc, "div", {
+    class: "bob-day-strip-bar",
+    "aria-hidden": "true",
+  });
+  if (!node) return null;
+  const segments = skeleton ? [] : Array.isArray(mix.segments) ? mix.segments : [];
+  const slots = Math.max(8, segments.length);
+  for (let index = 0; index < slots; index += 1) {
+    const segment = segments[index];
+    const part = statsEl(doc, "span", {
+      class: "bob-day-strip-bar-segment" + (segment ? " bob-day-strip-hue-" + segment.hue : "") + (segment && segment.bucket ? " bob-day-strip-bar-bucket" : ""),
+      title: segment ? segment.label + " " + segment.display : null,
+    });
+    if (part && part.style && segment) part.style.flexGrow = String(Math.max(0, Number(segment.value) || 0));
+    if (!segment) part.setAttribute("hidden", "true");
+    dayStripAppend(node, part);
+  }
+  dayStripBarActivate(node, (newLeaf) => {
     if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel: "homes", newLeaf });
   });
   return node;
@@ -31227,6 +31317,11 @@ function paintDayStrip(el, model, handlers) {
     dayStripAppend(el, facts);
     const mixRow = dayStripRenderMixRow(doc, safeModel, safeHandlers);
     if (mixRow) dayStripAppend(el, mixRow);
+    const showMix = safeModel.state === "skeleton" || (safeModel.mix && !safeModel.mix.omitted);
+    if (showMix) {
+      const bar = dayStripRenderBar(doc, safeModel, safeHandlers);
+      if (bar) dayStripAppend(el, bar);
+    }
     return el;
   } catch (error) {
     // A failed paint must not escape into Obsidian's render lifecycle.
@@ -32600,9 +32695,9 @@ class BobLedgerToolsDayStripFenceMixin {
   }
 }
 // ---- src/239-plugin-day-strip-plan-host.js ----
-// Day strip plan host: host the strip inside the rendered `bob-plan`
-// block of canonical daily notes, after the badges, in Live Preview and
-// Reading view. Replaces the deleted CodeMirror end-of-note mount.
+// Day strip plan host: host the strip as the first child of the rendered
+// `bob-plan` block of canonical daily notes, above the badges, in Live
+// Preview and Reading view. Replaces the deleted CodeMirror end-of-note mount.
 function dayStripPlanHostAddClass(el, name) {
   try {
     if (!el || !name) return;
@@ -32967,18 +33062,50 @@ class BobLedgerToolsDayStripPlanHostMixin {
         return;
       }
       try {
-        if (typeof el.appendChild === "function") {
-          el.appendChild(host);
-        } else if (typeof el.createDiv === "function") {
+        let attached = false;
+        try {
+          if (typeof el.insertBefore === "function") {
+            const first = el.firstChild || (Array.isArray(el.children) ? el.children[0] : null) || null;
+            el.insertBefore(host, first);
+            attached = host.parentNode === el || true;
+          }
+        } catch (error) {
+          attached = false;
+        }
+        if (!attached && typeof el.prepend === "function") {
+          try {
+            el.prepend(host);
+            attached = true;
+          } catch (error) {
+            attached = false;
+          }
+        }
+        if (!attached && typeof el.createDiv === "function" && typeof el.insertBefore !== "function") {
           const placed = el.createDiv({ cls: "bob-day-strip-plan-host" });
           host = placed || host;
           if (placed !== host && host.parentNode !== el && typeof el.appendChild === "function") {
             el.appendChild(host);
           }
-        } else if (Array.isArray(el.children)) {
+          attached = true;
+        }
+        if (!attached && typeof el.appendChild === "function") {
+          // Fake-DOM harnesses without insertBefore: prepend via children array.
+          if (Array.isArray(el.children)) {
+            if (el.children.includes(host)) {
+              el.children = el.children.filter((child) => child !== host);
+            }
+            host.parentNode = el;
+            el.children.unshift(host);
+          } else {
+            el.appendChild(host);
+          }
+        } else if (!attached && Array.isArray(el.children)) {
+          if (el.children.includes(host)) {
+            el.children = el.children.filter((child) => child !== host);
+          }
           host.parentNode = el;
-          el.children.push(host);
-        } else {
+          el.children.unshift(host);
+        } else if (!attached) {
           return;
         }
       } catch (error) {
@@ -33163,13 +33290,30 @@ class BobLedgerToolsDayStripPlanHostMixin {
     }
   }
 
-  // Reserve one chip row synchronously so the strip never paints above
-  // the chips and never jumps when they land. Never throws.
+  // Reserve one chip row synchronously so the badges never jump when
+  // they land. Finds the `.bob-plan` container by class, never by index.
+  // Never throws.
   dayStripPlanHostEnsurePlaceholder(el) {
     try {
       if (!el) return null;
       try {
-        if (Array.isArray(el.children) && el.children.length > 0) return el.children[0];
+        if (el.querySelector && typeof el.querySelector === "function") {
+          const found = el.querySelector(".bob-plan");
+          if (found) return found;
+        }
+      } catch (error) {
+        // Fall through to the children scan.
+      }
+      try {
+        const children = Array.isArray(el.children) ? el.children : (el.childNodes ? Array.from(el.childNodes) : []);
+        for (const child of children) {
+          try {
+            const cls = (typeof child.getAttribute === "function" ? child.getAttribute("class") : child.cls) || "";
+            if (String(cls).split(/\s+/).includes("bob-plan")) return child;
+          } catch (error) {
+            continue;
+          }
+        }
       } catch (error) {
         // Fall through to creation.
       }
@@ -33294,15 +33438,30 @@ class BobLedgerToolsDayStripPlanHostMixin {
     }
   }
 
-  // Keep `.bob-plan` as `el.children[0]` with the strip host after it.
+  // Keep the strip host first with `.bob-plan` directly after it.
   // Never throws.
-  dayStripPlanHostPlacePlanFirst(el, container, host) {
+  dayStripPlanHostPlacePlanAfter(el, container, host) {
     try {
       if (!el || !container) return;
       if (!host) return;
       try {
         if (typeof el.insertBefore === "function") {
-          el.insertBefore(container, host);
+          const next = host.nextSibling || null;
+          // Fake-DOM harnesses may lack nextSibling; fall back to index.
+          if (next || host.parentNode === el) {
+            el.insertBefore(container, next);
+            return;
+          }
+          if (Array.isArray(el.children)) {
+            const hostIndex = el.children.indexOf(host);
+            if (hostIndex >= 0) {
+              el.children = el.children.filter((child) => child !== container);
+              el.children.splice(hostIndex + 1, 0, container);
+              container.parentNode = el;
+              return;
+            }
+          }
+          el.insertBefore(container, next);
           return;
         }
       } catch (error) {
@@ -33313,9 +33472,10 @@ class BobLedgerToolsDayStripPlanHostMixin {
           el.children = el.children.filter((child) => child !== container);
           const index = el.children.indexOf(host);
           if (index < 0) {
-            el.children.unshift(container);
+            el.children.unshift(host);
+            el.children.splice(1, 0, container);
           } else {
-            el.children.splice(index, 0, container);
+            el.children.splice(index + 1, 0, container);
           }
           container.parentNode = el;
         }
@@ -33325,6 +33485,11 @@ class BobLedgerToolsDayStripPlanHostMixin {
     } catch (error) {
       // Ordering never breaks the plan block.
     }
+  }
+
+  // Legacy alias: the host used to sit after the badges.
+  dayStripPlanHostPlacePlanFirst(el, container, host) {
+    return this.dayStripPlanHostPlacePlanAfter(el, container, host);
   }
 }
 // ---- src/240-plugin-freshness-status.js ----
@@ -51264,8 +51429,7 @@ class BobLedgerToolsTodayLocationMixin {
         // Older hosts may reject the child; the Set is cleared on unload.
       }
     }
-    // Reserve one chip row synchronously so the strip never paints above
-    // the chips and never jumps when they land.
+    // Reserve one chip row synchronously so the badges never jump when they land.
     try {
       if (typeof this.dayStripPlanHostEnsurePlaceholder === "function") {
         this.dayStripPlanHostEnsurePlaceholder(el);
@@ -51310,8 +51474,8 @@ class BobLedgerToolsTodayLocationMixin {
           return;
         }
         // The host node is never detached: remove every child except the
-        // Day strip host, then insert the new `.bob-plan` before it. Its
-        // paint, observer, hover, and keyboard focus survive the repaint.
+        // Day strip host, then insert the new `.bob-plan` directly after it.
+        // Its paint, observer, hover, and keyboard focus survive the repaint.
         let stripHost = null;
         try {
           if (typeof this.dayStripPlanHostForRepaint === "function") {
@@ -51361,11 +51525,11 @@ class BobLedgerToolsTodayLocationMixin {
         });
         const container = el.createDiv({ cls: "bob-plan" });
         try {
-          if (stripHost && typeof this.dayStripPlanHostPlacePlanFirst === "function") {
-            this.dayStripPlanHostPlacePlanFirst(el, container, stripHost);
+          if (stripHost && typeof this.dayStripPlanHostPlacePlanAfter === "function") {
+            this.dayStripPlanHostPlacePlanAfter(el, container, stripHost);
           }
         } catch (error) {
-          // Ordering is best-effort; `.bob-plan` stays first when possible.
+          // Ordering is best-effort; the strip host stays first when possible.
         }
         container.setAttribute("role", "status");
         container.setAttribute(

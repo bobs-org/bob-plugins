@@ -44,6 +44,28 @@ function dayStripActivate(node, action) {
   });
 }
 
+// Mouse-only activation for the full-width bar: a second target for the
+// legend's action with no keyboard stop. Never a <button>.
+function dayStripBarActivate(node, action) {
+  if (!node || typeof node.addEventListener !== "function") return;
+  const invoke = (event, forcedNewLeaf) => {
+    const newLeaf = forcedNewLeaf || Boolean(event && (event.ctrlKey || event.metaKey || event.button === 1));
+    if (typeof action === "function") action(newLeaf);
+  };
+  node.addEventListener("mousedown", (event) => {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  });
+  node.addEventListener("click", (event) => {
+    invoke(event, false);
+  });
+  node.addEventListener("auxclick", (event) => {
+    if (event && event.button === 1) {
+      if (event.preventDefault) event.preventDefault();
+      invoke(event, true);
+    }
+  });
+}
+
 function dayStripRenderFact(doc, fact, model, handlers) {
   const skeleton = model.state === "skeleton";
   const node = dayStripLink(
@@ -74,8 +96,9 @@ function dayStripRenderFact(doc, fact, model, handlers) {
 }
 
 function dayStripLegendItem(doc, entry) {
+  const rank = entry && typeof entry.rank === "number" ? entry.rank : 0;
   const item = statsEl(doc, "span", {
-    class: "bob-day-strip-legend-item",
+    class: "bob-day-strip-legend-item" + (rank === 3 ? " bob-day-strip-legend-rank-3" : ""),
     title: entry ? entry.label + " " + entry.display : null,
   });
   const dot = statsEl(doc, "span", {
@@ -89,33 +112,27 @@ function dayStripLegendItem(doc, entry) {
   return item;
 }
 
-// Fixed slots (8 bar segments, 3 legend items) keep the skeleton and the
-// loaded strip structurally identical; missing slots stay hidden.
+function dayStripOverflowCounter(doc, className, info, skeleton) {
+  const count = info && typeof info.count === "number" ? info.count : 0;
+  const node = statsEl(doc, "span", {
+    class: "bob-day-strip-overflow " + className,
+    title: info && info.title ? info.title : null,
+  }, count > 0 && !skeleton ? "+" + count : "+N");
+  if (!count || skeleton) node.setAttribute("hidden", "true");
+  return node;
+}
+
+// The legend link: up to three root entries in bar order plus both
+// overflow counters (the container query picks the visible one).
+// Fixed slots keep the skeleton and the loaded strip identical.
 function dayStripRenderMix(doc, model, handlers) {
   const mix = model.mix || { segments: [], legend: [], overflow: [], omitted: true };
   const skeleton = model.state === "skeleton";
-  const node = dayStripLink(doc, "bob-day-strip-mix", "Time by area", mix.title);
-  const bar = statsEl(doc, "span", {
-    class: "bob-day-strip-mix-bar",
-    "aria-hidden": "true",
-  });
-  const segments = skeleton ? [] : Array.isArray(mix.segments) ? mix.segments : [];
-  const slots = Math.max(8, segments.length);
-  for (let index = 0; index < slots; index += 1) {
-    const segment = segments[index];
-    const part = statsEl(doc, "span", {
-      class: "bob-day-strip-mix-segment" + (segment ? " bob-day-strip-hue-" + segment.hue : "") + (segment && segment.bucket ? " bob-day-strip-mix-bucket" : ""),
-      title: segment ? segment.label + " " + segment.display : null,
-    });
-    if (part && part.style && segment) part.style.flexGrow = String(Math.max(0, Number(segment.value) || 0));
-    if (!segment) part.setAttribute("hidden", "true");
-    dayStripAppend(bar, part);
-  }
-  dayStripAppend(node, bar);
-
+  const sentence = mix.dimension === "area" ? "Time by area" : "Time by root parent";
+  const node = dayStripLink(doc, "bob-day-strip-mix", sentence, mix.title);
   const legend = statsEl(doc, "span", { class: "bob-day-strip-legend" });
   const entries = skeleton
-    ? [{ label: "Area", display: "0m" }, { label: "Area", display: "0m" }, { label: "Area", display: "0m" }]
+    ? [{ label: "Area", display: "0m", rank: 1 }, { label: "Area", display: "0m", rank: 2 }, { label: "Area", display: "0m", rank: 3 }]
     : Array.isArray(mix.legend) ? mix.legend : [];
   for (let index = 0; index < 3; index += 1) {
     dayStripAppend(legend, dayStripLegendItem(doc, skeleton ? entries[index] : entries[index] || null));
@@ -123,14 +140,40 @@ function dayStripRenderMix(doc, model, handlers) {
   const noPomodoros = statsEl(doc, "span", { class: "bob-day-strip-no-pomodoros" }, "no Pomodoros");
   if (!mix.empty && !skeleton) noPomodoros.setAttribute("hidden", "true");
   dayStripAppend(legend, noPomodoros);
-  const overflow = statsEl(doc, "span", {
-    class: "bob-day-strip-overflow",
-    title: mix.overflow && mix.overflow.length ? mix.overflow.map((segment) => segment.label + " " + segment.display).join("\n") : null,
-  }, mix.overflow && mix.overflow.length && !skeleton ? "+" + mix.overflow.length : "+N");
-  if (!mix.overflow || !mix.overflow.length || skeleton) overflow.setAttribute("hidden", "true");
-  dayStripAppend(legend, overflow);
+  const wide = mix.overflowWide || { count: Array.isArray(mix.overflow) ? mix.overflow.length : 0, title: "" };
+  const narrowInfo = mix.overflowNarrow || { count: 0, title: "" };
+  dayStripAppend(legend, dayStripOverflowCounter(doc, "bob-day-strip-overflow-wide", wide, skeleton));
+  dayStripAppend(legend, dayStripOverflowCounter(doc, "bob-day-strip-overflow-narrow", narrowInfo, skeleton));
   dayStripAppend(node, legend);
   dayStripActivate(node, (newLeaf) => {
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel: "homes", newLeaf });
+  });
+  return node;
+}
+
+// The full-width bar: one segment per root, the strip's last line and a
+// mouse-only second target for the legend's action.
+function dayStripRenderBar(doc, model, handlers) {
+  const mix = model.mix || { segments: [] };
+  const skeleton = model.state === "skeleton";
+  const node = statsEl(doc, "div", {
+    class: "bob-day-strip-bar",
+    "aria-hidden": "true",
+  });
+  if (!node) return null;
+  const segments = skeleton ? [] : Array.isArray(mix.segments) ? mix.segments : [];
+  const slots = Math.max(8, segments.length);
+  for (let index = 0; index < slots; index += 1) {
+    const segment = segments[index];
+    const part = statsEl(doc, "span", {
+      class: "bob-day-strip-bar-segment" + (segment ? " bob-day-strip-hue-" + segment.hue : "") + (segment && segment.bucket ? " bob-day-strip-bar-bucket" : ""),
+      title: segment ? segment.label + " " + segment.display : null,
+    });
+    if (part && part.style && segment) part.style.flexGrow = String(Math.max(0, Number(segment.value) || 0));
+    if (!segment) part.setAttribute("hidden", "true");
+    dayStripAppend(node, part);
+  }
+  dayStripBarActivate(node, (newLeaf) => {
     if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel: "homes", newLeaf });
   });
   return node;
@@ -208,6 +251,11 @@ function paintDayStrip(el, model, handlers) {
     dayStripAppend(el, facts);
     const mixRow = dayStripRenderMixRow(doc, safeModel, safeHandlers);
     if (mixRow) dayStripAppend(el, mixRow);
+    const showMix = safeModel.state === "skeleton" || (safeModel.mix && !safeModel.mix.omitted);
+    if (showMix) {
+      const bar = dayStripRenderBar(doc, safeModel, safeHandlers);
+      if (bar) dayStripAppend(el, bar);
+    }
     return el;
   } catch (error) {
     // A failed paint must not escape into Obsidian's render lifecycle.

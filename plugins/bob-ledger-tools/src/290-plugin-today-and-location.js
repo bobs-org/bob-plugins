@@ -463,8 +463,7 @@ class BobLedgerToolsTodayLocationMixin {
         // Older hosts may reject the child; the Set is cleared on unload.
       }
     }
-    // Reserve one chip row synchronously so the strip never paints above
-    // the chips and never jumps when they land.
+    // Reserve one chip row synchronously so the badges never jump when they land.
     try {
       if (typeof this.dayStripPlanHostEnsurePlaceholder === "function") {
         this.dayStripPlanHostEnsurePlaceholder(el);
@@ -509,8 +508,8 @@ class BobLedgerToolsTodayLocationMixin {
           return;
         }
         // The host node is never detached: remove every child except the
-        // Day strip host, then insert the new `.bob-plan` before it. Its
-        // paint, observer, hover, and keyboard focus survive the repaint.
+        // Day strip host, then insert the new `.bob-plan` directly after it.
+        // Its paint, observer, hover, and keyboard focus survive the repaint.
         let stripHost = null;
         try {
           if (typeof this.dayStripPlanHostForRepaint === "function") {
@@ -560,11 +559,11 @@ class BobLedgerToolsTodayLocationMixin {
         });
         const container = el.createDiv({ cls: "bob-plan" });
         try {
-          if (stripHost && typeof this.dayStripPlanHostPlacePlanFirst === "function") {
-            this.dayStripPlanHostPlacePlanFirst(el, container, stripHost);
+          if (stripHost && typeof this.dayStripPlanHostPlacePlanAfter === "function") {
+            this.dayStripPlanHostPlacePlanAfter(el, container, stripHost);
           }
         } catch (error) {
-          // Ordering is best-effort; `.bob-plan` stays first when possible.
+          // Ordering is best-effort; the strip host stays first when possible.
         }
         container.setAttribute("role", "status");
         container.setAttribute(

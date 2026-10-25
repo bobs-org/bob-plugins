@@ -1,6 +1,6 @@
-// Day strip plan host: host the strip inside the rendered `bob-plan`
-// block of canonical daily notes, after the badges, in Live Preview and
-// Reading view. Replaces the deleted CodeMirror end-of-note mount.
+// Day strip plan host: host the strip as the first child of the rendered
+// `bob-plan` block of canonical daily notes, above the badges, in Live
+// Preview and Reading view. Replaces the deleted CodeMirror end-of-note mount.
 function dayStripPlanHostAddClass(el, name) {
   try {
     if (!el || !name) return;
@@ -365,18 +365,50 @@ class BobLedgerToolsDayStripPlanHostMixin {
         return;
       }
       try {
-        if (typeof el.appendChild === "function") {
-          el.appendChild(host);
-        } else if (typeof el.createDiv === "function") {
+        let attached = false;
+        try {
+          if (typeof el.insertBefore === "function") {
+            const first = el.firstChild || (Array.isArray(el.children) ? el.children[0] : null) || null;
+            el.insertBefore(host, first);
+            attached = host.parentNode === el || true;
+          }
+        } catch (error) {
+          attached = false;
+        }
+        if (!attached && typeof el.prepend === "function") {
+          try {
+            el.prepend(host);
+            attached = true;
+          } catch (error) {
+            attached = false;
+          }
+        }
+        if (!attached && typeof el.createDiv === "function" && typeof el.insertBefore !== "function") {
           const placed = el.createDiv({ cls: "bob-day-strip-plan-host" });
           host = placed || host;
           if (placed !== host && host.parentNode !== el && typeof el.appendChild === "function") {
             el.appendChild(host);
           }
-        } else if (Array.isArray(el.children)) {
+          attached = true;
+        }
+        if (!attached && typeof el.appendChild === "function") {
+          // Fake-DOM harnesses without insertBefore: prepend via children array.
+          if (Array.isArray(el.children)) {
+            if (el.children.includes(host)) {
+              el.children = el.children.filter((child) => child !== host);
+            }
+            host.parentNode = el;
+            el.children.unshift(host);
+          } else {
+            el.appendChild(host);
+          }
+        } else if (!attached && Array.isArray(el.children)) {
+          if (el.children.includes(host)) {
+            el.children = el.children.filter((child) => child !== host);
+          }
           host.parentNode = el;
-          el.children.push(host);
-        } else {
+          el.children.unshift(host);
+        } else if (!attached) {
           return;
         }
       } catch (error) {
@@ -561,13 +593,30 @@ class BobLedgerToolsDayStripPlanHostMixin {
     }
   }
 
-  // Reserve one chip row synchronously so the strip never paints above
-  // the chips and never jumps when they land. Never throws.
+  // Reserve one chip row synchronously so the badges never jump when
+  // they land. Finds the `.bob-plan` container by class, never by index.
+  // Never throws.
   dayStripPlanHostEnsurePlaceholder(el) {
     try {
       if (!el) return null;
       try {
-        if (Array.isArray(el.children) && el.children.length > 0) return el.children[0];
+        if (el.querySelector && typeof el.querySelector === "function") {
+          const found = el.querySelector(".bob-plan");
+          if (found) return found;
+        }
+      } catch (error) {
+        // Fall through to the children scan.
+      }
+      try {
+        const children = Array.isArray(el.children) ? el.children : (el.childNodes ? Array.from(el.childNodes) : []);
+        for (const child of children) {
+          try {
+            const cls = (typeof child.getAttribute === "function" ? child.getAttribute("class") : child.cls) || "";
+            if (String(cls).split(/\s+/).includes("bob-plan")) return child;
+          } catch (error) {
+            continue;
+          }
+        }
       } catch (error) {
         // Fall through to creation.
       }
@@ -692,15 +741,30 @@ class BobLedgerToolsDayStripPlanHostMixin {
     }
   }
 
-  // Keep `.bob-plan` as `el.children[0]` with the strip host after it.
+  // Keep the strip host first with `.bob-plan` directly after it.
   // Never throws.
-  dayStripPlanHostPlacePlanFirst(el, container, host) {
+  dayStripPlanHostPlacePlanAfter(el, container, host) {
     try {
       if (!el || !container) return;
       if (!host) return;
       try {
         if (typeof el.insertBefore === "function") {
-          el.insertBefore(container, host);
+          const next = host.nextSibling || null;
+          // Fake-DOM harnesses may lack nextSibling; fall back to index.
+          if (next || host.parentNode === el) {
+            el.insertBefore(container, next);
+            return;
+          }
+          if (Array.isArray(el.children)) {
+            const hostIndex = el.children.indexOf(host);
+            if (hostIndex >= 0) {
+              el.children = el.children.filter((child) => child !== container);
+              el.children.splice(hostIndex + 1, 0, container);
+              container.parentNode = el;
+              return;
+            }
+          }
+          el.insertBefore(container, next);
           return;
         }
       } catch (error) {
@@ -711,9 +775,10 @@ class BobLedgerToolsDayStripPlanHostMixin {
           el.children = el.children.filter((child) => child !== container);
           const index = el.children.indexOf(host);
           if (index < 0) {
-            el.children.unshift(container);
+            el.children.unshift(host);
+            el.children.splice(1, 0, container);
           } else {
-            el.children.splice(index, 0, container);
+            el.children.splice(index + 1, 0, container);
           }
           container.parentNode = el;
         }
@@ -723,5 +788,10 @@ class BobLedgerToolsDayStripPlanHostMixin {
     } catch (error) {
       // Ordering never breaks the plan block.
     }
+  }
+
+  // Legacy alias: the host used to sit after the badges.
+  dayStripPlanHostPlacePlanFirst(el, container, host) {
+    return this.dayStripPlanHostPlacePlanAfter(el, container, host);
   }
 }

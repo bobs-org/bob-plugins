@@ -210,8 +210,31 @@ function checkMeasurement(item, context) {
   if (item.hasButton) failures.push(`strip contains a <button> element`);
   if (!item.relaxed) {
     if (item.factRows > 2 && item.state !== "unavailable") failures.push(`${item.factRows} fact rows (max 2)`);
-    const budget = item.factRows <= 1 ? 48 : 72;
+    const budget = item.factRows <= 1 ? 56 : 80;
     if (item.stripHeight > budget + 0.5) failures.push(`height ${item.stripHeight}px over the ${budget}px budget`);
+  }
+  // (i) the strip precedes .bob-plan with a calm 6–16 px gap.
+  if (item.domOrderOk === false && item.state !== "unavailable" && item.state !== "skeleton") {
+    failures.push(`strip does not precede .bob-plan in the DOM`);
+  }
+  if (typeof item.stripToBadges === "number" && (item.stripToBadges < 6 || item.stripToBadges > 16)) {
+    failures.push(`strip bottom sits ${item.stripToBadges}px above the badges (want 6–16px)`);
+  }
+  // (j) the bar spans the strip and ends it.
+  if (typeof item.barWidthDelta === "number" && item.barWidthDelta > 1) {
+    failures.push(`bar misses the strip width by ${item.barWidthDelta}px`);
+  }
+  if (item.barIsLast === false && item.state !== "unavailable" && !item.mixOmitted) {
+    failures.push(`bar is not the strip's last line box`);
+  }
+  // (k) no legend label is truncated.
+  if (item.legendTruncation > 0.5) failures.push(`legend label truncates by ${item.legendTruncation}px`);
+  // (l) narrow cells show at most two legend labels with a true counter.
+  if (context.width === 410 && typeof item.segments === "number" && item.segments > 0 && item.state !== "skeleton") {
+    if (item.visibleLegend > 2) failures.push(`narrow strip shows ${item.visibleLegend} legend labels (max 2)`);
+    if (item.segments > item.visibleLegend && item.visibleCounter !== item.segments - item.visibleLegend) {
+      failures.push(`narrow counter is +${item.visibleCounter} for ${item.segments} segments and ${item.visibleLegend} labels`);
+    }
   }
   if (item.state === "today" && context.width >= 540 && item.factRows !== 1) {
     failures.push(`facts wrap to ${item.factRows} rows at ${context.width}px (must fit on one line)`);
@@ -230,21 +253,21 @@ function matrixMarkdown(matrix, browser, revision, interactionChecks) {
     `- Renderer checkout revision: ${revision}.`,
     `- Browser: ${browser}.`,
     "- Source: production `main.js`, `styles.css`, and synthetic presentation fixtures; no fixture is captured vault data.",
-    "- Each strip renders under mock plan badges (TODAY / PENDING / NEXT / READY plus a ★ theme line) inside a Live Preview code-block container; one extra Reading-view cell renders today.",
+    "- Each strip renders above mock plan badges (TODAY / PENDING / NEXT / READY plus a ★ theme line) inside a Live Preview code-block container, with a bare `## Pomodoros` heading below; one extra Reading-view cell renders today.",
     "- An Obsidian baseline stylesheet (30 px inline-flex buttons, link colours, rendered line-height) loads before the production CSS, so a `<button>` regression fails the matrix.",
-    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 13 states plus Reading view.",
-    "- Height budgets (16 px base): ≤48 px when the facts fit on one line, ≤72 px when they wrap once. The long-labels case is relaxed: geometry is enforced, height is reported.",
-    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline.",
+    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 16 states plus Reading view.",
+    "- Height budgets (16 px base): ≤56 px when the facts fit on one line, ≤80 px when they wrap once. The long-labels case is relaxed: geometry is enforced, height is reported.",
+    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) the bar spans the strip's content width (±1 px) and is its last line box; (k) no legend label is truncated; (l) narrow cells show at most 2 legend items and the visible counter equals segments minus visible items.",
     "",
     "| Width | Theme | State | Strip height | Budget | Fact rows | Overflow | Facts overlap | Lines overlap | Legend overlap | Value baseline spread | Skeleton delta | Button | Result | Screenshot |",
     "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
-    ...measurements.map((item) => `| ${item.width}px | ${item.theme} | ${item.state} | ${item.stripHeight}px | ${item.relaxed ? "—" : `${item.factRows <= 1 ? 48 : 72}px`} | ${item.factRows} | ${item.maxOverflow}px | ${item.maxFactOverlap}px | ${item.linesOverlap}px | ${item.legendOverlap}px | ${item.valueBaselineSpread}px | ${item.skeletonHeightDelta === null ? "—" : `${item.skeletonHeightDelta}px`} | ${item.hasButton ? "yes" : "no"} | ${item.result} | ${item.screenshot} |`),
+    ...measurements.map((item) => `| ${item.width}px | ${item.theme} | ${item.state} | ${item.stripHeight}px | ${item.relaxed ? "—" : `${item.factRows <= 1 ? 56 : 80}px`} | ${item.factRows} | ${item.maxOverflow}px | ${item.maxFactOverlap}px | ${item.linesOverlap}px | ${item.legendOverlap}px | ${item.valueBaselineSpread}px | ${item.skeletonHeightDelta === null ? "—" : `${item.skeletonHeightDelta}px`} | ${item.hasButton ? "yes" : "no"} | ${item.result} | ${item.screenshot} |`),
     "",
     "Interaction checks (forced pseudo-states, per width × theme):",
     "",
     ...interactionChecks.map((item) => `- ${item.width}px ${item.theme}: ${item.label} — ${item.result}${item.detail ? ` (${item.detail})` : ""}`),
     "",
-    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, a redefined `worked` without area parts, long labels, wide values (`10h 05m`, three-digit counts, `not yet`), forced hover, forced `:focus-visible`, and a Reading-view today cell.",
+    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-hue roots, seven roots with `+N`, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), forced hover, forced `:focus-visible`, and a Reading-view today cell.",
     "",
   ].join("\n");
 }

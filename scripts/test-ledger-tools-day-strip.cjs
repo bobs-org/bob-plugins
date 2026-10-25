@@ -170,15 +170,31 @@ test("time mix reuses Stats area ordering and hues, with buckets last and a tool
   const model = modelFor(fixture);
   const worked = fixture.report.metrics.find((metric) => metric.id === "worked");
   const point = helpers.statsChartDailyPoints(worked, fixture.report).find((item) => item.date === fixture.day);
-  const expected = helpers.statsPanelHomeAreaRows(helpers.statsPanelHomeRows(worked, fixture.report, "area", point), fixture.report);
+  const expected = helpers.statsPanelHomeAreaRows(helpers.statsPanelHomeRows(worked, fixture.report, "root_parent", point), fixture.report);
+  assert.equal(model.mix.dimension, "root_parent");
   assert.deepEqual(model.mix.segments.map((segment) => segment.key), expected.map((row) => row.key));
   assert.deepEqual(model.mix.segments.map((segment) => segment.hue), expected.map((row) => row.hue));
   assert.ok(model.mix.segments.slice(-1)[0].key.startsWith("@"));
   assert.equal(model.mix.segments.at(-1).hue, "gray");
   assert.equal(model.mix.legend.length, 3);
   assert.equal(model.mix.overflow.length, 5);
-  assert.match(model.mix.title, /^Time by area\n/);
-  assert.equal(byClass(paint(model).root, "bob-day-strip-overflow")[0].textContent, "+5");
+  assert.deepEqual(model.mix.legend.map((entry) => entry.rank).sort((a, b) => a - b), [1, 2, 3]);
+  assert.equal(model.mix.overflowWide.count, 5);
+  assert.equal(model.mix.overflowNarrow.count, 6);
+  assert.match(model.mix.title, /^Time by root parent\n/);
+  assert.equal(byClass(paint(model).root, "bob-day-strip-overflow-wide")[0].textContent, "+5");
+  assert.equal(byClass(paint(model).root, "bob-day-strip-overflow-narrow")[0].textContent, "+6");
+});
+
+test("root_parent is preferred with an honest area fallback", () => {
+  const rootModel = modelFor(fixtures.today);
+  assert.equal(rootModel.mix.dimension, "root_parent");
+  assert.match(rootModel.mix.title, /^Time by root parent/);
+  const areaModel = modelFor(fixtures.areaOnly);
+  assert.equal(areaModel.mix.dimension, "area");
+  assert.match(areaModel.mix.title, /^Time by area/);
+  assert.match(areaModel.ariaLabel, /Time by area:/);
+  assert.ok(areaModel.mix.segments.length > 0);
 });
 
 test("zero worked renders no Pomodoros and redefined worked omits its mix", () => {
@@ -199,7 +215,7 @@ test("aria label carries the date, values, provisional state, and area names", (
   const model = modelFor(fixtures.today);
   assert.match(model.ariaLabel, /^Day stats for Saturday, October 24, so far:/);
   assert.match(model.ariaLabel, /Worked/);
-  assert.match(model.ariaLabel, /Time by area: gtd/);
+  assert.match(model.ariaLabel, /Time by root parent: gtd/);
 });
 
 test("skeleton carries placeholder text per fact and the same tag and class sequence", () => {
@@ -213,7 +229,10 @@ test("skeleton carries placeholder text per fact and the same tag and class sequ
     .split(/\s+/)
     .filter(Boolean)
     .map((name) => name === "bob-day-strip-state-ready" || name === "bob-day-strip-state-skeleton" ? "bob-day-strip-state-STATE" : name)
-    .filter((name) => name !== "bob-day-strip-provisional" && name !== "bob-day-strip-stale" && !name.endsWith("-skeleton") && !name.startsWith("bob-day-strip-hue-"))
+    .map((name) => name === "bob-day-strip-overflow-wide" || name === "bob-day-strip-overflow-narrow" ? "bob-day-strip-overflow" : name)
+    .map((name) => name === "bob-day-strip-bar-segment" ? "bob-day-strip-segment" : name)
+    .map((name) => name === "bob-day-strip-mix-segment" ? "bob-day-strip-segment" : name)
+    .filter((name) => name !== "bob-day-strip-provisional" && name !== "bob-day-strip-stale" && name !== "bob-day-strip-legend-rank-3" && name !== "bob-day-strip-bar-bucket" && name !== "bob-day-strip-mix-bucket" && !name.endsWith("-skeleton") && !name.startsWith("bob-day-strip-hue-"))
     .join(" ");
   const shape = (root) => findAll(root, () => true).map((node) => node.tagName + "|" + normalize(node.getAttribute("class")));
   assert.deepEqual(shape(paint(skeleton).root), shape(paint(ready).root));
@@ -281,4 +300,43 @@ test("future and hidden models paint no children", () => {
     const { root } = paint(model);
     assert.equal(root.children.length, 0);
   }
+});
+
+test("strip paints facts, legend row, then full-width bar with no buttons", () => {
+  const { root } = paint(modelFor(fixtures.today));
+  const tags = findAll(root, () => true).map((node) => node.tagName);
+  assert.ok(tags.length > 0);
+  const facts = byClass(root, "bob-day-strip-facts");
+  const mixRows = byClass(root, "bob-day-strip-mix-row");
+  const bars = byClass(root, "bob-day-strip-bar");
+  assert.equal(facts.length, 1, "one facts line");
+  assert.equal(mixRows.length, 1, "one legend and meta row");
+  assert.equal(bars.length, 1, "one full-width bar");
+  assert.equal(findAll(root, (node) => node.tagName === "BUTTON").length, 0, "no <button> elements");
+  assert.equal(root.children[0], facts[0], "facts paint first");
+  assert.equal(root.children[1], mixRows[0], "legend row paints second");
+  assert.equal(root.children[2], bars[0], "bar paints last, above the badges");
+  assert.equal(bars[0].getAttribute("aria-hidden"), "true", "bar is hidden from assistive tech");
+  assert.equal(bars[0].getAttribute("role"), null, "bar carries no link role");
+  assert.equal(bars[0].getAttribute("tabindex"), null, "bar carries no keyboard stop");
+});
+
+test("bar click opens Stats homes with day and new-leaf modifiers", () => {
+  const calls = [];
+  const fixture = fixtures.manyRoots;
+  const { root } = paint(modelFor(fixture), {
+    openStats: (options) => calls.push(options),
+  });
+  const bar = byClass(root, "bob-day-strip-bar")[0];
+  assert.ok(bar, "bar renders with several roots");
+  bar.dispatch("mousedown", { button: 0 });
+  bar.dispatch("click", { button: 0, ctrlKey: true });
+  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", panel: "homes", newLeaf: true });
+  bar.dispatch("auxclick", { button: 1 });
+  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", panel: "homes", newLeaf: true });
+  const keydownBefore = calls.length;
+  for (const node of findAll(bar, () => true)) {
+    if (typeof node.dispatch === "function") node.dispatch("keydown", { key: "Enter" });
+  }
+  assert.equal(calls.length, keydownBefore, "bar has no keyboard activation");
 });

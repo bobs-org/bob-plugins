@@ -85,6 +85,9 @@
       { id: "no-pomodoros", title: "No Pomodoros", fixture: "noPomodoros" },
       { id: "not-tracked-warning", title: "Not tracked · journal warning", fixture: "notTrackedWarning" },
       { id: "many-areas", title: "Many areas · +N", fixture: "manyAreas" },
+      { id: "area-only", title: "Old bob · areas without root_parent", fixture: "areaOnly" },
+      { id: "same-hue-roots", title: "Same-hue roots share blue and orange", fixture: "sameHueRoots" },
+      { id: "many-roots", title: "Seven roots · +N", fixture: "manyRoots" },
       { id: "redefined-worked", title: "Redefined worked · no area mix", fixture: "redefinedWorked" },
       { id: "long-labels", title: "Long labels", fixture: "longLabels", relaxed: true },
       { id: "wide-values", title: "Wide values · 10h 05m", fixture: "wideValues" },
@@ -129,13 +132,13 @@
       codeBlock.className = "cm-preview-code-block cm-embed-block markdown-rendered";
       const block = doc.createElement("div");
       block.className = "block-language-bob-plan bob-plan-has-day-strip";
-      block.appendChild(mockBadges(doc));
       block.appendChild(stripHost);
+      block.appendChild(mockBadges(doc));
       codeBlock.appendChild(block);
       content.appendChild(codeBlock);
       const heading = doc.createElement("div");
       heading.className = "preview-ledger-line preview-ledger-heading";
-      heading.textContent = "## Pomodoros (5h 25m)";
+      heading.textContent = "## Pomodoros";
       content.appendChild(heading);
       const lineA = doc.createElement("div");
       lineA.className = "preview-ledger-line";
@@ -154,11 +157,11 @@
       view.className = "markdown-preview-view markdown-rendered";
       const block = doc.createElement("div");
       block.className = "block-language-bob-plan bob-plan-has-day-strip";
-      block.appendChild(mockBadges(doc));
       block.appendChild(stripHost);
+      block.appendChild(mockBadges(doc));
       view.appendChild(block);
       const heading = doc.createElement("h2");
-      heading.textContent = "Pomodoros (5h 25m)";
+      heading.textContent = "Pomodoros";
       view.appendChild(heading);
       return view;
     }
@@ -279,7 +282,71 @@
         linesOverlap: Math.round(linesOverlap * 10) / 10,
         legendOverlap: Math.round(legendOverlap * 10) / 10,
         hasButton: Boolean(strip.querySelector("button")),
+        ...measureStripPlacement(strip),
       };
+    }
+
+    function visible(node) {
+      if (!node) return false;
+      const box = node.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) return false;
+      return getComputedStyle(node).display !== "none" && !node.hasAttribute("hidden");
+    }
+
+    // (i) strip precedes .bob-plan in the DOM with a calm gap; (j) the bar
+    // spans the strip and ends it; (k) legend labels never truncate;
+    // (l) narrow cells show at most two legend labels plus a true counter.
+    function measureStripPlacement(strip) {
+      const out = {
+        domOrderOk: false,
+        stripToBadges: null,
+        barWidthDelta: null,
+        barIsLast: false,
+        legendTruncation: 0,
+        visibleLegend: 0,
+        visibleCounter: null,
+      };
+      try {
+        const block = strip.parentElement;
+        const plan = block ? block.querySelector(":scope > .bob-plan") : null;
+        const kids = block ? Array.from(block.children) : [];
+        out.domOrderOk = Boolean(plan) && kids[0] === strip && kids[1] === plan;
+        if (plan) {
+          const stripBox = strip.getBoundingClientRect();
+          const planBox = plan.getBoundingClientRect();
+          if (stripBox.height > 0 && planBox.height > 0) {
+            out.stripToBadges = Math.round((planBox.top - stripBox.bottom) * 10) / 10;
+          }
+        }
+        const bar = strip.querySelector(":scope > .bob-day-strip-bar");
+        if (bar) {
+          const stripBox = strip.getBoundingClientRect();
+          const barBox = bar.getBoundingClientRect();
+          const style = getComputedStyle(strip);
+          const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+          out.barWidthDelta = Math.round(Math.abs(barBox.width - (stripBox.width - padX)) * 10) / 10;
+          const last = strip.lastElementChild;
+          out.barIsLast = last === bar && barBox.bottom <= stripBox.bottom + 0.5 && barBox.bottom >= stripBox.bottom - 0.5;
+        }
+        let worst = 0;
+        for (const label of strip.querySelectorAll(".bob-day-strip-legend-label")) {
+          if (!visible(label)) continue;
+          worst = Math.max(worst, label.scrollWidth - label.clientWidth);
+        }
+        out.legendTruncation = Math.round(worst * 10) / 10;
+        out.visibleLegend = Array.from(strip.querySelectorAll(".bob-day-strip-legend-item")).filter(visible).length;
+        for (const counter of strip.querySelectorAll(".bob-day-strip-overflow")) {
+          if (!visible(counter)) continue;
+          const match = /^\+(\d+)$/.exec(counter.textContent.trim());
+          if (match) {
+            out.visibleCounter = Number(match[1]);
+            break;
+          }
+        }
+      } catch (error) {
+        // Placement measurement never breaks the matrix.
+      }
+      return out;
     }
 
     function renderMatrix(width, theme) {
@@ -315,7 +382,9 @@
           : { localToday: "2026-10-24", error: item.error || null };
         const model = helpers.dayStripModel(fixture && fixture.report, fixture ? fixture.day : "2026-10-24", context);
         helpers.paintDayStrip(strip, model, { openStats() {}, retry() {} });
-        measurements.push({ state: item.id, relaxed: item.relaxed === true, ...measureStrip(strip) });
+        const mixOmitted = Boolean(!model || !model.mix || model.mix.omitted);
+        const segments = !mixOmitted && model && model.mix && Array.isArray(model.mix.segments) ? model.mix.segments.length : 0;
+        measurements.push({ state: item.id, relaxed: item.relaxed === true, segments, mixOmitted, ...measureStrip(strip) });
       }
       const readingCard = document.createElement("section");
       readingCard.className = "preview-case";
@@ -335,7 +404,9 @@
       const fixture = fixtureReports.today;
       const readingModel = helpers.dayStripModel(fixture.report, fixture.day, { localToday: fixture.localToday, fetchedAt: fixture.fetchedAt });
       helpers.paintDayStrip(readingStrip, readingModel, { openStats() {}, retry() {} });
-      measurements.push({ state: "reading", relaxed: false, ...measureStrip(readingStrip) });
+      const readingOmitted = Boolean(!readingModel || !readingModel.mix || readingModel.mix.omitted);
+      const readingSegments = !readingOmitted && readingModel && readingModel.mix && Array.isArray(readingModel.mix.segments) ? readingModel.mix.segments.length : 0;
+      measurements.push({ state: "reading", relaxed: false, segments: readingSegments, mixOmitted: readingOmitted, ...measureStrip(readingStrip) });
       return { width, theme, measurements, pageScrollWidth: document.documentElement.scrollWidth, viewportWidth: window.innerWidth };
     }
     window.dayStripPreview = { renderMatrix, cases };

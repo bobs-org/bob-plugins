@@ -4067,23 +4067,27 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   }
 }
 
-/* Day strip: two calm, readable lines under the plan badges. No card,
-   border, rule, background, shadow, or radius on the strip; separation
-   comes from spacing only. Area hues are the only colour. */
+/* Day strip: three calm lines above the plan badges. The full-width
+   root-parent bar is the last line, so it reads as the separator above
+   the badges. No card, border, background, shadow, or radius on the
+   strip; separation comes from spacing only. Area hues are the only
+   colour. */
 .bob-day-strip {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  margin: 0 0 1rem;
+  margin: 0.5rem 0 0;
+  container-type: inline-size;
   color: var(--text-normal);
   font-family: var(--font-interface);
   font-size: 0.875em;
   line-height: 1.45;
 }
 
-/* The plan block's own bottom margin shrinks when a strip follows it. */
+/* The plan badges sit below the strip with room to breathe. */
 .bob-plan-has-day-strip > .bob-plan {
-  margin-bottom: 0.5rem;
+  margin-top: 0.7rem;
+  margin-bottom: 1rem;
 }
 
 .bob-day-strip-state-hidden,
@@ -4169,7 +4173,7 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   align-items: center;
   min-width: 0;
   gap: 0.8em;
-  margin-top: 0.25em;
+  margin-top: 0.2em;
 }
 
 .bob-day-strip-mix {
@@ -4181,26 +4185,39 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   cursor: pointer;
 }
 
-.bob-day-strip-mix-bar {
+/* The full-width bar: the strip's last line and the separator above the
+   badges. Gaps show the note background, never the track colour. */
+.bob-day-strip-bar {
   box-sizing: border-box;
   display: flex;
-  flex: none;
-  width: 7.5em;
-  height: 5px;
+  width: 100%;
+  height: 4px;
+  margin-top: 0.45em;
   gap: 2px;
   overflow: hidden;
   border-radius: 999px;
+  background: transparent;
+}
+
+/* The track shows only when the bar is empty or in the skeleton. */
+.bob-day-strip-bar:empty,
+.bob-day-strip-state-skeleton .bob-day-strip-bar {
   background: var(--background-modifier-border);
 }
 
-.bob-day-strip-mix-segment {
+.bob-day-strip-bar-segment {
   display: block;
   flex: 0 1 0;
   min-width: 0;
   background: var(--bob-day-strip-hue, var(--text-faint));
 }
 
-.bob-day-strip-mix-bucket { --bob-day-strip-hue: var(--text-faint); }
+.bob-day-strip-bar-bucket { --bob-day-strip-hue: var(--text-faint); }
+
+/* Legacy in-row bar: removed when the strip moved above the badges. */
+.bob-day-strip-mix-bar,
+.bob-day-strip-mix-segment,
+.bob-day-strip-mix-bucket { display: none; }
 .bob-day-strip-hue-blue { --bob-day-strip-hue: var(--bob-area-blue, var(--text-muted)); }
 .bob-day-strip-hue-orange { --bob-day-strip-hue: var(--bob-area-orange, var(--text-muted)); }
 .bob-day-strip-hue-aqua { --bob-day-strip-hue: var(--bob-area-aqua, var(--text-muted)); }
@@ -4230,14 +4247,20 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   align-items: center;
   min-width: 0;
   gap: 0.3em;
-  overflow: hidden;
   white-space: nowrap;
 }
 
 .bob-day-strip-legend-label {
-  max-width: 10em;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Narrow strips show two legend labels plus the narrow counter; the
+   rank-3 item and the wide counter hide. Labels never ellipsize. */
+.bob-day-strip-overflow-narrow { display: none; }
+@container (max-width: 30em) {
+  .bob-day-strip-legend-rank-3 { display: none; }
+  .bob-day-strip-overflow-wide { display: none; }
+  .bob-day-strip-overflow-narrow { display: inline; }
 }
 
 .bob-day-strip-legend-value {

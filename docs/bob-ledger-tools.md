@@ -12,10 +12,10 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.68.1 |
+| Version | 1.69.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Expand Bob daily-note snippets and ledger time ranges, navigate and adjust Pomodoro entries, render the live plan-budget bob-plan block, track task freshness including [unblocked::] TICKLERs, render [priority::] fields as signal-bar priority marks, render created/scheduled/completion/cancelled dates and `[repeat:: …]` rules as compact date-family marks (including date and recurrence marks in full and short Tasks query results), render `#task` tags as a teal hash task-tag mark (hidden in Tasks query results) and `#task #ref` pairs as an open-book ref mark, and render canonical `#task #gtd #pre` / `#task #gtd #post` runs as teal sunrise / flag identity marks across Live Preview, reading view, and Tasks rows. Render Depends-On lines as live dependency chips plus generated BLOCKS rows with live dependents, last-blocker keys, stale-entry styling, and frees-N summaries. Open BLOCKS rows add ＋ / hover × through nav api.blocks when present. Index raw task LINKS rows through api.relationIndex v1, with unsaved editor overlays and label suggestions. Render Task Links under today's open Pomodoros with In Progress half-ring marks and read-time unblocked hand-off glyphs. Fetch `bob stats` JSON with stale-while-revalidate caching and render the responsive Stats page `bob-stats` block with metric-family context, accessible daily drill-down, definition disclosures, tiles, and table. Fetch `bob ref list` JSON with a bounded stale-while-revalidate cache, decode audio paths, and provide pure Reading Board lane, card, Snoozed group, ordering, and validated fence models. Render the read-only `bob-reading-board` code block, a Reading / Next / Ready / Snoozed kanban of the reading queue drawn entirely from `bob ref list` JSON (wake dates and waiting-on reasons from bob, never from vault text), with keyed background refresh errors, repaint-safe navigation, roving keyboard focus, click and modifier routing to Obsidian navigation, the optional Highlights PDF hand-off through nav `openReferencePdf`, and the Open Reading Board command. Derive quiet lowercase Pomodoro home chips from linked task notes in Live Preview and Reading view, with area-hue dots, a tooltip, and a toggle. Show a display-only 🍅 Today mark on open task lines linked under today's open Pomodoros in Live Preview and Reading view, with a session toggle and jumps to the Task Link. Task relation lines are excluded from the plan Task Link count. Render 🪢 LINKS and LINKED FROM rows as live relation chips from that index, with label pills, inverse phrases, stale and broken styling, closed-row collapse, and ＋ / hover × through nav api.relations v1 when present. While the cursor is on a review row, the footer shows the Alt+P roll preview from nav api.quickRoll v1 in its hint slot and full sentence in its tooltip. In source-note Live Preview and Reading view, the freshness mark tooltip adds a `🥀 N keeps logged · last <date> — <reason>` line from the task's Rotten Log; Tasks and Dataview query rows never show it. Share the Pomodoro theme catalog through api.themes v1 and render theme pills with stable hues in Live Preview, Reading view, the plan block, and the Stats Themes panel, with a session toggle. Render the read-only Day strip under the bob-plan badges of canonical daily notes, support the bob-day-stats fence, and provide the Toggle Day stats session command. |
+| Description | Expand Bob daily-note snippets and ledger time ranges, navigate and adjust Pomodoro entries, render the live plan-budget bob-plan block, track task freshness including [unblocked::] TICKLERs, render [priority::] fields as signal-bar priority marks, render created/scheduled/completion/cancelled dates and `[repeat:: …]` rules as compact date-family marks (including date and recurrence marks in full and short Tasks query results), render `#task` tags as a teal hash task-tag mark (hidden in Tasks query results) and `#task #ref` pairs as an open-book ref mark, and render canonical `#task #gtd #pre` / `#task #gtd #post` runs as teal sunrise / flag identity marks across Live Preview, reading view, and Tasks rows. Render Depends-On lines as live dependency chips plus generated BLOCKS rows with live dependents, last-blocker keys, stale-entry styling, and frees-N summaries. Open BLOCKS rows add ＋ / hover × through nav api.blocks when present. Index raw task LINKS rows through api.relationIndex v1, with unsaved editor overlays and label suggestions. Render Task Links under today's open Pomodoros with In Progress half-ring marks and read-time unblocked hand-off glyphs. Fetch `bob stats` JSON with stale-while-revalidate caching and render the responsive Stats page `bob-stats` block with metric-family context, accessible daily drill-down, definition disclosures, tiles, and table. Fetch `bob ref list` JSON with a bounded stale-while-revalidate cache, decode audio paths, and provide pure Reading Board lane, card, Snoozed group, ordering, and validated fence models. Render the read-only `bob-reading-board` code block, a Reading / Next / Ready / Snoozed kanban of the reading queue drawn entirely from `bob ref list` JSON (wake dates and waiting-on reasons from bob, never from vault text), with keyed background refresh errors, repaint-safe navigation, roving keyboard focus, click and modifier routing to Obsidian navigation, the optional Highlights PDF hand-off through nav `openReferencePdf`, and the Open Reading Board command. Derive quiet lowercase Pomodoro home chips from linked task notes in Live Preview and Reading view, with area-hue dots, a tooltip, and a toggle. Show a display-only 🍅 Today mark on open task lines linked under today's open Pomodoros in Live Preview and Reading view, with a session toggle and jumps to the Task Link. Task relation lines are excluded from the plan Task Link count. Render 🪢 LINKS and LINKED FROM rows as live relation chips from that index, with label pills, inverse phrases, stale and broken styling, closed-row collapse, and ＋ / hover × through nav api.relations v1 when present. While the cursor is on a review row, the footer shows the Alt+P roll preview from nav api.quickRoll v1 in its hint slot and full sentence in its tooltip. In source-note Live Preview and Reading view, the freshness mark tooltip adds a `🥀 N keeps logged · last <date> — <reason>` line from the task's Rotten Log; Tasks and Dataview query rows never show it. Share the Pomodoro theme catalog through api.themes v1 and render theme pills with stable hues in Live Preview, Reading view, the plan block, and the Stats Themes panel, with a session toggle. Render the read-only Day strip above the bob-plan badges of canonical daily notes, support the bob-day-stats fence, and provide the Toggle Day stats session command. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -132,11 +132,14 @@ jump to the Task Link. A name the catalog does not know stays neutral on the
 cursor line while it is typed.
 The shared behavior and hue contract is [Pomodoro themes](https://bobs-org.github.io/pomodoro-themes/).
 
-The **Day strip** is a read-only daily Stats receipt rendered under the
+The **Day strip** is a read-only daily Stats receipt rendered above the
 `bob-plan` badges of canonical daily notes, in Live Preview and Reading view.
-It shows that note's own day as two calm lines — LABEL-value facts plus the
-area time mix with `so far · HH:MM` — and paints from bob's Stats report; it
-never changes the note and never writes the vault. Daily notes without a
+It shows that note's own day as three calm lines — LABEL-value facts, the
+root-parent legend with `so far · HH:MM`, and the full-width root-parent bar
+that separates it from the badges — and paints from bob's Stats report; it
+never changes the note and never writes the vault. The bar groups working time
+by root parent (falling back to areas with an honest "Time by area" label when
+bob predates `root_parent`). Daily notes without a
 `bob-plan` block show no strip. To place one explicitly, add a `bob-day-stats`
 code fence in any note, optionally with `day: YYYY-MM-DD`. A fence placed
 inside a daily note simply renders its own strip.
@@ -196,7 +199,7 @@ today's Task Link`, `Open today's daily note`, `Open Stats`, `Open Reading
 Board`) are the only commands in this plugin with lasting effects; `Ctrl+9` is
 its only registered default hotkey.
 
-`Toggle Day stats` hides or restores the automatic Day strip under the
+`Toggle Day stats` hides or restores the automatic Day strip above the
 `bob-plan` badges for the current session. It does not remove an explicit
 `bob-day-stats` fence.
 
@@ -213,7 +216,7 @@ when pressed again on that home tab.
 This plugin adds no settings tab. It reads the shared bob config file: the
 `plan:` block for lane caps, the `freshness:` block for decay and intervals,
 the `stats.day_strip` switch (set it to `false` to hide the automatic Day
-strip under the `bob-plan` badges), and per-note `task_refresh` frontmatter
+strip above the `bob-plan` badges), and per-note `task_refresh` frontmatter
 for note overrides. It
 also serves its rendered state to the other plugins through a versioned `api` surface
 (`planBudget`, `todayKeys`, freshness, readiness, badge, and mark namespaces)

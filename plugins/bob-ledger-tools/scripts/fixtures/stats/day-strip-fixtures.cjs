@@ -37,10 +37,26 @@ function makeReport(options = {}) {
     ? Array.from({ length: 7 }, (_, index) => `area-${index + 1}.md`)
     : ["gtd.md", "dev.md"];
   areaNames.forEach((key, index) => {
-    homes[key] = { label: options.longLabels ? `Long ${["Systems Research", "Personal Development", "Writing and Editing"][index % 3]} Area ${index + 1}` : key.replace(/\.md$/, ""), kind: "area", area: key, path: key, hue: HUES[index % HUES.length] };
+    homes[key] = { label: options.longLabels ? `Long ${["Systems Research", "Personal Development", "Writing"][index % 3]} ${index + 1}` : key.replace(/\.md$/, ""), kind: "area", area: key, root_parent: key, path: key, hue: HUES[index % HUES.length] };
   });
-  homes["@unlinked"] = { label: "unlinked", kind: "bucket", area: "@unlinked", path: null, hue: null };
-  homes["@unfiled"] = { label: "unfiled", kind: "bucket", area: "@unfiled", path: null, hue: null };
+  homes["@unlinked"] = { label: "unlinked", kind: "bucket", area: "@unlinked", root_parent: "@unlinked", path: null, hue: null };
+  homes["@unfiled"] = { label: "unfiled", kind: "bucket", area: "@unfiled", root_parent: "@unfiled", path: null, hue: null };
+  if (options.sameHueRoots) {
+    homes["bob.md"] = { label: "bob", kind: "project", area: "dev.md", root_parent: "bob.md", path: "bob.md", hue: "blue" };
+    homes["sase.md"] = { label: "sase", kind: "project", area: "dev.md", root_parent: "sase.md", path: "sase.md", hue: "blue" };
+    homes["dev.md"] = { label: "dev", kind: "area", area: "dev.md", root_parent: "dev.md", path: "dev.md", hue: "blue" };
+    homes["@review:GTD"] = { label: "GTD review", kind: "bucket", area: "gtd.md", root_parent: "@review:GTD", path: null, hue: "orange" };
+    homes["gtd.md"] = { label: "gtd", kind: "area", area: "gtd.md", root_parent: "gtd.md", path: "gtd.md", hue: "orange" };
+  }
+  if (options.manyRoots) {
+    for (let index = 1; index <= 7; index += 1) {
+      const key = `root-${index}.md`;
+      homes[key] = { label: `root-${index}`, kind: "project", area: "dev.md", root_parent: key, path: key, hue: HUES[(index - 1) % HUES.length] };
+    }
+  }
+  if (options.longLabels) {
+    homes["job_2026_apply_29.md"] = { label: "job_2026_apply_29 long root", kind: "project", area: "dev.md", root_parent: "job_2026_apply_29.md", path: "job_2026_apply_29.md", hue: "blue" };
+  }
 
   const workedPoints = dates.map((date, index) => {
     const value = date === day ? (options.noPomodoros ? 0 : options.allUnlinked ? 105 : options.manyAreas ? 420 : options.wideValues ? 605 : options.redefinedWorked ? 4 : 185) : 30 + index * 15;
@@ -57,12 +73,33 @@ function makeReport(options = {}) {
       entries.push(["@unlinked", 30]);
       parts = { area: Object.fromEntries(entries) };
       partsDisplay = { area: Object.fromEntries(entries.map(([key, amount]) => [key, `${amount}m`])) };
+    } else if (date === day && options.sameHueRoots) {
+      parts = { area: { "dev.md": 120, "gtd.md": 65 }, root_parent: { "bob.md": 45, "sase.md": 75, "dev.md": 10, "@review:GTD": 50, "gtd.md": 15, "@unlinked": 5 } };
+      partsDisplay = { area: { "dev.md": "2h 0m", "gtd.md": "1h 5m" }, root_parent: { "bob.md": "45m", "sase.md": "1h 15m", "dev.md": "10m", "@review:GTD": "50m", "gtd.md": "15m", "@unlinked": "5m" } };
+    } else if (date === day && options.manyRoots) {
+      const entries = Array.from({ length: 7 }, (_, rootIndex) => [`root-${rootIndex + 1}.md`, (rootIndex + 1) * 20]);
+      entries.push(["@unlinked", 15]);
+      parts = { area: { "dev.md": entries.reduce((sum, [, amount]) => sum + amount, 0) }, root_parent: Object.fromEntries(entries) };
+      partsDisplay = {
+        area: { "dev.md": `${entries.reduce((sum, [, amount]) => sum + amount, 0)}m` },
+        root_parent: Object.fromEntries(entries.map(([key, amount]) => [key, `${amount}m`])),
+      };
     } else if (date === day && options.noPomodoros) {
       parts = { area: {} };
       partsDisplay = { area: {} };
     } else if (!(date === day && options.redefinedWorked)) {
       parts = { area: { "gtd.md": Math.round(value * 0.55), "dev.md": value - Math.round(value * 0.55) } };
       partsDisplay = { area: { "gtd.md": `${Math.round(value * 0.55)}m`, "dev.md": `${value - Math.round(value * 0.55)}m` } };
+    }
+    // Default: mirror area parts into root_parent so the strip prefers
+    // roots; areaOnly (old bob) skips the mirror.
+    if (!options.areaOnly && !options.redefinedWorked && parts.area && !parts.root_parent) {
+      parts = { ...parts, root_parent: { ...parts.area } };
+      partsDisplay = { ...partsDisplay, root_parent: { ...(partsDisplay.area || {}) } };
+    }
+    if (options.longLabels && date === day && parts.root_parent) {
+      parts = { ...parts, root_parent: { ...parts.root_parent, "job_2026_apply_29.md": 25 } };
+      partsDisplay = { ...partsDisplay, root_parent: { ...(partsDisplay.root_parent || {}), "job_2026_apply_29.md": "25m" } };
     }
     return dailyPoint(date, value, options.redefinedWorked ? String(value) : value === 0 ? "0m" : `${Math.floor(value / 60)}h ${String(value % 60).padStart(2, "0")}m`, {
       provisional: date === day && options.provisional !== false && day === today,
@@ -162,6 +199,9 @@ const fixtures = {
   missingWarning: fixture("missing journal warning", { missingWarning: true }),
   manyAreas: fixture("seven areas and +N", { manyAreas: true }),
   redefinedWorked: fixture("redefined worked without area parts", { redefinedWorked: true }),
+  areaOnly: fixture("old bob without root_parent", { areaOnly: true }),
+  sameHueRoots: fixture("same-hue roots share blue and orange", { sameHueRoots: true }),
+  manyRoots: fixture("seven roots and +N", { manyRoots: true }),
   longLabels: fixture("long metric and area labels", { longLabels: true }),
   wideValues: fixture("wide values", { wideValues: true }),
   weekGrouped: fixture("week grouped report with daily points", { group: "week" }),

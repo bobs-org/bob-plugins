@@ -30,23 +30,14 @@ class BobLedgerToolsProgressMarksMixin {
           this.progressMarkLastTargets = null;
         }
       }
-      try {
-        if (
-          typeof document !== "undefined" &&
-          document &&
-          document.body &&
-          document.body.classList &&
-          typeof document.body.classList.add === "function"
-        ) {
-          if (this.progressMarksEnabled) {
-            document.body.classList.add("bob-progress-marks");
-          } else {
-            document.body.classList.remove("bob-progress-marks");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass(
+        "bob-progress-marks",
+        this.progressMarksEnabled,
+      );
+      this.registerMarkGatePopoutSync(
+        "bob-progress-marks",
+        () => this.progressMarksEnabled,
+      );
       try {
         if (typeof this.addCommand === "function") {
           this.addCommand({
@@ -598,21 +589,7 @@ class BobLedgerToolsProgressMarksMixin {
     try {
       this.progressMarksEnabled = !this.progressMarksEnabled;
       const enabled = this.progressMarksEnabled;
-      try {
-        const body =
-          typeof document !== "undefined" && document
-            ? document.body
-            : null;
-        if (body && body.classList) {
-          if (enabled) {
-            body.classList.add("bob-progress-marks");
-          } else {
-            body.classList.remove("bob-progress-marks");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass("bob-progress-marks", enabled);
       try {
         this.refreshProgressMarkEditors();
       } catch (error) {

@@ -67,6 +67,7 @@
   "260-plugin-freshness-mark-render.js",
   "264-plugin-task-tag-marks.js",
   "265-plugin-priority-marks.js",
+  "266-plugin-mark-gate-mirror.js",
   "266-plugin-date-marks.js",
   "267-plugin-date-marks-tasks.js",
   "268-plugin-progress-marks.js",

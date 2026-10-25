@@ -7,21 +7,11 @@ class BobLedgerToolsDateMarksMixin {
       if (typeof this.dateMarksEnabled !== "boolean") {
         this.dateMarksEnabled = true;
       }
-      try {
-        const body =
-          typeof document !== "undefined" && document
-            ? document.body
-            : null;
-        if (body && body.classList) {
-          if (this.dateMarksEnabled) {
-            body.classList.add("bob-date-marks");
-          } else {
-            body.classList.remove("bob-date-marks");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass("bob-date-marks", this.dateMarksEnabled);
+      this.registerMarkGatePopoutSync(
+        "bob-date-marks",
+        () => this.dateMarksEnabled,
+      );
       try {
         if (typeof this.addCommand === "function") {
           this.addCommand({
@@ -696,21 +686,7 @@ class BobLedgerToolsDateMarksMixin {
     try {
       this.dateMarksEnabled = !this.dateMarksEnabled;
       const enabled = this.dateMarksEnabled;
-      try {
-        const body =
-          typeof document !== "undefined" && document
-            ? document.body
-            : null;
-        if (body && body.classList) {
-          if (enabled) {
-            body.classList.add("bob-date-marks");
-          } else {
-            body.classList.remove("bob-date-marks");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass("bob-date-marks", enabled);
       try {
         this.refreshDateMarkEditors();
       } catch (error) {

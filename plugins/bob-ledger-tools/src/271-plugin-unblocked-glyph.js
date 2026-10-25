@@ -17,23 +17,14 @@ class BobLedgerToolsUnblockedGlyphMixin {
       if (typeof this.unblockedGlyphEnabled !== "boolean") {
         this.unblockedGlyphEnabled = true;
       }
-      try {
-        if (
-          typeof document !== "undefined" &&
-          document &&
-          document.body &&
-          document.body.classList &&
-          typeof document.body.classList.add === "function"
-        ) {
-          if (this.unblockedGlyphEnabled) {
-            document.body.classList.add("bob-unblocked-glyphs");
-          } else {
-            document.body.classList.remove("bob-unblocked-glyphs");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass(
+        "bob-unblocked-glyphs",
+        this.unblockedGlyphEnabled,
+      );
+      this.registerMarkGatePopoutSync(
+        "bob-unblocked-glyphs",
+        () => this.unblockedGlyphEnabled,
+      );
       try {
         if (typeof this.addCommand === "function") {
           this.addCommand({
@@ -398,21 +389,7 @@ class BobLedgerToolsUnblockedGlyphMixin {
     try {
       this.unblockedGlyphEnabled = !this.unblockedGlyphEnabled;
       const enabled = this.unblockedGlyphEnabled;
-      try {
-        const body =
-          typeof document !== "undefined" && document
-            ? document.body
-            : null;
-        if (body && body.classList) {
-          if (enabled) {
-            body.classList.add("bob-unblocked-glyphs");
-          } else {
-            body.classList.remove("bob-unblocked-glyphs");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass("bob-unblocked-glyphs", enabled);
       try {
         this.refreshUnblockedGlyphEditors();
       } catch (error) {

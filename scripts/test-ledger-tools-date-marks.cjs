@@ -1573,6 +1573,77 @@ test("session toggle and onload wiring", () => {
   }
 });
 
+test("mark gate holds in popout windows for both toggle states", () => {
+  const savedDocument = global.document;
+  const makeGateDocument = () => {
+    const classes = new Set();
+    return {
+      body: {
+        classList: {
+          add: (name) => classes.add(name),
+          remove: (name) => classes.delete(name),
+          contains: (name) => classes.has(name),
+        },
+      },
+      _classes: classes,
+    };
+  };
+  const popoutLeaf = (doc) => ({
+    view: { file: { path: "other.md" } },
+    containerEl: { ownerDocument: doc },
+  });
+  const mainDoc = makeGateDocument();
+  const earlyPopoutDoc = makeGateDocument();
+  const leaves = [popoutLeaf(earlyPopoutDoc)];
+  const windowOpenHandlers = [];
+  const app = makeSurfaceApp({ triggers: [], leaves });
+  app.workspace.on = (event, handler) => {
+    if (event === "window-open") {
+      windowOpenHandlers.push(handler);
+    }
+    return {};
+  };
+  global.document = mainDoc;
+  try {
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.setupDateMarks();
+    const has = (doc) => doc._classes.has("bob-date-marks");
+    // Setup mirrors the on state onto the main and early-popout bodies.
+    assert.equal(has(mainDoc), true);
+    assert.equal(has(earlyPopoutDoc), true);
+    assert.ok(windowOpenHandlers.length >= 1, "window-open mirrored");
+    // A popout opened after setup inherits the on state.
+    const latePopoutDoc = makeGateDocument();
+    for (const handler of windowOpenHandlers) {
+      handler({ doc: latePopoutDoc }, undefined);
+    }
+    assert.equal(has(latePopoutDoc), true);
+    // Toggle off clears every known body; later popouts stay off.
+    assert.equal(plugin.toggleDateMarks(), false);
+    assert.equal(has(mainDoc), false);
+    assert.equal(has(earlyPopoutDoc), false);
+    assert.equal(has(latePopoutDoc), false);
+    const offPopoutDoc = makeGateDocument();
+    for (const handler of windowOpenHandlers) {
+      handler(undefined, { document: offPopoutDoc });
+    }
+    assert.equal(has(offPopoutDoc), false);
+    // Toggle on restores every known body, including popouts opened while off.
+    leaves.push(popoutLeaf(offPopoutDoc));
+    assert.equal(plugin.toggleDateMarks(), true);
+    assert.equal(has(mainDoc), true);
+    assert.equal(has(earlyPopoutDoc), true);
+    assert.equal(has(latePopoutDoc), true);
+    assert.equal(has(offPopoutDoc), true);
+  } finally {
+    if (savedDocument === undefined) {
+      delete global.document;
+    } else {
+      global.document = savedDocument;
+    }
+  }
+});
+
 test("styles.css contract: masks, tones, repair flag, resting", () => {
   const css = fs.readFileSync(
     path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),

@@ -52,81 +52,6 @@ class BobLedgerToolsDayStripMixin {
 
   // Per-device collapse, shared by every strip on this device. Vault
   // reads and writes never happen here. Never throws.
-  dayStripIsCollapsed() {
-    try {
-      if (
-        this.app &&
-        typeof this.app.loadLocalStorage === "function"
-      ) {
-        const value = this.app.loadLocalStorage(DAY_STRIP_COLLAPSE_KEY);
-        return value === true || value === "true";
-      }
-    } catch (error) {
-      // Fall through to window storage below.
-    }
-    try {
-      if (
-        typeof window !== "undefined" &&
-        window &&
-        window.localStorage &&
-        typeof window.localStorage.getItem === "function"
-      ) {
-        return window.localStorage.getItem(DAY_STRIP_COLLAPSE_KEY) === "true";
-      }
-    } catch (error) {
-      // Storage is best-effort.
-    }
-    return false;
-  }
-
-  dayStripSetCollapsed(value) {
-    const collapsed = value === true;
-    try {
-      if (this.app && typeof this.app.saveLocalStorage === "function") {
-        this.app.saveLocalStorage(DAY_STRIP_COLLAPSE_KEY, collapsed);
-      }
-    } catch (error) {
-      // Storage is best-effort.
-    }
-    try {
-      if (
-        typeof window !== "undefined" &&
-        window &&
-        window.localStorage &&
-        typeof window.localStorage.setItem === "function"
-      ) {
-        window.localStorage.setItem(
-          DAY_STRIP_COLLAPSE_KEY,
-          collapsed ? "true" : "false",
-        );
-      }
-    } catch (error) {
-      // Storage is best-effort.
-    }
-    try {
-      for (const record of Array.from(this.dayStripViewsStore())) {
-        try {
-          this.dayStripPaint(record);
-        } catch (error) {
-          // One stale strip never breaks the others.
-        }
-        try {
-          if (
-            record &&
-            record.editorView &&
-            typeof record.editorView.requestMeasure === "function"
-          ) {
-            record.editorView.requestMeasure();
-          }
-        } catch (error) {
-          // Measuring is best-effort.
-        }
-      }
-    } catch (error) {
-      // Repaint is best-effort.
-    }
-  }
-
   setupDayStripHosts() {
     try {
       if (typeof this.setupDayStripMount === "function") {
@@ -447,7 +372,6 @@ class BobLedgerToolsDayStripMixin {
       }
       const localToday = this.dayStripLocalNow();
       const day = record.day;
-      const collapsed = this.dayStripIsCollapsed();
       const handlers = {
         openStats: (opts) => {
           try {
@@ -462,13 +386,6 @@ class BobLedgerToolsDayStripMixin {
             });
           } catch (error) {
             // Opening Stats is best-effort here; openStatsForDay Notices.
-          }
-        },
-        toggleCollapsed: () => {
-          try {
-            this.dayStripSetCollapsed(!this.dayStripIsCollapsed());
-          } catch (error) {
-            // Collapse is best-effort.
           }
         },
         retry: () => {
@@ -488,8 +405,7 @@ class BobLedgerToolsDayStripMixin {
             String(stamp === undefined ? "" : stamp),
             model.stale,
             model.error ? model.error.code : "",
-            collapsed,
-            (model.tiles || []).map((tile) => tile.display).join(","),
+            (model.facts || []).map((fact) => fact.display).join(","),
           ].join("|");
           if (record.paintedKey === key) {
             return model;
@@ -559,7 +475,6 @@ class BobLedgerToolsDayStripMixin {
             fetchedAt,
             stale,
             error,
-            collapsed,
           }),
           "skeleton",
           "miss",
@@ -571,7 +486,6 @@ class BobLedgerToolsDayStripMixin {
           fetchedAt,
           stale,
           error,
-          collapsed,
         }),
         "cached",
         fetchedAt,

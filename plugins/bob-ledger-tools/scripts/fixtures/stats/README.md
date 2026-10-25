@@ -45,7 +45,8 @@ dev-only and is not included in `npm test` or `npm run validate`.
 
 `day-strip-fixtures.cjs` exports synthetic presentation reports for the Day strip:
 today in progress, a past day, no Pomodoros, all-unlinked time, not-tracked and missing
-points, seven areas, a redefined `worked`, long labels, a week-grouped daily series, a
-canonical-shaped default `4w` report, and an explicit eight-day `-g day` report. These
+points, seven areas, a redefined `worked`, long labels, wide values (`10h 05m`,
+three-digit counts, `not yet`), a week-grouped daily series, a canonical-shaped
+default `4w` report, and an explicit eight-day `-g day` report. These
 reports exist only to exercise the view and are not captured vault data or tests of
 `bob stats` calculations.

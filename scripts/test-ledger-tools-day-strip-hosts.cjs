@@ -203,10 +203,17 @@ function asOfHidden(el) {
     (node) =>
       (node.getAttribute("class") || "")
         .split(/\s+/)
-        .includes("bob-day-strip-as-of"),
+        .includes("bob-day-strip-meta"),
   );
-  assert.ok(nodes.length > 0, "the as-of node renders");
-  return nodes[0].getAttribute("hidden") !== null;
+  // A past day renders no meta at all; that hides "so far" by construction.
+  // A skeleton's placeholder meta is transparent text, also never shown.
+  if (!nodes.length) return true;
+  let scope = nodes[0];
+  while (scope) {
+    if ((scope.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-state-skeleton")) return true;
+    scope = scope.parentNode;
+  }
+  return nodes[0].getAttribute("hidden") !== null || !nodes[0].textContent;
 }
 
 function makeApp(overrides = {}) {
@@ -396,7 +403,8 @@ test("paint from cache costs one frame and zero spawns", async () => {
       await settle();
       assert.equal(spawns.length, 1);
       assert.ok(plugin.dayStripPaintsCached > before, "paints from cache");
-      assert.match(el.textContent, /Stats/);
+      assert.match(el.textContent, /Worked/);
+      assert.match(el.textContent, /so far/);
       assert.doesNotMatch(el.textContent, /unavailable/i);
       // A second paint with the same cache entry rebuilds nothing.
       const first = el.children[0];
@@ -600,7 +608,7 @@ test("several strips and the page share one spawn per key", async () => {
       );
       await settle(60);
       assert.equal(spawns.length, 1);
-      assert.match(el.textContent, /Stats/);
+      assert.match(el.textContent, /Worked/);
       assert.ok(page.querySelector(".bob-stats"), "the page settles too");
     } finally {
       plugin.onunload();
@@ -789,9 +797,10 @@ test("a failed refresh keeps the frame and shows the stale dot", async () => {
       plugin.dayStripCheckAll();
       await settle(60);
       assert.equal(spawns.length, 2);
-      assert.ok(
-        el.querySelector(".bob-day-strip-stale-dot"),
-        "the stale dot shows after a failed refresh",
+      assert.match(
+        el.querySelector(".bob-day-strip-meta").textContent,
+        /refresh failed/,
+        "the meta names the failed refresh while the cached frame stays",
       );
       assert.ok(
         el.textContent.includes(framed.slice(0, 24)),
@@ -824,7 +833,8 @@ test("a failure with nothing cached shows the one-line error and Retry", async (
       assert.match(el.textContent, /Day stats unavailable/);
       const retry = el.querySelector(".bob-day-strip-retry");
       assert.ok(retry, "Retry is offered");
-      assert.ok(el.querySelector(".bob-day-strip-stats-link"), "Stats link stays");
+      assert.equal(retry.getAttribute("role"), "link", "Retry is a link span, not a button");
+      assert.equal(retry.getAttribute("tabindex"), "0");
       retry.dispatch("click", { button: 0 });
       await settle(60);
       assert.equal(spawns.length, 2);
@@ -1132,7 +1142,7 @@ test("renderStatsResult consumes the one-shot revealPanel", async () => {
   });
 });
 
-test("collapse persists per device and repaints every strip in place", async () => {
+test("every strip paints facts and links with no buttons and no vault writes", async () => {
   await withMissingConfig(async () => {
     const app = makeApp();
     let writes = 0;
@@ -1150,7 +1160,6 @@ test("collapse persists per device and repaints every strip in place", async () 
       const current = fixtures.createReport({ day: today, today, count: 8 });
       stubSpawn(plugin, () => ({ ok: true, report: current }));
       await seedDefault(plugin, current);
-      assert.equal(plugin.dayStripIsCollapsed(), false);
       const first = mountFence(plugin, {
         sourcePath: `${folder}/${stem}.md`,
       });
@@ -1159,14 +1168,11 @@ test("collapse persists per device and repaints every strip in place", async () 
         sourcePath: "notes/weekly.md",
       });
       await settle(60);
-      assert.ok(!first.el.querySelector(".bob-day-strip-summary"));
-      plugin.dayStripSetCollapsed(true);
-      assert.equal(app.__store.get("bob-day-strip-collapsed"), true);
-      assert.ok(first.el.querySelector(".bob-day-strip-summary"));
-      assert.ok(second.el.querySelector(".bob-day-strip-summary"));
-      assert.equal(writes, 0, "collapse never writes the vault");
-      plugin.dayStripSetCollapsed(false);
-      assert.ok(!first.el.querySelector(".bob-day-strip-summary"));
+      for (const mounted of [first, second]) {
+        assert.ok(mounted.el.querySelector(".bob-day-strip-fact"), "each strip paints facts");
+        assert.equal(mounted.el.querySelector("button"), null, "no button elements");
+      }
+      assert.equal(writes, 0, "painting never writes the vault");
     } finally {
       plugin.onunload();
     }

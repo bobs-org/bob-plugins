@@ -1,4 +1,4 @@
-// Pure model for the daily-note Stats receipt. Bob owns every displayed
+// Pure model for the daily-note Day strip. Bob owns every displayed
 // value; this model only selects the requested day's points and arranges
 // their supplied labels, parts, and quality information for the painter.
 const DAY_STRIP_METRIC_IDS = ["worked", "reviewed", "done", "created", "review_closed"];
@@ -8,6 +8,15 @@ const DAY_STRIP_LABELS = {
   done: "Done",
   created: "Created",
   review_closed: "Review closed",
+};
+// Transparent-text skeleton placeholders, one per fact, so the skeleton
+// keeps the loaded strip's line boxes and wrap points.
+const DAY_STRIP_SKELETON_DISPLAYS = {
+  worked: "0h 00m",
+  reviewed: "00",
+  done: "00",
+  created: "00",
+  review_closed: "not yet",
 };
 const DAY_STRIP_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAY_STRIP_WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -90,37 +99,7 @@ function dayStripMetricPoints(metric, report) {
   }
 }
 
-function dayStripMarks(metric, report, day, bool) {
-  const points = dayStripMetricPoints(metric, report);
-  const dates = Array.from({ length: 8 }, (_, index) => dayStripShiftDay(day, index - 7));
-  const byDate = new Map(points.filter((point) => point && typeof point.date === "string").map((point) => [point.date, point]));
-  const source = dates.map((date) => {
-    const point = byDate.get(date);
-    return point && typeof point.value === "number"
-      ? { value: point.value, provisional: point.provisional === true && date === day }
-      : { value: null, provisional: false };
-  });
-  const bars = statsSparkBars(source);
-  return dates.map((date, index) => {
-    const point = byDate.get(date) || null;
-    const value = point && typeof point.value === "number" ? point.value : null;
-    return {
-      date,
-      height: bars[index] ? bars[index].height : 0,
-      empty: !point || value === null,
-      zero: Boolean(point && value === 0),
-      provisional: Boolean(point && point.provisional === true && date === day),
-      isDay: date === day,
-      met: bool ? (value === null ? null : value > 0) : null,
-      display: point && typeof point.display === "string" ? point.display : "–",
-      title: dayStripDateWords(date)
-        ? dayStripDateWords(date).short + ": " + (point && typeof point.display === "string" ? point.display : "–")
-        : date,
-    };
-  });
-}
-
-function dayStripBuildTile(metric, report, day, dateWords) {
+function dayStripBuildFact(metric, report, day, dateWords) {
   const points = dayStripMetricPoints(metric, report);
   const point = points.find((candidate) => candidate && candidate.date === day) || null;
   const unit = metric && typeof metric.unit === "string" ? metric.unit : "";
@@ -153,21 +132,18 @@ function dayStripBuildTile(metric, report, day, dateWords) {
     warning,
     definition: metric && typeof metric.definition === "string" ? metric.definition : "",
     tooltip,
-    kind: unit === "bool" ? "dots" : "bars",
     unit,
     value: point && typeof point.value === "number" ? point.value : null,
     provisional: Boolean(point && point.provisional === true),
-    point,
-    marks: dayStripMarks(metric, report, day, unit === "bool"),
   };
 }
 
 function dayStripMix(report, worked, day) {
   const omitted = !worked || worked.unit !== "minutes";
-  if (omitted) return { segments: [], legend: [], overflow: [], empty: false, omitted: true };
+  if (omitted) return { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" };
   const points = dayStripMetricPoints(worked, report);
   const hasAreaParts = points.some((point) => point && point.parts && point.parts.area && typeof point.parts.area === "object" && Object.keys(point.parts.area).length > 0);
-  if (!hasAreaParts) return { segments: [], legend: [], overflow: [], empty: false, omitted: true };
+  if (!hasAreaParts) return { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" };
   const point = points.find((candidate) => candidate && candidate.date === day) || null;
   const rawAreas = point && point.parts && point.parts.area && typeof point.parts.area === "object" ? point.parts.area : null;
   const rows = rawAreas ? statsPanelHomeRows(worked, report, "area", point) : [];
@@ -193,7 +169,7 @@ function dayStripMix(report, worked, day) {
     overflow,
     empty: Boolean(point && point.value === 0 && point.quality === "ok"),
     omitted: false,
-    overflowTitle: overflow.map((segment) => segment.label + " " + segment.display).join("\n"),
+    title: ["Time by area", ...segments.map((segment) => segment.label + " " + segment.display)].join("\n"),
     point,
   };
 }
@@ -211,22 +187,26 @@ function dayStripErrorInfo(error) {
   }
 }
 
-function dayStripCollapsedText(tiles) {
-  return tiles.map((tile) => ({
-    id: tile.id,
-    label: tile.label,
-    display: tile.display,
-    kind: tile.unit === "bool" ? "bool" : "value",
-  }));
+// The meta line next to the mix: today reads `so far · HH:MM`, a stale
+// today appends `refresh failed`, a stale past day reads `refresh failed`,
+// and every other day reads nothing. Never throws.
+function dayStripMetaText({ day, localToday, asOf, stale }) {
+  try {
+    if (day !== localToday) return stale === true ? "refresh failed" : "";
+    if (!asOf) return stale === true ? "refresh failed" : "";
+    return stale === true ? "so far · " + asOf + " · refresh failed" : "so far · " + asOf;
+  } catch (error) {
+    return "";
+  }
 }
 
-function dayStripAriaLabel(day, dateWords, provisional, tiles, mix) {
-  const values = tiles.map((tile) => tile.label + " " + tile.display).join(", ");
-  let label = "Day stats for " + dateWords.full + (provisional ? ", so far" : "") + (values ? ": " + values : ".");
+function dayStripAriaLabel(day, dateWords, provisional, facts, mix) {
+  const values = facts.map((fact) => fact.label + " " + fact.display).join(", ");
+  let label = "Day stats for " + dateWords.full + (provisional ? ", so far" : "") + (values ? ": " + values + "." : ".");
   if (mix && !mix.omitted && mix.segments.length) {
-    label += ". Time by area: " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
+    label += " Time by area: " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   } else if (mix && mix.empty) {
-    label += ". No Pomodoros.";
+    label += " No Pomodoros.";
   }
   return label;
 }
@@ -237,36 +217,33 @@ function dayStripModel(report, day, context) {
     const safeReport = report && typeof report === "object" ? report : null;
     const dateWords = dayStripDateWords(day);
     if (!dateWords) {
-      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", tiles: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true }, collapsedText: [], ariaLabel: "", stale: false, error: null, collapsed: false };
+      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "", stale: false, error: null };
     }
     const localToday = typeof safeContext.localToday === "string" ? safeContext.localToday : "";
     if (dayStripDateParts(localToday) && day > localToday) {
-      return { state: "future", day, dateWords, provisional: false, asOf: "", tiles: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true }, collapsedText: [], ariaLabel: "", stale: false, error: null, collapsed: false };
+      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "", stale: false, error: null };
     }
     const error = dayStripErrorInfo(safeContext.error);
     if (!safeReport) {
       if (error) {
-        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", tiles: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true }, collapsedText: [], ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error, collapsed: false };
+        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
       }
-      const tiles = DAY_STRIP_METRIC_IDS.map((id) => ({
+      const facts = DAY_STRIP_METRIC_IDS.map((id) => ({
         id,
         label: DAY_STRIP_LABELS[id],
-        display: "",
+        display: DAY_STRIP_SKELETON_DISPLAYS[id] || "00",
         quality: "skeleton",
         reason: "",
         since: "",
         warning: "",
         definition: "",
         tooltip: "",
-        kind: id === "review_closed" ? "dots" : "bars",
         unit: id === "review_closed" ? "bool" : "",
         value: null,
         provisional: false,
-        point: null,
-        marks: Array.from({ length: 8 }, (_, index) => ({ date: dayStripShiftDay(day, index - 7), height: 0, empty: true, zero: false, provisional: false, isDay: index === 7, met: null, display: "–", title: "" })),
       }));
-      const mix = { segments: [], legend: [], overflow: [], empty: false, omitted: false, skeleton: true };
-      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", tiles, mix, collapsedText: dayStripCollapsedText(tiles), ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null, collapsed: safeContext.collapsed === true };
+      const mix = { segments: [], legend: [], overflow: [], empty: false, omitted: false, skeleton: true, title: "" };
+      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
     }
 
     // A default report from before midnight must never be used to show a
@@ -276,14 +253,15 @@ function dayStripModel(report, day, context) {
     }
 
     const metrics = Array.isArray(safeReport.metrics) ? safeReport.metrics : [];
-    const tiles = DAY_STRIP_METRIC_IDS.map((id) => metrics.find((metric) => metric && metric.id === id)).filter(Boolean)
-      .map((metric) => dayStripBuildTile(metric, safeReport, day, dateWords));
+    const facts = DAY_STRIP_METRIC_IDS.map((id) => metrics.find((metric) => metric && metric.id === id)).filter(Boolean)
+      .map((metric) => dayStripBuildFact(metric, safeReport, day, dateWords));
     const worked = metrics.find((metric) => metric && metric.id === "worked") || null;
     const mix = dayStripMix(safeReport, worked, day);
-    const provisional = tiles.some((tile) => tile.provisional);
+    const provisional = facts.some((fact) => fact.provisional);
     const asOf = day === localToday ? dayStripAsOf(safeContext.fetchedAt, true) : "";
     const stale = safeContext.stale === true;
-    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, tiles, mix);
+    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, facts, mix);
+    const metaText = dayStripMetaText({ day, localToday, asOf, stale });
     const staleTitle = stale
       ? ((error && error.title) || (typeof safeContext.error === "string" ? safeContext.error : "Refresh failed")) +
         " · showing the " + (asOf || "cached") + " report"
@@ -294,14 +272,13 @@ function dayStripModel(report, day, context) {
       dateWords,
       provisional,
       asOf,
-      tiles,
+      metaText,
+      facts,
       mix,
-      collapsedText: dayStripCollapsedText(tiles),
       ariaLabel,
       stale,
       staleTitle,
       error,
-      collapsed: safeContext.collapsed === true,
     };
   } catch (error) {
     const safeDay = typeof day === "string" ? day : "";
@@ -312,13 +289,12 @@ function dayStripModel(report, day, context) {
       dateWords,
       provisional: false,
       asOf: "",
-      tiles: [],
-      mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true },
-      collapsedText: [],
+      metaText: "",
+      facts: [],
+      mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" },
       ariaLabel: "Day stats unavailable — bob stats failed.",
       stale: false,
       error: { code: "model-error", title: "bob stats failed", hint: "" },
-      collapsed: false,
     };
   }
 }

@@ -30,6 +30,7 @@ class FakeNode {
   setAttribute(name, value) { this.attrs.set(name, String(value)); }
   getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
   removeAttribute(name) { this.attrs.delete(name); }
+  hasAttribute(name) { return this.attrs.has(name); }
 
   appendChild(child) {
     child.parentNode = this;
@@ -105,10 +106,6 @@ function modelFor(fixture, overrides = {}) {
   });
 }
 
-function treeShape(node) {
-  return [node.tagName, node.children.map(treeShape)];
-}
-
 test("date words and day shifts use calendar integers, including leap day", () => {
   assert.equal(helpers.dayStripShiftDay("2028-03-01", -1), "2028-02-29");
   assert.equal(helpers.dayStripShiftDay("2028-02-29", 1), "2028-03-01");
@@ -116,7 +113,7 @@ test("date words and day shifts use calendar integers, including leap day", () =
   assert.equal(helpers.dayStripDateParts("2028-02-30"), null);
 });
 
-test("tile displays are selected from the exact day point, even with null headline and grouped input", () => {
+test("fact displays are selected from the exact day point, even with null headline and grouped input", () => {
   const leap = fixtures.createReport({ day: "2028-02-29", today: "2028-02-29", count: 8 });
   const cases = [
     [fixtures.today.report, fixtures.today.day],
@@ -128,53 +125,47 @@ test("tile displays are selected from the exact day point, even with null headli
     assert.equal(report.metrics.find((metric) => metric.id === "worked").summary.headline, null);
     const result = helpers.dayStripModel(report, day, { localToday: report.today, fetchedAt: "2026-10-24T14:50:00" });
     assert.equal(result.state, "ready");
-    for (const tile of result.tiles) {
-      const metric = report.metrics.find((item) => item.id === tile.id);
+    assert.deepEqual(result.facts.map((fact) => fact.id), ["worked", "reviewed", "done", "created", "review_closed"]);
+    for (const fact of result.facts) {
+      const metric = report.metrics.find((item) => item.id === fact.id);
       const point = helpers.statsChartDailyPoints(metric, report).find((item) => item.date === day);
-      assert.ok(point, `${tile.id} has a point for ${day}`);
-      assert.equal(tile.display, point.display, `${tile.id} keeps bob's display for ${day}`);
+      assert.ok(point, `${fact.id} has a point for ${day}`);
+      assert.equal(fact.display, point.display, `${fact.id} keeps bob's display for ${day}`);
     }
   }
 });
 
-test("honest states preserve future, skeleton, unavailable, missing, not-tracked, and stale information", () => {
+test("honest states carry meta text for today, past, stale today, and stale past", () => {
   assert.equal(helpers.dayStripModel(null, "2026-10-24", { localToday: "2026-10-24" }).state, "skeleton");
   assert.equal(helpers.dayStripModel(null, "2026-10-25", { localToday: "2026-10-24" }).state, "future");
   assert.equal(helpers.dayStripModel(null, "2026-10-24", { localToday: "2026-10-24", error: { code: "bob-not-found" } }).state, "unavailable");
   assert.equal(helpers.dayStripModel(null, "invalid", { localToday: "2026-10-24" }).state, "hidden");
 
   const notTracked = modelFor(fixtures.notTracked);
-  const reviewed = notTracked.tiles.find((tile) => tile.id === "reviewed");
+  const reviewed = notTracked.facts.find((fact) => fact.id === "reviewed");
   assert.equal(reviewed.quality, "not_tracked");
   assert.equal(reviewed.display, "–");
   assert.match(reviewed.tooltip, /Tracking since 2026-10-25/);
 
   const missing = modelFor(fixtures.missingWarning);
-  const missingTile = missing.tiles.find((tile) => tile.id === "reviewed");
-  assert.equal(missingTile.display, "–");
-  assert.match(missingTile.warning, /journal has a gap/);
-  assert.match(missingTile.warning, /journal_gap|review journal/);
+  const missingReviewed = missing.facts.find((fact) => fact.id === "reviewed");
+  assert.equal(missingReviewed.display, "–");
+  assert.match(missingReviewed.warning, /journal has a gap/);
+  assert.match(missingReviewed.warning, /journal_gap|review journal/);
 
-  const stale = modelFor(fixtures.today, { stale: true, error: { code: "timeout", title: "bob stats timed out" } });
-  assert.equal(stale.stale, true);
-  assert.match(stale.staleTitle, /showing the 14:50 report/);
+  const today = modelFor(fixtures.today);
+  assert.equal(today.metaText, "so far · 14:50");
+  const past = modelFor(fixtures.past);
+  assert.equal(past.metaText, "");
+  const staleToday = modelFor(fixtures.today, { stale: true, error: { code: "timeout", title: "bob stats timed out" } });
+  assert.equal(staleToday.stale, true);
+  assert.equal(staleToday.metaText, "so far · 14:50 · refresh failed");
+  assert.match(staleToday.staleTitle, /showing the 14:50 report/);
+  const stalePast = modelFor(fixtures.past, { stale: true, error: { code: "timeout", title: "bob stats timed out" } });
+  assert.equal(stalePast.metaText, "refresh failed");
 });
 
-test("marks cover eight dates with the requested day last and provisional marks hollow", () => {
-  const model = modelFor(fixtures.today);
-  for (const tile of model.tiles) {
-    assert.equal(tile.marks.length, 8);
-    assert.equal(tile.marks.at(-1).date, fixtures.today.day);
-    assert.equal(tile.marks.at(-1).isDay, true);
-  }
-  const worked = model.tiles.find((tile) => tile.id === "worked");
-  const painted = paint(model).root;
-  assert.ok(byClass(painted, "bob-day-strip-mark-provisional").length > 0);
-  assert.ok(byClass(painted, "bob-day-strip-mark-day").length > 0);
-  assert.equal(worked.marks.at(-1).provisional, true);
-});
-
-test("time mix reuses Stats area ordering and hues, with buckets last", () => {
+test("time mix reuses Stats area ordering and hues, with buckets last and a tooltip title", () => {
   const fixture = fixtures.manyAreas;
   const model = modelFor(fixture);
   const worked = fixture.report.metrics.find((metric) => metric.id === "worked");
@@ -186,19 +177,22 @@ test("time mix reuses Stats area ordering and hues, with buckets last", () => {
   assert.equal(model.mix.segments.at(-1).hue, "gray");
   assert.equal(model.mix.legend.length, 3);
   assert.equal(model.mix.overflow.length, 5);
+  assert.match(model.mix.title, /^Time by area\n/);
   assert.equal(byClass(paint(model).root, "bob-day-strip-overflow")[0].textContent, "+5");
 });
 
 test("zero worked renders no Pomodoros and redefined worked omits its mix", () => {
   const empty = modelFor(fixtures.noPomodoros);
   assert.equal(empty.mix.empty, true);
+  assert.equal(empty.mix.omitted, false);
   const emptyRoot = paint(empty).root;
   assert.equal(byClass(emptyRoot, "bob-day-strip-no-pomodoros")[0].textContent, "no Pomodoros");
-  assert.ok(byClass(emptyRoot, "bob-day-strip-mix-empty").length);
 
   const redefined = modelFor(fixtures.redefinedWorked);
   assert.equal(redefined.mix.omitted, true);
-  assert.equal(byClass(paint(redefined).root, "bob-day-strip-mix-action")[0].getAttribute("hidden"), "true");
+  const redefinedRoot = paint(redefined).root;
+  assert.equal(byClass(redefinedRoot, "bob-day-strip-mix").length, 0, "a redefined worked omits the mix link");
+  assert.ok(byClass(redefinedRoot, "bob-day-strip-meta").length, "today keeps only the meta");
 });
 
 test("aria label carries the date, values, provisional state, and area names", () => {
@@ -208,50 +202,75 @@ test("aria label carries the date, values, provisional state, and area names", (
   assert.match(model.ariaLabel, /Time by area: gtd/);
 });
 
-test("painter repaints in place, renders fixed skeleton geometry, and shows unavailable controls", () => {
-  const ready = modelFor(fixtures.explicitDay8);
-  const skeleton = helpers.dayStripModel(null, fixtures.explicitDay8.day, { localToday: fixtures.explicitDay8.localToday });
+test("skeleton carries placeholder text per fact and the same tag and class sequence", () => {
+  const ready = modelFor(fixtures.today);
+  const skeleton = helpers.dayStripModel(null, fixtures.today.day, { localToday: fixtures.today.localToday });
+  assert.deepEqual(
+    skeleton.facts.map((fact) => [fact.id, fact.display]),
+    [["worked", "0h 00m"], ["reviewed", "00"], ["done", "00"], ["created", "00"], ["review_closed", "not yet"]],
+  );
+  const normalize = (classes) => (classes || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((name) => name === "bob-day-strip-state-ready" || name === "bob-day-strip-state-skeleton" ? "bob-day-strip-state-STATE" : name)
+    .filter((name) => name !== "bob-day-strip-provisional" && name !== "bob-day-strip-stale" && !name.endsWith("-skeleton") && !name.startsWith("bob-day-strip-hue-"))
+    .join(" ");
+  const shape = (root) => findAll(root, () => true).map((node) => node.tagName + "|" + normalize(node.getAttribute("class")));
+  assert.deepEqual(shape(paint(skeleton).root), shape(paint(ready).root));
+});
+
+test("painter repaints in place, emits no buttons, and shows unavailable controls", () => {
+  const ready = modelFor(fixtures.today);
+  const skeleton = helpers.dayStripModel(null, fixtures.today.day, { localToday: fixtures.today.localToday });
   const { root, returned } = paint(ready);
   assert.equal(returned, root);
-  const shape = treeShape(root);
+  assert.equal(findAll(root, (node) => node.tagName === "BUTTON").length, 0, "no <button> elements");
   helpers.paintDayStrip(root, skeleton);
-  assert.deepEqual(treeShape(root), shape);
+  assert.equal(findAll(root, (node) => node.tagName === "BUTTON").length, 0);
   helpers.paintDayStrip(root, ready);
   assert.equal(root.getAttribute("data-day"), ready.day);
+  assert.equal(root.getAttribute("role"), "group");
 
   const unavailable = helpers.dayStripModel(null, ready.day, { localToday: ready.day, error: { code: "bob-not-found" } });
   helpers.paintDayStrip(root, unavailable, { retry() {} });
   assert.match(root.textContent, /bob was not found/);
+  assert.match(root.textContent, /Set stats\.bob_path/);
   assert.ok(byClass(root, "bob-day-strip-retry").length);
-  assert.ok(byClass(root, "bob-day-strip-stats-link").length);
+  assert.equal(findAll(root, (node) => node.tagName === "BUTTON").length, 0);
 });
 
-test("tiles, mix, and Stats actions preserve day, focus, and new-leaf modifiers", () => {
+test("facts, mix, and Retry preserve day, focus, and new-leaf modifiers", () => {
   const calls = [];
   const fixture = fixtures.today;
   const { root } = paint(modelFor(fixture), {
     openStats: (options) => calls.push(options),
-    toggleCollapsed: () => calls.push({ toggle: true }),
+    retry: () => calls.push({ retry: true }),
   });
-  const tile = byAttribute(root, "data-day-strip-metric", "worked")[0];
-  tile.dispatch("click", { button: 0, ctrlKey: true });
+  const fact = byAttribute(root, "data-day-strip-metric", "worked")[0];
+  assert.equal(fact.getAttribute("role"), "link");
+  assert.equal(fact.getAttribute("tabindex"), "0");
+  fact.dispatch("click", { button: 0, ctrlKey: true });
   assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", newLeaf: true });
 
-  byClass(root, "bob-day-strip-mix-action")[0].dispatch("auxclick", { button: 1 });
+  byClass(root, "bob-day-strip-mix")[0].dispatch("auxclick", { button: 1 });
   assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", panel: "homes", newLeaf: true });
 
-  byClass(root, "bob-day-strip-stats-link")[0].dispatch("click", { button: 0, metaKey: true });
-  assert.deepEqual(calls.pop(), { day: fixture.day, newLeaf: true });
+  const keydownFact = byAttribute(root, "data-day-strip-metric", "done")[0];
+  keydownFact.dispatch("keydown", { key: "Enter" });
+  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "done", newLeaf: false });
+  keydownFact.dispatch("keydown", { key: " " });
+  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "done", newLeaf: false });
 
-  const mark = byClass(tile, "bob-day-strip-mark")[0];
-  mark.dispatch("click", { button: 0 });
-  assert.equal(calls.length, 0, "a mark is a tooltip target and does not activate its tile");
-
-  const mousedown = tile.dispatch("mousedown", { button: 0 });
+  const mousedown = fact.dispatch("mousedown", { button: 0 });
   assert.equal(mousedown.defaultPrevented, true);
-  const collapse = byClass(root, "bob-day-strip-collapse")[0];
-  collapse.dispatch("keydown", { key: "Enter" });
-  assert.deepEqual(calls.pop(), { toggle: true });
+
+  const unavailable = helpers.dayStripModel(null, fixture.day, { localToday: fixture.day, error: { code: "timeout", title: "boom" } });
+  helpers.paintDayStrip(root, unavailable, {
+    openStats: (options) => calls.push(options),
+    retry: () => calls.push({ retry: true }),
+  });
+  byClass(root, "bob-day-strip-retry")[0].dispatch("click", { button: 0 });
+  assert.deepEqual(calls.pop(), { retry: true });
 });
 
 test("future and hidden models paint no children", () => {

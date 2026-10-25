@@ -43,7 +43,7 @@ function makeReport(options = {}) {
   homes["@unfiled"] = { label: "unfiled", kind: "bucket", area: "@unfiled", path: null, hue: null };
 
   const workedPoints = dates.map((date, index) => {
-    const value = date === day ? (options.noPomodoros ? 0 : options.allUnlinked ? 105 : options.manyAreas ? 420 : options.redefinedWorked ? 4 : 185) : 30 + index * 15;
+    const value = date === day ? (options.noPomodoros ? 0 : options.allUnlinked ? 105 : options.manyAreas ? 420 : options.wideValues ? 605 : options.redefinedWorked ? 4 : 185) : 30 + index * 15;
     let parts = {};
     let partsDisplay = {};
     if (options.redefinedWorked) {
@@ -72,7 +72,8 @@ function makeReport(options = {}) {
   });
 
   const reviewedPoints = dates.map((date, index) => {
-    const target = dailyPoint(date, index + 3, String(index + 3), { provisional: date === day && day === today });
+    const count = options.wideValues ? 300 + index : index + 3;
+    const target = dailyPoint(date, count, String(count), { provisional: date === day && day === today });
     if (options.notTracked && date === day) {
       Object.assign(target, { value: null, display: "–", quality: "not_tracked", reason: "No review answers have been recorded.", provisional: false });
     }
@@ -81,7 +82,10 @@ function makeReport(options = {}) {
     }
     return target;
   });
-  const numberPoints = (base) => dates.map((date, index) => dailyPoint(date, base + index, String(base + index), { provisional: date === day && day === today }));
+  const numberPoints = (base) => dates.map((date, index) => {
+    const value = options.wideValues ? base * 100 + index : base + index;
+    return dailyPoint(date, value, String(value), { provisional: date === day && day === today });
+  });
   const closedPoints = dates.map((date, index) => {
     const value = date === day && day === today ? 0 : index % 2 === 0 ? 1 : 0;
     return dailyPoint(date, value, value ? "met" : date === day && day === today ? "not yet" : "missed", {
@@ -159,6 +163,7 @@ const fixtures = {
   manyAreas: fixture("seven areas and +N", { manyAreas: true }),
   redefinedWorked: fixture("redefined worked without area parts", { redefinedWorked: true }),
   longLabels: fixture("long metric and area labels", { longLabels: true }),
+  wideValues: fixture("wide values", { wideValues: true }),
   weekGrouped: fixture("week grouped report with daily points", { group: "week" }),
   default4w: fixture("canonical-shaped default 4w", { preset: "4w", count: 28 }),
   explicitDay8: fixture("explicit -g day eight-day report", { count: 8 }),

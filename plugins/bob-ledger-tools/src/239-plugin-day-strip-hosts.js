@@ -7,7 +7,6 @@
 const DAY_STRIP_RECHECK_DEBOUNCE_MS = 2000;
 const DAY_STRIP_TODAY_MIN_AGE_MS = 30 * 1000;
 const DAY_STRIP_PAST_MIN_AGE_MS = 10 * 60 * 1000;
-const DAY_STRIP_COLLAPSE_KEY = "bob-day-strip-collapsed";
 
 // Canonical daily-note identity: `YYYY/YYYYMMDD.md` where the year
 // folder equals the stem's year and the stem is a real calendar date.

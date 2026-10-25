@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Render the production Day strip model, painter, and stylesheet in Chromium.
-// The output is dev-only; no browser dependency is needed beyond Chromium.
+// Render the production Day strip model, painter, and stylesheet in Chromium,
+// under mock plan badges and an Obsidian baseline stylesheet. The output is
+// dev-only; no browser dependency is needed beyond Chromium.
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -10,11 +11,42 @@ const { pathToFileURL } = require("node:url");
 const repoRoot = path.resolve(__dirname, "..");
 const pluginRoot = path.join(repoRoot, "plugins/bob-ledger-tools");
 
+// Obsidian's app.css rules that reach plugin DOM. This commented baseline
+// is what once broke the strip: every tile was a <button>, so the 30 px
+// input height clipped each label, value, and history mark. It loads
+// before the production CSS so a <button> regression fails the matrix.
+const OBSIDIAN_BASELINE_CSS = [
+  "/* Obsidian app.css baseline (excerpt).",
+  "   These rules reach plugin DOM in both Live Preview and Reading view:",
+  "   buttons render as 30 px inline-flex inputs, links take the accent",
+  "   colour, and rendered Markdown sets the surrounding line-height. */",
+  ":root { --input-height: 30px; }",
+  "button {",
+  "  display: inline-flex;",
+  "  align-items: center;",
+  "  justify-content: center;",
+  "  height: var(--input-height);",
+  "  padding: 4px 12px;",
+  "  border: 1px solid var(--background-modifier-border);",
+  "  border-radius: 5px;",
+  "  background: var(--interactive-normal);",
+  "  box-shadow: var(--input-shadow);",
+  "  color: var(--text-normal);",
+  "  font-family: var(--font-interface);",
+  "  font-size: 13px;",
+  "  font-weight: 500;",
+  "  white-space: nowrap;",
+  "}",
+  "a { color: var(--text-accent); text-decoration-line: underline; }",
+  ".markdown-rendered { line-height: 1.5; }",
+  ".markdown-source-view.mod-cm6 .cm-content { line-height: 1.5; }",
+].join("\n");
+
 function parseArgs(argv) {
   const args = { out: path.join("/tmp", "bob-day-strip-preview") };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--out" && argv[index + 1]) args.out = path.resolve(argv[++index]);
-    else if (argv[index] === "--help" || argv[index] === "-h") {
+    else if (argv[index] === "--help" || argv === "-h") {
       console.log("Usage: node scripts/preview-day-strip.cjs [--out DIRECTORY]");
       process.exit(0);
     } else throw new Error(`Unknown argument: ${argv[index]}`);
@@ -67,6 +99,7 @@ function loadFixtures() {
 
 function makeHtml({ pluginSource, css, fixtures }) {
   return fs.readFileSync(path.join(__dirname, "preview-day-strip.template.html"), "utf8")
+    .replace("__OBSIDIAN_BASELINE_CSS__", () => OBSIDIAN_BASELINE_CSS)
     .replace("__PRODUCTION_CSS__", () => css)
     .replace("__PLUGIN_SOURCE_JSON__", () => safeJson(pluginSource))
     .replace("__FIXTURES_JSON__", () => safeJson(fixtures));
@@ -82,7 +115,7 @@ class CdpClient {
       if (!message.id || !this.pending.has(message.id)) return;
       const pending = this.pending.get(message.id);
       this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(message.error.message || JSON.stringify(message.error)));
+      if (message.error) pending.reject(new Error(String(pending.method) + ": " + (message.error.message || JSON.stringify(message.error))));
       else pending.resolve(message.result || {});
     });
   }
@@ -105,7 +138,7 @@ class CdpClient {
   call(method, params = {}) {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve, reject, method });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -167,23 +200,51 @@ async function capturePage(client, output) {
   fs.writeFileSync(output, Buffer.from(response.data, "base64"));
 }
 
-function matrixMarkdown(matrix, browser, revision) {
+function checkMeasurement(item, context) {
+  const failures = [];
+  if (item.maxOverflow > 0.5) failures.push(`overflow ${item.maxOverflow}px escapes the strip box`);
+  if (item.maxFactOverlap > 0.5) failures.push(`facts overlap by ${item.maxFactOverlap}px`);
+  if (item.linesOverlap > 0.5) failures.push(`line 1 and line 2 overlap by ${item.linesOverlap}px`);
+  if (item.legendOverlap > 0.5) failures.push(`legend items or meta overlap`);
+  if (item.valueBaselineSpread > 1) failures.push(`value baselines spread ${item.valueBaselineSpread}px`);
+  if (item.hasButton) failures.push(`strip contains a <button> element`);
+  if (!item.relaxed) {
+    if (item.factRows > 2 && item.state !== "unavailable") failures.push(`${item.factRows} fact rows (max 2)`);
+    const budget = item.factRows <= 1 ? 48 : 72;
+    if (item.stripHeight > budget + 0.5) failures.push(`height ${item.stripHeight}px over the ${budget}px budget`);
+  }
+  if (item.state === "today" && context.width >= 540 && item.factRows !== 1) {
+    failures.push(`facts wrap to ${item.factRows} rows at ${context.width}px (must fit on one line)`);
+  }
+  if (item.state === "wide-values" && context.width >= 700 && item.factRows !== 1) {
+    failures.push(`wide facts wrap to ${item.factRows} rows at ${context.width}px (must fit on one line)`);
+  }
+  return failures;
+}
+
+function matrixMarkdown(matrix, browser, revision, interactionChecks) {
   const measurements = matrix.flatMap((entry) => entry.measurements.map((item) => ({ ...item, width: entry.width, theme: entry.theme, screenshot: entry.screenshot })));
   return [
     "# Day strip Chromium preview matrix",
     "",
     `- Renderer checkout revision: ${revision}.`,
-    `- Browser: ${browser}.` ,
+    `- Browser: ${browser}.`,
     "- Source: production `main.js`, `styles.css`, and synthetic presentation fixtures; no fixture is captured vault data.",
-    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 10 states.",
-    "- Height budgets: expanded single-row strips ≤104 px; each additional tile row adds 66 px; collapsed ≤26 px; unavailable ≤40 px.",
-    "- Alignment checks compare value and mark baselines within each tile row, and the mix width against the full tile row.",
+    "- Each strip renders under mock plan badges (TODAY / PENDING / NEXT / READY plus a ★ theme line) inside a Live Preview code-block container; one extra Reading-view cell renders today.",
+    "- An Obsidian baseline stylesheet (30 px inline-flex buttons, link colours, rendered line-height) loads before the production CSS, so a `<button>` regression fails the matrix.",
+    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 13 states plus Reading view.",
+    "- Height budgets (16 px base): ≤48 px when the facts fit on one line, ≤72 px when they wrap once. The long-labels case is relaxed: geometry is enforced, height is reported.",
+    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline.",
     "",
-    "| Width | Theme | State | Strip height | Budget | Tile rows | Value baseline spread | Mark baseline spread | Mix width delta | Skeleton delta | Result | Screenshot |",
-    "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
-    ...measurements.map((item) => `| ${item.width}px | ${item.theme} | ${item.state} | ${item.stripHeight}px | ${item.heightBudget}px | ${item.tileRows} | ${item.valueBaselineSpread}px | ${item.markBaselineSpread}px | ${item.mixWidth}px | ${item.skeletonHeightDelta === null ? "—" : `${item.skeletonHeightDelta}px`} | ${item.result} | ${item.screenshot} |`),
+    "| Width | Theme | State | Strip height | Budget | Fact rows | Overflow | Facts overlap | Lines overlap | Legend overlap | Value baseline spread | Skeleton delta | Button | Result | Screenshot |",
+    "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
+    ...measurements.map((item) => `| ${item.width}px | ${item.theme} | ${item.state} | ${item.stripHeight}px | ${item.relaxed ? "—" : `${item.factRows <= 1 ? 48 : 72}px`} | ${item.factRows} | ${item.maxOverflow}px | ${item.maxFactOverlap}px | ${item.linesOverlap}px | ${item.legendOverlap}px | ${item.valueBaselineSpread}px | ${item.skeletonHeightDelta === null ? "—" : `${item.skeletonHeightDelta}px`} | ${item.hasButton ? "yes" : "no"} | ${item.result} | ${item.screenshot} |`),
     "",
-    "Synthetic cases: today in progress, complete past day, collapsed, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, and a redefined `worked` without area parts.",
+    "Interaction checks (forced pseudo-states, per width × theme):",
+    "",
+    ...interactionChecks.map((item) => `- ${item.width}px ${item.theme}: ${item.label} — ${item.result}${item.detail ? ` (${item.detail})` : ""}`),
+    "",
+    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, a redefined `worked` without area parts, long labels, wide values (`10h 05m`, three-digit counts, `not yet`), forced hover, forced `:focus-visible`, and a Reading-view today cell.",
     "",
   ].join("\n");
 }
@@ -220,32 +281,89 @@ async function main() {
     await client.call("Runtime.enable");
     await client.call("Page.navigate", { url: pathToFileURL(htmlFile).href });
     await waitForPreview(client);
+    // DOM and CSS domains reset on navigation; enable them on the live page.
+    await client.call("DOM.enable");
+    await client.call("CSS.enable");
     const browserVersion = await client.call("Browser.getVersion");
     const revision = spawnSync("git", ["rev-parse", "--short=12", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim();
     const matrix = [];
+    const interactionChecks = [];
     for (const width of [410, 540, 700]) {
       for (const theme of ["light", "dark"]) {
         await client.call("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: false });
         const result = await client.evaluate(`window.dayStripPreview.renderMatrix(${width}, ${JSON.stringify(theme)})`);
-        const screenshot = `day-strip-${width}-${theme}.png`;
-        await capturePage(client, path.join(args.out, screenshot));
         const readyHeight = result.measurements.find((item) => item.state === "today").stripHeight;
         const skeletonHeight = result.measurements.find((item) => item.state === "skeleton").stripHeight;
         const skeletonHeightDelta = Math.round(Math.abs(readyHeight - skeletonHeight) * 10) / 10;
-        const measurements = result.measurements.map((item) => ({
-          ...item,
-          skeletonHeightDelta: item.state === "skeleton" ? skeletonHeightDelta : null,
-          result: item.heightPass && item.mixPass && item.valueBaselineSpread <= 1 && item.markBaselineSpread <= 1 && (item.state !== "skeleton" || skeletonHeightDelta <= 0.5) ? "pass" : "review",
-        }));
+        const measurements = result.measurements.map((item) => {
+          const failures = checkMeasurement(item, { width, theme });
+          if (item.state === "skeleton" && skeletonHeightDelta > 0.5) {
+            failures.push(`skeleton height differs from today by ${skeletonHeightDelta}px`);
+          }
+          return {
+            ...item,
+            skeletonHeightDelta: item.state === "skeleton" ? skeletonHeightDelta : null,
+            result: failures.length ? "FAIL" : "pass",
+            failures,
+          };
+        });
+
+        // (h) Forced hover must never shift the fact's box; forced
+        // :focus-visible must show an outline on the focused fact.
+        // Nodes resolve through the DOM domain so CSS sees the same ids.
+        const domRoot = await client.call("DOM.getDocument", { depth: 0, pierce: true });
+        const forcePseudo = async (selector, pseudos) => {
+          const found = await client.call("DOM.querySelector", { nodeId: domRoot.root.nodeId, selector });
+          if (!found || !found.nodeId) throw new Error("no node for " + selector);
+          await client.call("CSS.forcePseudoState", { nodeId: found.nodeId, forcedPseudoClasses: pseudos });
+        };
+        const hoverSelector = '[data-strip="hover"] .bob-day-strip-fact';
+        const before = await client.evaluate(`(() => { const n = document.querySelector(${JSON.stringify(hoverSelector)}); if (!n) return null; const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`);
+        if (before) {
+          await forcePseudo(hoverSelector, ["hover"]);
+          const after = await client.evaluate(`(() => { const n = document.querySelector(${JSON.stringify(hoverSelector)}); if (!n) return null; const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`);
+          if (!after) {
+            interactionChecks.push({ width, theme, label: "forced hover never shifts the fact", result: "FAIL", detail: "hover strip vanished" });
+          } else {
+            const shift = Math.max(Math.abs(after.x - before.x), Math.abs(after.y - before.y), Math.abs(after.width - before.width), Math.abs(after.height - before.height));
+            interactionChecks.push({ width, theme, label: "forced hover never shifts the fact", result: shift <= 0.5 ? "pass" : "FAIL", detail: `shift ${Math.round(shift * 10) / 10}px` });
+          }
+        } else {
+          interactionChecks.push({ width, theme, label: "forced hover never shifts the fact", result: "FAIL", detail: "no hover strip rendered" });
+        }
+        const focusSelector = '[data-strip="focus"] .bob-day-strip-fact';
+        const focusState = await client.evaluate(`(() => { const n = document.querySelector(${JSON.stringify(focusSelector)}); if (!n) return null; n.focus(); const style = getComputedStyle(n); return { active: document.activeElement === n, outline: style.outlineWidth, role: n.getAttribute("role"), tab: n.getAttribute("tabindex") }; })()`);
+        if (focusState && focusState.active) {
+          await forcePseudo(focusSelector, ["focus-visible"]);
+          const outlined = await client.evaluate(`(() => { const n = document.querySelector(${JSON.stringify(focusSelector)}); return getComputedStyle(n).outlineWidth; })()`);
+          const pass = focusState.role === "link" && outlined !== "0px";
+          interactionChecks.push({ width, theme, label: "focus-visible shows an outline on the fact", result: pass ? "pass" : "FAIL", detail: `role=${focusState.role} tabindex=${focusState.tab} outline=${outlined}` });
+        } else {
+          interactionChecks.push({ width, theme, label: "focus-visible shows an outline on the fact", result: "FAIL", detail: "fact is not focusable" });
+        }
+
+        const screenshot = `day-strip-${width}-${theme}.png`;
+        await capturePage(client, path.join(args.out, screenshot));
         matrix.push({ ...result, measurements, screenshot });
       }
     }
-    const report = matrixMarkdown(matrix, browserVersion.product, revision);
+    const report = matrixMarkdown(matrix, browserVersion.product, revision, interactionChecks);
     fs.writeFileSync(path.join(args.out, "matrix-report.md"), report);
-    const failures = matrix.flatMap((entry) => entry.measurements.filter((item) => item.result !== "pass").map((item) => `${entry.width}px ${entry.theme} ${item.state}: height ${item.stripHeight}/${item.heightBudget}, value alignment ${item.valueBaselineSpread}, marks ${item.markBaselineSpread}, mix delta ${item.mixWidth}`));
+    const failures = matrix.flatMap((entry) => entry.measurements.filter((item) => item.result !== "pass").map((item) => `${entry.width}px ${entry.theme} ${item.state}: ${item.failures.join("; ")}`));
+    const interactionFailures = interactionChecks.filter((item) => item.result !== "pass").map((item) => `${item.width}px ${item.theme} ${item.label}: ${item.detail}`);
     const overflow = matrix.filter((item) => item.pageScrollWidth > item.viewportWidth);
-    console.log(JSON.stringify({ output: args.out, html: htmlFile, chromium, browser: browserVersion.product, screenshots: matrix.map((item) => path.join(args.out, item.screenshot)), cells: matrix.reduce((sum, item) => sum + item.measurements.length, 0), failures, overflow: overflow.map((item) => `${item.width}px ${item.theme}`) }, null, 2));
-    if (failures.length || overflow.length) throw new Error("Preview matrix failed its geometry or no-overflow checks; inspect matrix-report.md and screenshots.");
+    if (process.env.DAYSTRIP_WIDTHS) {
+      for (const entry of matrix) {
+        for (const item of entry.measurements) {
+          if ((item.state === "today" || item.state === "wide-values") && (entry.width === 540 || entry.width === 700)) {
+            console.error(`${entry.width}px ${entry.theme} ${item.state}: facts=${JSON.stringify(item.factWidths)} rows=${item.factRows} strip=${item.stripHeight}px`);
+          }
+        }
+      }
+    }
+    console.log(JSON.stringify({ output: args.out, html: htmlFile, chromium, browser: browserVersion.product, screenshots: matrix.map((item) => path.join(args.out, item.screenshot)), cells: matrix.reduce((sum, item) => sum + item.measurements.length, 0), failures: [...failures, ...interactionFailures], overflow: overflow.map((item) => `${item.width}px ${item.theme}`) }, null, 2));
+    const allFailures = [...failures, ...interactionFailures];
+    if (allFailures.length || overflow.length) throw new Error("Preview matrix failed its geometry or no-overflow checks; inspect matrix-report.md and screenshots.");
   } finally {
     if (client) client.socket.close();
     child.kill("SIGTERM");

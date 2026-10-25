@@ -30708,7 +30708,7 @@ class BobLedgerToolsStatsHomesMixin {
   }
 }
 // ---- src/239-plugin-day-strip-model.js ----
-// Pure model for the daily-note Stats receipt. Bob owns every displayed
+// Pure model for the daily-note Day strip. Bob owns every displayed
 // value; this model only selects the requested day's points and arranges
 // their supplied labels, parts, and quality information for the painter.
 const DAY_STRIP_METRIC_IDS = ["worked", "reviewed", "done", "created", "review_closed"];
@@ -30718,6 +30718,15 @@ const DAY_STRIP_LABELS = {
   done: "Done",
   created: "Created",
   review_closed: "Review closed",
+};
+// Transparent-text skeleton placeholders, one per fact, so the skeleton
+// keeps the loaded strip's line boxes and wrap points.
+const DAY_STRIP_SKELETON_DISPLAYS = {
+  worked: "0h 00m",
+  reviewed: "00",
+  done: "00",
+  created: "00",
+  review_closed: "not yet",
 };
 const DAY_STRIP_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAY_STRIP_WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -30800,37 +30809,7 @@ function dayStripMetricPoints(metric, report) {
   }
 }
 
-function dayStripMarks(metric, report, day, bool) {
-  const points = dayStripMetricPoints(metric, report);
-  const dates = Array.from({ length: 8 }, (_, index) => dayStripShiftDay(day, index - 7));
-  const byDate = new Map(points.filter((point) => point && typeof point.date === "string").map((point) => [point.date, point]));
-  const source = dates.map((date) => {
-    const point = byDate.get(date);
-    return point && typeof point.value === "number"
-      ? { value: point.value, provisional: point.provisional === true && date === day }
-      : { value: null, provisional: false };
-  });
-  const bars = statsSparkBars(source);
-  return dates.map((date, index) => {
-    const point = byDate.get(date) || null;
-    const value = point && typeof point.value === "number" ? point.value : null;
-    return {
-      date,
-      height: bars[index] ? bars[index].height : 0,
-      empty: !point || value === null,
-      zero: Boolean(point && value === 0),
-      provisional: Boolean(point && point.provisional === true && date === day),
-      isDay: date === day,
-      met: bool ? (value === null ? null : value > 0) : null,
-      display: point && typeof point.display === "string" ? point.display : "–",
-      title: dayStripDateWords(date)
-        ? dayStripDateWords(date).short + ": " + (point && typeof point.display === "string" ? point.display : "–")
-        : date,
-    };
-  });
-}
-
-function dayStripBuildTile(metric, report, day, dateWords) {
+function dayStripBuildFact(metric, report, day, dateWords) {
   const points = dayStripMetricPoints(metric, report);
   const point = points.find((candidate) => candidate && candidate.date === day) || null;
   const unit = metric && typeof metric.unit === "string" ? metric.unit : "";
@@ -30863,21 +30842,18 @@ function dayStripBuildTile(metric, report, day, dateWords) {
     warning,
     definition: metric && typeof metric.definition === "string" ? metric.definition : "",
     tooltip,
-    kind: unit === "bool" ? "dots" : "bars",
     unit,
     value: point && typeof point.value === "number" ? point.value : null,
     provisional: Boolean(point && point.provisional === true),
-    point,
-    marks: dayStripMarks(metric, report, day, unit === "bool"),
   };
 }
 
 function dayStripMix(report, worked, day) {
   const omitted = !worked || worked.unit !== "minutes";
-  if (omitted) return { segments: [], legend: [], overflow: [], empty: false, omitted: true };
+  if (omitted) return { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" };
   const points = dayStripMetricPoints(worked, report);
   const hasAreaParts = points.some((point) => point && point.parts && point.parts.area && typeof point.parts.area === "object" && Object.keys(point.parts.area).length > 0);
-  if (!hasAreaParts) return { segments: [], legend: [], overflow: [], empty: false, omitted: true };
+  if (!hasAreaParts) return { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" };
   const point = points.find((candidate) => candidate && candidate.date === day) || null;
   const rawAreas = point && point.parts && point.parts.area && typeof point.parts.area === "object" ? point.parts.area : null;
   const rows = rawAreas ? statsPanelHomeRows(worked, report, "area", point) : [];
@@ -30903,7 +30879,7 @@ function dayStripMix(report, worked, day) {
     overflow,
     empty: Boolean(point && point.value === 0 && point.quality === "ok"),
     omitted: false,
-    overflowTitle: overflow.map((segment) => segment.label + " " + segment.display).join("\n"),
+    title: ["Time by area", ...segments.map((segment) => segment.label + " " + segment.display)].join("\n"),
     point,
   };
 }
@@ -30921,22 +30897,26 @@ function dayStripErrorInfo(error) {
   }
 }
 
-function dayStripCollapsedText(tiles) {
-  return tiles.map((tile) => ({
-    id: tile.id,
-    label: tile.label,
-    display: tile.display,
-    kind: tile.unit === "bool" ? "bool" : "value",
-  }));
+// The meta line next to the mix: today reads `so far · HH:MM`, a stale
+// today appends `refresh failed`, a stale past day reads `refresh failed`,
+// and every other day reads nothing. Never throws.
+function dayStripMetaText({ day, localToday, asOf, stale }) {
+  try {
+    if (day !== localToday) return stale === true ? "refresh failed" : "";
+    if (!asOf) return stale === true ? "refresh failed" : "";
+    return stale === true ? "so far · " + asOf + " · refresh failed" : "so far · " + asOf;
+  } catch (error) {
+    return "";
+  }
 }
 
-function dayStripAriaLabel(day, dateWords, provisional, tiles, mix) {
-  const values = tiles.map((tile) => tile.label + " " + tile.display).join(", ");
-  let label = "Day stats for " + dateWords.full + (provisional ? ", so far" : "") + (values ? ": " + values : ".");
+function dayStripAriaLabel(day, dateWords, provisional, facts, mix) {
+  const values = facts.map((fact) => fact.label + " " + fact.display).join(", ");
+  let label = "Day stats for " + dateWords.full + (provisional ? ", so far" : "") + (values ? ": " + values + "." : ".");
   if (mix && !mix.omitted && mix.segments.length) {
-    label += ". Time by area: " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
+    label += " Time by area: " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   } else if (mix && mix.empty) {
-    label += ". No Pomodoros.";
+    label += " No Pomodoros.";
   }
   return label;
 }
@@ -30947,36 +30927,33 @@ function dayStripModel(report, day, context) {
     const safeReport = report && typeof report === "object" ? report : null;
     const dateWords = dayStripDateWords(day);
     if (!dateWords) {
-      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", tiles: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true }, collapsedText: [], ariaLabel: "", stale: false, error: null, collapsed: false };
+      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "", stale: false, error: null };
     }
     const localToday = typeof safeContext.localToday === "string" ? safeContext.localToday : "";
     if (dayStripDateParts(localToday) && day > localToday) {
-      return { state: "future", day, dateWords, provisional: false, asOf: "", tiles: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true }, collapsedText: [], ariaLabel: "", stale: false, error: null, collapsed: false };
+      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "", stale: false, error: null };
     }
     const error = dayStripErrorInfo(safeContext.error);
     if (!safeReport) {
       if (error) {
-        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", tiles: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true }, collapsedText: [], ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error, collapsed: false };
+        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" }, ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
       }
-      const tiles = DAY_STRIP_METRIC_IDS.map((id) => ({
+      const facts = DAY_STRIP_METRIC_IDS.map((id) => ({
         id,
         label: DAY_STRIP_LABELS[id],
-        display: "",
+        display: DAY_STRIP_SKELETON_DISPLAYS[id] || "00",
         quality: "skeleton",
         reason: "",
         since: "",
         warning: "",
         definition: "",
         tooltip: "",
-        kind: id === "review_closed" ? "dots" : "bars",
         unit: id === "review_closed" ? "bool" : "",
         value: null,
         provisional: false,
-        point: null,
-        marks: Array.from({ length: 8 }, (_, index) => ({ date: dayStripShiftDay(day, index - 7), height: 0, empty: true, zero: false, provisional: false, isDay: index === 7, met: null, display: "–", title: "" })),
       }));
-      const mix = { segments: [], legend: [], overflow: [], empty: false, omitted: false, skeleton: true };
-      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", tiles, mix, collapsedText: dayStripCollapsedText(tiles), ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null, collapsed: safeContext.collapsed === true };
+      const mix = { segments: [], legend: [], overflow: [], empty: false, omitted: false, skeleton: true, title: "" };
+      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
     }
 
     // A default report from before midnight must never be used to show a
@@ -30986,14 +30963,15 @@ function dayStripModel(report, day, context) {
     }
 
     const metrics = Array.isArray(safeReport.metrics) ? safeReport.metrics : [];
-    const tiles = DAY_STRIP_METRIC_IDS.map((id) => metrics.find((metric) => metric && metric.id === id)).filter(Boolean)
-      .map((metric) => dayStripBuildTile(metric, safeReport, day, dateWords));
+    const facts = DAY_STRIP_METRIC_IDS.map((id) => metrics.find((metric) => metric && metric.id === id)).filter(Boolean)
+      .map((metric) => dayStripBuildFact(metric, safeReport, day, dateWords));
     const worked = metrics.find((metric) => metric && metric.id === "worked") || null;
     const mix = dayStripMix(safeReport, worked, day);
-    const provisional = tiles.some((tile) => tile.provisional);
+    const provisional = facts.some((fact) => fact.provisional);
     const asOf = day === localToday ? dayStripAsOf(safeContext.fetchedAt, true) : "";
     const stale = safeContext.stale === true;
-    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, tiles, mix);
+    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, facts, mix);
+    const metaText = dayStripMetaText({ day, localToday, asOf, stale });
     const staleTitle = stale
       ? ((error && error.title) || (typeof safeContext.error === "string" ? safeContext.error : "Refresh failed")) +
         " · showing the " + (asOf || "cached") + " report"
@@ -31004,14 +30982,13 @@ function dayStripModel(report, day, context) {
       dateWords,
       provisional,
       asOf,
-      tiles,
+      metaText,
+      facts,
       mix,
-      collapsedText: dayStripCollapsedText(tiles),
       ariaLabel,
       stale,
       staleTitle,
       error,
-      collapsed: safeContext.collapsed === true,
     };
   } catch (error) {
     const safeDay = typeof day === "string" ? day : "";
@@ -31022,27 +30999,28 @@ function dayStripModel(report, day, context) {
       dateWords,
       provisional: false,
       asOf: "",
-      tiles: [],
-      mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true },
-      collapsedText: [],
+      metaText: "",
+      facts: [],
+      mix: { segments: [], legend: [], overflow: [], empty: false, omitted: true, title: "" },
       ariaLabel: "Day stats unavailable — bob stats failed.",
       stale: false,
       error: { code: "model-error", title: "bob stats failed", hint: "" },
-      collapsed: false,
     };
   }
 }
 // ---- src/239-plugin-day-strip-render.js ----
-// DOM painter for the daily-note Stats receipt. The host element remains
+// DOM painter for the daily-note Day strip. The host element remains
 // stable; each update replaces only its children from the current model.
-function dayStripButton(doc, className, label, title) {
-  const button = statsEl(doc, "button", {
+// Interactive targets are spans with role="link": Obsidian's global
+// button rules must never be able to resize the strip again.
+function dayStripLink(doc, className, label, title) {
+  return statsEl(doc, "span", {
     class: className,
-    type: "button",
+    role: "link",
+    tabindex: "0",
     title: title || null,
     "aria-label": label,
   });
-  return button;
 }
 
 function dayStripAppend(parent, child) {
@@ -31050,220 +31028,155 @@ function dayStripAppend(parent, child) {
   return child;
 }
 
-function dayStripActivate(button, action) {
-  if (!button || typeof button.addEventListener !== "function") return;
-  let suppressNativeKeyboardClick = false;
+function dayStripActivate(node, action) {
+  if (!node || typeof node.addEventListener !== "function") return;
   const invoke = (event, forcedNewLeaf) => {
     if (event && event.preventDefault && event.type === "mousedown") event.preventDefault();
     const newLeaf = forcedNewLeaf || Boolean(event && (event.ctrlKey || event.metaKey || event.button === 1));
     if (typeof action === "function") action(newLeaf);
   };
-  button.addEventListener("mousedown", (event) => {
+  node.addEventListener("mousedown", (event) => {
+    // A click never steals focus from the editor, so vim keeps working.
     if (event && typeof event.preventDefault === "function") event.preventDefault();
   });
-  button.addEventListener("click", (event) => {
-    if (suppressNativeKeyboardClick) {
-      suppressNativeKeyboardClick = false;
-      return;
-    }
+  node.addEventListener("click", (event) => {
     invoke(event, false);
   });
-  button.addEventListener("auxclick", (event) => {
+  node.addEventListener("auxclick", (event) => {
     if (event && event.button === 1) {
       if (event.preventDefault) event.preventDefault();
       invoke(event, true);
     }
   });
-  button.addEventListener("keydown", (event) => {
+  node.addEventListener("keydown", (event) => {
     if (!event || (event.key !== "Enter" && event.key !== " ")) return;
     if (event.preventDefault) event.preventDefault();
-    suppressNativeKeyboardClick = true;
     invoke(event, false);
   });
 }
 
-function dayStripClassForMark(mark, kind) {
-  if (!mark || mark.empty) return "bob-day-strip-mark bob-day-strip-mark-null";
-  const classes = ["bob-day-strip-mark"];
-  if (mark.isDay) classes.push("bob-day-strip-mark-day");
-  else classes.push("bob-day-strip-mark-context");
-  if (mark.provisional) classes.push("bob-day-strip-mark-provisional");
-  if (kind === "dots") {
-    classes.push(mark.met ? "bob-day-strip-mark-met" : mark.provisional ? "bob-day-strip-mark-pending" : "bob-day-strip-mark-missed");
-  } else if (mark.zero) {
-    classes.push("bob-day-strip-mark-zero");
+function dayStripRenderFact(doc, fact, model, handlers) {
+  const skeleton = model.state === "skeleton";
+  const node = dayStripLink(
+    doc,
+    "bob-day-strip-fact" + (skeleton ? " bob-day-strip-fact-skeleton" : ""),
+    skeleton ? fact.label + ", loading" : fact.label + " " + fact.display,
+    fact.tooltip,
+  );
+  if (node) node.setAttribute("data-day-strip-metric", fact.id);
+  dayStripAppend(node, statsEl(doc, "span", { class: "bob-day-strip-label" }, fact.label));
+  dayStripAppend(node, statsEl(doc, "span", {
+    class: "bob-day-strip-value" + (fact.display === "–" && !skeleton ? " bob-day-strip-value-empty" : "") + (skeleton ? " bob-day-strip-value-skeleton" : ""),
+    title: fact.quality === "not_tracked" && fact.since ? "Tracking since " + fact.since : null,
+  }, fact.display));
+  if (fact.warning && !skeleton) {
+    dayStripAppend(node, statsEl(doc, "span", {
+      class: "bob-day-strip-warning",
+      title: fact.warning,
+      "aria-hidden": "true",
+    }, "⚠"));
   }
-  return classes.join(" ");
-}
-
-function dayStripRenderMark(doc, mark, kind) {
-  const node = statsEl(doc, "span", {
-    class: dayStripClassForMark(mark, kind),
-    title: mark && mark.title ? mark.title : null,
-    "aria-hidden": "true",
+  dayStripActivate(node, (newLeaf) => {
+    if (typeof handlers.openStats === "function") {
+      handlers.openStats({ day: model.day, metric: fact.id, newLeaf });
+    }
   });
-  if (kind === "bars" && mark && !mark.empty && !mark.zero && node && node.style) {
-    node.style.height = Math.max(0.08, Math.min(1, Number(mark.height) || 0)) * 14 + "px";
-  }
-  if (node && typeof node.addEventListener === "function") {
-    node.addEventListener("click", (event) => { if (event && event.stopPropagation) event.stopPropagation(); });
-    node.addEventListener("auxclick", (event) => { if (event && event.stopPropagation) event.stopPropagation(); });
-  }
   return node;
 }
 
-function dayStripRenderTile(doc, tile, model, handlers) {
-  const skeleton = model.state === "skeleton";
-  const button = dayStripButton(
-    doc,
-    "bob-day-strip-tile" + (skeleton ? " bob-day-strip-tile-skeleton" : ""),
-    skeleton ? tile.label + ", loading" : tile.label + ": " + tile.display,
-    tile.tooltip,
-  );
-  if (button) button.setAttribute("data-day-strip-metric", tile.id);
-  const label = statsEl(doc, "span", { class: "bob-day-strip-label" }, tile.label);
-  dayStripAppend(button, label);
-
-  const valueRow = statsEl(doc, "span", { class: "bob-day-strip-value-row" });
-  const value = skeleton
-    ? statsEl(doc, "span", { class: "bob-day-strip-value bob-day-strip-value-skeleton", "aria-hidden": "true" })
-    : statsEl(doc, "span", {
-      class: "bob-day-strip-value" + (tile.display === "–" ? " bob-day-strip-value-empty" : ""),
-      title: tile.quality === "not_tracked" && tile.since ? "Tracking since " + tile.since : null,
-    }, tile.display);
-  dayStripAppend(valueRow, value);
-  const warning = statsEl(doc, "span", {
-    class: "bob-day-strip-warning",
-    title: tile.warning || null,
-    "aria-hidden": "true",
-  }, "⚠");
-  if (!tile.warning || skeleton) warning.setAttribute("hidden", "true");
-  dayStripAppend(valueRow, warning);
-  dayStripAppend(button, valueRow);
-
-  const marks = statsEl(doc, "span", { class: "bob-day-strip-marks", "aria-hidden": "true" });
-  for (const mark of tile.marks || []) dayStripAppend(marks, dayStripRenderMark(doc, mark, tile.kind));
-  dayStripAppend(button, marks);
-  dayStripActivate(button, (newLeaf) => {
-    if (typeof handlers.openStats === "function") {
-      handlers.openStats({ day: model.day, metric: tile.id, newLeaf });
-    }
+function dayStripLegendItem(doc, entry) {
+  const item = statsEl(doc, "span", {
+    class: "bob-day-strip-legend-item",
+    title: entry ? entry.label + " " + entry.display : null,
   });
-  return button;
+  const dot = statsEl(doc, "span", {
+    class: "bob-day-strip-legend-dot" + (entry ? " bob-day-strip-hue-" + entry.hue : ""),
+    "aria-hidden": "true",
+  });
+  dayStripAppend(item, dot);
+  dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-label" }, entry ? entry.label : ""));
+  dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-value" }, entry ? entry.display : ""));
+  if (!entry) item.setAttribute("hidden", "true");
+  return item;
 }
 
+// Fixed slots (8 bar segments, 3 legend items) keep the skeleton and the
+// loaded strip structurally identical; missing slots stay hidden.
 function dayStripRenderMix(doc, model, handlers) {
   const mix = model.mix || { segments: [], legend: [], overflow: [], omitted: true };
   const skeleton = model.state === "skeleton";
-  const button = dayStripButton(doc, "bob-day-strip-mix-action", "Open Stats for time by area", mix.overflowTitle);
-  if (mix.omitted && !skeleton) button.setAttribute("hidden", "true");
+  const node = dayStripLink(doc, "bob-day-strip-mix", "Time by area", mix.title);
   const bar = statsEl(doc, "span", {
-    class: "bob-day-strip-mix-bar" + (mix.empty ? " bob-day-strip-mix-empty" : "") + (skeleton ? " bob-day-strip-mix-skeleton" : ""),
+    class: "bob-day-strip-mix-bar",
     "aria-hidden": "true",
   });
-  const segments = Array.isArray(mix.segments) ? mix.segments : [];
+  const segments = skeleton ? [] : Array.isArray(mix.segments) ? mix.segments : [];
   const slots = Math.max(8, segments.length);
   for (let index = 0; index < slots; index += 1) {
     const segment = segments[index];
-    const node = statsEl(doc, "span", {
-      class: "bob-day-strip-mix-segment" + (segment ? " bob-day-strip-hue-" + segment.hue : "") + (segment && segment.bucket ? " bob-day-strip-mix-bucket" : "") + (!segment ? " bob-day-strip-mix-segment-placeholder" : ""),
+    const part = statsEl(doc, "span", {
+      class: "bob-day-strip-mix-segment" + (segment ? " bob-day-strip-hue-" + segment.hue : "") + (segment && segment.bucket ? " bob-day-strip-mix-bucket" : ""),
       title: segment ? segment.label + " " + segment.display : null,
     });
-    if (node && node.style && segment) node.style.flexGrow = String(Math.max(0, Number(segment.value) || 0));
-    if (!segment) node.setAttribute("hidden", "true");
-    dayStripAppend(bar, node);
+    if (part && part.style && segment) part.style.flexGrow = String(Math.max(0, Number(segment.value) || 0));
+    if (!segment) part.setAttribute("hidden", "true");
+    dayStripAppend(bar, part);
   }
-  dayStripAppend(button, bar);
+  dayStripAppend(node, bar);
 
   const legend = statsEl(doc, "span", { class: "bob-day-strip-legend" });
-  const entries = Array.isArray(mix.legend) ? mix.legend : [];
+  const entries = skeleton
+    ? [{ label: "Area", display: "0m" }, { label: "Area", display: "0m" }, { label: "Area", display: "0m" }]
+    : Array.isArray(mix.legend) ? mix.legend : [];
   for (let index = 0; index < 3; index += 1) {
-    const entry = entries[index];
-    const item = statsEl(doc, "span", {
-      class: "bob-day-strip-legend-item" + (entry ? "" : " bob-day-strip-legend-placeholder"),
-      title: entry ? entry.label + " " + entry.display : null,
-      "aria-hidden": skeleton && !entry ? "true" : null,
-    });
-    const dot = statsEl(doc, "span", {
-      class: "bob-day-strip-legend-dot" + (entry ? " bob-day-strip-hue-" + entry.hue : ""),
-      "aria-hidden": "true",
-    });
-    dayStripAppend(item, dot);
-    dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-label" }, entry ? entry.label : skeleton ? "Area" : ""));
-    dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-value" }, entry ? entry.display : skeleton ? "0m" : ""));
-    if (!entry && !skeleton) item.setAttribute("hidden", "true");
-    dayStripAppend(legend, item);
+    dayStripAppend(legend, dayStripLegendItem(doc, skeleton ? entries[index] : entries[index] || null));
   }
-  const noPomodoros = mix.empty && !skeleton;
-  const noPomodorosLabel = statsEl(doc, "span", { class: "bob-day-strip-no-pomodoros" }, noPomodoros ? "no Pomodoros" : skeleton ? "no Pomodoros" : "");
-  if (skeleton) noPomodorosLabel.setAttribute("aria-hidden", "true");
-  if (!noPomodoros && !skeleton) noPomodorosLabel.setAttribute("hidden", "true");
-  dayStripAppend(legend, noPomodorosLabel);
+  const noPomodoros = statsEl(doc, "span", { class: "bob-day-strip-no-pomodoros" }, "no Pomodoros");
+  if (!mix.empty && !skeleton) noPomodoros.setAttribute("hidden", "true");
+  dayStripAppend(legend, noPomodoros);
   const overflow = statsEl(doc, "span", {
     class: "bob-day-strip-overflow",
-    title: mix.overflowTitle || null,
-    "aria-hidden": skeleton ? "true" : null,
-  }, mix.overflow && mix.overflow.length ? "+" + mix.overflow.length : skeleton ? "+N" : "");
-  if (!mix.overflow || !mix.overflow.length) overflow.setAttribute("hidden", "true");
+    title: mix.overflow && mix.overflow.length ? mix.overflow.map((segment) => segment.label + " " + segment.display).join("\n") : null,
+  }, mix.overflow && mix.overflow.length && !skeleton ? "+" + mix.overflow.length : "+N");
+  if (!mix.overflow || !mix.overflow.length || skeleton) overflow.setAttribute("hidden", "true");
   dayStripAppend(legend, overflow);
-  dayStripAppend(button, legend);
-  dayStripActivate(button, (newLeaf) => {
+  dayStripAppend(node, legend);
+  dayStripActivate(node, (newLeaf) => {
     if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel: "homes", newLeaf });
   });
-  return button;
+  return node;
 }
 
-function dayStripRenderMeta(doc, model, handlers) {
-  const meta = statsEl(doc, "span", { class: "bob-day-strip-meta" });
-  const asOfText = model.asOf ? "so far · " + model.asOf : "so far · 00:00";
-  const asOf = statsEl(doc, "span", { class: "bob-day-strip-as-of" }, asOfText);
-  if (!model.asOf) asOf.setAttribute("hidden", "true");
-  dayStripAppend(meta, asOf);
-  const stale = statsEl(doc, "span", {
-    class: "bob-day-strip-stale-dot",
-    title: model.staleTitle || null,
-    "aria-label": model.stale ? "Showing stale Stats" : null,
-  }, "●");
-  if (!model.stale) stale.setAttribute("hidden", "true");
-  dayStripAppend(meta, stale);
-
-  const stats = dayStripButton(doc, "bob-day-strip-stats-link", "Open Stats for " + model.day, "Open Stats for " + model.day);
-  dayStripAppend(stats, statsEl(doc, "span", {}, "Stats ↗"));
-  dayStripActivate(stats, (newLeaf) => {
-    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, newLeaf });
-  });
-  dayStripAppend(meta, stats);
-
-  const collapsed = model.collapsed === true;
-  const toggle = dayStripButton(doc, "bob-day-strip-collapse", collapsed ? "Expand Day stats" : "Collapse Day stats");
-  toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  dayStripAppend(toggle, statsEl(doc, "span", { "aria-hidden": "true" }, collapsed ? "▸" : "▾"));
-  dayStripActivate(toggle, () => {
-    if (typeof handlers.toggleCollapsed === "function") handlers.toggleCollapsed();
-  });
-  dayStripAppend(meta, toggle);
-  return meta;
+function dayStripRenderMixRow(doc, model, handlers) {
+  const mix = model.mix || { omitted: true };
+  const skeleton = model.state === "skeleton";
+  const showMix = skeleton || !mix.omitted;
+  const showMeta = skeleton || Boolean(model.metaText);
+  if (!showMix && !showMeta) return null;
+  const row = statsEl(doc, "div", { class: "bob-day-strip-mix-row" });
+  if (showMix) dayStripAppend(row, dayStripRenderMix(doc, model, handlers));
+  if (showMeta) {
+    dayStripAppend(row, statsEl(doc, "span", {
+      class: "bob-day-strip-meta",
+      title: model.stale && model.staleTitle ? model.staleTitle : null,
+    }, skeleton ? "so far · 00:00" : model.metaText));
+  }
+  return row;
 }
 
 function dayStripRenderUnavailable(doc, model, handlers) {
-  const line = statsEl(doc, "span", { class: "bob-day-strip-unavailable" });
+  const line = statsEl(doc, "div", { class: "bob-day-strip-unavailable" });
   const error = model.error || { title: "bob stats failed", hint: "" };
   const message = error.code === "bob-not-found"
-    ? "Day stats unavailable — bob was not found. Set stats.bob_path, or open Stats."
+    ? "Day stats unavailable — bob was not found. Set stats.bob_path."
     : "Day stats unavailable — " + error.title + ".";
   dayStripAppend(line, statsEl(doc, "span", { class: "bob-day-strip-unavailable-message" }, message));
-  const retry = dayStripButton(doc, "bob-day-strip-retry", "Retry Day stats");
+  const retry = dayStripLink(doc, "bob-day-strip-retry", "Retry Day stats");
   dayStripAppend(retry, statsEl(doc, "span", {}, "Retry"));
   dayStripActivate(retry, () => {
     if (typeof handlers.retry === "function") handlers.retry();
   });
   dayStripAppend(line, retry);
-  const stats = dayStripButton(doc, "bob-day-strip-stats-link", "Open Stats for " + model.day);
-  dayStripAppend(stats, statsEl(doc, "span", {}, "Stats ↗"));
-  dayStripActivate(stats, (newLeaf) => {
-    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, newLeaf });
-  });
-  dayStripAppend(line, stats);
   return line;
 }
 
@@ -31282,13 +31195,12 @@ function paintDayStrip(el, model, handlers) {
     } else el.textContent = "";
     const state = ["ready", "skeleton", "unavailable", "future", "hidden"].includes(safeModel.state) ? safeModel.state : "hidden";
     const classes = ["bob-day-strip", "bob-day-strip-state-" + state];
-    if (safeModel.collapsed) classes.push("bob-day-strip-collapsed");
     if (safeModel.stale) classes.push("bob-day-strip-stale");
     if (safeModel.provisional) classes.push("bob-day-strip-provisional");
     if (el.setAttribute) {
       el.setAttribute("class", classes.join(" "));
       el.setAttribute("data-day", safeModel.day || "");
-      if (state !== "hidden" && state !== "future") {
+      if (state === "ready" || state === "skeleton") {
         el.setAttribute("role", "group");
         el.setAttribute("aria-label", safeModel.ariaLabel || "Day stats for " + safeModel.day);
       } else {
@@ -31302,27 +31214,11 @@ function paintDayStrip(el, model, handlers) {
       return el;
     }
 
-    if (safeModel.collapsed && state !== "skeleton") {
-      const summary = statsEl(doc, "span", { class: "bob-day-strip-summary" });
-      for (const part of safeModel.collapsedText || []) {
-        const item = statsEl(doc, "span", { class: "bob-day-strip-summary-item" });
-        if (part.kind === "bool") {
-          dayStripAppend(item, statsEl(doc, "strong", { class: "bob-day-strip-summary-value" }, part.label + " " + part.display));
-        } else {
-          dayStripAppend(item, statsEl(doc, "strong", { class: "bob-day-strip-summary-value" }, part.display));
-          dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-summary-label" }, " " + part.label.toLowerCase()));
-        }
-        dayStripAppend(summary, item);
-        if (part !== (safeModel.collapsedText || []).at(-1)) dayStripAppend(summary, statsEl(doc, "span", { class: "bob-day-strip-summary-separator", "aria-hidden": "true" }, " · "));
-      }
-      dayStripAppend(el, summary);
-    } else {
-      const tiles = statsEl(doc, "span", { class: "bob-day-strip-tiles" });
-      for (const tile of safeModel.tiles || []) dayStripAppend(tiles, dayStripRenderTile(doc, tile, safeModel, safeHandlers));
-      dayStripAppend(el, tiles);
-      dayStripAppend(el, dayStripRenderMix(doc, safeModel, safeHandlers));
-    }
-    dayStripAppend(el, dayStripRenderMeta(doc, safeModel, safeHandlers));
+    const facts = statsEl(doc, "div", { class: "bob-day-strip-facts" });
+    for (const fact of safeModel.facts || []) dayStripAppend(facts, dayStripRenderFact(doc, fact, safeModel, safeHandlers));
+    dayStripAppend(el, facts);
+    const mixRow = dayStripRenderMixRow(doc, safeModel, safeHandlers);
+    if (mixRow) dayStripAppend(el, mixRow);
     return el;
   } catch (error) {
     // A failed paint must not escape into Obsidian's render lifecycle.
@@ -31339,7 +31235,6 @@ function paintDayStrip(el, model, handlers) {
 const DAY_STRIP_RECHECK_DEBOUNCE_MS = 2000;
 const DAY_STRIP_TODAY_MIN_AGE_MS = 30 * 1000;
 const DAY_STRIP_PAST_MIN_AGE_MS = 10 * 60 * 1000;
-const DAY_STRIP_COLLAPSE_KEY = "bob-day-strip-collapsed";
 
 // Canonical daily-note identity: `YYYY/YYYYMMDD.md` where the year
 // folder equals the stem's year and the stem is a real calendar date.
@@ -31647,81 +31542,6 @@ class BobLedgerToolsDayStripMixin {
 
   // Per-device collapse, shared by every strip on this device. Vault
   // reads and writes never happen here. Never throws.
-  dayStripIsCollapsed() {
-    try {
-      if (
-        this.app &&
-        typeof this.app.loadLocalStorage === "function"
-      ) {
-        const value = this.app.loadLocalStorage(DAY_STRIP_COLLAPSE_KEY);
-        return value === true || value === "true";
-      }
-    } catch (error) {
-      // Fall through to window storage below.
-    }
-    try {
-      if (
-        typeof window !== "undefined" &&
-        window &&
-        window.localStorage &&
-        typeof window.localStorage.getItem === "function"
-      ) {
-        return window.localStorage.getItem(DAY_STRIP_COLLAPSE_KEY) === "true";
-      }
-    } catch (error) {
-      // Storage is best-effort.
-    }
-    return false;
-  }
-
-  dayStripSetCollapsed(value) {
-    const collapsed = value === true;
-    try {
-      if (this.app && typeof this.app.saveLocalStorage === "function") {
-        this.app.saveLocalStorage(DAY_STRIP_COLLAPSE_KEY, collapsed);
-      }
-    } catch (error) {
-      // Storage is best-effort.
-    }
-    try {
-      if (
-        typeof window !== "undefined" &&
-        window &&
-        window.localStorage &&
-        typeof window.localStorage.setItem === "function"
-      ) {
-        window.localStorage.setItem(
-          DAY_STRIP_COLLAPSE_KEY,
-          collapsed ? "true" : "false",
-        );
-      }
-    } catch (error) {
-      // Storage is best-effort.
-    }
-    try {
-      for (const record of Array.from(this.dayStripViewsStore())) {
-        try {
-          this.dayStripPaint(record);
-        } catch (error) {
-          // One stale strip never breaks the others.
-        }
-        try {
-          if (
-            record &&
-            record.editorView &&
-            typeof record.editorView.requestMeasure === "function"
-          ) {
-            record.editorView.requestMeasure();
-          }
-        } catch (error) {
-          // Measuring is best-effort.
-        }
-      }
-    } catch (error) {
-      // Repaint is best-effort.
-    }
-  }
-
   setupDayStripHosts() {
     try {
       if (typeof this.setupDayStripMount === "function") {
@@ -32042,7 +31862,6 @@ class BobLedgerToolsDayStripMixin {
       }
       const localToday = this.dayStripLocalNow();
       const day = record.day;
-      const collapsed = this.dayStripIsCollapsed();
       const handlers = {
         openStats: (opts) => {
           try {
@@ -32057,13 +31876,6 @@ class BobLedgerToolsDayStripMixin {
             });
           } catch (error) {
             // Opening Stats is best-effort here; openStatsForDay Notices.
-          }
-        },
-        toggleCollapsed: () => {
-          try {
-            this.dayStripSetCollapsed(!this.dayStripIsCollapsed());
-          } catch (error) {
-            // Collapse is best-effort.
           }
         },
         retry: () => {
@@ -32083,8 +31895,7 @@ class BobLedgerToolsDayStripMixin {
             String(stamp === undefined ? "" : stamp),
             model.stale,
             model.error ? model.error.code : "",
-            collapsed,
-            (model.tiles || []).map((tile) => tile.display).join(","),
+            (model.facts || []).map((fact) => fact.display).join(","),
           ].join("|");
           if (record.paintedKey === key) {
             return model;
@@ -32154,7 +31965,6 @@ class BobLedgerToolsDayStripMixin {
             fetchedAt,
             stale,
             error,
-            collapsed,
           }),
           "skeleton",
           "miss",
@@ -32166,7 +31976,6 @@ class BobLedgerToolsDayStripMixin {
           fetchedAt,
           stale,
           error,
-          collapsed,
         }),
         "cached",
         fetchedAt,
@@ -32837,12 +32646,10 @@ class DayStripWidget extends WidgetType {
     return same;
   }
 
+  // The two-line strip budget (16 px base): 48 px on one fact row.
+  // strip-home deletes this mount.
   get estimatedHeight() {
-    try {
-      return this.plugin.dayStripIsCollapsed() ? 26 : 100;
-    } catch (error) {
-      return 100;
-    }
+    return 48;
   }
 
   ignoreEvent() {

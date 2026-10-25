@@ -4061,16 +4061,23 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   }
 }
 
-/* Day strip: a quiet receipt of the current daily note's own Stats. */
+/* Day strip: two calm, readable lines under the plan badges. No card,
+   border, rule, background, shadow, or radius on the strip; separation
+   comes from spacing only. Area hues are the only colour. */
 .bob-day-strip {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  margin-top: 1.25em;
-  padding-top: 0.6em;
-  border-top: 1px solid var(--background-modifier-border);
+  margin: 0 0 1rem;
   color: var(--text-normal);
-  font: inherit;
+  font-family: var(--font-interface);
+  font-size: 0.875em;
+  line-height: 1.45;
+}
+
+/* The plan block's own bottom margin shrinks when a strip follows it. */
+.bob-plan-has-day-strip > .bob-plan {
+  margin-bottom: 0.5rem;
 }
 
 .bob-day-strip-state-hidden,
@@ -4079,76 +4086,57 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   display: none !important;
 }
 
-.bob-day-strip-tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(5.2rem, 1fr));
-  column-gap: 1rem;
-  row-gap: 0.5rem;
-  width: 100%;
+.bob-day-strip-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   min-width: 0;
+  column-gap: 0.5em;
+  row-gap: 0.15em;
+  padding: 0.05em 0.3em;
 }
 
-.bob-day-strip button {
-  box-sizing: border-box;
-  appearance: none;
+/* Facts are spans with role="link": no <button> elements anywhere, so
+   Obsidian's global button rules can never resize them again. */
+.bob-day-strip-fact {
+  display: inline-flex;
+  align-items: baseline;
   min-width: 0;
-  margin: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  color: inherit;
-  font: inherit;
+  gap: 0.3em;
+  padding: 0.05em 0.3em;
+  margin: -0.05em -0.3em;
+  border-radius: var(--radius-s);
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.bob-day-strip-tile {
-  display: block;
-  width: 100%;
-  padding: 2px 4px !important;
-  border-radius: var(--radius-s, 4px) !important;
-  text-align: left;
-}
-
-.bob-day-strip-tile:hover,
-.bob-day-strip-collapse:hover {
+.bob-day-strip-fact:hover {
   background: var(--background-modifier-hover);
 }
 
-.bob-day-strip button:focus-visible {
+.bob-day-strip-fact:focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: 1px;
 }
 
 .bob-day-strip-label {
-  display: block;
   min-width: 0;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 0.72em;
+  font-size: 0.75em;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  line-height: 1.25;
-  text-overflow: ellipsis;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.bob-day-strip-value-row {
-  display: flex;
-  align-items: baseline;
-  min-width: 0;
-  min-height: 1em;
-  gap: 0.25em;
-  line-height: 1.05;
-}
-
 .bob-day-strip-value {
-  display: block;
   min-width: 0;
   overflow: hidden;
   color: var(--text-normal);
-  font-size: 1.15em;
-  font-weight: 650;
+  font-size: 1em;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4157,94 +4145,55 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
 .bob-day-strip-value-empty { color: var(--text-faint); }
 
 .bob-day-strip-value-skeleton {
-  width: 3.5em;
-  height: 1.05em;
   border-radius: 2px;
   background: var(--background-modifier-hover);
-  opacity: 0.65;
+  color: transparent;
 }
 
 .bob-day-strip-warning {
   flex: none;
   color: var(--text-muted);
-  font-size: 0.72em;
+  font-size: 0.75em;
   line-height: 1;
 }
 
-.bob-day-strip-marks {
+.bob-day-strip-mix-row {
   display: flex;
-  align-items: flex-end;
-  width: 54px;
-  height: 14px;
-  gap: 2px;
-  margin-top: 0.1px;
+  flex-wrap: nowrap;
+  align-items: center;
+  min-width: 0;
+  gap: 0.8em;
+  margin-top: 0.25em;
 }
 
-.bob-day-strip-mark {
-  box-sizing: border-box;
-  display: block;
-  flex: 0 0 5px;
-  width: 5px;
-  max-height: 14px;
-  background: var(--text-muted);
-}
-
-.bob-day-strip-mark-context { opacity: 0.38; }
-.bob-day-strip-mark-day { opacity: 1; background: var(--text-normal); }
-
-.bob-day-strip-mark-provisional:not(.bob-day-strip-mark-null):not(.bob-day-strip-mark-zero) {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.2px var(--text-normal);
-}
-
-.bob-day-strip-mark-zero,
-.bob-day-strip-mark-null { height: 1px; }
-.bob-day-strip-mark-null { background: var(--text-faint); }
-
-.bob-day-strip-mark-met,
-.bob-day-strip-mark-missed,
-.bob-day-strip-mark-pending {
-  align-self: center;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-}
-
-.bob-day-strip-mark-met { background: var(--text-muted); }
-.bob-day-strip-mark-missed { border: 1px solid var(--text-muted); background: transparent; }
-.bob-day-strip-mark-pending { border: 1px dashed var(--text-normal); background: transparent; }
-
-.bob-day-strip-mix-action {
-  display: block;
-  width: 100%;
-  margin-top: 0.1rem !important;
-  padding: 0 !important;
-  text-align: left;
+.bob-day-strip-mix {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 0.55em;
+  cursor: pointer;
 }
 
 .bob-day-strip-mix-bar {
   box-sizing: border-box;
   display: flex;
-  width: 100%;
+  flex: none;
+  width: 7.5em;
   height: 5px;
   gap: 2px;
   overflow: hidden;
-  border-radius: 3px;
-  background: var(--background-primary);
+  border-radius: 999px;
+  background: var(--background-modifier-border);
 }
-
-.bob-day-strip-mix-empty { background: var(--text-faint); opacity: 0.5; }
 
 .bob-day-strip-mix-segment {
   display: block;
   flex: 0 1 0;
   min-width: 0;
-  border-radius: 0;
   background: var(--bob-day-strip-hue, var(--text-faint));
 }
 
-.bob-day-strip-mix-segment:first-child { border-radius: 3px 0 0 3px; }
-.bob-day-strip-mix-segment:last-child { border-radius: 0 3px 3px 0; }
 .bob-day-strip-mix-bucket { --bob-day-strip-hue: var(--text-faint); }
 .bob-day-strip-hue-blue { --bob-day-strip-hue: var(--bob-area-blue, var(--text-muted)); }
 .bob-day-strip-hue-orange { --bob-day-strip-hue: var(--bob-area-orange, var(--text-muted)); }
@@ -4259,24 +4208,28 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
 .bob-day-strip-legend {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   min-width: 0;
-  gap: 0.45rem 0.8rem;
-  margin-top: 0.1rem;
+  gap: 0.8em;
+  overflow: hidden;
   color: var(--text-muted);
-  font-size: 0.8em;
-  line-height: 1.1;
+  font-size: 0.85em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .bob-day-strip-legend-item {
   display: inline-flex;
   align-items: center;
   min-width: 0;
-  gap: 0.25rem;
+  gap: 0.3em;
+  overflow: hidden;
   white-space: nowrap;
 }
 
 .bob-day-strip-legend-label {
-  max-width: 11em;
+  max-width: 10em;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -4288,8 +4241,8 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
 
 .bob-day-strip-legend-dot {
   flex: none;
-  width: 5px;
-  height: 5px;
+  width: 0.5em;
+  height: 0.5em;
   border-radius: 50%;
   background: var(--bob-day-strip-hue, var(--text-faint));
 }
@@ -4297,96 +4250,40 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
 .bob-day-strip-no-pomodoros,
 .bob-day-strip-overflow { flex: none; color: var(--text-muted); }
 
-.bob-day-strip-state-skeleton .bob-day-strip-legend-placeholder,
-.bob-day-strip-state-skeleton .bob-day-strip-no-pomodoros,
-.bob-day-strip-state-skeleton .bob-day-strip-overflow {
+.bob-day-strip-meta {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bob-day-strip-state-skeleton .bob-day-strip-legend,
+.bob-day-strip-state-skeleton .bob-day-strip-meta {
   visibility: hidden;
 }
 
-.bob-day-strip-meta {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 0;
-  min-height: 1.1em;
-  gap: 0.65rem;
-  margin-top: 0.1rem;
-  color: var(--text-muted);
-  font-size: 0.8em;
-  line-height: 1.1;
-  white-space: nowrap;
-}
-
-.bob-day-strip-as-of { color: var(--text-faint); font-variant-numeric: tabular-nums; }
-.bob-day-strip-stale-dot { color: var(--text-muted); font-size: 0.7em; }
-
-.bob-day-strip-stats-link {
-  flex: none;
-  padding: 0 !important;
-  color: var(--text-muted) !important;
-  white-space: nowrap;
-}
-
-.bob-day-strip-stats-link:hover { color: var(--text-normal) !important; }
-
-.bob-day-strip-collapse {
-  flex: none;
-  min-width: 1.2em !important;
-  padding: 0 0.1em !important;
-  color: var(--text-muted) !important;
-  line-height: 1;
-}
-
-.bob-day-strip-summary {
-  display: block;
-  align-items: baseline;
-  min-width: 0;
-  overflow: hidden;
-  gap: 0.25rem;
-  font-size: 0.85em;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.bob-day-strip-summary-item { flex: none; min-width: 0; }
-.bob-day-strip-summary-value { color: var(--text-normal); font-weight: 650; font-variant-numeric: tabular-nums; }
-.bob-day-strip-summary-label,
-.bob-day-strip-summary-separator { color: var(--text-muted); }
-
-.bob-day-strip-collapsed {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-height: 0;
-}
-
-.bob-day-strip-collapsed .bob-day-strip-summary { flex: 1 1 auto; font-size: 0.78em; line-height: 1.1; }
-.bob-day-strip-collapsed .bob-day-strip-meta { flex: none; min-height: 0; margin-top: 0; line-height: 1; gap: 0.45rem; }
+.bob-day-strip-state-skeleton .bob-day-strip-fact { cursor: default; }
 
 .bob-day-strip-unavailable {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 0.65rem;
-  color: var(--text-muted);
-  font-size: 0.85em;
-}
-
-.bob-day-strip-fence-note {
-  color: var(--text-muted);
-  font-size: 0.8em;
-}
-
-.bob-day-strip-unavailable-message {
+  display: block;
   min-width: 0;
   overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.85em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.bob-day-strip-retry { flex: none; padding: 0 !important; color: var(--text-accent) !important; }
-.bob-day-strip-state-skeleton .bob-day-strip-tile { cursor: default; pointer-events: none; }
+.bob-day-strip-retry {
+  color: var(--text-accent);
+  cursor: pointer;
+}
+
+.bob-day-strip-retry:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .bob-day-strip,

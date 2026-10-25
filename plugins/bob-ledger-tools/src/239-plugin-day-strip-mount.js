@@ -150,12 +150,10 @@ class DayStripWidget extends WidgetType {
     return same;
   }
 
+  // The two-line strip budget (16 px base): 48 px on one fact row.
+  // strip-home deletes this mount.
   get estimatedHeight() {
-    try {
-      return this.plugin.dayStripIsCollapsed() ? 26 : 100;
-    } catch (error) {
-      return 100;
-    }
+    return 48;
   }
 
   ignoreEvent() {

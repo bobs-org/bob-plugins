@@ -12,8 +12,10 @@
     body.theme-light {
       color-scheme: light; --background-primary: #fff; --background-secondary: #f6f5f2;
       --background-modifier-border: #d8d5cf; --background-modifier-hover: #eeece8;
+      --interactive-normal: #e8e6e2; --input-shadow: inset 0 0 0 1px #d8d5cf;
       --text-normal: #262521; --text-muted: #6f6c65; --text-faint: #a7a39b;
       --text-accent: #5143ad; --interactive-accent: #6556c8;
+      --radius-s: 4px; --font-interface: system-ui, sans-serif;
       --bob-area-blue: #3979c5; --bob-area-orange: #d66d36; --bob-area-aqua: #268d97;
       --bob-area-yellow: #ae8c1e; --bob-area-magenta: #b04c85; --bob-area-green: #4c8b57;
       --bob-area-violet: #765eb8; --bob-area-red: #bf5c54;
@@ -22,11 +24,13 @@
     body.theme-dark {
       color-scheme: dark; --background-primary: #202124; --background-secondary: #292a2e;
       --background-modifier-border: #45464c; --background-modifier-hover: #34363b;
+      --interactive-normal: #2e2f34; --input-shadow: inset 0 0 0 1px #45464c;
       --text-normal: #e7e6e2; --text-muted: #a4a3a0; --text-faint: #74757a;
       --text-accent: #b2a9ff; --interactive-accent: #9a8cf0;
+      --radius-s: 4px; --font-interface: system-ui, sans-serif;
       --bob-area-blue: #68a4ee; --bob-area-orange: #e17a4a; --bob-area-aqua: #55b8c3;
       --bob-area-yellow: #d0b24c; --bob-area-magenta: #d172a7; --bob-area-green: #75b87e;
-      --bob-area-violet: #a18be4; --bob-area-red: #df817a;
+      --bob-area-violet: #a18ce4; --bob-area-red: #df817a;
       background: #17181a; color: var(--text-normal);
     }
     #preview-root { margin: 0 auto; width: 100%; padding: 12px; }
@@ -34,17 +38,18 @@
     .preview-case { min-width: 0; margin: 0 0 18px; }
     .preview-case-title { margin: 0 0 5px; color: var(--text-muted); font-size: 12px; font-weight: 650; }
     .preview-note {
-      min-width: 0; width: 100%; padding: 8px 0 0;
-      border-top: 1px solid var(--background-modifier-border);
+      min-width: 0; width: 100%; padding: 8px 12px 8px;
+      border: 1px solid var(--background-modifier-border); border-radius: 6px;
       background: var(--background-primary); color: var(--text-normal);
-      font: 16px/1.45 system-ui, sans-serif;
+      font: 16px/1.45 var(--font-interface);
     }
     .preview-ledger-line { min-height: 1.45em; }
-    .preview-ledger-heading { color: var(--text-normal); font-weight: 650; }
+    .preview-ledger-heading { color: var(--text-normal); font-weight: 650; font-size: 1.25em; }
     .preview-ledger-muted { color: var(--text-muted); }
     .preview-strip { width: 100%; min-width: 0; }
     .preview-report { margin-top: 16px; color: var(--text-muted); font-size: 12px; }
   </style>
+  <style id="obsidian-baseline">__OBSIDIAN_BASELINE_CSS__</style>
   <style id="production-day-strip-css">__PRODUCTION_CSS__</style>
 </head>
 <body class="theme-light">
@@ -74,7 +79,6 @@
     const cases = [
       { id: "today", title: "Today in progress · 14:50", fixture: "today" },
       { id: "past", title: "Complete past day", fixture: "past" },
-      { id: "collapsed", title: "Collapsed to one line", fixture: "today", collapsed: true },
       { id: "skeleton", title: "First load · skeleton", fixture: null },
       { id: "stale", title: "Refresh failed · cached frame", fixture: "today", stale: true },
       { id: "unavailable", title: "No cached report · unavailable", fixture: null, error: { code: "timeout", title: "bob stats timed out", hint: "Retry once." } },
@@ -82,7 +86,201 @@
       { id: "not-tracked-warning", title: "Not tracked · journal warning", fixture: "notTrackedWarning" },
       { id: "many-areas", title: "Many areas · +N", fixture: "manyAreas" },
       { id: "redefined-worked", title: "Redefined worked · no area mix", fixture: "redefinedWorked" },
+      { id: "long-labels", title: "Long labels", fixture: "longLabels", relaxed: true },
+      { id: "wide-values", title: "Wide values · 10h 05m", fixture: "wideValues" },
+      { id: "hover", title: "Forced hover on a fact", fixture: "today", pseudo: "hover" },
+      { id: "focus", title: "Forced focus-visible on a fact", fixture: "today", pseudo: "focus-visible" },
     ];
+
+    function mockBadges(doc) {
+      const plan = doc.createElement("div");
+      plan.className = "bob-plan";
+      const chips = [
+        ["bob-plan-chip bob-plan-plan", "TODAY 3/3 · 7/10"],
+        ["bob-plan-chip bob-plan-pending", "PENDING 4/10"],
+        ["bob-plan-chip bob-plan-next", "NEXT 15/15"],
+        ["bob-plan-chip bob-plan-ready", "READY 61/100"],
+      ];
+      for (const [cls, text] of chips) {
+        const chip = doc.createElement("a");
+        chip.className = cls;
+        chip.textContent = text;
+        plan.appendChild(chip);
+      }
+      const themes = doc.createElement("span");
+      themes.className = "bob-plan-themes";
+      const star = doc.createElement("span");
+      star.className = "bob-plan-themes-star";
+      star.textContent = "★ ";
+      themes.appendChild(star);
+      const names = doc.createElement("span");
+      names.textContent = "GTD · BOB";
+      themes.appendChild(names);
+      plan.appendChild(themes);
+      return plan;
+    }
+
+    function livePreviewCell(doc, stripHost) {
+      const view = doc.createElement("div");
+      view.className = "markdown-source-view mod-cm6";
+      const content = doc.createElement("div");
+      content.className = "cm-content";
+      const codeBlock = doc.createElement("div");
+      codeBlock.className = "cm-preview-code-block cm-embed-block markdown-rendered";
+      const block = doc.createElement("div");
+      block.className = "block-language-bob-plan bob-plan-has-day-strip";
+      block.appendChild(mockBadges(doc));
+      block.appendChild(stripHost);
+      codeBlock.appendChild(block);
+      content.appendChild(codeBlock);
+      const heading = doc.createElement("div");
+      heading.className = "preview-ledger-line preview-ledger-heading";
+      heading.textContent = "## Pomodoros (5h 25m)";
+      content.appendChild(heading);
+      const lineA = doc.createElement("div");
+      lineA.className = "preview-ledger-line";
+      lineA.textContent = "- [08:00-08:45] Design the day strip";
+      content.appendChild(lineA);
+      const lineB = doc.createElement("div");
+      lineB.className = "preview-ledger-line preview-ledger-muted";
+      lineB.textContent = "- [09:00-09:25] Review notes and close the loop";
+      content.appendChild(lineB);
+      view.appendChild(content);
+      return view;
+    }
+
+    function readingViewCell(doc, stripHost) {
+      const view = doc.createElement("div");
+      view.className = "markdown-preview-view markdown-rendered";
+      const block = doc.createElement("div");
+      block.className = "block-language-bob-plan bob-plan-has-day-strip";
+      block.appendChild(mockBadges(doc));
+      block.appendChild(stripHost);
+      view.appendChild(block);
+      const heading = doc.createElement("h2");
+      heading.textContent = "Pomodoros (5h 25m)";
+      view.appendChild(heading);
+      return view;
+    }
+
+    function boxesOverlap(a, b, tolerance) {
+      const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+      const height = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      return width > tolerance && height > tolerance;
+    }
+
+    function visibleBox(node) {
+      const box = node.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) return null;
+      return box;
+    }
+
+    function measureStrip(strip) {
+      const rect = strip.getBoundingClientRect();
+      const descendants = Array.from(strip.querySelectorAll("*"));
+      let maxOverflow = 0;
+      for (const node of descendants) {
+        const box = node.getBoundingClientRect();
+        if (box.width === 0 && box.height === 0) continue;
+        const over = Math.max(
+          0,
+          rect.left - box.left,
+          box.right - rect.right,
+          rect.top - box.top,
+          box.bottom - rect.bottom,
+        );
+        if (over > maxOverflow) maxOverflow = over;
+      }
+      const facts = Array.from(strip.querySelectorAll(".bob-day-strip-fact"));
+      const factBoxes = facts.map((node) => node.getBoundingClientRect());
+      // Cluster into wrapped rows by top (2 px bands): the hover pill's
+      // negative margins let adjacent boxes kiss, so only same-row pairs
+      // can really collide, and each box shrinks by the pill outset
+      // (.3em inline, .05em block) first: the pill may touch, content
+      // must not.
+      const fontSize = parseFloat(getComputedStyle(strip).fontSize) || 14;
+      const insetX = 0.3 * fontSize;
+      const insetY = 0.05 * fontSize;
+      const contentBoxes = factBoxes.map((box) => ({
+        left: box.left + insetX,
+        right: box.right - insetX,
+        top: box.top + insetY,
+        bottom: box.bottom - insetY,
+      }));
+      const rowOf = factBoxes.map((box) => {
+        const bands = [];
+        for (const [index, other] of factBoxes.entries()) {
+          if (Math.abs(other.top - box.top) <= 2) bands.push(index);
+        }
+        return Math.min(...bands);
+      });
+      let maxFactOverlap = 0;
+      for (let i = 0; i < contentBoxes.length; i += 1) {
+        for (let j = i + 1; j < contentBoxes.length; j += 1) {
+          if (rowOf[i] !== rowOf[j]) continue;
+          const a = contentBoxes[i];
+          const b = contentBoxes[j];
+          const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+          const height = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+          if (width > 0.5 && height > 0.5) maxFactOverlap = Math.max(maxFactOverlap, Math.min(width, height));
+        }
+      }
+      const factTops = Array.from(new Set(factBoxes.map((box) => Math.round(box.top)))).sort((a, b) => a - b);
+      let valueBaselineSpread = 0;
+      for (const top of factTops) {
+        const bottoms = [];
+        for (const fact of facts) {
+          if (Math.round(fact.getBoundingClientRect().top) !== top) continue;
+          const value = fact.querySelector(".bob-day-strip-value");
+          if (value) bottoms.push(value.getBoundingClientRect().bottom);
+        }
+        if (bottoms.length > 1) valueBaselineSpread = Math.max(valueBaselineSpread, Math.max(...bottoms) - Math.min(...bottoms));
+      }
+      const line1 = strip.querySelector(".bob-day-strip-facts");
+      const line2 = strip.querySelector(".bob-day-strip-mix-row");
+      let linesOverlap = 0;
+      if (line1 && line2) {
+        const a = line1.getBoundingClientRect();
+        const b = line2.getBoundingClientRect();
+        if (a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0 && boxesOverlap(a, b, 0.5)) {
+          linesOverlap = Math.min(
+            Math.min(a.right, b.right) - Math.max(a.left, b.left),
+            Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top),
+          );
+        }
+      }
+      let legendOverlap = 0;
+      const legend = strip.querySelector(".bob-day-strip-legend");
+      const meta = strip.querySelector(".bob-day-strip-meta");
+      if (legend) {
+        const items = Array.from(legend.children).map(visibleBox).filter(Boolean);
+        for (let i = 0; i < items.length; i += 1) {
+          for (let j = i + 1; j < items.length; j += 1) {
+            if (boxesOverlap(items[i], items[j], 0.5)) legendOverlap = Math.max(legendOverlap, 1);
+          }
+        }
+        if (meta) {
+          const metaBox = visibleBox(meta);
+          if (metaBox) {
+            for (const item of items) {
+              if (boxesOverlap(item, metaBox, 0.5)) legendOverlap = Math.max(legendOverlap, 1);
+            }
+          }
+        }
+      }
+      const factWidths = factBoxes.map((box) => Math.round(box.width * 10) / 10);
+      return {
+        stripHeight: Math.round(rect.height * 10) / 10,
+        maxOverflow: Math.round(maxOverflow * 10) / 10,
+        factWidths,
+        factRows: factTops.length,
+        valueBaselineSpread: Math.round(valueBaselineSpread * 10) / 10,
+        maxFactOverlap: Math.round(maxFactOverlap * 10) / 10,
+        linesOverlap: Math.round(linesOverlap * 10) / 10,
+        legendOverlap: Math.round(legendOverlap * 10) / 10,
+        hasButton: Boolean(strip.querySelector("button")),
+      };
+    }
 
     function renderMatrix(width, theme) {
       document.body.className = `theme-${theme}`;
@@ -97,69 +295,47 @@
       for (const item of cases) {
         const card = document.createElement("section");
         card.className = "preview-case";
+        card.setAttribute("data-case", item.id);
         const title = document.createElement("h2");
         title.className = "preview-case-title";
         title.textContent = item.title;
         card.appendChild(title);
         const note = document.createElement("div");
-        note.className = "preview-note cm-content";
-        const ledger = document.createElement("div");
-        ledger.className = "preview-ledger-line preview-ledger-heading";
-        ledger.textContent = "Pomodoros";
-        note.appendChild(ledger);
-        const lineA = document.createElement("div");
-        lineA.className = "preview-ledger-line";
-        lineA.textContent = "- [08:00-08:45] Design the day strip";
-        note.appendChild(lineA);
-        const lineB = document.createElement("div");
-        lineB.className = "preview-ledger-line preview-ledger-muted";
-        lineB.textContent = "- [09:00-09:25] Review notes and close the loop";
-        note.appendChild(lineB);
+        note.className = "preview-note";
         const strip = document.createElement("div");
         strip.className = "preview-strip";
-        note.appendChild(strip);
+        strip.setAttribute("data-strip", item.id);
+        note.appendChild(livePreviewCell(document, strip));
         card.appendChild(note);
         root.appendChild(card);
 
         const fixture = item.fixture ? fixtureReports[item.fixture] : null;
         const context = fixture
-          ? { localToday: fixture.localToday, fetchedAt: fixture.fetchedAt, stale: item.stale === true, error: item.stale ? { code: "timeout", title: "bob stats timed out" } : null, collapsed: item.collapsed === true }
+          ? { localToday: fixture.localToday, fetchedAt: fixture.fetchedAt, stale: item.stale === true, error: item.stale ? { code: "timeout", title: "bob stats timed out" } : null }
           : { localToday: "2026-10-24", error: item.error || null };
         const model = helpers.dayStripModel(fixture && fixture.report, fixture ? fixture.day : "2026-10-24", context);
-        helpers.paintDayStrip(strip, model, { openStats() {}, toggleCollapsed() {}, retry() {} });
-        const rect = strip.getBoundingClientRect();
-        const tileNodes = Array.from(strip.querySelectorAll(".bob-day-strip-tile"));
-        const rowTops = Array.from(new Set(tileNodes.map((node) => Math.round(node.getBoundingClientRect().top))));
-        const spreadWithinRows = (selector) => {
-          const rows = new Map();
-          for (const node of tileNodes) {
-            const top = Math.round(node.getBoundingClientRect().top);
-            const target = node.querySelector(selector);
-            if (!rows.has(top)) rows.set(top, []);
-            rows.get(top).push(target.getBoundingClientRect().bottom);
-          }
-          return Math.max(0, ...Array.from(rows.values(), (values) => values.length ? Math.max(...values) - Math.min(...values) : 0));
-        };
-        const valueBaselineSpread = spreadWithinRows(".bob-day-strip-value-row");
-        const markBaselineSpread = spreadWithinRows(".bob-day-strip-marks");
-        const mixBar = strip.querySelector(".bob-day-strip-mix-bar");
-        const tiles = strip.querySelector(".bob-day-strip-tiles");
-        const mixWidth = mixBar && tiles && !mixBar.closest(".bob-day-strip-mix-action").hasAttribute("hidden")
-          ? Math.abs(mixBar.getBoundingClientRect().width - tiles.getBoundingClientRect().width)
-          : 0;
-        const heightBudget = item.collapsed ? 26 : model.state === "unavailable" ? 40 : 104 + Math.max(0, rowTops.length - 1) * 66;
-        measurements.push({
-          state: item.id,
-          stripHeight: Math.round(rect.height * 10) / 10,
-          heightBudget,
-          heightPass: rect.height <= heightBudget + 0.5,
-          tileRows: rowTops.length,
-          valueBaselineSpread: Math.round(valueBaselineSpread * 10) / 10,
-          markBaselineSpread: Math.round(markBaselineSpread * 10) / 10,
-          mixWidth: Math.round(mixWidth * 10) / 10,
-          mixPass: !mixBar || mixWidth <= 0.5,
-        });
+        helpers.paintDayStrip(strip, model, { openStats() {}, retry() {} });
+        measurements.push({ state: item.id, relaxed: item.relaxed === true, ...measureStrip(strip) });
       }
+      const readingCard = document.createElement("section");
+      readingCard.className = "preview-case";
+      readingCard.setAttribute("data-case", "reading");
+      const readingTitle = document.createElement("h2");
+      readingTitle.className = "preview-case-title";
+      readingTitle.textContent = "Reading view · today in progress";
+      readingCard.appendChild(readingTitle);
+      const readingNote = document.createElement("div");
+      readingNote.className = "preview-note";
+      const readingStrip = document.createElement("div");
+      readingStrip.className = "preview-strip";
+      readingStrip.setAttribute("data-strip", "reading");
+      readingNote.appendChild(readingViewCell(document, readingStrip));
+      readingCard.appendChild(readingNote);
+      root.appendChild(readingCard);
+      const fixture = fixtureReports.today;
+      const readingModel = helpers.dayStripModel(fixture.report, fixture.day, { localToday: fixture.localToday, fetchedAt: fixture.fetchedAt });
+      helpers.paintDayStrip(readingStrip, readingModel, { openStats() {}, retry() {} });
+      measurements.push({ state: "reading", relaxed: false, ...measureStrip(readingStrip) });
       return { width, theme, measurements, pageScrollWidth: document.documentElement.scrollWidth, viewportWidth: window.innerWidth };
     }
     window.dayStripPreview = { renderMatrix, cases };

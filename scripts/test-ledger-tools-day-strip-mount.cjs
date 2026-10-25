@@ -178,7 +178,7 @@ test("canonical Live Preview daily notes get a block widget at doc.length", () =
   assert.equal(mounted[0].value.spec.side, 1);
   const widget = mounted[0].value.spec.widget;
   assert.equal(widget.ignoreEvent(), true);
-  assert.equal(widget.estimatedHeight, 100);
+  assert.equal(widget.estimatedHeight, 48);
   const equalWidget = plugin.dayStripMountDecoration(value.path, value.day, doc)
     .ranges[0].value.spec.widget;
   assert.equal(widget.eq(equalWidget), true);
@@ -285,7 +285,7 @@ test("toDOM paints/registers live hosts and suppresses popover and canvas DOM", 
   assert.equal(plugin.dayStripViewsStore().size, 0);
 });
 
-test("toggle/config refresh effects are lazy and collapse persists with remeasurement", () => {
+test("toggle/config refresh effects are lazy and session state needs no vault writes", () => {
   const plugin = makePlugin();
   let enabled = true;
   plugin.dayStripConfigEnabled = () => enabled;
@@ -307,19 +307,6 @@ test("toggle/config refresh effects are lazy and collapse persists with remeasur
   assert.equal(plugin.dayStripCheckConfig(), true);
   value = field.update(value, { state, startState: state, effects: dispatches.at(-1).effects });
   assert.equal(ranges(value).length, 0);
-
-  let measures = 0;
-  let paints = 0;
-  plugin.dayStripPaint = () => { paints += 1; };
-  plugin.dayStripViewsStore().add({
-    el: {},
-    editorView: { requestMeasure: () => { measures += 1; } },
-  });
-  plugin.dayStripSetCollapsed(true);
-  assert.equal(plugin.dayStripIsCollapsed(), true);
-  assert.equal(plugin.app.localStore.get("bob-day-strip-collapsed"), true);
-  assert.equal(measures, 1);
-  assert.equal(paints, 1);
 });
 
 test("each strip re-check cycle re-reads stats.day_strip and refreshes editors on a flip", () => {

@@ -177,6 +177,7 @@ function dayStripMix(report, worked, day) {
   }
   const rows = statsPanelHomeRows(worked, report, dimension, point);
   const ordered = statsPanelHomeAreaRows(rows, report);
+  const hueMap = statsPanelDistinctHues(ordered, report);
   const displays = point && point.parts_display && point.parts_display[dimension] && typeof point.parts_display[dimension] === "object"
     ? point.parts_display[dimension]
     : {};
@@ -185,7 +186,7 @@ function dayStripMix(report, worked, day) {
     label: row.label,
     value: row.value,
     display: typeof displays[row.key] === "string" ? displays[row.key] : row.display,
-    hue: statsPanelHomeHue(report, row.key),
+    hue: hueMap.get(row.key) || "gray",
     bucket: row.key.startsWith("@"),
   }));
   // Top three by minutes; the legend keeps them in bar order.

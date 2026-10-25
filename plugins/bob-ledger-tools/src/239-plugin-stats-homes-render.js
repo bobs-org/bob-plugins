@@ -265,8 +265,7 @@ class BobLedgerToolsStatsHomesMixin {
     });
     const width = this.statsPanelWidth(view);
     for (const [index, row] of ordered.entries()) {
-      const isBucket = row.key.startsWith("@");
-      const hue = isBucket ? "gray" : row.hue;
+      const hue = row.hue || "gray";
       const percent = total > 0 ? Math.max(0, row.value / total) * 100 : 0;
       const segment = statsEl(doc, "span", {
         class: "bob-stats-home-area-segment bob-stats-home-" + hue,
@@ -337,9 +336,11 @@ class BobLedgerToolsStatsHomesMixin {
     if (!expanded) return wrap;
     const list = statsEl(doc, "div", { class: "bob-stats-home-subs-list", "aria-label": "Sub-projects of " + root.label });
     const maxValue = Math.max(0, root.value || 0);
+    const rootHue = root.hue || "gray";
     for (const leaf of leaves) {
+      leaf.hue = rootHue;
       const row = statsEl(doc, "div", { class: "bob-stats-home-sub-leaf" + (leaf.key.startsWith("@") ? " bob-stats-home-bucket" : "") });
-      const top = statsEl(doc, "div", { class: "bob-stats-home-sub-top bob-stats-home-" + (leaf.hue || "gray") });
+      const top = statsEl(doc, "div", { class: "bob-stats-home-sub-top bob-stats-home-" + rootHue });
       top.appendChild(this.statsPanelHomeLink(doc, view, leaf, "project"));
       top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, leaf.display + (leaf.share ? " · " + leaf.share : "")));
       row.appendChild(top);
@@ -356,6 +357,12 @@ class BobLedgerToolsStatsHomesMixin {
     const point = statsPanelSelectedHomePoint(metric, report, state);
     const areaRows = statsPanelHomeRows(metric, report, "area", point);
     const rootRows = statsPanelHomeRows(metric, report, "root_parent", point);
+    const distinctHues = typeof statsPanelDistinctHues === "function"
+      ? statsPanelDistinctHues(rootRows, report)
+      : new Map();
+    for (const row of rootRows) {
+      if (distinctHues.has(row.key)) row.hue = distinctHues.get(row.key);
+    }
     const tint = metric.unit === "minutes";
     if (options.title) {
       section.appendChild(this.statsPanelTitle(doc, (metric.label || metric.id) + " by root parent"));

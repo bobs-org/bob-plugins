@@ -236,6 +236,31 @@ function checkMeasurement(item, context) {
       failures.push(`narrow counter is +${item.visibleCounter} for ${item.segments} segments and ${item.visibleLegend} labels`);
     }
   }
+  // (m) distinct hues: ready cells with <=8 non-gray segments carry pairwise
+  // distinct bar hues and matching legend dots.
+  if (!item.mixOmitted && item.state !== "skeleton" && item.state !== "unavailable" && Array.isArray(item.barHues)) {
+    const nonGray = item.barHues.filter((hue) => hue !== "gray");
+    if (nonGray.length > 0 && nonGray.length <= 8) {
+      const seen = new Set();
+      for (const hue of nonGray) {
+        if (seen.has(hue)) {
+          failures.push(`bar hues repeat ${hue} (want distinct hues)`);
+          break;
+        }
+        seen.add(hue);
+      }
+      const byTitle = new Map();
+      (Array.isArray(item.barTitles) ? item.barTitles : []).forEach((title, index) => {
+        if (title) byTitle.set(title, item.barHues[index]);
+      });
+      for (const dot of (Array.isArray(item.legendDots) ? item.legendDots : [])) {
+        const expected = byTitle.get(dot.title);
+        if (expected && dot.hue !== expected) {
+          failures.push(`legend dot ${dot.title} is ${dot.hue} but its segment is ${expected}`);
+        }
+      }
+    }
+  }
   if (item.state === "today" && context.width >= 540 && item.factRows !== 1) {
     failures.push(`facts wrap to ${item.factRows} rows at ${context.width}px (must fit on one line)`);
   }
@@ -257,7 +282,7 @@ function matrixMarkdown(matrix, browser, revision, interactionChecks) {
     "- An Obsidian baseline stylesheet (30 px inline-flex buttons, link colours, rendered line-height) loads before the production CSS, so a `<button>` regression fails the matrix.",
     "- Grid: light and dark themes × 410, 540, and 700 px note columns × 16 states plus Reading view.",
     "- Height budgets (16 px base): ≤56 px when the facts fit on one line, ≤80 px when they wrap once. The long-labels case is relaxed: geometry is enforced, height is reported.",
-    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) the bar spans the strip's content width (±1 px) and is its last line box; (k) no legend label is truncated; (l) narrow cells show at most 2 legend items and the visible counter equals segments minus visible items.",
+    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) the bar spans the strip's content width (±1 px) and is its last line box; (k) no legend label is truncated; (l) narrow cells show at most 2 legend items and the visible counter equals segments minus visible items; (m) ready cells with ≤8 non-gray segments carry pairwise distinct bar hues and matching legend dots.",
     "",
     "| Width | Theme | State | Strip height | Budget | Fact rows | Overflow | Facts overlap | Lines overlap | Legend overlap | Value baseline spread | Skeleton delta | Button | Result | Screenshot |",
     "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
@@ -267,7 +292,7 @@ function matrixMarkdown(matrix, browser, revision, interactionChecks) {
     "",
     ...interactionChecks.map((item) => `- ${item.width}px ${item.theme}: ${item.label} — ${item.result}${item.detail ? ` (${item.detail})` : ""}`),
     "",
-    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-hue roots, seven roots with `+N`, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), forced hover, forced `:focus-visible`, and a Reading-view today cell.",
+    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-area roots get distinct hues, seven roots with `+N`, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), forced hover, forced `:focus-visible`, and a Reading-view today cell.",
     "",
   ].join("\n");
 }

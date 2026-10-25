@@ -494,6 +494,7 @@ module.exports.helpers = {
   statsPanelRootSubRows,
   statsPanelHomeLabel,
   statsPanelHomeHue,
+  statsPanelDistinctHues,
   statsPanelFormatMinutes,
   statsPanelHomeRows,
   statsPanelHomeAreaRows,

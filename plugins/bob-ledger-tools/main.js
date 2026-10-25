@@ -15128,13 +15128,6 @@ function pomodoroHomeParentTarget(raw) {
   return pomodoroHomeLinkTarget(raw);
 }
 
-function pomodoroHomeRollupValue(raw) {
-  // Retired: `rollup:` frontmatter is silently ignored. Kept as a stub so
-  // older callers fail closed without regrouping or warning.
-  void raw;
-  return "off";
-}
-
 function pomodoroHomePercentages(weights) {
   const values = Array.isArray(weights) ? weights.map((weight) => Number(weight) || 0) : [];
   const total = values.reduce((sum, weight) => sum + weight, 0);
@@ -29231,6 +29224,54 @@ function statsPanelHomeAreaRows(rows, report) {
   });
 }
 
+function statsPanelDistinctHues(rows, report) {
+  const result = new Map();
+  const list = Array.isArray(rows) ? rows.slice() : [];
+  const coloured = [];
+  for (const row of list) {
+    if (!row || typeof row.key !== "string" || !row.key) continue;
+    if (row.key.startsWith("@") && statsPanelHomeHue(report, row.key) === "gray") {
+      result.set(row.key, "gray");
+    } else {
+      coloured.push(row);
+    }
+  }
+  const labelOf = (row) => (typeof row.label === "string" && row.label ? row.label : row.key);
+  const valueOf = (row) => (typeof row.value === "number" && Number.isFinite(row.value) ? row.value : 0);
+  coloured.sort((a, b) => (valueOf(b) - valueOf(a)) || labelOf(a).localeCompare(labelOf(b)) || a.key.localeCompare(b.key));
+  const claimed = new Set();
+  const preferredOf = (row) => statsPanelHomeHue(report, row.key);
+  for (const row of coloured) {
+    if (result.has(row.key)) continue;
+    const preferred = preferredOf(row);
+    if (STATS_PANEL_HOME_HUES.includes(preferred) && !claimed.has(preferred)) {
+      result.set(row.key, preferred);
+      claimed.add(preferred);
+    }
+  }
+  for (const row of coloured) {
+    if (result.has(row.key)) continue;
+    const preferred = preferredOf(row);
+    const preferredIndex = STATS_PANEL_HOME_HUES.indexOf(preferred);
+    const start = preferredIndex >= 0 ? (preferredIndex + 1) % STATS_PANEL_HOME_HUES.length : 0;
+    let chosen = null;
+    for (let offset = 0; offset < STATS_PANEL_HOME_HUES.length; offset += 1) {
+      const hue = STATS_PANEL_HOME_HUES[(start + offset) % STATS_PANEL_HOME_HUES.length];
+      if (!claimed.has(hue)) {
+        chosen = hue;
+        break;
+      }
+    }
+    if (chosen) {
+      result.set(row.key, chosen);
+      claimed.add(chosen);
+    } else {
+      result.set(row.key, STATS_PANEL_HOME_HUES.includes(preferred) ? preferred : "gray");
+    }
+  }
+  return result;
+}
+
 function statsPanelSelectedHomePoint(metric, report, state) {
   const safe = state && typeof state === "object" ? state : {};
   const points = Array.isArray(metric && metric.points) ? metric.points : [];
@@ -30647,8 +30688,7 @@ class BobLedgerToolsStatsHomesMixin {
     });
     const width = this.statsPanelWidth(view);
     for (const [index, row] of ordered.entries()) {
-      const isBucket = row.key.startsWith("@");
-      const hue = isBucket ? "gray" : row.hue;
+      const hue = row.hue || "gray";
       const percent = total > 0 ? Math.max(0, row.value / total) * 100 : 0;
       const segment = statsEl(doc, "span", {
         class: "bob-stats-home-area-segment bob-stats-home-" + hue,
@@ -30719,9 +30759,11 @@ class BobLedgerToolsStatsHomesMixin {
     if (!expanded) return wrap;
     const list = statsEl(doc, "div", { class: "bob-stats-home-subs-list", "aria-label": "Sub-projects of " + root.label });
     const maxValue = Math.max(0, root.value || 0);
+    const rootHue = root.hue || "gray";
     for (const leaf of leaves) {
+      leaf.hue = rootHue;
       const row = statsEl(doc, "div", { class: "bob-stats-home-sub-leaf" + (leaf.key.startsWith("@") ? " bob-stats-home-bucket" : "") });
-      const top = statsEl(doc, "div", { class: "bob-stats-home-sub-top bob-stats-home-" + (leaf.hue || "gray") });
+      const top = statsEl(doc, "div", { class: "bob-stats-home-sub-top bob-stats-home-" + rootHue });
       top.appendChild(this.statsPanelHomeLink(doc, view, leaf, "project"));
       top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, leaf.display + (leaf.share ? " · " + leaf.share : "")));
       row.appendChild(top);
@@ -30738,6 +30780,12 @@ class BobLedgerToolsStatsHomesMixin {
     const point = statsPanelSelectedHomePoint(metric, report, state);
     const areaRows = statsPanelHomeRows(metric, report, "area", point);
     const rootRows = statsPanelHomeRows(metric, report, "root_parent", point);
+    const distinctHues = typeof statsPanelDistinctHues === "function"
+      ? statsPanelDistinctHues(rootRows, report)
+      : new Map();
+    for (const row of rootRows) {
+      if (distinctHues.has(row.key)) row.hue = distinctHues.get(row.key);
+    }
     const tint = metric.unit === "minutes";
     if (options.title) {
       section.appendChild(this.statsPanelTitle(doc, (metric.label || metric.id) + " by root parent"));
@@ -31079,6 +31127,7 @@ function dayStripMix(report, worked, day) {
   }
   const rows = statsPanelHomeRows(worked, report, dimension, point);
   const ordered = statsPanelHomeAreaRows(rows, report);
+  const hueMap = statsPanelDistinctHues(ordered, report);
   const displays = point && point.parts_display && point.parts_display[dimension] && typeof point.parts_display[dimension] === "object"
     ? point.parts_display[dimension]
     : {};
@@ -31087,7 +31136,7 @@ function dayStripMix(report, worked, day) {
     label: row.label,
     value: row.value,
     display: typeof displays[row.key] === "string" ? displays[row.key] : row.display,
-    hue: statsPanelHomeHue(report, row.key),
+    hue: hueMap.get(row.key) || "gray",
     bucket: row.key.startsWith("@"),
   }));
   // Top three by minutes; the legend keeps them in bar order.
@@ -55114,6 +55163,7 @@ module.exports.helpers = {
   statsPanelRootSubRows,
   statsPanelHomeLabel,
   statsPanelHomeHue,
+  statsPanelDistinctHues,
   statsPanelFormatMinutes,
   statsPanelHomeRows,
   statsPanelHomeAreaRows,

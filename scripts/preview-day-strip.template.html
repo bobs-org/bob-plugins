@@ -86,7 +86,7 @@
       { id: "not-tracked-warning", title: "Not tracked · journal warning", fixture: "notTrackedWarning" },
       { id: "many-areas", title: "Many areas · +N", fixture: "manyAreas" },
       { id: "area-only", title: "Old bob · areas without root_parent", fixture: "areaOnly" },
-      { id: "same-hue-roots", title: "Same-hue roots share blue and orange", fixture: "sameHueRoots" },
+      { id: "same-hue-roots", title: "Same-area roots get distinct hues", fixture: "sameHueRoots" },
       { id: "many-roots", title: "Seven roots · +N", fixture: "manyRoots" },
       { id: "redefined-worked", title: "Redefined worked · no area mix", fixture: "redefinedWorked" },
       { id: "long-labels", title: "Long labels", fixture: "longLabels", relaxed: true },
@@ -283,6 +283,7 @@
         legendOverlap: Math.round(legendOverlap * 10) / 10,
         hasButton: Boolean(strip.querySelector("button")),
         ...measureStripPlacement(strip),
+        ...measureStripHues(strip),
       };
     }
 
@@ -291,6 +292,40 @@
       const box = node.getBoundingClientRect();
       if (box.width <= 0 || box.height <= 0) return false;
       return getComputedStyle(node).display !== "none" && !node.hasAttribute("hidden");
+    }
+
+    // (m) distinct hues: bar segments carry pairwise distinct hue classes
+    // and each legend dot matches its segment.
+    function hueFromClass(className) {
+      const match = /bob-day-strip-hue-([a-z]+)/.exec(String(className || ""));
+      return match ? match[1] : null;
+    }
+
+    function measureStripHues(strip) {
+      const out = { barHues: [], barTitles: [], legendDots: [] };
+      try {
+        const bar = strip.querySelector(":scope > .bob-day-strip-bar");
+        if (bar) {
+          for (const segment of bar.querySelectorAll(".bob-day-strip-bar-segment")) {
+            if (segment.hasAttribute("hidden")) continue;
+            const hue = hueFromClass(segment.getAttribute("class"));
+            if (!hue) continue;
+            out.barHues.push(hue);
+            out.barTitles.push(segment.getAttribute("title") || "");
+          }
+        }
+        for (const item of strip.querySelectorAll(".bob-day-strip-legend-item")) {
+          if (item.hasAttribute("hidden")) continue;
+          if (!visible(item)) continue;
+          const dot = item.querySelector(".bob-day-strip-legend-dot");
+          const hue = dot ? hueFromClass(dot.getAttribute("class")) : null;
+          if (!hue) continue;
+          out.legendDots.push({ title: item.getAttribute("title") || "", hue });
+        }
+      } catch (error) {
+        // Hue measurement never breaks the matrix.
+      }
+      return out;
     }
 
     // (i) strip precedes .bob-plan in the DOM with a calm gap; (j) the bar

@@ -131,13 +131,6 @@ function pomodoroHomeParentTarget(raw) {
   return pomodoroHomeLinkTarget(raw);
 }
 
-function pomodoroHomeRollupValue(raw) {
-  // Retired: `rollup:` frontmatter is silently ignored. Kept as a stub so
-  // older callers fail closed without regrouping or warning.
-  void raw;
-  return "off";
-}
-
 function pomodoroHomePercentages(weights) {
   const values = Array.isArray(weights) ? weights.map((weight) => Number(weight) || 0) : [];
   const total = values.reduce((sum, weight) => sum + weight, 0);

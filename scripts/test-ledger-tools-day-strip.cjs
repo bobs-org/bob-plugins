@@ -171,9 +171,10 @@ test("time mix reuses Stats area ordering and hues, with buckets last and a tool
   const worked = fixture.report.metrics.find((metric) => metric.id === "worked");
   const point = helpers.statsChartDailyPoints(worked, fixture.report).find((item) => item.date === fixture.day);
   const expected = helpers.statsPanelHomeAreaRows(helpers.statsPanelHomeRows(worked, fixture.report, "root_parent", point), fixture.report);
+  const hueMap = helpers.statsPanelDistinctHues(expected, fixture.report);
   assert.equal(model.mix.dimension, "root_parent");
   assert.deepEqual(model.mix.segments.map((segment) => segment.key), expected.map((row) => row.key));
-  assert.deepEqual(model.mix.segments.map((segment) => segment.hue), expected.map((row) => row.hue));
+  assert.deepEqual(model.mix.segments.map((segment) => segment.hue), expected.map((row) => hueMap.get(row.key)));
   assert.ok(model.mix.segments.slice(-1)[0].key.startsWith("@"));
   assert.equal(model.mix.segments.at(-1).hue, "gray");
   assert.equal(model.mix.legend.length, 3);
@@ -339,4 +340,40 @@ test("bar click opens Stats homes with day and new-leaf modifiers", () => {
     if (typeof node.dispatch === "function") node.dispatch("keydown", { key: "Enter" });
   }
   assert.equal(calls.length, keydownBefore, "bar has no keyboard activation");
+});
+
+test("same-area roots get distinct hues and legend dots match their segments", () => {
+  const fixture = fixtures.sameHueRoots;
+  const model = modelFor(fixture);
+  const worked = fixture.report.metrics.find((metric) => metric.id === "worked");
+  const point = helpers.statsChartDailyPoints(worked, fixture.report).find((item) => item.date === fixture.day);
+  const expectedOrder = helpers.statsPanelHomeAreaRows(helpers.statsPanelHomeRows(worked, fixture.report, "root_parent", point), fixture.report);
+  assert.deepEqual(model.mix.segments.map((segment) => segment.key), expectedOrder.map((row) => row.key), "order is unchanged");
+  const byKey = new Map(model.mix.segments.map((segment) => [segment.key, segment.hue]));
+  assert.equal(byKey.get("sase.md"), "blue");
+  assert.equal(byKey.get("@review:GTD"), "orange");
+  assert.equal(byKey.get("bob.md"), "aqua");
+  assert.equal(byKey.get("gtd.md"), "yellow");
+  assert.equal(byKey.get("dev.md"), "magenta");
+  assert.equal(byKey.get("@unlinked"), "gray");
+  const nonGray = model.mix.segments.filter((segment) => segment.hue !== "gray");
+  assert.equal(new Set(nonGray.map((segment) => segment.hue)).size, nonGray.length, "non-gray segments differ");
+  const { root } = paint(model);
+  const hueOf = (className) => {
+    const match = /bob-day-strip-hue-([a-z]+)/.exec(String(className || ""));
+    return match ? match[1] : null;
+  };
+  const barNodes = findAll(root, (node) => (node.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-bar-segment"))
+    .filter((node) => !node.hasAttribute("hidden"));
+  const barHues = barNodes.map((node) => hueOf(node.getAttribute("class")));
+  const nonGrayBar = barHues.filter((hue) => hue !== "gray");
+  assert.equal(new Set(nonGrayBar).size, nonGrayBar.length, "painter bar segments differ");
+  const byTitle = new Map(barNodes.map((node) => [node.getAttribute("title"), hueOf(node.getAttribute("class"))]));
+  const legendItems = byClass(root, "bob-day-strip-legend-item").filter((node) => !node.hasAttribute("hidden"));
+  assert.ok(legendItems.length > 0);
+  for (const item of legendItems) {
+    const dot = findAll(item, (node) => (node.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-legend-dot"))[0];
+    assert.ok(dot, "legend item has a dot");
+    assert.equal(hueOf(dot.getAttribute("class")), byTitle.get(item.getAttribute("title")), "legend dot matches its segment");
+  }
 });

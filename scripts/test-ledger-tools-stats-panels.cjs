@@ -946,3 +946,157 @@ test("field and formula metrics keep only the focus chart and table", async () =
     }
   });
 });
+
+test("statsPanelDistinctHues gives every root its own colour", () => {
+  const report = {
+    homes: {
+      "sase.md": { label: "sase", hue: "blue" },
+      "bob.md": { label: "bob", hue: "blue" },
+      "dev.md": { label: "dev", hue: "blue" },
+      "@review:GTD": { label: "GTD review", hue: "orange", area: "gtd.md" },
+      "gtd.md": { label: "gtd", hue: "orange" },
+      "@unlinked": { label: "unlinked", hue: null },
+    },
+  };
+  const rows = [
+    { key: "sase.md", value: 75, label: "sase" },
+    { key: "@review:GTD", value: 50, label: "GTD review" },
+    { key: "bob.md", value: 45, label: "bob" },
+    { key: "gtd.md", value: 15, label: "gtd" },
+    { key: "dev.md", value: 10, label: "dev" },
+    { key: "@unlinked", value: 5, label: "unlinked" },
+  ];
+  const hues = helpers.statsPanelDistinctHues(rows, report);
+  assert.equal(hues.get("sase.md"), "blue");
+  assert.equal(hues.get("@review:GTD"), "orange");
+  assert.equal(hues.get("bob.md"), "aqua");
+  assert.equal(hues.get("gtd.md"), "yellow");
+  assert.equal(hues.get("dev.md"), "magenta");
+  assert.equal(hues.get("@unlinked"), "gray");
+});
+
+test("statsPanelDistinctHues does not depend on input order", () => {
+  const report = {
+    homes: {
+      "sase.md": { label: "sase", hue: "blue" },
+      "bob.md": { label: "bob", hue: "blue" },
+      "@review:GTD": { label: "GTD review", hue: "orange" },
+    },
+  };
+  const forward = [
+    { key: "sase.md", value: 75, label: "sase" },
+    { key: "@review:GTD", value: 50, label: "GTD review" },
+    { key: "bob.md", value: 45, label: "bob" },
+  ];
+  const backward = [...forward].reverse();
+  assert.deepEqual([...helpers.statsPanelDistinctHues(forward, report)], [...helpers.statsPanelDistinctHues(backward, report)]);
+});
+
+test("statsPanelDistinctHues keeps different area hues and greys buckets", () => {
+  const report = {
+    homes: {
+      "a.md": { label: "a", hue: "blue" },
+      "b.md": { label: "b", hue: "aqua" },
+      "@unlinked": { label: "unlinked", hue: null },
+      "@unfiled": { label: "unfiled", hue: null },
+      "@review:GTD": { label: "GTD review", hue: "orange" },
+    },
+  };
+  const hues = helpers.statsPanelDistinctHues([
+    { key: "a.md", value: 10, label: "a" },
+    { key: "b.md", value: 5, label: "b" },
+    { key: "@unlinked", value: 3, label: "unlinked" },
+    { key: "@unfiled", value: 2, label: "unfiled" },
+    { key: "@review:GTD", value: 8, label: "GTD review" },
+  ], report);
+  assert.equal(hues.get("a.md"), "blue");
+  assert.equal(hues.get("b.md"), "aqua");
+  assert.equal(hues.get("@unlinked"), "gray");
+  assert.equal(hues.get("@unfiled"), "gray");
+  assert.equal(hues.get("@review:GTD"), "orange");
+});
+
+test("statsPanelDistinctHues never throws past eight coloured roots", () => {
+  const palette = ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
+  const homes = {};
+  const rows = [];
+  for (let index = 0; index < 9; index += 1) {
+    const key = `root-${index}.md`;
+    homes[key] = { label: key, hue: palette[index % palette.length] };
+    rows.push({ key, value: 90 - index, label: key });
+  }
+  const hues = helpers.statsPanelDistinctHues(rows, { homes });
+  assert.equal(hues.size, 9);
+  for (const row of rows) assert.ok(hues.get(row.key), `keeps a hue for ${row.key}`);
+});
+
+test("root bar gives same-area roots distinct hues and GTD review stays coloured", async () => {
+  await withMissingConfig(async () => {
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
+    plugin.onload();
+    try {
+      const report = homesPanelReport();
+      const worked = report.metrics.find((metric) => metric.id === "worked");
+      worked.parts_summary.root_parent.push({ key: "@review:GTD", value: 12, display: "12m", share: "10%", label: "GTD review" });
+      const target = worked.points.find((entry) => entry.date === "2026-10-10");
+      target.parts.root_parent["@review:GTD"] = 12;
+      target.parts_display.root_parent["@review:GTD"] = "12m";
+      const { el, view } = renderWithFocus("worked");
+      plugin.renderStatsResult(view, { report });
+      const segments = el.querySelectorAll(".bob-stats-home-area-segment");
+      const byTitle = new Map();
+      for (const segment of segments) {
+        const classes = String(segment.getAttribute("class") || "").split(/\s+/);
+        const hue = classes.map((name) => /^bob-stats-home-([a-z]+)$/.exec(name)).find(Boolean)?.[1] || null;
+        const title = String(segment.getAttribute("title") || "");
+        if (title) byTitle.set(title, hue);
+      }
+      const nonGray = [...byTitle.values()].filter((hue) => hue !== "gray");
+      assert.equal(new Set(nonGray).size, nonGray.length, "root bar segments differ");
+      const gtdHue = [...byTitle.entries()].find(([title]) => title.includes("GTD review"))?.[1];
+      assert.ok(gtdHue && gtdHue !== "gray", "GTD review is coloured, not gray");
+      const areaRows = el.querySelectorAll(".bob-stats-home-area-row");
+      const headerHues = areaRows.map((row) => String(row.getAttribute("class") || ""));
+      assert.ok(headerHues.some((names) => names.includes("bob-stats-home-blue")), "area headers keep the blue area hue");
+      assert.ok(headerHues.some((names) => names.includes("bob-stats-home-aqua")), "area headers keep the aqua area hue");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("root rows and their sub-project leaves share the mapped hue", async () => {
+  await withMissingConfig(async () => {
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
+    plugin.onload();
+    try {
+      const report = homesPanelReport();
+      const { doc, el, view } = renderWithFocus("worked");
+      plugin.renderStatsResult(view, { report });
+      const roots = el.querySelectorAll(".bob-stats-home-project-top");
+      const hueOf = (node) => {
+        const palette = ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red", "gray"];
+        for (const token of String(node.getAttribute("class") || "").split(/\s+/)) {
+          const match = /^bob-stats-home-([a-z]+)$/.exec(token);
+          if (match && palette.includes(match[1])) return match[1];
+        }
+        return null;
+      };
+      const saseRoot = el.querySelectorAll(".bob-stats-home-link").find((node) => node.textContent === "sase");
+      assert.ok(saseRoot);
+      const saseTop = roots.find((node) => node.children.some((child) => child === saseRoot));
+      const saseHue = hueOf(saseTop);
+      assert.ok(saseHue && saseHue !== "gray");
+      const jobRoot = el.querySelectorAll(".bob-stats-home-link").find((node) => node.textContent === "job_2026_apply_29");
+      const jobTop = roots.find((node) => node.children.some((child) => child === jobRoot));
+      assert.notEqual(saseHue, hueOf(jobTop), "different areas keep different hues");
+      const toggle = findByFocus(el.querySelector(".bob-stats-panel"), "panel-home-subs-sase.md");
+      toggle.dispatch("click");
+      const leaves = el.querySelectorAll(".bob-stats-home-sub-top");
+      assert.ok(leaves.length > 0);
+      for (const leaf of leaves) assert.equal(hueOf(leaf), saseHue, "sub-project leaves share their root hue");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});

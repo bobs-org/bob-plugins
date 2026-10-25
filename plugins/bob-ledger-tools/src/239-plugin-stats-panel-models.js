@@ -211,6 +211,54 @@ function statsPanelHomeAreaRows(rows, report) {
   });
 }
 
+function statsPanelDistinctHues(rows, report) {
+  const result = new Map();
+  const list = Array.isArray(rows) ? rows.slice() : [];
+  const coloured = [];
+  for (const row of list) {
+    if (!row || typeof row.key !== "string" || !row.key) continue;
+    if (row.key.startsWith("@") && statsPanelHomeHue(report, row.key) === "gray") {
+      result.set(row.key, "gray");
+    } else {
+      coloured.push(row);
+    }
+  }
+  const labelOf = (row) => (typeof row.label === "string" && row.label ? row.label : row.key);
+  const valueOf = (row) => (typeof row.value === "number" && Number.isFinite(row.value) ? row.value : 0);
+  coloured.sort((a, b) => (valueOf(b) - valueOf(a)) || labelOf(a).localeCompare(labelOf(b)) || a.key.localeCompare(b.key));
+  const claimed = new Set();
+  const preferredOf = (row) => statsPanelHomeHue(report, row.key);
+  for (const row of coloured) {
+    if (result.has(row.key)) continue;
+    const preferred = preferredOf(row);
+    if (STATS_PANEL_HOME_HUES.includes(preferred) && !claimed.has(preferred)) {
+      result.set(row.key, preferred);
+      claimed.add(preferred);
+    }
+  }
+  for (const row of coloured) {
+    if (result.has(row.key)) continue;
+    const preferred = preferredOf(row);
+    const preferredIndex = STATS_PANEL_HOME_HUES.indexOf(preferred);
+    const start = preferredIndex >= 0 ? (preferredIndex + 1) % STATS_PANEL_HOME_HUES.length : 0;
+    let chosen = null;
+    for (let offset = 0; offset < STATS_PANEL_HOME_HUES.length; offset += 1) {
+      const hue = STATS_PANEL_HOME_HUES[(start + offset) % STATS_PANEL_HOME_HUES.length];
+      if (!claimed.has(hue)) {
+        chosen = hue;
+        break;
+      }
+    }
+    if (chosen) {
+      result.set(row.key, chosen);
+      claimed.add(chosen);
+    } else {
+      result.set(row.key, STATS_PANEL_HOME_HUES.includes(preferred) ? preferred : "gray");
+    }
+  }
+  return result;
+}
+
 function statsPanelSelectedHomePoint(metric, report, state) {
   const safe = state && typeof state === "object" ? state : {};
   const points = Array.isArray(metric && metric.points) ? metric.points : [];

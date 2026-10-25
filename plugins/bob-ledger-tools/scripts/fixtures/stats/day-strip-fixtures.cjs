@@ -200,7 +200,7 @@ const fixtures = {
   manyAreas: fixture("seven areas and +N", { manyAreas: true }),
   redefinedWorked: fixture("redefined worked without area parts", { redefinedWorked: true }),
   areaOnly: fixture("old bob without root_parent", { areaOnly: true }),
-  sameHueRoots: fixture("same-hue roots share blue and orange", { sameHueRoots: true }),
+  sameHueRoots: fixture("same-area roots get distinct hues", { sameHueRoots: true }),
   manyRoots: fixture("seven roots and +N", { manyRoots: true }),
   longLabels: fixture("long metric and area labels", { longLabels: true }),
   wideValues: fixture("wide values", { wideValues: true }),

@@ -91,6 +91,7 @@
       { id: "redefined-worked", title: "Redefined worked · no area mix", fixture: "redefinedWorked" },
       { id: "long-labels", title: "Long labels", fixture: "longLabels", relaxed: true },
       { id: "wide-values", title: "Wide values · 10h 05m", fixture: "wideValues" },
+      { id: "met", title: "Closed-out past day · met", fixture: "metPast" },
       { id: "hover", title: "Forced hover on a fact", fixture: "today", pseudo: "hover" },
       { id: "focus", title: "Forced focus-visible on a fact", fixture: "today", pseudo: "focus-visible" },
     ];
@@ -196,14 +197,11 @@
       }
       const facts = Array.from(strip.querySelectorAll(".bob-day-strip-fact"));
       const factBoxes = facts.map((node) => node.getBoundingClientRect());
-      // Cluster into wrapped rows by top (2 px bands): the hover pill's
-      // negative margins let adjacent boxes kiss, so only same-row pairs
-      // can really collide, and each box shrinks by the pill outset
-      // (.3em inline, .05em block) first: the pill may touch, content
-      // must not.
-      const fontSize = parseFloat(getComputedStyle(strip).fontSize) || 14;
-      const insetX = 0.3 * fontSize;
-      const insetY = 0.05 * fontSize;
+      // Cluster into wrapped rows by top (2 px bands): stat cells sit in
+      // their own grid tracks, so adjacent cells may touch but must not
+      // overlap. Only same-row pairs can collide.
+      const insetX = 0;
+      const insetY = 0;
       const contentBoxes = factBoxes.map((box) => ({
         left: box.left + insetX,
         right: box.right - insetX,
@@ -284,7 +282,68 @@
         hasButton: Boolean(strip.querySelector("button")),
         ...measureStripPlacement(strip),
         ...measureStripHues(strip),
+        ...measureStripStats(strip, factBoxes, rowOf),
       };
+    }
+
+    // (n) the values lead: each value is at least 2x its head; (o) every
+    // fact's aria-label ends with its value text and no value holds a warning;
+    // (p) row-start hairlines hide while later cells draw theirs;
+    // (q) the empty track shows in the no-Pomodoros cell.
+    function measureStripStats(strip, factBoxes, rowOf) {
+      const out = {
+        valueLeadMinRatio: null,
+        ariaFaithful: true,
+        valueHasWarning: false,
+        rowStartHairlines: [],
+        laterHairlines: [],
+        barBackground: "",
+      };
+      try {
+        const facts = Array.from(strip.querySelectorAll(".bob-day-strip-fact"));
+        const ratios = [];
+        for (const fact of facts) {
+          const head = fact.querySelector(".bob-day-strip-head");
+          const value = fact.querySelector(".bob-day-strip-value");
+          if (head && value) {
+            const headSize = parseFloat(getComputedStyle(head).fontSize) || 0;
+            const valueSize = parseFloat(getComputedStyle(value).fontSize) || 0;
+            if (headSize > 0) ratios.push(valueSize / headSize);
+          }
+          const label = fact.getAttribute("aria-label") || "";
+          const text = value ? value.textContent || "" : "";
+          if (!label.endsWith(text)) out.ariaFaithful = false;
+          if (value && value.textContent && value.textContent.includes("⚠")) out.valueHasWarning = true;
+        }
+        if (ratios.length) out.valueLeadMinRatio = Math.round(Math.min(...ratios) * 100) / 100;
+        const rowStarts = new Set();
+        for (let i = 0; i < factBoxes.length; i += 1) {
+          let start = true;
+          for (let j = 0; j < factBoxes.length; j += 1) {
+            if (rowOf[j] !== rowOf[i]) continue;
+            if (factBoxes[j].left < factBoxes[i].left - 0.5) { start = false; break; }
+          }
+          if (start) rowStarts.add(i);
+        }
+        for (let i = 0; i < facts.length; i += 1) {
+          if (i === 0) continue;
+          let style = null;
+          try {
+            style = getComputedStyle(facts[i], "::before");
+          } catch (error) { style = null; }
+          const record = {
+            display: style ? style.display : "",
+            content: style ? style.content : "",
+          };
+          if (rowStarts.has(i)) out.rowStartHairlines.push(record);
+          else out.laterHairlines.push(record);
+        }
+        const bar = strip.querySelector(":scope > .bob-day-strip-bar");
+        if (bar) out.barBackground = getComputedStyle(bar).backgroundColor || "";
+      } catch (error) {
+        // Stat measurement never breaks the matrix.
+      }
+      return out;
     }
 
     function visible(node) {

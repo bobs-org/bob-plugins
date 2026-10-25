@@ -377,3 +377,67 @@ test("same-area roots get distinct hues and legend dots match their segments", (
     assert.equal(hueOf(dot.getAttribute("class")), byTitle.get(item.getAttribute("title")), "legend dot matches its segment");
   }
 });
+
+test("dayStripValueRuns splits numerals from units and keeps words whole", () => {
+  const cases = [
+    ["3h 05m", [{ kind: "num", text: "3" }, { kind: "unit", text: "h" }, { kind: "space", text: " " }, { kind: "num", text: "05" }, { kind: "unit", text: "m" }]],
+    ["45m", [{ kind: "num", text: "45" }, { kind: "unit", text: "m" }]],
+    ["0m", [{ kind: "num", text: "0" }, { kind: "unit", text: "m" }]],
+    ["12", [{ kind: "num", text: "12" }]],
+    ["+3", [{ kind: "num", text: "+3" }]],
+    ["−5m", [{ kind: "num", text: "−5" }, { kind: "unit", text: "m" }]],
+    ["75%", [{ kind: "num", text: "75" }, { kind: "unit", text: "%" }]],
+    ["met", [{ kind: "word", text: "met" }]],
+    ["missed", [{ kind: "word", text: "missed" }]],
+    ["not yet", [{ kind: "word", text: "not yet" }]],
+    ["–", [{ kind: "word", text: "–" }]],
+    ["", [{ kind: "word", text: "" }]],
+    ["3 h", [{ kind: "word", text: "3 h" }]],
+  ];
+  for (const [display, expected] of cases) {
+    assert.deepEqual(helpers.dayStripValueRuns(display), expected, `${JSON.stringify(display)} splits`);
+  }
+  for (const [display] of cases) {
+    const runs = helpers.dayStripValueRuns(display);
+    assert.equal(runs.map((run) => run.text).join(""), display, `${JSON.stringify(display)} round-trips`);
+  }
+});
+
+test("facts stack a label head over a faithful value with warnings in the head", () => {
+  for (const fixture of Object.values(fixtures)) {
+    if (!fixture || typeof fixture !== "object" || !fixture.report) continue;
+    const model = modelFor(fixture);
+    if (model.state === "skeleton" || model.state === "unavailable" || model.state === "future" || model.state === "hidden") continue;
+    if (!Array.isArray(model.facts) || model.facts.length === 0) continue;
+    const { root } = paint(model);
+    const factNodes = byClass(root, "bob-day-strip-fact");
+    assert.equal(factNodes.length, model.facts.length, `${fixture.name} paints every fact`);
+    for (const [index, fact] of model.facts.entries()) {
+      const node = byAttribute(root, "data-day-strip-metric", fact.id)[0];
+      assert.ok(node, `${fixture.name} ${fact.id} has a fact node`);
+      assert.equal(node.getAttribute("aria-label"), `${fact.label} ${fact.display}`, `${fixture.name} ${fact.id} keeps its aria-label`);
+      const head = byClass(node, "bob-day-strip-head")[0];
+      assert.ok(head, `${fixture.name} ${fact.id} has a head`);
+      const value = byClass(node, "bob-day-strip-value")[0];
+      assert.ok(value, `${fixture.name} ${fact.id} has a value`);
+      assert.equal(node.children[0], head, `${fixture.name} ${fact.id} head paints first`);
+      assert.equal(node.children[1], value, `${fixture.name} ${fact.id} value paints second`);
+      assert.equal(value.textContent, fact.display, `${fixture.name} ${fact.id} keeps bob's display`);
+      const warnings = byClass(value, "bob-day-strip-warning");
+      assert.equal(warnings.length, 0, `${fixture.name} ${fact.id} value holds no warning`);
+      const words = findAll(value, (child) => (child.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-word"));
+      if (fact.display === "–") {
+        assert.ok((value.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-value-empty"), `${fixture.name} ${fact.id} marks empty`);
+        assert.ok(!(value.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-value-word"), `${fixture.name} ${fact.id} empty is not a word`);
+      } else {
+        const runs = helpers.dayStripValueRuns(fact.display);
+        const isWord = runs.length === 1 && runs[0].kind === "word";
+        assert.equal((value.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-value-word"), isWord, `${fixture.name} ${fact.id} word class follows its runs`);
+      }
+      void index;
+      void words;
+    }
+    const valueWarnings = factNodes.flatMap((node) => byClass(byClass(node, "bob-day-strip-value")[0] || node, "bob-day-strip-warning"));
+    assert.equal(valueWarnings.length, 0, `${fixture.name} never warns inside a value`);
+  }
+});

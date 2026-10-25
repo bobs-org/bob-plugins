@@ -4094,7 +4094,7 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   }
 }
 
-/* Day strip: three calm lines above the plan badges. The full-width
+/* Day strip: a row of stacked stats above the plan badges. The full-width
    root-parent bar is the last line, so it reads as the separator above
    the badges. No card, border, background, shadow, or radius on the
    strip; separation comes from spacing only. Area hues are the only
@@ -4124,75 +4124,120 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
 }
 
 .bob-day-strip-facts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: auto; /* content-aware tracks that share free width equally */
   min-width: 0;
-  column-gap: 0.5em;
-  row-gap: 0.15em;
-  padding: 0.05em 0.3em;
+  row-gap: 0.35em;
 }
-
-/* Facts are spans with role="link": no <button> elements anywhere, so
-   Obsidian's global button rules can never resize them again. */
+@container (max-width: 34em) {
+  .bob-day-strip-facts {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(3, auto);
+  }
+  .bob-day-strip-fact:nth-child(3n + 1)::before {
+    display: none;
+  }
+}
 .bob-day-strip-fact {
-  display: inline-flex;
-  align-items: baseline;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
   min-width: 0;
-  gap: 0.3em;
-  padding: 0.05em 0.3em;
-  margin: -0.05em -0.3em;
+  gap: 0.15em;
+  padding: 0.25em 0.7em 0.3em;
   border-radius: var(--radius-s);
-  white-space: nowrap;
   cursor: pointer;
 }
-
+.bob-day-strip-fact + .bob-day-strip-fact::before {
+  content: "";
+  position: absolute;
+  top: 0.45em;
+  bottom: 0.45em;
+  left: 0;
+  width: 1px;
+  background: var(--background-modifier-border);
+  pointer-events: none;
+}
 .bob-day-strip-fact:hover {
   background: var(--background-modifier-hover);
 }
-
+.bob-day-strip-fact:hover .bob-day-strip-head {
+  color: var(--text-normal);
+}
 .bob-day-strip-fact:focus-visible {
   outline: 2px solid var(--interactive-accent);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
-
+.bob-day-strip-head {
+  /* fixed height: a ⚠ never moves the value */
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 1.3em;
+  gap: 0.35em;
+  color: var(--text-muted);
+  font-size: 0.7em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
 .bob-day-strip-label {
   min-width: 0;
   overflow: hidden;
-  color: var(--text-muted);
-  font-size: 0.75em;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .bob-day-strip-value {
-  min-width: 0;
+  /* one 1.5em line box for every value → one shared baseline */
+  display: block;
+  width: fit-content;
+  max-width: 100%;
   overflow: hidden;
   color: var(--text-normal);
-  font-size: 1em;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  font-size: 1.5em;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.bob-day-strip-value-empty { color: var(--text-faint); }
-
+.bob-day-strip-unit {
+  margin-left: 0.04em;
+  color: var(--text-muted);
+  font-size: 0.6em;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.bob-day-strip-value-word .bob-day-strip-word {
+  font-size: 0.66em;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.bob-day-strip-value-empty {
+  color: var(--text-faint);
+  font-weight: 500;
+}
 .bob-day-strip-value-skeleton {
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--background-modifier-hover);
   color: transparent;
 }
-
+.bob-day-strip-value-skeleton .bob-day-strip-unit {
+  color: transparent;
+}
 .bob-day-strip-warning {
   flex: none;
   color: var(--text-muted);
-  font-size: 0.75em;
+  font-size: 1.1em;
+  letter-spacing: 0;
   line-height: 1;
 }
+/* a cached frame after a failed refresh steps back a shade so it never reads as live */
+.bob-day-strip-stale .bob-day-strip-value:not(.bob-day-strip-value-empty) { color: var(--text-muted); }
 
 .bob-day-strip-mix-row {
   display: flex;
@@ -4200,7 +4245,8 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   align-items: center;
   min-width: 0;
   gap: 0.8em;
-  margin-top: 0.2em;
+  margin-top: 0.35em;
+  padding: 0 0.7em;
 }
 
 .bob-day-strip-mix {
@@ -4228,6 +4274,7 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
 
 /* The track shows only when the bar is empty or in the skeleton. */
 .bob-day-strip-bar:empty,
+.bob-day-strip-bar:not(:has(.bob-day-strip-bar-segment:not([hidden]))),
 .bob-day-strip-state-skeleton .bob-day-strip-bar {
   background: var(--background-modifier-border);
 }
@@ -4332,6 +4379,7 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
 }
 
 .bob-day-strip-retry {
+  margin-left: 0.4em;
   color: var(--text-accent);
   cursor: pointer;
 }
@@ -4339,6 +4387,15 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
 .bob-day-strip-retry:focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: 1px;
+}
+
+@media (forced-colors: active) {
+  .bob-day-strip-fact + .bob-day-strip-fact::before {
+    background: GrayText;
+  }
+  .bob-day-strip-fact:focus-visible {
+    outline-color: Highlight;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

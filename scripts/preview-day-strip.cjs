@@ -94,6 +94,18 @@ function loadFixtures() {
     message: "A review-journal gap was recorded for this day.",
   });
   result.notTrackedWarning = notTrackedWarning;
+  const metPast = JSON.parse(JSON.stringify(result.past));
+  metPast.name = "closed-out past day · met";
+  const closedMetric = metPast.report.metrics.find((metric) => metric.id === "review_closed");
+  if (closedMetric) {
+    for (const point of closedMetric.chart_daily_points || closedMetric.daily_points || closedMetric.points || []) {
+      if (point.date === metPast.day) {
+        point.value = 1;
+        point.display = "met";
+      }
+    }
+  }
+  result.metPast = metPast;
   return result;
 }
 
@@ -210,7 +222,7 @@ function checkMeasurement(item, context) {
   if (item.hasButton) failures.push(`strip contains a <button> element`);
   if (!item.relaxed) {
     if (item.factRows > 2 && item.state !== "unavailable") failures.push(`${item.factRows} fact rows (max 2)`);
-    const budget = item.factRows <= 1 ? 56 : 80;
+    const budget = item.factRows <= 1 ? 84 : 136;
     if (item.stripHeight > budget + 0.5) failures.push(`height ${item.stripHeight}px over the ${budget}px budget`);
   }
   // (i) the strip precedes .bob-plan with a calm 6–16 px gap.
@@ -267,6 +279,41 @@ function checkMeasurement(item, context) {
   if (item.state === "wide-values" && context.width >= 700 && item.factRows !== 1) {
     failures.push(`wide facts wrap to ${item.factRows} rows at ${context.width}px (must fit on one line)`);
   }
+  // (n) the values lead: ready and stale cells carry values at least 2x their heads.
+  if ((item.state === "today" || item.state === "stale") && typeof item.valueLeadMinRatio === "number") {
+    if (item.valueLeadMinRatio < 2) failures.push(`values lead by ${item.valueLeadMinRatio}x (want at least 2x)`);
+  }
+  // (o) faithful text: aria-labels end with the value text and values hold no warning.
+  if (item.state !== "skeleton" && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading") {
+    if (item.ariaFaithful === false) failures.push(`a fact aria-label does not end with its value text`);
+    if (item.valueHasWarning === true) failures.push(`a value contains the warning mark`);
+  }
+  // (p) clean folds: at 410px facts fold and row starts hide their hairline;
+  // at 540px and 700px every later fact draws its hairline.
+  const hairlineHidden = (record) => {
+    if (!record) return false;
+    if (record.display === "none") return true;
+    const content = String(record.content || "").trim().toLowerCase();
+    return content === "none" || content === "normal";
+  };
+  if (context.width === 410 && item.state !== "skeleton" && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading") {
+    if (item.factRows < 2) failures.push(`facts hold ${item.factRows} row at 410px (want a two-row fold)`);
+    for (const record of item.rowStartHairlines || []) {
+      if (!hairlineHidden(record)) failures.push(`a folded row starts with a hairline`);
+    }
+  }
+  if (context.width >= 540 && item.state !== "skeleton" && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading") {
+    for (const record of item.laterHairlines || []) {
+      if (hairlineHidden(record)) failures.push(`a fact after the first hides its hairline at ${context.width}px`);
+    }
+  }
+  // (q) empty track: the no-Pomodoros bar shows its track colour.
+  if (item.state === "no-pomodoros") {
+    const background = String(item.barBackground || "").replace(/\s+/g, "").toLowerCase();
+    if (!background || background === "rgba(0,0,0,0)" || background === "transparent") {
+      failures.push(`empty bar shows no track colour`);
+    }
+  }
   return failures;
 }
 
@@ -280,19 +327,19 @@ function matrixMarkdown(matrix, browser, revision, interactionChecks) {
     "- Source: production `main.js`, `styles.css`, and synthetic presentation fixtures; no fixture is captured vault data.",
     "- Each strip renders above mock plan badges (TODAY / PENDING / NEXT / READY plus a ★ theme line) inside a Live Preview code-block container, with a bare `## Pomodoros` heading below; one extra Reading-view cell renders today.",
     "- An Obsidian baseline stylesheet (30 px inline-flex buttons, link colours, rendered line-height) loads before the production CSS, so a `<button>` regression fails the matrix.",
-    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 16 states plus Reading view.",
-    "- Height budgets (16 px base): ≤56 px when the facts fit on one line, ≤80 px when they wrap once. The long-labels case is relaxed: geometry is enforced, height is reported.",
-    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) the bar spans the strip's content width (±1 px) and is its last line box; (k) no legend label is truncated; (l) narrow cells show at most 2 legend items and the visible counter equals segments minus visible items; (m) ready cells with ≤8 non-gray segments carry pairwise distinct bar hues and matching legend dots.",
+    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 17 states plus Reading view.",
+    "- Height budgets (16 px base): ≤84 px when the facts fit on one row, ≤136 px when they fold to two rows. The long-labels case is relaxed: geometry is enforced, height is reported.",
+    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) the bar spans the strip's content width (±1 px) and is its last line box; (k) no legend label is truncated; (l) narrow cells show at most 2 legend items and the visible counter equals segments minus visible items; (m) ready cells with ≤8 non-gray segments carry pairwise distinct bar hues and matching legend dots; (n) ready and stale values render at least 2× their heads; (o) every fact aria-label ends with its value text and no value holds a warning; (p) folded rows start without a hairline at 410 px while wider rows draw every hairline; (q) the no-Pomodoros bar shows its track colour.",
     "",
     "| Width | Theme | State | Strip height | Budget | Fact rows | Overflow | Facts overlap | Lines overlap | Legend overlap | Value baseline spread | Skeleton delta | Button | Result | Screenshot |",
     "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
-    ...measurements.map((item) => `| ${item.width}px | ${item.theme} | ${item.state} | ${item.stripHeight}px | ${item.relaxed ? "—" : `${item.factRows <= 1 ? 56 : 80}px`} | ${item.factRows} | ${item.maxOverflow}px | ${item.maxFactOverlap}px | ${item.linesOverlap}px | ${item.legendOverlap}px | ${item.valueBaselineSpread}px | ${item.skeletonHeightDelta === null ? "—" : `${item.skeletonHeightDelta}px`} | ${item.hasButton ? "yes" : "no"} | ${item.result} | ${item.screenshot} |`),
+    ...measurements.map((item) => `| ${item.width}px | ${item.theme} | ${item.state} | ${item.stripHeight}px | ${item.relaxed ? "—" : `${item.factRows <= 1 ? 84 : 136}px`} | ${item.factRows} | ${item.maxOverflow}px | ${item.maxFactOverlap}px | ${item.linesOverlap}px | ${item.legendOverlap}px | ${item.valueBaselineSpread}px | ${item.skeletonHeightDelta === null ? "—" : `${item.skeletonHeightDelta}px`} | ${item.hasButton ? "yes" : "no"} | ${item.result} | ${item.screenshot} |`),
     "",
     "Interaction checks (forced pseudo-states, per width × theme):",
     "",
     ...interactionChecks.map((item) => `- ${item.width}px ${item.theme}: ${item.label} — ${item.result}${item.detail ? ` (${item.detail})` : ""}`),
     "",
-    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-area roots get distinct hues, seven roots with `+N`, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), forced hover, forced `:focus-visible`, and a Reading-view today cell.",
+    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-area roots get distinct hues, seven roots with `+N`, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), closed-out past day · met, forced hover, forced `:focus-visible`, and a Reading-view today cell.",
     "",
   ].join("\n");
 }

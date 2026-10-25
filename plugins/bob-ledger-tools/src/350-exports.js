@@ -503,6 +503,7 @@ module.exports.helpers = {
   dayStripShiftDay,
   dayStripDateWords,
   dayStripModel,
+  dayStripValueRuns,
   paintDayStrip,
   dayStripDayForPath,
   dayStripLocalToday,

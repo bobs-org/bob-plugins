@@ -31361,6 +31361,26 @@ function dayStripBarActivate(node, action) {
   });
 }
 
+// Bob's numeric displays ("3h 05m", "45m", "12", "+3", "−5m", "75%")
+// split into numeral and unit runs so the numerals carry the weight;
+// any other display (words, "–") stays one word run. The runs only
+// style bob's string: their joined text is always the display itself.
+const DAY_STRIP_NUMERIC_DISPLAY = /^[+−-]?\d+(?:[.,]\d+)?[a-z%]*(?: \d+(?:[.,]\d+)?[a-z%]*)*$/;
+
+function dayStripValueRuns(display) {
+  const text = typeof display === "string" ? display : "";
+  if (!text || !DAY_STRIP_NUMERIC_DISPLAY.test(text)) return [{ kind: "word", text }];
+  const runs = [];
+  const pattern = /([+−-]?\d+(?:[.,]\d+)?)|([a-z%]+)|( )/g;
+  let match;
+  while ((match = pattern.exec(text))) {
+    if (match[1]) runs.push({ kind: "num", text: match[1] });
+    else if (match[2]) runs.push({ kind: "unit", text: match[2] });
+    else runs.push({ kind: "space", text: match[3] });
+  }
+  return runs;
+}
+
 function dayStripRenderFact(doc, fact, model, handlers) {
   const skeleton = model.state === "skeleton";
   const node = dayStripLink(
@@ -31370,18 +31390,27 @@ function dayStripRenderFact(doc, fact, model, handlers) {
     fact.tooltip,
   );
   if (node) node.setAttribute("data-day-strip-metric", fact.id);
-  dayStripAppend(node, statsEl(doc, "span", { class: "bob-day-strip-label" }, fact.label));
-  dayStripAppend(node, statsEl(doc, "span", {
-    class: "bob-day-strip-value" + (fact.display === "–" && !skeleton ? " bob-day-strip-value-empty" : "") + (skeleton ? " bob-day-strip-value-skeleton" : ""),
-    title: fact.quality === "not_tracked" && fact.since ? "Tracking since " + fact.since : null,
-  }, fact.display));
+  const head = statsEl(doc, "span", { class: "bob-day-strip-head" });
+  dayStripAppend(head, statsEl(doc, "span", { class: "bob-day-strip-label" }, fact.label));
   if (fact.warning && !skeleton) {
-    dayStripAppend(node, statsEl(doc, "span", {
+    dayStripAppend(head, statsEl(doc, "span", {
       class: "bob-day-strip-warning",
       title: fact.warning,
       "aria-hidden": "true",
     }, "⚠"));
   }
+  dayStripAppend(node, head);
+  const runs = dayStripValueRuns(fact.display);
+  const isWord = runs.length === 1 && runs[0].kind === "word";
+  const isEmpty = fact.display === "–" && !skeleton;
+  const value = statsEl(doc, "span", {
+    class: "bob-day-strip-value" + (isEmpty ? " bob-day-strip-value-empty" : isWord ? " bob-day-strip-value-word" : "") + (skeleton ? " bob-day-strip-value-skeleton" : ""),
+    title: fact.quality === "not_tracked" && fact.since ? "Tracking since " + fact.since : null,
+  });
+  for (const run of runs) {
+    dayStripAppend(value, statsEl(doc, "span", { class: "bob-day-strip-" + run.kind }, run.text));
+  }
+  dayStripAppend(node, value);
   dayStripActivate(node, (newLeaf) => {
     if (typeof handlers.openStats === "function") {
       handlers.openStats({ day: model.day, metric: fact.id, newLeaf });
@@ -55172,6 +55201,7 @@ module.exports.helpers = {
   dayStripShiftDay,
   dayStripDateWords,
   dayStripModel,
+  dayStripValueRuns,
   paintDayStrip,
   dayStripDayForPath,
   dayStripLocalToday,

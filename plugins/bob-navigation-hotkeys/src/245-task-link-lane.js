@@ -215,7 +215,12 @@ function planTaskLinkLaneBatch(content, session, options = {}) {
     const oldLine = String(workingLines[target.line] || "");
     let nextLine = replaceObsidianTaskCheckboxStatus(oldLine, toStatus);
     if (laneStamper) {
-      nextLine = applyFreshStampLine(nextLine, laneStamper, laneFreshDateText);
+      nextLine = applyFreshStampLine(
+        nextLine,
+        laneStamper,
+        laneFreshDateText,
+        { content: workingLines.join(source.lineEnding), line: target.line },
+      );
     }
     if (nextLine !== oldLine) {
       changedTaskCount += 1;

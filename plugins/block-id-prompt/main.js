@@ -1274,13 +1274,33 @@ function identityFreshStampLine(line) {
   return String(line || "");
 }
 
+function isPomodoroFreshnessLedgerLine(line) {
+  const match = getObsidianTaskLineMatch(line);
+  const body = match ? match[2] || "" : "";
+  if (/^\(\s*\)/.test(body)) {
+    return true;
+  }
+  const range = body.match(
+    /^\((\*\*)?(\d{4}|\d{2}:\d{2})\s*-\s*(\d{4}|\d{2}:\d{2})(\*\*)?(?:\s+[^)]*)?\)/,
+  );
+  return Boolean(
+    range &&
+      Boolean(range[1]) === Boolean(range[4]) &&
+      range[2].includes(":") === range[3].includes(":"),
+  );
+}
+
 function applyFreshStampLine(line, stamper, dateText) {
+  const text = String(line || "");
+  if (isPomodoroFreshnessLedgerLine(text)) {
+    return text;
+  }
   const fn = typeof stamper === "function" ? stamper : identityFreshStampLine;
   try {
-    const stamped = fn(String(line || ""), dateText);
-    return typeof stamped === "string" ? stamped : String(line || "");
+    const stamped = fn(text, dateText);
+    return typeof stamped === "string" ? stamped : text;
   } catch (error) {
-    return String(line || "");
+    return text;
   }
 }
 

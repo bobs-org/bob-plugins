@@ -731,6 +731,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           finalLine,
           stamper,
           this.getFreshnessDateText(),
+          { content: writeContext.content, line: plan.cursorLine },
         );
       }
     }

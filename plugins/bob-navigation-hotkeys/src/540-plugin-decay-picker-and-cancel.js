@@ -121,6 +121,7 @@ class BobNavigationHotkeysDecayCancelMixin {
         live.lineText,
         stamper,
         cardCtx.dateText,
+        { content: live.content, line: cardCtx.line },
       );
       const reason = formatFreshnessDecisionRewordReason({
         keeps: cardCtx.keeps,

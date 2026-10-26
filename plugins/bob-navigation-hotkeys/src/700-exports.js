@@ -491,6 +491,8 @@ module.exports.helpers = {
   deduplicateFreshStampTargets,
   isReviewRefreshKeydown,
   identityFreshStampLine,
+  isPomodoroFreshnessLedgerLine,
+  isPomodoroFreshnessLedgerEntry,
   applyFreshStampLine,
   applyFreshRefreshLine,
   resolveFreshStamper,

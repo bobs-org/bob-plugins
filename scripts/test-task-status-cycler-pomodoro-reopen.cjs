@@ -8,6 +8,7 @@ const {
   registerTaskToggleVimAction,
   flushAsyncActions,
 } = require("./task-status-cycler-harness.cjs");
+const { freshnessStampLine } = require("./ledger-tools-harness.cjs");
 
 test("selected Done Pomodoro transclusion reopens only its cross-file root", async () => {
   const daily = "## Pomodoros\n- [ ] Focus\n\t- ![[Tree#^root|Work]]";
@@ -212,6 +213,50 @@ test("Done Pomodoro reopens direct roots and clears only its block-link markers"
   assert.match(harness.getSource("Tasks.md"), /^- \[-\] #task Canceled/m);
   assert.match(harness.getSource("Tasks.md"), /^- \[\?\] #task Custom/m);
   assert.equal(harness.getSource("Bad.md"), "- [x] #task Unreadable ^stale");
+});
+
+test("reopening timed, placeholder, and legacy ledger rows never stamps the headline", async () => {
+  const headlines = [
+    "(**1020-1035** [t:: 15m]) — VIBE",
+    "() — PLANNED",
+    "Finished session",
+  ];
+  for (const headline of headlines) {
+    const daily = [
+      "## Pomodoros",
+      `- [x] ${headline}`,
+      "\t- 🍅 [[Daily#^work]]",
+      "## Tasks",
+      "- [x] #task Work [completion:: 2026-10-25] ^work",
+    ].join("\n");
+    const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+    harness.app.plugins.plugins["bob-ledger-tools"].api.freshness = {
+      version: 12,
+      stampLine: (line, dateText) => freshnessStampLine(line, dateText).line,
+    };
+    const editor = createTextEditor(daily, { line: 1, ch: 5 });
+    const plugin = new TaskStatusCyclerPlugin();
+    plugin.app = harness.app;
+
+    assert.equal(
+      await plugin.reopenActivePomodoroTask(
+        editor,
+        harness.app.vault.getAbstractFileByPath("Daily.md"),
+        { pomodoroLine: 1 },
+      ),
+      true,
+      headline,
+    );
+
+    const lines = editor.getValue().split("\n");
+    assert.equal(lines[1], `- [ ] ${headline}`, "ledger headline stays exact");
+    assert.equal(lines[2], "\t- [[Daily#^work]]", "child marker is cleared");
+    assert.match(
+      lines[4],
+      /^- \[ \] #task Work \[fresh:: \d{4}-\d{2}-\d{2}\] \^work$/,
+      "linked task outside the section still reopens and receives freshness",
+    );
+  }
 });
 
 test("Done Pomodoro reopen restores its own block reference after reopening direct roots", async () => {

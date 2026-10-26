@@ -311,6 +311,10 @@ class BobNavigationHotkeysLaneReviewMixin {
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : "";
+    if (isPomodoroFreshnessLedgerEntry(content, cursor.line)) {
+      new Notice("Pomodoro ledger row · not reviewed");
+      return false;
+    }
     let countExplicit = options.countExplicit === true;
     let additionalTaskCount = Math.max(
       0,
@@ -490,6 +494,14 @@ class BobNavigationHotkeysLaneReviewMixin {
       new Notice(session.error);
       return false;
     }
+    const contentLines = splitMarkdownContent(content).lines;
+    const safeTargets = session.targets.filter(
+      (target) => !isPomodoroFreshnessLedgerEntry(content, target.line),
+    );
+    if (safeTargets.length === 0) {
+      new Notice("Pomodoro ledger rows are not freshness targets");
+      return false;
+    }
     const api = getReviewFreshnessApi(this.app);
     if (!api) {
       new Notice(REVIEW_FRESHNESS_API_REQUIRED_NOTICE);
@@ -504,12 +516,11 @@ class BobNavigationHotkeysLaneReviewMixin {
     // exact due-Ready ROTTEN/TICKLER row counts (`docs/freshness.md` §2a).
     // Every other explicit keep still goes through `keepLine` uncounted so
     // the streak is preserved, never reset.
-    const contentLines = splitMarkdownContent(content).lines;
     const localDayBefore = this.laneReleaseDateText();
-    const singleKeep = options.countExplicit !== true && session.targets.length === 1;
+    const singleKeep = options.countExplicit !== true && safeTargets.length === 1;
     let cardFallback = false;
     const resolved = deduplicateFreshStampTargets(
-      session.targets.map((target) => ({
+      safeTargets.map((target) => ({
         path: filePath,
         line: target.line,
         rawLine: target.rawLine,

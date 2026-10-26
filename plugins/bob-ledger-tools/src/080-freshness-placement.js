@@ -182,6 +182,60 @@ function freshnessTaskStatus(line) {
   return inner;
 }
 
+// Pomodoro headlines are recognizable without their daily-note context:
+// the checkbox body starts with `()` or a compact/colon time range. Keep
+// this check anchored immediately after the checkbox so ordinary task prose
+// that mentions a time range remains eligible for freshness.
+function freshnessIsPomodoroLedgerLine(line) {
+  const body = freshnessTaskBody(line);
+  if (body === null) {
+    return false;
+  }
+  if (/^\(\s*\)/.test(body)) {
+    return true;
+  }
+  const match = body.match(
+    /^\((\*\*)?(\d{4}|\d{2}:\d{2})\s*-\s*(\d{4}|\d{2}:\d{2})(\*\*)?(?:\s+[^)]*)?\)/,
+  );
+  return Boolean(
+    match &&
+      Boolean(match[1]) === Boolean(match[4]) &&
+      match[2].includes(":") === match[3].includes(":"),
+  );
+}
+
+function freshnessTaskBody(line) {
+  const stripped = freshnessStripBlockquotePrefix(line);
+  let index = 0;
+  while (stripped[index] === " " || stripped[index] === "\t") {
+    index += 1;
+  }
+  const after = freshnessAfterListMarker(stripped, index);
+  if (after === null) {
+    return null;
+  }
+  index = after;
+  while (stripped[index] !== undefined && /\s/.test(stripped[index])) {
+    index += 1;
+  }
+  if (stripped[index] !== "[") {
+    return null;
+  }
+  const close = stripped.indexOf("]", index + 1);
+  if (close === -1 || [...stripped.slice(index + 1, close)].length !== 1) {
+    return null;
+  }
+  const trailing = stripped.slice(close + 1);
+  if (trailing !== "" && !/^\s/.test(trailing)) {
+    return null;
+  }
+  let bodyStart = close + 1;
+  while (stripped[bodyStart] === " " || stripped[bodyStart] === "\t") {
+    bodyStart += 1;
+  }
+  return stripped.slice(bodyStart);
+}
+
 function freshnessIsClosedStatus(status) {
   return status === "x" || status === "X" || status === "-";
 }
@@ -532,6 +586,9 @@ function freshnessStampLine(line, dateText) {
   if (status === null) {
     return { line: text, changed: false, refused: "not_task" };
   }
+  if (freshnessIsPomodoroLedgerLine(text)) {
+    return { line: text, changed: false, refused: "not_task" };
+  }
   if (freshnessIsClosedStatus(status)) {
     return { line: text, changed: false, refused: "closed" };
   }
@@ -693,6 +750,9 @@ function freshnessKeepLine(line, dateText, options) {
   if (status === null) {
     return { line: text, changed: false, refused: "not_task" };
   }
+  if (freshnessIsPomodoroLedgerLine(text)) {
+    return { line: text, changed: false, refused: "not_task" };
+  }
   if (freshnessIsClosedStatus(status)) {
     return { line: text, changed: false, refused: "closed" };
   }
@@ -738,6 +798,9 @@ function freshnessSetRefreshLine(line, days, dateText) {
       : null;
   const status = freshnessTaskStatus(text);
   if (status === null) {
+    return { line: text, changed: false, refused: "not_task" };
+  }
+  if (freshnessIsPomodoroLedgerLine(text)) {
     return { line: text, changed: false, refused: "not_task" };
   }
   if (freshnessIsClosedStatus(status)) {

@@ -264,6 +264,14 @@ function applySuccessorVerdicts(context) {
     let blockId = task.blockId || "";
     let blockIdCreated = false;
     const before = task.rawLine != null ? String(task.rawLine) : null;
+    let sourceNoteText = "";
+    try {
+      sourceNoteText = noteTexts instanceof Map
+        ? String(noteTexts.get(task.path) ?? "")
+        : String(noteTexts[task.path] ?? "");
+    } catch (error) {
+      sourceNoteText = "";
+    }
     let after = before;
     if (before != null) {
       if (mark.pullIn) {
@@ -274,7 +282,12 @@ function applySuccessorVerdicts(context) {
           isDailyNote: isDailyNotePath(task.path),
           isToday: true,
         });
-        after = applyFreshStampLine(raised != null ? raised : before, stampLine, today);
+        after = applyFreshStampLine(
+          raised != null ? raised : before,
+          stampLine,
+          today,
+          { content: sourceNoteText, line: task.line },
+        );
       } else {
         if (!blockId) {
           if (!mintedByNote.has(task.path)) {
@@ -298,7 +311,10 @@ function applySuccessorVerdicts(context) {
         // Strip the inherited project tag per PDC3 without touching own
         // reasons (schedules/IDs/dependency fields never change here).
         raised = stripProjectBlockedResidentTag(raised);
-        after = applyFreshStampLine(raised, stampLine, today);
+        after = applyFreshStampLine(raised, stampLine, today, {
+          content: sourceNoteText,
+          line: task.line,
+        });
       }
     } else if (!blockId && !mark.pullIn) {
       if (!mintedByNote.has(task.path)) {

@@ -132,6 +132,106 @@ function countedSession(lines) {
   });
 }
 
+test("freshness delegation guards reject Pomodoro ledger rows before injected writers", () => {
+  let calls = 0;
+  const injectedStamp = (line) => {
+    calls += 1;
+    return `${line} [fresh:: ${DATE}]`;
+  };
+  const injectedRefresh = (line) => {
+    calls += 1;
+    return `${line} [refresh:: 30]`;
+  };
+  for (const line of [
+    "- [ ] (**0920-0950** [t:: 30m]) — FOCUS",
+    "- [ ] () — PLANNED",
+    "- [ ] (09:20-09:50) — FOCUS",
+  ]) {
+    assert.equal(helpers.applyFreshStampLine(line, injectedStamp, DATE), line);
+    assert.equal(helpers.applyFreshRefreshLine(line, injectedRefresh, 30, DATE), line);
+  }
+  assert.equal(calls, 0, "line-only guards must run before injected writers");
+
+  const legacyLedger = [
+    "## Pomodoros",
+    "- [ ] Finished session",
+    "\t- [ ] #task Real linked task",
+    "## Tasks",
+    "- [ ] #task Ordinary task mentions 09:20-09:50",
+  ].join("\n");
+  assert.equal(helpers.isPomodoroFreshnessLedgerEntry(legacyLedger, 1), true);
+  const refused = helpers.planFreshStampBatch(
+    legacyLedger,
+    [{ line: 1, counted: true }],
+    injectedStamp,
+    DATE,
+  );
+  assert.equal(refused.ok, false);
+  assert.equal(refused.refusal, "not-task");
+  assert.equal(refused.content, legacyLedger);
+  assert.equal(calls, 0, "context guard must refuse legacy ledger rows first");
+  const countedKeep = helpers.planFreshStampBatchWithLogs(
+    legacyLedger,
+    [{ line: 1, counted: true }],
+    (line) => {
+      calls += 1;
+      return `${line} [fresh:: ${DATE}] [keeps:: 1]`;
+    },
+    DATE,
+  );
+  assert.equal(countedKeep.ok, false);
+  assert.equal(countedKeep.refusal, "not-task");
+  assert.equal(calls, 0, "counted keeps are refused before the shared writer calls them");
+
+  const linkedTask = helpers.planFreshStampBatch(
+    legacyLedger,
+    [{ line: 2, counted: true }],
+    injectedStamp,
+    DATE,
+  );
+  assert.equal(linkedTask.ok, true, "nested task targets remain eligible");
+  assert.match(linkedTask.content, /Real linked task \[fresh:: 2026-10-08\]/);
+  assert.equal(calls, 1);
+
+  const ordinaryTask = helpers.planFreshStampBatch(
+    legacyLedger,
+    [{ line: 4, counted: false }],
+    injectedStamp,
+    DATE,
+  );
+  assert.equal(ordinaryTask.ok, true, "tasks outside the section remain eligible");
+  assert.match(ordinaryTask.content, /Ordinary task mentions 09:20-09:50 \[fresh:: 2026-10-08\]/);
+  assert.equal(calls, 2);
+});
+
+test("refresh picker refuses a legacy Pomodoro heading before its refresher runs", async () => {
+  const content = "## Pomodoros\n- [ ] Finished session\n## Tasks\n- [ ] #task Work";
+  const lines = content.split("\n");
+  const editor = {
+    getValue: () => content,
+    getLine: (line) => lines[line] || "",
+    replaceRange: () => {
+      throw new Error("ledger row should not be written");
+    },
+  };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {};
+  let calls = 0;
+  const result = await plugin.applyRefreshIntervalToSingle(
+    { editor, cursor: { line: 1, ch: 5 } },
+    30,
+    {
+      refresher: (line) => {
+        calls += 1;
+        return `${line} [refresh:: 30]`;
+      },
+      dateText: DATE,
+    },
+  );
+  assert.equal(result, false);
+  assert.equal(calls, 0);
+});
+
 test("lane commit stamps an open Ready task", () => {
   const content = "- [ ] #task Buy milk [priority:: P2]";
   const session = countedSession([content]);

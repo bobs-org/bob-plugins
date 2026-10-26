@@ -387,6 +387,26 @@ test("K11 refusals preserve: closed and recurring lines never write", () => {
   assert.equal(plain.changed, false);
 });
 
+test("Pomodoro ledger rows are refused byte-for-byte by counted and uncounted keep", () => {
+  const rows = [
+    "- [ ] (**0920-0950** [t:: 30m]) — FOCUS",
+    "- [x] (**0920-0950** [t:: 30m]) — FOCUS [fresh:: 2026-10-01]",
+    "- [ ] () — PLANNED",
+    "- [ ] (09:20 - 09:50) — FOCUS",
+    "- [ ] (0920 - 0950) [fresh:: 2026-10-01] [refresh:: 14] [keeps:: 2]",
+    "\t- [ ] (**0920-0950**) — INDENTED",
+    "> - [ ] (**09:20-09:50**) — QUOTED",
+  ];
+  for (const line of rows) {
+    for (const counted of [true, false]) {
+      const kept = freshnessKeepLine(line, D, { counted });
+      assert.equal(kept.line, line, `ledger row must stay byte-exact: ${line}`);
+      assert.equal(kept.changed, false, `ledger row must not change: ${line}`);
+      assert.equal(kept.refused, "not_task", line);
+    }
+  }
+});
+
 // --- keepLine increment matrix (no fixture entry: JS-only) ---
 
 test("counted keep increments a stale streak once in the same write", () => {

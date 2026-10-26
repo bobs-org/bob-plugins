@@ -33,7 +33,15 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     if (result.changed) {
       const depStamper = this.getFreshnessStampLine();
       if (typeof depStamper === "function") {
-        depParentLine = applyFreshStampLine(depParentLine, depStamper, this.getFreshnessDateText());
+        depParentLine = applyFreshStampLine(
+          depParentLine,
+          depStamper,
+          this.getFreshnessDateText(),
+          {
+            content: typeof cm.getValue === "function" ? cm.getValue() : "",
+            line: cursor.line,
+          },
+        );
       }
     }
 

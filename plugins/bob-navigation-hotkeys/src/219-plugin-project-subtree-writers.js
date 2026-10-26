@@ -159,7 +159,12 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
     if (nextLine !== lineText) {
       const inlineStamper = this.getFreshnessStampLine();
       if (typeof inlineStamper === "function") {
-        nextLine = applyFreshStampLine(nextLine, inlineStamper, this.getFreshnessDateText());
+        nextLine = applyFreshStampLine(
+          nextLine,
+          inlineStamper,
+          this.getFreshnessDateText(),
+          { content: writeContext.content, line: cursor.line },
+        );
       }
     }
 

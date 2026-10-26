@@ -90,7 +90,15 @@ class BobNavigationHotkeysJumpKeyMixin {
     if (nextLine !== lineText) {
       const deleteStamper = this.getFreshnessStampLine();
       if (typeof deleteStamper === "function") {
-        nextLine = applyFreshStampLine(nextLine, deleteStamper, this.getFreshnessDateText());
+        nextLine = applyFreshStampLine(
+          nextLine,
+          deleteStamper,
+          this.getFreshnessDateText(),
+          {
+            content: typeof cm.getValue === "function" ? cm.getValue() : "",
+            line: cursor.line,
+          },
+        );
       }
     }
 

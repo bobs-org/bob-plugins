@@ -9288,7 +9288,10 @@ function stampBlocksEditParentLine(content, parentLine, stamper, dateText) {
   if (parentLine < 0 || parentLine >= lines.length) {
     return String(content || "");
   }
-  const next = applyFreshStampLine(lines[parentLine], stamper, dateText);
+  const next = applyFreshStampLine(lines[parentLine], stamper, dateText, {
+    content: String(content || ""),
+    line: parentLine,
+  });
   if (next === lines[parentLine]) {
     return String(content || "");
   }
@@ -21069,6 +21072,7 @@ class FreshnessRefreshSummaryModal extends Modal {
 function classifyRottenKeepTarget({ match, raw, stamper, dateText } = {}) {
   const keepsBefore = parseKeepsCount(raw);
   const uncounted = { counted: false, keepsBefore, keepsAfter: keepsBefore };
+  if (isPomodoroFreshnessLedgerLine(raw)) return uncounted;
   if (!match || !match.ok || !match.entry || match.entry.lane !== "ready" ||
       !["rotten", "tickler"].includes(reviewEntryMachineTier(match.entry)) ||
       match.entry.returnedBy === "unblocked" || freshStampLineHasToday(raw, dateText) ||
@@ -29411,7 +29415,12 @@ class BobNavigationHotkeysProjectSubtreeMixin {
     if (parentLine < 0 || parentLine >= lines.length) {
       return nextContent;
     }
-    lines[parentLine] = applyFreshStampLine(lines[parentLine], stamper, dateText);
+    lines[parentLine] = applyFreshStampLine(
+      lines[parentLine],
+      stamper,
+      dateText,
+      { content: nextContent, line: parentLine },
+    );
     return lines.join(lineEnding);
   }
 
@@ -29658,7 +29667,12 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
     if (nextLine !== lineText) {
       const inlineStamper = this.getFreshnessStampLine();
       if (typeof inlineStamper === "function") {
-        nextLine = applyFreshStampLine(nextLine, inlineStamper, this.getFreshnessDateText());
+        nextLine = applyFreshStampLine(
+          nextLine,
+          inlineStamper,
+          this.getFreshnessDateText(),
+          { content: writeContext.content, line: cursor.line },
+        );
       }
     }
 
@@ -31251,7 +31265,12 @@ function planTaskLaneBatch(content, session, options = {}) {
       if (status === " ") {
         let nextLine = replaceObsidianTaskCheckboxStatus(oldLine, "*");
         if (laneStamper) {
-          nextLine = applyFreshStampLine(nextLine, laneStamper, laneFreshDateText);
+          nextLine = applyFreshStampLine(
+            nextLine,
+            laneStamper,
+            laneFreshDateText,
+            { content: workingLines.join(source.lineEnding), line: target.line },
+          );
         }
         if (nextLine !== oldLine) {
           changedTaskCount += 1;
@@ -31267,7 +31286,12 @@ function planTaskLaneBatch(content, session, options = {}) {
     if (status === "*" || status === "/") {
       let nextLine = replaceObsidianTaskCheckboxStatus(oldLine, " ");
       if (laneStamper) {
-        nextLine = applyFreshStampLine(nextLine, laneStamper, laneFreshDateText);
+        nextLine = applyFreshStampLine(
+          nextLine,
+          laneStamper,
+          laneFreshDateText,
+          { content: workingLines.join(source.lineEnding), line: target.line },
+        );
       }
       if (nextLine !== oldLine) {
         changedTaskCount += 1;
@@ -32884,7 +32908,12 @@ function planTaskLinkLaneBatch(content, session, options = {}) {
     const oldLine = String(workingLines[target.line] || "");
     let nextLine = replaceObsidianTaskCheckboxStatus(oldLine, toStatus);
     if (laneStamper) {
-      nextLine = applyFreshStampLine(nextLine, laneStamper, laneFreshDateText);
+      nextLine = applyFreshStampLine(
+        nextLine,
+        laneStamper,
+        laneFreshDateText,
+        { content: workingLines.join(source.lineEnding), line: target.line },
+      );
     }
     if (nextLine !== oldLine) {
       changedTaskCount += 1;
@@ -33189,7 +33218,7 @@ function planTaskMoveAcrossFiles(options = {}) {
   // closed and recurring lines.
   const moveStamper = resolveFreshStamper(options);
   const moveFreshDateText = resolveFreshDateText(options);
-  const rewrittenMovedBlocks = identities.blocks.map((block) => {
+  const rewrittenMovedBlocks = identities.blocks.map((block, blockIndex) => {
     const rewritten = rewriteTaskMoveReferences(block.join("\n"), {
       ...referenceOptions,
       currentPath: sourcePath,
@@ -33197,7 +33226,13 @@ function planTaskMoveAcrossFiles(options = {}) {
     });
     let lines = rewritten.content.split("\n");
     if (moveStamper) {
-      lines = lines.map((line) => applyFreshStampLine(line, moveStamper, moveFreshDateText));
+      const sourceRange = rangeResult.ranges[blockIndex];
+      lines = lines.map((line, offset) =>
+        applyFreshStampLine(line, moveStamper, moveFreshDateText, {
+          content: sourceContent,
+          line: sourceRange ? sourceRange.startLine + offset : -1,
+        }),
+      );
     }
     return Object.freeze(lines);
   });
@@ -34775,7 +34810,12 @@ function planCountedBulletPropertyBatch(
     }
 
     if (countedStamper && targetChanged) {
-      const stamped = applyFreshStampLine(nextLine, countedStamper, countedFreshDateText);
+      const stamped = applyFreshStampLine(
+        nextLine,
+        countedStamper,
+        countedFreshDateText,
+        { content: source.lines.join(source.lineEnding), line: mappedLine },
+      );
       if (stamped !== nextLine) {
         nextLine = stamped;
         targetChanged = true;
@@ -35655,6 +35695,7 @@ function planCountedLocalTaskDependency(
         afterLines[stampLine],
         countedDepStamper,
         countedDepFreshDateText,
+        { content: nextContent, line: stampLine },
       );
       if (stamped !== afterLines[stampLine]) {
         afterLines[stampLine] = stamped;
@@ -56369,32 +56410,95 @@ function identityFreshStampLine(line) {
   return String(line || "");
 }
 
-function applyFreshStampLine(line, stamper, dateText) {
+// Recognize a Pomodoro-shaped checkbox from its body alone. This protects
+// delegation boundaries even when callers inject a legacy stamper.
+function isPomodoroFreshnessLedgerLine(line) {
+  const text = String(line || "");
+  const task = text.match(OBSIDIAN_TASK_LINE_RE);
+  if (!task) {
+    return false;
+  }
+  const body = task[2] || "";
+  if (/^\(\s*\)/.test(body)) {
+    return true;
+  }
+  const range = body.match(
+    /^\((\*\*)?(\d{4}|\d{2}:\d{2})\s*-\s*(\d{4}|\d{2}:\d{2})(\*\*)?(?:\s+[^)]*)?\)/,
+  );
+  return Boolean(
+    range &&
+      Boolean(range[1]) === Boolean(range[4]) &&
+      range[2].includes(":") === range[3].includes(":"),
+  );
+}
+
+// A top-level checkbox anywhere in the Pomodoros section is a ledger row,
+// including legacy headings that lack a parseable time range. Nested task
+// children and rows outside the section remain eligible.
+function isPomodoroFreshnessLedgerEntry(content, lineIndex) {
+  const text = String(content || "");
+  const index = Math.floor(numericOrDefault(lineIndex, Number.NaN));
+  const { lines } = splitMarkdownContent(text);
+  const section = findPomodorosSectionRange(text);
+  return Boolean(
+    section &&
+      Number.isInteger(index) &&
+      index > section.startLine &&
+      index <= section.endLine &&
+      /^(?:[-+*]|\d+[.)])[ \t]+\[[^\]\n]\]/.test(
+        String(lines[index] || ""),
+      ),
+  );
+}
+
+function applyFreshStampLine(line, stamper, dateText, sourceContext = null) {
+  const text = String(line || "");
+  if (
+    isPomodoroFreshnessLedgerLine(text) ||
+    (sourceContext &&
+      isPomodoroFreshnessLedgerEntry(
+        sourceContext.content,
+        sourceContext.line,
+      ))
+  ) {
+    return text;
+  }
   const fn = typeof stamper === "function" ? stamper : identityFreshStampLine;
   try {
-    const stamped = fn(String(line || ""), dateText);
+    const stamped = fn(text, dateText);
     if (typeof stamped === "string") {
       return stamped;
     }
-    return String(line || "");
+    return text;
   } catch (error) {
-    return String(line || "");
+    return text;
   }
 }
 
-function applyFreshRefreshLine(line, refresher, days, dateText) {
+function applyFreshRefreshLine(line, refresher, days, dateText, sourceContext = null) {
+  const text = String(line || "");
+  if (
+    isPomodoroFreshnessLedgerLine(text) ||
+    (sourceContext &&
+      isPomodoroFreshnessLedgerEntry(
+        sourceContext.content,
+        sourceContext.line,
+      ))
+  ) {
+    return text;
+  }
   const fn = typeof refresher === "function" ? refresher : null;
   if (!fn) {
-    return String(line || "");
+    return text;
   }
   try {
-    const out = fn(String(line || ""), days, dateText);
+    const out = fn(text, days, dateText);
     if (typeof out === "string") {
       return out;
     }
-    return String(line || "");
+    return text;
   } catch (error) {
-    return String(line || "");
+    return text;
   }
 }
 
@@ -57536,6 +57640,17 @@ function planFreshStampBatch(content, targetLines, stamper, dateText) {
     });
   });
   for (const target of targets) {
+    if (
+      isPomodoroFreshnessLedgerEntry(text, target.line) ||
+      isPomodoroFreshnessLedgerLine(lines[target.line])
+    ) {
+      return Object.freeze({
+        ok: false,
+        refusal: "not-task",
+        content: text,
+        stamped: Object.freeze([]),
+      });
+    }
     const check = classifyFreshStampTarget(lines[target.line]);
     if (!check.ok) {
       return Object.freeze({
@@ -60030,6 +60145,10 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       return false;
     }
     const content = String(editor.getValue ? editor.getValue() : picker.getEditorContent ? picker.getEditorContent() : "");
+    if (isPomodoroFreshnessLedgerEntry(content, cursor.line)) {
+      new Notice("Pomodoro ledger row · not updated");
+      return false;
+    }
     const line = getEditorLine(editor, cursor.line);
     if (line === null || !isObsidianTaskLine(line)) {
       new Notice("Cursor is not on a task");
@@ -60082,6 +60201,10 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         new Notice("A counted task changed while the picker was open");
         return false;
       }
+      if (isPomodoroFreshnessLedgerEntry(writeContext.content, target.line)) {
+        skipped += 1;
+        continue;
+      }
       const status = getObsidianTaskCheckboxStatus(live);
       if (status === null || !OPEN_OBSIDIAN_TASK_STATUSES.has(status) || isRecurringTaskLine(live)) {
         skipped += 1;
@@ -60130,6 +60253,9 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         if (live !== target.rawLine || !isObsidianTaskLine(live)) {
           new Notice("A linked note changed; no tasks were updated");
           return false;
+        }
+        if (isPomodoroFreshnessLedgerEntry(group.content, target.line)) {
+          continue;
         }
         const status = getObsidianTaskCheckboxStatus(live);
         if (status === null || !OPEN_OBSIDIAN_TASK_STATUSES.has(status) || isRecurringTaskLine(live)) {
@@ -60712,6 +60838,10 @@ class BobNavigationHotkeysLaneReviewMixin {
       cm && typeof cm.getValue === "function"
         ? String(cm.getValue() || "")
         : "";
+    if (isPomodoroFreshnessLedgerEntry(content, cursor.line)) {
+      new Notice("Pomodoro ledger row · not reviewed");
+      return false;
+    }
     let countExplicit = options.countExplicit === true;
     let additionalTaskCount = Math.max(
       0,
@@ -60891,6 +61021,14 @@ class BobNavigationHotkeysLaneReviewMixin {
       new Notice(session.error);
       return false;
     }
+    const contentLines = splitMarkdownContent(content).lines;
+    const safeTargets = session.targets.filter(
+      (target) => !isPomodoroFreshnessLedgerEntry(content, target.line),
+    );
+    if (safeTargets.length === 0) {
+      new Notice("Pomodoro ledger rows are not freshness targets");
+      return false;
+    }
     const api = getReviewFreshnessApi(this.app);
     if (!api) {
       new Notice(REVIEW_FRESHNESS_API_REQUIRED_NOTICE);
@@ -60905,12 +61043,11 @@ class BobNavigationHotkeysLaneReviewMixin {
     // exact due-Ready ROTTEN/TICKLER row counts (`docs/freshness.md` §2a).
     // Every other explicit keep still goes through `keepLine` uncounted so
     // the streak is preserved, never reset.
-    const contentLines = splitMarkdownContent(content).lines;
     const localDayBefore = this.laneReleaseDateText();
-    const singleKeep = options.countExplicit !== true && session.targets.length === 1;
+    const singleKeep = options.countExplicit !== true && safeTargets.length === 1;
     let cardFallback = false;
     const resolved = deduplicateFreshStampTargets(
-      session.targets.map((target) => ({
+      safeTargets.map((target) => ({
         path: filePath,
         line: target.line,
         rawLine: target.rawLine,
@@ -62233,11 +62370,16 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
+      if (isPomodoroFreshnessLedgerEntry(live.content, cardCtx.line)) {
+        new Notice("Pomodoro ledger row · not updated");
+        return false;
+      }
       const nextLine = applyFreshRefreshLine(
         live.lineText,
         refresher,
         days,
         cardCtx.dateText,
+        { content: live.content, line: cardCtx.line },
       );
       if (nextLine === live.lineText) {
         new Notice("Refresh unchanged; nothing was written");
@@ -62339,34 +62481,43 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
       const groupLines = splitMarkdownContent(group.content).lines;
       return {
         group,
-        resolved: group.session.targets.map((target) => {
-          const raw = String(groupLines[target.line] || "");
-          const match = matchFreshStampExactEntry(queueBefore, {
-            path: group.path,
-            line: target.line,
-            raw,
-          });
-          const keep = canCountKeeps
-            ? classifyRottenKeepTarget({
-              match,
-              raw,
-              stamper: options.stamper,
-              dateText: options.dateText,
-            })
-            : { counted: false };
-          return Object.freeze({
-            target: Object.freeze({
-              line: target.line,
+        resolved: group.session.targets
+          .filter(
+            (target) =>
+              !isPomodoroFreshnessLedgerEntry(group.content, target.line),
+          )
+          .map((target) => {
+            const raw = String(groupLines[target.line] || "");
+            const match = matchFreshStampExactEntry(queueBefore, {
               path: group.path,
+              line: target.line,
               raw,
-              counted: match.ok,
-            }),
-            keep,
-            match,
-          });
-        }),
+            });
+            const keep = canCountKeeps
+              ? classifyRottenKeepTarget({
+                  match,
+                  raw,
+                  stamper: options.stamper,
+                  dateText: options.dateText,
+                })
+              : { counted: false };
+            return Object.freeze({
+              target: Object.freeze({
+                line: target.line,
+                path: group.path,
+                raw,
+                counted: match.ok,
+              }),
+              keep,
+              match,
+            });
+          }),
       };
     });
+    if (linkResolved.every(({ resolved }) => resolved.length === 0)) {
+      new Notice("Pomodoro ledger rows are not freshness targets");
+      return false;
+    }
     const skipDecisions = freshnessSupportsDecayDecisions(api);
     let linkDecisionSkipped = 0;
     let linkChecklistSkipped = 0;
@@ -65498,6 +65649,7 @@ class BobNavigationHotkeysDecayCancelMixin {
         live.lineText,
         stamper,
         cardCtx.dateText,
+        { content: live.content, line: cardCtx.line },
       );
       const reason = formatFreshnessDecisionRewordReason({
         keeps: cardCtx.keeps,
@@ -69018,6 +69170,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           finalLine,
           stamper,
           this.getFreshnessDateText(),
+          { content: writeContext.content, line: plan.cursorLine },
         );
       }
     }
@@ -69355,6 +69508,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           finalLine,
           stamper,
           this.getFreshnessDateText(),
+          { content: writeContext.content, line: cursor.line },
         );
         plannedSource.lines[plan.cursorLine] = finalLine;
       }
@@ -72951,7 +73105,15 @@ class BobNavigationHotkeysDependencyMirrorMixin {
     if (result.changed) {
       const depStamper = this.getFreshnessStampLine();
       if (typeof depStamper === "function") {
-        depParentLine = applyFreshStampLine(depParentLine, depStamper, this.getFreshnessDateText());
+        depParentLine = applyFreshStampLine(
+          depParentLine,
+          depStamper,
+          this.getFreshnessDateText(),
+          {
+            content: typeof cm.getValue === "function" ? cm.getValue() : "",
+            line: cursor.line,
+          },
+        );
       }
     }
 
@@ -73963,7 +74125,15 @@ class BobNavigationHotkeysJumpKeyMixin {
     if (nextLine !== lineText) {
       const deleteStamper = this.getFreshnessStampLine();
       if (typeof deleteStamper === "function") {
-        nextLine = applyFreshStampLine(nextLine, deleteStamper, this.getFreshnessDateText());
+        nextLine = applyFreshStampLine(
+          nextLine,
+          deleteStamper,
+          this.getFreshnessDateText(),
+          {
+            content: typeof cm.getValue === "function" ? cm.getValue() : "",
+            line: cursor.line,
+          },
+        );
       }
     }
 
@@ -84910,6 +85080,8 @@ module.exports.helpers = {
   deduplicateFreshStampTargets,
   isReviewRefreshKeydown,
   identityFreshStampLine,
+  isPomodoroFreshnessLedgerLine,
+  isPomodoroFreshnessLedgerEntry,
   applyFreshStampLine,
   applyFreshRefreshLine,
   resolveFreshStamper,

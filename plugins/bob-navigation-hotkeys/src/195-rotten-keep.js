@@ -3,6 +3,7 @@
 function classifyRottenKeepTarget({ match, raw, stamper, dateText } = {}) {
   const keepsBefore = parseKeepsCount(raw);
   const uncounted = { counted: false, keepsBefore, keepsAfter: keepsBefore };
+  if (isPomodoroFreshnessLedgerLine(raw)) return uncounted;
   if (!match || !match.ok || !match.entry || match.entry.lane !== "ready" ||
       !["rotten", "tickler"].includes(reviewEntryMachineTier(match.entry)) ||
       match.entry.returnedBy === "unblocked" || freshStampLineHasToday(raw, dateText) ||

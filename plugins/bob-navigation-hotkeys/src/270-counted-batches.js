@@ -264,6 +264,7 @@ function planCountedLocalTaskDependency(
         afterLines[stampLine],
         countedDepStamper,
         countedDepFreshDateText,
+        { content: nextContent, line: stampLine },
       );
       if (stamped !== afterLines[stampLine]) {
         afterLines[stampLine] = stamped;

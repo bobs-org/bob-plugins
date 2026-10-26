@@ -321,32 +321,95 @@ function identityFreshStampLine(line) {
   return String(line || "");
 }
 
-function applyFreshStampLine(line, stamper, dateText) {
+// Recognize a Pomodoro-shaped checkbox from its body alone. This protects
+// delegation boundaries even when callers inject a legacy stamper.
+function isPomodoroFreshnessLedgerLine(line) {
+  const text = String(line || "");
+  const task = text.match(OBSIDIAN_TASK_LINE_RE);
+  if (!task) {
+    return false;
+  }
+  const body = task[2] || "";
+  if (/^\(\s*\)/.test(body)) {
+    return true;
+  }
+  const range = body.match(
+    /^\((\*\*)?(\d{4}|\d{2}:\d{2})\s*-\s*(\d{4}|\d{2}:\d{2})(\*\*)?(?:\s+[^)]*)?\)/,
+  );
+  return Boolean(
+    range &&
+      Boolean(range[1]) === Boolean(range[4]) &&
+      range[2].includes(":") === range[3].includes(":"),
+  );
+}
+
+// A top-level checkbox anywhere in the Pomodoros section is a ledger row,
+// including legacy headings that lack a parseable time range. Nested task
+// children and rows outside the section remain eligible.
+function isPomodoroFreshnessLedgerEntry(content, lineIndex) {
+  const text = String(content || "");
+  const index = Math.floor(numericOrDefault(lineIndex, Number.NaN));
+  const { lines } = splitMarkdownContent(text);
+  const section = findPomodorosSectionRange(text);
+  return Boolean(
+    section &&
+      Number.isInteger(index) &&
+      index > section.startLine &&
+      index <= section.endLine &&
+      /^(?:[-+*]|\d+[.)])[ \t]+\[[^\]\n]\]/.test(
+        String(lines[index] || ""),
+      ),
+  );
+}
+
+function applyFreshStampLine(line, stamper, dateText, sourceContext = null) {
+  const text = String(line || "");
+  if (
+    isPomodoroFreshnessLedgerLine(text) ||
+    (sourceContext &&
+      isPomodoroFreshnessLedgerEntry(
+        sourceContext.content,
+        sourceContext.line,
+      ))
+  ) {
+    return text;
+  }
   const fn = typeof stamper === "function" ? stamper : identityFreshStampLine;
   try {
-    const stamped = fn(String(line || ""), dateText);
+    const stamped = fn(text, dateText);
     if (typeof stamped === "string") {
       return stamped;
     }
-    return String(line || "");
+    return text;
   } catch (error) {
-    return String(line || "");
+    return text;
   }
 }
 
-function applyFreshRefreshLine(line, refresher, days, dateText) {
+function applyFreshRefreshLine(line, refresher, days, dateText, sourceContext = null) {
+  const text = String(line || "");
+  if (
+    isPomodoroFreshnessLedgerLine(text) ||
+    (sourceContext &&
+      isPomodoroFreshnessLedgerEntry(
+        sourceContext.content,
+        sourceContext.line,
+      ))
+  ) {
+    return text;
+  }
   const fn = typeof refresher === "function" ? refresher : null;
   if (!fn) {
-    return String(line || "");
+    return text;
   }
   try {
-    const out = fn(String(line || ""), days, dateText);
+    const out = fn(text, days, dateText);
     if (typeof out === "string") {
       return out;
     }
-    return String(line || "");
+    return text;
   } catch (error) {
-    return String(line || "");
+    return text;
   }
 }
 

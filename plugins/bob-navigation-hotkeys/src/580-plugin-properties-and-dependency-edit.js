@@ -71,6 +71,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           finalLine,
           stamper,
           this.getFreshnessDateText(),
+          { content: writeContext.content, line: cursor.line },
         );
         plannedSource.lines[plan.cursorLine] = finalLine;
       }

@@ -517,6 +517,10 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       return false;
     }
     const content = String(editor.getValue ? editor.getValue() : picker.getEditorContent ? picker.getEditorContent() : "");
+    if (isPomodoroFreshnessLedgerEntry(content, cursor.line)) {
+      new Notice("Pomodoro ledger row · not updated");
+      return false;
+    }
     const line = getEditorLine(editor, cursor.line);
     if (line === null || !isObsidianTaskLine(line)) {
       new Notice("Cursor is not on a task");
@@ -569,6 +573,10 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         new Notice("A counted task changed while the picker was open");
         return false;
       }
+      if (isPomodoroFreshnessLedgerEntry(writeContext.content, target.line)) {
+        skipped += 1;
+        continue;
+      }
       const status = getObsidianTaskCheckboxStatus(live);
       if (status === null || !OPEN_OBSIDIAN_TASK_STATUSES.has(status) || isRecurringTaskLine(live)) {
         skipped += 1;
@@ -617,6 +625,9 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         if (live !== target.rawLine || !isObsidianTaskLine(live)) {
           new Notice("A linked note changed; no tasks were updated");
           return false;
+        }
+        if (isPomodoroFreshnessLedgerEntry(group.content, target.line)) {
+          continue;
         }
         const status = getObsidianTaskCheckboxStatus(live);
         if (status === null || !OPEN_OBSIDIAN_TASK_STATUSES.has(status) || isRecurringTaskLine(live)) {

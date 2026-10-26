@@ -299,7 +299,9 @@ class TaskStatusCyclerTargetsMixin {
       resolvedTarget.line,
       resolvedTarget.blockId,
       forcedNextSymbol,
-      options,
+      this.isPomodoroLedgerLineInEditor(editor, resolvedTarget.line)
+        ? { ...options, skipFreshnessStamp: true }
+        : options,
     );
     if (nextLineText === null || nextLineText === currentLineText) {
       return false;
@@ -333,7 +335,9 @@ class TaskStatusCyclerTargetsMixin {
         resolvedTarget.line,
         resolvedTarget.blockId,
         forcedNextSymbol,
-        options,
+        this.isPomodoroLedgerLineInSourceText(sourceText, resolvedTarget.line)
+          ? { ...options, skipFreshnessStamp: true }
+          : options,
       );
       if (nextLineText === null || nextLineText === currentLineText) {
         return sourceText;
@@ -417,7 +421,9 @@ class TaskStatusCyclerTargetsMixin {
       nextSymbol,
       this.getCompletionDateString(),
       {
-        stampLine: this.getFreshnessStampLine(),
+        stampLine: options.skipFreshnessStamp
+          ? null
+          : this.getFreshnessStampLine(),
         freshDateText: formatLocalDate(),
       },
     );
@@ -478,6 +484,51 @@ class TaskStatusCyclerTargetsMixin {
     }
   }
 
+  isPomodoroLedgerLineInEditor(editor, line) {
+    try {
+      if (!editor || !Number.isInteger(line)) {
+        return false;
+      }
+      let lines = null;
+      if (typeof editor.getValue === "function") {
+        lines = String(editor.getValue() || "").split(/\r?\n/);
+      } else if (typeof editor.lineCount === "function") {
+        const count = editor.lineCount();
+        if (Number.isInteger(count) && count >= 0) {
+          lines = Array.from({ length: count }, (_, index) =>
+            String(editor.getLine(index) || ""),
+          );
+        }
+      }
+      return Boolean(
+        Array.isArray(lines) &&
+          isPomodoroTaskLine(
+            lines,
+            findPomodorosSectionInLines(lines),
+            line,
+          ),
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  isPomodoroLedgerLineInSourceText(sourceText, line) {
+    try {
+      if (typeof sourceText !== "string" || !Number.isInteger(line)) {
+        return false;
+      }
+      const lines = sourceText.split(/\r?\n/);
+      return isPomodoroTaskLine(
+        lines,
+        findPomodorosSectionInLines(lines),
+        line,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
   // Stamp one editor line with today's freshness date when a stamper is
   // available. Best effort: returns false when nothing was written.
   stampFreshnessOnEditorLine(editor, line) {
@@ -491,6 +542,9 @@ class TaskStatusCyclerTargetsMixin {
       }
       const current = editor.getLine(line);
       if (typeof current !== "string") {
+        return false;
+      }
+      if (this.isPomodoroLedgerLineInEditor(editor, line)) {
         return false;
       }
       const stamped = applyFreshStampLine(current, stamper, formatLocalDate());

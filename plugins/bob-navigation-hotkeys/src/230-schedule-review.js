@@ -220,7 +220,12 @@ function planTaskLaneBatch(content, session, options = {}) {
       if (status === " ") {
         let nextLine = replaceObsidianTaskCheckboxStatus(oldLine, "*");
         if (laneStamper) {
-          nextLine = applyFreshStampLine(nextLine, laneStamper, laneFreshDateText);
+          nextLine = applyFreshStampLine(
+            nextLine,
+            laneStamper,
+            laneFreshDateText,
+            { content: workingLines.join(source.lineEnding), line: target.line },
+          );
         }
         if (nextLine !== oldLine) {
           changedTaskCount += 1;
@@ -236,7 +241,12 @@ function planTaskLaneBatch(content, session, options = {}) {
     if (status === "*" || status === "/") {
       let nextLine = replaceObsidianTaskCheckboxStatus(oldLine, " ");
       if (laneStamper) {
-        nextLine = applyFreshStampLine(nextLine, laneStamper, laneFreshDateText);
+        nextLine = applyFreshStampLine(
+          nextLine,
+          laneStamper,
+          laneFreshDateText,
+          { content: workingLines.join(source.lineEnding), line: target.line },
+        );
       }
       if (nextLine !== oldLine) {
         changedTaskCount += 1;

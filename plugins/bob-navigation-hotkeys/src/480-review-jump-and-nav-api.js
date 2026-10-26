@@ -552,6 +552,17 @@ function planFreshStampBatch(content, targetLines, stamper, dateText) {
     });
   });
   for (const target of targets) {
+    if (
+      isPomodoroFreshnessLedgerEntry(text, target.line) ||
+      isPomodoroFreshnessLedgerLine(lines[target.line])
+    ) {
+      return Object.freeze({
+        ok: false,
+        refusal: "not-task",
+        content: text,
+        stamped: Object.freeze([]),
+      });
+    }
     const check = classifyFreshStampTarget(lines[target.line]);
     if (!check.ok) {
       return Object.freeze({

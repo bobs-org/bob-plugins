@@ -135,13 +135,39 @@ function identityFreshStampLine(line) {
   return String(line || "");
 }
 
+// Keep the small line-only boundary safe when a caller supplies an older or
+// injected stamper. Full-note Pomodoro section checks live at the editor and
+// batch boundaries, where heading context is available.
+function isPomodoroFreshnessLedgerLine(line) {
+  const match = String(line || "").match(TASK_CHECKBOX_MARKER_RE);
+  if (!match) {
+    return false;
+  }
+  const body = match[3] || "";
+  if (/^\(\s*\)/.test(body)) {
+    return true;
+  }
+  const range = body.match(
+    /^\((\*\*)?(\d{4}|\d{2}:\d{2})\s*-\s*(\d{4}|\d{2}:\d{2})(\*\*)?(?:\s+[^)]*)?\)/,
+  );
+  return Boolean(
+    range &&
+      Boolean(range[1]) === Boolean(range[4]) &&
+      range[2].includes(":") === range[3].includes(":"),
+  );
+}
+
 function applyFreshStampLine(line, stamper, dateText) {
+  const text = String(line || "");
+  if (isPomodoroFreshnessLedgerLine(text)) {
+    return text;
+  }
   const fn = typeof stamper === "function" ? stamper : identityFreshStampLine;
   try {
-    const stamped = fn(String(line || ""), dateText);
-    return typeof stamped === "string" ? stamped : String(line || "");
+    const stamped = fn(text, dateText);
+    return typeof stamped === "string" ? stamped : text;
   } catch (error) {
-    return String(line || "");
+    return text;
   }
 }
 
@@ -10256,6 +10282,14 @@ function applySuccessorVerdicts(context) {
     let blockId = task.blockId || "";
     let blockIdCreated = false;
     const before = task.rawLine != null ? String(task.rawLine) : null;
+    let sourceNoteText = "";
+    try {
+      sourceNoteText = noteTexts instanceof Map
+        ? String(noteTexts.get(task.path) ?? "")
+        : String(noteTexts[task.path] ?? "");
+    } catch (error) {
+      sourceNoteText = "";
+    }
     let after = before;
     if (before != null) {
       if (mark.pullIn) {
@@ -10266,7 +10300,12 @@ function applySuccessorVerdicts(context) {
           isDailyNote: isDailyNotePath(task.path),
           isToday: true,
         });
-        after = applyFreshStampLine(raised != null ? raised : before, stampLine, today);
+        after = applyFreshStampLine(
+          raised != null ? raised : before,
+          stampLine,
+          today,
+          { content: sourceNoteText, line: task.line },
+        );
       } else {
         if (!blockId) {
           if (!mintedByNote.has(task.path)) {
@@ -10290,7 +10329,10 @@ function applySuccessorVerdicts(context) {
         // Strip the inherited project tag per PDC3 without touching own
         // reasons (schedules/IDs/dependency fields never change here).
         raised = stripProjectBlockedResidentTag(raised);
-        after = applyFreshStampLine(raised, stampLine, today);
+        after = applyFreshStampLine(raised, stampLine, today, {
+          content: sourceNoteText,
+          line: task.line,
+        });
       }
     } else if (!blockId && !mark.pullIn) {
       if (!mintedByNote.has(task.path)) {
@@ -19299,7 +19341,9 @@ class TaskStatusCyclerEditorEditsMixin {
       nextSymbol,
       this.getCompletionDateString(),
       {
-        stampLine: this.getFreshnessStampLine(),
+        stampLine: this.isPomodoroLedgerLineInEditor(editor, taskStatus.line)
+          ? null
+          : this.getFreshnessStampLine(),
         freshDateText: formatLocalDate(),
       },
     );
@@ -20057,7 +20101,9 @@ class TaskStatusCyclerTargetsMixin {
       resolvedTarget.line,
       resolvedTarget.blockId,
       forcedNextSymbol,
-      options,
+      this.isPomodoroLedgerLineInEditor(editor, resolvedTarget.line)
+        ? { ...options, skipFreshnessStamp: true }
+        : options,
     );
     if (nextLineText === null || nextLineText === currentLineText) {
       return false;
@@ -20091,7 +20137,9 @@ class TaskStatusCyclerTargetsMixin {
         resolvedTarget.line,
         resolvedTarget.blockId,
         forcedNextSymbol,
-        options,
+        this.isPomodoroLedgerLineInSourceText(sourceText, resolvedTarget.line)
+          ? { ...options, skipFreshnessStamp: true }
+          : options,
       );
       if (nextLineText === null || nextLineText === currentLineText) {
         return sourceText;
@@ -20175,7 +20223,9 @@ class TaskStatusCyclerTargetsMixin {
       nextSymbol,
       this.getCompletionDateString(),
       {
-        stampLine: this.getFreshnessStampLine(),
+        stampLine: options.skipFreshnessStamp
+          ? null
+          : this.getFreshnessStampLine(),
         freshDateText: formatLocalDate(),
       },
     );
@@ -20236,6 +20286,51 @@ class TaskStatusCyclerTargetsMixin {
     }
   }
 
+  isPomodoroLedgerLineInEditor(editor, line) {
+    try {
+      if (!editor || !Number.isInteger(line)) {
+        return false;
+      }
+      let lines = null;
+      if (typeof editor.getValue === "function") {
+        lines = String(editor.getValue() || "").split(/\r?\n/);
+      } else if (typeof editor.lineCount === "function") {
+        const count = editor.lineCount();
+        if (Number.isInteger(count) && count >= 0) {
+          lines = Array.from({ length: count }, (_, index) =>
+            String(editor.getLine(index) || ""),
+          );
+        }
+      }
+      return Boolean(
+        Array.isArray(lines) &&
+          isPomodoroTaskLine(
+            lines,
+            findPomodorosSectionInLines(lines),
+            line,
+          ),
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  isPomodoroLedgerLineInSourceText(sourceText, line) {
+    try {
+      if (typeof sourceText !== "string" || !Number.isInteger(line)) {
+        return false;
+      }
+      const lines = sourceText.split(/\r?\n/);
+      return isPomodoroTaskLine(
+        lines,
+        findPomodorosSectionInLines(lines),
+        line,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
   // Stamp one editor line with today's freshness date when a stamper is
   // available. Best effort: returns false when nothing was written.
   stampFreshnessOnEditorLine(editor, line) {
@@ -20249,6 +20344,9 @@ class TaskStatusCyclerTargetsMixin {
       }
       const current = editor.getLine(line);
       if (typeof current !== "string") {
+        return false;
+      }
+      if (this.isPomodoroLedgerLineInEditor(editor, line)) {
         return false;
       }
       const stamped = applyFreshStampLine(current, stamper, formatLocalDate());

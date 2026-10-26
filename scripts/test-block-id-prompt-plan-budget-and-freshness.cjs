@@ -454,3 +454,27 @@ test("block-id-prompt freshness accessors degrade without ledger-tools", () => {
   assert.equal(typeof plugin.getFreshnessStampLine(), "function");
   assert.match(plugin.getFreshnessDateText(), /^\d{4}-\d{2}-\d{2}$/);
 });
+
+test("block-id-prompt refuses Pomodoro ledger lines before calling a stamper", () => {
+  let calls = 0;
+  const injected = (line) => {
+    calls += 1;
+    return `${line} [fresh:: 2026-10-08]`;
+  };
+  for (const line of [
+    "- [ ] (**0920-0950** [t:: 30m]) — FOCUS",
+    "- [ ] () — PLANNED",
+  ]) {
+    assert.equal(helpers.applyFreshStampLine(line, injected, "2026-10-08"), line);
+  }
+  assert.equal(calls, 0, "ledger rows never reach an injected stamper");
+  assert.equal(
+    helpers.applyFreshStampLine(
+      "- [ ] #task Ordinary task",
+      injected,
+      "2026-10-08",
+    ),
+    "- [ ] #task Ordinary task [fresh:: 2026-10-08]",
+  );
+  assert.equal(calls, 1, "ordinary tasks retain the shared writer path");
+});

@@ -145,6 +145,43 @@ test("P13 recurring and P17 done tasks are refused unchanged", () => {
   assert.equal(freshnessStampLine(plain, D).refused, "not_task");
 });
 
+test("Pomodoro ledger rows are refused byte-for-byte by every fresh writer", () => {
+  const rows = [
+    "- [ ] (**0920-0950** [t:: 30m]) — FOCUS",
+    "- [x] (**0920-0950** [t:: 30m]) — FOCUS [fresh:: 2026-10-01]",
+    "- [ ] () — PLANNED",
+    "- [ ] (09:20 - 09:50) — FOCUS",
+    "- [ ] (0920 - 0950) [fresh:: 2026-10-01] [refresh:: 14] [keeps:: 2]",
+    "\t- [ ] (**0920-0950**) — INDENTED",
+    "> - [ ] (**09:20-09:50**) — QUOTED",
+  ];
+
+  for (const line of rows) {
+    const outcomes = [
+      freshnessStampLine(line, D),
+      freshnessSetRefreshLine(line, 30, D),
+      freshnessSetRefreshLine(line, null, D),
+      freshnessKeepLine(line, D, { counted: true }),
+      freshnessKeepLine(line, D, { counted: false }),
+    ];
+    for (const result of outcomes) {
+      assert.equal(result.line, line, `ledger row must stay byte-exact: ${line}`);
+      assert.equal(result.changed, false, `ledger row must not change: ${line}`);
+      assert.equal(result.refused, "not_task", line);
+    }
+  }
+});
+
+test("a time range later in task prose remains eligible for freshness", () => {
+  const line = "- [ ] #task Review 09:20-09:50 before lunch";
+  const stamped = freshnessStampLine(line, D);
+  assert.equal(
+    stamped.line,
+    "- [ ] #task Review 09:20-09:50 before lunch [fresh:: 2026-10-08]",
+  );
+  assert.equal(stamped.refused, null);
+});
+
 test("U1-U2 stamp vectors clear unblocked while preserving keeps in seed mode", () => {
   const u1 = freshnessStampLine(
     "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-07] [created:: 2026-09-01]",

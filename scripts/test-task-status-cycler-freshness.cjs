@@ -48,6 +48,79 @@ test("cycler freshness: a throwing stamper leaves the rewritten line intact", ()
   assert.equal(out, "- [*] #task Ship it");
 });
 
+test("cycler line guard skips Pomodoro signatures before injected stampers", () => {
+  let calls = 0;
+  const injected = (line, dateText) => {
+    calls += 1;
+    return `${line} [fresh:: ${dateText}]`;
+  };
+  for (const line of [
+    "- [ ] (**0920-0950** [t:: 30m]) — FOCUS",
+    "- [ ] () — PLANNED",
+    "> - [ ] (09:20-09:50) — FOCUS",
+  ]) {
+    assert.equal(helpers.applyFreshStampLine(line, injected, "2026-10-01"), line);
+  }
+  assert.equal(calls, 0);
+  assert.equal(
+    helpers.applyFreshStampLine(
+      "- [ ] #task Review 09:20-09:50",
+      injected,
+      "2026-10-01",
+    ),
+    "- [ ] #task Review 09:20-09:50 [fresh:: 2026-10-01]",
+  );
+  assert.equal(calls, 1);
+});
+
+test("cycler skips legacy Pomodoro headlines in local and Tasks-command writes", () => {
+  for (const mode of ["local", "tasks-command"]) {
+    const original = [
+      "## Pomodoros",
+      "- [x] #task Finished session",
+      "\t- 🍅 [[Tasks#^work]]",
+      "## Tasks",
+      "- [x] #task Ordinary task ^work",
+    ].join("\n");
+    const editor = createTextEditor(original, { line: 1, ch: 5 });
+    const plugin = new TaskStatusCyclerPlugin();
+    let stampCalls = 0;
+    plugin.getFreshnessStampLine = () => (line, dateText) => {
+      stampCalls += 1;
+      return `${line} [fresh:: ${dateText}]`;
+    };
+    if (mode === "tasks-command") {
+      const commandId = "obsidian-tasks-plugin:set-status-symbol-to-*";
+      plugin.app = {
+        commands: {
+          commands: { [commandId]: {} },
+          executeCommandById: () => {
+            const current = editor.getLine(1);
+            editor.replaceRange(
+              current.replace("[x]", "[*]"),
+              { line: 1, ch: 0 },
+              { line: 1, ch: current.length },
+            );
+            return true;
+          },
+        },
+      };
+    } else {
+      plugin.app = {
+        commands: {
+          commands: {},
+          executeCommandById: () => false,
+        },
+      };
+    }
+    const taskStatus = helpers.getTaskStatusForLine(editor.getLine(1), 1);
+    assert.equal(plugin.setActiveCheckboxStatus(editor, taskStatus, "*"), true);
+    assert.equal(stampCalls, 0, `${mode} must skip legacy ledger freshness`);
+    assert.equal(editor.getLine(1), "- [*] #task Finished session");
+    assert.match(editor.getLine(4), /^- \[x\] #task Ordinary task/);
+  }
+});
+
 test("cycler freshness: transcluded rewrite stamps last via injected stamper", () => {
   const stamper = (line, dateText) => `${line} [fresh:: ${dateText}]`;
   const out = helpers.rewriteTaskLineForTranscludedSource(

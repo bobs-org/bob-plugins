@@ -677,11 +677,16 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
+      if (isPomodoroFreshnessLedgerEntry(live.content, cardCtx.line)) {
+        new Notice("Pomodoro ledger row · not updated");
+        return false;
+      }
       const nextLine = applyFreshRefreshLine(
         live.lineText,
         refresher,
         days,
         cardCtx.dateText,
+        { content: live.content, line: cardCtx.line },
       );
       if (nextLine === live.lineText) {
         new Notice("Refresh unchanged; nothing was written");

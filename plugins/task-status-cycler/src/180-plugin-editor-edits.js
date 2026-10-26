@@ -472,7 +472,9 @@ class TaskStatusCyclerEditorEditsMixin {
       nextSymbol,
       this.getCompletionDateString(),
       {
-        stampLine: this.getFreshnessStampLine(),
+        stampLine: this.isPomodoroLedgerLineInEditor(editor, taskStatus.line)
+          ? null
+          : this.getFreshnessStampLine(),
         freshDateText: formatLocalDate(),
       },
     );

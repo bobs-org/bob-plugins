@@ -901,7 +901,12 @@ class BobNavigationHotkeysProjectSubtreeMixin {
     if (parentLine < 0 || parentLine >= lines.length) {
       return nextContent;
     }
-    lines[parentLine] = applyFreshStampLine(lines[parentLine], stamper, dateText);
+    lines[parentLine] = applyFreshStampLine(
+      lines[parentLine],
+      stamper,
+      dateText,
+      { content: nextContent, line: parentLine },
+    );
     return lines.join(lineEnding);
   }
 

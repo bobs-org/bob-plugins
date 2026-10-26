@@ -60,34 +60,43 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
       const groupLines = splitMarkdownContent(group.content).lines;
       return {
         group,
-        resolved: group.session.targets.map((target) => {
-          const raw = String(groupLines[target.line] || "");
-          const match = matchFreshStampExactEntry(queueBefore, {
-            path: group.path,
-            line: target.line,
-            raw,
-          });
-          const keep = canCountKeeps
-            ? classifyRottenKeepTarget({
-              match,
-              raw,
-              stamper: options.stamper,
-              dateText: options.dateText,
-            })
-            : { counted: false };
-          return Object.freeze({
-            target: Object.freeze({
-              line: target.line,
+        resolved: group.session.targets
+          .filter(
+            (target) =>
+              !isPomodoroFreshnessLedgerEntry(group.content, target.line),
+          )
+          .map((target) => {
+            const raw = String(groupLines[target.line] || "");
+            const match = matchFreshStampExactEntry(queueBefore, {
               path: group.path,
+              line: target.line,
               raw,
-              counted: match.ok,
-            }),
-            keep,
-            match,
-          });
-        }),
+            });
+            const keep = canCountKeeps
+              ? classifyRottenKeepTarget({
+                  match,
+                  raw,
+                  stamper: options.stamper,
+                  dateText: options.dateText,
+                })
+              : { counted: false };
+            return Object.freeze({
+              target: Object.freeze({
+                line: target.line,
+                path: group.path,
+                raw,
+                counted: match.ok,
+              }),
+              keep,
+              match,
+            });
+          }),
       };
     });
+    if (linkResolved.every(({ resolved }) => resolved.length === 0)) {
+      new Notice("Pomodoro ledger rows are not freshness targets");
+      return false;
+    }
     const skipDecisions = freshnessSupportsDecayDecisions(api);
     let linkDecisionSkipped = 0;
     let linkChecklistSkipped = 0;

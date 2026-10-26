@@ -133,7 +133,7 @@ function planTaskMoveAcrossFiles(options = {}) {
   // closed and recurring lines.
   const moveStamper = resolveFreshStamper(options);
   const moveFreshDateText = resolveFreshDateText(options);
-  const rewrittenMovedBlocks = identities.blocks.map((block) => {
+  const rewrittenMovedBlocks = identities.blocks.map((block, blockIndex) => {
     const rewritten = rewriteTaskMoveReferences(block.join("\n"), {
       ...referenceOptions,
       currentPath: sourcePath,
@@ -141,7 +141,13 @@ function planTaskMoveAcrossFiles(options = {}) {
     });
     let lines = rewritten.content.split("\n");
     if (moveStamper) {
-      lines = lines.map((line) => applyFreshStampLine(line, moveStamper, moveFreshDateText));
+      const sourceRange = rangeResult.ranges[blockIndex];
+      lines = lines.map((line, offset) =>
+        applyFreshStampLine(line, moveStamper, moveFreshDateText, {
+          content: sourceContent,
+          line: sourceRange ? sourceRange.startLine + offset : -1,
+        }),
+      );
     }
     return Object.freeze(lines);
   });

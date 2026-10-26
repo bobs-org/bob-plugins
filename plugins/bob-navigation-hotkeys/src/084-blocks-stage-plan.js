@@ -135,7 +135,10 @@ function stampBlocksEditParentLine(content, parentLine, stamper, dateText) {
   if (parentLine < 0 || parentLine >= lines.length) {
     return String(content || "");
   }
-  const next = applyFreshStampLine(lines[parentLine], stamper, dateText);
+  const next = applyFreshStampLine(lines[parentLine], stamper, dateText, {
+    content: String(content || ""),
+    line: parentLine,
+  });
   if (next === lines[parentLine]) {
     return String(content || "");
   }

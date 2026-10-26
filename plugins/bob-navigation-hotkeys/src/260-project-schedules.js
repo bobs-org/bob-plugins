@@ -607,7 +607,12 @@ function planCountedBulletPropertyBatch(
     }
 
     if (countedStamper && targetChanged) {
-      const stamped = applyFreshStampLine(nextLine, countedStamper, countedFreshDateText);
+      const stamped = applyFreshStampLine(
+        nextLine,
+        countedStamper,
+        countedFreshDateText,
+        { content: source.lines.join(source.lineEnding), line: mappedLine },
+      );
       if (stamped !== nextLine) {
         nextLine = stamped;
         targetChanged = true;

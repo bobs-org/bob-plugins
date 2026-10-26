@@ -398,6 +398,7 @@
         barWidthDelta: null,
         barIsLast: false,
         legendTruncation: 0,
+        legendItemOverflow: 0,
         visibleLegend: 0,
         visibleCounter: null,
       };
@@ -429,6 +430,23 @@
           worst = Math.max(worst, label.scrollWidth - label.clientWidth);
         }
         out.legendTruncation = Math.round(worst * 10) / 10;
+        // A shrunken legend item keeps its nowrap text visible past its box,
+        // so it paints over the next item while no two boxes intersect. The
+        // item's own scrollWidth catches that: it exceeds the box exactly
+        // when content spills out of it.
+        let worstItem = 0;
+        for (const item of strip.querySelectorAll(".bob-day-strip-legend-item")) {
+          if (!visible(item)) continue;
+          // Skeleton placeholders are invisible by design; their shrunken
+          // boxes never paint over anything.
+          try {
+            if (getComputedStyle(item).visibility === "hidden") continue;
+          } catch (error) {
+            // Fall through to the measurement.
+          }
+          worstItem = Math.max(worstItem, item.scrollWidth - item.clientWidth);
+        }
+        out.legendItemOverflow = Math.round(worstItem * 10) / 10;
         out.visibleLegend = Array.from(strip.querySelectorAll(".bob-day-strip-legend-item")).filter(visible).length;
         for (const counter of strip.querySelectorAll(".bob-day-strip-overflow")) {
           if (!visible(counter)) continue;

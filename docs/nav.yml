@@ -2,6 +2,8 @@
   path: block-id-prompt.md
 - title: Bob Articles
   path: bob-articles.md
+- title: Bob Command Mode
+  path: bob-command-mode.md
 - title: Bob Ledger Tools
   path: bob-ledger-tools.md
 - title: Bob Navigation Hotkeys

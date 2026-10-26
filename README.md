@@ -1,6 +1,6 @@
 # bob-plugins
 
-Source repository for the seven custom Obsidian plugins used with Bob. Use
+Source repository for the eight custom Obsidian plugins used with Bob. Use
 [bob-cli](https://github.com/bobs-org/bob-cli) to deploy them into a vault.
 
 <!-- BEGIN GENERATED: requirements -->

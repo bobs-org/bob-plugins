@@ -3,7 +3,7 @@ title: "Plugin architecture"
 description: "Understand plugin layout, generated JavaScript bundles, and the documentation inventory."
 ---
 
-This repository is the source tree for seven Bob Obsidian plugins. Each
+This repository is the source tree for eight Bob Obsidian plugins. Each
 plugin has its own manifest version; releases are not lockstep. A
 `plugins/<id>/` directory uses Obsidian's plugin layout: a
 `manifest.json`, a loadable `main.js`, and optional

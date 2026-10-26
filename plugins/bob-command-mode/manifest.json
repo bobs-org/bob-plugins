@@ -1,0 +1,9 @@
+{
+  "id": "bob-command-mode",
+  "name": "Bob Command Mode",
+  "version": "0.1.0",
+  "minAppVersion": "1.8.7",
+  "description": "Run bob commands from Obsidian with safe-write guards, run history, and an automation API.",
+  "author": "Bryan M Bugyi",
+  "isDesktopOnly": true
+}

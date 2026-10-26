@@ -925,6 +925,7 @@ export function loadInventory(root = REPO_ROOT) {
 const PURPOSES = {
   "block-id-prompt": "Block ID Prompt helps create and manage stable block identifiers and task links in Obsidian.",
   "bob-articles": "Bob Articles formats reading notes and presents article metadata in Obsidian.",
+  "bob-command-mode": "Bob Command Mode runs bob commands from Obsidian with safe-write guards and run history.",
   "bob-ledger-tools": "Bob Ledger Tools renders task, Pomodoro, freshness, and planning information from Bob notes.",
   "bob-navigation-hotkeys": "Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob notes.",
   "bob-project-tasks": "Bob Project Tasks keeps project task sections in sync across notes.",
@@ -935,6 +936,7 @@ const PURPOSES = {
 const PAGE_DESCRIPTIONS = {
   "block-id-prompt": "Create and manage block IDs and task links in Bob's Obsidian workflow.",
   "bob-articles": "Format and adopt article notes with Bob Articles.",
+  "bob-command-mode": "Run bob commands from Obsidian with guards, history, and an automation API.",
   "bob-ledger-tools": "Inspect task lanes, Pomodoros, freshness, and planning marks.",
   "bob-navigation-hotkeys": "Navigate and edit Bob notes with keyboard commands.",
   "bob-project-tasks": "Synchronize project task sections across notes.",

@@ -1,0 +1,40 @@
+/* Bob Command Mode: calm native surfaces for running bob from Obsidian. */
+
+.bob-cmd-sheet {
+  --bob-cmd-accent: var(--text-accent);
+}
+
+.bob-cmd-sheet .bob-cmd-row {
+  font-family: var(--font-monospace);
+}
+
+.bob-cmd-toast {
+  border-left: 4px solid var(--text-muted);
+}
+
+.bob-cmd-toast.is-completed {
+  border-left-color: var(--color-green);
+}
+
+.bob-cmd-toast.is-attention {
+  border-left-color: var(--color-orange);
+}
+
+.bob-cmd-toast.is-failed,
+.bob-cmd-toast.is-unknown {
+  border-left-color: var(--color-red);
+}
+
+.bob-cmd-toast.is-stopped {
+  border-left-color: var(--text-muted);
+}
+
+.bob-cmd-chip {
+  font-family: var(--font-interface);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-cmd-sheet {
+    transition: none;
+  }
+}

@@ -26,12 +26,25 @@ function cmSheetArticleType(type) {
 }
 
 function cmSheetCaptureContext(app) {
-  const context = { notePath: null, noteKind: null, clipboardUrl: null };
+  const context = {
+    notePath: null, noteKind: null, clipboardUrl: null,
+    originLeaf: null, originView: null, originEditor: null, originCursor: null,
+  };
   try {
     const workspace = app && app.workspace;
+    context.originLeaf = workspace && workspace.activeLeaf ? workspace.activeLeaf : null;
     const view = workspace && typeof workspace.getActiveViewOfType === "function"
       ? workspace.getActiveViewOfType(MarkdownView)
       : null;
+    context.originView = view || null;
+    context.originEditor = (view && view.editor) || null;
+    try {
+      context.originCursor = context.originEditor && typeof context.originEditor.getCursor === "function"
+        ? context.originEditor.getCursor()
+        : null;
+    } catch (error) {
+      context.originCursor = null;
+    }
     const file = view && view.file;
     if (file && file.path) {
       context.notePath = file.path;
@@ -112,6 +125,7 @@ class CommandModeSheetModal extends Modal {
     this.hint = null;
     this.surfaceAvailable = (options && options.surfaceAvailable) || null;
     this.onPickVim = (options && options.onPickVim) || null;
+    this.completionExecFile = (options && options.completionExecFile) || null;
   }
 
   open() {

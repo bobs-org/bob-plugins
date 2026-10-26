@@ -395,7 +395,7 @@ test("Shift+Enter previews first and Apply reruns without the preview flag", asy
   }
 });
 
-test("missing positionals hint instead of running", async () => {
+test("missing positionals enter argument mode instead of running", async () => {
   const { restore, base, plugin } = sheetHarness(sheetCatalog());
   try {
     const modal = openSheet(plugin);
@@ -406,7 +406,11 @@ test("missing positionals hint instead of running", async () => {
     assert.equal(row.key, "entry:ref-rename");
     const before = base.runner.newestRecord();
     const result = await modal.activateRow({ ...row, userArgs: [] }, {});
-    assert.equal(result.ok, false);
+    assert.equal(result.ok, true);
+    assert.equal(result.stage, "args");
+    assert.equal(modal.stage, "args");
+    const argumentResult = await modal.runArgumentStage();
+    assert.equal(argumentResult.ok, false);
     assert.match(modal.hint, /REF/);
     assert.equal(base.runner.newestRecord(), before);
     modal.close();

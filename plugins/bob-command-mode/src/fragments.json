@@ -15,5 +15,6 @@
   "150-pager.js",
   "160-sheet-rank.js",
   "170-sheet.js",
+  "175-args-vim.js",
   "990-exports.js"
 ]

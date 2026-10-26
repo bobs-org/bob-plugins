@@ -47,6 +47,18 @@ class FakeNode {
     this.scrollTop = 0;
   }
 
+  // Short descriptor so a failing assert comparing two live nodes reports
+  // instead of diffing the whole cyclic graph (bob-cli-c7).
+  [require("node:util").inspect.custom]() {
+    const cls = this.getAttribute("class");
+    const kids = Array.isArray(this.children) ? this.children.length : 0;
+    const raw = typeof this.textContent === "string" ? this.textContent : "";
+    const flat = raw.replace(/\s+/g, " ");
+    const text = flat.length > 40 ? flat.slice(0, 40) + "…" : flat;
+    const dot = cls ? "." + String(cls).split(/\s+/).filter(Boolean).join(".") : "";
+    return `FakeNode(${this.tagName}${dot} children=${kids} text=${JSON.stringify(text)})`;
+  }
+
   setAttribute(name, value) {
     this.attrs.set(name, String(value));
   }

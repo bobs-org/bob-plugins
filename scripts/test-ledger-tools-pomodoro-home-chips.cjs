@@ -350,6 +350,18 @@ test("chip DOM exposes forecast, hue, accessible text, and tooltip", () => {
 
 test("Reading view appends a forecast chip before its Task Link list", () => {
   class Node {
+    // Short descriptor so a failing assert comparing two live nodes reports
+    // instead of diffing the whole cyclic graph (bob-cli-c7).
+    [require("node:util").inspect.custom]() {
+      const cls = this.attributes ? this.attributes.class : null;
+      const kids = Array.isArray(this.childNodes) ? this.childNodes.length : 0;
+      const raw = typeof this._text === "string" ? this._text : "";
+      const flat = raw.replace(/\s+/g, " ");
+      const text = flat.length > 40 ? flat.slice(0, 40) + "…" : flat;
+      const dot = cls ? "." + String(cls).split(/\s+/).filter(Boolean).join(".") : "";
+      return `Node(${this.tagName}${dot} children=${kids} text=${JSON.stringify(text)})`;
+    }
+
     constructor(tagName, nodeType = 1, text = "") {
       this.tagName = tagName;
       this.nodeName = tagName;
@@ -624,6 +636,18 @@ test("Live Preview skips chips in Source mode", () => {
 
 test("Reading view finds embedded Task Links via src", () => {
   class Node {
+    // Short descriptor so a failing assert comparing two live nodes reports
+    // instead of diffing the whole cyclic graph (bob-cli-c7).
+    [require("node:util").inspect.custom]() {
+      const cls = this.attributes ? this.attributes.class : null;
+      const kids = Array.isArray(this.childNodes) ? this.childNodes.length : 0;
+      const raw = typeof this._text === "string" ? this._text : "";
+      const flat = raw.replace(/\s+/g, " ");
+      const text = flat.length > 40 ? flat.slice(0, 40) + "…" : flat;
+      const dot = cls ? "." + String(cls).split(/\s+/).filter(Boolean).join(".") : "";
+      return `Node(${this.tagName}${dot} children=${kids} text=${JSON.stringify(text)})`;
+    }
+
     constructor(tagName, nodeType = 1, text = "") {
       this.tagName = tagName;
       this.nodeName = tagName;

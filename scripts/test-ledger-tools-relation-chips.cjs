@@ -330,6 +330,22 @@ class MiniNode {
   }
   setAttribute(name, value) { this.attributes[name] = String(value); if (name === "class") this.className = String(value); }
   getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; }
+  // Short descriptor so a failing assert comparing two live nodes reports
+  // instead of diffing the whole cyclic graph (bob-cli-c7).
+  [require("node:util").inspect.custom]() {
+    const cls = String(this.className || "");
+    const kids = Array.isArray(this.childNodes) ? this.childNodes.length : 0;
+    let raw = "";
+    if (this.nodeType === 3) raw = String(this.nodeValue || "");
+    else {
+      const first = this.childNodes.find((node) => node && node.nodeType === 3);
+      if (first) raw = String(first.nodeValue || "");
+    }
+    const flat = raw.replace(/\s+/g, " ");
+    const text = flat.length > 40 ? flat.slice(0, 40) + "…" : flat;
+    const dot = cls ? "." + cls.split(/\s+/).filter(Boolean).join(".") : "";
+    return `MiniNode(${this.tagName}${dot} children=${kids} text=${JSON.stringify(text)})`;
+  }
   removeAttribute(name) { delete this.attributes[name]; }
   appendChild(child) { child.parentNode = this; child.ownerDocument = this.ownerDocument; this.childNodes.push(child); return child; }
   insertBefore(child, before) {

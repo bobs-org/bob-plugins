@@ -12,7 +12,7 @@ Bob Project Tasks keeps project task sections in sync across notes.
 | --- | --- |
 | Name | Bob Project Tasks |
 | ID | `bob-project-tasks` |
-| Version | 1.0.0 |
+| Version | 1.1.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Keep project task counts materialized in frontmatter. |
@@ -43,6 +43,12 @@ The two snapshot commands send the active Markdown note to Highlights through
 **Snapshot note to Highlights (with closed tasks)** (`-C`) when the closed
 history should travel with it. Both commands are available only on Markdown
 notes.
+
+When Bob Command Mode is enabled (its `api.commandMode` is version 1 or
+newer), the snapshot runs through its runner as `ref create <note>` with the
+same save-before-write and single-writer guards as the command sheet, and the
+run's toast carries the result. Otherwise the plugin spawns `bob ref create`
+directly, exactly as before.
 
 None of the three commands has a registered default hotkey; run them from the
 command palette or bind them in Obsidian's hotkey settings.

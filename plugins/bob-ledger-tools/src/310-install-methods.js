@@ -60,6 +60,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,
   BobLedgerToolsRelationRenderMixin,
+  BobLedgerToolsCommandModeRefreshMixin,
   BobLedgerToolsTodayLocationMixin,
   BobLedgerToolsTodayMarksMixin,
   BobLedgerToolsTodayMarksReadingMixin,

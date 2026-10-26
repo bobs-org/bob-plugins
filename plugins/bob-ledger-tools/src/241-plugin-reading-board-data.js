@@ -683,6 +683,10 @@ class BobLedgerToolsReadingBoardDataMixin {
     } catch (error) {
       // Rollover wiring is best-effort.
     }
+    // Command-mode finished-run refresh subscribes beside the other
+    // workspace listeners here, keeping onload in 170-plugin-lifecycle.js
+    // within the fragment line budget.
+    this.setupCommandModeRunRefresh();
   }
 
   teardownReadingBoardData() {

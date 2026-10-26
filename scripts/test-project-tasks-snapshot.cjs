@@ -175,6 +175,100 @@ test("failure notices retain bob error and hint lines verbatim", async () => {
   );
 });
 
+function makePluginWithCommandMode(activeFile, commandMode) {
+  const plugin = makePlugin(activeFile);
+  plugin.app.plugins.plugins["bob-command-mode"] = { api: { commandMode } };
+  return plugin;
+}
+
+test("snapshot runs through api.commandMode when version 1 is available", async () => {
+  const calls = [];
+  const plugin = makePluginWithCommandMode(new MockTFile("area/sase_blog.md"), {
+    version: 1,
+    run: async (argv, opts) => {
+      calls.push([argv, opts]);
+      return { ok: true, runId: "20261026-120000-ab12", outcome: "completed", exitCode: 0 };
+    },
+  });
+  let legacyCalled = false;
+  plugin.snapshotSpawnBob = async () => {
+    legacyCalled = true;
+    return { ok: true, stdout: "", stderr: "" };
+  };
+
+  const commands = plugin.commands.filter((command) =>
+    command.id.startsWith("snapshot-note-to-highlights"),
+  );
+  commands[0].checkCallback(false);
+  commands[1].checkCallback(false);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, [
+    [
+      ["ref", "create", "area/sase_blog.md"],
+      { presentation: "action", title: "Snapshot to Highlights", entryId: "ref-create", trigger: "api" },
+    ],
+    [
+      ["ref", "create", "area/sase_blog.md", "-C"],
+      { presentation: "action", title: "Snapshot to Highlights", entryId: "ref-create", trigger: "api" },
+    ],
+  ]);
+  assert.equal(legacyCalled, false);
+  assert.ok(
+    notices.every((notice) => !String(notice.message).includes("ref create failed")),
+    "command-mode success leaves toasts to the runner, not legacy notices",
+  );
+});
+
+test("snapshot falls back to the legacy spawn without command mode", async () => {
+  const plugin = makePlugin(new MockTFile("area/sase_blog.md"));
+  const calls = [];
+  plugin.snapshotSpawnBob = async (args) => {
+    calls.push(args);
+    return { ok: true, stdout: "pdf: x.pdf\n", stderr: "" };
+  };
+
+  await plugin.snapshotActiveNote(new MockTFile("area/sase_blog.md"), false);
+
+  assert.deepEqual(calls, [["ref", "create", "area/sase_blog.md"]]);
+});
+
+test("snapshot falls back to the legacy spawn when command mode is older than v1", async () => {
+  const calls = [];
+  const plugin = makePluginWithCommandMode(new MockTFile("area/sase_blog.md"), {
+    version: 0,
+    run: async (argv, opts) => {
+      calls.push([argv, opts]);
+      return { ok: true, runId: "x", outcome: "completed", exitCode: 0 };
+    },
+  });
+  plugin.snapshotSpawnBob = async (args) => {
+    calls.push(args);
+    return { ok: true, stdout: "pdf: x.pdf\n", stderr: "" };
+  };
+
+  await plugin.snapshotActiveNote(new MockTFile("area/sase_blog.md"), true);
+
+  assert.deepEqual(calls, [["ref", "create", "area/sase_blog.md", "-C"]]);
+});
+
+test("a refused command-mode run keeps the legacy error notice and never spawns", async () => {
+  const plugin = makePluginWithCommandMode(new MockTFile("area/sase_blog.md"), {
+    version: 1,
+    run: async () => ({ ok: false, runId: null, outcome: "failed", exitCode: null, reason: "bob not found" }),
+  });
+  let legacyCalled = false;
+  plugin.snapshotSpawnBob = async () => {
+    legacyCalled = true;
+    return { ok: true, stdout: "", stderr: "" };
+  };
+
+  await plugin.snapshotActiveNote(new MockTFile("area/sase_blog.md"), false);
+
+  assert.equal(legacyCalled, false);
+  assert.ok(notices.some((notice) => notice.message === "bob not found"));
+});
+
 test("off desktop, bob spawning is refused with the desktop-app explanation", async () => {
   mockObsidian.Platform.isDesktopApp = false;
   const plugin = makePlugin(new MockTFile("sase_blog.md"));

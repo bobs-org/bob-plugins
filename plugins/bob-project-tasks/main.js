@@ -284,8 +284,66 @@ module.exports = class BobProjectTasksPlugin extends Plugin {
     );
   }
 
+  snapshotCommandMode() {
+    try {
+      const plugins =
+        this.app && this.app.plugins && this.app.plugins.plugins;
+      const commandMode =
+        plugins &&
+        plugins["bob-command-mode"] &&
+        plugins["bob-command-mode"].api &&
+        plugins["bob-command-mode"].api.commandMode;
+      if (!commandMode || typeof commandMode.run !== "function") {
+        return null;
+      }
+      if (typeof commandMode.version !== "number" || commandMode.version < 1) {
+        return null;
+      }
+      return commandMode;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async snapshotActiveNoteViaCommandMode(file, includeClosed) {
+    const commandMode = this.snapshotCommandMode();
+    const args = ["ref", "create", file.path];
+    if (includeClosed) {
+      args.push("-C");
+    }
+    let result = null;
+    try {
+      result = await commandMode.run(args, {
+        presentation: "action",
+        title: "Snapshot to Highlights",
+        entryId: "ref-create",
+        trigger: "api",
+      });
+    } catch (error) {
+      result = {
+        ok: false,
+        reason:
+          error && error.message ? String(error.message) : "bob ref create failed.",
+      };
+    }
+    if (result && result.ok) {
+      // The command-mode runner owns the toast for this run (outcome,
+      // Output, Scan intake); a second notice here would double-notify.
+      return;
+    }
+    new Notice(
+      (result && result.reason) || "bob ref create failed.",
+      10000,
+    );
+  }
+
   async snapshotActiveNote(file, includeClosed) {
     if (!isMarkdownFile(file)) {
+      return;
+    }
+
+    if (this.snapshotCommandMode()) {
+      await this.snapshotActiveNoteViaCommandMode(file, includeClosed);
       return;
     }
 

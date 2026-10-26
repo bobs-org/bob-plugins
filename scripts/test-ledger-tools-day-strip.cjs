@@ -189,14 +189,24 @@ test("time mix reuses Stats area ordering and hues, with buckets last and a tool
   assert.deepEqual(model.mix.segments.map((segment) => segment.hue), expected.map((row) => hueMap.get(row.key)));
   assert.ok(model.mix.segments.slice(-1)[0].key.startsWith("@"));
   assert.equal(model.mix.segments.at(-1).hue, "gray");
-  assert.equal(model.mix.legend.length, 3);
-  assert.equal(model.mix.overflow.length, 5);
-  assert.deepEqual(model.mix.legend.map((entry) => entry.rank).sort((a, b) => a - b), [1, 2, 3]);
-  assert.equal(model.mix.overflowWide.count, 5);
-  assert.equal(model.mix.overflowNarrow.count, 6);
+  assert.equal(model.mix.legend.length, model.mix.segments.length);
+  assert.deepEqual(
+    model.mix.legend.map((entry) => entry.key),
+    model.mix.segments.map((segment) => segment.key),
+    "legend holds every segment in bar order",
+  );
+  assert.equal(model.mix.overflowDefault.count, model.mix.segments.length - 3);
+  assert.equal(model.mix.overflow.length, model.mix.segments.length - 3);
   assert.match(model.mix.title, /^Time by root parent\n/);
-  assert.equal(byClass(paint(model).root, "bob-day-strip-overflow-wide")[0].textContent, "+5");
-  assert.equal(byClass(paint(model).root, "bob-day-strip-overflow-narrow")[0].textContent, "+6");
+  const painted = paint(model).root;
+  assert.equal(byClass(painted, "bob-day-strip-overflow")[0].textContent, `+${model.mix.segments.length - 3}`);
+  assert.equal(byClass(painted, "bob-day-strip-legend-item").length, model.mix.segments.length);
+  const visible = byClass(painted, "bob-day-strip-legend-item").filter((node) => !node.hasAttribute("hidden"));
+  assert.equal(visible.length, 3, "static pre-fit shows ranks 1-3");
+  assert.deepEqual(
+    visible.map((node) => Number(node.getAttribute("data-rank"))).sort((a, b) => a - b),
+    [1, 2, 3],
+  );
 });
 
 test("root_parent is preferred with an honest area fallback", () => {
@@ -238,17 +248,29 @@ test("skeleton carries placeholder text per fact and the same tag and class sequ
     skeleton.facts.map((fact) => [fact.id, fact.display]),
     [["worked", "0h 00m"], ["reviewed", "00"], ["done", "00"], ["created", "00"], ["review_closed", "not yet"]],
   );
+  const skeletonRoot = paint(skeleton).root;
+  const readyRoot = paint(ready).root;
+  assert.equal(byClass(skeletonRoot, "bob-day-strip-legend-item").length, 3, "skeleton keeps three placeholders");
+  assert.equal(
+    byClass(readyRoot, "bob-day-strip-legend-item").length,
+    ready.mix.legend.length,
+    "ready paints one item per root",
+  );
   const normalize = (classes) => (classes || "")
     .split(/\s+/)
     .filter(Boolean)
     .map((name) => name === "bob-day-strip-state-ready" || name === "bob-day-strip-state-skeleton" ? "bob-day-strip-state-STATE" : name)
-    .map((name) => name === "bob-day-strip-overflow-wide" || name === "bob-day-strip-overflow-narrow" ? "bob-day-strip-overflow" : name)
     .map((name) => name === "bob-day-strip-bar-segment" ? "bob-day-strip-segment" : name)
     .map((name) => name === "bob-day-strip-mix-segment" ? "bob-day-strip-segment" : name)
-    .filter((name) => name !== "bob-day-strip-provisional" && name !== "bob-day-strip-stale" && name !== "bob-day-strip-legend-rank-3" && name !== "bob-day-strip-bar-bucket" && name !== "bob-day-strip-mix-bucket" && !name.endsWith("-skeleton") && !name.startsWith("bob-day-strip-hue-"))
+    .filter((name) => name !== "bob-day-strip-provisional" && name !== "bob-day-strip-stale" && name !== "bob-day-strip-bar-bucket" && name !== "bob-day-strip-mix-bucket" && !name.endsWith("-skeleton") && !name.startsWith("bob-day-strip-hue-"))
     .join(" ");
-  const shape = (root) => findAll(root, () => true).map((node) => node.tagName + "|" + normalize(node.getAttribute("class")));
-  assert.deepEqual(shape(paint(skeleton).root), shape(paint(ready).root));
+  const legendPart = (classes) => (classes || "").split(/\s+/).some((name) =>
+    name === "bob-day-strip-legend-item" || name === "bob-day-strip-legend-dot" ||
+    name === "bob-day-strip-legend-label" || name === "bob-day-strip-legend-value");
+  const shape = (root) => findAll(root, () => true)
+    .filter((node) => !legendPart(node.getAttribute("class")))
+    .map((node) => node.tagName + "|" + normalize(node.getAttribute("class")));
+  assert.deepEqual(shape(skeletonRoot), shape(readyRoot));
 });
 
 test("painter repaints in place, emits no buttons, and shows unavailable controls", () => {
@@ -451,5 +473,110 @@ test("facts stack a label head over a faithful value with warnings in the head",
     }
     const valueWarnings = factNodes.flatMap((node) => byClass(byClass(node, "bob-day-strip-value")[0] || node, "bob-day-strip-warning"));
     assert.equal(valueWarnings.length, 0, `${fixture.name} never warns inside a value`);
+  }
+});
+
+test("short_label paints GTD with a full-label tooltip", () => {
+  const model = modelFor(fixtures.screenshotDay);
+  const entry = model.mix.legend.find((item) => item.key === "@review:GTD");
+  assert.ok(entry, "review bucket is in the legend");
+  assert.equal(entry.legendLabel, "GTD");
+  assert.equal(entry.label, "GTD review");
+  const { root } = paint(model);
+  const item = byAttribute(root, "data-key", "@review:GTD")[0];
+  assert.ok(item, "review legend item paints");
+  const label = byClass(item, "bob-day-strip-legend-label")[0];
+  assert.equal(label.textContent, "GTD");
+  assert.equal(item.getAttribute("title"), "GTD review 45m");
+});
+
+test("area roots paint the bare label with a project_label tooltip", () => {
+  const model = modelFor(fixtures.today);
+  const entry = model.mix.legend.find((item) => item.key === "gtd.md");
+  assert.ok(entry, "gtd area root is in the legend");
+  assert.equal(entry.legendLabel, "gtd");
+  assert.match(entry.label, /gtd · area tasks/);
+  const { root } = paint(model);
+  const item = byAttribute(root, "data-key", "gtd.md")[0];
+  assert.ok(item, "gtd legend item paints");
+  assert.equal(byClass(item, "bob-day-strip-legend-label")[0].textContent, "gtd");
+  assert.match(item.getAttribute("title"), /gtd · area tasks/);
+});
+
+test("case-insensitive legend collisions fall back to full labels", () => {
+  const model = modelFor(fixtures.sameHueRoots);
+  const byKey = new Map(model.mix.legend.map((entry) => [entry.key, entry]));
+  assert.equal(byKey.get("@review:GTD").legendLabel, "GTD review");
+  assert.equal(byKey.get("gtd.md").legendLabel, "gtd · area tasks");
+  const { root } = paint(model);
+  assert.equal(byClass(byAttribute(root, "data-key", "@review:GTD")[0], "bob-day-strip-legend-label")[0].textContent, "GTD review");
+  assert.equal(byClass(byAttribute(root, "data-key", "gtd.md")[0], "bob-day-strip-legend-label")[0].textContent, "gtd · area tasks");
+});
+
+test("dayStripLegendFit fits every root, reserves the counter, and handles empty", () => {
+  assert.deepEqual(
+    helpers.dayStripLegendFit({ full: [40, 50, 60], gap: 8, counter: 30, available: 500 }),
+    { count: 3, mode: "values" },
+  );
+  const partial = helpers.dayStripLegendFit({ full: [100, 100, 100, 100], gap: 10, counter: 30, available: 250 });
+  assert.equal(partial.count, 2, "partial fit reserves room for the counter");
+  assert.equal(partial.mode, "values");
+  assert.deepEqual(
+    helpers.dayStripLegendFit({ full: [100, 100], gap: 10, counter: 30, available: 10 }),
+    { count: 0, mode: "values" },
+  );
+});
+
+test("names mode wins only when it names strictly more roots", () => {
+  const valuesOnly = helpers.dayStripLegendFit({
+    full: [100, 100, 100],
+    names: [60, 60, 60],
+    gap: 10,
+    counter: 30,
+    available: 200,
+  });
+  assert.equal(valuesOnly.mode, "names");
+  assert.ok(valuesOnly.count > 1);
+  const tie = helpers.dayStripLegendFit({
+    full: [80, 80],
+    names: [80, 80],
+    gap: 10,
+    counter: 30,
+    available: 170,
+  });
+  assert.equal(tie.mode, "values", "equal counts stay in values mode");
+});
+
+test("DOM glue hides overflow, writes the counter, and toggles names mode", () => {
+  const model = modelFor(fixtures.manyRoots);
+  const { root } = paint(model);
+  const legend = byClass(root, "bob-day-strip-legend")[0];
+  const items = byClass(root, "bob-day-strip-legend-item");
+  const counter = byClass(root, "bob-day-strip-overflow")[0];
+  assert.ok(legend && items.length > 3 && counter, "manyRoots paints a fittable legend");
+  legend.clientWidth = 300;
+  const widths = new Map(items.map((item, index) => [item, 40 + index * 5]));
+  for (const item of items) {
+    const width = widths.get(item);
+    item.getBoundingClientRect = () => ({ width, height: 16, top: 0, left: 0, right: width, bottom: 16 });
+  }
+  counter.getBoundingClientRect = () => ({ width: 30, height: 16, top: 0, left: 0, right: 30, bottom: 16 });
+  const view = { getComputedStyle: () => ({ columnGap: "8px" }) };
+  root.ownerDocument.defaultView = view;
+  legend.ownerDocument = root.ownerDocument;
+  for (const item of items) item.ownerDocument = root.ownerDocument;
+  counter.ownerDocument = root.ownerDocument;
+  const result = helpers.dayStripFitLegend(root);
+  assert.ok(result, "fit runs with layout");
+  assert.ok(result.count < items.length, "narrow legend hides some roots");
+  assert.equal(counter.textContent, `+${items.length - result.count}`);
+  const title = counter.getAttribute("title") || "";
+  assert.equal(title.split("\n").filter(Boolean).length, items.length - result.count);
+  const hidden = items.filter((item) => item.hasAttribute("hidden"));
+  assert.equal(hidden.length, items.length - result.count);
+  if (result.mode === "names") {
+    assert.ok((legend.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-legend-names"));
+  } else {
+    assert.ok(!(legend.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-legend-names"));
   }
 });

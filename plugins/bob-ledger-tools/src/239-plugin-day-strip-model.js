@@ -138,13 +138,30 @@ function dayStripBuildFact(metric, report, day, dateWords) {
   };
 }
 
+// Strip-specific legend labels. Bob owns every label; the plugin only
+// chooses among them. Never touches statsPanelHomeLabel, which the Stats
+// dash shares.
+function dayStripLegendLabel(report, dimension, row) {
+  try {
+    const catalog = typeof statsPanelHomeCatalog === "function" ? statsPanelHomeCatalog(report) : {};
+    const entry = catalog && row && typeof catalog[row.key] === "object" ? catalog[row.key] : {};
+    const short = entry && typeof entry.short_label === "string" ? entry.short_label : "";
+    if (short) return short;
+    if (dimension === "root_parent" && entry && typeof entry.label === "string" && entry.label) {
+      return entry.label;
+    }
+  } catch (error) {
+    // Fall through to the row label.
+  }
+  return row && typeof row.label === "string" && row.label ? row.label : (row ? row.key : "");
+}
+
 function dayStripMix(report, worked, day) {
   const emptyMix = (extra) => ({
     segments: [],
     legend: [],
     overflow: [],
-    overflowWide: { count: 0, title: "" },
-    overflowNarrow: { count: 0, title: "" },
+    overflowDefault: { count: 0, title: "" },
     empty: false,
     omitted: true,
     dimension: null,
@@ -189,26 +206,44 @@ function dayStripMix(report, worked, day) {
     hue: hueMap.get(row.key) || "gray",
     bucket: row.key.startsWith("@"),
   }));
-  // Top three by minutes; the legend keeps them in bar order.
+  // Rank 1 = most minutes; tie-break by label, as before.
   const byValue = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
-  const topThree = byValue.slice(0, 3);
-  const topTwo = byValue.slice(0, 2);
-  const topThreeKeys = new Set(topThree.map((segment) => segment.key));
-  const topTwoKeys = new Set(topTwo.map((segment) => segment.key));
   const rankOf = new Map(byValue.map((segment, index) => [segment.key, index + 1]));
-  const legend = segments
-    .filter((segment) => topThreeKeys.has(segment.key))
-    .map((segment) => ({ ...segment, rank: rankOf.get(segment.key) || 0 }));
-  const overflowList = segments.filter((segment) => !topThreeKeys.has(segment.key));
-  const narrowOverflowList = segments.filter((segment) => !topTwoKeys.has(segment.key));
+  // Legend names every segment in bar order; the fitter decides how many fit.
+  const initialLabels = new Map(
+    segments.map((segment) => {
+      const row = ordered.find((candidate) => candidate.key === segment.key) || segment;
+      return [segment.key, dayStripLegendLabel(report, dimension, row)];
+    }),
+  );
+  const labelCounts = new Map();
+  for (const label of initialLabels.values()) {
+    const folded = String(label).toLowerCase();
+    labelCounts.set(folded, (labelCounts.get(folded) || 0) + 1);
+  }
+  const legend = segments.map((segment) => {
+    const initial = initialLabels.get(segment.key) || segment.label;
+    const folded = String(initial).toLowerCase();
+    const collided = (labelCounts.get(folded) || 0) > 1;
+    return {
+      key: segment.key,
+      label: segment.label,
+      legendLabel: collided ? segment.label : initial,
+      display: segment.display,
+      value: segment.value,
+      hue: segment.hue,
+      bucket: segment.bucket,
+      rank: rankOf.get(segment.key) || 0,
+    };
+  });
+  const overflowList = segments.filter((segment) => (rankOf.get(segment.key) || 0) > 3);
   const overflowTitle = (list) => list.map((segment) => segment.label + " " + segment.display).join("\n");
   const sentence = dimension === "root_parent" ? "Time by root parent" : "Time by area";
   return {
     segments,
     legend,
     overflow: overflowList,
-    overflowWide: { count: Math.max(0, segments.length - 3), title: overflowTitle(overflowList) },
-    overflowNarrow: { count: Math.max(0, segments.length - 2), title: overflowTitle(narrowOverflowList) },
+    overflowDefault: { count: Math.max(0, segments.length - 3), title: overflowTitle(overflowList) },
     empty: Boolean(point && point.value === 0 && point.quality === "ok"),
     omitted: false,
     dimension,
@@ -261,16 +296,16 @@ function dayStripModel(report, day, context) {
     const safeReport = report && typeof report === "object" ? report : null;
     const dateWords = dayStripDateWords(day);
     if (!dateWords) {
-      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
+      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
     }
     const localToday = typeof safeContext.localToday === "string" ? safeContext.localToday : "";
     if (dayStripDateParts(localToday) && day > localToday) {
-      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
+      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
     }
     const error = dayStripErrorInfo(safeContext.error);
     if (!safeReport) {
       if (error) {
-        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
+        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
       }
       const facts = DAY_STRIP_METRIC_IDS.map((id) => ({
         id,
@@ -286,7 +321,7 @@ function dayStripModel(report, day, context) {
         value: null,
         provisional: false,
       }));
-      const mix = { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "root_parent", title: "Time by root parent" };
+      const mix = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "root_parent", title: "Time by root parent" };
       return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
     }
 
@@ -335,7 +370,7 @@ function dayStripModel(report, day, context) {
       asOf: "",
       metaText: "",
       facts: [],
-      mix: { segments: [], legend: [], overflow: [], overflowWide: { count: 0, title: "" }, overflowNarrow: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" },
+      mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" },
       ariaLabel: "Day stats unavailable — bob stats failed.",
       stale: false,
       error: { code: "model-error", title: "bob stats failed", hint: "" },

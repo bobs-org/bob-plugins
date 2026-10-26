@@ -4319,28 +4319,29 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
 .bob-day-strip-legend-item {
   display: inline-flex;
   align-items: center;
-  min-width: 0;
+  flex: none;
   gap: 0.3em;
   white-space: nowrap;
+}
+
+/* Skeleton placeholders are invisible; they may shrink so the hidden
+   three-item row never overlaps the meta before the first real fit. */
+.bob-day-strip-state-skeleton .bob-day-strip-legend-item {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .bob-day-strip-legend-label {
   white-space: nowrap;
 }
 
-/* Narrow strips show two legend labels plus the narrow counter; the
-   rank-3 item and the wide counter hide. Labels never ellipsize. */
-.bob-day-strip-overflow-narrow { display: none; }
-@container (max-width: 30em) {
-  .bob-day-strip-legend-rank-3 { display: none; }
-  .bob-day-strip-overflow-wide { display: none; }
-  .bob-day-strip-overflow-narrow { display: inline; }
-}
-
 .bob-day-strip-legend-value {
   color: var(--text-normal);
   font-variant-numeric: tabular-nums;
 }
+
+/* Names-only mode: hiding values lets more roots name themselves. */
+.bob-day-strip-legend-names .bob-day-strip-legend-value { display: none; }
 
 .bob-day-strip-legend-dot {
   flex: none;

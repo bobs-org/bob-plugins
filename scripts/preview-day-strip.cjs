@@ -241,11 +241,28 @@ function checkMeasurement(item, context) {
   }
   // (k) no legend label is truncated.
   if (item.legendTruncation > 0.5) failures.push(`legend label truncates by ${item.legendTruncation}px`);
-  // (l) narrow cells show at most two legend labels with a true counter.
-  if (context.width === 410 && typeof item.segments === "number" && item.segments > 0 && item.state !== "skeleton") {
-    if (item.visibleLegend > 2) failures.push(`narrow strip shows ${item.visibleLegend} legend labels (max 2)`);
+  // (l) fitted legend: at every width the visible counter equals segments
+  // minus visible items; screenshotDay fits four roots at 540/700 and at
+  // least three at 410. Clipping is covered by (a)(b)(k).
+  if (typeof item.segments === "number" && item.segments > 0 && item.state !== "skeleton" && !item.mixOmitted) {
     if (item.segments > item.visibleLegend && item.visibleCounter !== item.segments - item.visibleLegend) {
-      failures.push(`narrow counter is +${item.visibleCounter} for ${item.segments} segments and ${item.visibleLegend} labels`);
+      failures.push(`counter is +${item.visibleCounter} for ${item.segments} segments and ${item.visibleLegend} labels`);
+    }
+    if (item.segments === item.visibleLegend && item.visibleCounter !== null && item.visibleCounter !== undefined) {
+      failures.push(`counter shows +${item.visibleCounter} with every root visible`);
+    }
+  }
+  if (item.state === "screenshot-day" && !item.mixOmitted) {
+    if (context.width === 540 || context.width === 700) {
+      if (item.visibleLegend !== 4 || item.segments !== 4) {
+        failures.push(`screenshotDay shows ${item.visibleLegend} of ${item.segments} roots at ${context.width}px (want 4)`);
+      }
+      if (item.visibleCounter !== null && item.visibleCounter !== undefined) {
+        failures.push(`screenshotDay shows +${item.visibleCounter} at ${context.width}px (want no counter)`);
+      }
+    }
+    if (context.width === 410 && item.visibleLegend < 3) {
+      failures.push(`screenshotDay shows ${item.visibleLegend} roots at 410px (want at least 3)`);
     }
   }
   // (m) distinct hues: ready cells with <=8 non-gray segments carry pairwise
@@ -327,9 +344,9 @@ function matrixMarkdown(matrix, browser, revision, interactionChecks) {
     "- Source: production `main.js`, `styles.css`, and synthetic presentation fixtures; no fixture is captured vault data.",
     "- Each strip renders above mock plan badges (TODAY / PENDING / NEXT / READY plus a ★ theme line) inside a Live Preview code-block container, with a bare `## Pomodoros` heading below; one extra Reading-view cell renders today.",
     "- An Obsidian baseline stylesheet (30 px inline-flex buttons, link colours, rendered line-height) loads before the production CSS, so a `<button>` regression fails the matrix.",
-    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 17 states plus Reading view.",
+    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 18 states plus Reading view.",
     "- Height budgets (16 px base): ≤84 px when the facts fit on one row, ≤136 px when they fold to two rows. The long-labels case is relaxed: geometry is enforced, height is reported.",
-    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) the bar spans the strip's content width (±1 px) and is its last line box; (k) no legend label is truncated; (l) narrow cells show at most 2 legend items and the visible counter equals segments minus visible items; (m) ready cells with ≤8 non-gray segments carry pairwise distinct bar hues and matching legend dots; (n) ready and stale values render at least 2× their heads; (o) every fact aria-label ends with its value text and no value holds a warning; (p) folded rows start without a hairline at 410 px while wider rows draw every hairline; (q) the no-Pomodoros bar shows its track colour.",
+    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) the bar spans the strip's content width (±1 px) and is its last line box; (k) no legend label is truncated; (l) at every width every visible legend item lies inside the legend box and the visible counter equals segments minus visible items, with screenshotDay showing all four roots at 540 and 700 px and at least three at 410 px; (m) ready cells with ≤8 non-gray segments carry pairwise distinct bar hues and matching legend dots; (n) ready and stale values render at least 2× their heads; (o) every fact aria-label ends with its value text and no value holds a warning; (p) folded rows start without a hairline at 410 px while wider rows draw every hairline; (q) the no-Pomodoros bar shows its track colour.",
     "",
     "| Width | Theme | State | Strip height | Budget | Fact rows | Overflow | Facts overlap | Lines overlap | Legend overlap | Value baseline spread | Skeleton delta | Button | Result | Screenshot |",
     "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
@@ -339,7 +356,7 @@ function matrixMarkdown(matrix, browser, revision, interactionChecks) {
     "",
     ...interactionChecks.map((item) => `- ${item.width}px ${item.theme}: ${item.label} — ${item.result}${item.detail ? ` (${item.detail})` : ""}`),
     "",
-    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-area roots get distinct hues, seven roots with `+N`, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), closed-out past day · met, forced hover, forced `:focus-visible`, and a Reading-view today cell.",
+    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-area roots get distinct hues, seven roots with `+N`, four roots that fit at 540 and 700 px, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), closed-out past day · met, forced hover, forced `:focus-visible`, and a Reading-view today cell.",
     "",
   ].join("\n");
 }

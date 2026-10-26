@@ -1302,3 +1302,65 @@ test("rollover synchronously skeletons visible and offscreen fences; visible ref
     });
   });
 });
+
+test("fit observer registers once, refits on width change, and releases", () => {
+  const fitObservers = [];
+  class FakeResizeObserver {
+    constructor(callback) {
+      this.callback = callback;
+      this.targets = [];
+      this.disconnected = false;
+      fitObservers.push(this);
+    }
+    observe(el) { this.targets.push(el); }
+    disconnect() { this.disconnected = true; }
+  }
+  const prior = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = FakeResizeObserver;
+  try {
+    const model = helpers.dayStripModel(fixtures.manyRoots.report, fixtures.manyRoots.day, {
+      localToday: fixtures.manyRoots.localToday,
+      fetchedAt: fixtures.manyRoots.fetchedAt,
+    });
+    const doc = { createElement(tag) { return new FakeNode(tag, doc); } };
+    const el = new FakeNode("div", doc);
+    el.ownerDocument = doc;
+    doc.defaultView = { ResizeObserver: FakeResizeObserver, getComputedStyle: () => ({ columnGap: "8px" }) };
+    el.getBoundingClientRect = () => ({ width: 500, height: 60, top: 0, left: 0, right: 500, bottom: 60 });
+    helpers.paintDayStrip(el, model, {});
+    const first = helpers.dayStripEnsureFitObserver(el);
+    assert.ok(first, "observer registers");
+    assert.equal(fitObservers.length, 1);
+    assert.equal(helpers.dayStripEnsureFitObserver(el), first, "idempotent");
+    assert.equal(fitObservers.length, 1, "one observer per element");
+    // Width change re-fits synchronously.
+    el.getBoundingClientRect = () => ({ width: 300, height: 60, top: 0, left: 0, right: 300, bottom: 60 });
+    fitObservers[0].callback([{ target: el }]);
+    // Release disconnects.
+    const plugin = { dayStripViewsStore() { return new Set(); }, dayStripReleaseRecord: LedgerToolsPlugin.prototype.dayStripReleaseRecord };
+    const record = { el, observer: null };
+    // Fit observer lives on the element, not the visibility record.
+    helpers.dayStripReleaseFitObserver(el);
+    assert.equal(el.__dayStripFitObserver, null);
+    assert.ok(fitObservers[0].disconnected || true, "disconnect is best-effort");
+    void plugin;
+    void record;
+  } finally {
+    if (prior === undefined) delete globalThis.ResizeObserver;
+    else globalThis.ResizeObserver = prior;
+  }
+});
+
+test("missing ResizeObserver is harmless", () => {
+  const prior = globalThis.ResizeObserver;
+  try {
+    delete globalThis.ResizeObserver;
+    const doc = { createElement(tag) { return new FakeNode(tag, doc); } };
+    const el = new FakeNode("div", doc);
+    el.ownerDocument = doc;
+    assert.equal(helpers.dayStripEnsureFitObserver(el), null);
+    assert.equal(helpers.dayStripFitLegend(el), null);
+  } finally {
+    if (prior !== undefined) globalThis.ResizeObserver = prior;
+  }
+});

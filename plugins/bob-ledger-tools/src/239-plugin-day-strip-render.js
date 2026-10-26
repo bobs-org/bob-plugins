@@ -126,34 +126,42 @@ function dayStripRenderFact(doc, fact, model, handlers) {
 
 function dayStripLegendItem(doc, entry) {
   const rank = entry && typeof entry.rank === "number" ? entry.rank : 0;
+  const key = entry && typeof entry.key === "string" ? entry.key : "";
+  const text = entry
+    ? (typeof entry.legendLabel === "string" && entry.legendLabel ? entry.legendLabel : entry.label)
+    : "";
   const item = statsEl(doc, "span", {
-    class: "bob-day-strip-legend-item" + (rank === 3 ? " bob-day-strip-legend-rank-3" : ""),
+    class: "bob-day-strip-legend-item",
     title: entry ? entry.label + " " + entry.display : null,
   });
+  if (item) {
+    if (rank) item.setAttribute("data-rank", String(rank));
+    if (key) item.setAttribute("data-key", key);
+  }
   const dot = statsEl(doc, "span", {
     class: "bob-day-strip-legend-dot" + (entry ? " bob-day-strip-hue-" + entry.hue : ""),
     "aria-hidden": "true",
   });
   dayStripAppend(item, dot);
-  dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-label" }, entry ? entry.label : ""));
+  dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-label" }, text || ""));
   dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-value" }, entry ? entry.display : ""));
   if (!entry) item.setAttribute("hidden", "true");
   return item;
 }
 
-function dayStripOverflowCounter(doc, className, info, skeleton) {
+function dayStripOverflowCounter(doc, info, skeleton) {
   const count = info && typeof info.count === "number" ? info.count : 0;
   const node = statsEl(doc, "span", {
-    class: "bob-day-strip-overflow " + className,
+    class: "bob-day-strip-overflow",
     title: info && info.title ? info.title : null,
   }, count > 0 && !skeleton ? "+" + count : "+N");
   if (!count || skeleton) node.setAttribute("hidden", "true");
   return node;
 }
 
-// The legend link: up to three root entries in bar order plus both
-// overflow counters (the container query picks the visible one).
-// Fixed slots keep the skeleton and the loaded strip identical.
+// The legend link: one item per root in bar order plus one overflow
+// counter. The static pre-fit state shows ranks 1-3 so a host that
+// cannot measure keeps today's look; the fitter refines it.
 function dayStripRenderMix(doc, model, handlers) {
   const mix = model.mix || { segments: [], legend: [], overflow: [], omitted: true };
   const skeleton = model.state === "skeleton";
@@ -161,18 +169,21 @@ function dayStripRenderMix(doc, model, handlers) {
   const node = dayStripLink(doc, "bob-day-strip-mix", sentence, mix.title);
   const legend = statsEl(doc, "span", { class: "bob-day-strip-legend" });
   const entries = skeleton
-    ? [{ label: "Area", display: "0m", rank: 1 }, { label: "Area", display: "0m", rank: 2 }, { label: "Area", display: "0m", rank: 3 }]
+    ? [{ label: "Area", legendLabel: "Area", display: "0m", rank: 1 }, { label: "Area", legendLabel: "Area", display: "0m", rank: 2 }, { label: "Area", legendLabel: "Area", display: "0m", rank: 3 }]
     : Array.isArray(mix.legend) ? mix.legend : [];
-  for (let index = 0; index < 3; index += 1) {
-    dayStripAppend(legend, dayStripLegendItem(doc, skeleton ? entries[index] : entries[index] || null));
+  for (const entry of entries) {
+    const item = dayStripLegendItem(doc, entry);
+    if (!skeleton && entry && typeof entry.rank === "number" && entry.rank > 3) {
+      item.setAttribute("hidden", "true");
+    }
+    dayStripAppend(legend, item);
   }
   const noPomodoros = statsEl(doc, "span", { class: "bob-day-strip-no-pomodoros" }, "no Pomodoros");
   if (!mix.empty && !skeleton) noPomodoros.setAttribute("hidden", "true");
   dayStripAppend(legend, noPomodoros);
-  const wide = mix.overflowWide || { count: Array.isArray(mix.overflow) ? mix.overflow.length : 0, title: "" };
-  const narrowInfo = mix.overflowNarrow || { count: 0, title: "" };
-  dayStripAppend(legend, dayStripOverflowCounter(doc, "bob-day-strip-overflow-wide", wide, skeleton));
-  dayStripAppend(legend, dayStripOverflowCounter(doc, "bob-day-strip-overflow-narrow", narrowInfo, skeleton));
+  const overflowInfo = mix.overflowDefault
+    || { count: Math.max(0, entries.length - 3), title: "" };
+  dayStripAppend(legend, dayStripOverflowCounter(doc, overflowInfo, skeleton));
   dayStripAppend(node, legend);
   dayStripActivate(node, (newLeaf) => {
     if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel: "homes", newLeaf });
@@ -284,6 +295,27 @@ function paintDayStrip(el, model, handlers) {
     if (showMix) {
       const bar = dayStripRenderBar(doc, safeModel, safeHandlers);
       if (bar) dayStripAppend(el, bar);
+    }
+    if ((state === "ready" || state === "skeleton") && showMix && safeModel.mix && !safeModel.mix.omitted) {
+      try {
+        if (typeof dayStripFitLegend === "function") dayStripFitLegend(el);
+      } catch (error) {
+        // Fit is best-effort.
+      }
+      if (state === "skeleton") {
+        try {
+          const legend = el.querySelector ? el.querySelector(".bob-day-strip-legend") : null;
+          const counter = legend && legend.querySelector ? legend.querySelector(".bob-day-strip-overflow") : null;
+          if (counter && counter.setAttribute) counter.setAttribute("hidden", "true");
+        } catch (error) {
+          // Skeleton never shows its counter.
+        }
+      }
+      try {
+        if (typeof dayStripEnsureFitObserver === "function") dayStripEnsureFitObserver(el);
+      } catch (error) {
+        // Observer is best-effort.
+      }
     }
     return el;
   } catch (error) {

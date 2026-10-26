@@ -803,6 +803,13 @@ class BobLedgerToolsDayStripMixin {
       } catch (error) {
         // Observer cleanup is best-effort.
       }
+      try {
+        if (record && record.el && typeof dayStripReleaseFitObserver === "function") {
+          dayStripReleaseFitObserver(record.el);
+        }
+      } catch (error) {
+        // Fit observer cleanup is best-effort.
+      }
       if (record) {
         record.observer = null;
       }

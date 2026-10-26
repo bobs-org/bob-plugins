@@ -77,7 +77,8 @@ nnoremap g: :
 
 Insert-mode `:` remains text, visual-mode `:` remains native, and `g:` opens
 Vim's native ex line even if the plugin is disabled. The plugin warns if a
-recursive map replays `:`.
+recursive map replays `:`. If `:` does nothing, run `bob plugins sync` on that
+host, confirm `bob plugins list` shows it enabled, then reload Obsidian.
 
 ## Feedback
 

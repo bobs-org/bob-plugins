@@ -20,6 +20,7 @@ function runnerWith(extraEnv = {}, overrides = {}) {
     PATH: "/usr/bin:/bin",
     ...extraEnv,
   };
+  if (!Object.hasOwn(extraEnv, "NO_COLOR")) delete base.runner.deps.env.NO_COLOR;
   base.runner.deps.resolveBob = () => ({ path: FAKE_BOB, source: "candidate", tried: [FAKE_BOB] });
   return base;
 }

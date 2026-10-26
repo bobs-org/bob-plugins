@@ -176,7 +176,7 @@ class BobLedgerToolsDayStripFenceMixin {
       } catch (error) {
         leaf = null;
       }
-      if (leaf && workspace) {
+      if (leaf && workspace && opts.newLeaf !== true) {
         try {
           if (typeof workspace.revealLeaf === "function") {
             await workspace.revealLeaf(leaf);

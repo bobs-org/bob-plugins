@@ -1012,6 +1012,52 @@ test("openStatsForDay pins the day, focuses the metric, and opens a new tab", as
   });
 });
 
+test("openStatsForDay opens a new tab when Stats is already open", async () => {
+  await withMissingConfig(async () => {
+    const opened = [];
+    const revealed = [];
+    const existingLeaf = {
+      view: {},
+      getViewState: () => ({
+        type: "markdown",
+        state: { file: "dash_stats.md" },
+      }),
+    };
+    const app = makeApp();
+    app.workspace.iterateAllLeaves = (visit) => visit(existingLeaf);
+    app.workspace.revealLeaf = async (leaf) => revealed.push(leaf);
+    app.workspace.setActiveLeaf = async () => {};
+    app.workspace.openLinkText = async (target, source, newLeaf) => {
+      opened.push([target, source, newLeaf]);
+    };
+    app.metadataCache.getFirstLinkpathDest = () => ({ path: "dash_stats.md" });
+    const plugin = await makePlugin(app);
+    try {
+      const today = plugin.dayStripLocalNow();
+      const day = shiftDay(today, -4);
+      const ok = await plugin.openStatsForDay({
+        day,
+        metric: "worked",
+        sourcePath: "2026/20261024.md",
+        newLeaf: true,
+      });
+      assert.equal(ok, true);
+      assert.deepEqual(revealed, [], "the existing leaf is not revealed");
+      assert.deepEqual(opened, [
+        ["dash_stats", "2026/20261024.md", true],
+      ]);
+      const state = plugin.statsViewStateFor("dash_stats.md");
+      assert.equal(state.pinnedDay, day);
+      assert.equal(state.pinnedBucket, null);
+      assert.equal(state.focus, "worked");
+      assert.equal(state.range, `${shiftDay(day, -27)}..${day}`);
+      assert.equal(state.offset, 0);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
 test("openStatsForDay keeps the page window when it already shows D", async () => {
   await withMissingConfig(async () => {
     const revealed = [];

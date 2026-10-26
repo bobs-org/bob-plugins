@@ -418,7 +418,7 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
 
     // Batch Depends-On write through the pure planner: snapshots resolve
     // read-only here, then one gesture commits the line, the field,
-    // same-note target ids, status effects, and legacy folding in one
+    // same-note target ids and status effects in one
     // editor transaction (one Ctrl+Z), with `[fresh:: today]` stamped last.
     const originalContent = String(this.editor.getValue() || "");
     const filePath = normalizeVaultRelativePath(this.filePath || "");

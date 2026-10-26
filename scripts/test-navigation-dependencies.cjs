@@ -509,8 +509,8 @@ test("DW17 field placement follows fresh and precedes the block id", () => {
   );
 });
 
-// DW18: legacy children fold into the line in the same write.
-test("DW18 legacy children fold into the line", () => {
+// Child links outside the managed line are ordinary task content.
+test("dependency edits leave child links outside the managed line alone", () => {
   const content = [
     "- [ ] #task Parent [dependsOn:: Tasks__a, Tasks__b, Tasks__c] ^parent",
     "  - ⛓️ **DEPENDS ON:** [[#^a]]",
@@ -522,9 +522,11 @@ test("DW18 legacy children fold into the line", () => {
   ].join("\n");
   const plan = planSingle(content, 0, "Tasks.md", [], []);
   assert.equal(plan.ok, true);
-  assert.deepEqual(plan.nextContent.split("\n").slice(0, 2), [
-    "- [ ] #task Parent [dependsOn:: Tasks__a, Tasks__b, Tasks__c] ^parent",
-    "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]] • [[#^c]]",
+  assert.deepEqual(plan.nextContent.split("\n").slice(0, 4), [
+    "- [ ] #task Parent [dependsOn:: Tasks__a] ^parent",
+    "  - ⛓️ **DEPENDS ON:** [[#^a]]",
+    "  - ![[#^b]]",
+    "  - ~~[[#^c]]~~",
   ]);
 });
 
@@ -697,36 +699,14 @@ test("a failed preparation leaves the dependent untouched", async () => {
   assert.equal(committed, 0);
 });
 
-// Recovery edges: line links plus covered legacy children, never `#^ref`.
-test("recovery references follow the line plus covered legacy children", () => {
-  const targetNote = "- [ ] #task A [id:: Tasks__a] ^a";
-  const noteIndex = helpers.createScheduledRecoveryNoteIndex([
-    { path: "Tasks.md", content: targetNote },
-  ]);
-  const blocks = new Map([
-    ["Tasks.md\0a", [{ taskId: "Tasks__a" }]],
-  ]);
-  const covered = helpers.recoveryDependencyReferences(
-    "  - ![[#^a]]",
-    ["Tasks__a"],
-    blocks,
-    { noteIndex, sourcePath: "Tasks.md" },
-  );
-  assert.equal(covered.length, 1);
+// Recovery edges come only from managed Depends-On lines.
+test("recovery references ignore child links outside the managed line", () => {
   assert.deepEqual(
-    helpers.recoveryDependencyReferences(
-      "  - ![[#^a]]",
-      ["something-else"],
-      blocks,
-      { noteIndex, sourcePath: "Tasks.md" },
-    ),
+    helpers.recoveryDependencyReferences("  - ![[#^a]]"),
     [],
   );
   const line = helpers.recoveryDependencyReferences(
     "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[cash#^b]]",
-    [],
-    new Map(),
-    {},
   );
   assert.deepEqual(
     line.map((ref) => `${ref.target}#^${ref.blockId}`),
@@ -735,18 +715,12 @@ test("recovery references follow the line plus covered legacy children", () => {
   assert.deepEqual(
     helpers.recoveryDependencyReferences(
       "  - ![[ref/chat/example#^ref]]",
-      [],
-      new Map(),
-      {},
     ),
     [],
   );
   assert.deepEqual(
     helpers.recoveryDependencyReferences(
       "  - ⛓️ **DEPENDS ON:** [[#^a]] needs review",
-      [],
-      new Map(),
-      {},
     ),
     [],
   );

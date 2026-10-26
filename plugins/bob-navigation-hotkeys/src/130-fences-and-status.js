@@ -479,13 +479,8 @@ function resolveScheduledRecoveryNote(index, sourcePath, target) {
   return index.basenames.get(recoveryMarkdownBasename(exact).toLowerCase()) || null;
 }
 
-// Promotion references on one child line (`docs/task-dependencies.md` §5):
-// every Depends-On line link, plus an R8 legacy child only while the
-// dependent's field manages its target id. Anything else — a `#^ref`
-// reading embed, prose, a malformed line — yields nothing. `context` carries
-// the dependent's `dependsOn` field, its note path, the note index, and the
-// recovery block map for the R8 gate.
-function recoveryDependencyReferences(lineText, dependsOn, blocks, context = {}) {
+// Promotion references come only from the managed Depends-On line.
+function recoveryDependencyReferences(lineText) {
   const text = String(lineText || "");
   const parsed = parseDependencyLine(text, { isDirectChildOfTask: true });
   if (parsed && parsed.verdict === "accept") {
@@ -495,74 +490,7 @@ function recoveryDependencyReferences(lineText, dependsOn, blocks, context = {})
       ),
     );
   }
-  const legacy = parseDependencyLegacyChildDetails(text);
-  if (!legacy) {
-    return Object.freeze([]);
-  }
-  // The Rust reader takes no aliases on legacy children; an aliased sole
-  // link is content until a writer canonicalises it onto the line.
-  if (/\|[^]\n]*\]\]/.test(text)) {
-    return Object.freeze([]);
-  }
-  if (
-    !recoveryLegacyChildCovered(legacy, dependsOn || [], context, blocks)
-  ) {
-    return Object.freeze([]);
-  }
-  return Object.freeze([
-    Object.freeze({ target: legacy.note, blockId: legacy.blockId }),
-  ]);
-}
-
-// R8 field gate for recovery: the legacy child's resolved target id (its
-// `[id::]`, canonical id, or same-note bare block id) is in the dependent's
-// field. Unresolvable targets are content here, never edges: unlike line
-// links they must not poison `rankSafe`.
-function recoveryLegacyChildCovered(legacy, dependsOn, context, blocks) {
-  if (!Array.isArray(dependsOn) || dependsOn.length === 0) {
-    return false;
-  }
-  const field = new Set(dependsOn);
-  const sourcePath =
-    context && context.sourcePath
-      ? normalizeVaultRelativePath(context.sourcePath)
-      : "";
-  let targetPath = null;
-  if (!legacy.note && sourcePath) {
-    targetPath = sourcePath;
-  } else if (context && context.noteIndex) {
-    targetPath = resolveScheduledRecoveryNote(
-      context.noteIndex,
-      sourcePath,
-      legacy.note,
-    );
-  }
-  if (!targetPath) {
-    return false;
-  }
-  const candidates = new Set();
-  if (blocks instanceof Map) {
-    for (const task of blocks.get(
-      recoveryIdentity(targetPath, legacy.blockId),
-    ) || []) {
-      if (task && task.taskId) {
-        candidates.add(task.taskId);
-      }
-    }
-  }
-  const canonical = tryDependencyId(targetPath, legacy.blockId);
-  if (canonical) {
-    candidates.add(canonical);
-  }
-  if (!legacy.note) {
-    candidates.add(legacy.blockId);
-  }
-  for (const candidate of candidates) {
-    if (field.has(candidate)) {
-      return true;
-    }
-  }
-  return false;
+  return Object.freeze([]);
 }
 
 // Archived (`done/`) link targets are resolved, closed prerequisites: never
@@ -815,16 +743,9 @@ function buildScheduledRecoveryIndex(
         if (findNearestParentListItem(model.lines, line) !== task.line) {
           continue;
         }
-        // Promotion edges (`docs/task-dependencies.md` §5): the Depends-On
-        // line links plus R8 legacy children, the same as Rust. `#^ref`
-        // reading embeds and other unmanaged sole embeds are content, never
-        // edges.
-        for (const reference of recoveryDependencyReferences(
-          lineText,
-          task.dependsOn || [],
-          blocks,
-          { noteIndex, sourcePath: path },
-        )) {
+        // Promotion edges (`docs/task-dependencies.md` §5) come only from
+        // the Depends-On line; other child links are content.
+        for (const reference of recoveryDependencyReferences(lineText)) {
           if (isArchivedRecoveryTarget(reference.target)) {
             continue;
           }

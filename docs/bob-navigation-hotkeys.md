@@ -190,9 +190,9 @@ dependent's live links from today's open Pomodoros together with any emptied
 entry. Cleanup deletes an open Pomodoro entry it empties, while entries with
 prose children and untouched placeholders remain. Removing the last open
 prerequisite recovers the dependent immediately when it has no future
-`scheduled` date. `Ctrl+D` on the Depends-On row deletes that line, the
-`[dependsOn::]` field, and legacy dependency children in one writer
-transaction, with immediate recovery. Hand edits are mirrored once the cursor
+`scheduled` date. `Ctrl+D` on the Depends-On row deletes that line and the
+`[dependsOn::]` field in one writer transaction, leaving other child content
+untouched, with immediate recovery. Hand edits are mirrored once the cursor
 leaves the edited line; malformed lines are left alone. BLOCKED stage rows
 show `🔒 waits on N` for one or more open prerequisites, otherwise
 `🔒 scheduled YYYY-MM-DD` when a date blocks the task, otherwise `🔒 blocked`.

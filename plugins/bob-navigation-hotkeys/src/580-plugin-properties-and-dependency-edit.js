@@ -334,7 +334,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
   // Plans with `planDependencyEdit`, prepares cross-note targets first (an
   // unused target id is acceptable, a link to an unprepared target is not),
   // then commits the dependent's note in one editor transaction: the line,
-  // the field, same-note target ids, status effects, legacy folding, and
+  // the field, same-note target ids, and status effects, plus
   // `[fresh:: today]`. `args.editor` + `args.filePath` select the live same-
   // note flow; `args.content` + `args.files` drive the pure/test flow.
   // `args.stamper` overrides the freshness stamper (tests inject one).

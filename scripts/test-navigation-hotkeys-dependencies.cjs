@@ -542,7 +542,7 @@ test("transclusion toggles refuse generated BLOCKS lines with their notice", asy
   assert.equal(notices.length, 0);
 });
 
-test("legacy sole-link children toggle purely, without field or status writes", async () => {
+test("task child links toggle as transclusions without dependency writes", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const lines = [
     "- [/] #task Parent ^parent",
@@ -571,7 +571,7 @@ test("legacy sole-link children toggle purely, without field or status writes", 
   assert.equal(editor.getLine(2), "- [ ] #task Child ^child");
 });
 
-test("Ctrl+D on the Depends on row clears the line, field, and legacy children", async () => {
+test("Ctrl+D on the Depends on row leaves unrelated child links as content", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const editor = new TransactionEditor(
     [
@@ -599,7 +599,7 @@ test("Ctrl+D on the Depends on row clears the line, field, and legacy children",
   assert.equal(result.deleted, true);
   assert.match(editor.getValue(), /- \[ \] #task P \^p$/m);
   assert.doesNotMatch(editor.getValue(), /DEPENDS ON|dependsOn/);
-  assert.doesNotMatch(editor.getValue(), /\[\[#\^a\]\]/);
+  assert.match(editor.getValue(), /  - !\[\[#\^a\]\]/);
   assert.match(notices.at(-1), /No longer waits on/);
 });
 
@@ -829,7 +829,7 @@ test("hand-edit mirror leaves malformed lines alone", async () => {
   assert.equal(editor.getValue(), content);
 });
 
-test("hand-edit mirror leaves legacy-only children for the hooks", async () => {
+test("hand-edit mirror ignores child links outside the managed line", async () => {
   const content = [
     "- [ ] #task P [dependsOn:: Here__a] ^p",
     "  - ![[#^a]]",

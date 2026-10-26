@@ -757,26 +757,6 @@ function formatDependencyNavigationBullet(target, indent) {
   return formatDependencyNavigationBulletWithMarker(target, indent, "-");
 }
 
-function parseDependencyTransclusionBulletDetails(line) {
-  const match = DEPENDENCY_TRANSCLUSION_BULLET_RE.exec(String(line || ""));
-  if (!match) {
-    return null;
-  }
-  const { indent, marker, strike, embed, note, blockId } = match.groups;
-  if (strike && embed) {
-    return null;
-  }
-  return Object.freeze({
-    indent,
-    marker,
-    note: String(note || "").trim(),
-    blockId,
-    blockIds: Object.freeze([blockId]),
-    transcluded: Boolean(embed),
-    terminal: Boolean(strike),
-  });
-}
-
 function extractDependencyNavigationBlockIds(linkSpan) {
   return extractDependencyLineLinks(linkSpan).map((link) => link.blockId);
 }
@@ -815,9 +795,7 @@ function isDependencyLineLinkRemainderClean(linkSpan) {
 }
 
 function getDependencyNavigationBlockIds(line) {
-  const details =
-    parseDependencyNavigationBulletDetails(line) ||
-    parseDependencyTransclusionBulletDetails(line);
+  const details = parseDependencyNavigationBulletDetails(line);
   return details ? details.blockIds.slice() : [];
 }
 
@@ -825,9 +803,7 @@ function getDependencyNavigationBlockIds(line) {
 // bullet (current or legacy label), otherwise null. Kept for narrow legacy
 // callers; new code should use getDependencyNavigationBlockIds.
 function parseDependencyNavigationBullet(line) {
-  const details =
-    parseDependencyNavigationBulletDetails(line) ||
-    parseDependencyTransclusionBulletDetails(line);
+  const details = parseDependencyNavigationBulletDetails(line);
   return details && details.blockIds.length > 0 ? details.blockIds[0] : null;
 }
 
@@ -937,33 +913,8 @@ function isDependencyLineWriterSeparators(linkSpan) {
 }
 
 // Rewrite a managed dependency navigation bullet to the current label while
-// preserving its existing indentation and list marker, so a legacy bullet can be
+// preserving its existing indentation and list marker, so an older line can be
 // normalized in place without disturbing tab-indented or non-dash markers.
-function getTaskIdentityByBlockId(content, lineContexts = null, sourceLines = null) {
-  const identities = new Map();
-  const text = String(content || "");
-  const lines = sourceLines || text.split(/\r?\n/);
-  const contexts = lineContexts || getMarkdownLineContextsForLines(lines);
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    if (!isObsidianTaskAtLine(text, lineIndex, contexts, lines)) {
-      continue;
-    }
-    const line = lines[lineIndex];
-    const blockId = getTrailingBlockId(line);
-    if (!blockId) {
-      continue;
-    }
-    const idField = findBulletPropertyField(line, "id");
-    identities.set(
-      blockId,
-      idField
-        ? normalizeBulletPropertyValue(idField.value) || blockId
-        : blockId,
-    );
-  }
-  return identities;
-}
-
 // Capture the index range of the current bullet's child block: every later line
 // that is blank or indented deeper than the parent, stopping at the first
 // nonblank line indented at or shallower than the parent (or EOF). Trailing

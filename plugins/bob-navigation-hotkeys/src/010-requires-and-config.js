@@ -268,8 +268,7 @@ const PROJECT_HIDE_TAG = "#hide";
 // in addition order on one first-child line. Readers tolerate the legacy `🔗`
 // emoji, a missing emoji, the `DEPENDENCIES` label, `·` / `,` / whitespace
 // separators, and aliased / struck / `!`-embedded links; writers canonicalise
-// all of them. Sole block-link children (plain, `![[…]]`, `~~[[…]]~~`) are
-// the R8 legacy form and are read, never written.
+// all of them. Links outside this managed line remain ordinary task content.
 const DEPENDENCY_NAVIGATION_LABEL = "DEPENDS ON";
 const DEPENDENCY_NAVIGATION_EMOJI = "⛓️";
 const DEPENDENCY_NAVIGATION_SEPARATOR = " • ";
@@ -308,8 +307,6 @@ const DEPENDENCY_NAVIGATION_LINK_RE =
 // token and are stripped separately by the remainder check).
 const DEPENDENCY_LINE_LINK_TOKEN_RE =
   /!?\[\[[^\]|#\n]*?#\^[A-Za-z0-9-]+(?:\|[^\]\n]*)?\]\]/g;
-const DEPENDENCY_TRANSCLUSION_BULLET_RE =
-  /^(?<indent>\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?<strike>~~)?(?<embed>!)?\[\[(?<note>[^\]|#]*?)#\^(?<blockId>[A-Za-z0-9-]+)(?:\|[^\]\n]*)?\]\]\k<strike>[ \t]*$/;
 // Managed Schedule Log / Work Log parent-marker grammar. Mirrors bob-cli's
 // parse_managed_task_log_marker() in src/native/capture.rs and must stay
 // byte-compatible with it; kept as an independent copy since plugins are

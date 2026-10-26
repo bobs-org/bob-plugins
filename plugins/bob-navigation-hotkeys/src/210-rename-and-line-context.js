@@ -365,45 +365,8 @@ function createDependencyNoteSnapshot(content) {
     lineEnding,
     contexts,
     entries: Object.freeze(entries),
-    identities: null,
     collections: new Map(),
   };
-}
-
-function getDependencySnapshotIdentities(snapshot) {
-  if (!snapshot) {
-    return new Map();
-  }
-  if (snapshot.identities) {
-    return snapshot.identities;
-  }
-  const identities = new Map();
-  for (const entry of snapshot.entries) {
-    if (!entry.isTask || !entry.blockId) {
-      continue;
-    }
-    identities.set(
-      entry.blockId,
-      entry.idField || entry.blockId,
-    );
-  }
-  snapshot.identities = identities;
-  return identities;
-}
-
-function dependencySnapshotKey(additionalManagedIds) {
-  if (!additionalManagedIds || additionalManagedIds.length === 0) {
-    return "";
-  }
-  try {
-    return JSON.stringify(
-      normalizeDependencyNavigationTargets(additionalManagedIds).map(
-        dependencyNavigationTargetKey,
-      ),
-    );
-  } catch (_error) {
-    return `count:${additionalManagedIds.length}`;
-  }
 }
 
 function vaultStageYield() {

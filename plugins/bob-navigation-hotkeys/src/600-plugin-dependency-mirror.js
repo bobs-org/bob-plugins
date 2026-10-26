@@ -66,8 +66,8 @@ class BobNavigationHotkeysDependencyMirrorMixin {
   }
 
   // Single-select Depends-On write through the pure planner: one gesture
-  // writes the line, the field, same-note target ids, status effects, and
-  // legacy folding in one editor transaction (one Ctrl+Z), with `[fresh::
+  // writes the line, the field, same-note target ids, and status effects in
+  // one editor transaction (one Ctrl+Z), with `[fresh::
   // today]` stamped last. `options.linkBlockId` is the target's `^block-id`
   // in this note; `options.filePath` overrides the active file.
   // `options.pendingTargetLine` (`{line, expected, text}`) folds a same-note
@@ -179,7 +179,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
   }
 
   // Ctrl+D on the Depends on row (`docs/task-dependencies.md` §7): delete the
-  // task's Depends-On line, its `[dependsOn::]` field, and any legacy children
+  // task's Depends-On line and its `[dependsOn::]` field
   // in one writer transaction, with ADJ-8 recovery. Clearing removes every
   // current target, so the line empties even when a link no longer resolves.
   async deleteDependencyLineAndField(cm, cursor, options = {}, validatedContext = null) {

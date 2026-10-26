@@ -270,8 +270,7 @@ const PROJECT_HIDE_TAG = "#hide";
 // in addition order on one first-child line. Readers tolerate the legacy `🔗`
 // emoji, a missing emoji, the `DEPENDENCIES` label, `·` / `,` / whitespace
 // separators, and aliased / struck / `!`-embedded links; writers canonicalise
-// all of them. Sole block-link children (plain, `![[…]]`, `~~[[…]]~~`) are
-// the R8 legacy form and are read, never written.
+// all of them. Links outside this managed line remain ordinary task content.
 const DEPENDENCY_NAVIGATION_LABEL = "DEPENDS ON";
 const DEPENDENCY_NAVIGATION_EMOJI = "⛓️";
 const DEPENDENCY_NAVIGATION_SEPARATOR = " • ";
@@ -310,8 +309,6 @@ const DEPENDENCY_NAVIGATION_LINK_RE =
 // token and are stripped separately by the remainder check).
 const DEPENDENCY_LINE_LINK_TOKEN_RE =
   /!?\[\[[^\]|#\n]*?#\^[A-Za-z0-9-]+(?:\|[^\]\n]*)?\]\]/g;
-const DEPENDENCY_TRANSCLUSION_BULLET_RE =
-  /^(?<indent>\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?<strike>~~)?(?<embed>!)?\[\[(?<note>[^\]|#]*?)#\^(?<blockId>[A-Za-z0-9-]+)(?:\|[^\]\n]*)?\]\]\k<strike>[ \t]*$/;
 // Managed Schedule Log / Work Log parent-marker grammar. Mirrors bob-cli's
 // parse_managed_task_log_marker() in src/native/capture.rs and must stay
 // byte-compatible with it; kept as an independent copy since plugins are
@@ -2136,26 +2133,6 @@ function formatDependencyNavigationBullet(target, indent) {
   return formatDependencyNavigationBulletWithMarker(target, indent, "-");
 }
 
-function parseDependencyTransclusionBulletDetails(line) {
-  const match = DEPENDENCY_TRANSCLUSION_BULLET_RE.exec(String(line || ""));
-  if (!match) {
-    return null;
-  }
-  const { indent, marker, strike, embed, note, blockId } = match.groups;
-  if (strike && embed) {
-    return null;
-  }
-  return Object.freeze({
-    indent,
-    marker,
-    note: String(note || "").trim(),
-    blockId,
-    blockIds: Object.freeze([blockId]),
-    transcluded: Boolean(embed),
-    terminal: Boolean(strike),
-  });
-}
-
 function extractDependencyNavigationBlockIds(linkSpan) {
   return extractDependencyLineLinks(linkSpan).map((link) => link.blockId);
 }
@@ -2194,9 +2171,7 @@ function isDependencyLineLinkRemainderClean(linkSpan) {
 }
 
 function getDependencyNavigationBlockIds(line) {
-  const details =
-    parseDependencyNavigationBulletDetails(line) ||
-    parseDependencyTransclusionBulletDetails(line);
+  const details = parseDependencyNavigationBulletDetails(line);
   return details ? details.blockIds.slice() : [];
 }
 
@@ -2204,9 +2179,7 @@ function getDependencyNavigationBlockIds(line) {
 // bullet (current or legacy label), otherwise null. Kept for narrow legacy
 // callers; new code should use getDependencyNavigationBlockIds.
 function parseDependencyNavigationBullet(line) {
-  const details =
-    parseDependencyNavigationBulletDetails(line) ||
-    parseDependencyTransclusionBulletDetails(line);
+  const details = parseDependencyNavigationBulletDetails(line);
   return details && details.blockIds.length > 0 ? details.blockIds[0] : null;
 }
 
@@ -2316,33 +2289,8 @@ function isDependencyLineWriterSeparators(linkSpan) {
 }
 
 // Rewrite a managed dependency navigation bullet to the current label while
-// preserving its existing indentation and list marker, so a legacy bullet can be
+// preserving its existing indentation and list marker, so an older line can be
 // normalized in place without disturbing tab-indented or non-dash markers.
-function getTaskIdentityByBlockId(content, lineContexts = null, sourceLines = null) {
-  const identities = new Map();
-  const text = String(content || "");
-  const lines = sourceLines || text.split(/\r?\n/);
-  const contexts = lineContexts || getMarkdownLineContextsForLines(lines);
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    if (!isObsidianTaskAtLine(text, lineIndex, contexts, lines)) {
-      continue;
-    }
-    const line = lines[lineIndex];
-    const blockId = getTrailingBlockId(line);
-    if (!blockId) {
-      continue;
-    }
-    const idField = findBulletPropertyField(line, "id");
-    identities.set(
-      blockId,
-      idField
-        ? normalizeBulletPropertyValue(idField.value) || blockId
-        : blockId,
-    );
-  }
-  return identities;
-}
-
 // Capture the index range of the current bullet's child block: every later line
 // that is blank or indented deeper than the parent, stopping at the first
 // nonblank line indented at or shallower than the parent (or EOF). Trailing
@@ -5736,7 +5684,6 @@ function createDependencyNavigationCollection(fields) {
     indent: fields.indent === undefined ? null : fields.indent,
     marker: fields.marker === undefined ? null : fields.marker,
     lineIndex: fields.lineIndex === undefined ? null : fields.lineIndex,
-    anyLegacy: Boolean(fields.anyLegacy),
     startLine: fields.startLine === undefined ? 0 : fields.startLine,
     endLineExclusive:
       fields.endLineExclusive === undefined ? 0 : fields.endLineExclusive,
@@ -5747,7 +5694,6 @@ function createDependencyNavigationCollection(fields) {
 function collectDependencyNavigationBullets(
   content,
   parentLine,
-  additionalManagedIds = [],
   prepared = null,
 ) {
   const text = String(content || "");
@@ -5793,36 +5739,12 @@ function collectDependencyNavigationBullets(
   let indent = null;
   let marker = null;
   let lineIndex = null;
-  let anyLegacy = false;
-  const dependencyField = findBulletPropertyField(lines[parentIndex], "dependsOn");
-  const managedIds = new Set(
-    dependencyField ? parseLocalTaskIdList(dependencyField.value) : [],
-  );
-  const managedTargetKeys = new Set(
-    normalizeDependencyNavigationTargets(additionalManagedIds).map(
-      dependencyNavigationTargetKey,
-    ),
-  );
-  let taskIdentities = null;
-  const getTaskIdentities = () => {
-    if (taskIdentities) {
-      return taskIdentities;
-    }
-    if (prepared && prepared.entries) {
-      taskIdentities = getDependencySnapshotIdentities(prepared);
-      return taskIdentities;
-    }
-    taskIdentities = getTaskIdentityByBlockId(text, contexts, lines);
-    return taskIdentities;
-  };
 
   const rememberTarget = (target) => {
     const normalized = normalizeBulletPropertyValue(target.blockId);
     const frozen = Object.freeze({
       blockId: normalized,
       note: String(target.note || "").trim(),
-      terminal: false,
-      legacy: Boolean(target.legacy),
     });
     const targetKey = dependencyNavigationTargetKey(frozen);
     if (!normalized || seenTargetKeys.has(targetKey)) {
@@ -5842,8 +5764,7 @@ function collectDependencyNavigationBullets(
     if (findNearestParentListItem(lines, index) !== parentIndex) {
       continue;
     }
-    // The managed Depends-On line: links first, then legacy children, so the
-    // field mirrors the line's order (`docs/task-dependencies.md` §3).
+    // Only the managed Depends-On line defines dependency links.
     const parsedLine = parseDependencyLine(lineText, {
       isDirectChildOfTask: true,
     });
@@ -5854,40 +5775,12 @@ function collectDependencyNavigationBullets(
         marker = parsedLine.marker;
         lineIndices.unshift(index);
       }
-      if (!parsedLine.canonical) {
-        anyLegacy = true;
-      }
       parsedLine.links.forEach(rememberTarget);
       continue;
     }
     if (parsedLine.verdict === "malformed" || parsedLine.verdict === "empty") {
       continue;
     }
-    // R8 legacy child: a direct child bullet whose only content is one block
-    // link (plain, embedded, or struck). It counts while the dependent's
-    // field (or the in-flight batch) still manages its target id; anything
-    // else — a `#^ref` reading embed, prose, a nested link — is content.
-    const legacy = parseDependencyLegacyChildDetails(lineText);
-    if (!legacy) {
-      continue;
-    }
-    if (
-      !legacyChildCoveredByField(
-        legacy,
-        managedIds,
-        managedTargetKeys,
-        getTaskIdentities(),
-      )
-    ) {
-      continue;
-    }
-    if (lineIndices.length === 0) {
-      indent = parsedLegacyIndent(lineText);
-      marker = parsedLegacyMarker(lineText);
-    }
-    lineIndices.push(index);
-    anyLegacy = true;
-    rememberTarget({ blockId: legacy.blockId, note: legacy.note, legacy: true });
   }
 
   return createDependencyNavigationCollection({
@@ -5897,30 +5790,23 @@ function collectDependencyNavigationBullets(
     indent,
     marker,
     lineIndex,
-    anyLegacy,
     startLine: block.startLine,
     endLineExclusive: block.endLineExclusive,
     reason: null,
   });
 }
 
-function getCachedDependencyCollection(snapshot, content, parentLine, additionalManagedIds = []) {
-  const normalizedIds = Array.isArray(additionalManagedIds) ? additionalManagedIds : [];
-  if (snapshot && snapshot.collections && normalizedIds.length === 0) {
+function getCachedDependencyCollection(snapshot, content, parentLine) {
+  if (snapshot && snapshot.collections) {
     const at = Math.floor(numericOrDefault(parentLine, Number.NaN));
     if (snapshot.collections.has(at)) {
       return snapshot.collections.get(at);
     }
-    const built = collectDependencyNavigationBullets(snapshot.text, at, [], snapshot);
+    const built = collectDependencyNavigationBullets(snapshot.text, at, snapshot);
     snapshot.collections.set(at, built);
     return built;
   }
-  return collectDependencyNavigationBullets(
-    content,
-    parentLine,
-    normalizedIds,
-    snapshot || null,
-  );
+  return collectDependencyNavigationBullets(content, parentLine, snapshot || null);
 }
 
 // True when the task line carries a `[scheduled:: YYYY-MM-DD]` date after
@@ -5945,64 +5831,6 @@ function dependencyParentHasFutureSchedule(lineText, today = new Date()) {
     Number(match[3]),
   );
   return scheduled.getTime() > startOfToday.getTime();
-}
-
-// One sole block link on a child bullet: plain, `![[…]]`, or `~~[[…]]~~`
-// (never both). Mirrors `task_dependencies::legacy_child_reference` in
-// bob-cli; the field-membership half of R8 is checked by the caller.
-function parseDependencyLegacyChildDetails(line) {
-  const text = String(line || "");
-  const match = DEPENDENCY_TRANSCLUSION_BULLET_RE.exec(text);
-  if (!match) {
-    return null;
-  }
-  const { strike, embed, note, blockId } = match.groups;
-  if (strike && embed) {
-    return null;
-  }
-  return Object.freeze({
-    note: String(note || "").trim(),
-    blockId,
-    transcluded: Boolean(embed),
-    terminal: Boolean(strike),
-  });
-}
-
-function parsedLegacyIndent(line) {
-  const match = DEPENDENCY_TRANSCLUSION_BULLET_RE.exec(String(line || ""));
-  return match ? match.groups.indent : "";
-}
-
-function parsedLegacyMarker(line) {
-  const match = DEPENDENCY_TRANSCLUSION_BULLET_RE.exec(String(line || ""));
-  return match ? match.groups.marker : "-";
-}
-
-// R8 field gate: the legacy child's resolved target id (its `[id::]`,
-// canonical id, or same-note bare block id) is in the dependent's field, or
-// the in-flight batch already manages its link.
-function legacyChildCoveredByField(
-  legacy,
-  managedIds,
-  managedTargetKeys,
-  taskIdentities,
-) {
-  if (managedTargetKeys.has(dependencyNavigationTargetKey(legacy))) {
-    return true;
-  }
-  if (legacy.note) {
-    const qualified = tryDependencyId(
-      `${legacy.note}.md`,
-      legacy.blockId,
-    );
-    return Boolean(qualified && managedIds.has(qualified));
-  }
-  return (
-    managedIds.has(legacy.blockId) ||
-    managedIds.has(
-      taskIdentities ? taskIdentities.get(legacy.blockId) : undefined,
-    )
-  );
 }
 
 function computeFinalDependencyLinkOrder(existingIds, addIds, removeIds) {
@@ -6279,8 +6107,7 @@ function dependencyHandEditOwningLine(
 // task: "touch" projects the line into the field and canonicalises it (R1);
 // "clear-empty" drops a linkless line and the field (R9); "clear-field" drops
 // the field after the line was deleted; null leaves the task alone (no task,
-// malformed line, legacy-only children that the hooks still read, or nothing
-// to do).
+// malformed line or nothing to do).
 function planDependencyHandEditMirror(
   oldContent,
   newContent,
@@ -6624,18 +6451,7 @@ function planDependencyEdit(args = {}) {
   if (internalAddReason) {
     return fail(internalAddReason);
   }
-  // Legacy children join the order while the field (or this batch) still
-  // manages them, so a touch folds them into the line in the same write.
-  const collection = collectDependencyNavigationBullets(content, parentIndex, [
-    ...add.map((ref) => ({
-      blockId: ref.blockId,
-      note: dependencyLinkNoteForPath(ref.path, parentPath),
-    })),
-    ...remove.map((ref) => ({
-      blockId: ref.blockId,
-      note: dependencyLinkNoteForPath(ref.path, parentPath),
-    })),
-  ]);
+  const collection = collectDependencyNavigationBullets(content, parentIndex);
   if (collection.reason) {
     return fail(collection.reason);
   }
@@ -14462,13 +14278,8 @@ function resolveScheduledRecoveryNote(index, sourcePath, target) {
   return index.basenames.get(recoveryMarkdownBasename(exact).toLowerCase()) || null;
 }
 
-// Promotion references on one child line (`docs/task-dependencies.md` §5):
-// every Depends-On line link, plus an R8 legacy child only while the
-// dependent's field manages its target id. Anything else — a `#^ref`
-// reading embed, prose, a malformed line — yields nothing. `context` carries
-// the dependent's `dependsOn` field, its note path, the note index, and the
-// recovery block map for the R8 gate.
-function recoveryDependencyReferences(lineText, dependsOn, blocks, context = {}) {
+// Promotion references come only from the managed Depends-On line.
+function recoveryDependencyReferences(lineText) {
   const text = String(lineText || "");
   const parsed = parseDependencyLine(text, { isDirectChildOfTask: true });
   if (parsed && parsed.verdict === "accept") {
@@ -14478,74 +14289,7 @@ function recoveryDependencyReferences(lineText, dependsOn, blocks, context = {})
       ),
     );
   }
-  const legacy = parseDependencyLegacyChildDetails(text);
-  if (!legacy) {
-    return Object.freeze([]);
-  }
-  // The Rust reader takes no aliases on legacy children; an aliased sole
-  // link is content until a writer canonicalises it onto the line.
-  if (/\|[^]\n]*\]\]/.test(text)) {
-    return Object.freeze([]);
-  }
-  if (
-    !recoveryLegacyChildCovered(legacy, dependsOn || [], context, blocks)
-  ) {
-    return Object.freeze([]);
-  }
-  return Object.freeze([
-    Object.freeze({ target: legacy.note, blockId: legacy.blockId }),
-  ]);
-}
-
-// R8 field gate for recovery: the legacy child's resolved target id (its
-// `[id::]`, canonical id, or same-note bare block id) is in the dependent's
-// field. Unresolvable targets are content here, never edges: unlike line
-// links they must not poison `rankSafe`.
-function recoveryLegacyChildCovered(legacy, dependsOn, context, blocks) {
-  if (!Array.isArray(dependsOn) || dependsOn.length === 0) {
-    return false;
-  }
-  const field = new Set(dependsOn);
-  const sourcePath =
-    context && context.sourcePath
-      ? normalizeVaultRelativePath(context.sourcePath)
-      : "";
-  let targetPath = null;
-  if (!legacy.note && sourcePath) {
-    targetPath = sourcePath;
-  } else if (context && context.noteIndex) {
-    targetPath = resolveScheduledRecoveryNote(
-      context.noteIndex,
-      sourcePath,
-      legacy.note,
-    );
-  }
-  if (!targetPath) {
-    return false;
-  }
-  const candidates = new Set();
-  if (blocks instanceof Map) {
-    for (const task of blocks.get(
-      recoveryIdentity(targetPath, legacy.blockId),
-    ) || []) {
-      if (task && task.taskId) {
-        candidates.add(task.taskId);
-      }
-    }
-  }
-  const canonical = tryDependencyId(targetPath, legacy.blockId);
-  if (canonical) {
-    candidates.add(canonical);
-  }
-  if (!legacy.note) {
-    candidates.add(legacy.blockId);
-  }
-  for (const candidate of candidates) {
-    if (field.has(candidate)) {
-      return true;
-    }
-  }
-  return false;
+  return Object.freeze([]);
 }
 
 // Archived (`done/`) link targets are resolved, closed prerequisites: never
@@ -14798,16 +14542,9 @@ function buildScheduledRecoveryIndex(
         if (findNearestParentListItem(model.lines, line) !== task.line) {
           continue;
         }
-        // Promotion edges (`docs/task-dependencies.md` §5): the Depends-On
-        // line links plus R8 legacy children, the same as Rust. `#^ref`
-        // reading embeds and other unmanaged sole embeds are content, never
-        // edges.
-        for (const reference of recoveryDependencyReferences(
-          lineText,
-          task.dependsOn || [],
-          blocks,
-          { noteIndex, sourcePath: path },
-        )) {
+        // Promotion edges (`docs/task-dependencies.md` §5) come only from
+        // the Depends-On line; other child links are content.
+        for (const reference of recoveryDependencyReferences(lineText)) {
           if (isArchivedRecoveryTarget(reference.target)) {
             continue;
           }
@@ -19418,17 +19155,18 @@ function findTransclusionToggleTargets(line) {
   if (isTaskRelationLine(text)) {
     return [];
   }
-  const dependencyBullet = parseDependencyTransclusionBulletDetails(text);
-  if (dependencyBullet && dependencyBullet.terminal) {
-    return [];
-  }
   const targets = [];
   let index = 0;
 
   while (index < text.length) {
     const target = parseTransclusionToggleTargetAt(text, index);
     if (target) {
-      targets.push(target);
+      const struck =
+        text.slice(target.markerIndex - 2, target.markerIndex) === "~~" &&
+        text.slice(target.endIndex, target.endIndex + 2) === "~~";
+      if (!struck) {
+        targets.push(target);
+      }
       index = target.endIndex;
       continue;
     }
@@ -26078,45 +25816,8 @@ function createDependencyNoteSnapshot(content) {
     lineEnding,
     contexts,
     entries: Object.freeze(entries),
-    identities: null,
     collections: new Map(),
   };
-}
-
-function getDependencySnapshotIdentities(snapshot) {
-  if (!snapshot) {
-    return new Map();
-  }
-  if (snapshot.identities) {
-    return snapshot.identities;
-  }
-  const identities = new Map();
-  for (const entry of snapshot.entries) {
-    if (!entry.isTask || !entry.blockId) {
-      continue;
-    }
-    identities.set(
-      entry.blockId,
-      entry.idField || entry.blockId,
-    );
-  }
-  snapshot.identities = identities;
-  return identities;
-}
-
-function dependencySnapshotKey(additionalManagedIds) {
-  if (!additionalManagedIds || additionalManagedIds.length === 0) {
-    return "";
-  }
-  try {
-    return JSON.stringify(
-      normalizeDependencyNavigationTargets(additionalManagedIds).map(
-        dependencyNavigationTargetKey,
-      ),
-    );
-  } catch (_error) {
-    return `count:${additionalManagedIds.length}`;
-  }
 }
 
 function vaultStageYield() {
@@ -53747,7 +53448,7 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
 
     // Batch Depends-On write through the pure planner: snapshots resolve
     // read-only here, then one gesture commits the line, the field,
-    // same-note target ids, status effects, and legacy folding in one
+    // same-note target ids and status effects in one
     // editor transaction (one Ctrl+Z), with `[fresh:: today]` stamped last.
     const originalContent = String(this.editor.getValue() || "");
     const filePath = normalizeVaultRelativePath(this.filePath || "");
@@ -69917,7 +69618,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
   // Plans with `planDependencyEdit`, prepares cross-note targets first (an
   // unused target id is acceptable, a link to an unprepared target is not),
   // then commits the dependent's note in one editor transaction: the line,
-  // the field, same-note target ids, status effects, legacy folding, and
+  // the field, same-note target ids, and status effects, plus
   // `[fresh:: today]`. `args.editor` + `args.filePath` select the live same-
   // note flow; `args.content` + `args.files` drive the pure/test flow.
   // `args.stamper` overrides the freshness stamper (tests inject one).
@@ -73283,8 +72984,8 @@ class BobNavigationHotkeysDependencyMirrorMixin {
   }
 
   // Single-select Depends-On write through the pure planner: one gesture
-  // writes the line, the field, same-note target ids, status effects, and
-  // legacy folding in one editor transaction (one Ctrl+Z), with `[fresh::
+  // writes the line, the field, same-note target ids, and status effects in
+  // one editor transaction (one Ctrl+Z), with `[fresh::
   // today]` stamped last. `options.linkBlockId` is the target's `^block-id`
   // in this note; `options.filePath` overrides the active file.
   // `options.pendingTargetLine` (`{line, expected, text}`) folds a same-note
@@ -73396,7 +73097,7 @@ class BobNavigationHotkeysDependencyMirrorMixin {
   }
 
   // Ctrl+D on the Depends on row (`docs/task-dependencies.md` §7): delete the
-  // task's Depends-On line, its `[dependsOn::]` field, and any legacy children
+  // task's Depends-On line and its `[dependsOn::]` field
   // in one writer transaction, with ADJ-8 recovery. Clearing removes every
   // current target, so the line empties even when a link no longer resolves.
   async deleteDependencyLineAndField(cm, cursor, options = {}, validatedContext = null) {
@@ -85339,7 +85040,6 @@ module.exports.helpers = {
   DEPENDENCY_MIRROR_DEBOUNCE_MS,
   LEGACY_DEPENDENCY_NAVIGATION_LABELS,
   formatDependencyNavigationBullet,
-  parseDependencyTransclusionBulletDetails,
   getDependencyNavigationBlockIds,
   parseDependencyNavigationBullet,
   parseDependencyNavigationBulletDetails,
@@ -85391,8 +85091,6 @@ module.exports.helpers = {
   withBlocksFollowUpNotice,
   handEditTouchesBlocksLine,
   isProjectSubprojectsLine,
-  parseDependencyLegacyChildDetails,
-  legacyChildCoveredByField,
   extractDependencyLineLinks,
   isDependencyLineLinkRemainderClean,
   formatDependencyNavigationLinkRef,

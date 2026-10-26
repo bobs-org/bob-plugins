@@ -316,32 +316,8 @@ test("dependency lines render one canonical Depends-On line per parent", () => {
     ),
     "  - ⛓️ **DEPENDS ON:** [[projects/Other#^remote]]",
   );
-  assert.deepEqual(
-    helpers.parseDependencyTransclusionBulletDetails("  - ![[Other#^remote]]"),
-    {
-      indent: "  ",
-      marker: "-",
-      note: "Other",
-      blockId: "remote",
-      blockIds: ["remote"],
-      transcluded: true,
-      terminal: false,
-    },
-  );
-  assert.deepEqual(
-    helpers.parseDependencyTransclusionBulletDetails(
-      "\t- ~~[[Other#^remote]]~~",
-    ),
-    {
-      indent: "\t",
-      marker: "-",
-      note: "Other",
-      blockId: "remote",
-      blockIds: ["remote"],
-      transcluded: false,
-      terminal: true,
-    },
-  );
+  assert.deepEqual(helpers.getDependencyNavigationBlockIds("  - ![[Other#^remote]]"), []);
+  assert.equal(helpers.parseDependencyNavigationBullet("  - ![[Other#^remote]]"), null);
 });
 
 test("dependency IDs encode root and nested Markdown paths deterministically", () => {
@@ -383,9 +359,10 @@ test("prompted block IDs truthfully replace legacy id fields", () => {
   );
 });
 
-test("dependency navigation identity includes note path and folds legacy children", () => {
+test("dependency navigation identity comes from the managed line only", () => {
   const input = [
     "- [ ] #task Parent [dependsOn:: Here__x, Other__x] ^parent",
+    "  - ⛓️ **DEPENDS ON:** [[#^x]] • [[Other#^x]]",
     "  - ![[#^x]]",
     "  - ![[Other#^x]]",
     "- [ ] #task Local [id:: Here__x] ^x",

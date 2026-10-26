@@ -149,18 +149,7 @@ function planDependencyEdit(args = {}) {
   if (internalAddReason) {
     return fail(internalAddReason);
   }
-  // Legacy children join the order while the field (or this batch) still
-  // manages them, so a touch folds them into the line in the same write.
-  const collection = collectDependencyNavigationBullets(content, parentIndex, [
-    ...add.map((ref) => ({
-      blockId: ref.blockId,
-      note: dependencyLinkNoteForPath(ref.path, parentPath),
-    })),
-    ...remove.map((ref) => ({
-      blockId: ref.blockId,
-      note: dependencyLinkNoteForPath(ref.path, parentPath),
-    })),
-  ]);
+  const collection = collectDependencyNavigationBullets(content, parentIndex);
   if (collection.reason) {
     return fail(collection.reason);
   }

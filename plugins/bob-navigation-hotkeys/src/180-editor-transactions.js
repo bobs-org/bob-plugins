@@ -431,17 +431,18 @@ function findTransclusionToggleTargets(line) {
   if (isTaskRelationLine(text)) {
     return [];
   }
-  const dependencyBullet = parseDependencyTransclusionBulletDetails(text);
-  if (dependencyBullet && dependencyBullet.terminal) {
-    return [];
-  }
   const targets = [];
   let index = 0;
 
   while (index < text.length) {
     const target = parseTransclusionToggleTargetAt(text, index);
     if (target) {
-      targets.push(target);
+      const struck =
+        text.slice(target.markerIndex - 2, target.markerIndex) === "~~" &&
+        text.slice(target.endIndex, target.endIndex + 2) === "~~";
+      if (!struck) {
+        targets.push(target);
+      }
       index = target.endIndex;
       continue;
     }

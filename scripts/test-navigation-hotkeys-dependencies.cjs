@@ -501,6 +501,47 @@ test("transclusion toggle is refused on Depends-On lines", async () => {
   assert.match(notices.at(-1), /Ctrl\+Shift\+P/);
 });
 
+test("transclusion toggles refuse generated BLOCKS lines with their notice", async () => {
+  const blocksLine = "  - 🧱 **BLOCKS:** [[#^t1]]";
+  const blocksEditor = new TransactionEditor(blocksLine, { line: 0, ch: 20 });
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    workspace: { getActiveFile: () => ({ path: "Here.md", extension: "md" }) },
+  };
+
+  notices.length = 0;
+  assert.equal(await plugin.toggleCurrentLineTransclusions(blocksEditor), false);
+  assert.equal(blocksEditor.content, blocksLine);
+  assert.deepEqual(blocksEditor.transactions, []);
+  assert.equal(notices.at(-1), helpers.BLOCKS_GENERATED_LINE_NOTICE);
+
+  const countedEditor = new TransactionEditor(blocksLine, { line: 0, ch: 20 });
+  notices.length = 0;
+  assert.equal(
+    await plugin.toggleCountedLineTransclusions(
+      countedEditor,
+      { line: 0, ch: 20 },
+      0,
+    ),
+    false,
+  );
+  assert.equal(countedEditor.content, blocksLine);
+  assert.deepEqual(countedEditor.transactions, []);
+  assert.equal(notices.at(-1), helpers.BLOCKS_GENERATED_LINE_NOTICE);
+
+  const ordinaryEditor = new TransactionEditor("- [[Target]]", {
+    line: 0,
+    ch: 5,
+  });
+  notices.length = 0;
+  assert.equal(
+    await plugin.toggleCurrentLineTransclusions(ordinaryEditor),
+    true,
+  );
+  assert.equal(ordinaryEditor.content, "- ![[Target]]");
+  assert.equal(notices.length, 0);
+});
+
 test("legacy sole-link children toggle purely, without field or status writes", async () => {
   const activeFile = { path: "Here.md", extension: "md" };
   const lines = [

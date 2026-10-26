@@ -204,6 +204,11 @@ class BobNavigationHotkeysTransclusionLinkMixin {
       return false;
     }
 
+    if (parseBlocksLine(lineText, {}).verdict !== "not-a-line") {
+      new Notice(BLOCKS_GENERATED_LINE_NOTICE);
+      return false;
+    }
+
     const result = toggleLineTransclusions(lineText);
     if (!result.found) {
       new Notice("No links found on current line");
@@ -262,13 +267,14 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     // (`docs/task-dependencies.md` §8). Other lines in the range still
     // toggle; the notice reports the skipped Depends-On lines.
     let skippedDependencyLine = false;
+    let skippedBlocksLine = false;
     for (let line = startLine; line <= endLine; line += 1) {
-      if (
-        parseDependencyLine(String(lines[line] || ""), {}).verdict !==
-        "not-a-line"
-      ) {
+      const lineText = String(lines[line] || "");
+      if (parseDependencyLine(lineText, {}).verdict !== "not-a-line") {
         skippedDependencyLine = true;
-        break;
+      }
+      if (parseBlocksLine(lineText, {}).verdict !== "not-a-line") {
+        skippedBlocksLine = true;
       }
     }
     const result = toggleLineRangeTransclusions(lines, startLine, endLine);
@@ -277,6 +283,9 @@ class BobNavigationHotkeysTransclusionLinkMixin {
         new Notice(
           "⛓ Dependencies use plain links — edit them with Ctrl+Shift+P",
         );
+      }
+      if (skippedBlocksLine) {
+        new Notice(BLOCKS_GENERATED_LINE_NOTICE);
       }
       return false;
     }
@@ -313,6 +322,9 @@ class BobNavigationHotkeysTransclusionLinkMixin {
       new Notice(
         "⛓ Dependencies use plain links — edit them with Ctrl+Shift+P",
       );
+    }
+    if (skippedBlocksLine) {
+      new Notice(BLOCKS_GENERATED_LINE_NOTICE);
     }
     return true;
   }

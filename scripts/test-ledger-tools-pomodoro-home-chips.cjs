@@ -7,6 +7,17 @@ const path = require("node:path");
 const Module = require("node:module");
 const test = require("node:test");
 
+function hideNodeFields(node, fields) {
+  for (const field of fields) {
+    Object.defineProperty(node, field, {
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  assert.deepEqual(fields.filter((field) => Object.keys(node).includes(field)), []);
+}
+
 class TestMarkdownView {}
 class TestPlugin {
   constructor(app) {
@@ -350,8 +361,7 @@ test("chip DOM exposes forecast, hue, accessible text, and tooltip", () => {
 
 test("Reading view appends a forecast chip before its Task Link list", () => {
   class Node {
-    // Short descriptor so a failing assert comparing two live nodes reports
-    // instead of diffing the whole cyclic graph (bob-cli-c7).
+    // Hidden back-references bound assert diffs; this descriptor keeps inspect and reporter output short.
     [require("node:util").inspect.custom]() {
       const cls = this.attributes ? this.attributes.class : null;
       const kids = Array.isArray(this.childNodes) ? this.childNodes.length : 0;
@@ -376,6 +386,7 @@ test("Reading view appends a forecast chip before its Task Link list", () => {
       this.isConnected = true;
       this._text = text;
       this.nodeValue = nodeType === 3 ? text : null;
+    hideNodeFields(this, ["parentNode", "ownerDocument", "previousSibling", "nextSibling"]);
     }
 
     get children() {
@@ -636,8 +647,7 @@ test("Live Preview skips chips in Source mode", () => {
 
 test("Reading view finds embedded Task Links via src", () => {
   class Node {
-    // Short descriptor so a failing assert comparing two live nodes reports
-    // instead of diffing the whole cyclic graph (bob-cli-c7).
+    // Hidden back-references bound assert diffs; this descriptor keeps inspect and reporter output short.
     [require("node:util").inspect.custom]() {
       const cls = this.attributes ? this.attributes.class : null;
       const kids = Array.isArray(this.childNodes) ? this.childNodes.length : 0;
@@ -662,6 +672,7 @@ test("Reading view finds embedded Task Links via src", () => {
       this.isConnected = true;
       this._text = text;
       this.nodeValue = nodeType === 3 ? text : null;
+      hideNodeFields(this, ["parentNode", "ownerDocument", "previousSibling", "nextSibling"]);
     }
 
     get children() {

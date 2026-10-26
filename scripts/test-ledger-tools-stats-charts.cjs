@@ -8,6 +8,17 @@ const {
 
 const helpers = LedgerToolsPlugin.helpers;
 
+function hideNodeFields(node, fields) {
+  for (const field of fields) {
+    Object.defineProperty(node, field, {
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  assert.deepEqual(fields.filter((field) => Object.keys(node).includes(field)), []);
+}
+
 class FakeNode {
   constructor(tag, doc, namespaceURI) {
     this.tagName = String(tag).toUpperCase();
@@ -26,10 +37,10 @@ class FakeNode {
       remove: (name) => this.removeClass(name),
       contains: (name) => this.hasClass(name),
     };
+    hideNodeFields(this, ["ownerDocument", "parentNode"]);
   }
 
-  // Short descriptor so a failing assert comparing two live nodes reports
-  // instead of diffing the whole cyclic graph (bob-cli-c7).
+  // Hidden back-references bound assert diffs; this descriptor keeps inspect and reporter output short.
   [require("node:util").inspect.custom]() {
     const cls = this.getAttribute("class");
     const kids = Array.isArray(this.children) ? this.children.length : 0;

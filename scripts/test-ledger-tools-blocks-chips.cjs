@@ -34,6 +34,17 @@ class TestPlugin {
   registerInterval(handle) { (this.intervals ||= []).push(handle); return handle; }
 }
 class TestNotice { constructor(message) { TestNotice.messages.push(String(message)); } }
+
+function hideNodeFields(node, fields) {
+  for (const field of fields) {
+    Object.defineProperty(node, field, {
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  assert.deepEqual(fields.filter((field) => Object.keys(node).includes(field)), []);
+}
 TestNotice.messages = [];
 
 const originalLoad = Module._load;
@@ -219,11 +230,11 @@ class MiniNode {
       remove: (...names) => { this.className = this.className.split(/\s+/).filter((name) => name && !names.includes(name)).join(" "); },
       contains: (name) => this.className.split(/\s+/).includes(name),
     };
+    hideNodeFields(this, ["parentNode", "ownerDocument"]);
   }
   setAttribute(name, value) { this.attributes[name] = String(value); if (name === "class") this.className = String(value); }
   getAttribute(name) { return this.attributes[name] || null; }
-  // Short descriptor so a failing assert comparing two live nodes reports
-  // instead of diffing the whole cyclic graph (bob-cli-c7).
+  // Hidden back-references bound assert diffs; this descriptor keeps inspect and reporter output short.
   [require("node:util").inspect.custom]() {
     const cls = String(this.className || "");
     const kids = Array.isArray(this.childNodes) ? this.childNodes.length : 0;

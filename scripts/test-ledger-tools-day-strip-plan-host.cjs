@@ -3,15 +3,6 @@
 // The plan block's repaint never touches the host.
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const util = require("node:util");
-
-// bob-cli-c7: node-identity asserts must never hand two live nodes to
-// assert.equal — its structural differ ignores util.inspect.custom and walks
-// the whole cyclic graph (heap OOM). Compare with === and name both nodes in
-// the message instead; util.inspect uses each suite's short descriptor.
-function nodeNote(message, ...nodes) {
-  return `${message} [${nodes.map((node) => util.inspect(node)).join(" vs ")}]`;
-}
 const {
   LedgerToolsPlugin,
   makeFreshnessApp,
@@ -26,6 +17,17 @@ const _originalDefine = null;
 
 function shiftDay(day, amount) {
   return helpers.dayStripShiftDay(day, amount);
+}
+
+function hideNodeFields(node, fields) {
+  for (const field of fields) {
+    Object.defineProperty(node, field, {
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  assert.deepEqual(fields.filter((field) => Object.keys(node).includes(field)), []);
 }
 
 class FakeNode {
@@ -48,10 +50,10 @@ class FakeNode {
       remove: (name) => { this._classSet.delete(name); this._syncClass(); },
       contains: (name) => this._classSet.has(name),
     };
+    hideNodeFields(this, ["ownerDocument", "parentNode", "_closest", "removed", "inserted"]);
   }
 
-  // Short descriptor so a failing assert comparing two live nodes reports
-  // instead of diffing the whole cyclic graph (bob-cli-c7).
+  // Hidden back-references bound assert diffs; this descriptor keeps inspect and reporter output short.
   [require("node:util").inspect.custom]() {
     const cls = this.getAttribute("class");
     const kids = Array.isArray(this.children) ? this.children.length : 0;
@@ -384,11 +386,8 @@ test("renderPlanBlock puts exactly one host first with .bob-plan after it on can
           assert.equal(planChildren(el).length, 2, "exactly one host with .bob-plan");
           const host = planChildren(el)[0];
           assert.ok(host, "expected the strip host");
-          assert.ok(host !== container, nodeNote("host and .bob-plan are distinct nodes", host));
-          assert.ok(
-            planChildren(el)[1] === container,
-            nodeNote(".bob-plan sits directly after the host", planChildren(el)[1], container),
-          );
+          assert.notEqual(host, container, "host and .bob-plan are distinct nodes");
+          assert.equal(planChildren(el)[1], container, ".bob-plan sits directly after the host");
           assert.equal(hasStripClass(el), true, "spacing class is set");
           assert.equal(added.length, 1, "unload child is registered");
         }
@@ -475,13 +474,11 @@ test("paintPlanBlock keeps the same host node first with .bob-plan after it and 
         await settle(60);
         plugin.rerenderPlanBlocks();
         await settle(60);
-        assert.ok(
-          planChildren(el)[0] === host,
-          nodeNote("the host node stays first and is never detached", planChildren(el)[0], host),
-        );
-        assert.ok(
-          planChildren(el)[1] === findPlanContainer(el),
-          nodeNote(".bob-plan sits directly after the host", planChildren(el)[1], findPlanContainer(el)),
+        assert.equal(planChildren(el)[0], host, "the host node stays first and is never detached");
+        assert.equal(
+          planChildren(el)[1],
+          findPlanContainer(el),
+          ".bob-plan sits directly after the host",
         );
         assert.ok(!el.removed.includes(host), "the host is never removed");
         assert.ok(!el.inserted.includes(host) || el.inserted.filter((node) => node === host).length === 1, "the host is never re-inserted");
@@ -782,13 +779,11 @@ test("detached excluded blocks get no host; detached ordinary blocks attach sync
         plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
         fixDetachedSubtree(container);
         await settle();
-        assert.ok(
-          planChildren(el)[0] !== findPlanContainer(el),
-          nodeNote("host comes before .bob-plan", planChildren(el)[0]),
-        );
-        assert.ok(
-          planChildren(el)[1] === findPlanContainer(el),
-          nodeNote(".bob-plan sits directly after the host", planChildren(el)[1], findPlanContainer(el)),
+        assert.notEqual(planChildren(el)[0], findPlanContainer(el), "host comes before .bob-plan");
+        assert.equal(
+          planChildren(el)[1],
+          findPlanContainer(el),
+          ".bob-plan sits directly after the host",
         );
         assert.equal(planChildren(el).length, 2, "detached ordinary block attaches its host synchronously");
         assert.equal(hasStripClass(el), true, "detached host sets the spacing class");
@@ -982,9 +977,10 @@ test("reading-view order attaches detached, virtualized stays quiet until attach
         fixDetachedSubtree(container);
         await settle();
         assert.equal(planChildren(el).length, 2, "reading flow attaches detached host synchronously");
-        assert.ok(
-          planChildren(el)[1] === findPlanContainer(el),
-          nodeNote("reading host sits above the badges", planChildren(el)[1], findPlanContainer(el)),
+        assert.equal(
+          planChildren(el)[1],
+          findPlanContainer(el),
+          "reading host sits above the badges",
         );
         const [record] = Array.from(plugin.dayStripViews).filter((entry) => entry.kind === "plan" && entry.planView && entry.planView.el === el);
         assert.ok(record, "reading host registers a record");
@@ -1110,29 +1106,20 @@ test("placeholder finds .bob-plan by class and toggle-off restores it first", as
         const el = fakePlanBlock();
         // A leading non-plan child must never be mistaken for the badges.
         const decoy = el.createDiv({ cls: "bob-plan-decoy" });
-        assert.ok(
-          planChildren(el)[0] === decoy,
-          nodeNote("decoy leads before render", planChildren(el)[0], decoy),
-        );
+        assert.equal(planChildren(el)[0], decoy, "decoy leads before render");
         plugin.renderPlanBlock(el, { sourcePath, addChild: () => {} });
         await settle();
         const container = findPlanContainer(el);
         assert.ok(container, "placeholder still finds the .bob-plan container by class");
-        assert.ok(container !== decoy, nodeNote("placeholder never returns the decoy by index", container));
-        assert.ok(
-          planChildren(el)[0] !== container,
-          nodeNote("host stays first even with a leading decoy", planChildren(el)[0]),
-        );
+        assert.notEqual(container, decoy, "placeholder never returns the decoy by index");
+        assert.notEqual(planChildren(el)[0], container, "host stays first even with a leading decoy");
         // Toggle off removes the host and leaves .bob-plan behind.
         plugin.toggleDayStripPlanHost();
         assert.equal(planChildren(el).filter((child) => child !== container && child !== decoy).length, 0, "toggle off removes the host");
         assert.ok(planChildren(el).includes(container), "toggle off keeps .bob-plan");
         plugin.toggleDayStripPlanHost();
         await settle();
-        assert.ok(
-          planChildren(el)[0] !== container,
-          nodeNote("toggle on restores the host first", planChildren(el)[0]),
-        );
+        assert.notEqual(planChildren(el)[0], container, "toggle on restores the host first");
         assert.ok(planChildren(el).includes(container), "toggle on keeps .bob-plan");
       } finally {
         plugin.onunload();

@@ -34,6 +34,17 @@ const REPORT = decoded.report;
 const SOURCE = "dash_references.md";
 const NOW = new Date(2026, 9, 20, 9, 0, 0);
 
+function hideNodeFields(node, fields) {
+  for (const field of fields) {
+    Object.defineProperty(node, field, {
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  assert.deepEqual(fields.filter((field) => Object.keys(node).includes(field)), []);
+}
+
 class FakeNode {
   constructor(tag, doc) {
     this.tag = tag;
@@ -45,10 +56,10 @@ class FakeNode {
     this.listeners = new Map();
     this.textContent = "";
     this.scrollTop = 0;
+    hideNodeFields(this, ["doc", "parentNode"]);
   }
 
-  // Short descriptor so a failing assert comparing two live nodes reports
-  // instead of diffing the whole cyclic graph (bob-cli-c7).
+  // Hidden back-references bound assert diffs; this descriptor keeps inspect and reporter output short.
   [require("node:util").inspect.custom]() {
     const cls = this.getAttribute("class");
     const kids = Array.isArray(this.children) ? this.children.length : 0;

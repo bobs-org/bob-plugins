@@ -264,4 +264,4 @@ effect, invalidates }`.
 - [Bob Navigation Hotkeys](https://bobs-org.github.io/reference/plugins/bob-navigation-hotkeys/)
 - [Task Status Cycler](https://bobs-org.github.io/reference/plugins/task-status-cycler/)
 - [Plugin architecture](architecture.md) — generated sources and module boundaries.
-- [Bob Command Mode](https://bobs-org.github.io/bob-command-mode/)
+- [Bob Command Mode](https://bobs-org.github.io/reference/plugins/bob-command-mode/)

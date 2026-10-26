@@ -31385,16 +31385,75 @@ function dayStripOmittedLane(dimension) {
   };
 }
 
-function dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes) {
+function dayStripLaneViewForContext(context) {
+  try {
+    const raw = context && typeof context === "object" ? context.laneView : null;
+    if (typeof dayStripLaneViewOf === "function") return dayStripLaneViewOf(raw);
+    return raw === "roots" || raw === "themes" || raw === "both" ? raw : "both";
+  } catch (error) {
+    return "both";
+  }
+}
+
+function dayStripLanesFor(state, mix, themes, view) {
+  try {
+    if (typeof dayStripLaneLayout === "function") {
+      return dayStripLaneLayout({ state, mix, themes, view });
+    }
+  } catch (error) {
+    // Fall through to the local fallback.
+  }
+  const sane = view === "roots" || view === "themes" || view === "both" ? view : "both";
+  const rootsAvailable = Boolean(mix && mix.omitted !== true);
+  const themesAvailable = Boolean(themes && themes.omitted !== true);
+  let shown = [];
+  if (state === "skeleton") {
+    shown = sane === "both" ? ["roots", "themes"] : [sane];
+  } else if (state === "ready" || state === "stale") {
+    if (sane === "both") {
+      if (rootsAvailable) shown.push("roots");
+      if (themesAvailable) shown.push("themes");
+    } else if (sane === "roots") {
+      shown = rootsAvailable ? ["roots"] : (themesAvailable ? ["themes"] : []);
+    } else {
+      shown = themesAvailable ? ["themes"] : (rootsAvailable ? ["roots"] : []);
+    }
+  }
+  const rootsName = mix && mix.dimension === "area" ? "areas" : "root parents";
+  const title = sane === "themes"
+    ? "Showing themes only \u00b7 click for both"
+    : sane === "roots"
+      ? "Showing " + rootsName + " only \u00b7 click for themes only"
+      : "Showing " + rootsName + " and themes \u00b7 click for " + rootsName + " only";
+  const ariaLabel = sane === "themes"
+    ? "Day stats bars: themes only. Activate for " + rootsName + " and themes."
+    : sane === "roots"
+      ? "Day stats bars: " + rootsName + " only. Activate for themes only."
+      : "Day stats bars: " + rootsName + " and themes. Activate for " + rootsName + " only.";
+  return {
+    view: sane,
+    shown,
+    switchable: Boolean(rootsAvailable && themesAvailable && (state === "ready" || state === "stale" || state === "skeleton")),
+    next: sane === "both" ? "roots" : sane === "roots" ? "themes" : "both",
+    title,
+    ariaLabel,
+  };
+}
+
+function dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes, shown) {
   const values = facts.map((fact) => fact.label + " " + fact.display).join(", ");
   let label = "Day stats for " + dateWords.full + (provisional ? ", so far" : "") + (values ? ": " + values + "." : ".");
-  if (mix && !mix.omitted && mix.segments.length) {
-    const sentence = mix.dimension === "area" ? "Time by area" : "Time by root parent";
-    label += " " + sentence + ": " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
-  } else if (mix && mix.empty) {
-    label += " No Pomodoros.";
+  const showRoots = !Array.isArray(shown) || shown.includes("roots");
+  const showThemes = !Array.isArray(shown) || shown.includes("themes");
+  if (showRoots) {
+    if (mix && !mix.omitted && mix.segments.length) {
+      const sentence = mix.dimension === "area" ? "Time by area" : "Time by root parent";
+      label += " " + sentence + ": " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
+    } else if (mix && mix.empty) {
+      label += " No Pomodoros.";
+    }
   }
-  if (themes && !themes.omitted && themes.segments.length) {
+  if (showThemes && themes && !themes.omitted && themes.segments.length) {
     label += " Time by theme: " + themes.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   }
   return label;
@@ -31404,18 +31463,25 @@ function dayStripModel(report, day, context) {
   try {
     const safeContext = context && typeof context === "object" ? context : {};
     const safeReport = report && typeof report === "object" ? report : null;
+    const laneView = dayStripLaneViewForContext(safeContext);
     const dateWords = dayStripDateWords(day);
     if (!dateWords) {
-      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "", stale: false, error: null };
+      const hiddenMix = dayStripOmittedLane(null);
+      const hiddenThemes = dayStripOmittedLane("theme");
+      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: hiddenMix, themes: hiddenThemes, lanes: dayStripLanesFor("hidden", hiddenMix, hiddenThemes, laneView), ariaLabel: "", stale: false, error: null };
     }
     const localToday = typeof safeContext.localToday === "string" ? safeContext.localToday : "";
     if (dayStripDateParts(localToday) && day > localToday) {
-      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "", stale: false, error: null };
+      const futureMix = dayStripOmittedLane(null);
+      const futureThemes = dayStripOmittedLane("theme");
+      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: futureMix, themes: futureThemes, lanes: dayStripLanesFor("future", futureMix, futureThemes, laneView), ariaLabel: "", stale: false, error: null };
     }
     const error = dayStripErrorInfo(safeContext.error);
     if (!safeReport) {
       if (error) {
-        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
+        const unavailableMix = dayStripOmittedLane(null);
+        const unavailableThemes = dayStripOmittedLane("theme");
+        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: unavailableMix, themes: unavailableThemes, lanes: dayStripLanesFor("unavailable", unavailableMix, unavailableThemes, laneView), ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
       }
       const facts = DAY_STRIP_METRIC_IDS.map((id) => ({
         id,
@@ -31434,7 +31500,8 @@ function dayStripModel(report, day, context) {
       }));
       const mix = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "root_parent", title: "Time by root parent" };
       const themes = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "theme", title: "Time by theme" };
-      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, themes, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
+      const lanes = dayStripLanesFor("skeleton", mix, themes, laneView);
+      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, themes, lanes, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
     }
 
     // A default report from before midnight must never be used to show a
@@ -31454,7 +31521,8 @@ function dayStripModel(report, day, context) {
     const provisional = facts.some((fact) => fact.provisional);
     const asOf = day === localToday ? dayStripAsOf(safeContext.fetchedAt, true) : "";
     const stale = safeContext.stale === true;
-    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes);
+    const lanes = dayStripLanesFor(stale ? "stale" : "ready", mix, themes, laneView);
+    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes, lanes.shown);
     const metaText = dayStripMetaText({ day, localToday, asOf, stale });
     const staleTitle = stale
       ? ((error && error.title) || (typeof safeContext.error === "string" ? safeContext.error : "Refresh failed")) +
@@ -31470,6 +31538,7 @@ function dayStripModel(report, day, context) {
       facts,
       mix,
       themes,
+      lanes,
       ariaLabel,
       stale,
       staleTitle,
@@ -31478,6 +31547,8 @@ function dayStripModel(report, day, context) {
   } catch (error) {
     const safeDay = typeof day === "string" ? day : "";
     const dateWords = dayStripDateWords(safeDay);
+    const fallbackMix = dayStripOmittedLane(null);
+    const fallbackThemes = dayStripOmittedLane("theme");
     return {
       state: "unavailable",
       day: safeDay,
@@ -31486,8 +31557,9 @@ function dayStripModel(report, day, context) {
       asOf: "",
       metaText: "",
       facts: [],
-      mix: dayStripOmittedLane(null),
-      themes: dayStripOmittedLane("theme"),
+      mix: fallbackMix,
+      themes: fallbackThemes,
+      lanes: dayStripLanesFor("unavailable", fallbackMix, fallbackThemes, "both"),
       ariaLabel: "Day stats unavailable — bob stats failed.",
       stale: false,
       error: { code: "model-error", title: "bob stats failed", hint: "" },
@@ -31643,6 +31715,207 @@ function dayStripThemeMix(report, worked, day, context) {
     return dayStripThemeEmpty();
   }
 }
+// ---- src/239-plugin-day-strip-lanes.js ----
+// Day strip lane switch: one global view (both, roots only, themes only)
+// across every strip on this device. Pure layout plus a small mixin that
+// owns the in-memory view, device persistence, and synchronous repaint.
+// Never throws into Obsidian.
+const DAY_STRIP_LANE_VIEWS = ["both", "roots", "themes"];
+const DAY_STRIP_LANES_STORAGE_KEY = "bob-ledger-tools-day-strip-bars";
+
+function dayStripLaneViewOf(value) {
+  try {
+    return DAY_STRIP_LANE_VIEWS.includes(value) ? value : "both";
+  } catch (error) {
+    return "both";
+  }
+}
+
+function dayStripNextLaneView(view) {
+  try {
+    const current = dayStripLaneViewOf(view);
+    const index = DAY_STRIP_LANE_VIEWS.indexOf(current);
+    return DAY_STRIP_LANE_VIEWS[(index + 1) % DAY_STRIP_LANE_VIEWS.length];
+  } catch (error) {
+    return "roots";
+  }
+}
+
+// Layout for the switch and the painted lanes. Never throws. On error it
+// reports both with today's shown lanes and no switch.
+function dayStripLaneLayout(input) {
+  try {
+    const safe = input && typeof input === "object" ? input : {};
+    const state = typeof safe.state === "string" ? safe.state : "";
+    const mix = safe.mix && typeof safe.mix === "object" ? safe.mix : null;
+    const themes = safe.themes && typeof safe.themes === "object" ? safe.themes : null;
+    const view = dayStripLaneViewOf(safe.view);
+    const next = dayStripNextLaneView(view);
+    const rootsAvailable = Boolean(mix && mix.omitted !== true);
+    const themesAvailable = Boolean(themes && themes.omitted !== true);
+    const rootsName = mix && mix.dimension === "area" ? "areas" : "root parents";
+    let title = "";
+    let ariaLabel = "";
+    if (view === "both") {
+      title = "Showing " + rootsName + " and themes \u00b7 click for " + rootsName + " only";
+      ariaLabel = "Day stats bars: " + rootsName + " and themes. Activate for " + rootsName + " only.";
+    } else if (view === "roots") {
+      title = "Showing " + rootsName + " only \u00b7 click for themes only";
+      ariaLabel = "Day stats bars: " + rootsName + " only. Activate for themes only.";
+    } else {
+      title = "Showing themes only \u00b7 click for both";
+      ariaLabel = "Day stats bars: themes only. Activate for " + rootsName + " and themes.";
+    }
+    if (state === "skeleton") {
+      const shown = view === "both" ? ["roots", "themes"] : [view];
+      return {
+        view,
+        shown,
+        switchable: Boolean(rootsAvailable && themesAvailable),
+        next,
+        title,
+        ariaLabel,
+      };
+    }
+    if (state === "ready" || state === "stale") {
+      const switchable = Boolean(rootsAvailable && themesAvailable);
+      let shown = [];
+      if (view === "both") {
+        if (rootsAvailable) shown.push("roots");
+        if (themesAvailable) shown.push("themes");
+      } else if (view === "roots") {
+        if (rootsAvailable) shown = ["roots"];
+        else if (themesAvailable) shown = ["themes"];
+      } else {
+        if (themesAvailable) shown = ["themes"];
+        else if (rootsAvailable) shown = ["roots"];
+      }
+      return { view, shown, switchable, next, title, ariaLabel };
+    }
+    return { view, shown: [], switchable: false, next, title, ariaLabel };
+  } catch (error) {
+    return {
+      view: "both",
+      shown: [],
+      switchable: false,
+      next: "roots",
+      title: "Showing root parents and themes \u00b7 click for root parents only",
+      ariaLabel: "Day stats bars: root parents and themes. Activate for root parents only.",
+    };
+  }
+}
+
+class BobLedgerToolsDayStripLanesMixin {
+  dayStripLaneViewCurrent() {
+    try {
+      return dayStripLaneViewOf(this.dayStripLaneView);
+    } catch (error) {
+      return "both";
+    }
+  }
+
+  dayStripLoadLaneView() {
+    try {
+      if (typeof this.dayStripLaneView !== "string") {
+        this.dayStripLaneView = "both";
+      }
+      try {
+        const app = this.app;
+        if (!app || typeof app.loadLocalStorage !== "function") {
+          return this.dayStripLaneViewCurrent();
+        }
+        const stored = app.loadLocalStorage(DAY_STRIP_LANES_STORAGE_KEY);
+        this.dayStripLaneView = dayStripLaneViewOf(stored);
+        return this.dayStripLaneView;
+      } catch (error) {
+        return this.dayStripLaneViewCurrent();
+      }
+    } catch (error) {
+      return "both";
+    }
+  }
+
+  dayStripSetLaneView(view, opts) {
+    try {
+      const sane = dayStripLaneViewOf(view);
+      this.dayStripLaneView = sane;
+      try {
+        if (this.app && typeof this.app.saveLocalStorage === "function") {
+          this.app.saveLocalStorage(DAY_STRIP_LANES_STORAGE_KEY, sane);
+        }
+      } catch (error) {
+        // A missing API or a throwing write keeps the in-memory view silently.
+      }
+      try {
+        const store = typeof this.dayStripViewsStore === "function"
+          ? this.dayStripViewsStore()
+          : this.dayStripViews;
+        if (store && typeof store[Symbol.iterator] === "function") {
+          for (const record of Array.from(store)) {
+            try {
+              if (record) record.paintedKey = null;
+            } catch (error) {
+              // Painted-key reset is best-effort.
+            }
+            try {
+              this.dayStripPaint(record);
+            } catch (error) {
+              // One stale strip never breaks the others.
+            }
+          }
+        }
+      } catch (error) {
+        // Repaint is best-effort.
+      }
+      try {
+        const from = opts && opts.focusFrom ? opts.focusFrom : null;
+        if (from) {
+          let sw = null;
+          try {
+            if (from.querySelector && typeof from.querySelector === "function") {
+              sw = from.querySelector(".bob-day-strip-lanes");
+            }
+          } catch (error) {
+            sw = null;
+          }
+          if (!sw && typeof dayStripFitFindByClass === "function") {
+            try {
+              const found = dayStripFitFindByClass(from, "bob-day-strip-lanes");
+              sw = (found && found[0]) || null;
+            } catch (error) {
+              sw = null;
+            }
+          }
+          if (sw && typeof sw.focus === "function") {
+            try {
+              sw.focus({ preventScroll: true });
+            } catch (error) {
+              try {
+                sw.focus();
+              } catch (inner) {
+                // Focus is best-effort.
+              }
+            }
+          }
+        }
+      } catch (error) {
+        // Focus restore is best-effort.
+      }
+      return sane;
+    } catch (error) {
+      return "both";
+    }
+  }
+
+  dayStripCycleLaneView(opts) {
+    try {
+      const current = this.dayStripLaneViewCurrent();
+      return this.dayStripSetLaneView(dayStripNextLaneView(current), opts);
+    } catch (error) {
+      return "both";
+    }
+  }
+}
 // ---- src/239-plugin-day-strip-render.js ----
 // DOM painter for the daily-note Day strip. The host element remains
 // stable; each update replaces only its children from the current model.
@@ -31652,6 +31925,10 @@ function dayStripThemeMix(report, worked, day, context) {
 // day can draw the check in once. Skeleton and non-ready paints never
 // write it.
 const dayStripMarkMemory = new WeakMap();
+// Last {day, view, shown} per host for the lane-enter animation. Written
+// only on ready paints (stale included); skeleton and other states never
+// write it, so skeleton to ready never animates.
+const dayStripLaneMemory = new WeakMap();
 function dayStripLink(doc, className, label, title) {
   return statsEl(doc, "span", {
     class: className,
@@ -31692,6 +31969,86 @@ function dayStripActivate(node, action) {
     if (event.preventDefault) event.preventDefault();
     invoke(event, false);
   });
+}
+
+// Lane-switch activation: click, Enter, and Space advance the cycle once.
+// The handler learns whether the switch had keyboard focus from the
+// document's active element. A click never steals editor focus, and
+// Ctrl/Cmd and middle-click do nothing special. Never a <button>.
+function dayStripLanesSwitchActivate(node, doc, handlers) {
+  if (!node || typeof node.addEventListener !== "function") return;
+  const isFocused = () => {
+    try {
+      return Boolean(doc) && doc.activeElement === node;
+    } catch (error) {
+      return false;
+    }
+  };
+  node.addEventListener("mousedown", (event) => {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  });
+  node.addEventListener("click", () => {
+    try {
+      if (typeof handlers.cycleLanes === "function") handlers.cycleLanes({ focused: isFocused() });
+    } catch (error) {
+      // Switching is best-effort.
+    }
+  });
+  node.addEventListener("keydown", (event) => {
+    try {
+      if (!event || (event.key !== "Enter" && event.key !== " ")) return;
+      if (event.preventDefault) event.preventDefault();
+      if (typeof handlers.cycleLanes === "function") handlers.cycleLanes({ focused: isFocused() });
+    } catch (error) {
+      // Switching is best-effort.
+    }
+  });
+}
+
+function dayStripRenderLanesSwitch(doc, model, handlers) {
+  try {
+    const lanes = model && model.lanes && typeof model.lanes === "object" ? model.lanes : null;
+    const view = lanes && typeof lanes.view === "string" ? lanes.view : "both";
+    const skeleton = model && model.state === "skeleton";
+    const switchable = Boolean(lanes && lanes.switchable);
+    if (!switchable && !skeleton) return null;
+    if (skeleton && !switchable) {
+      // Skeleton without two lanes still needs its geometry; the caller
+      // only asks for the switch on the top row when lanes exist.
+    }
+    const rootsOn = view === "both" || view === "roots";
+    const themesOn = view === "both" || view === "themes";
+    const node = statsEl(doc, "span", { class: "bob-day-strip-lanes" });
+    if (!node) return null;
+    if (node.setAttribute) node.setAttribute("data-view", view);
+    if (skeleton) {
+      if (node.setAttribute) node.setAttribute("aria-hidden", "true");
+      // Inert placeholder: no role, no tabindex, no listeners, hidden by CSS.
+    } else {
+      if (node.setAttribute) {
+        node.setAttribute("role", "button");
+        node.setAttribute("tabindex", "0");
+        node.setAttribute("aria-label", (lanes && lanes.ariaLabel) || "Day stats bars");
+        node.setAttribute("title", (lanes && lanes.title) || "");
+      }
+      dayStripLanesSwitchActivate(node, doc, handlers || {});
+    }
+    const rootsMark = statsEl(doc, "span", {
+      class: "bob-day-strip-lanes-mark bob-day-strip-lanes-mark-roots",
+      "aria-hidden": "true",
+    });
+    if (rootsMark && rootsMark.setAttribute) rootsMark.setAttribute("data-on", rootsOn ? "true" : "false");
+    dayStripAppend(node, rootsMark);
+    const themesMark = statsEl(doc, "span", {
+      class: "bob-day-strip-lanes-mark bob-day-strip-lanes-mark-themes",
+      "aria-hidden": "true",
+    });
+    if (themesMark && themesMark.setAttribute) themesMark.setAttribute("data-on", themesOn ? "true" : "false");
+    dayStripAppend(node, themesMark);
+    return node;
+  } catch (error) {
+    return null;
+  }
 }
 
 // Mouse-only activation for the full-width bar: a second target for the
@@ -31995,11 +32352,33 @@ function dayStripRenderBar(doc, model, handlers, lane) {
   return node;
 }
 
-function dayStripRenderMixRow(doc, model, handlers, lane) {
+function dayStripLaneShownFor(model) {
+  try {
+    const lanes = model && model.lanes && typeof model.lanes === "object" ? model.lanes : null;
+    if (lanes && Array.isArray(lanes.shown)) return lanes.shown.filter((lane) => lane === "roots" || lane === "themes");
+  } catch (error) {
+    // Fall through to the availability fallback.
+  }
+  try {
+    const skeleton = model && model.state === "skeleton";
+    if (skeleton) return ["roots", "themes"];
+    const mix = model ? dayStripLaneMix(model, "roots") : null;
+    const themes = model ? dayStripLaneMix(model, "themes") : null;
+    const shown = [];
+    if (mix && !mix.omitted) shown.push("roots");
+    if (themes && !themes.omitted) shown.push("themes");
+    return shown;
+  } catch (error) {
+    return [];
+  }
+}
+
+function dayStripRenderMixRow(doc, model, handlers, lane, isFirst) {
   const mix = dayStripLaneMix(model, lane);
   const skeleton = model.state === "skeleton";
   const showMix = skeleton || !mix.omitted;
-  const showMeta = lane !== "themes" && (skeleton || Boolean(model.metaText));
+  const first = isFirst === undefined ? lane !== "themes" : Boolean(isFirst);
+  const showMeta = first && (skeleton || Boolean(model.metaText));
   if (!showMix && !showMeta) return null;
   const themes = lane === "themes";
   const row = statsEl(doc, "div", {
@@ -32012,6 +32391,14 @@ function dayStripRenderMixRow(doc, model, handlers, lane) {
       class: "bob-day-strip-meta",
       title: model.stale && model.staleTitle ? model.staleTitle : null,
     }, skeleton ? "so far · 00:00" : model.metaText));
+  }
+  if (first) {
+    const lanes = model && model.lanes ? model.lanes : null;
+    const switchable = Boolean(lanes && lanes.switchable);
+    if (skeleton || switchable) {
+      const sw = dayStripRenderLanesSwitch(doc, model, handlers);
+      if (sw) dayStripAppend(row, sw);
+    }
   }
   return row;
 }
@@ -32032,6 +32419,47 @@ function dayStripRenderUnavailable(doc, model, handlers) {
   return line;
 }
 
+function dayStripLaneEntering(el, model, shown) {
+  try {
+    if (!el || !model || model.state !== "ready") return [];
+    let wasSkeleton = false;
+    try {
+      const cls = typeof el.getAttribute === "function" ? el.getAttribute("class") : "";
+      wasSkeleton = String(cls || "").split(/\s+/).includes("bob-day-strip-state-skeleton");
+    } catch (error) {
+      wasSkeleton = false;
+    }
+    if (wasSkeleton) return [];
+    let prev = null;
+    try {
+      prev = dayStripLaneMemory.get(el);
+    } catch (error) {
+      return [];
+    }
+    if (!prev || !prev.day || prev.day !== model.day) return [];
+    const prevView = prev.view || "both";
+    const currentView = (model.lanes && model.lanes.view) || "both";
+    if (prevView === currentView) return [];
+    const prevShown = Array.isArray(prev.shown) ? prev.shown : [];
+    return (Array.isArray(shown) ? shown : []).filter((lane) => !prevShown.includes(lane));
+  } catch (error) {
+    return [];
+  }
+}
+
+function dayStripRememberLaneView(el, model, shown) {
+  try {
+    if (!el || !model || model.state !== "ready") return;
+    dayStripLaneMemory.set(el, {
+      day: model.day,
+      view: (model.lanes && model.lanes.view) || "both",
+      shown: Array.isArray(shown) ? shown.slice() : [],
+    });
+  } catch (error) {
+    // Host memory is best-effort.
+  }
+}
+
 function paintDayStrip(el, model, handlers) {
   if (!el || !model) return el;
   const safeModel = model && typeof model === "object" ? model : {};
@@ -32040,6 +32468,9 @@ function paintDayStrip(el, model, handlers) {
   if (!doc) return el;
   try {
     const arriveIds = dayStripArriveIds(el, safeModel);
+    const shown = dayStripLaneShownFor(safeModel);
+    const entering = dayStripLaneEntering(el, safeModel, shown);
+    const enteringSet = new Set(entering);
     if (typeof el.replaceChildren === "function") el.replaceChildren();
     else if (Array.isArray(el.children)) {
       for (const child of el.children) child.parentNode = null;
@@ -32072,21 +32503,39 @@ function paintDayStrip(el, model, handlers) {
       dayStripAppend(facts, dayStripRenderFact(doc, fact, safeModel, safeHandlers, Boolean(arriveIds[fact.id])));
     }
     dayStripAppend(el, facts);
-    const mixRow = dayStripRenderMixRow(doc, safeModel, safeHandlers, "roots");
-    if (mixRow) dayStripAppend(el, mixRow);
-    const showMix = safeModel.state === "skeleton" || (safeModel.mix && !safeModel.mix.omitted);
-    if (showMix) {
-      const bar = dayStripRenderBar(doc, safeModel, safeHandlers, "roots");
-      if (bar) dayStripAppend(el, bar);
+    if (shown.length > 0) {
+      shown.forEach((lane, index) => {
+        const isFirst = index === 0;
+        const row = dayStripRenderMixRow(doc, safeModel, safeHandlers, lane, isFirst);
+        if (row) {
+          if (enteringSet.has(lane)) {
+            try {
+              const current = row.getAttribute("class") || "";
+              row.setAttribute("class", (current ? current + " " : "") + "bob-day-strip-lane-enter");
+            } catch (error) {
+              // Enter class is best-effort.
+            }
+          }
+          dayStripAppend(el, row);
+        }
+        const bar = dayStripRenderBar(doc, safeModel, safeHandlers, lane);
+        if (bar) {
+          if (enteringSet.has(lane)) {
+            try {
+              const current = bar.getAttribute("class") || "";
+              bar.setAttribute("class", (current ? current + " " : "") + "bob-day-strip-lane-enter");
+            } catch (error) {
+              // Enter class is best-effort.
+            }
+          }
+          dayStripAppend(el, bar);
+        }
+      });
+    } else {
+      const loneRow = dayStripRenderMixRow(doc, safeModel, safeHandlers, "roots", true);
+      if (loneRow) dayStripAppend(el, loneRow);
     }
-    const showThemes = safeModel.state === "skeleton" || (safeModel.themes && !safeModel.themes.omitted);
-    if (showThemes) {
-      const themesRow = dayStripRenderMixRow(doc, safeModel, safeHandlers, "themes");
-      if (themesRow) dayStripAppend(el, themesRow);
-      const themesBar = dayStripRenderBar(doc, safeModel, safeHandlers, "themes");
-      if (themesBar) dayStripAppend(el, themesBar);
-    }
-    const fitLanes = showMix || showThemes;
+    const fitLanes = shown.length > 0;
     if ((state === "ready" || state === "skeleton") && fitLanes) {
       try {
         if (typeof dayStripFitLegend === "function") dayStripFitLegend(el);
@@ -32115,6 +32564,7 @@ function paintDayStrip(el, model, handlers) {
       }
     }
     dayStripRememberMarks(el, safeModel);
+    dayStripRememberLaneView(el, safeModel, shown);
     return el;
   } catch (error) {
     // A failed paint must not escape into Obsidian's render lifecycle.
@@ -32880,6 +33330,13 @@ class BobLedgerToolsDayStripMixin {
   // reads and writes never happen here. Never throws.
   setupDayStripHosts() {
     try {
+      if (typeof this.dayStripLoadLaneView === "function") {
+        this.dayStripLoadLaneView();
+      }
+    } catch (error) {
+      // Lane-view load is best-effort.
+    }
+    try {
       if (typeof this.setupDayStripPlanHost === "function") {
         this.setupDayStripPlanHost();
       }
@@ -33198,6 +33655,14 @@ class BobLedgerToolsDayStripMixin {
       }
       const localToday = this.dayStripLocalNow();
       const day = record.day;
+      let laneView = "both";
+      try {
+        laneView = typeof this.dayStripLaneViewCurrent === "function"
+          ? this.dayStripLaneViewCurrent()
+          : dayStripLaneViewOf(this.dayStripLaneView);
+      } catch (error) {
+        laneView = "both";
+      }
       const handlers = {
         openStats: (opts) => {
           try {
@@ -33221,6 +33686,16 @@ class BobLedgerToolsDayStripMixin {
             // Retry is best-effort.
           }
         },
+        cycleLanes: (opts) => {
+          try {
+            const safe = opts && typeof opts === "object" ? opts : {};
+            if (typeof this.dayStripCycleLaneView === "function") {
+              this.dayStripCycleLaneView({ focusFrom: safe.focused ? record.el : null });
+            }
+          } catch (error) {
+            // Cycling is best-effort.
+          }
+        },
       };
       const finish = (model, counter, stamp) => {
         try {
@@ -33228,6 +33703,8 @@ class BobLedgerToolsDayStripMixin {
             ? model.themes.segments.map((segment) =>
               String(segment.key || "") + ":" + String(segment.hue || "") + ":" + String(segment.shade || 0)).join(",")
             : "");
+          const laneSig = (model.lanes && typeof model.lanes.view === "string" ? model.lanes.view : laneView)
+            + ":" + (model.lanes && Array.isArray(model.lanes.shown) ? model.lanes.shown.join(",") : "");
           const key = [
             model.state,
             model.day,
@@ -33237,6 +33714,7 @@ class BobLedgerToolsDayStripMixin {
             model.error ? model.error.code : "",
             (model.facts || []).map((fact) => fact.display).join(","),
             themeSig,
+            laneSig,
           ].join("|");
           if (record.paintedKey === key) {
             return model;
@@ -33258,19 +33736,20 @@ class BobLedgerToolsDayStripMixin {
         return finish(
           dayStripModel(null, typeof day === "string" ? day : "", {
             localToday,
+            laneView,
           }),
           null,
         );
       }
       if (localToday && day > localToday) {
-        return finish(dayStripModel(null, day, { localToday }), null);
+        return finish(dayStripModel(null, day, { localToday, laneView }), null);
       }
       const { selection, options } = this.dayStripOptionsForRecord(
         record,
         localToday,
       );
       if (selection.source === "none" || !options) {
-        return finish(dayStripModel(null, day, { localToday }), null);
+        return finish(dayStripModel(null, day, { localToday, laneView }), null);
       }
       const snapshot =
         result &&
@@ -33306,6 +33785,7 @@ class BobLedgerToolsDayStripMixin {
             fetchedAt,
             stale,
             error,
+            laneView,
           }),
           "skeleton",
           "miss",
@@ -33317,6 +33797,7 @@ class BobLedgerToolsDayStripMixin {
           fetchedAt,
           stale,
           error,
+          laneView,
           themeHueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
         }),
         "cached",
@@ -34110,6 +34591,11 @@ class BobLedgerToolsDayStripPlanHostMixin {
           name: "Toggle Day stats",
           callback: () => this.toggleDayStripPlanHost(),
         });
+        this.addCommand({
+          id: "cycle-day-stats-bars",
+          name: "Cycle Day stats bars",
+          callback: () => this.cycleDayStripBarsCommand(),
+        });
       }
       try {
         if (
@@ -34172,6 +34658,34 @@ class BobLedgerToolsDayStripPlanHostMixin {
       return enabled;
     } catch (error) {
       return this.dayStripSessionEnabled !== false;
+    }
+  }
+
+  cycleDayStripBarsCommand() {
+    try {
+      let view = "both";
+      try {
+        if (typeof this.dayStripCycleLaneView === "function") {
+          view = this.dayStripCycleLaneView() || "both";
+        } else if (typeof this.dayStripLaneViewCurrent === "function") {
+          view = this.dayStripLaneViewCurrent();
+        }
+      } catch (error) {
+        view = "both";
+      }
+      const message = view === "roots"
+        ? "Day stats bars: root parents only"
+        : view === "themes"
+          ? "Day stats bars: themes only"
+          : "Day stats bars: root parents and themes";
+      try {
+        new Notice(message);
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return view;
+    } catch (error) {
+      return "both";
     }
   }
 
@@ -53733,6 +54247,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsHomesMixin,
   BobLedgerToolsStatsPanelsMixin,
   BobLedgerToolsDayStripMixin,
+  BobLedgerToolsDayStripLanesMixin,
   BobLedgerToolsDayStripFenceMixin,
   BobLedgerToolsDayStripPlanHostMixin,
   BobLedgerToolsFreshnessStatusMixin,
@@ -56207,6 +56722,16 @@ module.exports.helpers = {
   dayStripModel,
   dayStripThemeMix,
   dayStripThemeEmpty,
+  DAY_STRIP_LANE_VIEWS,
+  DAY_STRIP_LANES_STORAGE_KEY,
+  dayStripLaneViewOf,
+  dayStripNextLaneView,
+  dayStripLaneLayout,
+  dayStripLaneViewForContext,
+  dayStripLanesFor,
+  dayStripLaneShownFor,
+  dayStripRenderLanesSwitch,
+  dayStripLanesSwitchActivate,
   dayStripLegendFit,
   dayStripFitLegend,
   dayStripEnsureFitObserver,

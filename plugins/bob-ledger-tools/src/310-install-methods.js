@@ -34,6 +34,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsHomesMixin,
   BobLedgerToolsStatsPanelsMixin,
   BobLedgerToolsDayStripMixin,
+  BobLedgerToolsDayStripLanesMixin,
   BobLedgerToolsDayStripFenceMixin,
   BobLedgerToolsDayStripPlanHostMixin,
   BobLedgerToolsFreshnessStatusMixin,

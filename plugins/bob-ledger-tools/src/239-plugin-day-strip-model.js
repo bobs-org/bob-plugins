@@ -309,16 +309,75 @@ function dayStripOmittedLane(dimension) {
   };
 }
 
-function dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes) {
+function dayStripLaneViewForContext(context) {
+  try {
+    const raw = context && typeof context === "object" ? context.laneView : null;
+    if (typeof dayStripLaneViewOf === "function") return dayStripLaneViewOf(raw);
+    return raw === "roots" || raw === "themes" || raw === "both" ? raw : "both";
+  } catch (error) {
+    return "both";
+  }
+}
+
+function dayStripLanesFor(state, mix, themes, view) {
+  try {
+    if (typeof dayStripLaneLayout === "function") {
+      return dayStripLaneLayout({ state, mix, themes, view });
+    }
+  } catch (error) {
+    // Fall through to the local fallback.
+  }
+  const sane = view === "roots" || view === "themes" || view === "both" ? view : "both";
+  const rootsAvailable = Boolean(mix && mix.omitted !== true);
+  const themesAvailable = Boolean(themes && themes.omitted !== true);
+  let shown = [];
+  if (state === "skeleton") {
+    shown = sane === "both" ? ["roots", "themes"] : [sane];
+  } else if (state === "ready" || state === "stale") {
+    if (sane === "both") {
+      if (rootsAvailable) shown.push("roots");
+      if (themesAvailable) shown.push("themes");
+    } else if (sane === "roots") {
+      shown = rootsAvailable ? ["roots"] : (themesAvailable ? ["themes"] : []);
+    } else {
+      shown = themesAvailable ? ["themes"] : (rootsAvailable ? ["roots"] : []);
+    }
+  }
+  const rootsName = mix && mix.dimension === "area" ? "areas" : "root parents";
+  const title = sane === "themes"
+    ? "Showing themes only \u00b7 click for both"
+    : sane === "roots"
+      ? "Showing " + rootsName + " only \u00b7 click for themes only"
+      : "Showing " + rootsName + " and themes \u00b7 click for " + rootsName + " only";
+  const ariaLabel = sane === "themes"
+    ? "Day stats bars: themes only. Activate for " + rootsName + " and themes."
+    : sane === "roots"
+      ? "Day stats bars: " + rootsName + " only. Activate for themes only."
+      : "Day stats bars: " + rootsName + " and themes. Activate for " + rootsName + " only.";
+  return {
+    view: sane,
+    shown,
+    switchable: Boolean(rootsAvailable && themesAvailable && (state === "ready" || state === "stale" || state === "skeleton")),
+    next: sane === "both" ? "roots" : sane === "roots" ? "themes" : "both",
+    title,
+    ariaLabel,
+  };
+}
+
+function dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes, shown) {
   const values = facts.map((fact) => fact.label + " " + fact.display).join(", ");
   let label = "Day stats for " + dateWords.full + (provisional ? ", so far" : "") + (values ? ": " + values + "." : ".");
-  if (mix && !mix.omitted && mix.segments.length) {
-    const sentence = mix.dimension === "area" ? "Time by area" : "Time by root parent";
-    label += " " + sentence + ": " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
-  } else if (mix && mix.empty) {
-    label += " No Pomodoros.";
+  const showRoots = !Array.isArray(shown) || shown.includes("roots");
+  const showThemes = !Array.isArray(shown) || shown.includes("themes");
+  if (showRoots) {
+    if (mix && !mix.omitted && mix.segments.length) {
+      const sentence = mix.dimension === "area" ? "Time by area" : "Time by root parent";
+      label += " " + sentence + ": " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
+    } else if (mix && mix.empty) {
+      label += " No Pomodoros.";
+    }
   }
-  if (themes && !themes.omitted && themes.segments.length) {
+  if (showThemes && themes && !themes.omitted && themes.segments.length) {
     label += " Time by theme: " + themes.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   }
   return label;
@@ -328,18 +387,25 @@ function dayStripModel(report, day, context) {
   try {
     const safeContext = context && typeof context === "object" ? context : {};
     const safeReport = report && typeof report === "object" ? report : null;
+    const laneView = dayStripLaneViewForContext(safeContext);
     const dateWords = dayStripDateWords(day);
     if (!dateWords) {
-      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "", stale: false, error: null };
+      const hiddenMix = dayStripOmittedLane(null);
+      const hiddenThemes = dayStripOmittedLane("theme");
+      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: hiddenMix, themes: hiddenThemes, lanes: dayStripLanesFor("hidden", hiddenMix, hiddenThemes, laneView), ariaLabel: "", stale: false, error: null };
     }
     const localToday = typeof safeContext.localToday === "string" ? safeContext.localToday : "";
     if (dayStripDateParts(localToday) && day > localToday) {
-      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "", stale: false, error: null };
+      const futureMix = dayStripOmittedLane(null);
+      const futureThemes = dayStripOmittedLane("theme");
+      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: futureMix, themes: futureThemes, lanes: dayStripLanesFor("future", futureMix, futureThemes, laneView), ariaLabel: "", stale: false, error: null };
     }
     const error = dayStripErrorInfo(safeContext.error);
     if (!safeReport) {
       if (error) {
-        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
+        const unavailableMix = dayStripOmittedLane(null);
+        const unavailableThemes = dayStripOmittedLane("theme");
+        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: unavailableMix, themes: unavailableThemes, lanes: dayStripLanesFor("unavailable", unavailableMix, unavailableThemes, laneView), ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
       }
       const facts = DAY_STRIP_METRIC_IDS.map((id) => ({
         id,
@@ -358,7 +424,8 @@ function dayStripModel(report, day, context) {
       }));
       const mix = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "root_parent", title: "Time by root parent" };
       const themes = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "theme", title: "Time by theme" };
-      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, themes, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
+      const lanes = dayStripLanesFor("skeleton", mix, themes, laneView);
+      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, themes, lanes, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
     }
 
     // A default report from before midnight must never be used to show a
@@ -378,7 +445,8 @@ function dayStripModel(report, day, context) {
     const provisional = facts.some((fact) => fact.provisional);
     const asOf = day === localToday ? dayStripAsOf(safeContext.fetchedAt, true) : "";
     const stale = safeContext.stale === true;
-    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes);
+    const lanes = dayStripLanesFor(stale ? "stale" : "ready", mix, themes, laneView);
+    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes, lanes.shown);
     const metaText = dayStripMetaText({ day, localToday, asOf, stale });
     const staleTitle = stale
       ? ((error && error.title) || (typeof safeContext.error === "string" ? safeContext.error : "Refresh failed")) +
@@ -394,6 +462,7 @@ function dayStripModel(report, day, context) {
       facts,
       mix,
       themes,
+      lanes,
       ariaLabel,
       stale,
       staleTitle,
@@ -402,6 +471,8 @@ function dayStripModel(report, day, context) {
   } catch (error) {
     const safeDay = typeof day === "string" ? day : "";
     const dateWords = dayStripDateWords(safeDay);
+    const fallbackMix = dayStripOmittedLane(null);
+    const fallbackThemes = dayStripOmittedLane("theme");
     return {
       state: "unavailable",
       day: safeDay,
@@ -410,8 +481,9 @@ function dayStripModel(report, day, context) {
       asOf: "",
       metaText: "",
       facts: [],
-      mix: dayStripOmittedLane(null),
-      themes: dayStripOmittedLane("theme"),
+      mix: fallbackMix,
+      themes: fallbackThemes,
+      lanes: dayStripLanesFor("unavailable", fallbackMix, fallbackThemes, "both"),
       ariaLabel: "Day stats unavailable — bob stats failed.",
       stale: false,
       error: { code: "model-error", title: "bob stats failed", hint: "" },

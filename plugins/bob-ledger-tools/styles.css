@@ -4094,9 +4094,9 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   }
 }
 
-/* Day strip: a row of stacked stats above the plan badges. The full-width
-   theme bar (else the roots bar) is the last line, so it reads as the
-   separator above the badges. No card, border, background, shadow, or
+/* Day strip: a row of stacked stats above the plan badges. The last
+   painted bar is the separator above the badges. A quiet switch on the
+   top lane row chooses the lanes. No card, border, background, shadow, or
    radius on the strip; separation comes from spacing only. Area hues,
    theme hues, plus status inks for boolean marks are the colours. */
 .bob-day-strip {
@@ -4341,7 +4341,7 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   padding: 0 0.7em;
 }
 
-.bob-day-strip-mix-row.bob-day-strip-lane-themes {
+.bob-day-strip-bar + .bob-day-strip-mix-row {
   margin-top: 0.6em;
 }
 
@@ -4486,8 +4486,69 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   white-space: nowrap;
 }
 
+/* Lane switch: quiet chrome in the legend's size and faint ink. The marks
+   speak the strip's own language: a circle for root parents, a rounded
+   square for themes, filled when shown and hollow when hidden. */
+.bob-day-strip-lanes {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  min-height: 14px;
+  margin-left: auto;
+  padding: 2px 4px;
+  gap: 0.25em;
+  border-radius: var(--radius-s, 4px);
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 0.85em;
+  line-height: 1;
+}
+.bob-day-strip-lanes:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+.bob-day-strip-lanes:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+.bob-day-strip-lanes-mark {
+  display: block;
+  flex: none;
+  width: 0.5em;
+  height: 0.5em;
+}
+.bob-day-strip-lanes-mark-roots {
+  border-radius: 50%;
+}
+.bob-day-strip-lanes-mark-themes {
+  border-radius: 1.5px;
+}
+.bob-day-strip-lanes-mark[data-on="true"] {
+  background: currentColor;
+}
+.bob-day-strip-lanes-mark[data-on="false"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+/* A newly shown lane fades in softly; layout never shifts beyond the
+   inevitable height change. The reduced-motion block below disables it. */
+.bob-day-strip-lane-enter {
+  animation: bob-day-strip-lane-enter 160ms ease-out;
+}
+@keyframes bob-day-strip-lane-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .bob-day-strip-state-skeleton .bob-day-strip-legend,
 .bob-day-strip-state-skeleton .bob-day-strip-meta {
+  visibility: hidden;
+}
+
+.bob-day-strip-state-skeleton .bob-day-strip-lanes {
   visibility: hidden;
 }
 
@@ -4529,6 +4590,13 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   }
   .bob-day-strip-mark-rim {
     stroke: var(--bob-day-strip-mark-ink);
+  }
+  .bob-day-strip-lanes-mark[data-on="true"] {
+    background: ButtonText;
+  }
+  .bob-day-strip-lanes-mark[data-on="false"] {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px ButtonText;
   }
 }
 

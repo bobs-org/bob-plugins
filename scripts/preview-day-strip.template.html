@@ -84,7 +84,7 @@
     window.__dayStripStage = "plugin-loaded";
     const helpers = moduleObject.exports.helpers;
     window.__dayStripStage = "helpers-loaded";
-    const cases = [
+    const baseCases = [
       { id: "today", title: "Today in progress · 14:50", fixture: "today" },
       { id: "past", title: "Complete past day", fixture: "past" },
       { id: "skeleton", title: "First load · skeleton", fixture: null },
@@ -107,6 +107,18 @@
       { id: "hover", title: "Forced hover on a fact", fixture: "today", pseudo: "hover" },
       { id: "focus", title: "Forced focus-visible on a fact", fixture: "today", pseudo: "focus-visible" },
     ];
+    const viewAxis = ["today", "past", "screenshot-day", "theme-collision", "no-pomodoros", "no-theme-hues", "skeleton", "stale"];
+    const cases = [];
+    for (const base of baseCases) {
+      cases.push({ ...base, view: "both" });
+    }
+    for (const baseId of viewAxis) {
+      const base = baseCases.find((item) => item.id === baseId);
+      if (!base) continue;
+      for (const view of ["roots", "themes"]) {
+        cases.push({ ...base, id: base.id + "-" + view, title: base.title + " · " + view + " only", view });
+      }
+    }
 
     function mockBadges(doc) {
       const plan = doc.createElement("div");
@@ -494,9 +506,9 @@
           || bars.find((bar) => bar.getAttribute("data-lane") === "themes")
           || null;
         out.themeLanePresent = Boolean(themesBar);
-        const rootsBar = bars.find((bar) => bar.getAttribute("data-lane") === "roots") || bars[0] || null;
+        const rootsBar = bars.find((bar) => bar.getAttribute("data-lane") === "roots") || null;
         const themesRow = strip.querySelector(".bob-day-strip-lane-themes");
-        if (rootsBar && themesRow && themesBar) {
+        if (rootsBar && themesRow && themesBar && rootsBar !== themesBar) {
           const a = rootsBar.getBoundingClientRect();
           const b = themesRow.getBoundingClientRect();
           const c = themesBar.getBoundingClientRect();
@@ -549,6 +561,91 @@
         }
       } catch (error) {
         // Theme-lane measurement never breaks the matrix.
+      }
+      return out;
+    }
+
+    // (t)-(w) lane-switch geometry: the switch box, its marks, and the
+    // painted lanes. Never breaks the matrix.
+    function measureLaneSwitch(strip) {
+      const out = {
+        switchPresent: false,
+        switchWidth: 0,
+        switchHeight: 0,
+        switchBox: null,
+        switchView: "",
+        switchInsideTopRow: null,
+        switchMarks: [],
+        legendDotWidth: 0,
+        legendDotHeight: 0,
+        laneRowCount: 0,
+        laneBarCount: 0,
+        laneRows: [],
+        laneBars: [],
+      };
+      try {
+        const rows = Array.from(strip.querySelectorAll(":scope > .bob-day-strip-mix-row"));
+        const bars = Array.from(strip.querySelectorAll(":scope > .bob-day-strip-bar"));
+        out.laneRowCount = rows.length;
+        out.laneBarCount = bars.length;
+        out.laneRows = rows.map((row) => row.getAttribute("data-lane") || "");
+        out.laneBars = bars.map((bar) => bar.getAttribute("data-lane") || "");
+        const sw = strip.querySelector(".bob-day-strip-lanes");
+        if (!sw) return out;
+        out.switchPresent = true;
+        out.switchView = sw.getAttribute("data-view") || "";
+        try {
+          const box = sw.getBoundingClientRect();
+          out.switchBox = { x: box.x, y: box.y, width: box.width, height: box.height };
+          out.switchWidth = Math.round(box.width * 10) / 10;
+          out.switchHeight = Math.round(box.height * 10) / 10;
+        } catch (error) {
+          // Box is best-effort.
+        }
+        try {
+          const topRow = rows[0] || null;
+          if (topRow && out.switchBox) {
+            const topBox = topRow.getBoundingClientRect();
+            const inside = out.switchBox.x >= topBox.x - 0.5
+              && (out.switchBox.x + out.switchBox.width) <= topBox.right + 0.5
+              && out.switchBox.y >= topBox.y - 0.5
+              && (out.switchBox.y + out.switchBox.height) <= topBox.bottom + 0.5;
+            out.switchInsideTopRow = Boolean(inside);
+          }
+        } catch (error) {
+          // Containment is best-effort.
+        }
+        try {
+          const dot = strip.querySelector(".bob-day-strip-legend-dot");
+          if (dot) {
+            const dotBox = dot.getBoundingClientRect();
+            out.legendDotWidth = Math.round(dotBox.width * 10) / 10;
+            out.legendDotHeight = Math.round(dotBox.height * 10) / 10;
+          }
+        } catch (error) {
+          // Dot size is best-effort.
+        }
+        try {
+          const marks = Array.from(sw.querySelectorAll(".bob-day-strip-lanes-mark"));
+          for (const mark of marks) {
+            const box = mark.getBoundingClientRect();
+            const style = getComputedStyle(mark);
+            out.switchMarks.push({
+              lane: (mark.getAttribute("class") || "").includes("bob-day-strip-lanes-mark-roots") ? "roots" : "themes",
+              width: Math.round(box.width * 10) / 10,
+              height: Math.round(box.height * 10) / 10,
+              radius: parseFloat(style.borderRadius) || 0,
+              radiusText: style.borderRadius || "",
+              background: style.backgroundColor || "",
+              shadow: style.boxShadow || "",
+              on: mark.getAttribute("data-on") || "",
+            });
+          }
+        } catch (error) {
+          // Marks are best-effort.
+        }
+      } catch (error) {
+        // Switch measurement never breaks the matrix.
       }
       return out;
     }
@@ -657,16 +754,19 @@
         root.appendChild(card);
 
         const fixture = item.fixture ? fixtureReports[item.fixture] : null;
+        const laneView = item.view || "both";
         const context = fixture
-          ? { localToday: fixture.localToday, fetchedAt: fixture.fetchedAt, stale: item.stale === true, error: item.stale ? { code: "timeout", title: "bob stats timed out" } : null }
-          : { localToday: "2026-10-24", error: item.error || null };
+          ? { localToday: fixture.localToday, fetchedAt: fixture.fetchedAt, stale: item.stale === true, error: item.stale ? { code: "timeout", title: "bob stats timed out" } : null, laneView }
+          : { localToday: "2026-10-24", error: item.error || null, laneView };
         const model = helpers.dayStripModel(fixture && fixture.report, fixture ? fixture.day : "2026-10-24", context);
         helpers.paintDayStrip(strip, model, { openStats() {}, retry() {} });
         const mixOmitted = Boolean(!model || !model.mix || model.mix.omitted);
         const segments = !mixOmitted && model && model.mix && Array.isArray(model.mix.segments) ? model.mix.segments.length : 0;
         const themeOmitted = Boolean(!model || !model.themes || model.themes.omitted);
         const themeSegmentsCount = !themeOmitted && model.themes && Array.isArray(model.themes.segments) ? model.themes.segments.length : 0;
-        measurements.push({ state: item.id, relaxed: item.relaxed === true, segments, mixOmitted, themeOmitted, themeSegmentsCount, ...measureStrip(strip) });
+        const laneViewActual = (model && model.lanes && model.lanes.view) || laneView;
+        const laneShown = (model && model.lanes && Array.isArray(model.lanes.shown)) ? model.lanes.shown.slice() : [];
+        measurements.push({ state: item.id, view: laneView, laneView: laneViewActual, laneShown, relaxed: item.relaxed === true, segments, mixOmitted, themeOmitted, themeSegmentsCount, ...measureStrip(strip), ...measureLaneSwitch(strip) });
       }
       const readingCard = document.createElement("section");
       readingCard.className = "preview-case";
@@ -684,13 +784,13 @@
       readingCard.appendChild(readingNote);
       root.appendChild(readingCard);
       const fixture = fixtureReports.today;
-      const readingModel = helpers.dayStripModel(fixture.report, fixture.day, { localToday: fixture.localToday, fetchedAt: fixture.fetchedAt });
+      const readingModel = helpers.dayStripModel(fixture.report, fixture.day, { localToday: fixture.localToday, fetchedAt: fixture.fetchedAt, laneView: "both" });
       helpers.paintDayStrip(readingStrip, readingModel, { openStats() {}, retry() {} });
       const readingOmitted = Boolean(!readingModel || !readingModel.mix || readingModel.mix.omitted);
       const readingSegments = !readingOmitted && readingModel && readingModel.mix && Array.isArray(readingModel.mix.segments) ? readingModel.mix.segments.length : 0;
       const readingThemeOmitted = Boolean(!readingModel || !readingModel.themes || readingModel.themes.omitted);
       const readingThemeSegments = !readingThemeOmitted && readingModel.themes && Array.isArray(readingModel.themes.segments) ? readingModel.themes.segments.length : 0;
-      measurements.push({ state: "reading", relaxed: false, segments: readingSegments, mixOmitted: readingOmitted, themeOmitted: readingThemeOmitted, themeSegmentsCount: readingThemeSegments, ...measureStrip(readingStrip) });
+      measurements.push({ state: "reading", view: "both", laneView: "both", laneShown: (readingModel.lanes && readingModel.lanes.shown) || [], relaxed: false, segments: readingSegments, mixOmitted: readingOmitted, themeOmitted: readingThemeOmitted, themeSegmentsCount: readingThemeSegments, ...measureStrip(readingStrip), ...measureLaneSwitch(readingStrip) });
       return { width, theme, measurements, pageScrollWidth: document.documentElement.scrollWidth, viewportWidth: window.innerWidth };
     }
     window.dayStripPreview = { renderMatrix, cases };

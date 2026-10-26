@@ -6,6 +6,10 @@
 // day can draw the check in once. Skeleton and non-ready paints never
 // write it.
 const dayStripMarkMemory = new WeakMap();
+// Last {day, view, shown} per host for the lane-enter animation. Written
+// only on ready paints (stale included); skeleton and other states never
+// write it, so skeleton to ready never animates.
+const dayStripLaneMemory = new WeakMap();
 function dayStripLink(doc, className, label, title) {
   return statsEl(doc, "span", {
     class: className,
@@ -46,6 +50,86 @@ function dayStripActivate(node, action) {
     if (event.preventDefault) event.preventDefault();
     invoke(event, false);
   });
+}
+
+// Lane-switch activation: click, Enter, and Space advance the cycle once.
+// The handler learns whether the switch had keyboard focus from the
+// document's active element. A click never steals editor focus, and
+// Ctrl/Cmd and middle-click do nothing special. Never a <button>.
+function dayStripLanesSwitchActivate(node, doc, handlers) {
+  if (!node || typeof node.addEventListener !== "function") return;
+  const isFocused = () => {
+    try {
+      return Boolean(doc) && doc.activeElement === node;
+    } catch (error) {
+      return false;
+    }
+  };
+  node.addEventListener("mousedown", (event) => {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  });
+  node.addEventListener("click", () => {
+    try {
+      if (typeof handlers.cycleLanes === "function") handlers.cycleLanes({ focused: isFocused() });
+    } catch (error) {
+      // Switching is best-effort.
+    }
+  });
+  node.addEventListener("keydown", (event) => {
+    try {
+      if (!event || (event.key !== "Enter" && event.key !== " ")) return;
+      if (event.preventDefault) event.preventDefault();
+      if (typeof handlers.cycleLanes === "function") handlers.cycleLanes({ focused: isFocused() });
+    } catch (error) {
+      // Switching is best-effort.
+    }
+  });
+}
+
+function dayStripRenderLanesSwitch(doc, model, handlers) {
+  try {
+    const lanes = model && model.lanes && typeof model.lanes === "object" ? model.lanes : null;
+    const view = lanes && typeof lanes.view === "string" ? lanes.view : "both";
+    const skeleton = model && model.state === "skeleton";
+    const switchable = Boolean(lanes && lanes.switchable);
+    if (!switchable && !skeleton) return null;
+    if (skeleton && !switchable) {
+      // Skeleton without two lanes still needs its geometry; the caller
+      // only asks for the switch on the top row when lanes exist.
+    }
+    const rootsOn = view === "both" || view === "roots";
+    const themesOn = view === "both" || view === "themes";
+    const node = statsEl(doc, "span", { class: "bob-day-strip-lanes" });
+    if (!node) return null;
+    if (node.setAttribute) node.setAttribute("data-view", view);
+    if (skeleton) {
+      if (node.setAttribute) node.setAttribute("aria-hidden", "true");
+      // Inert placeholder: no role, no tabindex, no listeners, hidden by CSS.
+    } else {
+      if (node.setAttribute) {
+        node.setAttribute("role", "button");
+        node.setAttribute("tabindex", "0");
+        node.setAttribute("aria-label", (lanes && lanes.ariaLabel) || "Day stats bars");
+        node.setAttribute("title", (lanes && lanes.title) || "");
+      }
+      dayStripLanesSwitchActivate(node, doc, handlers || {});
+    }
+    const rootsMark = statsEl(doc, "span", {
+      class: "bob-day-strip-lanes-mark bob-day-strip-lanes-mark-roots",
+      "aria-hidden": "true",
+    });
+    if (rootsMark && rootsMark.setAttribute) rootsMark.setAttribute("data-on", rootsOn ? "true" : "false");
+    dayStripAppend(node, rootsMark);
+    const themesMark = statsEl(doc, "span", {
+      class: "bob-day-strip-lanes-mark bob-day-strip-lanes-mark-themes",
+      "aria-hidden": "true",
+    });
+    if (themesMark && themesMark.setAttribute) themesMark.setAttribute("data-on", themesOn ? "true" : "false");
+    dayStripAppend(node, themesMark);
+    return node;
+  } catch (error) {
+    return null;
+  }
 }
 
 // Mouse-only activation for the full-width bar: a second target for the
@@ -349,11 +433,33 @@ function dayStripRenderBar(doc, model, handlers, lane) {
   return node;
 }
 
-function dayStripRenderMixRow(doc, model, handlers, lane) {
+function dayStripLaneShownFor(model) {
+  try {
+    const lanes = model && model.lanes && typeof model.lanes === "object" ? model.lanes : null;
+    if (lanes && Array.isArray(lanes.shown)) return lanes.shown.filter((lane) => lane === "roots" || lane === "themes");
+  } catch (error) {
+    // Fall through to the availability fallback.
+  }
+  try {
+    const skeleton = model && model.state === "skeleton";
+    if (skeleton) return ["roots", "themes"];
+    const mix = model ? dayStripLaneMix(model, "roots") : null;
+    const themes = model ? dayStripLaneMix(model, "themes") : null;
+    const shown = [];
+    if (mix && !mix.omitted) shown.push("roots");
+    if (themes && !themes.omitted) shown.push("themes");
+    return shown;
+  } catch (error) {
+    return [];
+  }
+}
+
+function dayStripRenderMixRow(doc, model, handlers, lane, isFirst) {
   const mix = dayStripLaneMix(model, lane);
   const skeleton = model.state === "skeleton";
   const showMix = skeleton || !mix.omitted;
-  const showMeta = lane !== "themes" && (skeleton || Boolean(model.metaText));
+  const first = isFirst === undefined ? lane !== "themes" : Boolean(isFirst);
+  const showMeta = first && (skeleton || Boolean(model.metaText));
   if (!showMix && !showMeta) return null;
   const themes = lane === "themes";
   const row = statsEl(doc, "div", {
@@ -366,6 +472,14 @@ function dayStripRenderMixRow(doc, model, handlers, lane) {
       class: "bob-day-strip-meta",
       title: model.stale && model.staleTitle ? model.staleTitle : null,
     }, skeleton ? "so far · 00:00" : model.metaText));
+  }
+  if (first) {
+    const lanes = model && model.lanes ? model.lanes : null;
+    const switchable = Boolean(lanes && lanes.switchable);
+    if (skeleton || switchable) {
+      const sw = dayStripRenderLanesSwitch(doc, model, handlers);
+      if (sw) dayStripAppend(row, sw);
+    }
   }
   return row;
 }
@@ -386,6 +500,47 @@ function dayStripRenderUnavailable(doc, model, handlers) {
   return line;
 }
 
+function dayStripLaneEntering(el, model, shown) {
+  try {
+    if (!el || !model || model.state !== "ready") return [];
+    let wasSkeleton = false;
+    try {
+      const cls = typeof el.getAttribute === "function" ? el.getAttribute("class") : "";
+      wasSkeleton = String(cls || "").split(/\s+/).includes("bob-day-strip-state-skeleton");
+    } catch (error) {
+      wasSkeleton = false;
+    }
+    if (wasSkeleton) return [];
+    let prev = null;
+    try {
+      prev = dayStripLaneMemory.get(el);
+    } catch (error) {
+      return [];
+    }
+    if (!prev || !prev.day || prev.day !== model.day) return [];
+    const prevView = prev.view || "both";
+    const currentView = (model.lanes && model.lanes.view) || "both";
+    if (prevView === currentView) return [];
+    const prevShown = Array.isArray(prev.shown) ? prev.shown : [];
+    return (Array.isArray(shown) ? shown : []).filter((lane) => !prevShown.includes(lane));
+  } catch (error) {
+    return [];
+  }
+}
+
+function dayStripRememberLaneView(el, model, shown) {
+  try {
+    if (!el || !model || model.state !== "ready") return;
+    dayStripLaneMemory.set(el, {
+      day: model.day,
+      view: (model.lanes && model.lanes.view) || "both",
+      shown: Array.isArray(shown) ? shown.slice() : [],
+    });
+  } catch (error) {
+    // Host memory is best-effort.
+  }
+}
+
 function paintDayStrip(el, model, handlers) {
   if (!el || !model) return el;
   const safeModel = model && typeof model === "object" ? model : {};
@@ -394,6 +549,9 @@ function paintDayStrip(el, model, handlers) {
   if (!doc) return el;
   try {
     const arriveIds = dayStripArriveIds(el, safeModel);
+    const shown = dayStripLaneShownFor(safeModel);
+    const entering = dayStripLaneEntering(el, safeModel, shown);
+    const enteringSet = new Set(entering);
     if (typeof el.replaceChildren === "function") el.replaceChildren();
     else if (Array.isArray(el.children)) {
       for (const child of el.children) child.parentNode = null;
@@ -426,21 +584,39 @@ function paintDayStrip(el, model, handlers) {
       dayStripAppend(facts, dayStripRenderFact(doc, fact, safeModel, safeHandlers, Boolean(arriveIds[fact.id])));
     }
     dayStripAppend(el, facts);
-    const mixRow = dayStripRenderMixRow(doc, safeModel, safeHandlers, "roots");
-    if (mixRow) dayStripAppend(el, mixRow);
-    const showMix = safeModel.state === "skeleton" || (safeModel.mix && !safeModel.mix.omitted);
-    if (showMix) {
-      const bar = dayStripRenderBar(doc, safeModel, safeHandlers, "roots");
-      if (bar) dayStripAppend(el, bar);
+    if (shown.length > 0) {
+      shown.forEach((lane, index) => {
+        const isFirst = index === 0;
+        const row = dayStripRenderMixRow(doc, safeModel, safeHandlers, lane, isFirst);
+        if (row) {
+          if (enteringSet.has(lane)) {
+            try {
+              const current = row.getAttribute("class") || "";
+              row.setAttribute("class", (current ? current + " " : "") + "bob-day-strip-lane-enter");
+            } catch (error) {
+              // Enter class is best-effort.
+            }
+          }
+          dayStripAppend(el, row);
+        }
+        const bar = dayStripRenderBar(doc, safeModel, safeHandlers, lane);
+        if (bar) {
+          if (enteringSet.has(lane)) {
+            try {
+              const current = bar.getAttribute("class") || "";
+              bar.setAttribute("class", (current ? current + " " : "") + "bob-day-strip-lane-enter");
+            } catch (error) {
+              // Enter class is best-effort.
+            }
+          }
+          dayStripAppend(el, bar);
+        }
+      });
+    } else {
+      const loneRow = dayStripRenderMixRow(doc, safeModel, safeHandlers, "roots", true);
+      if (loneRow) dayStripAppend(el, loneRow);
     }
-    const showThemes = safeModel.state === "skeleton" || (safeModel.themes && !safeModel.themes.omitted);
-    if (showThemes) {
-      const themesRow = dayStripRenderMixRow(doc, safeModel, safeHandlers, "themes");
-      if (themesRow) dayStripAppend(el, themesRow);
-      const themesBar = dayStripRenderBar(doc, safeModel, safeHandlers, "themes");
-      if (themesBar) dayStripAppend(el, themesBar);
-    }
-    const fitLanes = showMix || showThemes;
+    const fitLanes = shown.length > 0;
     if ((state === "ready" || state === "skeleton") && fitLanes) {
       try {
         if (typeof dayStripFitLegend === "function") dayStripFitLegend(el);
@@ -469,6 +645,7 @@ function paintDayStrip(el, model, handlers) {
       }
     }
     dayStripRememberMarks(el, safeModel);
+    dayStripRememberLaneView(el, safeModel, shown);
     return el;
   } catch (error) {
     // A failed paint must not escape into Obsidian's render lifecycle.

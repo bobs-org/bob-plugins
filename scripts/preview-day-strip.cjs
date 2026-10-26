@@ -13,6 +13,9 @@ const pluginRoot = path.join(repoRoot, "plugins/bob-ledger-tools");
 // Height budgets at a 16 px base, measured with the theme lane plus 2 px.
 const DAY_STRIP_HEIGHT_ONE_LINE = 116;
 const DAY_STRIP_HEIGHT_WRAPPED = 167;
+// Single-lane budgets at a 16 px base, measured plus 2 px.
+const DAY_STRIP_HEIGHT_ONE_LANE_ONE_LINE = 84;
+const DAY_STRIP_HEIGHT_ONE_LANE_WRAPPED = 134;
 
 // Obsidian's app.css rules that reach plugin DOM. This commented baseline
 // is what once broke the strip: every tile was a <button>, so the 30 px
@@ -217,6 +220,8 @@ async function capturePage(client, output) {
 
 function checkMeasurement(item, context) {
   const failures = [];
+  const view = item.view || "both";
+  const isSingleLaneView = view === "roots" || view === "themes";
   if (item.maxOverflow > 0.5) failures.push(`overflow ${item.maxOverflow}px escapes the strip box`);
   if (item.maxFactOverlap > 0.5) failures.push(`facts overlap by ${item.maxFactOverlap}px`);
   if (item.linesOverlap > 0.5) failures.push(`line 1 and line 2 overlap by ${item.linesOverlap}px`);
@@ -225,11 +230,13 @@ function checkMeasurement(item, context) {
   if (item.hasButton) failures.push(`strip contains a <button> element`);
   if (!item.relaxed) {
     if (item.factRows > 2 && item.state !== "unavailable") failures.push(`${item.factRows} fact rows (max 2)`);
-    const budget = item.factRows <= 1 ? DAY_STRIP_HEIGHT_ONE_LINE : DAY_STRIP_HEIGHT_WRAPPED;
+    const budget = isSingleLaneView
+      ? (item.factRows <= 1 ? DAY_STRIP_HEIGHT_ONE_LANE_ONE_LINE : DAY_STRIP_HEIGHT_ONE_LANE_WRAPPED)
+      : (item.factRows <= 1 ? DAY_STRIP_HEIGHT_ONE_LINE : DAY_STRIP_HEIGHT_WRAPPED);
     if (item.stripHeight > budget + 0.5) failures.push(`height ${item.stripHeight}px over the ${budget}px budget`);
   }
   // (i) the strip precedes .bob-plan with a calm 6–16 px gap.
-  if (item.domOrderOk === false && item.state !== "unavailable" && item.state !== "skeleton") {
+  if (item.domOrderOk === false && item.state !== "unavailable" && !String(item.state).startsWith("skeleton")) {
     failures.push(`strip does not precede .bob-plan in the DOM`);
   }
   if (typeof item.stripToBadges === "number" && (item.stripToBadges < 6 || item.stripToBadges > 16)) {
@@ -266,10 +273,24 @@ function checkMeasurement(item, context) {
       failures.push(`${label} counter shows +${fit.counter} with every item visible`);
     }
   };
+  const laneShown = Array.isArray(item.laneShown) ? item.laneShown : [];
+  const showsRoots = laneShown.includes("roots") || (!laneShown.length && !item.mixOmitted);
+  const showsThemes = laneShown.includes("themes") || (!laneShown.length && !item.themeOmitted);
   if (Array.isArray(item.legendFits) && item.legendFits.length) {
-    if (item.state !== "skeleton" && !item.mixOmitted) checkLegendFit(item.legendFits[0], item.segments, "roots");
-    if (item.state !== "skeleton" && !item.themeOmitted) checkLegendFit(item.legendFits[1], item.themeSegmentsCount, "themes");
-  } else if (typeof item.segments === "number" && item.segments > 0 && item.state !== "skeleton" && !item.mixOmitted) {
+    const fitsByLane = {};
+    if (item.laneRowCount === 1 && item.laneRows && item.laneRows.length === 1) {
+      fitsByLane[item.laneRows[0]] = item.legendFits[0];
+    } else {
+      if (item.legendFits[0]) fitsByLane.roots = item.legendFits[0];
+      if (item.legendFits[1]) fitsByLane.themes = item.legendFits[1];
+    }
+    if (item.state !== "skeleton" && item.state !== "skeleton-roots" && item.state !== "skeleton-themes" && !item.mixOmitted && showsRoots && fitsByLane.roots) {
+      checkLegendFit(fitsByLane.roots, item.segments, "roots");
+    }
+    if (item.state !== "skeleton" && item.state !== "skeleton-roots" && item.state !== "skeleton-themes" && !item.themeOmitted && showsThemes && fitsByLane.themes) {
+      checkLegendFit(fitsByLane.themes, item.themeSegmentsCount, "themes");
+    }
+  } else if (typeof item.segments === "number" && item.segments > 0 && item.state !== "skeleton" && !item.mixOmitted && showsRoots) {
     if (item.segments > item.visibleLegend && item.visibleCounter !== item.segments - item.visibleLegend) {
       failures.push(`counter is +${item.visibleCounter} for ${item.segments} segments and ${item.visibleLegend} labels`);
     }
@@ -277,7 +298,8 @@ function checkMeasurement(item, context) {
       failures.push(`counter shows +${item.visibleCounter} with every root visible`);
     }
   }
-  if (item.state === "screenshot-day" && !item.mixOmitted) {
+  const baseState = String(item.state || "").replace(/-(roots|themes)$/, "");
+  if (baseState === "screenshot-day" && !item.mixOmitted && showsRoots) {
     if (context.width === 540 || context.width === 700) {
       if (item.visibleLegend !== 4 || item.segments !== 4) {
         failures.push(`screenshotDay shows ${item.visibleLegend} of ${item.segments} roots at ${context.width}px (want 4)`);
@@ -290,9 +312,80 @@ function checkMeasurement(item, context) {
       failures.push(`screenshotDay shows ${item.visibleLegend} roots at 410px (want at least 3)`);
     }
   }
+  // (u) single-lane views paint exactly one lane row and one bar; the bar is
+  // the strip's last line; the lane is the chosen one when available.
+  if (isSingleLaneView && !String(item.state).startsWith("skeleton") && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading") {
+    if (item.laneRowCount !== 1) failures.push(`single-lane view paints ${item.laneRowCount} rows (want 1)`);
+    if (item.laneBarCount !== 1) failures.push(`single-lane view paints ${item.laneBarCount} bars (want 1)`);
+    const barIsLast = item.lastBarIsLast === undefined ? item.barIsLast : item.lastBarIsLast;
+    if (barIsLast === false) failures.push(`single-lane bar is not the strip's last line`);
+    if (item.laneRows.length === 1 && item.laneBars.length === 1 && item.laneRows[0] !== item.laneBars[0]) {
+      failures.push(`single-lane row is ${item.laneRows[0]} but bar is ${item.laneBars[0]}`);
+    }
+    const want = view === "roots"
+      ? (!item.mixOmitted ? "roots" : (!item.themeOmitted ? "themes" : ""))
+      : (!item.themeOmitted ? "themes" : (!item.mixOmitted ? "roots" : ""));
+    if (want && item.laneRows[0] && item.laneRows[0] !== want) {
+      failures.push(`single-lane ${view} view shows ${item.laneRows[0]} (want ${want})`);
+    }
+  }
+  // (w) the switch reads as quiet chrome at the legend dot's size.
+  if (item.switchPresent && !String(item.state).startsWith("skeleton") && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading") {
+    if (item.switchWidth < 20 - 0.5 || item.switchHeight < 14 - 0.5) {
+      failures.push(`switch box is ${item.switchWidth}x${item.switchHeight} (want at least 20x14)`);
+    }
+    if (item.switchInsideTopRow === false) failures.push(`switch escapes the top row`);
+    const marks = Array.isArray(item.switchMarks) ? item.switchMarks : [];
+    if (marks.length !== 2) {
+      failures.push(`switch paints ${marks.length} marks (want 2)`);
+    } else {
+      const dotSize = Math.max(Number(item.legendDotWidth) || 0, Number(item.legendDotHeight) || 0);
+      for (const mark of marks) {
+        if (Math.abs(mark.width - mark.height) > 0.5) {
+          failures.push(`switch ${mark.lane} mark is ${mark.width}x${mark.height} (want square)`);
+        }
+        if (dotSize > 0 && Math.abs(mark.width - dotSize) > 0.5) {
+          failures.push(`switch ${mark.lane} mark differs from the legend dot size`);
+        }
+      }
+      const rootsMark = marks.find((mark) => mark.lane === "roots");
+      const themesMark = marks.find((mark) => mark.lane === "themes");
+      const isRound = (mark) => {
+        if (!mark) return false;
+        const text = String(mark.radiusText || "");
+        if (text.includes("%")) {
+          const percent = parseFloat(text) || 0;
+          return percent >= 40;
+        }
+        return Math.abs(mark.width / 2 - mark.radius) <= 0.6;
+      };
+      if (rootsMark && !isRound(rootsMark)) {
+        failures.push(`roots switch mark is not round`);
+      }
+      if (themesMark && themesMark.width > 0) {
+        const text = String(themesMark.radiusText || "");
+        if (text.includes("%")) {
+          const percent = parseFloat(text) || 0;
+          if (percent >= 50 - 0.5) failures.push(`themes switch mark radius is not below half its width`);
+        } else if (themesMark.radius >= (themesMark.width / 2) - 0.05) {
+          failures.push(`themes switch mark radius is not below half its width`);
+        }
+      }
+      for (const mark of marks) {
+        if (mark.on === "false") {
+          const bg = String(mark.background || "").replace(/\s+/g, "").toLowerCase();
+          if (bg !== "rgba(0,0,0,0)" && bg !== "transparent") {
+            failures.push(`off switch mark is not transparent`);
+          }
+          const shadow = String(mark.shadow || "").toLowerCase();
+          if (shadow === "none" || !shadow) failures.push(`off switch mark has no visible ring`);
+        }
+      }
+    }
+  }
   // (m) distinct hues: ready cells with <=8 non-gray segments carry pairwise
   // distinct bar hues and matching legend dots.
-  if (!item.mixOmitted && item.state !== "skeleton" && item.state !== "unavailable" && Array.isArray(item.barHues)) {
+  if (!item.mixOmitted && !String(item.state).startsWith("skeleton") && item.state !== "unavailable" && Array.isArray(item.barHues)) {
     const nonGray = item.barHues.filter((hue) => hue !== "gray");
     if (nonGray.length > 0 && nonGray.length <= 8) {
       const seen = new Set();
@@ -315,18 +408,19 @@ function checkMeasurement(item, context) {
       }
     }
   }
-  if (item.state === "today" && context.width >= 540 && item.factRows !== 1) {
+  const baseForFacts = String(item.state || "").replace(/-(roots|themes)$/, "");
+  if (baseForFacts === "today" && context.width >= 540 && item.factRows !== 1) {
     failures.push(`facts wrap to ${item.factRows} rows at ${context.width}px (must fit on one line)`);
   }
-  if (item.state === "wide-values" && context.width >= 700 && item.factRows !== 1) {
+  if (baseForFacts === "wide-values" && context.width >= 700 && item.factRows !== 1) {
     failures.push(`wide facts wrap to ${item.factRows} rows at ${context.width}px (must fit on one line)`);
   }
   // (n) the values lead: ready and stale cells carry values at least 2x their heads.
-  if ((item.state === "today" || item.state === "stale") && typeof item.valueLeadMinRatio === "number") {
+  if ((baseForFacts === "today" || baseForFacts === "stale") && typeof item.valueLeadMinRatio === "number") {
     if (item.valueLeadMinRatio < 2) failures.push(`values lead by ${item.valueLeadMinRatio}x (want at least 2x)`);
   }
   // (o) faithful text: aria-labels end with the value text and values hold no warning.
-  if (item.state !== "skeleton" && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading") {
+  if (!String(item.state).startsWith("skeleton") && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading" && !String(item.state).startsWith("skeleton-")) {
     if (item.ariaFaithful === false) failures.push(`a fact aria-label does not end with its value text`);
     if (item.valueHasWarning === true) failures.push(`a value contains the warning mark`);
   }
@@ -338,19 +432,19 @@ function checkMeasurement(item, context) {
     const content = String(record.content || "").trim().toLowerCase();
     return content === "none" || content === "normal";
   };
-  if (context.width === 410 && item.state !== "skeleton" && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading") {
+  if (context.width === 410 && !String(item.state).startsWith("skeleton") && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading") {
     if (item.factRows < 2) failures.push(`facts hold ${item.factRows} row at 410px (want a two-row fold)`);
     for (const record of item.rowStartHairlines || []) {
       if (!hairlineHidden(record)) failures.push(`a folded row starts with a hairline`);
     }
   }
-  if (context.width >= 540 && item.state !== "skeleton" && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading") {
+  if (context.width >= 540 && !String(item.state).startsWith("skeleton") && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading") {
     for (const record of item.laterHairlines || []) {
       if (hairlineHidden(record)) failures.push(`a fact after the first hides its hairline at ${context.width}px`);
     }
   }
   // (q) empty track: the no-Pomodoros bar shows its track colour.
-  if (item.state === "no-pomodoros") {
+  if (String(item.state || "").replace(/-(roots|themes)$/, "") === "no-pomodoros") {
     const background = String(item.barBackground || "").replace(/\s+/g, "").toLowerCase();
     if (!background || background === "rgba(0,0,0,0)" || background === "transparent") {
       failures.push(`empty bar shows no track colour`);
@@ -363,7 +457,7 @@ function checkMeasurement(item, context) {
   }
   // Theme swatches: square within ±0.5 px, radius below half width, and
   // the same computed background as the matching segment (shade included).
-  if (item.state !== "skeleton" && item.state !== "unavailable" && !item.themeOmitted) {
+  if (!String(item.state).startsWith("skeleton") && item.state !== "unavailable" && !item.themeOmitted) {
     const segmentsByTitle = new Map((Array.isArray(item.themeSegments) ? item.themeSegments : []).map((segment) => [segment.title, segment]));
     for (const swatch of (Array.isArray(item.themeSwatches) ? item.themeSwatches : [])) {
       if (Math.abs(swatch.width - swatch.height) > 0.5) {
@@ -378,7 +472,7 @@ function checkMeasurement(item, context) {
       }
     }
   }
-  if (item.state === "theme-collision") {
+  if (String(item.state || "").replace(/-(roots|themes)$/, "") === "theme-collision") {
     const coloured = (Array.isArray(item.themeSegments) ? item.themeSegments : []).filter((segment) => !segment.gray);
     for (let index = 0; index < coloured.length - 1; index += 1) {
       if (rgbKey(coloured[index].background) === rgbKey(coloured[index + 1].background)) {
@@ -446,19 +540,23 @@ function matrixMarkdown(matrix, browser, revision, interactionChecks) {
     "- Source: production `main.js`, `styles.css`, and synthetic presentation fixtures; no fixture is captured vault data.",
     "- Each strip renders above mock plan badges (TODAY / PENDING / NEXT / READY plus a ★ theme line) inside a Live Preview code-block container, with a bare `## Pomodoros` heading below; one extra Reading-view cell renders today.",
     "- An Obsidian baseline stylesheet (30 px inline-flex buttons, link colours, rendered line-height) loads before the production CSS, so a `<button>` regression fails the matrix.",
-    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 21 states plus Reading view.",
-    `- Height budgets (16 px base): ≤${DAY_STRIP_HEIGHT_ONE_LINE} px when the facts fit on one row, ≤${DAY_STRIP_HEIGHT_WRAPPED} px when they fold to two rows. The long-labels case is relaxed: geometry is enforced, height is reported.`,
-    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, lanes never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) every lane bar spans the strip's content width (±1 px) and the themes bar, when present, is its last line box (else the roots bar); (k) no legend label is truncated and no legend item spills past its box; (l) at every width, per legend, the visible counter equals that lane's segments minus its visible items, with screenshotDay showing all four roots at 540 and 700 px and at least three at 410 px; (m) ready cells with ≤8 non-gray root segments carry pairwise distinct bar hues and matching legend dots; theme swatches are square with a radius below half their width and match their segment background, and themeCollision adjacent coloured segments compute different backgrounds; (n) ready and stale values render at least 2× their heads; (o) every fact aria-label ends with its value text and no value holds a warning; (p) folded rows start without a hairline at 410 px while wider rows draw every hairline; (q) the no-Pomodoros bar shows its track colour; (r) every `.bob-day-strip-mark` is square within ±0.5 px, measures 0.95–1.12× its value's computed font size, lies inside its value box, and has its vertical centre within 1 px of the value box centre; (s) in ready cells the met, missed, and pending marks compute three distinct non-gray rim/ring colours, and in stale cells the mark ink computes to the muted text colour.",
+    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 21 states in both plus roots/themes for eight lanes cases plus Reading view.",
+    `- Height budgets (16 px base): both ≤${DAY_STRIP_HEIGHT_ONE_LINE} px one-line / ≤${DAY_STRIP_HEIGHT_WRAPPED} px wrapped; single-lane ≤${DAY_STRIP_HEIGHT_ONE_LANE_ONE_LINE} px one-line / ≤${DAY_STRIP_HEIGHT_ONE_LANE_WRAPPED} px wrapped. The long-labels case is relaxed: geometry is enforced, height is reported.`,
+    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, lanes never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) every lane bar spans the strip's content width (±1 px) and the last painted bar is the strip's last line box; (k) no legend label is truncated and no legend item spills past its box; (l) at every width, per legend, the visible counter equals that lane's segments minus its visible items, with screenshotDay showing all four roots at 540 and 700 px and at least three at 410 px; (m) ready cells with ≤8 non-gray root segments carry pairwise distinct bar hues and matching legend dots; theme swatches are square with a radius below half their width and match their segment background, and themeCollision adjacent coloured segments compute different backgrounds; (n) ready and stale values render at least 2× their heads; (o) every fact aria-label ends with its value text and no value holds a warning; (p) folded rows start without a hairline at 410 px while wider rows draw every hairline; (q) the no-Pomodoros bar shows its track colour; (r) every `.bob-day-strip-mark` is square within ±0.5 px, measures 0.95–1.12× its value's computed font size, lies inside its value box, and has its vertical centre within 1 px of the value box centre; (s) in ready cells the met, missed, and pending marks compute three distinct non-gray rim/ring colours, and in stale cells the mark ink computes to the muted text colour; (t) the switch anchor is identical across the three views for every switchable fixture; (u) single-lane views paint one lane row and bar with the chosen lane; (v) skeleton height equals ready height per view; (w) the switch marks are square at the legend dot size with a round roots mark, a rounded themes mark, a transparent off mark with a ring, and a 20×14 box inside the top row.",
     "",
-    "| Width | Theme | State | Strip height | Budget | Fact rows | Overflow | Facts overlap | Lines overlap | Legend overlap | Value baseline spread | Skeleton delta | Button | Result | Screenshot |",
-    "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
-    ...measurements.map((item) => `| ${item.width}px | ${item.theme} | ${item.state} | ${item.stripHeight}px | ${item.relaxed ? "—" : `${item.factRows <= 1 ? DAY_STRIP_HEIGHT_ONE_LINE : DAY_STRIP_HEIGHT_WRAPPED}px`} | ${item.factRows} | ${item.maxOverflow}px | ${item.maxFactOverlap}px | ${item.linesOverlap}px | ${item.legendOverlap}px | ${item.valueBaselineSpread}px | ${item.skeletonHeightDelta === null ? "—" : `${item.skeletonHeightDelta}px`} | ${item.hasButton ? "yes" : "no"} | ${item.result} | ${item.screenshot} |`),
+    "| Width | Theme | State | View | Strip height | Budget | Fact rows | Overflow | Facts overlap | Lines overlap | Legend overlap | Value baseline spread | Skeleton delta | Button | Result | Screenshot |",
+    "| ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
+    ...measurements.map((item) => {
+      const single = (item.view || "both") !== "both";
+      const budget = item.relaxed ? "—" : `${item.factRows <= 1 ? (single ? DAY_STRIP_HEIGHT_ONE_LANE_ONE_LINE : DAY_STRIP_HEIGHT_ONE_LINE) : (single ? DAY_STRIP_HEIGHT_ONE_LANE_WRAPPED : DAY_STRIP_HEIGHT_WRAPPED)}px`;
+      return `| ${item.width}px | ${item.theme} | ${item.state} | ${item.view || "both"} | ${item.stripHeight}px | ${budget} | ${item.factRows} | ${item.maxOverflow}px | ${item.maxFactOverlap}px | ${item.linesOverlap}px | ${item.legendOverlap}px | ${item.valueBaselineSpread}px | ${item.skeletonHeightDelta === null ? "—" : `${item.skeletonHeightDelta}px`} | ${item.hasButton ? "yes" : "no"} | ${item.result} | ${item.screenshot} |`;
+    }),
     "",
     "Interaction checks (forced pseudo-states, per width × theme):",
     "",
     ...interactionChecks.map((item) => `- ${item.width}px ${item.theme}: ${item.label} — ${item.result}${item.detail ? ` (${item.detail})` : ""}`),
     "",
-    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-area roots get distinct hues, seven roots with `+N`, four roots that fit at 540 and 700 px, same-hue themes get shades, seven themes and unnamed, theme parts without `theme_hues`, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), closed-out past day · met, forced hover, forced `:focus-visible`, and a Reading-view today cell.",
+    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-area roots get distinct hues, seven roots with `+N`, four roots that fit at 540 and 700 px, same-hue themes get shades, seven themes and unnamed, theme parts without `theme_hues`, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), closed-out past day · met, forced hover, forced `:focus-visible`, and a Reading-view today cell, plus roots/themes views for today, past, screenshotDay, themeCollision, noPomodoros, noThemeHues, skeleton, and stale.",
     "",
   ].join("\n");
 }
@@ -506,25 +604,70 @@ async function main() {
       for (const theme of ["light", "dark"]) {
         await client.call("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: false });
         const result = await client.evaluate(`window.dayStripPreview.renderMatrix(${width}, ${JSON.stringify(theme)})`);
-        const readyHeight = result.measurements.find((item) => item.state === "today").stripHeight;
-        const skeletonHeight = result.measurements.find((item) => item.state === "skeleton").stripHeight;
-        const skeletonHeightDelta = Math.round(Math.abs(readyHeight - skeletonHeight) * 10) / 10;
+        const byState = new Map(result.measurements.map((item) => [item.state, item]));
+        const skeletonDeltaForView = (view) => {
+          const todayId = view === "both" ? "today" : `today-${view}`;
+          const skeletonId = view === "both" ? "skeleton" : `skeleton-${view}`;
+          const ready = byState.get(todayId);
+          const skeleton = byState.get(skeletonId);
+          if (!ready || !skeleton) return null;
+          return Math.round(Math.abs(ready.stripHeight - skeleton.stripHeight) * 10) / 10;
+        };
+        const skeletonDeltas = {
+          both: skeletonDeltaForView("both"),
+          roots: skeletonDeltaForView("roots"),
+          themes: skeletonDeltaForView("themes"),
+        };
         const measurements = result.measurements.map((item) => {
           const failures = checkMeasurement(item, { width, theme });
-          if (item.state === "skeleton" && skeletonHeightDelta > 0.5) {
-            failures.push(`skeleton height differs from today by ${skeletonHeightDelta}px`);
+          const view = item.view || "both";
+          if (String(item.state).startsWith("skeleton")) {
+            const delta = skeletonDeltas[view];
+            if (typeof delta === "number" && delta > 0.5) {
+              failures.push(`skeleton height differs from today by ${delta}px in ${view} view`);
+            }
           }
           return {
             ...item,
-            skeletonHeightDelta: item.state === "skeleton" ? skeletonHeightDelta : null,
-            result: failures.length ? "FAIL" : "pass",
+            skeletonHeightDelta: String(item.state).startsWith("skeleton") ? (skeletonDeltas[view] ?? null) : null,
+            result: "pass",
             failures,
           };
         });
+        // (t) the switch anchor is identical across the three views: same
+        // horizontal anchor and size (vertical page position differs).
+        const switchableBases = ["today", "past", "screenshot-day", "theme-collision", "no-theme-hues", "stale"];
+        for (const base of switchableBases) {
+          const boxes = [];
+          for (const view of ["both", "roots", "themes"]) {
+            const id = view === "both" ? base : `${base}-${view}`;
+            const found = measurements.find((item) => item.state === id);
+            if (found && found.switchPresent && found.switchBox) boxes.push({ view, box: found.switchBox, item: found });
+          }
+          if (boxes.length === 3) {
+            const first = boxes[0].box;
+            for (const entry of boxes.slice(1)) {
+              const delta = Math.max(
+                Math.abs(entry.box.x - first.x),
+                Math.abs(entry.box.width - first.width),
+                Math.abs(entry.box.height - first.height),
+              );
+              if (delta > 0.5) {
+                entry.item.failures.push(`switch anchor differs by ${Math.round(delta * 10) / 10}px across views in ${base}`);
+                entry.item.result = "FAIL";
+              }
+            }
+          }
+        }
+        for (const item of measurements) {
+          if (item.failures.length) item.result = "FAIL";
+          else item.result = "pass";
+        }
         const inkFailures = checkMarkInks(measurements);
         if (inkFailures.length) {
           for (const item of measurements) {
-            if (item.state === "today" || item.state === "past" || item.state === "met" || item.state === "stale") {
+            const base = String(item.state || "").replace(/-(roots|themes)$/, "");
+            if (base === "today" || base === "past" || base === "met" || base === "stale") {
               item.failures.push(...inkFailures);
               item.result = "FAIL";
             }
@@ -563,6 +706,16 @@ async function main() {
           interactionChecks.push({ width, theme, label: "focus-visible shows an outline on the fact", result: pass ? "pass" : "FAIL", detail: `role=${focusState.role} tabindex=${focusState.tab} outline=${outlined}` });
         } else {
           interactionChecks.push({ width, theme, label: "focus-visible shows an outline on the fact", result: "FAIL", detail: "fact is not focusable" });
+        }
+        const switchSelector = '[data-strip="today"] .bob-day-strip-lanes';
+        const switchState = await client.evaluate(`(() => { const n = document.querySelector(${JSON.stringify(switchSelector)}); if (!n) return null; n.focus(); const style = getComputedStyle(n); return { active: document.activeElement === n, outline: style.outlineWidth, role: n.getAttribute("role"), tab: n.getAttribute("tabindex") }; })()`);
+        if (switchState && switchState.active) {
+          await forcePseudo(switchSelector, ["focus-visible"]);
+          const outlined = await client.evaluate(`(() => { const n = document.querySelector(${JSON.stringify(switchSelector)}); return getComputedStyle(n).outlineWidth; })()`);
+          const pass = switchState.role === "button" && outlined !== "0px";
+          interactionChecks.push({ width, theme, label: "forced focus-visible on the switch shows an outline", result: pass ? "pass" : "FAIL", detail: `role=${switchState.role} tabindex=${switchState.tab} outline=${outlined}` });
+        } else {
+          interactionChecks.push({ width, theme, label: "forced focus-visible on the switch shows an outline", result: "FAIL", detail: "switch is not focusable" });
         }
 
         const screenshot = `day-strip-${width}-${theme}.png`;

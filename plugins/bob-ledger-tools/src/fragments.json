@@ -54,6 +54,7 @@
   "239-plugin-stats-homes-render.js",
   "239-plugin-day-strip-model.js",
   "239-plugin-day-strip-theme-model.js",
+  "239-plugin-day-strip-lanes.js",
   "239-plugin-day-strip-render.js",
   "239-plugin-day-strip-fit.js",
   "239-plugin-day-strip-hosts.js",

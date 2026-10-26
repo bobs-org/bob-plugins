@@ -163,6 +163,11 @@ class BobLedgerToolsDayStripPlanHostMixin {
           name: "Toggle Day stats",
           callback: () => this.toggleDayStripPlanHost(),
         });
+        this.addCommand({
+          id: "cycle-day-stats-bars",
+          name: "Cycle Day stats bars",
+          callback: () => this.cycleDayStripBarsCommand(),
+        });
       }
       try {
         if (
@@ -225,6 +230,34 @@ class BobLedgerToolsDayStripPlanHostMixin {
       return enabled;
     } catch (error) {
       return this.dayStripSessionEnabled !== false;
+    }
+  }
+
+  cycleDayStripBarsCommand() {
+    try {
+      let view = "both";
+      try {
+        if (typeof this.dayStripCycleLaneView === "function") {
+          view = this.dayStripCycleLaneView() || "both";
+        } else if (typeof this.dayStripLaneViewCurrent === "function") {
+          view = this.dayStripLaneViewCurrent();
+        }
+      } catch (error) {
+        view = "both";
+      }
+      const message = view === "roots"
+        ? "Day stats bars: root parents only"
+        : view === "themes"
+          ? "Day stats bars: themes only"
+          : "Day stats bars: root parents and themes";
+      try {
+        new Notice(message);
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return view;
+    } catch (error) {
+      return "both";
     }
   }
 

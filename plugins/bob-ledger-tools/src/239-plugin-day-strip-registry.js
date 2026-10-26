@@ -54,6 +54,13 @@ class BobLedgerToolsDayStripMixin {
   // reads and writes never happen here. Never throws.
   setupDayStripHosts() {
     try {
+      if (typeof this.dayStripLoadLaneView === "function") {
+        this.dayStripLoadLaneView();
+      }
+    } catch (error) {
+      // Lane-view load is best-effort.
+    }
+    try {
       if (typeof this.setupDayStripPlanHost === "function") {
         this.setupDayStripPlanHost();
       }
@@ -372,6 +379,14 @@ class BobLedgerToolsDayStripMixin {
       }
       const localToday = this.dayStripLocalNow();
       const day = record.day;
+      let laneView = "both";
+      try {
+        laneView = typeof this.dayStripLaneViewCurrent === "function"
+          ? this.dayStripLaneViewCurrent()
+          : dayStripLaneViewOf(this.dayStripLaneView);
+      } catch (error) {
+        laneView = "both";
+      }
       const handlers = {
         openStats: (opts) => {
           try {
@@ -395,6 +410,16 @@ class BobLedgerToolsDayStripMixin {
             // Retry is best-effort.
           }
         },
+        cycleLanes: (opts) => {
+          try {
+            const safe = opts && typeof opts === "object" ? opts : {};
+            if (typeof this.dayStripCycleLaneView === "function") {
+              this.dayStripCycleLaneView({ focusFrom: safe.focused ? record.el : null });
+            }
+          } catch (error) {
+            // Cycling is best-effort.
+          }
+        },
       };
       const finish = (model, counter, stamp) => {
         try {
@@ -402,6 +427,8 @@ class BobLedgerToolsDayStripMixin {
             ? model.themes.segments.map((segment) =>
               String(segment.key || "") + ":" + String(segment.hue || "") + ":" + String(segment.shade || 0)).join(",")
             : "");
+          const laneSig = (model.lanes && typeof model.lanes.view === "string" ? model.lanes.view : laneView)
+            + ":" + (model.lanes && Array.isArray(model.lanes.shown) ? model.lanes.shown.join(",") : "");
           const key = [
             model.state,
             model.day,
@@ -411,6 +438,7 @@ class BobLedgerToolsDayStripMixin {
             model.error ? model.error.code : "",
             (model.facts || []).map((fact) => fact.display).join(","),
             themeSig,
+            laneSig,
           ].join("|");
           if (record.paintedKey === key) {
             return model;
@@ -432,19 +460,20 @@ class BobLedgerToolsDayStripMixin {
         return finish(
           dayStripModel(null, typeof day === "string" ? day : "", {
             localToday,
+            laneView,
           }),
           null,
         );
       }
       if (localToday && day > localToday) {
-        return finish(dayStripModel(null, day, { localToday }), null);
+        return finish(dayStripModel(null, day, { localToday, laneView }), null);
       }
       const { selection, options } = this.dayStripOptionsForRecord(
         record,
         localToday,
       );
       if (selection.source === "none" || !options) {
-        return finish(dayStripModel(null, day, { localToday }), null);
+        return finish(dayStripModel(null, day, { localToday, laneView }), null);
       }
       const snapshot =
         result &&
@@ -480,6 +509,7 @@ class BobLedgerToolsDayStripMixin {
             fetchedAt,
             stale,
             error,
+            laneView,
           }),
           "skeleton",
           "miss",
@@ -491,6 +521,7 @@ class BobLedgerToolsDayStripMixin {
           fetchedAt,
           stale,
           error,
+          laneView,
           themeHueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
         }),
         "cached",

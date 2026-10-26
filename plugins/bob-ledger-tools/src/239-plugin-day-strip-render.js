@@ -215,7 +215,7 @@ function dayStripRenderFact(doc, fact, model, handlers, arrive) {
   return node;
 }
 
-function dayStripLegendItem(doc, entry) {
+function dayStripLegendItem(doc, entry, lane) {
   const rank = entry && typeof entry.rank === "number" ? entry.rank : 0;
   const key = entry && typeof entry.key === "string" ? entry.key : "";
   const text = entry
@@ -229,11 +229,18 @@ function dayStripLegendItem(doc, entry) {
     if (rank) item.setAttribute("data-rank", String(rank));
     if (key) item.setAttribute("data-key", key);
   }
-  const dot = statsEl(doc, "span", {
-    class: "bob-day-strip-legend-dot" + (entry ? " bob-day-strip-hue-" + entry.hue : ""),
+  const themes = lane === "themes";
+  const markClass = themes
+    ? "bob-day-strip-legend-swatch" + (entry ? " bob-day-strip-theme-hue-" + entry.hue : "")
+    : "bob-day-strip-legend-dot" + (entry ? " bob-day-strip-hue-" + entry.hue : "");
+  const mark = statsEl(doc, "span", {
+    class: markClass,
     "aria-hidden": "true",
   });
-  dayStripAppend(item, dot);
+  if (mark && themes && entry && typeof entry.shade === "number" && entry.shade > 0) {
+    mark.setAttribute("data-shade", String(entry.shade));
+  }
+  dayStripAppend(item, mark);
   dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-label" }, text || ""));
   dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-value" }, entry ? entry.display : ""));
   if (!entry) item.setAttribute("hidden", "true");
@@ -250,74 +257,110 @@ function dayStripOverflowCounter(doc, info, skeleton) {
   return node;
 }
 
-// The legend link: one item per root in bar order plus one overflow
+function dayStripLaneMix(model, lane) {
+  if (lane === "themes") return model.themes || { segments: [], legend: [], overflow: [], omitted: true };
+  return model.mix || { segments: [], legend: [], overflow: [], omitted: true };
+}
+
+function dayStripLaneSentence(mix, lane) {
+  if (lane === "themes") return "Time by theme";
+  return mix && mix.dimension === "area" ? "Time by area" : "Time by root parent";
+}
+
+function dayStripLanePanel(lane) {
+  return lane === "themes" ? "themes" : "homes";
+}
+
+// The legend link: one item per segment in bar order plus one overflow
 // counter. The static pre-fit state shows ranks 1-3 so a host that
 // cannot measure keeps today's look; the fitter refines it.
-function dayStripRenderMix(doc, model, handlers) {
-  const mix = model.mix || { segments: [], legend: [], overflow: [], omitted: true };
+function dayStripRenderMix(doc, model, handlers, lane) {
+  const mix = dayStripLaneMix(model, lane);
   const skeleton = model.state === "skeleton";
-  const sentence = mix.dimension === "area" ? "Time by area" : "Time by root parent";
+  const sentence = dayStripLaneSentence(mix, lane);
   const node = dayStripLink(doc, "bob-day-strip-mix", sentence, mix.title);
   const legend = statsEl(doc, "span", { class: "bob-day-strip-legend" });
+  const skeletonLabel = lane === "themes" ? "Theme" : "Area";
   const entries = skeleton
-    ? [{ label: "Area", legendLabel: "Area", display: "0m", rank: 1 }, { label: "Area", legendLabel: "Area", display: "0m", rank: 2 }, { label: "Area", legendLabel: "Area", display: "0m", rank: 3 }]
+    ? [
+      { label: skeletonLabel, legendLabel: skeletonLabel, display: "0m", rank: 1 },
+      { label: skeletonLabel, legendLabel: skeletonLabel, display: "0m", rank: 2 },
+      { label: skeletonLabel, legendLabel: skeletonLabel, display: "0m", rank: 3 },
+    ]
     : Array.isArray(mix.legend) ? mix.legend : [];
   for (const entry of entries) {
-    const item = dayStripLegendItem(doc, entry);
+    const item = dayStripLegendItem(doc, entry, lane);
     if (!skeleton && entry && typeof entry.rank === "number" && entry.rank > 3) {
       item.setAttribute("hidden", "true");
     }
     dayStripAppend(legend, item);
   }
-  const noPomodoros = statsEl(doc, "span", { class: "bob-day-strip-no-pomodoros" }, "no Pomodoros");
-  if (!mix.empty && !skeleton) noPomodoros.setAttribute("hidden", "true");
-  dayStripAppend(legend, noPomodoros);
+  if (lane !== "themes") {
+    const noPomodoros = statsEl(doc, "span", { class: "bob-day-strip-no-pomodoros" }, "no Pomodoros");
+    if (!mix.empty && !skeleton) noPomodoros.setAttribute("hidden", "true");
+    dayStripAppend(legend, noPomodoros);
+  }
   const overflowInfo = mix.overflowDefault
     || { count: Math.max(0, entries.length - 3), title: "" };
   dayStripAppend(legend, dayStripOverflowCounter(doc, overflowInfo, skeleton));
   dayStripAppend(node, legend);
+  const panel = dayStripLanePanel(lane);
   dayStripActivate(node, (newLeaf) => {
-    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel: "homes", newLeaf });
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, newLeaf });
   });
   return node;
 }
 
-// The full-width bar: one segment per root, the strip's last line and a
-// mouse-only second target for the legend's action.
-function dayStripRenderBar(doc, model, handlers) {
-  const mix = model.mix || { segments: [] };
+// A full-width bar: one segment per root or theme. The themes bar, when
+// present, is the strip's last line and a mouse-only second target for
+// its legend's action.
+function dayStripRenderBar(doc, model, handlers, lane) {
+  const mix = dayStripLaneMix(model, lane);
   const skeleton = model.state === "skeleton";
+  const themes = lane === "themes";
   const node = statsEl(doc, "div", {
-    class: "bob-day-strip-bar",
+    class: "bob-day-strip-bar" + (themes ? " bob-day-strip-bar-themes" : ""),
     "aria-hidden": "true",
   });
   if (!node) return null;
+  node.setAttribute("data-lane", themes ? "themes" : "roots");
   const segments = skeleton ? [] : Array.isArray(mix.segments) ? mix.segments : [];
   const slots = Math.max(8, segments.length);
   for (let index = 0; index < slots; index += 1) {
     const segment = segments[index];
+    const hueClass = segment
+      ? (themes ? " bob-day-strip-theme-hue-" + segment.hue : " bob-day-strip-hue-" + segment.hue)
+      : "";
     const part = statsEl(doc, "span", {
-      class: "bob-day-strip-bar-segment" + (segment ? " bob-day-strip-hue-" + segment.hue : "") + (segment && segment.bucket ? " bob-day-strip-bar-bucket" : ""),
+      class: "bob-day-strip-bar-segment" + hueClass + (segment && segment.bucket ? " bob-day-strip-bar-bucket" : ""),
       title: segment ? segment.label + " " + segment.display : null,
     });
+    if (part && themes && segment && typeof segment.shade === "number" && segment.shade > 0) {
+      part.setAttribute("data-shade", String(segment.shade));
+    }
     if (part && part.style && segment) part.style.flexGrow = String(Math.max(0, Number(segment.value) || 0));
     if (!segment) part.setAttribute("hidden", "true");
     dayStripAppend(node, part);
   }
+  const panel = dayStripLanePanel(lane);
   dayStripBarActivate(node, (newLeaf) => {
-    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel: "homes", newLeaf });
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, newLeaf });
   });
   return node;
 }
 
-function dayStripRenderMixRow(doc, model, handlers) {
-  const mix = model.mix || { omitted: true };
+function dayStripRenderMixRow(doc, model, handlers, lane) {
+  const mix = dayStripLaneMix(model, lane);
   const skeleton = model.state === "skeleton";
   const showMix = skeleton || !mix.omitted;
-  const showMeta = skeleton || Boolean(model.metaText);
+  const showMeta = lane !== "themes" && (skeleton || Boolean(model.metaText));
   if (!showMix && !showMeta) return null;
-  const row = statsEl(doc, "div", { class: "bob-day-strip-mix-row" });
-  if (showMix) dayStripAppend(row, dayStripRenderMix(doc, model, handlers));
+  const themes = lane === "themes";
+  const row = statsEl(doc, "div", {
+    class: "bob-day-strip-mix-row" + (themes ? " bob-day-strip-lane-themes" : ""),
+  });
+  if (row) row.setAttribute("data-lane", themes ? "themes" : "roots");
+  if (showMix) dayStripAppend(row, dayStripRenderMix(doc, model, handlers, lane));
   if (showMeta) {
     dayStripAppend(row, statsEl(doc, "span", {
       class: "bob-day-strip-meta",
@@ -383,14 +426,22 @@ function paintDayStrip(el, model, handlers) {
       dayStripAppend(facts, dayStripRenderFact(doc, fact, safeModel, safeHandlers, Boolean(arriveIds[fact.id])));
     }
     dayStripAppend(el, facts);
-    const mixRow = dayStripRenderMixRow(doc, safeModel, safeHandlers);
+    const mixRow = dayStripRenderMixRow(doc, safeModel, safeHandlers, "roots");
     if (mixRow) dayStripAppend(el, mixRow);
     const showMix = safeModel.state === "skeleton" || (safeModel.mix && !safeModel.mix.omitted);
     if (showMix) {
-      const bar = dayStripRenderBar(doc, safeModel, safeHandlers);
+      const bar = dayStripRenderBar(doc, safeModel, safeHandlers, "roots");
       if (bar) dayStripAppend(el, bar);
     }
-    if ((state === "ready" || state === "skeleton") && showMix && safeModel.mix && !safeModel.mix.omitted) {
+    const showThemes = safeModel.state === "skeleton" || (safeModel.themes && !safeModel.themes.omitted);
+    if (showThemes) {
+      const themesRow = dayStripRenderMixRow(doc, safeModel, safeHandlers, "themes");
+      if (themesRow) dayStripAppend(el, themesRow);
+      const themesBar = dayStripRenderBar(doc, safeModel, safeHandlers, "themes");
+      if (themesBar) dayStripAppend(el, themesBar);
+    }
+    const fitLanes = showMix || showThemes;
+    if ((state === "ready" || state === "skeleton") && fitLanes) {
       try {
         if (typeof dayStripFitLegend === "function") dayStripFitLegend(el);
       } catch (error) {
@@ -398,9 +449,15 @@ function paintDayStrip(el, model, handlers) {
       }
       if (state === "skeleton") {
         try {
-          const legend = el.querySelector ? el.querySelector(".bob-day-strip-legend") : null;
-          const counter = legend && legend.querySelector ? legend.querySelector(".bob-day-strip-overflow") : null;
-          if (counter && counter.setAttribute) counter.setAttribute("hidden", "true");
+          const counters = [];
+          if (el.querySelectorAll) {
+            Array.prototype.push.apply(counters, el.querySelectorAll(".bob-day-strip-overflow"));
+          } else if (typeof dayStripFitFindByClass === "function") {
+            Array.prototype.push.apply(counters, dayStripFitFindByClass(el, "bob-day-strip-overflow"));
+          }
+          for (const counter of counters) {
+            if (counter && counter.setAttribute) counter.setAttribute("hidden", "true");
+          }
         } catch (error) {
           // Skeleton never shows its counter.
         }

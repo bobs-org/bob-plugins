@@ -153,24 +153,26 @@ function dayStripFitSetNamesMode(legend, on) {
   }
 }
 
-// DOM glue: measure the legend and apply the fit. Never throws; returns
-// null when there is no layout to measure.
-function dayStripFitLegend(stripEl) {
+function dayStripFitLegendEls(stripEl) {
+  let legends = [];
   try {
-    if (!stripEl || typeof stripEl !== "object") return null;
-    let legend = null;
-    try {
-      if (typeof stripEl.querySelector === "function") {
-        legend = stripEl.querySelector(".bob-day-strip-legend");
-      }
-    } catch (error) {
-      legend = null;
+    if (typeof stripEl.querySelectorAll === "function") {
+      legends = Array.from(stripEl.querySelectorAll(".bob-day-strip-legend"));
     }
-    if (!legend) {
-      const matches = dayStripFitFindByClass(stripEl, "bob-day-strip-legend");
-      legend = matches[0] || null;
-    }
-    if (!legend) return null;
+  } catch (error) {
+    legends = [];
+  }
+  if (!legends.length) {
+    legends = dayStripFitFindByClass(stripEl, "bob-day-strip-legend");
+  }
+  return legends;
+}
+
+// Measure one legend and apply its fit. Never throws; returns null when
+// there is no layout to measure.
+function dayStripFitOneLegend(legend, view) {
+  try {
+    if (!legend || typeof legend !== "object") return null;
     let items = [];
     try {
       if (typeof legend.querySelectorAll === "function") {
@@ -206,7 +208,6 @@ function dayStripFitLegend(stripEl) {
       }
     }
     if (!canMeasure || typeof counter.getBoundingClientRect !== "function") return null;
-    const view = dayStripFitViewOf(stripEl);
     // Unhide every item so measured widths are intrinsic.
     for (const item of items) {
       try {
@@ -238,12 +239,6 @@ function dayStripFitLegend(stripEl) {
     const n = byRank.length;
     const digits = String(Math.max(1, n)).length;
     const widest = "+" + "9".repeat(digits);
-    let savedCounterText = "";
-    try {
-      savedCounterText = counter.textContent || "";
-    } catch (error) {
-      savedCounterText = "";
-    }
     try {
       counter.textContent = widest;
     } catch (error) {
@@ -276,14 +271,12 @@ function dayStripFitLegend(stripEl) {
     const count = Math.max(0, Math.min(n, fit.count || 0));
     const mode = fit.mode === "names" ? "names" : "values";
     dayStripFitSetNamesMode(legend, mode === "names");
-    // Hidden roots in bar order (DOM order) for the counter title.
+    // Hidden items in bar order (DOM order) for the counter title.
     const rankOf = new Map();
     for (const item of items) {
       try {
         const rank = Number(item.getAttribute("data-rank")) || 0;
-        const key = typeof item.getAttribute === "function" ? item.getAttribute("data-key") : "";
         rankOf.set(item, rank);
-        void key;
       } catch (error) {
         rankOf.set(item, 0);
       }
@@ -326,12 +319,35 @@ function dayStripFitLegend(stripEl) {
     } catch (error) {
       // Best-effort.
     }
+    return { count, mode };
+  } catch (error) {
+    return null;
+  }
+}
+
+// DOM glue: fit every legend in the strip independently. Returns the
+// first (roots) legend's { count, mode } so existing callers keep their
+// contract. Never throws; returns null when there is no layout to measure.
+function dayStripFitLegend(stripEl) {
+  try {
+    if (!stripEl || typeof stripEl !== "object") return null;
+    const legends = dayStripFitLegendEls(stripEl);
+    const view = dayStripFitViewOf(stripEl);
+    let first = null;
+    let firstSet = false;
+    for (const legend of legends) {
+      const result = dayStripFitOneLegend(legend, view);
+      if (!firstSet) {
+        first = result;
+        firstSet = true;
+      }
+    }
     try {
       stripEl.__dayStripFitWidth = dayStripFitStripWidth(stripEl);
     } catch (error) {
       // Best-effort.
     }
-    return { count, mode };
+    return firstSet ? first : null;
   } catch (error) {
     return null;
   }

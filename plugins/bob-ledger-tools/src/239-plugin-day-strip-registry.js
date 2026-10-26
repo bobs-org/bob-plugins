@@ -398,6 +398,10 @@ class BobLedgerToolsDayStripMixin {
       };
       const finish = (model, counter, stamp) => {
         try {
+          const themeSig = (model.themes && Array.isArray(model.themes.segments)
+            ? model.themes.segments.map((segment) =>
+              String(segment.key || "") + ":" + String(segment.hue || "") + ":" + String(segment.shade || 0)).join(",")
+            : "");
           const key = [
             model.state,
             model.day,
@@ -406,6 +410,7 @@ class BobLedgerToolsDayStripMixin {
             model.stale,
             model.error ? model.error.code : "",
             (model.facts || []).map((fact) => fact.display).join(","),
+            themeSig,
           ].join("|");
           if (record.paintedKey === key) {
             return model;
@@ -486,6 +491,7 @@ class BobLedgerToolsDayStripMixin {
           fetchedAt,
           stale,
           error,
+          themeHueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
         }),
         "cached",
         fetchedAt,

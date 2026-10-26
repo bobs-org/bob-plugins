@@ -220,9 +220,12 @@ test("time mix reuses Stats area ordering and hues, with buckets last and a tool
   assert.equal(model.mix.overflow.length, model.mix.segments.length - 3);
   assert.match(model.mix.title, /^Time by root parent\n/);
   const painted = paint(model).root;
-  assert.equal(byClass(painted, "bob-day-strip-overflow")[0].textContent, `+${model.mix.segments.length - 3}`);
-  assert.equal(byClass(painted, "bob-day-strip-legend-item").length, model.mix.segments.length);
-  const visible = byClass(painted, "bob-day-strip-legend-item").filter((node) => !node.hasAttribute("hidden"));
+  const rootsRow = byClass(painted, "bob-day-strip-mix-row").find((node) => node.getAttribute("data-lane") === "roots")
+    || byClass(painted, "bob-day-strip-mix-row")[0];
+  const rootsLegend = byClass(rootsRow, "bob-day-strip-legend")[0];
+  assert.equal(byClass(rootsLegend, "bob-day-strip-overflow")[0].textContent, `+${model.mix.segments.length - 3}`);
+  assert.equal(byClass(rootsLegend, "bob-day-strip-legend-item").length, model.mix.segments.length);
+  const visible = byClass(rootsLegend, "bob-day-strip-legend-item").filter((node) => !node.hasAttribute("hidden"));
   assert.equal(visible.length, 3, "static pre-fit shows ranks 1-3");
   assert.deepEqual(
     visible.map((node) => Number(node.getAttribute("data-rank"))).sort((a, b) => a - b),
@@ -271,11 +274,11 @@ test("skeleton carries placeholder text per fact and the same tag and class sequ
   );
   const skeletonRoot = paint(skeleton).root;
   const readyRoot = paint(ready).root;
-  assert.equal(byClass(skeletonRoot, "bob-day-strip-legend-item").length, 3, "skeleton keeps three placeholders");
+  assert.equal(byClass(skeletonRoot, "bob-day-strip-legend-item").length, 6, "skeleton keeps three placeholders per lane");
   assert.equal(
     byClass(readyRoot, "bob-day-strip-legend-item").length,
-    ready.mix.legend.length,
-    "ready paints one item per root",
+    ready.mix.legend.length + (ready.themes && !ready.themes.omitted ? ready.themes.legend.length : 0),
+    "ready paints one item per root and theme",
   );
   const normalize = (classes) => (classes || "")
     .split(/\s+/)
@@ -283,10 +286,11 @@ test("skeleton carries placeholder text per fact and the same tag and class sequ
     .map((name) => name === "bob-day-strip-state-ready" || name === "bob-day-strip-state-skeleton" ? "bob-day-strip-state-STATE" : name)
     .map((name) => name === "bob-day-strip-bar-segment" ? "bob-day-strip-segment" : name)
     .map((name) => name === "bob-day-strip-mix-segment" ? "bob-day-strip-segment" : name)
-    .filter((name) => name !== "bob-day-strip-provisional" && name !== "bob-day-strip-stale" && name !== "bob-day-strip-bar-bucket" && name !== "bob-day-strip-mix-bucket" && !name.endsWith("-skeleton") && !name.startsWith("bob-day-strip-hue-"))
+    .filter((name) => name !== "bob-day-strip-provisional" && name !== "bob-day-strip-stale" && name !== "bob-day-strip-bar-bucket" && name !== "bob-day-strip-mix-bucket" && !name.endsWith("-skeleton") && !name.startsWith("bob-day-strip-hue-") && !name.startsWith("bob-day-strip-theme-hue-"))
     .join(" ");
   const legendPart = (classes) => (classes || "").split(/\s+/).some((name) =>
     name === "bob-day-strip-legend-item" || name === "bob-day-strip-legend-dot" ||
+    name === "bob-day-strip-legend-swatch" ||
     name === "bob-day-strip-legend-label" || name === "bob-day-strip-legend-value");
   const markPart = (classes) => (classes || "").split(/\s+/).some((name) =>
     name === "bob-day-strip-mark" || name.startsWith("bob-day-strip-mark-"));
@@ -368,15 +372,23 @@ test("strip paints facts, legend row, then full-width bar with no buttons", () =
   const mixRows = byClass(root, "bob-day-strip-mix-row");
   const bars = byClass(root, "bob-day-strip-bar");
   assert.equal(facts.length, 1, "one facts line");
-  assert.equal(mixRows.length, 1, "one legend and meta row");
-  assert.equal(bars.length, 1, "one full-width bar");
+  assert.equal(mixRows.length, 2, "roots legend and themes legend rows");
+  assert.equal(bars.length, 2, "roots bar and themes bar");
   assert.equal(findAll(root, (node) => node.tagName === "BUTTON").length, 0, "no <button> elements");
   assert.equal(root.children[0], facts[0], "facts paint first");
-  assert.equal(root.children[1], mixRows[0], "legend row paints second");
-  assert.equal(root.children[2], bars[0], "bar paints last, above the badges");
+  assert.equal(root.children[1], mixRows[0], "roots legend row paints second");
+  assert.equal(root.children[2], bars[0], "roots bar paints third");
+  assert.equal(root.children[3], mixRows[1], "themes legend row paints fourth");
+  assert.equal(root.children[4], bars[1], "themes bar paints last, above the badges");
+  assert.equal(mixRows[0].getAttribute("data-lane"), "roots");
+  assert.equal(bars[0].getAttribute("data-lane"), "roots");
+  assert.equal(mixRows[1].getAttribute("data-lane"), "themes");
+  assert.equal(bars[1].getAttribute("data-lane"), "themes");
   assert.equal(bars[0].getAttribute("aria-hidden"), "true", "bar is hidden from assistive tech");
   assert.equal(bars[0].getAttribute("role"), null, "bar carries no link role");
   assert.equal(bars[0].getAttribute("tabindex"), null, "bar carries no keyboard stop");
+  assert.equal(bars[1].getAttribute("aria-hidden"), "true");
+  assert.equal(bars[1].getAttribute("tabindex"), null);
 });
 
 test("bar click opens Stats homes with day and new-leaf modifiers", () => {
@@ -420,13 +432,16 @@ test("same-area roots get distinct hues and legend dots match their segments", (
     const match = /bob-day-strip-hue-([a-z]+)/.exec(String(className || ""));
     return match ? match[1] : null;
   };
-  const barNodes = findAll(root, (node) => (node.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-bar-segment"))
+  const rootsBar = byClass(root, "bob-day-strip-bar").find((node) => node.getAttribute("data-lane") === "roots") || byClass(root, "bob-day-strip-bar")[0];
+  const barNodes = findAll(rootsBar, (node) => (node.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-bar-segment"))
     .filter((node) => !node.hasAttribute("hidden"));
   const barHues = barNodes.map((node) => hueOf(node.getAttribute("class")));
   const nonGrayBar = barHues.filter((hue) => hue !== "gray");
   assert.equal(new Set(nonGrayBar).size, nonGrayBar.length, "painter bar segments differ");
   const byTitle = new Map(barNodes.map((node) => [node.getAttribute("title"), hueOf(node.getAttribute("class"))]));
-  const legendItems = byClass(root, "bob-day-strip-legend-item").filter((node) => !node.hasAttribute("hidden"));
+  const rootsRow = byClass(root, "bob-day-strip-mix-row").find((node) => node.getAttribute("data-lane") === "roots") || byClass(root, "bob-day-strip-mix-row")[0];
+  const rootsLegend = byClass(rootsRow, "bob-day-strip-legend")[0];
+  const legendItems = byClass(rootsLegend, "bob-day-strip-legend-item").filter((node) => !node.hasAttribute("hidden"));
   assert.ok(legendItems.length > 0);
   for (const item of legendItems) {
     const dot = findAll(item, (node) => (node.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-legend-dot"))[0];
@@ -577,8 +592,8 @@ test("DOM glue hides overflow, writes the counter, and toggles names mode", () =
   const model = modelFor(fixtures.manyRoots);
   const { root } = paint(model);
   const legend = byClass(root, "bob-day-strip-legend")[0];
-  const items = byClass(root, "bob-day-strip-legend-item");
-  const counter = byClass(root, "bob-day-strip-overflow")[0];
+  const items = byClass(legend, "bob-day-strip-legend-item");
+  const counter = byClass(legend, "bob-day-strip-overflow")[0];
   assert.ok(legend && items.length > 3 && counter, "manyRoots paints a fittable legend");
   legend.clientWidth = 300;
   const widths = new Map(items.map((item, index) => [item, 40 + index * 5]));

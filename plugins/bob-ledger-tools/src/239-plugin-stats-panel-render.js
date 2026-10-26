@@ -182,35 +182,19 @@ class BobLedgerToolsStatsPanelsMixin {
     return Math.max(300, width);
   }
 
-  // Bar hue for one Themes-panel row: the theme's hue (the fetched
-  // `bob themes` report wins inside `pomodoroThemeHueFor`, else the
-  // local hash/area/journal mirror). Exempt themes and the "other"
-  // bucket render gray. When theme-json adds a stats hue map beside
-  // homes, prefer it here before the api lookup. Never throws.
-  statsPanelThemeBarHue(key) {
+  // Bar hue for one Themes-panel row: the report's theme_hues map wins,
+  // then the fetched `bob themes` report inside `pomodoroThemeHueFor`.
+  // Exempt themes and the "other" bucket render gray. Never throws.
+  statsPanelThemeBarHue(key, report) {
     try {
-      const slots = Array.isArray(
-        typeof POMODORO_THEMES_HUE_SLOTS !== "undefined"
-          ? POMODORO_THEMES_HUE_SLOTS
-          : null,
-      )
-        ? POMODORO_THEMES_HUE_SLOTS
-        : ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
-      if (String(key || "").toLowerCase() === "other") {
-        return "gray";
-      }
-      const resolved =
+      const fallback =
         typeof this.pomodoroThemeHueFor === "function"
-          ? this.pomodoroThemeHueFor(key)
+          ? (themeKey, name) => this.pomodoroThemeHueFor(themeKey, name)
           : null;
-      const hue = resolved && resolved.hue ? resolved.hue : null;
-      if (!hue || !slots.includes(hue)) {
-        return "gray";
-      }
-      if (resolved.hue_source === "exempt") {
-        return "gray";
-      }
-      return hue;
+      const ref = typeof statsThemeRef === "function"
+        ? statsThemeRef(report, key, fallback)
+        : { hue: "gray", gray: true };
+      return ref.gray ? "gray" : ref.hue;
     } catch (error) {
       return "gray";
     }
@@ -239,10 +223,17 @@ class BobLedgerToolsStatsPanelsMixin {
     }
     const max = Math.max(0, ...model.rows.map((row) => (statsFinite(row.value) ? row.value : 0)));
     const list = statsEl(doc, "ul", { class: "bob-stats-panel-bars", "aria-label": "Themes" });
+    const fallback =
+      typeof this.pomodoroThemeHueFor === "function"
+        ? (themeKey, name) => this.pomodoroThemeHueFor(themeKey, name)
+        : null;
     for (const row of model.rows) {
       const item = statsEl(doc, "li", { class: "bob-stats-panel-bar-row" });
       const track = statsEl(doc, "span", { class: "bob-stats-panel-bar-track bob-stats-panel-bar-thin", "aria-hidden": "true" });
-      const fill = statsEl(doc, "span", { class: "bob-stats-panel-bar-fill bob-stats-theme-bar-" + this.statsPanelThemeBarHue(row.key), "aria-hidden": "true" });
+      const ref = typeof statsThemeRef === "function"
+        ? statsThemeRef(report, row.key, fallback)
+        : { key: row.key, label: row.key, hue: "gray", gray: true };
+      const fill = statsEl(doc, "span", { class: "bob-stats-panel-bar-fill bob-stats-theme-bar-" + (ref.gray ? "gray" : ref.hue), "aria-hidden": "true" });
       try {
         fill.setAttribute("style", "width: " + (max > 0 && statsFinite(row.value) ? Math.max(4, Math.round((row.value / max) * 100)) : 0) + "%");
       } catch (error) {
@@ -251,7 +242,7 @@ class BobLedgerToolsStatsPanelsMixin {
       track.appendChild(fill);
       item.appendChild(track);
       const share = row.share ? " (" + row.share + ")" : "";
-      item.appendChild(statsEl(doc, "span", { class: "bob-stats-panel-bar-text" }, row.key + " — " + row.display + share));
+      item.appendChild(statsEl(doc, "span", { class: "bob-stats-panel-bar-text" }, ref.label + " — " + row.display + share));
       list.appendChild(item);
     }
     section.appendChild(list);

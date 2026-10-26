@@ -10,6 +10,9 @@ const { pathToFileURL } = require("node:url");
 
 const repoRoot = path.resolve(__dirname, "..");
 const pluginRoot = path.join(repoRoot, "plugins/bob-ledger-tools");
+// Height budgets at a 16 px base, measured with the theme lane plus 2 px.
+const DAY_STRIP_HEIGHT_ONE_LINE = 116;
+const DAY_STRIP_HEIGHT_WRAPPED = 167;
 
 // Obsidian's app.css rules that reach plugin DOM. This commented baseline
 // is what once broke the strip: every tile was a <button>, so the 30 px
@@ -222,7 +225,7 @@ function checkMeasurement(item, context) {
   if (item.hasButton) failures.push(`strip contains a <button> element`);
   if (!item.relaxed) {
     if (item.factRows > 2 && item.state !== "unavailable") failures.push(`${item.factRows} fact rows (max 2)`);
-    const budget = item.factRows <= 1 ? 84 : 136;
+    const budget = item.factRows <= 1 ? DAY_STRIP_HEIGHT_ONE_LINE : DAY_STRIP_HEIGHT_WRAPPED;
     if (item.stripHeight > budget + 0.5) failures.push(`height ${item.stripHeight}px over the ${budget}px budget`);
   }
   // (i) the strip precedes .bob-plan with a calm 6–16 px gap.
@@ -232,20 +235,41 @@ function checkMeasurement(item, context) {
   if (typeof item.stripToBadges === "number" && (item.stripToBadges < 6 || item.stripToBadges > 16)) {
     failures.push(`strip bottom sits ${item.stripToBadges}px above the badges (want 6–16px)`);
   }
-  // (j) the bar spans the strip and ends it.
-  if (typeof item.barWidthDelta === "number" && item.barWidthDelta > 1) {
-    failures.push(`bar misses the strip width by ${item.barWidthDelta}px`);
+  // (j) every lane bar spans the content width (±1 px); the themes bar,
+  // when present, is the strip's last line box (else the roots bar).
+  const widthDeltas = Array.isArray(item.barWidthDeltas) && item.barWidthDeltas.length
+    ? item.barWidthDeltas
+    : (typeof item.barWidthDelta === "number" ? [item.barWidthDelta] : []);
+  for (const delta of widthDeltas) {
+    if (delta > 1) failures.push(`a lane bar misses the strip width by ${delta}px`);
   }
-  if (item.barIsLast === false && item.state !== "unavailable" && !item.mixOmitted) {
+  const barIsLast = item.lastBarIsLast === undefined ? item.barIsLast : item.lastBarIsLast;
+  if (barIsLast === false && item.state !== "unavailable" && !item.mixOmitted) {
     failures.push(`bar is not the strip's last line box`);
+  }
+  if (item.lanesOverlap > 0.5) failures.push(`theme and root lanes overlap`);
+  if (item.themeLanePresent && item.laneGapOk === false) {
+    failures.push(`roots-bar-to-themes-row gap is not larger than the themes legend-to-bar gap`);
   }
   // (k) no legend label is truncated and no legend item spills past its box.
   if (item.legendTruncation > 0.5) failures.push(`legend label truncates by ${item.legendTruncation}px`);
   if (item.legendItemOverflow > 0.5) failures.push(`legend item overflows its box by ${item.legendItemOverflow}px`);
-  // (l) fitted legend: at every width the visible counter equals segments
-  // minus visible items; screenshotDay fits four roots at 540/700 and at
-  // least three at 410. Clipping is covered by (a)(b)(k).
-  if (typeof item.segments === "number" && item.segments > 0 && item.state !== "skeleton" && !item.mixOmitted) {
+  // (k)/(l) per legend: the visible counter equals that lane's segments
+  // minus its visible items. screenshotDay fits four roots at 540/700
+  // and at least three at 410. Clipping is covered by (a)(b)(k).
+  const checkLegendFit = (fit, segments, label) => {
+    if (!fit || typeof segments !== "number" || segments <= 0) return;
+    if (segments > fit.visible && fit.counter !== segments - fit.visible) {
+      failures.push(`${label} counter is +${fit.counter} for ${segments} segments and ${fit.visible} labels`);
+    }
+    if (segments === fit.visible && fit.counter !== null && fit.counter !== undefined) {
+      failures.push(`${label} counter shows +${fit.counter} with every item visible`);
+    }
+  };
+  if (Array.isArray(item.legendFits) && item.legendFits.length) {
+    if (item.state !== "skeleton" && !item.mixOmitted) checkLegendFit(item.legendFits[0], item.segments, "roots");
+    if (item.state !== "skeleton" && !item.themeOmitted) checkLegendFit(item.legendFits[1], item.themeSegmentsCount, "themes");
+  } else if (typeof item.segments === "number" && item.segments > 0 && item.state !== "skeleton" && !item.mixOmitted) {
     if (item.segments > item.visibleLegend && item.visibleCounter !== item.segments - item.visibleLegend) {
       failures.push(`counter is +${item.visibleCounter} for ${item.segments} segments and ${item.visibleLegend} labels`);
     }
@@ -337,6 +361,32 @@ function checkMeasurement(item, context) {
   if (Array.isArray(item.markGeometryFailures)) {
     for (const failure of item.markGeometryFailures) failures.push(`mark geometry: ${failure}`);
   }
+  // Theme swatches: square within ±0.5 px, radius below half width, and
+  // the same computed background as the matching segment (shade included).
+  if (item.state !== "skeleton" && item.state !== "unavailable" && !item.themeOmitted) {
+    const segmentsByTitle = new Map((Array.isArray(item.themeSegments) ? item.themeSegments : []).map((segment) => [segment.title, segment]));
+    for (const swatch of (Array.isArray(item.themeSwatches) ? item.themeSwatches : [])) {
+      if (Math.abs(swatch.width - swatch.height) > 0.5) {
+        failures.push(`theme swatch ${swatch.title || ""} is ${Math.round(swatch.width * 10) / 10}x${Math.round(swatch.height * 10) / 10} (want square)`);
+      }
+      if (swatch.width > 0 && swatch.radius >= (swatch.width / 2) - 0.05) {
+        failures.push(`theme swatch ${swatch.title || ""} radius ${swatch.radius} is not below half its width`);
+      }
+      const segment = segmentsByTitle.get(swatch.title);
+      if (segment && rgbKey(segment.background) !== rgbKey(swatch.background)) {
+        failures.push(`theme swatch ${swatch.title} background differs from its segment`);
+      }
+    }
+  }
+  if (item.state === "theme-collision") {
+    const coloured = (Array.isArray(item.themeSegments) ? item.themeSegments : []).filter((segment) => !segment.gray);
+    for (let index = 0; index < coloured.length - 1; index += 1) {
+      if (rgbKey(coloured[index].background) === rgbKey(coloured[index + 1].background)) {
+        failures.push(`adjacent coloured theme segments share a background`);
+        break;
+      }
+    }
+  }
   return failures;
 }
 
@@ -396,19 +446,19 @@ function matrixMarkdown(matrix, browser, revision, interactionChecks) {
     "- Source: production `main.js`, `styles.css`, and synthetic presentation fixtures; no fixture is captured vault data.",
     "- Each strip renders above mock plan badges (TODAY / PENDING / NEXT / READY plus a ★ theme line) inside a Live Preview code-block container, with a bare `## Pomodoros` heading below; one extra Reading-view cell renders today.",
     "- An Obsidian baseline stylesheet (30 px inline-flex buttons, link colours, rendered line-height) loads before the production CSS, so a `<button>` regression fails the matrix.",
-    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 18 states plus Reading view.",
-    "- Height budgets (16 px base): ≤84 px when the facts fit on one row, ≤136 px when they fold to two rows. The long-labels case is relaxed: geometry is enforced, height is reported.",
-    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) the bar spans the strip's content width (±1 px) and is its last line box; (k) no legend label is truncated and no legend item spills past its box; (l) at every width every visible legend item lies inside the legend box and the visible counter equals segments minus visible items, with screenshotDay showing all four roots at 540 and 700 px and at least three at 410 px; (m) ready cells with ≤8 non-gray segments carry pairwise distinct bar hues and matching legend dots; (n) ready and stale values render at least 2× their heads; (o) every fact aria-label ends with its value text and no value holds a warning; (p) folded rows start without a hairline at 410 px while wider rows draw every hairline; (q) the no-Pomodoros bar shows its track colour; (r) every `.bob-day-strip-mark` is square within ±0.5 px, measures 0.95–1.12× its value's computed font size, lies inside its value box, and has its vertical centre within 1 px of the value box centre; (s) in ready cells the met, missed, and pending marks compute three distinct non-gray rim/ring colours, and in stale cells the mark ink computes to the muted text colour.",
+    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 21 states plus Reading view.",
+    `- Height budgets (16 px base): ≤${DAY_STRIP_HEIGHT_ONE_LINE} px when the facts fit on one row, ≤${DAY_STRIP_HEIGHT_WRAPPED} px when they fold to two rows. The long-labels case is relaxed: geometry is enforced, height is reported.`,
+    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, lanes never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) every lane bar spans the strip's content width (±1 px) and the themes bar, when present, is its last line box (else the roots bar); (k) no legend label is truncated and no legend item spills past its box; (l) at every width, per legend, the visible counter equals that lane's segments minus its visible items, with screenshotDay showing all four roots at 540 and 700 px and at least three at 410 px; (m) ready cells with ≤8 non-gray root segments carry pairwise distinct bar hues and matching legend dots; theme swatches are square with a radius below half their width and match their segment background, and themeCollision adjacent coloured segments compute different backgrounds; (n) ready and stale values render at least 2× their heads; (o) every fact aria-label ends with its value text and no value holds a warning; (p) folded rows start without a hairline at 410 px while wider rows draw every hairline; (q) the no-Pomodoros bar shows its track colour; (r) every `.bob-day-strip-mark` is square within ±0.5 px, measures 0.95–1.12× its value's computed font size, lies inside its value box, and has its vertical centre within 1 px of the value box centre; (s) in ready cells the met, missed, and pending marks compute three distinct non-gray rim/ring colours, and in stale cells the mark ink computes to the muted text colour.",
     "",
     "| Width | Theme | State | Strip height | Budget | Fact rows | Overflow | Facts overlap | Lines overlap | Legend overlap | Value baseline spread | Skeleton delta | Button | Result | Screenshot |",
     "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
-    ...measurements.map((item) => `| ${item.width}px | ${item.theme} | ${item.state} | ${item.stripHeight}px | ${item.relaxed ? "—" : `${item.factRows <= 1 ? 84 : 136}px`} | ${item.factRows} | ${item.maxOverflow}px | ${item.maxFactOverlap}px | ${item.linesOverlap}px | ${item.legendOverlap}px | ${item.valueBaselineSpread}px | ${item.skeletonHeightDelta === null ? "—" : `${item.skeletonHeightDelta}px`} | ${item.hasButton ? "yes" : "no"} | ${item.result} | ${item.screenshot} |`),
+    ...measurements.map((item) => `| ${item.width}px | ${item.theme} | ${item.state} | ${item.stripHeight}px | ${item.relaxed ? "—" : `${item.factRows <= 1 ? DAY_STRIP_HEIGHT_ONE_LINE : DAY_STRIP_HEIGHT_WRAPPED}px`} | ${item.factRows} | ${item.maxOverflow}px | ${item.maxFactOverlap}px | ${item.linesOverlap}px | ${item.legendOverlap}px | ${item.valueBaselineSpread}px | ${item.skeletonHeightDelta === null ? "—" : `${item.skeletonHeightDelta}px`} | ${item.hasButton ? "yes" : "no"} | ${item.result} | ${item.screenshot} |`),
     "",
     "Interaction checks (forced pseudo-states, per width × theme):",
     "",
     ...interactionChecks.map((item) => `- ${item.width}px ${item.theme}: ${item.label} — ${item.result}${item.detail ? ` (${item.detail})` : ""}`),
     "",
-    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-area roots get distinct hues, seven roots with `+N`, four roots that fit at 540 and 700 px, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), closed-out past day · met, forced hover, forced `:focus-visible`, and a Reading-view today cell.",
+    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-area roots get distinct hues, seven roots with `+N`, four roots that fit at 540 and 700 px, same-hue themes get shades, seven themes and unnamed, theme parts without `theme_hues`, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), closed-out past day · met, forced hover, forced `:focus-visible`, and a Reading-view today cell.",
     "",
   ].join("\n");
 }

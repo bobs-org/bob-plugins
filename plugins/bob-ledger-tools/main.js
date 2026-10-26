@@ -29094,6 +29094,83 @@ function statsPanelThemeRows(metric, point) {
   };
 }
 
+function statsThemePaletteHues() {
+  return Array.isArray(
+    typeof POMODORO_THEMES_HUE_SLOTS !== "undefined"
+      ? POMODORO_THEMES_HUE_SLOTS
+      : null,
+  )
+    ? POMODORO_THEMES_HUE_SLOTS
+    : ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
+}
+
+function statsThemeNormalizeKey(key) {
+  try {
+    if (typeof pomodoroThemeNormalizeKey === "function") {
+      const normalized = pomodoroThemeNormalizeKey(key);
+      if (normalized) return normalized;
+    }
+  } catch (error) {
+    // Fall through to the raw key.
+  }
+  return String(key || "");
+}
+
+function statsThemeHueFromResolved(resolved, slots) {
+  if (!resolved || typeof resolved !== "object") return { hue: "gray", gray: true };
+  if (resolved.hue_source === "exempt" || resolved.hue === null || resolved.hue === undefined) {
+    return { hue: "gray", gray: true };
+  }
+  const hue = resolved.hue;
+  if (typeof hue === "string" && slots.includes(hue)) {
+    return { hue, gray: false };
+  }
+  return { hue: "gray", gray: true };
+}
+
+// Shared theme identity for the Stats Themes panel and the Day strip
+// theme lane. Label and hue come from the report's theme_hues map when
+// present; otherwise an optional fallback (the plugin's pomodoroThemeHueFor).
+// Never hashes, never scans areas. Returns { key, label, hue, gray }.
+function statsThemeRef(report, key, fallback) {
+  const rawKey = typeof key === "string" ? key : String(key || "");
+  const slots = statsThemePaletteHues();
+  const folded = rawKey.toLowerCase();
+  const verbatim = folded === "(unnamed)" || folded === "other";
+  const normalized = statsThemeNormalizeKey(rawKey);
+  const hues = report && report.theme_hues && typeof report.theme_hues === "object"
+    ? report.theme_hues
+    : null;
+  const mapped = hues && typeof hues === "object"
+    ? (hues[normalized] || hues[rawKey] || null)
+    : null;
+  const entry = mapped && typeof mapped === "object" ? mapped : null;
+  let label = rawKey;
+  if (!verbatim && entry && typeof entry.name === "string" && entry.name) {
+    label = entry.name;
+  }
+  let hue = "gray";
+  let gray = true;
+  if (entry) {
+    const resolved = statsThemeHueFromResolved(entry, slots);
+    hue = resolved.hue;
+    gray = resolved.gray;
+  } else if (verbatim) {
+    hue = "gray";
+    gray = true;
+  } else if (typeof fallback === "function") {
+    try {
+      const resolved = statsThemeHueFromResolved(fallback(rawKey, label), slots);
+      hue = resolved.hue;
+      gray = resolved.gray;
+    } catch (error) {
+      hue = "gray";
+      gray = true;
+    }
+  }
+  return { key: rawKey, label, hue, gray };
+}
+
 const STATS_PANEL_HOME_HUES = ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
 
 function statsPanelHomeCatalog(report) {
@@ -29782,35 +29859,19 @@ class BobLedgerToolsStatsPanelsMixin {
     return Math.max(300, width);
   }
 
-  // Bar hue for one Themes-panel row: the theme's hue (the fetched
-  // `bob themes` report wins inside `pomodoroThemeHueFor`, else the
-  // local hash/area/journal mirror). Exempt themes and the "other"
-  // bucket render gray. When theme-json adds a stats hue map beside
-  // homes, prefer it here before the api lookup. Never throws.
-  statsPanelThemeBarHue(key) {
+  // Bar hue for one Themes-panel row: the report's theme_hues map wins,
+  // then the fetched `bob themes` report inside `pomodoroThemeHueFor`.
+  // Exempt themes and the "other" bucket render gray. Never throws.
+  statsPanelThemeBarHue(key, report) {
     try {
-      const slots = Array.isArray(
-        typeof POMODORO_THEMES_HUE_SLOTS !== "undefined"
-          ? POMODORO_THEMES_HUE_SLOTS
-          : null,
-      )
-        ? POMODORO_THEMES_HUE_SLOTS
-        : ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
-      if (String(key || "").toLowerCase() === "other") {
-        return "gray";
-      }
-      const resolved =
+      const fallback =
         typeof this.pomodoroThemeHueFor === "function"
-          ? this.pomodoroThemeHueFor(key)
+          ? (themeKey, name) => this.pomodoroThemeHueFor(themeKey, name)
           : null;
-      const hue = resolved && resolved.hue ? resolved.hue : null;
-      if (!hue || !slots.includes(hue)) {
-        return "gray";
-      }
-      if (resolved.hue_source === "exempt") {
-        return "gray";
-      }
-      return hue;
+      const ref = typeof statsThemeRef === "function"
+        ? statsThemeRef(report, key, fallback)
+        : { hue: "gray", gray: true };
+      return ref.gray ? "gray" : ref.hue;
     } catch (error) {
       return "gray";
     }
@@ -29839,10 +29900,17 @@ class BobLedgerToolsStatsPanelsMixin {
     }
     const max = Math.max(0, ...model.rows.map((row) => (statsFinite(row.value) ? row.value : 0)));
     const list = statsEl(doc, "ul", { class: "bob-stats-panel-bars", "aria-label": "Themes" });
+    const fallback =
+      typeof this.pomodoroThemeHueFor === "function"
+        ? (themeKey, name) => this.pomodoroThemeHueFor(themeKey, name)
+        : null;
     for (const row of model.rows) {
       const item = statsEl(doc, "li", { class: "bob-stats-panel-bar-row" });
       const track = statsEl(doc, "span", { class: "bob-stats-panel-bar-track bob-stats-panel-bar-thin", "aria-hidden": "true" });
-      const fill = statsEl(doc, "span", { class: "bob-stats-panel-bar-fill bob-stats-theme-bar-" + this.statsPanelThemeBarHue(row.key), "aria-hidden": "true" });
+      const ref = typeof statsThemeRef === "function"
+        ? statsThemeRef(report, row.key, fallback)
+        : { key: row.key, label: row.key, hue: "gray", gray: true };
+      const fill = statsEl(doc, "span", { class: "bob-stats-panel-bar-fill bob-stats-theme-bar-" + (ref.gray ? "gray" : ref.hue), "aria-hidden": "true" });
       try {
         fill.setAttribute("style", "width: " + (max > 0 && statsFinite(row.value) ? Math.max(4, Math.round((row.value / max) * 100)) : 0) + "%");
       } catch (error) {
@@ -29851,7 +29919,7 @@ class BobLedgerToolsStatsPanelsMixin {
       track.appendChild(fill);
       item.appendChild(track);
       const share = row.share ? " (" + row.share + ")" : "";
-      item.appendChild(statsEl(doc, "span", { class: "bob-stats-panel-bar-text" }, row.key + " — " + row.display + share));
+      item.appendChild(statsEl(doc, "span", { class: "bob-stats-panel-bar-text" }, ref.label + " — " + row.display + share));
       list.appendChild(item);
     }
     section.appendChild(list);
@@ -31246,7 +31314,20 @@ function dayStripMetaText({ day, localToday, asOf, stale }) {
   }
 }
 
-function dayStripAriaLabel(day, dateWords, provisional, facts, mix) {
+function dayStripOmittedLane(dimension) {
+  return {
+    segments: [],
+    legend: [],
+    overflow: [],
+    overflowDefault: { count: 0, title: "" },
+    empty: false,
+    omitted: true,
+    dimension: dimension || null,
+    title: "",
+  };
+}
+
+function dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes) {
   const values = facts.map((fact) => fact.label + " " + fact.display).join(", ");
   let label = "Day stats for " + dateWords.full + (provisional ? ", so far" : "") + (values ? ": " + values + "." : ".");
   if (mix && !mix.omitted && mix.segments.length) {
@@ -31254,6 +31335,9 @@ function dayStripAriaLabel(day, dateWords, provisional, facts, mix) {
     label += " " + sentence + ": " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   } else if (mix && mix.empty) {
     label += " No Pomodoros.";
+  }
+  if (themes && !themes.omitted && themes.segments.length) {
+    label += " Time by theme: " + themes.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   }
   return label;
 }
@@ -31264,16 +31348,16 @@ function dayStripModel(report, day, context) {
     const safeReport = report && typeof report === "object" ? report : null;
     const dateWords = dayStripDateWords(day);
     if (!dateWords) {
-      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
+      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "", stale: false, error: null };
     }
     const localToday = typeof safeContext.localToday === "string" ? safeContext.localToday : "";
     if (dayStripDateParts(localToday) && day > localToday) {
-      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
+      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "", stale: false, error: null };
     }
     const error = dayStripErrorInfo(safeContext.error);
     if (!safeReport) {
       if (error) {
-        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
+        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
       }
       const facts = DAY_STRIP_METRIC_IDS.map((id) => ({
         id,
@@ -31291,7 +31375,8 @@ function dayStripModel(report, day, context) {
         provisional: false,
       }));
       const mix = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "root_parent", title: "Time by root parent" };
-      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
+      const themes = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "theme", title: "Time by theme" };
+      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, themes, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
     }
 
     // A default report from before midnight must never be used to show a
@@ -31305,10 +31390,13 @@ function dayStripModel(report, day, context) {
       .map((metric) => dayStripBuildFact(metric, safeReport, day, dateWords));
     const worked = metrics.find((metric) => metric && metric.id === "worked") || null;
     const mix = dayStripMix(safeReport, worked, day);
+    const themes = typeof dayStripThemeMix === "function"
+      ? dayStripThemeMix(safeReport, worked, day, safeContext)
+      : dayStripOmittedLane("theme");
     const provisional = facts.some((fact) => fact.provisional);
     const asOf = day === localToday ? dayStripAsOf(safeContext.fetchedAt, true) : "";
     const stale = safeContext.stale === true;
-    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, facts, mix);
+    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes);
     const metaText = dayStripMetaText({ day, localToday, asOf, stale });
     const staleTitle = stale
       ? ((error && error.title) || (typeof safeContext.error === "string" ? safeContext.error : "Refresh failed")) +
@@ -31323,6 +31411,7 @@ function dayStripModel(report, day, context) {
       metaText,
       facts,
       mix,
+      themes,
       ariaLabel,
       stale,
       staleTitle,
@@ -31339,11 +31428,161 @@ function dayStripModel(report, day, context) {
       asOf: "",
       metaText: "",
       facts: [],
-      mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" },
+      mix: dayStripOmittedLane(null),
+      themes: dayStripOmittedLane("theme"),
       ariaLabel: "Day stats unavailable — bob stats failed.",
       stale: false,
       error: { code: "model-error", title: "bob stats failed", hint: "" },
     };
+  }
+}
+// ---- src/239-plugin-day-strip-theme-model.js ----
+// Pure theme-lane model for the daily-note Day strip. Splits the same
+// worked minutes as the roots lane, by Pomodoro theme. Bob owns every
+// value; this model never re-splits sessions and never hashes hues.
+function dayStripThemeEmpty(extra) {
+  return {
+    segments: [],
+    legend: [],
+    overflow: [],
+    overflowDefault: { count: 0, title: "" },
+    empty: false,
+    omitted: true,
+    dimension: "theme",
+    title: "",
+    ...(extra || {}),
+  };
+}
+
+function dayStripThemeHasSplitSession(report, day) {
+  const sessions = report && Array.isArray(report.sessions) ? report.sessions : null;
+  if (!sessions) return false;
+  return sessions.some((session) => {
+    if (!session || typeof session !== "object") return false;
+    const sessionDay = session.date || session.day;
+    if (sessionDay !== day) return false;
+    const name = typeof session.name === "string" ? session.name : "";
+    try {
+      const parts = typeof pomodoroThemeSplitComponents === "function"
+        ? pomodoroThemeSplitComponents(name)
+        : [];
+      return Array.isArray(parts) && parts.length >= 2;
+    } catch (error) {
+      return false;
+    }
+  });
+}
+
+function dayStripThemeMix(report, worked, day, context) {
+  try {
+    if (!worked || worked.unit !== "minutes") return dayStripThemeEmpty();
+    const points = dayStripMetricPoints(worked, report);
+    const hasThemeParts = points.some((point) =>
+      point && point.parts && point.parts.theme &&
+      typeof point.parts.theme === "object" &&
+      !Array.isArray(point.parts.theme) &&
+      Object.keys(point.parts.theme).length > 0);
+    if (!hasThemeParts) return dayStripThemeEmpty();
+    const point = points.find((candidate) => candidate && candidate.date === day) || null;
+    const raw = point && point.parts && point.parts.theme && typeof point.parts.theme === "object"
+      && !Array.isArray(point.parts.theme)
+      ? point.parts.theme
+      : null;
+    if (!raw) return dayStripThemeEmpty({ point });
+    const fallback = context && typeof context.themeHueFor === "function"
+      ? context.themeHueFor
+      : null;
+    const displays = point && point.parts_display && point.parts_display.theme
+      && typeof point.parts_display.theme === "object"
+      ? point.parts_display.theme
+      : {};
+    const entries = [];
+    for (const [key, value] of Object.entries(raw)) {
+      const minutes = typeof value === "number" && Number.isFinite(value) ? value : 0;
+      if (minutes <= 0) continue;
+      const ref = typeof statsThemeRef === "function"
+        ? statsThemeRef(report, key, fallback)
+        : { key, label: key, hue: "gray", gray: true };
+      const display = typeof displays[key] === "string" && displays[key]
+        ? displays[key]
+        : statsPanelFormatMinutes(minutes);
+      entries.push({
+        key,
+        label: ref.label,
+        value: minutes,
+        display,
+        hue: ref.gray ? "gray" : ref.hue,
+        gray: Boolean(ref.gray),
+      });
+    }
+    if (!entries.length) return dayStripThemeEmpty({ point });
+
+    const coloured = entries.filter((entry) => !entry.gray);
+    const gray = entries.filter((entry) => entry.gray);
+    const shadeOf = new Map();
+    const byHue = new Map();
+    for (const entry of coloured) {
+      const list = byHue.get(entry.hue) || [];
+      list.push(entry);
+      byHue.set(entry.hue, list);
+    }
+    for (const list of byHue.values()) {
+      list.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+      list.forEach((entry, index) => {
+        shadeOf.set(entry.key, index === 0 ? 0 : index === 1 ? 1 : 2);
+      });
+    }
+    coloured.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+    gray.sort((a, b) => {
+      const aUnnamed = String(a.key).toLowerCase() === "(unnamed)" ? 1 : 0;
+      const bUnnamed = String(b.key).toLowerCase() === "(unnamed)" ? 1 : 0;
+      if (aUnnamed !== bUnnamed) return aUnnamed - bUnnamed;
+      return b.value - a.value || a.label.localeCompare(b.label);
+    });
+    const ordered = coloured.concat(gray);
+    const segments = ordered.map((entry) => ({
+      key: entry.key,
+      label: entry.label,
+      value: entry.value,
+      display: entry.display,
+      hue: entry.hue,
+      gray: entry.gray,
+      shade: entry.gray ? 0 : (shadeOf.has(entry.key) ? shadeOf.get(entry.key) : 0),
+      bucket: entry.gray,
+    }));
+    const byValue = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+    const rankOf = new Map(byValue.map((segment, index) => [segment.key, index + 1]));
+    const legend = segments.map((segment) => ({
+      key: segment.key,
+      label: segment.label,
+      legendLabel: segment.label,
+      display: segment.display,
+      value: segment.value,
+      hue: segment.hue,
+      gray: segment.gray,
+      shade: segment.shade,
+      bucket: segment.bucket,
+      rank: rankOf.get(segment.key) || 0,
+    }));
+    const overflowList = segments.filter((segment) => (rankOf.get(segment.key) || 0) > 3);
+    const overflowTitle = (list) => list.map((segment) => segment.label + " " + segment.display).join("\n");
+    const titleLines = ["Time by theme", ...segments.map((segment) => segment.label + " " + segment.display)];
+    if (dayStripThemeHasSplitSession(report, day)) {
+      titleLines.push("Pomodoros with several themes are split evenly between them.");
+    }
+    return {
+      segments,
+      legend,
+      overflow: overflowList,
+      overflowDefault: { count: Math.max(0, segments.length - 3), title: overflowTitle(overflowList) },
+      empty: false,
+      omitted: false,
+      dimension: "theme",
+      title: titleLines.join("\n"),
+      point,
+    };
+  } catch (error) {
+    return dayStripThemeEmpty();
   }
 }
 // ---- src/239-plugin-day-strip-render.js ----
@@ -31564,7 +31803,7 @@ function dayStripRenderFact(doc, fact, model, handlers, arrive) {
   return node;
 }
 
-function dayStripLegendItem(doc, entry) {
+function dayStripLegendItem(doc, entry, lane) {
   const rank = entry && typeof entry.rank === "number" ? entry.rank : 0;
   const key = entry && typeof entry.key === "string" ? entry.key : "";
   const text = entry
@@ -31578,11 +31817,18 @@ function dayStripLegendItem(doc, entry) {
     if (rank) item.setAttribute("data-rank", String(rank));
     if (key) item.setAttribute("data-key", key);
   }
-  const dot = statsEl(doc, "span", {
-    class: "bob-day-strip-legend-dot" + (entry ? " bob-day-strip-hue-" + entry.hue : ""),
+  const themes = lane === "themes";
+  const markClass = themes
+    ? "bob-day-strip-legend-swatch" + (entry ? " bob-day-strip-theme-hue-" + entry.hue : "")
+    : "bob-day-strip-legend-dot" + (entry ? " bob-day-strip-hue-" + entry.hue : "");
+  const mark = statsEl(doc, "span", {
+    class: markClass,
     "aria-hidden": "true",
   });
-  dayStripAppend(item, dot);
+  if (mark && themes && entry && typeof entry.shade === "number" && entry.shade > 0) {
+    mark.setAttribute("data-shade", String(entry.shade));
+  }
+  dayStripAppend(item, mark);
   dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-label" }, text || ""));
   dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-value" }, entry ? entry.display : ""));
   if (!entry) item.setAttribute("hidden", "true");
@@ -31599,74 +31845,110 @@ function dayStripOverflowCounter(doc, info, skeleton) {
   return node;
 }
 
-// The legend link: one item per root in bar order plus one overflow
+function dayStripLaneMix(model, lane) {
+  if (lane === "themes") return model.themes || { segments: [], legend: [], overflow: [], omitted: true };
+  return model.mix || { segments: [], legend: [], overflow: [], omitted: true };
+}
+
+function dayStripLaneSentence(mix, lane) {
+  if (lane === "themes") return "Time by theme";
+  return mix && mix.dimension === "area" ? "Time by area" : "Time by root parent";
+}
+
+function dayStripLanePanel(lane) {
+  return lane === "themes" ? "themes" : "homes";
+}
+
+// The legend link: one item per segment in bar order plus one overflow
 // counter. The static pre-fit state shows ranks 1-3 so a host that
 // cannot measure keeps today's look; the fitter refines it.
-function dayStripRenderMix(doc, model, handlers) {
-  const mix = model.mix || { segments: [], legend: [], overflow: [], omitted: true };
+function dayStripRenderMix(doc, model, handlers, lane) {
+  const mix = dayStripLaneMix(model, lane);
   const skeleton = model.state === "skeleton";
-  const sentence = mix.dimension === "area" ? "Time by area" : "Time by root parent";
+  const sentence = dayStripLaneSentence(mix, lane);
   const node = dayStripLink(doc, "bob-day-strip-mix", sentence, mix.title);
   const legend = statsEl(doc, "span", { class: "bob-day-strip-legend" });
+  const skeletonLabel = lane === "themes" ? "Theme" : "Area";
   const entries = skeleton
-    ? [{ label: "Area", legendLabel: "Area", display: "0m", rank: 1 }, { label: "Area", legendLabel: "Area", display: "0m", rank: 2 }, { label: "Area", legendLabel: "Area", display: "0m", rank: 3 }]
+    ? [
+      { label: skeletonLabel, legendLabel: skeletonLabel, display: "0m", rank: 1 },
+      { label: skeletonLabel, legendLabel: skeletonLabel, display: "0m", rank: 2 },
+      { label: skeletonLabel, legendLabel: skeletonLabel, display: "0m", rank: 3 },
+    ]
     : Array.isArray(mix.legend) ? mix.legend : [];
   for (const entry of entries) {
-    const item = dayStripLegendItem(doc, entry);
+    const item = dayStripLegendItem(doc, entry, lane);
     if (!skeleton && entry && typeof entry.rank === "number" && entry.rank > 3) {
       item.setAttribute("hidden", "true");
     }
     dayStripAppend(legend, item);
   }
-  const noPomodoros = statsEl(doc, "span", { class: "bob-day-strip-no-pomodoros" }, "no Pomodoros");
-  if (!mix.empty && !skeleton) noPomodoros.setAttribute("hidden", "true");
-  dayStripAppend(legend, noPomodoros);
+  if (lane !== "themes") {
+    const noPomodoros = statsEl(doc, "span", { class: "bob-day-strip-no-pomodoros" }, "no Pomodoros");
+    if (!mix.empty && !skeleton) noPomodoros.setAttribute("hidden", "true");
+    dayStripAppend(legend, noPomodoros);
+  }
   const overflowInfo = mix.overflowDefault
     || { count: Math.max(0, entries.length - 3), title: "" };
   dayStripAppend(legend, dayStripOverflowCounter(doc, overflowInfo, skeleton));
   dayStripAppend(node, legend);
+  const panel = dayStripLanePanel(lane);
   dayStripActivate(node, (newLeaf) => {
-    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel: "homes", newLeaf });
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, newLeaf });
   });
   return node;
 }
 
-// The full-width bar: one segment per root, the strip's last line and a
-// mouse-only second target for the legend's action.
-function dayStripRenderBar(doc, model, handlers) {
-  const mix = model.mix || { segments: [] };
+// A full-width bar: one segment per root or theme. The themes bar, when
+// present, is the strip's last line and a mouse-only second target for
+// its legend's action.
+function dayStripRenderBar(doc, model, handlers, lane) {
+  const mix = dayStripLaneMix(model, lane);
   const skeleton = model.state === "skeleton";
+  const themes = lane === "themes";
   const node = statsEl(doc, "div", {
-    class: "bob-day-strip-bar",
+    class: "bob-day-strip-bar" + (themes ? " bob-day-strip-bar-themes" : ""),
     "aria-hidden": "true",
   });
   if (!node) return null;
+  node.setAttribute("data-lane", themes ? "themes" : "roots");
   const segments = skeleton ? [] : Array.isArray(mix.segments) ? mix.segments : [];
   const slots = Math.max(8, segments.length);
   for (let index = 0; index < slots; index += 1) {
     const segment = segments[index];
+    const hueClass = segment
+      ? (themes ? " bob-day-strip-theme-hue-" + segment.hue : " bob-day-strip-hue-" + segment.hue)
+      : "";
     const part = statsEl(doc, "span", {
-      class: "bob-day-strip-bar-segment" + (segment ? " bob-day-strip-hue-" + segment.hue : "") + (segment && segment.bucket ? " bob-day-strip-bar-bucket" : ""),
+      class: "bob-day-strip-bar-segment" + hueClass + (segment && segment.bucket ? " bob-day-strip-bar-bucket" : ""),
       title: segment ? segment.label + " " + segment.display : null,
     });
+    if (part && themes && segment && typeof segment.shade === "number" && segment.shade > 0) {
+      part.setAttribute("data-shade", String(segment.shade));
+    }
     if (part && part.style && segment) part.style.flexGrow = String(Math.max(0, Number(segment.value) || 0));
     if (!segment) part.setAttribute("hidden", "true");
     dayStripAppend(node, part);
   }
+  const panel = dayStripLanePanel(lane);
   dayStripBarActivate(node, (newLeaf) => {
-    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel: "homes", newLeaf });
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, newLeaf });
   });
   return node;
 }
 
-function dayStripRenderMixRow(doc, model, handlers) {
-  const mix = model.mix || { omitted: true };
+function dayStripRenderMixRow(doc, model, handlers, lane) {
+  const mix = dayStripLaneMix(model, lane);
   const skeleton = model.state === "skeleton";
   const showMix = skeleton || !mix.omitted;
-  const showMeta = skeleton || Boolean(model.metaText);
+  const showMeta = lane !== "themes" && (skeleton || Boolean(model.metaText));
   if (!showMix && !showMeta) return null;
-  const row = statsEl(doc, "div", { class: "bob-day-strip-mix-row" });
-  if (showMix) dayStripAppend(row, dayStripRenderMix(doc, model, handlers));
+  const themes = lane === "themes";
+  const row = statsEl(doc, "div", {
+    class: "bob-day-strip-mix-row" + (themes ? " bob-day-strip-lane-themes" : ""),
+  });
+  if (row) row.setAttribute("data-lane", themes ? "themes" : "roots");
+  if (showMix) dayStripAppend(row, dayStripRenderMix(doc, model, handlers, lane));
   if (showMeta) {
     dayStripAppend(row, statsEl(doc, "span", {
       class: "bob-day-strip-meta",
@@ -31732,14 +32014,22 @@ function paintDayStrip(el, model, handlers) {
       dayStripAppend(facts, dayStripRenderFact(doc, fact, safeModel, safeHandlers, Boolean(arriveIds[fact.id])));
     }
     dayStripAppend(el, facts);
-    const mixRow = dayStripRenderMixRow(doc, safeModel, safeHandlers);
+    const mixRow = dayStripRenderMixRow(doc, safeModel, safeHandlers, "roots");
     if (mixRow) dayStripAppend(el, mixRow);
     const showMix = safeModel.state === "skeleton" || (safeModel.mix && !safeModel.mix.omitted);
     if (showMix) {
-      const bar = dayStripRenderBar(doc, safeModel, safeHandlers);
+      const bar = dayStripRenderBar(doc, safeModel, safeHandlers, "roots");
       if (bar) dayStripAppend(el, bar);
     }
-    if ((state === "ready" || state === "skeleton") && showMix && safeModel.mix && !safeModel.mix.omitted) {
+    const showThemes = safeModel.state === "skeleton" || (safeModel.themes && !safeModel.themes.omitted);
+    if (showThemes) {
+      const themesRow = dayStripRenderMixRow(doc, safeModel, safeHandlers, "themes");
+      if (themesRow) dayStripAppend(el, themesRow);
+      const themesBar = dayStripRenderBar(doc, safeModel, safeHandlers, "themes");
+      if (themesBar) dayStripAppend(el, themesBar);
+    }
+    const fitLanes = showMix || showThemes;
+    if ((state === "ready" || state === "skeleton") && fitLanes) {
       try {
         if (typeof dayStripFitLegend === "function") dayStripFitLegend(el);
       } catch (error) {
@@ -31747,9 +32037,15 @@ function paintDayStrip(el, model, handlers) {
       }
       if (state === "skeleton") {
         try {
-          const legend = el.querySelector ? el.querySelector(".bob-day-strip-legend") : null;
-          const counter = legend && legend.querySelector ? legend.querySelector(".bob-day-strip-overflow") : null;
-          if (counter && counter.setAttribute) counter.setAttribute("hidden", "true");
+          const counters = [];
+          if (el.querySelectorAll) {
+            Array.prototype.push.apply(counters, el.querySelectorAll(".bob-day-strip-overflow"));
+          } else if (typeof dayStripFitFindByClass === "function") {
+            Array.prototype.push.apply(counters, dayStripFitFindByClass(el, "bob-day-strip-overflow"));
+          }
+          for (const counter of counters) {
+            if (counter && counter.setAttribute) counter.setAttribute("hidden", "true");
+          }
         } catch (error) {
           // Skeleton never shows its counter.
         }
@@ -31923,24 +32219,26 @@ function dayStripFitSetNamesMode(legend, on) {
   }
 }
 
-// DOM glue: measure the legend and apply the fit. Never throws; returns
-// null when there is no layout to measure.
-function dayStripFitLegend(stripEl) {
+function dayStripFitLegendEls(stripEl) {
+  let legends = [];
   try {
-    if (!stripEl || typeof stripEl !== "object") return null;
-    let legend = null;
-    try {
-      if (typeof stripEl.querySelector === "function") {
-        legend = stripEl.querySelector(".bob-day-strip-legend");
-      }
-    } catch (error) {
-      legend = null;
+    if (typeof stripEl.querySelectorAll === "function") {
+      legends = Array.from(stripEl.querySelectorAll(".bob-day-strip-legend"));
     }
-    if (!legend) {
-      const matches = dayStripFitFindByClass(stripEl, "bob-day-strip-legend");
-      legend = matches[0] || null;
-    }
-    if (!legend) return null;
+  } catch (error) {
+    legends = [];
+  }
+  if (!legends.length) {
+    legends = dayStripFitFindByClass(stripEl, "bob-day-strip-legend");
+  }
+  return legends;
+}
+
+// Measure one legend and apply its fit. Never throws; returns null when
+// there is no layout to measure.
+function dayStripFitOneLegend(legend, view) {
+  try {
+    if (!legend || typeof legend !== "object") return null;
     let items = [];
     try {
       if (typeof legend.querySelectorAll === "function") {
@@ -31976,7 +32274,6 @@ function dayStripFitLegend(stripEl) {
       }
     }
     if (!canMeasure || typeof counter.getBoundingClientRect !== "function") return null;
-    const view = dayStripFitViewOf(stripEl);
     // Unhide every item so measured widths are intrinsic.
     for (const item of items) {
       try {
@@ -32008,12 +32305,6 @@ function dayStripFitLegend(stripEl) {
     const n = byRank.length;
     const digits = String(Math.max(1, n)).length;
     const widest = "+" + "9".repeat(digits);
-    let savedCounterText = "";
-    try {
-      savedCounterText = counter.textContent || "";
-    } catch (error) {
-      savedCounterText = "";
-    }
     try {
       counter.textContent = widest;
     } catch (error) {
@@ -32046,14 +32337,12 @@ function dayStripFitLegend(stripEl) {
     const count = Math.max(0, Math.min(n, fit.count || 0));
     const mode = fit.mode === "names" ? "names" : "values";
     dayStripFitSetNamesMode(legend, mode === "names");
-    // Hidden roots in bar order (DOM order) for the counter title.
+    // Hidden items in bar order (DOM order) for the counter title.
     const rankOf = new Map();
     for (const item of items) {
       try {
         const rank = Number(item.getAttribute("data-rank")) || 0;
-        const key = typeof item.getAttribute === "function" ? item.getAttribute("data-key") : "";
         rankOf.set(item, rank);
-        void key;
       } catch (error) {
         rankOf.set(item, 0);
       }
@@ -32096,12 +32385,35 @@ function dayStripFitLegend(stripEl) {
     } catch (error) {
       // Best-effort.
     }
+    return { count, mode };
+  } catch (error) {
+    return null;
+  }
+}
+
+// DOM glue: fit every legend in the strip independently. Returns the
+// first (roots) legend's { count, mode } so existing callers keep their
+// contract. Never throws; returns null when there is no layout to measure.
+function dayStripFitLegend(stripEl) {
+  try {
+    if (!stripEl || typeof stripEl !== "object") return null;
+    const legends = dayStripFitLegendEls(stripEl);
+    const view = dayStripFitViewOf(stripEl);
+    let first = null;
+    let firstSet = false;
+    for (const legend of legends) {
+      const result = dayStripFitOneLegend(legend, view);
+      if (!firstSet) {
+        first = result;
+        firstSet = true;
+      }
+    }
     try {
       stripEl.__dayStripFitWidth = dayStripFitStripWidth(stripEl);
     } catch (error) {
       // Best-effort.
     }
-    return { count, mode };
+    return firstSet ? first : null;
   } catch (error) {
     return null;
   }
@@ -32854,6 +33166,10 @@ class BobLedgerToolsDayStripMixin {
       };
       const finish = (model, counter, stamp) => {
         try {
+          const themeSig = (model.themes && Array.isArray(model.themes.segments)
+            ? model.themes.segments.map((segment) =>
+              String(segment.key || "") + ":" + String(segment.hue || "") + ":" + String(segment.shade || 0)).join(",")
+            : "");
           const key = [
             model.state,
             model.day,
@@ -32862,6 +33178,7 @@ class BobLedgerToolsDayStripMixin {
             model.stale,
             model.error ? model.error.code : "",
             (model.facts || []).map((fact) => fact.display).join(","),
+            themeSig,
           ].join("|");
           if (record.paintedKey === key) {
             return model;
@@ -32942,6 +33259,7 @@ class BobLedgerToolsDayStripMixin {
           fetchedAt,
           stale,
           error,
+          themeHueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
         }),
         "cached",
         fetchedAt,
@@ -33507,7 +33825,10 @@ class BobLedgerToolsDayStripFenceMixin {
         state.range = dayStripShiftDay(day, -27) + ".." + day;
         state.offset = 0;
       }
-      if (opts.panel === "homes") {
+      if (opts.panel === "themes") {
+        state.revealPanel = "homes";
+        state.homesView = "themes";
+      } else if (opts.panel === "homes") {
         state.revealPanel = "homes";
         state.homesView = "roots";
       }
@@ -55702,6 +56023,7 @@ module.exports.helpers = {
   statsPanelMetricById,
   statsPanelGroup,
   statsPanelThemeRows,
+  statsThemeRef,
   STATS_PANEL_HOME_HUES,
   statsPanelHomeCatalog,
   statsPanelHasHomes,
@@ -55718,6 +56040,8 @@ module.exports.helpers = {
   dayStripShiftDay,
   dayStripDateWords,
   dayStripModel,
+  dayStripThemeMix,
+  dayStripThemeEmpty,
   dayStripLegendFit,
   dayStripFitLegend,
   dayStripEnsureFitObserver,

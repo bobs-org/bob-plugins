@@ -150,7 +150,10 @@ class BobLedgerToolsDayStripFenceMixin {
         state.range = dayStripShiftDay(day, -27) + ".." + day;
         state.offset = 0;
       }
-      if (opts.panel === "homes") {
+      if (opts.panel === "themes") {
+        state.revealPanel = "homes";
+        state.homesView = "themes";
+      } else if (opts.panel === "homes") {
         state.revealPanel = "homes";
         state.homesView = "roots";
       }

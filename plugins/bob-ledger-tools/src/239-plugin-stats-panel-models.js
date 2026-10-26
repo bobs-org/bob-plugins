@@ -81,6 +81,83 @@ function statsPanelThemeRows(metric, point) {
   };
 }
 
+function statsThemePaletteHues() {
+  return Array.isArray(
+    typeof POMODORO_THEMES_HUE_SLOTS !== "undefined"
+      ? POMODORO_THEMES_HUE_SLOTS
+      : null,
+  )
+    ? POMODORO_THEMES_HUE_SLOTS
+    : ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
+}
+
+function statsThemeNormalizeKey(key) {
+  try {
+    if (typeof pomodoroThemeNormalizeKey === "function") {
+      const normalized = pomodoroThemeNormalizeKey(key);
+      if (normalized) return normalized;
+    }
+  } catch (error) {
+    // Fall through to the raw key.
+  }
+  return String(key || "");
+}
+
+function statsThemeHueFromResolved(resolved, slots) {
+  if (!resolved || typeof resolved !== "object") return { hue: "gray", gray: true };
+  if (resolved.hue_source === "exempt" || resolved.hue === null || resolved.hue === undefined) {
+    return { hue: "gray", gray: true };
+  }
+  const hue = resolved.hue;
+  if (typeof hue === "string" && slots.includes(hue)) {
+    return { hue, gray: false };
+  }
+  return { hue: "gray", gray: true };
+}
+
+// Shared theme identity for the Stats Themes panel and the Day strip
+// theme lane. Label and hue come from the report's theme_hues map when
+// present; otherwise an optional fallback (the plugin's pomodoroThemeHueFor).
+// Never hashes, never scans areas. Returns { key, label, hue, gray }.
+function statsThemeRef(report, key, fallback) {
+  const rawKey = typeof key === "string" ? key : String(key || "");
+  const slots = statsThemePaletteHues();
+  const folded = rawKey.toLowerCase();
+  const verbatim = folded === "(unnamed)" || folded === "other";
+  const normalized = statsThemeNormalizeKey(rawKey);
+  const hues = report && report.theme_hues && typeof report.theme_hues === "object"
+    ? report.theme_hues
+    : null;
+  const mapped = hues && typeof hues === "object"
+    ? (hues[normalized] || hues[rawKey] || null)
+    : null;
+  const entry = mapped && typeof mapped === "object" ? mapped : null;
+  let label = rawKey;
+  if (!verbatim && entry && typeof entry.name === "string" && entry.name) {
+    label = entry.name;
+  }
+  let hue = "gray";
+  let gray = true;
+  if (entry) {
+    const resolved = statsThemeHueFromResolved(entry, slots);
+    hue = resolved.hue;
+    gray = resolved.gray;
+  } else if (verbatim) {
+    hue = "gray";
+    gray = true;
+  } else if (typeof fallback === "function") {
+    try {
+      const resolved = statsThemeHueFromResolved(fallback(rawKey, label), slots);
+      hue = resolved.hue;
+      gray = resolved.gray;
+    } catch (error) {
+      hue = "gray";
+      gray = true;
+    }
+  }
+  return { key: rawKey, label, hue, gray };
+}
+
 const STATS_PANEL_HOME_HUES = ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
 
 function statsPanelHomeCatalog(report) {

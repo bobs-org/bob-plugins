@@ -153,6 +153,10 @@ test("every ledger-tools FakeNode-style fake has a descriptor and hides its cycl
       descriptors: 1,
       hidden: [["ownerDocument", "parentNode"]],
     },
+    "test-ledger-tools-day-strip-themes.cjs": {
+      descriptors: 1,
+      hidden: [["ownerDocument", "parentNode"]],
+    },
     "test-ledger-tools-day-strip-hosts.cjs": {
       descriptors: 1,
       hidden: [["ownerDocument", "parentNode", "_closest"]],

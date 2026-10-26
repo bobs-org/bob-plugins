@@ -1129,6 +1129,58 @@ test("openStatsForDay keeps the page window when it already shows D", async () =
   });
 });
 
+test("openStatsForDay panel themes selects the Themes view", async () => {
+  await withMissingConfig(async () => {
+    const revealed = [];
+    const app = makeApp();
+    app.workspace.iterateAllLeaves = (visit) => {
+      visit({
+        view: {},
+        pinned: false,
+        getViewState: () => ({
+          type: "markdown",
+          state: { file: "dash_stats.md" },
+        }),
+      });
+    };
+    app.workspace.revealLeaf = async (leaf) => {
+      revealed.push(leaf);
+    };
+    app.workspace.setActiveLeaf = async () => {};
+    app.workspace.openLinkText = async () => {};
+    app.metadataCache.getFirstLinkpathDest = () => ({ path: "dash_stats.md" });
+    const plugin = await makePlugin(app);
+    try {
+      const today = plugin.dayStripLocalNow();
+      const day = shiftDay(today, -4);
+      const current = fixtures.createReport({ day: today, today, count: 28 });
+      stubSpawn(plugin, () => ({ ok: true, report: current }));
+      const page = fakeHost();
+      plugin.renderStatsBlock(
+        page,
+        { sourcePath: "dash_stats.md", fence: {} },
+        "",
+      );
+      await settle(60);
+      const ok = await plugin.openStatsForDay({
+        day,
+        metric: "worked",
+        panel: "themes",
+        sourcePath: "notes/weekly.md",
+      });
+      assert.equal(ok, true);
+      const state = plugin.statsViewStateFor("dash_stats.md");
+      assert.equal(state.pinnedDay, day);
+      assert.equal(state.focus, "worked");
+      assert.equal(state.revealPanel, "homes");
+      assert.equal(state.homesView, "themes");
+      assert.equal(revealed.length, 1, "the open leaf is revealed and reused");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
 test("openStatsForDay Notices when Stats cannot open", async () => {
   await withMissingConfig(async () => {
     TestNotice.messages.length = 0;

@@ -658,6 +658,33 @@ test("a stale areas view maps to Root parents, and old bob falls back with copy"
   });
 });
 
+test("Themes panel prefers report.theme_hues names and hues over the api lookup", async () => {
+  await withMissingConfig(async () => {
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
+    plugin.onload();
+    try {
+      plugin.pomodoroThemeHueFor = () => ({ hue: "red", hue_source: "hash" });
+      const report = homesPanelReport();
+      report.theme_hues = {
+        gtd: { key: "gtd", name: "Get Things Done", hue: "aqua", hue_source: "pin" },
+        sase: { key: "sase", name: "SASE", hue: "blue", hue_source: "hash" },
+      };
+      const { el, view } = renderWithFocus("worked");
+      plugin.statsViewStateFor("dash_stats.md").homesView = "themes";
+      plugin.renderStatsResult(view, { report });
+      assert.match(el.text, /Get Things Done — 29m/);
+      assert.equal(el.text.includes("GTD — 29m"), false, "catalog name replaces the part key");
+      const fills = el.querySelectorAll(".bob-stats-panel-bar-fill");
+      assert.ok(fills.some((node) => (node.getAttribute("class") || "").split(/\s+/).includes("bob-stats-theme-bar-aqua")),
+        "GTD wears the report hue, never the api red");
+      assert.ok(fills.every((node) => !(node.getAttribute("class") || "").includes("bob-stats-theme-bar-red")),
+        "api fallback hue is unused when theme_hues is present");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
 test("chart pin refreshes Where the time went and Themes honor the pinned span", async () => {
   await withMissingConfig(async () => {
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});

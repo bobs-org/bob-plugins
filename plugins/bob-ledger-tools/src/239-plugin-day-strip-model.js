@@ -296,7 +296,20 @@ function dayStripMetaText({ day, localToday, asOf, stale }) {
   }
 }
 
-function dayStripAriaLabel(day, dateWords, provisional, facts, mix) {
+function dayStripOmittedLane(dimension) {
+  return {
+    segments: [],
+    legend: [],
+    overflow: [],
+    overflowDefault: { count: 0, title: "" },
+    empty: false,
+    omitted: true,
+    dimension: dimension || null,
+    title: "",
+  };
+}
+
+function dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes) {
   const values = facts.map((fact) => fact.label + " " + fact.display).join(", ");
   let label = "Day stats for " + dateWords.full + (provisional ? ", so far" : "") + (values ? ": " + values + "." : ".");
   if (mix && !mix.omitted && mix.segments.length) {
@@ -304,6 +317,9 @@ function dayStripAriaLabel(day, dateWords, provisional, facts, mix) {
     label += " " + sentence + ": " + mix.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   } else if (mix && mix.empty) {
     label += " No Pomodoros.";
+  }
+  if (themes && !themes.omitted && themes.segments.length) {
+    label += " Time by theme: " + themes.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   }
   return label;
 }
@@ -314,16 +330,16 @@ function dayStripModel(report, day, context) {
     const safeReport = report && typeof report === "object" ? report : null;
     const dateWords = dayStripDateWords(day);
     if (!dateWords) {
-      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
+      return { state: "hidden", day: typeof day === "string" ? day : "", dateWords: null, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "", stale: false, error: null };
     }
     const localToday = typeof safeContext.localToday === "string" ? safeContext.localToday : "";
     if (dayStripDateParts(localToday) && day > localToday) {
-      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "", stale: false, error: null };
+      return { state: "future", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "", stale: false, error: null };
     }
     const error = dayStripErrorInfo(safeContext.error);
     if (!safeReport) {
       if (error) {
-        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" }, ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
+        return { state: "unavailable", day, dateWords, provisional: false, asOf: "", metaText: "", facts: [], mix: dayStripOmittedLane(null), themes: dayStripOmittedLane("theme"), ariaLabel: "Day stats unavailable — " + error.title + ".", stale: false, error };
       }
       const facts = DAY_STRIP_METRIC_IDS.map((id) => ({
         id,
@@ -341,7 +357,8 @@ function dayStripModel(report, day, context) {
         provisional: false,
       }));
       const mix = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "root_parent", title: "Time by root parent" };
-      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
+      const themes = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "theme", title: "Time by theme" };
+      return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, themes, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
     }
 
     // A default report from before midnight must never be used to show a
@@ -355,10 +372,13 @@ function dayStripModel(report, day, context) {
       .map((metric) => dayStripBuildFact(metric, safeReport, day, dateWords));
     const worked = metrics.find((metric) => metric && metric.id === "worked") || null;
     const mix = dayStripMix(safeReport, worked, day);
+    const themes = typeof dayStripThemeMix === "function"
+      ? dayStripThemeMix(safeReport, worked, day, safeContext)
+      : dayStripOmittedLane("theme");
     const provisional = facts.some((fact) => fact.provisional);
     const asOf = day === localToday ? dayStripAsOf(safeContext.fetchedAt, true) : "";
     const stale = safeContext.stale === true;
-    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, facts, mix);
+    const ariaLabel = dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes);
     const metaText = dayStripMetaText({ day, localToday, asOf, stale });
     const staleTitle = stale
       ? ((error && error.title) || (typeof safeContext.error === "string" ? safeContext.error : "Refresh failed")) +
@@ -373,6 +393,7 @@ function dayStripModel(report, day, context) {
       metaText,
       facts,
       mix,
+      themes,
       ariaLabel,
       stale,
       staleTitle,
@@ -389,7 +410,8 @@ function dayStripModel(report, day, context) {
       asOf: "",
       metaText: "",
       facts: [],
-      mix: { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: true, dimension: null, title: "" },
+      mix: dayStripOmittedLane(null),
+      themes: dayStripOmittedLane("theme"),
       ariaLabel: "Day stats unavailable — bob stats failed.",
       stale: false,
       error: { code: "model-error", title: "bob stats failed", hint: "" },

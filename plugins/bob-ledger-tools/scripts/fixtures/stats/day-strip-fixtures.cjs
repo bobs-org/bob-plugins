@@ -26,6 +26,28 @@ function dailyPoint(date, value, display, extra = {}) {
   };
 }
 
+function minutesDisplay(value) {
+  if (value === 0) return "0m";
+  const hours = Math.floor(value / 60);
+  const remainder = value % 60;
+  if (hours && remainder) return `${hours}h ${String(remainder).padStart(2, "0")}m`;
+  if (hours) return `${hours}h`;
+  return `${value}m`;
+}
+
+function themeEntry(key, name, hue, hueSource) {
+  return { key, name, hue, hue_source: hueSource };
+}
+
+function defaultThemeSplit(value) {
+  const gtd = Math.round(value * 0.55);
+  const bob = value - gtd;
+  return {
+    parts: { GTD: gtd, BOB: bob },
+    display: { GTD: minutesDisplay(gtd), BOB: minutesDisplay(bob) },
+  };
+}
+
 function makeReport(options = {}) {
   const day = options.day || DAY;
   const today = options.today || DAY;
@@ -68,7 +90,18 @@ function makeReport(options = {}) {
   }
 
   const workedPoints = dates.map((date, index) => {
-    const value = date === day ? (options.noPomodoros ? 0 : options.allUnlinked ? 105 : options.manyAreas ? 420 : options.wideValues ? 605 : options.screenshotDay ? 115 : options.redefinedWorked ? 4 : 185) : 30 + index * 15;
+    const value = date === day
+      ? (options.noPomodoros ? 0
+        : options.allUnlinked ? 105
+        : options.manyAreas ? 420
+        : options.wideValues ? 605
+        : options.screenshotDay ? 115
+        : options.themeCollision ? 260
+        : options.manyThemes ? 295
+        : options.noThemeHues ? 90
+        : options.redefinedWorked ? 4
+        : 185)
+      : 30 + index * 15;
     let parts = {};
     let partsDisplay = {};
     if (options.redefinedWorked) {
@@ -112,6 +145,42 @@ function makeReport(options = {}) {
     if (options.longLabels && date === day && parts.root_parent) {
       parts = { ...parts, root_parent: { ...parts.root_parent, "job_2026_apply_29.md": 25 } };
       partsDisplay = { ...partsDisplay, root_parent: { ...(partsDisplay.root_parent || {}), "job_2026_apply_29.md": "25m" } };
+    }
+    if (!options.redefinedWorked && !options.noPomodoros && value > 0) {
+      let theme = null;
+      if (date === day && options.screenshotDay) {
+        theme = { parts: { GTD: 45, SASE: 40, BOB: 20, DECKS: 10 }, display: { GTD: "45m", SASE: "40m", BOB: "20m", DECKS: "10m" } };
+      } else if (date === day && options.themeCollision) {
+        theme = {
+          parts: { PYPI: 60, READ: 50, GTD: 50, WRITE: 45, BLOG: 35, VIBE: 20 },
+          display: { PYPI: "1h", READ: "50m", GTD: "50m", WRITE: "45m", BLOG: "35m", VIBE: "20m" },
+        };
+      } else if (date === day && options.manyThemes) {
+        const keys = ["ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOXTROT", "GOLF"];
+        const amounts = keys.map((_, themeIndex) => (themeIndex + 1) * 10);
+        amounts.push(15);
+        const themeParts = Object.fromEntries(keys.map((key, themeIndex) => [key, amounts[themeIndex]]));
+        themeParts["(unnamed)"] = 15;
+        theme = {
+          parts: themeParts,
+          display: Object.fromEntries(Object.entries(themeParts).map(([key, amount]) => [key, minutesDisplay(amount)])),
+        };
+      } else if (date === day && options.noThemeHues) {
+        theme = { parts: { BOB: 50, DECKS: 40 }, display: { BOB: "50m", DECKS: "40m" } };
+      } else if (date === day && options.allUnlinked) {
+        theme = { parts: { BOB: 105 }, display: { BOB: "1h 45m" } };
+      } else {
+        theme = defaultThemeSplit(value);
+      }
+      if (theme) {
+        parts = { ...parts, theme: theme.parts };
+        partsDisplay = { ...partsDisplay, theme: theme.display };
+      }
+      if (options.longLabels && date === day && parts.theme) {
+        const bob = (parts.theme.BOB || 0) + 25;
+        parts = { ...parts, theme: { ...parts.theme, BOB: bob } };
+        partsDisplay = { ...partsDisplay, theme: { ...(partsDisplay.theme || {}), BOB: minutesDisplay(bob) } };
+      }
     }
     return dailyPoint(date, value, options.redefinedWorked ? String(value) : value === 0 ? "0m" : `${Math.floor(value / 60)}h ${String(value % 60).padStart(2, "0")}m`, {
       provisional: date === day && options.provisional !== false && day === today,
@@ -175,6 +244,40 @@ function makeReport(options = {}) {
     metric("review_closed", "Review closed", "bool", "checklist", closedPoints),
   ];
   const warnings = options.missingWarning ? [{ code: "journal_gap", date: day, message: "The review journal has a gap for this day." }] : [];
+  let themeHues = null;
+  if (!options.noThemeHues && !options.redefinedWorked) {
+    themeHues = {
+      gtd: themeEntry("gtd", "GTD", null, "exempt"),
+      bob: themeEntry("bob", "BOB", "magenta", "hash"),
+      sase: themeEntry("sase", "SASE", "aqua", "pin"),
+      decks: themeEntry("decks", "DECKS", "orange", "hash"),
+      pypi: themeEntry("pypi", "PYPI", "green", "hash"),
+      read: themeEntry("read", "READ", "green", "hash"),
+      write: themeEntry("write", "WRITE", "magenta", "hash"),
+      blog: themeEntry("blog", "BLOG", "orange", "hash"),
+      vibe: themeEntry("vibe", "VIBE", "orange", "hash"),
+      alpha: themeEntry("alpha", "ALPHA", "blue", "hash"),
+      bravo: themeEntry("bravo", "BRAVO", "orange", "hash"),
+      charlie: themeEntry("charlie", "CHARLIE", "aqua", "hash"),
+      delta: themeEntry("delta", "DELTA", "yellow", "hash"),
+      echo: themeEntry("echo", "ECHO", "magenta", "hash"),
+      foxtrot: themeEntry("foxtrot", "FOXTROT", "green", "hash"),
+      golf: themeEntry("golf", "GOLF", "violet", "hash"),
+    };
+  }
+  const sessions = [];
+  if (options.screenshotDay) {
+    sessions.push({
+      date: day,
+      path: `${day.replace(/-/g, "/").slice(0, 7)}/${day.replace(/-/g, "")}.md`,
+      line: 12,
+      minutes: 30,
+      minutes_display: "30m",
+      quality: "ok",
+      name: "BOB + DECKS",
+      homes: {},
+    });
+  }
   return {
     ok: true,
     schema_version: 1,
@@ -193,7 +296,8 @@ function makeReport(options = {}) {
     metrics,
     warnings,
     homes,
-    sessions: [],
+    sessions,
+    ...(themeHues ? { theme_hues: themeHues } : {}),
   };
 }
 
@@ -215,6 +319,9 @@ const fixtures = {
   sameHueRoots: fixture("same-area roots get distinct hues", { sameHueRoots: true }),
   manyRoots: fixture("seven roots and +N", { manyRoots: true }),
   screenshotDay: fixture("four roots with minutes", { screenshotDay: true, provisional: true }),
+  themeCollision: fixture("same-hue themes get shades", { themeCollision: true, provisional: false }),
+  manyThemes: fixture("seven themes and unnamed", { manyThemes: true, provisional: false }),
+  noThemeHues: fixture("theme parts without theme_hues", { noThemeHues: true, provisional: false }),
   longLabels: fixture("long metric and area labels", { longLabels: true }),
   wideValues: fixture("wide values", { wideValues: true }),
   weekGrouped: fixture("week grouped report with daily points", { group: "week" }),

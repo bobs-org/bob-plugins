@@ -20,6 +20,9 @@
       --bob-area-blue: #3979c5; --bob-area-orange: #d66d36; --bob-area-aqua: #268d97;
       --bob-area-yellow: #ae8c1e; --bob-area-magenta: #b04c85; --bob-area-green: #4c8b57;
       --bob-area-violet: #765eb8; --bob-area-red: #bf5c54;
+      --bob-hue-blue: var(--bob-area-blue); --bob-hue-orange: var(--bob-area-orange); --bob-hue-aqua: var(--bob-area-aqua);
+      --bob-hue-yellow: var(--bob-area-yellow); --bob-hue-magenta: var(--bob-area-magenta); --bob-hue-green: var(--bob-area-green);
+      --bob-hue-violet: var(--bob-area-violet); --bob-hue-red: var(--bob-area-red);
       background: #eeece8; color: var(--text-normal);
     }
     body.theme-dark {
@@ -33,6 +36,9 @@
       --bob-area-blue: #68a4ee; --bob-area-orange: #e17a4a; --bob-area-aqua: #55b8c3;
       --bob-area-yellow: #d0b24c; --bob-area-magenta: #d172a7; --bob-area-green: #75b87e;
       --bob-area-violet: #a18ce4; --bob-area-red: #df817a;
+      --bob-hue-blue: var(--bob-area-blue); --bob-hue-orange: var(--bob-area-orange); --bob-hue-aqua: var(--bob-area-aqua);
+      --bob-hue-yellow: var(--bob-area-yellow); --bob-hue-magenta: var(--bob-area-magenta); --bob-hue-green: var(--bob-area-green);
+      --bob-hue-violet: var(--bob-area-violet); --bob-hue-red: var(--bob-area-red);
       background: #17181a; color: var(--text-normal);
     }
     #preview-root { margin: 0 auto; width: 100%; padding: 12px; }
@@ -91,6 +97,9 @@
       { id: "same-hue-roots", title: "Same-area roots get distinct hues", fixture: "sameHueRoots" },
       { id: "many-roots", title: "Seven roots · +N", fixture: "manyRoots" },
       { id: "screenshot-day", title: "Four roots · fits at 540 and 700", fixture: "screenshotDay" },
+      { id: "theme-collision", title: "Same-hue themes get shades", fixture: "themeCollision" },
+      { id: "many-themes", title: "Seven themes and unnamed · +N", fixture: "manyThemes" },
+      { id: "no-theme-hues", title: "Theme parts without theme_hues", fixture: "noThemeHues" },
       { id: "redefined-worked", title: "Redefined worked · no area mix", fixture: "redefinedWorked" },
       { id: "long-labels", title: "Long labels", fixture: "longLabels", relaxed: true },
       { id: "wide-values", title: "Wide values · 10h 05m", fixture: "wideValues" },
@@ -285,6 +294,7 @@
         hasButton: Boolean(strip.querySelector("button")),
         ...measureStripPlacement(strip),
         ...measureStripHues(strip),
+        ...measureThemeLanes(strip),
         ...measureStripStats(strip, factBoxes, rowOf),
         ...measureStripMarks(strip),
       };
@@ -419,7 +429,9 @@
     function measureStripHues(strip) {
       const out = { barHues: [], barTitles: [], legendDots: [] };
       try {
-        const bar = strip.querySelector(":scope > .bob-day-strip-bar");
+        const bar = strip.querySelector(':scope > .bob-day-strip-bar[data-lane="roots"]')
+          || strip.querySelector(":scope > .bob-day-strip-bar:not(.bob-day-strip-bar-themes)")
+          || strip.querySelector(":scope > .bob-day-strip-bar");
         if (bar) {
           for (const segment of bar.querySelectorAll(".bob-day-strip-bar-segment")) {
             if (segment.hasAttribute("hidden")) continue;
@@ -429,7 +441,9 @@
             out.barTitles.push(segment.getAttribute("title") || "");
           }
         }
-        for (const item of strip.querySelectorAll(".bob-day-strip-legend-item")) {
+        const rootsLegend = strip.querySelector(".bob-day-strip-mix-row:not(.bob-day-strip-lane-themes) .bob-day-strip-legend")
+          || strip.querySelector(".bob-day-strip-legend");
+        for (const item of (rootsLegend ? rootsLegend.querySelectorAll(".bob-day-strip-legend-item") : [])) {
           if (item.hasAttribute("hidden")) continue;
           if (!visible(item)) continue;
           const dot = item.querySelector(".bob-day-strip-legend-dot");
@@ -439,6 +453,102 @@
         }
       } catch (error) {
         // Hue measurement never breaks the matrix.
+      }
+      return out;
+    }
+
+    function themeHueFromClass(className) {
+      const match = /bob-day-strip-theme-hue-([a-z]+)/.exec(String(className || ""));
+      return match ? match[1] : null;
+    }
+
+    function measureThemeLanes(strip) {
+      const out = {
+        barWidthDeltas: [],
+        lastBarIsLast: false,
+        lanesOverlap: 0,
+        laneGapOk: null,
+        themeLanePresent: false,
+        legendFits: [],
+        themeSwatches: [],
+        themeSegments: [],
+      };
+      try {
+        const bars = Array.from(strip.querySelectorAll(":scope > .bob-day-strip-bar"));
+        const stripBox = strip.getBoundingClientRect();
+        const style = getComputedStyle(strip);
+        const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+        const contentWidth = stripBox.width - padX;
+        for (const bar of bars) {
+          const barBox = bar.getBoundingClientRect();
+          out.barWidthDeltas.push(Math.round(Math.abs(barBox.width - contentWidth) * 10) / 10);
+        }
+        const lastBar = bars[bars.length - 1] || null;
+        if (lastBar) {
+          const barBox = lastBar.getBoundingClientRect();
+          out.lastBarIsLast = strip.lastElementChild === lastBar
+            && barBox.bottom <= stripBox.bottom + 0.5
+            && barBox.bottom >= stripBox.bottom - 0.5;
+        }
+        const themesBar = strip.querySelector(":scope > .bob-day-strip-bar-themes")
+          || bars.find((bar) => bar.getAttribute("data-lane") === "themes")
+          || null;
+        out.themeLanePresent = Boolean(themesBar);
+        const rootsBar = bars.find((bar) => bar.getAttribute("data-lane") === "roots") || bars[0] || null;
+        const themesRow = strip.querySelector(".bob-day-strip-lane-themes");
+        if (rootsBar && themesRow && themesBar) {
+          const a = rootsBar.getBoundingClientRect();
+          const b = themesRow.getBoundingClientRect();
+          const c = themesBar.getBoundingClientRect();
+          if (boxesOverlap(a, b, 0.5) || boxesOverlap(b, c, 0.5) || boxesOverlap(a, c, 0.5)) {
+            out.lanesOverlap = 1;
+          }
+          out.laneGapOk = (b.top - a.bottom) > (c.top - b.bottom) + 0.05;
+        }
+        for (const legend of strip.querySelectorAll(".bob-day-strip-legend")) {
+          const items = Array.from(legend.querySelectorAll(".bob-day-strip-legend-item"));
+          const visibleItems = items.filter(visible);
+          const counter = legend.querySelector(".bob-day-strip-overflow");
+          let counterValue = null;
+          if (counter && visible(counter)) {
+            const match = /^\+(\d+)$/.exec(String(counter.textContent || "").trim());
+            if (match) counterValue = Number(match[1]);
+          }
+          out.legendFits.push({
+            total: items.length,
+            visible: visibleItems.length,
+            counter: counterValue,
+          });
+        }
+        if (themesRow && themesBar) {
+          for (const segment of themesBar.querySelectorAll(".bob-day-strip-bar-segment")) {
+            if (segment.hasAttribute("hidden")) continue;
+            const hue = themeHueFromClass(segment.getAttribute("class"));
+            out.themeSegments.push({
+              title: segment.getAttribute("title") || "",
+              background: getComputedStyle(segment).backgroundColor || "",
+              hue,
+              shade: Number(segment.getAttribute("data-shade") || 0) || 0,
+              gray: hue === "gray" || (segment.getAttribute("class") || "").includes("bob-day-strip-bar-bucket"),
+            });
+          }
+          const themesLegend = themesRow.querySelector(".bob-day-strip-legend");
+          for (const item of (themesLegend ? themesLegend.querySelectorAll(".bob-day-strip-legend-item") : [])) {
+            if (!visible(item)) continue;
+            const swatch = item.querySelector(".bob-day-strip-legend-swatch");
+            if (!swatch) continue;
+            const box = swatch.getBoundingClientRect();
+            out.themeSwatches.push({
+              title: item.getAttribute("title") || "",
+              width: box.width,
+              height: box.height,
+              radius: parseFloat(getComputedStyle(swatch).borderRadius) || 0,
+              background: getComputedStyle(swatch).backgroundColor || "",
+            });
+          }
+        }
+      } catch (error) {
+        // Theme-lane measurement never breaks the matrix.
       }
       return out;
     }
@@ -469,15 +579,16 @@
             out.stripToBadges = Math.round((planBox.top - stripBox.bottom) * 10) / 10;
           }
         }
-        const bar = strip.querySelector(":scope > .bob-day-strip-bar");
-        if (bar) {
+        const bars = Array.from(strip.querySelectorAll(":scope > .bob-day-strip-bar"));
+        const lastBar = bars[bars.length - 1] || null;
+        if (lastBar) {
           const stripBox = strip.getBoundingClientRect();
-          const barBox = bar.getBoundingClientRect();
+          const barBox = lastBar.getBoundingClientRect();
           const style = getComputedStyle(strip);
           const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
           out.barWidthDelta = Math.round(Math.abs(barBox.width - (stripBox.width - padX)) * 10) / 10;
           const last = strip.lastElementChild;
-          out.barIsLast = last === bar && barBox.bottom <= stripBox.bottom + 0.5 && barBox.bottom >= stripBox.bottom - 0.5;
+          out.barIsLast = last === lastBar && barBox.bottom <= stripBox.bottom + 0.5 && barBox.bottom >= stripBox.bottom - 0.5;
         }
         let worst = 0;
         for (const label of strip.querySelectorAll(".bob-day-strip-legend-label")) {
@@ -502,14 +613,15 @@
           worstItem = Math.max(worstItem, item.scrollWidth - item.clientWidth);
         }
         out.legendItemOverflow = Math.round(worstItem * 10) / 10;
-        out.visibleLegend = Array.from(strip.querySelectorAll(".bob-day-strip-legend-item")).filter(visible).length;
-        for (const counter of strip.querySelectorAll(".bob-day-strip-overflow")) {
-          if (!visible(counter)) continue;
-          const match = /^\+(\d+)$/.exec(counter.textContent.trim());
-          if (match) {
-            out.visibleCounter = Number(match[1]);
-            break;
-          }
+        const rootsLegend = strip.querySelector(".bob-day-strip-mix-row:not(.bob-day-strip-lane-themes) .bob-day-strip-legend")
+          || strip.querySelector(".bob-day-strip-legend");
+        out.visibleLegend = rootsLegend
+          ? Array.from(rootsLegend.querySelectorAll(".bob-day-strip-legend-item")).filter(visible).length
+          : 0;
+        const rootsCounter = rootsLegend ? rootsLegend.querySelector(".bob-day-strip-overflow") : null;
+        if (rootsCounter && visible(rootsCounter)) {
+          const match = /^\+(\d+)$/.exec(String(rootsCounter.textContent || "").trim());
+          if (match) out.visibleCounter = Number(match[1]);
         }
       } catch (error) {
         // Placement measurement never breaks the matrix.
@@ -552,7 +664,9 @@
         helpers.paintDayStrip(strip, model, { openStats() {}, retry() {} });
         const mixOmitted = Boolean(!model || !model.mix || model.mix.omitted);
         const segments = !mixOmitted && model && model.mix && Array.isArray(model.mix.segments) ? model.mix.segments.length : 0;
-        measurements.push({ state: item.id, relaxed: item.relaxed === true, segments, mixOmitted, ...measureStrip(strip) });
+        const themeOmitted = Boolean(!model || !model.themes || model.themes.omitted);
+        const themeSegmentsCount = !themeOmitted && model.themes && Array.isArray(model.themes.segments) ? model.themes.segments.length : 0;
+        measurements.push({ state: item.id, relaxed: item.relaxed === true, segments, mixOmitted, themeOmitted, themeSegmentsCount, ...measureStrip(strip) });
       }
       const readingCard = document.createElement("section");
       readingCard.className = "preview-case";
@@ -574,7 +688,9 @@
       helpers.paintDayStrip(readingStrip, readingModel, { openStats() {}, retry() {} });
       const readingOmitted = Boolean(!readingModel || !readingModel.mix || readingModel.mix.omitted);
       const readingSegments = !readingOmitted && readingModel && readingModel.mix && Array.isArray(readingModel.mix.segments) ? readingModel.mix.segments.length : 0;
-      measurements.push({ state: "reading", relaxed: false, segments: readingSegments, mixOmitted: readingOmitted, ...measureStrip(readingStrip) });
+      const readingThemeOmitted = Boolean(!readingModel || !readingModel.themes || readingModel.themes.omitted);
+      const readingThemeSegments = !readingThemeOmitted && readingModel.themes && Array.isArray(readingModel.themes.segments) ? readingModel.themes.segments.length : 0;
+      measurements.push({ state: "reading", relaxed: false, segments: readingSegments, mixOmitted: readingOmitted, themeOmitted: readingThemeOmitted, themeSegmentsCount: readingThemeSegments, ...measureStrip(readingStrip) });
       return { width, theme, measurements, pageScrollWidth: document.documentElement.scrollWidth, viewportWidth: window.innerWidth };
     }
     window.dayStripPreview = { renderMatrix, cases };

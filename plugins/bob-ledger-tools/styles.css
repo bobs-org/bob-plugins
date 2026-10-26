@@ -4095,10 +4095,10 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
 }
 
 /* Day strip: a row of stacked stats above the plan badges. The full-width
-   root-parent bar is the last line, so it reads as the separator above
-   the badges. No card, border, background, shadow, or radius on the
-   strip; separation comes from spacing only. Area hues plus status inks
-   for boolean marks are the colours. */
+   theme bar (else the roots bar) is the last line, so it reads as the
+   separator above the badges. No card, border, background, shadow, or
+   radius on the strip; separation comes from spacing only. Area hues,
+   theme hues, plus status inks for boolean marks are the colours. */
 .bob-day-strip {
   box-sizing: border-box;
   width: 100%;
@@ -4341,6 +4341,10 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   padding: 0 0.7em;
 }
 
+.bob-day-strip-mix-row.bob-day-strip-lane-themes {
+  margin-top: 0.6em;
+}
+
 .bob-day-strip-mix {
   display: inline-flex;
   align-items: center;
@@ -4441,6 +4445,34 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   height: 0.5em;
   border-radius: 50%;
   background: var(--bob-day-strip-hue, var(--text-faint));
+}
+
+.bob-day-strip-legend-swatch {
+  flex: none;
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 1.5px;
+  background: var(--bob-day-strip-hue, var(--text-faint));
+}
+
+.bob-day-strip-theme-hue-blue { --bob-day-strip-hue: var(--bob-hue-blue, var(--text-muted)); }
+.bob-day-strip-theme-hue-orange { --bob-day-strip-hue: var(--bob-hue-orange, var(--text-muted)); }
+.bob-day-strip-theme-hue-aqua { --bob-day-strip-hue: var(--bob-hue-aqua, var(--text-muted)); }
+.bob-day-strip-theme-hue-yellow { --bob-day-strip-hue: var(--bob-hue-yellow, var(--text-muted)); }
+.bob-day-strip-theme-hue-magenta { --bob-day-strip-hue: var(--bob-hue-magenta, var(--text-muted)); }
+.bob-day-strip-theme-hue-green { --bob-day-strip-hue: var(--bob-hue-green, var(--text-muted)); }
+.bob-day-strip-theme-hue-violet { --bob-day-strip-hue: var(--bob-hue-violet, var(--text-muted)); }
+.bob-day-strip-theme-hue-red { --bob-day-strip-hue: var(--bob-hue-red, var(--text-muted)); }
+.bob-day-strip-theme-hue-gray { --bob-day-strip-hue: var(--text-faint); }
+
+.bob-day-strip-lane-themes [data-shade="1"],
+.bob-day-strip-bar-themes [data-shade="1"] {
+  background: color-mix(in srgb, var(--bob-day-strip-hue, var(--text-faint)) 65%, var(--background-primary));
+}
+
+.bob-day-strip-lane-themes [data-shade="2"],
+.bob-day-strip-bar-themes [data-shade="2"] {
+  background: color-mix(in srgb, var(--bob-day-strip-hue, var(--text-faint)) 42%, var(--background-primary));
 }
 
 .bob-day-strip-no-pomodoros,

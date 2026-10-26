@@ -142,7 +142,7 @@ test("plugin onload registers run-* commands and exposes the frozen api", async 
   assert.ok(ids.includes("run-plan"), "expected run-plan in " + ids.join(","));
   assert.ok(ids.includes("run-ready"));
   assert.ok(!ids.includes("run-ref-create"), "required-arg entries get no command");
-  assert.ok(!ids.includes("open"), "the sheet phase owns open");
+  assert.ok(ids.includes("open"), "the sheet phase registers open");
   const spec = plugin.commands.get("run-plan");
   assert.equal(spec.name, "Bob: Today's plan");
   assert.equal(typeof spec.callback, "function");

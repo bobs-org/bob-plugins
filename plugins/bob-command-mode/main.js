@@ -762,7 +762,12 @@ class CommandModeRunner {
   async runInner(argv, opts) {
     const catalog = this.catalog();
     const entry = opts.entryId ? cmEntryById(catalog, opts.entryId) : cmFindEntryForArgv(catalog, argv);
-    const excluded = cmExcludedReason(catalog, argv);
+    // A resolved entry id names a catalog row the sheet or palette chose on
+    // purpose (for example the pomodoro or queue rows under `capture`), so the
+    // raw-argv exclusion list does not apply to it. Typed argv without an
+    // entry id keeps the guard, which is what refuses free-text capture.
+    const namedEntry = opts.entryId ? cmEntryById(catalog, opts.entryId) : null;
+    const excluded = namedEntry ? null : cmExcludedReason(catalog, argv);
     if (excluded) {
       return { ok: false, runId: null, outcome: "failed", exitCode: null, reason: excluded };
     }
@@ -1807,6 +1812,11 @@ class BobCommandModePlugin extends Plugin {
       name: "Bob: Show last output",
       callback: () => this.commandModeShowLastOutput(),
     });
+    this.addCommand({
+      id: "open",
+      name: "Bob: Command mode",
+      callback: () => this.commandModeOpenSheet(),
+    });
     // Register from the persisted catalog first so Ctrl+P works before the
     // background refresh finishes; refresh then re-registers the same ids.
     this.commandModeSyncRunCommands();
@@ -1821,6 +1831,10 @@ class BobCommandModePlugin extends Plugin {
     if (this.commandModePager) {
       try { this.commandModePager.close(); } catch (error) { /* Best effort during unload. */ }
       this.commandModePager = null;
+    }
+    if (this.commandModeSheet) {
+      try { this.commandModeSheet.close(); } catch (error) { /* Best effort during unload. */ }
+      this.commandModeSheet = null;
     }
     if (this.commandModeRunner) this.commandModeRunner.dispose();
     if (this.commandModeStatusTimer) clearInterval(this.commandModeStatusTimer);
@@ -2215,7 +2229,30 @@ class BobCommandModePlugin extends Plugin {
     return () => {};
   }
 
+  commandModeOpenSheet() {
+    if (this.commandModeSheet && this.commandModeSheet.sheetOpen) {
+      try { this.commandModeSheet.refocusInput(); } catch (error) { /* Best effort. */ }
+      return { ok: true, focused: true };
+    }
+    try {
+      const modal = new CommandModeSheetModal(this.app, this, {});
+      this.commandModeSheet = modal;
+      modal.open();
+      return { ok: true, opened: true };
+    } catch (error) {
+      return { ok: false, reason: String((error && error.message) || error) };
+    }
+  }
+
+  commandModeSheetIsWatching(runId) {
+    const sheet = this.commandModeSheet;
+    if (!sheet || !runId) return false;
+    if (sheet.sheetOpen === false || sheet.stage !== "output") return false;
+    return String(sheet.outputRunId) === String(runId) || String(sheet.previewRunId) === String(runId);
+  }
+
   commandModePagerIsWatching(runId) {
+    if (this.commandModeSheetIsWatching(runId)) return true;
     const pager = this.commandModePager;
     if (!pager || !runId) return false;
     if (pager.pagerOpen === false) return false;
@@ -3855,6 +3892,1415 @@ class CommandModePagerModal extends Modal {
     }
   }
 }
+// ---- src/160-sheet-rank.js ----
+// Bob Command Mode: bottom sheet row model, fuzzy ranking, and frecency.
+// Pure: no DOM and no Obsidian imports. The sheet modal (170) renders rows,
+// and node tests require this file through the built main.js helpers.
+
+const CM_SHEET_RECENT_LIMIT = 4;
+const CM_SHEET_FRECENCY_WINDOW = 10;
+// Shown only when the median tops two seconds.
+const CM_SHEET_DURATION_FLOOR_MS = 2000;
+// [max age in days, weight] per the sheet spec: runs at most 4 / 14 / 31 /
+// 90 days old earn 100 / 70 / 50 / 30, older runs earn 10.
+const CM_SHEET_FRECENCY_BUCKETS = [
+  [4, 100],
+  [14, 70],
+  [31, 50],
+  [90, 30],
+  [Infinity, 10],
+];
+const CM_SHEET_FIELD_WEIGHTS = { path: 1.0, alias: 0.9, title: 0.8, keywords: 0.6 };
+const CM_SHEET_PATH_PREFIX_BONUS = 8;
+const CM_SHEET_KEYWORD_BONUS = 8;
+
+// Row-kind icons (Lucide names). Entries derive their kind from effect and
+// network; the modal falls back to a text glyph when setIcon is unavailable.
+const CM_SHEET_ICONS = {
+  network: "globe",
+  syncs: "refresh-cw",
+  writes: "pencil-line",
+  reads: "book-open",
+  surface: "app-window",
+  vim: "terminal-square",
+  help: "help-circle",
+  recent: "history",
+  plain: "command",
+};
+const CM_SHEET_ICON_FALLBACK = {
+  network: "◉",
+  syncs: "⟳",
+  writes: "✎",
+  reads: "ⓘ",
+  surface: "▤",
+  vim: "›",
+  help: "?",
+  recent: "↺",
+  plain: "⌘",
+};
+
+// Surface rows owned by the plugin. Each runs an existing Obsidian command and
+// is feature-detected through app.commands.commands[id]; a missing command
+// makes the row unavailable. There is no "Preview article adoption" row: the
+// plan names a bob-articles adopt-preview command id, but no such command
+// exists in bob-articles' source (only format-article and convert-to-article),
+// so there is nothing to detect.
+const CM_SHEET_SURFACE_ROWS = [
+  { plugin: "bob-ledger-tools", id: "open-today-daily-note", title: "Today's daily note", section: "daily" },
+  { plugin: "bob-navigation-hotkeys", id: "open-pomodoro-themes-manager", title: "Pomodoro themes manager", section: "daily" },
+  { plugin: "bob-ledger-tools", id: "open-stats", title: "Stats dashboard", section: "daily" },
+  { plugin: "bob-navigation-hotkeys", id: "open-dash-tasks", title: "Dash tasks", section: "tasks" },
+  { plugin: "bob-navigation-hotkeys", id: "open-relation-labels-manager", title: "Relation labels manager", section: "tasks" },
+  { plugin: "bob-ledger-tools", id: "open-reading-board", title: "Reading Board", section: "vault" },
+  { plugin: "bob-articles", id: "format-article", title: "Format this article", section: "vault" },
+];
+
+function cmSheetLower(value) {
+  return String(value || "").toLowerCase();
+}
+
+function cmSheetWords(text) {
+  return cmSheetLower(text).split(/[\s_\/-]+/).filter(Boolean);
+}
+
+// Subsequence match of token inside field. Scores consecutive runs and word
+// starts; returns 0 when token is not a subsequence of field.
+function cmFuzzyFieldScore(token, field) {
+  const needle = cmSheetLower(token);
+  const hay = cmSheetLower(field);
+  if (!needle || !hay) return 0;
+  if (hay === needle) return 14;
+  if (hay.startsWith(needle)) return 10;
+  let score = 0;
+  let ni = 0;
+  let run = 0;
+  for (let hi = 0; hi < hay.length && ni < needle.length; hi += 1) {
+    if (hay[hi] === needle[ni]) {
+      ni += 1;
+      run += 1;
+      score += 1 + run;
+      if (hi === 0 || /[\s_\/\-:.]/.test(hay[hi - 1])) score += 2;
+    } else {
+      run = 0;
+    }
+  }
+  if (ni < needle.length) return 0;
+  const words = cmSheetWords(hay);
+  if (words.some((word) => word.startsWith(needle))) score += 4;
+  return score;
+}
+
+function cmSheetTokenize(query) {
+  return String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+// Best weighted field score for one token across the row's match views.
+// Views: {path, alias, title, keywords} as plain strings.
+function cmSheetTokenScore(token, views) {
+  let best = 0;
+  for (const field of Object.keys(CM_SHEET_FIELD_WEIGHTS)) {
+    const text = views && views[field];
+    if (!text) continue;
+    const score = cmFuzzyFieldScore(token, text) * CM_SHEET_FIELD_WEIGHTS[field];
+    if (score > best) best = score;
+  }
+  return best;
+}
+
+// Ranked score for a row. Every query token must match somewhere (AND);
+// exact path-prefix and exact keyword hits add a bonus. Returns -1 when the
+// row does not match.
+function cmRankSheetRow(queryText, views, keywords) {
+  const tokens = cmSheetTokenize(queryText);
+  if (!tokens.length) return 0;
+  let total = 0;
+  for (const token of tokens) {
+    const tokenScore = cmSheetTokenScore(token, views);
+    if (tokenScore <= 0) return -1;
+    total += tokenScore;
+  }
+  const query = cmSheetLower(queryText).trim().replace(/\s+/g, " ");
+  if (views && cmSheetLower(views.path).startsWith(query)) total += CM_SHEET_PATH_PREFIX_BONUS;
+  const words = Array.isArray(keywords) ? keywords.map(cmSheetLower) : [];
+  if (tokens.some((token) => words.includes(token))) total += CM_SHEET_KEYWORD_BONUS;
+  return total;
+}
+
+function cmSheetRowViews(row) {
+  return {
+    path: Array.isArray(row.path) ? row.path.join(" ") : String(row.path || ""),
+    alias: Array.isArray(row.aliases) ? row.aliases.join(" ") : String(row.aliases || ""),
+    title: String(row.title || ""),
+    keywords: Array.isArray(row.keywords) ? row.keywords.join(" ") : String(row.keywords || ""),
+  };
+}
+
+// Rank rows for a query: best match first. Frecency breaks ties, then the
+// input (catalog) order. Never mutates the input.
+function cmRankSheetRows(query, rows, frecencyByKey) {
+  const scored = [];
+  for (let index = 0; index < (rows || []).length; index += 1) {
+    const row = rows[index];
+    const views = cmSheetRowViews(row);
+    const score = cmRankSheetRow(query, views, row.keywords);
+    if (score < 0) continue;
+    scored.push({ row, score, index });
+  }
+  scored.sort((left, right) => {
+    if (right.score !== left.score) return right.score - left.score;
+    const leftFrec = Number((frecencyByKey && frecencyByKey[left.row.key]) || 0);
+    const rightFrec = Number((frecencyByKey && frecencyByKey[right.row.key]) || 0);
+    if (rightFrec !== leftFrec) return rightFrec - leftFrec;
+    return left.index - right.index;
+  });
+  return scored.map((item) => item.row);
+}
+
+function cmSheetRunTimeMs(run) {
+  const stamp = (run && (run.finished_at || run.started_at)) || null;
+  const ms = stamp ? Date.parse(stamp) : NaN;
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function cmSheetFrecencyWeight(ageMs) {
+  const days = ageMs / 86400000;
+  for (const [maxDays, weight] of CM_SHEET_FRECENCY_BUCKETS) {
+    if (days <= maxDays) return weight;
+  }
+  return 10;
+}
+
+// Frecency per row key over that row's last 10 runs. Counts runs from this
+// host plus runs recorded before hosts were tracked (null host).
+function cmSheetFrecency(runs, key, nowMs, host) {
+  const now = typeof nowMs === "number" ? nowMs : Date.now();
+  let total = 0;
+  let seen = 0;
+  const ordered = [...(runs || [])].reverse();
+  for (const run of ordered) {
+    if (seen >= CM_SHEET_FRECENCY_WINDOW) break;
+    if (!run || cmSheetRunKey(run) !== key) continue;
+    if (run.host && host && run.host !== host) continue;
+    const at = cmSheetRunTimeMs(run);
+    if (at === null || at > now) continue;
+    total += cmSheetFrecencyWeight(now - at);
+    seen += 1;
+  }
+  return total;
+}
+
+function cmSheetFrecencyMap(runs, rows, nowMs, host) {
+  const map = {};
+  for (const row of rows || []) {
+    if (!row || !row.key || row.key in map) continue;
+    map[row.key] = cmSheetFrecency(runs, row.key, nowMs, host);
+  }
+  return map;
+}
+
+function cmSheetRunKey(run) {
+  if (run && run.entry_id) return "entry:" + run.entry_id;
+  return "argv:" + JSON.stringify((run && run.argv) || []);
+}
+
+function cmSheetAgeText(ms) {
+  const age = Math.max(0, Number(ms) || 0);
+  const minutes = Math.floor(age / 60000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return minutes + "m";
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return hours + "h";
+  return Math.floor(hours / 24) + "d";
+}
+
+const CM_SHEET_OUTCOME_GLYPH = { completed: "✓", attention: "◐", failed: "✗", unknown: "?", stopped: "■", running: "⟳" };
+
+// Last four distinct argv, newest first, each with outcome glyph, age, and
+// duration for the RECENT section.
+function cmSheetRecentRows(runs, nowMs) {
+  const now = typeof nowMs === "number" ? nowMs : Date.now();
+  const seen = new Set();
+  const rows = [];
+  for (const run of [...(runs || [])].reverse()) {
+    if (rows.length >= CM_SHEET_RECENT_LIMIT) break;
+    if (!run || !Array.isArray(run.argv)) continue;
+    const signature = JSON.stringify(run.argv);
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    const at = cmSheetRunTimeMs(run);
+    rows.push({
+      key: run.entry_id ? "entry:" + run.entry_id : "argv:" + signature,
+      kind: "recent",
+      path: run.argv[0] === "bob" ? run.argv.slice(1) : [...run.argv],
+      title: run.title || run.entry_id || "Last command",
+      about: run.summary || "",
+      argv: [...run.argv],
+      entryId: run.entry_id || null,
+      presentation: run.presentation || "action",
+      policy: "run",
+      outcome: run.outcome || "unknown",
+      glyph: CM_SHEET_OUTCOME_GLYPH[run.outcome] || "?",
+      age: at === null ? "" : cmSheetAgeText(now - at),
+      duration: typeof run.duration_ms === "number" ? run.duration_ms : null,
+      icon: "recent",
+    });
+  }
+  return rows;
+}
+
+// Median of the row's last 10 local durations; null when under the floor.
+function cmSheetMedianDuration(runs, row, host) {
+  const signature = row.kind === "recent" && row.argv
+    ? "argv:" + JSON.stringify(row.argv)
+    : row.key;
+  const durations = [];
+  for (const run of [...(runs || [])].reverse()) {
+    if (durations.length >= CM_SHEET_FRECENCY_WINDOW) break;
+    if (!run || typeof run.duration_ms !== "number") continue;
+    if (run.host && host && run.host !== host) continue;
+    const key = run.entry_id && row.entryId
+      ? (run.entry_id === row.entryId ? signature : null)
+      : (cmSheetRunKey(run) === signature ? signature : null);
+    if (key) durations.push(run.duration_ms);
+  }
+  if (!durations.length) return null;
+  durations.sort((a, b) => a - b);
+  const median = durations[Math.floor(durations.length / 2)];
+  return median > CM_SHEET_DURATION_FLOOR_MS ? median : null;
+}
+
+function cmSheetEntryKind(entry) {
+  if (entry && entry.network) return "network";
+  const effect = cmNormalizeEffect(entry && entry.effect);
+  if (effect === "syncs") return "syncs";
+  if (effect === "writes") return "writes";
+  return "reads";
+}
+
+// Alias strings whose `to` path names this entry, e.g. "ref clip".
+function cmSheetEntryAliases(catalog, entry) {
+  const path = Array.isArray(entry && entry.path) ? entry.path : [];
+  const found = [];
+  for (const alias of ((catalog && catalog.aliases) || [])) {
+    if (alias && Array.isArray(alias.to) && Array.isArray(alias.from) &&
+        alias.to.length === path.length && alias.to.every((word, i) => word === path[i])) {
+      found.push(alias.from.join(" "));
+    }
+  }
+  return found;
+}
+
+function cmSheetEntryUnavailable(entry, host) {
+  const hosts = Array.isArray(entry && entry.hosts) ? entry.hosts.filter(Boolean) : [];
+  if (hosts.length && (!host || !hosts.includes(host))) return "Unavailable here";
+  return null;
+}
+
+// Catalog entry rows in catalog order. Skips entries retired by an exclusion
+// rule that names the entry's exact path (for example bare `capture`, whose
+// free-text runs stay refused); named rows under an excluded prefix keep
+// their row because the runner runs them by entry id.
+function cmSheetEntryRows(catalog, host) {
+  const entries = (catalog && Array.isArray(catalog.entries) && catalog.entries) || [];
+  const excludedPaths = new Set(
+    ((catalog && Array.isArray(catalog.excluded) && catalog.excluded) || [])
+      .filter((rule) => rule && Array.isArray(rule.path))
+      .map((rule) => JSON.stringify(rule.path)),
+  );
+  const rows = [];
+  for (const entry of entries) {
+    if (!entry || !Array.isArray(entry.path) || !entry.path.length) continue;
+    if (excludedPaths.has(JSON.stringify(entry.path)) && !(entry.fixed || []).length) continue;
+    const unavailable = cmSheetEntryUnavailable(entry, host);
+    rows.push({
+      key: "entry:" + entry.id,
+      kind: "entry",
+      subkind: cmSheetEntryKind(entry),
+      icon: cmSheetEntryKind(entry),
+      path: [...entry.path, ...((entry.fixed || []).map(String))],
+      basePath: [...entry.path],
+      fixed: (entry.fixed || []).map(String),
+      aliases: cmSheetEntryAliases(catalog, entry),
+      title: entry.title || entry.id,
+      about: (entry.about || "").split("\n")[0],
+      keywords: Array.isArray(entry.keywords) ? [...entry.keywords] : [],
+      effect: cmNormalizeEffect(entry.effect),
+      presentation: cmNormalizePresentation(entry.presentation),
+      policy: cmNormalizePolicy(entry.policy),
+      hasPreview: Array.isArray(entry.preview) && entry.preview.length > 0,
+      confirm: entry.policy === "confirm" ? String(entry.confirm || "") : null,
+      required: cmRequiredPositionals(entry),
+      entryId: entry.id,
+      section: entry.section || "daily",
+      unavailable,
+    });
+  }
+  return rows;
+}
+
+function cmSheetSurfaceRows(surfaceAvailable) {
+  return CM_SHEET_SURFACE_ROWS.map((item) => {
+    const commandId = item.plugin + ":" + item.id;
+    const available = typeof surfaceAvailable === "function" ? surfaceAvailable(commandId) : true;
+    return {
+      key: "surface:" + commandId,
+      kind: "surface",
+      icon: "surface",
+      path: [item.title],
+      title: item.title,
+      about: "Open in Obsidian",
+      keywords: [item.id.replace(/-/g, " ")],
+      effect: "opens",
+      presentation: "surface",
+      policy: "run",
+      hasPreview: false,
+      required: [],
+      surfaceId: commandId,
+      section: item.section,
+      unavailable: available ? null : "Enable " + item.plugin,
+    };
+  });
+}
+
+function cmSheetPlainRows() {
+  return [
+    {
+      key: "plain:bob-help", kind: "plain", icon: "help", path: ["bob", "--help"],
+      title: "bob help", about: "Every command, in the pager", keywords: ["help", "usage", "man"],
+      effect: "reads", presentation: "report", policy: "run", hasPreview: false,
+      required: [], argv: ["--help"], section: "setup", unavailable: null,
+    },
+    {
+      key: "plain:show-last-output", kind: "plain", icon: "plain", path: ["Show last output"],
+      title: "Show last output", about: "The newest run, in the pager", keywords: ["last", "output", "history"],
+      effect: "reads", presentation: "report", policy: "run", hasPreview: false,
+      required: [], action: "show-last-output", section: "setup", unavailable: null,
+    },
+    {
+      key: "plain:run-history", kind: "plain", icon: "recent", path: ["Run history"],
+      title: "Run history", about: "Every recorded run, newest first", keywords: ["history", "runs", "log"],
+      effect: "reads", presentation: "report", policy: "run", hasPreview: false,
+      required: [], action: "run-history", section: "setup", unavailable: null,
+    },
+  ];
+}
+
+function cmSheetIsHttpUrl(value) {
+  return /^https?:\/\/\S+$/i.test(String(value || "").trim());
+}
+
+// Normalize a note's frontmatter `type` plus the article check into the
+// context kind the sheet builds "For this note" rows from.
+function cmSheetNoteKind(frontmatterType, isArticle) {
+  const values = Array.isArray(frontmatterType) ? frontmatterType : [frontmatterType];
+  const normalized = values
+    .map((value) => String(value || "").trim().replace(/^\[\[/, "").replace(/\]\]$/, "").trim().toLowerCase())
+    .filter(Boolean);
+  if (normalized.includes("ref")) return "ref";
+  if (normalized.includes("area")) return "area";
+  if (normalized.includes("project")) return "project";
+  if (isArticle || normalized.includes("article")) return "article";
+  return "note";
+}
+
+// Context-filled argv rows: complete argv (never auto-filled on a plain row
+// run), each naming the entry it fills. Only rows whose entry exists in the
+// catalog are returned.
+function cmSheetContextRows(catalog, context) {
+  const byId = new Map();
+  for (const entry of ((catalog && catalog.entries) || [])) {
+    if (entry && entry.id) byId.set(entry.id, entry);
+  }
+  const rows = [];
+  const fill = (entryId, userArgs, tagline) => {
+    const entry = byId.get(entryId);
+    if (!entry) return;
+    rows.push({
+      key: "ctx:" + entryId + ":" + JSON.stringify(userArgs),
+      kind: "entry",
+      context: true,
+      subkind: cmSheetEntryKind(entry),
+      icon: cmSheetEntryKind(entry),
+      path: [...entry.path],
+      basePath: [...entry.path],
+      fixed: (entry.fixed || []).map(String),
+      aliases: [],
+      title: entry.title || entryId,
+      about: tagline || (entry.about || "").split("\n")[0],
+      tagline: tagline || null,
+      keywords: Array.isArray(entry.keywords) ? [...entry.keywords] : [],
+      effect: cmNormalizeEffect(entry.effect),
+      presentation: cmNormalizePresentation(entry.presentation),
+      policy: cmNormalizePolicy(entry.policy),
+      hasPreview: Array.isArray(entry.preview) && entry.preview.length > 0,
+      confirm: entry.policy === "confirm" ? String(entry.confirm || "") : null,
+      required: cmRequiredPositionals(entry),
+      entryId,
+      userArgs: [...userArgs],
+      section: "context",
+      unavailable: null,
+    });
+  };
+  const note = context && context.notePath;
+  const kind = (context && context.noteKind) || null;
+  if (note) {
+    if (kind === "ref") {
+      fill("ref-today", [note], "Pull into today's Pomodoro");
+      fill("ref-show", [note], "Show this reference");
+      fill("ref-rename", [note], "Rename this reference");
+    } else if (kind === "area" || kind === "project") {
+      fill("ready", [note], "Ready lane for this note");
+    } else if (kind === "article") {
+      fill("articles-outline", [note], "Outline this article");
+    }
+    fill("ref-create", [note], "Snapshot note to Highlights");
+  }
+  const url = context && context.clipboardUrl;
+  if (url && cmSheetIsHttpUrl(url)) {
+    fill("ref-queue", [url], "Queue link for reading");
+    fill("ref-create", [url], "Create reference now");
+    fill("ref-find", [url], "Is this in my library?");
+  }
+  return rows;
+}
+
+// Every row the sheet can show, in catalog order: entries, then surface rows,
+// then the three plain rows. Context rows are separate (they head the empty
+// query) but join the ranked pool once the user types.
+function cmBuildSheetRows(catalog, options = {}) {
+  const host = options.host || null;
+  const rows = [
+    ...cmSheetEntryRows(catalog, host),
+    ...cmSheetSurfaceRows(options.surfaceAvailable),
+    ...cmSheetPlainRows(),
+  ];
+  if (options.context) rows.push(...cmSheetContextRows(catalog, options.context));
+  return rows;
+}
+
+// Empty-query sections in sheet order: RECENT, FOR THIS NOTE, FROM CLIPBOARD,
+// then one per catalog section in catalog order.
+function cmGroupSheetRows(rows, catalog, context) {
+  const groups = [];
+  const recent = (rows || []).filter((row) => row && row.kind === "recent");
+  if (recent.length) groups.push({ id: "recent", title: "RECENT", rows: recent });
+  const noteRows = (rows || []).filter((row) => row && row.context && row.section === "context" && row.userArgs &&
+    !(context && context.clipboardUrl && row.userArgs.includes(context.clipboardUrl)));
+  if (noteRows.length) {
+    const label = context && context.notePath ? "FOR THIS NOTE · " + context.notePath : "FOR THIS NOTE";
+    groups.push({ id: "context", title: label, rows: noteRows });
+  }
+  const clipRows = (rows || []).filter((row) => row && row.context && !noteRows.includes(row));
+  if (clipRows.length) {
+    const label = context && context.clipboardUrl ? "FROM CLIPBOARD · " + context.clipboardUrl : "FROM CLIPBOARD";
+    groups.push({ id: "clipboard", title: label, rows: clipRows });
+  }
+  const rest = (rows || []).filter((row) => row && row.kind !== "recent" && !row.context);
+  const sections = (catalog && Array.isArray(catalog.sections) && catalog.sections) || [];
+  const seen = new Set();
+  for (const section of sections) {
+    if (!section || !section.id) continue;
+    seen.add(section.id);
+    const sectionRows = rest.filter((row) => (row.section || "daily") === section.id);
+    if (sectionRows.length) groups.push({ id: section.id, title: String(section.title || section.id).toUpperCase(), rows: sectionRows });
+  }
+  const homeless = rest.filter((row) => !seen.has(row.section || "daily"));
+  if (homeless.length) groups.push({ id: "more", title: "MORE", rows: homeless });
+  return groups;
+}
+
+// Footer hint bar per stage.
+function cmSheetFooterHints(stage) {
+  if (stage === "confirm") return "⌃↵ run · esc back";
+  if (stage === "output") return "r rerun · y copy · [ ] history · : list · esc back · q close";
+  return "↵ run · ⇥ args · ⇧↵ preview · ⌃↵ run now · ? help · :: vim · esc close";
+}
+
+// List-stage key intent. `args` and `vim` stages belong to the args-vim phase;
+// this maps only what the sheet owns and reports `unhandled` for the rest.
+function cmSheetListAction(event, state = {}) {
+  if (!event || typeof event.key !== "string") return { type: "none" };
+  const key = event.key;
+  const ctrl = Boolean(event.ctrlKey);
+  const shift = Boolean(event.shiftKey);
+  const meta = Boolean(event.metaKey);
+  if (meta) return { type: "none" };
+  if (key === "Escape") return { type: "close" };
+  if (key === "Enter" && ctrl && !shift) return { type: "run-now" };
+  if (key === "Enter" && shift && !ctrl) return { type: "preview" };
+  if (key === "Enter" && !ctrl && !shift) return { type: "run" };
+  if (key === "Tab" && !ctrl) return { type: "args" };
+  if ((key === "ArrowDown" || (ctrl && key === "n")) && !shift) return { type: "down" };
+  if ((key === "ArrowUp" || (ctrl && key === "p")) && !shift) return { type: "up" };
+  if (key === "?" && !ctrl && String((state.query || "")).endsWith("?")) return { type: "help" };
+  if (key === "Backspace" && !ctrl && !String(state.query || "").length) return { type: "close" };
+  return { type: "none" };
+}
+
+// Help argv for a `?` run: `bob <path> --help` for the selected row, or bare
+// `bob --help` with no selection.
+function cmSheetHelpArgv(selectedRow) {
+  if (selectedRow && Array.isArray(selectedRow.basePath) && selectedRow.basePath.length) {
+    return [...selectedRow.basePath, "--help"];
+  }
+  return ["--help"];
+}
+// ---- src/170-sheet.js ----
+// Bob Command Mode: the `Bob: Command mode` bottom sheet. Lists catalog,
+// surface, context, and recent rows with fuzzy ranking; runs them through the
+// runner with preview-first and confirm flows; grows in place into the output
+// pager for reports, previews, and `?` help. Argument mode, typed runs, and
+// Vim routing belong to the args-vim phase, which extends this modal.
+
+function cmSheetSetIcon(el, name, fallback) {
+  try {
+    const obsidian = require("obsidian");
+    if (obsidian && typeof obsidian.setIcon === "function") {
+      obsidian.setIcon(el, name);
+      return;
+    }
+  } catch (error) {
+    // Headless tests and older shims fall through to the glyph.
+  }
+  el.textContent = String(fallback);
+}
+
+// Same rule as bob-articles' articleHasArticleType (020-article-core.js):
+// the frontmatter type names "article", alone or in a list.
+function cmSheetArticleType(type) {
+  const values = Array.isArray(type) ? type : [type];
+  return values.some((value) => String(value || "").trim()
+    .replace(/^\[\[/, "").replace(/\]\]$/, "").trim().toLowerCase() === "article");
+}
+
+function cmSheetCaptureContext(app) {
+  const context = { notePath: null, noteKind: null, clipboardUrl: null };
+  try {
+    const workspace = app && app.workspace;
+    const view = workspace && typeof workspace.getActiveViewOfType === "function"
+      ? workspace.getActiveViewOfType(MarkdownView)
+      : null;
+    const file = view && view.file;
+    if (file && file.path) {
+      context.notePath = file.path;
+      let frontmatter = null;
+      try {
+        const cache = app.metadataCache && typeof app.metadataCache.getFileCache === "function"
+          ? app.metadataCache.getFileCache(file)
+          : null;
+        frontmatter = (cache && cache.frontmatter) || null;
+      } catch (error) {
+        frontmatter = null;
+      }
+      context.noteKind = cmSheetNoteKind(frontmatter && frontmatter.type, cmSheetArticleType(frontmatter && frontmatter.type));
+    }
+  } catch (error) {
+    // No active note: the sheet still opens with catalog rows.
+  }
+  return context;
+}
+
+function cmSheetReadClipboard() {
+  try {
+    const clipboard = typeof navigator !== "undefined" && navigator.clipboard;
+    if (!clipboard || typeof clipboard.readText !== "function") return Promise.resolve(null);
+    return clipboard.readText().then((text) => {
+      const url = String(text || "").trim().split(/\s+/)[0] || "";
+      return cmSheetIsHttpUrl(url) ? url : null;
+    }).catch(() => null);
+  } catch (error) {
+    return Promise.resolve(null);
+  }
+}
+
+function cmSheetRowArgv(row) {
+  if (row && Array.isArray(row.argv)) return [...row.argv];
+  const base = (row && Array.isArray(row.basePath) && row.basePath) ||
+    (Array.isArray(row.path) && row.path) || [];
+  const userArgs = (row && Array.isArray(row.userArgs) && row.userArgs) || [];
+  return [...base, ...userArgs];
+}
+
+function cmSheetMissingPositional(row) {
+  const required = (row && Array.isArray(row.required) && row.required) || [];
+  const userArgs = (row && Array.isArray(row.userArgs) && row.userArgs) || [];
+  const filled = userArgs.length;
+  const missing = required[filled];
+  return missing ? String(missing.name || missing.slot || "value") : null;
+}
+
+class CommandModeSheetModal extends Modal {
+  constructor(app, plugin, options = {}) {
+    super(app);
+    this.plugin = plugin;
+    this.sheetOpen = false;
+    this.stage = "list";
+    this.query = String((options && options.initialQuery) || "");
+    this.catalog = (plugin && plugin.commandModeCatalog) || null;
+    this.host = (plugin && plugin.commandModeRunner && plugin.commandModeRunner.host) || null;
+    this.context = (options && options.context) || cmSheetCaptureContext(app);
+    this.rows = [];
+    this.visible = [];
+    this.groups = [];
+    this.selectedKey = null;
+    this.runRecords = [];
+    this.frecency = {};
+    this.confirmRow = null;
+    this.previewRunId = null;
+    this.previewResult = null;
+    this.previewCarry = [];
+    this.outputRunId = null;
+    this.outputTitle = "";
+    this.outputWrap = false;
+    this.outputStopConfirm = false;
+    this.outputSearch = cmDefaultPagerSearch();
+    this.outputView = null;
+    this.outputNodes = null;
+    this.tailTimer = null;
+    this.hint = null;
+    this.surfaceAvailable = (options && options.surfaceAvailable) || null;
+    this.onPickVim = (options && options.onPickVim) || null;
+  }
+
+  open() {
+    if (this.sheetOpen) return this;
+    this.sheetOpen = true;
+    try {
+      return super.open();
+    } catch (error) {
+      this.sheetOpen = false;
+      throw error;
+    }
+  }
+
+  close() {
+    if (!this.sheetOpen) return this;
+    this.sheetOpen = false;
+    return super.close();
+  }
+
+  onOpen() {
+    if (this.containerEl && this.containerEl.addClass) this.containerEl.addClass("bob-cmd-sheet-host");
+    if (this.modalEl && this.modalEl.addClass) this.modalEl.addClass("bob-cmd-sheet");
+    this.refreshRecords();
+    this.rebuildRows();
+    this.render();
+    if (this.modalEl && this.modalEl.addEventListener) {
+      this.modalEl.addEventListener("keydown", (event) => this.handleSheetKeydown(event));
+    }
+    void cmSheetReadClipboard().then((url) => {
+      if (!this.sheetOpen || !url || this.context.clipboardUrl === url) return;
+      this.context = { ...this.context, clipboardUrl: url };
+      const keep = this.selectedKey;
+      this.rebuildRows();
+      this.selectedKey = keep;
+      if (this.stage === "list") this.render();
+    });
+  }
+
+  onClose() {
+    this.stopTail();
+    this.sheetOpen = false;
+    if (this.plugin && this.plugin.commandModeSheet === this) this.plugin.commandModeSheet = null;
+  }
+
+  runner() {
+    return this.plugin && this.plugin.commandModeRunner;
+  }
+
+  refreshRecords() {
+    const runner = this.runner();
+    try {
+      this.runRecords = runner ? cmListRecords(runner.fs(), runner.runsDir()) : [];
+    } catch (error) {
+      this.runRecords = [];
+    }
+  }
+
+  rebuildRows() {
+    const surfaceAvailable = this.surfaceAvailable || ((id) => {
+      try {
+        const commands = this.app && this.app.commands && this.app.commands.commands;
+        return Boolean(commands && commands[id]);
+      } catch (error) {
+        return false;
+      }
+    });
+    const contextRows = cmSheetContextRows(this.catalog, this.context);
+    this.rows = [
+      ...cmSheetEntryRows(this.catalog, this.host),
+      ...cmSheetSurfaceRows(surfaceAvailable),
+      ...cmSheetPlainRows(),
+      ...contextRows,
+    ];
+    if (!this.query.trim()) {
+      this.refreshRecords();
+      this.rows = [...cmSheetRecentRows(this.runRecords, Date.now()), ...this.rows];
+    }
+    this.frecency = cmSheetFrecencyMap(this.runRecords, this.rows, Date.now(), this.host);
+    this.recomputeVisible();
+  }
+
+  recomputeVisible() {
+    const query = this.query.trim();
+    if (!query) {
+      this.groups = cmGroupSheetRows(this.rows, this.catalog, this.context);
+      this.visible = this.groups.flatMap((group) => group.rows);
+    } else {
+      this.groups = [];
+      this.visible = cmRankSheetRows(query.replace(/\?$/, ""), this.rows, this.frecency);
+    }
+    if (!this.visible.some((row) => row && row.key === this.selectedKey)) {
+      this.selectedKey = this.visible.length ? this.visible[0].key : null;
+    }
+  }
+
+  selectedRow() {
+    return this.visible.find((row) => row && row.key === this.selectedKey) || null;
+  }
+
+  select(delta) {
+    if (!this.visible.length) return;
+    let index = this.visible.findIndex((row) => row && row.key === this.selectedKey);
+    index = index < 0 ? 0 : (index + delta + this.visible.length) % this.visible.length;
+    this.selectedKey = this.visible[index].key;
+    this.render();
+    this.scrollSelectionIntoView();
+  }
+
+  scrollSelectionIntoView() {
+    // Best effort; headless stubs ignore it.
+  }
+
+  render() {
+    if (!this.sheetOpen && !this.contentEl) return;
+    this.contentEl.empty();
+    if (this.contentEl.addClass) this.contentEl.addClass("bob-cmd-sheet-content");
+    this.renderHeader();
+    if (this.stage === "confirm") this.renderConfirm();
+    else if (this.stage === "output") this.renderOutput();
+    else this.renderList();
+    this.renderFooter();
+  }
+
+  renderHeader() {
+    const header = this.contentEl.createEl("div", { cls: "bob-cmd-sheet-header" });
+    header.createEl("span", { cls: "bob-cmd-sheet-brand", text: "bob" });
+    const version = this.catalog && this.catalog.bob_version ? "bob " + this.catalog.bob_version : "";
+    header.createEl("span", {
+      cls: "bob-cmd-sheet-host",
+      text: [this.host, version].filter(Boolean).join(" · "),
+    });
+    const inputWrap = this.contentEl.createEl("div", { cls: "bob-cmd-sheet-input-wrap" });
+    inputWrap.createEl("span", { cls: "bob-cmd-sheet-prompt", text: "❯" });
+    this.inputEl = inputWrap.createEl("input", { cls: "bob-cmd-sheet-input", attr: { type: "text" } });
+    try {
+      this.inputEl.value = this.query;
+      this.inputEl.setAttribute("placeholder", "Type a command…");
+    } catch (error) {
+      // Headless stubs may not store attributes.
+    }
+    this.inputEl.addEventListener("input", () => {
+      this.query = String(this.inputEl.value || "");
+      this.hint = null;
+      if (this.stage !== "list") {
+        this.stage = "list";
+        this.previewRunId = null;
+        this.previewResult = null;
+      }
+      this.rebuildRows();
+      this.render();
+      this.refocusInput();
+    });
+  }
+
+  refocusInput() {
+    try {
+      if (this.stage === "list" && this.inputEl && typeof this.inputEl.focus === "function") this.inputEl.focus();
+    } catch (error) {
+      // Focus is best effort.
+    }
+  }
+
+  renderList() {
+    const list = this.contentEl.createEl("div", { cls: "bob-cmd-sheet-list" });
+    this.rowEls = new Map();
+    const query = this.query.trim();
+    if (!this.visible.length) {
+      const empty = list.createEl("div", { cls: "bob-cmd-sheet-empty" });
+      empty.setText(query ? "No matching command" : "No commands yet — is bob on PATH?");
+      return;
+    }
+    if (!query) {
+      for (const group of this.groups) {
+        list.createEl("div", { cls: "bob-cmd-sheet-section", text: group.title });
+        for (const row of group.rows) this.renderRow(list, row);
+      }
+      return;
+    }
+    for (const row of this.visible) this.renderRow(list, row);
+  }
+
+  renderRow(list, row) {
+    const selected = row.key === this.selectedKey;
+    const cls = "bob-cmd-row" + (selected ? " is-selected" : "") + (row.unavailable ? " is-unavailable" : "");
+    const el = list.createEl("div", { cls });
+    const icon = el.createEl("span", { cls: "bob-cmd-row-icon" });
+    cmSheetSetIcon(icon, (CM_SHEET_ICONS[row.icon] || CM_SHEET_ICONS[row.subkind]) || "command", CM_SHEET_ICON_FALLBACK[row.icon] || CM_SHEET_ICON_FALLBACK[row.subkind] || "·");
+    const path = Array.isArray(row.path) ? row.path.join(" ") : String(row.path || "");
+    el.createEl("span", { cls: "bob-cmd-row-path", text: path });
+    el.createEl("span", { cls: "bob-cmd-row-title", text: row.tagline ? row.title + " — " + row.tagline : row.title });
+    const chips = el.createEl("span", { cls: "bob-cmd-row-chips" });
+    if (row.effect && row.effect !== "opens") chips.createEl("span", { cls: "bob-cmd-chip-" + row.effect, text: row.effect });
+    if (row.effect === "opens") chips.createEl("span", { cls: "bob-cmd-chip-opens", text: "opens" });
+    if (row.hasPreview) chips.createEl("kbd", { cls: "bob-cmd-kbd", text: "⇧↵" });
+    const duration = cmSheetMedianDuration(this.runRecords, row, this.host);
+    if (duration !== null) chips.createEl("span", { cls: "bob-cmd-row-duration", text: cmFormatDuration(duration) });
+    if (row.kind === "recent") {
+      chips.createEl("span", { cls: "bob-cmd-row-glyph", text: row.glyph || "?" });
+      if (row.age) chips.createEl("span", { cls: "bob-cmd-row-age", text: row.age });
+    }
+    if (row.unavailable) chips.createEl("span", { cls: "bob-cmd-row-unavailable", text: row.unavailable });
+    if (selected && (row.about || row.tagline)) {
+      list.createEl("div", { cls: "bob-cmd-row-about", text: row.tagline || row.about });
+    }
+    el.addEventListener("click", () => {
+      this.selectedKey = row.key;
+      void this.activateRow(row, {});
+    });
+    this.rowEls.set(row.key, el);
+    return el;
+  }
+
+  renderFooter() {
+    const footer = this.contentEl.createEl("div", { cls: "bob-cmd-sheet-footer" });
+    if (this.hint) {
+      footer.createEl("span", { cls: "bob-cmd-sheet-hint is-warning", text: this.hint });
+      return;
+    }
+    if (this.stage === "output" && this.previewRunId && !this.previewResult) {
+      footer.createEl("span", { cls: "bob-cmd-sheet-hint", text: "preview running… ⌃↵ applies when it finishes" });
+      return;
+    }
+    footer.createEl("span", { cls: "bob-cmd-sheet-hint", text: cmSheetFooterHints(this.stage) });
+  }
+
+  renderConfirm() {
+    const row = this.confirmRow;
+    const card = this.contentEl.createEl("div", { cls: "bob-cmd-confirm" });
+    card.createEl("div", { cls: "bob-cmd-confirm-title", text: (row && row.title) || "Confirm" });
+    card.createEl("div", {
+      cls: "bob-cmd-confirm-text",
+      text: (row && row.confirm) || "This command needs confirmation.",
+    });
+    card.createEl("div", { cls: "bob-cmd-confirm-argv", text: "bob " + cmSheetRowArgv(row).map(cmQuoteArg).join(" ") });
+    const actions = card.createEl("div", { cls: "bob-cmd-confirm-actions" });
+    const run = actions.createEl("button", { cls: "bob-cmd-confirm-run", text: "Run ⌃↵" });
+    run.addEventListener("click", () => void this.confirmRun());
+    const back = actions.createEl("button", { cls: "bob-cmd-confirm-back", text: "Back" });
+    back.addEventListener("click", () => {
+      this.stage = "list";
+      this.confirmRow = null;
+      this.render();
+      this.refocusInput();
+    });
+  }
+
+  handleSheetKeydown(event) {
+    if (this.stage === "output") return this.handleOutputKeydown(event);
+    if (this.stage === "confirm") {
+      if (event && event.key === "Escape") {
+        event.preventDefault();
+        this.stage = "list";
+        this.confirmRow = null;
+        this.render();
+        this.refocusInput();
+        return true;
+      }
+      if (event && event.key === "Enter" && event.ctrlKey && !event.shiftKey) {
+        event.preventDefault();
+        void this.confirmRun();
+        return true;
+      }
+      if (event && event.key === "Enter" && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        return true;
+      }
+      return false;
+    }
+    const action = cmSheetListAction(event, { query: this.query });
+    if (!action || action.type === "none") return false;
+    if (typeof event.preventDefault === "function") event.preventDefault();
+    if (typeof event.stopPropagation === "function") event.stopPropagation();
+    if (action.type === "close") {
+      this.close();
+      return true;
+    }
+    if (action.type === "down") {
+      this.select(1);
+      return true;
+    }
+    if (action.type === "up") {
+      this.select(-1);
+      return true;
+    }
+    if (action.type === "help") {
+      this.showHelp();
+      return true;
+    }
+    if (action.type === "args") {
+      const row = this.selectedRow();
+      if (row && typeof this.onPickVim === "function") {
+        // Placeholder for the args-vim phase; until then, Tab names the need.
+        this.hint = "Argument mode lands with the args-vim phase";
+        this.render();
+        this.refocusInput();
+      } else if (row) {
+        this.hint = row.required && row.required.length
+          ? "Missing " + row.required.map((arg) => arg.name || arg.slot).join(", ")
+          : "Nothing to fill in — press ↵ to run";
+        this.render();
+        this.refocusInput();
+      }
+      return true;
+    }
+    const row = this.selectedRow();
+    if (!row) return true;
+    if (action.type === "run") void this.activateRow(row, {});
+    else if (action.type === "preview") void this.activateRow(row, { preview: true });
+    else if (action.type === "run-now") void this.activateRow(row, { force: true });
+    return true;
+  }
+
+  async activateRow(row, opts = {}) {
+    if (!row || row.unavailable) return { ok: false, reason: row && row.unavailable ? row.unavailable : "no row" };
+    if (row.kind === "surface") return this.runSurface(row);
+    if (row.kind === "plain") return this.runPlain(row);
+    if (row.kind === "recent") return this.rerunRecent(row);
+    const missing = cmSheetMissingPositional(row);
+    if (missing) {
+      this.hint = "Needs " + missing;
+      this.render();
+      this.refocusInput();
+      return { ok: false, reason: "missing " + missing };
+    }
+    const argv = cmSheetRowArgv(row);
+    if (opts.preview || (row.policy === "preview-first" && !opts.force)) {
+      return this.runPreview(row, argv);
+    }
+    if (row.policy === "confirm" && !opts.force) {
+      this.confirmRow = row;
+      this.stage = "confirm";
+      this.render();
+      return { ok: true, stage: "confirm" };
+    }
+    if (row.presentation === "report") {
+      return this.runReport(row, argv, { preview: false });
+    }
+    if (row.presentation === "inline") {
+      this.close();
+      return this.runner().run(argv, { entryId: row.entryId, title: row.title, trigger: "sheet" });
+    }
+    this.close();
+    return this.runner().run(argv, {
+      entryId: row.entryId, title: row.title, trigger: "sheet",
+      ...(opts.force ? { skipGuards: true } : {}),
+    });
+  }
+
+  async runSurface(row) {
+    try {
+      const commands = this.app && this.app.commands;
+      if (!commands || typeof commands.executeCommandById !== "function") return { ok: false, reason: "no command runner" };
+      this.close();
+      await commands.executeCommandById(row.surfaceId);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: String((error && error.message) || error) };
+    }
+  }
+
+  async runPlain(row) {
+    if (row.action === "show-last-output" || row.action === "run-history") {
+      const plugin = this.plugin;
+      this.close();
+      if (plugin && typeof plugin.commandModeOpenOutput === "function") {
+        const runner = this.runner();
+        const newest = runner && typeof runner.newestRecord === "function" ? runner.newestRecord() : null;
+        if (!newest) return { ok: false, reason: "no command output yet" };
+        return plugin.commandModeOpenOutput(newest.id);
+      }
+      return { ok: false, reason: "no output view yet" };
+    }
+    return this.runReport({ ...row, title: "bob help" }, ["--help"], { preview: false });
+  }
+
+  async rerunRecent(row) {
+    const runner = this.runner();
+    if (!runner) return { ok: false, reason: "no runner" };
+    const argv = [...(row.argv || [])];
+    if (row.presentation === "report") {
+      return this.runReport(row, argv, { preview: false, entryId: row.entryId || undefined });
+    }
+    this.close();
+    return runner.run(argv, {
+      ...(row.entryId ? { entryId: row.entryId } : {}),
+      title: row.title, trigger: "sheet-recent",
+    });
+  }
+
+  async runPreview(row, argv) {
+    if (!row.hasPreview) {
+      if (row.presentation === "report") return this.runReport(row, argv, { preview: false });
+      return this.activateRow(row, { force: false });
+    }
+    const runner = this.runner();
+    if (!runner) return { ok: false, reason: "no runner" };
+    this.previewRunId = null;
+    this.previewResult = null;
+    this.previewCarry = [];
+    const settled = await runner.run(argv, {
+      entryId: row.entryId, title: row.title, trigger: "sheet-preview", preview: true,
+    });
+    if (!settled || !settled.runId) {
+      this.hint = (settled && settled.reason) || "Preview failed to start";
+      this.render();
+      this.refocusInput();
+      return settled || { ok: false };
+    }
+    this.previewRunId = settled.runId;
+    this.previewResult = settled;
+    try {
+      const record = cmPagerFindRecord(runner, settled.runId);
+      if (record && Array.isArray(record.carry)) this.previewCarry = [...record.carry];
+    } catch (error) {
+      this.previewCarry = [];
+    }
+    this.enterOutput(settled.runId, row.title + " · preview", { previewOf: { row, argv } });
+    return settled;
+  }
+
+  async runReport(row, argv, opts = {}) {
+    const runner = this.runner();
+    if (!runner) return { ok: false, reason: "no runner" };
+    const settled = await runner.run(argv, {
+      ...(opts.entryId !== undefined ? { entryId: opts.entryId } : (row.entryId ? { entryId: row.entryId } : {})),
+      title: row.title || "Report", trigger: "sheet",
+      ...(opts.preview ? { preview: true } : {}),
+      ...(opts.skipGuards ? { skipGuards: true } : {}),
+    });
+    if (!settled || !settled.runId) {
+      this.hint = (settled && settled.reason) || "Run failed to start";
+      this.render();
+      this.refocusInput();
+      return settled || { ok: false };
+    }
+    this.enterOutput(settled.runId, row.title || "Report", {});
+    return settled;
+  }
+
+  async confirmRun() {
+    const row = this.confirmRow;
+    if (!row) return { ok: false, reason: "nothing to confirm" };
+    const argv = cmSheetRowArgv(row);
+    this.confirmRow = null;
+    if (row.presentation === "report") {
+      this.stage = "list";
+      // The card was the confirmation; the run itself skips the policy gate.
+      return this.runReport(row, argv, { skipGuards: true });
+    }
+    this.close();
+    return this.runner().run(argv, {
+      entryId: row.entryId, title: row.title, trigger: "sheet", confirmed: true,
+    });
+  }
+
+  showHelp() {
+    const query = this.query.trim().replace(/\?$/, "").trim();
+    const rows = query ? cmRankSheetRows(query, this.rows, this.frecency) : [];
+    const selected = rows[0] || this.selectedRow();
+    const argv = cmSheetHelpArgv(selected && selected.kind !== "recent" ? selected : null);
+    const title = selected && selected.title ? selected.title + " · help" : "bob help";
+    const runner = this.runner();
+    if (!runner) return { ok: false, reason: "no runner" };
+    return runner.run(argv, { title, trigger: "sheet-help" }).then((settled) => {
+      if (!settled || !settled.runId) {
+        this.hint = (settled && settled.reason) || "Help failed to start";
+        this.render();
+        this.refocusInput();
+        return settled || { ok: false };
+      }
+      this.enterOutput(settled.runId, title, {});
+      return settled;
+    });
+  }
+
+  enterOutput(runId, title, opts = {}) {
+    this.stage = "output";
+    this.outputRunId = String(runId || "");
+    this.outputTitle = String(title || "Output");
+    this.outputStopConfirm = false;
+    this.outputSearch = cmDefaultPagerSearch();
+    this.previewOf = opts.previewOf || null;
+    if (!this.previewOf) {
+      this.previewRunId = null;
+      this.previewResult = null;
+      this.previewCarry = [];
+    }
+    this.render();
+    this.startTail();
+  }
+
+  backToList() {
+    this.stopTail();
+    this.stage = "list";
+    this.outputRunId = null;
+    this.previewOf = null;
+    this.render();
+    this.refocusInput();
+  }
+
+  payload() {
+    return cmPagerLoadPayload(this.runner(), this.outputRunId);
+  }
+
+  records() {
+    const runner = this.runner();
+    if (!runner) return [];
+    try { return cmListRecords(runner.fs(), runner.runsDir()); }
+    catch (error) { return []; }
+  }
+
+  startTail() {
+    this.stopTail();
+    this.tailTimer = setInterval(() => this.refreshOutput(), CM_TAIL_POLL_MS);
+    if (this.tailTimer && typeof this.tailTimer.unref === "function") this.tailTimer.unref();
+  }
+
+  stopTail() {
+    if (this.tailTimer) {
+      try { clearInterval(this.tailTimer); } catch (error) { /* Best effort. */ }
+      this.tailTimer = null;
+    }
+  }
+
+  refreshOutput() {
+    if (!this.sheetOpen || this.stage !== "output") return null;
+    const runner = this.runner();
+    const vaultBase = runner && typeof runner.deps.vaultBase === "function" ? runner.deps.vaultBase() : cmVaultBasePath(this.app);
+    const payload = this.payload();
+    if (!payload) return null;
+    this.outputView = cmBuildPagerView(payload, {
+      app: this.app,
+      vaultBase,
+      records: this.records(),
+      search: this.outputSearch,
+      wrap: this.outputWrap,
+      stopConfirm: this.outputStopConfirm,
+      queuedBehind: cmPagerQueuedBehind(runner),
+      nowMs: Date.now(),
+    });
+    if (!this.outputBody) return this.outputView;
+    this.outputNodes = cmRenderPagerView(this.outputBody, this.outputView, {
+      onStop: () => this.requestOutputStop(),
+      onOpenLog: () => this.openFullLog(),
+      onLink: (link) => this.openOutputLink(link),
+    });
+    this.renderOutputFooter();
+    return this.outputView;
+  }
+
+  renderOutput() {
+    const wrap = this.contentEl.createEl("div", { cls: "bob-cmd-sheet-output" });
+    const bar = wrap.createEl("div", { cls: "bob-cmd-sheet-output-bar" });
+    bar.createEl("span", { cls: "bob-cmd-sheet-output-title", text: this.outputTitle });
+    if (this.previewOf) {
+      const apply = bar.createEl("button", {
+        cls: "bob-cmd-sheet-apply" + (this.previewResult && !this.previewResult.ok ? " is-disabled" : ""),
+        text: "Apply ⌃↵",
+      });
+      apply.addEventListener("click", () => void this.applyPreview());
+    }
+    this.outputBody = wrap.createEl("div", { cls: "bob-cmd-sheet-output-body" });
+    const footerHost = wrap.createEl("div", { cls: "bob-cmd-sheet-footer" });
+    this.outputFooterEl = footerHost;
+    this.refreshOutput();
+  }
+
+  renderOutputFooter() {
+    if (!this.outputFooterEl) return;
+    this.outputFooterEl.empty();
+    if (this.previewOf) {
+      const failed = this.previewResult && !this.previewResult.ok;
+      this.outputFooterEl.createEl("span", {
+        cls: "bob-cmd-sheet-hint" + (failed ? " is-warning" : ""),
+        text: failed ? "preview failed — apply disabled" : "⌃↵ apply · esc back to list · q close",
+      });
+      return;
+    }
+    this.outputFooterEl.createEl("span", { cls: "bob-cmd-sheet-hint", text: cmSheetFooterHints("output") });
+  }
+
+  async applyPreview() {
+    const previewOf = this.previewOf;
+    if (!previewOf) return { ok: false, reason: "no preview to apply" };
+    if (this.previewResult && !this.previewResult.ok) return { ok: false, reason: "preview failed" };
+    const { row, argv } = previewOf;
+    const carry = this.previewCarry.length ? this.previewCarry : [];
+    this.previewOf = null;
+    this.previewRunId = null;
+    this.previewResult = null;
+    // The preview already ran, so Apply skips the preview-first gate. The
+    // save-before-write guard still applies inside the runner.
+    if (row.presentation === "report") {
+      return this.runReport(row, [...argv, ...carry], { skipGuards: true });
+    }
+    this.close();
+    return this.runner().run([...argv, ...carry], {
+      entryId: row.entryId, title: row.title, trigger: "sheet-apply", skipGuards: true,
+    });
+  }
+
+  requestOutputStop() {
+    const record = this.outputView && this.outputView.record;
+    if (!record || record.outcome !== "running") return { ok: false, reason: "run is not active" };
+    if (record.effect !== "reads" && !this.outputStopConfirm) {
+      this.outputStopConfirm = true;
+      this.refreshOutput();
+      return { ok: true, confirm: true };
+    }
+    this.outputStopConfirm = false;
+    const runner = this.runner();
+    if (!runner || typeof runner.stop !== "function") return { ok: false, reason: "run is not active" };
+    const result = runner.stop(this.outputRunId);
+    this.refreshOutput();
+    return result;
+  }
+
+  openFullLog() {
+    const runner = this.runner();
+    if (!runner || typeof this.plugin.commandModeOpenPath !== "function") return { ok: false };
+    const paths = cmRunFilePaths(runner.runsDir(), this.outputRunId, runner.pathModule());
+    return this.plugin.commandModeOpenPath(paths.out);
+  }
+
+  openOutputLink(link) {
+    const workspace = this.app && this.app.workspace;
+    if (!workspace || typeof workspace.openLinkText !== "function") return { ok: false, reason: "note opener unavailable" };
+    try {
+      const opened = workspace.openLinkText(link.href || link.path, "", Boolean(link.newLeaf), {});
+      return opened && typeof opened.then === "function" ? opened.then(() => ({ ok: true })) : { ok: true };
+    } catch (error) {
+      return { ok: false, reason: String((error && error.message) || error) };
+    }
+  }
+
+  handleOutputKeydown(event) {
+    if (!event || typeof event.key !== "string") return false;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.backToList();
+      return true;
+    }
+    if (event.key === "q" && !event.ctrlKey && !event.metaKey) {
+      const tag = event.target && event.target.tagName;
+      if (tag !== "INPUT" && tag !== "TEXTAREA") {
+        event.preventDefault();
+        this.close();
+        return true;
+      }
+    }
+    if (event.key === ":" && !event.ctrlKey && !event.metaKey) {
+      const tag = event.target && event.target.tagName;
+      if (tag !== "INPUT" && tag !== "TEXTAREA") {
+        event.preventDefault();
+        this.backToList();
+        return true;
+      }
+    }
+    if (event.key === "Enter" && event.ctrlKey && !event.shiftKey && this.previewOf) {
+      event.preventDefault();
+      void this.applyPreview();
+      return true;
+    }
+    const action = cmHandlePagerKey(event, {
+      search: this.outputSearch,
+      stopConfirm: this.outputStopConfirm,
+      hasSelection: cmPagerHasSelection(),
+    });
+    if (!action || action.type === "none") return false;
+    if (typeof event.preventDefault === "function") event.preventDefault();
+    if (typeof event.stopPropagation === "function") event.stopPropagation();
+    this.applyOutputAction(action);
+    return true;
+  }
+
+  applyOutputAction(action) {
+    if (!action) return;
+    switch (action.type) {
+      case "rerun":
+        this.rerunOutput();
+        break;
+      case "copy-output":
+        try {
+          if (this.outputView) {
+            const text = cmPagerCopyOutput(this.outputView);
+            void cmPagerWriteClipboard(text);
+          }
+        } catch (error) { /* Clipboard is best effort. */ }
+        break;
+      case "copy-command":
+        try {
+          if (this.outputView) {
+            const text = cmPagerCopyCommand(this.outputView);
+            void cmPagerWriteClipboard(text);
+          }
+        } catch (error) { /* Clipboard is best effort. */ }
+        break;
+      case "history-older":
+      case "history-newer": {
+        const ids = cmPagerHistoryIds(this.records());
+        const state = cmPagerHistoryState(ids, this.outputRunId, action.type === "history-older" ? -1 : 1);
+        if (state && state.runId) {
+          this.outputRunId = state.runId;
+          this.outputStopConfirm = false;
+          this.outputSearch = cmDefaultPagerSearch();
+          this.refreshOutput();
+        }
+        break;
+      }
+      case "open-log":
+        this.openFullLog();
+        break;
+      case "close":
+        this.close();
+        break;
+      default:
+        this.refreshOutput();
+        break;
+    }
+  }
+
+  rerunOutput() {
+    const record = this.outputView && this.outputView.record;
+    if (!record || !Array.isArray(record.argv)) return { ok: false, reason: "nothing to rerun" };
+    const runner = this.runner();
+    if (!runner) return { ok: false, reason: "no runner" };
+    return runner.run([...record.argv], {
+      ...(record.entry_id ? { entryId: record.entry_id } : {}),
+      title: record.title, trigger: "sheet-rerun",
+    }).then((settled) => {
+      if (settled && settled.runId) {
+        this.outputRunId = settled.runId;
+        this.outputStopConfirm = false;
+        this.outputSearch = cmDefaultPagerSearch();
+        this.previewOf = null;
+        this.refreshOutput();
+      }
+      return settled;
+    });
+  }
+}
 // ---- src/990-exports.js ----
 // Bob Command Mode: public entrypoint and test helpers.
 module.exports = BobCommandModePlugin;
@@ -3960,6 +5406,33 @@ module.exports.helpers = {
   cmPagerHistoryState,
   cmPagerApplyScroll,
   cmHandlePagerKey,
+  cmSheetFrecency,
+  cmSheetFrecencyMap,
+  cmSheetRunKey,
+  cmSheetAgeText,
+  cmRankSheetRow,
+  cmSheetRowViews,
+  cmRankSheetRows,
+  cmSheetNoteKind,
+  cmSheetIsHttpUrl,
+  cmSheetEntryRows,
+  cmSheetEntryAliases,
+  cmSheetEntryUnavailable,
+  cmSheetSurfaceRows,
+  cmSheetPlainRows,
+  cmSheetContextRows,
+  cmBuildSheetRows,
+  cmGroupSheetRows,
+  cmSheetFooterHints,
+  cmSheetListAction,
+  cmSheetHelpArgv,
+  cmSheetMedianDuration,
+  cmSheetRecentRows,
+  cmSheetCaptureContext,
+  cmSheetRowArgv,
+  cmSheetMissingPositional,
+  cmSheetSetIcon,
+  CommandModeSheetModal,
   cmDefaultPagerSearch,
   cmBuildPagerView,
   cmRenderPagerView,

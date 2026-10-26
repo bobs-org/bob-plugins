@@ -99,7 +99,12 @@ class CommandModeRunner {
   async runInner(argv, opts) {
     const catalog = this.catalog();
     const entry = opts.entryId ? cmEntryById(catalog, opts.entryId) : cmFindEntryForArgv(catalog, argv);
-    const excluded = cmExcludedReason(catalog, argv);
+    // A resolved entry id names a catalog row the sheet or palette chose on
+    // purpose (for example the pomodoro or queue rows under `capture`), so the
+    // raw-argv exclusion list does not apply to it. Typed argv without an
+    // entry id keeps the guard, which is what refuses free-text capture.
+    const namedEntry = opts.entryId ? cmEntryById(catalog, opts.entryId) : null;
+    const excluded = namedEntry ? null : cmExcludedReason(catalog, argv);
     if (excluded) {
       return { ok: false, runId: null, outcome: "failed", exitCode: null, reason: excluded };
     }

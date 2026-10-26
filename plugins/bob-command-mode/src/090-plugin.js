@@ -62,6 +62,11 @@ class BobCommandModePlugin extends Plugin {
       name: "Bob: Show last output",
       callback: () => this.commandModeShowLastOutput(),
     });
+    this.addCommand({
+      id: "open",
+      name: "Bob: Command mode",
+      callback: () => this.commandModeOpenSheet(),
+    });
     // Register from the persisted catalog first so Ctrl+P works before the
     // background refresh finishes; refresh then re-registers the same ids.
     this.commandModeSyncRunCommands();
@@ -76,6 +81,10 @@ class BobCommandModePlugin extends Plugin {
     if (this.commandModePager) {
       try { this.commandModePager.close(); } catch (error) { /* Best effort during unload. */ }
       this.commandModePager = null;
+    }
+    if (this.commandModeSheet) {
+      try { this.commandModeSheet.close(); } catch (error) { /* Best effort during unload. */ }
+      this.commandModeSheet = null;
     }
     if (this.commandModeRunner) this.commandModeRunner.dispose();
     if (this.commandModeStatusTimer) clearInterval(this.commandModeStatusTimer);
@@ -470,7 +479,30 @@ class BobCommandModePlugin extends Plugin {
     return () => {};
   }
 
+  commandModeOpenSheet() {
+    if (this.commandModeSheet && this.commandModeSheet.sheetOpen) {
+      try { this.commandModeSheet.refocusInput(); } catch (error) { /* Best effort. */ }
+      return { ok: true, focused: true };
+    }
+    try {
+      const modal = new CommandModeSheetModal(this.app, this, {});
+      this.commandModeSheet = modal;
+      modal.open();
+      return { ok: true, opened: true };
+    } catch (error) {
+      return { ok: false, reason: String((error && error.message) || error) };
+    }
+  }
+
+  commandModeSheetIsWatching(runId) {
+    const sheet = this.commandModeSheet;
+    if (!sheet || !runId) return false;
+    if (sheet.sheetOpen === false || sheet.stage !== "output") return false;
+    return String(sheet.outputRunId) === String(runId) || String(sheet.previewRunId) === String(runId);
+  }
+
   commandModePagerIsWatching(runId) {
+    if (this.commandModeSheetIsWatching(runId)) return true;
     const pager = this.commandModePager;
     if (!pager || !runId) return false;
     if (pager.pagerOpen === false) return false;

@@ -279,6 +279,18 @@ test("policy and entry guards refuse with reasons", async () => {
   assert.equal(excluded.ok, false);
   assert.match(excluded.reason, /named capture rows/);
 
+  const namedCatalog = fixtureCatalog();
+  namedCatalog.entries = [...namedCatalog.entries, {
+    id: "pomodoro-start", path: ["capture"], fixed: ["="], title: "Start next Pomodoro",
+    about: "Start", section: "daily", keywords: ["pomodoro", "start"],
+    effect: "writes", network: false, presentation: "action",
+    policy: "run", preview: null, confirm: null, budget_secs: 60,
+    args: [], exit_codes: [], adapter: null, hosts: [], invalidates: [],
+  }];
+  const named = runnerWith({ FAKE_BOB_EXIT: "0" }, { catalog: namedCatalog });
+  const namedRow = await named.runner.run(["capture", "="], { entryId: "pomodoro-start", title: "Start next Pomodoro" });
+  assert.equal(namedRow.ok, true, namedRow.reason || "named capture row refused");
+
   const confirm = await base.runner.run(["task", "archive"]);
   assert.equal(confirm.ok, false);
   assert.equal(confirm.reason, "Archive every done task?");

@@ -23,6 +23,7 @@ Bob Command Mode runs bob commands from Obsidian with safe-write guards and run 
 
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
+| Bob: Command mode | `open` | — |
 | Bob: Rerun last command | `rerun-last` | — |
 | Bob: Show last output | `show-last-output` | — |
 <!-- END GENERATED: commands -->
@@ -64,6 +65,23 @@ rerun, stop, and step through history newest-first. Toast **Output**, the
 status chip, OS notification clicks, and `api.commandMode.openOutput` all open
 this view. A run whose pager is open and focused at finish updates the status
 pill and skips the toast.
+
+## Command sheet
+
+`Bob: Command mode` opens a bottom sheet with a fuzzy finder over every catalog
+entry, ranked by path, alias, title, and keywords with frecency tie-breaks. An
+empty query shows RECENT runs, FOR THIS NOTE rows filled from the active note
+(ref, area, project, and article notes each get their own rows), FROM CLIPBOARD
+rows for an http(s) URL, and one section per catalog section plus surface rows
+that run existing Obsidian commands (daily note, themes manager, stats, tasks,
+relation labels, reading board, article formatting). Unavailable rows stay
+visible and dimmed with their reason. `Enter` runs, `Tab` names argument mode
+(it lands with the args-vim phase), `Shift+Enter` dry-runs a preview into the
+sheet, `Ctrl+Enter` runs now, and a trailing `?` shows `bob <path> --help` for
+the selected row. Preview-first rows stream their preview in place and apply
+with `Ctrl+Enter`; writers without a dry run ask once on an amber confirm card
+that only `Ctrl+Enter` or Run confirms. Reports grow the sheet into the output
+pager in place, and `Esc` returns to the list with the query intact.
 
 ## Run engine
 

@@ -39,6 +39,46 @@ finishes with an outcome toast. `Bob: Rerun last command` repeats the newest
 recorded command with its original arguments and preview setting.
 `Bob: Show last output` opens the output pager on the newest run.
 
+## Keyboard and Vim
+
+With Vim mode enabled, `:` in normal mode opens the sheet. `Escape` closes
+it. In the list, `↑` / `↓` and `Ctrl+P` / `Ctrl+N` move between rows;
+`Enter` runs, `Tab` opens argument mode, `Shift+Enter` previews,
+`Ctrl+Enter` runs without preview, and `?` after a query opens
+`bob <command> --help`. Typing `::` opens Vim's ex line. Vim commands such
+as `:%s/foo/bar/` and `:42` are routed to Vim, and matching `exmap` commands
+can be selected from suggestions. The catalog also includes named Pomodoro
+session actions to start, stop, extend, and shorten a session. Free-text
+`bob capture TEXT` is not accepted in command mode; use the dedicated capture
+workflow for free-text capture.
+
+In argument mode, `Tab` accepts the selected completion, arrows or
+`Ctrl+P` / `Ctrl+N` move through completions, and `Enter` accepts a
+completion. `Shift+Enter` previews and `Ctrl+Enter` runs the typed command;
+`Escape` returns to the list. A preview is applied with `Ctrl+Enter`. A
+writer without a preview requires `Ctrl+Enter` or the Run button on its
+confirmation card.
+
+In the pager, `j` / `k` scroll a line and `d` / `u` scroll half a page;
+`g` / `G` go to the start or end. `/` starts search, `n` / `N` move between
+matches, and `w` toggles wrapping. `y` copies output, `Y` copies the
+shell-quoted command, `r` reruns, and `[` / `]` move through history.
+`:` returns to the list, `Escape` returns to the prior stage, and `q` closes
+the sheet.
+
+Bind Vim's keys with non-recursive mappings so replaying `:` cannot reopen
+the sheet recursively:
+
+```vim
+exmap bob_command obcommand bob-command-mode:open
+nnoremap : :bob_command<CR>
+nnoremap g: :
+```
+
+Insert-mode `:` remains text, visual-mode `:` remains native, and `g:` opens
+Vim's native ex line even if the plugin is disabled. The plugin warns if a
+recursive map replays `:`.
+
 ## Feedback
 
 Finished runs use toast cards for completed, needs-attention, failed, unknown,
@@ -93,6 +133,10 @@ run in parallel. Read budgets kill the child, writer budgets mark the run
 overdue, and stop is offered only for runs this instance spawned. A plugin
 reload adopts unfinished records from their receipts, or reports unknown when
 no receipt arrives in time.
+
+Run records and stdout/stderr files live under
+`${XDG_STATE_HOME:-~/.local/state}/bob-cli/command-mode/runs/`. They are
+host-local rather than vault data.
 
 ## Settings
 

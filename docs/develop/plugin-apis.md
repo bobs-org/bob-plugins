@@ -237,6 +237,26 @@ than rejecting. `taskLinkLane.matches` is synchronous and
   `{ ok: true, lineDelta, successorNotice }` or
   `{ ok: false, reason }` and does not stamp the task.
 
+## Bob Command Mode
+
+`bob-command-mode.api.commandMode` is namespace version 1. Consumers should
+feature-detect both the plugin and namespace before calling it:
+
+```js
+const commandMode = app.plugins.plugins["bob-command-mode"]?.api?.commandMode;
+if (commandMode?.version >= 1) {
+  const result = await commandMode.run(["plan"]);
+}
+```
+
+`run(argv, opts)` settles to `{ ok, runId, outcome, exitCode, reason? }`
+and does not reject. `openOutput(runId)` opens a run in the pager;
+`onRunFinished(callback)` subscribes to finished runs and returns an
+unsubscribe function; `catalog()` and `lastRun()` read the cached catalog
+and newest record. Each finish also triggers the workspace event
+`bob-command-mode:run-finished` with `{ runId, argv, entryId, outcome,
+effect, invalidates }`.
+
 ## Related
 
 - [Block ID Prompt](https://bobs-org.github.io/reference/plugins/block-id-prompt/)
@@ -244,3 +264,4 @@ than rejecting. `taskLinkLane.matches` is synchronous and
 - [Bob Navigation Hotkeys](https://bobs-org.github.io/reference/plugins/bob-navigation-hotkeys/)
 - [Task Status Cycler](https://bobs-org.github.io/reference/plugins/task-status-cycler/)
 - [Plugin architecture](architecture.md) — generated sources and module boundaries.
+- [Bob Command Mode](https://bobs-org.github.io/bob-command-mode/)

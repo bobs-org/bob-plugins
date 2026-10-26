@@ -14,5 +14,5 @@ documentation inventory, test suites, and deployment workflow.
 
 ## Maintenance tasks
 
-- [Dependency-line migration](dependency-migration.md) — preview and apply the legacy-line conversion.
+- [Dependency-line migration](dependency-migration.md) — the retired legacy-line conversion.
 - [Deployment](deployment.md) — sync the repository's plugins into a Bob vault.

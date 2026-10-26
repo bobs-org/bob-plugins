@@ -317,27 +317,22 @@ test("stage collections reuse one snapshot per parent", () => {
   ].join("\n");
   const snapshot = createDependencyNoteSnapshot(content);
   const { collectDependencyNavigationBullets: collect } = helpers;
-  const one = collect(snapshot.text, 0, [], snapshot);
-  const two = collect(snapshot.text, 0, [], snapshot);
+  const one = collect(snapshot.text, 0, snapshot);
+  const two = collect(snapshot.text, 0, snapshot);
   assert.ok(one.targets.length === 1, "the parent links one target");
   assert.deepEqual(one, two, "repeated parents produce identical collections");
-  assert.equal(
-    snapshot.identities,
-    null,
-    "managed-only parents never build the legacy identity map",
-  );
-  const legacyContent = [
-    "- [?] #task Legacy ^legacy [dependsOn:: Tasks__child]",
+  const childLinkContent = [
+    "- [?] #task Former legacy ^legacy [dependsOn:: Tasks__child]",
     "  - [[#^child]]",
     "- [ ] #task Child [id:: Tasks__child] ^child",
   ].join("\n");
-  const legacySnapshot = createDependencyNoteSnapshot(legacyContent);
-  const legacy = collect(legacySnapshot.text, 0, [], legacySnapshot);
-  assert.ok(legacy.targets.length === 1, "the legacy parent links one target");
-  assert.ok(legacySnapshot.identities instanceof Map);
-  assert.equal(legacySnapshot.identities.get("child"), "Tasks__child");
-  const again = collect(legacySnapshot.text, 0, [], legacySnapshot);
-  assert.deepEqual(again, legacy, "the cached parent reuses its collection");
+  const childLinkSnapshot = createDependencyNoteSnapshot(childLinkContent);
+  const childLinks = collect(childLinkSnapshot.text, 0, childLinkSnapshot);
+  assert.equal(
+    childLinks.targets.length,
+    0,
+    "a child link outside the managed line is content, not a dependency",
+  );
 });
 
 test("stage cold refresh yields, preserves state, and performs no search reads", async () => {

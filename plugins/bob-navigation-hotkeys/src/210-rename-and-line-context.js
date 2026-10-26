@@ -297,9 +297,9 @@ function getMarkdownLineContexts(content) {
 
 // Short-lived per-note parse snapshot shared by one dependency stage build.
 // Tied to exact note content: lines, Markdown contexts, scanned task entries
-// (with forward-carried sections), lazily built block-id identities, and a
-// per-parent dependency-collection cache. Never reuse across changed editor
-// content, write-planner intermediate content, or reopened stages.
+// (with forward-carried sections), and a per-parent dependency-collection
+// cache. Never reuse across changed editor content, write-planner
+// intermediate content, or reopened stages.
 function createDependencyNoteSnapshot(content) {
   const text = String(content || "");
   const { lines, lineEnding } = splitMarkdownContent(text);

@@ -2,6 +2,7 @@
 // Fragments share one script scope; every helper here is file-scoped on purpose.
 const {
   MarkdownView,
+  Modal,
   Notice,
   Plugin,
   PluginSettingTab,

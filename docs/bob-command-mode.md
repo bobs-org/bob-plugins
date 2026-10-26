@@ -24,6 +24,7 @@ Bob Command Mode runs bob commands from Obsidian with safe-write guards and run 
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
 | Bob: Rerun last command | `rerun-last` | — |
+| Bob: Show last output | `show-last-output` | — |
 <!-- END GENERATED: commands -->
 
 ## Run commands
@@ -35,6 +36,7 @@ are generated from the cached catalog at load, so the inventory scanner does
 not list them here. Each one runs its entry through the same run engine and
 finishes with an outcome toast. `Bob: Rerun last command` repeats the newest
 recorded command with its original arguments and preview setting.
+`Bob: Show last output` opens the output pager on the newest run.
 
 ## Feedback
 
@@ -44,11 +46,24 @@ line; their actions can open a note or conflict log, scan queued intake, reload
 deployed plugins, retry, copy the command, or open the saved output. Failed and
 unknown cards remain until dismissed. The status-bar chip appears after a run
 has lasted 400 ms, shows active run counts and elapsed time, and turns amber
-when a writer passes its budget. Clicking it opens the active run's output.
+when a writer passes its budget. Clicking it opens the active run's pager.
 
 When a run takes more than 15 seconds and Obsidian is unfocused, the enabled OS
-notification opens that run's output when clicked. The `OS notifications`
+notification opens that run's pager when clicked. The `OS notifications`
 setting controls this behavior.
+
+## Output pager
+
+The output pager is a bottom sheet that streams a run's stdout and stderr,
+replays finished runs in arrival order, and doubles as run history. It renders
+ANSI color against theme variables, ticks stderr with a faint red gutter,
+pretty-prints a body that is a single JSON document, and turns vault paths and
+`[[wikilinks]]` that resolve into note links. Vim-style keys scroll, search,
+wrap, copy (ANSI-stripped output with `y`, the shell-quoted command with `Y`),
+rerun, stop, and step through history newest-first. Toast **Output**, the
+status chip, OS notification clicks, and `api.commandMode.openOutput` all open
+this view. A run whose pager is open and focused at finish updates the status
+pill and skips the toast.
 
 ## Run engine
 
@@ -75,8 +90,8 @@ no receipt arrives in time.
 Other plugins reach the engine through
 `app.plugins.plugins["bob-command-mode"].api.commandMode` (version 1):
 `run(argv, opts)` settles `{ok, runId, outcome, exitCode, reason?}` and never
-rejects, `openOutput(runId)` opens the run's `.out` file until the pager
-lands, `onRunFinished(cb)` subscribes to finishes, and `catalog()` and
+rejects, `openOutput(runId)` opens that run in the output pager,
+`onRunFinished(cb)` subscribes to finishes, and `catalog()` and
 `lastRun()` read the cached catalog and newest record. Every finish also fires
 `bob-command-mode:run-finished` on the workspace with `{runId, argv, entryId,
 outcome, effect, invalidates}`.

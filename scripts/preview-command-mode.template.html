@@ -34,27 +34,37 @@ body { margin:0; padding:28px; background:var(--background-secondary); color:var
 .preview-chip-case h2 { margin:0 0 11px; color:var(--text-muted); font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
 .preview-chip-case .bob-cmd-chip { display:inline-flex; max-width:100%; }
 .stderr-note { margin:5px 0 0 26px; color:var(--text-muted); font:11px/1.4 var(--font-monospace); }
-@media (max-width:740px) { body{padding:14px}.preview-grid{grid-template-columns:1fr}.preview-chips{grid-template-columns:1fr} }
+.preview-pagers { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:22px; }
+.preview-pager-case { min-width:0; padding:10px; border:1px solid var(--background-modifier-border); border-radius:10px; background:var(--background-secondary); }
+.preview-pager-case h2 { margin:0 0 9px; color:var(--text-muted); font-size:10px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; }
+.preview-pager-case .bob-cmd-pager-view { max-height:280px; border:1px solid var(--background-modifier-border); border-radius:10px; background:var(--background-primary); }
+@media (max-width:740px) { body{padding:14px}.preview-grid{grid-template-columns:1fr}.preview-chips{grid-template-columns:1fr}.preview-pagers{grid-template-columns:1fr} }
 __PRODUCTION_CSS__
 </style>
 </head>
 <body data-theme="light">
 <main class="preview-shell">
-  <header class="preview-heading"><h1>Bob Command Mode</h1><span>Toast and status feedback</span></header>
+  <header class="preview-heading"><h1>Bob Command Mode</h1><span>Toast, chip, and output pager</span></header>
   <section class="preview-grid" id="cards"></section>
   <section class="preview-chips" id="chips"></section>
+  <section class="preview-pagers" id="pagers"></section>
 </main>
 <script>
 __UTILITY_SOURCE__
 __TOAST_SOURCE__
 __CHIP_SOURCE__
+class Modal { constructor(app) { this.app = app; } open() {} close() {} }
+__ANSI_SOURCE__
+__PAGER_SOURCE__
 window.commandModePreview = {
   render(theme) {
     document.body.dataset.theme = theme;
     const cards = document.getElementById("cards");
     const chips = document.getElementById("chips");
+    const pagers = document.getElementById("pagers");
     cards.replaceChildren();
     chips.replaceChildren();
+    pagers.replaceChildren();
     const cases = [
       { title:"Completed", outcome:"completed", runId:"done", record:{ id:"done", title:"Deploy plugins", argv:["/opt/homebrew/bin/bob","plugins","sync"], duration_ms:4312, summary:"Deployed 2: bob-ledger-tools, bob-command-mode", entry_id:"plugins-sync" } },
       { title:"Needs attention", outcome:"attention", runId:"attention", actions:[{id:"run",label:"Scan intake"}], record:{ id:"attention", title:"Scan Highlights library", argv:["/usr/local/bin/bob","ref","scan"], duration_ms:18421, summary:"3 PDF writes held", entry_id:"ref-scan" } },
@@ -95,6 +105,47 @@ window.commandModePreview = {
       cmRenderStatusChip(chip, item.records, base, () => {}, () => "pulling updates");
       chips.appendChild(section);
     }
+    const app = {
+      vault: { getAbstractFileByPath: (target) => (String(target).endsWith(".md") ? { path: target } : null) },
+      metadataCache: { getFirstLinkpathDest: (name) => (name === "Work" ? { path: "areas/work.md" } : null) },
+    };
+    const pagerCases = [
+      {
+        title: "Running",
+        record: { id: "run", title: "Today's plan", argv: ["/usr/bin/bob", "plan"], outcome: "running", started_at: new Date(base - 12000).toISOString(), interleave: [["out", 28]] },
+        chunks: [{ stream: "out", text: "\u001b[36mplan\u001b[0m · collecting today's tasks\n" }],
+      },
+      {
+        title: "Completed · ANSI and links",
+        record: { id: "done", title: "Ready lanes", argv: ["/usr/bin/bob", "ready"], outcome: "completed", duration_ms: 1200, exit_code: 0, started_at: new Date(base - 5000).toISOString(), interleave: [["out", 64]] },
+        chunks: [{ stream: "out", text: "\u001b[32mready\u001b[0m  [[Work]]  areas/work.md:12\nOpen the note.\n" }],
+      },
+      {
+        title: "Failed · stderr",
+        record: { id: "fail", title: "Sync vault now", argv: ["/usr/bin/bob", "vault-sync", "run"], outcome: "failed", duration_ms: 1800, exit_code: 1, started_at: new Date(base - 8000).toISOString(), interleave: [["out", 6], ["err", 34]] },
+        chunks: [{ stream: "out", text: "sync:\n" }, { stream: "err", text: "error: working tree has dirty paths\n" }],
+      },
+      {
+        title: "JSON",
+        record: { id: "json", title: "Hide a theme", argv: ["/usr/bin/bob", "themes", "hide", "DEEP WORK"], outcome: "completed", duration_ms: 1240, exit_code: 0, started_at: new Date(base - 2000).toISOString(), interleave: [["out", 40]] },
+        chunks: [{ stream: "out", text: '{"ok":true,"hidden":["DEEP WORK"]}\n' }],
+      },
+    ];
+    const records = pagerCases.map((item) => item.record);
+    pagerCases.forEach((item, index) => {
+      const section = document.createElement("article");
+      section.className = "preview-pager-case";
+      const heading = document.createElement("h2");
+      heading.textContent = item.title;
+      const host = document.createElement("div");
+      const view = cmBuildPagerView({ record: item.record, truncated: false }, {
+        chunks: item.chunks, app, vaultBase: "/vault", records, nowMs: base,
+        history: cmPagerHistoryState(records, item.record.id),
+      });
+      cmRenderPagerView(host, view, {});
+      section.append(heading, host);
+      pagers.appendChild(section);
+    });
   },
 };
 window.commandModePreview.render("light");

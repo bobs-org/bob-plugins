@@ -138,6 +138,7 @@ test("plugin onload registers run-* commands and exposes the frozen api", async 
   assert.ok(Object.isFrozen(plugin.api.commandMode));
   const ids = [...plugin.commands.keys()];
   assert.ok(ids.includes("rerun-last"), "expected rerun-last command");
+  assert.ok(ids.includes("show-last-output"), "expected show-last-output command");
   assert.ok(ids.includes("run-plan"), "expected run-plan in " + ids.join(","));
   assert.ok(ids.includes("run-ready"));
   assert.ok(!ids.includes("run-ref-create"), "required-arg entries get no command");

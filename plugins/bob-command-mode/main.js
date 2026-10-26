@@ -4,6 +4,7 @@
 // Fragments share one script scope; every helper here is file-scoped on purpose.
 const {
   MarkdownView,
+  Modal,
   Notice,
   Plugin,
   PluginSettingTab,
@@ -1689,7 +1690,7 @@ function cmCreateApi(runner, options = {}) {
       }
       return Promise.resolve(pending).catch(refused);
     },
-    // Open a run's output (the pager once it lands; the .out file until then).
+    // Open a run's output in the pager.
     openOutput(runId) {
       if (typeof openOutput === "function") {
         try {
@@ -1778,6 +1779,7 @@ class BobCommandModePlugin extends Plugin {
     this.commandModeState = this.commandModeCatalog ? "ready" : "empty";
     this.commandModeMissingBob = null;
     this.commandModeStickyNotices = new Map();
+    this.commandModePager = null;
     this.commandModeRunner = new CommandModeRunner({
       resolveBob: () => this.commandModeResolveBob(),
       vaultBase: () => cmVaultBasePath(this.app),
@@ -1800,6 +1802,11 @@ class BobCommandModePlugin extends Plugin {
       name: "Bob: Rerun last command",
       callback: () => this.commandModeRerun(this.commandModeRunner && this.commandModeRunner.newestRecord()),
     });
+    this.addCommand({
+      id: "show-last-output",
+      name: "Bob: Show last output",
+      callback: () => this.commandModeShowLastOutput(),
+    });
     // Register from the persisted catalog first so Ctrl+P works before the
     // background refresh finishes; refresh then re-registers the same ids.
     this.commandModeSyncRunCommands();
@@ -1811,6 +1818,10 @@ class BobCommandModePlugin extends Plugin {
   onunload() {
     // Writers are detached and keep running; their records are adopted on the
     // next load. Never kill a writer from unload.
+    if (this.commandModePager) {
+      try { this.commandModePager.close(); } catch (error) { /* Best effort during unload. */ }
+      this.commandModePager = null;
+    }
     if (this.commandModeRunner) this.commandModeRunner.dispose();
     if (this.commandModeStatusTimer) clearInterval(this.commandModeStatusTimer);
     this.commandModeStatusTimer = null;
@@ -2012,6 +2023,11 @@ class BobCommandModePlugin extends Plugin {
     try {
       const notice = { ...(outcome || {}) };
       const record = cmToastRun(notice);
+      if (this.commandModePagerIsWatching(record.id || notice.runId)) {
+        try { if (this.commandModePager) this.commandModePager.refresh(); }
+        catch (error) { /* The pager may already be closing. */ }
+        return null;
+      }
       const source = [notice.reason, record.summary].filter(Boolean).join("\n");
       const actions = Array.isArray(notice.actions) ? [...notice.actions] : [];
       if (/bob not found/i.test(source) && !actions.some((action) => action.id === "open-settings")) {
@@ -2199,10 +2215,31 @@ class BobCommandModePlugin extends Plugin {
     return () => {};
   }
 
-  commandModeOpenOutput(runId) {
+  commandModePagerIsWatching(runId) {
+    const pager = this.commandModePager;
+    if (!pager || !runId) return false;
+    if (pager.pagerOpen === false) return false;
+    if (String(pager.runId) !== String(runId)) return false;
+    try {
+      if (typeof document !== "undefined" && typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+    } catch (error) {
+      // Headless tests without a document still count as watching when the pager is open.
+    }
+    return true;
+  }
+
+  commandModeShowLastOutput() {
     const runner = this.commandModeRunner;
-    if (!runner) return { ok: false, reason: "command mode is not loaded" };
-    const paths = cmRunFilePaths(runner.runsDir(), String(runId || ""), runner.pathModule());
+    const newest = runner && typeof runner.newestRecord === "function" ? runner.newestRecord() : null;
+    if (!newest) {
+      try { new Notice("No command output yet"); } catch (error) { /* Headless. */ }
+      return { ok: false, reason: "no command output yet" };
+    }
+    return this.commandModeOpenOutput(newest.id);
+  }
+
+  commandModeOpenPath(filePath) {
+    const runner = this.commandModeRunner;
     let shell = null;
     try {
       const electron = require("electron");
@@ -2210,14 +2247,36 @@ class BobCommandModePlugin extends Plugin {
     } catch (error) {
       shell = null;
     }
-    const opener = runner.deps.shellOpenPath || (shell && shell.openPath ? (target) => shell.openPath(target) : null);
-    if (!opener) return { ok: false, reason: "no output view yet" };
+    const opener = (runner && runner.deps && runner.deps.shellOpenPath) ||
+      (shell && shell.openPath ? (target) => shell.openPath(target) : null);
+    if (!opener) return { ok: false, reason: "no file opener" };
     try {
-      const result = opener(paths.out);
+      const result = opener(filePath);
       if (result && typeof result.then === "function") {
-        return result.then(() => ({ ok: true, runId })).catch((error) => ({ ok: false, reason: String((error && error.message) || error) }));
+        return result.then(() => ({ ok: true })).catch((error) => ({ ok: false, reason: String((error && error.message) || error) }));
       }
-      return { ok: true, runId };
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: String((error && error.message) || error) };
+    }
+  }
+
+  commandModeOpenOutput(runId) {
+    const runner = this.commandModeRunner;
+    if (!runner) return { ok: false, reason: "command mode is not loaded" };
+    const id = String(runId || "");
+    if (!id) return { ok: false, reason: "run not found" };
+    const record = cmPagerFindRecord(runner, id);
+    if (!record) return { ok: false, reason: "run not found" };
+    try {
+      if (this.commandModePager && this.commandModePager.pagerOpen) {
+        this.commandModePager.showRun(id);
+        return { ok: true, runId: id };
+      }
+      const modal = new CommandModePagerModal(this.app, this, { runId: id });
+      this.commandModePager = modal;
+      modal.open();
+      return { ok: true, runId: id };
     } catch (error) {
       return { ok: false, reason: String((error && error.message) || error) };
     }
@@ -2607,6 +2666,1195 @@ cmRegisterOutcomeAdapter("task-reroll", cmAdapterTaskReroll);
 cmRegisterOutcomeAdapter("pomodoro-status", cmAdapterPomodoroStatus);
 cmRegisterOutcomeAdapter("capture-session", cmAdapterCaptureSession);
 cmRegisterOutcomeAdapter("gkeep-pull", cmAdapterGkeepPull);
+// ---- src/140-ansi-and-links.js ----
+// Bob Command Mode: streaming ANSI parser, JSON pretty-print, vault linkifier,
+// interleave replay, pager copy/search/keys. Pure helpers; the pager view
+// mounts them. Never innerHTML, never Markdown.
+
+const CM_PAGER_LINE_PX = 19;
+const CM_ANSI_FG = {
+  30: "var(--text-muted)",
+  31: "var(--color-red)",
+  32: "var(--color-green)",
+  33: "var(--color-yellow, var(--color-orange))",
+  34: "var(--color-blue, var(--text-accent))",
+  35: "var(--color-purple, var(--text-accent))",
+  36: "var(--color-cyan, var(--color-blue, var(--text-accent)))",
+  37: "var(--text-normal)",
+  90: "var(--text-muted)",
+  91: "var(--color-red)",
+  92: "var(--color-green)",
+  93: "var(--color-yellow, var(--color-orange))",
+  94: "var(--color-blue, var(--text-accent))",
+  95: "var(--color-purple, var(--text-accent))",
+  96: "var(--color-cyan, var(--color-blue, var(--text-accent)))",
+  97: "var(--text-normal)",
+};
+const CM_ANSI_BG = {
+  40: "var(--text-muted)",
+  41: "var(--color-red)",
+  42: "var(--color-green)",
+  43: "var(--color-yellow, var(--color-orange))",
+  44: "var(--color-blue, var(--text-accent))",
+  45: "var(--color-purple, var(--text-accent))",
+  46: "var(--color-cyan, var(--color-blue, var(--text-accent)))",
+  47: "var(--text-normal)",
+};
+
+function cmDefaultAnsiStyle() {
+  return { bold: false, dim: false, italic: false, underline: false, fg: null, bg: null, muted: false };
+}
+
+function cmAnsiStylesEqual(left, right) {
+  if (!left || !right) return false;
+  return left.bold === right.bold && left.dim === right.dim && left.italic === right.italic &&
+    left.underline === right.underline && left.fg === right.fg && left.bg === right.bg &&
+    left.muted === right.muted;
+}
+
+function cmCreateAnsiParser() {
+  return { leftover: "", style: cmDefaultAnsiStyle() };
+}
+
+function cmAnsi256Color(index) {
+  const n = Number(index);
+  if (!Number.isFinite(n) || n < 0) return null;
+  if (n < 8) return CM_ANSI_FG[30 + n] || null;
+  if (n < 16) return CM_ANSI_FG[90 + (n - 8)] || null;
+  if (n >= 232) {
+    const value = 8 + (n - 232) * 10;
+    return "rgb(" + value + "," + value + "," + value + ")";
+  }
+  const cube = n - 16;
+  const ramp = (part) => (part === 0 ? 0 : 55 + part * 40);
+  const red = ramp(Math.floor(cube / 36));
+  const green = ramp(Math.floor((cube % 36) / 6));
+  const blue = ramp(cube % 6);
+  return "rgb(" + red + "," + green + "," + blue + ")";
+}
+
+function cmApplySgr(style, params) {
+  const next = { ...style };
+  const codes = params.length ? params : [0];
+  for (let index = 0; index < codes.length; index += 1) {
+    const code = Number(codes[index]);
+    if (!Number.isFinite(code) || code === 0) {
+      next.bold = false;
+      next.dim = false;
+      next.italic = false;
+      next.underline = false;
+      next.fg = null;
+      next.bg = null;
+      next.muted = false;
+      continue;
+    }
+    if (code === 1) next.bold = true;
+    else if (code === 2) next.dim = true;
+    else if (code === 3) next.italic = true;
+    else if (code === 4) next.underline = true;
+    else if (code === 22) { next.bold = false; next.dim = false; }
+    else if (code === 23) next.italic = false;
+    else if (code === 24) next.underline = false;
+    else if (code === 39) next.fg = null;
+    else if (code === 49) next.bg = null;
+    else if (CM_ANSI_FG[code]) next.fg = CM_ANSI_FG[code];
+    else if (CM_ANSI_BG[code]) next.bg = CM_ANSI_BG[code];
+    else if (code === 38 || code === 48) {
+      const slot = code === 38 ? "fg" : "bg";
+      const mode = Number(codes[index + 1]);
+      if (mode === 5 && codes[index + 2] !== undefined) {
+        next[slot] = cmAnsi256Color(codes[index + 2]);
+        index += 2;
+      } else if (mode === 2 && codes[index + 4] !== undefined) {
+        const red = Math.max(0, Math.min(255, Number(codes[index + 2]) || 0));
+        const green = Math.max(0, Math.min(255, Number(codes[index + 3]) || 0));
+        const blue = Math.max(0, Math.min(255, Number(codes[index + 4]) || 0));
+        next[slot] = "rgb(" + red + "," + green + "," + blue + ")";
+        index += 4;
+      } else {
+        index += 1;
+      }
+    }
+  }
+  return next;
+}
+
+function cmConsumeEscape(text) {
+  if (!text || text[0] !== "\u001b") return { length: 0, incomplete: false };
+  if (text.length === 1) return { length: 1, incomplete: true };
+  const second = text[1];
+  if (second === "[") {
+    let index = 2;
+    while (index < text.length) {
+      const code = text.charCodeAt(index);
+      if (code >= 64 && code <= 126) {
+        const final = text[index];
+        const body = text.slice(2, index);
+        const params = final === "m"
+          ? body.split(";").map((part) => (part === "" ? 0 : Number(part)))
+          : [];
+        return { length: index + 1, incomplete: false, sgr: final === "m", params };
+      }
+      index += 1;
+    }
+    return { length: text.length, incomplete: true };
+  }
+  if (second === "]") {
+    for (let index = 2; index < text.length; index += 1) {
+      if (text[index] === "\u0007") return { length: index + 1, incomplete: false };
+      if (text[index] === "\u001b" && text[index + 1] === "\\") return { length: index + 2, incomplete: false };
+    }
+    return { length: text.length, incomplete: true };
+  }
+  if (second === "(" || second === ")") {
+    if (text.length < 3) return { length: text.length, incomplete: true };
+    return { length: 3, incomplete: false };
+  }
+  return { length: 2, incomplete: false };
+}
+
+function cmPushAnsiNode(nodes, text, style) {
+  if (!text) return;
+  const last = nodes[nodes.length - 1];
+  if (last && cmAnsiStylesEqual(last.style, style)) last.text += text;
+  else nodes.push({ text, style: { ...style } });
+}
+
+function cmParseAnsiChunk(parser, chunk) {
+  const source = String((parser && parser.leftover) || "") + String(chunk || "");
+  if (parser) parser.leftover = "";
+  const nodes = [];
+  let current = "";
+  let index = 0;
+  const styleOf = () => (parser && parser.style) || cmDefaultAnsiStyle();
+  const flush = () => {
+    cmPushAnsiNode(nodes, current, styleOf());
+    current = "";
+  };
+  while (index < source.length) {
+    if (source[index] === "\u001b") {
+      const consumed = cmConsumeEscape(source.slice(index));
+      if (consumed.incomplete) {
+        if (parser) parser.leftover = source.slice(index);
+        break;
+      }
+      flush();
+      if (consumed.sgr && parser) parser.style = cmApplySgr(parser.style, consumed.params || []);
+      index += consumed.length;
+      continue;
+    }
+    current += source[index];
+    index += 1;
+  }
+  flush();
+  return nodes;
+}
+
+function cmParseAnsi(text) {
+  const parser = cmCreateAnsiParser();
+  return cmParseAnsiChunk(parser, text);
+}
+
+function cmAnsiStyleToCss(style) {
+  if (!style) return "";
+  const parts = [];
+  if (style.bold) parts.push("font-weight:700");
+  if (style.dim) parts.push("opacity:0.7");
+  if (style.italic) parts.push("font-style:italic");
+  if (style.underline) parts.push("text-decoration:underline");
+  if (style.fg) parts.push("color:" + style.fg);
+  if (style.bg) parts.push("background-color:" + style.bg);
+  if (style.muted) parts.push("color:var(--text-muted)");
+  return parts.join(";");
+}
+
+function cmNormalizePagerNewlines(text) {
+  return String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function cmBufferFrom(value) {
+  if (value == null) {
+    if (typeof Buffer !== "undefined" && typeof Buffer.alloc === "function") return Buffer.alloc(0);
+    return { length: 0, slice() { return ""; }, subarray() { return ""; }, toString() { return ""; } };
+  }
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer && Buffer.isBuffer(value)) return value;
+  if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") return Buffer.from(String(value), "utf8");
+  const text = String(value);
+  return {
+    length: text.length,
+    slice(start, end) { return text.slice(start, end); },
+    subarray(start, end) { return text.slice(start, end); },
+    toString() { return text; },
+  };
+}
+
+function cmReplayInterleave(stdoutValue, stderrValue, interleave) {
+  const stdout = cmBufferFrom(stdoutValue);
+  const stderr = cmBufferFrom(stderrValue);
+  const chunks = [];
+  let outOff = 0;
+  let errOff = 0;
+  const pairs = Array.isArray(interleave) ? interleave : [];
+  const take = (buffer, offset, count, stream) => {
+    const end = Math.min(buffer.length, offset + Math.max(0, count));
+    const slice = typeof buffer.subarray === "function" ? buffer.subarray(offset, end) : buffer.slice(offset, end);
+    const text = typeof slice.toString === "function" ? slice.toString("utf8") : String(slice);
+    if (text) chunks.push({ stream, text: cmNormalizePagerNewlines(text) });
+    return end;
+  };
+  for (const pair of pairs) {
+    const stream = pair && pair[0];
+    const count = Number(pair && pair[1]) || 0;
+    if (stream === "out") outOff = take(stdout, outOff, count, "out");
+    else if (stream === "err") errOff = take(stderr, errOff, count, "err");
+  }
+  if (outOff < stdout.length) take(stdout, outOff, stdout.length - outOff, "out");
+  if (errOff < stderr.length) take(stderr, errOff, stderr.length - errOff, "err");
+  return chunks;
+}
+
+function cmTryParseJsonBody(text) {
+  const source = cmStripAnsi(text).trim();
+  if (!source || (source[0] !== "{" && source[0] !== "[")) return null;
+  try {
+    const value = JSON.parse(source);
+    if (value === null || typeof value !== "object") return null;
+    return value;
+  } catch (error) {
+    return null;
+  }
+}
+
+function cmJsonPrettyNodes(value) {
+  const nodes = [];
+  const push = (text, kind) => {
+    if (!text) return;
+    const style = kind === "key" ? { ...cmDefaultAnsiStyle(), muted: true } : cmDefaultAnsiStyle();
+    const last = nodes[nodes.length - 1];
+    if (last && last.kind === kind && cmAnsiStylesEqual(last.style, style)) last.text += text;
+    else nodes.push({ text, style, kind });
+  };
+  const walk = (item, level) => {
+    const pad = "  ".repeat(level);
+    if (item !== null && typeof item === "object") {
+      const isArray = Array.isArray(item);
+      const entries = isArray
+        ? item.map((entry, index) => [index, entry])
+        : Object.keys(item).map((key) => [key, item[key]]);
+      push(isArray ? "[" : "{", "punct");
+      if (!entries.length) {
+        push(isArray ? "]" : "}", "punct");
+        return;
+      }
+      push("\n", "punct");
+      entries.forEach(([key, entry], index) => {
+        push(pad + "  ", "punct");
+        if (!isArray) {
+          push(JSON.stringify(String(key)), "key");
+          push(": ", "punct");
+        }
+        walk(entry, level + 1);
+        if (index < entries.length - 1) push(",", "punct");
+        push("\n", "punct");
+      });
+      push(pad + (isArray ? "]" : "}"), "punct");
+      return;
+    }
+    if (typeof item === "string") push(JSON.stringify(item), "string");
+    else if (typeof item === "number" || typeof item === "boolean") push(String(item), "value");
+    else push("null", "value");
+  };
+  walk(value, 0);
+  return nodes;
+}
+
+function cmMaybePrettyJsonChunks(chunks) {
+  const list = Array.isArray(chunks) ? chunks : [];
+  const stdout = list.filter((chunk) => chunk && chunk.stream === "out").map((chunk) => chunk.text).join("");
+  const parsed = cmTryParseJsonBody(stdout);
+  if (!parsed) return list;
+  const stderr = list.filter((chunk) => chunk && chunk.stream === "err");
+  return [{ stream: "out", nodes: cmJsonPrettyNodes(parsed) }, ...stderr];
+}
+
+function cmResolveLinkTarget(app, linkpath) {
+  const pathOnly = String(linkpath || "").split("#")[0];
+  if (!pathOnly) return null;
+  try {
+    const vault = app && app.vault;
+    if (vault && typeof vault.getAbstractFileByPath === "function") {
+      const file = vault.getAbstractFileByPath(pathOnly);
+      if (file) return { path: file.path || pathOnly, file };
+    }
+  } catch (error) {
+    // Vault lookup is best effort.
+  }
+  try {
+    const cache = app && app.metadataCache;
+    if (cache && typeof cache.getFirstLinkpathDest === "function") {
+      const dest = cache.getFirstLinkpathDest(pathOnly, "");
+      if (dest) return { path: dest.path || pathOnly, file: dest };
+    }
+  } catch (error) {
+    // Cache lookup is best effort.
+  }
+  return null;
+}
+
+function cmPushLinkSpan(spans, span, app) {
+  if (!span || span.end <= span.start) return;
+  const resolved = cmResolveLinkTarget(app, span.linkpath);
+  if (!resolved) return;
+  spans.push({ ...span, path: resolved.path });
+}
+
+function cmFindWikiLinkSpans(text, app) {
+  const spans = [];
+  const regex = /\[\[([^\]|#\n]+)(?:#([^|\]]+))?(?:\|([^\]]+))?\]\]/g;
+  let match;
+  while ((match = regex.exec(String(text || "")))) {
+    const target = match[1] + (match[2] ? "#" + match[2] : "");
+    cmPushLinkSpan(spans, {
+      start: match.index,
+      end: match.index + match[0].length,
+      text: match[3] || match[0],
+      linkpath: target,
+      href: target,
+      line: null,
+      kind: "wiki",
+    }, app);
+  }
+  return spans;
+}
+
+function cmFindMdPathSpans(text, app) {
+  const spans = [];
+  const regex = /(?<![A-Za-z0-9_./-])((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.md)(?::(\d+)|(#[^\s\]|]+))?/g;
+  let match;
+  while ((match = regex.exec(String(text || "")))) {
+    const line = match[2] ? Number(match[2]) : null;
+    const hash = match[3] || "";
+    cmPushLinkSpan(spans, {
+      start: match.index,
+      end: match.index + match[0].length,
+      text: match[0],
+      linkpath: match[1],
+      href: match[1] + hash,
+      line: Number.isFinite(line) ? line : null,
+      kind: "path",
+    }, app);
+  }
+  return spans;
+}
+
+function cmFindAbsolutePathSpans(text, app, vaultBase) {
+  const prefix = String(vaultBase || "").replace(/\/+$/, "");
+  if (!prefix) return [];
+  const spans = [];
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(escaped + "/((?:[^\\s]+/)*[^\\s]+\\.md)(?::(\\d+)|(#[^\\s\\]|]+))?", "g");
+  let match;
+  while ((match = regex.exec(String(text || "")))) {
+    const line = match[2] ? Number(match[2]) : null;
+    const hash = match[3] || "";
+    cmPushLinkSpan(spans, {
+      start: match.index,
+      end: match.index + match[0].length,
+      text: match[0],
+      linkpath: match[1],
+      href: match[1] + hash,
+      line: Number.isFinite(line) ? line : null,
+      kind: "absolute",
+    }, app);
+  }
+  return spans;
+}
+
+function cmFindLinkSpans(text, options = {}) {
+  const source = String(text || "");
+  const app = options.app || null;
+  const combined = [
+    ...cmFindWikiLinkSpans(source, app),
+    ...cmFindAbsolutePathSpans(source, app, options.vaultBase),
+    ...cmFindMdPathSpans(source, app),
+  ].sort((left, right) => left.start - right.start || right.end - left.end);
+  const spans = [];
+  let cursor = 0;
+  for (const span of combined) {
+    if (span.start < cursor) continue;
+    spans.push(span);
+    cursor = span.end;
+  }
+  return spans;
+}
+
+function cmLinkifyAnsiNodes(nodes, options = {}) {
+  const result = [];
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    const text = String(node.text || "");
+    const spans = cmFindLinkSpans(text, options);
+    if (!spans.length) {
+      result.push({ ...node });
+      continue;
+    }
+    let cursor = 0;
+    for (const span of spans) {
+      if (span.start > cursor) result.push({ text: text.slice(cursor, span.start), style: node.style });
+      result.push({
+        text: text.slice(span.start, span.end),
+        style: node.style,
+        href: span.href,
+        path: span.path,
+        line: span.line,
+      });
+      cursor = span.end;
+    }
+    if (cursor < text.length) result.push({ text: text.slice(cursor), style: node.style });
+  }
+  return result;
+}
+
+function cmDecoratePagerChunks(chunks, options = {}) {
+  const pretty = cmMaybePrettyJsonChunks(chunks);
+  return pretty.map((chunk) => {
+    if (chunk.nodes) {
+      return { stream: chunk.stream || "out", nodes: cmLinkifyAnsiNodes(chunk.nodes, options) };
+    }
+    const parser = cmCreateAnsiParser();
+    const ansi = cmParseAnsiChunk(parser, chunk.text || "");
+    return { stream: chunk.stream || "out", nodes: cmLinkifyAnsiNodes(ansi, options) };
+  });
+}
+
+function cmPagerVisibleText(chunks) {
+  const parts = [];
+  for (const chunk of Array.isArray(chunks) ? chunks : []) {
+    if (Array.isArray(chunk.nodes)) {
+      for (const node of chunk.nodes) parts.push(node.text || "");
+    } else {
+      parts.push(chunk.text || "");
+    }
+  }
+  return parts.join("");
+}
+
+function cmPagerCopyOutput(chunks) {
+  return cmStripAnsi(cmPagerVisibleText(chunks));
+}
+
+function cmPagerDisplayArgv(record) {
+  const argv = Array.isArray(record && record.argv) ? [...record.argv] : [];
+  if (argv.length && (argv[0] === "bob" || /(?:^|\/)bob$/.test(String(argv[0])))) argv.shift();
+  return cmFormatArgv(["bob", ...argv]);
+}
+
+function cmPagerCopyCommand(record) {
+  return cmPagerDisplayArgv(record);
+}
+
+function cmFormatStartTime(iso) {
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return "";
+  return cmPad2(date.getHours()) + ":" + cmPad2(date.getMinutes()) + ":" + cmPad2(date.getSeconds());
+}
+
+function cmPagerStatusMeta(record, nowMs = Date.now(), queuedBehind = "") {
+  const outcome = record && record.outcome ? record.outcome : "unknown";
+  const exitLabel = typeof (record && record.exit_code) === "number" ? "exit " + record.exit_code : "";
+  const started = Date.parse(record && record.started_at);
+  const elapsed = Number.isFinite(started) ? Math.max(0, nowMs - started) : 0;
+  if (outcome === "running") {
+    return { glyph: "●", text: "running " + cmFormatClock(elapsed), className: "is-running" };
+  }
+  if (outcome === "queued") {
+    const behind = queuedBehind ? "queued behind " + queuedBehind : "queued";
+    return { glyph: "⧗", text: behind, className: "is-queued" };
+  }
+  if (outcome === "completed") {
+    return { glyph: "✓", text: "completed · " + cmFormatDuration(record.duration_ms), className: "is-completed" };
+  }
+  if (outcome === "attention") {
+    return { glyph: "◐", text: ["needs attention", exitLabel].filter(Boolean).join(" · "), className: "is-attention" };
+  }
+  if (outcome === "failed") {
+    return { glyph: "✗", text: ["failed", exitLabel].filter(Boolean).join(" · "), className: "is-failed" };
+  }
+  if (outcome === "stopped") {
+    return { glyph: "■", text: "stopped", className: "is-stopped" };
+  }
+  return { glyph: "?", text: "unknown", className: "is-unknown" };
+}
+
+function cmFindSearchMatches(text, query) {
+  const source = String(text || "");
+  const needle = String(query || "");
+  if (!needle) return [];
+  const matches = [];
+  let from = 0;
+  while (from <= source.length) {
+    const index = source.indexOf(needle, from);
+    if (index < 0) break;
+    matches.push({ start: index, end: index + needle.length });
+    from = index + Math.max(1, needle.length);
+  }
+  return matches;
+}
+
+function cmPagerHistoryIds(records) {
+  return (Array.isArray(records) ? records : [])
+    .map((record) => record && record.id)
+    .filter(Boolean)
+    .slice()
+    .reverse();
+}
+
+function cmPagerHistoryState(records, runId) {
+  const ids = cmPagerHistoryIds(records);
+  const index = ids.indexOf(runId);
+  return {
+    ids,
+    index,
+    total: ids.length,
+    label: index >= 0 && ids.length ? (index + 1) + " of " + ids.length : "",
+    olderId: index >= 0 ? ids[index + 1] || null : null,
+    newerId: index >= 0 ? ids[index - 1] || null : null,
+  };
+}
+
+function cmPagerApplyScroll(scroll, action) {
+  const view = Math.max(0, Number(scroll && scroll.view) || 0);
+  const height = Math.max(0, Number(scroll && scroll.height) || 0);
+  const max = Math.max(0, height - view);
+  const half = Math.max(CM_PAGER_LINE_PX, Math.floor(view / 2) || CM_PAGER_LINE_PX * 8);
+  let top = Number(scroll && scroll.top) || 0;
+  if (action.delta === "line") top += action.dir * CM_PAGER_LINE_PX;
+  else if (action.delta === "half") top += action.dir * half;
+  else if (action.delta === "home") top = 0;
+  else if (action.delta === "end") top = max;
+  return Math.max(0, Math.min(max, top));
+}
+
+function cmDefaultPagerSearch() {
+  return { mode: "off", query: "", matches: [], current: -1 };
+}
+
+function cmHandlePagerKey(event, state = {}) {
+  if (!event) return { type: "none" };
+  if (event.altKey) return { type: "none" };
+  const key = event.key;
+  const ctrl = Boolean(event.ctrlKey);
+  const meta = Boolean(event.metaKey);
+  const search = state.search || cmDefaultPagerSearch();
+  if (search.mode === "editing") {
+    if (key === "Escape") return { type: "search-cancel" };
+    if (key === "Enter") return { type: "search-commit" };
+    if (key === "Backspace") return { type: "search-backspace" };
+    if (!ctrl && !meta && key.length === 1) return { type: "search-type", char: key };
+    return { type: "none" };
+  }
+  if (state.stopConfirm) {
+    if (key === "y" || key === "Y" || key === "Enter") return { type: "stop" };
+    if (key === "Escape" || key === "n" || key === "N") return { type: "stop-cancel" };
+    if (key === "q") return { type: "close" };
+  }
+  if ((ctrl || meta) && (key === "c" || key === "C")) {
+    if (state.hasSelection) return { type: "none" };
+    return { type: "stop-request" };
+  }
+  if (ctrl || meta) return { type: "none" };
+  if (search.mode === "idle") {
+    if (key === "n") return { type: "search-next" };
+    if (key === "N") return { type: "search-prev" };
+    if (key === "Escape") return { type: "search-cancel" };
+  }
+  switch (key) {
+    case "j": return { type: "scroll", delta: "line", dir: 1 };
+    case "k": return { type: "scroll", delta: "line", dir: -1 };
+    case "d": return { type: "scroll", delta: "half", dir: 1 };
+    case "u": return { type: "scroll", delta: "half", dir: -1 };
+    case "g": return { type: "scroll", delta: "home" };
+    case "G": return { type: "scroll", delta: "end" };
+    case "/": return { type: "search-start" };
+    case "w": return { type: "wrap" };
+    case "y": return { type: "copy-output" };
+    case "Y": return { type: "copy-command" };
+    case "r": return { type: "rerun" };
+    case "[": return { type: "history", dir: 1 };
+    case "]": return { type: "history", dir: -1 };
+    case ":": return { type: "back" };
+    case "Escape": return { type: "escape" };
+    case "q": return { type: "close" };
+    default: return { type: "none" };
+  }
+}
+// ---- src/150-pager.js ----
+// Bob Command Mode: output pager view and standalone sheet-shaped modal.
+// The sheet phase remounts the same view in its output stage.
+
+function cmPagerEl(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = String(text);
+  return element;
+}
+
+function cmPagerHasSelection() {
+  try {
+    const selection = typeof window !== "undefined" && window.getSelection ? window.getSelection() : null;
+    return Boolean(selection && String(selection.toString() || "").length);
+  } catch (error) {
+    return false;
+  }
+}
+
+async function cmPagerWriteClipboard(text) {
+  try {
+    const clipboard = typeof navigator !== "undefined" && navigator.clipboard;
+    if (!clipboard || typeof clipboard.writeText !== "function") return { ok: false, reason: "clipboard unavailable" };
+    await clipboard.writeText(String(text || ""));
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: String((error && error.message) || error) };
+  }
+}
+
+function cmPagerReadCapped(fsModule, filePath, cap) {
+  let fd = null;
+  try {
+    const size = fsModule.statSync(filePath).size;
+    const length = Math.min(Math.max(0, cap), Math.max(0, size));
+    const buffer = Buffer.alloc(length);
+    fd = fsModule.openSync(filePath, "r");
+    fsModule.readSync(fd, buffer, 0, length, 0);
+    return { buffer, truncated: size > cap };
+  } catch (error) {
+    return { buffer: Buffer.alloc(0), truncated: false };
+  } finally {
+    if (fd !== null) {
+      try { fsModule.closeSync(fd); } catch (error) { /* Best effort. */ }
+    }
+  }
+}
+
+function cmPagerQueuedBehind(runner) {
+  if (!runner || !runner.live) return "";
+  try {
+    for (const live of runner.live.values()) {
+      const record = live && live.record;
+      if (record && record.outcome === "running" && record.effect !== "reads") {
+        return record.title || record.entry_id || cmPagerDisplayArgv(record);
+      }
+    }
+  } catch (error) {
+    return "";
+  }
+  return "";
+}
+
+function cmPagerFindRecord(runner, runId) {
+  if (!runner) return null;
+  const id = String(runId || "");
+  if (!id) return null;
+  try {
+    const live = runner.live && runner.live.get(id);
+    if (live && live.record) return live.record;
+  } catch (error) {
+    // Fall through to the store.
+  }
+  try {
+    const records = cmListRecords(runner.fs(), runner.runsDir());
+    return records.find((record) => record && record.id === id) || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function cmPagerLoadPayload(runner, runId) {
+  const id = String(runId || "");
+  if (!runner || !id) return null;
+  let live = null;
+  try { live = runner.live && runner.live.get(id); } catch (error) { live = null; }
+  if (live && live.state) {
+    return {
+      record: live.record,
+      stdout: Buffer.from(String(live.state.stdout || ""), "utf8"),
+      stderr: Buffer.from(String(live.state.stderr || ""), "utf8"),
+      truncated: Boolean(live.state.truncated || (live.record && live.record.truncated)),
+      live: true,
+    };
+  }
+  const record = cmPagerFindRecord(runner, id);
+  if (!record) return null;
+  const paths = cmRunFilePaths(runner.runsDir(), id, runner.pathModule());
+  const out = cmPagerReadCapped(runner.fs(), paths.out, CM_MEM_CAP_BYTES);
+  const err = cmPagerReadCapped(runner.fs(), paths.err, CM_MEM_CAP_BYTES);
+  return {
+    record,
+    stdout: out.buffer,
+    stderr: err.buffer,
+    truncated: Boolean(record.truncated || out.truncated || err.truncated),
+    live: false,
+    paths,
+  };
+}
+
+function cmBuildPagerView(payload, options = {}) {
+  const record = (payload && payload.record) || {};
+  const nowMs = typeof options.nowMs === "number" ? options.nowMs : Date.now();
+  const rawChunks = Array.isArray(options.chunks)
+    ? options.chunks
+    : cmReplayInterleave(payload && payload.stdout, payload && payload.stderr, record.interleave);
+  const chunks = cmDecoratePagerChunks(rawChunks, {
+    app: options.app,
+    vaultBase: options.vaultBase,
+  });
+  const history = options.history || cmPagerHistoryState(options.records || [], record.id);
+  const search = options.search || cmDefaultPagerSearch();
+  const visible = cmPagerVisibleText(chunks);
+  if (search.mode !== "off" && search.query) search.matches = cmFindSearchMatches(visible, search.query);
+  return {
+    record,
+    status: cmPagerStatusMeta(record, nowMs, options.queuedBehind || ""),
+    argv: cmPagerDisplayArgv(record),
+    started: cmFormatStartTime(record.started_at),
+    history,
+    stopVisible: record.outcome === "running",
+    stopConfirm: Boolean(options.stopConfirm),
+    wrap: Boolean(options.wrap),
+    truncated: Boolean(payload && payload.truncated),
+    search,
+    chunks,
+    visible,
+  };
+}
+
+function cmPagerMarkSearch(text, offset, search) {
+  const source = String(text || "");
+  if (!search || search.mode === "off" || !search.matches || !search.matches.length) {
+    return [{ text: source, hit: false, current: false }];
+  }
+  const parts = [];
+  let cursor = 0;
+  const start = offset;
+  const end = offset + source.length;
+  for (let index = 0; index < search.matches.length; index += 1) {
+    const match = search.matches[index];
+    if (match.end <= start || match.start >= end) continue;
+    const localStart = Math.max(0, match.start - start);
+    const localEnd = Math.min(source.length, match.end - start);
+    if (localStart > cursor) parts.push({ text: source.slice(cursor, localStart), hit: false, current: false });
+    parts.push({ text: source.slice(localStart, localEnd), hit: true, current: index === search.current });
+    cursor = localEnd;
+  }
+  if (cursor < source.length) parts.push({ text: source.slice(cursor), hit: false, current: false });
+  return parts.length ? parts : [{ text: source, hit: false, current: false }];
+}
+
+function cmRenderPagerText(parent, node, offset, search, handlers) {
+  const pieces = cmPagerMarkSearch(node.text || "", offset, search);
+  for (const piece of pieces) {
+    let el = cmPagerEl(node.href ? "a" : "span", "bob-cmd-ansi");
+    if (node.kind === "key") el.classList.add("bob-cmd-json-key");
+    if (node.href) {
+      el.classList.add("bob-cmd-link");
+      el.setAttribute("href", node.href);
+      el.setAttribute("data-link-path", node.path || node.href);
+      if (node.line != null) el.setAttribute("data-link-line", String(node.line));
+      el.addEventListener("click", (event) => {
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        if (typeof handlers.onLink === "function") {
+          handlers.onLink({
+            path: node.path || node.href,
+            href: node.href,
+            line: node.line,
+            newLeaf: Boolean(event && (event.metaKey || event.ctrlKey)),
+          });
+        }
+      });
+    }
+    const css = cmAnsiStyleToCss(node.style);
+    if (css) el.setAttribute("style", css);
+    if (piece.hit) {
+      const mark = cmPagerEl("mark", "bob-cmd-search-hit" + (piece.current ? " is-current" : ""), piece.text);
+      el.appendChild(mark);
+    } else {
+      el.textContent = piece.text;
+    }
+    parent.appendChild(el);
+  }
+  return (node.text || "").length;
+}
+
+function cmRenderPagerView(root, view, handlers = {}) {
+  if (!root) return null;
+  root.empty ? root.empty() : (root.textContent = "");
+  if (root.replaceChildren) root.replaceChildren();
+  else root.children = root.children || [];
+  root.className = "bob-cmd-pager-view" + (view.wrap ? " is-wrap" : "");
+  root.setAttribute("role", "dialog");
+  root.setAttribute("aria-label", "Command output");
+
+  const header = cmPagerEl("header", "bob-cmd-pager-header");
+  const pill = cmPagerEl("span", "bob-cmd-pill " + view.status.className, view.status.glyph + " " + view.status.text);
+  pill.setAttribute("aria-live", "polite");
+  const argv = cmPagerEl("code", "bob-cmd-pager-argv", view.argv);
+  argv.setAttribute("title", view.argv);
+  const started = cmPagerEl("span", "bob-cmd-pager-started", view.started);
+  header.append(pill, argv, started);
+  if (view.history && view.history.label) {
+    header.appendChild(cmPagerEl("span", "bob-cmd-pager-index", view.history.label));
+  }
+  if (view.stopVisible) {
+    const stop = cmPagerEl("button", "bob-cmd-pager-stop", view.stopConfirm ? "Confirm stop" : "Stop");
+    stop.type = "button";
+    stop.addEventListener("click", (event) => {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      if (typeof handlers.onStop === "function") handlers.onStop();
+    });
+    header.appendChild(stop);
+  }
+  root.appendChild(header);
+
+  if (view.truncated) {
+    const truncated = cmPagerEl("div", "bob-cmd-pager-truncated", "View truncated — open the full log");
+    truncated.setAttribute("role", "button");
+    truncated.setAttribute("tabindex", "0");
+    truncated.addEventListener("click", () => { if (typeof handlers.onOpenLog === "function") handlers.onOpenLog(); });
+    root.appendChild(truncated);
+  }
+
+  const body = cmPagerEl("div", "bob-cmd-pager-body" + (view.wrap ? " is-wrap" : ""));
+  body.setAttribute("tabindex", "0");
+  let offset = 0;
+  for (const chunk of view.chunks || []) {
+    const row = cmPagerEl("div", "bob-cmd-chunk" + (chunk.stream === "err" ? " is-stderr" : ""));
+    const nodes = Array.isArray(chunk.nodes) ? chunk.nodes : [{ text: chunk.text || "", style: cmDefaultAnsiStyle() }];
+    for (const node of nodes) offset += cmRenderPagerText(row, node, offset, view.search, handlers);
+    body.appendChild(row);
+  }
+  if (!(view.chunks && view.chunks.length)) {
+    body.appendChild(cmPagerEl("div", "bob-cmd-chunk is-empty", "No output yet"));
+  }
+  root.appendChild(body);
+
+  const footer = cmPagerEl("footer", "bob-cmd-pager-footer");
+  if (view.search && view.search.mode === "editing") {
+    footer.appendChild(cmPagerEl("span", "bob-cmd-pager-search", "/" + view.search.query));
+  } else if (view.search && view.search.mode === "idle") {
+    const count = view.search.matches.length;
+    const current = count && view.search.current >= 0 ? (view.search.current + 1) + "/" + count : "0/" + count;
+    footer.appendChild(cmPagerEl("span", "bob-cmd-pager-search", "/" + view.search.query + "  " + current));
+  } else if (view.stopConfirm) {
+    footer.appendChild(cmPagerEl("span", "bob-cmd-pager-confirm", "Stop this writer? y confirm · esc cancel"));
+  } else {
+    footer.appendChild(cmPagerEl("span", "bob-cmd-pager-hints", "j k d u g G  / n N  w wrap  y copy  Y argv  r rerun  [ ] history  q close"));
+  }
+  root.appendChild(footer);
+  return { root, header, body, footer };
+}
+
+function cmPagerAdvanceSearch(search, dir) {
+  const count = search.matches.length;
+  if (!count) {
+    search.current = -1;
+    return search;
+  }
+  if (search.current < 0) search.current = dir > 0 ? 0 : count - 1;
+  else search.current = (search.current + dir + count) % count;
+  return search;
+}
+
+class CommandModePagerModal extends Modal {
+  constructor(app, plugin, options = {}) {
+    super(app);
+    this.plugin = plugin;
+    this.pagerOpen = false;
+    this.fromList = Boolean(options.fromList);
+    this.runId = String(options.runId || "");
+    this.wrap = false;
+    this.stopConfirm = false;
+    this.search = cmDefaultPagerSearch();
+    this.view = null;
+    this.nodes = null;
+    this.tailTimer = null;
+    this.copied = "";
+    this.clipboardWrite = typeof options.clipboardWrite === "function" ? options.clipboardWrite : cmPagerWriteClipboard;
+  }
+
+  open() {
+    if (this.pagerOpen) return this;
+    this.pagerOpen = true;
+    try {
+      return super.open();
+    } catch (error) {
+      this.pagerOpen = false;
+      throw error;
+    }
+  }
+
+  close() {
+    if (!this.pagerOpen) return this;
+    this.pagerOpen = false;
+    return super.close();
+  }
+
+  onOpen() {
+    if (this.containerEl && this.containerEl.addClass) this.containerEl.addClass("bob-cmd-pager-host");
+    if (this.modalEl && this.modalEl.addClass) this.modalEl.addClass("bob-cmd-pager");
+    this.contentEl.empty();
+    if (this.contentEl.addClass) this.contentEl.addClass("bob-cmd-pager-content");
+    this.viewEl = cmPagerEl("div", "bob-cmd-pager-view");
+    this.contentEl.appendChild(this.viewEl);
+    if (this.modalEl && this.modalEl.addEventListener) {
+      this.modalEl.addEventListener("keydown", (event) => this.handlePagerKeydown(event));
+    }
+    this.refresh();
+    this.startTail();
+    if (this.modalEl) {
+      this.modalEl.setAttribute("tabindex", "-1");
+      if (typeof this.modalEl.focus === "function") this.modalEl.focus();
+    }
+  }
+
+  onClose() {
+    this.stopTail();
+    this.pagerOpen = false;
+    if (this.plugin && this.plugin.commandModePager === this) this.plugin.commandModePager = null;
+    this.contentEl.empty();
+  }
+
+  startTail() {
+    this.stopTail();
+    this.tailTimer = setInterval(() => this.refresh(), CM_TAIL_POLL_MS);
+    if (this.tailTimer && typeof this.tailTimer.unref === "function") this.tailTimer.unref();
+  }
+
+  stopTail() {
+    if (this.tailTimer) {
+      try { clearInterval(this.tailTimer); } catch (error) { /* Best effort. */ }
+      this.tailTimer = null;
+    }
+  }
+
+  showRun(runId) {
+    this.runId = String(runId || "");
+    this.stopConfirm = false;
+    this.search = cmDefaultPagerSearch();
+    this.refresh();
+  }
+
+  payload() {
+    return cmPagerLoadPayload(this.plugin && this.plugin.commandModeRunner, this.runId);
+  }
+
+  records() {
+    const runner = this.plugin && this.plugin.commandModeRunner;
+    if (!runner) return [];
+    try { return cmListRecords(runner.fs(), runner.runsDir()); }
+    catch (error) { return []; }
+  }
+
+  refresh() {
+    const payload = this.payload();
+    if (!payload) {
+      if (this.viewEl) {
+        this.viewEl.empty ? this.viewEl.empty() : (this.viewEl.textContent = "Run not found");
+      }
+      return null;
+    }
+    const runner = this.plugin.commandModeRunner;
+    const vaultBase = runner && typeof runner.deps.vaultBase === "function" ? runner.deps.vaultBase() : cmVaultBasePath(this.app);
+    const previous = this.nodes && this.nodes.body;
+    const wasAtBottom = previous
+      ? (Number(previous.scrollTop) || 0) + (Number(previous.clientHeight) || 0) >= (Number(previous.scrollHeight) || 0) - 8
+      : true;
+    const savedTop = previous ? Number(previous.scrollTop) || 0 : 0;
+    this.view = cmBuildPagerView(payload, {
+      app: this.app,
+      vaultBase,
+      records: this.records(),
+      search: this.search,
+      wrap: this.wrap,
+      stopConfirm: this.stopConfirm,
+      queuedBehind: cmPagerQueuedBehind(runner),
+      nowMs: Date.now(),
+    });
+    this.nodes = cmRenderPagerView(this.viewEl, this.view, {
+      onStop: () => this.requestStop(),
+      onOpenLog: () => this.openFullLog(),
+      onLink: (link) => this.openLink(link),
+    });
+    if (this.nodes && this.nodes.body) {
+      const body = this.nodes.body;
+      body.scrollTop = wasAtBottom ? (body.scrollHeight || 0) : savedTop;
+    }
+    return this.view;
+  }
+
+  openFullLog() {
+    const runner = this.plugin && this.plugin.commandModeRunner;
+    if (!runner || typeof this.plugin.commandModeOpenPath !== "function") return { ok: false };
+    const paths = cmRunFilePaths(runner.runsDir(), this.runId, runner.pathModule());
+    return this.plugin.commandModeOpenPath(paths.out);
+  }
+
+  openLink(link) {
+    const workspace = this.app && this.app.workspace;
+    if (!workspace || typeof workspace.openLinkText !== "function") return { ok: false, reason: "note opener unavailable" };
+    const target = link.href || link.path;
+    const eState = {};
+    if (typeof link.line === "number") eState.line = Math.max(0, link.line - 1);
+    try {
+      const opened = workspace.openLinkText(target, "", Boolean(link.newLeaf), { eState });
+      if (!link.newLeaf) this.close();
+      return opened && typeof opened.then === "function" ? opened.then(() => ({ ok: true })) : { ok: true };
+    } catch (error) {
+      return { ok: false, reason: String((error && error.message) || error) };
+    }
+  }
+
+  requestStop() {
+    const record = this.view && this.view.record;
+    if (!record || record.outcome !== "running") return { ok: false, reason: "run is not active" };
+    if (record.effect !== "reads" && !this.stopConfirm) {
+      this.stopConfirm = true;
+      this.refresh();
+      return { ok: true, confirm: true };
+    }
+    this.stopConfirm = false;
+    const runner = this.plugin && this.plugin.commandModeRunner;
+    if (!runner || typeof runner.stop !== "function") return { ok: false, reason: "run is not active" };
+    const result = runner.stop(this.runId);
+    this.refresh();
+    return result;
+  }
+
+  backToList() {
+    if (typeof this.onBackToList === "function") {
+      this.onBackToList();
+      return;
+    }
+    this.close();
+  }
+
+  handlePagerKeydown(event) {
+    const action = cmHandlePagerKey(event, {
+      search: this.search,
+      stopConfirm: this.stopConfirm,
+      hasSelection: cmPagerHasSelection(),
+    });
+    if (!action || action.type === "none") return false;
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+    this.applyPagerAction(action);
+    return true;
+  }
+
+  applyPagerAction(action) {
+    const body = this.nodes && this.nodes.body;
+    switch (action.type) {
+      case "scroll": {
+        if (!body) return;
+        body.scrollTop = cmPagerApplyScroll({
+          top: Number(body.scrollTop) || 0,
+          view: Number(body.clientHeight) || 0,
+          height: Number(body.scrollHeight) || 0,
+        }, action);
+        return;
+      }
+      case "wrap":
+        this.wrap = !this.wrap;
+        this.refresh();
+        return;
+      case "copy-output":
+        void this.clipboardWrite(cmPagerCopyOutput(this.view && this.view.chunks)).then((result) => {
+          if (result && result.ok) this.copied = "output";
+        });
+        return;
+      case "copy-command":
+        void this.clipboardWrite(cmPagerCopyCommand(this.view && this.view.record)).then((result) => {
+          if (result && result.ok) this.copied = "command";
+        });
+        return;
+      case "rerun":
+        if (this.plugin && typeof this.plugin.commandModeRerun === "function") {
+          void Promise.resolve(this.plugin.commandModeRerun(this.view && this.view.record)).then((result) => {
+            if (result && result.runId) this.showRun(result.runId);
+          });
+        }
+        return;
+      case "history": {
+        const history = this.view && this.view.history;
+        const nextId = action.dir > 0 ? history && history.olderId : history && history.newerId;
+        if (nextId) this.showRun(nextId);
+        return;
+      }
+      case "stop-request":
+        this.requestStop();
+        return;
+      case "stop":
+        this.stopConfirm = true;
+        this.requestStop();
+        return;
+      case "stop-cancel":
+        this.stopConfirm = false;
+        this.refresh();
+        return;
+      case "search-start":
+        this.search = { ...cmDefaultPagerSearch(), mode: "editing" };
+        this.refresh();
+        return;
+      case "search-type":
+        this.search.query = String(this.search.query || "") + action.char;
+        this.refresh();
+        return;
+      case "search-backspace":
+        this.search.query = String(this.search.query || "").slice(0, -1);
+        this.refresh();
+        return;
+      case "search-commit":
+        if (!this.search.query) {
+          this.search = cmDefaultPagerSearch();
+        } else {
+          this.search.mode = "idle";
+          this.search.matches = cmFindSearchMatches(this.view && this.view.visible, this.search.query);
+          this.search.current = this.search.matches.length ? 0 : -1;
+        }
+        this.refresh();
+        return;
+      case "search-cancel":
+        this.search = cmDefaultPagerSearch();
+        this.refresh();
+        return;
+      case "search-next":
+        cmPagerAdvanceSearch(this.search, 1);
+        this.refresh();
+        return;
+      case "search-prev":
+        cmPagerAdvanceSearch(this.search, -1);
+        this.refresh();
+        return;
+      case "back":
+        this.backToList();
+        return;
+      case "escape":
+        if (this.fromList) this.backToList();
+        else this.close();
+        return;
+      case "close":
+        this.close();
+        return;
+      default:
+        return;
+    }
+  }
+}
 // ---- src/990-exports.js ----
 // Bob Command Mode: public entrypoint and test helpers.
 module.exports = BobCommandModePlugin;
@@ -2689,4 +3937,33 @@ module.exports.helpers = {
   cmCreateRootApi,
   cmDefaultSettings,
   cmClassifyCatalogFailure,
+  CM_PAGER_LINE_PX,
+  cmCreateAnsiParser,
+  cmParseAnsi,
+  cmParseAnsiChunk,
+  cmAnsiStyleToCss,
+  cmReplayInterleave,
+  cmTryParseJsonBody,
+  cmJsonPrettyNodes,
+  cmMaybePrettyJsonChunks,
+  cmFindLinkSpans,
+  cmResolveLinkTarget,
+  cmLinkifyAnsiNodes,
+  cmDecoratePagerChunks,
+  cmPagerVisibleText,
+  cmPagerCopyOutput,
+  cmPagerCopyCommand,
+  cmPagerDisplayArgv,
+  cmPagerStatusMeta,
+  cmFindSearchMatches,
+  cmPagerHistoryIds,
+  cmPagerHistoryState,
+  cmPagerApplyScroll,
+  cmHandlePagerKey,
+  cmDefaultPagerSearch,
+  cmBuildPagerView,
+  cmRenderPagerView,
+  cmPagerLoadPayload,
+  cmPagerFindRecord,
+  CommandModePagerModal,
 };

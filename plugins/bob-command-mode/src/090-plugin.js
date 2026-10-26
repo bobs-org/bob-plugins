@@ -34,6 +34,7 @@ class BobCommandModePlugin extends Plugin {
     this.commandModeState = this.commandModeCatalog ? "ready" : "empty";
     this.commandModeMissingBob = null;
     this.commandModeStickyNotices = new Map();
+    this.commandModePager = null;
     this.commandModeRunner = new CommandModeRunner({
       resolveBob: () => this.commandModeResolveBob(),
       vaultBase: () => cmVaultBasePath(this.app),
@@ -56,6 +57,11 @@ class BobCommandModePlugin extends Plugin {
       name: "Bob: Rerun last command",
       callback: () => this.commandModeRerun(this.commandModeRunner && this.commandModeRunner.newestRecord()),
     });
+    this.addCommand({
+      id: "show-last-output",
+      name: "Bob: Show last output",
+      callback: () => this.commandModeShowLastOutput(),
+    });
     // Register from the persisted catalog first so Ctrl+P works before the
     // background refresh finishes; refresh then re-registers the same ids.
     this.commandModeSyncRunCommands();
@@ -67,6 +73,10 @@ class BobCommandModePlugin extends Plugin {
   onunload() {
     // Writers are detached and keep running; their records are adopted on the
     // next load. Never kill a writer from unload.
+    if (this.commandModePager) {
+      try { this.commandModePager.close(); } catch (error) { /* Best effort during unload. */ }
+      this.commandModePager = null;
+    }
     if (this.commandModeRunner) this.commandModeRunner.dispose();
     if (this.commandModeStatusTimer) clearInterval(this.commandModeStatusTimer);
     this.commandModeStatusTimer = null;
@@ -268,6 +278,11 @@ class BobCommandModePlugin extends Plugin {
     try {
       const notice = { ...(outcome || {}) };
       const record = cmToastRun(notice);
+      if (this.commandModePagerIsWatching(record.id || notice.runId)) {
+        try { if (this.commandModePager) this.commandModePager.refresh(); }
+        catch (error) { /* The pager may already be closing. */ }
+        return null;
+      }
       const source = [notice.reason, record.summary].filter(Boolean).join("\n");
       const actions = Array.isArray(notice.actions) ? [...notice.actions] : [];
       if (/bob not found/i.test(source) && !actions.some((action) => action.id === "open-settings")) {
@@ -455,10 +470,31 @@ class BobCommandModePlugin extends Plugin {
     return () => {};
   }
 
-  commandModeOpenOutput(runId) {
+  commandModePagerIsWatching(runId) {
+    const pager = this.commandModePager;
+    if (!pager || !runId) return false;
+    if (pager.pagerOpen === false) return false;
+    if (String(pager.runId) !== String(runId)) return false;
+    try {
+      if (typeof document !== "undefined" && typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+    } catch (error) {
+      // Headless tests without a document still count as watching when the pager is open.
+    }
+    return true;
+  }
+
+  commandModeShowLastOutput() {
     const runner = this.commandModeRunner;
-    if (!runner) return { ok: false, reason: "command mode is not loaded" };
-    const paths = cmRunFilePaths(runner.runsDir(), String(runId || ""), runner.pathModule());
+    const newest = runner && typeof runner.newestRecord === "function" ? runner.newestRecord() : null;
+    if (!newest) {
+      try { new Notice("No command output yet"); } catch (error) { /* Headless. */ }
+      return { ok: false, reason: "no command output yet" };
+    }
+    return this.commandModeOpenOutput(newest.id);
+  }
+
+  commandModeOpenPath(filePath) {
+    const runner = this.commandModeRunner;
     let shell = null;
     try {
       const electron = require("electron");
@@ -466,14 +502,36 @@ class BobCommandModePlugin extends Plugin {
     } catch (error) {
       shell = null;
     }
-    const opener = runner.deps.shellOpenPath || (shell && shell.openPath ? (target) => shell.openPath(target) : null);
-    if (!opener) return { ok: false, reason: "no output view yet" };
+    const opener = (runner && runner.deps && runner.deps.shellOpenPath) ||
+      (shell && shell.openPath ? (target) => shell.openPath(target) : null);
+    if (!opener) return { ok: false, reason: "no file opener" };
     try {
-      const result = opener(paths.out);
+      const result = opener(filePath);
       if (result && typeof result.then === "function") {
-        return result.then(() => ({ ok: true, runId })).catch((error) => ({ ok: false, reason: String((error && error.message) || error) }));
+        return result.then(() => ({ ok: true })).catch((error) => ({ ok: false, reason: String((error && error.message) || error) }));
       }
-      return { ok: true, runId };
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: String((error && error.message) || error) };
+    }
+  }
+
+  commandModeOpenOutput(runId) {
+    const runner = this.commandModeRunner;
+    if (!runner) return { ok: false, reason: "command mode is not loaded" };
+    const id = String(runId || "");
+    if (!id) return { ok: false, reason: "run not found" };
+    const record = cmPagerFindRecord(runner, id);
+    if (!record) return { ok: false, reason: "run not found" };
+    try {
+      if (this.commandModePager && this.commandModePager.pagerOpen) {
+        this.commandModePager.showRun(id);
+        return { ok: true, runId: id };
+      }
+      const modal = new CommandModePagerModal(this.app, this, { runId: id });
+      this.commandModePager = modal;
+      modal.open();
+      return { ok: true, runId: id };
     } catch (error) {
       return { ok: false, reason: String((error && error.message) || error) };
     }

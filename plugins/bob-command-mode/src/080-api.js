@@ -22,7 +22,7 @@ function cmCreateApi(runner, options = {}) {
       }
       return Promise.resolve(pending).catch(refused);
     },
-    // Open a run's output (the pager once it lands; the .out file until then).
+    // Open a run's output in the pager.
     openOutput(runId) {
       if (typeof openOutput === "function") {
         try {

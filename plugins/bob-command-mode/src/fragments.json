@@ -11,5 +11,7 @@
   "110-toasts.js",
   "120-status-chip.js",
   "130-adapters.js",
+  "140-ansi-and-links.js",
+  "150-pager.js",
   "990-exports.js"
 ]

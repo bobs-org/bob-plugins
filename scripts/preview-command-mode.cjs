@@ -37,14 +37,16 @@ function findChromium() {
 
 function safeJson(value) { return JSON.stringify(value).replace(/</g, "\\u003c"); }
 
-function makeHtml(css, utility, toasts, chip) {
+function makeHtml(css, utility, toasts, chip, ansi, pager) {
   const template = fs.readFileSync(path.join(__dirname, "preview-command-mode.template.html"), "utf8");
   return template
     .replace("__OBSIDIAN_BASELINE_CSS__", () => BASELINE)
     .replace("__PRODUCTION_CSS__", () => css)
     .replace("__UTILITY_SOURCE__", () => utility)
     .replace("__TOAST_SOURCE__", () => toasts)
-    .replace("__CHIP_SOURCE__", () => chip);
+    .replace("__CHIP_SOURCE__", () => chip)
+    .replace("__ANSI_SOURCE__", () => ansi)
+    .replace("__PAGER_SOURCE__", () => pager);
 }
 
 class CdpClient {
@@ -120,6 +122,8 @@ async function main() {
     fs.readFileSync(path.join(pluginRoot, "src/020-util.js"), "utf8"),
     fs.readFileSync(path.join(pluginRoot, "src/110-toasts.js"), "utf8"),
     fs.readFileSync(path.join(pluginRoot, "src/120-status-chip.js"), "utf8"),
+    fs.readFileSync(path.join(pluginRoot, "src/140-ansi-and-links.js"), "utf8"),
+    fs.readFileSync(path.join(pluginRoot, "src/150-pager.js"), "utf8"),
   );
   fs.writeFileSync(htmlFile, html);
   const chromium = findChromium();
@@ -140,7 +144,7 @@ async function main() {
     client = await CdpClient.connect(page.webSocketDebuggerUrl);
     await client.call("Page.enable");
     await client.call("Runtime.enable");
-    await client.call("Emulation.setDeviceMetricsOverride", { width: 1040, height: 1250, deviceScaleFactor: 1, mobile: false });
+    await client.call("Emulation.setDeviceMetricsOverride", { width: 1040, height: 1680, deviceScaleFactor: 1, mobile: false });
     await client.call("Page.navigate", { url: pathToFileURL(htmlFile).href });
     const start = Date.now();
     while (Date.now() - start < 15000) {
@@ -157,9 +161,9 @@ async function main() {
     fs.writeFileSync(path.join(args.out, "matrix-report.md"), [
       "# Bob Command Mode feedback preview",
       "",
-      "Rendered from production `110-toasts.js`, `120-status-chip.js`, and `styles.css` under an Obsidian baseline stylesheet.",
+      "Rendered from production toast, chip, ANSI, and pager fragments plus `styles.css` under an Obsidian baseline stylesheet.",
       "",
-      "Cases: completed, attention with Scan intake, failed stderr summary, unknown, stopped; one run, two runs, and an overdue writer.",
+      "Cases: completed, attention with Scan intake, failed stderr summary, unknown, stopped; one run, two runs, and an overdue writer; pager running, completed with ANSI and links, failed stderr, and JSON.",
       "",
       ...screenshots.map((file) => "- " + path.basename(file)),
       "",

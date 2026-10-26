@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 const { LedgerToolsPlugin } = require("./ledger-tools-harness.cjs");
 
@@ -97,6 +99,14 @@ class FakeNode {
 }
 
 function fakeDocument() {
+  const doc = {
+    createElement(tag) { return new FakeNode(tag, doc); },
+    createElementNS(ns, tag) { return new FakeNode(tag, doc); },
+  };
+  return doc;
+}
+
+function fakeDocumentWithoutNs() {
   const doc = { createElement(tag) { return new FakeNode(tag, doc); } };
   return doc;
 }
@@ -278,8 +288,10 @@ test("skeleton carries placeholder text per fact and the same tag and class sequ
   const legendPart = (classes) => (classes || "").split(/\s+/).some((name) =>
     name === "bob-day-strip-legend-item" || name === "bob-day-strip-legend-dot" ||
     name === "bob-day-strip-legend-label" || name === "bob-day-strip-legend-value");
+  const markPart = (classes) => (classes || "").split(/\s+/).some((name) =>
+    name === "bob-day-strip-mark" || name.startsWith("bob-day-strip-mark-"));
   const shape = (root) => findAll(root, () => true)
-    .filter((node) => !legendPart(node.getAttribute("class")))
+    .filter((node) => !legendPart(node.getAttribute("class")) && !markPart(node.getAttribute("class")))
     .map((node) => node.tagName + "|" + normalize(node.getAttribute("class")));
   assert.deepEqual(shape(skeletonRoot), shape(readyRoot));
 });
@@ -471,7 +483,10 @@ test("facts stack a label head over a faithful value with warnings in the head",
       const warnings = byClass(value, "bob-day-strip-warning");
       assert.equal(warnings.length, 0, `${fixture.name} ${fact.id} value holds no warning`);
       const words = findAll(value, (child) => (child.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-word"));
-      if (fact.display === "–") {
+      if (fact.mark) {
+        assert.ok((value.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-value-mark"), `${fixture.name} ${fact.id} paints a mark value`);
+        assert.ok(!(value.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-value-word"), `${fixture.name} ${fact.id} mark is not a word`);
+      } else if (fact.display === "–") {
         assert.ok((value.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-value-empty"), `${fixture.name} ${fact.id} marks empty`);
         assert.ok(!(value.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-value-word"), `${fixture.name} ${fact.id} empty is not a word`);
       } else {
@@ -590,4 +605,170 @@ test("DOM glue hides overflow, writes the counter, and toggles names mode", () =
   } else {
     assert.ok(!(legend.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-legend-names"));
   }
+});
+
+function classList(node) {
+  return (node && node.getAttribute("class") || "").split(/\s+/).filter(Boolean);
+}
+
+function markPartNames(svg) {
+  return (svg.children || []).map((child) => {
+    const names = classList(child);
+    if (names.includes("bob-day-strip-mark-disc")) return "disc";
+    if (names.includes("bob-day-strip-mark-rim")) return "rim";
+    if (names.includes("bob-day-strip-mark-ring")) return "ring";
+    if (names.includes("bob-day-strip-mark-glyph")) return "glyph";
+    if (names.includes("bob-day-strip-mark-half")) return "half";
+    return names.join(" ");
+  });
+}
+
+function closedModel(model, mark, extra = {}) {
+  const display = mark === "met" ? "met" : mark === "missed" ? "missed" : "not yet";
+  return {
+    ...model,
+    state: extra.state || "ready",
+    stale: extra.stale === true,
+    day: extra.day || model.day,
+    facts: (model.facts || []).map((fact) => fact.id === "review_closed"
+      ? { ...fact, mark, display, provisional: mark === "pending" }
+      : fact),
+  };
+}
+
+function arriveClass(root) {
+  const fact = byAttribute(root, "data-day-strip-metric", "review_closed")[0];
+  const value = fact ? byClass(fact, "bob-day-strip-value")[0] : null;
+  return classList(value).includes("bob-day-strip-mark-arrive");
+}
+
+test("dayStripMarkState maps bool points from the bob point, never the word", () => {
+  const cases = [
+    ["met", "bool", { value: 1, quality: "ok" }, "met"],
+    ["missed on a complete day", "bool", { value: 0, quality: "ok" }, "missed"],
+    ["pending provisional zero", "bool", { value: 0, quality: "ok", provisional: true }, "pending"],
+    ["provisional met", "bool", { value: 1, quality: "ok", provisional: true }, "met"],
+    ["null value", "bool", { value: null, quality: "ok" }, null],
+    ["missing", "bool", { value: 0, quality: "missing" }, null],
+    ["not_tracked", "bool", { value: 0, quality: "not_tracked" }, null],
+    ["count unit", "count", { value: 1, quality: "ok" }, null],
+    ["absent point", "bool", null, null],
+  ];
+  for (const [name, unit, point, expected] of cases) {
+    assert.equal(helpers.dayStripMarkState(unit, point), expected, name);
+  }
+  const today = modelFor(fixtures.today).facts.find((fact) => fact.id === "review_closed");
+  assert.equal(today.mark, "pending");
+  const past = modelFor(fixtures.past).facts.find((fact) => fact.id === "review_closed");
+  assert.equal(past.mark, "missed");
+});
+
+test("boolean facts paint an aria-hidden mark with hidden display text", () => {
+  const expected = {
+    pending: ["disc", "ring", "half"],
+    missed: ["disc", "rim", "glyph"],
+    met: ["disc", "rim", "glyph"],
+  };
+  const today = modelFor(fixtures.today);
+  const cases = [
+    ["pending", today],
+    ["missed", modelFor(fixtures.past)],
+    ["met", closedModel(today, "met")],
+  ];
+  for (const [state, model] of cases) {
+    const { root } = paint(model);
+    const fact = byAttribute(root, "data-day-strip-metric", "review_closed")[0];
+    const value = byClass(fact, "bob-day-strip-value")[0];
+    assert.equal(value.getAttribute("data-mark"), state, `${state} data-mark`);
+    assert.ok(classList(value).includes("bob-day-strip-value-mark"), `${state} mark class`);
+    assert.ok(!classList(value).includes("bob-day-strip-value-word"), `${state} is not a word`);
+    const svgs = byClass(value, "bob-day-strip-mark");
+    assert.equal(svgs.length, 1, `${state} paints one svg`);
+    assert.equal(svgs[0].tagName, "SVG");
+    assert.equal(svgs[0].getAttribute("aria-hidden"), "true");
+    assert.equal(svgs[0].getAttribute("focusable"), "false");
+    assert.deepEqual(markPartNames(svgs[0]), expected[state], `${state} parts`);
+    const modelFact = model.facts.find((item) => item.id === "review_closed");
+    assert.equal(value.textContent, modelFact.display, `${state} keeps bob's display`);
+    assert.equal(fact.getAttribute("aria-label"), `${modelFact.label} ${modelFact.display}`);
+  }
+});
+
+test("docs without createElementNS keep word runs", () => {
+  const doc = fakeDocumentWithoutNs();
+  const root = new FakeNode("div", doc);
+  helpers.paintDayStrip(root, modelFor(fixtures.today));
+  const fact = byAttribute(root, "data-day-strip-metric", "review_closed")[0];
+  const value = byClass(fact, "bob-day-strip-value")[0];
+  assert.ok(classList(value).includes("bob-day-strip-value-word"));
+  assert.ok(!classList(value).includes("bob-day-strip-value-mark"));
+  assert.equal(byClass(value, "bob-day-strip-mark").length, 0);
+  assert.equal(value.textContent, "not yet");
+  assert.equal(byClass(value, "bob-day-strip-word")[0].textContent, "not yet");
+});
+
+test("bool skeleton paints a round placeholder and no svg", () => {
+  const skeleton = helpers.dayStripModel(null, fixtures.today.day, { localToday: fixtures.today.localToday });
+  const closed = skeleton.facts.find((fact) => fact.id === "review_closed");
+  assert.equal(closed.mark, null);
+  assert.equal(closed.unit, "bool");
+  const { root } = paint(skeleton);
+  const fact = byAttribute(root, "data-day-strip-metric", "review_closed")[0];
+  const value = byClass(fact, "bob-day-strip-value")[0];
+  assert.ok(classList(value).includes("bob-day-strip-value-mark"));
+  assert.ok(classList(value).includes("bob-day-strip-value-skeleton"));
+  assert.equal(byClass(value, "bob-day-strip-mark-skeleton").length, 1);
+  assert.equal(byClass(value, "bob-day-strip-mark").length, 0);
+  assert.equal(findAll(value, (node) => node.tagName === "SVG").length, 0);
+});
+
+test("pending mark tooltip drops so far; numeric provisional keeps it", () => {
+  const today = modelFor(fixtures.today);
+  const closed = today.facts.find((fact) => fact.id === "review_closed");
+  assert.equal(closed.mark, "pending");
+  assert.match(closed.tooltip, /Sat Oct 24: not yet/);
+  assert.doesNotMatch(closed.tooltip, /not yet so far/);
+  const worked = today.facts.find((fact) => fact.id === "worked");
+  assert.equal(worked.mark, null);
+  assert.match(worked.tooltip, / so far/);
+});
+
+test("pending to met on the same host and day draws the check once", () => {
+  const pending = closedModel(modelFor(fixtures.today), "pending");
+  const { root } = paint(pending);
+  assert.equal(arriveClass(root), false, "first pending paint does not arrive");
+  helpers.paintDayStrip(root, closedModel(pending, "met"));
+  assert.equal(arriveClass(root), true, "pending then met arrives");
+  helpers.paintDayStrip(root, closedModel(pending, "met"));
+  assert.equal(arriveClass(root), false, "met then met does not arrive");
+});
+
+test("arrive class stays off for other mark transitions", () => {
+  const pending = closedModel(modelFor(fixtures.today), "pending");
+  const { root } = paint(pending);
+  helpers.paintDayStrip(root, closedModel(pending, "met", { day: "2026-10-21" }));
+  assert.equal(arriveClass(root), false, "pending then met on another day");
+
+  const skeleton = helpers.dayStripModel(null, fixtures.today.day, { localToday: fixtures.today.localToday });
+  const fresh = new FakeNode("div", fakeDocument());
+  helpers.paintDayStrip(fresh, skeleton);
+  helpers.paintDayStrip(fresh, closedModel(pending, "met"));
+  assert.equal(arriveClass(fresh), false, "skeleton then met");
+
+  const staleHost = new FakeNode("div", fakeDocument());
+  helpers.paintDayStrip(staleHost, pending);
+  helpers.paintDayStrip(staleHost, closedModel(pending, "met", { stale: true }));
+  assert.equal(arriveClass(staleHost), false, "stale met frame");
+
+  const missedHost = new FakeNode("div", fakeDocument());
+  helpers.paintDayStrip(missedHost, pending);
+  helpers.paintDayStrip(missedHost, closedModel(pending, "missed"));
+  assert.equal(arriveClass(missedHost), false, "pending then missed");
+});
+
+test("stroke-dashoffset lives only inside keyframes", () => {
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  const withoutKeyframes = css.replace(/@keyframes[^{]*\{(?:[^{}]|\{[^{}]*\})*\}/g, "");
+  assert.doesNotMatch(withoutKeyframes, /stroke-dashoffset/);
+  assert.match(css, /@keyframes[\s\S]*stroke-dashoffset/);
 });

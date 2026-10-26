@@ -16,6 +16,7 @@
       --text-normal: #262521; --text-muted: #6f6c65; --text-faint: #a7a39b;
       --text-accent: #5143ad; --interactive-accent: #6556c8;
       --radius-s: 4px; --font-interface: system-ui, sans-serif;
+      --color-red: #e93147; --color-orange: #ec7500; --color-yellow: #e0ac00; --color-green: #08b94e;
       --bob-area-blue: #3979c5; --bob-area-orange: #d66d36; --bob-area-aqua: #268d97;
       --bob-area-yellow: #ae8c1e; --bob-area-magenta: #b04c85; --bob-area-green: #4c8b57;
       --bob-area-violet: #765eb8; --bob-area-red: #bf5c54;
@@ -28,6 +29,7 @@
       --text-normal: #e7e6e2; --text-muted: #a4a3a0; --text-faint: #74757a;
       --text-accent: #b2a9ff; --interactive-accent: #9a8cf0;
       --radius-s: 4px; --font-interface: system-ui, sans-serif;
+      --color-red: #fb464c; --color-orange: #e9973f; --color-yellow: #e0de71; --color-green: #44cf6e;
       --bob-area-blue: #68a4ee; --bob-area-orange: #e17a4a; --bob-area-aqua: #55b8c3;
       --bob-area-yellow: #d0b24c; --bob-area-magenta: #d172a7; --bob-area-green: #75b87e;
       --bob-area-violet: #a18ce4; --bob-area-red: #df817a;
@@ -284,7 +286,60 @@
         ...measureStripPlacement(strip),
         ...measureStripHues(strip),
         ...measureStripStats(strip, factBoxes, rowOf),
+        ...measureStripMarks(strip),
       };
+    }
+
+    // (r) Geometry of boolean status marks; (s) ready inks vs stale muted ink.
+    function measureStripMarks(strip) {
+      const out = {
+        markGeometryFailures: [],
+        markInk: null,
+        markState: null,
+        markMutedMatch: null,
+      };
+      try {
+        const head = strip.querySelector(".bob-day-strip-head");
+        const mutedColor = head ? getComputedStyle(head).color : "";
+        for (const value of strip.querySelectorAll(".bob-day-strip-value-mark")) {
+          const svg = value.querySelector("svg.bob-day-strip-mark");
+          if (!svg) continue;
+          const valueBox = value.getBoundingClientRect();
+          const markBox = svg.getBoundingClientRect();
+          const fontSize = parseFloat(getComputedStyle(value).fontSize) || 0;
+          if (Math.abs(markBox.width - markBox.height) > 0.5) {
+            out.markGeometryFailures.push(`not square ${Math.round(markBox.width * 10) / 10}x${Math.round(markBox.height * 10) / 10}`);
+          }
+          if (fontSize > 0) {
+            const ratio = markBox.width / fontSize;
+            if (ratio < 0.95 || ratio > 1.12) {
+              out.markGeometryFailures.push(`size ${Math.round(ratio * 100) / 100}x font`);
+            }
+          }
+          if (
+            markBox.left < valueBox.left - 0.5
+            || markBox.right > valueBox.right + 0.5
+            || markBox.top < valueBox.top - 0.5
+            || markBox.bottom > valueBox.bottom + 0.5
+          ) {
+            out.markGeometryFailures.push("outside its value box");
+          }
+          const markCenter = (markBox.top + markBox.bottom) / 2;
+          const valueCenter = (valueBox.top + valueBox.bottom) / 2;
+          if (Math.abs(markCenter - valueCenter) > 1) {
+            out.markGeometryFailures.push(`vertical centre ${Math.round(Math.abs(markCenter - valueCenter) * 10) / 10}px off`);
+          }
+          const inkNode = svg.querySelector(".bob-day-strip-mark-rim, .bob-day-strip-mark-ring");
+          if (inkNode) {
+            out.markInk = getComputedStyle(inkNode).stroke;
+            out.markState = value.getAttribute("data-mark");
+            out.markMutedMatch = Boolean(mutedColor) && Boolean(out.markInk) && out.markInk === mutedColor;
+          }
+        }
+      } catch (error) {
+        // Mark measurement never breaks the matrix.
+      }
+      return out;
     }
 
     // (n) the values lead: each value is at least 2x its head; (o) every

@@ -2,6 +2,10 @@
 // stable; each update replaces only its children from the current model.
 // Interactive targets are spans with role="link": Obsidian's global
 // button rules must never be able to resize the strip again.
+// Last ready-paint marks per host, so a pending→met flip on the same
+// day can draw the check in once. Skeleton and non-ready paints never
+// write it.
+const dayStripMarkMemory = new WeakMap();
 function dayStripLink(doc, className, label, title) {
   return statsEl(doc, "span", {
     class: className,
@@ -86,7 +90,80 @@ function dayStripValueRuns(display) {
   return runs;
 }
 
-function dayStripRenderFact(doc, fact, model, handlers) {
+function dayStripRenderMark(doc, state) {
+  const svg = statsSvgEl(doc, "svg", {
+    class: "bob-day-strip-mark",
+    viewBox: "0 0 16 16",
+    "aria-hidden": "true",
+    focusable: "false",
+  });
+  if (!svg) return null;
+  dayStripAppend(svg, statsSvgEl(doc, "circle", {
+    class: "bob-day-strip-mark-disc",
+    cx: "8",
+    cy: "8",
+    r: "7.1",
+  }));
+  if (state === "pending") {
+    dayStripAppend(svg, statsSvgEl(doc, "circle", {
+      class: "bob-day-strip-mark-ring",
+      cx: "8",
+      cy: "8",
+      r: "6.05",
+      fill: "none",
+    }));
+    dayStripAppend(svg, statsSvgEl(doc, "path", {
+      class: "bob-day-strip-mark-half",
+      d: "M8 4.1A3.9 3.9 0 0 1 8 11.9Z",
+    }));
+  } else {
+    dayStripAppend(svg, statsSvgEl(doc, "circle", {
+      class: "bob-day-strip-mark-rim",
+      cx: "8",
+      cy: "8",
+      r: "6.6",
+      fill: "none",
+    }));
+    dayStripAppend(svg, statsSvgEl(doc, "path", {
+      class: "bob-day-strip-mark-glyph",
+      d: state === "met" ? "M4.75 8.35l2.1 2.1 4.4-4.65" : "M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8",
+      fill: "none",
+      pathLength: "1",
+    }));
+  }
+  return svg;
+}
+
+function dayStripArriveIds(el, model) {
+  const arriving = Object.create(null);
+  if (!el || !model || model.state !== "ready" || model.stale) return arriving;
+  let prev = null;
+  try {
+    prev = dayStripMarkMemory.get(el);
+  } catch (error) {
+    return arriving;
+  }
+  if (!prev || prev.day !== model.day || !prev.marks) return arriving;
+  for (const fact of model.facts || []) {
+    if (fact && fact.mark === "met" && prev.marks[fact.id] === "pending") arriving[fact.id] = true;
+  }
+  return arriving;
+}
+
+function dayStripRememberMarks(el, model) {
+  if (!el || !model || model.state !== "ready") return;
+  const marks = Object.create(null);
+  for (const fact of model.facts || []) {
+    if (fact && fact.id) marks[fact.id] = fact.mark || null;
+  }
+  try {
+    dayStripMarkMemory.set(el, { day: model.day, marks });
+  } catch (error) {
+    // Host memory is best-effort.
+  }
+}
+
+function dayStripRenderFact(doc, fact, model, handlers, arrive) {
   const skeleton = model.state === "skeleton";
   const node = dayStripLink(
     doc,
@@ -106,14 +183,28 @@ function dayStripRenderFact(doc, fact, model, handlers) {
   }
   dayStripAppend(node, head);
   const runs = dayStripValueRuns(fact.display);
-  const isWord = runs.length === 1 && runs[0].kind === "word";
+  const markNode = fact.mark ? dayStripRenderMark(doc, fact.mark) : null;
+  const skeletonMark = skeleton && fact.unit === "bool";
+  const isWord = !markNode && !skeletonMark && runs.length === 1 && runs[0].kind === "word";
   const isEmpty = fact.display === "–" && !skeleton;
   const value = statsEl(doc, "span", {
-    class: "bob-day-strip-value" + (isEmpty ? " bob-day-strip-value-empty" : isWord ? " bob-day-strip-value-word" : "") + (skeleton ? " bob-day-strip-value-skeleton" : ""),
+    class: "bob-day-strip-value"
+      + (isEmpty ? " bob-day-strip-value-empty" : isWord ? " bob-day-strip-value-word" : "")
+      + (skeleton ? " bob-day-strip-value-skeleton" : "")
+      + (markNode || skeletonMark ? " bob-day-strip-value-mark" : "")
+      + (markNode && arrive ? " bob-day-strip-mark-arrive" : ""),
     title: fact.quality === "not_tracked" && fact.since ? "Tracking since " + fact.since : null,
   });
-  for (const run of runs) {
-    dayStripAppend(value, statsEl(doc, "span", { class: "bob-day-strip-" + run.kind }, run.text));
+  if (markNode) {
+    if (value && value.setAttribute) value.setAttribute("data-mark", fact.mark);
+    dayStripAppend(value, markNode);
+    dayStripAppend(value, statsEl(doc, "span", { class: "bob-day-strip-mark-text" }, fact.display));
+  } else if (skeletonMark) {
+    dayStripAppend(value, statsEl(doc, "span", { class: "bob-day-strip-mark-skeleton" }));
+  } else {
+    for (const run of runs) {
+      dayStripAppend(value, statsEl(doc, "span", { class: "bob-day-strip-" + run.kind }, run.text));
+    }
   }
   dayStripAppend(node, value);
   dayStripActivate(node, (newLeaf) => {
@@ -259,6 +350,7 @@ function paintDayStrip(el, model, handlers) {
   const doc = statsDocFor(el);
   if (!doc) return el;
   try {
+    const arriveIds = dayStripArriveIds(el, safeModel);
     if (typeof el.replaceChildren === "function") el.replaceChildren();
     else if (Array.isArray(el.children)) {
       for (const child of el.children) child.parentNode = null;
@@ -287,7 +379,9 @@ function paintDayStrip(el, model, handlers) {
     }
 
     const facts = statsEl(doc, "div", { class: "bob-day-strip-facts" });
-    for (const fact of safeModel.facts || []) dayStripAppend(facts, dayStripRenderFact(doc, fact, safeModel, safeHandlers));
+    for (const fact of safeModel.facts || []) {
+      dayStripAppend(facts, dayStripRenderFact(doc, fact, safeModel, safeHandlers, Boolean(arriveIds[fact.id])));
+    }
     dayStripAppend(el, facts);
     const mixRow = dayStripRenderMixRow(doc, safeModel, safeHandlers);
     if (mixRow) dayStripAppend(el, mixRow);
@@ -317,6 +411,7 @@ function paintDayStrip(el, model, handlers) {
         // Observer is best-effort.
       }
     }
+    dayStripRememberMarks(el, safeModel);
     return el;
   } catch (error) {
     // A failed paint must not escape into Obsidian's render lifecycle.

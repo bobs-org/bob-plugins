@@ -99,6 +99,21 @@ function dayStripMetricPoints(metric, report) {
   }
 }
 
+// Choose the Day strip boolean mark from bob's point, never from the
+// English display word. Mirrors `bool_mark` in bob-cli stats render:
+// provisional zero is "not yet", then missing/not_tracked/non-finite
+// have no mark, then value > 0 is met and every other finite value is
+// missed.
+function dayStripMarkState(unit, point) {
+  if (unit !== "bool") return null;
+  if (!point || typeof point !== "object") return null;
+  if (point.provisional === true && point.value === 0) return "pending";
+  const quality = typeof point.quality === "string" ? point.quality : "missing";
+  if (quality === "missing" || quality === "not_tracked") return null;
+  if (typeof point.value !== "number" || !Number.isFinite(point.value)) return null;
+  return point.value > 0 ? "met" : "missed";
+}
+
 function dayStripBuildFact(metric, report, day, dateWords) {
   const points = dayStripMetricPoints(metric, report);
   const point = points.find((candidate) => candidate && candidate.date === day) || null;
@@ -115,9 +130,11 @@ function dayStripBuildFact(metric, report, day, dateWords) {
   const display = point && typeof point.display === "string" ? point.display : "–";
   const label = metric && typeof metric.label === "string" && metric.label ? metric.label : DAY_STRIP_LABELS[metric && metric.id] || String(metric && metric.id || "Metric");
   const metricId = String(metric && metric.id || "");
+  const mark = dayStripMarkState(unit, point);
+  const soFar = point && point.provisional && mark !== "pending" ? " so far" : "";
   const tooltip = [
     metric && typeof metric.definition === "string" ? metric.definition : "",
-    dateWords.short + ": " + display + (point && point.provisional ? " so far" : ""),
+    dateWords.short + ": " + display + soFar,
     quality === "not_tracked" && metric && metric.since ? "Tracking since " + metric.since : "",
     point && typeof point.reason === "string" && point.reason ? point.reason : "",
     ...warnings,
@@ -133,6 +150,7 @@ function dayStripBuildFact(metric, report, day, dateWords) {
     definition: metric && typeof metric.definition === "string" ? metric.definition : "",
     tooltip,
     unit,
+    mark,
     value: point && typeof point.value === "number" ? point.value : null,
     provisional: Boolean(point && point.provisional === true),
   };
@@ -318,6 +336,7 @@ function dayStripModel(report, day, context) {
         definition: "",
         tooltip: "",
         unit: id === "review_closed" ? "bool" : "",
+        mark: null,
         value: null,
         provisional: false,
       }));

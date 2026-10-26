@@ -332,6 +332,57 @@ function checkMeasurement(item, context) {
       failures.push(`empty bar shows no track colour`);
     }
   }
+  // (r) Geometry: every status mark is square, sized to the value font,
+  // inside its value box, and vertically centred on it.
+  if (Array.isArray(item.markGeometryFailures)) {
+    for (const failure of item.markGeometryFailures) failures.push(`mark geometry: ${failure}`);
+  }
+  return failures;
+}
+
+function parseRgb(value) {
+  const text = String(value || "").trim();
+  let match = text.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i);
+  if (match) return [Number(match[1]), Number(match[2]), Number(match[3])];
+  match = text.match(/rgba?\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)/i);
+  if (match) return [Number(match[1]), Number(match[2]), Number(match[3])];
+  match = text.match(/color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/i);
+  if (match) return [Number(match[1]) * 255, Number(match[2]) * 255, Number(match[3]) * 255];
+  return null;
+}
+
+function rgbKey(value) {
+  const rgb = parseRgb(value);
+  return rgb ? rgb.map((n) => Math.round(n)).join(",") : String(value || "");
+}
+
+function isGrayRgb(value) {
+  const rgb = parseRgb(value);
+  if (!rgb) return true;
+  return Math.max(...rgb) - Math.min(...rgb) < 16;
+}
+
+function checkMarkInks(measurements) {
+  const failures = [];
+  const byId = Object.fromEntries(measurements.map((item) => [item.state, item]));
+  const ready = [
+    ["met", byId.met],
+    ["missed", byId.past],
+    ["pending", byId.today],
+  ];
+  const missing = ready.filter(([, item]) => !item || !item.markInk);
+  if (missing.length) {
+    failures.push(`ready mark inks missing for ${missing.map(([name]) => name).join(", ")}`);
+  } else {
+    const keys = ready.map(([, item]) => rgbKey(item.markInk));
+    if (new Set(keys).size !== 3) failures.push(`ready mark inks are not three distinct colours (${keys.join("; ")})`);
+    for (const [name, item] of ready) {
+      if (isGrayRgb(item.markInk)) failures.push(`${name} mark ink is gray (${item.markInk})`);
+    }
+  }
+  if (byId.stale && byId.stale.markInk && byId.stale.markMutedMatch !== true) {
+    failures.push(`stale mark ink is not muted (${byId.stale.markInk})`);
+  }
   return failures;
 }
 
@@ -347,7 +398,7 @@ function matrixMarkdown(matrix, browser, revision, interactionChecks) {
     "- An Obsidian baseline stylesheet (30 px inline-flex buttons, link colours, rendered line-height) loads before the production CSS, so a `<button>` regression fails the matrix.",
     "- Grid: light and dark themes × 410, 540, and 700 px note columns × 18 states plus Reading view.",
     "- Height budgets (16 px base): ≤84 px when the facts fit on one row, ≤136 px when they fold to two rows. The long-labels case is relaxed: geometry is enforced, height is reported.",
-    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) the bar spans the strip's content width (±1 px) and is its last line box; (k) no legend label is truncated and no legend item spills past its box; (l) at every width every visible legend item lies inside the legend box and the visible counter equals segments minus visible items, with screenshotDay showing all four roots at 540 and 700 px and at least three at 410 px; (m) ready cells with ≤8 non-gray segments carry pairwise distinct bar hues and matching legend dots; (n) ready and stale values render at least 2× their heads; (o) every fact aria-label ends with its value text and no value holds a warning; (p) folded rows start without a hairline at 410 px while wider rows draw every hairline; (q) the no-Pomodoros bar shows its track colour.",
+    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) the bar spans the strip's content width (±1 px) and is its last line box; (k) no legend label is truncated and no legend item spills past its box; (l) at every width every visible legend item lies inside the legend box and the visible counter equals segments minus visible items, with screenshotDay showing all four roots at 540 and 700 px and at least three at 410 px; (m) ready cells with ≤8 non-gray segments carry pairwise distinct bar hues and matching legend dots; (n) ready and stale values render at least 2× their heads; (o) every fact aria-label ends with its value text and no value holds a warning; (p) folded rows start without a hairline at 410 px while wider rows draw every hairline; (q) the no-Pomodoros bar shows its track colour; (r) every `.bob-day-strip-mark` is square within ±0.5 px, measures 0.95–1.12× its value's computed font size, lies inside its value box, and has its vertical centre within 1 px of the value box centre; (s) in ready cells the met, missed, and pending marks compute three distinct non-gray rim/ring colours, and in stale cells the mark ink computes to the muted text colour.",
     "",
     "| Width | Theme | State | Strip height | Budget | Fact rows | Overflow | Facts overlap | Lines overlap | Legend overlap | Value baseline spread | Skeleton delta | Button | Result | Screenshot |",
     "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
@@ -420,6 +471,15 @@ async function main() {
             failures,
           };
         });
+        const inkFailures = checkMarkInks(measurements);
+        if (inkFailures.length) {
+          for (const item of measurements) {
+            if (item.state === "today" || item.state === "past" || item.state === "met" || item.state === "stale") {
+              item.failures.push(...inkFailures);
+              item.result = "FAIL";
+            }
+          }
+        }
 
         // (h) Forced hover must never shift the fact's box; forced
         // :focus-visible must show an outline on the focused fact.

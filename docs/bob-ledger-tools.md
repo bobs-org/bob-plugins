@@ -138,7 +138,9 @@ It shows that note's own day as a row of stacked stats (a small uppercase
 label over a large value), followed by the root-parent legend with
 `so far · HH:MM` and the full-width root-parent bar that separates it from
 the badges — and paints from bob's Stats report; it
-never changes the note and never writes the vault. The bar groups working time
+never changes the note and never writes the vault. Review closed shows a
+green check, a red ✕, or the yellow In Progress half-ring while today's
+review is still open. The bar groups working time
 by root parent (falling back to areas with an honest "Time by area" label when
 bob predates `root_parent`). The legend fits as many roots as the line holds.
 Daily notes without a `bob-plan` block show no strip. To place one explicitly,

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bob Command Mode feedback preview</title>
+<style>
+__OBSIDIAN_BASELINE_CSS__
+body[data-theme="light"] {
+  --background-primary:#fcfcfd; --background-secondary:#f0f1f4; --background-modifier-border:#d7d9df;
+  --background-modifier-hover:#e5e7ec; --text-normal:#252832; --text-muted:#727783;
+  --text-accent:#624bb8; --interactive-accent:#7457ce; --interactive-normal:#f4f4f6;
+  --color-green:#27865e; --color-orange:#b87918; --color-red:#c44950; --shadow-l:0 12px 32px #20263a22;
+  color-scheme:light;
+}
+body[data-theme="dark"] {
+  --background-primary:#202226; --background-secondary:#292c32; --background-modifier-border:#41454d;
+  --background-modifier-hover:#383c44; --text-normal:#e4e5e9; --text-muted:#a3a7b0;
+  --text-accent:#b6a0ff; --interactive-accent:#a78bf2; --interactive-normal:#30333a;
+  --color-green:#73c99d; --color-orange:#e8b55e; --color-red:#ee797e; --shadow-l:0 12px 32px #0008;
+  color-scheme:dark;
+}
+body { margin:0; padding:28px; background:var(--background-secondary); color:var(--text-normal); font:14px var(--font-interface); }
+.preview-shell { max-width:940px; margin:0 auto; padding:22px; border:1px solid var(--background-modifier-border); border-radius:14px; background:var(--background-primary); box-shadow:var(--shadow-l); }
+.preview-heading { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:18px; }
+.preview-heading h1 { margin:0; font-size:18px; font-weight:650; }
+.preview-heading span { color:var(--text-muted); font-size:12px; }
+.preview-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; align-items:start; }
+.preview-case { min-width:0; padding:10px; border:1px solid var(--background-modifier-border); border-radius:10px; background:var(--background-secondary); }
+.preview-case h2 { margin:0 0 9px; color:var(--text-muted); font-size:10px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; }
+.preview-card { max-width:100%; }
+.preview-chips { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:22px; }
+.preview-chip-case { min-width:0; padding:11px; border:1px solid var(--background-modifier-border); border-radius:9px; background:var(--background-secondary); }
+.preview-chip-case h2 { margin:0 0 11px; color:var(--text-muted); font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
+.preview-chip-case .bob-cmd-chip { display:inline-flex; max-width:100%; }
+.stderr-note { margin:5px 0 0 26px; color:var(--text-muted); font:11px/1.4 var(--font-monospace); }
+@media (max-width:740px) { body{padding:14px}.preview-grid{grid-template-columns:1fr}.preview-chips{grid-template-columns:1fr} }
+__PRODUCTION_CSS__
+</style>
+</head>
+<body data-theme="light">
+<main class="preview-shell">
+  <header class="preview-heading"><h1>Bob Command Mode</h1><span>Toast and status feedback</span></header>
+  <section class="preview-grid" id="cards"></section>
+  <section class="preview-chips" id="chips"></section>
+</main>
+<script>
+__UTILITY_SOURCE__
+__TOAST_SOURCE__
+__CHIP_SOURCE__
+window.commandModePreview = {
+  render(theme) {
+    document.body.dataset.theme = theme;
+    const cards = document.getElementById("cards");
+    const chips = document.getElementById("chips");
+    cards.replaceChildren();
+    chips.replaceChildren();
+    const cases = [
+      { title:"Completed", outcome:"completed", runId:"done", record:{ id:"done", title:"Deploy plugins", argv:["/opt/homebrew/bin/bob","plugins","sync"], duration_ms:4312, summary:"Deployed 2: bob-ledger-tools, bob-command-mode", entry_id:"plugins-sync" } },
+      { title:"Needs attention", outcome:"attention", runId:"attention", actions:[{id:"run",label:"Scan intake"}], record:{ id:"attention", title:"Scan Highlights library", argv:["/usr/local/bin/bob","ref","scan"], duration_ms:18421, summary:"3 PDF writes held", entry_id:"ref-scan" } },
+      { title:"Failed · stderr", outcome:"failed", runId:"failed", reason:"Commit pending edits first", record:{ id:"failed", title:"Sync vault now", argv:["/usr/local/bin/bob","vault-sync","run"], duration_ms:1201, summary:"error: working tree has dirty paths", entry_id:"vault-sync" } },
+      { title:"Unknown", outcome:"unknown", runId:"unknown", record:{ id:"unknown", title:"Create reference", argv:["/usr/local/bin/bob","ref","create","https://example.com/paper"], duration_ms:90001, summary:"Unknown — log preserved", entry_id:"ref-create" } },
+      { title:"Stopped", outcome:"stopped", runId:"stopped", record:{ id:"stopped", title:"Plan budget", argv:["/usr/local/bin/bob","plan","budget"], duration_ms:2800, summary:"Stopped", entry_id:"plan-budget" } },
+    ];
+    for (const item of cases) {
+      const section = document.createElement("article");
+      section.className = "preview-case";
+      const heading = document.createElement("h2");
+      heading.textContent = item.title;
+      section.appendChild(heading);
+      const fragment = cmCreateToastFragment(item, () => {}, () => {});
+      section.appendChild(fragment);
+      if (item.outcome === "failed") {
+        const stderr = document.createElement("div");
+        stderr.className = "stderr-note";
+        stderr.textContent = "stderr · error: working tree has dirty paths";
+        section.appendChild(stderr);
+      }
+      cards.appendChild(section);
+    }
+    const base = Date.parse("2026-10-26T15:00:00.000Z");
+    const chipCases = [
+      { label:"One run", records:[{id:"one",title:"ref create",outcome:"running",effect:"writes",budget_secs:180,started_at:new Date(base-42000).toISOString(),argv:["/usr/local/bin/bob","ref","create","paper.pdf"]}] },
+      { label:"Two runs", records:[{id:"two-a",title:"Scan",outcome:"running",effect:"writes",budget_secs:180,started_at:new Date(base-65000).toISOString(),argv:["/usr/local/bin/bob","ref","scan"]},{id:"two-b",title:"Plan",outcome:"running",effect:"reads",budget_secs:60,started_at:new Date(base-12000).toISOString(),argv:["/usr/local/bin/bob","plan"]}] },
+      { label:"Overdue writer", records:[{id:"late",title:"Sync vault",outcome:"running",effect:"writes",budget_secs:180,started_at:new Date(base-181000).toISOString(),argv:["/usr/local/bin/bob","vault-sync","run"]}] },
+    ];
+    for (const item of chipCases) {
+      const section = document.createElement("article");
+      section.className = "preview-chip-case";
+      const heading = document.createElement("h2");
+      heading.textContent = item.label;
+      const chip = document.createElement("span");
+      chip.className = "bob-cmd-chip";
+      section.append(heading, chip);
+      cmRenderStatusChip(chip, item.records, base, () => {}, () => "pulling updates");
+      chips.appendChild(section);
+    }
+  },
+};
+window.commandModePreview.render("light");
+window.commandModePreviewReady = true;
+</script>
+</body>
+</html>

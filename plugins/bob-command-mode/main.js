@@ -808,6 +808,8 @@ class CommandModeRunner {
       nowMs: this.deps.nowMs(),
     });
     const isReads = effect === "reads";
+    const budgetSecs = Number((entry && entry.budget_secs) || (isReads ? 60 : 180)) || 60;
+    record.budget_secs = budgetSecs;
     if (!isReads) {
       const saved = await this.deps.saveAllMarkdown();
       if (!saved || !saved.ok) {
@@ -825,7 +827,7 @@ class CommandModeRunner {
     const spec = {
       record, entry, resolution, features, vaultBase, usePreview,
       argvKey: JSON.stringify({ argv: finalArgv, preview: usePreview }),
-      budgetSecs: Number((entry && entry.budget_secs) || (isReads ? 60 : 180)) || 60,
+      budgetSecs,
       settled, settleResolve,
     };
     if (isReads) {
@@ -1187,6 +1189,8 @@ class CommandModeRunner {
       stderrText: "",
       exitHints: (spec.entry && spec.entry.exit_codes) || [],
       adapterId: spec.entry && spec.entry.adapter,
+      run: spec.record,
+      budgetSecs: spec.budgetSecs,
     });
     this.finishWithClassification(spec, kind, state, {
       exit_code: null, signal: null, outcome: classification.outcome, summary: classification.summary,
@@ -1248,6 +1252,8 @@ class CommandModeRunner {
       stderrText: state.stderr,
       exitHints: (spec.entry && spec.entry.exit_codes) || [],
       adapterId: spec.entry && spec.entry.adapter,
+      run: record,
+      budgetSecs: spec.budgetSecs,
     });
     const finished = {
       exit_code: exitCode, signal, outcome: classification.outcome, summary: classification.summary,
@@ -1272,6 +1278,9 @@ class CommandModeRunner {
     record.signal = result.signal;
     record.outcome = result.outcome;
     record.summary = result.summary;
+    if (result.retry) record.retry = true;
+    if (result.carry !== undefined) record.carry = result.carry;
+    if (Array.isArray(result.actions)) record.actions = result.actions;
     if (state) {
       if (state.stdoutDecoder || state.stderrDecoder || state.stdout || state.stderr) {
         record.summary = result.summary;
@@ -1455,6 +1464,8 @@ class CommandModeRunner {
         stderrText: cmStripTailForClassification(stderrText),
         exitHints: (entry && entry.exit_codes) || [],
         adapterId: entry && entry.adapter,
+        run: record,
+        budgetSecs: (entry && entry.budget_secs) || (record.effect === "reads" ? 60 : 180),
       });
     const finished = cmReadJsonFile(fsModule, paths.json) || record;
     finished.finished_at = finished.finished_at || cmIsoNow(this.deps.nowMs());
@@ -1469,6 +1480,9 @@ class CommandModeRunner {
     finished.signal = result.signal;
     finished.outcome = classification.outcome;
     finished.summary = classification.summary;
+    if (classification.retry) finished.retry = true;
+    if (classification.carry !== undefined) finished.carry = classification.carry;
+    if (Array.isArray(classification.actions)) finished.actions = classification.actions;
     try {
       cmWriteRecord(fsModule, this.runsDir(), finished);
     } catch (error) {
@@ -1485,7 +1499,16 @@ class CommandModeRunner {
     // A run that failed while Obsidian was closed gets one summary notice.
     if (classification.outcome === "failed" || classification.outcome === "unknown") {
       try {
-        this.deps.notify({ ...settlement, entryId: finished.entry_id, effect: finished.effect, invalidates: this.entryInvalidates(entry) });
+        this.deps.notify({
+          ...settlement,
+          record: { ...finished },
+          entryId: finished.entry_id,
+          effect: finished.effect,
+          invalidates: this.entryInvalidates(entry),
+          ...(classification.retry ? { retry: true } : {}),
+          ...(classification.carry !== undefined ? { carry: classification.carry } : {}),
+          ...(Array.isArray(classification.actions) ? { actions: classification.actions } : {}),
+        });
       } catch (error) {
         // Notification must never break adoption.
       }
@@ -1508,6 +1531,12 @@ class CommandModeRunner {
   newestRecord() {
     const records = cmListRecords(this.fs(), this.runsDir());
     return records.length > 0 ? records[records.length - 1] : null;
+  }
+
+  activeRecords() {
+    return [...this.live.values()]
+      .map((live) => live && live.record)
+      .filter((record) => record && (record.outcome === "queued" || record.outcome === "running"));
   }
 
   dispose() {
@@ -1553,14 +1582,17 @@ function cmOutcomeAdapter(adapterId) {
 }
 
 function cmAdapterText(stdoutText, stderrText) {
+  const stdout = cmStripAnsi(stdoutText);
+  const stderr = cmStripAnsi(stderrText);
   const out = cmLastMeaningfulLine(stdoutText);
   const err = cmFirstMeaningfulLine(stderrText);
-  return { out, err };
+  return { out, err, stdout, stderr };
 }
 
 // Classify a finished run. Input: {exitCode, signal, timedOut, stoppedByUser,
 // spawnError, spawnNotFound, spawnMessage, triedPaths, stdoutText, stderrText,
-// exitHints, adapterId, adapterScope}. Returns {outcome, summary, retry?}.
+// exitHints, adapterId, run, adapterScope}. Returns {outcome, summary,
+// retry?, actions?, carry?}.
 function cmClassifyRun(input = {}) {
   if (input.stoppedByUser) {
     return { outcome: "stopped", summary: "Stopped" };
@@ -1591,18 +1623,14 @@ function cmClassifyRun(input = {}) {
     }
     return { outcome: "failed", summary: "Another bob maintenance run holds the lock", retry: true };
   }
-  if (Array.isArray(input.exitHints)) {
-    for (const hint of input.exitHints) {
-      if (hint && hint.code === input.exitCode && (hint.outcome === "completed" || hint.outcome === "attention" || hint.outcome === "failed")) {
-        return { outcome: hint.outcome, summary: String(hint.meaning || ("Exit " + hint.code)) };
-      }
-    }
-  }
   const adapter = cmOutcomeAdapter(input.adapterId);
+  let adapterExtras = {};
   if (adapter) {
     let adjusted = null;
     try {
-      adjusted = adapter({ ...cmAdapterText(stdoutText, stderrText), exitCode: input.exitCode }, input.adapterScope || {});
+      const text = cmAdapterText(stdoutText, stderrText);
+      const run = { ...(input.run || {}), ...text, exitCode: input.exitCode };
+      adjusted = adapter(run, text, input.adapterScope || {});
     } catch (error) {
       adjusted = null;
     }
@@ -1615,16 +1643,26 @@ function cmClassifyRun(input = {}) {
         if (Array.isArray(adjusted.actions)) result.actions = adjusted.actions;
         return result;
       }
+      if (adjusted.retry) adapterExtras.retry = true;
+      if (adjusted.carry !== undefined) adapterExtras.carry = adjusted.carry;
+      if (Array.isArray(adjusted.actions)) adapterExtras.actions = adjusted.actions;
+    }
+  }
+  if (Array.isArray(input.exitHints)) {
+    for (const hint of input.exitHints) {
+      if (hint && hint.code === input.exitCode && (hint.outcome === "completed" || hint.outcome === "attention" || hint.outcome === "failed")) {
+        return { outcome: hint.outcome, summary: String(hint.meaning || ("Exit " + hint.code)), ...adapterExtras };
+      }
     }
   }
   if (input.exitCode === 0) {
-    return { outcome: "completed", summary: cmLastMeaningfulLine(stdoutText) || "Done" };
+    return { outcome: "completed", summary: cmLastMeaningfulLine(stdoutText) || "Done", ...adapterExtras };
   }
   const errorLine = cmFirstErrorLine(stderrText);
-  if (errorLine) return { outcome: "failed", summary: errorLine };
+  if (errorLine) return { outcome: "failed", summary: errorLine, ...adapterExtras };
   const firstErr = cmFirstMeaningfulLine(stderrText);
-  if (firstErr) return { outcome: "failed", summary: firstErr };
-  return { outcome: "failed", summary: cmLastMeaningfulLine(stdoutText) || "Failed" };
+  if (firstErr) return { outcome: "failed", summary: firstErr, ...adapterExtras };
+  return { outcome: "failed", summary: cmLastMeaningfulLine(stdoutText) || "Failed", ...adapterExtras };
 }
 // ---- src/080-api.js ----
 // Bob Command Mode: api.commandMode v1 for other plugins.
@@ -1739,6 +1777,7 @@ class BobCommandModePlugin extends Plugin {
     this.commandModeFingerprint = (stored.catalogCache && stored.catalogCache.fingerprint) || null;
     this.commandModeState = this.commandModeCatalog ? "ready" : "empty";
     this.commandModeMissingBob = null;
+    this.commandModeStickyNotices = new Map();
     this.commandModeRunner = new CommandModeRunner({
       resolveBob: () => this.commandModeResolveBob(),
       vaultBase: () => cmVaultBasePath(this.app),
@@ -1756,9 +1795,15 @@ class BobCommandModePlugin extends Plugin {
       openOutput: (runId) => this.commandModeOpenOutput(runId),
     }));
     this.addSettingTab(new BobCommandModeSettingTab(this.app, this));
+    this.addCommand({
+      id: "rerun-last",
+      name: "Bob: Rerun last command",
+      callback: () => this.commandModeRerun(this.commandModeRunner && this.commandModeRunner.newestRecord()),
+    });
     // Register from the persisted catalog first so Ctrl+P works before the
     // background refresh finishes; refresh then re-registers the same ids.
     this.commandModeSyncRunCommands();
+    this.commandModeStartStatusChip();
     void this.commandModeRefreshCatalog("load");
     this.commandModeRunner.adoptUnfinished();
   }
@@ -1767,6 +1812,13 @@ class BobCommandModePlugin extends Plugin {
     // Writers are detached and keep running; their records are adopted on the
     // next load. Never kill a writer from unload.
     if (this.commandModeRunner) this.commandModeRunner.dispose();
+    if (this.commandModeStatusTimer) clearInterval(this.commandModeStatusTimer);
+    this.commandModeStatusTimer = null;
+    for (const notice of this.commandModeStickyNotices.values()) {
+      try { if (notice && typeof notice.hide === "function") notice.hide(); }
+      catch (error) { /* Best effort during unload. */ }
+    }
+    if (this.commandModeStickyNotices) this.commandModeStickyNotices.clear();
     this.commandModeRunner = null;
     this.api = null;
   }
@@ -1876,6 +1928,64 @@ class BobCommandModePlugin extends Plugin {
     }
   }
 
+  commandModeStartStatusChip() {
+    if (typeof this.addStatusBarItem !== "function") return;
+    try {
+      this.commandModeStatusEl = this.addStatusBarItem();
+      if (!this.commandModeStatusEl) return;
+      this.commandModeStatusEl.addClass("bob-cmd-chip");
+      this.commandModeStatusEl.style.display = "none";
+      this.commandModeStatusEl.addEventListener("keydown", (event) => {
+        if (event && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          const active = this.commandModeRunner && this.commandModeRunner.activeRecords();
+          const newest = active && active[active.length - 1];
+          if (newest) void this.commandModeOpenOutput(newest.id);
+        }
+      });
+      this.commandModeRefreshStatusChip();
+      this.commandModeStatusTimer = setInterval(() => this.commandModeRefreshStatusChip(), 250);
+      if (this.commandModeStatusTimer && typeof this.commandModeStatusTimer.unref === "function") this.commandModeStatusTimer.unref();
+    } catch (error) {
+      this.commandModeStatusEl = null;
+    }
+  }
+
+  commandModeRefreshStatusChip(nowMs = Date.now()) {
+    const runner = this.commandModeRunner;
+    if (!runner || !this.commandModeStatusEl) return { visible: false, runs: 0 };
+    return cmRenderStatusChip(
+      this.commandModeStatusEl,
+      runner.activeRecords(),
+      nowMs,
+      (runId) => this.commandModeOpenOutput(runId),
+      (runId) => this.commandModeProgressText(runId),
+    );
+  }
+
+  commandModeProgressText(runId) {
+    const runner = this.commandModeRunner;
+    if (!runner) return "";
+    let fd = null;
+    try {
+      const file = cmRunFilePaths(runner.runsDir(), String(runId || ""), runner.pathModule()).out;
+      const fsModule = runner.fs();
+      const size = fsModule.statSync(file).size;
+      const length = Math.min(8192, size);
+      const bytes = Buffer.alloc(length);
+      fd = fsModule.openSync(file, "r");
+      fsModule.readSync(fd, bytes, 0, length, Math.max(0, size - length));
+      const lines = cmStripAnsi(bytes.toString("utf8")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      return lines[lines.length - 1] || "";
+    } catch (error) {
+      return "";
+    } finally {
+      if (fd !== null) {
+        try { runner.fs().closeSync(fd); } catch (error) { /* Best effort. */ }
+      }
+    }
+  }
+
   async commandModeSaveAllMarkdown() {
     const workspace = this.app && this.app.workspace;
     if (!workspace || typeof workspace.iterateAllLeaves !== "function") return { ok: true };
@@ -1900,13 +2010,165 @@ class BobCommandModePlugin extends Plugin {
 
   commandModeNotify(outcome) {
     try {
-      const summary = outcome && outcome.reason
-        ? outcome.reason
-        : (outcome && outcome.outcome ? String(outcome.outcome) : "Done");
-      new Notice(summary);
+      const notice = { ...(outcome || {}) };
+      const record = cmToastRun(notice);
+      const source = [notice.reason, record.summary].filter(Boolean).join("\n");
+      const actions = Array.isArray(notice.actions) ? [...notice.actions] : [];
+      if (/bob not found/i.test(source) && !actions.some((action) => action.id === "open-settings")) {
+        actions.push({ id: "open-settings", label: "Open settings" });
+      }
+      if (/(?:dirty.*paths?|paths?.*dirty|uncommitted\s+(?:edits|changes)|working tree.*dirty)/i.test(source)) {
+        notice.reason = "Commit pending edits first";
+        notice.actions = [...actions, { id: "sync-vault-retry", label: "Sync vault, then retry" }];
+      } else {
+        notice.actions = actions;
+      }
+      if (record.entry_id === "projects-sync" && notice.outcome === "completed") {
+        notice.actions.push({ id: "run", label: "Reconcile tasks", entryId: "task-reconcile", argv: ["task", "reconcile"] });
+      }
+      const sticky = notice.outcome === "failed" || notice.outcome === "unknown";
+      const stickyKey = String(record.entry_id || notice.entryId || notice.runId || "bob");
+      if (sticky && this.commandModeStickyNotices) {
+        const previous = this.commandModeStickyNotices.get(stickyKey);
+        try { if (previous && typeof previous.hide === "function") previous.hide(); }
+        catch (error) { /* A prior notice may already be closed. */ }
+      }
+      const fragment = cmCreateToastFragment(
+        notice,
+        (action, card) => this.commandModeRunToastAction(action, card),
+        (runId) => this.commandModeOpenOutput(runId),
+      );
+      if (!fragment) {
+        new Notice(cmToastSummary(notice), cmToastDuration(notice));
+        return null;
+      }
+      const card = new Notice(fragment, cmToastDuration(notice));
+      if (sticky && this.commandModeStickyNotices) this.commandModeStickyNotices.set(stickyKey, card);
+      this.commandModeMaybeNotifyOS(notice);
+      return card;
     } catch (error) {
       // Headless or unloaded: the record already carries the truth.
+      return null;
     }
+  }
+
+  commandModeMaybeNotifyOS(outcome) {
+    const record = cmToastRun(outcome);
+    if (this.settings.osNotifications === false || Number(record.duration_ms) <= 15000) return false;
+    try {
+      if (typeof document !== "undefined" && typeof document.hasFocus === "function" && document.hasFocus()) return false;
+      if (typeof Notification !== "function") return false;
+      const title = cmToastTitle(outcome) + " · " + String(outcome.outcome || "completed");
+      const notification = new Notification(title, { body: cmToastSummary(outcome) });
+      notification.onclick = () => {
+        try { if (typeof window !== "undefined" && typeof window.focus === "function") window.focus(); }
+        catch (error) { /* The shell may not expose focus. */ }
+        void this.commandModeOpenOutput(record.id || outcome.runId);
+      };
+      return true;
+    } catch (error) {
+      // OS notification APIs can be unavailable or denied; the in-app toast remains.
+      return false;
+    }
+  }
+
+  async commandModeRunToastAction(action, outcome = {}) {
+    if (!action || !action.id) return { ok: false, reason: "unknown action" };
+    const record = cmToastRun(outcome);
+    const runner = this.commandModeRunner;
+    switch (action.id) {
+      case "output":
+        return this.commandModeOpenOutput(record.id || outcome.runId);
+      case "retry":
+        return this.commandModeRerun(record);
+      case "copy": {
+        try {
+          const clipboard = typeof navigator !== "undefined" && navigator.clipboard;
+          if (!clipboard || typeof clipboard.writeText !== "function") return { ok: false, reason: "clipboard unavailable" };
+          await clipboard.writeText(cmToastArgv(outcome));
+          return { ok: true };
+        } catch (error) {
+          return { ok: false, reason: String((error && error.message) || error) };
+        }
+      }
+      case "open-vault-note": {
+        const workspace = this.app && this.app.workspace;
+        if (!action.path || !workspace || typeof workspace.openLinkText !== "function") return { ok: false, reason: "note opener unavailable" };
+        try { await workspace.openLinkText(String(action.path), "", false); return { ok: true }; }
+        catch (error) { return { ok: false, reason: String((error && error.message) || error) }; }
+      }
+      case "open-settings": {
+        try {
+          const setting = this.app && this.app.setting;
+          if (setting && typeof setting.open === "function") setting.open();
+          if (setting && typeof setting.openTabById === "function") setting.openTabById("bob-command-mode");
+          return { ok: Boolean(setting) };
+        } catch (error) { return { ok: false, reason: String((error && error.message) || error) }; }
+      }
+      case "run":
+        if (!runner || !Array.isArray(action.argv)) return { ok: false, reason: "runner unavailable" };
+        return runner.run(action.argv, { entryId: action.entryId, title: action.label, trigger: "toast-action" });
+      case "rerun-with-carry":
+        return this.commandModeRerun(record, { carry: action.carry, preview: false });
+      case "sync-vault-retry": {
+        if (!runner) return { ok: false, reason: "runner unavailable" };
+        const synced = await runner.run(["vault-sync", "run"], { entryId: "vault-sync", title: "Sync vault", trigger: "toast-action" });
+        if (!synced || synced.outcome !== "completed") return synced;
+        return this.commandModeRerun(record);
+      }
+      case "reload-plugins": {
+        const plugins = this.app && this.app.plugins;
+        if (!plugins || typeof plugins.disablePlugin !== "function" || typeof plugins.enablePlugin !== "function") {
+          return { ok: false, reason: "plugin reload unavailable" };
+        }
+        const ids = Array.isArray(action.pluginIds) ? [...action.pluginIds] : [];
+        const own = ids.filter((id) => id !== "bob-command-mode");
+        if (ids.includes("bob-command-mode")) own.push("bob-command-mode");
+        try {
+          for (const id of own) {
+            await plugins.disablePlugin(id);
+            await plugins.enablePlugin(id);
+          }
+          return { ok: true, pluginIds: own };
+        } catch (error) { return { ok: false, reason: String((error && error.message) || error) }; }
+      }
+      default:
+        return { ok: false, reason: "unknown action: " + action.id };
+    }
+  }
+
+  commandModeRerun(record, options = {}) {
+    const runner = this.commandModeRunner;
+    const current = record || (runner && runner.newestRecord());
+    if (!runner || !current || !Array.isArray(current.argv)) return Promise.resolve({ ok: false, reason: "no command to rerun" });
+    let words = [...current.argv];
+    if (words.length && (words[0] === "bob" || words[0] === current.bob_path || /(?:^|\/)bob$/.test(String(words[0])))) words.shift();
+    const entry = current.entry_id ? cmEntryById(runner.catalog(), current.entry_id) : null;
+    if (entry && Array.isArray(entry.path) && entry.path.every((word, index) => words[index] === word)) {
+      let rest = words.slice(entry.path.length);
+      const previewFlags = Array.isArray(entry.preview) ? new Set(entry.preview.map(String)) : new Set();
+      rest = rest.filter((word) => !previewFlags.has(String(word)));
+      if (Array.isArray(entry.fixed)) {
+        let cursor = 0;
+        for (const fixed of entry.fixed) {
+          const index = rest.indexOf(String(fixed), cursor);
+          if (index >= 0) {
+            rest.splice(index, 1);
+            cursor = index;
+          }
+        }
+      }
+      words = [...entry.path, ...rest];
+    }
+    const carry = Array.isArray(options.carry) ? options.carry.map(String) : [];
+    words.push(...carry);
+    const preview = options.preview === undefined ? Boolean(current.preview) : Boolean(options.preview);
+    return runner.run(words, {
+      entryId: current.entry_id || undefined,
+      title: current.title || undefined,
+      trigger: "retry",
+      preview,
+    });
   }
 
   commandModeFireEvent(name, payload) {
@@ -2026,6 +2288,325 @@ class BobCommandModeSettingTab extends PluginSettingTab {
       });
   }
 }
+// ---- src/110-toasts.js ----
+// Bob Command Mode: outcome toast cards and their action strip.
+
+const CM_TOAST_META = {
+  completed: { glyph: "✓", label: "Completed", duration: 5000 },
+  attention: { glyph: "◐", label: "Needs attention", duration: 8000 },
+  failed: { glyph: "✗", label: "Failed", duration: 0 },
+  unknown: { glyph: "?", label: "Unknown · log preserved", duration: 0 },
+  stopped: { glyph: "■", label: "Stopped", duration: 5000 },
+};
+
+function cmToastRun(outcome = {}) {
+  return outcome.record && typeof outcome.record === "object" ? outcome.record : {};
+}
+
+function cmToastDuration(outcome = {}) {
+  const state = CM_TOAST_META[outcome.outcome] ? outcome.outcome : "unknown";
+  return CM_TOAST_META[state].duration;
+}
+
+function cmToastSummary(outcome = {}) {
+  const record = cmToastRun(outcome);
+  const source = outcome.reason || record.summary || outcome.summary || "Done";
+  const lines = cmStripAnsi(source).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length <= 2) return lines.join(" · ") || "Done";
+  return lines.slice(0, 2).join(" · ") + " …";
+}
+
+function cmToastTitle(outcome = {}) {
+  const record = cmToastRun(outcome);
+  return String(record.title || outcome.title || record.entry_id || outcome.entryId || "bob");
+}
+
+function cmToastArgv(outcome = {}) {
+  const record = cmToastRun(outcome);
+  const argv = Array.isArray(record.argv) ? [...record.argv] : [];
+  if (argv.length && (argv[0] === "bob" || /(?:^|\/)bob$/.test(String(argv[0])))) argv.shift();
+  return cmFormatArgv(["bob", ...argv]);
+}
+
+function cmToastActions(outcome = {}) {
+  const actions = Array.isArray(outcome.actions) ? outcome.actions.filter((action) => action && action.label) : [];
+  actions.push({ id: "output", label: "Output" });
+  actions.push({ id: "retry", label: "Retry" });
+  actions.push({ id: "copy", label: "Copy" });
+  return actions;
+}
+
+function cmToastNode(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = String(text);
+  return element;
+}
+
+function cmCreateToastFragment(outcome = {}, onAction = () => {}, onOutput = () => {}) {
+  if (typeof document === "undefined" || !document.createDocumentFragment) return null;
+  const state = CM_TOAST_META[outcome.outcome] ? outcome.outcome : "unknown";
+  const meta = CM_TOAST_META[state];
+  const fragment = document.createDocumentFragment();
+  const card = cmToastNode("section", "bob-cmd-toast is-" + state);
+  card.setAttribute("role", "status");
+  card.setAttribute("aria-live", state === "failed" || state === "unknown" ? "assertive" : "polite");
+
+  const header = cmToastNode("div", "bob-cmd-toast-header");
+  const mark = cmToastNode("span", "bob-cmd-toast-mark", meta.glyph);
+  mark.setAttribute("aria-hidden", "true");
+  const title = cmToastNode("span", "bob-cmd-toast-title", cmToastTitle(outcome));
+  const duration = cmToastNode("span", "bob-cmd-toast-duration", cmFormatDuration(cmToastRun(outcome).duration_ms));
+  header.append(mark, title, duration);
+  card.appendChild(header);
+
+  const body = cmToastNode("div", "bob-cmd-toast-body");
+  const summary = cmToastNode("div", "bob-cmd-toast-summary", cmToastSummary(outcome));
+  const argv = cmToastNode("code", "bob-cmd-toast-argv", cmToastArgv(outcome));
+  body.append(summary, argv);
+  body.addEventListener("click", (event) => {
+    if (event && event.defaultPrevented) return;
+    onOutput(cmToastRun(outcome).id || outcome.runId);
+  });
+  card.appendChild(body);
+
+  const actions = cmToastNode("div", "bob-cmd-toast-actions");
+  for (const action of cmToastActions(outcome)) {
+    const button = cmToastNode("button", "bob-cmd-toast-action", action.label);
+    button.type = "button";
+    button.setAttribute("data-action-id", action.id || "");
+    button.addEventListener("click", (event) => {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      onAction(action, outcome);
+    });
+    actions.appendChild(button);
+  }
+  card.appendChild(actions);
+  fragment.appendChild(card);
+  return fragment;
+}
+// ---- src/120-status-chip.js ----
+// Bob Command Mode: live status-bar chip. Runner state stays authoritative.
+
+function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () => {}, progressFor = () => "") {
+  if (!element) return { visible: false, runs: 0 };
+  const active = (Array.isArray(records) ? records : []).filter((record) => record && (record.outcome === "running" || record.outcome === "queued"));
+  if (!active.length) {
+    element.style.display = "none";
+    element.classList.remove("is-overdue");
+    element.textContent = "";
+    element.removeAttribute("title");
+    return { visible: false, runs: 0 };
+  }
+  const ages = active.map((record) => Math.max(0, nowMs - (Date.parse(record.started_at) || nowMs)));
+  if (ages.every((age) => age < 400)) {
+    element.style.display = "none";
+    element.classList.remove("is-overdue");
+    element.textContent = "";
+    element.removeAttribute("title");
+    return { visible: false, runs: active.length };
+  }
+  const longest = Math.max(...ages);
+  const overdue = active.some((record, index) => record.overdue || (
+    record.effect !== "reads" && Number(record.budget_secs) > 0 && ages[index] >= Number(record.budget_secs) * 1000
+  ));
+  const overdueRecord = active.find((record, index) => record.overdue || (
+    record.effect !== "reads" && Number(record.budget_secs) > 0 && ages[index] >= Number(record.budget_secs) * 1000
+  ));
+  const newest = active[active.length - 1];
+  const name = active.length === 1 ? String(newest.title || newest.entry_id || "bob") : "bob ×" + active.length;
+  element.style.display = "";
+  element.classList.toggle("is-overdue", overdue);
+  const budgetMins = overdueRecord ? Math.max(1, Math.round(Number(overdueRecord.budget_secs) / 60)) : 0;
+  element.textContent = overdue
+    ? name + " · still running past ~" + budgetMins + " min"
+    : name + " · " + cmFormatClock(longest);
+  const detail = active.map((record) => {
+    const argv = Array.isArray(record.argv) ? [...record.argv] : [];
+    if (argv.length && (argv[0] === "bob" || /(?:^|\/)bob$/.test(String(argv[0])))) argv.shift();
+    const progress = String(progressFor(record.id) || "").trim();
+    return [cmFormatArgv(["bob", ...argv]), progress ? "Last: " + progress : ""].filter(Boolean).join("\n");
+  }).join("\n\n");
+  element.setAttribute("title", detail);
+  element.setAttribute("aria-label", "Open output for " + name);
+  element.setAttribute("role", "button");
+  element.setAttribute("tabindex", "0");
+  element.onclick = () => onOpen(newest.id);
+  return { visible: true, runs: active.length, overdue, runId: newest.id };
+}
+// ---- src/130-adapters.js ----
+// Bob Command Mode: catalog-keyed outcome adapters. These stay pure: action
+// descriptors carry data, and the plugin decides how to present and execute it.
+
+function cmAdapterJson(text) {
+  const source = String((text && text.stdout) || "").trim();
+  if (!source) return null;
+  try {
+    return JSON.parse(source);
+  } catch (error) {
+    const start = source.indexOf("{");
+    const end = source.lastIndexOf("}");
+    if (start < 0 || end <= start) return null;
+    try { return JSON.parse(source.slice(start, end + 1)); }
+    catch (ignored) { return null; }
+  }
+}
+
+function cmAdapterAction(id, label, extra = {}) {
+  return { id, label, ...extra };
+}
+
+function cmAdapterRefCreate(run, text) {
+  const source = String((text && text.stdout) || "");
+  const queued = source.match(/queued:\s*(.+?)\s*\(([^)]*)\)/i);
+  if (queued) {
+    const detail = queued[2].replace(/^\s*[^:]+:\s*/, "").trim();
+    return {
+      outcome: "attention",
+      summary: detail ? "Queued — " + detail : "Queued for intake",
+      actions: [cmAdapterAction("run", "Scan intake", { entryId: "ref-scan-intake", argv: ["ref", "scan"] })],
+    };
+  }
+  const ingested = source.match(/ingested:\s*.+?\s+→\s+([^\r\n]+)/i);
+  if (ingested) {
+    const note = ingested[1].replace(/\s+(?:·\s+task\s+→|\(adopted\)).*$/i, "").trim();
+    return {
+      outcome: "completed",
+      summary: "Added " + note,
+      actions: [cmAdapterAction("open-vault-note", "Open note", { path: note })],
+    };
+  }
+  return null;
+}
+
+function cmAdapterRefScan(run, text) {
+  const report = cmAdapterJson(text);
+  let held = report && report.summary ? Number(report.summary.held) || 0 : 0;
+  if (!held) {
+    const match = String((text && text.stdout) || "").match(/\b(\d+)\s+held\b|(?:pdfs?_held|pdf_markers_held|held)\s*:\s*(\d+)/i);
+    if (match) held = Number(match[1] || match[2]) || 0;
+  }
+  if (held > 0) return { outcome: "attention", summary: held + " PDF writes held" };
+  const combined = String((text && text.stdout) || "") + "\n" + String((text && text.stderr) || "");
+  if (run.exitCode === 1 && /still\s+queued/i.test(combined)) {
+    return { outcome: "attention", summary: "Intake is still queued" };
+  }
+  return null;
+}
+
+function cmAdapterVaultSync(run, text) {
+  const stdout = String((text && text.stdout) || "").trim();
+  const stderr = String((text && text.stderr) || "").trim();
+  if (run.exitCode === 0 && !stdout && !stderr) {
+    return { outcome: "attention", summary: "Skipped — another bob maintenance run holds the lock", retry: true };
+  }
+  const match = (stdout + "\n" + stderr).match(/[^\r\n]*(?:conflict|_conflicts\/)[^\r\n]*/i);
+  if (match) {
+    return {
+      outcome: "attention",
+      summary: cmLastMeaningfulLine(match[0]) || "Sync conflict needs review",
+      actions: [cmAdapterAction("open-vault-note", "Open conflict log", { path: "_conflicts/sync_conflicts.md" })],
+    };
+  }
+  return null;
+}
+
+function cmAdapterJsonWrite(run, text) {
+  const result = cmAdapterJson(text);
+  if (!result || typeof result !== "object") return null;
+  const code = String(result.code || "");
+  const message = String(result.message || "").trim();
+  if (result.ok === false) {
+    if (code === "unchanged") return { outcome: "attention", summary: message || "Already up to date" };
+    return {
+      outcome: "failed",
+      summary: message || "Command failed",
+      ...(code === "lock_busy" ? { retry: true } : {}),
+    };
+  }
+  if (result.ok !== true) return null;
+  const names = [result.hidden, result.unhidden].find(Array.isArray)
+    ? [result.hidden, result.unhidden].find(Array.isArray).join(", ")
+    : (result.name ? String(result.name) : "");
+  const entryId = String(run.entry_id || "");
+  const verb = /(?:themes|relations)-hide$/.test(entryId) ? "Hid"
+    : /(?:themes|relations)-unhide$/.test(entryId) ? "Unhid"
+      : /themes-color$/.test(entryId) ? "Pinned" : "Updated";
+  return { outcome: "completed", summary: names ? verb + " " + names : message || "Updated" };
+}
+
+function cmAdapterPluginsSync(run, text) {
+  const result = cmAdapterJson(text);
+  if (!result || typeof result !== "object" || result.ok !== true || !Array.isArray(result.plugins)) return null;
+  const changed = [];
+  let dirty = 0;
+  for (const plugin of result.plugins) {
+    if (!plugin || typeof plugin.id !== "string" || !Array.isArray(plugin.files)) continue;
+    if (plugin.files.some((file) => file && ["created", "updated", "forced"].includes(file.action))) changed.push(plugin.id);
+    dirty += plugin.files.filter((file) => file && file.action === "skipped_dirty").length;
+  }
+  const actions = changed.length
+    ? [cmAdapterAction("reload-plugins", "Reload " + changed.length + " plugin" + (changed.length === 1 ? "" : "s"), { pluginIds: changed })]
+    : [];
+  if (dirty > 0) {
+    return {
+      outcome: "attention",
+      summary: changed.length
+        ? "Deployed " + changed.length + ": " + changed.join(", ") + " · " + dirty + " dirty file" + (dirty === 1 ? " left alone" : "s left alone")
+        : dirty + " dirty file" + (dirty === 1 ? " left alone" : "s left alone"),
+      actions,
+    };
+  }
+  return {
+    outcome: "completed",
+    summary: changed.length ? "Deployed " + changed.length + ": " + changed.join(", ") : "Plugins already up to date",
+    actions,
+  };
+}
+
+function cmAdapterTaskReroll(run, text) {
+  if (!run.preview) return null;
+  const result = cmAdapterJson(text);
+  const source = String((text && text.stdout) || "");
+  const seed = (result && result.seed) || (source.match(/\bseed\s+(0x[\da-f]+|\d+)/i) || [])[1];
+  if (!seed) return null;
+  return {
+    carry: ["--seed", String(seed)],
+    actions: [cmAdapterAction("rerun-with-carry", "Apply", { carry: ["--seed", String(seed)] })],
+  };
+}
+
+function cmAdapterPomodoroStatus(run, text) {
+  if (run.exitCode !== 0) return { outcome: "failed", summary: String((text && (text.err || text.out)) || "Pomodoro status failed").trim() };
+  return { outcome: "completed", summary: String((text && text.out) || "").trim() || "No Pomodoro running" };
+}
+
+function cmAdapterCaptureSession(run, text) {
+  const summary = String((text && (text.out || text.err)) || "").trim() || (run.exitCode === 0 ? "Pomodoro updated" : "Command refused");
+  return { outcome: run.exitCode === 0 ? "completed" : "failed", summary };
+}
+
+function cmAdapterGkeepPull(run, text) {
+  const result = cmAdapterJson(text);
+  const source = String((text && text.stdout) || "");
+  const pulled = result && Number(result.pulled ?? result.notes_pulled ?? result.imported);
+  const saysEmpty = pulled === 0 || /\b0\s+(?:notes|items)\s+(?:pulled|imported)\b/i.test(source);
+  if (run.exitCode === 0 && saysEmpty) return { outcome: "completed", summary: "Keep inbox already empty" };
+  return null;
+}
+
+cmRegisterOutcomeAdapter("ref-create", cmAdapterRefCreate);
+cmRegisterOutcomeAdapter("ref-scan", cmAdapterRefScan);
+cmRegisterOutcomeAdapter("vault-sync", cmAdapterVaultSync);
+cmRegisterOutcomeAdapter("json-write", cmAdapterJsonWrite);
+cmRegisterOutcomeAdapter("plugins-sync", cmAdapterPluginsSync);
+cmRegisterOutcomeAdapter("task-reroll", cmAdapterTaskReroll);
+cmRegisterOutcomeAdapter("pomodoro-status", cmAdapterPomodoroStatus);
+cmRegisterOutcomeAdapter("capture-session", cmAdapterCaptureSession);
+cmRegisterOutcomeAdapter("gkeep-pull", cmAdapterGkeepPull);
 // ---- src/990-exports.js ----
 // Bob Command Mode: public entrypoint and test helpers.
 module.exports = BobCommandModePlugin;
@@ -2100,6 +2681,10 @@ module.exports.helpers = {
   cmClassifyRun,
   cmRegisterOutcomeAdapter,
   cmOutcomeAdapter,
+  cmToastDuration,
+  cmToastSummary,
+  cmCreateToastFragment,
+  cmRenderStatusChip,
   cmCreateApi,
   cmCreateRootApi,
   cmDefaultSettings,

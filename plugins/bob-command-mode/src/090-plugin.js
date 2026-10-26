@@ -33,6 +33,7 @@ class BobCommandModePlugin extends Plugin {
     this.commandModeFingerprint = (stored.catalogCache && stored.catalogCache.fingerprint) || null;
     this.commandModeState = this.commandModeCatalog ? "ready" : "empty";
     this.commandModeMissingBob = null;
+    this.commandModeStickyNotices = new Map();
     this.commandModeRunner = new CommandModeRunner({
       resolveBob: () => this.commandModeResolveBob(),
       vaultBase: () => cmVaultBasePath(this.app),
@@ -50,9 +51,15 @@ class BobCommandModePlugin extends Plugin {
       openOutput: (runId) => this.commandModeOpenOutput(runId),
     }));
     this.addSettingTab(new BobCommandModeSettingTab(this.app, this));
+    this.addCommand({
+      id: "rerun-last",
+      name: "Bob: Rerun last command",
+      callback: () => this.commandModeRerun(this.commandModeRunner && this.commandModeRunner.newestRecord()),
+    });
     // Register from the persisted catalog first so Ctrl+P works before the
     // background refresh finishes; refresh then re-registers the same ids.
     this.commandModeSyncRunCommands();
+    this.commandModeStartStatusChip();
     void this.commandModeRefreshCatalog("load");
     this.commandModeRunner.adoptUnfinished();
   }
@@ -61,6 +68,13 @@ class BobCommandModePlugin extends Plugin {
     // Writers are detached and keep running; their records are adopted on the
     // next load. Never kill a writer from unload.
     if (this.commandModeRunner) this.commandModeRunner.dispose();
+    if (this.commandModeStatusTimer) clearInterval(this.commandModeStatusTimer);
+    this.commandModeStatusTimer = null;
+    for (const notice of this.commandModeStickyNotices.values()) {
+      try { if (notice && typeof notice.hide === "function") notice.hide(); }
+      catch (error) { /* Best effort during unload. */ }
+    }
+    if (this.commandModeStickyNotices) this.commandModeStickyNotices.clear();
     this.commandModeRunner = null;
     this.api = null;
   }
@@ -170,6 +184,64 @@ class BobCommandModePlugin extends Plugin {
     }
   }
 
+  commandModeStartStatusChip() {
+    if (typeof this.addStatusBarItem !== "function") return;
+    try {
+      this.commandModeStatusEl = this.addStatusBarItem();
+      if (!this.commandModeStatusEl) return;
+      this.commandModeStatusEl.addClass("bob-cmd-chip");
+      this.commandModeStatusEl.style.display = "none";
+      this.commandModeStatusEl.addEventListener("keydown", (event) => {
+        if (event && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          const active = this.commandModeRunner && this.commandModeRunner.activeRecords();
+          const newest = active && active[active.length - 1];
+          if (newest) void this.commandModeOpenOutput(newest.id);
+        }
+      });
+      this.commandModeRefreshStatusChip();
+      this.commandModeStatusTimer = setInterval(() => this.commandModeRefreshStatusChip(), 250);
+      if (this.commandModeStatusTimer && typeof this.commandModeStatusTimer.unref === "function") this.commandModeStatusTimer.unref();
+    } catch (error) {
+      this.commandModeStatusEl = null;
+    }
+  }
+
+  commandModeRefreshStatusChip(nowMs = Date.now()) {
+    const runner = this.commandModeRunner;
+    if (!runner || !this.commandModeStatusEl) return { visible: false, runs: 0 };
+    return cmRenderStatusChip(
+      this.commandModeStatusEl,
+      runner.activeRecords(),
+      nowMs,
+      (runId) => this.commandModeOpenOutput(runId),
+      (runId) => this.commandModeProgressText(runId),
+    );
+  }
+
+  commandModeProgressText(runId) {
+    const runner = this.commandModeRunner;
+    if (!runner) return "";
+    let fd = null;
+    try {
+      const file = cmRunFilePaths(runner.runsDir(), String(runId || ""), runner.pathModule()).out;
+      const fsModule = runner.fs();
+      const size = fsModule.statSync(file).size;
+      const length = Math.min(8192, size);
+      const bytes = Buffer.alloc(length);
+      fd = fsModule.openSync(file, "r");
+      fsModule.readSync(fd, bytes, 0, length, Math.max(0, size - length));
+      const lines = cmStripAnsi(bytes.toString("utf8")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      return lines[lines.length - 1] || "";
+    } catch (error) {
+      return "";
+    } finally {
+      if (fd !== null) {
+        try { runner.fs().closeSync(fd); } catch (error) { /* Best effort. */ }
+      }
+    }
+  }
+
   async commandModeSaveAllMarkdown() {
     const workspace = this.app && this.app.workspace;
     if (!workspace || typeof workspace.iterateAllLeaves !== "function") return { ok: true };
@@ -194,13 +266,165 @@ class BobCommandModePlugin extends Plugin {
 
   commandModeNotify(outcome) {
     try {
-      const summary = outcome && outcome.reason
-        ? outcome.reason
-        : (outcome && outcome.outcome ? String(outcome.outcome) : "Done");
-      new Notice(summary);
+      const notice = { ...(outcome || {}) };
+      const record = cmToastRun(notice);
+      const source = [notice.reason, record.summary].filter(Boolean).join("\n");
+      const actions = Array.isArray(notice.actions) ? [...notice.actions] : [];
+      if (/bob not found/i.test(source) && !actions.some((action) => action.id === "open-settings")) {
+        actions.push({ id: "open-settings", label: "Open settings" });
+      }
+      if (/(?:dirty.*paths?|paths?.*dirty|uncommitted\s+(?:edits|changes)|working tree.*dirty)/i.test(source)) {
+        notice.reason = "Commit pending edits first";
+        notice.actions = [...actions, { id: "sync-vault-retry", label: "Sync vault, then retry" }];
+      } else {
+        notice.actions = actions;
+      }
+      if (record.entry_id === "projects-sync" && notice.outcome === "completed") {
+        notice.actions.push({ id: "run", label: "Reconcile tasks", entryId: "task-reconcile", argv: ["task", "reconcile"] });
+      }
+      const sticky = notice.outcome === "failed" || notice.outcome === "unknown";
+      const stickyKey = String(record.entry_id || notice.entryId || notice.runId || "bob");
+      if (sticky && this.commandModeStickyNotices) {
+        const previous = this.commandModeStickyNotices.get(stickyKey);
+        try { if (previous && typeof previous.hide === "function") previous.hide(); }
+        catch (error) { /* A prior notice may already be closed. */ }
+      }
+      const fragment = cmCreateToastFragment(
+        notice,
+        (action, card) => this.commandModeRunToastAction(action, card),
+        (runId) => this.commandModeOpenOutput(runId),
+      );
+      if (!fragment) {
+        new Notice(cmToastSummary(notice), cmToastDuration(notice));
+        return null;
+      }
+      const card = new Notice(fragment, cmToastDuration(notice));
+      if (sticky && this.commandModeStickyNotices) this.commandModeStickyNotices.set(stickyKey, card);
+      this.commandModeMaybeNotifyOS(notice);
+      return card;
     } catch (error) {
       // Headless or unloaded: the record already carries the truth.
+      return null;
     }
+  }
+
+  commandModeMaybeNotifyOS(outcome) {
+    const record = cmToastRun(outcome);
+    if (this.settings.osNotifications === false || Number(record.duration_ms) <= 15000) return false;
+    try {
+      if (typeof document !== "undefined" && typeof document.hasFocus === "function" && document.hasFocus()) return false;
+      if (typeof Notification !== "function") return false;
+      const title = cmToastTitle(outcome) + " · " + String(outcome.outcome || "completed");
+      const notification = new Notification(title, { body: cmToastSummary(outcome) });
+      notification.onclick = () => {
+        try { if (typeof window !== "undefined" && typeof window.focus === "function") window.focus(); }
+        catch (error) { /* The shell may not expose focus. */ }
+        void this.commandModeOpenOutput(record.id || outcome.runId);
+      };
+      return true;
+    } catch (error) {
+      // OS notification APIs can be unavailable or denied; the in-app toast remains.
+      return false;
+    }
+  }
+
+  async commandModeRunToastAction(action, outcome = {}) {
+    if (!action || !action.id) return { ok: false, reason: "unknown action" };
+    const record = cmToastRun(outcome);
+    const runner = this.commandModeRunner;
+    switch (action.id) {
+      case "output":
+        return this.commandModeOpenOutput(record.id || outcome.runId);
+      case "retry":
+        return this.commandModeRerun(record);
+      case "copy": {
+        try {
+          const clipboard = typeof navigator !== "undefined" && navigator.clipboard;
+          if (!clipboard || typeof clipboard.writeText !== "function") return { ok: false, reason: "clipboard unavailable" };
+          await clipboard.writeText(cmToastArgv(outcome));
+          return { ok: true };
+        } catch (error) {
+          return { ok: false, reason: String((error && error.message) || error) };
+        }
+      }
+      case "open-vault-note": {
+        const workspace = this.app && this.app.workspace;
+        if (!action.path || !workspace || typeof workspace.openLinkText !== "function") return { ok: false, reason: "note opener unavailable" };
+        try { await workspace.openLinkText(String(action.path), "", false); return { ok: true }; }
+        catch (error) { return { ok: false, reason: String((error && error.message) || error) }; }
+      }
+      case "open-settings": {
+        try {
+          const setting = this.app && this.app.setting;
+          if (setting && typeof setting.open === "function") setting.open();
+          if (setting && typeof setting.openTabById === "function") setting.openTabById("bob-command-mode");
+          return { ok: Boolean(setting) };
+        } catch (error) { return { ok: false, reason: String((error && error.message) || error) }; }
+      }
+      case "run":
+        if (!runner || !Array.isArray(action.argv)) return { ok: false, reason: "runner unavailable" };
+        return runner.run(action.argv, { entryId: action.entryId, title: action.label, trigger: "toast-action" });
+      case "rerun-with-carry":
+        return this.commandModeRerun(record, { carry: action.carry, preview: false });
+      case "sync-vault-retry": {
+        if (!runner) return { ok: false, reason: "runner unavailable" };
+        const synced = await runner.run(["vault-sync", "run"], { entryId: "vault-sync", title: "Sync vault", trigger: "toast-action" });
+        if (!synced || synced.outcome !== "completed") return synced;
+        return this.commandModeRerun(record);
+      }
+      case "reload-plugins": {
+        const plugins = this.app && this.app.plugins;
+        if (!plugins || typeof plugins.disablePlugin !== "function" || typeof plugins.enablePlugin !== "function") {
+          return { ok: false, reason: "plugin reload unavailable" };
+        }
+        const ids = Array.isArray(action.pluginIds) ? [...action.pluginIds] : [];
+        const own = ids.filter((id) => id !== "bob-command-mode");
+        if (ids.includes("bob-command-mode")) own.push("bob-command-mode");
+        try {
+          for (const id of own) {
+            await plugins.disablePlugin(id);
+            await plugins.enablePlugin(id);
+          }
+          return { ok: true, pluginIds: own };
+        } catch (error) { return { ok: false, reason: String((error && error.message) || error) }; }
+      }
+      default:
+        return { ok: false, reason: "unknown action: " + action.id };
+    }
+  }
+
+  commandModeRerun(record, options = {}) {
+    const runner = this.commandModeRunner;
+    const current = record || (runner && runner.newestRecord());
+    if (!runner || !current || !Array.isArray(current.argv)) return Promise.resolve({ ok: false, reason: "no command to rerun" });
+    let words = [...current.argv];
+    if (words.length && (words[0] === "bob" || words[0] === current.bob_path || /(?:^|\/)bob$/.test(String(words[0])))) words.shift();
+    const entry = current.entry_id ? cmEntryById(runner.catalog(), current.entry_id) : null;
+    if (entry && Array.isArray(entry.path) && entry.path.every((word, index) => words[index] === word)) {
+      let rest = words.slice(entry.path.length);
+      const previewFlags = Array.isArray(entry.preview) ? new Set(entry.preview.map(String)) : new Set();
+      rest = rest.filter((word) => !previewFlags.has(String(word)));
+      if (Array.isArray(entry.fixed)) {
+        let cursor = 0;
+        for (const fixed of entry.fixed) {
+          const index = rest.indexOf(String(fixed), cursor);
+          if (index >= 0) {
+            rest.splice(index, 1);
+            cursor = index;
+          }
+        }
+      }
+      words = [...entry.path, ...rest];
+    }
+    const carry = Array.isArray(options.carry) ? options.carry.map(String) : [];
+    words.push(...carry);
+    const preview = options.preview === undefined ? Boolean(current.preview) : Boolean(options.preview);
+    return runner.run(words, {
+      entryId: current.entry_id || undefined,
+      title: current.title || undefined,
+      trigger: "retry",
+      preview,
+    });
   }
 
   commandModeFireEvent(name, payload) {

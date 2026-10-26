@@ -17,14 +17,17 @@ function cmOutcomeAdapter(adapterId) {
 }
 
 function cmAdapterText(stdoutText, stderrText) {
+  const stdout = cmStripAnsi(stdoutText);
+  const stderr = cmStripAnsi(stderrText);
   const out = cmLastMeaningfulLine(stdoutText);
   const err = cmFirstMeaningfulLine(stderrText);
-  return { out, err };
+  return { out, err, stdout, stderr };
 }
 
 // Classify a finished run. Input: {exitCode, signal, timedOut, stoppedByUser,
 // spawnError, spawnNotFound, spawnMessage, triedPaths, stdoutText, stderrText,
-// exitHints, adapterId, adapterScope}. Returns {outcome, summary, retry?}.
+// exitHints, adapterId, run, adapterScope}. Returns {outcome, summary,
+// retry?, actions?, carry?}.
 function cmClassifyRun(input = {}) {
   if (input.stoppedByUser) {
     return { outcome: "stopped", summary: "Stopped" };
@@ -55,18 +58,14 @@ function cmClassifyRun(input = {}) {
     }
     return { outcome: "failed", summary: "Another bob maintenance run holds the lock", retry: true };
   }
-  if (Array.isArray(input.exitHints)) {
-    for (const hint of input.exitHints) {
-      if (hint && hint.code === input.exitCode && (hint.outcome === "completed" || hint.outcome === "attention" || hint.outcome === "failed")) {
-        return { outcome: hint.outcome, summary: String(hint.meaning || ("Exit " + hint.code)) };
-      }
-    }
-  }
   const adapter = cmOutcomeAdapter(input.adapterId);
+  let adapterExtras = {};
   if (adapter) {
     let adjusted = null;
     try {
-      adjusted = adapter({ ...cmAdapterText(stdoutText, stderrText), exitCode: input.exitCode }, input.adapterScope || {});
+      const text = cmAdapterText(stdoutText, stderrText);
+      const run = { ...(input.run || {}), ...text, exitCode: input.exitCode };
+      adjusted = adapter(run, text, input.adapterScope || {});
     } catch (error) {
       adjusted = null;
     }
@@ -79,14 +78,24 @@ function cmClassifyRun(input = {}) {
         if (Array.isArray(adjusted.actions)) result.actions = adjusted.actions;
         return result;
       }
+      if (adjusted.retry) adapterExtras.retry = true;
+      if (adjusted.carry !== undefined) adapterExtras.carry = adjusted.carry;
+      if (Array.isArray(adjusted.actions)) adapterExtras.actions = adjusted.actions;
+    }
+  }
+  if (Array.isArray(input.exitHints)) {
+    for (const hint of input.exitHints) {
+      if (hint && hint.code === input.exitCode && (hint.outcome === "completed" || hint.outcome === "attention" || hint.outcome === "failed")) {
+        return { outcome: hint.outcome, summary: String(hint.meaning || ("Exit " + hint.code)), ...adapterExtras };
+      }
     }
   }
   if (input.exitCode === 0) {
-    return { outcome: "completed", summary: cmLastMeaningfulLine(stdoutText) || "Done" };
+    return { outcome: "completed", summary: cmLastMeaningfulLine(stdoutText) || "Done", ...adapterExtras };
   }
   const errorLine = cmFirstErrorLine(stderrText);
-  if (errorLine) return { outcome: "failed", summary: errorLine };
+  if (errorLine) return { outcome: "failed", summary: errorLine, ...adapterExtras };
   const firstErr = cmFirstMeaningfulLine(stderrText);
-  if (firstErr) return { outcome: "failed", summary: firstErr };
-  return { outcome: "failed", summary: cmLastMeaningfulLine(stdoutText) || "Failed" };
+  if (firstErr) return { outcome: "failed", summary: firstErr, ...adapterExtras };
+  return { outcome: "failed", summary: cmLastMeaningfulLine(stdoutText) || "Failed", ...adapterExtras };
 }

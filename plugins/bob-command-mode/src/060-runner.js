@@ -146,6 +146,8 @@ class CommandModeRunner {
       nowMs: this.deps.nowMs(),
     });
     const isReads = effect === "reads";
+    const budgetSecs = Number((entry && entry.budget_secs) || (isReads ? 60 : 180)) || 60;
+    record.budget_secs = budgetSecs;
     if (!isReads) {
       const saved = await this.deps.saveAllMarkdown();
       if (!saved || !saved.ok) {
@@ -163,7 +165,7 @@ class CommandModeRunner {
     const spec = {
       record, entry, resolution, features, vaultBase, usePreview,
       argvKey: JSON.stringify({ argv: finalArgv, preview: usePreview }),
-      budgetSecs: Number((entry && entry.budget_secs) || (isReads ? 60 : 180)) || 60,
+      budgetSecs,
       settled, settleResolve,
     };
     if (isReads) {
@@ -525,6 +527,8 @@ class CommandModeRunner {
       stderrText: "",
       exitHints: (spec.entry && spec.entry.exit_codes) || [],
       adapterId: spec.entry && spec.entry.adapter,
+      run: spec.record,
+      budgetSecs: spec.budgetSecs,
     });
     this.finishWithClassification(spec, kind, state, {
       exit_code: null, signal: null, outcome: classification.outcome, summary: classification.summary,
@@ -586,6 +590,8 @@ class CommandModeRunner {
       stderrText: state.stderr,
       exitHints: (spec.entry && spec.entry.exit_codes) || [],
       adapterId: spec.entry && spec.entry.adapter,
+      run: record,
+      budgetSecs: spec.budgetSecs,
     });
     const finished = {
       exit_code: exitCode, signal, outcome: classification.outcome, summary: classification.summary,
@@ -610,6 +616,9 @@ class CommandModeRunner {
     record.signal = result.signal;
     record.outcome = result.outcome;
     record.summary = result.summary;
+    if (result.retry) record.retry = true;
+    if (result.carry !== undefined) record.carry = result.carry;
+    if (Array.isArray(result.actions)) record.actions = result.actions;
     if (state) {
       if (state.stdoutDecoder || state.stderrDecoder || state.stdout || state.stderr) {
         record.summary = result.summary;
@@ -793,6 +802,8 @@ class CommandModeRunner {
         stderrText: cmStripTailForClassification(stderrText),
         exitHints: (entry && entry.exit_codes) || [],
         adapterId: entry && entry.adapter,
+        run: record,
+        budgetSecs: (entry && entry.budget_secs) || (record.effect === "reads" ? 60 : 180),
       });
     const finished = cmReadJsonFile(fsModule, paths.json) || record;
     finished.finished_at = finished.finished_at || cmIsoNow(this.deps.nowMs());
@@ -807,6 +818,9 @@ class CommandModeRunner {
     finished.signal = result.signal;
     finished.outcome = classification.outcome;
     finished.summary = classification.summary;
+    if (classification.retry) finished.retry = true;
+    if (classification.carry !== undefined) finished.carry = classification.carry;
+    if (Array.isArray(classification.actions)) finished.actions = classification.actions;
     try {
       cmWriteRecord(fsModule, this.runsDir(), finished);
     } catch (error) {
@@ -823,7 +837,16 @@ class CommandModeRunner {
     // A run that failed while Obsidian was closed gets one summary notice.
     if (classification.outcome === "failed" || classification.outcome === "unknown") {
       try {
-        this.deps.notify({ ...settlement, entryId: finished.entry_id, effect: finished.effect, invalidates: this.entryInvalidates(entry) });
+        this.deps.notify({
+          ...settlement,
+          record: { ...finished },
+          entryId: finished.entry_id,
+          effect: finished.effect,
+          invalidates: this.entryInvalidates(entry),
+          ...(classification.retry ? { retry: true } : {}),
+          ...(classification.carry !== undefined ? { carry: classification.carry } : {}),
+          ...(Array.isArray(classification.actions) ? { actions: classification.actions } : {}),
+        });
       } catch (error) {
         // Notification must never break adoption.
       }
@@ -846,6 +869,12 @@ class CommandModeRunner {
   newestRecord() {
     const records = cmListRecords(this.fs(), this.runsDir());
     return records.length > 0 ? records[records.length - 1] : null;
+  }
+
+  activeRecords() {
+    return [...this.live.values()]
+      .map((live) => live && live.record)
+      .filter((record) => record && (record.outcome === "queued" || record.outcome === "running"));
   }
 
   dispose() {

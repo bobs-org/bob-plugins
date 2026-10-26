@@ -9,6 +9,8 @@ const path = require("node:path");
 const {
   BobCommandModePlugin,
   helpers,
+  installDocument,
+  takeToastNotices,
   TestPlugin,
   makeApp,
   makeRunner,
@@ -32,10 +34,10 @@ test("classification order: stop, spawn, timeout, signal", () => {
 });
 
 test("lock phrase wins over exit codes and adapters", () => {
-  helpers.cmRegisterOutcomeAdapter("ref-scan", () => ({ outcome: "completed", summary: "adapter" }));
+  helpers.cmRegisterOutcomeAdapter("lock-test", () => ({ outcome: "completed", summary: "adapter" }));
   const attention = classify({
     exitCode: 0, stdoutText: "another Bob vault maintenance run is already active\n",
-    adapterId: "ref-scan",
+    adapterId: "lock-test",
   });
   assert.equal(attention.outcome, "attention");
   assert.equal(attention.retry, true);
@@ -135,6 +137,7 @@ test("plugin onload registers run-* commands and exposes the frozen api", async 
   assert.equal(plugin.api.commandMode.version, 1);
   assert.ok(Object.isFrozen(plugin.api.commandMode));
   const ids = [...plugin.commands.keys()];
+  assert.ok(ids.includes("rerun-last"), "expected rerun-last command");
   assert.ok(ids.includes("run-plan"), "expected run-plan in " + ids.join(","));
   assert.ok(ids.includes("run-ready"));
   assert.ok(!ids.includes("run-ref-create"), "required-arg entries get no command");
@@ -171,4 +174,205 @@ test("runner notifies with a plain summary after each finish", async () => {
   plugin.commandModeNotify({ ok: false, outcome: "failed", reason: "error: bad input" });
   const notes = takeNotices();
   assert.ok(notes.includes("error: bad input"));
+});
+
+test("catalog outcome adapters cover command-specific results and actions", () => {
+  const classifyAdapter = (adapterId, exitCode, stdoutText = "", stderrText = "", run = {}) => classify({
+    adapterId, exitCode, stdoutText, stderrText, run,
+  });
+
+  const queued = classifyAdapter("ref-create", 0, "queued: papers/a.pdf (network: try again) · next: bob ref scan\n");
+  assert.equal(queued.outcome, "attention");
+  assert.match(queued.summary, /try again/);
+  assert.equal(queued.actions[0].label, "Scan intake");
+  const ingested = classifyAdapter("ref-create", 0, "ingested: in/a.pdf → ref/papers/A Paper.md\n");
+  assert.equal(ingested.outcome, "completed");
+  assert.deepEqual(ingested.actions[0], { id: "open-vault-note", label: "Open note", path: "ref/papers/A Paper.md" });
+
+  assert.deepEqual(classifyAdapter("ref-scan", 0, "3 held\n"), { outcome: "attention", summary: "3 PDF writes held" });
+  assert.deepEqual(classifyAdapter("ref-scan", 0, "pdf_markers_held: 3\n"), { outcome: "attention", summary: "3 PDF writes held" });
+  assert.deepEqual(classifyAdapter("ref-scan", 1, "Still queued: paper.pdf\n"), { outcome: "attention", summary: "Intake is still queued" });
+  assert.deepEqual(classifyAdapter("vault-sync", 0), {
+    outcome: "attention", summary: "Skipped — another bob maintenance run holds the lock", retry: true,
+  });
+  const conflict = classifyAdapter("vault-sync", 1, "conflict: Daily/Today.md\n");
+  assert.equal(conflict.outcome, "attention");
+  assert.equal(conflict.actions[0].path, "_conflicts/sync_conflicts.md");
+
+  assert.deepEqual(classifyAdapter("json-write", 0, '{"ok":true,"hidden":["Deep Work"]}', "", { entry_id: "themes-hide" }), {
+    outcome: "completed", summary: "Hid Deep Work",
+  });
+  assert.equal(classifyAdapter("json-write", 1, '{"ok":false,"code":"unchanged","message":"Already hidden"}').outcome, "attention");
+  assert.equal(classifyAdapter("json-write", 1, '{"ok":false,"code":"lock_busy","message":"busy"}').retry, true);
+
+  const deployed = classifyAdapter("plugins-sync", 0, JSON.stringify({ ok: true, plugins: [
+    { id: "alpha", files: [{ action: "updated" }, { action: "unchanged" }] },
+  ] }));
+  assert.equal(deployed.summary, "Deployed 1: alpha");
+  assert.deepEqual(deployed.actions[0].pluginIds, ["alpha"]);
+  const dirty = classifyAdapter("plugins-sync", 0, JSON.stringify({ ok: true, plugins: [
+    { id: "alpha", files: [{ action: "skipped_dirty" }] },
+  ] }));
+  assert.equal(dirty.outcome, "attention");
+
+  const reroll = classifyAdapter("task-reroll", 0, "seed 0x0000002a · undo\n", "", { preview: true });
+  assert.deepEqual(reroll.carry, ["--seed", "0x0000002a"]);
+  assert.equal(reroll.actions[0].label, "Apply");
+  assert.deepEqual(classifyAdapter("pomodoro-status", 0), { outcome: "completed", summary: "No Pomodoro running" });
+  assert.deepEqual(classifyAdapter("capture-session", 1, "", "finish the current Pomodoro first\n"), {
+    outcome: "failed", summary: "finish the current Pomodoro first",
+  });
+  assert.deepEqual(classifyAdapter("gkeep-pull", 0, '{"pulled":0}'), {
+    outcome: "completed", summary: "Keep inbox already empty",
+  });
+});
+
+test("toast classes have distinct timing and newer failures replace older cards", () => {
+  const restoreDocument = installDocument();
+  try {
+    takeToastNotices();
+    const plugin = new BobCommandModePlugin(makeApp());
+    plugin.settings = { osNotifications: false };
+    plugin.commandModeStickyNotices = new Map();
+    const opened = [];
+    plugin.commandModeOpenOutput = (id) => { opened.push(id); return { ok: true }; };
+
+    const cases = [
+      ["completed", 5000], ["attention", 8000], ["failed", 0], ["unknown", 0], ["stopped", 5000],
+    ];
+    for (const [outcome, duration] of cases) {
+      const notice = plugin.commandModeNotify({
+        outcome,
+        runId: outcome,
+        record: { id: outcome, entry_id: "test-" + outcome, title: "Plan", argv: ["/usr/bin/bob", "plan"], summary: "Done" },
+      });
+      assert.equal(notice.duration, duration);
+      const card = notice.message.children[0];
+      assert.ok(card.classList.contains("bob-cmd-toast"));
+      assert.ok(card.classList.contains("is-" + outcome));
+      assert.equal(card.children[0].children[0].textContent.length > 0, true);
+      const labels = card.children[2].children.map((button) => button.textContent);
+      assert.deepEqual(labels.slice(-3), ["Output", "Retry", "Copy"]);
+      if (outcome === "completed") card.children[1].listeners.click({ defaultPrevented: false });
+    }
+    assert.deepEqual(opened, ["completed"], "clicking the toast body opens its output");
+
+    const project = plugin.commandModeNotify({
+      outcome: "completed", actions: [{ id: "adapter", label: "Adapter action" }],
+      record: { id: "project", entry_id: "projects-sync", argv: ["bob", "projects", "sync"], summary: "Synced projects" },
+    });
+    const projectLabels = project.message.children[0].children[2].children.map((button) => button.textContent);
+    assert.deepEqual(projectLabels, ["Adapter action", "Reconcile tasks", "Output", "Retry", "Copy"]);
+
+    const dirty = plugin.commandModeNotify({
+      outcome: "failed", reason: "dirty paths: Daily/today.md", record: { id: "dirty", entry_id: "rename", argv: ["bob", "themes", "rename"] },
+    });
+    assert.equal(dirty.message.children[0].children[1].children[0].textContent, "Commit pending edits first");
+    assert.equal(dirty.message.children[0].children[2].children[0].textContent, "Sync vault, then retry");
+
+    const missing = plugin.commandModeNotify({
+      outcome: "failed", reason: "bob not found (tried /one/bob, /two/bob)", record: { id: "missing", argv: ["bob", "plan"] },
+    });
+    assert.equal(missing.message.children[0].children[2].children[0].textContent, "Open settings");
+
+    const first = plugin.commandModeNotify({ outcome: "failed", record: { id: "old", entry_id: "same", summary: "bad" } });
+    const second = plugin.commandModeNotify({ outcome: "failed", record: { id: "new", entry_id: "same", summary: "worse" } });
+    assert.equal(first.hidden, true);
+    assert.equal(second.duration, 0);
+    assert.equal(plugin.commandModeStickyNotices.get("same"), second);
+  } finally {
+    restoreDocument();
+    takeToastNotices();
+  }
+});
+
+test("status chip waits 400 ms, tracks multiple runs, and marks overdue writers", () => {
+  const { ElementStub } = require("./modal-harness.cjs");
+  const chip = new ElementStub({ tag: "span", cls: "bob-cmd-chip" });
+  const opened = [];
+  const now = Date.parse("2026-10-26T15:00:00.000Z");
+  const run = (id, elapsed, extra = {}) => ({
+    id, title: "Sync vault", outcome: "running", effect: "writes", budget_secs: 180,
+    started_at: new Date(now - elapsed).toISOString(), argv: ["/usr/bin/bob", "vault-sync", "run"], ...extra,
+  });
+
+  assert.deepEqual(helpers.cmRenderStatusChip(chip, [run("one", 399)], now, (id) => opened.push(id)), { visible: false, runs: 1 });
+  const shown = helpers.cmRenderStatusChip(chip, [run("one", 400)], now, (id) => opened.push(id), () => "pulling");
+  assert.equal(shown.visible, true);
+  assert.match(chip.textContent, /Sync vault · 0:00/);
+  assert.match(chip.getAttribute("title"), /Last: pulling/);
+  const multiple = helpers.cmRenderStatusChip(chip, [run("one", 10000), run("two", 2000)], now, (id) => opened.push(id));
+  assert.equal(multiple.runs, 2);
+  assert.match(chip.textContent, /bob ×2 · 0:10/);
+  chip.onclick();
+  assert.deepEqual(opened, ["two"]);
+
+  const overdue = helpers.cmRenderStatusChip(chip, [run("late", 181000)], now);
+  assert.equal(overdue.overdue, true);
+  assert.match(chip.textContent, /still running past ~3 min/);
+  assert.ok(chip.classList.contains("is-overdue"));
+  assert.equal(helpers.cmRenderStatusChip(chip, [], now).visible, false);
+  assert.equal(chip.style.display, "none");
+});
+
+test("OS notifications only fire for long runs while Obsidian is unfocused", () => {
+  const restoreDocument = installDocument({ focused: false });
+  const previousNotification = global.Notification;
+  const previousWindow = global.window;
+  const shown = [];
+  let focused = 0;
+  global.Notification = class TestNotification {
+    constructor(title, options) { this.title = title; this.options = options; shown.push(this); }
+  };
+  global.window = { focus: () => { focused += 1; } };
+  try {
+    const plugin = new BobCommandModePlugin(makeApp());
+    plugin.settings = { osNotifications: true };
+    plugin.commandModeStickyNotices = new Map();
+    const opened = [];
+    plugin.commandModeOpenOutput = (id) => { opened.push(id); return { ok: true }; };
+    assert.equal(plugin.commandModeMaybeNotifyOS({ outcome: "completed", runId: "short", record: { id: "short", duration_ms: 15000 } }), false);
+    assert.equal(plugin.commandModeMaybeNotifyOS({ outcome: "completed", runId: "long", record: { id: "long", duration_ms: 15001, title: "Sync vault", summary: "Done" } }), true);
+    assert.equal(shown.length, 1);
+    global.document.hasFocus = () => true;
+    assert.equal(plugin.commandModeMaybeNotifyOS({ outcome: "completed", record: { id: "focused", duration_ms: 20000 } }), false);
+    global.document.hasFocus = () => false;
+    shown[0].onclick();
+    assert.equal(focused, 1);
+    assert.deepEqual(opened, ["long"]);
+    plugin.settings.osNotifications = false;
+    assert.equal(plugin.commandModeMaybeNotifyOS({ outcome: "completed", record: { id: "disabled", duration_ms: 20000 } }), false);
+  } finally {
+    restoreDocument();
+    if (previousNotification === undefined) delete global.Notification;
+    else global.Notification = previousNotification;
+    if (previousWindow === undefined) delete global.window;
+    else global.window = previousWindow;
+  }
+});
+
+test("rerun-last preserves arguments and preview mode; Apply carries the replay seed", async () => {
+  const calls = [];
+  const plugin = new BobCommandModePlugin(makeApp());
+  const entry = {
+    id: "task-reroll", path: ["task", "reroll"], fixed: [], preview: ["--dry-run"],
+    title: "Re-roll due prioritized tasks", effect: "writes", policy: "preview-first",
+  };
+  plugin.commandModeRunner = {
+    catalog: () => ({ entries: [entry] }),
+    newestRecord: () => null,
+    run: (argv, options) => { calls.push({ argv, options }); return Promise.resolve({ ok: true }); },
+  };
+  const record = {
+    id: "reroll", entry_id: "task-reroll", title: "Re-roll due prioritized tasks", preview: true,
+    bob_path: "/usr/local/bin/bob", argv: ["/usr/local/bin/bob", "task", "reroll", "--dry-run", "--level", "P2"],
+  };
+  await plugin.commandModeRerun(record);
+  await plugin.commandModeRerun(record, { carry: ["--seed", "0x0000002a"], preview: false });
+  assert.deepEqual(calls.map((call) => call.argv), [
+    ["task", "reroll", "--level", "P2"],
+    ["task", "reroll", "--level", "P2", "--seed", "0x0000002a"],
+  ]);
+  assert.equal(calls[0].options.preview, true);
+  assert.equal(calls[1].options.preview, false);
 });

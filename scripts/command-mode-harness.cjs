@@ -9,6 +9,7 @@ const path = require("node:path");
 const { ModalStub } = require("./modal-harness.cjs");
 
 const notices = [];
+const toastNotices = [];
 
 class TestMarkdownView {
   constructor(file) {
@@ -30,6 +31,7 @@ class TestPlugin {
     this.commands = new Map();
     this.settingTabs = [];
     this.events = [];
+    this.statusBarItems = [];
     this.stored = undefined;
   }
 
@@ -49,6 +51,13 @@ class TestPlugin {
 
   addSettingTab(tab) {
     this.settingTabs.push(tab);
+  }
+
+  addStatusBarItem() {
+    const { ElementStub } = require("./modal-harness.cjs");
+    const element = new ElementStub({ tag: "span" });
+    this.statusBarItems.push(element);
+    return element;
   }
 
   registerEvent(ref) {
@@ -171,8 +180,16 @@ Module._load = function loadWithCommandModeStubs(request, parent, isMain) {
       MarkdownView: TestMarkdownView,
       Modal: ModalStub,
       Notice: class TestNotice {
-        constructor(message) {
-          notices.push(String(message));
+        constructor(message, duration) {
+          this.message = message;
+          this.duration = duration;
+          this.hidden = false;
+          if (typeof message === "string") notices.push(message);
+          else toastNotices.push(this);
+        }
+
+        hide() {
+          this.hidden = true;
         }
       },
       Plugin: TestPlugin,
@@ -190,6 +207,24 @@ const { helpers } = BobCommandModePlugin;
 
 function takeNotices() {
   return notices.splice(0);
+}
+
+function takeToastNotices() {
+  return toastNotices.splice(0);
+}
+
+function installDocument(options = {}) {
+  const { ElementStub } = require("./modal-harness.cjs");
+  const previous = global.document;
+  global.document = {
+    createElement: (tag) => new ElementStub({ tag }),
+    createDocumentFragment: () => new ElementStub({ tag: "#document-fragment" }),
+    hasFocus: () => Boolean(options.focused),
+  };
+  return () => {
+    if (previous === undefined) delete global.document;
+    else global.document = previous;
+  };
 }
 
 function fixtureCatalog(overrides = {}) {
@@ -277,6 +312,8 @@ module.exports = {
   makeApp,
   makeWorkspace,
   takeNotices,
+  takeToastNotices,
+  installDocument,
   fixtureCatalog,
   makeRunner,
 };

@@ -52,6 +52,18 @@ class ElementStub {
     return child;
   }
 
+  append(...children) {
+    for (const child of children) this.appendChild(child);
+  }
+
+  get className() {
+    return this.classes.join(" ");
+  }
+
+  set className(value) {
+    this.classes = String(value || "").split(/\s+/).filter(Boolean);
+  }
+
   createDiv(options = {}) {
     return this.appendChild(new ElementStub(options));
   }

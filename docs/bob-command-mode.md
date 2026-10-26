@@ -21,7 +21,9 @@ Bob Command Mode runs bob commands from Obsidian with safe-write guards and run 
 <!-- BEGIN GENERATED: commands -->
 ## Registered commands
 
-This plugin registers no command palette commands.
+| Command | Command ID | Default hotkey |
+| --- | --- | --- |
+| Bob: Rerun last command | `rerun-last` | — |
 <!-- END GENERATED: commands -->
 
 ## Run commands
@@ -31,7 +33,22 @@ Every catalog entry whose positionals are all optional and whose policy is
 `run-<entry-id>` (for example `Bob: Today's plan` as `run-plan`). These ids
 are generated from the cached catalog at load, so the inventory scanner does
 not list them here. Each one runs its entry through the same run engine and
-reports through the plain notifier until the toast cards land.
+finishes with an outcome toast. `Bob: Rerun last command` repeats the newest
+recorded command with its original arguments and preview setting.
+
+## Feedback
+
+Finished runs use toast cards for completed, needs-attention, failed, unknown,
+and stopped outcomes. Cards show a short summary, elapsed time, and the command
+line; their actions can open a note or conflict log, scan queued intake, reload
+deployed plugins, retry, copy the command, or open the saved output. Failed and
+unknown cards remain until dismissed. The status-bar chip appears after a run
+has lasted 400 ms, shows active run counts and elapsed time, and turns amber
+when a writer passes its budget. Clicking it opens the active run's output.
+
+When a run takes more than 15 seconds and Obsidian is unfocused, the enabled OS
+notification opens that run's output when clicked. The `OS notifications`
+setting controls this behavior.
 
 ## Run engine
 

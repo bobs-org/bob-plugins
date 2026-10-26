@@ -103,6 +103,9 @@
       { id: "redefined-worked", title: "Redefined worked · no area mix", fixture: "redefinedWorked" },
       { id: "long-labels", title: "Long labels", fixture: "longLabels", relaxed: true },
       { id: "wide-values", title: "Wide values · 10h 05m", fixture: "wideValues" },
+      { id: "short-history", title: "Short typical history", fixture: "shortHistory" },
+      { id: "missing-day", title: "D missing · blank typical", fixture: "missingWarning" },
+      { id: "old-bob", title: "Old bob without typical", fixture: "oldBob" },
       { id: "met", title: "Closed-out past day · met", fixture: "metPast" },
       { id: "hover", title: "Forced hover on a fact", fixture: "today", pseudo: "hover" },
       { id: "focus", title: "Forced focus-visible on a fact", fixture: "today", pseudo: "focus-visible" },
@@ -309,6 +312,7 @@
         ...measureThemeLanes(strip),
         ...measureStripStats(strip, factBoxes, rowOf),
         ...measureStripMarks(strip),
+        ...measureStripRefs(strip),
       };
     }
 
@@ -364,8 +368,113 @@
       return out;
     }
 
+    function parseCssRgb(value) {
+      const match = /rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)/i.exec(String(value || ""));
+      if (!match) return null;
+      return [Number(match[1]), Number(match[2]), Number(match[3])];
+    }
+
+    function relativeLuminance(rgb) {
+      const channel = (value) => {
+        const c = Number(value) / 255;
+        return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+      };
+      return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+    }
+
+    function contrastRatio(fg, bg) {
+      const a = relativeLuminance(fg);
+      const b = relativeLuminance(bg);
+      const hi = Math.max(a, b);
+      const lo = Math.min(a, b);
+      return (hi + 0.05) / (lo + 0.05);
+    }
+
+    function measureStripRefs(strip) {
+      const out = {
+        refCount: 0,
+        factCount: 0,
+        refHidden: true,
+        refBaselineSpread: 0,
+        refClip: 0,
+        refMarkFailures: [],
+        refContrast: null,
+      };
+      try {
+        const facts = Array.from(strip.querySelectorAll(".bob-day-strip-fact"));
+        const refs = Array.from(strip.querySelectorAll(".bob-day-strip-ref"));
+        out.factCount = facts.length;
+        out.refCount = refs.length;
+        out.refHidden = refs.length === 0 || refs.every((node) => node.getAttribute("aria-hidden") === "true");
+        const rowTops = [];
+        for (const fact of facts) {
+          const ref = fact.querySelector(".bob-day-strip-ref");
+          if (!ref) continue;
+          if (fact.scrollWidth > fact.clientWidth + 0.5) {
+            out.refClip = Math.max(out.refClip, fact.scrollWidth - fact.clientWidth);
+          }
+          const refBox = ref.getBoundingClientRect();
+          if (refBox.width > 0 && refBox.height > 0) {
+            const band = Math.round(refBox.top);
+            let row = rowTops.find((entry) => Math.abs(entry.top - band) <= 2);
+            if (!row) {
+              row = { top: band, bottoms: [] };
+              rowTops.push(row);
+            }
+            row.bottoms.push(refBox.bottom);
+          }
+          const mark = ref.querySelector("svg.bob-day-strip-ref-mark");
+          const num = ref.querySelector(".bob-day-strip-ref-num");
+          if (mark) {
+            const markBox = mark.getBoundingClientRect();
+            const lineBox = ref.getBoundingClientRect();
+            if (Math.abs(markBox.width - markBox.height) > 0.5) {
+              out.refMarkFailures.push(`not square ${Math.round(markBox.width * 10) / 10}x${Math.round(markBox.height * 10) / 10}`);
+            }
+            if (
+              markBox.left < lineBox.left - 0.5
+              || markBox.right > lineBox.right + 0.5
+              || markBox.top < lineBox.top - 0.5
+              || markBox.bottom > lineBox.bottom + 0.5
+            ) {
+              out.refMarkFailures.push("outside its line");
+            }
+            if (num) {
+              const numBox = num.getBoundingClientRect();
+              const markCenter = (markBox.top + markBox.bottom) / 2;
+              const numCenter = (numBox.top + numBox.bottom) / 2;
+              if (Math.abs(markCenter - numCenter) > 1) {
+                out.refMarkFailures.push(`vertical centre ${Math.round(Math.abs(markCenter - numCenter) * 10) / 10}px off`);
+              }
+            }
+          }
+        }
+        for (const row of rowTops) {
+          if (row.bottoms.length > 1) {
+            out.refBaselineSpread = Math.max(out.refBaselineSpread, Math.max(...row.bottoms) - Math.min(...row.bottoms));
+          }
+        }
+        const sample = refs.find((node) => (node.getAttribute("data-ref-state") === "ready" || node.getAttribute("data-ref-state") === "short")) || refs[0];
+        if (sample) {
+          const fg = parseCssRgb(getComputedStyle(sample).color);
+          let bgNode = strip;
+          let bg = parseCssRgb(getComputedStyle(bgNode).backgroundColor);
+          while (bgNode && (!bg || (bg[0] === 0 && bg[1] === 0 && bg[2] === 0 && String(getComputedStyle(bgNode).backgroundColor).includes("0)")))) {
+            bgNode = bgNode.parentElement;
+            if (!bgNode) break;
+            bg = parseCssRgb(getComputedStyle(bgNode).backgroundColor);
+          }
+          if (fg && bg) out.refContrast = Math.round(contrastRatio(fg, bg) * 100) / 100;
+        }
+      } catch (error) {
+        // Reference measurement never breaks the matrix.
+      }
+      return out;
+    }
+
     // (n) the values lead: each value is at least 2x its head; (o) every
-    // fact's aria-label ends with its value text and no value holds a warning;
+    // fact's aria-label starts with its label and display; ready/short refs
+    // add bob's words; no value holds a warning;
     // (p) row-start hairlines hide while later cells draw theirs;
     // (q) the empty track shows in the no-Pomodoros cell.
     function measureStripStats(strip, factBoxes, rowOf) {
@@ -383,6 +492,7 @@
         for (const fact of facts) {
           const head = fact.querySelector(".bob-day-strip-head");
           const value = fact.querySelector(".bob-day-strip-value");
+          const metricLabel = fact.querySelector(".bob-day-strip-label");
           if (head && value) {
             const headSize = parseFloat(getComputedStyle(head).fontSize) || 0;
             const valueSize = parseFloat(getComputedStyle(value).fontSize) || 0;
@@ -390,7 +500,15 @@
           }
           const label = fact.getAttribute("aria-label") || "";
           const text = value ? value.textContent || "" : "";
-          if (!label.endsWith(text)) out.ariaFaithful = false;
+          const name = metricLabel ? metricLabel.textContent || "" : "";
+          if (name && text && !label.startsWith(name + " " + text) && !label.startsWith(name + ", loading")) {
+            out.ariaFaithful = false;
+          }
+          const ref = fact.querySelector(".bob-day-strip-ref");
+          const refState = ref ? ref.getAttribute("data-ref-state") : "";
+          if ((refState === "ready" || refState === "short") && label.indexOf(", ") < 0) {
+            out.ariaFaithful = false;
+          }
           if (value && value.textContent && value.textContent.includes("⚠")) out.valueHasWarning = true;
         }
         if (ratios.length) out.valueLeadMinRatio = Math.round(Math.min(...ratios) * 100) / 100;

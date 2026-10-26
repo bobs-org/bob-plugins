@@ -522,6 +522,7 @@ module.exports.helpers = {
   dayStripReleaseFitObserver,
   dayStripValueRuns,
   dayStripMarkState,
+  dayStripRef,
   paintDayStrip,
   dayStripDayForPath,
   dayStripLocalToday,

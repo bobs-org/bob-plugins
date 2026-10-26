@@ -114,6 +114,39 @@ function dayStripMarkState(unit, point) {
   return point.value > 0 ? "met" : "missed";
 }
 
+// Pure selection of bob's typical-day reference. Never computes a
+// median, relation, or sentence: it only classifies `point.typical`.
+function dayStripBlankRef() {
+  return { state: "blank", mark: null, display: "", words: "", detail: "" };
+}
+
+function dayStripRef(unit, point) {
+  try {
+    if (unit !== "minutes" && unit !== "count") return dayStripBlankRef();
+    if (!point || typeof point !== "object") return dayStripBlankRef();
+    const typical = point.typical;
+    if (!typical || typeof typical !== "object") return dayStripBlankRef();
+    if (typeof typical.display !== "string") return dayStripBlankRef();
+    if (typeof point.value !== "number" || !Number.isFinite(point.value)) return dayStripBlankRef();
+    const short = typical.value === null || typical.value === undefined;
+    const relation = typical.relation;
+    const mark = (
+      !short &&
+      point.provisional !== true &&
+      (relation === "above" || relation === "below" || relation === "equal")
+    ) ? relation : null;
+    return {
+      state: short ? "short" : "ready",
+      mark,
+      display: typical.display,
+      words: typeof typical.words === "string" ? typical.words : "",
+      detail: typeof typical.detail === "string" ? typical.detail : "",
+    };
+  } catch (error) {
+    return dayStripBlankRef();
+  }
+}
+
 function dayStripBuildFact(metric, report, day, dateWords) {
   const points = dayStripMetricPoints(metric, report);
   const point = points.find((candidate) => candidate && candidate.date === day) || null;
@@ -132,9 +165,14 @@ function dayStripBuildFact(metric, report, day, dateWords) {
   const metricId = String(metric && metric.id || "");
   const mark = dayStripMarkState(unit, point);
   const soFar = point && point.provisional && mark !== "pending" ? " so far" : "";
+  const ref = dayStripRef(unit, point);
+  const ariaLabel = (ref.state === "ready" || ref.state === "short") && ref.words
+    ? label + " " + display + soFar + ", " + ref.words
+    : label + " " + display;
   const tooltip = [
     metric && typeof metric.definition === "string" ? metric.definition : "",
     dateWords.short + ": " + display + soFar,
+    (ref.state === "ready" || ref.state === "short") && ref.detail ? ref.detail : "",
     quality === "not_tracked" && metric && metric.since ? "Tracking since " + metric.since : "",
     point && typeof point.reason === "string" && point.reason ? point.reason : "",
     ...warnings,
@@ -149,8 +187,10 @@ function dayStripBuildFact(metric, report, day, dateWords) {
     warning,
     definition: metric && typeof metric.definition === "string" ? metric.definition : "",
     tooltip,
+    ariaLabel,
     unit,
     mark,
+    ref,
     value: point && typeof point.value === "number" ? point.value : null,
     provisional: Boolean(point && point.provisional === true),
   };
@@ -417,8 +457,10 @@ function dayStripModel(report, day, context) {
         warning: "",
         definition: "",
         tooltip: "",
+        ariaLabel: DAY_STRIP_LABELS[id] + ", loading",
         unit: id === "review_closed" ? "bool" : "",
         mark: null,
+        ref: dayStripBlankRef(),
         value: null,
         provisional: false,
       }));

@@ -11,11 +11,11 @@ const { pathToFileURL } = require("node:url");
 const repoRoot = path.resolve(__dirname, "..");
 const pluginRoot = path.join(repoRoot, "plugins/bob-ledger-tools");
 // Height budgets at a 16 px base, measured with the theme lane plus 2 px.
-const DAY_STRIP_HEIGHT_ONE_LINE = 116;
-const DAY_STRIP_HEIGHT_WRAPPED = 167;
+const DAY_STRIP_HEIGHT_ONE_LINE = 132;
+const DAY_STRIP_HEIGHT_WRAPPED = 198;
 // Single-lane budgets at a 16 px base, measured plus 2 px.
-const DAY_STRIP_HEIGHT_ONE_LANE_ONE_LINE = 84;
-const DAY_STRIP_HEIGHT_ONE_LANE_WRAPPED = 134;
+const DAY_STRIP_HEIGHT_ONE_LANE_ONE_LINE = 100;
+const DAY_STRIP_HEIGHT_ONE_LANE_WRAPPED = 166;
 
 // Obsidian's app.css rules that reach plugin DOM. This commented baseline
 // is what once broke the strip: every tile was a <button>, so the 30 px
@@ -419,10 +419,29 @@ function checkMeasurement(item, context) {
   if ((baseForFacts === "today" || baseForFacts === "stale") && typeof item.valueLeadMinRatio === "number") {
     if (item.valueLeadMinRatio < 2) failures.push(`values lead by ${item.valueLeadMinRatio}x (want at least 2x)`);
   }
-  // (o) faithful text: aria-labels end with the value text and values hold no warning.
+  // (o) faithful text: aria-labels start with `<label> <display>` and, when
+  // a reference is ready or short, include bob's words; values hold no warning.
   if (!String(item.state).startsWith("skeleton") && item.state !== "unavailable" && item.state !== "hover" && item.state !== "focus" && item.state !== "reading" && !String(item.state).startsWith("skeleton-")) {
-    if (item.ariaFaithful === false) failures.push(`a fact aria-label does not end with its value text`);
+    if (item.ariaFaithful === false) failures.push(`a fact aria-label does not start with its label and display`);
     if (item.valueHasWarning === true) failures.push(`a value contains the warning mark`);
+  }
+  if (item.state !== "unavailable" && !String(item.state).startsWith("hover") && item.state !== "focus") {
+    if (typeof item.factCount === "number" && item.factCount > 0 && item.refCount !== item.factCount) {
+      failures.push(`facts have ${item.refCount} reference lines, want ${item.factCount}`);
+    }
+    if (item.factCount > 0 && item.refHidden === false) failures.push(`a reference line is not aria-hidden`);
+    if (typeof item.refBaselineSpread === "number" && item.refBaselineSpread > 0.5) {
+      failures.push(`reference baselines spread ${item.refBaselineSpread}px`);
+    }
+    if (typeof item.refClip === "number" && item.refClip > 0.5) {
+      failures.push(`a reference line clips by ${item.refClip}px`);
+    }
+    if (Array.isArray(item.refMarkFailures) && item.refMarkFailures.length) {
+      failures.push(`reference marks: ${item.refMarkFailures[0]}`);
+    }
+    if (typeof item.refContrast === "number" && item.refContrast < 4.5) {
+      failures.push(`reference contrast ${item.refContrast}:1 is below 4.5:1`);
+    }
   }
   // (p) clean folds: at 410px facts fold and row starts hide their hairline;
   // at 540px and 700px every later fact draws its hairline.
@@ -540,9 +559,9 @@ function matrixMarkdown(matrix, browser, revision, interactionChecks) {
     "- Source: production `main.js`, `styles.css`, and synthetic presentation fixtures; no fixture is captured vault data.",
     "- Each strip renders above mock plan badges (TODAY / PENDING / NEXT / READY plus a ★ theme line) inside a Live Preview code-block container, with a bare `## Pomodoros` heading below; one extra Reading-view cell renders today.",
     "- An Obsidian baseline stylesheet (30 px inline-flex buttons, link colours, rendered line-height) loads before the production CSS, so a `<button>` regression fails the matrix.",
-    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 21 states in both plus roots/themes for eight lanes cases plus Reading view.",
+    "- Grid: light and dark themes × 410, 540, and 700 px note columns × 24 states in both plus roots/themes for eight lanes cases plus Reading view.",
     `- Height budgets (16 px base): both ≤${DAY_STRIP_HEIGHT_ONE_LINE} px one-line / ≤${DAY_STRIP_HEIGHT_WRAPPED} px wrapped; single-lane ≤${DAY_STRIP_HEIGHT_ONE_LANE_ONE_LINE} px one-line / ≤${DAY_STRIP_HEIGHT_ONE_LANE_WRAPPED} px wrapped. The long-labels case is relaxed: geometry is enforced, height is reported.`,
-    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, lanes never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton height equals today's height at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) every lane bar spans the strip's content width (±1 px) and the last painted bar is the strip's last line box; (k) no legend label is truncated and no legend item spills past its box; (l) at every width, per legend, the visible counter equals that lane's segments minus its visible items, with screenshotDay showing all four roots at 540 and 700 px and at least three at 410 px; (m) ready cells with ≤8 non-gray root segments carry pairwise distinct bar hues and matching legend dots; theme swatches are square with a radius below half their width and match their segment background, and themeCollision adjacent coloured segments compute different backgrounds; (n) ready and stale values render at least 2× their heads; (o) every fact aria-label ends with its value text and no value holds a warning; (p) folded rows start without a hairline at 410 px while wider rows draw every hairline; (q) the no-Pomodoros bar shows its track colour; (r) every `.bob-day-strip-mark` is square within ±0.5 px, measures 0.95–1.12× its value's computed font size, lies inside its value box, and has its vertical centre within 1 px of the value box centre; (s) in ready cells the met, missed, and pending marks compute three distinct non-gray rim/ring colours, and in stale cells the mark ink computes to the muted text colour; (t) the switch anchor is identical across the three views for every switchable fixture; (u) single-lane views paint one lane row and bar with the chosen lane; (v) skeleton height equals ready height per view; (w) the switch marks are square at the legend dot size with a round roots mark, a rounded themes mark, a transparent off mark with a ring, and a 20×14 box inside the top row.",
+    "- Geometry checks: (a) every strip descendant's box lies inside the strip's box (±0.5 px); (b) no two facts overlap, line 1 and line 2 never overlap, lanes never overlap, and legend items and meta never overlap; (c) values share a baseline within each wrapped line (≤1 px); (d) skeleton, today, and old-bob heights match at every width (≤0.5 px); (e) the height budget holds; (f) the today and wide-values facts fit on one line at 540 and 700; (g) the strip contains no `button` element; (h) forcing hover on a fact never shifts its box, and forcing `:focus-visible` shows an outline; (i) the strip precedes `.bob-plan` in the DOM with its bottom 6–16 px above the badges' top; (j) every lane bar spans the strip's content width (±1 px) and the last painted bar is the strip's last line box; (k) no legend label is truncated and no legend item spills past its box; (l) at every width, per legend, the visible counter equals that lane's segments minus its visible items, with screenshotDay showing all four roots at 540 and 700 px and at least three at 410 px; (m) ready cells with ≤8 non-gray root segments carry pairwise distinct bar hues and matching legend dots; theme swatches are square with a radius below half their width and match their segment background, and themeCollision adjacent coloured segments compute different backgrounds; (n) ready and stale values render at least 2× their heads; (o) every fact aria-label starts with `<label> <display>` and, when a reference is ready or short, includes bob's words, and no value holds a warning; (p) folded rows start without a hairline at 410 px while wider rows draw every hairline; (q) the no-Pomodoros bar shows its track colour; (r) every `.bob-day-strip-mark` is square within ±0.5 px, measures 0.95–1.12× its value's computed font size, lies inside its value box, and has its vertical centre within 1 px of the value box centre; (s) in ready cells the met, missed, and pending marks compute three distinct non-gray rim/ring colours, and in stale cells the mark ink computes to the muted text colour; (t) the switch anchor is identical across the three views for every switchable fixture; (u) single-lane views paint one lane row and bar with the chosen lane; (v) skeleton height equals ready height per view; (w) the switch marks are square at the legend dot size with a round roots mark, a rounded themes mark, a transparent off mark with a ring, and a 20×14 box inside the top row; (x) every fact has exactly one aria-hidden reference line; reference lines share a baseline within 0.5 px on each wrapped row; no reference clips; marks are square, inside their line, and vertically centred on the number; the line's colour contrasts at least 4.5:1 in light and dark.",
     "",
     "| Width | Theme | State | View | Strip height | Budget | Fact rows | Overflow | Facts overlap | Lines overlap | Legend overlap | Value baseline spread | Skeleton delta | Button | Result | Screenshot |",
     "| ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
@@ -556,7 +575,7 @@ function matrixMarkdown(matrix, browser, revision, interactionChecks) {
     "",
     ...interactionChecks.map((item) => `- ${item.width}px ${item.theme}: ${item.label} — ${item.result}${item.detail ? ` (${item.detail})` : ""}`),
     "",
-    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-area roots get distinct hues, seven roots with `+N`, four roots that fit at 540 and 700 px, same-hue themes get shades, seven themes and unnamed, theme parts without `theme_hues`, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m`, three-digit counts, `not yet`), closed-out past day · met, forced hover, forced `:focus-visible`, and a Reading-view today cell, plus roots/themes views for today, past, screenshotDay, themeCollision, noPomodoros, noThemeHues, skeleton, and stale.",
+    "Synthetic cases: today in progress, complete past day, skeleton, stale cached frame, unavailable, no Pomodoros, not tracked with a journal warning, seven areas with `+N`, an old-bob report without `root_parent`, same-area roots get distinct hues, seven roots with `+N`, four roots that fit at 540 and 700 px, same-hue themes get shades, seven themes and unnamed, theme parts without `theme_hues`, a redefined `worked` without area parts, long labels (with a long `job_2026_apply_29` root), wide values (`10h 05m` with `▲ typical 10h 05m`), short typical history, D missing, old bob without `typical`, closed-out past day · met, forced hover, forced `:focus-visible`, and a Reading-view today cell, plus roots/themes views for today, past, screenshotDay, themeCollision, noPomodoros, noThemeHues, skeleton, and stale.",
     "",
   ].join("\n");
 }
@@ -625,6 +644,16 @@ async function main() {
             const delta = skeletonDeltas[view];
             if (typeof delta === "number" && delta > 0.5) {
               failures.push(`skeleton height differs from today by ${delta}px in ${view} view`);
+            }
+          }
+          if (item.state === "old-bob") {
+            const ready = byState.get("today");
+            const skeleton = byState.get("skeleton");
+            if (ready && Math.abs(item.stripHeight - ready.stripHeight) > 0.5) {
+              failures.push(`old-bob height differs from today by ${Math.round(Math.abs(item.stripHeight - ready.stripHeight) * 10) / 10}px`);
+            }
+            if (skeleton && Math.abs(item.stripHeight - skeleton.stripHeight) > 0.5) {
+              failures.push(`old-bob height differs from skeleton by ${Math.round(Math.abs(item.stripHeight - skeleton.stripHeight) * 10) / 10}px`);
             }
           }
           return {

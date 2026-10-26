@@ -26,6 +26,104 @@ function dailyPoint(date, value, display, extra = {}) {
   };
 }
 
+function typicalWords(display, relation, options = {}) {
+  if (options.short) return "no typical day yet";
+  if (options.provisional) return "typical full day " + display;
+  if (relation === "above") return "above the typical day of " + display;
+  if (relation === "below") return "below the typical day of " + display;
+  if (relation === "equal") return "the same as the typical day of " + display;
+  return "typical day " + display;
+}
+
+function typicalDetail(display, relation, options = {}) {
+  const span = options.span || "Oct 17 – Oct 23";
+  const days = options.days !== undefined ? options.days : 7;
+  if (options.short) {
+    const verb = days === 1 ? "has" : "have";
+    return `No typical day yet: ${days} of the previous 7 days ${verb} data (needs 4).`;
+  }
+  if (options.provisional) {
+    return `Typical full day ${display}: median of ${span} (${days} of 7 days with data). Today is still in progress, so this is context, not a pace.`;
+  }
+  if (relation === "equal") {
+    return `Typical day ${display}: median of ${span} (${days} of 7 days with data). This day matches it.`;
+  }
+  if (relation === "above" || relation === "below") {
+    return `Typical day ${display}: median of ${span} (${days} of 7 days with data). This day is ${relation}.`;
+  }
+  return `Typical day ${display}: median of ${span} (${days} of 7 days with data).`;
+}
+
+function buildTypical(date, spec) {
+  const start = spec.start || shiftDay(date, -7);
+  const end = spec.end || shiftDay(date, -1);
+  const days = spec.days !== undefined ? spec.days : 7;
+  const display = spec.display;
+  const value = spec.value;
+  const relation = spec.relation === undefined ? null : spec.relation;
+  const short = value === null || value === undefined;
+  const words = spec.words || typicalWords(display, relation, {
+    short,
+    provisional: spec.provisional === true,
+    days,
+  });
+  const detail = spec.detail || typicalDetail(display, relation, {
+    short,
+    provisional: spec.provisional === true,
+    days,
+    span: spec.span,
+  });
+  return { start, end, days, value, display, relation, words, detail };
+}
+
+function defaultTypicalSpecs(options) {
+  if (options.shortHistory) {
+    return {
+      worked: { display: "–", value: null, relation: null, days: 2 },
+      reviewed: { display: "–", value: null, relation: null, days: 2 },
+      done: { display: "–", value: null, relation: null, days: 2 },
+      created: { display: "–", value: null, relation: null, days: 2 },
+    };
+  }
+  if (options.wideValues) {
+    return {
+      worked: { display: "10h 05m", value: 500, relation: "above" },
+      reviewed: { display: "54", value: 54, relation: "above" },
+      done: { display: "19", value: 19, relation: "above" },
+      created: { display: "23", value: 23, relation: "above" },
+    };
+  }
+  if (options.provisional === false) {
+    return {
+      worked: { display: "4h 10m", value: 250, relation: "below" },
+      reviewed: { display: "6", value: 6, relation: "above" },
+      done: { display: "8", value: 8, relation: "equal" },
+      created: { display: "23", value: 23, relation: "below" },
+    };
+  }
+  return {
+    worked: { display: "4h 10m", value: 250, relation: null, provisional: true },
+    reviewed: { display: "54", value: 54, relation: null, provisional: true },
+    done: { display: "17", value: 17, relation: null, provisional: true },
+    created: { display: "22", value: 22, relation: null, provisional: true },
+  };
+}
+
+function attachDayTypical(metrics, day, options) {
+  if (options.noTypical) return;
+  if ((options.group || "day") !== "day") return;
+  const specs = options.typical || defaultTypicalSpecs(options);
+  for (const metric of metrics) {
+    if (!metric || (metric.unit !== "minutes" && metric.unit !== "count")) continue;
+    const spec = specs[metric.id];
+    if (!spec) continue;
+    const points = Array.isArray(metric.points) ? metric.points : [];
+    const point = points.find((candidate) => candidate && candidate.date === day);
+    if (!point) continue;
+    point.typical = buildTypical(day, spec);
+  }
+}
+
 function minutesDisplay(value) {
   if (value === 0) return "0m";
   const hours = Math.floor(value / 60);
@@ -243,6 +341,7 @@ function makeReport(options = {}) {
     metric("created", "Created", "count", "tasks", numberPoints(4)),
     metric("review_closed", "Review closed", "bool", "checklist", closedPoints),
   ];
+  attachDayTypical(metrics, day, { ...options, group });
   const warnings = options.missingWarning ? [{ code: "journal_gap", date: day, message: "The review journal has a gap for this day." }] : [];
   let themeHues = null;
   if (!options.noThemeHues && !options.redefinedWorked) {
@@ -323,10 +422,12 @@ const fixtures = {
   manyThemes: fixture("seven themes and unnamed", { manyThemes: true, provisional: false }),
   noThemeHues: fixture("theme parts without theme_hues", { noThemeHues: true, provisional: false }),
   longLabels: fixture("long metric and area labels", { longLabels: true }),
-  wideValues: fixture("wide values", { wideValues: true }),
+  wideValues: fixture("wide values", { wideValues: true, provisional: false }),
   weekGrouped: fixture("week grouped report with daily points", { group: "week" }),
   default4w: fixture("canonical-shaped default 4w", { preset: "4w", count: 28 }),
   explicitDay8: fixture("explicit -g day eight-day report", { count: 8 }),
+  shortHistory: fixture("short typical history", { shortHistory: true, provisional: false }),
+  oldBob: fixture("old bob without typical", { noTypical: true, provisional: false }),
 };
 
 module.exports = { ...fixtures, createReport: makeReport };

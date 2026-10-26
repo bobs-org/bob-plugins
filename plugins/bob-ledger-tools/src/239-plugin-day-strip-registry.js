@@ -436,7 +436,15 @@ class BobLedgerToolsDayStripMixin {
             String(stamp === undefined ? "" : stamp),
             model.stale,
             model.error ? model.error.code : "",
-            (model.facts || []).map((fact) => fact.display).join(","),
+            (model.facts || []).map((fact) => {
+              const ref = fact && fact.ref && typeof fact.ref === "object" ? fact.ref : {};
+              return [
+                fact.display,
+                ref.state || "",
+                ref.mark || "",
+                ref.display || "",
+              ].join(":");
+            }).join(","),
             themeSig,
             laneSig,
           ].join("|");
@@ -753,6 +761,30 @@ class BobLedgerToolsDayStripMixin {
         return;
       }
       this.dayStripPaint(record, result || { report: null });
+      // A cold-cache default fetch may settle with a week/month-grouped
+      // report whose daily_points never carry `typical`. Re-run selection
+      // at once so the strip fetches the explicit `-g day` range.
+      try {
+        const requestedRange = options && typeof options.range === "string" ? options.range : "";
+        const requestedGroup = options && typeof options.group === "string" ? options.group : "";
+        if (requestedRange || requestedGroup) {
+          return;
+        }
+        const report = result && result.report;
+        if (!report) {
+          return;
+        }
+        const localToday = this.dayStripLocalNow();
+        if (dayStripDefaultReportCovers(report, record.day, localToday)) {
+          return;
+        }
+        const next = this.dayStripOptionsForRecord(record, localToday);
+        if (next && next.selection && next.selection.source === "range" && next.options) {
+          this.dayStripFetch(record, next.options);
+        }
+      } catch (error) {
+        // Immediate re-selection is best-effort.
+      }
     } catch (error) {
       // Settling is best-effort.
     }

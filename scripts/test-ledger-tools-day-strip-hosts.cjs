@@ -402,6 +402,66 @@ test("report window checks keep the page window only when it shows D", async () 
         dayStripDefaultReportCovers(report, shiftDay(today, -21), today),
         false,
       );
+      const week = fixtures.createReport({ day: today, today, count: 28, group: "week" });
+      assert.equal(dayStripDefaultReportCovers(week, today, today), false);
+      const month = fixtures.createReport({ day: today, today, count: 28, group: "month" });
+      assert.equal(dayStripDefaultReportCovers(month, today, today), false);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("week-grouped default never covers D, and a cold-cache today re-selects once", async () => {
+  await withMissingConfig(async () => {
+    const plugin = await makePlugin();
+    try {
+      const today = plugin.dayStripLocalNow();
+      const stem = today.replace(/-/g, "");
+      const folder = today.slice(0, 4);
+      const week = fixtures.createReport({ day: today, today, count: 28, group: "week" });
+      const dayReport = fixtures.createReport({ day: today, today, count: 8, group: "day" });
+      assert.equal(dayStripDefaultReportCovers(week, today, today), false);
+      const spawns = stubSpawn(plugin, (args) => {
+        const grouped = Array.isArray(args) && args.includes("-g") && args.includes("day");
+        return { ok: true, report: grouped ? dayReport : week };
+      });
+      const { el } = mountFence(plugin, {
+        sourcePath: `${folder}/${stem}.md`,
+      });
+      await settle(80);
+      assert.ok(spawns.length >= 2, `cold-cache today re-selects once, got ${spawns.length} spawns`);
+      const groups = spawns.filter((args) => Array.isArray(args) && args.includes("-g") && args.includes("day"));
+      assert.equal(groups.length, 1, "exactly one explicit -g day fetch");
+      assert.match(el.textContent, /Worked/);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("a report that differs only in typical repaints", async () => {
+  await withMissingConfig(async () => {
+    const plugin = await makePlugin();
+    try {
+      const today = plugin.dayStripLocalNow();
+      const stem = today.replace(/-/g, "");
+      const folder = today.slice(0, 4);
+      const without = fixtures.createReport({ day: today, today, count: 8, noTypical: true });
+      const withTypical = fixtures.createReport({ day: today, today, count: 8 });
+      stubSpawn(plugin, () => ({ ok: true, report: without }));
+      await seedDefault(plugin, without);
+      mountFence(plugin, { sourcePath: `${folder}/${stem}.md` });
+      await settle();
+      const record = Array.from(plugin.dayStripViews)[0];
+      assert.ok(record, "strip is registered");
+      plugin.dayStripPaint(record, { report: without, fetchedAt: 1 });
+      const firstKey = record.paintedKey;
+      const firstText = record.el.textContent;
+      plugin.dayStripPaint(record, { report: withTypical, fetchedAt: 1 });
+      assert.notEqual(record.paintedKey, firstKey, "typical-only change repaints");
+      assert.notEqual(record.el.textContent, firstText);
+      assert.match(record.el.textContent, /typical/);
     } finally {
       plugin.onunload();
     }

@@ -127,6 +127,12 @@ function dayStripDefaultReportCovers(report, day, localToday) {
     if (!dayStripDateParts(day)) {
       return false;
     }
+    const group = report.range && typeof report.range.group === "string"
+      ? report.range.group
+      : "";
+    if (group === "week" || group === "month") {
+      return false;
+    }
     const today = typeof localToday === "string" ? localToday : "";
     const reportToday = typeof report.today === "string" ? report.today : "";
     if (reportToday && today && reportToday < today && day >= reportToday) {

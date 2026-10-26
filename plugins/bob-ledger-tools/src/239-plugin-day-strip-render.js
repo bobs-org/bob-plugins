@@ -247,12 +247,54 @@ function dayStripRememberMarks(el, model) {
   }
 }
 
+function dayStripRenderRefMark(doc, mark) {
+  if (mark !== "above" && mark !== "below" && mark !== "equal") return null;
+  const svg = statsSvgEl(doc, "svg", {
+    class: "bob-day-strip-ref-mark",
+    viewBox: "0 0 10 10",
+    "aria-hidden": "true",
+    focusable: "false",
+  });
+  if (!svg) return null;
+  if (mark === "above") {
+    dayStripAppend(svg, statsSvgEl(doc, "path", { d: "M5 1.6 L8.8 8 H1.2 Z" }));
+  } else if (mark === "below") {
+    dayStripAppend(svg, statsSvgEl(doc, "path", { d: "M1.2 2 H8.8 L5 8.4 Z" }));
+  } else {
+    dayStripAppend(svg, statsSvgEl(doc, "path", { d: "M1.5 2.9h7v1.5h-7z M1.5 5.6h7v1.5h-7z" }));
+  }
+  return svg;
+}
+
+function dayStripRenderRef(doc, fact) {
+  const ref = fact && fact.ref && typeof fact.ref === "object" ? fact.ref : { state: "blank" };
+  const state = ref.state === "ready" || ref.state === "short" ? ref.state : "blank";
+  const node = statsEl(doc, "span", {
+    class: "bob-day-strip-ref",
+    "aria-hidden": "true",
+  });
+  if (!node) return null;
+  if (node.setAttribute) {
+    node.setAttribute("data-ref-state", state);
+    if (ref.mark) node.setAttribute("data-ref-mark", ref.mark);
+  }
+  if (state === "ready" || state === "short") {
+    if (state === "ready") {
+      const markNode = dayStripRenderRefMark(doc, ref.mark);
+      if (markNode) dayStripAppend(node, markNode);
+    }
+    dayStripAppend(node, statsEl(doc, "span", { class: "bob-day-strip-ref-word" }, "typical"));
+    dayStripAppend(node, statsEl(doc, "span", { class: "bob-day-strip-ref-num" }, ref.display));
+  }
+  return node;
+}
+
 function dayStripRenderFact(doc, fact, model, handlers, arrive) {
   const skeleton = model.state === "skeleton";
   const node = dayStripLink(
     doc,
     "bob-day-strip-fact" + (skeleton ? " bob-day-strip-fact-skeleton" : ""),
-    skeleton ? fact.label + ", loading" : fact.label + " " + fact.display,
+    fact.ariaLabel || (skeleton ? fact.label + ", loading" : fact.label + " " + fact.display),
     fact.tooltip,
   );
   if (node) node.setAttribute("data-day-strip-metric", fact.id);
@@ -291,6 +333,7 @@ function dayStripRenderFact(doc, fact, model, handlers, arrive) {
     }
   }
   dayStripAppend(node, value);
+  dayStripAppend(node, dayStripRenderRef(doc, fact));
   dayStripActivate(node, (newLeaf) => {
     if (typeof handlers.openStats === "function") {
       handlers.openStats({ day: model.day, metric: fact.id, newLeaf });

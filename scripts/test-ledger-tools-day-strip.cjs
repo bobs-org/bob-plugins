@@ -294,8 +294,11 @@ test("skeleton carries placeholder text per fact and the same tag and class sequ
     name === "bob-day-strip-legend-label" || name === "bob-day-strip-legend-value");
   const markPart = (classes) => (classes || "").split(/\s+/).some((name) =>
     name === "bob-day-strip-mark" || name.startsWith("bob-day-strip-mark-"));
+  const refPart = (classes) => (classes || "").split(/\s+/).some((name) =>
+    name === "bob-day-strip-ref-word" || name === "bob-day-strip-ref-num" ||
+    name === "bob-day-strip-ref-mark");
   const shape = (root) => findAll(root, () => true)
-    .filter((node) => !legendPart(node.getAttribute("class")) && !markPart(node.getAttribute("class")))
+    .filter((node) => !legendPart(node.getAttribute("class")) && !markPart(node.getAttribute("class")) && !refPart(node.getAttribute("class")))
     .map((node) => node.tagName + "|" + normalize(node.getAttribute("class")));
   assert.deepEqual(shape(skeletonRoot), shape(readyRoot));
 });
@@ -487,13 +490,16 @@ test("facts stack a label head over a faithful value with warnings in the head",
     for (const [index, fact] of model.facts.entries()) {
       const node = byAttribute(root, "data-day-strip-metric", fact.id)[0];
       assert.ok(node, `${fixture.name} ${fact.id} has a fact node`);
-      assert.equal(node.getAttribute("aria-label"), `${fact.label} ${fact.display}`, `${fixture.name} ${fact.id} keeps its aria-label`);
+      assert.equal(node.getAttribute("aria-label"), fact.ariaLabel, `${fixture.name} ${fact.id} keeps its aria-label`);
       const head = byClass(node, "bob-day-strip-head")[0];
       assert.ok(head, `${fixture.name} ${fact.id} has a head`);
       const value = byClass(node, "bob-day-strip-value")[0];
       assert.ok(value, `${fixture.name} ${fact.id} has a value`);
+      const refNode = byClass(node, "bob-day-strip-ref")[0];
+      assert.ok(refNode, `${fixture.name} ${fact.id} reserves a reference line`);
       assert.equal(node.children[0], head, `${fixture.name} ${fact.id} head paints first`);
       assert.equal(node.children[1], value, `${fixture.name} ${fact.id} value paints second`);
+      assert.equal(node.children[2], refNode, `${fixture.name} ${fact.id} reference paints third`);
       assert.equal(value.textContent, fact.display, `${fixture.name} ${fact.id} keeps bob's display`);
       const warnings = byClass(value, "bob-day-strip-warning");
       assert.equal(warnings.length, 0, `${fixture.name} ${fact.id} value holds no warning`);
@@ -705,7 +711,7 @@ test("boolean facts paint an aria-hidden mark with hidden display text", () => {
     assert.deepEqual(markPartNames(svgs[0]), expected[state], `${state} parts`);
     const modelFact = model.facts.find((item) => item.id === "review_closed");
     assert.equal(value.textContent, modelFact.display, `${state} keeps bob's display`);
-    assert.equal(fact.getAttribute("aria-label"), `${modelFact.label} ${modelFact.display}`);
+    assert.equal(fact.getAttribute("aria-label"), modelFact.ariaLabel);
   }
 });
 
@@ -786,4 +792,162 @@ test("stroke-dashoffset lives only inside keyframes", () => {
   const withoutKeyframes = css.replace(/@keyframes[^{]*\{(?:[^{}]|\{[^{}]*\})*\}/g, "");
   assert.doesNotMatch(withoutKeyframes, /stroke-dashoffset/);
   assert.match(css, /@keyframes[\s\S]*stroke-dashoffset/);
+});
+
+function refNode(root, metricId) {
+  const fact = byAttribute(root, "data-day-strip-metric", metricId)[0];
+  return byClass(fact, "bob-day-strip-ref")[0];
+}
+
+test("dayStripRef classifies bob's typical without computing it", () => {
+  const ready = {
+    value: 205,
+    typical: {
+      display: "4h 10m",
+      value: 250,
+      relation: "below",
+      words: "45m below the typical day of 4h 10m",
+      detail: "Typical day 4h 10m.",
+    },
+  };
+  assert.deepEqual(helpers.dayStripRef("minutes", ready), {
+    state: "ready",
+    mark: "below",
+    display: "4h 10m",
+    words: "45m below the typical day of 4h 10m",
+    detail: "Typical day 4h 10m.",
+  });
+  assert.equal(helpers.dayStripRef("minutes", { ...ready, provisional: true }).mark, null);
+  assert.equal(helpers.dayStripRef("minutes", { ...ready, typical: { ...ready.typical, value: null } }).state, "short");
+  assert.equal(helpers.dayStripRef("minutes", { ...ready, typical: { ...ready.typical, value: null } }).mark, null);
+  assert.equal(helpers.dayStripRef("bool", ready).state, "blank");
+  assert.equal(helpers.dayStripRef("minutes", { value: 10 }).state, "blank");
+  assert.equal(helpers.dayStripRef("minutes", { value: null, typical: ready.typical }).state, "blank");
+  assert.equal(helpers.dayStripRef("count", { value: 9, typical: { display: "23", value: 23, relation: "below", words: "w", detail: "d" } }).mark, "below");
+});
+
+test("typical line covers every States-table row", () => {
+  const past = modelFor(fixtures.past);
+  const worked = past.facts.find((fact) => fact.id === "worked");
+  const reviewed = past.facts.find((fact) => fact.id === "reviewed");
+  const done = past.facts.find((fact) => fact.id === "done");
+  const created = past.facts.find((fact) => fact.id === "created");
+  const closed = past.facts.find((fact) => fact.id === "review_closed");
+  assert.equal(worked.ref.state, "ready");
+  assert.equal(worked.ref.mark, "below");
+  assert.equal(worked.ref.display, "4h 10m");
+  assert.match(worked.ariaLabel, /^Worked .+ so far, |^Worked .+, /);
+  assert.ok(worked.ariaLabel.endsWith(worked.ref.words));
+  assert.match(worked.tooltip, /Typical day 4h 10m/);
+  assert.equal(reviewed.ref.mark, "above");
+  assert.equal(done.ref.mark, "equal");
+  assert.equal(created.ref.mark, "below");
+  assert.equal(closed.ref.state, "blank");
+  assert.equal(closed.ariaLabel, `${closed.label} ${closed.display}`);
+
+  const today = modelFor(fixtures.today);
+  const todayWorked = today.facts.find((fact) => fact.id === "worked");
+  assert.equal(todayWorked.ref.state, "ready");
+  assert.equal(todayWorked.ref.mark, null);
+  assert.ok(todayWorked.ariaLabel.startsWith("Worked "));
+  assert.match(todayWorked.ariaLabel, / so far, /);
+  assert.ok(todayWorked.ariaLabel.endsWith(todayWorked.ref.words));
+
+  const short = modelFor(fixtures.shortHistory);
+  const shortWorked = short.facts.find((fact) => fact.id === "worked");
+  assert.equal(shortWorked.ref.state, "short");
+  assert.equal(shortWorked.ref.mark, null);
+  assert.equal(shortWorked.ref.display, "–");
+  assert.ok(shortWorked.ariaLabel.endsWith("no typical day yet"));
+
+  const missing = modelFor(fixtures.missingWarning);
+  const missingReviewed = missing.facts.find((fact) => fact.id === "reviewed");
+  assert.equal(missingReviewed.display, "–");
+  assert.equal(missingReviewed.ref.state, "blank");
+  assert.equal(missingReviewed.ariaLabel, "Reviewed –");
+
+  const old = modelFor(fixtures.oldBob);
+  for (const fact of old.facts) {
+    assert.equal(fact.ref.state, "blank", `${fact.id} is blank on old bob`);
+  }
+
+  const skeleton = helpers.dayStripModel(null, fixtures.today.day, { localToday: fixtures.today.localToday });
+  for (const fact of skeleton.facts) {
+    assert.equal(fact.ref.state, "blank");
+    assert.equal(fact.ariaLabel, `${fact.label}, loading`);
+  }
+
+  const stale = modelFor(fixtures.today, { stale: true, error: { code: "timeout", title: "bob stats timed out" } });
+  assert.equal(stale.stale, true);
+  assert.equal(stale.facts.find((fact) => fact.id === "worked").ref.state, "ready");
+});
+
+test("typical line is aria-hidden, reserved, and never a tab stop", () => {
+  const cases = [
+    modelFor(fixtures.past),
+    modelFor(fixtures.today),
+    modelFor(fixtures.shortHistory),
+    modelFor(fixtures.missingWarning),
+    modelFor(fixtures.oldBob),
+    helpers.dayStripModel(null, fixtures.today.day, { localToday: fixtures.today.localToday }),
+    modelFor(fixtures.today, { stale: true }),
+  ];
+  for (const model of cases) {
+    const { root } = paint(model);
+    const facts = byClass(root, "bob-day-strip-fact");
+    assert.equal(facts.length, model.facts.length);
+    for (const fact of facts) {
+      const refs = byClass(fact, "bob-day-strip-ref");
+      assert.equal(refs.length, 1, "exactly one reference line");
+      assert.equal(refs[0].getAttribute("aria-hidden"), "true");
+      assert.equal(refs[0].getAttribute("role"), null);
+      assert.equal(refs[0].getAttribute("tabindex"), null);
+      assert.equal(fact.getAttribute("role"), "link");
+      assert.equal(fact.getAttribute("tabindex"), "0");
+      assert.equal(findAll(fact, (node) => node.tagName === "BUTTON").length, 0);
+    }
+  }
+
+  const pastRoot = paint(modelFor(fixtures.past)).root;
+  const below = refNode(pastRoot, "worked");
+  assert.equal(below.getAttribute("data-ref-state"), "ready");
+  assert.equal(below.getAttribute("data-ref-mark"), "below");
+  assert.equal(byClass(below, "bob-day-strip-ref-word")[0].textContent, "typical");
+  assert.equal(byClass(below, "bob-day-strip-ref-num")[0].textContent, "4h 10m");
+  assert.equal(byClass(below, "bob-day-strip-ref-mark").length, 1);
+
+  const equal = refNode(pastRoot, "done");
+  assert.equal(equal.getAttribute("data-ref-mark"), "equal");
+
+  const todayRoot = paint(modelFor(fixtures.today)).root;
+  const todayRef = refNode(todayRoot, "worked");
+  assert.equal(todayRef.getAttribute("data-ref-mark"), null);
+  assert.equal(byClass(todayRef, "bob-day-strip-ref-mark").length, 0);
+  assert.equal(byClass(todayRef, "bob-day-strip-ref-word")[0].textContent, "typical");
+
+  const shortRoot = paint(modelFor(fixtures.shortHistory)).root;
+  const shortRef = refNode(shortRoot, "worked");
+  assert.equal(shortRef.getAttribute("data-ref-state"), "short");
+  assert.equal(byClass(shortRef, "bob-day-strip-ref-mark").length, 0);
+  assert.equal(byClass(shortRef, "bob-day-strip-ref-num")[0].textContent, "–");
+
+  const missingRoot = paint(modelFor(fixtures.missingWarning)).root;
+  const missingRef = refNode(missingRoot, "reviewed");
+  assert.equal(missingRef.getAttribute("data-ref-state"), "blank");
+  assert.equal(missingRef.textContent, "");
+
+  const boolRef = refNode(pastRoot, "review_closed");
+  assert.equal(boolRef.getAttribute("data-ref-state"), "blank");
+  assert.equal(boolRef.textContent, "");
+
+  const skeletonRoot = paint(helpers.dayStripModel(null, fixtures.today.day, { localToday: fixtures.today.localToday })).root;
+  for (const fact of byClass(skeletonRoot, "bob-day-strip-fact")) {
+    const ref = byClass(fact, "bob-day-strip-ref")[0];
+    assert.equal(ref.getAttribute("data-ref-state"), "blank");
+  }
+
+  const oldRoot = paint(modelFor(fixtures.oldBob)).root;
+  for (const fact of byClass(oldRoot, "bob-day-strip-fact")) {
+    assert.equal(byClass(fact, "bob-day-strip-ref")[0].getAttribute("data-ref-state"), "blank");
+  }
 });

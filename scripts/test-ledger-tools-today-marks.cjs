@@ -1585,3 +1585,94 @@ test("home labels: unnamed timed entry uses derived label and 1-based entryLine"
     }
   }
 });
+
+test("mark gate holds in popout windows for both toggle states", () => {
+  const LivePlugin = loadPluginModule({ livePreview: true });
+  const savedDocument = global.document;
+  const makeGateDocument = () => {
+    const classes = new Set();
+    return {
+      body: {
+        classList: {
+          add: (name) => classes.add(name),
+          remove: (name) => classes.delete(name),
+          contains: (name) => classes.has(name),
+        },
+      },
+      _classes: classes,
+    };
+  };
+  const popoutLeaf = (doc) => ({
+    view: { file: { path: "other.md" } },
+    containerEl: { ownerDocument: doc },
+  });
+  const mainDoc = makeGateDocument();
+  const earlyPopoutDoc = makeGateDocument();
+  const leaves = [popoutLeaf(earlyPopoutDoc)];
+  const windowOpenHandlers = [];
+  const plugin = makeLiveMarkPlugin(LivePlugin);
+  plugin.app = {
+    vault: {},
+    metadataCache: { on: () => ({}), getCache: () => ({}) },
+    workspace: {
+      on: (event, handler) => {
+        if (event === "window-open") {
+          windowOpenHandlers.push(handler);
+        }
+        return {};
+      },
+      getLeavesOfType: () => leaves,
+      trigger: () => {},
+    },
+  };
+  plugin.registerEvent = (ref) => {
+    plugin.registeredEvents = plugin.registeredEvents || [];
+    plugin.registeredEvents.push(ref);
+    return ref;
+  };
+  plugin.addCommand = () => {};
+  plugin.registerEditorExtension = () => {};
+  plugin.registerMarkdownPostProcessor = () => {};
+  plugin.setupTodayMarksReading = () => {};
+  plugin.scheduleTodayMarksRefresh = () => {};
+  plugin.sweepTodayMarksReading = () => {};
+  plugin.refreshTodayMarkEditors = () => {};
+  global.document = mainDoc;
+  try {
+    plugin.setupTodayMarks();
+    const has = (doc) => doc._classes.has("bob-today-marks-off");
+    // Today marks on means the opt-out class is absent everywhere.
+    assert.equal(has(mainDoc), false);
+    assert.equal(has(earlyPopoutDoc), false);
+    assert.ok(windowOpenHandlers.length >= 1, "window-open mirrored");
+    // A popout opened after setup inherits the on state (class absent).
+    const latePopoutDoc = makeGateDocument();
+    for (const handler of windowOpenHandlers) {
+      handler({ doc: latePopoutDoc }, undefined);
+    }
+    assert.equal(has(latePopoutDoc), false);
+    // Toggle off adds the opt-out class everywhere; later popouts stay off.
+    assert.equal(plugin.toggleTodayMarks(), false);
+    assert.equal(has(mainDoc), true);
+    assert.equal(has(earlyPopoutDoc), true);
+    assert.equal(has(latePopoutDoc), true);
+    const offPopoutDoc = makeGateDocument();
+    for (const handler of windowOpenHandlers) {
+      handler(undefined, { document: offPopoutDoc });
+    }
+    assert.equal(has(offPopoutDoc), true);
+    // Toggle on removes the opt-out class everywhere, including popouts opened while off.
+    leaves.push(popoutLeaf(offPopoutDoc));
+    assert.equal(plugin.toggleTodayMarks(), true);
+    assert.equal(has(mainDoc), false);
+    assert.equal(has(earlyPopoutDoc), false);
+    assert.equal(has(latePopoutDoc), false);
+    assert.equal(has(offPopoutDoc), false);
+  } finally {
+    if (savedDocument === undefined) {
+      delete global.document;
+    } else {
+      global.document = savedDocument;
+    }
+  }
+});

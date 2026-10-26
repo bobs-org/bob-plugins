@@ -76,19 +76,14 @@ class BobLedgerToolsTodayMarksMixin {
       if (typeof this.todayJumpInFlight !== "boolean") {
         this.todayJumpInFlight = false;
       }
-      try {
-        const body =
-          typeof document !== "undefined" && document ? document.body : null;
-        if (body && body.classList) {
-          if (this.todayMarksEnabled) {
-            body.classList.remove("bob-today-marks-off");
-          } else {
-            body.classList.add("bob-today-marks-off");
-          }
-        }
-      } catch (error) {
-        // The opt-out class is best-effort; JavaScript gating is authoritative.
-      }
+      this.applyMarkGateClass(
+        "bob-today-marks-off",
+        !this.todayMarksEnabled,
+      );
+      this.registerMarkGatePopoutSync(
+        "bob-today-marks-off",
+        () => !this.todayMarksEnabled,
+      );
       try {
         if (typeof this.addCommand === "function") {
           this.addCommand({
@@ -613,19 +608,7 @@ class BobLedgerToolsTodayMarksMixin {
     try {
       this.todayMarksEnabled = !this.todayMarksEnabled;
       const enabled = this.todayMarksEnabled;
-      try {
-        const body =
-          typeof document !== "undefined" && document ? document.body : null;
-        if (body && body.classList) {
-          if (enabled) {
-            body.classList.remove("bob-today-marks-off");
-          } else {
-            body.classList.add("bob-today-marks-off");
-          }
-        }
-      } catch (error) {
-        // JavaScript gating remains authoritative.
-      }
+      this.applyMarkGateClass("bob-today-marks-off", !enabled);
       this.applyTodayMarksRefresh();
       try {
         new Notice(enabled ? "Today marks on" : "Today marks off");

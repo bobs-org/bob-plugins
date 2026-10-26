@@ -4,23 +4,14 @@ class BobLedgerToolsFreshnessMarkModelMixin {
       if (typeof this.freshnessMarksEnabled !== "boolean") {
         this.freshnessMarksEnabled = true;
       }
-      try {
-        if (
-          typeof document !== "undefined" &&
-          document &&
-          document.body &&
-          document.body.classList &&
-          typeof document.body.classList.add === "function"
-        ) {
-          if (this.freshnessMarksEnabled) {
-            document.body.classList.add("bob-fresh-marks");
-          } else {
-            document.body.classList.remove("bob-fresh-marks");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass(
+        "bob-fresh-marks",
+        this.freshnessMarksEnabled,
+      );
+      this.registerMarkGatePopoutSync(
+        "bob-fresh-marks",
+        () => this.freshnessMarksEnabled,
+      );
       try {
         if (typeof this.addCommand === "function") {
           this.addCommand({

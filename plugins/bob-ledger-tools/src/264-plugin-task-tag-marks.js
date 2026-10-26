@@ -11,23 +11,14 @@ class BobLedgerToolsTaskTagMarksMixin {
       if (typeof this.taskTagMarksEnabled !== "boolean") {
         this.taskTagMarksEnabled = true;
       }
-      try {
-        if (
-          typeof document !== "undefined" &&
-          document &&
-          document.body &&
-          document.body.classList &&
-          typeof document.body.classList.add === "function"
-        ) {
-          if (this.taskTagMarksEnabled) {
-            document.body.classList.add("bob-task-tag-marks");
-          } else {
-            document.body.classList.remove("bob-task-tag-marks");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass(
+        "bob-task-tag-marks",
+        this.taskTagMarksEnabled,
+      );
+      this.registerMarkGatePopoutSync(
+        "bob-task-tag-marks",
+        () => this.taskTagMarksEnabled,
+      );
       try {
         if (typeof this.addCommand === "function") {
           this.addCommand({
@@ -663,24 +654,7 @@ class BobLedgerToolsTaskTagMarksMixin {
     try {
       this.taskTagMarksEnabled = !this.taskTagMarksEnabled;
       const enabled = this.taskTagMarksEnabled;
-      try {
-        if (
-          typeof document !== "undefined" &&
-          document &&
-          document.body &&
-          document.body.classList
-        ) {
-          if (enabled) {
-            if (typeof document.body.classList.add === "function") {
-              document.body.classList.add("bob-task-tag-marks");
-            }
-          } else if (typeof document.body.classList.remove === "function") {
-            document.body.classList.remove("bob-task-tag-marks");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass("bob-task-tag-marks", enabled);
       try {
         if (enabled) {
           this.annotateTaskTagMarksInDocument();

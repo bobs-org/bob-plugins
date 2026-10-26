@@ -13,23 +13,14 @@ class BobLedgerToolsPriorityMarksMixin {
       if (typeof this.priorityMarksEnabled !== "boolean") {
         this.priorityMarksEnabled = true;
       }
-      try {
-        if (
-          typeof document !== "undefined" &&
-          document &&
-          document.body &&
-          document.body.classList &&
-          typeof document.body.classList.add === "function"
-        ) {
-          if (this.priorityMarksEnabled) {
-            document.body.classList.add("bob-priority-marks");
-          } else {
-            document.body.classList.remove("bob-priority-marks");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass(
+        "bob-priority-marks",
+        this.priorityMarksEnabled,
+      );
+      this.registerMarkGatePopoutSync(
+        "bob-priority-marks",
+        () => this.priorityMarksEnabled,
+      );
       try {
         if (typeof this.addCommand === "function") {
           this.addCommand({
@@ -845,24 +836,7 @@ class BobLedgerToolsPriorityMarksMixin {
     try {
       this.priorityMarksEnabled = !this.priorityMarksEnabled;
       const enabled = this.priorityMarksEnabled;
-      try {
-        if (
-          typeof document !== "undefined" &&
-          document &&
-          document.body &&
-          document.body.classList
-        ) {
-          if (enabled) {
-            if (typeof document.body.classList.add === "function") {
-              document.body.classList.add("bob-priority-marks");
-            }
-          } else if (typeof document.body.classList.remove === "function") {
-            document.body.classList.remove("bob-priority-marks");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass("bob-priority-marks", enabled);
       try {
         this.refreshPriorityMarkEditors();
       } catch (error) {

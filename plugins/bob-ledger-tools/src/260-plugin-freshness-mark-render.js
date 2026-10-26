@@ -551,24 +551,7 @@ class BobLedgerToolsFreshnessMarkRenderMixin {
     try {
       this.freshnessMarksEnabled = !this.freshnessMarksEnabled;
       const enabled = this.freshnessMarksEnabled;
-      try {
-        if (
-          typeof document !== "undefined" &&
-          document &&
-          document.body &&
-          document.body.classList
-        ) {
-          if (enabled) {
-            if (typeof document.body.classList.add === "function") {
-              document.body.classList.add("bob-fresh-marks");
-            }
-          } else if (typeof document.body.classList.remove === "function") {
-            document.body.classList.remove("bob-fresh-marks");
-          }
-        }
-      } catch (error) {
-        // Body class is best-effort.
-      }
+      this.applyMarkGateClass("bob-fresh-marks", enabled);
       try {
         this.refreshFreshnessMarkEditors();
       } catch (error) {

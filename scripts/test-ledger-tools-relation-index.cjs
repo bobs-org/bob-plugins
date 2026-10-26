@@ -588,3 +588,142 @@ test("api.relationLabels reads folded preferences and delegates desktop writes t
   plugin.teardownRelationIndex();
 });
 
+function wrapRelationIndexCounters(plugin) {
+  let publishes = 0;
+  let memoBuilds = 0;
+  const originalPublish = plugin.publishRelationIndex;
+  const originalMemo = plugin.relationIndexTaskMemo;
+  plugin.publishRelationIndex = function wrappedPublish(...args) {
+    publishes += 1;
+    return originalPublish.apply(this, args);
+  };
+  plugin.relationIndexTaskMemo = function wrappedMemo(...args) {
+    const missed = !this.relationIndexTaskMemoCache;
+    const result = originalMemo.apply(this, args);
+    if (missed) memoBuilds += 1;
+    return result;
+  };
+  return {
+    originalPublish,
+    counts: () => ({ publishes, memoBuilds }),
+    reset: () => {
+      publishes = 0;
+      memoBuilds = 0;
+    },
+  };
+}
+
+test("relationIndex coalesces a metadata storm to one publish and one task memo", async () => {
+  const stormSize = 40;
+  const files = [];
+  const tasks = [];
+  for (let index = 0; index < stormSize; index += 1) {
+    const path = `notes/source-${index}.md`;
+    const targetPath = `notes/target-${index}.md`;
+    files.push(makeFile(
+      path,
+      `- [ ] #task Source ${index} ^source-${index}\n  - 🪢 **LINKS:** [[${targetPath}#^target-${index}]]`,
+      { links: [{ link: `${targetPath}#^target-${index}` }], blocks: { [`source-${index}`]: {} } },
+    ));
+    files.push(makeFile(
+      targetPath,
+      `- [ ] #task Target ${index} ^target-${index}`,
+      { blocks: { [`target-${index}`]: {} } },
+    ));
+    tasks.push({
+      path,
+      lineNumber: 0,
+      status: { type: "TODO" },
+      description: `Source ${index}`,
+    });
+  }
+  const app = makeApp(files, tasks);
+  for (let index = 0; index < stormSize; index += 1) {
+    app._aliases.set(`notes/target-${index}`, `notes/target-${index}.md`);
+  }
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.initializeRelationIndex();
+  plugin.setupRelationIndex();
+  plugin.startRelationIndexScan();
+  const api = plugin.relationIndexApi();
+  await waitUntil(() => api.ready(), "initial relation scan should finish");
+
+  const counters = wrapRelationIndexCounters(plugin);
+  const uncoalescedStart = performance.now();
+  for (let index = 0; index < stormSize; index += 1) {
+    const source = files[index * 2];
+    plugin.relationIndexApplyFile(source.path, source.content);
+    plugin.flushRelationIndexPublish();
+  }
+  const uncoalescedMs = performance.now() - uncoalescedStart;
+  assert.equal(counters.counts().publishes, stormSize);
+  assert.equal(counters.counts().memoBuilds, 1, "flushed publishes in one turn reuse the task memo");
+  await Promise.resolve();
+  counters.reset();
+
+  const notifications = [];
+  api.onChange((event) => notifications.push(event.generation));
+  const coalescedStart = performance.now();
+  for (let index = 0; index < stormSize; index += 1) {
+    const source = files[index * 2];
+    const changed = `- [ ] #task Source ${index} ^source-${index}\n  - 🪢 **LINKS:** storm-${index} [[notes/target-${index}.md#^target-${index}]]`;
+    source.content = changed;
+    app._events.metadataEvents.emit("changed", source, changed);
+  }
+  const eventStackMs = performance.now() - coalescedStart;
+  assert.equal(counters.counts().publishes, 0, "the storm defers the rebuild off the event stack");
+  assert.equal(notifications.length, 0, "onChange waits for the coalesced publish");
+  await Promise.resolve();
+  const coalescedMs = performance.now() - coalescedStart;
+  assert.equal(counters.counts().publishes, 1, "one publish after the coalesced turn");
+  assert.equal(counters.counts().memoBuilds, 1, "one task memo build for the coalesced turn");
+  assert.equal(notifications.length, 1, "listeners see one atomic publication");
+  assert.equal(
+    api.outgoing(`notes/source-${stormSize - 1}.md`, `source-${stormSize - 1}`)[0].label,
+    `storm-${stormSize - 1}`,
+  );
+  assert.equal(counters.counts().publishes, 1, "a v1 read after the turn does not publish again");
+  console.log(JSON.stringify({
+    relation_index_storm: {
+      events: stormSize,
+      uncoalesced_publish_ms: Number(uncoalescedMs.toFixed(2)),
+      coalesced_event_stack_ms: Number(eventStackMs.toFixed(2)),
+      coalesced_turn_ms: Number(coalescedMs.toFixed(2)),
+      publishes: counters.counts().publishes,
+      memo_builds: counters.counts().memoBuilds,
+    },
+  }));
+  plugin.teardownRelationIndex();
+});
+
+test("relationIndex v1 reads flush a pending publish", async () => {
+  const source = makeFile(
+    "notes/source.md",
+    "- [ ] #task Source ^source\n  - 🪢 **LINKS:** [[notes/target#^target]]",
+    { links: [{ link: "notes/target#^target" }], blocks: { source: {} } },
+  );
+  const target = makeFile("notes/target.md", "- [ ] #task Target ^target", { blocks: { target: {} } });
+  const app = makeApp([source, target]);
+  app._aliases.set("notes/target", "notes/target.md");
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.initializeRelationIndex();
+  plugin.setupRelationIndex();
+  plugin.startRelationIndexScan();
+  const api = plugin.relationIndexApi();
+  await waitUntil(() => api.ready(), "initial relation scan should finish");
+
+  const counters = wrapRelationIndexCounters(plugin);
+  const before = api.generation;
+  const changed = "- [ ] #task Source ^source\n  - 🪢 **LINKS:** fresh-label [[notes/target#^target]]";
+  source.content = changed;
+  app._events.metadataEvents.emit("changed", source, changed);
+  assert.equal(counters.counts().publishes, 0, "the event itself does not publish");
+  assert.equal(api.outgoing("notes/source.md", "source")[0].label, "fresh-label");
+  assert.equal(api.generation, before + 1);
+  assert.equal(counters.counts().publishes, 1, "the v1 read flushes the pending rebuild");
+  await Promise.resolve();
+  assert.equal(counters.counts().publishes, 1, "the later microtask does not publish a second time");
+  plugin.teardownRelationIndex();
+});
+
+

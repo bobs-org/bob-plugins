@@ -117,7 +117,22 @@ try {
 
   const warmStart = performance.now();
   plugin.relationIndexApplyFile(daily.path, warmContent);
+  plugin.flushRelationIndexPublish();
   const warmMs = performance.now() - warmStart;
+
+  const stormSize = 40;
+  const uncoalescedStart = performance.now();
+  for (let index = 0; index < stormSize; index += 1) {
+    plugin.publishRelationIndex();
+  }
+  const uncoalescedStormMs = performance.now() - uncoalescedStart;
+  const coalescedStart = performance.now();
+  for (let index = 0; index < stormSize; index += 1) {
+    plugin.relationIndexApplyFile(daily.path, warmContent);
+  }
+  plugin.flushRelationIndexPublish();
+  const coalescedStormMs = performance.now() - coalescedStart;
+
   console.log(JSON.stringify({
     copied_markdown_files: copied.length,
     prefiltered_relation_sources: plugin.relationIndexFiles.size,
@@ -126,6 +141,9 @@ try {
     warm_daily_update_ms: Number(warmMs.toFixed(2)),
     warm_daily_bytes: Buffer.byteLength(warmContent),
     warm_synthetic_relations: relationCount,
+    storm_events: stormSize,
+    uncoalesced_storm_ms: Number(uncoalescedStormMs.toFixed(2)),
+    coalesced_storm_ms: Number(coalescedStormMs.toFixed(2)),
   }, null, 2));
   plugin.teardownRelationIndex();
 } finally {

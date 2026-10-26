@@ -72,9 +72,14 @@ cache and fall back to indexed note text, including read-only `done/` notes.
 
 The index scans relation-bearing Markdown files in idle chunks, including
 `done/`, and updates from metadata changes, vault create/delete/rename events,
-and the active editor's unsaved text. Relation targets are resolved with
-Obsidian's link resolver and cached block IDs. Consumers render from this live
-index; they do not read the generated `LINKED FROM` mirror as source data.
+and the active editor's unsaved text. Vault, metadata, overlay, and scan-driven
+publishes coalesce to one rebuild per microtask. A pending rebuild flushes on
+any `api.relationIndex` v1 read (`generation`, `ready`, `outgoing`,
+`incoming`, `labelSuggestions`) so those calls observe the latest maps. The
+Tasks-backed task memo is reused for every rebuild in the same turn. Relation
+targets are resolved with Obsidian's link resolver and cached block IDs.
+Consumers render from this live index; they do not read the generated
+`LINKED FROM` mirror as source data.
 
 `relationLabels.rows(query?, { hidden })` and `hiddenCount()` expose the
 catalog and folded hidden preferences. `hide(name)`, `unhide(name)`, and

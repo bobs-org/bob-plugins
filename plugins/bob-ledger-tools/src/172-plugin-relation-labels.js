@@ -33,6 +33,7 @@ class BobLedgerToolsRelationLabelsMixin {
 
   relationLabelsRows(query, options = {}) {
     try {
+      if (typeof this.flushRelationIndexPublish === "function") this.flushRelationIndexPublish();
       const edges = this.relationIndexState && Array.isArray(this.relationIndexState.edges)
         ? this.relationIndexState.edges
         : [];

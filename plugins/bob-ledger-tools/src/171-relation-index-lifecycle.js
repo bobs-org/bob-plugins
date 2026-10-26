@@ -10,6 +10,9 @@ class BobLedgerToolsRelationIndexMixin {
     this.relationIndexGeneration = 0;
     this.relationIndexOverlay = null;
     this.relationIndexOverlayTimer = null;
+    this.relationIndexPublishPending = false;
+    this.relationIndexTurnFlushScheduled = false;
+    this.relationIndexTaskMemoCache = null;
     this.relationIndexState = {
       generation: 0,
       ready: false,
@@ -21,13 +24,25 @@ class BobLedgerToolsRelationIndexMixin {
     this.relationIndexApiValue = Object.freeze({
       version: 1,
       get generation() {
+        plugin.flushRelationIndexPublish();
         return plugin.relationIndexState.generation;
       },
-      ready: () => plugin.relationIndexState.ready,
-      outgoing: (path, blockIdOrLine) =>
-        plugin.relationIndexOutgoing(path, blockIdOrLine),
-      incoming: (path, blockId) => plugin.relationIndexIncoming(path, blockId),
-      labelSuggestions: (prefix) => plugin.relationIndexLabelSuggestions(prefix),
+      ready: () => {
+        plugin.flushRelationIndexPublish();
+        return plugin.relationIndexState.ready;
+      },
+      outgoing: (path, blockIdOrLine) => {
+        plugin.flushRelationIndexPublish();
+        return plugin.relationIndexOutgoing(path, blockIdOrLine);
+      },
+      incoming: (path, blockId) => {
+        plugin.flushRelationIndexPublish();
+        return plugin.relationIndexIncoming(path, blockId);
+      },
+      labelSuggestions: (prefix) => {
+        plugin.flushRelationIndexPublish();
+        return plugin.relationIndexLabelSuggestions(prefix);
+      },
       onChange: (listener) => plugin.relationIndexOnChange(listener),
     });
     this.initializeRelationLabels();
@@ -153,6 +168,7 @@ class BobLedgerToolsRelationIndexMixin {
   }
 
   relationIndexTaskMemo() {
+    if (this.relationIndexTaskMemoCache) return this.relationIndexTaskMemoCache;
     const byPathAndLine = new Map();
     try {
       const tasks = planBlockTasks(this.app) || [];
@@ -165,6 +181,8 @@ class BobLedgerToolsRelationIndexMixin {
     } catch (error) {
       // The index remains useful from raw note text when Tasks is unavailable.
     }
+    this.relationIndexTaskMemoCache = byPathAndLine;
+    this.relationIndexEnsureTurnFlush();
     return byPathAndLine;
   }
 
@@ -194,7 +212,7 @@ class BobLedgerToolsRelationIndexMixin {
       if ((this.relationIndexVersions.get(path) || 0) !== version || !this.relationIndexPendingTargetReads.has(path)) return;
       this.relationIndexFiles.set(path, parseTaskRelationFile(content, path));
       this.relationIndexPendingTargetReads.delete(path);
-      this.publishRelationIndex();
+      this.scheduleRelationIndexPublish();
     }).catch(() => {
       this.relationIndexPendingTargetReads.delete(path);
     });
@@ -220,7 +238,7 @@ class BobLedgerToolsRelationIndexMixin {
     const normalized = this.relationIndexNormalizePath(path);
     if (!normalized || (expectedVersion !== undefined && (this.relationIndexVersions.get(normalized) || 0) !== expectedVersion)) return false;
     this.relationIndexFiles.set(normalized, parseTaskRelationFile(content, normalized));
-    this.publishRelationIndex();
+    this.scheduleRelationIndexPublish();
     return true;
   }
 
@@ -230,7 +248,7 @@ class BobLedgerToolsRelationIndexMixin {
     this.relationIndexVersions.set(normalized, (this.relationIndexVersions.get(normalized) || 0) + 1);
     this.relationIndexFiles.delete(normalized);
     if (this.relationIndexOverlay && this.relationIndexOverlay.path === normalized) this.relationIndexOverlay = null;
-    this.publishRelationIndex();
+    this.scheduleRelationIndexPublish();
   }
 
   relationIndexHandleRename(file, oldPath) {
@@ -258,7 +276,7 @@ class BobLedgerToolsRelationIndexMixin {
     const previous = this.relationIndexOverlay;
     if ((!previous && !next) || (previous && next && previous.path === next.path && previous.content === next.content)) return false;
     this.relationIndexOverlay = next;
-    this.publishRelationIndex();
+    this.scheduleRelationIndexPublish();
     return true;
   }
 
@@ -282,7 +300,8 @@ class BobLedgerToolsRelationIndexMixin {
   // same-note relations, took 13.21 ms. That sample did not include Obsidian's
   // vault-load create replay, which in 1.60.0 read every vault file (about
   // 3.5 GB on the MacBook) and OOM-crashed the renderer. Relation listeners
-  // are therefore registered at layout-ready. Re-run
+  // are therefore registered at layout-ready. Event-driven publishes now
+  // coalesce to one rebuild per microtask; re-run
   // scripts/measure-ledger-tools-relation-index.cjs after parser/lifecycle work.
   // Keep the scan chunked as vault size grows, despite this sample staying below 1s.
   startRelationIndexScan() {
@@ -291,13 +310,13 @@ class BobLedgerToolsRelationIndexMixin {
     if (!vault || typeof vault.getMarkdownFiles !== "function") return;
     const token = ++this.relationIndexScanToken;
     this.relationIndexReadyFlag = false;
-    this.publishRelationIndex();
+    this.scheduleRelationIndexPublish();
     let files = [];
     try {
       files = vault.getMarkdownFiles().filter((file) => this.relationIndexPrefilter(file));
     } catch (error) {
       this.relationIndexReadyFlag = true;
-      this.publishRelationIndex();
+      this.scheduleRelationIndexPublish();
       return;
     }
     let offset = 0;
@@ -320,20 +339,56 @@ class BobLedgerToolsRelationIndexMixin {
         }
       }));
       if (token !== this.relationIndexScanToken) return;
-      this.publishRelationIndex(offset >= files.length);
+      this.scheduleRelationIndexPublish(offset >= files.length);
       if (offset < files.length) setTimeout(scanChunk, 0);
       else this.refreshRelationIndexOverlay();
     };
     if (!files.length) {
       this.relationIndexReadyFlag = true;
       this.refreshRelationIndexOverlay();
-      this.publishRelationIndex(true);
+      this.scheduleRelationIndexPublish(true);
     } else {
       setTimeout(scanChunk, 0);
     }
   }
 
+  // Event-driven rebuilds coalesce to one publish per microtask. A v1
+  // api.relationIndex read flushes first so consumers never observe a
+  // stale snapshot. The Tasks memo is reused for every rebuild in the
+  // same turn.
+  scheduleRelationIndexPublish(ready) {
+    if (this.relationIndexTornDown) return;
+    if (arguments.length > 0) this.relationIndexReadyFlag = Boolean(ready);
+    this.relationIndexPublishPending = true;
+    this.relationIndexEnsureTurnFlush();
+  }
+
+  relationIndexEnsureTurnFlush() {
+    if (this.relationIndexTurnFlushScheduled) return;
+    this.relationIndexTurnFlushScheduled = true;
+    const run = () => {
+      this.relationIndexTurnFlushScheduled = false;
+      if (this.relationIndexTornDown) {
+        this.relationIndexPublishPending = false;
+        this.relationIndexTaskMemoCache = null;
+        return;
+      }
+      this.flushRelationIndexPublish();
+      this.relationIndexTaskMemoCache = null;
+    };
+    if (typeof queueMicrotask === "function") queueMicrotask(run);
+    else Promise.resolve().then(run);
+  }
+
+  flushRelationIndexPublish() {
+    if (this.relationIndexTornDown || !this.relationIndexPublishPending) return false;
+    this.relationIndexPublishPending = false;
+    this.publishRelationIndex(this.relationIndexReadyFlag);
+    return true;
+  }
+
   publishRelationIndex(ready = this.relationIndexReadyFlag) {
+    this.relationIndexPublishPending = false;
     const records = new Map(this.relationIndexFiles);
     if (this.relationIndexOverlay) {
       records.set(this.relationIndexOverlay.path, parseTaskRelationFile(this.relationIndexOverlay.content, this.relationIndexOverlay.path));
@@ -453,6 +508,8 @@ class BobLedgerToolsRelationIndexMixin {
       clearTimeout(this.relationIndexOverlayTimer);
     }
     this.relationIndexOverlayTimer = null;
+    this.relationIndexPublishPending = false;
+    this.relationIndexTaskMemoCache = null;
     if (this.relationIndexListeners && typeof this.relationIndexListeners.clear === "function") {
       this.relationIndexListeners.clear();
     }

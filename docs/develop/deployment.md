@@ -55,6 +55,62 @@ plugin deploy or vault files with uncommitted Git changes; ordinary
 development syncs should omit it. Existing `bob` binaries that do not
 understand stamps cannot enforce the guard.
 
+## Rollout smoke check
+
+Plugin rollouts run the packaged Obsidian startup smoke check in an isolated
+scratch vault and profile. It never opens the live vault in Obsidian. The
+fixture verifies the managed Bob plugin build, not the user's full
+third-party plugin/settings combination.
+
+Prerequisites: the Obsidian Electron app (for example `/snap/bin/obsidian`),
+`xvfb-run` on Linux, and Node 22. On Linux use an independent Xvfb display,
+never the inherited desktop display.
+
+```bash
+npm run build:check
+npm test -- scripts/test-obsidian-startup-smoke.cjs
+npm run smoke:obsidian -- --help
+```
+
+The offline self-test is an offline check only, never an Obsidian pass:
+
+```bash
+npm run smoke:obsidian -- --self-test
+```
+
+Run the real isolated check under Xvfb, then build, preview, sync, and run
+the mandatory post-sync gate:
+
+```bash
+xvfb-run -a npm run smoke:obsidian -- --report /tmp/obsidian-smoke.json
+bob plugins sync --repo "$PWD" --no-pull --dry-run
+bob plugins sync --repo "$PWD" --no-pull
+npm run smoke:obsidian -- --deployed-vault /path/to/vault --report /tmp/obsidian-smoke.json
+```
+
+The post-sync command verifies every expected repository plugin is present in
+the deployed vault at the expected version with `sync: synced`, then repeats
+the check after the smoke run and rejects source changes during the run.
+`bob plugins list` exits 0 on drift, so the gate reads the JSON rows itself;
+a passing exit code alone is not a pass.
+
+Acceptance uses fixed defaults: layout-ready within 30 seconds of
+instrumented startup, and sampled peak JS heap below 1.5 GiB throughout the
+run. The gate also requires the ledger relation index ready with zero
+non-Markdown keys and the fixture relation indexed, all four editor cases
+(canonical daily note plus one ordinary task note, each in Live Preview and
+Source mode) mounting a connected CodeMirror editor with the expected text,
+and no renderer crash artifacts/events, plugin-load failures, or uncaught
+exceptions/rejections. The structured report records the source SHA, plugin
+ids/versions and managed-file hashes, executable/app version, durations,
+counters, heap peak, each editor result, crash/exception evidence, the
+deployment match, and the exact failed checks.
+
+On a skipped, unrun, or failing check, do not claim rollout success. Record
+the exact command, the report path, and the verdict; a missing host or
+missing prerequisite stays visible as a limitation and never converts into a
+pass.
+
 ## Distribution scope
 
 This monorepo is a development source and vault sync target, not a package

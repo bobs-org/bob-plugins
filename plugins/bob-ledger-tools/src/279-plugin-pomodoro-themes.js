@@ -260,7 +260,7 @@ class BobLedgerToolsPomodoroThemesMixin {
     }
   }
 
-  // Normalized `plan.exempt` keys (GTD by default). Never throws.
+  // Normalized `plan.exempt` keys (PLAN by default). Never throws.
   pomodoroThemesExemptKeys() {
     try {
       const loaded = loadPlanCaps();
@@ -268,10 +268,10 @@ class BobLedgerToolsPomodoroThemesMixin {
       const exempt =
         caps && Array.isArray(caps.exempt) && caps.exempt.length > 0
           ? caps.exempt
-          : ["GTD"];
+          : ["PLAN"];
       return exempt.map((value) => pomodoroThemeNormalizeKey(value));
     } catch (error) {
-      return ["gtd"];
+      return ["plan"];
     }
   }
 

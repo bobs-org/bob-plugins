@@ -560,19 +560,19 @@ test("Reading view appends a forecast chip before its Task Link list", () => {
   const reviewContext = plugin.pomodoroHomeReadingEntry(reviewEntry, "2026/20261018.md");
   assert.equal(reviewContext.entry.name, "");
   assert.equal(plugin.pomodoroHomeChipModelForEntry(reviewContext.entry, "2026/20261018.md").kind, "review");
-  assert.equal(reviewRecord.chip.children[1].textContent, "GTD review");
+  assert.equal(reviewRecord.chip.children[1].textContent, "PLAN review");
   assert.equal(plugin.renderPomodoroHomeReadingRecord(reviewRecord), true);
   assert.equal(
     reviewEntry.children.filter((child) => child.getAttribute("class") === "bob-pomodoro-home-chip").length,
     1,
   );
 
-  const namedReviewEntry = makeEntry(" (1410-1420) — GTD", "2026/20261018#^gtd");
+  const namedReviewEntry = makeEntry(" (1410-1420) — PLAN", "2026/20261018#^gtd");
   const namedReviewRecord = { el: namedReviewEntry, path: "2026/20261018.md", chip: null };
   assert.equal(plugin.renderPomodoroHomeReadingRecord(namedReviewRecord), true);
   const namedReviewContext = plugin.pomodoroHomeReadingEntry(namedReviewEntry, "2026/20261018.md");
   const namedReviewModel = plugin.pomodoroHomeChipModelForEntry(namedReviewContext.entry, "2026/20261018.md");
-  assert.equal(namedReviewContext.entry.name, "GTD");
+  assert.equal(namedReviewContext.entry.name, "PLAN");
   assert.equal(namedReviewModel.kind, "review");
   assert.equal(namedReviewModel.chip, null);
   assert.equal(namedReviewRecord.chip, null);

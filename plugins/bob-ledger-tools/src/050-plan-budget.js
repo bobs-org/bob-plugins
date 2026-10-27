@@ -36,7 +36,7 @@ function defaultPlanCaps() {
     maxReady: 100,
     maxReadyPerNote: 5,
     strict: false,
-    exempt: ["GTD"],
+    exempt: ["PLAN"],
     inventoryLabels: ["LATER", "MISC", "NEW FEATURES", "SASE"],
   };
 }

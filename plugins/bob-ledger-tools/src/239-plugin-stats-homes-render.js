@@ -66,8 +66,10 @@ class BobLedgerToolsStatsHomesMixin {
   statsPanelHomeFixCopy(key) {
     if (key === "@unlinked") return "link the task to attribute it";
     if (key === "@unfiled") return "file the task in an area or project";
+    if (key === "@daily") return "Tasks defined in daily notes, including review, group here.";
     if (typeof key === "string" && key.startsWith("@review:")) {
-      return "GTD review stays grouped here; name mixed work to attribute it separately.";
+      const name = key.slice("@review:".length);
+      return `${name} review stays grouped here; name mixed work to attribute it separately.`;
     }
     return "This is a reserved Stats bucket.";
   }

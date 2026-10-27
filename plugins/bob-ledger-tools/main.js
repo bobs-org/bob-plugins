@@ -2132,7 +2132,7 @@ function defaultPlanCaps() {
     maxReady: 100,
     maxReadyPerNote: 5,
     strict: false,
-    exempt: ["GTD"],
+    exempt: ["PLAN"],
     inventoryLabels: ["LATER", "MISC", "NEW FEATURES", "SASE"],
   };
 }
@@ -15580,13 +15580,13 @@ function pomodoroHomeParseEntries(content) {
 
 function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, warnings, seen, health) {
   const nameComponents = splitPlanComponents(entry.name);
-  const exemptNames = (Array.isArray(exempt) ? exempt : ["GTD"])
+  const exemptNames = (Array.isArray(exempt) ? exempt : ["PLAN"])
     .map((item) => String(item || "").trim())
     .filter(Boolean);
   const normalizedExempt = exemptNames
     .map((item) => normalizePlanComponent(item))
     .filter(Boolean);
-  const firstExemptName = exemptNames[0] || "GTD";
+  const firstExemptName = exemptNames[0] || "PLAN";
   const exemptSet = new Set(normalizedExempt);
   const namedReview =
     nameComponents.length > 0 &&
@@ -15623,6 +15623,18 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
         ...pomodoroHomeBucket(bucketName, metadataCache, vault, dailyPath, warnings, seen),
         source: bucketName,
       });
+      continue;
+    }
+    if (path && PLAN_DAILY_PATH_RE.test(path)) {
+      resolved.push(
+        pomodoroHomeBucketPart(
+          "@daily",
+          "<daily>",
+          "@daily",
+          "<daily>",
+          null,
+        ),
+      );
       continue;
     }
     const home = file
@@ -15672,7 +15684,7 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
     const count = Math.max(1, components.length);
     const baseMinutes = Number.isInteger(entry.minutes) ? entry.minutes : 0;
     components.forEach((component, index) => {
-      const bucketName = component || "GTD";
+      const bucketName = component || "PLAN";
       const bucket = pomodoroHomeBucket(bucketName, metadataCache, vault, dailyPath, warnings, seen);
       const minutes = Math.floor(baseMinutes / count) + (index === 0 ? baseMinutes % count : 0);
       parts.push({ ...bucket, tasks: 0, minutes, sourceOrder: index });
@@ -30678,8 +30690,10 @@ class BobLedgerToolsStatsHomesMixin {
   statsPanelHomeFixCopy(key) {
     if (key === "@unlinked") return "link the task to attribute it";
     if (key === "@unfiled") return "file the task in an area or project";
+    if (key === "@daily") return "Tasks defined in daily notes, including review, group here.";
     if (typeof key === "string" && key.startsWith("@review:")) {
-      return "GTD review stays grouped here; name mixed work to attribute it separately.";
+      const name = key.slice("@review:".length);
+      return `${name} review stays grouped here; name mixed work to attribute it separately.`;
     }
     return "This is a reserved Stats bucket.";
   }
@@ -46017,9 +46031,9 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
     try {
       const loaded = loadPlanCaps();
       const caps = loaded && loaded.caps ? loaded.caps : null;
-      return caps && Array.isArray(caps.exempt) ? caps.exempt : ["GTD"];
+      return caps && Array.isArray(caps.exempt) ? caps.exempt : ["PLAN"];
     } catch (error) {
-      return ["GTD"];
+      return ["PLAN"];
     }
   }
 
@@ -47533,7 +47547,7 @@ class BobLedgerToolsPomodoroThemesMixin {
     }
   }
 
-  // Normalized `plan.exempt` keys (GTD by default). Never throws.
+  // Normalized `plan.exempt` keys (PLAN by default). Never throws.
   pomodoroThemesExemptKeys() {
     try {
       const loaded = loadPlanCaps();
@@ -47541,10 +47555,10 @@ class BobLedgerToolsPomodoroThemesMixin {
       const exempt =
         caps && Array.isArray(caps.exempt) && caps.exempt.length > 0
           ? caps.exempt
-          : ["GTD"];
+          : ["PLAN"];
       return exempt.map((value) => pomodoroThemeNormalizeKey(value));
     } catch (error) {
-      return ["gtd"];
+      return ["plan"];
     }
   }
 
@@ -53102,7 +53116,7 @@ class BobLedgerToolsTodayLocationMixin {
       return labels;
     }
     try {
-      let exempt = ["GTD"];
+      let exempt = ["PLAN"];
       try {
         const loaded = loadPlanCaps();
         const caps = loaded && loaded.caps ? loaded.caps : null;
@@ -53110,7 +53124,7 @@ class BobLedgerToolsTodayLocationMixin {
           exempt = caps.exempt;
         }
       } catch (error) {
-        exempt = ["GTD"];
+        exempt = ["PLAN"];
       }
       const app = this.app || {};
       const model = pomodoroHomeModels(

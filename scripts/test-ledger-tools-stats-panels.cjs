@@ -718,6 +718,8 @@ test("review rows keep their area hue and a missing homes report keeps the saved
     try {
       const report = homesPanelReport();
       assert.equal(helpers.statsPanelHomeHue(report, "@review:GTD"), "orange");
+      assert.equal(plugin.statsPanelHomeFixCopy("@daily"), "Tasks defined in daily notes, including review, group here.");
+      assert.equal(plugin.statsPanelHomeFixCopy("@review:PLAN"), "PLAN review stays grouped here; name mixed work to attribute it separately.");
       assert.equal(helpers.statsPanelHomeHue(report, "@unfiled"), "gray");
       assert.equal(helpers.statsPanelHomeHue(report, "@unlinked"), "gray");
 
@@ -1103,8 +1105,8 @@ test("root bar gives same-area roots distinct hues and GTD review stays coloured
       }
       const nonGray = [...byTitle.values()].filter((hue) => hue !== "gray");
       assert.equal(new Set(nonGray).size, nonGray.length, "root bar segments differ");
-      const gtdHue = [...byTitle.entries()].find(([title]) => title.includes("GTD review"))?.[1];
-      assert.ok(gtdHue && gtdHue !== "gray", "GTD review is coloured, not gray");
+      const reviewHue = [...byTitle.entries()].find(([title]) => title.includes("GTD review"))?.[1];
+      assert.ok(reviewHue && reviewHue !== "gray", "GTD review is coloured, not gray");
       const areaRows = el.querySelectorAll(".bob-stats-home-area-row");
       const headerHues = areaRows.map((row) => String(row.getAttribute("class") || ""));
       assert.ok(headerHues.some((names) => names.includes("bob-stats-home-blue")), "area headers keep the blue area hue");

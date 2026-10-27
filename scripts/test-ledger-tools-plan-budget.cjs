@@ -131,7 +131,7 @@ test("conformance: merged name with duplicate", () => {
   assert.equal(budget.entries[1].highlight, false);
 });
 
-// docs/plan.md conformance example 2: a struck link, GTD's `[[#^gtd]]`, a
+// docs/plan.md conformance example 2: a struck link, the `^gtd` bridge, a
 // link planned twice, an embedded link, and a `#`-marked link.
 test("conformance: link forms and exclusions", () => {
   const budget = computePlanBudget(
@@ -143,15 +143,15 @@ test("conformance: link forms and exclusions", () => {
       "    - [[mark#^mmm]]#\n" +
       "- [ ] () — DECKS\n" +
       "    - [[task#^aaa]]\n" +
-      "- [ ] () — GTD\n" +
+      "- [ ] () — PLAN\n" +
       "    - [[#^gtd]]\n",
   );
   assert.equal(budget.links.count, 3);
   assert.equal(budget.status, "ok");
   assert.deepEqual(codes(budget), []);
-  const gtd = budget.entries.find((entry) => entry.name === "GTD");
-  assert.equal(gtd.exempt, true);
-  assert.equal(gtd.links, 0);
+  const plan = budget.entries.find((entry) => entry.name === "PLAN");
+  assert.equal(plan.exempt, true);
+  assert.equal(plan.links, 0);
 });
 
 // docs/plan.md conformance example 3: unnamed placeholders with and
@@ -264,7 +264,7 @@ test("highlight is the first open non-exempt entry; running is the timed one", (
   const budget = computePlanBudget(
     "## Pomodoros\n" +
       "\n" +
-      "- [ ] () — GTD\n" +
+      "- [ ] () — PLAN\n" +
       "- [ ] (0945-1015) — GOALS\n" +
       "    - [[a#^one]]\n" +
       "- [ ] () — DECKS\n",
@@ -286,6 +286,7 @@ test("coercePlanCaps ignores a legacy max_now instead of failing", () => {
 });
 
 test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
+  assert.deepEqual(defaultPlanCaps().exempt, ["PLAN"]);
   assert.deepEqual(parsePlanCaps(null), defaultPlanCaps());
   assert.deepEqual(parsePlanCaps({}), defaultPlanCaps());
   const caps = parsePlanCaps({

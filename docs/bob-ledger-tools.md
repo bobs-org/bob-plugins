@@ -126,7 +126,7 @@ cap), the CROWDED chip, the `bob-ready-notes` ranked-bar block, `## Tasks`
 heading chips, Pomodoro home chips (quiet lowercase chips with area-hue dots
 derived from linked task notes), Pomodoro theme pills (one soft tint per
 `+`-separated component of the ` — NAME` tail, with a muted pill for exempt
-themes such as GTD, a tooltip naming the hue and day count, and a session
+themes such as PLAN, a tooltip naming the hue and day count, and a session
 toggle), and the display-only 🍅 Today mark on open
 task lines linked under today's open Pomodoros, with a session toggle and a
 jump to the Task Link. A name the catalog does not know stays neutral on the

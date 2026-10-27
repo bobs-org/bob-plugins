@@ -520,13 +520,13 @@ function pomodoroHomeParseEntries(content) {
 
 function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, warnings, seen, health) {
   const nameComponents = splitPlanComponents(entry.name);
-  const exemptNames = (Array.isArray(exempt) ? exempt : ["GTD"])
+  const exemptNames = (Array.isArray(exempt) ? exempt : ["PLAN"])
     .map((item) => String(item || "").trim())
     .filter(Boolean);
   const normalizedExempt = exemptNames
     .map((item) => normalizePlanComponent(item))
     .filter(Boolean);
-  const firstExemptName = exemptNames[0] || "GTD";
+  const firstExemptName = exemptNames[0] || "PLAN";
   const exemptSet = new Set(normalizedExempt);
   const namedReview =
     nameComponents.length > 0 &&
@@ -563,6 +563,18 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
         ...pomodoroHomeBucket(bucketName, metadataCache, vault, dailyPath, warnings, seen),
         source: bucketName,
       });
+      continue;
+    }
+    if (path && PLAN_DAILY_PATH_RE.test(path)) {
+      resolved.push(
+        pomodoroHomeBucketPart(
+          "@daily",
+          "<daily>",
+          "@daily",
+          "<daily>",
+          null,
+        ),
+      );
       continue;
     }
     const home = file
@@ -612,7 +624,7 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
     const count = Math.max(1, components.length);
     const baseMinutes = Number.isInteger(entry.minutes) ? entry.minutes : 0;
     components.forEach((component, index) => {
-      const bucketName = component || "GTD";
+      const bucketName = component || "PLAN";
       const bucket = pomodoroHomeBucket(bucketName, metadataCache, vault, dailyPath, warnings, seen);
       const minutes = Math.floor(baseMinutes / count) + (index === 0 ? baseMinutes % count : 0);
       parts.push({ ...bucket, tasks: 0, minutes, sourceOrder: index });

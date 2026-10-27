@@ -24,7 +24,7 @@ class BobLedgerToolsTodayLocationMixin {
       return labels;
     }
     try {
-      let exempt = ["GTD"];
+      let exempt = ["PLAN"];
       try {
         const loaded = loadPlanCaps();
         const caps = loaded && loaded.caps ? loaded.caps : null;
@@ -32,7 +32,7 @@ class BobLedgerToolsTodayLocationMixin {
           exempt = caps.exempt;
         }
       } catch (error) {
-        exempt = ["GTD"];
+        exempt = ["PLAN"];
       }
       const app = this.app || {};
       const model = pomodoroHomeModels(

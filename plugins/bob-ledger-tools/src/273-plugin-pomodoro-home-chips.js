@@ -142,9 +142,9 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
     try {
       const loaded = loadPlanCaps();
       const caps = loaded && loaded.caps ? loaded.caps : null;
-      return caps && Array.isArray(caps.exempt) ? caps.exempt : ["GTD"];
+      return caps && Array.isArray(caps.exempt) ? caps.exempt : ["PLAN"];
     } catch (error) {
-      return ["GTD"];
+      return ["PLAN"];
     }
   }
 

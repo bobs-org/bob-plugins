@@ -423,7 +423,7 @@ test("same-area roots get distinct hues and legend dots match their segments", (
   assert.deepEqual(model.mix.segments.map((segment) => segment.key), expectedOrder.map((row) => row.key), "order is unchanged");
   const byKey = new Map(model.mix.segments.map((segment) => [segment.key, segment.hue]));
   assert.equal(byKey.get("sase.md"), "blue");
-  assert.equal(byKey.get("@review:GTD"), "orange");
+  assert.equal(byKey.get("@daily"), "gray");
   assert.equal(byKey.get("bob.md"), "aqua");
   assert.equal(byKey.get("gtd.md"), "yellow");
   assert.equal(byKey.get("dev.md"), "magenta");
@@ -535,6 +535,29 @@ test("short_label paints GTD with a full-label tooltip", () => {
   const label = byClass(item, "bob-day-strip-legend-label")[0];
   assert.equal(label.textContent, "GTD");
   assert.equal(item.getAttribute("title"), "GTD review 45m");
+});
+
+test("daily root paints its label in gray after real roots", () => {
+  const fixture = fixtures.sameHueRoots;
+  const model = modelFor(fixture);
+  const entry = model.mix.legend.find((item) => item.key === "@daily");
+  assert.ok(entry, "daily root is in the legend");
+  assert.equal(entry.legendLabel, "<daily>");
+  assert.equal(entry.label, "<daily>");
+  const realRoots = model.mix.legend.filter((item) => {
+    const home = fixture.report.homes[item.key];
+    return home && home.kind !== "bucket";
+  });
+  const lastRealRoot = Math.max(...realRoots.map((item) => model.mix.legend.indexOf(item)));
+  assert.ok(model.mix.legend.indexOf(entry) > lastRealRoot, "buckets follow real roots");
+  assert.equal(entry.hue, "gray");
+  const { root } = paint(model);
+  const item = byAttribute(root, "data-key", "@daily")[0];
+  assert.ok(item, "daily root legend item paints");
+  assert.equal(byClass(item, "bob-day-strip-legend-label")[0].textContent, "<daily>");
+  const dot = byClass(item, "bob-day-strip-legend-dot")[0];
+  assert.ok(dot, "daily root has a legend dot");
+  assert.match(dot.getAttribute("class"), /bob-day-strip-hue-gray/);
 });
 
 test("area roots paint the bare label with a project_label tooltip", () => {

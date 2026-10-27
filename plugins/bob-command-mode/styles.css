@@ -142,34 +142,88 @@
 .bob-cmd-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   max-width: 360px;
   overflow: hidden;
   color: var(--text-muted);
+  font-family: var(--font-interface);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+  animation: bob-cmd-chip-in 160ms ease-out;
 }
 
-.bob-cmd-chip::before {
-  content: "⟳";
+.bob-cmd-chip-mark {
   display: inline-block;
   flex: 0 0 auto;
-  color: var(--interactive-accent);
-  font-size: 14px;
-  line-height: 1;
-  animation: bob-cmd-spin 1.4s linear infinite;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--interactive-accent) 25%, transparent);
+  border-top-color: var(--interactive-accent);
+  animation: bob-cmd-spin 0.9s linear infinite;
 }
 
-.bob-cmd-chip.is-overdue { color: var(--color-orange, #d89a36); }
-.bob-cmd-chip.is-overdue::before { color: var(--color-orange, #d89a36); }
+.bob-cmd-chip-label {
+  flex: 0 0 auto;
+  color: var(--text-normal);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.bob-cmd-chip-clock {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-cmd-chip.is-queued .bob-cmd-chip-mark {
+  border-style: dashed;
+  border-color: var(--text-faint);
+  border-top-color: var(--text-faint);
+  animation: none;
+}
+
+.bob-cmd-chip.is-overdue,
+.bob-cmd-chip.is-overdue .bob-cmd-chip-clock { color: var(--color-orange, #d89a36); }
+.bob-cmd-chip.is-overdue .bob-cmd-chip-mark {
+  border-color: color-mix(in srgb, var(--color-orange, #d89a36) 25%, transparent);
+  border-top-color: var(--color-orange, #d89a36);
+  animation-duration: 1.8s;
+}
+
+.bob-cmd-chip.is-settled .bob-cmd-chip-mark {
+  width: auto;
+  height: auto;
+  border: none;
+  font-size: 12px;
+  line-height: 1;
+  animation: bob-cmd-chip-pop 160ms ease-out;
+}
+
+.bob-cmd-chip.is-settled.is-completed .bob-cmd-chip-mark { color: var(--color-green, #4caf7d); }
+.bob-cmd-chip.is-settled.is-attention .bob-cmd-chip-mark { color: var(--color-orange, #d89a36); }
+.bob-cmd-chip.is-settled.is-failed .bob-cmd-chip-mark,
+.bob-cmd-chip.is-settled.is-unknown .bob-cmd-chip-mark { color: var(--color-red, #d65c62); }
+.bob-cmd-chip.is-settled.is-stopped .bob-cmd-chip-mark { color: var(--text-muted); }
+
+.bob-cmd-chip.is-settled.is-leaving {
+  opacity: 0;
+  transition: opacity 240ms ease-out;
+}
 
 @keyframes bob-cmd-spin { to { transform: rotate(360deg); } }
+@keyframes bob-cmd-chip-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+@keyframes bob-cmd-chip-pop { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .bob-cmd-chip::before { animation: none; }
+  .bob-cmd-chip { animation: none; }
+  .bob-cmd-chip-mark { animation: none; }
+  .bob-cmd-chip.is-overdue .bob-cmd-chip-mark { animation: none; }
+  .bob-cmd-chip.is-settled .bob-cmd-chip-mark { animation: none; }
+  .bob-cmd-chip.is-settled.is-leaving { opacity: 0; transition: none; }
 }
 
 .modal-container.bob-cmd-pager-host {

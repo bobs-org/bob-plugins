@@ -163,7 +163,7 @@ async function main() {
       "",
       "Rendered from production toast, chip, ANSI, and pager fragments plus `styles.css` under an Obsidian baseline stylesheet.",
       "",
-      "Cases: completed, attention with Scan intake, failed stderr summary, unknown, stopped; one run, two runs, and an overdue writer; pager running, completed with ANSI and links, failed stderr, and JSON.",
+      "Cases: completed, attention with Scan intake, failed stderr summary, unknown, stopped; one run, two runs, queued, overdue, settled completed, and settled failed; pager running, completed with ANSI and links, failed stderr, and JSON.",
       "",
       ...screenshots.map((file) => "- " + path.basename(file)),
       "",

@@ -89,10 +89,18 @@ window.commandModePreview = {
       cards.appendChild(section);
     }
     const base = Date.parse("2026-10-26T15:00:00.000Z");
+    const chipStrip = document.createElement("div");
+    chipStrip.className = "preview-chip-strip";
+    chipStrip.setAttribute("role", "status");
+    chipStrip.setAttribute("aria-label", "Mock status-bar strip");
+    chips.appendChild(chipStrip);
     const chipCases = [
       { label:"One run", records:[{id:"one",title:"ref create",outcome:"running",effect:"writes",budget_secs:180,started_at:new Date(base-42000).toISOString(),argv:["/usr/local/bin/bob","ref","create","paper.pdf"]}] },
       { label:"Two runs", records:[{id:"two-a",title:"Scan",outcome:"running",effect:"writes",budget_secs:180,started_at:new Date(base-65000).toISOString(),argv:["/usr/local/bin/bob","ref","scan"]},{id:"two-b",title:"Plan",outcome:"running",effect:"reads",budget_secs:60,started_at:new Date(base-12000).toISOString(),argv:["/usr/local/bin/bob","plan"]}] },
+      { label:"Queued", records:[{id:"q-one",title:"Sync vault",outcome:"queued",effect:"writes",budget_secs:180,started_at:new Date(base-5000).toISOString(),argv:["/usr/local/bin/bob","vault-sync","run"]}] },
       { label:"Overdue writer", records:[{id:"late",title:"Sync vault",outcome:"running",effect:"writes",budget_secs:180,started_at:new Date(base-181000).toISOString(),argv:["/usr/local/bin/bob","vault-sync","run"]}] },
+      { label:"Settled completed", records:[], state:{ shown:new Set(["done"]), settle:{ runId:"done", title:"Deploy plugins", outcome:"completed", durationMs:4312, atMs:base-500 } } },
+      { label:"Settled failed", records:[], state:{ shown:new Set(["fail"]), settle:{ runId:"fail", title:"Sync vault now", outcome:"failed", durationMs:1201, atMs:base-500 } } },
     ];
     for (const item of chipCases) {
       const section = document.createElement("article");
@@ -102,8 +110,8 @@ window.commandModePreview = {
       const chip = document.createElement("span");
       chip.className = "bob-cmd-chip";
       section.append(heading, chip);
-      cmRenderStatusChip(chip, item.records, base, () => {}, () => "pulling updates");
-      chips.appendChild(section);
+      chipStrip.appendChild(section);
+      cmRenderStatusChip(chip, item.records, base, () => {}, () => "pulling updates", item.state);
     }
     const app = {
       vault: { getAbstractFileByPath: (target) => (String(target).endsWith(".md") ? { path: target } : null) },

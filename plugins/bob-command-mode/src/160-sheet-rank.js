@@ -518,7 +518,7 @@ function cmGroupSheetRows(rows, catalog, context) {
 function cmSheetFooterHints(stage) {
   if (stage === "confirm") return "⌃↵ run · esc back";
   if (stage === "output") return "r rerun · y copy · [ ] history · : list · esc back · q close";
-  return "↵ run · ⇥ args · ⇧↵ preview · ⌃↵ run now · ? help · :: vim · esc close";
+  return "⌃N/⌃P select · ↵ run · ⇥ args · ⇧↵ preview · ⌃↵ run now · ? help · :: vim · esc close";
 }
 
 // List-stage key intent. `args` and `vim` stages belong to the args-vim phase;

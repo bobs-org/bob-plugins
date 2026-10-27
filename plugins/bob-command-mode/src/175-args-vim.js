@@ -489,7 +489,10 @@ CommandModeSheetModal.prototype.render = function renderWithArgumentStage() {
 CommandModeSheetModal.prototype.renderList = function renderListWithVimRows() {
   if (this.stage !== "vim") return cmOriginalSheetRenderList.call(this);
   const list = this.contentEl.createEl("div", { cls: "bob-cmd-sheet-list" });
+  this.listEl = list;
   this.rowEls = new Map();
+  this.sectionHeadingEls = new Map();
+  this.aboutEl = null;
   if (!this.visible.length) {
     list.createEl("div", { cls: "bob-cmd-sheet-empty", text: "No Vim mappings in the vimrc" });
     return;
@@ -497,12 +500,19 @@ CommandModeSheetModal.prototype.renderList = function renderListWithVimRows() {
   for (const row of this.visible) this.renderRow(list, row);
 };
 
+function cmArgRenderedRows(sheet) {
+  const groups = (sheet && sheet.argCompletionGroups) || [];
+  return groups.flatMap((group) => group.rows || []);
+}
+
 CommandModeSheetModal.prototype.renderArguments = function renderArguments() {
   const entry = this.argEntry;
   const summary = this.contentEl.createEl("div", { cls: "bob-cmd-args-summary" });
   const fixed = entry && Array.isArray(entry.fixed) ? entry.fixed : [];
   if (fixed.length) summary.createEl("span", { cls: "bob-cmd-args-fixed", text: fixed.map(cmQuoteArg).join(" ") });
   const list = this.contentEl.createEl("div", { cls: "bob-cmd-args-completions" });
+  this.argListEl = list;
+  this.argRowEls = new Map();
   const groups = this.argCompletionGroups || [];
   if (!groups.length) {
     if (!this.hint && entry && !this.argCompletionPending) list.createEl("div", { cls: "bob-cmd-sheet-empty", text: "No completions" });
@@ -516,6 +526,7 @@ CommandModeSheetModal.prototype.renderArguments = function renderArguments() {
       row.createEl("span", { cls: "bob-cmd-completion-value", text: item.insertValue || item.value });
       if (item.description) row.createEl("span", { cls: "bob-cmd-completion-description", text: item.description });
       row.addEventListener("click", () => this.acceptArgumentCompletion(item));
+      this.argRowEls.set(item.key, row);
     }
   }
 };
@@ -530,8 +541,8 @@ CommandModeSheetModal.prototype.renderFooter = function renderFooterWithStage() 
   footer.createEl("span", {
     cls: "bob-cmd-sheet-hint",
     text: this.stage === "args"
-      ? "↵ run · ⇥ accept · ↑↓ completion · ⇧↵ preview · ⌃↵ run now · esc back"
-      : "↵ run Vim ex · ↑↓ mapping · esc back",
+      ? "⌃N/⌃P completion · ⇥ accept · ↵ run · ⇧↵ preview · ⌃↵ run now · esc back"
+      : "⌃N/⌃P mapping · ↵ run Vim ex · esc back",
   });
 };
 
@@ -661,7 +672,7 @@ CommandModeSheetModal.prototype.acceptArgumentCompletion = function acceptArgume
 };
 
 CommandModeSheetModal.prototype.moveArgumentCompletion = function moveArgumentCompletion(delta) {
-  const rows = this.argCompletions || [];
+  const rows = cmArgRenderedRows(this);
   if (!rows.length) return;
   let index = rows.findIndex((item) => item.key === this.argSelectedKey);
   index = index < 0 ? (delta > 0 ? 0 : rows.length - 1) : (index + delta + rows.length) % rows.length;
@@ -793,13 +804,14 @@ CommandModeSheetModal.prototype.handleSheetKeydown = function handleSheetKeydown
     }
     if (event.key === "Tab") {
       consume();
-      const selected = (this.argCompletions || []).find((item) => item.key === this.argSelectedKey) || (this.argCompletions || [])[0];
+      const rendered = cmArgRenderedRows(this);
+      const selected = rendered.find((item) => item.key === this.argSelectedKey) || rendered[0];
       if (selected) this.acceptArgumentCompletion(selected);
       return true;
     }
     if (event.key === "Enter") {
       consume();
-      const selected = (this.argCompletions || []).find((item) => item.key === this.argSelectedKey);
+      const selected = cmArgRenderedRows(this).find((item) => item.key === this.argSelectedKey);
       if (selected && !event.shiftKey && !event.ctrlKey) this.acceptArgumentCompletion(selected);
       else void this.runArgumentStage({ preview: Boolean(event.shiftKey), force: Boolean(event.ctrlKey && !event.shiftKey) });
       return true;

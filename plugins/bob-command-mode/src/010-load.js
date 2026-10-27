@@ -42,6 +42,10 @@ const CM_LOCK_PHRASE = "another Bob vault maintenance run is already active";
 const CM_RUN_FINISHED_EVENT = "bob-command-mode:run-finished";
 // Directory (under the state root) holding per-run files.
 const CM_RUNS_DIRNAME = "command-mode/runs";
+// Status-bar run indicator timing.
+const CM_CHIP_REVEAL_MS = 400;
+const CM_CHIP_SETTLE_MS = 1600;
+const CM_CHIP_LEAVE_MS = 300;
 
 // Lazily loaded Node modules. Direct require calls keep the fragments working
 // under Obsidian and under plain Node tests; tests may inject fakes instead.

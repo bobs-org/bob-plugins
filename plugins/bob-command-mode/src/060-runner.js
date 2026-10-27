@@ -44,6 +44,7 @@ class CommandModeRunner {
     this.readsActive = 0;
     this.writerActive = false;
     this.adoptTimers = new Set();
+    this.adopted = new Map(); // runId -> adopted unfinished record (flagged)
     this.lastRunId = null;
     try {
       this.host = this.deps.os && typeof this.deps.os.hostname === "function"
@@ -762,6 +763,8 @@ class CommandModeRunner {
         if (!late || !cmIsUnfinishedOutcome(late.outcome)) {
           clearInterval(timer);
           this.adoptTimers.delete(timer);
+          if (late && late.id) this.adopted.delete(late.id);
+          else this.adopted.delete(record.id);
           return;
         }
         const lateReceipt = cmReadReceipt(fsModule, paths.receipt);
@@ -779,6 +782,7 @@ class CommandModeRunner {
       }, this.deps.adoptPollMs);
       if (this.deps.unrefHandles !== false && timer && typeof timer.unref === "function") timer.unref();
       this.adoptTimers.add(timer);
+      this.adopted.set(record.id, { ...record, adopted: true });
       results.push({ runId: record.id, outcome: "adopted" });
     }
     return results;
@@ -831,6 +835,7 @@ class CommandModeRunner {
     } catch (error) {
       // Best effort on a damaged store.
     }
+    if (this.adopted && finished && finished.id) this.adopted.delete(finished.id);
     if (options.silent) return finished;
     const settlement = {
       ok: classification.outcome === "completed",
@@ -877,9 +882,14 @@ class CommandModeRunner {
   }
 
   activeRecords() {
-    return [...this.live.values()]
+    const liveRecords = [...this.live.values()]
       .map((live) => live && live.record)
       .filter((record) => record && (record.outcome === "queued" || record.outcome === "running"));
+    const seen = new Set(liveRecords.map((record) => record.id));
+    const adoptedRecords = [...(this.adopted ? this.adopted.values() : [])].filter(
+      (record) => record && !seen.has(record.id) && (record.outcome === "queued" || record.outcome === "running"),
+    ).map((record) => (record.adopted ? record : { ...record, adopted: true }));
+    return [...liveRecords, ...adoptedRecords];
   }
 
   dispose() {
@@ -891,6 +901,7 @@ class CommandModeRunner {
       }
     }
     this.adoptTimers.clear();
+    if (this.adopted) this.adopted.clear();
   }
 }
 

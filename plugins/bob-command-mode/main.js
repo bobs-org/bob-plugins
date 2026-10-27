@@ -44,6 +44,10 @@ const CM_LOCK_PHRASE = "another Bob vault maintenance run is already active";
 const CM_RUN_FINISHED_EVENT = "bob-command-mode:run-finished";
 // Directory (under the state root) holding per-run files.
 const CM_RUNS_DIRNAME = "command-mode/runs";
+// Status-bar run indicator timing.
+const CM_CHIP_REVEAL_MS = 400;
+const CM_CHIP_SETTLE_MS = 1600;
+const CM_CHIP_LEAVE_MS = 300;
 
 // Lazily loaded Node modules. Direct require calls keep the fragments working
 // under Obsidian and under plain Node tests; tests may inject fakes instead.
@@ -707,6 +711,7 @@ class CommandModeRunner {
     this.readsActive = 0;
     this.writerActive = false;
     this.adoptTimers = new Set();
+    this.adopted = new Map(); // runId -> adopted unfinished record (flagged)
     this.lastRunId = null;
     try {
       this.host = this.deps.os && typeof this.deps.os.hostname === "function"
@@ -1425,6 +1430,8 @@ class CommandModeRunner {
         if (!late || !cmIsUnfinishedOutcome(late.outcome)) {
           clearInterval(timer);
           this.adoptTimers.delete(timer);
+          if (late && late.id) this.adopted.delete(late.id);
+          else this.adopted.delete(record.id);
           return;
         }
         const lateReceipt = cmReadReceipt(fsModule, paths.receipt);
@@ -1442,6 +1449,7 @@ class CommandModeRunner {
       }, this.deps.adoptPollMs);
       if (this.deps.unrefHandles !== false && timer && typeof timer.unref === "function") timer.unref();
       this.adoptTimers.add(timer);
+      this.adopted.set(record.id, { ...record, adopted: true });
       results.push({ runId: record.id, outcome: "adopted" });
     }
     return results;
@@ -1494,6 +1502,7 @@ class CommandModeRunner {
     } catch (error) {
       // Best effort on a damaged store.
     }
+    if (this.adopted && finished && finished.id) this.adopted.delete(finished.id);
     if (options.silent) return finished;
     const settlement = {
       ok: classification.outcome === "completed",
@@ -1540,9 +1549,14 @@ class CommandModeRunner {
   }
 
   activeRecords() {
-    return [...this.live.values()]
+    const liveRecords = [...this.live.values()]
       .map((live) => live && live.record)
       .filter((record) => record && (record.outcome === "queued" || record.outcome === "running"));
+    const seen = new Set(liveRecords.map((record) => record.id));
+    const adoptedRecords = [...(this.adopted ? this.adopted.values() : [])].filter(
+      (record) => record && !seen.has(record.id) && (record.outcome === "queued" || record.outcome === "running"),
+    ).map((record) => (record.adopted ? record : { ...record, adopted: true }));
+    return [...liveRecords, ...adoptedRecords];
   }
 
   dispose() {
@@ -1554,6 +1568,7 @@ class CommandModeRunner {
       }
     }
     this.adoptTimers.clear();
+    if (this.adopted) this.adopted.clear();
   }
 }
 
@@ -1953,20 +1968,43 @@ class BobCommandModePlugin extends Plugin {
     }
   }
 
+  commandModeChipState() {
+    if (!this.commandModeChip || !(this.commandModeChip.shown instanceof Set)) {
+      this.commandModeChip = { shown: new Set(), settle: null };
+    }
+    return this.commandModeChip;
+  }
+
   commandModeStartStatusChip() {
     if (typeof this.addStatusBarItem !== "function") return;
     try {
       this.commandModeStatusEl = this.addStatusBarItem();
       if (!this.commandModeStatusEl) return;
       this.commandModeStatusEl.addClass("bob-cmd-chip");
+      try {
+        if (typeof this.commandModeStatusEl.addClass === "function") this.commandModeStatusEl.addClass("mod-clickable");
+        else if (this.commandModeStatusEl.classList && typeof this.commandModeStatusEl.classList.add === "function") this.commandModeStatusEl.classList.add("mod-clickable");
+      } catch (error) {
+        // Best effort.
+      }
       this.commandModeStatusEl.style.display = "none";
+      try {
+        this.commandModeStatusEl.setAttribute("role", "button");
+        this.commandModeStatusEl.setAttribute("tabindex", "0");
+      } catch (error) {
+        // Headless stubs may not store attributes.
+      }
+      this.commandModeChipState();
       this.commandModeStatusEl.addEventListener("keydown", (event) => {
         if (event && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
-          const active = this.commandModeRunner && this.commandModeRunner.activeRecords();
-          const newest = active && active[active.length - 1];
-          if (newest) void this.commandModeOpenOutput(newest.id);
+          const target = this.commandModeChipRunId;
+          if (target) void this.commandModeOpenOutput(target);
         }
+      });
+      this.commandModeStatusEl.addEventListener("click", () => {
+        const target = this.commandModeChipRunId;
+        if (target) void this.commandModeOpenOutput(target);
       });
       this.commandModeRefreshStatusChip();
       this.commandModeStatusTimer = setInterval(() => this.commandModeRefreshStatusChip(), 250);
@@ -1979,13 +2017,20 @@ class BobCommandModePlugin extends Plugin {
   commandModeRefreshStatusChip(nowMs = Date.now()) {
     const runner = this.commandModeRunner;
     if (!runner || !this.commandModeStatusEl) return { visible: false, runs: 0 };
-    return cmRenderStatusChip(
+    const chipState = this.commandModeChipState();
+    const result = cmRenderStatusChip(
       this.commandModeStatusEl,
       runner.activeRecords(),
       nowMs,
       (runId) => this.commandModeOpenOutput(runId),
       (runId) => this.commandModeProgressText(runId),
+      chipState,
     );
+    this.commandModeChipRunId = result && result.runId ? result.runId : (result && result.visible ? this.commandModeChipRunId : null);
+    if (!result || !result.visible) {
+      if (!result || !result.runId) this.commandModeChipRunId = null;
+    }
+    return result;
   }
 
   commandModeProgressText(runId) {
@@ -2203,10 +2248,52 @@ class BobCommandModePlugin extends Plugin {
 
   commandModeFireEvent(name, payload) {
     try {
+      if (name === CM_RUN_FINISHED_EVENT && payload && payload.runId) {
+        this.commandModeRecordChipSettle(payload);
+      }
+    } catch (error) {
+      // Settle tracking must never break finalization.
+    }
+    try {
       const workspace = this.app && this.app.workspace;
       if (workspace && typeof workspace.trigger === "function") workspace.trigger(name, payload);
     } catch (error) {
       // Event delivery must never break finalization.
+    }
+  }
+
+  commandModeRecordChipSettle(payload) {
+    const runId = payload && payload.runId ? String(payload.runId) : "";
+    if (!runId) return;
+    const chipState = this.commandModeChipState();
+    if (!chipState.shown.has(runId)) return;
+    const runner = this.commandModeRunner;
+    const active = runner ? runner.activeRecords() : [];
+    if (active.length) return;
+    let record = null;
+    try {
+      record = cmPagerFindRecord(runner, runId);
+    } catch (error) {
+      record = null;
+    }
+    const outcome = (payload && payload.outcome) || (record && record.outcome) || "unknown";
+    const title = (record && (record.title || record.entry_id)) || "bob";
+    let durationMs = record && typeof record.duration_ms === "number" ? record.duration_ms : null;
+    if (durationMs === null || durationMs === undefined) {
+      try {
+        const started = record && record.started_at ? Date.parse(record.started_at) : NaN;
+        const done = record && record.finished_at ? Date.parse(record.finished_at) : NaN;
+        durationMs = Number.isFinite(started) && Number.isFinite(done) ? Math.max(0, done - started) : 0;
+      } catch (error) {
+        durationMs = 0;
+      }
+    }
+    const nowMs = Date.now();
+    chipState.settle = { runId, title: String(title), outcome, durationMs, atMs: nowMs };
+    try {
+      if (this.commandModeStatusEl) this.commandModeRefreshStatusChip(nowMs);
+    } catch (error) {
+      // Paint is best effort here; the timer repaints within 250 ms.
     }
   }
 
@@ -2485,53 +2572,343 @@ function cmCreateToastFragment(outcome = {}, onAction = () => {}, onOutput = () 
   return fragment;
 }
 // ---- src/120-status-chip.js ----
-// Bob Command Mode: live status-bar chip. Runner state stays authoritative.
+// Bob Command Mode: live status-bar run indicator. Runner state stays authoritative.
+// Brand indicator: icon-led ring plus `bob`, count, and clock. Model is pure;
+// paint is idempotent and never recreates the spinning mark.
 
-function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () => {}, progressFor = () => "") {
+function cmChipRevealMs() {
+  return typeof CM_CHIP_REVEAL_MS === "number" ? CM_CHIP_REVEAL_MS : 400;
+}
+
+function cmChipSettleMs() {
+  return typeof CM_CHIP_SETTLE_MS === "number" ? CM_CHIP_SETTLE_MS : 1600;
+}
+
+function cmChipLeaveMs() {
+  return typeof CM_CHIP_LEAVE_MS === "number" ? CM_CHIP_LEAVE_MS : 300;
+}
+
+function cmChipToastMeta() {
+  if (typeof CM_TOAST_META !== "undefined" && CM_TOAST_META) return CM_TOAST_META;
+  return {
+    completed: { glyph: "✓", label: "Completed" },
+    attention: { glyph: "◐", label: "Needs attention" },
+    failed: { glyph: "✗", label: "Failed" },
+    unknown: { glyph: "?", label: "Unknown · log preserved" },
+    stopped: { glyph: "■", label: "Stopped" },
+  };
+}
+
+function cmChipRecordAge(record, nowMs) {
+  const started = record && record.started_at ? Date.parse(record.started_at) : NaN;
+  if (!Number.isFinite(started)) return 0;
+  return Math.max(0, nowMs - started);
+}
+
+function cmChipIsOverdue(record, ageMs) {
+  if (!record) return false;
+  if (record.overdue) return true;
+  const budget = Number(record.budget_secs);
+  if (record.effect === "reads" || !Number.isFinite(budget) || budget <= 0) return false;
+  return ageMs >= budget * 1000;
+}
+
+function cmChipShortArgv(record) {
+  const argv = Array.isArray(record && record.argv) ? [...record.argv] : [];
+  if (argv.length && (argv[0] === "bob" || /(?:^|\/)bob$/.test(String(argv[0])))) argv.shift();
+  try {
+    return cmFormatArgv(["bob", ...argv]);
+  } catch (error) {
+    return "bob " + argv.join(" ");
+  }
+}
+
+function cmChipRunTitle(record) {
+  return String((record && (record.title || record.entry_id)) || "bob");
+}
+
+function cmChipBudgetMins(record) {
+  return Math.max(1, Math.round(Number(record.budget_secs) / 60) || 0);
+}
+
+// Pure model for the brand indicator (indicator_label = brand, indicator_runs = all).
+// records: live plus adopted unfinished runs. state: {shown:Set, settle:null|{...}}.
+// progressFor(runId): last progress line. Returns {visible, tone, outcome,
+// label, count, clock, clockMs, tooltip, runId, runs, leaving}.
+function cmStatusChipModel(records, nowMs, state, progressFor, options = {}) {
+  const now = typeof nowMs === "number" ? nowMs : Date.now();
+  const progress = typeof progressFor === "function" ? progressFor : () => "";
+  const settleState = state && typeof state === "object" ? state : null;
+  const settle = settleState && settleState.settle ? settleState.settle : null;
+  const revealMs = cmChipRevealMs();
+  const settleMs = cmChipSettleMs();
+  const leaveMs = cmChipLeaveMs();
+  const active = (Array.isArray(records) ? records : []).filter(
+    (record) => record && (record.outcome === "running" || record.outcome === "queued"),
+  );
+  const ages = active.map((record) => cmChipRecordAge(record, now));
+
+  if (active.length) {
+    if (ages.every((age) => age < revealMs)) {
+      return { visible: false, runs: active.length, count: active.length, runId: null };
+    }
+    const longest = Math.max(...ages);
+    const overdue = active.some((record, index) => cmChipIsOverdue(record, ages[index]));
+    const queuedOnly = active.every((record) => record && record.outcome === "queued");
+    const tone = overdue ? "is-overdue" : queuedOnly ? "is-queued" : "is-running";
+    const newest = active[active.length - 1];
+    const count = active.length;
+    const label = "bob";
+    const clock = (() => {
+      try {
+        return cmFormatClock(longest);
+      } catch (error) {
+        return "0:00";
+      }
+    })();
+    const header = count === 1 ? "bob · running" : "bob · " + count + " running";
+    const ordered = [...active].reverse();
+    const shownBlocks = [];
+    const maxRows = 4;
+    for (const record of ordered.slice(0, maxRows)) {
+      const age = cmChipRecordAge(record, now);
+      let clockText = "0:00";
+      try {
+        clockText = cmFormatClock(age);
+      } catch (error) {
+        clockText = "0:00";
+      }
+      const lines = [cmChipRunTitle(record) + " · " + clockText, cmChipShortArgv(record)];
+      let suffix = "";
+      if (record.outcome === "queued") suffix = "queued";
+      else if (cmChipIsOverdue(record, age)) suffix = "past its ~" + cmChipBudgetMins(record) + " min budget";
+      else if (record.adopted) suffix = "adopted after reload";
+      if (suffix) lines[0] += " · " + suffix;
+      let last = "";
+      try {
+        last = String(progress(record.id) || "").trim();
+      } catch (error) {
+        last = "";
+      }
+      if (last) lines.push("Last: " + last);
+      else if (record.adopted && !suffix) lines[0] += " · adopted after reload";
+      else if (record.adopted && suffix !== "adopted after reload" && record.outcome !== "queued" && !cmChipIsOverdue(record, age)) lines.push("adopted after reload");
+      shownBlocks.push(lines.join("\n"));
+    }
+    if (ordered.length > maxRows) shownBlocks.push("…and " + (ordered.length - maxRows) + " more");
+    shownBlocks.push("Click to open output");
+    return {
+      visible: true,
+      tone,
+      outcome: null,
+      label,
+      count,
+      clock,
+      clockMs: longest,
+      tooltip: [header, ...shownBlocks].join("\n\n"),
+      runId: newest.id,
+      runs: active.length,
+      leaving: false,
+    };
+  }
+
+  if (settle && typeof settle.atMs === "number" && now - settle.atMs < settleMs) {
+    const meta = cmChipToastMeta();
+    const outcome = settle.outcome || "unknown";
+    const entry = meta[outcome] || meta.unknown;
+    let clockText = "0:00";
+    try {
+      clockText = cmFormatClock(settle.durationMs || 0);
+    } catch (error) {
+      clockText = "0:00";
+    }
+    const leaving = now - settle.atMs >= settleMs - leaveMs;
+    const tooltip = settle.title + " · " + entry.label + " in " + clockText + "\n\nClick to open output";
+    return {
+      visible: true,
+      tone: "is-settled",
+      outcome,
+      label: "bob",
+      count: 1,
+      clock: clockText,
+      clockMs: settle.durationMs || 0,
+      tooltip,
+      runId: settle.runId,
+      runs: 0,
+      leaving,
+    };
+  }
+
+  return { visible: false, runs: 0, count: 0, runId: null };
+}
+
+function cmChipEnsureChildren(element) {
+  const doc = (typeof document !== "undefined" && document) || null;
+  const find = (cls) => {
+    for (const child of element.children || []) {
+      const classes = child.classes || [];
+      const className = child.className || "";
+      if (classes.includes(cls) || String(className).split(/\s+/).includes(cls)) return child;
+    }
+    return null;
+  };
+  let mark = find("bob-cmd-chip-mark");
+  let label = find("bob-cmd-chip-label");
+  let clock = find("bob-cmd-chip-clock");
+  if (mark && label && clock) return { mark, label, clock, created: false };
+  const create = (cls, text) => {
+    if (doc && typeof doc.createElement === "function") {
+      const el = doc.createElement("span");
+      el.className = cls;
+      if (text !== undefined) el.textContent = text;
+      return el;
+    }
+    if (typeof element.createEl === "function") return element.createEl("span", { cls, text });
+    const ElementCtor = element && element.constructor;
+    const el = new ElementCtor({ tag: "span", cls });
+    if (text !== undefined) el.textContent = text;
+    return el;
+  };
+  if (!mark) {
+    mark = create("bob-cmd-chip-mark");
+    try {
+      if (typeof mark.setAttribute === "function") mark.setAttribute("aria-hidden", "true");
+    } catch (error) {
+      // Best effort.
+    }
+  }
+  if (!label) label = create("bob-cmd-chip-label", "bob");
+  if (!clock) clock = create("bob-cmd-chip-clock", "0:00");
+  // Append in anatomy order exactly once; never reorder afterwards.
+  let created = false;
+  for (const node of [mark, label, clock]) {
+    const present = (element.children || []).includes(node);
+    if (!present) {
+      if (typeof element.appendChild === "function") element.appendChild(node);
+      else if (typeof element.append === "function") element.append(node);
+      created = true;
+    }
+  }
+  return { mark, label, clock, created };
+}
+
+function cmChipToneClasses() {
+  return ["is-running", "is-queued", "is-overdue", "is-settled", "is-completed", "is-attention", "is-failed", "is-unknown", "is-stopped", "is-leaving"];
+}
+
+function cmChipApplyTone(element, model) {
+  const tones = cmChipToneClasses();
+  const current = new Set(String(element.className || "").split(/\s+/).filter(Boolean));
+  for (const tone of tones) current.delete(tone);
+  if (model.visible && model.tone) {
+    current.add(model.tone);
+    if (model.tone === "is-settled" && model.outcome) current.add("is-" + model.outcome);
+    if (model.leaving) current.add("is-leaving");
+  }
+  const next = [...current].join(" ");
+  if (element.className !== undefined) element.className = next;
+  else if (element.classes) element.classes = next.split(/\s+/).filter(Boolean);
+  // Keep the classList stub in sync when present.
+  try {
+    if (element.classList) {
+      for (const tone of tones) {
+        const want = model.visible && (model.tone === tone || (model.tone === "is-settled" && model.outcome && "is-" + model.outcome === tone) || (model.leaving && tone === "is-leaving"));
+        if (typeof element.classList.toggle === "function") element.classList.toggle(tone, want);
+        else if (want && typeof element.classList.add === "function") element.classList.add(tone);
+        else if (!want && typeof element.classList.remove === "function") element.classList.remove(tone);
+      }
+    }
+  } catch (error) {
+    // Class sync is best effort.
+  }
+}
+
+// Idempotent paint. Keeps the current signature with an optional trailing
+// state for the preview script and old callers. Never recreates the mark.
+function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () => {}, progressFor = () => "", state) {
   if (!element) return { visible: false, runs: 0 };
-  const active = (Array.isArray(records) ? records : []).filter((record) => record && (record.outcome === "running" || record.outcome === "queued"));
-  if (!active.length) {
-    element.style.display = "none";
-    element.classList.remove("is-overdue");
-    element.textContent = "";
-    element.removeAttribute("title");
-    return { visible: false, runs: 0 };
+  let progressFn = progressFor;
+  let chipState = state;
+  if (typeof progressFn !== "function" && chipState === undefined) {
+    chipState = progressFn;
+    progressFn = () => "";
   }
-  const ages = active.map((record) => Math.max(0, nowMs - (Date.parse(record.started_at) || nowMs)));
-  if (ages.every((age) => age < 400)) {
-    element.style.display = "none";
-    element.classList.remove("is-overdue");
-    element.textContent = "";
-    element.removeAttribute("title");
-    return { visible: false, runs: active.length };
+  if (chipState && !(chipState.shown instanceof Set)) {
+    try {
+      chipState.shown = new Set(chipState.shown || []);
+    } catch (error) {
+      chipState.shown = new Set();
+    }
   }
-  const longest = Math.max(...ages);
-  const overdue = active.some((record, index) => record.overdue || (
-    record.effect !== "reads" && Number(record.budget_secs) > 0 && ages[index] >= Number(record.budget_secs) * 1000
-  ));
-  const overdueRecord = active.find((record, index) => record.overdue || (
-    record.effect !== "reads" && Number(record.budget_secs) > 0 && ages[index] >= Number(record.budget_secs) * 1000
-  ));
-  const newest = active[active.length - 1];
-  const name = active.length === 1 ? String(newest.title || newest.entry_id || "bob") : "bob ×" + active.length;
-  element.style.display = "";
-  element.classList.toggle("is-overdue", overdue);
-  const budgetMins = overdueRecord ? Math.max(1, Math.round(Number(overdueRecord.budget_secs) / 60)) : 0;
-  element.textContent = overdue
-    ? name + " · still running past ~" + budgetMins + " min"
-    : name + " · " + cmFormatClock(longest);
-  const detail = active.map((record) => {
-    const argv = Array.isArray(record.argv) ? [...record.argv] : [];
-    if (argv.length && (argv[0] === "bob" || /(?:^|\/)bob$/.test(String(argv[0])))) argv.shift();
-    const progress = String(progressFor(record.id) || "").trim();
-    return [cmFormatArgv(["bob", ...argv]), progress ? "Last: " + progress : ""].filter(Boolean).join("\n");
-  }).join("\n\n");
-  element.setAttribute("title", detail);
-  element.setAttribute("aria-label", "Open output for " + name);
-  element.setAttribute("role", "button");
-  element.setAttribute("tabindex", "0");
-  element.onclick = () => onOpen(newest.id);
-  return { visible: true, runs: active.length, overdue, runId: newest.id };
+  const model = cmStatusChipModel(records, nowMs, chipState || null, progressFn);
+  const active = (Array.isArray(records) ? records : []).filter(
+    (record) => record && (record.outcome === "running" || record.outcome === "queued"),
+  );
+  // One engine, one honest busy signal: any active run replaces a settle at once.
+  if (chipState && active.length && chipState.settle) chipState.settle = null;
+  if (!model.visible) {
+    // Expired settles clear so the next paint stays hidden.
+    if (chipState && chipState.settle) {
+      const settleMs = cmChipSettleMs();
+      const now = typeof nowMs === "number" ? nowMs : Date.now();
+      if (typeof chipState.settle.atMs !== "number" || now - chipState.settle.atMs >= settleMs) chipState.settle = null;
+    }
+    try {
+      element.style.display = "none";
+    } catch (error) {
+      element.style = { display: "none" };
+    }
+    cmChipApplyTone(element, model);
+    try {
+      element.removeAttribute("title");
+    } catch (error) {
+      // Best effort.
+    }
+    return { visible: false, runs: active.length || model.runs || 0 };
+  }
+  if (chipState && chipState.shown instanceof Set) {
+    for (const record of active) {
+      if (record && record.id) chipState.shown.add(record.id);
+    }
+  }
+  const parts = cmChipEnsureChildren(element);
+  const countText = model.count > 1 ? "bob ×" + model.count : "bob";
+  if (parts.label.textContent !== countText) parts.label.textContent = countText;
+  if (parts.clock.textContent !== model.clock) parts.clock.textContent = model.clock;
+  try {
+    if (parts.mark.textContent !== (model.tone === "is-settled" ? (cmChipToastMeta()[model.outcome] || {}).glyph || "" : "")) {
+      parts.mark.textContent = model.tone === "is-settled" ? (cmChipToastMeta()[model.outcome] || {}).glyph || "" : "";
+    }
+  } catch (error) {
+    // Best effort.
+  }
+  cmChipApplyTone(element, model);
+  try {
+    element.style.display = "";
+  } catch (error) {
+    // Best effort.
+  }
+  try {
+    element.removeAttribute("title");
+  } catch (error) {
+    // Native tooltip uses aria-label only.
+  }
+  try {
+    element.setAttribute("aria-label", model.tooltip);
+    element.setAttribute("data-tooltip-position", "top");
+    element.setAttribute("role", "button");
+    element.setAttribute("tabindex", "0");
+  } catch (error) {
+    // Headless stubs may not store attributes.
+  }
+  const runId = model.runId;
+  try {
+    element.onclick = () => onOpen(runId);
+  } catch (error) {
+    // Best effort.
+  }
+  const overdue = model.tone === "is-overdue";
+  return { visible: true, runs: model.runs || model.count, overdue, runId };
 }
 // ---- src/130-adapters.js ----
 // Bob Command Mode: catalog-keyed outcome adapters. These stay pure: action
@@ -4413,7 +4790,7 @@ function cmGroupSheetRows(rows, catalog, context) {
 function cmSheetFooterHints(stage) {
   if (stage === "confirm") return "⌃↵ run · esc back";
   if (stage === "output") return "r rerun · y copy · [ ] history · : list · esc back · q close";
-  return "↵ run · ⇥ args · ⇧↵ preview · ⌃↵ run now · ? help · :: vim · esc close";
+  return "⌃N/⌃P select · ↵ run · ⇥ args · ⇧↵ preview · ⌃↵ run now · ? help · :: vim · esc close";
 }
 
 // List-stage key intent. `args` and `vim` stages belong to the args-vim phase;
@@ -4738,7 +5115,10 @@ class CommandModeSheetModal extends Modal {
 
   renderList() {
     const list = this.contentEl.createEl("div", { cls: "bob-cmd-sheet-list" });
+    this.listEl = list;
     this.rowEls = new Map();
+    this.sectionHeadingEls = new Map();
+    this.aboutEl = null;
     const query = this.query.trim();
     if (!this.visible.length) {
       const empty = list.createEl("div", { cls: "bob-cmd-sheet-empty" });
@@ -4747,7 +5127,8 @@ class CommandModeSheetModal extends Modal {
     }
     if (!query) {
       for (const group of this.groups) {
-        list.createEl("div", { cls: "bob-cmd-sheet-section", text: group.title });
+        const heading = list.createEl("div", { cls: "bob-cmd-sheet-section", text: group.title });
+        if (group.rows.length) this.sectionHeadingEls.set(group.rows[0].key, heading);
         for (const row of group.rows) this.renderRow(list, row);
       }
       return;
@@ -4776,7 +5157,7 @@ class CommandModeSheetModal extends Modal {
     }
     if (row.unavailable) chips.createEl("span", { cls: "bob-cmd-row-unavailable", text: row.unavailable });
     if (selected && (row.about || row.tagline)) {
-      list.createEl("div", { cls: "bob-cmd-row-about", text: row.tagline || row.about });
+      this.aboutEl = list.createEl("div", { cls: "bob-cmd-row-about", text: row.tagline || row.about });
     }
     el.addEventListener("click", () => {
       this.selectedKey = row.key;
@@ -5807,7 +6188,10 @@ CommandModeSheetModal.prototype.render = function renderWithArgumentStage() {
 CommandModeSheetModal.prototype.renderList = function renderListWithVimRows() {
   if (this.stage !== "vim") return cmOriginalSheetRenderList.call(this);
   const list = this.contentEl.createEl("div", { cls: "bob-cmd-sheet-list" });
+  this.listEl = list;
   this.rowEls = new Map();
+  this.sectionHeadingEls = new Map();
+  this.aboutEl = null;
   if (!this.visible.length) {
     list.createEl("div", { cls: "bob-cmd-sheet-empty", text: "No Vim mappings in the vimrc" });
     return;
@@ -5815,12 +6199,19 @@ CommandModeSheetModal.prototype.renderList = function renderListWithVimRows() {
   for (const row of this.visible) this.renderRow(list, row);
 };
 
+function cmArgRenderedRows(sheet) {
+  const groups = (sheet && sheet.argCompletionGroups) || [];
+  return groups.flatMap((group) => group.rows || []);
+}
+
 CommandModeSheetModal.prototype.renderArguments = function renderArguments() {
   const entry = this.argEntry;
   const summary = this.contentEl.createEl("div", { cls: "bob-cmd-args-summary" });
   const fixed = entry && Array.isArray(entry.fixed) ? entry.fixed : [];
   if (fixed.length) summary.createEl("span", { cls: "bob-cmd-args-fixed", text: fixed.map(cmQuoteArg).join(" ") });
   const list = this.contentEl.createEl("div", { cls: "bob-cmd-args-completions" });
+  this.argListEl = list;
+  this.argRowEls = new Map();
   const groups = this.argCompletionGroups || [];
   if (!groups.length) {
     if (!this.hint && entry && !this.argCompletionPending) list.createEl("div", { cls: "bob-cmd-sheet-empty", text: "No completions" });
@@ -5834,6 +6225,7 @@ CommandModeSheetModal.prototype.renderArguments = function renderArguments() {
       row.createEl("span", { cls: "bob-cmd-completion-value", text: item.insertValue || item.value });
       if (item.description) row.createEl("span", { cls: "bob-cmd-completion-description", text: item.description });
       row.addEventListener("click", () => this.acceptArgumentCompletion(item));
+      this.argRowEls.set(item.key, row);
     }
   }
 };
@@ -5848,8 +6240,8 @@ CommandModeSheetModal.prototype.renderFooter = function renderFooterWithStage() 
   footer.createEl("span", {
     cls: "bob-cmd-sheet-hint",
     text: this.stage === "args"
-      ? "↵ run · ⇥ accept · ↑↓ completion · ⇧↵ preview · ⌃↵ run now · esc back"
-      : "↵ run Vim ex · ↑↓ mapping · esc back",
+      ? "⌃N/⌃P completion · ⇥ accept · ↵ run · ⇧↵ preview · ⌃↵ run now · esc back"
+      : "⌃N/⌃P mapping · ↵ run Vim ex · esc back",
   });
 };
 
@@ -5979,7 +6371,7 @@ CommandModeSheetModal.prototype.acceptArgumentCompletion = function acceptArgume
 };
 
 CommandModeSheetModal.prototype.moveArgumentCompletion = function moveArgumentCompletion(delta) {
-  const rows = this.argCompletions || [];
+  const rows = cmArgRenderedRows(this);
   if (!rows.length) return;
   let index = rows.findIndex((item) => item.key === this.argSelectedKey);
   index = index < 0 ? (delta > 0 ? 0 : rows.length - 1) : (index + delta + rows.length) % rows.length;
@@ -6111,13 +6503,14 @@ CommandModeSheetModal.prototype.handleSheetKeydown = function handleSheetKeydown
     }
     if (event.key === "Tab") {
       consume();
-      const selected = (this.argCompletions || []).find((item) => item.key === this.argSelectedKey) || (this.argCompletions || [])[0];
+      const rendered = cmArgRenderedRows(this);
+      const selected = rendered.find((item) => item.key === this.argSelectedKey) || rendered[0];
       if (selected) this.acceptArgumentCompletion(selected);
       return true;
     }
     if (event.key === "Enter") {
       consume();
-      const selected = (this.argCompletions || []).find((item) => item.key === this.argSelectedKey);
+      const selected = cmArgRenderedRows(this).find((item) => item.key === this.argSelectedKey);
       if (selected && !event.shiftKey && !event.ctrlKey) this.acceptArgumentCompletion(selected);
       else void this.runArgumentStage({ preview: Boolean(event.shiftKey), force: Boolean(event.ctrlKey && !event.shiftKey) });
       return true;
@@ -6186,6 +6579,432 @@ BobCommandModePlugin.prototype.onunload = function onunloadVimrcLint(...args) {
   this.commandModeVimrcLintActive = false;
   return cmOriginalPluginOnunloadArgsVim.apply(this, args);
 };
+// ---- src/176-sheet-keys.js ----
+// Bob Command Mode: key aliases, focus-preserving render, and scroll.
+function cmIsCtrlOnly(event) {
+  return Boolean(event && event.ctrlKey) && !event.altKey && !event.metaKey && !event.shiftKey;
+}
+
+function cmIsCtrlLeftBracketKeydown(event) {
+  if (!event || !event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return false;
+  if (event.code === "BracketLeft") return true;
+  return event.key === "[";
+}
+
+function cmCommandModeKeyAlias(event) {
+  if (!event || typeof event.key !== "string") return null;
+  if (event.isComposing) return null;
+  if (cmIsCtrlLeftBracketKeydown(event)) return "Escape";
+  if (!cmIsCtrlOnly(event)) return null;
+  const key = String(event.key || "").toLowerCase();
+  const code = String(event.code || "");
+  if (key === "n" || code === "KeyN") return "ArrowDown";
+  if (key === "p" || code === "KeyP") return "ArrowUp";
+  return null;
+}
+
+function cmAliasedKeyEvent(event, aliasKey) {
+  const aliased = {
+    key: aliasKey,
+    code: event.code,
+    target: event.target,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    metaKey: false,
+    isComposing: false,
+    __cmAliasedFrom: event.key,
+    preventDefault() {
+      if (event && typeof event.preventDefault === "function") event.preventDefault();
+    },
+    stopPropagation() {
+      if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+    },
+  };
+  try {
+    Object.defineProperty(aliased, "defaultPrevented", {
+      enumerable: true,
+      get() {
+        return Boolean(event && event.defaultPrevented);
+      },
+    });
+  } catch (error) {
+    aliased.defaultPrevented = Boolean(event && event.defaultPrevented);
+  }
+  return aliased;
+}
+
+const cmHandledSheetKeys = new WeakSet();
+
+function cmSheetFocusInside(sheet) {
+  try {
+    const doc = typeof document !== "undefined" ? document : null;
+    const active = doc && doc.activeElement ? doc.activeElement : null;
+    if (active && sheet && sheet.modalEl) {
+      for (let current = active; current; current = current.parent) {
+        if (current === sheet.modalEl) return true;
+      }
+      try {
+        if (typeof sheet.modalEl.contains === "function" && sheet.modalEl.contains(active)) return true;
+      } catch (error) {
+        // Fall through to stub flags.
+      }
+      if (active !== (doc.body || null)) {
+        // Active element exists but is outside the sheet.
+      } else {
+        // Body focus counts as outside.
+      }
+    }
+  } catch (error) {
+    // Fall through to stub flags.
+  }
+  try {
+    if (sheet && sheet.inputEl && sheet.inputEl.focused) return true;
+    if (sheet && sheet.modalEl && sheet.modalEl.focused) return true;
+  } catch (error) {
+    // Best effort.
+  }
+  return false;
+}
+
+function cmSheetHomeFocus(sheet) {
+  if (!sheet) return;
+  if (sheet.stage === "output") {
+    if (sheet.modalEl) {
+      try {
+        if (typeof sheet.modalEl.getAttribute === "function" && !sheet.modalEl.getAttribute("tabindex")) {
+          sheet.modalEl.setAttribute("tabindex", "-1");
+        }
+      } catch (error) {
+        // Best effort.
+      }
+      try {
+        if (typeof sheet.modalEl.focus === "function") sheet.modalEl.focus();
+      } catch (error) {
+        // Best effort.
+      }
+    }
+    return;
+  }
+  try {
+    if (sheet.inputEl && typeof sheet.inputEl.focus === "function") sheet.inputEl.focus();
+  } catch (error) {
+    // Best effort.
+  }
+}
+
+function cmSheetScrollSelectionIntoView(sheet) {
+  const isArgs = sheet && sheet.stage === "args";
+  const listEl = isArgs ? sheet.argListEl : sheet.listEl;
+  if (!listEl) return;
+  const rowEls = isArgs ? sheet.argRowEls : sheet.rowEls;
+  const selectedKey = isArgs ? sheet.argSelectedKey : sheet.selectedKey;
+  if (!rowEls || !selectedKey) return;
+  const rowEl = typeof rowEls.get === "function" ? rowEls.get(selectedKey) : rowEls[selectedKey];
+  if (!rowEl) return;
+  let targets = [rowEl];
+  if (!isArgs) {
+    if (sheet.aboutEl) targets.push(sheet.aboutEl);
+    const heading = sheet.sectionHeadingEls && typeof sheet.sectionHeadingEls.get === "function"
+      ? sheet.sectionHeadingEls.get(selectedKey)
+      : null;
+    if (heading) targets.push(heading);
+  }
+  const getRect = (el) => {
+    try {
+      if (el && typeof el.getBoundingClientRect === "function") return el.getBoundingClientRect();
+    } catch (error) {
+      // Fall through.
+    }
+    return null;
+  };
+  const listRect = getRect(listEl);
+  const rects = targets.map(getRect);
+  if (!listRect || rects.some((rect) => !rect)) {
+    try {
+      rowEl.scrollIntoView({ block: "nearest" });
+    } catch (error) {
+      // Headless stubs ignore scrolling.
+    }
+    return;
+  }
+  const top = Math.min(...rects.map((rect) => rect.top));
+  const bottom = Math.max(...rects.map((rect) => rect.bottom));
+  const listTop = listRect.top;
+  const listBottom = listRect.bottom;
+  const rowRect = getRect(rowEl);
+  const rowHeight = rowRect ? Math.max(0, rowRect.bottom - rowRect.top) : 0;
+  let margin = rowHeight;
+  const viewportHeight = Number(listEl.clientHeight) || (listBottom - listTop);
+  if (viewportHeight && rowHeight && viewportHeight < rowHeight * 3) margin = 0;
+  const ordered = isArgs
+    ? (typeof cmArgRenderedRows === "function" ? cmArgRenderedRows(sheet) : [])
+    : (sheet.visible || []);
+  const firstKey = ordered.length ? ordered[0].key : null;
+  if (selectedKey === firstKey) {
+    listEl.scrollTop = 0;
+    return;
+  }
+  const scrollTop = Number(listEl.scrollTop) || 0;
+  if (top - margin < listTop) {
+    listEl.scrollTop = scrollTop - (listTop - (top - margin));
+  } else if (bottom + margin > listBottom) {
+    listEl.scrollTop = scrollTop + ((bottom + margin) - listBottom);
+  }
+  if (Number(listEl.scrollTop) < 0) listEl.scrollTop = 0;
+}
+
+function cmIsBlockedCtrlLetter(event) {
+  if (!event || typeof event.key !== "string") return false;
+  if (!event.ctrlKey) return false;
+  if (!event.altKey && !event.metaKey && !event.shiftKey) return false;
+  const key = String(event.key || "").toLowerCase();
+  const code = String(event.code || "");
+  return key === "n" || key === "p" || code === "KeyN" || code === "KeyP";
+}
+
+const cmOriginalSheetKeydownKeys = CommandModeSheetModal.prototype.handleSheetKeydown;
+CommandModeSheetModal.prototype.handleSheetKeydown = function handleSheetKeydownWithAliases(event) {
+  if (!event || typeof event.key !== "string") return false;
+  if (cmHandledSheetKeys.has(event)) return true;
+  if (cmIsBlockedCtrlLetter(event)) return false;
+  const alias = cmCommandModeKeyAlias(event);
+  let effective = event;
+  if (alias === "Escape") {
+    effective = cmAliasedKeyEvent(event, "Escape");
+  } else if ((alias === "ArrowDown" || alias === "ArrowUp") &&
+    (this.stage === "list" || this.stage === "args" || this.stage === "vim")) {
+    effective = cmAliasedKeyEvent(event, alias);
+  }
+  const result = cmOriginalSheetKeydownKeys.call(this, effective);
+  if (result) cmHandledSheetKeys.add(event);
+  return result;
+};
+
+const cmOriginalPagerKeydownKeys = CommandModePagerModal.prototype.handlePagerKeydown;
+CommandModePagerModal.prototype.handlePagerKeydown = function handlePagerKeydownWithAlias(event) {
+  if (!event || typeof event.key !== "string") return false;
+  if (cmHandledSheetKeys.has(event)) return true;
+  const alias = cmCommandModeKeyAlias(event);
+  let effective = event;
+  if (alias === "Escape") effective = cmAliasedKeyEvent(event, "Escape");
+  const result = cmOriginalPagerKeydownKeys.call(this, effective);
+  if (result) cmHandledSheetKeys.add(event);
+  return result;
+};
+
+const cmOriginalRenderKeys = CommandModeSheetModal.prototype.render;
+CommandModeSheetModal.prototype.render = function renderFocusPreserving() {
+  const prevStage = this.stage;
+  const prevQuery = this.query;
+  const prevInput = this.inputEl;
+  let wasFocused = false;
+  let prevValue = null;
+  let selStart = null;
+  let selEnd = null;
+  try {
+    wasFocused = cmSheetFocusInside(this) && Boolean(prevInput) && (
+      (prevInput.focused) ||
+      (typeof document !== "undefined" && document.activeElement === prevInput)
+    );
+    if (!wasFocused && prevInput) {
+      // Any focus inside the sheet counts as needing a home after re-render.
+      wasFocused = cmSheetFocusInside(this);
+    }
+    if (prevInput) {
+      prevValue = prevInput.value;
+      selStart = typeof prevInput.selectionStart === "number" ? prevInput.selectionStart : null;
+      selEnd = typeof prevInput.selectionEnd === "number" ? prevInput.selectionEnd : null;
+    }
+  } catch (error) {
+    wasFocused = false;
+  }
+  let prevScrollTop = null;
+  try {
+    const listNode = prevStage === "args" ? this.argListEl : this.listEl;
+    if (listNode && typeof listNode.scrollTop === "number") prevScrollTop = listNode.scrollTop;
+  } catch (error) {
+    prevScrollTop = null;
+  }
+  const result = cmOriginalRenderKeys.call(this);
+  const focusInside = (() => {
+    try {
+      return cmSheetFocusInside(this);
+    } catch (error) {
+      return false;
+    }
+  })();
+  if (!focusInside) cmSheetHomeFocus(this);
+  try {
+    if (this.inputEl && prevValue !== null && prevValue !== undefined) {
+      if (this.inputEl.value === prevValue && typeof selStart === "number") {
+        try {
+          if (typeof this.inputEl.setSelectionRange === "function") this.inputEl.setSelectionRange(selStart, selEnd);
+          else {
+            this.inputEl.selectionStart = selStart;
+            this.inputEl.selectionEnd = selEnd;
+          }
+        } catch (error) {
+          // Caret restore is best effort.
+        }
+      } else if (this.inputEl.value !== prevValue) {
+        try {
+          const len = String(this.inputEl.value || "").length;
+          if (typeof this.inputEl.setSelectionRange === "function") this.inputEl.setSelectionRange(len, len);
+          else {
+            this.inputEl.selectionStart = len;
+            this.inputEl.selectionEnd = len;
+          }
+        } catch (error) {
+          // Caret restore is best effort.
+        }
+      }
+    }
+  } catch (error) {
+    // Caret restore is best effort.
+  }
+  try {
+    const listNode = this.stage === "args" ? this.argListEl : this.listEl;
+    if (listNode) {
+      const lastStage = this.cmLastRenderStage;
+      const lastQuery = this.cmLastRenderQuery;
+      const sameRender = lastStage === this.stage && lastQuery === this.query && lastStage !== undefined;
+      if (sameRender && typeof prevScrollTop === "number") {
+        listNode.scrollTop = prevScrollTop;
+      } else if (typeof listNode.scrollTop === "number" || listNode.scrollTop === undefined) {
+        listNode.scrollTop = 0;
+      }
+    }
+    try {
+      this.cmLastRenderStage = this.stage;
+      this.cmLastRenderQuery = this.query;
+    } catch (error) {
+      // Best effort.
+    }
+  } catch (error) {
+    // Scroll restore is best effort.
+  }
+  try {
+    if (typeof this.scrollSelectionIntoView === "function") this.scrollSelectionIntoView();
+  } catch (error) {
+    // Best effort.
+  }
+  return result;
+};
+
+CommandModeSheetModal.prototype.scrollSelectionIntoView = function scrollSelectionIntoViewReal() {
+  cmSheetScrollSelectionIntoView(this);
+};
+
+function cmSheetListScrollHelper(sheet) {
+  cmSheetScrollSelectionIntoView(sheet);
+}
+
+const cmOriginalRenderRowKeys = CommandModeSheetModal.prototype.renderRow;
+CommandModeSheetModal.prototype.renderRow = function renderRowWithMousedownGuard(list, row) {
+  const el = cmOriginalRenderRowKeys.call(this, list, row);
+  try {
+    el.addEventListener("mousedown", (event) => {
+      if (event && typeof event.preventDefault === "function") event.preventDefault();
+    });
+  } catch (error) {
+    // Best effort.
+  }
+  return el;
+};
+
+const cmOriginalRenderArgumentsKeys = CommandModeSheetModal.prototype.renderArguments;
+if (typeof cmOriginalRenderArgumentsKeys === "function") {
+  CommandModeSheetModal.prototype.renderArguments = function renderArgumentsWithMousedownGuard() {
+    const result = cmOriginalRenderArgumentsKeys.call(this);
+    try {
+      const rows = this.argRowEls;
+      const visit = (rowEl) => {
+        try {
+          rowEl.addEventListener("mousedown", (event) => {
+            if (event && typeof event.preventDefault === "function") event.preventDefault();
+          });
+        } catch (error) {
+          // Best effort.
+        }
+      };
+      if (rows && typeof rows.values === "function") {
+        for (const rowEl of rows.values()) visit(rowEl);
+      }
+    } catch (error) {
+      // Best effort.
+    }
+    return result;
+  };
+}
+
+const cmOriginalSheetOnOpenKeys = CommandModeSheetModal.prototype.onOpen;
+const cmOriginalSheetOnCloseKeys = CommandModeSheetModal.prototype.onClose;
+CommandModeSheetModal.prototype.onOpen = function onOpenWithScopeFallback() {
+  const result = cmOriginalSheetOnOpenKeys.call(this);
+  try {
+    if (this.scope && typeof this.scope.register === "function") {
+      const handler = (event) => {
+        if (!event) return true;
+        if (cmHandledSheetKeys.has(event)) return false;
+        let inside = false;
+        try {
+          for (let current = event.target; current; current = current.parent) {
+            if (current === this.modalEl) {
+              inside = true;
+              break;
+            }
+          }
+          if (!inside && this.modalEl && typeof this.modalEl.contains === "function") {
+            try {
+              inside = Boolean(this.modalEl.contains(event.target));
+            } catch (error) {
+              // Best effort.
+            }
+          }
+        } catch (error) {
+          inside = false;
+        }
+        if (inside) return true;
+        cmSheetHomeFocus(this);
+        let handled = false;
+        try {
+          handled = this.handleSheetKeydown(event);
+        } catch (error) {
+          handled = false;
+        }
+        if (handled) cmHandledSheetKeys.add(event);
+        return handled ? false : true;
+      };
+      let ref = null;
+      try {
+        ref = this.scope.register(null, null, handler);
+      } catch (error) {
+        ref = null;
+      }
+      this.cmScopeUnregister = () => {
+        try {
+          if (this.scope && typeof this.scope.unregister === "function" && ref) this.scope.unregister(ref);
+          else if (typeof ref === "function") ref();
+        } catch (error) {
+          // Best effort.
+        }
+        this.cmScopeUnregister = null;
+      };
+    }
+  } catch (error) {
+    // Scope fallback is best effort.
+  }
+  return result;
+};
+CommandModeSheetModal.prototype.onClose = function onCloseWithScopeFallback() {
+  try {
+    if (typeof this.cmScopeUnregister === "function") this.cmScopeUnregister();
+  } catch (error) {
+    // Best effort.
+  }
+  return cmOriginalSheetOnCloseKeys.call(this);
+};
 // ---- src/990-exports.js ----
 // Bob Command Mode: public entrypoint and test helpers.
 module.exports = BobCommandModePlugin;
@@ -6209,7 +7028,13 @@ module.exports.helpers = {
   CM_LOCK_PHRASE,
   CM_RUN_FINISHED_EVENT,
   CM_RUNS_DIRNAME,
+  CM_CHIP_REVEAL_MS,
+  CM_CHIP_SETTLE_MS,
+  CM_CHIP_LEAVE_MS,
   CM_BOB_CANDIDATES,
+  cmStatusChipModel,
+  cmCommandModeKeyAlias,
+  cmArgRenderedRows,
   CommandModeRunner,
   cmDefaultRunnerDeps,
   cmStripAnsi,

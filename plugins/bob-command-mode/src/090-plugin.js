@@ -203,20 +203,43 @@ class BobCommandModePlugin extends Plugin {
     }
   }
 
+  commandModeChipState() {
+    if (!this.commandModeChip || !(this.commandModeChip.shown instanceof Set)) {
+      this.commandModeChip = { shown: new Set(), settle: null };
+    }
+    return this.commandModeChip;
+  }
+
   commandModeStartStatusChip() {
     if (typeof this.addStatusBarItem !== "function") return;
     try {
       this.commandModeStatusEl = this.addStatusBarItem();
       if (!this.commandModeStatusEl) return;
       this.commandModeStatusEl.addClass("bob-cmd-chip");
+      try {
+        if (typeof this.commandModeStatusEl.addClass === "function") this.commandModeStatusEl.addClass("mod-clickable");
+        else if (this.commandModeStatusEl.classList && typeof this.commandModeStatusEl.classList.add === "function") this.commandModeStatusEl.classList.add("mod-clickable");
+      } catch (error) {
+        // Best effort.
+      }
       this.commandModeStatusEl.style.display = "none";
+      try {
+        this.commandModeStatusEl.setAttribute("role", "button");
+        this.commandModeStatusEl.setAttribute("tabindex", "0");
+      } catch (error) {
+        // Headless stubs may not store attributes.
+      }
+      this.commandModeChipState();
       this.commandModeStatusEl.addEventListener("keydown", (event) => {
         if (event && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
-          const active = this.commandModeRunner && this.commandModeRunner.activeRecords();
-          const newest = active && active[active.length - 1];
-          if (newest) void this.commandModeOpenOutput(newest.id);
+          const target = this.commandModeChipRunId;
+          if (target) void this.commandModeOpenOutput(target);
         }
+      });
+      this.commandModeStatusEl.addEventListener("click", () => {
+        const target = this.commandModeChipRunId;
+        if (target) void this.commandModeOpenOutput(target);
       });
       this.commandModeRefreshStatusChip();
       this.commandModeStatusTimer = setInterval(() => this.commandModeRefreshStatusChip(), 250);
@@ -229,13 +252,20 @@ class BobCommandModePlugin extends Plugin {
   commandModeRefreshStatusChip(nowMs = Date.now()) {
     const runner = this.commandModeRunner;
     if (!runner || !this.commandModeStatusEl) return { visible: false, runs: 0 };
-    return cmRenderStatusChip(
+    const chipState = this.commandModeChipState();
+    const result = cmRenderStatusChip(
       this.commandModeStatusEl,
       runner.activeRecords(),
       nowMs,
       (runId) => this.commandModeOpenOutput(runId),
       (runId) => this.commandModeProgressText(runId),
+      chipState,
     );
+    this.commandModeChipRunId = result && result.runId ? result.runId : (result && result.visible ? this.commandModeChipRunId : null);
+    if (!result || !result.visible) {
+      if (!result || !result.runId) this.commandModeChipRunId = null;
+    }
+    return result;
   }
 
   commandModeProgressText(runId) {
@@ -453,10 +483,52 @@ class BobCommandModePlugin extends Plugin {
 
   commandModeFireEvent(name, payload) {
     try {
+      if (name === CM_RUN_FINISHED_EVENT && payload && payload.runId) {
+        this.commandModeRecordChipSettle(payload);
+      }
+    } catch (error) {
+      // Settle tracking must never break finalization.
+    }
+    try {
       const workspace = this.app && this.app.workspace;
       if (workspace && typeof workspace.trigger === "function") workspace.trigger(name, payload);
     } catch (error) {
       // Event delivery must never break finalization.
+    }
+  }
+
+  commandModeRecordChipSettle(payload) {
+    const runId = payload && payload.runId ? String(payload.runId) : "";
+    if (!runId) return;
+    const chipState = this.commandModeChipState();
+    if (!chipState.shown.has(runId)) return;
+    const runner = this.commandModeRunner;
+    const active = runner ? runner.activeRecords() : [];
+    if (active.length) return;
+    let record = null;
+    try {
+      record = cmPagerFindRecord(runner, runId);
+    } catch (error) {
+      record = null;
+    }
+    const outcome = (payload && payload.outcome) || (record && record.outcome) || "unknown";
+    const title = (record && (record.title || record.entry_id)) || "bob";
+    let durationMs = record && typeof record.duration_ms === "number" ? record.duration_ms : null;
+    if (durationMs === null || durationMs === undefined) {
+      try {
+        const started = record && record.started_at ? Date.parse(record.started_at) : NaN;
+        const done = record && record.finished_at ? Date.parse(record.finished_at) : NaN;
+        durationMs = Number.isFinite(started) && Number.isFinite(done) ? Math.max(0, done - started) : 0;
+      } catch (error) {
+        durationMs = 0;
+      }
+    }
+    const nowMs = Date.now();
+    chipState.settle = { runId, title: String(title), outcome, durationMs, atMs: nowMs };
+    try {
+      if (this.commandModeStatusEl) this.commandModeRefreshStatusChip(nowMs);
+    } catch (error) {
+      // Paint is best effort here; the timer repaints within 250 ms.
     }
   }
 

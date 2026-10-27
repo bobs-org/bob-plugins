@@ -296,23 +296,38 @@ test("status chip waits 400 ms, tracks multiple runs, and marks overdue writers"
     id, title: "Sync vault", outcome: "running", effect: "writes", budget_secs: 180,
     started_at: new Date(now - elapsed).toISOString(), argv: ["/usr/bin/bob", "vault-sync", "run"], ...extra,
   });
+  const childText = (cls) => {
+    const found = (chip.children || []).find((child) => (child.classes || []).includes(cls) || String(child.className || "").split(/\s+/).includes(cls));
+    return found ? found.textContent : "";
+  };
 
   assert.deepEqual(helpers.cmRenderStatusChip(chip, [run("one", 399)], now, (id) => opened.push(id)), { visible: false, runs: 1 });
-  const shown = helpers.cmRenderStatusChip(chip, [run("one", 400)], now, (id) => opened.push(id), () => "pulling");
+  const chipState = { shown: new Set(), settle: null };
+  const shown = helpers.cmRenderStatusChip(chip, [run("one", 400)], now, (id) => opened.push(id), () => "pulling", chipState);
   assert.equal(shown.visible, true);
-  assert.match(chip.textContent, /Sync vault · 0:00/);
-  assert.match(chip.getAttribute("title"), /Last: pulling/);
-  const multiple = helpers.cmRenderStatusChip(chip, [run("one", 10000), run("two", 2000)], now, (id) => opened.push(id));
+  assert.equal(childText("bob-cmd-chip-label"), "bob");
+  assert.equal(childText("bob-cmd-chip-clock"), "0:00");
+  assert.match(chip.getAttribute("aria-label"), /Sync vault · 0:00/);
+  assert.match(chip.getAttribute("aria-label"), /bob vault-sync run/);
+  assert.match(chip.getAttribute("aria-label"), /Last: pulling/);
+  assert.equal(chip.getAttribute("title"), undefined);
+  const marks = (chip.children || []).filter((child) => (child.classes || []).includes("bob-cmd-chip-mark"));
+  assert.equal(marks.length, 1);
+  const firstMark = marks[0];
+  const multiple = helpers.cmRenderStatusChip(chip, [run("one", 10000), run("two", 2000)], now, (id) => opened.push(id), () => "", chipState);
   assert.equal(multiple.runs, 2);
-  assert.match(chip.textContent, /bob ×2 · 0:10/);
+  assert.equal(childText("bob-cmd-chip-label"), "bob ×2");
+  assert.equal(childText("bob-cmd-chip-clock"), "0:10");
+  const marksAfter = (chip.children || []).filter((child) => (child.classes || []).includes("bob-cmd-chip-mark"));
+  assert.equal(marksAfter[0], firstMark);
   chip.onclick();
   assert.deepEqual(opened, ["two"]);
 
-  const overdue = helpers.cmRenderStatusChip(chip, [run("late", 181000)], now);
+  const overdue = helpers.cmRenderStatusChip(chip, [run("late", 181000)], now, () => {}, () => "", chipState);
   assert.equal(overdue.overdue, true);
-  assert.match(chip.textContent, /still running past ~3 min/);
+  assert.match(chip.getAttribute("aria-label"), /past its ~3 min budget/);
   assert.ok(chip.classList.contains("is-overdue"));
-  assert.equal(helpers.cmRenderStatusChip(chip, [], now).visible, false);
+  assert.equal(helpers.cmRenderStatusChip(chip, [], now, () => {}, () => "", chipState).visible, false);
   assert.equal(chip.style.display, "none");
 });
 

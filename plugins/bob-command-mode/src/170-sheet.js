@@ -290,7 +290,10 @@ class CommandModeSheetModal extends Modal {
 
   renderList() {
     const list = this.contentEl.createEl("div", { cls: "bob-cmd-sheet-list" });
+    this.listEl = list;
     this.rowEls = new Map();
+    this.sectionHeadingEls = new Map();
+    this.aboutEl = null;
     const query = this.query.trim();
     if (!this.visible.length) {
       const empty = list.createEl("div", { cls: "bob-cmd-sheet-empty" });
@@ -299,7 +302,8 @@ class CommandModeSheetModal extends Modal {
     }
     if (!query) {
       for (const group of this.groups) {
-        list.createEl("div", { cls: "bob-cmd-sheet-section", text: group.title });
+        const heading = list.createEl("div", { cls: "bob-cmd-sheet-section", text: group.title });
+        if (group.rows.length) this.sectionHeadingEls.set(group.rows[0].key, heading);
         for (const row of group.rows) this.renderRow(list, row);
       }
       return;
@@ -328,7 +332,7 @@ class CommandModeSheetModal extends Modal {
     }
     if (row.unavailable) chips.createEl("span", { cls: "bob-cmd-row-unavailable", text: row.unavailable });
     if (selected && (row.about || row.tagline)) {
-      list.createEl("div", { cls: "bob-cmd-row-about", text: row.tagline || row.about });
+      this.aboutEl = list.createEl("div", { cls: "bob-cmd-row-about", text: row.tagline || row.about });
     }
     el.addEventListener("click", () => {
       this.selectedKey = row.key;

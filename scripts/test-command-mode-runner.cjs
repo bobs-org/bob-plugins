@@ -29,6 +29,79 @@ function runPaths(base, runId) {
   return helpers.cmRunFilePaths(base.runner.runsDir(), runId, path);
 }
 
+const LIFECYCLE_DEADLOCK_MS = 15000;
+
+function argvKey(args) {
+  return JSON.stringify(args);
+}
+
+async function waitUntil(predicate, label, timeoutMs = LIFECYCLE_DEADLOCK_MS) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail(label + " (timed out after " + timeoutMs + "ms)");
+}
+
+function killChild(child) {
+  const pid = child && child.pid;
+  if (typeof pid !== "number") return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch (error) {
+    // Already gone, or no process group.
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    // Already gone.
+  }
+}
+
+function releaseGate(gate) {
+  fs.writeFileSync(gate.release, "1\n");
+}
+
+function installGatedSpawn(base, argvGates, children) {
+  const real = base.runner.childProcess();
+  const spawnOrder = [];
+  const spawnProbes = [];
+  base.runner.deps.childProcess = {
+    spawn(bin, args, options) {
+      const copied = [...args];
+      spawnOrder.push(copied);
+      const liveIds = [...base.runner.live.keys()];
+      spawnProbes.push({ args: copied, liveIds });
+      const gate = argvGates.get(argvKey(args));
+      const env = { ...(options && options.env) };
+      if (gate) {
+        env.FAKE_BOB_STARTED_FILE = gate.started;
+        env.FAKE_BOB_GATE_FILE = gate.release;
+      }
+      const child = real.spawn(bin, args, { ...options, env });
+      children.push(child);
+      return child;
+    },
+  };
+  return { spawnOrder, spawnProbes };
+}
+
+function makeGate(dir, name) {
+  return {
+    started: path.join(dir, name + ".started"),
+    release: path.join(dir, name + ".release"),
+  };
+}
+
+function readOutcome(base, runId) {
+  try {
+    return JSON.parse(fs.readFileSync(runPaths(base, runId).json, "utf8")).outcome;
+  } catch (error) {
+    return null;
+  }
+}
+
 function richCatalog() {
   const base = fixtureCatalog();
   return {
@@ -185,33 +258,78 @@ test("a double run is one run: duplicates share the settlement", async () => {
 });
 
 test("writers serialize FIFO while reads run in parallel", async () => {
-  const catalog = richCatalog();
-  const base = runnerWith({ FAKE_BOB_SLEEP_MS: "400" }, { catalog });
-  const spawnTimes = [];
-  const real = base.runner.childProcess();
-  base.runner.deps.childProcess = {
-    spawn: (...args) => {
-      spawnTimes.push(Date.now());
-      return real.spawn(...args);
-    },
-  };
-  const start = Date.now();
-  const [w1, w2] = await Promise.all([
-    base.runner.run(["slow", "write"], { title: "w1" }),
-    base.runner.run(["slow", "write", "again"], { title: "w2" }),
-  ]);
-  assert.equal(w1.outcome, "completed");
-  assert.equal(w2.outcome, "completed");
-  assert.equal(spawnTimes.length, 2);
-  assert.ok(spawnTimes[1] - spawnTimes[0] >= 300, "writers ran in parallel");
+  const gateDir = fs.mkdtempSync(path.join(os.tmpdir(), "bob-cmd-gate-"));
+  const children = [];
+  const w1Args = ["slow", "write"];
+  const w2Args = ["slow", "write", "again"];
+  const r1Args = ["plan"];
+  const r2Args = ["ready"];
+  const w1Gate = makeGate(gateDir, "w1");
+  const w2Gate = makeGate(gateDir, "w2");
+  const r1Gate = makeGate(gateDir, "r1");
+  const r2Gate = makeGate(gateDir, "r2");
+  try {
+    const catalog = richCatalog();
+    const writers = runnerWith({}, { catalog });
+    const writerGates = new Map([
+      [argvKey(w1Args), w1Gate],
+      [argvKey(w2Args), w2Gate],
+    ]);
+    const { spawnOrder: writerSpawns, spawnProbes } = installGatedSpawn(writers, writerGates, children);
+    const w1Promise = writers.runner.run(w1Args, { title: "w1" });
+    const w2Promise = writers.runner.run(w2Args, { title: "w2" });
+    await waitUntil(() => writers.runner.live.size === 2, "both writers accepted");
+    const [w1RunId, w2RunId] = [...writers.runner.live.keys()];
+    await waitUntil(() => fs.existsSync(w1Gate.started), "first writer process started");
+    assert.deepEqual(writerSpawns, [w1Args]);
+    assert.equal(fs.existsSync(w2Gate.started), false, "second writer started while first was held");
+    assert.equal(writers.runner.writerActive, true);
+    assert.equal(writers.runner.pending.filter((item) => item.kind === "write").length, 1);
+    assert.equal(readOutcome(writers, w2RunId), "queued");
+    releaseGate(w1Gate);
+    const w1 = await w1Promise;
+    assert.equal(w1.outcome, "completed");
+    await waitUntil(() => fs.existsSync(w2Gate.started), "second writer starts after first completes");
+    const w2Probe = spawnProbes.find((probe) => argvKey(probe.args) === argvKey(w2Args));
+    assert.ok(w2Probe, "second writer spawn was recorded");
+    assert.equal(w2Probe.liveIds.includes(w1RunId), false, "second writer spawned while first was still live");
+    assert.equal(readOutcome(writers, w1RunId), "completed");
+    assert.deepEqual(writerSpawns, [w1Args, w2Args]);
+    releaseGate(w2Gate);
+    const w2 = await w2Promise;
+    assert.equal(w2.outcome, "completed");
+    writers.runner.dispose();
 
-  const reads = runnerWith({ FAKE_BOB_SLEEP_MS: "300" });
-  const begun = Date.now();
-  const [r1, r2] = await Promise.all([reads.runner.run(["plan"]), reads.runner.run(["ready"])]);
-  assert.equal(r1.outcome, "completed");
-  assert.equal(r2.outcome, "completed");
-  assert.ok(Date.now() - begun < 590, "reads did not overlap");
-  void start;
+    const reads = runnerWith({});
+    const readGates = new Map([
+      [argvKey(r1Args), r1Gate],
+      [argvKey(r2Args), r2Gate],
+    ]);
+    const { spawnOrder: readSpawns } = installGatedSpawn(reads, readGates, children);
+    const r1Promise = reads.runner.run(r1Args);
+    const r2Promise = reads.runner.run(r2Args);
+    await waitUntil(
+      () => fs.existsSync(r1Gate.started) && fs.existsSync(r2Gate.started),
+      "both reads started before either was released",
+    );
+    assert.equal(fs.existsSync(r1Gate.release), false);
+    assert.equal(fs.existsSync(r2Gate.release), false);
+    assert.equal(readSpawns.length, 2);
+    assert.equal(reads.runner.readsActive, 2);
+    releaseGate(r1Gate);
+    releaseGate(r2Gate);
+    const [r1, r2] = await Promise.all([r1Promise, r2Promise]);
+    assert.equal(r1.outcome, "completed");
+    assert.equal(r2.outcome, "completed");
+    reads.runner.dispose();
+  } finally {
+    for (const child of children) killChild(child);
+    try {
+      fs.rmSync(gateDir, { recursive: true, force: true });
+    } catch (error) {
+      // Best effort on teardown.
+    }
+  }
 });
 
 test("a failed save refuses the writer", async () => {

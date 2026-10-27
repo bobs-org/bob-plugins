@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Fake bob for bob-command-mode tests. Serves a fixture catalog for
 // `__catalog --protocol 1`; every other invocation is driven by FAKE_BOB_*
-// env vars: sleep, emit stdout/stderr (including a split multi-byte char and
-// >1MiB output), exit with a code or signal, and write BOB_RUN_RECEIPT.
+// env vars: sleep, hold on a gate file, emit stdout/stderr (including a split
+// multi-byte char and >1MiB output), exit with a code or signal, and write
+// BOB_RUN_RECEIPT.
 const fs = require("node:fs");
 
 function fixtureCatalog() {
@@ -92,7 +93,15 @@ function main() {
   }
   const env = process.env;
   const sleepMs = Number(env.FAKE_BOB_SLEEP_MS || 0);
-  const finish = () => {
+  const startedFile = env.FAKE_BOB_STARTED_FILE;
+  if (startedFile) {
+    try {
+      fs.writeFileSync(startedFile, String(process.pid) + "\n");
+    } catch (error) {
+      process.stderr.write("fake-bob: cannot write started file\n");
+    }
+  }
+  const finish = (exitOverride) => {
     if (env.FAKE_BOB_ECHO === "1") {
       process.stdout.write(JSON.stringify({
         argv,
@@ -124,7 +133,7 @@ function main() {
       process.kill(process.pid, env.FAKE_BOB_SIGNAL);
       return;
     }
-    const code = Number(env.FAKE_BOB_EXIT || 0);
+    const code = exitOverride !== undefined ? Number(exitOverride) : Number(env.FAKE_BOB_EXIT || 0);
     const receiptPath = env.BOB_RUN_RECEIPT;
     if (receiptPath) {
       try {
@@ -137,8 +146,35 @@ function main() {
     }
     process.exitCode = code;
   };
-  if (Number.isFinite(sleepMs) && sleepMs > 0) setTimeout(finish, sleepMs);
-  else finish();
+  const waitThenFinish = () => {
+    if (Number.isFinite(sleepMs) && sleepMs > 0) setTimeout(finish, sleepMs);
+    else finish();
+  };
+  const gateFile = env.FAKE_BOB_GATE_FILE;
+  if (gateFile) {
+    const pollMs = Number(env.FAKE_BOB_GATE_POLL_MS || 15);
+    const timeoutMs = Number(env.FAKE_BOB_GATE_TIMEOUT_MS || 30000);
+    const begun = Date.now();
+    const poll = () => {
+      try {
+        if (fs.existsSync(gateFile)) {
+          waitThenFinish();
+          return;
+        }
+      } catch (error) {
+        // Retry until the gate timeout.
+      }
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0 && Date.now() - begun >= timeoutMs) {
+        process.stderr.write("fake-bob: gate timed out\n");
+        finish(1);
+        return;
+      }
+      setTimeout(poll, Number.isFinite(pollMs) && pollMs > 0 ? pollMs : 15);
+    };
+    poll();
+    return;
+  }
+  waitThenFinish();
 }
 
 main();

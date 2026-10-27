@@ -32,6 +32,14 @@ while the stamp still matches the vault. After an uncommitted fix is committed
 and present in a clean checkout of the same bytes, a real sync reconciles the
 stamp without `--force`; a later descendant can then update normally.
 
+In a Git vault, sync and list also warn when a plugin's whole vault folder
+(`.obsidian/plugins/<id>/`) is not ignored or holds tracked files. The warning
+prints under the plugin row and appears as `vault_ignore` in JSON output,
+including `--dry-run` previews, without blocking the copy. Add
+`.obsidian/plugins/<id>/` to the vault `.gitignore` yourself: sync never edits
+it and never untracks files, because untracking on one host deletes the files
+on the others at their next pull.
+
 The command normally refreshes its plugin repository with a non-interactive
 `git pull` before analysis. To deploy the checkout open for local
 development, pass its root explicitly and skip that pull:

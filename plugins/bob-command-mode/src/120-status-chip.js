@@ -170,8 +170,9 @@ function cmStatusChipModel(records, nowMs, state, progressFor, options = {}) {
 
 function cmChipEnsureChildren(element) {
   const doc = (typeof document !== "undefined" && document) || null;
+  const children = Array.from(element.children || []);
   const find = (cls) => {
-    for (const child of element.children || []) {
+    for (const child of children) {
       const classes = child.classes || [];
       const className = child.className || "";
       if (classes.includes(cls) || String(className).split(/\s+/).includes(cls)) return child;
@@ -189,7 +190,12 @@ function cmChipEnsureChildren(element) {
       if (text !== undefined) el.textContent = text;
       return el;
     }
-    if (typeof element.createEl === "function") return element.createEl("span", { cls, text });
+    if (typeof element.createEl === "function") {
+      const el = element.createEl("span", { cls, text });
+      // Obsidian's createEl appends immediately; keep the snapshot in sync.
+      children.push(el);
+      return el;
+    }
     const ElementCtor = element && element.constructor;
     const el = new ElementCtor({ tag: "span", cls });
     if (text !== undefined) el.textContent = text;
@@ -208,10 +214,11 @@ function cmChipEnsureChildren(element) {
   // Append in anatomy order exactly once; never reorder afterwards.
   let created = false;
   for (const node of [mark, label, clock]) {
-    const present = (element.children || []).includes(node);
+    const present = children.includes(node);
     if (!present) {
       if (typeof element.appendChild === "function") element.appendChild(node);
       else if (typeof element.append === "function") element.append(node);
+      children.push(node);
       created = true;
     }
   }

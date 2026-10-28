@@ -3,7 +3,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { helpers } = require("./command-mode-harness.cjs");
+const {
+  BobCommandModePlugin,
+  helpers,
+  makeApp,
+  makeRunner,
+} = require("./command-mode-harness.cjs");
 
 function chipEl() {
   const { ElementStub } = require("./modal-harness.cjs");
@@ -25,6 +30,97 @@ function run(id, elapsed, extra = {}) {
 }
 
 const NOW = Date.parse("2026-10-26T15:00:00.000Z");
+
+function htmlCollection(children) {
+  const collection = {
+    length: children.length,
+    item(index) { return children[index] || null; },
+    *[Symbol.iterator]() { yield* children; },
+  };
+  children.forEach((child, index) => { collection[index] = child; });
+  return collection;
+}
+
+class DomLikeElement {
+  constructor(className = "") {
+    this._children = [];
+    this._className = String(className);
+    this.style = {};
+    this.attributes = Object.create(null);
+    this.listeners = Object.create(null);
+    this.textContent = "";
+    this.classList = {
+      add: (...classes) => this.setClasses([...this.classTokens(), ...classes]),
+      remove: (...classes) => this.setClasses(this.classTokens().filter((item) => !classes.includes(item))),
+      toggle: (token, force) => {
+        const present = this.classList.contains(token);
+        const add = force === undefined ? !present : Boolean(force);
+        if (add) this.classList.add(token);
+        else this.classList.remove(token);
+        return add;
+      },
+      contains: (token) => this.classTokens().includes(token),
+    };
+  }
+
+  get children() {
+    return htmlCollection(this._children.slice());
+  }
+
+  get className() {
+    return this._className;
+  }
+
+  set className(value) {
+    this._className = String(value || "");
+  }
+
+  classTokens() {
+    return this._className.split(/\s+/).filter(Boolean);
+  }
+
+  setClasses(classes) {
+    this._className = [...new Set(classes.filter(Boolean))].join(" ");
+  }
+
+  addClass(token) {
+    this.classList.add(token);
+  }
+
+  appendChild(child) {
+    this._children.push(child);
+    return child;
+  }
+
+  addEventListener(type, callback) {
+    (this.listeners[type] || (this.listeners[type] = [])).push(callback);
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
+  }
+
+  getAttribute(name) {
+    return this.attributes[name];
+  }
+
+  removeAttribute(name) {
+    delete this.attributes[name];
+  }
+}
+
+function installDomLikeDocument() {
+  const previous = global.document;
+  global.document = { createElement: () => new DomLikeElement() };
+  return () => {
+    if (previous === undefined) delete global.document;
+    else global.document = previous;
+  };
+}
+
+function domChild(element, cls) {
+  return Array.from(element.children).find((child) => child.classList.contains(cls)) || null;
+}
 
 function labelText(chip) {
   const found = (chip.children || []).find((child) => (child.classes || []).includes("bob-cmd-chip-label"));
@@ -153,4 +249,89 @@ test("adopted unfinished runs appear flagged and all triggers light the indicato
   const palette = run("pal", 5000, { title: "Palette", trigger: "command" });
   const model = helpers.cmStatusChipModel([palette], NOW, null, () => "");
   assert.equal(model.visible, true);
+});
+
+test("first visible paint uses HTMLCollection semantics and preserves existing classes", () => {
+  const restore = installDomLikeDocument();
+  try {
+    const chip = new DomLikeElement("status-bar-item bob-cmd-chip");
+    const state = { shown: new Set(), settle: null };
+    assert.equal(typeof chip.children.includes, "undefined");
+    const result = helpers.cmRenderStatusChip(chip, [run("dom", 5000)], NOW, () => {}, () => "", state);
+    assert.equal(result.visible, true);
+    assert.equal(chip.style.display, "");
+    assert.deepEqual(Array.from(chip.children).map((child) => child.className), [
+      "bob-cmd-chip-mark", "bob-cmd-chip-label", "bob-cmd-chip-clock",
+    ]);
+    assert.equal(domChild(chip, "bob-cmd-chip-label").textContent, "bob");
+    assert.equal(domChild(chip, "bob-cmd-chip-clock").textContent, "0:05");
+    assert.ok(chip.classList.contains("is-running"));
+    assert.ok(chip.classList.contains("status-bar-item"));
+    assert.ok(chip.classList.contains("bob-cmd-chip"));
+  } finally {
+    restore();
+  }
+});
+
+test("DOM-like repaints keep the mark and anatomy idempotent", () => {
+  const restore = installDomLikeDocument();
+  try {
+    const chip = new DomLikeElement("status-bar-item bob-cmd-chip");
+    const state = { shown: new Set(), settle: null };
+    helpers.cmRenderStatusChip(chip, [run("one", 5000)], NOW, () => {}, () => "", state);
+    const mark = domChild(chip, "bob-cmd-chip-mark");
+    helpers.cmRenderStatusChip(chip, [run("one", 5000), run("two", 2000)], NOW, () => {}, () => "", state);
+    assert.equal(chip.children.length, 3);
+    assert.equal(domChild(chip, "bob-cmd-chip-mark"), mark);
+    assert.equal(domChild(chip, "bob-cmd-chip-label").textContent, "bob ×2");
+  } finally {
+    restore();
+  }
+});
+
+test("DOM-like settle paint shows its outcome, then hides after the settle window", () => {
+  const restore = installDomLikeDocument();
+  try {
+    const chip = new DomLikeElement("status-bar-item bob-cmd-chip");
+    const state = {
+      shown: new Set(["done"]),
+      settle: { runId: "done", title: "Deploy", outcome: "completed", durationMs: 4312, atMs: NOW },
+    };
+    const settled = helpers.cmRenderStatusChip(chip, [], NOW + 500, () => {}, () => "", state);
+    assert.equal(settled.visible, true);
+    assert.equal(domChild(chip, "bob-cmd-chip-mark").textContent, "✓");
+    assert.ok(chip.classList.contains("is-settled"));
+    assert.ok(chip.classList.contains("is-completed"));
+    const hidden = helpers.cmRenderStatusChip(chip, [], NOW + 1700, () => {}, () => "", state);
+    assert.equal(hidden.visible, false);
+    assert.equal(chip.style.display, "none");
+  } finally {
+    restore();
+  }
+});
+
+test("plugin status-chip path paints an HTMLCollection-like status item", () => {
+  const restore = installDomLikeDocument();
+  const app = makeApp();
+  const base = makeRunner({ app });
+  const plugin = new BobCommandModePlugin(app);
+  const chip = new DomLikeElement("status-bar-item");
+  const now = Date.now();
+  base.runner.activeRecords = () => [{
+    ...run("plugin-run", 5000),
+    started_at: new Date(now - 5000).toISOString(),
+  }];
+  plugin.commandModeRunner = base.runner;
+  plugin.commandModeStickyNotices = new Map();
+  plugin.addStatusBarItem = () => chip;
+  try {
+    plugin.commandModeStartStatusChip();
+    const result = plugin.commandModeRefreshStatusChip(now);
+    assert.equal(result.visible, true);
+    assert.equal(chip.style.display, "");
+    assert.equal(chip.children.length, 3);
+  } finally {
+    plugin.onunload();
+    restore();
+  }
 });

@@ -112,6 +112,16 @@ function rankIds(query, rows, frecency) {
   return helpers.cmRankSheetRows(query, rows, frecency || {}).map((row) => row.key);
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 test("fuzzy ranking matches every token and prefers paths, prefixes, and keywords", () => {
   const rows = helpers.cmSheetEntryRows(sheetCatalog(), null);
   assert.ok(rankIds("sync", rows).includes("entry:vault-sync"));
@@ -344,6 +354,97 @@ test("Enter on a report row streams it in the sheet output stage", async () => {
     assert.equal(modal.stage, "output");
     assert.equal(modal.outputRunId, settled.runId);
     assert.ok(modal.outputView);
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("report footer shows its running line until the output opens", async () => {
+  const { restore, base, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const modal = openSheet(plugin);
+    const pending = deferred();
+    base.runner.run = () => pending.promise;
+    const started = modal.runReport(
+      { entryId: "plan", title: "Pending report", presentation: "report" },
+      ["plan"],
+    );
+    assert.match(sheetText(modal.contentEl), /running Pending report…/);
+    assert.equal(modal.waitingRun.title, "Pending report");
+    pending.resolve({ ok: true, runId: "pending-report" });
+    const settled = await started;
+    assert.equal(settled.runId, "pending-report");
+    assert.equal(modal.waitingRun, null);
+    assert.equal(modal.stage, "output");
+    assert.doesNotMatch(sheetText(modal.contentEl), /running Pending report…/);
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("preview footer shows a running line while the preview is pending", async () => {
+  const { restore, base, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const modal = openSheet(plugin);
+    const pending = deferred();
+    base.runner.run = () => pending.promise;
+    const started = modal.runPreview({
+      entryId: "ref-rename", title: "Pending preview", hasPreview: true,
+    }, ["ref", "rename"]);
+    assert.match(sheetText(modal.contentEl), /running Pending preview…/);
+    pending.resolve({ ok: true, runId: "pending-preview" });
+    await started;
+    assert.equal(modal.waitingRun, null);
+    assert.equal(modal.stage, "output");
+    assert.doesNotMatch(sheetText(modal.contentEl), /running Pending preview…/);
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("help start failure replaces its running line with the warning hint", async () => {
+  const { restore, base, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const modal = openSheet(plugin);
+    modal.query = "sync?";
+    modal.rebuildRows();
+    modal.render();
+    const pending = deferred();
+    base.runner.run = () => pending.promise;
+    const started = modal.showHelp();
+    assert.match(sheetText(modal.contentEl), /running Sync vault now · help…/);
+    pending.resolve({ ok: false, reason: "Help could not start" });
+    await started;
+    assert.equal(modal.waitingRun, null);
+    assert.doesNotMatch(sheetText(modal.contentEl), /running Sync vault now · help…/);
+    assert.match(sheetText(modal.contentEl), /Help could not start/);
+    assert.ok(modal.contentEl.children.some((node) =>
+      (node.classes || []).includes("bob-cmd-sheet-footer") &&
+      node.children.some((child) => (child.classes || []).includes("is-warning"))));
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("a rejected sheet run clears the running line before propagating", async () => {
+  const { restore, base, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const modal = openSheet(plugin);
+    const pending = deferred();
+    base.runner.run = () => pending.promise;
+    const started = modal.runReport(
+      { entryId: "plan", title: "Rejected report", presentation: "report" },
+      ["plan"],
+    );
+    assert.match(sheetText(modal.contentEl), /running Rejected report…/);
+    pending.reject(new Error("runner rejected"));
+    await assert.rejects(started, /runner rejected/);
+    assert.equal(modal.waitingRun, null);
+    assert.doesNotMatch(sheetText(modal.contentEl), /running Rejected report…/);
     modal.close();
   } finally {
     restore();

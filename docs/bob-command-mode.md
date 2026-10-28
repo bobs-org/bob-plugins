@@ -132,7 +132,9 @@ sheet, `Ctrl+Enter` runs now, and a trailing `?` shows `bob <path> --help` for
 the selected row. Preview-first rows stream their preview in place and apply
 with `Ctrl+Enter`; writers without a dry run ask once on an amber confirm card
 that only `Ctrl+Enter` or Run confirms. Reports grow the sheet into the output
-pager in place, and `Esc` returns to the list with the query intact.
+pager in place, and `Esc` returns to the list with the query intact. While a
+report, preview, or help run is in flight, the sheet footer shows a running line
+until its output opens.
 
 ## Run engine
 

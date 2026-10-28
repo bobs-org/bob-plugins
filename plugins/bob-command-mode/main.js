@@ -2744,8 +2744,9 @@ function cmStatusChipModel(records, nowMs, state, progressFor, options = {}) {
 
 function cmChipEnsureChildren(element) {
   const doc = (typeof document !== "undefined" && document) || null;
+  const children = Array.from(element.children || []);
   const find = (cls) => {
-    for (const child of element.children || []) {
+    for (const child of children) {
       const classes = child.classes || [];
       const className = child.className || "";
       if (classes.includes(cls) || String(className).split(/\s+/).includes(cls)) return child;
@@ -2763,7 +2764,12 @@ function cmChipEnsureChildren(element) {
       if (text !== undefined) el.textContent = text;
       return el;
     }
-    if (typeof element.createEl === "function") return element.createEl("span", { cls, text });
+    if (typeof element.createEl === "function") {
+      const el = element.createEl("span", { cls, text });
+      // Obsidian's createEl appends immediately; keep the snapshot in sync.
+      children.push(el);
+      return el;
+    }
     const ElementCtor = element && element.constructor;
     const el = new ElementCtor({ tag: "span", cls });
     if (text !== undefined) el.textContent = text;
@@ -2782,10 +2788,11 @@ function cmChipEnsureChildren(element) {
   // Append in anatomy order exactly once; never reorder afterwards.
   let created = false;
   for (const node of [mark, label, clock]) {
-    const present = (element.children || []).includes(node);
+    const present = children.includes(node);
     if (!present) {
       if (typeof element.appendChild === "function") element.appendChild(node);
       else if (typeof element.append === "function") element.append(node);
+      children.push(node);
       created = true;
     }
   }
@@ -4948,6 +4955,7 @@ class CommandModeSheetModal extends Modal {
     this.outputNodes = null;
     this.tailTimer = null;
     this.hint = null;
+    this.waitingRun = null;
     this.surfaceAvailable = (options && options.surfaceAvailable) || null;
     this.onPickVim = (options && options.onPickVim) || null;
     this.completionExecFile = (options && options.completionExecFile) || null;
@@ -5173,6 +5181,12 @@ class CommandModeSheetModal extends Modal {
       footer.createEl("span", { cls: "bob-cmd-sheet-hint is-warning", text: this.hint });
       return;
     }
+    if (this.waitingRun) {
+      const hint = footer.createEl("span", { cls: "bob-cmd-sheet-hint bob-cmd-sheet-running" });
+      hint.createEl("span", { cls: "bob-cmd-sheet-spin" });
+      hint.createEl("span", { text: "running " + this.waitingRun.title + "…" });
+      return;
+    }
     if (this.stage === "output" && this.previewRunId && !this.previewResult) {
       footer.createEl("span", { cls: "bob-cmd-sheet-hint", text: "preview running… ⌃↵ applies when it finishes" });
       return;
@@ -5354,9 +5368,9 @@ class CommandModeSheetModal extends Modal {
     this.previewRunId = null;
     this.previewResult = null;
     this.previewCarry = [];
-    const settled = await runner.run(argv, {
+    const settled = await this.runWithWaitingLine(row.title || "Preview", () => runner.run(argv, {
       entryId: row.entryId, title: row.title, trigger: "sheet-preview", preview: true,
-    });
+    }));
     if (!settled || !settled.runId) {
       this.hint = (settled && settled.reason) || "Preview failed to start";
       this.render();
@@ -5378,12 +5392,12 @@ class CommandModeSheetModal extends Modal {
   async runReport(row, argv, opts = {}) {
     const runner = this.runner();
     if (!runner) return { ok: false, reason: "no runner" };
-    const settled = await runner.run(argv, {
+    const settled = await this.runWithWaitingLine(row.title || "Report", () => runner.run(argv, {
       ...(opts.entryId !== undefined ? { entryId: opts.entryId } : (row.entryId ? { entryId: row.entryId } : {})),
       title: row.title || "Report", trigger: "sheet",
       ...(opts.preview ? { preview: true } : {}),
       ...(opts.skipGuards ? { skipGuards: true } : {}),
-    });
+    }));
     if (!settled || !settled.runId) {
       this.hint = (settled && settled.reason) || "Run failed to start";
       this.render();
@@ -5410,7 +5424,21 @@ class CommandModeSheetModal extends Modal {
     });
   }
 
-  showHelp() {
+  async runWithWaitingLine(title, run) {
+    const waitingRun = { title: String(title || "bob") };
+    this.waitingRun = waitingRun;
+    this.render();
+    try {
+      return await run();
+    } finally {
+      if (this.waitingRun === waitingRun) {
+        this.waitingRun = null;
+        this.render();
+      }
+    }
+  }
+
+  async showHelp() {
     const query = this.query.trim().replace(/\?$/, "").trim();
     const rows = query ? cmRankSheetRows(query, this.rows, this.frecency) : [];
     const selected = rows[0] || this.selectedRow();
@@ -5418,16 +5446,15 @@ class CommandModeSheetModal extends Modal {
     const title = selected && selected.title ? selected.title + " · help" : "bob help";
     const runner = this.runner();
     if (!runner) return { ok: false, reason: "no runner" };
-    return runner.run(argv, { title, trigger: "sheet-help" }).then((settled) => {
-      if (!settled || !settled.runId) {
-        this.hint = (settled && settled.reason) || "Help failed to start";
-        this.render();
-        this.refocusInput();
-        return settled || { ok: false };
-      }
-      this.enterOutput(settled.runId, title, {});
-      return settled;
-    });
+    const settled = await this.runWithWaitingLine(title, () => runner.run(argv, { title, trigger: "sheet-help" }));
+    if (!settled || !settled.runId) {
+      this.hint = (settled && settled.reason) || "Help failed to start";
+      this.render();
+      this.refocusInput();
+      return settled || { ok: false };
+    }
+    this.enterOutput(settled.runId, title, {});
+    return settled;
   }
 
   enterOutput(runId, title, opts = {}) {

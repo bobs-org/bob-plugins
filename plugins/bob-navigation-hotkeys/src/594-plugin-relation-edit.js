@@ -1,8 +1,9 @@
-// Relation orchestrator (`docs/task-relations.md` Rule 7): write each source
-// LINKS line, mint the source id inside that transaction when a mirror will
-// be stored, then send best-effort LINKED FROM follow-ups. Same-note S and T
-// share one undo group. The writer never stamps, routes inbox tasks, or
-// touches Pomodoros (LG13).
+// Relation orchestrator (`docs/task-relations.md` Rule 7 / §17): write each
+// source LINKS line, mint the source id inside that transaction when a
+// mirror will be stored, then send best-effort LINKED FROM follow-ups.
+// Same-note S and T share one undo group. The writer never stamps or routes
+// inbox tasks. It touches Pomodoros only through the §17 cancel-label
+// composition (Task Card Cancel planners folded into the source write).
 class BobNavigationHotkeysRelationEditMixin {
   findRelationEditOpenEditor(filePath) {
     const path = normalizeVaultRelativePath(filePath || "");
@@ -104,11 +105,13 @@ class BobNavigationHotkeysRelationEditMixin {
 
   async applyRelationEdit(args = {}) {
     const stale = "changed — reopen";
-    const refuse = (reason, notice = null) =>
+    const refuse = (reason, notice = null, extra = {}) =>
       Object.freeze({
         ok: false,
         reason,
         notice,
+        stale: extra.stale === true,
+        cancelEffects: extra.cancelEffects || null,
         committed: Object.freeze([]),
         failed: Object.freeze([]),
         mirrorFailed: Object.freeze([]),
@@ -132,6 +135,15 @@ class BobNavigationHotkeysRelationEditMixin {
         args.linkedFromLinesEnabled !== undefined
           ? args.linkedFromLinesEnabled === true
           : loadRelationsLinkedFromLinesEnabled();
+      const cancelLabels =
+        args.cancelLabels !== undefined
+          ? args.cancelLabels
+          : loadRelationsCancelLabels();
+      const cancelDate =
+        typeof args.cancelDate === "string" && args.cancelDate
+          ? String(args.cancelDate)
+          : formatBulletPropertyDate(today instanceof Date ? today : new Date());
+      const cancelTrigger = args.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER;
 
       const files = new Map();
       const collectRef = (ref) => {
@@ -215,6 +227,11 @@ class BobNavigationHotkeysRelationEditMixin {
       const noticeRemoved = [];
       const noticeRelabeled = [];
       const mirrorFailed = [];
+      const cancelledNoticeRows = [];
+      const cancelledIdentities = [];
+      const cancelSourcePlans = [];
+      const cancelRefusals = [];
+      const consumedLinesByPath = new Map();
       let archived = false;
       const contentOf = (path) =>
         sourceWrites.has(path)
@@ -234,10 +251,15 @@ class BobNavigationHotkeysRelationEditMixin {
         const original = sourceWrites.has(source.path)
           ? sourceWrites.get(source.path).original
           : String(files.get(source.path) || "");
-        let sourceLine = source.line;
+        const consumed = consumedLinesByPath.get(source.path) || new Set();
+        const liveSource = relocateRelationCancelSource(content, source, consumed);
+        let sourceLine = liveSource.line;
         const liveLines = content.split(/\r?\n/);
-        if (source.blockId) {
-          const found = findTaskLineByTrailingBlockId(liveLines, source.blockId);
+        if (liveSource.blockId) {
+          const found = findTaskLineByTrailingBlockId(
+            liveLines,
+            liveSource.blockId,
+          );
           if (found !== null) sourceLine = found;
         }
         const children = findLinksChildren(liveLines, sourceLine);
@@ -340,6 +362,38 @@ class BobNavigationHotkeysRelationEditMixin {
           }
         }
 
+        const cancelEdges = deriveRelationCancelEdges({
+          report: planned.report,
+          existingRows,
+          liveAdd,
+          liveRelabel,
+          sourcePath: source.path,
+          vaultFiles,
+        });
+        const policyRaw = String(
+          content.split(/\r?\n/)[sourceLine] || liveSource.rawLine || "",
+        );
+        const policyPlan = planRelationCancelEffects({
+          cancelLabels,
+          trigger: cancelTrigger,
+          sources: [
+            relationCancelPolicySourceFromLine(
+              {
+                path: liveSource.path,
+                blockId: liveSource.blockId,
+                line: sourceLine,
+              },
+              policyRaw,
+              cancelEdges,
+            ),
+          ],
+        });
+        const policySource = policyPlan.sources[0] || null;
+        if (policySource) cancelSourcePlans.push(policySource);
+        if (policySource && policySource.refusal) {
+          cancelRefusals.push(policySource);
+        }
+
         const mirrorTargets = [...liveAdd, ...liveRemove, ...liveRelabel].filter(
           (target, index, list) =>
             list.findIndex(
@@ -382,8 +436,7 @@ class BobNavigationHotkeysRelationEditMixin {
           content = mintedLines.join(relationLineEnding(content));
         }
         stageWrite(source.path, original, content);
-        if (!needsMirror || !sourceBlockId) continue;
-
+        if (needsMirror && sourceBlockId) {
         const sourceIdentity = blocksIdentity(source.path, sourceBlockId);
         for (const target of writableMirrors) {
           const targetContent = contentOf(target.path);
@@ -477,7 +530,39 @@ class BobNavigationHotkeysRelationEditMixin {
             );
           }
         }
+        }
+
+        const folded = applyComposedRelationSourceCancel({
+          policySource, cancelRefusals, content: contentOf(source.path), source,
+          liveSource, sourceLine, consumed, cancelEdges, cancelLabels,
+          cancelTrigger, cancelDate, liveAdd, liveRelabel, liveRemove, original,
+          stageWrite, cancelledIdentities, cancelledNoticeRows, consumedLinesByPath,
+        });
+        if (!folded.ok) {
+          return refuse(
+            folded.recurring ? "relation_cancels_recurring_task" : folded.reason || "cancel-failed",
+            folded.reason,
+          );
+        }
       }
+
+      const commitGate = relationCancelCommitGate(
+        cancelSourcePlans, cancelRefusals, cancelDate, args.expectedCancelEffects, stale,
+      );
+      if (!commitGate.ok) {
+        return refuse(commitGate.reason, commitGate.notice, {
+          stale: commitGate.stale === true,
+          cancelEffects: commitGate.cancelEffects,
+        });
+      }
+      const cancelEffects = commitGate.cancelEffects;
+      const dailyPrep = await this.prepareRelationCancelDailyCleanup(
+        sourceWrites, cancelledIdentities, today,
+      );
+      if (!dailyPrep.ok) return refuse(dailyPrep.reason, dailyPrep.notice);
+      const pomodoroSnapshot = dailyPrep.snapshot;
+      const dailyCleanupPlan = dailyPrep.plan;
+      const cleanupHandled = dailyPrep.cleanupHandled === true;
 
       const failed = [];
       for (const write of sourceWrites.values()) {
@@ -487,31 +572,61 @@ class BobNavigationHotkeysRelationEditMixin {
           write.nextContent,
         );
         if (!result.ok) {
-          return refuse(stale, stale);
+          failed.push(write.path);
+          if (committed.length === 0) {
+            return refuse(stale, stale, { cancelEffects });
+          }
+          break;
         }
         committed.push(write.path);
       }
 
+      const committedSet = new Set(committed);
+      const committedCancelled = cancelledIdentities.filter((entry) =>
+        committedSet.has(entry.path),
+      );
       let followFailed = [];
-      if (followUps.length > 0) {
+      if (followUps.length > 0 && failed.length === 0) {
         try {
           const result = await this.applyRelationFollowUps(followUps);
           followFailed = (result && result.failed) || [];
         } catch (_error) {
           followFailed = followUps.map((entry) => entry.path);
         }
+      } else if (failed.length > 0) {
+        followFailed = followUps.map((entry) => entry.path);
       }
       mirrorFailed.push(...followFailed);
+
+      let pomodoroLinksRemoved = 0;
+      let pruneFailed = false;
+      let recovered = 0;
+      if (committedCancelled.length > 0) {
+        const effects = await this.runPostCancelEffects({
+          identities: committedCancelled,
+          activePath: liveSources[0] && liveSources[0].path,
+          editor: this.findRelationEditOpenEditor(liveSources[0] && liveSources[0].path),
+          pomodoroSnapshot, dailyCleanupPlan, cleanupHandled,
+          pomodoroLinksRemoved:
+            cleanupHandled && dailyCleanupPlan && dailyCleanupPlan.changed
+              ? dailyCleanupPlan.removedLinkCount
+              : 0,
+        });
+        pomodoroLinksRemoved = effects.pomodoroLinksRemoved;
+        pruneFailed = effects.pruneFailed;
+        recovered = effects.recovered;
+      }
 
       const unchanged =
         noticeAdded.length === 0 &&
         noticeRemoved.length === 0 &&
         noticeRelabeled.length === 0 &&
+        cancelledNoticeRows.length === 0 &&
         committed.every((path) => {
           const write = sourceWrites.get(path);
           return write && write.original === write.nextContent;
         });
-      const notice = unchanged
+      const relationNotice = unchanged
         ? null
         : buildRelationEditNotice({
             added: noticeAdded,
@@ -519,15 +634,35 @@ class BobNavigationHotkeysRelationEditMixin {
             relabeled: noticeRelabeled,
             direction,
             archived,
+            mirrorFailed: [],
+          });
+      const notice = unchanged
+        ? null
+        : buildRelationCancelComposeNotice({
+            cancelled: cancelledNoticeRows,
+            relationNotice,
+            pruneFailed,
+            pomodoroLinksRemoved,
+            recovered,
             mirrorFailed,
           });
       return Object.freeze({
         ok: true,
-        reason: followFailed.length > 0 ? "partial" : unchanged ? "unchanged" : null,
+        reason:
+          failed.length > 0 || followFailed.length > 0
+            ? "partial"
+            : unchanged
+              ? "unchanged"
+              : null,
         notice,
+        stale: false,
+        cancelEffects,
         committed: Object.freeze(committed),
         failed: Object.freeze(failed),
         mirrorFailed: Object.freeze([...new Set(mirrorFailed)]),
+        pomodoroLinksRemoved,
+        pruneFailed,
+        recovered,
       });
     } catch (_error) {
       return refuse("apply-failed");

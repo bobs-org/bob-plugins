@@ -838,24 +838,6 @@ class BobNavigationHotkeysDecayCancelMixin {
       return false;
     }
 
-    let removedPomodoroLinkCount = 0;
-    let pomodoroPruneFailed = false;
-    if (dailyCleanupPlan && dailyCleanupPlan.changed && pomodoroSnapshot) {
-      if (pomodoroSnapshot.sameFile) {
-        removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
-      } else {
-        const written = await this.writeDeferredPomodoroCleanup(
-          pomodoroSnapshot,
-          dailyCleanupPlan,
-        );
-        if (written) {
-          removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
-        } else {
-          pomodoroPruneFailed = true;
-        }
-      }
-    }
-
     const identities = plan.cancelled.map((entry) =>
       Object.freeze({
         path: filePath,
@@ -863,10 +845,6 @@ class BobNavigationHotkeysDecayCancelMixin {
         taskId: entry.taskId,
       }),
     );
-    const postPruneDailyContent =
-      dailyCleanupPlan && dailyCleanupPlan.changed
-        ? dailyCleanupPlan.content
-        : null;
     return await this.finishTaskCancelNotice(picker, {
       identities,
       activePath: filePath,
@@ -877,9 +855,16 @@ class BobNavigationHotkeysDecayCancelMixin {
       reason: cancel.reason,
       fallbackUsed: plan.fallbackLoggedCount > 0,
       skippedClosedCount: plan.skippedClosedCount,
-      removedPomodoroLinkCount,
-      pomodoroPruneFailed,
-      postPruneDailyContent,
+      pomodoroSnapshot,
+      dailyCleanupPlan,
+      cleanupHandled: Boolean(pomodoroSnapshot && pomodoroSnapshot.sameFile),
+      pomodoroLinksRemoved:
+        pomodoroSnapshot &&
+        pomodoroSnapshot.sameFile &&
+        dailyCleanupPlan &&
+        dailyCleanupPlan.changed
+          ? dailyCleanupPlan.removedLinkCount
+          : 0,
     });
   }
 }

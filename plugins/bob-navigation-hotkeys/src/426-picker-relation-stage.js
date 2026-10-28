@@ -1,8 +1,8 @@
-// Links… stage picker (`docs/task-relations.md` Rules 7–8) and its vault
-// pool builders. Commits through `plugin.applyRelationEdit`, so one gesture
-// writes the source LINKS line, mints the source id, and follows up the
-// LINKED FROM mirrors with one notice. Never stamps, routes inbox tasks,
-// or touches Pomodoros (LG13).
+// Links… stage picker (`docs/task-relations.md` Rules 7–8 / §17) and its
+// vault pool builders. Commits through `plugin.applyRelationEdit`, so one
+// gesture writes the source LINKS line, mints the source id, and follows
+// up the LINKED FROM mirrors with one notice. Never stamps or routes inbox
+// tasks. It touches Pomodoros only through the §17 cancel-label composition.
 
 class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
   isRelationStage() {
@@ -40,6 +40,8 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationStage = true;
     this.relationStageDirection = direction === "from" ? "from" : "to";
     this.relationLabel = null;
+    this.relationCancelExpected = null;
+    this.relationCancelConfirmNonce = null;
     this.selectedPropertyItem = this.relationStageDummyProperty();
     this.pendingTask = null;
     this.pendingRelation = null;
@@ -493,8 +495,12 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
           relabel: group.mode === "relabel" ? [{ ...ownerRef, label }] : [],
           direction: "from",
           expected: this.relationStageExpectedMap([...sourceRefs, ownerRef]),
+          expectedCancelEffects: this.relationCancelExpected || null,
         });
         if (!outcome.ok) {
+          if (applyRelationCancelStaleToPicker(this, outcome)) {
+            return false;
+          }
           if (outcome.reason === "changed — reopen" || outcome.reason === "changed") {
             return this.refuseDependencyStale();
           }
@@ -516,8 +522,12 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         remove: removals.map(toRef),
         relabel: relabels.map(toRef),
         expected,
+        expectedCancelEffects: this.relationCancelExpected || null,
       });
       if (!outcome.ok) {
+        if (applyRelationCancelStaleToPicker(this, outcome)) {
+          return false;
+        }
         if (
           outcome.reason === "changed — reopen" ||
           outcome.reason === "changed"

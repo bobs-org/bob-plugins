@@ -91,10 +91,6 @@ class BobNavigationHotkeysCancelPropertyMixin {
       return false;
     }
 
-    const removedPomodoroLinkCount =
-      dailyCleanupPlan && dailyCleanupPlan.changed && !commit.pomodoroPruneFailed
-        ? dailyCleanupPlan.removedLinkCount
-        : 0;
     const identities = [];
     let cancelledCount = 0;
     let skippedClosedCount = 0;
@@ -113,10 +109,6 @@ class BobNavigationHotkeysCancelPropertyMixin {
         );
       }
     }
-    const postPruneDailyContent =
-      dailyCleanupPlan && dailyCleanupPlan.changed
-        ? dailyCleanupPlan.content
-        : null;
     return await this.finishTaskCancelNotice(picker, {
       identities,
       activePath: picker.filePath,
@@ -127,9 +119,14 @@ class BobNavigationHotkeysCancelPropertyMixin {
       reason: cancel.reason,
       fallbackUsed: fallbackLoggedCount > 0,
       skippedClosedCount,
-      removedPomodoroLinkCount,
-      pomodoroPruneFailed: commit.pomodoroPruneFailed,
-      postPruneDailyContent,
+      pomodoroSnapshot,
+      dailyCleanupPlan,
+      cleanupHandled: true,
+      pomodoroLinksRemoved:
+        dailyCleanupPlan && dailyCleanupPlan.changed && !commit.pomodoroPruneFailed
+          ? dailyCleanupPlan.removedLinkCount
+          : 0,
+      pruneFailed: Boolean(commit.pomodoroPruneFailed),
     });
   }
 
@@ -159,40 +156,33 @@ class BobNavigationHotkeysCancelPropertyMixin {
     const identities = Array.isArray(details.identities)
       ? details.identities
       : [];
-    let reopened = 0;
-    let recoveryRan = false;
-    if (identities.length > 0) {
-      try {
-        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
-        const holder = plugins && plugins["task-status-cycler"];
-        const api = holder && holder.api;
-        if (
-          api &&
-          typeof api.recoverBlockedDependents === "function" &&
-          Number(api.version) >= 1
-        ) {
-          recoveryRan = true;
-          const result = await api.recoverBlockedDependents(identities, {
-            activePath: details.activePath,
-            editor: details.editor,
-          });
-          reopened = Math.max(
-            0,
-            Math.floor(numericOrDefault(result && result.reopened, 0)),
-          );
-        }
-      } catch (error) {
-        recoveryRan = false;
-        reopened = 0;
-      }
-    }
+    const effects = details.effects
+      ? details.effects
+      : await this.runPostCancelEffects({
+          identities,
+          activePath: details.activePath,
+          editor: details.editor,
+          pomodoroSnapshot: details.pomodoroSnapshot,
+          dailyCleanupPlan: details.dailyCleanupPlan,
+          cleanupHandled: details.cleanupHandled === true,
+          pomodoroLinksRemoved:
+            details.pomodoroLinksRemoved !== undefined
+              ? details.pomodoroLinksRemoved
+              : details.removedPomodoroLinkCount,
+          pruneFailed:
+            details.pruneFailed !== undefined
+              ? details.pruneFailed
+              : details.pomodoroPruneFailed,
+        });
+    const reopened = effects.recovered;
+    const recoveryRan = effects.recoveryRan;
     // The plan chip covers the prune only: it needs the post-prune daily
     // note text, and is omitted when nothing was pruned or the API is
     // unavailable.
     const planChip =
-      details.postPruneDailyContent !== null &&
-      details.postPruneDailyContent !== undefined
-        ? getCancelPlanBudgetChip(this.app, details.postPruneDailyContent)
+      effects.postPruneDailyContent !== null &&
+      effects.postPruneDailyContent !== undefined
+        ? getCancelPlanBudgetChip(this.app, effects.postPruneDailyContent)
         : "";
     showCancelNotice(
       buildCancelNoticeModel({
@@ -201,12 +191,12 @@ class BobNavigationHotkeysCancelPropertyMixin {
         date: details.dateText,
         reason: details.reason,
         fallbackUsed: details.fallbackUsed,
-        removedPomodoroLinkCount: details.removedPomodoroLinkCount,
+        removedPomodoroLinkCount: effects.pomodoroLinksRemoved,
         reopenedDependents: reopened,
         recoveryRan,
         planChip,
         skippedClosedCount: details.skippedClosedCount,
-        pomodoroPruneFailed: details.pomodoroPruneFailed,
+        pomodoroPruneFailed: effects.pruneFailed,
       }),
     );
     // The deferred review settle runs after the cancel card, so the landing

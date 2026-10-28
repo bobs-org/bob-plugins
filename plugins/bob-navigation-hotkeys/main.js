@@ -2297,6 +2297,164 @@ function isDependencyLineWriterSeparators(linkSpan) {
 // blank lines past the last deeper-indented child are excluded. Mirrors
 // getProjectSourceTaskBlock but operates on a plain line array and returns only
 // the bounds. `parentLine` is a 0-based index into `lines`.
+// ---- src/021-relations-cancel-labels.js ----
+// `relations.cancel_labels` loader (`docs/task-relations.md` §17 CL2).
+// Missing/null/empty is a valid empty policy. Invalid containers warn once
+// and cancel nothing; invalid entries warn and are skipped; duplicate keys
+// collapse. Read/parse failures never keep an older effectful policy.
+// Independent of `linked_from_lines`. Cache by mtime/size so the next
+// gesture sees an edit, and cache warnings so an unchanged bad file does
+// not spam.
+
+const RELATIONS_CANCEL_LABELS_LIST_WARNING =
+  "invalid relations.cancel_labels in %s: expected a list of relation labels; cancelling nothing";
+
+let relationsCancelLabelsConfigCache = {
+  key: null,
+  value: emptyRelationsCancelLabels(),
+};
+let relationsCancelLabelsWarnedKey = null;
+
+function emptyRelationsCancelLabels() {
+  return Object.freeze({
+    keys: Object.freeze([]),
+    labels: Object.freeze({}),
+  });
+}
+
+function resetRelationsCancelLabelsConfigCache() {
+  relationsCancelLabelsConfigCache = {
+    key: null,
+    value: emptyRelationsCancelLabels(),
+  };
+  relationsCancelLabelsWarnedKey = null;
+}
+
+function freezeRelationsCancelLabels(keys, labels) {
+  return Object.freeze({
+    keys: Object.freeze(keys.slice()),
+    labels: Object.freeze({ ...labels }),
+  });
+}
+
+function emitRelationsCancelLabelWarnings(messages, cacheKey, emit) {
+  if (!Array.isArray(messages) || messages.length === 0) return;
+  if (cacheKey != null && relationsCancelLabelsWarnedKey === cacheKey) return;
+  if (cacheKey != null) relationsCancelLabelsWarnedKey = cacheKey;
+  const warn =
+    typeof emit === "function"
+      ? emit
+      : typeof console !== "undefined" && typeof console.warn === "function"
+        ? (text) => console.warn(text)
+        : null;
+  if (!warn) return;
+  for (const message of messages) warn(message);
+}
+
+function loadRelationsCancelLabels(options = {}) {
+  const empty = emptyRelationsCancelLabels();
+  const env =
+    options.env ||
+    (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule =
+    options.osModule === undefined
+      ? requireOptionalNodeModule("os")
+      : options.osModule;
+  const fsModule =
+    options.fsModule === undefined
+      ? requireOptionalNodeModule("fs")
+      : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") {
+    relationsCancelLabelsConfigCache = { key: null, value: empty };
+    return empty;
+  }
+  const configPath =
+    options.configPath || getBulletPropertyConfigPath({ env, osModule });
+  const statKey = blocksLinesConfigStatKey(fsModule, configPath);
+  const key = statKey == null ? null : `${configPath}|${statKey}`;
+  if (key != null && relationsCancelLabelsConfigCache.key === key) {
+    return relationsCancelLabelsConfigCache.value;
+  }
+
+  const storeEmpty = () => {
+    if (key != null) {
+      relationsCancelLabelsConfigCache = { key, value: empty };
+    } else {
+      relationsCancelLabelsConfigCache = { key: null, value: empty };
+    }
+    return empty;
+  };
+
+  let rawConfig;
+  try {
+    rawConfig = fsModule.readFileSync(configPath, "utf8");
+  } catch (_error) {
+    return storeEmpty();
+  }
+
+  const parse = options.parseYaml === undefined ? parseYaml : options.parseYaml;
+  if (typeof parse !== "function") {
+    return storeEmpty();
+  }
+
+  let config;
+  try {
+    config = parse(rawConfig);
+  } catch (_error) {
+    return storeEmpty();
+  }
+
+  const warn = options.warn;
+  const warnings = [];
+  const relations = config && config.relations;
+  if (!relations || relations.cancel_labels === undefined) {
+    return storeEmpty();
+  }
+  const value = relations.cancel_labels;
+  if (value === null) {
+    return storeEmpty();
+  }
+  if (!Array.isArray(value)) {
+    warnings.push(
+      RELATIONS_CANCEL_LABELS_LIST_WARNING.replace("%s", configPath),
+    );
+    emitRelationsCancelLabelWarnings(warnings, key, warn);
+    return storeEmpty();
+  }
+
+  const keys = [];
+  const labels = {};
+  const seen = new Set();
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      warnings.push(
+        `invalid relations.cancel_labels entry in ${configPath}: expected a relation label string`,
+      );
+      continue;
+    }
+    const normalized = normalizeRelationLabel(entry);
+    if (!normalized) {
+      warnings.push(
+        `invalid relations.cancel_labels entry in ${configPath}: not a legal relation label`,
+      );
+      continue;
+    }
+    const labelKey = relationCancelLabelKey(normalized);
+    if (!labelKey || seen.has(labelKey)) continue;
+    seen.add(labelKey);
+    keys.push(labelKey);
+    labels[labelKey] = normalized;
+  }
+  emitRelationsCancelLabelWarnings(warnings, key, warn);
+
+  const loaded = freezeRelationsCancelLabels(keys, labels);
+  if (key != null) {
+    relationsCancelLabelsConfigCache = { key, value: loaded };
+  } else {
+    relationsCancelLabelsConfigCache = { key: null, value: loaded };
+  }
+  return loaded;
+}
 // ---- src/030-bullet-blocks-and-logs.js ----
 function findCurrentBulletChildBlock(lines, parentLine) {
   const sourceLines = Array.isArray(lines)
@@ -32708,6 +32866,330 @@ function taskMoveLinkNoteMatchesPath(note, filePath) {
   return target === path || target === basename;
 }
 
+// ---- src/241-relation-cancel-effects.js ----
+// Pure cancel-label policy (`docs/task-relations.md` §17). This is the
+// verdict authority for the relation writer and for the next phase's cue.
+// Matching uses `relation_label_key` (trim, collapse whitespace, strip one
+// trailing colon, Unicode lowercase). Same-edge/same-key re-adds, including
+// spelling/case-only changes, never cancel. Unlink, mirrors, hand edits,
+// reconcile, rename, sync, and config changes never cancel.
+
+const RELATION_CANCEL_EXPLICIT_TRIGGER = "explicit";
+const RELATION_CANCEL_OPEN_STATUSES = OPEN_OBSIDIAN_TASK_STATUSES;
+const RELATION_CANCEL_CONFLICT_MODIFIERS = Object.freeze(["!", "=", ":", "&", "*"]);
+
+function relationCancelLabelKey(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .replace(/:$/u, "")
+    .trim()
+    .toLowerCase();
+}
+
+function relationCancelLabelsSet(cancelLabels) {
+  if (!cancelLabels) return new Set();
+  if (cancelLabels instanceof Set) return cancelLabels;
+  if (Array.isArray(cancelLabels)) {
+    return new Set(
+      cancelLabels.map((entry) => relationCancelLabelKey(entry)).filter(Boolean),
+    );
+  }
+  if (Array.isArray(cancelLabels.keys)) {
+    return new Set(
+      cancelLabels.keys.map((entry) => relationCancelLabelKey(entry)).filter(Boolean),
+    );
+  }
+  return new Set();
+}
+
+function relationCancelEdgeAction(edge) {
+  const action = String((edge && edge.action) || "");
+  if (action === "added" || action === "relabeled" || action === "unchanged" || action === "removed") {
+    return action;
+  }
+  return "unchanged";
+}
+
+function relationCancelNormalizedKeysEqual(left, right) {
+  const leftKey = relationCancelLabelKey(left);
+  const rightKey = relationCancelLabelKey(right);
+  return Boolean(leftKey) && leftKey === rightKey;
+}
+
+function relationCancelFallbackReason(edges) {
+  const parts = [];
+  for (const edge of edges || []) {
+    const label = String((edge && (edge.label || edge.displayLabel)) || "").trim();
+    const link = String((edge && (edge.storedTargetLink || edge.link)) || "").trim();
+    if (!label || !link) continue;
+    parts.push(`🪢 ${label} ${link}`);
+  }
+  return parts.join(" · ");
+}
+
+function relationCancelSourceIdentityKey(source) {
+  const path = normalizeVaultRelativePath((source && source.path) || "");
+  const blockId = normalizeBulletPropertyValue((source && source.blockId) || "");
+  if (path && blockId) return `${path}\x00${blockId}`;
+  const line = Math.floor(numericOrDefault(source && source.line, NaN));
+  if (path && Number.isFinite(line)) return `${path}\x00line:${line}`;
+  return path || "";
+}
+
+function verdictRelationCancelSource(source, configuredKeys, trigger) {
+  const explicit = trigger === RELATION_CANCEL_EXPLICIT_TRIGGER;
+  const edges = Array.isArray(source && source.edges) ? source.edges : [];
+  const triggering = [];
+  if (explicit) {
+    for (const edge of edges) {
+      const action = relationCancelEdgeAction(edge);
+      if (action !== "added" && action !== "relabeled") continue;
+      const label = edge && (edge.label || edge.displayLabel);
+      const labelKey = relationCancelLabelKey(label);
+      if (!labelKey || !configuredKeys.has(labelKey)) continue;
+      const previous = edge && (edge.previousLabel || edge.previous_label);
+      if (
+        previous != null &&
+        previous !== undefined &&
+        String(previous) !== "" &&
+        relationCancelNormalizedKeysEqual(previous, label)
+      ) {
+        continue;
+      }
+      triggering.push(edge);
+    }
+  }
+
+  const isRecurring = source && source.isRecurring === true;
+  const isNew = source && source.isNew === true;
+  const modifiers = Array.isArray(source && source.itemModifiers)
+    ? source.itemModifiers
+    : [];
+  const hasConflict = modifiers.some((entry) =>
+    RELATION_CANCEL_CONFLICT_MODIFIERS.includes(String(entry)),
+  );
+  const status = source && source.status != null ? String(source.status) : " ";
+  const isOpen = RELATION_CANCEL_OPEN_STATUSES.has(status);
+  const wouldCancel = triggering.length > 0;
+
+  let verdict = "none";
+  let cancels = false;
+  let refusal = null;
+  if (!wouldCancel) {
+    verdict = "none";
+  } else if (isRecurring) {
+    verdict = "recurring";
+    refusal = Object.freeze({
+      code: "relation_cancels_recurring_task",
+      message:
+        "Recurring tasks are cancelled with Obsidian Tasks so the next occurrence is handled; no tasks were updated",
+    });
+  } else if (isNew) {
+    verdict = "new_task";
+    refusal = Object.freeze({
+      code: "relation_cancels_new_task",
+      message: "new task sources cannot be cancelled by a relation",
+    });
+  } else if (hasConflict) {
+    verdict = "conflict";
+    refusal = Object.freeze({
+      code: "relation_cancel_conflicts_with_item_action",
+      message: "cancel conflicts with another action on the same item",
+    });
+  } else if (!isOpen) {
+    verdict = "already_closed";
+  } else {
+    verdict = "cancels";
+    cancels = true;
+  }
+
+  return Object.freeze({
+    path: normalizeVaultRelativePath((source && source.path) || ""),
+    blockId: normalizeBulletPropertyValue((source && source.blockId) || "") || null,
+    line: Number.isInteger(source && source.line) ? source.line : null,
+    identity: relationCancelSourceIdentityKey(source),
+    status,
+    isProject: source && source.isProject === true,
+    verdict,
+    cancels,
+    triggeringEdges: Object.freeze(triggering.slice()),
+    fallbackReason: cancels ? relationCancelFallbackReason(triggering) : "",
+    refusal,
+  });
+}
+
+function planRelationCancelEffects(args = {}) {
+  const configuredKeys = relationCancelLabelsSet(args.cancelLabels);
+  const trigger = args.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER;
+  const rawSources = Array.isArray(args.sources)
+    ? args.sources
+    : args.source
+      ? [args.source]
+      : [];
+  const seen = new Set();
+  const sources = [];
+  const refusals = [];
+  const cancels = [];
+  for (const source of rawSources) {
+    const planned = verdictRelationCancelSource(source, configuredKeys, trigger);
+    const identity = planned.identity || `anon:${sources.length}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    sources.push(planned);
+    if (planned.refusal) refusals.push(planned);
+    if (planned.cancels) cancels.push(planned);
+  }
+  return Object.freeze({
+    sources: Object.freeze(sources),
+    cancels: Object.freeze(cancels),
+    refusals: Object.freeze(refusals),
+    refuse: refusals.length > 0,
+  });
+}
+
+function planRelationCancelEffectsFromVector(vector) {
+  const source = {
+    path: "vector.md",
+    blockId: "source",
+    line: 0,
+    status: vector.source_status,
+    isNew: vector.source_is_new === true,
+    isProject: vector.source_is_project === true,
+    isRecurring: vector.source_is_recurring === true,
+    itemModifiers: Array.isArray(vector.item_modifiers)
+      ? vector.item_modifiers
+      : [],
+    edges: [
+      {
+        action: vector.action,
+        label: vector.label,
+        previousLabel: vector.previous_label,
+        storedTargetLink: "[[#^target]]",
+      },
+    ],
+  };
+  return planRelationCancelEffects({
+    cancelLabels: vector.configured,
+    trigger: vector.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER,
+    sources: [source],
+  });
+}
+
+function summarizeRelationCancelEffects(plan, day) {
+  const sources = ((plan && plan.sources) || []).map((source) =>
+    Object.freeze({
+      path: source.path || "",
+      identity: source.identity || "",
+      verdict: source.verdict || "none",
+      cancels: source.cancels === true,
+      edges: Object.freeze(
+        (source.triggeringEdges || []).map((edge) =>
+          Object.freeze({
+            action: relationCancelEdgeAction(edge),
+            labelKey: relationCancelLabelKey(edge && (edge.label || edge.displayLabel)),
+            link: String((edge && (edge.storedTargetLink || edge.link)) || ""),
+          }),
+        ),
+      ),
+    }),
+  );
+  sources.sort((left, right) => {
+    const byPath = String(left.path).localeCompare(String(right.path));
+    if (byPath !== 0) return byPath;
+    return String(left.identity).localeCompare(String(right.identity));
+  });
+  return Object.freeze({
+    day: String(day || ""),
+    sources: Object.freeze(sources),
+  });
+}
+
+function relationCancelEffectsEqual(left, right) {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function relationCancelEdgeFromReport(link, action, label, previousLabel, target) {
+  return Object.freeze({
+    action,
+    label: label || null,
+    previousLabel: previousLabel || null,
+    storedTargetLink: link,
+    target: target || null,
+  });
+}
+
+function deriveRelationCancelEdges(details = {}) {
+  const report = details.report || {};
+  const added = Array.isArray(report.added) ? report.added : [];
+  const relabeled = Array.isArray(report.relabeled) ? report.relabeled : [];
+  const unchanged = Array.isArray(report.unchanged) ? report.unchanged : [];
+  const existingRows = Array.isArray(details.existingRows)
+    ? details.existingRows
+    : [];
+  const liveAdd = Array.isArray(details.liveAdd) ? details.liveAdd : [];
+  const liveRelabel = Array.isArray(details.liveRelabel)
+    ? details.liveRelabel
+    : [];
+  const sourcePath = details.sourcePath;
+  const vaultFiles = details.vaultFiles;
+  const edges = [];
+  const seen = new Set();
+  const previousLabelFor = (link) => {
+    const row = existingRows.find((entry) => entry && entry.link === link);
+    return row && row.label ? row.label : null;
+  };
+  const push = (target, reportedAction) => {
+    const link = storedRelationLinkForTarget(
+      existingRows,
+      target,
+      sourcePath,
+      vaultFiles,
+    );
+    if (!link || seen.has(link)) return;
+    seen.add(link);
+    let action = reportedAction;
+    const previousLabel = previousLabelFor(link);
+    const label = target && target.label !== undefined ? target.label : null;
+    if (
+      action === "relabeled" &&
+      relationCancelNormalizedKeysEqual(previousLabel, label)
+    ) {
+      action = "unchanged";
+    }
+    edges.push(relationCancelEdgeFromReport(link, action, label, previousLabel, target));
+  };
+  for (const target of liveAdd) {
+    const link = storedRelationLinkForTarget(
+      existingRows,
+      target,
+      sourcePath,
+      vaultFiles,
+    );
+    const action = added.includes(link)
+      ? "added"
+      : relabeled.includes(link)
+        ? "relabeled"
+        : unchanged.includes(link)
+          ? "unchanged"
+          : null;
+    if (action) push(target, action);
+  }
+  for (const target of liveRelabel) {
+    const link = storedRelationLinkForTarget(
+      existingRows,
+      target,
+      sourcePath,
+      vaultFiles,
+    );
+    if (seen.has(link)) continue;
+    const action = relabeled.includes(link) ? "relabeled" : "unchanged";
+    push(target, action);
+  }
+  return edges;
+}
 // ---- src/245-task-link-lane.js ----
 // ---------------------------------------------------------------------------
 // task-link-lane: toggle a Pomodoro Task Link's target between Next (`*`) and
@@ -50655,11 +51137,11 @@ class BulletPropertyPickerBlocksStageMixin extends FilteredPickerModal {
   }
 }
 // ---- src/426-picker-relation-stage.js ----
-// Links… stage picker (`docs/task-relations.md` Rules 7–8) and its vault
-// pool builders. Commits through `plugin.applyRelationEdit`, so one gesture
-// writes the source LINKS line, mints the source id, and follows up the
-// LINKED FROM mirrors with one notice. Never stamps, routes inbox tasks,
-// or touches Pomodoros (LG13).
+// Links… stage picker (`docs/task-relations.md` Rules 7–8 / §17) and its
+// vault pool builders. Commits through `plugin.applyRelationEdit`, so one
+// gesture writes the source LINKS line, mints the source id, and follows
+// up the LINKED FROM mirrors with one notice. Never stamps or routes inbox
+// tasks. It touches Pomodoros only through the §17 cancel-label composition.
 
 class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
   isRelationStage() {
@@ -50697,6 +51179,8 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationStage = true;
     this.relationStageDirection = direction === "from" ? "from" : "to";
     this.relationLabel = null;
+    this.relationCancelExpected = null;
+    this.relationCancelConfirmNonce = null;
     this.selectedPropertyItem = this.relationStageDummyProperty();
     this.pendingTask = null;
     this.pendingRelation = null;
@@ -51150,8 +51634,12 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
           relabel: group.mode === "relabel" ? [{ ...ownerRef, label }] : [],
           direction: "from",
           expected: this.relationStageExpectedMap([...sourceRefs, ownerRef]),
+          expectedCancelEffects: this.relationCancelExpected || null,
         });
         if (!outcome.ok) {
+          if (applyRelationCancelStaleToPicker(this, outcome)) {
+            return false;
+          }
           if (outcome.reason === "changed — reopen" || outcome.reason === "changed") {
             return this.refuseDependencyStale();
           }
@@ -51173,8 +51661,12 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         remove: removals.map(toRef),
         relabel: relabels.map(toRef),
         expected,
+        expectedCancelEffects: this.relationCancelExpected || null,
       });
       if (!outcome.ok) {
+        if (applyRelationCancelStaleToPicker(this, outcome)) {
+          return false;
+        }
         if (
           outcome.reason === "changed — reopen" ||
           outcome.reason === "changed"
@@ -66453,24 +66945,6 @@ class BobNavigationHotkeysDecayCancelMixin {
       return false;
     }
 
-    let removedPomodoroLinkCount = 0;
-    let pomodoroPruneFailed = false;
-    if (dailyCleanupPlan && dailyCleanupPlan.changed && pomodoroSnapshot) {
-      if (pomodoroSnapshot.sameFile) {
-        removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
-      } else {
-        const written = await this.writeDeferredPomodoroCleanup(
-          pomodoroSnapshot,
-          dailyCleanupPlan,
-        );
-        if (written) {
-          removedPomodoroLinkCount = dailyCleanupPlan.removedLinkCount;
-        } else {
-          pomodoroPruneFailed = true;
-        }
-      }
-    }
-
     const identities = plan.cancelled.map((entry) =>
       Object.freeze({
         path: filePath,
@@ -66478,10 +66952,6 @@ class BobNavigationHotkeysDecayCancelMixin {
         taskId: entry.taskId,
       }),
     );
-    const postPruneDailyContent =
-      dailyCleanupPlan && dailyCleanupPlan.changed
-        ? dailyCleanupPlan.content
-        : null;
     return await this.finishTaskCancelNotice(picker, {
       identities,
       activePath: filePath,
@@ -66492,9 +66962,16 @@ class BobNavigationHotkeysDecayCancelMixin {
       reason: cancel.reason,
       fallbackUsed: plan.fallbackLoggedCount > 0,
       skippedClosedCount: plan.skippedClosedCount,
-      removedPomodoroLinkCount,
-      pomodoroPruneFailed,
-      postPruneDailyContent,
+      pomodoroSnapshot,
+      dailyCleanupPlan,
+      cleanupHandled: Boolean(pomodoroSnapshot && pomodoroSnapshot.sameFile),
+      pomodoroLinksRemoved:
+        pomodoroSnapshot &&
+        pomodoroSnapshot.sameFile &&
+        dailyCleanupPlan &&
+        dailyCleanupPlan.changed
+          ? dailyCleanupPlan.removedLinkCount
+          : 0,
     });
   }
 }
@@ -66973,10 +67450,6 @@ class BobNavigationHotkeysCancelPropertyMixin {
       return false;
     }
 
-    const removedPomodoroLinkCount =
-      dailyCleanupPlan && dailyCleanupPlan.changed && !commit.pomodoroPruneFailed
-        ? dailyCleanupPlan.removedLinkCount
-        : 0;
     const identities = [];
     let cancelledCount = 0;
     let skippedClosedCount = 0;
@@ -66995,10 +67468,6 @@ class BobNavigationHotkeysCancelPropertyMixin {
         );
       }
     }
-    const postPruneDailyContent =
-      dailyCleanupPlan && dailyCleanupPlan.changed
-        ? dailyCleanupPlan.content
-        : null;
     return await this.finishTaskCancelNotice(picker, {
       identities,
       activePath: picker.filePath,
@@ -67009,9 +67478,14 @@ class BobNavigationHotkeysCancelPropertyMixin {
       reason: cancel.reason,
       fallbackUsed: fallbackLoggedCount > 0,
       skippedClosedCount,
-      removedPomodoroLinkCount,
-      pomodoroPruneFailed: commit.pomodoroPruneFailed,
-      postPruneDailyContent,
+      pomodoroSnapshot,
+      dailyCleanupPlan,
+      cleanupHandled: true,
+      pomodoroLinksRemoved:
+        dailyCleanupPlan && dailyCleanupPlan.changed && !commit.pomodoroPruneFailed
+          ? dailyCleanupPlan.removedLinkCount
+          : 0,
+      pruneFailed: Boolean(commit.pomodoroPruneFailed),
     });
   }
 
@@ -67041,40 +67515,33 @@ class BobNavigationHotkeysCancelPropertyMixin {
     const identities = Array.isArray(details.identities)
       ? details.identities
       : [];
-    let reopened = 0;
-    let recoveryRan = false;
-    if (identities.length > 0) {
-      try {
-        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
-        const holder = plugins && plugins["task-status-cycler"];
-        const api = holder && holder.api;
-        if (
-          api &&
-          typeof api.recoverBlockedDependents === "function" &&
-          Number(api.version) >= 1
-        ) {
-          recoveryRan = true;
-          const result = await api.recoverBlockedDependents(identities, {
-            activePath: details.activePath,
-            editor: details.editor,
-          });
-          reopened = Math.max(
-            0,
-            Math.floor(numericOrDefault(result && result.reopened, 0)),
-          );
-        }
-      } catch (error) {
-        recoveryRan = false;
-        reopened = 0;
-      }
-    }
+    const effects = details.effects
+      ? details.effects
+      : await this.runPostCancelEffects({
+          identities,
+          activePath: details.activePath,
+          editor: details.editor,
+          pomodoroSnapshot: details.pomodoroSnapshot,
+          dailyCleanupPlan: details.dailyCleanupPlan,
+          cleanupHandled: details.cleanupHandled === true,
+          pomodoroLinksRemoved:
+            details.pomodoroLinksRemoved !== undefined
+              ? details.pomodoroLinksRemoved
+              : details.removedPomodoroLinkCount,
+          pruneFailed:
+            details.pruneFailed !== undefined
+              ? details.pruneFailed
+              : details.pomodoroPruneFailed,
+        });
+    const reopened = effects.recovered;
+    const recoveryRan = effects.recoveryRan;
     // The plan chip covers the prune only: it needs the post-prune daily
     // note text, and is omitted when nothing was pruned or the API is
     // unavailable.
     const planChip =
-      details.postPruneDailyContent !== null &&
-      details.postPruneDailyContent !== undefined
-        ? getCancelPlanBudgetChip(this.app, details.postPruneDailyContent)
+      effects.postPruneDailyContent !== null &&
+      effects.postPruneDailyContent !== undefined
+        ? getCancelPlanBudgetChip(this.app, effects.postPruneDailyContent)
         : "";
     showCancelNotice(
       buildCancelNoticeModel({
@@ -67083,12 +67550,12 @@ class BobNavigationHotkeysCancelPropertyMixin {
         date: details.dateText,
         reason: details.reason,
         fallbackUsed: details.fallbackUsed,
-        removedPomodoroLinkCount: details.removedPomodoroLinkCount,
+        removedPomodoroLinkCount: effects.pomodoroLinksRemoved,
         reopenedDependents: reopened,
         recoveryRan,
         planChip,
         skippedClosedCount: details.skippedClosedCount,
-        pomodoroPruneFailed: details.pomodoroPruneFailed,
+        pomodoroPruneFailed: effects.pruneFailed,
       }),
     );
     // The deferred review settle runs after the cancel card, so the landing
@@ -67862,6 +68329,94 @@ class BobNavigationHotkeysCancelPropertyMixin {
       )}${propagationSuffix}${hideSuffix}${blockedSuffix}${ambiguitySuffix}${recoverySuffix}${scheduleLogSuffix}${workLogSuffix}${pomodoroPruneSuffix}${countedPropertySubtreeSuffix}`,
     );
     return true;
+  }
+}
+// ---- src/551-post-cancel-effects.js ----
+// Shared post-cancel follow-ups (`docs/task-relations.md` §17 CL4/CL8).
+// Runs deferred daily-note prune at most once and recovers Blocked
+// dependents through the versioned cycler API. Never closes a picker,
+// displays a notice, settles the walk, offers successors, or transfers
+// dependencies. Task Card Cancel and the relation writer both call this.
+
+class BobNavigationHotkeysPostCancelEffectsMixin {
+  async runPostCancelEffects(details = {}) {
+    const identities = Array.isArray(details.identities)
+      ? details.identities
+      : [];
+    const snapshot = details.pomodoroSnapshot || null;
+    const plan = details.dailyCleanupPlan || null;
+    const cleanupHandled = details.cleanupHandled === true;
+    let pomodoroLinksRemoved = 0;
+    let pruneFailed = false;
+    let postPruneDailyContent = null;
+
+    if (plan && plan.changed) {
+      postPruneDailyContent = plan.content;
+    }
+    if (cleanupHandled) {
+      pomodoroLinksRemoved = Math.max(
+        0,
+        Math.floor(numericOrDefault(details.pomodoroLinksRemoved, 0)),
+      );
+      pruneFailed = Boolean(details.pruneFailed);
+    } else if (plan && plan.changed && snapshot) {
+      if (snapshot.sameFile) {
+        pomodoroLinksRemoved = Math.max(
+          0,
+          Math.floor(numericOrDefault(plan.removedLinkCount, 0)),
+        );
+      } else {
+        const written = await this.writeDeferredPomodoroCleanup(snapshot, plan);
+        if (written) {
+          pomodoroLinksRemoved = Math.max(
+            0,
+            Math.floor(numericOrDefault(plan.removedLinkCount, 0)),
+          );
+        } else {
+          pruneFailed = true;
+        }
+      }
+    }
+
+    let recovered = 0;
+    let recoveryAvailable = false;
+    let recoveryRan = false;
+    if (identities.length > 0) {
+      try {
+        const plugins =
+          this.app && this.app.plugins && this.app.plugins.plugins;
+        const holder = plugins && plugins["task-status-cycler"];
+        const api = holder && holder.api;
+        if (
+          api &&
+          typeof api.recoverBlockedDependents === "function" &&
+          Number(api.version) >= 1
+        ) {
+          recoveryAvailable = true;
+          recoveryRan = true;
+          const result = await api.recoverBlockedDependents(identities, {
+            activePath: details.activePath,
+            editor: details.editor,
+          });
+          recovered = Math.max(
+            0,
+            Math.floor(numericOrDefault(result && result.reopened, 0)),
+          );
+        }
+      } catch (_error) {
+        recoveryRan = false;
+        recovered = 0;
+      }
+    }
+
+    return Object.freeze({
+      pomodoroLinksRemoved,
+      pruneFailed,
+      recovered,
+      recoveryAvailable,
+      recoveryRan,
+      postPruneDailyContent,
+    });
   }
 }
 // ---- src/560-plugin-counted-priority-and-roll.js ----
@@ -72131,11 +72686,12 @@ class BobNavigationHotkeysBlocksApiMixin {
   }
 }
 // ---- src/594-plugin-relation-edit.js ----
-// Relation orchestrator (`docs/task-relations.md` Rule 7): write each source
-// LINKS line, mint the source id inside that transaction when a mirror will
-// be stored, then send best-effort LINKED FROM follow-ups. Same-note S and T
-// share one undo group. The writer never stamps, routes inbox tasks, or
-// touches Pomodoros (LG13).
+// Relation orchestrator (`docs/task-relations.md` Rule 7 / §17): write each
+// source LINKS line, mint the source id inside that transaction when a
+// mirror will be stored, then send best-effort LINKED FROM follow-ups.
+// Same-note S and T share one undo group. The writer never stamps or routes
+// inbox tasks. It touches Pomodoros only through the §17 cancel-label
+// composition (Task Card Cancel planners folded into the source write).
 class BobNavigationHotkeysRelationEditMixin {
   findRelationEditOpenEditor(filePath) {
     const path = normalizeVaultRelativePath(filePath || "");
@@ -72237,11 +72793,13 @@ class BobNavigationHotkeysRelationEditMixin {
 
   async applyRelationEdit(args = {}) {
     const stale = "changed — reopen";
-    const refuse = (reason, notice = null) =>
+    const refuse = (reason, notice = null, extra = {}) =>
       Object.freeze({
         ok: false,
         reason,
         notice,
+        stale: extra.stale === true,
+        cancelEffects: extra.cancelEffects || null,
         committed: Object.freeze([]),
         failed: Object.freeze([]),
         mirrorFailed: Object.freeze([]),
@@ -72265,6 +72823,15 @@ class BobNavigationHotkeysRelationEditMixin {
         args.linkedFromLinesEnabled !== undefined
           ? args.linkedFromLinesEnabled === true
           : loadRelationsLinkedFromLinesEnabled();
+      const cancelLabels =
+        args.cancelLabels !== undefined
+          ? args.cancelLabels
+          : loadRelationsCancelLabels();
+      const cancelDate =
+        typeof args.cancelDate === "string" && args.cancelDate
+          ? String(args.cancelDate)
+          : formatBulletPropertyDate(today instanceof Date ? today : new Date());
+      const cancelTrigger = args.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER;
 
       const files = new Map();
       const collectRef = (ref) => {
@@ -72348,6 +72915,11 @@ class BobNavigationHotkeysRelationEditMixin {
       const noticeRemoved = [];
       const noticeRelabeled = [];
       const mirrorFailed = [];
+      const cancelledNoticeRows = [];
+      const cancelledIdentities = [];
+      const cancelSourcePlans = [];
+      const cancelRefusals = [];
+      const consumedLinesByPath = new Map();
       let archived = false;
       const contentOf = (path) =>
         sourceWrites.has(path)
@@ -72367,10 +72939,15 @@ class BobNavigationHotkeysRelationEditMixin {
         const original = sourceWrites.has(source.path)
           ? sourceWrites.get(source.path).original
           : String(files.get(source.path) || "");
-        let sourceLine = source.line;
+        const consumed = consumedLinesByPath.get(source.path) || new Set();
+        const liveSource = relocateRelationCancelSource(content, source, consumed);
+        let sourceLine = liveSource.line;
         const liveLines = content.split(/\r?\n/);
-        if (source.blockId) {
-          const found = findTaskLineByTrailingBlockId(liveLines, source.blockId);
+        if (liveSource.blockId) {
+          const found = findTaskLineByTrailingBlockId(
+            liveLines,
+            liveSource.blockId,
+          );
           if (found !== null) sourceLine = found;
         }
         const children = findLinksChildren(liveLines, sourceLine);
@@ -72473,6 +73050,38 @@ class BobNavigationHotkeysRelationEditMixin {
           }
         }
 
+        const cancelEdges = deriveRelationCancelEdges({
+          report: planned.report,
+          existingRows,
+          liveAdd,
+          liveRelabel,
+          sourcePath: source.path,
+          vaultFiles,
+        });
+        const policyRaw = String(
+          content.split(/\r?\n/)[sourceLine] || liveSource.rawLine || "",
+        );
+        const policyPlan = planRelationCancelEffects({
+          cancelLabels,
+          trigger: cancelTrigger,
+          sources: [
+            relationCancelPolicySourceFromLine(
+              {
+                path: liveSource.path,
+                blockId: liveSource.blockId,
+                line: sourceLine,
+              },
+              policyRaw,
+              cancelEdges,
+            ),
+          ],
+        });
+        const policySource = policyPlan.sources[0] || null;
+        if (policySource) cancelSourcePlans.push(policySource);
+        if (policySource && policySource.refusal) {
+          cancelRefusals.push(policySource);
+        }
+
         const mirrorTargets = [...liveAdd, ...liveRemove, ...liveRelabel].filter(
           (target, index, list) =>
             list.findIndex(
@@ -72515,8 +73124,7 @@ class BobNavigationHotkeysRelationEditMixin {
           content = mintedLines.join(relationLineEnding(content));
         }
         stageWrite(source.path, original, content);
-        if (!needsMirror || !sourceBlockId) continue;
-
+        if (needsMirror && sourceBlockId) {
         const sourceIdentity = blocksIdentity(source.path, sourceBlockId);
         for (const target of writableMirrors) {
           const targetContent = contentOf(target.path);
@@ -72610,7 +73218,39 @@ class BobNavigationHotkeysRelationEditMixin {
             );
           }
         }
+        }
+
+        const folded = applyComposedRelationSourceCancel({
+          policySource, cancelRefusals, content: contentOf(source.path), source,
+          liveSource, sourceLine, consumed, cancelEdges, cancelLabels,
+          cancelTrigger, cancelDate, liveAdd, liveRelabel, liveRemove, original,
+          stageWrite, cancelledIdentities, cancelledNoticeRows, consumedLinesByPath,
+        });
+        if (!folded.ok) {
+          return refuse(
+            folded.recurring ? "relation_cancels_recurring_task" : folded.reason || "cancel-failed",
+            folded.reason,
+          );
+        }
       }
+
+      const commitGate = relationCancelCommitGate(
+        cancelSourcePlans, cancelRefusals, cancelDate, args.expectedCancelEffects, stale,
+      );
+      if (!commitGate.ok) {
+        return refuse(commitGate.reason, commitGate.notice, {
+          stale: commitGate.stale === true,
+          cancelEffects: commitGate.cancelEffects,
+        });
+      }
+      const cancelEffects = commitGate.cancelEffects;
+      const dailyPrep = await this.prepareRelationCancelDailyCleanup(
+        sourceWrites, cancelledIdentities, today,
+      );
+      if (!dailyPrep.ok) return refuse(dailyPrep.reason, dailyPrep.notice);
+      const pomodoroSnapshot = dailyPrep.snapshot;
+      const dailyCleanupPlan = dailyPrep.plan;
+      const cleanupHandled = dailyPrep.cleanupHandled === true;
 
       const failed = [];
       for (const write of sourceWrites.values()) {
@@ -72620,31 +73260,61 @@ class BobNavigationHotkeysRelationEditMixin {
           write.nextContent,
         );
         if (!result.ok) {
-          return refuse(stale, stale);
+          failed.push(write.path);
+          if (committed.length === 0) {
+            return refuse(stale, stale, { cancelEffects });
+          }
+          break;
         }
         committed.push(write.path);
       }
 
+      const committedSet = new Set(committed);
+      const committedCancelled = cancelledIdentities.filter((entry) =>
+        committedSet.has(entry.path),
+      );
       let followFailed = [];
-      if (followUps.length > 0) {
+      if (followUps.length > 0 && failed.length === 0) {
         try {
           const result = await this.applyRelationFollowUps(followUps);
           followFailed = (result && result.failed) || [];
         } catch (_error) {
           followFailed = followUps.map((entry) => entry.path);
         }
+      } else if (failed.length > 0) {
+        followFailed = followUps.map((entry) => entry.path);
       }
       mirrorFailed.push(...followFailed);
+
+      let pomodoroLinksRemoved = 0;
+      let pruneFailed = false;
+      let recovered = 0;
+      if (committedCancelled.length > 0) {
+        const effects = await this.runPostCancelEffects({
+          identities: committedCancelled,
+          activePath: liveSources[0] && liveSources[0].path,
+          editor: this.findRelationEditOpenEditor(liveSources[0] && liveSources[0].path),
+          pomodoroSnapshot, dailyCleanupPlan, cleanupHandled,
+          pomodoroLinksRemoved:
+            cleanupHandled && dailyCleanupPlan && dailyCleanupPlan.changed
+              ? dailyCleanupPlan.removedLinkCount
+              : 0,
+        });
+        pomodoroLinksRemoved = effects.pomodoroLinksRemoved;
+        pruneFailed = effects.pruneFailed;
+        recovered = effects.recovered;
+      }
 
       const unchanged =
         noticeAdded.length === 0 &&
         noticeRemoved.length === 0 &&
         noticeRelabeled.length === 0 &&
+        cancelledNoticeRows.length === 0 &&
         committed.every((path) => {
           const write = sourceWrites.get(path);
           return write && write.original === write.nextContent;
         });
-      const notice = unchanged
+      const relationNotice = unchanged
         ? null
         : buildRelationEditNotice({
             added: noticeAdded,
@@ -72652,15 +73322,35 @@ class BobNavigationHotkeysRelationEditMixin {
             relabeled: noticeRelabeled,
             direction,
             archived,
+            mirrorFailed: [],
+          });
+      const notice = unchanged
+        ? null
+        : buildRelationCancelComposeNotice({
+            cancelled: cancelledNoticeRows,
+            relationNotice,
+            pruneFailed,
+            pomodoroLinksRemoved,
+            recovered,
             mirrorFailed,
           });
       return Object.freeze({
         ok: true,
-        reason: followFailed.length > 0 ? "partial" : unchanged ? "unchanged" : null,
+        reason:
+          failed.length > 0 || followFailed.length > 0
+            ? "partial"
+            : unchanged
+              ? "unchanged"
+              : null,
         notice,
+        stale: false,
+        cancelEffects,
         committed: Object.freeze(committed),
         failed: Object.freeze(failed),
         mirrorFailed: Object.freeze([...new Set(mirrorFailed)]),
+        pomodoroLinksRemoved,
+        pruneFailed,
+        recovered,
       });
     } catch (_error) {
       return refuse("apply-failed");
@@ -73154,6 +73844,567 @@ class BobNavigationHotkeysRelationFollowUpsMixin {
       ok: failed.size === 0,
       failed: Object.freeze([...failed]),
     });
+  }
+}
+// ---- src/596-relation-cancel-compose.js ----
+// Relation-writer composition for §17 cancel labels. Preview/commit
+// contract for bob-cli-dl.6: `summarizeRelationCancelEffects` over the
+// same planner; pass `expectedCancelEffects` into `applyRelationEdit`.
+// At commit the writer reloads config/date, re-plans over live snapshots,
+// and compares consequences (identities, edge/label keys, verdicts, day).
+// A mismatch returns `{ ok: false, stale: true, cancelEffects }` and
+// writes nothing. Ordinary callers omit the expected summary and plan
+// from current state.
+
+function relocateRelationCancelSource(content, source, consumedLines) {
+  if (!source || typeof content !== "string") return source;
+  const lines = content.split(/\r?\n/);
+  const consumed = consumedLines instanceof Set ? consumedLines : new Set();
+  const blockId = normalizeBulletPropertyValue(source.blockId || "");
+  if (blockId) {
+    const found = findTaskLineByTrailingBlockId(lines, blockId);
+    if (found !== null && !consumed.has(found)) {
+      return Object.freeze({
+        ...source,
+        line: found,
+        rawLine: String(lines[found] || source.rawLine || ""),
+        blockId: getTrailingBlockId(lines[found]) || blockId,
+      });
+    }
+  }
+  const rawLine = String(source.rawLine || "");
+  const matches = [];
+  if (rawLine) {
+    for (let index = 0; index < lines.length; index += 1) {
+      if (consumed.has(index)) continue;
+      if (
+        lines[index] === rawLine &&
+        isObsidianTaskAtLine(content, index)
+      ) {
+        matches.push(index);
+      }
+    }
+  }
+  if (matches.length === 1) {
+    return Object.freeze({
+      ...source,
+      line: matches[0],
+      rawLine: String(lines[matches[0]] || rawLine),
+      blockId: getTrailingBlockId(lines[matches[0]]) || source.blockId || null,
+    });
+  }
+  if (matches.length > 1) {
+    const hint = Math.floor(numericOrDefault(source.line, 0));
+    const best = matches.reduce((chosen, index) =>
+      Math.abs(index - hint) < Math.abs(chosen - hint) ? index : chosen,
+    );
+    return Object.freeze({
+      ...source,
+      line: best,
+      rawLine: String(lines[best] || rawLine),
+      blockId: getTrailingBlockId(lines[best]) || source.blockId || null,
+    });
+  }
+  return source;
+}
+
+function remapConsumedRelationCancelLines(consumedLines, insertAt, insertCount) {
+  if (!(consumedLines instanceof Set) || !Number.isInteger(insertAt) || insertCount <= 0) {
+    return consumedLines;
+  }
+  const next = new Set();
+  for (const line of consumedLines) {
+    next.add(line >= insertAt ? line + insertCount : line);
+  }
+  return next;
+}
+
+function relationCancelSourceStatus(rawLine) {
+  return getObsidianTaskCheckboxStatus(String(rawLine || ""));
+}
+
+function formatRelationCancelCount(count, singular, plural) {
+  const numeric = Math.max(0, Math.floor(numericOrDefault(count, 0)));
+  if (numeric === 1) return `1 ${singular}`;
+  return `${numeric} ${plural || `${singular}s`}`;
+}
+
+function relationCancelPolicySourceFromLine(source, rawLine, edges) {
+  return {
+    path: source && source.path,
+    blockId:
+      (source && source.blockId) || getTrailingBlockId(rawLine) || null,
+    line: source && source.line,
+    status: relationCancelSourceStatus(rawLine),
+    isNew: false,
+    isProject: isProjectLifecycleTaskLine(rawLine),
+    isRecurring: isRecurringTaskLine(rawLine),
+    itemModifiers: [],
+    edges: Array.isArray(edges) ? edges : [],
+  };
+}
+
+function composeRelationSourceCancel(details = {}) {
+  const content = String(details.content || "");
+  const source = details.source;
+  const consumed =
+    details.consumed instanceof Set ? details.consumed : new Set();
+  const liveSource = relocateRelationCancelSource(content, source, consumed);
+  const sourceLine = liveSource.line;
+  const rawLine = String(
+    content.split(/\r?\n/)[sourceLine] || liveSource.rawLine || "",
+  );
+  const policy = planRelationCancelEffects({
+    cancelLabels: details.cancelLabels,
+    trigger: details.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER,
+    sources: [relationCancelPolicySourceFromLine(liveSource, rawLine, details.edges)],
+  });
+  const planned = policy.sources[0] || null;
+  if (!planned || !planned.cancels) {
+    return Object.freeze({
+      ok: true,
+      content,
+      planned,
+      identity: null,
+      noticeRow: null,
+      consumed,
+      sourceLine,
+    });
+  }
+  const session = Object.freeze({
+    valid: true,
+    error: null,
+    explicit: false,
+    startLine: sourceLine,
+    requestedAdditionalCount: 0,
+    requestedCount: 1,
+    actualCount: 1,
+    clamped: false,
+    targets: Object.freeze([{ line: sourceLine, rawLine }]),
+  });
+  const batch = planTaskCancelBatch(content, session, {
+    date: details.cancelDate,
+    reason: "",
+    fallbackReason: planned.fallbackReason,
+  });
+  if (!batch.valid) {
+    return Object.freeze({
+      ok: false,
+      reason: batch.error,
+      recurring: batch.recurring === true,
+      planned,
+      content,
+      consumed,
+      sourceLine,
+    });
+  }
+  const insertCount =
+    batch.content.split(/\r?\n/).length - content.split(/\r?\n/).length;
+  let nextConsumed = consumed;
+  if (insertCount > 0) {
+    nextConsumed = remapConsumedRelationCancelLines(
+      consumed,
+      sourceLine + 1,
+      insertCount,
+    );
+  }
+  nextConsumed.add(sourceLine);
+  const cancelled = (batch.cancelled || [])[0];
+  const triggering = planned.triggeringEdges[0] || {};
+  return Object.freeze({
+    ok: true,
+    content: batch.content,
+    planned,
+    identity: Object.freeze({
+      path: liveSource.path,
+      blockId:
+        (cancelled && cancelled.blockId) ||
+        getTrailingBlockId(String(batch.content.split(/\r?\n/)[sourceLine] || "")) ||
+        liveSource.blockId ||
+        null,
+      taskId: (cancelled && cancelled.taskId) || null,
+    }),
+    noticeRow: Object.freeze({
+      sourceName:
+        liveSource.description || relationNoticeNameFromLine(rawLine) || "task",
+      targetName: details.targetName || "task",
+      label: triggering.label || triggering.displayLabel || "",
+    }),
+    consumed: nextConsumed,
+    sourceLine,
+  });
+}
+
+function foldRelationCancelDailyCleanup(sourceWrites, identities, snapshot) {
+  if (!snapshot || !Array.isArray(identities) || identities.length === 0) {
+    return Object.freeze({ plan: null, folded: false });
+  }
+  const pruneTargets = identities
+    .filter((entry) => entry && entry.path && entry.blockId)
+    .map((entry) =>
+      Object.freeze({ path: entry.path, blockId: entry.blockId }),
+    );
+  if (pruneTargets.length === 0) {
+    return Object.freeze({ plan: null, folded: false });
+  }
+  const dailyPath = snapshot.dailyPath;
+  const staged = sourceWrites instanceof Map ? sourceWrites.get(dailyPath) : null;
+  const dailyBase = staged ? staged.nextContent : snapshot.content;
+  if (dailyBase == null) {
+    return Object.freeze({ plan: null, folded: false });
+  }
+  const plan = planDeferredPomodoroLinkCleanup(dailyBase, pruneTargets, {
+    dailyPath,
+    noteIndex: snapshot.noteIndex,
+  });
+  if (staged && plan && plan.changed) {
+    sourceWrites.set(dailyPath, {
+      path: dailyPath,
+      original: staged.original,
+      nextContent: plan.content,
+    });
+    return Object.freeze({ plan, folded: true });
+  }
+  return Object.freeze({ plan, folded: false });
+}
+
+function relationCancelCommitGate(
+  cancelSourcePlans,
+  cancelRefusals,
+  cancelDate,
+  expectedCancelEffects,
+  staleReason,
+) {
+  if (Array.isArray(cancelRefusals) && cancelRefusals.length > 0) {
+    const refusal = cancelRefusals[0] && cancelRefusals[0].refusal;
+    return Object.freeze({
+      ok: false,
+      reason: (refusal && refusal.code) || "relation-cancel-refused",
+      notice: (refusal && refusal.message) || null,
+      stale: false,
+      cancelEffects: null,
+    });
+  }
+  const effectsPlan = Object.freeze({
+    sources: Object.freeze((cancelSourcePlans || []).slice()),
+    cancels: Object.freeze(
+      (cancelSourcePlans || []).filter((entry) => entry && entry.cancels),
+    ),
+    refusals: Object.freeze((cancelRefusals || []).slice()),
+    refuse: false,
+  });
+  const cancelEffects = summarizeRelationCancelEffects(effectsPlan, cancelDate);
+  if (
+    expectedCancelEffects &&
+    !relationCancelEffectsEqual(expectedCancelEffects, cancelEffects)
+  ) {
+    return Object.freeze({
+      ok: false,
+      reason: staleReason,
+      notice: staleReason,
+      stale: true,
+      cancelEffects,
+    });
+  }
+  return Object.freeze({
+    ok: true,
+    reason: null,
+    notice: null,
+    stale: false,
+    cancelEffects,
+  });
+}
+
+function applyRelationCancelStaleToPicker(picker, outcome) {
+  if (!outcome || outcome.stale !== true) return false;
+  if (picker) {
+    picker.relationCancelExpected = outcome.cancelEffects || null;
+    picker.relationCancelConfirmNonce = null;
+    if (typeof picker.refreshRelationConsequenceStrip === "function") {
+      try {
+        picker.refreshRelationConsequenceStrip();
+      } catch (_error) {
+        // Best-effort cue refresh for phase .6.
+      }
+    }
+  }
+  return true;
+}
+
+function buildRelationCancelComposeNotice(details = {}) {
+  const cancelled = Array.isArray(details.cancelled) ? details.cancelled : [];
+  const relationNotice = details.relationNotice || null;
+  const pruneFailed = details.pruneFailed === true;
+  const pomodoroLinksRemoved = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.pomodoroLinksRemoved, 0)),
+  );
+  const recovered = Math.max(
+    0,
+    Math.floor(numericOrDefault(details.recovered, 0)),
+  );
+  const mirrorFailed = details.mirrorFailed;
+  const chips = [];
+  if (pruneFailed) {
+    chips.push("Pomodoro links not removed");
+  } else if (pomodoroLinksRemoved > 0) {
+    chips.push(
+      `removed ${formatRelationCancelCount(pomodoroLinksRemoved, "Pomodoro link")}`,
+    );
+  }
+  if (recovered > 0) {
+    chips.push(`unblocked ${recovered}`);
+  }
+
+  if (cancelled.length === 0) {
+    let notice = relationNotice;
+    if (!notice) return null;
+    if (chips.length > 0) notice = `${notice} · ${chips.join(" · ")}`;
+    return withLinkedFromFollowUpNotice(notice, mirrorFailed);
+  }
+
+  if (cancelled.length === 1) {
+    const row = cancelled[0];
+    const sourceName = String(row.sourceName || "task");
+    const targetName = String(row.targetName || "task");
+    const label = String(row.label || "").trim();
+    const labelPart = label ? ` ${label} → ` : " → ";
+    let notice = `🪢 ${sourceName} —${labelPart}${targetName} · ⊘ cancelled`;
+    if (chips.length > 0) notice = `${notice} · ${chips.join(" · ")}`;
+    return withLinkedFromFollowUpNotice(notice, mirrorFailed);
+  }
+
+  const relationPart = relationNotice || `🪢 Linked ${cancelled.length} tasks`;
+  let notice = `${relationPart} · ⊘ cancelled`;
+  if (chips.length > 0) notice = `${notice} · ${chips.join(" · ")}`;
+  return withLinkedFromFollowUpNotice(notice, mirrorFailed);
+}
+
+function applyComposedRelationSourceCancel(details = {}) {
+  const policySource = details.policySource;
+  const cancelRefusals = details.cancelRefusals || [];
+  const consumed =
+    details.consumed instanceof Set ? details.consumed : new Set();
+  const source = details.source;
+  const sourceLine = details.sourceLine;
+  const consumedLinesByPath = details.consumedLinesByPath;
+  if (!(policySource && policySource.cancels && cancelRefusals.length === 0)) {
+    consumed.add(sourceLine);
+    if (consumedLinesByPath && source) {
+      consumedLinesByPath.set(source.path, consumed);
+    }
+    return Object.freeze({ ok: true });
+  }
+  const primaryTarget =
+    (details.liveAdd && details.liveAdd[0]) ||
+    (details.liveRelabel && details.liveRelabel[0]) ||
+    (details.liveRemove && details.liveRemove[0]);
+  const folded = composeRelationSourceCancel({
+    content: details.content,
+    source: {
+      ...details.liveSource,
+      line: sourceLine,
+      description:
+        (details.liveSource && details.liveSource.description) ||
+        (source && source.description),
+    },
+    consumed,
+    edges: details.cancelEdges,
+    cancelLabels: details.cancelLabels,
+    trigger: details.cancelTrigger,
+    cancelDate: details.cancelDate,
+    targetName:
+      (primaryTarget && (primaryTarget.description || primaryTarget.blockId)) ||
+      "task",
+  });
+  if (!folded.ok) return folded;
+  if (consumedLinesByPath && source) {
+    consumedLinesByPath.set(source.path, folded.consumed);
+  }
+  if (typeof details.stageWrite === "function" && source) {
+    details.stageWrite(source.path, details.original, folded.content);
+  }
+  if (folded.identity && Array.isArray(details.cancelledIdentities)) {
+    details.cancelledIdentities.push(folded.identity);
+  }
+  if (folded.noticeRow && Array.isArray(details.cancelledNoticeRows)) {
+    details.cancelledNoticeRows.push(folded.noticeRow);
+  }
+  return Object.freeze({ ok: true });
+}
+
+class BobNavigationHotkeysRelationCancelComposeMixin {
+  async prepareRelationCancelDailyCleanup(sourceWrites, identities, today) {
+    if (!Array.isArray(identities) || identities.length === 0) {
+      return Object.freeze({
+        ok: true,
+        snapshot: null,
+        plan: null,
+        cleanupHandled: false,
+      });
+    }
+    const dailyRead = await this.readRelationCancelDailySnapshot(this.app, {
+      today,
+    });
+    if (dailyRead && dailyRead.unreadable) {
+      return Object.freeze({
+        ok: false,
+        reason: "unreadable-daily",
+        notice: "today's daily note could not be read; no tasks were updated",
+      });
+    }
+    const snapshot = dailyRead && dailyRead.snapshot;
+    if (!snapshot) {
+      return Object.freeze({
+        ok: true,
+        snapshot: null,
+        plan: null,
+        cleanupHandled: false,
+      });
+    }
+    const foldedDaily = foldRelationCancelDailyCleanup(
+      sourceWrites,
+      identities,
+      snapshot,
+    );
+    return Object.freeze({
+      ok: true,
+      snapshot,
+      plan: foldedDaily.plan,
+      cleanupHandled: foldedDaily.folded === true,
+    });
+  }
+
+  // Detailed daily-note snapshot for the relation cancel writer. Absence is
+  // zero cleanup; an existing unreadable note is an error. Other callers keep
+  // `readDeferredPomodoroSnapshot`, which still returns null for both.
+  // Uses `findRelationEditOpenEditor` so a missing workspace
+  // `getActiveViewOfType` (the relation-writer test harness) cannot throw
+  // and collapse into apply-failed.
+  async readRelationCancelDailySnapshot(app, options = {}) {
+    const vault = app && app.vault;
+    if (!vault || typeof vault.getMarkdownFiles !== "function") {
+      return Object.freeze({
+        ok: false,
+        absent: true,
+        unreadable: false,
+        snapshot: null,
+      });
+    }
+    try {
+      const sourcePath = normalizeVaultRelativePath(options.sourcePath);
+      const today = options.today instanceof Date ? options.today : new Date();
+      const buffers = getOpenMarkdownBufferContents(app);
+      if (buffers.ambiguous) {
+        return Object.freeze({
+          ok: false,
+          absent: false,
+          unreadable: true,
+          snapshot: null,
+        });
+      }
+      if (sourcePath) {
+        buffers.set(sourcePath, String(options.sourceContent || ""));
+      }
+      let vaultFiles;
+      try {
+        vaultFiles = vault.getMarkdownFiles() || [];
+      } catch (_error) {
+        return Object.freeze({
+          ok: false,
+          absent: true,
+          unreadable: false,
+          snapshot: null,
+        });
+      }
+      const dailyPath = scheduledRecoveryDailyPaths(vaultFiles, today).current;
+      if (!dailyPath) {
+        return Object.freeze({
+          ok: true,
+          absent: true,
+          unreadable: false,
+          snapshot: null,
+        });
+      }
+      const noteIndex = createScheduledRecoveryNoteIndex(
+        vaultFiles.map((file) => ({
+          path: normalizeVaultRelativePath(file.path),
+        })),
+      );
+      if (dailyPath === sourcePath) {
+        return Object.freeze({
+          ok: true,
+          absent: false,
+          unreadable: false,
+          snapshot: Object.freeze({
+            dailyPath,
+            file: null,
+            editor: null,
+            content: null,
+            noteIndex,
+            sameFile: true,
+          }),
+        });
+      }
+      const dailyFile = vaultFiles.find(
+        (file) => normalizeVaultRelativePath(file.path) === dailyPath,
+      );
+      if (!dailyFile) {
+        return Object.freeze({
+          ok: true,
+          absent: true,
+          unreadable: false,
+          snapshot: null,
+        });
+      }
+      const editor =
+        typeof this.findRelationEditOpenEditor === "function"
+          ? this.findRelationEditOpenEditor(dailyPath)
+          : null;
+      let content = null;
+      let unreadable = false;
+      if (buffers.has(dailyPath)) {
+        content = buffers.get(dailyPath);
+      } else if (editor && typeof editor.getValue === "function") {
+        content = String(editor.getValue() || "");
+      } else if (typeof vault.cachedRead === "function") {
+        try {
+          content = String((await vault.cachedRead(dailyFile)) || "");
+        } catch (_error) {
+          unreadable = true;
+        }
+      } else {
+        unreadable = true;
+      }
+      if (unreadable || content === null) {
+        return Object.freeze({
+          ok: false,
+          absent: false,
+          unreadable: true,
+          snapshot: null,
+        });
+      }
+      return Object.freeze({
+        ok: true,
+        absent: false,
+        unreadable: false,
+        snapshot: Object.freeze({
+          dailyPath,
+          file: dailyFile,
+          editor,
+          content,
+          noteIndex,
+          sameFile: false,
+        }),
+      });
+    } catch (_error) {
+      return Object.freeze({
+        ok: false,
+        absent: false,
+        unreadable: true,
+        snapshot: null,
+      });
+    }
   }
 }
 // ---- src/600-plugin-dependency-mirror.js ----
@@ -84640,6 +85891,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysReviewReturnMixin,
   BobNavigationHotkeysReviewJournalMixin,
   BobNavigationHotkeysDecayCancelMixin,
+  BobNavigationHotkeysPostCancelEffectsMixin,
   BobNavigationHotkeysCancelPropertyMixin,
   BobNavigationHotkeysCountedRollMixin,
   BobNavigationHotkeysLinkRollScheduleMixin,
@@ -84650,6 +85902,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysBlocksFollowUpsMixin,
   BobNavigationHotkeysBlocksEditMixin,
   BobNavigationHotkeysBlocksApiMixin,
+  BobNavigationHotkeysRelationCancelComposeMixin,
   BobNavigationHotkeysRelationEditMixin,
   BobNavigationHotkeysRelationFollowUpsMixin,
   BobNavigationHotkeysRelationStageMixin,
@@ -84983,6 +86236,19 @@ module.exports.helpers = {
   resetBlocksLinesConfigCache,
   loadRelationsLinkedFromLinesEnabled,
   resetRelationsLinkedFromLinesConfigCache,
+  loadRelationsCancelLabels,
+  resetRelationsCancelLabelsConfigCache,
+  relationCancelLabelKey,
+  planRelationCancelEffects,
+  planRelationCancelEffectsFromVector,
+  summarizeRelationCancelEffects,
+  relationCancelEffectsEqual,
+  deriveRelationCancelEdges,
+  relocateRelationCancelSource,
+  composeRelationSourceCancel,
+  foldRelationCancelDailyCleanup,
+  applyRelationCancelStaleToPicker,
+  buildRelationCancelComposeNotice,
   validateBulletPropertyConfig,
   isValidBulletPropertyName,
   isBulletLine,
@@ -85499,6 +86765,7 @@ module.exports.helpers = {
   getTaskCancelStatusLabel,
   describeCancelTaskRow,
   planTaskCancelBatch,
+  RELATION_CANCEL_EXPLICIT_TRIGGER,
   applyScheduleLogEntryToLines,
   hasScheduleLogReasonInput,
   getScheduleLogWriteOutcome,

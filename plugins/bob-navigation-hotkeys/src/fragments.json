@@ -113,6 +113,7 @@
   "544-plugin-lane-walk.js",
   "540-plugin-decay-picker-and-cancel.js",
   "545-plugin-review-journal.js",
+  "546-plugin-bracket-repeat.js",
   "550-plugin-cancel-and-counted-property.js",
   "551-post-cancel-effects.js",
   "560-plugin-counted-priority-and-roll.js",

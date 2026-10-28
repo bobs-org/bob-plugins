@@ -12,10 +12,10 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | --- | --- |
 | Name | Bob Navigation Hotkeys |
 | ID | `bob-navigation-hotkeys` |
-| Version | 2.58.0 |
+| Version | 2.59.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Ctrl+Shift+P always opens the Task Card, a focused first screen with exact P-level previews. Ctrl+Shift+B is Ctrl+Shift+P then `b`: it opens the Task Card's Depends on stage for the task, a Task Link's linked task, or a counted `N<Ctrl+Shift+B>` batch; Esc, q, or Ctrl+[ close it without writing, and its More section opens a property's value stage. Ctrl+Shift+Alt+B is Ctrl+Shift+P then `⇧B`: it opens the Blocks stage for a task or Task Link, supports counted `N<Ctrl+Shift+Alt+B>`, and works from Depends-On and BLOCKS lines, where Ctrl+Shift+P on a BLOCKS line also opens the owner’s stage directly. On an inbox task every non-closing answer asks where it goes before writing and moves there. Open and manage related notes, tabs, and task properties, including priority levels that roll scheduled dates. Ctrl+Enter on the card takes the recommended roll, decay, or cancel from the previewed ladder, including counted and Task Link batches. Scheduling a date opens one combined Reason and Work summary review; a Pending or Next task can record an optional Work Log summary as a dated entry under a WORK LOG child. A Cancel action closes tasks as Cancelled with an optional reason kept in a first-child Cancel Log. Alt+F and Ctrl+Alt+F prompt Pending tasks for an optional Work summary. A single counted Ready ROTTEN or scheduled TICKLER keep asks why, then stamps and writes one Rotten Log entry in one undo; blank logs no reason given, and Esc cancels. Counted N<Alt+F> and Task Link sessions show one combined prompt when Rotten keep reasons or Pending/Next Work summaries apply; Work summary comes first, followed by Keep reason, and one Enter submits both. Each counted keep gets its own entry; at-limit targets still skip unstamped and unlogged. The decay card shows the logged keeps in its header and its Keep swaps the rows for the same in-card reason stage, committing stamp, increment, and entry in one undo; Esc returns to the choices. On a landed RECURRING row both write nothing, show the recurring-tier notice, and stay. Ctrl+Enter on the PRE/POST row the review walk just landed on completes it and advances within the group when another live row remains (nav api v3). `]s` / `[s` away from the current review task first return to it. The Task Card level strip and priority notices render the shared signal-bar priority mark through the bob-ledger-tools api.priorityMarks v1 namespace, falling back to the Lucide signal icons without it. Alt+[ / Alt+] on a Pomodoro Task Link toggles the linked task between Next and In Progress — asking once for an optional Work Log summary when moving back to Next — through the nav api.taskLinkLane v1 namespace. Closing a planned task opens one grouped successor picker when offers exist; nothing starts selected, and the cycler applies only chosen links. The pulled-in summary is shown through nav api.notice v1. Review-row closes append the cycler's additive `successorNotice` line to the walk toast. Journals each counted ]s answer, with its outcome, through the bob-ledger-tools api.stats namespace. Depends-On writes now mirror open dependents into generated 🧱 BLOCKS lines, in the same-note transaction or a checked cross-note follow-up, including counted, marked, Ctrl+D, hand-edit (and undo), conversion, and Ctrl+Shift+M paths. Adding an open prerequisite from Ctrl+Shift+P also removes the newly Blocked task's live links from today's open Pomodoros, deleting an emptied entry. Cmd+Enter on a reading task, Task Link, or managed embed opens its source_pdf in Highlights without vault writes, while other targets retain Obsidian’s new-tab behavior. Turns on Templater's device-local "Trigger on file creation" when it is unset, so Cmd+N and other new notes get the vault's folder template (_templates/new_note.md). Only the BLOCKS chips in bob-ledger-tools use nav `api.blocks` v1, for ＋ and hover ×. The nav api gains an additive `openReferencePdf(path)` member (Promise of `{ok, reason?}`; the api `version` is unchanged) so the bob-ledger-tools Reading Board can hand a reference PDF to Highlights without vault writes. `Z` (mapped in the vault vimrc) or the "Zoom image on cursor line" command opens the image on the cursor line — an embed, image link, or Markdown image — in a read-only full-window viewer with keyboard and mouse zoom and pan; it never writes the vault, and native image clicks are unchanged. Task relations use 🪢 LINKS and generated LINKED FROM rows; nav api.relations v1 opens either stage and removes live links. The Task Card offers Links to (l) and Linked from (⇧L), with Ctrl+Shift+L and Ctrl+Shift+Alt+L commands. CURRENT shows existing links or sources, Enter applies or removes, Shift+Enter edits a relation label, `~` in the filter flips direction, and Ctrl+D clears all outgoing Links to relations while refusing generated Linked from rows. Counted Ctrl+Shift+L applies one target to every selected source; reverse counted links are refused. Alt+P applies the Task Card recommendation in one key, stays hidden for immediate rolls and decays, and waits on the visible card before cancellation. `]s` landings end their toast with the `Alt+P` roll preview from nav `api.quickRoll` v1. Pomodoro move and rename pickers offer recent themes with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. `]w` / `[w` (mapped in the vault vimrc) walk Pending, Next, and Ready tasks off today's plan — the dash PENDING/NEXT/READY sections — with a lane-colored toast and walk rail; `]W` / `[W` jump to the first task of the next / previous lane, cycling. |
+| Description | Ctrl+Shift+P always opens the Task Card, a focused first screen with exact P-level previews. Ctrl+Shift+B is Ctrl+Shift+P then `b`: it opens the Task Card's Depends on stage for the task, a Task Link's linked task, or a counted `N<Ctrl+Shift+B>` batch; Esc, q, or Ctrl+[ close it without writing, and its More section opens a property's value stage. Ctrl+Shift+Alt+B is Ctrl+Shift+P then `⇧B`: it opens the Blocks stage for a task or Task Link, supports counted `N<Ctrl+Shift+Alt+B>`, and works from Depends-On and BLOCKS lines, where Ctrl+Shift+P on a BLOCKS line also opens the owner’s stage directly. On an inbox task every non-closing answer asks where it goes before writing and moves there. Open and manage related notes, tabs, and task properties, including priority levels that roll scheduled dates. Ctrl+Enter on the card takes the recommended roll, decay, or cancel from the previewed ladder, including counted and Task Link batches. Scheduling a date opens one combined Reason and Work summary review; a Pending or Next task can record an optional Work Log summary as a dated entry under a WORK LOG child. A Cancel action closes tasks as Cancelled with an optional reason kept in a first-child Cancel Log. Alt+F and Ctrl+Alt+F prompt Pending tasks for an optional Work summary. A single counted Ready ROTTEN or scheduled TICKLER keep asks why, then stamps and writes one Rotten Log entry in one undo; blank logs no reason given, and Esc cancels. Counted N<Alt+F> and Task Link sessions show one combined prompt when Rotten keep reasons or Pending/Next Work summaries apply; Work summary comes first, followed by Keep reason, and one Enter submits both. Each counted keep gets its own entry; at-limit targets still skip unstamped and unlogged. The decay card shows the logged keeps in its header and its Keep swaps the rows for the same in-card reason stage, committing stamp, increment, and entry in one undo; Esc returns to the choices. On a landed RECURRING row both write nothing, show the recurring-tier notice, and stay. Ctrl+Enter on the PRE/POST row the review walk just landed on completes it and advances within the group when another live row remains (nav api v3). `]s` / `[s` away from the current review task first return to it. The Task Card level strip and priority notices render the shared signal-bar priority mark through the bob-ledger-tools api.priorityMarks v1 namespace, falling back to the Lucide signal icons without it. Alt+[ / Alt+] on a Pomodoro Task Link toggles the linked task between Next and In Progress — asking once for an optional Work Log summary when moving back to Next — through the nav api.taskLinkLane v1 namespace. Closing a planned task opens one grouped successor picker when offers exist; nothing starts selected, and the cycler applies only chosen links. The pulled-in summary is shown through nav api.notice v1. Review-row closes append the cycler's additive `successorNotice` line to the walk toast. Journals each counted ]s answer, with its outcome, through the bob-ledger-tools api.stats namespace. Depends-On writes now mirror open dependents into generated 🧱 BLOCKS lines, in the same-note transaction or a checked cross-note follow-up, including counted, marked, Ctrl+D, hand-edit (and undo), conversion, and Ctrl+Shift+M paths. Adding an open prerequisite from Ctrl+Shift+P also removes the newly Blocked task's live links from today's open Pomodoros, deleting an emptied entry. Cmd+Enter on a reading task, Task Link, or managed embed opens its source_pdf in Highlights without vault writes, while other targets retain Obsidian’s new-tab behavior. Turns on Templater's device-local "Trigger on file creation" when it is unset, so Cmd+N and other new notes get the vault's folder template (_templates/new_note.md). Only the BLOCKS chips in bob-ledger-tools use nav `api.blocks` v1, for ＋ and hover ×. The nav api gains an additive `openReferencePdf(path)` member (Promise of `{ok, reason?}`; the api `version` is unchanged) so the bob-ledger-tools Reading Board can hand a reference PDF to Highlights without vault writes. `Z` (mapped in the vault vimrc) or the "Zoom image on cursor line" command opens the image on the cursor line — an embed, image link, or Markdown image — in a read-only full-window viewer with keyboard and mouse zoom and pan; it never writes the vault, and native image clicks are unchanged. Task relations use 🪢 LINKS and generated LINKED FROM rows; nav api.relations v1 opens either stage and removes live links. The Task Card offers Links to (l) and Linked from (⇧L), with Ctrl+Shift+L and Ctrl+Shift+Alt+L commands. CURRENT shows existing links or sources, Enter applies or removes, Shift+Enter edits a relation label, `~` in the filter flips direction, and Ctrl+D clears all outgoing Links to relations while refusing generated Linked from rows. Counted Ctrl+Shift+L applies one target to every selected source; reverse counted links are refused. Alt+P applies the Task Card recommendation in one key, stays hidden for immediate rolls and decays, and waits on the visible card before cancellation. `]s` landings end their toast with the `Alt+P` roll preview from nav `api.quickRoll` v1. Pomodoro move and rename pickers offer recent themes with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. `]w` / `[w` (mapped in the vault vimrc) walk Pending, Next, and Ready tasks off today's plan — the dash PENDING/NEXT/READY sections — with a lane-colored toast and walk rail; `]W` / `[W` jump to the first task of the next / previous lane, cycling. [n` / `]n` (mapped in the vault vimrc) open the note's previous / next labeled link; `]]` / `[[` repeat the last bracket walk — `]s` review, `]w` lanes, or `]n` links — forward / backward, remembered per device. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -64,6 +64,8 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Refresh task freshness (confirm it still looks right) | `refresh-task-freshness` | Alt+F |
 | Refresh task freshness and jump to the next due task | `refresh-task-freshness-and-advance` | Ctrl+Alt+F |
 | Rename current file | `rename-current-file` | — |
+| Repeat last bracket walk backward ([s, [w, or [n) | `repeat-prev-bracket-walk` | — |
+| Repeat last bracket walk forward (]s, ]w, or ]n) | `repeat-next-bracket-walk` | — |
 | Task card (set properties) | `set-bullet-property` | — |
 | Task card: Blocked by (Depends on) | `task-card-depends-on` | Ctrl+Shift+B |
 | Task card: Blocks (reverse Depends on) | `task-card-blocks` | Ctrl+Shift+Alt+B |
@@ -262,6 +264,8 @@ a notice. `N]s` / `N[s` jump N review-queue entries in one landing. `]s` /
 with a `Back to current review task` toast; `<C-o>` goes back, and the next
 press steps from the task. `[S` / `]S` jump to the first/last queue entries
 without wrapping.
+After any review-walk key or command, `]]` / `[[` repeat the `]s` / `[s` walk
+forward / backward.
 
 Before a same-pane note switch, the plugin saves the active note and checks its
 disk text against the editor. A failed save or mismatch keeps the current note
@@ -365,6 +369,44 @@ with a `TODAY m` chip; with none of those tasks at all it reads `No
 Pending, Next, or Ready tasks`. The walk never writes and never sets or
 advances the `]s` review walk.
 
+`]]` / `[[` also repeat the `]w` / `[w` walk after any lane-walk key or
+command, forward / backward.
+
+## Bracket repeat
+
+`]]` repeats the last bracket-walk family forward, and `[[` repeats it
+backward. The repeat key owns the direction, regardless of which way the last
+walk moved. The active type is:
+
+| Type | Keys that set it | Commands and other surfaces |
+| --- | --- | --- |
+| `s` | `[s` / `]s`, `[S` / `]S` | `jump-to-next/prev/first/last-due-task`; `Ctrl+Alt+J/K`; the Ledger Tools review footer |
+| `w` | `[w` / `]w`, `[W` / `]W` | `jump-to-next/prev-lane-task`, `jump-to-next/prev-lane` |
+| `n` | `[n` / `]n` | `open-prev-link`, `open-next-link` |
+
+The family command records its type whenever it runs, including from the
+command palette, bob command mode, and other callers. The review footer runs
+`jump-to-next-due-task`, so it selects `s` too. Uppercase `[S` / `]S` and
+`[W` / `]W` belong to their lowercase families.
+
+For example, press `]s` once to start the morning review walk, then use `]]`
+to reach the current or next review task and `[[` to step backward. `N]]` and
+`N[[` retain count parity with the selected walk (`N]s` / `N[s`, or `N]w` /
+`N[w`). Repeat delegates synchronously, leaving the pending Vim count for the
+walk to consume. Link type `n` follows `]n` / `[n` behavior and ignores counts.
+
+The selected type is stored in device-local Obsidian local storage. It is per
+device and per vault, and survives plugin reloads and Obsidian restarts. With
+no saved or used type, either repeat key shows
+`Nothing to repeat yet — press ]s, ]w, or ]n first`. A repeat adds no landing
+toast; the walk's own toast identifies the action.
+
+Only the family command callbacks record a type. Direct internal advances,
+stale retries, the decay card, `Ctrl+Alt+F`, PRE/POST `Ctrl+Enter`,
+`jump-to-next-open-task`, section-header commands, and `[<Space>` / `]<Space>`
+blank-line insertion do not record one. `]]` / `[[` do not change the selected
+type and never write notes, stats-journal events, or freshness stamps.
+
 ## Relation-label stage
 
 The Links and Linked-from relation-label stage adds a `⊘ cancels` cue to
@@ -406,6 +448,9 @@ Three keyboard layers are in play, and they are not the same thing:
   to `bob-navigation-hotkeys:zoom-image-on-line`, and the vault binds
   `bob-navigation-hotkeys:open-reference-pdf-in-highlights` to `Meta+Enter`;
   that binding is custom vault configuration, not a registered plugin default.
+  The vimrc maps `[n` / `]n` to `open-prev-link` / `open-next-link` and `[[` /
+  `]]` to the two repeat commands; these are vault configuration, not registered
+  defaults.
   A registered default would lose to Obsidian's built-in `Mod+Enter`. Do not
   re-record the binding in Obsidian Settings on a Mac: Obsidian may save `Mod`,
   which would claim `Ctrl+Enter` on other platforms.

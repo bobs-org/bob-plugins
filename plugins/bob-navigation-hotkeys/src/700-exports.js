@@ -958,4 +958,8 @@ module.exports.helpers = {
   renderLaneWalkNoticeFragment,
   renderLaneWalkEmptyFragment,
   showLaneWalkNotice,
+  normalizeBracketRepeatType,
+  planBracketRepeat,
+  BRACKET_REPEAT_STORAGE_KEY,
+  BRACKET_REPEAT_EMPTY_NOTICE,
 };

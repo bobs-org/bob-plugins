@@ -13,6 +13,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.alternateFilePath = null;
     this.filePositions = new Map();
     this.vimJumpHistory = createVimJumpHistory();
+    this.bracketRepeatType = undefined;
     this.vimJumpOperationToken = 0;
     this.vimJumpHistoryChain = Promise.resolve();
     this.vimJumpBridgeVim = null;
@@ -122,13 +123,31 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.addCommand({
       id: "open-next-link",
       name: "Open next link",
-      callback: () => this.openLabeledBodyLink("next"),
+      callback: () => {
+        this.rememberBracketRepeatType("n");
+        return this.openLabeledBodyLink("next");
+      },
     });
 
     this.addCommand({
       id: "open-prev-link",
       name: "Open previous link",
-      callback: () => this.openLabeledBodyLink("prev"),
+      callback: () => {
+        this.rememberBracketRepeatType("n");
+        return this.openLabeledBodyLink("prev");
+      },
+    });
+
+    this.addCommand({
+      id: "repeat-next-bracket-walk",
+      name: "Repeat last bracket walk forward (]s, ]w, or ]n)",
+      callback: () => this.repeatBracketWalk(1),
+    });
+
+    this.addCommand({
+      id: "repeat-prev-bracket-walk",
+      name: "Repeat last bracket walk backward ([s, [w, or [n)",
+      callback: () => this.repeatBracketWalk(-1),
     });
 
     this.addCommand({
@@ -202,50 +221,74 @@ class BobNavigationHotkeysPlugin extends Plugin {
       id: "jump-to-next-due-task",
       name: "Jump to next task due for freshness review",
       hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "J" }],
-      callback: () => this.jumpToDueTask(1),
+      callback: () => {
+        this.rememberBracketRepeatType("s");
+        return this.jumpToDueTask(1);
+      },
     });
 
     this.addCommand({
       id: "jump-to-prev-due-task",
       name: "Jump to previous task due for freshness review",
       hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "K" }],
-      callback: () => this.jumpToDueTask(-1),
+      callback: () => {
+        this.rememberBracketRepeatType("s");
+        return this.jumpToDueTask(-1);
+      },
     });
 
     this.addCommand({
       id: "jump-to-first-due-task",
       name: "Jump to first task due for freshness review",
-      callback: () => this.jumpToDueTask(1, { endpoint: "first" }),
+      callback: () => {
+        this.rememberBracketRepeatType("s");
+        return this.jumpToDueTask(1, { endpoint: "first" });
+      },
     });
 
     this.addCommand({
       id: "jump-to-last-due-task",
       name: "Jump to last task due for freshness review",
-      callback: () => this.jumpToDueTask(-1, { endpoint: "last" }),
+      callback: () => {
+        this.rememberBracketRepeatType("s");
+        return this.jumpToDueTask(-1, { endpoint: "last" });
+      },
     });
 
     this.addCommand({
       id: "jump-to-next-lane-task",
       name: "Jump to next Pending, Next, or Ready task off today's plan",
-      callback: () => this.jumpToLaneTask(1),
+      callback: () => {
+        this.rememberBracketRepeatType("w");
+        return this.jumpToLaneTask(1);
+      },
     });
 
     this.addCommand({
       id: "jump-to-prev-lane-task",
       name: "Jump to previous Pending, Next, or Ready task off today's plan",
-      callback: () => this.jumpToLaneTask(-1),
+      callback: () => {
+        this.rememberBracketRepeatType("w");
+        return this.jumpToLaneTask(-1);
+      },
     });
 
     this.addCommand({
       id: "jump-to-next-lane",
       name: "Jump to the first task of the next lane off today's plan",
-      callback: () => this.jumpToLaneTask(1, { laneJump: true }),
+      callback: () => {
+        this.rememberBracketRepeatType("w");
+        return this.jumpToLaneTask(1, { laneJump: true });
+      },
     });
 
     this.addCommand({
       id: "jump-to-prev-lane",
       name: "Jump to the first task of the previous lane off today's plan",
-      callback: () => this.jumpToLaneTask(-1, { laneJump: true }),
+      callback: () => {
+        this.rememberBracketRepeatType("w");
+        return this.jumpToLaneTask(-1, { laneJump: true });
+      },
     });
 
     this.addCommand({

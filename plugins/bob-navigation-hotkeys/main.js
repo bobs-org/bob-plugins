@@ -59561,6 +59561,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.alternateFilePath = null;
     this.filePositions = new Map();
     this.vimJumpHistory = createVimJumpHistory();
+    this.bracketRepeatType = undefined;
     this.vimJumpOperationToken = 0;
     this.vimJumpHistoryChain = Promise.resolve();
     this.vimJumpBridgeVim = null;
@@ -59670,13 +59671,31 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.addCommand({
       id: "open-next-link",
       name: "Open next link",
-      callback: () => this.openLabeledBodyLink("next"),
+      callback: () => {
+        this.rememberBracketRepeatType("n");
+        return this.openLabeledBodyLink("next");
+      },
     });
 
     this.addCommand({
       id: "open-prev-link",
       name: "Open previous link",
-      callback: () => this.openLabeledBodyLink("prev"),
+      callback: () => {
+        this.rememberBracketRepeatType("n");
+        return this.openLabeledBodyLink("prev");
+      },
+    });
+
+    this.addCommand({
+      id: "repeat-next-bracket-walk",
+      name: "Repeat last bracket walk forward (]s, ]w, or ]n)",
+      callback: () => this.repeatBracketWalk(1),
+    });
+
+    this.addCommand({
+      id: "repeat-prev-bracket-walk",
+      name: "Repeat last bracket walk backward ([s, [w, or [n)",
+      callback: () => this.repeatBracketWalk(-1),
     });
 
     this.addCommand({
@@ -59750,50 +59769,74 @@ class BobNavigationHotkeysPlugin extends Plugin {
       id: "jump-to-next-due-task",
       name: "Jump to next task due for freshness review",
       hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "J" }],
-      callback: () => this.jumpToDueTask(1),
+      callback: () => {
+        this.rememberBracketRepeatType("s");
+        return this.jumpToDueTask(1);
+      },
     });
 
     this.addCommand({
       id: "jump-to-prev-due-task",
       name: "Jump to previous task due for freshness review",
       hotkeys: [{ modifiers: ["Ctrl", "Alt"], key: "K" }],
-      callback: () => this.jumpToDueTask(-1),
+      callback: () => {
+        this.rememberBracketRepeatType("s");
+        return this.jumpToDueTask(-1);
+      },
     });
 
     this.addCommand({
       id: "jump-to-first-due-task",
       name: "Jump to first task due for freshness review",
-      callback: () => this.jumpToDueTask(1, { endpoint: "first" }),
+      callback: () => {
+        this.rememberBracketRepeatType("s");
+        return this.jumpToDueTask(1, { endpoint: "first" });
+      },
     });
 
     this.addCommand({
       id: "jump-to-last-due-task",
       name: "Jump to last task due for freshness review",
-      callback: () => this.jumpToDueTask(-1, { endpoint: "last" }),
+      callback: () => {
+        this.rememberBracketRepeatType("s");
+        return this.jumpToDueTask(-1, { endpoint: "last" });
+      },
     });
 
     this.addCommand({
       id: "jump-to-next-lane-task",
       name: "Jump to next Pending, Next, or Ready task off today's plan",
-      callback: () => this.jumpToLaneTask(1),
+      callback: () => {
+        this.rememberBracketRepeatType("w");
+        return this.jumpToLaneTask(1);
+      },
     });
 
     this.addCommand({
       id: "jump-to-prev-lane-task",
       name: "Jump to previous Pending, Next, or Ready task off today's plan",
-      callback: () => this.jumpToLaneTask(-1),
+      callback: () => {
+        this.rememberBracketRepeatType("w");
+        return this.jumpToLaneTask(-1);
+      },
     });
 
     this.addCommand({
       id: "jump-to-next-lane",
       name: "Jump to the first task of the next lane off today's plan",
-      callback: () => this.jumpToLaneTask(1, { laneJump: true }),
+      callback: () => {
+        this.rememberBracketRepeatType("w");
+        return this.jumpToLaneTask(1, { laneJump: true });
+      },
     });
 
     this.addCommand({
       id: "jump-to-prev-lane",
       name: "Jump to the first task of the previous lane off today's plan",
-      callback: () => this.jumpToLaneTask(-1, { laneJump: true }),
+      callback: () => {
+        this.rememberBracketRepeatType("w");
+        return this.jumpToLaneTask(-1, { laneJump: true });
+      },
     });
 
     this.addCommand({
@@ -69394,6 +69437,83 @@ class BobNavigationHotkeysReviewJournalMixin {
     } catch (error) {
       // The task write remains successful even if a card row cannot be keyed.
     }
+  }
+}
+// ---- src/546-plugin-bracket-repeat.js ----
+// `]]` / `[[` repeat the last bracket-walk family command used in this vault.
+const BRACKET_REPEAT_STORAGE_KEY = "bob-navigation-hotkeys-bracket-repeat";
+const BRACKET_REPEAT_EMPTY_NOTICE =
+  "Nothing to repeat yet — press ]s, ]w, or ]n first";
+
+function normalizeBracketRepeatType(value) {
+  return value === "s" || value === "w" || value === "n" ? value : null;
+}
+
+const BRACKET_REPEAT_PLANS = Object.freeze({
+  s: Object.freeze({
+    forward: Object.freeze({ method: "jumpToDueTask", args: Object.freeze([1]) }),
+    backward: Object.freeze({ method: "jumpToDueTask", args: Object.freeze([-1]) }),
+  }),
+  w: Object.freeze({
+    forward: Object.freeze({ method: "jumpToLaneTask", args: Object.freeze([1]) }),
+    backward: Object.freeze({ method: "jumpToLaneTask", args: Object.freeze([-1]) }),
+  }),
+  n: Object.freeze({
+    forward: Object.freeze({ method: "openLabeledBodyLink", args: Object.freeze(["next"]) }),
+    backward: Object.freeze({ method: "openLabeledBodyLink", args: Object.freeze(["prev"]) }),
+  }),
+});
+
+function planBracketRepeat(type, direction) {
+  const normalized = normalizeBracketRepeatType(type);
+  if (normalized === null) {
+    return null;
+  }
+  return BRACKET_REPEAT_PLANS[normalized][direction < 0 ? "backward" : "forward"];
+}
+
+class BobNavigationHotkeysBracketRepeatMixin {
+  rememberBracketRepeatType(type) {
+    const normalized = normalizeBracketRepeatType(type);
+    if (normalized === null) {
+      return null;
+    }
+    if (this.bracketRepeatType !== normalized) {
+      this.bracketRepeatType = normalized;
+      try {
+        if (this.app && typeof this.app.saveLocalStorage === "function") {
+          this.app.saveLocalStorage(BRACKET_REPEAT_STORAGE_KEY, normalized);
+        }
+      } catch (error) {
+        // Local storage is device-local convenience; memory remains authoritative.
+      }
+    }
+    return normalized;
+  }
+
+  readBracketRepeatType() {
+    if (this.bracketRepeatType !== undefined) {
+      return normalizeBracketRepeatType(this.bracketRepeatType);
+    }
+    let stored = null;
+    try {
+      if (this.app && typeof this.app.loadLocalStorage === "function") {
+        stored = this.app.loadLocalStorage(BRACKET_REPEAT_STORAGE_KEY);
+      }
+    } catch (error) {
+      // Fall back to in-memory state without surfacing storage errors.
+    }
+    this.bracketRepeatType = normalizeBracketRepeatType(stored);
+    return this.bracketRepeatType;
+  }
+
+  repeatBracketWalk(direction) {
+    const plan = planBracketRepeat(this.readBracketRepeatType(), direction);
+    if (!plan) {
+      new Notice(BRACKET_REPEAT_EMPTY_NOTICE);
+      return false;
+    }
+    return this[plan.method](...plan.args);
   }
 }
 // ---- src/550-plugin-cancel-and-counted-property.js ----
@@ -88010,6 +88130,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysReviewAdvanceMixin,
   BobNavigationHotkeysWalkLandingMixin,
   BobNavigationHotkeysLaneWalkMixin,
+  BobNavigationHotkeysBracketRepeatMixin,
   BobNavigationHotkeysSuccessorPickerMixin,
   BobNavigationHotkeysReviewMoveMixin,
   BobNavigationHotkeysReviewReturnMixin,
@@ -89011,4 +89132,8 @@ module.exports.helpers = {
   renderLaneWalkNoticeFragment,
   renderLaneWalkEmptyFragment,
   showLaneWalkNotice,
+  normalizeBracketRepeatType,
+  planBracketRepeat,
+  BRACKET_REPEAT_STORAGE_KEY,
+  BRACKET_REPEAT_EMPTY_NOTICE,
 };

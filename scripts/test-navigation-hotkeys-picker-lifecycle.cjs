@@ -333,6 +333,43 @@ test("commitPomodoroBulletMoveSession applies one guarded same-file transaction"
   assert.equal(notices.at(-1), "Moved 1 bullet to VERIFY");
 });
 
+test("Pomodoro move notice identifies a newly created unconfigured theme", async () => {
+  notices.length = 0;
+  const themes = {
+    version: 1,
+    snapshot: () => ({ configured_themes: [{ key: "build", name: "BUILD", color: "yellow" }] }),
+    isConfigured: () => false,
+    componentsOf: (name) => String(name || "").split("+").map((raw) => ({ raw: raw.trim(), key: raw.trim().toLowerCase() })),
+  };
+  const { editor, plugin, sourceFile, view } = createPomodoroMovePickerHarness({
+    cursor: { line: 5, ch: 999 },
+    app: { plugins: { plugins: { "bob-ledger-tools": { api: { themes } } } } },
+  });
+  const sourceContent = editor.getValue();
+  const discovery = helpers.discoverMovablePomodoroBulletTargets(sourceContent, 5, 0);
+  const session = Object.freeze({
+    sourceFile,
+    sourcePath: sourceFile.path,
+    sourceView: view,
+    editor,
+    sourceContent,
+    cursor: Object.freeze({ line: 5, ch: 999 }),
+    scroll: null,
+    countExplicit: false,
+    discovery,
+    entries: discovery.context.entries,
+    sourceEntry: discovery.context.entry,
+  });
+  assert.equal(
+    await plugin.commitPomodoroBulletMoveSession(session, { kind: "new", name: "SNACK" }),
+    true,
+  );
+  assert.equal(
+    notices.at(-1),
+    "Moved 1 bullet to new Pomodoro SNACK · SNACK isn't one of your themes",
+  );
+});
+
 test("Pomodoro bullet move picker confirms = through the actual picker callback", async () => {
   notices.length = 0;
   const content = [

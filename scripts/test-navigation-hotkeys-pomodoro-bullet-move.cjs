@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const fs = require("node:fs");
 const {
   helpers,
   pomodoroFixtureLines,
@@ -28,6 +29,100 @@ test("planPomodoroBulletMove appends one bullet last in an existing open Pomodor
   ]);
   assert.equal(afterLines[11], "\t- [[bob#^move-pomodoros]]");
   assert.equal(plan.firstMovedLine, 11);
+});
+
+test("configured theme menu vectors scope Recent, preserve config order, and flag new names", () => {
+  const vectors = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, "../plugins/bob-ledger-tools/scripts/fixtures/pomodoro_themes/vectors.json"),
+      "utf8",
+    ),
+  ).menu.filter((item) => Array.isArray(item.configured));
+  assert.equal(vectors.length, 3);
+  for (const item of vectors) {
+    const configured = item.configured.map((theme) => ({
+      key: theme.name.toLowerCase(),
+      name: theme.name,
+      color: theme.color === "auto" ? null : theme.color,
+    }));
+    const hidden = new Set((item.hidden || []).map((name) => name.toLowerCase()));
+    const used = [];
+    for (const [date, names] of Object.entries(item.history || {})) {
+      for (const name of names) {
+        const key = name.toLowerCase();
+        const prior = used.find((theme) => theme.key === key);
+        if (prior) {
+          prior.last_used = date;
+        } else {
+          used.push({ key, name, last_used: date, days_used: 1, hidden: hidden.has(key) });
+        }
+      }
+    }
+    const rows = configured.map((theme) => {
+      const known = used.find((row) => row.key === theme.key);
+      return known
+        ? { ...known, configured: true }
+        : {
+            ...theme,
+            hue: theme.color,
+            hue_source: theme.color ? "config" : "hash",
+            configured: true,
+            last_used: "",
+            days_used: 0,
+            hidden: hidden.has(theme.key),
+          };
+    });
+    const themesApi = {
+      version: 1,
+      available: () => ({ available: true }),
+      snapshot: () => ({ themes: rows, configured_themes: configured }),
+      isConfigured: (key) => configured.some((theme) => theme.key === key),
+      componentsOf: (name) => String(name || "").split("+").map((raw) => raw.trim()).filter(Boolean).map((raw) => ({ raw, key: raw.toLowerCase().replace(/\s+/g, " ") })),
+      historyRows: ({ exclusions = new Set() } = {}) => rows
+        .filter((theme) => !theme.hidden && !exclusions.has(theme.key)),
+      similarTo: () => ["BUILD", "SNACK"],
+      hueFor: (key) => ({ hue: key === "build" ? "yellow" : "violet", hue_source: "config" }),
+    };
+    const query = item.draft.slice(2).trim();
+    const baseRows = query
+      ? [{ kind: "new", key: `new-${query}`, name: query.toUpperCase(), selectable: true }]
+      : [];
+    const result = helpers.withNavigationPomodoroThemeRows(
+      [],
+      query,
+      baseRows,
+      { themesApi },
+    );
+    const actual = result.map((row) => row.kind === "recent"
+      ? { name: row.name, replacement: row.theme.key, origin: "history" }
+      : { name: row.name, replacement: row.name.toLowerCase(), creates_pomodoro: true });
+    assert.deepEqual(actual, item.expected, item.name);
+    if (item.name === "configured-unconfigured-create-row") {
+      const create = result.find((row) => row.kind === "new");
+      assert.equal(create.unconfigured, true);
+      assert.deepEqual(create.similarTo, ["BUILD"]);
+    }
+  }
+});
+
+test("configured empty-query picker shows up to twelve configured themes", () => {
+  const configured = Array.from({ length: 14 }, (_, index) => ({
+    key: `theme${index}`,
+    name: `THEME${index}`,
+    color: null,
+  }));
+  const themesApi = {
+    version: 1,
+    available: () => ({ available: true }),
+    snapshot: () => ({ themes: configured, configured_themes: configured }),
+    isConfigured: () => true,
+    componentsOf: (name) => [{ raw: name, key: name.toLowerCase() }],
+    historyRows: () => configured,
+    similarTo: () => [],
+    hueFor: () => ({ hue: null, hue_source: "hash" }),
+  };
+  const rows = helpers.withNavigationPomodoroThemeRows([], "", [], { themesApi });
+  assert.equal(rows.filter((row) => row.kind === "recent").length, 12);
 });
 
 test("planPomodoroBulletMove deletes the source when a counted move consumes every sibling, including a nested subtree", () => {

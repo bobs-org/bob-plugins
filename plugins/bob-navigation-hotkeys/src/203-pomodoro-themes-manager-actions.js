@@ -7,10 +7,22 @@ class PomodoroThemeActionModal extends FilteredPickerModal {
     const theme = themeRow && themeRow.theme ? themeRow.theme : null;
     const name = theme && theme.name ? theme.name : "theme";
     const hidden = theme && theme.hidden === true;
+    const configColor = theme && theme.hue_source === "config";
     super(app, {
       items: [
         { kind: "action", key: "rename", title: `Rename ${name}`, meta: "Previewed one-commit rename (r)" },
-        { kind: "action", key: "color", title: `Pin color for ${name}`, meta: "8 hues plus Auto (c)" },
+        {
+          kind: "action",
+          key: "color",
+          title: `Pin color for ${name}`,
+          meta: configColor
+            ? "Color set in ~/.config/bob/config.yml"
+            : "8 hues plus Auto (c)",
+          disabled: configColor,
+          tooltip: configColor
+            ? "Color set in ~/.config/bob/config.yml"
+            : "",
+        },
         { kind: "action", key: "hide", title: hidden ? `Unhide ${name}` : `Hide ${name}`, meta: "Recent suggestions only (h)" },
         { kind: "action", key: "occurrences", title: `Show occurrences of ${name}`, meta: "Daily notes, Enter opens (o)" },
       ],
@@ -27,17 +39,28 @@ class PomodoroThemeActionModal extends FilteredPickerModal {
       ],
       filterItem: (row, query) => !query || String(row.title || "").toLowerCase().includes(query),
       renderItem: (row, rowEl, query) => {
-        addPickerRowClasses(rowEl, ["bob-cnp-pomodoro-row", "is-action"]);
+        addPickerRowClasses(rowEl, [
+          "bob-cnp-pomodoro-row",
+          "is-action",
+          row.disabled ? "is-disabled" : "",
+        ]);
+        if (row.disabled && typeof rowEl.setAttribute === "function") {
+          rowEl.setAttribute("aria-disabled", "true");
+          rowEl.setAttribute("title", row.tooltip || row.meta || "");
+        }
         const iconEl = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
         applyIcon(iconEl, row.key === "rename" ? "pencil" : row.key === "color" ? "palette" : row.key === "hide" ? "eye-off" : "search");
         const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
         const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
         appendHighlighted(titleEl, row.title, query);
         const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
+        if (row.disabled && typeof pathEl.setAttribute === "function") {
+          pathEl.setAttribute("title", row.tooltip || row.meta || "");
+        }
         appendHighlighted(pathEl, row.meta, query);
       },
-      closeBeforeOpenItem: true,
-      openItem: (row) => this.runAction(row),
+      closeBeforeOpenItem: false,
+      openItem: (row) => row && row.disabled ? false : this.runAction(row),
     });
     this.manager = manager;
     this.themeRow = themeRow;
@@ -66,6 +89,9 @@ class PomodoroThemeActionModal extends FilteredPickerModal {
 
   runAction(row) {
     if (!row || !this.manager) {
+      return false;
+    }
+    if (row.disabled) {
       return false;
     }
     if (row.key === "rename") {

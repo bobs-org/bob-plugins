@@ -791,6 +791,12 @@
   background-color: color-mix(in srgb, var(--interactive-accent) 7%, transparent);
 }
 
+.bid-ppk-pill.is-warning {
+  color: var(--text-warning, var(--color-orange));
+  border: 1px solid color-mix(in srgb, var(--text-warning, var(--color-orange)) 70%, transparent);
+  background-color: color-mix(in srgb, var(--text-warning, var(--color-orange)) 8%, transparent);
+}
+
 .bid-ppk-theme-swatches {
   display: inline-flex;
   align-items: center;

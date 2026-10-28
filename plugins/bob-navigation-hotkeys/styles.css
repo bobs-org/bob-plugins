@@ -352,6 +352,12 @@
   background-color: color-mix(in srgb, var(--interactive-accent) 7%, transparent);
 }
 
+.bob-cnp-row-status.is-warning {
+  color: var(--text-warning, var(--color-orange));
+  border-color: color-mix(in srgb, var(--text-warning, var(--color-orange)) 70%, transparent);
+  background-color: color-mix(in srgb, var(--text-warning, var(--color-orange)) 8%, transparent);
+}
+
 .bob-cnp-theme-swatches {
   display: inline-flex;
   align-items: center;
@@ -382,6 +388,11 @@
 /* Pomodoro themes manager rows: hint, theme, action, color, occurrence. */
 .bob-cnp-pomodoro-row.is-hint .bob-cnp-row-title {
   font-style: italic;
+}
+
+.bob-cnp-pomodoro-row.is-disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .bob-cnp-pomodoro-row.is-theme.is-hidden-theme .bob-cnp-row-title {

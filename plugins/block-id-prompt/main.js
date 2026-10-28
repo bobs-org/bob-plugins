@@ -6038,6 +6038,44 @@ function blockPomodoroThemeKeysInToday(api, entries) {
   return keys;
 }
 
+function blockPomodoroThemeConfiguredRows(api) {
+  try {
+    const report = api && typeof api.snapshot === "function" ? api.snapshot() : null;
+    return Array.isArray(report && report.configured_themes)
+      ? report.configured_themes
+      : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function blockPomodoroThemeInVocabulary(api, key) {
+  const rows = blockPomodoroThemeConfiguredRows(api);
+  return rows ? rows.some((theme) => theme && theme.key === key) : null;
+}
+
+function blockPomodoroThemeUnconfiguredNames(api, name) {
+  try {
+    const seen = new Set();
+    return blockPomodoroThemeComponents(api, name).filter((component) => {
+      if (seen.has(component.key)) {
+        return false;
+      }
+      seen.add(component.key);
+      if (api && typeof api.isConfigured === "function") {
+        return api.isConfigured(component.key) === false;
+      }
+      return blockPomodoroThemeInVocabulary(api, component.key) === false;
+    }).map((component) => component.raw);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function blockPomodoroThemeUnconfigured(api, name) {
+  return blockPomodoroThemeUnconfiguredNames(api, name).length > 0;
+}
+
 function blockPomodoroThemeCompareRecent(left, right) {
   const leftDate = String(left && left.last_used || "");
   const rightDate = String(right && right.last_used || "");
@@ -6087,7 +6125,14 @@ function blockPomodoroThemeHistory(api, query, exclusions, hiddenRows) {
     return [];
   }
   const trimmed = String(query || "").trim();
-  const limit = trimmed ? 12 : 5;
+  const configuredRows = blockPomodoroThemeConfiguredRows(api);
+  const configuredOrder = configuredRows
+    ? new Map(configuredRows.map((theme, index) => [theme.key, index]))
+    : null;
+  const configuredKeys = configuredRows
+    ? new Set(configuredRows.map((theme) => theme.key))
+    : null;
+  const limit = trimmed || configuredRows ? 12 : 5;
   let visible = [];
   try {
     visible = api.historyRows({
@@ -6100,13 +6145,26 @@ function blockPomodoroThemeHistory(api, query, exclusions, hiddenRows) {
   }
   const byKey = new Map();
   for (const theme of Array.isArray(visible) ? visible : []) {
-    if (theme && theme.key && theme.name && !exclusions.has(theme.key)) {
-      byKey.set(theme.key, theme);
+    if (
+      theme && theme.key && theme.name && !exclusions.has(theme.key) &&
+      (!configuredKeys || configuredKeys.has(theme.key)) &&
+      (!configuredRows || blockPomodoroThemeMatchesQuery(theme, trimmed))
+    ) {
+      byKey.set(theme.key, {
+        ...theme,
+        ...(configuredOrder && configuredOrder.has(theme.key)
+          ? { configured_order: configuredOrder.get(theme.key) }
+          : {}),
+      });
     }
   }
   if (hiddenRows instanceof Map) {
     for (const [key, theme] of hiddenRows) {
-      if (theme && theme.name && !exclusions.has(key) && blockPomodoroThemeMatchesQuery(theme, trimmed)) {
+      if (
+        theme && theme.name && !exclusions.has(key) &&
+        (!configuredKeys || configuredKeys.has(key)) &&
+        blockPomodoroThemeMatchesQuery(theme, trimmed)
+      ) {
         byKey.set(key, { ...theme, hidden: true });
       }
     }
@@ -6114,7 +6172,17 @@ function blockPomodoroThemeHistory(api, query, exclusions, hiddenRows) {
   return [...byKey.values()]
     .sort((left, right) => {
       const tier = blockPomodoroThemeHistoryTier(left, trimmed) - blockPomodoroThemeHistoryTier(right, trimmed);
-      return tier || blockPomodoroThemeCompareRecent(left, right);
+      if (tier) {
+        return tier;
+      }
+      if (
+        !left.last_used && !right.last_used &&
+        Number.isInteger(left.configured_order) &&
+        Number.isInteger(right.configured_order)
+      ) {
+        return left.configured_order - right.configured_order;
+      }
+      return blockPomodoroThemeCompareRecent(left, right);
     })
     .slice(0, limit);
 }
@@ -6134,11 +6202,20 @@ function blockPomodoroThemeSimilar(api, name) {
     return [];
   }
   const names = new Set();
+  const configuredRows = blockPomodoroThemeConfiguredRows(api);
+  const configuredNames = configuredRows
+    ? new Set(configuredRows.map((theme) => theme && theme.key).filter(Boolean))
+    : null;
   for (const component of blockPomodoroThemeComponents(api, name)) {
     try {
       for (const similar of api.similarTo(component.raw) || []) {
         if (typeof similar === "string" && similar) {
-          names.add(similar);
+          const key = asciiLowercasePomodoroText(
+            similar.replace(/\s+/g, " ").trim(),
+          );
+          if (!configuredNames || configuredNames.has(key)) {
+            names.add(similar);
+          }
         }
       }
     } catch (_error) {
@@ -6172,6 +6249,9 @@ function withPomodoroThemeHistoryRows(model, query, baseRows, selectedIndex, opt
     : "";
   const exactRecent = history.find((theme) => theme.key === candidateKey) || null;
   if (candidate) {
+    if (blockPomodoroThemeUnconfigured(api, candidate.name)) {
+      candidate.unconfigured = true;
+    }
     const similarTo = blockPomodoroThemeSimilar(api, candidate.name);
     if (similarTo.length > 0) {
       candidate.similarTo = similarTo;
@@ -7364,7 +7444,7 @@ class PomodoroLinkPickerModal extends Modal {
     }
 
     if (row.kind === "new") {
-      return `New Pomodoro ${row.name}`;
+      return `${row.unconfigured ? "Not in your themes, " : ""}New Pomodoro ${row.name}`;
     }
 
     return row.message || "";
@@ -7484,6 +7564,13 @@ class PomodoroLinkPickerModal extends Modal {
 
     const rightEl = rowEl.createDiv({ cls: "bid-ppk-row-right" });
     rightEl.createDiv({ cls: "bid-ppk-pill is-new", text: "New" });
+    if (row.unconfigured) {
+      rightEl.createDiv({
+        cls: "bid-ppk-pill is-warning",
+        text: "Not in your themes",
+        attr: { title: "This name isn't in your configured themes" },
+      });
+    }
     if (row.hiddenThemes && row.hiddenThemes.length > 0) {
       rightEl.createDiv({
         cls: "bid-ppk-pill is-hidden-theme",
@@ -11013,8 +11100,17 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       chips.push("logged schedule change");
     }
     const suffix = chips.length ? ` · ${chips.join(" · ")}` : "";
+    const themeWarnings = destination && destination.kind === "created"
+      ? blockPomodoroThemeUnconfiguredNames(
+          getBlockPomodoroThemesApi(this.app),
+          destination.name || destination.title || "",
+        )
+      : [];
+    const themeWarningSuffix = themeWarnings
+      .map((name) => ` · ${name} isn't one of your themes`)
+      .join("");
 
-    return `${base}${suffix}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}`;
+    return `${base}${suffix}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}${themeWarningSuffix}`;
   }
 
   reportPomodoroLinkOutcome(plan, pomodoroPlan) {
@@ -11943,6 +12039,9 @@ module.exports.helpers = {
   buildBlockedTooltip,
   buildPomodoroLinkPickerModel,
   buildPomodoroLinkPickerRows,
+  withPomodoroThemeHistoryRows,
+  blockPomodoroThemeUnconfigured,
+  blockPomodoroThemeUnconfiguredNames,
   buildTaskDependencyIndex,
   canonicalizePomodoroLinkName,
   collectAllOpenPomodoroRanges,

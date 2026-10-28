@@ -209,6 +209,9 @@ function buildPomodoroThemesManagerRows(report, view) {
     if (theme.exempt === true) {
       badges.push("exempt");
     }
+    if (theme.configured === false) {
+      badges.push("not configured");
+    }
     if (reappeared.has(theme.key) || reappeared.has(theme.name)) {
       badges.push("reappeared");
     }
@@ -360,6 +363,7 @@ function renderPomodoroThemesManagerRow(row, rowEl, query, themesApi) {
     "bob-cnp-pomodoro-row",
     "is-theme",
     theme.hidden === true ? "is-hidden-theme" : "",
+    theme.configured === false ? "is-unconfigured-theme" : "",
   ]);
   const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
   const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
@@ -381,6 +385,8 @@ function renderPomodoroThemesManagerRow(row, rowEl, query, themesApi) {
         ? "bob-cnp-row-status is-hidden-theme"
         : badge === "reappeared"
           ? "bob-cnp-row-status is-similar-theme"
+          : badge === "not configured"
+            ? "bob-cnp-row-status is-warning"
           : "bob-cnp-row-status is-recent-theme";
     const label =
       badge === "reappeared"
@@ -393,10 +399,19 @@ function renderPomodoroThemesManagerRow(row, rowEl, query, themesApi) {
     });
   }
   if (theme.hue) {
+    const source = theme.hue_source === "config"
+      ? " · config"
+      : theme.pinned === true
+        ? " · pinned"
+        : "";
     badgesEl.createDiv({
       cls: "bob-cnp-row-status",
-      text: theme.pinned === true ? `${theme.hue} · pinned` : String(theme.hue),
-      attr: { title: `Hue ${theme.hue}${theme.pinned === true ? " (pinned)" : ""}` },
+      text: `${theme.hue}${source}`,
+      attr: {
+        title: theme.hue_source === "config"
+          ? "Color set in ~/.config/bob/config.yml"
+          : `Hue ${theme.hue}${theme.pinned === true ? " (pinned)" : ""}`,
+      },
     });
   }
 }
@@ -557,6 +572,10 @@ class PomodoroThemesManagerModal extends FilteredPickerModal {
 
   openThemeColor(row) {
     if (!row || row.kind !== "theme") {
+      return;
+    }
+    if (row.theme && row.theme.hue_source === "config") {
+      new Notice("Color set in ~/.config/bob/config.yml");
       return;
     }
     new PomodoroThemeColorModal(this.app, this, row.theme).open();

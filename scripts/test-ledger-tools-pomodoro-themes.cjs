@@ -56,7 +56,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
       EditorView: { updateListener: { of: (listener) => ({ listener }) } },
       keymap: { of: (value) => value },
       ViewPlugin: { fromClass: (cls, options) => ({ cls, options }) },
-      Decoration: { none: {}, widget: (spec) => spec },
+      Decoration: { none: {}, mark: (spec) => spec, widget: (spec) => spec },
       WidgetType: class {},
     };
   }
@@ -108,7 +108,7 @@ test("theme vectors: components split and key like bob", () => {
   }
 });
 
-test("theme vectors: hue rule resolves pin, exempt, area, then hash", () => {
+test("theme vectors: hue rule includes configured colors and unconfigured mute", () => {
   assert.ok(fixture.hue.length > 0, "vectors carry hue cases");
   for (const item of fixture.hue) {
     if (item.rust_only) {
@@ -118,6 +118,7 @@ test("theme vectors: hue rule resolves pin, exempt, area, then hash", () => {
       pin: item.pin,
       exempt: item.exempt,
       areas: item.areas,
+      configured: item.configured,
     });
     assert.deepEqual(
       got,
@@ -237,6 +238,73 @@ test("theme decode accepts a schema 1 report and rejects the rest", () => {
   );
 });
 
+test("theme decode keeps configured vocabulary and row flags", () => {
+  const decoded = pomodoroThemesDecodeReport(
+    JSON.stringify({
+      schema_version: 1,
+      counts: { configured: 1 },
+      configured_themes: [{ key: "build", name: "BUILD", color: "yellow" }],
+      themes: [
+        { key: "build", name: "BUILD", hue: "yellow", hue_source: "config", configured: true },
+        { key: "snack", name: "SNACK", hue: null, hue_source: "unconfigured", configured: false },
+      ],
+    }),
+    "",
+  );
+  assert.equal(decoded.ok, true);
+  assert.deepEqual(decoded.report.configured_themes, [
+    { key: "build", name: "BUILD", color: "yellow" },
+  ]);
+  assert.equal(decoded.report.counts.configured, 1);
+  assert.equal(decoded.report.themes[0].hue_source, "config");
+  assert.equal(decoded.report.themes[0].configured, true);
+  assert.equal(decoded.report.themes[1].hue_source, "unconfigured");
+  assert.equal(decoded.report.themes[1].configured, false);
+});
+
+test("themes API reports vocabulary membership and returns null without a configured block", () => {
+  const plugin = new LedgerToolsPlugin({});
+  plugin.pomodoroThemesCache = {
+    report: {
+      ...LedgerToolsPlugin.helpers.pomodoroThemesEmptyReport(),
+      configured_themes: [{ key: "build", name: "BUILD", color: "yellow" }],
+      themes: [
+        { key: "build", name: "BUILD", configured: true },
+        { key: "inventory", name: "INVENTORY", configured: true },
+        { key: "snack", name: "SNACK", configured: false },
+      ],
+    },
+  };
+  assert.equal(plugin.pomodoroThemeIsConfigured("BUILD"), true);
+  assert.equal(plugin.pomodoroThemeIsConfigured("INVENTORY"), true);
+  assert.equal(plugin.pomodoroThemeIsConfigured("SNACK"), false);
+  plugin.pomodoroThemesCache = {
+    report: LedgerToolsPlugin.helpers.pomodoroThemesEmptyReport(),
+  };
+  assert.equal(plugin.pomodoroThemeIsConfigured("SNACK"), null);
+});
+
+test("themes API Recent rows include configured never-used names in config order and omit strays", () => {
+  const plugin = new LedgerToolsPlugin({});
+  plugin.pomodoroThemesCache = {
+    report: {
+      ...LedgerToolsPlugin.helpers.pomodoroThemesEmptyReport(),
+      configured_themes: [
+        { key: "build", name: "BUILD", color: "yellow" },
+        { key: "write", name: "WRITE", color: "violet" },
+      ],
+      themes: [
+        { key: "build", name: "BUILD", hue: "yellow", hue_source: "config", configured: true, hidden: false, last_used: "2026-10-23", days_used: 4 },
+        { key: "snack", name: "SNACK", hue: null, hue_source: "unconfigured", configured: false, hidden: false, last_used: "2026-10-24", days_used: 1 },
+      ],
+    },
+  };
+  const rows = plugin.pomodoroThemeHistoryRows({ query: "", limit: 12 });
+  assert.deepEqual(rows.map((row) => row.name), ["BUILD", "WRITE"]);
+  assert.deepEqual(rows.map((row) => row.configured_order), [0, 1]);
+  assert.equal(rows[1].last_used, "");
+});
+
 test("theme write decode maps refusals and pre-writer bob output", () => {
   const ok = pomodoroThemesDecodeWrite(
     JSON.stringify({ ok: true, key: "books" }),
@@ -283,6 +351,64 @@ test("theme pill models mark exempt components muted", () => {
       ["GTD", null, "exempt", true],
     ],
   );
+});
+
+test("theme pill models mark unconfigured components muted and outlined", () => {
+  const pills = pomodoroThemePillModels("SNACK", () => ({
+    hue: null,
+    hue_source: "unconfigured",
+    configured: false,
+  }));
+  assert.deepEqual(
+    [pills[0].configured, pills[0].unconfigured, pills[0].muted],
+    [false, true, true],
+  );
+});
+
+test("Live Preview waits until the cursor leaves an unconfigured theme name", () => {
+  const plugin = new LedgerToolsPlugin({});
+  const name = "SNACK";
+  plugin.pomodoroThemesCache = {
+    report: {
+      ...LedgerToolsPlugin.helpers.pomodoroThemesEmptyReport(),
+      configured_themes: [{ key: "build", name: "BUILD", color: "yellow" }],
+      themes: [{
+        key: "snack",
+        name,
+        hue: null,
+        hue_source: "unconfigured",
+        configured: false,
+        hidden: false,
+        days_used: 1,
+      }],
+    },
+  };
+  const content = `## Pomodoros\n- [ ] () — ${name}`;
+  const nameOffset = content.indexOf(name);
+  const makeView = (head) => ({
+    state: {
+      doc: {
+        toString: () => content,
+        lineAt: (position) => ({
+          number: content.slice(0, position).split("\n").length,
+        }),
+      },
+      field: (field) => field === EDITOR_INFO_FIELD
+        ? { file: { path: "2026/20261028.md" } }
+        : true,
+      selection: { main: { head } },
+    },
+  });
+  const duringTyping = plugin.buildPomodoroThemeDecorations(makeView(nameOffset + 1));
+  const typingClass = duringTyping[0].value.class;
+  assert.ok(typingClass.includes("bob-pomo-theme-unknown"));
+  assert.ok(!typingClass.includes("bob-pomo-theme-unconfigured"));
+
+  const afterTyping = plugin.buildPomodoroThemeDecorations(makeView(0));
+  const committedClass = afterTyping[0].value.class;
+  assert.ok(committedClass.includes("bob-pomo-theme-unconfigured"));
+  assert.ok(committedClass.includes("bob-pomo-theme-muted"));
+  assert.match(afterTyping[0].value.attributes.title, /not in your themes$/);
 });
 
 test("theme name offsets anchor at the em dash of a ledger line", () => {

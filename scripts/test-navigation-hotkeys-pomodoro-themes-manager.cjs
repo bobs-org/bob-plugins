@@ -233,6 +233,69 @@ test("manager rename input rejects empty names and composites", () => {
   assert.match(pomodoroThemesManagerRenameInputError("A+B"), /without \+/);
 });
 
+test("manager badges unconfigured themes and disables config-owned pin colors", async () => {
+  notices.length = 0;
+  const report = managerReport({
+    hints: [],
+    themes: [
+      themeRow({
+        key: "snack",
+        name: "SNACK",
+        hue: null,
+        hue_source: "unconfigured",
+        configured: false,
+        today: null,
+      }),
+      themeRow({
+        key: "build",
+        name: "BUILD",
+        hue: "yellow",
+        hue_source: "config",
+        configured: true,
+        today: null,
+      }),
+    ],
+  });
+  const rows = helpers.buildPomodoroThemesManagerRows(report, "all");
+  const snack = rows.find((row) => row.theme && row.theme.key === "snack");
+  assert.ok(snack.badges.includes("not configured"));
+
+  const api = createManagerThemesApi(report);
+  const manager = {
+    themesApi: api,
+    openThemeRename() {},
+    openThemeColor() { throw new Error("config colors must remain disabled"); },
+    toggleThemeRowVisibility() {},
+    openThemeOccurrences() {},
+  };
+  const action = new helpers.PomodoroThemeActionModal(
+    managerApp(api),
+    manager,
+    rows.find((row) => row.theme && row.theme.key === "build"),
+  );
+  const color = action.items.find((row) => row.key === "color");
+  assert.equal(color.disabled, true);
+  assert.equal(color.tooltip, "Color set in ~/.config/bob/config.yml");
+  assert.equal(action.runAction(color), false);
+
+  const refusalMessage = "Color is set in ~/.config/bob/config.yml (yellow)";
+  const refusalApi = {
+    ...api,
+    color: async () => ({ ok: false, code: "config_color", message: refusalMessage }),
+  };
+  const refusalManager = {
+    themesApi: refusalApi,
+    refreshManagerReport: async () => {},
+  };
+  const colorModal = new helpers.PomodoroThemeColorModal(
+    managerApp(refusalApi),
+    refusalManager,
+    themeRow({ key: "build", name: "BUILD", hue: "yellow", hue_source: "config" }),
+  );
+  await colorModal.pinColor({ hue: "red" });
+  assert.equal(notices.at(-1), refusalMessage);
+});
+
 test("manager rename preview formats files, entries, and state notes", () => {
   const { formatPomodoroThemeManagerRenamePreview } = helpers;
   const preview = formatPomodoroThemeManagerRenamePreview({ report: dryRunReport() });

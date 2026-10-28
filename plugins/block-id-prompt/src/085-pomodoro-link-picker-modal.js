@@ -478,7 +478,7 @@ class PomodoroLinkPickerModal extends Modal {
     }
 
     if (row.kind === "new") {
-      return `New Pomodoro ${row.name}`;
+      return `${row.unconfigured ? "Not in your themes, " : ""}New Pomodoro ${row.name}`;
     }
 
     return row.message || "";
@@ -598,6 +598,13 @@ class PomodoroLinkPickerModal extends Modal {
 
     const rightEl = rowEl.createDiv({ cls: "bid-ppk-row-right" });
     rightEl.createDiv({ cls: "bid-ppk-pill is-new", text: "New" });
+    if (row.unconfigured) {
+      rightEl.createDiv({
+        cls: "bid-ppk-pill is-warning",
+        text: "Not in your themes",
+        attr: { title: "This name isn't in your configured themes" },
+      });
+    }
     if (row.hiddenThemes && row.hiddenThemes.length > 0) {
       rightEl.createDiv({
         cls: "bid-ppk-pill is-hidden-theme",

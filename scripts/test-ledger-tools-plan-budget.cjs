@@ -170,6 +170,44 @@ test("conformance: unnamed placeholders", () => {
   assert.equal(budget.links.count, 1);
 });
 
+test("plan block mirrors Bob's unconfigured-theme lint and suppresses it without a vocabulary", () => {
+  const content = [
+    "## Pomodoros",
+    "",
+    "- [ ] () — SNACK",
+    "- [ ] () — SNACK + GEAR",
+  ].join("\n");
+  const configuredModel = planBlockModel({
+    content,
+    caps: defaultPlanCaps(),
+    app: makeApp(),
+    themeConfigured: (key) => key !== "snack" && key !== "gear",
+    themeSimilarTo: () => ["CHORE"],
+  });
+  const lint = configuredModel.lints.find(
+    (line) => line.includes("theme_not_configured"),
+  );
+  assert.equal(
+    lint,
+    "SNACK isn't one of your configured themes; did you mean CHORE? (line 3)  theme_not_configured",
+  );
+  assert.equal(
+    configuredModel.lints.some((line) => line.includes("GEAR isn't one")),
+    true,
+  );
+
+  const noSnapshotModel = planBlockModel({
+    content,
+    caps: defaultPlanCaps(),
+    app: makeApp(),
+    themeConfigured: () => null,
+  });
+  assert.equal(
+    noSnapshotModel.lints.some((line) => line.includes("theme_not_configured")),
+    false,
+  );
+});
+
 // docs/plan.md conformance example 4: `### Notes` inside the section.
 test("conformance: subheading in the section", () => {
   const budget = computePlanBudget(

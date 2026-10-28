@@ -350,6 +350,62 @@ class BobLedgerToolsPomodoroThemesMixin {
     }
   }
 
+  // Configured themes in the exact order returned by bob. An absent field
+  // means this bob build/config has no configured vocabulary.
+  pomodoroThemesConfiguredRows() {
+    try {
+      const report = this.apiThemesSnapshot();
+      return Array.isArray(report.configured_themes)
+        ? report.configured_themes
+        : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  pomodoroThemesConfiguredMap() {
+    try {
+      const rows = this.pomodoroThemesConfiguredRows();
+      if (!rows) {
+        return null;
+      }
+      const configured = Object.create(null);
+      for (const row of rows) {
+        if (row && typeof row.key === "string") {
+          configured[row.key] = row.color === null ? null : row.color;
+        }
+      }
+      return configured;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  pomodoroThemeIsConfigured(key) {
+    try {
+      const normalized = pomodoroThemeNormalizeKey(key);
+      if (!normalized) {
+        return null;
+      }
+      const rows = this.pomodoroThemesConfiguredRows();
+      if (!rows) {
+        return null;
+      }
+      const report = this.apiThemesSnapshot();
+      const entry = (report.themes || []).find(
+        (theme) => theme && theme.key === normalized,
+      );
+      // Rust marks inventory labels configured:true so clients don't tint or
+      // warn about these storage labels, although they aren't vocabulary rows.
+      if (entry && typeof entry.configured === "boolean") {
+        return entry.configured;
+      }
+      return rows.some((row) => row && row.key === normalized);
+    } catch (error) {
+      return null;
+    }
+  }
+
   // Folded journal prefs (`{ key: { hidden, pin } }`), from the last
   // vault read. Never throws.
   pomodoroThemesJournalPrefs() {
@@ -509,15 +565,25 @@ class BobLedgerToolsPomodoroThemesMixin {
         return {
           hue: entry.hue,
           hue_source: entry.hue_source || "hash",
+          configured: this.pomodoroThemeIsConfigured(normalized),
         };
       }
       const prefs = this.pomodoroThemesJournalPrefs();
       const pref = prefs[normalized] || { hidden: false, pin: null };
-      return pomodoroThemeResolveHue(normalized, {
+      const configured = this.pomodoroThemesConfiguredMap();
+      const resolved = pomodoroThemeResolveHue(normalized, {
         pin: pref.pin,
         exempt: this.pomodoroThemesExemptKeys(),
         areas: this.pomodoroThemesAreasMap(),
+        configured,
       });
+      return {
+        ...resolved,
+        configured:
+          configured === null
+            ? null
+            : Object.prototype.hasOwnProperty.call(configured, normalized),
+      };
     } catch (error) {
       return { hue: null, hue_source: "hash" };
     }
@@ -559,10 +625,58 @@ class BobLedgerToolsPomodoroThemesMixin {
           ? opts.exclusions
           : new Set(Array.isArray(opts.exclusions) ? opts.exclusions : []);
       const report = this.apiThemesSnapshot();
-      const visible = (report.themes || []).filter(
-        (theme) => theme && theme.hidden !== true,
+      const configuredRows = this.pomodoroThemesConfiguredRows();
+      let visible;
+      let configuredOrder = null;
+      if (configuredRows) {
+        configuredOrder = new Map(
+          configuredRows.map((theme, index) => [theme.key, index]),
+        );
+        const byKey = new Map(
+          (report.themes || [])
+            .filter((theme) => theme && typeof theme.key === "string")
+            .map((theme) => [theme.key, theme]),
+        );
+        visible = configuredRows.map((configuredTheme, index) => {
+          const existing = byKey.get(configuredTheme.key);
+          let theme = existing
+            ? { ...existing, configured: true }
+            : {
+                key: configuredTheme.key,
+                name: configuredTheme.name,
+                configured: true,
+                pinned: false,
+                hidden: this.pomodoroThemeHiddenFor(configuredTheme.key),
+                first_used: "",
+                last_used: "",
+                days_used: 0,
+                entries: 0,
+                today: null,
+              };
+          if (!existing) {
+            const resolved = this.pomodoroThemeHueFor(
+              configuredTheme.key,
+              configuredTheme.name,
+            );
+            theme = {
+              ...theme,
+              hue: resolved.hue,
+              hue_source: resolved.hue_source,
+            };
+          }
+          return { ...theme, configured_order: index };
+        }).filter((theme) => theme && theme.hidden !== true);
+      } else {
+        visible = (report.themes || []).filter(
+          (theme) => theme && theme.hidden !== true,
+        );
+      }
+      const ranked = pomodoroThemeRankHistory(
+        visible,
+        query,
+        exclusions,
+        configuredOrder,
       );
-      const ranked = pomodoroThemeRankHistory(visible, query, exclusions);
       const capped =
         Number.isFinite(limit) && limit >= 0 ? ranked.slice(0, limit) : ranked;
       return capped.map((theme) => ({
@@ -572,6 +686,8 @@ class BobLedgerToolsPomodoroThemesMixin {
         days_used: theme.days_used,
         hue: theme.hue,
         hue_source: theme.hue_source,
+        configured: theme.configured,
+        configured_order: theme.configured_order,
         today: theme.today,
         themes: pomodoroThemePillModels(theme.name, (key) =>
           this.pomodoroThemeHueFor(key),
@@ -590,7 +706,15 @@ class BobLedgerToolsPomodoroThemesMixin {
         return [];
       }
       const report = this.apiThemesSnapshot();
-      const keys = pomodoroThemeSimilarKeys(queryKey, report.themes || []);
+      const configuredRows = this.pomodoroThemesConfiguredRows();
+      if (!configuredRows) {
+        return [];
+      }
+      const visible = new Set(configuredRows.map((theme) => theme.key));
+      const candidates = (report.themes || []).filter(
+        (theme) => theme && visible.has(theme.key) && theme.hidden !== true,
+      );
+      const keys = pomodoroThemeSimilarKeys(queryKey, candidates);
       const byKey = new Map(
         (report.themes || [])
           .filter((theme) => theme && typeof theme.key === "string")
@@ -739,4 +863,33 @@ class BobLedgerToolsPomodoroThemesMixin {
       return { ok: false, code: "failed", message: "bob themes rename failed." };
     }
   }
+}
+
+function pomodoroThemesPlanLintWarnings(entries, isConfigured, similarTo) {
+  if (typeof isConfigured !== "function") {
+    return [];
+  }
+  const warnings = [];
+  const seen = new Set();
+  for (const entry of entries || []) {
+    for (const component of entry.components || []) {
+      const key = normalizePlanComponent(component);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      let configured = null;
+      try { configured = isConfigured(key); } catch (_error) {}
+      if (configured !== false) continue;
+      let similar = [];
+      try {
+        similar = typeof similarTo === "function" ? similarTo(component) || [] : [];
+      } catch (_error) {}
+      const suggestion = Array.isArray(similar) ? similar[0] : null;
+      warnings.push({
+        code: "theme_not_configured",
+        message: `${component} isn't one of your configured themes${suggestion ? `; did you mean ${suggestion}?` : ""}`,
+        line: entry.line,
+      });
+    }
+  }
+  return warnings;
 }

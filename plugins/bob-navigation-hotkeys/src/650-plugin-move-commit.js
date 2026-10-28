@@ -82,12 +82,18 @@ class BobNavigationHotkeysMoveCommitMixin {
     }
 
     this.restoreTaskMoveSourceContext(session);
+    const themeWarningSuffix = row.kind === "new"
+      ? navigationPomodoroThemeUnconfiguredNames(
+          getNavigationPomodoroThemesApi(this.app),
+          row.name,
+        ).map((name) => ` · ${name} isn't one of your themes`).join("")
+      : "";
     new Notice(
       buildPomodoroBulletMoveNotice(
         plan,
         session.discovery,
         destinationLabel,
-      ),
+      ) + themeWarningSuffix,
     );
     return true;
   }
@@ -278,9 +284,15 @@ class BobNavigationHotkeysMoveCommitMixin {
     }
 
     this.restoreTaskMoveSourceContext(session);
+    const themeWarningSuffix = isRename
+      ? navigationPomodoroThemeUnconfiguredNames(
+          getNavigationPomodoroThemesApi(this.app),
+          plan.name,
+        ).map((name) => ` · ${name} isn't one of your themes`).join("")
+      : "";
     new Notice(
       isRename
-        ? `Renamed Pomodoro #${session.sourceEntry.position} to ${plan.name}`
+        ? `Renamed Pomodoro #${session.sourceEntry.position} to ${plan.name}${themeWarningSuffix}`
         : buildPomodoroEntryMoveNotice(plan, session.discovery, destinationLabel),
     );
     return true;

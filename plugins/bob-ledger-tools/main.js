@@ -18996,6 +18996,7 @@ class BobLedgerToolsPlugin extends Plugin {
         available: () => this.apiThemesAvailable(),
         fetch: () => this.apiThemesFetch(),
         snapshot: () => this.apiThemesSnapshot(),
+        isConfigured: (key) => this.pomodoroThemeIsConfigured(key),
         hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
         componentsOf: (name) => pomodoroThemeComponentsOf(name),
         historyRows: (options) => this.pomodoroThemeHistoryRows(options),
@@ -19722,7 +19723,6 @@ class BobLedgerToolsPlugin extends Plugin {
       this.dailyLocations.clear();
     }
   }
-
 }
 // ---- src/171-relation-index-lifecycle.js ----
 class BobLedgerToolsRelationIndexMixin {
@@ -46743,12 +46743,26 @@ function pomodoroThemeFallbackHue(key) {
 }
 
 // Mirror of `pomodoro_themes::resolve_hue` (PT5, area_hues = area): a
-// journal pin wins, then a normalized `plan.exempt` entry is muted, then
-// a top-level area stem wears that area's resolved hue, else the name
-// hash. `options` takes `{ pin, exempt, areas }` where `exempt` is an
-// array of keys and `areas` maps key to hue slot.
+// configured color wins, then a journal pin, then exempt and unconfigured
+// mutes, then a top-level area stem, else the name hash. `configured` is
+// absent when bob has no configured vocabulary; otherwise it maps keys to
+// a palette slot or null for `auto`.
 function pomodoroThemeResolveHue(key, options = {}) {
   const opts = options && typeof options === "object" ? options : {};
+  const configured =
+    opts.configured &&
+    typeof opts.configured === "object" &&
+    !Array.isArray(opts.configured)
+      ? opts.configured
+      : null;
+  if (
+    configured &&
+    Object.prototype.hasOwnProperty.call(configured, key) &&
+    typeof configured[key] === "string" &&
+    POMODORO_THEMES_HUE_SLOTS.includes(configured[key])
+  ) {
+    return { hue: configured[key], hue_source: "config" };
+  }
   const pin =
     typeof opts.pin === "string" && POMODORO_THEMES_HUE_SLOTS.includes(opts.pin)
       ? opts.pin
@@ -46759,6 +46773,9 @@ function pomodoroThemeResolveHue(key, options = {}) {
   const exempt = Array.isArray(opts.exempt) ? opts.exempt : [];
   if (exempt.includes(key)) {
     return { hue: null, hue_source: "exempt" };
+  }
+  if (configured && !Object.prototype.hasOwnProperty.call(configured, key)) {
+    return { hue: null, hue_source: "unconfigured" };
   }
   const areas =
     opts.areas && typeof opts.areas === "object" && !Array.isArray(opts.areas)
@@ -47023,7 +47040,7 @@ function pomodoroThemeSimilarKeys(queryKey, themes) {
 // displayed Today rows excluded by the caller. `themes` entries carry
 // `{ key, name, last_used,
 // days_used }`; `exclusions` is an array or Set of keys.
-function pomodoroThemeRankHistory(themes, query, exclusions) {
+function pomodoroThemeRankHistory(themes, query, exclusions, configuredOrder) {
   const list = Array.isArray(themes) ? themes : [];
   const excluded = new Set(
     exclusions instanceof Set
@@ -47087,13 +47104,27 @@ function pomodoroThemeRankHistory(themes, query, exclusions) {
       groupD.push(theme);
     }
   }
+  const compareConfiguredRecent = (left, right) => {
+    if (
+      !left.last_used &&
+      !right.last_used &&
+      configuredOrder instanceof Map
+    ) {
+      const leftOrder = configuredOrder.get(left.key);
+      const rightOrder = configuredOrder.get(right.key);
+      if (Number.isInteger(leftOrder) && Number.isInteger(rightOrder)) {
+        return leftOrder - rightOrder;
+      }
+    }
+    return compareRecent(left, right);
+  };
   groupB.sort((left, right) => {
     if (right.exact !== left.exact) {
       return right.exact ? 1 : -1;
     }
-    return compareRecent(left.theme, right.theme);
+    return compareConfiguredRecent(left.theme, right.theme);
   });
-  groupD.sort(compareRecent);
+  groupD.sort(compareConfiguredRecent);
   return [...groupB.map((entry) => entry.theme), ...groupD];
 }
 
@@ -47106,8 +47137,9 @@ function pomodoroThemePillModels(name, hueFor) {
   for (const component of pomodoroThemeComponentsWithOffsets(name)) {
     let hue = null;
     let hueSource = null;
+    let resolved = null;
     try {
-      const resolved = resolve(component.key, component.raw);
+      resolved = resolve(component.key, component.raw);
       if (resolved && typeof resolved === "object") {
         hue = resolved.hue || null;
         hueSource = resolved.hue_source || null;
@@ -47127,7 +47159,12 @@ function pomodoroThemePillModels(name, hueFor) {
           ? hue
           : null,
       hueSource,
-      muted: hueSource === "exempt",
+      configured:
+        resolved && typeof resolved.configured === "boolean"
+          ? resolved.configured
+          : null,
+      unconfigured: Boolean(resolved && resolved.configured === false),
+      muted: hueSource === "exempt" || hueSource === "unconfigured",
     });
   }
   return pills;
@@ -47199,6 +47236,9 @@ function pomodoroThemesDecodeReport(stdout, stderr) {
       pinned: entry.pinned === true,
       hidden: entry.hidden === true,
       exempt: entry.exempt === true,
+      ...(typeof entry.configured === "boolean"
+        ? { configured: entry.configured }
+        : {}),
       first_used: typeof entry.first_used === "string" ? entry.first_used : "",
       last_used: typeof entry.last_used === "string" ? entry.last_used : "",
       days_used: Number.isFinite(Number(entry.days_used))
@@ -47223,6 +47263,28 @@ function pomodoroThemesDecodeReport(stdout, stderr) {
         : 90,
       counts:
         body.counts && typeof body.counts === "object" ? body.counts : {},
+      ...(Array.isArray(body.configured_themes)
+        ? {
+            configured_themes: body.configured_themes
+              .map((entry) => {
+                if (!entry || typeof entry !== "object") {
+                  return null;
+                }
+                const key = typeof entry.key === "string" ? entry.key : "";
+                const name = typeof entry.name === "string" ? entry.name : "";
+                const color =
+                  entry.color === null ||
+                  (typeof entry.color === "string" &&
+                    POMODORO_THEMES_HUE_SLOTS.includes(entry.color))
+                    ? entry.color
+                    : undefined;
+                return key && name && color !== undefined
+                  ? { key, name, color }
+                  : null;
+              })
+              .filter(Boolean),
+          }
+        : {}),
       themes: body.themes.map(sanitizeTheme).filter(Boolean),
       hints: Array.isArray(body.hints) ? body.hints : [],
       renamed_reappeared: Array.isArray(body.renamed_reappeared)
@@ -47638,6 +47700,62 @@ class BobLedgerToolsPomodoroThemesMixin {
     }
   }
 
+  // Configured themes in the exact order returned by bob. An absent field
+  // means this bob build/config has no configured vocabulary.
+  pomodoroThemesConfiguredRows() {
+    try {
+      const report = this.apiThemesSnapshot();
+      return Array.isArray(report.configured_themes)
+        ? report.configured_themes
+        : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  pomodoroThemesConfiguredMap() {
+    try {
+      const rows = this.pomodoroThemesConfiguredRows();
+      if (!rows) {
+        return null;
+      }
+      const configured = Object.create(null);
+      for (const row of rows) {
+        if (row && typeof row.key === "string") {
+          configured[row.key] = row.color === null ? null : row.color;
+        }
+      }
+      return configured;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  pomodoroThemeIsConfigured(key) {
+    try {
+      const normalized = pomodoroThemeNormalizeKey(key);
+      if (!normalized) {
+        return null;
+      }
+      const rows = this.pomodoroThemesConfiguredRows();
+      if (!rows) {
+        return null;
+      }
+      const report = this.apiThemesSnapshot();
+      const entry = (report.themes || []).find(
+        (theme) => theme && theme.key === normalized,
+      );
+      // Rust marks inventory labels configured:true so clients don't tint or
+      // warn about these storage labels, although they aren't vocabulary rows.
+      if (entry && typeof entry.configured === "boolean") {
+        return entry.configured;
+      }
+      return rows.some((row) => row && row.key === normalized);
+    } catch (error) {
+      return null;
+    }
+  }
+
   // Folded journal prefs (`{ key: { hidden, pin } }`), from the last
   // vault read. Never throws.
   pomodoroThemesJournalPrefs() {
@@ -47797,15 +47915,25 @@ class BobLedgerToolsPomodoroThemesMixin {
         return {
           hue: entry.hue,
           hue_source: entry.hue_source || "hash",
+          configured: this.pomodoroThemeIsConfigured(normalized),
         };
       }
       const prefs = this.pomodoroThemesJournalPrefs();
       const pref = prefs[normalized] || { hidden: false, pin: null };
-      return pomodoroThemeResolveHue(normalized, {
+      const configured = this.pomodoroThemesConfiguredMap();
+      const resolved = pomodoroThemeResolveHue(normalized, {
         pin: pref.pin,
         exempt: this.pomodoroThemesExemptKeys(),
         areas: this.pomodoroThemesAreasMap(),
+        configured,
       });
+      return {
+        ...resolved,
+        configured:
+          configured === null
+            ? null
+            : Object.prototype.hasOwnProperty.call(configured, normalized),
+      };
     } catch (error) {
       return { hue: null, hue_source: "hash" };
     }
@@ -47847,10 +47975,58 @@ class BobLedgerToolsPomodoroThemesMixin {
           ? opts.exclusions
           : new Set(Array.isArray(opts.exclusions) ? opts.exclusions : []);
       const report = this.apiThemesSnapshot();
-      const visible = (report.themes || []).filter(
-        (theme) => theme && theme.hidden !== true,
+      const configuredRows = this.pomodoroThemesConfiguredRows();
+      let visible;
+      let configuredOrder = null;
+      if (configuredRows) {
+        configuredOrder = new Map(
+          configuredRows.map((theme, index) => [theme.key, index]),
+        );
+        const byKey = new Map(
+          (report.themes || [])
+            .filter((theme) => theme && typeof theme.key === "string")
+            .map((theme) => [theme.key, theme]),
+        );
+        visible = configuredRows.map((configuredTheme, index) => {
+          const existing = byKey.get(configuredTheme.key);
+          let theme = existing
+            ? { ...existing, configured: true }
+            : {
+                key: configuredTheme.key,
+                name: configuredTheme.name,
+                configured: true,
+                pinned: false,
+                hidden: this.pomodoroThemeHiddenFor(configuredTheme.key),
+                first_used: "",
+                last_used: "",
+                days_used: 0,
+                entries: 0,
+                today: null,
+              };
+          if (!existing) {
+            const resolved = this.pomodoroThemeHueFor(
+              configuredTheme.key,
+              configuredTheme.name,
+            );
+            theme = {
+              ...theme,
+              hue: resolved.hue,
+              hue_source: resolved.hue_source,
+            };
+          }
+          return { ...theme, configured_order: index };
+        }).filter((theme) => theme && theme.hidden !== true);
+      } else {
+        visible = (report.themes || []).filter(
+          (theme) => theme && theme.hidden !== true,
+        );
+      }
+      const ranked = pomodoroThemeRankHistory(
+        visible,
+        query,
+        exclusions,
+        configuredOrder,
       );
-      const ranked = pomodoroThemeRankHistory(visible, query, exclusions);
       const capped =
         Number.isFinite(limit) && limit >= 0 ? ranked.slice(0, limit) : ranked;
       return capped.map((theme) => ({
@@ -47860,6 +48036,8 @@ class BobLedgerToolsPomodoroThemesMixin {
         days_used: theme.days_used,
         hue: theme.hue,
         hue_source: theme.hue_source,
+        configured: theme.configured,
+        configured_order: theme.configured_order,
         today: theme.today,
         themes: pomodoroThemePillModels(theme.name, (key) =>
           this.pomodoroThemeHueFor(key),
@@ -47878,7 +48056,15 @@ class BobLedgerToolsPomodoroThemesMixin {
         return [];
       }
       const report = this.apiThemesSnapshot();
-      const keys = pomodoroThemeSimilarKeys(queryKey, report.themes || []);
+      const configuredRows = this.pomodoroThemesConfiguredRows();
+      if (!configuredRows) {
+        return [];
+      }
+      const visible = new Set(configuredRows.map((theme) => theme.key));
+      const candidates = (report.themes || []).filter(
+        (theme) => theme && visible.has(theme.key) && theme.hidden !== true,
+      );
+      const keys = pomodoroThemeSimilarKeys(queryKey, candidates);
       const byKey = new Map(
         (report.themes || [])
           .filter((theme) => theme && typeof theme.key === "string")
@@ -48027,6 +48213,35 @@ class BobLedgerToolsPomodoroThemesMixin {
       return { ok: false, code: "failed", message: "bob themes rename failed." };
     }
   }
+}
+
+function pomodoroThemesPlanLintWarnings(entries, isConfigured, similarTo) {
+  if (typeof isConfigured !== "function") {
+    return [];
+  }
+  const warnings = [];
+  const seen = new Set();
+  for (const entry of entries || []) {
+    for (const component of entry.components || []) {
+      const key = normalizePlanComponent(component);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      let configured = null;
+      try { configured = isConfigured(key); } catch (_error) {}
+      if (configured !== false) continue;
+      let similar = [];
+      try {
+        similar = typeof similarTo === "function" ? similarTo(component) || [] : [];
+      } catch (_error) {}
+      const suggestion = Array.isArray(similar) ? similar[0] : null;
+      warnings.push({
+        code: "theme_not_configured",
+        message: `${component} isn't one of your configured themes${suggestion ? `; did you mean ${suggestion}?` : ""}`,
+        line: entry.line,
+      });
+    }
+  }
+  return warnings;
 }
 // ---- src/279-plugin-pomodoro-theme-chips.js ----
 // --- Pomodoro theme pills: Live Preview --------------------------------
@@ -48202,12 +48417,18 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
     try {
       const report = this.apiThemesSnapshot();
       const themes = (report && report.themes) || [];
-      if (themes.length === 0) {
+      const configured = Array.isArray(report && report.configured_themes)
+        ? report.configured_themes
+        : [];
+      if (themes.length === 0 && configured.length === 0) {
         return null;
       }
-      return new Set(
-        themes.filter((theme) => theme && theme.key).map((theme) => theme.key),
-      );
+      return new Set([
+        ...themes.filter((theme) => theme && theme.key).map((theme) => theme.key),
+        ...configured
+          .filter((theme) => theme && theme.key)
+          .map((theme) => theme.key),
+      ]);
     } catch (error) {
       return null;
     }
@@ -48225,7 +48446,10 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
         entry && Number.isFinite(Number(entry.days_used))
           ? ` · ${entry.days_used} days`
           : "";
-      return `${name} · ${hue}${days}`;
+      const unconfigured = this.pomodoroThemeIsConfigured(key) === false
+        ? " · not in your themes"
+        : "";
+      return `${name} · ${hue}${days}${unconfigured}`;
     } catch (error) {
       return String(name || key || "");
     }
@@ -48384,14 +48608,18 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
             const onCursor = index === cursorLine;
             const unknown =
               known && !known.has(component.key) ? true : false;
-            const neutral = onCursor && unknown;
+            const unconfigured =
+              this.pomodoroThemeIsConfigured(component.key) === false;
+            const neutral = onCursor && (unknown || unconfigured);
             const hue = neutral
               ? null
               : resolved && resolved.hue
                 ? resolved.hue
                 : null;
             const muted =
-              !neutral && resolved && resolved.hue_source === "exempt";
+              !neutral && resolved &&
+              (resolved.hue_source === "exempt" ||
+                resolved.hue_source === "unconfigured");
             const attributes = {
               "data-theme-key": component.key,
               title: this.pomodoroThemeTooltip(component.key, component.raw),
@@ -48403,7 +48631,7 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
               base + component.start,
               base + component.end,
               Decoration.mark({
-                class: `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}${neutral ? " bob-pomo-theme-unknown" : ""}`,
+                class: `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}${unconfigured && !neutral ? " bob-pomo-theme-unconfigured" : ""}${neutral ? " bob-pomo-theme-unknown" : ""}`,
                 attributes,
               }),
             );
@@ -48656,11 +48884,16 @@ class BobLedgerToolsPomodoroThemeChipsReadingMixin {
       }
       const resolved = this.pomodoroThemeHueFor(component.key, component.raw);
       const hue = resolved && resolved.hue ? resolved.hue : null;
-      const muted = Boolean(resolved && resolved.hue_source === "exempt");
+      const unconfigured = this.pomodoroThemeIsConfigured(component.key) === false;
+      const muted = Boolean(
+        resolved &&
+          (resolved.hue_source === "exempt" ||
+            resolved.hue_source === "unconfigured"),
+      );
       const pill = doc.createElement("span");
       pill.setAttribute(
         "class",
-        `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}`,
+        `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}${unconfigured ? " bob-pomo-theme-unconfigured" : ""}`,
       );
       if (hue) {
         pill.setAttribute("data-theme-hue", hue);
@@ -48696,10 +48929,15 @@ class BobLedgerToolsPomodoroThemeChipsReadingMixin {
               const name = pill.textContent || key;
               const resolved = this.pomodoroThemeHueFor(key, name);
               const hue = resolved && resolved.hue ? resolved.hue : null;
-              const muted = Boolean(resolved && resolved.hue_source === "exempt");
+              const unconfigured = this.pomodoroThemeIsConfigured(key) === false;
+              const muted = Boolean(
+                resolved &&
+                  (resolved.hue_source === "exempt" ||
+                    resolved.hue_source === "unconfigured"),
+              );
               pill.setAttribute(
                 "class",
-                `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}`,
+                `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}${unconfigured ? " bob-pomo-theme-unconfigured" : ""}`,
               );
               if (hue) {
                 pill.setAttribute("data-theme-hue", hue);
@@ -53649,6 +53887,8 @@ class BobLedgerToolsTodayLocationMixin {
           nextDashboard,
           pendingDashboard,
           hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
+          themeConfigured: (key) => this.pomodoroThemeIsConfigured(key),
+          themeSimilarTo: (name) => this.pomodoroThemeSimilarTo(name),
         });
         const container = el.createDiv({ cls: "bob-plan" });
         try {
@@ -56231,6 +56471,8 @@ function planBlockModel({
   nextDashboard,
   pendingDashboard,
   hueFor,
+  themeConfigured,
+  themeSimilarTo,
 }) {
   const effective = effectivePlanCaps(caps);
   const targetPath = planBlockTargetPath(app, sourcePath);
@@ -56300,6 +56542,7 @@ function planBlockModel({
   const over =
     budget.status === "over" || (hasTasks && ready && ready.over);
   const lintWarnings = budget.warnings.slice();
+  lintWarnings.push(...pomodoroThemesPlanLintWarnings(budget.entries, themeConfigured, themeSimilarTo));
   if (nextModel.placeholder === false && nextModel.sectionOver) {
     lintWarnings.push({
       code: PLAN_LINT_NEXT_CAP,

@@ -3406,6 +3406,17 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   color: var(--text-muted);
 }
 
+.bob-pomo-theme-colors .bob-pomo-theme-unconfigured {
+  outline: 1px dashed color-mix(in srgb, var(--text-warning, var(--color-orange)) 70%, transparent);
+  outline-offset: 1px;
+  opacity: 0.7;
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme-muted.bob-pomo-theme-unconfigured {
+  background-color: transparent;
+  color: var(--text-muted);
+}
+
 /* Swatch for dense rows: 8pt rounded square (radius 2) before the name.
    Homes keep their ● dot, so a theme never looks like a home. */
 .bob-pomo-theme-swatch {

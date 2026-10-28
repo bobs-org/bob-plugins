@@ -270,6 +270,7 @@ class BobLedgerToolsPlugin extends Plugin {
         available: () => this.apiThemesAvailable(),
         fetch: () => this.apiThemesFetch(),
         snapshot: () => this.apiThemesSnapshot(),
+        isConfigured: (key) => this.pomodoroThemeIsConfigured(key),
         hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
         componentsOf: (name) => pomodoroThemeComponentsOf(name),
         historyRows: (options) => this.pomodoroThemeHistoryRows(options),
@@ -996,5 +997,4 @@ class BobLedgerToolsPlugin extends Plugin {
       this.dailyLocations.clear();
     }
   }
-
 }

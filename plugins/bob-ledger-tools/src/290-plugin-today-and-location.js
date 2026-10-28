@@ -556,6 +556,8 @@ class BobLedgerToolsTodayLocationMixin {
           nextDashboard,
           pendingDashboard,
           hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
+          themeConfigured: (key) => this.pomodoroThemeIsConfigured(key),
+          themeSimilarTo: (name) => this.pomodoroThemeSimilarTo(name),
         });
         const container = el.createDiv({ cls: "bob-plan" });
         try {

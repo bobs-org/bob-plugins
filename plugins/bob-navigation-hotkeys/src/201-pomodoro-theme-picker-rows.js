@@ -71,6 +71,16 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi) {
       cls: "bob-cnp-row-status is-create",
     });
     appendHighlighted(statusEl, row.badge || "New", query);
+    if (row.unconfigured) {
+      badgesEl.createDiv({
+        cls: "bob-cnp-row-status is-warning",
+        text: "Not in your themes",
+        attr: {
+          title: "This name isn't in your configured themes",
+          "aria-label": "Not in your themes",
+        },
+      });
+    }
     for (const similar of row.similarTo || []) {
       badgesEl.createDiv({
         cls: "bob-cnp-row-status is-similar-theme",

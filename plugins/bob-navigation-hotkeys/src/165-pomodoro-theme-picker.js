@@ -89,6 +89,44 @@ function navigationPomodoroThemeKeysInToday(api, entries) {
   return keys;
 }
 
+function navigationPomodoroThemeConfiguredRows(api) {
+  try {
+    const report = api && typeof api.snapshot === "function" ? api.snapshot() : null;
+    return Array.isArray(report && report.configured_themes)
+      ? report.configured_themes
+      : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function navigationPomodoroThemeInVocabulary(api, key) {
+  const rows = navigationPomodoroThemeConfiguredRows(api);
+  return rows ? rows.some((theme) => theme && theme.key === key) : null;
+}
+
+function navigationPomodoroThemeUnconfiguredNames(api, name) {
+  try {
+    const seen = new Set();
+    return navigationPomodoroThemeComponents(api, name).filter((component) => {
+      if (seen.has(component.key)) {
+        return false;
+      }
+      seen.add(component.key);
+      if (api && typeof api.isConfigured === "function") {
+        return api.isConfigured(component.key) === false;
+      }
+      return navigationPomodoroThemeInVocabulary(api, component.key) === false;
+    }).map((component) => component.raw);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function navigationPomodoroThemeUnconfigured(api, name) {
+  return navigationPomodoroThemeUnconfiguredNames(api, name).length > 0;
+}
+
 function navigationPomodoroThemeSlug(value) {
   return String(value || "")
     .trim()
@@ -147,7 +185,14 @@ function navigationPomodoroThemeHistory(api, query, exclusions, hiddenRows) {
     return [];
   }
   const trimmed = String(query || "").trim();
-  const limit = trimmed ? 12 : 5;
+  const configuredRows = navigationPomodoroThemeConfiguredRows(api);
+  const configuredOrder = configuredRows
+    ? new Map(configuredRows.map((theme, index) => [theme.key, index]))
+    : null;
+  const configuredKeys = configuredRows
+    ? new Set(configuredRows.map((theme) => theme.key))
+    : null;
+  const limit = trimmed || configuredRows ? 12 : 5;
   let visible = [];
   try {
     visible = api.historyRows({ query: trimmed, limit: 100, exclusions });
@@ -156,14 +201,24 @@ function navigationPomodoroThemeHistory(api, query, exclusions, hiddenRows) {
   }
   const byKey = new Map();
   for (const theme of Array.isArray(visible) ? visible : []) {
-    if (theme && theme.key && theme.name && !exclusions.has(theme.key)) {
-      byKey.set(theme.key, theme);
+    if (
+      theme && theme.key && theme.name && !exclusions.has(theme.key) &&
+      (!configuredKeys || configuredKeys.has(theme.key)) &&
+      (!configuredRows || navigationPomodoroThemeMatchesQuery(theme, trimmed))
+    ) {
+      byKey.set(theme.key, {
+        ...theme,
+        ...(configuredOrder && configuredOrder.has(theme.key)
+          ? { configured_order: configuredOrder.get(theme.key) }
+          : {}),
+      });
     }
   }
   if (hiddenRows instanceof Map) {
     for (const [key, theme] of hiddenRows) {
       if (
         theme && theme.name && !exclusions.has(key) &&
+        (!configuredKeys || configuredKeys.has(key)) &&
         navigationPomodoroThemeMatchesQuery(theme, trimmed)
       ) {
         byKey.set(key, { ...theme, hidden: true });
@@ -173,7 +228,17 @@ function navigationPomodoroThemeHistory(api, query, exclusions, hiddenRows) {
   return [...byKey.values()]
     .sort((left, right) => {
       const tier = navigationPomodoroThemeTier(left, trimmed) - navigationPomodoroThemeTier(right, trimmed);
-      return tier || navigationPomodoroThemeCompareRecent(left, right);
+      if (tier) {
+        return tier;
+      }
+      if (
+        !left.last_used && !right.last_used &&
+        Number.isInteger(left.configured_order) &&
+        Number.isInteger(right.configured_order)
+      ) {
+        return left.configured_order - right.configured_order;
+      }
+      return navigationPomodoroThemeCompareRecent(left, right);
     })
     .slice(0, limit);
 }
@@ -193,11 +258,18 @@ function navigationPomodoroThemeSimilar(api, name) {
     return [];
   }
   const names = new Set();
+  const configuredRows = navigationPomodoroThemeConfiguredRows(api);
+  const configuredNames = configuredRows
+    ? new Set(configuredRows.map((theme) => theme && theme.key).filter(Boolean))
+    : null;
   for (const component of navigationPomodoroThemeComponents(api, name)) {
     try {
       for (const similar of api.similarTo(component.raw) || []) {
         if (typeof similar === "string" && similar) {
-          names.add(similar);
+          const key = similar.trim().replace(/\s+/g, " ").toLowerCase();
+          if (!configuredNames || configuredNames.has(key)) {
+            names.add(similar);
+          }
         }
       }
     } catch (_error) {
@@ -228,6 +300,9 @@ function withNavigationPomodoroThemeRows(entries, query, baseRows, options = {})
     : "";
   const exactRecent = history.find((theme) => theme.key === candidateKey) || null;
   if (candidate) {
+    if (navigationPomodoroThemeUnconfigured(api, candidate.name)) {
+      candidate.unconfigured = true;
+    }
     const similarTo = navigationPomodoroThemeSimilar(api, candidate.name);
     if (similarTo.length > 0) {
       candidate.similarTo = similarTo;

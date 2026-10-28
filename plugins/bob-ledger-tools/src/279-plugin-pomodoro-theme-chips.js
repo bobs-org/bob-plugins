@@ -171,12 +171,18 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
     try {
       const report = this.apiThemesSnapshot();
       const themes = (report && report.themes) || [];
-      if (themes.length === 0) {
+      const configured = Array.isArray(report && report.configured_themes)
+        ? report.configured_themes
+        : [];
+      if (themes.length === 0 && configured.length === 0) {
         return null;
       }
-      return new Set(
-        themes.filter((theme) => theme && theme.key).map((theme) => theme.key),
-      );
+      return new Set([
+        ...themes.filter((theme) => theme && theme.key).map((theme) => theme.key),
+        ...configured
+          .filter((theme) => theme && theme.key)
+          .map((theme) => theme.key),
+      ]);
     } catch (error) {
       return null;
     }
@@ -194,7 +200,10 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
         entry && Number.isFinite(Number(entry.days_used))
           ? ` · ${entry.days_used} days`
           : "";
-      return `${name} · ${hue}${days}`;
+      const unconfigured = this.pomodoroThemeIsConfigured(key) === false
+        ? " · not in your themes"
+        : "";
+      return `${name} · ${hue}${days}${unconfigured}`;
     } catch (error) {
       return String(name || key || "");
     }
@@ -353,14 +362,18 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
             const onCursor = index === cursorLine;
             const unknown =
               known && !known.has(component.key) ? true : false;
-            const neutral = onCursor && unknown;
+            const unconfigured =
+              this.pomodoroThemeIsConfigured(component.key) === false;
+            const neutral = onCursor && (unknown || unconfigured);
             const hue = neutral
               ? null
               : resolved && resolved.hue
                 ? resolved.hue
                 : null;
             const muted =
-              !neutral && resolved && resolved.hue_source === "exempt";
+              !neutral && resolved &&
+              (resolved.hue_source === "exempt" ||
+                resolved.hue_source === "unconfigured");
             const attributes = {
               "data-theme-key": component.key,
               title: this.pomodoroThemeTooltip(component.key, component.raw),
@@ -372,7 +385,7 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
               base + component.start,
               base + component.end,
               Decoration.mark({
-                class: `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}${neutral ? " bob-pomo-theme-unknown" : ""}`,
+                class: `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}${unconfigured && !neutral ? " bob-pomo-theme-unconfigured" : ""}${neutral ? " bob-pomo-theme-unknown" : ""}`,
                 attributes,
               }),
             );

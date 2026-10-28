@@ -807,6 +807,8 @@ function planBlockModel({
   nextDashboard,
   pendingDashboard,
   hueFor,
+  themeConfigured,
+  themeSimilarTo,
 }) {
   const effective = effectivePlanCaps(caps);
   const targetPath = planBlockTargetPath(app, sourcePath);
@@ -876,6 +878,7 @@ function planBlockModel({
   const over =
     budget.status === "over" || (hasTasks && ready && ready.over);
   const lintWarnings = budget.warnings.slice();
+  lintWarnings.push(...pomodoroThemesPlanLintWarnings(budget.entries, themeConfigured, themeSimilarTo));
   if (nextModel.placeholder === false && nextModel.sectionOver) {
     lintWarnings.push({
       code: PLAN_LINT_NEXT_CAP,

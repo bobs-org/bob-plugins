@@ -142,11 +142,17 @@ picker uses it; no plugin keeps its own hidden list or history scanner.
 (hash, area, and journal pins from the vault `.bob/themes/` fold) still
 render. `fetch()` resolves `{ report, stale, error }` with stale-while-
 revalidate single flight over `bob themes list -a -f json`;
-`snapshot()` returns the last report without spawning. `hueFor(key, name)`
-returns `{ hue, hue_source }` (null hue for exempt themes) and never throws.
+`snapshot()` returns the last report without spawning, including Bob's
+`configured_themes`, `counts.configured`, and per-row `configured` fields
+when the vocabulary is present. `isConfigured(key)` returns `true` or
+`false` when that snapshot has a configured vocabulary, and `null` when it
+does not. `hueFor(key, name)` returns `{ hue, hue_source, configured }`
+and never throws; `hue_source` preserves `config` and `unconfigured`.
 `componentsOf(name)` returns `{ raw, key }` rows, `historyRows({ query,
-limit, exclusions })` ranks visible catalog themes per PT7 group B then D,
-and `similarTo(name)` returns up to 2 near-duplicate names. `hide`,
+limit, exclusions })` ranks visible configured themes per PT7 group B then D
+when configured themes exist (including never-used names in config order),
+and `similarTo(name)` returns up to 2 visible configured near-duplicate
+names. `hide`,
 `unhide`, `color`, and `rename` spawn bob with `--via bob-ledger-tools`,
 then refresh; they resolve `{ ok, code?, message? }` and never reject —
 an older bob without the writers resolves `code: "unsupported"`.

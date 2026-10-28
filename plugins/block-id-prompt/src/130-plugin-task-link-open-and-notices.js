@@ -405,8 +405,17 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       chips.push("logged schedule change");
     }
     const suffix = chips.length ? ` · ${chips.join(" · ")}` : "";
+    const themeWarnings = destination && destination.kind === "created"
+      ? blockPomodoroThemeUnconfiguredNames(
+          getBlockPomodoroThemesApi(this.app),
+          destination.name || destination.title || "",
+        )
+      : [];
+    const themeWarningSuffix = themeWarnings
+      .map((name) => ` · ${name} isn't one of your themes`)
+      .join("");
 
-    return `${base}${suffix}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}`;
+    return `${base}${suffix}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}${themeWarningSuffix}`;
   }
 
   reportPomodoroLinkOutcome(plan, pomodoroPlan) {

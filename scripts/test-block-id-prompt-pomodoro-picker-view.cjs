@@ -4,6 +4,8 @@
 // stays on its stub Modal.
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const Module = require("node:module");
 
@@ -17,16 +19,22 @@ const {
 global.window = global.window || { setTimeout: (callback) => callback() };
 
 const iconCalls = [];
+const noticeMessages = [];
 
 const originalLoad = Module._load;
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     class EmptyClass {}
     class TestModal extends ModalStub {}
+    class TestNotice {
+      constructor(message) {
+        noticeMessages.push(String(message));
+      }
+    }
     return {
       MarkdownView: EmptyClass,
       Modal: TestModal,
-      Notice: EmptyClass,
+      Notice: TestNotice,
       Plugin: EmptyClass,
       Setting: EmptyClass,
       TFile: EmptyClass,
@@ -711,6 +719,140 @@ test("done-today themes stay in Recent while open Today themes stay excluded", (
     ),
   );
   modal.close();
+});
+
+test("configured theme menu vectors scope Recent, preserve config order, and flag new names", () => {
+  const vectors = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, "../plugins/bob-ledger-tools/scripts/fixtures/pomodoro_themes/vectors.json"),
+      "utf8",
+    ),
+  ).menu.filter((item) => Array.isArray(item.configured));
+  assert.equal(vectors.length, 3);
+  for (const item of vectors) {
+    const configured = item.configured.map((theme) => ({
+      key: theme.name.toLowerCase(),
+      name: theme.name,
+      color: theme.color === "auto" ? null : theme.color,
+    }));
+    const hidden = new Set((item.hidden || []).map((name) => name.toLowerCase()));
+    const used = [];
+    for (const [date, names] of Object.entries(item.history || {})) {
+      for (const name of names) {
+        const key = name.toLowerCase();
+        const prior = used.find((theme) => theme.key === key);
+        if (prior) {
+          prior.last_used = date;
+        } else {
+          used.push({ key, name, last_used: date, days_used: 1, hidden: hidden.has(key) });
+        }
+      }
+    }
+    const rows = configured.map((theme) => {
+      const known = used.find((row) => row.key === theme.key);
+      return known
+        ? { ...known, configured: true }
+        : {
+            ...theme,
+            hue: theme.color,
+            hue_source: theme.color ? "config" : "hash",
+            configured: true,
+            last_used: "",
+            days_used: 0,
+            hidden: hidden.has(theme.key),
+          };
+    });
+    const themesApi = {
+      version: 1,
+      available: () => ({ available: true }),
+      snapshot: () => ({ themes: rows, configured_themes: configured }),
+      isConfigured: (key) => configured.some((theme) => theme.key === key),
+      componentsOf: (name) => String(name || "").split("+").map((raw) => raw.trim()).filter(Boolean).map((raw) => ({ raw, key: raw.toLowerCase().replace(/\s+/g, " ") })),
+      historyRows: ({ exclusions = new Set() } = {}) => rows
+        .filter((theme) => !theme.hidden && !exclusions.has(theme.key)),
+      similarTo: () => ["BUILD", "SNACK"],
+      hueFor: (key) => ({ hue: key === "build" ? "yellow" : "violet", hue_source: "config" }),
+    };
+    const query = item.draft.slice(2).trim();
+    const baseRows = query
+      ? [{ kind: "new", key: `new-${query}`, name: query.toUpperCase(), selectable: true }]
+      : [];
+    const result = helpers.withPomodoroThemeHistoryRows(
+      { creation: { allowed: true }, entries: [], allEntries: [] },
+      query,
+      baseRows,
+      0,
+      { themesApi },
+    );
+    const actual = result.rows.map((row) => row.kind === "recent"
+      ? { name: row.name, replacement: row.theme.key, origin: "history" }
+      : { name: row.name, replacement: row.name.toLowerCase(), creates_pomodoro: true });
+    assert.deepEqual(actual, item.expected, item.name);
+    if (item.name === "configured-unconfigured-create-row") {
+      const create = result.rows.find((row) => row.kind === "new");
+      assert.equal(create.unconfigured, true);
+      assert.deepEqual(create.similarTo, ["BUILD"]);
+    }
+  }
+});
+
+test("configured empty-query picker shows up to twelve configured themes", () => {
+  const configured = Array.from({ length: 14 }, (_, index) => ({
+    key: `theme${index}`,
+    name: `THEME${index}`,
+    color: null,
+  }));
+  const themesApi = {
+    version: 1,
+    available: () => ({ available: true }),
+    snapshot: () => ({ themes: configured, configured_themes: configured }),
+    isConfigured: () => true,
+    componentsOf: (name) => [{ raw: name, key: name.toLowerCase() }],
+    historyRows: () => configured,
+    similarTo: () => [],
+    hueFor: () => ({ hue: null, hue_source: "hash" }),
+  };
+  const result = helpers.withPomodoroThemeHistoryRows(
+    { creation: { allowed: true }, entries: [], allEntries: [] },
+    "",
+    [],
+    -1,
+    { themesApi },
+  );
+  assert.equal(result.rows.filter((row) => row.kind === "recent").length, 12);
+});
+
+test("link success notice names an unconfigured theme after creating its Pomodoro", () => {
+  const plugin = new Plugin();
+  plugin.app = {
+    plugins: {
+      plugins: {
+        "bob-ledger-tools": {
+          api: {
+            themes: {
+              version: 1,
+              snapshot: () => ({
+                configured_themes: [{ key: "build", name: "BUILD", color: "yellow" }],
+                themes: [],
+              }),
+              isConfigured: (key) => key === "build",
+              componentsOf: (name) => String(name || "").split("+").map((raw) => ({ raw: raw.trim(), key: raw.trim().toLowerCase() })),
+            },
+          },
+        },
+      },
+    },
+  };
+  plugin.futureLinkCleanupNoticeSuffix = () => "";
+  plugin.planBudgetNoticeSuffix = () => "";
+  const notice = plugin.formatPomodoroLinkOutcome(
+    { statusChanged: true, newStatus: " " },
+    { destination: { kind: "created", name: "SNACK" }, removedCount: 0, content: "" },
+  );
+  assert.equal(
+    notice,
+    "Linked to new SNACK · Next · SNACK isn't one of your themes",
+  );
 });
 
 test("typing done shows only the Recent DONE row and keeps catalog spelling", async () => {

@@ -90,12 +90,26 @@ function pomodoroThemeFallbackHue(key) {
 }
 
 // Mirror of `pomodoro_themes::resolve_hue` (PT5, area_hues = area): a
-// journal pin wins, then a normalized `plan.exempt` entry is muted, then
-// a top-level area stem wears that area's resolved hue, else the name
-// hash. `options` takes `{ pin, exempt, areas }` where `exempt` is an
-// array of keys and `areas` maps key to hue slot.
+// configured color wins, then a journal pin, then exempt and unconfigured
+// mutes, then a top-level area stem, else the name hash. `configured` is
+// absent when bob has no configured vocabulary; otherwise it maps keys to
+// a palette slot or null for `auto`.
 function pomodoroThemeResolveHue(key, options = {}) {
   const opts = options && typeof options === "object" ? options : {};
+  const configured =
+    opts.configured &&
+    typeof opts.configured === "object" &&
+    !Array.isArray(opts.configured)
+      ? opts.configured
+      : null;
+  if (
+    configured &&
+    Object.prototype.hasOwnProperty.call(configured, key) &&
+    typeof configured[key] === "string" &&
+    POMODORO_THEMES_HUE_SLOTS.includes(configured[key])
+  ) {
+    return { hue: configured[key], hue_source: "config" };
+  }
   const pin =
     typeof opts.pin === "string" && POMODORO_THEMES_HUE_SLOTS.includes(opts.pin)
       ? opts.pin
@@ -106,6 +120,9 @@ function pomodoroThemeResolveHue(key, options = {}) {
   const exempt = Array.isArray(opts.exempt) ? opts.exempt : [];
   if (exempt.includes(key)) {
     return { hue: null, hue_source: "exempt" };
+  }
+  if (configured && !Object.prototype.hasOwnProperty.call(configured, key)) {
+    return { hue: null, hue_source: "unconfigured" };
   }
   const areas =
     opts.areas && typeof opts.areas === "object" && !Array.isArray(opts.areas)
@@ -370,7 +387,7 @@ function pomodoroThemeSimilarKeys(queryKey, themes) {
 // displayed Today rows excluded by the caller. `themes` entries carry
 // `{ key, name, last_used,
 // days_used }`; `exclusions` is an array or Set of keys.
-function pomodoroThemeRankHistory(themes, query, exclusions) {
+function pomodoroThemeRankHistory(themes, query, exclusions, configuredOrder) {
   const list = Array.isArray(themes) ? themes : [];
   const excluded = new Set(
     exclusions instanceof Set
@@ -434,13 +451,27 @@ function pomodoroThemeRankHistory(themes, query, exclusions) {
       groupD.push(theme);
     }
   }
+  const compareConfiguredRecent = (left, right) => {
+    if (
+      !left.last_used &&
+      !right.last_used &&
+      configuredOrder instanceof Map
+    ) {
+      const leftOrder = configuredOrder.get(left.key);
+      const rightOrder = configuredOrder.get(right.key);
+      if (Number.isInteger(leftOrder) && Number.isInteger(rightOrder)) {
+        return leftOrder - rightOrder;
+      }
+    }
+    return compareRecent(left, right);
+  };
   groupB.sort((left, right) => {
     if (right.exact !== left.exact) {
       return right.exact ? 1 : -1;
     }
-    return compareRecent(left.theme, right.theme);
+    return compareConfiguredRecent(left.theme, right.theme);
   });
-  groupD.sort(compareRecent);
+  groupD.sort(compareConfiguredRecent);
   return [...groupB.map((entry) => entry.theme), ...groupD];
 }
 
@@ -453,8 +484,9 @@ function pomodoroThemePillModels(name, hueFor) {
   for (const component of pomodoroThemeComponentsWithOffsets(name)) {
     let hue = null;
     let hueSource = null;
+    let resolved = null;
     try {
-      const resolved = resolve(component.key, component.raw);
+      resolved = resolve(component.key, component.raw);
       if (resolved && typeof resolved === "object") {
         hue = resolved.hue || null;
         hueSource = resolved.hue_source || null;
@@ -474,7 +506,12 @@ function pomodoroThemePillModels(name, hueFor) {
           ? hue
           : null,
       hueSource,
-      muted: hueSource === "exempt",
+      configured:
+        resolved && typeof resolved.configured === "boolean"
+          ? resolved.configured
+          : null,
+      unconfigured: Boolean(resolved && resolved.configured === false),
+      muted: hueSource === "exempt" || hueSource === "unconfigured",
     });
   }
   return pills;
@@ -546,6 +583,9 @@ function pomodoroThemesDecodeReport(stdout, stderr) {
       pinned: entry.pinned === true,
       hidden: entry.hidden === true,
       exempt: entry.exempt === true,
+      ...(typeof entry.configured === "boolean"
+        ? { configured: entry.configured }
+        : {}),
       first_used: typeof entry.first_used === "string" ? entry.first_used : "",
       last_used: typeof entry.last_used === "string" ? entry.last_used : "",
       days_used: Number.isFinite(Number(entry.days_used))
@@ -570,6 +610,28 @@ function pomodoroThemesDecodeReport(stdout, stderr) {
         : 90,
       counts:
         body.counts && typeof body.counts === "object" ? body.counts : {},
+      ...(Array.isArray(body.configured_themes)
+        ? {
+            configured_themes: body.configured_themes
+              .map((entry) => {
+                if (!entry || typeof entry !== "object") {
+                  return null;
+                }
+                const key = typeof entry.key === "string" ? entry.key : "";
+                const name = typeof entry.name === "string" ? entry.name : "";
+                const color =
+                  entry.color === null ||
+                  (typeof entry.color === "string" &&
+                    POMODORO_THEMES_HUE_SLOTS.includes(entry.color))
+                    ? entry.color
+                    : undefined;
+                return key && name && color !== undefined
+                  ? { key, name, color }
+                  : null;
+              })
+              .filter(Boolean),
+          }
+        : {}),
       themes: body.themes.map(sanitizeTheme).filter(Boolean),
       hints: Array.isArray(body.hints) ? body.hints : [],
       renamed_reappeared: Array.isArray(body.renamed_reappeared)

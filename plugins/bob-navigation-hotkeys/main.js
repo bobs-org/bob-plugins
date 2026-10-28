@@ -17687,6 +17687,44 @@ function navigationPomodoroThemeKeysInToday(api, entries) {
   return keys;
 }
 
+function navigationPomodoroThemeConfiguredRows(api) {
+  try {
+    const report = api && typeof api.snapshot === "function" ? api.snapshot() : null;
+    return Array.isArray(report && report.configured_themes)
+      ? report.configured_themes
+      : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function navigationPomodoroThemeInVocabulary(api, key) {
+  const rows = navigationPomodoroThemeConfiguredRows(api);
+  return rows ? rows.some((theme) => theme && theme.key === key) : null;
+}
+
+function navigationPomodoroThemeUnconfiguredNames(api, name) {
+  try {
+    const seen = new Set();
+    return navigationPomodoroThemeComponents(api, name).filter((component) => {
+      if (seen.has(component.key)) {
+        return false;
+      }
+      seen.add(component.key);
+      if (api && typeof api.isConfigured === "function") {
+        return api.isConfigured(component.key) === false;
+      }
+      return navigationPomodoroThemeInVocabulary(api, component.key) === false;
+    }).map((component) => component.raw);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function navigationPomodoroThemeUnconfigured(api, name) {
+  return navigationPomodoroThemeUnconfiguredNames(api, name).length > 0;
+}
+
 function navigationPomodoroThemeSlug(value) {
   return String(value || "")
     .trim()
@@ -17745,7 +17783,14 @@ function navigationPomodoroThemeHistory(api, query, exclusions, hiddenRows) {
     return [];
   }
   const trimmed = String(query || "").trim();
-  const limit = trimmed ? 12 : 5;
+  const configuredRows = navigationPomodoroThemeConfiguredRows(api);
+  const configuredOrder = configuredRows
+    ? new Map(configuredRows.map((theme, index) => [theme.key, index]))
+    : null;
+  const configuredKeys = configuredRows
+    ? new Set(configuredRows.map((theme) => theme.key))
+    : null;
+  const limit = trimmed || configuredRows ? 12 : 5;
   let visible = [];
   try {
     visible = api.historyRows({ query: trimmed, limit: 100, exclusions });
@@ -17754,14 +17799,24 @@ function navigationPomodoroThemeHistory(api, query, exclusions, hiddenRows) {
   }
   const byKey = new Map();
   for (const theme of Array.isArray(visible) ? visible : []) {
-    if (theme && theme.key && theme.name && !exclusions.has(theme.key)) {
-      byKey.set(theme.key, theme);
+    if (
+      theme && theme.key && theme.name && !exclusions.has(theme.key) &&
+      (!configuredKeys || configuredKeys.has(theme.key)) &&
+      (!configuredRows || navigationPomodoroThemeMatchesQuery(theme, trimmed))
+    ) {
+      byKey.set(theme.key, {
+        ...theme,
+        ...(configuredOrder && configuredOrder.has(theme.key)
+          ? { configured_order: configuredOrder.get(theme.key) }
+          : {}),
+      });
     }
   }
   if (hiddenRows instanceof Map) {
     for (const [key, theme] of hiddenRows) {
       if (
         theme && theme.name && !exclusions.has(key) &&
+        (!configuredKeys || configuredKeys.has(key)) &&
         navigationPomodoroThemeMatchesQuery(theme, trimmed)
       ) {
         byKey.set(key, { ...theme, hidden: true });
@@ -17771,7 +17826,17 @@ function navigationPomodoroThemeHistory(api, query, exclusions, hiddenRows) {
   return [...byKey.values()]
     .sort((left, right) => {
       const tier = navigationPomodoroThemeTier(left, trimmed) - navigationPomodoroThemeTier(right, trimmed);
-      return tier || navigationPomodoroThemeCompareRecent(left, right);
+      if (tier) {
+        return tier;
+      }
+      if (
+        !left.last_used && !right.last_used &&
+        Number.isInteger(left.configured_order) &&
+        Number.isInteger(right.configured_order)
+      ) {
+        return left.configured_order - right.configured_order;
+      }
+      return navigationPomodoroThemeCompareRecent(left, right);
     })
     .slice(0, limit);
 }
@@ -17791,11 +17856,18 @@ function navigationPomodoroThemeSimilar(api, name) {
     return [];
   }
   const names = new Set();
+  const configuredRows = navigationPomodoroThemeConfiguredRows(api);
+  const configuredNames = configuredRows
+    ? new Set(configuredRows.map((theme) => theme && theme.key).filter(Boolean))
+    : null;
   for (const component of navigationPomodoroThemeComponents(api, name)) {
     try {
       for (const similar of api.similarTo(component.raw) || []) {
         if (typeof similar === "string" && similar) {
-          names.add(similar);
+          const key = similar.trim().replace(/\s+/g, " ").toLowerCase();
+          if (!configuredNames || configuredNames.has(key)) {
+            names.add(similar);
+          }
         }
       }
     } catch (_error) {
@@ -17826,6 +17898,9 @@ function withNavigationPomodoroThemeRows(entries, query, baseRows, options = {})
     : "";
   const exactRecent = history.find((theme) => theme.key === candidateKey) || null;
   if (candidate) {
+    if (navigationPomodoroThemeUnconfigured(api, candidate.name)) {
+      candidate.unconfigured = true;
+    }
     const similarTo = navigationPomodoroThemeSimilar(api, candidate.name);
     if (similarTo.length > 0) {
       candidate.similarTo = similarTo;
@@ -22658,6 +22733,16 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi) {
       cls: "bob-cnp-row-status is-create",
     });
     appendHighlighted(statusEl, row.badge || "New", query);
+    if (row.unconfigured) {
+      badgesEl.createDiv({
+        cls: "bob-cnp-row-status is-warning",
+        text: "Not in your themes",
+        attr: {
+          title: "This name isn't in your configured themes",
+          "aria-label": "Not in your themes",
+        },
+      });
+    }
     for (const similar of row.similarTo || []) {
       badgesEl.createDiv({
         cls: "bob-cnp-row-status is-similar-theme",
@@ -22911,6 +22996,9 @@ function buildPomodoroThemesManagerRows(report, view) {
     if (theme.exempt === true) {
       badges.push("exempt");
     }
+    if (theme.configured === false) {
+      badges.push("not configured");
+    }
     if (reappeared.has(theme.key) || reappeared.has(theme.name)) {
       badges.push("reappeared");
     }
@@ -23062,6 +23150,7 @@ function renderPomodoroThemesManagerRow(row, rowEl, query, themesApi) {
     "bob-cnp-pomodoro-row",
     "is-theme",
     theme.hidden === true ? "is-hidden-theme" : "",
+    theme.configured === false ? "is-unconfigured-theme" : "",
   ]);
   const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
   const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
@@ -23083,6 +23172,8 @@ function renderPomodoroThemesManagerRow(row, rowEl, query, themesApi) {
         ? "bob-cnp-row-status is-hidden-theme"
         : badge === "reappeared"
           ? "bob-cnp-row-status is-similar-theme"
+          : badge === "not configured"
+            ? "bob-cnp-row-status is-warning"
           : "bob-cnp-row-status is-recent-theme";
     const label =
       badge === "reappeared"
@@ -23095,10 +23186,19 @@ function renderPomodoroThemesManagerRow(row, rowEl, query, themesApi) {
     });
   }
   if (theme.hue) {
+    const source = theme.hue_source === "config"
+      ? " · config"
+      : theme.pinned === true
+        ? " · pinned"
+        : "";
     badgesEl.createDiv({
       cls: "bob-cnp-row-status",
-      text: theme.pinned === true ? `${theme.hue} · pinned` : String(theme.hue),
-      attr: { title: `Hue ${theme.hue}${theme.pinned === true ? " (pinned)" : ""}` },
+      text: `${theme.hue}${source}`,
+      attr: {
+        title: theme.hue_source === "config"
+          ? "Color set in ~/.config/bob/config.yml"
+          : `Hue ${theme.hue}${theme.pinned === true ? " (pinned)" : ""}`,
+      },
     });
   }
 }
@@ -23261,6 +23361,10 @@ class PomodoroThemesManagerModal extends FilteredPickerModal {
     if (!row || row.kind !== "theme") {
       return;
     }
+    if (row.theme && row.theme.hue_source === "config") {
+      new Notice("Color set in ~/.config/bob/config.yml");
+      return;
+    }
     new PomodoroThemeColorModal(this.app, this, row.theme).open();
   }
 
@@ -23287,10 +23391,22 @@ class PomodoroThemeActionModal extends FilteredPickerModal {
     const theme = themeRow && themeRow.theme ? themeRow.theme : null;
     const name = theme && theme.name ? theme.name : "theme";
     const hidden = theme && theme.hidden === true;
+    const configColor = theme && theme.hue_source === "config";
     super(app, {
       items: [
         { kind: "action", key: "rename", title: `Rename ${name}`, meta: "Previewed one-commit rename (r)" },
-        { kind: "action", key: "color", title: `Pin color for ${name}`, meta: "8 hues plus Auto (c)" },
+        {
+          kind: "action",
+          key: "color",
+          title: `Pin color for ${name}`,
+          meta: configColor
+            ? "Color set in ~/.config/bob/config.yml"
+            : "8 hues plus Auto (c)",
+          disabled: configColor,
+          tooltip: configColor
+            ? "Color set in ~/.config/bob/config.yml"
+            : "",
+        },
         { kind: "action", key: "hide", title: hidden ? `Unhide ${name}` : `Hide ${name}`, meta: "Recent suggestions only (h)" },
         { kind: "action", key: "occurrences", title: `Show occurrences of ${name}`, meta: "Daily notes, Enter opens (o)" },
       ],
@@ -23307,17 +23423,28 @@ class PomodoroThemeActionModal extends FilteredPickerModal {
       ],
       filterItem: (row, query) => !query || String(row.title || "").toLowerCase().includes(query),
       renderItem: (row, rowEl, query) => {
-        addPickerRowClasses(rowEl, ["bob-cnp-pomodoro-row", "is-action"]);
+        addPickerRowClasses(rowEl, [
+          "bob-cnp-pomodoro-row",
+          "is-action",
+          row.disabled ? "is-disabled" : "",
+        ]);
+        if (row.disabled && typeof rowEl.setAttribute === "function") {
+          rowEl.setAttribute("aria-disabled", "true");
+          rowEl.setAttribute("title", row.tooltip || row.meta || "");
+        }
         const iconEl = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
         applyIcon(iconEl, row.key === "rename" ? "pencil" : row.key === "color" ? "palette" : row.key === "hide" ? "eye-off" : "search");
         const textEl = rowEl.createDiv({ cls: "bob-cnp-row-text" });
         const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
         appendHighlighted(titleEl, row.title, query);
         const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
+        if (row.disabled && typeof pathEl.setAttribute === "function") {
+          pathEl.setAttribute("title", row.tooltip || row.meta || "");
+        }
         appendHighlighted(pathEl, row.meta, query);
       },
-      closeBeforeOpenItem: true,
-      openItem: (row) => this.runAction(row),
+      closeBeforeOpenItem: false,
+      openItem: (row) => row && row.disabled ? false : this.runAction(row),
     });
     this.manager = manager;
     this.themeRow = themeRow;
@@ -23346,6 +23473,9 @@ class PomodoroThemeActionModal extends FilteredPickerModal {
 
   runAction(row) {
     if (!row || !this.manager) {
+      return false;
+    }
+    if (row.disabled) {
       return false;
     }
     if (row.key === "rename") {
@@ -79414,12 +79544,18 @@ class BobNavigationHotkeysMoveCommitMixin {
     }
 
     this.restoreTaskMoveSourceContext(session);
+    const themeWarningSuffix = row.kind === "new"
+      ? navigationPomodoroThemeUnconfiguredNames(
+          getNavigationPomodoroThemesApi(this.app),
+          row.name,
+        ).map((name) => ` · ${name} isn't one of your themes`).join("")
+      : "";
     new Notice(
       buildPomodoroBulletMoveNotice(
         plan,
         session.discovery,
         destinationLabel,
-      ),
+      ) + themeWarningSuffix,
     );
     return true;
   }
@@ -79610,9 +79746,15 @@ class BobNavigationHotkeysMoveCommitMixin {
     }
 
     this.restoreTaskMoveSourceContext(session);
+    const themeWarningSuffix = isRename
+      ? navigationPomodoroThemeUnconfiguredNames(
+          getNavigationPomodoroThemesApi(this.app),
+          plan.name,
+        ).map((name) => ` · ${name} isn't one of your themes`).join("")
+      : "";
     new Notice(
       isRename
-        ? `Renamed Pomodoro #${session.sourceEntry.position} to ${plan.name}`
+        ? `Renamed Pomodoro #${session.sourceEntry.position} to ${plan.name}${themeWarningSuffix}`
         : buildPomodoroEntryMoveNotice(plan, session.discovery, destinationLabel),
     );
     return true;
@@ -86171,6 +86313,9 @@ module.exports.helpers = {
   planPomodoroEntryReorder,
   getPomodoroBulletMoveDestinationLabel,
   createPomodoroBulletMovePickerRows,
+  withNavigationPomodoroThemeRows,
+  navigationPomodoroThemeUnconfigured,
+  navigationPomodoroThemeUnconfiguredNames,
   POMODORO_THEMES_MANAGER_VIEWS,
   POMODORO_THEMES_MANAGER_VIEW_LABELS,
   POMODORO_THEMES_MANAGER_HUES,

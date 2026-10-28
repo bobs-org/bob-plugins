@@ -1,5 +1,6 @@
-// Lane-walk runtime: `]w` / `[w` step, `[W` / `]W` jump to the ends.
-// Navigation-only: never writes, never touches the `]s` walk state.
+// Lane-walk runtime: `]w` / `[w` step, `]W` / `[W` jump to the first
+// task of the next / previous lane. Navigation-only: never writes, never
+// touches the `]s` walk state.
 const LANE_WALK_STALE_NOTICE = "Lane walk changed — try again";
 const LANE_WALK_API_REQUIRED_NOTICE =
   "Bob Ledger Tools lane walk api required";
@@ -25,18 +26,18 @@ class BobNavigationHotkeysLaneWalkMixin {
       if (!Array.isArray(result.entries)) {
         return null;
       }
-      return result;
+      const entries = result.entries.filter(
+        (entry) => normalizeLaneWalkLane(entry && entry.lane) !== null,
+      );
+      return { ...result, entries };
     } catch (error) {
       return null;
     }
   }
 
-  consumePendingLaneWalkRepeat(options, endpoint) {
+  consumePendingLaneWalkRepeat(options) {
     if (options && options.repeat !== undefined && options.repeat !== null) {
       return normalizeVimRepeat(options.repeat);
-    }
-    if (endpoint) {
-      return 1;
     }
     try {
       const view = this.getActiveMarkdownView();
@@ -71,17 +72,8 @@ class BobNavigationHotkeysLaneWalkMixin {
       return false;
     }
     const step = direction < 0 ? -1 : 1;
-    const endpointRaw =
-      options && typeof options.endpoint === "string"
-        ? options.endpoint.trim().toLowerCase()
-        : "";
-    const endpoint =
-      endpointRaw === "first" || endpointRaw === "last"
-        ? endpointRaw
-        : options && options.endpoint
-          ? "endpoint"
-          : null;
-    const repeat = this.consumePendingLaneWalkRepeat(options, endpoint);
+    const laneJump = Boolean(options && options.laneJump === true);
+    const repeat = this.consumePendingLaneWalkRepeat(options);
     const run = async () => {
       const api = getLaneWalkApi(this.app);
       if (!api) {
@@ -101,6 +93,23 @@ class BobNavigationHotkeysLaneWalkMixin {
         );
         return false;
       }
+      const cursor = this.getReviewJumpCursor();
+      const anchor =
+        this.laneWalkAnchor && typeof this.laneWalkAnchor === "object"
+          ? this.laneWalkAnchor
+          : null;
+      const planFrom = (entries) => {
+        const args = {
+          direction: step,
+          cursor,
+          anchor,
+          todayText,
+          repeat,
+        };
+        return laneJump
+          ? planLaneWalkLaneJump(entries, args)
+          : planLaneWalkJump(entries, args);
+      };
       let entries = Array.isArray(queue.entries) ? queue.entries : [];
       if (entries.length === 0) {
         this.laneWalkAnchor = null;
@@ -110,19 +119,7 @@ class BobNavigationHotkeysLaneWalkMixin {
         );
         return false;
       }
-      const cursor = this.getReviewJumpCursor();
-      const anchor =
-        this.laneWalkAnchor && typeof this.laneWalkAnchor === "object"
-          ? this.laneWalkAnchor
-          : null;
-      let plan = planLaneWalkJump(entries, {
-        direction: step,
-        cursor,
-        anchor,
-        todayText,
-        repeat,
-        endpoint: endpointRaw || (endpoint ? true : null),
-      });
+      let plan = planFrom(entries);
       if (!plan || plan.kind === "empty") {
         this.laneWalkAnchor = null;
         showLaneWalkNotice(
@@ -153,14 +150,7 @@ class BobNavigationHotkeysLaneWalkMixin {
           );
           return false;
         }
-        plan = planLaneWalkJump(entries, {
-          direction: step,
-          cursor,
-          anchor,
-          todayText,
-          repeat,
-          endpoint: endpointRaw || (endpoint ? true : null),
-        });
+        plan = planFrom(entries);
         if (!plan || plan.kind === "empty") {
           this.laneWalkAnchor = null;
           showLaneWalkNotice(

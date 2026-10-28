@@ -59774,26 +59774,26 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-next-lane-task",
-      name: "Jump to next Pending or Next task off today's plan",
+      name: "Jump to next Pending, Next, or Ready task off today's plan",
       callback: () => this.jumpToLaneTask(1),
     });
 
     this.addCommand({
       id: "jump-to-prev-lane-task",
-      name: "Jump to previous Pending or Next task off today's plan",
+      name: "Jump to previous Pending, Next, or Ready task off today's plan",
       callback: () => this.jumpToLaneTask(-1),
     });
 
     this.addCommand({
-      id: "jump-to-first-lane-task",
-      name: "Jump to first Pending or Next task off today's plan",
-      callback: () => this.jumpToLaneTask(1, { endpoint: "first" }),
+      id: "jump-to-next-lane",
+      name: "Jump to the first task of the next lane off today's plan",
+      callback: () => this.jumpToLaneTask(1, { laneJump: true }),
     });
 
     this.addCommand({
-      id: "jump-to-last-lane-task",
-      name: "Jump to last Pending or Next task off today's plan",
-      callback: () => this.jumpToLaneTask(1, { endpoint: "last" }),
+      id: "jump-to-prev-lane",
+      name: "Jump to the first task of the previous lane off today's plan",
+      callback: () => this.jumpToLaneTask(-1, { laneJump: true }),
     });
 
     this.addCommand({
@@ -67010,7 +67010,8 @@ class BobNavigationHotkeysWalkLandingMixin {
 // Lane-walk pure model: planning, anchors, work-log reads, and notice
 // models. Reuses the review-walk identity, repeat, date, and display
 // helpers; nothing here touches Obsidian.
-const LANE_WALK_REQUIRED_API_VERSION = 1;
+const LANE_WALK_REQUIRED_API_VERSION = 2;
+const LANE_WALK_LANES = Object.freeze(["pending", "next", "ready"]);
 
 function getLaneWalkApi(app) {
   try {
@@ -67023,7 +67024,10 @@ function getLaneWalkApi(app) {
     if (!laneWalk || typeof laneWalk !== "object") {
       return null;
     }
-    if (!Number.isInteger(laneWalk.version) || laneWalk.version < 1) {
+    if (
+      !Number.isInteger(laneWalk.version) ||
+      laneWalk.version < LANE_WALK_REQUIRED_API_VERSION
+    ) {
       return null;
     }
     if (typeof laneWalk.queue !== "function") {
@@ -67035,8 +67039,32 @@ function getLaneWalkApi(app) {
   }
 }
 
+function normalizeLaneWalkLane(lane) {
+  if (lane === "pending" || lane === "next" || lane === "ready") {
+    return lane;
+  }
+  return null;
+}
+
+function laneWalkLaneLabel(lane) {
+  if (lane === "ready") {
+    return "READY";
+  }
+  if (lane === "next") {
+    return "NEXT";
+  }
+  return "PENDING";
+}
+
 function laneWalkOrderOf(entry) {
-  return entry && entry.lane === "next" ? 1 : 0;
+  const lane = normalizeLaneWalkLane(entry && entry.lane);
+  if (lane === "ready") {
+    return 2;
+  }
+  if (lane === "next") {
+    return 1;
+  }
+  return 0;
 }
 
 function laneWalkTupleCompare(left, right) {
@@ -67054,6 +67082,14 @@ function laneWalkTupleCompare(left, right) {
   return leftLine - rightLine;
 }
 
+function laneWalkEntryKey(entry) {
+  try {
+    return reviewQueueEntryKey(entry);
+  } catch (error) {
+    return entry && typeof entry.key === "string" ? entry.key : "";
+  }
+}
+
 // Anchor: `{ day, key, lane, path, line, text }`, recorded after every
 // successful landing and cleared on unload.
 function buildLaneWalkAnchor(entry, todayText) {
@@ -67063,10 +67099,11 @@ function buildLaneWalkAnchor(entry, todayText) {
       entry && typeof entry.key === "string" && entry.key
         ? entry.key
         : reviewQueueEntryKey(entry);
+    const lane = normalizeLaneWalkLane(entry && entry.lane) || "pending";
     return Object.freeze({
       day,
       key,
-      lane: entry && entry.lane === "next" ? "next" : "pending",
+      lane,
       path: entry && typeof entry.path === "string" ? entry.path : "",
       line: entry && Number.isInteger(entry.line) ? entry.line : 0,
       text:
@@ -67087,42 +67124,8 @@ function laneWalkAnchorIsCurrentDay(anchor, todayText) {
   }
 }
 
-// Pure jump planner. Returns `{ kind: "empty" }` or
-// `{ kind: "jump", entry, rank, total, laneRank, laneTotal, wrapped, origin }`.
-// `direction` is +1 (`]w`) or -1 (`[w`); `endpoint` is "first", "last", or
-// truthy for the directional end; `repeat` is N steps with wrap.
-function planLaneWalkJump(list, options = {}) {
-  const rows = Array.isArray(list) ? list.slice() : [];
-  if (rows.length === 0) {
-    return Object.freeze({ kind: "empty" });
-  }
-  const direction = options.direction < 0 ? -1 : 1;
-  const endpointRaw =
-    options && typeof options.endpoint === "string"
-      ? options.endpoint.trim().toLowerCase()
-      : "";
-  const endpointFlag =
-    endpointRaw === "first" || endpointRaw === "last"
-      ? endpointRaw
-      : options && options.endpoint
-        ? direction < 0
-          ? "first"
-          : "last"
-        : null;
-  if (endpointFlag === "first" || endpointFlag === "last") {
-    const index = endpointFlag === "first" ? 0 : rows.length - 1;
-    const entry = rows[index];
-    return Object.freeze({
-      kind: "jump",
-      entry,
-      rank: index + 1,
-      total: rows.length,
-      laneRank: entry.laneRank,
-      laneTotal: entry.laneTotal,
-      wrapped: false,
-      origin: null,
-    });
-  }
+function resolveLaneWalkOrigin(rows, options = {}) {
+  const list = Array.isArray(rows) ? rows : [];
   const todayText =
     options && typeof options.todayText === "string" ? options.todayText : "";
   const cursor =
@@ -67136,40 +67139,145 @@ function planLaneWalkJump(list, options = {}) {
   if (anchor && !laneWalkAnchorIsCurrentDay(anchor, todayText)) {
     anchor = null;
   }
-  const finish = (at, wrapped, origin) => {
-    const step = Object.freeze({
-      kind: "jump",
-      entry: rows[at],
-      rank: at + 1,
-      total: rows.length,
-      laneRank: rows[at].laneRank,
-      laneTotal: rows[at].laneTotal,
-      wrapped: Boolean(wrapped),
-      origin: origin || null,
+  const freeze = (kind, index, tuple, lane) =>
+    Object.freeze({
+      kind,
+      index: Number.isInteger(index) ? index : -1,
+      tuple: tuple || null,
+      lane: normalizeLaneWalkLane(lane) || null,
     });
-    const repeat = normalizeVimRepeat(options.repeat);
-    if (repeat <= 1) {
-      return step;
+  const none = () => freeze(null, -1, null, null);
+  const anchorKey =
+    anchor && typeof anchor.key === "string" && anchor.key
+      ? anchor.key
+      : null;
+  const anchorLane = anchor ? normalizeLaneWalkLane(anchor.lane) : null;
+  const anchorTuple = () => {
+    if (!anchor || !anchorLane) {
+      return null;
     }
-    const extra = repeat - 1;
-    const raw = at + direction * extra;
-    const rem = raw % rows.length;
-    const finalIndex = rem < 0 ? rem + rows.length : rem;
-    const finalEntry = rows[finalIndex];
-    return Object.freeze({
-      kind: "jump",
-      entry: finalEntry,
-      rank: finalIndex + 1,
-      total: rows.length,
-      laneRank: finalEntry.laneRank,
-      laneTotal: finalEntry.laneTotal,
-      wrapped: Boolean(wrapped) || raw < 0 || raw >= rows.length,
-      origin: origin || null,
-    });
+    const path = typeof anchor.path === "string" ? anchor.path : "";
+    if (!path) {
+      return null;
+    }
+    return {
+      lane: anchorLane,
+      path,
+      line: Number.isInteger(anchor.line) ? anchor.line : 0,
+    };
   };
-  const cursorIndex = cursor ? findReviewCursorIndex(rows, cursor, new Set()) : -1;
+  const laneChange = () => {
+    const tuple = anchorTuple();
+    if (!tuple) {
+      return none();
+    }
+    return freeze("lane-change", -1, tuple, tuple.lane);
+  };
+  const cursorIndex = cursor
+    ? findReviewCursorIndex(list, cursor, new Set())
+    : -1;
   if (cursorIndex >= 0) {
-    let index = cursorIndex + direction;
+    const entry = list[cursorIndex];
+    if (
+      anchor &&
+      anchorKey &&
+      laneWalkEntryKey(entry) === anchorKey &&
+      normalizeLaneWalkLane(entry && entry.lane) !== anchorLane
+    ) {
+      return laneChange();
+    }
+    return freeze("cursor", cursorIndex, entry, entry && entry.lane);
+  }
+  if (anchor) {
+    const anchorIndex =
+      anchorKey !== null
+        ? list.findIndex((entry) => laneWalkEntryKey(entry) === anchorKey)
+        : -1;
+    if (anchorIndex >= 0) {
+      const entry = list[anchorIndex];
+      if (normalizeLaneWalkLane(entry && entry.lane) !== anchorLane) {
+        return laneChange();
+      }
+      return freeze("anchor", anchorIndex, entry, entry && entry.lane);
+    }
+    const tuple = anchorTuple();
+    if (tuple) {
+      return freeze("anchor-gap", -1, tuple, tuple.lane);
+    }
+  }
+  return none();
+}
+
+function finishLaneWalkJump(rows, at, wrapped, origin, extra = {}) {
+  const step = Object.freeze({
+    kind: "jump",
+    entry: rows[at],
+    rank: at + 1,
+    total: rows.length,
+    laneRank: rows[at].laneRank,
+    laneTotal: rows[at].laneTotal,
+    wrapped: Boolean(wrapped),
+    origin: origin || null,
+    ...extra,
+  });
+  return step;
+}
+
+function applyLaneWalkRepeat(rows, at, direction, wrapped, origin, repeat) {
+  const count = normalizeVimRepeat(repeat);
+  if (count <= 1) {
+    return finishLaneWalkJump(rows, at, wrapped, origin);
+  }
+  const extra = count - 1;
+  const raw = at + direction * extra;
+  const rem = raw % rows.length;
+  const finalIndex = rem < 0 ? rem + rows.length : rem;
+  return finishLaneWalkJump(
+    rows,
+    finalIndex,
+    Boolean(wrapped) || raw < 0 || raw >= rows.length,
+    origin,
+  );
+}
+
+function planLaneWalkFromTuple(rows, tuple, direction, originKind) {
+  if (direction > 0) {
+    for (let index = 0; index < rows.length; index += 1) {
+      if (laneWalkTupleCompare(tuple, rows[index]) < 0) {
+        return { at: index, wrapped: false, origin: originKind };
+      }
+    }
+    return { at: 0, wrapped: true, origin: originKind };
+  }
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    if (laneWalkTupleCompare(tuple, rows[index]) > 0) {
+      return { at: index, wrapped: false, origin: originKind };
+    }
+  }
+  return { at: rows.length - 1, wrapped: true, origin: originKind };
+}
+
+// Pure jump planner. Returns `{ kind: "empty" }` or
+// `{ kind: "jump", entry, rank, total, laneRank, laneTotal, wrapped, origin }`.
+// `direction` is +1 (`]w`) or -1 (`[w`); `repeat` is N steps with wrap.
+function planLaneWalkJump(list, options = {}) {
+  const rows = Array.isArray(list) ? list.slice() : [];
+  if (rows.length === 0) {
+    return Object.freeze({ kind: "empty" });
+  }
+  const direction = options.direction < 0 ? -1 : 1;
+  const origin = resolveLaneWalkOrigin(rows, options);
+  const finish = (at, wrapped, originKind) =>
+    applyLaneWalkRepeat(
+      rows,
+      at,
+      direction,
+      wrapped,
+      originKind,
+      options.repeat,
+    );
+  if (origin.kind === "cursor" || origin.kind === "anchor") {
+    let index = origin.index + direction;
     let wrapped = false;
     if (index < 0) {
       index = rows.length - 1;
@@ -67178,54 +67286,110 @@ function planLaneWalkJump(list, options = {}) {
       index = 0;
       wrapped = true;
     }
-    return finish(index, wrapped, "cursor");
+    return finish(index, wrapped, origin.kind);
   }
-  if (anchor) {
-    const anchorKey =
-      typeof anchor.key === "string" && anchor.key ? anchor.key : null;
-    const anchorIndex =
-      anchorKey !== null
-        ? rows.findIndex((entry) => reviewQueueEntryKey(entry) === anchorKey)
-        : -1;
-    if (anchorIndex >= 0) {
-      let index = anchorIndex + direction;
-      let wrapped = false;
-      if (index < 0) {
-        index = rows.length - 1;
-        wrapped = true;
-      } else if (index >= rows.length) {
-        index = 0;
-        wrapped = true;
-      }
-      return finish(index, wrapped, "anchor");
-    }
-    const anchorTuple = {
-      lane:
-        anchor.lane === "next" ? "next" : anchor.lane === "pending" ? "pending" : null,
-      path: typeof anchor.path === "string" ? anchor.path : "",
-      line: Number.isInteger(anchor.line) ? anchor.line : 0,
-    };
-    if (anchorTuple.lane !== null && anchorTuple.path) {
-      if (direction > 0) {
-        for (let index = 0; index < rows.length; index += 1) {
-          if (laneWalkTupleCompare(anchorTuple, rows[index]) < 0) {
-            return finish(index, false, "anchor-gap");
-          }
-        }
-        return finish(0, true, "anchor-gap");
-      }
-      for (let index = rows.length - 1; index >= 0; index -= 1) {
-        if (laneWalkTupleCompare(anchorTuple, rows[index]) > 0) {
-          return finish(index, false, "anchor-gap");
-        }
-      }
-      return finish(rows.length - 1, true, "anchor-gap");
-    }
+  if (
+    (origin.kind === "anchor-gap" || origin.kind === "lane-change") &&
+    origin.tuple
+  ) {
+    const stepped = planLaneWalkFromTuple(
+      rows,
+      origin.tuple,
+      direction,
+      origin.kind,
+    );
+    return finish(stepped.at, stepped.wrapped, stepped.origin);
   }
   if (direction < 0) {
     return finish(rows.length - 1, false, null);
   }
   return finish(0, false, null);
+}
+
+function laneWalkOccupiedLanes(rows) {
+  const present = new Set();
+  for (const entry of rows) {
+    const lane = normalizeLaneWalkLane(entry && entry.lane);
+    if (lane) {
+      present.add(lane);
+    }
+  }
+  return LANE_WALK_LANES.filter((lane) => present.has(lane));
+}
+
+function laneWalkFirstIndexOfLane(rows, lane) {
+  return rows.findIndex(
+    (entry) => normalizeLaneWalkLane(entry && entry.lane) === lane,
+  );
+}
+
+function stepOccupiedLane(occupied, fromLane, direction) {
+  const ring = LANE_WALK_LANES;
+  const start = ring.indexOf(fromLane);
+  const fromIndex = start >= 0 ? start : direction > 0 ? -1 : ring.length;
+  let wrapped = false;
+  let found = occupied[0];
+  for (let n = 1; n <= ring.length; n += 1) {
+    let idx = fromIndex + direction * n;
+    if (idx >= ring.length || idx < 0) {
+      wrapped = true;
+      idx = ((idx % ring.length) + ring.length) % ring.length;
+    }
+    const lane = ring[idx];
+    if (occupied.includes(lane)) {
+      found = lane;
+      break;
+    }
+  }
+  return { lane: found, wrapped };
+}
+
+// Pure lane-jump planner for `]W` / `[W`. Lands on the first task of the
+// next / previous non-empty lane, cycling, skipping empty lanes.
+function planLaneWalkLaneJump(list, options = {}) {
+  const rows = Array.isArray(list) ? list.slice() : [];
+  if (rows.length === 0) {
+    return Object.freeze({ kind: "empty" });
+  }
+  const direction = options.direction < 0 ? -1 : 1;
+  const occupied = laneWalkOccupiedLanes(rows);
+  if (occupied.length === 0) {
+    return Object.freeze({ kind: "empty" });
+  }
+  const origin = resolveLaneWalkOrigin(rows, options);
+  const steps = Math.max(1, normalizeVimRepeat(options.repeat));
+  const fromLane = origin.lane;
+  let wrapped = false;
+  let targetLane = occupied[0];
+  if (!origin.kind || fromLane === null) {
+    if (direction > 0) {
+      const raw = -1 + steps;
+      const idx = ((raw % occupied.length) + occupied.length) % occupied.length;
+      targetLane = occupied[idx];
+      wrapped = raw >= occupied.length || raw < 0;
+    } else {
+      const raw = occupied.length - steps;
+      const idx = ((raw % occupied.length) + occupied.length) % occupied.length;
+      targetLane = occupied[idx];
+      wrapped = raw < 0 || raw >= occupied.length;
+    }
+  } else {
+    let current = fromLane;
+    for (let s = 0; s < steps; s += 1) {
+      const stepped = stepOccupiedLane(occupied, current, direction);
+      current = stepped.lane;
+      wrapped = wrapped || stepped.wrapped;
+    }
+    targetLane = current;
+  }
+  const index = laneWalkFirstIndexOfLane(rows, targetLane);
+  if (index < 0) {
+    return Object.freeze({ kind: "empty" });
+  }
+  return finishLaneWalkJump(rows, index, wrapped, origin.kind, {
+    fromLane,
+    laneJump: true,
+  });
 }
 
 // Latest Work Log entry for the task at 0-based `taskLine` in `content`.
@@ -67299,14 +67463,18 @@ function laneWalkNoteName(path) {
   return base.replace(/\.md$/i, "");
 }
 
+function laneWalkHintAction(lane) {
+  return lane === "ready" ? "next" : "release";
+}
+
 // Pure notice model for one landing. `context` is
 // `{ rank, total, wrapped, list, noteName, workLog }`; `list` is the full
 // walk list for the rail (entries carry `lane`). Falls back to the entry's
 // own rank/total when the plan rank is missing.
 function buildLaneWalkNoticeModel(entry, context = {}) {
   try {
-    const lane = entry && entry.lane === "next" ? "next" : "pending";
-    const laneLabel = lane === "next" ? "NEXT" : "PENDING";
+    const lane = normalizeLaneWalkLane(entry && entry.lane) || "pending";
+    const laneLabel = laneWalkLaneLabel(lane);
     const rank =
       Number.isInteger(context.rank) && context.rank >= 1
         ? context.rank
@@ -67333,7 +67501,9 @@ function buildLaneWalkNoticeModel(entry, context = {}) {
           : 1;
     const list = Array.isArray(context.list) ? context.list : null;
     const railLanes = list
-      ? list.map((item) => (item && item.lane === "next" ? "next" : "pending"))
+      ? list.map(
+          (item) => normalizeLaneWalkLane(item && item.lane) || "pending",
+        )
       : null;
     const wrapped = context.wrapped === true;
     const title = cleanTaskDisplayText(
@@ -67352,9 +67522,7 @@ function buildLaneWalkNoticeModel(entry, context = {}) {
         ? entry.created
         : null;
     const railMode =
-      railLanes && railLanes.length > 30
-        ? "bar"
-        : "dots";
+      railLanes && railLanes.length > 30 ? "bar" : "dots";
     const model = {
       empty: false,
       lane,
@@ -67368,6 +67536,7 @@ function buildLaneWalkNoticeModel(entry, context = {}) {
       noteName,
       workLog,
       created,
+      hintAction: laneWalkHintAction(lane),
       railMode,
       railLanes: railLanes ? Object.freeze(railLanes.slice()) : null,
       railTotal: railLanes ? railLanes.length : total,
@@ -67388,6 +67557,7 @@ function buildLaneWalkNoticeModel(entry, context = {}) {
       noteName: "",
       workLog: null,
       created: null,
+      hintAction: "release",
       railMode: "dots",
       railLanes: null,
       railTotal: 1,
@@ -67407,29 +67577,63 @@ function buildLaneWalkEmptyNoticeModel(counts = {}) {
       0,
       Math.floor(numericOrDefault(counts.todayNext, 0)),
     );
-    const today = todayPending + todayNext;
-    const model = {
+    const todayReady = Math.max(
+      0,
+      Math.floor(numericOrDefault(counts.todayReady, 0)),
+    );
+    const reviewReady = Math.max(
+      0,
+      Math.floor(numericOrDefault(counts.reviewReady, 0)),
+    );
+    const today = todayPending + todayNext + todayReady;
+    const review = reviewReady;
+    let title;
+    let text;
+    if (review > 0) {
+      title = "Ready tasks are waiting in review";
+      const parts = ["Lanes clear", title, `REVIEW ${review}`];
+      if (today > 0) {
+        parts.push(`TODAY ${today}`);
+      }
+      parts.push("]s walks NEW and ROTTEN");
+      text = parts.join(" · ");
+    } else if (today > 0) {
+      title = "Every Pending, Next, and Ready task is on today's plan";
+      text = `Lanes clear · ${title} · TODAY ${today}`;
+    } else {
+      title = "No Pending, Next, or Ready tasks";
+      text = `Lanes clear · ${title}`;
+    }
+    return Object.freeze({
       empty: true,
       lanesClear: true,
       hasToday: today > 0,
+      hasReview: review > 0,
       today,
       todayPending,
       todayNext,
-    };
-    model.text =
-      today > 0
-        ? `Lanes clear · Every Pending and Next task is on today's plan · TODAY ${today}`
-        : "Lanes clear · No Pending or Next tasks";
-    return Object.freeze(model);
+      todayReady,
+      review,
+      reviewReady,
+      title,
+      hint: review > 0 ? "]s walks NEW and ROTTEN" : null,
+      text,
+    });
   } catch (error) {
     return Object.freeze({
       empty: true,
       lanesClear: true,
       hasToday: false,
+      hasReview: false,
       today: 0,
       todayPending: 0,
       todayNext: 0,
-      text: "Lanes clear · No Pending or Next tasks",
+      todayReady: 0,
+      review: 0,
+      reviewReady: 0,
+      title: "No Pending, Next, or Ready tasks",
+      hint: null,
+      text: "Lanes clear · No Pending, Next, or Ready tasks",
     });
   }
 }
@@ -67442,19 +67646,24 @@ function formatLaneWalkNoticeText(model) {
     if (model.empty === true) {
       return typeof model.text === "string" && model.text
         ? model.text
-        : "Lanes clear · No Pending or Next tasks";
+        : "Lanes clear · No Pending, Next, or Ready tasks";
     }
-    const laneLabel =
-      model.lane === "next" ? "NEXT" : model.laneLabel || "PENDING";
+    const lane = normalizeLaneWalkLane(model.lane);
+    const laneLabel = lane
+      ? laneWalkLaneLabel(lane)
+      : model.laneLabel || "PENDING";
     const head = `${laneLabel} ${model.laneRank} of ${model.laneTotal} · walk ${model.rank}/${model.total}`;
     const title = String(model.title || "").trim() || "(untitled task)";
     const parts = [`${head} — ${title}`];
     if (model.workLog && model.workLog.date && model.workLog.summary) {
-      parts.push(`🛠️ ${reviewShortDate(model.workLog.date)} — ${model.workLog.summary}`);
+      parts.push(
+        `🛠️ ${reviewShortDate(model.workLog.date)} — ${model.workLog.summary}`,
+      );
     } else if (model.created) {
       parts.push(`created ${reviewShortDate(model.created)}`);
     }
-    parts.push("Ctrl+Shift+Enter today · Alt+N release");
+    const action = laneWalkHintAction(lane);
+    parts.push(`Ctrl+Shift+Enter today · Alt+N ${action}`);
     let text = parts.join(" · ");
     if (model.wrapped === true) {
       text += " · wrapped around";
@@ -67468,17 +67677,23 @@ function formatLaneWalkNoticeText(model) {
 // Lane-walk toast: rich `.bob-nh-notice` card plus the plain-text
 // fallback. Replaces the previous lane-walk notice instead of stacking.
 function renderLaneWalkNoticeFragment(model, root) {
-  const lane = model && model.lane === "next" ? "next" : "pending";
+  const lane = normalizeLaneWalkLane(model && model.lane) || "pending";
   const card = root.createDiv({
     cls: `bob-nh-notice bob-nh-lane-walk is-${lane}`,
     attr: { "aria-label": model.text },
   });
   const headerEl = card.createDiv({ cls: "bob-nh-notice-header" });
-  headerEl.createSpan({
-    cls: "bob-nh-lane-walk-box",
-    text: lane === "next" ? "*" : "/",
+  const boxOpts = {
+    cls:
+      lane === "ready"
+        ? "bob-nh-lane-walk-box is-empty"
+        : "bob-nh-lane-walk-box",
     attr: { "aria-hidden": "true" },
-  });
+  };
+  if (lane !== "ready") {
+    boxOpts.text = lane === "next" ? "*" : "/";
+  }
+  headerEl.createSpan(boxOpts);
   headerEl.createSpan({ cls: "bob-nh-notice-level", text: model.laneLabel });
   headerEl.createSpan({
     cls: "bob-nh-notice-count",
@@ -67496,46 +67711,63 @@ function renderLaneWalkNoticeFragment(model, root) {
   });
   if (lanes && lanes.length > 30) {
     const bar = railEl.createDiv({ cls: "bob-nh-lane-walk-bar" });
-    const pendingCount = lanes.filter((item) => item !== "next").length;
-    const nextCount = lanes.length - pendingCount;
-    const pendingSeg = bar.createDiv({
-      cls: "bob-nh-lane-walk-bar-pending",
-    });
-    const nextSeg = bar.createDiv({ cls: "bob-nh-lane-walk-bar-next" });
-    try {
-      pendingSeg.setAttribute("style", `flex-grow: ${pendingCount}`);
-      nextSeg.setAttribute("style", `flex-grow: ${nextCount}`);
-    } catch (error) {
-      // Inline flex is best-effort.
+    const laneCounts = { pending: 0, next: 0, ready: 0 };
+    for (const item of lanes) {
+      const itemLane = normalizeLaneWalkLane(item) || "pending";
+      laneCounts[itemLane] += 1;
     }
-    const caret = bar.createDiv({ cls: "bob-nh-lane-walk-caret" });
-    try {
-      const percent = ((model.rank - 0.5) / lanes.length) * 100;
-      caret.setAttribute("style", `left: ${percent}%`);
-    } catch (error) {
-      // Caret position is best-effort.
+    for (const itemLane of LANE_WALK_LANES) {
+      const count = laneCounts[itemLane];
+      if (count <= 0) {
+        continue;
+      }
+      const current = itemLane === lane;
+      const seg = bar.createDiv({
+        cls: `bob-nh-lane-walk-bar-${itemLane}${current ? " is-current-lane" : ""}`,
+      });
+      try {
+        seg.setAttribute("style", `flex-grow: ${count}`);
+      } catch (error) {
+        // Inline flex is best-effort.
+      }
+      if (current) {
+        const caret = seg.createDiv({ cls: "bob-nh-lane-walk-caret" });
+        try {
+          const denom =
+            Number.isInteger(model.laneTotal) && model.laneTotal > 0
+              ? model.laneTotal
+              : count;
+          const rank =
+            Number.isInteger(model.laneRank) && model.laneRank >= 1
+              ? model.laneRank
+              : 1;
+          const percent = ((rank - 0.5) / denom) * 100;
+          caret.setAttribute("style", `left: ${percent}%`);
+        } catch (error) {
+          // Caret position is best-effort.
+        }
+      }
     }
   } else if (lanes && lanes.length > 0) {
-    const pendingTotal = lanes.filter((item) => item !== "next").length;
-    lanes.forEach((itemLane, index) => {
+    lanes.forEach((itemLaneRaw, index) => {
+      const itemLane = normalizeLaneWalkLane(itemLaneRaw) || "pending";
       const isCurrent = index === model.rank - 1;
-      const cls = `bob-nh-lane-walk-dot is-${itemLane}${isCurrent ? " is-current" : ""}`;
+      const inCurrentLane = itemLane === lane;
+      const cls = `bob-nh-lane-walk-dot is-${itemLane}${isCurrent ? " is-current" : ""}${inCurrentLane ? " is-current-lane" : ""}`;
       railEl.createSpan({ cls, attr: { "aria-hidden": "true" } });
-      if (
-        pendingTotal > 0 &&
-        index === pendingTotal - 1 &&
-        index < lanes.length - 1 &&
-        lanes[index + 1] === "next"
-      ) {
-        railEl.createSpan({
-          cls: "bob-nh-lane-walk-gap",
-          attr: { "aria-hidden": "true" },
-        });
+      if (index < lanes.length - 1) {
+        const nextLane = normalizeLaneWalkLane(lanes[index + 1]) || "pending";
+        if (nextLane !== itemLane) {
+          railEl.createSpan({
+            cls: "bob-nh-lane-walk-gap",
+            attr: { "aria-hidden": "true" },
+          });
+        }
       }
     });
   } else {
     railEl.createSpan({
-      cls: `bob-nh-lane-walk-dot is-${lane} is-current`,
+      cls: `bob-nh-lane-walk-dot is-${lane} is-current is-current-lane`,
       attr: { "aria-hidden": "true" },
     });
   }
@@ -67571,7 +67803,9 @@ function renderLaneWalkNoticeFragment(model, root) {
   hintEl.createSpan({ cls: "bob-nh-lane-walk-key", text: "Ctrl+Shift+Enter" });
   hintEl.createSpan({ text: " today · " });
   hintEl.createSpan({ cls: "bob-nh-lane-walk-key", text: "Alt+N" });
-  hintEl.createSpan({ text: " release" });
+  hintEl.createSpan({
+    text: ` ${laneWalkHintAction(lane)}`,
+  });
   return card;
 }
 
@@ -67588,21 +67822,37 @@ function renderLaneWalkEmptyFragment(model, root) {
     // Icon is best-effort.
   }
   headerEl.createSpan({ cls: "bob-nh-notice-level", text: "Lanes clear" });
-  if (model && model.hasToday === true) {
-    card.createDiv({
-      cls: "bob-nh-lane-walk-title",
-      text: "Every Pending and Next task is on today's plan",
-    });
+  const title =
+    model && typeof model.title === "string" && model.title
+      ? model.title
+      : model && model.hasReview
+        ? "Ready tasks are waiting in review"
+        : model && model.hasToday
+          ? "Every Pending, Next, and Ready task is on today's plan"
+          : "No Pending, Next, or Ready tasks";
+  card.createDiv({
+    cls: "bob-nh-lane-walk-title",
+    text: title,
+  });
+  if (model && (model.hasReview === true || model.hasToday === true)) {
     const chipsEl = card.createDiv({ cls: "bob-nh-notice-chips" });
-    chipsEl.createSpan({
-      cls: "bob-nh-notice-chip",
-      text: `TODAY ${model.today}`,
-    });
-  } else {
-    card.createDiv({
-      cls: "bob-nh-lane-walk-title",
-      text: "No Pending or Next tasks",
-    });
+    if (model.hasReview === true) {
+      chipsEl.createSpan({
+        cls: "bob-nh-notice-chip is-info",
+        text: `REVIEW ${model.review}`,
+      });
+    }
+    if (model.hasToday === true) {
+      chipsEl.createSpan({
+        cls: "bob-nh-notice-chip",
+        text: `TODAY ${model.today}`,
+      });
+    }
+  }
+  if (model && model.hasReview === true) {
+    const hintEl = card.createDiv({ cls: "bob-nh-lane-walk-hint" });
+    hintEl.createSpan({ cls: "bob-nh-lane-walk-key", text: "]s" });
+    hintEl.createSpan({ text: " walks NEW and ROTTEN" });
   }
   return card;
 }
@@ -67655,8 +67905,9 @@ function showLaneWalkNotice(plugin, model) {
   }
 }
 // ---- src/544-plugin-lane-walk.js ----
-// Lane-walk runtime: `]w` / `[w` step, `[W` / `]W` jump to the ends.
-// Navigation-only: never writes, never touches the `]s` walk state.
+// Lane-walk runtime: `]w` / `[w` step, `]W` / `[W` jump to the first
+// task of the next / previous lane. Navigation-only: never writes, never
+// touches the `]s` walk state.
 const LANE_WALK_STALE_NOTICE = "Lane walk changed — try again";
 const LANE_WALK_API_REQUIRED_NOTICE =
   "Bob Ledger Tools lane walk api required";
@@ -67682,18 +67933,18 @@ class BobNavigationHotkeysLaneWalkMixin {
       if (!Array.isArray(result.entries)) {
         return null;
       }
-      return result;
+      const entries = result.entries.filter(
+        (entry) => normalizeLaneWalkLane(entry && entry.lane) !== null,
+      );
+      return { ...result, entries };
     } catch (error) {
       return null;
     }
   }
 
-  consumePendingLaneWalkRepeat(options, endpoint) {
+  consumePendingLaneWalkRepeat(options) {
     if (options && options.repeat !== undefined && options.repeat !== null) {
       return normalizeVimRepeat(options.repeat);
-    }
-    if (endpoint) {
-      return 1;
     }
     try {
       const view = this.getActiveMarkdownView();
@@ -67728,17 +67979,8 @@ class BobNavigationHotkeysLaneWalkMixin {
       return false;
     }
     const step = direction < 0 ? -1 : 1;
-    const endpointRaw =
-      options && typeof options.endpoint === "string"
-        ? options.endpoint.trim().toLowerCase()
-        : "";
-    const endpoint =
-      endpointRaw === "first" || endpointRaw === "last"
-        ? endpointRaw
-        : options && options.endpoint
-          ? "endpoint"
-          : null;
-    const repeat = this.consumePendingLaneWalkRepeat(options, endpoint);
+    const laneJump = Boolean(options && options.laneJump === true);
+    const repeat = this.consumePendingLaneWalkRepeat(options);
     const run = async () => {
       const api = getLaneWalkApi(this.app);
       if (!api) {
@@ -67758,6 +68000,23 @@ class BobNavigationHotkeysLaneWalkMixin {
         );
         return false;
       }
+      const cursor = this.getReviewJumpCursor();
+      const anchor =
+        this.laneWalkAnchor && typeof this.laneWalkAnchor === "object"
+          ? this.laneWalkAnchor
+          : null;
+      const planFrom = (entries) => {
+        const args = {
+          direction: step,
+          cursor,
+          anchor,
+          todayText,
+          repeat,
+        };
+        return laneJump
+          ? planLaneWalkLaneJump(entries, args)
+          : planLaneWalkJump(entries, args);
+      };
       let entries = Array.isArray(queue.entries) ? queue.entries : [];
       if (entries.length === 0) {
         this.laneWalkAnchor = null;
@@ -67767,19 +68026,7 @@ class BobNavigationHotkeysLaneWalkMixin {
         );
         return false;
       }
-      const cursor = this.getReviewJumpCursor();
-      const anchor =
-        this.laneWalkAnchor && typeof this.laneWalkAnchor === "object"
-          ? this.laneWalkAnchor
-          : null;
-      let plan = planLaneWalkJump(entries, {
-        direction: step,
-        cursor,
-        anchor,
-        todayText,
-        repeat,
-        endpoint: endpointRaw || (endpoint ? true : null),
-      });
+      let plan = planFrom(entries);
       if (!plan || plan.kind === "empty") {
         this.laneWalkAnchor = null;
         showLaneWalkNotice(
@@ -67810,14 +68057,7 @@ class BobNavigationHotkeysLaneWalkMixin {
           );
           return false;
         }
-        plan = planLaneWalkJump(entries, {
-          direction: step,
-          cursor,
-          anchor,
-          todayText,
-          repeat,
-          endpoint: endpointRaw || (endpoint ? true : null),
-        });
+        plan = planFrom(entries);
         if (!plan || plan.kind === "empty") {
           this.laneWalkAnchor = null;
           showLaneWalkNotice(
@@ -88761,6 +89001,8 @@ module.exports.helpers = {
   deleteEditorLine,
   getLaneWalkApi,
   planLaneWalkJump,
+  resolveLaneWalkOrigin,
+  planLaneWalkLaneJump,
   buildLaneWalkAnchor,
   readLatestWorkLog,
   buildLaneWalkNoticeModel,

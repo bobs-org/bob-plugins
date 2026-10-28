@@ -123,6 +123,7 @@ module.exports.helpers = {
   dashboardLaneSectionVisible,
   dashboardLaneStatusMatches,
   dashboardSectionBaseVisible,
+  readyLaneScanFromTasks,
   readyCountFromTasks,
   readyBudgetFromTasks,
   readyBadgeModel,

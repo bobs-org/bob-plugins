@@ -138,17 +138,29 @@ function loadProductionHelpers() {
   return helpers;
 }
 
+function laneMark(lane) {
+  if (lane === "pending") return "/";
+  if (lane === "next") return "*";
+  return " ";
+}
+
+function laneLabel(lane) {
+  if (lane === "pending") return "PENDING";
+  if (lane === "next") return "NEXT";
+  return "READY";
+}
+
 function laneEntry(lane, line, text, notePath = "notes/alpha.md") {
   return {
     key: `${notePath}:${line}`,
     path: notePath,
     line,
     lineNumber: line - 1,
-    originalMarkdown: `- [${lane === "pending" ? "/" : "*"}] #task ${text}`,
+    originalMarkdown: `- [${laneMark(lane)}] #task ${text}`,
     text,
     blockId: null,
     lane,
-    laneLabel: lane === "pending" ? "PENDING" : "NEXT",
+    laneLabel: laneLabel(lane),
     created: null,
     rank: 0,
     total: 0,
@@ -158,17 +170,22 @@ function laneEntry(lane, line, text, notePath = "notes/alpha.md") {
 }
 
 function withRanks(rows) {
-  const pending = rows.filter((row) => row.lane === "pending").length;
-  const next = rows.length - pending;
-  let seenPending = 0;
-  let seenNext = 0;
-  return rows.map((row, index) => ({
-    ...row,
-    rank: index + 1,
-    total: rows.length,
-    laneRank: row.lane === "pending" ? (seenPending += 1) : (seenNext += 1),
-    laneTotal: row.lane === "pending" ? pending : next,
-  }));
+  const totals = { pending: 0, next: 0, ready: 0 };
+  for (const row of rows) {
+    if (Object.prototype.hasOwnProperty.call(totals, row.lane)) totals[row.lane] += 1;
+  }
+  const seen = { pending: 0, next: 0, ready: 0 };
+  return rows.map((row, index) => {
+    const lane = Object.prototype.hasOwnProperty.call(seen, row.lane) ? row.lane : "pending";
+    seen[lane] += 1;
+    return {
+      ...row,
+      rank: index + 1,
+      total: rows.length,
+      laneRank: seen[lane],
+      laneTotal: totals[lane],
+    };
+  });
 }
 
 function buildCases(helpers) {
@@ -291,12 +308,88 @@ function buildCases(helpers) {
   cases.push({
     id: "empty-today",
     title: "empty, everything on today",
-    html: render(buildLaneWalkEmptyNoticeModel({ todayPending: 2, todayNext: 1 })),
+    html: render(buildLaneWalkEmptyNoticeModel({ todayPending: 2, todayNext: 1, todayReady: 3 })),
   });
   cases.push({
     id: "empty-none",
-    title: "empty, nothing pending or next",
+    title: "empty, nothing pending, next, or ready",
     html: render(buildLaneWalkEmptyNoticeModel({})),
+  });
+  const threeLane = withRanks([
+    laneEntry("pending", 3, "Fix vault-sync quarantine for foreign identity clobbers"),
+    laneEntry("pending", 9, "second pending"),
+    laneEntry("next", 20, "Ship lane-walk READY membership"),
+    laneEntry("next", 26, "next two"),
+    laneEntry("ready", 40, "Triage the rotten log keep reasons"),
+    laneEntry("ready", 44, "second ready"),
+    laneEntry("ready", 48, "third ready"),
+  ]);
+  cases.push({
+    id: "ready-mid-walk",
+    title: "READY mid-walk (dots, three lanes, two gaps)",
+    html: render(
+      buildLaneWalkNoticeModel({ ...threeLane[5], created: "2026-10-03" }, {
+        rank: 6,
+        total: 7,
+        laneRank: 2,
+        laneTotal: 3,
+        wrapped: false,
+        list: threeLane,
+      }),
+    ),
+  });
+  cases.push({
+    id: "lane-jump-ready-first",
+    title: "]W landing on READY 1 after NEXT",
+    html: render(
+      buildLaneWalkNoticeModel(threeLane[4], {
+        rank: 5,
+        total: 7,
+        laneRank: 1,
+        laneTotal: 3,
+        wrapped: false,
+        list: threeLane,
+      }),
+    ),
+  });
+  cases.push({
+    id: "lane-jump-wrap-pending",
+    title: "wrapped ]W from READY to PENDING 1",
+    html: render(
+      buildLaneWalkNoticeModel(threeLane[0], {
+        rank: 1,
+        total: 7,
+        laneRank: 1,
+        laneTotal: 2,
+        wrapped: true,
+        list: threeLane,
+      }),
+    ),
+  });
+  const ninetySix = withRanks(
+    Array.from({ length: 96 }, (_, index) => {
+      const lane = index === 0 ? "pending" : index < 9 ? "next" : "ready";
+      return laneEntry(lane, index + 1, `task ${index + 1}`);
+    }),
+  );
+  cases.push({
+    id: "ninety-six-bar",
+    title: "96 entries (1 PENDING, 8 NEXT, 87 READY)",
+    html: render(
+      buildLaneWalkNoticeModel(ninetySix[20], {
+        rank: 21,
+        total: 96,
+        laneRank: 12,
+        laneTotal: 87,
+        wrapped: false,
+        list: ninetySix,
+      }),
+    ),
+  });
+  cases.push({
+    id: "empty-review",
+    title: "empty, Ready tasks waiting in review",
+    html: render(buildLaneWalkEmptyNoticeModel({ reviewReady: 4, todayPending: 1 })),
   });
   return cases;
 }
@@ -319,6 +412,7 @@ body[data-theme="light"] {
   --background-primary:#fcfcfd; --background-secondary:#f0f1f4; --background-modifier-border:#d7d9df;
   --text-normal:#252832; --text-muted:#727783; --text-faint:#a0a4ad; --text-accent:#624bb8;
   --color-green:#3f8f5f; --color-orange:#d9822b; --color-yellow:#b87918; --color-blue:#3b82c4;
+  --interactive-accent:#624bb8;
   --color-purple:#8e63c8; --color-red:#c44950; --font-ui-smaller:12px; --radius-s:5px; --radius-m:8px;
   --shadow-s:0 2px 8px #20263a22;
   --task-status-in-progress:#d9a13b; --task-status-next:#3f8f5f;
@@ -328,6 +422,7 @@ body[data-theme="dark"] {
   --background-primary:#202226; --background-secondary:#292c32; --background-modifier-border:#41454d;
   --text-normal:#e4e5e9; --text-muted:#a3a7b0; --text-faint:#6b7078; --text-accent:#b6a0ff;
   --color-green:#3f8f5f; --color-orange:#d9822b; --color-yellow:#e8b55e; --color-blue:#6aa5e8;
+  --interactive-accent:#b6a0ff;
   --color-purple:#b48ae8; --color-red:#ee797e; --font-ui-smaller:12px; --radius-s:5px; --radius-m:8px;
   --shadow-s:0 2px 8px #0008;
   --task-status-in-progress:#e0aa3e; --task-status-next:#73c99d;
@@ -459,7 +554,7 @@ async function main() {
     client = await CdpClient.connect(page.webSocketDebuggerUrl);
     await client.call("Page.enable");
     await client.call("Runtime.enable");
-    await client.call("Emulation.setDeviceMetricsOverride", { width: 1040, height: 1680, deviceScaleFactor: 1, mobile: false });
+    await client.call("Emulation.setDeviceMetricsOverride", { width: 1040, height: 1480, deviceScaleFactor: 1, mobile: false });
     await client.call("Page.navigate", { url: pathToFileURL(htmlFile).href });
     const start = Date.now();
     while (Date.now() - start < 15000) {
@@ -485,7 +580,7 @@ async function main() {
       "",
       "Rendered from the production lane-walk renderer plus `styles.css` under an Obsidian baseline stylesheet.",
       "",
-      "Cases: PENDING mid-walk with a Work Log, NEXT after a lane crossing with created, wrapped, a two-line long title, 8 entries (dots), 40 entries (compressed bar), both empty states.",
+      "Cases: PENDING mid-walk with a Work Log, NEXT after a lane crossing with created, wrapped, a two-line long title, 8 entries (dots), 40 entries (compressed bar), empty today, empty none, READY mid-walk, ]W READY 1, wrapped ]W to PENDING 1, 96-entry three-lane bar, empty review.",
       "",
       ...screenshots.map((file) => `- ${path.basename(file)}`),
       "",

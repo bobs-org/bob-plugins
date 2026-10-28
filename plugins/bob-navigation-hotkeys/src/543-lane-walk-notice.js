@@ -1,17 +1,23 @@
 // Lane-walk toast: rich `.bob-nh-notice` card plus the plain-text
 // fallback. Replaces the previous lane-walk notice instead of stacking.
 function renderLaneWalkNoticeFragment(model, root) {
-  const lane = model && model.lane === "next" ? "next" : "pending";
+  const lane = normalizeLaneWalkLane(model && model.lane) || "pending";
   const card = root.createDiv({
     cls: `bob-nh-notice bob-nh-lane-walk is-${lane}`,
     attr: { "aria-label": model.text },
   });
   const headerEl = card.createDiv({ cls: "bob-nh-notice-header" });
-  headerEl.createSpan({
-    cls: "bob-nh-lane-walk-box",
-    text: lane === "next" ? "*" : "/",
+  const boxOpts = {
+    cls:
+      lane === "ready"
+        ? "bob-nh-lane-walk-box is-empty"
+        : "bob-nh-lane-walk-box",
     attr: { "aria-hidden": "true" },
-  });
+  };
+  if (lane !== "ready") {
+    boxOpts.text = lane === "next" ? "*" : "/";
+  }
+  headerEl.createSpan(boxOpts);
   headerEl.createSpan({ cls: "bob-nh-notice-level", text: model.laneLabel });
   headerEl.createSpan({
     cls: "bob-nh-notice-count",
@@ -29,46 +35,63 @@ function renderLaneWalkNoticeFragment(model, root) {
   });
   if (lanes && lanes.length > 30) {
     const bar = railEl.createDiv({ cls: "bob-nh-lane-walk-bar" });
-    const pendingCount = lanes.filter((item) => item !== "next").length;
-    const nextCount = lanes.length - pendingCount;
-    const pendingSeg = bar.createDiv({
-      cls: "bob-nh-lane-walk-bar-pending",
-    });
-    const nextSeg = bar.createDiv({ cls: "bob-nh-lane-walk-bar-next" });
-    try {
-      pendingSeg.setAttribute("style", `flex-grow: ${pendingCount}`);
-      nextSeg.setAttribute("style", `flex-grow: ${nextCount}`);
-    } catch (error) {
-      // Inline flex is best-effort.
+    const laneCounts = { pending: 0, next: 0, ready: 0 };
+    for (const item of lanes) {
+      const itemLane = normalizeLaneWalkLane(item) || "pending";
+      laneCounts[itemLane] += 1;
     }
-    const caret = bar.createDiv({ cls: "bob-nh-lane-walk-caret" });
-    try {
-      const percent = ((model.rank - 0.5) / lanes.length) * 100;
-      caret.setAttribute("style", `left: ${percent}%`);
-    } catch (error) {
-      // Caret position is best-effort.
+    for (const itemLane of LANE_WALK_LANES) {
+      const count = laneCounts[itemLane];
+      if (count <= 0) {
+        continue;
+      }
+      const current = itemLane === lane;
+      const seg = bar.createDiv({
+        cls: `bob-nh-lane-walk-bar-${itemLane}${current ? " is-current-lane" : ""}`,
+      });
+      try {
+        seg.setAttribute("style", `flex-grow: ${count}`);
+      } catch (error) {
+        // Inline flex is best-effort.
+      }
+      if (current) {
+        const caret = seg.createDiv({ cls: "bob-nh-lane-walk-caret" });
+        try {
+          const denom =
+            Number.isInteger(model.laneTotal) && model.laneTotal > 0
+              ? model.laneTotal
+              : count;
+          const rank =
+            Number.isInteger(model.laneRank) && model.laneRank >= 1
+              ? model.laneRank
+              : 1;
+          const percent = ((rank - 0.5) / denom) * 100;
+          caret.setAttribute("style", `left: ${percent}%`);
+        } catch (error) {
+          // Caret position is best-effort.
+        }
+      }
     }
   } else if (lanes && lanes.length > 0) {
-    const pendingTotal = lanes.filter((item) => item !== "next").length;
-    lanes.forEach((itemLane, index) => {
+    lanes.forEach((itemLaneRaw, index) => {
+      const itemLane = normalizeLaneWalkLane(itemLaneRaw) || "pending";
       const isCurrent = index === model.rank - 1;
-      const cls = `bob-nh-lane-walk-dot is-${itemLane}${isCurrent ? " is-current" : ""}`;
+      const inCurrentLane = itemLane === lane;
+      const cls = `bob-nh-lane-walk-dot is-${itemLane}${isCurrent ? " is-current" : ""}${inCurrentLane ? " is-current-lane" : ""}`;
       railEl.createSpan({ cls, attr: { "aria-hidden": "true" } });
-      if (
-        pendingTotal > 0 &&
-        index === pendingTotal - 1 &&
-        index < lanes.length - 1 &&
-        lanes[index + 1] === "next"
-      ) {
-        railEl.createSpan({
-          cls: "bob-nh-lane-walk-gap",
-          attr: { "aria-hidden": "true" },
-        });
+      if (index < lanes.length - 1) {
+        const nextLane = normalizeLaneWalkLane(lanes[index + 1]) || "pending";
+        if (nextLane !== itemLane) {
+          railEl.createSpan({
+            cls: "bob-nh-lane-walk-gap",
+            attr: { "aria-hidden": "true" },
+          });
+        }
       }
     });
   } else {
     railEl.createSpan({
-      cls: `bob-nh-lane-walk-dot is-${lane} is-current`,
+      cls: `bob-nh-lane-walk-dot is-${lane} is-current is-current-lane`,
       attr: { "aria-hidden": "true" },
     });
   }
@@ -104,7 +127,9 @@ function renderLaneWalkNoticeFragment(model, root) {
   hintEl.createSpan({ cls: "bob-nh-lane-walk-key", text: "Ctrl+Shift+Enter" });
   hintEl.createSpan({ text: " today · " });
   hintEl.createSpan({ cls: "bob-nh-lane-walk-key", text: "Alt+N" });
-  hintEl.createSpan({ text: " release" });
+  hintEl.createSpan({
+    text: ` ${laneWalkHintAction(lane)}`,
+  });
   return card;
 }
 
@@ -121,21 +146,37 @@ function renderLaneWalkEmptyFragment(model, root) {
     // Icon is best-effort.
   }
   headerEl.createSpan({ cls: "bob-nh-notice-level", text: "Lanes clear" });
-  if (model && model.hasToday === true) {
-    card.createDiv({
-      cls: "bob-nh-lane-walk-title",
-      text: "Every Pending and Next task is on today's plan",
-    });
+  const title =
+    model && typeof model.title === "string" && model.title
+      ? model.title
+      : model && model.hasReview
+        ? "Ready tasks are waiting in review"
+        : model && model.hasToday
+          ? "Every Pending, Next, and Ready task is on today's plan"
+          : "No Pending, Next, or Ready tasks";
+  card.createDiv({
+    cls: "bob-nh-lane-walk-title",
+    text: title,
+  });
+  if (model && (model.hasReview === true || model.hasToday === true)) {
     const chipsEl = card.createDiv({ cls: "bob-nh-notice-chips" });
-    chipsEl.createSpan({
-      cls: "bob-nh-notice-chip",
-      text: `TODAY ${model.today}`,
-    });
-  } else {
-    card.createDiv({
-      cls: "bob-nh-lane-walk-title",
-      text: "No Pending or Next tasks",
-    });
+    if (model.hasReview === true) {
+      chipsEl.createSpan({
+        cls: "bob-nh-notice-chip is-info",
+        text: `REVIEW ${model.review}`,
+      });
+    }
+    if (model.hasToday === true) {
+      chipsEl.createSpan({
+        cls: "bob-nh-notice-chip",
+        text: `TODAY ${model.today}`,
+      });
+    }
+  }
+  if (model && model.hasReview === true) {
+    const hintEl = card.createDiv({ cls: "bob-nh-lane-walk-hint" });
+    hintEl.createSpan({ cls: "bob-nh-lane-walk-key", text: "]s" });
+    hintEl.createSpan({ text: " walks NEW and ROTTEN" });
   }
   return card;
 }

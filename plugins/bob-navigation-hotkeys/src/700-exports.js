@@ -948,6 +948,8 @@ module.exports.helpers = {
   deleteEditorLine,
   getLaneWalkApi,
   planLaneWalkJump,
+  resolveLaneWalkOrigin,
+  planLaneWalkLaneJump,
   buildLaneWalkAnchor,
   readLatestWorkLog,
   buildLaneWalkNoticeModel,

@@ -22,8 +22,8 @@ See [plugin deployment](https://bobs-org.github.io/develop/plugins/deployment/) 
 | [Block ID Prompt](block-id-prompt.md) | 1.33.3 | 1.8.7 | No |
 | [Bob Articles](bob-articles.md) | 0.2.1 | 1.8.7 | No |
 | [Bob Command Mode](bob-command-mode.md) | 0.1.0 | 1.8.7 | Yes |
-| [Bob Ledger Tools](bob-ledger-tools.md) | 1.78.0 | 1.8.7 | No |
-| [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) | 2.57.0 | 1.8.7 | No |
+| [Bob Ledger Tools](bob-ledger-tools.md) | 1.79.0 | 1.8.7 | No |
+| [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) | 2.58.0 | 1.8.7 | No |
 | [Bob Project Tasks](bob-project-tasks.md) | 1.1.0 | 1.8.7 | No |
 | [Bob Vim Surround](bob-vim-surround.md) | 1.5.2 | 1.8.7 | No |
 | [Task Status Cycler](task-status-cycler.md) | 1.42.2 | 1.8.7 | No |

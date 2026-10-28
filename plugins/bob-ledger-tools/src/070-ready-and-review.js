@@ -241,25 +241,28 @@ function dashboardLaneBadgeModel(budget, lane) {
   };
 }
 
-// Pure, testable READY count over Tasks-plugin task objects. `isToday`
-// is the caller's Today predicate. Throws when `isToday` or `isBlocked`
-// throws, so callers can degrade to an unavailable badge rather than a
-// partial count.
-//
-// The optional `isReviewBucket` predicate gates the shared READY count
-// (`docs/freshness.md` §4 in bob-cli): tasks it flags (NEW or ROTTEN
-// review) are excluded from READY. A throwing predicate discards the
-// partial gated count and recomputes the legacy ungated count, so a
-// failure halfway through a batch never leaves a partially gated badge.
-function readyCountFromTasks(tasks, today, isToday, isReviewBucket) {
+// Pure READY-lane scan over Tasks-plugin task objects. `isToday` is the
+// caller's Today predicate. Returns `{ members, today, review, gated }`:
+// `members` are input indices in input order, `today` / `review` tally
+// the visible unblocked TODO tasks dropped for Today and for review.
+// Throws when `isToday` throws. The optional `isReviewBucket` predicate
+// gates the shared READY count (`docs/freshness.md` §4 in bob-cli):
+// tasks it flags (NEW or ROTTEN review) are excluded from READY. A
+// throwing predicate discards the partial gated scan and recomputes the
+// legacy ungated pool (`review: 0`, `gated: false`), so a failure
+// halfway through a batch never leaves a partially gated chip or walk.
+function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
   const list = Array.isArray(tasks) ? tasks : [];
   const todayDay = planDayNumber(today === undefined ? new Date() : today);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
   const gated = typeof isReviewBucket === "function";
-  const legacyCount = () => {
-    let total = 0;
-    for (const task of list) {
+  const scan = (useGate) => {
+    const members = [];
+    let todayCount = 0;
+    let reviewCount = 0;
+    for (let index = 0; index < list.length; index += 1) {
+      const task = list[index];
       if (!readyTaskVisible(task, todayDay)) {
         continue;
       }
@@ -273,44 +276,51 @@ function readyCountFromTasks(tasks, today, isToday, isReviewBucket) {
         throw error;
       }
       if (todayFlag) {
+        todayCount += 1;
         continue;
       }
-      total += 1;
+      if (useGate) {
+        let review = false;
+        try {
+          review = Boolean(isReviewBucket(task));
+        } catch (error) {
+          return { failed: true };
+        }
+        if (review) {
+          reviewCount += 1;
+          continue;
+        }
+      }
+      members.push(index);
     }
-    return total;
+    return {
+      failed: false,
+      members,
+      today: todayCount,
+      review: useGate ? reviewCount : 0,
+      gated: useGate,
+    };
   };
+  const freeze = (result) =>
+    Object.freeze({
+      members: Object.freeze(result.members.slice()),
+      today: result.today,
+      review: result.review,
+      gated: result.gated,
+    });
   if (!gated) {
-    return legacyCount();
+    return freeze(scan(false));
   }
-  let count = 0;
-  for (const task of list) {
-    if (!readyTaskVisible(task, todayDay)) {
-      continue;
-    }
-    if (planTaskIsBlocked(task, list)) {
-      continue;
-    }
-    let todayFlag = false;
-    try {
-      todayFlag = Boolean(isTodayPredicate(task));
-    } catch (error) {
-      throw error;
-    }
-    if (todayFlag) {
-      continue;
-    }
-    let review = false;
-    try {
-      review = Boolean(isReviewBucket(task));
-    } catch (error) {
-      return legacyCount();
-    }
-    if (review) {
-      continue;
-    }
-    count += 1;
+  const gatedResult = scan(true);
+  if (gatedResult.failed) {
+    return freeze(scan(false));
   }
-  return count;
+  return freeze(gatedResult);
+}
+
+function readyCountFromTasks(tasks, today, isToday, isReviewBucket) {
+  return readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket)
+    .members.length;
 }
 
 function readyBudgetFromTasks(tasks, today, caps, isToday, isReviewBucket) {

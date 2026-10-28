@@ -2838,6 +2838,9 @@
 .bob-nh-notice.bob-nh-lane-walk.is-next {
   --bob-nh-level-color: var(--task-status-next, var(--color-green, #3f8f5f));
 }
+.bob-nh-notice.bob-nh-lane-walk.is-ready {
+  --bob-nh-level-color: var(--color-blue, var(--interactive-accent));
+}
 .bob-nh-notice.bob-nh-lane-walk.is-clear {
   --bob-nh-level-color: var(--color-green, #3f8f5f);
 }
@@ -2855,6 +2858,12 @@
   line-height: 1;
   flex: 0 0 auto;
 }
+.bob-nh-lane-walk-box.is-empty {
+  box-sizing: border-box;
+  background-color: transparent;
+  border: 1.5px solid var(--bob-nh-level-color);
+  color: transparent;
+}
 .bob-nh-lane-walk-rail {
   display: flex;
   align-items: center;
@@ -2868,13 +2877,25 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: color-mix(in srgb, var(--bob-nh-level-color) 35%, transparent);
-}
-.bob-nh-lane-walk-dot.is-next {
-  background-color: color-mix(in srgb, var(--task-status-next, var(--color-green, #3f8f5f)) 35%, transparent);
+  background-color: color-mix(in srgb, var(--bob-nh-level-color) 30%, transparent);
 }
 .bob-nh-lane-walk-dot.is-pending {
-  background-color: color-mix(in srgb, var(--task-status-in-progress, var(--color-orange, #d9822b)) 35%, transparent);
+  background-color: color-mix(in srgb, var(--task-status-in-progress, var(--color-orange, #d9822b)) 30%, transparent);
+}
+.bob-nh-lane-walk-dot.is-next {
+  background-color: color-mix(in srgb, var(--task-status-next, var(--color-green, #3f8f5f)) 30%, transparent);
+}
+.bob-nh-lane-walk-dot.is-ready {
+  background-color: color-mix(in srgb, var(--color-blue, var(--interactive-accent)) 30%, transparent);
+}
+.bob-nh-lane-walk-dot.is-current-lane.is-pending {
+  background-color: color-mix(in srgb, var(--task-status-in-progress, var(--color-orange, #d9822b)) 55%, transparent);
+}
+.bob-nh-lane-walk-dot.is-current-lane.is-next {
+  background-color: color-mix(in srgb, var(--task-status-next, var(--color-green, #3f8f5f)) 55%, transparent);
+}
+.bob-nh-lane-walk-dot.is-current-lane.is-ready {
+  background-color: color-mix(in srgb, var(--color-blue, var(--interactive-accent)) 55%, transparent);
 }
 .bob-nh-lane-walk-dot.is-current {
   width: 8px;
@@ -2888,18 +2909,38 @@
 }
 .bob-nh-lane-walk-bar {
   display: flex;
-  position: relative;
   width: 100%;
   height: 8px;
-  border-radius: 4px;
+  gap: 2px;
   overflow: hidden;
-  background-color: var(--background-modifier-border);
+  background-color: transparent;
+}
+.bob-nh-lane-walk-bar-pending,
+.bob-nh-lane-walk-bar-next,
+.bob-nh-lane-walk-bar-ready {
+  position: relative;
+  min-width: 6px;
+  border-radius: 4px;
+  flex-basis: 0;
+  flex-shrink: 1;
 }
 .bob-nh-lane-walk-bar-pending {
-  background-color: color-mix(in srgb, var(--task-status-in-progress, var(--color-orange, #d9822b)) 45%, transparent);
+  background-color: color-mix(in srgb, var(--task-status-in-progress, var(--color-orange, #d9822b)) 35%, transparent);
 }
 .bob-nh-lane-walk-bar-next {
-  background-color: color-mix(in srgb, var(--task-status-next, var(--color-green, #3f8f5f)) 45%, transparent);
+  background-color: color-mix(in srgb, var(--task-status-next, var(--color-green, #3f8f5f)) 35%, transparent);
+}
+.bob-nh-lane-walk-bar-ready {
+  background-color: color-mix(in srgb, var(--color-blue, var(--interactive-accent)) 35%, transparent);
+}
+.bob-nh-lane-walk-bar-pending.is-current-lane {
+  background-color: color-mix(in srgb, var(--task-status-in-progress, var(--color-orange, #d9822b)) 70%, transparent);
+}
+.bob-nh-lane-walk-bar-next.is-current-lane {
+  background-color: color-mix(in srgb, var(--task-status-next, var(--color-green, #3f8f5f)) 70%, transparent);
+}
+.bob-nh-lane-walk-bar-ready.is-current-lane {
+  background-color: color-mix(in srgb, var(--color-blue, var(--interactive-accent)) 70%, transparent);
 }
 .bob-nh-lane-walk-caret {
   position: absolute;

@@ -3739,25 +3739,28 @@ function dashboardLaneBadgeModel(budget, lane) {
   };
 }
 
-// Pure, testable READY count over Tasks-plugin task objects. `isToday`
-// is the caller's Today predicate. Throws when `isToday` or `isBlocked`
-// throws, so callers can degrade to an unavailable badge rather than a
-// partial count.
-//
-// The optional `isReviewBucket` predicate gates the shared READY count
-// (`docs/freshness.md` §4 in bob-cli): tasks it flags (NEW or ROTTEN
-// review) are excluded from READY. A throwing predicate discards the
-// partial gated count and recomputes the legacy ungated count, so a
-// failure halfway through a batch never leaves a partially gated badge.
-function readyCountFromTasks(tasks, today, isToday, isReviewBucket) {
+// Pure READY-lane scan over Tasks-plugin task objects. `isToday` is the
+// caller's Today predicate. Returns `{ members, today, review, gated }`:
+// `members` are input indices in input order, `today` / `review` tally
+// the visible unblocked TODO tasks dropped for Today and for review.
+// Throws when `isToday` throws. The optional `isReviewBucket` predicate
+// gates the shared READY count (`docs/freshness.md` §4 in bob-cli):
+// tasks it flags (NEW or ROTTEN review) are excluded from READY. A
+// throwing predicate discards the partial gated scan and recomputes the
+// legacy ungated pool (`review: 0`, `gated: false`), so a failure
+// halfway through a batch never leaves a partially gated chip or walk.
+function readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket) {
   const list = Array.isArray(tasks) ? tasks : [];
   const todayDay = planDayNumber(today === undefined ? new Date() : today);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
   const gated = typeof isReviewBucket === "function";
-  const legacyCount = () => {
-    let total = 0;
-    for (const task of list) {
+  const scan = (useGate) => {
+    const members = [];
+    let todayCount = 0;
+    let reviewCount = 0;
+    for (let index = 0; index < list.length; index += 1) {
+      const task = list[index];
       if (!readyTaskVisible(task, todayDay)) {
         continue;
       }
@@ -3771,44 +3774,51 @@ function readyCountFromTasks(tasks, today, isToday, isReviewBucket) {
         throw error;
       }
       if (todayFlag) {
+        todayCount += 1;
         continue;
       }
-      total += 1;
+      if (useGate) {
+        let review = false;
+        try {
+          review = Boolean(isReviewBucket(task));
+        } catch (error) {
+          return { failed: true };
+        }
+        if (review) {
+          reviewCount += 1;
+          continue;
+        }
+      }
+      members.push(index);
     }
-    return total;
+    return {
+      failed: false,
+      members,
+      today: todayCount,
+      review: useGate ? reviewCount : 0,
+      gated: useGate,
+    };
   };
+  const freeze = (result) =>
+    Object.freeze({
+      members: Object.freeze(result.members.slice()),
+      today: result.today,
+      review: result.review,
+      gated: result.gated,
+    });
   if (!gated) {
-    return legacyCount();
+    return freeze(scan(false));
   }
-  let count = 0;
-  for (const task of list) {
-    if (!readyTaskVisible(task, todayDay)) {
-      continue;
-    }
-    if (planTaskIsBlocked(task, list)) {
-      continue;
-    }
-    let todayFlag = false;
-    try {
-      todayFlag = Boolean(isTodayPredicate(task));
-    } catch (error) {
-      throw error;
-    }
-    if (todayFlag) {
-      continue;
-    }
-    let review = false;
-    try {
-      review = Boolean(isReviewBucket(task));
-    } catch (error) {
-      return legacyCount();
-    }
-    if (review) {
-      continue;
-    }
-    count += 1;
+  const gatedResult = scan(true);
+  if (gatedResult.failed) {
+    return freeze(scan(false));
   }
-  return count;
+  return freeze(gatedResult);
+}
+
+function readyCountFromTasks(tasks, today, isToday, isReviewBucket) {
+  return readyLaneScanFromTasks(tasks, today, isToday, isReviewBucket)
+    .members.length;
 }
 
 function readyBudgetFromTasks(tasks, today, caps, isToday, isReviewBucket) {
@@ -4295,17 +4305,36 @@ function paintReviewElement(host, kind, review) {
 }
 
 // ---- src/071-lane-walk-model.js ----
-// --- Lane walk queue (api.laneWalk v1) --------------------------------------
-// Pure Pending/Next-off-Today walk list behind the navigation `]w` / `[w`
-// keys. Membership is the dash PENDING/NEXT section predicate
-// (`dashboardLaneSectionVisible`), minus every task with a dedicated Task
-// Link under today's open Pomodoros (`isToday`). Order is lane-first
-// (PENDING = 0, NEXT = 1, matching the dash and chips), then path (raw
-// string compare), then 1-based line, so each lane walks top to bottom
-// through each note and the lanes appear in dash order.
+// --- Lane walk queue (api.laneWalk v2) --------------------------------------
+// Pure Pending/Next/Ready-off-Today walk list behind the navigation
+// `]w` / `[w` and `]W` / `[W` keys. PENDING / NEXT membership is the dash
+// section predicate (`dashboardLaneSectionVisible`); READY membership is
+// the gated READY chip (`readyLaneScanFromTasks`). Today tasks are
+// counted then dropped. Order is lane-first (PENDING = 0, NEXT = 1,
+// READY = 2, matching the dash and chips), then path (raw string
+// compare), then 1-based line, so each lane walks top to bottom through
+// each note and the lanes appear in dash order. A task that matches more
+// than one lane lands only in the first one (PENDING, then NEXT, then
+// READY).
 
 function laneWalkLaneOrder(lane) {
-  return lane === "next" ? 1 : 0;
+  if (lane === "ready") {
+    return 2;
+  }
+  if (lane === "next") {
+    return 1;
+  }
+  return 0;
+}
+
+function laneWalkLaneLabel(lane) {
+  if (lane === "ready") {
+    return "READY";
+  }
+  if (lane === "next") {
+    return "NEXT";
+  }
+  return "PENDING";
 }
 
 function laneWalkCompareEntries(left, right) {
@@ -4317,23 +4346,82 @@ function laneWalkCompareEntries(left, right) {
   return freshnessComparePathLine(left, right);
 }
 
+function laneWalkEntryFromTask(task, index, list, todayDay, todayFlag, lane) {
+  let row = null;
+  try {
+    row = freshnessRowFromTask(task, index, {
+      list,
+      todayDay,
+      isToday: () => todayFlag,
+    });
+  } catch (error) {
+    row = null;
+  }
+  const path = row ? String(row.path || "") : planTaskPath(task) || "";
+  if (!path) {
+    return null;
+  }
+  const line = row && Number.isInteger(row.line) ? row.line : index + 1;
+  const lineNumber =
+    row && Number.isInteger(row.lineNumber) ? row.lineNumber : line - 1;
+  const originalMarkdown =
+    row && typeof row.originalMarkdown === "string"
+      ? row.originalMarkdown
+      : typeof task.originalMarkdown === "string"
+        ? task.originalMarkdown
+        : "";
+  const text =
+    row && typeof row.text === "string"
+      ? row.text
+      : typeof task.description === "string"
+        ? task.description
+        : "";
+  const blockId = row ? row.blockId || null : planTaskBlockId(task);
+  const created =
+    row && (row.created === null || typeof row.created === "string")
+      ? row.created
+      : null;
+  const key = row ? freshnessRowKey(row) : `${path}:${line}`;
+  return {
+    key,
+    path,
+    line,
+    lineNumber,
+    originalMarkdown,
+    text,
+    blockId,
+    lane,
+    laneLabel: laneWalkLaneLabel(lane),
+    created,
+    rank: 0,
+    total: 0,
+    laneRank: 0,
+    laneTotal: 0,
+  };
+}
+
 // Pure queue over Tasks-plugin task objects. `now` sets the local day for
 // future-schedule exclusion; `isToday` is the caller's Today predicate.
-// Returns a frozen `{ entries, counts }` where each entry carries
+// `options.isReviewBucket` is the same READY gate the chip uses. Returns
+// a frozen `{ entries, counts }` where each entry carries
 // `{ key, path, line, lineNumber, originalMarkdown, text, blockId, lane,
 // laneLabel, created, rank, total, laneRank, laneTotal }` and `counts` is
-// `{ pending, next, total, todayPending, todayNext }`. Per lane,
-// `entries.length` equals `dashboardLaneBudgetFromTasks(...).section` on
-// the same snapshot. Throws only when `isToday` throws.
+// `{ pending, next, ready, total, todayPending, todayNext, todayReady,
+// reviewReady }`. Per PENDING / NEXT lane, `entries.length` equals
+// `dashboardLaneBudgetFromTasks(...).section`; READY `entries.length`
+// equals `readyCountFromTasks(...)` on the same snapshot. Throws only
+// when `isToday` throws.
 function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
   const list = Array.isArray(tasks) ? tasks : [];
   const todayDay = planDayNumber(now === undefined ? new Date() : now);
   const isTodayPredicate =
     typeof isToday === "function" ? isToday : () => false;
-  const order =
-    options && typeof options.order === "string" ? options.order : "lane";
-  void order;
+  const isReviewBucket =
+    options && typeof options.isReviewBucket === "function"
+      ? options.isReviewBucket
+      : null;
   const built = [];
+  const claimed = new Set();
   let todayPending = 0;
   let todayNext = 0;
   for (let index = 0; index < list.length; index += 1) {
@@ -4360,99 +4448,76 @@ function laneWalkQueueFromTasks(tasks, now, isToday, options = {}) {
       }
       continue;
     }
-    let row = null;
-    try {
-      row = freshnessRowFromTask(task, index, {
-        list,
-        todayDay,
-        isToday: () => todayFlag,
-      });
-    } catch (error) {
-      row = null;
-    }
-    const path = row ? String(row.path || "") : planTaskPath(task) || "";
-    if (!path) {
+    const entry = laneWalkEntryFromTask(
+      task,
+      index,
+      list,
+      todayDay,
+      todayFlag,
+      lane,
+    );
+    if (!entry) {
       continue;
     }
-    const line = row && Number.isInteger(row.line) ? row.line : index + 1;
-    const lineNumber =
-      row && Number.isInteger(row.lineNumber) ? row.lineNumber : line - 1;
-    const originalMarkdown =
-      row && typeof row.originalMarkdown === "string"
-        ? row.originalMarkdown
-        : typeof task.originalMarkdown === "string"
-          ? task.originalMarkdown
-          : "";
-    const text =
-      row && typeof row.text === "string"
-        ? row.text
-        : typeof task.description === "string"
-          ? task.description
-          : "";
-    const blockId = row ? row.blockId || null : planTaskBlockId(task);
-    const created =
-      row && (row.created === null || typeof row.created === "string")
-        ? row.created
-        : null;
-    const key = row ? freshnessRowKey(row) : `${path}:${line}`;
-    built.push({
-      key,
-      path,
-      line,
-      lineNumber,
-      originalMarkdown,
-      text,
-      blockId,
-      lane,
-      laneLabel: lane === "next" ? "NEXT" : "PENDING",
-      created,
-      rank: 0,
-      total: 0,
-      laneRank: 0,
-      laneTotal: 0,
-    });
+    claimed.add(index);
+    built.push(entry);
+  }
+  const scan = readyLaneScanFromTasks(
+    list,
+    now,
+    isTodayPredicate,
+    isReviewBucket,
+  );
+  for (const index of scan.members) {
+    if (claimed.has(index)) {
+      continue;
+    }
+    const task = list[index];
+    const entry = laneWalkEntryFromTask(
+      task,
+      index,
+      list,
+      todayDay,
+      false,
+      "ready",
+    );
+    if (!entry) {
+      continue;
+    }
+    built.push(entry);
   }
   built.sort(laneWalkCompareEntries);
   const total = built.length;
-  let pendingTotal = 0;
-  let nextTotal = 0;
+  const laneTotals = { pending: 0, next: 0, ready: 0 };
   for (const entry of built) {
-    if (entry.lane === "pending") {
-      pendingTotal += 1;
-    } else {
-      nextTotal += 1;
-    }
+    const lane =
+      entry.lane === "next" || entry.lane === "ready" ? entry.lane : "pending";
+    laneTotals[lane] += 1;
   }
-  let pendingSeen = 0;
-  let nextSeen = 0;
+  const laneSeen = { pending: 0, next: 0, ready: 0 };
   const entries = built.map((entry, at) => {
-    let laneRank = 0;
-    let laneTotal = 0;
-    if (entry.lane === "pending") {
-      pendingSeen += 1;
-      laneRank = pendingSeen;
-      laneTotal = pendingTotal;
-    } else {
-      nextSeen += 1;
-      laneRank = nextSeen;
-      laneTotal = nextTotal;
-    }
+    const lane =
+      entry.lane === "next" || entry.lane === "ready" ? entry.lane : "pending";
+    laneSeen[lane] += 1;
     return Object.freeze({
       ...entry,
       rank: at + 1,
       total,
-      laneRank,
-      laneTotal,
+      laneRank: laneSeen[lane],
+      laneTotal: laneTotals[lane],
     });
   });
   return Object.freeze({
     entries: Object.freeze(entries),
     counts: Object.freeze({
-      pending: pendingTotal,
-      next: nextTotal,
+      pending: laneTotals.pending,
+      next: laneTotals.next,
+      ready: laneTotals.ready,
       total,
       todayPending,
       todayNext,
+      todayReady: scan.today,
+      reviewReady: scan.review,
     }),
   });
 }
@@ -20893,6 +20958,24 @@ class BobLedgerToolsPlanAndReadyMixin {
     }
   }
 
+  // Shared READY gate for the chip and the lane walk. Returns
+  // `{ gate, gateMemo }`, both null when the snapshot is missing or
+  // throws, so the two surfaces always degrade together.
+  readyReviewGate(now) {
+    try {
+      const gateMemo = this.freshnessEnsureMemo(now);
+      if (!gateMemo || !gateMemo.tasksAvailable) {
+        return { gate: null, gateMemo: null };
+      }
+      return {
+        gate: this.freshnessReviewPredicate(gateMemo),
+        gateMemo,
+      };
+    } catch (error) {
+      return { gate: null, gateMemo: null };
+    }
+  }
+
   readyBudget(now = new Date()) {
     try {
       const loaded = loadPlanCaps();
@@ -20914,20 +20997,7 @@ class BobLedgerToolsPlanAndReadyMixin {
       if (!this.isTodayCacheReady(now)) {
         return unavailable;
       }
-      // Gate the shared READY count from one validated freshness
-      // snapshot. A missing or throwing snapshot degrades to the
-      // legacy ungated count, never a partially gated one.
-      let gate = null;
-      let gateMemo = null;
-      try {
-        gateMemo = this.freshnessEnsureMemo(now);
-        if (gateMemo && gateMemo.tasksAvailable) {
-          gate = this.freshnessReviewPredicate(gateMemo);
-        }
-      } catch (error) {
-        gate = null;
-        gateMemo = null;
-      }
+      const { gate, gateMemo } = this.readyReviewGate(now);
       let count;
       try {
         count = readyCountFromTasks(
@@ -21566,9 +21636,10 @@ class BobLedgerToolsPlanAndReadyMixin {
     }
   }
 
-  // Lane walk queue (api.laneWalk v1): Pending/Next-off-Today entries in
-  // lane order. Same gating as the lane budget; never throws. Memoized on
-  // the Tasks array identity, the local date text, and todayCacheGen.
+  // Lane walk queue (api.laneWalk v2): Pending/Next/Ready-off-Today
+  // entries in lane order. READY uses the same gate as readyBudget;
+  // never throws. Memoized on the Tasks array identity, the local date
+  // text, todayCacheGen, and the freshness snapshot identity.
   apiLaneWalkQueue(now = new Date()) {
     try {
       const dateText = this.todayLocalDate(now);
@@ -21583,12 +21654,14 @@ class BobLedgerToolsPlanAndReadyMixin {
       if (!this.isTodayCacheReady(now)) {
         return { available: false, reason: "today" };
       }
+      const { gate, gateMemo } = this.readyReviewGate(now);
       const memo = this.laneWalkMemo;
       if (
         memo &&
         memo.tasks === tasks &&
         memo.dateText === dateText &&
-        memo.todayGen === this.todayCacheGen
+        memo.todayGen === this.todayCacheGen &&
+        memo.gateMemo === gateMemo
       ) {
         return memo.result;
       }
@@ -21598,7 +21671,7 @@ class BobLedgerToolsPlanAndReadyMixin {
           tasks,
           now,
           (task) => this.isTodayTask(task),
-          { order: "lane" },
+          { isReviewBucket: gate },
         );
       } catch (error) {
         return { available: false, reason: "error" };
@@ -21613,6 +21686,7 @@ class BobLedgerToolsPlanAndReadyMixin {
         tasks,
         dateText,
         todayGen: this.todayCacheGen,
+        gateMemo,
         result,
       };
       return result;
@@ -21623,7 +21697,7 @@ class BobLedgerToolsPlanAndReadyMixin {
 
   laneWalkApi() {
     return Object.freeze({
-      version: 1,
+      version: 2,
       queue: () => this.apiLaneWalkQueue(),
     });
   }
@@ -57014,6 +57088,7 @@ module.exports.helpers = {
   dashboardLaneSectionVisible,
   dashboardLaneStatusMatches,
   dashboardSectionBaseVisible,
+  readyLaneScanFromTasks,
   readyCountFromTasks,
   readyBudgetFromTasks,
   readyBadgeModel,

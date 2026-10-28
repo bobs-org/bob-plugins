@@ -226,26 +226,26 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-next-lane-task",
-      name: "Jump to next Pending or Next task off today's plan",
+      name: "Jump to next Pending, Next, or Ready task off today's plan",
       callback: () => this.jumpToLaneTask(1),
     });
 
     this.addCommand({
       id: "jump-to-prev-lane-task",
-      name: "Jump to previous Pending or Next task off today's plan",
+      name: "Jump to previous Pending, Next, or Ready task off today's plan",
       callback: () => this.jumpToLaneTask(-1),
     });
 
     this.addCommand({
-      id: "jump-to-first-lane-task",
-      name: "Jump to first Pending or Next task off today's plan",
-      callback: () => this.jumpToLaneTask(1, { endpoint: "first" }),
+      id: "jump-to-next-lane",
+      name: "Jump to the first task of the next lane off today's plan",
+      callback: () => this.jumpToLaneTask(1, { laneJump: true }),
     });
 
     this.addCommand({
-      id: "jump-to-last-lane-task",
-      name: "Jump to last Pending or Next task off today's plan",
-      callback: () => this.jumpToLaneTask(1, { endpoint: "last" }),
+      id: "jump-to-prev-lane",
+      name: "Jump to the first task of the previous lane off today's plan",
+      callback: () => this.jumpToLaneTask(-1, { laneJump: true }),
     });
 
     this.addCommand({

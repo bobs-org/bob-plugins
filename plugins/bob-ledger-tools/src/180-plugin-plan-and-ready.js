@@ -191,6 +191,24 @@ class BobLedgerToolsPlanAndReadyMixin {
     }
   }
 
+  // Shared READY gate for the chip and the lane walk. Returns
+  // `{ gate, gateMemo }`, both null when the snapshot is missing or
+  // throws, so the two surfaces always degrade together.
+  readyReviewGate(now) {
+    try {
+      const gateMemo = this.freshnessEnsureMemo(now);
+      if (!gateMemo || !gateMemo.tasksAvailable) {
+        return { gate: null, gateMemo: null };
+      }
+      return {
+        gate: this.freshnessReviewPredicate(gateMemo),
+        gateMemo,
+      };
+    } catch (error) {
+      return { gate: null, gateMemo: null };
+    }
+  }
+
   readyBudget(now = new Date()) {
     try {
       const loaded = loadPlanCaps();
@@ -212,20 +230,7 @@ class BobLedgerToolsPlanAndReadyMixin {
       if (!this.isTodayCacheReady(now)) {
         return unavailable;
       }
-      // Gate the shared READY count from one validated freshness
-      // snapshot. A missing or throwing snapshot degrades to the
-      // legacy ungated count, never a partially gated one.
-      let gate = null;
-      let gateMemo = null;
-      try {
-        gateMemo = this.freshnessEnsureMemo(now);
-        if (gateMemo && gateMemo.tasksAvailable) {
-          gate = this.freshnessReviewPredicate(gateMemo);
-        }
-      } catch (error) {
-        gate = null;
-        gateMemo = null;
-      }
+      const { gate, gateMemo } = this.readyReviewGate(now);
       let count;
       try {
         count = readyCountFromTasks(
@@ -864,9 +869,10 @@ class BobLedgerToolsPlanAndReadyMixin {
     }
   }
 
-  // Lane walk queue (api.laneWalk v1): Pending/Next-off-Today entries in
-  // lane order. Same gating as the lane budget; never throws. Memoized on
-  // the Tasks array identity, the local date text, and todayCacheGen.
+  // Lane walk queue (api.laneWalk v2): Pending/Next/Ready-off-Today
+  // entries in lane order. READY uses the same gate as readyBudget;
+  // never throws. Memoized on the Tasks array identity, the local date
+  // text, todayCacheGen, and the freshness snapshot identity.
   apiLaneWalkQueue(now = new Date()) {
     try {
       const dateText = this.todayLocalDate(now);
@@ -881,12 +887,14 @@ class BobLedgerToolsPlanAndReadyMixin {
       if (!this.isTodayCacheReady(now)) {
         return { available: false, reason: "today" };
       }
+      const { gate, gateMemo } = this.readyReviewGate(now);
       const memo = this.laneWalkMemo;
       if (
         memo &&
         memo.tasks === tasks &&
         memo.dateText === dateText &&
-        memo.todayGen === this.todayCacheGen
+        memo.todayGen === this.todayCacheGen &&
+        memo.gateMemo === gateMemo
       ) {
         return memo.result;
       }
@@ -896,7 +904,7 @@ class BobLedgerToolsPlanAndReadyMixin {
           tasks,
           now,
           (task) => this.isTodayTask(task),
-          { order: "lane" },
+          { isReviewBucket: gate },
         );
       } catch (error) {
         return { available: false, reason: "error" };
@@ -911,6 +919,7 @@ class BobLedgerToolsPlanAndReadyMixin {
         tasks,
         dateText,
         todayGen: this.todayCacheGen,
+        gateMemo,
         result,
       };
       return result;
@@ -921,7 +930,7 @@ class BobLedgerToolsPlanAndReadyMixin {
 
   laneWalkApi() {
     return Object.freeze({
-      version: 1,
+      version: 2,
       queue: () => this.apiLaneWalkQueue(),
     });
   }

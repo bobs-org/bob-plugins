@@ -217,6 +217,14 @@ such as invalid note defaults are available from the exported pure resolver
 helper for contract tests; `suggestFor` returns only a suggestion or `null`,
 not a command-response envelope. All six additions are additive under
 `themes` v1; the root API remains v3.
+
+Explicit `[theme:: NAME]` / `(theme:: NAME)` fields render as PT13 pills in
+Live Preview, Reading view, and Tasks/Dataview task rows through the same
+canonical mark model. A Dataview `theme | NAME` chip is replaced only when it
+is an explicit task-line field; `task.theme` inherited from page frontmatter
+is not enough. Hover tooltips resolve `suggestFor` lazily from the originating
+note, never from a dashboard path, and never put `::` in `aria-label` or
+`title`.
 `dashboardCollections` provides `snapshot()` and
 `renderChip(host, options?)` for live PROJECTS/REFERENCES badges.
 

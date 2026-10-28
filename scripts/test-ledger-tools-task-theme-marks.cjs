@@ -823,6 +823,7 @@ test("styles.css contract for task theme pills", () => {
   assert.ok(css.indexOf('.bob-pomo-theme[data-task-theme-kind="unknown"]') !== -1);
   assert.ok(css.indexOf('.bob-pomo-theme[data-task-theme-kind="repair"]') !== -1);
   assert.ok(css.indexOf("body:not(.bob-task-theme-marks) .bob-pomo-theme[data-task-theme-kind]") !== -1);
+  assert.ok(css.indexOf("body.bob-task-theme-marks .bob-task-theme-native") !== -1);
   assert.ok(css.indexOf('[data-dv-norm-key="theme"]') !== -1);
   assert.ok(css.indexOf("body.bob-task-theme-marks .markdown-source-view.is-live-preview") !== -1);
 });

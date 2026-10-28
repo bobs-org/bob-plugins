@@ -52,6 +52,21 @@ class BobLedgerToolsTaskThemeEditorMixin {
       } catch (error) {
         // Live Preview marks are best-effort.
       }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor(
+            (el, ctx) => this.renderTaskThemeMarksIn(el, ctx),
+            50,
+          );
+        }
+      } catch (error) {
+        // Rendered-view marks are best-effort.
+      }
+      try {
+        this.taskThemeEnsureHoverForDocuments();
+      } catch (error) {
+        // Reading-view hover hosts are best-effort.
+      }
     } catch (error) {
       // Marks setup never throws.
     }
@@ -690,12 +705,13 @@ class BobLedgerToolsTaskThemeEditorMixin {
 
   taskThemeReasonForPosition(view, mark) {
     try {
-      if (
-        typeof this.pomodoroThemeSuggestFor !== "function" ||
-        !view ||
-        !view.state
-      ) {
+      if (typeof this.pomodoroThemeSuggestFor !== "function") {
         return null;
+      }
+      if (!view || !view.state) {
+        return this.taskThemeReasonForMarkOrigin
+          ? this.taskThemeReasonForMarkOrigin(mark)
+          : null;
       }
       let pos = null;
       try {
@@ -707,7 +723,9 @@ class BobLedgerToolsTaskThemeEditorMixin {
         pos = null;
       }
       if (typeof pos !== "number") {
-        return null;
+        return this.taskThemeReasonForMarkOrigin
+          ? this.taskThemeReasonForMarkOrigin(mark)
+          : null;
       }
       let info = null;
       try {
@@ -723,7 +741,9 @@ class BobLedgerToolsTaskThemeEditorMixin {
           ? info.file.path
           : null;
       if (!path) {
-        return null;
+        return this.taskThemeReasonForMarkOrigin
+          ? this.taskThemeReasonForMarkOrigin(mark)
+          : null;
       }
       let lineNumber = null;
       let docText = null;
@@ -772,6 +792,13 @@ class BobLedgerToolsTaskThemeEditorMixin {
       this.taskThemeMarksEnabled = !this.taskThemeMarksEnabled;
       const enabled = this.taskThemeMarksEnabled;
       this.applyMarkGateClass("bob-task-theme-marks", enabled);
+      if (!enabled) {
+        try {
+          this.taskThemeCancelScheduledWork();
+        } catch (error) {
+          // Queue drop is best-effort.
+        }
+      }
       try {
         this.refreshTaskThemeMarkEditors();
       } catch (error) {
@@ -832,6 +859,11 @@ class BobLedgerToolsTaskThemeEditorMixin {
   refreshTaskThemeMarksForCache() {
     try {
       this.refreshTaskThemeMarkEditors();
+      try {
+        this.refreshTaskThemeRenderedMarks();
+      } catch (error) {
+        // Rendered-view hue refresh is best-effort.
+      }
       return true;
     } catch (error) {
       return false;
@@ -839,9 +871,25 @@ class BobLedgerToolsTaskThemeEditorMixin {
   }
 
   // Unload cleanup for both task-theme gates (visibility + ledger tint).
-  // Never throws.
+  // Restores native Reading/query field content, drops queued frames, and
+  // removes delegated hover hosts. Never throws.
   teardownTaskThemeMarksAndColors() {
     try {
+      try {
+        this.taskThemeCancelScheduledWork();
+      } catch (error) {
+        // Queue drop is best-effort.
+      }
+      try {
+        this.taskThemeRestoreRenderedHosts();
+      } catch (error) {
+        // Native restoration is best-effort.
+      }
+      try {
+        this.taskThemeTeardownHover();
+      } catch (error) {
+        // Hover teardown is best-effort.
+      }
       this.taskThemeMarksEnabled = false;
       this.pomodoroThemeColorsEnabled = false;
       if (typeof this.applyMarkGateClass === "function") {

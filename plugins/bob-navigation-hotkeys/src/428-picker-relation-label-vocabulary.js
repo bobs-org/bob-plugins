@@ -107,6 +107,15 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
   getRelationLabelFooterHints() {
     const raw = this.getRawQuery ? String(this.getRawQuery() || "") : "";
     const item = (this.visibleItems || [])[this.selectedIndex] || null;
+    const preview = item && item.cancelPreview;
+    const cancelCount = preview && Array.isArray(preview.cancels)
+      ? preview.cancels.length
+      : 0;
+    const nonce = preview && preview.expected
+      ? JSON.stringify(preview.expected)
+      : "";
+    const confirming = cancelCount >= 2 && nonce &&
+      this.relationCancelConfirmNonce === nonce;
     const noSelection = !item || item.typed === true || item.plain === true || this.selectedIndex === 0;
     let tabLabel = "accept top match";
     if (!noSelection) tabLabel = "accept selected";
@@ -121,7 +130,16 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       { keys: ["⌃D"], label: hideLabel },
       { keys: ["⌃H"], label: this.relationLabelShowHidden === true ? "hide list" : `Hidden ${this.readRelationLabelHiddenCount()}` },
       { keys: ["⌃R"], label: "rename selected" },
-      { keys: ["↵"], label: this.relationLabelMode === "relabel" ? "relabel" : "link" },
+      {
+        keys: ["↵"],
+        label: item && item.disabled
+          ? "unavailable"
+          : confirming
+            ? "again to confirm"
+            : cancelCount > 0
+              ? "link & cancel"
+              : this.relationLabelMode === "relabel" ? "relabel" : "link",
+      },
       { keys: ["esc"], label: "back to list" },
     ];
   }
@@ -133,6 +151,10 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     for (let step = 0; step < items.length; step += 1) {
       index = (index + delta + items.length) % items.length;
       if (items[index] && items[index].nonSelectable !== true) {
+        if (index !== this.selectedIndex) {
+          this.relationCancelConfirmNonce = null;
+          this.relationCancelExpected = null;
+        }
         this.selectedIndex = index;
         this.relationLabelTabNoMatch = false;
         this.renderResults();
@@ -144,6 +166,10 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
   relationLabelSelectKey(key) {
     const items = this.getRelationLabelPreviewItems();
     const index = items.findIndex((row) => row && row.key === key && row.typed !== true);
+    if (index !== this.selectedIndex) {
+      this.relationCancelConfirmNonce = null;
+      this.relationCancelExpected = null;
+    }
     this.selectedIndex = index >= 0 ? index : 0;
   }
 
@@ -181,6 +207,457 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     this.relationLabelSelectKey(key);
     this.renderResults();
     return true;
+  }
+
+  relationCancelLabelsConfig() {
+    try {
+      if (
+        this.plugin &&
+        typeof this.plugin.loadRelationsCancelLabels === "function"
+      ) {
+        return this.plugin.loadRelationsCancelLabels();
+      }
+      return loadRelationsCancelLabels();
+    } catch (_error) {
+      return emptyRelationsCancelLabels();
+    }
+  }
+
+  relationCancelContentForRef(ref) {
+    const path = normalizeVaultRelativePath((ref && ref.path) || "");
+    if (
+      path && path === normalizeVaultRelativePath(this.filePath || "") &&
+      typeof this.getEditorContent === "function"
+    ) {
+      return String(this.getEditorContent() || "");
+    }
+    const files = this.vaultStage && this.vaultStage.files;
+    if (path && files instanceof Map && files.has(path)) {
+      return String(files.get(path) || "");
+    }
+    return String((ref && ref.rawLine) || "");
+  }
+
+  relationCancelPreviewForLabel(label, targetOverrides = new Map()) {
+    const normalized = normalizeRelationLabel(String(label || ""));
+    const config = this.relationCancelLabelsConfig();
+    const configuredKeys = relationCancelLabelsSet(config);
+    const linkedFrom = this.isLinkedFromSession();
+    const labelTargets = Array.isArray(this.relationLabelTargets)
+      ? this.relationLabelTargets
+      : [];
+    const sourceRefs = linkedFrom
+      ? labelTargets
+      : this.relationStageSourceRefs();
+    const edgeTargets = linkedFrom
+      ? this.relationStageSourceRefs(targetOverrides).slice(0, 1)
+      : labelTargets.map((target) => {
+          const key = `${normalizeVaultRelativePath(target.path || "")}\x00${target.line}`;
+          const extra = targetOverrides instanceof Map ? targetOverrides.get(key) : null;
+          return {
+            ...target,
+            blockId: (extra && extra.blockId) || target.blockId || target.existingBlockId || null,
+          };
+        });
+    for (const target of edgeTargets) {
+      if (target && normalized) target.label = normalized;
+    }
+    const listed =
+      this.plugin && typeof this.plugin.readDependencyVaultFileList === "function"
+        ? this.plugin.readDependencyVaultFileList()
+        : this.vaultStage && this.vaultStage.files instanceof Map
+          ? [...this.vaultStage.files.keys()]
+          : [];
+    const vaultFiles = (Array.isArray(listed) ? listed : []).map((entry) =>
+      typeof entry === "string" ? { path: entry } : entry,
+    );
+    const resolveLinkpath =
+      this.plugin && typeof this.plugin.dependencyLinkpathResolver === "function"
+        ? this.plugin.dependencyLinkpathResolver()
+        : null;
+    const policySources = [];
+    const sourceDetails = [];
+    let relabelAway = false;
+
+    for (const sourceRef of sourceRefs) {
+      const sourcePath = normalizeVaultRelativePath((sourceRef && sourceRef.path) || "");
+      const content = this.relationCancelContentForRef(sourceRef);
+      const lines = content.split(/\r?\n/);
+      let sourceLine = Math.floor(numericOrDefault(sourceRef && sourceRef.line, 0));
+      const blockId = normalizeBulletPropertyValue((sourceRef && sourceRef.blockId) || "");
+      if (blockId) {
+        const found = findTaskLineByTrailingBlockId(lines, blockId);
+        if (found !== null) sourceLine = found;
+      }
+      if (sourceLine < 0 || sourceLine >= lines.length) sourceLine = 0;
+      const rawLine = String(lines[sourceLine] || (sourceRef && sourceRef.rawLine) || "");
+      const liveSource = {
+        ...sourceRef,
+        path: sourcePath,
+        line: sourceLine,
+        blockId: blockId || getTrailingBlockId(rawLine) || null,
+        rawLine,
+      };
+      const children = rawLine && isObsidianTaskAtLine(content, sourceLine)
+        ? findLinksChildren(lines, sourceLine)
+        : [];
+      const existingRows = children.flatMap((index) =>
+        relationLinksRows(sourcePath, lines[index], resolveLinkpath, vaultFiles),
+      );
+      const validTargets = edgeTargets.filter(
+        (target) => target && target.path && target.blockId,
+      );
+      const links = validTargets.map((target) =>
+        storedRelationLinkForTarget(existingRows, target, sourcePath, vaultFiles),
+      );
+      const report = this.relationLabelMode === "relabel"
+        ? { added: [], relabeled: links, unchanged: [] }
+        : { added: links, relabeled: [], unchanged: [] };
+      const edges = deriveRelationCancelEdges({
+        report,
+        existingRows,
+        liveAdd: this.relationLabelMode === "relabel" ? [] : validTargets,
+        liveRelabel: this.relationLabelMode === "relabel" ? validTargets : [],
+        sourcePath,
+        vaultFiles,
+      });
+      const policySource = relationCancelPolicySourceFromLine(
+        liveSource,
+        rawLine,
+        edges,
+      );
+      policySources.push(policySource);
+      const status = relationCancelSourceStatus(rawLine);
+      const projectOpenTasks = policySource.isProject
+        ? collectProjectNoteTaskRows(content).residents.length
+        : null;
+      sourceDetails.push({
+        text: cleanTaskDisplayText(rawLine) || sourceRef.displayText || "task",
+        path: sourcePath,
+        line: sourceLine,
+        blockId: policySource.blockId,
+        status,
+        projectOpenTasks,
+      });
+      if (
+        this.relationLabelMode === "relabel" &&
+        status === "-" &&
+        normalized &&
+        !configuredKeys.has(relationCancelLabelKey(normalized))
+      ) {
+        const targetIdentities = new Set(
+          validTargets.map((target) => blocksIdentity(target.path, target.blockId)),
+        );
+        relabelAway = relabelAway || existingRows.some(
+          (row) => targetIdentities.has(row.identity) &&
+            configuredKeys.has(relationCancelLabelKey(row.label)),
+        );
+      }
+    }
+
+    const plan = planRelationCancelEffects({
+      cancelLabels: config,
+      trigger: RELATION_CANCEL_EXPLICIT_TRIGGER,
+      sources: policySources,
+    });
+    const sources = plan.sources.map((source, index) => ({
+      ...source,
+      ...(sourceDetails[index] || {}),
+    }));
+    const cancels = sources.filter((source) => source.cancels === true);
+    let refusal = null;
+    if (plan.refusals.length > 0) {
+      const refused = sources.find((source) => source.refusal);
+      refusal = refused && refused.verdict === "recurring"
+        ? `“${refused.text}” repeats — cancel it with Obsidian Tasks first`
+        : (refused && refused.refusal && refused.refusal.message) || "This relation cannot be committed";
+    }
+    const expected = summarizeRelationCancelEffects(
+      plan,
+      formatBulletPropertyDate(new Date()),
+    );
+    const inverseLabel = normalized && !configuredKeys.has(relationCancelLabelKey(normalized))
+      ? relationCancelInverseLabel(normalized, config)
+      : null;
+    const targetForInverse = linkedFrom
+      ? sourceDetails[0] && sourceDetails[0].text
+      : labelTargets[0] && (labelTargets[0].displayText || labelTargets[0].text);
+    return Object.freeze({
+      configured: Boolean(normalized && configuredKeys.has(relationCancelLabelKey(normalized))),
+      sources: Object.freeze(sources),
+      cancels: Object.freeze(cancels),
+      refusal,
+      staysCancelled: relabelAway,
+      inverseHint: inverseLabel
+        ? `“${normalized}” never cancels · to retire “${targetForInverse || "that task"}”, use ⇧L`
+        : "",
+      expected,
+    });
+  }
+
+  relationCancelStayHintForItem(item) {
+    if (!item || item.stageSection !== "current") return "";
+    const config = this.relationCancelLabelsConfig();
+    const keys = relationCancelLabelsSet(config);
+    const label = this.isLinkedFromSession()
+      ? item.storedLabel || item.label
+      : item.label;
+    if (!keys.has(relationCancelLabelKey(label))) return "";
+    const sources = this.isLinkedFromSession() ? [item] : this.relationStageSourceRefs();
+    for (const source of sources) {
+      const rawLine = this.relationCancelContentForRef(source).split(/\r?\n/)[
+        Math.max(0, Math.floor(numericOrDefault(source.line, 0)))
+      ] || source.rawLine || "";
+      if (relationCancelSourceStatus(rawLine) === "-") {
+        return "⊘ Stays Cancelled · reopen with Alt+]";
+      }
+    }
+    return "";
+  }
+
+  relationLabelLiveContext(item, preview) {
+    const linkedFrom = this.isLinkedFromSession();
+    const sources = this.vaultStage && Array.isArray(this.vaultStage.sources)
+      ? this.vaultStage.sources
+      : [];
+    const targets = Array.isArray(this.relationLabelTargets)
+      ? this.relationLabelTargets
+      : [];
+    const sourceRef = linkedFrom ? targets[0] : sources[0];
+    const source = preview && preview.cancels && preview.cancels[0]
+      ? preview.cancels[0].text
+      : (sourceRef && (sourceRef.displayText || sourceRef.text)) || "This task";
+    const sourcePath = normalizeVaultRelativePath((sourceRef && sourceRef.path) || "");
+    const activePath = normalizeVaultRelativePath(this.filePath || "");
+    const sourceText = sourcePath && sourcePath !== activePath
+      ? `${source} (${dependencyStageBasenameOf(sourcePath)})`
+      : source;
+    const firstTarget = targets[0];
+    const targetText = linkedFrom
+      ? "this"
+      : targets.length > 1
+        ? `${(firstTarget && (firstTarget.displayText || firstTarget.text || firstTarget.blockId)) || "that task"} +${targets.length - 1} more`
+        : (firstTarget && (firstTarget.displayText || firstTarget.text || firstTarget.blockId)) || "that task";
+    const label = item && item.plain
+      ? ""
+      : (item && item.label) || (this.getRawQuery ? this.getRawQuery() : "");
+    return { sourceText, targetText, label: String(label || "").trim() };
+  }
+
+  getRelationLabelSubtitle() {
+    const item = (this.visibleItems || [])[this.selectedIndex] || null;
+    const label = item && !item.plain
+      ? item.label
+      : this.getRawQuery ? this.getRawQuery() : "";
+    const preview = item && item.cancelPreview
+      ? item.cancelPreview
+      : this.relationCancelPreviewForLabel(label);
+    const context = this.relationLabelLiveContext(item, preview);
+    return relationStageLiveSentence(context.sourceText, context.label, context.targetText);
+  }
+
+  renderPickerSubtitle(element) {
+    if (this.stage !== "relation-label") return false;
+    const item = (this.visibleItems || [])[this.selectedIndex] || null;
+    const label = item && !item.plain
+      ? item.label
+      : this.getRawQuery ? this.getRawQuery() : "";
+    const preview = item && item.cancelPreview
+      ? item.cancelPreview
+      : this.relationCancelPreviewForLabel(label);
+    if (!preview || !Array.isArray(preview.cancels) || preview.cancels.length === 0) {
+      return false;
+    }
+    const context = this.relationLabelLiveContext(item, preview);
+    element.empty();
+    element.createSpan({ cls: "bob-cnp-relation-cancel-mark", text: "⊘ " });
+    element.createSpan({ cls: "bob-cnp-relation-cancel-source", text: context.sourceText });
+    element.createSpan({
+      cls: "bob-cnp-relation-cancel-sentence-tail",
+      text: ` — ${context.label} → ${context.targetText}`,
+    });
+    return true;
+  }
+
+  refreshRelationConsequenceStrip() {
+    if (!this.isRelationStage() && this.stage !== "relation-label") {
+      if (this.consequenceStripEl) this.consequenceStripEl.setText("");
+      return;
+    }
+    const el = this.ensureRelationConsequenceStrip();
+    if (!el) return;
+    const item = (this.visibleItems || [])[this.selectedIndex] || null;
+    if (this.stage === "relation-label") {
+      const preview = item && item.cancelPreview
+        ? item.cancelPreview
+        : item && item.label
+          ? this.relationCancelPreviewForLabel(item.label)
+          : null;
+      const nonce = preview && preview.expected ? JSON.stringify(preview.expected) : "";
+      const confirmBanner = nonce && this.relationCancelConfirmNonce === nonce &&
+        Array.isArray(preview.cancels) && preview.cancels.length >= 2
+        ? `⊘ Cancels ${preview.cancels.length} tasks — ↵ again to confirm`
+        : "";
+      const text = relationLabelCancelConsequenceStrip(item, {
+        preview,
+        confirmBanner,
+      });
+      el.empty();
+      el.createSpan({
+        cls: preview && preview.cancels && preview.cancels.length > 0
+          ? "bob-cnp-consequence-strip-text bob-cnp-relation-cancel-effects"
+          : "bob-cnp-consequence-strip-text",
+        text,
+      });
+      return;
+    }
+    const text = relationStageConsequenceStrip(item, {
+      marked: this.getMarkedTaskItems(),
+      direction: this.relationStageDirection,
+      cancelStayHint: this.relationCancelStayHintForItem(item),
+    });
+    el.empty();
+    el.createSpan({ cls: "bob-cnp-consequence-strip-text", text });
+  }
+
+  getRelationLabelPreviewItems() {
+    const raw = this.getRawQuery ? String(this.getRawQuery() || "") : "";
+    if (raw !== this.relationLabelLastQuery) {
+      this.relationLabelLastQuery = raw;
+      this.relationLabelGhosts = new Map();
+      this.relationLabelOneOff = false;
+      this.relationLabelTabNoMatch = false;
+      this.relationCancelConfirmNonce = null;
+      this.relationCancelExpected = null;
+      this.selectedIndex = 0;
+    }
+    const typed = normalizeRelationLabel(raw);
+    const config = this.relationCancelLabelsConfig();
+    const suggestions = mergeRelationCancelLabelSuggestions(
+      this.readRelationLabelSuggestions(raw, { hidden: "include" }),
+      config,
+      raw,
+    );
+    const ghosts = this.relationLabelGhosts instanceof Map
+      ? this.relationLabelGhosts
+      : new Map();
+    const effective = suggestions.map((row) => {
+      const ghost = ghosts.get(row.key);
+      return ghost
+        ? { ...row, hidden: ghost.hidden, ghost: true }
+        : { ...row, ghost: false };
+    });
+    this.relationLabelTopMatchKey = (effective.find((row) => row.hidden !== true && row.ghost !== true) || {}).key || "";
+    const out = [];
+    const decorate = (item) => {
+      if (!item || item.kind !== "relation-label" || item.plain || !item.label) return Object.freeze(item);
+      const configuredCancel = item.configuredCancel === true ||
+        relationCancelLabelsSet(config).has(relationCancelLabelKey(item.label));
+      const inverse = relationCancelInverseLabel(item.label, config);
+      const preview = configuredCancel || inverse
+        ? this.relationCancelPreviewForLabel(item.label)
+        : null;
+      const disabledReason = configuredCancel && preview && preview.refusal
+        ? preview.refusal
+        : "";
+      return Object.freeze({
+        ...item,
+        configuredCancel,
+        cancelPreview: preview,
+        disabled: item.disabled === true || Boolean(disabledReason),
+        disabledReason: disabledReason || item.disabledReason || "",
+      });
+    };
+    if (!raw.trim()) {
+      out.push(Object.freeze({
+        kind: "relation-label",
+        label: null,
+        typed: false,
+        plain: true,
+        displayText: "Plain link (no relation)",
+        searchText: "",
+        oneOff: false,
+      }));
+    } else if (typed) {
+      const key = relationCancelLabelKey(typed);
+      const existing = suggestions.find((row) => relationCancelLabelKey(row.key) === key) || null;
+      const labelValue = existing ? existing.label : typed;
+      const hidden = existing ? existing.hidden === true : false;
+      const warning = Boolean(this.relationLabelOneOff && existing && !hidden && existing.count > 0);
+      out.push(decorate({
+        kind: "relation-label",
+        key,
+        label: labelValue,
+        typed: !existing,
+        existing: Boolean(existing),
+        count: existing ? existing.count : 0,
+        hidden,
+        configuredCancel: existing && existing.configuredCancel === true,
+        oneOff: this.relationLabelOneOff === true,
+        warning,
+        warningText: warning
+          ? `⚠ Capturing also hides “${labelValue}” (${existing.count} links) from suggestions. Existing links keep their label.`
+          : "",
+        displayText: labelValue,
+        searchText: labelValue,
+      }));
+    } else {
+      return Object.freeze([Object.freeze({
+        kind: "relation-label-invalid",
+        label: null,
+        reason: describeRelationLabelRefusal(raw) || "That relation cannot be used",
+        displayText: describeRelationLabelRefusal(raw) || "That relation cannot be used",
+        searchText: "",
+        disabled: true,
+      })]);
+    }
+    const typedKey = typed ? relationCancelLabelKey(typed) : "";
+    const visibleRows = effective.filter((row) => row.hidden !== true && relationCancelLabelKey(row.key) !== typedKey);
+    const hiddenRows = effective.filter((row) => row.hidden === true && relationCancelLabelKey(row.key) !== typedKey);
+    const visibleLimit = 12 + (Array.isArray(config && config.keys) ? config.keys.length : 0);
+    const toItem = (row) => decorate({
+      kind: "relation-label",
+      key: row.key,
+      label: row.label,
+      count: Math.max(0, Math.floor(numericOrDefault(row.count, 0))),
+      inverse: row.inverse || null,
+      hidden: row.hidden === true,
+      ghost: row.ghost === true,
+      configuredCancel: row.configuredCancel === true,
+      typed: false,
+      displayText: row.label,
+      searchText: row.label,
+    });
+    for (const row of visibleRows) {
+      out.push(toItem(row));
+      if (out.length >= visibleLimit) break;
+    }
+    if (this.relationLabelShowHidden === true && hiddenRows.length > 0 && out.length < 13) {
+      out.push(Object.freeze({
+        kind: "relation-label-heading",
+        displayText: "Hidden",
+        searchText: "",
+        nonSelectable: true,
+      }));
+      for (const row of hiddenRows) {
+        out.push(toItem(row));
+        if (out.length >= 24) break;
+      }
+    } else if (this.relationLabelShowHidden !== true) {
+      for (const row of hiddenRows.filter((entry) => entry.ghost)) {
+        out.push(toItem(row));
+        if (out.length >= 24) break;
+      }
+    }
+    const selectedIndex = Math.max(0, Math.min(this.selectedIndex || 0, out.length - 1));
+    const selected = out[selectedIndex];
+    if (selected && selected.kind === "relation-label" && !selected.plain && !selected.cancelPreview) {
+      out[selectedIndex] = decorate({
+        ...selected,
+        cancelPreview: this.relationCancelPreviewForLabel(selected.label),
+      });
+    }
+    return Object.freeze(out);
   }
 
   handleRelationLabelKeydown(event) {

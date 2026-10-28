@@ -318,6 +318,21 @@ every action sets or clears `[refresh:: N]` through the same namespace,
 reading lane intervals with the task's own refresh kept as the once-Ready
 return value.
 
+## Relation-label stage
+
+The Links and Linked-from relation-label stage adds a `⊘ cancels` cue to
+configured cancel-label suggestions, including labels with no previous use.
+The live sentence dims and prefixes the source task with `⊘`, the consequence
+strip names the task and the Task Card Cancel effects, and Return reads
+`↵ link & cancel`. Recurring sources show a disabled row with the Obsidian
+Tasks instruction; inverse phrases explain that they never cancel and point to
+`⇧L`. A counted commit that cancels two or more tasks waits for a second Return.
+
+Hand-editing a configured cancel label into LINKS leaves an open task open and
+shows a hint to use the relation stage or capture. Unlinking a cancel-label
+edge or relabelling it away keeps a cancelled task cancelled; reopen it with
+`Alt+]`. See [Task relations](task-relations.md) for the full behavior.
+
 ## Notes, tabs, and keyboard layers
 
 The plugin opens and manages related notes and tabs, including pinned-tab

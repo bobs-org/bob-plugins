@@ -268,6 +268,36 @@ function beginRelationLabel(picker, targets, raw, mode = "add") {
   picker.relationLabelMode = mode;
 }
 
+function makeCancelCuePicker(notes, sourceRows, target) {
+  const harness = makePlugin(notes);
+  const config = {
+    keys: ["duplicate of", "superseded by"],
+    labels: {
+      "duplicate of": "duplicate of",
+      "superseded by": "superseded by",
+    },
+  };
+  harness.plugin.loadRelationsCancelLabels = () => config;
+  harness.plugin.readDependencyVaultFileList = () =>
+    Object.keys(notes).map((path) => ({ path }));
+  const picker = makeRelationPicker(
+    harness.plugin,
+    "to",
+    sourceRows.map((source) => ({ path: "Tasks.md", ...source })),
+    notes,
+  );
+  picker.getEditorContent = () => String(notes["Tasks.md"] || "");
+  picker.readRelationLabelSuggestions = () => [
+    { key: "see", label: "see", count: 4, hidden: false, inverse: null },
+  ];
+  beginRelationLabel(picker, [target], "");
+  picker.renderResults = () => {
+    picker.visibleItems = picker.getRelationLabelPreviewItems();
+  };
+  picker.renderResults();
+  return { ...harness, picker };
+}
+
 function currentOtherNotes(overrides = {}) {
   return {
     "Current.md":
@@ -452,7 +482,7 @@ test("Linked from Shift+Enter goes through the relation field and labels the sou
   picker.getRawQuery = () => "son of";
   assert.equal(picker.chooseRelationTask(other, { withLabel: true }), false);
   assert.equal(picker.stage, "relation-label");
-  assert.equal(picker.getRelationLabelSubtitle(), "Other — son of → this");
+  assert.equal(picker.getRelationLabelSubtitle(), "Other (Other) — son of → this");
   assert.equal(
     await picker.commitRelationLabel(picker.getRelationLabelPreviewItems()[0]),
     true,
@@ -1222,6 +1252,126 @@ test("subtitle, consequence strip, live sentence, and label refusal copy", () =>
   assert.equal(helpers.describeRelationLabelRefusal("see also"), null);
   assert.match(helpers.describeRelationLabelRefusal("x".repeat(41)), /40/);
   assert.match(helpers.describeRelationLabelRefusal("see (old)"), /cannot contain/);
+  assert.equal(
+    helpers.relationCancelHandEditHint("duplicate of"),
+    "⊘ “duplicate of” cancels only from the Links stage or capture · this task stays open",
+  );
+  assert.equal(
+    helpers.relationLabelCancelConsequenceStrip(
+      { kind: "relation-label", label: "supersedes" },
+      { preview: { inverseHint: "“supersedes” never cancels · to retire “Target”, use ⇧L", cancels: [] } },
+    ),
+    "“supersedes” never cancels · to retire “Target”, use ⇧L",
+  );
+});
+
+test("cancel labels overlay at zero uses and render the live source cue", () => {
+  const notes = {
+    "Tasks.md": "- [ ] #task Source ^source\n- [ ] #task Target ^target",
+  };
+  const { picker } = makeCancelCuePicker(
+    notes,
+    [{ line: 0, blockId: "source" }],
+    { path: "Tasks.md", line: 1, blockId: "target", displayText: "Target" },
+  );
+  const item = picker.visibleItems.find((row) => row.label === "duplicate of");
+  assert.ok(item, "a configured label appears before its first use");
+  assert.equal(item.count, 0);
+  assert.equal(item.configuredCancel, true);
+  picker.selectedIndex = picker.visibleItems.indexOf(item);
+  const spans = [];
+  const subtitle = {
+    empty() { spans.length = 0; },
+    createSpan(options) { spans.push(options); },
+  };
+  assert.equal(picker.renderPickerSubtitle(subtitle), true);
+  assert.deepEqual(spans.map((span) => span.text), [
+    "⊘ ",
+    "Source",
+    " — duplicate of → Target",
+  ]);
+  assert.match(spans[1].cls, /relation-cancel-source/);
+  const strip = {
+    spans: [],
+    empty() { this.spans = []; },
+    createSpan(options) { this.spans.push(options); },
+  };
+  picker.ensureRelationConsequenceStrip = () => strip;
+  picker.refreshRelationConsequenceStrip();
+  assert.match(
+    strip.spans[0].text,
+    /⊘ Cancels “Source” · removes its links from today's open Pomodoros · unblocks dependents/,
+  );
+});
+
+test("recurring cancel rows are disabled and a multi-source cancel needs a second Return", async () => {
+  const recurringNotes = {
+    "Tasks.md": "- [ ] #task Recurring 🔁 ^recurring\n- [ ] #task Target ^target",
+  };
+  const recurring = makeCancelCuePicker(
+    recurringNotes,
+    [{ line: 0, blockId: "recurring" }],
+    { path: "Tasks.md", line: 1, blockId: "target", displayText: "Target" },
+  );
+  const recurringItem = recurring.picker.visibleItems.find((row) => row.label === "duplicate of");
+  assert.equal(recurringItem.disabled, true);
+  assert.equal(
+    recurringItem.disabledReason,
+    "“Recurring 🔁” repeats — cancel it with Obsidian Tasks first",
+  );
+  let recurringWrites = 0;
+  recurring.plugin.applyRelationEdit = async () => {
+    recurringWrites += 1;
+    return { ok: true };
+  };
+  assert.equal(await recurring.picker.commitRelationLabel(recurringItem), false);
+  assert.equal(recurringWrites, 0);
+
+  const notes = {
+    "Tasks.md": [
+      "- [ ] #task First ^first",
+      "- [ ] #task Second ^second",
+      "- [ ] #task Target ^target",
+    ].join("\n"),
+  };
+  const batch = makeCancelCuePicker(
+    notes,
+    [
+      { line: 0, blockId: "first" },
+      { line: 1, blockId: "second" },
+    ],
+    { path: "Tasks.md", line: 2, blockId: "target", displayText: "Target" },
+  );
+  const { picker } = batch;
+  const itemIndex = picker.visibleItems.findIndex((row) => row.label === "duplicate of");
+  picker.selectedIndex = itemIndex;
+  let writes = 0;
+  let writeArgs = null;
+  batch.plugin.applyRelationEdit = async (args) => {
+    writes += 1;
+    writeArgs = args;
+    return { ok: true };
+  };
+  const confirmStrip = {
+    spans: [],
+    empty() { this.spans = []; },
+    createSpan(options) { this.spans.push(options); },
+  };
+  picker.ensureRelationConsequenceStrip = () => confirmStrip;
+  assert.equal(await picker.commitRelationLabel(picker.visibleItems[itemIndex]), false);
+  assert.equal(writes, 0, "the first Return only opens the confirmation step");
+  assert.equal(picker.getRelationLabelFooterHints()[4].label, "again to confirm");
+  picker.refreshRelationConsequenceStrip();
+  assert.equal(
+    confirmStrip.spans[0].text,
+    "⊘ Cancels 2 tasks — ↵ again to confirm",
+  );
+  assert.equal(await picker.commitRelationLabel(picker.visibleItems[itemIndex]), true);
+  assert.equal(writes, 1);
+  assert.equal(
+    writeArgs.expectedCancelEffects.sources.filter((source) => source.cancels).length,
+    2,
+  );
 });
 
 test("LG15: marked rows plan one commit with adds and unlinks split", () => {

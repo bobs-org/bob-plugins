@@ -7,7 +7,9 @@ A task relates to another task with an entry on its `🪢 **LINKS:**` line. The
 reverse `🪢 **LINKED FROM:**` line is generated output: reconcile rebuilds it
 from other tasks' LINKS lines, so edit the source side and let the mirror
 converge. Relations never block, promote, consume, schedule, stamp, or route
-anything.
+anything. The one status exception is an explicit commit with a configured
+cancel label: it cancels the source task at that gesture, as described in
+[bob's cancel-label contract](https://bobs-org.github.io/task-relations/#17-cancel-labels).
 
 Both rows render as live chips in Live Preview and Reading view from the
 relation index (`api.relationIndex`), never the stored mirror:
@@ -75,6 +77,22 @@ generated. Hand edits to LINKS update LINKED FROM with the same-note undo
 transaction or checked cross-note mirrors; `Ctrl+Z` runs the mirror again.
 Editing LINKED FROM shows the generated-line notice and does not change an
 edge.
+
+When `relations.cancel_labels` is configured, those labels appear in the
+relation-label suggestions even before they have been used. They stay in the
+zero-use tier and carry `⊘ cancels`; hiding a suggestion does not disable its
+effect. Selecting one shows `⊘ {S} — {label} → {T}` with the source dimmed,
+names the cancelled source in the consequence strip, and changes Return to
+`↵ link & cancel`. A remote source includes its note stem. Recurring-source
+rows are disabled with `“{S}” repeats — cancel it with Obsidian Tasks first`.
+Typing an inverse phrase shows that it never cancels and points to `⇧L` for
+the source direction that does. A counted label commit that cancels two or
+more tasks shows `⊘ Cancels {N} tasks — ↵ again to confirm` before writing.
+
+Hand-editing a configured cancel label into LINKS leaves an open task open
+and shows a hint to use the Links stage or capture. Unlinking a cancel-label
+edge or relabelling it away never reopens a cancelled task; the stage and
+result notice say `⊘ Stays Cancelled · reopen with Alt+]`.
 
 In the relation-label stage, row zero is the typed label (or plain link), so
 `Tab` accepts the top visible match while `Enter` uses the typed value. Arrow

@@ -1623,6 +1623,33 @@
   color: var(--text-muted);
 }
 
+/* Cancel-label cues use Obsidian's theme-aware status tokens in light and
+   dark themes, so the ⊘ tint follows the existing Cancelled status color. */
+.bob-cnp-relation-cancel-meta,
+.bob-cnp-relation-cancel-mark,
+.bob-cnp-relation-cancel-effects {
+  color: var(--color-red);
+}
+
+.bob-cnp-relation-cancel-meta,
+.bob-cnp-relation-cancel-mark {
+  font-weight: 600;
+}
+
+.bob-cnp-relation-cancel-source {
+  color: var(--text-muted);
+  opacity: 0.68;
+}
+
+.bob-cnp-relation-cancel-disabled-meta {
+  color: var(--color-red);
+  font-size: var(--font-ui-smaller);
+}
+
+.bob-cnp-task-value-row.is-relation-cancel-disabled {
+  cursor: not-allowed;
+}
+
 .bob-cnp-task-value-row.is-relation-label-heading {
   cursor: default;
 }

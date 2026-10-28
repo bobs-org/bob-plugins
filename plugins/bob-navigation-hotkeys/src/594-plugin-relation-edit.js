@@ -231,6 +231,7 @@ class BobNavigationHotkeysRelationEditMixin {
       const cancelledIdentities = [];
       const cancelSourcePlans = [];
       const cancelRefusals = [];
+      let cancelStayedCancelled = false;
       const consumedLinesByPath = new Map();
       let archived = false;
       const contentOf = (path) =>
@@ -373,6 +374,14 @@ class BobNavigationHotkeysRelationEditMixin {
         const policyRaw = String(
           content.split(/\r?\n/)[sourceLine] || liveSource.rawLine || "",
         );
+        cancelStayedCancelled = cancelStayedCancelled ||
+          relationCancelRemovalStaysCancelled(
+            policyRaw,
+            existingRows,
+            liveRemove,
+            liveRelabel,
+            cancelLabels,
+          );
         const policyPlan = planRelationCancelEffects({
           cancelLabels,
           trigger: cancelTrigger,
@@ -628,14 +637,14 @@ class BobNavigationHotkeysRelationEditMixin {
         });
       const relationNotice = unchanged
         ? null
-        : buildRelationEditNotice({
+        : withRelationCancelStayNotice(buildRelationEditNotice({
             added: noticeAdded,
             removed: noticeRemoved,
             relabeled: noticeRelabeled,
             direction,
             archived,
             mirrorFailed: [],
-          });
+          }), cancelStayedCancelled);
       const notice = unchanged
         ? null
         : buildRelationCancelComposeNotice({
@@ -808,7 +817,7 @@ class BobNavigationHotkeysRelationEditMixin {
       const result = await this.applyRelationFollowUps(followUps);
       for (const failedPath of result.failed || []) failed.add(failedPath);
     }
-    if (failed.size > 0) new Notice("🪢 LINKED FROM not updated");
+    showRelationCancelHandEditNotice(changes, currentLines[owner], failed);
     return Object.freeze({ mirrored: true, failed: Object.freeze([...failed]) });
   }
 

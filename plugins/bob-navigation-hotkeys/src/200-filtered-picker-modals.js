@@ -239,14 +239,31 @@ class FilteredPickerModal extends Modal {
   }
 
   updateSubtitle() {
-    if (!this.subtitleEl || typeof this.getSubtitle !== "function") {
+    if (!this.subtitleEl) return;
+    if (
+      typeof this.renderPickerSubtitle === "function" &&
+      this.renderPickerSubtitle(this.subtitleEl, this.visibleItems, this.items) === true
+    ) {
+      if (
+        this.stage === "relation-label" &&
+        typeof this.refreshRelationConsequenceStrip === "function"
+      ) {
+        this.refreshRelationConsequenceStrip();
+      }
       return;
     }
+    if (typeof this.getSubtitle !== "function") return;
 
     this.subtitleEl.textContent = this.getSubtitle(
       this.visibleItems,
       this.items,
     );
+    if (
+      this.stage === "relation-label" &&
+      typeof this.refreshRelationConsequenceStrip === "function"
+    ) {
+      this.refreshRelationConsequenceStrip();
+    }
   }
 
   renderResults() {

@@ -32,6 +32,9 @@ function relationStageSubtitle(stage, markedDiff, options = {}) {
 }
 
 function relationStageConsequenceStrip(item, context = {}) {
+  if (context.cancelStayHint) {
+    return String(context.cancelStayHint);
+  }
   const marked = Array.isArray(context.marked) ? context.marked : [];
   if (marked.length > 0) {
     let add = 0;
@@ -76,6 +79,111 @@ function relationStageLiveSentence(sourceText, label, targetText) {
   const target = String(targetText || "").trim() || "that task";
   const middle = String(label || "").trim();
   return middle ? `${source} — ${middle} → ${target}` : `${source} → ${target}`;
+}
+
+// Configured cancel labels are suggestions even before their first use. Keep
+// them in the zero-use tier, after the live catalog's ranked rows, and retain
+// a hidden catalog row's preference when the same key is configured.
+function mergeRelationCancelLabelSuggestions(rows, policy, query = "") {
+  const out = (Array.isArray(rows) ? rows : []).map((row) => ({ ...row }));
+  const positions = new Map(
+    out.map((row, index) => [relationCancelLabelKey(row.key || row.label), index]),
+  );
+  const keys = Array.isArray(policy && policy.keys) ? policy.keys : [];
+  const labels = policy && policy.labels && typeof policy.labels === "object"
+    ? policy.labels
+    : {};
+  for (const rawKey of keys) {
+    const key = relationCancelLabelKey(rawKey);
+    const label = String(labels[key] || rawKey || "").trim();
+    if (!key || !label) continue;
+    const existingIndex = positions.get(key);
+    if (existingIndex !== undefined) {
+      out[existingIndex] = { ...out[existingIndex], configuredCancel: true };
+      continue;
+    }
+    if (query && !fuzzyMatchesText(label, query)) continue;
+    positions.set(key, out.length);
+    out.push({ key, label, count: 0, hidden: false, inverse: null, configuredCancel: true });
+  }
+  return out;
+}
+
+function relationCancelInverseLabel(label, policy) {
+  const key = relationCancelLabelKey(label);
+  if (!key) return null;
+  const keys = Array.isArray(policy && policy.keys) ? policy.keys : [];
+  const labels = policy && policy.labels && typeof policy.labels === "object"
+    ? policy.labels
+    : {};
+  for (const configuredKey of keys) {
+    const configuredLabel = String(labels[configuredKey] || configuredKey || "");
+    const inverse = inverseRelationPhrase(configuredLabel);
+    if (
+      inverse &&
+      !inverse.endsWith(" → this") &&
+      relationCancelLabelKey(inverse) === key
+    ) {
+      return configuredLabel;
+    }
+  }
+  return null;
+}
+
+function relationCancelStatusName(status) {
+  switch (String(status == null ? "" : status)) {
+    case " ": return "Ready";
+    case "*": return "Next";
+    case "/": return "In Progress";
+    case "?": return "Blocked";
+    case "x":
+    case "X": return "Done";
+    case "-": return "Cancelled";
+    default: return "Closed";
+  }
+}
+
+function relationLabelCancelConsequenceStrip(item, context = {}) {
+  if (context.confirmBanner) return String(context.confirmBanner);
+  if (context.cancelStayHint) return String(context.cancelStayHint);
+  if (!item || item.plain || item.kind === "relation-label-invalid") {
+    return item && item.reason ? String(item.reason) : "Links only · never blocks, schedules, or changes status";
+  }
+  const preview = context.preview || item.cancelPreview || null;
+  if (preview && preview.refusal) return String(preview.refusal);
+  if (preview && preview.inverseHint && (!preview.cancels || preview.cancels.length === 0)) {
+    return String(preview.inverseHint);
+  }
+  if (preview && preview.staysCancelled) {
+    return "⊘ Stays Cancelled · reopen with Alt+]";
+  }
+  if (preview && Array.isArray(preview.sources) && preview.sources.length > 0) {
+    const cancelled = Array.isArray(preview.cancels) ? preview.cancels : [];
+    if (cancelled.length === 0) {
+      const source = preview.sources[0];
+      if (source && source.status === "-") return "Already Cancelled · link only";
+      if (source && (source.status === "x" || source.status === "X")) return "Stays Done · link only";
+      if (source && source.verdict === "already_closed") return `${relationCancelStatusName(source.status)} · link only`;
+      return "Links only · never blocks, schedules, or changes status";
+    }
+    const source = cancelled[0];
+    const more = cancelled.length > 1 ? ` +${cancelled.length - 1} ${cancelled.length === 2 ? "task" : "tasks"}` : "";
+    const parts = [`⊘ Cancels “${source.text || "task"}”${more}`];
+    if (source.blockId) parts.push("removes its links from today's open Pomodoros");
+    parts.push("unblocks dependents");
+    if (source.projectOpenTasks !== null && source.projectOpenTasks !== undefined) {
+      parts.push(`its ${source.projectOpenTasks} open tasks stay open`);
+    }
+    return parts.join(" · ");
+  }
+  return "Links only · never blocks, schedules, or changes status";
+}
+
+function relationCancelHandEditHint(label) {
+  const normalized = normalizeRelationLabel(String(label || ""));
+  return normalized
+    ? `⊘ “${normalized}” cancels only from the Links stage or capture · this task stays open`
+    : null;
 }
 
 // Inline validation reason for the relation field, mirroring

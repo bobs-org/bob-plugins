@@ -95,6 +95,51 @@ function relationCancelPolicySourceFromLine(source, rawLine, edges) {
   };
 }
 
+function relationCancelRemovalStaysCancelled(rawLine, existingRows, removed, relabeled, cancelLabels) {
+  if (relationCancelSourceStatus(rawLine) !== "-") return false;
+  const configured = relationCancelLabelsSet(cancelLabels);
+  const oldByIdentity = new Map(
+    (Array.isArray(existingRows) ? existingRows : []).map((row) => [row.identity, row]),
+  );
+  for (const target of [
+    ...(Array.isArray(removed) ? removed : []),
+    ...(Array.isArray(relabeled) ? relabeled : []),
+  ]) {
+    const identity = blocksIdentity(target && target.path, target && target.blockId);
+    const old = oldByIdentity.get(identity);
+    if (!old || !configured.has(relationCancelLabelKey(old.label))) continue;
+    const next = (Array.isArray(removed) ? removed : []).includes(target)
+      ? ""
+      : relationCancelLabelKey(target && target.label);
+    if (!next || !configured.has(next)) return true;
+  }
+  return false;
+}
+
+function withRelationCancelStayNotice(notice, staysCancelled) {
+  return notice && staysCancelled
+    ? `${notice} · ⊘ Stays Cancelled · reopen with Alt+]`
+    : notice;
+}
+
+function showRelationCancelHandEditNotice(changes, rawLine, failed) {
+  const configured = relationCancelLabelsSet(loadRelationsCancelLabels());
+  const cancelEdit = (Array.isArray(changes) ? changes : []).find((change) =>
+    (change.kind === "add" || change.kind === "relabel") &&
+    configured.has(relationCancelLabelKey(change.label)),
+  );
+  const status = relationCancelSourceStatus(rawLine);
+  const hint = cancelEdit && OPEN_OBSIDIAN_TASK_STATUSES.has(status) &&
+    !isRecurringTaskLine(rawLine)
+    ? relationCancelHandEditHint(cancelEdit.label)
+    : null;
+  const notices = [
+    hint,
+    failed && failed.size > 0 ? "🪢 LINKED FROM not updated" : null,
+  ].filter(Boolean);
+  if (notices.length > 0) new Notice(notices.join(" · "));
+}
+
 function composeRelationSourceCancel(details = {}) {
   const content = String(details.content || "");
   const source = details.source;

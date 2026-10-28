@@ -105,6 +105,20 @@ already has a Schedule Log. A blank Work summary writes no Work Log. Priority
 picks keep their deterministic 🎲 reason and offer a Work summary only for
 an eligible Next or Pending target.
 
+## Links stage and cancel labels
+
+The `l` Links to and `⇧L` Linked from stages list configured cancel labels with
+`⊘ cancels` and preview the source as a dimmed `⊘ {S}`. The consequence strip
+names the source and its cancel effects, and Return reads `↵ link & cancel`.
+Recurring sources are disabled. A counted commit that would cancel two or more
+sources first shows `⊘ Cancels {N} tasks — ↵ again to confirm`; a second Return
+commits, while Escape or changing the query or selection disarms it.
+
+Inverse labels explain that they never cancel and point to `⇧L`. A hand edit of
+a cancel label into LINKS does not cancel its source. Unlinking or relabelling a
+cancel edge away does not reopen the source; the notice says to reopen it with
+`Alt+]`. See [Task relations](task-relations.md) for the complete contract.
+
 ## Undo and direct stages
 
 One local or counted edit is undoable as a unit. A cross-note Task Link edit
@@ -123,5 +137,6 @@ Rotten Log entry in one undo.
 - [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) — navigation, task properties, and review gestures.
 - [Bob Ledger Tools](bob-ledger-tools.md) — the shared plan budget, marks, and freshness views.
 - [Task dependencies](https://bobs-org.github.io/task-dependencies/) — dependency edits and their guards.
+- [Task relations](task-relations.md) — relation labels, including cancel labels.
 - [Freshness](https://bobs-org.github.io/freshness/) — review intervals and freshness decisions.
 - [Projects](https://bobs-org.github.io/projects/) — project schedules and blocking.

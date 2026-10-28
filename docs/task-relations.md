@@ -7,9 +7,13 @@ A task relates to another task with an entry on its `🪢 **LINKS:**` line. The
 reverse `🪢 **LINKED FROM:**` line is generated output: reconcile rebuilds it
 from other tasks' LINKS lines, so edit the source side and let the mirror
 converge. Relations never block, promote, consume, schedule, stamp, or route
-anything. The one status exception is an explicit commit with a configured
-cancel label: it cancels the source task at that gesture, as described in
-[bob's cancel-label contract](https://bobs-org.github.io/task-relations/#17-cancel-labels).
+anything. The two status exceptions are both commit-time and both close the
+source: an explicit commit with a configured cancel label cancels it, as
+described in
+[bob's cancel-label contract](https://bobs-org.github.io/task-relations/#17-cancel-labels),
+and an explicit commit with a configured complete label (such as
+`implemented by`) marks it Done, as described in
+[bob's complete-label contract](https://bobs-org.github.io/task-relations/#18-complete-labels).
 
 Both rows render as live chips in Live Preview and Reading view from the
 relation index (`api.relationIndex`), never the stored mirror:
@@ -89,10 +93,30 @@ Typing an inverse phrase shows that it never cancels and points to `⇧L` for
 the source direction that does. A counted label commit that cancels two or
 more tasks shows `⊘ Cancels {N} tasks — ↵ again to confirm` before writing.
 
-Hand-editing a configured cancel label into LINKS leaves an open task open
-and shows a hint to use the Links stage or capture. Unlinking a cancel-label
-edge or relabelling it away never reopens a cancelled task; the stage and
-result notice say `⊘ Stays Cancelled · reopen with Alt+]`.
+When `relations.complete_labels` is configured, those labels overlay the same
+way and carry `✓ completes` (with `used N× · ✓ completes` when the catalog
+already has uses). Selecting one shows `✓ {S} — {label} → {T}` with the source
+dimmed, names the completed source in the consequence strip
+(`✓ Completes “{S}” · unblocks dependents · offers successors`), and changes
+Return to `↵ link & complete`. A Cancelled target adds the amber caveat
+`“{T}” is Cancelled`. Recurring-source rows are disabled with
+`“{S}” repeats — complete it in Obsidian so Tasks writes the next one`; an old
+Task Status Cycler disables them with
+`Update Task Status Cycler to complete from a link`. Already-closed sources
+link only (`Already Done · link only`). Typing `implements` or `verifies`
+shows that those labels never complete and points to `⇧L` / `l` with
+`implemented by` / `verified by`. A counted label commit that completes two or
+more tasks shows `✓ Completes {N} tasks — ↵ again to confirm`; a mixed
+cancel-and-complete selection shows
+`Closes {N} tasks · ✓ {a} · ⊘ {b} — ↵ again to confirm` and Return reads
+`↵ link & close`.
+
+Hand-editing a configured cancel or complete label into LINKS leaves an open
+task open and shows a hint to use the Links stage or capture. Unlinking a
+cancel-label edge or relabelling it away never reopens a cancelled task; the
+stage and result notice say `⊘ Stays Cancelled · reopen with Alt+]`. Unlinking
+or relabelling a complete-label edge away never reopens a Done task; the stage
+and result notice say `stays Done · reopen with Alt+[`.
 
 In the relation-label stage, row zero is the typed label (or plain link), so
 `Tab` accepts the top visible match while `Enter` uses the typed value. Arrow

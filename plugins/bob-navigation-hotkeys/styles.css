@@ -1650,6 +1650,37 @@
   cursor: not-allowed;
 }
 
+/* Complete-label cues use Obsidian's theme-aware Done green in light and
+   dark themes. Meaning never depends on color; there is no strikethrough. */
+.bob-cnp-relation-complete-meta,
+.bob-cnp-relation-complete-mark,
+.bob-cnp-relation-complete-effects {
+  color: var(--color-green);
+}
+
+.bob-cnp-relation-complete-meta,
+.bob-cnp-relation-complete-mark {
+  font-weight: 600;
+}
+
+.bob-cnp-relation-complete-source {
+  color: var(--text-muted);
+  opacity: 0.68;
+}
+
+.bob-cnp-relation-complete-disabled-meta {
+  color: var(--color-green);
+  font-size: var(--font-ui-smaller);
+}
+
+.bob-cnp-relation-complete-caveat {
+  color: var(--text-warning, var(--text-muted));
+}
+
+.bob-cnp-task-value-row.is-relation-complete-disabled {
+  cursor: not-allowed;
+}
+
 .bob-cnp-task-value-row.is-relation-label-heading {
   cursor: default;
 }

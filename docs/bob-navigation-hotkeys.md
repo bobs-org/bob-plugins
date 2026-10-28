@@ -410,17 +410,24 @@ type and never write notes, stats-journal events, or freshness stamps.
 ## Relation-label stage
 
 The Links and Linked-from relation-label stage adds a `⊘ cancels` cue to
-configured cancel-label suggestions, including labels with no previous use.
-The live sentence dims and prefixes the source task with `⊘`, the consequence
-strip names the task and the Task Card Cancel effects, and Return reads
-`↵ link & cancel`. Recurring sources show a disabled row with the Obsidian
-Tasks instruction; inverse phrases explain that they never cancel and point to
-`⇧L`. A counted commit that cancels two or more tasks waits for a second Return.
+configured cancel-label suggestions and a `✓ completes` cue to configured
+complete-label suggestions, including labels with no previous use. The live
+sentence dims and prefixes the source task with `⊘` or `✓`, the consequence
+strip names the task and the close effects, and Return reads `↵ link & cancel`,
+`↵ link & complete`, or `↵ link & close` when both kinds are selected.
+Recurring sources show a disabled row with the Obsidian Tasks instruction;
+complete rows also disable when Task Status Cycler is below api v3. Inverse
+phrases explain that they never cancel or complete and point to `⇧L` or `l`
+with the closing label. A counted commit that closes two or more tasks waits
+for a second Return, with mixed cancel-and-complete copy when both happen;
+Escape or changing the query or selection disarms the confirm.
 
-Hand-editing a configured cancel label into LINKS leaves an open task open and
-shows a hint to use the relation stage or capture. Unlinking a cancel-label
-edge or relabelling it away keeps a cancelled task cancelled; reopen it with
-`Alt+]`. See [Task relations](task-relations.md) for the full behavior.
+Hand-editing a configured cancel or complete label into LINKS leaves an open
+task open and shows a hint to use the relation stage or capture. Unlinking a
+cancel-label edge or relabelling it away keeps a cancelled task cancelled;
+reopen it with `Alt+]`. The same for a complete-label edge keeps the task Done;
+reopen it with `Alt+[`. See [Task relations](task-relations.md) for the full
+behavior.
 
 ## Notes, tabs, and keyboard layers
 

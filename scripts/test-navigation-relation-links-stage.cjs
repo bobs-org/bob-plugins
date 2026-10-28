@@ -298,6 +298,70 @@ function makeCancelCuePicker(notes, sourceRows, target) {
   return { ...harness, picker };
 }
 
+function stubCyclerApi(plugin, available = true) {
+  plugin.app.plugins = {
+    plugins: {
+      "task-status-cycler": available
+        ? {
+            api: {
+              version: 3,
+              completeTaskLineText() { return { ok: true, lineText: "" }; },
+              finalizeClosedTasks() { return {}; },
+            },
+          }
+        : { api: { version: 2 } },
+    },
+  };
+}
+
+function makeCompleteCuePicker(notes, sourceRows, target, options = {}) {
+  const harness = makePlugin(notes);
+  stubCyclerApi(harness.plugin, options.cycler !== false);
+  const cancel = options.cancel || { keys: [], labels: {} };
+  const complete = options.complete || {
+    keys: ["implemented by", "verified by"],
+    labels: {
+      "implemented by": "implemented by",
+      "verified by": "verified by",
+    },
+  };
+  harness.plugin.loadRelationsCloseLabels = () => ({
+    cancel,
+    complete,
+    warnings: [],
+  });
+  harness.plugin.loadRelationsCancelLabels = () => cancel;
+  harness.plugin.readDependencyVaultFileList = () =>
+    Object.keys(notes).map((path) => ({ path }));
+  const picker = makeRelationPicker(
+    harness.plugin,
+    options.direction || "to",
+    sourceRows.map((source) => ({ path: source.path || "Tasks.md", ...source })),
+    notes,
+  );
+  picker.getEditorContent = () => String(notes[picker.filePath] || notes["Tasks.md"] || "");
+  picker.readRelationLabelSuggestions = () => options.suggestions || [
+    { key: "see", label: "see", count: 4, hidden: false, inverse: null },
+    {
+      key: "implemented by",
+      label: "implemented by",
+      count: options.implementedCount || 0,
+      hidden: options.implementedHidden === true,
+      inverse: "implements",
+    },
+  ];
+  beginRelationLabel(picker, [target], options.query || "");
+  picker.renderResults = () => {
+    picker.visibleItems = picker.getRelationLabelPreviewItems();
+  };
+  picker.applyOptions = () => {};
+  picker.relationStageListOptions = () => ({});
+  picker.clearRelationLabelSubscriptions = () => {};
+  picker.resetLocalTaskMarks = () => {};
+  picker.renderResults();
+  return { ...harness, picker };
+}
+
 function currentOtherNotes(overrides = {}) {
   return {
     "Current.md":
@@ -959,6 +1023,8 @@ test("Linked-from scans source LINKS, reverses built-in phrases, and ignores sto
     [],
   );
   assert.equal(helpers.inverseRelationPhrase("duplicate of"), "duplicated by");
+  assert.equal(helpers.inverseRelationPhrase("implemented by"), "implements");
+  assert.equal(helpers.inverseRelationPhrase("verified by"), "verifies");
   assert.equal(helpers.inverseRelationPhrase("see also"), "see also → this");
 
   const view = helpers.planLinkedFromStageView({
@@ -1257,6 +1323,72 @@ test("subtitle, consequence strip, live sentence, and label refusal copy", () =>
     "⊘ “duplicate of” cancels only from the Links stage or capture · this task stays open",
   );
   assert.equal(
+    helpers.relationCompleteHandEditHint("implemented by"),
+    "✓ “implemented by” completes only from the Links stage or capture · this task stays open",
+  );
+  assert.equal(
+    helpers.relationCloseConfirmBanner(2, 0),
+    "⊘ Cancels 2 tasks — ↵ again to confirm",
+  );
+  assert.equal(
+    helpers.relationCloseConfirmBanner(0, 2),
+    "✓ Completes 2 tasks — ↵ again to confirm",
+  );
+  assert.equal(
+    helpers.relationCloseConfirmBanner(1, 1),
+    "Closes 2 tasks · ✓ 1 · ⊘ 1 — ↵ again to confirm",
+  );
+  assert.equal(helpers.relationCloseFooterEnterLabel({ completeCount: 1 }), "link & complete");
+  assert.equal(
+    helpers.relationCloseFooterEnterLabel({ cancelCount: 1, completeCount: 1 }),
+    "link & close",
+  );
+  assert.equal(
+    helpers.relationLabelCancelConsequenceStrip(
+      { kind: "relation-label", label: "implemented by" },
+      {
+        preview: {
+          completes: [{ text: "Ship it", projectOpenTasks: 2 }],
+          cancels: [],
+        },
+      },
+    ),
+    "✓ Completes “Ship it” · unblocks dependents · offers successors · its 2 open tasks stay open",
+  );
+  assert.equal(
+    helpers.relationLabelCancelConsequenceStrip(
+      { kind: "relation-label", label: "implemented by" },
+      {
+        preview: {
+          inverseHint: "“implements” never completes · to finish “Target”, use ⇧L with “implemented by”",
+          completes: [],
+          cancels: [],
+        },
+      },
+    ),
+    "“implements” never completes · to finish “Target”, use ⇧L with “implemented by”",
+  );
+  assert.equal(
+    helpers.relationLabelCancelConsequenceStrip(
+      { kind: "relation-label", label: "implemented by" },
+      {
+        preview: {
+          completeSources: [{ text: "Ship it", status: "x", verdict: "already_closed" }],
+          completes: [],
+          cancels: [],
+        },
+      },
+    ),
+    "Already Done · link only",
+  );
+  assert.equal(
+    helpers.relationLabelCancelConsequenceStrip(
+      { kind: "relation-label", label: "implemented by" },
+      { preview: { staysDone: true, completes: [], cancels: [] } },
+    ),
+    "stays Done · reopen with Alt+[",
+  );
+  assert.equal(
     helpers.relationLabelCancelConsequenceStrip(
       { kind: "relation-label", label: "supersedes" },
       { preview: { inverseHint: "“supersedes” never cancels · to retire “Target”, use ⇧L", cancels: [] } },
@@ -1395,6 +1527,265 @@ test("recurring cancel rows are disabled and a multi-source cancel needs a secon
   assert.equal(
     writeArgs.expectedCancelEffects.sources.filter((source) => source.cancels).length,
     2,
+  );
+});
+
+test("complete labels overlay at zero uses and render the live source cue", () => {
+  const notes = {
+    "Tasks.md": "- [ ] #task Source ^source\n- [ ] #task Target ^target",
+  };
+  const { picker } = makeCompleteCuePicker(
+    notes,
+    [{ line: 0, blockId: "source", displayText: "Source" }],
+    { path: "Tasks.md", line: 1, blockId: "target", displayText: "Target", rawLine: "- [ ] #task Target ^target" },
+  );
+  const item = picker.visibleItems.find((row) => row.label === "implemented by");
+  assert.ok(item, "a configured complete label appears before its first use");
+  assert.equal(item.count, 0);
+  assert.equal(item.configuredComplete, true);
+  picker.selectedIndex = picker.visibleItems.indexOf(item);
+  const spans = [];
+  const subtitle = {
+    empty() { spans.length = 0; },
+    createSpan(options) { spans.push(options); },
+  };
+  assert.equal(picker.renderPickerSubtitle(subtitle), true);
+  assert.deepEqual(spans.map((span) => span.text), [
+    "✓ ",
+    "Source",
+    " — implemented by → Target",
+  ]);
+  assert.match(spans[1].cls, /relation-complete-source/);
+  const strip = {
+    spans: [],
+    empty() { this.spans = []; },
+    createSpan(options) { this.spans.push(options); },
+  };
+  picker.ensureRelationConsequenceStrip = () => strip;
+  picker.refreshRelationConsequenceStrip();
+  assert.match(
+    strip.spans[0].text,
+    /✓ Completes “Source” · unblocks dependents · offers successors/,
+  );
+  assert.equal(picker.getRelationLabelFooterHints()[4].label, "link & complete");
+});
+
+test("complete labels keep used-count meta, hide overlay, and stay inert without config", () => {
+  const notes = {
+    "Tasks.md": "- [ ] #task Source ^source\n- [ ] #task Target ^target",
+  };
+  const used = makeCompleteCuePicker(
+    notes,
+    [{ line: 0, blockId: "source" }],
+    { path: "Tasks.md", line: 1, blockId: "target", displayText: "Target" },
+    { implementedCount: 14 },
+  );
+  const usedItem = used.picker.visibleItems.find((row) => row.label === "implemented by");
+  assert.equal(usedItem.count, 14);
+  assert.equal(usedItem.configuredComplete, true);
+  const metas = [];
+  const usedRow = {
+    classList: { add() {} },
+    setAttribute() {},
+    createDiv() {
+      return {
+        classList: { add() {} },
+        createDiv(options) {
+          metas.push(options);
+          return {
+            classList: { add() {} },
+            createSpan() { return {}; },
+            appendText() {},
+          };
+        },
+      };
+    },
+  };
+  used.picker.renderRelationLabelItem(usedItem, usedRow, "");
+  assert.equal(
+    metas.find((meta) => meta && /complete-meta/.test(meta.cls)).text,
+    "used 14× · ✓ completes",
+  );
+
+  const hidden = makeCompleteCuePicker(
+    notes,
+    [{ line: 0, blockId: "source" }],
+    { path: "Tasks.md", line: 1, blockId: "target", displayText: "Target" },
+    { implementedHidden: true },
+  );
+  assert.equal(
+    hidden.picker.visibleItems.some((row) => row.label === "implemented by"),
+    false,
+  );
+  hidden.picker.relationLabelShowHidden = true;
+  hidden.picker.renderResults();
+  const hiddenItem = hidden.picker.visibleItems.find((row) => row.label === "implemented by");
+  assert.equal(hiddenItem.hidden, true);
+  assert.equal(hiddenItem.configuredComplete, true);
+
+  const inert = makeCancelCuePicker(
+    notes,
+    [{ line: 0, blockId: "source" }],
+    { path: "Tasks.md", line: 1, blockId: "target", displayText: "Target" },
+  );
+  assert.equal(
+    inert.picker.visibleItems.some((row) => row.configuredComplete === true),
+    false,
+  );
+  const cancelItem = inert.picker.visibleItems.find((row) => row.label === "duplicate of");
+  assert.equal(cancelItem.configuredCancel, true);
+  inert.picker.selectedIndex = inert.picker.visibleItems.indexOf(cancelItem);
+  assert.equal(inert.picker.getRelationLabelFooterHints()[4].label, "link & cancel");
+});
+
+test("complete-label copy covers verdicts, inverse hint, cancelled target, and cycler disable", () => {
+  const notes = {
+    "Tasks.md": "- [ ] #task Source ^source\n- [ ] #task Target ^target",
+    "Other.md": "- [x] #task Remote ^remote",
+  };
+  const inverse = makeCompleteCuePicker(
+    notes,
+    [{ line: 0, blockId: "source", displayText: "Source" }],
+    { path: "Tasks.md", line: 1, blockId: "target", displayText: "Target" },
+    { query: "implements" },
+  );
+  const inverseItem = inverse.picker.visibleItems.find((row) => row.label === "implements" || row.typed);
+  inverse.picker.selectedIndex = inverse.picker.visibleItems.indexOf(inverseItem);
+  const inverseStrip = {
+    spans: [],
+    empty() { this.spans = []; },
+    createSpan(options) { this.spans.push(options); },
+  };
+  inverse.picker.ensureRelationConsequenceStrip = () => inverseStrip;
+  inverse.picker.refreshRelationConsequenceStrip();
+  assert.match(
+    inverseStrip.spans[0].text,
+    /“implements” never completes · to finish “Target”, use ⇧L with “implemented by”/,
+  );
+
+  const cancelledTarget = makeCompleteCuePicker(
+    notes,
+    [{ line: 0, blockId: "source", displayText: "Source" }],
+    {
+      path: "Tasks.md",
+      line: 1,
+      blockId: "target",
+      displayText: "Target",
+      rawLine: "- [-] #task Target ^target",
+    },
+  );
+  const completeItem = cancelledTarget.picker.visibleItems.find((row) => row.label === "implemented by");
+  cancelledTarget.picker.selectedIndex = cancelledTarget.picker.visibleItems.indexOf(completeItem);
+  const caveatStrip = {
+    spans: [],
+    empty() { this.spans = []; },
+    createSpan(options) { this.spans.push(options); },
+  };
+  cancelledTarget.picker.ensureRelationConsequenceStrip = () => caveatStrip;
+  cancelledTarget.picker.refreshRelationConsequenceStrip();
+  assert.ok(caveatStrip.spans.some((span) => /is Cancelled/.test(span.text)));
+
+  const oldCycler = makeCompleteCuePicker(
+    notes,
+    [{ line: 0, blockId: "source", displayText: "Source" }],
+    { path: "Tasks.md", line: 1, blockId: "target", displayText: "Target" },
+    { cycler: false },
+  );
+  const disabled = oldCycler.picker.visibleItems.find((row) => row.label === "implemented by");
+  assert.equal(disabled.disabled, true);
+  assert.equal(disabled.disabledReason, "Update Task Status Cycler to complete from a link");
+});
+
+test("recurring complete rows are disabled and a multi-source complete needs a second Return", async () => {
+  const recurringNotes = {
+    "Tasks.md": "- [ ] #task Recurring 🔁 ^recurring\n- [ ] #task Target ^target",
+  };
+  const recurring = makeCompleteCuePicker(
+    recurringNotes,
+    [{ line: 0, blockId: "recurring", displayText: "Recurring 🔁" }],
+    { path: "Tasks.md", line: 1, blockId: "target", displayText: "Target" },
+  );
+  const recurringItem = recurring.picker.visibleItems.find((row) => row.label === "implemented by");
+  assert.equal(recurringItem.disabled, true);
+  assert.equal(
+    recurringItem.disabledReason,
+    "“Recurring 🔁” repeats — complete it in Obsidian so Tasks writes the next one",
+  );
+
+  const notes = {
+    "Tasks.md": [
+      "- [ ] #task First ^first",
+      "- [ ] #task Second ^second",
+      "- [ ] #task Target ^target",
+    ].join("\n"),
+  };
+  const batch = makeCompleteCuePicker(
+    notes,
+    [
+      { line: 0, blockId: "first", displayText: "First" },
+      { line: 1, blockId: "second", displayText: "Second" },
+    ],
+    { path: "Tasks.md", line: 2, blockId: "target", displayText: "Target" },
+  );
+  const { picker } = batch;
+  const itemIndex = picker.visibleItems.findIndex((row) => row.label === "implemented by");
+  picker.selectedIndex = itemIndex;
+  let writes = 0;
+  batch.plugin.applyRelationEdit = async () => {
+    writes += 1;
+    return { ok: true };
+  };
+  picker.commitRelationEdit = async () => {
+    writes += 1;
+    return true;
+  };
+  const confirmStrip = {
+    spans: [],
+    empty() { this.spans = []; },
+    createSpan(options) { this.spans.push(options); },
+  };
+  picker.ensureRelationConsequenceStrip = () => confirmStrip;
+  assert.equal(await picker.commitRelationLabel(picker.visibleItems[itemIndex]), false);
+  assert.equal(writes, 0, "the first Return only opens the confirmation step");
+  assert.equal(picker.getRelationLabelFooterHints()[4].label, "again to confirm");
+  picker.refreshRelationConsequenceStrip();
+  assert.equal(
+    confirmStrip.spans[0].text,
+    "✓ Completes 2 tasks — ↵ again to confirm",
+  );
+  picker.handleKeydown({
+    key: "Escape",
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.equal(picker.stage, "relation-label", "Escape disarms without leaving the field");
+  assert.equal(picker.relationCancelConfirmNonce, null);
+  picker.selectedIndex = picker.visibleItems.findIndex((row) => row.label === "implemented by");
+  assert.equal(await picker.commitRelationLabel(picker.visibleItems[picker.selectedIndex]), false);
+  assert.equal(writes, 0, "Escape disarms the confirm step");
+  assert.equal(await picker.commitRelationLabel(picker.visibleItems[picker.selectedIndex]), true);
+  assert.equal(writes, 1);
+});
+
+test("mixed closing banner and footer name both effects", () => {
+  assert.equal(
+    helpers.relationCloseConfirmBanner(2, 1),
+    "Closes 3 tasks · ✓ 1 · ⊘ 2 — ↵ again to confirm",
+  );
+  assert.equal(
+    helpers.relationCloseFooterEnterLabel({
+      cancelCount: 1,
+      completeCount: 1,
+      confirming: false,
+    }),
+    "link & close",
+  );
+  assert.equal(
+    helpers.relationLabelCancelConsequenceStrip(
+      { kind: "relation-label", label: "implemented by" },
+      { confirmBanner: helpers.relationCloseConfirmBanner(1, 1) },
+    ),
+    "Closes 2 tasks · ✓ 1 · ⊘ 1 — ↵ again to confirm",
   );
 });
 

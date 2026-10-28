@@ -123,16 +123,25 @@ function withRelationCancelStayNotice(notice, staysCancelled) {
 }
 
 function showRelationCancelHandEditNotice(changes, rawLine, failed) {
-  const configured = relationCancelLabelsSet(loadRelationsCancelLabels());
-  const cancelEdit = (Array.isArray(changes) ? changes : []).find((change) =>
+  const close = loadRelationsCloseLabels();
+  const cancelConfigured = relationCancelLabelsSet(close.cancel);
+  const completeConfigured = relationCompleteLabelsSet(close.complete);
+  const edits = Array.isArray(changes) ? changes : [];
+  const cancelEdit = edits.find((change) =>
     (change.kind === "add" || change.kind === "relabel") &&
-    configured.has(relationCancelLabelKey(change.label)),
+    cancelConfigured.has(relationCancelLabelKey(change.label)),
+  );
+  const completeEdit = edits.find((change) =>
+    (change.kind === "add" || change.kind === "relabel") &&
+    completeConfigured.has(relationCancelLabelKey(change.label)),
   );
   const status = relationCancelSourceStatus(rawLine);
-  const hint = cancelEdit && OPEN_OBSIDIAN_TASK_STATUSES.has(status) &&
-    !isRecurringTaskLine(rawLine)
+  const open = OPEN_OBSIDIAN_TASK_STATUSES.has(status) && !isRecurringTaskLine(rawLine);
+  const hint = cancelEdit && open
     ? relationCancelHandEditHint(cancelEdit.label)
-    : null;
+    : completeEdit && open
+      ? relationCompleteHandEditHint(completeEdit.label)
+      : null;
   const notices = [
     hint,
     failed && failed.size > 0 ? "🪢 LINKED FROM not updated" : null,

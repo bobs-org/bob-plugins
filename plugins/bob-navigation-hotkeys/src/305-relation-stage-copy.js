@@ -130,6 +130,104 @@ function relationCancelInverseLabel(label, policy) {
   return null;
 }
 
+function mergeRelationCompleteLabelSuggestions(rows, policy, query = "") {
+  const out = (Array.isArray(rows) ? rows : []).map((row) => ({ ...row }));
+  const positions = new Map(
+    out.map((row, index) => [relationCancelLabelKey(row.key || row.label), index]),
+  );
+  const keys = Array.isArray(policy && policy.keys) ? policy.keys : [];
+  const labels = policy && policy.labels && typeof policy.labels === "object"
+    ? policy.labels
+    : {};
+  for (const rawKey of keys) {
+    const key = relationCancelLabelKey(rawKey);
+    const label = String(labels[key] || rawKey || "").trim();
+    if (!key || !label) continue;
+    const existingIndex = positions.get(key);
+    if (existingIndex !== undefined) {
+      out[existingIndex] = { ...out[existingIndex], configuredComplete: true };
+      continue;
+    }
+    if (query && !fuzzyMatchesText(label, query)) continue;
+    positions.set(key, out.length);
+    out.push({
+      key,
+      label,
+      count: 0,
+      hidden: false,
+      inverse: null,
+      configuredComplete: true,
+    });
+  }
+  return out;
+}
+
+function relationCompleteInverseLabel(label, policy) {
+  return relationCancelInverseLabel(label, policy);
+}
+
+function relationCompleteHandEditHint(label) {
+  const normalized = normalizeRelationLabel(String(label || ""));
+  return normalized
+    ? `✓ “${normalized}” completes only from the Links stage or capture · this task stays open`
+    : null;
+}
+
+function relationCloseConfirmBanner(cancelCount, completeCount) {
+  const cancels = Math.max(0, Math.floor(numericOrDefault(cancelCount, 0)));
+  const completes = Math.max(0, Math.floor(numericOrDefault(completeCount, 0)));
+  const closes = cancels + completes;
+  if (closes < 2) return "";
+  if (cancels > 0 && completes > 0) {
+    return `Closes ${closes} tasks · ✓ ${completes} · ⊘ ${cancels} — ↵ again to confirm`;
+  }
+  if (completes > 0) {
+    return `✓ Completes ${completes} tasks — ↵ again to confirm`;
+  }
+  return `⊘ Cancels ${cancels} tasks — ↵ again to confirm`;
+}
+
+function relationCloseFooterEnterLabel(details = {}) {
+  if (details.disabled) return "unavailable";
+  if (details.confirming) return "again to confirm";
+  const cancels = Math.max(0, Math.floor(numericOrDefault(details.cancelCount, 0)));
+  const completes = Math.max(0, Math.floor(numericOrDefault(details.completeCount, 0)));
+  if (cancels > 0 && completes > 0) return "link & close";
+  if (completes > 0) return "link & complete";
+  if (cancels > 0) return "link & cancel";
+  return details.relabel === true ? "relabel" : "link";
+}
+
+function relationCompleteAlreadyClosedCopy(source) {
+  if (!source) return "Links only · never blocks, schedules, or changes status";
+  if (source.status === "x" || source.status === "X") return "Already Done · link only";
+  if (source.status === "-") return "Stays Cancelled · link only";
+  if (source.verdict === "already_closed") {
+    return `Stays ${relationCancelStatusName(source.status)} · link only`;
+  }
+  return "Links only · never blocks, schedules, or changes status";
+}
+
+function relationLabelCompleteConsequenceText(preview) {
+  const completed = Array.isArray(preview && preview.completes) ? preview.completes : [];
+  if (completed.length === 0) return "";
+  const source = completed[0];
+  const more = completed.length > 1
+    ? ` +${completed.length - 1} ${completed.length === 2 ? "task" : "tasks"}`
+    : "";
+  const parts = [`✓ Completes “${(source && source.text) || "task"}”${more}`];
+  parts.push("unblocks dependents");
+  parts.push("offers successors");
+  if (source && source.projectOpenTasks !== null && source.projectOpenTasks !== undefined) {
+    if (source.projectOpenTasks === 1) {
+      parts.push("its 1 open task stays open");
+    } else {
+      parts.push(`its ${source.projectOpenTasks} open tasks stay open`);
+    }
+  }
+  return parts.join(" · ");
+}
+
 function relationCancelStatusName(status) {
   switch (String(status == null ? "" : status)) {
     case " ": return "Ready";
@@ -149,13 +247,33 @@ function relationLabelCancelConsequenceStrip(item, context = {}) {
   if (!item || item.plain || item.kind === "relation-label-invalid") {
     return item && item.reason ? String(item.reason) : "Links only · never blocks, schedules, or changes status";
   }
-  const preview = context.preview || item.cancelPreview || null;
+  const preview = context.preview || item.cancelPreview || item.closePreview || null;
+  if (preview && preview.staysDone) {
+    return "stays Done · reopen with Alt+[";
+  }
+  if (preview && preview.completeRefusal) return String(preview.completeRefusal);
+  const completed = Array.isArray(preview && preview.completes) ? preview.completes : [];
+  const cancelled = Array.isArray(preview && preview.cancels) ? preview.cancels : [];
   if (preview && preview.refusal) return String(preview.refusal);
-  if (preview && preview.inverseHint && (!preview.cancels || preview.cancels.length === 0)) {
+  if (
+    preview &&
+    preview.inverseHint &&
+    cancelled.length === 0 &&
+    completed.length === 0
+  ) {
     return String(preview.inverseHint);
   }
   if (preview && preview.staysCancelled) {
     return "⊘ Stays Cancelled · reopen with Alt+]";
+  }
+  if (completed.length > 0) {
+    return relationLabelCompleteConsequenceText(preview);
+  }
+  if (preview && Array.isArray(preview.completeSources) && preview.completeSources.length > 0 && completed.length === 0) {
+    const source = preview.completeSources[0];
+    if (source && (source.verdict === "already_closed" || source.status === "x" || source.status === "X" || source.status === "-")) {
+      return relationCompleteAlreadyClosedCopy(source);
+    }
   }
   if (preview && Array.isArray(preview.sources) && preview.sources.length > 0) {
     const cancelled = Array.isArray(preview.cancels) ? preview.cancels : [];

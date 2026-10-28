@@ -42232,6 +42232,8 @@ const RELATION_INVERSE_PHRASES = Object.freeze({
   "follow-up of": "followed up by",
   "superseded by": "supersedes",
   "split from": "split into",
+  "implemented by": "implements",
+  "verified by": "verifies",
 });
 
 function inverseRelationPhrase(label) {
@@ -42898,6 +42900,104 @@ function relationCancelInverseLabel(label, policy) {
   return null;
 }
 
+function mergeRelationCompleteLabelSuggestions(rows, policy, query = "") {
+  const out = (Array.isArray(rows) ? rows : []).map((row) => ({ ...row }));
+  const positions = new Map(
+    out.map((row, index) => [relationCancelLabelKey(row.key || row.label), index]),
+  );
+  const keys = Array.isArray(policy && policy.keys) ? policy.keys : [];
+  const labels = policy && policy.labels && typeof policy.labels === "object"
+    ? policy.labels
+    : {};
+  for (const rawKey of keys) {
+    const key = relationCancelLabelKey(rawKey);
+    const label = String(labels[key] || rawKey || "").trim();
+    if (!key || !label) continue;
+    const existingIndex = positions.get(key);
+    if (existingIndex !== undefined) {
+      out[existingIndex] = { ...out[existingIndex], configuredComplete: true };
+      continue;
+    }
+    if (query && !fuzzyMatchesText(label, query)) continue;
+    positions.set(key, out.length);
+    out.push({
+      key,
+      label,
+      count: 0,
+      hidden: false,
+      inverse: null,
+      configuredComplete: true,
+    });
+  }
+  return out;
+}
+
+function relationCompleteInverseLabel(label, policy) {
+  return relationCancelInverseLabel(label, policy);
+}
+
+function relationCompleteHandEditHint(label) {
+  const normalized = normalizeRelationLabel(String(label || ""));
+  return normalized
+    ? `✓ “${normalized}” completes only from the Links stage or capture · this task stays open`
+    : null;
+}
+
+function relationCloseConfirmBanner(cancelCount, completeCount) {
+  const cancels = Math.max(0, Math.floor(numericOrDefault(cancelCount, 0)));
+  const completes = Math.max(0, Math.floor(numericOrDefault(completeCount, 0)));
+  const closes = cancels + completes;
+  if (closes < 2) return "";
+  if (cancels > 0 && completes > 0) {
+    return `Closes ${closes} tasks · ✓ ${completes} · ⊘ ${cancels} — ↵ again to confirm`;
+  }
+  if (completes > 0) {
+    return `✓ Completes ${completes} tasks — ↵ again to confirm`;
+  }
+  return `⊘ Cancels ${cancels} tasks — ↵ again to confirm`;
+}
+
+function relationCloseFooterEnterLabel(details = {}) {
+  if (details.disabled) return "unavailable";
+  if (details.confirming) return "again to confirm";
+  const cancels = Math.max(0, Math.floor(numericOrDefault(details.cancelCount, 0)));
+  const completes = Math.max(0, Math.floor(numericOrDefault(details.completeCount, 0)));
+  if (cancels > 0 && completes > 0) return "link & close";
+  if (completes > 0) return "link & complete";
+  if (cancels > 0) return "link & cancel";
+  return details.relabel === true ? "relabel" : "link";
+}
+
+function relationCompleteAlreadyClosedCopy(source) {
+  if (!source) return "Links only · never blocks, schedules, or changes status";
+  if (source.status === "x" || source.status === "X") return "Already Done · link only";
+  if (source.status === "-") return "Stays Cancelled · link only";
+  if (source.verdict === "already_closed") {
+    return `Stays ${relationCancelStatusName(source.status)} · link only`;
+  }
+  return "Links only · never blocks, schedules, or changes status";
+}
+
+function relationLabelCompleteConsequenceText(preview) {
+  const completed = Array.isArray(preview && preview.completes) ? preview.completes : [];
+  if (completed.length === 0) return "";
+  const source = completed[0];
+  const more = completed.length > 1
+    ? ` +${completed.length - 1} ${completed.length === 2 ? "task" : "tasks"}`
+    : "";
+  const parts = [`✓ Completes “${(source && source.text) || "task"}”${more}`];
+  parts.push("unblocks dependents");
+  parts.push("offers successors");
+  if (source && source.projectOpenTasks !== null && source.projectOpenTasks !== undefined) {
+    if (source.projectOpenTasks === 1) {
+      parts.push("its 1 open task stays open");
+    } else {
+      parts.push(`its ${source.projectOpenTasks} open tasks stay open`);
+    }
+  }
+  return parts.join(" · ");
+}
+
 function relationCancelStatusName(status) {
   switch (String(status == null ? "" : status)) {
     case " ": return "Ready";
@@ -42917,13 +43017,33 @@ function relationLabelCancelConsequenceStrip(item, context = {}) {
   if (!item || item.plain || item.kind === "relation-label-invalid") {
     return item && item.reason ? String(item.reason) : "Links only · never blocks, schedules, or changes status";
   }
-  const preview = context.preview || item.cancelPreview || null;
+  const preview = context.preview || item.cancelPreview || item.closePreview || null;
+  if (preview && preview.staysDone) {
+    return "stays Done · reopen with Alt+[";
+  }
+  if (preview && preview.completeRefusal) return String(preview.completeRefusal);
+  const completed = Array.isArray(preview && preview.completes) ? preview.completes : [];
+  const cancelled = Array.isArray(preview && preview.cancels) ? preview.cancels : [];
   if (preview && preview.refusal) return String(preview.refusal);
-  if (preview && preview.inverseHint && (!preview.cancels || preview.cancels.length === 0)) {
+  if (
+    preview &&
+    preview.inverseHint &&
+    cancelled.length === 0 &&
+    completed.length === 0
+  ) {
     return String(preview.inverseHint);
   }
   if (preview && preview.staysCancelled) {
     return "⊘ Stays Cancelled · reopen with Alt+]";
+  }
+  if (completed.length > 0) {
+    return relationLabelCompleteConsequenceText(preview);
+  }
+  if (preview && Array.isArray(preview.completeSources) && preview.completeSources.length > 0 && completed.length === 0) {
+    const source = preview.completeSources[0];
+    if (source && (source.verdict === "already_closed" || source.status === "x" || source.status === "X" || source.status === "-")) {
+      return relationCompleteAlreadyClosedCopy(source);
+    }
   }
   if (preview && Array.isArray(preview.sources) && preview.sources.length > 0) {
     const cancelled = Array.isArray(preview.cancels) ? preview.cancels : [];
@@ -52568,7 +52688,11 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       item.hidden ? "is-relation-label-hidden" : "",
       item.ghost ? "is-relation-label-ghost" : "",
       item.warning ? "is-relation-label-warning" : "",
-      item.disabled ? "is-disabled is-relation-cancel-disabled" : "",
+      item.disabled
+        ? item.configuredComplete
+          ? "is-disabled is-relation-complete-disabled"
+          : "is-disabled is-relation-cancel-disabled"
+        : "",
     );
     if (item.disabled) rowEl.setAttribute("aria-disabled", "true");
     const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
@@ -52582,9 +52706,20 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         text: "⊘ cancels",
       });
     }
+    if (item.configuredComplete) {
+      const used = !item.plain && Number.isInteger(item.count) && item.count > 0
+        ? `used ${item.count}× · ✓ completes`
+        : "✓ completes";
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta bob-cnp-relation-complete-meta",
+        text: used,
+      });
+    }
     if (item.disabledReason) {
       textEl.createDiv({
-        cls: "bob-cnp-row-meta bob-cnp-relation-cancel-disabled-meta",
+        cls: item.configuredComplete
+          ? "bob-cnp-row-meta bob-cnp-relation-complete-disabled-meta"
+          : "bob-cnp-row-meta bob-cnp-relation-cancel-disabled-meta",
         text: item.disabledReason,
       });
     } else if (item.oneOff) {
@@ -52598,7 +52733,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       });
     } else if (item.hidden) {
       textEl.createDiv({ cls: "bob-cnp-row-meta bob-cnp-relation-label-hidden-meta", text: "hidden everywhere · ⌃D unhide" });
-    } else if (!item.plain && Number.isInteger(item.count) && item.count > 0) {
+    } else if (!item.plain && Number.isInteger(item.count) && item.count > 0 && !item.configuredComplete) {
       textEl.createDiv({
         cls: "bob-cnp-row-meta",
         text: `used ${item.count}×`,
@@ -52657,21 +52792,26 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       new Notice(cancelPreview.refusal);
       return false;
     }
-    if (cancelPreview && cancelPreview.expected) {
-      const cancels = Array.isArray(cancelPreview.cancels)
-        ? cancelPreview.cancels
-        : [];
-      const nonce = JSON.stringify(cancelPreview.expected);
+    if (cancelPreview && cancelPreview.completeRefusal) {
+      new Notice(cancelPreview.completeRefusal);
+      return false;
+    }
+    if (cancelPreview && (cancelPreview.expectedCloseEffects || cancelPreview.expected)) {
+      const counts = this.relationLabelCloseCounts(cancelPreview);
+      const nonce = this.relationLabelCloseNonce(cancelPreview);
       if (
-        cancels.length >= 2 &&
+        counts.closeCount >= 2 &&
+        nonce &&
         this.relationCancelConfirmNonce !== nonce
       ) {
         this.relationCancelExpected = cancelPreview.expected;
+        this.relationCloseExpected = cancelPreview.expectedCloseEffects || null;
         this.relationCancelConfirmNonce = nonce;
         if (typeof this.renderResults === "function") this.renderResults();
         return false;
       }
       this.relationCancelExpected = cancelPreview.expected;
+      this.relationCloseExpected = cancelPreview.expectedCloseEffects || this.relationCloseExpected;
       this.relationCancelConfirmNonce = null;
     }
     let committed = false;
@@ -52706,6 +52846,9 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationLabelOneOff = false;
     this.relationLabelGhosts = new Map();
     this.relationLabelWrites = new Set();
+    this.relationCancelExpected = null;
+    this.relationCloseExpected = null;
+    this.relationCancelConfirmNonce = null;
     this.stage = "value";
     this.selectedIndex = 0;
     const items = this.vaultStage
@@ -53398,17 +53541,32 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     if (this.titleEl) this.titleEl.textContent = this.title;
   }
 
+  relationLabelCloseNonce(preview) {
+    if (!preview) return "";
+    if (preview.expectedCloseEffects) return JSON.stringify(preview.expectedCloseEffects);
+    if (preview.expected) return JSON.stringify(preview.expected);
+    return "";
+  }
+
+  relationLabelCloseCounts(preview) {
+    const cancelCount = preview && Array.isArray(preview.cancels) ? preview.cancels.length : 0;
+    const completeCount = preview && Array.isArray(preview.completes)
+      ? preview.completes.length
+      : 0;
+    return {
+      cancelCount,
+      completeCount,
+      closeCount: cancelCount + completeCount,
+    };
+  }
+
   getRelationLabelFooterHints() {
     const raw = this.getRawQuery ? String(this.getRawQuery() || "") : "";
     const item = (this.visibleItems || [])[this.selectedIndex] || null;
-    const preview = item && item.cancelPreview;
-    const cancelCount = preview && Array.isArray(preview.cancels)
-      ? preview.cancels.length
-      : 0;
-    const nonce = preview && preview.expected
-      ? JSON.stringify(preview.expected)
-      : "";
-    const confirming = cancelCount >= 2 && nonce &&
+    const preview = item && (item.closePreview || item.cancelPreview);
+    const counts = this.relationLabelCloseCounts(preview);
+    const nonce = this.relationLabelCloseNonce(preview);
+    const confirming = counts.closeCount >= 2 && nonce &&
       this.relationCancelConfirmNonce === nonce;
     const noSelection = !item || item.typed === true || item.plain === true || this.selectedIndex === 0;
     let tabLabel = "accept top match";
@@ -53426,13 +53584,13 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       { keys: ["⌃R"], label: "rename selected" },
       {
         keys: ["↵"],
-        label: item && item.disabled
-          ? "unavailable"
-          : confirming
-            ? "again to confirm"
-            : cancelCount > 0
-              ? "link & cancel"
-              : this.relationLabelMode === "relabel" ? "relabel" : "link",
+        label: relationCloseFooterEnterLabel({
+          disabled: Boolean(item && item.disabled),
+          confirming,
+          cancelCount: counts.cancelCount,
+          completeCount: counts.completeCount,
+          relabel: this.relationLabelMode === "relabel",
+        }),
       },
       { keys: ["esc"], label: "back to list" },
     ];
@@ -53596,9 +53754,11 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       this.plugin && typeof this.plugin.dependencyLinkpathResolver === "function"
         ? this.plugin.dependencyLinkpathResolver()
         : null;
+    const completeKeys = relationCompleteLabelsSet(closeConfig.complete);
     const policySources = [];
     const sourceDetails = [];
     let relabelAway = false;
+    let relabelAwayDone = false;
 
     for (const sourceRef of sourceRefs) {
       const sourcePath = normalizeVaultRelativePath((sourceRef && sourceRef.path) || "");
@@ -53674,6 +53834,20 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
             configuredKeys.has(relationCancelLabelKey(row.label)),
         );
       }
+      if (
+        this.relationLabelMode === "relabel" &&
+        (status === "x" || status === "X") &&
+        normalized &&
+        !completeKeys.has(relationCancelLabelKey(normalized))
+      ) {
+        const targetIdentities = new Set(
+          validTargets.map((target) => blocksIdentity(target.path, target.blockId)),
+        );
+        relabelAwayDone = relabelAwayDone || existingRows.some(
+          (row) => targetIdentities.has(row.identity) &&
+            completeKeys.has(relationCancelLabelKey(row.label)),
+        );
+      }
     }
 
     const api = relationTaskStatusCyclerApi(this.plugin && this.plugin.app);
@@ -53705,12 +53879,25 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       ...(sourceDetails[index] || {}),
     }));
     const cancels = sources.filter((source) => source.cancels === true);
+    const completes = completeSources.filter((source) => source.completes === true);
     let refusal = null;
     if (plan.refusals.length > 0) {
       const refused = sources.find((source) => source.refusal);
       refusal = refused && refused.verdict === "recurring"
         ? `“${refused.text}” repeats — cancel it with Obsidian Tasks first`
         : (refused && refused.refusal && refused.refusal.message) || "This relation cannot be committed";
+    }
+    let completeRefusal = null;
+    if (completePlan.refusals.length > 0) {
+      const refused = completeSources.find((source) => source.refusal);
+      if (refused && refused.verdict === "recurring") {
+        completeRefusal = `“${refused.text}” repeats — complete it in Obsidian so Tasks writes the next one`;
+      } else if (refused && refused.verdict === "cycler_api") {
+        completeRefusal = "Update Task Status Cycler to complete from a link";
+      } else {
+        completeRefusal = (refused && refused.refusal && refused.refusal.message) ||
+          "This relation cannot be committed";
+      }
     }
     const expected = summarizeRelationCancelEffects(
       plan,
@@ -53725,40 +53912,65 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const inverseLabel = normalized && !configuredKeys.has(relationCancelLabelKey(normalized))
       ? relationCancelInverseLabel(normalized, config)
       : null;
+    const completeInverse = normalized && !completeKeys.has(relationCancelLabelKey(normalized))
+      ? relationCompleteInverseLabel(normalized, closeConfig.complete)
+      : null;
     const targetForInverse = linkedFrom
       ? sourceDetails[0] && sourceDetails[0].text
       : labelTargets[0] && (labelTargets[0].displayText || labelTargets[0].text);
+    const completeTargetForInverse = linkedFrom
+      ? (this.vaultStage && Array.isArray(this.vaultStage.sources) && this.vaultStage.sources[0]
+        && (this.vaultStage.sources[0].displayText || this.vaultStage.sources[0].text)) || "this"
+      : labelTargets[0] && (labelTargets[0].displayText || labelTargets[0].text);
+    const cancelledTarget = edgeTargets.find((target) => {
+      const raw = String((target && target.rawLine) || "");
+      return relationCancelSourceStatus(raw) === "-";
+    });
+    const targetCancelledCaveat = cancelledTarget
+      ? `“${cancelledTarget.displayText || cancelledTarget.text || "that task"}” is Cancelled`
+      : "";
     return Object.freeze({
       configured: Boolean(normalized && configuredKeys.has(relationCancelLabelKey(normalized))),
+      configuredComplete: Boolean(normalized && completeKeys.has(relationCancelLabelKey(normalized))),
       sources: Object.freeze(sources),
       cancels: Object.freeze(cancels),
       refusal,
       staysCancelled: relabelAway,
-      completeSources: Object.freeze(completeSources.filter((source) => source.completes === true)),
-      completeRefusal: completePlan.refusals[0] || null,
+      staysDone: relabelAwayDone,
+      completes: Object.freeze(completes),
+      completeSources: Object.freeze(completeSources),
+      completeRefusal,
       expectedCloseEffects,
+      targetCancelledCaveat,
       inverseHint: inverseLabel
         ? `“${normalized}” never cancels · to retire “${targetForInverse || "that task"}”, use ⇧L`
-        : "",
+        : completeInverse
+          ? `“${normalized}” never completes · to finish “${completeTargetForInverse || "that task"}”, use ${linkedFrom ? "l" : "⇧L"} with “${completeInverse}”`
+          : "",
       expected,
     });
   }
 
   relationCancelStayHintForItem(item) {
     if (!item || item.stageSection !== "current") return "";
-    const config = this.relationCancelLabelsConfig();
-    const keys = relationCancelLabelsSet(config);
+    const close = this.relationCloseLabelsConfig();
+    const cancelKeys = relationCancelLabelsSet(close.cancel || this.relationCancelLabelsConfig());
+    const completeKeys = relationCompleteLabelsSet(close.complete);
     const label = this.isLinkedFromSession()
       ? item.storedLabel || item.label
       : item.label;
-    if (!keys.has(relationCancelLabelKey(label))) return "";
+    const key = relationCancelLabelKey(label);
     const sources = this.isLinkedFromSession() ? [item] : this.relationStageSourceRefs();
     for (const source of sources) {
       const rawLine = this.relationCancelContentForRef(source).split(/\r?\n/)[
         Math.max(0, Math.floor(numericOrDefault(source.line, 0)))
       ] || source.rawLine || "";
-      if (relationCancelSourceStatus(rawLine) === "-") {
+      const status = relationCancelSourceStatus(rawLine);
+      if (cancelKeys.has(key) && status === "-") {
         return "⊘ Stays Cancelled · reopen with Alt+]";
+      }
+      if (completeKeys.has(key) && (status === "x" || status === "X")) {
+        return "stays Done · reopen with Alt+[";
       }
     }
     return "";
@@ -53773,9 +53985,11 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       ? this.relationLabelTargets
       : [];
     const sourceRef = linkedFrom ? targets[0] : sources[0];
-    const source = preview && preview.cancels && preview.cancels[0]
-      ? preview.cancels[0].text
-      : (sourceRef && (sourceRef.displayText || sourceRef.text)) || "This task";
+    const source = preview && preview.completes && preview.completes[0]
+      ? preview.completes[0].text
+      : preview && preview.cancels && preview.cancels[0]
+        ? preview.cancels[0].text
+        : (sourceRef && (sourceRef.displayText || sourceRef.text)) || "This task";
     const sourcePath = normalizeVaultRelativePath((sourceRef && sourceRef.path) || "");
     const activePath = normalizeVaultRelativePath(this.filePath || "");
     const sourceText = sourcePath && sourcePath !== activePath
@@ -53811,18 +54025,29 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const label = item && !item.plain
       ? item.label
       : this.getRawQuery ? this.getRawQuery() : "";
-    const preview = item && item.cancelPreview
-      ? item.cancelPreview
+    const preview = item && (item.closePreview || item.cancelPreview)
+      ? (item.closePreview || item.cancelPreview)
       : this.relationCancelPreviewForLabel(label);
-    if (!preview || !Array.isArray(preview.cancels) || preview.cancels.length === 0) {
+    const completes = preview && Array.isArray(preview.completes) ? preview.completes : [];
+    const cancels = preview && Array.isArray(preview.cancels) ? preview.cancels : [];
+    if (completes.length === 0 && cancels.length === 0) {
       return false;
     }
     const context = this.relationLabelLiveContext(item, preview);
+    const completeCue = completes.length > 0 && cancels.length === 0;
     element.empty();
-    element.createSpan({ cls: "bob-cnp-relation-cancel-mark", text: "⊘ " });
-    element.createSpan({ cls: "bob-cnp-relation-cancel-source", text: context.sourceText });
     element.createSpan({
-      cls: "bob-cnp-relation-cancel-sentence-tail",
+      cls: completeCue ? "bob-cnp-relation-complete-mark" : "bob-cnp-relation-cancel-mark",
+      text: completeCue ? "✓ " : "⊘ ",
+    });
+    element.createSpan({
+      cls: completeCue ? "bob-cnp-relation-complete-source" : "bob-cnp-relation-cancel-source",
+      text: context.sourceText,
+    });
+    element.createSpan({
+      cls: completeCue
+        ? "bob-cnp-relation-complete-sentence-tail"
+        : "bob-cnp-relation-cancel-sentence-tail",
       text: ` — ${context.label} → ${context.targetText}`,
     });
     return true;
@@ -53837,27 +54062,37 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     if (!el) return;
     const item = (this.visibleItems || [])[this.selectedIndex] || null;
     if (this.stage === "relation-label") {
-      const preview = item && item.cancelPreview
-        ? item.cancelPreview
+      const preview = item && (item.closePreview || item.cancelPreview)
+        ? (item.closePreview || item.cancelPreview)
         : item && item.label
           ? this.relationCancelPreviewForLabel(item.label)
           : null;
-      const nonce = preview && preview.expected ? JSON.stringify(preview.expected) : "";
-      const confirmBanner = nonce && this.relationCancelConfirmNonce === nonce &&
-        Array.isArray(preview.cancels) && preview.cancels.length >= 2
-        ? `⊘ Cancels ${preview.cancels.length} tasks — ↵ again to confirm`
+      const counts = this.relationLabelCloseCounts(preview);
+      const nonce = this.relationLabelCloseNonce(preview);
+      const confirmBanner = nonce && this.relationCancelConfirmNonce === nonce
+        ? relationCloseConfirmBanner(counts.cancelCount, counts.completeCount)
         : "";
       const text = relationLabelCancelConsequenceStrip(item, {
         preview,
         confirmBanner,
       });
+      const completeCue = counts.completeCount > 0 && counts.cancelCount === 0;
+      const cancelCue = counts.cancelCount > 0 && counts.completeCount === 0;
       el.empty();
       el.createSpan({
-        cls: preview && preview.cancels && preview.cancels.length > 0
-          ? "bob-cnp-consequence-strip-text bob-cnp-relation-cancel-effects"
-          : "bob-cnp-consequence-strip-text",
+        cls: completeCue
+          ? "bob-cnp-consequence-strip-text bob-cnp-relation-complete-effects"
+          : cancelCue
+            ? "bob-cnp-consequence-strip-text bob-cnp-relation-cancel-effects"
+            : "bob-cnp-consequence-strip-text",
         text,
       });
+      if (!confirmBanner && preview && preview.targetCancelledCaveat) {
+        el.createSpan({
+          cls: "bob-cnp-relation-complete-caveat",
+          text: ` · ${preview.targetCancelledCaveat}`,
+        });
+      }
       return;
     }
     const text = relationStageConsequenceStrip(item, {
@@ -53884,10 +54119,15 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const typed = normalizeRelationLabel(raw);
     const closeConfig = this.relationCloseLabelsConfig();
     const config = closeConfig.cancel || this.relationCancelLabelsConfig();
-    const configuredComplete = relationCompleteLabelsSet(closeConfig.complete);
-    const suggestions = mergeRelationCancelLabelSuggestions(
-      this.readRelationLabelSuggestions(raw, { hidden: "include" }),
-      config,
+    const completeConfig = closeConfig.complete || emptyRelationsCancelLabels();
+    const configuredComplete = relationCompleteLabelsSet(completeConfig);
+    const suggestions = mergeRelationCompleteLabelSuggestions(
+      mergeRelationCancelLabelSuggestions(
+        this.readRelationLabelSuggestions(raw, { hidden: "include" }),
+        config,
+        raw,
+      ),
+      completeConfig,
       raw,
     );
     const ghosts = this.relationLabelGhosts instanceof Map
@@ -53905,14 +54145,18 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       if (!item || item.kind !== "relation-label" || item.plain || !item.label) return Object.freeze(item);
       const configuredCancel = item.configuredCancel === true ||
         relationCancelLabelsSet(config).has(relationCancelLabelKey(item.label));
-      const completeLabel = configuredComplete.has(relationCancelLabelKey(item.label));
-      const inverse = relationCancelInverseLabel(item.label, config);
+      const completeLabel = item.configuredComplete === true ||
+        configuredComplete.has(relationCancelLabelKey(item.label));
+      const inverse = relationCancelInverseLabel(item.label, config) ||
+        relationCompleteInverseLabel(item.label, completeConfig);
       const preview = configuredCancel || completeLabel || inverse
         ? this.relationCancelPreviewForLabel(item.label)
         : null;
       const disabledReason = configuredCancel && preview && preview.refusal
         ? preview.refusal
-        : "";
+        : completeLabel && preview && preview.completeRefusal
+          ? preview.completeRefusal
+          : "";
       return Object.freeze({
         ...item,
         configuredCancel,
@@ -53948,6 +54192,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         count: existing ? existing.count : 0,
         hidden,
         configuredCancel: existing && existing.configuredCancel === true,
+        configuredComplete: existing && existing.configuredComplete === true,
         oneOff: this.relationLabelOneOff === true,
         warning,
         warningText: warning
@@ -53969,7 +54214,9 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const typedKey = typed ? relationCancelLabelKey(typed) : "";
     const visibleRows = effective.filter((row) => row.hidden !== true && relationCancelLabelKey(row.key) !== typedKey);
     const hiddenRows = effective.filter((row) => row.hidden === true && relationCancelLabelKey(row.key) !== typedKey);
-    const visibleLimit = 12 + (Array.isArray(config && config.keys) ? config.keys.length : 0);
+    const visibleLimit = 12
+      + (Array.isArray(config && config.keys) ? config.keys.length : 0)
+      + (Array.isArray(completeConfig && completeConfig.keys) ? completeConfig.keys.length : 0);
     const toItem = (row) => decorate({
       kind: "relation-label",
       key: row.key,
@@ -53979,6 +54226,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       hidden: row.hidden === true,
       ghost: row.ghost === true,
       configuredCancel: row.configuredCancel === true,
+      configuredComplete: row.configuredComplete === true,
       typed: false,
       displayText: row.label,
       searchText: row.label,
@@ -54025,6 +54273,16 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       this.stage !== "relation-label"
     ) return false;
     const noMetaAlt = event.metaKey !== true && event.altKey !== true;
+    if (event.key === "Escape" && noMetaAlt && event.ctrlKey !== true) {
+      if (!this.relationCancelConfirmNonce) return false;
+      event.preventDefault();
+      event.stopPropagation();
+      this.relationCancelConfirmNonce = null;
+      this.relationCancelExpected = null;
+      this.relationCloseExpected = null;
+      if (typeof this.renderResults === "function") this.renderResults();
+      return true;
+    }
     if (event.key === "Tab" && noMetaAlt && event.ctrlKey !== true) {
       event.preventDefault();
       event.stopPropagation();
@@ -75747,6 +76005,7 @@ class BobNavigationHotkeysRelationEditMixin {
       const completionNoticeRows = [];
       const closingRows = [];
       let cancelStayedCancelled = false;
+      let completeStayedDone = false;
       const consumedLinesByPath = new Map();
       let archived = false;
       const contentOf = (path) =>
@@ -75896,6 +76155,14 @@ class BobNavigationHotkeysRelationEditMixin {
             liveRemove,
             liveRelabel,
             cancelLabels,
+          );
+        completeStayedDone = completeStayedDone ||
+          relationCompleteRemovalStaysDone(
+            policyRaw,
+            existingRows,
+            liveRemove,
+            liveRelabel,
+            completeLabels,
           );
         const closePlan = planRelationClosingSource({
           cancelLabels,
@@ -76216,14 +76483,14 @@ class BobNavigationHotkeysRelationEditMixin {
         });
       const relationNotice = unchanged
         ? null
-        : withRelationCancelStayNotice(buildRelationEditNotice({
+        : withRelationCloseStayNotice(buildRelationEditNotice({
             added: noticeAdded.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
             removed: noticeRemoved.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
             relabeled: noticeRelabeled.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
             direction,
             archived,
             mirrorFailed: [],
-          }), cancelStayedCancelled);
+          }), cancelStayedCancelled, completeStayedDone);
       const baseNotice = unchanged
         ? null
         : committedCompleted.length > 0
@@ -76905,16 +77172,25 @@ function withRelationCancelStayNotice(notice, staysCancelled) {
 }
 
 function showRelationCancelHandEditNotice(changes, rawLine, failed) {
-  const configured = relationCancelLabelsSet(loadRelationsCancelLabels());
-  const cancelEdit = (Array.isArray(changes) ? changes : []).find((change) =>
+  const close = loadRelationsCloseLabels();
+  const cancelConfigured = relationCancelLabelsSet(close.cancel);
+  const completeConfigured = relationCompleteLabelsSet(close.complete);
+  const edits = Array.isArray(changes) ? changes : [];
+  const cancelEdit = edits.find((change) =>
     (change.kind === "add" || change.kind === "relabel") &&
-    configured.has(relationCancelLabelKey(change.label)),
+    cancelConfigured.has(relationCancelLabelKey(change.label)),
+  );
+  const completeEdit = edits.find((change) =>
+    (change.kind === "add" || change.kind === "relabel") &&
+    completeConfigured.has(relationCancelLabelKey(change.label)),
   );
   const status = relationCancelSourceStatus(rawLine);
-  const hint = cancelEdit && OPEN_OBSIDIAN_TASK_STATUSES.has(status) &&
-    !isRecurringTaskLine(rawLine)
+  const open = OPEN_OBSIDIAN_TASK_STATUSES.has(status) && !isRecurringTaskLine(rawLine);
+  const hint = cancelEdit && open
     ? relationCancelHandEditHint(cancelEdit.label)
-    : null;
+    : completeEdit && open
+      ? relationCompleteHandEditHint(completeEdit.label)
+      : null;
   const notices = [
     hint,
     failed && failed.size > 0 ? "🪢 LINKED FROM not updated" : null,
@@ -77542,6 +77818,41 @@ function summarizeRelationCloseEffects(cancelPlans, completePlan, day) {
     String(left.identity).localeCompare(String(right.identity)),
   );
   return Object.freeze({ day: String(day || ""), sources: Object.freeze(sources) });
+}
+
+function relationCompleteRemovalStaysDone(rawLine, existingRows, removed, relabeled, completeLabels) {
+  const status = relationCancelSourceStatus(rawLine);
+  if (status !== "x" && status !== "X") return false;
+  const configured = relationCompleteLabelsSet(completeLabels);
+  const oldByIdentity = new Map(
+    (Array.isArray(existingRows) ? existingRows : []).map((row) => [row.identity, row]),
+  );
+  for (const target of [
+    ...(Array.isArray(removed) ? removed : []),
+    ...(Array.isArray(relabeled) ? relabeled : []),
+  ]) {
+    const identity = blocksIdentity(target && target.path, target && target.blockId);
+    const old = oldByIdentity.get(identity);
+    if (!old || !configured.has(relationCancelLabelKey(old.label))) continue;
+    const next = (Array.isArray(removed) ? removed : []).includes(target)
+      ? ""
+      : relationCancelLabelKey(target && target.label);
+    if (!next || !configured.has(next)) return true;
+  }
+  return false;
+}
+
+function withRelationCompleteStayNotice(notice, staysDone) {
+  return notice && staysDone
+    ? `${notice} · stays Done · reopen with Alt+[`
+    : notice;
+}
+
+function withRelationCloseStayNotice(notice, staysCancelled, staysDone) {
+  return withRelationCompleteStayNotice(
+    withRelationCancelStayNotice(notice, staysCancelled),
+    staysDone,
+  );
 }
 
 function relationCloseEffectsEqual(left, right) {
@@ -90217,12 +90528,22 @@ module.exports.helpers = {
   relationStageConsequenceStrip,
   relationStageLiveSentence,
   mergeRelationCancelLabelSuggestions,
+  mergeRelationCompleteLabelSuggestions,
   relationCancelInverseLabel,
+  relationCompleteInverseLabel,
   relationCancelStatusName,
   relationLabelCancelConsequenceStrip,
+  relationLabelCompleteConsequenceText,
+  relationCompleteAlreadyClosedCopy,
   relationCancelHandEditHint,
+  relationCompleteHandEditHint,
+  relationCloseConfirmBanner,
+  relationCloseFooterEnterLabel,
   relationCancelRemovalStaysCancelled,
+  relationCompleteRemovalStaysDone,
   withRelationCancelStayNotice,
+  withRelationCompleteStayNotice,
+  withRelationCloseStayNotice,
   describeRelationLabelRefusal,
   taskCardLinksToAvailabilityReason,
   taskCardLinksToEntryRefusal,

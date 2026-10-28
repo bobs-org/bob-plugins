@@ -105,19 +105,28 @@ already has a Schedule Log. A blank Work summary writes no Work Log. Priority
 picks keep their deterministic 🎲 reason and offer a Work summary only for
 an eligible Next or Pending target.
 
-## Links stage and cancel labels
+## Links stage and closing labels
 
 The `l` Links to and `⇧L` Linked from stages list configured cancel labels with
-`⊘ cancels` and preview the source as a dimmed `⊘ {S}`. The consequence strip
-names the source and its cancel effects, and Return reads `↵ link & cancel`.
-Recurring sources are disabled. A counted commit that would cancel two or more
-sources first shows `⊘ Cancels {N} tasks — ↵ again to confirm`; a second Return
+`⊘ cancels` and complete labels with `✓ completes`, including typed rows and
+labels with no previous use. Cancel previews dim the source as `⊘ {S}`; complete
+previews dim it as `✓ {S}`, with the note stem when the source is remote. The
+consequence strip names the source and its close effects (`unblocks dependents ·
+offers successors` on a complete, plus `its N open tasks stay open` on a `^prj`
+source). Return reads `↵ link & cancel`, `↵ link & complete`, or `↵ link & close`
+when the selection mixes both. Recurring sources and an old Task Status Cycler
+(`api.version` below 3) disable complete rows. A counted commit that would close
+two or more sources first shows `⊘ Cancels {N} tasks — ↵ again to confirm`,
+`✓ Completes {N} tasks — ↵ again to confirm`, or
+`Closes {N} tasks · ✓ {a} · ⊘ {b} — ↵ again to confirm`; a second Return
 commits, while Escape or changing the query or selection disarms it.
 
-Inverse labels explain that they never cancel and point to `⇧L`. A hand edit of
-a cancel label into LINKS does not cancel its source. Unlinking or relabelling a
-cancel edge away does not reopen the source; the notice says to reopen it with
-`Alt+]`. See [Task relations](task-relations.md) for the complete contract.
+Inverse labels explain that they never cancel or complete and point to `⇧L` or
+`l` with the closing label. A hand edit of a closing label into LINKS does not
+close its source. Unlinking or relabelling a cancel edge away does not reopen
+the source (`⊘ Stays Cancelled · reopen with Alt+]`); the same for a complete
+edge says `stays Done · reopen with Alt+[`. See
+[Task relations](task-relations.md) for the complete contract.
 
 ## Undo and direct stages
 
@@ -137,6 +146,6 @@ Rotten Log entry in one undo.
 - [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) — navigation, task properties, and review gestures.
 - [Bob Ledger Tools](bob-ledger-tools.md) — the shared plan budget, marks, and freshness views.
 - [Task dependencies](https://bobs-org.github.io/task-dependencies/) — dependency edits and their guards.
-- [Task relations](task-relations.md) — relation labels, including cancel labels.
+- [Task relations](task-relations.md) — relation labels, including closing labels.
 - [Freshness](https://bobs-org.github.io/freshness/) — review intervals and freshness decisions.
 - [Projects](https://bobs-org.github.io/projects/) — project schedules and blocking.

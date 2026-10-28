@@ -772,7 +772,11 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       item.hidden ? "is-relation-label-hidden" : "",
       item.ghost ? "is-relation-label-ghost" : "",
       item.warning ? "is-relation-label-warning" : "",
-      item.disabled ? "is-disabled is-relation-cancel-disabled" : "",
+      item.disabled
+        ? item.configuredComplete
+          ? "is-disabled is-relation-complete-disabled"
+          : "is-disabled is-relation-cancel-disabled"
+        : "",
     );
     if (item.disabled) rowEl.setAttribute("aria-disabled", "true");
     const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
@@ -786,9 +790,20 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         text: "⊘ cancels",
       });
     }
+    if (item.configuredComplete) {
+      const used = !item.plain && Number.isInteger(item.count) && item.count > 0
+        ? `used ${item.count}× · ✓ completes`
+        : "✓ completes";
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta bob-cnp-relation-complete-meta",
+        text: used,
+      });
+    }
     if (item.disabledReason) {
       textEl.createDiv({
-        cls: "bob-cnp-row-meta bob-cnp-relation-cancel-disabled-meta",
+        cls: item.configuredComplete
+          ? "bob-cnp-row-meta bob-cnp-relation-complete-disabled-meta"
+          : "bob-cnp-row-meta bob-cnp-relation-cancel-disabled-meta",
         text: item.disabledReason,
       });
     } else if (item.oneOff) {
@@ -802,7 +817,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       });
     } else if (item.hidden) {
       textEl.createDiv({ cls: "bob-cnp-row-meta bob-cnp-relation-label-hidden-meta", text: "hidden everywhere · ⌃D unhide" });
-    } else if (!item.plain && Number.isInteger(item.count) && item.count > 0) {
+    } else if (!item.plain && Number.isInteger(item.count) && item.count > 0 && !item.configuredComplete) {
       textEl.createDiv({
         cls: "bob-cnp-row-meta",
         text: `used ${item.count}×`,
@@ -861,21 +876,26 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       new Notice(cancelPreview.refusal);
       return false;
     }
-    if (cancelPreview && cancelPreview.expected) {
-      const cancels = Array.isArray(cancelPreview.cancels)
-        ? cancelPreview.cancels
-        : [];
-      const nonce = JSON.stringify(cancelPreview.expected);
+    if (cancelPreview && cancelPreview.completeRefusal) {
+      new Notice(cancelPreview.completeRefusal);
+      return false;
+    }
+    if (cancelPreview && (cancelPreview.expectedCloseEffects || cancelPreview.expected)) {
+      const counts = this.relationLabelCloseCounts(cancelPreview);
+      const nonce = this.relationLabelCloseNonce(cancelPreview);
       if (
-        cancels.length >= 2 &&
+        counts.closeCount >= 2 &&
+        nonce &&
         this.relationCancelConfirmNonce !== nonce
       ) {
         this.relationCancelExpected = cancelPreview.expected;
+        this.relationCloseExpected = cancelPreview.expectedCloseEffects || null;
         this.relationCancelConfirmNonce = nonce;
         if (typeof this.renderResults === "function") this.renderResults();
         return false;
       }
       this.relationCancelExpected = cancelPreview.expected;
+      this.relationCloseExpected = cancelPreview.expectedCloseEffects || this.relationCloseExpected;
       this.relationCancelConfirmNonce = null;
     }
     let committed = false;
@@ -910,6 +930,9 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationLabelOneOff = false;
     this.relationLabelGhosts = new Map();
     this.relationLabelWrites = new Set();
+    this.relationCancelExpected = null;
+    this.relationCloseExpected = null;
+    this.relationCancelConfirmNonce = null;
     this.stage = "value";
     this.selectedIndex = 0;
     const items = this.vaultStage

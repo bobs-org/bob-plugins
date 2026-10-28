@@ -200,9 +200,13 @@ test("LC5 LINKED FROM shows the builtin inverse phrase", () => {
     ["follow-up of", "followed up by"],
     ["superseded by", "supersedes"],
     ["split from", "split into"],
+    ["implemented by", "implements"],
+    ["verified by", "verifies"],
   ]);
   assert.equal(relationInversePhrase("Merged Into"), "merged from");
   assert.equal(relationInversePhrase("DUPLICATE OF"), "duplicated by");
+  assert.equal(relationInversePhrase("Implemented By"), "implements");
+  assert.equal(relationInversePhrase("VERIFIED BY"), "verifies");
   assert.equal(relationInversePhrase("see"), null);
   const source = task({ blockId: "s", id: "s", description: "Source", status: "DONE", symbol: "x" });
   const model = relationChipModelForRow({
@@ -213,6 +217,26 @@ test("LC5 LINKED FROM shows the builtin inverse phrase", () => {
   assert.equal(model.label, "🪢 linked from");
   assert.equal(model.chips[0].inverse, "merged from");
   assert.equal(model.chips[0].label, "merged into");
+  const reading = task({
+    blockId: "reading",
+    id: "reading",
+    description: "reading task",
+    status: "DONE",
+    symbol: "x",
+  });
+  const implemented = relationChipModelForRow({
+    direction: "from",
+    lineText: "- 🪢 **LINKED FROM:** [[#^reading]] (implemented by)",
+    sourcePath: "feature.md",
+    live: [liveFrom({ path: "reading.md", blockId: "reading" }, { label: "implemented by", task: reading })],
+    lookup: lookupFor([reading]),
+    resolve: resolveFor(),
+  });
+  assert.equal(implemented.chips[0].inverse, "implements");
+  assert.equal(implemented.chips[0].label, "implemented by");
+  const doc = new MiniDoc();
+  const html = serializeNode(buildRelationChipElement(doc, implemented, {}));
+  assert.match(html, /implements/);
 });
 
 test("LC6 LINKED FROM with an unknown label reads chip, label, this", () => {

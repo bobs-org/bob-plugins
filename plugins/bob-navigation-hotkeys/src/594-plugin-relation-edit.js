@@ -253,6 +253,7 @@ class BobNavigationHotkeysRelationEditMixin {
       const completionNoticeRows = [];
       const closingRows = [];
       let cancelStayedCancelled = false;
+      let completeStayedDone = false;
       const consumedLinesByPath = new Map();
       let archived = false;
       const contentOf = (path) =>
@@ -402,6 +403,14 @@ class BobNavigationHotkeysRelationEditMixin {
             liveRemove,
             liveRelabel,
             cancelLabels,
+          );
+        completeStayedDone = completeStayedDone ||
+          relationCompleteRemovalStaysDone(
+            policyRaw,
+            existingRows,
+            liveRemove,
+            liveRelabel,
+            completeLabels,
           );
         const closePlan = planRelationClosingSource({
           cancelLabels,
@@ -722,14 +731,14 @@ class BobNavigationHotkeysRelationEditMixin {
         });
       const relationNotice = unchanged
         ? null
-        : withRelationCancelStayNotice(buildRelationEditNotice({
+        : withRelationCloseStayNotice(buildRelationEditNotice({
             added: noticeAdded.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
             removed: noticeRemoved.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
             relabeled: noticeRelabeled.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
             direction,
             archived,
             mirrorFailed: [],
-          }), cancelStayedCancelled);
+          }), cancelStayedCancelled, completeStayedDone);
       const baseNotice = unchanged
         ? null
         : committedCompleted.length > 0

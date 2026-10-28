@@ -147,6 +147,41 @@ function summarizeRelationCloseEffects(cancelPlans, completePlan, day) {
   return Object.freeze({ day: String(day || ""), sources: Object.freeze(sources) });
 }
 
+function relationCompleteRemovalStaysDone(rawLine, existingRows, removed, relabeled, completeLabels) {
+  const status = relationCancelSourceStatus(rawLine);
+  if (status !== "x" && status !== "X") return false;
+  const configured = relationCompleteLabelsSet(completeLabels);
+  const oldByIdentity = new Map(
+    (Array.isArray(existingRows) ? existingRows : []).map((row) => [row.identity, row]),
+  );
+  for (const target of [
+    ...(Array.isArray(removed) ? removed : []),
+    ...(Array.isArray(relabeled) ? relabeled : []),
+  ]) {
+    const identity = blocksIdentity(target && target.path, target && target.blockId);
+    const old = oldByIdentity.get(identity);
+    if (!old || !configured.has(relationCancelLabelKey(old.label))) continue;
+    const next = (Array.isArray(removed) ? removed : []).includes(target)
+      ? ""
+      : relationCancelLabelKey(target && target.label);
+    if (!next || !configured.has(next)) return true;
+  }
+  return false;
+}
+
+function withRelationCompleteStayNotice(notice, staysDone) {
+  return notice && staysDone
+    ? `${notice} · stays Done · reopen with Alt+[`
+    : notice;
+}
+
+function withRelationCloseStayNotice(notice, staysCancelled, staysDone) {
+  return withRelationCompleteStayNotice(
+    withRelationCancelStayNotice(notice, staysCancelled),
+    staysDone,
+  );
+}
+
 function relationCloseEffectsEqual(left, right) {
   if (!left && !right) return true;
   if (!left || !right) return false;

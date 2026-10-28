@@ -11,6 +11,8 @@ const RELATION_LABEL_INVERSES = Object.freeze({
   "follow-up of": "followed up by",
   "superseded by": "supersedes",
   "split from": "split into",
+  "implemented by": "implements",
+  "verified by": "verifies",
 });
 
 function relationLabelCollapseText(value) {

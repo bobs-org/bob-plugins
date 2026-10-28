@@ -93,6 +93,9 @@ class BobLedgerToolsPlugin extends Plugin {
     this.todayMarksEnabled = true;
     this.todayMarksTimer = null;
     this.todayJumpInFlight = false;
+    // Task theme marks + ledger tint gate (both default on).
+    this.taskThemeMarksEnabled = true;
+    this.pomodoroThemeColorsEnabled = true;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -667,6 +670,8 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupProgressMarks();
     this.setupTodayMarks();
     this.setupPomodoroHomeChips();
+    this.setupTaskThemeMarks();
+    this.setupPomodoroThemeChips();
     this.setupUnblockedGlyph();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
@@ -947,6 +952,11 @@ class BobLedgerToolsPlugin extends Plugin {
       }
     } catch (error) {
       // Body class cleanup is best-effort.
+    }
+    try {
+      this.teardownTaskThemeMarksAndColors();
+    } catch (error) {
+      // Task-theme gate cleanup is best-effort.
     }
     if (
       this.pomodoroHomeChipRefreshTimer !== null &&

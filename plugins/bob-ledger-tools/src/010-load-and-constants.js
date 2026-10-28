@@ -225,6 +225,26 @@ function ensureTaskTagMarksRefresh() {
   }
   return taskTagMarksRefresh;
 }
+// Task theme marks (bob-cli-dm.5.1 task-theme-editor): a StateEffect the
+// consolidated live-refresh fan-out dispatches so Live Preview task-theme
+// widgets rebuild without a doc change. Defined lazily on first dispatch
+// so requiring the module never adds a second eager
+// `StateEffect.define()` call (the freshness-mark surfaces suite shares
+// one stub effect type across every eager define).
+let taskThemeMarksRefresh = null;
+function ensureTaskThemeMarksRefresh() {
+  if (taskThemeMarksRefresh) {
+    return taskThemeMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      taskThemeMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    taskThemeMarksRefresh = null;
+  }
+  return taskThemeMarksRefresh;
+}
 
 const DAY_MINUTES = 24 * 60;
 const STEP_MINUTES = 5;

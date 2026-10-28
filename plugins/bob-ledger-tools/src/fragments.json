@@ -85,6 +85,8 @@
   "279-plugin-task-theme-model.js",
   "279-plugin-task-theme-home-facts.js",
   "279-plugin-task-theme-suggest.js",
+  "279-plugin-task-theme-marks.js",
+  "279-plugin-task-theme-editor.js",
   "279-plugin-pomodoro-themes.js",
   "279-plugin-task-theme-api.js",
   "279-plugin-pomodoro-theme-chips.js",

@@ -3417,6 +3417,42 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   color: var(--text-muted);
 }
 
+/* Task theme pills (PT13 task-theme-editor): explicit `[theme:: NAME]`
+   fields render as readable PT6 pills in Live Preview. The pill text is
+   the canonical component spelling with normal text color; tints come
+   from the shared `.bob-pomo-theme-colors` gate. Unknown names stay
+   neutral with a dotted underline; duplicate/invalid fields use the
+   dashed repair treatment. Disabling task marks restores raw fields;
+   disabling colors leaves readable pills. */
+.bob-pomo-theme[data-task-theme-kind="unknown"] {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.bob-pomo-theme[data-task-theme-kind="repair"] {
+  outline: 1px dashed color-mix(in srgb, var(--text-warning, var(--color-orange)) 70%, transparent);
+  outline-offset: 1px;
+}
+
+.bob-pomo-theme:focus-visible {
+  outline: 1px solid var(--text-accent, var(--color-accent));
+  outline-offset: 1px;
+}
+
+/* Toggle-off cover: without the task-theme gate a stale pill hides
+   instead of lingering beside the raw field. */
+body:not(.bob-task-theme-marks) .bob-pomo-theme[data-task-theme-kind] {
+  display: none;
+}
+
+body.bob-task-theme-marks .markdown-source-view.is-live-preview .dataview.inline-field:has(> :is(.inline-field-key, .inline-field-standalone-value)[data-dv-norm-key="theme"]) {
+  opacity: 1;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--color-orange) 55%, transparent);
+}
+
 /* Swatch for dense rows: 8pt rounded square (radius 2) before the name.
    Homes keep their ● dot, so a theme never looks like a home. */
 .bob-pomo-theme-swatch {

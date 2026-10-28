@@ -61,6 +61,16 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
       }
       this.setPomodoroThemeChipBodyClass();
       try {
+        if (typeof this.registerMarkGatePopoutSync === "function") {
+          this.registerMarkGatePopoutSync(
+            "bob-pomo-theme-colors",
+            () => this.pomodoroThemeColorsEnabled,
+          );
+        }
+      } catch (error) {
+        // Popout mirroring is best-effort.
+      }
+      try {
         if (typeof this.addCommand === "function") {
           this.addCommand({
             id: "toggle-pomodoro-theme-colors",
@@ -106,6 +116,13 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
 
   setPomodoroThemeChipBodyClass() {
     try {
+      if (typeof this.applyMarkGateClass === "function") {
+        this.applyMarkGateClass(
+          "bob-pomo-theme-colors",
+          this.pomodoroThemeColorsEnabled,
+        );
+        return true;
+      }
       const body = typeof document !== "undefined" && document ? document.body : null;
       const classes = body && body.classList;
       if (!classes) {

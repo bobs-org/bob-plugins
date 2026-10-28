@@ -46,7 +46,9 @@ The Links stage title reads `🪢 Links · <task>` with the subtitle
 `Links to K · searching P tasks · ⇥ to mark several · does not block`.
 CURRENT holds the outgoing links with label pills in authored order,
 RESULTS holds open tasks, and CLOSED holds closed tasks then `done/`
-archives. `↵` links (or unlinks on CURRENT), `⇧↵` opens the relation field
+archives. RESULTS ranks open tasks of every status by match score, so Blocked
+`[?]` tasks are never set apart in their own section; exact-score ties put In
+Progress and Next first, then Ready and Blocked together. `↵` links (or unlinks on CURRENT), `⇧↵` opens the relation field
 (or relabels on CURRENT), `⇥` marks several, and id-less targets run the
 block-ID prompt once on apply. Typing `~` anywhere in the Links /
 Linked-from filter flips the stage in place, keeping the filter text and

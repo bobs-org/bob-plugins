@@ -341,6 +341,28 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     }
   }
 
+  // One stage-planner dispatch shared by render and refresh: Blocks goes to
+  // the Blocks planner, relation stages (Links both directions) go to the
+  // relation planner, and everything else goes to the Depends-on planner.
+  planVaultStageItemsForQuery(stage, query) {
+    const resolved = typeof query === "string" ? query : this.getQuery();
+    if (this.blocksStage) {
+      return planBlocksStageItemsFromVault(stage, resolved);
+    }
+    if (this.relationStage) {
+      return planRelationStageItemsFromVault(stage, resolved);
+    }
+    return planDependencyStageView({
+      current: stage.current,
+      candidates: stage.candidates,
+      query: resolved,
+      dependent: stage.dependent,
+      edges: stage.edges,
+      linkedKeys: stage.linkedKeys,
+      sourceValueSets: stage.sourceValueSets,
+    });
+  }
+
   // Swap in the vault-scan pool, keeping marks across the refresh: mark keys
   // are stable (`path#line`), so marked rows survive the pool replacement.
   applyVaultStageItems(stage) {
@@ -365,19 +387,7 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     } else {
       this.vaultStage = stage;
     }
-    const items = this.blocksStage
-      ? planBlocksStageItemsFromVault(this.vaultStage, this.getQuery())
-      : this.relationStage
-        ? planRelationStageItemsFromVault(this.vaultStage, this.getQuery())
-        : planDependencyStageView({
-          current: stage.current,
-          candidates: stage.candidates,
-          query: this.getQuery(),
-          dependent: stage.dependent,
-          edges: stage.edges,
-          linkedKeys: stage.linkedKeys,
-          sourceValueSets: stage.sourceValueSets,
-        });
+    const items = this.planVaultStageItemsForQuery(this.vaultStage, this.getQuery());
     this.resetLocalTaskMarks(items);
     for (const key of marked) {
       if (this.taskItemsByLine.has(key)) {

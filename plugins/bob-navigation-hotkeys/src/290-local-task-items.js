@@ -652,7 +652,8 @@ function findDependencyStageCycle(edges, fromKey, toKey) {
 // Canonical order for ties and the empty query
 // (`docs/task-dependencies.md` §6.3): same-note tasks in document order,
 // then In Progress, Next, Ready (by path, then line), then `#hide`.
-function compareDependencyStageCanonical(first, second, dependentPath) {
+// Relations pass `{ blockedWithReady: true }` so Blocked shares Ready's lane.
+function compareDependencyStageCanonical(first, second, dependentPath, options = {}) {
   const firstSame = first.path === dependentPath;
   const secondSame = second.path === dependentPath;
   if (firstSame !== secondSame) {
@@ -666,8 +667,14 @@ function compareDependencyStageCanonical(first, second, dependentPath) {
   if (Boolean(first.hidden) !== Boolean(second.hidden)) {
     return first.hidden ? 1 : -1;
   }
-  const lane = (status) =>
-    status === "/" ? 0 : status === "*" ? 1 : status === " " ? 2 : 3;
+  const blockedWithReady = Boolean(options && options.blockedWithReady);
+  const lane = (status) => {
+    if (status === "/") return 0;
+    if (status === "*") return 1;
+    if (status === " ") return 2;
+    if (blockedWithReady && status === "?") return 2;
+    return 3;
+  };
   const laneDiff = lane(first.status) - lane(second.status);
   if (laneDiff !== 0) {
     return laneDiff;

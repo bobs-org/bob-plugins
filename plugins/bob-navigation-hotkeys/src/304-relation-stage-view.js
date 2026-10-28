@@ -745,12 +745,12 @@ function planLinkedFromStageView(args = {}) {
     const ranked = dependencyStageRank(fresh, query);
     const rank = new Map(ranked.map((candidate, index) => [candidate, index]));
     ordered = ordered.filter((candidate) => rank.has(candidate)).sort((left, right) =>
-      rank.get(left) - rank.get(right) || compareDependencyStageCanonical(left, right, ownerPath),
+      rank.get(left) - rank.get(right) || compareRelationStageCanonical(left, right, ownerPath),
     );
   } else {
     ordered.sort((left, right) => {
       const openOrder = Number(right.open === true) - Number(left.open === true);
-      return openOrder || compareDependencyStageCanonical(left, right, ownerPath);
+      return openOrder || compareRelationStageCanonical(left, right, ownerPath);
     });
   }
   const room = Math.max(0, maxRows - out.length);
@@ -806,7 +806,9 @@ function planLinkedFromStageView(args = {}) {
 }
 
 // Archived rows sink below closed rows; open rows float above both. Within
-// a tier the owner's note wins, then code-point order.
+// a tier the owner's note wins, then visible before `#hide`, then In
+// Progress, Next, Ready and Blocked together, then other statuses, then
+// path, then line (relations never block, so Blocked shares Ready's lane).
 function compareRelationStageCanonical(first, second, ownerPath) {
   const firstArchived = first && first.archived === true ? 1 : 0;
   const secondArchived = second && second.archived === true ? 1 : 0;
@@ -818,7 +820,9 @@ function compareRelationStageCanonical(first, second, ownerPath) {
   if (firstClosed !== secondClosed) {
     return firstClosed - secondClosed;
   }
-  return compareDependencyStageCanonical(first, second, ownerPath);
+  return compareDependencyStageCanonical(first, second, ownerPath, {
+    blockedWithReady: true,
+  });
 }
 
 function planRelationStageItemsFromVault(stage, query) {

@@ -1,25 +1,12 @@
 class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
   getFilteredItems() {
-    // Ranked, section-ordered rows for the vault-wide Depends on stage. The
-    // sync pool never reads from disk; the one-time vault scan (when the
-    // Tasks cache is not Warm) refreshes through `applyVaultStageItems`.
+    // Ranked, section-ordered rows for the vault-wide Depends on, Blocks,
+    // and Links / Linked-from stages. The sync pool never reads from disk;
+    // the one-time vault scan (when the Tasks cache is not Warm) refreshes
+    // through `applyVaultStageItems`, which shares this dispatch.
     if (this.isLocalTaskStage() && this.vaultStage) {
       try {
-        if (this.blocksStage) {
-          return planBlocksStageItemsFromVault(
-            this.vaultStage,
-            this.getQuery(),
-          );
-        }
-        return planDependencyStageView({
-          current: this.vaultStage.current,
-          candidates: this.vaultStage.candidates,
-          query: this.getQuery(),
-          dependent: this.vaultStage.dependent,
-          edges: this.vaultStage.edges,
-          linkedKeys: this.vaultStage.linkedKeys,
-          sourceValueSets: this.vaultStage.sourceValueSets,
-        });
+        return this.planVaultStageItemsForQuery(this.vaultStage, this.getQuery());
       } catch (_error) {
         return super.getFilteredItems();
       }

@@ -367,7 +367,13 @@ test("priority notice stylesheet scopes Obsidian notice overrides and uses theme
   assert.notEqual(priorityNoticeStart, -1);
   const priorityNoticeStyles = styles.slice(priorityNoticeStart);
 
-  assert.doesNotMatch(priorityNoticeStyles, /#[0-9a-f]{6}\b/i);
+  // The lane-walk card reuses the shared ledger-tools chip fallbacks
+  // (`#d9822b` pending, `#3f8f5f` next) inside theme `var()` chains; every
+  // other hex value stays forbidden.
+  const withoutSharedFallbacks = priorityNoticeStyles
+    .replace(/#d9822b\b/gi, "")
+    .replace(/#3f8f5f\b/gi, "");
+  assert.doesNotMatch(withoutSharedFallbacks, /#[0-9a-f]{6}\b/i);
   assert.doesNotMatch(priorityNoticeStyles, /\brgb\(/i);
   assert.doesNotMatch(priorityNoticeStyles, /\bhsl\(/i);
 });

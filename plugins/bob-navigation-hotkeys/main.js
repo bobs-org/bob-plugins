@@ -59773,6 +59773,30 @@ class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "jump-to-next-lane-task",
+      name: "Jump to next Pending or Next task off today's plan",
+      callback: () => this.jumpToLaneTask(1),
+    });
+
+    this.addCommand({
+      id: "jump-to-prev-lane-task",
+      name: "Jump to previous Pending or Next task off today's plan",
+      callback: () => this.jumpToLaneTask(-1),
+    });
+
+    this.addCommand({
+      id: "jump-to-first-lane-task",
+      name: "Jump to first Pending or Next task off today's plan",
+      callback: () => this.jumpToLaneTask(1, { endpoint: "first" }),
+    });
+
+    this.addCommand({
+      id: "jump-to-last-lane-task",
+      name: "Jump to last Pending or Next task off today's plan",
+      callback: () => this.jumpToLaneTask(1, { endpoint: "last" }),
+    });
+
+    this.addCommand({
       id: "refresh-task-freshness",
       name: "Refresh task freshness (confirm it still looks right)",
       hotkeys: [{ modifiers: ["Alt"], key: "F" }],
@@ -59968,6 +59992,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.reviewAnchor = null;
     this.reviewLanding = null;
     this.reviewWalkCurrent = null;
+    this.laneWalkAnchor = null;
+    this.laneWalkChain = Promise.resolve();
+    this.laneWalkNotice = null;
     // Review-walk auto-advance (`docs/freshness.md` §6): the landing epoch
     // and gesture sequence make stale callbacks refuse, and the lock
     // swallows double presses while an answer is in flight or settling.
@@ -60090,6 +60117,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
     }
     this.cancelPendingTaskMoveJump();
     this.cancelPendingVimJumpDestination();
+    this.laneWalkAnchor = null;
+    this.laneWalkChain = Promise.resolve();
+    this.laneWalkNotice = null;
   }
 }
 // ---- src/500-plugin-transclusion-and-link-picker.js ----
@@ -65292,137 +65322,20 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     }
   }
 
-  // Land on one queue entry without writing: resolve its line in the target
-  // note, then put the cursor there and center it. Same-note landings write
-  // the cursor directly; cross-note landings reuse the leaf-reuse open plus
-  // the shared jump-or-defer retry so the cursor lands after the new leaf
-  // renders. Returns `{ ok, stale }`; `stale` means the queue moved and the
-  // caller should rebuild once and try again. `options.jumpOrigin` is the
-  // pre-landing cursor: every walk landing records a Vim jump from it to
-  // the landed row, so `<C-o>` returns to the answered row. Recording never
-  // blocks the landing.
+  // Thin wrapper over the shared walk landing: cursor movement lives in
+  // `landOnWalkEntry`; this only records the review landing on success so
+  // `]s` behavior stays byte-identical.
   async landOnReviewQueueEntry(entry, options = {}) {
-    const jumpOrigin =
-      options && typeof options === "object" ? options.jumpOrigin : null;
-    const path = entry && typeof entry.path === "string" ? entry.path : "";
-    if (!path) {
-      return { ok: false, stale: true };
+    const landed = await this.landOnWalkEntry(entry, options);
+    if (!landed || !landed.ok) {
+      return { ok: false, stale: Boolean(landed && landed.stale) };
     }
-    const activeView = this.getActiveMarkdownView();
-    const activeEditor = activeView && activeView.editor;
-    const sameNote = Boolean(
-      activeView &&
-        activeView.file &&
-        activeView.file.path === path &&
-        activeEditor &&
-        typeof activeEditor.getValue === "function",
-    );
-    let content = null;
-    let file =
-      activeView && activeView.file && activeView.file.path === path
-        ? activeView.file
-        : null;
-    if (sameNote) {
-      content = String(activeEditor.getValue() || "");
-    } else {
-      const vault = this.app && this.app.vault;
-      file =
-        file ||
-        (vault && typeof vault.getAbstractFileByPath === "function"
-          ? vault.getAbstractFileByPath(path)
-          : null);
-      if (!file) {
-        return { ok: false, stale: true };
-      }
-      content = await this.readLinkPickerNoteContent(path, file);
-      if (content === null) {
-        return { ok: false, stale: true };
-      }
-    }
-    const resolved = resolveReviewQueueLine(content, entry);
-    if (!resolved.ok) {
-      return { ok: false, stale: true };
-    }
-    if (sameNote) {
-      if (!setEditorCursor(activeEditor, { line: resolved.line, ch: 0 })) {
-        return { ok: false, stale: false };
-      }
-      scheduleOpenTaskJumpCenter(this, activeEditor, resolved.line, 0);
-      if (jumpOrigin) {
-        try {
-          const jumpContext =
-            this.createVimJumpContextWithOrigin(jumpOrigin);
-          if (jumpContext) {
-            const settled = this.enqueueVimJumpContextTransition(
-              jumpContext,
-              { path, line: resolved.line, ch: 0 },
-              { expectedPath: path },
-            );
-            if (settled && typeof settled.catch === "function") {
-              settled.catch(() => false);
-            }
-          }
-        } catch (error) {
-          // Jump history is best-effort after a successful landing.
-        }
-      }
+    try {
+      const path = entry && typeof entry.path === "string" ? entry.path : "";
       this.setReviewLanding(entry, path);
-      return { ok: true, stale: false };
+    } catch (error) {
+      // Landing succeeded; recording never fails it.
     }
-    const opened = await openMarkdownFileWithLeafReuse(
-      this,
-      file,
-      `Review jump, but could not open ${path}`,
-    );
-    if (!opened) {
-      return { ok: false, stale: false };
-    }
-    if (jumpOrigin) {
-      let jumpContext = null;
-      try {
-        jumpContext = this.createVimJumpContextWithOrigin(jumpOrigin);
-      } catch (error) {
-        jumpContext = null;
-      }
-      if (jumpContext) {
-        const completion = {
-          token: jumpContext.token,
-          resolve: (result) => {
-            try {
-              if (result && result.ok && result.destination) {
-                const settled = this.enqueueVimJumpContextTransition(
-                  jumpContext,
-                  result.destination,
-                  { expectedPath: path },
-                );
-                if (settled && typeof settled.catch === "function") {
-                  settled.catch(() => false);
-                }
-              }
-            } catch (error) {
-              // Jump history is best-effort after a successful landing.
-            }
-          },
-        };
-        this.jumpOrDeferTaskMoveDestination(
-          path,
-          { line: resolved.line, text: entry.originalMarkdown },
-          TASK_MOVE_DESTINATION_JUMP_RETRIES,
-          completion,
-        );
-      } else {
-        this.jumpOrDeferTaskMoveDestination(path, {
-          line: resolved.line,
-          text: entry.originalMarkdown,
-        });
-      }
-    } else {
-      this.jumpOrDeferTaskMoveDestination(path, {
-        line: resolved.line,
-        text: entry.originalMarkdown,
-      });
-    }
-    this.setReviewLanding(entry, path);
     return { ok: true, stale: false };
   }
 
@@ -66922,6 +66835,1073 @@ class BobNavigationHotkeysReviewReturnMixin {
     } catch (error) {
       return Object.freeze({ handled: false });
     }
+  }
+}
+// ---- src/541-walk-landing.js ----
+// Shared walk landing: the cursor-moving core behind `]s` and `]w`.
+// `landOnReviewQueueEntry` (review advance) is a thin wrapper that calls
+// this and then records the review landing; the lane walk calls this
+// directly so a `]w` landing never touches the `]s` walk.
+const WALK_LANDING_SETTLE_TIMEOUT_MS = 1500;
+
+class BobNavigationHotkeysWalkLandingMixin {
+  async landOnWalkEntry(entry, options = {}) {
+    const jumpOrigin =
+      options && typeof options === "object" ? options.jumpOrigin : null;
+    const path = entry && typeof entry.path === "string" ? entry.path : "";
+    if (!path) {
+      return { ok: false, stale: true, settled: Promise.resolve(false) };
+    }
+    const activeView = this.getActiveMarkdownView();
+    const activeEditor = activeView && activeView.editor;
+    const sameNote = Boolean(
+      activeView &&
+        activeView.file &&
+        activeView.file.path === path &&
+        activeEditor &&
+        typeof activeEditor.getValue === "function",
+    );
+    let content = null;
+    let file =
+      activeView && activeView.file && activeView.file.path === path
+        ? activeView.file
+        : null;
+    if (sameNote) {
+      content = String(activeEditor.getValue() || "");
+    } else {
+      const vault = this.app && this.app.vault;
+      file =
+        file ||
+        (vault && typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(path)
+          : null);
+      if (!file) {
+        return { ok: false, stale: true, settled: Promise.resolve(false) };
+      }
+      content = await this.readLinkPickerNoteContent(path, file);
+      if (content === null) {
+        return { ok: false, stale: false, settled: Promise.resolve(false) };
+      }
+    }
+    const resolved = resolveReviewQueueLine(content, entry);
+    if (!resolved.ok) {
+      return { ok: false, stale: true, settled: Promise.resolve(false) };
+    }
+    if (sameNote) {
+      if (!setEditorCursor(activeEditor, { line: resolved.line, ch: 0 })) {
+        return { ok: false, stale: false, settled: Promise.resolve(false) };
+      }
+      scheduleOpenTaskJumpCenter(this, activeEditor, resolved.line, 0);
+      if (jumpOrigin) {
+        try {
+          const jumpContext =
+            this.createVimJumpContextWithOrigin(jumpOrigin);
+          if (jumpContext) {
+            const settled = this.enqueueVimJumpContextTransition(
+              jumpContext,
+              { path, line: resolved.line, ch: 0 },
+              { expectedPath: path },
+            );
+            if (settled && typeof settled.catch === "function") {
+              settled.catch(() => false);
+            }
+          }
+        } catch (error) {
+          // Jump history is best-effort after a successful landing.
+        }
+      }
+      return { ok: true, stale: false, settled: Promise.resolve(true) };
+    }
+    const opened = await openMarkdownFileWithLeafReuse(
+      this,
+      file,
+      `Review jump, but could not open ${path}`,
+    );
+    if (!opened) {
+      return { ok: false, stale: false, settled: Promise.resolve(false) };
+    }
+    let settleResolve = null;
+    const settled = new Promise((resolve) => {
+      settleResolve = resolve;
+    });
+    let settledDone = false;
+    const settleOnce = (value) => {
+      if (settledDone) {
+        return;
+      }
+      settledDone = true;
+      try {
+        settleResolve(value);
+      } catch (error) {
+        // Best-effort settle only.
+      }
+    };
+    const timer =
+      typeof setTimeout === "function"
+        ? setTimeout(() => settleOnce(false), WALK_LANDING_SETTLE_TIMEOUT_MS)
+        : null;
+    const finishTimer = () => {
+      if (timer !== null && typeof clearTimeout === "function") {
+        clearTimeout(timer);
+      }
+    };
+    void finishTimer;
+    const wrappedSettle = (value) => {
+      finishTimer();
+      settleOnce(value);
+    };
+    if (jumpOrigin) {
+      let jumpContext = null;
+      try {
+        jumpContext = this.createVimJumpContextWithOrigin(jumpOrigin);
+      } catch (error) {
+        jumpContext = null;
+      }
+      if (jumpContext) {
+        const completion = {
+          token: jumpContext.token,
+          resolve: (result) => {
+            try {
+              if (result && result.ok && result.destination) {
+                const transition = this.enqueueVimJumpContextTransition(
+                  jumpContext,
+                  result.destination,
+                  { expectedPath: path },
+                );
+                if (transition && typeof transition.catch === "function") {
+                  transition.catch(() => false);
+                }
+              }
+            } catch (error) {
+              // Jump history is best-effort after a successful landing.
+            } finally {
+              wrappedSettle(true);
+            }
+          },
+        };
+        this.jumpOrDeferTaskMoveDestination(
+          path,
+          { line: resolved.line, text: entry.originalMarkdown },
+          TASK_MOVE_DESTINATION_JUMP_RETRIES,
+          completion,
+        );
+      } else {
+        this.jumpOrDeferTaskMoveDestination(path, {
+          line: resolved.line,
+          text: entry.originalMarkdown,
+        });
+        wrappedSettle(true);
+      }
+    } else {
+      this.jumpOrDeferTaskMoveDestination(
+        path,
+        { line: resolved.line, text: entry.originalMarkdown },
+        TASK_MOVE_DESTINATION_JUMP_RETRIES,
+        () => wrappedSettle(true),
+      );
+      if (timer === null) {
+        wrappedSettle(true);
+      }
+    }
+    return { ok: true, stale: false, settled };
+  }
+}
+// ---- src/542-lane-walk-model.js ----
+// Lane-walk pure model: planning, anchors, work-log reads, and notice
+// models. Reuses the review-walk identity, repeat, date, and display
+// helpers; nothing here touches Obsidian.
+const LANE_WALK_REQUIRED_API_VERSION = 1;
+
+function getLaneWalkApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const api =
+      plugins &&
+      plugins["bob-ledger-tools"] &&
+      plugins["bob-ledger-tools"].api;
+    const laneWalk = api && api.laneWalk;
+    if (!laneWalk || typeof laneWalk !== "object") {
+      return null;
+    }
+    if (!Number.isInteger(laneWalk.version) || laneWalk.version < 1) {
+      return null;
+    }
+    if (typeof laneWalk.queue !== "function") {
+      return null;
+    }
+    return laneWalk;
+  } catch (error) {
+    return null;
+  }
+}
+
+function laneWalkOrderOf(entry) {
+  return entry && entry.lane === "next" ? 1 : 0;
+}
+
+function laneWalkTupleCompare(left, right) {
+  const laneDiff = laneWalkOrderOf(left) - laneWalkOrderOf(right);
+  if (laneDiff !== 0) {
+    return laneDiff;
+  }
+  const leftPath = String((left && left.path) || "");
+  const rightPath = String((right && right.path) || "");
+  if (leftPath !== rightPath) {
+    return leftPath < rightPath ? -1 : 1;
+  }
+  const leftLine = Number.isInteger(left && left.line) ? left.line : 0;
+  const rightLine = Number.isInteger(right && right.line) ? right.line : 0;
+  return leftLine - rightLine;
+}
+
+// Anchor: `{ day, key, lane, path, line, text }`, recorded after every
+// successful landing and cleared on unload.
+function buildLaneWalkAnchor(entry, todayText) {
+  try {
+    const day = typeof todayText === "string" ? todayText : "";
+    const key =
+      entry && typeof entry.key === "string" && entry.key
+        ? entry.key
+        : reviewQueueEntryKey(entry);
+    return Object.freeze({
+      day,
+      key,
+      lane: entry && entry.lane === "next" ? "next" : "pending",
+      path: entry && typeof entry.path === "string" ? entry.path : "",
+      line: entry && Number.isInteger(entry.line) ? entry.line : 0,
+      text:
+        entry && typeof entry.originalMarkdown === "string"
+          ? entry.originalMarkdown
+          : "",
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+function laneWalkAnchorIsCurrentDay(anchor, todayText) {
+  try {
+    return reviewAnchorIsCurrentDay(anchor, todayText);
+  } catch (error) {
+    return false;
+  }
+}
+
+// Pure jump planner. Returns `{ kind: "empty" }` or
+// `{ kind: "jump", entry, rank, total, laneRank, laneTotal, wrapped, origin }`.
+// `direction` is +1 (`]w`) or -1 (`[w`); `endpoint` is "first", "last", or
+// truthy for the directional end; `repeat` is N steps with wrap.
+function planLaneWalkJump(list, options = {}) {
+  const rows = Array.isArray(list) ? list.slice() : [];
+  if (rows.length === 0) {
+    return Object.freeze({ kind: "empty" });
+  }
+  const direction = options.direction < 0 ? -1 : 1;
+  const endpointRaw =
+    options && typeof options.endpoint === "string"
+      ? options.endpoint.trim().toLowerCase()
+      : "";
+  const endpointFlag =
+    endpointRaw === "first" || endpointRaw === "last"
+      ? endpointRaw
+      : options && options.endpoint
+        ? direction < 0
+          ? "first"
+          : "last"
+        : null;
+  if (endpointFlag === "first" || endpointFlag === "last") {
+    const index = endpointFlag === "first" ? 0 : rows.length - 1;
+    const entry = rows[index];
+    return Object.freeze({
+      kind: "jump",
+      entry,
+      rank: index + 1,
+      total: rows.length,
+      laneRank: entry.laneRank,
+      laneTotal: entry.laneTotal,
+      wrapped: false,
+      origin: null,
+    });
+  }
+  const todayText =
+    options && typeof options.todayText === "string" ? options.todayText : "";
+  const cursor =
+    options.cursor && typeof options.cursor === "object"
+      ? options.cursor
+      : null;
+  let anchor =
+    options.anchor && typeof options.anchor === "object"
+      ? options.anchor
+      : null;
+  if (anchor && !laneWalkAnchorIsCurrentDay(anchor, todayText)) {
+    anchor = null;
+  }
+  const finish = (at, wrapped, origin) => {
+    const step = Object.freeze({
+      kind: "jump",
+      entry: rows[at],
+      rank: at + 1,
+      total: rows.length,
+      laneRank: rows[at].laneRank,
+      laneTotal: rows[at].laneTotal,
+      wrapped: Boolean(wrapped),
+      origin: origin || null,
+    });
+    const repeat = normalizeVimRepeat(options.repeat);
+    if (repeat <= 1) {
+      return step;
+    }
+    const extra = repeat - 1;
+    const raw = at + direction * extra;
+    const rem = raw % rows.length;
+    const finalIndex = rem < 0 ? rem + rows.length : rem;
+    const finalEntry = rows[finalIndex];
+    return Object.freeze({
+      kind: "jump",
+      entry: finalEntry,
+      rank: finalIndex + 1,
+      total: rows.length,
+      laneRank: finalEntry.laneRank,
+      laneTotal: finalEntry.laneTotal,
+      wrapped: Boolean(wrapped) || raw < 0 || raw >= rows.length,
+      origin: origin || null,
+    });
+  };
+  const cursorIndex = cursor ? findReviewCursorIndex(rows, cursor, new Set()) : -1;
+  if (cursorIndex >= 0) {
+    let index = cursorIndex + direction;
+    let wrapped = false;
+    if (index < 0) {
+      index = rows.length - 1;
+      wrapped = true;
+    } else if (index >= rows.length) {
+      index = 0;
+      wrapped = true;
+    }
+    return finish(index, wrapped, "cursor");
+  }
+  if (anchor) {
+    const anchorKey =
+      typeof anchor.key === "string" && anchor.key ? anchor.key : null;
+    const anchorIndex =
+      anchorKey !== null
+        ? rows.findIndex((entry) => reviewQueueEntryKey(entry) === anchorKey)
+        : -1;
+    if (anchorIndex >= 0) {
+      let index = anchorIndex + direction;
+      let wrapped = false;
+      if (index < 0) {
+        index = rows.length - 1;
+        wrapped = true;
+      } else if (index >= rows.length) {
+        index = 0;
+        wrapped = true;
+      }
+      return finish(index, wrapped, "anchor");
+    }
+    const anchorTuple = {
+      lane:
+        anchor.lane === "next" ? "next" : anchor.lane === "pending" ? "pending" : null,
+      path: typeof anchor.path === "string" ? anchor.path : "",
+      line: Number.isInteger(anchor.line) ? anchor.line : 0,
+    };
+    if (anchorTuple.lane !== null && anchorTuple.path) {
+      if (direction > 0) {
+        for (let index = 0; index < rows.length; index += 1) {
+          if (laneWalkTupleCompare(anchorTuple, rows[index]) < 0) {
+            return finish(index, false, "anchor-gap");
+          }
+        }
+        return finish(0, true, "anchor-gap");
+      }
+      for (let index = rows.length - 1; index >= 0; index -= 1) {
+        if (laneWalkTupleCompare(anchorTuple, rows[index]) > 0) {
+          return finish(index, false, "anchor-gap");
+        }
+      }
+      return finish(rows.length - 1, true, "anchor-gap");
+    }
+  }
+  if (direction < 0) {
+    return finish(rows.length - 1, false, null);
+  }
+  return finish(0, false, null);
+}
+
+// Latest Work Log entry for the task at 0-based `taskLine` in `content`.
+// Built on `findManagedTaskLogParents(..., WORK)`. Entries are newest-first
+// `*YYYY-MM-DD* — summary`. More than one WORK LOG marker, a missing
+// parent, or a malformed newest entry means no chip (null).
+function readLatestWorkLog(content, taskLine) {
+  try {
+    const lines = String(content || "").split(/\r?\n/);
+    const line = Math.floor(numericOrDefault(taskLine, Number.NaN));
+    if (!Number.isFinite(line) || line < 0 || line >= lines.length) {
+      return null;
+    }
+    const parents = findManagedTaskLogParents(
+      lines,
+      line,
+      MANAGED_TASK_LOG_KIND_WORK,
+    );
+    if (!Array.isArray(parents) || parents.length !== 1) {
+      return null;
+    }
+    const parentLine = parents[0].line;
+    const entries = [];
+    for (let index = parentLine + 1; index < lines.length; index += 1) {
+      let owner = null;
+      try {
+        owner = findNearestParentListItem(lines, index);
+      } catch (error) {
+        owner = null;
+      }
+      if (owner !== parentLine) {
+        const indentOk = lines[index] && lines[index].trim() !== "";
+        if (indentOk) {
+          const block = findCurrentBulletChildBlock(lines, parentLine);
+          if (index >= block.endLineExclusive) {
+            break;
+          }
+        }
+        continue;
+      }
+      entries.push(String(lines[index] || ""));
+    }
+    if (entries.length === 0) {
+      return null;
+    }
+    const newest = entries[0];
+    const match = /^\s*(?:[-*+]|\d+[.)])\s+\*(\d{4}-\d{2}-\d{2})\*\s+—\s+(.+?)\s*$/.exec(
+      newest,
+    );
+    if (!match) {
+      return null;
+    }
+    const date = match[1];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return null;
+    }
+    const summaryRaw = String(match[2] || "").trim();
+    if (!summaryRaw) {
+      return null;
+    }
+    const summary =
+      summaryRaw.length > 48 ? `${summaryRaw.slice(0, 48)}…` : summaryRaw;
+    return Object.freeze({ date, summary });
+  } catch (error) {
+    return null;
+  }
+}
+
+function laneWalkNoteName(path) {
+  const base = String(path || "").split("/").pop() || "";
+  return base.replace(/\.md$/i, "");
+}
+
+// Pure notice model for one landing. `context` is
+// `{ rank, total, wrapped, list, noteName, workLog }`; `list` is the full
+// walk list for the rail (entries carry `lane`). Falls back to the entry's
+// own rank/total when the plan rank is missing.
+function buildLaneWalkNoticeModel(entry, context = {}) {
+  try {
+    const lane = entry && entry.lane === "next" ? "next" : "pending";
+    const laneLabel = lane === "next" ? "NEXT" : "PENDING";
+    const rank =
+      Number.isInteger(context.rank) && context.rank >= 1
+        ? context.rank
+        : Number.isInteger(entry && entry.rank)
+          ? entry.rank
+          : 1;
+    const total =
+      Number.isInteger(context.total) && context.total >= 1
+        ? context.total
+        : Number.isInteger(entry && entry.total)
+          ? entry.total
+          : 1;
+    const laneRank =
+      Number.isInteger(context.laneRank) && context.laneRank >= 1
+        ? context.laneRank
+        : Number.isInteger(entry && entry.laneRank)
+          ? entry.laneRank
+          : 1;
+    const laneTotal =
+      Number.isInteger(context.laneTotal) && context.laneTotal >= 1
+        ? context.laneTotal
+        : Number.isInteger(entry && entry.laneTotal)
+          ? entry.laneTotal
+          : 1;
+    const list = Array.isArray(context.list) ? context.list : null;
+    const railLanes = list
+      ? list.map((item) => (item && item.lane === "next" ? "next" : "pending"))
+      : null;
+    const wrapped = context.wrapped === true;
+    const title = cleanTaskDisplayText(
+      (entry && entry.originalMarkdown) || (entry && entry.text) || "",
+    );
+    const noteName =
+      typeof context.noteName === "string" && context.noteName
+        ? context.noteName
+        : laneWalkNoteName(entry && entry.path);
+    const workLog =
+      context.workLog && typeof context.workLog === "object"
+        ? context.workLog
+        : null;
+    const created =
+      entry && typeof entry.created === "string" && entry.created
+        ? entry.created
+        : null;
+    const railMode =
+      railLanes && railLanes.length > 30
+        ? "bar"
+        : "dots";
+    const model = {
+      empty: false,
+      lane,
+      laneLabel,
+      laneRank,
+      laneTotal,
+      rank,
+      total,
+      wrapped,
+      title,
+      noteName,
+      workLog,
+      created,
+      railMode,
+      railLanes: railLanes ? Object.freeze(railLanes.slice()) : null,
+      railTotal: railLanes ? railLanes.length : total,
+    };
+    model.text = formatLaneWalkNoticeText(model);
+    return Object.freeze(model);
+  } catch (error) {
+    const fallback = {
+      empty: false,
+      lane: "pending",
+      laneLabel: "PENDING",
+      laneRank: 1,
+      laneTotal: 1,
+      rank: 1,
+      total: 1,
+      wrapped: false,
+      title: "(untitled task)",
+      noteName: "",
+      workLog: null,
+      created: null,
+      railMode: "dots",
+      railLanes: null,
+      railTotal: 1,
+    };
+    fallback.text = formatLaneWalkNoticeText(fallback);
+    return Object.freeze(fallback);
+  }
+}
+
+function buildLaneWalkEmptyNoticeModel(counts = {}) {
+  try {
+    const todayPending = Math.max(
+      0,
+      Math.floor(numericOrDefault(counts.todayPending, 0)),
+    );
+    const todayNext = Math.max(
+      0,
+      Math.floor(numericOrDefault(counts.todayNext, 0)),
+    );
+    const today = todayPending + todayNext;
+    const model = {
+      empty: true,
+      lanesClear: true,
+      hasToday: today > 0,
+      today,
+      todayPending,
+      todayNext,
+    };
+    model.text =
+      today > 0
+        ? `Lanes clear · Every Pending and Next task is on today's plan · TODAY ${today}`
+        : "Lanes clear · No Pending or Next tasks";
+    return Object.freeze(model);
+  } catch (error) {
+    return Object.freeze({
+      empty: true,
+      lanesClear: true,
+      hasToday: false,
+      today: 0,
+      todayPending: 0,
+      todayNext: 0,
+      text: "Lanes clear · No Pending or Next tasks",
+    });
+  }
+}
+
+function formatLaneWalkNoticeText(model) {
+  try {
+    if (!model || typeof model !== "object") {
+      return "";
+    }
+    if (model.empty === true) {
+      return typeof model.text === "string" && model.text
+        ? model.text
+        : "Lanes clear · No Pending or Next tasks";
+    }
+    const laneLabel =
+      model.lane === "next" ? "NEXT" : model.laneLabel || "PENDING";
+    const head = `${laneLabel} ${model.laneRank} of ${model.laneTotal} · walk ${model.rank}/${model.total}`;
+    const title = String(model.title || "").trim() || "(untitled task)";
+    const parts = [`${head} — ${title}`];
+    if (model.workLog && model.workLog.date && model.workLog.summary) {
+      parts.push(`🛠️ ${reviewShortDate(model.workLog.date)} — ${model.workLog.summary}`);
+    } else if (model.created) {
+      parts.push(`created ${reviewShortDate(model.created)}`);
+    }
+    parts.push("Ctrl+Shift+Enter today · Alt+N release");
+    let text = parts.join(" · ");
+    if (model.wrapped === true) {
+      text += " · wrapped around";
+    }
+    return text;
+  } catch (error) {
+    return "";
+  }
+}
+// ---- src/543-lane-walk-notice.js ----
+// Lane-walk toast: rich `.bob-nh-notice` card plus the plain-text
+// fallback. Replaces the previous lane-walk notice instead of stacking.
+function renderLaneWalkNoticeFragment(model, root) {
+  const lane = model && model.lane === "next" ? "next" : "pending";
+  const card = root.createDiv({
+    cls: `bob-nh-notice bob-nh-lane-walk is-${lane}`,
+    attr: { "aria-label": model.text },
+  });
+  const headerEl = card.createDiv({ cls: "bob-nh-notice-header" });
+  headerEl.createSpan({
+    cls: "bob-nh-lane-walk-box",
+    text: lane === "next" ? "*" : "/",
+    attr: { "aria-hidden": "true" },
+  });
+  headerEl.createSpan({ cls: "bob-nh-notice-level", text: model.laneLabel });
+  headerEl.createSpan({
+    cls: "bob-nh-notice-count",
+    text: `${model.laneRank} of ${model.laneTotal}`,
+  });
+  headerEl.createSpan({
+    cls: "bob-nh-notice-receipt",
+    text: `${model.rank}/${model.total}`,
+  });
+
+  const lanes = Array.isArray(model.railLanes) ? model.railLanes : null;
+  const railEl = card.createDiv({
+    cls: "bob-nh-lane-walk-rail",
+    attr: { "aria-hidden": "true" },
+  });
+  if (lanes && lanes.length > 30) {
+    const bar = railEl.createDiv({ cls: "bob-nh-lane-walk-bar" });
+    const pendingCount = lanes.filter((item) => item !== "next").length;
+    const nextCount = lanes.length - pendingCount;
+    const pendingSeg = bar.createDiv({
+      cls: "bob-nh-lane-walk-bar-pending",
+    });
+    const nextSeg = bar.createDiv({ cls: "bob-nh-lane-walk-bar-next" });
+    try {
+      pendingSeg.setAttribute("style", `flex-grow: ${pendingCount}`);
+      nextSeg.setAttribute("style", `flex-grow: ${nextCount}`);
+    } catch (error) {
+      // Inline flex is best-effort.
+    }
+    const caret = bar.createDiv({ cls: "bob-nh-lane-walk-caret" });
+    try {
+      const percent = ((model.rank - 0.5) / lanes.length) * 100;
+      caret.setAttribute("style", `left: ${percent}%`);
+    } catch (error) {
+      // Caret position is best-effort.
+    }
+  } else if (lanes && lanes.length > 0) {
+    const pendingTotal = lanes.filter((item) => item !== "next").length;
+    lanes.forEach((itemLane, index) => {
+      const isCurrent = index === model.rank - 1;
+      const cls = `bob-nh-lane-walk-dot is-${itemLane}${isCurrent ? " is-current" : ""}`;
+      railEl.createSpan({ cls, attr: { "aria-hidden": "true" } });
+      if (
+        pendingTotal > 0 &&
+        index === pendingTotal - 1 &&
+        index < lanes.length - 1 &&
+        lanes[index + 1] === "next"
+      ) {
+        railEl.createSpan({
+          cls: "bob-nh-lane-walk-gap",
+          attr: { "aria-hidden": "true" },
+        });
+      }
+    });
+  } else {
+    railEl.createSpan({
+      cls: `bob-nh-lane-walk-dot is-${lane} is-current`,
+      attr: { "aria-hidden": "true" },
+    });
+  }
+
+  card.createDiv({ cls: "bob-nh-lane-walk-title", text: model.title });
+
+  const chipsEl = card.createDiv({ cls: "bob-nh-notice-chips" });
+  if (model.noteName) {
+    chipsEl.createSpan({
+      cls: "bob-nh-notice-chip",
+      text: String(model.noteName),
+    });
+  }
+  if (model.workLog && model.workLog.date && model.workLog.summary) {
+    chipsEl.createSpan({
+      cls: "bob-nh-notice-chip",
+      text: `🛠️ ${reviewShortDate(model.workLog.date)} — ${model.workLog.summary}`,
+    });
+  } else if (model.created) {
+    chipsEl.createSpan({
+      cls: "bob-nh-notice-chip",
+      text: `created ${reviewShortDate(model.created)}`,
+    });
+  }
+  if (model.wrapped === true) {
+    chipsEl.createSpan({
+      cls: "bob-nh-notice-chip is-info",
+      text: "↻ wrapped",
+    });
+  }
+
+  const hintEl = card.createDiv({ cls: "bob-nh-lane-walk-hint" });
+  hintEl.createSpan({ cls: "bob-nh-lane-walk-key", text: "Ctrl+Shift+Enter" });
+  hintEl.createSpan({ text: " today · " });
+  hintEl.createSpan({ cls: "bob-nh-lane-walk-key", text: "Alt+N" });
+  hintEl.createSpan({ text: " release" });
+  return card;
+}
+
+function renderLaneWalkEmptyFragment(model, root) {
+  const card = root.createDiv({
+    cls: "bob-nh-notice bob-nh-lane-walk is-clear",
+    attr: { "aria-label": model.text },
+  });
+  const headerEl = card.createDiv({ cls: "bob-nh-notice-header" });
+  const iconEl = headerEl.createSpan({ cls: "bob-nh-notice-icon" });
+  try {
+    applyIcon(iconEl, "check-circle-2");
+  } catch (error) {
+    // Icon is best-effort.
+  }
+  headerEl.createSpan({ cls: "bob-nh-notice-level", text: "Lanes clear" });
+  if (model && model.hasToday === true) {
+    card.createDiv({
+      cls: "bob-nh-lane-walk-title",
+      text: "Every Pending and Next task is on today's plan",
+    });
+    const chipsEl = card.createDiv({ cls: "bob-nh-notice-chips" });
+    chipsEl.createSpan({
+      cls: "bob-nh-notice-chip",
+      text: `TODAY ${model.today}`,
+    });
+  } else {
+    card.createDiv({
+      cls: "bob-nh-lane-walk-title",
+      text: "No Pending or Next tasks",
+    });
+  }
+  return card;
+}
+
+function showLaneWalkNotice(plugin, model) {
+  const fallbackText =
+    model && typeof model.text === "string" ? model.text : String(model || "");
+  const showText = (text) => {
+    try {
+      new Notice(String(text));
+    } catch (error) {
+      // Notice is best-effort in tests.
+    }
+  };
+  try {
+    try {
+      if (
+        plugin &&
+        plugin.laneWalkNotice &&
+        typeof plugin.laneWalkNotice.hide === "function"
+      ) {
+        plugin.laneWalkNotice.hide();
+      }
+    } catch (error) {
+      // Replacing the previous notice is best-effort.
+    }
+    if (plugin) {
+      plugin.laneWalkNotice = null;
+    }
+    if (typeof document === "undefined") {
+      showText(fallbackText);
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    if (!fragment || typeof fragment.createDiv !== "function") {
+      showText(fallbackText);
+      return;
+    }
+    if (model && model.empty === true) {
+      renderLaneWalkEmptyFragment(model, fragment);
+    } else {
+      renderLaneWalkNoticeFragment(model, fragment);
+    }
+    const notice = new Notice(fragment);
+    if (plugin) {
+      plugin.laneWalkNotice = notice;
+    }
+  } catch (error) {
+    showText(fallbackText);
+  }
+}
+// ---- src/544-plugin-lane-walk.js ----
+// Lane-walk runtime: `]w` / `[w` step, `[W` / `]W` jump to the ends.
+// Navigation-only: never writes, never touches the `]s` walk state.
+const LANE_WALK_STALE_NOTICE = "Lane walk changed — try again";
+const LANE_WALK_API_REQUIRED_NOTICE =
+  "Bob Ledger Tools lane walk api required";
+const LANE_WALK_TASKS_NOTICE =
+  "Lane walk unavailable — Tasks is still indexing";
+const LANE_WALK_TODAY_NOTICE =
+  "Lane walk unavailable — today's plan is still loading";
+const LANE_WALK_JUMP_FAILURE_NOTICE = "Could not jump to task";
+
+class BobNavigationHotkeysLaneWalkMixin {
+  readLaneWalkQueue(api) {
+    try {
+      if (!api || typeof api.queue !== "function") {
+        return null;
+      }
+      const result = api.queue();
+      if (!result || typeof result !== "object") {
+        return null;
+      }
+      if (result.available === false) {
+        return result;
+      }
+      if (!Array.isArray(result.entries)) {
+        return null;
+      }
+      return result;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  consumePendingLaneWalkRepeat(options, endpoint) {
+    if (options && options.repeat !== undefined && options.repeat !== null) {
+      return normalizeVimRepeat(options.repeat);
+    }
+    if (endpoint) {
+      return 1;
+    }
+    try {
+      const view = this.getActiveMarkdownView();
+      const editor = view && view.editor;
+      if (!editor || !this.isVimNormalModeEditor(editor, view)) {
+        return 1;
+      }
+      const cm = this.resolveVimCodeMirror(editor, view);
+      const pending = getPendingVimRepeat(cm);
+      if (!pending.explicit) {
+        return 1;
+      }
+      resetPendingVimInputState(cm, "counted-lane-walk");
+      return normalizeVimRepeat(pending.repeat);
+    } catch (error) {
+      return 1;
+    }
+  }
+
+  laneWalkQueueUnavailableNotice(queue) {
+    if (!queue || queue.available !== false) {
+      return null;
+    }
+    if (queue.reason === "today") {
+      return LANE_WALK_TODAY_NOTICE;
+    }
+    return LANE_WALK_TASKS_NOTICE;
+  }
+
+  async jumpToLaneTask(direction, options = {}) {
+    if (this.reviewWalkBusy()) {
+      return false;
+    }
+    const step = direction < 0 ? -1 : 1;
+    const endpointRaw =
+      options && typeof options.endpoint === "string"
+        ? options.endpoint.trim().toLowerCase()
+        : "";
+    const endpoint =
+      endpointRaw === "first" || endpointRaw === "last"
+        ? endpointRaw
+        : options && options.endpoint
+          ? "endpoint"
+          : null;
+    const repeat = this.consumePendingLaneWalkRepeat(options, endpoint);
+    const run = async () => {
+      const api = getLaneWalkApi(this.app);
+      if (!api) {
+        new Notice(LANE_WALK_API_REQUIRED_NOTICE);
+        return false;
+      }
+      const jumpOrigin = this.getReviewWalkOriginCursor();
+      const todayText = this.laneReleaseDateText({});
+      let queue = this.readLaneWalkQueue(api);
+      if (!queue) {
+        new Notice(LANE_WALK_API_REQUIRED_NOTICE);
+        return false;
+      }
+      if (queue.available === false) {
+        new Notice(
+          this.laneWalkQueueUnavailableNotice(queue) || LANE_WALK_TASKS_NOTICE,
+        );
+        return false;
+      }
+      let entries = Array.isArray(queue.entries) ? queue.entries : [];
+      if (entries.length === 0) {
+        this.laneWalkAnchor = null;
+        showLaneWalkNotice(
+          this,
+          buildLaneWalkEmptyNoticeModel(queue.counts || {}),
+        );
+        return false;
+      }
+      const cursor = this.getReviewJumpCursor();
+      const anchor =
+        this.laneWalkAnchor && typeof this.laneWalkAnchor === "object"
+          ? this.laneWalkAnchor
+          : null;
+      let plan = planLaneWalkJump(entries, {
+        direction: step,
+        cursor,
+        anchor,
+        todayText,
+        repeat,
+        endpoint: endpointRaw || (endpoint ? true : null),
+      });
+      if (!plan || plan.kind === "empty") {
+        this.laneWalkAnchor = null;
+        showLaneWalkNotice(
+          this,
+          buildLaneWalkEmptyNoticeModel(queue.counts || {}),
+        );
+        return false;
+      }
+      let landed = await this.landOnWalkEntry(plan.entry, { jumpOrigin });
+      if (!landed.ok && landed.stale) {
+        queue = this.readLaneWalkQueue(api);
+        if (!queue) {
+          new Notice(LANE_WALK_API_REQUIRED_NOTICE);
+          return false;
+        }
+        if (queue.available === false) {
+          new Notice(
+            this.laneWalkQueueUnavailableNotice(queue) || LANE_WALK_TASKS_NOTICE,
+          );
+          return false;
+        }
+        entries = Array.isArray(queue.entries) ? queue.entries : [];
+        if (entries.length === 0) {
+          this.laneWalkAnchor = null;
+          showLaneWalkNotice(
+            this,
+            buildLaneWalkEmptyNoticeModel(queue.counts || {}),
+          );
+          return false;
+        }
+        plan = planLaneWalkJump(entries, {
+          direction: step,
+          cursor,
+          anchor,
+          todayText,
+          repeat,
+          endpoint: endpointRaw || (endpoint ? true : null),
+        });
+        if (!plan || plan.kind === "empty") {
+          this.laneWalkAnchor = null;
+          showLaneWalkNotice(
+            this,
+            buildLaneWalkEmptyNoticeModel(queue.counts || {}),
+          );
+          return false;
+        }
+        landed = await this.landOnWalkEntry(plan.entry, { jumpOrigin });
+      }
+      if (!landed.ok) {
+        new Notice(
+          landed.stale ? LANE_WALK_STALE_NOTICE : LANE_WALK_JUMP_FAILURE_NOTICE,
+        );
+        return false;
+      }
+      try {
+        if (landed.settled && typeof landed.settled.then === "function") {
+          await landed.settled;
+        }
+      } catch (error) {
+        // Settling never fails the landing.
+      }
+      this.laneWalkAnchor = buildLaneWalkAnchor(plan.entry, todayText);
+      let workLog = null;
+      try {
+        const view = this.getActiveMarkdownView();
+        const editor = view && view.editor;
+        if (
+          view &&
+          view.file &&
+          view.file.path === plan.entry.path &&
+          editor &&
+          typeof editor.getValue === "function" &&
+          typeof editor.getCursor === "function"
+        ) {
+          const cursorPos = getEditorCursor(editor);
+          const content = String(editor.getValue() || "");
+          if (cursorPos) {
+            workLog = readLatestWorkLog(content, cursorPos.line);
+          }
+        } else {
+          const file = plan.entry.path
+            ? this.app &&
+              this.app.vault &&
+              typeof this.app.vault.getAbstractFileByPath === "function"
+              ? this.app.vault.getAbstractFileByPath(plan.entry.path)
+              : null
+            : null;
+          if (file) {
+            const content = await this.readLinkPickerNoteContent(
+              plan.entry.path,
+              file,
+            );
+            if (typeof content === "string") {
+              const resolved = resolveReviewQueueLine(content, plan.entry);
+              if (resolved.ok) {
+                workLog = readLatestWorkLog(content, resolved.line);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        workLog = null;
+      }
+      const model = buildLaneWalkNoticeModel(plan.entry, {
+        rank: plan.rank,
+        total: plan.total,
+        laneRank: plan.laneRank,
+        laneTotal: plan.laneTotal,
+        wrapped: plan.wrapped,
+        list: entries,
+        workLog,
+      });
+      showLaneWalkNotice(this, model);
+      return true;
+    };
+    const previous = this.laneWalkChain || Promise.resolve();
+    const chained = previous.then(run, run);
+    this.laneWalkChain = chained.then(
+      () => undefined,
+      () => undefined,
+    );
+    return chained;
   }
 }
 // ---- src/540-plugin-decay-picker-and-cancel.js ----
@@ -86788,6 +87768,8 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysFreshnessDecayMixin,
   BobNavigationHotkeysChecklistWalkMixin,
   BobNavigationHotkeysReviewAdvanceMixin,
+  BobNavigationHotkeysWalkLandingMixin,
+  BobNavigationHotkeysLaneWalkMixin,
   BobNavigationHotkeysSuccessorPickerMixin,
   BobNavigationHotkeysReviewMoveMixin,
   BobNavigationHotkeysReviewReturnMixin,
@@ -87777,4 +88759,14 @@ module.exports.helpers = {
   applyInlinePropertyAndScheduleLogTransaction,
   insertEditorLine,
   deleteEditorLine,
+  getLaneWalkApi,
+  planLaneWalkJump,
+  buildLaneWalkAnchor,
+  readLatestWorkLog,
+  buildLaneWalkNoticeModel,
+  buildLaneWalkEmptyNoticeModel,
+  formatLaneWalkNoticeText,
+  renderLaneWalkNoticeFragment,
+  renderLaneWalkEmptyFragment,
+  showLaneWalkNotice,
 };

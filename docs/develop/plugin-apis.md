@@ -49,6 +49,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | `freshness` | 12 | Read or update freshness, refresh intervals, keep counts, review queue, and unblocked metadata. |
 | `noteReady` | 1 | Read per-note Ready-lane counts and render the crowded-note chip. |
 | `dashboardCollections` | 1 | Snapshot or render PROJECTS and REFERENCES badges. |
+| `laneWalk` | 1 | Serve the Pending/Next-off-Today walk list behind `]w` / `[w`. |
 | `priorityMarks` | 1 | Model and render priority marks. |
 | `dateMarks` | 1 | Model and render canonical date marks. |
 | `progressMarks` | 1 | Refresh the display-only In Progress Task Link mark. |
@@ -103,6 +104,18 @@ in the tooltip. The no-argument `pendingBudget()` and `nextBudget()` keep
 whole-lane counts for existing callers. Render helpers accept a host and
 optional source-path/component context so mounted views can refresh with their
 lifecycle.
+
+`laneWalk.queue()` returns `{ available, reason?, date?, entries, counts? }`
+with `entries` in walk order (PENDING first, then NEXT; path, then 1-based
+line) and `counts` (`pending`, `next`, `total`, `todayPending`,
+`todayNext`). Each entry carries `key`, `path`, `line`, `lineNumber`,
+`originalMarkdown`, `text`, `blockId`, `lane`, `laneLabel`, `created`,
+`rank`, `total`, `laneRank`, and `laneTotal`. The call uses the same gating
+as the lane budget (Tasks array, Warm cache, ready Today cache) and reports
+`reason: "tasks" | "today" | "error"` when unavailable; per lane,
+`entries.length` equals the `dashboardLaneBudget` section on the same
+snapshot. The result is memoized on the Tasks array identity, the local
+date text, and the Today generation, and the call never throws.
 
 The `freshness` namespace advertises
 `trackerReview`, `checklistTiers`, and

@@ -663,137 +663,20 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     }
   }
 
-  // Land on one queue entry without writing: resolve its line in the target
-  // note, then put the cursor there and center it. Same-note landings write
-  // the cursor directly; cross-note landings reuse the leaf-reuse open plus
-  // the shared jump-or-defer retry so the cursor lands after the new leaf
-  // renders. Returns `{ ok, stale }`; `stale` means the queue moved and the
-  // caller should rebuild once and try again. `options.jumpOrigin` is the
-  // pre-landing cursor: every walk landing records a Vim jump from it to
-  // the landed row, so `<C-o>` returns to the answered row. Recording never
-  // blocks the landing.
+  // Thin wrapper over the shared walk landing: cursor movement lives in
+  // `landOnWalkEntry`; this only records the review landing on success so
+  // `]s` behavior stays byte-identical.
   async landOnReviewQueueEntry(entry, options = {}) {
-    const jumpOrigin =
-      options && typeof options === "object" ? options.jumpOrigin : null;
-    const path = entry && typeof entry.path === "string" ? entry.path : "";
-    if (!path) {
-      return { ok: false, stale: true };
+    const landed = await this.landOnWalkEntry(entry, options);
+    if (!landed || !landed.ok) {
+      return { ok: false, stale: Boolean(landed && landed.stale) };
     }
-    const activeView = this.getActiveMarkdownView();
-    const activeEditor = activeView && activeView.editor;
-    const sameNote = Boolean(
-      activeView &&
-        activeView.file &&
-        activeView.file.path === path &&
-        activeEditor &&
-        typeof activeEditor.getValue === "function",
-    );
-    let content = null;
-    let file =
-      activeView && activeView.file && activeView.file.path === path
-        ? activeView.file
-        : null;
-    if (sameNote) {
-      content = String(activeEditor.getValue() || "");
-    } else {
-      const vault = this.app && this.app.vault;
-      file =
-        file ||
-        (vault && typeof vault.getAbstractFileByPath === "function"
-          ? vault.getAbstractFileByPath(path)
-          : null);
-      if (!file) {
-        return { ok: false, stale: true };
-      }
-      content = await this.readLinkPickerNoteContent(path, file);
-      if (content === null) {
-        return { ok: false, stale: true };
-      }
-    }
-    const resolved = resolveReviewQueueLine(content, entry);
-    if (!resolved.ok) {
-      return { ok: false, stale: true };
-    }
-    if (sameNote) {
-      if (!setEditorCursor(activeEditor, { line: resolved.line, ch: 0 })) {
-        return { ok: false, stale: false };
-      }
-      scheduleOpenTaskJumpCenter(this, activeEditor, resolved.line, 0);
-      if (jumpOrigin) {
-        try {
-          const jumpContext =
-            this.createVimJumpContextWithOrigin(jumpOrigin);
-          if (jumpContext) {
-            const settled = this.enqueueVimJumpContextTransition(
-              jumpContext,
-              { path, line: resolved.line, ch: 0 },
-              { expectedPath: path },
-            );
-            if (settled && typeof settled.catch === "function") {
-              settled.catch(() => false);
-            }
-          }
-        } catch (error) {
-          // Jump history is best-effort after a successful landing.
-        }
-      }
+    try {
+      const path = entry && typeof entry.path === "string" ? entry.path : "";
       this.setReviewLanding(entry, path);
-      return { ok: true, stale: false };
+    } catch (error) {
+      // Landing succeeded; recording never fails it.
     }
-    const opened = await openMarkdownFileWithLeafReuse(
-      this,
-      file,
-      `Review jump, but could not open ${path}`,
-    );
-    if (!opened) {
-      return { ok: false, stale: false };
-    }
-    if (jumpOrigin) {
-      let jumpContext = null;
-      try {
-        jumpContext = this.createVimJumpContextWithOrigin(jumpOrigin);
-      } catch (error) {
-        jumpContext = null;
-      }
-      if (jumpContext) {
-        const completion = {
-          token: jumpContext.token,
-          resolve: (result) => {
-            try {
-              if (result && result.ok && result.destination) {
-                const settled = this.enqueueVimJumpContextTransition(
-                  jumpContext,
-                  result.destination,
-                  { expectedPath: path },
-                );
-                if (settled && typeof settled.catch === "function") {
-                  settled.catch(() => false);
-                }
-              }
-            } catch (error) {
-              // Jump history is best-effort after a successful landing.
-            }
-          },
-        };
-        this.jumpOrDeferTaskMoveDestination(
-          path,
-          { line: resolved.line, text: entry.originalMarkdown },
-          TASK_MOVE_DESTINATION_JUMP_RETRIES,
-          completion,
-        );
-      } else {
-        this.jumpOrDeferTaskMoveDestination(path, {
-          line: resolved.line,
-          text: entry.originalMarkdown,
-        });
-      }
-    } else {
-      this.jumpOrDeferTaskMoveDestination(path, {
-        line: resolved.line,
-        text: entry.originalMarkdown,
-      });
-    }
-    this.setReviewLanding(entry, path);
     return { ok: true, stale: false };
   }
 

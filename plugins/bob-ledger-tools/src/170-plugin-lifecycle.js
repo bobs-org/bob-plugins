@@ -209,12 +209,11 @@ class BobLedgerToolsPlugin extends Plugin {
     this.liveWidgetRefreshTimer = null;
     this.planPaintGen = 0;
     this.planPaintGens = new Map();
-    // Synchronous Today cache: `{ date, dailyPath, keys, rank, details,
-    // detailsSignature, idsByPath }`. Built from the daily note's text
-    // (never awaited inside the api); before the first build `isToday`
-    // returns false for every task.
+    // Synchronous Today cache: built from the daily note's text (never
+    // awaited inside the api); before the first build `isToday` is false.
     this.todayCache = emptyTodayCache();
     this.todayCacheGen = 0;
+    this.laneWalkMemo = null;
     this.todayEnteredAt = new Map();
     this.todayRevalidateAt = 0;
     this.statsAppendQueue = Promise.resolve();
@@ -244,6 +243,7 @@ class BobLedgerToolsPlugin extends Plugin {
         );
       },
       dashboardLaneBudget: (lane) => this.dashboardLaneBudget(lane),
+      laneWalk: this.laneWalkApi(),
       renderDashboardLaneBadge: (parent, options = {}) =>
         this.renderDashboardLaneBadge(parent, options),
       readyBudget: () => this.readyBudget(),
@@ -322,8 +322,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // like any task. Visible `^prj` rows use the ordinary
       // predicate, and the PROJECTS tier walks with `projectsDue`;
       // references use ordinary freshness and review groups.
-      // `checklistTiers` advertises
-      // PRE/POST using `preDue`/`postDue` and the nine-key `byTier`
+      // `checklistTiers` advertises PRE/POST and the nine-key `byTier`
       // histogram including recurring. Namespace v11 removes
       // the reference review tier and cadence. Top-level api stays v3).
       // `freshness` namespace v12 adds recorded unblock TICKLERs and
@@ -808,6 +807,7 @@ class BobLedgerToolsPlugin extends Plugin {
     }
     this.todayCache = emptyTodayCache();
     this.todayCacheGen = 0;
+    this.laneWalkMemo = null;
     this.todayEnteredAt = new Map();
     this.todayRevalidateAt = 0;
     if (

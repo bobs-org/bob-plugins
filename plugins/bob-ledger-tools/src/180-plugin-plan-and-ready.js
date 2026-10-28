@@ -864,4 +864,66 @@ class BobLedgerToolsPlanAndReadyMixin {
     }
   }
 
+  // Lane walk queue (api.laneWalk v1): Pending/Next-off-Today entries in
+  // lane order. Same gating as the lane budget; never throws. Memoized on
+  // the Tasks array identity, the local date text, and todayCacheGen.
+  apiLaneWalkQueue(now = new Date()) {
+    try {
+      const dateText = this.todayLocalDate(now);
+      const tasks = planBlockTasks(this.app);
+      if (!Array.isArray(tasks)) {
+        return { available: false, reason: "tasks" };
+      }
+      const state = this.tasksCacheState();
+      if (typeof state === "string" && state !== "Warm") {
+        return { available: false, reason: "tasks" };
+      }
+      if (!this.isTodayCacheReady(now)) {
+        return { available: false, reason: "today" };
+      }
+      const memo = this.laneWalkMemo;
+      if (
+        memo &&
+        memo.tasks === tasks &&
+        memo.dateText === dateText &&
+        memo.todayGen === this.todayCacheGen
+      ) {
+        return memo.result;
+      }
+      let built = null;
+      try {
+        built = laneWalkQueueFromTasks(
+          tasks,
+          now,
+          (task) => this.isTodayTask(task),
+          { order: "lane" },
+        );
+      } catch (error) {
+        return { available: false, reason: "error" };
+      }
+      const result = Object.freeze({
+        available: true,
+        date: dateText,
+        entries: built.entries,
+        counts: built.counts,
+      });
+      this.laneWalkMemo = {
+        tasks,
+        dateText,
+        todayGen: this.todayCacheGen,
+        result,
+      };
+      return result;
+    } catch (error) {
+      return { available: false, reason: "error" };
+    }
+  }
+
+  laneWalkApi() {
+    return Object.freeze({
+      version: 1,
+      queue: () => this.apiLaneWalkQueue(),
+    });
+  }
+
 }

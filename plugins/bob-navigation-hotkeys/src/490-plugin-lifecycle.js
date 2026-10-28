@@ -225,6 +225,30 @@ class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "jump-to-next-lane-task",
+      name: "Jump to next Pending or Next task off today's plan",
+      callback: () => this.jumpToLaneTask(1),
+    });
+
+    this.addCommand({
+      id: "jump-to-prev-lane-task",
+      name: "Jump to previous Pending or Next task off today's plan",
+      callback: () => this.jumpToLaneTask(-1),
+    });
+
+    this.addCommand({
+      id: "jump-to-first-lane-task",
+      name: "Jump to first Pending or Next task off today's plan",
+      callback: () => this.jumpToLaneTask(1, { endpoint: "first" }),
+    });
+
+    this.addCommand({
+      id: "jump-to-last-lane-task",
+      name: "Jump to last Pending or Next task off today's plan",
+      callback: () => this.jumpToLaneTask(1, { endpoint: "last" }),
+    });
+
+    this.addCommand({
       id: "refresh-task-freshness",
       name: "Refresh task freshness (confirm it still looks right)",
       hotkeys: [{ modifiers: ["Alt"], key: "F" }],
@@ -420,6 +444,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.reviewAnchor = null;
     this.reviewLanding = null;
     this.reviewWalkCurrent = null;
+    this.laneWalkAnchor = null;
+    this.laneWalkChain = Promise.resolve();
+    this.laneWalkNotice = null;
     // Review-walk auto-advance (`docs/freshness.md` §6): the landing epoch
     // and gesture sequence make stale callbacks refuse, and the lock
     // swallows double presses while an answer is in flight or settling.
@@ -542,5 +569,8 @@ class BobNavigationHotkeysPlugin extends Plugin {
     }
     this.cancelPendingTaskMoveJump();
     this.cancelPendingVimJumpDestination();
+    this.laneWalkAnchor = null;
+    this.laneWalkChain = Promise.resolve();
+    this.laneWalkNotice = null;
   }
 }

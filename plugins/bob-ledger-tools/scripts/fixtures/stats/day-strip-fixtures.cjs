@@ -167,7 +167,7 @@ function makeReport(options = {}) {
     homes["sase.md"] = { label: "sase", kind: "project", area: "dev.md", root_parent: "sase.md", path: "sase.md", hue: "blue" };
     homes["dev.md"] = { label: "dev", kind: "area", area: "dev.md", root_parent: "dev.md", path: "dev.md", hue: "blue", project_label: "dev · area tasks" };
     homes["@review:GTD"] = { label: "GTD review", short_label: "GTD", kind: "bucket", area: "gtd.md", root_parent: "@review:GTD", path: null, hue: "orange" };
-    homes["@daily"] = { label: "<daily>", kind: "bucket", area: "@daily", root_parent: "@daily", path: null, hue: null };
+    homes["@daily"] = { label: "GTD", kind: "bucket", area: "@daily", root_parent: "@daily", path: null, hue: null };
     homes["gtd.md"] = { label: "gtd", kind: "area", area: "gtd.md", root_parent: "gtd.md", path: "gtd.md", hue: "orange", project_label: "gtd · area tasks" };
   }
   if (options.screenshotDay) {

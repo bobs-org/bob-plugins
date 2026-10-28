@@ -569,9 +569,9 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
       resolved.push(
         pomodoroHomeBucketPart(
           "@daily",
-          "<daily>",
+          "GTD",
           "@daily",
-          "<daily>",
+          "GTD",
           null,
         ),
       );

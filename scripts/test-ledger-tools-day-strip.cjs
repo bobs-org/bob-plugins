@@ -542,8 +542,8 @@ test("daily root paints its label in gray after real roots", () => {
   const model = modelFor(fixture);
   const entry = model.mix.legend.find((item) => item.key === "@daily");
   assert.ok(entry, "daily root is in the legend");
-  assert.equal(entry.legendLabel, "<daily>");
-  assert.equal(entry.label, "<daily>");
+  assert.equal(entry.legendLabel, "GTD");
+  assert.equal(entry.label, "GTD");
   const realRoots = model.mix.legend.filter((item) => {
     const home = fixture.report.homes[item.key];
     return home && home.kind !== "bucket";
@@ -554,7 +554,7 @@ test("daily root paints its label in gray after real roots", () => {
   const { root } = paint(model);
   const item = byAttribute(root, "data-key", "@daily")[0];
   assert.ok(item, "daily root legend item paints");
-  assert.equal(byClass(item, "bob-day-strip-legend-label")[0].textContent, "<daily>");
+  assert.equal(byClass(item, "bob-day-strip-legend-label")[0].textContent, "GTD");
   const dot = byClass(item, "bob-day-strip-legend-dot")[0];
   assert.ok(dot, "daily root has a legend dot");
   assert.match(dot.getAttribute("class"), /bob-day-strip-hue-gray/);
@@ -578,9 +578,11 @@ test("case-insensitive legend collisions fall back to full labels", () => {
   const byKey = new Map(model.mix.legend.map((entry) => [entry.key, entry]));
   assert.equal(byKey.get("@review:GTD").legendLabel, "GTD review");
   assert.equal(byKey.get("gtd.md").legendLabel, "gtd · area tasks");
+  assert.equal(byKey.get("@daily").legendLabel, "GTD");
   const { root } = paint(model);
   assert.equal(byClass(byAttribute(root, "data-key", "@review:GTD")[0], "bob-day-strip-legend-label")[0].textContent, "GTD review");
   assert.equal(byClass(byAttribute(root, "data-key", "gtd.md")[0], "bob-day-strip-legend-label")[0].textContent, "gtd · area tasks");
+  assert.equal(byClass(byAttribute(root, "data-key", "@daily")[0], "bob-day-strip-legend-label")[0].textContent, "GTD");
 });
 
 test("dayStripLegendFit fits every root, reserves the counter, and handles empty", () => {

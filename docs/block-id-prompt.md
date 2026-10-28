@@ -40,7 +40,9 @@ available, the picker also offers recent themes for new Pomodoros, with a
 swatch for each `+` component and a `like NAME` hint on near-duplicates. A
 recent row keeps its catalog spelling. `Ctrl+D` hides that theme from Recent
 suggestions; the row remains as a reversible hidden suggestion. Typing the name
-still works, and `Ctrl+D` on a Today row leaves it unchanged.
+still works, and `Ctrl+D` on a Today row leaves it unchanged. A theme that
+today's ledger uses only on a done or cancelled Pomodoro still shows as a
+Recent row; only themes of the open Today rows are left out.
 
 Linking applies lane changes: Ready and Blocked tasks become Next, while Next
 and In Progress tasks stay unchanged. A `^^` task-picker link that is the sole

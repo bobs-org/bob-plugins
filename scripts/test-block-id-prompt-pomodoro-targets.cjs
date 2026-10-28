@@ -626,3 +626,37 @@ test("planPomodoroLinkInsertion without a target keeps today's behavior and shap
   assert.ok(!("destination" in plan));
   assert.ok(plan.content.includes("\t- [[Tasks#^task1]]"));
 });
+
+function createDoneTodayThemesApi(themes) {
+  return {
+    version: 1,
+    available: () => ({ available: true }),
+    componentsOf: (name) =>
+      String(name || "")
+        .split("+")
+        .map((raw) => raw.trim())
+        .filter(Boolean)
+        .map((raw) => ({ raw, key: raw.toLowerCase().replace(/\s+/g, " ") })),
+    historyRows: ({ query = "", limit = 5, exclusions = new Set() } = {}) => {
+      const needle = String(query).trim().toLowerCase();
+      return themes
+        .filter((theme) => !exclusions.has(theme.key))
+        .filter((theme) => !needle || theme.name.toLowerCase().includes(needle))
+        .slice(0, limit);
+    },
+    similarTo: () => [],
+    snapshot: () => ({ themes }),
+  };
+}
+
+test("buildPomodoroLinkPickerRows keeps a done-only theme in Recent", () => {
+  const content = ["## Pomodoros", "- [ ] () — HERE", "- [x] () — DONE"].join("\n");
+  const model = helpers.buildPomodoroLinkPickerModel(content, {});
+  const themesApi = createDoneTodayThemesApi([
+    { key: "here", name: "HERE", last_used: "2026-08-14", days_used: 3 },
+    { key: "done", name: "DONE", last_used: "2026-08-15", days_used: 2 },
+  ]);
+  const { rows } = helpers.buildPomodoroLinkPickerRows(model, "", { themesApi });
+  const recent = rows.filter((row) => row.kind === "recent").map((row) => row.name);
+  assert.deepEqual(recent, ["DONE"]);
+});

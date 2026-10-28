@@ -151,6 +151,9 @@ destinations or renames when the Ledger Tools `themes` catalog is available.
 Recent rows keep catalog spelling; `+` components show their theme swatches,
 and typed near-duplicates show a `like NAME` hint. `Ctrl+D` hides a Recent
 suggestion and leaves a reversible hidden row; on a Today row it has no effect.
+A theme that today's ledger uses only on a done or cancelled Pomodoro still
+shows as a Recent row; only themes of the open Today rows (and, for rename,
+the entry being renamed) are left out.
 
 The **Bob: Pomodoro themes** command (no default hotkey) opens the themes
 manager, with Active, Hidden, Possible duplicates, and All views on `Tab`.

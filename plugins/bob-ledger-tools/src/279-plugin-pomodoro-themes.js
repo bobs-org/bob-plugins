@@ -546,9 +546,9 @@ class BobLedgerToolsPomodoroThemesMixin {
   }
 
   // Synchronous history rows for pickers: visible catalog themes ranked
-  // per PT7 group B (exact/prefix) then D (substring), with today's
-  // components excluded by the caller. Options: `{ query, limit,
-  // exclusions }`. Never throws.
+  // per PT7 group B (exact/prefix) then D (substring), with components of
+  // the caller's displayed Today rows excluded by the caller. Options:
+  // `{ query, limit, exclusions }`. Never throws.
   pomodoroThemeHistoryRows(options = {}) {
     try {
       const opts = options && typeof options === "object" ? options : {};

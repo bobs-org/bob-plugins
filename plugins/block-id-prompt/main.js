@@ -6153,8 +6153,11 @@ function withPomodoroThemeHistoryRows(model, query, baseRows, selectedIndex, opt
   if (!model || !model.creation || model.creation.allowed !== true) {
     return { rows: baseRows, selectedIndex };
   }
-  const allToday = Array.isArray(model.allEntries) ? model.allEntries : model.entries;
-  const exclusions = blockPomodoroThemeKeysInToday(api, allToday);
+  // Only themes the menu already shows as a Today row leave Recent; a done
+  // Pomodoro is not a Today row here, so model.entries (open only) excludes
+  // done and cancelled entries that model.allEntries still carries.
+  const openToday = Array.isArray(model.entries) ? model.entries : [];
+  const exclusions = blockPomodoroThemeKeysInToday(api, openToday);
   const history = blockPomodoroThemeHistory(
     api,
     query,

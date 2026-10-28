@@ -697,3 +697,73 @@ test("Escape and Ctrl+[ cancel with no choice; settle-once holds", async () => {
   assert.deepEqual(await oncePromise, first);
   assert.deepEqual(oncePromise, once.waitForChoice());
 });
+
+test("done-today themes stay in Recent while open Today themes stay excluded", () => {
+  const themesApi = createThemesApi([
+    { key: "done", name: "DONE", last_used: "2026-08-15", days_used: 2 },
+    { key: "capture", name: "CAPTURE", last_used: "2026-08-14", days_used: 4 },
+  ]);
+  const modal = openPicker({ themesApi });
+  assert.deepEqual(rowTitles(modal), ["CAPTURE", "LATER", "New Pomodoro DONE"]);
+  assert.ok(
+    !modal.rows.some(
+      (row) => row.kind === "recent" && row.theme && row.theme.key === "capture",
+    ),
+  );
+  modal.close();
+});
+
+test("typing done shows only the Recent DONE row and keeps catalog spelling", async () => {
+  const themesApi = createThemesApi([
+    { key: "done", name: "DONE", last_used: "2026-08-15", days_used: 2 },
+    { key: "capture", name: "CAPTURE", last_used: "2026-08-14", days_used: 4 },
+  ]);
+  const modal = openPicker({ themesApi });
+  type(modal, "done");
+  assert.deepEqual(rowTitles(modal), ["New Pomodoro DONE"]);
+  assert.equal(modal.rows.length, 1);
+  assert.equal(modal.rows[0].kind, "recent");
+
+  const choicePromise = modal.waitForChoice();
+  pressKey(modal, "Enter", { shiftKey: true });
+  assert.deepEqual(await choicePromise, {
+    kind: "new",
+    name: "DONE",
+    preserveSpelling: true,
+  });
+});
+
+test("Today exclusions apply before query filtering; cancelled themes stay Recent", () => {
+  const seen = {};
+  const base = createThemesApi([
+    { key: "done", name: "DONE", last_used: "2026-08-15", days_used: 2 },
+    { key: "capture", name: "CAPTURE", last_used: "2026-08-14", days_used: 4 },
+  ]);
+  const themesApi = {
+    ...base,
+    historyRows: (options = {}) => {
+      seen[String(options.query || "")] = new Set(options.exclusions || []);
+      return base.historyRows(options);
+    },
+  };
+  const modal = openPicker({ themesApi });
+  type(modal, "later");
+  assert.ok(seen.later.has("capture"), "open CAPTURE stays excluded when filtered out");
+  assert.ok(!seen.later.has("done"), "done DONE never enters the exclusion set");
+  assert.ok(
+    !modal.rows.some(
+      (row) => row.kind === "recent" && row.theme && row.theme.key === "capture",
+    ),
+  );
+  modal.close();
+
+  const cancelled = openPicker({
+    daily: ["## Pomodoros", "- [ ] () — HERE", "- [-] () — GONE"].join("\n"),
+    themesApi: createThemesApi([
+      { key: "gone", name: "GONE", last_used: "2026-08-15", days_used: 1 },
+      { key: "here", name: "HERE", last_used: "2026-08-14", days_used: 3 },
+    ]),
+  });
+  assert.deepEqual(rowTitles(cancelled), ["HERE", "New Pomodoro GONE"]);
+  cancelled.close();
+});

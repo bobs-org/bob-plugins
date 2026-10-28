@@ -366,8 +366,9 @@ function pomodoroThemeSimilarKeys(queryKey, themes) {
 }
 
 // Mirror of `pomodoro_themes::rank_history` (PT7 groups B exact/prefix
-// then D substring). Hidden filtering and today-row exclusions are the
-// caller's job. `themes` entries carry `{ key, name, last_used,
+// then D substring). Hidden filtering and components of the caller's
+// displayed Today rows excluded by the caller. `themes` entries carry
+// `{ key, name, last_used,
 // days_used }`; `exclusions` is an array or Set of keys.
 function pomodoroThemeRankHistory(themes, query, exclusions) {
   const list = Array.isArray(themes) ? themes : [];

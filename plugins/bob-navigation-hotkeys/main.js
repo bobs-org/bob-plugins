@@ -16851,8 +16851,26 @@ function createPomodoroBulletMovePickerRows(
     );
   }
 
+  // Only displayed Today rows leave Recent: open entries in bullets mode,
+  // plus the source entry itself in entry mode (whatever its status, so no
+  // "Rename to <own name>" row). A done bullets source stays included.
+  const exclusionEntries =
+    mode === "entry"
+      ? (() => {
+        const sourceEntry = allEntries.find(
+          (entry) => entry && entry.entryLine === sourceEntryLine,
+        );
+        if (
+          sourceEntry &&
+          !openEntries.some((entry) => entry && entry.entryLine === sourceEntryLine)
+        ) {
+          return [...openEntries, sourceEntry];
+        }
+        return openEntries;
+      })()
+      : openEntries;
   return Object.freeze(
-    withNavigationPomodoroThemeRows(allEntries, queryText, rows, {
+    withNavigationPomodoroThemeRows(exclusionEntries, queryText, rows, {
       ...options,
       mode,
     }),

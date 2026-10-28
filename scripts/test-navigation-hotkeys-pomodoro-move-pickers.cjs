@@ -92,6 +92,75 @@ function textOf(element) {
     ((element && element.children) || []).map(textOf).join("");
 }
 
+function recentRowNames(rows) {
+  return rows.filter((row) => row.kind === "recent").map((row) => row.name);
+}
+
+function movePickerEntries(content) {
+  return helpers.collectPomodoroEntries(content).entries;
+}
+
+test("done-today themes stay Recent in bullet-move and entry pickers", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- [[Tasks#^one]]",
+    "- [ ] () — DESTINATION",
+    "\t- [[Tasks#^two]]",
+    "- [x] () — BUILD",
+  ].join("\n");
+  const entries = movePickerEntries(content);
+  const sourceLine = entries.find((entry) => entry.name === "SOURCE").entryLine;
+  const makeApi = () => createThemesApi([
+    { key: "source", name: "SOURCE", last_used: "2026-08-13", days_used: 1 },
+    { key: "destination", name: "DESTINATION", last_used: "2026-08-14", days_used: 2 },
+    { key: "build", name: "BUILD", last_used: "2026-08-15", days_used: 3 },
+  ]);
+
+  const bullets = helpers.createPomodoroBulletMovePickerRows(entries, sourceLine, "", {
+    themesApi: makeApi(),
+  });
+  assert.ok(recentRowNames(bullets).includes("BUILD"));
+  assert.ok(!recentRowNames(bullets).includes("SOURCE"));
+  assert.ok(!recentRowNames(bullets).includes("DESTINATION"));
+
+  const rename = helpers.createPomodoroBulletMovePickerRows(entries, sourceLine, "", {
+    mode: "entry",
+    themesApi: makeApi(),
+  });
+  assert.ok(recentRowNames(rename).includes("BUILD"));
+  assert.ok(!recentRowNames(rename).includes("SOURCE"));
+  assert.ok(!recentRowNames(rename).includes("DESTINATION"));
+});
+
+test("entry mode excludes a done source entry's own theme; bullets mode keeps it", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — KEEP",
+    "- [x] () — OLD",
+  ].join("\n");
+  const entries = movePickerEntries(content);
+  const oldLine = entries.find((entry) => entry.name === "OLD").entryLine;
+  const makeApi = () => createThemesApi([
+    { key: "keep", name: "KEEP", last_used: "2026-08-13", days_used: 1 },
+    { key: "old", name: "OLD", last_used: "2026-08-15", days_used: 2 },
+    { key: "fresh", name: "FRESH", last_used: "2026-08-14", days_used: 1 },
+  ]);
+
+  const rename = helpers.createPomodoroBulletMovePickerRows(entries, oldLine, "", {
+    mode: "entry",
+    themesApi: makeApi(),
+  });
+  assert.deepEqual(recentRowNames(rename), ["FRESH"]);
+
+  const bullets = helpers.createPomodoroBulletMovePickerRows(entries, oldLine, "", {
+    themesApi: makeApi(),
+  });
+  assert.ok(recentRowNames(bullets).includes("OLD"));
+  assert.ok(recentRowNames(bullets).includes("FRESH"));
+  assert.ok(!recentRowNames(bullets).includes("KEEP"));
+});
+
 function pressCtrlD(picker) {
   const event = {
     key: "d",

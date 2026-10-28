@@ -10,10 +10,14 @@ class TaskStatusCyclerPlugin extends Plugin {
     // Cross-plugin surface (plugins never import one another's `main.js`).
     // Keep the shape additive: bump `version` whenever a method is added.
     this.api = Object.freeze({
-      version: 2,
+      version: 3,
       recoverBlockedDependents: (closedIdentities, context) =>
         this.recoverBlockedDependents(closedIdentities, context),
       completeTaskAtCursor: (editor) => this.completeTaskAtCursor(editor),
+      completeTaskLineText: (lineText, options) =>
+        this.completeTaskLineText(lineText, options),
+      finalizeClosedTasks: (closedIdentities, context) =>
+        this.finalizeClosedTasks(closedIdentities, context),
     });
 
     this.addCommand({

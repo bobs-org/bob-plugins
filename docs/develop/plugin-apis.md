@@ -246,7 +246,7 @@ than rejecting. `taskLinkLane.matches` is synchronous and
 
 ## Task Status Cycler
 
-`task-status-cycler.api` is version 2:
+`task-status-cycler.api` is version 3:
 
 - `recoverBlockedDependents(identities, context?)` runs the same
   dependent recovery as task completion without retiring references. It
@@ -260,6 +260,16 @@ than rejecting. `taskLinkLane.matches` is synchronous and
   writes `[x]` directly. It returns
   `{ ok: true, lineDelta, successorNotice }` or
   `{ ok: false, reason }` and does not stamp the task.
+- `completeTaskLineText(lineText, { date }?)` returns the exact
+  local-fallback bytes for closing `lineText` (`[x]` plus
+  `[completion:: date]`, defaulting to today), with no freshness stamp.
+  Complete-label writers compose this with their LINKS edit in one
+  transaction. It never throws; a non-task line comes back unchanged.
+- `finalizeClosedTasks(identities, context?)` runs the post-Done pass
+  Ctrl+Enter runs after its write: dependent recovery, embed retirement,
+  the Unblocked notice, and the successor picker. It resolves to
+  `{ reopened, retired, recoveryFailures, retirementFailures, successors,
+  successorNotice }` and never throws.
 
 ## Bob Command Mode
 

@@ -404,7 +404,7 @@ test("completeTaskAtCursor reports not-closed when Tasks does not write [x]", as
   assert.equal(editor.getLine(0), "- [ ] #task Brush teeth ^chore");
 });
 
-test("recovery api is frozen at version 2 and recovers without striking references", async () => {
+test("recovery api is frozen at version 3 and recovers without striking references", async () => {
   const plugin = new TaskStatusCyclerPlugin();
   plugin.addCommand = () => {};
   plugin.registerEvent = () => {};
@@ -417,10 +417,12 @@ test("recovery api is frozen at version 2 and recovers without striking referenc
   };
   plugin.onload();
 
-  assert.equal(plugin.api.version, 2);
+  assert.equal(plugin.api.version, 3);
   assert.equal(Object.isFrozen(plugin.api), true);
   assert.equal(typeof plugin.api.recoverBlockedDependents, "function");
   assert.equal(typeof plugin.api.completeTaskAtCursor, "function");
+  assert.equal(typeof plugin.api.completeTaskLineText, "function");
+  assert.equal(typeof plugin.api.finalizeClosedTasks, "function");
 
   const harness = createInMemoryObsidianApp({
     "Daily.md": "## Pomodoros\n- [ ] Focus\n\t- ![[Tasks#^root]]",

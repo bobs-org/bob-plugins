@@ -216,6 +216,27 @@ class TaskStatusCyclerCompletionMixin {
     return true;
   }
 
+  // Cross-plugin Done line rewrite (api v3): the exact local-fallback
+  // bytes for closing `lineText`, with no freshness stamp. Nav's
+  // complete-label writer composes this with its LINKS edit in one
+  // transaction; the post-Done pass stays `finalizeClosedTasks`. Never
+  // throws: a non-task line comes back unchanged.
+  completeTaskLineText(lineText, options = {}) {
+    try {
+      const date =
+        options && typeof options.date === "string" && options.date
+          ? options.date
+          : this.getCompletionDateString();
+      return rewriteTaskLineForLocalFallback(
+        String(lineText || ""),
+        "x",
+        date,
+      );
+    } catch (error) {
+      return String(lineText || "");
+    }
+  }
+
   toggleActiveCheckboxOpenDone(editor, taskStatus = this.getActiveTaskStatus(editor)) {
     if (!this.isOpenDoneTaskStatus(taskStatus)) {
       return false;

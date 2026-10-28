@@ -11729,10 +11729,14 @@ class TaskStatusCyclerPlugin extends Plugin {
     // Cross-plugin surface (plugins never import one another's `main.js`).
     // Keep the shape additive: bump `version` whenever a method is added.
     this.api = Object.freeze({
-      version: 2,
+      version: 3,
       recoverBlockedDependents: (closedIdentities, context) =>
         this.recoverBlockedDependents(closedIdentities, context),
       completeTaskAtCursor: (editor) => this.completeTaskAtCursor(editor),
+      completeTaskLineText: (lineText, options) =>
+        this.completeTaskLineText(lineText, options),
+      finalizeClosedTasks: (closedIdentities, context) =>
+        this.finalizeClosedTasks(closedIdentities, context),
     });
 
     this.addCommand({
@@ -17437,6 +17441,27 @@ class TaskStatusCyclerCompletionMixin {
     return true;
   }
 
+  // Cross-plugin Done line rewrite (api v3): the exact local-fallback
+  // bytes for closing `lineText`, with no freshness stamp. Nav's
+  // complete-label writer composes this with its LINKS edit in one
+  // transaction; the post-Done pass stays `finalizeClosedTasks`. Never
+  // throws: a non-task line comes back unchanged.
+  completeTaskLineText(lineText, options = {}) {
+    try {
+      const date =
+        options && typeof options.date === "string" && options.date
+          ? options.date
+          : this.getCompletionDateString();
+      return rewriteTaskLineForLocalFallback(
+        String(lineText || ""),
+        "x",
+        date,
+      );
+    } catch (error) {
+      return String(lineText || "");
+    }
+  }
+
   toggleActiveCheckboxOpenDone(editor, taskStatus = this.getActiveTaskStatus(editor)) {
     if (!this.isOpenDoneTaskStatus(taskStatus)) {
       return false;
@@ -19336,17 +19361,26 @@ class TaskStatusCyclerEditorEditsMixin {
       return false;
     }
 
-    const nextLineText = rewriteTaskLineForLocalFallback(
-      taskStatus.lineText,
-      nextSymbol,
-      this.getCompletionDateString(),
-      {
-        stampLine: this.isPomodoroLedgerLineInEditor(editor, taskStatus.line)
-          ? null
-          : this.getFreshnessStampLine(),
-        freshDateText: formatLocalDate(),
-      },
-    );
+    // Done shares the api v3 line rewrite so Ctrl+Enter and
+    // complete-label commits close from one byte source. The freshness
+    // stamper refuses closed lines, so no stamp options here is
+    // byte-identical to the stamped fallback above.
+    const nextLineText =
+      nextSymbol === "x"
+        ? this.completeTaskLineText(taskStatus.lineText, {
+            date: this.getCompletionDateString(),
+          })
+        : rewriteTaskLineForLocalFallback(
+            taskStatus.lineText,
+            nextSymbol,
+            this.getCompletionDateString(),
+            {
+              stampLine: this.isPomodoroLedgerLineInEditor(editor, taskStatus.line)
+                ? null
+                : this.getFreshnessStampLine(),
+              freshDateText: formatLocalDate(),
+            },
+          );
     editor.replaceRange(
       nextLineText,
       { line: taskStatus.line, ch: 0 },

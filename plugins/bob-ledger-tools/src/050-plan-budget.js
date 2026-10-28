@@ -38,6 +38,7 @@ function defaultPlanCaps() {
     strict: false,
     exempt: ["PLAN"],
     inventoryLabels: ["LATER", "MISC", "NEW FEATURES", "SASE"],
+    readingTheme: "READ",
   };
 }
 
@@ -114,7 +115,19 @@ function effectivePlanCaps(caps) {
       raw.inventoryLabels,
       defaults.inventoryLabels,
     ),
+    readingTheme: planEffectiveReadingTheme(raw.readingTheme, defaults.readingTheme),
   };
+}
+
+function planEffectiveReadingTheme(value, fallback) {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (value === null || (typeof value === "string" && value.trim().toLowerCase() === "off")) {
+    return null;
+  }
+  const canonical = pomodoroThemeCanonicalName(value);
+  return canonical || fallback;
 }
 
 // Read the `plan:` block out of a parsed config file (snake_case keys, with
@@ -208,6 +221,24 @@ function coercePlanCaps(block) {
       strict = strictValue;
     }
   }
+  const readingThemeValue = pick("reading_theme", "readingTheme");
+  let readingTheme = defaults.readingTheme;
+  if (readingThemeValue !== undefined) {
+    if (typeof readingThemeValue === "string") {
+      if (readingThemeValue.trim().toLowerCase() === "off") {
+        readingTheme = null;
+      } else {
+        const canonical = pomodoroThemeCanonicalName(readingThemeValue);
+        if (!canonical) {
+          invalid = true;
+        } else {
+          readingTheme = canonical;
+        }
+      }
+    } else {
+      invalid = true;
+    }
+  }
   // Unknown keys (including a legacy `max_now`) stay ignored, so an old
   // config loads without error.
   const caps = {
@@ -228,6 +259,7 @@ function coercePlanCaps(block) {
       "inventoryLabels",
       defaults.inventoryLabels,
     ),
+    readingTheme,
   };
   // Like Rust, any invalid value falls back to the full default block.
   if (invalid) {

@@ -180,6 +180,43 @@ mirrors of the hue rule, the journal fold, and the PT7 ranking are pinned by
 `scripts/fixtures/pomodoro_themes/vectors.json`, copied byte-for-byte from
 bob-cli. See the [Pomodoro themes contract](https://bobs-org.github.io/pomodoro-themes/)
 for the shared catalog, hue, and menu rules.
+
+The v1 namespace also exposes synchronous task-theme helpers:
+`suggestFor({ path, line, text? })`, `taskThemeOf(text)`,
+`setTaskTheme(text, name)`, `clearTaskTheme(text)`,
+`planThemeChange(options)`, and `isKnownTheme(key)`. `suggestFor` uses a
+vault-relative `path`, a one-based integer line number, and optional full live
+Markdown text. When `text` is omitted it reads that line only from an open
+editor whose path matches; it returns `null` when the path/line cannot be read
+or no rule suggests a theme. It never substitutes another active note or
+stale Tasks metadata. Suggestions contain the Rust `ThemeRef` shape and
+`source`/`label`; only note suggestions have `from`, and task-field suggestions
+always have `inherited`, including `null`. A repaired field adds
+`repair: "duplicate" | "invalid"` only when a suggestion remains. `from`
+contains the declaring note's path, lowercase stem, `area`/`project` kind,
+root-area hue when available, and the residence-to-declarer path chain.
+Rust-compatible serialized `ThemeRef` values omit `known` when true and omit
+`configured` when the catalog has no configured vocabulary.
+
+`taskThemeOf` returns `{ state: "none" }`,
+`{ state: "set", value, key, fields }`, or
+`{ state: "repair", repair, fields }`; field spans use JavaScript UTF-16
+offsets. The parser accepts both `[theme:: value]` and `(theme:: value)` with
+Rust's spacing and name rules. The two setters return rewritten strings and do
+not write the vault. `planThemeChange({ field, suggestion, inherited,
+ destinationName, exemptKeys, deliberate })` returns `{ action: "none" }`,
+`{ action: "clear" }`, or `{ action: "set", name, key }`. `suggestion` and
+`inherited` may be the corresponding suggestion objects or theme keys. Its
+write rule requires a deliberate choice and a shown suggestion, and clears a
+field when the selected theme matches the inherited one.
+
+`isKnownTheme(key)` is synchronous and read-only. It checks the cached theme
+catalog and today's Pomodoro names, preferring an open daily editor so unsaved
+components count immediately. Hidden names remain known. Suggestion warnings
+such as invalid note defaults are available from the exported pure resolver
+helper for contract tests; `suggestFor` returns only a suggestion or `null`,
+not a command-response envelope. All six additions are additive under
+`themes` v1; the root API remains v3.
 `dashboardCollections` provides `snapshot()` and
 `renderChip(host, options?)` for live PROJECTS/REFERENCES badges.
 

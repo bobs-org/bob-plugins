@@ -336,6 +336,7 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
       strict: true,
       exempt: ["GTD", "ADMIN"],
       inventory_labels: ["LATER"],
+      reading_theme: "deep   work",
     },
   });
   assert.deepEqual(caps, {
@@ -348,6 +349,7 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
     strict: true,
     exempt: ["GTD", "ADMIN"],
     inventoryLabels: ["LATER"],
+    readingTheme: "DEEP WORK",
   });
   assert.deepEqual(
     parsePlanCaps({
@@ -363,6 +365,25 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
     }),
     defaultPlanCaps(),
   );
+});
+
+test("reading theme config defaults to READ, accepts off, and rejects invalid values", () => {
+  assert.equal(defaultPlanCaps().readingTheme, "READ");
+  assert.equal(
+    parsePlanCaps({ plan: { reading_theme: " study  group " } }).readingTheme,
+    "STUDY GROUP",
+  );
+  assert.equal(
+    parsePlanCaps({ plan: { readingTheme: " off " } }).readingTheme,
+    null,
+  );
+  const nullValue = coercePlanCaps({ reading_theme: null });
+  assert.equal(nullValue.invalid, true);
+  assert.equal(nullValue.caps.readingTheme, "READ");
+  const listValue = coercePlanCaps({ readingTheme: ["READ"] });
+  assert.equal(listValue.invalid, true);
+  assert.equal(listValue.caps.readingTheme, "READ");
+  assert.equal(coercePlanCaps({ readingTheme: "BUILD + FIX" }).invalid, true);
 });
 
 function laneTask(overrides = {}) {
@@ -407,6 +428,17 @@ test("loadPlanCaps reads plan: and flags invalid values", () => {
   assert.equal(good.caps.maxLinks, 10);
   assert.equal(good.invalid, false);
   assert.equal(good.configPath, "/cfg/bob/config.yml");
+
+  const badReading = loadPlanCaps({
+    fsModule: {
+      readFileSync: () => JSON.stringify({ plan: { reading_theme: ["READ"] } }),
+    },
+    parseYaml: (text) => JSON.parse(text),
+    Platform: { isDesktopApp: true },
+    configPath: "/cfg/bob/reading-theme.yml",
+  });
+  assert.equal(badReading.invalid, true);
+  assert.equal(badReading.caps.readingTheme, "READ");
 
   const bad = loadPlanCaps({
     fsModule: {

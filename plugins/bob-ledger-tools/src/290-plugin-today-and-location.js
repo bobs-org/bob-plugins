@@ -148,6 +148,7 @@ class BobLedgerToolsTodayLocationMixin {
       detailsSignature,
       idsByPath,
     };
+    this.pomodoroThemeCacheTodayLedger(content, dailyPath);
     const becameReady = !wasReady && this.isTodayCacheReady(clock);
     if (changed || becameReady) {
       try {

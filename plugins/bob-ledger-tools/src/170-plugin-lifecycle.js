@@ -265,22 +265,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // Themes namespace v1: cached history, sync hue/history/
       // near-duplicate mirrors, journal writers. Unavailable on mobile.
       // Additive: api stays v3.
-      themes: Object.freeze({
-        version: 1,
-        available: () => this.apiThemesAvailable(),
-        fetch: () => this.apiThemesFetch(),
-        snapshot: () => this.apiThemesSnapshot(),
-        isConfigured: (key) => this.pomodoroThemeIsConfigured(key),
-        hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
-        componentsOf: (name) => pomodoroThemeComponentsOf(name),
-        historyRows: (options) => this.pomodoroThemeHistoryRows(options),
-        similarTo: (name) => this.pomodoroThemeSimilarTo(name),
-        hide: (name) => this.apiThemesHide(name),
-        unhide: (name) => this.apiThemesUnhide(name),
-        color: (name, hue) => this.apiThemesColor(name, hue),
-        rename: (from, to, options) => this.apiThemesRename(from, to, options),
-        onChange: (callback) => this.onThemesChange(callback),
-      }),
+      themes: this.pomodoroThemesApi(),
       // Work badge tones (workBadges namespace v2 adds the magenta exact-cap
       // tone): shared count-to-limit colors for TODAY, PENDING, NEXT, and READY.
       // Additive: top-level api stays v3. Every member is synchronous

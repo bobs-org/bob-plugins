@@ -20,6 +20,18 @@ test("the task picker drops the paired #ref and prefixes the book", () => {
   );
   assert.deepEqual(displayTexts("- [ ] #task Plain work"), ["Plain work"]);
   assert.deepEqual(displayTexts("- [ ] #task #REF Loud"), ["📖 Loud"]);
+  assert.deepEqual(
+    displayTexts("- [ ] #task Legacy reference ^ref-paper-v2"),
+    ["📖 Legacy reference"],
+  );
+  assert.deepEqual(
+    displayTexts("- [ ] #task Legacy reference ^REF"),
+    ["📖 Legacy reference"],
+  );
+  assert.deepEqual(
+    displayTexts("- [ ] #task Ordinary follow-up ^follow-up"),
+    ["Ordinary follow-up"],
+  );
   assert.deepEqual(displayTexts("- [ ] #task   #ref Extra spaces"), [
     "📖 Extra spaces",
   ]);

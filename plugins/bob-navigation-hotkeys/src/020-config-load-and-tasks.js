@@ -371,7 +371,8 @@ function cleanTaskDisplayText(line) {
     .replace(BULLET_PROPERTY_TRAILING_BLOCK_ID_RE, "")
     .replace(BULLET_PROPERTY_TASKS_INLINE_FIELD_RE, "")
     .replace(BULLET_PROPERTY_TASKS_EMOJI_DATE_RE, "");
-  const isRefTask = REF_AFTER_TASK_RE.test(body);
+  const isRefTask =
+    REF_AFTER_TASK_RE.test(body) || REF_TASK_BLOCK_ID_RE.test(String(line || ""));
   body = stripTaskTag(body)
     .replace(/[ \t]+([,.;:!?])/g, "$1")
     .replace(/[ \t]{2,}/g, " ")

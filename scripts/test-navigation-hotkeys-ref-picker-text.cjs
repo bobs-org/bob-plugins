@@ -43,6 +43,18 @@ test("reading tasks read with the book prefix, plain tasks unchanged", () => {
     "📖 Titled",
   );
   assert.equal(
+    cleanTaskDisplayText("- [ ] #task Legacy reference ^ref-paper-v2"),
+    "📖 Legacy reference",
+  );
+  assert.equal(
+    cleanTaskDisplayText("- [ ] #task Legacy reference ^REF"),
+    "📖 Legacy reference",
+  );
+  assert.equal(
+    cleanTaskDisplayText("- [ ] #task Ordinary follow-up ^follow-up"),
+    "Ordinary follow-up",
+  );
+  assert.equal(
     cleanTaskDisplayText(
       "- [ ] #task #ref Dated [priority:: high] [created:: 2026-10-07]",
     ),

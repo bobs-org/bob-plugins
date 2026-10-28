@@ -190,7 +190,8 @@ function cleanTaskDisplayText(lineText) {
     .replace(TRAILING_BLOCK_ID_RE, "")
     .replace(TASKS_INLINE_FIELD_RE, "")
     .replace(TASKS_EMOJI_DATE_RE, "");
-  const isRefTask = REF_AFTER_TASK_RE.test(text);
+  const isRefTask =
+    REF_AFTER_TASK_RE.test(text) || REF_TASK_BLOCK_ID_RE.test(String(lineText || ""));
   text = stripInternalTaskTags(text)
     .replace(/[ \t]+([,.;:!?])/g, "$1")
     .replace(/[ \t]{2,}/g, " ")

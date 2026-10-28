@@ -86,6 +86,15 @@ const {
   pomodoroThemesDecodeReport,
   pomodoroThemesDecodeWrite,
   pomodoroThemeNameOffsetInLine,
+  pomodoroThemeNormalizeKey,
+  pomodoroThemeCanonicalName,
+  pomodoroThemeInlineFields,
+  pomodoroThemeTaskFieldState,
+  pomodoroThemeSetTaskTheme,
+  pomodoroThemeClearTaskTheme,
+  pomodoroThemePlanChange,
+  pomodoroThemeLedgerNames,
+  pomodoroThemeSuggestWithDiagnostics,
 } = LedgerToolsPlugin.helpers;
 
 const fixturePath = path.join(
@@ -417,4 +426,356 @@ test("theme name offsets anchor at the em dash of a ledger line", () => {
   assert.equal("- [ ] (08:00-08:25) — BOB + DECKS".slice(slot.nameStart, slot.nameEnd), "BOB + DECKS");
   assert.equal(pomodoroThemeNameOffsetInLine("- [ ] ()"), null);
   assert.equal(pomodoroThemeNameOffsetInLine("  - [ ] () — INDENTED"), null);
+});
+
+function obsidianYamlScalar(raw) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return null;
+  }
+  if (text.startsWith("[[") && text.endsWith("]]")) {
+    return [[text.slice(2, -2)]];
+  }
+  if (text.startsWith("[") && text.endsWith("]")) {
+    return text
+      .slice(1, -1)
+      .split(",")
+      .map((item) => obsidianYamlScalar(item));
+  }
+  if (text.startsWith('"') && text.endsWith('"')) {
+    return JSON.parse(text);
+  }
+  if (text.startsWith("'") && text.endsWith("'")) {
+    return text.slice(1, -1).replace(/''/g, "'");
+  }
+  if (/^(?:true|false)$/i.test(text)) {
+    return text.toLowerCase() === "true";
+  }
+  if (/^-?\d+(?:\.\d+)?$/.test(text)) {
+    return Number(text);
+  }
+  return text;
+}
+
+function obsidianFrontmatter(markdown) {
+  const lines = String(markdown || "").split("\n");
+  if (String(lines[0] || "").trimEnd() !== "---") {
+    return {};
+  }
+  let close = 1;
+  while (close < lines.length && String(lines[close] || "").trimEnd() !== "---") {
+    close += 1;
+  }
+  const yamlLines = lines.slice(1, close);
+  const frontmatter = {};
+  for (let index = 0; index < yamlLines.length; index += 1) {
+    const match = /^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t]*(.*))$/.exec(yamlLines[index]);
+    if (!match) {
+      continue;
+    }
+    const key = match[1];
+    const raw = match[2];
+    if (raw) {
+      frontmatter[key] = obsidianYamlScalar(raw);
+      continue;
+    }
+    const values = [];
+    let next = index + 1;
+    while (next < yamlLines.length) {
+      const child = /^[ \t]*-[ \t]*(.*)$/.exec(yamlLines[next]);
+      if (child) {
+        values.push(obsidianYamlScalar(child[1]));
+        next += 1;
+        continue;
+      }
+      if (!String(yamlLines[next] || "").trim()) {
+        next += 1;
+        continue;
+      }
+      break;
+    }
+    frontmatter[key] = values.length > 0 ? values : null;
+  }
+  return frontmatter;
+}
+
+function createThemeMiniVault(notes) {
+  const files = new Map();
+  const caches = new Map();
+  for (const [pathName, markdown] of Object.entries(notes || {})) {
+    const file = { path: pathName };
+    files.set(pathName, file);
+    caches.set(pathName, { frontmatter: obsidianFrontmatter(markdown) });
+  }
+  const normalizeTarget = (target) => {
+    const value = String(target || "").split("|")[0].split("#")[0].trim();
+    return value.replace(/\.md$/i, "").replace(/^\/+/, "");
+  };
+  const metadataCache = {
+    getFileCache(file) {
+      return file && caches.get(file.path) || null;
+    },
+    getCache(file) {
+      return file && caches.get(file.path) || null;
+    },
+    getFirstLinkpathDest(target, sourcePath) {
+      const value = normalizeTarget(target);
+      if (!value) {
+        return null;
+      }
+      const withExtension = /\.md$/i.test(value) ? value : `${value}.md`;
+      if (files.has(withExtension)) {
+        return files.get(withExtension);
+      }
+      const sourceDir = String(sourcePath || "").split("/").slice(0, -1).join("/");
+      const relative = sourceDir ? `${sourceDir}/${withExtension}` : withExtension;
+      if (files.has(relative)) {
+        return files.get(relative);
+      }
+      const basename = withExtension.split("/").pop();
+      const matches = [...files.entries()].filter(([pathName]) => pathName.split("/").pop() === basename);
+      return matches.length === 1 ? matches[0][1] : null;
+    },
+  };
+  const vault = {
+    getAbstractFileByPath(pathName) {
+      return files.get(pathName) || null;
+    },
+  };
+  return { files, caches, metadataCache, vault };
+}
+
+function catalogForSuggest(live = []) {
+  const names = new Map([
+    ["write", "WRITE"],
+    ["build", "BUILD"],
+    ["read", "READ"],
+    ["fix", "FIX"],
+    ["plan", "PLAN"],
+    ["chore", "CHORE"],
+  ]);
+  const known = new Set(names.keys());
+  for (const item of live) {
+    const key = pomodoroThemeNormalizeKey(item);
+    if (key) {
+      known.add(key);
+      if (!names.has(key)) {
+        names.set(key, key.replace(/[a-z]/g, (letter) => letter.toUpperCase()));
+      }
+    }
+  }
+  return { names, known };
+}
+
+function assertThemeSuggestion(id, expected, got) {
+  if (expected == null) {
+    assert.equal(got, null, id);
+    return;
+  }
+  assert.ok(got, `${id}: expected a suggestion`);
+  assert.equal(got.source, expected.source, id);
+  assert.equal(got.label, expected.label, id);
+  assert.equal(got.theme.key, expected.theme_key, id);
+  assert.equal(got.theme.name, expected.theme_name, id);
+  assert.equal(got.theme.known !== false, expected.known, id);
+  assert.equal(got.repair || null, expected.repair || null, id);
+  if (expected.from) {
+    assert.ok(got.from, `${id}: expected note origin`);
+    for (const key of ["path", "stem", "kind"]) {
+      assert.equal(got.from[key], expected.from[key], `${id}: from.${key}`);
+    }
+    assert.deepEqual(got.from.chain, expected.from.chain, `${id}: from.chain`);
+  } else {
+    assert.equal(Object.hasOwn(got, "from"), false, `${id}: unexpected from`);
+  }
+  if (expected.inherited) {
+    assert.ok(got.inherited, `${id}: expected inherited suggestion`);
+    assertThemeSuggestion(id + ".inherited", expected.inherited, got.inherited);
+  } else if (got.source === "task") {
+    assert.equal(Object.hasOwn(got, "inherited"), true, `${id}: task carries explicit inherited null`);
+    assert.equal(got.inherited, null, `${id}: inherited is null`);
+  } else {
+    assert.equal(Object.hasOwn(got, "inherited"), false, `${id}: no inherited member`);
+  }
+}
+
+test("theme task-field vectors execute parse, byte-preserving setters, and clear", () => {
+  assert.ok(fixture.task_field.length > 0);
+  for (const item of fixture.task_field) {
+    if (item.rust_only) {
+      continue;
+    }
+    if (item.op === "parse") {
+      const result = pomodoroThemeTaskFieldState(item.line);
+      assert.equal(result.state, item.state, `task_field: ${item.id}`);
+      if (item.state === "set") {
+        assert.equal(result.value, item.value, `task_field: ${item.id}`);
+      }
+      if (item.state === "repair") {
+        assert.equal(result.repair, item.repair, `task_field: ${item.id}`);
+      }
+    } else if (item.op === "set") {
+      assert.equal(
+        pomodoroThemeSetTaskTheme(item.before, item.name),
+        item.after,
+        `task_field: ${item.id}`,
+      );
+    } else if (item.op === "clear") {
+      assert.equal(
+        pomodoroThemeClearTaskTheme(item.before),
+        item.after,
+        `task_field: ${item.id}`,
+      );
+    } else {
+      assert.fail(`unknown task_field op ${item.op}`);
+    }
+  }
+});
+
+test("theme write-rule vectors execute the deliberate-choice decision", () => {
+  assert.ok(fixture.write_rule.length > 0);
+  for (const item of fixture.write_rule) {
+    if (item.rust_only) {
+      continue;
+    }
+    const field =
+      item.field === "none"
+        ? { state: "none" }
+        : item.field === "set"
+          ? { state: "set", key: item.field_key }
+          : { state: "repair", repair: "invalid" };
+    const change = pomodoroThemePlanChange({
+      field,
+      suggestion: item.suggestion,
+      inherited: item.inherited,
+      destinationName: item.destination,
+      exemptKeys: item.exempt,
+      deliberate: item.deliberate,
+    });
+    assert.equal(change.action, item.expected, `write_rule: ${item.id}`);
+    if (item.expected === "set") {
+      assert.equal(change.name, item.name, `write_rule: ${item.id}`);
+    }
+  }
+});
+
+test("theme suggestion vectors execute Rust precedence, origins, diagnostics, and live names", () => {
+  assert.ok(fixture.suggest.cases.length > 0);
+  assert.deepEqual(obsidianFrontmatter(fixture.suggest.notes["unindented_list.md"]).theme, ["WRITE"]);
+  const miniVault = createThemeMiniVault(fixture.suggest.notes);
+  for (const item of fixture.suggest.cases) {
+    const config = item.config
+      ? { reading_theme: item.config.reading_theme, exempt: item.config.exempt }
+      : { readingTheme: "READ", exempt: ["PLAN"] };
+    const result = pomodoroThemeSuggestWithDiagnostics({
+      path: item.residence,
+      line: item.line || "",
+      newTask: item.new_task === true,
+      dailyPath: "2026/20261028.md",
+      metadataCache: miniVault.metadataCache,
+      vault: miniVault.vault,
+      catalog: catalogForSuggest(item.live || []),
+      config,
+    });
+    assertThemeSuggestion(item.id, item.expected, result.suggestion);
+    assert.deepEqual(
+      result.warnings.map((warning) => [warning.code, warning.path || null]),
+      (item.warnings || []).map((warning) => [warning.code, warning.path || null]),
+      `suggest warnings: ${item.id}; result=${JSON.stringify(result)}`,
+    );
+  }
+});
+
+test("task-theme API is additive, synchronous, path-bound, and read-only", () => {
+  const todayPath = "2026/20261028.md";
+  const todayText = "## Pomodoros\n- [ ] () — UNSAVED\n";
+  const taskText = "- [ ] Write the tests ^write-tests";
+  const miniVault = createThemeMiniVault({
+    "Task.md": "---\ntype: [[project]]\ntheme: BUILD\n---\n",
+    "NoTheme.md": "---\ntype: [[note]]\n---\n",
+  });
+  const leaves = [
+    { view: { file: { path: "Other.md" }, editor: { getValue: () => "- [ ] Wrong active file" } } },
+    { view: { file: { path: todayPath }, editor: { getValue: () => todayText } } },
+    { view: { file: { path: "Task.md" }, editor: { getValue: () => "- [ ] Current editor [theme:: FIX] ^id" } } },
+    { view: { file: { path: "NoTheme.md" }, editor: { getValue: () => "- [ ] Explicit [theme:: CUSTOM] ^id" } } },
+  ];
+  const plugin = new LedgerToolsPlugin({
+    metadataCache: miniVault.metadataCache,
+    vault: miniVault.vault,
+    workspace: { getLeavesOfType: () => leaves },
+  });
+  plugin.currentTodayDailyPath = () => todayPath;
+  plugin.pomodoroThemesCache = {
+    report: {
+      ...LedgerToolsPlugin.helpers.pomodoroThemesEmptyReport(),
+      themes: [{ key: "hidden", name: "HIDDEN", hidden: true }],
+      configured_themes: [],
+    },
+  };
+  plugin.pomodoroThemeHueFor = () => ({ hue: "blue", hue_source: "area", configured: null });
+  let spawned = 0;
+  let writes = 0;
+  plugin.themesSpawnFetch = () => {
+    spawned += 1;
+  };
+  miniVault.vault.modify = () => {
+    writes += 1;
+  };
+
+  const api = plugin.pomodoroThemesApi();
+  assert.equal(Object.isFrozen(api), true);
+  for (const member of [
+    "available", "fetch", "snapshot", "isConfigured", "hueFor", "componentsOf",
+    "historyRows", "similarTo", "hide", "unhide", "color", "rename", "onChange",
+    "suggestFor", "taskThemeOf", "setTaskTheme", "clearTaskTheme", "planThemeChange", "isKnownTheme",
+  ]) {
+    assert.equal(typeof api[member], "function", `themes.${member} is present`);
+  }
+  assert.equal(api.isKnownTheme("HIDDEN"), true, "hidden catalog entries stay known");
+  assert.equal(api.isKnownTheme("UNSAVED"), true, "open daily editor names are known");
+  const knownThemeSuggestion = api.suggestFor({
+    path: "Task.md",
+    line: 1,
+    text: "- [ ] Explicit [theme:: UNSAVED] ^unsaved-theme",
+  });
+  assert.equal(knownThemeSuggestion.theme.key, "unsaved");
+  assert.equal(Object.hasOwn(knownThemeSuggestion.theme, "known"), false,
+    "Rust ThemeRef omits known=true");
+  assert.equal(Object.hasOwn(knownThemeSuggestion.theme, "configured"), false,
+    "Rust ThemeRef omits an unavailable configured flag");
+  const liveSuggestion = api.suggestFor({ path: "Task.md", line: 1, text: taskText });
+  assert.equal(liveSuggestion.source, "note");
+  assert.equal(liveSuggestion.theme.name, "BUILD");
+  assert.equal(Object.hasOwn(liveSuggestion.theme, "known"), true);
+  assert.equal(liveSuggestion.theme.known, false, "catalog-only spelling stays explicitly unknown");
+
+  const editorSuggestion = api.suggestFor({ path: "Task.md", line: 1 });
+  assert.equal(editorSuggestion.source, "task");
+  assert.equal(editorSuggestion.theme.key, "fix");
+  assert.equal(editorSuggestion.inherited.theme.key, "build");
+  const nullInherited = api.suggestFor({ path: "NoTheme.md", line: 1 });
+  assert.equal(nullInherited.source, "task");
+  assert.equal(Object.hasOwn(nullInherited, "inherited"), true);
+  assert.equal(nullInherited.inherited, null);
+
+  assert.equal(api.suggestFor({ path: "Task.md", line: 3 }), null);
+  assert.equal(api.suggestFor({ path: "Missing.md", line: 1, text: "- [ ] Plain task" }), null);
+  assert.equal(api.taskThemeOf("- [ ] X (theme ::  WRITE )").value, "WRITE");
+  assert.equal(api.setTaskTheme("- [ ] 😀 Café [fresh:: 2026-10-28]", "WRITE"),
+    "- [ ] 😀 Café [theme:: WRITE] [fresh:: 2026-10-28]");
+  assert.equal(api.clearTaskTheme("- [ ] Café [theme:: WRITE] ^id"), "- [ ] Café ^id");
+  assert.deepEqual(
+    api.planThemeChange({
+      field: api.taskThemeOf("- [ ] Task"),
+      suggestion: liveSuggestion,
+      inherited: liveSuggestion,
+      destinationName: "BUILD",
+      exemptKeys: ["PLAN"],
+      deliberate: true,
+    }),
+    { action: "none" },
+  );
+  assert.equal(spawned, 0, "synchronous suggestions do not fetch history");
+  assert.equal(writes, 0, "field helpers do not mutate the vault");
 });

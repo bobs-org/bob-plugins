@@ -1678,3 +1678,224 @@ test("one-off labels hide through bob only after the relation commit succeeds", 
   assert.match(currentEditor.getValue(), /prompted the purchase of \[\[Other#\^other\]\]/);
   assert.deepEqual(hideCalls, [["prompted the purchase of", { allowUnused: true }]]);
 });
+
+// LG16: `~` anywhere in a Links / Linked-from filter flips the stage in
+// place, keeping the filter text and caret. The typed `~` never enters the
+// filter, repeats are ignored, and counted sessions refuse the flip.
+function makeFlipPicker(direction, query, extra = {}) {
+  const notes = {
+    "Current.md": "- [ ] #task Current owner ^owner",
+    "Other.md": "- [ ] #task Footnote task ^foot\n- [ ] #task Unrelated ^other",
+  };
+  const harness = makePlugin(notes);
+  const editor = new TestEditor(notes["Current.md"]);
+  harness.openEditors.set("Current.md", editor);
+  harness.openEditors.set("Other.md", new TestEditor(notes["Other.md"]));
+  const picker = Object.create(helpers.BulletPropertyPickerModal.prototype);
+  picker.plugin = harness.plugin;
+  picker.app = harness.plugin.app;
+  picker.filePath = "Current.md";
+  picker.editor = editor;
+  picker.cursor = { line: 0 };
+  picker.lineText = String(notes["Current.md"]).split(/\r?\n/)[0];
+  picker.taskSession = extra.taskSession || null;
+  picker.linkSession = null;
+  picker.stage = "value";
+  picker.relationStage = true;
+  picker.relationStageDirection = direction;
+  picker.selectedPropertyItem = {
+    property: { name: "linksTo", values: "local_task_id" },
+  };
+  picker.selectedIndex = 0;
+  picker.markedLines = new Set(extra.marks || []);
+  picker.taskItemsByLine = new Map();
+  picker.items = [];
+  picker.visibleItems = [];
+  picker.opening = false;
+  picker.pendingBatch = null;
+  const caret = extra.caret === undefined ? String(query).length : extra.caret;
+  picker.inputEl = {
+    value: query,
+    selectionStart: caret,
+    selectionEnd: caret,
+    setSelectionRange(start, end) {
+      this.selectionStart = start;
+      this.selectionEnd = end;
+    },
+    setAttribute() {},
+  };
+  return { harness, picker, editor };
+}
+
+function tildeKeyEvent(overrides = {}) {
+  let prevented = false;
+  let stopped = false;
+  return {
+    event: {
+      key: "~",
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      shiftKey: true,
+      isComposing: false,
+      keyCode: 0,
+      repeat: false,
+      target: null,
+      preventDefault() {
+        prevented = true;
+      },
+      stopPropagation() {
+        stopped = true;
+      },
+      ...overrides,
+    },
+    get prevented() {
+      return prevented;
+    },
+    get stopped() {
+      return stopped;
+    },
+  };
+}
+
+test("LG16: ~ flips Links to Linked from in place, keeping the filter", () => {
+  const { picker } = makeFlipPicker("to", "foot");
+  picker.showRelationStage("to");
+  assert.equal(picker.relationStageDirection, "to");
+  const flipped = picker.flipRelationStageDirection();
+  assert.equal(flipped, true);
+  assert.equal(picker.relationStageDirection, "from");
+  assert.match(picker.title, /Linked from/);
+  assert.equal(picker.inputEl.value, "foot");
+  const texts = picker.items.map((item) => item.searchText || "");
+  assert.ok(texts.length > 0);
+  assert.ok(texts.every((text) => text.toLowerCase().includes("foot")));
+  assert.equal(picker.markedLines.size, 0);
+  assert.equal(picker.selectedIndex, 0);
+});
+
+test("LG16: mid-query caret survives the flip and a second ~ flips back", () => {
+  const { picker } = makeFlipPicker("to", "foot", { caret: 2 });
+  picker.showRelationStage("to");
+  picker.flipRelationStageDirection();
+  assert.equal(picker.relationStageDirection, "from");
+  assert.equal(picker.inputEl.value, "foot");
+  assert.equal(picker.inputEl.selectionStart, 2);
+  assert.equal(picker.inputEl.selectionEnd, 2);
+  picker.flipRelationStageDirection();
+  assert.equal(picker.relationStageDirection, "to");
+  assert.equal(picker.inputEl.value, "foot");
+});
+
+test("LG16: a ~ keydown flips through handleKeydown and never types", () => {
+  const { picker } = makeFlipPicker("to", "foot");
+  picker.showRelationStage("to");
+  const box = tildeKeyEvent();
+  box.event.target = picker.inputEl;
+  picker.handleKeydown(box.event);
+  assert.equal(box.prevented, true);
+  assert.equal(picker.relationStageDirection, "from");
+  assert.equal(picker.inputEl.value, "foot");
+});
+
+test("LG16: counted sessions refuse the flip to Linked from", () => {
+  notices.length = 0;
+  const { picker } = makeFlipPicker("to", "foot", {
+    taskSession: {
+      explicit: true,
+      targets: [{ line: 0 }, { line: 1 }],
+    },
+    marks: ["Current.md\x000"],
+  });
+  picker.showRelationStage("to");
+  picker.markedLines = new Set(["Current.md\x000"]);
+  const before = picker.inputEl.value;
+  const flipped = picker.flipRelationStageDirection();
+  assert.equal(flipped, false);
+  assert.equal(picker.relationStageDirection, "to");
+  assert.equal(picker.inputEl.value, before);
+  assert.equal(picker.markedLines.size, 1);
+  assert.ok(notices.some((message) => /Linked from needs a single task/.test(message)));
+});
+
+test("LG16: modified, composing, repeat, and busy ~ keydowns do not flip", () => {
+  for (const modifiers of [
+    { ctrlKey: true },
+    { metaKey: true },
+    { altKey: true },
+  ]) {
+    const { picker } = makeFlipPicker("to", "foot");
+    picker.showRelationStage("to");
+    const { event } = tildeKeyEvent(modifiers);
+    picker.handleKeydown(event);
+    assert.equal(picker.relationStageDirection, "to");
+    assert.equal(picker.inputEl.value, "foot");
+  }
+  for (const inert of [{ isComposing: true }, { keyCode: 229 }]) {
+    const { picker } = makeFlipPicker("to", "foot");
+    picker.showRelationStage("to");
+    const box = tildeKeyEvent(inert);
+    picker.handleKeydown(box.event);
+    assert.equal(picker.relationStageDirection, "to");
+    assert.equal(box.prevented, false);
+  }
+  {
+    const { picker } = makeFlipPicker("to", "foot");
+    picker.showRelationStage("to");
+    const box = tildeKeyEvent({ repeat: true });
+    picker.handleKeydown(box.event);
+    assert.equal(box.prevented, true);
+    assert.equal(picker.relationStageDirection, "to");
+    assert.equal(picker.inputEl.value, "foot");
+  }
+  {
+    const { picker } = makeFlipPicker("to", "foot");
+    picker.showRelationStage("to");
+    picker.opening = true;
+    const box = tildeKeyEvent();
+    picker.handleKeydown(box.event);
+    assert.equal(picker.relationStageDirection, "to");
+  }
+});
+
+test("LG16: ~ in the relation-label stage is not intercepted", () => {
+  const { picker } = makeFlipPicker("to", "foot");
+  picker.showRelationStage("to");
+  picker.stage = "relation-label";
+  picker.handleRelationLabelKeydown = () => false;
+  const box = tildeKeyEvent();
+  picker.handleKeydown(box.event);
+  assert.equal(box.prevented, false);
+  assert.equal(picker.relationStageDirection, "to");
+});
+
+test("LG16: a stale refresh for the old direction never replaces the new stage", () => {
+  const { picker } = makeFlipPicker("to", "");
+  picker.showRelationStage("to");
+  const seed = picker.relationStageSeed;
+  picker.flipRelationStageDirection();
+  assert.notEqual(picker.relationStageSeed, seed);
+  const stale = { ...picker.vaultStage, refreshOf: seed };
+  picker.applyVaultStageItems(stale);
+  assert.notEqual(picker.vaultStage, stale);
+  assert.equal(picker.relationStageDirection, "from");
+});
+
+test("LG16: footer offers ~ flip direction in single sessions only", () => {
+  const single = makeFlipPicker("to", "").picker;
+  single.showRelationStage("to");
+  assert.ok(
+    single
+      .getRelationStageFooterHints()
+      .some((hint) => hint.keys.includes("~") && /flip direction/.test(hint.label)),
+  );
+  const counted = makeFlipPicker("to", "", {
+    taskSession: { explicit: true, targets: [{ line: 0 }] },
+  }).picker;
+  counted.showRelationStage("to");
+  assert.ok(
+    !counted
+      .getRelationStageFooterHints()
+      .some((hint) => hint.keys.includes("~")),
+  );
+});

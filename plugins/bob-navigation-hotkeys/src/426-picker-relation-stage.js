@@ -34,7 +34,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     return [this.cursor.line];
   }
 
-  showRelationStage(direction = "to") {
+  showRelationStage(direction = "to", options = {}) {
     this.stage = "value";
     this.blocksStage = false;
     this.relationStage = true;
@@ -45,6 +45,9 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.pendingRelation = null;
     this.clearPendingBatch();
     this.selectedIndex = 0;
+    const keepQuery = Boolean(options && options.keepQuery);
+    const initialQuery =
+      keepQuery && typeof this.getQuery === "function" ? this.getQuery() : "";
     const parentLines = this.relationStageSourceLines();
     let stage = null;
     try {
@@ -64,7 +67,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationStageSeed = stage;
     this.vaultStage = stage;
     const items = this.vaultStage
-      ? planRelationStageItemsFromVault(this.vaultStage, "")
+      ? planRelationStageItemsFromVault(this.vaultStage, initialQuery)
       : [];
     this.resetLocalTaskMarks(items);
     this.applyOptions(this.relationStageListOptions());
@@ -79,7 +82,11 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       }
     }
     if (this.resultsEl) {
-      this.renderAll({ clearQuery: true });
+      if (keepQuery) {
+        this.renderAll({});
+      } else {
+        this.renderAll({ clearQuery: true });
+      }
     }
     this.applyTaskCardChrome({ wide: Boolean(this.vaultStage) });
     this.ensureRelationConsequenceStrip();
@@ -103,6 +110,31 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
 
   showLinkedFromStage() {
     return this.showRelationStage("from");
+  }
+
+  flipRelationStageDirection() {
+    const next = this.relationStageDirection === "from" ? "to" : "from";
+    if (next === "from" && this.taskSession && this.taskSession.type !== "single") {
+      new Notice("Linked from needs a single task");
+      return false;
+    }
+    const field = this.inputEl || {};
+    const value = String(field.value || "");
+    const start = typeof field.selectionStart === "number" ? field.selectionStart : null;
+    const end = typeof field.selectionEnd === "number" ? field.selectionEnd : null;
+    this.showRelationStage(next, { keepQuery: true });
+    if (this.inputEl) {
+      this.inputEl.value = value;
+      if (start !== null && end !== null) {
+        try {
+          this.inputEl.setSelectionRange(start, end);
+        } catch (_restoreError) {
+          // Best effort: the restored value is what matters for filtering.
+        }
+      }
+    }
+    if (this.resultsEl && typeof this.renderResults === "function") this.renderResults();
+    return true;
   }
 
   relationStageListOptions() {
@@ -147,13 +179,17 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     } else if (item && item.stageSection === "current") {
       verb = this.isLinkedFromStage() ? "remove source" : "unlink";
     }
-    return [
+    const hints = [
       { keys: ["↑", "↓"], label: "navigate" },
       { keys: ["⇥"], label: "mark" },
       { keys: ["↵"], label: verb },
       { keys: ["⇧↵"], label: "with a relation" },
-      { keys: ["esc"], label: "dismiss" },
     ];
+    if (!this.taskSession || this.taskSession.type === "single") {
+      hints.push({ keys: ["~"], label: "flip direction" });
+    }
+    hints.push({ keys: ["esc"], label: "dismiss" });
+    return hints;
   }
 
   getRelationStageSubtitle(_visibleItems, _allItems) {

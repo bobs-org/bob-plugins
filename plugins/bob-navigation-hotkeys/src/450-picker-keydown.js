@@ -71,6 +71,31 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         });
       return;
     }
+    // `~` anywhere in the Links / Linked-from filter flips the stage in
+    // place (LG16). The typed tilde never enters the filter; repeats are
+    // consumed without flipping. The relation-label stage and the block-ID
+    // prompt are other stages and are not intercepted.
+    if (
+      this.relationStage &&
+      this.stage === "value" &&
+      event &&
+      event.key === "~" &&
+      event.ctrlKey !== true &&
+      event.metaKey !== true &&
+      event.altKey !== true &&
+      event.isComposing !== true &&
+      event.keyCode !== 229
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat === true) {
+        return;
+      }
+      if (!this.opening && typeof this.flipRelationStageDirection === "function") {
+        this.flipRelationStageDirection();
+      }
+      return;
+    }
     // Ctrl+[ closes from every stage, including a focused date, filter,
     // reason, or Work summary field. Closing discards uncommitted state and
     // writes nothing, exactly as Escape does.

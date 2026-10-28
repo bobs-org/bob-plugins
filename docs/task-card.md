@@ -41,8 +41,8 @@ matching stage directly.
 | `Enter` | Open the selected action; Schedule is the default. |
 | `b` | Open Blocked by (Depends on). |
 | `⇧B` | Open Blocks (reverse Depends on). |
-| `l` | Open Links to (task relations). |
-| `⇧L` | Open Linked from (task relations). |
+| `l` | Open Links to (task relations); in its filter, `~` flips direction. |
+| `⇧L` | Open Linked from (task relations); in its filter, `~` flips direction. |
 | `f` | Open Review every (Refresh). |
 | `x` | Open the cancel-reason stage; the key alone never cancels. |
 | `Alt+N` | Commit to Next or release to Ready. |

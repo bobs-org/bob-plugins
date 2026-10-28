@@ -48,7 +48,10 @@ CURRENT holds the outgoing links with label pills in authored order,
 RESULTS holds open tasks, and CLOSED holds closed tasks then `done/`
 archives. `↵` links (or unlinks on CURRENT), `⇧↵` opens the relation field
 (or relabels on CURRENT), `⇥` marks several, and id-less targets run the
-block-ID prompt once on apply. The relation field offers suggestions from
+block-ID prompt once on apply. Typing `~` anywhere in the Links /
+Linked-from filter flips the stage in place, keeping the filter text and
+caret while clearing Tab marks; counted sessions refuse the flip to Linked
+from with `Linked from needs a single task`. The relation field offers suggestions from
 the live index with a live `S — ‹label› → T` sentence; an empty field
 commits a plain link. Same-note writes share one undo entry; cross-note
 mirrors follow best-effort with a `· 🪢 LINKED FROM not updated` suffix when

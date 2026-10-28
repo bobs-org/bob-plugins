@@ -76543,10 +76543,25 @@ class BobNavigationHotkeysRelationEditMixin {
         }
         }
 
+        const closeSource = relationCloseSourceForFold(
+          contentOf(source.path), sourceLine, liveSource, sourceBlockId,
+          Boolean((policySource && policySource.cancels && cancelRefusals.length === 0) ||
+            (completeSource && completeSource.completes)),
+        );
+        if (!closeSource) return refuse(stale, stale, { stale: true });
+        const foldSource = closeSource.source;
+        const resolvedLine = closeSource.line;
+        const foldCompleteSource = completeSource
+          ? Object.freeze({
+              ...completeSource,
+              blockId: foldSource.blockId || null,
+            })
+          : completeSource;
+
         const cancelRowsBefore = cancelledNoticeRows.length;
         const folded = applyComposedRelationSourceCancel({
           policySource, cancelRefusals, content: contentOf(source.path), source,
-          liveSource, sourceLine, consumed, cancelEdges, cancelLabels,
+          liveSource: foldSource, sourceLine: resolvedLine, consumed, cancelEdges, cancelLabels,
           cancelTrigger, cancelDate, liveAdd, liveRelabel, liveRemove, original,
           stageWrite, cancelledIdentities, cancelledNoticeRows, consumedLinesByPath,
         });
@@ -76562,10 +76577,10 @@ class BobNavigationHotkeysRelationEditMixin {
         if (completeSource && completeSource.completes) {
           const completeFold = foldRelationCompleteLine(
             contentOf(source.path),
-            completeSource,
+            foldCompleteSource,
             cyclerApi,
             completeDate,
-            sourceLine,
+            resolvedLine,
           );
           if (!completeFold.ok) {
             return refuse("relation_complete_write_failed", null, {
@@ -77336,6 +77351,54 @@ function remapConsumedRelationCancelLines(consumedLines, insertAt, insertCount) 
     next.add(line >= insertAt ? line + insertCount : line);
   }
   return next;
+}
+
+function resolveRelationCloseSource(content, sourceLine, liveSource, sourceBlockId) {
+  const lines = String(content || "").split(/\r?\n/);
+  const blockId = normalizeBulletPropertyValue(
+    sourceBlockId || (liveSource && liveSource.blockId) || "",
+  );
+  let line = Math.floor(numericOrDefault(sourceLine, NaN));
+  if (blockId) {
+    const found = findTaskLineByTrailingBlockId(lines, blockId);
+    if (found === null) return null;
+    line = found;
+  }
+  if (!Number.isInteger(line) || line < 0 || line >= lines.length) return null;
+  return Object.freeze({
+    ...liveSource,
+    line,
+    blockId: blockId || getTrailingBlockId(lines[line]) || null,
+    rawLine: String(lines[line] || ""),
+  });
+}
+
+function relationCloseSourceLineMatches(content, source) {
+  const lines = String(content || "").split(/\r?\n/);
+  const line = Math.floor(numericOrDefault(source && source.line, NaN));
+  if (
+    !Number.isInteger(line) ||
+    line < 0 ||
+    line >= lines.length ||
+    !isObsidianTaskAtLine(content, line)
+  ) {
+    return false;
+  }
+  const expectedBlockId = normalizeBulletPropertyValue(
+    (source && source.blockId) || "",
+  );
+  return !expectedBlockId || getTrailingBlockId(lines[line]) === expectedBlockId;
+}
+
+function relationCloseSourceForFold(content, sourceLine, liveSource, sourceBlockId, closes) {
+  const resolved = resolveRelationCloseSource(content, sourceLine, liveSource, sourceBlockId);
+  if (closes && (!resolved || !relationCloseSourceLineMatches(content, resolved))) {
+    return null;
+  }
+  return Object.freeze({
+    source: resolved || liveSource,
+    line: resolved ? resolved.line : sourceLine,
+  });
 }
 
 function relationCancelSourceStatus(rawLine) {

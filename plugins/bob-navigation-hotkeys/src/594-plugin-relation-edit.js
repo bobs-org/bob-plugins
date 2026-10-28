@@ -572,10 +572,25 @@ class BobNavigationHotkeysRelationEditMixin {
         }
         }
 
+        const closeSource = relationCloseSourceForFold(
+          contentOf(source.path), sourceLine, liveSource, sourceBlockId,
+          Boolean((policySource && policySource.cancels && cancelRefusals.length === 0) ||
+            (completeSource && completeSource.completes)),
+        );
+        if (!closeSource) return refuse(stale, stale, { stale: true });
+        const foldSource = closeSource.source;
+        const resolvedLine = closeSource.line;
+        const foldCompleteSource = completeSource
+          ? Object.freeze({
+              ...completeSource,
+              blockId: foldSource.blockId || null,
+            })
+          : completeSource;
+
         const cancelRowsBefore = cancelledNoticeRows.length;
         const folded = applyComposedRelationSourceCancel({
           policySource, cancelRefusals, content: contentOf(source.path), source,
-          liveSource, sourceLine, consumed, cancelEdges, cancelLabels,
+          liveSource: foldSource, sourceLine: resolvedLine, consumed, cancelEdges, cancelLabels,
           cancelTrigger, cancelDate, liveAdd, liveRelabel, liveRemove, original,
           stageWrite, cancelledIdentities, cancelledNoticeRows, consumedLinesByPath,
         });
@@ -591,10 +606,10 @@ class BobNavigationHotkeysRelationEditMixin {
         if (completeSource && completeSource.completes) {
           const completeFold = foldRelationCompleteLine(
             contentOf(source.path),
-            completeSource,
+            foldCompleteSource,
             cyclerApi,
             completeDate,
-            sourceLine,
+            resolvedLine,
           );
           if (!completeFold.ok) {
             return refuse("relation_complete_write_failed", null, {

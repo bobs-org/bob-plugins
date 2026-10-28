@@ -213,6 +213,19 @@ test("same-note completion and LINKS write share one undo transaction; post-Done
   assert.equal(editor.getValue(), initial);
 });
 
+test("same-note completion follows an id-less source after a mirror shifts it", async () => {
+  const initial = "- [ ] #task Target ^target\n- [ ] #task Bystander\n- [ ] #task Source";
+  const harness = makePlugin({ "Tasks.md": initial });
+  const outcome = await harness.plugin.applyRelationEdit(writerArgs(
+    [{ path: "Tasks.md", line: 2, blockId: null }],
+    [{ path: "Tasks.md", blockId: "target", label: "implemented by" }],
+    { linkedFromLinesEnabled: true },
+  ));
+  assert.equal(outcome.ok, true);
+  assert.match(harness.store.get("Tasks.md"), /^- \[ \] #task Bystander$/m);
+  assert.match(harness.store.get("Tasks.md"), /^- \[x\] #task Source .*\[completion:: 2026-10-29\]/m);
+});
+
 test("all four open statuses complete with the real cycler line rewrite", async () => {
   for (const status of [" ", "*", "/", "?"]) {
     const source = `- [${status}] #task Source ^source\n- [ ] #task Target ^target`;

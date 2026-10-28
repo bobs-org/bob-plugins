@@ -180,6 +180,100 @@ test("same-note cancel is one transaction and undo restores LINKS/status/log", a
   assert.equal(editor.getValue(), source);
 });
 
+test("same-note cancel follows an id-less source after a mirror is inserted above it", async () => {
+  const source = [
+    "- [ ] #task Target ^target",
+    "  - 📅 **SCHEDULE LOG**",
+    "    - *2026-10-01* — earlier",
+    "- [ ] #task Source",
+  ].join("\n");
+  const harness = makePlugin({ "Tasks.md": source });
+  const editor = new TestEditor(source);
+  harness.openEditors.set("Tasks.md", editor);
+  const outcome = await harness.plugin.applyRelationEdit({
+    sources: [{ path: "Tasks.md", line: 3, blockId: null }],
+    add: [{ path: "Tasks.md", blockId: "target", label: "superseded by" }],
+    cancelLabels: CANCEL_LABELS,
+    cancelDate: "2026-10-22",
+    today: TODAY,
+    linkedFromLinesEnabled: true,
+  });
+  assert.equal(outcome.ok, true);
+  assert.equal(editor.undoGroups, 1);
+  assert.match(editor.getValue(), /^- \[-] #task Source .*\[cancelled:: 2026-10-22].*\^[A-Za-z0-9-]+$/m);
+  assert.match(editor.getValue(), /🪢 \*\*LINKS:\*\* superseded by \[\[#\^target\]\]/);
+  assert.match(editor.getValue(), /LINKED FROM:\*\* .*superseded by/);
+  assert.match(editor.getValue(), /^- \[ \] #task Target \^target$/m);
+  editor.undo();
+  assert.equal(editor.getValue(), source);
+});
+
+test("same-note cancel leaves the task above an id-less source untouched", async () => {
+  const source = "- [ ] #task Target ^target\n- [ ] #task Bystander\n- [ ] #task Source";
+  const harness = makePlugin({ "Tasks.md": source });
+  const outcome = await harness.plugin.applyRelationEdit({
+    sources: [{ path: "Tasks.md", line: 2, blockId: null }],
+    add: [{ path: "Tasks.md", blockId: "target", label: "superseded by" }],
+    cancelLabels: CANCEL_LABELS,
+    cancelDate: "2026-10-22",
+    today: TODAY,
+    linkedFromLinesEnabled: true,
+  });
+  assert.equal(outcome.ok, true);
+  assert.match(harness.store.get("Tasks.md"), /^- \[ \] #task Bystander$/m);
+  assert.match(harness.store.get("Tasks.md"), /^- \[-] #task Source .*\[cancelled:: 2026-10-22]/m);
+});
+
+test("counted same-note cancels skip bystanders while each mirror shifts later sources", async () => {
+  const source = [
+    "- [ ] #task Target ^target",
+    "- [ ] #task Bystander",
+    "- [ ] #task Source one",
+    "- [ ] #task Source two",
+  ].join("\n");
+  const harness = makePlugin({ "Tasks.md": source });
+  const outcome = await harness.plugin.applyRelationEdit({
+    sources: [
+      { path: "Tasks.md", line: 2, blockId: null },
+      { path: "Tasks.md", line: 3, blockId: null },
+    ],
+    add: [{ path: "Tasks.md", blockId: "target", label: "duplicate of" }],
+    cancelLabels: CANCEL_LABELS,
+    cancelDate: "2026-10-22",
+    today: TODAY,
+    linkedFromLinesEnabled: true,
+  });
+  assert.equal(outcome.ok, true);
+  assert.match(harness.store.get("Tasks.md"), /^- \[ \] #task Bystander$/m);
+  assert.match(harness.store.get("Tasks.md"), /^- \[-] #task Source one .*\[cancelled:: 2026-10-22]/m);
+  assert.match(harness.store.get("Tasks.md"), /^- \[-] #task Source two .*\[cancelled:: 2026-10-22]/m);
+});
+
+test("same-note cancel follows an id-less source after two mirrors are inserted above it", async () => {
+  const source = [
+    "- [ ] #task Target one ^target-one",
+    "- [ ] #task Target two ^target-two",
+    "- [ ] #task Source",
+  ].join("\n");
+  const harness = makePlugin({ "Tasks.md": source });
+  const outcome = await harness.plugin.applyRelationEdit({
+    sources: [{ path: "Tasks.md", line: 2, blockId: null }],
+    add: [
+      { path: "Tasks.md", blockId: "target-one", label: "superseded by" },
+      { path: "Tasks.md", blockId: "target-two", label: "superseded by" },
+    ],
+    cancelLabels: CANCEL_LABELS,
+    cancelDate: "2026-10-22",
+    today: TODAY,
+    linkedFromLinesEnabled: true,
+  });
+  assert.equal(outcome.ok, true);
+  assert.match(harness.store.get("Tasks.md"), /^- \[-] #task Source .*\[cancelled:: 2026-10-22]/m);
+  assert.equal((harness.store.get("Tasks.md").match(/LINKED FROM/g) || []).length, 2);
+  assert.match(harness.store.get("Tasks.md"), /^- \[ \] #task Target one \^target-one$/m);
+  assert.match(harness.store.get("Tasks.md"), /^- \[ \] #task Target two \^target-two$/m);
+});
+
 test("cross-note sources cancel the source and follow up the target", async () => {
   const harness = makePlugin({
     "Tasks.md": "- [ ] #task Source ^source",

@@ -664,6 +664,64 @@ test("Linked from prompts for the owner's id then links", async (t) => {
   });
 });
 
+test("Linked-from cancel label follows the source after the owner mirror shifts it", async () => {
+  const initial = "- [ ] #task Owner\n- [ ] #task Source";
+  const notes = { "Tasks.md": initial };
+  const harness = makePlugin(notes);
+  harness.plugin.loadRelationsCancelLabels = () => ({
+    keys: ["duplicate of", "superseded by"],
+    labels: { "duplicate of": "duplicate of", "superseded by": "superseded by" },
+  });
+  harness.plugin.loadRelationsCloseLabels = () => ({
+    cancel: { keys: ["duplicate of", "superseded by"], labels: { "duplicate of": "duplicate of", "superseded by": "superseded by" } },
+    complete: { keys: [], labels: {} },
+    warnings: [],
+  });
+  const applyRelationEdit = harness.plugin.applyRelationEdit.bind(harness.plugin);
+  harness.plugin.applyRelationEdit = async (args) => {
+    return applyRelationEdit({
+      ...args,
+      cancelLabels: { keys: ["duplicate of", "superseded by"], labels: { "duplicate of": "duplicate of", "superseded by": "superseded by" } },
+      cancelDate: "2026-10-03",
+    });
+  };
+  const editor = new TestEditor(initial);
+  harness.openEditors.set("Tasks.md", editor);
+  const ownerLine = initial.split("\n")[0];
+  const sourceLine = initial.split("\n")[1];
+  const picker = makeRelationPicker(harness.plugin, "from", [{
+    path: "Tasks.md",
+    line: 0,
+    blockId: null,
+    displayText: "Owner",
+    rawLine: ownerLine,
+  }], notes);
+  picker.editor = editor;
+  const source = {
+    path: "Tasks.md",
+    line: 1,
+    blockId: null,
+    displayText: "Source",
+    rawLine: sourceLine,
+    stageSection: "results",
+  };
+  const prompts = stubRelationBlockIdPrompt(picker);
+  picker.getRawQuery = () => "superseded by";
+  assert.equal(picker.chooseRelationTask(source, { withLabel: true }), false);
+  assert.equal(picker.stage, "relation-label");
+  assert.equal(await picker.commitRelationLabel(picker.getRelationLabelPreviewItems()[0]), false);
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].snapshot.path, "Tasks.md");
+  // The focused fixture omits the app-level relation config file, so keep
+  // the writer's preview parity gate out of this line-shift regression.
+  picker.relationCancelExpected = null;
+  picker.relationCloseExpected = null;
+  assert.equal(await picker.confirmRelationTargetBlockId({ valid: true, id: "owner" }), true);
+  assert.match(editor.getValue(), /^- \[ \] #task Owner .*\^owner$/m);
+  assert.match(editor.getValue(), /^- \[-] #task Source .*\[cancelled::/m);
+  assert.doesNotMatch(notices.slice(-3).join("\n"), /A counted task changed while the picker was open/);
+});
+
 test("Links to prompts for the selected task's id then links", async () => {
   const notes = currentOtherNotes({
     other: "- [ ] #task Other",

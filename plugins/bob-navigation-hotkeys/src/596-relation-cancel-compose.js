@@ -70,6 +70,54 @@ function remapConsumedRelationCancelLines(consumedLines, insertAt, insertCount) 
   return next;
 }
 
+function resolveRelationCloseSource(content, sourceLine, liveSource, sourceBlockId) {
+  const lines = String(content || "").split(/\r?\n/);
+  const blockId = normalizeBulletPropertyValue(
+    sourceBlockId || (liveSource && liveSource.blockId) || "",
+  );
+  let line = Math.floor(numericOrDefault(sourceLine, NaN));
+  if (blockId) {
+    const found = findTaskLineByTrailingBlockId(lines, blockId);
+    if (found === null) return null;
+    line = found;
+  }
+  if (!Number.isInteger(line) || line < 0 || line >= lines.length) return null;
+  return Object.freeze({
+    ...liveSource,
+    line,
+    blockId: blockId || getTrailingBlockId(lines[line]) || null,
+    rawLine: String(lines[line] || ""),
+  });
+}
+
+function relationCloseSourceLineMatches(content, source) {
+  const lines = String(content || "").split(/\r?\n/);
+  const line = Math.floor(numericOrDefault(source && source.line, NaN));
+  if (
+    !Number.isInteger(line) ||
+    line < 0 ||
+    line >= lines.length ||
+    !isObsidianTaskAtLine(content, line)
+  ) {
+    return false;
+  }
+  const expectedBlockId = normalizeBulletPropertyValue(
+    (source && source.blockId) || "",
+  );
+  return !expectedBlockId || getTrailingBlockId(lines[line]) === expectedBlockId;
+}
+
+function relationCloseSourceForFold(content, sourceLine, liveSource, sourceBlockId, closes) {
+  const resolved = resolveRelationCloseSource(content, sourceLine, liveSource, sourceBlockId);
+  if (closes && (!resolved || !relationCloseSourceLineMatches(content, resolved))) {
+    return null;
+  }
+  return Object.freeze({
+    source: resolved || liveSource,
+    line: resolved ? resolved.line : sourceLine,
+  });
+}
+
 function relationCancelSourceStatus(rawLine) {
   return getObsidianTaskCheckboxStatus(String(rawLine || ""));
 }

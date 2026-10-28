@@ -227,7 +227,16 @@ class BobLedgerToolsStatsPanelsMixin {
       typeof this.pomodoroThemeHueFor === "function"
         ? (themeKey, name) => this.pomodoroThemeHueFor(themeKey, name)
         : null;
-    for (const row of model.rows) {
+    const hasOther = model.rows.some((row) => row && row.key === "other");
+    if (!viewModel.state || viewModel.state.themeRowsExpanded !== true) {
+      viewModel.state.themeRowsExpanded = false;
+    }
+    const expanded = viewModel.state.themeRowsExpanded === true;
+    const cap = 8;
+    const visible = (!hasOther && !expanded && model.rows.length > cap)
+      ? model.rows.slice(0, cap)
+      : model.rows;
+    for (const row of visible) {
       const item = statsEl(doc, "li", { class: "bob-stats-panel-bar-row" });
       const track = statsEl(doc, "span", { class: "bob-stats-panel-bar-track bob-stats-panel-bar-thin", "aria-hidden": "true" });
       const ref = typeof statsThemeRef === "function"
@@ -246,6 +255,19 @@ class BobLedgerToolsStatsPanelsMixin {
       list.appendChild(item);
     }
     section.appendChild(list);
+    if (!hasOther && model.rows.length > cap) {
+      const more = statsEl(doc, "button", {
+        class: "bob-stats-home-more",
+        type: "button",
+        "aria-expanded": expanded ? "true" : "false",
+        "data-stats-focus-key": "panel-theme-more",
+      }, expanded ? "Show fewer" : (model.rows.length - cap) + " more");
+      more.addEventListener("click", () => {
+        viewModel.state.themeRowsExpanded = !expanded;
+        this.statsRenderLocally(view, "panel-theme-more");
+      });
+      section.appendChild(more);
+    }
     return true;
   }
 

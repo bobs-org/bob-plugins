@@ -61,81 +61,24 @@ function dayStripThemeMix(report, worked, day, context) {
     for (const [key, value] of Object.entries(raw)) {
       const minutes = typeof value === "number" && Number.isFinite(value) ? value : 0;
       if (minutes <= 0) continue;
-      const ref = typeof statsThemeRef === "function"
-        ? statsThemeRef(report, key, fallback)
-        : { key, label: key, hue: "gray", gray: true };
       const display = typeof displays[key] === "string" && displays[key]
         ? displays[key]
         : statsPanelFormatMinutes(minutes);
-      entries.push({
-        key,
-        label: ref.label,
-        value: minutes,
-        display,
-        hue: ref.gray ? "gray" : ref.hue,
-        gray: Boolean(ref.gray),
-      });
+      entries.push({ key, value: minutes, display });
     }
     if (!entries.length) return dayStripThemeEmpty({ point });
-
-    const coloured = entries.filter((entry) => !entry.gray);
-    const gray = entries.filter((entry) => entry.gray);
-    const shadeOf = new Map();
-    const byHue = new Map();
-    for (const entry of coloured) {
-      const list = byHue.get(entry.hue) || [];
-      list.push(entry);
-      byHue.set(entry.hue, list);
-    }
-    for (const list of byHue.values()) {
-      list.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
-      list.forEach((entry, index) => {
-        shadeOf.set(entry.key, index === 0 ? 0 : index === 1 ? 1 : 2);
-      });
-    }
-    coloured.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
-    gray.sort((a, b) => {
-      const aUnnamed = String(a.key).toLowerCase() === "(unnamed)" ? 1 : 0;
-      const bUnnamed = String(b.key).toLowerCase() === "(unnamed)" ? 1 : 0;
-      if (aUnnamed !== bUnnamed) return aUnnamed - bUnnamed;
-      return b.value - a.value || a.label.localeCompare(b.label);
-    });
-    const ordered = coloured.concat(gray);
-    const segments = ordered.map((entry) => ({
-      key: entry.key,
-      label: entry.label,
-      value: entry.value,
-      display: entry.display,
-      hue: entry.hue,
-      gray: entry.gray,
-      shade: entry.gray ? 0 : (shadeOf.has(entry.key) ? shadeOf.get(entry.key) : 0),
-      bucket: entry.gray,
-    }));
-    const byValue = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
-    const rankOf = new Map(byValue.map((segment, index) => [segment.key, index + 1]));
-    const legend = segments.map((segment) => ({
-      key: segment.key,
-      label: segment.label,
-      legendLabel: segment.label,
-      display: segment.display,
-      value: segment.value,
-      hue: segment.hue,
-      gray: segment.gray,
-      shade: segment.shade,
-      bucket: segment.bucket,
-      rank: rankOf.get(segment.key) || 0,
-    }));
-    const overflowList = segments.filter((segment) => (rankOf.get(segment.key) || 0) > 3);
-    const overflowTitle = (list) => list.map((segment) => segment.label + " " + segment.display).join("\n");
-    const titleLines = ["Time by theme", ...segments.map((segment) => segment.label + " " + segment.display)];
+    const built = typeof timeLaneLegend === "function" && typeof timeLaneThemeSegments === "function"
+      ? timeLaneLegend(report, "theme", timeLaneThemeSegments(report, entries, fallback))
+      : { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" } };
+    const titleLines = ["Time by theme", ...built.segments.map((segment) => segment.label + " " + segment.display)];
     if (dayStripThemeHasSplitSession(report, day)) {
       titleLines.push("Pomodoros with several themes are split evenly between them.");
     }
     return {
-      segments,
-      legend,
-      overflow: overflowList,
-      overflowDefault: { count: Math.max(0, segments.length - 3), title: overflowTitle(overflowList) },
+      segments: built.segments,
+      legend: built.legend,
+      overflow: built.overflow,
+      overflowDefault: built.overflowDefault,
       empty: false,
       omitted: false,
       dimension: "theme",

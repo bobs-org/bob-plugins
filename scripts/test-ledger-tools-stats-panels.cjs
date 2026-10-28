@@ -611,7 +611,9 @@ test("roots panel toggles Themes, pins spans, discloses sub-projects, and opens 
       plugin.statsPanelPinDay(doc, view, report, "2026-10-09");
       assert.equal(plugin.statsViewStateFor("dash_stats.md").pinnedDay, "2026-10-09");
       assert.match(el.text, /2026-10-09 · 20m/);
-      assert.equal(el.text.includes("job_2026_apply_29"), false, "the pinned day's supplied parts replace the period split");
+      const pinnedPanel = el.querySelector(".bob-stats-panel");
+      assert.equal(pinnedPanel.text.includes("job_2026_apply_29"), false, "the pinned day's supplied parts replace the period split");
+      assert.match(el.querySelector(".bob-stats-lanes").text, /job_2026_apply_29/, "window bars keep the period split");
 
       const sessions = findByFocus(el.querySelector(".bob-stats-panel"), "panel-home-sessions-root_parent:sase.md");
       sessions.dispatch("click");
@@ -699,12 +701,14 @@ test("chart pin refreshes Where the time went and Themes honor the pinned span",
       assert.equal(plugin.statsViewStateFor("dash_stats.md").pinnedDay, "2026-10-09");
       assert.match(el.text, /Where the time went · 2026-10-09/);
       assert.match(el.text, /2026-10-09 · 20m/);
-      assert.equal(el.text.includes("job_2026_apply_29"), false);
+      const pinnedPanel = el.querySelector(".bob-stats-panel");
+      assert.equal(pinnedPanel.text.includes("job_2026_apply_29"), false);
+      assert.match(el.querySelector(".bob-stats-lanes").text, /job_2026_apply_29/, "window bars keep the period split");
 
       const themeToggle = findByFocus(el.querySelector(".bob-stats-panel"), "panel-home-view-themes");
       themeToggle.dispatch("click");
       assert.match(el.text, /SASE — 20m/);
-      assert.equal(el.text.includes("GTD — 29m"), false, "the pinned day's theme rows replace the period split");
+      assert.equal(el.querySelector(".bob-stats-panel").text.includes("GTD — 29m"), false, "the pinned day's theme rows replace the period split");
     } finally {
       plugin.onunload();
     }

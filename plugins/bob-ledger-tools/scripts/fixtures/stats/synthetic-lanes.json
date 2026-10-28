@@ -1,0 +1,728 @@
+{
+  "ok": true,
+  "schema_version": 1,
+  "presentation_fixture": true,
+  "today": "2026-10-28",
+  "range": {
+    "preset": "4w",
+    "offset": 0,
+    "start": "2026-09-30",
+    "end": "2026-10-27",
+    "days": 28,
+    "includes_today": true,
+    "group": "day",
+    "label": "Sep 30 \u2013 Oct 27",
+    "prior": {
+      "start": "2026-09-02",
+      "end": "2026-09-29",
+      "label": "Sep 2 \u2013 Sep 29"
+    }
+  },
+  "metrics": [
+    {
+      "id": "worked",
+      "label": "Worked",
+      "kind": "pomodoro",
+      "unit": "minutes",
+      "direction": "up",
+      "color": "orange",
+      "source": "derived",
+      "origin": "builtin",
+      "since": "2026-06-01",
+      "definition": "Minutes in closed Pomodoros under ## Pomodoros.",
+      "limits": [
+        "Open Pomodoros are plans and never count."
+      ],
+      "parameters": {
+        "measure": "minutes",
+        "review": "include"
+      },
+      "summary": {
+        "headline": {
+          "value": 264,
+          "display": "4h 24m",
+          "suffix": "/day",
+          "stat": "median"
+        },
+        "total": {
+          "value": 7375,
+          "display": "122h 55m"
+        },
+        "mean": 263,
+        "p25": 120,
+        "p75": 360,
+        "days_with_data": 28,
+        "days_met": null,
+        "prior": {
+          "headline": {
+            "value": 240,
+            "display": "4h"
+          }
+        },
+        "delta": {
+          "display": "\u25b2 10%",
+          "words": "up 10% vs the prior 4 weeks",
+          "sign": 1
+        }
+      },
+      "chart": {
+        "group": "day",
+        "p25": 120,
+        "p75": 360
+      },
+      "parts_summary": {
+        "area": [
+          {
+            "key": "dev.md",
+            "value": 3976,
+            "display": "66h 16m",
+            "share": "54%",
+            "label": "dev"
+          },
+          {
+            "key": "@daily",
+            "value": 2443,
+            "display": "40h 43m",
+            "share": "33%",
+            "label": "GTD"
+          },
+          {
+            "key": "gtd.md",
+            "value": 280,
+            "display": "4h 40m",
+            "share": "4%",
+            "label": "gtd"
+          },
+          {
+            "key": "job.md",
+            "value": 240,
+            "display": "4h",
+            "share": "3%",
+            "label": "job"
+          },
+          {
+            "key": "cash.md",
+            "value": 180,
+            "display": "3h",
+            "share": "2%",
+            "label": "cash"
+          },
+          {
+            "key": "@unlinked",
+            "value": 96,
+            "display": "1h 36m",
+            "share": "1%",
+            "label": "unlinked"
+          },
+          {
+            "key": "health.md",
+            "value": 90,
+            "display": "1h 30m",
+            "share": "1%",
+            "label": "health"
+          },
+          {
+            "key": "@unfiled",
+            "value": 70,
+            "display": "1h 10m",
+            "share": "1%",
+            "label": "unfiled"
+          }
+        ],
+        "root_parent": [
+          {
+            "key": "bob.md",
+            "value": 1716,
+            "display": "28h 36m",
+            "share": "23%",
+            "label": "bob"
+          },
+          {
+            "key": "sase.md",
+            "value": 1671,
+            "display": "27h 51m",
+            "share": "23%",
+            "label": "sase"
+          },
+          {
+            "key": "sase_blog.md",
+            "value": 484,
+            "display": "8h 04m",
+            "share": "7%",
+            "label": "sase_blog"
+          },
+          {
+            "key": "job.md",
+            "value": 240,
+            "display": "4h",
+            "share": "3%",
+            "label": "job"
+          },
+          {
+            "key": "cash.md",
+            "value": 180,
+            "display": "3h",
+            "share": "2%",
+            "label": "cash"
+          },
+          {
+            "key": "health.md",
+            "value": 90,
+            "display": "1h 30m",
+            "share": "1%",
+            "label": "health"
+          },
+          {
+            "key": "chezmoi.md",
+            "value": 60,
+            "display": "1h",
+            "share": "1%",
+            "label": "chezmoi"
+          },
+          {
+            "key": "vault.md",
+            "value": 45,
+            "display": "45m",
+            "share": "1%",
+            "label": "vault"
+          },
+          {
+            "key": "gtd.md",
+            "value": 100,
+            "display": "1h 40m",
+            "share": "1%",
+            "label": "gtd"
+          },
+          {
+            "key": "@daily",
+            "value": 2443,
+            "display": "40h 43m",
+            "share": "33%",
+            "label": "GTD"
+          },
+          {
+            "key": "@review:GTD",
+            "value": 180,
+            "display": "3h",
+            "share": "2%",
+            "label": "GTD review"
+          },
+          {
+            "key": "@unlinked",
+            "value": 96,
+            "display": "1h 36m",
+            "share": "1%",
+            "label": "unlinked"
+          },
+          {
+            "key": "@unfiled",
+            "value": 70,
+            "display": "1h 10m",
+            "share": "1%",
+            "label": "unfiled"
+          }
+        ],
+        "theme": [
+          {
+            "key": "BUILD",
+            "value": 1670,
+            "display": "27h 50m",
+            "share": "23%"
+          },
+          {
+            "key": "READ",
+            "value": 1225,
+            "display": "20h 25m",
+            "share": "17%"
+          },
+          {
+            "key": "PLAN",
+            "value": 2455,
+            "display": "40h 55m",
+            "share": "33%"
+          },
+          {
+            "key": "CHORE",
+            "value": 335,
+            "display": "5h 35m",
+            "share": "5%"
+          },
+          {
+            "key": "WRITE",
+            "value": 325,
+            "display": "5h 25m",
+            "share": "4%"
+          },
+          {
+            "key": "SASE",
+            "value": 180,
+            "display": "3h",
+            "share": "2%"
+          },
+          {
+            "key": "BOB",
+            "value": 120,
+            "display": "2h",
+            "share": "2%"
+          },
+          {
+            "key": "DECKS",
+            "value": 90,
+            "display": "1h 30m",
+            "share": "1%"
+          },
+          {
+            "key": "BLOG",
+            "value": 60,
+            "display": "1h",
+            "share": "1%"
+          },
+          {
+            "key": "HACK",
+            "value": 50,
+            "display": "50m",
+            "share": "1%"
+          },
+          {
+            "key": "FIX",
+            "value": 40,
+            "display": "40m",
+            "share": "1%"
+          },
+          {
+            "key": "LEARN",
+            "value": 30,
+            "display": "30m",
+            "share": "0%"
+          },
+          {
+            "key": "SHIP",
+            "value": 25,
+            "display": "25m",
+            "share": "0%"
+          },
+          {
+            "key": "VIBE",
+            "value": 20,
+            "display": "20m",
+            "share": "0%"
+          },
+          {
+            "key": "MAIL",
+            "value": 18,
+            "display": "18m",
+            "share": "0%"
+          },
+          {
+            "key": "MEET",
+            "value": 15,
+            "display": "15m",
+            "share": "0%"
+          },
+          {
+            "key": "ADMIN",
+            "value": 12,
+            "display": "12m",
+            "share": "0%"
+          },
+          {
+            "key": "CLEAN",
+            "value": 10,
+            "display": "10m",
+            "share": "0%"
+          },
+          {
+            "key": "NOTE",
+            "value": 8,
+            "display": "8m",
+            "share": "0%"
+          },
+          {
+            "key": "SORT",
+            "value": 7,
+            "display": "7m",
+            "share": "0%"
+          },
+          {
+            "key": "INBOX",
+            "value": 6,
+            "display": "6m",
+            "share": "0%"
+          },
+          {
+            "key": "(unnamed)",
+            "value": 674,
+            "display": "11h 14m",
+            "share": "9%"
+          }
+        ]
+      },
+      "points": [
+        {
+          "date": "2026-10-09",
+          "end": "2026-10-09",
+          "value": 245,
+          "display": "4h 05m",
+          "quality": "ok",
+          "provisional": false,
+          "parts": {
+            "root_parent": {
+              "bob.md": 120,
+              "sase.md": 125
+            },
+            "theme": {
+              "BUILD": 120,
+              "READ": 125
+            }
+          },
+          "parts_display": {
+            "root_parent": {
+              "bob.md": "2h",
+              "sase.md": "2h 05m"
+            },
+            "theme": {
+              "BUILD": "2h",
+              "READ": "2h 05m"
+            }
+          }
+        },
+        {
+          "date": "2026-10-27",
+          "end": "2026-10-27",
+          "value": 264,
+          "display": "4h 24m",
+          "quality": "ok",
+          "provisional": false,
+          "parts": {
+            "root_parent": {
+              "bob.md": 264
+            },
+            "theme": {
+              "BUILD": 264
+            }
+          },
+          "parts_display": {
+            "root_parent": {
+              "bob.md": "4h 24m"
+            },
+            "theme": {
+              "BUILD": "4h 24m"
+            }
+          }
+        },
+        {
+          "date": "2026-10-28",
+          "end": "2026-10-28",
+          "value": 30,
+          "display": "30m",
+          "quality": "ok",
+          "provisional": true,
+          "parts": {
+            "root_parent": {
+              "bob.md": 30
+            },
+            "theme": {
+              "BUILD": 30
+            }
+          },
+          "parts_display": {
+            "root_parent": {
+              "bob.md": "30m"
+            },
+            "theme": {
+              "BUILD": "30m"
+            }
+          }
+        }
+      ],
+      "prior_points": []
+    }
+  ],
+  "homes": {
+    "bob.md": {
+      "label": "bob",
+      "kind": "project",
+      "area": "dev.md",
+      "subarea": null,
+      "path": "bob.md",
+      "hue": "blue",
+      "root_parent": "bob.md"
+    },
+    "sase.md": {
+      "label": "sase",
+      "kind": "project",
+      "area": "dev.md",
+      "subarea": null,
+      "path": "sase.md",
+      "hue": "blue",
+      "root_parent": "sase.md"
+    },
+    "sase_blog.md": {
+      "label": "sase_blog",
+      "kind": "project",
+      "area": "dev.md",
+      "subarea": null,
+      "path": "sase_blog.md",
+      "hue": "blue",
+      "root_parent": "sase_blog.md"
+    },
+    "job.md": {
+      "label": "job",
+      "kind": "area",
+      "area": "job.md",
+      "subarea": null,
+      "path": "job.md",
+      "hue": "aqua",
+      "root_parent": "job.md",
+      "project_label": "job \u00b7 area tasks"
+    },
+    "cash.md": {
+      "label": "cash",
+      "kind": "area",
+      "area": "cash.md",
+      "subarea": null,
+      "path": "cash.md",
+      "hue": "yellow",
+      "root_parent": "cash.md",
+      "project_label": "cash \u00b7 area tasks"
+    },
+    "health.md": {
+      "label": "health",
+      "kind": "area",
+      "area": "health.md",
+      "subarea": null,
+      "path": "health.md",
+      "hue": "green",
+      "root_parent": "health.md",
+      "project_label": "health \u00b7 area tasks"
+    },
+    "chezmoi.md": {
+      "label": "chezmoi",
+      "kind": "project",
+      "area": "dev.md",
+      "subarea": null,
+      "path": "chezmoi.md",
+      "hue": "blue",
+      "root_parent": "chezmoi.md"
+    },
+    "vault.md": {
+      "label": "vault",
+      "kind": "project",
+      "area": "dev.md",
+      "subarea": null,
+      "path": "vault.md",
+      "hue": "blue",
+      "root_parent": "vault.md"
+    },
+    "gtd.md": {
+      "label": "gtd",
+      "kind": "area",
+      "area": "gtd.md",
+      "subarea": null,
+      "path": "gtd.md",
+      "hue": "orange",
+      "root_parent": "gtd.md",
+      "project_label": "gtd \u00b7 area tasks"
+    },
+    "@daily": {
+      "label": "GTD",
+      "kind": "bucket",
+      "area": "@daily",
+      "subarea": null,
+      "path": null,
+      "hue": null,
+      "root_parent": "@daily"
+    },
+    "@review:GTD": {
+      "label": "GTD review",
+      "kind": "bucket",
+      "area": "gtd.md",
+      "subarea": null,
+      "path": null,
+      "hue": "orange",
+      "root_parent": "@review:GTD",
+      "short_label": "GTD"
+    },
+    "@unlinked": {
+      "label": "unlinked",
+      "kind": "bucket",
+      "area": "@unlinked",
+      "subarea": null,
+      "path": null,
+      "hue": null,
+      "root_parent": "@unlinked"
+    },
+    "@unfiled": {
+      "label": "unfiled",
+      "kind": "bucket",
+      "area": "@unfiled",
+      "subarea": null,
+      "path": null,
+      "hue": null,
+      "root_parent": "@unfiled"
+    },
+    "dev.md": {
+      "label": "dev",
+      "kind": "area",
+      "area": "dev.md",
+      "subarea": null,
+      "path": "dev.md",
+      "hue": "blue",
+      "root_parent": "dev.md",
+      "project_label": "dev \u00b7 area tasks"
+    }
+  },
+  "theme_hues": {
+    "build": {
+      "key": "build",
+      "name": "BUILD",
+      "hue": "blue",
+      "hue_source": "config"
+    },
+    "read": {
+      "key": "read",
+      "name": "READ",
+      "hue": "green",
+      "hue_source": "pin"
+    },
+    "plan": {
+      "key": "plan",
+      "name": "PLAN",
+      "hue": null,
+      "hue_source": "exempt"
+    },
+    "chore": {
+      "key": "chore",
+      "name": "CHORE",
+      "hue": "orange",
+      "hue_source": "hash"
+    },
+    "write": {
+      "key": "write",
+      "name": "WRITE",
+      "hue": "magenta",
+      "hue_source": "hash"
+    },
+    "sase": {
+      "key": "sase",
+      "name": "SASE",
+      "hue": "aqua",
+      "hue_source": "pin"
+    },
+    "bob": {
+      "key": "bob",
+      "name": "BOB",
+      "hue": "magenta",
+      "hue_source": "config"
+    },
+    "decks": {
+      "key": "decks",
+      "name": "DECKS",
+      "hue": "orange",
+      "hue_source": "hash"
+    },
+    "blog": {
+      "key": "blog",
+      "name": "BLOG",
+      "hue": "orange",
+      "hue_source": "hash"
+    },
+    "hack": {
+      "key": "hack",
+      "name": "HACK",
+      "hue": "blue",
+      "hue_source": "hash"
+    },
+    "fix": {
+      "key": "fix",
+      "name": "FIX",
+      "hue": "yellow",
+      "hue_source": "hash"
+    },
+    "learn": {
+      "key": "learn",
+      "name": "LEARN",
+      "hue": "violet",
+      "hue_source": "hash"
+    },
+    "ship": {
+      "key": "ship",
+      "name": "SHIP",
+      "hue": "red",
+      "hue_source": "hash"
+    },
+    "vibe": {
+      "key": "vibe",
+      "name": "VIBE",
+      "hue": null,
+      "hue_source": "unconfigured",
+      "configured": false
+    },
+    "mail": {
+      "key": "mail",
+      "name": "MAIL",
+      "hue": null,
+      "hue_source": "unconfigured",
+      "configured": false
+    },
+    "meet": {
+      "key": "meet",
+      "name": "MEET",
+      "hue": null,
+      "hue_source": "unconfigured",
+      "configured": false
+    },
+    "admin": {
+      "key": "admin",
+      "name": "ADMIN",
+      "hue": null,
+      "hue_source": "unconfigured",
+      "configured": false
+    },
+    "clean": {
+      "key": "clean",
+      "name": "CLEAN",
+      "hue": null,
+      "hue_source": "unconfigured",
+      "configured": false
+    },
+    "note": {
+      "key": "note",
+      "name": "NOTE",
+      "hue": null,
+      "hue_source": "unconfigured",
+      "configured": false
+    },
+    "sort": {
+      "key": "sort",
+      "name": "SORT",
+      "hue": null,
+      "hue_source": "unconfigured",
+      "configured": false
+    },
+    "inbox": {
+      "key": "inbox",
+      "name": "INBOX",
+      "hue": null,
+      "hue_source": "unconfigured",
+      "configured": false
+    },
+    "(unnamed)": {
+      "key": "(unnamed)",
+      "name": "(unnamed)",
+      "hue": "green",
+      "hue_source": "hash"
+    }
+  },
+  "health": {
+    "journal": {
+      "hosts": [
+        {
+          "host": "apollo",
+          "last_ts": "2026-10-28T09:00:00-04:00"
+        }
+      ]
+    }
+  },
+  "warnings": []
+}

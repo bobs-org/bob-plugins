@@ -2108,6 +2108,123 @@ body.bob-today-marks-off .bob-today-mark {
   margin: 0.6rem 0;
 }
 
+/* Window time bars: Day-strip family, no card. Roots then themes. */
+.bob-stats-lanes {
+  margin: 0.7rem 0 0.2rem;
+}
+.bob-stats-lane + .bob-stats-lane {
+  margin-top: 0.7em;
+}
+.bob-stats-lane-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45em;
+  min-width: 0;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+.bob-stats-lane-legend {
+  min-width: 0;
+  flex: 1 1 auto;
+  cursor: pointer;
+}
+.bob-stats-lane-legend:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+.bob-stats-lane-meta {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.bob-stats-lane-bar {
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  height: 6px;
+  margin-top: 0.4em;
+  overflow: hidden;
+  border-radius: 999px;
+  background: transparent;
+}
+.bob-stats-lane-bar:empty,
+.bob-stats-lanes-skeleton .bob-stats-lane-bar {
+  background: var(--background-modifier-border);
+}
+.bob-stats-lane-segment {
+  display: block;
+  flex: 0 1 0;
+  min-width: 2px;
+  background: var(--bob-day-strip-hue, var(--text-faint));
+}
+.bob-stats-lane-segment + .bob-stats-lane-segment {
+  margin-inline-start: 2px;
+}
+.bob-stats-lane-segment[data-tone="gray"] + .bob-stats-lane-segment[data-tone="gray"],
+.bob-stats-lane-segment[data-tone="none"] + .bob-stats-lane-segment[data-tone="none"] {
+  margin-inline-start: 0;
+}
+.bob-stats-lane-segment[data-tone="none"] {
+  background-color: color-mix(in srgb, var(--text-faint) 18%, var(--background-primary));
+  background-image: repeating-linear-gradient(
+    135deg,
+    var(--text-faint) 0 2px,
+    transparent 2px 4px
+  );
+}
+.bob-stats-lanes [data-tone="none"].bob-day-strip-legend-dot,
+.bob-stats-lanes [data-tone="none"].bob-day-strip-legend-swatch {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--text-faint);
+}
+.bob-stats-lane[data-hot="true"] .bob-stats-lane-segment:not([data-hot="true"]) {
+  opacity: 0.28;
+}
+.bob-stats-lane[data-hot="true"] .bob-day-strip-legend-item:not([data-hot="true"]),
+.bob-stats-lane[data-hot="true"] .bob-day-strip-overflow:not([data-hot="true"]) {
+  opacity: 0.45;
+}
+.bob-stats-lane-segment,
+.bob-stats-lane .bob-day-strip-legend-item,
+.bob-stats-lane .bob-day-strip-overflow {
+  transition: opacity 120ms ease;
+}
+.bob-stats-lanes-morph .bob-stats-lane-segment {
+  transition: flex-grow 280ms cubic-bezier(.2, .8, .2, 1), opacity 120ms ease;
+}
+.bob-stats-lanes-skeleton {
+  pointer-events: none;
+}
+.bob-stats-lanes-skeleton .bob-stats-lane-row {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-stats-lanes,
+  .bob-stats-lanes *,
+  .bob-stats-lanes-morph .bob-stats-lane-segment {
+    transition: none;
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .bob-stats-lane-segment {
+    background: CanvasText;
+    background-image: none;
+  }
+  .bob-stats-lane-segment[data-tone="gray"],
+  .bob-stats-lane-segment[data-tone="none"] {
+    background: GrayText;
+    background-image: none;
+  }
+  .bob-stats-lane-legend:focus-visible {
+    outline-color: Highlight;
+  }
+}
+
 .bob-stats-tile {
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
@@ -4565,12 +4682,14 @@ body.bob-task-theme-marks .markdown-source-view.is-live-preview .dataview.inline
 .bob-day-strip-theme-hue-gray { --bob-day-strip-hue: var(--text-faint); }
 
 .bob-day-strip-lane-themes [data-shade="1"],
-.bob-day-strip-bar-themes [data-shade="1"] {
+.bob-day-strip-bar-themes [data-shade="1"],
+.bob-stats-lane-themes [data-shade="1"] {
   background: color-mix(in srgb, var(--bob-day-strip-hue, var(--text-faint)) 65%, var(--background-primary));
 }
 
 .bob-day-strip-lane-themes [data-shade="2"],
-.bob-day-strip-bar-themes [data-shade="2"] {
+.bob-day-strip-bar-themes [data-shade="2"],
+.bob-stats-lane-themes [data-shade="2"] {
   background: color-mix(in srgb, var(--bob-day-strip-hue, var(--text-faint)) 42%, var(--background-primary));
 }
 

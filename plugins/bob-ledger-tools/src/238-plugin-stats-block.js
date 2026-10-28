@@ -536,6 +536,8 @@ class BobLedgerToolsStatsBlockMixin {
         view.el.textContent = "";
       }
       const root = statsEl(doc, "div", { class: "bob-stats bob-stats-loading" });
+      const lanes = typeof statsWindowLanesSkeleton === "function" ? statsWindowLanesSkeleton(doc) : null;
+      if (lanes) root.appendChild(lanes);
       const tiles = statsEl(doc, "div", { class: "bob-stats-tiles", role: "status", "aria-label": "Stats loading" });
       for (let index = 0; index < STATS_DEFAULT_TILE_COUNT; index += 1) {
         const tile = statsEl(doc, "div", { class: "bob-stats-tile bob-stats-skeleton" });
@@ -602,6 +604,8 @@ class BobLedgerToolsStatsBlockMixin {
         state.focus = fence.focus && allIds.includes(fence.focus) ? fence.focus : ids[0] || allIds[0] || null;
       }
       root.appendChild(this.statsHeader(doc, view, report));
+      const lanes = typeof this.statsWindowLanes === "function" ? this.statsWindowLanes(doc, view, report) : null;
+      if (lanes) root.appendChild(lanes);
       root.appendChild(this.statsTiles(doc, view, report));
       const focusMetric = metrics.find((metric) => metric.id === state.focus) || null;
       if (focusMetric) {

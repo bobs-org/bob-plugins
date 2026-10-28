@@ -186,6 +186,7 @@ async function main() {
     week: readJson(path.join(fixturesDir, "synthetic-week.json")),
     homes: readJson(path.join(fixturesDir, "synthetic-homes.json")),
     homesBuckets: readJson(path.join(fixturesDir, "synthetic-homes-buckets.json")),
+    lanes: readJson(path.join(fixturesDir, "synthetic-lanes.json")),
     empty: readJson(path.join(fixturesDir, "synthetic-empty.json")),
     allNull: readJson(path.join(fixturesDir, "synthetic-all-null.json")),
   };
@@ -354,7 +355,50 @@ async function main() {
       forcedColors: matchMedia('(forced-colors: active)').matches
     })`);
     check("reduced-motion and forced-colors media modes activate", media.reducedMotion && media.forcedColors, JSON.stringify(media));
-    await client.call("Emulation.setEmulatedMedia", { features: [] });
+    await client.call("Emulation.setEmulatedMedia", { features: [
+      { name: "prefers-reduced-motion", value: "no-preference" },
+      { name: "forced-colors", value: "none" },
+    ] });
+
+    await client.evaluate("window.statsPreview.renderSingle('lanes', 'worked', 1000, 'light')");
+    await sleep(250);
+    const lanesLayout = await client.evaluate(`(() => {
+      const root = document.querySelector('.bob-stats');
+      const children = Array.from(root.children).map((node) => node.className);
+      const header = children.findIndex((name) => name.split(/\\s+/).includes('bob-stats-header'));
+      const lanes = children.findIndex((name) => name.split(/\\s+/).includes('bob-stats-lanes'));
+      const tiles = children.findIndex((name) => name.split(/\\s+/).includes('bob-stats-tiles'));
+      return { header, lanes, tiles, fetchCount: window.statsPreview.fetchCount };
+    })()`);
+    check("window lanes render above the tiles", lanesLayout.header >= 0 && lanesLayout.lanes === lanesLayout.header + 1 && lanesLayout.tiles === lanesLayout.lanes + 1, JSON.stringify(lanesLayout));
+    const beforeThemes = await client.evaluate("window.statsPreview.fetchCount");
+    await client.evaluate(`document.querySelector('[data-stats-focus-key="lanes-themes"]').click()`);
+    const afterThemes = await client.evaluate(`({
+      focus: window.statsPreview.stateFor(window.statsPreview.views[0]).focus,
+      homesView: window.statsPreview.stateFor(window.statsPreview.views[0]).homesView,
+      fetchCount: window.statsPreview.fetchCount,
+      themesOn: Boolean(document.querySelector('[data-stats-focus-key="panel-home-view-themes"][aria-pressed="true"]'))
+    })`);
+    check("themes legend focuses Worked and Themes without fetching", afterThemes.focus === "worked" && afterThemes.homesView === "themes" && afterThemes.fetchCount === beforeThemes && afterThemes.themesOn, JSON.stringify(afterThemes));
+    await client.evaluate("window.statsPreview.renderSingle('lanes', 'worked', 1000, 'light')");
+    await sleep(150);
+    const hover = await client.evaluate(`(() => new Promise((resolve) => {
+      const lane = document.querySelector('.bob-stats-lane[data-lane="roots"]');
+      const segments = Array.from(lane.querySelectorAll('.bob-stats-lane-segment'));
+      segments[0].dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+      setTimeout(() => {
+        const styles = segments.map((node) => getComputedStyle(node).opacity);
+        resolve({
+          hot: lane.getAttribute('data-hot'),
+          first: styles[0],
+          other: styles[1],
+          firstHot: segments[0] && segments[0].getAttribute('data-hot'),
+          otherHot: segments[1] && segments[1].getAttribute('data-hot'),
+          count: segments.length,
+        });
+      }, 160);
+    }))()`);
+    check("lane hover dims the other segments", hover.hot === "true" && hover.firstHot === "true" && hover.otherHot !== "true" && Number(hover.first) > 0.9 && Number(hover.other) < 0.4, JSON.stringify(hover));
 
     const overflow = matrix.filter((item) => item.pageScrollWidth > item.viewportWidth);
     if (overflow.length) throw new Error(`Preview page overflow at ${overflow.map((item) => `${item.width}px ${item.theme}`).join(", ")}`);
@@ -390,7 +434,11 @@ async function main() {
     if (client) client.socket.close();
     child.kill("SIGTERM");
     await new Promise((resolve) => child.once("exit", resolve));
-    fs.rmSync(profile, { recursive: true, force: true });
+    try {
+      fs.rmSync(profile, { recursive: true, force: true });
+    } catch (error) {
+      // Chromium can leave lock files in the profile after SIGTERM.
+    }
   }
 }
 

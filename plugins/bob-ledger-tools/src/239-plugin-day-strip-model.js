@@ -252,60 +252,26 @@ function dayStripMix(report, worked, day) {
   }
   const rows = statsPanelHomeRows(worked, report, dimension, point);
   const ordered = statsPanelHomeAreaRows(rows, report);
-  const hueMap = statsPanelDistinctHues(ordered, report);
   const displays = point && point.parts_display && point.parts_display[dimension] && typeof point.parts_display[dimension] === "object"
     ? point.parts_display[dimension]
     : {};
-  const segments = ordered.map((row) => ({
-    key: row.key,
-    label: row.label,
-    value: row.value,
+  const withDisplay = ordered.map((row) => ({
+    ...row,
     display: typeof displays[row.key] === "string" ? displays[row.key] : row.display,
-    hue: hueMap.get(row.key) || "gray",
-    bucket: row.key.startsWith("@"),
   }));
-  // Rank 1 = most minutes; tie-break by label, as before.
-  const byValue = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
-  const rankOf = new Map(byValue.map((segment, index) => [segment.key, index + 1]));
-  // Legend names every segment in bar order; the fitter decides how many fit.
-  const initialLabels = new Map(
-    segments.map((segment) => {
-      const row = ordered.find((candidate) => candidate.key === segment.key) || segment;
-      return [segment.key, dayStripLegendLabel(report, dimension, row)];
-    }),
-  );
-  const labelCounts = new Map();
-  for (const label of initialLabels.values()) {
-    const folded = String(label).toLowerCase();
-    labelCounts.set(folded, (labelCounts.get(folded) || 0) + 1);
-  }
-  const legend = segments.map((segment) => {
-    const initial = initialLabels.get(segment.key) || segment.label;
-    const folded = String(initial).toLowerCase();
-    const collided = (labelCounts.get(folded) || 0) > 1;
-    return {
-      key: segment.key,
-      label: segment.label,
-      legendLabel: collided ? segment.label : initial,
-      display: segment.display,
-      value: segment.value,
-      hue: segment.hue,
-      bucket: segment.bucket,
-      rank: rankOf.get(segment.key) || 0,
-    };
-  });
-  const overflowList = segments.filter((segment) => (rankOf.get(segment.key) || 0) > 3);
-  const overflowTitle = (list) => list.map((segment) => segment.label + " " + segment.display).join("\n");
+  const built = typeof timeLaneLegend === "function" && typeof timeLaneRootSegments === "function"
+    ? timeLaneLegend(report, dimension, timeLaneRootSegments(report, dimension, withDisplay))
+    : { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" } };
   const sentence = dimension === "root_parent" ? "Time by root parent" : "Time by area";
   return {
-    segments,
-    legend,
-    overflow: overflowList,
-    overflowDefault: { count: Math.max(0, segments.length - 3), title: overflowTitle(overflowList) },
+    segments: built.segments,
+    legend: built.legend,
+    overflow: built.overflow,
+    overflowDefault: built.overflowDefault,
     empty: Boolean(point && point.value === 0 && point.quality === "ok"),
     omitted: false,
     dimension,
-    title: [sentence, ...segments.map((segment) => segment.label + " " + segment.display)].join("\n"),
+    title: [sentence, ...built.segments.map((segment) => segment.label + " " + segment.display)].join("\n"),
     point,
   };
 }

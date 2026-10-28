@@ -152,6 +152,7 @@ function statsDefaultViewState() {
     homeRowsExpanded: {},
     homeSessionsExpanded: {},
     homeSessionsAll: {},
+    themeRowsExpanded: false,
   };
 }
 

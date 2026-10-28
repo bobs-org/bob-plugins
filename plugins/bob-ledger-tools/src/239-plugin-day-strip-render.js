@@ -348,9 +348,12 @@ function dayStripLegendItem(doc, entry, lane) {
   const text = entry
     ? (typeof entry.legendLabel === "string" && entry.legendLabel ? entry.legendLabel : entry.label)
     : "";
+  const title = entry && typeof entry.title === "string" && entry.title
+    ? entry.title
+    : (entry ? entry.label + " " + entry.display : null);
   const item = statsEl(doc, "span", {
     class: "bob-day-strip-legend-item",
-    title: entry ? entry.label + " " + entry.display : null,
+    title,
   });
   if (item) {
     if (rank) item.setAttribute("data-rank", String(rank));
@@ -366,6 +369,9 @@ function dayStripLegendItem(doc, entry, lane) {
   });
   if (mark && themes && entry && typeof entry.shade === "number" && entry.shade > 0) {
     mark.setAttribute("data-shade", String(entry.shade));
+  }
+  if (mark && entry && typeof entry.tone === "string" && entry.tone) {
+    mark.setAttribute("data-tone", entry.tone);
   }
   dayStripAppend(item, mark);
   dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-label" }, text || ""));

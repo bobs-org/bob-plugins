@@ -26,7 +26,11 @@ The `synthetic-*.json` files are explicitly synthetic **presentation** fixtures.
 cover week/month groups, signed values, populated rolling medians and prior ticks, long
 theme/chore names, grouped daily drill-down, and empty/all-null states. The
 `synthetic-homes.json` fixture adds the long `job_2026_apply_29` stem, many area hues,
-an all-bucket split, and expandable project groups. Synthetic values and summaries are
+an all-bucket split, and expandable project groups. `synthetic-lanes.json` is a
+presentation-only 4W-shaped report for the Stats window bars: about 13 roots
+including `@daily`, `@unlinked`, and `@unfiled`, and about 22 themes with
+config, pin, exempt, unconfigured, and `(unnamed)` hues plus long hour
+displays. Synthetic values and summaries are
 intentionally not internally consistent and must never be treated as vault results or
 as tests of Stats metric semantics.
 

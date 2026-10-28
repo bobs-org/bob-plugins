@@ -27152,6 +27152,7 @@ function statsDefaultViewState() {
     homeRowsExpanded: {},
     homeSessionsExpanded: {},
     homeSessionsAll: {},
+    themeRowsExpanded: false,
   };
 }
 
@@ -27910,6 +27911,8 @@ class BobLedgerToolsStatsBlockMixin {
         view.el.textContent = "";
       }
       const root = statsEl(doc, "div", { class: "bob-stats bob-stats-loading" });
+      const lanes = typeof statsWindowLanesSkeleton === "function" ? statsWindowLanesSkeleton(doc) : null;
+      if (lanes) root.appendChild(lanes);
       const tiles = statsEl(doc, "div", { class: "bob-stats-tiles", role: "status", "aria-label": "Stats loading" });
       for (let index = 0; index < STATS_DEFAULT_TILE_COUNT; index += 1) {
         const tile = statsEl(doc, "div", { class: "bob-stats-tile bob-stats-skeleton" });
@@ -27976,6 +27979,8 @@ class BobLedgerToolsStatsBlockMixin {
         state.focus = fence.focus && allIds.includes(fence.focus) ? fence.focus : ids[0] || allIds[0] || null;
       }
       root.appendChild(this.statsHeader(doc, view, report));
+      const lanes = typeof this.statsWindowLanes === "function" ? this.statsWindowLanes(doc, view, report) : null;
+      if (lanes) root.appendChild(lanes);
       root.appendChild(this.statsTiles(doc, view, report));
       const focusMetric = metrics.find((metric) => metric.id === state.focus) || null;
       if (focusMetric) {
@@ -28783,6 +28788,14 @@ class BobLedgerToolsStatsChartMixin {
     view.chartRoot = null;
     view.chartHitNodes = null;
     view.hoverBucket = null;
+    try {
+      if (view.statsLanesHost && typeof dayStripReleaseFitObserver === "function") {
+        dayStripReleaseFitObserver(view.statsLanesHost);
+      }
+    } catch (error) {
+      // Fit observer cleanup is best-effort.
+    }
+    view.statsLanesHost = null;
   }
 
   statsRegisterChartResize(view, target) {
@@ -29557,8 +29570,9 @@ function statsPanelSummaryEntry(entry) {
 }
 
 // Ranked theme rows for pomodoro metrics plus the supplied period total.
-// Rust already keeps top-five-plus-other; this preserves that order for
-// ties and sorts strictly by value otherwise.
+// JSON keeps every theme; older bob still supplies top-five-plus-other.
+// This preserves supplied order for ties and sorts strictly by value
+// otherwise.
 function statsPanelThemeRows(metric, point) {
   const safe = metric && typeof metric === "object" ? metric : {};
   const summary = safe.parts_summary && typeof safe.parts_summary === "object" ? safe.parts_summary : {};
@@ -29621,11 +29635,16 @@ function statsThemeHueFromResolved(resolved, slots) {
 // theme lane. Label and hue come from the report's theme_hues map when
 // present; otherwise an optional fallback (the plugin's pomodoroThemeHueFor).
 // Never hashes, never scans areas. Returns { key, label, hue, gray }.
+// Exact keys `other` and `(unnamed)` are always gray, even when
+// theme_hues carries a hashed entry for them.
 function statsThemeRef(report, key, fallback) {
   const rawKey = typeof key === "string" ? key : String(key || "");
   const slots = statsThemePaletteHues();
   const folded = rawKey.toLowerCase();
   const verbatim = folded === "(unnamed)" || folded === "other";
+  if (verbatim) {
+    return { key: rawKey, label: rawKey, hue: "gray", gray: true, hue_source: "bucket", unconfigured: false };
+  }
   const normalized = statsThemeNormalizeKey(rawKey);
   const hues = report && report.theme_hues && typeof report.theme_hues === "object"
     ? report.theme_hues
@@ -29635,29 +29654,33 @@ function statsThemeRef(report, key, fallback) {
     : null;
   const entry = mapped && typeof mapped === "object" ? mapped : null;
   let label = rawKey;
-  if (!verbatim && entry && typeof entry.name === "string" && entry.name) {
+  if (entry && typeof entry.name === "string" && entry.name) {
     label = entry.name;
   }
   let hue = "gray";
   let gray = true;
+  let hueSource = "";
+  let unconfigured = false;
   if (entry) {
     const resolved = statsThemeHueFromResolved(entry, slots);
     hue = resolved.hue;
     gray = resolved.gray;
-  } else if (verbatim) {
-    hue = "gray";
-    gray = true;
+    hueSource = typeof entry.hue_source === "string" ? entry.hue_source : "";
+    unconfigured = hueSource === "unconfigured" || entry.configured === false;
   } else if (typeof fallback === "function") {
     try {
-      const resolved = statsThemeHueFromResolved(fallback(rawKey, label), slots);
+      const resolvedRaw = fallback(rawKey, label);
+      const resolved = statsThemeHueFromResolved(resolvedRaw, slots);
       hue = resolved.hue;
       gray = resolved.gray;
+      hueSource = resolvedRaw && typeof resolvedRaw.hue_source === "string" ? resolvedRaw.hue_source : "";
+      unconfigured = hueSource === "unconfigured" || Boolean(resolvedRaw && resolvedRaw.configured === false);
     } catch (error) {
       hue = "gray";
       gray = true;
     }
   }
-  return { key: rawKey, label, hue, gray };
+  return { key: rawKey, label, hue, gray, hue_source: hueSource, unconfigured };
 }
 
 const STATS_PANEL_HOME_HUES = ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
@@ -30393,7 +30416,16 @@ class BobLedgerToolsStatsPanelsMixin {
       typeof this.pomodoroThemeHueFor === "function"
         ? (themeKey, name) => this.pomodoroThemeHueFor(themeKey, name)
         : null;
-    for (const row of model.rows) {
+    const hasOther = model.rows.some((row) => row && row.key === "other");
+    if (!viewModel.state || viewModel.state.themeRowsExpanded !== true) {
+      viewModel.state.themeRowsExpanded = false;
+    }
+    const expanded = viewModel.state.themeRowsExpanded === true;
+    const cap = 8;
+    const visible = (!hasOther && !expanded && model.rows.length > cap)
+      ? model.rows.slice(0, cap)
+      : model.rows;
+    for (const row of visible) {
       const item = statsEl(doc, "li", { class: "bob-stats-panel-bar-row" });
       const track = statsEl(doc, "span", { class: "bob-stats-panel-bar-track bob-stats-panel-bar-thin", "aria-hidden": "true" });
       const ref = typeof statsThemeRef === "function"
@@ -30412,6 +30444,19 @@ class BobLedgerToolsStatsPanelsMixin {
       list.appendChild(item);
     }
     section.appendChild(list);
+    if (!hasOther && model.rows.length > cap) {
+      const more = statsEl(doc, "button", {
+        class: "bob-stats-home-more",
+        type: "button",
+        "aria-expanded": expanded ? "true" : "false",
+        "data-stats-focus-key": "panel-theme-more",
+      }, expanded ? "Show fewer" : (model.rows.length - cap) + " more");
+      more.addEventListener("click", () => {
+        viewModel.state.themeRowsExpanded = !expanded;
+        this.statsRenderLocally(view, "panel-theme-more");
+      });
+      section.appendChild(more);
+    }
     return true;
   }
 
@@ -31506,6 +31551,373 @@ class BobLedgerToolsStatsHomesMixin {
     return true;
   }
 }
+// ---- src/239-plugin-time-lanes-model.js ----
+// Shared time-lane builders for the Day strip and the Stats window bars.
+// Order, hue, shade, tone, legend labels, and overflow ranks live here so
+// both surfaces stay one family. Bob owns every value; these helpers only
+// arrange supplied parts.
+
+function timeLanePositive(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function timeLaneRootTone(key, hue) {
+  if (key === "@unlinked" || key === "@unfiled") return "none";
+  if (hue === "gray") return "gray";
+  return "hue";
+}
+
+function timeLaneThemeTone(key, gray) {
+  if (String(key).toLowerCase() === "(unnamed)") return "none";
+  if (gray) return "gray";
+  return "hue";
+}
+
+function timeLaneThemeUnconfigured(entry) {
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.hue_source === "unconfigured") return true;
+  if (entry.configured === false) return true;
+  return false;
+}
+
+function timeLaneSegmentTitle(segment) {
+  const label = segment && typeof segment.label === "string" ? segment.label : "";
+  const display = segment && typeof segment.display === "string" ? segment.display : "";
+  const share = segment && typeof segment.share === "string" ? segment.share : "";
+  const parts = [label, display, share].filter(Boolean);
+  let title = parts.join(" · ");
+  if (segment && segment.unconfigured) title += " · not in your themes";
+  return title;
+}
+
+function timeLaneRootSegments(report, dimension, rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const hueMap = typeof statsPanelDistinctHues === "function"
+    ? statsPanelDistinctHues(list, report)
+    : new Map();
+  return list.map((row) => {
+    if (!row || typeof row.key !== "string" || !row.key) return null;
+    const hue = hueMap.get(row.key) || row.hue || "gray";
+    const tone = timeLaneRootTone(row.key, hue);
+    const segment = {
+      key: row.key,
+      label: typeof row.label === "string" && row.label ? row.label : row.key,
+      value: timeLanePositive(row.value) ? row.value : (Number(row.value) || 0),
+      display: typeof row.display === "string" && row.display ? row.display : "",
+      share: typeof row.share === "string" ? row.share : "",
+      hue,
+      shade: 0,
+      gray: hue === "gray",
+      tone,
+      bucket: typeof row.key === "string" && row.key.startsWith("@"),
+      unconfigured: false,
+    };
+    segment.title = timeLaneSegmentTitle(segment);
+    return segment;
+  }).filter(Boolean);
+}
+
+function timeLaneThemeSegments(report, entries, fallback) {
+  const list = [];
+  const raw = Array.isArray(entries) ? entries : [];
+  for (const entry of raw) {
+    if (!entry || typeof entry.key !== "string" || !entry.key) continue;
+    const minutes = typeof entry.value === "number" && Number.isFinite(entry.value) ? entry.value : 0;
+    if (minutes <= 0) continue;
+    const ref = typeof statsThemeRef === "function"
+      ? statsThemeRef(report, entry.key, fallback)
+      : { key: entry.key, label: entry.key, hue: "gray", gray: true };
+    const gray = Boolean(ref.gray);
+    list.push({
+      key: entry.key,
+      label: ref.label || entry.label || entry.key,
+      value: minutes,
+      display: typeof entry.display === "string" && entry.display ? entry.display : "",
+      share: typeof entry.share === "string" ? entry.share : "",
+      hue: gray ? "gray" : ref.hue,
+      gray,
+      hue_source: typeof ref.hue_source === "string" ? ref.hue_source : "",
+      unconfigured: timeLaneThemeUnconfigured(ref) || timeLaneThemeUnconfigured(entry),
+    });
+  }
+  const coloured = list.filter((entry) => !entry.gray);
+  const gray = list.filter((entry) => entry.gray);
+  const shadeOf = new Map();
+  const byHue = new Map();
+  for (const entry of coloured) {
+    const group = byHue.get(entry.hue) || [];
+    group.push(entry);
+    byHue.set(entry.hue, group);
+  }
+  for (const group of byHue.values()) {
+    group.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+    group.forEach((entry, index) => {
+      shadeOf.set(entry.key, index === 0 ? 0 : index === 1 ? 1 : 2);
+    });
+  }
+  coloured.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  const unnamed = [];
+  const other = [];
+  const muted = [];
+  for (const entry of gray) {
+    const folded = String(entry.key).toLowerCase();
+    if (folded === "(unnamed)") unnamed.push(entry);
+    else if (folded === "other") other.push(entry);
+    else muted.push(entry);
+  }
+  muted.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  other.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  unnamed.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  const ordered = coloured.concat(muted, other, unnamed);
+  return ordered.map((entry) => {
+    const segment = {
+      key: entry.key,
+      label: entry.label,
+      value: entry.value,
+      display: entry.display,
+      share: entry.share,
+      hue: entry.hue,
+      gray: entry.gray,
+      shade: entry.gray ? 0 : (shadeOf.has(entry.key) ? shadeOf.get(entry.key) : 0),
+      tone: timeLaneThemeTone(entry.key, entry.gray),
+      bucket: entry.gray,
+      unconfigured: Boolean(entry.unconfigured),
+    };
+    segment.title = timeLaneSegmentTitle(segment);
+    return segment;
+  });
+}
+
+function timeLaneLegendLabel(report, dimension, row) {
+  try {
+    if (typeof dayStripLegendLabel === "function") {
+      return dayStripLegendLabel(report, dimension, row);
+    }
+  } catch (error) {
+    // Fall through to the row label.
+  }
+  return row && typeof row.label === "string" && row.label ? row.label : (row ? row.key : "");
+}
+
+function timeLaneLegend(report, dimension, segments) {
+  const list = Array.isArray(segments) ? segments : [];
+  const byValue = list.slice().sort((a, b) => {
+    const aValue = typeof a.value === "number" ? a.value : 0;
+    const bValue = typeof b.value === "number" ? b.value : 0;
+    const aLabel = typeof a.label === "string" ? a.label : "";
+    const bLabel = typeof b.label === "string" ? b.label : "";
+    return bValue - aValue || aLabel.localeCompare(bLabel);
+  });
+  const rankOf = new Map(byValue.map((segment, index) => [segment.key, index + 1]));
+  const ranked = list.map((segment) => {
+    const rank = rankOf.get(segment.key) || 0;
+    if (segment && typeof segment === "object") segment.rank = rank;
+    return segment;
+  });
+  const initialLabels = new Map(
+    ranked.map((segment) => [segment.key, timeLaneLegendLabel(report, dimension, segment)]),
+  );
+  const labelCounts = new Map();
+  for (const label of initialLabels.values()) {
+    const folded = String(label).toLowerCase();
+    labelCounts.set(folded, (labelCounts.get(folded) || 0) + 1);
+  }
+  const legend = ranked.map((segment) => {
+    const initial = initialLabels.get(segment.key) || segment.label;
+    const folded = String(initial).toLowerCase();
+    const collided = (labelCounts.get(folded) || 0) > 1;
+    return {
+      key: segment.key,
+      label: segment.label,
+      legendLabel: collided ? segment.label : initial,
+      display: segment.display,
+      value: segment.value,
+      hue: segment.hue,
+      gray: segment.gray,
+      shade: segment.shade,
+      bucket: segment.bucket,
+      rank: segment.rank || 0,
+    };
+  });
+  const overflow = ranked.filter((segment) => (rankOf.get(segment.key) || 0) > 3);
+  const overflowTitle = overflow.map((segment) => segment.label + " " + segment.display).join("\n");
+  return {
+    segments: ranked,
+    legend,
+    overflow,
+    overflowDefault: { count: Math.max(0, ranked.length - 3), title: overflowTitle },
+  };
+}
+
+function statsWindowLaneEmpty(dimension, extra) {
+  const themes = dimension === "theme";
+  return {
+    omitted: true,
+    empty: false,
+    dimension: dimension || null,
+    sentence: "",
+    panelView: themes ? "themes" : (dimension === "area" ? "areas" : "roots"),
+    segments: [],
+    legend: [],
+    overflowDefault: { count: 0, title: "" },
+    ariaLabel: "",
+    ...(extra || {}),
+  };
+}
+
+function statsWindowLanesOmitted(extra) {
+  return {
+    state: "omitted",
+    windowKey: "",
+    span: "",
+    meta: { text: "", title: "" },
+    roots: statsWindowLaneEmpty("root_parent"),
+    themes: statsWindowLaneEmpty("theme"),
+    ariaLabel: "",
+    ...(extra || {}),
+  };
+}
+
+function statsWindowWorkedMetric(report) {
+  const metrics = report && Array.isArray(report.metrics) ? report.metrics : [];
+  return metrics.find((metric) => metric && metric.id === "worked") || null;
+}
+
+function statsWindowTotal(worked) {
+  const summary = worked && worked.summary && typeof worked.summary === "object" ? worked.summary : null;
+  const total = summary ? summary.total : null;
+  if (total === null || total === undefined || typeof total !== "object") return null;
+  const value = typeof total.value === "number" && Number.isFinite(total.value) ? total.value : null;
+  const display = typeof total.display === "string" && total.display ? total.display : "";
+  if (value === null && !display) return null;
+  return { value, display };
+}
+
+function statsWindowThemeEntries(worked) {
+  const summary = worked && worked.parts_summary && typeof worked.parts_summary === "object"
+    ? worked.parts_summary
+    : {};
+  const raw = Array.isArray(summary.theme) ? summary.theme : [];
+  return raw.filter((part) => part && typeof part.key === "string" && timeLanePositive(part.value));
+}
+
+function statsWindowLaneAria(sentence, span, segments) {
+  const listed = (Array.isArray(segments) ? segments : []).map((segment) => {
+    const share = segment.share ? " (" + segment.share + ")" : "";
+    return segment.label + " " + segment.display + share;
+  }).join(", ");
+  const head = sentence + (span ? ", " + span : "");
+  if (!listed) return head + ". Show details below.";
+  return head + ": " + listed + ". Show details below.";
+}
+
+function statsWindowBuildLane(report, worked, dimension, sentence, panelView, segments, span) {
+  const built = timeLaneLegend(report, dimension, segments);
+  const legend = built.legend.map((entry) => {
+    const segment = built.segments.find((item) => item.key === entry.key) || entry;
+    return {
+      ...entry,
+      title: segment.title,
+      tone: segment.tone,
+    };
+  });
+  const overflowTitle = built.segments
+    .filter((segment) => (segment.rank || 0) > 3)
+    .map((segment) => segment.title || (segment.label + " " + segment.display))
+    .join("\n");
+  return {
+    omitted: false,
+    empty: false,
+    dimension,
+    sentence,
+    panelView,
+    segments: built.segments,
+    legend,
+    overflowDefault: { count: built.overflowDefault.count, title: overflowTitle },
+    ariaLabel: statsWindowLaneAria(sentence, span, built.segments),
+  };
+}
+
+function statsWindowLanesModel(report, context) {
+  try {
+    const safeReport = report && typeof report === "object" ? report : null;
+    if (!safeReport) return statsWindowLanesOmitted();
+    const worked = statsWindowWorkedMetric(safeReport);
+    if (!worked || worked.unit !== "minutes") return statsWindowLanesOmitted();
+    const total = statsWindowTotal(worked);
+    if (!total) return statsWindowLanesOmitted();
+    const range = safeReport.range && typeof safeReport.range === "object" ? safeReport.range : {};
+    const span = typeof range.label === "string" ? range.label : "";
+    const windowKey = String(range.start || "") + ".." + String(range.end || "");
+    const metaTitle = "Worked" + (span ? " " + span : "") +
+      (range.includes_today ? " · complete days; today is not included" : "");
+    const meta = {
+      text: (total.display || "0m") + " worked",
+      title: metaTitle,
+    };
+    const ariaLabel = "Where the time went" + (span ? ", " + span : "");
+    if (total.value === 0) {
+      const roots = statsWindowLaneEmpty("root_parent", {
+        omitted: false,
+        empty: true,
+        sentence: "Time by root parent",
+        panelView: "roots",
+        ariaLabel: statsWindowLaneAria("Time by root parent", span, []),
+      });
+      return {
+        state: "ready",
+        windowKey,
+        span,
+        meta,
+        roots,
+        themes: statsWindowLaneEmpty("theme"),
+        ariaLabel,
+      };
+    }
+    const hasRoots = typeof statsPanelHasRootParents === "function"
+      ? statsPanelHasRootParents(worked)
+      : Array.isArray(worked.parts_summary && worked.parts_summary.root_parent);
+    const hasAreas = Array.isArray(worked.parts_summary && worked.parts_summary.area);
+    const rootDimension = hasRoots ? "root_parent" : (hasAreas ? "area" : null);
+    let roots = statsWindowLaneEmpty(rootDimension || "root_parent");
+    if (rootDimension) {
+      const rows = typeof statsPanelHomeRows === "function"
+        ? statsPanelHomeRows(worked, safeReport, rootDimension, null)
+        : [];
+      const positive = (Array.isArray(rows) ? rows : []).filter((row) => row && timeLanePositive(row.value));
+      if (positive.length) {
+        const ordered = typeof statsPanelHomeAreaRows === "function"
+          ? statsPanelHomeAreaRows(positive, safeReport)
+          : positive;
+        const segments = timeLaneRootSegments(safeReport, rootDimension, ordered);
+        const sentence = rootDimension === "area" ? "Time by area" : "Time by root parent";
+        const panelView = rootDimension === "area" ? "areas" : "roots";
+        roots = statsWindowBuildLane(safeReport, worked, rootDimension, sentence, panelView, segments, span);
+      }
+    }
+    let themes = statsWindowLaneEmpty("theme");
+    const themeEntries = statsWindowThemeEntries(worked);
+    if (themeEntries.length) {
+      const fallback = context && typeof context.themeHueFor === "function" ? context.themeHueFor : null;
+      const segments = timeLaneThemeSegments(safeReport, themeEntries, fallback);
+      if (segments.length) {
+        themes = statsWindowBuildLane(safeReport, worked, "theme", "Time by theme", "themes", segments, span);
+      }
+    }
+    if (roots.omitted && themes.omitted) return statsWindowLanesOmitted();
+    return {
+      state: "ready",
+      windowKey,
+      span,
+      meta,
+      roots,
+      themes,
+      ariaLabel,
+    };
+  } catch (error) {
+    return statsWindowLanesOmitted();
+  }
+}
 // ---- src/239-plugin-day-strip-model.js ----
 // Pure model for the daily-note Day strip. Bob owns every displayed
 // value; this model only selects the requested day's points and arranges
@@ -31761,60 +32173,26 @@ function dayStripMix(report, worked, day) {
   }
   const rows = statsPanelHomeRows(worked, report, dimension, point);
   const ordered = statsPanelHomeAreaRows(rows, report);
-  const hueMap = statsPanelDistinctHues(ordered, report);
   const displays = point && point.parts_display && point.parts_display[dimension] && typeof point.parts_display[dimension] === "object"
     ? point.parts_display[dimension]
     : {};
-  const segments = ordered.map((row) => ({
-    key: row.key,
-    label: row.label,
-    value: row.value,
+  const withDisplay = ordered.map((row) => ({
+    ...row,
     display: typeof displays[row.key] === "string" ? displays[row.key] : row.display,
-    hue: hueMap.get(row.key) || "gray",
-    bucket: row.key.startsWith("@"),
   }));
-  // Rank 1 = most minutes; tie-break by label, as before.
-  const byValue = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
-  const rankOf = new Map(byValue.map((segment, index) => [segment.key, index + 1]));
-  // Legend names every segment in bar order; the fitter decides how many fit.
-  const initialLabels = new Map(
-    segments.map((segment) => {
-      const row = ordered.find((candidate) => candidate.key === segment.key) || segment;
-      return [segment.key, dayStripLegendLabel(report, dimension, row)];
-    }),
-  );
-  const labelCounts = new Map();
-  for (const label of initialLabels.values()) {
-    const folded = String(label).toLowerCase();
-    labelCounts.set(folded, (labelCounts.get(folded) || 0) + 1);
-  }
-  const legend = segments.map((segment) => {
-    const initial = initialLabels.get(segment.key) || segment.label;
-    const folded = String(initial).toLowerCase();
-    const collided = (labelCounts.get(folded) || 0) > 1;
-    return {
-      key: segment.key,
-      label: segment.label,
-      legendLabel: collided ? segment.label : initial,
-      display: segment.display,
-      value: segment.value,
-      hue: segment.hue,
-      bucket: segment.bucket,
-      rank: rankOf.get(segment.key) || 0,
-    };
-  });
-  const overflowList = segments.filter((segment) => (rankOf.get(segment.key) || 0) > 3);
-  const overflowTitle = (list) => list.map((segment) => segment.label + " " + segment.display).join("\n");
+  const built = typeof timeLaneLegend === "function" && typeof timeLaneRootSegments === "function"
+    ? timeLaneLegend(report, dimension, timeLaneRootSegments(report, dimension, withDisplay))
+    : { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" } };
   const sentence = dimension === "root_parent" ? "Time by root parent" : "Time by area";
   return {
-    segments,
-    legend,
-    overflow: overflowList,
-    overflowDefault: { count: Math.max(0, segments.length - 3), title: overflowTitle(overflowList) },
+    segments: built.segments,
+    legend: built.legend,
+    overflow: built.overflow,
+    overflowDefault: built.overflowDefault,
     empty: Boolean(point && point.value === 0 && point.quality === "ok"),
     omitted: false,
     dimension,
-    title: [sentence, ...segments.map((segment) => segment.label + " " + segment.display)].join("\n"),
+    title: [sentence, ...built.segments.map((segment) => segment.label + " " + segment.display)].join("\n"),
     point,
   };
 }
@@ -32105,81 +32483,24 @@ function dayStripThemeMix(report, worked, day, context) {
     for (const [key, value] of Object.entries(raw)) {
       const minutes = typeof value === "number" && Number.isFinite(value) ? value : 0;
       if (minutes <= 0) continue;
-      const ref = typeof statsThemeRef === "function"
-        ? statsThemeRef(report, key, fallback)
-        : { key, label: key, hue: "gray", gray: true };
       const display = typeof displays[key] === "string" && displays[key]
         ? displays[key]
         : statsPanelFormatMinutes(minutes);
-      entries.push({
-        key,
-        label: ref.label,
-        value: minutes,
-        display,
-        hue: ref.gray ? "gray" : ref.hue,
-        gray: Boolean(ref.gray),
-      });
+      entries.push({ key, value: minutes, display });
     }
     if (!entries.length) return dayStripThemeEmpty({ point });
-
-    const coloured = entries.filter((entry) => !entry.gray);
-    const gray = entries.filter((entry) => entry.gray);
-    const shadeOf = new Map();
-    const byHue = new Map();
-    for (const entry of coloured) {
-      const list = byHue.get(entry.hue) || [];
-      list.push(entry);
-      byHue.set(entry.hue, list);
-    }
-    for (const list of byHue.values()) {
-      list.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
-      list.forEach((entry, index) => {
-        shadeOf.set(entry.key, index === 0 ? 0 : index === 1 ? 1 : 2);
-      });
-    }
-    coloured.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
-    gray.sort((a, b) => {
-      const aUnnamed = String(a.key).toLowerCase() === "(unnamed)" ? 1 : 0;
-      const bUnnamed = String(b.key).toLowerCase() === "(unnamed)" ? 1 : 0;
-      if (aUnnamed !== bUnnamed) return aUnnamed - bUnnamed;
-      return b.value - a.value || a.label.localeCompare(b.label);
-    });
-    const ordered = coloured.concat(gray);
-    const segments = ordered.map((entry) => ({
-      key: entry.key,
-      label: entry.label,
-      value: entry.value,
-      display: entry.display,
-      hue: entry.hue,
-      gray: entry.gray,
-      shade: entry.gray ? 0 : (shadeOf.has(entry.key) ? shadeOf.get(entry.key) : 0),
-      bucket: entry.gray,
-    }));
-    const byValue = segments.slice().sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
-    const rankOf = new Map(byValue.map((segment, index) => [segment.key, index + 1]));
-    const legend = segments.map((segment) => ({
-      key: segment.key,
-      label: segment.label,
-      legendLabel: segment.label,
-      display: segment.display,
-      value: segment.value,
-      hue: segment.hue,
-      gray: segment.gray,
-      shade: segment.shade,
-      bucket: segment.bucket,
-      rank: rankOf.get(segment.key) || 0,
-    }));
-    const overflowList = segments.filter((segment) => (rankOf.get(segment.key) || 0) > 3);
-    const overflowTitle = (list) => list.map((segment) => segment.label + " " + segment.display).join("\n");
-    const titleLines = ["Time by theme", ...segments.map((segment) => segment.label + " " + segment.display)];
+    const built = typeof timeLaneLegend === "function" && typeof timeLaneThemeSegments === "function"
+      ? timeLaneLegend(report, "theme", timeLaneThemeSegments(report, entries, fallback))
+      : { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" } };
+    const titleLines = ["Time by theme", ...built.segments.map((segment) => segment.label + " " + segment.display)];
     if (dayStripThemeHasSplitSession(report, day)) {
       titleLines.push("Pomodoros with several themes are split evenly between them.");
     }
     return {
-      segments,
-      legend,
-      overflow: overflowList,
-      overflowDefault: { count: Math.max(0, segments.length - 3), title: overflowTitle(overflowList) },
+      segments: built.segments,
+      legend: built.legend,
+      overflow: built.overflow,
+      overflowDefault: built.overflowDefault,
       empty: false,
       omitted: false,
       dimension: "theme",
@@ -32742,9 +33063,12 @@ function dayStripLegendItem(doc, entry, lane) {
   const text = entry
     ? (typeof entry.legendLabel === "string" && entry.legendLabel ? entry.legendLabel : entry.label)
     : "";
+  const title = entry && typeof entry.title === "string" && entry.title
+    ? entry.title
+    : (entry ? entry.label + " " + entry.display : null);
   const item = statsEl(doc, "span", {
     class: "bob-day-strip-legend-item",
-    title: entry ? entry.label + " " + entry.display : null,
+    title,
   });
   if (item) {
     if (rank) item.setAttribute("data-rank", String(rank));
@@ -32760,6 +33084,9 @@ function dayStripLegendItem(doc, entry, lane) {
   });
   if (mark && themes && entry && typeof entry.shade === "number" && entry.shade > 0) {
     mark.setAttribute("data-shade", String(entry.shade));
+  }
+  if (mark && entry && typeof entry.tone === "string" && entry.tone) {
+    mark.setAttribute("data-tone", entry.tone);
   }
   dayStripAppend(item, mark);
   dayStripAppend(item, statsEl(doc, "span", { class: "bob-day-strip-legend-label" }, text || ""));
@@ -33527,6 +33854,492 @@ function dayStripReleaseFitObserver(el) {
     el.__dayStripFitObserver = null;
   } catch (error) {
     // Best-effort.
+  }
+}
+// ---- src/239-plugin-stats-lanes-render.js ----
+// Stats window time bars: two Day-strip-style lanes between the header
+// and the tiles. The model owns values; this painter lays them out,
+// fits the legends, morphs on a window change, and activates the panel.
+
+function statsLanesViewOf(host) {
+  try {
+    if (host && host.ownerDocument && host.ownerDocument.defaultView) {
+      return host.ownerDocument.defaultView;
+    }
+  } catch (error) {
+    // Fall through.
+  }
+  try {
+    if (typeof globalThis !== "undefined") return globalThis;
+  } catch (error) {
+    // No global.
+  }
+  return null;
+}
+
+function statsLanesHasLayout(host) {
+  try {
+    if (host && typeof host.getBoundingClientRect === "function") {
+      const rect = host.getBoundingClientRect();
+      if (rect && Number.isFinite(rect.width) && rect.width > 0) return true;
+    }
+  } catch (error) {
+    // Fall through.
+  }
+  try {
+    if (host && Number.isFinite(host.clientWidth) && host.clientWidth > 0) return true;
+  } catch (error) {
+    // No layout.
+  }
+  return false;
+}
+
+function statsLanesPrefersReducedMotion(host) {
+  try {
+    const view = statsLanesViewOf(host);
+    if (view && typeof view.matchMedia === "function") {
+      return Boolean(view.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    }
+  } catch (error) {
+    // Assume motion is allowed.
+  }
+  return false;
+}
+
+function statsLanesRaf(host) {
+  try {
+    const view = statsLanesViewOf(host);
+    if (view && typeof view.requestAnimationFrame === "function") {
+      return view.requestAnimationFrame.bind(view);
+    }
+  } catch (error) {
+    // Fall through.
+  }
+  try {
+    if (typeof requestAnimationFrame === "function") return requestAnimationFrame;
+  } catch (error) {
+    // No rAF.
+  }
+  return null;
+}
+
+function statsLanesMemoryPairs(lane) {
+  const segments = lane && Array.isArray(lane.segments) ? lane.segments : [];
+  return segments.map((segment) => [segment.key, segment.value]);
+}
+
+function statsLanesOldValue(pairs, key) {
+  if (!Array.isArray(pairs)) return null;
+  for (const pair of pairs) {
+    if (Array.isArray(pair) && pair[0] === key) return pair[1];
+  }
+  return null;
+}
+
+function statsLanesShouldMorph(host, model, memory) {
+  if (!model || !memory || memory.windowKey === model.windowKey) return false;
+  if (!statsLanesHasLayout(host)) return false;
+  if (statsLanesPrefersReducedMotion(host)) return false;
+  return typeof statsLanesRaf(host) === "function";
+}
+
+function statsLanesSetGrow(node, value) {
+  try {
+    if (node && node.style) node.style.flexGrow = String(Math.max(0, Number(value) || 0));
+  } catch (error) {
+    // Best-effort.
+  }
+}
+
+function statsLanesClosest(node, predicate) {
+  let current = node;
+  while (current) {
+    try {
+      if (predicate(current)) return current;
+    } catch (error) {
+      // Keep walking.
+    }
+    current = current.parentNode || null;
+  }
+  return null;
+}
+
+function statsLanesClassList(node) {
+  try {
+    if (typeof node.getAttribute === "function") {
+      return String(node.getAttribute("class") || "").split(/\s+/).filter(Boolean);
+    }
+  } catch (error) {
+    // Empty.
+  }
+  return [];
+}
+
+function statsLanesHasClass(node, name) {
+  return statsLanesClassList(node).includes(name);
+}
+
+function statsLanesHiddenKeys(lane) {
+  const keys = [];
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (statsLanesHasClass(node, "bob-day-strip-legend-item")) {
+      const hidden = (typeof node.hasAttribute === "function" && node.hasAttribute("hidden"))
+        || node.hidden === true
+        || (typeof node.getAttribute === "function" && node.getAttribute("hidden") !== null);
+      const key = typeof node.getAttribute === "function" ? node.getAttribute("data-key") : null;
+      if (hidden && key) keys.push(key);
+    }
+    const children = node.children || [];
+    for (const child of children) visit(child);
+  };
+  visit(lane);
+  return keys;
+}
+
+function statsLanesClearHot(lane) {
+  if (!lane) return;
+  try {
+    if (typeof lane.removeAttribute === "function") lane.removeAttribute("data-hot");
+  } catch (error) {
+    // Best-effort.
+  }
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    try {
+      if (typeof node.removeAttribute === "function" && node.getAttribute && node.getAttribute("data-hot") === "true") {
+        node.removeAttribute("data-hot");
+      }
+    } catch (error) {
+      // Best-effort.
+    }
+    const children = node.children || [];
+    for (const child of children) visit(child);
+  };
+  visit(lane);
+}
+
+function statsLanesMarkHot(lane, keys) {
+  statsLanesClearHot(lane);
+  if (!lane || !Array.isArray(keys) || !keys.length) return;
+  const wanted = new Set(keys);
+  try {
+    if (typeof lane.setAttribute === "function") lane.setAttribute("data-hot", "true");
+  } catch (error) {
+    // Best-effort.
+  }
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    try {
+      const key = typeof node.getAttribute === "function" ? node.getAttribute("data-key") : null;
+      if (key && wanted.has(key) && typeof node.setAttribute === "function") {
+        node.setAttribute("data-hot", "true");
+      }
+    } catch (error) {
+      // Best-effort.
+    }
+    const children = node.children || [];
+    for (const child of children) visit(child);
+  };
+  visit(lane);
+}
+
+function statsLanesBindHover(lane) {
+  if (!lane || typeof lane.addEventListener !== "function") return;
+  lane.addEventListener("pointerover", (event) => {
+    const target = event && event.target;
+    const overflow = statsLanesClosest(target, (node) => statsLanesHasClass(node, "bob-day-strip-overflow"));
+    if (overflow) {
+      const keys = statsLanesHiddenKeys(lane);
+      statsLanesMarkHot(lane, keys);
+      try {
+        if (typeof overflow.setAttribute === "function") overflow.setAttribute("data-hot", "true");
+      } catch (error) {
+        // Best-effort.
+      }
+      return;
+    }
+    const keyed = statsLanesClosest(target, (node) => {
+      try {
+        return Boolean(node && typeof node.getAttribute === "function" && node.getAttribute("data-key"));
+      } catch (error) {
+        return false;
+      }
+    });
+    if (!keyed) return;
+    const key = keyed.getAttribute("data-key");
+    if (key) statsLanesMarkHot(lane, [key]);
+  });
+  lane.addEventListener("pointerleave", () => {
+    statsLanesClearHot(lane);
+  });
+}
+
+function statsLanesActivate(node, action) {
+  if (!node || typeof node.addEventListener !== "function") return;
+  const invoke = (event) => {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    if (typeof action === "function") action();
+  };
+  node.addEventListener("click", invoke);
+  node.addEventListener("keydown", (event) => {
+    if (!event || (event.key !== "Enter" && event.key !== " ")) return;
+    invoke(event);
+  });
+}
+
+function statsLanesActivateBar(node, action) {
+  if (!node || typeof node.addEventListener !== "function") return;
+  node.addEventListener("click", () => {
+    if (typeof action === "function") action();
+  });
+}
+
+function statsWindowLanesPaintLegend(doc, laneModel, laneName, skeleton) {
+  const legend = statsEl(doc, "span", { class: "bob-day-strip-legend" });
+  const entries = skeleton
+    ? [
+      { label: "Area", legendLabel: "Area", display: "0m", rank: 1 },
+      { label: "Area", legendLabel: "Area", display: "0m", rank: 2 },
+      { label: "Area", legendLabel: "Area", display: "0m", rank: 3 },
+    ]
+    : (laneModel && Array.isArray(laneModel.legend) ? laneModel.legend : []);
+  for (const entry of entries) {
+    const item = dayStripLegendItem(doc, entry, laneName);
+    if (!skeleton && entry && typeof entry.rank === "number" && entry.rank > 3 && item) {
+      item.setAttribute("hidden", "true");
+    }
+    dayStripAppend(legend, item);
+  }
+  if (laneName !== "themes") {
+    const empty = statsEl(doc, "span", { class: "bob-day-strip-no-pomodoros" }, "no Pomodoros");
+    if (!skeleton && !(laneModel && laneModel.empty) && empty) empty.setAttribute("hidden", "true");
+    dayStripAppend(legend, empty);
+  }
+  const overflowInfo = (laneModel && laneModel.overflowDefault) || { count: Math.max(0, entries.length - 3), title: "" };
+  dayStripAppend(legend, dayStripOverflowCounter(doc, overflowInfo, skeleton));
+  return legend;
+}
+
+function statsWindowLanesPaintBar(doc, laneModel, laneName, oldPairs, morph) {
+  const themes = laneName === "themes";
+  const bar = statsEl(doc, "div", {
+    class: "bob-stats-lane-bar" + (themes ? " bob-stats-lane-themes" : ""),
+    "aria-hidden": "true",
+  });
+  if (!bar) return bar;
+  const segments = laneModel && Array.isArray(laneModel.segments) ? laneModel.segments : [];
+  for (const segment of segments) {
+    if (!segment || !timeLanePositive(segment.value)) continue;
+    const hueClass = themes
+      ? " bob-day-strip-theme-hue-" + segment.hue
+      : " bob-day-strip-hue-" + segment.hue;
+    const part = statsEl(doc, "span", {
+      class: "bob-stats-lane-segment" + hueClass,
+      title: segment.title || (segment.label + " · " + segment.display),
+      "data-key": segment.key,
+      "data-tone": segment.tone || "hue",
+    });
+    if (part && themes && typeof segment.shade === "number" && segment.shade > 0) {
+      part.setAttribute("data-shade", String(segment.shade));
+    }
+    const start = morph ? statsLanesOldValue(oldPairs, segment.key) : segment.value;
+    statsLanesSetGrow(part, start === null || start === undefined ? 0 : start);
+    if (!morph) statsLanesSetGrow(part, segment.value);
+    dayStripAppend(bar, part);
+  }
+  return bar;
+}
+
+function statsWindowLanesPaintLane(doc, model, laneName, handlers, memory, morph) {
+  const laneModel = laneName === "themes" ? model.themes : model.roots;
+  if (!laneModel || laneModel.omitted) return null;
+  const lane = statsEl(doc, "div", {
+    class: "bob-stats-lane",
+    "data-lane": laneName,
+  });
+  const row = statsEl(doc, "div", { class: "bob-stats-lane-row" });
+  const legendWrap = statsEl(doc, "span", {
+    class: "bob-stats-lane-legend",
+    role: "button",
+    tabindex: "0",
+    "data-stats-focus-key": laneName === "themes" ? "lanes-themes" : "lanes-roots",
+    "aria-label": laneModel.ariaLabel || laneModel.sentence,
+  });
+  dayStripAppend(legendWrap, statsWindowLanesPaintLegend(doc, laneModel, laneName, false));
+  statsLanesActivate(legendWrap, () => {
+    if (typeof handlers.activate === "function") handlers.activate(laneModel.panelView);
+  });
+  dayStripAppend(row, legendWrap);
+  const firstShown = (laneName === "roots" && !laneModel.omitted)
+    || (laneName === "themes" && model.roots && model.roots.omitted);
+  if (firstShown && model.meta && model.meta.text) {
+    dayStripAppend(row, statsEl(doc, "span", {
+      class: "bob-stats-lane-meta",
+      title: model.meta.title || null,
+    }, model.meta.text));
+  }
+  dayStripAppend(lane, row);
+  const oldPairs = memory && (laneName === "themes" ? memory.themes : memory.roots);
+  const bar = statsWindowLanesPaintBar(doc, laneModel, laneName, oldPairs, morph);
+  statsLanesActivateBar(bar, () => {
+    if (typeof handlers.activate === "function") handlers.activate(laneModel.panelView);
+  });
+  dayStripAppend(lane, bar);
+  statsLanesBindHover(lane);
+  return lane;
+}
+
+function statsWindowLanesApplyFinalGrow(host, model) {
+  const apply = (laneName, laneModel) => {
+    if (!laneModel || laneModel.omitted) return;
+    const visit = (node) => {
+      if (!node || typeof node !== "object") return;
+      try {
+        if (statsLanesHasClass(node, "bob-stats-lane-segment")) {
+          const key = node.getAttribute && node.getAttribute("data-key");
+          const segment = (laneModel.segments || []).find((item) => item.key === key);
+          if (segment) statsLanesSetGrow(node, segment.value);
+        }
+      } catch (error) {
+        // Best-effort.
+      }
+      const children = node.children || [];
+      for (const child of children) visit(child);
+    };
+    const lanes = host && host.children ? host.children : [];
+    for (const child of lanes) {
+      try {
+        if (child && child.getAttribute && child.getAttribute("data-lane") === laneName) visit(child);
+      } catch (error) {
+        // Best-effort.
+      }
+    }
+  };
+  apply("roots", model.roots);
+  apply("themes", model.themes);
+}
+
+function paintStatsWindowLanes(host, model, handlers, memory) {
+  if (!host || !model || model.state === "omitted") return host;
+  try {
+    if (typeof host.replaceChildren === "function") {
+      host.replaceChildren();
+    } else {
+      host.textContent = "";
+    }
+  } catch (error) {
+    try {
+      host.textContent = "";
+    } catch (inner) {
+      // Best-effort.
+    }
+  }
+  try {
+    host.setAttribute("class", "bob-stats-lanes");
+    host.setAttribute("role", "group");
+    host.setAttribute("aria-label", model.ariaLabel || "Where the time went");
+  } catch (error) {
+    // Best-effort.
+  }
+  const morph = statsLanesShouldMorph(host, model, memory);
+  const safeHandlers = handlers && typeof handlers === "object" ? handlers : {};
+  const roots = statsWindowLanesPaintLane(host.ownerDocument || (typeof document !== "undefined" ? document : null), model, "roots", safeHandlers, memory, morph);
+  const themes = statsWindowLanesPaintLane(host.ownerDocument || (typeof document !== "undefined" ? document : null), model, "themes", safeHandlers, memory, morph);
+  dayStripAppend(host, roots);
+  dayStripAppend(host, themes);
+  if (morph) {
+    try {
+      const classes = statsLanesClassList(host);
+      if (!classes.includes("bob-stats-lanes-morph")) classes.push("bob-stats-lanes-morph");
+      host.setAttribute("class", classes.join(" "));
+    } catch (error) {
+      // Best-effort.
+    }
+    const raf = statsLanesRaf(host);
+    raf(() => {
+      statsWindowLanesApplyFinalGrow(host, model);
+    });
+  }
+  return host;
+}
+
+function statsWindowLanesSkeleton(doc) {
+  const host = statsEl(doc, "div", {
+    class: "bob-stats-lanes bob-stats-lanes-skeleton",
+    role: "group",
+    "aria-label": "Where the time went",
+    "aria-hidden": "true",
+  });
+  for (const laneName of ["roots", "themes"]) {
+    const lane = statsEl(doc, "div", { class: "bob-stats-lane", "data-lane": laneName });
+    const row = statsEl(doc, "div", { class: "bob-stats-lane-row" });
+    dayStripAppend(row, statsWindowLanesPaintLegend(doc, null, laneName, true));
+    dayStripAppend(lane, row);
+    dayStripAppend(lane, statsEl(doc, "div", {
+      class: "bob-stats-lane-bar",
+      "aria-hidden": "true",
+    }));
+    dayStripAppend(host, lane);
+  }
+  return host;
+}
+
+class BobLedgerToolsStatsLanesMixin {
+  statsWindowLanes(doc, view, report) {
+    try {
+      const fallback = typeof this.pomodoroThemeHueFor === "function"
+        ? (themeKey, name) => this.pomodoroThemeHueFor(themeKey, name)
+        : null;
+      const model = typeof statsWindowLanesModel === "function"
+        ? statsWindowLanesModel(report, { themeHueFor: fallback })
+        : null;
+      if (!model || model.state === "omitted") return null;
+      const host = statsEl(doc, "div", {
+        class: "bob-stats-lanes",
+        role: "group",
+        "aria-label": model.ariaLabel || "Where the time went",
+      });
+      if (!host) return null;
+      paintStatsWindowLanes(host, model, {
+        activate: (panelView) => this.statsWindowLanesActivate(view, panelView),
+      }, view && view.statsLanesMemory);
+      if (view) {
+        view.statsLanesMemory = {
+          windowKey: model.windowKey,
+          roots: statsLanesMemoryPairs(model.roots),
+          themes: statsLanesMemoryPairs(model.themes),
+        };
+        view.statsLanesHost = host;
+      }
+      try {
+        if (typeof dayStripFitLegend === "function") dayStripFitLegend(host);
+      } catch (error) {
+        // Fit is best-effort.
+      }
+      try {
+        if (typeof dayStripEnsureFitObserver === "function") dayStripEnsureFitObserver(host);
+      } catch (error) {
+        // Observer is best-effort.
+      }
+      return host;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  statsWindowLanesActivate(view, panelView) {
+    try {
+      const state = this.statsViewStateFor(view && view.sourcePath);
+      state.focus = "worked";
+      state.homesView = panelView === "areas" || panelView === "themes" ? panelView : "roots";
+      state.pinnedDay = null;
+      state.pinnedBucket = null;
+      state.revealPanel = "homes";
+      this.statsRenderLocally(view, "panel-home-view-" + state.homesView);
+    } catch (error) {
+      // Activation is best-effort.
+    }
   }
 }
 // ---- src/239-plugin-day-strip-hosts.js ----
@@ -59217,6 +60030,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsChartMixin,
   BobLedgerToolsStatsHomesMixin,
   BobLedgerToolsStatsPanelsMixin,
+  BobLedgerToolsStatsLanesMixin,
   BobLedgerToolsDayStripMixin,
   BobLedgerToolsDayStripLanesMixin,
   BobLedgerToolsDayStripFenceMixin,
@@ -61734,6 +62548,12 @@ module.exports.helpers = {
   dayStripFitLegend,
   dayStripEnsureFitObserver,
   dayStripReleaseFitObserver,
+  timeLaneRootSegments,
+  timeLaneThemeSegments,
+  timeLaneLegend,
+  statsWindowLanesModel,
+  statsWindowLanesSkeleton,
+  paintStatsWindowLanes,
   dayStripValueRuns,
   dayStripMarkState,
   dayStripRef,

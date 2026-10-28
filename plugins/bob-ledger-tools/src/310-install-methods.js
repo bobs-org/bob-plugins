@@ -33,6 +33,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsChartMixin,
   BobLedgerToolsStatsHomesMixin,
   BobLedgerToolsStatsPanelsMixin,
+  BobLedgerToolsStatsLanesMixin,
   BobLedgerToolsDayStripMixin,
   BobLedgerToolsDayStripLanesMixin,
   BobLedgerToolsDayStripFenceMixin,

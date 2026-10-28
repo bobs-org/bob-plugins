@@ -187,6 +187,14 @@ class BobLedgerToolsStatsChartMixin {
     view.chartRoot = null;
     view.chartHitNodes = null;
     view.hoverBucket = null;
+    try {
+      if (view.statsLanesHost && typeof dayStripReleaseFitObserver === "function") {
+        dayStripReleaseFitObserver(view.statsLanesHost);
+      }
+    } catch (error) {
+      // Fit observer cleanup is best-effort.
+    }
+    view.statsLanesHost = null;
   }
 
   statsRegisterChartResize(view, target) {

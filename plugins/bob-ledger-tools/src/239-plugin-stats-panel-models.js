@@ -55,8 +55,9 @@ function statsPanelSummaryEntry(entry) {
 }
 
 // Ranked theme rows for pomodoro metrics plus the supplied period total.
-// Rust already keeps top-five-plus-other; this preserves that order for
-// ties and sorts strictly by value otherwise.
+// JSON keeps every theme; older bob still supplies top-five-plus-other.
+// This preserves supplied order for ties and sorts strictly by value
+// otherwise.
 function statsPanelThemeRows(metric, point) {
   const safe = metric && typeof metric === "object" ? metric : {};
   const summary = safe.parts_summary && typeof safe.parts_summary === "object" ? safe.parts_summary : {};
@@ -119,11 +120,16 @@ function statsThemeHueFromResolved(resolved, slots) {
 // theme lane. Label and hue come from the report's theme_hues map when
 // present; otherwise an optional fallback (the plugin's pomodoroThemeHueFor).
 // Never hashes, never scans areas. Returns { key, label, hue, gray }.
+// Exact keys `other` and `(unnamed)` are always gray, even when
+// theme_hues carries a hashed entry for them.
 function statsThemeRef(report, key, fallback) {
   const rawKey = typeof key === "string" ? key : String(key || "");
   const slots = statsThemePaletteHues();
   const folded = rawKey.toLowerCase();
   const verbatim = folded === "(unnamed)" || folded === "other";
+  if (verbatim) {
+    return { key: rawKey, label: rawKey, hue: "gray", gray: true, hue_source: "bucket", unconfigured: false };
+  }
   const normalized = statsThemeNormalizeKey(rawKey);
   const hues = report && report.theme_hues && typeof report.theme_hues === "object"
     ? report.theme_hues
@@ -133,29 +139,33 @@ function statsThemeRef(report, key, fallback) {
     : null;
   const entry = mapped && typeof mapped === "object" ? mapped : null;
   let label = rawKey;
-  if (!verbatim && entry && typeof entry.name === "string" && entry.name) {
+  if (entry && typeof entry.name === "string" && entry.name) {
     label = entry.name;
   }
   let hue = "gray";
   let gray = true;
+  let hueSource = "";
+  let unconfigured = false;
   if (entry) {
     const resolved = statsThemeHueFromResolved(entry, slots);
     hue = resolved.hue;
     gray = resolved.gray;
-  } else if (verbatim) {
-    hue = "gray";
-    gray = true;
+    hueSource = typeof entry.hue_source === "string" ? entry.hue_source : "";
+    unconfigured = hueSource === "unconfigured" || entry.configured === false;
   } else if (typeof fallback === "function") {
     try {
-      const resolved = statsThemeHueFromResolved(fallback(rawKey, label), slots);
+      const resolvedRaw = fallback(rawKey, label);
+      const resolved = statsThemeHueFromResolved(resolvedRaw, slots);
       hue = resolved.hue;
       gray = resolved.gray;
+      hueSource = resolvedRaw && typeof resolvedRaw.hue_source === "string" ? resolvedRaw.hue_source : "";
+      unconfigured = hueSource === "unconfigured" || Boolean(resolvedRaw && resolvedRaw.configured === false);
     } catch (error) {
       hue = "gray";
       gray = true;
     }
   }
-  return { key: rawKey, label, hue, gray };
+  return { key: rawKey, label, hue, gray, hue_source: hueSource, unconfigured };
 }
 
 const STATS_PANEL_HOME_HUES = ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];

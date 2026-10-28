@@ -308,6 +308,7 @@ test("stats view state is session-only and per source path", async () => {
         homeRowsExpanded: {},
         homeSessionsExpanded: {},
         homeSessionsAll: {},
+        themeRowsExpanded: false,
       });
       first.range = "7d";
       assert.equal(second.range, null);

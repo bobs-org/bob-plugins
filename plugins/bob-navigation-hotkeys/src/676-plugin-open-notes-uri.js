@@ -424,7 +424,14 @@ class BobNavigationHotkeysOpenNotesUriMixin {
           ? { eState: { line } }
           : undefined;
       try {
-        await leaf.openFile(file, openState);
+        if (!(await openWithLeafSwitchGuard(
+          this,
+          file,
+          leaf,
+          () => leaf.openFile(file, openState),
+        ))) {
+          return null;
+        }
       } catch (error) {
         return null;
       }

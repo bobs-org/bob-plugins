@@ -1466,8 +1466,15 @@ async function openVaultFile(app, file) {
   }
 
   try {
-    await leaf.openFile(file);
-    return true;
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const nav = plugins ? plugins["bob-navigation-hotkeys"] : null;
+    const openInActiveLeaf = nav && nav.api && nav.api.openFileInActiveLeaf;
+    if (typeof openInActiveLeaf !== "function") {
+      new Notice("Could not safely open note; update Bob Navigation Hotkeys and try again");
+      return false;
+    }
+    const result = await openInActiveLeaf.call(nav.api, file);
+    return Boolean(result && result.ok === true);
   } catch (error) {
     return false;
   }

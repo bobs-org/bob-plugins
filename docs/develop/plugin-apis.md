@@ -192,6 +192,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
 | `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` opens the Links direction; the reverse direction settles `{ ok: false }` until both stage directions ship. |
 | `openReferencePdf(path)` | Additive member | Open a vault-relative PDF in Highlights; resolves `{ ok, reason? }`. |
+| `openFileInActiveLeaf(file)` | Additive member | Save and verify the current note before opening a Markdown file in the active leaf; reports `{ ok, reason? }` and checks for a clobbered landing. |
 | `openDependencyStage(ref)` | Root method | Open the task's dependency stage. |
 | `removeDependency(parentRef, target)` | Root method | Remove the requested prerequisite. |
 | `claimReviewWalkCompletion(editor)` | Root method | Claim completion handoff for a landed review row. |

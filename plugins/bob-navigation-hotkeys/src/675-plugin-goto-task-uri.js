@@ -469,8 +469,7 @@ class BobNavigationHotkeysGoToTaskUriMixin {
     }
 
     nextState.state.mode = "source";
-    await leaf.setViewState(nextState);
-    return true;
+    return await openWithLeafSwitchGuard(this, file, leaf, () => leaf.setViewState(nextState));
   }
 
   focusGoToTaskEditor() {

@@ -91,6 +91,7 @@
   "457-picker-quick-roll.js",
   "460-install-picker-mixins.js",
   "470-keydown-and-freshness.js",
+  "475-leaf-switch-guard.js",
   "480-review-jump-and-nav-api.js",
   "485-blocks-nav-api.js",
   "486-relations-nav-api.js",

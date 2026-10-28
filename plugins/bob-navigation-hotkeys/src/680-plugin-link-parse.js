@@ -210,17 +210,25 @@ class BobNavigationHotkeysLinkParseMixin {
             (await this.activateWorkspaceLeaf(existingLeaf))
           ) {
             if (this.stripLinkSubpath(linkText) !== linkText) {
-              await this.app.workspace.openLinkText(
-                linkText,
-                sourcePath,
-                false,
+              const leaf = this.app.workspace.activeLeaf || this.app.workspace.getLeaf(false);
+              const opened = await openWithLeafSwitchGuard(this, resolvedFile, leaf, () =>
+                this.app.workspace.openLinkText(linkText, sourcePath, false),
               );
+              if (!opened) {
+                return false;
+              }
             }
             return true;
           }
         }
 
-        await this.app.workspace.openLinkText(linkText, sourcePath, false);
+        const leaf = this.app.workspace.activeLeaf || this.app.workspace.getLeaf(false);
+        const opened = await openWithLeafSwitchGuard(this, resolvedFile, leaf, () =>
+          this.app.workspace.openLinkText(linkText, sourcePath, false),
+        );
+        if (!opened) {
+          return false;
+        }
       } else {
         return this.openMarkdownFileWithLeafReuse(
           resolvedFile,

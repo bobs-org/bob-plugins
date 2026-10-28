@@ -572,15 +572,41 @@ function findStubNode(node, predicate) {
   return null;
 }
 
-test("unblocked rows open their task without dismissing the notice", () => {
-  const calls = [];
+function unblockedNavigationApp(calls) {
+  const sourceFile = { path: "2026/20261009.md", extension: "md" };
+  const targetFile = { path: "sase.md", extension: "md" };
+  const disk = new Map([
+    [sourceFile.path, "daily note"],
+    [targetFile.path, "target note"],
+  ]);
+  const leaf = {
+    view: {
+      file: sourceFile,
+      editor: { getValue: () => "daily note" },
+      save: async () => {},
+      requestSave: { cancel: () => {} },
+    },
+  };
   const app = {
+    vault: {
+      getAbstractFileByPath: (path) => path === targetFile.path ? targetFile : null,
+      read: async (file) => disk.get(file.path),
+    },
     workspace: {
+      activeLeaf: leaf,
+      getLeaf: () => leaf,
       openLinkText: (linkText, sourcePath) => {
         calls.push([linkText, sourcePath]);
+        leaf.view = { file: targetFile, editor: { getValue: () => "target note" } };
       },
     },
   };
+  return app;
+}
+
+test("unblocked rows open their task without dismissing the notice", async () => {
+  const calls = [];
+  const app = unblockedNavigationApp(calls);
   const view = helpers.buildUnblockedNoticeModel(singleLinkedModel(), { app });
   const root = clickableStubNode();
   helpers.renderUnblockedNoticeFragment(view, root, { app });
@@ -591,20 +617,14 @@ test("unblocked rows open their task without dismissing the notice", () => {
   assert.ok(row);
   assert.equal(typeof row.unblockedClick, "function");
   let stopped = false;
-  row.fireClick({ stopPropagation: () => { stopped = true; } });
+  await row.fireClick({ stopPropagation: () => { stopped = true; } });
   assert.equal(stopped, true);
   assert.deepEqual(calls, [["sase.md#^relaunch-failed-agents", "2026/20261009.md"]]);
 });
 
-test("unblocked row without a block id opens the note path", () => {
+test("unblocked row without a block id opens the note path", async () => {
   const calls = [];
-  const app = {
-    workspace: {
-      openLinkText: (linkText, sourcePath) => {
-        calls.push([linkText, sourcePath]);
-      },
-    },
-  };
+  const app = unblockedNavigationApp(calls);
   const row = linkedRow({ block_id: "", link: null, not_linked: "hidden" });
   const view = helpers.buildUnblockedNoticeModel(
     singleLinkedModel({ unblocked: [row] }),
@@ -615,7 +635,7 @@ test("unblocked row without a block id opens the note path", () => {
   const rendered = findFragmentNode(root, (node) =>
     (node.classes || []).includes("bob-nh-unblock-row"),
   );
-  rendered.unblockedClick({ stopPropagation: () => {} });
+  await rendered.unblockedClick({ stopPropagation: () => {} });
   assert.deepEqual(calls, [["sase.md", "2026/20261009.md"]]);
 });
 

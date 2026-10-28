@@ -52,7 +52,10 @@ class BobNavigationHotkeysVimJumpMixin {
         return true;
       }
 
-      await this.app.workspace.getLeaf(false).openFile(file);
+      const leaf = this.app.workspace.getLeaf(false);
+      if (!(await openWithLeafSwitchGuard(this, file, leaf, () => leaf.openFile(file)))) {
+        return false;
+      }
     } catch (error) {
       new Notice(`Could not open ${DASH_FILE_PATH}`);
       return false;

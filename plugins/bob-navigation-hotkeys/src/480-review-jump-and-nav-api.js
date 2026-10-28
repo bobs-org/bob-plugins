@@ -871,8 +871,8 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
       return true;
     }
 
-    await plugin.app.workspace.getLeaf(false).openFile(file);
-    return true;
+    const leaf = plugin.app.workspace.getLeaf(false);
+    return await openWithLeafSwitchGuard(plugin, file, leaf, () => leaf.openFile(file));
   } catch (error) {
     if (failureNotice) {
       new Notice(failureNotice);
@@ -946,6 +946,21 @@ function createDependencyNavApi(plugin) {
           ? { ok: true }
           : { ok: false, reason: "not-opened" },
       );
+    },
+    openFileInActiveLeaf(file) {
+      if (!plugin || !plugin.app || !plugin.app.workspace) {
+        return Promise.resolve({ ok: false, reason: "unavailable" });
+      }
+      return settle(async () => {
+        const workspace = plugin.app.workspace;
+        const leaf = workspace.activeLeaf || workspace.getLeaf(false);
+        if (!leaf || !plugin.isMarkdownFile(file)) {
+          return { ok: false, reason: "unavailable" };
+        }
+        return (await openWithLeafSwitchGuard(plugin, file, leaf, () => leaf.openFile(file)))
+          ? { ok: true }
+          : { ok: false, reason: "not-opened" };
+      });
     },
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {

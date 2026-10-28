@@ -490,7 +490,7 @@ function buildUnblockedNoticeModel(model, options = {}) {
   }
 }
 
-function openUnblockedRowTarget(app, row, dailyPath) {
+async function openUnblockedRowTarget(app, row, dailyPath) {
   try {
     const workspace = app && app.workspace;
     if (!workspace || typeof workspace.openLinkText !== "function") {
@@ -502,13 +502,18 @@ function openUnblockedRowTarget(app, row, dailyPath) {
     }
     const blockId = unblockedNoticeText(row && row.block_id);
     const linkText = blockId ? `${notePath}#^${blockId}` : notePath;
-    const sourcePath = unblockedNoticeText(dailyPath);
-    if (sourcePath) {
-      workspace.openLinkText(linkText, sourcePath);
-    } else {
-      workspace.openLinkText(linkText, "");
+    const targetFile =
+      app.vault && typeof app.vault.getAbstractFileByPath === "function"
+        ? app.vault.getAbstractFileByPath(notePath)
+        : null;
+    const leaf = workspace.activeLeaf || workspace.getLeaf(false);
+    if (!targetFile || !leaf) {
+      return false;
     }
-    return true;
+    const sourcePath = unblockedNoticeText(dailyPath);
+    return await openWithLeafSwitchGuard(app, targetFile, leaf, () =>
+      workspace.openLinkText(linkText, sourcePath || ""),
+    );
   } catch (error) {
     return false;
   }
@@ -532,7 +537,7 @@ function attachUnblockedRowClick(rowEl, handler) {
         } catch (error) {
           // A click must never fail on propagation.
         }
-        handler(event);
+        return handler(event);
       });
     }
   } catch (error) {

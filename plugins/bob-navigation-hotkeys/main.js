@@ -38396,7 +38396,7 @@ function buildUnblockedNoticeModel(model, options = {}) {
   }
 }
 
-function openUnblockedRowTarget(app, row, dailyPath) {
+async function openUnblockedRowTarget(app, row, dailyPath) {
   try {
     const workspace = app && app.workspace;
     if (!workspace || typeof workspace.openLinkText !== "function") {
@@ -38408,13 +38408,18 @@ function openUnblockedRowTarget(app, row, dailyPath) {
     }
     const blockId = unblockedNoticeText(row && row.block_id);
     const linkText = blockId ? `${notePath}#^${blockId}` : notePath;
-    const sourcePath = unblockedNoticeText(dailyPath);
-    if (sourcePath) {
-      workspace.openLinkText(linkText, sourcePath);
-    } else {
-      workspace.openLinkText(linkText, "");
+    const targetFile =
+      app.vault && typeof app.vault.getAbstractFileByPath === "function"
+        ? app.vault.getAbstractFileByPath(notePath)
+        : null;
+    const leaf = workspace.activeLeaf || workspace.getLeaf(false);
+    if (!targetFile || !leaf) {
+      return false;
     }
-    return true;
+    const sourcePath = unblockedNoticeText(dailyPath);
+    return await openWithLeafSwitchGuard(app, targetFile, leaf, () =>
+      workspace.openLinkText(linkText, sourcePath || ""),
+    );
   } catch (error) {
     return false;
   }
@@ -38438,7 +38443,7 @@ function attachUnblockedRowClick(rowEl, handler) {
         } catch (error) {
           // A click must never fail on propagation.
         }
-        handler(event);
+        return handler(event);
       });
     }
   } catch (error) {
@@ -57794,6 +57799,169 @@ function applyReviewJumpRepeat(step, walkList, direction, repeatRaw) {
 // anchors without before/after keys keep the rank-skip behavior forward,
 // mirrored backward. Extra counted steps continue from that one-step
 // landing on the same walk list; `originTier` stays the one-step origin.
+// ---- src/475-leaf-switch-guard.js ----
+function leafSwitchApp(owner) {
+  return owner && owner.app ? owner.app : owner;
+}
+
+function leafSwitchNotice(message, sticky = false) {
+  try {
+    new Notice(message, sticky ? 0 : undefined);
+  } catch (error) {
+    // Notices must never break navigation cleanup.
+  }
+}
+
+function leafSwitchActiveLeaf(app) {
+  const workspace = app && app.workspace;
+  if (!workspace) {
+    return null;
+  }
+  if (workspace.activeLeaf) {
+    return workspace.activeLeaf;
+  }
+  try {
+    return typeof workspace.getLeaf === "function" ? workspace.getLeaf(false) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function leafSwitchIsMarkdown(owner, file) {
+  try {
+    if (owner && typeof owner.isMarkdownFile === "function") {
+      return owner.isMarkdownFile(file) === true;
+    }
+  } catch (error) {
+    return false;
+  }
+  return Boolean(file && typeof file.path === "string" && /\.md$/i.test(file.path));
+}
+
+async function prepareActiveLeafSwitch(owner, targetFile, targetLeaf = null) {
+  const app = leafSwitchApp(owner);
+  const vault = app && app.vault;
+  const leaf = targetLeaf || leafSwitchActiveLeaf(app);
+  const view = leaf && leaf.view;
+  const sourceFile = view && view.file;
+  const sourcePath = sourceFile && sourceFile.path ? sourceFile.path : null;
+  const targetPath = targetFile && targetFile.path ? targetFile.path : "<unknown>";
+  let sourceText = null;
+
+  if (sourcePath && sourcePath === targetPath) {
+    return Object.freeze({ ok: true, sourcePath, sourceText, targetDiskText: null });
+  }
+
+  if (
+    sourceFile &&
+    sourcePath !== targetPath &&
+    leafSwitchIsMarkdown(owner, sourceFile)
+  ) {
+    const editor = view.editor;
+    if (
+      !editor ||
+      typeof editor.getValue !== "function" ||
+      typeof view.save !== "function" ||
+      !vault ||
+      typeof vault.read !== "function"
+    ) {
+      leafSwitchNotice(`Could not save ${sourcePath} before switching notes; staying here`);
+      return Object.freeze({ ok: false, sourcePath, sourceText: null, targetDiskText: null });
+    }
+
+    try {
+      await view.save();
+      const cancel = view.requestSave && view.requestSave.cancel;
+      if (typeof cancel === "function") {
+        cancel.call(view.requestSave);
+      }
+      const sourceDiskText = await vault.read(sourceFile);
+      sourceText = editor.getValue();
+      if (sourceDiskText !== sourceText) {
+        leafSwitchNotice(`Could not save ${sourcePath} before switching notes; staying here`);
+        return Object.freeze({ ok: false, sourcePath, sourceText: null, targetDiskText: null });
+      }
+    } catch (error) {
+      leafSwitchNotice(`Could not save ${sourcePath} before switching notes; staying here`);
+      return Object.freeze({ ok: false, sourcePath, sourceText: null, targetDiskText: null });
+    }
+  }
+
+  let targetDiskText = null;
+  if (vault && typeof vault.read === "function" && targetFile) {
+    try {
+      targetDiskText = await vault.read(targetFile);
+    } catch (error) {
+      leafSwitchNotice(`Could not read ${targetPath} before switching notes; staying here`);
+      return Object.freeze({ ok: false, sourcePath, sourceText, targetDiskText: null });
+    }
+  }
+  return Object.freeze({ ok: true, sourcePath, sourceText, targetDiskText });
+}
+
+function leafSwitchClobberMessage(context, targetFile) {
+  const targetPath = targetFile && targetFile.path ? targetFile.path : "<unknown>";
+  const sourcePath = context && context.sourcePath ? context.sourcePath : "<unknown>";
+  return `bob: ${targetPath} opened with ${sourcePath}'s text — it may have been overwritten while switching notes. Walk stopped; see vault-git-sync docs, Clobbered notes`;
+}
+
+function checkLeafSwitchLanding(owner, targetFile, leaf, context) {
+  if (!context || context.sourceText === null || !targetFile) {
+    return true;
+  }
+  const app = leafSwitchApp(owner);
+  const editor = leaf && leaf.view && leaf.view.editor;
+  const landedText = editor && typeof editor.getValue === "function"
+    ? editor.getValue()
+    : null;
+  if (
+    typeof landedText === "string" &&
+    context.targetDiskText !== context.sourceText &&
+    landedText === context.sourceText
+  ) {
+    leafSwitchNotice(leafSwitchClobberMessage(context, targetFile), true);
+    return false;
+  }
+
+  const checkDisk = async () => {
+    try {
+      const vault = app && app.vault;
+      if (!vault || typeof vault.read !== "function") {
+        return;
+      }
+      const currentDiskText = await vault.read(targetFile);
+      if (
+        context.targetDiskText !== context.sourceText &&
+        currentDiskText === context.sourceText
+      ) {
+        leafSwitchNotice(leafSwitchClobberMessage(context, targetFile), true);
+      }
+    } catch (error) {
+      // The delayed tripwire is best-effort and never rewrites either note.
+    }
+  };
+  try {
+    const schedule = typeof window !== "undefined" && window.setTimeout
+      ? window.setTimeout.bind(window)
+      : setTimeout;
+    schedule(() => { void checkDisk(); }, 2500);
+  } catch (error) {
+    // A missing timer must not make a successful open fail.
+  }
+  return true;
+}
+
+async function openWithLeafSwitchGuard(owner, targetFile, leaf, openAction) {
+  if (!leaf || typeof openAction !== "function") {
+    return false;
+  }
+  const context = await prepareActiveLeafSwitch(owner, targetFile, leaf);
+  if (!context.ok) {
+    return false;
+  }
+  await openAction();
+  return checkLeafSwitchLanding(owner, targetFile, leaf, context);
+}
 // ---- src/480-review-jump-and-nav-api.js ----
 // RECURRING landing refusal (Alt+F and Ctrl+Alt+F write nothing and stay).
 // Exact text from plan:202610/recurring_review_tier.md.
@@ -58668,8 +58836,8 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
       return true;
     }
 
-    await plugin.app.workspace.getLeaf(false).openFile(file);
-    return true;
+    const leaf = plugin.app.workspace.getLeaf(false);
+    return await openWithLeafSwitchGuard(plugin, file, leaf, () => leaf.openFile(file));
   } catch (error) {
     if (failureNotice) {
       new Notice(failureNotice);
@@ -58743,6 +58911,21 @@ function createDependencyNavApi(plugin) {
           ? { ok: true }
           : { ok: false, reason: "not-opened" },
       );
+    },
+    openFileInActiveLeaf(file) {
+      if (!plugin || !plugin.app || !plugin.app.workspace) {
+        return Promise.resolve({ ok: false, reason: "unavailable" });
+      }
+      return settle(async () => {
+        const workspace = plugin.app.workspace;
+        const leaf = workspace.activeLeaf || workspace.getLeaf(false);
+        if (!leaf || !plugin.isMarkdownFile(file)) {
+          return { ok: false, reason: "unavailable" };
+        }
+        return (await openWithLeafSwitchGuard(plugin, file, leaf, () => leaf.openFile(file)))
+          ? { ok: true }
+          : { ok: false, reason: "not-opened" };
+      });
     },
     openDependencyStage(ref) {
       if (!plugin || typeof plugin.openDependencyStageForRef !== "function") {
@@ -76592,7 +76775,10 @@ class BobNavigationHotkeysVimJumpMixin {
         return true;
       }
 
-      await this.app.workspace.getLeaf(false).openFile(file);
+      const leaf = this.app.workspace.getLeaf(false);
+      if (!(await openWithLeafSwitchGuard(this, file, leaf, () => leaf.openFile(file)))) {
+        return false;
+      }
     } catch (error) {
       new Notice(`Could not open ${DASH_FILE_PATH}`);
       return false;
@@ -77725,8 +77911,7 @@ class BobNavigationHotkeysLeafMixin {
     }
 
     try {
-      await leaf.openFile(file);
-      return true;
+      return await openWithLeafSwitchGuard(this, file, leaf, () => leaf.openFile(file));
     } catch (error) {
       return false;
     }
@@ -83859,8 +84044,7 @@ class BobNavigationHotkeysGoToTaskUriMixin {
     }
 
     nextState.state.mode = "source";
-    await leaf.setViewState(nextState);
-    return true;
+    return await openWithLeafSwitchGuard(this, file, leaf, () => leaf.setViewState(nextState));
   }
 
   focusGoToTaskEditor() {
@@ -84396,7 +84580,14 @@ class BobNavigationHotkeysOpenNotesUriMixin {
           ? { eState: { line } }
           : undefined;
       try {
-        await leaf.openFile(file, openState);
+        if (!(await openWithLeafSwitchGuard(
+          this,
+          file,
+          leaf,
+          () => leaf.openFile(file, openState),
+        ))) {
+          return null;
+        }
       } catch (error) {
         return null;
       }
@@ -85821,17 +86012,25 @@ class BobNavigationHotkeysLinkParseMixin {
             (await this.activateWorkspaceLeaf(existingLeaf))
           ) {
             if (this.stripLinkSubpath(linkText) !== linkText) {
-              await this.app.workspace.openLinkText(
-                linkText,
-                sourcePath,
-                false,
+              const leaf = this.app.workspace.activeLeaf || this.app.workspace.getLeaf(false);
+              const opened = await openWithLeafSwitchGuard(this, resolvedFile, leaf, () =>
+                this.app.workspace.openLinkText(linkText, sourcePath, false),
               );
+              if (!opened) {
+                return false;
+              }
             }
             return true;
           }
         }
 
-        await this.app.workspace.openLinkText(linkText, sourcePath, false);
+        const leaf = this.app.workspace.activeLeaf || this.app.workspace.getLeaf(false);
+        const opened = await openWithLeafSwitchGuard(this, resolvedFile, leaf, () =>
+          this.app.workspace.openLinkText(linkText, sourcePath, false),
+        );
+        if (!opened) {
+          return false;
+        }
       } else {
         return this.openMarkdownFileWithLeafReuse(
           resolvedFile,
@@ -86358,6 +86557,9 @@ module.exports.helpers = {
   getOpenObsidianTaskJumpLine,
   getDashTasksHeaderLine,
   openMarkdownFileWithLeafReuse,
+  prepareActiveLeafSwitch,
+  openWithLeafSwitchGuard,
+  checkLeafSwitchLanding,
   getEditorCursor,
   getEditorLine,
   setEditorCursorWithoutScroll,

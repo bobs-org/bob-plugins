@@ -217,8 +217,7 @@ class BobNavigationHotkeysLeafMixin {
     }
 
     try {
-      await leaf.openFile(file);
-      return true;
+      return await openWithLeafSwitchGuard(this, file, leaf, () => leaf.openFile(file));
     } catch (error) {
       return false;
     }

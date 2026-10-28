@@ -9,6 +9,7 @@ const { ModalStub } = require("./modal-harness.cjs");
 global.window = global.window || { setTimeout: (callback) => callback() };
 
 const notices = [];
+const noticeDurations = [];
 
 const originalLoad = Module._load;
 function parseTestYaml(text) {
@@ -40,8 +41,9 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
     class EmptyClass {}
     class TestModal extends ModalStub {}
     class TestNotice {
-      constructor(message) {
+      constructor(message, duration) {
         notices.push(String(message));
+        noticeDurations.push(duration);
       }
     }
     return {
@@ -754,6 +756,7 @@ function createLinkPickerHarness(harnessOptions = {}) {
 
 module.exports = {
   notices,
+  noticeDurations,
   parseTestYaml,
   NavigationHotkeysPlugin,
   helpers,

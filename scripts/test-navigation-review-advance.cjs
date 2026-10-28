@@ -170,7 +170,14 @@ function makeEditor(initial, cursorLine = 0) {
   };
 }
 
-function makePlugin({ rows, activePath, cursorLine = 0, freshnessOptions = {}, withCycler = false }) {
+function makePlugin({
+  rows,
+  activePath,
+  cursorLine = 0,
+  freshnessOptions = {},
+  withCycler = false,
+  trackLeafSwitch = false,
+}) {
   const queueState = rows.map((row) => ({ ...row }));
   const contents = buildNotes(queueState);
   const fileMap = new Map();
@@ -181,22 +188,48 @@ function makePlugin({ rows, activePath, cursorLine = 0, freshnessOptions = {}, w
     editors.set(path, makeEditor(lines.join("\n")));
   }
   let currentPath = activePath;
+  const leafSwitchEvents = [];
+  const diskContents = new Map(
+    Object.entries(contents).map(([path, lines]) => [path, lines.join("\n")]),
+  );
   const viewFor = (path) => ({
     file: fileMap.get(path) || null,
     editor: editors.get(path) || null,
   });
+  const trackedLeaf = {
+    get view() {
+      const current = viewFor(currentPath);
+      return {
+        ...current,
+        save: async () => {
+          leafSwitchEvents.push(`save:${currentPath}`);
+          diskContents.set(currentPath, current.editor.getValue());
+        },
+        requestSave: {
+          cancel: () => leafSwitchEvents.push(`cancel:${currentPath}`),
+        },
+      };
+    },
+    openFile: async (file) => {
+      leafSwitchEvents.push(`open:${file.path}`);
+      currentPath = file.path;
+      return true;
+    },
+  };
   const workspace = {
     getActiveFile: () => fileMap.get(currentPath) || null,
-    getActiveViewOfType: () => viewFor(currentPath),
-    getLeaf: () => ({
+    getActiveViewOfType: () => trackLeafSwitch ? trackedLeaf.view : viewFor(currentPath),
+    getLeaf: () => trackLeafSwitch ? trackedLeaf : ({
       openFile: async (file) => {
         currentPath = file.path;
         return true;
       },
     }),
+    ...(trackLeafSwitch ? { activeLeaf: trackedLeaf } : null),
   };
   const vault = {
     getAbstractFileByPath: (path) => fileMap.get(path) || null,
+    ...(trackLeafSwitch ? { read: async (file) => diskContents.get(file.path) } : null),
   };
   const freshness = freshnessApi(queueState, freshnessOptions);
   const plugins = {
@@ -253,6 +286,8 @@ function makePlugin({ rows, activePath, cursorLine = 0, freshnessOptions = {}, w
     editor: editors.get(currentPath),
     view: () => viewFor(currentPath),
     activePath: () => currentPath,
+    leafSwitchEvents,
+    diskContents,
   };
 }
 
@@ -1013,6 +1048,42 @@ test("advance: Ctrl+Alt+F stamps through the shared tail with one composed toast
   assert.deepEqual(notices, [
     "Fresh ✓ 1 task · 2 due (0 new) · ✓ 0 today\nReview 1/2 · NEXT 2/3 · confirmed 2d ago",
   ]);
+});
+
+test("advance: cross-note landing saves the edited source and cancels its pending save", async () => {
+  const fixture = makePlugin({
+    rows: [
+      laneEntry({ tier: "next", path: "a.md", line: 1, text: "Alpha", rank: 1, tierRank: 1, tierTotal: 1 }),
+      laneEntry({ tier: "next", path: "b.md", line: 1, text: "Beta", rank: 2, tierRank: 1, tierTotal: 1 }),
+    ],
+    activePath: "a.md",
+    trackLeafSwitch: true,
+  });
+  await land(fixture, "first");
+  const editor = fixture.editors.get("a.md");
+  const sourceLine = editor.getLine(0);
+  editor.transaction({
+    changes: [{
+      from: { line: 0, ch: sourceLine.length },
+      to: { line: 0, ch: sourceLine.length },
+      text: "\n# pending editor change",
+    }],
+  });
+  const origin = fixture.plugin.captureReviewGesture(editor);
+  const result = await fixture.plugin.continueReviewWalkAfter(origin, {
+    kind: "lane",
+    handledRefs: [{ path: "a.md", line: 0, raw: fixture.queueState[0].originalMarkdown }],
+    notice: "Ready · 1 task",
+  });
+
+  assert.deepEqual(result, { ok: true, advanced: true, stopped: false });
+  assert.deepEqual(fixture.leafSwitchEvents, [
+    "save:a.md",
+    "cancel:a.md",
+    "open:b.md",
+  ]);
+  assert.equal(fixture.diskContents.get("a.md"), editor.getValue());
+  assert.equal(fixture.activePath(), "b.md");
 });
 
 test("advance: decay choices advance except reword, with no preamble of their own", async () => {

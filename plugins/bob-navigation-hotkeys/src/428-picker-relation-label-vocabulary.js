@@ -154,6 +154,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         if (index !== this.selectedIndex) {
           this.relationCancelConfirmNonce = null;
           this.relationCancelExpected = null;
+          this.relationCloseExpected = null;
         }
         this.selectedIndex = index;
         this.relationLabelTabNoMatch = false;
@@ -169,6 +170,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     if (index !== this.selectedIndex) {
       this.relationCancelConfirmNonce = null;
       this.relationCancelExpected = null;
+      this.relationCloseExpected = null;
     }
     this.selectedIndex = index >= 0 ? index : 0;
   }
@@ -223,6 +225,30 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     }
   }
 
+  relationCloseLabelsConfig() {
+    try {
+      if (
+        this.plugin &&
+        typeof this.plugin.loadRelationsCloseLabels === "function"
+      ) {
+        return this.plugin.loadRelationsCloseLabels();
+      }
+      if (
+        this.plugin &&
+        typeof this.plugin.loadRelationsCancelLabels === "function"
+      ) {
+        return Object.freeze({
+          cancel: this.plugin.loadRelationsCancelLabels(),
+          complete: emptyRelationsCancelLabels(),
+          warnings: Object.freeze([]),
+        });
+      }
+      return loadRelationsCloseLabels();
+    } catch (_error) {
+      return emptyRelationsCloseLabels();
+    }
+  }
+
   relationCancelContentForRef(ref) {
     const path = normalizeVaultRelativePath((ref && ref.path) || "");
     if (
@@ -240,7 +266,8 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
 
   relationCancelPreviewForLabel(label, targetOverrides = new Map()) {
     const normalized = normalizeRelationLabel(String(label || ""));
-    const config = this.relationCancelLabelsConfig();
+    const closeConfig = this.relationCloseLabelsConfig();
+    const config = closeConfig.cancel || this.relationCancelLabelsConfig();
     const configuredKeys = relationCancelLabelsSet(config);
     const linkedFrom = this.isLinkedFromSession();
     const labelTargets = Array.isArray(this.relationLabelTargets)
@@ -355,12 +382,31 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       }
     }
 
-    const plan = planRelationCancelEffects({
-      cancelLabels: config,
-      trigger: RELATION_CANCEL_EXPLICIT_TRIGGER,
-      sources: policySources,
-    });
+    const api = relationTaskStatusCyclerApi(this.plugin && this.plugin.app);
+    const closingPlans = policySources.map((source) =>
+      planRelationClosingSource({
+        cancelLabels: config,
+        completeLabels: closeConfig.complete,
+        trigger: RELATION_CANCEL_EXPLICIT_TRIGGER,
+        cyclerApiAvailable: relationCompleteCyclerApiAvailable(api),
+        source,
+      }),
+    );
+    const plan = {
+      sources: closingPlans.map((entry) => entry.cancel).filter(Boolean),
+      cancels: closingPlans.map((entry) => entry.cancel).filter((entry) => entry && entry.cancels),
+      refusals: closingPlans.map((entry) => entry.cancelRefusal).filter(Boolean),
+    };
+    const completePlan = {
+      sources: closingPlans.map((entry) => entry.complete).filter(Boolean),
+      completes: closingPlans.map((entry) => entry.complete).filter((entry) => entry && entry.completes),
+      refusals: closingPlans.map((entry) => entry.completeRefusal).filter(Boolean),
+    };
     const sources = plan.sources.map((source, index) => ({
+      ...source,
+      ...(sourceDetails[index] || {}),
+    }));
+    const completeSources = completePlan.sources.map((source, index) => ({
       ...source,
       ...(sourceDetails[index] || {}),
     }));
@@ -376,6 +422,12 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       plan,
       formatBulletPropertyDate(new Date()),
     );
+    const expectedCloseEffects = summarizeRelationCloseEffects(
+      plan.sources,
+      completePlan,
+      expected.day,
+    );
+    this.relationCloseExpected = expectedCloseEffects;
     const inverseLabel = normalized && !configuredKeys.has(relationCancelLabelKey(normalized))
       ? relationCancelInverseLabel(normalized, config)
       : null;
@@ -388,6 +440,9 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       cancels: Object.freeze(cancels),
       refusal,
       staysCancelled: relabelAway,
+      completeSources: Object.freeze(completeSources.filter((source) => source.completes === true)),
+      completeRefusal: completePlan.refusals[0] || null,
+      expectedCloseEffects,
       inverseHint: inverseLabel
         ? `“${normalized}” never cancels · to retire “${targetForInverse || "that task"}”, use ⇧L`
         : "",
@@ -529,10 +584,13 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       this.relationLabelTabNoMatch = false;
       this.relationCancelConfirmNonce = null;
       this.relationCancelExpected = null;
+      this.relationCloseExpected = null;
       this.selectedIndex = 0;
     }
     const typed = normalizeRelationLabel(raw);
-    const config = this.relationCancelLabelsConfig();
+    const closeConfig = this.relationCloseLabelsConfig();
+    const config = closeConfig.cancel || this.relationCancelLabelsConfig();
+    const configuredComplete = relationCompleteLabelsSet(closeConfig.complete);
     const suggestions = mergeRelationCancelLabelSuggestions(
       this.readRelationLabelSuggestions(raw, { hidden: "include" }),
       config,
@@ -553,8 +611,9 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       if (!item || item.kind !== "relation-label" || item.plain || !item.label) return Object.freeze(item);
       const configuredCancel = item.configuredCancel === true ||
         relationCancelLabelsSet(config).has(relationCancelLabelKey(item.label));
+      const completeLabel = configuredComplete.has(relationCancelLabelKey(item.label));
       const inverse = relationCancelInverseLabel(item.label, config);
-      const preview = configuredCancel || inverse
+      const preview = configuredCancel || completeLabel || inverse
         ? this.relationCancelPreviewForLabel(item.label)
         : null;
       const disabledReason = configuredCancel && preview && preview.refusal
@@ -563,7 +622,9 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       return Object.freeze({
         ...item,
         configuredCancel,
+        configuredComplete: completeLabel,
         cancelPreview: preview,
+        closePreview: preview,
         disabled: item.disabled === true || Boolean(disabledReason),
         disabledReason: disabledReason || item.disabledReason || "",
       });
@@ -651,6 +712,10 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     }
     const selectedIndex = Math.max(0, Math.min(this.selectedIndex || 0, out.length - 1));
     const selected = out[selectedIndex];
+    this.relationCloseExpected =
+      selected && selected.closePreview
+        ? selected.closePreview.expectedCloseEffects || null
+        : null;
     if (selected && selected.kind === "relation-label" && !selected.plain && !selected.cancelPreview) {
       out[selectedIndex] = decorate({
         ...selected,

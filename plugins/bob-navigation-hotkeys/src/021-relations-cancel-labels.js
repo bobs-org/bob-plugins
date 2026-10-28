@@ -23,6 +23,10 @@ function emptyRelationsCancelLabels() {
 }
 
 function resetRelationsCancelLabelsConfigCache() {
+  if (typeof resetRelationsCloseLabelsConfigCache === "function") {
+    resetRelationsCloseLabelsConfigCache();
+    return;
+  }
   relationsCancelLabelsConfigCache = {
     key: null,
     value: emptyRelationsCancelLabels(),
@@ -52,6 +56,9 @@ function emitRelationsCancelLabelWarnings(messages, cacheKey, emit) {
 }
 
 function loadRelationsCancelLabels(options = {}) {
+  if (typeof loadRelationsCloseLabels === "function") {
+    return loadRelationsCloseLabels(options).cancel;
+  }
   const empty = emptyRelationsCancelLabels();
   const env =
     options.env ||

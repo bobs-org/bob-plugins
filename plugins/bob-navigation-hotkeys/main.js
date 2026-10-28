@@ -2323,6 +2323,10 @@ function emptyRelationsCancelLabels() {
 }
 
 function resetRelationsCancelLabelsConfigCache() {
+  if (typeof resetRelationsCloseLabelsConfigCache === "function") {
+    resetRelationsCloseLabelsConfigCache();
+    return;
+  }
   relationsCancelLabelsConfigCache = {
     key: null,
     value: emptyRelationsCancelLabels(),
@@ -2352,6 +2356,9 @@ function emitRelationsCancelLabelWarnings(messages, cacheKey, emit) {
 }
 
 function loadRelationsCancelLabels(options = {}) {
+  if (typeof loadRelationsCloseLabels === "function") {
+    return loadRelationsCloseLabels(options).cancel;
+  }
   const empty = emptyRelationsCancelLabels();
   const env =
     options.env ||
@@ -2454,6 +2461,174 @@ function loadRelationsCancelLabels(options = {}) {
     relationsCancelLabelsConfigCache = { key: null, value: loaded };
   }
   return loaded;
+}
+// ---- src/022-relations-close-labels.js ----
+// Combined cancel/complete label policy (`docs/task-relations.md` §§17–18).
+// The two kinds share one cache and one overlap check so a configured label
+// can never carry both status effects.
+const RELATIONS_CLOSE_LABELS_LIST_WARNINGS = Object.freeze({
+  cancel:
+    "invalid relations.cancel_labels in %s: expected a list of relation labels; cancelling nothing",
+  complete:
+    "invalid relations.complete_labels in %s: expected a list of relation labels; completing nothing",
+});
+
+let relationsCloseLabelsConfigCache = {
+  key: null,
+  value: emptyRelationsCloseLabels(),
+};
+let relationsCloseLabelsWarnedKey = null;
+
+function emptyRelationsCloseLabels() {
+  return Object.freeze({
+    cancel: emptyRelationsCancelLabels(),
+    complete: emptyRelationsCancelLabels(),
+    warnings: Object.freeze([]),
+  });
+}
+
+function resetRelationsCloseLabelsConfigCache() {
+  relationsCloseLabelsConfigCache = {
+    key: null,
+    value: emptyRelationsCloseLabels(),
+  };
+  relationsCloseLabelsWarnedKey = null;
+  relationsCancelLabelsConfigCache = {
+    key: null,
+    value: emptyRelationsCancelLabels(),
+  };
+  relationsCancelLabelsWarnedKey = null;
+}
+
+function emitRelationsCloseLabelWarnings(messages, cacheKey, emit) {
+  if (!Array.isArray(messages) || messages.length === 0) return;
+  if (cacheKey != null && relationsCloseLabelsWarnedKey === cacheKey) return;
+  if (cacheKey != null) relationsCloseLabelsWarnedKey = cacheKey;
+  const warn =
+    typeof emit === "function"
+      ? emit
+      : typeof console !== "undefined" && typeof console.warn === "function"
+        ? (message) => console.warn(message)
+        : null;
+  if (warn) for (const message of messages) warn(message);
+}
+
+function loadRelationsCloseLabels(options = {}) {
+  const empty = emptyRelationsCloseLabels();
+  const env =
+    options.env ||
+    (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule =
+    options.osModule === undefined
+      ? requireOptionalNodeModule("os")
+      : options.osModule;
+  const fsModule =
+    options.fsModule === undefined
+      ? requireOptionalNodeModule("fs")
+      : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") {
+    relationsCloseLabelsConfigCache = { key: null, value: empty };
+    return empty;
+  }
+  const configPath =
+    options.configPath || getBulletPropertyConfigPath({ env, osModule });
+  const statKey = blocksLinesConfigStatKey(fsModule, configPath);
+  const cacheKey = statKey == null ? null : `${configPath}|${statKey}`;
+  if (
+    cacheKey != null &&
+    relationsCloseLabelsConfigCache.key === cacheKey
+  ) {
+    return relationsCloseLabelsConfigCache.value;
+  }
+  const store = (value) => {
+    relationsCloseLabelsConfigCache = { key: cacheKey, value };
+    return value;
+  };
+
+  let rawConfig;
+  try {
+    rawConfig = fsModule.readFileSync(configPath, "utf8");
+  } catch (_error) {
+    return store(empty);
+  }
+  const parse = options.parseYaml === undefined ? parseYaml : options.parseYaml;
+  if (typeof parse !== "function") return store(empty);
+  let config;
+  try {
+    config = parse(rawConfig);
+  } catch (_error) {
+    return store(empty);
+  }
+
+  const relations = config && config.relations;
+  const warnings = [];
+  const parseList = (kind) => {
+    const field = kind === "cancel" ? "cancel_labels" : "complete_labels";
+    const value = relations && relations[field];
+    if (value === undefined || value === null) {
+      return freezeRelationsCancelLabels([], {});
+    }
+    if (!Array.isArray(value)) {
+      warnings.push(
+        RELATIONS_CLOSE_LABELS_LIST_WARNINGS[kind].replace("%s", configPath),
+      );
+      return freezeRelationsCancelLabels([], {});
+    }
+    const keys = [];
+    const labels = {};
+    const seen = new Set();
+    for (const entry of value) {
+      if (typeof entry !== "string") {
+        warnings.push(
+          `invalid relations.${field} entry in ${configPath}: expected a relation label string`,
+        );
+        continue;
+      }
+      const normalized = normalizeRelationLabel(entry);
+      if (!normalized) {
+        warnings.push(
+          `invalid relations.${field} entry in ${configPath}: not a legal relation label`,
+        );
+        continue;
+      }
+      const key = relationCancelLabelKey(normalized);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      keys.push(key);
+      labels[key] = normalized;
+    }
+    return freezeRelationsCancelLabels(keys, labels);
+  };
+
+  let cancel = parseList("cancel");
+  let complete = parseList("complete");
+  const overlap = cancel.keys.filter((key) => complete.keys.includes(key));
+  if (overlap.length > 0) {
+    const cancelKeys = cancel.keys.filter((key) => !overlap.includes(key));
+    const completeKeys = complete.keys.filter((key) => !overlap.includes(key));
+    for (const key of overlap) {
+      const label = cancel.labels[key] || complete.labels[key] || key;
+      warnings.push(
+        `relations: “${label}” is in both cancel_labels and complete_labels in ${configPath}; it closes nothing`,
+      );
+    }
+    cancel = freezeRelationsCancelLabels(
+      cancelKeys,
+      Object.fromEntries(cancelKeys.map((key) => [key, cancel.labels[key]])),
+    );
+    complete = freezeRelationsCancelLabels(
+      completeKeys,
+      Object.fromEntries(completeKeys.map((key) => [key, complete.labels[key]])),
+    );
+  }
+  emitRelationsCloseLabelWarnings(warnings, cacheKey, options.warn);
+  return store(
+    Object.freeze({
+      cancel,
+      complete,
+      warnings: Object.freeze(warnings.slice()),
+    }),
+  );
 }
 // ---- src/030-bullet-blocks-and-logs.js ----
 function findCurrentBulletChildBlock(lines, parentLine) {
@@ -33196,6 +33371,23 @@ function planRelationCancelEffects(args = {}) {
 }
 
 function planRelationCancelEffectsFromVector(vector) {
+  const configuredCancel = Array.isArray(vector.configured_cancel)
+    ? vector.configured_cancel
+    : Array.isArray(vector.configured)
+      ? vector.configured
+      : [];
+  const configuredComplete = Array.isArray(vector.configured_complete)
+    ? vector.configured_complete
+    : [];
+  const completeKeys = new Set(configuredComplete.map(relationCancelLabelKey));
+  const overlap = new Set(
+    configuredCancel
+      .map(relationCancelLabelKey)
+      .filter((key) => completeKeys.has(key)),
+  );
+  const effectiveCancel = configuredCancel.filter(
+    (entry) => !overlap.has(relationCancelLabelKey(entry)),
+  );
   const source = {
     path: "vector.md",
     blockId: "source",
@@ -33217,7 +33409,7 @@ function planRelationCancelEffectsFromVector(vector) {
     ],
   };
   return planRelationCancelEffects({
-    cancelLabels: vector.configured,
+    cancelLabels: effectiveCancel,
     trigger: vector.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER,
     sources: [source],
   });
@@ -33336,6 +33528,200 @@ function deriveRelationCancelEdges(details = {}) {
     push(target, action);
   }
   return edges;
+}
+// ---- src/242-relation-complete-effects.js ----
+// Pure complete-label policy (`docs/task-relations.md` §18). Edge deltas
+// come from `deriveRelationCancelEdges`, shared with the cancel writer.
+const RELATION_COMPLETE_CONFLICT_MODIFIERS = Object.freeze([
+  "!",
+  "=",
+  ":",
+  "&",
+  "*",
+]);
+
+function relationCompleteLabelsSet(labels) {
+  return relationCancelLabelsSet(labels);
+}
+
+function relationCompleteCyclerApiAvailable(api) {
+  return Boolean(
+    api &&
+      Number(api.version) >= 3 &&
+      typeof api.completeTaskLineText === "function" &&
+      typeof api.finalizeClosedTasks === "function",
+  );
+}
+
+function verdictRelationCompleteSource(source, configuredKeys, trigger, apiAvailable) {
+  const edges = Array.isArray(source && source.edges) ? source.edges : [];
+  const triggering = [];
+  if (trigger === RELATION_CANCEL_EXPLICIT_TRIGGER) {
+    for (const edge of edges) {
+      const action = relationCancelEdgeAction(edge);
+      if (action !== "added" && action !== "relabeled") continue;
+      const label = edge && (edge.label || edge.displayLabel);
+      const key = relationCancelLabelKey(label);
+      if (!key || !configuredKeys.has(key)) continue;
+      const previous = edge && (edge.previousLabel || edge.previous_label);
+      if (
+        previous != null &&
+        String(previous) !== "" &&
+        relationCancelNormalizedKeysEqual(previous, label)
+      ) {
+        continue;
+      }
+      triggering.push(edge);
+    }
+  }
+
+  const modifiers = Array.isArray(source && source.itemModifiers)
+    ? source.itemModifiers.map(String)
+    : [];
+  const hasConflict = modifiers.some((entry) =>
+    RELATION_COMPLETE_CONFLICT_MODIFIERS.includes(entry),
+  );
+  const cancelEdges = Array.isArray(source && source.cancelTriggeringEdges)
+    ? source.cancelTriggeringEdges
+    : [];
+  const bothEffects =
+    cancelEdges.length > 0 || modifiers.includes("cancel_label");
+  const status = source && source.status != null ? String(source.status) : " ";
+  const wouldComplete = triggering.length > 0;
+  let verdict = "none";
+  let completes = false;
+  let refusal = null;
+  if (!wouldComplete) {
+    verdict = "none";
+  } else if (bothEffects) {
+    verdict = "conflict";
+    refusal = Object.freeze({
+      code: "relation_close_effects_conflict",
+      message: "A task cannot be cancelled and completed in one relation commit",
+    });
+  } else if (source && source.isRecurring === true) {
+    verdict = "recurring";
+    refusal = Object.freeze({
+      code: "relation_completes_recurring_task",
+      message:
+        "Recurring tasks are completed with Obsidian Tasks so the next occurrence is handled; no tasks were updated",
+    });
+  } else if (source && source.isNew === true) {
+    verdict = "new_task";
+    refusal = Object.freeze({
+      code: "relation_completes_new_task",
+      message: "new task sources cannot be completed by a relation",
+    });
+  } else if (hasConflict) {
+    verdict = "conflict";
+    refusal = Object.freeze({
+      code: "relation_complete_conflicts_with_item_action",
+      message: "complete conflicts with another action on the same item",
+    });
+  } else if (!RELATION_CANCEL_OPEN_STATUSES.has(status)) {
+    verdict = "already_closed";
+  } else if (apiAvailable !== true) {
+    verdict = "cycler_api";
+    refusal = Object.freeze({
+      code: "relation_complete_cycler_api_required",
+      message: "Update Task Status Cycler to complete from a link",
+    });
+  } else {
+    verdict = "completes";
+    completes = true;
+  }
+
+  return Object.freeze({
+    path: normalizeVaultRelativePath((source && source.path) || ""),
+    blockId: normalizeBulletPropertyValue((source && source.blockId) || "") || null,
+    line: Number.isInteger(source && source.line) ? source.line : null,
+    identity: relationCancelSourceIdentityKey(source),
+    status,
+    isProject: source && source.isProject === true,
+    verdict,
+    completes,
+    triggeringEdges: Object.freeze(triggering.slice()),
+    refusal,
+  });
+}
+
+function planRelationCompleteEffects(args = {}) {
+  const configuredKeys = relationCompleteLabelsSet(args.completeLabels);
+  const trigger = args.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER;
+  const apiAvailable = args.cyclerApiAvailable !== false;
+  const rawSources = Array.isArray(args.sources)
+    ? args.sources
+    : args.source
+      ? [args.source]
+      : [];
+  const seen = new Set();
+  const sources = [];
+  const refusals = [];
+  const completes = [];
+  for (const source of rawSources) {
+    const planned = verdictRelationCompleteSource(
+      source,
+      configuredKeys,
+      trigger,
+      apiAvailable,
+    );
+    const identity = planned.identity || `anon:${sources.length}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    sources.push(planned);
+    if (planned.refusal) refusals.push(planned);
+    if (planned.completes) completes.push(planned);
+  }
+  return Object.freeze({
+    sources: Object.freeze(sources),
+    completes: Object.freeze(completes),
+    refusals: Object.freeze(refusals),
+    refuse: refusals.length > 0,
+  });
+}
+
+function planRelationCompleteEffectsFromVector(vector) {
+  const cancelLabels = Array.isArray(vector && vector.configured_cancel)
+    ? vector.configured_cancel
+    : [];
+  const completeLabels = Array.isArray(vector && vector.configured_complete)
+    ? vector.configured_complete
+    : [];
+  const cancelKeys = new Set(cancelLabels.map(relationCancelLabelKey));
+  const completeKeys = new Set(completeLabels.map(relationCancelLabelKey));
+  const overlap = new Set([...cancelKeys].filter((key) => completeKeys.has(key)));
+  const effectiveCancel = cancelLabels.filter((entry) => !overlap.has(relationCancelLabelKey(entry)));
+  const effectiveComplete = completeLabels.filter((entry) => !overlap.has(relationCancelLabelKey(entry)));
+  const cancelTrigger =
+    effectiveCancel.some((entry) => relationCancelLabelKey(entry) === relationCancelLabelKey(vector && vector.label))
+      ? [{ label: vector.label, action: vector.action }]
+      : [];
+  const source = {
+    path: "vector.md",
+    blockId: "source",
+    line: 0,
+    status: vector.source_status,
+    isNew: vector.source_is_new === true,
+    isProject: vector.source_is_project === true,
+    isRecurring: vector.source_is_recurring === true,
+    itemModifiers: Array.isArray(vector.item_modifiers)
+      ? vector.item_modifiers
+      : [],
+    cancelTriggeringEdges: cancelTrigger,
+    edges: [
+      {
+        action: vector.action,
+        label: vector.label,
+        previousLabel: vector.previous_label,
+        storedTargetLink: "[[#^target]]",
+      },
+    ],
+  };
+  return planRelationCompleteEffects({
+    completeLabels: effectiveComplete,
+    trigger: vector.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER,
+    sources: [source],
+  });
 }
 // ---- src/245-task-link-lane.js ----
 // ---------------------------------------------------------------------------
@@ -45897,23 +46283,25 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   // and continue the walk. Esc, `q`, refusals, and no-op writes read an
   // unchanged line, which stays; every committing write is judged from the
   // line after the write. Never throws.
-  settleReviewOrigin() {
+  async settleReviewOrigin(kind = "card", extraOutcome = {}) {
     const origin = this.reviewOrigin;
     this.reviewOrigin = null;
     if (!origin) {
-      return;
+      return null;
     }
     try {
       const plugin = this.plugin;
       if (!plugin || typeof plugin.continueReviewWalkAfter !== "function") {
-        return;
+        return null;
       }
       const beforeLine =
         typeof this.reviewBeforeLine === "string" ? this.reviewBeforeLine : "";
       const resolvedAfter = readReviewOriginAfterLine(this);
       if (resolvedAfter === null) {
-        void plugin.continueReviewWalkAfter(origin, null);
-        return;
+        return plugin.continueReviewWalkAfter(origin, {
+          ...extraOutcome,
+          kind: "noop",
+        });
       }
       const afterLine = resolvedAfter;
       let handledRefs = [
@@ -45938,18 +46326,23 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       } catch (error) {
         // Keep the single cursor-task ref.
       }
-      void plugin.continueReviewWalkAfter(origin, {
-        kind: "card",
+      return plugin.continueReviewWalkAfter(origin, {
+        ...extraOutcome,
+        kind: String(kind || "card"),
         beforeLine,
         afterLine,
         handledRefs,
       });
     } catch (error) {
       try {
-        void this.plugin.continueReviewWalkAfter(origin, null);
+        return await this.plugin.continueReviewWalkAfter(origin, {
+          ...extraOutcome,
+          kind: "noop",
+        });
       } catch (ignoredError) {
         // Best effort only.
       }
+      return null;
     }
   }
 
@@ -51444,6 +51837,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationStageDirection = direction === "from" ? "from" : "to";
     this.relationLabel = null;
     this.relationCancelExpected = null;
+    this.relationCloseExpected = null;
     this.relationCancelConfirmNonce = null;
     this.selectedPropertyItem = this.relationStageDummyProperty();
     this.pendingTask = null;
@@ -51855,20 +52249,8 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       ...removals.map(toRef),
       ...relabels.map(toRef),
     ]);
-    let expectedCancelEffects = this.relationCancelExpected || null;
-    if (expectedCancelEffects) {
-      const labelled = [...relabels, ...additions].find(
-        (target) => target && Object.prototype.hasOwnProperty.call(target, "label"),
-      );
-      const preview = this.relationCancelPreviewForLabel(
-        labelled ? labelled.label : null,
-        targetOverrides,
-      );
-      if (preview && preview.expected) {
-        expectedCancelEffects = preview.expected;
-        this.relationCancelExpected = preview.expected;
-      }
-    }
+    const expectedCloseEffects = this.relationCloseExpected || null;
+    const expectedCancelEffects = this.relationCancelExpected || null;
     if (linkedFrom) {
       if (!owner) {
         new Notice("This task could not be resolved");
@@ -51881,6 +52263,8 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         { mode: "relabel", items: relabels },
       ].filter((group) => group.items.length > 0);
       const notices = [];
+      const outcomes = [];
+      let failedNotice = null;
       for (const group of groups) {
         const sourceRefs = group.items.map(toRef);
         const label = group.items[0].label || null;
@@ -51891,7 +52275,9 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
           relabel: group.mode === "relabel" ? [{ ...ownerRef, label }] : [],
           direction: "from",
           expected: this.relationStageExpectedMap([...sourceRefs, ownerRef]),
+          expectedCloseEffects,
           expectedCancelEffects,
+          deferCloseFinalization: true,
         });
         if (!outcome.ok) {
           if (applyRelationCancelStaleToPicker(this, outcome)) {
@@ -51900,13 +52286,34 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
           if (outcome.reason === "changed — reopen" || outcome.reason === "changed") {
             return this.refuseDependencyStale();
           }
-          new Notice(outcome.notice || `🪢 Could not update links (${outcome.reason})`);
-          return false;
+          failedNotice = outcome.notice || `🪢 Could not update links (${outcome.reason})`;
+          break;
         }
+        outcomes.push(outcome);
         if (outcome.notice) notices.push(outcome.notice);
       }
-      if (notices.length === 1) new Notice(notices[0]);
+      const completedIdentities = outcomes.flatMap((entry) => entry.completedIdentities || []);
+      if (completedIdentities.length > 0) {
+        const combined = {
+          ok: true,
+          activePath: this.filePath,
+          completedIdentities,
+          closingRows: outcomes.flatMap((entry) => entry.closingRows || []),
+          relationNotice: outcomes.map((entry) => entry.relationNotice).filter(Boolean).join(" · ") || null,
+          mirrorFailed: outcomes.flatMap((entry) => entry.mirrorFailed || []),
+          pruneFailed: outcomes.some((entry) => entry.pruneFailed === true),
+          pomodoroLinksRemoved: outcomes.reduce((sum, entry) => sum + (entry.pomodoroLinksRemoved || 0), 0),
+          recovered: outcomes.reduce((sum, entry) => sum + (entry.recovered || 0), 0),
+        };
+        const finalized = await this.plugin.finalizeRelationCompleteOutcome(combined, {
+          picker: this,
+          activePath: this.filePath,
+          editor: this.editor,
+        });
+        if (finalized.notice && finalized.noticeDisplayed !== true) new Notice(finalized.notice);
+      } else if (notices.length === 1) new Notice(notices[0]);
       else if (notices.length > 1) new Notice(notices.join(" · "));
+      if (failedNotice) new Notice(failedNotice);
       this.clearPendingBatch();
       this.pendingRelation = null;
       return true;
@@ -51918,7 +52325,9 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         remove: removals.map(toRef),
         relabel: relabels.map(toRef),
         expected,
+          expectedCloseEffects,
         expectedCancelEffects,
+          deferCloseFinalization: true,
       });
       if (!outcome.ok) {
         if (applyRelationCancelStaleToPicker(this, outcome)) {
@@ -51935,8 +52344,15 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         );
         return false;
       }
-      if (outcome.notice) {
-        new Notice(outcome.notice);
+      const finalized = (outcome.completedIdentities || []).length > 0
+        ? await this.plugin.finalizeRelationCompleteOutcome(outcome, {
+            picker: this,
+            activePath: this.filePath,
+            editor: this.editor,
+          })
+        : outcome;
+      if (finalized.notice && finalized.noticeDisplayed !== true) {
+        new Notice(finalized.notice);
       }
       this.clearPendingBatch();
       this.pendingRelation = null;
@@ -52081,6 +52497,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationLabelGhosts = new Map();
     this.relationLabelWrites = new Set();
     this.relationCancelExpected = null;
+    this.relationCloseExpected = null;
     this.relationCancelConfirmNonce = null;
     const suggestions = this.readRelationLabelSuggestions("", { hidden: "exclude" });
     const hiddenCount = this.readRelationLabelHiddenCount();
@@ -52228,7 +52645,14 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       }
     }
     const withLabel = targets.map((target) => ({ ...target, label }));
-    const cancelPreview = this.relationCancelPreviewForLabel(label);
+    const selectedPreview = item && (item.closePreview || item.cancelPreview);
+    const cancelPreview = selectedPreview &&
+      relationCancelLabelKey(item.label || "") === relationCancelLabelKey(label || "")
+      ? selectedPreview
+      : this.relationCancelPreviewForLabel(label);
+    if (cancelPreview && cancelPreview.expectedCloseEffects) {
+      this.relationCloseExpected = cancelPreview.expectedCloseEffects;
+    }
     if (cancelPreview && cancelPreview.refusal) {
       new Notice(cancelPreview.refusal);
       return false;
@@ -53024,6 +53448,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         if (index !== this.selectedIndex) {
           this.relationCancelConfirmNonce = null;
           this.relationCancelExpected = null;
+          this.relationCloseExpected = null;
         }
         this.selectedIndex = index;
         this.relationLabelTabNoMatch = false;
@@ -53039,6 +53464,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     if (index !== this.selectedIndex) {
       this.relationCancelConfirmNonce = null;
       this.relationCancelExpected = null;
+      this.relationCloseExpected = null;
     }
     this.selectedIndex = index >= 0 ? index : 0;
   }
@@ -53093,6 +53519,30 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     }
   }
 
+  relationCloseLabelsConfig() {
+    try {
+      if (
+        this.plugin &&
+        typeof this.plugin.loadRelationsCloseLabels === "function"
+      ) {
+        return this.plugin.loadRelationsCloseLabels();
+      }
+      if (
+        this.plugin &&
+        typeof this.plugin.loadRelationsCancelLabels === "function"
+      ) {
+        return Object.freeze({
+          cancel: this.plugin.loadRelationsCancelLabels(),
+          complete: emptyRelationsCancelLabels(),
+          warnings: Object.freeze([]),
+        });
+      }
+      return loadRelationsCloseLabels();
+    } catch (_error) {
+      return emptyRelationsCloseLabels();
+    }
+  }
+
   relationCancelContentForRef(ref) {
     const path = normalizeVaultRelativePath((ref && ref.path) || "");
     if (
@@ -53110,7 +53560,8 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
 
   relationCancelPreviewForLabel(label, targetOverrides = new Map()) {
     const normalized = normalizeRelationLabel(String(label || ""));
-    const config = this.relationCancelLabelsConfig();
+    const closeConfig = this.relationCloseLabelsConfig();
+    const config = closeConfig.cancel || this.relationCancelLabelsConfig();
     const configuredKeys = relationCancelLabelsSet(config);
     const linkedFrom = this.isLinkedFromSession();
     const labelTargets = Array.isArray(this.relationLabelTargets)
@@ -53225,12 +53676,31 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       }
     }
 
-    const plan = planRelationCancelEffects({
-      cancelLabels: config,
-      trigger: RELATION_CANCEL_EXPLICIT_TRIGGER,
-      sources: policySources,
-    });
+    const api = relationTaskStatusCyclerApi(this.plugin && this.plugin.app);
+    const closingPlans = policySources.map((source) =>
+      planRelationClosingSource({
+        cancelLabels: config,
+        completeLabels: closeConfig.complete,
+        trigger: RELATION_CANCEL_EXPLICIT_TRIGGER,
+        cyclerApiAvailable: relationCompleteCyclerApiAvailable(api),
+        source,
+      }),
+    );
+    const plan = {
+      sources: closingPlans.map((entry) => entry.cancel).filter(Boolean),
+      cancels: closingPlans.map((entry) => entry.cancel).filter((entry) => entry && entry.cancels),
+      refusals: closingPlans.map((entry) => entry.cancelRefusal).filter(Boolean),
+    };
+    const completePlan = {
+      sources: closingPlans.map((entry) => entry.complete).filter(Boolean),
+      completes: closingPlans.map((entry) => entry.complete).filter((entry) => entry && entry.completes),
+      refusals: closingPlans.map((entry) => entry.completeRefusal).filter(Boolean),
+    };
     const sources = plan.sources.map((source, index) => ({
+      ...source,
+      ...(sourceDetails[index] || {}),
+    }));
+    const completeSources = completePlan.sources.map((source, index) => ({
       ...source,
       ...(sourceDetails[index] || {}),
     }));
@@ -53246,6 +53716,12 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       plan,
       formatBulletPropertyDate(new Date()),
     );
+    const expectedCloseEffects = summarizeRelationCloseEffects(
+      plan.sources,
+      completePlan,
+      expected.day,
+    );
+    this.relationCloseExpected = expectedCloseEffects;
     const inverseLabel = normalized && !configuredKeys.has(relationCancelLabelKey(normalized))
       ? relationCancelInverseLabel(normalized, config)
       : null;
@@ -53258,6 +53734,9 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       cancels: Object.freeze(cancels),
       refusal,
       staysCancelled: relabelAway,
+      completeSources: Object.freeze(completeSources.filter((source) => source.completes === true)),
+      completeRefusal: completePlan.refusals[0] || null,
+      expectedCloseEffects,
       inverseHint: inverseLabel
         ? `“${normalized}” never cancels · to retire “${targetForInverse || "that task"}”, use ⇧L`
         : "",
@@ -53399,10 +53878,13 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       this.relationLabelTabNoMatch = false;
       this.relationCancelConfirmNonce = null;
       this.relationCancelExpected = null;
+      this.relationCloseExpected = null;
       this.selectedIndex = 0;
     }
     const typed = normalizeRelationLabel(raw);
-    const config = this.relationCancelLabelsConfig();
+    const closeConfig = this.relationCloseLabelsConfig();
+    const config = closeConfig.cancel || this.relationCancelLabelsConfig();
+    const configuredComplete = relationCompleteLabelsSet(closeConfig.complete);
     const suggestions = mergeRelationCancelLabelSuggestions(
       this.readRelationLabelSuggestions(raw, { hidden: "include" }),
       config,
@@ -53423,8 +53905,9 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       if (!item || item.kind !== "relation-label" || item.plain || !item.label) return Object.freeze(item);
       const configuredCancel = item.configuredCancel === true ||
         relationCancelLabelsSet(config).has(relationCancelLabelKey(item.label));
+      const completeLabel = configuredComplete.has(relationCancelLabelKey(item.label));
       const inverse = relationCancelInverseLabel(item.label, config);
-      const preview = configuredCancel || inverse
+      const preview = configuredCancel || completeLabel || inverse
         ? this.relationCancelPreviewForLabel(item.label)
         : null;
       const disabledReason = configuredCancel && preview && preview.refusal
@@ -53433,7 +53916,9 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       return Object.freeze({
         ...item,
         configuredCancel,
+        configuredComplete: completeLabel,
         cancelPreview: preview,
+        closePreview: preview,
         disabled: item.disabled === true || Boolean(disabledReason),
         disabledReason: disabledReason || item.disabledReason || "",
       });
@@ -53521,6 +54006,10 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     }
     const selectedIndex = Math.max(0, Math.min(this.selectedIndex || 0, out.length - 1));
     const selected = out[selectedIndex];
+    this.relationCloseExpected =
+      selected && selected.closePreview
+        ? selected.closePreview.expectedCloseEffects || null
+        : null;
     if (selected && selected.kind === "relation-label" && !selected.plain && !selected.cancelPreview) {
       out[selectedIndex] = decorate({
         ...selected,
@@ -53624,6 +54113,162 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       return true;
     }
     return false;
+  }
+}
+// ---- src/428a-picker-relation-close-preview.js ----
+// Shared data-only closing preview for phase .7. Callers pass the complete
+// pending edge sets so mixed actions and Linked-from use the same planner.
+class BulletPropertyPickerRelationClosePreviewMixin {
+  relationClosePreviewForChanges(args = {}) {
+    const loaded = args.closeLabels || this.relationCloseLabelsConfig();
+    const cancelLabels = args.cancelLabels !== undefined
+      ? args.cancelLabels
+      : loaded.cancel;
+    const completeLabels = args.completeLabels !== undefined
+      ? args.completeLabels
+      : loaded.complete;
+    const trigger = args.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER;
+    const day = args.date || formatBulletPropertyDate(new Date());
+    const sources = Array.isArray(args.sources) ? args.sources : [];
+    const add = Array.isArray(args.add) ? args.add : [];
+    const remove = Array.isArray(args.remove) ? args.remove : [];
+    const relabel = Array.isArray(args.relabel)
+      ? args.relabel
+      : args.relabel && typeof args.relabel === "object"
+        ? Object.entries(args.relabel).map(([path, label]) => ({ target: path, label }))
+        : [];
+    const vaultEntries =
+      this.plugin && typeof this.plugin.readDependencyVaultFileList === "function"
+        ? this.plugin.readDependencyVaultFileList()
+        : this.vaultStage && this.vaultStage.files instanceof Map
+          ? [...this.vaultStage.files.keys()]
+          : [];
+    const vaultFiles = (Array.isArray(vaultEntries) ? vaultEntries : []).map((entry) =>
+      typeof entry === "string" ? { path: entry } : entry,
+    );
+    const resolveLinkpath =
+      this.plugin && typeof this.plugin.dependencyLinkpathResolver === "function"
+        ? this.plugin.dependencyLinkpathResolver()
+        : null;
+    const api = relationTaskStatusCyclerApi(this.plugin && this.plugin.app);
+    const plans = [];
+    for (const sourceRef of sources) {
+      const path = normalizeVaultRelativePath(sourceRef && sourceRef.path);
+      const content = this.relationCancelContentForRef({ ...sourceRef, path });
+      const lines = content.split(/\r?\n/);
+      let line = Math.floor(numericOrDefault(sourceRef && sourceRef.line, NaN));
+      const blockId = normalizeBulletPropertyValue(sourceRef && sourceRef.blockId);
+      if (blockId) {
+        const found = findTaskLineByTrailingBlockId(lines, blockId);
+        if (found !== null) line = found;
+      }
+      if (!Number.isInteger(line) || line < 0 || line >= lines.length) {
+        return Object.freeze({ ok: false, reason: "source-not-found" });
+      }
+      const rawLine = String(lines[line] || "");
+      const children = findLinksChildren(lines, line);
+      const existingRows = children.flatMap((index) =>
+        relationLinksRows(path, lines[index], resolveLinkpath, vaultFiles),
+      );
+      const normalizeTarget = (entry) => {
+        const raw = entry && entry.target ? { ...entry.target, label: entry.label } : entry;
+        const targetPath = normalizeVaultRelativePath(raw && raw.path);
+        const targetContent = this.relationCancelContentForRef({ ...raw, path: targetPath });
+        const targetLines = targetContent.split(/\r?\n/);
+        let targetLine = Math.floor(numericOrDefault(raw && raw.line, NaN));
+        const targetId = normalizeBulletPropertyValue(raw && (raw.blockId || raw.existingBlockId));
+        if (targetId) {
+          const found = findTaskLineByTrailingBlockId(targetLines, targetId);
+          if (found !== null) targetLine = found;
+        }
+        if (!Number.isInteger(targetLine) || targetLine < 0 || targetLine >= targetLines.length) {
+          return null;
+        }
+        return Object.freeze({
+          ...raw,
+          path: targetPath,
+          line: targetLine,
+          blockId: getTrailingBlockId(targetLines[targetLine]) || targetId,
+          rawLine: targetLines[targetLine],
+          description: relationNoticeNameFromLine(targetLines[targetLine]),
+        });
+      };
+      const liveAdd = add.map(normalizeTarget).filter(Boolean);
+      const liveRemove = remove.map(normalizeTarget).filter(Boolean);
+      const liveRelabel = relabel.map(normalizeTarget).filter(Boolean);
+      const planned = planLinksEdit(content, line, {
+        add: liveAdd.map((target) => ({
+          link: storedRelationLinkForTarget(existingRows, target, path, vaultFiles),
+          label: target.label,
+        })),
+        remove: liveRemove.map((target) =>
+          storedRelationLinkForTarget(existingRows, target, path, vaultFiles),
+        ),
+        relabel: liveRelabel.map((target) => ({
+          link: storedRelationLinkForTarget(existingRows, target, path, vaultFiles),
+          label: target.label,
+        })),
+      });
+      if (!planned.ok) return Object.freeze({ ok: false, reason: planned.reason });
+      const edges = deriveRelationCancelEdges({
+        report: planned.report,
+        existingRows,
+        liveAdd,
+        liveRelabel,
+        sourcePath: path,
+        vaultFiles,
+      });
+      const policySource = relationCancelPolicySourceFromLine(
+        {
+          path,
+          line,
+          blockId: getTrailingBlockId(rawLine) || blockId,
+        },
+        rawLine,
+        edges,
+      );
+      plans.push(
+        planRelationClosingSource({
+          cancelLabels,
+          completeLabels,
+          trigger,
+          cyclerApiAvailable: relationCompleteCyclerApiAvailable(api),
+          source: policySource,
+        }),
+      );
+    }
+    const cancelSources = plans.map((entry) => entry.cancel).filter(Boolean);
+    const completeSources = plans.map((entry) => entry.complete).filter(Boolean);
+    const cancelRefusals = plans.map((entry) => entry.cancelRefusal).filter(Boolean);
+    const completeRefusals = plans.map((entry) => entry.completeRefusal).filter(Boolean);
+    const cancelPlan = {
+      sources: cancelSources,
+      cancels: cancelSources.filter((entry) => entry.cancels),
+      refusals: cancelRefusals,
+    };
+    const completePlan = {
+      sources: completeSources,
+      completes: completeSources.filter((entry) => entry.completes),
+      refusals: completeRefusals,
+    };
+    const gate = relationCloseCommitGate({
+      cancelSourcePlans: cancelSources,
+      cancelRefusals,
+      completePlan,
+      day,
+    });
+    this.relationCloseExpected = gate.closeEffects;
+    return Object.freeze({
+      ok: true,
+      cancel: Object.freeze(cancelPlan),
+      complete: Object.freeze(completePlan),
+      cancelEffects: gate.cancelEffects,
+      closeEffects: gate.closeEffects,
+      expected: gate.closeEffects,
+      expectedCloseEffects: gate.closeEffects,
+      expectedCancelEffects: gate.cancelEffects,
+      refusal: gate.ok ? null : Object.freeze({ reason: gate.reason, notice: gate.notice }),
+    });
   }
 }
 // ---- src/429-relation-label-management.js ----
@@ -57301,6 +57946,7 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerBlocksStageMixin,
   BulletPropertyPickerRelationStageMixin,
   BulletPropertyPickerRelationLabelVocabularyMixin,
+  BulletPropertyPickerRelationClosePreviewMixin,
   BulletPropertyPickerRelationLabelManagementMixin,
   BulletPropertyPickerVaultBatchMixin,
   BulletPropertyPickerVaultCommitMixin,
@@ -74849,9 +75495,8 @@ class BobNavigationHotkeysBlocksApiMixin {
 // Relation orchestrator (`docs/task-relations.md` Rule 7 / §17): write each
 // source LINKS line, mint the source id inside that transaction when a
 // mirror will be stored, then send best-effort LINKED FROM follow-ups.
-// Same-note S and T share one undo group. The writer never stamps or routes
-// inbox tasks. It touches Pomodoros only through the §17 cancel-label
-// composition (Task Card Cancel planners folded into the source write).
+// Same-note S and T share one undo group. Relation status changes only via
+// the explicit §17 cancel-label and §18 complete-label exceptions.
 class BobNavigationHotkeysRelationEditMixin {
   findRelationEditOpenEditor(filePath) {
     const path = normalizeVaultRelativePath(filePath || "");
@@ -74960,9 +75605,11 @@ class BobNavigationHotkeysRelationEditMixin {
         notice,
         stale: extra.stale === true,
         cancelEffects: extra.cancelEffects || null,
+        closeEffects: extra.closeEffects || null,
         committed: Object.freeze([]),
         failed: Object.freeze([]),
         mirrorFailed: Object.freeze([]),
+        completedIdentities: Object.freeze([]),
       });
     try {
       const today = args.today || new Date();
@@ -74983,15 +75630,30 @@ class BobNavigationHotkeysRelationEditMixin {
         args.linkedFromLinesEnabled !== undefined
           ? args.linkedFromLinesEnabled === true
           : loadRelationsLinkedFromLinesEnabled();
+      const hasInjectedClosePolicy =
+        args.closeLabels !== undefined ||
+        args.cancelLabels !== undefined ||
+        args.completeLabels !== undefined;
+      const closeLabels = args.closeLabels !== undefined
+        ? args.closeLabels
+        : hasInjectedClosePolicy
+          ? {
+              cancel: args.cancelLabels || emptyRelationsCancelLabels(),
+              complete: args.completeLabels || emptyRelationsCancelLabels(),
+            }
+          : loadRelationsCloseLabels();
       const cancelLabels =
-        args.cancelLabels !== undefined
-          ? args.cancelLabels
-          : loadRelationsCancelLabels();
+        args.cancelLabels !== undefined ? args.cancelLabels : closeLabels.cancel;
+      const completeLabels =
+        args.completeLabels !== undefined ? args.completeLabels : closeLabels.complete;
+      const cyclerApi = relationTaskStatusCyclerApi(this.app);
+      const cyclerApiAvailable = relationCompleteCyclerApiAvailable(cyclerApi);
       const cancelDate =
         typeof args.cancelDate === "string" && args.cancelDate
           ? String(args.cancelDate)
           : formatBulletPropertyDate(today instanceof Date ? today : new Date());
       const cancelTrigger = args.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER;
+      const completeDate = cancelDate;
 
       const files = new Map();
       const collectRef = (ref) => {
@@ -75079,6 +75741,11 @@ class BobNavigationHotkeysRelationEditMixin {
       const cancelledIdentities = [];
       const cancelSourcePlans = [];
       const cancelRefusals = [];
+      const completeSourcePlans = [];
+      const completeRefusals = [];
+      const completedIdentities = [];
+      const completionNoticeRows = [];
+      const closingRows = [];
       let cancelStayedCancelled = false;
       const consumedLinesByPath = new Map();
       let archived = false;
@@ -75164,8 +75831,8 @@ class BobNavigationHotkeysRelationEditMixin {
         if (planned.report) {
           const noticeRow = (target) =>
             direction === "from"
-              ? { ...source, label: target.label }
-              : target;
+              ? { ...source, label: target.label, relationSourcePath: source.path }
+              : { ...target, relationSourcePath: source.path };
           for (const target of liveAdd) {
             const link = storedRelationLinkForTarget(
               existingRows,
@@ -75230,26 +75897,27 @@ class BobNavigationHotkeysRelationEditMixin {
             liveRelabel,
             cancelLabels,
           );
-        const policyPlan = planRelationCancelEffects({
+        const closePlan = planRelationClosingSource({
           cancelLabels,
+          completeLabels,
           trigger: cancelTrigger,
-          sources: [
-            relationCancelPolicySourceFromLine(
-              {
-                path: liveSource.path,
-                blockId: liveSource.blockId,
-                line: sourceLine,
-              },
-              policyRaw,
-              cancelEdges,
-            ),
-          ],
+          cyclerApiAvailable,
+          source: relationCancelPolicySourceFromLine(
+            {
+              path: liveSource.path,
+              blockId: liveSource.blockId,
+              line: sourceLine,
+            },
+            policyRaw,
+            cancelEdges,
+          ),
         });
-        const policySource = policyPlan.sources[0] || null;
+        const policySource = closePlan.cancel;
+        const completeSource = closePlan.complete;
         if (policySource) cancelSourcePlans.push(policySource);
-        if (policySource && policySource.refusal) {
-          cancelRefusals.push(policySource);
-        }
+        if (closePlan.cancelRefusal) cancelRefusals.push(closePlan.cancelRefusal);
+        if (completeSource) completeSourcePlans.push(completeSource);
+        if (closePlan.completeRefusal) completeRefusals.push(closePlan.completeRefusal);
 
         const mirrorTargets = [...liveAdd, ...liveRemove, ...liveRelabel].filter(
           (target, index, list) =>
@@ -75389,6 +76057,7 @@ class BobNavigationHotkeysRelationEditMixin {
         }
         }
 
+        const cancelRowsBefore = cancelledNoticeRows.length;
         const folded = applyComposedRelationSourceCancel({
           policySource, cancelRefusals, content: contentOf(source.path), source,
           liveSource, sourceLine, consumed, cancelEdges, cancelLabels,
@@ -75401,18 +76070,70 @@ class BobNavigationHotkeysRelationEditMixin {
             folded.reason,
           );
         }
+        for (const row of cancelledNoticeRows.slice(cancelRowsBefore)) {
+          closingRows.push(Object.freeze({ ...row, effect: "cancel" }));
+        }
+        if (completeSource && completeSource.completes) {
+          const completeFold = foldRelationCompleteLine(
+            contentOf(source.path),
+            completeSource,
+            cyclerApi,
+            completeDate,
+            sourceLine,
+          );
+          if (!completeFold.ok) {
+            return refuse("relation_complete_write_failed", null, {
+              closeEffects: null,
+            });
+          }
+          stageWrite(source.path, original, completeFold.content);
+          const completedBlockId = getTrailingBlockId(completeFold.rawLine);
+          const completedTaskId = completeTaskIdFromLine(completeFold.rawLine);
+          const completedIdentity = Object.freeze({
+            path: source.path,
+            blockId: completedBlockId || null,
+            taskId: completedTaskId || null,
+            line: completeFold.line,
+          });
+          completedIdentities.push(completedIdentity);
+          const edge = completeSource.triggeringEdges[0] || {};
+          const target = edge.target || {};
+          const completionRow = Object.freeze({
+            effect: "complete",
+            path: source.path,
+            sourceName:
+              liveSource.description || relationNoticeNameFromLine(policyRaw) || "task",
+            targetName:
+              target.description || target.displayText || target.blockId || "task",
+            label: edge.label || edge.displayLabel || "",
+          });
+          completionNoticeRows.push(completionRow);
+          closingRows.push(completionRow);
+        }
       }
 
-      const commitGate = relationCancelCommitGate(
-        cancelSourcePlans, cancelRefusals, cancelDate, args.expectedCancelEffects, stale,
-      );
+      const commitGate = relationCloseCommitGate({
+        cancelSourcePlans,
+        cancelRefusals,
+        completePlan: {
+          sources: completeSourcePlans,
+          completes: completeSourcePlans.filter((entry) => entry && entry.completes),
+          refusals: completeRefusals,
+        },
+        day: cancelDate,
+        expectedCloseEffects: args.expectedCloseEffects,
+        expectedCancelEffects: args.expectedCancelEffects,
+        staleReason: stale,
+      });
       if (!commitGate.ok) {
         return refuse(commitGate.reason, commitGate.notice, {
           stale: commitGate.stale === true,
           cancelEffects: commitGate.cancelEffects,
+          closeEffects: commitGate.closeEffects,
         });
       }
       const cancelEffects = commitGate.cancelEffects;
+      const closeEffects = commitGate.closeEffects;
       const dailyPrep = await this.prepareRelationCancelDailyCleanup(
         sourceWrites, cancelledIdentities, today,
       );
@@ -75431,7 +76152,7 @@ class BobNavigationHotkeysRelationEditMixin {
         if (!result.ok) {
           failed.push(write.path);
           if (committed.length === 0) {
-            return refuse(stale, stale, { cancelEffects });
+            return refuse(stale, stale, { cancelEffects, closeEffects });
           }
           break;
         }
@@ -75441,6 +76162,15 @@ class BobNavigationHotkeysRelationEditMixin {
       const committedSet = new Set(committed);
       const committedCancelled = cancelledIdentities.filter((entry) =>
         committedSet.has(entry.path),
+      );
+      const committedCompleted = dedupeRelationCompleteIdentities(
+        completedIdentities.filter((entry) => committedSet.has(entry.path)),
+      );
+      const committedCancelledNoticeRows = cancelledNoticeRows.filter((entry) =>
+        !entry.path || committedSet.has(entry.path),
+      );
+      const committedClosingRows = closingRows.filter((entry) =>
+        !entry.path || committedSet.has(entry.path),
       );
       let followFailed = [];
       if (followUps.length > 0 && failed.length === 0) {
@@ -75475,10 +76205,11 @@ class BobNavigationHotkeysRelationEditMixin {
       }
 
       const unchanged =
-        noticeAdded.length === 0 &&
-        noticeRemoved.length === 0 &&
-        noticeRelabeled.length === 0 &&
-        cancelledNoticeRows.length === 0 &&
+        noticeAdded.every((entry) => entry.relationSourcePath && !committedSet.has(entry.relationSourcePath)) &&
+        noticeRemoved.every((entry) => entry.relationSourcePath && !committedSet.has(entry.relationSourcePath)) &&
+        noticeRelabeled.every((entry) => entry.relationSourcePath && !committedSet.has(entry.relationSourcePath)) &&
+        committedCancelledNoticeRows.length === 0 &&
+        committedCompleted.length === 0 &&
         committed.every((path) => {
           const write = sourceWrites.get(path);
           return write && write.original === write.nextContent;
@@ -75486,24 +76217,33 @@ class BobNavigationHotkeysRelationEditMixin {
       const relationNotice = unchanged
         ? null
         : withRelationCancelStayNotice(buildRelationEditNotice({
-            added: noticeAdded,
-            removed: noticeRemoved,
-            relabeled: noticeRelabeled,
+            added: noticeAdded.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
+            removed: noticeRemoved.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
+            relabeled: noticeRelabeled.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
             direction,
             archived,
             mirrorFailed: [],
           }), cancelStayedCancelled);
-      const notice = unchanged
+      const baseNotice = unchanged
         ? null
-        : buildRelationCancelComposeNotice({
-            cancelled: cancelledNoticeRows,
-            relationNotice,
-            pruneFailed,
-            pomodoroLinksRemoved,
-            recovered,
-            mirrorFailed,
-          });
-      return Object.freeze({
+        : committedCompleted.length > 0
+          ? buildRelationClosingNotice({
+              closingRows: committedClosingRows,
+              relationNotice,
+              pruneFailed,
+              pomodoroLinksRemoved,
+              recovered,
+              mirrorFailed,
+            })
+          : buildRelationCancelComposeNotice({
+              cancelled: committedCancelledNoticeRows,
+              relationNotice,
+              pruneFailed,
+              pomodoroLinksRemoved,
+              recovered,
+              mirrorFailed,
+            });
+      const outcome = Object.freeze({
         ok: true,
         reason:
           failed.length > 0 || followFailed.length > 0
@@ -75511,9 +76251,14 @@ class BobNavigationHotkeysRelationEditMixin {
             : unchanged
               ? "unchanged"
               : null,
-        notice,
+        notice: baseNotice,
         stale: false,
         cancelEffects,
+        closeEffects,
+        relationNotice,
+        closingRows: committedClosingRows,
+        completedIdentities: committedCompleted,
+        activePath: liveSources[0] && liveSources[0].path,
         committed: Object.freeze(committed),
         failed: Object.freeze(failed),
         mirrorFailed: Object.freeze([...new Set(mirrorFailed)]),
@@ -75521,153 +76266,27 @@ class BobNavigationHotkeysRelationEditMixin {
         pruneFailed,
         recovered,
       });
+      if (
+        committedCompleted.length > 0 &&
+        args.deferCloseFinalization !== true
+      ) {
+        const picker = this.activeBulletPropertyPicker;
+        const activePath =
+          normalizeVaultRelativePath(picker && picker.filePath) ||
+          outcome.activePath;
+        return this.finalizeRelationCompleteOutcome(outcome, {
+          activePath,
+          editor:
+            (picker && picker.editor) ||
+            this.findRelationEditOpenEditor(activePath),
+        });
+      }
+      return outcome;
     } catch (_error) {
       return refuse("apply-failed");
     }
   }
 
-  async mirrorRelationHandEdit(editor, parentPath, oldContent, baselineLine, currentOwnerLine) {
-    const path = normalizeVaultRelativePath(parentPath || "");
-    if (!editor || typeof editor.getValue !== "function" || !path) {
-      return Object.freeze({ mirrored: false, reason: "editor-unavailable" });
-    }
-    const before = String(oldContent || "");
-    const after = String(editor.getValue() || "");
-    if (!taskRelationLinesChanged(before, after).linksChanged) {
-      return Object.freeze({ mirrored: false, reason: "no-links-change" });
-    }
-    const oldLines = before.split(/\r?\n/);
-    const currentLines = after.split(/\r?\n/);
-    const oldHint = Math.max(0, Math.min(Math.floor(numericOrDefault(baselineLine, 0)), oldLines.length - 1));
-    const newHint = Math.max(0, Math.min(Math.floor(numericOrDefault(currentOwnerLine, oldHint)), currentLines.length - 1));
-    const oldOwner = findOwningTaskLine(oldLines, oldHint);
-    let owner = findOwningTaskLine(currentLines, newHint);
-    if (oldOwner === null || owner === null) {
-      return Object.freeze({ mirrored: false, reason: "owner-not-found" });
-    }
-    const oldId = getTrailingBlockId(oldLines[oldOwner]);
-    if (oldId) {
-      const relocated = findTaskLineByTrailingBlockId(currentLines, oldId);
-      if (relocated !== null) owner = relocated;
-    }
-    const resolveLinkpath = this.dependencyLinkpathResolver();
-    const vaultFiles = this.readDependencyVaultFileList() || [];
-    const collect = (content, ownerLine) => {
-      const lines = String(content || "").split(/\r?\n/);
-      const children = findLinksChildren(lines, ownerLine);
-      const entries = [];
-      for (const child of children) {
-        const parsed = parseLinksLine(String(lines[child] || ""), { isDirectChildOfTask: true });
-        if (parsed.verdict === "malformed") return null;
-        if (parsed.verdict === "accept") entries.push(...(parsed.entries || []));
-      }
-      const rows = new Map();
-      for (const entry of entries) {
-        const targetPath = normalizeVaultRelativePath(
-          dependencyPathForLinkNote(entry.note, path, resolveLinkpath) || "",
-        );
-        const blockId = normalizeBulletPropertyValue(entry.blockId || "");
-        if (!targetPath || !blockId) continue;
-        const identity = blocksIdentity(targetPath, blockId);
-        rows.set(identity, {
-          path: targetPath,
-          blockId,
-          label: entry.label || null,
-          link: relationLinkText(entry),
-        });
-      }
-      return rows;
-    };
-    const oldEdges = collect(before, oldOwner);
-    const newEdges = collect(after, owner);
-    if (!oldEdges || !newEdges) {
-      return Object.freeze({ mirrored: false, reason: "malformed-links-line" });
-    }
-    const changes = [];
-    for (const [identity, oldEdge] of oldEdges) {
-      if (!newEdges.has(identity)) changes.push({ kind: "remove", ...oldEdge });
-      else if ((newEdges.get(identity).label || null) !== (oldEdge.label || null)) {
-        changes.push({ kind: "relabel", ...newEdges.get(identity) });
-      }
-    }
-    for (const [identity, edge] of newEdges) {
-      if (!oldEdges.has(identity)) changes.push({ kind: "add", ...edge });
-    }
-    if (changes.length === 0) return Object.freeze({ mirrored: false, reason: "unchanged" });
-
-    const mirrorEnabled = loadRelationsLinkedFromLinesEnabled();
-    let currentContent = after;
-    let liveLines = currentContent.split(/\r?\n/);
-    let sourceBlockId = getTrailingBlockId(liveLines[owner]);
-    if (mirrorEnabled && newEdges.size > 0 && !sourceBlockId) {
-      const used = new Set();
-      for (const match of currentContent.matchAll(/\^([A-Za-z0-9-]+)(?=\s|$)/g)) used.add(match[1]);
-      sourceBlockId = mintDependentBlockId(liveLines[owner], used);
-      liveLines[owner] = appendBlockIdToLine(liveLines[owner], sourceBlockId);
-      currentContent = liveLines.join(relationLineEnding(currentContent));
-    }
-    const sourceIdentity = sourceBlockId ? blocksIdentity(path, sourceBlockId) : null;
-    const daily = scheduledRecoveryDailyPaths(vaultFiles.map((entry) => ({ path: typeof entry === "string" ? entry : entry.path })));
-    const previousDailyPath = normalizeVaultRelativePath((daily && daily.previous) || "");
-    const followUps = [];
-    const failed = new Set();
-    if (mirrorEnabled && sourceIdentity) {
-      for (const change of changes) {
-        if (!relationPathIsWritable(change.path, previousDailyPath)) continue;
-        let targetContent = change.path === path
-          ? currentContent
-          : await this.readDependencyNoteContent(change.path, null, "");
-        if (targetContent === null) {
-          failed.add(change.path);
-          continue;
-        }
-        const targetLines = targetContent.split(/\r?\n/);
-        const targetLine = findTaskLineByTrailingBlockId(targetLines, change.blockId);
-        if (targetLine === null) {
-          failed.add(change.path);
-          continue;
-        }
-        const children = findLinkedFromChildren(targetLines, targetLine);
-        const parsed = children.map((index) => parseLinkedFromLine(targetLines[index], { isDirectChildOfTask: true }));
-        if (parsed.some((entry) => entry.verdict === "malformed")) {
-          failed.add(change.path);
-          continue;
-        }
-        const existing = children.flatMap((index) => relationLinkedFromRows(change.path, targetLines[index], resolveLinkpath, vaultFiles));
-        const canonical = canonicalDependencyLink({ path, blockId: sourceBlockId }, change.path, vaultFiles).text;
-        const add = change.kind === "remove" ? [] : [{ identity: sourceIdentity, link: canonical, label: change.label || null }];
-        const remove = change.kind === "remove" ? [sourceIdentity] : [];
-        const desired = linkedFromDesiredAfterDelta(existing, (entry) => ({ identity: entry.identity, link: entry.link }), add, remove);
-        const planned = planLinkedFromLine(targetContent, targetLine, desired);
-        if (!planned.ok) {
-          failed.add(change.path);
-          continue;
-        }
-        if (change.path === path) {
-          currentContent = planned.nextContent;
-        } else if (planned.nextContent !== targetContent) {
-          followUps.push(Object.freeze({
-            path: change.path,
-            ownerBlockId: change.blockId,
-            add: Object.freeze(add),
-            remove: Object.freeze(remove),
-            preimage: targetContent,
-            today: new Date(),
-          }));
-        }
-      }
-    }
-    if (currentContent !== after) {
-      const written = await this.writeRelationEditNote(path, after, currentContent);
-      if (!written.ok) return Object.freeze({ mirrored: false, reason: "changed" });
-    }
-    if (followUps.length > 0) {
-      const result = await this.applyRelationFollowUps(followUps);
-      for (const failedPath of result.failed || []) failed.add(failedPath);
-    }
-    showRelationCancelHandEditNotice(changes, currentLines[owner], failed);
-    return Object.freeze({ mirrored: true, failed: Object.freeze([...failed]) });
-  }
 
   async removeAllRelationLinksByRef(sourceRef = {}) {
     try {
@@ -75835,6 +76454,151 @@ class BobNavigationHotkeysRelationEditMixin {
     } catch (_error) {
       return Object.freeze({ ok: false, reason: "remove-failed" });
     }
+  }
+}
+// ---- src/594a-relation-hand-edit.js ----
+class BobNavigationHotkeysRelationHandEditMixin {
+  async mirrorRelationHandEdit(editor, parentPath, oldContent, baselineLine, currentOwnerLine) {
+    const path = normalizeVaultRelativePath(parentPath || "");
+    if (!editor || typeof editor.getValue !== "function" || !path) {
+      return Object.freeze({ mirrored: false, reason: "editor-unavailable" });
+    }
+    const before = String(oldContent || "");
+    const after = String(editor.getValue() || "");
+    if (!taskRelationLinesChanged(before, after).linksChanged) {
+      return Object.freeze({ mirrored: false, reason: "no-links-change" });
+    }
+    const oldLines = before.split(/\r?\n/);
+    const currentLines = after.split(/\r?\n/);
+    const oldHint = Math.max(0, Math.min(Math.floor(numericOrDefault(baselineLine, 0)), oldLines.length - 1));
+    const newHint = Math.max(0, Math.min(Math.floor(numericOrDefault(currentOwnerLine, oldHint)), currentLines.length - 1));
+    const oldOwner = findOwningTaskLine(oldLines, oldHint);
+    let owner = findOwningTaskLine(currentLines, newHint);
+    if (oldOwner === null || owner === null) {
+      return Object.freeze({ mirrored: false, reason: "owner-not-found" });
+    }
+    const oldId = getTrailingBlockId(oldLines[oldOwner]);
+    if (oldId) {
+      const relocated = findTaskLineByTrailingBlockId(currentLines, oldId);
+      if (relocated !== null) owner = relocated;
+    }
+    const resolveLinkpath = this.dependencyLinkpathResolver();
+    const vaultFiles = this.readDependencyVaultFileList() || [];
+    const collect = (content, ownerLine) => {
+      const lines = String(content || "").split(/\r?\n/);
+      const children = findLinksChildren(lines, ownerLine);
+      const entries = [];
+      for (const child of children) {
+        const parsed = parseLinksLine(String(lines[child] || ""), { isDirectChildOfTask: true });
+        if (parsed.verdict === "malformed") return null;
+        if (parsed.verdict === "accept") entries.push(...(parsed.entries || []));
+      }
+      const rows = new Map();
+      for (const entry of entries) {
+        const targetPath = normalizeVaultRelativePath(
+          dependencyPathForLinkNote(entry.note, path, resolveLinkpath) || "",
+        );
+        const blockId = normalizeBulletPropertyValue(entry.blockId || "");
+        if (!targetPath || !blockId) continue;
+        const identity = blocksIdentity(targetPath, blockId);
+        rows.set(identity, {
+          path: targetPath,
+          blockId,
+          label: entry.label || null,
+          link: relationLinkText(entry),
+        });
+      }
+      return rows;
+    };
+    const oldEdges = collect(before, oldOwner);
+    const newEdges = collect(after, owner);
+    if (!oldEdges || !newEdges) {
+      return Object.freeze({ mirrored: false, reason: "malformed-links-line" });
+    }
+    const changes = [];
+    for (const [identity, oldEdge] of oldEdges) {
+      if (!newEdges.has(identity)) changes.push({ kind: "remove", ...oldEdge });
+      else if ((newEdges.get(identity).label || null) !== (oldEdge.label || null)) {
+        changes.push({ kind: "relabel", ...newEdges.get(identity) });
+      }
+    }
+    for (const [identity, edge] of newEdges) {
+      if (!oldEdges.has(identity)) changes.push({ kind: "add", ...edge });
+    }
+    if (changes.length === 0) return Object.freeze({ mirrored: false, reason: "unchanged" });
+
+    const mirrorEnabled = loadRelationsLinkedFromLinesEnabled();
+    let currentContent = after;
+    let liveLines = currentContent.split(/\r?\n/);
+    let sourceBlockId = getTrailingBlockId(liveLines[owner]);
+    if (mirrorEnabled && newEdges.size > 0 && !sourceBlockId) {
+      const used = new Set();
+      for (const match of currentContent.matchAll(/\^([A-Za-z0-9-]+)(?=\s|$)/g)) used.add(match[1]);
+      sourceBlockId = mintDependentBlockId(liveLines[owner], used);
+      liveLines[owner] = appendBlockIdToLine(liveLines[owner], sourceBlockId);
+      currentContent = liveLines.join(relationLineEnding(currentContent));
+    }
+    const sourceIdentity = sourceBlockId ? blocksIdentity(path, sourceBlockId) : null;
+    const daily = scheduledRecoveryDailyPaths(vaultFiles.map((entry) => ({ path: typeof entry === "string" ? entry : entry.path })));
+    const previousDailyPath = normalizeVaultRelativePath((daily && daily.previous) || "");
+    const followUps = [];
+    const failed = new Set();
+    if (mirrorEnabled && sourceIdentity) {
+      for (const change of changes) {
+        if (!relationPathIsWritable(change.path, previousDailyPath)) continue;
+        let targetContent = change.path === path
+          ? currentContent
+          : await this.readDependencyNoteContent(change.path, null, "");
+        if (targetContent === null) {
+          failed.add(change.path);
+          continue;
+        }
+        const targetLines = targetContent.split(/\r?\n/);
+        const targetLine = findTaskLineByTrailingBlockId(targetLines, change.blockId);
+        if (targetLine === null) {
+          failed.add(change.path);
+          continue;
+        }
+        const children = findLinkedFromChildren(targetLines, targetLine);
+        const parsed = children.map((index) => parseLinkedFromLine(targetLines[index], { isDirectChildOfTask: true }));
+        if (parsed.some((entry) => entry.verdict === "malformed")) {
+          failed.add(change.path);
+          continue;
+        }
+        const existing = children.flatMap((index) => relationLinkedFromRows(change.path, targetLines[index], resolveLinkpath, vaultFiles));
+        const canonical = canonicalDependencyLink({ path, blockId: sourceBlockId }, change.path, vaultFiles).text;
+        const add = change.kind === "remove" ? [] : [{ identity: sourceIdentity, link: canonical, label: change.label || null }];
+        const remove = change.kind === "remove" ? [sourceIdentity] : [];
+        const desired = linkedFromDesiredAfterDelta(existing, (entry) => ({ identity: entry.identity, link: entry.link }), add, remove);
+        const planned = planLinkedFromLine(targetContent, targetLine, desired);
+        if (!planned.ok) {
+          failed.add(change.path);
+          continue;
+        }
+        if (change.path === path) {
+          currentContent = planned.nextContent;
+        } else if (planned.nextContent !== targetContent) {
+          followUps.push(Object.freeze({
+            path: change.path,
+            ownerBlockId: change.blockId,
+            add: Object.freeze(add),
+            remove: Object.freeze(remove),
+            preimage: targetContent,
+            today: new Date(),
+          }));
+        }
+      }
+    }
+    if (currentContent !== after) {
+      const written = await this.writeRelationEditNote(path, after, currentContent);
+      if (!written.ok) return Object.freeze({ mirrored: false, reason: "changed" });
+    }
+    if (followUps.length > 0) {
+      const result = await this.applyRelationFollowUps(followUps);
+      for (const failedPath of result.failed || []) failed.add(failedPath);
+    }
+    showRelationCancelHandEditNotice(changes, currentLines[owner], failed);
+    return Object.freeze({ mirrored: true, failed: Object.freeze([...failed]) });
   }
 }
 // ---- src/595-relation-follow-ups.js ----
@@ -76239,6 +77003,12 @@ function composeRelationSourceCancel(details = {}) {
       taskId: (cancelled && cancelled.taskId) || null,
     }),
     noticeRow: Object.freeze({
+      path: liveSource.path,
+      blockId:
+        (cancelled && cancelled.blockId) ||
+        getTrailingBlockId(String(batch.content.split(/\r?\n/)[sourceLine] || "")) ||
+        liveSource.blockId ||
+        null,
       sourceName:
         liveSource.description || relationNoticeNameFromLine(rawLine) || "task",
       targetName: details.targetName || "task",
@@ -76330,6 +77100,9 @@ function relationCancelCommitGate(
 }
 
 function applyRelationCancelStaleToPicker(picker, outcome) {
+  if (typeof applyRelationCloseStaleToPicker === "function") {
+    return applyRelationCloseStaleToPicker(picker, outcome);
+  }
   if (!outcome || outcome.stale !== true) return false;
   if (picker) {
     picker.relationCancelExpected = outcome.cancelEffects || null;
@@ -76619,6 +77392,481 @@ class BobNavigationHotkeysRelationCancelComposeMixin {
         snapshot: null,
       });
     }
+  }
+}
+// ---- src/597-relation-complete-compose.js ----
+// Completion writer composition for §18. The preview and writer share this
+// summary shape; only committed completion identities reach the post-Done API.
+function relationTaskStatusCyclerApi(app) {
+  return app && app.plugins && app.plugins.plugins &&
+    app.plugins.plugins["task-status-cycler"] &&
+    app.plugins.plugins["task-status-cycler"].api || null;
+}
+
+function planRelationClosingSource(details = {}) {
+  const cancelPlan = planRelationCancelEffects({
+    cancelLabels: details.cancelLabels,
+    trigger: details.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER,
+    sources: [details.source],
+  });
+  const cancel = cancelPlan.sources[0] || null;
+  const source = {
+    ...(details.source || {}),
+    cancelTriggeringEdges: (cancel && cancel.triggeringEdges) || [],
+  };
+  const completePlan = planRelationCompleteEffects({
+    completeLabels: details.completeLabels,
+    trigger: details.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER,
+    cyclerApiAvailable: details.cyclerApiAvailable === true,
+    sources: [source],
+  });
+  return Object.freeze({
+    cancel,
+    complete: completePlan.sources[0] || null,
+    cancelRefusal: cancel && cancel.refusal ? cancel : null,
+    completeRefusal: completePlan.refusals[0] || null,
+  });
+}
+
+function completeTaskIdFromLine(line) {
+  const field = findBulletPropertyField(String(line || ""), "id");
+  return normalizeBulletPropertyValue(field && field.value);
+}
+
+function summarizeRelationCompleteEffects(plan, day) {
+  const sources = ((plan && plan.sources) || []).map((source) =>
+    Object.freeze({
+      path: source.path || "",
+      identity: source.identity || "",
+      verdict: source.verdict || "none",
+      completes: source.completes === true,
+      edges: Object.freeze(
+        (source.triggeringEdges || []).map((edge) =>
+          Object.freeze({
+            action: relationCancelEdgeAction(edge),
+            labelKey: relationCancelLabelKey(
+              edge && (edge.label || edge.displayLabel),
+            ),
+            link: String((edge && (edge.storedTargetLink || edge.link)) || ""),
+          }),
+        ),
+      ),
+    }),
+  );
+  sources.sort((left, right) =>
+    String(left.path).localeCompare(String(right.path)) ||
+    String(left.identity).localeCompare(String(right.identity)),
+  );
+  return Object.freeze({ day: String(day || ""), sources: Object.freeze(sources) });
+}
+
+function summarizeRelationCloseEffects(cancelPlans, completePlan, day) {
+  const byIdentity = new Map();
+  const ensure = (source) => {
+    const identity = String((source && source.identity) || "");
+    if (!identity) return null;
+    if (!byIdentity.has(identity)) {
+      byIdentity.set(identity, {
+        path: source.path || "",
+        identity,
+        cancel: null,
+        complete: null,
+      });
+    }
+    return byIdentity.get(identity);
+  };
+  for (const source of cancelPlans || []) {
+    const entry = ensure(source);
+    if (entry) entry.cancel = source;
+  }
+  for (const source of (completePlan && completePlan.sources) || []) {
+    const entry = ensure(source);
+    if (entry) entry.complete = source;
+  }
+  const sources = [...byIdentity.values()].map((entry) => {
+    const cancel = entry.cancel;
+    const complete = entry.complete;
+    const cancelVerdict = (cancel && cancel.verdict) || "none";
+    const completeVerdict = (complete && complete.verdict) || "none";
+    const edges = [];
+    const addEdges = (effect, plan) => {
+      for (const edge of (plan && plan.triggeringEdges) || []) {
+        edges.push(
+          Object.freeze({
+            effect,
+            action: relationCancelEdgeAction(edge),
+            labelKey: relationCancelLabelKey(
+              edge && (edge.label || edge.displayLabel),
+            ),
+            link: String((edge && (edge.storedTargetLink || edge.link)) || ""),
+          }),
+        );
+      }
+    };
+    addEdges("cancel", cancel);
+    addEdges("complete", complete);
+    let effect = "none";
+    let verdict = "none";
+    if (completeVerdict === "conflict") {
+      verdict = completeVerdict;
+    } else if (cancel && cancel.cancels === true) {
+      effect = "cancel";
+      verdict = "cancels";
+    } else if (complete && complete.completes === true) {
+      effect = "complete";
+      verdict = "completes";
+    } else if (completeVerdict !== "none" && completeVerdict !== "already_closed") {
+      verdict = completeVerdict;
+    } else if (cancelVerdict !== "none" && cancelVerdict !== "already_closed") {
+      verdict = cancelVerdict;
+    } else if (cancelVerdict === "already_closed" || completeVerdict === "already_closed") {
+      verdict = "already_closed";
+    }
+    edges.sort((left, right) =>
+      left.effect.localeCompare(right.effect) ||
+      left.link.localeCompare(right.link) ||
+      left.labelKey.localeCompare(right.labelKey),
+    );
+    return Object.freeze({
+      path: entry.path,
+      identity: entry.identity,
+      verdict,
+      effect,
+      cancelVerdict,
+      completeVerdict,
+      edges: Object.freeze(edges),
+    });
+  });
+  sources.sort((left, right) =>
+    String(left.path).localeCompare(String(right.path)) ||
+    String(left.identity).localeCompare(String(right.identity)),
+  );
+  return Object.freeze({ day: String(day || ""), sources: Object.freeze(sources) });
+}
+
+function relationCloseEffectsEqual(left, right) {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function relationCloseExpectedMatchesCancelSummary(expected, cancelEffects) {
+  if (!expected || !cancelEffects) return false;
+  return relationCancelEffectsEqual(expected, cancelEffects);
+}
+
+function relationCloseCommitGate(details = {}) {
+  const cancelPlans = Array.isArray(details.cancelSourcePlans)
+    ? details.cancelSourcePlans
+    : [];
+  const completePlan = details.completePlan || { sources: [], completes: [], refusals: [] };
+  const cancelRefusals = Array.isArray(details.cancelRefusals)
+    ? details.cancelRefusals
+    : [];
+  const completeRefusals = Array.isArray(completePlan.refusals)
+    ? completePlan.refusals
+    : [];
+  const cancelPlan = Object.freeze({
+    sources: Object.freeze(cancelPlans.slice()),
+    cancels: Object.freeze(cancelPlans.filter((entry) => entry && entry.cancels)),
+    refusals: Object.freeze(cancelRefusals.slice()),
+    refuse: cancelRefusals.length > 0,
+  });
+  const cancelEffects = summarizeRelationCancelEffects(cancelPlan, details.day);
+  const closeEffects = summarizeRelationCloseEffects(
+    cancelPlans,
+    completePlan,
+    details.day,
+  );
+  if (
+    details.expectedCloseEffects &&
+    !relationCloseEffectsEqual(details.expectedCloseEffects, closeEffects)
+  ) {
+    return Object.freeze({
+      ok: false,
+      reason: details.staleReason || "changed — reopen",
+      notice: details.staleReason || "changed — reopen",
+      stale: true,
+      closeEffects,
+      cancelEffects,
+    });
+  }
+  if (
+    !details.expectedCloseEffects &&
+    details.expectedCancelEffects &&
+    !relationCloseExpectedMatchesCancelSummary(
+      details.expectedCancelEffects,
+      cancelEffects,
+    )
+  ) {
+    return Object.freeze({
+      ok: false,
+      reason: details.staleReason || "changed — reopen",
+      notice: details.staleReason || "changed — reopen",
+      stale: true,
+      closeEffects,
+      cancelEffects,
+    });
+  }
+  const refusal =
+    completeRefusals[0] && completeRefusals[0].refusal
+      ? completeRefusals[0].refusal
+      : cancelRefusals[0] && cancelRefusals[0].refusal;
+  if (refusal) {
+    return Object.freeze({
+      ok: false,
+      reason: refusal.code || "relation-close-refused",
+      notice: refusal.message || null,
+      stale: false,
+      closeEffects,
+      cancelEffects,
+    });
+  }
+  return Object.freeze({
+    ok: true,
+    reason: null,
+    notice: null,
+    stale: false,
+    closeEffects,
+    cancelEffects,
+  });
+}
+
+function applyRelationCloseStaleToPicker(picker, outcome) {
+  if (!outcome || outcome.stale !== true) return false;
+  if (picker) {
+    picker.relationCloseExpected = null;
+    picker.relationCancelExpected = outcome.cancelEffects || null;
+    picker.relationCancelConfirmNonce = null;
+    if (typeof picker.refreshRelationConsequenceStrip === "function") {
+      try {
+        picker.refreshRelationConsequenceStrip();
+      } catch (_error) {
+        // The next Return re-renders the live relation stage.
+      }
+    }
+  }
+  return true;
+}
+
+function completeTaskLineForRelation(api, rawLine, date, expectedBlockId) {
+  const before = String(rawLine || "");
+  if (!api || typeof api.completeTaskLineText !== "function") {
+    return Object.freeze({ ok: false, reason: "cycler-api" });
+  }
+  let after;
+  try {
+    after = api.completeTaskLineText(before, { date });
+  } catch (_error) {
+    return Object.freeze({ ok: false, reason: "cycler-api" });
+  }
+  if (typeof after !== "string" || after === before) {
+    return Object.freeze({ ok: false, reason: "unexpected-cycler-result" });
+  }
+  const blockId = getTrailingBlockId(after);
+  const completion = findBulletPropertyField(after, "completion");
+  if (
+    getObsidianTaskCheckboxStatus(after) !== "x" ||
+    !completion ||
+    String(completion.value || "") !== date ||
+    (expectedBlockId && blockId !== expectedBlockId) ||
+    !isObsidianTaskAtLine(after, 0)
+  ) {
+    return Object.freeze({ ok: false, reason: "unexpected-cycler-result" });
+  }
+  return Object.freeze({ ok: true, lineText: after });
+}
+
+function foldRelationCompleteLine(content, planned, api, date, sourceLine) {
+  const lines = String(content || "").split(/\r?\n/);
+  const blockId = normalizeBulletPropertyValue((planned && planned.blockId) || "");
+  let line = Math.floor(numericOrDefault(sourceLine, NaN));
+  if (blockId) {
+    const found = findTaskLineByTrailingBlockId(lines, blockId);
+    if (found !== null) line = found;
+  }
+  if (!Number.isInteger(line) || line < 0 || line >= lines.length) {
+    return Object.freeze({ ok: false, reason: "source-not-found" });
+  }
+  const result = completeTaskLineForRelation(api, lines[line], date, blockId);
+  if (!result.ok) return result;
+  lines[line] = result.lineText;
+  return Object.freeze({
+    ok: true,
+    content: lines.join(relationLineEnding(content)),
+    line,
+    rawLine: result.lineText,
+  });
+}
+
+function relationCompleteIdentityKey(identity) {
+  return `${normalizeVaultRelativePath(identity && identity.path)}\x00${normalizeBulletPropertyValue(identity && identity.blockId)}\x00${String((identity && identity.taskId) || "")}\x00${Math.floor(numericOrDefault(identity && identity.line, -1))}`;
+}
+
+function dedupeRelationCompleteIdentities(identities) {
+  const seen = new Set();
+  const result = [];
+  for (const identity of Array.isArray(identities) ? identities : []) {
+    const path = normalizeVaultRelativePath(identity && identity.path);
+    const blockId = normalizeBulletPropertyValue(identity && identity.blockId);
+    const taskId = String((identity && identity.taskId) || "");
+    const line = Math.floor(numericOrDefault(identity && identity.line, -1));
+    if (!path || (!blockId && !taskId && line < 0)) continue;
+    const normalized = Object.freeze({
+      path,
+      blockId: blockId || null,
+      taskId: taskId || null,
+      ...(line >= 0 ? { line } : {}),
+    });
+    const key = relationCompleteIdentityKey(normalized);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+  return Object.freeze(result);
+}
+
+function buildRelationClosingNotice(details = {}) {
+  const rows = Array.isArray(details.closingRows) ? details.closingRows : [];
+  const relationNotice = details.relationNotice || null;
+  const chips = [];
+  const removed = Math.max(0, Math.floor(numericOrDefault(details.pomodoroLinksRemoved, 0)));
+  const unblocked = Math.max(0, Math.floor(numericOrDefault(details.recovered, 0))) +
+    Math.max(0, Math.floor(numericOrDefault(details.reopened, 0)));
+  if (details.pruneFailed === true) chips.push("Pomodoro links not removed");
+  else if (removed > 0) chips.push(`removed ${formatRelationCancelCount(removed, "Pomodoro link")}`);
+  if (unblocked > 0) chips.push(`unblocked ${unblocked}`);
+  if (details.recoveryFailed === true) chips.push("dependents not recovered");
+  if (details.retirementFailed === true) chips.push("references not retired");
+  const mirrorFailed = details.mirrorFailed;
+  const formatRow = (row) => {
+    const sourceName = String(row.sourceName || "task");
+    const targetName = String(row.targetName || "task");
+    const label = String(row.label || "").trim();
+    const arrow = label ? ` — ${label} → ` : " → ";
+    return `🪢 ${sourceName}${arrow}${targetName} · ${row.effect === "complete" ? "✓ done" : "⊘ cancelled"}`;
+  };
+  let notice;
+  if (rows.length === 0) {
+    notice = relationNotice;
+  } else if (rows.length === 1) {
+    notice = formatRow(rows[0]);
+    if (relationNotice && rows[0].includeRelationNotice === true) {
+      notice = `${notice} · ${relationNotice}`;
+    }
+  } else {
+    notice = rows.map(formatRow).join(" · ");
+    if (relationNotice) notice = `${notice} · ${relationNotice}`;
+  }
+  if (notice && chips.length > 0) notice = `${notice} · ${chips.join(" · ")}`;
+  if (notice) notice = withLinkedFromFollowUpNotice(notice, mirrorFailed);
+  const successorNotice =
+    typeof details.successorNotice === "string" ? details.successorNotice.trim() : "";
+  return [notice, successorNotice].filter(Boolean).join("\n") || null;
+}
+
+class BobNavigationHotkeysRelationCompleteComposeMixin {
+  async finalizeRelationCompleteOutcome(outcome, options = {}) {
+    const result = outcome || {};
+    const identities = dedupeRelationCompleteIdentities(result.completedIdentities);
+    if (identities.length === 0) return result;
+    const picker = options.picker || this.activeBulletPropertyPicker || null;
+    const key = identities.map(relationCompleteIdentityKey).join("\n");
+    if (picker && picker.relationCloseFinalizationKey === key) {
+      return picker.relationCloseFinalizationPromise || result;
+    }
+    let resolveFinalization;
+    const pending = new Promise((resolve) => { resolveFinalization = resolve; });
+    if (picker) {
+      picker.relationCloseFinalizationKey = key;
+      picker.relationCloseFinalizationPromise = pending;
+      picker.reviewSettleDeferred = true;
+      if (typeof picker.clearPendingBatch === "function") picker.clearPendingBatch();
+      picker.pendingRelation = null;
+      picker.relationLabelBuffer = "";
+      try {
+        if (typeof picker.close === "function") picker.close();
+      } catch (_error) {
+        // The modal must be closed before successor selection can open.
+      }
+    }
+    const activePath = normalizeVaultRelativePath(
+      options.activePath || (picker && picker.filePath) || result.activePath || "",
+    );
+    const editor =
+      options.editor ||
+      (picker && picker.editor) ||
+      (typeof this.findRelationEditOpenEditor === "function"
+        ? this.findRelationEditOpenEditor(activePath)
+        : null);
+    const cycler =
+      this.app && this.app.plugins && this.app.plugins.plugins &&
+      this.app.plugins.plugins["task-status-cycler"];
+    const api = cycler && cycler.api;
+    let finalization = {
+      reopened: 0,
+      retired: 0,
+      recoveryFailures: [],
+      retirementFailures: [],
+      successors: null,
+      successorNotice: null,
+    };
+    if (relationCompleteCyclerApiAvailable(api)) {
+      try {
+        const actual = await api.finalizeClosedTasks(identities, {
+          activePath,
+          editor,
+          successorNoticeTarget: "return",
+        });
+        if (actual && typeof actual === "object") {
+          finalization = {
+            ...finalization,
+            ...actual,
+            reopened: Math.max(0, Math.floor(numericOrDefault(actual.reopened, 0))),
+            recoveryFailures: Array.isArray(actual.recoveryFailures) ? actual.recoveryFailures : [],
+            retirementFailures: Array.isArray(actual.retirementFailures) ? actual.retirementFailures : [],
+          };
+        }
+      } catch (error) {
+        finalization.recoveryFailures = [error && error.message ? error.message : String(error)];
+      }
+    } else {
+      finalization.recoveryFailures = ["Task Status Cycler API v3 is unavailable"];
+    }
+    const completionNotice = buildRelationClosingNotice({
+      closingRows: result.closingRows,
+      relationNotice: result.relationNotice,
+      pruneFailed: result.pruneFailed,
+      pomodoroLinksRemoved: result.pomodoroLinksRemoved,
+      recovered: result.recovered,
+      reopened: finalization.reopened,
+      recoveryFailed: finalization.recoveryFailures.length > 0,
+      retirementFailed: finalization.retirementFailures.length > 0,
+      mirrorFailed: result.mirrorFailed,
+      successorNotice: finalization.successorNotice,
+    });
+    const walkOrigin = picker && picker.reviewOrigin ? picker.reviewOrigin : null;
+    let noticeDisplayed = false;
+    try {
+      if (walkOrigin && typeof picker.settleReviewOrigin === "function") {
+        const activeCompleted = identities.some((identity) => identity.path === activePath);
+        await picker.settleReviewOrigin(activeCompleted ? "complete" : "noop", {
+          notice: completionNotice,
+        });
+        noticeDisplayed = true;
+      }
+    } catch (_error) {
+      noticeDisplayed = false;
+    }
+    const completed = Object.freeze({
+      ...result,
+      completedIdentities: identities,
+      finalization: Object.freeze(finalization),
+      notice: noticeDisplayed ? null : completionNotice,
+      noticeDisplayed,
+    });
+    if (picker) resolveFinalization(completed);
+    return completed;
   }
 }
 // ---- src/600-plugin-dependency-mirror.js ----
@@ -88148,6 +89396,8 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysBlocksEditMixin,
   BobNavigationHotkeysBlocksApiMixin,
   BobNavigationHotkeysRelationCancelComposeMixin,
+  BobNavigationHotkeysRelationCompleteComposeMixin,
+  BobNavigationHotkeysRelationHandEditMixin,
   BobNavigationHotkeysRelationEditMixin,
   BobNavigationHotkeysRelationFollowUpsMixin,
   BobNavigationHotkeysRelationStageMixin,
@@ -88489,10 +89739,25 @@ module.exports.helpers = {
   resetRelationsLinkedFromLinesConfigCache,
   loadRelationsCancelLabels,
   resetRelationsCancelLabelsConfigCache,
+  loadRelationsCloseLabels,
+  resetRelationsCloseLabelsConfigCache,
   relationCancelLabelKey,
   planRelationCancelEffects,
   planRelationCancelEffectsFromVector,
+  planRelationCompleteEffects,
+  planRelationCompleteEffectsFromVector,
+  relationCompleteLabelsSet,
+  planRelationClosingSource,
   summarizeRelationCancelEffects,
+  summarizeRelationCompleteEffects,
+  summarizeRelationCloseEffects,
+  relationCloseEffectsEqual,
+  relationCloseCommitGate,
+  completeTaskLineForRelation,
+  foldRelationCompleteLine,
+  dedupeRelationCompleteIdentities,
+  buildRelationClosingNotice,
+  BulletPropertyPickerRelationClosePreviewMixin,
   relationCancelEffectsEqual,
   deriveRelationCancelEdges,
   relocateRelationCancelSource,

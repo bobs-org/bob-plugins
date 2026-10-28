@@ -41,6 +41,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationStageDirection = direction === "from" ? "from" : "to";
     this.relationLabel = null;
     this.relationCancelExpected = null;
+    this.relationCloseExpected = null;
     this.relationCancelConfirmNonce = null;
     this.selectedPropertyItem = this.relationStageDummyProperty();
     this.pendingTask = null;
@@ -452,20 +453,8 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       ...removals.map(toRef),
       ...relabels.map(toRef),
     ]);
-    let expectedCancelEffects = this.relationCancelExpected || null;
-    if (expectedCancelEffects) {
-      const labelled = [...relabels, ...additions].find(
-        (target) => target && Object.prototype.hasOwnProperty.call(target, "label"),
-      );
-      const preview = this.relationCancelPreviewForLabel(
-        labelled ? labelled.label : null,
-        targetOverrides,
-      );
-      if (preview && preview.expected) {
-        expectedCancelEffects = preview.expected;
-        this.relationCancelExpected = preview.expected;
-      }
-    }
+    const expectedCloseEffects = this.relationCloseExpected || null;
+    const expectedCancelEffects = this.relationCancelExpected || null;
     if (linkedFrom) {
       if (!owner) {
         new Notice("This task could not be resolved");
@@ -478,6 +467,8 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         { mode: "relabel", items: relabels },
       ].filter((group) => group.items.length > 0);
       const notices = [];
+      const outcomes = [];
+      let failedNotice = null;
       for (const group of groups) {
         const sourceRefs = group.items.map(toRef);
         const label = group.items[0].label || null;
@@ -488,7 +479,9 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
           relabel: group.mode === "relabel" ? [{ ...ownerRef, label }] : [],
           direction: "from",
           expected: this.relationStageExpectedMap([...sourceRefs, ownerRef]),
+          expectedCloseEffects,
           expectedCancelEffects,
+          deferCloseFinalization: true,
         });
         if (!outcome.ok) {
           if (applyRelationCancelStaleToPicker(this, outcome)) {
@@ -497,13 +490,34 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
           if (outcome.reason === "changed — reopen" || outcome.reason === "changed") {
             return this.refuseDependencyStale();
           }
-          new Notice(outcome.notice || `🪢 Could not update links (${outcome.reason})`);
-          return false;
+          failedNotice = outcome.notice || `🪢 Could not update links (${outcome.reason})`;
+          break;
         }
+        outcomes.push(outcome);
         if (outcome.notice) notices.push(outcome.notice);
       }
-      if (notices.length === 1) new Notice(notices[0]);
+      const completedIdentities = outcomes.flatMap((entry) => entry.completedIdentities || []);
+      if (completedIdentities.length > 0) {
+        const combined = {
+          ok: true,
+          activePath: this.filePath,
+          completedIdentities,
+          closingRows: outcomes.flatMap((entry) => entry.closingRows || []),
+          relationNotice: outcomes.map((entry) => entry.relationNotice).filter(Boolean).join(" · ") || null,
+          mirrorFailed: outcomes.flatMap((entry) => entry.mirrorFailed || []),
+          pruneFailed: outcomes.some((entry) => entry.pruneFailed === true),
+          pomodoroLinksRemoved: outcomes.reduce((sum, entry) => sum + (entry.pomodoroLinksRemoved || 0), 0),
+          recovered: outcomes.reduce((sum, entry) => sum + (entry.recovered || 0), 0),
+        };
+        const finalized = await this.plugin.finalizeRelationCompleteOutcome(combined, {
+          picker: this,
+          activePath: this.filePath,
+          editor: this.editor,
+        });
+        if (finalized.notice && finalized.noticeDisplayed !== true) new Notice(finalized.notice);
+      } else if (notices.length === 1) new Notice(notices[0]);
       else if (notices.length > 1) new Notice(notices.join(" · "));
+      if (failedNotice) new Notice(failedNotice);
       this.clearPendingBatch();
       this.pendingRelation = null;
       return true;
@@ -515,7 +529,9 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         remove: removals.map(toRef),
         relabel: relabels.map(toRef),
         expected,
+          expectedCloseEffects,
         expectedCancelEffects,
+          deferCloseFinalization: true,
       });
       if (!outcome.ok) {
         if (applyRelationCancelStaleToPicker(this, outcome)) {
@@ -532,8 +548,15 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         );
         return false;
       }
-      if (outcome.notice) {
-        new Notice(outcome.notice);
+      const finalized = (outcome.completedIdentities || []).length > 0
+        ? await this.plugin.finalizeRelationCompleteOutcome(outcome, {
+            picker: this,
+            activePath: this.filePath,
+            editor: this.editor,
+          })
+        : outcome;
+      if (finalized.notice && finalized.noticeDisplayed !== true) {
+        new Notice(finalized.notice);
       }
       this.clearPendingBatch();
       this.pendingRelation = null;
@@ -678,6 +701,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationLabelGhosts = new Map();
     this.relationLabelWrites = new Set();
     this.relationCancelExpected = null;
+    this.relationCloseExpected = null;
     this.relationCancelConfirmNonce = null;
     const suggestions = this.readRelationLabelSuggestions("", { hidden: "exclude" });
     const hiddenCount = this.readRelationLabelHiddenCount();
@@ -825,7 +849,14 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       }
     }
     const withLabel = targets.map((target) => ({ ...target, label }));
-    const cancelPreview = this.relationCancelPreviewForLabel(label);
+    const selectedPreview = item && (item.closePreview || item.cancelPreview);
+    const cancelPreview = selectedPreview &&
+      relationCancelLabelKey(item.label || "") === relationCancelLabelKey(label || "")
+      ? selectedPreview
+      : this.relationCancelPreviewForLabel(label);
+    if (cancelPreview && cancelPreview.expectedCloseEffects) {
+      this.relationCloseExpected = cancelPreview.expectedCloseEffects;
+    }
     if (cancelPreview && cancelPreview.refusal) {
       new Notice(cancelPreview.refusal);
       return false;

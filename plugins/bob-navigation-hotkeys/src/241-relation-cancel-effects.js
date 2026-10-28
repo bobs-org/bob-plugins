@@ -180,6 +180,23 @@ function planRelationCancelEffects(args = {}) {
 }
 
 function planRelationCancelEffectsFromVector(vector) {
+  const configuredCancel = Array.isArray(vector.configured_cancel)
+    ? vector.configured_cancel
+    : Array.isArray(vector.configured)
+      ? vector.configured
+      : [];
+  const configuredComplete = Array.isArray(vector.configured_complete)
+    ? vector.configured_complete
+    : [];
+  const completeKeys = new Set(configuredComplete.map(relationCancelLabelKey));
+  const overlap = new Set(
+    configuredCancel
+      .map(relationCancelLabelKey)
+      .filter((key) => completeKeys.has(key)),
+  );
+  const effectiveCancel = configuredCancel.filter(
+    (entry) => !overlap.has(relationCancelLabelKey(entry)),
+  );
   const source = {
     path: "vector.md",
     blockId: "source",
@@ -201,7 +218,7 @@ function planRelationCancelEffectsFromVector(vector) {
     ],
   };
   return planRelationCancelEffects({
-    cancelLabels: vector.configured,
+    cancelLabels: effectiveCancel,
     trigger: vector.trigger || RELATION_CANCEL_EXPLICIT_TRIGGER,
     sources: [source],
   });

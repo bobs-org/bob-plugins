@@ -785,23 +785,25 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   // and continue the walk. Esc, `q`, refusals, and no-op writes read an
   // unchanged line, which stays; every committing write is judged from the
   // line after the write. Never throws.
-  settleReviewOrigin() {
+  async settleReviewOrigin(kind = "card", extraOutcome = {}) {
     const origin = this.reviewOrigin;
     this.reviewOrigin = null;
     if (!origin) {
-      return;
+      return null;
     }
     try {
       const plugin = this.plugin;
       if (!plugin || typeof plugin.continueReviewWalkAfter !== "function") {
-        return;
+        return null;
       }
       const beforeLine =
         typeof this.reviewBeforeLine === "string" ? this.reviewBeforeLine : "";
       const resolvedAfter = readReviewOriginAfterLine(this);
       if (resolvedAfter === null) {
-        void plugin.continueReviewWalkAfter(origin, null);
-        return;
+        return plugin.continueReviewWalkAfter(origin, {
+          ...extraOutcome,
+          kind: "noop",
+        });
       }
       const afterLine = resolvedAfter;
       let handledRefs = [
@@ -826,18 +828,23 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       } catch (error) {
         // Keep the single cursor-task ref.
       }
-      void plugin.continueReviewWalkAfter(origin, {
-        kind: "card",
+      return plugin.continueReviewWalkAfter(origin, {
+        ...extraOutcome,
+        kind: String(kind || "card"),
         beforeLine,
         afterLine,
         handledRefs,
       });
     } catch (error) {
       try {
-        void this.plugin.continueReviewWalkAfter(origin, null);
+        return await this.plugin.continueReviewWalkAfter(origin, {
+          ...extraOutcome,
+          kind: "noop",
+        });
       } catch (ignoredError) {
         // Best effort only.
       }
+      return null;
     }
   }
 

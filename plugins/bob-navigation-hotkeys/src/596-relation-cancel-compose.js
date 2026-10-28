@@ -221,6 +221,12 @@ function composeRelationSourceCancel(details = {}) {
       taskId: (cancelled && cancelled.taskId) || null,
     }),
     noticeRow: Object.freeze({
+      path: liveSource.path,
+      blockId:
+        (cancelled && cancelled.blockId) ||
+        getTrailingBlockId(String(batch.content.split(/\r?\n/)[sourceLine] || "")) ||
+        liveSource.blockId ||
+        null,
       sourceName:
         liveSource.description || relationNoticeNameFromLine(rawLine) || "task",
       targetName: details.targetName || "task",
@@ -312,6 +318,9 @@ function relationCancelCommitGate(
 }
 
 function applyRelationCancelStaleToPicker(picker, outcome) {
+  if (typeof applyRelationCloseStaleToPicker === "function") {
+    return applyRelationCloseStaleToPicker(picker, outcome);
+  }
   if (!outcome || outcome.stale !== true) return false;
   if (picker) {
     picker.relationCancelExpected = outcome.cancelEffects || null;

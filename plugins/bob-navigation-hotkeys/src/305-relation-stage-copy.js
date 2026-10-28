@@ -172,7 +172,11 @@ function relationLabelCancelConsequenceStrip(item, context = {}) {
     if (source.blockId) parts.push("removes its links from today's open Pomodoros");
     parts.push("unblocks dependents");
     if (source.projectOpenTasks !== null && source.projectOpenTasks !== undefined) {
-      parts.push(`its ${source.projectOpenTasks} open tasks stay open`);
+      if (source.projectOpenTasks === 1) {
+        parts.push("its 1 open task stays open");
+      } else {
+        parts.push(`its ${source.projectOpenTasks} open tasks stay open`);
+      }
     }
     return parts.join(" · ");
   }

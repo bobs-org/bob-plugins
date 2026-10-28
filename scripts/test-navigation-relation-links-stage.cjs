@@ -1263,6 +1263,30 @@ test("subtitle, consequence strip, live sentence, and label refusal copy", () =>
     ),
     "“supersedes” never cancels · to retire “Target”, use ⇧L",
   );
+  assert.equal(
+    helpers.relationLabelCancelConsequenceStrip(
+      { kind: "relation-label", label: "duplicate of" },
+      {
+        preview: {
+          sources: [{ text: "Ship it", blockId: "prj", projectOpenTasks: 1 }],
+          cancels: [{ text: "Ship it", blockId: "prj", projectOpenTasks: 1 }],
+        },
+      },
+    ),
+    "⊘ Cancels “Ship it” · removes its links from today's open Pomodoros · unblocks dependents · its 1 open task stays open",
+  );
+  assert.equal(
+    helpers.relationLabelCancelConsequenceStrip(
+      { kind: "relation-label", label: "duplicate of" },
+      {
+        preview: {
+          sources: [{ text: "Ship it", blockId: "prj", projectOpenTasks: 2 }],
+          cancels: [{ text: "Ship it", blockId: "prj", projectOpenTasks: 2 }],
+        },
+      },
+    ),
+    "⊘ Cancels “Ship it” · removes its links from today's open Pomodoros · unblocks dependents · its 2 open tasks stay open",
+  );
 });
 
 test("cancel labels overlay at zero uses and render the live source cue", () => {

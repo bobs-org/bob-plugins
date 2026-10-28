@@ -47,6 +47,11 @@ actions work on open and closed tasks. `Ctrl+Shift+L` (command
 `Ctrl+Shift+Alt+L` (command
 `bob-navigation-hotkeys:task-card-linked-from`) opens Linked from. On
 either relation line, `Ctrl+Shift+P` opens the owner's matching stage.
+On a dedicated Task Link, the L chords open the linked task's matching stage
+after focusing its note; read-only linked tasks are refused before focus.
+`N<Ctrl+Shift+L>` on Task Links opens the first resolved linked task's Links
+stage and reports that it opened the first of N linked tasks. The Task Card's
+Links to and Linked from rows on a Task Link use the same focus-and-open path.
 
 The Links stage title reads `🪢 Links · <task>` with the subtitle
 `Links to K · searching P tasks · ⇥ to mark several · does not block`.

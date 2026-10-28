@@ -525,6 +525,137 @@ class BobNavigationHotkeysRelationStageMixin {
     });
   }
 
+  // Focus one resolved Task Link target and open its relation stage. The
+  // live editor rechecks availability after focus before the stage opens.
+  async openLinkedRelationStage(targets, direction) {
+    const resolved = Array.isArray(targets) ? targets : [];
+    if (direction !== "to" && direction !== "from") {
+      return false;
+    }
+    if (direction === "from" && resolved.length > 1) {
+      new Notice("Linked from needs a single task");
+      return false;
+    }
+    const first = resolved[0];
+    if (!first) {
+      new Notice("No linked tasks are available");
+      return false;
+    }
+    let vaultFiles = [];
+    try {
+      vaultFiles = this.readDependencyVaultFileList() || [];
+    } catch (_error) {
+      vaultFiles = [];
+    }
+    const session = {
+      valid: true,
+      type: "single",
+      targets: [{
+        path: first.path,
+        line: first.line,
+        rawLine: first.rawLine,
+      }],
+      content: first.content,
+      cursorLine: first.line,
+    };
+    const context = {
+      filePath: first.path,
+      vaultFiles,
+      baseDate: new Date(),
+    };
+    const reason = direction === "from"
+      ? taskCardLinkedFromAvailabilityReason(session, context)
+      : taskCardLinksToAvailabilityReason(session, context);
+    if (reason) {
+      new Notice(reason);
+      return false;
+    }
+    const opened = await this.openLinkedDependencyStage(first, {
+      rowId: direction === "from" ? "linked-from" : "links-to",
+    });
+    if (opened && direction === "to" && resolved.length > 1) {
+      new Notice(
+        `🪢 Opened the first of ${resolved.length} linked tasks; reopen Links to for the rest`,
+      );
+    }
+    return opened;
+  }
+
+  // Chord entry on a dedicated Task Link. Resolve with closed tasks allowed,
+  // then guard against stale editors before moving focus to the target note.
+  async openTaskLinkRelationStage(cm, options = {}) {
+    const cursor = getEditorCursor(cm);
+    if (!cursor) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const content =
+      cm && typeof cm.getValue === "function" ? String(cm.getValue() || "") : "";
+    const discovery = discoverLinkPickerTargets(
+      content,
+      cursor.line,
+      options.countExplicit === true ? options.additionalTaskCount : 0,
+    );
+    if (!discovery.valid) {
+      new Notice(
+        discovery.notLink ? "Cursor is not on a Task Link" : discovery.error,
+      );
+      return false;
+    }
+    const activeView = this.getActiveMarkdownView();
+    if (!activeView || activeView.editor !== cm || !activeView.file) {
+      new Notice("No active markdown note");
+      return false;
+    }
+    const filePath = activeView.file.path;
+    const direction = options.initialTaskCardRow === "linked-from"
+      ? "from"
+      : "to";
+    const requestToken = (this.taskLinkRelationRequestToken || 0) + 1;
+    this.taskLinkRelationRequestToken = requestToken;
+    let resolution;
+    let resolutionFailed = false;
+    try {
+      resolution = await this.resolveLinkPickerTargets(
+        filePath,
+        discovery,
+        { allowClosed: true },
+      );
+    } catch (_error) {
+      resolutionFailed = true;
+    }
+    if (
+      requestToken !== this.taskLinkRelationRequestToken ||
+      this.taskCardPluginUnloading === true
+    ) {
+      return false;
+    }
+    if (resolutionFailed) {
+      new Notice("Task Link targets could not be read");
+      return false;
+    }
+    const currentView = this.getActiveMarkdownView();
+    if (
+      !currentView ||
+      currentView.editor !== cm ||
+      !currentView.file ||
+      currentView.file.path !== filePath ||
+      !cm ||
+      typeof cm.getValue !== "function" ||
+      String(cm.getValue() || "") !== content
+    ) {
+      new Notice("Current note changed; no tasks were updated");
+      return false;
+    }
+    if (!resolution || resolution.error) {
+      new Notice(
+        (resolution && resolution.error) || "Task Link targets could not be read",
+      );
+      return false;
+    }
+    return this.openLinkedRelationStage(resolution.targets, direction);
+  }
+
   // nav api.relations.openStage for the Links ("to") direction. The reverse
   // direction stays unavailable until nav-linked-from lands.
   async openRelationStageForRef(ref = {}) {

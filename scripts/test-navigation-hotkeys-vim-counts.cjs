@@ -596,6 +596,62 @@ test("physical counted property chord consumes only explicit normal-mode Vim cou
   assert.equal(opens.length, 1);
 });
 
+test("counted Ctrl+Shift+L on a Task Link reaches the relation opener", () => {
+  const content = "- [[Tasks/Alpha#^alpha]]\n- [[Tasks/Beta#^beta]]";
+  const inputState = {
+    keyBuffer: ["2"],
+    repeat: 2,
+    getRepeat: () => 2,
+  };
+  const cm = {
+    state: { vim: { mode: "normal", inputState } },
+    getCursor: () => ({ line: 0, ch: 0 }),
+  };
+  const editor = {
+    cm: { cm },
+    getValue: () => content,
+    getLine: (line) => content.split(/\r?\n/)[line] ?? null,
+    getCursor: () => ({ line: 0, ch: 0 }),
+  };
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.handledCountedBulletPropertyEvents = new WeakSet();
+  plugin.getFocusedMarkdownEditorView = () => ({ editor });
+  const routed = [];
+  let linkPickerCalls = 0;
+  plugin.openTaskLinkRelationStage = (receivedEditor, options) => {
+    routed.push({ editor: receivedEditor, options });
+    return Promise.resolve(false);
+  };
+  plugin.openLinkPicker = () => {
+    linkPickerCalls += 1;
+    return Promise.resolve(false);
+  };
+  const calls = { prevent: 0, stop: 0, immediate: 0 };
+  const event = {
+    key: "L",
+    code: "KeyL",
+    ctrlKey: true,
+    shiftKey: true,
+    altKey: false,
+    metaKey: false,
+    preventDefault: () => { calls.prevent += 1; },
+    stopPropagation: () => { calls.stop += 1; },
+    stopImmediatePropagation: () => { calls.immediate += 1; },
+  };
+
+  assert.equal(plugin.handleCountedBulletPropertyPhysicalKeydown(event), true);
+  assert.deepEqual(routed, [{
+    editor,
+    options: {
+      countExplicit: true,
+      additionalTaskCount: 2,
+      initialTaskCardRow: "links-to",
+    },
+  }]);
+  assert.equal(linkPickerCalls, 0);
+  assert.deepEqual(calls, { prevent: 1, stop: 1, immediate: 1 });
+});
+
 test("physical counted relation and dependency chords route or refuse by direction", () => {
   const makeEvent = (overrides = {}) => {
     const calls = { prevent: 0, stop: 0, immediate: 0 };

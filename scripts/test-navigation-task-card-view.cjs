@@ -522,6 +522,147 @@ test("counted and linked cards disclose mixed values and Task Link notes", () =>
   assert.match(linkedText, /Beta/);
 });
 
+test("Task Link relation rows use the linked task's content and index", () => {
+  const targetContent = [
+    "- [ ] #task Alpha ^alpha",
+    "  - 🪢 **LINKS:** see [[Tasks/Other#^other]]",
+  ].join("\n");
+  const target = {
+    path: "Tasks/Alpha.md",
+    line: 0,
+    rawLine: "- [ ] #task Alpha ^alpha",
+    content: targetContent,
+    blockId: "alpha",
+  };
+  const incomingCalls = [];
+  const app = {
+    plugins: {
+      plugins: {
+        "bob-ledger-tools": {
+          api: {
+            relationIndex: {
+              version: 1,
+              ready: () => true,
+              incoming: (path, blockId) => {
+                incomingCalls.push([path, blockId]);
+                return [{ source: { text: "- [ ] #task Source task", blockId: "source" } }];
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const linked = makeModel({
+    content: "- [[Tasks/Alpha#^alpha]]",
+    lineText: "- [[Tasks/Alpha#^alpha]]",
+    filePath: "Daily/2026-10-28.md",
+    app,
+    taskCache: { ready: true, tasks: [{ blockId: "other", displayText: "Other task" }] },
+    linkSession: {
+      kind: "task-link",
+      requestedCount: 1,
+      targets: [{ line: 0 }],
+      resolved: [target],
+    },
+  });
+  const linksTo = linked.rows.find((row) => row.id === "links-to");
+  const linkedFrom = linked.rows.find((row) => row.id === "linked-from");
+  assert.equal(linksTo.enabled, true);
+  assert.equal(linksTo.detail, "1 · see Other task");
+  assert.equal(linkedFrom.enabled, true);
+  assert.equal(linkedFrom.detail, "1 · Source task");
+  assert.deepEqual(incomingCalls, [["Tasks/Alpha.md", "alpha"]]);
+
+  const second = { ...target, path: "Tasks/Beta.md", blockId: "beta" };
+  const counted = makeModel({
+    content: "- [[Tasks/Alpha#^alpha]]\n- [[Tasks/Beta#^beta]]",
+    lineText: "- [[Tasks/Alpha#^alpha]]",
+    filePath: "Daily/2026-10-28.md",
+    app,
+    linkSession: {
+      kind: "task-link",
+      requestedCount: 2,
+      targets: [{ line: 0 }, { line: 1 }],
+      resolved: [target, second],
+    },
+  });
+  assert.equal(counted.rows.find((row) => row.id === "links-to").enabled, true);
+  const countedLinkedFrom = counted.rows.find((row) => row.id === "linked-from");
+  assert.equal(countedLinkedFrom.enabled, false);
+  assert.equal(countedLinkedFrom.unavailableReason, "Linked from needs a single task");
+});
+
+test("Task Link Task Card relation actions focus resolved tasks and clear by ref", async () => {
+  const first = {
+    path: "Tasks/Alpha.md",
+    line: 3,
+    rawLine: "- [ ] #task Alpha ^alpha",
+    content: "head\nhead\nhead\n- [ ] #task Alpha ^alpha",
+    blockId: "alpha",
+  };
+  const second = {
+    path: "Tasks/Beta.md",
+    line: 7,
+    rawLine: "- [ ] #task Beta ^beta",
+    content: "- [ ] #task Beta ^beta",
+    blockId: "beta",
+  };
+  const linkSession = {
+    kind: "task-link",
+    requestedCount: 2,
+    targets: [{ line: 0 }, { line: 1 }],
+    resolved: [first, second],
+  };
+
+  const linksCard = openPropertyPicker({
+    content: "- [[Tasks/Alpha#^alpha]]\n- [[Tasks/Beta#^beta]]",
+    linkSession,
+    filePath: "Daily/2026-10-28.md",
+  });
+  const opened = [];
+  linksCard.plugin.openLinkedRelationStage = async (...args) => {
+    opened.push(args);
+    return true;
+  };
+  assert.equal(await linksCard.modal.openTaskCardAction("links-to", "links"), true);
+  await nextTurn();
+  assert.deepEqual(opened, [[linkSession.resolved, "to"]]);
+  assert.equal(linksCard.modal.isOpen, false);
+
+  const linkedFromCard = openPropertyPicker({
+    content: "- [[Tasks/Alpha#^alpha]]\n- [[Tasks/Beta#^beta]]",
+    linkSession,
+    filePath: "Daily/2026-10-28.md",
+  });
+  linkedFromCard.plugin.openLinkedRelationStage = async (...args) => {
+    opened.push(args);
+    return true;
+  };
+  assert.equal(
+    await linkedFromCard.modal.openTaskCardAction("linked-from", "linked-from"),
+    true,
+  );
+  await nextTurn();
+  assert.deepEqual(opened[1], [linkSession.resolved, "from"]);
+
+  const clearCard = openPropertyPicker({
+    content: "- [[Tasks/Alpha#^alpha]]\n- [[Tasks/Beta#^beta]]",
+    linkSession,
+    filePath: "Daily/2026-10-28.md",
+  });
+  const removed = [];
+  clearCard.plugin.removeAllRelationLinksByRef = async (ref) => {
+    removed.push(ref);
+    return { ok: true, removed: 1 };
+  };
+  assert.equal(await clearCard.modal.clearTaskCardRelations("links-to"), true);
+  assert.deepEqual(removed, [
+    { path: "Tasks/Alpha.md", line: 3, blockId: "alpha" },
+    { path: "Tasks/Beta.md", line: 7, blockId: "beta" },
+  ]);
+});
+
 const CLASSIC_LIST_TEXT = /Set bullet property|Filter properties|Filter bullet properties|No matching properties/;
 
 function assertNoClassicList(modal) {
@@ -1022,6 +1163,136 @@ test("Ctrl+Shift+Alt+B on a Task Link opens the linked Blocks stage", async () =
   assert.equal(result, true);
   assert.deepEqual(opened, [target]);
   assert.equal(plugin.activeBulletPropertyPicker, null);
+});
+
+test("LG18-LG20: Task Link relation chords resolve, guard, and open the selected target", async () => {
+  const makeTarget = (path, blockId, rawLine) => ({
+    path,
+    line: 0,
+    rawLine,
+    content: rawLine,
+    blockId,
+    displayText: blockId,
+  });
+  const run = async ({ content, row, targets, countExplicit, additionalTaskCount, mutate }) => {
+    let currentContent = content;
+    const editor = {
+      getValue: () => currentContent,
+      getLine: (line) => currentContent.split(/\r?\n/)[line] ?? null,
+      getCursor: () => ({ line: 0, ch: 0 }),
+      setCursor(line, ch) {
+        this.cursor = typeof line === "object" ? line : { line, ch };
+      },
+    };
+    const plugin = new NavigationHotkeysPlugin();
+    plugin.app = {};
+    plugin.getActiveMarkdownView = () => ({ editor, file: { path: "Daily/2026-10-28.md" } });
+    plugin.readDependencyVaultFileList = () => [];
+    const resolveCalls = [];
+    plugin.resolveLinkPickerTargets = async (...args) => {
+      resolveCalls.push(args);
+      if (mutate) currentContent = `${currentContent}\nchanged`;
+      return { error: null, targets };
+    };
+    const opened = [];
+    plugin.openLinkedDependencyStage = async (...args) => {
+      opened.push(args);
+      return true;
+    };
+    const openRelation = plugin.openTaskLinkRelationStage.bind(plugin);
+    let pending;
+    plugin.openTaskLinkRelationStage = (...args) => {
+      pending = openRelation(...args);
+      return pending;
+    };
+    const result = plugin.openBulletPropertyPicker(editor, {
+      config: buildConfig(),
+      initialTaskCardRow: row,
+      countExplicit,
+      additionalTaskCount,
+    });
+    assert.equal(result, true);
+    await pending;
+    return { opened, resolveCalls };
+  };
+
+  notices.length = 0;
+  const alpha = makeTarget(
+    "Tasks/Alpha.md",
+    "alpha",
+    "- [ ] #task Alpha ^alpha",
+  );
+  for (const [row, rowId] of [
+    ["links-to", "links-to"],
+    ["linked-from", "linked-from"],
+  ]) {
+    const { opened, resolveCalls } = await run({
+      content: "- [[Tasks/Alpha#^alpha]]",
+      row,
+      targets: [alpha],
+    });
+    assert.deepEqual(resolveCalls[0][2], { allowClosed: true });
+    assert.deepEqual(opened, [[alpha, { rowId }]]);
+  }
+
+  const closed = makeTarget(
+    "Tasks/Closed.md",
+    "closed",
+    "- [x] #task Closed ✅ 2026-10-27 ^closed",
+  );
+  const closedResult = await run({
+    content: "- [[Tasks/Closed#^closed]]",
+    row: "links-to",
+    targets: [closed],
+  });
+  assert.deepEqual(closedResult.opened, [[closed, { rowId: "links-to" }]]);
+
+  const second = makeTarget("Tasks/Beta.md", "beta", "- [ ] #task Beta ^beta");
+  notices.length = 0;
+  const counted = await run({
+    content: "- [[Tasks/Alpha#^alpha]]\n- [[Tasks/Beta#^beta]]",
+    row: "links-to",
+    countExplicit: true,
+    additionalTaskCount: 1,
+    targets: [alpha, second],
+  });
+  assert.deepEqual(counted.opened, [[alpha, { rowId: "links-to" }]]);
+  assert.deepEqual(notices, [
+    "🪢 Opened the first of 2 linked tasks; reopen Links to for the rest",
+  ]);
+
+  notices.length = 0;
+  const linkedFromCounted = await run({
+    content: "- [[Tasks/Alpha#^alpha]]\n- [[Tasks/Beta#^beta]]",
+    row: "linked-from",
+    targets: [alpha, second],
+  });
+  assert.deepEqual(linkedFromCounted.opened, []);
+  assert.deepEqual(notices, ["Linked from needs a single task"]);
+
+  notices.length = 0;
+  const readOnly = makeTarget(
+    "done/Alpha.md",
+    "alpha",
+    "- [ ] #task Alpha ^alpha",
+  );
+  const refused = await run({
+    content: "- [[done/Alpha#^alpha]]",
+    row: "links-to",
+    targets: [readOnly],
+  });
+  assert.deepEqual(refused.opened, []);
+  assert.deepEqual(notices, ["This task is in a read-only note"]);
+
+  notices.length = 0;
+  const stale = await run({
+    content: "- [[Tasks/Alpha#^alpha]]",
+    row: "links-to",
+    targets: [alpha],
+    mutate: true,
+  });
+  assert.deepEqual(stale.opened, []);
+  assert.deepEqual(notices, ["Current note changed; no tasks were updated"]);
 });
 
 test("Task Link count replacement and source edits invalidate old resolutions", async () => {

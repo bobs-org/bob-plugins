@@ -43556,20 +43556,18 @@ function planTaskCard(context = {}) {
     session,
     context,
   );
-  const linksToSummary =
-    session.type === "single" && session.valid
-      ? taskCardLinksToSummary(session, context)
-      : null;
+  const linksToSummary = session.valid
+    ? taskCardLinksToSummary(session, context)
+    : null;
   const linksToDetail = linksToSummary ? linksToSummary.detail : "";
   const linksToAvailable = !linksToUnavailableReason;
   const linkedFromUnavailableReason = taskCardLinkedFromAvailabilityReason(
     session,
     context,
   );
-  const linkedFromSummary =
-    session.type === "single" && session.valid
-      ? taskCardLinkedFromSummary(session, context)
-      : null;
+  const linkedFromSummary = session.valid
+    ? taskCardLinkedFromSummary(session, context)
+    : null;
   const linkedFromAvailable = !linkedFromUnavailableReason;
   const blocksDetail = blocksSummary
     ? `${formatCountLabel(blocksSummary.count, "task")}${
@@ -44265,7 +44263,11 @@ function taskCardLinksToAvailabilityReason(session, context = {}) {
   if (targets.length === 0) {
     return "No task targets are available";
   }
-  if (session.type !== "single" && session.type !== "counted") {
+  if (
+    session.type !== "single" &&
+    session.type !== "counted" &&
+    session.type !== "linked"
+  ) {
     return "Links to needs a single task";
   }
   if (targets.some((target) => !isObsidianTaskLine(target && target.rawLine))) {
@@ -44378,13 +44380,30 @@ function taskCardLinksToDetail(entries, taskCache) {
 }
 
 function taskCardLinksToSummary(session, context = {}) {
-  if (!session || session.valid !== true || session.type !== "single") {
+  const linkedTarget =
+    session && session.type === "linked" && Array.isArray(session.targets) &&
+    session.targets.length === 1
+      ? session.targets[0]
+      : null;
+  if (
+    !session ||
+    session.valid !== true ||
+    (session.type !== "single" && !linkedTarget)
+  ) {
     return null;
   }
   const content = String(
-    (session && session.content) || context.content || "",
+    (linkedTarget && linkedTarget.content) ||
+      (session && session.content) ||
+      context.content ||
+      "",
   );
-  const line = Math.floor(numericOrDefault(session.cursorLine, Number.NaN));
+  const line = Math.floor(
+    numericOrDefault(
+      linkedTarget ? linkedTarget.line : session.cursorLine,
+      Number.NaN,
+    ),
+  );
   if (!Number.isFinite(line)) {
     return null;
   }
@@ -44402,7 +44421,14 @@ function taskCardLinksToSummary(session, context = {}) {
 // fallback: LINKED FROM is a generated mirror, and the Task Card only shows
 // this detail when the live index is ready.
 function taskCardLinkedFromAvailabilityReason(session, context = {}) {
-  if (session && session.type !== "single") {
+  if (
+    session &&
+    session.type === "linked" &&
+    (!Array.isArray(session.targets) || session.targets.length !== 1)
+  ) {
+    return "Linked from needs a single task";
+  }
+  if (session && session.type !== "single" && session.type !== "linked") {
     return "Linked from needs a single task";
   }
   return taskCardLinksToAvailabilityReason(session, context);
@@ -44426,10 +44452,19 @@ function taskCardRelationIndex(context = {}) {
 }
 
 function taskCardLinkedFromSummary(session, context = {}) {
-  if (!session || session.valid !== true || session.type !== "single") {
+  const linkedTarget =
+    session && session.type === "linked" && Array.isArray(session.targets) &&
+    session.targets.length === 1
+      ? session.targets[0]
+      : null;
+  if (
+    !session ||
+    session.valid !== true ||
+    (session.type !== "single" && !linkedTarget)
+  ) {
     return null;
   }
-  const target = (session.targets || [])[0];
+  const target = linkedTarget || (session.targets || [])[0];
   const path = normalizeVaultRelativePath((target && target.path) || context.filePath || "");
   const blockId = normalizeBulletPropertyValue(
     getTrailingBlockId((target && target.rawLine) || "") || "",
@@ -46064,10 +46099,28 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       return false;
     }
     if (rowId === "links-to" || action === "links") {
+      const resolved =
+        this.linkSession && Array.isArray(this.linkSession.resolved)
+          ? this.linkSession.resolved
+          : [];
+      if (resolved.length > 0) {
+        this.close();
+        void this.plugin.openLinkedRelationStage(resolved, "to");
+        return true;
+      }
       this.openTaskCardStage(() => this.showRelationStage());
       return false;
     }
     if (rowId === "linked-from" || action === "linked-from") {
+      const resolved =
+        this.linkSession && Array.isArray(this.linkSession.resolved)
+          ? this.linkSession.resolved
+          : [];
+      if (resolved.length > 0) {
+        this.close();
+        void this.plugin.openLinkedRelationStage(resolved, "from");
+        return true;
+      }
       this.openTaskCardStage(() => this.showLinkedFromStage());
       return false;
     }
@@ -46190,9 +46243,15 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       new Notice("Select Links to before clearing relations");
       return false;
     }
-    const targets = this.taskSession && this.taskSession.explicit
-      ? this.taskSession.targets || []
-      : [{ path: this.filePath, line: this.cursor.line }];
+    const targets = this.isLinkSession()
+      ? (this.linkSession.resolved || []).map((target) => ({
+          path: target.path,
+          line: target.line,
+          blockId: target.blockId || getTrailingBlockId(target.rawLine || ""),
+        }))
+      : this.taskSession && this.taskSession.explicit
+        ? this.taskSession.targets || []
+        : [{ path: this.filePath, line: this.cursor.line }];
     let removed = 0;
     const mirrorFailures = new Set();
     for (const target of targets) {
@@ -53394,6 +53453,137 @@ class BobNavigationHotkeysRelationStageMixin {
     return this.openBulletPropertyPicker(editor, {
       initialTaskCardRow: "linked-from",
     });
+  }
+
+  // Focus one resolved Task Link target and open its relation stage. The
+  // live editor rechecks availability after focus before the stage opens.
+  async openLinkedRelationStage(targets, direction) {
+    const resolved = Array.isArray(targets) ? targets : [];
+    if (direction !== "to" && direction !== "from") {
+      return false;
+    }
+    if (direction === "from" && resolved.length > 1) {
+      new Notice("Linked from needs a single task");
+      return false;
+    }
+    const first = resolved[0];
+    if (!first) {
+      new Notice("No linked tasks are available");
+      return false;
+    }
+    let vaultFiles = [];
+    try {
+      vaultFiles = this.readDependencyVaultFileList() || [];
+    } catch (_error) {
+      vaultFiles = [];
+    }
+    const session = {
+      valid: true,
+      type: "single",
+      targets: [{
+        path: first.path,
+        line: first.line,
+        rawLine: first.rawLine,
+      }],
+      content: first.content,
+      cursorLine: first.line,
+    };
+    const context = {
+      filePath: first.path,
+      vaultFiles,
+      baseDate: new Date(),
+    };
+    const reason = direction === "from"
+      ? taskCardLinkedFromAvailabilityReason(session, context)
+      : taskCardLinksToAvailabilityReason(session, context);
+    if (reason) {
+      new Notice(reason);
+      return false;
+    }
+    const opened = await this.openLinkedDependencyStage(first, {
+      rowId: direction === "from" ? "linked-from" : "links-to",
+    });
+    if (opened && direction === "to" && resolved.length > 1) {
+      new Notice(
+        `🪢 Opened the first of ${resolved.length} linked tasks; reopen Links to for the rest`,
+      );
+    }
+    return opened;
+  }
+
+  // Chord entry on a dedicated Task Link. Resolve with closed tasks allowed,
+  // then guard against stale editors before moving focus to the target note.
+  async openTaskLinkRelationStage(cm, options = {}) {
+    const cursor = getEditorCursor(cm);
+    if (!cursor) {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const content =
+      cm && typeof cm.getValue === "function" ? String(cm.getValue() || "") : "";
+    const discovery = discoverLinkPickerTargets(
+      content,
+      cursor.line,
+      options.countExplicit === true ? options.additionalTaskCount : 0,
+    );
+    if (!discovery.valid) {
+      new Notice(
+        discovery.notLink ? "Cursor is not on a Task Link" : discovery.error,
+      );
+      return false;
+    }
+    const activeView = this.getActiveMarkdownView();
+    if (!activeView || activeView.editor !== cm || !activeView.file) {
+      new Notice("No active markdown note");
+      return false;
+    }
+    const filePath = activeView.file.path;
+    const direction = options.initialTaskCardRow === "linked-from"
+      ? "from"
+      : "to";
+    const requestToken = (this.taskLinkRelationRequestToken || 0) + 1;
+    this.taskLinkRelationRequestToken = requestToken;
+    let resolution;
+    let resolutionFailed = false;
+    try {
+      resolution = await this.resolveLinkPickerTargets(
+        filePath,
+        discovery,
+        { allowClosed: true },
+      );
+    } catch (_error) {
+      resolutionFailed = true;
+    }
+    if (
+      requestToken !== this.taskLinkRelationRequestToken ||
+      this.taskCardPluginUnloading === true
+    ) {
+      return false;
+    }
+    if (resolutionFailed) {
+      new Notice("Task Link targets could not be read");
+      return false;
+    }
+    const currentView = this.getActiveMarkdownView();
+    if (
+      !currentView ||
+      currentView.editor !== cm ||
+      !currentView.file ||
+      currentView.file.path !== filePath ||
+      !cm ||
+      typeof cm.getValue !== "function" ||
+      String(cm.getValue() || "") !== content
+    ) {
+      new Notice("Current note changed; no tasks were updated");
+      return false;
+    }
+    if (!resolution || resolution.error) {
+      new Notice(
+        (resolution && resolution.error) || "Task Link targets could not be read",
+      );
+      return false;
+    }
+    return this.openLinkedRelationStage(resolution.targets, direction);
   }
 
   // nav api.relations.openStage for the Links ("to") direction. The reverse
@@ -70744,6 +70934,18 @@ class BobNavigationHotkeysCancelPropertyMixin {
       ) {
         setEditorCursorSafely(cm, entry.parentLine, 0);
         const requestedRow = options.initialTaskCardRow || null;
+        if (requestedRow === "depends-on") {
+          return this.openBulletPropertyPicker(cm, {
+            ...options,
+            initialProperty: "dependsOn",
+          });
+        }
+        if (requestedRow === "blocks") {
+          return this.openBulletPropertyPicker(cm, {
+            ...options,
+            reopenBlocksStage: true,
+          });
+        }
         const openLinkedFrom = requestedRow
           ? requestedRow === "linked-from"
           : entry.lineKind === "linked-from";
@@ -70758,16 +70960,22 @@ class BobNavigationHotkeysCancelPropertyMixin {
         (entry.lineKind === "depends-on" || entry.lineKind === "blocks")
       ) {
         setEditorCursorSafely(cm, entry.parentLine, 0);
-        if (
-          options.initialTaskCardRow === "blocks" ||
-          (entry.lineKind === "blocks" && !options.initialTaskCardRow)
-        ) {
+        const requestedRow = options.initialTaskCardRow || null;
+        if (requestedRow === "links-to" || requestedRow === "linked-from") {
+          return this.openBulletPropertyPicker(cm, {
+            ...options,
+            ...(requestedRow === "links-to"
+              ? { reopenLinksStage: true }
+              : { reopenLinkedFromStage: true }),
+          });
+        }
+        if (requestedRow === "blocks" || (entry.lineKind === "blocks" && !requestedRow)) {
           return this.openBulletPropertyPicker(cm, {
             ...options,
             reopenBlocksStage: true,
           });
         }
-        if (entry.lineKind === "depends-on") {
+        if (requestedRow === "depends-on" || (entry.lineKind === "depends-on" && !requestedRow)) {
           return this.openBulletPropertyPicker(cm, {
             ...options,
             initialProperty: "dependsOn",
@@ -70787,7 +70995,14 @@ class BobNavigationHotkeysCancelPropertyMixin {
       !isObsidianTaskAtLine(content, cursor.line) &&
       parseLinkPickerTaskLink(lineText)
     ) {
-      void this.openLinkPicker(cm, options).catch(() => false);
+      if (
+        options.initialTaskCardRow === "links-to" ||
+        options.initialTaskCardRow === "linked-from"
+      ) {
+        void this.openTaskLinkRelationStage(cm, options).catch(() => false);
+      } else {
+        void this.openLinkPicker(cm, options).catch(() => false);
+      }
       return true;
     }
     let taskSession = options.taskSession || null;
@@ -74622,57 +74837,6 @@ class BobNavigationHotkeysDependencyStageMixin {
     }
   }
 
-  // Task Link mode: focus the linked note's tab first, even when it is already
-  // open in a background tab, because the stage needs the active view's editor.
-  async openLinkedDependencyStage(target, options = {}) {
-    try {
-      const path = normalizeVaultRelativePath((target && target.path) || "");
-      if (!path) {
-        new Notice("Linked task has no note");
-        return false;
-      }
-      const vault = this.app && this.app.vault;
-      const file =
-        vault && typeof vault.getAbstractFileByPath === "function"
-          ? vault.getAbstractFileByPath(path)
-          : null;
-      if (!file) {
-        new Notice(`Linked note not found: ${path}`);
-        return false;
-      }
-      const opened = await this.openMarkdownFileWithLeafReuse(
-        file,
-        `Could not open ${path}`,
-      );
-      if (!opened) {
-        return false;
-      }
-      const view = this.getActiveMarkdownView();
-      if (
-        !view ||
-        !view.editor ||
-        !view.file ||
-        normalizeVaultRelativePath(view.file.path) !== path
-      ) {
-        new Notice(`Could not open ${path}`);
-        return false;
-      }
-      const line = Math.floor(numericOrDefault(target.line, Number.NaN));
-      if (Number.isFinite(line)) {
-        setEditorCursorSafely(view.editor, line, 0);
-      }
-      return this.openBulletPropertyPicker(
-        view.editor,
-        options.rowId === "blocks"
-          ? { reopenBlocksStage: true }
-          : { initialProperty: "dependsOn" },
-      );
-    } catch (_error) {
-      new Notice("Could not open the linked task");
-      return false;
-    }
-  }
-
   // Palette command `edit-task-dependencies`: the task under the cursor.
   openDependencyStageAtCursor(editor) {
     const cursor = getEditorCursor(editor);
@@ -75609,6 +75773,61 @@ class BobNavigationHotkeysBlocksEditMixin {
 }
 // ---- src/593-plugin-blocks-api.js ----
 class BobNavigationHotkeysBlocksApiMixin {
+  // Focus the linked note first; each entry opens its own picker stage on the
+  // live editor, which remains the authority for stage availability.
+  async openLinkedDependencyStage(target, options = {}) {
+    try {
+      const path = normalizeVaultRelativePath((target && target.path) || "");
+      if (!path) {
+        new Notice("Linked task has no note");
+        return false;
+      }
+      const vault = this.app && this.app.vault;
+      const file =
+        vault && typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(path)
+          : null;
+      if (!file) {
+        new Notice(`Linked note not found: ${path}`);
+        return false;
+      }
+      const opened = await this.openMarkdownFileWithLeafReuse(
+        file,
+        `Could not open ${path}`,
+      );
+      if (!opened) {
+        return false;
+      }
+      const view = this.getActiveMarkdownView();
+      if (
+        !view ||
+        !view.editor ||
+        !view.file ||
+        normalizeVaultRelativePath(view.file.path) !== path
+      ) {
+        new Notice(`Could not open ${path}`);
+        return false;
+      }
+      const line = Math.floor(numericOrDefault(target.line, Number.NaN));
+      if (Number.isFinite(line)) {
+        setEditorCursorSafely(view.editor, line, 0);
+      }
+      const rowOptions = {
+        "depends-on": { initialProperty: "dependsOn" },
+        blocks: { reopenBlocksStage: true },
+        "links-to": { reopenLinksStage: true },
+        "linked-from": { reopenLinkedFromStage: true },
+      };
+      return this.openBulletPropertyPicker(
+        view.editor,
+        { ...(rowOptions[options.rowId] || rowOptions["depends-on"]) },
+      );
+    } catch (_error) {
+      new Notice("Could not open the linked task");
+      return false;
+    }
+  }
+
   async openLinkedBlocksStage(target) {
     return this.openLinkedDependencyStage(target, { rowId: "blocks" });
   }

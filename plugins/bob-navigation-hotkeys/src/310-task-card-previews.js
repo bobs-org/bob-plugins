@@ -440,20 +440,18 @@ function planTaskCard(context = {}) {
     session,
     context,
   );
-  const linksToSummary =
-    session.type === "single" && session.valid
-      ? taskCardLinksToSummary(session, context)
-      : null;
+  const linksToSummary = session.valid
+    ? taskCardLinksToSummary(session, context)
+    : null;
   const linksToDetail = linksToSummary ? linksToSummary.detail : "";
   const linksToAvailable = !linksToUnavailableReason;
   const linkedFromUnavailableReason = taskCardLinkedFromAvailabilityReason(
     session,
     context,
   );
-  const linkedFromSummary =
-    session.type === "single" && session.valid
-      ? taskCardLinkedFromSummary(session, context)
-      : null;
+  const linkedFromSummary = session.valid
+    ? taskCardLinkedFromSummary(session, context)
+    : null;
   const linkedFromAvailable = !linkedFromUnavailableReason;
   const blocksDetail = blocksSummary
     ? `${formatCountLabel(blocksSummary.count, "task")}${

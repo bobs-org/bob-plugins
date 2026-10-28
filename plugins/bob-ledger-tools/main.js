@@ -55115,6 +55115,23 @@ function planCoerceDate(value) {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value;
   }
+  if (typeof value === "string") {
+    const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+    if (dateOnly) {
+      const year = Number(dateOnly[1]);
+      const month = Number(dateOnly[2]);
+      const day = Number(dateOnly[3]);
+      const date = new Date(year, month - 1, day);
+      if (
+        date.getFullYear() !== year ||
+        date.getMonth() !== month - 1 ||
+        date.getDate() !== day
+      ) {
+        return null;
+      }
+      return date;
+    }
+  }
   if (typeof value === "string" || typeof value === "number") {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? null : date;

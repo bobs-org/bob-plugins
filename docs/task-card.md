@@ -23,11 +23,13 @@ selected dependent waits on the source task.
 
 `Ctrl+Shift+L` (command
 `bob-navigation-hotkeys:task-card-links`) opens Links to for the task
-under the cursor. `Ctrl+Shift+Alt+L` (command
+under the cursor or a dedicated Task Link's linked task, opening its note
+first. `Ctrl+Shift+Alt+L` (command
 `bob-navigation-hotkeys:task-card-linked-from`) opens Linked from. See
 [Task relations](task-relations.md). On either relation line,
 `Ctrl+Shift+P`, `Ctrl+Shift+L`, and `Ctrl+Shift+Alt+L` open that task's
-matching stage directly.
+matching stage directly. On a Depends-On or BLOCKS line, the L chords open
+the owning task's Links or Linked-from stage.
 
 ## Card gestures
 

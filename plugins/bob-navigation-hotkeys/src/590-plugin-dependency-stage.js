@@ -798,57 +798,6 @@ class BobNavigationHotkeysDependencyStageMixin {
     }
   }
 
-  // Task Link mode: focus the linked note's tab first, even when it is already
-  // open in a background tab, because the stage needs the active view's editor.
-  async openLinkedDependencyStage(target, options = {}) {
-    try {
-      const path = normalizeVaultRelativePath((target && target.path) || "");
-      if (!path) {
-        new Notice("Linked task has no note");
-        return false;
-      }
-      const vault = this.app && this.app.vault;
-      const file =
-        vault && typeof vault.getAbstractFileByPath === "function"
-          ? vault.getAbstractFileByPath(path)
-          : null;
-      if (!file) {
-        new Notice(`Linked note not found: ${path}`);
-        return false;
-      }
-      const opened = await this.openMarkdownFileWithLeafReuse(
-        file,
-        `Could not open ${path}`,
-      );
-      if (!opened) {
-        return false;
-      }
-      const view = this.getActiveMarkdownView();
-      if (
-        !view ||
-        !view.editor ||
-        !view.file ||
-        normalizeVaultRelativePath(view.file.path) !== path
-      ) {
-        new Notice(`Could not open ${path}`);
-        return false;
-      }
-      const line = Math.floor(numericOrDefault(target.line, Number.NaN));
-      if (Number.isFinite(line)) {
-        setEditorCursorSafely(view.editor, line, 0);
-      }
-      return this.openBulletPropertyPicker(
-        view.editor,
-        options.rowId === "blocks"
-          ? { reopenBlocksStage: true }
-          : { initialProperty: "dependsOn" },
-      );
-    } catch (_error) {
-      new Notice("Could not open the linked task");
-      return false;
-    }
-  }
-
   // Palette command `edit-task-dependencies`: the task under the cursor.
   openDependencyStageAtCursor(editor) {
     const cursor = getEditorCursor(editor);

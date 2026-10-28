@@ -1,4 +1,59 @@
 class BobNavigationHotkeysBlocksApiMixin {
+  // Focus the linked note first; each entry opens its own picker stage on the
+  // live editor, which remains the authority for stage availability.
+  async openLinkedDependencyStage(target, options = {}) {
+    try {
+      const path = normalizeVaultRelativePath((target && target.path) || "");
+      if (!path) {
+        new Notice("Linked task has no note");
+        return false;
+      }
+      const vault = this.app && this.app.vault;
+      const file =
+        vault && typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(path)
+          : null;
+      if (!file) {
+        new Notice(`Linked note not found: ${path}`);
+        return false;
+      }
+      const opened = await this.openMarkdownFileWithLeafReuse(
+        file,
+        `Could not open ${path}`,
+      );
+      if (!opened) {
+        return false;
+      }
+      const view = this.getActiveMarkdownView();
+      if (
+        !view ||
+        !view.editor ||
+        !view.file ||
+        normalizeVaultRelativePath(view.file.path) !== path
+      ) {
+        new Notice(`Could not open ${path}`);
+        return false;
+      }
+      const line = Math.floor(numericOrDefault(target.line, Number.NaN));
+      if (Number.isFinite(line)) {
+        setEditorCursorSafely(view.editor, line, 0);
+      }
+      const rowOptions = {
+        "depends-on": { initialProperty: "dependsOn" },
+        blocks: { reopenBlocksStage: true },
+        "links-to": { reopenLinksStage: true },
+        "linked-from": { reopenLinkedFromStage: true },
+      };
+      return this.openBulletPropertyPicker(
+        view.editor,
+        { ...(rowOptions[options.rowId] || rowOptions["depends-on"]) },
+      );
+    } catch (_error) {
+      new Notice("Could not open the linked task");
+      return false;
+    }
+  }
+
   async openLinkedBlocksStage(target) {
     return this.openLinkedDependencyStage(target, { rowId: "blocks" });
   }

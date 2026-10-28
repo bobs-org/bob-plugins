@@ -446,10 +446,28 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       return false;
     }
     if (rowId === "links-to" || action === "links") {
+      const resolved =
+        this.linkSession && Array.isArray(this.linkSession.resolved)
+          ? this.linkSession.resolved
+          : [];
+      if (resolved.length > 0) {
+        this.close();
+        void this.plugin.openLinkedRelationStage(resolved, "to");
+        return true;
+      }
       this.openTaskCardStage(() => this.showRelationStage());
       return false;
     }
     if (rowId === "linked-from" || action === "linked-from") {
+      const resolved =
+        this.linkSession && Array.isArray(this.linkSession.resolved)
+          ? this.linkSession.resolved
+          : [];
+      if (resolved.length > 0) {
+        this.close();
+        void this.plugin.openLinkedRelationStage(resolved, "from");
+        return true;
+      }
       this.openTaskCardStage(() => this.showLinkedFromStage());
       return false;
     }
@@ -572,9 +590,15 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       new Notice("Select Links to before clearing relations");
       return false;
     }
-    const targets = this.taskSession && this.taskSession.explicit
-      ? this.taskSession.targets || []
-      : [{ path: this.filePath, line: this.cursor.line }];
+    const targets = this.isLinkSession()
+      ? (this.linkSession.resolved || []).map((target) => ({
+          path: target.path,
+          line: target.line,
+          blockId: target.blockId || getTrailingBlockId(target.rawLine || ""),
+        }))
+      : this.taskSession && this.taskSession.explicit
+        ? this.taskSession.targets || []
+        : [{ path: this.filePath, line: this.cursor.line }];
     let removed = 0;
     const mirrorFailures = new Set();
     for (const target of targets) {

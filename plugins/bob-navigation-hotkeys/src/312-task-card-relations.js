@@ -12,7 +12,11 @@ function taskCardLinksToAvailabilityReason(session, context = {}) {
   if (targets.length === 0) {
     return "No task targets are available";
   }
-  if (session.type !== "single" && session.type !== "counted") {
+  if (
+    session.type !== "single" &&
+    session.type !== "counted" &&
+    session.type !== "linked"
+  ) {
     return "Links to needs a single task";
   }
   if (targets.some((target) => !isObsidianTaskLine(target && target.rawLine))) {
@@ -125,13 +129,30 @@ function taskCardLinksToDetail(entries, taskCache) {
 }
 
 function taskCardLinksToSummary(session, context = {}) {
-  if (!session || session.valid !== true || session.type !== "single") {
+  const linkedTarget =
+    session && session.type === "linked" && Array.isArray(session.targets) &&
+    session.targets.length === 1
+      ? session.targets[0]
+      : null;
+  if (
+    !session ||
+    session.valid !== true ||
+    (session.type !== "single" && !linkedTarget)
+  ) {
     return null;
   }
   const content = String(
-    (session && session.content) || context.content || "",
+    (linkedTarget && linkedTarget.content) ||
+      (session && session.content) ||
+      context.content ||
+      "",
   );
-  const line = Math.floor(numericOrDefault(session.cursorLine, Number.NaN));
+  const line = Math.floor(
+    numericOrDefault(
+      linkedTarget ? linkedTarget.line : session.cursorLine,
+      Number.NaN,
+    ),
+  );
   if (!Number.isFinite(line)) {
     return null;
   }
@@ -149,7 +170,14 @@ function taskCardLinksToSummary(session, context = {}) {
 // fallback: LINKED FROM is a generated mirror, and the Task Card only shows
 // this detail when the live index is ready.
 function taskCardLinkedFromAvailabilityReason(session, context = {}) {
-  if (session && session.type !== "single") {
+  if (
+    session &&
+    session.type === "linked" &&
+    (!Array.isArray(session.targets) || session.targets.length !== 1)
+  ) {
+    return "Linked from needs a single task";
+  }
+  if (session && session.type !== "single" && session.type !== "linked") {
     return "Linked from needs a single task";
   }
   return taskCardLinksToAvailabilityReason(session, context);
@@ -173,10 +201,19 @@ function taskCardRelationIndex(context = {}) {
 }
 
 function taskCardLinkedFromSummary(session, context = {}) {
-  if (!session || session.valid !== true || session.type !== "single") {
+  const linkedTarget =
+    session && session.type === "linked" && Array.isArray(session.targets) &&
+    session.targets.length === 1
+      ? session.targets[0]
+      : null;
+  if (
+    !session ||
+    session.valid !== true ||
+    (session.type !== "single" && !linkedTarget)
+  ) {
     return null;
   }
-  const target = (session.targets || [])[0];
+  const target = linkedTarget || (session.targets || [])[0];
   const path = normalizeVaultRelativePath((target && target.path) || context.filePath || "");
   const blockId = normalizeBulletPropertyValue(
     getTrailingBlockId((target && target.rawLine) || "") || "",

@@ -665,6 +665,109 @@ test("Task Link Blocks focuses the linked note and opens Blocks directly", async
   ]);
 });
 
+test("Task Link relation stages focus the linked note and open the requested direction", async () => {
+  for (const [direction, expected] of [
+    ["to", { reopenLinksStage: true }],
+    ["from", { reopenLinkedFromStage: true }],
+  ]) {
+    const { plugin } = stubPlugin({
+      "daily.md": "- [[job#^job-task]]\n",
+      "job.md": "heading\n- [ ] #task Job task ^job-task",
+    });
+    const dailyEditor = new TransactionEditor("- [[job#^job-task]]\n", {
+      line: 0,
+      ch: 0,
+    });
+    const jobEditor = new TransactionEditor(
+      "heading\n- [ ] #task Job task ^job-task",
+      { line: 0, ch: 0 },
+    );
+    let activeView = { file: { path: "daily.md" }, editor: dailyEditor };
+    plugin.getActiveMarkdownView = () => activeView;
+    plugin.readDependencyVaultFileList = () => [];
+    plugin.openMarkdownFileWithLeafReuse = async () => {
+      activeView = { file: { path: "job.md" }, editor: jobEditor };
+      return true;
+    };
+    const pickerCalls = [];
+    plugin.openBulletPropertyPicker = (editor, options) => {
+      pickerCalls.push({ editor, options });
+      return true;
+    };
+    const target = {
+      path: "job.md",
+      line: 1,
+      rawLine: "- [ ] #task Job task ^job-task",
+      content: "heading\n- [ ] #task Job task ^job-task",
+      blockId: "job-task",
+    };
+
+    assert.equal(await plugin.openLinkedRelationStage([target], direction), true);
+    assert.deepEqual(jobEditor.getCursor(), { line: 1, ch: 0 });
+    assert.deepEqual(pickerCalls, [{ editor: jobEditor, options: expected }]);
+  }
+});
+
+test("LG21: L chords on Depends-On and BLOCKS lines open the owner's relation stage", () => {
+  const cases = [
+    {
+      content: "- [?] #task Owner ^owner\n  - ⛓️ **DEPENDS ON:** [[#^target]]",
+      line: 1,
+      row: "links-to",
+      expected: { reopenLinksStage: true },
+    },
+    {
+      content: "- [?] #task Owner ^owner\n  - ⛓️ **DEPENDS ON:** [[#^target]]",
+      line: 1,
+      row: "linked-from",
+      expected: { reopenLinkedFromStage: true },
+    },
+    {
+      content: "- [ ] #task Owner ^owner\n  - 🧱 **BLOCKS:** [[#^target]]",
+      line: 1,
+      row: "links-to",
+      expected: { reopenLinksStage: true },
+    },
+    {
+      content: "- [ ] #task Owner ^owner\n  - 🧱 **BLOCKS:** [[#^target]]",
+      line: 1,
+      row: "linked-from",
+      expected: { reopenLinkedFromStage: true },
+    },
+  ];
+  for (const scenario of cases) {
+    const routed = hotkeyPicker(scenario.content, scenario.line, {
+      initialTaskCardRow: scenario.row,
+      countExplicit: scenario.row === "links-to",
+      additionalTaskCount: 2,
+    });
+    assert.equal(routed.result, true);
+    assert.deepEqual(routed.calls[1], {
+      initialTaskCardRow: scenario.row,
+      countExplicit: scenario.row === "links-to",
+      additionalTaskCount: 2,
+      ...scenario.expected,
+    });
+    assert.deepEqual(routed.editor.getCursor(), { line: 0, ch: 0 });
+  }
+});
+
+test("LG22: B chords on relation lines open the owner's Depends on or Blocks stage", () => {
+  const content = "- [ ] #task Owner ^owner\n  - 🪢 **LINKS:** [[#^target]]";
+  for (const [row, expected] of [
+    ["depends-on", { initialProperty: "dependsOn" }],
+    ["blocks", { reopenBlocksStage: true }],
+  ]) {
+    const routed = hotkeyPicker(content, 1, { initialTaskCardRow: row });
+    assert.equal(routed.result, true);
+    assert.deepEqual(routed.calls[1], {
+      initialTaskCardRow: row,
+      ...expected,
+    });
+    assert.deepEqual(routed.editor.getCursor(), { line: 0, ch: 0 });
+  }
+});
+
 test("Task Link Depends on refuses clearly when the linked note cannot be focused", async (t) => {
   await t.test("focus reports success but the active view stays elsewhere", async () => {
     const { plugin } = stubPlugin({

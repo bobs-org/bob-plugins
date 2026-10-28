@@ -321,6 +321,18 @@ class BobNavigationHotkeysCancelPropertyMixin {
       ) {
         setEditorCursorSafely(cm, entry.parentLine, 0);
         const requestedRow = options.initialTaskCardRow || null;
+        if (requestedRow === "depends-on") {
+          return this.openBulletPropertyPicker(cm, {
+            ...options,
+            initialProperty: "dependsOn",
+          });
+        }
+        if (requestedRow === "blocks") {
+          return this.openBulletPropertyPicker(cm, {
+            ...options,
+            reopenBlocksStage: true,
+          });
+        }
         const openLinkedFrom = requestedRow
           ? requestedRow === "linked-from"
           : entry.lineKind === "linked-from";
@@ -335,16 +347,22 @@ class BobNavigationHotkeysCancelPropertyMixin {
         (entry.lineKind === "depends-on" || entry.lineKind === "blocks")
       ) {
         setEditorCursorSafely(cm, entry.parentLine, 0);
-        if (
-          options.initialTaskCardRow === "blocks" ||
-          (entry.lineKind === "blocks" && !options.initialTaskCardRow)
-        ) {
+        const requestedRow = options.initialTaskCardRow || null;
+        if (requestedRow === "links-to" || requestedRow === "linked-from") {
+          return this.openBulletPropertyPicker(cm, {
+            ...options,
+            ...(requestedRow === "links-to"
+              ? { reopenLinksStage: true }
+              : { reopenLinkedFromStage: true }),
+          });
+        }
+        if (requestedRow === "blocks" || (entry.lineKind === "blocks" && !requestedRow)) {
           return this.openBulletPropertyPicker(cm, {
             ...options,
             reopenBlocksStage: true,
           });
         }
-        if (entry.lineKind === "depends-on") {
+        if (requestedRow === "depends-on" || (entry.lineKind === "depends-on" && !requestedRow)) {
           return this.openBulletPropertyPicker(cm, {
             ...options,
             initialProperty: "dependsOn",
@@ -364,7 +382,14 @@ class BobNavigationHotkeysCancelPropertyMixin {
       !isObsidianTaskAtLine(content, cursor.line) &&
       parseLinkPickerTaskLink(lineText)
     ) {
-      void this.openLinkPicker(cm, options).catch(() => false);
+      if (
+        options.initialTaskCardRow === "links-to" ||
+        options.initialTaskCardRow === "linked-from"
+      ) {
+        void this.openTaskLinkRelationStage(cm, options).catch(() => false);
+      } else {
+        void this.openLinkPicker(cm, options).catch(() => false);
+      }
       return true;
     }
     let taskSession = options.taskSession || null;

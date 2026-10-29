@@ -4,6 +4,11 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       this.handleTaskCardKeydown(event);
       return;
     }
+    if (this.stage === "value" && this.taskCardThemeStageRows && typeof this.handleTaskCardThemeKeydown === "function") {
+      if (this.handleTaskCardThemeKeydown(event) === true) {
+        return;
+      }
+    }
     if (this.stage === "relation-label" && this.handleRelationLabelKeydown(event)) {
       return;
     }

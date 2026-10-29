@@ -229,17 +229,20 @@ test("Task Card theme projection distinguishes explicit themes and inherited not
   assert.equal(row.kind, "property");
   assert.equal(row.propertyName, "theme");
   assert.equal(row.deletable, false);
-  assert.equal(row.enabled, false);
-  assert.equal(row.unavailableReason, "Theme editing is not available yet");
+  assert.equal(row.enabled, true);
+  assert.equal(row.unavailableReason, null);
   assert.equal(row.detail, "[FIX] this task · ● sase_blog suggests WRITE");
   assert.equal(ordered.shortcut, "t");
   assert.equal(model.header.theme.text, "Theme [FIX] this task · ● sase_blog suggests WRITE");
   assert.ok(Object.isFrozen(model.themeProjection));
   assert.ok(Object.isFrozen(model.themeProjection.targets));
   assert.ok(Object.isFrozen(model.themeProjection.targets[0].identity));
-  assert.equal(key(model, "Enter").type, "unavailable");
-  assert.equal(key(model, "Enter").reason, "Theme editing is not available yet");
-  assert.equal(key(model, "t"), null);
+  assert.equal(key(model, "Enter").type, "open-action");
+  assert.equal(key(model, "Enter").action, "theme");
+  assert.equal(key(model, "t").type, "open-action");
+  assert.equal(key(model, "t").action, "theme");
+  assert.equal(key(model, "t", { repeat: true }).type, "ignored");
+  assert.equal(key(model, "d", { ctrlKey: true }).type, "clear-theme");
   assert.equal(calls.writes, 0);
   assert.deepEqual(calls.suggestions[0], {
     path: "Projects/Example.md",

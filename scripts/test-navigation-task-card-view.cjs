@@ -450,7 +450,7 @@ test("Task Card theme header shows unknown and repair signals without invoking s
   assert.ok(themeDot.classes.includes("is-green"));
   assert.match(flattenText(themeDot), /●/);
   assert.ok(themeRow);
-  assert.equal(themeRow.attributes["aria-disabled"], "true");
+  assert.equal(themeRow.attributes["aria-disabled"], "false");
   assert.match(flattenText(themeRow), /t Theme/);
   assert.equal(writes, 0);
 });

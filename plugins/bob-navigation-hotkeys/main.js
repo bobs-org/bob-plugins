@@ -43720,9 +43720,9 @@ function planTaskCard(context = {}) {
       action: "theme",
       propertyName: "theme",
       label: "Theme",
-      enabled: false,
+      enabled: themeProjection.available,
       unavailableReason: themeProjection.available
-        ? "Theme editing is not available yet"
+        ? null
         : themeProjection.unavailableReason || "Theme is unavailable",
       detail: themeProjection.display.text,
       mixed: themeProjection.mixed,
@@ -44801,7 +44801,7 @@ function resolveTaskCardKey(model, event) {
   const movement = (direction) =>
     Object.freeze({ type: "move-selection", direction, fromRowId: model.selectedRowId });
   const actionKey =
-    (!modified && /^[0-9bflx]$/i.test(key)) ||
+    (!modified && /^[0-9bflxt]$/i.test(key)) ||
     (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || event.code === "KeyL" || key === "B" || key === "L")) ||
     (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
     (meta && !ctrl && !shift && !alt && key === "Enter") ||
@@ -44866,6 +44866,19 @@ function resolveTaskCardKey(model, event) {
         "clear-relations",
         TASK_LINKED_FROM_LINE_NOTICE,
       );
+    }
+    if (selected && selected.id === "theme") {
+      if (!selected.enabled) {
+        return unavailable(
+          "clear-theme",
+          selected.unavailableReason || "Theme editing is unavailable",
+        );
+      }
+      return Object.freeze({
+        type: "clear-theme",
+        rowId: selected.id,
+        targetCount: selected.targetCount || model.session.targetCount,
+      });
     }
     if (!selected || selected.kind !== "property" || !selected.deletable) {
       return unavailable("delete-property", "Only a selected property can be deleted");
@@ -44942,6 +44955,9 @@ function resolveTaskCardKey(model, event) {
   if (!modified && lower === "f") {
     return taskCardIntentForRow(rowById("review-every"));
   }
+  if (!modified && lower === "t") {
+    return taskCardIntentForRow(rowById("theme"));
+  }
   if (!modified && lower === "x") {
     return taskCardIntentForRow(rowById("cancel"));
   }
@@ -44981,6 +44997,493 @@ const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
   cancel: "x",
 });
 
+// ---- src/315-task-card-theme-stage.js ----
+// Pure Task Card theme stage model and direct-edit planner. It never writes.
+// The modal supplies the live projection, theme API, and snapshots; this
+// layer plans per-target set/clear/no-op edits and stage rows. Selecting Use
+// default always clears; selecting the inherited theme also clears. Other
+// choices follow the shared link write rule shape (single non-exempt
+// component, catalog spelling) without requiring a shown suggestion.
+function taskCardThemeNormalizeKey(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function taskCardThemeCanonicalName(raw) {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const name = String(raw == null ? "" : raw)
+    .split(/\s+/u)
+    .filter(Boolean)
+    .join(" ")
+    .replace(/[a-z]/g, (letter) => letter.toUpperCase());
+  if (!/^[A-Z0-9]/.test(name) || !/[A-Z]/.test(name)) {
+    return null;
+  }
+  return /^[A-Z0-9 &'(),.\/-]*$/.test(name) ? name : null;
+}
+
+function taskCardThemeSplitComponents(name) {
+  return String(name == null ? "" : name)
+    .split("+")
+    .map((part) => String(part || "").trim())
+    .filter(Boolean);
+}
+
+function taskCardThemeCatalogSpelling(api, key, fallback) {
+  const normalized = taskCardThemeNormalizeKey(key);
+  const fallbackName =
+    typeof fallback === "string" && fallback ? fallback : null;
+  if (!normalized) {
+    return fallbackName;
+  }
+  try {
+    if (!api || typeof api.snapshot !== "function") {
+      return fallbackName;
+    }
+    const snapshot = api.snapshot();
+    const lists = [];
+    if (snapshot && Array.isArray(snapshot.themes)) {
+      lists.push(snapshot.themes);
+    }
+    if (snapshot && Array.isArray(snapshot.configured_themes)) {
+      lists.push(snapshot.configured_themes);
+    }
+    for (const list of lists) {
+      for (const entry of list) {
+        if (!entry || typeof entry !== "object") {
+          continue;
+        }
+        if (taskCardThemeNormalizeKey(entry.key) !== normalized) {
+          continue;
+        }
+        if (typeof entry.name === "string" && entry.name) {
+          return entry.name;
+        }
+      }
+    }
+  } catch (_error) {
+    return fallbackName;
+  }
+  return fallbackName;
+}
+
+function taskCardThemeExemptKeys(api, ledgerApi) {
+  const fallback = ["PLAN"];
+  const source = ledgerApi || api;
+  try {
+    const capsSource =
+      source && typeof source.caps === "function" ? source.caps() : null;
+    const caps = capsSource && typeof capsSource.then === "function" ? null : capsSource;
+    if (caps && Array.isArray(caps.exempt)) {
+      const keys = [];
+      for (const value of caps.exempt) {
+        if (typeof value !== "string" || !value.trim() || value.includes("+")) {
+          return { available: false, keys: [] };
+        }
+        const canonical = taskCardThemeCanonicalName(value);
+        if (!canonical) {
+          return { available: false, keys: [] };
+        }
+        keys.push(value.trim());
+      }
+      return { available: true, keys };
+    }
+  } catch (_error) {
+    // Fall through to the default exempt set.
+  }
+  return { available: true, keys: fallback.slice() };
+}
+
+function taskCardThemeSingleComponent(name, exemptKeys) {
+  const text = String(name == null ? "" : name).trim();
+  if (!text || text === "(unnamed)") {
+    return null;
+  }
+  const exempt = new Set(
+    (Array.isArray(exemptKeys) ? exemptKeys : [])
+      .map((value) => taskCardThemeNormalizeKey(value))
+      .filter(Boolean),
+  );
+  const choices = taskCardThemeSplitComponents(text).filter(
+    (component) =>
+      !exempt.has(taskCardThemeNormalizeKey(component)),
+  );
+  if (choices.length !== 1) {
+    return null;
+  }
+  const canonical = taskCardThemeCanonicalName(choices[0]);
+  if (!canonical) {
+    return null;
+  }
+  return { name: canonical, key: taskCardThemeNormalizeKey(canonical) };
+}
+
+function taskCardThemeValidateNewName(raw, api, exemptKeys) {
+  const canonical = taskCardThemeCanonicalName(raw);
+  if (!canonical) {
+    return Object.freeze({
+      valid: false,
+      name: null,
+      key: null,
+      error: "Theme name is invalid",
+    });
+  }
+  const single = taskCardThemeSingleComponent(canonical, exemptKeys);
+  if (!single) {
+    const parts = taskCardThemeSplitComponents(canonical);
+    if (parts.length !== 1) {
+      return Object.freeze({
+        valid: false,
+        name: null,
+        key: null,
+        error: "Composite themes cannot be set on a task",
+      });
+    }
+    return Object.freeze({
+      valid: false,
+      name: null,
+      key: null,
+      error: "Exempt themes cannot be set on a task",
+    });
+  }
+  const spelling =
+    taskCardThemeCatalogSpelling(api, single.key, single.name) || single.name;
+  return Object.freeze({ valid: true, name: spelling, key: single.key, error: null });
+}
+
+function taskCardThemeStageInheritedReason(inherited) {
+  if (!inherited || !inherited.theme) {
+    return "no default";
+  }
+  const name = inherited.theme.name || inherited.theme.key || "default";
+  const sourceLabel = taskCardThemeSourceLabel(inherited);
+  return `${name} from ${sourceLabel}`;
+}
+
+function taskCardThemeStageTodayNames(api) {
+  const names = new Map();
+  try {
+    if (!api || typeof api.snapshot !== "function") {
+      return names;
+    }
+    const snapshot = api.snapshot();
+    const lists = [];
+    if (snapshot && Array.isArray(snapshot.themes)) {
+      lists.push(snapshot.themes);
+    }
+    if (snapshot && Array.isArray(snapshot.configured_themes)) {
+      lists.push(snapshot.configured_themes);
+    }
+    for (const list of lists) {
+      for (const entry of list) {
+        if (!entry || typeof entry !== "object") {
+          continue;
+        }
+        // Today membership is advisory: entries stamped for today surface
+        // first. Entries without today metadata still reach Recent below.
+        if (!entry.today) {
+          continue;
+        }
+        const rawName = typeof entry.name === "string" ? entry.name : "";
+        if (!rawName) {
+          continue;
+        }
+        for (const part of taskCardThemeSplitComponents(rawName)) {
+          const canonical = taskCardThemeCanonicalName(part);
+          if (!canonical) {
+            continue;
+          }
+          const key = taskCardThemeNormalizeKey(canonical);
+          if (!key || names.has(key)) {
+            continue;
+          }
+          const spelling =
+            taskCardThemeCatalogSpelling(api, key, canonical) || canonical;
+          names.set(key, spelling);
+        }
+      }
+    }
+  } catch (_error) {
+    // Today names are best-effort; Recent still covers the catalog.
+  }
+  return names;
+}
+
+function taskCardThemeStageRecentRows(api, query, exclusions) {
+  try {
+    if (!api || typeof api.historyRows !== "function") {
+      return [];
+    }
+    const rows = api.historyRows({
+      query: typeof query === "string" ? query : "",
+      limit: 100,
+      exclusions,
+    });
+    return Array.isArray(rows) ? rows : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function buildTaskCardThemeStageModel(projection, api, options = {}) {
+  const opts = options && typeof options === "object" ? options : {};
+  const query = typeof opts.query === "string" ? opts.query : "";
+  const trimmedQuery = query.trim();
+  const targets = projection && Array.isArray(projection.targets)
+    ? projection.targets.filter((target) => target && target.available)
+    : [];
+  const mixed = projection ? projection.mixed === true : targets.length > 1;
+  const inheritedKeys = new Map();
+  for (const target of targets) {
+    const inherited = target.inherited;
+    const theme = inherited && inherited.theme;
+    const key = theme && theme.key ? taskCardThemeNormalizeKey(theme.key) : "";
+    if (key && !inheritedKeys.has(key)) {
+      inheritedKeys.set(key, theme.name || key);
+    }
+  }
+  const firstInherited = targets.length === 1 ? targets[0].inherited : null;
+  const defaultDetail = mixed
+    ? `clear each task to its own default (${targets.length} tasks)`
+    : `Use default · ${taskCardThemeStageInheritedReason(firstInherited)}`;
+  const rows = [];
+  rows.push(
+    Object.freeze({
+      kind: "default",
+      key: "__default",
+      name: null,
+      title: "Use default",
+      detail: defaultDetail,
+    }),
+  );
+  const seen = new Set(["__default"]);
+  const remember = (key) => {
+    const normalized = taskCardThemeNormalizeKey(key);
+    if (!normalized || seen.has(normalized)) {
+      return false;
+    }
+    seen.add(normalized);
+    return true;
+  };
+  // Unknown inherited names stay selectable without preselection.
+  for (const [key, name] of inheritedKeys) {
+    if (!remember(key)) {
+      continue;
+    }
+    let known = null;
+    try {
+      if (api && typeof api.isKnownTheme === "function") {
+        known = api.isKnownTheme(key) === true;
+      }
+    } catch (_error) {
+      known = null;
+    }
+    if (known === false) {
+      rows.push(
+        Object.freeze({
+          kind: "inherited-unknown",
+          key,
+          name: taskCardThemeCatalogSpelling(api, key, name) || name,
+          title: name,
+          detail: "current default · not in catalog",
+        }),
+      );
+    }
+  }
+  const todayNames = taskCardThemeStageTodayNames(api);
+  for (const [key, name] of todayNames) {
+    if (!remember(key)) {
+      continue;
+    }
+    rows.push(
+      Object.freeze({
+        kind: "today",
+        key,
+        name,
+        title: name,
+        detail: "Today",
+      }),
+    );
+  }
+  const exclusions = new Set();
+  const recent = taskCardThemeStageRecentRows(api, trimmedQuery, exclusions);
+  for (const entry of recent) {
+    if (!entry || typeof entry.key !== "string" || !entry.key) {
+      continue;
+    }
+    const key = taskCardThemeNormalizeKey(entry.key);
+    if (!remember(key)) {
+      continue;
+    }
+    const spelling =
+      taskCardThemeCatalogSpelling(api, key, entry.name) || entry.name || key;
+    rows.push(
+      Object.freeze({
+        kind: "recent",
+        key,
+        name: spelling,
+        title: spelling,
+        detail: "Recent",
+      }),
+    );
+  }
+  if (trimmedQuery) {
+    const exempt = taskCardThemeExemptKeys(api, opts.ledgerApi);
+    const validated = taskCardThemeValidateNewName(
+      trimmedQuery,
+      api,
+      exempt.available ? exempt.keys : [],
+    );
+    if (validated.valid && remember(validated.key)) {
+      rows.push(
+        Object.freeze({
+          kind: "new",
+          key: validated.key,
+          name: validated.name,
+          title: validated.name,
+          detail: "New theme",
+        }),
+      );
+    }
+  }
+  return Object.freeze({
+    query,
+    mixed,
+    targetCount: targets.length,
+    defaultDetail,
+    rows: Object.freeze(rows),
+  });
+}
+
+function taskCardThemeFieldKey(field) {
+  if (!field || typeof field !== "object") {
+    return null;
+  }
+  if (typeof field.key === "string" && field.key) {
+    return taskCardThemeNormalizeKey(field.key);
+  }
+  if (typeof field.value === "string" && field.value) {
+    const canonical = taskCardThemeCanonicalName(field.value);
+    return canonical ? taskCardThemeNormalizeKey(canonical) : null;
+  }
+  return null;
+}
+
+function planTaskCardThemeEdits(projection, selection, api, options = {}) {
+  const opts = options && typeof options === "object" ? options : {};
+  const targets = projection && Array.isArray(projection.targets)
+    ? projection.targets.filter((target) => target && target.available)
+    : [];
+  if (targets.length === 0) {
+    return Object.freeze({ valid: false, error: "No editable tasks", edits: Object.freeze([]) });
+  }
+  if (!selection || typeof selection !== "object") {
+    return Object.freeze({ valid: false, error: "No theme choice", edits: Object.freeze([]) });
+  }
+  if (selection.kind === "default") {
+    const edits = targets.map((target) =>
+      Object.freeze({
+        target,
+        action: "clear",
+        name: null,
+        key: null,
+        reason: "use-default",
+      }),
+    );
+    return Object.freeze({ valid: true, error: null, edits: Object.freeze(edits) });
+  }
+  const key = taskCardThemeNormalizeKey(selection.key || selection.name);
+  const rawName = typeof selection.name === "string" && selection.name
+    ? selection.name
+    : typeof selection.key === "string"
+      ? selection.key
+      : "";
+  if (!key) {
+    return Object.freeze({ valid: false, error: "Theme name is invalid", edits: Object.freeze([]) });
+  }
+  const exempt = taskCardThemeExemptKeys(api, opts.ledgerApi);
+  const exemptKeys = exempt.available ? exempt.keys : [];
+  const validated = taskCardThemeValidateNewName(rawName, api, exemptKeys);
+  if (!validated.valid) {
+    return Object.freeze({ valid: false, error: validated.error, edits: Object.freeze([]) });
+  }
+  const spelling =
+    taskCardThemeCatalogSpelling(api, validated.key, validated.name) || validated.name;
+  const edits = targets.map((target) => {
+    const inherited = target.inherited;
+    const inheritedKey = inherited && inherited.theme && inherited.theme.key
+      ? taskCardThemeNormalizeKey(inherited.theme.key)
+      : null;
+    if (inheritedKey && inheritedKey === validated.key) {
+      return Object.freeze({
+        target,
+        action: "clear",
+        name: null,
+        key: null,
+        reason: "select-inherited-clears",
+      });
+    }
+    if (target.field && target.field.state === "set") {
+      const fieldKey = taskCardThemeFieldKey(target.field);
+      if (fieldKey && fieldKey === validated.key) {
+        return Object.freeze({
+          target,
+          action: "none",
+          name: spelling,
+          key: validated.key,
+          reason: "same-key-noop",
+        });
+      }
+    }
+    return Object.freeze({
+      target,
+      action: "set",
+      name: spelling,
+      key: validated.key,
+      reason: "set-theme",
+    });
+  });
+  return Object.freeze({ valid: true, error: null, edits: Object.freeze(edits) });
+}
+
+function taskCardThemeRevalidateEdit(edit, freshProjection) {
+  if (!edit || !freshProjection || !Array.isArray(freshProjection.targets)) {
+    return { ok: false, reason: "Task context is unavailable" };
+  }
+  const identity = edit.target && edit.target.identity;
+  const fresh = freshProjection.targets.find((target) => {
+    if (!target || !target.identity || !identity) {
+      return false;
+    }
+    return (
+      target.identity.path === identity.path &&
+      target.identity.line === identity.line &&
+      target.identity.rawLine === identity.rawLine
+    );
+  });
+  if (!fresh || !fresh.available) {
+    return { ok: false, reason: "Task changed; reopen the card" };
+  }
+  const beforeInherited = edit.target.inherited;
+  const beforeKey = beforeInherited && beforeInherited.theme && beforeInherited.theme.key
+    ? taskCardThemeNormalizeKey(beforeInherited.theme.key)
+    : null;
+  const afterInherited = fresh.inherited;
+  const afterKey = afterInherited && afterInherited.theme && afterInherited.theme.key
+    ? taskCardThemeNormalizeKey(afterInherited.theme.key)
+    : null;
+  if ((beforeKey || "") !== (afterKey || "")) {
+    return { ok: false, reason: "Default changed; reopen the card" };
+  }
+  if (fresh.identity.rawLine !== identity.rawLine) {
+    return { ok: false, reason: "Task changed; reopen the card" };
+  }
+  return { ok: true, fresh, reason: null };
+}
 // ---- src/320-task-card-header.js ----
 function buildTaskCardHeader(details = {}) {
   const session = details.session || {};
@@ -46433,9 +46936,6 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     ) || null;
   }
 
-  // Swaps the card for the filtered-picker chrome a value, reason, or review
-  // stage paints into. The caller opens that stage in the same synchronous
-  // step; `openTaskCardStage` returns to the card when nothing took over.
   ensureTaskCardStageChrome() {
     if (this.stage !== "task-card") {
       return;
@@ -46457,8 +46957,6 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     }
   }
 
-  // Where a refused or stale stage lands: back on the card, or closed when
-  // this modal was opened straight into a stage and never had a card.
   returnHome(options = {}) {
     if (this.hasTaskCard) {
       this.returnToTaskCard(options);
@@ -46476,6 +46974,9 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   }
 
   returnToTaskCard(options = {}) {
+    if (typeof this.clearTaskCardThemeSubscription === "function") this.clearTaskCardThemeSubscription();
+    this.taskCardThemeStageProjection = null;
+    this.taskCardThemeStageRows = null;
     this.revealQuickRollCard();
     this.pendingScheduleReason = null;
     this.pendingScheduleReview = null;
@@ -46601,6 +47102,8 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
         result = await this.deleteTaskCardProperty(intent.propertyName);
       } else if (intent.type === "clear-relations") {
         result = await this.clearTaskCardRelations(intent.rowId);
+      } else if (intent.type === "clear-theme") {
+        result = await this.applyTaskCardThemeDefault();
       } else if (intent.type === "open-action") {
         result = await this.openTaskCardAction(intent.rowId, intent.action);
       } else if (intent.type === "open-property") {
@@ -46614,6 +47117,10 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   }
 
   async openTaskCardAction(rowId, action) {
+    if (action === "theme" || rowId === "theme") {
+      this.openTaskCardStage(() => this.openTaskCardThemeStage());
+      return false;
+    }
     if (action === "schedule" || rowId === "schedule") {
       const scheduleRow = (this.taskCardModel && this.taskCardModel.rows || []).find((row) => row.id === "schedule");
       const item = this.getTaskCardPropertyItem(scheduleRow && scheduleRow.propertyName || "scheduled");
@@ -46705,8 +47212,6 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     return false;
   }
 
-  // A More-section row opens that property's existing value stage; the
-  // `scheduled` property takes the same schedule commit path as its card row.
   async openTaskCardProperty(propertyName) {
     this.refreshPropertyItems();
     const wanted = normalizeBulletPropertyName(propertyName);
@@ -46947,6 +47452,9 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   // Invalidate any pending vault-stage refresh so it never paints into the
   // closed modal.
   onClose() {
+    if (typeof this.clearTaskCardThemeSubscription === "function") this.clearTaskCardThemeSubscription();
+    this.taskCardThemeStageProjection = null;
+    this.taskCardThemeStageRows = null;
     this.clearRelationLabelSubscriptions();
     if (this.plugin && this.plugin.activeBulletPropertyPicker === this) {
       this.plugin.activeBulletPropertyPicker = null;
@@ -47243,6 +47751,544 @@ function buildTaskCardThemeRuntimeContext(modal) {
     themeApi,
     themeNoteContents: noteContents,
   });
+}
+// ---- src/352-picker-task-card-theme-stage.js ----
+// Task Card theme stage: t/Enter opens a filtered theme picker, Ctrl+D on
+// the Theme row clears to Use default. All commits use the Ledger Tools
+// string setters on exact task lines with preimage guards; no status, link,
+// ID, freshness, schedule, Work Log, or review-walk effects.
+class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
+  getTaskCardThemeApi() {
+    try {
+      const runtime = buildTaskCardThemeRuntimeContext(this);
+      if (runtime && runtime.themeApi) {
+        return runtime.themeApi;
+      }
+    } catch (_error) {
+      // Fall through to the direct lookup.
+    }
+    try {
+      return getNavigationPomodoroThemesApi(this.app);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  getTaskCardLedgerApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const ledger = plugins && plugins["bob-ledger-tools"];
+      return (ledger && ledger.api) || null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  currentTaskCardThemeProjection() {
+    if (this.taskCardModel && this.taskCardModel.themeProjection) {
+      return this.taskCardModel.themeProjection;
+    }
+    return null;
+  }
+
+  freshTaskCardThemeProjection() {
+    try {
+      const fresh = planTaskCard(this.buildTaskCardContext());
+      return fresh && fresh.themeProjection ? fresh.themeProjection : null;
+    } catch (_error) {
+      return this.currentTaskCardThemeProjection();
+    }
+  }
+
+  openTaskCardThemeStage() {
+    const projection = this.freshTaskCardThemeProjection() || this.currentTaskCardThemeProjection();
+    const api = this.getTaskCardThemeApi();
+    if (!projection || !projection.available) {
+      new Notice(
+        (projection && projection.unavailableReason) ||
+          "Theme editing is unavailable",
+      );
+      return false;
+    }
+    if (!api) {
+      new Notice("Ledger Tools task-theme API is unavailable");
+      return false;
+    }
+    this.taskCardThemeStageProjection = projection;
+    this.taskCardThemeQuery = typeof this.taskCardThemeQuery === "string" ? this.taskCardThemeQuery : "";
+    this.taskCardThemeSelectedKey = this.taskCardThemeSelectedKey || null;
+    this.showTaskCardThemeStage();
+    try {
+      this.taskCardThemeUnsubscribe = this.subscribeTaskCardThemeCatalog(() => {
+        if (this.pickerOpen && this.stage === "value" && this.taskCardThemeStageProjection) {
+          const query = this.inputEl && typeof this.inputEl.value === "string" ? this.inputEl.value : this.taskCardThemeQuery || "";
+          this.taskCardThemeQuery = query;
+          this.showTaskCardThemeStage({ keepQuery: true });
+        }
+      });
+    } catch (_error) {
+      this.taskCardThemeUnsubscribe = null;
+    }
+    try {
+      if (api && typeof api.fetch === "function") {
+        Promise.resolve(api.fetch())
+          .then(() => {
+            if (this.pickerOpen && this.stage === "value" && this.taskCardThemeStageProjection) {
+              this.showTaskCardThemeStage({ keepQuery: true });
+            }
+          })
+          .catch(() => {});
+      }
+    } catch (_error) {
+      // Fetch is best-effort; cached rows already render.
+    }
+    return false;
+  }
+
+  subscribeTaskCardThemeCatalog(onChange) {
+    try {
+      this.clearTaskCardThemeSubscription();
+      const api = this.getTaskCardThemeApi();
+      if (api && typeof api.onChange === "function") {
+        const unsubscribe = api.onChange(onChange);
+        this.taskCardThemeUnsubscribe = typeof unsubscribe === "function" ? unsubscribe : null;
+        return this.taskCardThemeUnsubscribe;
+      }
+    } catch (_error) {
+      // Subscription is best-effort.
+    }
+    return null;
+  }
+
+  clearTaskCardThemeSubscription() {
+    if (typeof this.taskCardThemeUnsubscribe === "function") {
+      try {
+        this.taskCardThemeUnsubscribe();
+      } catch (_error) {
+        // Unsubscribe is best-effort.
+      }
+    }
+    this.taskCardThemeUnsubscribe = null;
+  }
+
+  showTaskCardThemeStage(options = {}) {
+    const projection = this.freshTaskCardThemeProjection() || this.currentTaskCardThemeProjection();
+    if (!projection || !projection.available) {
+      new Notice((projection && projection.unavailableReason) || "Theme editing is unavailable");
+      this.returnToTaskCard({ rebuild: true });
+      return;
+    }
+    const api = this.getTaskCardThemeApi();
+    if (!api) {
+      new Notice("Ledger Tools task-theme API is unavailable");
+      this.returnToTaskCard({ rebuild: true });
+      return;
+    }
+    this.taskCardThemeStageProjection = projection;
+    const keepQuery = options.keepQuery === true;
+    const query = keepQuery
+      ? (this.inputEl && typeof this.inputEl.value === "string" ? this.inputEl.value : this.taskCardThemeQuery || "")
+      : "";
+    this.taskCardThemeQuery = query;
+    const ledgerApi = this.getTaskCardLedgerApi();
+    const stage = buildTaskCardThemeStageModel(projection, api, { query, ledgerApi });
+    const items = stage.rows.map((row) => Object.freeze({
+      key: row.kind === "default" ? "__default" : `theme-${row.key}`,
+      themeKind: row.kind,
+      themeKey: row.key,
+      themeName: row.name,
+      title: row.kind === "default" ? "Use default" : row.title,
+      detail: row.detail,
+      searchText: row.kind === "default" ? `use default ${row.detail}` : `${row.title || ""} ${row.detail || ""} ${row.key || ""}`,
+    }));
+    this.stage = "value";
+    this.selectedPropertyItem = null;
+    this.pendingTask = null;
+    const selectedKey = this.taskCardThemeSelectedKey;
+    let selectedIndex = 0;
+    if (selectedKey) {
+      const found = items.findIndex((item) => item.key === selectedKey || item.themeKey === selectedKey);
+      if (found >= 0) {
+        selectedIndex = found;
+      }
+    }
+    this.selectedIndex = selectedIndex;
+    this.taskCardThemeStageRows = items;
+    const subtitle = stage.mixed
+      ? `${formatCountLabel(stage.targetCount, "task")} · Use default clears each task to its own default`
+      : stage.defaultDetail
+        ? `${stage.defaultDetail}`
+        : "Choose a theme";
+    this.applyOptions({
+      items,
+      title: "Theme",
+      headerIcon: "palette",
+      inputLabel: "Filter themes",
+      placeholder: "Type a theme name or filter",
+      resultsLabel: "themes",
+      emptyText: "No matching themes",
+      footerHints: [
+        { keys: ["↵"], label: "Apply" },
+        { keys: ["^D"], label: "Use default" },
+        { keys: ["esc"], label: "Close without writing" },
+      ],
+      getSubtitle: () => subtitle,
+      filterItem: (item, nextQuery) => fuzzyMatchesText(item.searchText, nextQuery),
+      renderItem: (item, rowEl) => this.renderTaskCardThemeStageItem(item, rowEl),
+      openItem: (item) => this.commitTaskCardThemeStageItem(item),
+    });
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: !keepQuery });
+      if (keepQuery && this.inputEl && typeof this.inputEl.value === "string") {
+        this.inputEl.value = query;
+      }
+    }
+  }
+
+  renderTaskCardThemeStageItem(item, rowEl) {
+    if (!rowEl || typeof rowEl.createSpan !== "function") {
+      return;
+    }
+    rowEl.empty();
+    const main = rowEl.createSpan({ cls: "bob-cnp-row-main" });
+    if (item.themeKind === "default") {
+      main.createSpan({ cls: "bob-cnp-row-title", text: "Use default" });
+      if (item.detail) {
+        main.createSpan({ cls: "bob-cnp-row-detail", text: ` · ${item.detail}` });
+      }
+      return;
+    }
+    const api = this.getTaskCardThemeApi();
+    try {
+      if (api && typeof api.hueFor === "function" && item.themeKey) {
+        const hue = navigationPomodoroThemeHue(api, item.themeKey, item.themeName);
+        if (hue) {
+          const dot = main.createSpan({ cls: `bob-task-card-theme-dot is-${hue}`, text: "● " });
+          if (dot && typeof dot.setAttribute === "function") {
+            dot.setAttribute("aria-hidden", "true");
+          }
+        }
+      }
+    } catch (_error) {
+      // Hue dot is decorative.
+    }
+    main.createSpan({ cls: "bob-cnp-row-title", text: item.title || item.themeName || item.themeKey });
+    if (item.detail) {
+      const badge = item.themeKind === "today" ? "Today" : item.themeKind === "recent" ? "Recent" : item.themeKind === "new" ? "New" : item.themeKind === "inherited-unknown" ? "Current default" : "";
+      main.createSpan({ cls: "bob-cnp-row-detail", text: ` · ${badge ? `${badge} · ` : ""}${item.detail}` });
+    }
+  }
+
+  async commitTaskCardThemeStageItem(item) {
+    if (!item) {
+      return false;
+    }
+    if (this.opening) {
+      return false;
+    }
+    this.taskCardThemeSelectedKey = item.key || item.themeKey || null;
+    this.taskCardThemeQuery = this.inputEl && typeof this.inputEl.value === "string" ? this.inputEl.value : this.taskCardThemeQuery || "";
+    if (item.themeKind === "default") {
+      return await this.applyTaskCardThemeDefault();
+    }
+    return await this.applyTaskCardThemeChoice({ kind: item.themeKind, key: item.themeKey, name: item.themeName });
+  }
+
+  async applyTaskCardThemeDefault() {
+    return await this.applyTaskCardThemeChoice({ kind: "default", key: "__default", name: null });
+  }
+
+  async applyTaskCardThemeChoice(selection) {
+    const projection = this.freshTaskCardThemeProjection() || this.currentTaskCardThemeProjection();
+    const api = this.getTaskCardThemeApi();
+    if (!projection || !projection.available) {
+      new Notice((projection && projection.unavailableReason) || "Theme editing is unavailable");
+      return false;
+    }
+    if (!api || typeof api.setTaskTheme !== "function" || typeof api.clearTaskTheme !== "function") {
+      new Notice("Ledger Tools task-theme API is unavailable");
+      return false;
+    }
+    const ledgerApi = this.getTaskCardLedgerApi();
+    const plan = planTaskCardThemeEdits(projection, selection, api, { ledgerApi });
+    if (!plan.valid) {
+      new Notice(plan.error || "That theme cannot be set on a task");
+      return false;
+    }
+    const fresh = this.freshTaskCardThemeProjection() || projection;
+    const edits = [];
+    for (const edit of plan.edits) {
+      const check = taskCardThemeRevalidateEdit(edit, fresh);
+      if (!check.ok) {
+        new Notice(check.reason || "Task changed; reopen the card");
+        return false;
+      }
+      edits.push(edit);
+    }
+    const applied = await this.writeTaskCardThemeEdits(edits, api);
+    if (applied !== true) {
+      return false;
+    }
+    this.clearTaskCardThemeSubscription();
+    this.taskCardThemeStageProjection = null;
+    this.taskCardThemeQuery = "";
+    this.taskCardThemeSelectedKey = null;
+    // Theme-only edits never advance the review walk.
+    this.reviewOrigin = null;
+    this.reviewBeforeLine = "";
+    this.reviewLineIndex = null;
+    this.reviewOriginContent = null;
+    this.close();
+    return true;
+  }
+
+  async writeTaskCardThemeEdits(edits, api) {
+    if (!Array.isArray(edits) || edits.length === 0) {
+      return false;
+    }
+    if (this.isLinkSession()) {
+      return await this.writeTaskCardLinkedThemeEdits(edits, api);
+    }
+    if (this.isCountedSession()) {
+      return await this.writeTaskCardCountedThemeEdits(edits, api);
+    }
+    return await this.writeTaskCardSingleThemeEdits(edits, api);
+  }
+
+  taskCardThemeNewLineFor(rawLine, edit, api) {
+    if (edit.action === "clear") {
+      return api.clearTaskTheme(rawLine);
+    }
+    if (edit.action === "set") {
+      return api.setTaskTheme(rawLine, edit.name);
+    }
+    return rawLine;
+  }
+
+  isTaskCardThemeClosedLine(rawLine) {
+    try {
+      const status = getObsidianTaskCheckboxStatus(String(rawLine || ""));
+      if (status === null) {
+        return false;
+      }
+      if (typeof OPEN_OBSIDIAN_TASK_STATUSES !== "undefined" && OPEN_OBSIDIAN_TASK_STATUSES.has) {
+        return !OPEN_OBSIDIAN_TASK_STATUSES.has(status);
+      }
+      return status === "x" || status === "X" || status === "-";
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  async writeTaskCardSingleThemeEdits(edits, api) {
+    const edit = edits[0];
+    if (!edit) {
+      return false;
+    }
+    if (this.isTaskCardThemeClosedLine(edit.target.identity.rawLine)) {
+      new Notice("Closed tasks keep their theme history; nothing was written");
+      return false;
+    }
+    const editor = this.editor;
+    if (!editor || typeof editor.getValue !== "function" || typeof editor.replaceRange !== "function") {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const content = String(editor.getValue() || "");
+    const lines = content.split(/\r?\n/);
+    const line = edit.target.identity.line;
+    if (!Number.isInteger(line) || line < 0 || line >= lines.length) {
+      new Notice("Task changed; reopen the card");
+      return false;
+    }
+    if (lines[line] !== edit.target.identity.rawLine) {
+      new Notice("Task changed; reopen the card");
+      return false;
+    }
+    if (edit.action === "none") {
+      new Notice("Theme is already set; nothing was written");
+      this.close();
+      return true;
+    }
+    const nextLine = this.taskCardThemeNewLineFor(lines[line], edit, api);
+    if (nextLine === lines[line]) {
+      new Notice("Theme is already set; nothing was written");
+      this.close();
+      return true;
+    }
+    const cursor = typeof editor.getCursor === "function" ? editor.getCursor() : this.cursor;
+    const applied = replaceEditorLine(editor, line, lines[line], nextLine);
+    if (!applied) {
+      new Notice("Could not write the theme; nothing was written");
+      return false;
+    }
+    if (cursor && typeof editor.setCursor === "function") {
+      try {
+        setEditorCursorSafely(editor, cursor.line, Math.min(cursor.ch, nextLine.length));
+      } catch (_error) {
+        // Cursor restore is best-effort.
+      }
+    }
+    new Notice(edit.action === "clear" ? "Theme cleared to default" : `Theme ${edit.name} saved`);
+    return true;
+  }
+
+  async writeTaskCardCountedThemeEdits(edits, api) {
+    const editor = this.editor;
+    if (!editor || typeof editor.getValue !== "function") {
+      new Notice("No active markdown editor");
+      return false;
+    }
+    const content = String(typeof this.getEditorContent === "function" ? this.getEditorContent() : editor.getValue() || "");
+    const lines = content.split(/\r?\n/);
+    const nextLines = lines.slice();
+    let changed = 0;
+    let skippedClosed = 0;
+    for (const edit of edits) {
+      const line = edit.target.identity.line;
+      if (!Number.isInteger(line) || line < 0 || line >= lines.length || lines[line] !== edit.target.identity.rawLine) {
+        new Notice("Task changed; reopen the card");
+        return false;
+      }
+      if (this.isTaskCardThemeClosedLine(lines[line])) {
+        skippedClosed += 1;
+        continue;
+      }
+      if (edit.action === "none") {
+        continue;
+      }
+      const nextLine = this.taskCardThemeNewLineFor(lines[line], edit, api);
+      if (nextLine !== lines[line]) {
+        nextLines[line] = nextLine;
+        changed += 1;
+      }
+    }
+    if (changed === 0) {
+      new Notice(skippedClosed > 0 ? `Closed tasks keep their theme history; nothing was written` : "Themes are already set; nothing was written");
+      if (skippedClosed === 0) {
+        this.close();
+      }
+      return skippedClosed === 0;
+    }
+    const ending = content.includes("\r\n") ? "\r\n" : "\n";
+    const nextContent = nextLines.join(ending);
+    const cursor = typeof editor.getCursor === "function" ? editor.getCursor() : this.cursor;
+    const applied = applyEditorContentTransaction(editor, content, nextContent, cursor ? { line: cursor.line, ch: cursor.ch } : null);
+    if (!applied || String(editor.getValue() || "") !== nextContent) {
+      new Notice("Could not write themes; no tasks were updated");
+      return false;
+    }
+    new Notice(
+      `Theme saved on ${formatCountLabel(changed, "task")}${skippedClosed > 0 ? ` (${skippedClosed} closed skipped)` : ""}`,
+    );
+    return true;
+  }
+
+  async writeTaskCardLinkedThemeEdits(edits, api) {
+    let changed = 0;
+    let skippedClosed = 0;
+    let skippedStale = 0;
+    const failures = [];
+    for (const edit of edits) {
+      const identity = edit.target.identity;
+      const targetPath = identity.path;
+      if (!targetPath || !Number.isInteger(identity.line)) {
+        skippedStale += 1;
+        continue;
+      }
+      if (this.isTaskCardThemeClosedLine(identity.rawLine)) {
+        skippedClosed += 1;
+        continue;
+      }
+      if (edit.action === "none") {
+        continue;
+      }
+      let freshContent = null;
+      try {
+        if (typeof this.readVaultStageFiles === "function") {
+          const files = await this.readVaultStageFiles([targetPath]);
+          freshContent = files ? files.get(targetPath) : null;
+        } else if (this.plugin && typeof this.plugin.readDependencyNoteContent === "function") {
+          freshContent = await this.plugin.readDependencyNoteContent(targetPath, null, "");
+        }
+      } catch (_error) {
+        freshContent = null;
+      }
+      if (typeof freshContent !== "string") {
+        failures.push(targetPath);
+        continue;
+      }
+      const freshLines = freshContent.split(/\r?\n/);
+      if (freshLines[identity.line] !== identity.rawLine || !isObsidianTaskLine(freshLines[identity.line])) {
+        skippedStale += 1;
+        continue;
+      }
+      const nextLine = this.taskCardThemeNewLineFor(freshLines[identity.line], edit, api);
+      if (nextLine === freshLines[identity.line]) {
+        continue;
+      }
+      let prepared = null;
+      try {
+        prepared = await this.plugin.prepareDependencyTargetNote(targetPath, {
+          line: identity.line,
+          from: freshLines[identity.line],
+          text: nextLine,
+        });
+      } catch (_error) {
+        prepared = null;
+      }
+      if (!prepared || prepared.ok !== true) {
+        failures.push(targetPath);
+        continue;
+      }
+      changed += 1;
+    }
+    if (changed === 0 && failures.length === 0 && skippedStale === 0 && skippedClosed > 0) {
+      new Notice("Closed tasks keep their theme history; nothing was written");
+      return false;
+    }
+    if (changed === 0 && failures.length === 0 && skippedStale > 0) {
+      new Notice("Linked task changed; reopen the card");
+      return false;
+    }
+    if (changed === 0 && failures.length === 0) {
+      new Notice("Themes are already set; nothing was written");
+      this.close();
+      return true;
+    }
+    if (failures.length > 0 || skippedStale > 0) {
+      new Notice(
+        `Theme saved on ${formatCountLabel(changed, "task")}${failures.length > 0 ? ` · failed in ${failures.length} note${failures.length === 1 ? "" : "s"}` : ""}${skippedStale > 0 ? ` · ${skippedStale} stale skipped` : ""}${skippedClosed > 0 ? ` · ${skippedClosed} closed skipped` : ""}`,
+      );
+      return changed > 0;
+    }
+    new Notice(
+      `Theme saved on ${formatCountLabel(changed, "task")}${skippedClosed > 0 ? ` (${skippedClosed} closed skipped)` : ""}`,
+    );
+    return true;
+  }
+
+  handleTaskCardThemeKeydown(event) {
+    if (!event || event.isComposing === true || event.keyCode === 229) {
+      return false;
+    }
+    if (this.stage === "value" && this.taskCardThemeStageRows && isCtrlKey(event, "d")) {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.applyTaskCardThemeDefault().catch(() => {
+        new Notice("Could not clear the theme");
+      });
+      return true;
+    }
+    if (this.stage === "value" && this.taskCardThemeStageRows && event.key === "Escape") {
+      // Cancellation writes nothing and clears the stage subscription.
+      this.clearTaskCardThemeSubscription();
+      this.taskCardThemeStageProjection = null;
+      this.taskCardThemeStageRows = null;
+      return false;
+    }
+    return false;
+  }
 }
 // ---- src/360-picker-schedule-review.js ----
 class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
@@ -57547,6 +58593,11 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       this.handleTaskCardKeydown(event);
       return;
     }
+    if (this.stage === "value" && this.taskCardThemeStageRows && typeof this.handleTaskCardThemeKeydown === "function") {
+      if (this.handleTaskCardThemeKeydown(event) === true) {
+        return;
+      }
+    }
     if (this.stage === "relation-label" && this.handleRelationLabelKeydown(event)) {
       return;
     }
@@ -58986,6 +60037,7 @@ function installBulletPropertyPickerMixins(pluginClass, mixins) {
 
 installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerTaskCardMixin,
+  BulletPropertyPickerTaskCardThemeStageMixin,
   BulletPropertyPickerQuickRollMixin,
   BulletPropertyPickerScheduleReviewMixin,
   BulletPropertyPickerScheduleWorkLogMixin,
@@ -91041,6 +92093,11 @@ module.exports.helpers = {
   buildTaskCardThemeProjection,
   buildTaskCardThemeHeader,
   buildTaskCardThemeRuntimeContext,
+  taskCardThemeNormalizeKey, taskCardThemeCanonicalName,
+  taskCardThemeCatalogSpelling, taskCardThemeExemptKeys,
+  taskCardThemeSingleComponent, taskCardThemeValidateNewName,
+  buildTaskCardThemeStageModel, planTaskCardThemeEdits,
+  taskCardThemeRevalidateEdit,
   planTaskCard,
   taskCardBlocksAvailabilityReason,
   taskCardBlocksSummary,

@@ -46,9 +46,10 @@ the owning task's Links or Linked-from stage.
 | `l` | Open Links to (task relations); in its filter, `~` flips direction. |
 | `⇧L` | Open Linked from (task relations); in its filter, `~` flips direction. |
 | `f` | Open Review every (Refresh). |
+| `t` | Open Theme; `Enter` on the Theme row opens the same stage. The stage offers Use default first with its inherited reason, then Today, Recent, and a validated typed new name. |
 | `x` | Open the cancel-reason stage; the key alone never cancels. |
 | `Alt+N` | Commit to Next or release to Ready. |
-| `Ctrl+D` | Delete the selected property; Schedule is selected by default. On Links to, clear all outgoing relations; Linked from is generated and refuses clearing. In the relation-label stage, hide or unhide the selected label; row zero toggles one-off instead. |
+| `Ctrl+D` | Delete the selected property; Schedule is selected by default. On Theme, clear to Use default (field clearing only, never Recent hide; theme need not be in the configured property list). On Links to, clear all outgoing relations; Linked from is generated and refuses clearing. In the relation-label stage, hide or unhide the selected label; row zero toggles one-off instead. |
 | `Ctrl+H` | In the relation-label stage, show or hide the Hidden section. |
 | Backspace on an empty field or Back | Return to the card without writing. |
 | Escape, `q`, `Q` | Close and discard uncommitted state. `q` does not close while a text field is focused. |
@@ -74,10 +75,23 @@ Schedule task Work summary stage.
 ## Scope and previews
 
 The header shows the cleaned task text, note, lane, priority, schedule,
-dependency counts, and review interval. Counted sessions identify their
-N+1-item scope and mixed values. Task Links show `via Task Link`
-and name their target notes. Each priority level shows its exact ISO date;
-batches show a date span and per-target details.
+dependency counts, and review interval, plus a Theme line (`Theme [X] this
+task`, `Theme [X] from note`, `Theme none · t to set`) with catalog spelling,
+declaring-note hue dot, and unknown/repair/mixed signals with tooltips; color
+is never the only signal. Batch cards name their scope and mixed values and
+never imply a value or default applies to all targets when it differs.
+Counted sessions identify their N+1-item scope and mixed values. Task Links
+show `via Task Link` and name their target notes. Each priority level shows
+its exact ISO date; batches show a date span and per-target details.
+
+A theme-only edit writes only `[theme:: ...]` fields through the Ledger Tools
+setters with guarded identity and a revalidated default: selecting Use default
+always clears (including invalid, duplicate, and none defaults), selecting the
+inherited theme also clears, and other choices follow the single non-exempt
+component rule with catalog spelling. Closed tasks keep their history. No
+status, Task Link, ID, route, freshness, stamp, schedule, Work Log, or
+review-walk change is caused by a theme-only edit; `Back`, `Escape`, and
+`Ctrl+[` write nothing.
 
 Choosing the same priority level again is deliberate: selecting `2`
 on a P2 task resets its roll streak. Unbound letters, `/`, and

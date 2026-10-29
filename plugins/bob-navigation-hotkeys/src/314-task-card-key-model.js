@@ -62,7 +62,7 @@ function resolveTaskCardKey(model, event) {
   const movement = (direction) =>
     Object.freeze({ type: "move-selection", direction, fromRowId: model.selectedRowId });
   const actionKey =
-    (!modified && /^[0-9bflx]$/i.test(key)) ||
+    (!modified && /^[0-9bflxt]$/i.test(key)) ||
     (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || event.code === "KeyL" || key === "B" || key === "L")) ||
     (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
     (meta && !ctrl && !shift && !alt && key === "Enter") ||
@@ -127,6 +127,19 @@ function resolveTaskCardKey(model, event) {
         "clear-relations",
         TASK_LINKED_FROM_LINE_NOTICE,
       );
+    }
+    if (selected && selected.id === "theme") {
+      if (!selected.enabled) {
+        return unavailable(
+          "clear-theme",
+          selected.unavailableReason || "Theme editing is unavailable",
+        );
+      }
+      return Object.freeze({
+        type: "clear-theme",
+        rowId: selected.id,
+        targetCount: selected.targetCount || model.session.targetCount,
+      });
     }
     if (!selected || selected.kind !== "property" || !selected.deletable) {
       return unavailable("delete-property", "Only a selected property can be deleted");
@@ -202,6 +215,9 @@ function resolveTaskCardKey(model, event) {
   }
   if (!modified && lower === "f") {
     return taskCardIntentForRow(rowById("review-every"));
+  }
+  if (!modified && lower === "t") {
+    return taskCardIntentForRow(rowById("theme"));
   }
   if (!modified && lower === "x") {
     return taskCardIntentForRow(rowById("cancel"));

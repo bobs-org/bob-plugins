@@ -239,9 +239,6 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     ) || null;
   }
 
-  // Swaps the card for the filtered-picker chrome a value, reason, or review
-  // stage paints into. The caller opens that stage in the same synchronous
-  // step; `openTaskCardStage` returns to the card when nothing took over.
   ensureTaskCardStageChrome() {
     if (this.stage !== "task-card") {
       return;
@@ -263,8 +260,6 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     }
   }
 
-  // Where a refused or stale stage lands: back on the card, or closed when
-  // this modal was opened straight into a stage and never had a card.
   returnHome(options = {}) {
     if (this.hasTaskCard) {
       this.returnToTaskCard(options);
@@ -282,6 +277,9 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   }
 
   returnToTaskCard(options = {}) {
+    if (typeof this.clearTaskCardThemeSubscription === "function") this.clearTaskCardThemeSubscription();
+    this.taskCardThemeStageProjection = null;
+    this.taskCardThemeStageRows = null;
     this.revealQuickRollCard();
     this.pendingScheduleReason = null;
     this.pendingScheduleReview = null;
@@ -407,6 +405,8 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
         result = await this.deleteTaskCardProperty(intent.propertyName);
       } else if (intent.type === "clear-relations") {
         result = await this.clearTaskCardRelations(intent.rowId);
+      } else if (intent.type === "clear-theme") {
+        result = await this.applyTaskCardThemeDefault();
       } else if (intent.type === "open-action") {
         result = await this.openTaskCardAction(intent.rowId, intent.action);
       } else if (intent.type === "open-property") {
@@ -420,6 +420,10 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   }
 
   async openTaskCardAction(rowId, action) {
+    if (action === "theme" || rowId === "theme") {
+      this.openTaskCardStage(() => this.openTaskCardThemeStage());
+      return false;
+    }
     if (action === "schedule" || rowId === "schedule") {
       const scheduleRow = (this.taskCardModel && this.taskCardModel.rows || []).find((row) => row.id === "schedule");
       const item = this.getTaskCardPropertyItem(scheduleRow && scheduleRow.propertyName || "scheduled");
@@ -511,8 +515,6 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     return false;
   }
 
-  // A More-section row opens that property's existing value stage; the
-  // `scheduled` property takes the same schedule commit path as its card row.
   async openTaskCardProperty(propertyName) {
     this.refreshPropertyItems();
     const wanted = normalizeBulletPropertyName(propertyName);
@@ -753,6 +755,9 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   // Invalidate any pending vault-stage refresh so it never paints into the
   // closed modal.
   onClose() {
+    if (typeof this.clearTaskCardThemeSubscription === "function") this.clearTaskCardThemeSubscription();
+    this.taskCardThemeStageProjection = null;
+    this.taskCardThemeStageRows = null;
     this.clearRelationLabelSubscriptions();
     if (this.plugin && this.plugin.activeBulletPropertyPicker === this) {
       this.plugin.activeBulletPropertyPicker = null;

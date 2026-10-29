@@ -113,6 +113,12 @@ class ElementStub {
     };
   }
 
+  select() {
+    const text = String(this.value || this.textContent || "");
+    this.selectionStart = 0;
+    this.selectionEnd = text.length;
+  }
+
   focus() {
     if (activeElement && activeElement !== this) activeElement.focused = false;
     activeElement = this;

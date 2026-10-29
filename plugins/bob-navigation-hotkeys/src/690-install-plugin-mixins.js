@@ -71,4 +71,5 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysTemplaterTriggerMixin,
   BobNavigationHotkeysImageZoomMixin,
   BobNavigationHotkeysLinkParseMixin,
+  BobNavigationHotkeysParentChangeMixin,
 ]);

@@ -39,6 +39,8 @@ class BobNavigationHotkeysPlugin extends Plugin {
     // Shared guard for Ctrl+Shift+M task-note and Pomodoro-bullet pickers.
     this.activeTaskMoveDestinationPicker = null;
     this.activeBulletPropertyPicker = null;
+    this.activeParentNotePicker = null;
+    this.parentChangePickerOpening = false;
     this.pendingTaskMoveJumpDeferred = null;
 
     this.addCommand({
@@ -51,6 +53,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
       id: "open-child-note",
       name: "Open child note",
       callback: () => this.openChildNotePicker(),
+    });
+
+    // Completes the Ctrl+- / Ctrl+= / Ctrl+Shift+- parent/child trio.
+    this.addCommand({
+      id: "change-parent-note",
+      name: "Change parent note",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "-" }],
+      callback: () => this.openParentChangePicker(),
     });
 
     this.addCommand({

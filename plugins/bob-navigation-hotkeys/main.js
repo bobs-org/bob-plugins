@@ -26161,6 +26161,707 @@ class ImageZoomModal extends Modal {
     }
   }
 }
+// ---- src/208-parent-note-picker-model.js ----
+const PARENT_PICKER_HINTS = Object.freeze([
+  Object.freeze({ keys: Object.freeze(["↑", "↓"]), label: "Navigate" }),
+  Object.freeze({ keys: Object.freeze(["^N", "^P"]), label: "Move" }),
+  Object.freeze({ keys: Object.freeze(["↵"]), label: "Set parent" }),
+  Object.freeze({ keys: Object.freeze(["esc"]), label: "Cancel" }),
+]);
+
+const PARENT_PICKER_RESULT_CAP = 50;
+const PARENT_BREADCRUMB_MAX = 5;
+const PARENT_ANCESTRY_MAX_HOPS = 16;
+const PARENT_WORD_SEPARATORS = " _-./";
+
+function parentNoteBasenameFromPath(path) {
+  const value = String(path || "");
+  const leaf = value.split("/").pop() || value;
+  return leaf.toLowerCase().endsWith(".md") ? leaf.slice(0, -3) : leaf;
+}
+
+function isConflictsNotePath(path) {
+  return String(path || "")
+    .split("/")
+    .some((part) => part === "_conflicts");
+}
+
+function isTerminalProjectNoteInfo(noteInfo) {
+  if (!noteInfo || noteInfo.kind !== "project") {
+    return false;
+  }
+  const key = String(noteInfo.statusKey || "");
+  return key === "done" || key === "canceled" || key === "cancelled";
+}
+
+function parentKindWeight(noteInfo) {
+  if (noteInfo && noteInfo.kind === "area") {
+    return 0;
+  }
+  if (noteInfo && noteInfo.kind === "project") {
+    return isTerminalProjectNoteInfo(noteInfo) ? 2 : 0;
+  }
+  return 1;
+}
+
+function parentQueryHasWordStart(name, query) {
+  if (!name || !query || name.length <= query.length) {
+    return false;
+  }
+  for (let index = 1; index < name.length; index += 1) {
+    if (
+      PARENT_WORD_SEPARATORS.includes(name[index - 1]) &&
+      name.slice(index, index + query.length) === query
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function parentQueryIsFuzzy(name, query) {
+  if (!name || !query) {
+    return false;
+  }
+  let cursor = 0;
+  for (let index = 0; index < name.length; index += 1) {
+    if (name[index] === query[cursor]) {
+      cursor += 1;
+      if (cursor === query.length) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function parentQueryMatchTier(record, query) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) {
+    return null;
+  }
+  const name = String(record.basename || "").toLowerCase();
+  const path = String(record.path || "").toLowerCase();
+  if (name === needle) {
+    return 0;
+  }
+  if (name.startsWith(needle)) {
+    return 1;
+  }
+  if (parentQueryHasWordStart(name, needle)) {
+    return 2;
+  }
+  if (name.includes(needle)) {
+    return 3;
+  }
+  if (path.includes(needle)) {
+    return 4;
+  }
+  if (parentQueryIsFuzzy(name, needle)) {
+    return 5;
+  }
+  return null;
+}
+
+function normalizeParentPickerRecord(record) {
+  if (!record || typeof record !== "object" || !record.path) {
+    return null;
+  }
+  const path = String(record.path);
+  const recentRank = Number(record.recentRank);
+  return {
+    path,
+    basename:
+      typeof record.basename === "string" && record.basename
+        ? record.basename
+        : parentNoteBasenameFromPath(path),
+    file: record.file || null,
+    noteInfo: record.noteInfo || Object.freeze({ kind: "plain" }),
+    parentPath: record.parentPath || null,
+    recentRank: Number.isFinite(recentRank) ? recentRank : Infinity,
+    childCount: 0,
+  };
+}
+
+function buildParentPickerIndex(records, context = {}) {
+  const sourcePath = context && context.sourcePath ? String(context.sourcePath) : "";
+  const byPath = new Map();
+  const children = new Map();
+  const list = Array.isArray(records) ? records : [];
+  for (const source of list) {
+    const normalized = normalizeParentPickerRecord(source);
+    if (!normalized || byPath.has(normalized.path)) {
+      continue;
+    }
+    byPath.set(normalized.path, normalized);
+  }
+  for (const record of byPath.values()) {
+    if (!record.parentPath) {
+      continue;
+    }
+    const siblings = children.get(record.parentPath) || [];
+    siblings.push(record.path);
+    children.set(record.parentPath, siblings);
+    const parent = byPath.get(record.parentPath);
+    if (parent) {
+      parent.childCount += 1;
+    }
+  }
+  const excluded = new Set();
+  if (sourcePath) {
+    excluded.add(sourcePath);
+    const queue = (children.get(sourcePath) || []).slice();
+    while (queue.length > 0) {
+      const path = queue.shift();
+      if (excluded.has(path)) {
+        continue;
+      }
+      excluded.add(path);
+      const kids = children.get(path);
+      if (kids) {
+        for (let index = 0; index < kids.length; index += 1) {
+          queue.push(kids[index]);
+        }
+      }
+    }
+  }
+  for (const record of byPath.values()) {
+    if (isConflictsNotePath(record.path)) {
+      excluded.add(record.path);
+    }
+  }
+  const source = sourcePath ? byPath.get(sourcePath) : null;
+  const currentParentPath =
+    (source && source.parentPath) ||
+    (context && context.currentParentPath) ||
+    null;
+  const currentParent = currentParentPath ? byPath.get(currentParentPath) : null;
+  const grandparentPath = currentParent && currentParent.parentPath
+    ? currentParent.parentPath
+    : null;
+  return {
+    sourcePath,
+    byPath,
+    records: Array.from(byPath.values()),
+    children,
+    excluded,
+    currentParentPath,
+    grandparentPath,
+  };
+}
+
+function compareParentCandidates(left, right, currentParentPath) {
+  if (left.path === currentParentPath && right.path !== currentParentPath) {
+    return -1;
+  }
+  if (right.path === currentParentPath && left.path !== currentParentPath) {
+    return 1;
+  }
+  const kindDelta = parentKindWeight(left.noteInfo) - parentKindWeight(right.noteInfo);
+  if (kindDelta !== 0) {
+    return kindDelta;
+  }
+  if (right.childCount !== left.childCount) {
+    return right.childCount - left.childCount;
+  }
+  const leftRecent = Number.isFinite(left.recentRank) ? left.recentRank : Infinity;
+  const rightRecent = Number.isFinite(right.recentRank) ? right.recentRank : Infinity;
+  if (leftRecent !== rightRecent) {
+    return leftRecent - rightRecent;
+  }
+  if (left.path.length !== right.path.length) {
+    return left.path.length - right.path.length;
+  }
+  return left.path.localeCompare(right.path);
+}
+
+function takeParentCandidate(record, seen, excluded, out) {
+  if (!record || seen.has(record.path) || excluded.has(record.path)) {
+    return;
+  }
+  seen.add(record.path);
+  out.push(record);
+}
+
+function rankParentCandidates(index, query, options = {}) {
+  const limit = Number.isInteger(options.limit) && options.limit > 0
+    ? options.limit
+    : PARENT_PICKER_RESULT_CAP;
+  const currentParentPath =
+    options.currentParentPath || (index && index.currentParentPath) || null;
+  const grandparentPath =
+    options.grandparentPath || (index && index.grandparentPath) || null;
+  const excluded = (index && index.excluded) || new Set();
+  const records = (index && Array.isArray(index.records) ? index.records : []);
+  const needle = String(query || "").trim();
+
+  if (!needle) {
+    const seen = new Set();
+    const out = [];
+    const byPath = (index && index.byPath) || new Map();
+    takeParentCandidate(byPath.get(currentParentPath), seen, excluded, out);
+    takeParentCandidate(byPath.get(grandparentPath), seen, excluded, out);
+    const recents = records
+      .filter((record) => Number.isFinite(record.recentRank) && !excluded.has(record.path))
+      .slice()
+      .sort(
+        (left, right) =>
+          left.recentRank - right.recentRank || left.path.localeCompare(right.path),
+      );
+    for (let indexRecent = 0; indexRecent < recents.length; indexRecent += 1) {
+      takeParentCandidate(recents[indexRecent], seen, excluded, out);
+    }
+    const popular = records
+      .filter((record) => !excluded.has(record.path))
+      .slice()
+      .sort(
+        (left, right) =>
+          right.childCount - left.childCount || left.path.localeCompare(right.path),
+      );
+    for (let indexPopular = 0; indexPopular < popular.length; indexPopular += 1) {
+      takeParentCandidate(popular[indexPopular], seen, excluded, out);
+    }
+    return {
+      items: out.slice(0, limit),
+      total: out.length,
+      excludedOnly: false,
+    };
+  }
+
+  const matched = [];
+  const excludedMatches = [];
+  for (let indexRecord = 0; indexRecord < records.length; indexRecord += 1) {
+    const record = records[indexRecord];
+    const tier = parentQueryMatchTier(record, needle);
+    if (tier === null) {
+      continue;
+    }
+    if (excluded.has(record.path)) {
+      excludedMatches.push(record);
+      continue;
+    }
+    matched.push({ record, tier });
+  }
+  matched.sort((left, right) => {
+    if (left.tier !== right.tier) {
+      return left.tier - right.tier;
+    }
+    return compareParentCandidates(left.record, right.record, currentParentPath);
+  });
+  const items = matched.map((row) => row.record);
+  return {
+    items: items.slice(0, limit),
+    total: items.length,
+    excludedOnly: items.length === 0 && excludedMatches.length > 0,
+  };
+}
+
+function buildParentAncestry(index, path, maxHops = PARENT_ANCESTRY_MAX_HOPS) {
+  const hops = Number.isInteger(maxHops) && maxHops > 0 ? maxHops : PARENT_ANCESTRY_MAX_HOPS;
+  const byPath = (index && index.byPath) || new Map();
+  const seen = new Set();
+  const upward = [];
+  let current = path || null;
+  let count = 0;
+  while (current && count < hops) {
+    if (seen.has(current)) {
+      break;
+    }
+    seen.add(current);
+    const record = byPath.get(current);
+    upward.push({
+      path: current,
+      basename: record
+        ? record.basename
+        : parentNoteBasenameFromPath(current),
+      missing: !record,
+      ellipsis: false,
+    });
+    current = record && record.parentPath ? record.parentPath : null;
+    count += 1;
+  }
+  return upward.reverse();
+}
+
+function collapseParentBreadcrumb(segments, max = PARENT_BREADCRUMB_MAX) {
+  const list = Array.isArray(segments) ? segments.slice() : [];
+  const cap = Number.isInteger(max) && max > 0 ? max : PARENT_BREADCRUMB_MAX;
+  if (list.length <= cap) {
+    return list;
+  }
+  return [
+    list[0],
+    {
+      path: "",
+      basename: "…",
+      missing: false,
+      ellipsis: true,
+    },
+    ...list.slice(-(cap - 2)),
+  ];
+}
+
+function parentChangeWouldCycle(index, sourcePath, candidatePath) {
+  if (!sourcePath || !candidatePath) {
+    return false;
+  }
+  if (sourcePath === candidatePath) {
+    return true;
+  }
+  const ancestry = buildParentAncestry(index, candidatePath, PARENT_ANCESTRY_MAX_HOPS);
+  for (let indexSeg = 0; indexSeg < ancestry.length; indexSeg += 1) {
+    if (ancestry[indexSeg].path === sourcePath) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function parentNameLastSegment(target) {
+  const text = String(target || "").trim();
+  if (!text) {
+    return "";
+  }
+  const leaf = text.split("/").pop() || text;
+  return leaf.toLowerCase().endsWith(".md") ? leaf.slice(0, -3) : leaf;
+}
+
+function parentEmptyStateText(query, excludedOnly) {
+  const shown = String(query || "").trim();
+  if (excludedOnly) {
+    return `“${shown}” is inside this note's own subtree — choosing it would create a cycle`;
+  }
+  return `No note matches “${shown}” — the parent must be an existing note`;
+}
+// ---- src/209-parent-note-picker-modal.js ----
+function insertParentPickerNodeAfter(parent, node, reference) {
+  if (!parent || !node) {
+    return;
+  }
+  if (typeof parent.insertBefore === "function" && reference) {
+    parent.insertBefore(node, reference.nextSibling || null);
+    return;
+  }
+  if (Array.isArray(parent.children) && reference) {
+    const from = parent.children.indexOf(node);
+    if (from !== -1) {
+      parent.children.splice(from, 1);
+    }
+    const at = parent.children.indexOf(reference);
+    parent.children.splice(at < 0 ? parent.children.length : at + 1, 0, node);
+    node.parent = parent;
+  }
+}
+
+function parentPickerFileForRow(record) {
+  if (record && record.file) {
+    return record.file;
+  }
+  return {
+    path: record && record.path ? record.path : "",
+    basename: record && record.basename ? record.basename : "",
+  };
+}
+
+function appendParentBreadcrumbCrumb(parentEl, segment, extraClass) {
+  if (!parentEl || !segment) {
+    return;
+  }
+  const classes = ["bob-pnp-crumb"];
+  if (segment.ellipsis) {
+    classes.push("is-ellipsis");
+  }
+  if (segment.missing) {
+    classes.push("is-missing");
+  }
+  if (extraClass) {
+    classes.push(extraClass);
+  }
+  const crumb = parentEl.createSpan({ cls: classes.join(" ") });
+  if (segment.missing) {
+    const icon = crumb.createSpan({ cls: "bob-pnp-crumb-icon" });
+    applyIcon(icon, "triangle-alert");
+  }
+  crumb.createSpan({
+    cls: "bob-pnp-crumb-label",
+    text: segment.basename || "",
+  });
+  if (segment.missing && !segment.ellipsis) {
+    crumb.createSpan({
+      cls: "bob-pnp-crumb-missing",
+      text: " (not found)",
+    });
+  }
+}
+
+function appendParentBreadcrumbSep(parentEl) {
+  parentEl.createSpan({ cls: "bob-pnp-crumb-sep", text: "›" });
+}
+
+function parentBreadcrumbLabel(segments) {
+  return (Array.isArray(segments) ? segments : [])
+    .map((segment) => (segment && segment.basename) || "")
+    .filter(Boolean)
+    .join(" › ");
+}
+
+class ParentNotePickerModal extends FilteredPickerModal {
+  constructor(app, plugin, options = {}) {
+    super(app, {
+      items: [],
+      title: "Change parent",
+      headerIcon: "network",
+      inputLabel: "Type a note name",
+      placeholder: "Type a note name…",
+      resultsLabel: "Parent notes",
+      emptyText: "No note matches “” — the parent must be an existing note",
+      footerHints: PARENT_PICKER_HINTS.slice(),
+      renderItem: (record, rowEl, query) =>
+        this.renderParentCandidateRow(record, rowEl, query),
+      openItem: (record) =>
+        plugin.commitParentChange({
+          file: options.sourceFile,
+          candidate: record,
+          expected: options.expectedRaw,
+        }),
+    });
+    this.plugin = plugin;
+    this.sourceFile = options.sourceFile || null;
+    this.index = options.index || buildParentPickerIndex([], {});
+    this.field = options.field || readParentFrontmatterField("");
+    this.expectedRaw = Object.prototype.hasOwnProperty.call(options, "expectedRaw")
+      ? options.expectedRaw
+      : this.field.raw;
+    this.initialQuery = typeof options.initialQuery === "string" ? options.initialQuery : "";
+    this.rankedTotal = 0;
+    this.rankedExcludedOnly = false;
+    this.previewEl = null;
+    this.moreEl = null;
+  }
+
+  onOpen() {
+    super.onOpen();
+    this.modalEl.addClass("bob-pnp-modal");
+    this.previewEl = this.contentEl.createDiv({
+      cls: "bob-pnp-preview",
+      attr: { "aria-live": "polite" },
+    });
+    insertParentPickerNodeAfter(this.contentEl, this.previewEl, this.searchEl);
+    if (this.inputEl) {
+      this.inputEl.value = this.initialQuery;
+    }
+    this.renderResults();
+    const openingInput = this.inputEl;
+    window.setTimeout(() => {
+      if (
+        this.pickerOpen &&
+        this.inputEl === openingInput &&
+        openingInput
+      ) {
+        if (typeof openingInput.focus === "function") {
+          openingInput.focus();
+        }
+        if (typeof openingInput.select === "function") {
+          openingInput.select();
+        }
+      }
+    }, 0);
+  }
+
+  onClose() {
+    if (this.plugin && this.plugin.activeParentNotePicker === this) {
+      this.plugin.activeParentNotePicker = null;
+    }
+    super.onClose();
+  }
+
+  getFilteredItems() {
+    const query = this.getRawQuery();
+    const ranked = rankParentCandidates(this.index, query, {
+      currentParentPath: this.index.currentParentPath,
+      grandparentPath: this.index.grandparentPath,
+    });
+    this.rankedTotal = ranked.total;
+    this.rankedExcludedOnly = ranked.excludedOnly === true;
+    this.emptyText = parentEmptyStateText(query, this.rankedExcludedOnly);
+    return ranked.items;
+  }
+
+  renderPickerSubtitle(subtitleEl) {
+    if (!subtitleEl) {
+      return true;
+    }
+    subtitleEl.empty();
+    const noteName =
+      (this.sourceFile && this.sourceFile.basename) ||
+      parentNoteBasenameFromPath(this.index.sourcePath);
+    const field = this.field || {};
+    if (field.state === "list") {
+      subtitleEl.createSpan({
+        text: `Parent is a YAML list · ${noteName}`,
+      });
+      return true;
+    }
+    if (field.state === "duplicate") {
+      const count = Number(field.count) || 2;
+      subtitleEl.createSpan({
+        text: `Duplicate parent: keys (${count}) · ${noteName}`,
+      });
+      return true;
+    }
+    if (field.state === "unclosed") {
+      subtitleEl.createSpan({
+        text: `Frontmatter is unclosed · ${noteName}`,
+      });
+      return true;
+    }
+    if (
+      field.state === "no-frontmatter" ||
+      field.state === "absent" ||
+      !this.index.currentParentPath
+    ) {
+      if (field.state === "scalar" && field.target) {
+        const crumbs = subtitleEl.createDiv({ cls: "bob-pnp-crumbs" });
+        appendParentBreadcrumbCrumb(crumbs, {
+          path: "",
+          basename: parentNameLastSegment(field.target) || String(field.target),
+          missing: true,
+          ellipsis: false,
+        });
+        appendParentBreadcrumbSep(crumbs);
+        appendParentBreadcrumbCrumb(
+          crumbs,
+          { path: this.index.sourcePath, basename: noteName, missing: false },
+          "is-self",
+        );
+        return true;
+      }
+      subtitleEl.createSpan({
+        text: `No parent yet · ${noteName}`,
+      });
+      return true;
+    }
+    const ancestry = buildParentAncestry(this.index, this.index.sourcePath);
+    this.renderParentCrumbs(subtitleEl, ancestry, {
+      selfPath: this.index.sourcePath,
+    });
+    return true;
+  }
+
+  renderParentCrumbs(hostEl, segments, options = {}) {
+    const full = Array.isArray(segments) ? segments : [];
+    const visible = collapseParentBreadcrumb(full);
+    const crumbs = hostEl.createDiv({
+      cls: "bob-pnp-crumbs",
+      attr: {
+        title: parentBreadcrumbLabel(full),
+        "aria-label": parentBreadcrumbLabel(full),
+      },
+    });
+    visible.forEach((segment, index) => {
+      if (index > 0) {
+        appendParentBreadcrumbSep(crumbs);
+      }
+      let extra = "";
+      if (options.newParentPath && segment.path === options.newParentPath) {
+        extra = "is-new-parent";
+      }
+      if (options.selfPath && segment.path === options.selfPath) {
+        extra = extra ? `${extra} is-self` : "is-self";
+      }
+      appendParentBreadcrumbCrumb(crumbs, segment, extra);
+    });
+    return crumbs;
+  }
+
+  renderParentCandidateRow(record, rowEl, query) {
+    renderTypedNotePickerRow(
+      parentPickerFileForRow(record),
+      record && record.noteInfo,
+      rowEl,
+      query,
+    );
+    const chips = rowEl.createDiv({ cls: "bob-pnp-chips" });
+    if (record && record.path === this.index.currentParentPath) {
+      chips.createSpan({ cls: "bob-pnp-chip is-current", text: "current" });
+    }
+    if (record && record.path === this.index.grandparentPath) {
+      chips.createSpan({ cls: "bob-pnp-chip is-up", text: "up a level" });
+    }
+    if (record && Number.isFinite(record.recentRank)) {
+      chips.createSpan({ cls: "bob-pnp-chip is-recent", text: "recent" });
+    }
+    const childCount = record && Number(record.childCount);
+    if (childCount > 0) {
+      rowEl.createDiv({
+        cls: "bob-pnp-children",
+        text: `${childCount} ${childCount === 1 ? "child" : "children"}`,
+      });
+    }
+  }
+
+  refreshPreviewStrip() {
+    if (!this.previewEl) {
+      return;
+    }
+    this.previewEl.empty();
+    const selected = this.visibleItems[this.selectedIndex];
+    if (!selected) {
+      this.previewEl.style.display = "none";
+      return;
+    }
+    this.previewEl.style.display = "";
+    const isCurrent = selected.path === this.index.currentParentPath;
+    this.previewEl.createDiv({
+      cls: "bob-pnp-preview-label",
+      text: isCurrent ? "STAYS UNDER" : "MOVES TO",
+    });
+    const selectedAncestry = buildParentAncestry(this.index, selected.path);
+    const sourcePath = this.index.sourcePath;
+    const sourceName =
+      (this.sourceFile && this.sourceFile.basename) ||
+      parentNoteBasenameFromPath(sourcePath);
+    const chain = selectedAncestry.concat([
+      {
+        path: sourcePath,
+        basename: sourceName,
+        missing: false,
+        ellipsis: false,
+      },
+    ]);
+    this.renderParentCrumbs(this.previewEl, chain, {
+      newParentPath: isCurrent ? null : selected.path,
+      selfPath: sourcePath,
+    });
+  }
+
+  refreshCappedCountLine() {
+    if (this.moreEl && this.moreEl.parent) {
+      this.moreEl.parent.children = this.moreEl.parent.children.filter(
+        (child) => child !== this.moreEl,
+      );
+      this.moreEl.parent = null;
+    }
+    this.moreEl = null;
+    if (!this.resultsEl) {
+      return;
+    }
+    const shown = this.visibleItems.length;
+    if (shown === 0 || this.rankedTotal <= shown) {
+      return;
+    }
+    this.moreEl = this.resultsEl.createDiv({
+      cls: "bob-pnp-more",
+      text: `Showing ${shown} of ${this.rankedTotal} matches — keep typing to narrow`,
+    });
+  }
+
+  renderResults() {
+    super.renderResults();
+    this.refreshCappedCountLine();
+    this.refreshPreviewStrip();
+  }
+}
 // ---- src/210-rename-and-line-context.js ----
 function isManagedRefNote(path, frontmatter) {
   const normalizedPath = normalizeVaultRelativePath(path);
@@ -27064,6 +27765,360 @@ function getProjectNotePropertyContext(content, lineIndex, options = {}) {
   });
 }
 
+// ---- src/211-parent-frontmatter-plan.js ----
+// Pure parent: frontmatter reader and line planner. Never uses
+// processFrontMatter: that re-serializes the whole YAML block and would
+// rewrite unquoted [[wikilinks]] in other keys. Every byte outside the
+// edited parent span is preserved, including comments and CRLF.
+
+const PARENT_KEY_RE = /^parent[ \t]*:(.*)$/;
+const TRAILING_YAML_COMMENT_RE = /([ \t]+#.*)$/;
+const QUOTED_TRAILING_COMMENT_RE = /^([ \t]+#.*)$/;
+
+function findParentFrontmatterClose(lines) {
+  if (!startsWithFrontmatter(lines)) {
+    return { state: "no-frontmatter", close: -1 };
+  }
+  for (let lineIndex = 1; lineIndex < lines.length; lineIndex += 1) {
+    if (FRONTMATTER_DELIMITER_RE.test(lines[lineIndex])) {
+      return { state: "closed", close: lineIndex };
+    }
+  }
+  return { state: "unclosed", close: -1 };
+}
+
+function collectColumn0ParentKeys(lines, close) {
+  const found = [];
+  const end = close < 0 ? lines.length : close;
+  for (let lineIndex = 1; lineIndex < end; lineIndex += 1) {
+    const match = PARENT_KEY_RE.exec(String(lines[lineIndex] || ""));
+    if (match) {
+      found.push({ lineIndex, remainder: match[1] });
+    }
+  }
+  return found;
+}
+
+function parseParentWikiTarget(inner) {
+  const text = String(inner || "");
+  let end = text.length;
+  const pipe = text.indexOf("|");
+  const hash = text.indexOf("#");
+  if (pipe !== -1) {
+    end = Math.min(end, pipe);
+  }
+  if (hash !== -1) {
+    end = Math.min(end, hash);
+  }
+  return text.slice(0, end).trim();
+}
+
+function parseParentScalarTarget(value) {
+  const text = String(value || "").trim();
+  const wiki = /^\[\[([\s\S]*?)\]\]$/.exec(text);
+  if (wiki) {
+    return parseParentWikiTarget(wiki[1]);
+  }
+  return text;
+}
+
+function isParentContinuationLine(line) {
+  return /^[ \t]/.test(String(line || ""));
+}
+
+function collectParentContinuation(lines, start, close) {
+  const collected = [];
+  let index = start;
+  const end = close < 0 ? lines.length : close;
+  while (index < end) {
+    const line = String(lines[index] || "");
+    if (FRONTMATTER_DELIMITER_RE.test(line)) {
+      break;
+    }
+    if (isParentContinuationLine(line)) {
+      collected.push(line);
+      index += 1;
+      continue;
+    }
+    if (line.trim() === "") {
+      let look = index + 1;
+      let hasIndented = false;
+      while (look < end) {
+        const next = String(lines[look] || "");
+        if (FRONTMATTER_DELIMITER_RE.test(next)) {
+          break;
+        }
+        if (isParentContinuationLine(next)) {
+          hasIndented = true;
+          break;
+        }
+        if (next.trim() !== "") {
+          break;
+        }
+        look += 1;
+      }
+      if (!hasIndented) {
+        break;
+      }
+      collected.push(line);
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return {
+    lines: collected,
+    endLine: collected.length === 0 ? start - 1 : start + collected.length - 1,
+  };
+}
+
+function splitParentValueAndComment(remainder, innerEnd) {
+  const after = remainder.slice(innerEnd);
+  const commentMatch = QUOTED_TRAILING_COMMENT_RE.exec(after);
+  if (commentMatch) {
+    return {
+      raw: remainder.slice(0, innerEnd),
+      comment: commentMatch[1],
+    };
+  }
+  return { raw: remainder, comment: "" };
+}
+
+function parseParentValueSpan(lines, lineIndex, remainder, close, lineEnding) {
+  const rest = remainder == null ? "" : String(remainder);
+  const trimmed = rest.trimStart();
+  if (trimmed === "") {
+    const continuation = collectParentContinuation(lines, lineIndex + 1, close);
+    if (continuation.lines.length > 0) {
+      const raw = rest + lineEnding + continuation.lines.join(lineEnding);
+      return {
+        kind: "list",
+        raw,
+        comment: "",
+        endLine: continuation.endLine,
+        target: null,
+      };
+    }
+    return {
+      kind: "scalar",
+      raw: rest,
+      comment: "",
+      endLine: lineIndex,
+      target: "",
+    };
+  }
+
+  const quote = trimmed[0];
+  if (quote === '"' || quote === "'") {
+    const quoteAt = rest.indexOf(quote);
+    const afterQuote = rest.slice(quoteAt + 1);
+    const closeAt = afterQuote.indexOf(quote);
+    if (closeAt === -1) {
+      return {
+        kind: "scalar",
+        raw: rest,
+        comment: "",
+        endLine: lineIndex,
+        target: parseParentScalarTarget(getYamlScalarText(rest)),
+      };
+    }
+    const inner = afterQuote.slice(0, closeAt);
+    const innerEnd = quoteAt + 1 + closeAt + 1;
+    const split = splitParentValueAndComment(rest, innerEnd);
+    return {
+      kind: "scalar",
+      raw: split.raw,
+      comment: split.comment,
+      endLine: lineIndex,
+      target: parseParentScalarTarget(inner),
+    };
+  }
+
+  const wikiStart = rest.indexOf("[[");
+  const wikiEnd = wikiStart === -1 ? -1 : rest.indexOf("]]", wikiStart + 2);
+  if (wikiStart !== -1 && wikiEnd !== -1) {
+    const inner = rest.slice(wikiStart + 2, wikiEnd);
+    const innerEnd = wikiEnd + 2;
+    const split = splitParentValueAndComment(rest, innerEnd);
+    return {
+      kind: "scalar",
+      raw: split.raw,
+      comment: split.comment,
+      endLine: lineIndex,
+      target: parseParentWikiTarget(inner),
+    };
+  }
+
+  const commentMatch = TRAILING_YAML_COMMENT_RE.exec(rest);
+  const comment = commentMatch ? commentMatch[1] : "";
+  const raw = comment ? rest.slice(0, rest.length - comment.length) : rest;
+  return {
+    kind: "scalar",
+    raw,
+    comment,
+    endLine: lineIndex,
+    target: parseParentScalarTarget(getYamlScalarText(rest)),
+  };
+}
+
+function readParentFrontmatterField(content) {
+  const { lines, lineEnding } = splitMarkdownContent(content);
+  const fence = findParentFrontmatterClose(lines);
+  if (fence.state === "no-frontmatter") {
+    return Object.freeze({
+      state: "no-frontmatter",
+      raw: null,
+      target: null,
+      lineIndex: -1,
+      endLine: -1,
+      comment: "",
+      count: 0,
+    });
+  }
+  if (fence.state === "unclosed") {
+    return Object.freeze({
+      state: "unclosed",
+      raw: null,
+      target: null,
+      lineIndex: -1,
+      endLine: -1,
+      comment: "",
+      count: 0,
+    });
+  }
+  const keys = collectColumn0ParentKeys(lines, fence.close);
+  if (keys.length === 0) {
+    return Object.freeze({
+      state: "absent",
+      raw: null,
+      target: null,
+      lineIndex: -1,
+      endLine: -1,
+      comment: "",
+      count: 0,
+    });
+  }
+  if (keys.length > 1) {
+    return Object.freeze({
+      state: "duplicate",
+      raw: null,
+      target: null,
+      lineIndex: keys[0].lineIndex,
+      endLine: keys[0].lineIndex,
+      comment: "",
+      count: keys.length,
+    });
+  }
+  const key = keys[0];
+  const span = parseParentValueSpan(
+    lines,
+    key.lineIndex,
+    key.remainder,
+    fence.close,
+    lineEnding,
+  );
+  return Object.freeze({
+    state: span.kind === "list" ? "list" : "scalar",
+    raw: span.raw,
+    target: span.target,
+    lineIndex: key.lineIndex,
+    endLine: span.endLine,
+    comment: span.comment,
+    count: 1,
+  });
+}
+
+function parentLinkIsUnquotable(linkText) {
+  return /["\\\r\n]/.test(String(linkText || ""));
+}
+
+function formatParentFrontmatterLine(linkText, comment) {
+  return `parent: "${linkText}"${comment || ""}`;
+}
+
+function joinParentFrontmatterLines(lines, lineEnding) {
+  return lines.join(lineEnding);
+}
+
+function planParentFrontmatterEdit(content, linkText, options = {}) {
+  const text = String(content || "");
+  const link = String(linkText || "");
+  if (parentLinkIsUnquotable(link)) {
+    return Object.freeze({ ok: false, reason: "unquotable-link" });
+  }
+  const { lines, lineEnding } = splitMarkdownContent(text);
+  const field = readParentFrontmatterField(text);
+  if (field.state === "unclosed") {
+    return Object.freeze({ ok: false, reason: "unclosed-frontmatter" });
+  }
+  if (field.state === "duplicate") {
+    return Object.freeze({
+      ok: false,
+      reason: "duplicate-parent-keys",
+      count: field.count,
+    });
+  }
+  const expectedProvided = Object.prototype.hasOwnProperty.call(
+    options || {},
+    "expectedRaw",
+  );
+  if (expectedProvided && options.expectedRaw !== field.raw) {
+    return Object.freeze({ ok: false, reason: "stale" });
+  }
+
+  const parentLine = formatParentFrontmatterLine(link, field.comment || "");
+  const previousRaw = field.raw;
+  const previousTarget = field.target;
+
+  if (field.state === "no-frontmatter") {
+    const created = ["---", parentLine, "---"].concat(lines);
+    return Object.freeze({
+      ok: true,
+      content: joinParentFrontmatterLines(created, lineEnding),
+      changed: true,
+      action: "create-frontmatter",
+      previousRaw,
+      previousTarget,
+    });
+  }
+
+  if (field.state === "absent") {
+    const next = lines.slice();
+    next.splice(1, 0, parentLine);
+    return Object.freeze({
+      ok: true,
+      content: joinParentFrontmatterLines(next, lineEnding),
+      changed: true,
+      action: "insert-key",
+      previousRaw,
+      previousTarget,
+    });
+  }
+
+  const start = field.lineIndex;
+  const end = field.endLine < start ? start : field.endLine;
+  const currentLine = String(lines[start] || "");
+  if (start === end && currentLine === parentLine) {
+    return Object.freeze({
+      ok: true,
+      content: text,
+      changed: false,
+      action: "replace",
+      previousRaw,
+      previousTarget,
+    });
+  }
+  const next = lines.slice();
+  next.splice(start, end - start + 1, parentLine);
+  return Object.freeze({
+    ok: true,
+    content: joinParentFrontmatterLines(next, lineEnding),
+    changed: true,
+    action: "replace",
+    previousRaw,
+    previousTarget,
+  });
+}
 // ---- src/212-project-conversion.js ----
 // Conversion helpers for moving the ordinary Depends-On line with a task or
 // the project's ^prj line. The field is a mirror; this line remains the
@@ -63074,6 +64129,8 @@ class BobNavigationHotkeysPlugin extends Plugin {
     // Shared guard for Ctrl+Shift+M task-note and Pomodoro-bullet pickers.
     this.activeTaskMoveDestinationPicker = null;
     this.activeBulletPropertyPicker = null;
+    this.activeParentNotePicker = null;
+    this.parentChangePickerOpening = false;
     this.pendingTaskMoveJumpDeferred = null;
 
     this.addCommand({
@@ -63086,6 +64143,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
       id: "open-child-note",
       name: "Open child note",
       callback: () => this.openChildNotePicker(),
+    });
+
+    // Completes the Ctrl+- / Ctrl+= / Ctrl+Shift+- parent/child trio.
+    this.addCommand({
+      id: "change-parent-note",
+      name: "Change parent note",
+      hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "-" }],
+      callback: () => this.openParentChangePicker(),
     });
 
     this.addCommand({
@@ -92363,6 +93428,307 @@ class BobNavigationHotkeysQuickRollMixin {
     });
   }
 }
+// ---- src/682-plugin-parent-change.js ----
+class BobNavigationHotkeysParentChangeMixin {
+  openParentChangePicker() {
+    const file = this.getActiveMarkdownFile();
+    if (!file) {
+      return false;
+    }
+
+    let active = this.activeParentNotePicker;
+    if (
+      active &&
+      typeof isStaleRegisteredPicker === "function" &&
+      isStaleRegisteredPicker(active)
+    ) {
+      if (this.activeParentNotePicker === active) {
+        this.activeParentNotePicker = null;
+      }
+      active = null;
+    }
+    if (active && active.pickerOpen === true) {
+      if (active.inputEl && typeof active.inputEl.focus === "function") {
+        active.inputEl.focus();
+      }
+      return true;
+    }
+    if (this.parentChangePickerOpening) {
+      return true;
+    }
+
+    void this.openParentChangePickerNow(file);
+    return true;
+  }
+
+  async openParentChangePickerNow(file) {
+    this.parentChangePickerOpening = true;
+    try {
+      const context = await this.getActiveMarkdownContext();
+      const content =
+        context && context.file && context.file.path === file.path
+          ? String(context.content || "")
+          : "";
+      const field = readParentFrontmatterField(content);
+      const records = this.collectParentPickerRecords();
+      const index = buildParentPickerIndex(records, { sourcePath: file.path });
+      const initialQuery = this.parentChangeInitialQuery(file, field, index);
+      const picker = new ParentNotePickerModal(this.app, this, {
+        sourceFile: file,
+        index,
+        field,
+        expectedRaw: field.raw,
+        initialQuery,
+      });
+      this.activeParentNotePicker = picker;
+      picker.open();
+      return picker;
+    } finally {
+      this.parentChangePickerOpening = false;
+    }
+  }
+
+  parentChangeInitialQuery(file, field, index) {
+    if (index && index.currentParentPath) {
+      const current = index.byPath.get(index.currentParentPath);
+      if (current && current.basename) {
+        return current.basename;
+      }
+      return parentNoteBasenameFromPath(index.currentParentPath);
+    }
+    if (field && field.state === "scalar" && field.target) {
+      return parentNameLastSegment(field.target);
+    }
+    return "";
+  }
+
+  collectParentPickerRecords() {
+    const vault = this.app && this.app.vault;
+    const files =
+      vault && typeof vault.getMarkdownFiles === "function"
+        ? vault.getMarkdownFiles() || []
+        : [];
+    const workspace = this.app && this.app.workspace;
+    const lastOpen =
+      workspace && typeof workspace.getLastOpenFiles === "function"
+        ? workspace.getLastOpenFiles() || []
+        : [];
+    const recentIndex = new Map();
+    for (let index = 0; index < lastOpen.length; index += 1) {
+      const path = lastOpen[index];
+      if (path && !recentIndex.has(path)) {
+        recentIndex.set(path, index);
+      }
+    }
+    const now = new Date();
+    const records = [];
+    for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+      const file = files[fileIndex];
+      if (!this.isMarkdownFile(file)) {
+        continue;
+      }
+      const cache =
+        this.app.metadataCache &&
+        typeof this.app.metadataCache.getFileCache === "function"
+          ? this.app.metadataCache.getFileCache(file)
+          : null;
+      const frontmatter = cache && cache.frontmatter;
+      const links = this.getFrontmatterLinks(frontmatter, "parent");
+      let parentPath = null;
+      if (links.length === 1) {
+        const resolved = this.resolveLinkTargetFile(links[0], file.path);
+        if (resolved && resolved.path) {
+          parentPath = resolved.path;
+        }
+      }
+      const recentRank = recentIndex.has(file.path)
+        ? recentIndex.get(file.path)
+        : Infinity;
+      records.push({
+        path: file.path,
+        basename: file.basename,
+        file,
+        noteInfo: getFileChildNoteInfo(this.app, file, now),
+        parentPath,
+        recentRank,
+      });
+    }
+    return records;
+  }
+
+  parentChangeLinkFor(file) {
+    return this.getFrontmatterWikiLinkToFile(file);
+  }
+
+  resolveParentChangeFile(file) {
+    const cache =
+      this.app.metadataCache &&
+      typeof this.app.metadataCache.getFileCache === "function"
+        ? this.app.metadataCache.getFileCache(file)
+        : null;
+    const links = this.getFrontmatterLinks(cache && cache.frontmatter, "parent");
+    if (links.length !== 1) {
+      return null;
+    }
+    const resolved = this.resolveLinkTargetFile(links[0], file.path);
+    return resolved && this.isMarkdownFile(resolved) ? resolved : null;
+  }
+
+  parentChangeLiveIndex(sourcePath) {
+    return buildParentPickerIndex(this.collectParentPickerRecords(), {
+      sourcePath,
+    });
+  }
+
+  noticeParentChangeFailure(plan, candidate) {
+    const name =
+      (candidate && candidate.basename) ||
+      (candidate && candidate.file && candidate.file.basename) ||
+      "that note";
+    if (!plan || plan.ok) {
+      return;
+    }
+    if (plan.reason === "unclosed-frontmatter") {
+      new Notice("Can't change parent: the frontmatter block has no closing ---");
+      return;
+    }
+    if (plan.reason === "duplicate-parent-keys") {
+      const count = Number(plan.count) || 2;
+      new Notice(
+        `Can't change parent: the frontmatter has ${count} parent: keys — fix them by hand first`,
+      );
+      return;
+    }
+    if (plan.reason === "unquotable-link") {
+      new Notice(
+        `Can't change parent: ${name}'s name can't be written as a quoted link`,
+      );
+      return;
+    }
+    if (plan.reason === "stale") {
+      new Notice(
+        "Parent changed while the panel was open — press Ctrl+Shift+- again",
+      );
+      return;
+    }
+    new Notice("Could not change parent");
+  }
+
+  noticeParentChangeSuccess(previousName, nextName) {
+    if (previousName) {
+      new Notice(`Parent: ${previousName} → ${nextName}`);
+      return;
+    }
+    new Notice(`Parent set: ${nextName}`);
+  }
+
+  closeParentChangePicker() {
+    const picker = this.activeParentNotePicker;
+    if (picker && typeof picker.close === "function") {
+      try {
+        picker.close();
+      } catch (_error) {
+        this.activeParentNotePicker = null;
+      }
+    }
+    this.activeParentNotePicker = null;
+  }
+
+  async commitParentChange({ file, candidate, expected }) {
+    const candidateFile =
+      candidate && candidate.file ? candidate.file : candidate;
+    if (!this.isMarkdownFile(file) || !this.isMarkdownFile(candidateFile)) {
+      this.closeParentChangePicker();
+      return false;
+    }
+    const liveIndex = this.parentChangeLiveIndex(file.path);
+    if (parentChangeWouldCycle(liveIndex, file.path, candidateFile.path)) {
+      new Notice(
+        `Can't make ${candidateFile.basename} the parent: it is inside this note's subtree`,
+      );
+      this.closeParentChangePicker();
+      return false;
+    }
+    const currentParent = this.resolveParentChangeFile(file);
+    if (currentParent && currentParent.path === candidateFile.path) {
+      new Notice(`Parent unchanged: ${candidateFile.basename}`);
+      this.closeParentChangePicker();
+      return false;
+    }
+    const linkText = this.parentChangeLinkFor(candidateFile);
+    const previousName = currentParent
+      ? currentParent.basename
+      : parentNameLastSegment(
+          (this.activeParentNotePicker &&
+            this.activeParentNotePicker.field &&
+            this.activeParentNotePicker.field.target) ||
+            "",
+        );
+    const view = this.getActiveMarkdownView();
+    const editor =
+      view &&
+      view.file &&
+      view.file.path === file.path &&
+      typeof view.getMode === "function" &&
+      view.getMode() === "source" &&
+      view.editor
+        ? view.editor
+        : null;
+
+    const finish = (plan) => {
+      if (!plan || !plan.ok) {
+        this.noticeParentChangeFailure(plan, candidateFile);
+        this.closeParentChangePicker();
+        return false;
+      }
+      if (!plan.changed) {
+        new Notice(`Parent unchanged: ${candidateFile.basename}`);
+        this.closeParentChangePicker();
+        return false;
+      }
+      this.noticeParentChangeSuccess(previousName, candidateFile.basename);
+      this.closeParentChangePicker();
+      return true;
+    };
+
+    if (editor && typeof editor.getValue === "function") {
+      const content = editor.getValue();
+      const plan = planParentFrontmatterEdit(content, linkText, {
+        expectedRaw: expected,
+      });
+      if (!plan.ok || !plan.changed) {
+        return finish(plan);
+      }
+      applyEditorContentTransaction(editor, content, plan.content);
+      return finish(plan);
+    }
+
+    const vault = this.app && this.app.vault;
+    if (!vault || typeof vault.process !== "function") {
+      new Notice("Could not change parent: vault write is unavailable");
+      this.closeParentChangePicker();
+      return false;
+    }
+    let plan = null;
+    try {
+      await vault.process(file, (data) => {
+        plan = planParentFrontmatterEdit(data, linkText, {
+          expectedRaw: expected,
+        });
+        if (!plan.ok || !plan.changed) {
+          return data;
+        }
+        return plan.content;
+      });
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      new Notice(`Could not change parent: ${message}`);
+      this.closeParentChangePicker();
+      return false;
+    }
+    return finish(plan);
+  }
+}
 // ---- src/690-install-plugin-mixins.js ----
 function installBobNavigationHotkeysMixins(pluginClass, mixins) {
   const installedNames = new Set(
@@ -92437,6 +93803,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysTemplaterTriggerMixin,
   BobNavigationHotkeysImageZoomMixin,
   BobNavigationHotkeysLinkParseMixin,
+  BobNavigationHotkeysParentChangeMixin,
 ]);
 // ---- src/700-exports.js ----
 module.exports = BobNavigationHotkeysPlugin;
@@ -93438,3 +94805,16 @@ module.exports.helpers = {
   BRACKET_REPEAT_STORAGE_KEY,
   BRACKET_REPEAT_EMPTY_NOTICE,
 };
+// ---- src/701-exports-parent-change.js ----
+Object.assign(module.exports.helpers, {
+  readParentFrontmatterField,
+  planParentFrontmatterEdit,
+  buildParentPickerIndex,
+  rankParentCandidates,
+  buildParentAncestry,
+  collapseParentBreadcrumb,
+  parentChangeWouldCycle,
+  parentEmptyStateText,
+  PARENT_PICKER_HINTS,
+  ParentNotePickerModal,
+});

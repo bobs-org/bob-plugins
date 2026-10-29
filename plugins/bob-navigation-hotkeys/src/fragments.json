@@ -41,7 +41,10 @@
   "206a-successor-picker-model.js",
   "206-successor-picker-modal.js",
   "207-image-zoom-modal.js",
+  "208-parent-note-picker-model.js",
+  "209-parent-note-picker-modal.js",
   "210-rename-and-line-context.js",
+  "211-parent-frontmatter-plan.js",
   "212-project-conversion.js",
   "215-project-blocking.js",
   "216-project-dependency-stage.js",
@@ -157,6 +160,8 @@
   "679-plugin-image-zoom.js",
   "680-plugin-link-parse.js",
   "681-plugin-quick-roll.js",
+  "682-plugin-parent-change.js",
   "690-install-plugin-mixins.js",
-  "700-exports.js"
+  "700-exports.js",
+  "701-exports-parent-change.js"
 ]

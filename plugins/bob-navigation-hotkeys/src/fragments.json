@@ -102,6 +102,7 @@
   "470-keydown-and-freshness.js",
   "475-leaf-switch-guard.js",
   "480-review-jump-and-nav-api.js",
+  "481-review-group-jump.js",
   "485-blocks-nav-api.js",
   "486-relations-nav-api.js",
   "490-plugin-lifecycle.js",

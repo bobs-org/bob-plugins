@@ -1505,7 +1505,7 @@ test("return: a count is consumed and ignored", async () => {
   assert.match(notices[0], /^Back to current review task\n/);
 });
 
-test("return: endpoints never return", async () => {
+test("return: internal endpoints never return", async () => {
   const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three"]), activePath: "walk.md" });
   const { plugin, editor } = fixture;
   await land(fixture, "first");
@@ -1521,6 +1521,22 @@ test("return: endpoints never return", async () => {
   assert.equal(await plugin.jumpToDueTask(-1, { endpoint: "first" }), true);
   assert.equal(editor.getCursor().line, 0, "on the first row");
   assert.ok(!notices[0].startsWith("Back to current review task"), "no return toast");
+});
+
+test("return: group jumps never return; lowercase continues from the landed group", async () => {
+  const fixture = makePlugin({ rows: nextQueue(["One", "Two", "Three"]), activePath: "walk.md" });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  assert.equal(await plugin.jumpToDueTask(1), true, "steps to Two");
+  clearNotices();
+  editor.state.lines.push("# filler 4");
+  editor.setCursor(3, 0);
+  assert.equal(await plugin.jumpToDueTask(1, { groupJump: true }), true);
+  assert.equal(editor.getCursor().line, 0, "single occupied group wraps to first row");
+  assert.ok(!notices[0].startsWith("Back to current review task"), "no return toast");
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true, "lowercase steps from the group landing");
+  assert.equal(editor.getCursor().line, 1, "on Two");
 });
 
 test("return: its own stamp ends it", async () => {

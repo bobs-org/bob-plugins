@@ -32,7 +32,9 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     }
     this.reviewAnchor =
       matched.count > 0
-        ? buildReviewAnchor(queueBefore, matched.keys, matched.rank, dateText)
+        ? buildReviewAnchor(queueBefore, matched.keys, matched.rank, dateText, {
+            answered: true,
+          })
         : null;
     const changed = stamped.filter(
       (entry) => entry.after !== entry.before,
@@ -522,6 +524,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
               matched.keys,
               matched.rank,
               cardCtx.dateText,
+              { answered: true },
             )
           : null;
     } catch (error) {

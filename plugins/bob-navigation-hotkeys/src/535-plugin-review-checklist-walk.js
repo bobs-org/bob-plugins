@@ -249,7 +249,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
       nextPlan = planReviewJump(queueBefore, {
         direction: 1,
         cursor: { path: filePath, line: entry.line, text: entry.originalMarkdown },
-        anchor: buildReviewAnchor(queueBefore, Array.from(positionSet), entry.rank, todayText, { excludeKeys: verifiedPrior }),
+        anchor: buildReviewAnchor(queueBefore, Array.from(positionSet), entry.rank, todayText, { excludeKeys: verifiedPrior, answered: true }),
         todayText,
       });
     }
@@ -333,7 +333,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
       Array.from(positionSet),
       entry.rank,
       todayText,
-      { excludeKeys: verifiedPrior },
+      { excludeKeys: verifiedPrior, answered: true },
     );
     const remaining = reviewWalkRemaining(queueBefore, handled);
 
@@ -401,7 +401,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
         Array.from(positionSet),
         entry.rank,
         todayText,
-        { excludeKeys: verifiedPrior },
+        { excludeKeys: verifiedPrior, answered: true },
       );
       const next = planReviewJump(queueBefore, {
         direction: 1,

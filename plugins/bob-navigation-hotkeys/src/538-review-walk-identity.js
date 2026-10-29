@@ -344,6 +344,7 @@ function buildReviewAnchor(queue, handledKeys, fallbackRank, day, options = {}) 
       line: holder && Number.isInteger(holder.line) ? holder.line : null,
       tier: reviewEntryMachineTier(holder) || null,
       day: dayText,
+      answered: options && options.answered === true,
       afterKeys: Object.freeze(afterKeys),
       beforeKeys: Object.freeze(beforeKeys),
       keyTexts: Object.freeze(keyTexts),

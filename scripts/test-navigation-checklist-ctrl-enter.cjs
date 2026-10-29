@@ -309,7 +309,7 @@ test("claim declines without a current exact PRE/POST walk landing", async () =>
   }
 });
 
-test("a real [S landing lets Ctrl+Enter complete and land on the next live PRE row", async () => {
+test("an internal first-endpoint landing lets Ctrl+Enter complete and land on the next live PRE row", async () => {
   const queue = queueFor(CHORES);
   const fixture = makePlugin({ queue, content: queue.map((row) => row.originalMarkdown).join("\n") });
   await land(fixture.plugin, "first");
@@ -500,7 +500,7 @@ test("POST completion walks multiple rows for Ctrl+Enter and Ctrl+Alt+F, while A
   assert.match(chord.editor.getLine(chord.editor.getCursor().line), /Write retro/);
 });
 
-test("]S and Ctrl+Enter close the final Morning review; earlier POST rows stay counted", async () => {
+test("completing the last POST row closes the final Morning review; earlier POST rows stay counted", async () => {
   const queue = queueFor([], ["Morning review"]);
   const fixture = makePlugin({ queue, content: queue[0].originalMarkdown });
   await land(fixture.plugin, "last");
@@ -512,6 +512,25 @@ test("]S and Ctrl+Enter close the final Morning review; earlier POST rows stay c
   await land(skipped.plugin, "last");
   assert.deepEqual(await claim(skipped.plugin, skipped.editor), { ok: true });
   assert.equal(notices.at(-1), "1 POST still due · Review closed — 0 ROTTEN left for later");
+});
+
+test("]S from ROTTEN lands on POST row one", async () => {
+  const rotten = {
+    tier: "rotten",
+    text: "Rotten leftover",
+    markdown: "- [ ] #task Rotten leftover",
+  };
+  const queue = queueFor([], ["Morning review", "Skipped closeout"], [rotten]);
+  const fixture = makePlugin({
+    queue,
+    content: queue.map((row) => row.originalMarkdown).join("\n"),
+  });
+  await land(fixture.plugin, "first");
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /Rotten leftover/);
+  clearNotices();
+  assert.equal(await fixture.plugin.jumpToDueTask(1, { groupJump: true }), true);
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /Morning review/);
+  assert.ok(!notices.at(-1).includes("Commitments done"));
 });
 
 test("completion failure preserves cursor and landing and reports the Tasks failure", async () => {

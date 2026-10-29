@@ -459,7 +459,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         positionKeys,
         entryRank,
         todayText,
-        { excludeKeys },
+        { excludeKeys, answered: true },
       );
       this.reviewAnchor = anchor;
       const remaining = reviewWalkRemaining(before, handled);
@@ -680,10 +680,11 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     return { ok: true, stale: false };
   }
 
-  // Capture a Vim count for `]s` / `[s` before any await. An explicit
-  // `options.repeat` is the whole count and skips Vim. Endpoint jumps
-  // ignore a pending prefix. Otherwise a Vim-normal editor with an
-  // explicit prefix is N queue steps; reset that state immediately so
+  // Capture a Vim count for `]s` / `[s` / `[S` / `]S` before any await.
+  // An explicit `options.repeat` is the whole count and skips Vim.
+  // Internal endpoint jumps ignore a pending prefix. Group jumps consume
+  // the prefix as N occupied groups. Otherwise a Vim-normal editor with
+  // an explicit prefix is N queue steps; reset that state immediately so
   // CodeMirror cannot drop it across the landing await.
   consumePendingReviewJumpRepeat(options, endpoint) {
     if (options && options.repeat !== undefined && options.repeat !== null) {
@@ -716,10 +717,12 @@ class BobNavigationHotkeysReviewAdvanceMixin {
   // (or preceding) entry; from a just-stamped task go to the entry after
   // its remembered rank tuple; otherwise go to the first (or last) entry.
   // Wraps with a Notice; an empty queue shows the refreshed-today count.
+  // With `options.groupJump` land on the first due task of the previous
+  // or next occupied review group, cycling, without the lowercase return.
   // With `options.endpoint` ("first"/"last") jump to that queue endpoint
   // instead, ignoring cursor, anchor, and a typed count, without a
   // boundary preamble. A Vim count on a relative jump is N queue steps
-  // in one landing.
+  // in one landing; on a group jump it is N occupied groups.
   async jumpToDueTask(direction, options = {}) {
     // While an answer is in flight or settling, every external walk key
     // (`]s` `[s` `]S` `[S` Ctrl+Alt+J/K) is swallowed silently with no
@@ -740,12 +743,17 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       return false;
     }
     const step = direction < 0 ? -1 : 1;
+    const groupJump = Boolean(options && options.groupJump === true);
     const endpointRaw =
       options && typeof options.endpoint === "string"
         ? options.endpoint.trim().toLowerCase()
         : "";
     const endpoint =
-      endpointRaw === "first" || endpointRaw === "last" ? endpointRaw : null;
+      groupJump
+        ? null
+        : endpointRaw === "first" || endpointRaw === "last"
+          ? endpointRaw
+          : null;
     const repeat = this.consumePendingReviewJumpRepeat(options, endpoint);
     const jumpOrigin = this.getReviewWalkOriginCursor();
     let queue = this.readFreshnessQueue(api);
@@ -764,7 +772,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     if (anchor && !reviewAnchorIsCurrentDay(anchor, todayText)) {
       anchor = null;
     }
-    if (!endpoint) {
+    if (!endpoint && !groupJump) {
       const back = await this.returnToReviewWalkCurrent({
         api,
         queue,
@@ -775,33 +783,36 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       });
       if (back.handled) return back.result;
     }
-    let plan = planReviewJump(queue, {
+    const planArgs = {
       direction: step,
       cursor,
+      current: this.reviewWalkCurrent,
       stamped: anchor,
       anchor,
       todayText,
       endpoint,
       repeat,
-    });
+      answeredKeys: this.reviewAnsweredKeys,
+    };
+    const planFrom = (walkQueue, extra = {}) =>
+      groupJump
+        ? planReviewGroupJump(walkQueue, { ...planArgs, ...extra })
+        : planReviewJump(walkQueue, { ...planArgs, ...extra });
+    let plan = planFrom(queue);
     if (plan.kind === "empty") {
       this.reviewLanding = null;
       this.reviewWalkCurrent = null;
       new Notice(buildReviewEmptyNotice(this.readFreshnessCounts(api)));
       return false;
     }
+    const retryOrigin =
+      groupJump
+        ? { originTier: plan.originTier, originResolved: true }
+        : {};
     let landed = await this.landOnReviewQueueEntry(plan.entry, { jumpOrigin });
     if (!landed.ok && landed.stale) {
       queue = this.readFreshnessQueue(api);
-      plan = planReviewJump(queue, {
-        direction: step,
-        cursor,
-        stamped: anchor,
-        anchor,
-        todayText,
-        endpoint,
-        repeat,
-      });
+      plan = planFrom(queue, retryOrigin);
       if (plan.kind === "empty") {
         this.reviewLanding = null;
         this.reviewWalkCurrent = null;
@@ -835,7 +846,13 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           : null,
     });
     const destTier = reviewEntryMachineTier(plan.entry);
-    const handled = reviewVerifiedHandledKeys(queue, anchor);
+    const handled = groupJump
+      ? reviewGroupExcludedKeys(queue, {
+          anchor,
+          todayText,
+          answeredKeys: this.reviewAnsweredKeys,
+        })
+      : reviewVerifiedHandledKeys(queue, anchor);
     const remaining = reviewWalkRemaining(queue, handled);
     // A forward step out of the commitments into ROTTEN or POST names
     // the boundary (v4 tier entries only; v3 keeps the plain jump

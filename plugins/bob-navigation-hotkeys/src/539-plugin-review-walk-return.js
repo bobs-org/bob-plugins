@@ -19,7 +19,7 @@
 // preamble and no wrap, the toast is `Back to current review task` plus
 // the normal landing notice, a `<C-o>` jump is recorded, and the landing
 // is re-armed. The next press steps exactly as today. `[S` / `]S`
-// endpoint jumps never return. Nothing here throws.
+// group jumps never return. Nothing here throws.
 const REVIEW_RETURN_NOTICE_HEAD = "Back to current review task";
 
 // Frozen `{ path, line, text, key, tier, day }` for the row the walk last

@@ -82,12 +82,13 @@ function findReviewResumeIndex(list, ref) {
 
 function buildReviewMoveAnchor(queueBefore, handledKeys, fallbackRank, day, options = {}) {
   try {
+    const extra = options && typeof options === "object" ? options : {};
     const anchor = buildReviewAnchor(
       queueBefore,
       handledKeys,
       fallbackRank,
       day,
-      options && typeof options === "object" ? options : {},
+      { ...extra, answered: true },
     );
     if (!anchor || typeof anchor !== "object") {
       return null;

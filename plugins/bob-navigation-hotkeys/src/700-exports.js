@@ -499,7 +499,7 @@ module.exports.helpers = {
   reviewRefsTouchWalkCurrent,
   reviewWalkRemaining,
   buildReviewBoundaryNotice,
-  planReviewJump,
+  planReviewJump, planReviewGroupJump, REVIEW_GROUP_TIER_ORDER, reviewGroupOccupiedTiers, reviewAnchorIsAnswerEvidence, reviewGroupExcludedKeys, resolveReviewGroupOriginTier,
   resolveReviewQueueLine,
   formatReviewJumpNoticeFromView,
   buildReviewJumpNotice,

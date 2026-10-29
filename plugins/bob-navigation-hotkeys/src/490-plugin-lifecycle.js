@@ -237,21 +237,26 @@ class BobNavigationHotkeysPlugin extends Plugin {
       },
     });
 
+    // Legacy command IDs: vault mappings still bind `[S` / `]S` to
+    // `jump-to-first-due-task` / `jump-to-last-due-task`. The callbacks
+    // now cycle occupied review groups and always land on the destination
+    // group's first due task. Previous endpoint arguments reverse because
+    // `[S` is backward and `]S` is forward.
     this.addCommand({
       id: "jump-to-first-due-task",
-      name: "Jump to first task due for freshness review",
+      name: "Jump to the first task of the previous review group",
       callback: () => {
         this.rememberBracketRepeatType("s");
-        return this.jumpToDueTask(1, { endpoint: "first" });
+        return this.jumpToDueTask(-1, { groupJump: true });
       },
     });
 
     this.addCommand({
       id: "jump-to-last-due-task",
-      name: "Jump to last task due for freshness review",
+      name: "Jump to the first task of the next review group",
       callback: () => {
         this.rememberBracketRepeatType("s");
-        return this.jumpToDueTask(-1, { endpoint: "last" });
+        return this.jumpToDueTask(1, { groupJump: true });
       },
     });
 

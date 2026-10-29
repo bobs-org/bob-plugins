@@ -1780,8 +1780,8 @@ test("onload registers first/last commands routed to the shared jump", () => {
   const last = commands.find((item) => item.id === "jump-to-last-due-task");
   assert.ok(first);
   assert.ok(last);
-  assert.equal(first.name, "Jump to first task due for freshness review");
-  assert.equal(last.name, "Jump to last task due for freshness review");
+  assert.equal(first.name, "Jump to the first task of the previous review group");
+  assert.equal(last.name, "Jump to the first task of the next review group");
   assert.equal(first.hotkeys, undefined);
   assert.equal(last.hotkeys, undefined);
   const confirm = commands.find((item) => item.id === "refresh-task-freshness");
@@ -1802,8 +1802,8 @@ test("onload registers first/last commands routed to the shared jump", () => {
   assert.deepEqual(refreshCalls, [
     { editor, options: { advance: true } },
   ]);
-  // Both route through the shared jump with an explicit endpoint, never the
-  // relative fallback (forward would map to first, backward to last).
+  // Legacy IDs keep vault mappings; callbacks now cycle occupied groups.
+  // Previous endpoint arguments reverse because `[S` is backward.
   const calls = [];
   plugin.jumpToDueTask = (direction, options) => {
     calls.push({ direction, options });
@@ -1812,8 +1812,8 @@ test("onload registers first/last commands routed to the shared jump", () => {
   first.callback();
   last.callback();
   assert.deepEqual(calls, [
-    { direction: 1, options: { endpoint: "first" } },
-    { direction: -1, options: { endpoint: "last" } },
+    { direction: -1, options: { groupJump: true } },
+    { direction: 1, options: { groupJump: true } },
   ]);
   // Existing review commands keep working.
   const next = commands.find((item) => item.id === "jump-to-next-due-task");
@@ -2212,7 +2212,7 @@ test("boundary into ROTTEN appends ]S when POST remains; into POST names commitm
   );
 });
 
-test("]S reaches POST with 77 ROTTEN rows and a null budget", async () => {
+test("]S from ROTTEN reaches POST row one with 77 ROTTEN rows and a null budget", async () => {
   const rotten = Array.from({ length: 77 }, (_, index) =>
     queueEntry({
       key: `r${index}.md:1`,
@@ -2250,8 +2250,13 @@ test("]S reaches POST with 77 ROTTEN rows and a null budget", async () => {
     refreshedToday: 0,
     budget: null,
   });
+  plugin.getReviewJumpCursor = () => ({
+    path: "r0.md",
+    line: 1,
+    text: "- [ ] #task rotten 0",
+  });
   notices.length = 0;
-  assert.equal(await plugin.jumpToDueTask(-1, { endpoint: "last" }), true);
+  assert.equal(await plugin.jumpToDueTask(1, { groupJump: true }), true);
   assert.equal(plugin.reviewAnchor.keys[0], "gtd_daily.md:20");
   const notice = notices.at(-1);
   assert.match(notice, /^Review 78\/78 · POST 1\/1 · closeout/);

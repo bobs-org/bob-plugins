@@ -88,6 +88,8 @@
   "279-plugin-task-theme-home-facts.js",
   "279-plugin-task-theme-suggest.js",
   "279-plugin-task-theme-marks.js",
+  "279-plugin-root-marks-model.js",
+  "279-plugin-root-marks.js",
   "279-plugin-task-theme-editor.js",
   "279-plugin-task-theme-reading-dom.js",
   "279-plugin-task-theme-reading.js",

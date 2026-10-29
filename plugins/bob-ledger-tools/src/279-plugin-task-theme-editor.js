@@ -19,6 +19,11 @@
 class BobLedgerToolsTaskThemeEditorMixin {
   setupTaskThemeMarks() {
     try {
+      try {
+        this.setupTaskRootMarks();
+      } catch (error) {
+        // Root marks are a sibling display-only gate.
+      }
       if (typeof this.taskThemeMarksEnabled !== "boolean") {
         this.taskThemeMarksEnabled = true;
       }
@@ -55,7 +60,10 @@ class BobLedgerToolsTaskThemeEditorMixin {
       try {
         if (typeof this.registerMarkdownPostProcessor === "function") {
           this.registerMarkdownPostProcessor(
-            (el, ctx) => this.renderTaskThemeMarksIn(el, ctx),
+            (el, ctx) => {
+              this.renderTaskThemeMarksIn(el, ctx);
+              this.renderRootMarksIn(el, ctx);
+            },
             50,
           );
         }
@@ -889,6 +897,11 @@ class BobLedgerToolsTaskThemeEditorMixin {
   // removes delegated hover hosts. Never throws.
   teardownTaskThemeMarksAndColors() {
     try {
+      try {
+        this.teardownTaskRootMarks();
+      } catch (error) {
+        // Root mark cleanup is best-effort.
+      }
       try {
         this.taskThemeCancelScheduledWork();
       } catch (error) {

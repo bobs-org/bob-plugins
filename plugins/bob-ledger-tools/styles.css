@@ -3730,6 +3730,83 @@ body.bob-task-theme-marks .markdown-source-view.is-live-preview .dataview.inline
   border-color: var(--bob-area-red);
 }
 
+/* Root fields are places. The hue is the resolved root parent's area hue;
+   both light and dark themes use the shared home-chip hue tokens. */
+.bob-root-mark-host {
+  white-space: nowrap;
+}
+
+.bob-root-mark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2em;
+  margin-inline-start: 0.3em;
+  color: var(--text-muted);
+  font-family: var(--font-interface);
+  font-size: 0.8em;
+  line-height: 1.1;
+  white-space: nowrap;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+
+.bob-root-mark[data-fold-space="true"] {
+  margin-inline-start: 0.3em;
+}
+
+.theme-light .bob-root-mark,
+.theme-dark .bob-root-mark {
+  color: var(--text-muted);
+}
+
+.bob-root-mark-dot {
+  color: var(--text-muted);
+  font-size: 0.95em;
+}
+
+.bob-root-mark[data-root-hue="blue"] .bob-root-mark-dot { color: var(--bob-hue-blue); }
+.bob-root-mark[data-root-hue="orange"] .bob-root-mark-dot { color: var(--bob-hue-orange); }
+.bob-root-mark[data-root-hue="aqua"] .bob-root-mark-dot { color: var(--bob-hue-aqua); }
+.bob-root-mark[data-root-hue="yellow"] .bob-root-mark-dot { color: var(--bob-hue-yellow); }
+.bob-root-mark[data-root-hue="magenta"] .bob-root-mark-dot { color: var(--bob-hue-magenta); }
+.bob-root-mark[data-root-hue="green"] .bob-root-mark-dot { color: var(--bob-hue-green); }
+.bob-root-mark[data-root-hue="violet"] .bob-root-mark-dot { color: var(--bob-hue-violet); }
+.bob-root-mark[data-root-hue="red"] .bob-root-mark-dot { color: var(--bob-hue-red); }
+
+.bob-root-mark-rolls-up .bob-root-mark-label {
+  text-decoration: underline dotted;
+  text-underline-offset: 0.16em;
+}
+
+.bob-root-mark-repair {
+  outline: 1px dashed var(--text-error, var(--text-muted));
+  outline-offset: 0.08em;
+  border-radius: 2px;
+}
+
+.bob-root-mark:hover .bob-root-mark-label,
+.bob-root-mark:focus-visible .bob-root-mark-label {
+  color: var(--text-normal);
+}
+
+.bob-root-mark:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+body.bob-root-marks .bob-root-mark-native {
+  display: none;
+}
+
+body:not(.bob-root-marks) .bob-root-mark {
+  display: none !important;
+}
+
+body:not(.bob-root-marks) .bob-root-mark-native {
+  display: inline !important;
+}
+
 @media (max-width: 520px) {
   .bob-stats-day-detail {
     grid-template-columns: minmax(0, 1fr);

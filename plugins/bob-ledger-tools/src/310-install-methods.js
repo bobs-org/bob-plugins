@@ -53,6 +53,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsPomodoroThemesMixin,
   BobLedgerToolsTaskThemeApiMixin,
   BobLedgerToolsTaskThemeEditorMixin,
+  BobLedgerToolsTaskRootMarksMixin,
   BobLedgerToolsTaskThemeReadingMixin,
   BobLedgerToolsTaskThemeTasksMixin,
   BobLedgerToolsPomodoroThemeChipsMixin,

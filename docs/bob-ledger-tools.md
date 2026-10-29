@@ -36,6 +36,7 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | Toggle Task Link In Progress marks | `toggle-progress-marks` | — |
 | Toggle Today marks | `toggle-today-marks` | — |
 | Toggle dependency chips | `toggle-dependency-chips` | — |
+| Toggle root marks | `toggle-root-marks` | — |
 | Toggle task date marks | `toggle-date-marks` | — |
 | Toggle task freshness marks | `toggle-freshness-marks` | — |
 | Toggle task priority marks | `toggle-priority-marks` | — |
@@ -140,6 +141,13 @@ restores the unmarked rendering:
   theme marks** session command (default on) restores raw fields without
   writing them, independent of **Toggle Pomodoro theme colors** (default
   on), which keeps readable pills when colors are off.
+- The root mark renders each explicit `[root:: NOTE]` / `(root:: NOTE)` task
+  field as a hue-dot place mark in Live Preview, Reading view, and
+  Tasks/Dataview rows. A root that is also linked in the task text collapses
+  to its dot; child notes that roll up show a dotted label, and invalid,
+  missing, or duplicate fields keep a hollow repair mark. Clicking reveals
+  the source field, Mod-click opens the named note, and **Toggle root marks**
+  (default on) restores the raw field without writing it.
 
 The plugin also renders the TODAY/PENDING/NEXT/READY badges on dashboard and
 daily `bob-plan` blocks as live section-over-cap counts that agree with their

@@ -739,6 +739,12 @@ class BlockIdPromptPomodoroLinksMixin {
       return false;
     }
 
+    const themeWrite = resolvePomodoroLinkThemeWrite(
+      this,
+      source,
+      pomodoroPlan,
+      taskContent,
+    );
     const plan = planTargetTaskUpdate(taskContent, source.line, {
       activationEligible: true,
       forceNext: true,
@@ -746,11 +752,13 @@ class BlockIdPromptPomodoroLinksMixin {
       now: this.now(),
       stampLine: this.getFreshnessStampLine(),
       freshDateText: this.getFreshnessDateText(),
+      themeEdit: themeWrite.themeEdit,
     });
     if (!plan) {
       new Notice(`Task link stopped: selected task changed in ${source.sourcePath}`);
       return false;
     }
+    attachPomodoroLinkThemeOutcome(plan, themeWrite);
 
     if (sameNote) {
       const allEdits = [...plan.edits, ...pomodoroPlan.edits];

@@ -386,8 +386,16 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
 
   formatPomodoroLinkOutcome(plan, pomodoroPlan) {
     const destination = pomodoroPlan && pomodoroPlan.destination;
+    const destTheme = plan && typeof plan.themeDestinationName === "string"
+      && plan.themeDestinationName
+      ? plan.themeDestinationName
+      : null;
+    const remembered = plan && plan.themeChanged === true
+      && (plan.themeAction === "set" || plan.themeAction === "clear");
     let prefix = "Linked";
-    if (destination) {
+    if (remembered && destTheme) {
+      prefix = `Linked under ${destTheme}`;
+    } else if (destination) {
       if (destination.kind === "created") {
         prefix = `Linked to new ${destination.name || destination.title}`;
       } else if (destination.title) {
@@ -405,6 +413,7 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       chips.push("logged schedule change");
     }
     const suffix = chips.length ? ` · ${chips.join(" · ")}` : "";
+    const themeChip = formatPomodoroThemeLinkChip(plan);
     const themeWarnings = destination && destination.kind === "created"
       ? blockPomodoroThemeUnconfiguredNames(
           getBlockPomodoroThemesApi(this.app),
@@ -415,7 +424,7 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       .map((name) => ` · ${name} isn't one of your themes`)
       .join("");
 
-    return `${base}${suffix}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}${themeWarningSuffix}`;
+    return `${base}${suffix}${themeChip}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}${themeWarningSuffix}`;
   }
 
   reportPomodoroLinkOutcome(plan, pomodoroPlan) {
@@ -445,9 +454,23 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
 
   reportPomodoroLinkPartialFailure(plan, isNewId, dailyPath) {
     const parts = activationPartialFailureParts(plan);
+    const themeClause = pomodoroThemePartialFailureClause(plan);
     if (isNewId) {
+      const extras = themeClause ? [themeClause, ...parts] : parts;
       new Notice(
-        `Task block ID added${parts.length ? ` and ${parts.join(", ")}` : ""}, but ${dailyPath} could not be updated`,
+        `Task block ID added${extras.length ? ` and ${extras.join(", ")}` : ""}, but ${dailyPath} could not be updated`,
+      );
+      return;
+    }
+    if (themeClause && parts.length === 0) {
+      const label = `${themeClause.charAt(0).toUpperCase()}${themeClause.slice(1)}`;
+      new Notice(`${label}, but ${dailyPath} could not be updated`);
+      return;
+    }
+    if (themeClause) {
+      const label = `${themeClause.charAt(0).toUpperCase()}${themeClause.slice(1)}`;
+      new Notice(
+        `${label} and ${parts.join(", ")}, but ${dailyPath} could not be updated`,
       );
       return;
     }

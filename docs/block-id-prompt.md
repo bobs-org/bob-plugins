@@ -44,6 +44,22 @@ still works, and `Ctrl+D` on a Today row leaves it unchanged. A theme that
 today's ledger uses only on a done or cancelled Pomodoro still shows as a
 Recent row; only themes of the open Today rows are left out.
 
+When Ledger Tools can suggest a theme for the cursor task, empty search
+preselects that Pomodoro in place (or offers a new one when creation is
+allowed) and labels the row `Suggested · this task`, `Suggested · reading
+task`, `Suggested · daily review`, or `Suggested · from ● <stem>`. A second
+footer line appears only when the selected row would set or clear the task
+theme, for example `this task becomes FIX · sase_blog suggests WRITE · ⌥↵
+link once`. Enter on the untouched default links without storing a field.
+Choosing a different row, typing a query, or Shift+Enter to name a Pomodoro
+is a deliberate exception: the same task-line edit writes or clears
+`[theme:: X]` and the notice reads `Linked under FIX · task theme FIX` or
+`Linked under WRITE · task theme cleared`. `Alt+Enter` always links once
+and never changes the field. If the suggestion's write-relevant identity
+changed since the picker opened, the link still happens and the notice ends
+`· task theme unchanged (suggestion changed)`. Inbox notes usually have no
+suggestion, so routing a task never writes a theme onto the inbox line.
+
 Linking applies lane changes: Ready and Blocked tasks become Next, while Next
 and In Progress tasks stay unchanged. A `^^` task-picker link that is the sole
 content of an open Pomodoro sub-bullet pulls a uniquely future-scheduled target
@@ -100,6 +116,7 @@ Pomodoros, and marks dependency-blocked tasks.
 
 `Ctrl+Shift+Enter` and `^^` stamp the target task's freshness
 (`[fresh:: today]`) through Bob Ledger Tools whenever they rewrite its line.
+A theme-only edit on an already Next task does not stamp freshness.
 Link, unlink, and Task Link notices append the live plan budget
 (`· plan T/3 · L/10`, with 🔴 when over the cap) from Bob Ledger Tools.
 

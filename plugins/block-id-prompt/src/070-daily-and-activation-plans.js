@@ -360,7 +360,10 @@ function planPomodoroLinkInsertion(content, options = {}) {
 //     are promoted to Next, and only when a future schedule was actually
 //     removed for Blocked (the `^^` task-picker's original, more
 //     conservative mode);
-//   - an optional trailing block ID append, kept as the final task token; and
+//   - an optional trailing block ID append, kept as the final task token;
+//   - an optional `themeEdit` applied after lane/schedule changes and before
+//     the block-ID append and freshness stamp, using Ledger Tools setters;
+//     a theme-only rewrite never counts as `lineRewritten`; and
 //   - a Schedule Log entry, only when the task already owns a direct-child
 //     marker.
 // Returns the complete postimage plus outcome metadata and the discrete edits
@@ -429,6 +432,28 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
     updatedLineText = setCheckboxStatus(updatedLineText, newStatus);
   }
 
+  let themeChanged = false;
+  let themeAction = null;
+  let themeName = null;
+  const themeEdit = options.themeEdit && typeof options.themeEdit === "object"
+    ? options.themeEdit
+    : null;
+  if (themeEdit && typeof themeEdit.apply === "function") {
+    try {
+      const next = themeEdit.apply(updatedLineText);
+      if (typeof next === "string" && next !== updatedLineText) {
+        updatedLineText = next;
+        themeChanged = true;
+        themeAction = themeEdit.action === "clear" ? "clear" : "set";
+        themeName = typeof themeEdit.name === "string" && themeEdit.name
+          ? themeEdit.name
+          : null;
+      }
+    } catch (_error) {
+      // A throwing setter leaves the lane/schedule rewrite in place.
+    }
+  }
+
   if (newBlockId) {
     const trimmedLength = updatedLineText.replace(/[ \t]+$/g, "").length;
     updatedLineText = `${updatedLineText.slice(0, trimmedLength)} ^${newBlockId}`;
@@ -437,7 +462,8 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
   // Freshness is the last transformation of the task line, and only when
   // the gesture already rewrote the line (matching `bob capture`). The
   // stamper itself refuses closed and recurring lines, so those never
-  // stamp. Pure planners take the stamper as an injected option.
+  // stamp. A theme-only edit is not lineRewritten and never stamps.
+  // Pure planners take the stamper as an injected option.
   const lineRewritten = removedFutureSchedule || statusChanged || Boolean(newBlockId);
   let freshnessChanged = false;
   if (lineRewritten && typeof options.stampLine === "function") {
@@ -509,7 +535,10 @@ function planTargetTaskUpdate(preimageContent, taskLine, options = {}) {
     logInsertLine,
     blockIdAppended: Boolean(newBlockId),
     freshnessChanged,
-    hasChanges: removedFutureSchedule || statusChanged || logEntryAdded || Boolean(newBlockId) || freshnessChanged,
+    themeChanged,
+    themeAction,
+    themeName,
+    hasChanges: removedFutureSchedule || statusChanged || logEntryAdded || Boolean(newBlockId) || freshnessChanged || themeChanged,
   };
 }
 

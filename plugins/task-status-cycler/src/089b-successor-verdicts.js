@@ -9,6 +9,11 @@ function applySuccessorVerdicts(context) {
   const edits = Array.isArray(context.projectTagStripEdits) ? context.projectTagStripEdits.slice() : [];
   const dailyPath = context.dailyPath || "";
   const dailyBefore = context.dailyBefore != null ? context.dailyBefore : [];
+  const dailyAfter = context.dailyAfter != null ? context.dailyAfter : dailyBefore;
+  const successorTheme = context.successorTheme && typeof context.successorTheme === "object" ? context.successorTheme : null;
+  const successorThemesApi = successorTheme ? successorTheme.themesApi : null;
+  const successorLedgerApi = successorTheme ? successorTheme.ledgerApi : null;
+  const successorDailyLines = Array.isArray(dailyAfter) ? dailyAfter : dailyBefore;
   const today = context.today;
   const markUnblockedLine = context.markUnblockedLine;
   const stampLine = typeof context.stampLine === "function" ? context.stampLine : null;
@@ -260,30 +265,99 @@ function applySuccessorVerdicts(context) {
       continue;
     }
     // Picked (§12.4 PICK): raise Ready/Blocked to Next without demoting
-    // Next/Pending, mint only when necessary, strip the project tag, stamp
-    // freshness through ledger-tools. One guarded edit per task line.
+    // Next/Pending, mint only when necessary, strip the project tag, apply
+    // an eligible guarded retarget theme, then stamp freshness through
+    // ledger-tools. One guarded edit per task line.
     const rank = task.status === "?" || task.status === " " ? "*" : task.status;
     let blockId = task.blockId || "";
     let blockIdCreated = false;
     const before = task.rawLine != null ? String(task.rawLine) : null;
     let sourceNoteText = "";
     try {
-      sourceNoteText = noteTexts instanceof Map
-        ? String(noteTexts.get(task.path) ?? "")
-        : String(noteTexts[task.path] ?? "");
+      if (task.path === dailyPath && Array.isArray(successorDailyLines)) {
+        sourceNoteText = successorDailyLines.join("\n");
+      } else {
+        sourceNoteText = noteTexts instanceof Map
+          ? String(noteTexts.get(task.path) ?? "")
+          : String(noteTexts[task.path] ?? "");
+      }
     } catch (error) {
       sourceNoteText = "";
     }
+    let successorThemeChanged = false;
+    let successorThemeAction = null;
+    let successorThemeName = null;
+    let successorThemeSuggestionChanged = false;
+    let successorThemeDestinationName = null;
+    const successorEarlyOverride = (() => {
+      try {
+        return normalizeSuccessorPickDestination(destinations.get(String(key)));
+      } catch (_error) {
+        return null;
+      }
+    })();
+    const applySuccessorThemeToRaised = (raised) => {
+      if (raised == null || typeof raised !== "string") {
+        return raised;
+      }
+      if (!successorEarlyOverride || !successorThemesApi) {
+        return raised;
+      }
+      let write = null;
+      try {
+        write = resolveSuccessorThemeWrite({
+          override: successorEarlyOverride,
+          task,
+          noteTexts,
+          dailyLines: successorDailyLines,
+          dailyPath,
+          themesApi: successorThemesApi,
+          ledgerApi: successorLedgerApi,
+        });
+      } catch (_error) {
+        return raised;
+      }
+      if (!write) {
+        return raised;
+      }
+      if (write.suggestionChanged === true) {
+        successorThemeSuggestionChanged = true;
+        return raised;
+      }
+      if (write.themeEdit && typeof write.themeEdit.apply === "function") {
+        try {
+          const next = write.themeEdit.apply(raised);
+          if (typeof next === "string" && next !== raised) {
+            successorThemeChanged = true;
+            successorThemeAction = write.themeEdit.action === "clear" ? "clear" : "set";
+            successorThemeName = typeof write.themeEdit.name === "string" && write.themeEdit.name
+              ? write.themeEdit.name
+              : null;
+            successorThemeDestinationName = typeof write.destinationThemeName === "string" && write.destinationThemeName
+              ? write.destinationThemeName
+              : null;
+            return next;
+          }
+        } catch (_error) {
+          return raised;
+        }
+      }
+      return raised;
+    };
     let after = before;
     if (before != null) {
       if (mark.pullIn) {
-        const raised = projectPullInRewriteLine(before, rank, {
+        let raised = projectPullInRewriteLine(before, rank, {
           recoverRank: false,
           markUnblockedLine,
           today,
           isDailyNote: isDailyNotePath(task.path),
           isToday: true,
         });
+        if (raised == null) {
+          raised = before;
+        }
+        raised = applySuccessorThemeToRaised(raised);
         after = applyFreshStampLine(
           raised != null ? raised : before,
           stampLine,
@@ -307,12 +381,13 @@ function applySuccessorVerdicts(context) {
           blockIdCreated = true;
         }
         let raised = replaceTaskStatusSymbol(before, rank);
-        if (blockIdCreated) {
-          raised = `${raised.replace(/\s+$/, "")} ^${blockId}`;
-        }
         // Strip the inherited project tag per PDC3 without touching own
         // reasons (schedules/IDs/dependency fields never change here).
         raised = stripProjectBlockedResidentTag(raised);
+        raised = applySuccessorThemeToRaised(raised);
+        if (blockIdCreated) {
+          raised = `${raised.replace(/\s+$/, "")} ^${blockId}`;
+        }
         after = applyFreshStampLine(raised, stampLine, today, {
           content: sourceNoteText,
           line: task.line,
@@ -351,6 +426,13 @@ function applySuccessorVerdicts(context) {
     // passed the stamped line, so the edit is already consolidated. For
     // pullIn picks the rewrite+stamp line is likewise consolidated.)
     if (rowIndex != null) {
+      if (successorThemeChanged || successorThemeSuggestionChanged) {
+        unblocked[rowIndex].theme_changed = successorThemeChanged === true;
+        unblocked[rowIndex].theme_action = successorThemeAction;
+        unblocked[rowIndex].theme_name = successorThemeName;
+        unblocked[rowIndex].theme_destination_name = successorThemeDestinationName;
+        unblocked[rowIndex].theme_suggestion_changed = successorThemeSuggestionChanged === true;
+      }
       const placement = {
         key: String(key),
         rowIndex,
@@ -360,7 +442,10 @@ function applySuccessorVerdicts(context) {
       };
       // Per-row destination override (§12.13): validated here so a stale
       // shape from an older picker falls back to the planned anchor.
-      const override = normalizeSuccessorPickDestination(destinations.get(String(key)));
+      // Reuse the early override already used for the theme decision so the
+      // insertion planner consumes the same resolved name.
+      const override = successorEarlyOverride
+        || normalizeSuccessorPickDestination(destinations.get(String(key)));
       if (override) {
         placement.override = override;
       }

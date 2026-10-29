@@ -213,6 +213,23 @@ class TaskStatusCyclerSuccessorProjectMixin {
           return null;
         }
       })();
+      const successorThemesApiForPass = (() => {
+        try {
+          return typeof getSuccessorTaskThemesApi === "function" ? getSuccessorTaskThemesApi(this.app) : null;
+        } catch (error) {
+          return null;
+        }
+      })();
+      const successorLedgerApiForPass = (() => {
+        try {
+          return typeof getSuccessorTaskLedgerApi === "function" ? getSuccessorTaskLedgerApi(this.app) : null;
+        } catch (error) {
+          return null;
+        }
+      })();
+      const successorThemeForPass = successorThemesApiForPass
+        ? { themesApi: successorThemesApiForPass, ledgerApi: successorLedgerApiForPass }
+        : null;
       const noteTextsObject = {};
       for (const [path, text] of noteTexts) {
         noteTextsObject[path] = text;
@@ -237,6 +254,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
             closingEntry: closingForPlan,
             noteTexts: notesObj,
             notePaths,
+            successorTheme: successorThemeForPass,
           });
         } catch (error) {
           return null;

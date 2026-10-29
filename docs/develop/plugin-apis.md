@@ -299,7 +299,14 @@ Destination overrides may carry additive `themeIntent` and
 malformed one without rejecting the destination, and let `linkOnce`
 override `deliberate`. Marked-row retargets run one picker per target
 in displayed order and publish overrides only when every pick succeeds.
-The context transport and nested picker never mutate a task field.
+The context transport and nested picker never mutate a task field. The
+cycler consumes a valid deliberate `themeIntent` in the successor task edit:
+it revalidates `shown` against a fresh `suggestFor`, delegates to
+`api.themes.planThemeChange`, and applies `setTaskTheme`/`clearTaskTheme`
+after status recovery and before block-ID/freshness assembly. Ordinary
+successor placement never writes; link-once, untouched preselection, missing
+or changed suggestions, and stale or refused destinations skip the field
+while keeping the link.
 `blocks.openStage(ref)` and
 `blocks.removeDependent(ownerRef, target)` resolve to result
 objects. `relations.removeLink(sourceRef, targetRef)` removes the

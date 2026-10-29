@@ -6362,6 +6362,7 @@ function planSuccessors(options = {}) {
       ? new Map(Object.entries(options.destinations))
       : new Map());
   const stampLine = typeof options.stampLine === "function" ? options.stampLine : null;
+  const successorTheme = options.successorTheme && typeof options.successorTheme === "object" ? options.successorTheme : null;
 
   const empty = {
     unblocked: [],
@@ -6415,6 +6416,7 @@ function planSuccessors(options = {}) {
       projectOffers: extra.projectOffers || [],
       foldedByProject: extra.foldedByProject || new Map(),
       projectHeaders: extra.projectHeaders || new Map(),
+      successorTheme,
     });
   // GATE: no `[id::]` in C and no pull-in candidate → nothing.
   // A `[?]` R pull-in still recovers N's residents via the same
@@ -7536,6 +7538,466 @@ function getSuccessorPickerApi(app) {
     return null;
   }
 }
+// ---- src/085c-successor-theme-write.js ----
+// Guarded successor theme writes (plan:202610/task_card_successor_themes.md
+// successor-theme-write). Pure planner + runtime adapters. Shared scope with
+// 085-successor-plan.js / 089b-successor-verdicts.js. The wiring in
+// 137-plugin-successor-project.js supplies ledger-tools APIs.
+function successorThemeNormalizeKey(value) {
+  return String(value || "")
+    .split(/\s+/)
+    .filter((part) => part.length > 0)
+    .join(" ")
+    .toLowerCase();
+}
+
+function emptySuccessorThemeWrite() {
+  return { themeEdit: null, suggestionChanged: false, destinationThemeName: null };
+}
+
+function successorThemeSuggestionIdentity(suggestion) {
+  try {
+    if (!suggestion || typeof suggestion !== "object") {
+      return null;
+    }
+    const theme = suggestion.theme && typeof suggestion.theme === "object"
+      ? suggestion.theme
+      : null;
+    const key = theme && typeof theme.key === "string" && theme.key
+      ? successorThemeNormalizeKey(theme.key)
+      : null;
+    if (!key) {
+      return null;
+    }
+    const source = typeof suggestion.source === "string" ? suggestion.source : "";
+    const repair = suggestion.repair === "duplicate" || suggestion.repair === "invalid"
+      ? suggestion.repair
+      : null;
+    const from = suggestion.from && typeof suggestion.from === "object"
+      ? suggestion.from
+      : null;
+    const fromPath = from && typeof from.path === "string" ? from.path : null;
+    const fromStem = from && typeof from.stem === "string" ? from.stem : null;
+    const fromKind = from && typeof from.kind === "string" ? from.kind : null;
+    const fromChain = from && Array.isArray(from.chain)
+      ? from.chain.map((item) => String(item))
+      : null;
+    const inherited = source === "task"
+      ? (suggestion.inherited == null
+        ? null
+        : successorThemeSuggestionIdentity(suggestion.inherited))
+      : null;
+    return {
+      key,
+      source,
+      repair,
+      fromPath,
+      fromStem,
+      fromKind,
+      fromChain,
+      inherited,
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function successorThemeSuggestionsMatch(left, right) {
+  if (left == null && right == null) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  if (
+    left.key !== right.key ||
+    left.source !== right.source ||
+    left.repair !== right.repair ||
+    left.fromPath !== right.fromPath ||
+    left.fromStem !== right.fromStem ||
+    left.fromKind !== right.fromKind
+  ) {
+    return false;
+  }
+  const leftChain = left.fromChain;
+  const rightChain = right.fromChain;
+  if (Array.isArray(leftChain) !== Array.isArray(rightChain)) {
+    return false;
+  }
+  if (Array.isArray(leftChain)) {
+    if (leftChain.length !== rightChain.length) {
+      return false;
+    }
+    for (let index = 0; index < leftChain.length; index += 1) {
+      if (leftChain[index] !== rightChain[index]) {
+        return false;
+      }
+    }
+  }
+  return successorThemeSuggestionsMatch(left.inherited, right.inherited);
+}
+
+function successorThemeCatalogSpelling(themesApi, key, fallback) {
+  const normalized = successorThemeNormalizeKey(key);
+  const fallbackName = typeof fallback === "string" && fallback ? fallback : null;
+  if (!normalized) {
+    return fallbackName;
+  }
+  try {
+    if (!themesApi || typeof themesApi.snapshot !== "function") {
+      return fallbackName;
+    }
+    const snapshot = themesApi.snapshot();
+    const lists = [];
+    if (snapshot && Array.isArray(snapshot.themes)) {
+      lists.push(snapshot.themes);
+    }
+    if (snapshot && Array.isArray(snapshot.configured_themes)) {
+      lists.push(snapshot.configured_themes);
+    }
+    for (const list of lists) {
+      for (const theme of list) {
+        if (!theme || typeof theme !== "object") {
+          continue;
+        }
+        if (successorThemeNormalizeKey(theme.key) !== normalized) {
+          continue;
+        }
+        if (typeof theme.name === "string" && theme.name) {
+          return theme.name;
+        }
+      }
+    }
+  } catch (_error) {
+    return fallbackName;
+  }
+  return fallbackName;
+}
+
+function successorThemeWriteInherited(shown) {
+  if (!shown || typeof shown !== "object") {
+    return null;
+  }
+  if (shown.source === "task") {
+    return shown.inherited && typeof shown.inherited === "object"
+      ? shown.inherited
+      : null;
+  }
+  return shown;
+}
+
+function successorThemeWriteExemptKeys(ledgerApi) {
+  try {
+    if (!ledgerApi || typeof ledgerApi.caps !== "function") {
+      return { available: false, keys: [] };
+    }
+    const caps = ledgerApi.caps();
+    if (
+      !caps || typeof caps !== "object" || Array.isArray(caps) ||
+      typeof caps.then === "function" || !Array.isArray(caps.exempt)
+    ) {
+      return { available: false, keys: [] };
+    }
+    const keys = [];
+    for (const value of caps.exempt) {
+      if (typeof value !== "string" || !value.trim() || /[\r\n]/.test(value)) {
+        return { available: false, keys: [] };
+      }
+      if (String(value).includes("+")) {
+        return { available: false, keys: [] };
+      }
+      keys.push(String(value).trim());
+    }
+    return { available: true, keys };
+  } catch (_error) {
+    return { available: false, keys: [] };
+  }
+}
+
+function successorThemeWriteLineText(noteText, zeroBasedLine) {
+  if (typeof noteText !== "string" || !Number.isInteger(zeroBasedLine) || zeroBasedLine < 0) {
+    return null;
+  }
+  const lines = String(noteText).split(/\r?\n/);
+  return zeroBasedLine < lines.length ? lines[zeroBasedLine] : null;
+}
+
+// Resolve the successor destination's actual open entry name from the same
+// staged daily lines the insertion planner uses (087). An `existing` pick
+// names its entry outright only when the line preimage still holds and the
+// entry is still open; a moved or closed entry returns null so no theme
+// persists for it. A `new` pick returns its validated name. Unnamed entries
+// return null so the shared write rule refuses them.
+function successorThemeDestinationName(override, dailyLines) {
+  try {
+    if (!override || typeof override !== "object") {
+      return null;
+    }
+    const lines = Array.isArray(dailyLines)
+      ? dailyLines.map((line) => String(line ?? ""))
+      : String(dailyLines ?? "").split(/\r?\n/);
+    if (override.kind === "existing") {
+      if (!Number.isInteger(override.entryLine) || override.entryLine < 0) {
+        return null;
+      }
+      if (override.entryLine >= lines.length) {
+        return null;
+      }
+      if (typeof override.entryText !== "string" || !override.entryText) {
+        return null;
+      }
+      if (String(lines[override.entryLine]).replace(/\r$/, "") !== override.entryText) {
+        return null;
+      }
+      let entries = [];
+      try {
+        entries = parseSuccessorLedgerEntries(lines);
+      } catch (_error) {
+        return null;
+      }
+      const target = entries.find((entry) => entry && entry.entryLine === override.entryLine);
+      if (!target || !target.open) {
+        return null;
+      }
+      let name = "";
+      try {
+        const parts = parsePomodoroEntryLineParts(String(lines[override.entryLine] || ""));
+        name = parts && typeof parts.name === "string" ? parts.name : "";
+      } catch (_error) {
+        return null;
+      }
+      const trimmed = String(name || "").trim();
+      return trimmed ? trimmed : null;
+    }
+    if (override.kind === "new") {
+      const name = typeof override.name === "string" ? override.name.trim() : "";
+      if (!name || /[\r\n]/.test(name)) {
+        return null;
+      }
+      return name;
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function getSuccessorTaskThemesApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const api = plugins && plugins["bob-ledger-tools"] && plugins["bob-ledger-tools"].api;
+    const themes = api && api.themes;
+    return themes && themes.version >= 1 ? themes : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function getSuccessorTaskLedgerApi(app) {
+  try {
+    const plugins = app && app.plugins;
+    const holder = plugins && plugins.plugins && plugins["bob-ledger-tools"]
+      ? plugins["bob-ledger-tools"]
+      : plugins && typeof plugins.getPlugin === "function"
+        ? plugins.getPlugin("bob-ledger-tools")
+        : null;
+    return holder && holder.api ? holder.api : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Pure guarded decision for one explicitly picked successor with a retarget
+// override. Only a deliberate non-linkOnce intent with a shown suggestion can
+// write; default anchor/implicit placements (no override), unpicked offers,
+// missing APIs, unnamed/all-exempt/composite destinations, stale tasks, and
+// changed suggestions never write. The caller owns the guarded vault write.
+function resolveSuccessorThemeWrite(options = {}) {
+  try {
+    const opts = options && typeof options === "object" ? options : {};
+    const override = opts.override && typeof opts.override === "object" ? opts.override : null;
+    const rawIntent = override && override.themeIntent !== undefined ? override.themeIntent : opts.intent;
+    const intent = normalizeSuccessorThemeIntent(rawIntent);
+    if (!override || !intent || intent.linkOnce === true || intent.deliberate !== true || !intent.shown) {
+      return emptySuccessorThemeWrite();
+    }
+    const task = opts.task && typeof opts.task === "object" ? opts.task : null;
+    const taskPath = task && typeof task.path === "string" ? task.path : "";
+    const zeroBased = task && Number.isInteger(task.line) ? task.line : null;
+    if (!taskPath || zeroBased == null || zeroBased < 0) {
+      return emptySuccessorThemeWrite();
+    }
+    const dailyPath = typeof opts.dailyPath === "string" ? opts.dailyPath : "";
+    let dailyLines = null;
+    if (Array.isArray(opts.dailyLines)) {
+      dailyLines = opts.dailyLines.map((line) => String(line ?? ""));
+    } else if (typeof opts.dailyText === "string") {
+      dailyLines = String(opts.dailyText).split(/\r?\n/);
+    }
+    const destinationName = successorThemeDestinationName(override, dailyLines || []);
+    if (!destinationName) {
+      return emptySuccessorThemeWrite();
+    }
+    const themesApi = opts.themesApi || null;
+    const ledgerApi = opts.ledgerApi || null;
+    if (
+      !themesApi ||
+      typeof themesApi.suggestFor !== "function" ||
+      typeof themesApi.taskThemeOf !== "function" ||
+      typeof themesApi.planThemeChange !== "function" ||
+      typeof themesApi.setTaskTheme !== "function" ||
+      typeof themesApi.clearTaskTheme !== "function"
+    ) {
+      return emptySuccessorThemeWrite();
+    }
+    let noteText = null;
+    try {
+      if (dailyPath && taskPath === dailyPath && Array.isArray(dailyLines)) {
+        noteText = dailyLines.join("\n");
+      } else {
+        const texts = opts.noteTexts;
+        if (texts instanceof Map) {
+          const value = texts.get(taskPath);
+          noteText = typeof value === "string" ? value : null;
+        } else if (texts && typeof texts === "object") {
+          const value = texts[taskPath];
+          noteText = typeof value === "string" ? value : null;
+        }
+      }
+    } catch (_error) {
+      noteText = null;
+    }
+    if (typeof noteText !== "string") {
+      return emptySuccessorThemeWrite();
+    }
+    const oneBased = zeroBased + 1;
+    const lines = noteText.split(/\r?\n/);
+    if (oneBased < 1 || oneBased > lines.length) {
+      return emptySuccessorThemeWrite();
+    }
+    const lineText = lines[zeroBased];
+    // Stale-task guard: the refreshed note line must still equal the
+    // planned preimage when one is known.
+    const preimage = typeof task.rawLine === "string"
+      ? task.rawLine
+      : (typeof opts.preimage === "string" ? opts.preimage : null);
+    if (typeof preimage === "string" && lineText !== preimage) {
+      return emptySuccessorThemeWrite();
+    }
+    let current = null;
+    try {
+      current = themesApi.suggestFor({ path: taskPath, line: oneBased, text: noteText });
+    } catch (_error) {
+      return { themeEdit: null, suggestionChanged: true, destinationThemeName: null };
+    }
+    const shownIdentity = successorThemeSuggestionIdentity(intent.shown);
+    const currentIdentity = successorThemeSuggestionIdentity(current);
+    if (!successorThemeSuggestionsMatch(shownIdentity, currentIdentity)) {
+      return { themeEdit: null, suggestionChanged: true, destinationThemeName: null };
+    }
+    let field = null;
+    try {
+      field = themesApi.taskThemeOf(lineText);
+    } catch (_error) {
+      return emptySuccessorThemeWrite();
+    }
+    if (!field || typeof field !== "object") {
+      return emptySuccessorThemeWrite();
+    }
+    const inherited = successorThemeWriteInherited(intent.shown);
+    const exemptKeys = successorThemeWriteExemptKeys(ledgerApi);
+    if (!exemptKeys.available) {
+      return emptySuccessorThemeWrite();
+    }
+    let change = null;
+    try {
+      change = themesApi.planThemeChange({
+        field,
+        suggestion: intent.shown,
+        inherited,
+        destinationName,
+        exemptKeys: exemptKeys.keys,
+        deliberate: true,
+      });
+    } catch (_error) {
+      return emptySuccessorThemeWrite();
+    }
+    if (!change || (change.action !== "set" && change.action !== "clear")) {
+      return emptySuccessorThemeWrite();
+    }
+    if (change.action === "set") {
+      const name = successorThemeCatalogSpelling(themesApi, change.key, change.name);
+      if (!name) {
+        return emptySuccessorThemeWrite();
+      }
+      return {
+        themeEdit: {
+          action: "set",
+          name,
+          apply: (line) => themesApi.setTaskTheme(line, name),
+        },
+        suggestionChanged: false,
+        destinationThemeName: name,
+      };
+    }
+    const inheritedTheme = inherited && inherited.theme && typeof inherited.theme === "object"
+      ? inherited.theme
+      : intent.shown.theme;
+    const destinationThemeName = successorThemeCatalogSpelling(
+      themesApi,
+      inheritedTheme && inheritedTheme.key,
+      inheritedTheme && inheritedTheme.name,
+    );
+    return {
+      themeEdit: {
+        action: "clear",
+        name: null,
+        apply: (line) => themesApi.clearTaskTheme(line),
+      },
+      suggestionChanged: false,
+      destinationThemeName,
+    };
+  } catch (_error) {
+    return emptySuccessorThemeWrite();
+  }
+}
+
+function formatSuccessorThemeRowChip(row) {
+  try {
+    if (!row || typeof row !== "object") {
+      return "";
+    }
+    if (row.theme_changed === true && row.theme_action === "clear") {
+      return " · task theme cleared";
+    }
+    if (row.theme_changed === true && row.theme_action === "set" && row.theme_name) {
+      return ` · task theme ${row.theme_name}`;
+    }
+    if (row.theme_suggestion_changed === true) {
+      return " · task theme unchanged (suggestion changed)";
+    }
+    return "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function successorThemePartialFailureClause(row) {
+  try {
+    if (!row || row.theme_changed !== true) {
+      return null;
+    }
+    if (row.theme_action === "clear") {
+      return "task theme cleared";
+    }
+    if (typeof row.theme_name === "string" && row.theme_name) {
+      return `task theme ${row.theme_name} saved`;
+    }
+    return "task theme saved";
+  } catch (_error) {
+    return null;
+  }
+}
 // ---- src/086-successor-ids.js ----
 // Successor block-ID minting (docs/task-dependencies.md §12.4, §11.7 SB
 // vectors). Pure code only: no vault reads, no editor writes.
@@ -8490,7 +8952,11 @@ function successorNoticeText(model = {}) {
       ? truncateSuccessorNoticeText(predecessors[0].text)
       : "tasks";
     const count = Number(failure.count);
-    return `⚠ Closed ${pred} — couldn't link ${count} successor${count === 1 ? "" : "s"} (${failure.reason || "daily note changed"})`;
+    const themed = unblocked.filter((row) => row && row.theme_changed === true);
+    const themeClause = themed.length > 0
+      ? ` · task theme ${themed.length === 1 && themed[0].theme_action === "clear" ? "cleared" : "saved"}`
+      : "";
+    return `⚠ Closed ${pred} — couldn't link ${count} successor${count === 1 ? "" : "s"} (${failure.reason || "daily note changed"})${themeClause}`;
   }
   // Mixed picked/unpicked batches (§12.6 pulled-in summary) before single.
   if (linked.length > 0 && notLinked.length > 0) {
@@ -8502,14 +8968,15 @@ function successorNoticeText(model = {}) {
     const text = truncateSuccessorNoticeText(row.text);
     const name = (row.link && row.link.entry_name) || "";
     const suffix = isProjectEmptyRow(row) ? projectEmptySuffix : "";
+    const themeChip = typeof formatSuccessorThemeRowChip === "function" ? formatSuccessorThemeRowChip(row) : "";
     if (row.link && row.link.entry_created) {
       return name
-        ? `🔓 Next in new ${name} session (next up): ${text}${suffix}`
-        : `🔓 Next in new session (next up): ${text}${suffix}`;
+        ? `🔓 Next in new ${name} session (next up): ${text}${suffix}${themeChip}`
+        : `🔓 Next in new session (next up): ${text}${suffix}${themeChip}`;
     }
     return name
-      ? `🔓 Next in ${name}: ${text}${suffix}`
-      : `🔓 Next at line ${(row.link && row.link.line) || "?"}: ${text}${suffix}`;
+      ? `🔓 Next in ${name}: ${text}${suffix}${themeChip}`
+      : `🔓 Next at line ${(row.link && row.link.line) || "?"}: ${text}${suffix}${themeChip}`;
   }
   if (linked.length > 1) {
     const names = [];
@@ -8522,14 +8989,16 @@ function successorNoticeText(model = {}) {
     }
     const allProjectEmpty = linked.every(isProjectEmptyRow);
     const suffix = allProjectEmpty ? projectEmptySuffix : "";
+    const themedCount = linked.filter((row) => row && row.theme_changed === true).length;
+    const themeSuffix = themedCount > 0 ? ` · ${themedCount} task theme${themedCount === 1 ? "" : "s"} saved` : "";
     if (names.length === 1) {
       const shown = linked
         .slice(0, 2)
         .map((row) => truncateSuccessorNoticeText(row.text));
       const more = linked.length > 2 ? `, +${linked.length - 2}` : "";
-      return `🔓 ${linked.length} linked → ${names[0]}: ${shown.join(", ")}${more}${suffix}`;
+      return `🔓 ${linked.length} linked → ${names[0]}: ${shown.join(", ")}${more}${suffix}${themeSuffix}`;
     }
-    return `🔓 ${linked.length} linked · ${names.join(", ")}${suffix}`;
+    return `🔓 ${linked.length} linked · ${names.join(", ")}${suffix}${themeSuffix}`;
   }
   // Legacy breaker copy: kept for older payloads only. New output never
   // emits breaker rows (§12.2 BREAKER deleted).
@@ -10139,6 +10608,11 @@ function applySuccessorVerdicts(context) {
   const edits = Array.isArray(context.projectTagStripEdits) ? context.projectTagStripEdits.slice() : [];
   const dailyPath = context.dailyPath || "";
   const dailyBefore = context.dailyBefore != null ? context.dailyBefore : [];
+  const dailyAfter = context.dailyAfter != null ? context.dailyAfter : dailyBefore;
+  const successorTheme = context.successorTheme && typeof context.successorTheme === "object" ? context.successorTheme : null;
+  const successorThemesApi = successorTheme ? successorTheme.themesApi : null;
+  const successorLedgerApi = successorTheme ? successorTheme.ledgerApi : null;
+  const successorDailyLines = Array.isArray(dailyAfter) ? dailyAfter : dailyBefore;
   const today = context.today;
   const markUnblockedLine = context.markUnblockedLine;
   const stampLine = typeof context.stampLine === "function" ? context.stampLine : null;
@@ -10390,30 +10864,99 @@ function applySuccessorVerdicts(context) {
       continue;
     }
     // Picked (§12.4 PICK): raise Ready/Blocked to Next without demoting
-    // Next/Pending, mint only when necessary, strip the project tag, stamp
-    // freshness through ledger-tools. One guarded edit per task line.
+    // Next/Pending, mint only when necessary, strip the project tag, apply
+    // an eligible guarded retarget theme, then stamp freshness through
+    // ledger-tools. One guarded edit per task line.
     const rank = task.status === "?" || task.status === " " ? "*" : task.status;
     let blockId = task.blockId || "";
     let blockIdCreated = false;
     const before = task.rawLine != null ? String(task.rawLine) : null;
     let sourceNoteText = "";
     try {
-      sourceNoteText = noteTexts instanceof Map
-        ? String(noteTexts.get(task.path) ?? "")
-        : String(noteTexts[task.path] ?? "");
+      if (task.path === dailyPath && Array.isArray(successorDailyLines)) {
+        sourceNoteText = successorDailyLines.join("\n");
+      } else {
+        sourceNoteText = noteTexts instanceof Map
+          ? String(noteTexts.get(task.path) ?? "")
+          : String(noteTexts[task.path] ?? "");
+      }
     } catch (error) {
       sourceNoteText = "";
     }
+    let successorThemeChanged = false;
+    let successorThemeAction = null;
+    let successorThemeName = null;
+    let successorThemeSuggestionChanged = false;
+    let successorThemeDestinationName = null;
+    const successorEarlyOverride = (() => {
+      try {
+        return normalizeSuccessorPickDestination(destinations.get(String(key)));
+      } catch (_error) {
+        return null;
+      }
+    })();
+    const applySuccessorThemeToRaised = (raised) => {
+      if (raised == null || typeof raised !== "string") {
+        return raised;
+      }
+      if (!successorEarlyOverride || !successorThemesApi) {
+        return raised;
+      }
+      let write = null;
+      try {
+        write = resolveSuccessorThemeWrite({
+          override: successorEarlyOverride,
+          task,
+          noteTexts,
+          dailyLines: successorDailyLines,
+          dailyPath,
+          themesApi: successorThemesApi,
+          ledgerApi: successorLedgerApi,
+        });
+      } catch (_error) {
+        return raised;
+      }
+      if (!write) {
+        return raised;
+      }
+      if (write.suggestionChanged === true) {
+        successorThemeSuggestionChanged = true;
+        return raised;
+      }
+      if (write.themeEdit && typeof write.themeEdit.apply === "function") {
+        try {
+          const next = write.themeEdit.apply(raised);
+          if (typeof next === "string" && next !== raised) {
+            successorThemeChanged = true;
+            successorThemeAction = write.themeEdit.action === "clear" ? "clear" : "set";
+            successorThemeName = typeof write.themeEdit.name === "string" && write.themeEdit.name
+              ? write.themeEdit.name
+              : null;
+            successorThemeDestinationName = typeof write.destinationThemeName === "string" && write.destinationThemeName
+              ? write.destinationThemeName
+              : null;
+            return next;
+          }
+        } catch (_error) {
+          return raised;
+        }
+      }
+      return raised;
+    };
     let after = before;
     if (before != null) {
       if (mark.pullIn) {
-        const raised = projectPullInRewriteLine(before, rank, {
+        let raised = projectPullInRewriteLine(before, rank, {
           recoverRank: false,
           markUnblockedLine,
           today,
           isDailyNote: isDailyNotePath(task.path),
           isToday: true,
         });
+        if (raised == null) {
+          raised = before;
+        }
+        raised = applySuccessorThemeToRaised(raised);
         after = applyFreshStampLine(
           raised != null ? raised : before,
           stampLine,
@@ -10437,12 +10980,13 @@ function applySuccessorVerdicts(context) {
           blockIdCreated = true;
         }
         let raised = replaceTaskStatusSymbol(before, rank);
-        if (blockIdCreated) {
-          raised = `${raised.replace(/\s+$/, "")} ^${blockId}`;
-        }
         // Strip the inherited project tag per PDC3 without touching own
         // reasons (schedules/IDs/dependency fields never change here).
         raised = stripProjectBlockedResidentTag(raised);
+        raised = applySuccessorThemeToRaised(raised);
+        if (blockIdCreated) {
+          raised = `${raised.replace(/\s+$/, "")} ^${blockId}`;
+        }
         after = applyFreshStampLine(raised, stampLine, today, {
           content: sourceNoteText,
           line: task.line,
@@ -10481,6 +11025,13 @@ function applySuccessorVerdicts(context) {
     // passed the stamped line, so the edit is already consolidated. For
     // pullIn picks the rewrite+stamp line is likewise consolidated.)
     if (rowIndex != null) {
+      if (successorThemeChanged || successorThemeSuggestionChanged) {
+        unblocked[rowIndex].theme_changed = successorThemeChanged === true;
+        unblocked[rowIndex].theme_action = successorThemeAction;
+        unblocked[rowIndex].theme_name = successorThemeName;
+        unblocked[rowIndex].theme_destination_name = successorThemeDestinationName;
+        unblocked[rowIndex].theme_suggestion_changed = successorThemeSuggestionChanged === true;
+      }
       const placement = {
         key: String(key),
         rowIndex,
@@ -10490,7 +11041,10 @@ function applySuccessorVerdicts(context) {
       };
       // Per-row destination override (§12.13): validated here so a stale
       // shape from an older picker falls back to the planned anchor.
-      const override = normalizeSuccessorPickDestination(destinations.get(String(key)));
+      // Reuse the early override already used for the theme decision so the
+      // insertion planner consumes the same resolved name.
+      const override = successorEarlyOverride
+        || normalizeSuccessorPickDestination(destinations.get(String(key)));
       if (override) {
         placement.override = override;
       }
@@ -15099,6 +15653,23 @@ class TaskStatusCyclerSuccessorProjectMixin {
           return null;
         }
       })();
+      const successorThemesApiForPass = (() => {
+        try {
+          return typeof getSuccessorTaskThemesApi === "function" ? getSuccessorTaskThemesApi(this.app) : null;
+        } catch (error) {
+          return null;
+        }
+      })();
+      const successorLedgerApiForPass = (() => {
+        try {
+          return typeof getSuccessorTaskLedgerApi === "function" ? getSuccessorTaskLedgerApi(this.app) : null;
+        } catch (error) {
+          return null;
+        }
+      })();
+      const successorThemeForPass = successorThemesApiForPass
+        ? { themesApi: successorThemesApiForPass, ledgerApi: successorLedgerApiForPass }
+        : null;
       const noteTextsObject = {};
       for (const [path, text] of noteTexts) {
         noteTextsObject[path] = text;
@@ -15123,6 +15694,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
             closingEntry: closingForPlan,
             noteTexts: notesObj,
             notePaths,
+            successorTheme: successorThemeForPass,
           });
         } catch (error) {
           return null;
@@ -21044,6 +21616,19 @@ module.exports.helpers = {
   normalizeSuccessorPickDestination,
   normalizeSuccessorThemeIntent,
   getSuccessorPickerApi,
+  successorThemeNormalizeKey,
+  emptySuccessorThemeWrite,
+  successorThemeSuggestionIdentity,
+  successorThemeSuggestionsMatch,
+  successorThemeCatalogSpelling,
+  successorThemeWriteInherited,
+  successorThemeWriteExemptKeys,
+  successorThemeDestinationName,
+  getSuccessorTaskThemesApi,
+  getSuccessorTaskLedgerApi,
+  resolveSuccessorThemeWrite,
+  formatSuccessorThemeRowChip,
+  successorThemePartialFailureClause,
   successorOfferDestination,
   successorGroupOrder,
   successorOfferOrderCompare,

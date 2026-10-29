@@ -543,7 +543,11 @@ function successorNoticeText(model = {}) {
       ? truncateSuccessorNoticeText(predecessors[0].text)
       : "tasks";
     const count = Number(failure.count);
-    return `⚠ Closed ${pred} — couldn't link ${count} successor${count === 1 ? "" : "s"} (${failure.reason || "daily note changed"})`;
+    const themed = unblocked.filter((row) => row && row.theme_changed === true);
+    const themeClause = themed.length > 0
+      ? ` · task theme ${themed.length === 1 && themed[0].theme_action === "clear" ? "cleared" : "saved"}`
+      : "";
+    return `⚠ Closed ${pred} — couldn't link ${count} successor${count === 1 ? "" : "s"} (${failure.reason || "daily note changed"})${themeClause}`;
   }
   // Mixed picked/unpicked batches (§12.6 pulled-in summary) before single.
   if (linked.length > 0 && notLinked.length > 0) {
@@ -555,14 +559,15 @@ function successorNoticeText(model = {}) {
     const text = truncateSuccessorNoticeText(row.text);
     const name = (row.link && row.link.entry_name) || "";
     const suffix = isProjectEmptyRow(row) ? projectEmptySuffix : "";
+    const themeChip = typeof formatSuccessorThemeRowChip === "function" ? formatSuccessorThemeRowChip(row) : "";
     if (row.link && row.link.entry_created) {
       return name
-        ? `🔓 Next in new ${name} session (next up): ${text}${suffix}`
-        : `🔓 Next in new session (next up): ${text}${suffix}`;
+        ? `🔓 Next in new ${name} session (next up): ${text}${suffix}${themeChip}`
+        : `🔓 Next in new session (next up): ${text}${suffix}${themeChip}`;
     }
     return name
-      ? `🔓 Next in ${name}: ${text}${suffix}`
-      : `🔓 Next at line ${(row.link && row.link.line) || "?"}: ${text}${suffix}`;
+      ? `🔓 Next in ${name}: ${text}${suffix}${themeChip}`
+      : `🔓 Next at line ${(row.link && row.link.line) || "?"}: ${text}${suffix}${themeChip}`;
   }
   if (linked.length > 1) {
     const names = [];
@@ -575,14 +580,16 @@ function successorNoticeText(model = {}) {
     }
     const allProjectEmpty = linked.every(isProjectEmptyRow);
     const suffix = allProjectEmpty ? projectEmptySuffix : "";
+    const themedCount = linked.filter((row) => row && row.theme_changed === true).length;
+    const themeSuffix = themedCount > 0 ? ` · ${themedCount} task theme${themedCount === 1 ? "" : "s"} saved` : "";
     if (names.length === 1) {
       const shown = linked
         .slice(0, 2)
         .map((row) => truncateSuccessorNoticeText(row.text));
       const more = linked.length > 2 ? `, +${linked.length - 2}` : "";
-      return `🔓 ${linked.length} linked → ${names[0]}: ${shown.join(", ")}${more}${suffix}`;
+      return `🔓 ${linked.length} linked → ${names[0]}: ${shown.join(", ")}${more}${suffix}${themeSuffix}`;
     }
-    return `🔓 ${linked.length} linked · ${names.join(", ")}${suffix}`;
+    return `🔓 ${linked.length} linked · ${names.join(", ")}${suffix}${themeSuffix}`;
   }
   // Legacy breaker copy: kept for older payloads only. New output never
   // emits breaker rows (§12.2 BREAKER deleted).

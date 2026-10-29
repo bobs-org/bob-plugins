@@ -631,6 +631,7 @@ function planSuccessors(options = {}) {
       ? new Map(Object.entries(options.destinations))
       : new Map());
   const stampLine = typeof options.stampLine === "function" ? options.stampLine : null;
+  const successorTheme = options.successorTheme && typeof options.successorTheme === "object" ? options.successorTheme : null;
 
   const empty = {
     unblocked: [],
@@ -684,6 +685,7 @@ function planSuccessors(options = {}) {
       projectOffers: extra.projectOffers || [],
       foldedByProject: extra.foldedByProject || new Map(),
       projectHeaders: extra.projectHeaders || new Map(),
+      successorTheme,
     });
   // GATE: no `[id::]` in C and no pull-in candidate → nothing.
   // A `[?]` R pull-in still recovers N's residents via the same

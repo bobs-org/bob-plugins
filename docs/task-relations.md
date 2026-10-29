@@ -36,6 +36,36 @@ relation index (`api.relationIndex`), never the stored mirror:
 
 Without this plugin, both lines still read as English.
 
+## Text mentions
+
+A block link inside a task's own text (`[[note#^id]]`, embedded or struck
+too) derives an inert `[[S]] (💬 mentions)` entry on the target's LINKED
+FROM line, reading "S mentions this". The full contract — vocabulary, M1–M8,
+projection, storage and the reserved `💬` label, identity, minting,
+lifecycle, uncertainty, inertness, the kill switch, and the visual design —
+lives in [bob's task-relations §19](https://bobs-org.github.io/task-relations/#19-text-mentions);
+this plugin implements the live side of it.
+
+- The live index (`api.relationIndex` v2) scans task text under M1–M6 from
+  the shared MN vectors, resolves targets exactly as relations do, and
+  applies M7 precedence: a dependency joining the pair drops the mention
+  row, while a LINKS entry for the pair keeps the relation row and marks it
+  `alsoMentioned`.
+- `incoming()` and `outgoing()` keep returning relations only, so no v1
+  consumer can offer a removal it cannot perform. New in v2:
+  `linkedFrom(path, blockId)` returns typed rows — `{kind: "relation",
+  source, label, alsoMentioned, …}` and `{kind: "mention", source, display:
+  "mention"|"embed", count, occurrences: [{line, ch, site, excerpt}]}` —
+  and pure `scanMentions(content, path)` returns that note's resolved
+  `(S, T)` pairs with their occurrences for nav's courtesy write.
+- `labelSuggestions` never includes the reserved `💬 mentions` spelling.
+  On LINKS any `💬…` label is malformed; on LINKED FROM exactly `💬 mentions`
+  is a typed mention entry and any other `💬…` label is malformed.
+- `relations.linked_from_mentions` (default `false` in
+  `~/.config/bob/config.yml`) gates everything: when off, no mention rows
+  are published and `scanMentions` returns `[]`. Chips for mentions render
+  in the next phase; this phase only indexes.
+
 ## Linking from the Task Card
 
 The Task Card's `Links to…` row (`l`, after `Blocks…`) shows

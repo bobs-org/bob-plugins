@@ -186,7 +186,7 @@ test("relationIndex scans done sources, resolves both directions, and orders lab
   plugin.startRelationIndexScan();
   const api = plugin.relationIndexApi();
   await waitUntil(() => api.ready(), "initial relation scan should finish");
-  assert.equal(api.version, 1);
+  assert.equal(api.version, 2);
   assert.equal(api.outgoing("notes/source.md", "source").length, 2);
   assert.equal(api.outgoing("done/archived.md", "archived").length, 1, "done/ is indexed as a read-only source");
   assert.equal(api.outgoing("notes/prefiltered.md", "skipped").length, 0, "startup prefilter skips notes with no cached block links");

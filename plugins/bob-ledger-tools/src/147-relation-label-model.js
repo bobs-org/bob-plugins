@@ -49,6 +49,19 @@ function relationLabelPathIncluded(path) {
 function relationLabelCatalogRows(edges, prefs = {}) {
   const orderedEdges = (Array.isArray(edges) ? edges : [])
     .filter((edge) => relationLabelPathIncluded(edge && edge.source && edge.source.path))
+    // §19: mention entries never enter the catalog; the reserved 💬 spelling
+    // never surfaces as a label (MN15).
+    .filter((edge) => edge && edge.kind !== "mention")
+    .filter((edge) => {
+      const label = String((edge && edge.label) || "");
+      if (!label) return true;
+      try {
+        const first = Array.from(label)[0];
+        return first !== "💬";
+      } catch (error) {
+        return label.codePointAt(0) !== 0x1F4AC;
+      }
+    })
     .map((edge, index) => ({ edge, index }))
     .sort((left, right) => {
       const leftPath = String(left.edge && left.edge.source && left.edge.source.path || "");

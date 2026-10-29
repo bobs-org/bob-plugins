@@ -47446,7 +47446,7 @@ function renderTaskCardThemeHeader(container, theme) {
       if (part.type === "value" && part.themeKey) {
         span.textContent = "";
         const pill = span.createSpan({
-          cls: `bob-task-card-theme-pill${part.hue ? ` is-${part.hue}` : " is-muted"}`,
+          cls: `bob-task-card-theme-pill${part.hue ? ` is-${part.hue}` : ""}`,
         });
         pill.createSpan({
           cls: `bob-cnp-theme-swatch${part.hue ? ` is-${part.hue}` : " is-muted"}`,
@@ -94350,7 +94350,7 @@ module.exports.helpers = {
   taskCardThemeCatalogSpelling, taskCardThemeExemptKeys,
   taskCardThemeSingleComponent, taskCardThemeValidateNewName,
   buildTaskCardThemeStageModel, planTaskCardThemeEdits,
-  taskCardThemeRevalidateEdit, taskCardThemeUnchangedNotice, taskCardThemeSavedNotice, taskCardThemeInheritedSourceText, taskCardThemeStageItem,
+  taskCardThemeRevalidateEdit,
   planTaskCard,
   taskCardBlocksAvailabilityReason,
   taskCardBlocksSummary,

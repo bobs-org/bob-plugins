@@ -1,3 +1,182 @@
+// §19 kill switch: `relations.linked_from_mentions` (default false).
+// Missing, invalid, or unreadable values stay disabled so the switch is
+// lossless; cache by mtime/size like nav's loader. Warns in the
+// `linked_from_lines` wording pattern on invalid values.
+let relationIndexMentionsConfigCache = { key: null, value: false };
+
+function resetRelationIndexMentionsConfigCache() {
+  relationIndexMentionsConfigCache = { key: null, value: false };
+}
+
+function relationIndexMentionsStatKey(fsModule, configPath) {
+  try {
+    if (!fsModule || typeof fsModule.statSync !== "function") return null;
+    const stat = fsModule.statSync(configPath);
+    const mtime = stat && stat.mtimeMs != null ? stat.mtimeMs : stat && stat.mtime ? Number(stat.mtime) : "?";
+    const size = stat && stat.size != null ? stat.size : "?";
+    return `${mtime}:${size}`;
+  } catch (error) {
+    return error && error.code === "ENOENT" ? "missing" : null;
+  }
+}
+
+function loadRelationIndexMentionsEnabled(options = {}) {
+  const env = options.env || (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule = options.osModule === undefined
+    ? (typeof planRequireOptionalNodeModule === "function" ? planRequireOptionalNodeModule("os") : null)
+    : options.osModule;
+  const fsModule = options.fsModule === undefined
+    ? (typeof planRequireOptionalNodeModule === "function" ? planRequireOptionalNodeModule("fs") : null)
+    : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") return false;
+  let configPath = options.configPath || null;
+  if (!configPath) {
+    try {
+      if (typeof planConfigPath === "function") configPath = planConfigPath({ env, osModule });
+      else if (typeof getBulletPropertyConfigPath === "function") configPath = getBulletPropertyConfigPath({ env, osModule });
+    } catch (error) { /* fall through to default */ }
+  }
+  if (!configPath) return false;
+  const statKey = relationIndexMentionsStatKey(fsModule, configPath);
+  const key = statKey == null ? null : `${configPath}|${statKey}`;
+  if (key != null && relationIndexMentionsConfigCache.key === key) {
+    return relationIndexMentionsConfigCache.value;
+  }
+  let enabled = false;
+  try {
+    const parse = options.parseYaml === undefined
+      ? (typeof parseYaml === "function" ? parseYaml : null)
+      : options.parseYaml;
+    if (typeof parse === "function") {
+      const config = parse(fsModule.readFileSync(configPath, "utf8"));
+      const value = config && config.relations && config.relations.linked_from_mentions;
+      if (typeof value === "boolean") {
+        enabled = value;
+      } else if (value !== undefined && value !== null) {
+        enabled = false;
+        if (typeof console !== "undefined" && typeof console.warn === "function") {
+          console.warn("relations.linked_from_mentions is invalid; treating as false");
+        }
+      }
+    }
+  } catch (_error) {
+    enabled = false;
+  }
+  if (key != null) relationIndexMentionsConfigCache = { key, value: enabled };
+  return enabled;
+}
+
+// §19 M4/M7 resolution shared by publish and scanMentions.
+// `records` maps normalized path -> parseTaskRelationFile output.
+// `resolvePath` is (target, sourcePath) -> normalized path or null.
+// Returns `{mentionPairs, relationPairs, dependencyPairs}` where each pair
+// is `{sourceKey, targetKey, source, target}` plus occurrences for mentions.
+function relationIndexResolveMentionPairs(records, resolvePath, opts = {}) {
+  const includeUnresolved = opts.includeUnresolved === true;
+  const isCachedBlock = typeof opts.isCachedBlock === "function" ? opts.isCachedBlock : null;
+  const mentionGroups = new Map();
+  const relationPairs = new Map();
+  const dependencyPairs = new Map();
+  const targetInfo = new Map();
+  const getTargetInfo = (targetPath, blockId) => {
+    const key = `${targetPath}\u0000${blockId}`;
+    if (targetInfo.has(key)) return targetInfo.get(key);
+    const record = records.get(targetPath);
+    const counts = record && record.taskIdCounts;
+    const count = counts ? (counts.get(blockId) || 0) : 0;
+    const task = record && record.tasks ? record.tasks.get(blockId) : null;
+    let info = { record, count, task, unique: count === 1 && Boolean(task) };
+    if (!info.unique && isCachedBlock) {
+      // Live-index optimism (mirrors the relation edge path): the target
+      // note is not parsed yet but the metadata cache already holds the
+      // block, so resolve now and let the scheduled target read confirm
+      // uniqueness on the next publish. Fixture vectors pass no cache and
+      // stay strict (M4 duplicates ignored).
+      try {
+        if (isCachedBlock(targetPath, blockId)) {
+          info = { record: record || null, count: 1, task: task || null, unique: true, cached: true };
+        }
+      } catch (error) { /* strict on cache failure */ }
+    }
+    targetInfo.set(key, info);
+    return info;
+  };
+  // Relations (accepted LINKS) resolve exactly as the live index does.
+  for (const [sourcePath, record] of records) {
+    if (!record || !Array.isArray(record.outgoing)) continue;
+    for (const edge of record.outgoing) {
+      let targetPath = null;
+      try {
+        targetPath = resolvePath(edge.targetRef.path, sourcePath);
+      } catch (error) { targetPath = null; }
+      if (!targetPath) continue;
+      const targetKey = `${targetPath}\u0000${edge.targetRef.blockId}`;
+      const sourceKey = edge.sourceKey || `${sourcePath}\u0000${edge.source && edge.source.blockId ? edge.source.blockId : ""}`;
+      relationPairs.set(`${sourceKey}\u0000${targetKey}`, { sourceKey, targetKey });
+    }
+  }
+  // Dependencies (accepted Depends-On) resolve by path; existence is not
+  // required for the join to suppress a mention row.
+  for (const [sourcePath, record] of records) {
+    if (!record || !Array.isArray(record.dependsOn)) continue;
+    for (const dep of record.dependsOn) {
+      let targetPath = null;
+      try {
+        targetPath = resolvePath(dep.targetRef.path, sourcePath);
+      } catch (error) { targetPath = null; }
+      if (!targetPath) continue;
+      const targetKey = `${targetPath}\u0000${dep.targetRef.blockId}`;
+      const sourceKey = dep.sourceKey || `${sourcePath}\u0000${dep.source && dep.source.blockId ? dep.source.blockId : ""}`;
+      dependencyPairs.set(`${sourceKey}\u0000${targetKey}`, { sourceKey, targetKey });
+    }
+  }
+  // Mentions: M4 resolution (same resolver as relations; silent on miss).
+  for (const [sourcePath, record] of records) {
+    if (!record || !Array.isArray(record.mentionOccurrences)) continue;
+    for (const occurrence of record.mentionOccurrences) {
+      let targetPath = null;
+      try {
+        targetPath = resolvePath(occurrence.targetRef.path, sourcePath);
+      } catch (error) { targetPath = null; }
+      if (!targetPath) continue;
+      const info = getTargetInfo(targetPath, occurrence.targetRef.blockId);
+      if (!info.unique) {
+        if (!includeUnresolved) continue;
+      }
+      const targetKey = `${targetPath}\u0000${occurrence.targetRef.blockId}`;
+      // M4 self-links are ignored silently.
+      const sourceId = occurrence.source && occurrence.source.blockId ? String(occurrence.source.blockId) : "";
+      const sourceCount = record.taskIdCounts ? (record.taskIdCounts.get(sourceId) || 0) : 0;
+      if (sourceId && sourceCount === 1 && targetPath === sourcePath && occurrence.targetRef.blockId === sourceId) {
+        continue;
+      }
+      const sourceKey = occurrence.sourceKey || `${sourcePath}\u0000${sourceId}`;
+      const pairKey = `${sourceKey}\u0000${targetKey}`;
+      if (!mentionGroups.has(pairKey)) {
+        mentionGroups.set(pairKey, {
+          sourceKey,
+          targetKey,
+          source: occurrence.source,
+          sourcePath,
+          targetPath,
+          targetBlockId: occurrence.targetRef.blockId,
+          targetTask: info.task || null,
+          occurrences: [],
+        });
+      }
+      mentionGroups.get(pairKey).occurrences.push(occurrence);
+    }
+  }
+  // Sort occurrences in document order; display is embed only when every
+  // occurrence is an embed (M5).
+  for (const group of mentionGroups.values()) {
+    group.occurrences.sort((left, right) => (left.line - right.line) || (left.ch - right.ch));
+    group.display = group.occurrences.every((occurrence) => occurrence.isEmbed) ? "embed" : "mention";
+    group.count = group.occurrences.length;
+  }
+  return { mentionGroups, relationPairs, dependencyPairs };
+}
+
 class BobLedgerToolsRelationIndexMixin {
   initializeRelationIndex() {
     this.relationIndexTornDown = false;
@@ -18,11 +197,13 @@ class BobLedgerToolsRelationIndexMixin {
       ready: false,
       forward: new Map(),
       reverse: new Map(),
+      mentionReverse: new Map(),
+      mentionGroups: new Map(),
       edges: [],
     };
     const plugin = this;
     this.relationIndexApiValue = Object.freeze({
-      version: 1,
+      version: 2,
       get generation() {
         plugin.flushRelationIndexPublish();
         return plugin.relationIndexState.generation;
@@ -42,6 +223,14 @@ class BobLedgerToolsRelationIndexMixin {
       labelSuggestions: (prefix) => {
         plugin.flushRelationIndexPublish();
         return plugin.relationIndexLabelSuggestions(prefix);
+      },
+      linkedFrom: (path, blockId) => {
+        plugin.flushRelationIndexPublish();
+        return plugin.relationIndexLinkedFrom(path, blockId);
+      },
+      scanMentions: (content, path) => {
+        plugin.flushRelationIndexPublish();
+        return plugin.relationIndexScanMentions(content, path);
       },
       onChange: (listener) => plugin.relationIndexOnChange(listener),
     });
@@ -98,6 +287,84 @@ class BobLedgerToolsRelationIndexMixin {
       let id = String(blockId || "").trim();
       if (id.startsWith("^")) id = id.slice(1);
       return (this.relationIndexState.reverse.get(relationIdentity(normalized, id)) || []).slice();
+    } catch (error) {
+      return [];
+    }
+  }
+
+  // §19 `relationIndex` v2: typed LINKED FROM rows. Relations keep their
+  // v1 shape plus `alsoMentioned`; mentions carry display/count/occurrences.
+  // Dependency-joined pairs are omitted from the mention group (M7).
+  relationIndexLinkedFrom(path, blockId) {
+    try {
+      const normalized = this.relationIndexNormalizePath(path);
+      let id = String(blockId || "").trim();
+      if (id.startsWith("^")) id = id.slice(1);
+      const key = relationIdentity(normalized, id);
+      const relations = (this.relationIndexState.reverse.get(key) || []).map((edge) => ({
+        ...edge,
+        kind: "relation",
+        alsoMentioned: Boolean(edge && edge.alsoMentioned),
+      }));
+      const mentions = (this.relationIndexState.mentionReverse.get(key) || []).map((row) => ({
+        kind: "mention",
+        source: row.source,
+        display: row.display,
+        count: row.count,
+        occurrences: row.occurrences.map((occurrence) => ({ ...occurrence })),
+      }));
+      return [...relations, ...mentions];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  // §19 pure helper for nav's courtesy write: this note's resolved (S, T)
+  // pairs with their occurrences (M1–M6 + M4; M7 applied by the caller).
+  // Returns [] when the kill switch is off.
+  relationIndexScanMentions(content, path) {
+    try {
+      if (!loadRelationIndexMentionsEnabled()) return [];
+      const normalized = this.relationIndexNormalizePath(path);
+      const parsed = parseTaskRelationFile(String(content || ""), normalized);
+      const records = new Map(this.relationIndexFiles);
+      records.set(normalized, parsed);
+      if (this.relationIndexOverlay && this.relationIndexOverlay.path !== normalized) {
+        try {
+          records.set(
+            this.relationIndexOverlay.path,
+            parseTaskRelationFile(this.relationIndexOverlay.content, this.relationIndexOverlay.path),
+          );
+        } catch (error) { /* overlay stays best-effort */ }
+      }
+      const resolvePath = (target, sourcePath) => this.relationIndexResolvePath(target, sourcePath);
+      const { mentionGroups } = relationIndexResolveMentionPairs(records, resolvePath, {
+        isCachedBlock: (targetPath, blockId) => this.relationIndexHasCachedBlock(targetPath, blockId),
+      });
+      const pairs = [];
+      for (const group of mentionGroups.values()) {
+        if (group.sourcePath !== normalized) continue;
+        pairs.push({
+          source: group.source,
+          sourceKey: group.sourceKey,
+          target: group.targetTask || { path: group.targetPath, blockId: group.targetBlockId },
+          targetKey: group.targetKey,
+          display: group.display,
+          count: group.count,
+          occurrences: group.occurrences.map((occurrence) => ({
+            line: occurrence.line,
+            ch: occurrence.ch,
+            site: occurrence.site,
+            excerpt: occurrence.excerpt,
+            embedded: occurrence.embedded,
+            struck: occurrence.struck,
+          })),
+        });
+      }
+      pairs.sort((left, right) =>
+        relationCodepointCompare(left.targetKey, right.targetKey) ||
+        relationCodepointCompare(left.sourceKey, right.sourceKey));
+      return pairs;
     } catch (error) {
       return [];
     }
@@ -304,6 +571,11 @@ class BobLedgerToolsRelationIndexMixin {
   // coalesce to one rebuild per microtask; re-run
   // scripts/measure-ledger-tools-relation-index.cjs after parser/lifecycle work.
   // Keep the scan chunked as vault size grows, despite this sample staying below 1s.
+  // Mention-index sample, apollo (2026-10-29, with the §19 M1–M6 scanner and
+  // M7 resolution live): 6,795 notes, 3,256 prefilter candidates, 189
+  // relation edges, cold scan 1,322.85 ms, warm 292,989-byte daily update
+  // 23.36 ms. The cold scan stays chunked (24 files per turn) so the colder
+  // number is load-spread, not blocking.
   startRelationIndexScan() {
     if (this.relationIndexTornDown) return;
     const vault = this.app && this.app.vault;
@@ -396,7 +668,15 @@ class BobLedgerToolsRelationIndexMixin {
     const taskMemo = this.relationIndexTaskMemo();
     const forward = new Map();
     const reverse = new Map();
+    const mentionReverse = new Map();
+    const mentionGroups = new Map();
     const edges = [];
+    let mentionsEnabled = false;
+    try {
+      mentionsEnabled = loadRelationIndexMentionsEnabled();
+    } catch (error) {
+      mentionsEnabled = false;
+    }
     for (const [sourcePath, record] of records) {
       if (!record || !Array.isArray(record.outgoing)) continue;
       for (const sourceEdge of record.outgoing) {
@@ -424,8 +704,12 @@ class BobLedgerToolsRelationIndexMixin {
         if (targetRaw && targetRecord) target = { ...target, ...this.relationIndexDisplayTask(targetRaw, taskMemo), resolved, archived: Boolean(targetPath && /(^|\/)done\//iu.test(targetPath)) };
         const edge = {
           source: { path: sourcePath, blockId: source.blockId, line: source.line, text: source.text, status: source.status },
+          sourceKey: sourceEdge.sourceKey || `${sourcePath}\u0000${source.blockId || ""}`,
+          targetKey: targetPath ? `${targetPath}\u0000${sourceEdge.targetRef.blockId}` : null,
           target,
           label: sourceEdge.label,
+          kind: "relation",
+          alsoMentioned: false,
           relationLine: sourceEdge.relationLine,
           raw: sourceEdge.raw,
           embedded: sourceEdge.embedded,
@@ -451,8 +735,84 @@ class BobLedgerToolsRelationIndexMixin {
         edges.push(edge);
       }
     }
+    // §19 mentions: same generation, same resolver, M7 precedence. When the
+    // kill switch is off, no mention rows are published and scanMentions
+    // returns [] (the loader above already gates that helper).
+    if (mentionsEnabled) {
+      try {
+        // Schedule reads for mention-only targets so the next publish can
+        // resolve them, mirroring the relation target-read path above.
+        for (const [sourcePath, record] of records) {
+          if (!record || !Array.isArray(record.mentionOccurrences)) continue;
+          for (const occurrence of record.mentionOccurrences) {
+            let targetPath = null;
+            try {
+              targetPath = this.relationIndexResolvePath(occurrence.targetRef.path, sourcePath);
+            } catch (error) { targetPath = null; }
+            if (!targetPath || records.get(targetPath)) continue;
+            try {
+              const targetFile = this.app && this.app.vault && typeof this.app.vault.getAbstractFileByPath === "function"
+                ? this.app.vault.getAbstractFileByPath(targetPath)
+                : null;
+              if (targetFile) this.relationIndexScheduleTargetRead(targetFile);
+            } catch (error) { /* best-effort */ }
+          }
+        }
+        const resolvePath = (target, sourcePath) => this.relationIndexResolvePath(target, sourcePath);
+        const resolved = relationIndexResolveMentionPairs(records, resolvePath, {
+          isCachedBlock: (targetPath, blockId) => this.relationIndexHasCachedBlock(targetPath, blockId),
+        });
+        for (const [pairKey, group] of resolved.mentionGroups) {
+          mentionGroups.set(pairKey, group);
+        }
+        // Mixed pairs (MN8): the relation row keeps its label and gains the
+        // trailing 💬 marker via `alsoMentioned`.
+        for (const edge of edges) {
+          if (!edge || !edge.sourceKey || !edge.targetKey) continue;
+          if (mentionGroups.has(`${edge.sourceKey}\u0000${edge.targetKey}`)) {
+            edge.alsoMentioned = true;
+          }
+        }
+        // Mention rows: dependency-joined pairs omitted (M7); relation pairs
+        // stay as relations (alsoMentioned above).
+        for (const [pairKey, group] of mentionGroups) {
+          if (resolved.relationPairs.has(pairKey)) continue;
+          const reversePairKey = `${group.targetKey}\u0000${group.sourceKey}`;
+          if (resolved.dependencyPairs.has(pairKey) || resolved.dependencyPairs.has(reversePairKey)) {
+            continue;
+          }
+          const source = this.relationIndexDisplayTask(group.source, taskMemo) || group.source;
+          const row = {
+            kind: "mention",
+            source: { path: group.sourcePath, blockId: source.blockId, line: source.line, text: source.text, status: source.status },
+            sourceKey: group.sourceKey,
+            targetKey: group.targetKey,
+            display: group.display,
+            count: group.count,
+            occurrences: group.occurrences.map((occurrence) => ({
+              line: occurrence.line,
+              ch: occurrence.ch,
+              site: occurrence.site,
+              excerpt: occurrence.excerpt,
+            })),
+          };
+          const targetKey = relationIdentity(group.targetPath, group.targetBlockId);
+          if (!mentionReverse.has(targetKey)) mentionReverse.set(targetKey, []);
+          mentionReverse.get(targetKey).push(row);
+        }
+        // Canonical order within each target group (source path/codepoint).
+        for (const rows of mentionReverse.values()) {
+          rows.sort((left, right) =>
+            relationCodepointCompare(left.source.path, right.source.path) ||
+            relationCodepointCompare(left.source.blockId || "", right.source.blockId || "") ||
+            (left.source.line || 0) - (right.source.line || 0));
+        }
+      } catch (error) {
+        // Mentions never break the relation index; relations still publish.
+      }
+    }
     const generation = this.relationIndexGeneration + 1;
-    const snapshot = { generation, ready: Boolean(ready), forward, reverse, edges };
+    const snapshot = { generation, ready: Boolean(ready), forward, reverse, mentionReverse, mentionGroups, edges };
     // Publish both directions together; no consumer can observe half a rebuild.
     this.relationIndexGeneration = generation;
     this.relationIndexReadyFlag = Boolean(ready);

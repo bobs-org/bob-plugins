@@ -624,7 +624,7 @@ function buildRelationChipElement(doc, model, options) {
         entry.setAttribute("class", "bob-relation-entry" + (kind === "mentions" ? " is-mention" : ""));
         const chipEl = buildChipEl(chip);
         if (kind === "mentions") {
-          entry.appendChild(relationCreateMentionPill(doc, chip));
+          entry.appendChild(relationCreateMentionPill(doc, chip, opts));
           entry.appendChild(chipEl);
           if (chip.quote) relationAppendMentionQuote(entry, chip.quote, doc);
         } else {

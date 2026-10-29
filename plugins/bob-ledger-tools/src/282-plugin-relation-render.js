@@ -8,6 +8,9 @@ class BobLedgerToolsRelationRenderMixin {
       if (typeof this.registerMarkdownPostProcessor === "function") {
         this.registerMarkdownPostProcessor((el, ctx) => this.renderRelationChipsIn(el, ctx), 50);
       }
+      if (typeof this.register === "function") {
+        this.register(() => this.relationCloseMentionCard(false));
+      }
       // LC14: an entry typed in the editor before save refreshes the
       // target's chip row in the same session. The overlay updates the
       // index; this refresh rebuilds every chip decoration on it.
@@ -43,6 +46,7 @@ class BobLedgerToolsRelationRenderMixin {
       if (!path) {
         return;
       }
+      this.relationCloseMentionCardForSource(path);
       let items = [];
       try {
         if (typeof el.querySelectorAll === "function") {
@@ -126,8 +130,18 @@ class BobLedgerToolsRelationRenderMixin {
           if (!owner) {
             continue;
           }
-          const model = this.relationChipModelForLine({ path, text: rawLine, owner });
+          const originalModel = this.relationChipModelForLine({ path, text: rawLine, owner });
+          if (!originalModel || originalModel.chips.length === 0) {
+            continue;
+          }
+          const hostPaths = this.relationReadingTransclusionHostPaths(candidate.li, ctx, path);
+          const filtered = this.relationSuppressEmbedEchoes(originalModel, hostPaths);
+          const model = filtered.model;
+          if (filtered.suppressed.length > 0) {
+            this.relationRemoveReadingEchoAnchors(candidate.anchors, filtered.suppressed, path);
+          }
           if (!model || model.chips.length === 0) {
+            this.relationHideReadingEchoRow(candidate.li);
             continue;
           }
           const docNode = candidate.li.ownerDocument || (typeof document !== "undefined" ? document : null);
@@ -162,6 +176,147 @@ class BobLedgerToolsRelationRenderMixin {
       return { lines, low: Math.max(0, section.lineStart), high: Math.min(lines.length - 1, section.lineEnd) };
     } catch (error) {
       return null;
+    }
+  }
+
+  relationReadingTransclusionHostPaths(li, ctx, sourcePath) {
+    try {
+      let inTransclusion = false;
+      const paths = [];
+      if (ctx && typeof ctx.sourcePath === "string") paths.push(ctx.sourcePath);
+      let node = li || null;
+      let guard = 0;
+      while (node && guard < 100) {
+        guard += 1;
+        const classes = node.classList;
+        try {
+          if (classes && typeof classes.contains === "function" && classes.contains("markdown-embed")) {
+            inTransclusion = true;
+          }
+        } catch (error) {
+          // Continue looking for the host wrapper.
+        }
+        for (const attribute of ["data-path", "data-source-path", "data-embed-path", "data-host-path"]) {
+          try {
+            const value = node.getAttribute && node.getAttribute(attribute);
+            if (typeof value === "string" && value.trim()) paths.push(value.trim());
+          } catch (error) {
+            // Some DOM shims do not expose attributes.
+          }
+        }
+        try {
+          const dataset = node.dataset || {};
+          for (const key of ["path", "sourcePath", "embedPath", "hostPath"]) {
+            if (typeof dataset[key] === "string" && dataset[key].trim()) paths.push(dataset[key].trim());
+          }
+        } catch (error) {
+          // Dataset is optional.
+        }
+        node = node.parentNode || null;
+      }
+      if (!inTransclusion) return [];
+      if (sourcePath) paths.push(sourcePath);
+      try {
+        const workspace = this.app && this.app.workspace;
+        const leaves = workspace && typeof workspace.getLeavesOfType === "function"
+          ? workspace.getLeavesOfType("markdown") || []
+          : [];
+        for (const leaf of Array.from(leaves)) {
+          const view = leaf && leaf.view ? leaf.view : null;
+          const container = view && view.containerEl;
+          const filePath = view && view.file && view.file.path;
+          let containsRow = container === li;
+          if (!containsRow && container) {
+            if (typeof container.contains === "function") containsRow = container.contains(li);
+            else if (typeof this.relationNodeContains === "function") containsRow = this.relationNodeContains(container, li);
+          }
+          if (containsRow && typeof filePath === "string" && filePath) paths.push(filePath);
+        }
+      } catch (error) {
+        // The renderer context and embed ancestors remain the fallback.
+      }
+      const seen = new Set();
+      return paths.filter((path) => {
+        const key = this.relationNormalizeMentionPath(path);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    } catch (error) {
+      return [];
+    }
+  }
+
+  relationNormalizeMentionPath(path) {
+    try {
+      return String(path || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "").replace(/\.md$/i, "");
+    } catch (error) {
+      return "";
+    }
+  }
+
+  relationSuppressEmbedEchoes(model, hostPaths) {
+    try {
+      const hosts = new Set((Array.isArray(hostPaths) ? hostPaths : []).map((path) => this.relationNormalizeMentionPath(path)).filter(Boolean));
+      const groups = relationChipGroups(model);
+      if (!model || hosts.size === 0 || !groups.mentions.chips.length) return { model, suppressed: [] };
+      const suppressed = groups.mentions.chips.filter((chip) => chip && chip.display === "embed" && hosts.has(this.relationNormalizeMentionPath(chip.path)));
+      if (!suppressed.length) return { model, suppressed };
+      const suppressedKeys = new Set(suppressed.map((chip) => String(chip.path || "") + "\u0000" + String(chip.blockId || "")));
+      const mentionChips = groups.mentions.chips
+        .filter((chip) => !suppressedKeys.has(String(chip && chip.path || "") + "\u0000" + String(chip && chip.blockId || "")))
+        .map((chip) => ({ ...chip, collapsed: false, densityCollapsed: false }));
+      const mentionGroup = relationApplyChipGroupRules(mentionChips, "mentions");
+      const nextGroups = { relations: groups.relations, mentions: mentionGroup };
+      const chips = [...groups.relations.chips, ...mentionGroup.chips];
+      return {
+        model: {
+          ...model,
+          chips,
+          groups: nextGroups,
+          liveCount: chips.filter((chip) => chip && chip.live).length,
+          storedCount: chips.length,
+        },
+        suppressed,
+      };
+    } catch (error) {
+      return { model, suppressed: [] };
+    }
+  }
+
+  relationRemoveReadingEchoAnchors(anchors, suppressed, sourcePath) {
+    try {
+      const rows = Array.isArray(suppressed) ? suppressed : [];
+      if (!rows.length) return;
+      for (const anchor of Array.isArray(anchors) ? anchors : []) {
+        try {
+          const blockId = dependencyReadingBlockId(anchor);
+          if (!blockId) continue;
+          const raw = String((anchor.getAttribute && (anchor.getAttribute("data-href") || anchor.getAttribute("href"))) || "");
+          const path = this.relationResolveLinkpath(raw, sourcePath);
+          const match = rows.some((chip) => String(chip.blockId || "") === blockId && this.relationNormalizeMentionPath(chip.path) === this.relationNormalizeMentionPath(path));
+          if (match) {
+            if (typeof anchor.remove === "function") anchor.remove();
+            else if (anchor.parentNode && typeof anchor.parentNode.removeChild === "function") anchor.parentNode.removeChild(anchor);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // A raw embed link is still legible if it cannot be hidden.
+    }
+  }
+
+  relationHideReadingEchoRow(li) {
+    try {
+      if (!li) return;
+      li.classList && li.classList.add("bob-relation-embed-echo-hidden");
+      if (li.style) li.style.display = "none";
+      if (li.dataset) li.dataset.bobRelationEmbedEchoHidden = "1";
+      if (typeof li.setAttribute === "function") li.setAttribute("aria-hidden", "true");
+    } catch (error) {
+      // The row remains harmless if the DOM cannot hide it.
     }
   }
 
@@ -306,7 +461,13 @@ class BobLedgerToolsRelationRenderMixin {
     try {
       if (!host || !anchor) return;
       if (chip.kind === "mention") {
-        host.insertBefore(relationCreateMentionPill(doc, chip), anchor);
+        const self = this;
+        host.insertBefore(relationCreateMentionPill(doc, chip, {
+          onMention: (item, pill, event, reason) => self.relationOpenMentionCard(item, sourcePath, pill, event, reason),
+          onMentionLeave: (pill) => self.relationMentionCardPointerLeave(pill),
+          onMentionClose: (pill, event, restoreFocus) => self.relationCloseMentionCard(Boolean(restoreFocus), pill),
+          onMentionNavigate: (pill, event, direction) => self.relationMentionCardNavigate(pill, direction),
+        }), anchor);
         if (chip.quote) relationAppendMentionQuote(host, chip.quote, doc);
         return;
       }
@@ -388,10 +549,12 @@ class BobLedgerToolsRelationRenderMixin {
     }
   }
 
-  relationOpenMention(chip, sourcePath, event) {
+  relationOpenMention(chip, sourcePath, event, occurrenceOverride) {
     try {
       if (!chip || chip.kind !== "mention" || !chip.path || !Array.isArray(chip.occurrences) || chip.occurrences.length === 0) return false;
-      const occurrence = chip.occurrences[0];
+      const occurrence = occurrenceOverride && chip.occurrences.includes(occurrenceOverride)
+        ? occurrenceOverride
+        : chip.occurrences[0];
       if (!Number.isInteger(Number(occurrence.line)) || Number(occurrence.line) < 1) return false;
       const workspace = this.app && this.app.workspace;
       if (!workspace || typeof workspace.openLinkText !== "function") return false;
@@ -567,7 +730,62 @@ function relationChipGroups(model) {
   };
 }
 
-function relationCreateMentionPill(doc, chip) {
+function relationAttachMentionPillHandlers(pill, chip, options) {
+  try {
+    if (!pill || typeof pill.addEventListener !== "function") return;
+    const opts = options && typeof options === "object" ? options : {};
+    const open = (event, reason) => {
+      try {
+        if (typeof opts.onMention === "function") opts.onMention(chip, pill, event, reason);
+      } catch (error) {
+        // The read-only card is best-effort.
+      }
+    };
+    pill.addEventListener("mouseenter", (event) => open(event, "hover"));
+    pill.addEventListener("mouseleave", (event) => {
+      try {
+        if (typeof opts.onMentionLeave === "function") opts.onMentionLeave(pill, event);
+      } catch (error) {
+        // The pill remains usable if its card cannot close.
+      }
+    });
+    pill.addEventListener("focus", (event) => open(event, "focus"));
+    pill.addEventListener("click", (event) => {
+      try {
+        if (event && typeof event.preventDefault === "function") event.preventDefault();
+        if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+      } catch (error) {
+        // Opening the card is still useful without event suppression.
+      }
+      open(event, "click");
+    });
+    pill.addEventListener("keydown", (event) => {
+      try {
+        if (event && event.key === "Escape") {
+          if (typeof opts.onMentionClose === "function") opts.onMentionClose(pill, event, true);
+          return;
+        }
+        if (event && (event.key === "ArrowDown" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowLeft")) {
+          if (typeof event.preventDefault === "function") event.preventDefault();
+          if (typeof opts.onMentionNavigate === "function") {
+            opts.onMentionNavigate(pill, event, event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 1);
+          }
+          return;
+        }
+        if (event && (event.key === "Enter" || event.key === " ")) {
+          if (typeof event.preventDefault === "function") event.preventDefault();
+          open(event, "keyboard");
+        }
+      } catch (error) {
+        // The card is an optional affordance.
+      }
+    });
+  } catch (error) {
+    // A pill without handlers still communicates the mention.
+  }
+}
+
+function relationCreateMentionPill(doc, chip, options) {
   const pill = doc.createElement("span");
   pill.setAttribute("class", "bob-relation-pill is-mention");
   pill.setAttribute("role", "button");
@@ -575,6 +793,7 @@ function relationCreateMentionPill(doc, chip) {
   pill.setAttribute("aria-haspopup", "dialog");
   pill.setAttribute("aria-label", String(chip && chip.pillAriaLabel || "Why is this here?"));
   pill.appendChild(doc.createTextNode(String(chip && chip.mentionPill || "💬 mentioned in")));
+  relationAttachMentionPillHandlers(pill, chip, options);
   return pill;
 }
 

@@ -244,6 +244,9 @@ class BobLedgerToolsRelationModelMixin {
       if (!path) {
         return Decoration.none;
       }
+      if (typeof this.relationCloseMentionCardForSource === "function") {
+        this.relationCloseMentionCardForSource(path);
+      }
       const doc = view.state.doc;
       if (!doc || typeof doc.lineAt !== "function") {
         return Decoration.none;

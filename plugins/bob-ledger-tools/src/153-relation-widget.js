@@ -59,6 +59,42 @@ if (WidgetType && typeof WidgetType === "function") {
               // Best-effort only.
             }
           },
+          onMention: (chip, pill, event, reason) => {
+            try {
+              if (plugin && typeof plugin.relationOpenMentionCard === "function") {
+                plugin.relationOpenMentionCard(chip, sourcePath, pill, event, reason);
+              }
+            } catch (error) {
+              // The mention remains a usable task link if its card fails.
+            }
+          },
+          onMentionLeave: (pill) => {
+            try {
+              if (plugin && typeof plugin.relationMentionCardPointerLeave === "function") {
+                plugin.relationMentionCardPointerLeave(pill);
+              }
+            } catch (error) {
+              // The mention remains readable without pointer dismissal.
+            }
+          },
+          onMentionNavigate: (pill, event, direction) => {
+            try {
+              if (plugin && typeof plugin.relationMentionCardNavigate === "function") {
+                plugin.relationMentionCardNavigate(pill, direction);
+              }
+            } catch (error) {
+              // The popover stays available to ordinary Tab navigation.
+            }
+          },
+          onMentionClose: (pill, event, restoreFocus) => {
+            try {
+              if (plugin && typeof plugin.relationCloseMentionCard === "function") {
+                plugin.relationCloseMentionCard(Boolean(restoreFocus), pill);
+              }
+            } catch (error) {
+              // A failed close leaves the non-modal card in place.
+            }
+          },
           onRemove: (chip) => {
             try {
               if (plugin && typeof plugin.relationRemoveLink === "function") {

@@ -401,7 +401,19 @@ class MiniNode {
   }
   removeChild(child) { this.childNodes = this.childNodes.filter((node) => node !== child); child.parentNode = null; return child; }
   remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+  contains(node) {
+    let current = node;
+    while (current) {
+      if (current === this) return true;
+      current = current.parentNode || null;
+    }
+    return false;
+  }
   addEventListener(name, handler) { (this.listeners[name] ||= []).push(handler); }
+  focus() {
+    if (this.ownerDocument) this.ownerDocument.activeElement = this;
+    for (const handler of this.listeners.focus || []) handler({ target: this });
+  }
   get firstChild() { return this.childNodes[0] || null; }
   get textContent() { return this.nodeType === 3 ? this.nodeValue : this.childNodes.map((node) => node.textContent).join(""); }
   set textContent(value) { this.childNodes = []; this.appendChild(new MiniNode("#text", 3, String(value))); }
@@ -413,6 +425,10 @@ class MiniNode {
   }
 }
 class MiniDoc {
+  constructor() {
+    this.activeElement = null;
+    this.body = this.createElement("body");
+  }
   createElement(tag) { const node = new MiniNode(tag); node.ownerDocument = this; return node; }
   createTextNode(text) { const node = new MiniNode("#text", 3, String(text)); node.ownerDocument = this; return node; }
 }
@@ -726,7 +742,12 @@ test("Reading view groups mention rows, renders the quote, omits ×, and jumps t
   plugin.relationIndexApi = () => ({
     linkedFrom: () => [{
       kind: "mention", source: { path: "source.md", blockId: "source", text: "Source mentions this", status: "TODO" },
-      display: "mention", count: 1, occurrences: [{ line: 3, ch: 18, site: "note", excerpt: "Merged into ⟦this task⟧" }],
+      display: "mention", count: 4, occurrences: [
+        { line: 3, ch: 18, site: "note", excerpt: "Merged into ⟦this task⟧" },
+        { line: 5, ch: 8, site: "cancel_log", excerpt: "Cancel for ⟦this task⟧" },
+        { line: 7, ch: 4, site: "work_log", excerpt: "Worked on ⟦this task⟧" },
+        { line: 9, ch: 10, site: "schedule_log", excerpt: "Rescheduled ⟦this task⟧" },
+      ],
     }],
   });
   plugin.relationLookupTask = (path, id) => path === source.path && id === source.id ? source : null;
@@ -748,9 +769,157 @@ test("Reading view groups mention rows, renders the quote, omits ×, and jumps t
   assert.equal(findByClass(row, "bob-relation-pill")[0].textContent, "💬 mentioned in");
   assert.equal(findByClass(row, "bob-mention-quote-target")[0].textContent, "this task");
   assert.equal(findByClass(row, "bob-dep-chip-remove").length, 0);
+  const pill = findByClass(row, "bob-relation-pill")[0];
+  assert.equal(pill.getAttribute("aria-haspopup"), "dialog");
+  assert.equal(pill.getAttribute("role"), "button");
   fire(anchor, "click", { metaKey: true });
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.deepEqual(opened, [["source#^source", "target.md", true]]);
+
+  fire(pill, "click");
+  let card = findByClass(docNode.body, "bob-mention-card")[0];
+  assert.ok(card);
+  assert.equal(card.getAttribute("role"), "dialog");
+  assert.equal(card.getAttribute("aria-label"), "💬 Mentioned in another task's text · not a relation");
+  assert.match(card.textContent, /mentioned 4× in this task/);
+  assert.match(card.textContent, /\+1 more/);
+  assert.equal(findByClass(card, "bob-mention-card-occurrence").length, 3);
+  assert.match(card.textContent, /in a note under it/);
+  assert.match(card.textContent, /in its Cancel Log/);
+  assert.match(card.textContent, /in its Work Log/);
+
+  fire(card, "keydown", { key: "Escape" });
+  assert.equal(findByClass(docNode.body, "bob-mention-card").length, 0);
+  assert.equal(docNode.activeElement, pill, "Escape returns focus to the pill");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+
+  pill.focus();
+  card = findByClass(docNode.body, "bob-mention-card")[0];
+  assert.ok(card, "keyboard focus opens the card");
+  const occurrences = findByClass(card, "bob-mention-card-occurrence");
+  fire(pill, "keydown", { key: "ArrowDown" });
+  assert.equal(docNode.activeElement, occurrences[0], "arrow navigation enters the first occurrence");
+  fire(card, "keydown", { key: "ArrowRight", target: occurrences[0] });
+  assert.equal(docNode.activeElement, occurrences[1], "arrow navigation advances between occurrences");
+  let openedOccurrence = null;
+  plugin.relationOpenMention = (...args) => { openedOccurrence = args[3]; return true; };
+  fire(occurrences[1], "click");
+  assert.equal(openedOccurrence.line, 5, "clicking an occurrence opens that location");
+  assert.equal(findByClass(docNode.body, "bob-mention-card").length, 0);
+  plugin.teardownRelationIndex();
+});
+
+test("mention card hover waits, and moving the pointer onto the card keeps it open", async () => {
+  const source = task({ blockId: "source", id: "source", description: "Source task", path: "source.md" });
+  const model = relationChipModelForRow({
+    direction: "from",
+    lineText: "- 🪢 **LINKED FROM:** [[source#^source]] (💬 mentions)",
+    sourcePath: "target.md",
+    live: [liveMention(source, { occurrences: [{ line: 3, ch: 8, site: "note", excerpt: "See ⟦this task⟧" }] })],
+    lookup: lookupFor([source], "target.md"),
+    resolve: resolveFor("target.md"),
+  });
+  const plugin = new LedgerToolsPlugin(makeApp([source]), {});
+  const doc = new MiniDoc();
+  const row = buildRelationChipElement(doc, model, {
+    onMention: (chip, pill, event, reason) => plugin.relationOpenMentionCard(chip, "target.md", pill, event, reason),
+    onMentionLeave: (pill) => plugin.relationMentionCardPointerLeave(pill),
+    onMentionClose: (pill, event, restoreFocus) => plugin.relationCloseMentionCard(Boolean(restoreFocus), pill),
+    onMentionNavigate: (pill, event, direction) => plugin.relationMentionCardNavigate(pill, direction),
+  });
+  const pill = findByClass(row, "bob-relation-pill")[0];
+  fire(pill, "mouseenter");
+  assert.equal(findByClass(doc.body, "bob-mention-card").length, 0, "hover uses a delay");
+  await new Promise((resolve) => setTimeout(resolve, 440));
+  const card = findByClass(doc.body, "bob-mention-card")[0];
+  assert.ok(card, "hover opens the card after the delay");
+  fire(pill, "mouseleave");
+  fire(card, "mouseenter");
+  await new Promise((resolve) => setTimeout(resolve, 240));
+  assert.equal(findByClass(doc.body, "bob-mention-card").length, 1, "hovering the card cancels dismissal");
+  fire(card, "mouseleave");
+  await new Promise((resolve) => setTimeout(resolve, 240));
+  assert.equal(findByClass(doc.body, "bob-mention-card").length, 0, "the card closes after pointer exit");
+});
+
+test("Reading view hides only host-note embedded mentions inside a transclusion", async () => {
+  const onlyTask = task({ blockId: "only", id: "only", description: "Only echo", path: "target.md" });
+  const mixedTask = task({ blockId: "mixed", id: "mixed", description: "Mixed echo", path: "target.md" });
+  const host = task({ blockId: "host-source", id: "host-source", description: "Host source", path: "host.md" });
+  const other = task({ blockId: "other-source", id: "other-source", description: "Other source", path: "other.md" });
+  const content = [
+    "- [ ] #task Only echo ^only",
+    "  - 🪢 **LINKED FROM:** [[host#^host-source]] (💬 mentions)",
+    "- [ ] #task Mixed echo ^mixed",
+    "  - 🪢 **LINKED FROM:** [[host#^host-source]] (💬 mentions) • [[other#^other-source]] (💬 mentions)",
+  ].join("\n");
+  const app = makeApp([onlyTask, mixedTask, host, other], "", null, [{ path: "target.md", content }]);
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.dependencyChipsEnabled = true;
+  const hostEdge = {
+    kind: "mention", source: { path: "host.md", blockId: "host-source", text: "Host source", status: "TODO" },
+    display: "embed", count: 1, occurrences: [{ line: 3, ch: 12, site: "note", excerpt: null }],
+  };
+  const otherEdge = {
+    kind: "mention", source: { path: "other.md", blockId: "other-source", text: "Other source", status: "TODO" },
+    display: "embed", count: 1, occurrences: [{ line: 5, ch: 12, site: "note", excerpt: null }],
+  };
+  plugin.relationIndexApi = () => ({
+    linkedFrom: (path, id) => id === "only" ? [hostEdge] : id === "mixed" ? [hostEdge, otherEdge] : [],
+  });
+  plugin.relationLookupTask = (path, id) => path === "host.md" && id === "host-source" ? host
+    : path === "other.md" && id === "other-source" ? other : null;
+  plugin.relationResolveLinkpath = (linkpath) => {
+    const path = String(linkpath || "").split("#")[0];
+    return path ? path + ".md" : "target.md";
+  };
+
+  const doc = new MiniDoc();
+  const preview = doc.createElement("div");
+  preview.classList.add("markdown-preview-view");
+  app.workspace.getLeavesOfType = () => [{ view: { file: { path: "host.md" }, containerEl: preview } }];
+  const embed = doc.createElement("div");
+  embed.classList.add("markdown-embed");
+  embed.setAttribute("data-path", "target.md");
+  const embeddedContent = doc.createElement("div");
+  embed.appendChild(embeddedContent);
+  preview.appendChild(embed);
+  const addOwner = (id, description, links) => {
+    const owner = doc.createElement("li");
+    owner.appendChild(doc.createTextNode("#task " + description));
+    const list = doc.createElement("ul");
+    owner.appendChild(list);
+    const row = doc.createElement("li");
+    row.appendChild(doc.createTextNode("🪢 "));
+    const strong = doc.createElement("strong");
+    strong.appendChild(doc.createTextNode("LINKED FROM:"));
+    row.appendChild(strong);
+    row.appendChild(doc.createTextNode(" "));
+    for (let index = 0; index < links.length; index += 1) {
+      if (index > 0) row.appendChild(doc.createTextNode(" • "));
+      const anchor = doc.createElement("a");
+      anchor.classList.add("internal-link");
+      anchor.setAttribute("data-href", links[index]);
+      anchor.setAttribute("href", links[index]);
+      anchor.appendChild(doc.createTextNode(links[index]));
+      row.appendChild(anchor);
+    }
+    list.appendChild(row);
+    embeddedContent.appendChild(owner);
+    return row;
+  };
+  const echoOnlyRow = addOwner("only", "Only echo", ["host#^host-source"]);
+  const mixedRow = addOwner("mixed", "Mixed echo", ["host#^host-source", "other#^other-source"]);
+  await plugin.renderRelationChipsIn(embeddedContent, {
+    sourcePath: "target.md",
+    getSectionInfo: () => ({ lineStart: 0, lineEnd: 3 }),
+  });
+  assert.equal(echoOnlyRow.style.display, "none", "an echo-only row is hidden in its host transclusion");
+  assert.equal(echoOnlyRow.getAttribute("aria-hidden"), "true");
+  assert.equal(findByClass(echoOnlyRow, "bob-relation-pill").length, 0);
+  assert.equal(findByClass(mixedRow, "bob-relation-pill").length, 1, "a mention from another source remains");
+  assert.equal(findByClasses(mixedRow, ["bob-relation-chip", "is-mention"])[0].textContent.includes("Other source"), true);
+  assert.equal(findByClass(mixedRow, "bob-relation-chip").length, 1);
   plugin.teardownRelationIndex();
 });
 

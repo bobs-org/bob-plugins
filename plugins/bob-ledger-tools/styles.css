@@ -985,6 +985,115 @@ body.bob-fresh-marks .markdown-source-view.is-live-preview .dataview.inline-fiel
   border-radius: 2px;
 }
 
+.bob-mention-card {
+  z-index: var(--layer-popover, 1000);
+  box-sizing: border-box;
+  width: min(28rem, calc(100vw - 16px));
+  max-height: min(32rem, calc(100vh - 16px));
+  overflow: auto;
+  padding: 0.8em 0.9em;
+  color: var(--text-normal);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m, 8px);
+  box-shadow: var(--shadow-l);
+  font-size: var(--font-ui-small, 13px);
+  line-height: 1.4;
+}
+
+.bob-mention-card-header {
+  margin-bottom: 0.5em;
+  color: var(--text-muted);
+  font-weight: var(--font-semibold, 600);
+}
+
+.bob-mention-card-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25em 0.5em;
+  margin-bottom: 0.6em;
+}
+
+.bob-mention-card-status {
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+}
+
+.bob-mention-card-title {
+  font-weight: var(--font-semibold, 600);
+}
+
+.bob-mention-card-note,
+.bob-mention-card-count,
+.bob-mention-card-location,
+.bob-mention-card-escape,
+.bob-mention-card-more,
+.bob-mention-card-stale {
+  color: var(--text-muted);
+}
+
+.bob-mention-card-occurrences {
+  display: grid;
+  gap: 0.35em;
+}
+
+.bob-mention-card-occurrence {
+  display: block;
+  width: 100%;
+  padding: 0.45em 0.55em;
+  color: var(--text-normal);
+  text-align: left;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s, 4px);
+  cursor: pointer;
+}
+
+.bob-mention-card-occurrence:hover,
+.bob-mention-card-occurrence:focus-visible {
+  border-color: var(--interactive-accent);
+}
+
+.bob-mention-card .bob-mention-quote {
+  display: block;
+  max-width: none;
+  margin: 0 0 0.2em;
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.bob-mention-card-location {
+  display: block;
+  font-size: 0.9em;
+}
+
+.bob-mention-card-more {
+  margin-top: 0.35em;
+}
+
+.bob-mention-card-stale {
+  margin-bottom: 0.5em;
+}
+
+.bob-mention-card-open {
+  display: block;
+  margin-top: 0.65em;
+  padding: 0.35em 0.55em;
+  color: var(--text-on-accent, var(--text-normal));
+  background: var(--interactive-accent);
+  border: 0;
+  border-radius: var(--radius-s, 4px);
+  cursor: pointer;
+}
+
+.bob-mention-card-escape {
+  display: block;
+  margin-top: 0.45em;
+  font-size: 0.85em;
+}
+
 .bob-relation-mixed-marker {
   color: var(--text-muted);
   font-size: 0.8em;

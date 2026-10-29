@@ -105,6 +105,7 @@
   "280-plugin-dependency-render.js",
   "281-plugin-blocks-render.js",
   "282-plugin-relation-render.js",
+  "282b-plugin-relation-mention-card.js",
   "283-plugin-command-mode-refresh.js",
   "290-plugin-today-and-location.js",
   "300-plugin-vim-and-snippets.js",

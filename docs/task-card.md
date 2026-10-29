@@ -46,7 +46,7 @@ the owning task's Links or Linked-from stage.
 | `l` | Open Links to (task relations); in its filter, `~` flips direction. |
 | `⇧L` | Open Linked from (task relations); in its filter, `~` flips direction. |
 | `f` | Open Review every (Refresh). |
-| `t` | Open Theme; `Enter` on the Theme row opens the same stage. The stage offers Use default first with its inherited reason, then Today, Recent, and a validated typed new name. |
+| `t` | Open Theme; `Enter` on the Theme row opens the same stage. The stage offers Use default first with its inherited reason, then Today, Recent, and a validated typed new name. Theme rows use Bob's reported hue in a tinted pill with a swatch; uncolored themes (exempt or unconfigured), such as PLAN, are grey. The inherited theme's row is marked Default. |
 | `x` | Open the cancel-reason stage; the key alone never cancels. |
 | `Alt+N` | Commit to Next or release to Ready. |
 | `Ctrl+D` | Delete the selected property; Schedule is selected by default. On Theme, clear to Use default (field clearing only, never Recent hide; theme need not be in the configured property list). On Links to, clear all outgoing relations; Linked from is generated and refuses clearing. In the relation-label stage, hide or unhide the selected label; row zero toggles one-off instead. |
@@ -88,7 +88,10 @@ A theme-only edit writes only `[theme:: ...]` fields through the Ledger Tools
 setters with guarded identity and a revalidated default: selecting Use default
 always clears (including invalid, duplicate, and none defaults), selecting the
 inherited theme also clears, and other choices follow the single non-exempt
-component rule with catalog spelling. Closed tasks keep their history. No
+component rule with catalog spelling. On a task with no override, choosing its
+inherited theme writes nothing; the notice names the theme and its declaring area
+or project note, for example, `WRITE is already inherited from area note job;
+nothing was written`. Closed tasks keep their history. No
 status, Task Link, ID, route, freshness, stamp, schedule, Work Log, or
 review-walk change is caused by a theme-only edit; `Back`, `Escape`, and
 `Ctrl+[` write nothing.

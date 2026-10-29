@@ -2066,6 +2066,46 @@
   color: var(--text-normal);
 }
 
+.bob-task-card-theme-pill.is-muted {
+  border-color: color-mix(in srgb, var(--text-faint) 48%, var(--background-modifier-border));
+}
+
+.bob-task-card-theme-option-pill {
+  --bob-theme-option-hue: var(--text-faint);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  border-radius: 999px;
+  line-height: 1.55;
+  color: var(--text-normal);
+  background-color: color-mix(in srgb, var(--bob-theme-option-hue) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bob-theme-option-hue) 48%, var(--background-modifier-border));
+}
+
+.theme-dark .bob-task-card-theme-option-pill {
+  background-color: color-mix(in srgb, var(--bob-theme-option-hue) 24%, transparent);
+}
+
+.bob-task-card-theme-option-pill.is-blue { --bob-theme-option-hue: var(--bob-hue-blue, var(--text-faint)); }
+.bob-task-card-theme-option-pill.is-orange { --bob-theme-option-hue: var(--bob-hue-orange, var(--text-faint)); }
+.bob-task-card-theme-option-pill.is-aqua { --bob-theme-option-hue: var(--bob-hue-aqua, var(--text-faint)); }
+.bob-task-card-theme-option-pill.is-yellow { --bob-theme-option-hue: var(--bob-hue-yellow, var(--text-faint)); }
+.bob-task-card-theme-option-pill.is-magenta { --bob-theme-option-hue: var(--bob-hue-magenta, var(--text-faint)); }
+.bob-task-card-theme-option-pill.is-green { --bob-theme-option-hue: var(--bob-hue-green, var(--text-faint)); }
+.bob-task-card-theme-option-pill.is-violet { --bob-theme-option-hue: var(--bob-hue-violet, var(--text-faint)); }
+.bob-task-card-theme-option-pill.is-red { --bob-theme-option-hue: var(--bob-hue-red, var(--text-faint)); }
+
+.bob-task-card-theme-option-pill .bob-cnp-theme-swatch {
+  flex: 0 0 auto;
+}
+
+.bob-task-card-theme-option-pill .bob-cnp-theme-swatch.is-muted,
+.bob-task-card-theme-pill .bob-cnp-theme-swatch.is-muted {
+  background-color: var(--text-faint);
+  border-color: transparent;
+}
+
 .bob-task-card-theme-value.is-unknown {
   text-decoration-line: underline;
   text-decoration-style: dotted;

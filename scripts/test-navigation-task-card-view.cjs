@@ -2852,3 +2852,171 @@ test("task card labels are unchanged without the priority mark api", () => {
     assert.equal(flattenText(root), expected);
   }
 });
+
+function jobThemeSuggestion() {
+  return {
+    source: "note", theme: { key: "write", name: "WRITE", known: true },
+    from: { stem: "job", kind: "area", path: "job.md" },
+  };
+}
+
+function jobThemeHarness() {
+  return makeTaskThemeHarness({
+    catalog: [{ key: "write", name: "WRITE", hue: "violet" }, { key: "meet", name: "MEET", hue: "blue" }],
+    recent: [{ key: "write", name: "WRITE" }, { key: "meet", name: "MEET" }],
+    suggestFor: () => jobThemeSuggestion(),
+  });
+}
+
+function clickTheme(modal, key) {
+  const index = modal.visibleItems.findIndex((item) => item.themeKey === key);
+  assert.ok(index >= 0, `theme ${key} is visible`);
+  click(byClass(modal.resultsEl, "bob-cnp-row")[index]);
+}
+
+test("job.md inherited theme no-op explains the source, writes nothing, and closes", async () => {
+  const content = "- [ ] #task Job task ^job";
+  const { modal, editor } = openTaskThemeStage({ content, filePath: "job.md", themeHarness: jobThemeHarness() });
+  clickTheme(modal, "write");
+  await nextTurn();
+  assert.equal(editor.getValue(), content);
+  assert.deepEqual(editor.writeCounts(), { transactions: 0, replacements: 0 });
+  assert.equal(notices.at(-1), "WRITE is already inherited from area note job; nothing was written");
+  assert.equal(modal.isOpen, false);
+});
+
+test("choosing the inherited theme removes an override and reports its source", async () => {
+  const content = "- [ ] #task Job task [theme:: MEET] ^job";
+  const { modal, editor } = openTaskThemeStage({ content, themeHarness: jobThemeHarness() });
+  clickTheme(modal, "write");
+  await nextTurn();
+  assert.equal(editor.getValue(), "- [ ] #task Job task ^job");
+  assert.equal(editor.writeCounts().replacements, 1);
+  assert.equal(notices.at(-1), "Override removed; WRITE is inherited from area note job");
+  assert.equal(modal.isOpen, false);
+});
+
+test("Ctrl+D with no override and selecting the explicit theme explain unchanged tasks", async () => {
+  for (const same of [false, true]) {
+    const content = `- [ ] #task Job task${same ? " [theme:: MEET]" : ""} ^job`;
+    const { modal, editor } = openTaskThemeStage({ content, themeHarness: jobThemeHarness() });
+    if (same) clickTheme(modal, "meet");
+    else pressKey(modal, "d", { ctrlKey: true });
+    await nextTurn();
+    assert.equal(editor.getValue(), content);
+    assert.deepEqual(editor.writeCounts(), { transactions: 0, replacements: 0 });
+    assert.equal(notices.at(-1), same
+      ? "MEET is already set on this task; nothing was written"
+      : "Already using the default (WRITE from area note job); nothing was written");
+    assert.equal(modal.isOpen, false);
+  }
+});
+
+test("counted and linked unchanged batches explain the inherited source without writes", async () => {
+  for (const linked of [false, true]) {
+    const lines = ["- [ ] #task Alpha ^alpha", "- [/] #task Beta ^beta", "- [ ] #task Gamma ^gamma"];
+    const content = lines.join("\n");
+    const themeHarness = jobThemeHarness();
+    const vault = installThemeVault(themeHarness, { "job.md": content });
+    const targets = lines.map((rawLine, line) => ({ path: "job.md", content, line, rawLine, blockId: ["alpha", "beta", "gamma"][line] }));
+    const context = linked
+      ? { propertyContext: { isObsidianTask: false }, linkSession: linkSessionForTargets(targets) }
+      : { taskSession: { valid: true, explicit: true, requestedCount: 3, actualCount: 3, targets } };
+    const source = linked ? "- [[job#^alpha]]\n- [[job#^beta]]\n- [[job#^gamma]]" : content;
+    const { modal, editor } = openTaskThemeStage({ content: source, themeHarness, context });
+    clickTheme(modal, "write");
+    await nextTurn();
+    assert.equal(notices.at(-1), "WRITE is already inherited from area note job by all 3 tasks; nothing was written");
+    assert.equal(editor.getValue(), source);
+    assert.deepEqual(editor.writeCounts(), { transactions: 0, replacements: 0 });
+    assert.equal(vault.notes["job.md"], content);
+    assert.deepEqual(vault.writes, []);
+    assert.equal(modal.isOpen, false);
+  }
+});
+
+test("a single linked theme edit uses fresh source-specific no-op and saved notices", async () => {
+  for (const override of [false, true]) {
+    const content = `- [ ] #task Job task${override ? " [theme:: MEET]" : ""} ^job`;
+    const themeHarness = jobThemeHarness();
+    const vault = installThemeVault(themeHarness, { "job.md": content });
+    const target = { path: "job.md", content, line: 0, rawLine: content, blockId: "job" };
+    const { modal, editor } = openTaskThemeStage({
+      content: "- [[job#^job]]", themeHarness,
+      context: { propertyContext: { isObsidianTask: false }, linkSession: linkSessionForTargets([target]) },
+    });
+    clickTheme(modal, "write");
+    await nextTurn();
+    assert.equal(notices.at(-1), override
+      ? "Override removed; WRITE is inherited from area note job"
+      : "WRITE is already inherited from area note job; nothing was written");
+    assert.equal(vault.notes["job.md"], "- [ ] #task Job task ^job");
+    assert.equal(vault.writes.length, override ? 1 : 0);
+    assert.deepEqual(editor.writeCounts(), { transactions: 0, replacements: 0 });
+    assert.equal(modal.isOpen, false);
+  }
+});
+
+test("theme menu uses colored pills, grey PLAN, source markers, and distinct kind badges", () => {
+  const catalog = [
+    { key: "build", name: "BUILD", hue: "yellow", today: true },
+    { key: "plan", name: "PLAN", hue: null },
+    { key: "write", name: "WRITE", hue: "violet" },
+  ];
+  const { modal } = openTaskThemeStage({ themeOptions: { catalog, recent: catalog, suggestFor: jobThemeSuggestion } });
+  const rowFor = (key) => byClass(modal.resultsEl, "bob-cnp-row")[modal.visibleItems.findIndex((item) => item.themeKey === key)];
+  for (const [key, hue] of [["build", "yellow"], ["plan", "muted"]]) {
+    const row = rowFor(key);
+    assert.ok(row.classes.includes("bob-task-card-theme-option"));
+    const pill = byClass(row, "bob-task-card-theme-option-pill")[0];
+    const swatch = byClass(pill, "bob-cnp-theme-swatch")[0];
+    assert.ok(pill.classes.includes(`is-${hue}`));
+    assert.ok(swatch.classes.includes(`is-${hue}`));
+    assert.equal(pill.attributes["data-theme-hue"], hue === "muted" ? "none" : hue);
+    assert.equal(swatch.attributes["aria-hidden"], "true");
+    assert.equal(swatch.attributes.title, hue === "muted" ? "No theme color" : "Theme hue: yellow");
+    assert.equal(flattenText(pill), key.toUpperCase());
+    assert.equal(byClass(row, "bob-cnp-row-path").length, 0);
+    assert.equal(byClass(row, "bob-cnp-row-status").length, 1);
+  }
+  const write = rowFor("write");
+  const badges = byClass(write, "bob-cnp-row-status");
+  assert.deepEqual(badges.map(flattenText), ["Recent", "Default"]);
+  assert.equal(badges[1].attributes.title, "Inherited default; choosing it removes this task's override");
+  assert.equal(flattenText(byClass(write, "bob-cnp-row-path")[0]), "inherited from area note job");
+  const defaultRow = rowFor("__default");
+  assert.equal(byClass(defaultRow, "bob-task-card-theme-option-pill").length, 0);
+  assert.equal(flattenText(defaultRow), "Use default WRITE from job");
+  for (const row of byClass(modal.resultsEl, "bob-cnp-row")) {
+    assert.doesNotMatch(flattenText(row), /Today · Today|Recent · Recent|Use default · Use default/);
+  }
+  modal.inputEl.value = "bui";
+  modal.inputEl.listeners.input({});
+  assert.equal(flattenText(byClass(rowFor("build"), "bob-cnp-hl")[0]), "BUI");
+  modal.close();
+});
+
+test("theme menu stays grey when hueFor is missing or throws, and header matches null hues", () => {
+  for (const hueFor of [undefined, () => { throw new Error("unavailable hue"); }]) {
+    const themeHarness = jobThemeHarness();
+    themeHarness.api.hueFor = hueFor;
+    const { modal } = openTaskThemeStage({ themeHarness });
+    const pill = byClass(modal.resultsEl, "bob-task-card-theme-option-pill")[0];
+    assert.ok(pill.classes.includes("is-muted"));
+    assert.ok(byClass(pill, "bob-cnp-theme-swatch")[0].classes.includes("is-muted"));
+    modal.close();
+  }
+  const themeHarness = makeTaskThemeHarness({
+    catalog: [{ key: "plan", name: "PLAN", hue: null }], suggestFor: () => noteTheme("PLAN"),
+  });
+  const { modal } = openPropertyPicker({ content: "- [ ] #task Plan ^plan", app: themeHarness.app });
+  const pill = byClass(modal.contentEl, "bob-task-card-theme-pill")[0];
+  assert.ok(pill.classes.includes("is-muted"));
+  assert.ok(byClass(pill, "bob-cnp-theme-swatch")[0].classes.includes("is-muted"));
+  modal.close();
+  assert.match(STYLES, /\.bob-task-card-theme-option-pill\.is-blue/);
+  assert.match(STYLES, /--bob-theme-option-hue/);
+  assert.match(STYLES, /\.bob-task-card-theme-option-pill\s*\{[^}]*display: inline-flex/s);
+  assert.match(STYLES, /\.bob-task-card-theme-pill\.is-muted\s*\{[^}]*border-color: color-mix/s);
+  assert.match(STYLES, /\.bob-task-card-theme-option-pill \.bob-cnp-theme-swatch\.is-muted,\s*\.bob-task-card-theme-pill \.bob-cnp-theme-swatch\.is-muted\s*\{\s*background-color: var\(--text-faint\);\s*border-color: transparent;/s);
+});

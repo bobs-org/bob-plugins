@@ -68,17 +68,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       query: rawQuery,
       ledgerApi: this.getTaskCardLedgerApi(),
     });
-    const items = stage.rows.map((row) => Object.freeze({
-      key: row.kind === "default" ? "__default" : `theme-${row.key}`,
-      themeKind: row.kind,
-      themeKey: row.key,
-      themeName: row.name,
-      title: row.kind === "default" ? "Use default" : row.title,
-      detail: row.detail,
-      searchText: row.kind === "default"
-        ? `use default ${row.detail}`
-        : `${row.title || ""} ${row.detail || ""} ${row.key || ""}`,
-    }));
+    const items = stage.rows.map(taskCardThemeStageItem);
     this.taskCardThemeStageRows = items;
     this.items = items;
     const normalizedQuery = rawQuery.trim().toLowerCase();
@@ -200,15 +190,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     this.taskCardThemeQuery = query;
     const ledgerApi = this.getTaskCardLedgerApi();
     const stage = buildTaskCardThemeStageModel(projection, api, { query, ledgerApi });
-    const items = stage.rows.map((row) => Object.freeze({
-      key: row.kind === "default" ? "__default" : `theme-${row.key}`,
-      themeKind: row.kind,
-      themeKey: row.key,
-      themeName: row.name,
-      title: row.kind === "default" ? "Use default" : row.title,
-      detail: row.detail,
-      searchText: row.kind === "default" ? `use default ${row.detail}` : `${row.title || ""} ${row.detail || ""} ${row.key || ""}`,
-    }));
+    const items = stage.rows.map(taskCardThemeStageItem);
     this.stage = "value";
     this.selectedPropertyItem = null;
     this.pendingTask = null;
@@ -248,7 +230,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       ],
       getSubtitle: () => subtitle,
       filterItem: (item, nextQuery) => fuzzyMatchesText(item.searchText, nextQuery),
-      renderItem: (item, rowEl) => this.renderTaskCardThemeStageItem(item, rowEl),
+      renderItem: (item, rowEl, query) => this.renderTaskCardThemeStageItem(item, rowEl, query),
       openItem: (item) => this.commitTaskCardThemeStageItem(item),
     });
     if (this.resultsEl) {
@@ -259,40 +241,51 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     }
   }
 
-  renderTaskCardThemeStageItem(item, rowEl) {
-    if (!rowEl || typeof rowEl.createSpan !== "function") {
+  renderTaskCardThemeStageItem(item, rowEl, query) {
+    if (!rowEl || typeof rowEl.createDiv !== "function") {
       return;
     }
     rowEl.empty();
-    const main = rowEl.createSpan({ cls: "bob-cnp-row-main" });
+    addElementClasses(rowEl, "bob-task-card-theme-option", `is-${item.themeKind}`);
+    const text = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const title = text.createDiv({ cls: "bob-cnp-row-title" });
     if (item.themeKind === "default") {
-      main.createSpan({ cls: "bob-cnp-row-title", text: "Use default" });
-      if (item.detail) {
-        main.createSpan({ cls: "bob-cnp-row-detail", text: ` · ${item.detail}` });
+      title.textContent = "Use default";
+    } else {
+      let hue = null;
+      try {
+        hue = navigationPomodoroThemeHue(this.getTaskCardThemeApi(), item.themeKey, item.themeName);
+      } catch (_error) {
+        // Color is decorative; an unavailable hue stays grey.
       }
-      return;
+      const hueClass = hue ? `is-${hue}` : "is-muted";
+      const pill = title.createSpan({
+        cls: `bob-task-card-theme-option-pill ${hueClass}`,
+        attr: { "data-theme-hue": hue || "none" },
+      });
+      pill.createSpan({
+        cls: `bob-cnp-theme-swatch ${hueClass}`,
+        attr: { "aria-hidden": "true", title: hue ? `Theme hue: ${hue}` : "No theme color" },
+      });
+      const name = pill.createSpan({ cls: "bob-task-card-theme-option-name" });
+      appendHighlighted(name, item.title || item.themeName || item.themeKey, query);
     }
-    const api = this.getTaskCardThemeApi();
-    try {
-      if (item.themeKey) {
-        const hue = api && typeof api.hueFor === "function"
-          ? navigationPomodoroThemeHue(api, item.themeKey, item.themeName)
-          : null;
-        const swatch = main.createSpan({
-          cls: `bob-cnp-theme-swatch${hue ? ` is-${hue}` : " is-muted"}`,
-        });
-        if (swatch && typeof swatch.setAttribute === "function") {
-          swatch.setAttribute("aria-hidden", "true");
-          swatch.setAttribute("title", hue ? `Theme hue: ${hue}` : "Theme hue unavailable");
-        }
-      }
-    } catch (_error) {
-      // Hue dot is decorative.
-    }
-    main.createSpan({ cls: "bob-cnp-row-title", text: item.title || item.themeName || item.themeKey });
-    if (item.detail) {
-      const badge = item.themeKind === "today" ? "Today" : item.themeKind === "recent" ? "Recent" : item.themeKind === "new" ? "New" : item.themeKind === "inherited-unknown" ? "Current default" : "";
-      main.createSpan({ cls: "bob-cnp-row-detail", text: ` · ${badge ? `${badge} · ` : ""}${item.detail}` });
+    const detail = item.themeKind === "default" ? item.detail
+      : item.themeKind === "new" ? "New theme"
+        : item.themeKind === "inherited-unknown" ? "current default · not in catalog"
+          : item.inheritedDefault && item.inheritedFrom
+            ? item.inheritedFrom === "reading tasks" ? "default for reading tasks" : `inherited from ${item.inheritedFrom}`
+            : null;
+    if (detail) text.createDiv({ cls: "bob-cnp-row-path", text: detail });
+    const label = { today: "Today", recent: "Recent", new: "New", "inherited-unknown": "Not in catalog" }[item.themeKind];
+    if (label || item.inheritedDefault) {
+      const badges = rowEl.createDiv({ cls: "bob-cnp-row-badges" });
+      if (label) badges.createSpan({ cls: "bob-cnp-row-status", text: label });
+      if (item.inheritedDefault) badges.createSpan({
+        cls: "bob-cnp-row-status",
+        text: "Default",
+        attr: { title: "Inherited default; choosing it removes this task's override" },
+      });
     }
   }
 
@@ -460,12 +453,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       return false;
     }
     if (edit.action === "none") {
-      new Notice("Theme is already set; nothing was written");
+      new Notice(taskCardThemeUnchangedNotice([edit]));
       return true;
     }
     const nextLine = this.taskCardThemeNewLineFor(lines[line], edit, api);
     if (nextLine === lines[line]) {
-      new Notice("Theme is already set; nothing was written");
+      new Notice(taskCardThemeUnchangedNotice([edit]));
       return true;
     }
     const cursor = typeof editor.getCursor === "function" ? editor.getCursor() : this.cursor;
@@ -481,7 +474,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
         // Cursor restore is best-effort.
       }
     }
-    new Notice(edit.action === "clear" ? "Theme cleared to default" : `Theme ${edit.name} saved`);
+    new Notice(taskCardThemeSavedNotice(edit));
     return true;
   }
 
@@ -496,6 +489,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     const nextLines = lines.slice();
     let changed = 0;
     let skippedClosed = 0;
+    const unchanged = [];
     for (const edit of edits) {
       const line = edit.target.identity.line;
       if (!Number.isInteger(line) || line < 0 || line >= lines.length || lines[line] !== edit.target.identity.rawLine) {
@@ -507,16 +501,19 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
         continue;
       }
       if (edit.action === "none") {
+        unchanged.push(edit);
         continue;
       }
       const nextLine = this.taskCardThemeNewLineFor(lines[line], edit, api);
       if (nextLine !== lines[line]) {
         nextLines[line] = nextLine;
         changed += 1;
+      } else {
+        unchanged.push(edit);
       }
     }
     if (changed === 0) {
-      new Notice(skippedClosed > 0 ? `Closed tasks keep their theme history; nothing was written` : "Themes are already set; nothing was written");
+      new Notice(skippedClosed > 0 ? `Closed tasks keep their theme history; nothing was written` : taskCardThemeUnchangedNotice(unchanged));
       return skippedClosed === 0;
     }
     const ending = content.includes("\r\n") ? "\r\n" : "\n";
@@ -536,6 +533,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
   async writeTaskCardLinkedThemeEdits(edits, api, selection, isCurrent = () => true) {
     let changed = 0;
     let skippedClosed = 0;
+    const unchanged = [];
     let skippedStale = 0;
     const failures = [];
     const paths = Array.from(new Set(
@@ -603,6 +601,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       }
       const freshEdit = freshPlan.edits[0];
       if (freshEdit.action === "none") {
+        unchanged.push(freshEdit);
         continue;
       }
       const nextLine = this.taskCardThemeNewLineFor(freshLines[identity.line], freshEdit, api);
@@ -612,7 +611,10 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           line: identity.line,
           from: freshLines[identity.line],
           text: nextLine,
+          edit: freshEdit,
         });
+      } else {
+        unchanged.push(freshEdit);
       }
     }
     // All note reads, task preimages, and inherited defaults are validated
@@ -644,7 +646,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       return false;
     }
     if (changed === 0 && failures.length === 0) {
-      new Notice("Themes are already set; nothing was written");
+      new Notice(taskCardThemeUnchangedNotice(unchanged));
       return true;
     }
     if (failures.length > 0 || skippedStale > 0) {
@@ -654,7 +656,9 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       return changed > 0;
     }
     new Notice(
-      `Theme saved on ${formatCountLabel(changed, "task")}${skippedClosed > 0 ? ` (${skippedClosed} closed skipped)` : ""}`,
+      edits.length === 1 && changed === 1 && skippedClosed === 0
+        ? taskCardThemeSavedNotice(preparedEdits[0].edit)
+        : `Theme saved on ${formatCountLabel(changed, "task")}${skippedClosed > 0 ? ` (${skippedClosed} closed skipped)` : ""}`,
     );
     return true;
   }

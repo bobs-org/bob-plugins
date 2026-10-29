@@ -46464,6 +46464,112 @@ function taskCardThemeStageInheritedReason(inherited) {
   return `${name} from ${sourceLabel}`;
 }
 
+function taskCardThemeInheritedSourceText(inherited) {
+  try {
+    const note = taskCardThemeNoteSource(inherited);
+    if (!note) return null;
+    const kind = inherited.from && inherited.from.kind;
+    const label = kind === "area" ? "area note" : kind === "project" ? "project note" : "note";
+    return `${label} ${note.stem}`;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function taskCardThemeNoticeContext(edit) {
+  const inherited = edit && edit.target && edit.target.inherited;
+  const theme = inherited && inherited.theme;
+  const name = theme && (theme.name || theme.key);
+  return {
+    name: typeof name === "string" ? name : null,
+    source: taskCardThemeInheritedSourceText(inherited),
+    reading: inherited && inherited.source === "reading",
+  };
+}
+
+function taskCardThemeUnchangedNotice(edits) {
+  const fallback = "Themes are already set; nothing was written";
+  try {
+    if (!Array.isArray(edits) || edits.length === 0) return fallback;
+    const entries = edits.map((edit) => {
+      const context = taskCardThemeNoticeContext(edit);
+      const kind = edit.action === "none" || edit.action === "set" ? "same"
+        : edit.action === "clear" && edit.reason === "select-inherited-clears" ? "inherited"
+          : edit.action === "clear" && edit.reason === "use-default" ? "default" : null;
+      return { ...context, kind, name: kind === "same" ? edit.name : context.name };
+    });
+    let text;
+    const first = entries[0];
+    if (entries.length === 1) {
+      const { kind, name, source, reading } = first;
+      if (kind === "default") {
+        const reason = source ? `${name} from ${source}` : reading ? `${name} for reading tasks` : name;
+        text = name ? `Already using the default (${reason})` : "No theme override to clear";
+      } else if (typeof name !== "string" || !name) {
+        return fallback;
+      } else if (kind === "same") {
+        text = `${name} is already set on this task`;
+      } else if (kind === "inherited") {
+        text = source ? `${name} is already inherited from ${source}`
+          : reading ? `${name} is already the default for reading tasks`
+            : `${name} is already this task's default`;
+      }
+    } else {
+      const count = formatCountLabel(entries.length, "task");
+      if (entries.every((entry) => entry.kind === "default")) {
+        text = `All ${count} already use their defaults`;
+      } else if (typeof first.name === "string" && first.name && entries.every((entry) =>
+        typeof entry.name === "string" && taskCardThemeNormalizeKey(entry.name) === taskCardThemeNormalizeKey(first.name))) {
+        if (entries.every((entry) => entry.kind === "inherited")) {
+          const source = first.source && entries.every((entry) => entry.source === first.source)
+            ? ` from ${first.source}` : "";
+          text = `${first.name} is already inherited${source} by all ${count}`;
+        } else if (entries.every((entry) => entry.kind === "same")) {
+          text = `${first.name} is already set on all ${count}`;
+        } else if (entries.every((entry) => entry.kind === "same" || entry.kind === "inherited")) {
+          text = `${first.name} already applies to all ${count}`;
+        }
+      }
+    }
+    return text ? `${text}; nothing was written` : fallback;
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function taskCardThemeSavedNotice(edit) {
+  try {
+    if (edit && edit.action === "set" && typeof edit.name === "string" && edit.name) {
+      return `Theme ${edit.name} saved`;
+    }
+    if (!edit || edit.action !== "clear") return "Theme saved";
+    const { name, source, reading } = taskCardThemeNoticeContext(edit);
+    if (!name) return "Theme cleared to default";
+    const prefix = edit.reason === "select-inherited-clears"
+      ? edit.target.field && edit.target.field.state === "repair" ? "Theme fields repaired" : "Override removed"
+      : "Theme cleared";
+    const reason = source ? `${name} is inherited from ${source}`
+      : reading ? `${name} is the default for reading tasks` : `${name} is this task's default`;
+    return `${prefix}; ${reason}`;
+  } catch (_error) {
+    return "Theme saved";
+  }
+}
+
+function taskCardThemeStageItem(row) {
+  return Object.freeze({
+    key: row.kind === "default" ? "__default" : `theme-${row.key}`,
+    themeKind: row.kind,
+    themeKey: row.key,
+    themeName: row.name,
+    title: row.kind === "default" ? "Use default" : row.title,
+    detail: row.detail,
+    searchText: row.kind === "default" ? `use default ${row.detail}` : `${row.title || ""} ${row.detail || ""} ${row.key || ""}`,
+    inheritedDefault: row.inheritedDefault === true,
+    inheritedFrom: row.inheritedFrom || null,
+  });
+}
+
 function taskCardThemeStageTodayNames(api) {
   const names = new Map();
   try {
@@ -46557,7 +46663,7 @@ function buildTaskCardThemeStageModel(projection, api, options = {}) {
       key: "__default",
       name: null,
       title: "Use default",
-      detail: defaultDetail,
+      detail: mixed ? defaultDetail : taskCardThemeStageInheritedReason(firstInherited),
     }),
   );
   const seen = new Set(["__default"]);
@@ -46653,7 +46759,17 @@ function buildTaskCardThemeStageModel(projection, api, options = {}) {
     mixed,
     targetCount: targets.length,
     defaultDetail,
-    rows: Object.freeze(rows),
+    rows: Object.freeze(rows.map((row) => {
+      const inheritedKey = firstInherited && firstInherited.theme && firstInherited.theme.key;
+      if (mixed || !inheritedKey || !["today", "recent", "new"].includes(row.kind) ||
+          row.key !== taskCardThemeNormalizeKey(inheritedKey)) return row;
+      return Object.freeze({
+        ...row,
+        inheritedDefault: true,
+        inheritedFrom: taskCardThemeInheritedSourceText(firstInherited) ||
+          (firstInherited.source === "reading" ? "reading tasks" : null),
+      });
+    })),
   });
 }
 
@@ -47330,7 +47446,7 @@ function renderTaskCardThemeHeader(container, theme) {
       if (part.type === "value" && part.themeKey) {
         span.textContent = "";
         const pill = span.createSpan({
-          cls: `bob-task-card-theme-pill${part.hue ? ` is-${part.hue}` : ""}`,
+          cls: `bob-task-card-theme-pill${part.hue ? ` is-${part.hue}` : " is-muted"}`,
         });
         pill.createSpan({
           cls: `bob-cnp-theme-swatch${part.hue ? ` is-${part.hue}` : " is-muted"}`,
@@ -49167,17 +49283,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       query: rawQuery,
       ledgerApi: this.getTaskCardLedgerApi(),
     });
-    const items = stage.rows.map((row) => Object.freeze({
-      key: row.kind === "default" ? "__default" : `theme-${row.key}`,
-      themeKind: row.kind,
-      themeKey: row.key,
-      themeName: row.name,
-      title: row.kind === "default" ? "Use default" : row.title,
-      detail: row.detail,
-      searchText: row.kind === "default"
-        ? `use default ${row.detail}`
-        : `${row.title || ""} ${row.detail || ""} ${row.key || ""}`,
-    }));
+    const items = stage.rows.map(taskCardThemeStageItem);
     this.taskCardThemeStageRows = items;
     this.items = items;
     const normalizedQuery = rawQuery.trim().toLowerCase();
@@ -49299,15 +49405,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     this.taskCardThemeQuery = query;
     const ledgerApi = this.getTaskCardLedgerApi();
     const stage = buildTaskCardThemeStageModel(projection, api, { query, ledgerApi });
-    const items = stage.rows.map((row) => Object.freeze({
-      key: row.kind === "default" ? "__default" : `theme-${row.key}`,
-      themeKind: row.kind,
-      themeKey: row.key,
-      themeName: row.name,
-      title: row.kind === "default" ? "Use default" : row.title,
-      detail: row.detail,
-      searchText: row.kind === "default" ? `use default ${row.detail}` : `${row.title || ""} ${row.detail || ""} ${row.key || ""}`,
-    }));
+    const items = stage.rows.map(taskCardThemeStageItem);
     this.stage = "value";
     this.selectedPropertyItem = null;
     this.pendingTask = null;
@@ -49347,7 +49445,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       ],
       getSubtitle: () => subtitle,
       filterItem: (item, nextQuery) => fuzzyMatchesText(item.searchText, nextQuery),
-      renderItem: (item, rowEl) => this.renderTaskCardThemeStageItem(item, rowEl),
+      renderItem: (item, rowEl, query) => this.renderTaskCardThemeStageItem(item, rowEl, query),
       openItem: (item) => this.commitTaskCardThemeStageItem(item),
     });
     if (this.resultsEl) {
@@ -49358,40 +49456,51 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     }
   }
 
-  renderTaskCardThemeStageItem(item, rowEl) {
-    if (!rowEl || typeof rowEl.createSpan !== "function") {
+  renderTaskCardThemeStageItem(item, rowEl, query) {
+    if (!rowEl || typeof rowEl.createDiv !== "function") {
       return;
     }
     rowEl.empty();
-    const main = rowEl.createSpan({ cls: "bob-cnp-row-main" });
+    addElementClasses(rowEl, "bob-task-card-theme-option", `is-${item.themeKind}`);
+    const text = rowEl.createDiv({ cls: "bob-cnp-row-text" });
+    const title = text.createDiv({ cls: "bob-cnp-row-title" });
     if (item.themeKind === "default") {
-      main.createSpan({ cls: "bob-cnp-row-title", text: "Use default" });
-      if (item.detail) {
-        main.createSpan({ cls: "bob-cnp-row-detail", text: ` · ${item.detail}` });
+      title.textContent = "Use default";
+    } else {
+      let hue = null;
+      try {
+        hue = navigationPomodoroThemeHue(this.getTaskCardThemeApi(), item.themeKey, item.themeName);
+      } catch (_error) {
+        // Color is decorative; an unavailable hue stays grey.
       }
-      return;
+      const hueClass = hue ? `is-${hue}` : "is-muted";
+      const pill = title.createSpan({
+        cls: `bob-task-card-theme-option-pill ${hueClass}`,
+        attr: { "data-theme-hue": hue || "none" },
+      });
+      pill.createSpan({
+        cls: `bob-cnp-theme-swatch ${hueClass}`,
+        attr: { "aria-hidden": "true", title: hue ? `Theme hue: ${hue}` : "No theme color" },
+      });
+      const name = pill.createSpan({ cls: "bob-task-card-theme-option-name" });
+      appendHighlighted(name, item.title || item.themeName || item.themeKey, query);
     }
-    const api = this.getTaskCardThemeApi();
-    try {
-      if (item.themeKey) {
-        const hue = api && typeof api.hueFor === "function"
-          ? navigationPomodoroThemeHue(api, item.themeKey, item.themeName)
-          : null;
-        const swatch = main.createSpan({
-          cls: `bob-cnp-theme-swatch${hue ? ` is-${hue}` : " is-muted"}`,
-        });
-        if (swatch && typeof swatch.setAttribute === "function") {
-          swatch.setAttribute("aria-hidden", "true");
-          swatch.setAttribute("title", hue ? `Theme hue: ${hue}` : "Theme hue unavailable");
-        }
-      }
-    } catch (_error) {
-      // Hue dot is decorative.
-    }
-    main.createSpan({ cls: "bob-cnp-row-title", text: item.title || item.themeName || item.themeKey });
-    if (item.detail) {
-      const badge = item.themeKind === "today" ? "Today" : item.themeKind === "recent" ? "Recent" : item.themeKind === "new" ? "New" : item.themeKind === "inherited-unknown" ? "Current default" : "";
-      main.createSpan({ cls: "bob-cnp-row-detail", text: ` · ${badge ? `${badge} · ` : ""}${item.detail}` });
+    const detail = item.themeKind === "default" ? item.detail
+      : item.themeKind === "new" ? "New theme"
+        : item.themeKind === "inherited-unknown" ? "current default · not in catalog"
+          : item.inheritedDefault && item.inheritedFrom
+            ? item.inheritedFrom === "reading tasks" ? "default for reading tasks" : `inherited from ${item.inheritedFrom}`
+            : null;
+    if (detail) text.createDiv({ cls: "bob-cnp-row-path", text: detail });
+    const label = { today: "Today", recent: "Recent", new: "New", "inherited-unknown": "Not in catalog" }[item.themeKind];
+    if (label || item.inheritedDefault) {
+      const badges = rowEl.createDiv({ cls: "bob-cnp-row-badges" });
+      if (label) badges.createSpan({ cls: "bob-cnp-row-status", text: label });
+      if (item.inheritedDefault) badges.createSpan({
+        cls: "bob-cnp-row-status",
+        text: "Default",
+        attr: { title: "Inherited default; choosing it removes this task's override" },
+      });
     }
   }
 
@@ -49559,12 +49668,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       return false;
     }
     if (edit.action === "none") {
-      new Notice("Theme is already set; nothing was written");
+      new Notice(taskCardThemeUnchangedNotice([edit]));
       return true;
     }
     const nextLine = this.taskCardThemeNewLineFor(lines[line], edit, api);
     if (nextLine === lines[line]) {
-      new Notice("Theme is already set; nothing was written");
+      new Notice(taskCardThemeUnchangedNotice([edit]));
       return true;
     }
     const cursor = typeof editor.getCursor === "function" ? editor.getCursor() : this.cursor;
@@ -49580,7 +49689,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
         // Cursor restore is best-effort.
       }
     }
-    new Notice(edit.action === "clear" ? "Theme cleared to default" : `Theme ${edit.name} saved`);
+    new Notice(taskCardThemeSavedNotice(edit));
     return true;
   }
 
@@ -49595,6 +49704,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     const nextLines = lines.slice();
     let changed = 0;
     let skippedClosed = 0;
+    const unchanged = [];
     for (const edit of edits) {
       const line = edit.target.identity.line;
       if (!Number.isInteger(line) || line < 0 || line >= lines.length || lines[line] !== edit.target.identity.rawLine) {
@@ -49606,16 +49716,19 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
         continue;
       }
       if (edit.action === "none") {
+        unchanged.push(edit);
         continue;
       }
       const nextLine = this.taskCardThemeNewLineFor(lines[line], edit, api);
       if (nextLine !== lines[line]) {
         nextLines[line] = nextLine;
         changed += 1;
+      } else {
+        unchanged.push(edit);
       }
     }
     if (changed === 0) {
-      new Notice(skippedClosed > 0 ? `Closed tasks keep their theme history; nothing was written` : "Themes are already set; nothing was written");
+      new Notice(skippedClosed > 0 ? `Closed tasks keep their theme history; nothing was written` : taskCardThemeUnchangedNotice(unchanged));
       return skippedClosed === 0;
     }
     const ending = content.includes("\r\n") ? "\r\n" : "\n";
@@ -49635,6 +49748,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
   async writeTaskCardLinkedThemeEdits(edits, api, selection, isCurrent = () => true) {
     let changed = 0;
     let skippedClosed = 0;
+    const unchanged = [];
     let skippedStale = 0;
     const failures = [];
     const paths = Array.from(new Set(
@@ -49702,6 +49816,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       }
       const freshEdit = freshPlan.edits[0];
       if (freshEdit.action === "none") {
+        unchanged.push(freshEdit);
         continue;
       }
       const nextLine = this.taskCardThemeNewLineFor(freshLines[identity.line], freshEdit, api);
@@ -49711,7 +49826,10 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           line: identity.line,
           from: freshLines[identity.line],
           text: nextLine,
+          edit: freshEdit,
         });
+      } else {
+        unchanged.push(freshEdit);
       }
     }
     // All note reads, task preimages, and inherited defaults are validated
@@ -49743,7 +49861,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       return false;
     }
     if (changed === 0 && failures.length === 0) {
-      new Notice("Themes are already set; nothing was written");
+      new Notice(taskCardThemeUnchangedNotice(unchanged));
       return true;
     }
     if (failures.length > 0 || skippedStale > 0) {
@@ -49753,7 +49871,9 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       return changed > 0;
     }
     new Notice(
-      `Theme saved on ${formatCountLabel(changed, "task")}${skippedClosed > 0 ? ` (${skippedClosed} closed skipped)` : ""}`,
+      edits.length === 1 && changed === 1 && skippedClosed === 0
+        ? taskCardThemeSavedNotice(preparedEdits[0].edit)
+        : `Theme saved on ${formatCountLabel(changed, "task")}${skippedClosed > 0 ? ` (${skippedClosed} closed skipped)` : ""}`,
     );
     return true;
   }
@@ -94230,7 +94350,7 @@ module.exports.helpers = {
   taskCardThemeCatalogSpelling, taskCardThemeExemptKeys,
   taskCardThemeSingleComponent, taskCardThemeValidateNewName,
   buildTaskCardThemeStageModel, planTaskCardThemeEdits,
-  taskCardThemeRevalidateEdit,
+  taskCardThemeRevalidateEdit, taskCardThemeUnchangedNotice, taskCardThemeSavedNotice, taskCardThemeInheritedSourceText, taskCardThemeStageItem,
   planTaskCard,
   taskCardBlocksAvailabilityReason,
   taskCardBlocksSummary,

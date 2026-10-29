@@ -167,6 +167,112 @@ function taskCardThemeStageInheritedReason(inherited) {
   return `${name} from ${sourceLabel}`;
 }
 
+function taskCardThemeInheritedSourceText(inherited) {
+  try {
+    const note = taskCardThemeNoteSource(inherited);
+    if (!note) return null;
+    const kind = inherited.from && inherited.from.kind;
+    const label = kind === "area" ? "area note" : kind === "project" ? "project note" : "note";
+    return `${label} ${note.stem}`;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function taskCardThemeNoticeContext(edit) {
+  const inherited = edit && edit.target && edit.target.inherited;
+  const theme = inherited && inherited.theme;
+  const name = theme && (theme.name || theme.key);
+  return {
+    name: typeof name === "string" ? name : null,
+    source: taskCardThemeInheritedSourceText(inherited),
+    reading: inherited && inherited.source === "reading",
+  };
+}
+
+function taskCardThemeUnchangedNotice(edits) {
+  const fallback = "Themes are already set; nothing was written";
+  try {
+    if (!Array.isArray(edits) || edits.length === 0) return fallback;
+    const entries = edits.map((edit) => {
+      const context = taskCardThemeNoticeContext(edit);
+      const kind = edit.action === "none" || edit.action === "set" ? "same"
+        : edit.action === "clear" && edit.reason === "select-inherited-clears" ? "inherited"
+          : edit.action === "clear" && edit.reason === "use-default" ? "default" : null;
+      return { ...context, kind, name: kind === "same" ? edit.name : context.name };
+    });
+    let text;
+    const first = entries[0];
+    if (entries.length === 1) {
+      const { kind, name, source, reading } = first;
+      if (kind === "default") {
+        const reason = source ? `${name} from ${source}` : reading ? `${name} for reading tasks` : name;
+        text = name ? `Already using the default (${reason})` : "No theme override to clear";
+      } else if (typeof name !== "string" || !name) {
+        return fallback;
+      } else if (kind === "same") {
+        text = `${name} is already set on this task`;
+      } else if (kind === "inherited") {
+        text = source ? `${name} is already inherited from ${source}`
+          : reading ? `${name} is already the default for reading tasks`
+            : `${name} is already this task's default`;
+      }
+    } else {
+      const count = formatCountLabel(entries.length, "task");
+      if (entries.every((entry) => entry.kind === "default")) {
+        text = `All ${count} already use their defaults`;
+      } else if (typeof first.name === "string" && first.name && entries.every((entry) =>
+        typeof entry.name === "string" && taskCardThemeNormalizeKey(entry.name) === taskCardThemeNormalizeKey(first.name))) {
+        if (entries.every((entry) => entry.kind === "inherited")) {
+          const source = first.source && entries.every((entry) => entry.source === first.source)
+            ? ` from ${first.source}` : "";
+          text = `${first.name} is already inherited${source} by all ${count}`;
+        } else if (entries.every((entry) => entry.kind === "same")) {
+          text = `${first.name} is already set on all ${count}`;
+        } else if (entries.every((entry) => entry.kind === "same" || entry.kind === "inherited")) {
+          text = `${first.name} already applies to all ${count}`;
+        }
+      }
+    }
+    return text ? `${text}; nothing was written` : fallback;
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function taskCardThemeSavedNotice(edit) {
+  try {
+    if (edit && edit.action === "set" && typeof edit.name === "string" && edit.name) {
+      return `Theme ${edit.name} saved`;
+    }
+    if (!edit || edit.action !== "clear") return "Theme saved";
+    const { name, source, reading } = taskCardThemeNoticeContext(edit);
+    if (!name) return "Theme cleared to default";
+    const prefix = edit.reason === "select-inherited-clears"
+      ? edit.target.field && edit.target.field.state === "repair" ? "Theme fields repaired" : "Override removed"
+      : "Theme cleared";
+    const reason = source ? `${name} is inherited from ${source}`
+      : reading ? `${name} is the default for reading tasks` : `${name} is this task's default`;
+    return `${prefix}; ${reason}`;
+  } catch (_error) {
+    return "Theme saved";
+  }
+}
+
+function taskCardThemeStageItem(row) {
+  return Object.freeze({
+    key: row.kind === "default" ? "__default" : `theme-${row.key}`,
+    themeKind: row.kind,
+    themeKey: row.key,
+    themeName: row.name,
+    title: row.kind === "default" ? "Use default" : row.title,
+    detail: row.detail,
+    searchText: row.kind === "default" ? `use default ${row.detail}` : `${row.title || ""} ${row.detail || ""} ${row.key || ""}`,
+    inheritedDefault: row.inheritedDefault === true,
+    inheritedFrom: row.inheritedFrom || null,
+  });
+}
+
 function taskCardThemeStageTodayNames(api) {
   const names = new Map();
   try {
@@ -260,7 +366,7 @@ function buildTaskCardThemeStageModel(projection, api, options = {}) {
       key: "__default",
       name: null,
       title: "Use default",
-      detail: defaultDetail,
+      detail: mixed ? defaultDetail : taskCardThemeStageInheritedReason(firstInherited),
     }),
   );
   const seen = new Set(["__default"]);
@@ -356,7 +462,17 @@ function buildTaskCardThemeStageModel(projection, api, options = {}) {
     mixed,
     targetCount: targets.length,
     defaultDetail,
-    rows: Object.freeze(rows),
+    rows: Object.freeze(rows.map((row) => {
+      const inheritedKey = firstInherited && firstInherited.theme && firstInherited.theme.key;
+      if (mixed || !inheritedKey || !["today", "recent", "new"].includes(row.kind) ||
+          row.key !== taskCardThemeNormalizeKey(inheritedKey)) return row;
+      return Object.freeze({
+        ...row,
+        inheritedDefault: true,
+        inheritedFrom: taskCardThemeInheritedSourceText(firstInherited) ||
+          (firstInherited.source === "reading" ? "reading tasks" : null),
+      });
+    })),
   });
 }
 

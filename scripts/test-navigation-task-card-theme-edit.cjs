@@ -382,3 +382,112 @@ test("linked and mixed counted plans carry per-target identity without guessing"
   assert.ok(!cleared.includes("[theme::"));
   assert.ok(cleared.includes("^actual"));
 });
+
+function noticeEdit(kind, inherited = noteSuggestion("WRITE", "job"), state = "none") {
+  return {
+    action: kind === "same" ? "none" : kind === "set" ? "set" : "clear",
+    reason: kind === "default" ? "use-default" : kind === "inherited" ? "select-inherited-clears" : "same-key-noop",
+    name: kind === "same" || kind === "set" ? "MEET" : null,
+    target: { inherited, field: { state } },
+  };
+}
+
+test("theme notices explain every single-target no-op source and default", () => {
+  const project = { ...noteSuggestion("WRITE", "launch"), from: { stem: "launch", kind: "project" } };
+  const otherNote = { ...noteSuggestion("WRITE"), from: { path: "Notes/misc.md", kind: "other" } };
+  const reading = { source: "reading", theme: theme("READ") };
+  const unknown = { source: "other", theme: theme("WRITE") };
+  const cases = [
+    [noticeEdit("inherited"), "WRITE is already inherited from area note job"],
+    [noticeEdit("inherited", project), "WRITE is already inherited from project note launch"],
+    [noticeEdit("inherited", otherNote), "WRITE is already inherited from note misc"],
+    [noticeEdit("inherited", reading), "READ is already the default for reading tasks"],
+    [noticeEdit("inherited", unknown), "WRITE is already this task's default"],
+    [noticeEdit("inherited", { theme: { key: "write" } }), "write is already this task's default"],
+    [noticeEdit("same"), "MEET is already set on this task"],
+    [noticeEdit("set"), "MEET is already set on this task"],
+    [noticeEdit("default"), "Already using the default (WRITE from area note job)"],
+    [noticeEdit("default", project), "Already using the default (WRITE from project note launch)"],
+    [noticeEdit("default", reading), "Already using the default (READ for reading tasks)"],
+    [noticeEdit("default", unknown), "Already using the default (WRITE)"],
+    [noticeEdit("default", null), "No theme override to clear"],
+  ];
+  for (const [edit, expected] of cases) {
+    assert.equal(helpers.taskCardThemeUnchangedNotice([edit]), `${expected}; nothing was written`);
+  }
+  assert.equal(helpers.taskCardThemeInheritedSourceText(project), "project note launch");
+  assert.equal(helpers.taskCardThemeInheritedSourceText(otherNote), "note misc");
+  assert.equal(helpers.taskCardThemeInheritedSourceText({ source: "note", from: { stem: "misc" } }), "note misc");
+  for (const inherited of [null, {}, reading, { source: "note" }]) {
+    assert.equal(helpers.taskCardThemeInheritedSourceText(inherited), null);
+  }
+});
+
+test("theme no-op batches distinguish shared sources, different sources, explicit fields, and defaults", () => {
+  const inherited = noticeEdit("inherited");
+  const same = noticeEdit("same");
+  const defaultEdit = noticeEdit("default");
+  const cases = [
+    [[inherited, inherited, inherited], "WRITE is already inherited from area note job by all 3 tasks"],
+    [[inherited, noticeEdit("inherited", noteSuggestion("WRITE", "work")), inherited], "WRITE is already inherited by all 3 tasks"],
+    [[same, same, same], "MEET is already set on all 3 tasks"],
+    [[same, noticeEdit("inherited", noteSuggestion("MEET")), same], "MEET already applies to all 3 tasks"],
+    [[defaultEdit, noticeEdit("default", null), defaultEdit], "All 3 tasks already use their defaults"],
+  ];
+  for (const [edits, expected] of cases) {
+    assert.equal(helpers.taskCardThemeUnchangedNotice(edits), `${expected}; nothing was written`);
+  }
+  for (const edits of [[], null, [null], [{}], [inherited, same], [inherited, defaultEdit], [noticeEdit("inherited", null)]]) {
+    assert.equal(helpers.taskCardThemeUnchangedNotice(edits), "Themes are already set; nothing was written");
+  }
+});
+
+test("theme save notices distinguish removed overrides, repaired fields, and default sources", () => {
+  const sources = [
+    [noteSuggestion("WRITE", "job"), "WRITE is inherited from area note job"],
+    [{ ...noteSuggestion("WRITE"), from: { stem: "launch", kind: "project" } }, "WRITE is inherited from project note launch"],
+    [{ source: "reading", theme: theme("READ") }, "READ is the default for reading tasks"],
+    [{ theme: theme("WRITE") }, "WRITE is this task's default"],
+  ];
+  for (const [inherited, reason] of sources) {
+    assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("inherited", inherited, "set")), `Override removed; ${reason}`);
+    assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("inherited", inherited, "repair")), `Theme fields repaired; ${reason}`);
+    assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("default", inherited)), `Theme cleared; ${reason}`);
+  }
+  assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("set")), "Theme MEET saved");
+  assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("default", null)), "Theme cleared to default");
+  for (const edit of [null, {}, { get action() { throw new Error("invalid edit"); } }]) {
+    assert.equal(helpers.taskCardThemeSavedNotice(edit), "Theme saved");
+  }
+});
+
+test("stage rows keep subtitle and search fields while marking only a single inherited choice", () => {
+  const inherited = noteSuggestion("WRITE", "job");
+  const projection = { mixed: false, targets: [{ available: true, inherited }] };
+  for (const today of [true, false]) {
+    const api = makeThemeApi({ catalog: [{ key: "write", name: "WRITE", today }], recent: [{ key: "write", name: "WRITE" }] });
+    const stage = helpers.buildTaskCardThemeStageModel(projection, api);
+    assert.equal(stage.defaultDetail, "Use default · WRITE from job");
+    assert.equal(stage.rows[0].detail, "WRITE from job");
+    assert.deepEqual(helpers.taskCardThemeStageItem(stage.rows[0]), {
+      key: "__default", themeKind: "default", themeKey: "__default", themeName: null,
+      title: "Use default", detail: "WRITE from job", searchText: "use default WRITE from job",
+      inheritedDefault: false, inheritedFrom: null,
+    });
+    const row = stage.rows.find((row) => row.key === "write");
+    const detail = today ? "Today" : "Recent";
+    assert.deepEqual(helpers.taskCardThemeStageItem(row), {
+      key: "theme-write", themeKind: today ? "today" : "recent", themeKey: "write", themeName: "WRITE",
+      title: "WRITE", detail, searchText: `WRITE ${detail} write`, inheritedDefault: true, inheritedFrom: "area note job",
+    });
+    const mixed = helpers.buildTaskCardThemeStageModel({ mixed: true, targets: [projection.targets[0], projection.targets[0]] }, api);
+    assert.equal(mixed.rows[0].detail, "clear each task to its own default (2 tasks)");
+    assert.equal(mixed.rows.some((row) => row.inheritedDefault), false);
+  }
+  for (const [source, inheritedFrom] of [["reading", "reading tasks"], ["other", null]]) {
+    const stage = helpers.buildTaskCardThemeStageModel({ mixed: false, targets: [{ available: true, inherited: { theme: theme("READ"), source } }] }, makeThemeApi(), { query: "READ" });
+    const row = stage.rows.find((row) => row.kind === "new");
+    assert.equal(row.inheritedDefault, true);
+    assert.equal(row.inheritedFrom, inheritedFrom);
+  }
+});

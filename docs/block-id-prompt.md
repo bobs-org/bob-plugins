@@ -15,7 +15,7 @@ Block ID Prompt helps create and manage stable block identifiers and task links 
 | Version | 1.33.3 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, Ctrl+Shift+Enter asks where the task goes before linking or unlinking, then moves it with the toggle applied (nav inboxRoute v1). Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent themes with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. |
+| Description | Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, Ctrl+Shift+Enter asks where the task goes before linking or unlinking, then moves it with the toggle applied (nav inboxRoute v1). Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = suggested, else current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent themes with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -115,7 +115,11 @@ from the row the review walk just landed on advances the walk once to the next
 remaining item.
 
 The plugin exposes the Link to today picker as `api.pomodoroLinkPicker` v1 so
-the navigation successor picker can retarget rows per row.
+the navigation successor picker can retarget rows per row. `pick()` also accepts
+an optional task context (`path`, one-based `line`, full Markdown note `text`,
+`displayText`, and `status`) to select the task's suggested Pomodoro when one is
+available. Omitting it keeps the generic successor picker. The task context only
+guides the picker choice; callers still own their existing link operation.
 
 ## Settings
 

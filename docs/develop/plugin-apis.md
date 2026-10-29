@@ -23,7 +23,11 @@ destination (`{ kind: "new", name }`), or `null` when
 cancelled, unavailable, or unable to resolve today's Pomodoros. The promise
 does not reject. A new choice made from Recent may include the additive
 `preserveSpelling: true` field so the caller keeps the catalog's display name.
-Navigation Hotkeys uses this picker for successor offers.
+Navigation Hotkeys uses this picker for successor offers. An optional
+`task: { path, line, text, displayText, status }` request member enables
+task-aware preselection: `line` is one-based and `text` is the full live
+Markdown note. Calls without it keep the generic successor picker. This request
+member only affects picker suggestions; it does not write a task theme.
 
 ## Bob Ledger Tools
 

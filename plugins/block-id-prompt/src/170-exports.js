@@ -12,6 +12,7 @@ module.exports.helpers = {
   buildPomodoroLinkPickerModel,
   buildPomodoroLinkPickerRows,
   withPomodoroThemeHistoryRows,
+  chooseBlockPomodoroThemePreselection,
   blockPomodoroThemeUnconfigured,
   blockPomodoroThemeUnconfiguredNames,
   buildTaskDependencyIndex,

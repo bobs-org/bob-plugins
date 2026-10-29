@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const { helpers } = require("./block-id-prompt-harness.cjs");
 
 function linkBase(overrides = {}) {
@@ -659,4 +661,154 @@ test("buildPomodoroLinkPickerRows keeps a done-only theme in Recent", () => {
   const { rows } = helpers.buildPomodoroLinkPickerRows(model, "", { themesApi });
   const recent = rows.filter((row) => row.kind === "recent").map((row) => row.name);
   assert.deepEqual(recent, ["DONE"]);
+});
+
+test("shared task-theme preselection vectors match the bob-cli model", () => {
+  const vectors = JSON.parse(fs.readFileSync(
+    path.join(__dirname, "fixtures/pomodoro_themes/vectors.json"),
+    "utf8",
+  ));
+  for (const vector of vectors.preselect) {
+    const choice = helpers.chooseBlockPomodoroThemePreselection({
+      suggestion: vector.suggestion,
+      entries: vector.entries,
+      exemptKeys: vector.exempt,
+      ledgerKeys: vector.ledger_keys,
+      creationAllowed: vector.creation_allowed,
+      strict: vector.strict,
+      themesBefore: vector.themes_before,
+      maxThemes: vector.cap,
+      alreadyQueued: vector.already_queued,
+    });
+    const expected = vector.expected.kind === "entry"
+      ? { kind: "entry", index: vector.expected.index }
+      : vector.expected.kind === "create"
+        ? { kind: "create" }
+        : { kind: "fallback", code: vector.expected.code };
+    assert.deepEqual(choice, expected, vector.id);
+  }
+});
+
+test("task-theme preselection normalizes non-default exemptions and cap additions", () => {
+  const choose = helpers.chooseBlockPomodoroThemePreselection;
+  const suggestion = { key: "write", name: "WRITE", known: true };
+  assert.deepEqual(choose({
+    suggestion,
+    entries: [{ name: "WRITE + ADMIN", open: true }],
+    exemptKeys: ["ADMIN"],
+    creationAllowed: false,
+  }), { kind: "entry", index: 0 });
+  assert.deepEqual(choose({
+    suggestion: { key: "plan", name: "PLAN", known: true },
+    entries: [],
+    exemptKeys: ["plan"],
+    ledgerKeys: [],
+    creationAllowed: true,
+    strict: true,
+    themesBefore: 3,
+    maxThemes: 3,
+  }), { kind: "create" });
+  assert.deepEqual(choose({
+    suggestion,
+    entries: [],
+    exemptKeys: [],
+    ledgerKeys: ["WRITE"],
+    creationAllowed: true,
+    strict: true,
+    themesBefore: 3,
+    maxThemes: 3,
+  }), { kind: "create" });
+});
+
+function attachThemeSnapshot(model, suggestion, choice) {
+  const entries = model.entries.map((entry) => ({
+    name: entry.name || null,
+    open: true,
+    running: entry.running === true,
+    entryLine: entry.entryLine,
+    componentKeys: String(entry.name || "")
+      .split("+")
+      .map((part) => part.trim().replace(/\s+/g, " ").toLowerCase())
+      .filter(Boolean),
+  }));
+  model.themeSnapshot = { suggestion, choice, entries };
+  model.themeSuggestion = suggestion;
+  model.themePreselection = choice;
+}
+
+test("task-aware rows preselect an existing match when creation is blocked", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] (09:00-09:25) — FIRST",
+    "- [ ] (09:30-09:55) — WRITE",
+  ].join("\n");
+  const model = helpers.buildPomodoroLinkPickerModel(content, {});
+  assert.equal(model.creation.allowed, false);
+  const suggestion = { theme: { key: "write", name: "WRITE", known: true }, source: "note", label: "from dev" };
+  const choice = helpers.chooseBlockPomodoroThemePreselection({
+    suggestion,
+    entries: model.entries.map((entry) => ({ ...entry, open: true })),
+    creationAllowed: false,
+    exemptKeys: [],
+  });
+  attachThemeSnapshot(model, suggestion, choice);
+  const built = helpers.buildPomodoroLinkPickerRows(model, "");
+  assert.equal(choice.kind, "entry");
+  assert.equal(built.rows[built.selectedIndex].entry.name, "WRITE");
+});
+
+test("task-aware typed queries keep PT7 order and only annotate the matching row", () => {
+  const content = ["## Pomodoros", "- [ ] () — FIX + WRITE", "- [ ] () — WRITE"].join("\n");
+  const model = helpers.buildPomodoroLinkPickerModel(content, {});
+  const suggestion = { theme: { key: "write", name: "WRITE", known: true }, source: "note", label: "from dev" };
+  const choice = helpers.chooseBlockPomodoroThemePreselection({
+    suggestion,
+    entries: model.entries.map((entry) => ({ ...entry, open: true })),
+    exemptKeys: [],
+    creationAllowed: true,
+  });
+  attachThemeSnapshot(model, suggestion, choice);
+  const built = helpers.buildPomodoroLinkPickerRows(model, "fix");
+  assert.equal(choice.kind, "entry");
+  assert.equal(choice.index, 1, "empty-query exact match is the second Today row");
+  assert.equal(built.rows[built.selectedIndex].kind, "existing");
+  assert.equal(built.rows[built.selectedIndex].entry.name, "FIX + WRITE");
+  assert.equal(built.rows[0].suggested, true);
+  assert.deepEqual(built.rows.map((row) => row.key), ["existing-1", "new-fix"]);
+});
+
+test("suggested creation uses catalog spelling and removes its duplicate Recent row", () => {
+  const model = helpers.buildPomodoroLinkPickerModel(["## Pomodoros", "- [ ] () — FOCUS"].join("\n"), {});
+  const suggestion = { theme: { key: "build", name: "Build", known: true }, source: "note", label: "from dev" };
+  const choice = helpers.chooseBlockPomodoroThemePreselection({
+    suggestion,
+    entries: model.entries.map((entry) => ({ ...entry, open: true })),
+    exemptKeys: [],
+    ledgerKeys: ["focus"],
+    creationAllowed: true,
+    strict: false,
+  });
+  attachThemeSnapshot(model, suggestion, choice);
+  const themesApi = createDoneTodayThemesApi([
+    { key: "build", name: "BUILD", last_used: "2026-08-15", days_used: 2, hidden: true },
+  ]);
+  const built = helpers.buildPomodoroLinkPickerRows(model, "", { themesApi });
+  assert.equal(choice.kind, "create");
+  assert.equal(built.rows[0].kind, "new");
+  assert.equal(built.rows[0].suggestedCreate, true);
+  assert.equal(built.rows[0].name, "Build");
+  assert.equal(built.rows[0].preserveSpelling, true);
+  assert.equal(built.rows[0].hiddenThemes.length, 1, "hidden themes remain eligible");
+  assert.equal(built.rows.some((row) => row.kind === "recent" && row.theme.key === "build"), false);
+
+  let choiceValue = null;
+  helpers.PomodoroLinkPickerModal.prototype.commitRow.call({
+    rows: built.rows,
+    settleChoice(value) { choiceValue = value; },
+  }, 0);
+  assert.deepEqual(helpers.normalizePomodoroLinkPickerChoice(choiceValue), {
+    kind: "new",
+    name: "Build",
+    preserveSpelling: true,
+  });
 });

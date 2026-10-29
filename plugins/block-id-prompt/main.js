@@ -6227,42 +6227,344 @@ function blockPomodoroThemeSimilar(api, name) {
   return [...names].slice(0, 2);
 }
 
+function normalizeBlockPomodoroThemeKey(value) {
+  return asciiLowercasePomodoroText(String(value || "").trim().replace(/\s+/g, " "));
+}
+
+function blockPomodoroEntryThemeKeys(entry) {
+  if (Array.isArray(entry && entry.componentKeys)) {
+    return [...new Set(entry.componentKeys.map(normalizeBlockPomodoroThemeKey).filter(Boolean))];
+  }
+  return [...new Set(
+    blockPomodoroThemeComponents(null, entry && entry.name)
+      .map((component) => normalizeBlockPomodoroThemeKey(component.key))
+      .filter(Boolean),
+  )];
+}
+
+// Mirrors src/native/pomodoro_themes/preselect.rs. Inputs are detached,
+// synchronous snapshots so opening/refreshing a menu never reruns suggestion
+// resolution or reads configuration directly.
+function chooseBlockPomodoroThemePreselection(input = {}) {
+  const suggestion = input.suggestion && input.suggestion.theme
+    ? input.suggestion.theme
+    : input.suggestion;
+  const key = normalizeBlockPomodoroThemeKey(suggestion && suggestion.key);
+  if (!key) {
+    return null;
+  }
+  if (input.alreadyQueued === true) {
+    return { kind: "fallback", code: "already_queued" };
+  }
+
+  const exempt = new Set(
+    (Array.isArray(input.exemptKeys) ? input.exemptKeys : input.exempt || [])
+      .map(normalizeBlockPomodoroThemeKey)
+      .filter(Boolean),
+  );
+  const entries = Array.isArray(input.entries) ? input.entries : [];
+  const exact = [];
+  entries.forEach((entry, index) => {
+    if (!entry || entry.open !== true) {
+      return;
+    }
+    const components = new Set(
+      blockPomodoroEntryThemeKeys(entry).filter((component) => component === key || !exempt.has(component)),
+    );
+    if (components.size === 1 && components.has(key)) {
+      exact.push({ index, running: entry.running === true });
+    }
+  });
+
+  if (suggestion.known === true) {
+    const running = exact.find((candidate) => candidate.running);
+    if (running) {
+      return { kind: "entry", index: running.index };
+    }
+    if (exact.length > 0) {
+      return { kind: "entry", index: exact[0].index };
+    }
+    const containing = entries.findIndex((entry) =>
+      entry && entry.open === true && blockPomodoroEntryThemeKeys(entry).includes(key),
+    );
+    if (containing >= 0) {
+      return { kind: "entry", index: containing };
+    }
+  }
+
+  if (suggestion.known !== true) {
+    return { kind: "fallback", code: "unknown_theme" };
+  }
+  if (input.creationAllowed !== true) {
+    return { kind: "fallback", code: "creation_blocked" };
+  }
+
+  const ledgerKeys = new Set(
+    (Array.isArray(input.ledgerKeys) ? input.ledgerKeys : [])
+      .map(normalizeBlockPomodoroThemeKey)
+      .filter(Boolean),
+  );
+  const addsTheme = !exempt.has(key) && !ledgerKeys.has(key);
+  const strict = input.strict === true;
+  const themesBefore = Number.isInteger(input.themesBefore) ? input.themesBefore : 0;
+  const cap = Number.isInteger(input.maxThemes)
+    ? input.maxThemes
+    : Number.isInteger(input.cap)
+      ? input.cap
+      : Number.MAX_SAFE_INTEGER;
+  if (strict && addsTheme && themesBefore + 1 > cap) {
+    return { kind: "fallback", code: "strict_cap" };
+  }
+  return { kind: "create" };
+}
+
+function getBlockPomodoroLedgerApi(app) {
+  try {
+    const plugins = app && app.plugins;
+    const holder = plugins && plugins.plugins && plugins.plugins["bob-ledger-tools"]
+      ? plugins.plugins["bob-ledger-tools"]
+      : plugins && typeof plugins.getPlugin === "function"
+        ? plugins.getPlugin("bob-ledger-tools")
+        : null;
+    return holder && holder.api ? holder.api : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
+  try {
+    if (
+      !task || typeof task.path !== "string" || !task.path ||
+      !Number.isInteger(task.line) || task.line < 1 ||
+      typeof task.text !== "string"
+    ) {
+      return null;
+    }
+    const themesApi = getBlockPomodoroThemesApi(app);
+    const ledgerApi = getBlockPomodoroLedgerApi(app);
+    if (
+      !themesApi || typeof themesApi.suggestFor !== "function" ||
+      !ledgerApi || typeof ledgerApi.caps !== "function" ||
+      typeof ledgerApi.planBudget !== "function"
+    ) {
+      return null;
+    }
+
+    const rawSuggestion = themesApi.suggestFor({
+      path: task.path,
+      line: task.line,
+      text: task.text,
+    });
+    if (!rawSuggestion || typeof rawSuggestion !== "object") {
+      return null;
+    }
+    const suggestion = JSON.parse(JSON.stringify(rawSuggestion));
+    if (
+      !suggestion.theme || typeof suggestion.theme.key !== "string" ||
+      !suggestion.theme.key || typeof suggestion.theme.name !== "string" ||
+      !suggestion.theme.name
+    ) {
+      return null;
+    }
+
+    const rawCaps = ledgerApi.caps();
+    const meter = meterSnapshot;
+    if (
+      !rawCaps || typeof rawCaps !== "object" || typeof rawCaps.then === "function" ||
+      typeof rawCaps.strict !== "boolean" || !Array.isArray(rawCaps.exempt) ||
+      !Number.isInteger(rawCaps.maxThemes) || rawCaps.maxThemes < 1 ||
+      !meter || typeof meter !== "object" || typeof meter.then === "function" ||
+      !meter.themes || !Number.isInteger(meter.themes.count) ||
+      !Number.isInteger(meter.themes.cap)
+    ) {
+      return null;
+    }
+    const caps = {
+      exemptKeys: rawCaps.exempt
+        .map(normalizeBlockPomodoroThemeKey)
+        .filter(Boolean),
+      strict: rawCaps.strict,
+      maxThemes: rawCaps.maxThemes,
+    };
+    let known = suggestion.theme.known === true;
+    if (typeof themesApi.isKnownTheme === "function") {
+      const reported = themesApi.isKnownTheme(suggestion.theme.key);
+      if (typeof reported !== "boolean") {
+        return null;
+      }
+      known = reported;
+    } else if (suggestion.theme.known !== false) {
+      return null;
+    }
+    suggestion.theme.known = known;
+
+    const entries = (Array.isArray(model && model.entries) ? model.entries : []).map((entry) => ({
+      name: entry.name || null,
+      open: true,
+      running: entry.running === true,
+      entryLine: entry.entryLine,
+      componentKeys: blockPomodoroThemeComponents(themesApi, entry.name)
+        .map((component) => normalizeBlockPomodoroThemeKey(component.key))
+        .filter(Boolean),
+    }));
+    const ledgerKeys = [...new Set(entries.flatMap((entry) => entry.componentKeys))];
+    const choice = chooseBlockPomodoroThemePreselection({
+      suggestion,
+      entries,
+      exemptKeys: caps.exemptKeys,
+      ledgerKeys,
+      creationAllowed: Boolean(model && model.creation && model.creation.allowed),
+      strict: caps.strict,
+      themesBefore: meter.themes.count,
+      maxThemes: caps.maxThemes,
+      alreadyQueued: false,
+    });
+    if (!choice) {
+      return null;
+    }
+    if (choice.kind === "fallback") {
+      suggestion.fallback = choice.code;
+    }
+    return {
+      suggestion,
+      choice,
+      entries,
+      exemptKeys: caps.exemptKeys,
+      strict: caps.strict,
+      maxThemes: caps.maxThemes,
+      planMeter: {
+        themes: { count: meter.themes.count, cap: meter.themes.cap, over: meter.themes.over === true },
+      },
+      ledgerKeys,
+    };
+  } catch (_error) {
+    // Optional theme APIs never make the base picker unavailable.
+    return null;
+  }
+}
+
+function blockPomodoroThemeRowKeys(row, snapshot) {
+  if (row && row.kind === "existing" && snapshot && Array.isArray(snapshot.entries)) {
+    const entry = snapshot.entries.find((candidate) => candidate.entryLine === row.entry.entryLine);
+    if (entry) {
+      return entry.componentKeys;
+    }
+  }
+  if (row && row.kind === "recent" && row.theme && row.theme.key) {
+    return [normalizeBlockPomodoroThemeKey(row.theme.key)];
+  }
+  return blockPomodoroThemeComponents(null, row && row.name)
+    .map((component) => normalizeBlockPomodoroThemeKey(component.key))
+    .filter(Boolean);
+}
+
+function markBlockPomodoroThemeSuggestion(row, suggestion) {
+  if (!row || !suggestion) {
+    return;
+  }
+  row.suggested = true;
+  row.suggestionLabel = suggestion.label || "";
+  row.themeSuggestion = suggestion;
+}
+
 function withPomodoroThemeHistoryRows(model, query, baseRows, selectedIndex, options = {}) {
   const api = options && options.themesApi;
-  if (!model || !model.creation || model.creation.allowed !== true) {
-    return { rows: baseRows, selectedIndex };
+  const snapshot = (model && model.themeSnapshot) || (options && options.themeSnapshot) || null;
+  let rows = baseRows.slice();
+  let nextSelectedIndex = selectedIndex;
+  const trimmedQuery = String(query || "").trim();
+  const suggestion = snapshot && snapshot.suggestion;
+  const suggestionKey = normalizeBlockPomodoroThemeKey(suggestion && suggestion.theme && suggestion.theme.key);
+
+  if (suggestion && suggestionKey) {
+    let selectedSuggestionRow = null;
+    if (!trimmedQuery && snapshot.choice && snapshot.choice.kind === "entry") {
+      const selectedEntry = Array.isArray(snapshot.entries)
+        ? snapshot.entries[snapshot.choice.index]
+        : null;
+      const matchingIndex = selectedEntry
+        ? rows.findIndex((row) => row.kind === "existing" && row.entry.entryLine === selectedEntry.entryLine)
+        : -1;
+      if (matchingIndex >= 0) {
+        nextSelectedIndex = matchingIndex;
+        selectedSuggestionRow = rows[matchingIndex];
+      }
+    }
+
+    if (!trimmedQuery && snapshot.choice && snapshot.choice.kind === "create") {
+      const name = suggestion.theme.name;
+      const createRow = {
+        kind: "new",
+        key: `new-${pomodoroLinkSelectorSlug(name)}`,
+        selectable: true,
+        name,
+        againOf: null,
+        anchorTitle: model.creation && model.creation.anchor ? model.creation.anchor.title : null,
+        becomesNextUp: Boolean(model.creation && model.creation.becomesNextUp),
+        preserveSpelling: true,
+        suggestedCreate: true,
+      };
+      markBlockPomodoroThemeSuggestion(createRow, suggestion);
+      rows = [createRow, ...rows];
+      nextSelectedIndex = 0;
+      selectedSuggestionRow = createRow;
+    }
+
+    if (selectedSuggestionRow) {
+      markBlockPomodoroThemeSuggestion(selectedSuggestionRow, suggestion);
+    } else {
+      const matchableRows = rows.filter((row) =>
+        row.kind !== "new" || row.suggestedCreate || suggestion.theme.known === true,
+      );
+      const bestMatch = matchableRows.find((row) =>
+        blockPomodoroThemeRowKeys(row, snapshot).includes(suggestionKey),
+      );
+      if (bestMatch) {
+        markBlockPomodoroThemeSuggestion(bestMatch, suggestion);
+      }
+    }
   }
+
+  if (!model || !model.creation || model.creation.allowed !== true || !api) {
+    return { rows, selectedIndex: nextSelectedIndex };
+  }
+
   // Only themes the menu already shows as a Today row leave Recent; a done
   // Pomodoro is not a Today row here, so model.entries (open only) excludes
   // done and cancelled entries that model.allEntries still carries.
   const openToday = Array.isArray(model.entries) ? model.entries : [];
   const exclusions = blockPomodoroThemeKeysInToday(api, openToday);
+  if (snapshot && snapshot.choice && snapshot.choice.kind === "create" && suggestionKey) {
+    exclusions.add(suggestionKey);
+  }
   const history = blockPomodoroThemeHistory(
     api,
     query,
     exclusions,
     options && options.hiddenRows,
   );
-  const todayRows = baseRows.filter((row) => row.kind === "existing");
-  const otherRows = baseRows.filter((row) => row.kind !== "existing" && row.kind !== "new");
-  const candidate = baseRows.find((row) => row.kind === "new") || null;
+  const todayRows = rows.filter((row) => row.kind === "existing");
+  const suggestedCreate = rows.find((row) => row.suggestedCreate) || null;
+  const otherRows = rows.filter((row) => row.kind !== "existing" && row.kind !== "new");
+  const candidate = rows.find((row) => row.kind === "new" && !row.suggestedCreate) || null;
   const candidateKey = candidate
-    ? asciiLowercasePomodoroText(candidate.name.replace(/\s+/g, " "))
+    ? normalizeBlockPomodoroThemeKey(candidate.name)
     : "";
   const exactRecent = history.find((theme) => theme.key === candidateKey) || null;
-  if (candidate) {
-    if (blockPomodoroThemeUnconfigured(api, candidate.name)) {
-      candidate.unconfigured = true;
+  for (const row of [candidate, suggestedCreate].filter(Boolean)) {
+    if (blockPomodoroThemeUnconfigured(api, row.name)) {
+      row.unconfigured = true;
     }
-    const similarTo = blockPomodoroThemeSimilar(api, candidate.name);
+    const similarTo = blockPomodoroThemeSimilar(api, row.name);
     if (similarTo.length > 0) {
-      candidate.similarTo = similarTo;
+      row.similarTo = similarTo;
     }
-    const hiddenThemes = blockPomodoroThemeComponents(api, candidate.name)
+    const hiddenThemes = blockPomodoroThemeComponents(api, row.name)
       .map((component) => blockPomodoroThemeKnown(api, component.key))
       .filter((theme) => theme && theme.hidden === true);
     if (hiddenThemes.length > 0) {
-      candidate.hiddenThemes = hiddenThemes;
+      row.hiddenThemes = hiddenThemes;
     }
   }
 
@@ -6278,24 +6580,19 @@ function withPomodoroThemeHistoryRows(model, query, baseRows, selectedIndex, opt
   const substringRows = recentRows.filter((row) => blockPomodoroThemeHistoryTier(row.theme, query) === 2);
   const appendCandidate = candidate && !exactRecent ? [candidate] : [];
   const ordered = [
+    ...(suggestedCreate ? [suggestedCreate] : []),
     ...todayRows,
     ...prefixRows,
     ...appendCandidate,
     ...substringRows,
     ...otherRows,
   ];
-  const selectedRow = selectedIndex >= 0 ? baseRows[selectedIndex] : null;
-  const nextIndex = selectedRow && selectedRow.kind === "existing"
-    ? ordered.findIndex((row) => row.key === baseRows[selectedIndex]?.key)
-    : -1;
+  const selectedKey = nextSelectedIndex >= 0 ? rows[nextSelectedIndex] && rows[nextSelectedIndex].key : null;
+  const preservedIndex = selectedKey ? ordered.findIndex((row) => row.key === selectedKey) : -1;
+  const firstSelectable = ordered.findIndex((row) => row.selectable);
   return {
     rows: ordered,
-    selectedIndex:
-      nextIndex >= 0
-        ? nextIndex
-        : ordered.findIndex((row) => row.selectable) >= 0
-          ? ordered.findIndex((row) => row.selectable)
-          : -1,
+    selectedIndex: preservedIndex >= 0 ? preservedIndex : firstSelectable,
   };
 }
 
@@ -7555,10 +7852,13 @@ class PomodoroLinkPickerModal extends Modal {
 
     const textEl = rowEl.createDiv({ cls: "bid-ppk-row-text" });
     const titleEl = textEl.createDiv({ cls: "bid-ppk-row-title" });
-    titleEl.appendText("New Pomodoro ");
+    titleEl.appendText(row.suggestedCreate ? "New " : "New Pomodoro ");
     const nameEl = titleEl.createSpan({ cls: "bid-ppk-create-name" });
     renderBlockPomodoroThemeSwatches(nameEl, this.themesApi, row.name);
     appendHighlighted(nameEl, row.name, this.query);
+    if (row.suggestedCreate) {
+      titleEl.appendText(" Pomodoro");
+    }
     textEl.createDiv({
       cls: "bid-ppk-row-meta",
       text: pomodoroLinkCreateRowMeta(row, this.model),
@@ -7693,7 +7993,11 @@ class PomodoroLinkPickerModal extends Modal {
     }
 
     if (row.kind === "new") {
-      this.settleChoice({ kind: "new", name: row.name });
+      this.settleChoice({
+        kind: "new",
+        name: row.name,
+        ...(row.preserveSpelling === true ? { preserveSpelling: true } : {}),
+      });
       return;
     }
 
@@ -10213,6 +10517,72 @@ class BlockIdPromptPomodoroLinksMixin {
 
 }
 // ---- src/122-plugin-pomodoro-link-picker.js ----
+// Shared meter and creation projection for direct picker opens and the
+// versioned public API. A supplied task is projected through the same guarded
+// Pomodoro insertion planner in either entry point.
+function createBlockPomodoroLinkPickerBudget(plugin, options = {}) {
+  const current = plugin.readPlanBudgetMeter(options.dailyContent);
+  const task = options.task || {};
+  const taskFile = options.taskFile || null;
+  const dailyContent = options.dailyContent;
+  const dailyPath = options.dailyPath;
+  const taskPath = options.taskPath || (taskFile && taskFile.path) || task.path || "";
+  return {
+    current,
+    forNewName(name) {
+      try {
+        const canonical = canonicalizePomodoroLinkName(name);
+        if (!canonical.valid) {
+          return null;
+        }
+        const blockId = task.existingId || task.blockId || task.id || "pomodoro-picker-projection";
+        let linkTargetText = "";
+        try {
+          if (taskFile && dailyPath !== taskFile.path) {
+            linkTargetText = plugin.buildPomodoroLinkTargetText(taskFile, dailyPath);
+          }
+        } catch (_error) {
+          linkTargetText = "";
+        }
+        let linkText = null;
+        try {
+          linkText = sourceReplacement(
+            { targetText: linkTargetText, aliasSuffix: "" },
+            blockId,
+            CANONICAL_BLOCK_LINK_PREFIX,
+          );
+        } catch (_error) {
+          return null;
+        }
+        const planned = planExplicitPomodoroLinkInsertion(dailyContent, {
+          blockId,
+          targetPath: taskPath,
+          sourcePath: dailyPath,
+          resolveTarget: (reference, referrerPath) =>
+            plugin.resolveReferenceDestination(reference, referrerPath),
+          linkText,
+          target: { kind: "new", name: canonical.name },
+        });
+        if (!planned || planned.error || typeof planned.content !== "string") {
+          return null;
+        }
+        return plugin.readPlanBudgetMeter(planned.content);
+      } catch (_error) {
+        return null;
+      }
+    },
+  };
+}
+
+function attachBlockPomodoroThemePickerSnapshot(model, snapshot) {
+  if (!model || !snapshot) {
+    return;
+  }
+  model.themeSnapshot = snapshot;
+  model.themeSuggestion = snapshot.suggestion;
+  model.themePreselection = snapshot.choice;
+}
+
 class BlockIdPromptPomodoroLinkPickerMixin {
   // Test seam for the "Link to today" picker: opens the modal and resolves
   // its choice. Never throws (logs and resolves null).
@@ -10269,59 +10639,33 @@ class BlockIdPromptPomodoroLinkPickerMixin {
       const displayText =
         task.displayText ||
         (typeof task.rawLine === "string" ? cleanTaskDisplayText(task.rawLine) : "(untitled task)");
-      const current = this.readPlanBudgetMeter(dailyContent);
       const pickerSnapshot = dailyContent;
       const pickerDailyPath = dailyFile.path;
       const pickerTaskPath = taskFile ? taskFile.path : source.sourcePath;
-      const plugin = this;
-      const budget = {
-        current,
-        forNewName(name) {
-          try {
-            const canonical = canonicalizePomodoroLinkName(name);
-            if (!canonical.valid) {
-              return null;
-            }
-            const blockId = task.existingId || "pomodoro-picker-projection";
-            let linkTargetText = "";
-            try {
-              if (taskFile && pickerDailyPath !== taskFile.path) {
-                linkTargetText = plugin.buildPomodoroLinkTargetText(
-                  taskFile,
-                  pickerDailyPath,
-                );
-              }
-            } catch (error) {
-              linkTargetText = "";
-            }
-            let linkText = null;
-            try {
-              linkText = sourceReplacement(
-                { targetText: linkTargetText, aliasSuffix: "" },
-                blockId,
-                CANONICAL_BLOCK_LINK_PREFIX,
-              );
-            } catch (error) {
-              return null;
-            }
-            const planned = planExplicitPomodoroLinkInsertion(pickerSnapshot, {
-              blockId,
-              targetPath: pickerTaskPath,
-              sourcePath: pickerDailyPath,
-              resolveTarget: (reference, referrerPath) =>
-                plugin.resolveReferenceDestination(reference, referrerPath),
-              linkText,
-              target: { kind: "new", name: canonical.name },
-            });
-            if (!planned || planned.error || typeof planned.content !== "string") {
-              return null;
-            }
-            return plugin.readPlanBudgetMeter(planned.content);
-          } catch (error) {
-            return null;
-          }
+      const budget = createBlockPomodoroLinkPickerBudget(this, {
+        dailyContent: pickerSnapshot,
+        dailyPath: pickerDailyPath,
+        task,
+        taskFile,
+        taskPath: pickerTaskPath,
+      });
+      let taskText = "";
+      try {
+        taskText = source.editor.getValue();
+      } catch (_error) {
+        taskText = "";
+      }
+      const themeSnapshot = safeBlockPomodoroThemePickerSnapshot(
+        this.app,
+        model,
+        {
+          path: source.sourcePath,
+          line: source.line + 1,
+          text: taskText,
         },
-      };
+        budget.current,
+      );
+      attachBlockPomodoroThemePickerSnapshot(model, themeSnapshot);
 
       const request = {
         model,
@@ -10551,7 +10895,7 @@ class BlockIdPromptPomodoroInboxRouteMixin {
 // obsidian_destination phase): nav's successor picker chains
 // Ctrl+Shift+Enter here to retarget rows per row. `pick()` resolves today's
 // daily note (open editor value first, vault read otherwise), opens the
-// shared PomodoroLinkPickerModal with a generic successor task, and resolves
+// shared PomodoroLinkPickerModal with optional task context, and resolves
 // `{kind: "existing", entryLine, entryText, title} | {kind: "new", name} |
 // null`. Never rejects; null means none (cancel, unload, missing note, no
 // Pomodoros section, or a second call while one picker is already open).
@@ -10624,7 +10968,7 @@ class BlockIdPromptPomodoroLinkPickerApiMixin {
   // Test seam for the versioned api: resolves today's daily content, opens
   // the picker, and resolves its choice. Never throws (null carries every
   // refusal); holds `promptOpen` while the modal is up.
-  async pickPomodoroLinkDestination(_request) {
+  async pickPomodoroLinkDestination(apiRequest) {
     if (this.promptOpen === true || this.activePomodoroLinkPicker) {
       return null;
     }
@@ -10653,17 +10997,62 @@ class BlockIdPromptPomodoroLinkPickerApiMixin {
       if (!model || model.ok !== true) {
         return null;
       }
-      const request = {
+
+      const candidateTask = apiRequest && apiRequest.task;
+      const taskContext = candidateTask &&
+        typeof candidateTask.path === "string" && candidateTask.path &&
+        Number.isInteger(candidateTask.line) && candidateTask.line >= 1 &&
+        typeof candidateTask.text === "string"
+        ? {
+          path: candidateTask.path,
+          line: candidateTask.line,
+          text: candidateTask.text,
+        }
+        : null;
+      const taskFile = taskContext
+        ? (() => {
+          try {
+            return this.resolveTaskFile(taskContext.path) || { path: taskContext.path };
+          } catch (_error) {
+            return { path: taskContext.path };
+          }
+        })()
+        : null;
+      const budget = taskContext
+        ? createBlockPomodoroLinkPickerBudget(this, {
+          dailyContent,
+          dailyPath: dailyFile.path,
+          task: taskContext,
+          taskFile,
+          taskPath: taskFile.path,
+        })
+        : null;
+      const themeSnapshot = taskContext
+        ? safeBlockPomodoroThemePickerSnapshot(
+          this.app,
+          model,
+          taskContext,
+          budget.current,
+        )
+        : null;
+      attachBlockPomodoroThemePickerSnapshot(model, themeSnapshot);
+      const displayText = taskContext && typeof candidateTask.displayText === "string"
+        ? candidateTask.displayText
+        : "Successor pull-in";
+      const status = taskContext && typeof candidateTask.status === "string"
+        ? candidateTask.status
+        : " ";
+      const pickerRequest = {
         model,
-        task: { displayText: "Successor pull-in", status: " " },
+        task: { displayText, status },
         needsBlockId: false,
         now: this.now(),
-        budget: null,
+        budget,
       };
       let modal = null;
       this.promptOpen = true;
       try {
-        modal = new PomodoroLinkPickerModal(this.app, request);
+        modal = new PomodoroLinkPickerModal(this.app, pickerRequest);
         this.activePomodoroLinkPicker = modal;
         modal.open();
         return await modal.waitForChoice();
@@ -12042,6 +12431,7 @@ module.exports.helpers = {
   buildPomodoroLinkPickerModel,
   buildPomodoroLinkPickerRows,
   withPomodoroThemeHistoryRows,
+  chooseBlockPomodoroThemePreselection,
   blockPomodoroThemeUnconfigured,
   blockPomodoroThemeUnconfiguredNames,
   buildTaskDependencyIndex,

@@ -587,10 +587,13 @@ class PomodoroLinkPickerModal extends Modal {
 
     const textEl = rowEl.createDiv({ cls: "bid-ppk-row-text" });
     const titleEl = textEl.createDiv({ cls: "bid-ppk-row-title" });
-    titleEl.appendText("New Pomodoro ");
+    titleEl.appendText(row.suggestedCreate ? "New " : "New Pomodoro ");
     const nameEl = titleEl.createSpan({ cls: "bid-ppk-create-name" });
     renderBlockPomodoroThemeSwatches(nameEl, this.themesApi, row.name);
     appendHighlighted(nameEl, row.name, this.query);
+    if (row.suggestedCreate) {
+      titleEl.appendText(" Pomodoro");
+    }
     textEl.createDiv({
       cls: "bid-ppk-row-meta",
       text: pomodoroLinkCreateRowMeta(row, this.model),
@@ -725,7 +728,11 @@ class PomodoroLinkPickerModal extends Modal {
     }
 
     if (row.kind === "new") {
-      this.settleChoice({ kind: "new", name: row.name });
+      this.settleChoice({
+        kind: "new",
+        name: row.name,
+        ...(row.preserveSpelling === true ? { preserveSpelling: true } : {}),
+      });
       return;
     }
 

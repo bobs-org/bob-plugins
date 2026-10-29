@@ -2,7 +2,7 @@
 // obsidian_destination phase): nav's successor picker chains
 // Ctrl+Shift+Enter here to retarget rows per row. `pick()` resolves today's
 // daily note (open editor value first, vault read otherwise), opens the
-// shared PomodoroLinkPickerModal with a generic successor task, and resolves
+// shared PomodoroLinkPickerModal with optional task context, and resolves
 // `{kind: "existing", entryLine, entryText, title} | {kind: "new", name} |
 // null`. Never rejects; null means none (cancel, unload, missing note, no
 // Pomodoros section, or a second call while one picker is already open).
@@ -75,7 +75,7 @@ class BlockIdPromptPomodoroLinkPickerApiMixin {
   // Test seam for the versioned api: resolves today's daily content, opens
   // the picker, and resolves its choice. Never throws (null carries every
   // refusal); holds `promptOpen` while the modal is up.
-  async pickPomodoroLinkDestination(_request) {
+  async pickPomodoroLinkDestination(apiRequest) {
     if (this.promptOpen === true || this.activePomodoroLinkPicker) {
       return null;
     }
@@ -104,17 +104,62 @@ class BlockIdPromptPomodoroLinkPickerApiMixin {
       if (!model || model.ok !== true) {
         return null;
       }
-      const request = {
+
+      const candidateTask = apiRequest && apiRequest.task;
+      const taskContext = candidateTask &&
+        typeof candidateTask.path === "string" && candidateTask.path &&
+        Number.isInteger(candidateTask.line) && candidateTask.line >= 1 &&
+        typeof candidateTask.text === "string"
+        ? {
+          path: candidateTask.path,
+          line: candidateTask.line,
+          text: candidateTask.text,
+        }
+        : null;
+      const taskFile = taskContext
+        ? (() => {
+          try {
+            return this.resolveTaskFile(taskContext.path) || { path: taskContext.path };
+          } catch (_error) {
+            return { path: taskContext.path };
+          }
+        })()
+        : null;
+      const budget = taskContext
+        ? createBlockPomodoroLinkPickerBudget(this, {
+          dailyContent,
+          dailyPath: dailyFile.path,
+          task: taskContext,
+          taskFile,
+          taskPath: taskFile.path,
+        })
+        : null;
+      const themeSnapshot = taskContext
+        ? safeBlockPomodoroThemePickerSnapshot(
+          this.app,
+          model,
+          taskContext,
+          budget.current,
+        )
+        : null;
+      attachBlockPomodoroThemePickerSnapshot(model, themeSnapshot);
+      const displayText = taskContext && typeof candidateTask.displayText === "string"
+        ? candidateTask.displayText
+        : "Successor pull-in";
+      const status = taskContext && typeof candidateTask.status === "string"
+        ? candidateTask.status
+        : " ";
+      const pickerRequest = {
         model,
-        task: { displayText: "Successor pull-in", status: " " },
+        task: { displayText, status },
         needsBlockId: false,
         now: this.now(),
-        budget: null,
+        budget,
       };
       let modal = null;
       this.promptOpen = true;
       try {
-        modal = new PomodoroLinkPickerModal(this.app, request);
+        modal = new PomodoroLinkPickerModal(this.app, pickerRequest);
         this.activePomodoroLinkPicker = modal;
         modal.open();
         return await modal.waitForChoice();

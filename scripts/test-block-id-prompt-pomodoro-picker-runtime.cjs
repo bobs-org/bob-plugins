@@ -157,6 +157,73 @@ test("preflight refusals open nothing", async () => {
   assert.deepEqual(noSection.writes, []);
 });
 
+test("direct picker captures one task suggestion with a one-based line and live note text", async () => {
+  const taskText = ["## Tasks", "- [*] #task Ship it ^ship"].join("\n");
+  const h = createTaskModeHarness({
+    taskContent: taskText,
+    dailyContent: UNLINKED_DAILY,
+  });
+  const suggestionCalls = [];
+  h.plugin.app.plugins = {
+    plugins: {
+      "bob-ledger-tools": {
+        api: {
+          caps: () => ({ maxThemes: 3, strict: true, exempt: ["PLAN"] }),
+          planBudget: () => ({
+            themes: { count: 0, cap: 3, over: false },
+            links: { count: 0, cap: 10, over: false },
+            status: "ok",
+          }),
+          themes: {
+            version: 1,
+            suggestFor(request) {
+              suggestionCalls.push(request);
+              return {
+                theme: { key: "write", name: "WRITE", known: true },
+                source: "note",
+                label: "from dev",
+              };
+            },
+            isKnownTheme: () => true,
+            componentsOf: (name) => String(name || "").split("+").map((raw) => ({
+              raw: raw.trim(),
+              key: raw.trim().toLowerCase().replace(/\s+/g, " "),
+            })),
+          },
+        },
+      },
+    },
+  };
+  let pickerRequest = null;
+  h.plugin.promptPomodoroLinkTarget = async (request) => {
+    pickerRequest = request;
+    return null;
+  };
+
+  const source = sourceForPomodoroLink(h.editor, "Tasks.md", 1);
+  await h.plugin.choosePomodoroLinkTarget(source);
+
+  assert.deepEqual(suggestionCalls, [{ path: "Tasks.md", line: 2, text: taskText }]);
+  assert.equal(pickerRequest.model.themeSuggestion.theme.name, "WRITE");
+  assert.deepEqual(pickerRequest.model.themePreselection, { kind: "create" });
+  assert.equal(pickerRequest.budget.current.themes.count, 0);
+});
+
+test("missing task-theme APIs leave the direct picker on its existing default", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  let pickerRequest = null;
+  h.plugin.promptPomodoroLinkTarget = async (request) => {
+    pickerRequest = request;
+    return null;
+  };
+  await h.plugin.choosePomodoroLinkTarget(sourceForPomodoroLink(h.editor, "Tasks.md", 0));
+  assert.equal(pickerRequest.model.themeSuggestion, undefined);
+  assert.equal(helpers.buildPomodoroLinkPickerRows(pickerRequest.model, "").selectedIndex, 0);
+});
+
 test("picking a non-default entry links there", async () => {
   const h = createTaskModeHarness({
     taskContent: "- [*] #task Ship it ^ship",

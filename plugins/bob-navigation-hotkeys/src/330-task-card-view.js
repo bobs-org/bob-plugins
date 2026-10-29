@@ -47,6 +47,52 @@ function renderTaskCardLevelGlyph(labelEl, value, options) {
   }
 }
 
+function renderTaskCardThemeHeader(container, theme) {
+  if (!container || !theme) {
+    return null;
+  }
+  const stateClass = theme.state ? ` is-${theme.state}` : "";
+  const line = container.createDiv({
+    cls: `bob-task-card-theme-line${stateClass}${theme.unknown ? " is-unknown" : ""}${theme.needsRepair ? " is-repair" : ""}${theme.mixed ? " is-mixed" : ""}`,
+    attr: {
+      "aria-label": theme.text || "Theme unavailable",
+      title: theme.tooltip || theme.text || "Theme unavailable",
+    },
+  });
+  line.setAttribute("aria-label", theme.text || "Theme unavailable");
+  if (theme.tooltip || theme.text) {
+    line.setAttribute("title", theme.tooltip || theme.text);
+  }
+  for (const part of Array.isArray(theme.parts) ? theme.parts : []) {
+    if (!part || !part.text) {
+      continue;
+    }
+    if (part.type === "note") {
+      const note = line.createSpan({ cls: "bob-task-card-theme-note" });
+      note.createSpan({
+        cls: `bob-task-card-theme-dot${part.hue ? ` is-${part.hue}` : ""}`,
+        text: "●",
+        attr: { "aria-hidden": "true" },
+      });
+      note.createSpan({
+        cls: "bob-task-card-theme-note-name",
+        text: part.text,
+      });
+    } else {
+      const partClass = part.type === "label"
+        ? "bob-task-card-theme-label"
+        : part.type === "value"
+          ? `bob-task-card-theme-value${theme.unknown ? " is-unknown" : ""}${theme.needsRepair ? " is-repair" : ""}`
+          : "bob-task-card-theme-detail";
+      const span = line.createSpan({ cls: partClass, text: part.text });
+      if (part.type === "value" && theme.tooltip) {
+        span.setAttribute("title", theme.tooltip);
+      }
+    }
+  }
+  return line;
+}
+
 function renderTaskCardView(container, model, options = {}) {
   if (!container) {
     return null;
@@ -152,6 +198,7 @@ function renderTaskCardView(container, model, options = {}) {
     });
     errorEl.setAttribute("role", "alert");
   }
+  renderTaskCardThemeHeader(container, headerModel.theme);
   const isCardActivationKey = (event) =>
     Boolean(event) &&
     (event.key === "Enter" || event.key === " ") &&
@@ -467,11 +514,14 @@ function renderTaskCardView(container, model, options = {}) {
     } else {
       rowEl.createDiv({ cls: "bob-task-card-key-spacer" });
     }
+    if (row.id === "theme" && row.unavailableReason) {
+      rowEl.setAttribute("title", row.unavailableReason);
+    }
     const body = rowEl.createDiv({ cls: "bob-task-card-row-body" });
     body.createDiv({ cls: "bob-task-card-row-label", text: row.label });
     if (row.detail) {
       body.createDiv({
-        cls: row.enabled
+        cls: row.enabled || row.id === "theme"
           ? "bob-task-card-row-detail"
           : "bob-task-card-row-reason",
         text: row.detail,

@@ -870,6 +870,7 @@ test("links-to row follows blocks with N, first label, cut target, and +K", () =
     "review-every",
     "cancel",
     "lane",
+    "theme",
   ]);
   const row = model.rows.find((entry) => entry.id === "links-to");
   assert.equal(row.kind, "action");

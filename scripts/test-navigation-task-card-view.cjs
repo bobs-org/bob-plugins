@@ -346,6 +346,8 @@ test("styles share key-card tokens and compact Task Card dimensions", () => {
   assert.match(STYLES, /min\(600px, 92vw\)/);
   assert.match(STYLES, /75vh/);
   assert.match(STYLES, /\.bob-task-card-wide/);
+  assert.match(STYLES, /\.bob-task-card-theme-value\.is-unknown/);
+  assert.match(STYLES, /\.bob-task-card-theme-value\.is-repair/);
 });
 
 test("card renderer paints header, banner, strip, stable rows, more, and footer from the model", () => {
@@ -385,14 +387,72 @@ test("card renderer paints header, banner, strip, stable rows, more, and footer 
     "linked-from",
     "review-every",
     "lane",
+    "theme",
     "cancel",
   ]);
   assert.equal(orderedTaskCardRows(model).find((row) => row.id === "blocks").shortcut, "⇧B");
+  assert.equal(orderedTaskCardRows(model).find((row) => row.id === "theme").shortcut, "t");
   const list = byClass(root, "bob-task-card-actions")[0];
   assert.equal(list.attributes.role, "listbox");
   const strip = byClass(root, "bob-task-card-strip")[0];
   assert.equal(strip.attributes.role, "radiogroup");
   assert.ok(list.focused);
+});
+
+test("Task Card theme header shows unknown and repair signals without invoking setters", () => {
+  const line = "- [ ] #task Historical [theme:: OLD] ^old";
+  let writes = 0;
+  const model = makeModel({
+    content: line,
+    lineText: line,
+    themeApi: {
+      version: 1,
+      taskThemeOf: () => ({
+        state: "set",
+        value: "OLD",
+        key: "old",
+        fields: [{ start: 27, end: 41 }],
+      }),
+      suggestFor: () => ({
+        theme: { name: "OLD", key: "old", known: false },
+        source: "task",
+        label: "this task",
+        inherited: {
+          theme: { name: "WRITE", key: "write", known: true },
+          source: "note",
+          label: "from sase_blog",
+          from: {
+            path: "Areas/sase_blog.md",
+            stem: "sase_blog",
+            hue: "green",
+          },
+        },
+      }),
+      isKnownTheme: () => false,
+      setTaskTheme: () => { writes += 1; },
+      clearTaskTheme: () => { writes += 1; },
+    },
+  });
+  const root = new ElementStub();
+  renderTaskCardView(root, model);
+  const themeLine = byClass(root, "bob-task-card-theme-line")[0];
+  const themeValue = byClass(root, "bob-task-card-theme-value")[0];
+  const themeDot = byClass(root, "bob-task-card-theme-dot")[0];
+  const themeRow = descendants(root).find(
+    (item) => item.attributes.id === "bob-task-card-row-theme",
+  );
+  assert.ok(themeLine.classes.includes("is-unknown"));
+  const themeText = flattenText(themeLine).replace(/\s+/g, " ");
+  assert.match(themeText, /Theme \[OLD\] this task/);
+  assert.match(themeText, /sase_blog suggests WRITE/);
+  assert.ok(themeValue.classes.includes("is-unknown"));
+  assert.equal(themeValue.attributes.title.includes("not in the catalog"), true);
+  assert.ok(themeDot.classes.includes("is-green"));
+  assert.match(flattenText(themeDot), /●/);
+  assert.ok(themeRow);
+  assert.equal(themeRow.attributes["aria-disabled"], "true");
+  assert.match(flattenText(themeRow), /t Theme/);
+  assert.equal(writes, 0);
 });
 
 test("renderer does not consume randomness or invent recommendation data", () => {
@@ -765,6 +825,19 @@ test("Task Card opens the compact card with dialog semantics and a close control
   const close = byClass(modal.contentEl, "bob-task-card-close")[0];
   close.listeners.click({ preventDefault() {} });
   assert.equal(modal.isOpen, false);
+});
+
+test("Theme property row is selectable while its editor remains read-only", () => {
+  const { modal, editor } = openPropertyPicker();
+  const row = descendants(modal.contentEl).find(
+    (item) => item.attributes.id === "bob-task-card-row-theme",
+  );
+  assert.ok(row);
+  assert.equal(row.attributes["aria-disabled"], "true");
+  click(row);
+  assert.equal(modal.stage, "task-card");
+  assert.equal(modal.taskCardSelectedRowId, "theme");
+  assert.equal(editor.writes(), 0);
 });
 
 test("a More row opens that property's value stage, never a filter list, and Back restores the card", () => {

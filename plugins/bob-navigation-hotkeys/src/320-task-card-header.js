@@ -159,6 +159,7 @@ function buildTaskCardHeader(details = {}) {
     laneMixed: lane === "mixed",
     priority,
     schedule,
+    theme: buildTaskCardThemeHeader(details.themeProjection),
     dependencies,
     review: refresh,
     chips: Object.freeze(chips),
@@ -258,7 +259,9 @@ function presentTaskCardRow(row) {
     action: row.action,
     shortcut,
     label,
-    detail: row.enabled
+    detail: row.id === "theme"
+      ? row.detail || row.unavailableReason || ""
+      : row.enabled
       ? row.currentLabel || row.detail || ""
       : row.unavailableReason || row.detail || "",
     enabled: Boolean(row.enabled),

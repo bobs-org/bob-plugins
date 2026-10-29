@@ -43499,6 +43499,13 @@ function planTaskCard(context = {}) {
     ? dependencyItem || taskCardPropertyProjection({ property: dependencyProperty })
     : null;
   const targets = session.targets;
+  const themeProjection = buildTaskCardThemeProjection({
+    targets: session.valid ? targets : [],
+    themeApi: context.themeApi,
+    noteContents: context.themeNoteContents,
+    filePath: context.filePath || "",
+    content: session.content,
+  });
   const targetStatuses = targets.map((target) =>
     getObsidianTaskCheckboxStatus((target && target.rawLine) || ""),
   );
@@ -43707,6 +43714,22 @@ function planTaskCard(context = {}) {
       targetCount: laneDescription ? laneDescription.count : session.targetCount,
       deletable: false,
     }),
+    row({
+      id: "theme",
+      kind: "property",
+      action: "theme",
+      propertyName: "theme",
+      label: "Theme",
+      enabled: false,
+      unavailableReason: themeProjection.available
+        ? "Theme editing is not available yet"
+        : themeProjection.unavailableReason || "Theme is unavailable",
+      detail: themeProjection.display.text,
+      mixed: themeProjection.mixed,
+      valueState: themeProjection.display.state || "unavailable",
+      deletable: false,
+      targetCount: session.targetCount,
+    }),
   ]);
   const selectedRowId = rows.some((item) => item.id === context.selectedRowId)
     ? context.selectedRowId
@@ -43734,6 +43757,7 @@ function planTaskCard(context = {}) {
     priorityStrip,
     mixedMetadata: frozenMixedMetadata,
     refreshDescription,
+    themeProjection,
     rows,
     baseDate,
     inboxRoute: context.inboxRoute || null,
@@ -43769,6 +43793,7 @@ function planTaskCard(context = {}) {
     inputActive: context.inputActive === true,
     schedule: scheduleProjection,
     priorityStrip,
+    themeProjection,
     recommendation,
     properties: Object.freeze(propertyProjections),
     moreProperties: Object.freeze(
@@ -43794,248 +43819,6 @@ function planTaskCard(context = {}) {
     }),
   });
 }
-
-function taskCardIntentForRow(row) {
-  if (!row) {
-    return Object.freeze({
-      type: "unavailable",
-      action: "open-row",
-      reason: "No card action is selected",
-    });
-  }
-  if (!row.enabled) {
-    return Object.freeze({
-      type: "unavailable",
-      action: row.action || row.id,
-      rowId: row.id,
-      reason: row.unavailableReason || "This action is unavailable",
-    });
-  }
-  return Object.freeze({
-    type: "open-action",
-    action: row.action,
-    rowId: row.id,
-    propertyName: row.propertyName || "",
-    targetCount: row.targetCount || 0,
-  });
-}
-
-function resolveTaskCardKey(model, event) {
-  if (!model || model.kind !== "task-card" || !event) {
-    return null;
-  }
-  if (
-    event.isComposing === true ||
-    event.keyCode === 229 ||
-    model.inputActive === true ||
-    event.inputActive === true ||
-    event.inTextInput === true
-  ) {
-    return null;
-  }
-  const target = event.target;
-  if (
-    target &&
-    (target.isContentEditable === true ||
-      /^(INPUT|TEXTAREA|SELECT)$/.test(String(target.tagName || "").toUpperCase()))
-  ) {
-    return null;
-  }
-  const key = String(event.key || "");
-  const lower = key.toLowerCase();
-  const ctrl = event.ctrlKey === true;
-  const meta = event.metaKey === true;
-  const shift = event.shiftKey === true;
-  const alt = event.altKey === true;
-  const modified = ctrl || meta || shift || alt;
-  const repeatedAction = event.repeat === true;
-  const quickRollKey =
-    alt && !ctrl && !meta && !shift && event.code === "KeyP";
-  const rows = Array.isArray(model.rows) ? model.rows : [];
-  const selected = rows.find((row) => row.id === model.selectedRowId) || null;
-  const rowById = (id) => rows.find((row) => row.id === id) || null;
-  const unavailable = (action, reason) =>
-    Object.freeze({ type: "unavailable", action, reason });
-  const movement = (direction) =>
-    Object.freeze({ type: "move-selection", direction, fromRowId: model.selectedRowId });
-  const actionKey =
-    (!modified && /^[0-9bflx]$/i.test(key)) ||
-    (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || event.code === "KeyL" || key === "B" || key === "L")) ||
-    (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
-    (meta && !ctrl && !shift && !alt && key === "Enter") ||
-    (alt && !ctrl && !meta && !shift && lower === "n") ||
-    quickRollKey;
-  if (repeatedAction && actionKey) {
-    return Object.freeze({ type: "ignored", reason: "repeated-action-key" });
-  }
-  if (
-    (!modified && key === "ArrowUp") ||
-    (ctrl && !meta && !shift && !alt && lower === "p")
-  ) {
-    return movement("previous");
-  }
-  if (
-    (!modified && key === "ArrowDown") ||
-    (ctrl && !meta && !shift && !alt && lower === "n")
-  ) {
-    return movement("next");
-  }
-  if (quickRollKey || ((ctrl || meta) && !shift && !alt && key === "Enter")) {
-    const recommendation = model.recommendation;
-    if (!recommendation || !recommendation.available) {
-      return unavailable(
-        "apply-recommendation",
-        recommendation?.unavailableReason || "No recommendation is available",
-      );
-    }
-    return Object.freeze({
-      type: "apply-recommendation",
-      recommendation: recommendation.source,
-      effects: recommendation.effects,
-      targetCount: recommendation.targetCount,
-    });
-  }
-  if (ctrl && !meta && !shift && !alt && lower === "r") {
-    if (!model.priorityStrip || !model.priorityStrip.available) {
-      return unavailable(
-        "refresh-priority-previews",
-        model.priorityStrip?.unavailableReason || "Priority is not configured",
-      );
-    }
-    return Object.freeze({
-      type: "refresh-previews",
-      includeRecommendation: true,
-      includePriorityStrip: true,
-    });
-  }
-  if (alt && !ctrl && !meta && !shift && lower === "n") {
-    return taskCardIntentForRow(rowById("lane"));
-  }
-  if (ctrl && !meta && !shift && !alt && lower === "d") {
-    if (selected && selected.id === "links-to") {
-      return Object.freeze({
-        type: "clear-relations",
-        rowId: selected.id,
-        targetCount: model.session.targetCount,
-      });
-    }
-    if (selected && selected.id === "linked-from") {
-      return unavailable(
-        "clear-relations",
-        TASK_LINKED_FROM_LINE_NOTICE,
-      );
-    }
-    if (!selected || selected.kind !== "property" || !selected.deletable) {
-      return unavailable("delete-property", "Only a selected property can be deleted");
-    }
-    if (!selected.enabled) {
-      return unavailable(
-        "delete-property",
-        selected.unavailableReason || "The selected property is unavailable",
-      );
-    }
-    return Object.freeze({
-      type: "delete-property",
-      rowId: selected.id,
-      propertyName: selected.propertyName,
-      targetCount: selected.targetCount || model.session.targetCount,
-    });
-  }
-  if (!modified && /^[1-9]$/.test(key)) {
-    const level = model.priorityStrip?.levels?.find((item) => item.key === key);
-    if (!level) {
-      return unavailable("set-priority", "Priority level is not configured");
-    }
-    if (!level.available) {
-      return unavailable("set-priority", level.unavailableReason || "Priority level is unavailable");
-    }
-    return Object.freeze({
-      type: "set-priority",
-      propertyName: model.priorityStrip.propertyName,
-      levelIndex: level.index,
-      levelLabel: level.label,
-      value: level.value,
-      key,
-      previews: level.targetPreviews,
-      targetCount: level.targetCount,
-      mixed: level.mixed,
-    });
-  }
-  if (!modified && key === "0") {
-    if (!model.priorityStrip?.propertyName) {
-      return unavailable("clear-priority", "Priority is not configured");
-    }
-    return Object.freeze({
-      type: "clear-priority",
-      propertyName: model.priorityStrip.propertyName,
-      value: "",
-      keepScheduled: true,
-      targetCount: model.priorityStrip.targetCount,
-    });
-  }
-  if (!modified && lower === "b") {
-    return taskCardIntentForRow(rowById("depends-on"));
-  }
-  if (!modified && lower === "l") {
-    return taskCardIntentForRow(rowById("links-to"));
-  }
-  if (
-    shift &&
-    !ctrl &&
-    !meta &&
-    !alt &&
-    (event.code === "KeyB" || key === "B")
-  ) {
-    return taskCardIntentForRow(rowById("blocks"));
-  }
-  if (
-    shift &&
-    !ctrl &&
-    !meta &&
-    !alt &&
-    (event.code === "KeyL" || key === "L")
-  ) {
-    return taskCardIntentForRow(rowById("linked-from"));
-  }
-  if (!modified && lower === "f") {
-    return taskCardIntentForRow(rowById("review-every"));
-  }
-  if (!modified && lower === "x") {
-    return taskCardIntentForRow(rowById("cancel"));
-  }
-  if (!modified && key === "Enter") {
-    return taskCardIntentForRow(selected);
-  }
-  if (isTaskCardCloseKeydown(event)) {
-    return Object.freeze({ type: "close-card" });
-  }
-  if (!modified && key === "Backspace") {
-    return Object.freeze({ type: "back" });
-  }
-  return null;
-}
-
-const TASK_CARD_ROW_ORDER = Object.freeze([
-  "schedule",
-  "depends-on",
-  "blocks",
-  "links-to",
-  "linked-from",
-  "review-every",
-  "lane",
-  "cancel",
-]);
-
-const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
-  schedule: "Enter",
-  "depends-on": "b",
-  blocks: "⇧B",
-  "links-to": "l",
-  "linked-from": "⇧L",
-  "review-every": "f",
-  lane: "Alt+N",
-  cancel: "x",
-});
 
 function getTaskCardLaneChipLabel(status) {
   switch (String(status ?? "")) {
@@ -44495,6 +44278,709 @@ function taskCardLinkedFromSummary(session, context = {}) {
     detail: `${incoming.length} · ${name}`,
   });
 }
+// ---- src/313-task-card-theme-projection.js ----
+// Pure Task Card theme projection. It consumes the Ledger Tools task-theme
+// API and exact note snapshots supplied by the modal adapter; it never writes.
+const TASK_CARD_THEME_HUES = Object.freeze([
+  "blue",
+  "orange",
+  "aqua",
+  "yellow",
+  "magenta",
+  "green",
+  "violet",
+  "red",
+]);
+
+function copyTaskCardThemeData(value, depth = 0) {
+  if (depth > 8 || value == null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return Object.freeze(
+      value.map((entry) => copyTaskCardThemeData(entry, depth + 1)),
+    );
+  }
+  const copy = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "function") {
+      copy[key] = copyTaskCardThemeData(entry, depth + 1);
+    }
+  }
+  return Object.freeze(copy);
+}
+
+function taskCardThemeSnapshotForTarget(target, context = {}) {
+  const path = normalizeVaultRelativePath(
+    (target && (target.path || target.filePath)) || context.filePath || "",
+  );
+  const snapshots = context.noteContents;
+  if (snapshots instanceof Map) {
+    if (snapshots.has(path) && typeof snapshots.get(path) === "string") {
+      return snapshots.get(path);
+    }
+    for (const [candidate, content] of snapshots) {
+      if (
+        typeof content === "string" &&
+        normalizeVaultRelativePath(candidate) === path
+      ) {
+        return content;
+      }
+    }
+  } else if (snapshots && typeof snapshots === "object") {
+    const content = snapshots[path];
+    if (typeof content === "string") {
+      return content;
+    }
+  }
+  if (target && typeof target.content === "string") {
+    return target.content;
+  }
+  if (target && typeof target.noteText === "string") {
+    return target.noteText;
+  }
+  if (
+    path &&
+    path === normalizeVaultRelativePath(context.filePath || "") &&
+    typeof context.content === "string"
+  ) {
+    return context.content;
+  }
+  return null;
+}
+
+function taskCardThemeApiReady(api) {
+  return Boolean(
+    api &&
+      Number(api.version) >= 1 &&
+      typeof api.suggestFor === "function" &&
+      typeof api.taskThemeOf === "function",
+  );
+}
+
+function taskCardThemeKnown(api, theme) {
+  if (!theme || !theme.key) {
+    return null;
+  }
+  if (theme.known === false) {
+    return false;
+  }
+  try {
+    if (api && typeof api.isKnownTheme === "function") {
+      return api.isKnownTheme(theme.key) === true;
+    }
+  } catch (_error) {
+    // Catalog knowledge is optional display metadata.
+  }
+  return theme.known === true ? true : null;
+}
+
+function taskCardThemeNoteSource(suggestion) {
+  if (!suggestion || suggestion.source !== "note") {
+    return null;
+  }
+  const from = suggestion.from && typeof suggestion.from === "object"
+    ? suggestion.from
+    : {};
+  const stem = normalizeBulletPropertyValue(
+    from.stem ||
+      getVaultPathBasenameWithoutExtension(from.path || ""),
+  );
+  if (!stem) {
+    return null;
+  }
+  const hue = TASK_CARD_THEME_HUES.includes(from.hue) ? from.hue : null;
+  return Object.freeze({
+    path: normalizeVaultRelativePath(from.path || ""),
+    stem,
+    hue,
+  });
+}
+
+function taskCardThemeSourceLabel(suggestion) {
+  if (!suggestion) {
+    return "no default";
+  }
+  switch (suggestion.source) {
+    case "note":
+      return taskCardThemeNoteSource(suggestion)?.stem || "note default";
+    case "reading":
+      return suggestion.label || "reading task";
+    case "review":
+      return suggestion.label || "daily review";
+    case "task":
+      return suggestion.label || "this task";
+    default:
+      return suggestion.label || "inherited theme";
+  }
+}
+
+function taskCardThemeTextFromParts(parts) {
+  return parts
+    .map((part) => {
+      if (!part) return "";
+      return part.type === "note" ? `● ${part.text}` : String(part.text || "");
+    })
+    .join("");
+}
+
+function taskCardThemeSourceParts(suggestion) {
+  if (!suggestion) {
+    return [Object.freeze({ type: "text", text: "no default" })];
+  }
+  const note = taskCardThemeNoteSource(suggestion);
+  if (note) {
+    return [
+      Object.freeze({ type: "note", text: note.stem, hue: note.hue }),
+    ];
+  }
+  return [
+    Object.freeze({
+      type: "text",
+      text: taskCardThemeSourceLabel(suggestion),
+    }),
+  ];
+}
+
+function taskCardThemeTargetDisplay(state) {
+  const theme = state.theme;
+  const inherited = state.inherited;
+  const inheritedTheme = inherited && inherited.theme;
+  const valueText = theme && theme.name ? `[${theme.name}]` : "";
+  const parts = [];
+  if (state.needsRepair) {
+    parts.push(Object.freeze({ type: "value", text: "Needs repair" }));
+    if (inheritedTheme && inheritedTheme.name) {
+      parts.push(Object.freeze({ type: "text", text: " · " }));
+      parts.push(...taskCardThemeSourceParts(inherited));
+      parts.push(
+        Object.freeze({
+          type: "text",
+          text: ` suggests ${inheritedTheme.name}`,
+        }),
+      );
+    } else {
+      parts.push(Object.freeze({ type: "text", text: " · no default" }));
+    }
+  } else if (state.explicit) {
+    parts.push(
+      Object.freeze({
+        type: "value",
+        text: `${valueText} this task`,
+      }),
+    );
+    if (inheritedTheme && inheritedTheme.name) {
+      parts.push(Object.freeze({ type: "text", text: " · " }));
+      parts.push(...taskCardThemeSourceParts(inherited));
+      parts.push(
+        Object.freeze({
+          type: "text",
+          text: ` suggests ${inheritedTheme.name}`,
+        }),
+      );
+    } else {
+      parts.push(Object.freeze({ type: "text", text: " · no default" }));
+    }
+  } else if (theme && theme.name) {
+    parts.push(Object.freeze({ type: "value", text: valueText }));
+    if (inherited && inherited.source === "note") {
+      parts.push(Object.freeze({ type: "text", text: " from " }));
+      parts.push(...taskCardThemeSourceParts(inherited));
+    } else {
+      parts.push(
+        Object.freeze({
+          type: "text",
+          text: ` · ${taskCardThemeSourceLabel(inherited)}`,
+        }),
+      );
+    }
+  } else {
+    parts.push(Object.freeze({ type: "value", text: "none" }));
+    parts.push(Object.freeze({ type: "text", text: " · t to set" }));
+  }
+  const frozenParts = Object.freeze(parts);
+  const unknown = Boolean(theme && state.known === false);
+  const tooltip = state.needsRepair
+    ? "This task has a duplicate or invalid theme field and needs repair."
+    : unknown
+      ? "This theme is not in the catalog; its task field remains unchanged."
+      : null;
+  return Object.freeze({
+    parts: frozenParts,
+    text: taskCardThemeTextFromParts(frozenParts),
+    valueText: valueText || (state.needsRepair ? "Needs repair" : "none"),
+    state: state.needsRepair
+      ? "repair"
+      : state.explicit
+        ? "explicit"
+        : theme
+          ? "inherited"
+          : "none",
+    unknown,
+    needsRepair: state.needsRepair,
+    tooltip,
+  });
+}
+
+function taskCardThemeTargetProjection(target, id, context, apiReady) {
+  const path = normalizeVaultRelativePath(
+    (target && (target.path || target.filePath)) || context.filePath || "",
+  );
+  const line = Number.isInteger(target && target.line) ? target.line : null;
+  const rawLine = String((target && target.rawLine) || "");
+  const identity = Object.freeze({
+    id,
+    path,
+    line,
+    rawLine,
+    blockId: normalizeBulletPropertyValue(
+      target && (target.blockId || target.id || getTrailingBlockId(rawLine)),
+    ),
+  });
+  const unavailable = (reason) =>
+    Object.freeze({
+      identity,
+      available: false,
+      unavailableReason: reason,
+      field: Object.freeze({ state: "unavailable", repair: null, count: 0 }),
+      suggestion: null,
+      inherited: null,
+      theme: null,
+      explicit: false,
+      needsRepair: false,
+      known: null,
+      display: Object.freeze({
+        parts: Object.freeze([
+          Object.freeze({ type: "value", text: "unavailable" }),
+        ]),
+        text: "unavailable",
+        valueText: "unavailable",
+        state: "unavailable",
+        unknown: false,
+        needsRepair: false,
+        tooltip: reason,
+      }),
+      signature: `unavailable:${reason}`,
+    });
+  if (!apiReady) {
+    return unavailable("Ledger Tools task-theme API is unavailable");
+  }
+  if (!path || line === null || !rawLine) {
+    return unavailable("Task identity is unavailable");
+  }
+  const content = taskCardThemeSnapshotForTarget(target, context);
+  if (typeof content !== "string") {
+    return unavailable("Matching note snapshot is unavailable");
+  }
+  const lines = content.split(/\r?\n/);
+  if (lines[line] !== rawLine) {
+    return unavailable("Task does not match its note snapshot");
+  }
+  const api = context.themeApi;
+  let rawField;
+  let rawSuggestion;
+  try {
+    rawField = api.taskThemeOf(rawLine);
+    rawSuggestion = api.suggestFor({ path, line: line + 1, text: content });
+  } catch (_error) {
+    return unavailable("Task-theme information could not be read");
+  }
+  const field = rawField && ["none", "set", "repair"].includes(rawField.state)
+    ? copyTaskCardThemeData(rawField)
+    : Object.freeze({ state: "none" });
+  const suggestion = rawSuggestion
+    ? copyTaskCardThemeData(rawSuggestion)
+    : null;
+  const inherited = suggestion && suggestion.source === "task"
+    ? suggestion.inherited || null
+    : suggestion;
+  const explicit = field.state === "set";
+  const needsRepair = field.state === "repair";
+  const suggestedTheme = suggestion && suggestion.theme;
+  let theme = explicit
+    ? suggestedTheme && suggestion.source === "task"
+      ? suggestedTheme
+      : Object.freeze({
+          key:
+            field.key ||
+            String(field.value || "").trim().toLowerCase().replace(/\s+/g, " "),
+          name: field.value,
+          known:
+            suggestedTheme && suggestedTheme.key === field.key
+              ? suggestedTheme.known
+              : undefined,
+        })
+    : needsRepair
+      ? inherited && inherited.theme
+      : suggestedTheme;
+  const known = taskCardThemeKnown(api, theme);
+  if (theme && known !== null && theme.known !== known) {
+    theme = Object.freeze({ ...theme, known });
+  }
+  const fieldProjection = Object.freeze({
+    state: field.state,
+    key: typeof field.key === "string" ? field.key : null,
+    value: typeof field.value === "string" ? field.value : null,
+    repair: typeof field.repair === "string" ? field.repair : null,
+    fields: Array.isArray(field.fields)
+      ? copyTaskCardThemeData(field.fields)
+      : Object.freeze([]),
+    count: Array.isArray(field.fields) ? field.fields.length : explicit ? 1 : 0,
+  });
+  const state = {
+    theme,
+    inherited,
+    explicit,
+    needsRepair,
+    known,
+  };
+  const display = taskCardThemeTargetDisplay(state);
+  const signature = JSON.stringify({
+    state: field.state,
+    themeKey: theme && theme.key,
+    inheritedKey: inherited && inherited.theme && inherited.theme.key,
+    source: inherited && inherited.source,
+    declaringPath: inherited && inherited.from && inherited.from.path,
+    repair: field.repair,
+    known,
+  });
+  return Object.freeze({
+    identity,
+    available: true,
+    unavailableReason: null,
+    field: fieldProjection,
+    suggestion,
+    inherited,
+    theme: theme ? copyTaskCardThemeData(theme) : null,
+    explicit,
+    needsRepair,
+    known,
+    display,
+    signature,
+  });
+}
+
+function buildTaskCardThemeProjection(context = {}) {
+  const unique = deduplicateTaskCardTargets(context.targets);
+  const apiReady = taskCardThemeApiReady(context.themeApi);
+  const targets = unique.map(({ id, target }) =>
+    taskCardThemeTargetProjection(target, id, context, apiReady),
+  );
+  const available = targets.length > 0 && targets.every((target) => target.available);
+  const signatures = Array.from(
+    new Set(targets.filter((target) => target.available).map((target) => target.signature)),
+  );
+  const mixed = targets.length > 1 && (signatures.length > 1 || !available);
+  const first = targets[0] || null;
+  let parts = [];
+  let text = "unavailable";
+  if (targets.length === 0) {
+    text = "unavailable · no task targets";
+    parts = [Object.freeze({ type: "value", text })];
+  } else if (!available) {
+    const unavailableCount = targets.filter((target) => !target.available).length;
+    text = `unavailable for ${unavailableCount} of ${targets.length} tasks`;
+    parts = [Object.freeze({ type: "value", text })];
+  } else if (mixed) {
+    text = `mixed across ${targets.length} tasks`;
+    parts = [Object.freeze({ type: "value", text })];
+  } else if (targets.length > 1) {
+    parts = [
+      Object.freeze({ type: "text", text: `all ${targets.length} tasks · ` }),
+      ...first.display.parts,
+    ];
+    text = taskCardThemeTextFromParts(parts);
+  } else {
+    parts = [...first.display.parts];
+    text = first.display.text;
+  }
+  const unavailableReason = !apiReady
+    ? "Ledger Tools task-theme API is unavailable"
+    : targets.find((target) => !target.available)?.unavailableReason ||
+      (targets.length === 0 ? "No task targets are available" : null);
+  const display = Object.freeze({
+    parts: Object.freeze(parts),
+    text,
+    state: mixed ? "mixed" : first && first.display.state,
+    unknown: !mixed && Boolean(first && first.display.unknown),
+    needsRepair: !mixed && Boolean(first && first.display.needsRepair),
+    tooltip: !mixed && first ? first.display.tooltip : unavailableReason,
+  });
+  return Object.freeze({
+    available,
+    unavailableReason,
+    targetCount: targets.length,
+    mixed,
+    targets: Object.freeze(targets),
+    display,
+  });
+}
+
+function buildTaskCardThemeHeader(projection) {
+  if (!projection || !projection.display) {
+    return null;
+  }
+  const display = projection.display;
+  const parts = Object.freeze([
+    Object.freeze({ type: "label", text: "Theme " }),
+    ...display.parts,
+  ]);
+  return Object.freeze({
+    text: `Theme ${display.text}`,
+    parts,
+    state: display.state || "unavailable",
+    unknown: display.unknown === true,
+    needsRepair: display.needsRepair === true,
+    mixed: projection.mixed === true,
+    targetCount: projection.targetCount || 0,
+    tooltip: display.tooltip || projection.unavailableReason || null,
+  });
+}
+// ---- src/314-task-card-key-model.js ----
+function taskCardIntentForRow(row) {
+  if (!row) {
+    return Object.freeze({
+      type: "unavailable",
+      action: "open-row",
+      reason: "No card action is selected",
+    });
+  }
+  if (!row.enabled) {
+    return Object.freeze({
+      type: "unavailable",
+      action: row.action || row.id,
+      rowId: row.id,
+      reason: row.unavailableReason || "This action is unavailable",
+    });
+  }
+  return Object.freeze({
+    type: "open-action",
+    action: row.action,
+    rowId: row.id,
+    propertyName: row.propertyName || "",
+    targetCount: row.targetCount || 0,
+  });
+}
+
+function resolveTaskCardKey(model, event) {
+  if (!model || model.kind !== "task-card" || !event) {
+    return null;
+  }
+  if (
+    event.isComposing === true ||
+    event.keyCode === 229 ||
+    model.inputActive === true ||
+    event.inputActive === true ||
+    event.inTextInput === true
+  ) {
+    return null;
+  }
+  const target = event.target;
+  if (
+    target &&
+    (target.isContentEditable === true ||
+      /^(INPUT|TEXTAREA|SELECT)$/.test(String(target.tagName || "").toUpperCase()))
+  ) {
+    return null;
+  }
+  const key = String(event.key || "");
+  const lower = key.toLowerCase();
+  const ctrl = event.ctrlKey === true;
+  const meta = event.metaKey === true;
+  const shift = event.shiftKey === true;
+  const alt = event.altKey === true;
+  const modified = ctrl || meta || shift || alt;
+  const repeatedAction = event.repeat === true;
+  const quickRollKey =
+    alt && !ctrl && !meta && !shift && event.code === "KeyP";
+  const rows = Array.isArray(model.rows) ? model.rows : [];
+  const selected = rows.find((row) => row.id === model.selectedRowId) || null;
+  const rowById = (id) => rows.find((row) => row.id === id) || null;
+  const unavailable = (action, reason) =>
+    Object.freeze({ type: "unavailable", action, reason });
+  const movement = (direction) =>
+    Object.freeze({ type: "move-selection", direction, fromRowId: model.selectedRowId });
+  const actionKey =
+    (!modified && /^[0-9bflx]$/i.test(key)) ||
+    (shift && !ctrl && !meta && !alt && (event.code === "KeyB" || event.code === "KeyL" || key === "B" || key === "L")) ||
+    (ctrl && !meta && !shift && !alt && ["Enter", "r", "d"].includes(key)) ||
+    (meta && !ctrl && !shift && !alt && key === "Enter") ||
+    (alt && !ctrl && !meta && !shift && lower === "n") ||
+    quickRollKey;
+  if (repeatedAction && actionKey) {
+    return Object.freeze({ type: "ignored", reason: "repeated-action-key" });
+  }
+  if (
+    (!modified && key === "ArrowUp") ||
+    (ctrl && !meta && !shift && !alt && lower === "p")
+  ) {
+    return movement("previous");
+  }
+  if (
+    (!modified && key === "ArrowDown") ||
+    (ctrl && !meta && !shift && !alt && lower === "n")
+  ) {
+    return movement("next");
+  }
+  if (quickRollKey || ((ctrl || meta) && !shift && !alt && key === "Enter")) {
+    const recommendation = model.recommendation;
+    if (!recommendation || !recommendation.available) {
+      return unavailable(
+        "apply-recommendation",
+        recommendation?.unavailableReason || "No recommendation is available",
+      );
+    }
+    return Object.freeze({
+      type: "apply-recommendation",
+      recommendation: recommendation.source,
+      effects: recommendation.effects,
+      targetCount: recommendation.targetCount,
+    });
+  }
+  if (ctrl && !meta && !shift && !alt && lower === "r") {
+    if (!model.priorityStrip || !model.priorityStrip.available) {
+      return unavailable(
+        "refresh-priority-previews",
+        model.priorityStrip?.unavailableReason || "Priority is not configured",
+      );
+    }
+    return Object.freeze({
+      type: "refresh-previews",
+      includeRecommendation: true,
+      includePriorityStrip: true,
+    });
+  }
+  if (alt && !ctrl && !meta && !shift && lower === "n") {
+    return taskCardIntentForRow(rowById("lane"));
+  }
+  if (ctrl && !meta && !shift && !alt && lower === "d") {
+    if (selected && selected.id === "links-to") {
+      return Object.freeze({
+        type: "clear-relations",
+        rowId: selected.id,
+        targetCount: model.session.targetCount,
+      });
+    }
+    if (selected && selected.id === "linked-from") {
+      return unavailable(
+        "clear-relations",
+        TASK_LINKED_FROM_LINE_NOTICE,
+      );
+    }
+    if (!selected || selected.kind !== "property" || !selected.deletable) {
+      return unavailable("delete-property", "Only a selected property can be deleted");
+    }
+    if (!selected.enabled) {
+      return unavailable(
+        "delete-property",
+        selected.unavailableReason || "The selected property is unavailable",
+      );
+    }
+    return Object.freeze({
+      type: "delete-property",
+      rowId: selected.id,
+      propertyName: selected.propertyName,
+      targetCount: selected.targetCount || model.session.targetCount,
+    });
+  }
+  if (!modified && /^[1-9]$/.test(key)) {
+    const level = model.priorityStrip?.levels?.find((item) => item.key === key);
+    if (!level) {
+      return unavailable("set-priority", "Priority level is not configured");
+    }
+    if (!level.available) {
+      return unavailable("set-priority", level.unavailableReason || "Priority level is unavailable");
+    }
+    return Object.freeze({
+      type: "set-priority",
+      propertyName: model.priorityStrip.propertyName,
+      levelIndex: level.index,
+      levelLabel: level.label,
+      value: level.value,
+      key,
+      previews: level.targetPreviews,
+      targetCount: level.targetCount,
+      mixed: level.mixed,
+    });
+  }
+  if (!modified && key === "0") {
+    if (!model.priorityStrip?.propertyName) {
+      return unavailable("clear-priority", "Priority is not configured");
+    }
+    return Object.freeze({
+      type: "clear-priority",
+      propertyName: model.priorityStrip.propertyName,
+      value: "",
+      keepScheduled: true,
+      targetCount: model.priorityStrip.targetCount,
+    });
+  }
+  if (!modified && lower === "b") {
+    return taskCardIntentForRow(rowById("depends-on"));
+  }
+  if (!modified && lower === "l") {
+    return taskCardIntentForRow(rowById("links-to"));
+  }
+  if (
+    shift &&
+    !ctrl &&
+    !meta &&
+    !alt &&
+    (event.code === "KeyB" || key === "B")
+  ) {
+    return taskCardIntentForRow(rowById("blocks"));
+  }
+  if (
+    shift &&
+    !ctrl &&
+    !meta &&
+    !alt &&
+    (event.code === "KeyL" || key === "L")
+  ) {
+    return taskCardIntentForRow(rowById("linked-from"));
+  }
+  if (!modified && lower === "f") {
+    return taskCardIntentForRow(rowById("review-every"));
+  }
+  if (!modified && lower === "x") {
+    return taskCardIntentForRow(rowById("cancel"));
+  }
+  if (!modified && key === "Enter") {
+    return taskCardIntentForRow(selected);
+  }
+  if (isTaskCardCloseKeydown(event)) {
+    return Object.freeze({ type: "close-card" });
+  }
+  if (!modified && key === "Backspace") {
+    return Object.freeze({ type: "back" });
+  }
+  return null;
+}
+
+const TASK_CARD_ROW_ORDER = Object.freeze([
+  "schedule",
+  "depends-on",
+  "blocks",
+  "links-to",
+  "linked-from",
+  "review-every",
+  "lane",
+  "theme",
+  "cancel",
+]);
+
+const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
+  schedule: "Enter",
+  theme: "t",
+  "depends-on": "b",
+  blocks: "⇧B",
+  "links-to": "l",
+  "linked-from": "⇧L",
+  "review-every": "f",
+  lane: "Alt+N",
+  cancel: "x",
+});
+
 // ---- src/320-task-card-header.js ----
 function buildTaskCardHeader(details = {}) {
   const session = details.session || {};
@@ -44657,6 +45143,7 @@ function buildTaskCardHeader(details = {}) {
     laneMixed: lane === "mixed",
     priority,
     schedule,
+    theme: buildTaskCardThemeHeader(details.themeProjection),
     dependencies,
     review: refresh,
     chips: Object.freeze(chips),
@@ -44756,7 +45243,9 @@ function presentTaskCardRow(row) {
     action: row.action,
     shortcut,
     label,
-    detail: row.enabled
+    detail: row.id === "theme"
+      ? row.detail || row.unavailableReason || ""
+      : row.enabled
       ? row.currentLabel || row.detail || ""
       : row.unavailableReason || row.detail || "",
     enabled: Boolean(row.enabled),
@@ -44957,6 +45446,52 @@ function renderTaskCardLevelGlyph(labelEl, value, options) {
   }
 }
 
+function renderTaskCardThemeHeader(container, theme) {
+  if (!container || !theme) {
+    return null;
+  }
+  const stateClass = theme.state ? ` is-${theme.state}` : "";
+  const line = container.createDiv({
+    cls: `bob-task-card-theme-line${stateClass}${theme.unknown ? " is-unknown" : ""}${theme.needsRepair ? " is-repair" : ""}${theme.mixed ? " is-mixed" : ""}`,
+    attr: {
+      "aria-label": theme.text || "Theme unavailable",
+      title: theme.tooltip || theme.text || "Theme unavailable",
+    },
+  });
+  line.setAttribute("aria-label", theme.text || "Theme unavailable");
+  if (theme.tooltip || theme.text) {
+    line.setAttribute("title", theme.tooltip || theme.text);
+  }
+  for (const part of Array.isArray(theme.parts) ? theme.parts : []) {
+    if (!part || !part.text) {
+      continue;
+    }
+    if (part.type === "note") {
+      const note = line.createSpan({ cls: "bob-task-card-theme-note" });
+      note.createSpan({
+        cls: `bob-task-card-theme-dot${part.hue ? ` is-${part.hue}` : ""}`,
+        text: "●",
+        attr: { "aria-hidden": "true" },
+      });
+      note.createSpan({
+        cls: "bob-task-card-theme-note-name",
+        text: part.text,
+      });
+    } else {
+      const partClass = part.type === "label"
+        ? "bob-task-card-theme-label"
+        : part.type === "value"
+          ? `bob-task-card-theme-value${theme.unknown ? " is-unknown" : ""}${theme.needsRepair ? " is-repair" : ""}`
+          : "bob-task-card-theme-detail";
+      const span = line.createSpan({ cls: partClass, text: part.text });
+      if (part.type === "value" && theme.tooltip) {
+        span.setAttribute("title", theme.tooltip);
+      }
+    }
+  }
+  return line;
+}
+
 function renderTaskCardView(container, model, options = {}) {
   if (!container) {
     return null;
@@ -45062,6 +45597,7 @@ function renderTaskCardView(container, model, options = {}) {
     });
     errorEl.setAttribute("role", "alert");
   }
+  renderTaskCardThemeHeader(container, headerModel.theme);
   const isCardActivationKey = (event) =>
     Boolean(event) &&
     (event.key === "Enter" || event.key === " ") &&
@@ -45377,11 +45913,14 @@ function renderTaskCardView(container, model, options = {}) {
     } else {
       rowEl.createDiv({ cls: "bob-task-card-key-spacer" });
     }
+    if (row.id === "theme" && row.unavailableReason) {
+      rowEl.setAttribute("title", row.unavailableReason);
+    }
     const body = rowEl.createDiv({ cls: "bob-task-card-row-body" });
     body.createDiv({ cls: "bob-task-card-row-label", text: row.label });
     if (row.detail) {
       body.createDiv({
-        cls: row.enabled
+        cls: row.enabled || row.id === "theme"
           ? "bob-task-card-row-detail"
           : "bob-task-card-row-reason",
         text: row.detail,
@@ -45704,6 +46243,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     }
     return {
       config: this.config,
+      ...buildTaskCardThemeRuntimeContext(this),
       content: this.getEditorContent(),
       lineText: this.lineText,
       cursorLine: this.cursor ? this.cursor.line : 0,
@@ -45777,6 +46317,10 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       },
       onOpenRow: (rowId) => {
         const row = (this.taskCardModel && this.taskCardModel.rows || []).find((item) => item.id === rowId);
+        if (rowId === "theme" && row && !row.enabled) {
+          this.selectTaskCardRow(rowId);
+          return;
+        }
         void this.dispatchTaskCardIntent(taskCardIntentForRow(row));
       },
       onSelectPriority: (level) => {
@@ -46642,6 +47186,63 @@ function readReviewOriginAfterLine(modal) {
   } catch (_error) {
     return null;
   }
+}
+// ---- src/351-picker-task-card-theme-context.js ----
+// Runtime adapter for the pure Task Card theme projection. Task Link targets
+// carry the exact live note text captured during resolution; local and
+// counted targets use the modal's current editor snapshot.
+function buildTaskCardThemeRuntimeContext(modal) {
+  const app = modal && modal.app;
+  let themeApi = null;
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const ledger = plugins && plugins["bob-ledger-tools"];
+    const themes = ledger && ledger.api && ledger.api.themes;
+    if (themes && Number(themes.version) >= 1) {
+      themeApi = themes;
+    }
+  } catch (_error) {
+    themeApi = null;
+  }
+  let content = "";
+  try {
+    content = String(
+      modal && typeof modal.getEditorContent === "function"
+        ? modal.getEditorContent() || ""
+        : "",
+    );
+  } catch (_error) {
+    content = "";
+  }
+  const filePath = normalizeVaultRelativePath((modal && modal.filePath) || "");
+  const session = taskCardSessionContext({
+    content,
+    lineText: modal && modal.lineText,
+    cursorLine: modal && modal.cursor ? modal.cursor.line : 0,
+    filePath,
+    taskSession: modal && modal.taskSession,
+    linkSession: modal && modal.linkSession,
+  });
+  const noteContents = new Map();
+  for (const { target } of deduplicateTaskCardTargets(session.targets)) {
+    const path = normalizeVaultRelativePath(
+      (target && (target.path || target.filePath)) || filePath,
+    );
+    if (!path) {
+      continue;
+    }
+    if (path === filePath) {
+      noteContents.set(path, content);
+    } else if (target && typeof target.content === "string") {
+      noteContents.set(path, target.content);
+    } else if (target && typeof target.noteText === "string") {
+      noteContents.set(path, target.noteText);
+    }
+  }
+  return Object.freeze({
+    themeApi,
+    themeNoteContents: noteContents,
+  });
 }
 // ---- src/360-picker-schedule-review.js ----
 class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
@@ -90437,6 +91038,9 @@ module.exports.helpers = {
   getBulletPropertyCurrentLabel,
   createBulletPropertyItems,
   buildTaskCardPriorityPreviews,
+  buildTaskCardThemeProjection,
+  buildTaskCardThemeHeader,
+  buildTaskCardThemeRuntimeContext,
   planTaskCard,
   taskCardBlocksAvailabilityReason,
   taskCardBlocksSummary,

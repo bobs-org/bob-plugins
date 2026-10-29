@@ -49,6 +49,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
     }
     return {
       config: this.config,
+      ...buildTaskCardThemeRuntimeContext(this),
       content: this.getEditorContent(),
       lineText: this.lineText,
       cursorLine: this.cursor ? this.cursor.line : 0,
@@ -122,6 +123,10 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       },
       onOpenRow: (rowId) => {
         const row = (this.taskCardModel && this.taskCardModel.rows || []).find((item) => item.id === rowId);
+        if (rowId === "theme" && row && !row.enabled) {
+          this.selectTaskCardRow(rowId);
+          return;
+        }
         void this.dispatchTaskCardIntent(taskCardIntentForRow(row));
       },
       onSelectPriority: (level) => {

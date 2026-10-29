@@ -2021,6 +2021,50 @@
   font-size: var(--font-ui-smaller);
 }
 
+.bob-task-card-theme-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.bob-task-card-theme-label {
+  color: var(--text-faint);
+}
+
+.bob-task-card-theme-value {
+  color: var(--text-normal);
+}
+
+.bob-task-card-theme-value.is-unknown {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.bob-task-card-theme-value.is-repair {
+  outline: 1px dashed color-mix(in srgb, var(--text-warning, var(--color-orange)) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.bob-task-card-theme-note {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.bob-task-card-theme-dot.is-blue { color: var(--bob-hue-blue, var(--text-faint)); }
+.bob-task-card-theme-dot.is-orange { color: var(--bob-hue-orange, var(--text-faint)); }
+.bob-task-card-theme-dot.is-aqua { color: var(--bob-hue-aqua, var(--text-faint)); }
+.bob-task-card-theme-dot.is-yellow { color: var(--bob-hue-yellow, var(--text-faint)); }
+.bob-task-card-theme-dot.is-magenta { color: var(--bob-hue-magenta, var(--text-faint)); }
+.bob-task-card-theme-dot.is-green { color: var(--bob-hue-green, var(--text-faint)); }
+.bob-task-card-theme-dot.is-violet { color: var(--bob-hue-violet, var(--text-faint)); }
+.bob-task-card-theme-dot.is-red { color: var(--bob-hue-red, var(--text-faint)); }
+
 .bob-task-card-chip {
   display: inline-flex;
   align-items: center;

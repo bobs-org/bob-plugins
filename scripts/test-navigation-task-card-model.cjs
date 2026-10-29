@@ -81,6 +81,58 @@ function target(path, line, rawLine, content = rawLine) {
   return { path, line, rawLine, content };
 }
 
+function makeTaskThemeApi(options = {}) {
+  const calls = { suggestions: [], writes: 0 };
+  const fields = options.fields || {};
+  const suggestions = options.suggestions || {};
+  const api = {
+    version: 1,
+    taskThemeOf(line) {
+      if (typeof fields === "function") return fields(line);
+      return fields[line] || { state: "none" };
+    },
+    suggestFor(request) {
+      calls.suggestions.push(request);
+      if (typeof options.suggestFor === "function") {
+        return options.suggestFor(request);
+      }
+      return suggestions[request.line] || null;
+    },
+    isKnownTheme(key) {
+      return typeof options.isKnownTheme === "function"
+        ? options.isKnownTheme(key)
+        : true;
+    },
+    setTaskTheme(line) {
+      calls.writes += 1;
+      return line;
+    },
+    clearTaskTheme(line) {
+      calls.writes += 1;
+      return line;
+    },
+  };
+  return { api, calls };
+}
+
+function theme(name, key = name.toLowerCase(), extra = {}) {
+  return { name, key, known: true, ...extra };
+}
+
+function noteSuggestion(name, options = {}) {
+  return {
+    theme: theme(name, name.toLowerCase()),
+    source: "note",
+    label: `from ${options.stem || "sase_blog"}`,
+    from: {
+      path: options.path || "Areas/sase_blog.md",
+      stem: options.stem || "sase_blog",
+      kind: "area",
+      hue: options.hue || "green",
+    },
+  };
+}
+
 function makeModel(overrides = {}) {
   const content =
     overrides.content ||
@@ -117,7 +169,7 @@ test("card model builds stable rows, scope metadata, and an existing recommendat
   assert.equal(model.selectedRowId, "schedule");
   assert.deepEqual(
     model.rows.map((row) => row.id),
-    ["schedule", "depends-on", "blocks", "links-to", "linked-from", "review-every", "cancel", "lane"],
+    ["schedule", "depends-on", "blocks", "links-to", "linked-from", "review-every", "cancel", "lane", "theme"],
   );
   assert.ok(model.rows.find((row) => row.id === "schedule").enabled);
   assert.ok(model.rows.find((row) => row.id === "depends-on").enabled);
@@ -144,6 +196,267 @@ test("card model builds stable rows, scope metadata, and an existing recommendat
     model.priorityStrip.levels.map((item) => item.key),
     ["1", "2", "3", "4", "5"],
   );
+});
+
+test("Task Card theme projection distinguishes explicit themes and inherited note defaults", () => {
+  const line = "- [ ] #task Example [theme:: FIX] ^example";
+  const inherited = noteSuggestion("WRITE");
+  const { api, calls } = makeTaskThemeApi({
+    fields: { [line]: { state: "set", value: "FIX", key: "fix", fields: [{ start: 27, end: 42 }] } },
+    suggestions: {
+      1: {
+        theme: theme("FIX", "fix"),
+        source: "task",
+        label: "this task",
+        inherited,
+      },
+    },
+  });
+  const model = makeModel({
+    content: line,
+    lineText: line,
+    filePath: "Projects/Example.md",
+    themeApi: api,
+    selectedRowId: "theme",
+  });
+  const row = model.rows.find((item) => item.id === "theme");
+  const ordered = helpers.orderedTaskCardRows(model).find((item) => item.id === "theme");
+  assert.equal(model.themeProjection.available, true);
+  assert.equal(model.themeProjection.targets[0].field.state, "set");
+  assert.equal(model.themeProjection.targets[0].identity.path, "Projects/Example.md");
+  assert.equal(model.themeProjection.targets[0].identity.line, 0);
+  assert.equal(model.themeProjection.targets[0].inherited.source, "note");
+  assert.equal(row.kind, "property");
+  assert.equal(row.propertyName, "theme");
+  assert.equal(row.deletable, false);
+  assert.equal(row.enabled, false);
+  assert.equal(row.unavailableReason, "Theme editing is not available yet");
+  assert.equal(row.detail, "[FIX] this task · ● sase_blog suggests WRITE");
+  assert.equal(ordered.shortcut, "t");
+  assert.equal(model.header.theme.text, "Theme [FIX] this task · ● sase_blog suggests WRITE");
+  assert.ok(Object.isFrozen(model.themeProjection));
+  assert.ok(Object.isFrozen(model.themeProjection.targets));
+  assert.ok(Object.isFrozen(model.themeProjection.targets[0].identity));
+  assert.equal(key(model, "Enter").type, "unavailable");
+  assert.equal(key(model, "Enter").reason, "Theme editing is not available yet");
+  assert.equal(key(model, "t"), null);
+  assert.equal(calls.writes, 0);
+  assert.deepEqual(calls.suggestions[0], {
+    path: "Projects/Example.md",
+    line: 1,
+    text: line,
+  });
+});
+
+test("Task Card theme projection labels reading, review, and no-default suggestions", () => {
+  const readingLine = "- [ ] #task Read source #ref ^read";
+  const reviewLine = "- [ ] #task Review inbox ^gtd";
+  const noneLine = "- [ ] #task Ordinary work ^ordinary";
+  const { api } = makeTaskThemeApi({
+    suggestions: {
+      1: {
+        theme: theme("READ"),
+        source: "reading",
+        label: "reading task",
+      },
+    },
+    suggestFor(request) {
+      if (request.path === "2026/20261003.md") {
+        return {
+          theme: theme("PLAN"),
+          source: "review",
+          label: "daily review",
+        };
+      }
+      if (request.path === "Areas/Plain.md") return null;
+      return request.text.includes("#ref")
+        ? {
+            theme: theme("READ"),
+            source: "reading",
+            label: "reading task",
+          }
+        : null;
+    },
+  });
+  const reading = makeModel({ content: readingLine, lineText: readingLine, themeApi: api });
+  const review = makeModel({
+    content: reviewLine,
+    lineText: reviewLine,
+    filePath: "2026/20261003.md",
+    themeApi: api,
+  });
+  const none = makeModel({
+    content: noneLine,
+    lineText: noneLine,
+    filePath: "Areas/Plain.md",
+    themeApi: api,
+  });
+  assert.equal(reading.themeProjection.display.text, "[READ] · reading task");
+  assert.equal(review.themeProjection.display.text, "[PLAN] · daily review");
+  assert.equal(none.themeProjection.display.text, "none · t to set");
+});
+
+test("Task Card theme projection preserves repair and unknown states with or without a default", () => {
+  const repairLine = "- [ ] #task Repair [theme::bad] [theme:: ALSO] ^repair";
+  const unknownLine = "- [ ] #task Old theme [theme:: OLD] ^old";
+  const noDefaultLine = "- [ ] #task Repair without default [theme::bad] [theme:: ALSO] ^repair-none";
+  const duplicate = {
+    state: "repair",
+    repair: "duplicate",
+    fields: [{ start: 33, end: 45 }, { start: 46, end: 59 }],
+  };
+  const inherited = noteSuggestion("WRITE");
+  const { api } = makeTaskThemeApi({
+    fields: {
+      [repairLine]: duplicate,
+      [unknownLine]: { state: "set", value: "OLD", key: "old", fields: [{ start: 34, end: 48 }] },
+      [noDefaultLine]: duplicate,
+    },
+    suggestions: {
+      1: { ...inherited, repair: "duplicate" },
+      2: { theme: theme("OLD", "old", { known: false }), source: "task", inherited: null },
+    },
+    isKnownTheme(keyValue) {
+      return keyValue !== "old";
+    },
+    suggestFor(request) {
+      return request.text === repairLine
+        ? { ...inherited, repair: "duplicate" }
+        : request.text === noDefaultLine
+          ? null
+          : { theme: theme("OLD", "old", { known: false }), source: "task", inherited: null };
+    },
+  });
+  const repair = makeModel({ content: repairLine, lineText: repairLine, themeApi: api });
+  const unknown = makeModel({ content: unknownLine, lineText: unknownLine, themeApi: api });
+  const noDefault = makeModel({ content: noDefaultLine, lineText: noDefaultLine, themeApi: api });
+  assert.equal(repair.themeProjection.targets[0].field.repair, "duplicate");
+  assert.equal(repair.themeProjection.display.text, "Needs repair · ● sase_blog suggests WRITE");
+  assert.equal(repair.themeProjection.display.needsRepair, true);
+  assert.equal(unknown.themeProjection.targets[0].known, false);
+  assert.equal(unknown.header.theme.unknown, true);
+  assert.match(unknown.header.theme.tooltip, /not in the catalog/);
+  assert.equal(noDefault.themeProjection.display.text, "Needs repair · no default");
+});
+
+test("Task Card theme projection resolves linked task identity, deduplicates targets, and uses full target notes", () => {
+  const dailyLine = "- [[Projects/Target#^actual]]";
+  const targetLine = "- [ ] #task Actual [theme:: FIX] ^actual";
+  const targetContent = ["# target", targetLine].join("\n");
+  const suggestion = {
+    theme: theme("FIX", "fix"),
+    source: "task",
+    label: "this task",
+    inherited: null,
+  };
+  const { api, calls } = makeTaskThemeApi({
+    fields: { [targetLine]: { state: "set", value: "FIX", key: "fix", fields: [{}] } },
+    suggestions: { 2: suggestion },
+  });
+  const linkedTarget = {
+    path: "Projects/Target.md",
+    content: targetContent,
+    line: 1,
+    rawLine: targetLine,
+    blockId: "actual",
+    displayText: "Actual",
+  };
+  const model = makeModel({
+    content: dailyLine,
+    lineText: dailyLine,
+    filePath: "2026/20261003.md",
+    linkSession: {
+      kind: "task-link",
+      valid: true,
+      resolved: [linkedTarget, { ...linkedTarget }],
+      targets: [],
+    },
+    themeApi: api,
+  });
+  assert.equal(model.session.type, "linked");
+  assert.equal(model.themeProjection.targetCount, 1);
+  assert.equal(model.themeProjection.targets[0].identity.path, "Projects/Target.md");
+  assert.equal(model.themeProjection.targets[0].identity.line, 1);
+  assert.equal(model.themeProjection.targets[0].identity.rawLine, targetLine);
+  assert.deepEqual(calls.suggestions[0], {
+    path: "Projects/Target.md",
+    line: 2,
+    text: targetContent,
+  });
+  assert.equal(calls.writes, 0);
+});
+
+test("Task Card theme batches report mixed values and missing APIs without guessing", () => {
+  const lines = [
+    "- [ ] #task First ^first",
+    "- [ ] #task Second ^second",
+  ];
+  const content = lines.join("\n");
+  const session = {
+    valid: true,
+    explicit: true,
+    requestedCount: 2,
+    actualCount: 2,
+    targets: lines.map((rawLine, line) => ({ line, rawLine })),
+  };
+  const { api } = makeTaskThemeApi({
+    suggestFor(request) {
+      return noteSuggestion(request.line === 1 ? "WRITE" : "BUILD", {
+        stem: request.line === 1 ? "sase_blog" : "sase_cli",
+        path: request.line === 1 ? "Areas/sase_blog.md" : "Areas/sase_cli.md",
+      });
+    },
+  });
+  const mixed = makeModel({
+    content,
+    lineText: lines[0],
+    taskSession: session,
+    themeApi: api,
+  });
+  const missingApi = makeModel({
+    content: lines[0],
+    lineText: lines[0],
+    themeApi: null,
+  });
+  assert.equal(mixed.themeProjection.targetCount, 2);
+  assert.equal(mixed.themeProjection.mixed, true);
+  assert.equal(mixed.themeProjection.display.text, "mixed across 2 tasks");
+  assert.equal(mixed.rows.find((row) => row.id === "theme").mixed, true);
+  assert.equal(missingApi.themeProjection.available, false);
+  assert.match(missingApi.rows.find((row) => row.id === "theme").unavailableReason, /API is unavailable/);
+  assert.equal(missingApi.themeProjection.targets[0].suggestion, null);
+});
+
+test("Task Card theme runtime adapter supplies active and resolved live note snapshots", () => {
+  const activeContent = "- [[Projects/Target#^actual]]";
+  const targetLine = "- [ ] #task Actual ^actual";
+  const targetContent = ["# target", targetLine].join("\n");
+  const api = { version: 1 };
+  const context = helpers.buildTaskCardThemeRuntimeContext({
+    app: {
+      plugins: {
+        plugins: { "bob-ledger-tools": { api: { themes: api } } },
+      },
+    },
+    filePath: "2026/20261003.md",
+    lineText: activeContent,
+    cursor: { line: 0 },
+    getEditorContent: () => activeContent,
+    linkSession: {
+      kind: "task-link",
+      valid: true,
+      resolved: [{
+        path: "Projects/Target.md",
+        content: targetContent,
+        line: 1,
+        rawLine: targetLine,
+        blockId: "actual",
+      }],
+    },
+  });
+  assert.equal(context.themeApi, api);
+  assert.equal(context.themeNoteContents.get("Projects/Target.md"), targetContent);
+  assert.equal(context.themeNoteContents.has("2026/20261003.md"), false);
 });
 
 test("explicit preview builder matches writer rolls and deduplicates linked targets", () => {

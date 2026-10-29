@@ -163,24 +163,46 @@ const {
   taskThemeLiIsTask,
   taskThemeIsThemeInlineField,
   taskThemeQueryAncestor,
+  taskThemeParseLineAttr,
+  taskThemeOriginFromContext,
 } = helpers;
 
 function makeSurfaceApp({ triggers = [] } = {}) {
+  const workspaceHandlers = {};
+  const metadataHandlers = {};
   return {
     vault: {
       getAbstractFileByPath: () => null,
       cachedRead: () => Promise.resolve(null),
     },
     workspace: {
-      on: () => ({}),
+      on: (event, handler) => {
+        workspaceHandlers[event] = workspaceHandlers[event] || [];
+        workspaceHandlers[event].push(handler);
+        return { event, handler };
+      },
       offref: () => {},
       onLayoutReady: () => {},
       getActiveFile: () => null,
       getLeavesOfType: () => [],
-      trigger: (event) => triggers.push(event),
+      trigger: (event, ...args) => {
+        triggers.push(event);
+        for (const handler of workspaceHandlers[event] || []) {
+          handler(...args);
+        }
+      },
     },
     metadataCache: {
-      on: () => ({}),
+      on: (event, handler) => {
+        metadataHandlers[event] = metadataHandlers[event] || [];
+        metadataHandlers[event].push(handler);
+        return { event, handler };
+      },
+      trigger: (event, ...args) => {
+        for (const handler of metadataHandlers[event] || []) {
+          handler(...args);
+        }
+      },
       getCache: () => ({}),
       getFirstLinkpathDest: () => null,
     },
@@ -277,8 +299,15 @@ function fakeRenderEl() {
         child.parentNode = null;
         return child;
       },
-      addEventListener() {},
-      removeEventListener() {},
+      _listeners: {},
+      addEventListener(name, handler) {
+        this._listeners[name] = this._listeners[name] || [];
+        this._listeners[name].push(handler);
+      },
+      removeEventListener(name, handler) {
+        const list = this._listeners[name] || [];
+        this._listeners[name] = list.filter((item) => item !== handler);
+      },
     };
     Object.defineProperty(node, "firstChild", {
       get() {
@@ -702,8 +731,8 @@ test("without provenance a dashboard query does not invent an origin", () => {
   li.appendChild(fx.text("Write [theme:: WRITE]", fx.doc));
   plugin.renderTaskThemeMarksIn(fx.root, ctxFor("dashboard/dash.md"));
   const pillHost = findClass(li, "bob-task-theme-host");
-  assert.ok(pillHost);
-  assert.equal(pillHost.getAttribute("data-task-theme-path"), null);
+  assert.equal(pillHost, null);
+  assert.equal(countClass(li, "bob-pomo-theme"), 0);
 });
 
 test("idempotent re-render, clone, lazy hover, toggle, and unload restore", () => {
@@ -766,6 +795,7 @@ test("detached and pending Tasks rows retry then drop on disable", () => {
   const row = fx.doc.createElement("li");
   row.className = "plugin-tasks-list-item task-list-item";
   row.isConnected = true;
+  row.setAttribute("data-task-path", "areas/sase_blog.md");
   fx.root.appendChild(row);
   row.appendChild(detached);
   detached.isConnected = true;
@@ -810,4 +840,181 @@ test("setup registers the Reading-view postprocessor; helpers never throw", () =
   );
   assert.ok(css.indexOf("body.bob-task-theme-marks .bob-task-theme-native") !== -1);
   assert.ok(css.indexOf(".bob-task-theme-host") !== -1);
+});
+
+function dataviewThemeField(fx, value) {
+  const field = fx.doc.createElement("span");
+  field.className = "dataview inline-field";
+  const key = fx.doc.createElement("span");
+  key.className = "inline-field-key";
+  key.setAttribute("data-dv-key", "theme");
+  key.setAttribute("data-dv-norm-key", "theme");
+  key.appendChild(fx.text("theme", fx.doc));
+  const val = fx.doc.createElement("span");
+  val.className = "inline-field-value";
+  val.setAttribute("data-dv-norm-key", "theme");
+  val.appendChild(fx.text(value, fx.doc));
+  field.appendChild(key);
+  field.appendChild(val);
+  return field;
+}
+
+function findKind(root, kind) {
+  const stack = [root];
+  const found = [];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (
+      node.nodeType === 1 &&
+      node.getAttribute &&
+      node.getAttribute("data-task-theme-kind") === kind
+    ) {
+      found.push(node);
+    }
+    for (const child of node.childNodes || []) {
+      stack.push(child);
+    }
+  }
+  return found;
+}
+
+test("missing data-line stays absent; zero-based line zero becomes line 1", () => {
+  assert.equal(taskThemeParseLineAttr(null), null);
+  assert.equal(taskThemeParseLineAttr(""), null);
+  assert.equal(taskThemeParseLineAttr("0"), 1);
+  assert.equal(taskThemeParseLineAttr("4"), 5);
+  const fx = fakeRenderEl();
+  const li = taskLi(fx);
+  li.setAttribute("data-task-path", "areas/sase_blog.md");
+  const origin = taskThemeOriginFromContext(li, li, ctxFor("dash.md"), null);
+  assert.equal(origin.path, "areas/sase_blog.md");
+  assert.equal(origin.line, null);
+});
+
+test("duplicate native chips and mixed native/raw fields share one repair", () => {
+  const plugin = pluginWithThemeStubs();
+  const fx = fakeRenderEl();
+  const li = taskLi(fx);
+  li.appendChild(fx.text("Ship ", fx.doc));
+  li.appendChild(dataviewThemeField(fx, "WRITE"));
+  li.appendChild(dataviewThemeField(fx, "BUILD"));
+  plugin.renderTaskThemeMarksIn(fx.root, ctxFor("notes/a.md"));
+  const repairs = findKind(li, "repair");
+  assert.equal(repairs.length, 2);
+  assert.equal(findKind(li, "pill").length, 0);
+
+  const mixed = fakeRenderEl();
+  const mixedLi = taskLi(mixed);
+  mixedLi.appendChild(mixed.text("Do [theme:: WRITE] ", mixed.doc));
+  mixedLi.appendChild(dataviewThemeField(mixed, "BUILD"));
+  plugin.renderTaskThemeMarksIn(mixed.root, ctxFor("notes/a.md"));
+  assert.ok(findKind(mixedLi, "repair").length >= 1);
+  assert.equal(findKind(mixedLi, "pill").length, 0);
+});
+
+test("rendered hover supplies source text and skips unresolved enrichment", () => {
+  const requests = [];
+  const plugin = pluginWithThemeStubs({
+    suggest: (request) => {
+      requests.push(request);
+      return {
+        source: "task",
+        theme: { key: "write", name: "WRITE" },
+        inherited: {
+          source: "note",
+          theme: { key: "write", name: "WRITE" },
+          from: { stem: "sase_blog" },
+        },
+      };
+    },
+  });
+  plugin.pomodoroThemeSuggestFor = (request) => {
+    requests.push(request);
+    return {
+      source: "task",
+      theme: { key: "write", name: "WRITE" },
+      inherited: {
+        source: "note",
+        theme: { key: "write", name: "WRITE" },
+        from: { stem: "sase_blog" },
+      },
+    };
+  };
+  const fx = fakeRenderEl();
+  const host = fx.doc.createElement("div");
+  host.className = "plugin-tasks-query-result";
+  fx.root.appendChild(host);
+  const li = fx.doc.createElement("li");
+  li.className = "plugin-tasks-list-item task-list-item";
+  li.setAttribute("data-task", " ");
+  li.setAttribute("data-task-path", "areas/sase_blog.md");
+  host.appendChild(li);
+  li.appendChild(fx.text("Write [theme:: WRITE]", fx.doc));
+  plugin.renderTaskThemeMarksIn(fx.root, ctxFor("dashboard/dash.md"));
+  const pill = findClass(li, "bob-pomo-theme");
+  assert.ok(pill);
+  assert.equal(plugin.taskThemeEnrichMarkElement(null, pill), true);
+  assert.ok(requests.length >= 1);
+  assert.equal(requests[0].path, "areas/sase_blog.md");
+  assert.equal(typeof requests[0].text, "string");
+  assert.ok(requests[0].text.indexOf("WRITE") !== -1);
+  assert.ok(pill.getAttribute("aria-label").indexOf("sase_blog suggests WRITE") !== -1);
+
+  pill.removeAttribute("data-task-theme-enriched");
+  pill.removeAttribute("data-task-theme-path");
+  const hostEl = findClass(li, "bob-task-theme-host");
+  hostEl.removeAttribute("data-task-theme-path");
+  assert.equal(plugin.taskThemeEnrichMarkElement(null, pill), false);
+  assert.equal(pill.getAttribute("data-task-theme-enriched"), null);
+});
+
+test("native wrappers stay accessible when the marks gate is off", () => {
+  const plugin = pluginWithThemeStubs();
+  const fx = fakeRenderEl();
+  const li = taskLi(fx);
+  li.appendChild(fx.text("Do [theme:: WRITE]", fx.doc));
+  plugin.renderTaskThemeMarksIn(fx.root, ctxFor("notes/a.md"));
+  const native = findClass(li, "bob-task-theme-native");
+  const pill = findClass(li, "bob-pomo-theme");
+  assert.ok(native);
+  assert.equal(native.getAttribute("aria-hidden"), "true");
+  assert.equal(pill.getAttribute("aria-hidden"), null);
+  plugin.taskThemeMarksEnabled = false;
+  plugin.taskThemeSyncNativeAccessibility(fx.root);
+  assert.equal(native.getAttribute("aria-hidden"), null);
+  assert.equal(pill.getAttribute("aria-hidden"), "true");
+  plugin.taskThemeMarksEnabled = true;
+  plugin.taskThemeSyncNativeAccessibility(fx.root);
+  assert.equal(native.getAttribute("aria-hidden"), "true");
+  assert.equal(pill.getAttribute("aria-hidden"), null);
+});
+
+test("setup refresh and hover teardown cover rendered roots", () => {
+  const plugin = pluginWithThemeStubs({
+    suggest: {
+      source: "note",
+      theme: { key: "write", name: "WRITE" },
+      from: { stem: "sase_blog" },
+    },
+  });
+  plugin.setupTaskThemeMarks();
+  const fx = fakeRenderEl();
+  const li = taskLi(fx);
+  li.appendChild(fx.text("Do [theme:: WRITE]", fx.doc));
+  plugin.renderTaskThemeMarksIn(fx.root, ctxFor("notes/a.md"));
+  const pill = findClass(li, "bob-pomo-theme");
+  assert.ok(pill);
+  const gen = plugin.taskThemeMarksGeneration || 0;
+  plugin.themesNotifyChanged("journal");
+  assert.ok((plugin.taskThemeMarksGeneration || 0) > gen);
+  assert.equal(pill.getAttribute("data-task-theme-enriched"), null);
+  plugin.taskThemeEnsureHoverForRoot(fx.root);
+  assert.equal(fx.root.__bobTaskThemeHover, true);
+  assert.ok((fx.root._listeners.mouseover || []).length >= 1);
+  plugin.teardownTaskThemeMarksAndColors();
+  assert.equal(fx.root.__bobTaskThemeHover, false);
+  assert.equal((fx.root._listeners.mouseover || []).length, 0);
 });

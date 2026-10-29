@@ -599,6 +599,11 @@ function assertThemeSuggestion(id, expected, got) {
   }
 }
 
+test("theme fixture preserves preselect vectors from bob-cli", () => {
+  assert.ok(Array.isArray(fixture.preselect));
+  assert.equal(fixture.preselect.length, 8);
+});
+
 test("theme task-field vectors execute parse, byte-preserving setters, and clear", () => {
   assert.ok(fixture.task_field.length > 0);
   for (const item of fixture.task_field) {

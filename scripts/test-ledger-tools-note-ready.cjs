@@ -216,7 +216,15 @@ function makeNoteReadyApp({
     },
     metadataCache: {
       on: (event, handler) => {
-        handlers[`metadata:${event}`] = handler;
+        const key = `metadata:${event}`;
+        const previous = handlers[key];
+        handlers[key] =
+          typeof previous === "function"
+            ? () => {
+                previous();
+                handler();
+              }
+            : handler;
         return {};
       },
       getCache: (key) => {

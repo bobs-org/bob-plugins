@@ -91,6 +91,8 @@ function taskThemeMarkSource(lineText) {
         state.state === "set" && typeof state.key === "string"
           ? state.key
           : null,
+      rawValue:
+        first && typeof first.value === "string" ? first.value : null,
       fieldStart,
       fieldEnd,
       foldSpace: fieldStart > 0 && lineText[fieldStart - 1] === " ",
@@ -148,6 +150,8 @@ function taskThemeMarkSourceInText(text) {
         state.state === "set" && typeof state.key === "string"
           ? state.key
           : null,
+      rawValue:
+        first && typeof first.value === "string" ? first.value : null,
       fieldStart,
       fieldEnd,
     };
@@ -315,10 +319,10 @@ function taskThemeReasonFor(inherited) {
       return null;
     }
     if (inherited.source === "reading") {
-      return name ? "reading suggests " + name : "reading default";
+      return name ? "reading tasks suggest " + name : "reading default";
     }
     if (inherited.source === "review") {
-      return name ? "review suggests " + name : "daily review";
+      return name ? "daily review suggests " + name : "daily review";
     }
     if (inherited.source === "task") {
       if (inherited.inherited && typeof inherited.inherited === "object") {
@@ -345,10 +349,19 @@ function taskThemeReasonFor(inherited) {
 // `Needs repair`; otherwise the reason (or `no default`) names the default.
 // The hint is always last and no copy ever contains `::`, so Dataview never
 // rescans it. Never throws.
+function taskThemeSafeTooltipCopy(text) {
+  try {
+    return String(text == null ? "" : text).replace(/::/g, ":");
+  } catch (error) {
+    return "";
+  }
+}
+
 function taskThemeTooltipText(value, kind, reason) {
   try {
-    const name =
-      typeof value === "string" && value ? value : "theme";
+    const name = taskThemeSafeTooltipCopy(
+      typeof value === "string" && value ? value : "theme",
+    );
     const hint = TASK_THEME_MARK_HINT;
     if (kind === "repair") {
       return "Task theme " + name + " \u00b7 Needs repair \u00b7 " + hint;
@@ -356,8 +369,12 @@ function taskThemeTooltipText(value, kind, reason) {
     if (kind === "unknown") {
       return "Task theme " + name + " \u00b7 Unknown theme \u00b7 " + hint;
     }
-    const middle =
-      typeof reason === "string" && reason ? reason : "no default";
+    if (reason === undefined) {
+      return "Task theme " + name + " \u00b7 " + hint;
+    }
+    const middle = taskThemeSafeTooltipCopy(
+      typeof reason === "string" && reason ? reason : "no default here",
+    );
     return "Task theme " + name + " \u00b7 " + middle + " \u00b7 " + hint;
   } catch (error) {
     return "Task theme \u00b7 " + TASK_THEME_MARK_HINT;
@@ -405,6 +422,16 @@ function buildTaskThemeMarkElement(doc, model, options) {
       classes += " bob-pomo-theme-unknown";
     } else if (model.kind === "repair") {
       classes += " bob-pomo-theme-repair";
+    } else if (model.kind === "pill") {
+      if (
+        model.hueSource === "exempt" ||
+        model.hueSource === "unconfigured"
+      ) {
+        classes += " bob-pomo-theme-muted";
+      }
+      if (model.hueSource === "unconfigured") {
+        classes += " bob-pomo-theme-unconfigured";
+      }
     }
     span.setAttribute("class", classes);
     if (typeof model.key === "string" && model.key) {
@@ -428,7 +455,7 @@ function buildTaskThemeMarkElement(doc, model, options) {
           ? taskThemeTooltipText(model.label, "repair", null)
           : model.kind === "unknown"
             ? taskThemeTooltipText(model.label, "unknown", null)
-            : taskThemeTooltipText(model.label, "pill", null);
+            : taskThemeTooltipText(model.label, "pill", undefined);
       span.setAttribute("role", "img");
       span.setAttribute("aria-label", String(initial || ""));
       span.setAttribute("data-tooltip-position", "top");
@@ -440,8 +467,9 @@ function buildTaskThemeMarkElement(doc, model, options) {
   }
 }
 
-// Live Preview widget for one task-theme mark. `eq` compares the model id
-// plus `foldLength`, so unchanged marks never flicker. `toDOM` builds the
+// Live Preview widget for one task-theme mark. `eq` compares the model id,
+// `foldLength`, and refresh generation, so a catalog/default refresh does
+// not keep a stale inherited tooltip. `toDOM` builds the
 // listener-free element and adds the reveal-on-click listener only; hover
 // enrichment is delegated (see the editor mixin) so it survives Dataview
 // DOM cloning. Defined only when `WidgetType` exists; otherwise null and
@@ -449,7 +477,7 @@ function buildTaskThemeMarkElement(doc, model, options) {
 let TaskThemeMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   TaskThemeMarkWidget = class extends WidgetType {
-    constructor(model, foldLength) {
+    constructor(model, foldLength, generation) {
       super();
       this.model = model;
       let folds = 0;
@@ -463,17 +491,32 @@ if (WidgetType && typeof WidgetType === "function") {
         folds = 0;
       }
       this.foldLength = folds;
+      let gen = 0;
+      try {
+        gen = Number(generation) || 0;
+        if (!Number.isFinite(gen) || gen < 0) {
+          gen = 0;
+        }
+        gen = Math.floor(gen);
+      } catch (error) {
+        gen = 0;
+      }
+      this.generation = gen;
       let key = "";
       try {
         key =
           String((model && model.id) || (model && model.key) || JSON.stringify(model)) +
           "|" +
-          String(this.foldLength);
+          String(this.foldLength) +
+          "|" +
+          String(this.generation);
       } catch (error) {
         key =
           String((model && model.value) || "") +
           "|" +
-          String(this.foldLength);
+          String(this.foldLength) +
+          "|" +
+          String(this.generation);
       }
       this.key = key;
     }

@@ -67,6 +67,11 @@ class BobLedgerToolsTaskThemeEditorMixin {
       } catch (error) {
         // Reading-view hover hosts are best-effort.
       }
+      try {
+        this.taskThemeWireRefreshEvents();
+      } catch (error) {
+        // Refresh wiring is best-effort.
+      }
     } catch (error) {
       // Marks setup never throws.
     }
@@ -105,6 +110,7 @@ class BobLedgerToolsTaskThemeEditorMixin {
       const plugin = this;
       const MarkPluginClass = class {
         constructor(view) {
+          this.view = view;
           try {
             this.decorations = plugin.buildTaskThemeMarkDecorations(view);
           } catch (error) {
@@ -131,10 +137,19 @@ class BobLedgerToolsTaskThemeEditorMixin {
           }
           try {
             if (u && u.view) {
+              this.view = u.view;
               plugin.taskThemeEnsureHoverForView(u.view);
             }
           } catch (error) {
             // Hover enrichment is best-effort.
+          }
+        }
+
+        destroy() {
+          try {
+            plugin.taskThemeUntrackHoverRoot(this.view && this.view.dom);
+          } catch (error) {
+            // Editor hover cleanup is best-effort.
           }
         }
       };
@@ -321,9 +336,13 @@ class BobLedgerToolsTaskThemeEditorMixin {
       }
       if (source.state === "repair") {
         const raw =
-          typeof lineText === "string"
-            ? lineText.slice(source.fieldStart, source.fieldEnd)
-            : "";
+          typeof source.rawValue === "string"
+            ? source.rawValue
+            : typeof lineText === "string" &&
+                Number.isFinite(Number(source.fieldStart)) &&
+                Number.isFinite(Number(source.fieldEnd))
+              ? lineText.slice(source.fieldStart, source.fieldEnd)
+              : "";
         return taskThemeMarkModel(
           {
             state: "repair",
@@ -375,8 +394,19 @@ class BobLedgerToolsTaskThemeEditorMixin {
           hueSource = null;
         }
       }
+      let value = source.value;
+      try {
+        if (known && typeof this.pomodoroThemeCatalogSpelling === "function") {
+          const catalogName = this.pomodoroThemeCatalogSpelling(source.key);
+          if (typeof catalogName === "string" && catalogName) {
+            value = catalogName;
+          }
+        }
+      } catch (error) {
+        value = source.value;
+      }
       return taskThemeMarkModel(
-        { state: "set", value: source.value, key: source.key },
+        { state: "set", value, key: source.key },
         { known, hue, hueSource },
       );
     } catch (error) {
@@ -468,9 +498,20 @@ class BobLedgerToolsTaskThemeEditorMixin {
               break;
             }
             try {
-              if (line.text.indexOf("theme::") !== -1) {
-                const source = taskThemeMarkSource(line.text);
-                if (source) {
+              const sources =
+                typeof taskThemeMarkSourcesInText === "function"
+                  ? taskThemeMarkSourcesInText(line.text)
+                  : [];
+              const lineSource =
+                typeof taskThemeMarkSource === "function"
+                  ? taskThemeMarkSource(line.text)
+                  : null;
+              if (lineSource && sources.length > 0) {
+                for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+                  const source = sources[sourceIndex];
+                  if (!source) {
+                    continue;
+                  }
                   const absFrom = line.from + source.fieldStart;
                   const absTo = line.from + source.fieldEnd;
                   const contentStart =
@@ -523,7 +564,11 @@ class BobLedgerToolsTaskThemeEditorMixin {
                           from,
                           absTo,
                           Decoration.replace({
-                            widget: new TaskThemeMarkWidget(model, fold),
+                            widget: new TaskThemeMarkWidget(
+                              model,
+                              fold,
+                              this.taskThemeMarksGeneration || 0,
+                            ),
                           }),
                         );
                       }
@@ -594,6 +639,14 @@ class BobLedgerToolsTaskThemeEditorMixin {
         dom.__bobTaskThemeHover = true;
       } catch (error) {
         // The marker is best-effort; duplicate listeners stay harmless.
+      }
+      if (!Array.isArray(this.taskThemeHoverRoots)) {
+        this.taskThemeHoverRoots = [];
+      }
+      try {
+        this.taskThemeHoverRoots.push({ root: dom, onHover });
+      } catch (error) {
+        // Tracking is best-effort.
       }
       return true;
     } catch (error) {
@@ -683,11 +736,14 @@ class BobLedgerToolsTaskThemeEditorMixin {
         }
         return true;
       }
-      let reason = null;
+      let reason = undefined;
       try {
         reason = this.taskThemeReasonForPosition(view, mark);
       } catch (error) {
-        reason = null;
+        reason = undefined;
+      }
+      if (reason === undefined) {
+        return false;
       }
       const tooltip = taskThemeTooltipText(value, "pill", reason);
       try {
@@ -759,7 +815,7 @@ class BobLedgerToolsTaskThemeEditorMixin {
         lineNumber = null;
       }
       if (!Number.isInteger(lineNumber) || lineNumber < 1) {
-        return null;
+        return undefined;
       }
       const suggestion = this.pomodoroThemeSuggestFor({
         path,
@@ -792,6 +848,11 @@ class BobLedgerToolsTaskThemeEditorMixin {
       this.taskThemeMarksEnabled = !this.taskThemeMarksEnabled;
       const enabled = this.taskThemeMarksEnabled;
       this.applyMarkGateClass("bob-task-theme-marks", enabled);
+      try {
+        this.taskThemeSyncNativeAccessibility();
+      } catch (error) {
+        // Native aria updates are best-effort.
+      }
       if (!enabled) {
         try {
           this.taskThemeCancelScheduledWork();
@@ -820,53 +881,6 @@ class BobLedgerToolsTaskThemeEditorMixin {
       return enabled;
     } catch (error) {
       return this.taskThemeMarksEnabled;
-    }
-  }
-
-  refreshTaskThemeMarkEditors() {
-    try {
-      const refresh = ensureTaskThemeMarksRefresh();
-      const workspace = this.app && this.app.workspace;
-      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
-        return;
-      }
-      let leaves = [];
-      try {
-        leaves = workspace.getLeavesOfType("markdown") || [];
-      } catch (error) {
-        leaves = [];
-      }
-      for (const leaf of leaves) {
-        try {
-          const cm =
-            leaf && leaf.view && leaf.view.editor
-              ? leaf.view.editor.cm
-              : null;
-          if (cm && typeof cm.dispatch === "function" && refresh) {
-            cm.dispatch({ effects: refresh.of(null) });
-          }
-        } catch (error) {
-          continue;
-        }
-      }
-    } catch (error) {
-      // Editor refresh never throws.
-    }
-  }
-
-  // Cache refresh entry point: today-ledger names feed `isKnownTheme`, so
-  // a Today rebuild also rebuilds task-theme pills. Never throws.
-  refreshTaskThemeMarksForCache() {
-    try {
-      this.refreshTaskThemeMarkEditors();
-      try {
-        this.refreshTaskThemeRenderedMarks();
-      } catch (error) {
-        // Rendered-view hue refresh is best-effort.
-      }
-      return true;
-    } catch (error) {
-      return false;
     }
   }
 

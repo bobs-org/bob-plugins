@@ -218,6 +218,166 @@ class BobLedgerToolsTaskThemeApiMixin {
     }
   }
 
+  pomodoroThemeCatalogSpelling(key) {
+    try {
+      const normalized = pomodoroThemeNormalizeKey(key);
+      if (!normalized) {
+        return null;
+      }
+      const dailyPath = this.pomodoroThemeTodayPath();
+      const catalog = this.pomodoroThemeSuggestCatalog(dailyPath, "", undefined);
+      const name = catalog && catalog.names ? catalog.names.get(normalized) : null;
+      return typeof name === "string" && name ? name : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskThemeSourceCacheStore() {
+    if (!(this.taskThemeSourceCache instanceof Map)) {
+      this.taskThemeSourceCache = new Map();
+    }
+    return this.taskThemeSourceCache;
+  }
+
+  taskThemeRememberSourceText(path, text) {
+    try {
+      const normalized = normalizeVaultPath(path);
+      if (!normalized || typeof text !== "string") {
+        return false;
+      }
+      const cache = this.taskThemeSourceCacheStore();
+      if (cache.has(normalized)) {
+        cache.delete(normalized);
+      }
+      cache.set(normalized, text);
+      while (cache.size > 32) {
+        const first = cache.keys().next().value;
+        cache.delete(first);
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  taskThemeSourceTextFor(path) {
+    try {
+      const normalized = normalizeVaultPath(path);
+      if (!normalized) {
+        return null;
+      }
+      const live = this.pomodoroThemeOpenEditorContent(normalized);
+      if (typeof live === "string") {
+        this.taskThemeRememberSourceText(normalized, live);
+        return live;
+      }
+      const cache = this.taskThemeSourceCacheStore();
+      if (cache.has(normalized)) {
+        return cache.get(normalized);
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskThemeRequestSourceText(path) {
+    try {
+      const normalized = normalizeVaultPath(path);
+      if (!normalized) {
+        return false;
+      }
+      if (this.taskThemeSourceTextFor(normalized) !== null) {
+        return true;
+      }
+      if (this.taskThemeSourceReadsInFlight instanceof Set && this.taskThemeSourceReadsInFlight.has(normalized)) {
+        return false;
+      }
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.cachedRead !== "function") {
+        return false;
+      }
+      let file = null;
+      try {
+        file =
+          typeof vault.getAbstractFileByPath === "function"
+            ? vault.getAbstractFileByPath(normalized)
+            : null;
+      } catch (error) {
+        file = null;
+      }
+      if (!file) {
+        return false;
+      }
+      if (!(this.taskThemeSourceReadsInFlight instanceof Set)) {
+        this.taskThemeSourceReadsInFlight = new Set();
+      }
+      this.taskThemeSourceReadsInFlight.add(normalized);
+      const self = this;
+      Promise.resolve(vault.cachedRead(file))
+        .then((text) => {
+          try {
+            self.taskThemeSourceReadsInFlight.delete(normalized);
+          } catch (error) {
+            // In-flight tracking is best-effort.
+          }
+          if (typeof text !== "string") {
+            return;
+          }
+          self.taskThemeRememberSourceText(normalized, text);
+          try {
+            self.scheduleTaskThemeMarksRefresh();
+          } catch (error) {
+            // Refresh after cache fill is best-effort.
+          }
+        })
+        .catch(() => {
+          try {
+            self.taskThemeSourceReadsInFlight.delete(normalized);
+          } catch (error) {
+            // In-flight tracking is best-effort.
+          }
+        });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  taskThemeLineTextFor(path, line, fallback) {
+    try {
+      const text = this.taskThemeSourceTextFor(path);
+      if (typeof text === "string" && Number.isInteger(line) && line >= 1) {
+        const lines = text.split("\n");
+        if (line <= lines.length) {
+          return lines[line - 1];
+        }
+      }
+      return typeof fallback === "string" ? fallback : null;
+    } catch (error) {
+      return typeof fallback === "string" ? fallback : null;
+    }
+  }
+
+  taskThemePaddedNoteText(line, lineText) {
+    try {
+      const number = Number(line);
+      const body = String(lineText == null ? "" : lineText);
+      if (!Number.isInteger(number) || number < 1) {
+        return body;
+      }
+      const lines = [];
+      for (let index = 1; index < number; index += 1) {
+        lines.push("");
+      }
+      lines.push(body);
+      return lines.join("\n");
+    } catch (error) {
+      return String(lineText == null ? "" : lineText);
+    }
+  }
+
   pomodoroThemeReadTaskLine(request) {
     try {
       const opts = request && typeof request === "object" ? request : {};

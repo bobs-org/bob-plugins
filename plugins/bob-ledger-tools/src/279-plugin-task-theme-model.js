@@ -29,7 +29,13 @@ function pomodoroThemeInlineFields(line) {
     const leading = (raw.match(/^[ \t]*/) || [""])[0].length;
     const remaining = raw.slice(leading);
     const trailing = (remaining.match(/[ \t]*$/) || [""])[0].length;
-    const valueStart = match.index + match[0].indexOf(raw) + leading;
+    // Locate the value capture from the `::` delimiter. `indexOf(raw)`
+    // can hit the key when the value repeats it (`[theme:: theme]`).
+    const delim = match[0].indexOf("::");
+    const afterDelim = delim >= 0 ? match[0].slice(delim + 2) : "";
+    const spacing = (afterDelim.match(/^[ \t]*/) || [""])[0].length;
+    const rawStart = delim >= 0 ? delim + 2 + spacing : 0;
+    const valueStart = match.index + rawStart + leading;
     fields.push({
       start: match.index,
       end: regex.lastIndex,

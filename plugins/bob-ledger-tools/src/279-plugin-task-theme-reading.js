@@ -136,7 +136,7 @@ class BobLedgerToolsTaskThemeReadingMixin {
   taskThemeReasonForMarkOrigin(mark) {
     try {
       if (!mark || typeof this.pomodoroThemeSuggestFor !== "function") {
-        return null;
+        return undefined;
       }
       const path =
         taskThemeAttr(mark, "data-task-theme-path") ||
@@ -144,18 +144,56 @@ class BobLedgerToolsTaskThemeReadingMixin {
           ? taskThemeAttr(mark.parentNode, "data-task-theme-path")
           : null);
       if (!path) {
-        return null;
+        return undefined;
       }
       const rawLine =
         taskThemeAttr(mark, "data-task-theme-line") ||
         (mark.parentNode
           ? taskThemeAttr(mark.parentNode, "data-task-theme-line")
           : null);
-      const line = Number(rawLine);
+      let line = Number(rawLine);
       if (!Number.isInteger(line) || line < 1) {
-        return null;
+        line = null;
       }
-      const suggestion = this.pomodoroThemeSuggestFor({ path, line });
+      let noteText = null;
+      try {
+        noteText =
+          typeof this.taskThemeSourceTextFor === "function"
+            ? this.taskThemeSourceTextFor(path)
+            : null;
+      } catch (error) {
+        noteText = null;
+      }
+      let fallback = null;
+      try {
+        const row = taskThemeClosestRow(mark);
+        if (row) {
+          fallback = String(taskThemeNodeText(row) || "");
+        }
+      } catch (error) {
+        fallback = null;
+      }
+      if (typeof noteText === "string" && line) {
+        // Prefer live/cached source at the known line.
+      } else if (typeof fallback === "string" && fallback) {
+        line = line || 1;
+        noteText =
+          typeof this.taskThemePaddedNoteText === "function"
+            ? this.taskThemePaddedNoteText(line, fallback)
+            : fallback;
+      } else {
+        try {
+          this.taskThemeRequestSourceText(path);
+        } catch (error) {
+          // Cache fill is best-effort.
+        }
+        return undefined;
+      }
+      const suggestion = this.pomodoroThemeSuggestFor({
+        path,
+        line,
+        text: noteText,
+      });
       if (!suggestion || typeof suggestion !== "object") {
         return null;
       }
@@ -173,98 +211,14 @@ class BobLedgerToolsTaskThemeReadingMixin {
       }
       return null;
     } catch (error) {
-      return null;
+      return undefined;
     }
   }
 
   taskThemeOriginFor(li, el, ctx) {
     try {
-      const row = li || taskThemeClosestRow(el) || null;
-      let path = null;
-      let line = null;
-      if (row) {
-        try {
-          path =
-            taskThemeAttr(row, "data-task-path") ||
-            taskThemeAttr(row, "data-path") ||
-            null;
-        } catch (error) {
-          path = null;
-        }
-        try {
-          const raw = taskThemeAttr(row, "data-line");
-          const parsed = Number(raw);
-          if (Number.isInteger(parsed) && parsed >= 0) {
-            line = parsed + 1;
-          }
-        } catch (error) {
-          line = null;
-        }
-        if (!path) {
-          try {
-            const stack = taskThemeChildList(row);
-            let guard = 0;
-            while (stack.length > 0 && guard < 1000) {
-              guard += 1;
-              const node = stack.pop();
-              if (!node || node.nodeType !== 1) {
-                continue;
-              }
-              const tag = taskThemeTagOf(node);
-              if (tag === "UL" || tag === "OL" || tag === "LI") {
-                continue;
-              }
-              if (
-                tag === "A" &&
-                (taskThemeHasClass(node, "internal-link") ||
-                  taskThemeHasClass(node, "task-link"))
-              ) {
-                const inExtras =
-                  taskThemeHasClass(node, "task-extras") ||
-                  taskThemeHasClass(node.parentNode, "task-extras") ||
-                  taskThemeHasClass(node.parentNode, "tasks-backlink") ||
-                  taskThemeHasClass(node, "tasks-backlink");
-                const href =
-                  taskThemeAttr(node, "data-href") ||
-                  taskThemeAttr(node, "href");
-                if (inExtras && href && href.indexOf("://") === -1) {
-                  path = String(href).replace(/\.md$/i, "");
-                  if (path) {
-                    break;
-                  }
-                }
-              }
-              const kids = taskThemeChildList(node);
-              for (let index = 0; index < kids.length; index += 1) {
-                stack.push(kids[index]);
-              }
-            }
-          } catch (error) {
-            // Backlink recovery is best-effort.
-          }
-        }
-      }
-      const inQuery = Boolean(
-        taskThemeQueryAncestor(row || el, null) ||
-          (row && taskThemeHasClass(row, "plugin-tasks-list-item")),
-      );
-      if (!path && !inQuery && ctx && typeof ctx.sourcePath === "string") {
-        path = ctx.sourcePath;
-      }
-      if (line === null && ctx && typeof ctx.getSectionInfo === "function") {
-        try {
-          const info = ctx.getSectionInfo(el) || null;
-          if (info && Number.isInteger(info.lineStart)) {
-            line = info.lineStart + 1;
-          }
-        } catch (error) {
-          // Section mapping is best-effort.
-        }
-      }
-      if (!path) {
-        return null;
-      }
-      return { path, line };
+      const metadataCache = this.app && this.app.metadataCache;
+      return taskThemeOriginFromContext(li, el, ctx, metadataCache);
     } catch (error) {
       return null;
     }
@@ -312,9 +266,18 @@ class BobLedgerToolsTaskThemeReadingMixin {
       const native = doc.createElement("span");
       try {
         native.setAttribute("class", "bob-task-theme-native");
-        native.setAttribute("aria-hidden", "true");
+        if (this.taskThemeMarksEnabled) {
+          native.setAttribute("aria-hidden", "true");
+        }
       } catch (error) {
         // Native wrapper flags are best-effort.
+      }
+      try {
+        if (!this.taskThemeMarksEnabled && markEl) {
+          markEl.setAttribute("aria-hidden", "true");
+        }
+      } catch (error) {
+        // Pill aria is best-effort.
       }
       const nodes = Array.isArray(nativeNodes) ? nativeNodes : [];
       for (let index = 0; index < nodes.length; index += 1) {
@@ -531,80 +494,6 @@ class BobLedgerToolsTaskThemeReadingMixin {
     }
   }
 
-  taskThemeCollectTextSpans(root, row) {
-    const spans = [];
-    try {
-      let offset = 0;
-      const stack = [];
-      const initial = taskThemeChildList(root);
-      for (let index = initial.length - 1; index >= 0; index -= 1) {
-        stack.push(initial[index]);
-      }
-      let guard = 0;
-      while (stack.length > 0 && guard < 10000) {
-        guard += 1;
-        const node = stack.pop();
-        if (!node) {
-          continue;
-        }
-        try {
-          if (node.nodeType === 3) {
-            if (taskThemeExcludedAncestor(node, root)) {
-              continue;
-            }
-            const owner = taskThemeNearestLi(node, root) || row;
-            if (row && owner && owner !== row) {
-              continue;
-            }
-            const value = taskThemeNodeText(node);
-            spans.push({
-              node,
-              start: offset,
-              end: offset + value.length,
-              value,
-            });
-            offset += value.length;
-            continue;
-          }
-          if (node.nodeType !== 1) {
-            continue;
-          }
-          const tag = taskThemeTagOf(node);
-          if (tag === "UL" || tag === "OL") {
-            continue;
-          }
-          if (tag === "LI" && node !== row && node !== root) {
-            continue;
-          }
-          if (tag === "CODE" || tag === "PRE") {
-            continue;
-          }
-          if (taskThemeIsHost(node) || taskThemeIsPill(node)) {
-            continue;
-          }
-          if (taskThemeIsThemeInlineField(node)) {
-            continue;
-          }
-          if (
-            taskThemeHasClass(node, "internal-embed") ||
-            taskThemeHasClass(node, "markdown-embed")
-          ) {
-            continue;
-          }
-          const kids = taskThemeChildList(node);
-          for (let index = kids.length - 1; index >= 0; index -= 1) {
-            stack.push(kids[index]);
-          }
-        } catch (error) {
-          continue;
-        }
-      }
-    } catch (error) {
-      return [];
-    }
-    return spans;
-  }
-
   decorateTaskThemeRow(row, origin, root) {
     try {
       if (!row || row.nodeType !== 1) {
@@ -613,11 +502,38 @@ class BobLedgerToolsTaskThemeReadingMixin {
       if (!taskThemeLiIsTask(row) && row !== root) {
         return 0;
       }
+      const inQuery = taskThemeRowIsQuery(row, root);
+      if (inQuery && !(origin && origin.path)) {
+        return 0;
+      }
       const docNode =
         row.ownerDocument ||
         (typeof document !== "undefined" ? document : null);
       if (!docNode) {
         return 0;
+      }
+      let sourceState = null;
+      let sourceLine = null;
+      try {
+        if (origin && origin.path) {
+          sourceLine = this.taskThemeLineTextFor(
+            origin.path,
+            origin.line,
+            null,
+          );
+          if (typeof sourceLine !== "string" && origin.path) {
+            this.taskThemeRequestSourceText(origin.path);
+          }
+        }
+      } catch (error) {
+        sourceLine = null;
+      }
+      if (typeof sourceLine === "string") {
+        try {
+          sourceState = pomodoroThemeTaskFieldState(sourceLine);
+        } catch (error) {
+          sourceState = null;
+        }
       }
       let count = 0;
       const fields = [];
@@ -655,55 +571,96 @@ class BobLedgerToolsTaskThemeReadingMixin {
       } catch (error) {
         // Element scan is best-effort.
       }
-      for (let index = 0; index < fields.length; index += 1) {
-        try {
-          const node = fields[index];
-          if (!node || !node.parentNode) {
-            continue;
-          }
-          if (taskThemeIsHost(node.parentNode)) {
-            continue;
-          }
-          const raw = taskThemeInlineFieldValue(node);
-          const synthetic =
-            raw && raw.length > 0
-              ? "[theme:: " + raw + "]"
-              : "[theme:: ]";
-          const sources = taskThemeMarkSourcesInText(synthetic);
-          const source =
-            sources.length > 0
-              ? sources[0]
-              : {
-                  state: "repair",
-                  repair: "invalid",
-                  value: null,
-                  key: null,
-                  fieldStart: 0,
-                  fieldEnd: synthetic.length,
-                };
-          const model = this.taskThemeResolveModel(source, synthetic);
-          if (!model) {
-            continue;
-          }
-          if (this.taskThemeReplaceElement(node, model, origin)) {
-            count += 1;
-          }
-        } catch (error) {
-          continue;
-        }
-      }
-      const spans = this.taskThemeCollectTextSpans(row, row);
-      if (spans.length === 0) {
-        return count;
-      }
+      const spans = taskThemeCollectTextSpans(row, row);
       const concatenated = spans
         .map((span) => (span && typeof span.value === "string" ? span.value : ""))
         .join("");
-      const sources = taskThemeMarkSourcesInText(concatenated);
-      for (let index = sources.length - 1; index >= 0; index -= 1) {
+      const rawSources = taskThemeMarkSourcesInText(concatenated);
+      const explicitCount =
+        sourceState &&
+        (sourceState.state === "set" || sourceState.state === "repair")
+          ? (Array.isArray(sourceState.fields) ? sourceState.fields.length : 1)
+          : fields.length + rawSources.length;
+      const combinedRepair =
+        (sourceState && sourceState.state === "repair"
+          ? sourceState.repair
+          : null) ||
+        (explicitCount > 1 ? "duplicate" : null);
+      const nativeVerified =
+        !inQuery ||
+        (sourceState &&
+          (sourceState.state === "set" || sourceState.state === "repair")) ||
+        rawSources.length > 0;
+      if (nativeVerified) {
+        for (let index = 0; index < fields.length; index += 1) {
+          try {
+            const node = fields[index];
+            if (!node || !node.parentNode) {
+              continue;
+            }
+            if (taskThemeIsHost(node.parentNode)) {
+              continue;
+            }
+            const raw = taskThemeInlineFieldValue(node);
+            const synthetic =
+              raw && raw.length > 0
+                ? "[theme:: " + raw + "]"
+                : "[theme:: ]";
+            let source =
+              taskThemeMarkSourcesInText(synthetic)[0] || {
+                state: "repair",
+                repair: "invalid",
+                value: null,
+                key: null,
+                rawValue: raw || "",
+                fieldStart: 0,
+                fieldEnd: synthetic.length,
+              };
+            if (combinedRepair) {
+              source = {
+                ...source,
+                state: "repair",
+                repair: combinedRepair,
+                value: null,
+                key: null,
+                rawValue:
+                  source.rawValue ||
+                  (typeof raw === "string" ? raw : ""),
+              };
+            } else if (sourceState && sourceState.state === "set") {
+              source = {
+                ...source,
+                state: "set",
+                value: sourceState.value,
+                key: sourceState.key,
+                repair: null,
+              };
+            }
+            const model = this.taskThemeResolveModel(source, synthetic);
+            if (!model) {
+              continue;
+            }
+            if (this.taskThemeReplaceElement(node, model, origin)) {
+              count += 1;
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+      const textSources = combinedRepair
+        ? rawSources.map((source) => ({
+            ...source,
+            state: "repair",
+            repair: combinedRepair,
+            value: null,
+            key: null,
+          }))
+        : rawSources;
+      for (let index = textSources.length - 1; index >= 0; index -= 1) {
         try {
-          const source = sources[index];
-          const fresh = this.taskThemeCollectTextSpans(row, row);
+          const source = textSources[index];
+          const fresh = taskThemeCollectTextSpans(row, row);
           if (this.taskThemeReplaceTextRange(fresh, source, origin)) {
             count += 1;
           }
@@ -882,7 +839,38 @@ class BobLedgerToolsTaskThemeReadingMixin {
                   }
                 }
                 try {
-                  mark.setAttribute("data-task-theme-enriched", "false");
+                  mark.setAttribute("class", mark.getAttribute("class") || "bob-pomo-theme");
+                  let classes = "bob-pomo-theme";
+                  if (model.kind === "unknown") {
+                    classes += " bob-pomo-theme-unknown";
+                  } else if (model.kind === "repair") {
+                    classes += " bob-pomo-theme-repair";
+                  } else if (model.kind === "pill") {
+                    if (
+                      model.hueSource === "exempt" ||
+                      model.hueSource === "unconfigured"
+                    ) {
+                      classes += " bob-pomo-theme-muted";
+                    }
+                    if (model.hueSource === "unconfigured") {
+                      classes += " bob-pomo-theme-unconfigured";
+                    }
+                  }
+                  mark.setAttribute("class", classes);
+                } catch (error) {
+                  // Class refresh is best-effort.
+                }
+                try {
+                  if (typeof mark.removeAttribute === "function") {
+                    mark.removeAttribute("data-task-theme-enriched");
+                  }
+                  const tooltip = taskThemeTooltipText(
+                    model.label || value,
+                    model.kind,
+                    model.kind === "pill" ? undefined : null,
+                  );
+                  mark.setAttribute("aria-label", tooltip);
+                  mark.setAttribute("title", tooltip);
                 } catch (error) {
                   // Enrichment reset is best-effort.
                 }

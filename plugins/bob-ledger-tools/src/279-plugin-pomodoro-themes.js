@@ -80,6 +80,13 @@ class BobLedgerToolsPomodoroThemesMixin {
     } catch (error) {
       // Plan refresh is best-effort.
     }
+    try {
+      if (typeof this.refreshTaskThemeMarksForCache === "function") {
+        this.refreshTaskThemeMarksForCache();
+      }
+    } catch (error) {
+      // Task-theme mark refresh is best-effort.
+    }
   }
 
   // Subscribe to theme catalog changes; returns an unsubscribe

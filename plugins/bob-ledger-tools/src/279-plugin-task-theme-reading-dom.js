@@ -341,6 +341,8 @@ function taskThemeMarkSourcesInText(text) {
             state.state === "set" && typeof state.key === "string"
               ? state.key
               : null,
+          rawValue:
+            field && typeof field.value === "string" ? field.value : null,
           fieldStart,
           fieldEnd,
         });
@@ -351,6 +353,211 @@ function taskThemeMarkSourcesInText(text) {
     return sources;
   } catch (error) {
     return [];
+  }
+}
+
+function taskThemeParseLineAttr(raw) {
+  try {
+    if (raw === null || raw === undefined) {
+      return null;
+    }
+    const text = String(raw);
+    if (text === "") {
+      return null;
+    }
+    const parsed = Number(text);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      return null;
+    }
+    return parsed + 1;
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskThemeRowIsQuery(row, el) {
+  try {
+    return Boolean(
+      taskThemeQueryAncestor(row || el, null) ||
+        (row && taskThemeHasClass(row, "plugin-tasks-list-item")),
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+function taskThemeNormalizeOriginPath(raw, sourcePath, metadataCache) {
+  try {
+    const text = String(raw || "").trim();
+    if (!text || text.indexOf("://") !== -1) {
+      return null;
+    }
+    const withoutHash = text.split("#")[0];
+    let resolved = null;
+    try {
+      if (
+        metadataCache &&
+        typeof metadataCache.getFirstLinkpathDest === "function"
+      ) {
+        const dest = metadataCache.getFirstLinkpathDest(
+          withoutHash,
+          sourcePath || "",
+        );
+        if (dest && typeof dest.path === "string" && dest.path) {
+          resolved = dest.path;
+        }
+      }
+    } catch (error) {
+      resolved = null;
+    }
+    if (resolved) {
+      return typeof normalizeVaultPath === "function"
+        ? normalizeVaultPath(resolved)
+        : resolved;
+    }
+    const withExt =
+      typeof ensureMarkdownExtension === "function"
+        ? ensureMarkdownExtension(withoutHash)
+        : /\.md$/i.test(withoutHash)
+          ? withoutHash
+          : withoutHash + ".md";
+    return typeof normalizeVaultPath === "function"
+      ? normalizeVaultPath(withExt)
+      : withExt;
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskThemeOriginFromContext(row, el, ctx, metadataCache) {
+  try {
+    const host = row || taskThemeClosestRow(el) || null;
+    let path = null;
+    let line = null;
+    if (host) {
+      try {
+        const rawPath =
+          taskThemeAttr(host, "data-task-path") ||
+          taskThemeAttr(host, "data-path") ||
+          null;
+        if (rawPath) {
+          path = taskThemeNormalizeOriginPath(
+            rawPath,
+            ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "",
+            metadataCache,
+          );
+        }
+      } catch (error) {
+        path = null;
+      }
+      try {
+        line =
+          taskThemeParseLineAttr(taskThemeAttr(host, "data-line")) ||
+          taskThemeParseLineAttr(taskThemeAttr(host, "data-task-line"));
+      } catch (error) {
+        line = null;
+      }
+      if (!path) {
+        try {
+          const stack = taskThemeChildList(host);
+          let guard = 0;
+          while (stack.length > 0 && guard < 1000) {
+            guard += 1;
+            const node = stack.pop();
+            if (!node || node.nodeType !== 1) {
+              continue;
+            }
+            const tag = taskThemeTagOf(node);
+            if (tag === "UL" || tag === "OL" || tag === "LI") {
+              continue;
+            }
+            if (
+              tag === "A" &&
+              (taskThemeHasClass(node, "internal-link") ||
+                taskThemeHasClass(node, "task-link"))
+            ) {
+              const inExtras =
+                taskThemeHasClass(node, "task-extras") ||
+                taskThemeHasClass(node.parentNode, "task-extras") ||
+                taskThemeHasClass(node.parentNode, "tasks-backlink") ||
+                taskThemeHasClass(node, "tasks-backlink");
+              const href =
+                taskThemeAttr(node, "data-href") ||
+                taskThemeAttr(node, "href");
+              if (inExtras && href && href.indexOf("://") === -1) {
+                path = taskThemeNormalizeOriginPath(
+                  href,
+                  ctx && typeof ctx.sourcePath === "string"
+                    ? ctx.sourcePath
+                    : "",
+                  metadataCache,
+                );
+                if (path) {
+                  break;
+                }
+              }
+            }
+            const kids = taskThemeChildList(node);
+            for (let index = 0; index < kids.length; index += 1) {
+              stack.push(kids[index]);
+            }
+          }
+        } catch (error) {
+          // Backlink recovery is best-effort.
+        }
+      }
+    }
+    const inQuery = taskThemeRowIsQuery(host, el);
+    if (!path && !inQuery && ctx && typeof ctx.sourcePath === "string") {
+      path =
+        typeof normalizeVaultPath === "function"
+          ? normalizeVaultPath(ctx.sourcePath)
+          : ctx.sourcePath;
+    }
+    if (
+      line === null &&
+      !inQuery &&
+      host &&
+      ctx &&
+      typeof ctx.getSectionInfo === "function"
+    ) {
+      try {
+        const info = ctx.getSectionInfo(host) || null;
+        if (
+          info &&
+          Number.isInteger(info.lineStart) &&
+          info.lineStart >= 0 &&
+          (info.lineEnd === undefined ||
+            info.lineEnd === info.lineStart ||
+            (Number.isInteger(info.lineEnd) &&
+              info.lineEnd === info.lineStart))
+        ) {
+          line = info.lineStart + 1;
+        }
+      } catch (error) {
+        // Section mapping is best-effort.
+      }
+    }
+    if (!path) {
+      return null;
+    }
+    return { path, line, inQuery };
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskThemeLineHasExplicitField(lineText) {
+  try {
+    if (typeof pomodoroThemeTaskFieldState !== "function") {
+      return false;
+    }
+    const state = pomodoroThemeTaskFieldState(lineText);
+    return Boolean(
+      state && (state.state === "set" || state.state === "repair"),
+    );
+  } catch (error) {
+    return false;
   }
 }
 
@@ -398,5 +605,79 @@ function taskThemeInlineFieldValue(node) {
   } catch (error) {
     return "";
   }
+}
+
+function taskThemeCollectTextSpans(root, row) {
+  const spans = [];
+  try {
+    let offset = 0;
+    const stack = [];
+    const initial = taskThemeChildList(root);
+    for (let index = initial.length - 1; index >= 0; index -= 1) {
+      stack.push(initial[index]);
+    }
+    let guard = 0;
+    while (stack.length > 0 && guard < 10000) {
+      guard += 1;
+      const node = stack.pop();
+      if (!node) {
+        continue;
+      }
+      try {
+        if (node.nodeType === 3) {
+          if (taskThemeExcludedAncestor(node, root)) {
+            continue;
+          }
+          const owner = taskThemeNearestLi(node, root) || row;
+          if (row && owner && owner !== row) {
+            continue;
+          }
+          const value = taskThemeNodeText(node);
+          spans.push({
+            node,
+            start: offset,
+            end: offset + value.length,
+            value,
+          });
+          offset += value.length;
+          continue;
+        }
+        if (node.nodeType !== 1) {
+          continue;
+        }
+        const tag = taskThemeTagOf(node);
+        if (tag === "UL" || tag === "OL") {
+          continue;
+        }
+        if (tag === "LI" && node !== row && node !== root) {
+          continue;
+        }
+        if (tag === "CODE" || tag === "PRE") {
+          continue;
+        }
+        if (taskThemeIsHost(node) || taskThemeIsPill(node)) {
+          continue;
+        }
+        if (taskThemeIsThemeInlineField(node)) {
+          continue;
+        }
+        if (
+          taskThemeHasClass(node, "internal-embed") ||
+          taskThemeHasClass(node, "markdown-embed")
+        ) {
+          continue;
+        }
+        const kids = taskThemeChildList(node);
+        for (let index = kids.length - 1; index >= 0; index -= 1) {
+          stack.push(kids[index]);
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+  } catch (error) {
+    return [];
+  }
+  return spans;
 }
 

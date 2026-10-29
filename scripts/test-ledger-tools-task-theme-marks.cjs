@@ -177,6 +177,7 @@ const { helpers } = LedgerToolsPlugin;
 const {
   taskThemeMarkSource,
   taskThemeMarkSourceInText,
+  taskThemeMarkSourcesInText,
   taskThemeMarkModel,
   taskThemeMarkRawValue,
   taskThemeReasonFor,
@@ -184,6 +185,8 @@ const {
   buildTaskThemeMarkElement,
   ensureTaskThemeMarksRefresh,
   taskThemeFallbackFold,
+  pomodoroThemeInlineFields,
+  pomodoroThemeCanonicalDailyPath,
 } = helpers;
 
 const HINT = "Ctrl+Shift+P t to change";
@@ -268,6 +271,11 @@ function makeView({
       addEventListener(name, handler) {
         this.handlers[name] = handler;
       },
+      removeEventListener(name, handler) {
+        if (this.handlers[name] === handler) {
+          delete this.handlers[name];
+        }
+      },
     },
     state: {
       doc,
@@ -296,21 +304,41 @@ function makeView({
 }
 
 function makeSurfaceApp({ triggers = [] } = {}) {
+  const workspaceHandlers = {};
+  const metadataHandlers = {};
   return {
     vault: {
       getAbstractFileByPath: () => null,
       cachedRead: () => Promise.resolve(null),
     },
     workspace: {
-      on: () => ({}),
+      on: (event, handler) => {
+        workspaceHandlers[event] = workspaceHandlers[event] || [];
+        workspaceHandlers[event].push(handler);
+        return { event, handler };
+      },
       offref: () => {},
       onLayoutReady: () => {},
       getActiveFile: () => null,
       getLeavesOfType: () => [],
-      trigger: (event) => triggers.push(event),
+      trigger: (event, ...args) => {
+        triggers.push(event);
+        for (const handler of workspaceHandlers[event] || []) {
+          handler(...args);
+        }
+      },
     },
     metadataCache: {
-      on: () => ({}),
+      on: (event, handler) => {
+        metadataHandlers[event] = metadataHandlers[event] || [];
+        metadataHandlers[event].push(handler);
+        return { event, handler };
+      },
+      trigger: (event, ...args) => {
+        for (const handler of metadataHandlers[event] || []) {
+          handler(...args);
+        }
+      },
       getCache: () => ({}),
       getFirstLinkpathDest: () => null,
     },
@@ -367,6 +395,30 @@ test("bracket and paren fields parse with UTF-16 offsets", () => {
   assert.ok(inText);
   assert.equal(inText.value, "WRITE");
   assert.equal(inText.foldSpace, undefined);
+
+  const keyAsValue = "- [ ] Repeat [theme:: theme]";
+  const fields = pomodoroThemeInlineFields(keyAsValue);
+  assert.equal(fields.length, 1);
+  assert.equal(keyAsValue.slice(fields[0].valueStart, fields[0].valueEnd), "theme");
+  assert.equal(fields[0].value, "theme");
+
+  const spaced = "- [ ] Do thing [theme :: FIX]";
+  const spacedSource = taskThemeMarkSource(spaced);
+  assert.ok(spacedSource);
+  assert.equal(spacedSource.value, "FIX");
+  assert.equal(
+    spaced.slice(spacedSource.fieldStart, spacedSource.fieldEnd),
+    "[theme :: FIX]",
+  );
+
+  const tabbed = "- [ ] Do thing (theme\t:: FIX)";
+  const tabbedSource = taskThemeMarkSource(tabbed);
+  assert.ok(tabbedSource);
+  assert.equal(tabbedSource.value, "FIX");
+  assert.equal(
+    tabbed.slice(tabbedSource.fieldStart, tabbedSource.fieldEnd),
+    "(theme\t:: FIX)",
+  );
 });
 
 test("duplicates and invalids are repair, never a pill", () => {
@@ -453,6 +505,25 @@ test("unknown and known hues", () => {
   assert.ok(repairEl.attrs.class.indexOf("bob-pomo-theme-repair") !== -1);
   assert.equal(repairEl.attrs["data-theme-repair"], "invalid");
 
+  const exempt = taskThemeMarkModel(field, {
+    known: true,
+    hue: "gray",
+    hueSource: "exempt",
+  });
+  const exemptEl = buildTaskThemeMarkElement(doc, exempt, {});
+  assert.ok(exemptEl.attrs.class.indexOf("bob-pomo-theme-muted") !== -1);
+
+  const unconfigured = taskThemeMarkModel(field, {
+    known: true,
+    hue: "gray",
+    hueSource: "unconfigured",
+  });
+  const unconfiguredEl = buildTaskThemeMarkElement(doc, unconfigured, {});
+  assert.ok(unconfiguredEl.attrs.class.indexOf("bob-pomo-theme-muted") !== -1);
+  assert.ok(
+    unconfiguredEl.attrs.class.indexOf("bob-pomo-theme-unconfigured") !== -1,
+  );
+
   assert.equal(buildTaskThemeMarkElement(null, known, {}), null);
   assert.equal(buildTaskThemeMarkElement(doc, null, {}), null);
   assert.equal(
@@ -468,7 +539,11 @@ test("tooltip copy, reason phrases, and no double-colons", () => {
   );
   assert.equal(
     taskThemeTooltipText("READ", "pill", null),
-    "Task theme READ \u00b7 no default \u00b7 " + HINT,
+    "Task theme READ \u00b7 no default here \u00b7 " + HINT,
+  );
+  assert.equal(
+    taskThemeTooltipText("READ", "pill", undefined),
+    "Task theme READ \u00b7 " + HINT,
   );
   assert.ok(
     taskThemeTooltipText("WRITE", "unknown", null).indexOf("Unknown theme") !== -1,
@@ -494,11 +569,11 @@ test("tooltip copy, reason phrases, and no double-colons", () => {
   );
   assert.equal(
     taskThemeReasonFor({ source: "reading", theme: { name: "READ" } }),
-    "reading suggests READ",
+    "reading tasks suggest READ",
   );
   assert.equal(
     taskThemeReasonFor({ source: "review", theme: { name: "PLAN" } }),
-    "review suggests PLAN",
+    "daily review suggests PLAN",
   );
   assert.equal(taskThemeReasonFor(null), null);
   assert.equal(taskThemeReasonFor({ source: "task", theme: { name: "X" } }), null);
@@ -524,6 +599,36 @@ test("Live Preview folds, reveals, and refuses code", () => {
   assert.ok(widget instanceof StubWidgetType);
   const rebuilt = plugin.buildTaskThemeMarkDecorations(makeView({ lines: [line] }));
   assert.equal(widget.eq(rebuilt.adds[0].value.widget), true);
+
+  plugin.taskThemeMarksGeneration = 1;
+  const genOne = plugin.buildTaskThemeMarkDecorations(makeView({ lines: [line] }));
+  plugin.taskThemeMarksGeneration = 2;
+  const genTwo = plugin.buildTaskThemeMarkDecorations(makeView({ lines: [line] }));
+  assert.equal(
+    genOne.adds[0].value.widget.eq(genTwo.adds[0].value.widget),
+    false,
+  );
+
+  const spacedLine = "- [ ] Do thing [theme :: FIX]";
+  const spacedFolded = plugin.buildTaskThemeMarkDecorations(
+    makeView({ lines: [spacedLine] }),
+  );
+  assert.equal(spacedFolded.adds.length, 1);
+
+  const tabLine = "- [ ] Do thing (theme\t:: FIX)";
+  const tabFolded = plugin.buildTaskThemeMarkDecorations(
+    makeView({ lines: [tabLine] }),
+  );
+  assert.equal(tabFolded.adds.length, 1);
+
+  const dupeLine = "- [ ] A [theme:: WRITE] [theme:: BUILD]";
+  const dupeFolded = plugin.buildTaskThemeMarkDecorations(
+    makeView({ lines: [dupeLine] }),
+  );
+  assert.equal(dupeFolded.adds.length, 2);
+  assert.equal(dupeFolded.adds[0].value.widget.model.kind, "repair");
+  assert.equal(dupeFolded.adds[1].value.widget.model.kind, "repair");
+  assert.equal(taskThemeMarkSourcesInText(dupeLine).length, 2);
 
   // Touching the field reveals source.
   const revealed = plugin.buildTaskThemeMarkDecorations(
@@ -840,4 +945,66 @@ test("helpers never throw on bad input", () => {
   assert.equal(plugin.taskThemeMarkShouldRebuild(null), false);
   assert.equal(plugin.taskThemeEnrichMarkElement(null, null), false);
   assert.doesNotThrow(() => plugin.buildTaskThemeMarkDecorations(null));
+});
+
+test("canonical daily paths require matching directory and filename years", () => {
+  assert.equal(pomodoroThemeCanonicalDailyPath("2026/20261028.md"), true);
+  assert.equal(pomodoroThemeCanonicalDailyPath("2025/20261028.md"), false);
+  assert.equal(pomodoroThemeCanonicalDailyPath("2026/20260229.md"), false);
+  assert.equal(pomodoroThemeCanonicalDailyPath("daily/20261028.md"), false);
+});
+
+test("repair tooltips use the raw value, never the whole field span", () => {
+  const plugin = pluginWithThemeStubs();
+  const invalid = "- [ ] A [theme:: ???]";
+  const source = taskThemeMarkSource(invalid);
+  assert.equal(source.rawValue, "???");
+  const model = plugin.taskThemeResolveModel(source, invalid);
+  assert.equal(model.label, "???");
+  const tooltip = taskThemeTooltipText(model.label, "repair", null);
+  assert.equal(tooltip.indexOf("::"), -1);
+  assert.equal(tooltip.indexOf("["), -1);
+  assert.ok(tooltip.indexOf("???") !== -1);
+
+  const empty = "- [ ] A [theme:: ]";
+  const emptySource = taskThemeMarkSource(empty);
+  assert.equal(emptySource.rawValue, "");
+  const emptyModel = plugin.taskThemeResolveModel(emptySource, empty);
+  assert.equal(emptyModel.label, "theme");
+  assert.equal(
+    taskThemeTooltipText(emptyModel.label, "repair", null).indexOf("::"),
+    -1,
+  );
+});
+
+test("setup wires theme and metadata refresh; unload removes editor hover", () => {
+  capturedMarkClass = null;
+  const plugin = pluginWithThemeStubs();
+  plugin.setupTaskThemeMarks();
+  assert.equal(plugin.taskThemeRefreshEventsWired, true);
+  const gen = plugin.taskThemeMarksGeneration || 0;
+  plugin.themesNotifyChanged("journal");
+  assert.ok((plugin.taskThemeMarksGeneration || 0) > gen);
+  plugin.app.metadataCache.trigger("changed");
+  assert.ok(plugin.taskThemeRefreshTimer);
+  plugin.taskThemeCancelScheduledWork();
+  assert.equal(plugin.taskThemeRefreshTimer, null);
+
+  const view = makeView({ lines: ["- [ ] A [theme:: WRITE]"] });
+  plugin.taskThemeEnsureHoverForView(view);
+  assert.equal(view.dom.__bobTaskThemeHover, true);
+  assert.equal(typeof view.dom.handlers.mouseover, "function");
+  plugin.teardownTaskThemeMarksAndColors();
+  assert.equal(view.dom.__bobTaskThemeHover, false);
+  assert.equal(view.dom.handlers.mouseover, undefined);
+
+  const again = pluginWithThemeStubs();
+  again.setupTaskThemeMarks();
+  const view2 = makeView({ lines: ["- [ ] A [theme:: WRITE]"] });
+  assert.ok(capturedMarkClass);
+  const instance = new capturedMarkClass(view2);
+  assert.equal(view2.dom.__bobTaskThemeHover, true);
+  instance.destroy();
+  assert.equal(view2.dom.__bobTaskThemeHover, false);
+  again.teardownTaskThemeMarksAndColors();
 });

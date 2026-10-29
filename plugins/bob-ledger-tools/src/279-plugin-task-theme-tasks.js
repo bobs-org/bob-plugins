@@ -56,8 +56,152 @@ class BobLedgerToolsTaskThemeTasksMixin {
       this.tasksTaskThemeMarksPending = false;
       this.tasksTaskThemeMarksQueue = [];
       this.tasksTaskThemeMarksDoneSet = null;
+      if (this.taskThemeRefreshTimer) {
+        try {
+          clearTimeout(this.taskThemeRefreshTimer);
+        } catch (error) {
+          // Timer clear is best-effort.
+        }
+        this.taskThemeRefreshTimer = null;
+      }
     } catch (error) {
       // Queue drop never throws.
+    }
+  }
+
+  refreshTaskThemeMarkEditors() {
+    try {
+      const refresh = ensureTaskThemeMarksRefresh();
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return;
+      }
+      let leaves = [];
+      try {
+        leaves = workspace.getLeavesOfType("markdown") || [];
+      } catch (error) {
+        leaves = [];
+      }
+      for (const leaf of leaves) {
+        try {
+          const cm =
+            leaf && leaf.view && leaf.view.editor
+              ? leaf.view.editor.cm
+              : null;
+          if (cm && typeof cm.dispatch === "function" && refresh) {
+            cm.dispatch({ effects: refresh.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh never throws.
+    }
+  }
+
+  refreshTaskThemeMarksForCache() {
+    try {
+      this.taskThemeMarksGeneration =
+        (this.taskThemeMarksGeneration || 0) + 1;
+      this.refreshTaskThemeMarkEditors();
+      try {
+        this.refreshTaskThemeRenderedMarks();
+      } catch (error) {
+        // Rendered-view hue refresh is best-effort.
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  scheduleTaskThemeMarksRefresh() {
+    try {
+      if (this.taskThemeRefreshTimer) {
+        return;
+      }
+      const self = this;
+      const later = () => {
+        self.taskThemeRefreshTimer = null;
+        try {
+          if (self.taskThemeMarksEnabled === false) {
+            return;
+          }
+          self.refreshTaskThemeMarksForCache();
+        } catch (error) {
+          // Coalesced refresh is best-effort.
+        }
+      };
+      try {
+        this.taskThemeRefreshTimer = setTimeout(later, 50);
+      } catch (error) {
+        later();
+      }
+    } catch (error) {
+      // Scheduling never throws.
+    }
+  }
+
+  taskThemeWireRefreshEvents() {
+    try {
+      if (this.taskThemeRefreshEventsWired) {
+        return true;
+      }
+      this.taskThemeRefreshEventsWired = true;
+      const metadataCache = this.app && this.app.metadataCache;
+      if (
+        metadataCache &&
+        typeof metadataCache.on === "function" &&
+        typeof this.registerEvent === "function"
+      ) {
+        try {
+          this.registerEvent(
+            metadataCache.on("changed", () => this.scheduleTaskThemeMarksRefresh()),
+          );
+        } catch (error) {
+          // Metadata refresh is best-effort.
+        }
+        try {
+          this.registerEvent(
+            metadataCache.on("resolved", () => this.scheduleTaskThemeMarksRefresh()),
+          );
+        } catch (error) {
+          // Metadata refresh is best-effort.
+        }
+      }
+      const workspace = this.app && this.app.workspace;
+      if (
+        workspace &&
+        typeof workspace.on === "function" &&
+        typeof this.registerEvent === "function"
+      ) {
+        try {
+          this.registerEvent(
+            workspace.on(TODAY_RELOAD_EVENT, () =>
+              this.scheduleTaskThemeMarksRefresh(),
+            ),
+          );
+        } catch (error) {
+          // Today refresh is best-effort.
+        }
+        try {
+          this.registerEvent(
+            workspace.on("layout-change", () => {
+              try {
+                this.taskThemeEnsureHoverForDocuments();
+              } catch (inner) {
+                // Popout hover hosts are best-effort.
+              }
+            }),
+          );
+        } catch (error) {
+          // Layout hover hosts are best-effort.
+        }
+      }
+      return true;
+    } catch (error) {
+      return false;
     }
   }
 
@@ -252,6 +396,125 @@ class BobLedgerToolsTaskThemeTasksMixin {
       }
     } catch (error) {
       // The frame pass never throws.
+    }
+  }
+
+  taskThemeUntrackHoverRoot(root) {
+    try {
+      if (!root) {
+        return;
+      }
+      const tracked = Array.isArray(this.taskThemeHoverRoots)
+        ? this.taskThemeHoverRoots
+        : [];
+      const remaining = [];
+      for (let index = 0; index < tracked.length; index += 1) {
+        try {
+          const entry = tracked[index];
+          if (!entry || entry.root !== root) {
+            if (entry) {
+              remaining.push(entry);
+            }
+            continue;
+          }
+          const onHover = entry.onHover;
+          if (
+            typeof root.removeEventListener === "function" &&
+            typeof onHover === "function"
+          ) {
+            try {
+              root.removeEventListener("mouseover", onHover);
+            } catch (error) {
+              // Listener removal is best-effort.
+            }
+            try {
+              root.removeEventListener("focusin", onHover);
+            } catch (error) {
+              // Listener removal is best-effort.
+            }
+          }
+          try {
+            root.__bobTaskThemeHover = false;
+          } catch (error) {
+            // Marker cleanup is best-effort.
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      this.taskThemeHoverRoots = remaining;
+    } catch (error) {
+      // Untrack never throws.
+    }
+  }
+
+  taskThemeSyncNativeAccessibility(root) {
+    try {
+      const enabled = this.taskThemeMarksEnabled !== false;
+      const docs = [];
+      if (root) {
+        docs.push(root);
+      } else if (typeof this.markGateDocuments === "function") {
+        const list = this.markGateDocuments();
+        if (Array.isArray(list)) {
+          for (let index = 0; index < list.length; index += 1) {
+            const doc = list[index];
+            docs.push((doc && doc.body) || doc);
+          }
+        }
+      } else if (typeof document !== "undefined" && document) {
+        docs.push(document.body || document);
+      }
+      for (let index = 0; index < docs.length; index += 1) {
+        try {
+          const scope = docs[index];
+          if (!scope) {
+            continue;
+          }
+          const stack = [scope];
+          let guard = 0;
+          while (stack.length > 0 && guard < 20000) {
+            guard += 1;
+            const node = stack.pop();
+            if (!node || node.nodeType !== 1) {
+              continue;
+            }
+            if (taskThemeHasClass(node, "bob-task-theme-native")) {
+              try {
+                if (enabled) {
+                  node.setAttribute("aria-hidden", "true");
+                } else if (typeof node.removeAttribute === "function") {
+                  node.removeAttribute("aria-hidden");
+                }
+              } catch (error) {
+                // Native aria is best-effort.
+              }
+            }
+            if (taskThemeIsPill(node)) {
+              try {
+                if (enabled) {
+                  if (typeof node.removeAttribute === "function") {
+                    node.removeAttribute("aria-hidden");
+                  }
+                } else {
+                  node.setAttribute("aria-hidden", "true");
+                }
+              } catch (error) {
+                // Pill aria is best-effort.
+              }
+            }
+            const kids = taskThemeChildList(node);
+            for (let child = 0; child < kids.length; child += 1) {
+              stack.push(kids[child]);
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return true;
+    } catch (error) {
+      return false;
     }
   }
 }

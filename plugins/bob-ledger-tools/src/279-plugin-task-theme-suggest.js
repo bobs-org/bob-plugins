@@ -8,14 +8,19 @@ function pomodoroThemeCanonicalDailyPath(path) {
   if (!match) {
     return false;
   }
-  const year = Number(match[1]);
-  const month = Number(match[2].slice(4, 6));
-  const day = Number(match[2].slice(6, 8));
+  const dirYear = Number(match[1]);
+  const stamp = match[2];
+  const fileYear = Number(stamp.slice(0, 4));
+  const month = Number(stamp.slice(4, 6));
+  const day = Number(stamp.slice(6, 8));
+  if (dirYear !== fileYear) {
+    return false;
+  }
   const date = new Date(0);
   date.setUTCHours(0, 0, 0, 0);
-  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCFullYear(fileYear, month - 1, day);
   return (
-    date.getUTCFullYear() === year &&
+    date.getUTCFullYear() === fileYear &&
     date.getUTCMonth() === month - 1 &&
     date.getUTCDate() === day
   );

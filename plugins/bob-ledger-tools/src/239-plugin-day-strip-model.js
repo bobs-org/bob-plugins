@@ -203,8 +203,6 @@ function dayStripLegendLabel(report, dimension, row) {
   try {
     const catalog = typeof statsPanelHomeCatalog === "function" ? statsPanelHomeCatalog(report) : {};
     const entry = catalog && row && typeof catalog[row.key] === "object" ? catalog[row.key] : {};
-    const short = entry && typeof entry.short_label === "string" ? entry.short_label : "";
-    if (short) return short;
     if (dimension === "root_parent" && entry && typeof entry.label === "string" && entry.label) {
       return entry.label;
     }

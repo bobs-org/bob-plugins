@@ -89,6 +89,9 @@ const {
   pomodoroHomeFnv1a,
   pomodoroHomeLinkFromBody,
   pomodoroHomeModels,
+  pomodoroHomeParseEntries,
+  pomodoroHomeTaskHome,
+  rootMarkModel,
 } = LedgerToolsPlugin.helpers;
 
 const fixturePath = path.join(
@@ -194,28 +197,50 @@ function fakeVault(notes) {
     );
     return matches.length === 1 ? files.get(matches[0]) : null;
   };
+  const cacheForPath = (filePath) => {
+    if (!files.has(filePath)) {
+      return null;
+    }
+    const blocks = {};
+    String(notes[filePath] || "").split(/\r?\n/).forEach((line, index) => {
+      const match = /(?:^|\s)\^([A-Za-z0-9-]+)\s*$/.exec(line);
+      if (match) {
+        blocks[match[1]] = { position: { start: { line: index } } };
+      }
+    });
+    return { frontmatter: parseFrontmatter(notes[filePath]), blocks };
+  };
   const metadataCache = {
     getFirstLinkpathDest,
     getCache(filePath) {
       assert.equal(typeof filePath, "string", "metadataCache.getCache expects a vault path");
-      return files.has(filePath)
-        ? { frontmatter: parseFrontmatter(notes[filePath]) }
-        : null;
+      return cacheForPath(filePath);
     },
     getFileCache(file) {
       assert.equal(typeof file, "object", "metadataCache.getFileCache expects a TFile");
       assert.equal(typeof file.path, "string", "metadataCache.getFileCache expects a TFile path");
       assert.strictEqual(files.get(file.path), file, "cache lookup must use the resolved vault file");
-      return files.has(file.path)
-        ? { frontmatter: parseFrontmatter(notes[file.path]) }
-        : null;
+      return cacheForPath(file.path);
     },
   };
   const vault = {
     getAbstractFileByPath: (filePath) => files.get(filePath) || null,
     getMarkdownFiles: () => Array.from(files.values()),
+    cachedRead: (file) => Promise.resolve(String(notes[file.path] || "")),
   };
   return { metadataCache, vault };
+}
+
+function taskLineForBlock(notes) {
+  return (filePath, blockId) => {
+    const wanted = String(blockId || "").toLowerCase();
+    const note = notes[filePath];
+    if (!wanted || typeof note !== "string") return null;
+    return note.split(/\r?\n/).find((line) => {
+      const match = /(?:^|\s)\^([A-Za-z0-9-]+)\s*$/.exec(line);
+      return match && match[1].toLowerCase() === wanted;
+    }) || null;
+  };
 }
 
 function expectedEntry(entry) {
@@ -255,7 +280,7 @@ for (const vector of fixture.cases.filter((item) => !item.rust_only)) {
       vector.daily_path,
       metadataCache,
       vault,
-      vector.exempt,
+      taskLineForBlock(fixture.notes),
     );
     assert.deepEqual(
       result.entries.map(expectedEntry),
@@ -272,6 +297,78 @@ for (const vector of fixture.cases.filter((item) => !item.rust_only)) {
     }
   });
 }
+
+test("root-fields keeps home state, root, and hue in parity with root marks", () => {
+  const vector = fixture.cases.find((item) => item.name === "root-fields");
+  assert.ok(vector);
+  const { metadataCache, vault } = fakeVault(fixture.notes);
+  const lookup = taskLineForBlock(fixture.notes);
+  const links = pomodoroHomeParseEntries(`## Pomodoros\n${vector.pomodoros}`).flatMap((entry) => entry.links);
+  const expected = [
+    { state: "compact", target: "gtd_daily.md", home: "gtd_daily.md", hue: "orange" },
+    { state: "set", target: "sase.md", home: "sase.md", hue: "blue" },
+    { state: "set", target: "sase.md", home: "sase.md", hue: "blue" },
+    { state: "rolls-up", target: "sase_goals.md", home: "sase_goals.md", hue: "blue" },
+    { state: "repair", target: null, home: "inbox.md", hue: null },
+    { state: "repair", target: null, home: "inbox.md", hue: null },
+    { state: "repair", target: null, home: "inbox.md", hue: null },
+    { state: "repair", target: "unfiled.md", home: "inbox.md", hue: null },
+    { state: "set", target: "sase.md", home: "sase.md", hue: "blue" },
+  ];
+  assert.equal(links.length, expected.length);
+  links.forEach((link, index) => {
+    const file = link.target
+      ? metadataCache.getFirstLinkpathDest(link.target, vector.daily_path)
+      : vault.getAbstractFileByPath(vector.daily_path);
+    assert.ok(file, `source file resolves for ${link.blockId}`);
+    const line = lookup(file.path, link.blockId);
+    const mark = rootMarkModel(line, {
+      sourcePath: file.path,
+      metadataCache,
+      vault,
+    });
+    assert.ok(mark, `root mark exists for ${link.blockId}`);
+    assert.deepEqual(
+      { state: mark.state, target: mark.targetPath || null, hue: mark.hue || null },
+      { state: expected[index].state, target: expected[index].target, hue: expected[index].hue },
+      `root mark for ${link.blockId}`,
+    );
+    const home = pomodoroHomeTaskHome(
+      link,
+      file,
+      vector.daily_path,
+      metadataCache,
+      vault,
+      [],
+      new Set(),
+      lookup,
+    );
+    if (expected[index].home) {
+      assert.equal(home.key, expected[index].home);
+      if (mark.state === "repair") {
+        assert.equal(home.hue, "aqua");
+      } else {
+        assert.equal(home.hue, mark.hue);
+      }
+    }
+  });
+});
+
+test("home chips refresh after a linked task source read supplies its root field", async () => {
+  const { metadataCache, vault } = fakeVault(fixture.notes);
+  const plugin = new LedgerToolsPlugin({ metadataCache, vault }, {});
+  let refreshes = 0;
+  plugin.schedulePomodoroHomeChipRefresh = () => { refreshes += 1; };
+  plugin.scheduleTaskThemeMarksRefresh = () => {};
+  const content = "## Pomodoros\n- [x] (0800-0805 5m)\n  - [[inbox#^inbox-sase]]\n";
+  const pending = plugin.pomodoroHomeChipModels(content, "2026/20261028.md");
+  assert.equal(pending.entries[0].parts[0].key, "inbox.md");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(refreshes, 1);
+  const ready = plugin.pomodoroHomeChipModels(content, "2026/20261028.md");
+  assert.equal(ready.entries[0].parts[0].key, "sase.md");
+  assert.equal(ready.entries[0].parts[0].hue, "blue");
+});
 
 test("dedicated link parser keeps embeds and one struck link, but rejects prose", () => {
   assert.deepEqual(pomodoroHomeLinkFromBody("🍅 ![[bob#^task|Bob]]"), {
@@ -298,7 +395,7 @@ test("area-color lints are reported once per note", () => {
     "2026/20261018.md",
     metadataCache,
     vault,
-    ["GTD"],
+    null,
   );
   assert.equal(result.health.area_color_invalid, 1);
   assert.deepEqual(
@@ -318,7 +415,7 @@ test("a leftover rollup key neither regroups nor warns", () => {
     "2026/20261018.md",
     metadataCache,
     vault,
-    ["GTD"],
+    null,
   );
   assert.equal(result.warnings.length, 0);
   assert.equal(result.entries.length, 1);
@@ -559,8 +656,8 @@ test("Reading view appends a forecast chip before its Task Link list", () => {
   assert.equal(plugin.renderPomodoroHomeReadingRecord(reviewRecord), true);
   const reviewContext = plugin.pomodoroHomeReadingEntry(reviewEntry, "2026/20261018.md");
   assert.equal(reviewContext.entry.name, "");
-  assert.equal(plugin.pomodoroHomeChipModelForEntry(reviewContext.entry, "2026/20261018.md").kind, "review");
-  assert.equal(reviewRecord.chip.children[1].textContent, "PLAN review");
+  assert.equal(plugin.pomodoroHomeChipModelForEntry(reviewContext.entry, "2026/20261018.md").kind, "work");
+  assert.equal(reviewRecord.chip.children[1].textContent, "unfiled");
   assert.equal(plugin.renderPomodoroHomeReadingRecord(reviewRecord), true);
   assert.equal(
     reviewEntry.children.filter((child) => child.getAttribute("class") === "bob-pomodoro-home-chip").length,
@@ -573,9 +670,9 @@ test("Reading view appends a forecast chip before its Task Link list", () => {
   const namedReviewContext = plugin.pomodoroHomeReadingEntry(namedReviewEntry, "2026/20261018.md");
   const namedReviewModel = plugin.pomodoroHomeChipModelForEntry(namedReviewContext.entry, "2026/20261018.md");
   assert.equal(namedReviewContext.entry.name, "PLAN");
-  assert.equal(namedReviewModel.kind, "review");
-  assert.equal(namedReviewModel.chip, null);
-  assert.equal(namedReviewRecord.chip, null);
+  assert.equal(namedReviewModel.kind, "work");
+  assert.equal(namedReviewModel.chip, "unfiled");
+  assert.ok(namedReviewRecord.chip);
 
   const css = fs.readFileSync(
     path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"),

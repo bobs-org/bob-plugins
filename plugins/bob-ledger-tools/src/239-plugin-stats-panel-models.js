@@ -216,20 +216,11 @@ function statsPanelHomeHue(report, key, bucketGray = true) {
   if (bucketGray && typeof key === "string" && (key === "@unlinked" || key === "@unfiled")) {
     return "gray";
   }
-  if (bucketGray && typeof key === "string" && key.startsWith("@") && !key.startsWith("@review:")) {
+  if (bucketGray && typeof key === "string" && key.startsWith("@")) {
     return "gray";
   }
   const catalog = statsPanelHomeCatalog(report);
   const entry = catalog[key];
-  if (typeof key === "string" && key.startsWith("@review:")) {
-    if (entry && STATS_PANEL_HOME_HUES.includes(entry.hue)) {
-      return entry.hue;
-    }
-    const area = entry && typeof entry.area === "string" ? catalog[entry.area] : null;
-    if (area && STATS_PANEL_HOME_HUES.includes(area.hue)) {
-      return area.hue;
-    }
-  }
   return entry && STATS_PANEL_HOME_HUES.includes(entry.hue) ? entry.hue : "gray";
 }
 

@@ -62,15 +62,6 @@ function pomodoroThemeIsReadingTask(line) {
   return lower === "ref" || lower.startsWith("ref-");
 }
 
-function pomodoroThemeIsDailyReview(path, line) {
-  const id = pomodoroThemeTrailingBlockId(line);
-  return (
-    pomodoroThemeCanonicalDailyPath(path) &&
-    typeof id === "string" &&
-    id.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) === "gtd"
-  );
-}
-
 function pomodoroThemeCatalogTheme(key, canonical, options) {
   const catalog = options.catalog || {};
   const names = catalog.names instanceof Map ? catalog.names : new Map();
@@ -96,16 +87,30 @@ function pomodoroThemeMakeSuggestion(key, canonical, source, label, options, ext
   };
 }
 
-function pomodoroThemeResolveNoteDefault(path, options) {
+function pomodoroThemeResolveNoteDefault(path, line, options) {
   const result = { suggestion: null, warnings: [] };
-  if (pomodoroThemeCanonicalDailyPath(path)) {
+  const opts = options && typeof options === "object" ? options : {};
+  const metadataCache = opts.metadataCache || null;
+  const vault = opts.vault || null;
+  let startPath = path;
+  if (typeof line === "string" && line) {
+    const root = rootMarkModel(line, {
+      sourcePath: path,
+      metadataCache,
+      vault,
+    });
+    if (root && root.state !== "repair" && root.targetPath) {
+      startPath = root.targetPath;
+    }
+  }
+  if (pomodoroThemeCanonicalDailyPath(startPath)) {
     return result;
   }
   const facts = pomodoroHomeResolveTaskThemeFacts(
-    path,
-    options.dailyPath,
-    options.metadataCache,
-    options.vault,
+    startPath,
+    opts.dailyPath,
+    metadataCache,
+    vault,
   );
   if (!facts) {
     return result;
@@ -131,9 +136,9 @@ function pomodoroThemeResolveNoteDefault(path, options) {
     const stem = pomodoroHomeStem(item.path).toLowerCase();
     const declaring = pomodoroHomeResolveTaskThemeFacts(
       item.path,
-      options.dailyPath,
-      options.metadataCache,
-      options.vault,
+      opts.dailyPath,
+      metadataCache,
+      vault,
     );
     const origin = {
       path: item.path,
@@ -184,34 +189,14 @@ function pomodoroThemeResolveWithoutTaskField(path, line, options) {
       warnings: [],
     };
   }
-  const exempt = Array.isArray(config.exempt) ? config.exempt : ["PLAN"];
-  if (pomodoroThemeIsDailyReview(path, line) && exempt.length > 0) {
-    const raw = String(exempt[0] == null ? "" : exempt[0]).trim();
-    if (raw) {
-      const name =
-        pomodoroThemeCanonicalName(raw) ||
-        raw.replace(/[a-z]/g, (letter) => letter.toUpperCase());
-      const key = pomodoroThemeNormalizeKey(name);
-      return {
-        suggestion: pomodoroThemeMakeSuggestion(
-          key,
-          name,
-          "review",
-          "daily review",
-          options,
-        ),
-        warnings: [],
-      };
-    }
-  }
-  return pomodoroThemeResolveNoteDefault(path, options);
+  return pomodoroThemeResolveNoteDefault(path, line, options);
 }
 
 function pomodoroThemeSuggestWithDiagnostics(options = {}) {
   const opts = options && typeof options === "object" ? options : {};
   const path = typeof opts.path === "string" ? opts.path : "";
   if (opts.newTask === true) {
-    return pomodoroThemeResolveNoteDefault(path, opts);
+    return pomodoroThemeResolveNoteDefault(path, null, opts);
   }
   const line = String(opts.line == null ? "" : opts.line);
   const mark = pomodoroThemeTaskMark(line);

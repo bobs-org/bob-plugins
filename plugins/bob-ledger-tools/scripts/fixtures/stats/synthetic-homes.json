@@ -50,10 +50,8 @@
         "p25": 18,
         "p75": 84,
         "days_with_data": 3,
-        "days_met": null,
         "prior": {
           "headline": {
-            "value": null,
             "display": "\u2013"
           }
         },
@@ -110,7 +108,7 @@
               "learning.md": 3,
               "home_work.md": 7,
               "home.md": 2,
-              "@review:GTD": 15,
+              "gtd_daily.md": 15,
               "@unfiled": 8,
               "@unlinked": 6
             },
@@ -131,7 +129,7 @@
               "learning.md": 3,
               "home_work.md": 7,
               "home.md": 2,
-              "@review:GTD": 15,
+              "gtd_daily.md": 15,
               "@unfiled": 8,
               "@unlinked": 6
             }
@@ -170,7 +168,7 @@
               "learning.md": "3m",
               "home_work.md": "7m",
               "home.md": "2m",
-              "@review:GTD": "15m",
+              "gtd_daily.md": "15m",
               "@unfiled": "8m",
               "@unlinked": "6m"
             },
@@ -191,7 +189,7 @@
               "learning.md": "3m",
               "home_work.md": "7m",
               "home.md": "2m",
-              "@review:GTD": "15m",
+              "gtd_daily.md": "15m",
               "@unfiled": "8m",
               "@unlinked": "6m"
             }
@@ -223,8 +221,7 @@
               "body_work.md": 1,
               "learning_work.md": 1
             }
-          },
-          "apportioned_display": null
+          }
         }
       ],
       "prior_points": [],
@@ -469,11 +466,11 @@
             "label": "home \u00b7 area tasks"
           },
           {
-            "key": "@review:GTD",
+            "key": "gtd_daily.md",
             "value": 15,
             "display": "15m",
             "share": "5%",
-            "label": "GTD review"
+            "label": "gtd_daily"
           },
           {
             "key": "@unfiled",
@@ -591,11 +588,11 @@
             "apportioned_display": "1m"
           },
           {
-            "key": "@review:GTD",
+            "key": "gtd_daily.md",
             "value": 15,
             "display": "15m",
             "share": "5%",
-            "label": "GTD review"
+            "label": "gtd_daily"
           },
           {
             "key": "dev.md",
@@ -700,18 +697,11 @@
       },
       "summary": {
         "headline": {
-          "value": null,
           "display": "\u2013"
         },
-        "total": null,
-        "mean": null,
-        "p25": null,
-        "p75": null,
         "days_with_data": 0,
-        "days_met": null,
         "prior": {
           "headline": {
-            "value": null,
             "display": "\u2013"
           }
         },
@@ -722,300 +712,240 @@
         }
       },
       "chart": {
-        "group": "day",
-        "p25": null,
-        "p75": null
+        "group": "day"
       },
       "points": [
         {
           "date": "2026-09-20",
           "end": "2026-09-20",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-21",
           "end": "2026-09-21",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-22",
           "end": "2026-09-22",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-23",
           "end": "2026-09-23",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-24",
           "end": "2026-09-24",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-25",
           "end": "2026-09-25",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-26",
           "end": "2026-09-26",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-27",
           "end": "2026-09-27",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-28",
           "end": "2026-09-28",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-29",
           "end": "2026-09-29",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-30",
           "end": "2026-09-30",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-01",
           "end": "2026-10-01",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-02",
           "end": "2026-10-02",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-03",
           "end": "2026-10-03",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-04",
           "end": "2026-10-04",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-05",
           "end": "2026-10-05",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-06",
           "end": "2026-10-06",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-07",
           "end": "2026-10-07",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-08",
           "end": "2026-10-08",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-09",
           "end": "2026-10-09",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-10",
           "end": "2026-10-10",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-11",
           "end": "2026-10-11",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-12",
           "end": "2026-10-12",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-13",
           "end": "2026-10-13",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-14",
           "end": "2026-10-14",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-15",
           "end": "2026-10-15",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-16",
           "end": "2026-10-16",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-17",
           "end": "2026-10-17",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-18",
           "end": "2026-10-18",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": true,
-          "rolling_median": null
+          "provisional": true
         }
       ],
       "prior_points": [],
@@ -1057,10 +987,8 @@
         "p25": 1,
         "p75": 4,
         "days_with_data": 3,
-        "days_met": null,
         "prior": {
           "headline": {
-            "value": null,
             "display": "\u2013"
           }
         },
@@ -1117,7 +1045,7 @@
               "learning.md": 1,
               "home_work.md": 1,
               "home.md": 1,
-              "@review:GTD": 2,
+              "gtd_daily.md": 2,
               "@unfiled": 1,
               "@unlinked": 1
             },
@@ -1138,7 +1066,7 @@
               "learning.md": 1,
               "home_work.md": 1,
               "home.md": 1,
-              "@review:GTD": 2,
+              "gtd_daily.md": 2,
               "@unfiled": 1,
               "@unlinked": 1
             }
@@ -1177,7 +1105,7 @@
               "learning.md": "1",
               "home_work.md": "1",
               "home.md": "1",
-              "@review:GTD": "2",
+              "gtd_daily.md": "2",
               "@unfiled": "1",
               "@unlinked": "1"
             },
@@ -1198,13 +1126,11 @@
               "learning.md": "1",
               "home_work.md": "1",
               "home.md": "1",
-              "@review:GTD": "2",
+              "gtd_daily.md": "2",
               "@unfiled": "1",
               "@unlinked": "1"
             }
-          },
-          "apportioned": null,
-          "apportioned_display": null
+          }
         }
       ],
       "prior_points": [],
@@ -1469,11 +1395,11 @@
             "label": "home \u00b7 area tasks"
           },
           {
-            "key": "@review:GTD",
+            "key": "gtd_daily.md",
             "value": 2,
             "display": "2",
             "share": "5%",
-            "label": "GTD review"
+            "label": "gtd_daily"
           },
           {
             "key": "@unfiled",
@@ -1541,11 +1467,11 @@
             "label": "body_work"
           },
           {
-            "key": "@review:GTD",
+            "key": "gtd_daily.md",
             "value": 2,
             "display": "2",
             "share": "5%",
-            "label": "GTD review"
+            "label": "gtd_daily"
           },
           {
             "key": "dev.md",
@@ -1665,10 +1591,8 @@
         "p25": 1,
         "p75": 4,
         "days_with_data": 3,
-        "days_met": null,
         "prior": {
           "headline": {
-            "value": null,
             "display": "\u2013"
           }
         },
@@ -1687,252 +1611,202 @@
         {
           "date": "2026-09-20",
           "end": "2026-09-20",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-21",
           "end": "2026-09-21",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-22",
           "end": "2026-09-22",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-23",
           "end": "2026-09-23",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-24",
           "end": "2026-09-24",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-25",
           "end": "2026-09-25",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-26",
           "end": "2026-09-26",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-27",
           "end": "2026-09-27",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-28",
           "end": "2026-09-28",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-29",
           "end": "2026-09-29",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-30",
           "end": "2026-09-30",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-01",
           "end": "2026-10-01",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-02",
           "end": "2026-10-02",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-03",
           "end": "2026-10-03",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-04",
           "end": "2026-10-04",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-05",
           "end": "2026-10-05",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-06",
           "end": "2026-10-06",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-07",
           "end": "2026-10-07",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-08",
           "end": "2026-10-08",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-09",
           "end": "2026-10-09",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-10",
           "end": "2026-10-10",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-11",
           "end": "2026-10-11",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-12",
           "end": "2026-10-12",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-13",
           "end": "2026-10-13",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-14",
           "end": "2026-10-14",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-15",
@@ -1941,7 +1815,6 @@
           "display": "1",
           "quality": "ok",
           "provisional": false,
-          "rolling_median": null,
           "parts": {
             "area": {
               "gtd.md": 1
@@ -1978,7 +1851,6 @@
           "display": "6",
           "quality": "ok",
           "provisional": false,
-          "rolling_median": null,
           "parts": {
             "area": {
               "@unfiled": 1,
@@ -2036,8 +1908,7 @@
           "value": 0,
           "display": "0",
           "quality": "ok",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-18",
@@ -2045,8 +1916,7 @@
           "value": 0,
           "display": "0",
           "quality": "ok",
-          "provisional": true,
-          "rolling_median": null
+          "provisional": true
         }
       ],
       "prior_points": [],
@@ -2196,18 +2066,11 @@
       },
       "summary": {
         "headline": {
-          "value": null,
           "display": "\u2013"
         },
-        "total": null,
-        "mean": null,
-        "p25": null,
-        "p75": null,
         "days_with_data": 0,
-        "days_met": null,
         "prior": {
           "headline": {
-            "value": null,
             "display": "\u2013"
           }
         },
@@ -2218,300 +2081,240 @@
         }
       },
       "chart": {
-        "group": "day",
-        "p25": null,
-        "p75": null
+        "group": "day"
       },
       "points": [
         {
           "date": "2026-09-20",
           "end": "2026-09-20",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-21",
           "end": "2026-09-21",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-22",
           "end": "2026-09-22",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-23",
           "end": "2026-09-23",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-24",
           "end": "2026-09-24",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-25",
           "end": "2026-09-25",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-26",
           "end": "2026-09-26",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-27",
           "end": "2026-09-27",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-28",
           "end": "2026-09-28",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-29",
           "end": "2026-09-29",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-30",
           "end": "2026-09-30",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-01",
           "end": "2026-10-01",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-02",
           "end": "2026-10-02",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-03",
           "end": "2026-10-03",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-04",
           "end": "2026-10-04",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-05",
           "end": "2026-10-05",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-06",
           "end": "2026-10-06",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-07",
           "end": "2026-10-07",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-08",
           "end": "2026-10-08",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-09",
           "end": "2026-10-09",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-10",
           "end": "2026-10-10",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-11",
           "end": "2026-10-11",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-12",
           "end": "2026-10-12",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-13",
           "end": "2026-10-13",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-14",
           "end": "2026-10-14",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-15",
           "end": "2026-10-15",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "null input from dropped",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-16",
           "end": "2026-10-16",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "null input from dropped",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-17",
           "end": "2026-10-17",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "null input from dropped",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-18",
           "end": "2026-10-18",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "null input from dropped",
-          "provisional": true,
-          "rolling_median": null
+          "provisional": true
         }
       ],
       "prior_points": [],
@@ -2540,19 +2343,13 @@
       },
       "summary": {
         "headline": {
-          "value": null,
           "display": "\u2013",
           "stat": "days"
         },
-        "total": null,
-        "mean": null,
-        "p25": null,
-        "p75": null,
         "days_with_data": 0,
         "days_met": 0,
         "prior": {
           "headline": {
-            "value": null,
             "display": "\u2013",
             "stat": "days"
           }
@@ -2564,328 +2361,268 @@
         }
       },
       "chart": {
-        "group": "day",
-        "p25": null,
-        "p75": null
+        "group": "day"
       },
       "points": [
         {
           "date": "2026-09-20",
           "end": "2026-09-20",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-21",
           "end": "2026-09-21",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-22",
           "end": "2026-09-22",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-23",
           "end": "2026-09-23",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-24",
           "end": "2026-09-24",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-25",
           "end": "2026-09-25",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-26",
           "end": "2026-09-26",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-27",
           "end": "2026-09-27",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-28",
           "end": "2026-09-28",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-29",
           "end": "2026-09-29",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-30",
           "end": "2026-09-30",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-01",
           "end": "2026-10-01",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-02",
           "end": "2026-10-02",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-03",
           "end": "2026-10-03",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-04",
           "end": "2026-10-04",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-05",
           "end": "2026-10-05",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-06",
           "end": "2026-10-06",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-07",
           "end": "2026-10-07",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-08",
           "end": "2026-10-08",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-09",
           "end": "2026-10-09",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-10",
           "end": "2026-10-10",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-11",
           "end": "2026-10-11",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-12",
           "end": "2026-10-12",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-13",
           "end": "2026-10-13",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-14",
           "end": "2026-10-14",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-15",
           "end": "2026-10-15",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-16",
           "end": "2026-10-16",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-17",
           "end": "2026-10-17",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-18",
           "end": "2026-10-18",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": true,
-          "rolling_median": null,
           "checklist_state": "missing"
         }
       ],
@@ -2914,18 +2651,11 @@
       },
       "summary": {
         "headline": {
-          "value": null,
           "display": "\u2013"
         },
-        "total": null,
-        "mean": null,
-        "p25": null,
-        "p75": null,
         "days_with_data": 0,
-        "days_met": null,
         "prior": {
           "headline": {
-            "value": null,
             "display": "\u2013"
           }
         },
@@ -2936,300 +2666,240 @@
         }
       },
       "chart": {
-        "group": "day",
-        "p25": null,
-        "p75": null
+        "group": "day"
       },
       "points": [
         {
           "date": "2026-09-20",
           "end": "2026-09-20",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-21",
           "end": "2026-09-21",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-22",
           "end": "2026-09-22",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-23",
           "end": "2026-09-23",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-24",
           "end": "2026-09-24",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-25",
           "end": "2026-09-25",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-26",
           "end": "2026-09-26",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-27",
           "end": "2026-09-27",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-28",
           "end": "2026-09-28",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-29",
           "end": "2026-09-29",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-30",
           "end": "2026-09-30",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-01",
           "end": "2026-10-01",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-02",
           "end": "2026-10-02",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-03",
           "end": "2026-10-03",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-04",
           "end": "2026-10-04",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-05",
           "end": "2026-10-05",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-06",
           "end": "2026-10-06",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-07",
           "end": "2026-10-07",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-08",
           "end": "2026-10-08",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-09",
           "end": "2026-10-09",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-10",
           "end": "2026-10-10",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-11",
           "end": "2026-10-11",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-12",
           "end": "2026-10-12",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-13",
           "end": "2026-10-13",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-14",
           "end": "2026-10-14",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-15",
           "end": "2026-10-15",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-16",
           "end": "2026-10-16",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-17",
           "end": "2026-10-17",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-18",
           "end": "2026-10-18",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no qualifying task event has been recorded",
-          "provisional": true,
-          "rolling_median": null
+          "provisional": true
         }
       ],
       "prior_points": [],
@@ -3257,19 +2927,12 @@
       },
       "summary": {
         "headline": {
-          "value": null,
           "display": "\u2013",
           "stat": "pooled"
         },
-        "total": null,
-        "mean": null,
-        "p25": null,
-        "p75": null,
         "days_with_data": 0,
-        "days_met": null,
         "prior": {
           "headline": {
-            "value": null,
             "display": "\u2013",
             "stat": "pooled"
           }
@@ -3281,328 +2944,268 @@
         }
       },
       "chart": {
-        "group": "day",
-        "p25": null,
-        "p75": null
+        "group": "day"
       },
       "points": [
         {
           "date": "2026-09-20",
           "end": "2026-09-20",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-21",
           "end": "2026-09-21",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-22",
           "end": "2026-09-22",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-23",
           "end": "2026-09-23",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-24",
           "end": "2026-09-24",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-25",
           "end": "2026-09-25",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-26",
           "end": "2026-09-26",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-27",
           "end": "2026-09-27",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-28",
           "end": "2026-09-28",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-29",
           "end": "2026-09-29",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-09-30",
           "end": "2026-09-30",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-01",
           "end": "2026-10-01",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-02",
           "end": "2026-10-02",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-03",
           "end": "2026-10-03",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-04",
           "end": "2026-10-04",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-05",
           "end": "2026-10-05",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-06",
           "end": "2026-10-06",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-07",
           "end": "2026-10-07",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-08",
           "end": "2026-10-08",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-09",
           "end": "2026-10-09",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-10",
           "end": "2026-10-10",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-11",
           "end": "2026-10-11",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-12",
           "end": "2026-10-12",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-13",
           "end": "2026-10-13",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-14",
           "end": "2026-10-14",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-15",
           "end": "2026-10-15",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-16",
           "end": "2026-10-16",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-17",
           "end": "2026-10-17",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": false,
-          "rolling_median": null,
           "checklist_state": "missing"
         },
         {
           "date": "2026-10-18",
           "end": "2026-10-18",
-          "value": null,
           "display": "\u2013",
           "quality": "missing",
           "reason": "no matching checklist instance has been recorded",
           "provisional": true,
-          "rolling_median": null,
           "checklist_state": "missing"
         }
       ],
@@ -3631,19 +3234,12 @@
       },
       "summary": {
         "headline": {
-          "value": null,
           "display": "\u2013",
           "stat": "pooled"
         },
-        "total": null,
-        "mean": null,
-        "p25": null,
-        "p75": null,
         "days_with_data": 0,
-        "days_met": null,
         "prior": {
           "headline": {
-            "value": null,
             "display": "\u2013",
             "stat": "pooled"
           }
@@ -3655,300 +3251,240 @@
         }
       },
       "chart": {
-        "group": "day",
-        "p25": null,
-        "p75": null
+        "group": "day"
       },
       "points": [
         {
           "date": "2026-09-20",
           "end": "2026-09-20",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-21",
           "end": "2026-09-21",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-22",
           "end": "2026-09-22",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-23",
           "end": "2026-09-23",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-24",
           "end": "2026-09-24",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-25",
           "end": "2026-09-25",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-26",
           "end": "2026-09-26",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-27",
           "end": "2026-09-27",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-28",
           "end": "2026-09-28",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-29",
           "end": "2026-09-29",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-30",
           "end": "2026-09-30",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-01",
           "end": "2026-10-01",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-02",
           "end": "2026-10-02",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-03",
           "end": "2026-10-03",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-04",
           "end": "2026-10-04",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-05",
           "end": "2026-10-05",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-06",
           "end": "2026-10-06",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-07",
           "end": "2026-10-07",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-08",
           "end": "2026-10-08",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-09",
           "end": "2026-10-09",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-10",
           "end": "2026-10-10",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-11",
           "end": "2026-10-11",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-12",
           "end": "2026-10-12",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-13",
           "end": "2026-10-13",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-14",
           "end": "2026-10-14",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-15",
           "end": "2026-10-15",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-16",
           "end": "2026-10-16",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-17",
           "end": "2026-10-17",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-18",
           "end": "2026-10-18",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "no review answers have been recorded",
-          "provisional": true,
-          "rolling_median": null
+          "provisional": true
         }
       ],
       "prior_points": [],
@@ -3964,7 +3500,7 @@
       "source": "derived",
       "origin": "builtin",
       "since": "2026-10-15",
-      "definition": "Worked minutes in GTD review sessions.",
+      "definition": "Minutes attributed to tasks in, or rooted at, gtd_daily, the morning review's area.",
       "limits": [
         "Attributed from Task Links.",
         "Grouped by today's note tree.",
@@ -3973,7 +3509,9 @@
       ],
       "parameters": {
         "measure": "minutes",
-        "review": "only"
+        "in": [
+          "gtd_daily"
+        ]
       },
       "summary": {
         "headline": {
@@ -3990,10 +3528,8 @@
         "p25": 5,
         "p75": 18,
         "days_with_data": 3,
-        "days_met": null,
         "prior": {
           "headline": {
-            "value": null,
             "display": "\u2013"
           }
         },
@@ -4012,252 +3548,202 @@
         {
           "date": "2026-09-20",
           "end": "2026-09-20",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-21",
           "end": "2026-09-21",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-22",
           "end": "2026-09-22",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-23",
           "end": "2026-09-23",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-24",
           "end": "2026-09-24",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-25",
           "end": "2026-09-25",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-26",
           "end": "2026-09-26",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-27",
           "end": "2026-09-27",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-28",
           "end": "2026-09-28",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-29",
           "end": "2026-09-29",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-30",
           "end": "2026-09-30",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-01",
           "end": "2026-10-01",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-02",
           "end": "2026-10-02",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-03",
           "end": "2026-10-03",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-04",
           "end": "2026-10-04",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-05",
           "end": "2026-10-05",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-06",
           "end": "2026-10-06",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-07",
           "end": "2026-10-07",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-08",
           "end": "2026-10-08",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-09",
           "end": "2026-10-09",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-10",
           "end": "2026-10-10",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-11",
           "end": "2026-10-11",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-12",
           "end": "2026-10-12",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-13",
           "end": "2026-10-13",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-14",
           "end": "2026-10-14",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-15",
@@ -4266,13 +3752,12 @@
           "display": "25m",
           "quality": "ok",
           "provisional": false,
-          "rolling_median": null,
           "parts": {
             "area": {
               "gtd.md": 25
             },
             "project": {
-              "@review:GTD": 25
+              "gtd_daily.md": 25
             },
             "theme": {
               "GTD": 25
@@ -4283,7 +3768,7 @@
               "gtd.md": "25m"
             },
             "project": {
-              "@review:GTD": "25m"
+              "gtd_daily.md": "25m"
             },
             "theme": {
               "GTD": "25m"
@@ -4297,13 +3782,12 @@
           "display": "10m",
           "quality": "ok",
           "provisional": false,
-          "rolling_median": null,
           "parts": {
             "area": {
               "gtd.md": 10
             },
             "project": {
-              "@review:GTD": 10
+              "gtd_daily.md": 10
             },
             "theme": {
               "(unnamed)": 10
@@ -4314,7 +3798,7 @@
               "gtd.md": "10m"
             },
             "project": {
-              "@review:GTD": "10m"
+              "gtd_daily.md": "10m"
             },
             "theme": {
               "(unnamed)": "10m"
@@ -4327,8 +3811,7 @@
           "value": 0,
           "display": "0m",
           "quality": "ok",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-18",
@@ -4336,8 +3819,7 @@
           "value": 0,
           "display": "0m",
           "quality": "ok",
-          "provisional": true,
-          "rolling_median": null
+          "provisional": true
         }
       ],
       "prior_points": [],
@@ -4353,11 +3835,11 @@
         ],
         "project": [
           {
-            "key": "@review:GTD",
+            "key": "gtd_daily.md",
             "value": 35,
             "display": "35m",
             "share": "100%",
-            "label": "GTD review"
+            "label": "gtd_daily"
           }
         ],
         "theme": [
@@ -4413,10 +3895,8 @@
         "p25": 1,
         "p75": 4,
         "days_with_data": 3,
-        "days_met": null,
         "prior": {
           "headline": {
-            "value": null,
             "display": "\u2013"
           }
         },
@@ -4435,252 +3915,202 @@
         {
           "date": "2026-09-20",
           "end": "2026-09-20",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-21",
           "end": "2026-09-21",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-22",
           "end": "2026-09-22",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-23",
           "end": "2026-09-23",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-24",
           "end": "2026-09-24",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-25",
           "end": "2026-09-25",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-26",
           "end": "2026-09-26",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-27",
           "end": "2026-09-27",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-28",
           "end": "2026-09-28",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-29",
           "end": "2026-09-29",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-09-30",
           "end": "2026-09-30",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-01",
           "end": "2026-10-01",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-02",
           "end": "2026-10-02",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-03",
           "end": "2026-10-03",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-04",
           "end": "2026-10-04",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-05",
           "end": "2026-10-05",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-06",
           "end": "2026-10-06",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-07",
           "end": "2026-10-07",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-08",
           "end": "2026-10-08",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-09",
           "end": "2026-10-09",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-10",
           "end": "2026-10-10",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-11",
           "end": "2026-10-11",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-12",
           "end": "2026-10-12",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-13",
           "end": "2026-10-13",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-14",
           "end": "2026-10-14",
-          "value": null,
           "display": "\u2013",
           "quality": "not_tracked",
           "reason": "before tracking began",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-15",
@@ -4689,14 +4119,13 @@
           "display": "2",
           "quality": "ok",
           "provisional": false,
-          "rolling_median": null,
           "parts": {
             "area": {
               "@unlinked": 1,
               "gtd.md": 1
             },
             "project": {
-              "@review:GTD": 1,
+              "gtd_daily.md": 1,
               "@unlinked": 1
             },
             "theme": {
@@ -4710,7 +4139,7 @@
               "gtd.md": "1"
             },
             "project": {
-              "@review:GTD": "1",
+              "gtd_daily.md": "1",
               "@unlinked": "1"
             },
             "theme": {
@@ -4726,7 +4155,6 @@
           "display": "6",
           "quality": "ok",
           "provisional": false,
-          "rolling_median": null,
           "parts": {
             "area": {
               "@unfiled": 1,
@@ -4735,7 +4163,7 @@
               "job.md": 1
             },
             "project": {
-              "@review:GTD": 1,
+              "gtd_daily.md": 1,
               "@unfiled": 1,
               "bob.md": 1,
               "job.md": 1,
@@ -4758,7 +4186,7 @@
               "job.md": "1"
             },
             "project": {
-              "@review:GTD": "1",
+              "gtd_daily.md": "1",
               "@unfiled": "1",
               "bob.md": "1",
               "job.md": "1",
@@ -4780,8 +4208,7 @@
           "value": 0,
           "display": "0",
           "quality": "ok",
-          "provisional": false,
-          "rolling_median": null
+          "provisional": false
         },
         {
           "date": "2026-10-18",
@@ -4790,7 +4217,6 @@
           "display": "1",
           "quality": "ok",
           "provisional": true,
-          "rolling_median": null,
           "parts": {
             "area": {
               "dev.md": 1
@@ -4856,11 +4282,11 @@
         ],
         "project": [
           {
-            "key": "@review:GTD",
+            "key": "gtd_daily.md",
             "value": 2,
             "display": "2",
             "share": "25%",
-            "label": "GTD review"
+            "label": "gtd_daily"
           },
           {
             "key": "sase.md",
@@ -4978,7 +4404,6 @@
       "label": "dev",
       "kind": "area",
       "area": "dev.md",
-      "subarea": null,
       "path": "dev.md",
       "hue": "blue",
       "project_label": "dev \u00b7 area tasks",
@@ -4988,7 +4413,6 @@
       "label": "gtd",
       "kind": "area",
       "area": "gtd.md",
-      "subarea": null,
       "path": "gtd.md",
       "hue": "orange",
       "project_label": "gtd \u00b7 area tasks",
@@ -4998,7 +4422,6 @@
       "label": "job",
       "kind": "area",
       "area": "job.md",
-      "subarea": null,
       "path": "job.md",
       "hue": "aqua",
       "project_label": "job \u00b7 area tasks",
@@ -5008,7 +4431,6 @@
       "label": "love",
       "kind": "area",
       "area": "love.md",
-      "subarea": null,
       "path": "love.md",
       "hue": "yellow",
       "project_label": "love \u00b7 area tasks",
@@ -5018,7 +4440,6 @@
       "label": "cash",
       "kind": "area",
       "area": "cash.md",
-      "subarea": null,
       "path": "cash.md",
       "hue": "magenta",
       "project_label": "cash \u00b7 area tasks",
@@ -5028,7 +4449,6 @@
       "label": "body",
       "kind": "area",
       "area": "body.md",
-      "subarea": null,
       "path": "body.md",
       "hue": "green",
       "project_label": "body \u00b7 area tasks",
@@ -5038,7 +4458,6 @@
       "label": "learning",
       "kind": "area",
       "area": "learning.md",
-      "subarea": null,
       "path": "learning.md",
       "hue": "violet",
       "project_label": "learning \u00b7 area tasks",
@@ -5048,7 +4467,6 @@
       "label": "home",
       "kind": "area",
       "area": "home.md",
-      "subarea": null,
       "path": "home.md",
       "hue": "red",
       "project_label": "home \u00b7 area tasks",
@@ -5058,7 +4476,6 @@
       "label": "sase",
       "kind": "project",
       "area": "dev.md",
-      "subarea": null,
       "path": "sase.md",
       "hue": "blue",
       "root_parent": "sase.md"
@@ -5067,7 +4484,6 @@
       "label": "bob-tools",
       "kind": "project",
       "area": "dev.md",
-      "subarea": null,
       "path": "bob-tools.md",
       "hue": "blue",
       "root_parent": "sase.md"
@@ -5076,7 +4492,6 @@
       "label": "bob",
       "kind": "project",
       "area": "gtd.md",
-      "subarea": null,
       "path": "bob.md",
       "hue": "orange",
       "root_parent": "bob.md"
@@ -5085,7 +4500,6 @@
       "label": "job_search",
       "kind": "project",
       "area": "job.md",
-      "subarea": null,
       "path": "job_search.md",
       "hue": "aqua",
       "root_parent": "job_search.md"
@@ -5094,7 +4508,6 @@
       "label": "job_resume",
       "kind": "project",
       "area": "job.md",
-      "subarea": null,
       "path": "job_resume.md",
       "hue": "aqua",
       "root_parent": "job_search.md"
@@ -5103,7 +4516,6 @@
       "label": "job_network",
       "kind": "project",
       "area": "job.md",
-      "subarea": null,
       "path": "job_network.md",
       "hue": "aqua",
       "root_parent": "job_search.md"
@@ -5112,7 +4524,6 @@
       "label": "job_2026_apply_29",
       "kind": "project",
       "area": "job.md",
-      "subarea": null,
       "path": "job_2026_apply_29.md",
       "hue": "aqua",
       "root_parent": "job_search.md"
@@ -5121,7 +4532,6 @@
       "label": "love_work",
       "kind": "project",
       "area": "love.md",
-      "subarea": null,
       "path": "love_work.md",
       "hue": "yellow",
       "root_parent": "love_work.md"
@@ -5130,7 +4540,6 @@
       "label": "cash_work",
       "kind": "project",
       "area": "cash.md",
-      "subarea": null,
       "path": "cash_work.md",
       "hue": "magenta",
       "root_parent": "cash_work.md"
@@ -5139,7 +4548,6 @@
       "label": "body_work",
       "kind": "project",
       "area": "body.md",
-      "subarea": null,
       "path": "body_work.md",
       "hue": "green",
       "root_parent": "body_work.md"
@@ -5148,7 +4556,6 @@
       "label": "learning_work",
       "kind": "project",
       "area": "learning.md",
-      "subarea": null,
       "path": "learning_work.md",
       "hue": "violet",
       "root_parent": "learning_work.md"
@@ -5157,36 +4564,28 @@
       "label": "home_work",
       "kind": "project",
       "area": "home.md",
-      "subarea": null,
       "path": "home_work.md",
       "hue": "red",
       "root_parent": "home_work.md"
     },
-    "@review:GTD": {
-      "label": "GTD review",
-      "kind": "bucket",
+    "gtd_daily.md": {
+      "label": "gtd_daily",
+      "kind": "area",
       "area": "gtd.md",
-      "subarea": null,
-      "path": null,
       "hue": "orange",
-      "root_parent": "@review:GTD"
+      "root_parent": "gtd_daily.md",
+      "path": "gtd_daily.md"
     },
     "@unfiled": {
       "label": "unfiled",
       "kind": "bucket",
       "area": "@unfiled",
-      "subarea": null,
-      "path": null,
-      "hue": null,
       "root_parent": "@unfiled"
     },
     "@unlinked": {
       "label": "unlinked",
       "kind": "bucket",
       "area": "@unlinked",
-      "subarea": null,
-      "path": null,
-      "hue": null,
       "root_parent": "@unlinked"
     }
   },
@@ -5199,7 +4598,6 @@
       "minutes": 15,
       "minutes_display": "15m",
       "quality": "ok",
-      "name": null,
       "homes": {
         "state": "attributed",
         "kind": "work",
@@ -5289,7 +4687,6 @@
       "minutes": 15,
       "minutes_display": "15m",
       "quality": "ok",
-      "name": null,
       "homes": {
         "state": "attributed",
         "kind": "work",
@@ -5379,7 +4776,6 @@
       "minutes": 15,
       "minutes_display": "15m",
       "quality": "ok",
-      "name": null,
       "homes": {
         "state": "attributed",
         "kind": "work",
@@ -5469,7 +4865,6 @@
       "minutes": 15,
       "minutes_display": "15m",
       "quality": "ok",
-      "name": null,
       "homes": {
         "state": "attributed",
         "kind": "work",
@@ -5559,7 +4954,6 @@
       "minutes": 15,
       "minutes_display": "15m",
       "quality": "ok",
-      "name": null,
       "homes": {
         "state": "attributed",
         "kind": "work",
@@ -5649,7 +5043,6 @@
       "minutes": 15,
       "minutes_display": "15m",
       "quality": "ok",
-      "name": null,
       "homes": {
         "state": "attributed",
         "kind": "work",
@@ -5739,7 +5132,6 @@
       "minutes": 15,
       "minutes_display": "15m",
       "quality": "ok",
-      "name": null,
       "homes": {
         "state": "attributed",
         "kind": "work",
@@ -5829,7 +5221,6 @@
       "minutes": 15,
       "minutes_display": "15m",
       "quality": "ok",
-      "name": null,
       "homes": {
         "state": "attributed",
         "kind": "work",

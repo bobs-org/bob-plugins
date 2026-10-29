@@ -286,7 +286,7 @@ function taskThemeMarkRawValue(fieldState) {
 // apply without the explicit field. `inherited` is the suggestion's
 // `inherited` member (or a standalone suggestion when the pill line has no
 // field, which never happens in Live Preview but keeps the helper total).
-// Returns `null` when there is no usable reason. Reading, review, and
+// Returns `null` when there is no usable reason. Reading and
 // no-default use these shared phrases. Never throws and never emits `::`.
 function taskThemeReasonFor(inherited) {
   try {
@@ -320,9 +320,6 @@ function taskThemeReasonFor(inherited) {
     }
     if (inherited.source === "reading") {
       return name ? "reading tasks suggest " + name : "reading default";
-    }
-    if (inherited.source === "review") {
-      return name ? "daily review suggests " + name : "daily review";
     }
     if (inherited.source === "task") {
       if (inherited.inherited && typeof inherited.inherited === "object") {

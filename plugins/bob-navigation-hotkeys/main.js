@@ -44638,8 +44638,6 @@ function taskCardThemeSourceLabel(suggestion) {
       return taskCardThemeNoteSource(suggestion)?.stem || "note default";
     case "reading":
       return suggestion.label || "reading task";
-    case "review":
-      return suggestion.label || "daily review";
     case "task":
       return suggestion.label || "this task";
     default:

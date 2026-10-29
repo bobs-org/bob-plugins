@@ -52,7 +52,6 @@
         "p25": 120,
         "p75": 360,
         "days_with_data": 28,
-        "days_met": null,
         "prior": {
           "headline": {
             "value": 240,
@@ -78,13 +77,6 @@
             "display": "66h 16m",
             "share": "54%",
             "label": "dev"
-          },
-          {
-            "key": "@daily",
-            "value": 2443,
-            "display": "40h 43m",
-            "share": "33%",
-            "label": "GTD"
           },
           {
             "key": "gtd.md",
@@ -194,18 +186,11 @@
             "label": "gtd"
           },
           {
-            "key": "@daily",
-            "value": 2443,
-            "display": "40h 43m",
-            "share": "33%",
-            "label": "GTD"
-          },
-          {
-            "key": "@review:GTD",
+            "key": "gtd_daily.md",
             "value": 180,
             "display": "3h",
             "share": "2%",
-            "label": "GTD review"
+            "label": "gtd_daily"
           },
           {
             "key": "@unlinked",
@@ -443,7 +428,6 @@
       "label": "bob",
       "kind": "project",
       "area": "dev.md",
-      "subarea": null,
       "path": "bob.md",
       "hue": "blue",
       "root_parent": "bob.md"
@@ -452,7 +436,6 @@
       "label": "sase",
       "kind": "project",
       "area": "dev.md",
-      "subarea": null,
       "path": "sase.md",
       "hue": "blue",
       "root_parent": "sase.md"
@@ -461,7 +444,6 @@
       "label": "sase_blog",
       "kind": "project",
       "area": "dev.md",
-      "subarea": null,
       "path": "sase_blog.md",
       "hue": "blue",
       "root_parent": "sase_blog.md"
@@ -470,7 +452,6 @@
       "label": "job",
       "kind": "area",
       "area": "job.md",
-      "subarea": null,
       "path": "job.md",
       "hue": "aqua",
       "root_parent": "job.md",
@@ -480,7 +461,6 @@
       "label": "cash",
       "kind": "area",
       "area": "cash.md",
-      "subarea": null,
       "path": "cash.md",
       "hue": "yellow",
       "root_parent": "cash.md",
@@ -490,7 +470,6 @@
       "label": "health",
       "kind": "area",
       "area": "health.md",
-      "subarea": null,
       "path": "health.md",
       "hue": "green",
       "root_parent": "health.md",
@@ -500,7 +479,6 @@
       "label": "chezmoi",
       "kind": "project",
       "area": "dev.md",
-      "subarea": null,
       "path": "chezmoi.md",
       "hue": "blue",
       "root_parent": "chezmoi.md"
@@ -509,7 +487,6 @@
       "label": "vault",
       "kind": "project",
       "area": "dev.md",
-      "subarea": null,
       "path": "vault.md",
       "hue": "blue",
       "root_parent": "vault.md"
@@ -518,54 +495,35 @@
       "label": "gtd",
       "kind": "area",
       "area": "gtd.md",
-      "subarea": null,
       "path": "gtd.md",
       "hue": "orange",
       "root_parent": "gtd.md",
       "project_label": "gtd \u00b7 area tasks"
     },
-    "@daily": {
-      "label": "GTD",
-      "kind": "bucket",
-      "area": "@daily",
-      "subarea": null,
-      "path": null,
-      "hue": null,
-      "root_parent": "@daily"
-    },
-    "@review:GTD": {
-      "label": "GTD review",
-      "kind": "bucket",
+    "gtd_daily.md": {
+      "label": "gtd_daily",
+      "kind": "area",
       "area": "gtd.md",
-      "subarea": null,
-      "path": null,
       "hue": "orange",
-      "root_parent": "@review:GTD",
-      "short_label": "GTD"
+      "root_parent": "gtd_daily.md",
+      "path": "gtd_daily.md"
     },
     "@unlinked": {
       "label": "unlinked",
       "kind": "bucket",
       "area": "@unlinked",
-      "subarea": null,
-      "path": null,
-      "hue": null,
       "root_parent": "@unlinked"
     },
     "@unfiled": {
       "label": "unfiled",
       "kind": "bucket",
       "area": "@unfiled",
-      "subarea": null,
-      "path": null,
-      "hue": null,
       "root_parent": "@unfiled"
     },
     "dev.md": {
       "label": "dev",
       "kind": "area",
       "area": "dev.md",
-      "subarea": null,
       "path": "dev.md",
       "hue": "blue",
       "root_parent": "dev.md",
@@ -588,7 +546,6 @@
     "plan": {
       "key": "plan",
       "name": "PLAN",
-      "hue": null,
       "hue_source": "exempt"
     },
     "chore": {
@@ -654,56 +611,48 @@
     "vibe": {
       "key": "vibe",
       "name": "VIBE",
-      "hue": null,
       "hue_source": "unconfigured",
       "configured": false
     },
     "mail": {
       "key": "mail",
       "name": "MAIL",
-      "hue": null,
       "hue_source": "unconfigured",
       "configured": false
     },
     "meet": {
       "key": "meet",
       "name": "MEET",
-      "hue": null,
       "hue_source": "unconfigured",
       "configured": false
     },
     "admin": {
       "key": "admin",
       "name": "ADMIN",
-      "hue": null,
       "hue_source": "unconfigured",
       "configured": false
     },
     "clean": {
       "key": "clean",
       "name": "CLEAN",
-      "hue": null,
       "hue_source": "unconfigured",
       "configured": false
     },
     "note": {
       "key": "note",
       "name": "NOTE",
-      "hue": null,
       "hue_source": "unconfigured",
       "configured": false
     },
     "sort": {
       "key": "sort",
       "name": "SORT",
-      "hue": null,
       "hue_source": "unconfigured",
       "configured": false
     },
     "inbox": {
       "key": "inbox",
       "name": "INBOX",
-      "hue": null,
       "hue_source": "unconfigured",
       "configured": false
     },

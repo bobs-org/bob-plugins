@@ -138,13 +138,24 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
     }
   }
 
-  pomodoroHomeChipExemptNames() {
+  pomodoroHomeChipTaskLineForBlock(path, blockId) {
     try {
-      const loaded = loadPlanCaps();
-      const caps = loaded && loaded.caps ? loaded.caps : null;
-      return caps && Array.isArray(caps.exempt) ? caps.exempt : ["PLAN"];
+      const metadataCache = this.app && this.app.metadataCache;
+      const vault = this.app && this.app.vault;
+      const line = pomodoroHomeBlockLine(path, blockId, metadataCache, vault);
+      if (!Number.isInteger(line)) {
+        return null;
+      }
+      const text = this.taskThemeLineTextFor(path, line, null);
+      if (typeof text === "string") {
+        return text;
+      }
+      if (typeof this.taskThemeRequestSourceText === "function") {
+        this.taskThemeRequestSourceText(path);
+      }
+      return null;
     } catch (error) {
-      return ["PLAN"];
+      return null;
     }
   }
 
@@ -156,7 +167,7 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
         dailyPath,
         app.metadataCache,
         app.vault,
-        this.pomodoroHomeChipExemptNames(),
+        (path, blockId) => this.pomodoroHomeChipTaskLineForBlock(path, blockId),
       );
       this.logPomodoroHomeChipWarnings(model && model.warnings);
       return model;
@@ -173,7 +184,6 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
         dailyPath,
         this.app && this.app.metadataCache,
         this.app && this.app.vault,
-        this.pomodoroHomeChipExemptNames(),
         warnings,
         new Set(),
         {
@@ -182,6 +192,7 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
           unresolved_links: 0,
           area_color_invalid: 0,
         },
+        (path, blockId) => this.pomodoroHomeChipTaskLineForBlock(path, blockId),
       );
       this.logPomodoroHomeChipWarnings(warnings);
       return model;

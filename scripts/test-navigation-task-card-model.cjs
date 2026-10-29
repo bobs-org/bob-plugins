@@ -251,9 +251,9 @@ test("Task Card theme projection distinguishes explicit themes and inherited not
   });
 });
 
-test("Task Card theme projection labels reading, review, and no-default suggestions", () => {
+test("Task Card theme projection labels reading, note defaults, and no-default suggestions", () => {
   const readingLine = "- [ ] #task Read source #ref ^read";
-  const reviewLine = "- [ ] #task Review inbox ^gtd";
+  const reviewLine = "- [ ] #task Review inbox [root:: gtd_daily] ^gtd";
   const noneLine = "- [ ] #task Ordinary work ^ordinary";
   const { api } = makeTaskThemeApi({
     suggestions: {
@@ -267,8 +267,9 @@ test("Task Card theme projection labels reading, review, and no-default suggesti
       if (request.path === "2026/20261003.md") {
         return {
           theme: theme("PLAN"),
-          source: "review",
-          label: "daily review",
+          source: "note",
+          label: "from gtd_daily",
+          from: { path: "gtd_daily.md", stem: "gtd_daily", kind: "area" },
         };
       }
       if (request.path === "Areas/Plain.md") return null;
@@ -295,7 +296,7 @@ test("Task Card theme projection labels reading, review, and no-default suggesti
     themeApi: api,
   });
   assert.equal(reading.themeProjection.display.text, "[READ] · reading task");
-  assert.equal(review.themeProjection.display.text, "[PLAN] · daily review");
+  assert.equal(review.themeProjection.display.text, "[PLAN] from ● gtd_daily");
   assert.equal(none.themeProjection.display.text, "none · t to set");
 });
 

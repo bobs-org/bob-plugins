@@ -166,8 +166,7 @@ function makeReport(options = {}) {
     homes["bob.md"] = { label: "bob", kind: "project", area: "dev.md", root_parent: "bob.md", path: "bob.md", hue: "blue" };
     homes["sase.md"] = { label: "sase", kind: "project", area: "dev.md", root_parent: "sase.md", path: "sase.md", hue: "blue" };
     homes["dev.md"] = { label: "dev", kind: "area", area: "dev.md", root_parent: "dev.md", path: "dev.md", hue: "blue", project_label: "dev · area tasks" };
-    homes["@review:GTD"] = { label: "GTD review", short_label: "GTD", kind: "bucket", area: "gtd.md", root_parent: "@review:GTD", path: null, hue: "orange" };
-    homes["@daily"] = { label: "GTD", kind: "bucket", area: "@daily", root_parent: "@daily", path: null, hue: null };
+    homes["gtd_daily.md"] = { label: "gtd_daily", kind: "area", area: "gtd.md", root_parent: "gtd_daily.md", path: "gtd_daily.md", hue: "orange" };
     homes["gtd.md"] = { label: "gtd", kind: "area", area: "gtd.md", root_parent: "gtd.md", path: "gtd.md", hue: "orange", project_label: "gtd · area tasks" };
   }
   if (options.screenshotDay) {
@@ -175,7 +174,7 @@ function makeReport(options = {}) {
     homes["sase_pypi_releases.md"] = { label: "sase_pypi_releases", kind: "project", area: "dev.md", root_parent: "sase_pypi_releases.md", path: "sase_pypi_releases.md", hue: "blue" };
     homes["sase_blog.md"] = { label: "sase_blog", kind: "project", area: "dev.md", root_parent: "sase_blog.md", path: "sase_blog.md", hue: "blue" };
     homes["dev.md"] = { label: "dev", kind: "area", area: "dev.md", root_parent: "dev.md", path: "dev.md", hue: "blue", project_label: "dev · area tasks" };
-    homes["@review:GTD"] = { label: "GTD review", short_label: "GTD", kind: "bucket", area: "gtd.md", root_parent: "@review:GTD", path: null, hue: "orange" };
+    homes["gtd_daily.md"] = { label: "gtd_daily", kind: "area", area: "gtd.md", root_parent: "gtd_daily.md", path: "gtd_daily.md", hue: "orange" };
     homes["gtd.md"] = { label: "gtd", kind: "area", area: "gtd.md", root_parent: "gtd.md", path: "gtd.md", hue: "orange", project_label: "gtd · area tasks" };
   }
   if (options.manyRoots) {
@@ -215,11 +214,11 @@ function makeReport(options = {}) {
       parts = { area: Object.fromEntries(entries) };
       partsDisplay = { area: Object.fromEntries(entries.map(([key, amount]) => [key, `${amount}m`])) };
     } else if (date === day && options.sameHueRoots) {
-      parts = { area: { "dev.md": 120, "gtd.md": 65 }, root_parent: { "bob.md": 45, "sase.md": 75, "dev.md": 10, "@daily": 50, "@review:GTD": 20, "gtd.md": 15, "@unlinked": 5 } };
-      partsDisplay = { area: { "dev.md": "2h 0m", "gtd.md": "1h 5m" }, root_parent: { "bob.md": "45m", "sase.md": "1h 15m", "dev.md": "10m", "@daily": "50m", "@review:GTD": "20m", "gtd.md": "15m", "@unlinked": "5m" } };
+      parts = { area: { "dev.md": 120, "gtd.md": 65 }, root_parent: { "bob.md": 45, "sase.md": 75, "dev.md": 10, "@unfiled": 50, "gtd_daily.md": 20, "gtd.md": 15, "@unlinked": 5 } };
+      partsDisplay = { area: { "dev.md": "2h 0m", "gtd.md": "1h 5m" }, root_parent: { "bob.md": "45m", "sase.md": "1h 15m", "dev.md": "10m", "@unfiled": "50m", "gtd_daily.md": "20m", "gtd.md": "15m", "@unlinked": "5m" } };
     } else if (date === day && options.screenshotDay) {
-      parts = { area: { "dev.md": 70, "gtd.md": 45 }, root_parent: { "bob.md": 20, "sase_pypi_releases.md": 5, "sase_blog.md": 45, "@review:GTD": 45 } };
-      partsDisplay = { area: { "dev.md": "1h 10m", "gtd.md": "45m" }, root_parent: { "bob.md": "20m", "sase_pypi_releases.md": "5m", "sase_blog.md": "45m", "@review:GTD": "45m" } };
+      parts = { area: { "dev.md": 70, "gtd.md": 45 }, root_parent: { "bob.md": 20, "sase_pypi_releases.md": 5, "sase_blog.md": 45, "gtd_daily.md": 45 } };
+      partsDisplay = { area: { "dev.md": "1h 10m", "gtd.md": "45m" }, root_parent: { "bob.md": "20m", "sase_pypi_releases.md": "5m", "sase_blog.md": "45m", "gtd_daily.md": "45m" } };
     } else if (date === day && options.manyRoots) {
       const entries = Array.from({ length: 7 }, (_, rootIndex) => [`root-${rootIndex + 1}.md`, (rootIndex + 1) * 20]);
       entries.push(["@unlinked", 15]);

@@ -572,8 +572,12 @@ test("tooltip copy, reason phrases, and no double-colons", () => {
     "reading tasks suggest READ",
   );
   assert.equal(
-    taskThemeReasonFor({ source: "review", theme: { name: "PLAN" } }),
-    "daily review suggests PLAN",
+    taskThemeReasonFor({
+      source: "note",
+      theme: { name: "PLAN" },
+      from: { stem: "gtd_daily" },
+    }),
+    "gtd_daily suggests PLAN",
   );
   assert.equal(taskThemeReasonFor(null), null);
   assert.equal(taskThemeReasonFor({ source: "task", theme: { name: "X" } }), null);

@@ -219,12 +219,12 @@ test("window lanes model matches panel root order and distinct hues", () => {
   assert.deepEqual(model.roots.segments.map((segment) => segment.hue), ordered.map((row) => hues.get(row.key)));
 });
 
-test("legend labels use GTD for @daily and the full label on a GTD collision", () => {
+test("legend labels use the root note name for daily review tasks", () => {
   const model = helpers.statsWindowLanesModel(laneReport());
-  const daily = model.roots.legend.find((entry) => entry.key === "@daily");
-  const review = model.roots.legend.find((entry) => entry.key === "@review:GTD");
-  assert.equal(daily.legendLabel, "GTD");
-  assert.equal(review.legendLabel, "GTD review");
+  const root = model.roots.legend.find((entry) => entry.key === "gtd_daily.md");
+  assert.ok(root);
+  assert.equal(root.legendLabel, "gtd_daily");
+  assert.equal(model.roots.legend.some((entry) => entry.key === "@daily" || entry.key.startsWith("@review:")), false);
 });
 
 test("tones mark unattributed none, muted gray, and hashed other/unnamed as gray", () => {
@@ -232,7 +232,9 @@ test("tones mark unattributed none, muted gray, and hashed other/unnamed as gray
   const tone = (lane, key) => lane.segments.find((segment) => segment.key === key).tone;
   assert.equal(tone(model.roots, "@unlinked"), "none");
   assert.equal(tone(model.roots, "@unfiled"), "none");
-  assert.equal(tone(model.roots, "@daily"), "gray");
+  const dailyRoot = model.roots.segments.find((segment) => segment.key === "gtd_daily.md");
+  assert.equal(dailyRoot.tone, "hue");
+  assert.equal(dailyRoot.hue, "orange");
   assert.equal(tone(model.themes, "(unnamed)"), "none");
   assert.equal(tone(model.themes, "PLAN"), "gray");
   const hashed = helpers.statsThemeRef({

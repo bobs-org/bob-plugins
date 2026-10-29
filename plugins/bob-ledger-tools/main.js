@@ -15555,6 +15555,39 @@ function pomodoroHomeCacheFor(file, metadataCache, vault) {
   }
 }
 
+function pomodoroHomeBlockLine(path, blockId, metadataCache, vault) {
+  try {
+    const id = String(blockId || "");
+    if (!path || !id || !metadataCache) {
+      return null;
+    }
+    let file = null;
+    try {
+      file = vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+    } catch (error) {
+      file = null;
+    }
+    const cache = pomodoroHomeCacheFor(file || { path }, metadataCache, vault);
+    const blocks = cache && cache.blocks && typeof cache.blocks === "object"
+      ? cache.blocks
+      : null;
+    if (!blocks) {
+      return null;
+    }
+    const block = Object.prototype.hasOwnProperty.call(blocks, id)
+      ? blocks[id]
+      : blocks[id.toLowerCase()];
+    const start = block && block.position && block.position.start;
+    return start && Number.isInteger(start.line) && start.line >= 0
+      ? start.line + 1
+      : null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function pomodoroHomeResolveFile(target, sourcePath, dailyPath, metadataCache, vault) {
   try {
     const name = String(target || "").trim();
@@ -15734,28 +15767,6 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
   };
 }
 
-function pomodoroHomeBucket(name, metadataCache, vault, dailyPath, warnings, seen) {
-  const label = `${name} review`;
-  const home = pomodoroHomeResolve(
-    String(name || "").toLowerCase(),
-    dailyPath,
-    metadataCache,
-    vault,
-    warnings,
-    seen,
-  );
-  const usable = Boolean(home && home.area && home.area !== "@unfiled");
-  return {
-    key: `@review:${name}`,
-    label,
-    kind: "bucket",
-    area: usable ? home.area : `@review:${name}`,
-    area_label: usable ? home.area_label : label,
-    subarea: null,
-    hue: usable ? home.hue : null,
-  };
-}
-
 function pomodoroHomeBucketPart(key, label, area, areaLabel, hue) {
   return {
     key,
@@ -15864,49 +15875,65 @@ function pomodoroHomeParseEntries(content) {
   }
 }
 
-function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, warnings, seen, health) {
-  const nameComponents = splitPlanComponents(entry.name);
-  const exemptNames = (Array.isArray(exempt) ? exempt : ["PLAN"])
-    .map((item) => String(item || "").trim())
-    .filter(Boolean);
-  const normalizedExempt = exemptNames
-    .map((item) => normalizePlanComponent(item))
-    .filter(Boolean);
-  const firstExemptName = exemptNames[0] || "PLAN";
-  const exemptSet = new Set(normalizedExempt);
-  const nameAllExempt =
-    nameComponents.length > 0 &&
-    nameComponents.every((name) => exemptSet.has(normalizePlanComponent(name)));
-  // R4: the ^gtd link, not the name, marks the ritual. Pre-scan for a same-day
-  // ^gtd without recording warnings/health; the resolution loop below stays
-  // unchanged for work sessions.
-  const entryLinks = Array.isArray(entry.links) ? entry.links : [];
-  let prescanSameDayGtd = false;
-  for (const link of entryLinks) {
-    const file = pomodoroHomeResolveFile(
-      link.target,
-      dailyPath,
-      dailyPath,
-      metadataCache,
-      vault,
-    );
-    const path = file && typeof file.path === "string" ? file.path : null;
-    if (
-      path &&
-      PLAN_DAILY_PATH_RE.test(path) &&
-      String(link.blockId || "").toLowerCase() === "gtd" &&
-      pomodoroHomePathEqual(path, dailyPath)
-    ) {
-      prescanSameDayGtd = true;
-      break;
+function pomodoroHomeTaskHome(link, file, dailyPath, metadataCache, vault, warnings, seen, taskLineForBlock, health, rootSeen) {
+  const ownHome = pomodoroHomeResolve(
+    file.path,
+    dailyPath,
+    metadataCache,
+    vault,
+    warnings,
+    seen,
+  );
+  if (typeof taskLineForBlock !== "function") {
+    return ownHome;
+  }
+  let line = null;
+  try {
+    line = taskLineForBlock(file.path, String(link.blockId || ""));
+  } catch (error) {
+    line = null;
+  }
+  if (typeof line !== "string") {
+    return ownHome;
+  }
+  const root = rootMarkModel(line, {
+    sourcePath: file.path,
+    metadataCache,
+    vault,
+  });
+  const seenRoots = rootSeen instanceof Set ? rootSeen : new Set();
+  const rootKey = `${file.path.toLowerCase()}#${String(link.blockId || "").toLowerCase()}`;
+  if (root && (root.state === "repair" || root.state === "rolls-up") && !seenRoots.has(rootKey)) {
+    seenRoots.add(rootKey);
+    if (health && root.state === "repair") {
+      health.root_field_invalid = (Number(health.root_field_invalid) || 0) + 1;
+    } else if (health && root.state === "rolls-up") {
+      health.root_field_not_root = (Number(health.root_field_not_root) || 0) + 1;
     }
   }
-  const namedReview =
-    nameAllExempt && (entryLinks.length === 0 || prescanSameDayGtd);
+  if (!root || root.state === "repair") {
+    return ownHome;
+  }
+  const rootPath = root.targetPath;
+  if (!rootPath) {
+    return ownHome;
+  }
+  const rootedHome = pomodoroHomeResolve(
+    rootPath,
+    file.path,
+    metadataCache,
+    vault,
+    warnings,
+    seen,
+  );
+  return rootedHome && rootedHome.key !== "@unfiled" ? rootedHome : ownHome;
+}
+
+function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, warnings, seen, health, taskLineForBlock, rootSeen) {
+  const entryLinks = Array.isArray(entry.links) ? entry.links : [];
   const resolved = [];
   const distinct = new Set();
-  let sameDayReview = false;
-  for (const link of namedReview ? [] : entryLinks) {
+  for (const link of entryLinks) {
     const file = pomodoroHomeResolveFile(
       link.target,
       dailyPath,
@@ -15921,36 +15948,19 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
       continue;
     }
     distinct.add(key);
-    const isDailyGtd =
-      path &&
-      PLAN_DAILY_PATH_RE.test(path) &&
-      String(link.blockId || "").toLowerCase() === "gtd";
-    const sameDayGtd = isDailyGtd && pomodoroHomePathEqual(path, dailyPath);
-    if (sameDayGtd) {
-      sameDayReview = true;
-    }
-    if (isDailyGtd) {
-      const bucketName = firstExemptName;
-      resolved.push({
-        ...pomodoroHomeBucket(bucketName, metadataCache, vault, dailyPath, warnings, seen),
-        source: bucketName,
-      });
-      continue;
-    }
-    if (path && PLAN_DAILY_PATH_RE.test(path)) {
-      resolved.push(
-        pomodoroHomeBucketPart(
-          "@daily",
-          "GTD",
-          "@daily",
-          "GTD",
-          null,
-        ),
-      );
-      continue;
-    }
     const home = file
-      ? pomodoroHomeResolve(path, dailyPath, metadataCache, vault, warnings, seen)
+      ? pomodoroHomeTaskHome(
+          link,
+          file,
+          dailyPath,
+          metadataCache,
+          vault,
+          warnings,
+          seen,
+          taskLineForBlock,
+          health,
+          rootSeen,
+        )
       : null;
     if (home && home.key !== "@unfiled") {
       resolved.push(home);
@@ -15985,36 +15995,16 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
       });
     }
   }
-  const bridge =
-    nameComponents.length === 0 &&
-    normalizedExempt.length > 0 &&
-    sameDayReview;
-  const review = namedReview || bridge;
-  if (review) {
-    const components = namedReview ? nameComponents : [firstExemptName];
-    const parts = [];
-    const count = Math.max(1, components.length);
-    const baseMinutes = Number.isInteger(entry.minutes) ? entry.minutes : 0;
-    components.forEach((component, index) => {
-      const bucketName = component || "PLAN";
-      const bucket = pomodoroHomeBucket(bucketName, metadataCache, vault, dailyPath, warnings, seen);
-      const minutes = Math.floor(baseMinutes / count) + (index === 0 ? baseMinutes % count : 0);
-      parts.push({ ...bucket, tasks: 0, minutes, sourceOrder: index });
-    });
-    return { kind: "review", review: true, parts, nameComponents, resolved };
-  }
   if (resolved.length === 0) {
     if (entry.status === "completed") {
       const part = pomodoroHomeBucketPart("@unlinked", "unlinked", "@unlinked", "unlinked", null);
       return {
         kind: "unlinked",
-        review: false,
         parts: [{ ...part, tasks: 0, minutes: Number.isInteger(entry.minutes) ? entry.minutes : 0, sourceOrder: 0 }],
-        nameComponents,
         resolved,
       };
     }
-    return { kind: "unlinked", review: false, parts: [], nameComponents, resolved };
+    return { kind: "unlinked", parts: [], resolved };
   }
   const taskCount = resolved.length;
   const minutes = Number.isInteger(entry.minutes) ? entry.minutes : 0;
@@ -16032,23 +16022,22 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
   });
   return {
     kind: "work",
-    review: false,
     parts: Array.from(map.values()),
-    nameComponents,
     resolved,
   };
 }
 
-function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt, warnings, seen, health) {
+function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnings, seen, health, taskLineForBlock, rootSeen = new Set()) {
   const aggregate = pomodoroHomeShareParts(
     entry,
     dailyPath,
     metadataCache,
     vault,
-    exempt,
     warnings,
     seen,
     health,
+    taskLineForBlock,
+    rootSeen,
   );
   const attributed = entry.status === "completed";
   const minutesKnown = attributed && Number.isInteger(entry.minutes);
@@ -16067,16 +16056,10 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt
     if (minutesKnown) {
       return Number(part.minutes) || 0;
     }
-    if (aggregate.review) {
-      return 1;
-    }
     return Number(part.tasks) || 0;
   });
   if (weights.reduce((sum, weight) => sum + weight, 0) === 0) {
     weights = parts.map((part) => {
-      if (aggregate.review) {
-        return 1;
-      }
       const tasks = Number(part.tasks) || 0;
       return tasks > 0 ? tasks : 1;
     });
@@ -16088,9 +16071,7 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt
   });
   const label = aggregate.kind === "unlinked" ? "" : pomodoroHomeDisplayLabel(parts);
   let lead = null;
-  if (aggregate.review) {
-    lead = parts[0] || null;
-  } else if (parts.length > 0) {
+  if (parts.length > 0) {
     lead = parts.reduce((best, part) => {
       if (!best) {
         return part;
@@ -16104,16 +16085,7 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt
       return best;
     }, null);
   }
-  const namedReview = aggregate.review && aggregate.nameComponents.length > 0;
-  const nameKeys = new Set(aggregate.nameComponents.map((name) => normalizePlanComponent(name)));
-  const homeKeys = new Set(parts.map((part) => normalizePlanComponent(part.label)));
-  const nameMatchesHomes =
-    nameKeys.size > 0 &&
-    nameKeys.size === homeKeys.size &&
-    Array.from(nameKeys).every((name) => homeKeys.has(name));
-  const chip = aggregate.kind === "unlinked" || namedReview || nameMatchesHomes
-    ? null
-    : label || null;
+  const chip = aggregate.kind === "unlinked" ? null : label || null;
   return {
     state: attributed ? "attributed" : "forecast",
     kind: aggregate.kind,
@@ -16129,7 +16101,7 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt
   };
 }
 
-function pomodoroHomeModels(content, dailyPath, metadataCache, vault, exempt) {
+function pomodoroHomeModels(content, dailyPath, metadataCache, vault, taskLineForBlock) {
   const warnings = [];
   const warningKeys = new Set();
   const health = {
@@ -16138,11 +16110,12 @@ function pomodoroHomeModels(content, dailyPath, metadataCache, vault, exempt) {
     unresolved_links: 0,
     area_color_invalid: 0,
   };
+  const rootSeen = new Set();
   const entries = pomodoroHomeParseEntries(content);
   const sessions = entries.map((entry) => ({
     line: entry.line,
     name: entry.name,
-    ...pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, exempt, warnings, warningKeys, health),
+    ...pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnings, warningKeys, health, taskLineForBlock, rootSeen),
   }));
   health.area_color_invalid = warnings.filter((item) => item.code === "area_color_invalid").length;
   return { entries: sessions, warnings, health };
@@ -29757,20 +29730,11 @@ function statsPanelHomeHue(report, key, bucketGray = true) {
   if (bucketGray && typeof key === "string" && (key === "@unlinked" || key === "@unfiled")) {
     return "gray";
   }
-  if (bucketGray && typeof key === "string" && key.startsWith("@") && !key.startsWith("@review:")) {
+  if (bucketGray && typeof key === "string" && key.startsWith("@")) {
     return "gray";
   }
   const catalog = statsPanelHomeCatalog(report);
   const entry = catalog[key];
-  if (typeof key === "string" && key.startsWith("@review:")) {
-    if (entry && STATS_PANEL_HOME_HUES.includes(entry.hue)) {
-      return entry.hue;
-    }
-    const area = entry && typeof entry.area === "string" ? catalog[entry.area] : null;
-    if (area && STATS_PANEL_HOME_HUES.includes(area.hue)) {
-      return area.hue;
-    }
-  }
   return entry && STATS_PANEL_HOME_HUES.includes(entry.hue) ? entry.hue : "gray";
 }
 
@@ -31116,12 +31080,7 @@ class BobLedgerToolsStatsHomesMixin {
 
   statsPanelHomeFixCopy(key) {
     if (key === "@unlinked") return "link the task to attribute it";
-    if (key === "@unfiled") return "file the task in an area or project";
-    if (key === "@daily") return "Tasks defined in daily notes, including review, group here.";
-    if (typeof key === "string" && key.startsWith("@review:")) {
-      const name = key.slice("@review:".length);
-      return `${name} review stays grouped here; name mixed work to attribute it separately.`;
-    }
+    if (key === "@unfiled") return "file the task in an area or project, or give it a root field";
     return "This is a reserved Stats bucket.";
   }
 
@@ -32150,8 +32109,6 @@ function dayStripLegendLabel(report, dimension, row) {
   try {
     const catalog = typeof statsPanelHomeCatalog === "function" ? statsPanelHomeCatalog(report) : {};
     const entry = catalog && row && typeof catalog[row.key] === "object" ? catalog[row.key] : {};
-    const short = entry && typeof entry.short_label === "string" ? entry.short_label : "";
-    if (short) return short;
     if (dimension === "root_parent" && entry && typeof entry.label === "string" && entry.label) {
       return entry.label;
     }
@@ -47222,13 +47179,24 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
     }
   }
 
-  pomodoroHomeChipExemptNames() {
+  pomodoroHomeChipTaskLineForBlock(path, blockId) {
     try {
-      const loaded = loadPlanCaps();
-      const caps = loaded && loaded.caps ? loaded.caps : null;
-      return caps && Array.isArray(caps.exempt) ? caps.exempt : ["PLAN"];
+      const metadataCache = this.app && this.app.metadataCache;
+      const vault = this.app && this.app.vault;
+      const line = pomodoroHomeBlockLine(path, blockId, metadataCache, vault);
+      if (!Number.isInteger(line)) {
+        return null;
+      }
+      const text = this.taskThemeLineTextFor(path, line, null);
+      if (typeof text === "string") {
+        return text;
+      }
+      if (typeof this.taskThemeRequestSourceText === "function") {
+        this.taskThemeRequestSourceText(path);
+      }
+      return null;
     } catch (error) {
-      return ["PLAN"];
+      return null;
     }
   }
 
@@ -47240,7 +47208,7 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
         dailyPath,
         app.metadataCache,
         app.vault,
-        this.pomodoroHomeChipExemptNames(),
+        (path, blockId) => this.pomodoroHomeChipTaskLineForBlock(path, blockId),
       );
       this.logPomodoroHomeChipWarnings(model && model.warnings);
       return model;
@@ -47257,7 +47225,6 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
         dailyPath,
         this.app && this.app.metadataCache,
         this.app && this.app.vault,
-        this.pomodoroHomeChipExemptNames(),
         warnings,
         new Set(),
         {
@@ -47266,6 +47233,7 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
           unresolved_links: 0,
           area_color_invalid: 0,
         },
+        (path, blockId) => this.pomodoroHomeChipTaskLineForBlock(path, blockId),
       );
       this.logPomodoroHomeChipWarnings(warnings);
       return model;
@@ -49053,15 +49021,6 @@ function pomodoroThemeIsReadingTask(line) {
   return lower === "ref" || lower.startsWith("ref-");
 }
 
-function pomodoroThemeIsDailyReview(path, line) {
-  const id = pomodoroThemeTrailingBlockId(line);
-  return (
-    pomodoroThemeCanonicalDailyPath(path) &&
-    typeof id === "string" &&
-    id.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) === "gtd"
-  );
-}
-
 function pomodoroThemeCatalogTheme(key, canonical, options) {
   const catalog = options.catalog || {};
   const names = catalog.names instanceof Map ? catalog.names : new Map();
@@ -49087,16 +49046,30 @@ function pomodoroThemeMakeSuggestion(key, canonical, source, label, options, ext
   };
 }
 
-function pomodoroThemeResolveNoteDefault(path, options) {
+function pomodoroThemeResolveNoteDefault(path, line, options) {
   const result = { suggestion: null, warnings: [] };
-  if (pomodoroThemeCanonicalDailyPath(path)) {
+  const opts = options && typeof options === "object" ? options : {};
+  const metadataCache = opts.metadataCache || null;
+  const vault = opts.vault || null;
+  let startPath = path;
+  if (typeof line === "string" && line) {
+    const root = rootMarkModel(line, {
+      sourcePath: path,
+      metadataCache,
+      vault,
+    });
+    if (root && root.state !== "repair" && root.targetPath) {
+      startPath = root.targetPath;
+    }
+  }
+  if (pomodoroThemeCanonicalDailyPath(startPath)) {
     return result;
   }
   const facts = pomodoroHomeResolveTaskThemeFacts(
-    path,
-    options.dailyPath,
-    options.metadataCache,
-    options.vault,
+    startPath,
+    opts.dailyPath,
+    metadataCache,
+    vault,
   );
   if (!facts) {
     return result;
@@ -49122,9 +49095,9 @@ function pomodoroThemeResolveNoteDefault(path, options) {
     const stem = pomodoroHomeStem(item.path).toLowerCase();
     const declaring = pomodoroHomeResolveTaskThemeFacts(
       item.path,
-      options.dailyPath,
-      options.metadataCache,
-      options.vault,
+      opts.dailyPath,
+      metadataCache,
+      vault,
     );
     const origin = {
       path: item.path,
@@ -49175,34 +49148,14 @@ function pomodoroThemeResolveWithoutTaskField(path, line, options) {
       warnings: [],
     };
   }
-  const exempt = Array.isArray(config.exempt) ? config.exempt : ["PLAN"];
-  if (pomodoroThemeIsDailyReview(path, line) && exempt.length > 0) {
-    const raw = String(exempt[0] == null ? "" : exempt[0]).trim();
-    if (raw) {
-      const name =
-        pomodoroThemeCanonicalName(raw) ||
-        raw.replace(/[a-z]/g, (letter) => letter.toUpperCase());
-      const key = pomodoroThemeNormalizeKey(name);
-      return {
-        suggestion: pomodoroThemeMakeSuggestion(
-          key,
-          name,
-          "review",
-          "daily review",
-          options,
-        ),
-        warnings: [],
-      };
-    }
-  }
-  return pomodoroThemeResolveNoteDefault(path, options);
+  return pomodoroThemeResolveNoteDefault(path, line, options);
 }
 
 function pomodoroThemeSuggestWithDiagnostics(options = {}) {
   const opts = options && typeof options === "object" ? options : {};
   const path = typeof opts.path === "string" ? opts.path : "";
   if (opts.newTask === true) {
-    return pomodoroThemeResolveNoteDefault(path, opts);
+    return pomodoroThemeResolveNoteDefault(path, null, opts);
   }
   const line = String(opts.line == null ? "" : opts.line);
   const mark = pomodoroThemeTaskMark(line);
@@ -49528,7 +49481,7 @@ function taskThemeMarkRawValue(fieldState) {
 // apply without the explicit field. `inherited` is the suggestion's
 // `inherited` member (or a standalone suggestion when the pill line has no
 // field, which never happens in Live Preview but keeps the helper total).
-// Returns `null` when there is no usable reason. Reading, review, and
+// Returns `null` when there is no usable reason. Reading and
 // no-default use these shared phrases. Never throws and never emits `::`.
 function taskThemeReasonFor(inherited) {
   try {
@@ -49562,9 +49515,6 @@ function taskThemeReasonFor(inherited) {
     }
     if (inherited.source === "reading") {
       return name ? "reading tasks suggest " + name : "reading default";
-    }
-    if (inherited.source === "review") {
-      return name ? "daily review suggests " + name : "daily review";
     }
     if (inherited.source === "task") {
       if (inherited.inherited && typeof inherited.inherited === "object") {
@@ -55084,6 +55034,13 @@ class BobLedgerToolsTaskThemeApiMixin {
           } catch (error) {
             // Refresh after cache fill is best-effort.
           }
+          try {
+            if (typeof self.schedulePomodoroHomeChipRefresh === "function") {
+              self.schedulePomodoroHomeChipRefresh();
+            }
+          } catch (error) {
+            // Home chips may be disabled or unavailable.
+          }
         })
         .catch(() => {
           try {
@@ -55207,7 +55164,6 @@ class BobLedgerToolsTaskThemeApiMixin {
             caps && Object.prototype.hasOwnProperty.call(caps, "readingTheme")
               ? caps.readingTheme
               : "READ",
-          exempt: caps && Array.isArray(caps.exempt) ? caps.exempt : ["PLAN"],
         },
         themeRef: (key, name, known) => this.pomodoroThemeRef(key, name, known),
       });
@@ -60346,23 +60302,13 @@ class BobLedgerToolsTodayLocationMixin {
       return labels;
     }
     try {
-      let exempt = ["PLAN"];
-      try {
-        const loaded = loadPlanCaps();
-        const caps = loaded && loaded.caps ? loaded.caps : null;
-        if (caps && Array.isArray(caps.exempt)) {
-          exempt = caps.exempt;
-        }
-      } catch (error) {
-        exempt = ["PLAN"];
-      }
       const app = this.app || {};
       const model = pomodoroHomeModels(
         content,
         dailyPath,
         app.metadataCache,
         app.vault,
-        exempt,
+        (path, blockId) => this.pomodoroHomeChipTaskLineForBlock(path, blockId),
       );
       const sessions = model && Array.isArray(model.entries) ? model.entries : [];
       for (const session of sessions) {
@@ -64242,9 +64188,11 @@ module.exports.helpers = {
   pomodoroHomeFnv1a,
   pomodoroHomeDuration,
   pomodoroHomeLineMinutes,
+  pomodoroHomeBlockLine,
   pomodoroHomeLinkFromBody,
   pomodoroHomeParseEntries,
   pomodoroHomeResolve,
+  pomodoroHomeTaskHome,
   pomodoroHomeModels,
   pomodoroHomeSessionModel,
   buildPomodoroHomeChipElement,
@@ -64279,7 +64227,6 @@ module.exports.helpers = {
   pomodoroThemeTaskMark,
   pomodoroThemeTrailingBlockId,
   pomodoroThemeIsReadingTask,
-  pomodoroThemeIsDailyReview,
   pomodoroThemeSuggestWithDiagnostics,
   pomodoroHomeResolveTaskThemeFacts,
   pomodoroThemeNoteDefault,

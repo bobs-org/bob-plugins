@@ -423,7 +423,7 @@ test("same-area roots get distinct hues and legend dots match their segments", (
   assert.deepEqual(model.mix.segments.map((segment) => segment.key), expectedOrder.map((row) => row.key), "order is unchanged");
   const byKey = new Map(model.mix.segments.map((segment) => [segment.key, segment.hue]));
   assert.equal(byKey.get("sase.md"), "blue");
-  assert.equal(byKey.get("@daily"), "gray");
+  assert.equal(byKey.get("@unfiled"), "gray");
   assert.equal(byKey.get("bob.md"), "aqua");
   assert.equal(byKey.get("gtd.md"), "yellow");
   assert.equal(byKey.get("dev.md"), "magenta");
@@ -523,27 +523,27 @@ test("facts stack a label head over a faithful value with warnings in the head",
   }
 });
 
-test("short_label paints GTD with a full-label tooltip", () => {
+test("root-parent labels use Bob's full home label", () => {
   const model = modelFor(fixtures.screenshotDay);
-  const entry = model.mix.legend.find((item) => item.key === "@review:GTD");
-  assert.ok(entry, "review bucket is in the legend");
-  assert.equal(entry.legendLabel, "GTD");
-  assert.equal(entry.label, "GTD review");
+  const entry = model.mix.legend.find((item) => item.key === "gtd_daily.md");
+  assert.ok(entry, "root area is in the legend");
+  assert.equal(entry.legendLabel, "gtd_daily");
+  assert.equal(entry.label, "gtd_daily");
   const { root } = paint(model);
-  const item = byAttribute(root, "data-key", "@review:GTD")[0];
-  assert.ok(item, "review legend item paints");
+  const item = byAttribute(root, "data-key", "gtd_daily.md")[0];
+  assert.ok(item, "root legend item paints");
   const label = byClass(item, "bob-day-strip-legend-label")[0];
-  assert.equal(label.textContent, "GTD");
-  assert.equal(item.getAttribute("title"), "GTD review 45m");
+  assert.equal(label.textContent, "gtd_daily");
+  assert.equal(item.getAttribute("title"), "gtd_daily 45m");
 });
 
-test("daily root paints its label in gray after real roots", () => {
+test("unfiled root paints its label in gray after real roots", () => {
   const fixture = fixtures.sameHueRoots;
   const model = modelFor(fixture);
-  const entry = model.mix.legend.find((item) => item.key === "@daily");
-  assert.ok(entry, "daily root is in the legend");
-  assert.equal(entry.legendLabel, "GTD");
-  assert.equal(entry.label, "GTD");
+  const entry = model.mix.legend.find((item) => item.key === "@unfiled");
+  assert.ok(entry, "unfiled root is in the legend");
+  assert.equal(entry.legendLabel, "unfiled");
+  assert.equal(entry.label, "unfiled");
   const realRoots = model.mix.legend.filter((item) => {
     const home = fixture.report.homes[item.key];
     return home && home.kind !== "bucket";
@@ -552,11 +552,11 @@ test("daily root paints its label in gray after real roots", () => {
   assert.ok(model.mix.legend.indexOf(entry) > lastRealRoot, "buckets follow real roots");
   assert.equal(entry.hue, "gray");
   const { root } = paint(model);
-  const item = byAttribute(root, "data-key", "@daily")[0];
-  assert.ok(item, "daily root legend item paints");
-  assert.equal(byClass(item, "bob-day-strip-legend-label")[0].textContent, "GTD");
+  const item = byAttribute(root, "data-key", "@unfiled")[0];
+  assert.ok(item, "unfiled root legend item paints");
+  assert.equal(byClass(item, "bob-day-strip-legend-label")[0].textContent, "unfiled");
   const dot = byClass(item, "bob-day-strip-legend-dot")[0];
-  assert.ok(dot, "daily root has a legend dot");
+  assert.ok(dot, "unfiled root has a legend dot");
   assert.match(dot.getAttribute("class"), /bob-day-strip-hue-gray/);
 });
 
@@ -573,16 +573,16 @@ test("area roots paint the bare label with a project_label tooltip", () => {
   assert.match(item.getAttribute("title"), /gtd · area tasks/);
 });
 
-test("case-insensitive legend collisions fall back to full labels", () => {
+test("case-insensitive legend labels keep their full root names", () => {
   const model = modelFor(fixtures.sameHueRoots);
   const byKey = new Map(model.mix.legend.map((entry) => [entry.key, entry]));
-  assert.equal(byKey.get("@review:GTD").legendLabel, "GTD review");
-  assert.equal(byKey.get("gtd.md").legendLabel, "gtd · area tasks");
-  assert.equal(byKey.get("@daily").legendLabel, "GTD");
+  assert.equal(byKey.get("gtd_daily.md").legendLabel, "gtd_daily");
+  assert.equal(byKey.get("gtd.md").legendLabel, "gtd");
+  assert.equal(byKey.get("@unfiled").legendLabel, "unfiled");
   const { root } = paint(model);
-  assert.equal(byClass(byAttribute(root, "data-key", "@review:GTD")[0], "bob-day-strip-legend-label")[0].textContent, "GTD review");
-  assert.equal(byClass(byAttribute(root, "data-key", "gtd.md")[0], "bob-day-strip-legend-label")[0].textContent, "gtd · area tasks");
-  assert.equal(byClass(byAttribute(root, "data-key", "@daily")[0], "bob-day-strip-legend-label")[0].textContent, "GTD");
+  assert.equal(byClass(byAttribute(root, "data-key", "gtd_daily.md")[0], "bob-day-strip-legend-label")[0].textContent, "gtd_daily");
+  assert.equal(byClass(byAttribute(root, "data-key", "gtd.md")[0], "bob-day-strip-legend-label")[0].textContent, "gtd");
+  assert.equal(byClass(byAttribute(root, "data-key", "@unfiled")[0], "bob-day-strip-legend-label")[0].textContent, "unfiled");
 });
 
 test("dayStripLegendFit fits every root, reserves the counter, and handles empty", () => {

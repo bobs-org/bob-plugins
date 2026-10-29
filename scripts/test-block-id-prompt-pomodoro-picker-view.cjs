@@ -1065,7 +1065,7 @@ test("suggested entry rows render the reason, dot, theme pill, and accessible la
   modal.close();
 });
 
-test("reading and review suggestions render their own reasons and footer phrases", () => {
+test("reading and note suggestions render their own reasons and footer phrases", () => {
   const reading = {
     theme: { key: "read", name: "READ", known: true, hue: "blue", hue_source: "hash" },
     source: "reading",
@@ -1079,20 +1079,20 @@ test("reading and review suggestions render their own reasons and footer phrases
   assert.match(rows[0].getAttribute("aria-label"), /suggested, reading task/);
   modal.close();
 
-  const review = {
+  const note = {
     theme: { key: "plan", name: "PLAN", known: true, hue: "green", hue_source: "hash" },
-    source: "review",
-    label: "daily review",
+    source: "note",
+    label: "from gtd_daily",
+    from: { path: "gtd_daily.md", stem: "gtd_daily", kind: "area", hue: "orange" },
   };
-  // PLAN is exempt, so the footer hides: the review row still explains itself.
   const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
-  const snapshot = makeThemeSnapshot(probe, { suggestion: review, choice: { kind: "entry", index: 0 } });
+  const snapshot = makeThemeSnapshot(probe, { suggestion: note, choice: { kind: "entry", index: 0 } });
   const themesApi = createThemesApi([], { taskThemeOf: stubTaskThemeOf, planThemeChange: stubPlanThemeChange });
-  const reviewModal = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
-  const reviewRows = findAllByClass(reviewModal.contentEl, "bid-ppk-row");
-  assert.match(textOf(findByClass(reviewRows[0], "bid-ppk-suggest")), /Suggested · daily review/);
-  assert.match(reviewRows[0].getAttribute("aria-label"), /suggested, daily review/);
-  reviewModal.close();
+  const noteModal = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
+  const noteRows = findAllByClass(noteModal.contentEl, "bid-ppk-row");
+  assert.match(textOf(findByClass(noteRows[0], "bid-ppk-suggest")), /Suggested · from\s+.*gtd_daily/);
+  assert.match(noteRows[0].getAttribute("aria-label"), /suggested, from gtd_daily/);
+  noteModal.close();
 });
 
 test("footer previews the pending set and clear with the suggestion source", () => {

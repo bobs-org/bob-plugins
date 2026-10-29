@@ -301,7 +301,7 @@ function homesPanelReport() {
     "job_resume.md": { label: "job_resume", kind: "project", area: "job.md", path: "job_resume.md", hue: "aqua", root_parent: "job_2026_apply_29.md" },
     "job_more.md": { label: "job_more", kind: "project", area: "job.md", path: "job_more.md", hue: "aqua", root_parent: "job_2026_apply_29.md" },
     "@unfiled": { label: "unfiled", kind: "bucket", area: "@unfiled", path: null, hue: null, root_parent: "@unfiled" },
-    "@review:GTD": { label: "GTD review", kind: "bucket", area: "gtd.md", path: null, hue: "orange", root_parent: "@review:GTD" },
+    "gtd_daily.md": { label: "gtd_daily", kind: "area", area: "gtd.md", path: "gtd_daily.md", hue: "orange", root_parent: "gtd_daily.md" },
     "gtd.md": { label: "gtd", kind: "area", area: "gtd.md", path: "gtd.md", hue: "orange", project_label: "gtd · area tasks", root_parent: "gtd.md" },
   };
   const worked = report.metrics.find((metric) => metric.id === "worked");
@@ -324,6 +324,7 @@ function homesPanelReport() {
   worked.parts_summary.root_parent = [
     { key: "sase.md", value: 35, display: "35m", share: "47%", label: "sase", apportioned: 5, apportioned_display: "5m" },
     { key: "job_2026_apply_29.md", value: 19, display: "19m", share: "25%", label: "job_2026_apply_29", apportioned: 4, apportioned_display: "4m" },
+    { key: "gtd_daily.md", value: 12, display: "12m", share: "10%", label: "gtd_daily" },
     { key: "dev.md", value: 10, display: "10m", share: "13%", label: "dev · area tasks" },
     { key: "job.md", value: 6, display: "6m", share: "8%", label: "job · area tasks" },
     { key: "@unfiled", value: 5, display: "5m", share: "7%", label: "unfiled" },
@@ -336,8 +337,8 @@ function homesPanelReport() {
     }),
     point("2026-10-10", 55, {
       display: "55m",
-      parts: { area: { "dev.md": 25, "job.md": 25, "@unfiled": 5 }, project: { "sase.md": 20, "bob.md": 15, "dev.md": 10, "job_2026_apply_29.md": 12, "job_resume.md": 4, "job_more.md": 3, "job.md": 6, "@unfiled": 5 }, root_parent: { "sase.md": 35, "dev.md": 10, "job_2026_apply_29.md": 19, "job.md": 6, "@unfiled": 5 } },
-      parts_display: { area: { "dev.md": "25m", "job.md": "25m", "@unfiled": "5m" }, project: { "sase.md": "20m", "bob.md": "15m", "dev.md": "10m", "job_2026_apply_29.md": "12m", "job_resume.md": "4m", "job_more.md": "3m", "job.md": "6m", "@unfiled": "5m" }, root_parent: { "sase.md": "35m", "dev.md": "10m", "job_2026_apply_29.md": "19m", "job.md": "6m", "@unfiled": "5m" } },
+      parts: { area: { "dev.md": 25, "job.md": 25, "@unfiled": 5 }, project: { "sase.md": 20, "bob.md": 15, "dev.md": 10, "job_2026_apply_29.md": 12, "job_resume.md": 4, "job_more.md": 3, "job.md": 6, "@unfiled": 5 }, root_parent: { "sase.md": 35, "gtd_daily.md": 12, "dev.md": 10, "job_2026_apply_29.md": 19, "job.md": 6, "@unfiled": 5 } },
+      parts_display: { area: { "dev.md": "25m", "job.md": "25m", "@unfiled": "5m" }, project: { "sase.md": "20m", "bob.md": "15m", "dev.md": "10m", "job_2026_apply_29.md": "12m", "job_resume.md": "4m", "job_more.md": "3m", "job.md": "6m", "@unfiled": "5m" }, root_parent: { "sase.md": "35m", "gtd_daily.md": "12m", "dev.md": "10m", "job_2026_apply_29.md": "19m", "job.md": "6m", "@unfiled": "5m" } },
       apportioned: { project: { "sase.md": 5, "job_2026_apply_29.md": 4 }, root_parent: { "sase.md": 5, "job_2026_apply_29.md": 4 } },
     }),
   ];
@@ -715,15 +716,14 @@ test("chart pin refreshes Where the time went and Themes honor the pinned span",
   });
 });
 
-test("review rows keep their area hue and a missing homes report keeps the saved view", async () => {
+test("root-field homes keep their area hue and a missing homes report keeps the saved view", async () => {
   await withMissingConfig(async () => {
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
     plugin.onload();
     try {
       const report = homesPanelReport();
-      assert.equal(helpers.statsPanelHomeHue(report, "@review:GTD"), "orange");
-      assert.equal(plugin.statsPanelHomeFixCopy("@daily"), "Tasks defined in daily notes, including review, group here.");
-      assert.equal(plugin.statsPanelHomeFixCopy("@review:PLAN"), "PLAN review stays grouped here; name mixed work to attribute it separately.");
+      assert.equal(helpers.statsPanelHomeHue(report, "gtd_daily.md"), "orange");
+      assert.equal(plugin.statsPanelHomeFixCopy("@unfiled"), "file the task in an area or project, or give it a root field");
       assert.equal(helpers.statsPanelHomeHue(report, "@unfiled"), "gray");
       assert.equal(helpers.statsPanelHomeHue(report, "@unlinked"), "gray");
 
@@ -1009,14 +1009,14 @@ test("statsPanelDistinctHues gives every root its own colour", () => {
       "sase.md": { label: "sase", hue: "blue" },
       "bob.md": { label: "bob", hue: "blue" },
       "dev.md": { label: "dev", hue: "blue" },
-      "@review:GTD": { label: "GTD review", hue: "orange", area: "gtd.md" },
+      "gtd_daily.md": { label: "gtd_daily", hue: "orange", area: "gtd.md" },
       "gtd.md": { label: "gtd", hue: "orange" },
       "@unlinked": { label: "unlinked", hue: null },
     },
   };
   const rows = [
     { key: "sase.md", value: 75, label: "sase" },
-    { key: "@review:GTD", value: 50, label: "GTD review" },
+    { key: "gtd_daily.md", value: 50, label: "gtd_daily" },
     { key: "bob.md", value: 45, label: "bob" },
     { key: "gtd.md", value: 15, label: "gtd" },
     { key: "dev.md", value: 10, label: "dev" },
@@ -1024,7 +1024,7 @@ test("statsPanelDistinctHues gives every root its own colour", () => {
   ];
   const hues = helpers.statsPanelDistinctHues(rows, report);
   assert.equal(hues.get("sase.md"), "blue");
-  assert.equal(hues.get("@review:GTD"), "orange");
+  assert.equal(hues.get("gtd_daily.md"), "orange");
   assert.equal(hues.get("bob.md"), "aqua");
   assert.equal(hues.get("gtd.md"), "yellow");
   assert.equal(hues.get("dev.md"), "magenta");
@@ -1036,12 +1036,12 @@ test("statsPanelDistinctHues does not depend on input order", () => {
     homes: {
       "sase.md": { label: "sase", hue: "blue" },
       "bob.md": { label: "bob", hue: "blue" },
-      "@review:GTD": { label: "GTD review", hue: "orange" },
+      "gtd_daily.md": { label: "gtd_daily", hue: "orange" },
     },
   };
   const forward = [
     { key: "sase.md", value: 75, label: "sase" },
-    { key: "@review:GTD", value: 50, label: "GTD review" },
+    { key: "gtd_daily.md", value: 50, label: "gtd_daily" },
     { key: "bob.md", value: 45, label: "bob" },
   ];
   const backward = [...forward].reverse();
@@ -1055,7 +1055,7 @@ test("statsPanelDistinctHues keeps different area hues and greys buckets", () =>
       "b.md": { label: "b", hue: "aqua" },
       "@unlinked": { label: "unlinked", hue: null },
       "@unfiled": { label: "unfiled", hue: null },
-      "@review:GTD": { label: "GTD review", hue: "orange" },
+      "gtd_daily.md": { label: "gtd_daily", hue: "orange" },
     },
   };
   const hues = helpers.statsPanelDistinctHues([
@@ -1063,13 +1063,13 @@ test("statsPanelDistinctHues keeps different area hues and greys buckets", () =>
     { key: "b.md", value: 5, label: "b" },
     { key: "@unlinked", value: 3, label: "unlinked" },
     { key: "@unfiled", value: 2, label: "unfiled" },
-    { key: "@review:GTD", value: 8, label: "GTD review" },
+    { key: "gtd_daily.md", value: 8, label: "gtd_daily" },
   ], report);
   assert.equal(hues.get("a.md"), "blue");
   assert.equal(hues.get("b.md"), "aqua");
   assert.equal(hues.get("@unlinked"), "gray");
   assert.equal(hues.get("@unfiled"), "gray");
-  assert.equal(hues.get("@review:GTD"), "orange");
+  assert.equal(hues.get("gtd_daily.md"), "orange");
 });
 
 test("statsPanelDistinctHues never throws past eight coloured roots", () => {
@@ -1086,17 +1086,12 @@ test("statsPanelDistinctHues never throws past eight coloured roots", () => {
   for (const row of rows) assert.ok(hues.get(row.key), `keeps a hue for ${row.key}`);
 });
 
-test("root bar gives same-area roots distinct hues and GTD review stays coloured", async () => {
+test("root bar gives same-area roots distinct hues and gtd_daily stays coloured", async () => {
   await withMissingConfig(async () => {
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
     plugin.onload();
     try {
       const report = homesPanelReport();
-      const worked = report.metrics.find((metric) => metric.id === "worked");
-      worked.parts_summary.root_parent.push({ key: "@review:GTD", value: 12, display: "12m", share: "10%", label: "GTD review" });
-      const target = worked.points.find((entry) => entry.date === "2026-10-10");
-      target.parts.root_parent["@review:GTD"] = 12;
-      target.parts_display.root_parent["@review:GTD"] = "12m";
       const { el, view } = renderWithFocus("worked");
       plugin.renderStatsResult(view, { report });
       const segments = el.querySelectorAll(".bob-stats-home-area-segment");
@@ -1109,8 +1104,8 @@ test("root bar gives same-area roots distinct hues and GTD review stays coloured
       }
       const nonGray = [...byTitle.values()].filter((hue) => hue !== "gray");
       assert.equal(new Set(nonGray).size, nonGray.length, "root bar segments differ");
-      const reviewHue = [...byTitle.entries()].find(([title]) => title.includes("GTD review"))?.[1];
-      assert.ok(reviewHue && reviewHue !== "gray", "GTD review is coloured, not gray");
+      const reviewHue = [...byTitle.entries()].find(([title]) => title.includes("gtd_daily"))?.[1];
+      assert.ok(reviewHue && reviewHue !== "gray", "gtd_daily is coloured, not gray");
       const areaRows = el.querySelectorAll(".bob-stats-home-area-row");
       const headerHues = areaRows.map((row) => String(row.getAttribute("class") || ""));
       assert.ok(headerHues.some((names) => names.includes("bob-stats-home-blue")), "area headers keep the blue area hue");

@@ -24,23 +24,13 @@ class BobLedgerToolsTodayLocationMixin {
       return labels;
     }
     try {
-      let exempt = ["PLAN"];
-      try {
-        const loaded = loadPlanCaps();
-        const caps = loaded && loaded.caps ? loaded.caps : null;
-        if (caps && Array.isArray(caps.exempt)) {
-          exempt = caps.exempt;
-        }
-      } catch (error) {
-        exempt = ["PLAN"];
-      }
       const app = this.app || {};
       const model = pomodoroHomeModels(
         content,
         dailyPath,
         app.metadataCache,
         app.vault,
-        exempt,
+        (path, blockId) => this.pomodoroHomeChipTaskLineForBlock(path, blockId),
       );
       const sessions = model && Array.isArray(model.entries) ? model.entries : [];
       for (const session of sessions) {

@@ -205,7 +205,9 @@ editor whose path matches; it returns `null` when the path/line cannot be read
 or no rule suggests a theme. It never substitutes another active note or
 stale Tasks metadata. Suggestions contain the Rust `ThemeRef` shape and
 `source`/`label`; only note suggestions have `from`, and task-field suggestions
-always have `inherited`, including `null`. A repaired field adds
+always have `inherited`, including `null`. A valid task `[root:: NOTE]` field
+starts the note-default walk at that note; a field needing repair falls back
+to the task's own residence. A repaired theme field adds
 `repair: "duplicate" | "invalid"` only when a suggestion remains. `from`
 contains the declaring note's path, lowercase stem, `area`/`project` kind,
 root-area hue when available, and the residence-to-declarer path chain.

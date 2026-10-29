@@ -47,7 +47,7 @@ Recent row; only themes of the open Today rows are left out.
 When Ledger Tools can suggest a theme for the cursor task, empty search
 preselects that Pomodoro in place (or offers a new one when creation is
 allowed) and labels the row `Suggested · this task`, `Suggested · reading
-task`, `Suggested · daily review`, or `Suggested · from ● <stem>`. A second
+task`, or `Suggested · from ● <stem>`. A second
 footer line appears only when the selected row would set or clear the task
 theme, for example `this task becomes FIX · sase_blog suggests WRITE · ⌥↵
 link once`. Enter on the untouched default links without storing a field.

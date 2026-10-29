@@ -6997,9 +6997,6 @@ function pomodoroThemeSuggestionReason(suggestion) {
     if (suggestion.source === "reading") {
       return { kind: "reading", text: "reading task", themeName, themeHue };
     }
-    if (suggestion.source === "review") {
-      return { kind: "review", text: "daily review", themeName, themeHue };
-    }
     if (suggestion.source === "note") {
       const from = suggestion.from && typeof suggestion.from === "object"
         ? suggestion.from
@@ -7057,9 +7054,6 @@ function describePomodoroThemeSuggestionSource(target) {
     }
     if (target.source === "reading") {
       return `reading tasks suggest ${name}`;
-    }
-    if (target.source === "review") {
-      return `daily review suggests ${name}`;
     }
     if (target.source === "task") {
       return `this task suggests ${name}`;
@@ -8687,8 +8681,8 @@ class PomodoroLinkPickerModal extends Modal {
   }
 
   // Suggestion reason under the row meta: `Suggested · this task`,
-  // `Suggested · reading task`, `Suggested · daily review`, or
-  // `Suggested · from ● <stem>` plus the suggested theme pill. The dot
+  // `Suggested · reading task`, or `Suggested · from ● <stem>` plus the
+  // suggested theme pill. The dot
   // carries the place hue (from.hue) and the pill the theme hue, reusing
   // the PT6 swatch tokens.
   renderSuggestionReason(textEl, row) {

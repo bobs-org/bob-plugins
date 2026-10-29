@@ -331,6 +331,13 @@ class BobLedgerToolsTaskThemeApiMixin {
           } catch (error) {
             // Refresh after cache fill is best-effort.
           }
+          try {
+            if (typeof self.schedulePomodoroHomeChipRefresh === "function") {
+              self.schedulePomodoroHomeChipRefresh();
+            }
+          } catch (error) {
+            // Home chips may be disabled or unavailable.
+          }
         })
         .catch(() => {
           try {
@@ -454,7 +461,6 @@ class BobLedgerToolsTaskThemeApiMixin {
             caps && Object.prototype.hasOwnProperty.call(caps, "readingTheme")
               ? caps.readingTheme
               : "READ",
-          exempt: caps && Array.isArray(caps.exempt) ? caps.exempt : ["PLAN"],
         },
         themeRef: (key, name, known) => this.pomodoroThemeRef(key, name, known),
       });

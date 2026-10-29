@@ -28,7 +28,7 @@ theme/chore names, grouped daily drill-down, and empty/all-null states. The
 `synthetic-homes.json` fixture adds the long `job_2026_apply_29` stem, many area hues,
 an all-bucket split, and expandable project groups. `synthetic-lanes.json` is a
 presentation-only 4W-shaped report for the Stats window bars: about 13 roots
-including `@daily`, `@unlinked`, and `@unfiled`, and about 22 themes with
+including `@unlinked` and `@unfiled`, and about 22 themes with
 config, pin, exempt, unconfigured, and `(unnamed)` hues plus long hour
 displays. Synthetic values and summaries are
 intentionally not internally consistent and must never be treated as vault results or

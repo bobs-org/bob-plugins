@@ -102,9 +102,6 @@ function pomodoroThemeSuggestionReason(suggestion) {
     if (suggestion.source === "reading") {
       return { kind: "reading", text: "reading task", themeName, themeHue };
     }
-    if (suggestion.source === "review") {
-      return { kind: "review", text: "daily review", themeName, themeHue };
-    }
     if (suggestion.source === "note") {
       const from = suggestion.from && typeof suggestion.from === "object"
         ? suggestion.from
@@ -162,9 +159,6 @@ function describePomodoroThemeSuggestionSource(target) {
     }
     if (target.source === "reading") {
       return `reading tasks suggest ${name}`;
-    }
-    if (target.source === "review") {
-      return `daily review suggests ${name}`;
     }
     if (target.source === "task") {
       return `this task suggests ${name}`;

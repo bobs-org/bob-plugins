@@ -127,8 +127,8 @@ restores the unmarked rendering:
   16% light / 24% dark hue tint; there is no glyph and no `theme` label.
   Unknown names stay neutral with a dotted underline, and duplicate or
   invalid fields show the dashed repair treatment instead of a
-  trustworthy pill. No field means no pill, even when a note, reading, or
-  review default exists; a stored field on a closed task still shows its
+  trustworthy pill. No field means no pill, even when a note or reading
+  default exists; a stored field on a closed task still shows its
   history. Native Dataview `theme | NAME` chips are replaced only when they
   represent an explicit task-line field; a page-default `task.theme` is
   left alone. Surrounding links, emphasis, tags, and nested lists stay in
@@ -136,7 +136,7 @@ restores the unmarked rendering:
   the pill puts the caret in the field. Hover or focus resolves the
   inherited reason lazily from the originating note
   (`Task theme FIX · sase_blog suggests WRITE · Ctrl+Shift+P t to change`;
-  reading, review, and no-default rows use their shared phrases). Source
+  reading and no-default rows use their shared phrases). Source
   mode, fenced code, inline code, and prose stay raw. The **Toggle task
   theme marks** session command (default on) restores raw fields without
   writing them, independent of **Toggle Pomodoro theme colors** (default
@@ -154,7 +154,7 @@ daily `bob-plan` blocks as live section-over-cap counts that agree with their
 Tasks sections (the BLOCKED badge stays informational and neutral with no
 cap), the CROWDED chip, the `bob-ready-notes` ranked-bar block, `## Tasks`
 heading chips, Pomodoro home chips (quiet lowercase chips with area-hue dots
-derived from linked task notes), Pomodoro theme pills (one soft tint per
+derived from linked task notes, following each task's `[root:: NOTE]` field), Pomodoro theme pills (one soft tint per
 `+`-separated component of the ` — NAME` tail, with a gray pill for exempt
 themes such as PLAN, a tooltip naming the hue and day count, and a session
 toggle now active in every window through the shared tint gate), and the display-only 🍅 Today mark on open

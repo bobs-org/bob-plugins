@@ -634,8 +634,8 @@ class PomodoroLinkPickerModal extends Modal {
   }
 
   // Suggestion reason under the row meta: `Suggested · this task`,
-  // `Suggested · reading task`, `Suggested · daily review`, or
-  // `Suggested · from ● <stem>` plus the suggested theme pill. The dot
+  // `Suggested · reading task`, or `Suggested · from ● <stem>` plus the
+  // suggested theme pill. The dot
   // carries the place hue (from.hue) and the pill the theme hue, reusing
   // the PT6 swatch tokens.
   renderSuggestionReason(textEl, row) {

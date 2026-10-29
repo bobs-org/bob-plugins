@@ -174,6 +174,16 @@ test("Alt+P matches Ctrl+Enter for roll, decay, project, and counted task writes
   }
 });
 
+test("Task Card Ctrl+Enter and Alt+P roll preserve bracket and parenthesis theme fields", async () => {
+  for (const field of ["[theme:: FIX]", "(theme:: FIX)"]) {
+    const source = `- [ ] #task Roll ${field} [priority:: medium] [scheduled:: 2026-10-01] ^roll`;
+    const card = await runTaskAction(source, "card");
+    const quick = await runTaskAction(source, "quick");
+    assert.ok(card.content.includes(field), `Task Card retains ${field}`);
+    assert.ok(quick.content.includes(field), `Alt+P retains ${field}`);
+  }
+});
+
 test("Alt+P matches Ctrl+Enter for a counted Task Link batch", async () => {
   const options = {
     linkContent: "- [[Tasks#^a1]]\n- [[Tasks#^b1]]",

@@ -1296,6 +1296,66 @@ test("runtime task move groups open-editor source and destination changes", asyn
   assert.match(notices.at(-1), /Moved 1 task to Dest/);
 });
 
+test("Ctrl+Shift+M runtime move preserves bracket and parenthesis theme fields", async () => {
+  for (const field of ["[theme:: FIX]", "(theme:: FIX)"]) {
+    notices.length = 0;
+    const sourceFile = { path: "Source.md", basename: "Source", extension: "md" };
+    const destinationFile = { path: "Area.md", basename: "Area", extension: "md" };
+    const sourceContent = `- [ ] #task Preserve ${field} ^preserve`;
+    const destinationContent = [
+      "---",
+      'type: "[[area]]"',
+      "---",
+      "## Tasks",
+      "",
+    ].join("\n");
+    const sourceEditor = new TransactionEditor(sourceContent, { line: 0, ch: 4 });
+    const contents = new Map([
+      [sourceFile.path, sourceContent],
+      [destinationFile.path, destinationContent],
+    ]);
+    const view = { file: sourceFile, editor: sourceEditor };
+    const plugin = new NavigationHotkeysPlugin();
+    plugin.app = {
+      metadataCache: {
+        getFileCache: (file) => file.path === destinationFile.path
+          ? { frontmatter: { type: "[[area]]" } }
+          : null,
+      },
+      vault: {
+        getMarkdownFiles: () => [sourceFile, destinationFile],
+        getAbstractFileByPath: (path) => [sourceFile, destinationFile].find((file) => file.path === path) || null,
+        cachedRead: async (file) => contents.get(file.path),
+        process: async (file, transform) => {
+          contents.set(file.path, transform(contents.get(file.path)));
+        },
+      },
+      workspace: {},
+    };
+    plugin.getFocusedMarkdownEditorView = () => view;
+    plugin.getActiveMarkdownView = () => view;
+    plugin.getOpenMarkdownEditorForPath = (path) => path === sourceFile.path ? sourceEditor : null;
+    plugin.handledCountedTaskMoveEvents = new WeakSet();
+    const inputState = { keyBuffer: [], prefixRepeat: [], motionRepeat: [], repeat: null, getRepeat: () => null };
+    const cm = {
+      state: { vim: { mode: "normal", inputState } },
+      getCursor: () => sourceEditor.getCursor(),
+    };
+    sourceEditor.cm = { cm };
+
+    assert.equal(plugin.handleCountedTaskMovePhysicalKeydown(taskMoveDispatchEvent()), true);
+    const picker = plugin.activeTaskMoveDestinationPicker;
+    assert.ok(picker, "Ctrl+Shift+M opened the real destination picker");
+    const destinationIndex = picker.visibleItems.findIndex((item) => item.file.path === destinationFile.path);
+    assert.notEqual(destinationIndex, -1);
+    await picker.openItemAtIndex(destinationIndex);
+
+    assert.doesNotMatch(sourceEditor.getValue(), /#task Preserve/);
+    assert.ok(contents.get(destinationFile.path).includes(field), `move retains ${field}`);
+    assert.match(notices.at(-1), /Moved 1 task to Area/);
+  }
+});
+
 test("runtime task move guards destination, auxiliary, and rollback failures", async () => {
   const sourceFile = { path: "Source.md", basename: "Source", extension: "md" };
   const destinationFile = { path: "Dest.md", basename: "Dest", extension: "md" };

@@ -41,8 +41,50 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       const fresh = planTaskCard(this.buildTaskCardContext());
       return fresh && fresh.themeProjection ? fresh.themeProjection : null;
     } catch (_error) {
-      return this.currentTaskCardThemeProjection();
+      return null;
     }
+  }
+
+  taskCardThemeStageIsActive(generation = this.taskCardThemeStageGeneration) {
+    return Boolean(
+      this.pickerOpen &&
+      this.stage === "value" &&
+      this.taskCardThemeStageProjection &&
+      generation === this.taskCardThemeStageGeneration
+    );
+  }
+
+  taskCardThemeStageItemsForQuery(query) {
+    const projection = this.taskCardThemeStageProjection;
+    const api = this.getTaskCardThemeApi();
+    if (!projection || !api) {
+      this.items = [];
+      this.taskCardThemeStageRows = [];
+      return [];
+    }
+    const rawQuery = typeof query === "string" ? query : "";
+    this.taskCardThemeQuery = rawQuery;
+    const stage = buildTaskCardThemeStageModel(projection, api, {
+      query: rawQuery,
+      ledgerApi: this.getTaskCardLedgerApi(),
+    });
+    const items = stage.rows.map((row) => Object.freeze({
+      key: row.kind === "default" ? "__default" : `theme-${row.key}`,
+      themeKind: row.kind,
+      themeKey: row.key,
+      themeName: row.name,
+      title: row.kind === "default" ? "Use default" : row.title,
+      detail: row.detail,
+      searchText: row.kind === "default"
+        ? `use default ${row.detail}`
+        : `${row.title || ""} ${row.detail || ""} ${row.key || ""}`,
+    }));
+    this.taskCardThemeStageRows = items;
+    this.items = items;
+    const normalizedQuery = rawQuery.trim().toLowerCase();
+    return normalizedQuery
+      ? items.filter((item) => fuzzyMatchesText(item.searchText, normalizedQuery))
+      : items;
   }
 
   openTaskCardThemeStage() {
@@ -59,13 +101,19 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       new Notice("Ledger Tools task-theme API is unavailable");
       return false;
     }
+    if (typeof api.setTaskTheme !== "function" || typeof api.clearTaskTheme !== "function") {
+      new Notice("Ledger Tools task-theme write methods are unavailable");
+      return false;
+    }
     this.taskCardThemeStageProjection = projection;
-    this.taskCardThemeQuery = typeof this.taskCardThemeQuery === "string" ? this.taskCardThemeQuery : "";
-    this.taskCardThemeSelectedKey = this.taskCardThemeSelectedKey || null;
+    this.taskCardThemeStageGeneration = (this.taskCardThemeStageGeneration || 0) + 1;
+    const generation = this.taskCardThemeStageGeneration;
+    this.taskCardThemeQuery = "";
+    this.taskCardThemeSelectedKey = null;
     this.showTaskCardThemeStage();
     try {
       this.taskCardThemeUnsubscribe = this.subscribeTaskCardThemeCatalog(() => {
-        if (this.pickerOpen && this.stage === "value" && this.taskCardThemeStageProjection) {
+        if (this.taskCardThemeStageIsActive(generation)) {
           const query = this.inputEl && typeof this.inputEl.value === "string" ? this.inputEl.value : this.taskCardThemeQuery || "";
           this.taskCardThemeQuery = query;
           this.showTaskCardThemeStage({ keepQuery: true });
@@ -78,7 +126,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       if (api && typeof api.fetch === "function") {
         Promise.resolve(api.fetch())
           .then(() => {
-            if (this.pickerOpen && this.stage === "value" && this.taskCardThemeStageProjection) {
+            if (this.taskCardThemeStageIsActive(generation)) {
               this.showTaskCardThemeStage({ keepQuery: true });
             }
           })
@@ -116,8 +164,23 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     this.taskCardThemeUnsubscribe = null;
   }
 
+  clearTaskCardThemeStage() {
+    this.clearTaskCardThemeSubscription();
+    this.taskCardThemeStageGeneration = (this.taskCardThemeStageGeneration || 0) + 1;
+    this.taskCardThemeCommitGeneration = (this.taskCardThemeCommitGeneration || 0) + 1;
+    this.taskCardThemeCommitInFlight = false;
+    this.taskCardThemeStageProjection = null;
+    this.taskCardThemeStageRows = null;
+    this.taskCardThemeQuery = "";
+    this.taskCardThemeSelectedKey = null;
+  }
+
   showTaskCardThemeStage(options = {}) {
-    const projection = this.freshTaskCardThemeProjection() || this.currentTaskCardThemeProjection();
+    // Catalog refreshes repaint the choices against the exact projection the
+    // user saw on entry. A fresh task/default context is only established by
+    // opening the stage again, never by an asynchronous repaint.
+    const projection = options.projection || this.taskCardThemeStageProjection ||
+      this.freshTaskCardThemeProjection() || this.currentTaskCardThemeProjection();
     if (!projection || !projection.available) {
       new Notice((projection && projection.unavailableReason) || "Theme editing is unavailable");
       this.returnToTaskCard({ rebuild: true });
@@ -149,10 +212,16 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     this.stage = "value";
     this.selectedPropertyItem = null;
     this.pendingTask = null;
-    const selectedKey = this.taskCardThemeSelectedKey;
+    const activeItem = this.visibleItems && this.visibleItems[this.selectedIndex];
+    const selectedKey = activeItem && activeItem.key
+      ? activeItem.key
+      : this.taskCardThemeSelectedKey;
+    const visibleItems = query.trim()
+      ? items.filter((item) => fuzzyMatchesText(item.searchText, query.trim().toLowerCase()))
+      : items;
     let selectedIndex = 0;
     if (selectedKey) {
-      const found = items.findIndex((item) => item.key === selectedKey || item.themeKey === selectedKey);
+      const found = visibleItems.findIndex((item) => item.key === selectedKey || item.themeKey === selectedKey);
       if (found >= 0) {
         selectedIndex = found;
       }
@@ -205,13 +274,16 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     }
     const api = this.getTaskCardThemeApi();
     try {
-      if (api && typeof api.hueFor === "function" && item.themeKey) {
-        const hue = navigationPomodoroThemeHue(api, item.themeKey, item.themeName);
-        if (hue) {
-          const dot = main.createSpan({ cls: `bob-task-card-theme-dot is-${hue}`, text: "● " });
-          if (dot && typeof dot.setAttribute === "function") {
-            dot.setAttribute("aria-hidden", "true");
-          }
+      if (item.themeKey) {
+        const hue = api && typeof api.hueFor === "function"
+          ? navigationPomodoroThemeHue(api, item.themeKey, item.themeName)
+          : null;
+        const swatch = main.createSpan({
+          cls: `bob-cnp-theme-swatch${hue ? ` is-${hue}` : " is-muted"}`,
+        });
+        if (swatch && typeof swatch.setAttribute === "function") {
+          swatch.setAttribute("aria-hidden", "true");
+          swatch.setAttribute("title", hue ? `Theme hue: ${hue}` : "Theme hue unavailable");
         }
       }
     } catch (_error) {
@@ -225,10 +297,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
   }
 
   async commitTaskCardThemeStageItem(item) {
-    if (!item) {
-      return false;
-    }
-    if (this.opening) {
+    if (!item || this.stage !== "value" || !this.taskCardThemeStageProjection) {
       return false;
     }
     this.taskCardThemeSelectedKey = item.key || item.themeKey || null;
@@ -244,55 +313,95 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
   }
 
   async applyTaskCardThemeChoice(selection) {
-    const projection = this.freshTaskCardThemeProjection() || this.currentTaskCardThemeProjection();
+    if (this.taskCardThemeCommitInFlight) {
+      return false;
+    }
+    this.taskCardThemeCommitInFlight = true;
+    const commitGeneration = (this.taskCardThemeCommitGeneration || 0) + 1;
+    this.taskCardThemeCommitGeneration = commitGeneration;
+    const isCurrent = () =>
+      this.taskCardThemeCommitGeneration === commitGeneration &&
+      this.pickerOpen &&
+      this.stage === "value";
+    const projection = this.taskCardThemeStageProjection || this.currentTaskCardThemeProjection();
     const api = this.getTaskCardThemeApi();
-    if (!projection || !projection.available) {
-      new Notice((projection && projection.unavailableReason) || "Theme editing is unavailable");
-      return false;
-    }
-    if (!api || typeof api.setTaskTheme !== "function" || typeof api.clearTaskTheme !== "function") {
-      new Notice("Ledger Tools task-theme API is unavailable");
-      return false;
-    }
-    const ledgerApi = this.getTaskCardLedgerApi();
-    const plan = planTaskCardThemeEdits(projection, selection, api, { ledgerApi });
-    if (!plan.valid) {
-      new Notice(plan.error || "That theme cannot be set on a task");
-      return false;
-    }
-    const fresh = this.freshTaskCardThemeProjection() || projection;
-    const edits = [];
-    for (const edit of plan.edits) {
-      const check = taskCardThemeRevalidateEdit(edit, fresh);
-      if (!check.ok) {
-        new Notice(check.reason || "Task changed; reopen the card");
+    try {
+      if (!projection || !projection.available) {
+        new Notice((projection && projection.unavailableReason) || "Theme editing is unavailable");
         return false;
       }
-      edits.push(edit);
+      if (!api || typeof api.setTaskTheme !== "function" || typeof api.clearTaskTheme !== "function") {
+        new Notice("Ledger Tools task-theme API is unavailable");
+        return false;
+      }
+      const ledgerApi = this.getTaskCardLedgerApi();
+      const plan = planTaskCardThemeEdits(projection, selection, api, { ledgerApi });
+      if (!plan.valid) {
+        new Notice(plan.error || "That theme cannot be set on a task");
+        return false;
+      }
+      let edits = plan.edits;
+      if (this.isLinkSession()) {
+        if (!isCurrent()) return false;
+        const applied = await this.writeTaskCardLinkedThemeEdits(edits, api, selection, isCurrent);
+        if (applied !== true || !isCurrent()) return false;
+      } else {
+        const fresh = this.freshTaskCardThemeProjection();
+        if (!fresh || !fresh.available) {
+          new Notice((fresh && fresh.unavailableReason) || "Task context changed; reopen the card");
+          return false;
+        }
+        edits = [];
+        for (const edit of plan.edits) {
+          const check = taskCardThemeRevalidateEdit(edit, fresh);
+          if (!check.ok) {
+            new Notice(check.reason || "Task changed; reopen the card");
+            return false;
+          }
+          const refreshed = fresh.targets.find((target) => target.identity.id === edit.target.identity.id);
+          const freshPlan = planTaskCardThemeEdits(
+            { ...fresh, targets: [refreshed], mixed: false },
+            selection,
+            api,
+            { ledgerApi },
+          );
+          if (!freshPlan.valid) {
+            new Notice(freshPlan.error || "That theme cannot be set on a task");
+            return false;
+          }
+          edits.push(...freshPlan.edits);
+        }
+        if (!isCurrent()) return false;
+        const applied = await this.writeTaskCardThemeEdits(edits, api, isCurrent);
+        if (applied !== true || !isCurrent()) return false;
+      }
+      this.clearTaskCardThemeSubscription();
+      this.taskCardThemeStageGeneration = (this.taskCardThemeStageGeneration || 0) + 1;
+      this.taskCardThemeStageProjection = null;
+      this.taskCardThemeStageRows = null;
+      this.taskCardThemeQuery = "";
+      this.taskCardThemeSelectedKey = null;
+      // Theme-only edits never advance the review walk.
+      this.reviewOrigin = null;
+      this.reviewBeforeLine = "";
+      this.reviewLineIndex = null;
+      this.reviewOriginContent = null;
+      this.close();
+      return true;
+    } finally {
+      if (this.taskCardThemeCommitGeneration === commitGeneration) {
+        this.taskCardThemeCommitInFlight = false;
+      }
     }
-    const applied = await this.writeTaskCardThemeEdits(edits, api);
-    if (applied !== true) {
-      return false;
-    }
-    this.clearTaskCardThemeSubscription();
-    this.taskCardThemeStageProjection = null;
-    this.taskCardThemeQuery = "";
-    this.taskCardThemeSelectedKey = null;
-    // Theme-only edits never advance the review walk.
-    this.reviewOrigin = null;
-    this.reviewBeforeLine = "";
-    this.reviewLineIndex = null;
-    this.reviewOriginContent = null;
-    this.close();
-    return true;
   }
 
-  async writeTaskCardThemeEdits(edits, api) {
+  async writeTaskCardThemeEdits(edits, api, isCurrent = () => true) {
+    if (!isCurrent()) return false;
     if (!Array.isArray(edits) || edits.length === 0) {
       return false;
     }
     if (this.isLinkSession()) {
-      return await this.writeTaskCardLinkedThemeEdits(edits, api);
+      return false;
     }
     if (this.isCountedSession()) {
       return await this.writeTaskCardCountedThemeEdits(edits, api);
@@ -352,13 +461,11 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     }
     if (edit.action === "none") {
       new Notice("Theme is already set; nothing was written");
-      this.close();
       return true;
     }
     const nextLine = this.taskCardThemeNewLineFor(lines[line], edit, api);
     if (nextLine === lines[line]) {
       new Notice("Theme is already set; nothing was written");
-      this.close();
       return true;
     }
     const cursor = typeof editor.getCursor === "function" ? editor.getCursor() : this.cursor;
@@ -410,9 +517,6 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     }
     if (changed === 0) {
       new Notice(skippedClosed > 0 ? `Closed tasks keep their theme history; nothing was written` : "Themes are already set; nothing was written");
-      if (skippedClosed === 0) {
-        this.close();
-      }
       return skippedClosed === 0;
     }
     const ending = content.includes("\r\n") ? "\r\n" : "\n";
@@ -429,61 +533,104 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     return true;
   }
 
-  async writeTaskCardLinkedThemeEdits(edits, api) {
+  async writeTaskCardLinkedThemeEdits(edits, api, selection, isCurrent = () => true) {
     let changed = 0;
     let skippedClosed = 0;
     let skippedStale = 0;
     const failures = [];
+    const paths = Array.from(new Set(
+      edits.map((edit) => normalizeVaultRelativePath(edit && edit.target && edit.target.identity && edit.target.identity.path || ""))
+        .filter(Boolean),
+    ));
+    let files = null;
+    try {
+      files = await this.readVaultStageFiles(paths);
+    } catch (_error) {
+      files = null;
+    }
+    if (!isCurrent()) return false;
+    if (!files) {
+      new Notice("Could not read linked task notes; no themes were written");
+      return false;
+    }
+    const preparedEdits = [];
     for (const edit of edits) {
       const identity = edit.target.identity;
-      const targetPath = identity.path;
+      const targetPath = normalizeVaultRelativePath(identity.path || "");
       if (!targetPath || !Number.isInteger(identity.line)) {
         skippedStale += 1;
-        continue;
+        new Notice("Linked task changed; reopen the card");
+        return false;
       }
       if (this.isTaskCardThemeClosedLine(identity.rawLine)) {
         skippedClosed += 1;
         continue;
       }
-      if (edit.action === "none") {
-        continue;
-      }
-      let freshContent = null;
-      try {
-        if (typeof this.readVaultStageFiles === "function") {
-          const files = await this.readVaultStageFiles([targetPath]);
-          freshContent = files ? files.get(targetPath) : null;
-        } else if (this.plugin && typeof this.plugin.readDependencyNoteContent === "function") {
-          freshContent = await this.plugin.readDependencyNoteContent(targetPath, null, "");
-        }
-      } catch (_error) {
-        freshContent = null;
-      }
+      const freshContent = files.get(targetPath);
       if (typeof freshContent !== "string") {
-        failures.push(targetPath);
-        continue;
+        new Notice(`Could not read ${targetPath}; no themes were written`);
+        return false;
       }
       const freshLines = freshContent.split(/\r?\n/);
       if (freshLines[identity.line] !== identity.rawLine || !isObsidianTaskLine(freshLines[identity.line])) {
-        skippedStale += 1;
+        new Notice("Linked task changed; reopen the card");
+        return false;
+      }
+      const freshProjection = buildTaskCardThemeProjection({
+        themeApi: api,
+        filePath: targetPath,
+        content: freshContent,
+        noteContents: new Map([[targetPath, freshContent]]),
+        targets: [{
+          path: targetPath,
+          line: identity.line,
+          rawLine: freshLines[identity.line],
+          blockId: identity.blockId,
+          content: freshContent,
+        }],
+      });
+      const check = taskCardThemeRevalidateEdit(edit, freshProjection);
+      if (!check.ok) {
+        new Notice(check.reason || "Linked task changed; reopen the card");
+        return false;
+      }
+      const freshPlan = planTaskCardThemeEdits(freshProjection, selection, api, {
+        ledgerApi: this.getTaskCardLedgerApi(),
+      });
+      if (!freshPlan.valid) {
+        new Notice(freshPlan.error || "That theme cannot be set on a task");
+        return false;
+      }
+      const freshEdit = freshPlan.edits[0];
+      if (freshEdit.action === "none") {
         continue;
       }
-      const nextLine = this.taskCardThemeNewLineFor(freshLines[identity.line], edit, api);
-      if (nextLine === freshLines[identity.line]) {
-        continue;
-      }
-      let prepared = null;
-      try {
-        prepared = await this.plugin.prepareDependencyTargetNote(targetPath, {
+      const nextLine = this.taskCardThemeNewLineFor(freshLines[identity.line], freshEdit, api);
+      if (nextLine !== freshLines[identity.line]) {
+        preparedEdits.push({
+          path: targetPath,
           line: identity.line,
           from: freshLines[identity.line],
           text: nextLine,
         });
+      }
+    }
+    // All note reads, task preimages, and inherited defaults are validated
+    // before the first guarded write. A later note failure is reported as a
+    // partial result because cross-note writes cannot share one transaction.
+    for (const preparation of preparedEdits) {
+      if (!isCurrent()) break;
+      let prepared = null;
+      try {
+        prepared = await this.plugin.prepareDependencyTargetNote(
+          preparation.path,
+          preparation,
+        );
       } catch (_error) {
         prepared = null;
       }
       if (!prepared || prepared.ok !== true) {
-        failures.push(targetPath);
+        failures.push(preparation.path);
         continue;
       }
       changed += 1;
@@ -498,7 +645,6 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     }
     if (changed === 0 && failures.length === 0) {
       new Notice("Themes are already set; nothing was written");
-      this.close();
       return true;
     }
     if (failures.length > 0 || skippedStale > 0) {
@@ -514,22 +660,33 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
   }
 
   handleTaskCardThemeKeydown(event) {
-    if (!event || event.isComposing === true || event.keyCode === 229) {
+    if (!event) {
       return false;
+    }
+    if (event.isComposing === true || event.keyCode === 229) {
+      return this.stage === "value" && this.taskCardThemeStageRows && event.key === "Enter";
     }
     if (this.stage === "value" && this.taskCardThemeStageRows && isCtrlKey(event, "d")) {
       event.preventDefault();
       event.stopPropagation();
-      void this.applyTaskCardThemeDefault().catch(() => {
+      if (event.repeat === true || this.opening || this.taskCardThemeCommitInFlight) {
+        return true;
+      }
+      this.opening = true;
+      void this.applyTaskCardThemeDefault().then((applied) => {
+        if (applied === true && this.pickerOpen) {
+          this.close();
+        }
+      }).catch(() => {
         new Notice("Could not clear the theme");
+      }).finally(() => {
+        this.opening = false;
       });
       return true;
     }
     if (this.stage === "value" && this.taskCardThemeStageRows && event.key === "Escape") {
       // Cancellation writes nothing and clears the stage subscription.
-      this.clearTaskCardThemeSubscription();
-      this.taskCardThemeStageProjection = null;
-      this.taskCardThemeStageRows = null;
+      this.clearTaskCardThemeStage();
       return false;
     }
     return false;

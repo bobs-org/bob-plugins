@@ -277,9 +277,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   }
 
   returnToTaskCard(options = {}) {
-    if (typeof this.clearTaskCardThemeSubscription === "function") this.clearTaskCardThemeSubscription();
-    this.taskCardThemeStageProjection = null;
-    this.taskCardThemeStageRows = null;
+    if (typeof this.clearTaskCardThemeStage === "function") this.clearTaskCardThemeStage();
     this.revealQuickRollCard();
     this.pendingScheduleReason = null;
     this.pendingScheduleReview = null;
@@ -755,9 +753,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   // Invalidate any pending vault-stage refresh so it never paints into the
   // closed modal.
   onClose() {
-    if (typeof this.clearTaskCardThemeSubscription === "function") this.clearTaskCardThemeSubscription();
-    this.taskCardThemeStageProjection = null;
-    this.taskCardThemeStageRows = null;
+    if (typeof this.clearTaskCardThemeStage === "function") this.clearTaskCardThemeStage();
     this.clearRelationLabelSubscriptions();
     if (this.plugin && this.plugin.activeBulletPropertyPicker === this) {
       this.plugin.activeBulletPropertyPicker = null;

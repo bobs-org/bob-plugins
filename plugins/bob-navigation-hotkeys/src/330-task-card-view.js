@@ -88,6 +88,17 @@ function renderTaskCardThemeHeader(container, theme) {
       if (part.type === "value" && theme.tooltip) {
         span.setAttribute("title", theme.tooltip);
       }
+      if (part.type === "value" && part.themeKey) {
+        span.textContent = "";
+        const pill = span.createSpan({
+          cls: `bob-task-card-theme-pill${part.hue ? ` is-${part.hue}` : ""}`,
+        });
+        pill.createSpan({
+          cls: `bob-cnp-theme-swatch${part.hue ? ` is-${part.hue}` : " is-muted"}`,
+          attr: { "aria-hidden": "true" },
+        });
+        pill.createSpan({ cls: "bob-task-card-theme-pill-name", text: part.text });
+      }
     }
   }
   return line;

@@ -56,7 +56,9 @@ Module._load = function loadWithModalHarness(request, parent, isMain) {
 };
 
 const NavigationHotkeysPlugin = require("../plugins/bob-navigation-hotkeys/main.js");
+const LedgerToolsPlugin = require("../plugins/bob-ledger-tools/main.js");
 const { helpers } = NavigationHotkeysPlugin;
+const ledgerHelpers = LedgerToolsPlugin.helpers;
 Module._load = originalLoad;
 
 const {
@@ -209,6 +211,111 @@ function makeEditor(content) {
   };
 }
 
+function makeStatefulEditor(initialContent) {
+  let content = String(initialContent || "");
+  let cursor = { line: 0, ch: 0 };
+  let transactions = 0;
+  let replacements = 0;
+  const offsetAt = (position) => {
+    const lines = content.split("\n");
+    const line = Math.max(0, Math.min(Number(position && position.line) || 0, lines.length - 1));
+    const ch = Math.max(0, Number(position && position.ch) || 0);
+    let offset = 0;
+    for (let index = 0; index < line; index += 1) offset += lines[index].length + 1;
+    return Math.min(content.length, offset + ch);
+  };
+  const replace = (text, from, to) => {
+    const start = offsetAt(from);
+    const end = offsetAt(to);
+    content = `${content.slice(0, start)}${String(text || "")}${content.slice(end)}`;
+  };
+  return {
+    getValue: () => content,
+    getLine: (line) => content.split("\n")[line] ?? null,
+    getCursor: () => ({ ...cursor }),
+    setCursor(line, ch) {
+      cursor = line && typeof line === "object" ? { line: line.line, ch: line.ch } : { line, ch };
+    },
+    replaceRange(text, from, to) {
+      replacements += 1;
+      replace(text, from, to);
+    },
+    transaction(spec = {}) {
+      transactions += 1;
+      const changes = Array.isArray(spec.changes) ? spec.changes.slice() : [];
+      changes.sort((left, right) => offsetAt(right.from) - offsetAt(left.from));
+      for (const change of changes) replace(change.text, change.from, change.to);
+      const selection = spec.selection && spec.selection.from;
+      if (selection) cursor = { line: selection.line, ch: selection.ch };
+    },
+    writeCounts: () => ({ transactions, replacements }),
+  };
+}
+
+function noteTheme(name, stem = "sase_blog", hue = "green") {
+  return {
+    theme: { key: name.toLowerCase(), name, known: true },
+    source: "note",
+    label: `from ${stem}`,
+    from: { path: `Areas/${stem}.md`, stem, hue },
+  };
+}
+
+function makeTaskThemeHarness(options = {}) {
+  const listeners = new Set();
+  const apiCalls = [];
+  const api = {
+    version: 1,
+    snapshot() {
+      return {
+        themes: options.catalog || [],
+        configured_themes: options.configured || [],
+      };
+    },
+    historyRows({ query = "" } = {}) {
+      const normalized = String(query).trim().toLowerCase();
+      return (options.recent || []).filter((entry) =>
+        !normalized || `${entry.key} ${entry.name}`.toLowerCase().includes(normalized),
+      );
+    },
+    hueFor(key) {
+      const found = [...(options.catalog || []), ...(options.configured || [])]
+        .find((entry) => String(entry.key).toLowerCase() === String(key).toLowerCase());
+      return { hue: found && found.hue ? found.hue : null };
+    },
+    isKnownTheme(key) {
+      if (typeof options.isKnownTheme === "function") return options.isKnownTheme(key);
+      const known = [...(options.catalog || []), ...(options.configured || [])]
+        .some((entry) => String(entry.key).toLowerCase() === String(key).toLowerCase());
+      return known;
+    },
+    suggestFor(request) {
+      apiCalls.push({ ...request });
+      return typeof options.suggestFor === "function" ? options.suggestFor(request) : null;
+    },
+    taskThemeOf: (line) => ledgerHelpers.pomodoroThemeTaskFieldState(line),
+    setTaskTheme: (line, name) => ledgerHelpers.pomodoroThemeSetTaskTheme(line, name),
+    clearTaskTheme: (line) => ledgerHelpers.pomodoroThemeClearTaskTheme(line),
+    fetch: () => options.fetch ? options.fetch() : Promise.resolve(),
+    onChange(callback) {
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    },
+  };
+  const ledgerApi = {
+    themes: api,
+    caps: () => typeof options.caps === "function"
+      ? options.caps()
+      : { exempt: ["PLAN"] },
+  };
+  return {
+    api,
+    apiCalls,
+    app: { plugins: { plugins: { "bob-ledger-tools": { api: ledgerApi } } } },
+    notify: () => { for (const listener of [...listeners]) listener(); },
+  };
+}
+
 function openPickerRoute(content, pickerOptions = {}, extras = {}) {
   const editor = extras.editor || makeEditor(content);
   if (Number.isInteger(extras.line)) {
@@ -262,6 +369,60 @@ function openPropertyPicker(options = {}) {
   );
   modal.open();
   return { modal, editor, plugin };
+}
+
+function openTaskThemeStage(options = {}) {
+  const themeHarness = options.themeHarness || makeTaskThemeHarness(options.themeOptions);
+  const content = options.content || "- [ ] #task Theme task ^theme-task";
+  const editor = options.editor || makeStatefulEditor(content);
+  const opened = openPropertyPicker({
+    ...options,
+    content,
+    editor,
+    app: options.app || themeHarness.app,
+  });
+  dispatchCardKey(opened.modal, "t");
+  return { ...opened, editor, themeHarness };
+}
+
+function installThemeVault(themeHarness, notes, options = {}) {
+  const files = new Map(Object.keys(notes).map((path) => [path, { path, basename: path.split("/").pop(), extension: "md" }]));
+  const writes = [];
+  let reads = 0;
+  themeHarness.app.vault = {
+    getAbstractFileByPath: (path) => files.get(path) || null,
+    getMarkdownFiles: () => [...files.values()],
+    cachedRead: async (file) => {
+      reads += 1;
+      if (options.readGate) await options.readGate;
+      return notes[file.path] ?? null;
+    },
+    process: async (file, transform) => {
+      writes.push(file.path);
+      if (options.failPath === file.path) throw new Error("injected note write failure");
+      notes[file.path] = transform(notes[file.path]);
+    },
+  };
+  themeHarness.app.workspace = { getLeavesOfType: () => [] };
+  return {
+    files,
+    notes,
+    reads: () => reads,
+    writes,
+  };
+}
+
+function linkSessionForTargets(targets) {
+  const links = targets.map((target) => `- [[${target.path}#^${target.blockId}]]`);
+  return {
+    kind: "task-link",
+    valid: true,
+    requestedCount: targets.length,
+    actualCount: targets.length,
+    clamped: false,
+    targets: links.map((_line, line) => ({ line })),
+    resolved: targets,
+  };
 }
 
 function openTaskCardLinkWriter(options = {}) {
@@ -348,6 +509,7 @@ test("styles share key-card tokens and compact Task Card dimensions", () => {
   assert.match(STYLES, /\.bob-task-card-wide/);
   assert.match(STYLES, /\.bob-task-card-theme-value\.is-unknown/);
   assert.match(STYLES, /\.bob-task-card-theme-value\.is-repair/);
+  assert.match(STYLES, /\.bob-task-card-theme-pill/);
 });
 
 test("card renderer paints header, banner, strip, stable rows, more, and footer from the model", () => {
@@ -429,6 +591,7 @@ test("Task Card theme header shows unknown and repair signals without invoking s
         },
       }),
       isKnownTheme: () => false,
+      hueFor: () => ({ hue: "orange" }),
       setTaskTheme: () => { writes += 1; },
       clearTaskTheme: () => { writes += 1; },
     },
@@ -437,6 +600,7 @@ test("Task Card theme header shows unknown and repair signals without invoking s
   renderTaskCardView(root, model);
   const themeLine = byClass(root, "bob-task-card-theme-line")[0];
   const themeValue = byClass(root, "bob-task-card-theme-value")[0];
+  const themePill = byClass(root, "bob-task-card-theme-pill")[0];
   const themeDot = byClass(root, "bob-task-card-theme-dot")[0];
   const themeRow = descendants(root).find(
     (item) => item.attributes.id === "bob-task-card-row-theme",
@@ -447,6 +611,9 @@ test("Task Card theme header shows unknown and repair signals without invoking s
   assert.match(themeText, /sase_blog suggests WRITE/);
   assert.ok(themeValue.classes.includes("is-unknown"));
   assert.equal(themeValue.attributes.title.includes("not in the catalog"), true);
+  assert.ok(themePill);
+  assert.match(flattenText(themePill), /\[OLD\]/);
+  assert.ok(byClass(themePill, "bob-cnp-theme-swatch")[0].classes.includes("is-orange"));
   assert.ok(themeDot.classes.includes("is-green"));
   assert.match(flattenText(themeDot), /●/);
   assert.ok(themeRow);
@@ -838,6 +1005,260 @@ test("Theme property row is selectable while its editor remains read-only", () =
   assert.equal(modal.stage, "task-card");
   assert.equal(modal.taskCardSelectedRowId, "theme");
   assert.equal(editor.writes(), 0);
+});
+
+test("Task Card theme stage shows a typed new theme on input and commits the real Enter callback", async () => {
+  let releaseFetch;
+  const fetchPending = new Promise((resolve) => { releaseFetch = resolve; });
+  const source = "- [ ] #task Typed theme [[Notes/Keep]] [fresh:: today] [root:: project] ^typed";
+  const themeHarness = makeTaskThemeHarness({
+    catalog: [{ key: "write", name: "WRITE", hue: "green" }],
+    recent: [{ key: "write", name: "WRITE" }],
+    suggestFor: () => noteTheme("WRITE"),
+    fetch: () => fetchPending,
+  });
+  const editor = makeStatefulEditor(source);
+  const { modal } = openTaskThemeStage({ content: source, editor, themeHarness });
+  assert.equal(modal.stage, "value");
+
+  modal.inputEl.value = "Brand New";
+  modal.inputEl.listeners.input({});
+  assert.deepEqual(modal.visibleItems.map((item) => item.themeKind), ["new"]);
+  assert.equal(modal.visibleItems[0].themeName, "BRAND NEW");
+
+  pressKey(modal, "Enter");
+  pressKey(modal, "Enter");
+  await nextTurn();
+  const after = editor.getValue();
+  assert.match(after, /\[theme:: BRAND NEW\]/);
+  assert.match(after, /\[\[Notes\/Keep\]\]/);
+  assert.match(after, /\[fresh:: today\]/);
+  assert.match(after, /\[root:: project\]/);
+  assert.ok(after.endsWith("^typed"));
+  assert.equal(editor.writeCounts().replacements, 1, "base picker Enter owns one commit");
+  assert.equal(modal.isOpen, false);
+  releaseFetch();
+  await nextTurn();
+  assert.equal(modal.contentEl.children.length, 0, "a late catalog fetch cannot repaint a closed stage");
+});
+
+test("Task Card theme row click and Ctrl+D use real setters and keep repair history safe", async () => {
+  const source = "- [ ] #task Click theme [root:: work] ^click-theme";
+  const clickHarness = makeTaskThemeHarness({
+    catalog: [{ key: "fix", name: "FIX", hue: "blue" }],
+    recent: [{ key: "fix", name: "FIX" }],
+    suggestFor: () => noteTheme("WRITE"),
+  });
+  const clickEditor = makeStatefulEditor(source);
+  const clicked = openTaskThemeStage({ content: source, editor: clickEditor, themeHarness: clickHarness });
+  const rowIndex = clicked.modal.visibleItems.findIndex((item) => item.themeKind === "recent");
+  assert.ok(rowIndex >= 0);
+  click(byClass(clicked.modal.resultsEl, "bob-cnp-row")[rowIndex]);
+  await nextTurn();
+  assert.match(clickEditor.getValue(), /\[theme:: FIX\]/);
+  assert.match(clickEditor.getValue(), /\[root:: work\]/);
+  assert.equal(clicked.modal.isOpen, false);
+
+  const repairLine = "- [ ] #task Repair [theme:: bad] [theme:: ALSO] [root:: repair-root] ^repair";
+  const clearHarness = makeTaskThemeHarness({
+    caps: () => { throw new Error("caps unavailable"); },
+    suggestFor: () => noteTheme("PLAN"),
+  });
+  const clearEditor = makeStatefulEditor(repairLine);
+  const cleared = openTaskThemeStage({ content: repairLine, editor: clearEditor, themeHarness: clearHarness });
+  assert.ok(cleared.modal.taskCardThemeStageRows.some((item) => item.themeKind === "default"));
+  pressKey(cleared.modal, "d", { ctrlKey: true });
+  await nextTurn();
+  assert.doesNotMatch(clearEditor.getValue(), /\[theme::/);
+  assert.match(clearEditor.getValue(), /\[root:: repair-root\]/);
+  assert.ok(clearEditor.getValue().endsWith("^repair"));
+  assert.equal(cleared.modal.isOpen, false);
+});
+
+test("Task Card theme catalog repaint keeps query and keyboard selection; changed defaults refuse", async () => {
+  const recent = [
+    { key: "write", name: "WRITE" },
+    { key: "build", name: "BUILD" },
+  ];
+  const themeHarness = makeTaskThemeHarness({
+    catalog: recent.map((entry) => ({ ...entry, hue: "blue" })),
+    recent,
+    suggestFor: () => noteTheme("WRITE"),
+  });
+  const source = "- [ ] #task Refresh [root:: refresh] ^refresh";
+  const { modal, editor } = openTaskThemeStage({ content: source, themeHarness });
+  pressKey(modal, "ArrowDown");
+  assert.equal(modal.visibleItems[modal.selectedIndex].themeKey, "write");
+  themeHarness.notify();
+  assert.equal(modal.visibleItems[modal.selectedIndex].themeKey, "write");
+
+  modal.inputEl.value = "bui";
+  modal.inputEl.listeners.input({});
+  assert.equal(modal.inputEl.value, "bui");
+  assert.equal(modal.visibleItems[modal.selectedIndex].themeKey, "build");
+  themeHarness.notify();
+  assert.equal(modal.inputEl.value, "bui");
+  assert.equal(modal.visibleItems[modal.selectedIndex].themeKey, "build");
+  modal.close();
+  assert.equal(editor.writeCounts().replacements, 0);
+
+  let inherited = "WRITE";
+  const staleHarness = makeTaskThemeHarness({
+    catalog: [{ key: "build", name: "BUILD" }],
+    recent: [{ key: "build", name: "BUILD" }],
+    suggestFor: () => noteTheme(inherited),
+  });
+  const staleEditor = makeStatefulEditor("- [ ] #task Stale default ^stale");
+  const stale = openTaskThemeStage({ content: staleEditor.getValue(), editor: staleEditor, themeHarness: staleHarness });
+  inherited = "OTHER";
+  staleHarness.notify();
+  const buildIndex = stale.modal.visibleItems.findIndex((item) => item.themeKey === "build");
+  assert.ok(buildIndex >= 0);
+  click(byClass(stale.modal.resultsEl, "bob-cnp-row")[buildIndex]);
+  await nextTurn();
+  assert.equal(staleEditor.getValue(), "- [ ] #task Stale default ^stale");
+  assert.equal(stale.modal.isOpen, true);
+  assert.ok(notices.some((message) => message.includes("Default changed; reopen the card")));
+});
+
+test("counted Task Card theme edits use one editor transaction for all selected tasks", async () => {
+  const first = "- [ ] #task First [root:: one] ^first";
+  const second = "- [/] #task Second [root:: two] ^second";
+  const content = `${first}\n${second}`;
+  const themeHarness = makeTaskThemeHarness({
+    catalog: [{ key: "fix", name: "FIX" }],
+    recent: [{ key: "fix", name: "FIX" }],
+    suggestFor: (request) => noteTheme(request.line === 1 ? "WRITE" : "BUILD"),
+  });
+  const editor = makeStatefulEditor(content);
+  const { modal } = openTaskThemeStage({
+    content,
+    editor,
+    themeHarness,
+    context: {
+      taskSession: {
+        valid: true,
+        explicit: true,
+        requestedCount: 2,
+        actualCount: 2,
+        targets: [
+          { line: 0, rawLine: first },
+          { line: 1, rawLine: second },
+        ],
+      },
+    },
+  });
+  const fixIndex = modal.visibleItems.findIndex((item) => item.themeKey === "fix");
+  click(byClass(modal.resultsEl, "bob-cnp-row")[fixIndex]);
+  await nextTurn();
+  const after = editor.getValue();
+  assert.match(after, /First .*\[theme:: FIX\].*\[root:: one\].*\^first/);
+  assert.match(after, /Second .*\[theme:: FIX\].*\[root:: two\].*\^second/);
+  assert.deepEqual(editor.writeCounts(), { transactions: 1, replacements: 0 });
+  assert.equal(modal.isOpen, false);
+});
+
+test("linked Task Card theme edits recompute full-note inheritance and write two targets in one note", async () => {
+  const first = "- [ ] #task Alpha [root:: alpha-root] ^alpha";
+  const second = "- [ ] #task Beta [root:: beta-root] ^beta";
+  const note = `${first}\n${second}`;
+  const targets = [
+    { path: "Tasks/Shared.md", content: note, line: 0, rawLine: first, blockId: "alpha", displayText: "Alpha" },
+    { path: "Tasks/Shared.md", content: note, line: 1, rawLine: second, blockId: "beta", displayText: "Beta" },
+  ];
+  const themeHarness = makeTaskThemeHarness({
+    catalog: [{ key: "fix", name: "FIX" }],
+    recent: [{ key: "fix", name: "FIX" }],
+    suggestFor: (request) => noteTheme(request.line === 1 ? "WRITE" : "BUILD"),
+  });
+  const vault = installThemeVault(themeHarness, { "Tasks/Shared.md": note });
+  const source = "- [[Tasks/Shared.md#^alpha]]\n- [[Tasks/Shared.md#^beta]]";
+  const { modal } = openTaskThemeStage({
+    content: source,
+    filePath: "Daily/2026-10-29.md",
+    themeHarness,
+    context: { propertyContext: { isObsidianTask: false }, linkSession: linkSessionForTargets(targets) },
+  });
+  const fixIndex = modal.visibleItems.findIndex((item) => item.themeKey === "fix");
+  click(byClass(modal.resultsEl, "bob-cnp-row")[fixIndex]);
+  await nextTurn();
+  assert.match(vault.notes["Tasks/Shared.md"], /Alpha .*\[theme:: FIX\].*\[root:: alpha-root\].*\^alpha/);
+  assert.match(vault.notes["Tasks/Shared.md"], /Beta .*\[theme:: FIX\].*\[root:: beta-root\].*\^beta/);
+  assert.deepEqual(vault.writes, ["Tasks/Shared.md", "Tasks/Shared.md"]);
+  assert.ok(themeHarness.apiCalls.some((call) => call.text === note), "suggestFor receives the full matched note");
+  assert.equal(modal.isOpen, false);
+});
+
+test("linked Task Card theme writes report a later-note failure as a partial save", async () => {
+  const alpha = "- [ ] #task Alpha [root:: alpha-root] ^alpha";
+  const beta = "- [ ] #task Beta [root:: beta-root] ^beta";
+  const targets = [
+    { path: "Tasks/Alpha.md", content: alpha, line: 0, rawLine: alpha, blockId: "alpha", displayText: "Alpha" },
+    { path: "Tasks/Beta.md", content: beta, line: 0, rawLine: beta, blockId: "beta", displayText: "Beta" },
+  ];
+  const themeHarness = makeTaskThemeHarness({
+    catalog: [{ key: "fix", name: "FIX" }],
+    recent: [{ key: "fix", name: "FIX" }],
+    suggestFor: () => noteTheme("WRITE"),
+  });
+  const vault = installThemeVault(themeHarness, {
+    "Tasks/Alpha.md": alpha,
+    "Tasks/Beta.md": beta,
+  }, { failPath: "Tasks/Beta.md" });
+  const source = "- [[Tasks/Alpha#^alpha]]\n- [[Tasks/Beta#^beta]]";
+  const { modal } = openTaskThemeStage({
+    content: source,
+    filePath: "Daily/2026-10-29.md",
+    themeHarness,
+    context: { propertyContext: { isObsidianTask: false }, linkSession: linkSessionForTargets(targets) },
+  });
+  const fixIndex = modal.visibleItems.findIndex((item) => item.themeKey === "fix");
+  click(byClass(modal.resultsEl, "bob-cnp-row")[fixIndex]);
+  await nextTurn();
+  assert.match(vault.notes["Tasks/Alpha.md"], /\[theme:: FIX\]/);
+  assert.doesNotMatch(vault.notes["Tasks/Beta.md"], /\[theme:: FIX\]/);
+  assert.ok(notices.some((message) => /Theme saved on 1 task · failed in 1 note/.test(message)));
+  assert.equal(modal.isOpen, false);
+});
+
+test("closing a linked theme stage during note reads cancels the pending write and duplicate Enter", async () => {
+  const targetLine = "- [ ] #task Wait for read ^wait";
+  const targetNote = `# Heading\n${targetLine}`;
+  let releaseRead;
+  const readGate = new Promise((resolve) => { releaseRead = resolve; });
+  const targets = [{
+    path: "Tasks/Wait.md",
+    content: targetNote,
+    line: 1,
+    rawLine: targetLine,
+    blockId: "wait",
+    displayText: "Wait for read",
+  }];
+  const themeHarness = makeTaskThemeHarness({
+    catalog: [{ key: "fix", name: "FIX" }],
+    recent: [{ key: "fix", name: "FIX" }],
+    suggestFor: () => noteTheme("WRITE"),
+  });
+  const vault = installThemeVault(themeHarness, { "Tasks/Wait.md": targetNote }, { readGate });
+  const source = "- [[Tasks/Wait.md#^wait]]";
+  const { modal } = openTaskThemeStage({
+    content: source,
+    filePath: "Daily/2026-10-29.md",
+    themeHarness,
+    context: { propertyContext: { isObsidianTask: false }, linkSession: linkSessionForTargets(targets) },
+  });
+  const fixIndex = modal.visibleItems.findIndex((item) => item.themeKey === "fix");
+  click(byClass(modal.resultsEl, "bob-cnp-row")[fixIndex]);
+  await nextTurn();
+  assert.equal(vault.reads(), 1);
+  pressKey(modal, "Enter");
+  assert.equal(vault.reads(), 1, "the base picker keeps the pending action single-flight");
+  pressKey(modal, "Escape");
+  assert.equal(modal.isOpen, false);
+  releaseRead();
+  await nextTurn();
+  assert.equal(vault.notes["Tasks/Wait.md"], targetNote);
+  assert.deepEqual(vault.writes, []);
 });
 
 test("a More row opens that property's value stage, never a filter list, and Back restores the card", () => {

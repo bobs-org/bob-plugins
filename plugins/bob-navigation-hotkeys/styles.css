@@ -2038,6 +2038,30 @@
   color: var(--text-normal);
 }
 
+.bob-task-card-theme-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 5px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background-color: var(--background-secondary);
+  line-height: 1.55;
+}
+
+.bob-task-card-theme-pill.is-blue { border-color: color-mix(in srgb, var(--bob-hue-blue, var(--text-faint)) 48%, var(--background-modifier-border)); }
+.bob-task-card-theme-pill.is-orange { border-color: color-mix(in srgb, var(--bob-hue-orange, var(--text-faint)) 48%, var(--background-modifier-border)); }
+.bob-task-card-theme-pill.is-aqua { border-color: color-mix(in srgb, var(--bob-hue-aqua, var(--text-faint)) 48%, var(--background-modifier-border)); }
+.bob-task-card-theme-pill.is-yellow { border-color: color-mix(in srgb, var(--bob-hue-yellow, var(--text-faint)) 48%, var(--background-modifier-border)); }
+.bob-task-card-theme-pill.is-magenta { border-color: color-mix(in srgb, var(--bob-hue-magenta, var(--text-faint)) 48%, var(--background-modifier-border)); }
+.bob-task-card-theme-pill.is-green { border-color: color-mix(in srgb, var(--bob-hue-green, var(--text-faint)) 48%, var(--background-modifier-border)); }
+.bob-task-card-theme-pill.is-violet { border-color: color-mix(in srgb, var(--bob-hue-violet, var(--text-faint)) 48%, var(--background-modifier-border)); }
+.bob-task-card-theme-pill.is-red { border-color: color-mix(in srgb, var(--bob-hue-red, var(--text-faint)) 48%, var(--background-modifier-border)); }
+
+.bob-task-card-theme-pill-name {
+  color: var(--text-normal);
+}
+
 .bob-task-card-theme-value.is-unknown {
   text-decoration-line: underline;
   text-decoration-style: dotted;

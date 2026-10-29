@@ -7796,8 +7796,8 @@ function getSuccessorTaskThemesApi(app) {
 function getSuccessorTaskLedgerApi(app) {
   try {
     const plugins = app && app.plugins;
-    const holder = plugins && plugins.plugins && plugins["bob-ledger-tools"]
-      ? plugins["bob-ledger-tools"]
+    const holder = plugins && plugins.plugins && plugins.plugins["bob-ledger-tools"]
+      ? plugins.plugins["bob-ledger-tools"]
       : plugins && typeof plugins.getPlugin === "function"
         ? plugins.getPlugin("bob-ledger-tools")
         : null;

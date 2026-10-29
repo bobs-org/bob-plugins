@@ -94,6 +94,27 @@ function taskCardThemeKnown(api, theme) {
   return theme.known === true ? true : null;
 }
 
+function taskCardThemeReportedHue(api, theme) {
+  try {
+    const result = api && theme && theme.key && typeof api.hueFor === "function"
+      ? api.hueFor(theme.key, theme.name || theme.key)
+      : null;
+    return result && TASK_CARD_THEME_HUES.includes(result.hue) ? result.hue : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function taskCardThemeDisplayValue(theme, text) {
+  return Object.freeze({
+    type: "value",
+    text,
+    themeKey: theme && theme.key ? String(theme.key) : null,
+    themeName: theme && theme.name ? String(theme.name) : null,
+    hue: theme && TASK_CARD_THEME_HUES.includes(theme.hue) ? theme.hue : null,
+  });
+}
+
 function taskCardThemeNoteSource(suggestion) {
   if (!suggestion || suggestion.source !== "note") {
     return null;
@@ -182,12 +203,8 @@ function taskCardThemeTargetDisplay(state) {
       parts.push(Object.freeze({ type: "text", text: " · no default" }));
     }
   } else if (state.explicit) {
-    parts.push(
-      Object.freeze({
-        type: "value",
-        text: `${valueText} this task`,
-      }),
-    );
+    parts.push(taskCardThemeDisplayValue(theme, valueText));
+    parts.push(Object.freeze({ type: "text", text: " this task" }));
     if (inheritedTheme && inheritedTheme.name) {
       parts.push(Object.freeze({ type: "text", text: " · " }));
       parts.push(...taskCardThemeSourceParts(inherited));
@@ -201,7 +218,7 @@ function taskCardThemeTargetDisplay(state) {
       parts.push(Object.freeze({ type: "text", text: " · no default" }));
     }
   } else if (theme && theme.name) {
-    parts.push(Object.freeze({ type: "value", text: valueText }));
+    parts.push(taskCardThemeDisplayValue(theme, valueText));
     if (inherited && inherited.source === "note") {
       parts.push(Object.freeze({ type: "text", text: " from " }));
       parts.push(...taskCardThemeSourceParts(inherited));
@@ -333,8 +350,13 @@ function taskCardThemeTargetProjection(target, id, context, apiReady) {
       ? inherited && inherited.theme
       : suggestedTheme;
   const known = taskCardThemeKnown(api, theme);
-  if (theme && known !== null && theme.known !== known) {
-    theme = Object.freeze({ ...theme, known });
+  if (theme) {
+    const hue = taskCardThemeReportedHue(api, theme);
+    theme = Object.freeze({
+      ...theme,
+      ...(known !== null ? { known } : {}),
+      hue,
+    });
   }
   const fieldProjection = Object.freeze({
     state: field.state,
@@ -428,6 +450,17 @@ function buildTaskCardThemeProjection(context = {}) {
   return Object.freeze({
     available,
     unavailableReason,
+    editable: Boolean(
+      context.themeApi &&
+      typeof context.themeApi.setTaskTheme === "function" &&
+      typeof context.themeApi.clearTaskTheme === "function"
+    ),
+    editUnavailableReason:
+      context.themeApi &&
+      (typeof context.themeApi.setTaskTheme !== "function" ||
+        typeof context.themeApi.clearTaskTheme !== "function")
+        ? "Ledger Tools task-theme write methods are unavailable"
+        : null,
     targetCount: targets.length,
     mixed,
     targets: Object.freeze(targets),

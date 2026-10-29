@@ -72,30 +72,33 @@ function taskCardThemeCatalogSpelling(api, key, fallback) {
 }
 
 function taskCardThemeExemptKeys(api, ledgerApi) {
-  const fallback = ["PLAN"];
   const source = ledgerApi || api;
   try {
-    const capsSource =
-      source && typeof source.caps === "function" ? source.caps() : null;
-    const caps = capsSource && typeof capsSource.then === "function" ? null : capsSource;
-    if (caps && Array.isArray(caps.exempt)) {
-      const keys = [];
-      for (const value of caps.exempt) {
-        if (typeof value !== "string" || !value.trim() || value.includes("+")) {
-          return { available: false, keys: [] };
-        }
-        const canonical = taskCardThemeCanonicalName(value);
-        if (!canonical) {
-          return { available: false, keys: [] };
-        }
-        keys.push(value.trim());
-      }
-      return { available: true, keys };
+    if (!source || typeof source.caps !== "function") {
+      return { available: false, keys: [] };
     }
+    const caps = source.caps();
+    if (
+      !caps || typeof caps !== "object" || Array.isArray(caps) ||
+      typeof caps.then === "function" || !Array.isArray(caps.exempt)
+    ) {
+      return { available: false, keys: [] };
+    }
+    const keys = [];
+    for (const value of caps.exempt) {
+      if (typeof value !== "string" || !value.trim() || /[\r\n+]/.test(value)) {
+        return { available: false, keys: [] };
+      }
+      const canonical = taskCardThemeCanonicalName(value);
+      if (!canonical) {
+        return { available: false, keys: [] };
+      }
+      keys.push(value.trim());
+    }
+    return { available: true, keys };
   } catch (_error) {
-    // Fall through to the default exempt set.
+    return { available: false, keys: [] };
   }
-  return { available: true, keys: fallback.slice() };
 }
 
 function taskCardThemeSingleComponent(name, exemptKeys) {
@@ -271,9 +274,6 @@ function buildTaskCardThemeStageModel(projection, api, options = {}) {
   };
   // Unknown inherited names stay selectable without preselection.
   for (const [key, name] of inheritedKeys) {
-    if (!remember(key)) {
-      continue;
-    }
     let known = null;
     try {
       if (api && typeof api.isKnownTheme === "function") {
@@ -283,6 +283,9 @@ function buildTaskCardThemeStageModel(projection, api, options = {}) {
       known = null;
     }
     if (known === false) {
+      if (!remember(key)) {
+        continue;
+      }
       rows.push(
         Object.freeze({
           kind: "inherited-unknown",
@@ -333,11 +336,9 @@ function buildTaskCardThemeStageModel(projection, api, options = {}) {
   }
   if (trimmedQuery) {
     const exempt = taskCardThemeExemptKeys(api, opts.ledgerApi);
-    const validated = taskCardThemeValidateNewName(
-      trimmedQuery,
-      api,
-      exempt.available ? exempt.keys : [],
-    );
+    const validated = exempt.available
+      ? taskCardThemeValidateNewName(trimmedQuery, api, exempt.keys)
+      : { valid: false };
     if (validated.valid && remember(validated.key)) {
       rows.push(
         Object.freeze({
@@ -405,20 +406,20 @@ function planTaskCardThemeEdits(projection, selection, api, options = {}) {
   if (!key) {
     return Object.freeze({ valid: false, error: "Theme name is invalid", edits: Object.freeze([]) });
   }
-  const exempt = taskCardThemeExemptKeys(api, opts.ledgerApi);
-  const exemptKeys = exempt.available ? exempt.keys : [];
-  const validated = taskCardThemeValidateNewName(rawName, api, exemptKeys);
-  if (!validated.valid) {
-    return Object.freeze({ valid: false, error: validated.error, edits: Object.freeze([]) });
+  const candidate = taskCardThemeSingleComponent(rawName, []);
+  if (!candidate) {
+    const error = taskCardThemeSplitComponents(rawName).length !== 1
+      ? "Composite themes cannot be set on a task"
+      : "Theme name is invalid";
+    return Object.freeze({ valid: false, error, edits: Object.freeze([]) });
   }
-  const spelling =
-    taskCardThemeCatalogSpelling(api, validated.key, validated.name) || validated.name;
-  const edits = targets.map((target) => {
+  const spelling = taskCardThemeCatalogSpelling(api, candidate.key, candidate.name) || candidate.name;
+  const planned = targets.map((target) => {
     const inherited = target.inherited;
     const inheritedKey = inherited && inherited.theme && inherited.theme.key
       ? taskCardThemeNormalizeKey(inherited.theme.key)
       : null;
-    if (inheritedKey && inheritedKey === validated.key) {
+    if (inheritedKey && inheritedKey === candidate.key) {
       return Object.freeze({
         target,
         action: "clear",
@@ -429,12 +430,12 @@ function planTaskCardThemeEdits(projection, selection, api, options = {}) {
     }
     if (target.field && target.field.state === "set") {
       const fieldKey = taskCardThemeFieldKey(target.field);
-      if (fieldKey && fieldKey === validated.key) {
+      if (fieldKey && fieldKey === candidate.key) {
         return Object.freeze({
           target,
           action: "none",
           name: spelling,
-          key: validated.key,
+          key: candidate.key,
           reason: "same-key-noop",
         });
       }
@@ -443,11 +444,53 @@ function planTaskCardThemeEdits(projection, selection, api, options = {}) {
       target,
       action: "set",
       name: spelling,
-      key: validated.key,
+      key: candidate.key,
       reason: "set-theme",
     });
   });
+  if (planned.some((edit) => edit.action === "set")) {
+    const exempt = taskCardThemeExemptKeys(api, opts.ledgerApi);
+    if (!exempt.available) {
+      return Object.freeze({
+        valid: false,
+        error: "Theme eligibility is unavailable; Ledger Tools caps could not be read",
+        edits: Object.freeze([]),
+      });
+    }
+    const exemptKey = new Set(exempt.keys.map(taskCardThemeNormalizeKey));
+    if (exemptKey.has(candidate.key)) {
+      return Object.freeze({
+        valid: false,
+        error: "Exempt themes cannot be set on a task",
+        edits: Object.freeze([]),
+      });
+    }
+  }
+  const edits = planned;
   return Object.freeze({ valid: true, error: null, edits: Object.freeze(edits) });
+}
+
+function taskCardThemeDecisionIdentity(suggestion) {
+  if (!suggestion || typeof suggestion !== "object") {
+    return null;
+  }
+  const theme = suggestion.theme && typeof suggestion.theme === "object"
+    ? suggestion.theme
+    : {};
+  const from = suggestion.from && typeof suggestion.from === "object"
+    ? suggestion.from
+    : {};
+  const inherited = suggestion.inherited && typeof suggestion.inherited === "object"
+    ? taskCardThemeDecisionIdentity(suggestion.inherited)
+    : null;
+  return JSON.stringify({
+    source: suggestion.source || null,
+    label: suggestion.label || null,
+    themeKey: theme.key ? taskCardThemeNormalizeKey(theme.key) : null,
+    fromPath: normalizeVaultRelativePath(from.path || "") || null,
+    fromStem: normalizeBulletPropertyValue(from.stem || "") || null,
+    inherited,
+  });
 }
 
 function taskCardThemeRevalidateEdit(edit, freshProjection) {
@@ -460,23 +503,20 @@ function taskCardThemeRevalidateEdit(edit, freshProjection) {
       return false;
     }
     return (
+      target.identity.id === identity.id &&
       target.identity.path === identity.path &&
       target.identity.line === identity.line &&
+      target.identity.blockId === identity.blockId &&
       target.identity.rawLine === identity.rawLine
     );
   });
   if (!fresh || !fresh.available) {
     return { ok: false, reason: "Task changed; reopen the card" };
   }
-  const beforeInherited = edit.target.inherited;
-  const beforeKey = beforeInherited && beforeInherited.theme && beforeInherited.theme.key
-    ? taskCardThemeNormalizeKey(beforeInherited.theme.key)
-    : null;
-  const afterInherited = fresh.inherited;
-  const afterKey = afterInherited && afterInherited.theme && afterInherited.theme.key
-    ? taskCardThemeNormalizeKey(afterInherited.theme.key)
-    : null;
-  if ((beforeKey || "") !== (afterKey || "")) {
+  if (
+    taskCardThemeDecisionIdentity(edit.target.inherited) !==
+    taskCardThemeDecisionIdentity(fresh.inherited)
+  ) {
     return { ok: false, reason: "Default changed; reopen the card" };
   }
   if (fresh.identity.rawLine !== identity.rawLine) {

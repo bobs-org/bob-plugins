@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const Module = require("node:module");
 const {
   TaskStatusCyclerPlugin,
   helpers,
@@ -11,6 +12,41 @@ const {
   flushAsyncActions,
   installTasksCloseCommand,
 } = require("./task-status-cycler-harness.cjs");
+const {
+  helpers: navigationHelpers,
+  parseTestYaml,
+} = require("./navigation-hotkeys-harness.cjs");
+
+// Use the ledger-tools' real task-theme transforms in the successor runtime
+// tests. The harness APIs below fake only the suggestion and caps inputs.
+const originalModuleLoad = Module._load;
+Module._load = function loadLedgerToolsWithTestStubs(request, parent, isMain) {
+  if (request === "obsidian") {
+    class Empty {}
+    return {
+      MarkdownRenderChild: Empty,
+      MarkdownView: Empty,
+      Notice: class {},
+      Platform: { isDesktopApp: true, isMobile: false },
+      Plugin: Empty,
+      normalizePath: (value) => String(value || ""),
+      parseYaml: parseTestYaml,
+    };
+  }
+  if (request === "@codemirror/state") {
+    return { Prec: { highest: (value) => value } };
+  }
+  if (request === "@codemirror/view") {
+    return { EditorView: class {}, keymap: { of: (value) => value } };
+  }
+  return originalModuleLoad.call(this, request, parent, isMain);
+};
+let ledgerThemeHelpers;
+try {
+  ledgerThemeHelpers = require("../plugins/bob-ledger-tools/main.js").helpers;
+} finally {
+  Module._load = originalModuleLoad;
+}
 
 // Guard tests for the `cycler_wiring` pass (plan:202610/successor_links.md):
 // the gated recover-and-link inside `finalizeClosedTasks`, the Pomodoro
@@ -35,7 +71,7 @@ function makePlugin(harness, editor, path) {
   return plugin;
 }
 
-function installNavStub(plugin, seen) {
+function installNavStub(plugin, seen, pickOverride = null) {
   const previous = plugin.app.plugins && plugin.app.plugins.plugins
     ? plugin.app.plugins.plugins
     : {};
@@ -56,6 +92,9 @@ function installNavStub(plugin, seen) {
           successors: {
             version: 1,
             async pick(model) {
+              if (typeof pickOverride === "function") {
+                return pickOverride(model);
+              }
               const picks = [];
               for (const group of (model && model.groups) || []) {
                 for (const row of (group && group.rows) || []) {
@@ -71,6 +110,34 @@ function installNavStub(plugin, seen) {
       },
     },
   };
+}
+
+function installRealTaskThemeApi(plugin, suggestFor) {
+  const holder = plugin.app.plugins.plugins["bob-ledger-tools"];
+  holder.api.caps = () => ({ exempt: ["PLAN"], strict: false, maxThemes: 5 });
+  holder.api.themes = {
+    version: 1,
+    suggestFor,
+    taskThemeOf: ledgerThemeHelpers.pomodoroThemeTaskFieldState,
+    setTaskTheme: ledgerThemeHelpers.pomodoroThemeSetTaskTheme,
+    clearTaskTheme: ledgerThemeHelpers.pomodoroThemeClearTaskTheme,
+    planThemeChange: ledgerThemeHelpers.pomodoroThemePlanChange,
+    snapshot: () => ({
+        themes: ["WRITE", "FIX", "BUILD", "DEEP"].map((name) => ({
+          key: name.toLowerCase(),
+          name,
+        })),
+        configured_themes: [],
+      }),
+  };
+}
+
+async function pressCtrlEnterAndSettle(plugin, editor) {
+  const action = registerTaskToggleVimAction(plugin);
+  action(editor);
+  for (let round = 0; round < 12; round += 1) {
+    await flushAsyncActions();
+  }
 }
 
 function installTasksStub(plugin, tasks, state = "Warm") {
@@ -164,6 +231,345 @@ test("link close links the unblocked successor into the slot and shows the nav c
   ]);
   assert.equal(model.failure, null);
   assert.equal(notices.length, 0);
+});
+
+test("Ctrl+Enter close preserves bracket and parenthesis theme fields", async () => {
+  for (const field of ["[theme:: FIX]", "(theme:: FIX)"]) {
+    notices.length = 0;
+    const source = `- [ ] #task Keep this task ${field} ^keep`;
+    const harness = createInMemoryObsidianApp({ "Keep.md": source });
+    const editor = createTextEditor(source, { line: 0, ch: 4 });
+    const plugin = makePlugin(harness, editor, "Keep.md");
+    installTasksCloseCommand(plugin, editor);
+
+    await pressCtrlEnterAndSettle(plugin, editor);
+
+    assert.match(editor.getLine(0), /^- \[x\] #task/);
+    assert.ok(editor.getLine(0).includes(field), `Ctrl+Enter retains ${field}`);
+  }
+});
+
+test("Ctrl+Enter carries per-task theme intents through both pick normalizers and saves them with successor links", async () => {
+  notices.length = 0;
+  const closeLine = "- [ ] #task Finish the release [id:: work__finish] ^finish";
+  const aLine = "- [?] #task Write the changelog [dependsOn:: work__finish] ^changelog";
+  const bLine = "- [?] #task Fix the launch [dependsOn:: work__finish] ^launch";
+  const localLine = "- [?] #task Local follow-up [dependsOn:: work__finish] ^local";
+  const day = [
+    `# ${TODAY}`,
+    "",
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[work#^finish]]",
+    "- [ ] () — BUILD",
+    "- [ ] () — DEEP",
+    "## Tasks",
+    localLine,
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "work.md": closeLine,
+    "a.md": ["---", "theme: WRITE", "---", aLine].join("\n"),
+    "b.md": ["---", "theme: DEEP", "---", bLine].join("\n"),
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(closeLine, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "work.md");
+  installTasksCloseCommand(plugin, editor);
+  const shown = {
+    "a.md": {
+      theme: { key: "write", name: "WRITE", known: true },
+      source: "note",
+      label: "from a",
+    },
+    "b.md": {
+      theme: { key: "deep", name: "DEEP", known: true },
+      source: "note",
+      label: "from b",
+    },
+    [DAILY_PATH]: {
+      theme: { key: "write", name: "WRITE", known: true },
+      source: "note",
+      label: "from today",
+    },
+  };
+  const suggestCalls = [];
+  installRealTaskThemeApi(plugin, (request) => {
+    suggestCalls.push(request);
+    return shown[request.path] || null;
+  });
+  const seen = [];
+  const destinationByPath = {
+    "a.md": { entryLine: 5, entryText: "- [ ] () — BUILD" },
+    "b.md": { entryLine: 3, entryText: "- [ ] () — FIX" },
+    [DAILY_PATH]: { entryLine: 6, entryText: "- [ ] () — DEEP" },
+  };
+  installNavStub(plugin, seen, async (model) => {
+    const picks = [];
+    for (const group of model.groups || []) {
+      for (const row of group.rows || []) {
+        if (!row || row.selectable !== true || !row.key) continue;
+        const taskPath = row.task && row.task.path;
+        const chosen = destinationByPath[taskPath];
+        assert.ok(chosen, `task context on picker row: ${JSON.stringify(row)}`);
+        const rawDestination = {
+          kind: "existing",
+          ...chosen,
+          themeIntent: {
+            deliberate: true,
+            linkOnce: false,
+            shown: shown[taskPath],
+          },
+        };
+        // This mirrors the navigation picker's result normalization; the
+        // cycler applies its own normalizeSuccessorPicks after this API call.
+        const destination = navigationHelpers.normalizeSuccessorDestinationOverride(rawDestination);
+        picks.push({ key: String(row.key), destination });
+      }
+    }
+    return { picks };
+  });
+  let finalized = null;
+  const finalize = plugin.finalizeClosedTasks.bind(plugin);
+  plugin.finalizeClosedTasks = async (...args) => {
+    finalized = await finalize(...args);
+    return finalized;
+  };
+
+  await pressCtrlEnterAndSettle(plugin, editor);
+
+  assert.match(editor.getLine(0), /^- \[x\]/, "the real Ctrl+Enter close landed");
+  assert.match(harness.getSource("a.md"), /\[theme:: BUILD\]/);
+  assert.match(harness.getSource("b.md"), /\[theme:: FIX\]/);
+  assert.match(harness.getSource(DAILY_PATH), /\[theme:: DEEP\]/);
+  assert.match(harness.getSource("a.md"), /\[\*\].*\^changelog/);
+  assert.match(harness.getSource("b.md"), /\[\*\].*\^launch/);
+  assert.match(harness.getSource(DAILY_PATH), /\t- \[\[a#\^changelog\]\]/);
+  assert.match(harness.getSource(DAILY_PATH), /\t- \[\[b#\^launch\]\]/);
+  assert.match(harness.getSource(DAILY_PATH), /\[\*\] #task Local follow-up.*\[theme:: DEEP\]/);
+  assert.ok(harness.getSource(DAILY_PATH).includes(`\t- [[${DAILY_PATH.split("/").pop().replace(/\.md$/i, "")}#^local]]`));
+  assert.equal(suggestCalls.some((request) => request.path === "a.md"), true);
+  assert.equal(suggestCalls.some((request) => request.path === "b.md"), true);
+  assert.equal(seen.length, 1);
+  assert.equal(finalized.successors.unblocked.filter((row) => row.theme_changed).length, 3);
+  assert.equal(finalized.successors.failure, null);
+});
+
+test("default placement and a changed suggestion still link selected successors without retargeting themes", async () => {
+  notices.length = 0;
+  const closeLine = "- [ ] #task Finish the release [id:: work__finish] ^finish";
+  const day = [
+    `# ${TODAY}`,
+    "",
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[work#^finish]]",
+    "- [ ] () — BUILD",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "work.md": closeLine,
+    "a.md": "- [?] #task Default link [dependsOn:: work__finish] ^default-link",
+    "b.md": "- [?] #task Changed suggestion [dependsOn:: work__finish] ^changed-suggestion",
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(closeLine, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "work.md");
+  installTasksCloseCommand(plugin, editor);
+  const oldSuggestion = {
+    theme: { key: "write", name: "WRITE", known: true },
+    source: "note",
+    label: "from b",
+  };
+  const changedSuggestion = {
+    theme: { key: "deep", name: "DEEP", known: true },
+    source: "note",
+    label: "from b",
+  };
+  let currentSuggestion = oldSuggestion;
+  installRealTaskThemeApi(plugin, ({ path }) => path === "b.md" ? currentSuggestion : oldSuggestion);
+  const seen = [];
+  installNavStub(plugin, seen, async (model) => {
+    const picks = [];
+    for (const group of model.groups || []) {
+      for (const row of group.rows || []) {
+        if (!row || row.selectable !== true || !row.key) continue;
+        if (row.task && row.task.path === "b.md") {
+          const destination = navigationHelpers.normalizeSuccessorDestinationOverride({
+            kind: "existing",
+            entryLine: 5,
+            entryText: "- [ ] () — BUILD",
+            themeIntent: { deliberate: true, linkOnce: false, shown: oldSuggestion },
+          });
+          picks.push({ key: row.key, destination });
+        } else {
+          // A selection with no destination uses its ordinary anchor.
+          picks.push({ key: row.key });
+        }
+      }
+    }
+    currentSuggestion = changedSuggestion;
+    return { picks };
+  });
+  let finalized = null;
+  const finalize = plugin.finalizeClosedTasks.bind(plugin);
+  plugin.finalizeClosedTasks = async (...args) => {
+    finalized = await finalize(...args);
+    return finalized;
+  };
+
+  await pressCtrlEnterAndSettle(plugin, editor);
+
+  assert.doesNotMatch(harness.getSource("a.md"), /\[theme::/);
+  assert.doesNotMatch(harness.getSource("b.md"), /\[theme::/);
+  assert.match(harness.getSource("a.md"), /^- \[\*\]/);
+  assert.match(harness.getSource("b.md"), /^- \[\*\]/);
+  assert.match(harness.getSource(DAILY_PATH), /\t- \[\[a#\^default-link\]\]/);
+  assert.match(harness.getSource(DAILY_PATH), /\t- \[\[b#\^changed-suggestion\]\]/);
+  const defaultRow = finalized.successors.unblocked.find((row) => row.block_id === "default-link");
+  const changedRow = finalized.successors.unblocked.find((row) => row.block_id === "changed-suggestion");
+  assert.equal(defaultRow.theme_changed, undefined);
+  assert.equal(defaultRow.link.entry_name, "FIX");
+  assert.equal(changedRow.theme_changed, false);
+  assert.equal(changedRow.theme_suggestion_changed, true);
+  assert.equal(changedRow.link.entry_name, "BUILD");
+});
+
+test("project-finished successor writes its selected theme with real task-theme transforms", async () => {
+  notices.length = 0;
+  const childPath = "projects/child.md";
+  const parentPath = "projects/parent.md";
+  const day = [
+    `# ${TODAY}`,
+    "",
+    "## Pomodoros",
+    "- [ ] () — CHILD",
+    "\t- [[projects/child#^prj]]",
+    "- [ ] () — BUILD",
+  ].join("\n");
+  const child = [
+    "---",
+    'type: "[[project]]"',
+    'parent: "[[projects/parent|Parent]]"',
+    "---",
+    "- [ ] #task #prj Child project ^prj",
+  ].join("\n");
+  const parent = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "theme: WRITE",
+    "---",
+    "- [ ] #task #prj Parent project #hide ^prj",
+    "  - 🧩 **Sub-projects:** [[projects/child|Child]]",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    [childPath]: child,
+    [parentPath]: parent,
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(day, { line: 4, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  const shown = {
+    theme: { key: "write", name: "WRITE", known: true },
+    source: "note",
+    label: "from parent",
+  };
+  installRealTaskThemeApi(plugin, () => shown);
+  const seen = [];
+  installNavStub(plugin, seen, async (model) => {
+    const row = model.groups.flatMap((group) => group.rows || []).find(
+      (item) => item && item.selectable && item.task && item.task.path === parentPath,
+    );
+    assert.ok(row, "project-finished picker row includes the parent task context");
+    const destination = navigationHelpers.normalizeSuccessorDestinationOverride({
+      kind: "existing",
+      entryLine: 5,
+      entryText: "- [ ] () — BUILD",
+      themeIntent: { deliberate: true, linkOnce: false, shown },
+    });
+    return { picks: [{ key: row.key, destination }] };
+  });
+
+  const result = await plugin.handleActiveTaskBlockLinkOpenDone(editor, {
+    path: DAILY_PATH,
+  });
+
+  assert.equal(result.resolved, true);
+  assert.equal(result.changed, true);
+  assert.match(harness.getSource(parentPath), /^- \[\*\] #task #prj Parent project \[theme:: BUILD\] \^prj$/m);
+  assert.doesNotMatch(harness.getSource(parentPath), /#hide/);
+  assert.match(editor.getValue(), /\t- \[\[parent#\^prj\]\]/);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].unblocked[0].trigger, "project_empty");
+  assert.equal(seen[0].unblocked[0].theme_changed, true);
+  assert.equal(seen[0].failure, null);
+});
+
+test("successor theme save remains truthful when the later daily-link write fails", async () => {
+  notices.length = 0;
+  const closeLine = "- [ ] #task Finish the release [id:: work__finish] ^finish";
+  const dependentLine = "- [?] #task Write the changelog [dependsOn:: work__finish] ^changelog";
+  const day = [
+    `# ${TODAY}`,
+    "",
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[work#^finish]]",
+    "- [ ] () — BUILD",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "work.md": closeLine,
+    "a.md": dependentLine,
+    [DAILY_PATH]: day,
+  });
+  const originalProcess = harness.app.vault.process;
+  const writes = [];
+  harness.app.vault.process = async (file, transform) => {
+    writes.push(file.path);
+    if (file.path === DAILY_PATH) {
+      throw new Error("injected daily note write failure");
+    }
+    return originalProcess(file, transform);
+  };
+  const editor = createTextEditor(closeLine, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "work.md");
+  installTasksCloseCommand(plugin, editor);
+  const shown = {
+    theme: { key: "write", name: "WRITE", known: true },
+    source: "note",
+    label: "from a",
+  };
+  installRealTaskThemeApi(plugin, () => shown);
+  const seen = [];
+  installNavStub(plugin, seen, async (model) => {
+    const row = model.groups.flatMap((group) => group.rows || []).find((item) => item.selectable);
+    assert.ok(row);
+    const destination = navigationHelpers.normalizeSuccessorDestinationOverride({
+      kind: "existing",
+      entryLine: 5,
+      entryText: "- [ ] () — BUILD",
+      themeIntent: { deliberate: true, linkOnce: false, shown },
+    });
+    return { picks: [{ key: row.key, destination }] };
+  });
+  let finalized = null;
+  const finalize = plugin.finalizeClosedTasks.bind(plugin);
+  plugin.finalizeClosedTasks = async (...args) => {
+    finalized = await finalize(...args);
+    return finalized;
+  };
+
+  await pressCtrlEnterAndSettle(plugin, editor);
+
+  assert.match(harness.getSource("a.md"), /\[theme:: BUILD\]/);
+  assert.ok(writes.includes("a.md"), "the guarded task-note edit was saved first");
+  assert.ok(writes.includes(DAILY_PATH), "the daily insertion was attempted afterward");
+  assert.equal(finalized.successors.failure.count, 1);
+  assert.match(finalized.successors.failure.reason, /injected daily note write failure/);
+  const row = finalized.successors.unblocked.find((item) => item.block_id === "changelog");
+  assert.equal(row.link, null);
+  assert.equal(row.theme_changed, true);
+  assert.match(plugin.successorNoticeForModel(finalized.successors), /couldn't link 1 successor/);
+  assert.match(plugin.successorNoticeForModel(finalized.successors), /task theme saved/);
 });
 
 test("close with no [id::] performs zero vault reads and shows nothing", async () => {

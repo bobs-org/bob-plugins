@@ -112,7 +112,10 @@ function makeThemeApi(options = {}) {
     clearTaskTheme(line) {
       return ledgerHelpers.pomodoroThemeClearTaskTheme(line);
     },
-    caps: () => ({ exempt: ["PLAN"] }),
+    caps() {
+      if (!Object.prototype.hasOwnProperty.call(options, "caps")) return { exempt: ["PLAN"] };
+      return typeof options.caps === "function" ? options.caps() : options.caps;
+    },
   };
   return api;
 }
@@ -276,6 +279,47 @@ test("stage dedupes by key, preserves query, and keeps unknown inherited selecta
   assert.ok(typed.rows.some((r) => r.kind === "new" && r.key === "brand new"));
 });
 
+test("known inherited theme remains in Today or Recent; unknown inherited row is not preselected", () => {
+  const line = "- [ ] #task Inherited ^inherited";
+  const api = makeThemeApi({
+    suggestions: { 1: noteSuggestion("WRITE") },
+    catalog: [{ key: "write", name: "WRITE", today: true }],
+    recent: [{ key: "write", name: "WRITE" }],
+  });
+  const model = makeModel({ content: line, lineText: line, themeApi: api });
+  const stage = helpers.buildTaskCardThemeStageModel(model.themeProjection, api, {});
+  assert.ok(stage.rows.some((row) => row.key === "write" && row.kind === "today"));
+
+  const unknownApi = makeThemeApi({
+    suggestions: { 1: { ...noteSuggestion("OLD"), theme: theme("OLD", "old", { known: false }) } },
+    isKnownTheme: () => false,
+  });
+  const unknownModel = makeModel({ content: line, lineText: line, themeApi: unknownApi });
+  const unknownStage = helpers.buildTaskCardThemeStageModel(unknownModel.themeProjection, unknownApi, {});
+  assert.equal(unknownStage.rows[0].kind, "default");
+  assert.ok(unknownStage.rows.some((row) => row.kind === "inherited-unknown" && row.key === "old"));
+});
+
+test("theme sets fail closed on missing, throwing, asynchronous, or malformed caps while default clears", () => {
+  const line = "- [ ] #task Plain [root:: root-byte] ^plain";
+  for (const caps of [
+    null,
+    () => { throw new Error("caps failed"); },
+    () => Promise.resolve({ exempt: [] }),
+    () => ({ exempt: "PLAN" }),
+    () => ({ exempt: ["PLAN + BUILD"] }),
+  ]) {
+    const api = makeThemeApi({ caps });
+    const model = makeModel({ content: line, lineText: line, themeApi: api });
+    const set = helpers.planTaskCardThemeEdits(model.themeProjection, { kind: "new", key: "BUILD", name: "BUILD" }, api, {});
+    assert.equal(set.valid, false);
+    assert.match(set.error, /eligibility is unavailable/);
+    const clear = helpers.planTaskCardThemeEdits(model.themeProjection, { kind: "default" }, api, {});
+    assert.equal(clear.valid, true);
+    assert.equal(clear.edits[0].action, "clear");
+  }
+});
+
 test("stale line and changed default refuse; cancellation writes nothing", () => {
   const line = "- [ ] #task Example ^example";
   const api = makeThemeApi({ suggestions: { 1: noteSuggestion("WRITE") } });
@@ -295,9 +339,9 @@ test("stale line and changed default refuse; cancellation writes nothing", () =>
   assert.equal(helpers.resolveTaskCardKey(model, { key: "Escape" }).type, "close-card");
 });
 
-test("persisted post-images preserve status, links, and freshness bytes", () => {
+test("persisted post-images preserve status, links, root, and freshness bytes", () => {
   const api = makeThemeApi({ suggestions: { 1: noteSuggestion("WRITE") }, catalog: [{ key: "build", name: "BUILD" }] });
-  const line = "- [ ] #task Ship [[Notes/Other]] [fresh:: today] [priority:: medium] ^ship";
+  const line = "- [ ] #task Ship [[Notes/Other]] [fresh:: today] [priority:: medium] [root:: project] ^ship";
   const model = makeModel({ content: line, lineText: line, themeApi: api });
   const plan = helpers.planTaskCardThemeEdits(model.themeProjection, { kind: "recent", key: "build", name: "BUILD" }, api, {});
   assert.equal(plan.edits[0].action, "set");
@@ -306,12 +350,14 @@ test("persisted post-images preserve status, links, and freshness bytes", () => 
   assert.ok(after.includes("[[Notes/Other]]"));
   assert.ok(after.includes("[fresh:: today]"));
   assert.ok(after.includes("[priority:: medium]"));
+  assert.ok(after.includes("[root:: project]"));
   assert.ok(after.includes("[theme:: BUILD]"));
   assert.ok(after.endsWith("^ship"));
   const cleared = api.clearTaskTheme(after);
   assert.ok(!cleared.includes("[theme::"));
   assert.ok(cleared.includes("[[Notes/Other]]"));
   assert.ok(cleared.includes("[fresh:: today]"));
+  assert.ok(cleared.includes("[root:: project]"));
 });
 
 test("linked and mixed counted plans carry per-target identity without guessing", () => {

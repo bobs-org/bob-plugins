@@ -11,6 +11,13 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
         return super.getFilteredItems();
       }
     }
+    if (
+      this.stage === "value" &&
+      this.taskCardThemeStageProjection &&
+      typeof this.taskCardThemeStageItemsForQuery === "function"
+    ) {
+      return this.taskCardThemeStageItemsForQuery(this.getRawQuery());
+    }
     if (this.stage === "schedule-review") {
       const reason = normalizeScheduleReasonText(this.getScheduleReviewReasonText());
       const summary = normalizeSchedulingWorkSummary(
@@ -152,6 +159,15 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
   // as the user types, mirroring refreshLocalTaskFooter.
   renderResults() {
     super.renderResults();
+    if (this.stage === "value" && this.taskCardThemeStageProjection) {
+      this.taskCardThemeQuery = this.inputEl && typeof this.inputEl.value === "string"
+        ? this.inputEl.value
+        : this.taskCardThemeQuery || "";
+      const selected = this.visibleItems && this.visibleItems[this.selectedIndex];
+      if (selected && selected.key) {
+        this.taskCardThemeSelectedKey = selected.key;
+      }
+    }
     if (this.stage === "cancel-reason") {
       const item = (this.visibleItems || [])[0];
       const pending = this.pendingCancel;

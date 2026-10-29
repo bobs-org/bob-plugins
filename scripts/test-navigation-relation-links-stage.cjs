@@ -305,7 +305,7 @@ function stubCyclerApi(plugin, available = true) {
         ? {
             api: {
               version: 3,
-              completeTaskLineText() { return { ok: true, lineText: "" }; },
+              completeTaskLineText() { return { ok: true, unchanged: false, lineText: "" }; },
               finalizeClosedTasks() { return {}; },
             },
           }

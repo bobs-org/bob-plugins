@@ -292,15 +292,19 @@ function completeTaskLineForRelation(api, rawLine, date, expectedBlockId) {
   if (!api || typeof api.completeTaskLineText !== "function") {
     return Object.freeze({ ok: false, reason: "cycler-api" });
   }
-  let after;
+  let result;
   try {
-    after = api.completeTaskLineText(before, { date });
+    result = api.completeTaskLineText(before, { date });
   } catch (_error) {
     return Object.freeze({ ok: false, reason: "cycler-api" });
   }
-  if (typeof after !== "string" || after === before) {
+  if (
+    !result || result.ok !== true || result.unchanged !== false ||
+    typeof result.lineText !== "string" || result.lineText === before
+  ) {
     return Object.freeze({ ok: false, reason: "unexpected-cycler-result" });
   }
+  const after = result.lineText;
   const blockId = getTrailingBlockId(after);
   const completion = findBulletPropertyField(after, "completion");
   if (

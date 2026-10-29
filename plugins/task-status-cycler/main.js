@@ -17441,24 +17441,32 @@ class TaskStatusCyclerCompletionMixin {
     return true;
   }
 
-  // Cross-plugin Done line rewrite (api v3): the exact local-fallback
-  // bytes for closing `lineText`, with no freshness stamp. Nav's
-  // complete-label writer composes this with its LINKS edit in one
-  // transaction; the post-Done pass stays `finalizeClosedTasks`. Never
-  // throws: a non-task line comes back unchanged.
+  // Cross-plugin Done line rewrite (api v3): return a guarded result so
+  // complete-label writers cannot turn a closed or recurring task into Done.
   completeTaskLineText(lineText, options = {}) {
+    const line = String(lineText || "");
     try {
+      const status = getTaskStatusForLine(line, 0);
+      if (!status) {
+        return Object.freeze({ ok: false, reason: "not_completable", lineText: line });
+      }
+      if (![" ", "*", "/", "?"].includes(status.symbol)) {
+        return Object.freeze({ ok: true, unchanged: true, lineText: line });
+      }
+      if (isRecurringTaskLine(line)) {
+        return Object.freeze({ ok: false, reason: "recurring", lineText: line });
+      }
       const date =
         options && typeof options.date === "string" && options.date
           ? options.date
           : this.getCompletionDateString();
-      return rewriteTaskLineForLocalFallback(
-        String(lineText || ""),
-        "x",
-        date,
-      );
+      return Object.freeze({
+        ok: true,
+        unchanged: false,
+        lineText: rewriteTaskLineAsDone(line, date),
+      });
     } catch (error) {
-      return String(lineText || "");
+      return Object.freeze({ ok: false, reason: "not_completable", lineText: line });
     }
   }
 
@@ -18099,6 +18107,20 @@ class TaskStatusCyclerCompletionMixin {
     }
   }
 
+}
+
+function isRecurringTaskLine(lineText) {
+  const line = String(lineText || "");
+  return /\[repeat\s*::/i.test(line) || /\(repeat\s*::/i.test(line) || line.includes("🔁");
+}
+
+function rewriteTaskLineAsDone(lineText, date) {
+  const line = String(lineText || "");
+  try {
+    return rewriteTaskLineForLocalFallback(line, "x", date);
+  } catch (_error) {
+    return line;
+  }
 }
 // ---- src/170-plugin-pomodoro.js ----
 class TaskStatusCyclerPomodoroMixin {
@@ -19361,15 +19383,16 @@ class TaskStatusCyclerEditorEditsMixin {
       return false;
     }
 
-    // Done shares the api v3 line rewrite so Ctrl+Enter and
+    // Done shares the same local-fallback rewrite so Ctrl+Enter and
     // complete-label commits close from one byte source. The freshness
     // stamper refuses closed lines, so no stamp options here is
     // byte-identical to the stamped fallback above.
     const nextLineText =
       nextSymbol === "x"
-        ? this.completeTaskLineText(taskStatus.lineText, {
-            date: this.getCompletionDateString(),
-          })
+        ? rewriteTaskLineAsDone(
+            taskStatus.lineText,
+            this.getCompletionDateString(),
+          )
         : rewriteTaskLineForLocalFallback(
             taskStatus.lineText,
             nextSymbol,

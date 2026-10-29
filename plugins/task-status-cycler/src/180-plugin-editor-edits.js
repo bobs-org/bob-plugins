@@ -467,15 +467,16 @@ class TaskStatusCyclerEditorEditsMixin {
       return false;
     }
 
-    // Done shares the api v3 line rewrite so Ctrl+Enter and
+    // Done shares the same local-fallback rewrite so Ctrl+Enter and
     // complete-label commits close from one byte source. The freshness
     // stamper refuses closed lines, so no stamp options here is
     // byte-identical to the stamped fallback above.
     const nextLineText =
       nextSymbol === "x"
-        ? this.completeTaskLineText(taskStatus.lineText, {
-            date: this.getCompletionDateString(),
-          })
+        ? rewriteTaskLineAsDone(
+            taskStatus.lineText,
+            this.getCompletionDateString(),
+          )
         : rewriteTaskLineForLocalFallback(
             taskStatus.lineText,
             nextSymbol,

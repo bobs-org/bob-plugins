@@ -282,6 +282,27 @@ test("recurring sources and old cycler APIs refuse before any write", async () =
   }
 });
 
+test("refused and legacy cycler results write nothing", async () => {
+  const line = "- [ ] #task Source ^source";
+  const initial = `${line}\n- [ ] #task Target ^target`;
+  for (const result of [
+    { ok: false, reason: "recurring", lineText: line },
+    "- [x] #task Source [completion:: 2026-10-29] ^source",
+  ]) {
+    const harness = makePlugin({ "Tasks.md": initial }, {
+      cycler: { completeTaskLineText: () => result },
+    });
+    const outcome = await harness.plugin.applyRelationEdit(writerArgs(
+      [{ path: "Tasks.md", line: 0, blockId: "source" }],
+      [{ path: "Tasks.md", blockId: "target", label: "implemented by" }],
+    ));
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.reason, "relation_complete_write_failed");
+    assert.equal(harness.store.get("Tasks.md"), initial);
+    assert.equal(harness.finalizations.length, 0);
+  }
+});
+
 test("id-less cross-note source completes without a mirror or freshness side effects", async () => {
   const harness = makePlugin({
     "Tasks.md": "- [ ] #task Source\n",

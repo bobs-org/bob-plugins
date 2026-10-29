@@ -137,9 +137,10 @@ plugins do (plugins never import one another's `main.js`):
 retiring references, and `completeTaskAtCursor` closes the cursor `#task`
 through the Tasks command so recurrence fires, appending its additive
 `successorNotice` line to the walk toast on review landings. The api is
-version 3: `completeTaskLineText(lineText, { date }?)` returns the exact
-local-fallback Done bytes Ctrl+Enter writes (no freshness stamp), and
-`finalizeClosedTasks(identities, context?)` runs the post-Done pass —
+version 3: `completeTaskLineText(lineText, { date }?)` returns a frozen
+result with the exact local-fallback Done bytes (no freshness stamp),
+leaves already-closed lines unchanged and refuses recurring and non-task
+lines. `finalizeClosedTasks(identities, context?)` runs the post-Done pass —
 recovery, embed retirement, the Unblocked notice, and the successor picker —
 so complete-label commits close from the same bytes and the same pass.
 

@@ -319,11 +319,14 @@ than rejecting. `taskLinkLane.matches` is synchronous and
   writes `[x]` directly. It returns
   `{ ok: true, lineDelta, successorNotice }` or
   `{ ok: false, reason }` and does not stamp the task.
-- `completeTaskLineText(lineText, { date }?)` returns the exact
-  local-fallback bytes for closing `lineText` (`[x]` plus
-  `[completion:: date]`, defaulting to today), with no freshness stamp.
-  Complete-label writers compose this with their LINKS edit in one
-  transaction. It never throws; a non-task line comes back unchanged.
+- `completeTaskLineText(lineText, { date }?)` returns a frozen result.
+  Completable open tasks return `{ ok: true, unchanged: false, lineText }`
+  with the exact local-fallback bytes (`[x]` plus `[completion:: date]`,
+  defaulting to today) and no freshness stamp. Already-closed tasks return
+  `{ ok: true, unchanged: true, lineText }`; recurring and non-task lines
+  return `{ ok: false, reason: "recurring"|"not_completable", lineText }`.
+  Complete-label writers compose the rewrite with their LINKS edit in one
+  transaction. It never throws.
 - `finalizeClosedTasks(identities, context?)` runs the post-Done pass
   Ctrl+Enter runs after its write: dependent recovery, embed retirement,
   the Unblocked notice, and the successor picker. It resolves to

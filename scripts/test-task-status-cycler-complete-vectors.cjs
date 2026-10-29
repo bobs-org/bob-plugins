@@ -47,28 +47,28 @@ test("done vectors pin completeTaskLineText", () => {
   assert.ok(Array.isArray(vectors.config) && vectors.config.length > 0);
   const plugin = new TaskStatusCyclerPlugin();
   for (const vector of vectors.done) {
+    const actual = plugin.completeTaskLineText(vector.line, { date: vector.date });
+    assert.equal(actual.ok, vector.expected.ok, vector.name);
+    assert.equal(actual.lineText, vector.expected.line, vector.name);
+    if (vector.expected.ok) {
+      assert.equal(actual.unchanged, vector.expected.unchanged, vector.name);
+    } else {
+      assert.equal(actual.reason, vector.expected.reason, vector.name);
+    }
     if (vector.expected.ok && !vector.expected.unchanged) {
-      const actual = plugin.completeTaskLineText(vector.line, {
-        date: vector.date,
-      });
-      assert.equal(actual, vector.expected.line, vector.name);
       // The api delegates to the same local-fallback bytes Ctrl+Enter writes.
       assert.equal(
         helpers.rewriteTaskLineForLocalFallback(vector.line, "x", vector.date),
         vector.expected.line,
         `${vector.name}: fallback`,
       );
-      continue;
-    }
-    // Already-closed lines stay unchanged (the writer relabels only and
-    // never asks the cycler to rewrite); recurring lines are refused.
-    assert.equal(vector.expected.line, vector.line, vector.name);
-    if (!vector.expected.ok) {
-      assert.equal(vector.expected.reason, "recurring", vector.name);
-    } else {
-      assert.equal(vector.expected.unchanged, true, vector.name);
     }
   }
+  assert.deepEqual(plugin.completeTaskLineText("not a task", { date: "2026-10-29" }), {
+    ok: false,
+    reason: "not_completable",
+    lineText: "not a task",
+  });
 });
 
 test("Ctrl+Enter local fallback shares the api Done bytes", () => {
@@ -88,5 +88,10 @@ test("Ctrl+Enter local fallback shares the api Done bytes", () => {
     );
     assert.equal(wrote, true, vector.name);
     assert.equal(editor.getLine(0), vector.expected.line, vector.name);
+    assert.equal(
+      editor.getLine(0),
+      plugin.completeTaskLineText(vector.line, { date: vector.date }).lineText,
+      vector.name,
+    );
   }
 });

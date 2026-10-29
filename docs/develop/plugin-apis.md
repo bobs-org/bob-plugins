@@ -285,7 +285,21 @@ recommendation. With a null plugin (after unload) it returns
 `taskLinkLane.matches({ content, line, path })` is synchronous;
 `toggle(args)` performs the Next/In Progress change and resolves
 to a result object. `successors.pick(model)` resolves to a result
-with a `picks` array or `null` when no choice is made.
+with a `picks` array or `null` when no choice is made. Selectable
+rows may carry additive `task: { path, line, text, displayText, status,
+preimage }` so `Ctrl+Shift+Enter` can retarget through
+`pomodoroLinkPicker.pick({ task })`. `line` is one-based and `text` is
+the full matching note; `preimage` is the original task line used to
+refuse a changed or missing source before the nested picker. Older rows
+without `task` still retarget, without permission to edit a theme.
+Destination overrides may carry additive `themeIntent` and
+`preserveSpelling`. Both navigation's
+`normalizeSuccessorDestinationOverride` and the cycler's
+`normalizeSuccessorPickDestination` keep a valid intent, drop a
+malformed one without rejecting the destination, and let `linkOnce`
+override `deliberate`. Marked-row retargets run one picker per target
+in displayed order and publish overrides only when every pick succeeds.
+The context transport and nested picker never mutate a task field.
 `blocks.openStage(ref)` and
 `blocks.removeDependent(ownerRef, target)` resolve to result
 objects. `relations.removeLink(sourceRef, targetRef)` removes the

@@ -201,11 +201,13 @@ function applySuccessorVerdicts(context) {
       selected,
       block_id_needed: needsBlockId,
     };
+    const noteText = projectNoteTextFor(noteTexts, task.path);
     offers.push({
       key: offer.key, text: successorDisplayText(task), notePath: task.path, status: task.status,
       destination, needsBlockId, group, project: offer.project || null,
       anchor: mark.anchor, implicit: mark.implicit || null, predecessorRows: mark.predecessorRows || [],
       task, line: task.line,
+      ...(noteText ? { noteText } : {}),
     });
     if (!selected) {
       // Unpicked: recover exactly as today's recover rule (WRITE rule kept),

@@ -187,6 +187,103 @@ test("SO picker model, pick normalization, and API detection", () => {
   assert.ok(helpers.getSuccessorPickerApi({ plugins: { plugins: { "bob-navigation-hotkeys": { api: { successors: { version: 1, pick: async () => null } } } } } }));
 });
 
+test("picker rows carry one-based task context from the matching note snapshot", () => {
+  const noteText = ["# Sase", "- [?] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo", "- [?] #task Dep [dependsOn:: sase__fix-apollo] ^dep"].join("\n");
+  const model = helpers.buildSuccessorPickerModel({
+    predecessors: [{ note_path: "sase.md", block_id: "fix-apollo", text: "Fix" }],
+    offers: [{
+      key: "sase.md#^dep",
+      text: "Dep",
+      notePath: "sase.md",
+      status: "?",
+      destination: { entry_name: "FIX" },
+      needsBlockId: false,
+      group: "hand_off",
+      line: 2,
+      noteText,
+      task: { path: "sase.md", line: 2, status: "?", rawLine: "- [?] #task Dep [dependsOn:: sase__fix-apollo] ^dep" },
+    }],
+    stillBlocked: [],
+    foldedByProject: new Map(),
+    headers: new Map(),
+  });
+  assert.deepEqual(model.groups[0].rows[0].task, {
+    path: "sase.md",
+    line: 3,
+    text: noteText,
+    displayText: "Dep",
+    status: "?",
+    preimage: "- [?] #task Dep [dependsOn:: sase__fix-apollo] ^dep",
+  });
+  const old = helpers.buildSuccessorPickerModel({
+    predecessors: [{ note_path: "sase.md", block_id: "fix-apollo", text: "Fix" }],
+    offers: [{ key: "sase.md#^dep", text: "Dep", notePath: "sase.md", status: "?", destination: { entry_name: "FIX" }, needsBlockId: false, group: "hand_off" }],
+    stillBlocked: [],
+    foldedByProject: new Map(),
+    headers: new Map(),
+  });
+  assert.equal(old.groups[0].rows[0].task, undefined);
+});
+
+test("plan offers attach the live note snapshot so the picker can refresh", () => {
+  const notes = {
+    "sase.md": [
+      "- [?] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo",
+      "- [?] #task Follower [dependsOn:: sase__fix-apollo] ^follower",
+    ].join("\n"),
+  };
+  const { plan } = planFixture({ day: FIX_DAY, notes, closed: FIX_CLOSED, options: { selection: [] } });
+  const offer = plan.offers[0];
+  assert.equal(offer.noteText, notes["sase.md"]);
+  const model = helpers.buildSuccessorPickerModel({
+    predecessors: [{ note_path: "sase.md", block_id: "fix-apollo", text: "Fix" }],
+    offers: plan.offers,
+    stillBlocked: [],
+    foldedByProject: new Map(),
+    headers: new Map(),
+  });
+  assert.equal(model.groups[0].rows[0].task.line, offer.line + 1);
+  assert.equal(model.groups[0].rows[0].task.preimage, offer.task.rawLine);
+});
+
+test("themeIntent and preserveSpelling survive cycler pick normalization", () => {
+  const shown = { theme: { key: "write", name: "WRITE" }, source: "note" };
+  const picks = helpers.normalizeSuccessorPicks({
+    picks: [
+      {
+        key: "a",
+        destination: {
+          kind: "new",
+          name: "Write",
+          preserveSpelling: true,
+          themeIntent: { deliberate: true, linkOnce: false, shown },
+        },
+      },
+      {
+        key: "b",
+        destination: {
+          kind: "existing",
+          entryLine: 4,
+          entryText: "- [ ] () — DEEP",
+          title: "DEEP",
+          themeIntent: { deliberate: true, linkOnce: true, shown: null },
+        },
+      },
+      { key: "c", destination: { kind: "new", name: "PLAN", themeIntent: { deliberate: true } } },
+    ],
+  });
+  assert.deepEqual(picks[0].destination, {
+    kind: "new",
+    name: "Write",
+    preserveSpelling: true,
+    themeIntent: { deliberate: true, linkOnce: false, shown },
+  });
+  assert.equal(picks[1].destination.themeIntent.deliberate, false);
+  assert.equal(picks[1].destination.themeIntent.linkOnce, true);
+  assert.equal(picks[1].destination.title, "DEEP");
+  assert.deepEqual(picks[2].destination, { kind: "new", name: "PLAN" });
+});
+
 // Notice: not pulled in, no open Pomodoro, mixed, failure.
 test("SO notice copy for offers (SO20, mixed, failure)", () => {
   const row = (over = {}) => ({

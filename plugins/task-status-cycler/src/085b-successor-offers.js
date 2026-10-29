@@ -244,7 +244,7 @@ function buildSuccessorPickerModel(options = {}) {
       continue;
     }
     const entry = ensureGroup(offer.group || "hand_off", offer.project || null);
-    entry.rows.push({
+    const row = {
       key: String(offer.key),
       text: String(offer.text || ""),
       notePath: String(offer.notePath || ""),
@@ -252,7 +252,12 @@ function buildSuccessorPickerModel(options = {}) {
       destinationLabel: successorDestinationLabel(offer.destination),
       needsBlockId: offer.needsBlockId === true,
       selectable: true,
-    });
+    };
+    const taskContext = buildSuccessorPickerTaskContext(offer);
+    if (taskContext) {
+      row.task = taskContext;
+    }
+    entry.rows.push(row);
   }
   // Muted still-blocked project residents join their project group as
   // unselectable rows.
@@ -312,14 +317,113 @@ function buildSuccessorPickerModel(options = {}) {
   return model;
 }
 
+// Strict validation for additive themeIntent on a destination override.
+// Malformed intent is dropped so it can never enable a write; absent
+// intent keeps the legacy destination shape. linkOnce always wins over
+// deliberate.
+function normalizeSuccessorThemeIntent(intent) {
+  try {
+    if (!intent || typeof intent !== "object" || Array.isArray(intent)) {
+      return null;
+    }
+    if (typeof intent.deliberate !== "boolean") {
+      return null;
+    }
+    if (typeof intent.linkOnce !== "boolean") {
+      return null;
+    }
+    let shown = null;
+    if (intent.shown === undefined || intent.shown === null) {
+      shown = null;
+    } else if (typeof intent.shown !== "object") {
+      return null;
+    } else {
+      const theme = intent.shown.theme;
+      if (!theme || typeof theme !== "object") {
+        return null;
+      }
+      if (typeof theme.key !== "string" || !theme.key) {
+        return null;
+      }
+      shown = intent.shown;
+    }
+    const linkOnce = intent.linkOnce === true;
+    return {
+      deliberate: linkOnce ? false : intent.deliberate,
+      linkOnce,
+      shown,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+// Optional validated task context for the destination picker. Offer
+// `task.line` is zero-based; the row stores a one-based line and the full
+// matching note snapshot. Malformed context is omitted so older rows stay
+// selectable.
+function buildSuccessorPickerTaskContext(offer) {
+  try {
+    if (!offer || typeof offer !== "object") {
+      return null;
+    }
+    const task = offer.task && typeof offer.task === "object" ? offer.task : null;
+    const path = (task && typeof task.path === "string" && task.path)
+      || (typeof offer.notePath === "string" ? offer.notePath : "");
+    if (!path) {
+      return null;
+    }
+    const zeroBased = Number.isInteger(task && task.line)
+      ? task.line
+      : (Number.isInteger(offer.line) ? offer.line : null);
+    if (zeroBased == null || zeroBased < 0) {
+      return null;
+    }
+    const noteText = typeof offer.noteText === "string"
+      ? offer.noteText
+      : (task && typeof task.noteText === "string" ? task.noteText : null);
+    if (typeof noteText !== "string") {
+      return null;
+    }
+    const preimage = task && typeof task.rawLine === "string"
+      ? task.rawLine
+      : (task && typeof task.text === "string"
+        ? task.text
+        : (typeof offer.preimage === "string" ? offer.preimage : null));
+    if (typeof preimage !== "string") {
+      return null;
+    }
+    const lines = noteText.split(/\r?\n/);
+    if (zeroBased >= lines.length || lines[zeroBased] !== preimage) {
+      return null;
+    }
+    const displayText = typeof offer.text === "string" ? offer.text : "";
+    const status = (task && typeof task.status === "string" ? task.status : null)
+      || (typeof offer.status === "string" ? offer.status : " ");
+    return {
+      path,
+      line: zeroBased + 1,
+      text: noteText,
+      displayText,
+      status,
+      preimage,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
 // Normalize a per-row destination override (§12.13 obsidian_destination):
-// `{kind: "existing", entryLine, entryText} | {kind: "new", name}`. Null
-// unless the shape is exact; a malformed override never blocks the pick.
+// `{kind: "existing", entryLine, entryText, title?} | {kind: "new", name,
+// preserveSpelling?}`. Optional `themeIntent` rides along when valid.
+// Null unless the destination shape is exact; a malformed override never
+// blocks the pick, and malformed intent never rejects a valid destination.
 function normalizeSuccessorPickDestination(choice) {
   try {
     if (!choice || typeof choice !== "object") {
       return null;
     }
+    const themeIntent = normalizeSuccessorThemeIntent(choice.themeIntent);
     if (choice.kind === "existing") {
       if (!Number.isInteger(choice.entryLine) || choice.entryLine < 0) {
         return null;
@@ -327,10 +431,13 @@ function normalizeSuccessorPickDestination(choice) {
       if (typeof choice.entryText !== "string" || !choice.entryText) {
         return null;
       }
+      const title = typeof choice.title === "string" ? choice.title.trim() : "";
       return {
         kind: "existing",
         entryLine: choice.entryLine,
         entryText: choice.entryText,
+        ...(title ? { title } : {}),
+        ...(themeIntent ? { themeIntent } : {}),
       };
     }
     if (choice.kind === "new") {
@@ -338,7 +445,12 @@ function normalizeSuccessorPickDestination(choice) {
       if (!name || /[\r\n]/.test(name)) {
         return null;
       }
-      return { kind: "new", name };
+      return {
+        kind: "new",
+        name,
+        ...(choice.preserveSpelling === true ? { preserveSpelling: true } : {}),
+        ...(themeIntent ? { themeIntent } : {}),
+      };
     }
     return null;
   } catch (error) {

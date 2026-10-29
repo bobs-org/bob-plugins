@@ -38,6 +38,7 @@
   "202-pomodoro-themes-manager.js",
   "203-pomodoro-themes-manager-actions.js",
   "205-inbox-route-picker-modal.js",
+  "206a-successor-picker-model.js",
   "206-successor-picker-modal.js",
   "207-image-zoom-modal.js",
   "210-rename-and-line-context.js",

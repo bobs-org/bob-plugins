@@ -297,6 +297,8 @@ class TaskStatusCyclerSuccessorProjectMixin {
         selectedKeys = picks.map((pick) => pick && pick.key).filter(Boolean);
         selectedDestinations = new Map();
         for (const pick of picks) {
+          // Destination overrides keep optional themeIntent / preserveSpelling
+          // from both normalizers; the write phase consumes them.
           if (pick && pick.key && pick.destination) {
             selectedDestinations.set(String(pick.key), pick.destination);
           }

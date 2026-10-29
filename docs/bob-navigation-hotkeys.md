@@ -321,8 +321,13 @@ advances the walk once to the next remaining item. Every `]s` landing on an
 eligible row ends its toast with the `Alt+P` roll preview (for example
 `Alt+P roll P2 1/1 · 8–30d`), naming the level, step or decay, and window
 the key would use. In the successor picker,
-`Ctrl+Shift+Enter` retargets the marked rows through the Block ID Prompt
-picker.
+`Ctrl+Shift+Enter` retargets through the Block ID Prompt picker. One
+highlighted row opens one picker for that task. Multiple marked rows
+open one picker per target, in displayed order, so each task sees its
+own suggestion. A cancelled pick, a missing or changed source note, or
+closing the successor picker while a destination picker is open leaves
+the previous overrides, marks, and selection unchanged. Older
+destination pickers still retarget without writing a theme field.
 
 `Alt+N`, the Task Card property rows, and `Ctrl+Shift+M` moves stamp every
 rewritten open task through the ledger-tools stamper. The Task Card's Review

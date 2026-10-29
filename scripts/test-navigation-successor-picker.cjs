@@ -40,6 +40,8 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
 
 const NavigationHotkeysPlugin = require("../plugins/bob-navigation-hotkeys/main.js");
 const { helpers } = NavigationHotkeysPlugin;
+const CyclerPlugin = require("../plugins/task-status-cycler/main.js");
+const cyclerHelpers = CyclerPlugin.helpers;
 Module._load = originalLoad;
 
 function row(key, index, options = {}) {
@@ -52,6 +54,7 @@ function row(key, index, options = {}) {
     needsBlockId: options.needsBlockId === true,
     selectable: options.selectable !== false,
     ...(options.mutedReason ? { mutedReason: options.mutedReason } : {}),
+    ...(options.task ? { task: options.task } : {}),
   };
 }
 
@@ -81,7 +84,11 @@ function modelFor(count, options = {}) {
 function makePlugin(options = {}) {
   const plugin = Object.create(NavigationHotkeysPlugin.prototype);
   let now = options.now === undefined ? 1000 : options.now;
-  plugin.app = { workspace: {}, vault: {}, plugins: { plugins: {} } };
+  plugin.app = {
+    workspace: { getLeavesOfType: () => [] },
+    vault: {},
+    plugins: { plugins: {} },
+  };
   plugin.successorPickerUnavailable = false;
   plugin.activeSuccessorPicker = null;
   plugin.reviewSuccessorGestureOwner = null;
@@ -299,12 +306,77 @@ test("the review-walk hold survives the 3000 ms timeout and releases with the ma
   assert.equal(plugin.reviewWalkBusy(), true, "the normal post-answer settling lock remains after owner release");
 });
 
-function makePluginWithDestination(pickImpl) {
+function makePluginWithDestination(pickImpl, options = {}) {
   const plugin = makePlugin();
   plugin.app.plugins.plugins["block-id-prompt"] = {
     api: { pomodoroLinkPicker: { version: 1, pick: pickImpl } },
   };
+  if (options.files) {
+    plugin.app.vault = {
+      getAbstractFileByPath: (path) => (
+        Object.prototype.hasOwnProperty.call(options.files, path) ? { path } : null
+      ),
+      cachedRead: async (file) => options.files[file.path],
+    };
+  }
+  if (options.leaves) {
+    plugin.app.workspace.getLeavesOfType = (type) => (
+      type === "markdown" ? options.leaves : []
+    );
+  }
   return plugin;
+}
+
+function taskNote(options = {}) {
+  const path = options.path || "projects/write.md";
+  const before = Array.isArray(options.before) ? options.before : ["# Project", ""];
+  const lineText = options.lineText || "- [ ] #task Offer task ^offer";
+  const after = Array.isArray(options.after) ? options.after : [];
+  const lines = [...before, lineText, ...after];
+  return {
+    path,
+    text: lines.join("\n"),
+    line: before.length + 1,
+    preimage: lineText,
+    displayText: options.displayText || "Offer task",
+    status: options.status || " ",
+  };
+}
+
+function taskAwareRow(key, note, extra = {}) {
+  return row(key, extra.index || 1, {
+    text: note.displayText,
+    notePath: note.path,
+    status: extra.status || "Ready",
+    ...extra,
+    task: {
+      path: note.path,
+      line: note.line,
+      text: note.text,
+      displayText: note.displayText,
+      status: note.status,
+      preimage: note.preimage,
+    },
+  });
+}
+
+function taskAwareModel(notes) {
+  return {
+    title: "Choose successors",
+    predecessors: [{ notePath: "work/close.md", blockId: "closed", text: "Close task" }],
+    groups: [{
+      group: "hand_off",
+      header: "Hand-offs",
+      project: "",
+      rows: notes.map((note, index) => taskAwareRow(`opaque:task/${index}`, note, { index: index + 1 })),
+    }],
+  };
+}
+
+async function flush(times = 8) {
+  for (let index = 0; index < times; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 test("destination override shapes normalize and label", () => {
@@ -314,6 +386,10 @@ test("destination override shapes normalize and label", () => {
     { kind: "existing", entryLine: 4, entryText: "- [ ] () — DEEP", title: "DEEP" },
   );
   assert.deepEqual(normalizeSuccessorDestinationOverride({ kind: "new", name: "  WRITE " }), { kind: "new", name: "WRITE" });
+  assert.deepEqual(
+    normalizeSuccessorDestinationOverride({ kind: "new", name: "Write", preserveSpelling: true }),
+    { kind: "new", name: "Write", preserveSpelling: true },
+  );
   assert.equal(normalizeSuccessorDestinationOverride({ kind: "existing", entryLine: -1, entryText: "x" }), null);
   assert.equal(normalizeSuccessorDestinationOverride({ kind: "new", name: "" }), null);
   assert.equal(normalizeSuccessorDestinationOverride({ kind: "other" }), null);
@@ -423,3 +499,294 @@ test("unload closes a pending modal, settles old and replacement APIs to null, a
     Picker.prototype.onOpen = originalOnOpen;
   }
 });
+
+const WRITE_SHOWN = {
+  theme: { key: "write", name: "WRITE" },
+  source: "note",
+  label: "from write.md",
+};
+const DEEP_SHOWN = {
+  theme: { key: "deep", name: "DEEP" },
+  source: "task",
+  inherited: { theme: { key: "deep", name: "DEEP" }, source: "note" },
+};
+
+test("themeIntent and preserveSpelling survive both destination normalizers", () => {
+  const { normalizeSuccessorDestinationOverride, normalizeSuccessorThemeIntent } = helpers;
+  const valid = {
+    kind: "new",
+    name: "Write",
+    preserveSpelling: true,
+    themeIntent: { deliberate: true, linkOnce: false, shown: WRITE_SHOWN },
+  };
+  const nav = normalizeSuccessorDestinationOverride(valid);
+  assert.deepEqual(nav, {
+    kind: "new",
+    name: "Write",
+    preserveSpelling: true,
+    themeIntent: { deliberate: true, linkOnce: false, shown: WRITE_SHOWN },
+  });
+  const cycler = cyclerHelpers.normalizeSuccessorPickDestination(nav);
+  assert.deepEqual(cycler, nav);
+  const existing = normalizeSuccessorDestinationOverride({
+    kind: "existing",
+    entryLine: 4,
+    entryText: "- [ ] () — DEEP",
+    title: "DEEP",
+    themeIntent: { deliberate: false, linkOnce: false, shown: DEEP_SHOWN },
+  });
+  assert.deepEqual(cyclerHelpers.normalizeSuccessorPickDestination(existing), existing);
+  assert.deepEqual(
+    normalizeSuccessorThemeIntent({ deliberate: true, linkOnce: true, shown: WRITE_SHOWN }),
+    { deliberate: false, linkOnce: true, shown: WRITE_SHOWN },
+  );
+  assert.deepEqual(
+    cyclerHelpers.normalizeSuccessorThemeIntent({ deliberate: true, linkOnce: true, shown: null }),
+    { deliberate: false, linkOnce: true, shown: null },
+  );
+});
+
+test("malformed themeIntent is dropped without rejecting a valid destination", () => {
+  const { normalizeSuccessorDestinationOverride } = helpers;
+  const malformed = [
+    { deliberate: "yes", linkOnce: false, shown: null },
+    { deliberate: true, linkOnce: 1, shown: null },
+    { deliberate: true, linkOnce: false, shown: "write" },
+    { deliberate: true, linkOnce: false, shown: {} },
+    { deliberate: true, linkOnce: false, shown: { theme: {} } },
+    { deliberate: true, linkOnce: false, shown: { theme: { key: "" } } },
+    "intent",
+    42,
+  ];
+  for (const themeIntent of malformed) {
+    assert.deepEqual(
+      normalizeSuccessorDestinationOverride({ kind: "new", name: "WRITE", themeIntent }),
+      { kind: "new", name: "WRITE" },
+      `nav drops ${JSON.stringify(themeIntent)}`,
+    );
+    assert.deepEqual(
+      cyclerHelpers.normalizeSuccessorPickDestination({ kind: "new", name: "WRITE", themeIntent }),
+      { kind: "new", name: "WRITE" },
+      `cycler drops ${JSON.stringify(themeIntent)}`,
+    );
+  }
+});
+
+test("the picker model carries validated task context and drops malformed task objects", () => {
+  const { normalizeSuccessorPickerModel, normalizeSuccessorPickerTaskContext } = helpers;
+  const note = taskNote({ before: ["# Project", "intro"], lineText: "- [ ] #task Later line ^later" });
+  const normalized = normalizeSuccessorPickerModel(taskAwareModel([note]));
+  assert.deepEqual(normalized.groups[0].rows[0].task, {
+    path: note.path,
+    line: 3,
+    text: note.text,
+    displayText: note.displayText,
+    status: note.status,
+    preimage: note.preimage,
+  });
+  assert.equal(normalizeSuccessorPickerTaskContext({ path: "x.md", line: 0, text: "a", preimage: "a" }), null);
+  const withoutTask = normalizeSuccessorPickerModel(modelFor(1));
+  assert.equal(withoutTask.groups[0].rows[0].task, undefined);
+  const malformed = taskAwareModel([note]);
+  malformed.groups[0].rows[0].task = { path: note.path, line: 3, text: note.text };
+  assert.equal(normalizeSuccessorPickerModel(malformed).groups[0].rows[0].task, undefined);
+});
+
+test("task-aware retargets pass each successor's context, including a non-first line", async () => {
+  const write = taskNote({
+    path: "projects/write.md",
+    displayText: "Write docs",
+    status: " ",
+    lineText: "- [ ] #task Write docs ^write",
+  });
+  const deep = taskNote({
+    path: "projects/deep.md",
+    before: ["# Deep", "", "prelude"],
+    displayText: "Deep work",
+    status: "?",
+    lineText: "- [?] #task Deep work ^deep",
+  });
+  const requests = [];
+  const plugin = makePluginWithDestination(async (request) => {
+    requests.push(request);
+    if (requests.length === 1) {
+      return {
+        kind: "new",
+        name: "WRITE",
+        themeIntent: { deliberate: true, linkOnce: false, shown: WRITE_SHOWN },
+      };
+    }
+    return {
+      kind: "existing",
+      entryLine: 5,
+      entryText: "- [ ] () — DEEP",
+      title: "DEEP",
+      themeIntent: { deliberate: false, linkOnce: false, shown: DEEP_SHOWN },
+    };
+  }, { files: { [write.path]: write.text, [deep.path]: deep.text } });
+  const { pending, modal } = await openPicker(plugin, taskAwareModel([write, deep]));
+  pressKey(modal, "Tab");
+  pressKey(modal, "Tab");
+  assert.equal(await modal.retargetRowsForDestination(), true);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].task, {
+    path: write.path,
+    line: write.line,
+    text: write.text,
+    displayText: write.displayText,
+    status: write.status,
+  });
+  assert.deepEqual(requests[1].task, {
+    path: deep.path,
+    line: 4,
+    text: deep.text,
+    displayText: deep.displayText,
+    status: deep.status,
+  });
+  assert.equal(modal.destinationOverrides.get("opaque:task/0").themeIntent.shown, WRITE_SHOWN);
+  assert.equal(modal.destinationOverrides.get("opaque:task/1").themeIntent.shown, DEEP_SHOWN);
+  await finishWithEnter(plugin, modal);
+  const result = await pending;
+  const viaCycler = cyclerHelpers.normalizeSuccessorPicks(result);
+  assert.equal(viaCycler[0].destination.themeIntent.deliberate, true);
+  assert.equal(viaCycler[1].destination.kind, "existing");
+  assert.equal(viaCycler[1].destination.themeIntent.shown, DEEP_SHOWN);
+});
+
+test("old rows retarget without a task request and cannot acquire theme permission", async () => {
+  const requests = [];
+  const plugin = makePluginWithDestination(async (request) => {
+    requests.push(request);
+    return { kind: "new", name: "DEEP" };
+  });
+  const { pending, modal } = await openPicker(plugin, modelFor(2));
+  pressKey(modal, "Tab");
+  pressKey(modal, "Tab");
+  assert.equal(await modal.retargetRowsForDestination(), true);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0], {});
+  assert.deepEqual(requests[1], {});
+  assert.equal(modal.destinationOverrides.get("opaque:key/0#0").themeIntent, undefined);
+  await finishWithEnter(plugin, modal);
+  const result = await pending;
+  assert.equal(result.picks[0].destination.themeIntent, undefined);
+});
+
+test("Alt+Enter link-once and untouched preselection keep validated intent", async () => {
+  const note = taskNote();
+  const plugin = makePluginWithDestination(async () => ({
+    kind: "new",
+    name: "WRITE",
+    themeIntent: { deliberate: true, linkOnce: true, shown: WRITE_SHOWN },
+  }), { files: { [note.path]: note.text } });
+  const first = await openPicker(plugin, taskAwareModel([note]));
+  assert.equal(await first.modal.retargetRowsForDestination(), true);
+  assert.deepEqual(first.modal.destinationOverrides.get("opaque:task/0").themeIntent, {
+    deliberate: false,
+    linkOnce: true,
+    shown: WRITE_SHOWN,
+  });
+  first.modal.close();
+  assert.equal(await first.pending, null);
+
+  const untouched = makePluginWithDestination(async () => ({
+    kind: "existing",
+    entryLine: 2,
+    entryText: "- [ ] () — WRITE",
+    title: "WRITE",
+    themeIntent: { deliberate: false, linkOnce: false, shown: WRITE_SHOWN },
+  }), { files: { [note.path]: note.text } });
+  const second = await openPicker(untouched, taskAwareModel([note]));
+  assert.equal(await second.modal.retargetRowsForDestination(), true);
+  assert.deepEqual(second.modal.destinationOverrides.get("opaque:task/0").themeIntent, {
+    deliberate: false,
+    linkOnce: false,
+    shown: WRITE_SHOWN,
+  });
+  second.modal.close();
+});
+
+test("a changed or missing source refuses the retarget and leaves overrides untouched", async () => {
+  const note = taskNote();
+  const changed = makePluginWithDestination(async () => ({ kind: "new", name: "WRITE" }), {
+    files: { [note.path]: "# Project\n\n- [ ] #task Changed line ^offer" },
+  });
+  const first = await openPicker(changed, taskAwareModel([note]));
+  first.modal.destinationOverrides.set("opaque:task/0", { kind: "new", name: "KEEP" });
+  pressKey(first.modal, "Tab");
+  assert.equal(await first.modal.retargetRowsForDestination(), false);
+  assert.deepEqual(Array.from(first.modal.destinationOverrides.entries()), [
+    ["opaque:task/0", { kind: "new", name: "KEEP" }],
+  ]);
+  assert.equal(first.modal.markedKeys.size, 1);
+  first.modal.close();
+
+  const missing = makePluginWithDestination(async () => ({ kind: "new", name: "WRITE" }), { files: {} });
+  const second = await openPicker(missing, taskAwareModel([note]));
+  assert.equal(await second.modal.retargetRowsForDestination(), false);
+  assert.equal(second.modal.destinationOverrides.size, 0);
+  second.modal.close();
+});
+
+test("an intermediate cancel and a close while awaiting leave previous overrides", async () => {
+  const write = taskNote({ path: "projects/write.md", displayText: "Write" });
+  const deep = taskNote({ path: "projects/deep.md", displayText: "Deep" });
+  const files = { [write.path]: write.text, [deep.path]: deep.text };
+  let calls = 0;
+  const cancelled = makePluginWithDestination(async () => {
+    calls += 1;
+    return calls === 1 ? { kind: "new", name: "WRITE" } : null;
+  }, { files });
+  const first = await openPicker(cancelled, taskAwareModel([write, deep]));
+  first.modal.destinationOverrides.set("opaque:task/0", { kind: "new", name: "KEEP" });
+  pressKey(first.modal, "Tab");
+  pressKey(first.modal, "Tab");
+  assert.equal(await first.modal.retargetRowsForDestination(), false);
+  assert.deepEqual(Array.from(first.modal.destinationOverrides.entries()), [
+    ["opaque:task/0", { kind: "new", name: "KEEP" }],
+  ]);
+  assert.equal(first.modal.markedKeys.size, 2);
+  first.modal.close();
+
+  let resolvePick;
+  const hanging = makePluginWithDestination(() => new Promise((resolve) => {
+    resolvePick = resolve;
+  }), { files: { [write.path]: write.text } });
+  const second = await openPicker(hanging, taskAwareModel([write]));
+  second.modal.destinationOverrides.set("opaque:task/0", { kind: "new", name: "KEEP" });
+  const pendingRetarget = second.modal.retargetRowsForDestination();
+  await flush();
+  second.modal.close();
+  resolvePick({ kind: "new", name: "WRITE" });
+  assert.equal(await pendingRetarget, false);
+  assert.equal(await second.pending, null);
+});
+
+test("open-editor text wins the refresh and reentry is refused while awaiting", async () => {
+  const note = taskNote();
+  const live = `${note.text}\n`;
+  const requests = [];
+  let resolvePick;
+  const plugin = makePluginWithDestination((request) => {
+    requests.push(request);
+    return new Promise((resolve) => { resolvePick = resolve; });
+  }, {
+    files: { [note.path]: "stale" },
+    leaves: [{
+      view: {
+        file: { path: note.path },
+        editor: { getValue: () => live },
+      },
+    }],
+  });
+  const { modal, pending } = await openPicker(plugin, taskAwareModel([note]));
+  const first = modal.retargetRowsForDestination();
+  await flush();
+  assert.equal(await modal.retargetRowsForDestination(), false, "reentry is refused");
+  resolvePick({ kind: "new", name: "WRITE" });
+  assert.equal(await first, true);
+  assert.equal(requests[0].task.text, live);
+  modal.close();
+  assert.equal(await pending, null);
+});
+

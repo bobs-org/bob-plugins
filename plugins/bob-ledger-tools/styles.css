@@ -933,12 +933,72 @@ body.bob-fresh-marks .markdown-source-view.is-live-preview .dataview.inline-fiel
   flex-basis: 100%;
 }
 
+.bob-relation-group {
+  display: contents;
+}
+
+.bob-relation-entry.is-mention {
+  display: inline-flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 .bob-relation-pill {
   color: var(--text-muted);
   font-size: 0.85em;
   font-variant: small-caps;
   letter-spacing: 0.03em;
   white-space: nowrap;
+}
+
+.bob-relation-pill.is-mention {
+  cursor: pointer;
+  font-style: italic;
+}
+
+.bob-relation-divider {
+  display: block;
+  flex-basis: 100%;
+  border-top: 1px dotted var(--background-modifier-border);
+  margin: 0.15em 0;
+}
+
+.bob-mention-quote {
+  flex-basis: 100%;
+  box-sizing: border-box;
+  max-width: 82ch;
+  overflow: hidden;
+  color: var(--text-muted);
+  border-left: 2px solid var(--background-modifier-border);
+  margin-left: 0.3em;
+  padding-left: 0.45em;
+  font-size: 0.88em;
+  line-height: 1.25;
+  white-space: nowrap;
+  text-overflow: clip;
+}
+
+.bob-mention-quote-target {
+  color: var(--text-normal);
+  background: var(--text-highlight-bg);
+  border-radius: 2px;
+}
+
+.bob-relation-mixed-marker {
+  color: var(--text-muted);
+  font-size: 0.8em;
+  line-height: 1;
+}
+
+.bob-relation-more {
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.cm-line.bob-mention-jump-highlight {
+  background-color: var(--text-highlight-bg);
+  transition: background-color 0.2s ease-out;
 }
 
 .bob-relation-arrow {
@@ -977,6 +1037,10 @@ body.bob-fresh-marks .markdown-source-view.is-live-preview .dataview.inline-fiel
 @media (prefers-reduced-motion: reduce) {
   .bob-relation-row .bob-dep-chip:hover {
     transform: none;
+  }
+
+  .cm-line.bob-mention-jump-highlight {
+    transition: none;
   }
 }
 

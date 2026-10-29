@@ -17469,6 +17469,11 @@ const RELATION_LINKS_ROW_TOOLTIP =
   "Related tasks · live from the relation index";
 const RELATION_LINKED_FROM_ROW_TOOLTIP =
   "Tasks linking here · live from the relation index";
+const RELATION_LINKED_FROM_MENTIONS_TOOLTIP =
+  "Tasks linking here · relations and 💬 text mentions · live";
+const RELATION_MENTION_STALE_TOOLTIP =
+  "No longer mentioned here · refreshes on the next reconcile";
+const RELATION_MENTION_LABEL = "💬 mentions";
 
 // Display-only inverse phrases (docs/task-relations.md §10). Storage
 // stays verbatim; matching is case-insensitive.
@@ -17582,7 +17587,7 @@ function relationCompareLinktext(left, right) {
   return relationCodepointCompare(String(left || ""), String(right || ""));
 }
 
-function relationBuildChip({ direction, linkpath, blockId, label, task, otherPath, live, stale, resolved, sourcePath }) {
+function relationBuildChip({ direction, linkpath, blockId, label, task, otherPath, live, stale, resolved, sourcePath, alsoMentioned }) {
   try {
     const id = String(blockId || "");
     const known = task && typeof task === "object" ? task : null;
@@ -17625,6 +17630,8 @@ function relationBuildChip({ direction, linkpath, blockId, label, task, otherPat
       linktext,
       path: resolvedPath,
       label: label || null,
+      kind: "relation",
+      alsoMentioned: Boolean(alsoMentioned),
       inverse,
       // Stale chips keep their underlying state; the `is-stale` class
       // (dashed, muted) carries the staleness. Colour carries status.
@@ -17646,6 +17653,91 @@ function relationBuildChip({ direction, linkpath, blockId, label, task, otherPat
   } catch (error) {
     return null;
   }
+}
+
+function relationFitMentionQuote(marked, limit = 80) {
+  try {
+    const value = String(marked || "").trim();
+    const open = value.indexOf("⟦");
+    const close = open < 0 ? -1 : value.indexOf("⟧", open + 1);
+    if (open < 0 || close < 0) return null;
+    const points = Array.from(value);
+    const start = Array.from(value.slice(0, open)).length;
+    const end = Array.from(value.slice(0, close + 1)).length;
+    const max = Math.max(24, Math.floor(Number(limit) || 80));
+    const tokenLength = end - start;
+    if (points.length <= max) return value;
+    if (tokenLength >= max - 2) {
+      return "…" + points.slice(start, end).join("") + "…";
+    }
+    const room = max - tokenLength - 2;
+    let left = Math.min(start, Math.floor(room / 2));
+    let right = Math.min(points.length - end, room - left);
+    if (left < Math.floor(room / 2)) right = Math.min(points.length - end, room - left);
+    if (right < room - left) left = Math.min(start, room - right);
+    const prefix = start > left ? "…" : "";
+    const suffix = points.length - end > right ? "…" : "";
+    return prefix + points.slice(start - left, start).join("") + points.slice(start, end).join("") + points.slice(end, end + right).join("") + suffix;
+  } catch (error) {
+    return null;
+  }
+}
+
+function relationBuildMentionChip({ linkpath, blockId, task, otherPath, live, stale, resolved, sourcePath, display, count, occurrences }) {
+  try {
+    const base = relationBuildChip({
+      direction: "from",
+      linkpath,
+      blockId,
+      label: RELATION_MENTION_LABEL,
+      task,
+      otherPath,
+      live,
+      stale,
+      resolved,
+      sourcePath,
+    });
+    if (!base) return null;
+    const rows = Array.isArray(occurrences) ? occurrences.map((occurrence) => ({ ...occurrence })) : [];
+    const shownDisplay = display === "embed" ? "embed" : "mention";
+    const firstQuote = shownDisplay === "mention"
+      ? rows.find((occurrence) => occurrence && occurrence.site !== "title" && typeof occurrence.excerpt === "string" && occurrence.excerpt.includes("⟦") && occurrence.excerpt.includes("⟧"))
+      : null;
+    base.kind = "mention";
+    base.label = null;
+    base.alsoMentioned = false;
+    base.display = shownDisplay;
+    base.count = Math.max(0, Number(count) || rows.length || 0);
+    base.occurrences = rows;
+    base.quote = firstQuote ? relationFitMentionQuote(firstQuote.excerpt, 80) : null;
+    base.mentionPill = shownDisplay === "embed" ? "💬 embedded in" : "💬 mentioned in";
+    base.pillAriaLabel = "Why is this here? " + base.fullText + (shownDisplay === "embed" ? " embeds this task" : " mentions this task") + " in its text";
+    base.removeLabel = null;
+    base.tooltip = stale ? RELATION_MENTION_STALE_TOOLTIP : base.tooltip;
+    base.ariaLabel = base.pillAriaLabel;
+    return base;
+  } catch (error) {
+    return null;
+  }
+}
+
+function relationApplyChipGroupRules(chips, groupKind) {
+  const rows = Array.isArray(chips) ? chips : [];
+  const closed = rows.filter((chip) => chip && chip.live && !chip.broken && chip.state === "done");
+  let collapsed = null;
+  if (closed.length >= 3) {
+    for (const chip of closed) chip.collapsed = true;
+    collapsed = { count: closed.length };
+  }
+  let more = null;
+  if (groupKind === "mentions") {
+    const open = rows.filter((chip) => chip && !chip.broken && chip.state !== "done" && chip.state !== "cancelled");
+    if (open.length > 5) {
+      for (const chip of open.slice(5)) chip.densityCollapsed = true;
+      more = { count: open.length - 5 };
+    }
+  }
+  return { chips: rows, collapsed, more };
 }
 
 // Merge one relation row's stored entries with its live index edges.
@@ -17684,7 +17776,8 @@ function relationChipModelForRow({ direction, lineText, sourcePath, live, lookup
         continue;
       }
     }
-    const chips = [];
+    const relationChips = [];
+    const mentionChips = [];
     const consumed = new Set();
     const stored = Array.isArray(parsed.entries) ? parsed.entries : [];
     for (const entry of stored) {
@@ -17720,11 +17813,19 @@ function relationChipModelForRow({ direction, lineText, sourcePath, live, lookup
         } else {
           task = lookupFn(entryPath, entryId);
         }
-        const chip = relationBuildChip({
-          direction, linkpath: (entry && entry.target) || "", blockId: entryId,
-          label, task, otherPath, live: Boolean(edge), stale: !edge, resolved, sourcePath: source,
-        });
-        if (chip) chips.push(chip);
+        const isMention = Boolean((entry && entry.kind === "mention") || (edge && edge.kind === "mention") || label === RELATION_MENTION_LABEL);
+        const chip = isMention
+          ? relationBuildMentionChip({
+            linkpath: (entry && entry.target) || "", blockId: entryId, task, otherPath,
+            live: Boolean(edge), stale: !edge, resolved, sourcePath: source,
+            display: edge && edge.display, count: edge && edge.count, occurrences: edge && edge.occurrences,
+          })
+          : relationBuildChip({
+            direction, linkpath: (entry && entry.target) || "", blockId: entryId,
+            label, task, otherPath, live: Boolean(edge), stale: !edge, resolved, sourcePath: source,
+            alsoMentioned: Boolean(edge && edge.alsoMentioned),
+          });
+        if (chip) (isMention ? mentionChips : relationChips).push(chip);
       } catch (error) {
         continue;
       }
@@ -17748,30 +17849,36 @@ function relationChipModelForRow({ direction, lineText, sourcePath, live, lookup
         // An unresolvable live edge with no task record is broken, not
         // appended: only the stored text can name it (LC4).
         if (!otherPath && !task) continue;
-        const chip = relationBuildChip({
-          direction, linkpath: "", blockId: otherId, label: (edge && edge.label) || null,
-          task, otherPath, live: true, stale: false, sourcePath: source,
-        });
-        if (chip) chips.push(chip);
+        const isMention = Boolean(edge && edge.kind === "mention");
+        const chip = isMention
+          ? relationBuildMentionChip({
+            linkpath: "", blockId: otherId, task, otherPath, live: true, stale: false,
+            resolved: true, sourcePath: source, display: edge.display, count: edge.count,
+            occurrences: edge.occurrences,
+          })
+          : relationBuildChip({
+            direction, linkpath: "", blockId: otherId, label: (edge && edge.label) || null,
+            task, otherPath, live: true, stale: false, sourcePath: source,
+            alsoMentioned: Boolean(edge && edge.alsoMentioned),
+          });
+        if (chip) (isMention ? mentionChips : relationChips).push(chip);
       } catch (error) {
         continue;
       }
     }
-    const closed = chips.filter((chip) => chip && chip.live && !chip.broken && chip.state === "done");
-    let collapsed = null;
-    if (closed.length >= 3) {
-      for (const chip of closed) chip.collapsed = true;
-      collapsed = { count: closed.length };
-    }
-    const labelled = chips.some((chip) => chip && chip.label);
+    const relationGroup = relationApplyChipGroupRules(relationChips, "relations");
+    const mentionGroup = relationApplyChipGroupRules(mentionChips, "mentions");
+    const chips = [...relationChips, ...mentionChips];
+    const labelled = relationChips.some((chip) => chip && chip.label) || mentionChips.length > 0;
     const liveCount = chips.filter((chip) => chip && chip.live).length;
     return {
       direction,
       kind: parsed.kind,
       label: direction === "to" ? "🪢 links to" : "🪢 linked from",
-      tooltip: direction === "to" ? RELATION_LINKS_ROW_TOOLTIP : RELATION_LINKED_FROM_ROW_TOOLTIP,
+      tooltip: direction === "to" ? RELATION_LINKS_ROW_TOOLTIP : RELATION_LINKED_FROM_MENTIONS_TOOLTIP,
       chips,
-      collapsed,
+      groups: { relations: relationGroup, mentions: mentionGroup },
+      collapsed: relationGroup.collapsed,
       labelled,
       liveCount,
       storedCount: chips.length,
@@ -17851,6 +17958,7 @@ function relationAttachAddControl(row, doc, model, onAdd) {
 function relationChipAriaLabel(chip) {
   try {
     if (!chip || typeof chip !== "object") return "relation";
+    if (chip.kind === "mention") return String(chip.fullText || chip.text || "Task") + " · " + (chip.display === "embed" ? "embedded in" : "mentioned in") + " its text" + (chip.stale ? " · stale" : "");
     const parts = [String(chip.fullText || chip.text || "relation")];
     if (chip.direction === "from" && chip.inverse) parts.push("· " + chip.inverse);
     else if (chip.label) parts.push("· " + chip.label);
@@ -17874,14 +17982,14 @@ function buildRelationChipElement(doc, model, options) {
     if (!doc || !model || typeof model !== "object") return null;
     const opts = options && typeof options === "object" ? options : {};
     const interactive = Boolean(opts.interactive);
-    const chips = Array.isArray(model.chips) ? model.chips : [];
+    const groups = relationChipGroups(model);
     const row = doc.createElement("span");
     const rowClasses = ["bob-dep-row", "bob-relation-row"];
     if (model.direction === "from") rowClasses.push("is-incoming");
     if (model.labelled) rowClasses.push("is-labelled");
     row.setAttribute("class", rowClasses.join(" "));
     row.setAttribute("role", "group");
-    row.setAttribute("aria-label", String(model.label || "relations") + ", " + model.liveCount + " live");
+    row.setAttribute("aria-label", String(model.tooltip || model.label || "relations"));
     if (model.tooltip) row.setAttribute("title", String(model.tooltip));
     const label = doc.createElement("span");
     label.setAttribute("class", "bob-dep-label bob-relation-label");
@@ -17891,6 +17999,7 @@ function buildRelationChipElement(doc, model, options) {
     const buildChipEl = (chip) => {
       const el = doc.createElement("span");
       const classes = ["bob-dep-chip", "bob-relation-chip", "is-" + String(chip.state || "todo")];
+      if (chip.kind === "mention") classes.push("is-mention");
       if (chip.stale) classes.push("is-stale");
       if (chip.broken) classes.push("is-broken");
       if (chip.archived) classes.push("is-archived");
@@ -17917,7 +18026,7 @@ function buildRelationChipElement(doc, model, options) {
         note.appendChild(doc.createTextNode(String(chip.noteLabel)));
         el.appendChild(note);
       }
-      if (interactive && chip.live && !chip.broken) {
+      if (interactive && chip.kind !== "mention" && chip.live && !chip.broken) {
         relationAttachChipRemove(el, chip, doc, opts.onRemove);
       }
       if (typeof el.addEventListener === "function") {
@@ -17965,23 +18074,27 @@ function buildRelationChipElement(doc, model, options) {
       arrow.appendChild(doc.createTextNode(String(text === undefined ? "→" : text)));
       return arrow;
     };
-    const visible = chips.filter((chip) => chip && !chip.collapsed);
-    const appendChipEntry = (host, chip) => {
+    const buildEntry = (kind, chip) => {
       try {
-        if (model.labelled) {
-          const entry = doc.createElement("span");
-          entry.setAttribute("class", "bob-relation-entry");
+        const entry = doc.createElement("span");
+        entry.setAttribute("class", "bob-relation-entry" + (kind === "mentions" ? " is-mention" : ""));
+        const chipEl = buildChipEl(chip);
+        if (kind === "mentions") {
+          entry.appendChild(relationCreateMentionPill(doc, chip));
+          entry.appendChild(chipEl);
+          if (chip.quote) relationAppendMentionQuote(entry, chip.quote, doc);
+        } else {
           if (model.direction === "to") {
             if (chip.label) {
               entry.appendChild(buildPill(chip.label));
               entry.appendChild(buildArrow());
             }
-            entry.appendChild(buildChipEl(chip));
+            entry.appendChild(chipEl);
           } else if (chip.inverse) {
             entry.appendChild(buildPill(chip.inverse));
-            entry.appendChild(buildChipEl(chip));
+            entry.appendChild(chipEl);
           } else if (chip.label) {
-            entry.appendChild(buildChipEl(chip));
+            entry.appendChild(chipEl);
             const sep = doc.createElement("span");
             sep.setAttribute("class", "bob-relation-sep");
             sep.setAttribute("aria-hidden", "true");
@@ -17990,61 +18103,84 @@ function buildRelationChipElement(doc, model, options) {
             entry.appendChild(buildPill(chip.label));
             entry.appendChild(buildArrow("→ this"));
           } else {
-            entry.appendChild(buildChipEl(chip));
+            entry.appendChild(chipEl);
           }
-          host.appendChild(entry);
-        } else {
-          host.appendChild(buildChipEl(chip));
+          if (chip.alsoMentioned) relationAppendMixedMentionMarker(entry, doc);
         }
+        return entry;
       } catch (error) {
-        // One bad entry never breaks the row.
+        return null;
       }
     };
     if (!model.labelled && model.direction === "to") {
       // LC1: an unlabelled LINKS row reads `🪢 links to → (chip)`.
       row.appendChild(buildArrow());
     }
-    for (const chip of visible) appendChipEntry(row, chip);
-    if (model.collapsed && Number(model.collapsed.count) > 0) {
-      const count = Number(model.collapsed.count);
-      const collapsed = doc.createElement("span");
-      collapsed.setAttribute("class", "bob-dep-chip is-done-collapsed bob-relation-collapsed");
-      collapsed.setAttribute("role", "button");
-      collapsed.setAttribute("tabindex", "0");
-      collapsed.setAttribute("aria-label", "Show " + count + " closed relations");
-      collapsed.setAttribute("title", "✓×" + count + " closed");
-      collapsed.appendChild(doc.createTextNode("✓×" + count));
-      const expand = () => {
-        try {
-          for (const chip of chips) {
-            if (chip && chip.collapsed) appendChipEntry(row, { ...chip, collapsed: false });
-          }
-          if (typeof collapsed.remove === "function") collapsed.remove();
-          else if (collapsed.parentNode && typeof collapsed.parentNode.removeChild === "function") {
-            collapsed.parentNode.removeChild(collapsed);
-          }
-        } catch (error) {
-          // An unexpanded row never breaks the chips.
+    const appendGroup = (kind, group) => {
+      const chips = Array.isArray(group && group.chips) ? group.chips : [];
+      if (chips.length === 0) return null;
+      const host = doc.createElement("span");
+      host.setAttribute("class", kind === "mentions" ? "bob-relation-group bob-relation-mention-group" : "bob-relation-group bob-relation-link-group");
+      for (const chip of chips) {
+        if (!chip || chip.collapsed || chip.densityCollapsed) continue;
+        if (kind === "relations" && model.direction === "to" && !model.labelled) {
+          host.appendChild(buildChipEl(chip));
+        } else {
+          const entry = buildEntry(kind, chip);
+          if (entry) host.appendChild(entry);
         }
-      };
-      if (typeof collapsed.addEventListener === "function") {
-        collapsed.addEventListener("click", expand);
-        collapsed.addEventListener("keydown", (event) => {
-          if (event && (event.key === "Enter" || event.key === " ")) {
-            if (typeof event.preventDefault === "function") event.preventDefault();
-            expand();
+      }
+      const addToggle = (count, toggleKind, hidden) => {
+        if (!count || hidden.length === 0) return;
+        const toggle = doc.createElement("span");
+        const noun = kind === "mentions" ? "mentions" : "relations";
+        const text = toggleKind === "more" ? "+" + count + " more" : "✓×" + count;
+        toggle.setAttribute("class", "bob-dep-chip bob-relation-collapsed" + (toggleKind === "more" ? " bob-relation-more" : " is-done-collapsed"));
+        toggle.setAttribute("role", "button");
+        toggle.setAttribute("tabindex", "0");
+        toggle.setAttribute("aria-label", toggleKind === "more" ? "Show " + count + " more mentions" : "Show " + count + " closed " + noun);
+        toggle.setAttribute("title", toggleKind === "more" ? text : text + " closed " + noun);
+        toggle.appendChild(doc.createTextNode(text));
+        const expand = () => {
+          try {
+            for (const chip of hidden) {
+              if (kind === "relations" && model.direction === "to" && !model.labelled) {
+                host.insertBefore(buildChipEl(chip), toggle);
+              } else {
+                const entry = buildEntry(kind, chip);
+                if (entry) host.insertBefore(entry, toggle);
+              }
+            }
+            if (typeof toggle.remove === "function") toggle.remove();
+            else if (toggle.parentNode && typeof toggle.parentNode.removeChild === "function") toggle.parentNode.removeChild(toggle);
+          } catch (error) {
+            // A collapsed group never breaks the other rows.
           }
-        });
-      }
-      if (model.labelled) {
-        const entry = doc.createElement("span");
-        entry.setAttribute("class", "bob-relation-entry");
-        entry.appendChild(collapsed);
-        row.appendChild(entry);
-      } else {
-        row.appendChild(collapsed);
-      }
+        };
+        if (typeof toggle.addEventListener === "function") {
+          toggle.addEventListener("click", expand);
+          toggle.addEventListener("keydown", (event) => {
+            if (event && (event.key === "Enter" || event.key === " ")) {
+              if (typeof event.preventDefault === "function") event.preventDefault();
+              expand();
+            }
+          });
+        }
+        host.appendChild(toggle);
+      };
+      addToggle(group.collapsed && Number(group.collapsed.count), "closed", chips.filter((chip) => chip && chip.collapsed));
+      addToggle(group.more && Number(group.more.count), "more", chips.filter((chip) => chip && chip.densityCollapsed));
+      row.appendChild(host);
+      return host;
+    };
+    const relationHost = appendGroup("relations", groups.relations);
+    if (relationHost && groups.mentions.chips.length > 0) {
+      const divider = doc.createElement("span");
+      divider.setAttribute("class", "bob-relation-divider");
+      divider.setAttribute("aria-hidden", "true");
+      row.appendChild(divider);
     }
+    appendGroup("mentions", groups.mentions);
     if (interactive) relationAttachAddControl(row, doc, model, opts.onAdd);
     return row;
   } catch (error) {
@@ -18676,8 +18812,12 @@ if (WidgetType && typeof WidgetType === "function") {
           plugin,
           sourcePath,
           interactive,
-          onOpen: (linktext, event) => {
+          onOpen: (linktext, event, chip) => {
             try {
+              if (chip && chip.kind === "mention" && plugin && typeof plugin.relationOpenMention === "function") {
+                plugin.relationOpenMention(chip, sourcePath, event);
+                return;
+              }
               if (plugin && typeof plugin.dependencyOpenTarget === "function") {
                 plugin.dependencyOpenTarget(linktext, sourcePath, event);
               }
@@ -58834,20 +58974,32 @@ class BobLedgerToolsRelationModelMixin {
               },
             }));
           } else {
-            const rows = owner && owner.blockId ? api.incoming(sourcePath, owner.blockId) : [];
-            live = (Array.isArray(rows) ? rows : []).map((edge) => ({
-              label: edge && edge.label,
-              other: {
-                path: edge && edge.source ? edge.source.path : "",
-                blockId: edge && edge.source ? edge.source.blockId : "",
-                // Incoming rows only contain resolved targets.
-                resolved: true,
-                task: edge && edge.source && edge.source.path
-                  ? self.relationLookupTask(edge.source.path, edge.source.blockId)
-                  : null,
-                fallback: edge && edge.source ? edge.source : null,
-              },
-            }));
+            const hasLinkedFromV2 = typeof api.linkedFrom === "function";
+            const rows = owner && owner.blockId
+              ? (hasLinkedFromV2 ? api.linkedFrom(sourcePath, owner.blockId) : api.incoming(sourcePath, owner.blockId))
+              : [];
+            live = (Array.isArray(rows) ? rows : []).map((edge) => {
+              const source = edge && edge.source ? edge.source : null;
+              const other = source || {};
+              return {
+                kind: edge && edge.kind === "mention" ? "mention" : "relation",
+                label: edge && edge.kind === "mention" ? "💬 mentions" : edge && edge.label,
+                alsoMentioned: Boolean(edge && edge.alsoMentioned),
+                display: edge && edge.display,
+                count: edge && edge.count,
+                occurrences: Array.isArray(edge && edge.occurrences) ? edge.occurrences : [],
+                other: {
+                  path: other.path || "",
+                  blockId: other.blockId || "",
+                  // linkedFrom() and incoming() expose only resolved sources.
+                  resolved: true,
+                  task: other.path
+                    ? self.relationLookupTask(other.path, other.blockId)
+                    : null,
+                  fallback: source,
+                },
+              };
+            });
           }
         }
       } catch (error) {
@@ -60546,6 +60698,7 @@ class BobLedgerToolsRelationRenderMixin {
           // Best-effort.
         }
       }
+      const groups = relationChipGroups(model);
       const rowClasses = ["bob-dep-row", "bob-relation-row"];
       if (model.direction === "from") rowClasses.push("is-incoming");
       if (model.labelled) rowClasses.push("is-labelled");
@@ -60557,63 +60710,12 @@ class BobLedgerToolsRelationRenderMixin {
         }
       }
       li.setAttribute("role", "group");
-      li.setAttribute("aria-label", String(model.label || "relations") + ", " + model.liveCount + " live");
+      li.setAttribute("aria-label", String(model.tooltip || model.label || "relations"));
       li.setAttribute("title", String(model.tooltip || ""));
       if (li.dataset) li.dataset.bobRelationProcessed = "1";
       const meta = { lineNumber, direction: model.direction, ownerBlockId: (owner && owner.blockId) || null };
 
       const available = anchors.slice();
-      const closedAnchors = [];
-      for (const chip of model.chips) {
-        let anchor = null;
-        const foundAt = available.findIndex((candidate) => {
-          try {
-            return dependencyReadingBlockId(candidate) === chip.blockId;
-          } catch (error) {
-            return false;
-          }
-        });
-        if (foundAt >= 0) {
-          anchor = available.splice(foundAt, 1)[0];
-          this.relationDecorateReadingAnchor(anchor, chip, doc, model);
-        } else if (chip.live && !chip.broken) {
-          // LC7: a live edge missing from the stored text is appended
-          // in canonical order; placement happens below.
-          anchor = this.relationCreateReadingAnchor(chip, doc, model, sourcePath);
-          if (!anchor) {
-            continue;
-          }
-        } else {
-          // Stale chips with no stored anchor, and live-but-broken
-          // edges with none, name nothing to decorate.
-          continue;
-        }
-        if (chip.collapsed) {
-          closedAnchors.push(anchor);
-        }
-        if (model.labelled) {
-          // Each labelled entry gets its own visual row with its pill
-          // and arrow (LC10); processing in chip order keeps stored
-          // order with live appends last (LC7).
-          const entry = doc.createElement("span");
-          entry.setAttribute("class", "bob-relation-entry");
-          try {
-            if (anchor.parentNode) anchor.parentNode.removeChild(anchor);
-          } catch (removeError) {
-            // Fresh anchors have no parent yet.
-          }
-          entry.appendChild(anchor);
-          this.relationAppendReadingEntryContent(entry, anchor, chip, doc, model);
-          li.appendChild(entry);
-        } else if (!anchor.parentNode) {
-          // Unlabelled rows keep stored anchors in place; fresh live
-          // appends go last (LC7).
-          li.appendChild(anchor);
-        }
-        if (interactive && chip.live && !chip.broken && anchor) {
-          this.relationAttachReadingRemove(anchor, chip, doc, sourcePath, meta);
-        }
-      }
       // Hide the source glyph, header words, label words, and raw
       // separators: every direct text child of an accepted row is
       // chrome the chips replace. Nested lists are elements, so child
@@ -60652,9 +60754,55 @@ class BobLedgerToolsRelationRenderMixin {
           continue;
         }
       }
-      if (model.collapsed && Number(model.collapsed.count) > 0) {
-        this.relationAppendReadingCollapsed(li, closedAnchors, model, doc);
+      const appendGroup = (kind, group) => {
+        const chips = Array.isArray(group && group.chips) ? group.chips : [];
+        if (chips.length === 0) return null;
+        const host = doc.createElement("span");
+        host.setAttribute("class", kind === "mentions" ? "bob-relation-group bob-relation-mention-group" : "bob-relation-group bob-relation-link-group");
+        const hiddenClosed = [];
+        const hiddenMore = [];
+        for (const chip of chips) {
+          let anchor = null;
+          const foundAt = available.findIndex((candidate) => {
+            try {
+              return dependencyReadingBlockId(candidate) === chip.blockId;
+            } catch (error) {
+              return false;
+            }
+          });
+          if (foundAt >= 0) anchor = available.splice(foundAt, 1)[0];
+          else if (chip.live && !chip.broken) anchor = this.relationCreateReadingAnchor(chip, doc, model, sourcePath);
+          if (!anchor) continue;
+          this.relationDecorateReadingAnchor(anchor, chip, doc, model, sourcePath);
+          const entry = doc.createElement("span");
+          entry.setAttribute("class", "bob-relation-entry" + (kind === "mentions" ? " is-mention" : ""));
+          if (anchor.parentNode) anchor.parentNode.removeChild(anchor);
+          entry.appendChild(anchor);
+          this.relationAppendReadingEntryContent(entry, anchor, chip, doc, model, sourcePath);
+          host.appendChild(entry);
+          if (chip.collapsed) { entry.style.display = "none"; hiddenClosed.push(entry); }
+          if (chip.densityCollapsed) { entry.style.display = "none"; hiddenMore.push(entry); }
+          if (interactive && chip.kind !== "mention" && chip.live && !chip.broken) {
+            this.relationAttachReadingRemove(anchor, chip, doc, sourcePath, meta);
+          }
+        }
+        if (group.collapsed && Number(group.collapsed.count) > 0) {
+          this.relationAppendReadingGroupToggle(host, hiddenClosed, Number(group.collapsed.count), "closed", kind, doc);
+        }
+        if (group.more && Number(group.more.count) > 0) {
+          this.relationAppendReadingGroupToggle(host, hiddenMore, Number(group.more.count), "more", kind, doc);
+        }
+        li.appendChild(host);
+        return host;
+      };
+      const relationHost = appendGroup("relations", groups.relations);
+      if (relationHost && groups.mentions.chips.length > 0) {
+        const divider = doc.createElement("span");
+        divider.setAttribute("class", "bob-relation-divider");
+        divider.setAttribute("aria-hidden", "true");
+        li.appendChild(divider);
       }
+      appendGroup("mentions", groups.mentions);
       if (interactive && !(li.dataset && li.dataset.bobRelationAdd === "1")) {
         const self = this;
         relationAttachAddControl(li, doc, model, () => {
@@ -60671,10 +60819,15 @@ class BobLedgerToolsRelationRenderMixin {
     }
   }
 
-  relationAppendReadingEntryContent(host, anchor, chip, doc, model) {
+  relationAppendReadingEntryContent(host, anchor, chip, doc, model, sourcePath) {
     try {
       if (!host || !anchor) return;
-      if (!model.labelled) return;
+      if (chip.kind === "mention") {
+        host.insertBefore(relationCreateMentionPill(doc, chip), anchor);
+        if (chip.quote) relationAppendMentionQuote(host, chip.quote, doc);
+        return;
+      }
+      if (model.direction === "to" && !model.labelled) return;
       if (model.direction === "to") {
         if (chip.label) {
           const pill = doc.createElement("span");
@@ -60708,48 +60861,27 @@ class BobLedgerToolsRelationRenderMixin {
         arrow.appendChild(doc.createTextNode("→ this"));
         host.appendChild(arrow);
       }
+      if (chip.alsoMentioned) relationAppendMixedMentionMarker(host, doc);
     } catch (error) {
       // Pill and arrow are best-effort.
     }
   }
 
-  relationAppendReadingCollapsed(li, closedAnchors, model, doc) {
+  relationAppendReadingGroupToggle(host, hiddenEntries, count, toggleKind, groupKind, doc) {
     try {
-      const count = Number(model.collapsed.count) || 0;
-      if (count <= 0 || closedAnchors.length === 0) return;
-      for (const anchor of closedAnchors) {
-        try {
-          anchor.style.display = "none";
-        } catch (styleError) {
-          // Attribute fallback for style-free DOMs.
-        }
-        try {
-          anchor.setAttribute("data-bob-relation-collapsed", "1");
-        } catch (attrError) {
-          // Best-effort.
-        }
-      }
+      if (!host || count <= 0 || hiddenEntries.length === 0) return;
       const collapsed = doc.createElement("span");
-      collapsed.setAttribute("class", "bob-dep-chip is-done-collapsed bob-relation-collapsed");
+      collapsed.setAttribute("class", "bob-dep-chip bob-relation-collapsed" + (toggleKind === "more" ? " bob-relation-more" : " is-done-collapsed"));
       collapsed.setAttribute("role", "button");
       collapsed.setAttribute("tabindex", "0");
-      collapsed.setAttribute("aria-label", "Show " + count + " closed relations");
-      collapsed.setAttribute("title", "✓×" + count + " closed");
-      collapsed.appendChild(doc.createTextNode("✓×" + count));
+      const noun = groupKind === "mentions" ? "mentions" : "relations";
+      const label = toggleKind === "more" ? "+" + count + " more" : "✓×" + count;
+      collapsed.setAttribute("aria-label", toggleKind === "more" ? "Show " + count + " more mentions" : "Show " + count + " closed " + noun);
+      collapsed.setAttribute("title", toggleKind === "more" ? label : "✓×" + count + " closed " + noun);
+      collapsed.appendChild(doc.createTextNode(label));
       const expand = () => {
         try {
-          for (const anchor of closedAnchors) {
-            try {
-              anchor.style.display = "";
-            } catch (styleError) {
-              // Best-effort.
-            }
-            try {
-              anchor.removeAttribute("data-bob-relation-collapsed");
-            } catch (attrError) {
-              // Best-effort.
-            }
-          }
+          for (const entry of hiddenEntries) entry.style.display = "";
           if (typeof collapsed.remove === "function") collapsed.remove();
           else if (collapsed.parentNode && typeof collapsed.parentNode.removeChild === "function") {
             collapsed.parentNode.removeChild(collapsed);
@@ -60767,9 +60899,68 @@ class BobLedgerToolsRelationRenderMixin {
           }
         });
       }
-      li.appendChild(collapsed);
+      host.appendChild(collapsed);
     } catch (error) {
       // An uncollapsed row never breaks the chips.
+    }
+  }
+
+  relationOpenMention(chip, sourcePath, event) {
+    try {
+      if (!chip || chip.kind !== "mention" || !chip.path || !Array.isArray(chip.occurrences) || chip.occurrences.length === 0) return false;
+      const occurrence = chip.occurrences[0];
+      if (!Number.isInteger(Number(occurrence.line)) || Number(occurrence.line) < 1) return false;
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.openLinkText !== "function") return false;
+      const newLeaf = Boolean(event && (event.ctrlKey || event.metaKey));
+      const openResult = workspace.openLinkText(String(chip.linktext || ""), String(sourcePath || ""), newLeaf);
+      const jump = () => {
+        try {
+          let leaves = [];
+          try {
+            leaves = typeof workspace.getLeavesOfType === "function" ? workspace.getLeavesOfType("markdown") || [] : [];
+          } catch (error) {
+            leaves = [];
+          }
+          const targetPath = String(chip.path || "");
+          const leaf = Array.from(leaves).reverse().find((candidate) => candidate && candidate.view && candidate.view.file && candidate.view.file.path === targetPath);
+          const view = (leaf && leaf.view) || (typeof workspace.getActiveViewOfType === "function" ? workspace.getActiveViewOfType(MarkdownView) : null);
+          if (!view || !view.editor || (view.file && view.file.path && view.file.path !== targetPath)) return;
+          const line = Math.max(0, Number(occurrence.line) - 1);
+          const ch = Math.max(0, Number(occurrence.ch) || 0);
+          setEditorCursor(view.editor, line, ch);
+          focusEditor(view.editor);
+          this.relationFlashMentionLine(view.editor, line, ch);
+        } catch (error) {
+          // A failed reveal never blocks opening the task note.
+        }
+      };
+      Promise.resolve(openResult).then(() => setTimeout(jump, 0), () => {});
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  relationFlashMentionLine(editor, line, ch) {
+    try {
+      const cm = getEditorViewFromEditor(editor);
+      if (!cm || typeof cm.domAtPos !== "function") return false;
+      const position = editorViewPositionFromLineCh(cm, line, ch);
+      if (position === null) return false;
+      const located = cm.domAtPos(position);
+      let node = located && located.node ? located.node : null;
+      while (node && node.nodeType === 3) node = node.parentElement || node.parentNode;
+      while (node && node.classList && !node.classList.contains("cm-line")) node = node.parentElement || node.parentNode;
+      if (!node || !node.classList || typeof node.classList.add !== "function") return false;
+      node.classList.add("bob-mention-jump-highlight");
+      const timer = setTimeout(() => {
+        try { node.classList.remove("bob-mention-jump-highlight"); } catch (error) { /* best-effort */ }
+      }, 1200);
+      if (timer && typeof timer.unref === "function") timer.unref();
+      return true;
+    } catch (error) {
+      return false;
     }
   }
 
@@ -60796,9 +60987,10 @@ class BobLedgerToolsRelationRenderMixin {
     }
   }
 
-  relationDecorateReadingAnchor(anchor, chip, doc, model) {
+  relationDecorateReadingAnchor(anchor, chip, doc, model, sourcePath) {
     try {
       const classes = ["bob-dep-chip", "bob-relation-chip", "is-" + String(chip.state || "todo")];
+      if (chip.kind === "mention") classes.push("is-mention");
       if (chip.stale) classes.push("is-stale");
       if (chip.broken) classes.push("is-broken");
       if (chip.archived) classes.push("is-archived");
@@ -60808,6 +61000,8 @@ class BobLedgerToolsRelationRenderMixin {
       anchor.setAttribute("aria-label", relationChipAriaLabel(chip));
       if (chip.tooltip) anchor.setAttribute("title", chip.tooltip);
       anchor.setAttribute("data-state", String(chip.state || "todo"));
+      if (chip.collapsed) anchor.setAttribute("data-bob-collapsed-kind", "closed");
+      if (chip.densityCollapsed) anchor.setAttribute("data-bob-collapsed-kind", "density");
       for (const child of Array.from(anchor.childNodes || [])) {
         if (child.nodeType === 1 && child.classList && child.classList.contains("bob-dep-chip-box")) {
           child.remove();
@@ -60815,6 +61009,21 @@ class BobLedgerToolsRelationRenderMixin {
       }
       while (anchor.firstChild) anchor.removeChild(anchor.firstChild);
       this.relationAppendAnchorContent(anchor, chip, doc);
+      if (chip.kind === "mention" && chip.live && Array.isArray(chip.occurrences) && chip.occurrences.length > 0 && anchor.getAttribute("data-bob-mention-jump") !== "1") {
+        const self = this;
+        anchor.setAttribute("data-bob-mention-jump", "1");
+        const openMention = (event) => {
+          if (event && typeof event.preventDefault === "function") event.preventDefault();
+          if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+          self.relationOpenMention(chip, sourcePath, event);
+        };
+        if (typeof anchor.addEventListener === "function") {
+          anchor.addEventListener("click", openMention);
+          anchor.addEventListener("keydown", (event) => {
+            if (event && (event.key === "Enter" || event.key === " ")) openMention(event);
+          });
+        }
+      }
     } catch (error) {
       // Leave the existing internal link navigable.
     }
@@ -60829,7 +61038,7 @@ class BobLedgerToolsRelationRenderMixin {
       anchor.setAttribute("href", target.indexOf("#") === -1 ? "#" + target : target);
       anchor.setAttribute("aria-label", relationChipAriaLabel(chip));
       anchor.setAttribute("title", String(chip.tooltip || ""));
-      this.relationDecorateReadingAnchor(anchor, chip, doc, model);
+      this.relationDecorateReadingAnchor(anchor, chip, doc, model, sourcePath);
       return anchor;
     } catch (error) {
       return null;
@@ -60857,6 +61066,67 @@ class BobLedgerToolsRelationRenderMixin {
     } catch (error) {
       // Content is best-effort.
     }
+  }
+}
+
+function relationChipGroups(model) {
+  const source = model && model.groups && typeof model.groups === "object" ? model.groups : null;
+  if (source) {
+    return {
+      relations: source.relations || { chips: [], collapsed: null, more: null },
+      mentions: source.mentions || { chips: [], collapsed: null, more: null },
+    };
+  }
+  const chips = Array.isArray(model && model.chips) ? model.chips : [];
+  return {
+    relations: { chips: chips.filter((chip) => !chip || chip.kind !== "mention"), collapsed: model && model.collapsed || null, more: null },
+    mentions: { chips: chips.filter((chip) => chip && chip.kind === "mention"), collapsed: null, more: null },
+  };
+}
+
+function relationCreateMentionPill(doc, chip) {
+  const pill = doc.createElement("span");
+  pill.setAttribute("class", "bob-relation-pill is-mention");
+  pill.setAttribute("role", "button");
+  pill.setAttribute("tabindex", "0");
+  pill.setAttribute("aria-haspopup", "dialog");
+  pill.setAttribute("aria-label", String(chip && chip.pillAriaLabel || "Why is this here?"));
+  pill.appendChild(doc.createTextNode(String(chip && chip.mentionPill || "💬 mentioned in")));
+  return pill;
+}
+
+function relationAppendMentionQuote(host, marked, doc) {
+  try {
+    const value = String(marked || "");
+    const open = value.indexOf("⟦");
+    const close = open < 0 ? -1 : value.indexOf("⟧", open + 1);
+    if (!host || open < 0 || close < 0) return null;
+    const quote = doc.createElement("span");
+    quote.setAttribute("class", "bob-mention-quote");
+    quote.appendChild(doc.createTextNode("“" + value.slice(0, open)));
+    const target = doc.createElement("span");
+    target.setAttribute("class", "bob-mention-quote-target");
+    target.appendChild(doc.createTextNode(value.slice(open + 1, close)));
+    quote.appendChild(target);
+    quote.appendChild(doc.createTextNode(value.slice(close + 1) + "”"));
+    host.appendChild(quote);
+    return quote;
+  } catch (error) {
+    return null;
+  }
+}
+
+function relationAppendMixedMentionMarker(host, doc) {
+  try {
+    const marker = doc.createElement("span");
+    marker.setAttribute("class", "bob-relation-mixed-marker");
+    marker.setAttribute("title", "Also mentioned in its text");
+    marker.setAttribute("aria-label", "Also mentioned in its text");
+    marker.appendChild(doc.createTextNode("💬"));
+    host.appendChild(marker);
+    return marker;
+  } catch (error) {
+    return null;
   }
 }
 
@@ -64444,6 +64714,7 @@ module.exports.helpers = {
   relationLabelApiRows,
   relationLabelsDecodeWrite,
   relationChipModelForRow,
+  relationFitMentionQuote,
   buildRelationChipElement,
   relationAttachChipRemove,
   relationAttachAddControl,
@@ -64453,6 +64724,8 @@ module.exports.helpers = {
   relationReadingLabelElement,
   RELATION_INVERSE_PHRASES,
   RELATION_STALE_TOOLTIP,
+  RELATION_MENTION_STALE_TOOLTIP,
+  RELATION_MENTION_LABEL,
   emptyPlanBudget,
   computeTodayLinks,
   emptyTodayCache,

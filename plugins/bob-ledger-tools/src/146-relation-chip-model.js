@@ -13,6 +13,11 @@ const RELATION_LINKS_ROW_TOOLTIP =
   "Related tasks · live from the relation index";
 const RELATION_LINKED_FROM_ROW_TOOLTIP =
   "Tasks linking here · live from the relation index";
+const RELATION_LINKED_FROM_MENTIONS_TOOLTIP =
+  "Tasks linking here · relations and 💬 text mentions · live";
+const RELATION_MENTION_STALE_TOOLTIP =
+  "No longer mentioned here · refreshes on the next reconcile";
+const RELATION_MENTION_LABEL = "💬 mentions";
 
 // Display-only inverse phrases (docs/task-relations.md §10). Storage
 // stays verbatim; matching is case-insensitive.
@@ -126,7 +131,7 @@ function relationCompareLinktext(left, right) {
   return relationCodepointCompare(String(left || ""), String(right || ""));
 }
 
-function relationBuildChip({ direction, linkpath, blockId, label, task, otherPath, live, stale, resolved, sourcePath }) {
+function relationBuildChip({ direction, linkpath, blockId, label, task, otherPath, live, stale, resolved, sourcePath, alsoMentioned }) {
   try {
     const id = String(blockId || "");
     const known = task && typeof task === "object" ? task : null;
@@ -169,6 +174,8 @@ function relationBuildChip({ direction, linkpath, blockId, label, task, otherPat
       linktext,
       path: resolvedPath,
       label: label || null,
+      kind: "relation",
+      alsoMentioned: Boolean(alsoMentioned),
       inverse,
       // Stale chips keep their underlying state; the `is-stale` class
       // (dashed, muted) carries the staleness. Colour carries status.
@@ -190,6 +197,91 @@ function relationBuildChip({ direction, linkpath, blockId, label, task, otherPat
   } catch (error) {
     return null;
   }
+}
+
+function relationFitMentionQuote(marked, limit = 80) {
+  try {
+    const value = String(marked || "").trim();
+    const open = value.indexOf("⟦");
+    const close = open < 0 ? -1 : value.indexOf("⟧", open + 1);
+    if (open < 0 || close < 0) return null;
+    const points = Array.from(value);
+    const start = Array.from(value.slice(0, open)).length;
+    const end = Array.from(value.slice(0, close + 1)).length;
+    const max = Math.max(24, Math.floor(Number(limit) || 80));
+    const tokenLength = end - start;
+    if (points.length <= max) return value;
+    if (tokenLength >= max - 2) {
+      return "…" + points.slice(start, end).join("") + "…";
+    }
+    const room = max - tokenLength - 2;
+    let left = Math.min(start, Math.floor(room / 2));
+    let right = Math.min(points.length - end, room - left);
+    if (left < Math.floor(room / 2)) right = Math.min(points.length - end, room - left);
+    if (right < room - left) left = Math.min(start, room - right);
+    const prefix = start > left ? "…" : "";
+    const suffix = points.length - end > right ? "…" : "";
+    return prefix + points.slice(start - left, start).join("") + points.slice(start, end).join("") + points.slice(end, end + right).join("") + suffix;
+  } catch (error) {
+    return null;
+  }
+}
+
+function relationBuildMentionChip({ linkpath, blockId, task, otherPath, live, stale, resolved, sourcePath, display, count, occurrences }) {
+  try {
+    const base = relationBuildChip({
+      direction: "from",
+      linkpath,
+      blockId,
+      label: RELATION_MENTION_LABEL,
+      task,
+      otherPath,
+      live,
+      stale,
+      resolved,
+      sourcePath,
+    });
+    if (!base) return null;
+    const rows = Array.isArray(occurrences) ? occurrences.map((occurrence) => ({ ...occurrence })) : [];
+    const shownDisplay = display === "embed" ? "embed" : "mention";
+    const firstQuote = shownDisplay === "mention"
+      ? rows.find((occurrence) => occurrence && occurrence.site !== "title" && typeof occurrence.excerpt === "string" && occurrence.excerpt.includes("⟦") && occurrence.excerpt.includes("⟧"))
+      : null;
+    base.kind = "mention";
+    base.label = null;
+    base.alsoMentioned = false;
+    base.display = shownDisplay;
+    base.count = Math.max(0, Number(count) || rows.length || 0);
+    base.occurrences = rows;
+    base.quote = firstQuote ? relationFitMentionQuote(firstQuote.excerpt, 80) : null;
+    base.mentionPill = shownDisplay === "embed" ? "💬 embedded in" : "💬 mentioned in";
+    base.pillAriaLabel = "Why is this here? " + base.fullText + (shownDisplay === "embed" ? " embeds this task" : " mentions this task") + " in its text";
+    base.removeLabel = null;
+    base.tooltip = stale ? RELATION_MENTION_STALE_TOOLTIP : base.tooltip;
+    base.ariaLabel = base.pillAriaLabel;
+    return base;
+  } catch (error) {
+    return null;
+  }
+}
+
+function relationApplyChipGroupRules(chips, groupKind) {
+  const rows = Array.isArray(chips) ? chips : [];
+  const closed = rows.filter((chip) => chip && chip.live && !chip.broken && chip.state === "done");
+  let collapsed = null;
+  if (closed.length >= 3) {
+    for (const chip of closed) chip.collapsed = true;
+    collapsed = { count: closed.length };
+  }
+  let more = null;
+  if (groupKind === "mentions") {
+    const open = rows.filter((chip) => chip && !chip.broken && chip.state !== "done" && chip.state !== "cancelled");
+    if (open.length > 5) {
+      for (const chip of open.slice(5)) chip.densityCollapsed = true;
+      more = { count: open.length - 5 };
+    }
+  }
+  return { chips: rows, collapsed, more };
 }
 
 // Merge one relation row's stored entries with its live index edges.
@@ -228,7 +320,8 @@ function relationChipModelForRow({ direction, lineText, sourcePath, live, lookup
         continue;
       }
     }
-    const chips = [];
+    const relationChips = [];
+    const mentionChips = [];
     const consumed = new Set();
     const stored = Array.isArray(parsed.entries) ? parsed.entries : [];
     for (const entry of stored) {
@@ -264,11 +357,19 @@ function relationChipModelForRow({ direction, lineText, sourcePath, live, lookup
         } else {
           task = lookupFn(entryPath, entryId);
         }
-        const chip = relationBuildChip({
-          direction, linkpath: (entry && entry.target) || "", blockId: entryId,
-          label, task, otherPath, live: Boolean(edge), stale: !edge, resolved, sourcePath: source,
-        });
-        if (chip) chips.push(chip);
+        const isMention = Boolean((entry && entry.kind === "mention") || (edge && edge.kind === "mention") || label === RELATION_MENTION_LABEL);
+        const chip = isMention
+          ? relationBuildMentionChip({
+            linkpath: (entry && entry.target) || "", blockId: entryId, task, otherPath,
+            live: Boolean(edge), stale: !edge, resolved, sourcePath: source,
+            display: edge && edge.display, count: edge && edge.count, occurrences: edge && edge.occurrences,
+          })
+          : relationBuildChip({
+            direction, linkpath: (entry && entry.target) || "", blockId: entryId,
+            label, task, otherPath, live: Boolean(edge), stale: !edge, resolved, sourcePath: source,
+            alsoMentioned: Boolean(edge && edge.alsoMentioned),
+          });
+        if (chip) (isMention ? mentionChips : relationChips).push(chip);
       } catch (error) {
         continue;
       }
@@ -292,30 +393,36 @@ function relationChipModelForRow({ direction, lineText, sourcePath, live, lookup
         // An unresolvable live edge with no task record is broken, not
         // appended: only the stored text can name it (LC4).
         if (!otherPath && !task) continue;
-        const chip = relationBuildChip({
-          direction, linkpath: "", blockId: otherId, label: (edge && edge.label) || null,
-          task, otherPath, live: true, stale: false, sourcePath: source,
-        });
-        if (chip) chips.push(chip);
+        const isMention = Boolean(edge && edge.kind === "mention");
+        const chip = isMention
+          ? relationBuildMentionChip({
+            linkpath: "", blockId: otherId, task, otherPath, live: true, stale: false,
+            resolved: true, sourcePath: source, display: edge.display, count: edge.count,
+            occurrences: edge.occurrences,
+          })
+          : relationBuildChip({
+            direction, linkpath: "", blockId: otherId, label: (edge && edge.label) || null,
+            task, otherPath, live: true, stale: false, sourcePath: source,
+            alsoMentioned: Boolean(edge && edge.alsoMentioned),
+          });
+        if (chip) (isMention ? mentionChips : relationChips).push(chip);
       } catch (error) {
         continue;
       }
     }
-    const closed = chips.filter((chip) => chip && chip.live && !chip.broken && chip.state === "done");
-    let collapsed = null;
-    if (closed.length >= 3) {
-      for (const chip of closed) chip.collapsed = true;
-      collapsed = { count: closed.length };
-    }
-    const labelled = chips.some((chip) => chip && chip.label);
+    const relationGroup = relationApplyChipGroupRules(relationChips, "relations");
+    const mentionGroup = relationApplyChipGroupRules(mentionChips, "mentions");
+    const chips = [...relationChips, ...mentionChips];
+    const labelled = relationChips.some((chip) => chip && chip.label) || mentionChips.length > 0;
     const liveCount = chips.filter((chip) => chip && chip.live).length;
     return {
       direction,
       kind: parsed.kind,
       label: direction === "to" ? "🪢 links to" : "🪢 linked from",
-      tooltip: direction === "to" ? RELATION_LINKS_ROW_TOOLTIP : RELATION_LINKED_FROM_ROW_TOOLTIP,
+      tooltip: direction === "to" ? RELATION_LINKS_ROW_TOOLTIP : RELATION_LINKED_FROM_MENTIONS_TOOLTIP,
       chips,
-      collapsed,
+      groups: { relations: relationGroup, mentions: mentionGroup },
+      collapsed: relationGroup.collapsed,
       labelled,
       liveCount,
       storedCount: chips.length,
@@ -395,6 +502,7 @@ function relationAttachAddControl(row, doc, model, onAdd) {
 function relationChipAriaLabel(chip) {
   try {
     if (!chip || typeof chip !== "object") return "relation";
+    if (chip.kind === "mention") return String(chip.fullText || chip.text || "Task") + " · " + (chip.display === "embed" ? "embedded in" : "mentioned in") + " its text" + (chip.stale ? " · stale" : "");
     const parts = [String(chip.fullText || chip.text || "relation")];
     if (chip.direction === "from" && chip.inverse) parts.push("· " + chip.inverse);
     else if (chip.label) parts.push("· " + chip.label);
@@ -418,14 +526,14 @@ function buildRelationChipElement(doc, model, options) {
     if (!doc || !model || typeof model !== "object") return null;
     const opts = options && typeof options === "object" ? options : {};
     const interactive = Boolean(opts.interactive);
-    const chips = Array.isArray(model.chips) ? model.chips : [];
+    const groups = relationChipGroups(model);
     const row = doc.createElement("span");
     const rowClasses = ["bob-dep-row", "bob-relation-row"];
     if (model.direction === "from") rowClasses.push("is-incoming");
     if (model.labelled) rowClasses.push("is-labelled");
     row.setAttribute("class", rowClasses.join(" "));
     row.setAttribute("role", "group");
-    row.setAttribute("aria-label", String(model.label || "relations") + ", " + model.liveCount + " live");
+    row.setAttribute("aria-label", String(model.tooltip || model.label || "relations"));
     if (model.tooltip) row.setAttribute("title", String(model.tooltip));
     const label = doc.createElement("span");
     label.setAttribute("class", "bob-dep-label bob-relation-label");
@@ -435,6 +543,7 @@ function buildRelationChipElement(doc, model, options) {
     const buildChipEl = (chip) => {
       const el = doc.createElement("span");
       const classes = ["bob-dep-chip", "bob-relation-chip", "is-" + String(chip.state || "todo")];
+      if (chip.kind === "mention") classes.push("is-mention");
       if (chip.stale) classes.push("is-stale");
       if (chip.broken) classes.push("is-broken");
       if (chip.archived) classes.push("is-archived");
@@ -461,7 +570,7 @@ function buildRelationChipElement(doc, model, options) {
         note.appendChild(doc.createTextNode(String(chip.noteLabel)));
         el.appendChild(note);
       }
-      if (interactive && chip.live && !chip.broken) {
+      if (interactive && chip.kind !== "mention" && chip.live && !chip.broken) {
         relationAttachChipRemove(el, chip, doc, opts.onRemove);
       }
       if (typeof el.addEventListener === "function") {
@@ -509,23 +618,27 @@ function buildRelationChipElement(doc, model, options) {
       arrow.appendChild(doc.createTextNode(String(text === undefined ? "→" : text)));
       return arrow;
     };
-    const visible = chips.filter((chip) => chip && !chip.collapsed);
-    const appendChipEntry = (host, chip) => {
+    const buildEntry = (kind, chip) => {
       try {
-        if (model.labelled) {
-          const entry = doc.createElement("span");
-          entry.setAttribute("class", "bob-relation-entry");
+        const entry = doc.createElement("span");
+        entry.setAttribute("class", "bob-relation-entry" + (kind === "mentions" ? " is-mention" : ""));
+        const chipEl = buildChipEl(chip);
+        if (kind === "mentions") {
+          entry.appendChild(relationCreateMentionPill(doc, chip));
+          entry.appendChild(chipEl);
+          if (chip.quote) relationAppendMentionQuote(entry, chip.quote, doc);
+        } else {
           if (model.direction === "to") {
             if (chip.label) {
               entry.appendChild(buildPill(chip.label));
               entry.appendChild(buildArrow());
             }
-            entry.appendChild(buildChipEl(chip));
+            entry.appendChild(chipEl);
           } else if (chip.inverse) {
             entry.appendChild(buildPill(chip.inverse));
-            entry.appendChild(buildChipEl(chip));
+            entry.appendChild(chipEl);
           } else if (chip.label) {
-            entry.appendChild(buildChipEl(chip));
+            entry.appendChild(chipEl);
             const sep = doc.createElement("span");
             sep.setAttribute("class", "bob-relation-sep");
             sep.setAttribute("aria-hidden", "true");
@@ -534,61 +647,84 @@ function buildRelationChipElement(doc, model, options) {
             entry.appendChild(buildPill(chip.label));
             entry.appendChild(buildArrow("→ this"));
           } else {
-            entry.appendChild(buildChipEl(chip));
+            entry.appendChild(chipEl);
           }
-          host.appendChild(entry);
-        } else {
-          host.appendChild(buildChipEl(chip));
+          if (chip.alsoMentioned) relationAppendMixedMentionMarker(entry, doc);
         }
+        return entry;
       } catch (error) {
-        // One bad entry never breaks the row.
+        return null;
       }
     };
     if (!model.labelled && model.direction === "to") {
       // LC1: an unlabelled LINKS row reads `🪢 links to → (chip)`.
       row.appendChild(buildArrow());
     }
-    for (const chip of visible) appendChipEntry(row, chip);
-    if (model.collapsed && Number(model.collapsed.count) > 0) {
-      const count = Number(model.collapsed.count);
-      const collapsed = doc.createElement("span");
-      collapsed.setAttribute("class", "bob-dep-chip is-done-collapsed bob-relation-collapsed");
-      collapsed.setAttribute("role", "button");
-      collapsed.setAttribute("tabindex", "0");
-      collapsed.setAttribute("aria-label", "Show " + count + " closed relations");
-      collapsed.setAttribute("title", "✓×" + count + " closed");
-      collapsed.appendChild(doc.createTextNode("✓×" + count));
-      const expand = () => {
-        try {
-          for (const chip of chips) {
-            if (chip && chip.collapsed) appendChipEntry(row, { ...chip, collapsed: false });
-          }
-          if (typeof collapsed.remove === "function") collapsed.remove();
-          else if (collapsed.parentNode && typeof collapsed.parentNode.removeChild === "function") {
-            collapsed.parentNode.removeChild(collapsed);
-          }
-        } catch (error) {
-          // An unexpanded row never breaks the chips.
+    const appendGroup = (kind, group) => {
+      const chips = Array.isArray(group && group.chips) ? group.chips : [];
+      if (chips.length === 0) return null;
+      const host = doc.createElement("span");
+      host.setAttribute("class", kind === "mentions" ? "bob-relation-group bob-relation-mention-group" : "bob-relation-group bob-relation-link-group");
+      for (const chip of chips) {
+        if (!chip || chip.collapsed || chip.densityCollapsed) continue;
+        if (kind === "relations" && model.direction === "to" && !model.labelled) {
+          host.appendChild(buildChipEl(chip));
+        } else {
+          const entry = buildEntry(kind, chip);
+          if (entry) host.appendChild(entry);
         }
-      };
-      if (typeof collapsed.addEventListener === "function") {
-        collapsed.addEventListener("click", expand);
-        collapsed.addEventListener("keydown", (event) => {
-          if (event && (event.key === "Enter" || event.key === " ")) {
-            if (typeof event.preventDefault === "function") event.preventDefault();
-            expand();
+      }
+      const addToggle = (count, toggleKind, hidden) => {
+        if (!count || hidden.length === 0) return;
+        const toggle = doc.createElement("span");
+        const noun = kind === "mentions" ? "mentions" : "relations";
+        const text = toggleKind === "more" ? "+" + count + " more" : "✓×" + count;
+        toggle.setAttribute("class", "bob-dep-chip bob-relation-collapsed" + (toggleKind === "more" ? " bob-relation-more" : " is-done-collapsed"));
+        toggle.setAttribute("role", "button");
+        toggle.setAttribute("tabindex", "0");
+        toggle.setAttribute("aria-label", toggleKind === "more" ? "Show " + count + " more mentions" : "Show " + count + " closed " + noun);
+        toggle.setAttribute("title", toggleKind === "more" ? text : text + " closed " + noun);
+        toggle.appendChild(doc.createTextNode(text));
+        const expand = () => {
+          try {
+            for (const chip of hidden) {
+              if (kind === "relations" && model.direction === "to" && !model.labelled) {
+                host.insertBefore(buildChipEl(chip), toggle);
+              } else {
+                const entry = buildEntry(kind, chip);
+                if (entry) host.insertBefore(entry, toggle);
+              }
+            }
+            if (typeof toggle.remove === "function") toggle.remove();
+            else if (toggle.parentNode && typeof toggle.parentNode.removeChild === "function") toggle.parentNode.removeChild(toggle);
+          } catch (error) {
+            // A collapsed group never breaks the other rows.
           }
-        });
-      }
-      if (model.labelled) {
-        const entry = doc.createElement("span");
-        entry.setAttribute("class", "bob-relation-entry");
-        entry.appendChild(collapsed);
-        row.appendChild(entry);
-      } else {
-        row.appendChild(collapsed);
-      }
+        };
+        if (typeof toggle.addEventListener === "function") {
+          toggle.addEventListener("click", expand);
+          toggle.addEventListener("keydown", (event) => {
+            if (event && (event.key === "Enter" || event.key === " ")) {
+              if (typeof event.preventDefault === "function") event.preventDefault();
+              expand();
+            }
+          });
+        }
+        host.appendChild(toggle);
+      };
+      addToggle(group.collapsed && Number(group.collapsed.count), "closed", chips.filter((chip) => chip && chip.collapsed));
+      addToggle(group.more && Number(group.more.count), "more", chips.filter((chip) => chip && chip.densityCollapsed));
+      row.appendChild(host);
+      return host;
+    };
+    const relationHost = appendGroup("relations", groups.relations);
+    if (relationHost && groups.mentions.chips.length > 0) {
+      const divider = doc.createElement("span");
+      divider.setAttribute("class", "bob-relation-divider");
+      divider.setAttribute("aria-hidden", "true");
+      row.appendChild(divider);
     }
+    appendGroup("mentions", groups.mentions);
     if (interactive) relationAttachAddControl(row, doc, model, opts.onAdd);
     return row;
   } catch (error) {

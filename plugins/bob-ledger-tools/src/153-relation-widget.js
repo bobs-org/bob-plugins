@@ -37,8 +37,12 @@ if (WidgetType && typeof WidgetType === "function") {
           plugin,
           sourcePath,
           interactive,
-          onOpen: (linktext, event) => {
+          onOpen: (linktext, event, chip) => {
             try {
+              if (chip && chip.kind === "mention" && plugin && typeof plugin.relationOpenMention === "function") {
+                plugin.relationOpenMention(chip, sourcePath, event);
+                return;
+              }
               if (plugin && typeof plugin.dependencyOpenTarget === "function") {
                 plugin.dependencyOpenTarget(linktext, sourcePath, event);
               }

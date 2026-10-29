@@ -79,20 +79,32 @@ class BobLedgerToolsRelationModelMixin {
               },
             }));
           } else {
-            const rows = owner && owner.blockId ? api.incoming(sourcePath, owner.blockId) : [];
-            live = (Array.isArray(rows) ? rows : []).map((edge) => ({
-              label: edge && edge.label,
-              other: {
-                path: edge && edge.source ? edge.source.path : "",
-                blockId: edge && edge.source ? edge.source.blockId : "",
-                // Incoming rows only contain resolved targets.
-                resolved: true,
-                task: edge && edge.source && edge.source.path
-                  ? self.relationLookupTask(edge.source.path, edge.source.blockId)
-                  : null,
-                fallback: edge && edge.source ? edge.source : null,
-              },
-            }));
+            const hasLinkedFromV2 = typeof api.linkedFrom === "function";
+            const rows = owner && owner.blockId
+              ? (hasLinkedFromV2 ? api.linkedFrom(sourcePath, owner.blockId) : api.incoming(sourcePath, owner.blockId))
+              : [];
+            live = (Array.isArray(rows) ? rows : []).map((edge) => {
+              const source = edge && edge.source ? edge.source : null;
+              const other = source || {};
+              return {
+                kind: edge && edge.kind === "mention" ? "mention" : "relation",
+                label: edge && edge.kind === "mention" ? "💬 mentions" : edge && edge.label,
+                alsoMentioned: Boolean(edge && edge.alsoMentioned),
+                display: edge && edge.display,
+                count: edge && edge.count,
+                occurrences: Array.isArray(edge && edge.occurrences) ? edge.occurrences : [],
+                other: {
+                  path: other.path || "",
+                  blockId: other.blockId || "",
+                  // linkedFrom() and incoming() expose only resolved sources.
+                  resolved: true,
+                  task: other.path
+                    ? self.relationLookupTask(other.path, other.blockId)
+                    : null,
+                  fallback: source,
+                },
+              };
+            });
           }
         }
       } catch (error) {

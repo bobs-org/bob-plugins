@@ -77,6 +77,7 @@ Module._load = originalLoad;
 const {
   relationInversePhrase,
   relationChipModelForRow,
+  relationFitMentionQuote,
   buildRelationChipElement,
   RELATION_INVERSE_PHRASES,
   RELATION_STALE_TOOLTIP,
@@ -110,6 +111,14 @@ function liveTo(target, { label = null, resolved = true, task = null } = {}) {
 
 function liveFrom(source, { label = null, task = null } = {}) {
   return { label, other: { path: source.path, blockId: source.blockId, resolved: true, task } };
+}
+
+function liveMention(source, { display = "mention", count = 1, occurrences = [], task: sourceTask = null } = {}) {
+  const blockId = source && (source.blockId || source.id) || "";
+  return {
+    kind: "mention", display, count, occurrences,
+    other: { path: source.path, blockId, resolved: true, task: sourceTask || source },
+  };
 }
 
 test("LC1 one unlabelled open target renders links-to arrow chip", () => {
@@ -473,6 +482,12 @@ function findByClass(node, name, out = []) {
   return out;
 }
 
+function findByClasses(node, names, out = []) {
+  if (node && node.nodeType === 1 && node.classList && names.every((name) => node.classList.contains(name))) out.push(node);
+  for (const child of node.childNodes || []) findByClasses(child, names, out);
+  return out;
+}
+
 function serializeNode(node) {
   if (!node) return "";
   if (node.nodeType === 3) {
@@ -488,6 +503,7 @@ function fire(node, type, extra = {}) {
     preventDefault() {},
     target: node,
     key: extra.key,
+    ...extra,
   };
   for (const handler of node.listeners[type] || []) {
     handler(event);
@@ -695,6 +711,49 @@ test("Reading view decorates stored anchors and appends live edges", async () =>
   plugin.teardownRelationIndex();
 });
 
+test("Reading view groups mention rows, renders the quote, omits ×, and jumps to the source occurrence", async () => {
+  const source = task({ blockId: "source", id: "source", description: "Source mentions this", path: "source.md" });
+  const content = [
+    "- [ ] #task Target ^target",
+    "  - 🪢 **LINKED FROM:** [[source#^source]] (💬 mentions)",
+  ].join("\n");
+  const file = { path: "target.md", content };
+  const app = makeApp([source], content, null, [file]);
+  const opened = [];
+  app.workspace.openLinkText = (...args) => { opened.push(args); return Promise.resolve(); };
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.dependencyChipsEnabled = true;
+  plugin.relationIndexApi = () => ({
+    linkedFrom: () => [{
+      kind: "mention", source: { path: "source.md", blockId: "source", text: "Source mentions this", status: "TODO" },
+      display: "mention", count: 1, occurrences: [{ line: 3, ch: 18, site: "note", excerpt: "Merged into ⟦this task⟧" }],
+    }],
+  });
+  plugin.relationLookupTask = (path, id) => path === source.path && id === source.id ? source : null;
+  plugin.relationResolveLinkpath = (linkpath) => String(linkpath || "").replace(/\.md$/i, "") + ".md";
+  const docNode = new MiniDoc();
+  const root = docNode.createElement("div");
+  const ownerLi = docNode.createElement("li");
+  ownerLi.appendChild(docNode.createTextNode("#task Target"));
+  const list = docNode.createElement("ul"); ownerLi.appendChild(list);
+  const row = docNode.createElement("li");
+  row.appendChild(docNode.createTextNode("🪢 "));
+  const strong = docNode.createElement("strong"); strong.appendChild(docNode.createTextNode("LINKED FROM:")); row.appendChild(strong);
+  row.appendChild(docNode.createTextNode(" "));
+  const anchor = docNode.createElement("a"); anchor.classList.add("internal-link"); anchor.setAttribute("data-href", "source#^source"); anchor.setAttribute("href", "source#^source"); anchor.appendChild(docNode.createTextNode("Source")); row.appendChild(anchor);
+  list.appendChild(row);
+  root.appendChild(ownerLi);
+  await plugin.renderRelationChipsIn(root, { sourcePath: "target.md", getSectionInfo: () => ({ lineStart: 0, lineEnd: 1 }) });
+  assert.ok(row.className.includes("bob-relation-row"));
+  assert.equal(findByClass(row, "bob-relation-pill")[0].textContent, "💬 mentioned in");
+  assert.equal(findByClass(row, "bob-mention-quote-target")[0].textContent, "this task");
+  assert.equal(findByClass(row, "bob-dep-chip-remove").length, 0);
+  fire(anchor, "click", { metaKey: true });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(opened, [["source#^source", "target.md", true]]);
+  plugin.teardownRelationIndex();
+});
+
 test("Reading view with api.relations v1 shows ＋ and ×", async () => {
   const target = task({ blockId: "target", id: "target", description: "Target", lineNumber: 2, path: "a.md" });
   const source = task({ blockId: "source", id: "source", description: "Source", lineNumber: 0, path: "a.md" });
@@ -732,4 +791,142 @@ test("Reading view with api.relations v1 shows ＋ and ×", async () => {
   assert.deepEqual(calls[1][1], { path: "a.md", line: 1, blockId: "source" });
   assert.deepEqual(calls[1][2], { path: "a.md", blockId: "target" });
   plugin.teardownRelationIndex();
+});
+
+test("MN row model separates relations and mentions, marks mixed pairs, and quotes the first prose occurrence", () => {
+  const relationSource = task({ blockId: "rel", id: "rel", path: "sources.md", description: "Related source" });
+  const mentionSource = task({ blockId: "mention", id: "mention", path: "sources.md", description: "Mention source" });
+  const occurrences = [
+    { line: 4, ch: 22, site: "note", excerpt: "Merged into ⟦this task⟧ after review" },
+    { line: 7, ch: 6, site: "cancel_log", excerpt: "Also mentions ⟦the old plan⟧ here" },
+  ];
+  const model = relationChipModelForRow({
+    direction: "from",
+    lineText: "- 🪢 **LINKED FROM:** [[sources#^rel]] (follow-up of) • [[sources#^mention]] (💬 mentions)",
+    sourcePath: "target.md",
+    live: [
+      { kind: "relation", label: "follow-up of", alsoMentioned: true, other: { path: "sources.md", blockId: "rel", resolved: true, task: relationSource } },
+      liveMention(mentionSource, { count: 2, occurrences }),
+    ],
+    lookup: lookupFor([relationSource, mentionSource], "target.md"),
+    resolve: resolveFor("target.md"),
+  });
+  assert.equal(model.tooltip, "Tasks linking here · relations and 💬 text mentions · live");
+  assert.deepEqual(model.chips.map((chip) => chip.kind), ["relation", "mention"]);
+  assert.equal(model.groups.relations.chips[0].alsoMentioned, true);
+  assert.equal(model.groups.mentions.chips[0].count, 2);
+  assert.equal(model.groups.mentions.chips[0].quote, "Merged into ⟦this task⟧ after review");
+
+  const doc = new MiniDoc();
+  const opened = [];
+  const row = buildRelationChipElement(doc, model, {
+    interactive: true,
+    onOpen: (...args) => opened.push(args),
+    onRemove() {},
+  });
+  assert.equal(findByClass(row, "bob-relation-divider").length, 1);
+  assert.equal(findByClass(row, "bob-relation-mixed-marker")[0].getAttribute("title"), "Also mentioned in its text");
+  assert.equal(findByClass(row, "bob-relation-pill").map((pill) => pill.textContent).join("|"), "followed up by|💬 mentioned in");
+  assert.equal(findByClass(row, "bob-mention-quote-target")[0].textContent, "this task");
+  const mentionChip = findByClasses(row, ["bob-relation-chip", "is-mention"])[0];
+  assert.equal(findByClass(mentionChip, "bob-dep-chip-remove").length, 0, "mentions have no remove control");
+  assert.equal(findByClass(row, "bob-dep-chip-remove").length, 1, "the authored relation retains its remove control");
+  fire(mentionChip, "click", { metaKey: true });
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0][2].kind, "mention");
+  assert.equal(opened[0][1].metaKey, true);
+});
+
+test("MN quote rules omit title/embed excerpts and fit Unicode around the highlighted token", () => {
+  const source = task({ blockId: "s", id: "s", path: "b.md", description: "Source" });
+  const titleModel = relationChipModelForRow({
+    direction: "from", lineText: "- 🪢 **LINKED FROM:** [[b#^s]] (💬 mentions)", sourcePath: "a.md",
+    live: [liveMention(source, { occurrences: [{ line: 1, ch: 8, site: "title", excerpt: null }] })],
+    lookup: lookupFor([source]), resolve: resolveFor(),
+  });
+  assert.equal(titleModel.chips[0].quote, null);
+  const embedModel = relationChipModelForRow({
+    direction: "from", lineText: "- 🪢 **LINKED FROM:** [[b#^s]] (💬 mentions)", sourcePath: "a.md",
+    live: [liveMention(source, { display: "embed", occurrences: [{ line: 3, ch: 4, site: "note", excerpt: null }] })],
+    lookup: lookupFor([source]), resolve: resolveFor(),
+  });
+  assert.equal(embedModel.chips[0].mentionPill, "💬 embedded in");
+  assert.equal(embedModel.chips[0].quote, null);
+  const marked = relationFitMentionQuote("一二三四五六七八九十十一十二十三十四十五十六十七十八十九二十 ⟦the old plan⟧ end of the very long line", 80);
+  assert.ok(Array.from(marked).length <= 80);
+  assert.match(marked, /⟦the old plan⟧/);
+});
+
+test("MN stale mention rows keep the mention-specific dashed tooltip", () => {
+  const source = task({ blockId: "s", id: "s", path: "b.md", description: "Source" });
+  const model = relationChipModelForRow({
+    direction: "from", lineText: "- 🪢 **LINKED FROM:** [[b#^s]] (💬 mentions)", sourcePath: "a.md",
+    live: [], lookup: lookupFor([source]), resolve: resolveFor(),
+  });
+  const chip = model.chips[0];
+  assert.equal(chip.kind, "mention");
+  assert.equal(chip.stale, true);
+  assert.equal(chip.tooltip, "No longer mentioned here · refreshes on the next reconcile");
+  const row = buildRelationChipElement(new MiniDoc(), model, { interactive: true });
+  assert.ok(findByClass(row, "bob-relation-chip")[0].className.includes("is-stale"));
+  assert.equal(findByClass(row, "bob-dep-chip-remove").length, 0);
+});
+
+test("MN seven open mentions collapse after five and expand with +N more", () => {
+  const sources = Array.from({ length: 7 }, (_, index) => task({ blockId: "s" + index, id: "s" + index, path: "sources.md", description: "Source " + index }));
+  const links = sources.map((source) => "[[sources#^" + source.id + "]] (💬 mentions)").join(" • ");
+  const model = relationChipModelForRow({
+    direction: "from", lineText: "- 🪢 **LINKED FROM:** " + links, sourcePath: "target.md",
+    live: sources.map((source) => liveMention(source)), lookup: lookupFor(sources, "target.md"), resolve: resolveFor("target.md"),
+  });
+  assert.deepEqual(model.groups.mentions.more, { count: 2 });
+  assert.equal(model.groups.mentions.chips.filter((chip) => chip.densityCollapsed).length, 2);
+  const row = buildRelationChipElement(new MiniDoc(), model, {});
+  assert.equal(findByClasses(row, ["bob-relation-chip", "is-mention"]).length, 5);
+  const more = findByClass(row, "bob-relation-more")[0];
+  assert.equal(more.textContent, "+2 more");
+  fire(more, "click");
+  assert.equal(findByClasses(row, ["bob-relation-chip", "is-mention"]).length, 7);
+  assert.equal(findByClass(row, "bob-relation-more").length, 0);
+});
+
+test("MN linkedFrom v2 feeds mention rows and relationIndex v1 remains a fallback", () => {
+  const source = task({ blockId: "s", id: "s", path: "b.md", description: "Source" });
+  const plugin = new LedgerToolsPlugin(makeApp([source]), {});
+  plugin.relationIndexApi = () => ({
+    linkedFrom: () => [{
+      kind: "mention", source: { path: "b.md", blockId: "s", line: 1, text: "Source", status: "TODO" },
+      display: "mention", count: 1, occurrences: [{ line: 6, ch: 12, site: "note", excerpt: "See ⟦this task⟧" }],
+    }],
+    incoming: () => { throw new Error("v2 must use linkedFrom"); },
+  });
+  plugin.relationLookupTask = () => source;
+  plugin.relationResolveLinkpath = () => "b.md";
+  const owner = { blockId: "target", line: 2 };
+  const v2 = plugin.relationChipModelForLine({ path: "a.md", text: "- 🪢 **LINKED FROM:** [[b#^s]] (💬 mentions)", owner });
+  assert.equal(v2.chips[0].kind, "mention");
+  assert.equal(v2.chips[0].occurrences[0].line, 6);
+
+  let incomingCalls = 0;
+  plugin.relationIndexApi = () => ({ incoming: () => { incomingCalls += 1; return [{ label: "follow-up of", source: { path: "b.md", blockId: "s", task: source } }]; } });
+  const v1 = plugin.relationChipModelForLine({ path: "a.md", text: "- 🪢 **LINKED FROM:** [[b#^s]] (follow-up of)", owner });
+  assert.equal(incomingCalls, 1);
+  assert.equal(v1.chips[0].kind, "relation");
+  assert.equal(v1.chips[0].inverse, "followed up by");
+});
+
+test("MN click opens the source at its occurrence line and column, with Mod-click using a new pane", async () => {
+  const opened = [];
+  const cursor = [];
+  const sourceView = { file: { path: "sources.md" }, editor: { setCursor: (...args) => cursor.push(["cursor", ...args]), focus: () => cursor.push(["focus"]) } };
+  const app = makeApp([]);
+  app.workspace.openLinkText = (...args) => { opened.push(args); return Promise.resolve(); };
+  app.workspace.getLeavesOfType = () => [{ view: sourceView }];
+  app.workspace.getActiveViewOfType = () => sourceView;
+  const plugin = new LedgerToolsPlugin(app, {});
+  const chip = { kind: "mention", path: "sources.md", linktext: "sources#^s", occurrences: [{ line: 4, ch: 22 }] };
+  assert.equal(plugin.relationOpenMention(chip, "target.md", { metaKey: true }), true);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(opened, [["sources#^s", "target.md", true]]);
+  assert.deepEqual(cursor, [["cursor", 3, 22], ["focus"]]);
 });

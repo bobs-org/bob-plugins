@@ -37,7 +37,10 @@ class BobNavigationHotkeysRelationStageMixin {
     if (api && owner && owner.blockId) {
       let incoming = [];
       try {
-        incoming = api.incoming(owner.path, owner.blockId);
+        // §19: typed v2 rows carry mentions; v1 falls back to relations-only.
+        incoming = typeof api.linkedFrom === "function" && Number(api.version) >= 2
+          ? api.linkedFrom(owner.path, owner.blockId)
+          : api.incoming(owner.path, owner.blockId);
       } catch (_error) {
         incoming = [];
       }
@@ -48,7 +51,9 @@ class BobNavigationHotkeysRelationStageMixin {
       );
     }
     const linkedKeys = new Set(
-      current.map((row) => relationStageRowKey(row.path, row.blockId)),
+      current
+        .filter((row) => row && row.path && row.blockId)
+        .map((row) => relationStageRowKey(row.path, row.blockId)),
     );
     return {
       ...stage,
@@ -472,6 +477,53 @@ class BobNavigationHotkeysRelationStageMixin {
       modal.applyVaultStageItems(fresh);
     } catch (_error) {
       // The stage remains usable with an empty CURRENT list if scanning fails.
+    }
+  }
+
+  // §19 MN19: open a Linked-from mention row's source at its first
+  // occurrence. The note opens at the source task; the cursor then lands on
+  // the occurrence (1-based index lines to editor coordinates) with a scroll
+  // into view. The cursor move is best-effort: a note that opened is success.
+  async openRelationMentionSource(row, ownerPath) {
+    try {
+      const source = (row && (row.mentionSource || row.source)) || {};
+      const path = normalizeVaultRelativePath(source.path || (row && row.path) || "");
+      if (!path) return false;
+      const blockId = normalizeBulletPropertyValue(source.blockId || (row && row.blockId) || "");
+      const occurrences = row && Array.isArray(row.mentionOccurrences) ? row.mentionOccurrences : [];
+      const first = occurrences.find((occurrence) =>
+        occurrence && Number.isFinite(Math.floor(numericOrDefault(occurrence.line, Number.NaN))),
+      ) || null;
+      const vault = this.app && this.app.vault;
+      const workspace = this.app && this.app.workspace;
+      if (!vault || !workspace || typeof workspace.openLinkText !== "function") return false;
+      const file = typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+      if (!file) return false;
+      const leaf = workspace.activeLeaf ||
+        (typeof workspace.getLeaf === "function" ? workspace.getLeaf(false) : null);
+      const linkText = blockId ? `${path}#^${blockId}` : path;
+      const opened = await openWithLeafSwitchGuard(this, file, leaf, () =>
+        workspace.openLinkText(linkText, normalizeVaultRelativePath(ownerPath || ""), false),
+      );
+      if (!opened) return false;
+      if (first) {
+        try {
+          const editor = this.findRelationEditOpenEditor(path);
+          if (editor) {
+            setEditorCursor(editor, {
+              line: Math.max(0, Math.floor(numericOrDefault(first.line, 1)) - 1),
+              ch: Math.max(0, Math.floor(numericOrDefault(first.ch, 0))),
+            });
+          }
+        } catch (_cursorError) {
+          // The note already opened; the cursor move stays best-effort.
+        }
+      }
+      return true;
+    } catch (_error) {
+      return false;
     }
   }
 

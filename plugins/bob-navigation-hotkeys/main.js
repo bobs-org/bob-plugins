@@ -1462,6 +1462,49 @@ function loadRelationsLinkedFromLinesEnabled(options = {}) {
   return enabled;
 }
 
+let relationsLinkedFromMentionsConfigCache = { key: null, value: false };
+
+function resetRelationsLinkedFromMentionsConfigCache() {
+  relationsLinkedFromMentionsConfigCache = { key: null, value: false };
+}
+
+// §19 mention kill switch (`docs/task-relations.md` §12). Missing, invalid,
+// or unreadable values stay disabled so the switch is lossless; cache by
+// mtime/size so a config edit takes effect on the next gesture. The enable
+// phase flips the default to true.
+function loadRelationsLinkedFromMentionsEnabled(options = {}) {
+  const env = options.env || (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule = options.osModule === undefined ? requireOptionalNodeModule("os") : options.osModule;
+  const fsModule = options.fsModule === undefined ? requireOptionalNodeModule("fs") : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") return false;
+  const configPath = options.configPath || getBulletPropertyConfigPath({ env, osModule });
+  const statKey = blocksLinesConfigStatKey(fsModule, configPath);
+  const key = statKey == null ? null : `${configPath}|${statKey}`;
+  if (key != null && relationsLinkedFromMentionsConfigCache.key === key) {
+    return relationsLinkedFromMentionsConfigCache.value;
+  }
+  let enabled = false;
+  try {
+    const parse = options.parseYaml === undefined ? parseYaml : options.parseYaml;
+    if (typeof parse === "function") {
+      const config = parse(fsModule.readFileSync(configPath, "utf8"));
+      const value = config && config.relations && config.relations.linked_from_mentions;
+      if (typeof value === "boolean") {
+        enabled = value;
+      } else if (value !== undefined && value !== null) {
+        enabled = false;
+        if (typeof console !== "undefined" && typeof console.warn === "function") {
+          console.warn("relations.linked_from_mentions is invalid; treating as false");
+        }
+      }
+    }
+  } catch (_error) {
+    enabled = false;
+  }
+  if (key != null) relationsLinkedFromMentionsConfigCache = { key, value: enabled };
+  return enabled;
+}
+
 function loadBulletPropertyConfig(options = {}) {
   const fsModule =
     options.fsModule === undefined
@@ -7979,7 +8022,46 @@ const TASK_RELATION_EMOJI = "🪢";
 const TASK_RELATION_LINE_NOTICE =
   "🪢 LINKS entries are relations, not Task Links · edit them with Ctrl+Shift+L";
 const TASK_LINKED_FROM_LINE_NOTICE =
-  "🪢 LINKED FROM is generated from other tasks' LINKS lines · change it with Ctrl+Shift+Alt+L";
+  "🪢 LINKED FROM is generated from other tasks' LINKS lines and text · change it with Ctrl+Shift+Alt+L";
+// §19 stored mention label and reserved first code point. Only exactly
+// `💬 mentions` (after the usual collapse) may appear, and only on LINKED
+// FROM; every other 💬-first label is refused or malformed (MN15).
+const TASK_MENTION_LABEL = "💬 mentions";
+const TASK_MENTION_RESERVED_CODEPOINT = 0x1f4ac;
+const TASK_MENTION_RESERVED_MESSAGE = "💬 is reserved for text mentions";
+
+function relationLabelIsReservedStart(value) {
+  const text = String(value || "");
+  if (!text) return false;
+  try {
+    return Array.from(text)[0] === "💬";
+  } catch (_error) {
+    return text.codePointAt(0) === TASK_MENTION_RESERVED_CODEPOINT;
+  }
+}
+
+function relationLabelIsMentionLabel(value) {
+  return normalizeRelationReaderLabel(value) === TASK_MENTION_LABEL;
+}
+
+// §19 copy (`docs/task-relations.md` §19 copy table): pills, row tooltip,
+// removal refusal, and the mixed-pair unlink notice. ‹S› renders as the
+// source task's quoted name at the call site.
+const TASK_MENTION_PILL = "💬 mentioned in";
+const TASK_MENTION_EMBED_PILL = "💬 embedded in";
+const TASK_MENTION_ROW_TOOLTIP = "Tasks linking here · relations and 💬 text mentions · live";
+
+function relationMentionPill(display) {
+  return display === "embed" ? TASK_MENTION_EMBED_PILL : TASK_MENTION_PILL;
+}
+
+function relationMentionRemovalRefusal(sourceName) {
+  return `💬 This comes from a link in ${quoteRelationNoticeName(sourceName || "that task")}'s text · edit it there (↵ opens it)`;
+}
+
+function relationMentionUnlinkNotice(sourceName) {
+  return `Unlinked ${quoteRelationNoticeName(sourceName || "that task")} · it still mentions this task in its text`;
+}
 const RELATIONS_MACHINE_WRITE_ANNOTATION = "bob-relations-machine-write";
 const TASK_RELATION_SEPARATOR = " • ";
 const TASK_LINKS_LABEL = "LINKS";
@@ -8003,7 +8085,8 @@ function normalizeRelationLabel(value) {
     length < 1 ||
     length > 40 ||
     TASK_RELATION_LABEL_FORBIDDEN_RE.test(label) ||
-    /^[·,]/u.test(label)
+    /^[·,]/u.test(label) ||
+    relationLabelIsReservedStart(label)
   ) {
     return null;
   }
@@ -8073,10 +8156,17 @@ function parseLinksEntryLabel(gap, first, alias) {
   if (!raw) {
     if (!alias) return { ok: true, label: null };
     const fallback = normalizeRelationReaderLabel(alias);
-    return fallback ? { ok: true, label: fallback } : { ok: false, label: null };
+    if (!fallback || relationLabelIsReservedStart(fallback)) {
+      return { ok: false, label: null };
+    }
+    return { ok: true, label: fallback };
   }
   const label = normalizeRelationReaderLabel(raw);
-  return label ? { ok: true, label } : { ok: false, label: null };
+  // §19 MN15: no 💬-first label ever parses on LINKS.
+  if (!label || relationLabelIsReservedStart(label)) {
+    return { ok: false, label: null };
+  }
+  return { ok: true, label };
 }
 
 function parseLinkedFromEntryGap(gap, hasFollowingLink, alias) {
@@ -8101,10 +8191,24 @@ function parseLinkedFromEntryGap(gap, hasFollowingLink, alias) {
   if (!raw) {
     if (!alias) return { ok: true, label: null };
     const fallback = normalizeRelationReaderLabel(alias);
-    return fallback ? { ok: true, label: fallback } : { ok: false, label: null };
+    if (!fallback) return { ok: false, label: null };
+    // §19 MN16: exactly `💬 mentions` parses on LINKED FROM; any other
+    // 💬-first label is malformed (MN15).
+    if (relationLabelIsReservedStart(fallback)) {
+      return fallback === TASK_MENTION_LABEL
+        ? { ok: true, label: fallback }
+        : { ok: false, label: null };
+    }
+    return { ok: true, label: fallback };
   }
   const label = normalizeRelationReaderLabel(raw);
-  return label ? { ok: true, label } : { ok: false, label: null };
+  if (!label) return { ok: false, label: null };
+  if (relationLabelIsReservedStart(label)) {
+    return label === TASK_MENTION_LABEL
+      ? { ok: true, label }
+      : { ok: false, label: null };
+  }
+  return { ok: true, label };
 }
 
 function parseTaskRelationLine(lineText, direction, options = {}) {
@@ -8457,6 +8561,10 @@ function relationInsertLine(lines, taskLine, kind) {
 function normalizeOptionalRelationLabel(label) {
   if (label === undefined || label === null || label === "") {
     return { ok: true, label: null };
+  }
+  // §19 MN15: 💬-first labels are reserved for text mentions.
+  if (relationLabelIsReservedStart(String(label || ""))) {
+    return { ok: false, reason: "reserved" };
   }
   const normalized = normalizeRelationLabel(label);
   if (!normalized) {
@@ -43524,6 +43632,35 @@ function relationStageIncomingRow(source, label, options = {}) {
   });
 }
 
+// §19 mention CURRENT row: the pill, the excerpt subtitle, and the note.
+// Occurrence lines are 1-based; the opener converts to editor coordinates.
+function relationStageMentionRow(source, mention, options = {}) {
+  const display = (mention && mention.display) === "embed" ? "embed" : "mention";
+  const occurrences = Array.isArray(mention && mention.occurrences) ? mention.occurrences : [];
+  const excerpt = occurrences
+    .map((occurrence) => occurrence && occurrence.excerpt)
+    .find((text) => typeof text === "string" && text) || null;
+  const displayText = String(source.displayText || source.text || "task");
+  return Object.freeze({
+    ...source,
+    searchText: [displayText, source.route, source.blockId, source.note, "mention"].filter(Boolean).join(" "),
+    kind: "current",
+    label: null,
+    storedLabel: null,
+    incoming: true,
+    mention: true,
+    mentionDisplay: display,
+    mentionPill: relationMentionPill(display),
+    mentionCount: Math.max(1, Math.floor(numericOrDefault(mention && mention.count, occurrences.length) || 1)),
+    mentionOccurrences: Object.freeze(occurrences.map((occurrence) => Object.freeze({ ...(occurrence || {}) }))),
+    mentionExcerpt: excerpt,
+    mentionSource: Object.freeze({ path: source.path, blockId: source.blockId }),
+    readOnly: options.readOnly === true,
+    disabled: options.readOnly === true,
+    disabledReason: options.readOnly ? "This source task is in a read-only note" : null,
+  });
+}
+
 function relationStageEdgeStatusSymbol(source) {
   const text = source && source.text != null ? String(source.text) : "";
   const match = OBSIDIAN_TASK_LINE_RE.exec(text);
@@ -43586,9 +43723,12 @@ function relationStageIncomingRowsFromEdges(edges, index, previousDailyPath) {
         hidden: false,
       };
     }
-    rows.push(relationStageIncomingRow(rowSource, edge && edge.label, {
-      readOnly: archived || path === normalizeVaultRelativePath(previousDailyPath || ""),
-    }));
+    // §19: typed v2 mention rows render as mention CURRENT rows; v1 and
+    // v2 relation rows keep the inverse-phrase mapping.
+    const readOnlyRow = archived || path === normalizeVaultRelativePath(previousDailyPath || "");
+    rows.push(edge && edge.kind === "mention"
+      ? relationStageMentionRow(rowSource, edge, { readOnly: readOnlyRow })
+      : relationStageIncomingRow(rowSource, edge && edge.label, { readOnly: readOnlyRow }));
   }
   return Object.freeze(rows);
 }
@@ -44101,6 +44241,11 @@ function relationStageConsequenceStrip(item, context = {}) {
   if (item.archived === true) {
     return "Archived · its LINKED FROM shows live only";
   }
+  // §19: a mention row opens instead of toggling; only its text edit
+  // (or reconcile) changes the entry.
+  if (item.mention === true) {
+    return "↵ opens it in its note · ⇧↵ adds a relation";
+  }
   if (item.stageSection === "current") {
     return context.direction === "from"
       ? "↵ removes this source · ⇧↵ relabels"
@@ -44355,6 +44500,10 @@ function describeRelationLabelRefusal(value) {
     .trim();
   if (!text) {
     return null;
+  }
+  // §19 MN15: 💬-first labels are reserved for text mentions.
+  if (relationLabelIsReservedStart(text)) {
+    return TASK_MENTION_RESERVED_MESSAGE;
   }
   const length = Array.from(text).length;
   if (length > 40) {
@@ -45502,6 +45651,17 @@ function taskCardRelationIndex(context = {}) {
   }
 }
 
+// §19 Task Card count (`docs/task-relations.md` §19 copy table): relations
+// only keep `N · ‹first name›`; mentions only read `M 💬 · ‹first name›`;
+// both read `N · R relation(s) · M 💬`.
+function taskCardLinkedFromSourceName(source) {
+  const cleaned = source && source.text ? cleanTaskDisplayText(source.text) : "";
+  return String(
+    cleaned ||
+      (source && source.blockId ? `^${source.blockId}` : "source task"),
+  ).trim();
+}
+
 function taskCardLinkedFromSummary(session, context = {}) {
   const linkedTarget =
     session && session.type === "linked" && Array.isArray(session.targets) &&
@@ -45524,24 +45684,36 @@ function taskCardLinkedFromSummary(session, context = {}) {
   if (!path || !blockId || !index) {
     return null;
   }
-  let incoming = [];
+  let rows = [];
   try {
-    incoming = index.incoming(path, blockId);
+    rows = typeof index.linkedFrom === "function" && Number(index.version) >= 2
+      ? index.linkedFrom(path, blockId)
+      : index.incoming(path, blockId);
   } catch (_error) {
-    incoming = [];
+    rows = [];
   }
-  if (!Array.isArray(incoming) || incoming.length === 0) {
+  if (!Array.isArray(rows) || rows.length === 0) {
     return Object.freeze({ count: 0, detail: "" });
   }
-  const first = incoming[0] && incoming[0].source;
-  const cleaned = first && first.text ? cleanTaskDisplayText(first.text) : "";
-  const name = String(
-    cleaned ||
-      (first && first.blockId ? `^${first.blockId}` : "source task"),
-  ).trim();
+  const relations = rows.filter((row) => !row || row.kind !== "mention");
+  const mentions = rows.filter((row) => row && row.kind === "mention");
+  if (mentions.length === 0) {
+    return Object.freeze({
+      count: relations.length,
+      detail: `${relations.length} · ${taskCardLinkedFromSourceName(relations[0] && relations[0].source)}`,
+    });
+  }
+  if (relations.length === 0) {
+    return Object.freeze({
+      count: mentions.length,
+      detail: `${mentions.length} 💬 · ${taskCardLinkedFromSourceName(mentions[0] && mentions[0].source)}`,
+    });
+  }
+  const total = relations.length + mentions.length;
+  const relationWord = relations.length === 1 ? "relation" : "relations";
   return Object.freeze({
-    count: incoming.length,
-    detail: `${incoming.length} · ${name}`,
+    count: total,
+    detail: `${total} · ${relations.length} ${relationWord} · ${mentions.length} 💬`,
   });
 }
 // ---- src/313-task-card-theme-projection.js ----
@@ -53585,6 +53757,13 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
     appendHighlighted(titleEl, item.displayText, query);
 
+    // §19: a mention row's excerpt subtitle quotes the source task's words.
+    if (item && item.mention === true && typeof item.mentionExcerpt === "string" && item.mentionExcerpt) {
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta bob-cnp-relation-mention-excerpt",
+        text: `“${item.mentionExcerpt}”`,
+      });
+    }
     const metaEl = textEl.createDiv({ cls: "bob-cnp-row-meta bob-cnp-dep-meta" });
     // Cross-note rows name their note (`↗ note`); the badge below always
     // shows the block id, never the path-encoded id (§6.3).
@@ -53671,6 +53850,12 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
             ? item.blockedBadge
             : `🔒 waits on ${item.waitsOn}`,
       });
+    } else if (item.mention === true) {
+      // §19: a mention row opens instead of toggling; removal is refused.
+      badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-action",
+        text: "↵",
+      });
     } else if (item.alreadyLinked) {
       badgeEl.createSpan({
         cls: "bob-cnp-task-badge-action",
@@ -53692,7 +53877,23 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     // `⛓ prerequisite` (information only), and 🍅 for rows linked under
     // today's open Pomodoros (display only — relations never consume them).
     if (item && item.relationKind === true) {
-      if (item.label) {
+      if (item.mention === true) {
+        // §19: the mention pill carries the row tooltip; the excerpt
+        // subtitle below names the note's own words.
+        const pillEl = badgeEl.createSpan({
+          cls: "bob-cnp-task-badge-extra bob-cnp-relation-label is-mention",
+          text: String(item.mentionPill || "💬 mentioned in"),
+        });
+        if (pillEl && typeof pillEl.setAttribute === "function") {
+          const count = Math.floor(numericOrDefault(item.mentionCount, 1));
+          pillEl.setAttribute(
+            "title",
+            count > 1
+              ? `${TASK_MENTION_ROW_TOOLTIP} · mentioned ${count}× in its text`
+              : TASK_MENTION_ROW_TOOLTIP,
+          );
+        }
+      } else if (item.label) {
         badgeEl.createSpan({
           cls: "bob-cnp-task-badge-extra bob-cnp-relation-label",
           text: String(item.label),
@@ -55437,6 +55638,20 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     }
     const marked = this.getMarkedCount();
     const item = (this.visibleItems || [])[this.selectedIndex];
+    // §19: footer hints follow the selected row's kind — a mention row
+    // opens instead of linking.
+    if (item && item.mention === true && marked === 0) {
+      const hints = [
+        { keys: ["↑", "↓"], label: "navigate" },
+        { keys: ["↵"], label: "open mention" },
+        { keys: ["⇧↵"], label: "add relation" },
+      ];
+      if (!this.taskSession || this.taskSession.type === "single") {
+        hints.push({ keys: ["~"], label: "flip direction" });
+      }
+      hints.push({ keys: ["esc"], label: "dismiss" });
+      return hints;
+    }
     let verb = this.isLinkedFromStage() ? "link here" : "link";
     if (marked > 0) {
       verb = `apply ${marked}`;
@@ -55610,6 +55825,22 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       new Notice(item.disabledReason || "That task cannot be linked");
       return false;
     }
+    // §19: a mention row opens its source at the first occurrence (MN19).
+    // Toggling or removing it is refused; ⇧↵ adds a relation for the source
+    // instead, which replaces the mention entry by identity.
+    if (item.mention === true) {
+      if (options.withLabel) {
+        return this.showRelationLabelStage([item], { mode: "add" });
+      }
+      const opener = this.plugin && this.plugin.openRelationMentionSource;
+      if (typeof opener !== "function") return false;
+      const owner = this.vaultStage && this.vaultStage.dependent;
+      try {
+        return opener.call(this.plugin, item, (owner && owner.path) || this.filePath || "");
+      } catch (_openError) {
+        return false;
+      }
+    }
     if (item.stageSection === "current" && item.alreadyLinked) {
       if (options.withLabel) {
         return this.showRelationLabelStage([item], { mode: "relabel" });
@@ -55644,6 +55875,16 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     const additions = Array.isArray(add) ? add : [];
     const removals = Array.isArray(remove) ? remove : [];
     const relabels = Array.isArray(relabel) ? relabel : [];
+    // §19: toggling or removing a mention row is refused with the removal
+    // refusal notice; only the text edit (or reconcile) owns the entry.
+    const refusedMention = [...removals, ...relabels].find((item) => item && item.mention === true);
+    if (refusedMention) {
+      const name = cleanTaskDisplayText(
+        refusedMention.displayText || refusedMention.text || "",
+      ) || "that task";
+      new Notice(relationMentionRemovalRefusal(name));
+      return false;
+    }
     const linkedFrom = this.isLinkedFromSession();
     const owner = linkedFrom ? this.relationStageSourceRefs()[0] || null : null;
     const ownerKey = owner
@@ -56253,7 +56494,10 @@ class BobNavigationHotkeysRelationStageMixin {
     if (api && owner && owner.blockId) {
       let incoming = [];
       try {
-        incoming = api.incoming(owner.path, owner.blockId);
+        // §19: typed v2 rows carry mentions; v1 falls back to relations-only.
+        incoming = typeof api.linkedFrom === "function" && Number(api.version) >= 2
+          ? api.linkedFrom(owner.path, owner.blockId)
+          : api.incoming(owner.path, owner.blockId);
       } catch (_error) {
         incoming = [];
       }
@@ -56264,7 +56508,9 @@ class BobNavigationHotkeysRelationStageMixin {
       );
     }
     const linkedKeys = new Set(
-      current.map((row) => relationStageRowKey(row.path, row.blockId)),
+      current
+        .filter((row) => row && row.path && row.blockId)
+        .map((row) => relationStageRowKey(row.path, row.blockId)),
     );
     return {
       ...stage,
@@ -56688,6 +56934,53 @@ class BobNavigationHotkeysRelationStageMixin {
       modal.applyVaultStageItems(fresh);
     } catch (_error) {
       // The stage remains usable with an empty CURRENT list if scanning fails.
+    }
+  }
+
+  // §19 MN19: open a Linked-from mention row's source at its first
+  // occurrence. The note opens at the source task; the cursor then lands on
+  // the occurrence (1-based index lines to editor coordinates) with a scroll
+  // into view. The cursor move is best-effort: a note that opened is success.
+  async openRelationMentionSource(row, ownerPath) {
+    try {
+      const source = (row && (row.mentionSource || row.source)) || {};
+      const path = normalizeVaultRelativePath(source.path || (row && row.path) || "");
+      if (!path) return false;
+      const blockId = normalizeBulletPropertyValue(source.blockId || (row && row.blockId) || "");
+      const occurrences = row && Array.isArray(row.mentionOccurrences) ? row.mentionOccurrences : [];
+      const first = occurrences.find((occurrence) =>
+        occurrence && Number.isFinite(Math.floor(numericOrDefault(occurrence.line, Number.NaN))),
+      ) || null;
+      const vault = this.app && this.app.vault;
+      const workspace = this.app && this.app.workspace;
+      if (!vault || !workspace || typeof workspace.openLinkText !== "function") return false;
+      const file = typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+      if (!file) return false;
+      const leaf = workspace.activeLeaf ||
+        (typeof workspace.getLeaf === "function" ? workspace.getLeaf(false) : null);
+      const linkText = blockId ? `${path}#^${blockId}` : path;
+      const opened = await openWithLeafSwitchGuard(this, file, leaf, () =>
+        workspace.openLinkText(linkText, normalizeVaultRelativePath(ownerPath || ""), false),
+      );
+      if (!opened) return false;
+      if (first) {
+        try {
+          const editor = this.findRelationEditOpenEditor(path);
+          if (editor) {
+            setEditorCursor(editor, {
+              line: Math.max(0, Math.floor(numericOrDefault(first.line, 1)) - 1),
+              ch: Math.max(0, Math.floor(numericOrDefault(first.ch, 0))),
+            });
+          }
+        } catch (_cursorError) {
+          // The note already opened; the cursor move stays best-effort.
+        }
+      }
+      return true;
+    } catch (_error) {
+      return false;
     }
   }
 
@@ -79712,6 +80005,12 @@ class BobNavigationHotkeysRelationEditMixin {
         args.linkedFromLinesEnabled !== undefined
           ? args.linkedFromLinesEnabled === true
           : loadRelationsLinkedFromLinesEnabled();
+      // §19 mentions switch, honoring the same explicit-override channel so
+      // tests can drive the downgrade deterministically.
+      const linkedFromMentionsEnabled =
+        args.linkedFromMentionsEnabled !== undefined
+          ? args.linkedFromMentionsEnabled === true
+          : loadRelationsLinkedFromMentionsEnabled();
       const hasInjectedClosePolicy =
         args.closeLabels !== undefined ||
         args.cancelLabels !== undefined ||
@@ -79818,6 +80117,8 @@ class BobNavigationHotkeysRelationEditMixin {
       const noticeAdded = [];
       const noticeRemoved = [];
       const noticeRelabeled = [];
+      const noticeDowngraded = [];
+      const downgradedPairs = new Set();
       const mirrorFailed = [];
       const cancelledNoticeRows = [];
       const cancelledIdentities = [];
@@ -79907,7 +80208,9 @@ class BobNavigationHotkeysRelationEditMixin {
             planned.notice ||
               (planned.reason === "malformed-links-line"
                 ? "its LINKS line is malformed"
-                : null),
+                : planned.reason === "invalid-label" && planned.labelReason === "reserved"
+                  ? TASK_MENTION_RESERVED_MESSAGE
+                  : null),
           );
         }
         content = planned.nextContent;
@@ -79956,7 +80259,13 @@ class BobNavigationHotkeysRelationEditMixin {
               vaultFiles,
             );
             if (planned.report.removed.includes(link)) {
-              noticeRemoved.push(noticeRow(target));
+              // §19: the mirror loop below may downgrade this pair to
+              // `(💬 mentions)`; the pair key lets composition filter the
+              // plain removal then (the mirror loop runs after this block).
+              noticeRemoved.push({
+                ...noticeRow(target),
+                downgradePairKey: `${source.path}\u0000${target.path}\u0000${target.blockId}`,
+              });
             }
           }
         }
@@ -80102,7 +80411,7 @@ class BobNavigationHotkeysRelationEditMixin {
             target.path,
             vaultFiles,
           ).text;
-          const addRows = isRemove
+          let addRows = isRemove
             ? []
             : [
                 {
@@ -80111,7 +80420,45 @@ class BobNavigationHotkeysRelationEditMixin {
                   label: addLabel ? addLabel.label || null : null,
                 },
               ];
-          const removeIds = isRemove ? [sourceIdentity] : [];
+          // NOTE: linkedFromDesiredAfterDelta drops an identity listed in
+          // both add and remove, so a downgrade replaces instead of removing.
+          let removeIds = isRemove ? [sourceIdentity] : [];
+          // §19 unlink downgrade: a removed relation whose source still
+          // mentions the target becomes `(💬 mentions)` (MN8/M7).
+          if (isRemove && !addLabel) {
+            // Same-note mirror inserts above can shift lines: re-resolve the
+            // source owner by ^id before evaluating M7.
+            let downgradeSourceLine = sourceLine;
+            try {
+              const freshSourceLines = contentOf(source.path).split(/\r?\n/);
+              const relocated = sourceBlockId
+                ? findTaskLineByTrailingBlockId(freshSourceLines, sourceBlockId)
+                : null;
+              if (relocated !== null) downgradeSourceLine = relocated;
+            } catch (_relocateError) {
+              // Fall through with the loop's source line.
+            }
+            const downgradeLabel = this.mentionDowngradeLabelForRemove({
+              sourcePath: source.path,
+              sourceLine: downgradeSourceLine,
+              sourceBlockId,
+              sourceContent: contentOf(source.path),
+              targetPath: target.path,
+              targetBlockId: target.blockId,
+              targetContent: contentOf(target.path),
+              resolveLinkpath,
+              linesEnabled: linkedFromLinesEnabled,
+              mentionsEnabled: linkedFromMentionsEnabled,
+            });
+            if (downgradeLabel) {
+              addRows = [
+                { identity: sourceIdentity, link: canonical, label: downgradeLabel },
+              ];
+              removeIds = [];
+              downgradedPairs.add(`${source.path}\u0000${target.path}\u0000${target.blockId}`);
+              noticeDowngraded.push({ description: source.description, relationSourcePath: source.path });
+            }
+          }
           if (target.path === source.path) {
             const desired = linkedFromDesiredAfterDelta(
               existingMirror,
@@ -80314,22 +80661,45 @@ class BobNavigationHotkeysRelationEditMixin {
         noticeAdded.every((entry) => entry.relationSourcePath && !committedSet.has(entry.relationSourcePath)) &&
         noticeRemoved.every((entry) => entry.relationSourcePath && !committedSet.has(entry.relationSourcePath)) &&
         noticeRelabeled.every((entry) => entry.relationSourcePath && !committedSet.has(entry.relationSourcePath)) &&
+        noticeDowngraded.every((entry) => entry.relationSourcePath && !committedSet.has(entry.relationSourcePath)) &&
         committedCancelledNoticeRows.length === 0 &&
         committedCompleted.length === 0 &&
         committed.every((path) => {
           const write = sourceWrites.get(path);
           return write && write.original === write.nextContent;
         });
-      const relationNotice = unchanged
+      const committedDowngraded = noticeDowngraded.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath));
+      // §19: downgraded pairs report the unlink notice naming the mention
+      // source, never the plain `Unlinked` line.
+      const downgradeNotice = committedDowngraded.length > 0
+        ? committedDowngraded.map((entry) => relationMentionUnlinkNotice(entry.description || "that task")).join(" · ")
+        : null;
+      const committedNoticeAdded = noticeAdded.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath));
+      // §19: downgraded pairs report the unlink notice, never the plain
+      // removal, even when the mirror loop ran after the notice rows above.
+      const committedNoticeRemoved = noticeRemoved.filter((entry) =>
+        (!entry.relationSourcePath || committedSet.has(entry.relationSourcePath)) &&
+        !downgradedPairs.has(entry.downgradePairKey),
+      );
+      const committedNoticeRelabeled = noticeRelabeled.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath));
+      const hasBaseChanges = committedNoticeAdded.length + committedNoticeRemoved.length + committedNoticeRelabeled.length > 0;
+      const baseRelationNotice = unchanged
         ? null
         : withRelationCloseStayNotice(buildRelationEditNotice({
-            added: noticeAdded.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
-            removed: noticeRemoved.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
-            relabeled: noticeRelabeled.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
+            added: committedNoticeAdded,
+            removed: committedNoticeRemoved,
+            relabeled: committedNoticeRelabeled,
             direction,
             archived,
             mirrorFailed: [],
           }), cancelStayedCancelled, completeStayedDone);
+      // A downgrade-only gesture reports only the unlink notice; mixed
+      // gestures join both.
+      const relationNotice = unchanged
+        ? null
+        : downgradeNotice && !hasBaseChanges
+          ? downgradeNotice
+          : [baseRelationNotice, downgradeNotice].filter(Boolean).join(" · ") || null;
       const baseNotice = unchanged
         ? null
         : committedCompleted.length > 0
@@ -80394,175 +80764,171 @@ class BobNavigationHotkeysRelationEditMixin {
   }
 
 
-  async removeAllRelationLinksByRef(sourceRef = {}) {
-    try {
-      const path = normalizeVaultRelativePath(sourceRef.path || "");
-      if (!path) return Object.freeze({ ok: false, reason: "invalid-ref" });
-      const original = await this.readDependencyNoteContent(path, null, "");
-      if (original === null) return Object.freeze({ ok: false, reason: "target-not-found" });
-      const lines = original.split(/\r?\n/);
-      let owner = Math.floor(numericOrDefault(sourceRef.line, Number.NaN));
-      if (sourceRef.blockId) {
-        const byId = findTaskLineByTrailingBlockId(lines, sourceRef.blockId);
-        if (byId !== null) owner = byId;
-      }
-      if (!Number.isFinite(owner) || owner < 0 || owner >= lines.length || !isObsidianTaskAtLine(original, owner)) {
-        return Object.freeze({ ok: false, reason: "not-task" });
-      }
-      const children = findLinksChildren(lines, owner);
-      const entries = [];
-      for (const child of children) {
-        const parsed = parseLinksLine(String(lines[child] || ""), { isDirectChildOfTask: true });
-        if (parsed.verdict === "malformed") {
-          return Object.freeze({ ok: false, reason: "malformed-links-line", notice: "its LINKS line is malformed" });
-        }
-        if (parsed.verdict === "accept") entries.push(...(parsed.entries || []));
-      }
-      if (entries.length === 0) return Object.freeze({ ok: true, removed: 0, mirrorFailed: [] });
-      const planned = planLinksEdit(original, owner, {
-        remove: entries.map((entry) => relationLinkText(entry)),
-      });
-      if (!planned.ok) return Object.freeze({ ok: false, reason: planned.reason });
-      let nextContent = planned.nextContent;
-      const sourceBlockId = getTrailingBlockId(lines[owner]);
-      const followUps = [];
-      const mirrorFailed = new Set();
-      const enabled = loadRelationsLinkedFromLinesEnabled();
-      const vaultFiles = this.readDependencyVaultFileList() || [];
-      const daily = scheduledRecoveryDailyPaths(vaultFiles.map((entry) => ({ path: typeof entry === "string" ? entry : entry.path })));
-      const previousDailyPath = normalizeVaultRelativePath((daily && daily.previous) || "");
-      const resolveLinkpath = this.dependencyLinkpathResolver();
-      if (enabled && sourceBlockId) {
-        const sourceIdentity = blocksIdentity(path, sourceBlockId);
-        const targets = new Map();
-        for (const entry of entries) {
-          const targetPath = normalizeVaultRelativePath(dependencyPathForLinkNote(entry.note, path, resolveLinkpath) || "");
-          const blockId = normalizeBulletPropertyValue(entry.blockId || "");
-          if (targetPath && blockId) targets.set(`${targetPath}\x00${blockId}`, { path: targetPath, blockId });
-        }
-        for (const target of targets.values()) {
-          if (!relationPathIsWritable(target.path, previousDailyPath)) continue;
-          const targetContent = target.path === path
-            ? nextContent
-            : await this.readDependencyNoteContent(target.path, null, "");
-          if (targetContent === null) {
-            mirrorFailed.add(target.path);
-            continue;
-          }
-          const targetLines = targetContent.split(/\r?\n/);
-          const targetLine = findTaskLineByTrailingBlockId(targetLines, target.blockId);
-          if (targetLine === null) continue;
-          const mirrors = findLinkedFromChildren(targetLines, targetLine);
-          const parsedMirrors = mirrors.map((index) => parseLinkedFromLine(targetLines[index], { isDirectChildOfTask: true }));
-          if (parsedMirrors.some((entry) => entry.verdict === "malformed")) {
-            mirrorFailed.add(target.path);
-            continue;
-          }
-          const existing = mirrors.flatMap((index) => relationLinkedFromRows(target.path, targetLines[index], resolveLinkpath, vaultFiles));
-          const desired = linkedFromDesiredAfterDelta(existing, (entry) => ({ identity: entry.identity, link: entry.link }), [], [sourceIdentity]);
-          const mirrorPlan = planLinkedFromLine(targetContent, targetLine, desired);
-          if (!mirrorPlan.ok) {
-            mirrorFailed.add(target.path);
-            continue;
-          }
-          if (target.path === path) nextContent = mirrorPlan.nextContent;
-          else if (mirrorPlan.nextContent !== targetContent) {
-            followUps.push(Object.freeze({
-              path: target.path,
-              ownerBlockId: target.blockId,
-              add: Object.freeze([]),
-              remove: Object.freeze([sourceIdentity]),
-              preimage: targetContent,
-              today: new Date(),
-            }));
-          }
-        }
-      }
-      if (nextContent !== original) {
-        const write = await this.writeRelationEditNote(path, original, nextContent);
-        if (!write.ok) return Object.freeze({ ok: false, reason: "changed — reopen" });
-      }
-      if (followUps.length > 0) {
-        const outcome = await this.applyRelationFollowUps(followUps);
-        for (const failedPath of outcome.failed || []) mirrorFailed.add(failedPath);
-      }
-      return Object.freeze({
-        ok: true,
-        removed: entries.length,
-        mirrorFailed: Object.freeze([...mirrorFailed]),
-        notice: mirrorFailed.size > 0 ? "🪢 LINKED FROM not updated" : null,
-      });
-    } catch (_error) {
-      return Object.freeze({ ok: false, reason: "remove-failed" });
-    }
-  }
-
-  async removeRelationLinkByRef(sourceRef = {}, targetRef = {}) {
-    try {
-      const sourcePath = normalizeVaultRelativePath(sourceRef.path || "");
-      const targetPath = normalizeVaultRelativePath(targetRef.path || "");
-      const targetBlockId = normalizeBulletPropertyValue(targetRef.blockId || "");
-      if (!sourcePath || !targetPath || !targetBlockId) {
-        return Object.freeze({ ok: false, reason: "invalid-ref" });
-      }
-      const sourceContent = await this.readDependencyNoteContent(
-        sourcePath,
-        null,
-        "",
-      );
-      const targetContent = await this.readDependencyNoteContent(
-        targetPath,
-        null,
-        "",
-      );
-      if (sourceContent === null || targetContent === null) {
-        return Object.freeze({ ok: false, reason: "target-not-found" });
-      }
-      const sourceHit = Math.floor(numericOrDefault(sourceRef.line, Number.NaN));
-      const sourceLines = sourceContent.split(/\r?\n/);
-      let sourceLine = Number.isFinite(sourceHit) ? sourceHit : null;
-      if (sourceRef.blockId) {
-        const found = findTaskLineByTrailingBlockId(
-          sourceLines,
-          sourceRef.blockId,
-        );
-        if (found !== null) sourceLine = found;
-      }
-      if (!Number.isFinite(sourceLine) || sourceLine < 0) {
-        return Object.freeze({ ok: false, reason: "invalid-ref" });
-      }
-      const ownerLine = findOwningTaskLine(sourceLines, sourceLine);
-      if (ownerLine === null) {
-        return Object.freeze({ ok: false, reason: "no-owning-task" });
-      }
-      const expected = new Map([
-        [sourcePath, sourceContent],
-        [targetPath, targetContent],
-      ]);
-      const outcome = await this.applyRelationEdit({
-        sources: [
-          {
-            path: sourcePath,
-            line: ownerLine,
-            blockId: getTrailingBlockId(sourceLines[ownerLine]),
-          },
-        ],
-        add: [],
-        remove: [{ path: targetPath, blockId: targetBlockId }],
-        expected,
-      });
-      if (!outcome.ok) {
-        if (outcome.notice) new Notice(outcome.notice);
-        return Object.freeze({ ok: false, reason: outcome.reason });
-      }
-      if (outcome.notice) new Notice(outcome.notice);
-      return Object.freeze({ ok: true, notice: outcome.notice });
-    } catch (_error) {
-      return Object.freeze({ ok: false, reason: "remove-failed" });
-    }
-  }
 }
 // ---- src/594a-relation-hand-edit.js ----
+// §19 relationIndex v2 accessor for nav's mention reads and writes.
+// Null when ledger-tools is missing or older than v2 (MN18 skips then).
+function relationMentionIndexApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins && plugins["bob-ledger-tools"];
+    const api = holder && holder.api && holder.api.relationIndex;
+    if (!api || Number(api.version) < 2 || typeof api.scanMentions !== "function") {
+      return null;
+    }
+    return api;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function relationMentionPairKey(pair) {
+  return `${String((pair && pair.sourceKey) || "")}\u0000${String((pair && pair.targetKey) || "")}`;
+}
+
+// Direct-child lines of one owner, for malformed edge-line detection.
+function relationMentionOwnerChildLines(lines, owner) {
+  const out = [];
+  let block = null;
+  try {
+    block = findCurrentBulletChildBlock(lines, owner);
+  } catch (_error) {
+    block = null;
+  }
+  if (!block) return out;
+  for (let index = block.startLine; index < block.endLineExclusive; index += 1) {
+    try {
+      if (findNearestParentListItem(lines, index) === owner) out.push(index);
+    } catch (_error) {
+      // One unreadable line never blocks the uncertainty check.
+    }
+  }
+  return out;
+}
+
+function relationMentionNoteHasUnclosedFence(lines) {
+  let opening = null;
+  for (const line of Array.isArray(lines) ? lines : []) {
+    const text = String(line || "");
+    if (opening) {
+      try {
+        if (isClosingFence(text, opening)) opening = null;
+      } catch (_error) {
+        opening = null;
+      }
+      continue;
+    }
+    let next = null;
+    try {
+      next = getFenceOpening(text);
+    } catch (_error) {
+      next = null;
+    }
+    if (next) opening = next;
+  }
+  return opening !== null;
+}
+
+// M-uncertainty for one source owner in already-split lines: a malformed
+// LINKS or Depends-On child, a duplicate ^id for the owner, or an unclosed
+// fence in the note. Uncertain sources are kept byte-for-byte, never added.
+function relationMentionSourceUncertain(lines, owner) {
+  const at = Math.floor(Number(owner));
+  if (!Number.isFinite(at) || at < 0 || at >= lines.length) return true;
+  for (const index of relationMentionOwnerChildLines(lines, at)) {
+    const text = String(lines[index] || "");
+    try {
+      if (parseLinksLine(text, { isDirectChildOfTask: true }).verdict === "malformed") return true;
+    } catch (_error) {
+      return true;
+    }
+    try {
+      if (parseDependencyLine(text, { isDirectChildOfTask: true }).verdict === "malformed") return true;
+    } catch (_error) {
+      return true;
+    }
+  }
+  const ownerId = normalizeBulletPropertyValue(getTrailingBlockId(String(lines[at] || "")) || "");
+  if (ownerId) {
+    let count = 0;
+    for (const match of String(lines.join("\n")).matchAll(/\^([A-Za-z0-9-]+)(?=\s|$)/g)) {
+      if (String(match[1] || "") === ownerId) {
+        count += 1;
+        if (count > 1) return true;
+      }
+    }
+  }
+  return relationMentionNoteHasUnclosedFence(lines);
+}
+
+// Accepted Depends-On target identities for one owner task.
+function relationMentionDependencyIdentities(content, owner, ownerPath, resolveLinkpath) {
+  const out = new Set();
+  let collection = null;
+  try {
+    collection = collectDependencyNavigationBullets(content, owner);
+  } catch (_error) {
+    collection = null;
+  }
+  for (const target of (collection && collection.targets) || []) {
+    let targetPath = null;
+    try {
+      targetPath = dependencyPathForLinkNote(target.note, ownerPath, resolveLinkpath);
+    } catch (_error) {
+      targetPath = null;
+    }
+    const identity = blocksIdentity(targetPath, target.blockId);
+    if (identity) out.add(identity);
+  }
+  return out;
+}
+
+// Accepted LINKS target identities for one owner task, with labels, so the
+// courtesy write can apply M7 precedence (a relation on the pair wins).
+function relationMentionLinksIdentities(content, owner, ownerPath, resolveLinkpath) {
+  const out = new Map();
+  const lines = String(content || "").split(/\r?\n/);
+  const at = Math.floor(Number(owner));
+  if (!Number.isFinite(at) || at < 0 || at >= lines.length) return out;
+  for (const child of findLinksChildren(lines, at)) {
+    let parsed = null;
+    try {
+      parsed = parseLinksLine(String(lines[child] || ""), { isDirectChildOfTask: true });
+    } catch (_error) {
+      parsed = null;
+    }
+    if (!parsed || parsed.verdict !== "accept") continue;
+    for (const entry of parsed.entries || []) {
+      let targetPath = null;
+      try {
+        targetPath = dependencyPathForLinkNote(entry.note, ownerPath, resolveLinkpath);
+      } catch (_error) {
+        targetPath = null;
+      }
+      const identity = blocksIdentity(targetPath, entry.blockId);
+      if (identity && !out.has(identity)) out.set(identity, entry.label || null);
+    }
+  }
+  return out;
+}
+
+// Resolve one scanMentions source to its owner line in already-split lines:
+// the trailing ^id first, then the recorded 1-based line as a fallback.
+function relationMentionSourceOwnerLine(lines, source) {
+  const blockId = normalizeBulletPropertyValue((source && source.blockId) || "");
+  if (blockId) {
+    try {
+      const found = findTaskLineByTrailingBlockId(lines, blockId);
+      if (found !== null) return found;
+    } catch (_error) {
+      // Fall through to the recorded line.
+    }
+  }
+  const hint = Math.floor(numericOrDefault(source && source.line, Number.NaN));
+  if (Number.isFinite(hint) && hint >= 1 && hint <= lines.length) return hint - 1;
+  return null;
+}
+
 class BobNavigationHotkeysRelationHandEditMixin {
   async mirrorRelationHandEdit(editor, parentPath, oldContent, baselineLine, currentOwnerLine) {
     const path = normalizeVaultRelativePath(parentPath || "");
@@ -80705,6 +81071,619 @@ class BobNavigationHotkeysRelationHandEditMixin {
     }
     showRelationCancelHandEditNotice(changes, currentLines[owner], failed);
     return Object.freeze({ mirrored: true, failed: Object.freeze([...failed]) });
+  }
+
+  // §19 courtesy write (MN18). Runs after the dependency and LINKS mirrors:
+  // diff the note's mention pairs between the burst baseline and the current
+  // text, then converge each changed target's LINKED FROM (M7, minting,
+  // uncertainty, switches). Same-note targets join one annotated
+  // transaction; cross-note targets go through applyRelationFollowUps.
+  // Silent on success and failure; reconcile heals what this misses.
+  async mirrorMentionHandEdit(editor, parentPath, beforeContent, options = {}) {
+    const path = normalizeVaultRelativePath(parentPath || "");
+    if (!editor || typeof editor.getValue !== "function" || !path) {
+      return Object.freeze({ mirrored: false, reason: "editor-unavailable" });
+    }
+    const api = relationMentionIndexApi(this.app);
+    if (!api) {
+      return Object.freeze({ mirrored: false, reason: "no-index-api" });
+    }
+    const flags = options && typeof options === "object" ? options : {};
+    const linesEnabled = typeof flags.linesEnabled === "boolean"
+      ? flags.linesEnabled
+      : loadRelationsLinkedFromLinesEnabled();
+    const mentionsEnabled = typeof flags.mentionsEnabled === "boolean"
+      ? flags.mentionsEnabled
+      : loadRelationsLinkedFromMentionsEnabled();
+    if (!linesEnabled || !mentionsEnabled) {
+      return Object.freeze({ mirrored: false, reason: "switch-off" });
+    }
+    const before = String(beforeContent || "");
+    const after = String(editor.getValue() || "");
+    if (before === after) {
+      return Object.freeze({ mirrored: false, reason: "unchanged" });
+    }
+    let beforePairs = null;
+    let afterPairs = null;
+    try {
+      beforePairs = api.scanMentions(before, path) || [];
+      afterPairs = api.scanMentions(after, path) || [];
+    } catch (_error) {
+      return Object.freeze({ mirrored: false, reason: "scan-failed" });
+    }
+    if (!Array.isArray(beforePairs) || !Array.isArray(afterPairs)) {
+      return Object.freeze({ mirrored: false, reason: "scan-failed" });
+    }
+    const resolveLinkpath = this.dependencyLinkpathResolver();
+    const vaultFiles = this.readDependencyVaultFileList() || [];
+    const dailyPaths = scheduledRecoveryDailyPaths(vaultFiles.map((entry) => ({ path: typeof entry === "string" ? entry : entry.path })));
+    const previousDailyPath = normalizeVaultRelativePath((dailyPaths && dailyPaths.previous) || "");
+    const beforeKeys = new Set(beforePairs.map(relationMentionPairKey));
+    const afterKeys = new Set(afterPairs.map(relationMentionPairKey));
+    const addedPairs = afterPairs.filter((pair) => !beforeKeys.has(relationMentionPairKey(pair)));
+    const removedPairs = beforePairs.filter((pair) => !afterKeys.has(relationMentionPairKey(pair)));
+    // Sources whose LINKS or Depends-On inputs changed flip M7 without
+    // changing the pair set (hand-edited LINKS removal, new dependency):
+    // re-converge their after-pair targets too.
+    const touchedSources = new Set();
+    try {
+      const beforeLines = before.split(/\r?\n/);
+      const afterLines = after.split(/\r?\n/);
+      const sources = new Map();
+      for (const pair of [...beforePairs, ...afterPairs]) {
+        const key = String((pair && pair.sourceKey) || "");
+        if (key && !sources.has(key)) sources.set(key, (pair && pair.source) || null);
+      }
+      for (const source of sources.values()) {
+        const beforeOwner = relationMentionSourceOwnerLine(beforeLines, source);
+        const afterOwner = relationMentionSourceOwnerLine(afterLines, source);
+        if (beforeOwner === null || afterOwner === null) continue;
+        const linksBefore = relationMentionLinksIdentities(before, beforeOwner, path, resolveLinkpath);
+        const linksAfter = relationMentionLinksIdentities(after, afterOwner, path, resolveLinkpath);
+        const depsBefore = relationMentionDependencyIdentities(before, beforeOwner, path, resolveLinkpath);
+        const depsAfter = relationMentionDependencyIdentities(after, afterOwner, path, resolveLinkpath);
+        const sameLinks = linksBefore.size === linksAfter.size &&
+          [...linksBefore].every(([identity, label]) => linksAfter.has(identity) && linksAfter.get(identity) === label);
+        const sameDeps = depsBefore.size === depsAfter.size &&
+          [...depsBefore].every((identity) => depsAfter.has(identity));
+        if (!sameLinks || !sameDeps) {
+          touchedSources.add(String((source && source.blockId) || "") || `line:${Number((source && source.line) || 0)}`);
+        }
+      }
+    } catch (_error) {
+      // Input comparison stays best-effort; the pair diff below still runs.
+    }
+    const changedTargets = new Map();
+    const rememberTarget = (pair) => {
+      const target = (pair && pair.target) || {};
+      const targetPath = normalizeVaultRelativePath(target.path || "");
+      const targetBlockId = normalizeBulletPropertyValue(target.blockId || "");
+      if (!targetPath || !targetBlockId) return;
+      const key = `${targetPath}\u0000${targetBlockId}`;
+      if (!changedTargets.has(key)) {
+        changedTargets.set(key, {
+          path: targetPath,
+          blockId: targetBlockId,
+          added: [],
+          removed: [],
+        });
+      }
+    };
+    for (const pair of addedPairs) {
+      rememberTarget(pair);
+      const key = `${normalizeVaultRelativePath((pair.target && pair.target.path) || "")}\u0000${normalizeBulletPropertyValue((pair.target && pair.target.blockId) || "")}`;
+      if (changedTargets.has(key)) changedTargets.get(key).added.push(pair);
+    }
+    for (const pair of removedPairs) {
+      rememberTarget(pair);
+      const key = `${normalizeVaultRelativePath((pair.target && pair.target.path) || "")}\u0000${normalizeBulletPropertyValue((pair.target && pair.target.blockId) || "")}`;
+      if (changedTargets.has(key)) changedTargets.get(key).removed.push(pair);
+    }
+    for (const pair of afterPairs) {
+      const source = (pair && pair.source) || {};
+      const fingerprint = String(source.blockId || "") || `line:${Number(source.line || 0)}`;
+      if (!touchedSources.has(fingerprint)) continue;
+      rememberTarget(pair);
+      const key = `${normalizeVaultRelativePath((pair.target && pair.target.path) || "")}\u0000${normalizeBulletPropertyValue((pair.target && pair.target.blockId) || "")}`;
+      if (!changedTargets.has(key)) continue;
+      const bucket = changedTargets.get(key);
+      if (!bucket.added.some((entry) => relationMentionPairKey(entry) === relationMentionPairKey(pair)) &&
+        !bucket.removed.some((entry) => relationMentionPairKey(entry) === relationMentionPairKey(pair))) {
+        bucket.added.push(pair);
+      }
+    }
+    if (changedTargets.size === 0) {
+      return Object.freeze({ mirrored: false, reason: "unchanged" });
+    }
+    // Phase A (read-only plan on pristine lines): decide every pair action
+    // before any write, so same-note line shifts can never misresolve a
+    // later id-less source. Actions reference sources by fingerprint and
+    // materialize identities in phase B, after minting.
+    const pristineLines = after.split(/\r?\n/);
+    const sourceWritable = relationPathIsWritable(path, previousDailyPath);
+    const targetPlans = [];
+    for (const target of changedTargets.values()) {
+      if (!relationPathIsWritable(target.path, previousDailyPath)) continue;
+      const targetContent = target.path === path
+        ? after
+        : await this.readDependencyNoteContent(target.path, null, "");
+      if (targetContent === null) {
+        targetPlans.push({ target, failed: true });
+        continue;
+      }
+      const targetLines = targetContent.split(/\r?\n/);
+      const targetLine = findTaskLineByTrailingBlockId(targetLines, target.blockId);
+      if (targetLine === null) {
+        targetPlans.push({ target, failed: true });
+        continue;
+      }
+      const targetChildren = findLinkedFromChildren(targetLines, targetLine);
+      const targetParsed = targetChildren.map((index) => parseLinkedFromLine(targetLines[index], { isDirectChildOfTask: true }));
+      if (targetParsed.some((entry) => entry.verdict === "malformed")) {
+        targetPlans.push({ target, failed: true });
+        continue;
+      }
+      // T's Depends-On must parse for the pair: a malformed line there
+      // keeps every existing entry naming S (M-uncertainty).
+      let targetUncertain = false;
+      try {
+        for (const index of relationMentionOwnerChildLines(targetLines, targetLine)) {
+          if (parseDependencyLine(String(targetLines[index] || ""), { isDirectChildOfTask: true }).verdict === "malformed") {
+            targetUncertain = true;
+            break;
+          }
+        }
+      } catch (_error) {
+        targetUncertain = true;
+      }
+      const targetDeps = targetUncertain
+        ? new Set()
+        : relationMentionDependencyIdentities(targetContent, targetLine, target.path, resolveLinkpath);
+      const targetIdentity = blocksIdentity(target.path, target.blockId);
+      const actions = [];
+      for (const pair of [...target.added, ...target.removed]) {
+        const source = (pair && pair.source) || {};
+        const owner = relationMentionSourceOwnerLine(pristineLines, source);
+        if (owner === null) continue;
+        const fingerprint = String(source.blockId || "") || `line:${Number(source.line || 0)}`;
+        const sourceUncertain = relationMentionSourceUncertain(pristineLines, owner);
+        const ownerBlockId = normalizeBulletPropertyValue(getTrailingBlockId(String(pristineLines[owner] || "")) || "");
+        const sourceLinks = relationMentionLinksIdentities(after, owner, path, resolveLinkpath);
+        const sourceDeps = relationMentionDependencyIdentities(after, owner, path, resolveLinkpath);
+        const sourceIdentity = ownerBlockId ? blocksIdentity(path, ownerBlockId) : null;
+        const relationLabel = sourceLinks.get(targetIdentity);
+        const dependencyJoin = (sourceIdentity && targetDeps.has(sourceIdentity)) || sourceDeps.has(targetIdentity);
+        if (sourceUncertain || targetUncertain) continue;
+        if (relationLabel !== undefined) {
+          // M7: a relation on the pair wins; a stale mention spelling for
+          // the same identity becomes the relation entry.
+          actions.push({ kind: "relation", fingerprint, owner, sourceBlockId: ownerBlockId, label: relationLabel });
+          continue;
+        }
+        if (dependencyJoin) {
+          // M7: a dependency on the pair suppresses the mention entry, but
+          // never a relation entry.
+          actions.push({ kind: "suppress", fingerprint, owner, sourceBlockId: ownerBlockId });
+          continue;
+        }
+        const stillMentioned = afterKeys.has(relationMentionPairKey(pair));
+        if (!stillMentioned) {
+          actions.push({ kind: "remove", fingerprint, owner, sourceBlockId: ownerBlockId });
+          continue;
+        }
+        actions.push({ kind: "mention", fingerprint, owner, sourceBlockId: ownerBlockId });
+      }
+      targetPlans.push({
+        target,
+        failed: false,
+        preimage: targetContent,
+        actions,
+      });
+    }
+    // Phase B (apply): mint every id-less source whose entry will be stored
+    // first (mints never shift lines), then converge each target. T owners
+    // resolve by ^id at apply time; mention identities use the minted ids.
+    let currentContent = after;
+    let currentLines = currentContent.split(/\r?\n/);
+    const followUps = [];
+    const failed = new Set();
+    for (const plan of targetPlans) {
+      if (plan.failed) {
+        failed.add(plan.target.path);
+        continue;
+      }
+    }
+    const mintedByOwner = new Map();
+    if (sourceWritable) {
+      const used = new Set();
+      for (const match of currentContent.matchAll(/\^([A-Za-z0-9-]+)(?=\s|$)/g)) used.add(match[1]);
+      const mintOwners = new Set();
+      for (const plan of targetPlans) {
+        if (plan.failed) continue;
+        for (const action of plan.actions) {
+          if (action.kind === "mention" && !action.sourceBlockId) mintOwners.add(action.owner);
+        }
+      }
+      for (const owner of mintOwners) {
+        if (owner === null || owner < 0 || owner >= currentLines.length) continue;
+        if (normalizeBulletPropertyValue(getTrailingBlockId(String(currentLines[owner] || "")) || "")) continue;
+        const minted = mintDependentBlockId(currentLines[owner], used);
+        if (!minted) continue;
+        currentLines[owner] = appendBlockIdToLine(currentLines[owner], minted);
+        used.add(minted);
+        mintedByOwner.set(owner, minted);
+      }
+      if (mintedByOwner.size > 0) {
+        currentContent = currentLines.join(relationLineEnding(currentContent));
+      }
+    }
+    const sourceIdentityFor = (action) => {
+      if (action.sourceBlockId) return blocksIdentity(path, action.sourceBlockId);
+      const minted = mintedByOwner.get(action.owner);
+      return minted ? blocksIdentity(path, minted) : null;
+    };
+    for (const plan of targetPlans) {
+      if (plan.failed) continue;
+      const { target } = plan;
+      const targetContent = target.path === path
+        ? currentContent
+        : plan.preimage;
+      const targetLines = targetContent.split(/\r?\n/);
+      const targetLine = findTaskLineByTrailingBlockId(targetLines, target.blockId);
+      if (targetLine === null) {
+        failed.add(target.path);
+        continue;
+      }
+      const targetChildren = findLinkedFromChildren(targetLines, targetLine);
+      const existing = targetChildren.flatMap((index) => relationLinkedFromRows(target.path, targetLines[index], resolveLinkpath, vaultFiles));
+      const addRows = [];
+      const removeIds = [];
+      for (const action of plan.actions) {
+        const sourceIdentity = sourceIdentityFor(action);
+        const existingEntry = sourceIdentity
+          ? existing.find((entry) => entry.identity === sourceIdentity)
+          : null;
+        if (action.kind === "relation") {
+          if (sourceIdentity && (!existingEntry || relationLabelIsMentionLabel(existingEntry.label))) {
+            const blockId = action.sourceBlockId || mintedByOwner.get(action.owner);
+            if (!blockId) continue;
+            addRows.push({
+              identity: sourceIdentity,
+              link: canonicalDependencyLink({ path, blockId }, target.path, vaultFiles).text,
+              label: action.label,
+            });
+          }
+          continue;
+        }
+        if (action.kind === "suppress" || action.kind === "remove") {
+          if (existingEntry && relationLabelIsMentionLabel(existingEntry.label)) {
+            removeIds.push(sourceIdentity);
+          }
+          continue;
+        }
+        if (action.kind !== "mention") continue;
+        if (existingEntry) continue;
+        const blockId = action.sourceBlockId || mintedByOwner.get(action.owner);
+        if (!blockId || !sourceIdentity) continue;
+        addRows.push({
+          identity: sourceIdentity,
+          link: canonicalDependencyLink({ path, blockId }, target.path, vaultFiles).text,
+          label: TASK_MENTION_LABEL,
+        });
+      }
+      if (addRows.length === 0 && removeIds.length === 0) continue;
+      const desired = linkedFromDesiredAfterDelta(existing, (entry) => ({ identity: entry.identity, link: entry.link }), addRows, removeIds);
+      const planned = planLinkedFromLine(targetContent, targetLine, desired);
+      if (!planned.ok) {
+        failed.add(target.path);
+        continue;
+      }
+      if (target.path === path) {
+        currentContent = planned.nextContent;
+        currentLines = currentContent.split(/\r?\n/);
+      } else if (planned.nextContent !== targetContent) {
+        followUps.push(Object.freeze({
+          path: target.path,
+          ownerBlockId: target.blockId,
+          add: Object.freeze(addRows),
+          remove: Object.freeze(removeIds),
+          preimage: plan.preimage,
+          today: new Date(),
+        }));
+      }
+    }
+    if (currentContent !== after) {
+      const written = await this.writeRelationEditNote(path, after, currentContent);
+      if (!written.ok) return Object.freeze({ mirrored: false, reason: "changed" });
+    }
+    if (followUps.length > 0) {
+      const result = await this.applyRelationFollowUps(followUps);
+      for (const failedPath of result.failed || []) failed.add(failedPath);
+    }
+    if (currentContent === after && followUps.length === 0) {
+      return Object.freeze({ mirrored: false, reason: "unchanged" });
+    }
+    return Object.freeze({ mirrored: true, failed: Object.freeze([...failed]) });
+  }
+}
+// ---- src/594b-relation-unlink.js ----
+// Relation unlink writes (`docs/task-relations.md` Rule 7): remove one
+// or every LINKS entry through applyRelationEdit, with the §19 unlink
+// downgrade to `(💬 mentions)` when the source still mentions the target.
+class BobNavigationHotkeysRelationUnlinkMixin {
+  // §19 unlink downgrade (MN8/M7): a removed relation whose source still
+  // mentions the target in its own text becomes a `(💬 mentions)` entry
+  // instead of disappearing. Returns the mention label when the downgrade
+  // applies, else null. Never throws; reconcile heals a missed downgrade.
+  mentionDowngradeLabelForRemove(args = {}) {
+    try {
+      const linesEnabled = typeof args.linesEnabled === "boolean"
+        ? args.linesEnabled
+        : loadRelationsLinkedFromLinesEnabled();
+      const mentionsEnabled = typeof args.mentionsEnabled === "boolean"
+        ? args.mentionsEnabled
+        : loadRelationsLinkedFromMentionsEnabled();
+      if (!linesEnabled || !mentionsEnabled) {
+        return null;
+      }
+      const api = relationMentionIndexApi(this.app);
+      if (!api) return null;
+      const sourcePath = normalizeVaultRelativePath(args.sourcePath || "");
+      const targetPath = normalizeVaultRelativePath(args.targetPath || "");
+      const targetBlockId = normalizeBulletPropertyValue(args.targetBlockId || "");
+      const sourceContent = String(args.sourceContent || "");
+      const targetContent = String(args.targetContent || "");
+      if (!sourcePath || !targetPath || !targetBlockId || !sourceContent || !targetContent) {
+        return null;
+      }
+      let pairs = null;
+      try {
+        pairs = api.scanMentions(sourceContent, sourcePath) || [];
+      } catch (_scanError) {
+        return null;
+      }
+      const mentioned = (Array.isArray(pairs) ? pairs : []).some((pair) => {
+        const candidate = (pair && pair.target) || {};
+        return normalizeVaultRelativePath(candidate.path || "") === targetPath &&
+          normalizeBulletPropertyValue(candidate.blockId || "") === targetBlockId;
+      });
+      if (!mentioned) return null;
+      const sourceLines = sourceContent.split(/\r?\n/);
+      const sourceLine = Math.floor(numericOrDefault(args.sourceLine, Number.NaN));
+      if (!Number.isFinite(sourceLine) || sourceLine < 0 || sourceLine >= sourceLines.length) {
+        return null;
+      }
+      if (relationMentionSourceUncertain(sourceLines, sourceLine)) return null;
+      const resolveLinkpath = args.resolveLinkpath || null;
+      const targetIdentity = blocksIdentity(targetPath, targetBlockId);
+      const sourceDeps = relationMentionDependencyIdentities(sourceContent, sourceLine, sourcePath, resolveLinkpath);
+      if (sourceDeps.has(targetIdentity)) return null;
+      const targetLines = targetContent.split(/\r?\n/);
+      const targetLine = findTaskLineByTrailingBlockId(targetLines, targetBlockId);
+      if (targetLine === null) return null;
+      try {
+        for (const index of relationMentionOwnerChildLines(targetLines, targetLine)) {
+          if (parseDependencyLine(String(targetLines[index] || ""), { isDirectChildOfTask: true }).verdict === "malformed") {
+            return null;
+          }
+        }
+      } catch (_dependencyError) {
+        return null;
+      }
+      const sourceBlockId = normalizeBulletPropertyValue(args.sourceBlockId || "");
+      const sourceIdentity = sourceBlockId ? blocksIdentity(sourcePath, sourceBlockId) : null;
+      const targetDeps = relationMentionDependencyIdentities(targetContent, targetLine, targetPath, resolveLinkpath);
+      if (sourceIdentity && targetDeps.has(sourceIdentity)) return null;
+      return TASK_MENTION_LABEL;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  async removeAllRelationLinksByRef(sourceRef = {}, overrides = {}) {
+    const flags = overrides && typeof overrides === "object" ? overrides : {};
+    try {
+      const path = normalizeVaultRelativePath(sourceRef.path || "");
+      if (!path) return Object.freeze({ ok: false, reason: "invalid-ref" });
+      const original = await this.readDependencyNoteContent(path, null, "");
+      if (original === null) return Object.freeze({ ok: false, reason: "target-not-found" });
+      const lines = original.split(/\r?\n/);
+      let owner = Math.floor(numericOrDefault(sourceRef.line, Number.NaN));
+      if (sourceRef.blockId) {
+        const byId = findTaskLineByTrailingBlockId(lines, sourceRef.blockId);
+        if (byId !== null) owner = byId;
+      }
+      if (!Number.isFinite(owner) || owner < 0 || owner >= lines.length || !isObsidianTaskAtLine(original, owner)) {
+        return Object.freeze({ ok: false, reason: "not-task" });
+      }
+      const children = findLinksChildren(lines, owner);
+      const entries = [];
+      for (const child of children) {
+        const parsed = parseLinksLine(String(lines[child] || ""), { isDirectChildOfTask: true });
+        if (parsed.verdict === "malformed") {
+          return Object.freeze({ ok: false, reason: "malformed-links-line", notice: "its LINKS line is malformed" });
+        }
+        if (parsed.verdict === "accept") entries.push(...(parsed.entries || []));
+      }
+      if (entries.length === 0) return Object.freeze({ ok: true, removed: 0, mirrorFailed: [] });
+      const planned = planLinksEdit(original, owner, {
+        remove: entries.map((entry) => relationLinkText(entry)),
+      });
+      if (!planned.ok) return Object.freeze({ ok: false, reason: planned.reason });
+      let nextContent = planned.nextContent;
+      const sourceBlockId = getTrailingBlockId(lines[owner]);
+      const followUps = [];
+      const mirrorFailed = new Set();
+      const enabled = typeof flags.linkedFromLinesEnabled === "boolean"
+        ? flags.linkedFromLinesEnabled
+        : loadRelationsLinkedFromLinesEnabled();
+      const vaultFiles = this.readDependencyVaultFileList() || [];
+      const daily = scheduledRecoveryDailyPaths(vaultFiles.map((entry) => ({ path: typeof entry === "string" ? entry : entry.path })));
+      const previousDailyPath = normalizeVaultRelativePath((daily && daily.previous) || "");
+      const resolveLinkpath = this.dependencyLinkpathResolver();
+      if (enabled && sourceBlockId) {
+        const sourceIdentity = blocksIdentity(path, sourceBlockId);
+        const targets = new Map();
+        for (const entry of entries) {
+          const targetPath = normalizeVaultRelativePath(dependencyPathForLinkNote(entry.note, path, resolveLinkpath) || "");
+          const blockId = normalizeBulletPropertyValue(entry.blockId || "");
+          if (targetPath && blockId) targets.set(`${targetPath}\x00${blockId}`, { path: targetPath, blockId });
+        }
+        for (const target of targets.values()) {
+          if (!relationPathIsWritable(target.path, previousDailyPath)) continue;
+          const targetContent = target.path === path
+            ? nextContent
+            : await this.readDependencyNoteContent(target.path, null, "");
+          if (targetContent === null) {
+            mirrorFailed.add(target.path);
+            continue;
+          }
+          const targetLines = targetContent.split(/\r?\n/);
+          const targetLine = findTaskLineByTrailingBlockId(targetLines, target.blockId);
+          if (targetLine === null) continue;
+          const mirrors = findLinkedFromChildren(targetLines, targetLine);
+          const parsedMirrors = mirrors.map((index) => parseLinkedFromLine(targetLines[index], { isDirectChildOfTask: true }));
+          if (parsedMirrors.some((entry) => entry.verdict === "malformed")) {
+            mirrorFailed.add(target.path);
+            continue;
+          }
+          const existing = mirrors.flatMap((index) => relationLinkedFromRows(target.path, targetLines[index], resolveLinkpath, vaultFiles));
+          // §19 unlink downgrade (Links-to Ctrl+D): a removed relation whose
+          // source still mentions the target becomes `(💬 mentions)`.
+          // Same-note mirror inserts above can shift lines: re-resolve the
+          // source owner by ^id before evaluating M7.
+          let downgradeOwner = owner;
+          try {
+            const relocated = sourceBlockId
+              ? findTaskLineByTrailingBlockId(nextContent.split(/\r?\n/), sourceBlockId)
+              : null;
+            if (relocated !== null) downgradeOwner = relocated;
+          } catch (_relocateError) {
+            // Fall through with the original owner line.
+          }
+          const downgradeLabel = this.mentionDowngradeLabelForRemove({
+            sourcePath: path,
+            sourceLine: downgradeOwner,
+            sourceBlockId,
+            sourceContent: nextContent,
+            targetPath: target.path,
+            targetBlockId: target.blockId,
+            targetContent,
+            resolveLinkpath,
+            linesEnabled: flags.linkedFromLinesEnabled,
+            mentionsEnabled: flags.linkedFromMentionsEnabled,
+          });
+          const downgradeAdd = downgradeLabel
+            ? [{
+                identity: sourceIdentity,
+                link: canonicalDependencyLink({ path, blockId: sourceBlockId }, target.path, vaultFiles).text,
+                label: downgradeLabel,
+              }]
+            : [];
+          // NOTE: linkedFromDesiredAfterDelta drops an identity listed in
+          // both add and remove, so a downgrade replaces instead of removing.
+          const downgradeRemove = downgradeLabel ? [] : [sourceIdentity];
+          const desired = linkedFromDesiredAfterDelta(existing, (entry) => ({ identity: entry.identity, link: entry.link }), downgradeAdd, downgradeRemove);
+          const mirrorPlan = planLinkedFromLine(targetContent, targetLine, desired);
+          if (!mirrorPlan.ok) {
+            mirrorFailed.add(target.path);
+            continue;
+          }
+          if (target.path === path) nextContent = mirrorPlan.nextContent;
+          else if (mirrorPlan.nextContent !== targetContent) {
+            followUps.push(Object.freeze({
+              path: target.path,
+              ownerBlockId: target.blockId,
+              add: Object.freeze(downgradeAdd),
+              remove: Object.freeze(downgradeRemove),
+              preimage: targetContent,
+              today: new Date(),
+            }));
+          }
+        }
+      }
+      if (nextContent !== original) {
+        const write = await this.writeRelationEditNote(path, original, nextContent);
+        if (!write.ok) return Object.freeze({ ok: false, reason: "changed — reopen" });
+      }
+      if (followUps.length > 0) {
+        const outcome = await this.applyRelationFollowUps(followUps);
+        for (const failedPath of outcome.failed || []) mirrorFailed.add(failedPath);
+      }
+      return Object.freeze({
+        ok: true,
+        removed: entries.length,
+        mirrorFailed: Object.freeze([...mirrorFailed]),
+        notice: mirrorFailed.size > 0 ? "🪢 LINKED FROM not updated" : null,
+      });
+    } catch (_error) {
+      return Object.freeze({ ok: false, reason: "remove-failed" });
+    }
+  }
+
+  async removeRelationLinkByRef(sourceRef = {}, targetRef = {}) {
+    try {
+      const sourcePath = normalizeVaultRelativePath(sourceRef.path || "");
+      const targetPath = normalizeVaultRelativePath(targetRef.path || "");
+      const targetBlockId = normalizeBulletPropertyValue(targetRef.blockId || "");
+      if (!sourcePath || !targetPath || !targetBlockId) {
+        return Object.freeze({ ok: false, reason: "invalid-ref" });
+      }
+      const sourceContent = await this.readDependencyNoteContent(
+        sourcePath,
+        null,
+        "",
+      );
+      const targetContent = await this.readDependencyNoteContent(
+        targetPath,
+        null,
+        "",
+      );
+      if (sourceContent === null || targetContent === null) {
+        return Object.freeze({ ok: false, reason: "target-not-found" });
+      }
+      const sourceHit = Math.floor(numericOrDefault(sourceRef.line, Number.NaN));
+      const sourceLines = sourceContent.split(/\r?\n/);
+      let sourceLine = Number.isFinite(sourceHit) ? sourceHit : null;
+      if (sourceRef.blockId) {
+        const found = findTaskLineByTrailingBlockId(
+          sourceLines,
+          sourceRef.blockId,
+        );
+        if (found !== null) sourceLine = found;
+      }
+      if (!Number.isFinite(sourceLine) || sourceLine < 0) {
+        return Object.freeze({ ok: false, reason: "invalid-ref" });
+      }
+      const ownerLine = findOwningTaskLine(sourceLines, sourceLine);
+      if (ownerLine === null) {
+        return Object.freeze({ ok: false, reason: "no-owning-task" });
+      }
+      const expected = new Map([
+        [sourcePath, sourceContent],
+        [targetPath, targetContent],
+      ]);
+      const outcome = await this.applyRelationEdit({
+        sources: [
+          {
+            path: sourcePath,
+            line: ownerLine,
+            blockId: getTrailingBlockId(sourceLines[ownerLine]),
+          },
+        ],
+        add: [],
+        remove: [{ path: targetPath, blockId: targetBlockId }],
+        expected,
+      });
+      if (!outcome.ok) {
+        if (outcome.notice) new Notice(outcome.notice);
+        return Object.freeze({ ok: false, reason: outcome.reason });
+      }
+      if (outcome.notice) new Notice(outcome.notice);
+      return Object.freeze({ ok: true, notice: outcome.notice });
+    } catch (_error) {
+      return Object.freeze({ ok: false, reason: "remove-failed" });
+    }
   }
 }
 // ---- src/595-relation-follow-ups.js ----
@@ -83016,6 +83995,15 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         snapshot.removedText,
         { baselineLine: snapshot.baselineEditedLine },
       );
+      // §19 courtesy write (MN18): after the dependency and LINKS mirrors
+      // run, converge changed mention targets. Silent; reconcile heals.
+      if (typeof this.mirrorMentionHandEdit === "function") {
+        await this.mirrorMentionHandEdit(
+          snapshot.editor,
+          snapshot.parentPath,
+          snapshot.oldContent,
+        );
+      }
     } catch (_error) {
       // A timer must never throw: the next edit re-arms the mirror.
     } finally {
@@ -93902,6 +94890,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysRelationCompleteComposeMixin,
   BobNavigationHotkeysRelationHandEditMixin,
   BobNavigationHotkeysRelationEditMixin,
+  BobNavigationHotkeysRelationUnlinkMixin,
   BobNavigationHotkeysRelationFollowUpsMixin,
   BobNavigationHotkeysRelationStageMixin,
   BobNavigationHotkeysDependencyMirrorMixin,
@@ -94937,4 +95926,33 @@ Object.assign(module.exports.helpers, {
   parentEmptyStateText,
   PARENT_PICKER_HINTS,
   ParentNotePickerModal,
+});
+// ---- src/702-relation-mention-exports.js ----
+// §19 text-mention exports (`docs/task-relations.md` §19). Kept in this
+// sibling fragment so src/700-exports.js stays under the 1000-line cap.
+Object.assign(module.exports.helpers, {
+  loadRelationsLinkedFromMentionsEnabled,
+  resetRelationsLinkedFromMentionsConfigCache,
+  TASK_MENTION_LABEL,
+  TASK_MENTION_RESERVED_MESSAGE,
+  TASK_MENTION_PILL,
+  TASK_MENTION_EMBED_PILL,
+  TASK_MENTION_ROW_TOOLTIP,
+  relationLabelIsReservedStart,
+  relationLabelIsMentionLabel,
+  relationMentionPill,
+  relationMentionRemovalRefusal,
+  relationMentionUnlinkNotice,
+  normalizeOptionalRelationLabel,
+  relationStageMentionRow,
+  taskCardLinkedFromSourceName,
+  taskCardLinkedFromSummary,
+  relationMentionIndexApi,
+  relationMentionPairKey,
+  relationMentionOwnerChildLines,
+  relationMentionNoteHasUnclosedFence,
+  relationMentionSourceUncertain,
+  relationMentionDependencyIdentities,
+  relationMentionLinksIdentities,
+  relationMentionSourceOwnerLine,
 });

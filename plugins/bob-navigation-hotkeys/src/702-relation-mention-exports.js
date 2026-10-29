@@ -1,0 +1,28 @@
+// §19 text-mention exports (`docs/task-relations.md` §19). Kept in this
+// sibling fragment so src/700-exports.js stays under the 1000-line cap.
+Object.assign(module.exports.helpers, {
+  loadRelationsLinkedFromMentionsEnabled,
+  resetRelationsLinkedFromMentionsConfigCache,
+  TASK_MENTION_LABEL,
+  TASK_MENTION_RESERVED_MESSAGE,
+  TASK_MENTION_PILL,
+  TASK_MENTION_EMBED_PILL,
+  TASK_MENTION_ROW_TOOLTIP,
+  relationLabelIsReservedStart,
+  relationLabelIsMentionLabel,
+  relationMentionPill,
+  relationMentionRemovalRefusal,
+  relationMentionUnlinkNotice,
+  normalizeOptionalRelationLabel,
+  relationStageMentionRow,
+  taskCardLinkedFromSourceName,
+  taskCardLinkedFromSummary,
+  relationMentionIndexApi,
+  relationMentionPairKey,
+  relationMentionOwnerChildLines,
+  relationMentionNoteHasUnclosedFence,
+  relationMentionSourceUncertain,
+  relationMentionDependencyIdentities,
+  relationMentionLinksIdentities,
+  relationMentionSourceOwnerLine,
+});

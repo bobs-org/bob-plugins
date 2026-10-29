@@ -65,6 +65,11 @@ function relationStageConsequenceStrip(item, context = {}) {
   if (item.archived === true) {
     return "Archived · its LINKED FROM shows live only";
   }
+  // §19: a mention row opens instead of toggling; only its text edit
+  // (or reconcile) changes the entry.
+  if (item.mention === true) {
+    return "↵ opens it in its note · ⇧↵ adds a relation";
+  }
   if (item.stageSection === "current") {
     return context.direction === "from"
       ? "↵ removes this source · ⇧↵ relabels"
@@ -319,6 +324,10 @@ function describeRelationLabelRefusal(value) {
     .trim();
   if (!text) {
     return null;
+  }
+  // §19 MN15: 💬-first labels are reserved for text mentions.
+  if (relationLabelIsReservedStart(text)) {
+    return TASK_MENTION_RESERVED_MESSAGE;
   }
   const length = Array.from(text).length;
   if (length > 40) {

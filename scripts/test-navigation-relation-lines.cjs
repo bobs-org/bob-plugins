@@ -53,7 +53,7 @@ test("nav MC5 refuses relation embeds and MC16 keeps LINKS while dropping LINKED
     "    - nested user note",
     "  - user child",
   ]);
-  assert.equal(helpers.TASK_LINKED_FROM_LINE_NOTICE, "🪢 LINKED FROM is generated from other tasks' LINKS lines · change it with Ctrl+Shift+Alt+L");
+  assert.equal(helpers.TASK_LINKED_FROM_LINE_NOTICE, "🪢 LINKED FROM is generated from other tasks' LINKS lines and text · change it with Ctrl+Shift+Alt+L");
 });
 
 test("nav MC15 hands LINKS edits to the relation mirror and notices generated lines once", async () => {

@@ -23,7 +23,7 @@ test("block-id-prompt MC10 skips relations in Pomodoro cleanup and MC13 refuses 
   assert.equal(helpers.isTaskLinkExclusionLine(lines[1]), true);
   assert.deepEqual(helpers.collectPomodoroEntryBlockLinks(lines, 0, 1), []); // MC10
   assert.equal(helpers.TASK_LINKS_LINE_NOTICE, "🪢 LINKS entries are relations, not Task Links · edit them with Ctrl+Shift+L"); // MC13
-  assert.equal(helpers.TASK_LINKED_FROM_LINE_NOTICE, "🪢 LINKED FROM is generated from other tasks' LINKS lines · change it with Ctrl+Shift+Alt+L"); // MC13
+  assert.equal(helpers.TASK_LINKED_FROM_LINE_NOTICE, "🪢 LINKED FROM is generated from other tasks' LINKS lines and text · change it with Ctrl+Shift+Alt+L"); // MC13
   assert.equal(helpers.taskRelationLineNotice("  - 🪢 **LINKED FROM:** [[#^t]]"), helpers.TASK_LINKED_FROM_LINE_NOTICE);
 });
 

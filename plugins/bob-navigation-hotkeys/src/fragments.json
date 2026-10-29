@@ -138,6 +138,7 @@
   "593-plugin-blocks-api.js",
   "594-plugin-relation-edit.js",
   "594a-relation-hand-edit.js",
+  "594b-relation-unlink.js",
   "595-relation-follow-ups.js",
   "596-relation-cancel-compose.js",
   "597-relation-complete-compose.js",
@@ -163,5 +164,6 @@
   "682-plugin-parent-change.js",
   "690-install-plugin-mixins.js",
   "700-exports.js",
-  "701-exports-parent-change.js"
+  "701-exports-parent-change.js",
+  "702-relation-mention-exports.js"
 ]

@@ -178,6 +178,10 @@ function normalizeOptionalRelationLabel(label) {
   if (label === undefined || label === null || label === "") {
     return { ok: true, label: null };
   }
+  // §19 MN15: 💬-first labels are reserved for text mentions.
+  if (relationLabelIsReservedStart(String(label || ""))) {
+    return { ok: false, reason: "reserved" };
+  }
   const normalized = normalizeRelationLabel(label);
   if (!normalized) {
     const length = Array.from(

@@ -200,6 +200,17 @@ function taskCardRelationIndex(context = {}) {
   }
 }
 
+// §19 Task Card count (`docs/task-relations.md` §19 copy table): relations
+// only keep `N · ‹first name›`; mentions only read `M 💬 · ‹first name›`;
+// both read `N · R relation(s) · M 💬`.
+function taskCardLinkedFromSourceName(source) {
+  const cleaned = source && source.text ? cleanTaskDisplayText(source.text) : "";
+  return String(
+    cleaned ||
+      (source && source.blockId ? `^${source.blockId}` : "source task"),
+  ).trim();
+}
+
 function taskCardLinkedFromSummary(session, context = {}) {
   const linkedTarget =
     session && session.type === "linked" && Array.isArray(session.targets) &&
@@ -222,23 +233,35 @@ function taskCardLinkedFromSummary(session, context = {}) {
   if (!path || !blockId || !index) {
     return null;
   }
-  let incoming = [];
+  let rows = [];
   try {
-    incoming = index.incoming(path, blockId);
+    rows = typeof index.linkedFrom === "function" && Number(index.version) >= 2
+      ? index.linkedFrom(path, blockId)
+      : index.incoming(path, blockId);
   } catch (_error) {
-    incoming = [];
+    rows = [];
   }
-  if (!Array.isArray(incoming) || incoming.length === 0) {
+  if (!Array.isArray(rows) || rows.length === 0) {
     return Object.freeze({ count: 0, detail: "" });
   }
-  const first = incoming[0] && incoming[0].source;
-  const cleaned = first && first.text ? cleanTaskDisplayText(first.text) : "";
-  const name = String(
-    cleaned ||
-      (first && first.blockId ? `^${first.blockId}` : "source task"),
-  ).trim();
+  const relations = rows.filter((row) => !row || row.kind !== "mention");
+  const mentions = rows.filter((row) => row && row.kind === "mention");
+  if (mentions.length === 0) {
+    return Object.freeze({
+      count: relations.length,
+      detail: `${relations.length} · ${taskCardLinkedFromSourceName(relations[0] && relations[0].source)}`,
+    });
+  }
+  if (relations.length === 0) {
+    return Object.freeze({
+      count: mentions.length,
+      detail: `${mentions.length} 💬 · ${taskCardLinkedFromSourceName(mentions[0] && mentions[0].source)}`,
+    });
+  }
+  const total = relations.length + mentions.length;
+  const relationWord = relations.length === 1 ? "relation" : "relations";
   return Object.freeze({
-    count: incoming.length,
-    detail: `${incoming.length} · ${name}`,
+    count: total,
+    detail: `${total} · ${relations.length} ${relationWord} · ${mentions.length} 💬`,
   });
 }

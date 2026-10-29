@@ -4323,7 +4323,7 @@ const TASK_RELATION_LINE_RE =
 const TASK_LINKS_LINE_NOTICE =
   "🪢 LINKS entries are relations, not Task Links · edit them with Ctrl+Shift+L";
 const TASK_LINKED_FROM_LINE_NOTICE =
-  "🪢 LINKED FROM is generated from other tasks' LINKS lines · change it with Ctrl+Shift+Alt+L";
+  "🪢 LINKED FROM is generated from other tasks' LINKS lines and text · change it with Ctrl+Shift+Alt+L";
 
 function isTaskRelationLine(lineText, options = {}) {
   const line = String(lineText || "");

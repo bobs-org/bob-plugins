@@ -66,6 +66,31 @@ this plugin implements the live side of it.
   are published and `scanMentions` returns `[]`. Chips for mentions render
   in the next phase; this phase only indexes.
 
+Nav writes and shows mentions once the index is live. When the cursor
+leaves an edited line and the note's mention pairs changed, nav converges
+each changed target's LINKED FROM the same way reconcile does (M7, minting,
+uncertainty, both switches): same-note targets join one annotated
+transaction, cross-note targets go through checked follow-ups, and nothing
+is ever announced — reconcile heals what the burst misses. A `💬`-first
+label is refused everywhere a label can be typed (Links and Linked-from
+stages, label management, rename) with `💬 is reserved for text mentions`.
+The generated-line notice now reads `🪢 LINKED FROM is generated from other
+tasks' LINKS lines and text · change it with Ctrl+Shift+Alt+L`.
+
+In the Linked-from stage, mention rows carry the `💬 mentioned in` /
+`💬 embedded in` pill, the quoted excerpt subtitle, and the source note.
+`↵` opens the source at the first occurrence; toggling or removing a
+mention row is refused with `💬 This comes from a link in ‹S›'s text · edit
+it there (↵ opens it)`. Footer hints follow the selected row's kind, and
+`⇧↵` on a mention row adds a relation for that source, which replaces the
+mention entry by identity. Removing a relation whose source still mentions
+the target — `removeLink`, the chip `×`, or Links-to `Ctrl+D` — downgrades
+the entry to `(💬 mentions)` instead of deleting it, with
+`Unlinked ‹S› · it still mentions this task in its text`. The Task Card's
+`Linked from…` count reads `N · ‹first name›` for relations only,
+`M 💬 · ‹first name›` for mentions only, and
+`N · R relation(s) · M 💬` for both.
+
 ## Linking from the Task Card
 
 The Task Card's `Links to…` row (`l`, after `Blocks…`) shows

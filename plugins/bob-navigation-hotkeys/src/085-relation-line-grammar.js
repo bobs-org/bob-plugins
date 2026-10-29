@@ -6,7 +6,46 @@ const TASK_RELATION_EMOJI = "🪢";
 const TASK_RELATION_LINE_NOTICE =
   "🪢 LINKS entries are relations, not Task Links · edit them with Ctrl+Shift+L";
 const TASK_LINKED_FROM_LINE_NOTICE =
-  "🪢 LINKED FROM is generated from other tasks' LINKS lines · change it with Ctrl+Shift+Alt+L";
+  "🪢 LINKED FROM is generated from other tasks' LINKS lines and text · change it with Ctrl+Shift+Alt+L";
+// §19 stored mention label and reserved first code point. Only exactly
+// `💬 mentions` (after the usual collapse) may appear, and only on LINKED
+// FROM; every other 💬-first label is refused or malformed (MN15).
+const TASK_MENTION_LABEL = "💬 mentions";
+const TASK_MENTION_RESERVED_CODEPOINT = 0x1f4ac;
+const TASK_MENTION_RESERVED_MESSAGE = "💬 is reserved for text mentions";
+
+function relationLabelIsReservedStart(value) {
+  const text = String(value || "");
+  if (!text) return false;
+  try {
+    return Array.from(text)[0] === "💬";
+  } catch (_error) {
+    return text.codePointAt(0) === TASK_MENTION_RESERVED_CODEPOINT;
+  }
+}
+
+function relationLabelIsMentionLabel(value) {
+  return normalizeRelationReaderLabel(value) === TASK_MENTION_LABEL;
+}
+
+// §19 copy (`docs/task-relations.md` §19 copy table): pills, row tooltip,
+// removal refusal, and the mixed-pair unlink notice. ‹S› renders as the
+// source task's quoted name at the call site.
+const TASK_MENTION_PILL = "💬 mentioned in";
+const TASK_MENTION_EMBED_PILL = "💬 embedded in";
+const TASK_MENTION_ROW_TOOLTIP = "Tasks linking here · relations and 💬 text mentions · live";
+
+function relationMentionPill(display) {
+  return display === "embed" ? TASK_MENTION_EMBED_PILL : TASK_MENTION_PILL;
+}
+
+function relationMentionRemovalRefusal(sourceName) {
+  return `💬 This comes from a link in ${quoteRelationNoticeName(sourceName || "that task")}'s text · edit it there (↵ opens it)`;
+}
+
+function relationMentionUnlinkNotice(sourceName) {
+  return `Unlinked ${quoteRelationNoticeName(sourceName || "that task")} · it still mentions this task in its text`;
+}
 const RELATIONS_MACHINE_WRITE_ANNOTATION = "bob-relations-machine-write";
 const TASK_RELATION_SEPARATOR = " • ";
 const TASK_LINKS_LABEL = "LINKS";
@@ -30,7 +69,8 @@ function normalizeRelationLabel(value) {
     length < 1 ||
     length > 40 ||
     TASK_RELATION_LABEL_FORBIDDEN_RE.test(label) ||
-    /^[·,]/u.test(label)
+    /^[·,]/u.test(label) ||
+    relationLabelIsReservedStart(label)
   ) {
     return null;
   }
@@ -100,10 +140,17 @@ function parseLinksEntryLabel(gap, first, alias) {
   if (!raw) {
     if (!alias) return { ok: true, label: null };
     const fallback = normalizeRelationReaderLabel(alias);
-    return fallback ? { ok: true, label: fallback } : { ok: false, label: null };
+    if (!fallback || relationLabelIsReservedStart(fallback)) {
+      return { ok: false, label: null };
+    }
+    return { ok: true, label: fallback };
   }
   const label = normalizeRelationReaderLabel(raw);
-  return label ? { ok: true, label } : { ok: false, label: null };
+  // §19 MN15: no 💬-first label ever parses on LINKS.
+  if (!label || relationLabelIsReservedStart(label)) {
+    return { ok: false, label: null };
+  }
+  return { ok: true, label };
 }
 
 function parseLinkedFromEntryGap(gap, hasFollowingLink, alias) {
@@ -128,10 +175,24 @@ function parseLinkedFromEntryGap(gap, hasFollowingLink, alias) {
   if (!raw) {
     if (!alias) return { ok: true, label: null };
     const fallback = normalizeRelationReaderLabel(alias);
-    return fallback ? { ok: true, label: fallback } : { ok: false, label: null };
+    if (!fallback) return { ok: false, label: null };
+    // §19 MN16: exactly `💬 mentions` parses on LINKED FROM; any other
+    // 💬-first label is malformed (MN15).
+    if (relationLabelIsReservedStart(fallback)) {
+      return fallback === TASK_MENTION_LABEL
+        ? { ok: true, label: fallback }
+        : { ok: false, label: null };
+    }
+    return { ok: true, label: fallback };
   }
   const label = normalizeRelationReaderLabel(raw);
-  return label ? { ok: true, label } : { ok: false, label: null };
+  if (!label) return { ok: false, label: null };
+  if (relationLabelIsReservedStart(label)) {
+    return label === TASK_MENTION_LABEL
+      ? { ok: true, label }
+      : { ok: false, label: null };
+  }
+  return { ok: true, label };
 }
 
 function parseTaskRelationLine(lineText, direction, options = {}) {

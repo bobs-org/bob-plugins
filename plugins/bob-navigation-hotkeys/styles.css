@@ -1627,6 +1627,11 @@
   color: var(--text-muted);
 }
 
+/* §19 text-mention pill: italics carry reported speech, never status. */
+.bob-cnp-relation-label.is-mention {
+  font-style: italic;
+}
+
 /* Cancel-label cues use Obsidian's theme-aware status tokens in light and
    dark themes, so the ⊘ tint follows the existing Cancelled status color. */
 .bob-cnp-relation-cancel-meta,

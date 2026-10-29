@@ -136,6 +136,12 @@ class BobNavigationHotkeysRelationEditMixin {
         args.linkedFromLinesEnabled !== undefined
           ? args.linkedFromLinesEnabled === true
           : loadRelationsLinkedFromLinesEnabled();
+      // §19 mentions switch, honoring the same explicit-override channel so
+      // tests can drive the downgrade deterministically.
+      const linkedFromMentionsEnabled =
+        args.linkedFromMentionsEnabled !== undefined
+          ? args.linkedFromMentionsEnabled === true
+          : loadRelationsLinkedFromMentionsEnabled();
       const hasInjectedClosePolicy =
         args.closeLabels !== undefined ||
         args.cancelLabels !== undefined ||
@@ -242,6 +248,8 @@ class BobNavigationHotkeysRelationEditMixin {
       const noticeAdded = [];
       const noticeRemoved = [];
       const noticeRelabeled = [];
+      const noticeDowngraded = [];
+      const downgradedPairs = new Set();
       const mirrorFailed = [];
       const cancelledNoticeRows = [];
       const cancelledIdentities = [];
@@ -331,7 +339,9 @@ class BobNavigationHotkeysRelationEditMixin {
             planned.notice ||
               (planned.reason === "malformed-links-line"
                 ? "its LINKS line is malformed"
-                : null),
+                : planned.reason === "invalid-label" && planned.labelReason === "reserved"
+                  ? TASK_MENTION_RESERVED_MESSAGE
+                  : null),
           );
         }
         content = planned.nextContent;
@@ -380,7 +390,13 @@ class BobNavigationHotkeysRelationEditMixin {
               vaultFiles,
             );
             if (planned.report.removed.includes(link)) {
-              noticeRemoved.push(noticeRow(target));
+              // §19: the mirror loop below may downgrade this pair to
+              // `(💬 mentions)`; the pair key lets composition filter the
+              // plain removal then (the mirror loop runs after this block).
+              noticeRemoved.push({
+                ...noticeRow(target),
+                downgradePairKey: `${source.path}\u0000${target.path}\u0000${target.blockId}`,
+              });
             }
           }
         }
@@ -526,7 +542,7 @@ class BobNavigationHotkeysRelationEditMixin {
             target.path,
             vaultFiles,
           ).text;
-          const addRows = isRemove
+          let addRows = isRemove
             ? []
             : [
                 {
@@ -535,7 +551,45 @@ class BobNavigationHotkeysRelationEditMixin {
                   label: addLabel ? addLabel.label || null : null,
                 },
               ];
-          const removeIds = isRemove ? [sourceIdentity] : [];
+          // NOTE: linkedFromDesiredAfterDelta drops an identity listed in
+          // both add and remove, so a downgrade replaces instead of removing.
+          let removeIds = isRemove ? [sourceIdentity] : [];
+          // §19 unlink downgrade: a removed relation whose source still
+          // mentions the target becomes `(💬 mentions)` (MN8/M7).
+          if (isRemove && !addLabel) {
+            // Same-note mirror inserts above can shift lines: re-resolve the
+            // source owner by ^id before evaluating M7.
+            let downgradeSourceLine = sourceLine;
+            try {
+              const freshSourceLines = contentOf(source.path).split(/\r?\n/);
+              const relocated = sourceBlockId
+                ? findTaskLineByTrailingBlockId(freshSourceLines, sourceBlockId)
+                : null;
+              if (relocated !== null) downgradeSourceLine = relocated;
+            } catch (_relocateError) {
+              // Fall through with the loop's source line.
+            }
+            const downgradeLabel = this.mentionDowngradeLabelForRemove({
+              sourcePath: source.path,
+              sourceLine: downgradeSourceLine,
+              sourceBlockId,
+              sourceContent: contentOf(source.path),
+              targetPath: target.path,
+              targetBlockId: target.blockId,
+              targetContent: contentOf(target.path),
+              resolveLinkpath,
+              linesEnabled: linkedFromLinesEnabled,
+              mentionsEnabled: linkedFromMentionsEnabled,
+            });
+            if (downgradeLabel) {
+              addRows = [
+                { identity: sourceIdentity, link: canonical, label: downgradeLabel },
+              ];
+              removeIds = [];
+              downgradedPairs.add(`${source.path}\u0000${target.path}\u0000${target.blockId}`);
+              noticeDowngraded.push({ description: source.description, relationSourcePath: source.path });
+            }
+          }
           if (target.path === source.path) {
             const desired = linkedFromDesiredAfterDelta(
               existingMirror,
@@ -738,22 +792,45 @@ class BobNavigationHotkeysRelationEditMixin {
         noticeAdded.every((entry) => entry.relationSourcePath && !committedSet.has(entry.relationSourcePath)) &&
         noticeRemoved.every((entry) => entry.relationSourcePath && !committedSet.has(entry.relationSourcePath)) &&
         noticeRelabeled.every((entry) => entry.relationSourcePath && !committedSet.has(entry.relationSourcePath)) &&
+        noticeDowngraded.every((entry) => entry.relationSourcePath && !committedSet.has(entry.relationSourcePath)) &&
         committedCancelledNoticeRows.length === 0 &&
         committedCompleted.length === 0 &&
         committed.every((path) => {
           const write = sourceWrites.get(path);
           return write && write.original === write.nextContent;
         });
-      const relationNotice = unchanged
+      const committedDowngraded = noticeDowngraded.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath));
+      // §19: downgraded pairs report the unlink notice naming the mention
+      // source, never the plain `Unlinked` line.
+      const downgradeNotice = committedDowngraded.length > 0
+        ? committedDowngraded.map((entry) => relationMentionUnlinkNotice(entry.description || "that task")).join(" · ")
+        : null;
+      const committedNoticeAdded = noticeAdded.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath));
+      // §19: downgraded pairs report the unlink notice, never the plain
+      // removal, even when the mirror loop ran after the notice rows above.
+      const committedNoticeRemoved = noticeRemoved.filter((entry) =>
+        (!entry.relationSourcePath || committedSet.has(entry.relationSourcePath)) &&
+        !downgradedPairs.has(entry.downgradePairKey),
+      );
+      const committedNoticeRelabeled = noticeRelabeled.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath));
+      const hasBaseChanges = committedNoticeAdded.length + committedNoticeRemoved.length + committedNoticeRelabeled.length > 0;
+      const baseRelationNotice = unchanged
         ? null
         : withRelationCloseStayNotice(buildRelationEditNotice({
-            added: noticeAdded.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
-            removed: noticeRemoved.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
-            relabeled: noticeRelabeled.filter((entry) => !entry.relationSourcePath || committedSet.has(entry.relationSourcePath)),
+            added: committedNoticeAdded,
+            removed: committedNoticeRemoved,
+            relabeled: committedNoticeRelabeled,
             direction,
             archived,
             mirrorFailed: [],
           }), cancelStayedCancelled, completeStayedDone);
+      // A downgrade-only gesture reports only the unlink notice; mixed
+      // gestures join both.
+      const relationNotice = unchanged
+        ? null
+        : downgradeNotice && !hasBaseChanges
+          ? downgradeNotice
+          : [baseRelationNotice, downgradeNotice].filter(Boolean).join(" · ") || null;
       const baseNotice = unchanged
         ? null
         : committedCompleted.length > 0
@@ -818,171 +895,4 @@ class BobNavigationHotkeysRelationEditMixin {
   }
 
 
-  async removeAllRelationLinksByRef(sourceRef = {}) {
-    try {
-      const path = normalizeVaultRelativePath(sourceRef.path || "");
-      if (!path) return Object.freeze({ ok: false, reason: "invalid-ref" });
-      const original = await this.readDependencyNoteContent(path, null, "");
-      if (original === null) return Object.freeze({ ok: false, reason: "target-not-found" });
-      const lines = original.split(/\r?\n/);
-      let owner = Math.floor(numericOrDefault(sourceRef.line, Number.NaN));
-      if (sourceRef.blockId) {
-        const byId = findTaskLineByTrailingBlockId(lines, sourceRef.blockId);
-        if (byId !== null) owner = byId;
-      }
-      if (!Number.isFinite(owner) || owner < 0 || owner >= lines.length || !isObsidianTaskAtLine(original, owner)) {
-        return Object.freeze({ ok: false, reason: "not-task" });
-      }
-      const children = findLinksChildren(lines, owner);
-      const entries = [];
-      for (const child of children) {
-        const parsed = parseLinksLine(String(lines[child] || ""), { isDirectChildOfTask: true });
-        if (parsed.verdict === "malformed") {
-          return Object.freeze({ ok: false, reason: "malformed-links-line", notice: "its LINKS line is malformed" });
-        }
-        if (parsed.verdict === "accept") entries.push(...(parsed.entries || []));
-      }
-      if (entries.length === 0) return Object.freeze({ ok: true, removed: 0, mirrorFailed: [] });
-      const planned = planLinksEdit(original, owner, {
-        remove: entries.map((entry) => relationLinkText(entry)),
-      });
-      if (!planned.ok) return Object.freeze({ ok: false, reason: planned.reason });
-      let nextContent = planned.nextContent;
-      const sourceBlockId = getTrailingBlockId(lines[owner]);
-      const followUps = [];
-      const mirrorFailed = new Set();
-      const enabled = loadRelationsLinkedFromLinesEnabled();
-      const vaultFiles = this.readDependencyVaultFileList() || [];
-      const daily = scheduledRecoveryDailyPaths(vaultFiles.map((entry) => ({ path: typeof entry === "string" ? entry : entry.path })));
-      const previousDailyPath = normalizeVaultRelativePath((daily && daily.previous) || "");
-      const resolveLinkpath = this.dependencyLinkpathResolver();
-      if (enabled && sourceBlockId) {
-        const sourceIdentity = blocksIdentity(path, sourceBlockId);
-        const targets = new Map();
-        for (const entry of entries) {
-          const targetPath = normalizeVaultRelativePath(dependencyPathForLinkNote(entry.note, path, resolveLinkpath) || "");
-          const blockId = normalizeBulletPropertyValue(entry.blockId || "");
-          if (targetPath && blockId) targets.set(`${targetPath}\x00${blockId}`, { path: targetPath, blockId });
-        }
-        for (const target of targets.values()) {
-          if (!relationPathIsWritable(target.path, previousDailyPath)) continue;
-          const targetContent = target.path === path
-            ? nextContent
-            : await this.readDependencyNoteContent(target.path, null, "");
-          if (targetContent === null) {
-            mirrorFailed.add(target.path);
-            continue;
-          }
-          const targetLines = targetContent.split(/\r?\n/);
-          const targetLine = findTaskLineByTrailingBlockId(targetLines, target.blockId);
-          if (targetLine === null) continue;
-          const mirrors = findLinkedFromChildren(targetLines, targetLine);
-          const parsedMirrors = mirrors.map((index) => parseLinkedFromLine(targetLines[index], { isDirectChildOfTask: true }));
-          if (parsedMirrors.some((entry) => entry.verdict === "malformed")) {
-            mirrorFailed.add(target.path);
-            continue;
-          }
-          const existing = mirrors.flatMap((index) => relationLinkedFromRows(target.path, targetLines[index], resolveLinkpath, vaultFiles));
-          const desired = linkedFromDesiredAfterDelta(existing, (entry) => ({ identity: entry.identity, link: entry.link }), [], [sourceIdentity]);
-          const mirrorPlan = planLinkedFromLine(targetContent, targetLine, desired);
-          if (!mirrorPlan.ok) {
-            mirrorFailed.add(target.path);
-            continue;
-          }
-          if (target.path === path) nextContent = mirrorPlan.nextContent;
-          else if (mirrorPlan.nextContent !== targetContent) {
-            followUps.push(Object.freeze({
-              path: target.path,
-              ownerBlockId: target.blockId,
-              add: Object.freeze([]),
-              remove: Object.freeze([sourceIdentity]),
-              preimage: targetContent,
-              today: new Date(),
-            }));
-          }
-        }
-      }
-      if (nextContent !== original) {
-        const write = await this.writeRelationEditNote(path, original, nextContent);
-        if (!write.ok) return Object.freeze({ ok: false, reason: "changed — reopen" });
-      }
-      if (followUps.length > 0) {
-        const outcome = await this.applyRelationFollowUps(followUps);
-        for (const failedPath of outcome.failed || []) mirrorFailed.add(failedPath);
-      }
-      return Object.freeze({
-        ok: true,
-        removed: entries.length,
-        mirrorFailed: Object.freeze([...mirrorFailed]),
-        notice: mirrorFailed.size > 0 ? "🪢 LINKED FROM not updated" : null,
-      });
-    } catch (_error) {
-      return Object.freeze({ ok: false, reason: "remove-failed" });
-    }
-  }
-
-  async removeRelationLinkByRef(sourceRef = {}, targetRef = {}) {
-    try {
-      const sourcePath = normalizeVaultRelativePath(sourceRef.path || "");
-      const targetPath = normalizeVaultRelativePath(targetRef.path || "");
-      const targetBlockId = normalizeBulletPropertyValue(targetRef.blockId || "");
-      if (!sourcePath || !targetPath || !targetBlockId) {
-        return Object.freeze({ ok: false, reason: "invalid-ref" });
-      }
-      const sourceContent = await this.readDependencyNoteContent(
-        sourcePath,
-        null,
-        "",
-      );
-      const targetContent = await this.readDependencyNoteContent(
-        targetPath,
-        null,
-        "",
-      );
-      if (sourceContent === null || targetContent === null) {
-        return Object.freeze({ ok: false, reason: "target-not-found" });
-      }
-      const sourceHit = Math.floor(numericOrDefault(sourceRef.line, Number.NaN));
-      const sourceLines = sourceContent.split(/\r?\n/);
-      let sourceLine = Number.isFinite(sourceHit) ? sourceHit : null;
-      if (sourceRef.blockId) {
-        const found = findTaskLineByTrailingBlockId(
-          sourceLines,
-          sourceRef.blockId,
-        );
-        if (found !== null) sourceLine = found;
-      }
-      if (!Number.isFinite(sourceLine) || sourceLine < 0) {
-        return Object.freeze({ ok: false, reason: "invalid-ref" });
-      }
-      const ownerLine = findOwningTaskLine(sourceLines, sourceLine);
-      if (ownerLine === null) {
-        return Object.freeze({ ok: false, reason: "no-owning-task" });
-      }
-      const expected = new Map([
-        [sourcePath, sourceContent],
-        [targetPath, targetContent],
-      ]);
-      const outcome = await this.applyRelationEdit({
-        sources: [
-          {
-            path: sourcePath,
-            line: ownerLine,
-            blockId: getTrailingBlockId(sourceLines[ownerLine]),
-          },
-        ],
-        add: [],
-        remove: [{ path: targetPath, blockId: targetBlockId }],
-        expected,
-      });
-      if (!outcome.ok) {
-        if (outcome.notice) new Notice(outcome.notice);
-        return Object.freeze({ ok: false, reason: outcome.reason });
-      }
-      if (outcome.notice) new Notice(outcome.notice);
-      return Object.freeze({ ok: true, notice: outcome.notice });
-    } catch (_error) {
-      return Object.freeze({ ok: false, reason: "remove-failed" });
-    }
-  }
 }

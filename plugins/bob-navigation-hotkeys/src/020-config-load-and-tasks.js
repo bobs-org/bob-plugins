@@ -85,6 +85,49 @@ function loadRelationsLinkedFromLinesEnabled(options = {}) {
   return enabled;
 }
 
+let relationsLinkedFromMentionsConfigCache = { key: null, value: false };
+
+function resetRelationsLinkedFromMentionsConfigCache() {
+  relationsLinkedFromMentionsConfigCache = { key: null, value: false };
+}
+
+// §19 mention kill switch (`docs/task-relations.md` §12). Missing, invalid,
+// or unreadable values stay disabled so the switch is lossless; cache by
+// mtime/size so a config edit takes effect on the next gesture. The enable
+// phase flips the default to true.
+function loadRelationsLinkedFromMentionsEnabled(options = {}) {
+  const env = options.env || (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule = options.osModule === undefined ? requireOptionalNodeModule("os") : options.osModule;
+  const fsModule = options.fsModule === undefined ? requireOptionalNodeModule("fs") : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") return false;
+  const configPath = options.configPath || getBulletPropertyConfigPath({ env, osModule });
+  const statKey = blocksLinesConfigStatKey(fsModule, configPath);
+  const key = statKey == null ? null : `${configPath}|${statKey}`;
+  if (key != null && relationsLinkedFromMentionsConfigCache.key === key) {
+    return relationsLinkedFromMentionsConfigCache.value;
+  }
+  let enabled = false;
+  try {
+    const parse = options.parseYaml === undefined ? parseYaml : options.parseYaml;
+    if (typeof parse === "function") {
+      const config = parse(fsModule.readFileSync(configPath, "utf8"));
+      const value = config && config.relations && config.relations.linked_from_mentions;
+      if (typeof value === "boolean") {
+        enabled = value;
+      } else if (value !== undefined && value !== null) {
+        enabled = false;
+        if (typeof console !== "undefined" && typeof console.warn === "function") {
+          console.warn("relations.linked_from_mentions is invalid; treating as false");
+        }
+      }
+    }
+  } catch (_error) {
+    enabled = false;
+  }
+  if (key != null) relationsLinkedFromMentionsConfigCache = { key, value: enabled };
+  return enabled;
+}
+
 function loadBulletPropertyConfig(options = {}) {
   const fsModule =
     options.fsModule === undefined

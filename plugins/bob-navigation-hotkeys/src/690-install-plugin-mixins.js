@@ -50,6 +50,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysRelationCompleteComposeMixin,
   BobNavigationHotkeysRelationHandEditMixin,
   BobNavigationHotkeysRelationEditMixin,
+  BobNavigationHotkeysRelationUnlinkMixin,
   BobNavigationHotkeysRelationFollowUpsMixin,
   BobNavigationHotkeysRelationStageMixin,
   BobNavigationHotkeysDependencyMirrorMixin,

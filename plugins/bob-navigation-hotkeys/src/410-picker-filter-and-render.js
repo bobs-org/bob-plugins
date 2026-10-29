@@ -343,6 +343,13 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
     appendHighlighted(titleEl, item.displayText, query);
 
+    // §19: a mention row's excerpt subtitle quotes the source task's words.
+    if (item && item.mention === true && typeof item.mentionExcerpt === "string" && item.mentionExcerpt) {
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta bob-cnp-relation-mention-excerpt",
+        text: `“${item.mentionExcerpt}”`,
+      });
+    }
     const metaEl = textEl.createDiv({ cls: "bob-cnp-row-meta bob-cnp-dep-meta" });
     // Cross-note rows name their note (`↗ note`); the badge below always
     // shows the block id, never the path-encoded id (§6.3).
@@ -429,6 +436,12 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
             ? item.blockedBadge
             : `🔒 waits on ${item.waitsOn}`,
       });
+    } else if (item.mention === true) {
+      // §19: a mention row opens instead of toggling; removal is refused.
+      badgeEl.createSpan({
+        cls: "bob-cnp-task-badge-action",
+        text: "↵",
+      });
     } else if (item.alreadyLinked) {
       badgeEl.createSpan({
         cls: "bob-cnp-task-badge-action",
@@ -450,7 +463,23 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
     // `⛓ prerequisite` (information only), and 🍅 for rows linked under
     // today's open Pomodoros (display only — relations never consume them).
     if (item && item.relationKind === true) {
-      if (item.label) {
+      if (item.mention === true) {
+        // §19: the mention pill carries the row tooltip; the excerpt
+        // subtitle below names the note's own words.
+        const pillEl = badgeEl.createSpan({
+          cls: "bob-cnp-task-badge-extra bob-cnp-relation-label is-mention",
+          text: String(item.mentionPill || "💬 mentioned in"),
+        });
+        if (pillEl && typeof pillEl.setAttribute === "function") {
+          const count = Math.floor(numericOrDefault(item.mentionCount, 1));
+          pillEl.setAttribute(
+            "title",
+            count > 1
+              ? `${TASK_MENTION_ROW_TOOLTIP} · mentioned ${count}× in its text`
+              : TASK_MENTION_ROW_TOOLTIP,
+          );
+        }
+      } else if (item.label) {
         badgeEl.createSpan({
           cls: "bob-cnp-task-badge-extra bob-cnp-relation-label",
           text: String(item.label),

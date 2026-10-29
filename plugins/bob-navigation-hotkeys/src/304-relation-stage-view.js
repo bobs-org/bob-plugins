@@ -377,6 +377,35 @@ function relationStageIncomingRow(source, label, options = {}) {
   });
 }
 
+// §19 mention CURRENT row: the pill, the excerpt subtitle, and the note.
+// Occurrence lines are 1-based; the opener converts to editor coordinates.
+function relationStageMentionRow(source, mention, options = {}) {
+  const display = (mention && mention.display) === "embed" ? "embed" : "mention";
+  const occurrences = Array.isArray(mention && mention.occurrences) ? mention.occurrences : [];
+  const excerpt = occurrences
+    .map((occurrence) => occurrence && occurrence.excerpt)
+    .find((text) => typeof text === "string" && text) || null;
+  const displayText = String(source.displayText || source.text || "task");
+  return Object.freeze({
+    ...source,
+    searchText: [displayText, source.route, source.blockId, source.note, "mention"].filter(Boolean).join(" "),
+    kind: "current",
+    label: null,
+    storedLabel: null,
+    incoming: true,
+    mention: true,
+    mentionDisplay: display,
+    mentionPill: relationMentionPill(display),
+    mentionCount: Math.max(1, Math.floor(numericOrDefault(mention && mention.count, occurrences.length) || 1)),
+    mentionOccurrences: Object.freeze(occurrences.map((occurrence) => Object.freeze({ ...(occurrence || {}) }))),
+    mentionExcerpt: excerpt,
+    mentionSource: Object.freeze({ path: source.path, blockId: source.blockId }),
+    readOnly: options.readOnly === true,
+    disabled: options.readOnly === true,
+    disabledReason: options.readOnly ? "This source task is in a read-only note" : null,
+  });
+}
+
 function relationStageEdgeStatusSymbol(source) {
   const text = source && source.text != null ? String(source.text) : "";
   const match = OBSIDIAN_TASK_LINE_RE.exec(text);
@@ -439,9 +468,12 @@ function relationStageIncomingRowsFromEdges(edges, index, previousDailyPath) {
         hidden: false,
       };
     }
-    rows.push(relationStageIncomingRow(rowSource, edge && edge.label, {
-      readOnly: archived || path === normalizeVaultRelativePath(previousDailyPath || ""),
-    }));
+    // §19: typed v2 mention rows render as mention CURRENT rows; v1 and
+    // v2 relation rows keep the inverse-phrase mapping.
+    const readOnlyRow = archived || path === normalizeVaultRelativePath(previousDailyPath || "");
+    rows.push(edge && edge.kind === "mention"
+      ? relationStageMentionRow(rowSource, edge, { readOnly: readOnlyRow })
+      : relationStageIncomingRow(rowSource, edge && edge.label, { readOnly: readOnlyRow }));
   }
   return Object.freeze(rows);
 }

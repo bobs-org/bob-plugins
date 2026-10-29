@@ -176,6 +176,20 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     }
     const marked = this.getMarkedCount();
     const item = (this.visibleItems || [])[this.selectedIndex];
+    // §19: footer hints follow the selected row's kind — a mention row
+    // opens instead of linking.
+    if (item && item.mention === true && marked === 0) {
+      const hints = [
+        { keys: ["↑", "↓"], label: "navigate" },
+        { keys: ["↵"], label: "open mention" },
+        { keys: ["⇧↵"], label: "add relation" },
+      ];
+      if (!this.taskSession || this.taskSession.type === "single") {
+        hints.push({ keys: ["~"], label: "flip direction" });
+      }
+      hints.push({ keys: ["esc"], label: "dismiss" });
+      return hints;
+    }
     let verb = this.isLinkedFromStage() ? "link here" : "link";
     if (marked > 0) {
       verb = `apply ${marked}`;
@@ -349,6 +363,22 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       new Notice(item.disabledReason || "That task cannot be linked");
       return false;
     }
+    // §19: a mention row opens its source at the first occurrence (MN19).
+    // Toggling or removing it is refused; ⇧↵ adds a relation for the source
+    // instead, which replaces the mention entry by identity.
+    if (item.mention === true) {
+      if (options.withLabel) {
+        return this.showRelationLabelStage([item], { mode: "add" });
+      }
+      const opener = this.plugin && this.plugin.openRelationMentionSource;
+      if (typeof opener !== "function") return false;
+      const owner = this.vaultStage && this.vaultStage.dependent;
+      try {
+        return opener.call(this.plugin, item, (owner && owner.path) || this.filePath || "");
+      } catch (_openError) {
+        return false;
+      }
+    }
     if (item.stageSection === "current" && item.alreadyLinked) {
       if (options.withLabel) {
         return this.showRelationLabelStage([item], { mode: "relabel" });
@@ -383,6 +413,16 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     const additions = Array.isArray(add) ? add : [];
     const removals = Array.isArray(remove) ? remove : [];
     const relabels = Array.isArray(relabel) ? relabel : [];
+    // §19: toggling or removing a mention row is refused with the removal
+    // refusal notice; only the text edit (or reconcile) owns the entry.
+    const refusedMention = [...removals, ...relabels].find((item) => item && item.mention === true);
+    if (refusedMention) {
+      const name = cleanTaskDisplayText(
+        refusedMention.displayText || refusedMention.text || "",
+      ) || "that task";
+      new Notice(relationMentionRemovalRefusal(name));
+      return false;
+    }
     const linkedFrom = this.isLinkedFromSession();
     const owner = linkedFrom ? this.relationStageSourceRefs()[0] || null : null;
     const ownerKey = owner

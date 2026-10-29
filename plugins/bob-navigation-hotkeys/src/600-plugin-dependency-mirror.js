@@ -942,6 +942,15 @@ class BobNavigationHotkeysDependencyMirrorMixin {
         snapshot.removedText,
         { baselineLine: snapshot.baselineEditedLine },
       );
+      // §19 courtesy write (MN18): after the dependency and LINKS mirrors
+      // run, converge changed mention targets. Silent; reconcile heals.
+      if (typeof this.mirrorMentionHandEdit === "function") {
+        await this.mirrorMentionHandEdit(
+          snapshot.editor,
+          snapshot.parentPath,
+          snapshot.oldContent,
+        );
+      }
     } catch (_error) {
       // A timer must never throw: the next edit re-arms the mirror.
     } finally {

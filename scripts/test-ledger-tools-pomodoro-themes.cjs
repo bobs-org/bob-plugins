@@ -784,3 +784,25 @@ test("task-theme API is additive, synchronous, path-bound, and read-only", () =>
   assert.equal(spawned, 0, "synchronous suggestions do not fetch history");
   assert.equal(writes, 0, "field helpers do not mutate the vault");
 });
+
+test("muted exempt pill is gray while unconfigured stays transparent", () => {
+  const cssPath = path.join(
+    __dirname,
+    "../plugins/bob-ledger-tools/styles.css",
+  );
+  const css = fs.readFileSync(cssPath, "utf8");
+  const mutedRule = ".bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme-unconfigured)";
+  assert.ok(css.includes(mutedRule), "muted non-unconfigured rule exists");
+  assert.ok(
+    css.includes("color-mix(in srgb, var(--text-muted) 16%, transparent)"),
+    "muted non-unconfigured rule sets a non-transparent color-mix background",
+  );
+  const unconfiguredRule = ".bob-pomo-theme-colors .bob-pomo-theme-muted.bob-pomo-theme-unconfigured";
+  assert.ok(css.includes(unconfiguredRule), "muted+unconfigured rule exists");
+  const unconfiguredIndex = css.indexOf(unconfiguredRule);
+  const unconfiguredBlock = css.slice(unconfiguredIndex, unconfiguredIndex + 400);
+  assert.ok(
+    unconfiguredBlock.includes("background-color: transparent"),
+    "unconfigured combination stays transparent",
+  );
+});

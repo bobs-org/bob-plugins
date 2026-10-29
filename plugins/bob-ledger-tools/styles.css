@@ -3512,15 +3512,30 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme[data-theme-hue="red"]:hov
   background-color: color-mix(in srgb, var(--bob-hue-red) 32%, transparent);
 }
 
-/* Muted pill for exempt themes such as GTD: hover background, muted text. */
+/* Muted pill for exempt themes such as PLAN: neutral gray tint, muted text. */
 .bob-pomo-theme-colors .bob-pomo-theme-muted {
   background-color: transparent;
   color: var(--text-muted);
 }
 
-.bob-pomo-theme-colors .bob-pomo-theme-muted:hover {
-  background-color: var(--background-modifier-hover);
+.bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme-unconfigured) {
+  background-color: color-mix(in srgb, var(--text-muted) 16%, transparent);
   color: var(--text-muted);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme-unconfigured),
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme-unconfigured) {
+  background-color: color-mix(in srgb, var(--text-muted) 24%, transparent);
+}
+
+.bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme-unconfigured):hover {
+  background-color: color-mix(in srgb, var(--text-muted) 24%, transparent);
+  color: var(--text-muted);
+}
+
+.theme-dark.bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme-unconfigured):hover,
+body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme-unconfigured):hover {
+  background-color: color-mix(in srgb, var(--text-muted) 32%, transparent);
 }
 
 .bob-pomo-theme-colors .bob-pomo-theme-unconfigured {

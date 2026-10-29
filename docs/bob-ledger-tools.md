@@ -147,7 +147,7 @@ Tasks sections (the BLOCKED badge stays informational and neutral with no
 cap), the CROWDED chip, the `bob-ready-notes` ranked-bar block, `## Tasks`
 heading chips, Pomodoro home chips (quiet lowercase chips with area-hue dots
 derived from linked task notes), Pomodoro theme pills (one soft tint per
-`+`-separated component of the ` — NAME` tail, with a muted pill for exempt
+`+`-separated component of the ` — NAME` tail, with a gray pill for exempt
 themes such as PLAN, a tooltip naming the hue and day count, and a session
 toggle now active in every window through the shared tint gate), and the display-only 🍅 Today mark on open
 task lines linked under today's open Pomodoros, with a session toggle and a

@@ -15874,13 +15874,39 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, exempt, 
     .filter(Boolean);
   const firstExemptName = exemptNames[0] || "PLAN";
   const exemptSet = new Set(normalizedExempt);
-  const namedReview =
+  const nameAllExempt =
     nameComponents.length > 0 &&
     nameComponents.every((name) => exemptSet.has(normalizePlanComponent(name)));
+  // R4: the ^gtd link, not the name, marks the ritual. Pre-scan for a same-day
+  // ^gtd without recording warnings/health; the resolution loop below stays
+  // unchanged for work sessions.
+  const entryLinks = Array.isArray(entry.links) ? entry.links : [];
+  let prescanSameDayGtd = false;
+  for (const link of entryLinks) {
+    const file = pomodoroHomeResolveFile(
+      link.target,
+      dailyPath,
+      dailyPath,
+      metadataCache,
+      vault,
+    );
+    const path = file && typeof file.path === "string" ? file.path : null;
+    if (
+      path &&
+      PLAN_DAILY_PATH_RE.test(path) &&
+      String(link.blockId || "").toLowerCase() === "gtd" &&
+      pomodoroHomePathEqual(path, dailyPath)
+    ) {
+      prescanSameDayGtd = true;
+      break;
+    }
+  }
+  const namedReview =
+    nameAllExempt && (entryLinks.length === 0 || prescanSameDayGtd);
   const resolved = [];
   const distinct = new Set();
   let sameDayReview = false;
-  for (const link of namedReview ? [] : Array.isArray(entry.links) ? entry.links : []) {
+  for (const link of namedReview ? [] : entryLinks) {
     const file = pomodoroHomeResolveFile(
       link.target,
       dailyPath,

@@ -359,6 +359,124 @@ function chooseBlockPomodoroThemePreselection(input = {}) {
   return { kind: "create" };
 }
 
+function blockPomodoroThemeCatalogRow(api, key) {
+  try {
+    const normalized = normalizeBlockPomodoroThemeKey(key);
+    const report = api && typeof api.snapshot === "function" ? api.snapshot() : null;
+    if (!normalized || !report || typeof report !== "object") {
+      return null;
+    }
+    for (const rows of [report.themes, report.configured_themes]) {
+      if (!Array.isArray(rows)) {
+        continue;
+      }
+      const match = rows.find((row) =>
+        row && normalizeBlockPomodoroThemeKey(row.key) === normalized,
+      );
+      if (match) {
+        return match;
+      }
+    }
+  } catch (_error) {
+    // Catalog decoration is optional; keep the resolver's spelling.
+  }
+  return null;
+}
+
+function blockPomodoroThemeSuggestionForCatalog(api, semanticSuggestion, knownOverride) {
+  try {
+    if (!semanticSuggestion || typeof semanticSuggestion !== "object") {
+      return null;
+    }
+    const suggestion = JSON.parse(JSON.stringify(semanticSuggestion));
+    const refreshTheme = (theme) => {
+      if (!theme || typeof theme !== "object") {
+        return;
+      }
+      const catalog = blockPomodoroThemeCatalogRow(api, theme.key);
+      if (catalog && typeof catalog.name === "string" && catalog.name) {
+        theme.name = catalog.name;
+      }
+      if (catalog && typeof catalog.hue === "string") {
+        theme.hue = catalog.hue;
+      }
+      if (catalog && typeof catalog.hue_source === "string") {
+        theme.hue_source = catalog.hue_source;
+      }
+
+      let known = typeof knownOverride === "boolean" ? knownOverride : null;
+      if (known === null && api && typeof api.isKnownTheme === "function") {
+        try {
+          const reported = api.isKnownTheme(theme.key);
+          if (typeof reported === "boolean") {
+            known = reported;
+          }
+        } catch (_error) {
+          // Preserve the last safe knowledge snapshot below.
+        }
+      }
+      if (known === null && catalog) {
+        known = true;
+      }
+      if (known === null && typeof theme.known === "boolean") {
+        known = theme.known;
+      }
+      if (typeof known === "boolean") {
+        theme.known = known;
+      }
+    };
+    refreshTheme(suggestion.theme);
+    if (suggestion.source === "task" && suggestion.inherited && typeof suggestion.inherited === "object") {
+      const inherited = blockPomodoroThemeSuggestionForCatalog(api, suggestion.inherited);
+      if (inherited) {
+        suggestion.inherited = inherited;
+      }
+    }
+    return suggestion;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function refreshBlockPomodoroThemePickerSnapshot(model, api) {
+  try {
+    const snapshot = model && model.themeSnapshot;
+    if (!snapshot || typeof snapshot !== "object") {
+      return false;
+    }
+    const semanticSuggestion = snapshot.semanticSuggestion || snapshot.suggestion;
+    if (!semanticSuggestion || typeof semanticSuggestion !== "object") {
+      return false;
+    }
+    const suggestion = blockPomodoroThemeSuggestionForCatalog(api, semanticSuggestion);
+    if (!suggestion || !suggestion.theme || typeof suggestion.theme.known !== "boolean") {
+      return false;
+    }
+    const meter = snapshot.planMeter && snapshot.planMeter.themes;
+    const choice = chooseBlockPomodoroThemePreselection({
+      suggestion,
+      entries: snapshot.entries,
+      exemptKeys: snapshot.exemptKeys,
+      ledgerKeys: snapshot.ledgerKeys,
+      creationAllowed: Boolean(model.creation && model.creation.allowed),
+      strict: snapshot.strict,
+      themesBefore: meter && meter.count,
+      maxThemes: snapshot.maxThemes,
+      alreadyQueued: false,
+    });
+    if (!choice) {
+      return false;
+    }
+    snapshot.suggestion = suggestion;
+    snapshot.choice = choice;
+    model.themeSuggestion = suggestion;
+    model.themePreselection = choice;
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function getBlockPomodoroLedgerApi(app) {
   try {
     const plugins = app && app.plugins;
@@ -400,11 +518,11 @@ function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
     if (!rawSuggestion || typeof rawSuggestion !== "object") {
       return null;
     }
-    const suggestion = JSON.parse(JSON.stringify(rawSuggestion));
+    const semanticSuggestion = JSON.parse(JSON.stringify(rawSuggestion));
     if (
-      !suggestion.theme || typeof suggestion.theme.key !== "string" ||
-      !suggestion.theme.key || typeof suggestion.theme.name !== "string" ||
-      !suggestion.theme.name
+      !semanticSuggestion.theme || typeof semanticSuggestion.theme.key !== "string" ||
+      !semanticSuggestion.theme.key || typeof semanticSuggestion.theme.name !== "string" ||
+      !semanticSuggestion.theme.name
     ) {
       return null;
     }
@@ -428,17 +546,24 @@ function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
       strict: rawCaps.strict,
       maxThemes: rawCaps.maxThemes,
     };
-    let known = suggestion.theme.known === true;
+    let known = semanticSuggestion.theme.known === true;
     if (typeof themesApi.isKnownTheme === "function") {
-      const reported = themesApi.isKnownTheme(suggestion.theme.key);
+      const reported = themesApi.isKnownTheme(semanticSuggestion.theme.key);
       if (typeof reported !== "boolean") {
         return null;
       }
       known = reported;
-    } else if (suggestion.theme.known !== false) {
+    } else if (semanticSuggestion.theme.known !== false) {
       return null;
     }
-    suggestion.theme.known = known;
+    const suggestion = blockPomodoroThemeSuggestionForCatalog(
+      themesApi,
+      semanticSuggestion,
+      known,
+    );
+    if (!suggestion) {
+      return null;
+    }
 
     const entries = (Array.isArray(model && model.entries) ? model.entries : []).map((entry) => ({
       name: entry.name || null,
@@ -464,10 +589,8 @@ function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
     if (!choice) {
       return null;
     }
-    if (choice.kind === "fallback") {
-      suggestion.fallback = choice.code;
-    }
     return {
+      semanticSuggestion,
       suggestion,
       choice,
       entries,
@@ -517,9 +640,9 @@ function withPomodoroThemeHistoryRows(model, query, baseRows, selectedIndex, opt
   const trimmedQuery = String(query || "").trim();
   const suggestion = snapshot && snapshot.suggestion;
   const suggestionKey = normalizeBlockPomodoroThemeKey(suggestion && suggestion.theme && suggestion.theme.key);
+  let preferredSuggestionKey = null;
 
   if (suggestion && suggestionKey) {
-    let selectedSuggestionRow = null;
     if (!trimmedQuery && snapshot.choice && snapshot.choice.kind === "entry") {
       const selectedEntry = Array.isArray(snapshot.entries)
         ? snapshot.entries[snapshot.choice.index]
@@ -529,7 +652,7 @@ function withPomodoroThemeHistoryRows(model, query, baseRows, selectedIndex, opt
         : -1;
       if (matchingIndex >= 0) {
         nextSelectedIndex = matchingIndex;
-        selectedSuggestionRow = rows[matchingIndex];
+        preferredSuggestionKey = rows[matchingIndex].key;
       }
     }
 
@@ -546,28 +669,32 @@ function withPomodoroThemeHistoryRows(model, query, baseRows, selectedIndex, opt
         preserveSpelling: true,
         suggestedCreate: true,
       };
-      markBlockPomodoroThemeSuggestion(createRow, suggestion);
       rows = [createRow, ...rows];
       nextSelectedIndex = 0;
-      selectedSuggestionRow = createRow;
-    }
-
-    if (selectedSuggestionRow) {
-      markBlockPomodoroThemeSuggestion(selectedSuggestionRow, suggestion);
-    } else {
-      const matchableRows = rows.filter((row) =>
-        row.kind !== "new" || row.suggestedCreate || suggestion.theme.known === true,
-      );
-      const bestMatch = matchableRows.find((row) =>
-        blockPomodoroThemeRowKeys(row, snapshot).includes(suggestionKey),
-      );
-      if (bestMatch) {
-        markBlockPomodoroThemeSuggestion(bestMatch, suggestion);
-      }
+      preferredSuggestionKey = createRow.key;
     }
   }
 
+  const annotateSuggestion = (visibleRows) => {
+    if (!suggestion || !suggestionKey) {
+      return;
+    }
+    const matchableRows = visibleRows.filter((row) =>
+      row.kind !== "new" || row.suggestedCreate || suggestion.theme.known === true,
+    );
+    const preferred = preferredSuggestionKey
+      ? matchableRows.find((row) => row.key === preferredSuggestionKey)
+      : null;
+    const bestMatch = preferred || matchableRows.find((row) =>
+        blockPomodoroThemeRowKeys(row, snapshot).includes(suggestionKey),
+      );
+    if (bestMatch) {
+      markBlockPomodoroThemeSuggestion(bestMatch, suggestion);
+    }
+  };
+
   if (!model || !model.creation || model.creation.allowed !== true || !api) {
+    annotateSuggestion(rows);
     return { rows, selectedIndex: nextSelectedIndex };
   }
 
@@ -576,7 +703,8 @@ function withPomodoroThemeHistoryRows(model, query, baseRows, selectedIndex, opt
   // done and cancelled entries that model.allEntries still carries.
   const openToday = Array.isArray(model.entries) ? model.entries : [];
   const exclusions = blockPomodoroThemeKeysInToday(api, openToday);
-  if (snapshot && snapshot.choice && snapshot.choice.kind === "create" && suggestionKey) {
+  const suggestedCreate = rows.find((row) => row.suggestedCreate) || null;
+  if (suggestedCreate && suggestionKey) {
     exclusions.add(suggestionKey);
   }
   const history = blockPomodoroThemeHistory(
@@ -586,7 +714,6 @@ function withPomodoroThemeHistoryRows(model, query, baseRows, selectedIndex, opt
     options && options.hiddenRows,
   );
   const todayRows = rows.filter((row) => row.kind === "existing");
-  const suggestedCreate = rows.find((row) => row.suggestedCreate) || null;
   const otherRows = rows.filter((row) => row.kind !== "existing" && row.kind !== "new");
   const candidate = rows.find((row) => row.kind === "new" && !row.suggestedCreate) || null;
   const candidateKey = candidate
@@ -631,6 +758,7 @@ function withPomodoroThemeHistoryRows(model, query, baseRows, selectedIndex, opt
   const selectedKey = nextSelectedIndex >= 0 ? rows[nextSelectedIndex] && rows[nextSelectedIndex].key : null;
   const preservedIndex = selectedKey ? ordered.findIndex((row) => row.key === selectedKey) : -1;
   const firstSelectable = ordered.findIndex((row) => row.selectable);
+  annotateSuggestion(ordered);
   return {
     rows: ordered,
     selectedIndex: preservedIndex >= 0 ? preservedIndex : firstSelectable,

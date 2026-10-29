@@ -153,12 +153,29 @@ function pomodoroThemeWriteInherited(shown) {
 function pomodoroThemeWriteExemptKeys(ledgerApi) {
   try {
     if (!ledgerApi || typeof ledgerApi.caps !== "function") {
-      return [];
+      return { available: false, keys: [] };
     }
     const caps = ledgerApi.caps();
-    return caps && Array.isArray(caps.exempt) ? caps.exempt : [];
+    if (
+      !caps || typeof caps !== "object" || Array.isArray(caps) ||
+      typeof caps.then === "function" || !Array.isArray(caps.exempt)
+    ) {
+      return { available: false, keys: [] };
+    }
+    const keys = [];
+    for (const value of caps.exempt) {
+      if (typeof value !== "string" || !value.trim() || value.includes("+")) {
+        return { available: false, keys: [] };
+      }
+      const valid = canonicalizePomodoroLinkName(value);
+      if (!valid || valid.valid !== true) {
+        return { available: false, keys: [] };
+      }
+      keys.push(value.trim());
+    }
+    return { available: true, keys };
   } catch (_error) {
-    return [];
+    return { available: false, keys: [] };
   }
 }
 
@@ -222,6 +239,10 @@ function resolvePomodoroLinkThemeWrite(plugin, source, pomodoroPlan, taskContent
       return emptyPomodoroThemeWrite();
     }
     const inherited = pomodoroThemeWriteInherited(intent.shown);
+    const exemptKeys = pomodoroThemeWriteExemptKeys(ledgerApi);
+    if (!exemptKeys.available) {
+      return emptyPomodoroThemeWrite();
+    }
     let change = null;
     try {
       change = themesApi.planThemeChange({
@@ -229,7 +250,7 @@ function resolvePomodoroLinkThemeWrite(plugin, source, pomodoroPlan, taskContent
         suggestion: intent.shown,
         inherited,
         destinationName,
-        exemptKeys: pomodoroThemeWriteExemptKeys(ledgerApi),
+        exemptKeys: exemptKeys.keys,
         deliberate: true,
       });
     } catch (_error) {

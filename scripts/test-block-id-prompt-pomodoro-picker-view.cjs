@@ -241,6 +241,7 @@ function createThemesApi(initialThemes, extra = {}) {
 // and the detached inputs the preselection helper consumed.
 function makeThemeSnapshot(model, { suggestion, choice, exemptKeys = ["PLAN"] }) {
   return {
+    semanticSuggestion: JSON.parse(JSON.stringify(suggestion)),
     suggestion,
     choice,
     entries: model.entries.map((entry) => ({
@@ -1154,8 +1155,12 @@ test("footer refreshes on selection moves and hides on inert rows", async () => 
   modal.close();
 });
 
-test("untouched refresh preserves the settled key; arrivals adopt a first default", async () => {
+test("untouched refresh preserves a still-eligible suggested entry; arrivals adopt a first default", async () => {
   const modal = openSuggestedEntryPicker({
+    suggestion: {
+      ...noteSuggestion(),
+      theme: { key: "capture", name: "CAPTURE", known: true },
+    },
     themes: [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2 }],
   });
   const firstKey = modal.rows[modal.selectedIndex].key;
@@ -1167,7 +1172,7 @@ test("untouched refresh preserves the settled key; arrivals adopt a first defaul
   await tick();
   assert.equal(modal.interacted, false);
   assert.equal(modal.rows[modal.selectedIndex].key, firstKey);
-  assert.equal(modal.initialKey, firstKey, "the initial key does not follow refreshes");
+  assert.equal(modal.initialKey, firstKey, "an unchanged eligible default keeps its key");
   modal.close();
 
   // An empty picker that gains its first rows adopts them as the default.
@@ -1286,20 +1291,35 @@ test("suggestion never recomputes on refresh and survives API changes", async ()
   spied.close();
 });
 
-test("deferred fetch leaves the untouched default in place; late arrivals after close are safe", async () => {
+test("deferred fetch makes an unknown suggestion eligible and settles the untouched default", async () => {
   const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
+  const unknown = noteSuggestion({
+    theme: { key: "write", name: "WRITE", known: false },
+  });
   const snapshot = makeThemeSnapshot(probe, {
-    suggestion: noteSuggestion(),
-    choice: { kind: "entry", index: 0 },
+    suggestion: unknown,
+    choice: { kind: "fallback", code: "unknown_theme" },
   });
   let catalog = [];
   let fetchResolve = null;
+  let onChange = null;
+  let known = false;
+  let suggestCalls = 0;
   const themesApi = createThemesApi([], {
     taskThemeOf: stubTaskThemeOf,
     planThemeChange: stubPlanThemeChange,
+    suggestFor: () => {
+      suggestCalls += 1;
+      return noteSuggestion();
+    },
+    isKnownTheme: (key) => key === "write" && known,
     fetch: () => new Promise((resolve) => {
       fetchResolve = resolve;
     }),
+    onChange: (listener) => {
+      onChange = listener;
+      return () => {};
+    },
   });
   themesApi.historyRows = ({ query = "", limit = 5, exclusions = new Set() } = {}) => {
     const needle = String(query).trim().toLowerCase();
@@ -1308,6 +1328,7 @@ test("deferred fetch leaves the untouched default in place; late arrivals after 
       .filter((theme) => !needle || theme.name.toLowerCase().includes(needle))
       .slice(0, limit);
   };
+  themesApi.snapshot = () => ({ themes: catalog });
   const model = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
   model.themeSnapshot = snapshot;
   model.themeSuggestion = snapshot.suggestion;
@@ -1317,24 +1338,168 @@ test("deferred fetch leaves the untouched default in place; late arrivals after 
   );
   modal.open();
   assert.equal(modal.rows[modal.selectedIndex].entry.name, "CAPTURE");
-  const homeKey = modal.initialKey;
+  const initialKey = modal.initialKey;
   assert.equal(modal.interacted, false);
-  catalog = [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2 }];
+  assert.equal(modal.rows.some((row) => row.suggestedCreate), false);
+  catalog = [{ key: "write", name: "Write", last_used: "2026-08-15", days_used: 2 }];
+  known = true;
   fetchResolve({ report: { themes: catalog }, stale: false, error: null });
   await tick();
   await tick();
-  assert.ok(
-    modal.rows.some((row) => row.kind === "recent" && row.theme.key === "write"),
-    "the fetch arrival adds catalog rows",
+  assert.equal(modal.rows[0].kind, "new");
+  assert.equal(modal.rows[0].name, "Write", "the refreshed catalog spelling is shown");
+  assert.equal(modal.rows[0].preserveSpelling, true);
+  assert.equal(modal.rows.some((row) => row.kind === "recent" && row.theme.key === "write"), false);
+  assert.deepEqual(
+    modal.rows.filter((row) => row.kind === "existing").map((row) => row.entry.name),
+    ["CAPTURE", "LATER"],
+    "Today rows retain ledger order behind the suggested row",
   );
-  assert.equal(modal.rows[modal.selectedIndex].key, homeKey, "the untouched default does not move");
-  assert.equal(modal.initialKey, homeKey);
+  assert.equal(modal.rows[modal.selectedIndex].name, "Write");
+  assert.notEqual(modal.initialKey, initialKey);
+  assert.equal(modal.initialKey, modal.rows[modal.selectedIndex].key);
   assert.equal(modal.interacted, false);
   const promise = modal.waitForChoice();
   pressKey(modal, "Enter");
-  assert.equal((await promise).themeIntent.deliberate, false);
-  fetchResolve({ report: { themes: catalog }, stale: false, error: null });
+  const choice = await promise;
+  assert.deepEqual(choice, {
+    kind: "new",
+    name: "Write",
+    preserveSpelling: true,
+    themeIntent: { deliberate: false, linkOnce: false, shown: modal.shownSuggestion },
+  });
+  assert.equal(suggestCalls, 0, "refresh does not rerun task suggestion resolution");
+  const rowsAfterClose = modal.rows;
+  onChange({ reason: "late" });
   await tick();
+  assert.equal(modal.rows, rowsAfterClose, "a late change callback after close is ignored");
+});
+
+test("onChange adopts a newly eligible existing match only before interaction", () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] () — BUILD",
+    "- [ ] () — WRITE",
+    "- [ ] () — LATER",
+  ].join("\n");
+  const probe = helpers.buildPomodoroLinkPickerModel(daily, { now: NOW });
+  const snapshot = makeThemeSnapshot(probe, {
+    suggestion: noteSuggestion({ theme: { key: "write", name: "WRITE", known: false } }),
+    choice: { kind: "fallback", code: "unknown_theme" },
+  });
+  let known = false;
+  let catalog = [];
+  let emit = null;
+  const themesApi = createThemesApi([], {
+    taskThemeOf: stubTaskThemeOf,
+    planThemeChange: stubPlanThemeChange,
+    isKnownTheme: (key) => key === "write" && known,
+    historyRows: ({ exclusions = new Set() } = {}) => catalog.filter((row) => !exclusions.has(row.key)),
+    onChange: (listener) => { emit = listener; return () => {}; },
+  });
+  const modal = openPicker({ daily, themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
+  assert.equal(modal.rows[modal.selectedIndex].entry.name, "BUILD");
+  const rowOrder = modal.rows.filter((row) => row.kind === "existing").map((row) => row.entry.name);
+  catalog = [{ key: "write", name: "Write", last_used: "2026-08-15", days_used: 1 }];
+  known = true;
+  emit({ reason: "catalog-loaded" });
+  assert.deepEqual(modal.rows.filter((row) => row.kind === "existing").map((row) => row.entry.name), rowOrder);
+  assert.equal(modal.rows[modal.selectedIndex].entry.name, "WRITE");
+  assert.equal(modal.initialKey, modal.rows[modal.selectedIndex].key);
+  assert.equal(modal.interacted, false);
+  modal.close();
+});
+
+test("refresh after arrows and after typing then clearing keeps the settled user key", () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] () — BUILD",
+    "- [ ] () — WRITE",
+    "- [ ] () — LATER",
+  ].join("\n");
+  const probe = helpers.buildPomodoroLinkPickerModel(daily, { now: NOW });
+  const snapshot = makeThemeSnapshot(probe, {
+    suggestion: noteSuggestion({ theme: { key: "write", name: "WRITE", known: false } }),
+    choice: { kind: "fallback", code: "unknown_theme" },
+  });
+  let known = false;
+  let emit = null;
+  const themesApi = createThemesApi([], {
+    taskThemeOf: stubTaskThemeOf,
+    planThemeChange: stubPlanThemeChange,
+    isKnownTheme: (key) => key === "write" && known,
+    onChange: (listener) => { emit = listener; return () => {}; },
+  });
+  const modal = openPicker({ daily, themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
+  const initialKey = modal.initialKey;
+  modal.moveSelection(2);
+  const arrowKey = modal.rows[modal.selectedIndex].key;
+  known = true;
+  emit({ reason: "after-arrow" });
+  assert.equal(modal.rows[modal.selectedIndex].key, arrowKey);
+  assert.equal(modal.initialKey, initialKey);
+
+  type(modal, "later");
+  const typedKey = modal.rows[modal.selectedIndex].key;
+  emit({ reason: "while-typed" });
+  assert.equal(modal.rows[modal.selectedIndex].key, typedKey);
+  type(modal, "");
+  assert.equal(modal.interacted, true);
+  const clearedKey = modal.rows[modal.selectedIndex].key;
+  emit({ reason: "after-clear" });
+  assert.equal(modal.rows[modal.selectedIndex].key, clearedKey);
+  assert.equal(modal.initialKey, initialKey);
+  modal.close();
+});
+
+test("typed theme suggestion decorates the final Recent row without changing PT7 order", async () => {
+  const catalog = [{ key: "write", name: "Write", last_used: "2026-08-15", days_used: 2 }];
+  const themesApi = createThemesApi(catalog, {
+    taskThemeOf: stubTaskThemeOf,
+    planThemeChange: stubPlanThemeChange,
+  });
+  const plain = openPicker({ themesApi });
+  type(plain, "wri");
+  const plainOrder = rowTitles(plain);
+  assert.deepEqual(plainOrder, ["New Pomodoro Write", "New Pomodoro WRI"]);
+  assert.equal(plain.rows[plain.selectedIndex].kind, "new", "PT7 keeps its typed candidate first-selected");
+  plain.close();
+
+  const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
+  const snapshot = makeThemeSnapshot(probe, {
+    suggestion: noteSuggestion({ theme: { key: "write", name: "WRITE", known: true } }),
+    choice: { kind: "create" },
+  });
+  const suggested = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
+  type(suggested, "wri");
+  assert.deepEqual(rowTitles(suggested), plainOrder);
+  assert.equal(suggested.rows.filter((row) => row.suggested).length, 1);
+  assert.equal(suggested.rows[suggested.selectedIndex].kind, "new");
+  assert.equal(suggested.rows.find((row) => row.suggested).kind, "recent");
+  assert.equal(suggested.rows.find((row) => row.suggested).name, "Write");
+  suggested.close();
+
+  const exact = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
+  type(exact, "write");
+  assert.deepEqual(rowTitles(exact), ["New Pomodoro Write"]);
+  assert.equal(exact.rows.filter((row) => row.suggested).length, 1);
+  assert.equal(exact.rows[exact.selectedIndex].kind, "recent");
+  const exactPromise = exact.waitForChoice();
+  pressKey(exact, "Enter");
+  const exactChoice = await exactPromise;
+  assert.equal(exactChoice.name, "Write");
+  assert.equal(exactChoice.preserveSpelling, true);
+
+  const fallbackSnapshot = makeThemeSnapshot(probe, {
+    suggestion: noteSuggestion({ theme: { key: "write", name: "WRITE", known: false } }),
+    choice: { kind: "fallback", code: "unknown_theme" },
+  });
+  const fallback = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: fallbackSnapshot });
+  type(fallback, "wri");
+  assert.deepEqual(rowTitles(fallback), plainOrder);
+  assert.equal(fallback.rows.filter((row) => row.suggested).length, 1);
+  assert.equal(fallback.rows.find((row) => row.suggested).kind, "recent");
+  fallback.close();
 });
 
 test("Alt+Enter links once without remembering; plain commits carry deliberate intent", async () => {

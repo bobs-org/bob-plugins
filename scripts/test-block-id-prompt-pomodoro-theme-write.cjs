@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const Module = require("node:module");
 const {
   Plugin,
   helpers,
@@ -12,6 +13,52 @@ const {
   createTaskModeHarness,
   installMockInboxRoute,
 } = require("./block-id-prompt-harness.cjs");
+
+const originalModuleLoad = Module._load;
+Module._load = function loadLedgerToolsWithObsidianStubs(request, parent, isMain) {
+  if (request === "obsidian") {
+    return {
+      MarkdownRenderChild: class {},
+      MarkdownView: class {},
+      Notice: class {},
+      Platform: { isDesktopApp: false },
+      Plugin: class {},
+      normalizePath: (value) => value,
+      parseYaml: () => ({}),
+      editorInfoField: {},
+      editorLivePreviewField: {},
+    };
+  }
+  if (request === "@codemirror/state") {
+    return {
+      Prec: { highest: (value) => value },
+      StateEffect: { define: () => ({ of: (value) => ({ value }) }) },
+      RangeSetBuilder: class {
+        add() {}
+        finish() { return []; }
+      },
+    };
+  }
+  if (request === "@codemirror/view") {
+    return {
+      EditorView: { updateListener: { of: (listener) => ({ listener }) } },
+      keymap: { of: (value) => value },
+      ViewPlugin: { fromClass: (cls, options) => ({ cls, options }) },
+      Decoration: { none: {}, mark: (spec) => spec, widget: (spec) => spec },
+      WidgetType: class {},
+    };
+  }
+  if (request === "@codemirror/language") {
+    return { syntaxTree: () => ({ resolveInner: () => null }) };
+  }
+  return originalModuleLoad.call(this, request, parent, isMain);
+};
+let LedgerThemeHelpers;
+try {
+  LedgerThemeHelpers = require("../plugins/bob-ledger-tools/main.js").helpers;
+} finally {
+  Module._load = originalModuleLoad;
+}
 
 function noteSuggestion(overrides = {}) {
   return {
@@ -113,25 +160,35 @@ function installThemeWriteApis(plugin, options = {}) {
     "bob-ledger-tools": {
       api: {
         version: 3,
-        caps: () => ({
-          exempt: options.exempt || ["PLAN"],
-          strict: false,
-          maxThemes: 3,
-        }),
+        ...(!options.noCaps ? {
+          caps: options.caps || (() => ({
+            exempt: options.exempt || ["PLAN"],
+            strict: false,
+            maxThemes: 3,
+          })),
+        } : {}),
         planBudget: options.planBudget || (() => null),
         themes: {
           version: 1,
           suggestFor: options.suggestFor || (() => suggestion),
-          taskThemeOf: options.taskThemeOf || stubTaskThemeOf,
+          taskThemeOf: options.taskThemeOf || (options.useRealHelpers
+            ? LedgerThemeHelpers.pomodoroThemeTaskFieldState
+            : stubTaskThemeOf),
           setTaskTheme: (text, name) => {
             setterCalls.push(["set", text, name]);
-            return stubSetTaskTheme(text, name);
+            return options.useRealHelpers
+              ? LedgerThemeHelpers.pomodoroThemeSetTaskTheme(text, name)
+              : stubSetTaskTheme(text, name);
           },
           clearTaskTheme: (text) => {
             setterCalls.push(["clear", text]);
-            return stubClearTaskTheme(text);
+            return options.useRealHelpers
+              ? LedgerThemeHelpers.pomodoroThemeClearTaskTheme(text)
+              : stubClearTaskTheme(text);
           },
-          planThemeChange: options.planThemeChange || stubPlanThemeChange,
+          planThemeChange: options.planThemeChange || (options.useRealHelpers
+            ? LedgerThemeHelpers.pomodoroThemePlanChange
+            : stubPlanThemeChange),
           snapshot: () => ({ themes: catalog }),
           isKnownTheme: (key) => catalog.some((theme) => theme.key === String(key).toLowerCase()),
         },
@@ -230,6 +287,33 @@ test("theme suggestion identity treats a changed declaring note as a different s
     },
   }));
   assert.equal(helpers.pomodoroThemeSuggestionsMatch(left, right), false);
+});
+
+test("current exempt keys distinguish valid empty configuration from unavailable caps", () => {
+  const unavailable = [
+    null,
+    {},
+    { caps: () => { throw new Error("caps failed"); } },
+    { caps: () => Promise.resolve({ exempt: [] }) },
+    { caps: () => null },
+    { caps: () => ({ exempt: "PLAN" }) },
+    { caps: () => ({ exempt: ["PLAN", null] }) },
+    { caps: () => ({ exempt: ["PLAN + FIX"] }) },
+  ];
+  for (const api of unavailable) {
+    assert.deepEqual(
+      helpers.pomodoroThemeWriteExemptKeys(api),
+      { available: false, keys: [] },
+    );
+  }
+  assert.deepEqual(
+    helpers.pomodoroThemeWriteExemptKeys({ caps: () => ({ exempt: [] }) }),
+    { available: true, keys: [] },
+  );
+  assert.deepEqual(
+    helpers.pomodoroThemeWriteExemptKeys({ caps: () => ({ exempt: [" Custom "] }) }),
+    { available: true, keys: ["Custom"] },
+  );
 });
 
 test("planTargetTaskUpdate applies themeEdit after lane changes and before a new block ID", () => {
@@ -344,6 +428,67 @@ test("a deliberate named destination sets the task theme in the same cross-note 
   assert.ok(writes[0].content.includes("[[Tasks#^ship]]"));
   assert.equal(setterCalls.length, 1);
   assert.equal(lastNotice(), "Linked under FIX · stays Next · task theme FIX");
+});
+
+test("unavailable current caps skip only the task-theme edit and retain lane, ID, and freshness edits", async () => {
+  const invalidCaps = [
+    { noCaps: true },
+    { caps: () => { throw new Error("caps failed"); } },
+    { caps: () => Promise.resolve({ exempt: ["PLAN"] }) },
+    { caps: () => ({ exempt: "PLAN" }) },
+    { caps: () => ({ exempt: ["PLAN", null] }) },
+  ];
+  for (const apis of invalidCaps) {
+    const { result, editor, setterCalls } = await linkWithIntent({
+      taskContent: "- [ ] #task Ship it [theme:: authored]",
+      dailyContent: namedDaily("FIX"),
+      intent: deliberateIntent(),
+      isNewId: true,
+      apis: {
+        useRealHelpers: true,
+        freshness: {
+          stampLine: (line, dateText) => `${line} [fresh:: ${dateText}]`,
+        },
+        ...apis,
+      },
+    });
+    assert.equal(result, true);
+    assert.equal(
+      editor.getValue(),
+      "- [*] #task Ship it [theme:: authored] ^ship [fresh:: 2026-08-15]",
+      "the current task field stays byte-for-byte while lane and ID edits still land",
+    );
+    assert.equal(setterCalls.length, 0);
+    assert.doesNotMatch(lastNotice(), /task theme (?:FIX|saved|cleared)/);
+  }
+});
+
+test("real Ledger Tools planner writes with an empty exempt list and custom exemptions", async () => {
+  const writes = [
+    { destination: "PLAN", exempt: [], expected: "Plan" },
+    { destination: "CUSTOM + FIX", exempt: ["CUSTOM"], expected: "Fix" },
+    { destination: "PLAN + FIX", exempt: ["PLAN"], expected: "Fix" },
+  ];
+  for (const item of writes) {
+    const { result, editor, setterCalls } = await linkWithIntent({
+      taskContent: "- [*] #task Ship it ^ship",
+      dailyContent: namedDaily(item.destination),
+      intent: deliberateIntent(),
+      destination: item.destination,
+      apis: {
+        useRealHelpers: true,
+        exempt: item.exempt,
+        catalog: [
+          { key: "plan", name: "Plan" },
+          { key: "fix", name: "Fix" },
+        ],
+      },
+    });
+    assert.equal(result, true);
+    assert.equal(editor.getValue(), `- [*] #task Ship it [theme:: ${item.expected}] ^ship`);
+    assert.equal(setterCalls[0][0], "set");
+    assert.match(lastNotice(), new RegExp(`task theme ${item.expected}$`));
+  }
 });
 
 test("a Ready scheduled task sets Next, logs the date, and remembers the theme", async () => {

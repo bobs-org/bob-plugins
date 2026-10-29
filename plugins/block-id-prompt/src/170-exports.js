@@ -18,6 +18,7 @@ module.exports.helpers = {
   normalizePomodoroLinkPickerThemeIntent,
   pomodoroThemeSuggestionIdentity,
   pomodoroThemeSuggestionsMatch,
+  pomodoroThemeWriteExemptKeys,
   pomodoroPlanDestinationName,
   resolvePomodoroLinkThemeWrite,
   attachPomodoroLinkThemeOutcome,

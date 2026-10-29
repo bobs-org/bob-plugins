@@ -493,15 +493,12 @@ class PomodoroLinkPickerModal extends Modal {
     this.renderRows();
   }
 
-  // Selection stays stable across asynchronous refreshes: callers pass
-  // "init" for the opening build, "input" for typed queries, and "refresh"
-  // for catalog/history arrivals that reuse the current query (the task
-  // suggestion is never recomputed here). A refresh preserves the settled
-  // key whenever it survives; when the row is gone the first remaining
-  // selectable row wins, and an untouched picker also adopts the revised
-  // default as its initial key. Any query change applies PT7 first-row
-  // selection. Clearing a query never erases the fact that the user
-  // interacted.
+  // Selection stays stable across asynchronous refreshes. Refreshes update
+  // only catalog knowledge and decoration; task semantics stay fixed. An
+  // untouched empty-query picker adopts the newly eligible default and
+  // settles its initial key. After interaction, refreshes preserve the row
+  // key when possible and otherwise choose the first selectable row. Query
+  // changes use the model's normal selection and never clear interaction.
   updateQuery(query, origin = "input") {
     const nextQuery = String(query === null || query === undefined ? "" : query);
     const queryChanged = nextQuery !== this.query;
@@ -509,6 +506,14 @@ class PomodoroLinkPickerModal extends Modal {
       this.hiddenThemeRows.clear();
     }
     const previousKey = selectedPomodoroPickerKey(this.rows, this.selectedIndex);
+    if (
+      !queryChanged && origin === "refresh" &&
+      refreshBlockPomodoroThemePickerSnapshot(this.model, this.themesApi)
+    ) {
+      this.shownSuggestion = clonePomodoroThemeSuggestion(
+        this.model && this.model.themeSuggestion,
+      );
+    }
     this.query = nextQuery;
     const built = buildPomodoroLinkPickerRows(this.model, this.query, {
       themesApi: this.themesApi,
@@ -516,19 +521,16 @@ class PomodoroLinkPickerModal extends Modal {
     });
     this.rows = built.rows;
     if (!queryChanged && origin === "refresh") {
-      const preserved = previousKey !== null
-        ? this.rows.findIndex((row) => row && row.key === previousKey)
-        : -1;
-      if (preserved >= 0) {
-        this.selectedIndex = preserved;
-      } else if (!this.interacted && previousKey === null) {
+      if (!this.interacted && !this.query.trim()) {
         this.selectedIndex = built.selectedIndex;
         this.initialKey = selectedPomodoroPickerKey(this.rows, this.selectedIndex);
       } else {
-        this.selectedIndex = firstSelectablePomodoroPickerIndex(this.rows);
-        if (!this.interacted) {
-          this.initialKey = selectedPomodoroPickerKey(this.rows, this.selectedIndex);
-        }
+        const preserved = previousKey !== null
+          ? this.rows.findIndex((row) => row && row.key === previousKey)
+          : -1;
+        this.selectedIndex = preserved >= 0
+          ? preserved
+          : firstSelectablePomodoroPickerIndex(this.rows);
       }
     } else {
       if (queryChanged) {

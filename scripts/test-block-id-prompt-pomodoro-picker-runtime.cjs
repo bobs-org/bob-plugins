@@ -508,3 +508,37 @@ test("promptOpen blocks re-entry while the picker is open", async () => {
   assert.equal(h.plugin.promptOpen, false);
   assert.equal(lastNotice(), "Linked to Current · stays Next");
 });
+
+test("direct picker request carries the task line text for the footer", async () => {
+  const taskText = ["## Tasks", "- [*] #task Ship it ^ship"].join("\n");
+  const h = createTaskModeHarness({
+    taskContent: taskText,
+    dailyContent: UNLINKED_DAILY,
+  });
+  let pickerRequest = null;
+  h.plugin.promptPomodoroLinkTarget = async (request) => {
+    pickerRequest = request;
+    return null;
+  };
+  await h.plugin.choosePomodoroLinkTarget(sourceForPomodoroLink(h.editor, "Tasks.md", 1));
+  assert.equal(pickerRequest.task.lineText, "- [*] #task Ship it ^ship");
+  assert.equal(pickerRequest.task.displayText, "Ship it");
+});
+
+test("direct picker stays task-aware when the live note text is unavailable", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  h.editor.getValue = () => {
+    throw new Error("editor gone");
+  };
+  let pickerRequest = null;
+  h.plugin.promptPomodoroLinkTarget = async (request) => {
+    pickerRequest = request;
+    return null;
+  };
+  await h.plugin.choosePomodoroLinkTarget(sourceForPomodoroLink(h.editor, "Tasks.md", 0));
+  assert.equal(typeof pickerRequest.task.lineText, "string");
+  assert.equal(pickerRequest.task.lineText, "");
+});

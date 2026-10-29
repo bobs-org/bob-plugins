@@ -802,10 +802,19 @@ test("suggested creation uses catalog spelling and removes its duplicate Recent 
   assert.equal(built.rows.some((row) => row.kind === "recent" && row.theme.key === "build"), false);
 
   let choiceValue = null;
-  helpers.PomodoroLinkPickerModal.prototype.commitRow.call({
+  // A prototype-backed double: commitRow resolves intent through the real
+  // modal methods, but without task context the legacy shape is preserved.
+  const commitDouble = Object.create(helpers.PomodoroLinkPickerModal.prototype);
+  Object.assign(commitDouble, {
     rows: built.rows,
+    selectedIndex: 0,
+    initialKey: null,
+    query: "",
+    taskAware: false,
+    shownSuggestion: null,
     settleChoice(value) { choiceValue = value; },
-  }, 0);
+  });
+  commitDouble.commitRow(0);
   assert.deepEqual(helpers.normalizePomodoroLinkPickerChoice(choiceValue), {
     kind: "new",
     name: "Build",

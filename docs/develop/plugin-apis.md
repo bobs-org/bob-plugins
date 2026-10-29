@@ -28,6 +28,14 @@ Navigation Hotkeys uses this picker for successor offers. An optional
 task-aware preselection: `line` is one-based and `text` is the full live
 Markdown note. Calls without it keep the generic successor picker. This request
 member only affects picker suggestions; it does not write a task theme.
+Task-aware picks carry an additive
+`themeIntent: { deliberate, linkOnce, shown }` on the committed choice:
+`deliberate` is true when the committed row differs from the suggested default
+or a query is typed (Shift+Enter named commits are always deliberate, Alt+Enter
+link-once commits never are), `linkOnce` is true only for Alt+Enter, and `shown`
+is the suggestion actually presented (or null). Picks without task context keep
+the legacy shape, and a malformed optional intent is dropped. The namespace
+version stays 1.
 
 ## Bob Ledger Tools
 

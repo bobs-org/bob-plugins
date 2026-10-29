@@ -1,6 +1,21 @@
 // Shared meter and creation projection for direct picker opens and the
 // versioned public API. A supplied task is projected through the same guarded
 // Pomodoro insertion planner in either entry point.
+// The task's own line text (one-based line into the full live note) powers
+// the footer's pending-edit preview; its presence marks a pick task-aware.
+// Anything unreadable degrades to "" while staying task-aware.
+function taskLineTextAt(text, oneBasedLine) {
+  try {
+    if (typeof text !== "string" || !Number.isInteger(oneBasedLine) || oneBasedLine < 1) {
+      return "";
+    }
+    const lines = text.split("\n");
+    return oneBasedLine - 1 < lines.length ? lines[oneBasedLine - 1] : "";
+  } catch (_error) {
+    return "";
+  }
+}
+
 function createBlockPomodoroLinkPickerBudget(plugin, options = {}) {
   const current = plugin.readPlanBudgetMeter(options.dailyContent);
   const task = options.task || {};
@@ -148,9 +163,15 @@ class BlockIdPromptPomodoroLinkPickerMixin {
       );
       attachBlockPomodoroThemePickerSnapshot(model, themeSnapshot);
 
+      // The task's own line (source.line is zero-based) powers the footer's
+      // pending-edit preview; the direct gesture is always task-aware.
       const request = {
         model,
-        task: { displayText, status: task.status },
+        task: {
+          displayText,
+          status: task.status,
+          lineText: taskLineTextAt(taskText, Number.isInteger(source.line) ? source.line + 1 : 0),
+        },
         needsBlockId,
         now: this.now(),
         budget,

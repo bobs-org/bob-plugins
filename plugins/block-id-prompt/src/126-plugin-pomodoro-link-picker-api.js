@@ -19,11 +19,16 @@ function normalizePomodoroLinkPickerChoice(choice) {
         return null;
       }
       const title = typeof choice.title === "string" ? choice.title : "";
+      // A malformed optional intent is dropped so it can never enable a
+      // write; absent intent keeps the legacy return shape. API version
+      // stays 1.
+      const existingIntent = normalizePomodoroLinkPickerThemeIntent(choice.themeIntent);
       return {
         kind: "existing",
         entryLine: choice.entryLine,
         entryText: choice.entryText,
         title,
+        ...(existingIntent ? { themeIntent: existingIntent } : {}),
       };
     }
     if (choice.kind === "new") {
@@ -31,10 +36,12 @@ function normalizePomodoroLinkPickerChoice(choice) {
       if (!name || /[\r\n]/.test(name)) {
         return null;
       }
+      const newIntent = normalizePomodoroLinkPickerThemeIntent(choice.themeIntent);
       return {
         kind: "new",
         name,
         ...(choice.preserveSpelling === true ? { preserveSpelling: true } : {}),
+        ...(newIntent ? { themeIntent: newIntent } : {}),
       };
     }
     return null;
@@ -149,9 +156,14 @@ class BlockIdPromptPomodoroLinkPickerApiMixin {
       const status = taskContext && typeof candidateTask.status === "string"
         ? candidateTask.status
         : " ";
+      // The task line text powers the footer's pending-edit preview; its
+      // presence marks the pick task-aware even when no suggestion resolved.
+      const taskLineText = taskContext ? taskLineTextAt(taskContext.text, taskContext.line) : "";
       const pickerRequest = {
         model,
-        task: { displayText, status },
+        task: taskContext
+          ? { displayText, status, lineText: taskLineText }
+          : { displayText, status },
         needsBlockId: false,
         now: this.now(),
         budget,

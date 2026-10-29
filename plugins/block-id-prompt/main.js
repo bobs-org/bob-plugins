@@ -6645,7 +6645,7 @@ function startBlockPomodoroThemePicker(modal) {
     if (typeof api.onChange === "function") {
       modal.themesUnsubscribe = api.onChange(() => {
         if (!modal.settled) {
-          modal.updateQuery(modal.query);
+          modal.updateQuery(modal.query, "refresh");
         }
       });
     }
@@ -6656,7 +6656,7 @@ function startBlockPomodoroThemePicker(modal) {
     Promise.resolve(api.fetch())
       .then(() => {
         if (!modal.settled) {
-          modal.updateQuery(modal.query);
+          modal.updateQuery(modal.query, "refresh");
         }
       })
       .catch(() => {});
@@ -6682,6 +6682,12 @@ async function toggleBlockPomodoroThemeVisibility(modal) {
   }
   if (row.kind === "existing") {
     new Notice("Today's Pomodoros stay visible; Ctrl+D hides Recent themes");
+    return;
+  }
+  // The suggested create row is the picker's current recommendation: Ctrl+D
+  // is consumed without hide/unhide calls, including a hidden suggestion.
+  if (row.suggestedCreate === true) {
+    new Notice("Suggested Pomodoros stay put; Ctrl+D hides Recent themes only");
     return;
   }
   const hiddenNames = row.kind === "recent" && row.hidden
@@ -6717,7 +6723,7 @@ async function toggleBlockPomodoroThemeVisibility(modal) {
         }
       }
     }
-    modal.updateQuery(modal.query);
+    modal.updateQuery(modal.query, "refresh");
     const selectedIndex = modal.rows.findIndex((candidate) => candidate.key === row.key);
     if (selectedIndex >= 0) {
       modal.selectedIndex = selectedIndex;
@@ -6727,6 +6733,281 @@ async function toggleBlockPomodoroThemeVisibility(modal) {
     new Notice("Could not update the theme suggestion");
   } finally {
     modal.themeWriteInFlight = false;
+  }
+}
+// ---- src/077-pomodoro-picker-intent.js ----
+// Stable selection, suggestion reasons, and link-once intent for the Link to
+// today picker (plan:202610/task_theme_link_picker.md picker-intent). Pure
+// helpers over the task-aware theme snapshot; the modal in 085 owns the DOM.
+function pomodoroPickerRowKey(row) {
+  return row && typeof row.key === "string" ? row.key : null;
+}
+
+function firstSelectablePomodoroPickerIndex(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  for (let index = 0; index < list.length; index += 1) {
+    if (list[index] && list[index].selectable === true) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function selectedPomodoroPickerKey(rows, selectedIndex) {
+  if (!Number.isInteger(selectedIndex) || selectedIndex < 0) {
+    return null;
+  }
+  const list = Array.isArray(rows) ? rows : [];
+  if (selectedIndex >= list.length) {
+    return null;
+  }
+  return pomodoroPickerRowKey(list[selectedIndex]);
+}
+
+// A plain commit is deliberate when the row differs from the settled
+// initial key or a query is typed. Returning to the initial key with an
+// empty query (or an untouched double tap) is not deliberate.
+function pomodoroPickerRowDeliberate(initialKey, query, row) {
+  try {
+    return pomodoroPickerRowKey(row) !== initialKey || String(query || "").trim() !== "";
+  } catch (_error) {
+    return true;
+  }
+}
+
+function clonePomodoroThemeSuggestion(suggestion) {
+  try {
+    if (!suggestion || typeof suggestion !== "object") {
+      return null;
+    }
+    return JSON.parse(JSON.stringify(suggestion));
+  } catch (_error) {
+    return null;
+  }
+}
+
+// The destination Pomodoro name behind a committed row: existing entries use
+// their entry name, Recent rows keep catalog spelling, typed rows use the
+// canonical name. Anything else (notice rows, unnamed entries) has none.
+function destinationPomodoroRowName(row) {
+  try {
+    if (!row || typeof row !== "object") {
+      return null;
+    }
+    if (row.kind === "existing") {
+      const name = row.entry && row.entry.name;
+      return typeof name === "string" && name ? name : null;
+    }
+    if (row.kind === "recent") {
+      const theme = row.theme && typeof row.theme === "object" ? row.theme : null;
+      const name = theme && typeof theme.name === "string" && theme.name
+        ? theme.name
+        : row.name;
+      return typeof name === "string" && name ? name : null;
+    }
+    if (row.kind === "new") {
+      return typeof row.name === "string" && row.name ? row.name : null;
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function pomodoroThemeSuggestionHue(value) {
+  return typeof value === "string" && BLOCK_POMODORO_THEME_HUES.includes(value)
+    ? value
+    : null;
+}
+
+// Machine-readable reason behind a suggested row: the tail text plus the
+// place hue (from.hue) and the suggested theme name/hue for rendering.
+function pomodoroThemeSuggestionReason(suggestion) {
+  try {
+    if (!suggestion || typeof suggestion !== "object") {
+      return null;
+    }
+    const theme = suggestion.theme && typeof suggestion.theme === "object"
+      ? suggestion.theme
+      : null;
+    const themeName = theme && typeof theme.name === "string" && theme.name
+      ? theme.name
+      : null;
+    const themeHue = theme ? pomodoroThemeSuggestionHue(theme.hue) : null;
+    if (suggestion.source === "task") {
+      return { kind: "task", text: "this task", themeName, themeHue };
+    }
+    if (suggestion.source === "reading") {
+      return { kind: "reading", text: "reading task", themeName, themeHue };
+    }
+    if (suggestion.source === "review") {
+      return { kind: "review", text: "daily review", themeName, themeHue };
+    }
+    if (suggestion.source === "note") {
+      const from = suggestion.from && typeof suggestion.from === "object"
+        ? suggestion.from
+        : null;
+      const stem = from && typeof from.stem === "string" && from.stem
+        ? from.stem
+        : null;
+      if (!stem) {
+        return null;
+      }
+      return {
+        kind: "note",
+        stem,
+        placeHue: from ? pomodoroThemeSuggestionHue(from.hue) : null,
+        themeName,
+        themeHue,
+      };
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Accessible suffix for a suggested row label, e.g.
+// `Pomodoro WRITE, suggested, from sase_blog`. Color is never the only cue.
+function pomodoroThemeSuggestedLabelSuffix(suggestion) {
+  const reason = pomodoroThemeSuggestionReason(suggestion);
+  if (!reason) {
+    return "";
+  }
+  if (reason.kind === "note") {
+    return `, suggested, from ${reason.stem}`;
+  }
+  return `, suggested, ${reason.text}`;
+}
+
+// Middle segment of the field-change footer: whose default the pending edit
+// is measured against. A task-field suggestion defers to its inherited
+// default; a missing inherited default reports `no default here`.
+function describePomodoroThemeSuggestionSource(target) {
+  try {
+    if (!target || typeof target !== "object") {
+      return "no default here";
+    }
+    const theme = target.theme && typeof target.theme === "object" ? target.theme : null;
+    const name = theme && typeof theme.name === "string" && theme.name ? theme.name : null;
+    if (!name) {
+      return "no default here";
+    }
+    if (target.source === "note") {
+      const from = target.from && typeof target.from === "object" ? target.from : null;
+      const stem = from && typeof from.stem === "string" && from.stem ? from.stem : null;
+      return stem ? `${stem} suggests ${name}` : `note suggests ${name}`;
+    }
+    if (target.source === "reading") {
+      return `reading tasks suggest ${name}`;
+    }
+    if (target.source === "review") {
+      return `daily review suggests ${name}`;
+    }
+    if (target.source === "task") {
+      return `this task suggests ${name}`;
+    }
+    return `suggests ${name}`;
+  } catch (_error) {
+    return "no default here";
+  }
+}
+
+// Preview of the pending theme-field edit for the footer, e.g.
+// `this task becomes FIX · sase_blog suggests WRITE · ⌥↵ link once` or
+// `task theme cleared · sase_blog suggests WRITE · ⌥↵ link once`.
+// Returns null when no effective edit is pending, so the caller hides the
+// second footer line. taskThemeOf/planThemeChange come from the Ledger Tools
+// themes API; every failure degrades to no preview.
+function describePomodoroThemeFooterPreview(input = {}) {
+  try {
+    const opts = input && typeof input === "object" ? input : {};
+    const rowName = typeof opts.rowName === "string" ? opts.rowName : "";
+    const shown = opts.shown && typeof opts.shown === "object" ? opts.shown : null;
+    if (!rowName || !shown) {
+      return null;
+    }
+    if (typeof opts.taskThemeOf !== "function" || typeof opts.planThemeChange !== "function") {
+      return null;
+    }
+    const lineText = typeof opts.lineText === "string" ? opts.lineText : "";
+    let field = null;
+    try {
+      field = opts.taskThemeOf(lineText);
+    } catch (_error) {
+      return null;
+    }
+    if (!field || typeof field !== "object") {
+      return null;
+    }
+    const inherited = shown.source === "task"
+      ? (shown.inherited && typeof shown.inherited === "object" ? shown.inherited : null)
+      : shown;
+    const exemptKeys = Array.isArray(opts.exemptKeys) ? opts.exemptKeys : [];
+    let plan = null;
+    try {
+      plan = opts.planThemeChange({
+        field,
+        suggestion: shown,
+        inherited,
+        destinationName: rowName,
+        exemptKeys,
+        deliberate: opts.deliberate === true,
+      });
+    } catch (_error) {
+      return null;
+    }
+    if (!plan || (plan.action !== "set" && plan.action !== "clear")) {
+      return null;
+    }
+    let first = null;
+    if (plan.action === "set") {
+      first = typeof plan.name === "string" && plan.name ? `this task becomes ${plan.name}` : null;
+    } else {
+      first = "task theme cleared";
+    }
+    if (!first) {
+      return null;
+    }
+    const middle = describePomodoroThemeSuggestionSource(
+      shown.source === "task" ? inherited : shown,
+    );
+    return `${first} · ${middle} · ⌥↵ link once`;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Strict validation for the additive themeIntent on a committed choice.
+// Anything malformed is dropped so a bad intent can never enable a write;
+// absent intent keeps the legacy return shape.
+function normalizePomodoroLinkPickerThemeIntent(intent) {
+  try {
+    if (!intent || typeof intent !== "object" || Array.isArray(intent)) {
+      return null;
+    }
+    if (typeof intent.deliberate !== "boolean") {
+      return null;
+    }
+    if (typeof intent.linkOnce !== "boolean") {
+      return null;
+    }
+    if (intent.shown === undefined || intent.shown === null) {
+      return { deliberate: intent.deliberate, linkOnce: intent.linkOnce, shown: null };
+    }
+    if (typeof intent.shown !== "object") {
+      return null;
+    }
+    const theme = intent.shown.theme;
+    if (!theme || typeof theme !== "object") {
+      return null;
+    }
+    if (typeof theme.key !== "string" || !theme.key) {
+      return null;
+    }
+    return { deliberate: intent.deliberate, linkOnce: intent.linkOnce, shown: intent.shown };
+  } catch (_error) {
+    return null;
   }
 }
 // ---- src/080-picker-ui-and-task-link-modal.js ----
@@ -7421,6 +7702,17 @@ class PomodoroLinkPickerModal extends Modal {
     const task = safeRequest.task || {};
     this.taskDisplayText = task.displayText || "";
     this.taskStatus = task.status || " ";
+    // Task-aware picks carry the task line text and the suggestion actually
+    // presented (cloned so later catalog changes cannot rewrite intent).
+    // Picks without task context keep the legacy choice shape.
+    this.taskLineText = typeof task.lineText === "string" ? task.lineText : null;
+    this.taskAware = this.taskLineText !== null;
+    this.shownSuggestion = clonePomodoroThemeSuggestion(
+      safeRequest.model && safeRequest.model.themeSuggestion,
+    );
+    this.interacted = false;
+    this.initialKey = null;
+    this.themeFooterEl = null;
     this.needsBlockId = safeRequest.needsBlockId === true;
     this.now = safeRequest.now || null;
     this.budget = safeRequest.budget || null;
@@ -7475,7 +7767,7 @@ class PomodoroLinkPickerModal extends Modal {
     });
     this.renderFooter(contentEl);
     startBlockPomodoroThemePicker(this);
-    this.updateQuery("");
+    this.updateQuery("", "init");
 
     window.setTimeout(() => {
       if (this.inputEl) {
@@ -7532,7 +7824,7 @@ class PomodoroLinkPickerModal extends Modal {
       },
     });
     this.inputEl.addEventListener("input", () => {
-      this.updateQuery(this.inputEl ? this.inputEl.value : "");
+      this.updateQuery(this.inputEl ? this.inputEl.value : "", "input");
     });
     this.inputEl.addEventListener("keydown", (event) =>
       this.handleKeydown(event),
@@ -7573,6 +7865,97 @@ class PomodoroLinkPickerModal extends Modal {
         attr: { "aria-live": "polite" },
       });
     }
+    // Second footer line: the live pending theme-field edit preview. It is
+    // refreshed on every selection/query/refresh change and shown only for
+    // an effective edit.
+    this.themeFooterEl = footerEl.createDiv({
+      cls: "bid-ppk-theme-footer",
+      attr: { "aria-live": "polite" },
+    });
+    this.themeFooterEl.style.display = "none";
+  }
+
+  deliberateForRow(row) {
+    return pomodoroPickerRowDeliberate(this.initialKey, this.query, row);
+  }
+
+  deliberateForSelectedRow() {
+    return this.deliberateForRow(this.rows[this.selectedIndex]);
+  }
+
+  withTaskIntent(choice, deliberate, linkOnce) {
+    if (choice && this.taskAware) {
+      choice.themeIntent = {
+        deliberate: deliberate === true,
+        linkOnce: linkOnce === true,
+        shown: this.shownSuggestion,
+      };
+    }
+    return choice;
+  }
+
+  choiceForRow(row, deliberate, linkOnce) {
+    let choice = null;
+    if (!row) {
+      return null;
+    }
+    if (row.kind === "new") {
+      choice = {
+        kind: "new",
+        name: row.name,
+        ...(row.preserveSpelling === true ? { preserveSpelling: true } : {}),
+      };
+    } else if (row.kind === "recent") {
+      choice = { kind: "new", name: row.name, preserveSpelling: true };
+    } else if (row.kind === "existing") {
+      choice = {
+        kind: "existing",
+        entryLine: row.entry.entryLine,
+        entryText: row.entry.entryText,
+        title: row.entry.title,
+      };
+    }
+    return this.withTaskIntent(choice, deliberate, linkOnce);
+  }
+
+  updateThemeFooter() {
+    if (!this.themeFooterEl) {
+      return;
+    }
+    const preview = this.taskAware
+      ? describePomodoroThemeFooterPreview({
+        rowName: destinationPomodoroRowName(this.rows[this.selectedIndex]),
+        deliberate: this.deliberateForSelectedRow(),
+        lineText: this.taskLineText || "",
+        shown: this.shownSuggestion,
+        exemptKeys: (this.model && this.model.themeSnapshot && this.model.themeSnapshot.exemptKeys) || [],
+        taskThemeOf: (line) => {
+          try {
+            return this.themesApi && typeof this.themesApi.taskThemeOf === "function"
+              ? this.themesApi.taskThemeOf(line)
+              : null;
+          } catch (_error) {
+            return null;
+          }
+        },
+        planThemeChange: (options) => {
+          try {
+            return this.themesApi && typeof this.themesApi.planThemeChange === "function"
+              ? this.themesApi.planThemeChange(options)
+              : null;
+          } catch (_error) {
+            return null;
+          }
+        },
+      })
+      : null;
+    if (!preview) {
+      this.themeFooterEl.setText("");
+      this.themeFooterEl.style.display = "none";
+      return;
+    }
+    this.themeFooterEl.setText(preview);
+    this.themeFooterEl.style.display = "";
   }
 
   renderHint(hintsEl, keys, label) {
@@ -7607,9 +7990,13 @@ class PomodoroLinkPickerModal extends Modal {
     if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
-      // A habitual double tap links to the current/next Pomodoro, so
-      // Ctrl+Shift+Enter commits exactly like Enter — before the Shift branch.
-      if (event.shiftKey && !event.ctrlKey) {
+      // Alt+Enter links once without remembering a theme, before the
+      // generic Enter/Shift branch. A habitual double tap links to the
+      // current/next Pomodoro, so Ctrl+Shift+Enter commits exactly like
+      // Enter — before the Shift branch.
+      if (event.altKey) {
+        this.commitLinkOnce();
+      } else if (event.shiftKey && !event.ctrlKey) {
         this.commitCreateIntent();
       } else {
         this.commitRow(this.selectedIndex);
@@ -7626,6 +8013,9 @@ class PomodoroLinkPickerModal extends Modal {
   }
 
   moveSelection(delta) {
+    // Navigation marks the picker touched: later catalog/history refreshes
+    // preserve the user's position instead of revising the default.
+    this.interacted = true;
     const selectable = [];
     this.rows.forEach((row, index) => {
       if (row.selectable) {
@@ -7649,18 +8039,52 @@ class PomodoroLinkPickerModal extends Modal {
     this.renderRows();
   }
 
-  updateQuery(query) {
+  // Selection stays stable across asynchronous refreshes: callers pass
+  // "init" for the opening build, "input" for typed queries, and "refresh"
+  // for catalog/history arrivals that reuse the current query (the task
+  // suggestion is never recomputed here). A refresh preserves the settled
+  // key whenever it survives; when the row is gone the first remaining
+  // selectable row wins, and an untouched picker also adopts the revised
+  // default as its initial key. Any query change applies PT7 first-row
+  // selection. Clearing a query never erases the fact that the user
+  // interacted.
+  updateQuery(query, origin = "input") {
     const nextQuery = String(query === null || query === undefined ? "" : query);
-    if (nextQuery !== this.query && this.hiddenThemeRows.size > 0) {
+    const queryChanged = nextQuery !== this.query;
+    if (queryChanged && this.hiddenThemeRows.size > 0) {
       this.hiddenThemeRows.clear();
     }
+    const previousKey = selectedPomodoroPickerKey(this.rows, this.selectedIndex);
     this.query = nextQuery;
     const built = buildPomodoroLinkPickerRows(this.model, this.query, {
       themesApi: this.themesApi,
       hiddenRows: this.hiddenThemeRows,
     });
     this.rows = built.rows;
-    this.selectedIndex = built.selectedIndex;
+    if (!queryChanged && origin === "refresh") {
+      const preserved = previousKey !== null
+        ? this.rows.findIndex((row) => row && row.key === previousKey)
+        : -1;
+      if (preserved >= 0) {
+        this.selectedIndex = preserved;
+      } else if (!this.interacted && previousKey === null) {
+        this.selectedIndex = built.selectedIndex;
+        this.initialKey = selectedPomodoroPickerKey(this.rows, this.selectedIndex);
+      } else {
+        this.selectedIndex = firstSelectablePomodoroPickerIndex(this.rows);
+        if (!this.interacted) {
+          this.initialKey = selectedPomodoroPickerKey(this.rows, this.selectedIndex);
+        }
+      }
+    } else {
+      if (queryChanged) {
+        this.interacted = true;
+      }
+      this.selectedIndex = built.selectedIndex;
+      if (origin === "init") {
+        this.initialKey = selectedPomodoroPickerKey(this.rows, this.selectedIndex);
+      }
+    }
     this.renderRows();
   }
 
@@ -7693,6 +8117,8 @@ class PomodoroLinkPickerModal extends Modal {
       const intent = resolvePomodoroLinkCreateIntent(this.model, this.query);
       this.shiftHintEl.style.display = intent.kind === "none" ? "none" : "";
     }
+
+    this.updateThemeFooter();
   }
 
   renderRow(row, index) {
@@ -7734,19 +8160,58 @@ class PomodoroLinkPickerModal extends Modal {
   }
 
   rowLabel(row) {
+    let label = null;
     if (row.kind === "existing") {
-      return pomodoroLinkPickerRowLabel(row.entry, this.now);
+      label = pomodoroLinkPickerRowLabel(row.entry, this.now);
+    } else if (row.kind === "recent") {
+      label = `New Pomodoro ${row.name}, Recent, ${formatBlockPomodoroThemeRecentMeta(row.theme)}`;
+    } else if (row.kind === "new") {
+      label = `${row.unconfigured ? "Not in your themes, " : ""}New Pomodoro ${row.name}`;
+    } else {
+      return row.message || "";
     }
-
-    if (row.kind === "recent") {
-      return `New Pomodoro ${row.name}, Recent, ${formatBlockPomodoroThemeRecentMeta(row.theme)}`;
+    // Color is never the only cue: suggested rows name their origin aloud.
+    if (row.suggested === true) {
+      label += pomodoroThemeSuggestedLabelSuffix(row.themeSuggestion);
     }
+    return label;
+  }
 
-    if (row.kind === "new") {
-      return `${row.unconfigured ? "Not in your themes, " : ""}New Pomodoro ${row.name}`;
+  // Suggestion reason under the row meta: `Suggested · this task`,
+  // `Suggested · reading task`, `Suggested · daily review`, or
+  // `Suggested · from ● <stem>` plus the suggested theme pill. The dot
+  // carries the place hue (from.hue) and the pill the theme hue, reusing
+  // the PT6 swatch tokens.
+  renderSuggestionReason(textEl, row) {
+    if (!row || row.suggested !== true) {
+      return;
     }
-
-    return row.message || "";
+    const reason = pomodoroThemeSuggestionReason(row.themeSuggestion);
+    if (!reason) {
+      return;
+    }
+    const reasonEl = textEl.createDiv({ cls: "bid-ppk-suggest", attr: { role: "note" } });
+    const tailEl = reasonEl.createSpan({ cls: "bid-ppk-suggest-text" });
+    tailEl.appendText("Suggested · ");
+    if (reason.kind === "note") {
+      tailEl.appendText("from ");
+      if (reason.placeHue) {
+        tailEl.createSpan({
+          cls: `bid-ppk-theme-swatch is-${reason.placeHue}`,
+          attr: { "aria-hidden": "true" },
+        });
+        tailEl.appendText(` ${reason.stem}`);
+      } else {
+        tailEl.appendText(reason.stem);
+      }
+    } else {
+      tailEl.appendText(reason.text);
+    }
+    if (reason.themeName) {
+      const pillEl = reasonEl.createSpan({ cls: "bid-ppk-pill is-suggested-theme" });
+      renderBlockPomodoroThemeSwatches(pillEl, this.themesApi, reason.themeName);
+      pillEl.appendText(reason.themeName);
+    }
   }
 
   renderExistingRow(rowEl, row, isSelected) {
@@ -7760,6 +8225,7 @@ class PomodoroLinkPickerModal extends Modal {
     renderBlockPomodoroThemeSwatches(titleEl, this.themesApi, entry.name);
     appendHighlighted(titleEl, entry.title, this.query);
     this.renderExistingMeta(textEl, entry);
+    this.renderSuggestionReason(textEl, row);
 
     const rightEl = rowEl.createDiv({ cls: "bid-ppk-row-right" });
     if (entry.running) {
@@ -7863,6 +8329,7 @@ class PomodoroLinkPickerModal extends Modal {
       cls: "bid-ppk-row-meta",
       text: pomodoroLinkCreateRowMeta(row, this.model),
     });
+    this.renderSuggestionReason(textEl, row);
 
     const rightEl = rowEl.createDiv({ cls: "bid-ppk-row-right" });
     rightEl.createDiv({ cls: "bid-ppk-pill is-new", text: "New" });
@@ -7912,6 +8379,7 @@ class PomodoroLinkPickerModal extends Modal {
         ? `${formatBlockPomodoroThemeRecentMeta(row.theme)} · Hidden · ⌃D undo`
         : formatBlockPomodoroThemeRecentMeta(row.theme),
     });
+    this.renderSuggestionReason(textEl, row);
 
     const rightEl = rowEl.createDiv({ cls: "bid-ppk-row-right" });
     rightEl.createDiv({
@@ -7991,33 +8459,25 @@ class PomodoroLinkPickerModal extends Modal {
     if (!row || !row.selectable) {
       return;
     }
+    // The standalone deliberate helper keeps commitRow usable on partial
+    // doubles that only stub rows/settleChoice.
+    const deliberate = pomodoroPickerRowDeliberate(this.initialKey, this.query, row);
+    this.settleChoice(this.choiceForRow(row, deliberate, false));
+  }
 
-    if (row.kind === "new") {
-      this.settleChoice({
-        kind: "new",
-        name: row.name,
-        ...(row.preserveSpelling === true ? { preserveSpelling: true } : {}),
-      });
+  // Alt+Enter commits the selected row once: linkOnce without remembering
+  // a theme, so deliberate stays false even on a non-default row.
+  commitLinkOnce() {
+    const row = this.rows[this.selectedIndex];
+    if (!row || !row.selectable) {
       return;
     }
-
-    if (row.kind === "recent") {
-      this.settleChoice({ kind: "new", name: row.name, preserveSpelling: true });
-      return;
-    }
-
-    if (row.kind === "existing") {
-      this.settleChoice({
-        kind: "existing",
-        entryLine: row.entry.entryLine,
-        entryText: row.entry.entryText,
-        title: row.entry.title,
-      });
-    }
+    this.settleChoice(this.choiceForRow(row, false, true));
   }
 
   // ⇧↵ creates from the typed text even when other rows match; an exact
-  // open name links there instead (never a duplicate open name).
+  // open name links there instead (never a duplicate open name). Committing
+  // a named intent is always deliberate.
   commitCreateIntent() {
     const intent = resolvePomodoroLinkCreateIntent(this.model, this.query);
     if (intent.kind === "new") {
@@ -8028,24 +8488,20 @@ class PomodoroLinkPickerModal extends Modal {
         (row) => row.kind === "recent" && row.theme && row.theme.key === canonicalKey,
       );
       if (exactRecent) {
-        this.settleChoice({
-          kind: "new",
-          name: exactRecent.name,
-          preserveSpelling: true,
-        });
+        this.settleChoice(this.choiceForRow(exactRecent, true, false));
         return;
       }
-      this.settleChoice({ kind: "new", name: intent.name });
+      this.settleChoice(this.withTaskIntent({ kind: "new", name: intent.name }, true, false));
       return;
     }
 
     if (intent.kind === "existing" && intent.entry) {
-      this.settleChoice({
+      this.settleChoice(this.withTaskIntent({
         kind: "existing",
         entryLine: intent.entry.entryLine,
         entryText: intent.entry.entryText,
         title: intent.entry.title,
-      });
+      }, true, false));
     }
   }
 }
@@ -10520,6 +10976,21 @@ class BlockIdPromptPomodoroLinksMixin {
 // Shared meter and creation projection for direct picker opens and the
 // versioned public API. A supplied task is projected through the same guarded
 // Pomodoro insertion planner in either entry point.
+// The task's own line text (one-based line into the full live note) powers
+// the footer's pending-edit preview; its presence marks a pick task-aware.
+// Anything unreadable degrades to "" while staying task-aware.
+function taskLineTextAt(text, oneBasedLine) {
+  try {
+    if (typeof text !== "string" || !Number.isInteger(oneBasedLine) || oneBasedLine < 1) {
+      return "";
+    }
+    const lines = text.split("\n");
+    return oneBasedLine - 1 < lines.length ? lines[oneBasedLine - 1] : "";
+  } catch (_error) {
+    return "";
+  }
+}
+
 function createBlockPomodoroLinkPickerBudget(plugin, options = {}) {
   const current = plugin.readPlanBudgetMeter(options.dailyContent);
   const task = options.task || {};
@@ -10667,9 +11138,15 @@ class BlockIdPromptPomodoroLinkPickerMixin {
       );
       attachBlockPomodoroThemePickerSnapshot(model, themeSnapshot);
 
+      // The task's own line (source.line is zero-based) powers the footer's
+      // pending-edit preview; the direct gesture is always task-aware.
       const request = {
         model,
-        task: { displayText, status: task.status },
+        task: {
+          displayText,
+          status: task.status,
+          lineText: taskLineTextAt(taskText, Number.isInteger(source.line) ? source.line + 1 : 0),
+        },
         needsBlockId,
         now: this.now(),
         budget,
@@ -10912,11 +11389,16 @@ function normalizePomodoroLinkPickerChoice(choice) {
         return null;
       }
       const title = typeof choice.title === "string" ? choice.title : "";
+      // A malformed optional intent is dropped so it can never enable a
+      // write; absent intent keeps the legacy return shape. API version
+      // stays 1.
+      const existingIntent = normalizePomodoroLinkPickerThemeIntent(choice.themeIntent);
       return {
         kind: "existing",
         entryLine: choice.entryLine,
         entryText: choice.entryText,
         title,
+        ...(existingIntent ? { themeIntent: existingIntent } : {}),
       };
     }
     if (choice.kind === "new") {
@@ -10924,10 +11406,12 @@ function normalizePomodoroLinkPickerChoice(choice) {
       if (!name || /[\r\n]/.test(name)) {
         return null;
       }
+      const newIntent = normalizePomodoroLinkPickerThemeIntent(choice.themeIntent);
       return {
         kind: "new",
         name,
         ...(choice.preserveSpelling === true ? { preserveSpelling: true } : {}),
+        ...(newIntent ? { themeIntent: newIntent } : {}),
       };
     }
     return null;
@@ -11042,9 +11526,14 @@ class BlockIdPromptPomodoroLinkPickerApiMixin {
       const status = taskContext && typeof candidateTask.status === "string"
         ? candidateTask.status
         : " ";
+      // The task line text powers the footer's pending-edit preview; its
+      // presence marks the pick task-aware even when no suggestion resolved.
+      const taskLineText = taskContext ? taskLineTextAt(taskContext.text, taskContext.line) : "";
       const pickerRequest = {
         model,
-        task: { displayText, status },
+        task: taskContext
+          ? { displayText, status, lineText: taskLineText }
+          : { displayText, status },
         needsBlockId: false,
         now: this.now(),
         budget,
@@ -12432,6 +12921,12 @@ module.exports.helpers = {
   buildPomodoroLinkPickerRows,
   withPomodoroThemeHistoryRows,
   chooseBlockPomodoroThemePreselection,
+  describePomodoroThemeFooterPreview,
+  destinationPomodoroRowName,
+  normalizePomodoroLinkPickerThemeIntent,
+  pomodoroPickerRowDeliberate,
+  pomodoroThemeSuggestionReason,
+  pomodoroThemeSuggestedLabelSuffix,
   blockPomodoroThemeUnconfigured,
   blockPomodoroThemeUnconfiguredNames,
   buildTaskDependencyIndex,
@@ -12490,6 +12985,7 @@ module.exports.helpers = {
   planExplicitPomodoroLinkInsertion,
   PomodoroLinkPickerModal,
   createPomodoroLinkPickerApi,
+  taskLineTextAt,
   normalizePomodoroLinkPickerChoice,
   pomodoroLinkSelectorSlug,
   pomodoroRunProgress,

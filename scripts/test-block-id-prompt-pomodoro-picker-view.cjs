@@ -115,20 +115,83 @@ function openPicker(options = {}) {
     now = NOW,
     budget = null,
     themesApi = null,
+    lineText = null,
+    themeSnapshot = null,
   } = options;
   const model = helpers.buildPomodoroLinkPickerModel(daily, { now });
   assert.equal(model.ok, true);
+  if (themeSnapshot) {
+    model.themeSnapshot = themeSnapshot;
+    model.themeSuggestion = themeSnapshot.suggestion;
+  }
   const modal = new helpers.PomodoroLinkPickerModal(
     themesApi
       ? { plugins: { plugins: { "bob-ledger-tools": { api: { themes: themesApi } } } } }
       : {},
-    { model, task, needsBlockId, now, budget },
+    {
+      model,
+      task: lineText === null ? task : { ...task, lineText },
+      needsBlockId,
+      now,
+      budget,
+    },
   );
   modal.open();
   return modal;
 }
 
-function createThemesApi(initialThemes) {
+// A canned Ledger Tools field/parser pair mirroring the real pure rule closely
+// enough to exercise the footer's wiring: single non-exempt destination
+// components set, matching inherited defaults clear, anything else is none.
+function stubTaskThemeOf(lineText) {
+  const fields = [...String(lineText || "").matchAll(/\[theme::\s*([^\]]*)\]/g)]
+    .map((match) => match[1].trim())
+    .filter(Boolean);
+  if (fields.length === 0) {
+    return { state: "none" };
+  }
+  if (fields.length > 1) {
+    return { state: "repair", repair: "duplicate" };
+  }
+  return { state: "set", value: fields[0].toUpperCase(), key: fields[0].toLowerCase() };
+}
+
+function stubPlanThemeChange({ field, suggestion, inherited, destinationName, exemptKeys, deliberate }) {
+  const keyOf = (value) => {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+    const theme = value.theme;
+    const raw = theme && typeof theme.key === "string"
+      ? theme.key
+      : (typeof value.key === "string" ? value.key : "");
+    const key = raw.trim().toLowerCase();
+    return key || null;
+  };
+  if (deliberate !== true || !keyOf(suggestion)) {
+    return { action: "none" };
+  }
+  const exempt = new Set(
+    (Array.isArray(exemptKeys) ? exemptKeys : []).map((key) => String(key).trim().toLowerCase()),
+  );
+  const parts = String(destinationName || "")
+    .split("+")
+    .map((part) => part.trim())
+    .filter((part) => part && !exempt.has(part.toLowerCase()));
+  if (parts.length !== 1) {
+    return { action: "none" };
+  }
+  const destKey = parts[0].toLowerCase();
+  if (keyOf(inherited) === destKey) {
+    return field && field.state !== "none" ? { action: "clear" } : { action: "none" };
+  }
+  if (field && field.state === "set" && field.key === destKey) {
+    return { action: "none" };
+  }
+  return { action: "set", name: parts[0].toUpperCase(), key: destKey };
+}
+
+function createThemesApi(initialThemes, extra = {}) {
   const themes = initialThemes.map((theme) => ({ ...theme }));
   const hidden = new Set(themes.filter((theme) => theme.hidden).map((theme) => theme.key));
   const listeners = new Set();
@@ -171,7 +234,46 @@ function createThemesApi(initialThemes) {
     },
     writes,
   };
-  return api;
+  return Object.assign(api, extra);
+}
+
+// Build the task-aware snapshot the entry points attach: suggestion, choice,
+// and the detached inputs the preselection helper consumed.
+function makeThemeSnapshot(model, { suggestion, choice, exemptKeys = ["PLAN"] }) {
+  return {
+    suggestion,
+    choice,
+    entries: model.entries.map((entry) => ({
+      name: entry.name || null,
+      open: true,
+      running: entry.running === true,
+      entryLine: entry.entryLine,
+      componentKeys: String(entry.name || "")
+        .split("+")
+        .map((raw) => raw.trim().toLowerCase().replace(/\s+/g, " "))
+        .filter(Boolean),
+    })),
+    exemptKeys,
+    strict: false,
+    maxThemes: 3,
+    planMeter: { themes: { count: 1, cap: 3, over: false } },
+    ledgerKeys: ["capture", "later"],
+  };
+}
+
+function noteSuggestion() {
+  return {
+    theme: { key: "write", name: "WRITE", known: true, hue: "violet", hue_source: "hash" },
+    source: "note",
+    label: "from sase_blog",
+    from: {
+      path: "Areas/sase_blog.md",
+      stem: "sase_blog",
+      kind: "area",
+      chain: ["Areas/sase_blog.md"],
+      hue: "aqua",
+    },
+  };
 }
 
 function type(modal, value) {
@@ -908,4 +1010,436 @@ test("Today exclusions apply before query filtering; cancelled themes stay Recen
   });
   assert.deepEqual(rowTitles(cancelled), ["HERE", "New Pomodoro GONE"]);
   cancelled.close();
+});
+
+function footerText(modal) {
+  const footer = findByClass(modal.contentEl, "bid-ppk-theme-footer");
+  assert.ok(footer, "the theme footer line exists");
+  return { footer, text: textOf(footer), hidden: footer.style.display === "none" };
+}
+
+function openSuggestedEntryPicker({ suggestion = noteSuggestion(), lineText = "- [*] #task Ship it", themes = [], extra = {} } = {}) {
+  const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
+  const snapshot = makeThemeSnapshot(probe, {
+    suggestion,
+    choice: { kind: "entry", index: 0 },
+  });
+  const themesApi = createThemesApi(themes, {
+    taskThemeOf: stubTaskThemeOf,
+    planThemeChange: stubPlanThemeChange,
+    ...extra,
+  });
+  return openPicker({ themesApi, lineText, themeSnapshot: snapshot });
+}
+
+test("suggested entry rows render the reason, dot, theme pill, and accessible label", () => {
+  const modal = openSuggestedEntryPicker({
+    extra: { hueFor: (key) => ({ hue: key === "write" ? "violet" : "blue", hue_source: "test" }) },
+  });
+  const rows = findAllByClass(modal.contentEl, "bid-ppk-row");
+  const reason = findByClass(rows[0], "bid-ppk-suggest");
+  assert.ok(reason, "the suggested row carries a reason line");
+  assert.equal(reason.getAttribute("role"), "note");
+  assert.match(textOf(reason), /Suggested · from /);
+  assert.match(textOf(reason), /sase_blog/);
+  assert.match(textOf(reason), /WRITE/);
+  const dot = findAllByClass(reason, "bid-ppk-theme-swatch").find((swatch) =>
+    swatch.classes.includes("is-aqua"),
+  );
+  assert.ok(dot, "the place dot carries the from.hue tint token");
+  const pill = findAllByClass(reason, "bid-ppk-pill").find((candidate) =>
+    candidate.classes.includes("is-suggested-theme"),
+  );
+  assert.ok(pill, "the suggested theme renders as a pill");
+  assert.match(textOf(pill), /WRITE/);
+  assert.ok(
+    findAllByClass(pill, "bid-ppk-theme-swatch").some((swatch) => swatch.classes.includes("is-violet")),
+    "the theme pill carries the theme hue token",
+  );
+  assert.match(
+    rows[0].getAttribute("aria-label"),
+    /suggested, from sase_blog/,
+    "color is never the only cue",
+  );
+  modal.close();
+});
+
+test("reading and review suggestions render their own reasons and footer phrases", () => {
+  const reading = {
+    theme: { key: "read", name: "READ", known: true, hue: "blue", hue_source: "hash" },
+    source: "reading",
+    label: "reading task",
+  };
+  const modal = openSuggestedEntryPicker({ suggestion: reading });
+  const rows = findAllByClass(modal.contentEl, "bid-ppk-row");
+  const reason = findByClass(rows[0], "bid-ppk-suggest");
+  assert.ok(reason);
+  assert.match(textOf(reason), /Suggested · reading task/);
+  assert.match(rows[0].getAttribute("aria-label"), /suggested, reading task/);
+  modal.close();
+
+  const review = {
+    theme: { key: "plan", name: "PLAN", known: true, hue: "green", hue_source: "hash" },
+    source: "review",
+    label: "daily review",
+  };
+  // PLAN is exempt, so the footer hides: the review row still explains itself.
+  const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
+  const snapshot = makeThemeSnapshot(probe, { suggestion: review, choice: { kind: "entry", index: 0 } });
+  const themesApi = createThemesApi([], { taskThemeOf: stubTaskThemeOf, planThemeChange: stubPlanThemeChange });
+  const reviewModal = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
+  const reviewRows = findAllByClass(reviewModal.contentEl, "bid-ppk-row");
+  assert.match(textOf(findByClass(reviewRows[0], "bid-ppk-suggest")), /Suggested · daily review/);
+  assert.match(reviewRows[0].getAttribute("aria-label"), /suggested, daily review/);
+  reviewModal.close();
+});
+
+test("footer previews the pending set and clear with the suggestion source", () => {
+  const modal = openSuggestedEntryPicker();
+  // Untouched default CAPTURE: single non-exempt component, deliberate via
+  // seeded initial-key difference below; first force deliberate by typing.
+  type(modal, "capture");
+  const shown = footerText(modal);
+  assert.equal(shown.hidden, false);
+  assert.equal(
+    shown.text,
+    "this task becomes CAPTURE · sase_blog suggests WRITE · ⌥↵ link once",
+  );
+  modal.close();
+
+  const clearModal = openSuggestedEntryPicker({ lineText: "- [*] #task Ship it [theme:: WRITE]" });
+  type(clearModal, "write");
+  // WRITE matches the inherited default: the pending edit clears the field.
+  const cleared = footerText(clearModal);
+  assert.equal(cleared.hidden, false);
+  assert.equal(
+    cleared.text,
+    "task theme cleared · sase_blog suggests WRITE · ⌥↵ link once",
+  );
+  clearModal.close();
+});
+
+test("footer hides without task context, APIs, suggestion, or effective edit", () => {
+  const plain = openPicker();
+  assert.equal(footerText(plain).hidden, true);
+  assert.equal(footerText(plain).text, "");
+  plain.close();
+
+  // No theme APIs: task-aware but no preview.
+  const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
+  const snapshot = makeThemeSnapshot(probe, {
+    suggestion: noteSuggestion(),
+    choice: { kind: "entry", index: 0 },
+  });
+  const noApis = openPicker({ lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
+  assert.equal(footerText(noApis).hidden, true);
+  noApis.close();
+
+  // Effective edit absent: destination already matches the task field.
+  const settled = openSuggestedEntryPicker({ lineText: "- [*] #task Ship it [theme:: CAPTURE]" });
+  type(settled, "capture");
+  assert.equal(footerText(settled).hidden, true);
+  settled.close();
+});
+
+test("footer refreshes on selection moves and hides on inert rows", async () => {
+  const modal = openSuggestedEntryPicker();
+  type(modal, "capture");
+  assert.equal(footerText(modal).hidden, false);
+  modal.moveSelection(1);
+  // Only one row matches "capture": the move wraps to the same row.
+  assert.equal(selectedTitle(modal), "CAPTURE");
+  type(modal, "!!!");
+  assert.equal(footerText(modal).hidden, true, "invalid rows have no destination");
+  modal.close();
+});
+
+test("untouched refresh preserves the settled key; arrivals adopt a first default", async () => {
+  const modal = openSuggestedEntryPicker({
+    themes: [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2 }],
+  });
+  const firstKey = modal.rows[modal.selectedIndex].key;
+  assert.equal(modal.initialKey, firstKey);
+  assert.equal(modal.interacted, false);
+
+  // A catalog arrival that keeps the settled row moves nothing.
+  await modal.themesApi.hide("WRITE");
+  await tick();
+  assert.equal(modal.interacted, false);
+  assert.equal(modal.rows[modal.selectedIndex].key, firstKey);
+  assert.equal(modal.initialKey, firstKey, "the initial key does not follow refreshes");
+  modal.close();
+
+  // An empty picker that gains its first rows adopts them as the default.
+  const emptyDaily = ["## Pomodoros", "- [x] () — DONE"].join("\n");
+  let catalog = [];
+  let emit = null;
+  const api = createThemesApi([], { taskThemeOf: stubTaskThemeOf, planThemeChange: stubPlanThemeChange });
+  api.historyRows = ({ query = "", limit = 5, exclusions = new Set() } = {}) => {
+    const needle = String(query).trim().toLowerCase();
+    return catalog
+      .filter((theme) => !exclusions.has(theme.key))
+      .filter((theme) => !needle || theme.name.toLowerCase().includes(needle))
+      .slice(0, limit);
+  };
+  api.onChange = (listener) => {
+    emit = listener;
+    return () => {};
+  };
+  const empty = openPicker({ daily: emptyDaily, themesApi: api, lineText: "- [*] #task Ship it" });
+  assert.equal(empty.selectedIndex, -1);
+  assert.equal(empty.initialKey, null);
+  assert.equal(empty.interacted, false);
+  catalog = [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2 }];
+  emit({ reason: "test" });
+  assert.equal(empty.rows.length, 1);
+  assert.equal(empty.rows[0].kind, "recent");
+  assert.equal(empty.selectedIndex, 0, "the arrival becomes the untouched default");
+  assert.equal(empty.initialKey, empty.rows[0].key);
+  assert.equal(empty.interacted, false);
+  empty.close();
+});
+
+test("refresh after typing preserves the user's position and initial key", async () => {
+  const modal = openSuggestedEntryPicker({
+    themes: [
+      { key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2 },
+      { key: "other", name: "OTHER", last_used: "2026-08-14", days_used: 1 },
+    ],
+  });
+  const initialKey = modal.initialKey;
+  type(modal, "other");
+  assert.equal(modal.interacted, true);
+  assert.equal(selectedTitle(modal), "New Pomodoro OTHER");
+  const userKey = modal.rows[modal.selectedIndex].key;
+
+  await modal.themesApi.hide("WRITE");
+  await tick();
+  assert.equal(modal.rows[modal.selectedIndex].key, userKey, "refresh keeps the user's row");
+  assert.equal(modal.initialKey, initialKey, "the initial key does not follow refreshes");
+  const choicePromise = modal.waitForChoice();
+  pressKey(modal, "Enter");
+  const choice = await choicePromise;
+  assert.equal(choice.themeIntent.deliberate, true, "a typed query is deliberate");
+  assert.equal(choice.themeIntent.linkOnce, false);
+});
+
+test("removed rows fall back deterministically without clearing interaction", async () => {
+  const modal = openSuggestedEntryPicker({
+    themes: [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2 }],
+  });
+  modal.moveSelection(2);
+  assert.equal(modal.rows[modal.selectedIndex].kind, "recent");
+  assert.equal(modal.interacted, true);
+
+  await modal.themesApi.hide("WRITE");
+  await tick();
+  assert.equal(modal.interacted, true, "a refresh never clears interaction state");
+  assert.notEqual(modal.rows[modal.selectedIndex].kind, "recent");
+  assert.equal(modal.selectedIndex, modal.rows.findIndex((row) => row.selectable));
+  modal.close();
+});
+
+test("clearing a query keeps interaction but returning home is not deliberate", async () => {
+  const modal = openSuggestedEntryPicker();
+  const homeKey = modal.initialKey;
+  type(modal, "later");
+  assert.equal(modal.interacted, true);
+  type(modal, "");
+  assert.equal(modal.interacted, true, "clearing never erases interaction");
+  assert.equal(modal.rows[modal.selectedIndex].key, homeKey, "PT7 restores the default row");
+  const promise = modal.waitForChoice();
+  pressKey(modal, "Enter");
+  const choice = await promise;
+  assert.equal(choice.themeIntent.deliberate, false, "home with empty query is not deliberate");
+  assert.deepEqual(choice.themeIntent.shown, noteSuggestion());
+});
+
+test("suggestion never recomputes on refresh and survives API changes", async () => {
+  let suggestCalls = 0;
+  const themesApi = createThemesApi(
+    [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2 }],
+    {
+      taskThemeOf: stubTaskThemeOf,
+      planThemeChange: stubPlanThemeChange,
+      suggestFor: () => {
+        suggestCalls += 1;
+        throw new Error("suggestFor must not run on refresh");
+      },
+    },
+  );
+  const modal = openSuggestedEntryPicker({ themesApi, themes: [] });
+  // openSuggestedEntryPicker builds its own api; swap in the spy instead.
+  modal.close();
+  const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
+  const snapshot = makeThemeSnapshot(probe, {
+    suggestion: noteSuggestion(),
+    choice: { kind: "entry", index: 0 },
+  });
+  const spied = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
+  const presented = JSON.parse(JSON.stringify(spied.shownSuggestion));
+  type(spied, "later");
+  await spied.themesApi.hide("WRITE");
+  await tick();
+  assert.equal(suggestCalls, 0);
+  assert.deepEqual(spied.shownSuggestion, presented, "shown is preserved independently");
+  spied.close();
+});
+
+test("deferred fetch leaves the untouched default in place; late arrivals after close are safe", async () => {
+  const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
+  const snapshot = makeThemeSnapshot(probe, {
+    suggestion: noteSuggestion(),
+    choice: { kind: "entry", index: 0 },
+  });
+  let catalog = [];
+  let fetchResolve = null;
+  const themesApi = createThemesApi([], {
+    taskThemeOf: stubTaskThemeOf,
+    planThemeChange: stubPlanThemeChange,
+    fetch: () => new Promise((resolve) => {
+      fetchResolve = resolve;
+    }),
+  });
+  themesApi.historyRows = ({ query = "", limit = 5, exclusions = new Set() } = {}) => {
+    const needle = String(query).trim().toLowerCase();
+    return catalog
+      .filter((theme) => !exclusions.has(theme.key))
+      .filter((theme) => !needle || theme.name.toLowerCase().includes(needle))
+      .slice(0, limit);
+  };
+  const model = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
+  model.themeSnapshot = snapshot;
+  model.themeSuggestion = snapshot.suggestion;
+  const modal = new helpers.PomodoroLinkPickerModal(
+    { plugins: { plugins: { "bob-ledger-tools": { api: { themes: themesApi } } } } },
+    { model, task: { displayText: "Ship it", status: " ", lineText: "- [*] #task Ship it" }, now: NOW, budget: null },
+  );
+  modal.open();
+  assert.equal(modal.rows[modal.selectedIndex].entry.name, "CAPTURE");
+  const homeKey = modal.initialKey;
+  assert.equal(modal.interacted, false);
+  catalog = [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2 }];
+  fetchResolve({ report: { themes: catalog }, stale: false, error: null });
+  await tick();
+  await tick();
+  assert.ok(
+    modal.rows.some((row) => row.kind === "recent" && row.theme.key === "write"),
+    "the fetch arrival adds catalog rows",
+  );
+  assert.equal(modal.rows[modal.selectedIndex].key, homeKey, "the untouched default does not move");
+  assert.equal(modal.initialKey, homeKey);
+  assert.equal(modal.interacted, false);
+  const promise = modal.waitForChoice();
+  pressKey(modal, "Enter");
+  assert.equal((await promise).themeIntent.deliberate, false);
+  fetchResolve({ report: { themes: catalog }, stale: false, error: null });
+  await tick();
+});
+
+test("Alt+Enter links once without remembering; plain commits carry deliberate intent", async () => {
+  const modal = openSuggestedEntryPicker();
+  modal.moveSelection(1);
+  assert.equal(modal.rows[modal.selectedIndex].entry.name, "LATER");
+  const promise = modal.waitForChoice();
+  pressKey(modal, "Enter", { altKey: true });
+  const choice = await promise;
+  assert.equal(choice.kind, "existing");
+  assert.deepEqual(choice.themeIntent, {
+    deliberate: false,
+    linkOnce: true,
+    shown: noteSuggestion(),
+  });
+});
+
+test("Enter, click, and Ctrl+Shift+Enter share the deliberate rule", async () => {
+  const untouched = openSuggestedEntryPicker();
+  const untouchedPromise = untouched.waitForChoice();
+  pressKey(untouched, "Enter");
+  assert.deepEqual((await untouchedPromise).themeIntent, {
+    deliberate: false,
+    linkOnce: false,
+    shown: noteSuggestion(),
+  });
+
+  const doubleTap = openSuggestedEntryPicker();
+  const doublePromise = doubleTap.waitForChoice();
+  pressKey(doubleTap, "Enter");
+  pressKey(doubleTap, "Enter");
+  assert.equal((await doublePromise).themeIntent.deliberate, false, "untouched double tap is not deliberate");
+
+  const moved = openSuggestedEntryPicker();
+  moved.moveSelection(1);
+  const movedPromise = moved.waitForChoice();
+  pressKey(moved, "Enter", { ctrlKey: true, shiftKey: true });
+  const movedChoice = await movedPromise;
+  assert.equal(movedChoice.kind, "existing");
+  assert.equal(movedChoice.title, "LATER");
+  assert.equal(movedChoice.themeIntent.deliberate, true);
+  assert.equal(movedChoice.themeIntent.linkOnce, false);
+
+  const tapped = openSuggestedEntryPicker();
+  const tappedPromise = tapped.waitForChoice();
+  const rows = findAllByClass(tapped.contentEl, "bid-ppk-row");
+  click(rows[1]);
+  const tappedChoice = await tappedPromise;
+  assert.equal(tappedChoice.title, "LATER");
+  assert.equal(tappedChoice.themeIntent.deliberate, true, "clicking away from home is deliberate");
+});
+
+test("Shift+Enter named commits are always deliberate", async () => {
+  const created = openSuggestedEntryPicker();
+  type(created, "focus");
+  const createPromise = created.waitForChoice();
+  pressKey(created, "Enter", { shiftKey: true });
+  const createChoice = await createPromise;
+  assert.deepEqual(createChoice, {
+    kind: "new",
+    name: "FOCUS",
+    themeIntent: { deliberate: true, linkOnce: false, shown: noteSuggestion() },
+  });
+
+  const exact = openSuggestedEntryPicker();
+  type(exact, "capture");
+  const exactPromise = exact.waitForChoice();
+  pressKey(exact, "Enter", { shiftKey: true });
+  const exactChoice = await exactPromise;
+  assert.equal(exactChoice.kind, "existing");
+  assert.equal(exactChoice.title, "CAPTURE");
+  assert.equal(exactChoice.themeIntent.deliberate, true);
+});
+
+test("cancellation writes nothing even when task-aware", async () => {
+  const modal = openSuggestedEntryPicker();
+  const promise = modal.waitForChoice();
+  pressKey(modal, "Escape");
+  assert.equal(await promise, null);
+});
+
+test("Ctrl+D on the suggested create row is consumed without writes", async () => {
+  const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
+  const snapshot = makeThemeSnapshot(probe, {
+    suggestion: noteSuggestion(),
+    choice: { kind: "create" },
+  });
+  const themesApi = createThemesApi(
+    [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2, hidden: true }],
+    { taskThemeOf: stubTaskThemeOf, planThemeChange: stubPlanThemeChange },
+  );
+  const modal = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
+  assert.equal(modal.rows[modal.selectedIndex].suggestedCreate, true);
+  assert.ok(
+    (modal.rows[modal.selectedIndex].hiddenThemes || []).length > 0,
+    "the hidden suggestion stays eligible",
+  );
+  pressKey(modal, "d", { ctrlKey: true });
+  await tick();
+  assert.deepEqual(themesApi.writes, [], "no hide/unhide calls for the suggested row");
+  assert.equal(modal.rows[modal.selectedIndex].suggestedCreate, true);
+  assert.equal(themesApi.isHidden("WRITE"), true, "the suggestion stays hidden");
+  assert.match(
+    modal.rows[modal.selectedIndex].kind === "new" ? "new" : "other",
+    /new/,
+  );
+  modal.close();
 });

@@ -686,7 +686,7 @@ function startBlockPomodoroThemePicker(modal) {
     if (typeof api.onChange === "function") {
       modal.themesUnsubscribe = api.onChange(() => {
         if (!modal.settled) {
-          modal.updateQuery(modal.query);
+          modal.updateQuery(modal.query, "refresh");
         }
       });
     }
@@ -697,7 +697,7 @@ function startBlockPomodoroThemePicker(modal) {
     Promise.resolve(api.fetch())
       .then(() => {
         if (!modal.settled) {
-          modal.updateQuery(modal.query);
+          modal.updateQuery(modal.query, "refresh");
         }
       })
       .catch(() => {});
@@ -723,6 +723,12 @@ async function toggleBlockPomodoroThemeVisibility(modal) {
   }
   if (row.kind === "existing") {
     new Notice("Today's Pomodoros stay visible; Ctrl+D hides Recent themes");
+    return;
+  }
+  // The suggested create row is the picker's current recommendation: Ctrl+D
+  // is consumed without hide/unhide calls, including a hidden suggestion.
+  if (row.suggestedCreate === true) {
+    new Notice("Suggested Pomodoros stay put; Ctrl+D hides Recent themes only");
     return;
   }
   const hiddenNames = row.kind === "recent" && row.hidden
@@ -758,7 +764,7 @@ async function toggleBlockPomodoroThemeVisibility(modal) {
         }
       }
     }
-    modal.updateQuery(modal.query);
+    modal.updateQuery(modal.query, "refresh");
     const selectedIndex = modal.rows.findIndex((candidate) => candidate.key === row.key);
     if (selectedIndex >= 0) {
       modal.selectedIndex = selectedIndex;

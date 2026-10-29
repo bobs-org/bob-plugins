@@ -187,3 +187,107 @@ test("plugin lifecycle installs the api and drops it on unload", async () => {
   plugin.onunload();
   assert.equal(await plugin.api.pomodoroLinkPicker.pick(), null);
 });
+
+test("task-aware choices retain a valid themeIntent; absent intent keeps the legacy shape", () => {
+  const { normalizePomodoroLinkPickerChoice } = helpers;
+  const shown = { theme: { key: "write", name: "WRITE" }, source: "note", label: "from dev" };
+  assert.deepEqual(
+    normalizePomodoroLinkPickerChoice({
+      kind: "existing",
+      entryLine: 4,
+      entryText: "- [ ] () — DEEP",
+      title: "DEEP",
+      themeIntent: { deliberate: false, linkOnce: true, shown },
+    }),
+    {
+      kind: "existing",
+      entryLine: 4,
+      entryText: "- [ ] () — DEEP",
+      title: "DEEP",
+      themeIntent: { deliberate: false, linkOnce: true, shown },
+    },
+  );
+  assert.deepEqual(
+    normalizePomodoroLinkPickerChoice({
+      kind: "new",
+      name: "WRITE",
+      preserveSpelling: true,
+      themeIntent: { deliberate: true, linkOnce: false, shown: null },
+    }),
+    {
+      kind: "new",
+      name: "WRITE",
+      preserveSpelling: true,
+      themeIntent: { deliberate: true, linkOnce: false, shown: null },
+    },
+  );
+});
+
+test("malformed themeIntent is dropped so it can never enable a write", () => {
+  const { normalizePomodoroLinkPickerChoice } = helpers;
+  const malformed = [
+    { deliberate: "yes", linkOnce: false, shown: null },
+    { deliberate: true, linkOnce: 1, shown: null },
+    { deliberate: true, linkOnce: false, shown: "write" },
+    { deliberate: true, linkOnce: false, shown: {} },
+    { deliberate: true, linkOnce: false, shown: { theme: {} } },
+    { deliberate: true, linkOnce: false, shown: { theme: { key: "" } } },
+    "intent",
+    42,
+  ];
+  for (const themeIntent of malformed) {
+    assert.deepEqual(
+      normalizePomodoroLinkPickerChoice({ kind: "new", name: "WRITE", themeIntent }),
+      { kind: "new", name: "WRITE" },
+      `drops ${JSON.stringify(themeIntent)}`,
+    );
+    assert.deepEqual(
+      normalizePomodoroLinkPickerChoice({
+        kind: "existing",
+        entryLine: 1,
+        entryText: "- [ ] () — WRITE",
+        title: "WRITE",
+        themeIntent,
+      }),
+      { kind: "existing", entryLine: 1, entryText: "- [ ] () — WRITE", title: "WRITE" },
+      `drops ${JSON.stringify(themeIntent)}`,
+    );
+  }
+});
+
+test("taskLineTextAt reads one-based lines and degrades to empty", () => {
+  const { taskLineTextAt } = helpers;
+  const text = ["## Tasks", "- [*] #task Ship it ^ship", "- [ ] Follow up"].join("\n");
+  assert.equal(taskLineTextAt(text, 2), "- [*] #task Ship it ^ship");
+  assert.equal(taskLineTextAt(text, 1), "## Tasks");
+  assert.equal(taskLineTextAt(text, 9), "");
+  assert.equal(taskLineTextAt(text, 0), "");
+  assert.equal(taskLineTextAt(text, -1), "");
+  assert.equal(taskLineTextAt(null, 1), "");
+  assert.equal(taskLineTextAt(undefined, 1), "");
+  assert.equal(taskLineTextAt(text, 1.5), "");
+});
+
+test("public pick tolerates an out-of-range task line and releases its guards", async () => {
+  const pick = Plugin.prototype.pickPomodoroLinkDestination;
+  const fake = {
+    promptOpen: false,
+    activePomodoroLinkPicker: null,
+    resolveTodayDailyFile: () => ({ path: "Daily.md" }),
+    resolveTaskFile: (path) => ({ path }),
+    readPlanBudgetMeter: Plugin.prototype.readPlanBudgetMeter,
+    buildPomodoroLinkTargetText: () => "",
+    resolveReferenceDestination: () => null,
+    now: () => new Date(2026, 8, 15),
+    app: {
+      workspace: {},
+      plugins: { plugins: {} },
+      vault: { read: async () => "## Pomodoros\n- [ ] () — CURRENT" },
+    },
+  };
+  assert.equal(await pick.call(fake, {
+    task: { path: "Tasks.md", line: 99, text: "- [*] #task Ship it", displayText: "Ship it", status: "*" },
+  }), null);
+  assert.equal(fake.promptOpen, false);
+  assert.equal(fake.activePomodoroLinkPicker, null);
+});

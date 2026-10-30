@@ -460,6 +460,17 @@
   cursor: default;
 }
 
+.bid-twl-pomodoro-banner {
+  display: none;
+  margin: 0 var(--size-4-4) var(--size-2-2);
+  padding: var(--size-2-2) var(--size-2-3);
+  border-left: 2px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+  background-color: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+}
+
 .bid-twl-status-pill.is-done,
 .bid-twl-status-pill.is-cancelled {
   color: var(--text-faint);
@@ -643,6 +654,16 @@
 
 .bid-twl-detail-action.is-guarded {
   color: var(--text-faint);
+}
+
+.bid-twl-detail-action.is-pomodoro {
+  color: var(--text-normal);
+  white-space: normal;
+}
+
+.bid-twl-modal.is-pomodoro .bid-twl-detail {
+  flex-basis: 102px;
+  height: 102px;
 }
 
 .bid-twl-warning {

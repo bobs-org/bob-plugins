@@ -549,11 +549,14 @@ test("^^ marker still opens the per-note picker when (( is absent", () => {
     cursor: { line: 0, ch: 27 },
   });
   let opened = false;
-  harness.plugin.openTaskLinkPicker = async () => {
+  let openedSource = null;
+  harness.plugin.openTaskLinkPicker = async (source) => {
     opened = true;
+    openedSource = source;
   };
   harness.plugin.inspectActiveEditor(harness.editor.cm);
   assert.equal(opened, true);
+  assert.equal(openedSource.trigger, "^^");
   assert.equal(harness.plugin.promptOpen, false);
 });
 

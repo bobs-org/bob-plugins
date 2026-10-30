@@ -8,6 +8,12 @@ class TaskWikilinkPickerModal extends Modal {
     this.source = source;
     this.snapshot = snapshot || { rows: [], ready: true, scanned: 0, total: 0 };
     this.query = source && source.query ? String(source.query) : "";
+    this.pomodoroContext = plugin && typeof plugin.taskWikilinkPomodoroContext === "function"
+      ? plugin.taskWikilinkPomodoroContext(source)
+      : null;
+    this.pomodoroDependencies = null;
+    this.pomodoroDependenciesReady = !this.pomodoroContext;
+    this.pomodoroDetailCache = new Map();
     this.selectedKey = source && source.pickerState && source.pickerState.selectedKey
       ? source.pickerState.selectedKey
       : null;
@@ -23,6 +29,7 @@ class TaskWikilinkPickerModal extends Modal {
     this.detailEl = null;
     this.footerEl = null;
     this.liveEl = null;
+    this.bannerEl = null;
     this.plan = null;
   }
 
@@ -40,12 +47,15 @@ class TaskWikilinkPickerModal extends Modal {
     contentEl.empty();
     this.modalEl.addClass("bid-tlp-modal");
     this.modalEl.addClass("bid-twl-modal");
+    if (this.pomodoroContext) {
+      this.modalEl.addClass("is-pomodoro");
+    }
     contentEl.addClass("bid-tlp");
     contentEl.addClass("bid-twl");
 
     const header = contentEl.createDiv({ cls: "bid-tlp-header bid-twl-header" });
     const headerIcon = header.createDiv({ cls: "bid-tlp-header-icon bid-twl-header-icon" });
-    headerIcon.createSpan({ cls: "bid-twl-header-glyph", text: "((" });
+    this.headerGlyph = headerIcon.createSpan({ cls: "bid-twl-header-glyph", text: this.pomodoroContext ? "🍅" : "((" });
     const headerText = header.createDiv({ cls: "bid-tlp-header-text" });
     this.titleEl = headerText.createDiv({ cls: "bid-tlp-title" });
     this.subtitleEl = headerText.createDiv({ cls: "bid-tlp-subtitle" });
@@ -76,6 +86,9 @@ class TaskWikilinkPickerModal extends Modal {
     });
     this.inputEl.addEventListener("keydown", (event) => this.handleKeydown(event));
 
+    this.bannerEl = contentEl.createDiv({ cls: "bid-twl-pomodoro-banner" });
+    this.bannerEl.style.display = "none";
+
     this.resultsEl = contentEl.createDiv({
       cls: "bid-tlp-results bid-twl-results",
       attr: {
@@ -95,6 +108,7 @@ class TaskWikilinkPickerModal extends Modal {
 
     this.renderAll();
     this.subscribeToIndex();
+    this.loadPomodoroDependencies();
     if (this.source && this.source.pickerState && Number.isInteger(this.source.pickerState.scrollTop)) {
       this.resultsEl.scrollTop = this.source.pickerState.scrollTop;
     }
@@ -127,6 +141,7 @@ class TaskWikilinkPickerModal extends Modal {
       return;
     }
     this.snapshot = next;
+    this.pomodoroDetailCache.clear();
     this.renderAll();
   }
 
@@ -141,6 +156,7 @@ class TaskWikilinkPickerModal extends Modal {
     }
     this.modalEl.removeClass("bid-tlp-modal");
     this.modalEl.removeClass("bid-twl-modal");
+    this.modalEl.removeClass("is-pomodoro");
     this.contentEl.empty();
     if (this.plugin) {
       this.plugin.lastPromptKey = null;
@@ -181,8 +197,37 @@ class TaskWikilinkPickerModal extends Modal {
     } catch (error) {
       isInboxNote = null;
     }
+    let pomodoroDetail = null;
+    const rows = this.snapshot.rows || [];
+    if (this.pomodoroContext) {
+      if (!this.pomodoroDependenciesReady) {
+        pomodoroDetail = { checking: true };
+      } else {
+        const pool = rows.filter((row) => row && row.open);
+        const ranked = taskWikilinkSelectableRows(pool, this.query, this.source && this.source.sourcePath);
+        const raisedRows = this.source && this.source.pomodoroRaised && Array.isArray(this.source.pomodoroRaised.rows)
+          ? this.source.pomodoroRaised.rows
+          : [];
+        const selectedRow = ranked.find((row) => taskWikilinkRowKey(row) === this.selectedKey) ||
+          raisedRows.find((row) => taskWikilinkRowKey(row) === this.selectedKey) ||
+          raisedRows[0] || ranked[0] || null;
+        if (selectedRow) {
+          const key = taskWikilinkRowKey(selectedRow);
+          pomodoroDetail = this.pomodoroDetailCache.get(key) || null;
+          if (!pomodoroDetail && this.plugin && typeof this.plugin.taskWikilinkPomodoroDetail === "function") {
+            pomodoroDetail = this.plugin.taskWikilinkPomodoroDetail(
+              this.source,
+              selectedRow,
+              this.pomodoroContext,
+              this.pomodoroDependencies,
+            );
+            this.pomodoroDetailCache.set(key, pomodoroDetail || {});
+          }
+        }
+      }
+    }
     this.plan = buildTaskWikilinkPickerPlan({
-      rows: this.snapshot.rows || [],
+      rows,
       query: this.query,
       ownerPath: this.source && this.source.sourcePath,
       source: this.source,
@@ -199,6 +244,9 @@ class TaskWikilinkPickerModal extends Modal {
       blockIdsByPath,
       isInboxNote,
       now: plugin && typeof plugin.now === "function" ? plugin.now() : new Date(),
+      pomodoroContext: this.pomodoroContext,
+      pomodoroDetail,
+      pomodoroRaised: this.source && this.source.pomodoroRaised,
     });
     if (this.plan.selected) {
       this.selectedKey = this.plan.selected.key;
@@ -211,6 +259,9 @@ class TaskWikilinkPickerModal extends Modal {
     const plan = this.buildPlan();
     if (this.titleEl) {
       this.titleEl.setText(plan.header.title);
+    }
+    if (this.headerGlyph) {
+      this.headerGlyph.setText(plan.header.iconText);
     }
     if (this.subtitleEl) {
       this.subtitleEl.setText(plan.header.subtitle);
@@ -238,6 +289,10 @@ class TaskWikilinkPickerModal extends Modal {
     this.renderResults(plan);
     this.renderDetail(plan);
     this.renderFooter(plan);
+    if (this.bannerEl) {
+      this.bannerEl.setText(plan.banner || "");
+      this.bannerEl.style.display = plan.banner ? "" : "none";
+    }
     if (this.liveEl) {
       const live = [plan.live.count, plan.live.selected].filter(Boolean).join(". ");
       this.liveEl.setText(live);
@@ -261,7 +316,13 @@ class TaskWikilinkPickerModal extends Modal {
         renderTaskWikilinkNoteHeader(this.resultsEl, item);
       } else if (item.kind === "row") {
         const rowEl = renderTaskWikilinkRow(this.resultsEl, item, {
-          onClick: (clicked) => this.acceptKey(clicked.key),
+          onClick: (clicked) => {
+            this.selectedKey = clicked.key;
+            this.renderAll();
+            if (!this.pomodoroContext || this.pomodoroDependenciesReady) {
+              this.acceptKey(clicked.key);
+            }
+          },
         });
         if (item.selected) {
           this.scrollRowIntoView(rowEl);
@@ -428,6 +489,12 @@ class TaskWikilinkPickerModal extends Modal {
       }
       event.preventDefault();
       event.stopPropagation();
+      if (this.pomodoroContext && !this.pomodoroDependenciesReady) {
+        if (this.liveEl) {
+          this.liveEl.setText("Checking project and prerequisite status");
+        }
+        return;
+      }
       this.acceptSelected();
       return;
     }
@@ -463,6 +530,12 @@ class TaskWikilinkPickerModal extends Modal {
   }
 
   acceptKey(key) {
+    if (this.pomodoroContext && !this.pomodoroDependenciesReady) {
+      if (this.liveEl) {
+        this.liveEl.setText("Checking project and prerequisite status");
+      }
+      return;
+    }
     const selected = (this.plan && this.plan.items || []).find(
       (item) => item.kind === "row" && item.key === key,
     ) || (this.plan && this.plan.selected && this.plan.selected.key === key
@@ -480,10 +553,24 @@ class TaskWikilinkPickerModal extends Modal {
     const pickerState = this.pickerState();
     const accept = selected.identified
       ? plugin.acceptTaskWikilinkIdentified(source, selected)
-      : plugin.selectTaskLinkTask(source, selected.row, pickerState);
+      : plugin.selectTaskLinkTask(source, {
+          ...selected.row,
+          pomodoroTarget: selected.pomodoroTarget || null,
+        }, pickerState);
     Promise.resolve(accept)
       .then((result) => {
         this.accepting = false;
+        if (result && result.keepOpen) {
+          if (result.raised) {
+            this.source = { ...this.source, pomodoroRaised: result.raised };
+            this.selectedKey = result.raised.rows && result.raised.rows[0]
+              ? taskWikilinkRowKey(result.raised.rows[0])
+              : null;
+            this.pomodoroDetailCache.clear();
+            this.refreshFromIndex();
+          }
+          return;
+        }
         if (result && result.promptSource) {
           this.completed = true;
           this.close();
@@ -501,6 +588,31 @@ class TaskWikilinkPickerModal extends Modal {
       })
       .catch(() => {
         this.accepting = false;
+      });
+  }
+
+  loadPomodoroDependencies() {
+    if (!this.pomodoroContext || !this.plugin || typeof this.plugin.taskWikilinkPomodoroDocuments !== "function") {
+      return;
+    }
+    Promise.resolve(this.plugin.taskWikilinkPomodoroDocuments(this.source))
+      .then((snapshot) => {
+        if (!this.isOpen) {
+          return;
+        }
+        this.pomodoroDependencies = snapshot || { documents: [], failures: ["task-bearing notes"] };
+        this.pomodoroDependenciesReady = true;
+        this.pomodoroDetailCache.clear();
+        this.renderAll();
+      })
+      .catch(() => {
+        if (!this.isOpen) {
+          return;
+        }
+        this.pomodoroDependencies = { documents: [], failures: ["task-bearing notes"] };
+        this.pomodoroDependenciesReady = true;
+        this.pomodoroDetailCache.clear();
+        this.renderAll();
       });
   }
 

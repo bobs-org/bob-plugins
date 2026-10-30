@@ -114,6 +114,7 @@ class BlockIdPromptPlugin extends Plugin {
 
       void this.openTaskLinkPicker({
         ...taskMarker,
+        trigger: "^^",
         editor: view.editor,
         sourcePath: file.path,
         line: cursor.line,
@@ -286,11 +287,28 @@ class BlockIdPromptPlugin extends Plugin {
 
   async selectTaskLinkTask(source, task, pickerState = null) {
     if (task.existingId) {
+      if (this.taskWikilinkPomodoroContext(source)) {
+        return this.taskWikilinkPomodoroCommit(source, task, {
+          id: task.existingId,
+          pomodoroTarget: task.pomodoroTarget,
+        });
+      }
       return this.completeTaskLinkWithExistingId(source, task);
     }
 
     if (!this.sourceMarkerStillPresent(source)) {
       return null;
+    }
+
+    if (this.taskWikilinkPomodoroContext(source)) {
+      const prepared = await this.taskWikilinkPomodoroPrepare(source, task, {
+        isNewId: true,
+        pomodoroTarget: task.pomodoroTarget,
+      });
+      if (prepared.handled) {
+        return prepared.result || null;
+      }
+      task = { ...prepared.task, pomodoroTarget: prepared.target };
     }
 
     return {
@@ -304,11 +322,18 @@ class BlockIdPromptPlugin extends Plugin {
         previewText: task.displayText,
         prefillId: false,
         pickerState: pickerState || null,
+        pomodoroTarget: task.pomodoroTarget || null,
       },
     };
   }
 
   async completeTaskLinkWithExistingId(source, task) {
+    if (source.pomodoroTarget || this.taskWikilinkPomodoroContext(source)) {
+      return this.taskWikilinkPomodoroCommit(source, task, {
+        id: task.existingId,
+        pomodoroTarget: source.pomodoroTarget || task.pomodoroTarget,
+      });
+    }
     if (!this.sourceMarkerStillPresent(source)) {
       return null;
     }

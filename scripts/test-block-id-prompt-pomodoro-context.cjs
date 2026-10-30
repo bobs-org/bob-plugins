@@ -136,6 +136,53 @@ test("Pomodoro source context distinguishes ledger ancestry and open state", () 
   }
 });
 
+test("the open-Pomodoro task-link gate recognizes both ^^ and (( sources", () => {
+  const editor = createEditor([
+    "## Pomodoros",
+    "- [ ] Current (09:20-09:50)",
+    "  - [[Tasks#^^]]",
+    "  - ((ship))",
+  ].join("\n"));
+  const pickerSource = sourceForTaskPicker(editor, "Daily.md", 2);
+  pickerSource.trigger = "^^";
+  const token = helpers.findTaskWikilinkToken(editor.getLine(3), 11);
+  assert.ok(token);
+  const wikilinkSource = {
+    kind: "task-wikilink",
+    trigger: "((",
+    editor,
+    sourcePath: "Daily.md",
+    line: 3,
+    startCh: token.replaceStart,
+    endCh: token.replaceEnd,
+    replaceStart: token.replaceStart,
+    replaceEnd: token.replaceEnd,
+    raw: editor.getLine(3).slice(token.replaceStart, token.replaceEnd),
+  };
+  const plugin = new Plugin();
+
+  assert.equal(plugin.taskWikilinkPomodoroContext(pickerSource).ownerLine, 1);
+  assert.equal(plugin.taskWikilinkPomodoroContext(wikilinkSource).ownerLine, 1);
+
+  const closedEditor = createEditor([
+    "## Pomodoros",
+    "- [x] Complete (09:20-09:50)",
+    "  - ((ship))",
+  ].join("\n"));
+  const closedToken = helpers.findTaskWikilinkToken(closedEditor.getLine(2), 11);
+  const closedSource = {
+    ...wikilinkSource,
+    editor: closedEditor,
+    line: 2,
+    startCh: closedToken.replaceStart,
+    endCh: closedToken.replaceEnd,
+    replaceStart: closedToken.replaceStart,
+    replaceEnd: closedToken.replaceEnd,
+    raw: closedEditor.getLine(2).slice(closedToken.replaceStart, closedToken.replaceEnd),
+  };
+  assert.equal(plugin.taskWikilinkPomodoroContext(closedSource), null);
+});
+
 test("future cleanup touches only later open Pomodoros and counts duplicates", () => {
   const content = [
     "## Pomodoros",
@@ -270,6 +317,7 @@ test("existing-ID task completion prunes future links in the source editor", asy
   const destinationContent = "- [ ] #task Ship it ^ship";
   const task = helpers.collectTaskPickerItems(destinationContent)[0];
   const plugin = new Plugin();
+  plugin.taskWikilinkPomodoroContext = () => null;
   let promoted = false;
   plugin.readDestinationForValidation = async () => ({
     file: { path: "Tasks.md" },
@@ -308,6 +356,7 @@ test("new-ID same-file completion plans cleanup after the task edit", async () =
   const source = sourceForTaskPicker(editor, "Daily.md", 3);
   const task = helpers.collectTaskPickerItems(editor.getValue())[0];
   const plugin = new Plugin();
+  plugin.taskWikilinkPomodoroContext = () => null;
   plugin.readDestinationForValidation = async () => ({
     file: { path: "Daily.md" },
     content: editor.getValue(),

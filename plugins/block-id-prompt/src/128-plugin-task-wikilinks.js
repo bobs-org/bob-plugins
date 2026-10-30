@@ -348,6 +348,12 @@ class BlockIdPromptTaskWikilinksMixin {
     if (!row || !row.blockId) {
       return { ok: false };
     }
+    if (this.taskWikilinkPomodoroContext(source)) {
+      return this.taskWikilinkPomodoroCommit(source, row, {
+        id: row.blockId,
+        pomodoroTarget: item.pomodoroTarget,
+      });
+    }
     if (!this.taskWikilinkTokenStillPresent(source)) {
       new Notice("Task wikilink not inserted: the ((…)) text changed");
       return { ok: false, stale: true };

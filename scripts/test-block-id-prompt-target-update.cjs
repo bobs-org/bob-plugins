@@ -10,6 +10,10 @@ const {
   sourceForTaskPicker,
 } = require("./block-id-prompt-harness.cjs");
 
+// These cases cover the pre-existing non-Pomodoro target activation path.
+// Pomodoro-context ^^ parity is exercised in its dedicated runtime suite.
+Plugin.prototype.taskWikilinkPomodoroContext = () => null;
+
 // --- Future-scheduled Pomodoro activation -----------------------------------
 
 test("calendar date parsing rejects malformed width and impossible dates", () => {
@@ -804,6 +808,31 @@ test("planTargetTaskUpdate forceNext still removes a uniquely future schedule an
   assert.equal(plan.removedFutureSchedule, true);
   assert.equal(plan.newStatus, "*");
   assert.equal(plan.logEntryAdded, true);
+});
+
+test("Pomodoro forceNext stamps the pulled-forward Ready task before its block ID", () => {
+  const now = localDate(2026, 8, 15);
+  const content = [
+    "- [ ] #task Ship it [scheduled:: 2026-08-20] ^ship",
+    "  - 🗓️ **SCHEDULE LOG**",
+  ].join("\n");
+  const stampLine = (line, date) => {
+    const id = line.match(/([ \t]+\^[A-Za-z0-9-]+)$/);
+    return id
+      ? `${line.slice(0, -id[0].length)} [fresh:: ${date}]${id[0]}`
+      : `${line} [fresh:: ${date}]`;
+  };
+  const plan = helpers.planTargetTaskUpdate(content, 0, {
+    forceNext: true,
+    now,
+    stampLine,
+    freshDateText: "2026-08-15",
+  });
+
+  assert.equal(plan.freshnessChanged, true);
+  assert.match(plan.content, /^- \[\*\] #task Ship it \[fresh:: 2026-08-15\] \^ship/m);
+  assert.doesNotMatch(plan.content, /scheduled::/);
+  assert.match(plan.content, /_2026-08-20 → 2026-08-15_ — 🍅 pulled into today's Pomodoro/);
 });
 
 test("planTargetTaskUpdate forceNext never creates a Schedule Log for a task that keeps none", () => {

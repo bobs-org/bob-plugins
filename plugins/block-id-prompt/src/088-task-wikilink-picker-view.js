@@ -401,32 +401,6 @@ function taskWikilinkSuggestedBlockId(row, blockIds) {
   }
 }
 
-function taskWikilinkActionLine(row, options) {
-  const guard = options && options.guard;
-  if (guard) {
-    return { kind: "guarded", text: guard.full };
-  }
-  if (row && row.blockId) {
-    const target = (options && options.linkTarget) || row.linkTarget || taskWikilinkPathStem(row.notePath);
-    const replacement = `[[${target}#^${row.blockId}]]`;
-    return { kind: "identified", text: `↵ inserts ${replacement}`, replacement };
-  }
-  const suggestion = (options && options.suggestion) || taskWikilinkSuggestedBlockId(row, options && options.blockIds);
-  const note = taskWikilinkSourceBasename(row && row.notePath);
-  if (suggestion) {
-    return {
-      kind: "idless",
-      text: `↵ names it ^${suggestion} in ${note}, then links it`,
-      suggestion,
-    };
-  }
-  return {
-    kind: "idless",
-    text: `↵ names it in ${note}, then links it`,
-    suggestion: null,
-  };
-}
-
 function taskWikilinkEmptyMessage(query, total) {
   if (!total) {
     return "No tasks in this vault yet";
@@ -548,7 +522,13 @@ function buildTaskWikilinkFilteredItems(rowItems) {
 }
 
 function buildTaskWikilinkRowItem(row, context) {
-  const reason = pickerDisabledReasonFor(row, context.guardOptions);
+  const rowKey = taskWikilinkRowKey(row);
+  const pomodoroDetail = context.pomodoroMode && rowKey === context.selectedRowKey
+    ? context.pomodoroDetail
+    : null;
+  const reason = pickerDisabledReasonFor(row, context.guardOptions) ||
+    (pomodoroDetail && pomodoroDetail.guardText) ||
+    (pomodoroDetail && pomodoroDetail.checking ? "Checking dependency status" : null);
   const guard = taskWikilinkGuardPresentation(reason, row);
   const disabled = Boolean(reason);
   const identified = Boolean(row.blockId) && !disabled;
@@ -569,6 +549,8 @@ function buildTaskWikilinkRowItem(row, context) {
     suggestion,
     blockIds,
     linkTarget: row.linkTarget,
+    pomodoroMode: context.pomodoroMode,
+    pomodoroDetail,
   });
   const replacement = identified
     ? replacementForWikilinkTask(row, reason)
@@ -576,7 +558,7 @@ function buildTaskWikilinkRowItem(row, context) {
   const kind = taskWikilinkNoteKind(row.notePath, context.noteKind);
   return {
     kind: "row",
-    key: taskWikilinkRowKey(row),
+    key: rowKey,
     row,
     group: groupForWikilinkTask(row, context.ownerPath),
     disabled,
@@ -593,6 +575,9 @@ function buildTaskWikilinkRowItem(row, context) {
     titleParts: taskWikilinkHighlightedTitleParts(row.displayText, context.query),
     badges: {
       blocked: row.status === BLOCKED_OBSIDIAN_TASK_STATUS,
+      waits: pomodoroDetail && pomodoroDetail.waitingOn > 0
+        ? `🔒 waits on ${pomodoroDetail.waitingOn}`
+        : null,
       hidden: Boolean(row.hidden),
       history:
         row.status === "x" || row.status === "X"
@@ -603,6 +588,7 @@ function buildTaskWikilinkRowItem(row, context) {
     },
     locator,
     action,
+    pomodoroTarget: pomodoroDetail && pomodoroDetail.target || null,
     replacement,
     suggestion,
     noteKind: kind,
@@ -674,7 +660,18 @@ function buildTaskWikilinkPickerPlan(input) {
   const query = String(options.query || "");
   const ownerPath = options.ownerPath || (options.source && options.source.sourcePath) || null;
   const allRows = Array.isArray(options.rows) ? options.rows : [];
-  const ranked = taskWikilinkSelectableRows(allRows, query, ownerPath);
+  const pomodoroMode = Boolean(options.pomodoroContext);
+  const poolRows = pomodoroMode ? allRows.filter((row) => row && row.open) : allRows;
+  const ranked = taskWikilinkSelectableRows(poolRows, query, ownerPath);
+  const raisedRows = pomodoroMode && options.pomodoroRaised && Array.isArray(options.pomodoroRaised.rows)
+    ? options.pomodoroRaised.rows.filter((row) => row && row.open)
+    : [];
+  const raisedKeys = new Set(raisedRows.map(taskWikilinkRowKey));
+  const requestedSelectedKey = options.selectedKey ||
+    (raisedRows.length ? taskWikilinkRowKey(raisedRows[0]) : null);
+  const selectedCandidate = ranked.find((row) => taskWikilinkRowKey(row) === requestedSelectedKey) ||
+    raisedRows.find((row) => taskWikilinkRowKey(row) === requestedSelectedKey) ||
+    ranked[0] || null;
   const previousDailyPath =
     options.previousDailyPath ||
     previousDailyNotePath(
@@ -692,19 +689,39 @@ function buildTaskWikilinkPickerPlan(input) {
     narrow: Boolean(options.narrow),
     blockIdsByPath: options.blockIdsByPath || new Map(),
     noteKind,
+    pomodoroMode,
+    pomodoroDetail: options.pomodoroDetail || null,
+    selectedRowKey: selectedCandidate ? taskWikilinkRowKey(selectedCandidate) : null,
     guardOptions: {
       previousDailyPath,
       source: options.source || null,
     },
   };
   const filtered = Boolean(String(query).trim());
-  const plannedItems = filtered
+  let ordinaryItems = filtered
     ? buildTaskWikilinkFilteredItems(
-        ranked.map((row) => buildTaskWikilinkRowItem(row, context)),
+        ranked.filter((row) => !raisedKeys.has(taskWikilinkRowKey(row)))
+          .map((row) => buildTaskWikilinkRowItem(row, context)),
       )
-    : buildTaskWikilinkGroupedItems(ranked, context);
+    : buildTaskWikilinkGroupedItems(
+        ranked.filter((row) => !raisedKeys.has(taskWikilinkRowKey(row))),
+        context,
+      );
+  const pinnedItems = raisedRows.length
+    ? [
+        {
+          kind: "section",
+          id: "raised",
+          label: `Raised for ${options.pomodoroRaised.taskTitle || "this task"}`,
+          sticky: true,
+          variant: "raised",
+        },
+        ...raisedRows.map((row) => buildTaskWikilinkRowItem(row, context)),
+      ]
+    : [];
+  const plannedItems = [...pinnedItems, ...ordinaryItems];
 
-  const selectedKey = options.selectedKey || null;
+  const selectedKey = requestedSelectedKey;
   const selectable = plannedItems.filter((item) => item.kind === "row");
   let selectedIndex = 0;
   if (selectedKey) {
@@ -738,18 +755,23 @@ function buildTaskWikilinkPickerPlan(input) {
         text: taskWikilinkIndexingText(progress.scanned || 0, progress.total || 0),
       };
   const sourcePath = (options.source && options.source.sourcePath) || ownerPath || "";
-  const totalVaultRows = allRows.length;
+  const totalVaultRows = poolRows.length;
+  const pomodoroContext = options.pomodoroContext;
   return {
     header: {
-      iconText: "((",
-      title: TASK_WIKILINK_PICKER_TITLE,
-      subtitle: `Inserts [[note#^id]] in ${taskWikilinkSourceBasename(sourcePath) || "this note"}`,
+      iconText: pomodoroMode ? "🍅" : "((",
+      title: pomodoroMode ? "Link a task to this Pomodoro" : TASK_WIKILINK_PICKER_TITLE,
+      subtitle: pomodoroMode
+        ? `${pomodoroContext.title} · ${pomodoroContext.range || "planned"} · Ready tasks become Next`
+        : `Inserts [[note#^id]] in ${taskWikilinkSourceBasename(sourcePath) || "this note"}`,
     },
     search: {
       placeholder: TASK_WIKILINK_PICKER_PLACEHOLDER,
       countText: indexing
         ? indexing.text
-        : taskWikilinkCountText(selectable.length, totalVaultRows, String(query).trim()),
+        : pomodoroMode
+          ? `${formatTaskWikilinkCount(selectable.length)}${String(query).trim() ? ` of ${formatTaskWikilinkCount(totalVaultRows)}` : ""} open tasks`
+          : taskWikilinkCountText(selectable.length, totalVaultRows, String(query).trim()),
       indexing,
     },
     items: windowed.items.map((item) => {
@@ -771,7 +793,9 @@ function buildTaskWikilinkPickerPlan(input) {
     },
     empty:
       selectable.length === 0
-        ? { message: taskWikilinkEmptyMessage(query, totalVaultRows) }
+      ? { message: pomodoroMode
+          ? (String(query || "").trim() ? `No open tasks match "${String(query).trim()}" · try fewer words` : "No open tasks in this vault yet")
+          : taskWikilinkEmptyMessage(query, totalVaultRows) }
         : null,
     detail: taskWikilinkDetailPlan(selected, context),
     footer: {
@@ -781,9 +805,10 @@ function buildTaskWikilinkPickerPlan(input) {
     live: {
       count: indexing
         ? indexing.text
-        : `${formatTaskWikilinkCount(selectable.length)} of ${formatTaskWikilinkCount(totalVaultRows)} tasks`,
+        : `${formatTaskWikilinkCount(selectable.length)} of ${formatTaskWikilinkCount(totalVaultRows)} ${pomodoroMode ? "open " : ""}tasks`,
       selected: selected ? selected.displayText : "",
     },
+    banner: options.pomodoroRaised ? options.pomodoroRaised.banner || null : null,
     selected,
     selectedIndex,
     selectableKeys: selectable.map((item) => item.key),
@@ -909,7 +934,10 @@ function renderTaskWikilinkRow(el, item, options) {
   const badgesEl = textEl.createDiv({ cls: "bid-twl-badges" });
   if (item.badges.blocked) {
     const chip = badgesEl.createSpan({ cls: "bid-tlp-blocked-chip bid-twl-blocked" });
-    chip.createSpan({ cls: "bid-twl-blocked-label", text: "🔒 Blocked" });
+    chip.createSpan({ cls: "bid-twl-blocked-label", text: item.badges.waits || "🔒 Blocked" });
+  } else if (item.badges.waits) {
+    const chip = badgesEl.createSpan({ cls: "bid-tlp-blocked-chip bid-twl-blocked" });
+    chip.createSpan({ cls: "bid-twl-blocked-label", text: item.badges.waits });
   }
   if (item.badges.hidden) {
     const hiddenEl = badgesEl.createSpan({

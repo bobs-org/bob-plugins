@@ -659,6 +659,7 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     (target.blockId === "prj" && ownOpen.length > 0);
   const dependencyBlocked = ownOpen.length > 0 || projectDependencyBlocked ||
     projectOpen.length > 0;
+  const openPrerequisites = [...new Set([...ownOpen, ...projectOpen])];
   // A project's own date is a special refusal only when it is the sole
   // remaining reason. Dependency reasons take precedence and can be raised.
   const projectDateRefusal = target.blockId === "prj" && !!ownSchedule &&
@@ -727,6 +728,8 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
   return {
     blocked: true,
     dependencyBlocked,
+    openPrerequisites,
+    openPrerequisiteCount: openPrerequisites.length,
     projectDependencyBlocked,
     inheritedProjectBlocked,
     projectParent: inheritedProjectBlocked ? project.parent : null,

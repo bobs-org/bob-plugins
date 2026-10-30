@@ -208,6 +208,13 @@ class BlockIdPromptBlockIdSubmitMixin {
   }
 
   async submitLinkTaskBlockId(source, newId) {
+    if (source.pomodoroTarget || this.taskWikilinkPomodoroContext(source)) {
+      return this.taskWikilinkPomodoroCommit(source, source.task || {}, {
+        id: newId,
+        isNewId: true,
+        pomodoroTarget: source.pomodoroTarget,
+      });
+    }
     if (!this.sourceMarkerStillPresent(source)) {
       return false;
     }

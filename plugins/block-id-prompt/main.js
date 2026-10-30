@@ -2430,6 +2430,7 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     (target.blockId === "prj" && ownOpen.length > 0);
   const dependencyBlocked = ownOpen.length > 0 || projectDependencyBlocked ||
     projectOpen.length > 0;
+  const openPrerequisites = [...new Set([...ownOpen, ...projectOpen])];
   // A project's own date is a special refusal only when it is the sole
   // remaining reason. Dependency reasons take precedence and can be raised.
   const projectDateRefusal = target.blockId === "prj" && !!ownSchedule &&
@@ -2498,6 +2499,8 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
   return {
     blocked: true,
     dependencyBlocked,
+    openPrerequisites,
+    openPrerequisiteCount: openPrerequisites.length,
     projectDependencyBlocked,
     inheritedProjectBlocked,
     projectParent: inheritedProjectBlocked ? project.parent : null,
@@ -3027,6 +3030,10 @@ function parseNoteTaskRows(notePath, content, settings) {
       blockId: blockId || null,
       hidden: taskWikilinkHasExactTag(lines[index], "#hide"),
       prjBlocked: taskWikilinkHasExactTag(lines[index], "#prj_is_blocked"),
+      scheduleLogPresent: Boolean(
+        findScheduledFieldMatches(lines[index]).length &&
+        findScheduleLogMarker(lines, index),
+      ),
       section,
       depth: taskWikilinkIndentationDepth(match[1]),
       searchText: taskWikilinkSearchText(body, active.globalFilter, blockId),
@@ -11457,6 +11464,12 @@ class TaskWikilinkPickerModal extends Modal {
     this.source = source;
     this.snapshot = snapshot || { rows: [], ready: true, scanned: 0, total: 0 };
     this.query = source && source.query ? String(source.query) : "";
+    this.pomodoroContext = plugin && typeof plugin.taskWikilinkPomodoroContext === "function"
+      ? plugin.taskWikilinkPomodoroContext(source)
+      : null;
+    this.pomodoroDependencies = null;
+    this.pomodoroDependenciesReady = !this.pomodoroContext;
+    this.pomodoroDetailCache = new Map();
     this.selectedKey = source && source.pickerState && source.pickerState.selectedKey
       ? source.pickerState.selectedKey
       : null;
@@ -11472,6 +11485,7 @@ class TaskWikilinkPickerModal extends Modal {
     this.detailEl = null;
     this.footerEl = null;
     this.liveEl = null;
+    this.bannerEl = null;
     this.plan = null;
   }
 
@@ -11489,12 +11503,15 @@ class TaskWikilinkPickerModal extends Modal {
     contentEl.empty();
     this.modalEl.addClass("bid-tlp-modal");
     this.modalEl.addClass("bid-twl-modal");
+    if (this.pomodoroContext) {
+      this.modalEl.addClass("is-pomodoro");
+    }
     contentEl.addClass("bid-tlp");
     contentEl.addClass("bid-twl");
 
     const header = contentEl.createDiv({ cls: "bid-tlp-header bid-twl-header" });
     const headerIcon = header.createDiv({ cls: "bid-tlp-header-icon bid-twl-header-icon" });
-    headerIcon.createSpan({ cls: "bid-twl-header-glyph", text: "((" });
+    this.headerGlyph = headerIcon.createSpan({ cls: "bid-twl-header-glyph", text: this.pomodoroContext ? "🍅" : "((" });
     const headerText = header.createDiv({ cls: "bid-tlp-header-text" });
     this.titleEl = headerText.createDiv({ cls: "bid-tlp-title" });
     this.subtitleEl = headerText.createDiv({ cls: "bid-tlp-subtitle" });
@@ -11525,6 +11542,9 @@ class TaskWikilinkPickerModal extends Modal {
     });
     this.inputEl.addEventListener("keydown", (event) => this.handleKeydown(event));
 
+    this.bannerEl = contentEl.createDiv({ cls: "bid-twl-pomodoro-banner" });
+    this.bannerEl.style.display = "none";
+
     this.resultsEl = contentEl.createDiv({
       cls: "bid-tlp-results bid-twl-results",
       attr: {
@@ -11544,6 +11564,7 @@ class TaskWikilinkPickerModal extends Modal {
 
     this.renderAll();
     this.subscribeToIndex();
+    this.loadPomodoroDependencies();
     if (this.source && this.source.pickerState && Number.isInteger(this.source.pickerState.scrollTop)) {
       this.resultsEl.scrollTop = this.source.pickerState.scrollTop;
     }
@@ -11576,6 +11597,7 @@ class TaskWikilinkPickerModal extends Modal {
       return;
     }
     this.snapshot = next;
+    this.pomodoroDetailCache.clear();
     this.renderAll();
   }
 
@@ -11590,6 +11612,7 @@ class TaskWikilinkPickerModal extends Modal {
     }
     this.modalEl.removeClass("bid-tlp-modal");
     this.modalEl.removeClass("bid-twl-modal");
+    this.modalEl.removeClass("is-pomodoro");
     this.contentEl.empty();
     if (this.plugin) {
       this.plugin.lastPromptKey = null;
@@ -11630,8 +11653,37 @@ class TaskWikilinkPickerModal extends Modal {
     } catch (error) {
       isInboxNote = null;
     }
+    let pomodoroDetail = null;
+    const rows = this.snapshot.rows || [];
+    if (this.pomodoroContext) {
+      if (!this.pomodoroDependenciesReady) {
+        pomodoroDetail = { checking: true };
+      } else {
+        const pool = rows.filter((row) => row && row.open);
+        const ranked = taskWikilinkSelectableRows(pool, this.query, this.source && this.source.sourcePath);
+        const raisedRows = this.source && this.source.pomodoroRaised && Array.isArray(this.source.pomodoroRaised.rows)
+          ? this.source.pomodoroRaised.rows
+          : [];
+        const selectedRow = ranked.find((row) => taskWikilinkRowKey(row) === this.selectedKey) ||
+          raisedRows.find((row) => taskWikilinkRowKey(row) === this.selectedKey) ||
+          raisedRows[0] || ranked[0] || null;
+        if (selectedRow) {
+          const key = taskWikilinkRowKey(selectedRow);
+          pomodoroDetail = this.pomodoroDetailCache.get(key) || null;
+          if (!pomodoroDetail && this.plugin && typeof this.plugin.taskWikilinkPomodoroDetail === "function") {
+            pomodoroDetail = this.plugin.taskWikilinkPomodoroDetail(
+              this.source,
+              selectedRow,
+              this.pomodoroContext,
+              this.pomodoroDependencies,
+            );
+            this.pomodoroDetailCache.set(key, pomodoroDetail || {});
+          }
+        }
+      }
+    }
     this.plan = buildTaskWikilinkPickerPlan({
-      rows: this.snapshot.rows || [],
+      rows,
       query: this.query,
       ownerPath: this.source && this.source.sourcePath,
       source: this.source,
@@ -11648,6 +11700,9 @@ class TaskWikilinkPickerModal extends Modal {
       blockIdsByPath,
       isInboxNote,
       now: plugin && typeof plugin.now === "function" ? plugin.now() : new Date(),
+      pomodoroContext: this.pomodoroContext,
+      pomodoroDetail,
+      pomodoroRaised: this.source && this.source.pomodoroRaised,
     });
     if (this.plan.selected) {
       this.selectedKey = this.plan.selected.key;
@@ -11660,6 +11715,9 @@ class TaskWikilinkPickerModal extends Modal {
     const plan = this.buildPlan();
     if (this.titleEl) {
       this.titleEl.setText(plan.header.title);
+    }
+    if (this.headerGlyph) {
+      this.headerGlyph.setText(plan.header.iconText);
     }
     if (this.subtitleEl) {
       this.subtitleEl.setText(plan.header.subtitle);
@@ -11687,6 +11745,10 @@ class TaskWikilinkPickerModal extends Modal {
     this.renderResults(plan);
     this.renderDetail(plan);
     this.renderFooter(plan);
+    if (this.bannerEl) {
+      this.bannerEl.setText(plan.banner || "");
+      this.bannerEl.style.display = plan.banner ? "" : "none";
+    }
     if (this.liveEl) {
       const live = [plan.live.count, plan.live.selected].filter(Boolean).join(". ");
       this.liveEl.setText(live);
@@ -11710,7 +11772,13 @@ class TaskWikilinkPickerModal extends Modal {
         renderTaskWikilinkNoteHeader(this.resultsEl, item);
       } else if (item.kind === "row") {
         const rowEl = renderTaskWikilinkRow(this.resultsEl, item, {
-          onClick: (clicked) => this.acceptKey(clicked.key),
+          onClick: (clicked) => {
+            this.selectedKey = clicked.key;
+            this.renderAll();
+            if (!this.pomodoroContext || this.pomodoroDependenciesReady) {
+              this.acceptKey(clicked.key);
+            }
+          },
         });
         if (item.selected) {
           this.scrollRowIntoView(rowEl);
@@ -11877,6 +11945,12 @@ class TaskWikilinkPickerModal extends Modal {
       }
       event.preventDefault();
       event.stopPropagation();
+      if (this.pomodoroContext && !this.pomodoroDependenciesReady) {
+        if (this.liveEl) {
+          this.liveEl.setText("Checking project and prerequisite status");
+        }
+        return;
+      }
       this.acceptSelected();
       return;
     }
@@ -11912,6 +11986,12 @@ class TaskWikilinkPickerModal extends Modal {
   }
 
   acceptKey(key) {
+    if (this.pomodoroContext && !this.pomodoroDependenciesReady) {
+      if (this.liveEl) {
+        this.liveEl.setText("Checking project and prerequisite status");
+      }
+      return;
+    }
     const selected = (this.plan && this.plan.items || []).find(
       (item) => item.kind === "row" && item.key === key,
     ) || (this.plan && this.plan.selected && this.plan.selected.key === key
@@ -11929,10 +12009,24 @@ class TaskWikilinkPickerModal extends Modal {
     const pickerState = this.pickerState();
     const accept = selected.identified
       ? plugin.acceptTaskWikilinkIdentified(source, selected)
-      : plugin.selectTaskLinkTask(source, selected.row, pickerState);
+      : plugin.selectTaskLinkTask(source, {
+          ...selected.row,
+          pomodoroTarget: selected.pomodoroTarget || null,
+        }, pickerState);
     Promise.resolve(accept)
       .then((result) => {
         this.accepting = false;
+        if (result && result.keepOpen) {
+          if (result.raised) {
+            this.source = { ...this.source, pomodoroRaised: result.raised };
+            this.selectedKey = result.raised.rows && result.raised.rows[0]
+              ? taskWikilinkRowKey(result.raised.rows[0])
+              : null;
+            this.pomodoroDetailCache.clear();
+            this.refreshFromIndex();
+          }
+          return;
+        }
         if (result && result.promptSource) {
           this.completed = true;
           this.close();
@@ -11950,6 +12044,31 @@ class TaskWikilinkPickerModal extends Modal {
       })
       .catch(() => {
         this.accepting = false;
+      });
+  }
+
+  loadPomodoroDependencies() {
+    if (!this.pomodoroContext || !this.plugin || typeof this.plugin.taskWikilinkPomodoroDocuments !== "function") {
+      return;
+    }
+    Promise.resolve(this.plugin.taskWikilinkPomodoroDocuments(this.source))
+      .then((snapshot) => {
+        if (!this.isOpen) {
+          return;
+        }
+        this.pomodoroDependencies = snapshot || { documents: [], failures: ["task-bearing notes"] };
+        this.pomodoroDependenciesReady = true;
+        this.pomodoroDetailCache.clear();
+        this.renderAll();
+      })
+      .catch(() => {
+        if (!this.isOpen) {
+          return;
+        }
+        this.pomodoroDependencies = { documents: [], failures: ["task-bearing notes"] };
+        this.pomodoroDependenciesReady = true;
+        this.pomodoroDetailCache.clear();
+        this.renderAll();
       });
   }
 
@@ -12392,32 +12511,6 @@ function taskWikilinkSuggestedBlockId(row, blockIds) {
   }
 }
 
-function taskWikilinkActionLine(row, options) {
-  const guard = options && options.guard;
-  if (guard) {
-    return { kind: "guarded", text: guard.full };
-  }
-  if (row && row.blockId) {
-    const target = (options && options.linkTarget) || row.linkTarget || taskWikilinkPathStem(row.notePath);
-    const replacement = `[[${target}#^${row.blockId}]]`;
-    return { kind: "identified", text: `↵ inserts ${replacement}`, replacement };
-  }
-  const suggestion = (options && options.suggestion) || taskWikilinkSuggestedBlockId(row, options && options.blockIds);
-  const note = taskWikilinkSourceBasename(row && row.notePath);
-  if (suggestion) {
-    return {
-      kind: "idless",
-      text: `↵ names it ^${suggestion} in ${note}, then links it`,
-      suggestion,
-    };
-  }
-  return {
-    kind: "idless",
-    text: `↵ names it in ${note}, then links it`,
-    suggestion: null,
-  };
-}
-
 function taskWikilinkEmptyMessage(query, total) {
   if (!total) {
     return "No tasks in this vault yet";
@@ -12539,7 +12632,13 @@ function buildTaskWikilinkFilteredItems(rowItems) {
 }
 
 function buildTaskWikilinkRowItem(row, context) {
-  const reason = pickerDisabledReasonFor(row, context.guardOptions);
+  const rowKey = taskWikilinkRowKey(row);
+  const pomodoroDetail = context.pomodoroMode && rowKey === context.selectedRowKey
+    ? context.pomodoroDetail
+    : null;
+  const reason = pickerDisabledReasonFor(row, context.guardOptions) ||
+    (pomodoroDetail && pomodoroDetail.guardText) ||
+    (pomodoroDetail && pomodoroDetail.checking ? "Checking dependency status" : null);
   const guard = taskWikilinkGuardPresentation(reason, row);
   const disabled = Boolean(reason);
   const identified = Boolean(row.blockId) && !disabled;
@@ -12560,6 +12659,8 @@ function buildTaskWikilinkRowItem(row, context) {
     suggestion,
     blockIds,
     linkTarget: row.linkTarget,
+    pomodoroMode: context.pomodoroMode,
+    pomodoroDetail,
   });
   const replacement = identified
     ? replacementForWikilinkTask(row, reason)
@@ -12567,7 +12668,7 @@ function buildTaskWikilinkRowItem(row, context) {
   const kind = taskWikilinkNoteKind(row.notePath, context.noteKind);
   return {
     kind: "row",
-    key: taskWikilinkRowKey(row),
+    key: rowKey,
     row,
     group: groupForWikilinkTask(row, context.ownerPath),
     disabled,
@@ -12584,6 +12685,9 @@ function buildTaskWikilinkRowItem(row, context) {
     titleParts: taskWikilinkHighlightedTitleParts(row.displayText, context.query),
     badges: {
       blocked: row.status === BLOCKED_OBSIDIAN_TASK_STATUS,
+      waits: pomodoroDetail && pomodoroDetail.waitingOn > 0
+        ? `🔒 waits on ${pomodoroDetail.waitingOn}`
+        : null,
       hidden: Boolean(row.hidden),
       history:
         row.status === "x" || row.status === "X"
@@ -12594,6 +12698,7 @@ function buildTaskWikilinkRowItem(row, context) {
     },
     locator,
     action,
+    pomodoroTarget: pomodoroDetail && pomodoroDetail.target || null,
     replacement,
     suggestion,
     noteKind: kind,
@@ -12665,7 +12770,18 @@ function buildTaskWikilinkPickerPlan(input) {
   const query = String(options.query || "");
   const ownerPath = options.ownerPath || (options.source && options.source.sourcePath) || null;
   const allRows = Array.isArray(options.rows) ? options.rows : [];
-  const ranked = taskWikilinkSelectableRows(allRows, query, ownerPath);
+  const pomodoroMode = Boolean(options.pomodoroContext);
+  const poolRows = pomodoroMode ? allRows.filter((row) => row && row.open) : allRows;
+  const ranked = taskWikilinkSelectableRows(poolRows, query, ownerPath);
+  const raisedRows = pomodoroMode && options.pomodoroRaised && Array.isArray(options.pomodoroRaised.rows)
+    ? options.pomodoroRaised.rows.filter((row) => row && row.open)
+    : [];
+  const raisedKeys = new Set(raisedRows.map(taskWikilinkRowKey));
+  const requestedSelectedKey = options.selectedKey ||
+    (raisedRows.length ? taskWikilinkRowKey(raisedRows[0]) : null);
+  const selectedCandidate = ranked.find((row) => taskWikilinkRowKey(row) === requestedSelectedKey) ||
+    raisedRows.find((row) => taskWikilinkRowKey(row) === requestedSelectedKey) ||
+    ranked[0] || null;
   const previousDailyPath =
     options.previousDailyPath ||
     previousDailyNotePath(
@@ -12683,19 +12799,39 @@ function buildTaskWikilinkPickerPlan(input) {
     narrow: Boolean(options.narrow),
     blockIdsByPath: options.blockIdsByPath || new Map(),
     noteKind,
+    pomodoroMode,
+    pomodoroDetail: options.pomodoroDetail || null,
+    selectedRowKey: selectedCandidate ? taskWikilinkRowKey(selectedCandidate) : null,
     guardOptions: {
       previousDailyPath,
       source: options.source || null,
     },
   };
   const filtered = Boolean(String(query).trim());
-  const plannedItems = filtered
+  let ordinaryItems = filtered
     ? buildTaskWikilinkFilteredItems(
-        ranked.map((row) => buildTaskWikilinkRowItem(row, context)),
+        ranked.filter((row) => !raisedKeys.has(taskWikilinkRowKey(row)))
+          .map((row) => buildTaskWikilinkRowItem(row, context)),
       )
-    : buildTaskWikilinkGroupedItems(ranked, context);
+    : buildTaskWikilinkGroupedItems(
+        ranked.filter((row) => !raisedKeys.has(taskWikilinkRowKey(row))),
+        context,
+      );
+  const pinnedItems = raisedRows.length
+    ? [
+        {
+          kind: "section",
+          id: "raised",
+          label: `Raised for ${options.pomodoroRaised.taskTitle || "this task"}`,
+          sticky: true,
+          variant: "raised",
+        },
+        ...raisedRows.map((row) => buildTaskWikilinkRowItem(row, context)),
+      ]
+    : [];
+  const plannedItems = [...pinnedItems, ...ordinaryItems];
 
-  const selectedKey = options.selectedKey || null;
+  const selectedKey = requestedSelectedKey;
   const selectable = plannedItems.filter((item) => item.kind === "row");
   let selectedIndex = 0;
   if (selectedKey) {
@@ -12729,18 +12865,23 @@ function buildTaskWikilinkPickerPlan(input) {
         text: taskWikilinkIndexingText(progress.scanned || 0, progress.total || 0),
       };
   const sourcePath = (options.source && options.source.sourcePath) || ownerPath || "";
-  const totalVaultRows = allRows.length;
+  const totalVaultRows = poolRows.length;
+  const pomodoroContext = options.pomodoroContext;
   return {
     header: {
-      iconText: "((",
-      title: TASK_WIKILINK_PICKER_TITLE,
-      subtitle: `Inserts [[note#^id]] in ${taskWikilinkSourceBasename(sourcePath) || "this note"}`,
+      iconText: pomodoroMode ? "🍅" : "((",
+      title: pomodoroMode ? "Link a task to this Pomodoro" : TASK_WIKILINK_PICKER_TITLE,
+      subtitle: pomodoroMode
+        ? `${pomodoroContext.title} · ${pomodoroContext.range || "planned"} · Ready tasks become Next`
+        : `Inserts [[note#^id]] in ${taskWikilinkSourceBasename(sourcePath) || "this note"}`,
     },
     search: {
       placeholder: TASK_WIKILINK_PICKER_PLACEHOLDER,
       countText: indexing
         ? indexing.text
-        : taskWikilinkCountText(selectable.length, totalVaultRows, String(query).trim()),
+        : pomodoroMode
+          ? `${formatTaskWikilinkCount(selectable.length)}${String(query).trim() ? ` of ${formatTaskWikilinkCount(totalVaultRows)}` : ""} open tasks`
+          : taskWikilinkCountText(selectable.length, totalVaultRows, String(query).trim()),
       indexing,
     },
     items: windowed.items.map((item) => {
@@ -12762,7 +12903,9 @@ function buildTaskWikilinkPickerPlan(input) {
     },
     empty:
       selectable.length === 0
-        ? { message: taskWikilinkEmptyMessage(query, totalVaultRows) }
+      ? { message: pomodoroMode
+          ? (String(query || "").trim() ? `No open tasks match "${String(query).trim()}" · try fewer words` : "No open tasks in this vault yet")
+          : taskWikilinkEmptyMessage(query, totalVaultRows) }
         : null,
     detail: taskWikilinkDetailPlan(selected, context),
     footer: {
@@ -12772,9 +12915,10 @@ function buildTaskWikilinkPickerPlan(input) {
     live: {
       count: indexing
         ? indexing.text
-        : `${formatTaskWikilinkCount(selectable.length)} of ${formatTaskWikilinkCount(totalVaultRows)} tasks`,
+        : `${formatTaskWikilinkCount(selectable.length)} of ${formatTaskWikilinkCount(totalVaultRows)} ${pomodoroMode ? "open " : ""}tasks`,
       selected: selected ? selected.displayText : "",
     },
+    banner: options.pomodoroRaised ? options.pomodoroRaised.banner || null : null,
     selected,
     selectedIndex,
     selectableKeys: selectable.map((item) => item.key),
@@ -12900,7 +13044,10 @@ function renderTaskWikilinkRow(el, item, options) {
   const badgesEl = textEl.createDiv({ cls: "bid-twl-badges" });
   if (item.badges.blocked) {
     const chip = badgesEl.createSpan({ cls: "bid-tlp-blocked-chip bid-twl-blocked" });
-    chip.createSpan({ cls: "bid-twl-blocked-label", text: "🔒 Blocked" });
+    chip.createSpan({ cls: "bid-twl-blocked-label", text: item.badges.waits || "🔒 Blocked" });
+  } else if (item.badges.waits) {
+    const chip = badgesEl.createSpan({ cls: "bid-tlp-blocked-chip bid-twl-blocked" });
+    chip.createSpan({ cls: "bid-twl-blocked-label", text: item.badges.waits });
   }
   if (item.badges.hidden) {
     const hiddenEl = badgesEl.createSpan({
@@ -12927,6 +13074,86 @@ function renderTaskWikilinkRow(el, item, options) {
     rowEl.addEventListener("click", () => options.onClick(item));
   }
   return rowEl;
+}
+// ---- src/089-task-wikilink-picker-pomodoro-view.js ----
+function taskWikilinkActionLine(row, options) {
+  const guard = options && options.guard;
+  if (guard) {
+    return { kind: "guarded", text: guard.full };
+  }
+  const pomodoro = options && options.pomodoroMode ? options.pomodoroDetail : null;
+  if (pomodoro && pomodoro.checking) {
+    return { kind: "guarded", text: "Checking project and prerequisite status…" };
+  }
+  if (pomodoro && pomodoro.waitingOn > 0) {
+    return {
+      kind: "pomodoro-blocked",
+      text: `↵ raises ${pomodoro.waitingOn} prerequisites to Next · it stays unlinked`,
+    };
+  }
+  if (pomodoro && pomodoro.guardText) {
+    return { kind: "guarded", text: pomodoro.guardText };
+  }
+  if (row && row.blockId) {
+    const target = (options && options.linkTarget) || row.linkTarget || taskWikilinkPathStem(row.notePath);
+    const replacement = `[[${target}#^${row.blockId}]]`;
+    if (pomodoro) {
+      return {
+        kind: "pomodoro",
+        text: taskWikilinkPomodoroConsequenceText(row, pomodoro),
+        replacement,
+      };
+    }
+    return { kind: "identified", text: `↵ inserts ${replacement}`, replacement };
+  }
+  const suggestion = (options && options.suggestion) || taskWikilinkSuggestedBlockId(row, options && options.blockIds);
+  const note = taskWikilinkSourceBasename(row && row.notePath);
+  if (pomodoro) {
+    return {
+      kind: "pomodoro",
+      text: taskWikilinkPomodoroConsequenceText(row, pomodoro, suggestion, note),
+      suggestion,
+    };
+  }
+  if (suggestion) {
+    return {
+      kind: "idless",
+      text: `↵ names it ^${suggestion} in ${note}, then links it`,
+      suggestion,
+    };
+  }
+  return {
+    kind: "idless",
+    text: `↵ names it in ${note}, then links it`,
+    suggestion: null,
+  };
+}
+
+function taskWikilinkPomodoroConsequenceText(row, detail, suggestion, note) {
+  const clauses = [];
+  if (!row.blockId) {
+    clauses.push(suggestion
+      ? `↵ names it ^${suggestion} in ${note}, then links it here`
+      : `↵ names it in ${note}, then links it here`);
+  } else {
+    clauses.push("↵ links it here");
+  }
+  if (row.status === " ") {
+    clauses.push("Ready → Next");
+  }
+  if (detail.scheduledDate) {
+    clauses.push(`pulls it into today (was scheduled ${detail.scheduledDate})`);
+    if (detail.scheduleLogPresent) {
+      clauses.push("logs the schedule change");
+    }
+  }
+  if (detail.typeClause) {
+    clauses.push(detail.typeClause);
+  }
+  if (detail.dependencyUnavailable) {
+    clauses.push("dependency status unavailable · Enter rechecks before writing");
+  }
+  return clauses.join(" · ");
 }
 // ---- src/090-prompt-modals.js ----
 class BlockIdPromptModal extends Modal {
@@ -13914,6 +14141,7 @@ class BlockIdPromptPlugin extends Plugin {
 
       void this.openTaskLinkPicker({
         ...taskMarker,
+        trigger: "^^",
         editor: view.editor,
         sourcePath: file.path,
         line: cursor.line,
@@ -14086,11 +14314,28 @@ class BlockIdPromptPlugin extends Plugin {
 
   async selectTaskLinkTask(source, task, pickerState = null) {
     if (task.existingId) {
+      if (this.taskWikilinkPomodoroContext(source)) {
+        return this.taskWikilinkPomodoroCommit(source, task, {
+          id: task.existingId,
+          pomodoroTarget: task.pomodoroTarget,
+        });
+      }
       return this.completeTaskLinkWithExistingId(source, task);
     }
 
     if (!this.sourceMarkerStillPresent(source)) {
       return null;
+    }
+
+    if (this.taskWikilinkPomodoroContext(source)) {
+      const prepared = await this.taskWikilinkPomodoroPrepare(source, task, {
+        isNewId: true,
+        pomodoroTarget: task.pomodoroTarget,
+      });
+      if (prepared.handled) {
+        return prepared.result || null;
+      }
+      task = { ...prepared.task, pomodoroTarget: prepared.target };
     }
 
     return {
@@ -14104,11 +14349,18 @@ class BlockIdPromptPlugin extends Plugin {
         previewText: task.displayText,
         prefillId: false,
         pickerState: pickerState || null,
+        pomodoroTarget: task.pomodoroTarget || null,
       },
     };
   }
 
   async completeTaskLinkWithExistingId(source, task) {
+    if (source.pomodoroTarget || this.taskWikilinkPomodoroContext(source)) {
+      return this.taskWikilinkPomodoroCommit(source, task, {
+        id: task.existingId,
+        pomodoroTarget: source.pomodoroTarget || task.pomodoroTarget,
+      });
+    }
     if (!this.sourceMarkerStillPresent(source)) {
       return null;
     }
@@ -14472,6 +14724,13 @@ class BlockIdPromptBlockIdSubmitMixin {
   }
 
   async submitLinkTaskBlockId(source, newId) {
+    if (source.pomodoroTarget || this.taskWikilinkPomodoroContext(source)) {
+      return this.taskWikilinkPomodoroCommit(source, source.task || {}, {
+        id: newId,
+        isNewId: true,
+        pomodoroTarget: source.pomodoroTarget,
+      });
+    }
     if (!this.sourceMarkerStillPresent(source)) {
       return false;
     }
@@ -14731,154 +14990,6 @@ class BlockIdPromptPomodoroLinksMixin {
         this.resolveReferenceDestination(reference, referrerPath),
     });
     return cleanup.removedCount > 0;
-  }
-
-  async readTaskDependencyDocuments(source, targetFile) {
-    const vault = this.app && this.app.vault;
-    const files = vault && typeof vault.getMarkdownFiles === "function"
-      ? vault.getMarkdownFiles().filter((file) => file && file.path)
-      : [];
-    if (targetFile && !files.some((file) => file.path === targetFile.path)) {
-      files.push(targetFile);
-    }
-    const documents = [];
-    const fileByPath = new Map(files.map((file) => [file.path, file]));
-    const failures = [];
-    for (const file of files) {
-      let content = null;
-      if (
-        file.path === source.sourcePath && source.editor &&
-        typeof source.editor.getValue === "function"
-      ) {
-        content = source.editor.getValue();
-      } else if (typeof readAuthoritativePromptTargetContent === "function") {
-        try {
-          const snapshot = await readAuthoritativePromptTargetContent(
-            this,
-            source,
-            file,
-          );
-          if (!snapshot || snapshot.ambiguous) {
-            failures.push(file.path);
-            continue;
-          }
-          content = snapshot.content;
-        } catch (error) {
-          content = null;
-        }
-      } else if (typeof this.readFileSnapshot === "function") {
-        content = await this.readFileSnapshot(file, source);
-      }
-      if (typeof content !== "string") {
-        failures.push(file.path);
-        continue;
-      }
-      documents.push({ path: file.path, text: content });
-    }
-    return { documents, fileByPath, failures };
-  }
-
-  async consumeBlockedTaskPomodoroLink(source, targetFile) {
-    const editor = source && source.editor;
-    const targetLine = editor && typeof editor.getLine === "function"
-      ? editor.getLine(source.line)
-      : null;
-    const targetMatch = typeof targetLine === "string"
-      ? getObsidianTaskLineMatch(targetLine)
-      : null;
-    if (
-      !targetMatch ||
-      (targetMatch[1] !== BLOCKED_OBSIDIAN_TASK_STATUS &&
-        !hasProjectBlockedResidentTag(targetLine))
-    ) {
-      return false;
-    }
-    const { documents, fileByPath, failures } =
-      await this.readTaskDependencyDocuments(source, targetFile);
-    const plan = planTaskLinkBlockConsumption(
-      documents,
-      source.sourcePath,
-      source.line,
-      this.now(),
-    );
-    if (!plan) {
-      return false;
-    }
-    if (
-      plan.unresolvedIds && plan.unresolvedIds.length > 0 &&
-      failures.length > 0
-    ) {
-      new Notice(
-        "Task link blocked: dependency status could not be checked; no Pomodoro link was created",
-      );
-      return true;
-    }
-    if (!plan.blocked) {
-      return false;
-    }
-
-    let applied = 0;
-    let failed = false;
-    const updates = [...plan.updatesByPath.entries()].sort(([left], [right]) =>
-      left.localeCompare(right),
-    );
-    for (const [path, update] of updates) {
-      if (update.text === update.preimage) {
-        continue;
-      }
-      const file = fileByPath.get(path) ||
-        (this.app.vault &&
-        typeof this.app.vault.getAbstractFileByPath === "function"
-          ? this.app.vault.getAbstractFileByPath(path)
-          : null);
-      if (!file) {
-        failed = true;
-        continue;
-      }
-      const statusPlan = {
-        hasChanges: true,
-        content: update.text,
-        edits: update.edits,
-      };
-      if (
-        await this.applyTargetTaskPlan(
-          file,
-          source,
-          statusPlan,
-          update.preimage,
-          { noticePrefix: "Task consumption stopped" },
-        )
-      ) {
-        applied += update.edits.length;
-      } else {
-        failed = true;
-      }
-    }
-
-    if (plan.inheritedProjectBlocked) {
-      new Notice(
-        `Project blocked by parent project · ${plan.projectParent || plan.projectPath || source.sourcePath} · no Pomodoro link was created`,
-      );
-    } else if (plan.dependencyBlocked) {
-      const promotionText = applied > 0
-        ? `raised ${applied} prerequisite${applied === 1 ? "" : "s"} to Next`
-        : "prerequisites already raised";
-      const suffix = failed ? " · some updates failed" : "";
-      new Notice(
-        `${plan.projectDependencyBlocked ? "Project blocked by dependency" : "Task blocked"} · ${promotionText}${plan.projectPath ? ` · project ${plan.projectPath}` : ""}${suffix} · no Pomodoro link created`,
-      );
-    } else if (plan.projectDateRefusal) {
-      new Notice(
-        `Project date blocked · move the project date from the ^prj Schedule action in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`,
-      );
-    } else if (plan.projectScheduleIsFuture) {
-      new Notice(
-        `Project blocked by date until ${plan.projectSchedule} · move the ^prj Schedule in ${plan.projectPath} · no Pomodoro link created`,
-      );
-    } else {
-      new Notice(`Task blocked · project reason in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`);
-    }
-    return true;
   }
 
   // The cursor/task-eligibility half of openPomodoroTaskLink, split out so it
@@ -15538,6 +15649,286 @@ class BlockIdPromptPomodoroLinksMixin {
       status,
       routeGate,
     );
+  }
+
+}
+// ---- src/121-plugin-pomodoro-dependencies.js ----
+class BlockIdPromptPomodoroDependencyMixin {
+  async readTaskDependencyDocuments(source, targetFile, options = {}) {
+    const vault = this.app && this.app.vault;
+    let files = [];
+    const pathFailures = [];
+    if (options.taskBearingOnly === true) {
+      const index = this.taskWikilinkIndex;
+      const paths = index && typeof index.taskBearingPaths === "function"
+        ? index.taskBearingPaths()
+        : [];
+      const wanted = new Set([...paths, source && source.sourcePath].filter(Boolean));
+      files = [...wanted].map((path) => {
+        try {
+          const file = vault && typeof vault.getAbstractFileByPath === "function"
+            ? vault.getAbstractFileByPath(path)
+            : null;
+          if (!file) {
+            pathFailures.push(path);
+          }
+          return file;
+        } catch (_error) {
+          pathFailures.push(path);
+          return null;
+        }
+      }).filter((file) => file && file.path);
+    } else {
+      files = vault && typeof vault.getMarkdownFiles === "function"
+        ? vault.getMarkdownFiles().filter((file) => file && file.path)
+        : [];
+    }
+    if (targetFile && !files.some((file) => file.path === targetFile.path)) {
+      files.push(targetFile);
+    }
+    const documents = [];
+    const fileByPath = new Map(files.map((file) => [file.path, file]));
+    const failures = [...pathFailures];
+    for (const file of files) {
+      let content = null;
+      if (
+        file.path === source.sourcePath && source.editor &&
+        typeof source.editor.getValue === "function"
+      ) {
+        content = source.editor.getValue();
+      } else if (typeof readAuthoritativePromptTargetContent === "function") {
+        try {
+          const snapshot = await readAuthoritativePromptTargetContent(
+            this,
+            source,
+            file,
+          );
+          if (!snapshot || snapshot.ambiguous) {
+            failures.push(file.path);
+            continue;
+          }
+          content = snapshot.content;
+        } catch (error) {
+          content = null;
+        }
+      } else if (typeof this.readFileSnapshot === "function") {
+        content = await this.readFileSnapshot(file, source);
+      }
+      if (typeof content !== "string") {
+        failures.push(file.path);
+        continue;
+      }
+      documents.push({ path: file.path, text: content });
+    }
+    return { documents, fileByPath, failures };
+  }
+
+  async consumeBlockedTaskPomodoroLink(source, targetFile, options = {}) {
+    const editor = source && source.editor;
+    const targetPath = options.targetPath || source.sourcePath;
+    const targetLineNumber = Number.isInteger(options.targetLine)
+      ? options.targetLine
+      : source.line;
+    const targetLine = typeof options.targetLineText === "string"
+      ? options.targetLineText
+      : editor && typeof editor.getLine === "function"
+        ? editor.getLine(targetLineNumber)
+        : null;
+    const targetMatch = typeof targetLine === "string"
+      ? getObsidianTaskLineMatch(targetLine)
+      : null;
+    if (
+      !targetMatch ||
+      (options.forceCheck !== true &&
+        targetMatch[1] !== BLOCKED_OBSIDIAN_TASK_STATUS &&
+        !hasProjectBlockedResidentTag(targetLine))
+    ) {
+      return options.returnDetails === true
+        ? { handled: false, kind: "clear", plan: null }
+        : false;
+    }
+    const { documents, fileByPath, failures } =
+      await this.readTaskDependencyDocuments(source, targetFile, {
+        taskBearingOnly: options.taskBearingOnly === true,
+      });
+    if (typeof options.targetContent === "string") {
+      const existing = documents.find((document) => document.path === targetPath);
+      if (existing) {
+        existing.text = options.targetContent;
+      } else {
+        documents.push({ path: targetPath, text: options.targetContent });
+      }
+    }
+    const plan = planTaskLinkBlockConsumption(
+      documents,
+      targetPath,
+      targetLineNumber,
+      this.now(),
+    );
+    if (!plan) {
+      if (
+        options.returnDetails === true &&
+        (failures.length > 0 || options.indexReady === false)
+      ) {
+        new Notice(
+          "Task link blocked: dependency status could not be checked; no Pomodoro link was created",
+        );
+        return { handled: true, kind: "unavailable", plan: null, failures };
+      }
+      return options.returnDetails === true
+        ? { handled: false, kind: "clear", plan: null }
+        : false;
+    }
+    if (
+      options.returnDetails !== true &&
+      plan.unresolvedIds && plan.unresolvedIds.length > 0 &&
+      failures.length > 0
+    ) {
+      new Notice(
+        "Task link blocked: dependency status could not be checked; no Pomodoro link was created",
+      );
+      return options.returnDetails === true
+        ? { handled: true, kind: "unavailable", plan, failures, documents }
+        : true;
+    }
+    const projectBlocked = plan.inheritedProjectBlocked ||
+      plan.projectDependencyBlocked || plan.projectScheduleIsFuture ||
+      plan.projectDateRefusal;
+    if (options.returnDetails === true && projectBlocked) {
+      if (plan.inheritedProjectBlocked) {
+        new Notice(
+          `Project blocked by parent project · ${plan.projectParent || plan.projectPath || targetPath} · no Pomodoro link was created`,
+        );
+      } else if (plan.projectScheduleIsFuture) {
+        new Notice(
+          `Project blocked by date until ${plan.projectSchedule} · move the ^prj Schedule in ${plan.projectPath} · no Pomodoro link was created`,
+        );
+      } else if (plan.projectDateRefusal) {
+        new Notice(
+          `Project date blocked · move the project date from the ^prj Schedule action in ${plan.projectPath || targetPath} · no Pomodoro link was created`,
+        );
+      } else {
+        new Notice(
+          `Project blocked by dependency · move the ^prj Schedule in ${plan.projectPath || targetPath} · no Pomodoro link was created`,
+        );
+      }
+      return {
+        handled: true,
+        kind: "project",
+        plan,
+        applied: 0,
+        failed: false,
+        failures,
+        documents,
+        writtenDocuments: new Map(),
+      };
+    }
+    if (
+      options.returnDetails === true &&
+      (failures.length > 0 || options.indexReady === false)
+    ) {
+      new Notice(
+        "Task link blocked: dependency status could not be checked; no Pomodoro link was created",
+      );
+      return {
+        handled: true,
+        kind: "unavailable",
+        plan,
+        failures,
+        documents,
+      };
+    }
+    if (!plan.blocked) {
+      return options.returnDetails === true
+        ? { handled: false, kind: "clear", plan, failures, documents }
+        : false;
+    }
+
+    let applied = 0;
+    let failed = false;
+    const writtenDocuments = new Map();
+    const updates = [...plan.updatesByPath.entries()].sort(([left], [right]) =>
+      left.localeCompare(right),
+    );
+    for (const [path, update] of updates) {
+      if (update.text === update.preimage) {
+        continue;
+      }
+      const file = fileByPath.get(path) ||
+        (this.app.vault &&
+        typeof this.app.vault.getAbstractFileByPath === "function"
+          ? this.app.vault.getAbstractFileByPath(path)
+          : null);
+      if (!file) {
+        failed = true;
+        continue;
+      }
+      const statusPlan = {
+        hasChanges: true,
+        content: update.text,
+        edits: update.edits,
+      };
+      if (
+        await this.applyTargetTaskPlan(
+          file,
+          source,
+          statusPlan,
+          update.preimage,
+          { noticePrefix: "Task consumption stopped" },
+        )
+      ) {
+        applied += update.edits.length;
+        writtenDocuments.set(path, update.text);
+        if (options.taskBearingOnly === true && typeof this.refreshTaskWikilinkNote === "function") {
+          this.refreshTaskWikilinkNote(path, update.text);
+        }
+      } else {
+        failed = true;
+      }
+    }
+
+    if (plan.inheritedProjectBlocked) {
+      new Notice(
+        `Project blocked by parent project · ${plan.projectParent || plan.projectPath || source.sourcePath} · no Pomodoro link was created`,
+      );
+    } else if (plan.dependencyBlocked) {
+      const promotionText = applied > 0
+        ? `raised ${applied} prerequisite${applied === 1 ? "" : "s"} to Next`
+        : "prerequisites already raised";
+      const suffix = failed ? " · some updates failed" : "";
+      new Notice(
+        `${plan.projectDependencyBlocked ? "Project blocked by dependency" : "Task blocked"} · ${promotionText}${plan.projectPath ? ` · project ${plan.projectPath}` : ""}${suffix} · no Pomodoro link created`,
+      );
+    } else if (plan.projectDateRefusal) {
+      new Notice(
+        `Project date blocked · move the project date from the ^prj Schedule action in ${plan.projectPath || source.sourcePath} · no Pomodoro link created`,
+      );
+    } else if (plan.projectScheduleIsFuture) {
+      new Notice(
+        `Project blocked by date until ${plan.projectSchedule} · move the ^prj Schedule in ${plan.projectPath} · no Pomodoro link created`,
+      );
+    } else {
+      new Notice(`Task blocked · project reason in ${plan.projectPath || targetPath} · no Pomodoro link created`);
+    }
+    if (options.returnDetails === true) {
+      const kind = plan.inheritedProjectBlocked || plan.projectDependencyBlocked ||
+        plan.projectScheduleIsFuture || plan.projectDateRefusal
+        ? "project"
+        : plan.dependencyBlocked
+          ? "prerequisites"
+          : "project";
+      return {
+        handled: true,
+        kind,
+        plan,
+        applied,
+        failed,
+        failures,
+        documents,
+        writtenDocuments,
+      };
+    }
+    return true;
   }
 
 }
@@ -16492,6 +16883,12 @@ class BlockIdPromptTaskWikilinksMixin {
     if (!row || !row.blockId) {
       return { ok: false };
     }
+    if (this.taskWikilinkPomodoroContext(source)) {
+      return this.taskWikilinkPomodoroCommit(source, row, {
+        id: row.blockId,
+        pomodoroTarget: item.pomodoroTarget,
+      });
+    }
     if (!this.taskWikilinkTokenStillPresent(source)) {
       new Notice("Task wikilink not inserted: the ((…)) text changed");
       return { ok: false, stale: true };
@@ -16602,6 +16999,529 @@ function taskWikilinkUpdateIsUserInput(update) {
     }
   }
   return sawInput;
+}
+// ---- src/129-plugin-task-wikilink-pomodoro.js ----
+function taskWikilinkPomodoroDisplayDate(value) {
+  const date = value && typeof value === "object"
+    ? value
+    : parseStrictCalendarDate(value);
+  if (!date || !Number.isInteger(date.month) || !Number.isInteger(date.day)) {
+    return "";
+  }
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[date.month - 1]} ${date.day}`;
+}
+
+function taskWikilinkPaddedTaskText(row) {
+  const line = row && Number.isInteger(row.line) ? row.line : 0;
+  return `${"\n".repeat(Math.max(0, line))}${String((row && row.rawLine) || "")}`;
+}
+
+function taskWikilinkPomodoroCanonicalId(path, blockId) {
+  return `${String(path || "").replace(/\.md$/i, "").replace(/\//g, "__")}__${String(blockId || "")}`;
+}
+
+class BlockIdPromptTaskWikilinkPomodoroMixin {
+  taskWikilinkPomodoroContext(source) {
+    const wikilinkToken = source && source.trigger === "((";
+    if (!wikilinkToken && !sourceQualifiesForPomodoroActivation(source)) {
+      return null;
+    }
+    try {
+      const content = source.editor.getValue();
+      const lines = String(content || "").split("\n");
+      if (wikilinkToken && !isSoleContentLinkBullet(
+        source.editor.getLine(source.line) || "",
+        source.replaceStart,
+        source.replaceEnd,
+      )) {
+        return null;
+      }
+      const ancestry = findPomodoroSourceContext(lines, source.line);
+      if (!ancestry || !ancestry.isOpen) {
+        return null;
+      }
+      const model = collectPomodoroLinkEntries(content);
+      const entry = (model.entries || []).find((candidate) => candidate.entryLine === ancestry.ownerLine);
+      if (!entry || !entry.open) {
+        return null;
+      }
+      const parts = parsePomodoroEntryParts(entry.entryText);
+      return {
+        sourcePath: source.sourcePath,
+        ownerLine: entry.entryLine,
+        entryText: entry.entryText,
+        title: entry.name || entry.label || entry.range && entry.range.text || entry.title,
+        range: entry.range ? entry.range.text : "planned",
+        entry,
+        parts,
+      };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  async taskWikilinkPomodoroDocuments(source) {
+    const index = this.ensureTaskWikilinkIndex();
+    if (!index.progress.ready) {
+      await new Promise((resolve) => {
+        let settled = false;
+        let unsubscribe = () => {};
+        const finish = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          unsubscribe();
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(finish, 30000);
+        unsubscribe = index.subscribe(() => {
+          if (index.progress.ready) {
+            finish();
+          }
+        });
+        if (index.progress.ready) {
+          finish();
+        }
+      });
+    }
+    const snapshot = await this.readTaskDependencyDocuments(source, null, { taskBearingOnly: true });
+    const indexReady = Boolean(index.progress && index.progress.ready);
+    if (!indexReady) {
+      snapshot.failures.push("task index is not ready");
+    }
+    return { ...snapshot, indexReady };
+  }
+
+  taskWikilinkPomodoroTarget(context, row, shown) {
+    const target = {
+      kind: "existing",
+      entryLine: context.ownerLine,
+      entryText: context.entryText,
+      title: context.title,
+    };
+    if (shown && typeof shown === "object" && shown.theme) {
+      target.themeIntent = {
+        deliberate: true,
+        linkOnce: false,
+        shown: clonePomodoroThemeSuggestion(shown),
+      };
+    }
+    return target;
+  }
+
+  taskWikilinkPomodoroThemePreview(row, context) {
+    try {
+      const api = getBlockPomodoroThemesApi(this.app);
+      if (!api || typeof api.suggestFor !== "function") {
+        return { target: this.taskWikilinkPomodoroTarget(context, row, null), typeClause: null };
+      }
+      const text = taskWikilinkPaddedTaskText(row);
+      const shown = api.suggestFor({
+        path: row.notePath,
+        line: row.line + 1,
+        text,
+      });
+      const target = this.taskWikilinkPomodoroTarget(context, row, shown);
+      if (!target.themeIntent) {
+        return { target, typeClause: null };
+      }
+      const source = {
+        sourcePath: row.notePath,
+        line: row.line,
+        pomodoroTarget: target,
+      };
+      const write = resolvePomodoroLinkThemeWrite(this, source, target, text);
+      let typeClause = null;
+      if (write.retypeKind === "set" && write.destinationThemeName) {
+        typeClause = `type becomes ${write.destinationThemeName}`;
+      } else if (write.retypeKind === "clear") {
+        typeClause = `type cleared (inherits ${write.destinationThemeName || write.keepsName || "the note type"})`;
+      } else if (write.retypeKind && write.keepsName) {
+        typeClause = `keeps ${write.keepsName}`;
+      }
+      return { target, typeClause };
+    } catch (_error) {
+      return { target: this.taskWikilinkPomodoroTarget(context, row, null), typeClause: null };
+    }
+  }
+
+  taskWikilinkPomodoroProjectGuard(plan, path) {
+    if (!plan) {
+      return null;
+    }
+    const projectPath = plan.projectPath || path;
+    if (plan.inheritedProjectBlocked) {
+      return `Blocked by its project ${plan.projectParent || projectPath} · move the ^prj Schedule`;
+    }
+    if (plan.projectScheduleIsFuture) {
+      return `Blocked by project date until ${plan.projectSchedule} · move the ^prj Schedule in ${projectPath}`;
+    }
+    if (plan.projectDateRefusal) {
+      return `Project date blocked · move the project date from the ^prj Schedule action in ${projectPath}`;
+    }
+    if (plan.projectDependencyBlocked) {
+      return `Blocked by project prerequisites · move the ^prj Schedule in ${projectPath}`;
+    }
+    return null;
+  }
+
+  taskWikilinkPomodoroAlreadyLinked(context, row, id) {
+    if (!context || !row || !id) {
+      return false;
+    }
+    for (const link of context.entry.links || []) {
+      if (link.blockId !== id) {
+        continue;
+      }
+      try {
+        const destination = this.resolveReferenceDestination(link.targetText, context.sourcePath);
+        const path = typeof destination === "string" ? destination : destination && destination.path;
+        if (path === row.notePath || (!link.targetText && context.sourcePath === row.notePath)) {
+          return true;
+        }
+      } catch (_error) {
+        if (!link.targetText && context.sourcePath === row.notePath) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  taskWikilinkPomodoroDetail(source, row, context, dependencySnapshot) {
+    const detail = {
+      scheduledDate: null,
+      scheduleLogPresent: Boolean(row.scheduleLogPresent),
+      typeClause: null,
+      target: null,
+      waitingOn: 0,
+      guardText: null,
+      dependencyUnavailable: false,
+    };
+    const scheduled = findSingleFutureScheduledField(row.rawLine, localTodayParts(this.now()));
+    if (scheduled) {
+      detail.scheduledDate = taskWikilinkPomodoroDisplayDate(scheduled.date);
+    }
+    const theme = this.taskWikilinkPomodoroThemePreview(row, context);
+    detail.target = theme.target;
+    detail.typeClause = theme.typeClause;
+    if (row.blockId && this.taskWikilinkPomodoroAlreadyLinked(context, row, row.blockId)) {
+      detail.guardText = "Already in this Pomodoro";
+      return detail;
+    }
+    const docs = dependencySnapshot && Array.isArray(dependencySnapshot.documents)
+      ? dependencySnapshot.documents
+      : [];
+    const plan = planTaskLinkBlockConsumption(docs, row.notePath, row.line, this.now());
+    const failures = dependencySnapshot && Array.isArray(dependencySnapshot.failures)
+      ? dependencySnapshot.failures
+      : [];
+    if (
+      !dependencySnapshot || dependencySnapshot.indexReady === false ||
+      failures.length > 0
+    ) {
+      detail.dependencyUnavailable = true;
+    }
+    if (plan && plan.blocked) {
+      const unavailable = (plan.unresolvedIds || []).length > 0 &&
+        failures.length > 0;
+      const projectGuard = this.taskWikilinkPomodoroProjectGuard(plan, row.notePath);
+      if (projectGuard) {
+        detail.guardText = projectGuard;
+        return detail;
+      }
+      if (unavailable) {
+        detail.dependencyUnavailable = true;
+      } else if (plan.dependencyBlocked && !detail.dependencyUnavailable) {
+        detail.waitingOn = plan.openPrerequisiteCount || 0;
+      }
+    } else if (row.prjBlocked) {
+      detail.guardText = `Blocked by its project ${row.notePath} · move the ^prj Schedule`;
+      return detail;
+    } else if (!plan && failures.length > 0) {
+      detail.dependencyUnavailable = true;
+    }
+    return detail;
+  }
+
+  async taskWikilinkPomodoroPrepare(source, task, options = {}) {
+    const context = this.taskWikilinkPomodoroContext(source);
+    if (!context) {
+      new Notice("Task link stopped: the source is no longer under an open Pomodoro");
+      return { handled: true, kind: "stale" };
+    }
+    const sourcePresent = source.trigger === "(("
+      ? this.taskWikilinkTokenStillPresent(source)
+      : this.sourceMarkerStillPresent(source, { quiet: true });
+    if (!sourcePresent) {
+      new Notice("Task link stopped: the source link changed");
+      return { handled: true, kind: "stale" };
+    }
+    const chosenTarget = options.pomodoroTarget || task.pomodoroTarget || source.pomodoroTarget || null;
+    if (
+      chosenTarget && chosenTarget.kind === "existing" &&
+      (chosenTarget.entryLine !== context.ownerLine || chosenTarget.entryText !== context.entryText)
+    ) {
+      new Notice("Task link stopped: the source Pomodoro changed");
+      return { handled: true, kind: "stale" };
+    }
+    const file = this.resolveTaskFile(task.notePath) ||
+      (this.app.vault && this.app.vault.getAbstractFileByPath
+        ? this.app.vault.getAbstractFileByPath(task.notePath)
+        : null);
+    if (!file) {
+      new Notice("Task link blocked: target note could not be resolved");
+      return { handled: true, kind: "stale" };
+    }
+    const authoritative = await readAuthoritativePromptTargetContent(this, source, file);
+    if (!authoritative || typeof authoritative.content !== "string") {
+      new Notice(`Task link blocked: ${task.notePath} could not be read`);
+      return { handled: true, kind: "stale" };
+    }
+    let currentTask = { ...task };
+    if (source.trigger === "((" && options.isNewId === true) {
+      const relocated = taskWikilinkLineForIdentity(authoritative.content, task);
+      if (!relocated) {
+        new Notice(`Task link blocked: selected task moved or changed in ${task.notePath}`);
+        return { handled: true, kind: "stale" };
+      }
+      currentTask = { ...currentTask, ...relocated };
+    } else if ((authoritative.content.split("\n")[task.line] || "") !== task.rawLine) {
+      new Notice(`Task link blocked: selected task changed in ${task.notePath}`);
+      return { handled: true, kind: "stale" };
+    }
+    const taskMatch = getObsidianTaskLineMatch(currentTask.rawLine);
+    if (!taskMatch || !OPEN_OBSIDIAN_TASK_STATUSES.has(taskMatch[1])) {
+      new Notice("Closed tasks can't join a Pomodoro");
+      return { handled: true, kind: "closed" };
+    }
+    const existingId = getTrailingBlockId(currentTask.rawLine);
+    const id = options.id || null;
+    if (options.isNewId === true && existingId) {
+      new Notice(`Task link stopped: selected task now has ^${existingId}`);
+      return { handled: true, kind: "stale" };
+    }
+    if (options.isNewId !== true && id && existingId !== id) {
+      new Notice("Task link blocked: selected task block ID changed");
+      return { handled: true, kind: "stale" };
+    }
+    if (id) {
+      const matches = blockTokenMatches(authoritative.content, id);
+      if (options.isNewId === true ? matches.length > 0 : matches.length !== 1) {
+        new Notice(`Block ID ^${id} is no longer unique in ${task.notePath}`);
+        return { handled: true, kind: "stale" };
+      }
+      if (this.taskWikilinkPomodoroAlreadyLinked(context, currentTask, id)) {
+        new Notice("Already in this Pomodoro");
+        return { handled: true, kind: "duplicate" };
+      }
+    }
+    let dependencySnapshot;
+    try {
+      dependencySnapshot = await this.taskWikilinkPomodoroDocuments(source);
+    } catch (_error) {
+      new Notice(
+        "Task link blocked: dependency status could not be checked; no Pomodoro link was created",
+      );
+      return { handled: true, kind: "unavailable" };
+    }
+    let dependency;
+    try {
+      dependency = await this.consumeBlockedTaskPomodoroLink(source, file, {
+        forceCheck: true,
+        returnDetails: true,
+        taskBearingOnly: true,
+        indexReady: dependencySnapshot.indexReady !== false,
+        targetPath: currentTask.notePath,
+        targetLine: currentTask.line,
+        targetLineText: currentTask.rawLine,
+        targetContent: authoritative.content,
+      });
+    } catch (_error) {
+      new Notice(
+        "Task link blocked: dependency status could not be checked; no Pomodoro link was created",
+      );
+      return { handled: true, kind: "unavailable" };
+    }
+    if (dependency && dependency.handled) {
+      if (dependency.kind === "prerequisites") {
+        if (source.trigger === "^^") {
+          this.revertTaskPickerMarker(source, { quiet: true });
+          return { handled: true, kind: "prerequisites", result: { completed: true } };
+        }
+        return {
+          handled: true,
+          kind: "prerequisites",
+          result: {
+            keepOpen: true,
+            raised: this.taskWikilinkPomodoroRaisedSection(currentTask, dependency),
+          },
+        };
+      }
+      return {
+        handled: true,
+        kind: dependency.kind,
+        result: source.trigger === "((" ? { keepOpen: true } : null,
+      };
+    }
+    const themeTarget = chosenTarget || this.taskWikilinkPomodoroThemePreview(currentTask, context).target;
+    if (hasProjectBlockedResidentTag(currentTask.rawLine)) {
+      const projectReason = `Blocked by its project ${currentTask.notePath} · move the ^prj Schedule`;
+      new Notice(projectReason);
+      return {
+        handled: true,
+        kind: "project",
+        result: source.trigger === "((" ? { keepOpen: true } : null,
+      };
+    }
+    return {
+      handled: false,
+      context,
+      task: currentTask,
+      file,
+      content: authoritative.content,
+      target: themeTarget,
+      themeWrite: null,
+    };
+  }
+
+  taskWikilinkPomodoroRaisedSection(task, dependency) {
+    const plan = dependency && dependency.plan;
+    const documents = dependency && Array.isArray(dependency.documents)
+      ? dependency.documents
+      : [];
+    const written = dependency && dependency.writtenDocuments instanceof Map
+      ? dependency.writtenDocuments
+      : new Map();
+    const openIds = new Set((plan && plan.openPrerequisites || []).map(String));
+    const nextDocuments = documents.map((document) => ({
+      path: document.path,
+      text: written.has(document.path) ? written.get(document.path) : document.text,
+    }));
+    const records = taskDependencyRecordsFromDocuments(nextDocuments);
+    const matching = records.filter((record) => {
+      if (record.status !== "*") {
+        return false;
+      }
+      const keys = [record.taskId, record.blockId ? taskWikilinkPomodoroCanonicalId(record.path, record.blockId) : null]
+        .filter(Boolean)
+        .map(String);
+      return keys.some((key) => openIds.has(key));
+    });
+    const rows = [];
+    for (const document of nextDocuments) {
+      const parsed = parseNoteTaskRows(
+        document.path,
+        document.text,
+        (this.taskWikilinkIndex && this.taskWikilinkIndex.settings) || defaultTaskWikilinkSettings(),
+      );
+      for (const row of parsed) {
+        if (row.status === "*" && matching.some((record) => record.path === row.notePath && record.line === row.line)) {
+          rows.push(row);
+        }
+      }
+    }
+    const count = rows.length;
+    const banner = count > 0
+      ? dependency.applied > 0
+        ? `Raised ${count} ${count === 1 ? "prerequisite" : "prerequisites"} to Next · pick one to link`
+        : "Prerequisites already Next · pick one to link"
+      : "Prerequisites changed · pick one to link";
+    return { rows, taskTitle: task.displayText || cleanTaskDisplayText(task.rawLine), banner };
+  }
+
+  async taskWikilinkPomodoroCommit(source, task, options = {}) {
+    const id = options.id || task.existingId;
+    const prepared = await this.taskWikilinkPomodoroPrepare(source, task, {
+      ...options,
+      id,
+      isNewId: options.isNewId === true,
+    });
+    if (prepared.handled) {
+      return prepared.result || (prepared.kind === "stale" ? { stale: true } : null);
+    }
+    const themeSource = {
+      sourcePath: prepared.task.notePath,
+      line: prepared.task.line,
+      pomodoroTarget: prepared.target,
+    };
+    const themeWrite = resolvePomodoroLinkThemeWrite(
+      this,
+      themeSource,
+      prepared.target,
+      prepared.content,
+    );
+    const plan = planTargetTaskUpdate(prepared.content, prepared.task.line, {
+      activationEligible: true,
+      forceNext: true,
+      newBlockId: options.isNewId === true ? id : null,
+      now: this.now(),
+      stampLine: this.getFreshnessStampLine(),
+      freshDateText: this.getFreshnessDateText(),
+      themeEdit: themeWrite.themeEdit,
+    });
+    if (!plan) {
+      new Notice(`Task link stopped: selected task changed in ${prepared.task.notePath}`);
+      return { stale: true };
+    }
+    attachPomodoroLinkThemeOutcome(plan, themeWrite);
+    if (
+      plan.hasChanges &&
+      !(await this.applyTargetTaskPlan(prepared.file, source, plan, prepared.content))
+    ) {
+      return { stale: true };
+    }
+    const linkTarget = this.taskWikilinkLinkTarget(prepared.task, source.sourcePath);
+    const completionSource = this.adjustSourceForPlan(
+      {
+        ...source,
+        targetText: linkTarget,
+        blockPrefix: CANONICAL_BLOCK_LINK_PREFIX,
+        aliasSuffix: "",
+      },
+      prepared.task.notePath,
+      plan,
+    );
+    const completion = this.completeTaskSourceLink(
+      completionSource,
+      id,
+      prepared.task.notePath,
+    );
+    if (!completion) {
+      const parts = activationPartialFailureParts(plan);
+      new Notice(`Task ${parts.length ? parts.join(", ") : "updated"}, but the source link changed before completion`);
+      return { stale: true };
+    }
+    this.refreshTaskWikilinkNote(prepared.task.notePath, plan.content);
+    const themeChip = formatPomodoroThemeLinkChip(plan);
+    const entryName = pomodoroTargetDestinationName(prepared.target) || prepared.context.title;
+    const dailyContent = source.editor && typeof source.editor.getValue === "function"
+      ? source.editor.getValue()
+      : null;
+    new Notice(
+      `Linked under ${entryName}${themeChip}${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}${this.planBudgetNoticeSuffix(dailyContent)}`,
+    );
+    return { ok: true, completed: true };
+  }
+
+  taskWikilinkLinkTarget(task, sourcePath) {
+    let target = task.linkTarget || taskWikilinkPathStem(task.notePath);
+    try {
+      const resolved = this.app.metadataCache &&
+        typeof this.app.metadataCache.getFirstLinkpathDest === "function"
+        ? this.app.metadataCache.getFirstLinkpathDest(target, sourcePath)
+        : null;
+      if (!resolved || resolved.path !== task.notePath) {
+        target = taskWikilinkPathStem(task.notePath);
+      }
+    } catch (_error) {
+      target = taskWikilinkPathStem(task.notePath);
+    }
+    return target;
+  }
 }
 // ---- src/130-plugin-task-link-open-and-notices.js ----
 class BlockIdPromptTaskLinkOpenAndNoticesMixin {
@@ -17949,9 +18869,11 @@ function installBlockIdPromptMixins(pluginClass, mixins) {
 installBlockIdPromptMixins(BlockIdPromptPlugin, [
   BlockIdPromptBlockIdSubmitMixin,
   BlockIdPromptPomodoroLinksMixin,
+  BlockIdPromptPomodoroDependencyMixin,
   BlockIdPromptPomodoroLinkPickerMixin,
   BlockIdPromptPomodoroLinkPickerApiMixin,
   BlockIdPromptTaskWikilinksMixin,
+  BlockIdPromptTaskWikilinkPomodoroMixin,
   BlockIdPromptPomodoroInboxRouteMixin,
   BlockIdPromptTaskLinkOpenAndNoticesMixin,
   BlockIdPromptTargetPlansAndRewritesMixin,

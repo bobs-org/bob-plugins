@@ -108,6 +108,23 @@ currently holding the `((` token stay guarded. If the task moved while the promp
 was open, a unique exact line match lets Bob finish safely; ambiguous or changed
 lines leave the picker available for a fresh selection.
 
+When `((...))` is the only content of a sub-bullet under an open Pomodoro, the
+card becomes **Link a task to this Pomodoro** and shows only open tasks. Its
+action line previews the target link, Ready-to-Next change, future schedule
+pull-forward and existing Schedule Log write, plus any type retype. A target
+already linked in that Pomodoro is disabled. Project-blocked tasks are disabled
+with the project Schedule reason. A task blocked by its own open prerequisites
+stays selectable and shows how many prerequisites Enter will raise to Next; the
+task itself remains unlinked, and the raised prerequisites are pinned in a
+`Raised for …` section so one can be chosen next.
+
+A `^^` task-picker marker that is itself the only content of an open Pomodoro
+sub-bullet uses the same gate and commit. It refuses closed targets and
+project-blocked tasks; when only the target's own prerequisites block it, the
+prerequisites are raised and the marker returns to `[[note#^]]` without linking
+the target. Successful `((` and `^^` commits share lane, freshness, schedule,
+Schedule Log, type, cleanup, and plan-budget handling.
+
 Keys: `↑↓` move, `↵` / Tab insert the selected identified link, `esc` clears a
 filter or closes, and `⌫` on an empty filter undoes `((`.
 

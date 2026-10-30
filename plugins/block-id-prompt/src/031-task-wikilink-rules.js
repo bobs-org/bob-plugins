@@ -323,6 +323,10 @@ function parseNoteTaskRows(notePath, content, settings) {
       blockId: blockId || null,
       hidden: taskWikilinkHasExactTag(lines[index], "#hide"),
       prjBlocked: taskWikilinkHasExactTag(lines[index], "#prj_is_blocked"),
+      scheduleLogPresent: Boolean(
+        findScheduledFieldMatches(lines[index]).length &&
+        findScheduleLogMarker(lines, index),
+      ),
       section,
       depth: taskWikilinkIndentationDepth(match[1]),
       searchText: taskWikilinkSearchText(body, active.globalFilter, blockId),

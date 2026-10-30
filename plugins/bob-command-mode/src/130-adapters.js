@@ -158,6 +158,27 @@ function cmAdapterGkeepPull(run, text) {
   return null;
 }
 
+function cmAdapterGcalSync(run, text) {
+  const report = cmAdapterJson(text);
+  if (!report || report.schema_version !== 1 || report.ok !== true) return null;
+  if (report.status === "waiting") {
+    return { outcome: "attention", summary: "Calendar waiting for today's note" };
+  }
+  if (!Array.isArray(report.rows) || !report.pomodoro || typeof report.pomodoro !== "object") return null;
+  const added = (kind) => report.rows.filter((row) => row && row.action === "added" && row.kind === kind).length;
+  const tasks = added("task");
+  const context = added("context");
+  const links = Number(report.pomodoro.links_added) || 0;
+  const parts = [];
+  if (tasks) parts.push(`+${tasks} task${tasks === 1 ? "" : "s"}`);
+  if (context) parts.push(`+${context} context`);
+  if (links) parts.push(`MEET +${links} link${links === 1 ? "" : "s"}`);
+  return {
+    outcome: "completed",
+    summary: parts.length ? `Calendar · ${parts.join(", ")}` : "Calendar unchanged",
+  };
+}
+
 cmRegisterOutcomeAdapter("ref-create", cmAdapterRefCreate);
 cmRegisterOutcomeAdapter("ref-scan", cmAdapterRefScan);
 cmRegisterOutcomeAdapter("vault-sync", cmAdapterVaultSync);
@@ -167,3 +188,4 @@ cmRegisterOutcomeAdapter("task-reroll", cmAdapterTaskReroll);
 cmRegisterOutcomeAdapter("pomodoro-status", cmAdapterPomodoroStatus);
 cmRegisterOutcomeAdapter("capture-session", cmAdapterCaptureSession);
 cmRegisterOutcomeAdapter("gkeep-pull", cmAdapterGkeepPull);
+cmRegisterOutcomeAdapter("gcal-sync", cmAdapterGcalSync);

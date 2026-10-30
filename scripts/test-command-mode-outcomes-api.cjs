@@ -77,6 +77,50 @@ test("adapters adjust the result; failures stay honest", () => {
   assert.deepEqual(classify({ exitCode: 1, stdoutText: "\u001b[31merror: red\u001b[0m\n" }), { outcome: "failed", summary: "error: red" });
 });
 
+test("gcal-sync summarizes added Event Tasks, context, and MEET links", () => {
+  const result = classify({
+    exitCode: 0,
+    adapterId: "gcal-sync",
+    stdoutText: JSON.stringify({
+      schema_version: 1,
+      ok: true,
+      status: "written",
+      rows: [
+        { action: "added", kind: "task" },
+        { action: "added", kind: "task" },
+        { action: "added", kind: "context" },
+        { action: "adopted", kind: "task" },
+      ],
+      pomodoro: { links_added: 2 },
+    }),
+  });
+  assert.deepEqual(result, {
+    outcome: "completed",
+    summary: "Calendar · +2 tasks, +1 context, MEET +2 links",
+  });
+});
+
+test("gcal-sync reports unchanged and waiting outcomes", () => {
+  const unchanged = classify({
+    exitCode: 0,
+    adapterId: "gcal-sync",
+    stdoutText: JSON.stringify({
+      schema_version: 1, ok: true, status: "unchanged", rows: [],
+      pomodoro: { links_added: 0 },
+    }),
+  });
+  assert.deepEqual(unchanged, { outcome: "completed", summary: "Calendar unchanged" });
+  const waiting = classify({
+    exitCode: 0,
+    adapterId: "gcal-sync",
+    stdoutText: JSON.stringify({
+      schema_version: 1, ok: true, status: "waiting", rows: [],
+      pomodoro: { links_added: 0 },
+    }),
+  });
+  assert.deepEqual(waiting, { outcome: "attention", summary: "Calendar waiting for today's note" });
+});
+
 test("api.commandMode settles, never rejects, and fires the workspace event", async () => {
   const base = makeRunner({});
   base.runner.deps.env = { ...process.env, XDG_STATE_HOME: base.tmpState, PATH: "/usr/bin:/bin" };

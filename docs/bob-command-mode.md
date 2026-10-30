@@ -100,6 +100,10 @@ its command, progress, and queued, overdue, or adopted state; clicking (or
 adopted mark. Every run the command-mode engine owns lights the indicator:
 sheet, palette, toast-action, and sibling-plugin API runs.
 
+The `gcal-sync` outcome adapter summarizes added calendar rows and links, for
+example `Calendar · +2 tasks, +1 context, MEET +2 links`. A no-op sync reports
+`Calendar unchanged`, and a sync waiting for the daily note reports that state.
+
 When a run takes more than 15 seconds and Obsidian is unfocused, the enabled OS
 notification opens that run's pager when clicked. The `OS notifications`
 setting controls this behavior.

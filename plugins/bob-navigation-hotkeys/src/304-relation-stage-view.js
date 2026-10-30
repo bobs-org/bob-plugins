@@ -345,20 +345,10 @@ function decorateRelationVaultStage(stage, options = {}) {
   };
 }
 
-const RELATION_INVERSE_PHRASES = Object.freeze({
-  "merged into": "merged from",
-  "duplicate of": "duplicated by",
-  "follow-up of": "followed up by",
-  "superseded by": "supersedes",
-  "split from": "split into",
-  "implemented by": "implements",
-  "verified by": "verifies",
-});
-
 function inverseRelationPhrase(label) {
   const raw = String(label || "").trim();
   if (!raw) return "";
-  return RELATION_INVERSE_PHRASES[raw.toLocaleLowerCase("en-US")] || `${raw} → this`;
+  return relationInverseForLabel(raw) || `${raw} → this`;
 }
 
 function relationStageIncomingRow(source, label, options = {}) {

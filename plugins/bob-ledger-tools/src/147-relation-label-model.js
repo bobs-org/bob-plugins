@@ -5,16 +5,6 @@
 const RELATION_LABELS_SCHEMA_VERSION = 1;
 const RELATION_LABELS_JOURNAL_DIR = ".bob/relations";
 const RELATION_LABELS_VIA = "bob-ledger-tools";
-const RELATION_LABEL_INVERSES = Object.freeze({
-  "merged into": "merged from",
-  "duplicate of": "duplicated by",
-  "follow-up of": "followed up by",
-  "superseded by": "supersedes",
-  "split from": "split into",
-  "implemented by": "implements",
-  "verified by": "verifies",
-});
-
 function relationLabelCollapseText(value) {
   return String(value || "").trim().split(/\s+/u).filter(Boolean).join(" ");
 }
@@ -26,7 +16,7 @@ function relationLabelKey(value) {
 }
 
 function relationLabelInversePhrase(value) {
-  return RELATION_LABEL_INVERSES[relationLabelKey(value)] || null;
+  return relationInverseForLabel(value);
 }
 
 function relationLabelCodepointCompare(left, right) {

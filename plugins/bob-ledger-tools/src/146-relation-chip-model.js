@@ -5,7 +5,7 @@
 // order (LC7), and an unresolvable LINKS target is broken (LC4). Reuses
 // the `bob-dep-*` DOM family with no new palette. Labels are muted
 // small-caps pills on the arrow side; inverse phrases are display-only
-// (decision `inverse_phrases = builtin`); three or more closed chips
+// (derived `‹participle› by` rule plus named pairs); three or more closed chips
 // collapse to `✓×N` (LC9). Never throws.
 const RELATION_STALE_TOOLTIP =
   "No longer links here · refreshes on the next reconcile";
@@ -20,25 +20,11 @@ const RELATION_MENTION_STALE_TOOLTIP =
 const RELATION_MENTION_LABEL = "💬 mentions";
 
 // Display-only inverse phrases (docs/task-relations.md §10). Storage
-// stays verbatim; matching is case-insensitive.
-const RELATION_INVERSE_PHRASES = [
-  ["merged into", "merged from"],
-  ["duplicate of", "duplicated by"],
-  ["follow-up of", "followed up by"],
-  ["superseded by", "supersedes"],
-  ["split from", "split into"],
-  ["implemented by", "implements"],
-  ["verified by", "verifies"],
-];
-
+// stays verbatim; matching is case-insensitive. Delegates to the shared
+// derived rule in `145a-relation-inverse-phrase.js`.
 function relationInversePhrase(label) {
   try {
-    const needle = String(label || "").trim().toLocaleLowerCase();
-    if (!needle) return null;
-    for (const pair of RELATION_INVERSE_PHRASES) {
-      if (String(pair[0]).toLocaleLowerCase() === needle) return pair[1];
-    }
-    return null;
+    return relationInverseForLabel(label);
   } catch (error) {
     return null;
   }

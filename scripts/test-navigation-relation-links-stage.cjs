@@ -1085,6 +1085,17 @@ test("Linked-from scans source LINKS, reverses built-in phrases, and ignores sto
   assert.equal(helpers.inverseRelationPhrase("implemented by"), "implements");
   assert.equal(helpers.inverseRelationPhrase("verified by"), "verifies");
   assert.equal(helpers.inverseRelationPhrase("see also"), "see also → this");
+  const relationLabelVectors = require("../plugins/bob-ledger-tools/scripts/fixtures/relation_labels/vectors.json");
+  for (const vector of relationLabelVectors.inverse) {
+    const expected = vector.expected == null
+      ? `${String(vector.label).trim()} → this`
+      : vector.expected;
+    assert.equal(
+      helpers.inverseRelationPhrase(vector.label),
+      expected,
+      vector.name,
+    );
+  }
 
   const view = helpers.planLinkedFromStageView({
     sources: [{ path: "Target.md", blockId: "target", line: 0 }],

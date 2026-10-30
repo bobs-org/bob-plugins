@@ -19,8 +19,9 @@ Both rows render as live chips in Live Preview and Reading view from the
 relation index (`api.relationIndex`), never the stored mirror:
 
 - Labels show as muted small-caps pills on the arrow side: `‹label› → (chip)`
-  on LINKS, and the inverse phrase (`merged into` reads `merged from`) on
-  LINKED FROM, otherwise `(chip) · ‹label› → this`.
+  on LINKS, and the inverse phrase (`merged into` reads `merged from`,
+  `inspired by` reads `inspires`) on LINKED FROM, otherwise
+  `(chip) · ‹label› → this`.
 - A stored entry that is no longer live is dashed with the tooltip
   `No longer links here · refreshes on the next reconcile`. A live edge
   missing from the text is appended in canonical order. A target that cannot
@@ -131,8 +132,9 @@ Sources of every task status count, including Next `[*]` and Blocked `[?]`.
 Its RESULTS are editable source tasks that can link here; Enter applies or
 removes the selected source, and `Shift+Enter` adds or changes the relation
 label. `Shift+Enter` labels the selected source's LINKS line, and the
-relation field's live sentence reads `‹source› — ‹label› → this`. Built-in
-labels use their inverse phrase in CURRENT. `N<Ctrl+Shift+L>`
+relation field's live sentence reads `‹source› — ‹label› → this`. Named pairs
+and derived `‹participle› by` inverses show that inverse phrase in CURRENT.
+`N<Ctrl+Shift+L>`
 applies one Links-to target and label to each of N+1 source tasks;
 `N<Ctrl+Shift+Alt+L>` is refused because one target cannot be chosen for a
 reverse batch. `Ctrl+D` on Links to removes every outgoing relation and

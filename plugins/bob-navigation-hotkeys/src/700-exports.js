@@ -782,7 +782,7 @@ module.exports.helpers = {
   blocksStageSubtitle,
   blocksStageGuard,
   relationStageRowKey,
-  inverseRelationPhrase,
+  inverseRelationPhrase, relationInverseForLabel, RELATION_INVERSE_NAMED_PAIRS,
   relationStageEdgeStatusSymbol,
   relationStageIncomingRowsFromEdges,
   collectRelationStageIncomingFromSnapshots,

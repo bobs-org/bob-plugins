@@ -1,10 +1,13 @@
 // Relation chips (bob-cli-a2 chips). LC vectors come from the approved
-// task-relations plan (§10 chips, LC1–LC14); the `inverse_phrases =
-// builtin` and `linked_from_remove = yes` decisions are covered with
-// the model and both render surfaces.
+// task-relations plan (§10 chips, LC1–LC14); derived inverse phrases
+// and `linked_from_remove = yes` are covered with the model and both
+// render surfaces.
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const Module = require("node:module");
 const test = require("node:test");
+const relationLabelVectors = require("../plugins/bob-ledger-tools/scripts/fixtures/relation_labels/vectors.json");
 
 const editorInfoField = { field: "info" };
 const editorLivePreviewField = { field: "live" };
@@ -76,10 +79,12 @@ Module._load = originalLoad;
 
 const {
   relationInversePhrase,
+  relationLabelInversePhrase,
+  relationInverseForLabel,
   relationChipModelForRow,
   relationFitMentionQuote,
   buildRelationChipElement,
-  RELATION_INVERSE_PHRASES,
+  RELATION_INVERSE_NAMED_PAIRS,
   RELATION_STALE_TOOLTIP,
 } = helpers;
 
@@ -202,21 +207,26 @@ test("LC4 unresolvable target is a dashed missing chip", () => {
   assert.match(chip.tooltip, /⚠ \^x not found/);
 });
 
-test("LC5 LINKED FROM shows the builtin inverse phrase", () => {
-  assert.deepEqual(RELATION_INVERSE_PHRASES, [
-    ["merged into", "merged from"],
-    ["duplicate of", "duplicated by"],
-    ["follow-up of", "followed up by"],
-    ["superseded by", "supersedes"],
-    ["split from", "split into"],
-    ["implemented by", "implements"],
-    ["verified by", "verifies"],
-  ]);
-  assert.equal(relationInversePhrase("Merged Into"), "merged from");
-  assert.equal(relationInversePhrase("DUPLICATE OF"), "duplicated by");
-  assert.equal(relationInversePhrase("Implemented By"), "implements");
-  assert.equal(relationInversePhrase("VERIFIED BY"), "verifies");
-  assert.equal(relationInversePhrase("see"), null);
+test("LC5 LINKED FROM shows the derived inverse phrase", () => {
+  const ledgerFragment = fs.readFileSync(
+    path.join(__dirname, "../plugins/bob-ledger-tools/src/145a-relation-inverse-phrase.js"),
+  );
+  const navFragment = fs.readFileSync(
+    path.join(__dirname, "../plugins/bob-navigation-hotkeys/src/303a-relation-inverse-phrase.js"),
+  );
+  assert.equal(Buffer.compare(ledgerFragment, navFragment), 0);
+  assert.deepEqual(RELATION_INVERSE_NAMED_PAIRS, {
+    "duplicate of": "duplicated by",
+    "follow-up of": "followed up by",
+    "merged into": "merged from",
+    "split from": "split into",
+  });
+  assert.ok(Array.isArray(relationLabelVectors.inverse) && relationLabelVectors.inverse.length > 0);
+  for (const vector of relationLabelVectors.inverse) {
+    assert.equal(relationInverseForLabel(vector.label), vector.expected, vector.name);
+    assert.equal(relationInversePhrase(vector.label), vector.expected, vector.name);
+    assert.equal(relationLabelInversePhrase(vector.label), vector.expected, vector.name);
+  }
   const source = task({ blockId: "s", id: "s", description: "Source", status: "DONE", symbol: "x" });
   const model = relationChipModelForRow({
     direction: "from", lineText: "- 🪢 **LINKED FROM:** [[#^s]] (merged into)", sourcePath: "a.md",
@@ -243,6 +253,26 @@ test("LC5 LINKED FROM shows the builtin inverse phrase", () => {
   });
   assert.equal(implemented.chips[0].inverse, "implements");
   assert.equal(implemented.chips[0].label, "implemented by");
+  const inspired = task({
+    blockId: "idea",
+    id: "idea",
+    description: "Source idea",
+  });
+  const inspiredModel = relationChipModelForRow({
+    direction: "from",
+    lineText: "- 🪢 **LINKED FROM:** [[#^idea]] (inspired by)",
+    sourcePath: "a.md",
+    live: [liveFrom({ path: "a.md", blockId: "idea" }, { label: "inspired by", task: inspired })],
+    lookup: lookupFor([inspired]),
+    resolve: resolveFor(),
+  });
+  assert.equal(inspiredModel.chips[0].inverse, "inspires");
+  const inspiredHtml = serializeNode(buildRelationChipElement(new MiniDoc(), inspiredModel, {}));
+  assert.match(inspiredHtml, /inspires/);
+  assert.doesNotMatch(inspiredHtml, /→ this/);
+  const pillAt = inspiredHtml.indexOf("inspires");
+  const chipAt = inspiredHtml.indexOf("bob-relation-chip");
+  assert.ok(pillAt >= 0 && chipAt > pillAt, inspiredHtml);
   const doc = new MiniDoc();
   const html = serializeNode(buildRelationChipElement(doc, implemented, {}));
   assert.match(html, /implements/);

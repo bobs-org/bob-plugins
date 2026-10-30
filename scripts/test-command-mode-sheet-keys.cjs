@@ -13,10 +13,45 @@ const {
 const harness = require("./modal-harness.cjs");
 const { pressKey } = harness;
 
+function countSelectedRows(modal) {
+  let count = 0;
+  const walk = (node) => {
+    if (!node) return;
+    if (
+      Array.isArray(node.classes) &&
+      node.classes.includes("bob-cmd-row") &&
+      node.classes.includes("is-selected")
+    ) {
+      count += 1;
+    }
+    for (const child of node.children || []) walk(child);
+  };
+  walk(modal.listEl);
+  return count;
+}
+
 function makeSheet(options = {}) {
   const restore = installDocument();
   const catalog = options.catalog || fixtureCatalog();
   const base = makeRunner({ catalog });
+  if (Array.isArray(options.records) && options.records.length) {
+    const fs = require("node:fs");
+    for (const spec of options.records) {
+      const record = helpers.cmNewRecord({
+        id: spec.id,
+        argv: spec.argv,
+        entryId: spec.entryId,
+        title: spec.title,
+        preview: Boolean(spec.preview),
+        bobPath: spec.bobPath || "/Users/x/.cargo/bin/bob",
+        startedAt: spec.startedAt,
+      });
+      record.outcome = spec.outcome || "completed";
+      record.finished_at = spec.finishedAt || spec.startedAt;
+      if (typeof spec.durationMs === "number") record.duration_ms = spec.durationMs;
+      helpers.cmWriteRecord(fs, base.runner.runsDir(), record);
+    }
+  }
   const app = makeApp(options.app || {});
   const plugin = {
     app,
@@ -237,6 +272,90 @@ test("row mousedown is defaultPrevented and scope fallback routes body keys once
     // Keys targeted inside the sheet are ignored by the fallback.
     const insideEvent = { key: "n", ctrlKey: true, target: modal.inputEl, preventDefault() {}, stopPropagation() {} };
     assert.equal(handler(insideEvent), true);
+  } finally {
+    modal.close();
+    restore();
+  }
+});
+
+test("empty query walks every row with unique keys and survives a type-and-clear", () => {
+  const BIN = "/Users/x/.cargo/bin/bob";
+  const { modal, restore } = makeSheet({
+    context: {
+      notePath: "refs/a.md",
+      noteKind: "ref",
+      clipboardUrl: "https://example.com/x",
+      originView: null,
+      originEditor: null,
+    },
+    records: [
+      {
+        id: "20261001-000001-a",
+        argv: [BIN, "plan", "--dry-run"],
+        entryId: "plan",
+        preview: true,
+        title: "Today's plan",
+        startedAt: "2026-10-26T12:00:00.000Z",
+      },
+      {
+        id: "20261001-000002-b",
+        argv: [BIN, "ready"],
+        entryId: "ready",
+        preview: false,
+        title: "Ready lanes",
+        startedAt: "2026-10-26T12:01:00.000Z",
+      },
+      {
+        id: "20261001-000003-c",
+        argv: [BIN, "plan"],
+        entryId: "plan",
+        preview: false,
+        title: "Today's plan",
+        startedAt: "2026-10-26T12:02:00.000Z",
+      },
+    ],
+  });
+  try {
+    const keys = modal.visible.map((row) => row.key);
+    assert.equal(new Set(keys).size, keys.length, "every visible key is unique");
+    assert.ok(modal.visible.filter((row) => row.kind === "recent").length >= 3);
+    assert.equal(modal.selectedKey, modal.visible[0].key);
+    assert.equal(countSelectedRows(modal), 1);
+    assert.equal(harness.activeElement, modal.inputEl);
+
+    const total = modal.visible.length;
+    for (let step = 1; step <= total; step += 1) {
+      pressKey(modal, "n", { ctrlKey: true });
+      assert.equal(selectedIndex(modal), step % total, `Ctrl+N step ${step}`);
+      assert.equal(countSelectedRows(modal), 1, `exactly one row selected after Ctrl+N step ${step}`);
+      assert.equal(harness.activeElement, modal.inputEl);
+    }
+
+    for (let step = 1; step <= total; step += 1) {
+      pressKey(modal, "p", { ctrlKey: true });
+      assert.equal(selectedIndex(modal), (total - step) % total, `Ctrl+P step ${step}`);
+      assert.equal(countSelectedRows(modal), 1, `exactly one row selected after Ctrl+P step ${step}`);
+      assert.equal(harness.activeElement, modal.inputEl);
+    }
+
+    pressKey(modal, "ArrowDown");
+    assert.equal(selectedIndex(modal), 1);
+    assert.equal(countSelectedRows(modal), 1);
+    pressKey(modal, "ArrowUp");
+    assert.equal(selectedIndex(modal), 0);
+    assert.equal(countSelectedRows(modal), 1);
+
+    modal.inputEl.value = "p";
+    modal.inputEl.listeners.input();
+    assert.equal(modal.query, "p");
+    assert.ok(modal.visible.length > 0, "typing filters the list");
+    modal.inputEl.value = "";
+    modal.inputEl.listeners.input();
+    assert.ok(modal.visible.filter((row) => row.kind === "recent").length >= 3, "clearing brings RECENT back");
+    assert.equal(selectedIndex(modal), 0);
+    pressKey(modal, "n", { ctrlKey: true });
+    assert.equal(selectedIndex(modal), 1);
+    assert.equal(countSelectedRows(modal), 1);
   } finally {
     modal.close();
     restore();

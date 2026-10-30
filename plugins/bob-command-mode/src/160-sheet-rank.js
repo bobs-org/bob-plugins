@@ -236,6 +236,7 @@ function cmSheetRecentRows(runs, nowMs, catalog) {
     const entry = replay.entryId ? cmEntryById(catalog, replay.entryId) : null;
     const at = cmSheetRunTimeMs(run);
     rows.push({
+      // Row keys must stay unique across the whole sheet: selection, highlighting, rowEls, and section headings are all keyed by row.key.
       key: "recent:" + signature,
       kind: "recent",
       path: cmRecordArgs(run),

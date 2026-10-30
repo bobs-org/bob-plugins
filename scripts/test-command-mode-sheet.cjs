@@ -237,7 +237,7 @@ test("note kinds follow frontmatter type with the article rule", () => {
 test("empty query groups RECENT, note, clipboard, then catalog sections", () => {
   const catalog = sheetCatalog();
   const recent = [{
-    key: "entry:plan", kind: "recent", path: ["plan"], title: "Today's plan",
+    key: "recent:{\"argv\":[\"plan\"],\"preview\":false}", kind: "recent", path: ["plan"], title: "Today's plan",
     about: "", argv: ["plan"], entryId: "plan", presentation: "report",
     policy: "run", outcome: "completed", glyph: "✓", age: "2h", duration: 1000, icon: "recent",
   }];

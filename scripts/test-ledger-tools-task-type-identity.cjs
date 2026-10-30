@@ -254,6 +254,36 @@ function parseThemeBlock(css, selector) {
   return css.slice(start, end + 1);
 }
 
+function lanePalettes(lightBlock, darkBlock) {
+  return {
+    light: {
+      hues: parseAreaHues(lightBlock),
+      text: [34, 34, 34],
+      bg: [255, 255, 255],
+      blocked: [233, 49, 71],
+      inprogress: [224, 172, 0],
+      next: [8, 185, 78],
+    },
+    dark: {
+      hues: parseAreaHues(darkBlock),
+      text: [218, 218, 218],
+      bg: [30, 30, 30],
+      blocked: [251, 70, 76],
+      inprogress: [224, 222, 113],
+      next: [68, 207, 110],
+    },
+  };
+}
+
+test("stylesheet custom properties do not reference themselves", () => {
+  const css = fs.readFileSync(CSS_PATH, "utf8");
+  const cycle = /(--[\w-]+)\s*:[^;{}]*var\(\s*\1\s*[,)]/g;
+  const offenders = Array.from(css.matchAll(cycle), ([declaration, property]) =>
+    property + ": " + declaration.trim(),
+  );
+  assert.deepEqual(offenders, [], "cyclic custom properties: " + offenders.join("; "));
+});
+
 function parseAreaHues(block) {
   const hues = {};
   for (const slot of SLOTS) {
@@ -483,24 +513,7 @@ test("D11 contrast: 8 slots × {plain, Blocked, In Progress, Next} × {light, da
   const darkBlock = parseThemeBlock(css, ".theme-dark");
   assert.ok(lightBlock.indexOf("--bob-type-ink-yellow") !== -1);
   assert.ok(darkBlock.indexOf("--bob-type-ink-yellow") !== -1);
-  const palettes = {
-    light: {
-      hues: parseAreaHues(lightBlock),
-      text: [34, 34, 34],
-      bg: [255, 255, 255],
-      blocked: [233, 49, 71],
-      inprogress: [224, 172, 0],
-      next: [8, 185, 78],
-    },
-    dark: {
-      hues: parseAreaHues(darkBlock),
-      text: [218, 218, 218],
-      bg: [30, 30, 30],
-      blocked: [251, 70, 76],
-      inprogress: [224, 222, 113],
-      next: [68, 207, 110],
-    },
-  };
+  const palettes = lanePalettes(lightBlock, darkBlock);
   const wash = 0.07;
   const failures = [];
   for (const [theme, palette] of Object.entries(palettes)) {
@@ -525,10 +538,60 @@ test("D11 contrast: 8 slots × {plain, Blocked, In Progress, Next} × {light, da
   assert.deepEqual(failures, []);
 });
 
+test("muted type ink contrast: plain and lane tints at 7% and 14% × light/dark ≥ 4.5:1", () => {
+  const css = fs.readFileSync(CSS_PATH, "utf8");
+  const themeBlocks = {
+    light: parseThemeBlock(css, ".theme-light"),
+    dark: parseThemeBlock(css, ".theme-dark"),
+  };
+  const palettes = lanePalettes(
+    themeBlocks.light,
+    themeBlocks.dark,
+  );
+  const failures = [];
+  for (const [theme, palette] of Object.entries(palettes)) {
+    const match = themeBlocks[theme].match(/--bob-type-ink-muted:\s*(#[0-9a-fA-F]{6})/);
+    assert.ok(match, "missing --bob-type-ink-muted in .theme-" + theme);
+    const ink = hexToRgb(match[1]);
+    for (const wash of [0.07, 0.14]) {
+      const backgrounds = {
+        plain: palette.bg,
+        blocked: mixRgb(palette.blocked, palette.bg, wash),
+        inprogress: mixRgb(palette.inprogress, palette.bg, wash),
+        next: mixRgb(palette.next, palette.bg, wash),
+      };
+      for (const [lane, bg] of Object.entries(backgrounds)) {
+        const ratio = contrastRatio(ink, bg);
+        if (ratio < 4.5) {
+          failures.push(
+            theme + " " + Math.round(wash * 100) + "% " + lane + " " + ratio.toFixed(3),
+          );
+        }
+      }
+    }
+  }
+  assert.deepEqual(failures, []);
+});
+
+test("exempt PLAN identity stays muted and omits its hue attribute", () => {
+  const identity = taskTagIdentityFromField(
+    { fieldState: "set", type: "PLAN", key: "plan" },
+    { hue: null, hue_source: "exempt", configured: true },
+  );
+  assert.equal(identity.state, "muted");
+  assert.equal(identity.hue, null);
+  const el = fakeElementDoc().createElement("span");
+  assert.equal(applyTaskTagTypeAttrs(el, identity, false), true);
+  assert.equal(el.attrs["data-bob-type"], "PLAN");
+  assert.equal(el.attrs["data-bob-type-state"], "muted");
+  assert.equal(el.attrs["data-bob-type-hue"], undefined);
+});
+
 test("styles.css defines type ink, identity ::after, and ledger marks", () => {
   const css = fs.readFileSync(CSS_PATH, "utf8");
   assert.ok(css.indexOf("content: attr(data-bob-type)") !== -1);
   assert.ok(css.indexOf("content: \"#\" attr(data-bob-type)") !== -1);
+  assert.ok(css.indexOf("var(--bob-type-ink-muted)") !== -1);
   assert.ok(css.indexOf(".bob-ledger-type-mark.is-disagree") !== -1);
   assert.ok(css.indexOf(".bob-ledger-type-mark.is-composite") !== -1);
   assert.ok(css.indexOf('[data-dv-norm-key="type"]') !== -1);

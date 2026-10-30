@@ -1853,7 +1853,8 @@ li.task-list-item[data-task="-"] .bob-task-tag-mark,
 /* Explicit `#TYPE` identity (D11): typed hash marks draw the complete
    `#TYPE` text in `::after`; reading-view hosts
    create no nodes. Type ink mixes each palette slot 55% toward
-   `--text-normal`. `--bob-task-tag-color` still wins when set. */
+   `--text-normal`; muted (exempt) marks use `--bob-type-ink-muted`.
+   `--bob-task-tag-color` still wins when set. */
 
 body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type] {
   width: auto;
@@ -1921,7 +1922,7 @@ body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="red"] {
 }
 
 body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="muted"] {
-  --bob-task-tag-ink: color-mix(in srgb, var(--bob-task-tag-ink) 55%, var(--text-faint));
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-muted));
 }
 
 body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="unconfigured"] {
@@ -3691,7 +3692,9 @@ body.bob-today-marks-off .bob-today-mark {
 /* Fixed R8 theme hues (PT6): the single source for Pomodoro theme color.
    Later picker surfaces (block-id-prompt, nav Pomodoro pickers) reuse the
    `--bob-hue-*` tokens instead of defining their own, so one rule owns
-   every hue. They alias the `--bob-area-*` values below. */
+   every hue. They alias the `--bob-area-*` values below. Exempt types have no
+   palette slot, so they share this fixed muted ink, tuned to at least 4.5:1 on
+   plain and every lane tint (14% task-status tint minimum: 5.07 light, 4.86 dark). */
 .theme-light {
   --bob-area-blue: #2a78d6;
   --bob-area-orange: #eb6834;
@@ -3717,6 +3720,7 @@ body.bob-today-marks-off .bob-today-mark {
   --bob-type-ink-green: color-mix(in srgb, var(--bob-hue-green) 55%, var(--text-normal));
   --bob-type-ink-violet: color-mix(in srgb, var(--bob-hue-violet) 55%, var(--text-normal));
   --bob-type-ink-red: color-mix(in srgb, var(--bob-hue-red) 55%, var(--text-normal));
+  --bob-type-ink-muted: #52627a;
 }
 
 .theme-dark {
@@ -3744,6 +3748,7 @@ body.bob-today-marks-off .bob-today-mark {
   --bob-type-ink-green: color-mix(in srgb, var(--bob-hue-green) 55%, var(--text-normal));
   --bob-type-ink-violet: color-mix(in srgb, var(--bob-hue-violet) 55%, var(--text-normal));
   --bob-type-ink-red: color-mix(in srgb, var(--bob-hue-red) 55%, var(--text-normal));
+  --bob-type-ink-muted: #9aa8bd;
 }
 
 /* Pomodoro theme pills (PT6 visual language): names wear a tint, places

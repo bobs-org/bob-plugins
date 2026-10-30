@@ -599,7 +599,7 @@ test("stats stylesheet contract: selectors, tabular-nums, motion, colors", () =>
     }
     assert.match(
       line.trim(),
-      /^--bob-(?:stats-(?:orange|violet|green|blue)|area-(?:blue|orange|aqua|yellow|magenta|green|violet|red)):\s*#[0-9a-fA-F]{6};?$/,
+      /^--bob-(?:stats-(?:orange|violet|green|blue)|area-(?:blue|orange|aqua|yellow|magenta|green|violet|red)|type-ink-muted):\s*#[0-9a-fA-F]{6};?$/,
       `hex outside the palette block: ${line.trim()}`,
     );
   }

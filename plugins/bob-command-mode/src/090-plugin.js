@@ -55,7 +55,7 @@ class BobCommandModePlugin extends Plugin {
     this.addCommand({
       id: "rerun-last",
       name: "Bob: Rerun last command",
-      callback: () => this.commandModeRerun(this.commandModeRunner && this.commandModeRunner.newestRecord()),
+      callback: () => this.commandModeRerunLast(),
     });
     this.addCommand({
       id: "show-last-output",

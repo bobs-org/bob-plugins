@@ -150,6 +150,7 @@ class CommandModeRunner {
       bobVersion,
       host: this.host,
       nowMs: this.deps.nowMs(),
+      sequence: opts.sequence,
     });
     const isReads = effect === "reads";
     const budgetSecs = Number((entry && entry.budget_secs) || (isReads ? 60 : 180)) || 60;

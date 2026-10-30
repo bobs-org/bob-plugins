@@ -30,8 +30,28 @@ function cmRunFilePaths(runsDir, runId, pathModule) {
   };
 }
 
-function cmNewRecord(options = {}) {
+function cmCopySequenceStamp(raw) {
+  const steps = Array.isArray(raw && raw.steps)
+    ? raw.steps.map((step) => {
+      const argv = Array.isArray(step && step.argv) ? step.argv.map((word) => String(word)) : [];
+      let entry_id = null;
+      if (step && step.entry_id != null && step.entry_id !== "") entry_id = String(step.entry_id);
+      else if (step && step.entryId != null && step.entryId !== "") entry_id = String(step.entryId);
+      const title = step && step.title != null ? String(step.title) : null;
+      return { argv, entry_id, title };
+    })
+    : [];
   return {
+    id: raw && raw.id != null ? String(raw.id) : "",
+    index: Number(raw && raw.index) || 0,
+    total: Number.isFinite(Number(raw && raw.total)) ? Number(raw.total) : steps.length,
+    started_at: raw && raw.started_at != null ? String(raw.started_at) : "",
+    steps,
+  };
+}
+
+function cmNewRecord(options = {}) {
+  const record = {
     schema: CM_RECORD_SCHEMA,
     id: String(options.id || ""),
     argv: Array.isArray(options.argv) ? [...options.argv] : [],
@@ -56,6 +76,11 @@ function cmNewRecord(options = {}) {
     interleave: [],
     truncated: false,
   };
+  const raw = options.sequence;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    record.sequence = cmCopySequenceStamp(raw);
+  }
+  return record;
 }
 
 // Atomically persist the record: tmp file in the same directory, then rename.

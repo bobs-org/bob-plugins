@@ -93,6 +93,20 @@ function main() {
   }
   const env = process.env;
   const sleepMs = Number(env.FAKE_BOB_SLEEP_MS || 0);
+  const logFile = env.FAKE_BOB_LOG_FILE;
+  const logStart = new Date().toISOString();
+  let exitForCode;
+  if (env.FAKE_BOB_EXIT_FOR) {
+    try {
+      const map = JSON.parse(env.FAKE_BOB_EXIT_FOR);
+      const key = argv.join(" ");
+      if (map && Object.prototype.hasOwnProperty.call(map, key)) {
+        exitForCode = Number(map[key]);
+      }
+    } catch (error) {
+      // Ignore a malformed override map; FAKE_BOB_EXIT still applies.
+    }
+  }
   const startedFile = env.FAKE_BOB_STARTED_FILE;
   if (startedFile) {
     try {
@@ -133,7 +147,9 @@ function main() {
       process.kill(process.pid, env.FAKE_BOB_SIGNAL);
       return;
     }
-    const code = exitOverride !== undefined ? Number(exitOverride) : Number(env.FAKE_BOB_EXIT || 0);
+    const code = exitOverride !== undefined
+      ? Number(exitOverride)
+      : (exitForCode !== undefined ? Number(exitForCode) : Number(env.FAKE_BOB_EXIT || 0));
     const receiptPath = env.BOB_RUN_RECEIPT;
     if (receiptPath) {
       try {
@@ -142,6 +158,17 @@ function main() {
         }) + "\n");
       } catch (error) {
         process.stderr.write("fake-bob: cannot write receipt\n");
+      }
+    }
+    if (logFile) {
+      try {
+        fs.appendFileSync(logFile, JSON.stringify({
+          argv,
+          start: logStart,
+          end: new Date().toISOString(),
+        }) + "\n");
+      } catch (error) {
+        process.stderr.write("fake-bob: cannot write log file\n");
       }
     }
     process.exitCode = code;

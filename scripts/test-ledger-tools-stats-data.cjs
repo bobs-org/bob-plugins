@@ -186,6 +186,7 @@ test("stats spawn passes vault env, NO_COLOR, timeout, and a large buffer", asyn
         vaultPath: "/vault",
       });
       assert.equal(result.ok, true);
+      assert.equal(result.exitCode, null);
       assert.equal(seen.path, "/home/b/.cargo/bin/bob");
       assert.deepEqual(seen.args, ["stats", "show"]);
       assert.equal(seen.options.env.BOB_DIR, "/vault");
@@ -212,6 +213,16 @@ test("stats spawn maps ENOENT, timeouts, and stderr to named errors", async () =
         tried: ["bob (PATH)"],
       });
       assert.equal(missing.code, "bob-not-found");
+      const setupFailure = await plugin.statsSpawnFetch([], {
+        execFile: (path, args, options, callback) => {
+          const error = new Error("not connected");
+          error.code = 2;
+          callback(error, JSON.stringify({ schema_version: 1, ok: false, error: { code: "not_connected", message: "not connected" } }), "");
+        },
+        resolved: { path: "bob", source: "path" },
+      });
+      assert.equal(setupFailure.exitCode, 2);
+      assert.equal(setupFailure.code, "not_connected");
       const timedOut = await plugin.statsSpawnFetch([], {
         execFile: (path, args, options, callback) => {
           const error = new Error("timeout");

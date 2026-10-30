@@ -113,6 +113,7 @@
   "282b-plugin-relation-mention-card.js",
   "283-plugin-command-mode-refresh.js",
   "290-plugin-today-and-location.js",
+  "291-plugin-gcal-events.js",
   "300-plugin-vim-and-snippets.js",
   "310-install-methods.js",
   "320-plan-lane-and-config.js",

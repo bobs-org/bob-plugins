@@ -555,10 +555,10 @@ function bobSpawnJson(args, decode, options = {}) {
       settled = true;
       resolve(result);
     };
-    const decodeOutput = (stdout, stderr) => {
+    const decodeOutput = (stdout, stderr, exitCode = null) => {
       let result = null;
       try {
-        result = decoder(stdout, stderr);
+        result = decoder(stdout, stderr, exitCode);
       } catch (error) {
         result = {
           ok: false,
@@ -568,7 +568,7 @@ function bobSpawnJson(args, decode, options = {}) {
         };
       }
       if (result && result.ok) {
-        return { ok: true, report: result.report };
+        return { ok: true, report: result.report, exitCode };
       }
       const failure = result && typeof result === "object" ? result : {};
       return {
@@ -580,6 +580,7 @@ function bobSpawnJson(args, decode, options = {}) {
             : `${commandLabel} failed.`,
         detail: failure.detail || firstLine(stderr),
         tried,
+        exitCode,
       };
     };
     const notFound = () => ({
@@ -609,7 +610,10 @@ function bobSpawnJson(args, decode, options = {}) {
             });
             return;
           }
-          const decoded = decodeOutput(stdout, stderr);
+          const exitCode = error && Number.isInteger(error.code)
+            ? error.code
+            : null;
+          const decoded = decodeOutput(stdout, stderr, exitCode);
           finish(decoded);
         },
       );

@@ -3843,6 +3843,72 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme
   background-color: color-mix(in srgb, var(--text-muted) 32%, transparent);
 }
 
+/* Calendar Events are painted read-time in both Live Preview and Reading
+   view. Bob remains the only writer. */
+.bob-calendar-events .bob-calendar-event-time {
+  display: inline-block;
+  border-radius: 999px;
+  padding-inline: 0.48em;
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bob-calendar-events .bob-calendar-event-time[data-state="past"] {
+  opacity: 0.58;
+}
+
+.bob-calendar-events .bob-calendar-event-time[data-state="running"] {
+  outline: 1px solid color-mix(in srgb, var(--bob-calendar-event-hue, var(--interactive-accent)) 78%, transparent);
+  outline-offset: 1px;
+  background: color-mix(in srgb, var(--bob-calendar-event-hue, var(--interactive-accent)) 15%, transparent);
+  color: var(--text-normal);
+}
+
+.bob-calendar-events .bob-calendar-event-time[data-theme-hue="blue"] { --bob-calendar-event-hue: var(--bob-hue-blue); }
+.bob-calendar-events .bob-calendar-event-time[data-theme-hue="orange"] { --bob-calendar-event-hue: var(--bob-hue-orange); }
+.bob-calendar-events .bob-calendar-event-time[data-theme-hue="aqua"] { --bob-calendar-event-hue: var(--bob-hue-aqua); }
+.bob-calendar-events .bob-calendar-event-time[data-theme-hue="yellow"] { --bob-calendar-event-hue: var(--bob-hue-yellow); }
+.bob-calendar-events .bob-calendar-event-time[data-theme-hue="magenta"] { --bob-calendar-event-hue: var(--bob-hue-magenta); }
+.bob-calendar-events .bob-calendar-event-time[data-theme-hue="green"] { --bob-calendar-event-hue: var(--bob-hue-green); }
+.bob-calendar-events .bob-calendar-event-time[data-theme-hue="violet"] { --bob-calendar-event-hue: var(--bob-hue-violet); }
+.bob-calendar-events .bob-calendar-event-time[data-theme-hue="red"] { --bob-calendar-event-hue: var(--bob-hue-red); }
+
+.bob-calendar-events .bob-calendar-event-context {
+  color: var(--text-muted);
+}
+
+.bob-calendar-events .bob-calendar-event-tag {
+  display: inline-block;
+  border-radius: 999px;
+  padding-inline: 0.38em;
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  color: var(--text-muted);
+  font-size: 0.88em;
+  font-style: normal;
+}
+
+.bob-calendar-events .bob-calendar-event-badge {
+  font-size: 0.85em;
+  opacity: 0.78;
+  transition: opacity 100ms ease;
+}
+
+.bob-calendar-events .bob-calendar-event-badge:hover {
+  opacity: 1;
+}
+
+.theme-dark.bob-calendar-events .bob-calendar-event-time,
+body.theme-dark.bob-calendar-events .bob-calendar-event-time {
+  background: color-mix(in srgb, var(--text-muted) 20%, transparent);
+}
+
+.theme-dark.bob-calendar-events .bob-calendar-event-time[data-state="running"],
+body.theme-dark.bob-calendar-events .bob-calendar-event-time[data-state="running"] {
+  background: color-mix(in srgb, var(--bob-calendar-event-hue, var(--interactive-accent)) 24%, transparent);
+}
+
 .bob-pomo-theme-colors .bob-pomo-theme-unconfigured {
   outline: 1px dashed color-mix(in srgb, var(--text-warning, var(--color-orange)) 70%, transparent);
   outline-offset: 1px;

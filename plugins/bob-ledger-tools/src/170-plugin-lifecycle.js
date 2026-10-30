@@ -96,6 +96,8 @@ class BobLedgerToolsPlugin extends Plugin {
     // Task theme marks + ledger tint gate (both default on).
     this.taskThemeMarksEnabled = true;
     this.pomodoroThemeColorsEnabled = true;
+    this.calendarEventsPaintEnabled = true;
+    this.gcalSyncOnCreateEnabled = true;
 
     this.addCommand({
       id: "expand-ledger-time-range-snippet",
@@ -673,6 +675,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupPomodoroHomeChips();
     this.setupTaskThemeMarks();
     this.setupPomodoroThemeChips();
+    this.setupGcalEvents();
     this.setupUnblockedGlyph();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
@@ -683,6 +686,7 @@ class BobLedgerToolsPlugin extends Plugin {
   }
 
   onunload() {
+    this.teardownCalendarEventPainting();
     this.teardownRelationIndex();
     if (
       this.todayMarksTimer !== null &&

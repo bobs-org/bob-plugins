@@ -1,12 +1,23 @@
+const LEAF_SWITCH_CLOBBER_NOTICE_MS = 8000;
+
 function leafSwitchApp(owner) {
   return owner && owner.app ? owner.app : owner;
 }
 
-function leafSwitchNotice(message, sticky = false) {
+function leafSwitchNotice(message, durationMs) {
   try {
-    new Notice(message, sticky ? 0 : undefined);
+    new Notice(message, durationMs);
   } catch (error) {
     // Notices must never break navigation cleanup.
+  }
+}
+
+function leafSwitchViewPath(leaf) {
+  try {
+    const path = leaf && leaf.view && leaf.view.file && leaf.view.file.path;
+    return typeof path === "string" ? path : null;
+  } catch (error) {
+    return null;
   }
 }
 
@@ -108,17 +119,23 @@ function checkLeafSwitchLanding(owner, targetFile, leaf, context) {
     return true;
   }
   const app = leafSwitchApp(owner);
-  const editor = leaf && leaf.view && leaf.view.editor;
-  const landedText = editor && typeof editor.getValue === "function"
-    ? editor.getValue()
-    : null;
-  if (
-    typeof landedText === "string" &&
-    context.targetDiskText !== context.sourceText &&
-    landedText === context.sourceText
-  ) {
-    leafSwitchNotice(leafSwitchClobberMessage(context, targetFile), true);
-    return false;
+  const targetPath = targetFile.path;
+  if (leafSwitchViewPath(leaf) === targetPath) {
+    const editor = leaf && leaf.view && leaf.view.editor;
+    const landedText = editor && typeof editor.getValue === "function"
+      ? editor.getValue()
+      : null;
+    if (
+      typeof landedText === "string" &&
+      context.targetDiskText !== context.sourceText &&
+      landedText === context.sourceText
+    ) {
+      leafSwitchNotice(
+        leafSwitchClobberMessage(context, targetFile),
+        LEAF_SWITCH_CLOBBER_NOTICE_MS,
+      );
+      return false;
+    }
   }
 
   const checkDisk = async () => {
@@ -132,7 +149,10 @@ function checkLeafSwitchLanding(owner, targetFile, leaf, context) {
         context.targetDiskText !== context.sourceText &&
         currentDiskText === context.sourceText
       ) {
-        leafSwitchNotice(leafSwitchClobberMessage(context, targetFile), true);
+        leafSwitchNotice(
+          leafSwitchClobberMessage(context, targetFile),
+          LEAF_SWITCH_CLOBBER_NOTICE_MS,
+        );
       }
     } catch (error) {
       // The delayed tripwire is best-effort and never rewrites either note.

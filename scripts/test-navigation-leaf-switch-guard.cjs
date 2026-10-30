@@ -116,7 +116,7 @@ test("a disk/editor mismatch keeps the source note open and stops navigation", a
   assert.match(notices[0], /Could not save source\.md before switching notes/);
 });
 
-test("a landing with the source text raises the sticky clobber warning and stops", async () => {
+test("a landing with the source text raises the clobber warning and stops", async () => {
   clearNotices();
   const fixture = makeFixture({
     sourceText: "source text that was saved",
@@ -131,7 +131,7 @@ test("a landing with the source text raises the sticky clobber warning and stops
   assert.equal(opened, false);
   assert.equal(fixture.events.at(-1), "open:target.md");
   assert.match(notices[0], /target\.md opened with source\.md's text/);
-  assert.equal(noticeDurations[0], 0, "the warning is sticky");
+  assert.equal(noticeDurations[0], 8000);
 });
 
 test("the delayed tripwire catches a disk overwrite after a clean landing", async () => {
@@ -160,7 +160,58 @@ test("the delayed tripwire catches a disk overwrite after a clean landing", asyn
   }
 
   assert.match(notices[0], /target\.md opened with source\.md's text/);
-  assert.equal(noticeDurations[0], 0);
+  assert.equal(noticeDurations[0], 8000);
+});
+
+test("an open that lands in another leaf skips the landing clobber check", async () => {
+  clearNotices();
+  const fixture = makeFixture({ sourceText: "source text that was saved" });
+  const otherLeaf = {
+    view: {
+      file: fixture.targetFile,
+      editor: { getValue: () => "source text that was saved" },
+    },
+  };
+  const scheduled = [];
+  const originalSetTimeout = window.setTimeout;
+  window.setTimeout = (callback, delay) => {
+    scheduled.push({ callback, delay });
+    return scheduled.length;
+  };
+  try {
+    const opened = await helpers.openWithLeafSwitchGuard(
+      fixture.plugin,
+      fixture.targetFile,
+      fixture.leaf,
+      async () => {
+        fixture.workspace.activeLeaf = otherLeaf;
+      },
+    );
+    assert.equal(opened, true);
+    assert.equal(notices.length, 0);
+    assert.deepEqual(fixture.events, ["save", "cancel"]);
+    assert.equal(fixture.leaf.view.file, fixture.sourceFile);
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0].delay, 2500);
+  } finally {
+    window.setTimeout = originalSetTimeout;
+  }
+});
+
+test("a dropped open skips the landing clobber check", async () => {
+  clearNotices();
+  const fixture = makeFixture({ sourceText: "source text that was saved" });
+  const opened = await helpers.openWithLeafSwitchGuard(
+    fixture.plugin,
+    fixture.targetFile,
+    fixture.leaf,
+    async () => {},
+  );
+
+  assert.equal(opened, true);
+  assert.equal(notices.length, 0);
+  assert.equal(fixture.leaf.view.file, fixture.sourceFile);
+  assert.deepEqual(fixture.events, ["save", "cancel"]);
 });
 
 test("same-note opens and activation of an existing leaf never save", async () => {

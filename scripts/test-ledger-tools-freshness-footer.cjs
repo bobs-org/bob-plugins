@@ -1,7 +1,9 @@
 // Tests for the compact persistent review footer and shared
 // `freshnessReviewEntryView` presentation (freshness namespace v7).
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
+const path = require("node:path");
 const test = require("node:test");
 
 class TestMarkdownView {}
@@ -75,6 +77,7 @@ Module._load = originalLoad;
 
 const {
   freshnessFooterGroups,
+  freshnessFooterFit,
   freshnessFooterPaint,
   freshnessFooterView,
   freshnessMatchQueueCursor,
@@ -135,6 +138,31 @@ function queueEntry(overrides = {}) {
     tierTotal: 1,
     ...overrides,
   };
+}
+
+const FOOTER_TIER_KEYS = [
+  "pre", "new", "projects", "pending", "next", "recurring", "tickler", "rotten", "post",
+];
+
+function makeFooterView(byTier, { current = null, quickRoll = null } = {}) {
+  const normalized = Object.fromEntries(
+    FOOTER_TIER_KEYS.map((key) => [key, Number(byTier[key]) || 0]),
+  );
+  const walk = Object.values(normalized).reduce((sum, count) => sum + count, 0);
+  return freshnessFooterView(
+    {
+      counts: {
+        walk,
+        upkeepToday: 2,
+        budget: 5,
+        budgetMet: false,
+        byTier: normalized,
+      },
+      queue: [current || queueEntry()],
+      tasksAvailable: true,
+    },
+    { current, quickRoll, todayText: D },
+  );
 }
 
 function makeStatusEl() {
@@ -206,6 +234,20 @@ function findChild(el, className) {
     return null;
   };
   return walk(el);
+}
+
+function findChildren(el, className) {
+  const found = [];
+  const walk = (node) => {
+    if (node.classList && node.classList.has(className)) {
+      found.push(node);
+    }
+    for (const child of node.children || []) {
+      walk(child);
+    }
+  };
+  walk(el);
+  return found;
 }
 
 function makeFreshnessTask(overrides = {}) {
@@ -836,9 +878,212 @@ test("footer paint hides the host and keeps a stable button", () => {
   freshnessFooterPaint(el, shown);
   assert.equal(el.classList.has("bob-freshness-hidden"), false);
   assert.equal(findChild(el, "bob-freshness-due").textContent, "Review 1 due");
-  assert.equal(findChild(el, "bob-freshness-groups").textContent, "NEW 1");
+  const group = findChild(el, "bob-freshness-group");
+  assert.equal(group.attrs["data-review-tier"], "new");
+  assert.equal(findChild(group, "bob-freshness-group-label").textContent, "NEW");
+  assert.equal(findChild(group, "bob-freshness-group-count").textContent, "1");
   assert.equal(el.children.find((child) => child.tag === "button"), button);
   assert.equal(button.disabled, false);
+});
+
+test("groups paint as tier-keyed tokens and repaint without stale nodes", () => {
+  const allTiers = {
+    pre: 1,
+    new: 1,
+    projects: 1,
+    pending: 1,
+    next: 1,
+    recurring: 1,
+    tickler: 1,
+    rotten: 1,
+    post: 1,
+  };
+  const view = makeFooterView(allTiers);
+  assert.equal(
+    view.groupsText,
+    "PRE 1 · NEW 1 · PROJECTS 1 · WIP 1 · NEXT 1 · RECUR 1 · TICKS 1 · ROTTEN 1 · POST 1",
+  );
+  assert.equal(view.tooltip.split("\n")[1], view.groupsText);
+  assert.equal(view.ariaLabel.includes(view.groupsText), true);
+
+  const el = makeStatusEl();
+  freshnessFooterPaint(el, view);
+  let tokens = findChildren(el, "bob-freshness-group");
+  assert.deepEqual(
+    tokens.map((node) => node.attrs["data-review-tier"]),
+    FOOTER_TIER_KEYS,
+  );
+  assert.deepEqual(
+    findChildren(el, "bob-freshness-group-label").map((node) => node.textContent),
+    ["PRE", "NEW", "PROJECTS", "WIP", "NEXT", "RECUR", "TICKS", "ROTTEN", "POST"],
+  );
+
+  freshnessFooterPaint(el, makeFooterView({ new: 2, rotten: 3 }));
+  tokens = findChildren(el, "bob-freshness-group");
+  assert.deepEqual(
+    tokens.map((node) => node.attrs["data-review-tier"]),
+    ["new", "rotten"],
+  );
+  assert.equal(findChildren(el, "bob-freshness-groups-more").length, 1);
+});
+
+test("group boundary marks only the commitments-to-upkeep cut", () => {
+  const allTiers = {
+    pre: 1, new: 1, projects: 1, pending: 1, next: 1,
+    recurring: 1, tickler: 1, rotten: 1, post: 1,
+  };
+  const full = makeFooterView(allTiers);
+  assert.deepEqual(
+    full.groups.filter((group) => group.boundary).map((group) => group.key),
+    ["rotten"],
+  );
+
+  const upkeepOnly = makeFooterView({ rotten: 1, post: 1 });
+  assert.equal(upkeepOnly.groups.some((group) => group.boundary), false);
+
+  const rottenRow = queueEntry({
+    tier: "rotten", tierLabel: "ROTTEN", state: "rotten",
+    rank: 1, tierRank: 1, tierTotal: 1,
+  });
+  const rottenCurrent = makeFooterView(
+    { new: 1, rotten: 1, post: 1 },
+    { current: rottenRow },
+  );
+  assert.deepEqual(
+    rottenCurrent.groups.filter((group) => group.boundary).map((group) => group.key),
+    ["post"],
+  );
+
+  const nextRow = queueEntry({
+    tier: "next", tierLabel: "NEXT", lane: "next",
+    rank: 1, tierRank: 1, tierTotal: 1,
+  });
+  const rottenOnlyAfterNext = makeFooterView(
+    { next: 1, rotten: 1 },
+    { current: nextRow },
+  );
+  assert.equal(rottenOnlyAfterNext.groups.some((group) => group.boundary), false);
+});
+
+test("context ink follows supported current tiers and clears on other views", () => {
+  const el = makeStatusEl();
+  const current = queueEntry({
+    tier: "next", tierLabel: "NEXT", lane: "next",
+    rank: 1, tierRank: 1, tierTotal: 1,
+  });
+  freshnessFooterPaint(el, makeFooterView({ next: 1 }, { current }));
+  const context = findChild(el, "bob-freshness-context");
+  assert.equal(context.attrs["data-review-tier"], "next");
+
+  freshnessFooterPaint(el, makeFooterView({ new: 1 }));
+  assert.equal(Object.hasOwn(context.attrs, "data-review-tier"), false);
+  freshnessFooterPaint(el, freshnessFooterView({ counts: { walk: 0 }, queue: [] }));
+  assert.equal(Object.hasOwn(context.attrs, "data-review-tier"), false);
+
+  const legacyReference = queueEntry({
+    tier: "references", tierLabel: "REFERENCES", legacyReferenceTier: true,
+    rank: 1, tierRank: 1, tierTotal: 1,
+  });
+  freshnessFooterPaint(
+    el,
+    makeFooterView({ new: 1 }, { current: legacyReference }),
+  );
+  assert.equal(context.textContent, "REFERENCES 1/1");
+  assert.equal(Object.hasOwn(context.attrs, "data-review-tier"), false);
+});
+
+test("progressive fit sheds tail groups, then detail, hint, and meter", () => {
+  const current = queueEntry({
+    tier: "next", tierLabel: "NEXT", lane: "next",
+    rank: 1, tierRank: 1, tierTotal: 1,
+  });
+  const view = makeFooterView(
+    {
+      pre: 1, new: 1, projects: 1, pending: 1, next: 1,
+      recurring: 1, tickler: 1, rotten: 1, post: 1,
+    },
+    { current, quickRoll: { ok: true, compact: "Alt+P roll P2 1/1" } },
+  );
+  const el = makeStatusEl();
+  el.clientWidth = 1000;
+  const widthOf = (node) => {
+    if (node.classList.has("bob-freshness-main")) return 40;
+    if (node.classList.has("bob-freshness-context")) return 30;
+    if (node.classList.has("bob-freshness-detail")) return 30;
+    if (node.classList.has("bob-freshness-hint")) return 30;
+    if (node.classList.has("bob-freshness-meter")) return 30;
+    if (node.classList.has("bob-freshness-groups")) {
+      return node.children.reduce((sum, child) => {
+        if (child.classList.has("bob-freshness-omit")) return sum;
+        return sum + (child.classList.has("bob-freshness-group") ? 10 : 5);
+      }, 0);
+    }
+    return 0;
+  };
+  Object.defineProperty(el, "scrollWidth", {
+    configurable: true,
+    get() {
+      return this.children.reduce((sum, child) => {
+        if (child.classList.has("bob-freshness-omit")) return sum;
+        return sum + widthOf(child);
+      }, 0);
+    },
+  });
+  const parts = freshnessFooterPaint(el, view);
+  const groups = parts.groups._bobFreshnessGroupNodes;
+  const more = parts.groups._bobFreshnessGroupsMore;
+  assert.equal(groups.length, 8);
+
+  el.clientWidth = 245;
+  assert.deepEqual(freshnessFooterFit(el, parts, view), {
+    groups: true, groupsShown: 8, detail: true, hint: true, meter: true,
+  });
+  assert.equal(more.classList.has("bob-freshness-omit"), true);
+
+  el.clientWidth = 230;
+  assert.deepEqual(freshnessFooterFit(el, parts, view), {
+    groups: true, groupsShown: 6, detail: true, hint: true, meter: true,
+  });
+  assert.deepEqual(
+    groups.map((node) => !node.classList.has("bob-freshness-omit")),
+    [true, true, true, true, true, true, false, false],
+  );
+  assert.equal(more.classList.has("bob-freshness-omit"), false);
+
+  el.clientWidth = 160;
+  assert.deepEqual(freshnessFooterFit(el, parts, view), {
+    groups: false, groupsShown: 0, detail: true, hint: true, meter: true,
+  });
+  assert.equal(more.classList.has("bob-freshness-omit"), true);
+
+  el.clientWidth = 155;
+  assert.deepEqual(freshnessFooterFit(el, parts, view), {
+    groups: false, groupsShown: 0, detail: false, hint: true, meter: true,
+  });
+  el.clientWidth = 120;
+  assert.deepEqual(freshnessFooterFit(el, parts, view), {
+    groups: false, groupsShown: 0, detail: false, hint: false, meter: true,
+  });
+  el.clientWidth = 90;
+  assert.deepEqual(freshnessFooterFit(el, parts, view), {
+    groups: false, groupsShown: 0, detail: false, hint: false, meter: false,
+  });
+});
+
+test("the footer stylesheet defines every tier ink and removes NEW accent overrides", () => {
+  const css = fs.readFileSync(
+    path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"),
+    "utf8",
+  );
+  for (const tier of FOOTER_TIER_KEYS) {
+    assert.equal(
+      css.includes(`[data-review-tier="${tier}"]`),
+      true,
+      `missing ${tier} tier color rule`,
+    );
+  }
+  assert.equal(css.includes(".bob-freshness-new .bob-freshness-main .bob-freshness-due"), false);
+  assert.equal(css.includes(".bob-freshness-new .bob-freshness-tier"), false);
 });
 
 test("status bar 0-1-0 transitions hide without a reload", () => {

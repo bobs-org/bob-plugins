@@ -13,6 +13,7 @@
   "100-freshness-evaluate.js",
   "110-freshness-queue.js",
   "120-freshness-footer.js",
+  "121-freshness-footer-paint.js",
   "130-freshness-marks.js",
   "135-freshness-rotten-log.js",
   "135-priority-marks.js",

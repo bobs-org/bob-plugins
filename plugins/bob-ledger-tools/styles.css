@@ -231,8 +231,10 @@ a.bob-plan-ready:hover {
 }
 
 /* Task freshness review footer (freshness namespace v5): one compact
-   native status-bar item. Empty groups are omitted; an empty queue
-   removes the whole item from layout. Theme-native in light/dark. */
+   native status-bar item. Every walk tier has its own theme-native hue,
+   normalized to one OKLCH lightness per theme so every ink clears 4.5:1
+   on the status bar. POST uses the neutral text ink. Text, never color
+   alone, carries meaning. */
 .bob-freshness {
   display: flex;
   align-items: center;
@@ -309,10 +311,6 @@ a.bob-plan-ready:hover {
   font-weight: 600;
 }
 
-.bob-freshness-new .bob-freshness-main .bob-freshness-due {
-  color: var(--interactive-accent);
-}
-
 .bob-freshness-context,
 .bob-freshness-detail,
 .bob-freshness-hint,
@@ -324,10 +322,6 @@ a.bob-plan-ready:hover {
 .bob-freshness-tier {
   color: var(--text-normal);
   font-weight: 600;
-}
-
-.bob-freshness-new .bob-freshness-tier {
-  color: var(--interactive-accent);
 }
 
 .bob-freshness-budget .bob-freshness-meter {
@@ -345,6 +339,87 @@ a.bob-plan-ready:hover {
 
 .bob-freshness-unavailable {
   color: var(--text-faint, var(--text-muted));
+}
+
+.bob-freshness {
+  --bob-review-ink-l: 0.52;
+}
+.theme-dark .bob-freshness {
+  --bob-review-ink-l: 0.8;
+}
+
+.bob-freshness [data-review-tier="pre"] {
+  --bob-review-hue: var(--color-cyan, #00bfbc);
+}
+.bob-freshness [data-review-tier="new"] {
+  --bob-review-hue: var(--color-red, #e93147);
+}
+.bob-freshness [data-review-tier="projects"] {
+  --bob-review-hue: var(--color-purple, #7852ee);
+}
+.bob-freshness [data-review-tier="pending"] {
+  --bob-review-hue: var(--task-status-in-progress, var(--color-yellow, #e0ac00));
+}
+.bob-freshness [data-review-tier="next"] {
+  --bob-review-hue: var(--task-status-next, var(--color-green, #08b94e));
+}
+.bob-freshness [data-review-tier="recurring"] {
+  --bob-review-hue: var(--color-pink, #d53984);
+}
+.bob-freshness [data-review-tier="tickler"] {
+  --bob-review-hue: var(--color-blue, #086ddd);
+}
+.bob-freshness [data-review-tier="rotten"] {
+  --bob-review-hue: var(--color-orange, #ec7500);
+}
+
+.bob-freshness [data-review-tier] {
+  --bob-review-ink: color-mix(
+    in srgb,
+    var(--bob-review-hue) 60%,
+    var(--text-normal)
+  );
+  color: var(--bob-review-ink, var(--text-normal));
+}
+
+/* Older Electron installers lack relative color syntax; they keep the color-mix ink. */
+@supports (color: oklch(from red l c h)) {
+  .bob-freshness [data-review-tier] {
+    --bob-review-ink: oklch(
+      from var(--bob-review-hue) var(--bob-review-ink-l) min(c, 0.16) h
+    );
+  }
+}
+
+.bob-freshness [data-review-tier="post"] {
+  --bob-review-ink: var(--text-normal);
+}
+
+.bob-freshness-group-label {
+  font-weight: var(--font-medium, 500);
+}
+.bob-freshness-group-count {
+  font-weight: var(--font-bold, 700);
+}
+.bob-freshness-group-count::before {
+  content: "\00a0";
+}
+.bob-freshness-group + .bob-freshness-group {
+  margin-inline-start: 0.7em;
+}
+.bob-freshness-group.bob-freshness-group-boundary {
+  margin-inline-start: 0.6em;
+  padding-inline-start: 0.6em;
+  border-inline-start: 1px solid
+    var(--background-modifier-border-hover, var(--background-modifier-border));
+}
+.bob-freshness-groups-more {
+  margin-inline-start: 0.5em;
+  color: var(--text-faint, var(--text-muted));
+}
+.bob-freshness-main:hover {
+  background-color: var(--background-modifier-hover);
+  border-radius: var(--radius-s, 4px);
 }
 
 /* Task freshness mark (api v3): a small theme-native rendering of

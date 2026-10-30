@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bob review footer preview</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body { padding: 0 16px 24px; font: 14px/1.4 system-ui, sans-serif; }
+    body.theme-light {
+      color-scheme: light;
+      --color-red: #e93147; --color-orange: #ec7500; --color-yellow: #e0ac00;
+      --color-green: #08b94e; --color-cyan: #00bfbc; --color-blue: #086ddd;
+      --color-purple: #7852ee; --color-pink: #d53984;
+      --text-normal: #222222; --text-muted: #5c5c5c; --text-faint: #ababab;
+      --background-secondary: #f6f6f6; --background-modifier-hover: #e9e9e9;
+      --background-modifier-border: #d7d7d7; --background-modifier-border-hover: #aaa;
+      --interactive-accent: #7852ee; --radius-s: 4px;
+      --font-interface: system-ui, sans-serif; --font-ui-smaller: 12px;
+      --font-medium: 500; --font-bold: 700;
+      background: #fff; color: var(--text-normal);
+    }
+    body.theme-dark {
+      color-scheme: dark;
+      --color-red: #fb464c; --color-orange: #e9973f; --color-yellow: #e0de71;
+      --color-green: #44cf6e; --color-cyan: #53dfdd; --color-blue: #027aff;
+      --color-purple: #a882ff; --color-pink: #fa99cd;
+      --text-normal: #dadada; --text-muted: #b3b3b3; --text-faint: #666666;
+      --background-secondary: #262626; --background-modifier-hover: #353535;
+      --background-modifier-border: #484848; --background-modifier-border-hover: #777;
+      --interactive-accent: #a882ff; --radius-s: 4px;
+      --font-interface: system-ui, sans-serif; --font-ui-smaller: 12px;
+      --font-medium: 500; --font-bold: 700;
+      background: #1c1c1c; color: var(--text-normal);
+    }
+    #preview-root { width: 100%; padding: 12px 0; }
+    .preview-title { margin: 0 0 6px; color: var(--text-muted); font-size: 12px; }
+    .preview-case { margin: 0 0 16px; }
+    .preview-status-bar {
+      display: flex; align-items: center; width: 100%; min-width: 0;
+      background: var(--background-secondary); color: var(--text-normal);
+      border: 1px solid var(--background-modifier-border); padding: 5px 8px;
+      overflow: hidden;
+    }
+  </style>
+  <style id="obsidian-baseline">
+    :root { --input-height: 30px; }
+    button {
+      display: inline-flex; align-items: center; justify-content: center;
+      height: var(--input-height); padding: 4px 12px;
+      border: 1px solid var(--background-modifier-border);
+      border-radius: 5px; background: var(--background-secondary);
+      color: var(--text-normal); font-family: var(--font-interface);
+      font-size: 13px; font-weight: 500; white-space: nowrap;
+    }
+  </style>
+  <style id="production-footer-css">__PRODUCTION_CSS__</style>
+</head>
+<body class="theme-light">
+  <main id="preview-root"></main>
+  <script>
+  window.__previewError = "";
+  window.addEventListener("error", (event) => {
+    window.__previewError = String(event.message || event.error || "script error");
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    window.__previewError = String(event.reason || "promise rejection");
+  });
+  (() => {
+    "use strict";
+    const pluginSource = __PLUGIN_SOURCE__;
+    const moduleObject = { exports: {} };
+    const modules = {
+      obsidian: {
+        Plugin: class {}, MarkdownRenderChild: class {}, MarkdownView: class {},
+        Notice: class {}, Platform: { isDesktopApp: false },
+        normalizePath: (value) => value, parseYaml: () => ({}),
+      },
+      "@codemirror/state": {
+        Prec: { highest: (value) => value }, StateEffect: { define: () => ({}) },
+        RangeSetBuilder: class {},
+      },
+      "@codemirror/view": {
+        EditorView: { updateListener: { of: (fn) => ({ fn }) } },
+        keymap: { of: (value) => value },
+      },
+      "@codemirror/language": { syntaxTree: null },
+    };
+    new Function("require", "module", "exports", "process", pluginSource)(
+      (name) => modules[name] || {},
+      moduleObject,
+      moduleObject.exports,
+      { env: { HOME: "/" } },
+    );
+    const helpers = moduleObject.exports.helpers;
+    const tierKeys = [
+      "pre", "new", "projects", "pending", "next", "recurring", "tickler", "rotten", "post",
+    ];
+    const labels = {
+      pre: "PRE", new: "NEW", projects: "PROJECTS", pending: "PENDING",
+      next: "NEXT", recurring: "RECURRING", tickler: "TICKLER",
+      rotten: "ROTTEN", post: "POST",
+    };
+    const allTiers = {
+      pre: 1, new: 1, projects: 1, pending: 1, next: 1,
+      recurring: 1, tickler: 1, rotten: 1, post: 1,
+    };
+    const morning = {
+      pre: 1, new: 2, projects: 1, pending: 1, next: 2,
+      recurring: 1, tickler: 1, rotten: 3, post: 1,
+    };
+    const fixtures = [
+      { id: "all-tiers", title: "Off-row · all nine groups", counts: allTiers },
+      { id: "morning", title: "Typical morning", counts: morning },
+      { id: "new-row", title: "On a NEW row", counts: morning, current: "new" },
+      { id: "next-roll", title: "On a NEXT row · quickRoll", counts: morning, current: "next", quickRoll: true },
+      { id: "rotten-row", title: "On a ROTTEN row", counts: morning, current: "rotten" },
+    ];
+
+    function makeView(fixture) {
+      const byTier = Object.fromEntries(tierKeys.map((key) => [key, fixture.counts[key] || 0]));
+      const walk = Object.values(byTier).reduce((sum, count) => sum + count, 0);
+      let current = null;
+      if (fixture.current) {
+        const tier = fixture.current;
+        current = {
+          key: "preview.md:1", path: "preview.md", line: 1, lineNumber: 0,
+          originalMarkdown: "- [ ] #task Preview review row", text: "Preview review row",
+          state: tier === "rotten" ? "rotten" : tier === "new" ? "new" : "todo",
+          bucket: tier === "new" ? "new" : "ready", tier, tierLabel: labels[tier],
+          lane: tier === "next" ? "next" : "ready", created: null,
+          fresh: tier === "new" ? null : "2026-10-28", dueOn: "2026-10-30",
+          daysOverdue: tier === "rotten" ? 3 : 0, interval: 7,
+          rank: 3, tierRank: 1, tierTotal: byTier[tier] || 1,
+        };
+      }
+      return helpers.freshnessFooterView(
+        {
+          counts: { walk, upkeepToday: 2, budget: 5, budgetMet: false, byTier },
+          queue: [current || { key: "preview.md:1", tier: "new", rank: 1 }],
+          tasksAvailable: true,
+        },
+        {
+          current,
+          navAvailable: true,
+          todayText: "2026-10-30",
+          quickRoll: fixture.quickRoll ? { ok: true, compact: "Alt+P roll P2 1/1" } : null,
+        },
+      );
+    }
+
+    function visible(node) {
+      return Boolean(node)
+        && !node.hasAttribute("hidden")
+        && getComputedStyle(node).display !== "none";
+    }
+    function rgb(text) {
+      const value = String(text);
+      const oklch = /oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(value);
+      if (oklch) {
+        const lightness = Number(oklch[1]);
+        const chroma = Number(oklch[2]);
+        const hue = Number(oklch[3]) * Math.PI / 180;
+        const a = chroma * Math.cos(hue);
+        const b = chroma * Math.sin(hue);
+        const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+        const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+        const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
+        const linear = [
+          4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+          -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+          -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+        ];
+        return linear.map((channel) => {
+          const clamped = Math.max(0, Math.min(1, channel));
+          const encoded = clamped <= 0.0031308
+            ? 12.92 * clamped
+            : 1.055 * clamped ** (1 / 2.4) - 0.055;
+          return encoded * 255;
+        });
+      }
+      const values = value.match(/[\d.]+/g);
+      return values && values.length >= 3 ? values.slice(0, 3).map(Number) : null;
+    }
+    function luminance(color) {
+      const channels = rgb(color);
+      if (!channels) return null;
+      const linear = channels.map((value) => {
+        const component = value / 255;
+        return component <= 0.04045 ? component / 12.92 : ((component + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+    }
+    function contrast(foreground, background) {
+      const a = luminance(foreground);
+      const b = luminance(background);
+      if (a === null || b === null) return null;
+      return Math.round(((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) * 100) / 100;
+    }
+
+    function render(width, theme) {
+      document.body.className = `theme-${theme}`;
+      const root = document.querySelector("#preview-root");
+      root.replaceChildren();
+      root.style.width = `${width}px`;
+      const measurement = [];
+      let allTierColors = {};
+      for (const fixture of fixtures) {
+        const section = document.createElement("section");
+        section.className = "preview-case";
+        const heading = document.createElement("h2");
+        heading.className = "preview-title";
+        heading.textContent = fixture.title;
+        section.appendChild(heading);
+        const bar = document.createElement("div");
+        bar.className = "preview-status-bar";
+        const footer = document.createElement("div");
+        bar.appendChild(footer);
+        section.appendChild(bar);
+        root.appendChild(section);
+
+        const view = makeView(fixture);
+        helpers.freshnessFooterPaint(footer, view);
+        const tokens = Array.from(footer.querySelectorAll(".bob-freshness-group"));
+        const context = footer.querySelector(".bob-freshness-context");
+        const background = getComputedStyle(bar).backgroundColor;
+        const groupColors = tokens.map((token) => ({
+          key: token.getAttribute("data-review-tier"),
+          color: getComputedStyle(token).color,
+          contrast: contrast(getComputedStyle(token).color, background),
+        }));
+        if (fixture.id === "all-tiers") {
+          allTierColors = Object.fromEntries(groupColors.map((item) => [item.key, item.color]));
+        }
+        const contextColor = getComputedStyle(context).color;
+        const visibleKeys = tokens.filter(visible).map((token) => token.getAttribute("data-review-tier"));
+        const expectedKeys = view.groups.map((group) => group.key);
+        const expectedVisible = expectedKeys.slice(0, visibleKeys.length);
+        const more = footer.querySelector(".bob-freshness-groups-more");
+        const markerVisible = visible(more);
+        const shouldMarkCut = visibleKeys.length > 0 && visibleKeys.length < expectedKeys.length;
+        measurement.push({
+          id: fixture.id,
+          groups: groupColors,
+          visibleKeys,
+          prefixOk: JSON.stringify(visibleKeys) === JSON.stringify(expectedVisible),
+          markerVisible,
+          shouldMarkCut,
+          markerOk: markerVisible === shouldMarkCut,
+          overflow: footer.scrollWidth - footer.clientWidth,
+          contextTier: context.getAttribute("data-review-tier"),
+          contextColor,
+          contextContrast: contrast(contextColor, background),
+          contextMatchesTier: view.current && view.current.tier in allTierColors
+            ? contextColor === allTierColors[view.current.tier]
+            : true,
+        });
+      }
+      for (const item of measurement) {
+        item.contextMatchesTier = item.contextMatchesTier && (
+          item.contextTier === null || item.contextTier in allTierColors
+            ? !item.contextTier || item.contextColor === allTierColors[item.contextTier]
+            : true
+        );
+      }
+      return { width, theme, fixtures: measurement, allTierColors };
+    }
+
+    window.reviewFooterPreview = { render, fixtures };
+    window.__previewReady = true;
+  })();
+  </script>
+</body>
+</html>

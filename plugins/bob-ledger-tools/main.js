@@ -7786,9 +7786,23 @@ function freshnessFooterView(memo, options = {}) {
       }
     }
     const allGroups = freshnessFooterGroups(counts);
-    const groups = current
+    const filteredGroups = current
       ? allGroups.filter((group) => group.key !== current.tier)
       : allGroups.slice();
+    const boundaryIndex = filteredGroups.findIndex(
+      (group) => !FRESHNESS_FOOTER_COMMITMENT_TIERS.includes(group.key),
+    );
+    const hasCommitmentBeforeBoundary =
+      boundaryIndex > 0 &&
+      filteredGroups
+        .slice(0, boundaryIndex)
+        .some((group) => FRESHNESS_FOOTER_COMMITMENT_TIERS.includes(group.key));
+    const groups = filteredGroups.map((group, index) => ({
+      key: group.key,
+      label: group.label,
+      count: group.count,
+      boundary: index === boundaryIndex && hasCommitmentBeforeBoundary,
+    }));
     const groupsText = groups
       .map((group) => group.label + " " + group.count)
       .join(" · ");
@@ -7936,7 +7950,7 @@ function freshnessFooterView(memo, options = {}) {
     return freshnessFooterHiddenView();
   }
 }
-
+// ---- src/121-freshness-footer-paint.js ----
 function freshnessFooterSetText(node, text) {
   if (!node) {
     return;
@@ -7962,6 +7976,19 @@ function freshnessFooterSetAttr(node, name, value) {
       node.setAttribute(name, value);
     } else if (name === "title") {
       node.title = value;
+    }
+  } catch (error) {
+    // Cosmetic.
+  }
+}
+
+function freshnessFooterRemoveAttr(node, name) {
+  if (!node || !name) {
+    return;
+  }
+  try {
+    if (typeof node.removeAttribute === "function") {
+      node.removeAttribute(name);
     }
   } catch (error) {
     // Cosmetic.
@@ -8087,31 +8114,98 @@ function freshnessFooterSetOmitted(node, omitted) {
   }
 }
 
-// Hide optional parts in this order until the item fits: groups, then
-// optional detail, shortcut hint, upkeep meter. The main due total or
-// current rank and tier stay visible.
+function freshnessFooterPaintGroups(container, groups) {
+  if (!container) {
+    return;
+  }
+  try {
+    if (typeof container.empty === "function") {
+      container.empty();
+    } else if ("textContent" in container) {
+      container.textContent = "";
+    }
+    const nodes = [];
+    for (const group of Array.isArray(groups) ? groups : []) {
+      const className = group && group.boundary
+        ? "bob-freshness-group bob-freshness-group-boundary"
+        : "bob-freshness-group";
+      const token = freshnessFooterCreateChild(container, "span", className);
+      if (!token) {
+        continue;
+      }
+      freshnessFooterSetAttr(token, "data-review-tier", group && group.key);
+      const label = freshnessFooterCreateChild(
+        token,
+        "span",
+        "bob-freshness-group-label",
+      );
+      freshnessFooterSetText(label, group && group.label);
+      const count = freshnessFooterCreateChild(
+        token,
+        "span",
+        "bob-freshness-group-count",
+      );
+      freshnessFooterSetText(count, group && group.count);
+      nodes.push(token);
+    }
+    const more = freshnessFooterCreateChild(
+      container,
+      "span",
+      "bob-freshness-groups-more",
+    );
+    freshnessFooterSetText(more, "…");
+    freshnessFooterSetAttr(more, "aria-hidden", "true");
+    freshnessFooterSetOmitted(more, true);
+    container._bobFreshnessGroupNodes = nodes;
+    container._bobFreshnessGroupsMore = more;
+  } catch (error) {
+    // Cosmetic.
+  }
+}
+
+// Shed groups from the end of the walk, then optional detail, shortcut
+// hint, and upkeep meter. The due rank and current tier stay visible.
 function freshnessFooterFit(el, parts, view) {
-  const show = {
-    groups: Boolean(view && view.groupsText),
-    detail: Boolean(view && view.detailText),
-    hint: Boolean(view && view.hintText),
-    meter: Boolean(view && view.meterText),
-  };
+  const groupContainer = parts && parts.groups;
+  const nodes = groupContainer && Array.isArray(groupContainer._bobFreshnessGroupNodes)
+    ? groupContainer._bobFreshnessGroupNodes
+    : [];
+  const hasGroups = Boolean(view && view.groupsText);
+  const fallbackGroup = nodes.length === 0 && hasGroups;
+  const total = fallbackGroup ? 1 : nodes.length;
+  let shown = hasGroups ? total : 0;
+  let detail = Boolean(view && view.detailText);
+  let hint = Boolean(view && view.hintText);
+  let meter = Boolean(view && view.meterText);
   const apply = () => {
-    freshnessFooterSetOmitted(parts.groups, !show.groups);
-    freshnessFooterSetOmitted(parts.detail, !show.detail);
-    freshnessFooterSetOmitted(parts.hint, !show.hint);
-    freshnessFooterSetOmitted(parts.meter, !show.meter);
+    freshnessFooterSetOmitted(groupContainer, shown === 0);
+    nodes.forEach((node, index) => {
+      freshnessFooterSetOmitted(node, index >= shown);
+    });
+    freshnessFooterSetOmitted(
+      groupContainer && groupContainer._bobFreshnessGroupsMore,
+      !(shown > 0 && shown < total),
+    );
+    freshnessFooterSetOmitted(parts.detail, !detail);
+    freshnessFooterSetOmitted(parts.hint, !hint);
+    freshnessFooterSetOmitted(parts.meter, !meter);
   };
+  const result = () => ({
+    groups: shown > 0,
+    groupsShown: shown,
+    detail,
+    hint,
+    meter,
+  });
   apply();
   let width = 0;
   try {
     width = Number(el.clientWidth);
   } catch (error) {
-    return show;
+    return result();
   }
   if (!Number.isFinite(width) || width <= 0) {
-    return show;
+    return result();
   }
   const overflows = () => {
     try {
@@ -8120,27 +8214,23 @@ function freshnessFooterFit(el, parts, view) {
       return false;
     }
   };
-  if (!overflows()) {
-    return show;
+  while (overflows() && shown > 0) {
+    shown -= 1;
+    apply();
   }
-  show.groups = false;
-  apply();
-  if (!overflows()) {
-    return show;
+  if (overflows() && detail) {
+    detail = false;
+    apply();
   }
-  show.detail = false;
-  apply();
-  if (!overflows()) {
-    return show;
+  if (overflows() && hint) {
+    hint = false;
+    apply();
   }
-  show.hint = false;
-  apply();
-  if (!overflows()) {
-    return show;
+  if (overflows() && meter) {
+    meter = false;
+    apply();
   }
-  show.meter = false;
-  apply();
-  return show;
+  return result();
 }
 
 function freshnessFooterPaint(el, view) {
@@ -8195,8 +8285,9 @@ function freshnessFooterPaint(el, view) {
     freshnessFooterSetText(parts.context, "");
     freshnessFooterSetText(parts.detail, "");
     freshnessFooterSetText(parts.hint, "");
-    freshnessFooterSetText(parts.groups, "");
+    freshnessFooterPaintGroups(parts.groups, []);
     freshnessFooterSetText(parts.meter, "");
+    freshnessFooterRemoveAttr(parts.context, "data-review-tier");
     freshnessFooterSetAttr(parts.button, "aria-label", "Review footer hidden");
     freshnessFooterSetAttr(el, "title", "");
     return parts;
@@ -8205,18 +8296,29 @@ function freshnessFooterPaint(el, view) {
   freshnessFooterSetText(parts.context, view.contextText);
   freshnessFooterSetText(parts.detail, view.detailText);
   freshnessFooterSetText(parts.hint, view.hintText);
-  freshnessFooterSetText(parts.groups, view.groupsText);
+  freshnessFooterPaintGroups(parts.groups, view.groups);
   freshnessFooterSetText(parts.meter, view.meterText);
   freshnessFooterSetOmitted(parts.context, !view.contextText);
   freshnessFooterSetOmitted(parts.detail, !view.detailText);
   freshnessFooterSetOmitted(parts.hint, !view.hintText);
-  freshnessFooterSetOmitted(parts.groups, !view.groupsText);
   freshnessFooterSetOmitted(parts.meter, !view.meterText);
   freshnessFooterToggleClass(
     parts.context,
     "bob-freshness-tier",
     Boolean(view.current),
   );
+  if (
+    view.current &&
+    FRESHNESS_FOOTER_TIERS.includes(view.current.tier)
+  ) {
+    freshnessFooterSetAttr(
+      parts.context,
+      "data-review-tier",
+      view.current.tier,
+    );
+  } else {
+    freshnessFooterRemoveAttr(parts.context, "data-review-tier");
+  }
   freshnessFooterSetAttr(parts.button, "aria-label", view.ariaLabel || view.tooltip);
   freshnessFooterSetAttr(el, "title", view.tooltip);
   freshnessFooterSetAttr(parts.button, "title", view.tooltip);

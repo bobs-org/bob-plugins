@@ -2,6 +2,7 @@
   "010-core.js",
   "015-prompt-block-id-naming.js",
   "020-markers-and-references.js",
+  "022-task-wikilink-token.js",
   "030-tasks-and-dependencies.js",
   "040-editor-pomodoro-and-logs.js",
   "050-source-discovery-and-edits.js",

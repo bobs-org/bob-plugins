@@ -23,7 +23,6 @@ class BobLedgerToolsTaskThemeApiMixin {
       taskThemeOf: (text) => pomodoroThemeTaskFieldState(text),
       setTaskTheme: (text, name) => pomodoroThemeSetTaskTheme(text, name),
       clearTaskTheme: (text) => pomodoroThemeClearTaskTheme(text),
-      planThemeChange: (options) => this.pomodoroThemePlanThemeChange(options),
       effectiveTypeFor: (request) => this.taskTypeEffectiveTypeFor(request),
       typeComponentsOf: (name) => this.taskTypeComponentsOf(name),
       typeAgrees: (taskKey, entryName) => this.taskTypeAgrees(taskKey, entryName),
@@ -197,34 +196,6 @@ class BobLedgerToolsTaskThemeApiMixin {
       });
     } catch (error) {
       return null;
-    }
-  }
-
-  // Deprecated: the link-picker and Task Card phases replace this with
-  // `planRetype`. The default path keeps the legacy write rule byte for
-  // byte; only the keep-type path (`linkOnce`) delegates to `planRetype`.
-  pomodoroThemePlanThemeChange(options) {
-    try {
-      const opts = options && typeof options === "object" ? options : {};
-      if (opts.linkOnce === true) {
-        const outcome = this.taskTypePlanRetype({ ...opts, keepType: true });
-        if (!outcome) {
-          return { action: "none" };
-        }
-        if (outcome.kind === "merge") {
-          return { action: "merge", name: outcome.name };
-        }
-        if (outcome.kind === "set") {
-          return { action: "set", name: outcome.name, key: outcome.key };
-        }
-        if (outcome.kind === "clear") {
-          return { action: "clear" };
-        }
-        return { action: "none" };
-      }
-      return pomodoroThemePlanChange(opts);
-    } catch (error) {
-      return { action: "none" };
     }
   }
 

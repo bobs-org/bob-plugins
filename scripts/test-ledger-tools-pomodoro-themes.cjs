@@ -92,7 +92,6 @@ const {
   pomodoroThemeTaskFieldState,
   pomodoroThemeSetTaskTheme,
   pomodoroThemeClearTaskTheme,
-  pomodoroThemePlanChange,
   pomodoroThemeLedgerNames,
   pomodoroThemeSuggestWithDiagnostics,
   pomodoroThemeNoteDefault,
@@ -424,7 +423,7 @@ test("Live Preview waits until the cursor leaves an unconfigured theme name", ()
   const committedClass = afterTyping[0].value.class;
   assert.ok(committedClass.includes("bob-pomo-theme-unconfigured"));
   assert.ok(committedClass.includes("bob-pomo-theme-muted"));
-  assert.match(afterTyping[0].value.attributes.title, /not in your themes$/);
+  assert.match(afterTyping[0].value.attributes.title, /not in your types$/);
 });
 
 test("theme name offsets anchor at the em dash of a ledger line", () => {
@@ -853,7 +852,7 @@ test("task-theme API is additive, synchronous, path-bound, and read-only", () =>
   for (const member of [
     "available", "fetch", "snapshot", "isConfigured", "hueFor", "componentsOf",
     "historyRows", "similarTo", "hide", "unhide", "color", "rename", "onChange",
-    "suggestFor", "taskThemeOf", "setTaskTheme", "clearTaskTheme", "planThemeChange", "isKnownTheme",
+    "suggestFor", "taskThemeOf", "setTaskTheme", "clearTaskTheme", "isKnownTheme",
     "effectiveTypeFor", "typeComponentsOf", "typeAgrees", "planRetype", "planPlacement", "planRelocation",
   ]) {
     assert.equal(typeof api[member], "function", `themes.${member} is present`);
@@ -896,17 +895,6 @@ test("task-theme API is additive, synchronous, path-bound, and read-only", () =>
     "- [ ] Café [type:: FIX] ^id");
   assert.equal(api.clearTaskTheme("- [ ] Café [theme:: WRITE] ^id"), "- [ ] Café ^id");
   assert.equal(api.clearTaskTheme("- [ ] Café [type:: WRITE] [theme:: FIX] ^id"), "- [ ] Café ^id");
-  assert.deepEqual(
-    api.planThemeChange({
-      field: api.taskThemeOf("- [ ] Task"),
-      suggestion: liveSuggestion,
-      inherited: liveSuggestion,
-      destinationName: "BUILD",
-      exemptKeys: ["PLAN"],
-      deliberate: true,
-    }),
-    { action: "none" },
-  );
   assert.equal(spawned, 0, "synchronous suggestions do not fetch history");
   assert.equal(writes, 0, "field helpers do not mutate the vault");
 });
@@ -1011,47 +999,6 @@ test("suggestion cascade falls through to plan.default_type", () => {
   assert.deepEqual(
     conflicted.warnings.map((warning) => [warning.code, warning.path]),
     [["type_default_conflict", "both.md"]],
-  );
-});
-
-test("planThemeChange keeps the legacy rule and merges only for linkOnce", () => {
-  const plugin = new LedgerToolsPlugin({});
-  plugin.pomodoroThemesCache = {
-    report: {
-      ...LedgerToolsPlugin.helpers.pomodoroThemesEmptyReport(),
-      configured_themes: [
-        { key: "build", name: "BUILD" },
-        { key: "fix", name: "FIX" },
-        { key: "write", name: "WRITE" },
-        { key: "chore", name: "CHORE" },
-      ],
-    },
-  };
-  const api = plugin.pomodoroThemesApi();
-  const shown = { theme: { key: "build", name: "BUILD", known: true } };
-  const inherited = { theme: { key: "chore", name: "CHORE", known: true } };
-  assert.deepEqual(
-    api.planThemeChange({
-      field: { state: "none" },
-      suggestion: shown,
-      inherited,
-      destinationName: "FIX",
-      exemptKeys: ["PLAN"],
-      deliberate: true,
-    }),
-    { action: "set", name: "FIX", key: "fix" },
-  );
-  assert.deepEqual(
-    api.planThemeChange({
-      field: { state: "none" },
-      suggestion: shown,
-      inherited,
-      destinationName: "FIX",
-      exemptKeys: ["PLAN"],
-      deliberate: true,
-      linkOnce: true,
-    }),
-    { action: "merge", name: "FIX + BUILD" },
   );
 });
 

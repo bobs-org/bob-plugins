@@ -278,7 +278,7 @@ function statsChartTooltip(metric, point, report) {
     lines.push(part.dimension + ": " + part.label + " — " + part.formatted);
   }
   if (!ranked.length && safeMetric.id === "worked") {
-    lines.push("No theme parts for this point");
+    lines.push("No type parts for this point");
   }
   return lines.join("\n");
 }

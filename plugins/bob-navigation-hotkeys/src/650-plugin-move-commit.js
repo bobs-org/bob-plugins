@@ -239,7 +239,7 @@ class BobNavigationHotkeysMoveCommitMixin {
       ? navigationPomodoroThemeUnconfiguredNames(
           getNavigationPomodoroThemesApi(this.app),
           plan.name,
-        ).map((name) => ` · ${name} isn't one of your themes`).join("")
+        ).map((name) => ` · ${name} isn't one of your types`).join("")
       : "";
     if (isRename && renameFailedGroups > 0) {
       new Notice(

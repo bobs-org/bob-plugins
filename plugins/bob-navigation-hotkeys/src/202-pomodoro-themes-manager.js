@@ -249,7 +249,7 @@ function pomodoroThemesManagerRenameInputError(raw) {
     return validated.error;
   }
   if (validated.name.includes("+")) {
-    return "Rename to a single theme without +";
+    return "Rename to a single type without +";
   }
   return null;
 }
@@ -352,7 +352,7 @@ function renderPomodoroThemesManagerRow(row, rowEl, query, themesApi) {
     const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
     appendHighlighted(titleEl, row.title, query);
     const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-    pathEl.setText("Suggestion — Tab past it to browse themes");
+    pathEl.setText("Suggestion — Tab past it to browse types");
     return;
   }
   if (row.kind !== "theme" || !row.theme) {
@@ -457,7 +457,7 @@ class PomodoroThemesManagerModal extends FilteredPickerModal {
   onOpen() {
     super.onOpen();
     if (!this.managerAvailable()) {
-      new Notice("Pomodoro themes need the desktop app.");
+      new Notice("Task types need the desktop app.");
       this.close();
       return;
     }
@@ -483,7 +483,7 @@ class PomodoroThemesManagerModal extends FilteredPickerModal {
       }
       this.rebuildManagerItems();
     } catch (error) {
-      this.managerError = "Could not load themes";
+      this.managerError = "Could not load types";
       this.rebuildManagerItems();
     }
   }
@@ -537,19 +537,19 @@ class PomodoroThemesManagerModal extends FilteredPickerModal {
     }
     const method = row.theme.hidden === true ? "unhide" : "hide";
     if (typeof this.themesApi[method] !== "function") {
-      new Notice("Update bob to hide themes");
+      new Notice("Update bob to hide types");
       return;
     }
     this.themeWriteInFlight = true;
     try {
       const result = await this.themesApi[method](row.theme.name);
       if (!result || result.ok !== true) {
-        new Notice((result && result.message) || "Could not update the theme");
+        new Notice((result && result.message) || "Could not update the type");
         return;
       }
       await this.refreshManagerReport("write");
     } catch (error) {
-      new Notice("Could not update the theme");
+      new Notice("Could not update the type");
     } finally {
       this.themeWriteInFlight = false;
     }

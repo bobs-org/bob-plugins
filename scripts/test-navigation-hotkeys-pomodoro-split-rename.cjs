@@ -746,6 +746,63 @@ test("planPomodoroEntryRename renames closed and cancelled entries the same way 
   }
 });
 
+test("Pomodoro rename preview counts retyped tasks and reports containers", () => {
+  const api = {
+    planRetype: ({ field }) => field && field.container
+      ? { kind: "container" }
+      : field && field.clear
+        ? { kind: "clear" }
+        : { kind: "set", name: "BUILD" },
+  };
+  const modal = {
+    renameTypePreviewState: "ready",
+    renameTypePreview: {
+      api,
+      candidates: 3,
+      unresolved: 0,
+      records: [
+        { field: {} },
+        { field: {} },
+        { field: { clear: true } },
+      ],
+    },
+  };
+  assert.equal(
+    helpers.pomodoroEntryRenameTypeConsequence(modal, {
+      kind: "rename",
+      name: "BUILD",
+    }),
+    "2 tasks become BUILD · 1 task uses inherited types",
+  );
+  assert.equal(
+    helpers.pomodoroEntryRenameTypeConsequence({
+      renameTypePreviewState: "ready",
+      renameTypePreview: {
+        api: { planRetype: () => ({ kind: "container" }) },
+        candidates: 1,
+        unresolved: 0,
+        records: [{ field: { container: true } }],
+      },
+    }, { kind: "rename", name: "BUILD" }),
+    "Container or label destination · no task types change",
+  );
+});
+
+test("Pomodoro entry rename refuses a buffer changed after preview", async () => {
+  const { editor, plugin, sourceFile } = createPomodoroMovePickerHarness();
+  const sourceContent = editor.getValue();
+  editor.content = `${sourceContent}\nchanged after preview`;
+  const result = await plugin.commitPomodoroEntryMoveSession({
+    editor,
+    sourcePath: sourceFile.path,
+    sourceContent,
+    discovery: {},
+  }, { kind: "rename", name: "NEW NAME" });
+  assert.equal(result, false);
+  assert.equal(editor.transactions.length, 0);
+  assert.match(editor.getValue(), /changed after preview/);
+});
+
 test("planPomodoroEntryMerge resolves all direction-table cases with survivor-first bullets and names", () => {
   {
     const content = [

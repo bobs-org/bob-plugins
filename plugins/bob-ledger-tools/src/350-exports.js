@@ -629,7 +629,6 @@ module.exports.helpers = {
   pomodoroThemeTaskFieldState,
   pomodoroThemeSetTaskTheme,
   pomodoroThemeClearTaskTheme,
-  pomodoroThemePlanChange,
   pomodoroThemeLedgerNames,
   pomodoroThemeCanonicalDailyPath,
   pomodoroThemeTaskMark,

@@ -23392,6 +23392,62 @@ function pomodoroBulletMovePickerConsequence(modal, row) {
   return consequence;
 }
 
+function pomodoroEntryRenameTypeConsequence(modal, row) {
+  const isRename = row && (row.kind === "rename" ||
+    (row.kind === "recent" && row.operation === "rename"));
+  if (!isRename) {
+    return null;
+  }
+  const state = modal && modal.renameTypePreviewState;
+  if (state === "loading") {
+    return "Checking linked task types…";
+  }
+  const preview = modal && modal.renameTypePreview;
+  if (state === "unavailable" || preview && preview.error) {
+    return "Task type preview unavailable · nothing will be renamed";
+  }
+  if (!preview || !preview.candidates) {
+    return "No linked tasks · task types unchanged";
+  }
+  const plans = pomodoroBulletMoveTypePlanRows(
+    preview.api,
+    preview,
+    String(row.name || "").trim(),
+    {},
+  );
+  if (plans.some((item) => !item.plan)) {
+    return "Task type preview unavailable · nothing will be renamed";
+  }
+  const changes = new Map();
+  let inheritedCount = 0;
+  for (const item of plans) {
+    if (item.plan.kind === "set") {
+      const name = String(item.plan.name || "type");
+      changes.set(name, (changes.get(name) || 0) + 1);
+    } else if (item.plan.kind === "clear") {
+      inheritedCount += 1;
+    }
+  }
+  const countText = (count, singular, plural) => `${count} ${count === 1 ? singular : plural}`;
+  const pieces = [...changes.entries()].map(([name, count]) =>
+    `${countText(count, "task", "tasks")} ${count === 1 ? "becomes" : "become"} ${name}`,
+  );
+  if (inheritedCount > 0) {
+    pieces.push(`${countText(inheritedCount, "task", "tasks")} ${inheritedCount === 1 ? "uses" : "use"} inherited types`);
+  }
+  if (pieces.length === 0) {
+    const container = plans.some((item) => item.plan.kind === "container");
+    const unresolved = Number(preview.unresolved) || 0;
+    const reason = container
+      ? "Container or label destination · no task types change"
+      : "All linked tasks already agree · no task types change";
+    return unresolved > 0 ? `${reason} · ${unresolved} links not checked` : reason;
+  }
+  const unresolved = Number(preview.unresolved) || 0;
+  const suffix = unresolved > 0 ? ` · ${unresolved} links not checked` : "";
+  return `${pieces.join(" · ")}${suffix}`;
+}
+
 function cyclePomodoroBulletMoveType(modal, row, backwards = false) {
   const preview = modal && modal.moveTypePreview;
   if (!preview || preview.error || !preview.api) {
@@ -23414,6 +23470,53 @@ function cyclePomodoroBulletMoveType(modal, row, backwards = false) {
   modal.moveTypePicks.set(rowKey, candidates[nextIndex].key);
   modal.renderResults();
   return true;
+}
+
+function installPomodoroEntryMoveTypePreview() {
+  const prototype = PomodoroEntryMovePickerModal.prototype;
+  const originalOnOpen = prototype.onOpen;
+  const originalRenderResults = prototype.renderResults;
+  const originalRenderFooter = prototype.renderFooter;
+
+  prototype.onOpen = function () {
+    const linkedTaskCount = collectPomodoroBulletMoveTaskLinks(this.session).length;
+    this.renameTypePreviewState = linkedTaskCount > 0 ? "loading" : "ready";
+    this.renameTypePreview = linkedTaskCount > 0
+      ? null
+      : { api: this.themesApi, candidates: 0, unresolved: 0, records: [], error: null };
+    originalOnOpen.call(this);
+    if (linkedTaskCount === 0) {
+      return;
+    }
+    void resolvePomodoroBulletMoveTypePreview(this.plugin, this.session)
+      .then((preview) => {
+        if (!this.pickerOpen) return;
+        this.renameTypePreview = preview;
+        this.renameTypePreviewState = preview.error ? "unavailable" : "ready";
+        this.renderResults();
+      })
+      .catch(() => {
+        if (!this.pickerOpen) return;
+        this.renameTypePreview = { candidates: 0, unresolved: 0, records: [], error: "Task type preview failed" };
+        this.renameTypePreviewState = "unavailable";
+        this.renderResults();
+      });
+  };
+
+  prototype.renderFooter = function () {
+    originalRenderFooter.call(this);
+    if (!this.footerEl) return;
+    const row = (this.visibleItems || [])[this.selectedIndex];
+    const consequence = pomodoroEntryRenameTypeConsequence(this, row);
+    if (consequence) {
+      this.footerEl.createDiv({ cls: "bob-cnp-consequence-strip-text", text: consequence });
+    }
+  };
+
+  prototype.renderResults = function () {
+    originalRenderResults.call(this);
+    this.renderFooter();
+  };
 }
 
 function installPomodoroBulletMoveTypePicker() {
@@ -23513,6 +23616,7 @@ function installPomodoroBulletMoveTypePicker() {
   };
 }
 
+installPomodoroEntryMoveTypePreview();
 installPomodoroBulletMoveTypePicker();
 // ---- src/201-pomodoro-theme-picker-rows.js ----
 function addPickerRowClasses(rowEl, classes) {
@@ -23891,7 +23995,7 @@ function pomodoroThemesManagerRenameInputError(raw) {
     return validated.error;
   }
   if (validated.name.includes("+")) {
-    return "Rename to a single theme without +";
+    return "Rename to a single type without +";
   }
   return null;
 }
@@ -23994,7 +24098,7 @@ function renderPomodoroThemesManagerRow(row, rowEl, query, themesApi) {
     const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
     appendHighlighted(titleEl, row.title, query);
     const pathEl = textEl.createDiv({ cls: "bob-cnp-row-path" });
-    pathEl.setText("Suggestion — Tab past it to browse themes");
+    pathEl.setText("Suggestion — Tab past it to browse types");
     return;
   }
   if (row.kind !== "theme" || !row.theme) {
@@ -24099,7 +24203,7 @@ class PomodoroThemesManagerModal extends FilteredPickerModal {
   onOpen() {
     super.onOpen();
     if (!this.managerAvailable()) {
-      new Notice("Pomodoro themes need the desktop app.");
+      new Notice("Task types need the desktop app.");
       this.close();
       return;
     }
@@ -24125,7 +24229,7 @@ class PomodoroThemesManagerModal extends FilteredPickerModal {
       }
       this.rebuildManagerItems();
     } catch (error) {
-      this.managerError = "Could not load themes";
+      this.managerError = "Could not load types";
       this.rebuildManagerItems();
     }
   }
@@ -24179,19 +24283,19 @@ class PomodoroThemesManagerModal extends FilteredPickerModal {
     }
     const method = row.theme.hidden === true ? "unhide" : "hide";
     if (typeof this.themesApi[method] !== "function") {
-      new Notice("Update bob to hide themes");
+      new Notice("Update bob to hide types");
       return;
     }
     this.themeWriteInFlight = true;
     try {
       const result = await this.themesApi[method](row.theme.name);
       if (!result || result.ok !== true) {
-        new Notice((result && result.message) || "Could not update the theme");
+        new Notice((result && result.message) || "Could not update the type");
         return;
       }
       await this.refreshManagerReport("write");
     } catch (error) {
-      new Notice("Could not update the theme");
+      new Notice("Could not update the type");
     } finally {
       this.themeWriteInFlight = false;
     }
@@ -24244,7 +24348,7 @@ class PomodoroThemesManagerModal extends FilteredPickerModal {
 class PomodoroThemeActionModal extends FilteredPickerModal {
   constructor(app, manager, themeRow) {
     const theme = themeRow && themeRow.theme ? themeRow.theme : null;
-    const name = theme && theme.name ? theme.name : "theme";
+    const name = theme && theme.name ? theme.name : "type";
     const hidden = theme && theme.hidden === true;
     const configColor = theme && theme.hue_source === "config";
     super(app, {
@@ -24267,9 +24371,9 @@ class PomodoroThemeActionModal extends FilteredPickerModal {
       ],
       title: name,
       headerIcon: "timer",
-      inputLabel: "Choose a theme action",
+      inputLabel: "Choose a type action",
       placeholder: "type to filter · r/c/h/o jump when empty",
-      resultsLabel: "Theme actions",
+      resultsLabel: "Type actions",
       emptyText: "No actions",
       footerHints: [
         { keys: ["r", "c", "h", "o"], label: "Jump to action" },
@@ -24348,7 +24452,7 @@ class PomodoroThemeActionModal extends FilteredPickerModal {
 
 class PomodoroThemeColorModal extends FilteredPickerModal {
   constructor(app, manager, theme) {
-    const name = theme && theme.name ? theme.name : "theme";
+    const name = theme && theme.name ? theme.name : "type";
     const items = POMODORO_THEMES_MANAGER_HUES.map((hue, index) => ({
       kind: "color",
       key: `color-${hue}`,
@@ -24361,9 +24465,9 @@ class PomodoroThemeColorModal extends FilteredPickerModal {
       items,
       title: `Pin color for ${name}`,
       headerIcon: "palette",
-      inputLabel: "Choose a theme color",
+      inputLabel: "Choose a type color",
       placeholder: "type to filter · 1–8/a pin when empty",
-      resultsLabel: "Theme colors",
+      resultsLabel: "Type colors",
       emptyText: "No colors",
       footerHints: [
         { keys: ["1–8", "a"], label: "Pick hue or Auto" },
@@ -24422,20 +24526,20 @@ class PomodoroThemeColorModal extends FilteredPickerModal {
     }
     const api = this.manager.themesApi;
     if (typeof api.color !== "function") {
-      new Notice("Update bob to pin theme colors");
+      new Notice("Update bob to pin type colors");
       return;
     }
     try {
       const result = await api.color(this.theme.name, row.hue);
       if (!result || result.ok !== true) {
-        new Notice((result && result.message) || "Could not pin the theme color");
+        new Notice((result && result.message) || "Could not pin the type color");
         return;
       }
       new Notice(row.hue === "auto" ? `${this.theme.name} uses its automatic hue` : `${this.theme.name} wears ${row.hue}`);
       this.close();
       await this.manager.refreshManagerReport("write");
     } catch (error) {
-      new Notice("Could not pin the theme color");
+      new Notice("Could not pin the type color");
     }
   }
 }
@@ -24444,11 +24548,11 @@ class PomodoroThemeOccurrencesModal extends FilteredPickerModal {
   constructor(app, plugin, theme, options = {}) {
     super(app, {
       items: [],
-      title: `Occurrences of ${theme && theme.name ? theme.name : "theme"}`,
+      title: `Occurrences of ${theme && theme.name ? theme.name : "type"}`,
       headerIcon: "search",
       inputLabel: "Filter occurrences",
       placeholder: "Filter daily notes",
-      resultsLabel: "Theme occurrences",
+      resultsLabel: "Type occurrences",
       emptyText: "Scanning daily notes…",
       footerHints: [
         { keys: ["↵"], label: "Open at entry" },
@@ -24595,7 +24699,7 @@ class PomodoroThemeRenameModal extends Modal {
     applyIcon(headerIcon, "pencil");
     const headerText = header.createDiv({ cls: "bob-cnp-header-text" });
     const title = headerText.createDiv({ cls: "bob-cnp-title" });
-    const from = this.theme && this.theme.name ? this.theme.name : "theme";
+    const from = this.theme && this.theme.name ? this.theme.name : "type";
     title.setText(`Rename ${from}`);
     const subtitle = headerText.createDiv({ cls: "bob-cnp-subtitle" });
     subtitle.setText("Previewed one-commit rename across daily notes");
@@ -24604,13 +24708,13 @@ class PomodoroThemeRenameModal extends Modal {
     form.createEl("label", { cls: "bob-cnp-rename-label", text: "New name" });
     this.nameInput = form.createEl("input", {
       cls: "bob-cnp-input",
-      attr: { type: "text", placeholder: "FIX", "aria-label": "New theme name" },
+      attr: { type: "text", placeholder: "FIX", "aria-label": "New type name" },
     });
     this.mergeToggle = form.createEl("input", {
       cls: "bob-cnp-rename-merge",
-      attr: { type: "checkbox", "aria-label": "Merge into an existing theme" },
+      attr: { type: "checkbox", "aria-label": "Merge into an existing type" },
     });
-    form.createEl("label", { cls: "bob-cnp-rename-label", text: "Merge into an existing theme (--merge)" });
+    form.createEl("label", { cls: "bob-cnp-rename-label", text: "Merge into an existing type (--merge)" });
 
     const buttons = this.contentEl.createDiv({ cls: "bob-cnp-rename-buttons" });
     this.previewButton = buttons.createEl("button", { cls: "bob-cnp-rename-button", text: "Preview" });
@@ -24646,7 +24750,7 @@ class PomodoroThemeRenameModal extends Modal {
     }
     const api = this.manager && this.manager.themesApi;
     if (!api || typeof api.rename !== "function") {
-      this.renameError = "Theme renames need the desktop app.";
+      this.renameError = "Type renames need the desktop app.";
       this.renderRenamePreview();
       return null;
     }
@@ -24710,7 +24814,7 @@ class PomodoroThemeRenameModal extends Modal {
     }
     const api = this.manager && this.manager.themesApi;
     if (!api || typeof api.rename !== "function") {
-      new Notice("Theme renames need the desktop app.");
+      new Notice("Type renames need the desktop app.");
       return;
     }
     const to = this.renameTarget().trim().toUpperCase();
@@ -24724,7 +24828,7 @@ class PomodoroThemeRenameModal extends Modal {
       }
       const result = await api.rename(this.theme.name, to, { merge });
       if (!result || result.ok !== true) {
-        new Notice((result && result.message) || "Could not rename the theme");
+        new Notice((result && result.message) || "Could not rename the type");
         return;
       }
       const files = preview.files;
@@ -24734,7 +24838,7 @@ class PomodoroThemeRenameModal extends Modal {
         await this.manager.refreshManagerReport("rename");
       }
     } catch (error) {
-      new Notice("Could not rename the theme");
+      new Notice("Could not rename the type");
     } finally {
       this.renameApplying = false;
     }
@@ -24794,14 +24898,14 @@ class BobNavigationHotkeysPomodoroThemesManagerMixin {
   openPomodoroThemesManager() {
     const api = getNavigationPomodoroThemesApi(this.app);
     if (!navigationPomodoroThemeAvailable(api)) {
-      new Notice("Pomodoro themes need the desktop app.");
+      new Notice("Task types need the desktop app.");
       return false;
     }
     try {
       new PomodoroThemesManagerModal(this.app, this).open();
       return true;
     } catch (error) {
-      new Notice("Could not open Pomodoro themes");
+      new Notice("Could not open task types");
       return false;
     }
   }
@@ -46421,7 +46525,7 @@ function taskCardThemeSourceLabel(suggestion) {
     case "task":
       return suggestion.label || "this task";
     default:
-      return suggestion.label || "inherited theme";
+      return suggestion.label || "inherited type";
   }
 }
 
@@ -46507,9 +46611,9 @@ function taskCardThemeTargetDisplay(state) {
   const frozenParts = Object.freeze(parts);
   const unknown = Boolean(theme && state.known === false);
   const tooltip = state.needsRepair
-    ? "This task has a duplicate or invalid theme field and needs repair."
+    ? "This task has a duplicate or invalid type field and needs repair."
     : unknown
-      ? "This theme is not in the catalog; its task field remains unchanged."
+      ? "This type is not in the catalog; its task field remains unchanged."
       : null;
   return Object.freeze({
     parts: frozenParts,
@@ -46569,7 +46673,7 @@ function taskCardThemeTargetProjection(target, id, context, apiReady) {
       signature: `unavailable:${reason}`,
     });
   if (!apiReady) {
-    return unavailable("Ledger Tools task-theme API is unavailable");
+    return unavailable("Ledger Tools task type API is unavailable");
   }
   if (!path || line === null || !rawLine) {
     return unavailable("Task identity is unavailable");
@@ -46589,7 +46693,7 @@ function taskCardThemeTargetProjection(target, id, context, apiReady) {
     rawField = api.taskThemeOf(rawLine);
     rawSuggestion = api.suggestFor({ path, line: line + 1, text: content });
   } catch (_error) {
-    return unavailable("Task-theme information could not be read");
+    return unavailable("Task type information could not be read");
   }
   const field = rawField && ["none", "set", "repair"].includes(rawField.state)
     ? copyTaskCardThemeData(rawField)
@@ -46706,7 +46810,7 @@ function buildTaskCardThemeProjection(context = {}) {
     text = first.display.text;
   }
   const unavailableReason = !apiReady
-    ? "Ledger Tools task-theme API is unavailable"
+    ? "Ledger Tools task type API is unavailable"
     : targets.find((target) => !target.available)?.unavailableReason ||
       (targets.length === 0 ? "No task targets are available" : null);
   const display = Object.freeze({
@@ -46729,7 +46833,7 @@ function buildTaskCardThemeProjection(context = {}) {
       context.themeApi &&
       (typeof context.themeApi.setTaskTheme !== "function" ||
         typeof context.themeApi.clearTaskTheme !== "function")
-        ? "Ledger Tools task-theme write methods are unavailable"
+        ? "Ledger Tools task type write methods are unavailable"
         : null,
     targetCount: targets.length,
     mixed,
@@ -65844,7 +65948,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     // No default hotkey: the manager is a browsing surface, not a cursor action.
     this.addCommand({
       id: "open-pomodoro-themes-manager",
-      name: "Pomodoro themes",
+      name: "Task types",
       callback: () => this.openPomodoroThemesManager(),
     });
 
@@ -89446,7 +89550,7 @@ class BobNavigationHotkeysMoveCommitMixin {
       ? navigationPomodoroThemeUnconfiguredNames(
           getNavigationPomodoroThemesApi(this.app),
           plan.name,
-        ).map((name) => ` · ${name} isn't one of your themes`).join("")
+        ).map((name) => ` · ${name} isn't one of your types`).join("")
       : "";
     if (isRename && renameFailedGroups > 0) {
       new Notice(
@@ -96944,6 +97048,7 @@ module.exports.helpers = {
   rebasePomodoroBulletBlock,
   planPomodoroBulletMove,
   planPomodoroEntryRename,
+  pomodoroEntryRenameTypeConsequence,
   planPomodoroBulletSplit,
   planPomodoroEntryMerge,
   isMovablePomodoroEntryContext,

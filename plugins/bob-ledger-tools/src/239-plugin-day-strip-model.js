@@ -349,15 +349,15 @@ function dayStripLanesFor(state, mix, themes, view) {
   }
   const rootsName = mix && mix.dimension === "area" ? "areas" : "root parents";
   const title = sane === "themes"
-    ? "Showing themes only \u00b7 click for both"
+    ? "Showing types only \u00b7 click for both"
     : sane === "roots"
-      ? "Showing " + rootsName + " only \u00b7 click for themes only"
-      : "Showing " + rootsName + " and themes \u00b7 click for " + rootsName + " only";
+      ? "Showing " + rootsName + " only \u00b7 click for types only"
+      : "Showing " + rootsName + " and types \u00b7 click for " + rootsName + " only";
   const ariaLabel = sane === "themes"
-    ? "Day stats bars: themes only. Activate for " + rootsName + " and themes."
+    ? "Day stats bars: types only. Activate for " + rootsName + " and types."
     : sane === "roots"
-      ? "Day stats bars: " + rootsName + " only. Activate for themes only."
-      : "Day stats bars: " + rootsName + " and themes. Activate for " + rootsName + " only.";
+      ? "Day stats bars: " + rootsName + " only. Activate for types only."
+      : "Day stats bars: " + rootsName + " and types. Activate for " + rootsName + " only.";
   return {
     view: sane,
     shown,

@@ -237,6 +237,7 @@ module.exports.helpers = {
   rebasePomodoroBulletBlock,
   planPomodoroBulletMove,
   planPomodoroEntryRename,
+  pomodoroEntryRenameTypeConsequence,
   planPomodoroBulletSplit,
   planPomodoroEntryMerge,
   isMovablePomodoroEntryContext,

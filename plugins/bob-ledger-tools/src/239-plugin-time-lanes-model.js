@@ -32,7 +32,7 @@ function timeLaneSegmentTitle(segment) {
   const share = segment && typeof segment.share === "string" ? segment.share : "";
   const parts = [label, display, share].filter(Boolean);
   let title = parts.join(" · ");
-  if (segment && segment.unconfigured) title += " · not in your themes";
+  if (segment && segment.unconfigured) title += " · not in your types";
   return title;
 }
 

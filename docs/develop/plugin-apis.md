@@ -200,8 +200,8 @@ for the shared catalog, hue, and menu rules.
 
 The v1 namespace also exposes synchronous task-theme helpers:
 `suggestFor({ path, line, text? })`, `taskThemeOf(text)`,
-`setTaskTheme(text, name)`, `clearTaskTheme(text)`,
-`planThemeChange(options)`, and `isKnownTheme(key)`, plus the additive
+`setTaskTheme(text, name)`, `clearTaskTheme(text)`, and `isKnownTheme(key)`,
+plus the additive
 task-type routing surface: `effectiveTypeFor(request)`,
 `typeComponentsOf(name)`, `typeAgrees(taskKey, entryName)`,
 `planRetype(options)`, `planPlacement(options)`, and
@@ -234,18 +234,6 @@ offsets. The parser accepts the `type` and `theme` keys in both
 two or more type-ish fields on one line are the `duplicate` repair state.
 `setTaskTheme` emits `[type:: NAME]` and removes both spellings; the two
 setters return rewritten strings and do not write the vault.
-`planThemeChange({ field, suggestion, inherited,
- destinationName, exemptKeys, deliberate })` is deprecated: the default path
-keeps the legacy write rule byte for byte, and only the keep-type path
-(`linkOnce: true`) delegates to `planRetype`, returning
-`{ action: "merge", name }` for the merge. It returns `{ action: "none" }`,
-`{ action: "clear" }`, `{ action: "set", name, key }`, or the keep-type
-`{ action: "merge", name }`. `suggestion` and
-`inherited` may be the corresponding suggestion objects or theme keys. The
-legacy write rule requires a deliberate choice and a shown suggestion, and
-clears a field when the selected theme matches the inherited one. New callers
-use `planRetype` directly.
-
 `effectiveTypeFor(request)` runs the same cascade as `suggestFor` (field,
 reading task, note defaults, then `plan.default_type`) and returns the full
 suggestion or `null`. `typeComponentsOf(name)` returns `{ name, key, isType }`

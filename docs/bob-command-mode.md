@@ -128,7 +128,7 @@ entry, ranked by path, alias, title, and keywords with frecency tie-breaks. An
 empty query shows RECENT runs, FOR THIS NOTE rows filled from the active note
 (ref, area, project, and article notes each get their own rows), FROM CLIPBOARD
 rows for an http(s) URL, and one section per catalog section plus surface rows
-that run existing Obsidian commands (daily note, themes manager, stats, tasks,
+that run existing Obsidian commands (daily note, task types manager, stats, tasks,
 relation labels, reading board, article formatting). Unavailable rows stay
 visible and dimmed with their reason. `Enter` runs, `Tab` names argument mode
 (it lands with the args-vim phase), `Shift+Enter` dry-runs a preview into the

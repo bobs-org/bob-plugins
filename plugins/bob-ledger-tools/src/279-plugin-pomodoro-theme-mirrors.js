@@ -658,7 +658,7 @@ function pomodoroThemesEmptyReport() {
 // Decode one writer call (`hide`, `unhide`, `color`, `rename`): the
 // `{ ok, ... }` shape, with `{ ok: false, code }` on refusal even at a
 // nonzero exit. A non-JSON reply means the installed bob predates the
-// writers; callers report "Update bob to hide themes".
+// writers; callers report "Update bob to hide types".
 function pomodoroThemesDecodeWrite(stdout, stderr) {
   let body = null;
   try {
@@ -667,7 +667,7 @@ function pomodoroThemesDecodeWrite(stdout, stderr) {
     return {
       ok: false,
       code: "unsupported",
-      message: "Update bob to hide themes.",
+      message: "Update bob to hide types.",
       detail: statsFirstLine(stderr),
     };
   }

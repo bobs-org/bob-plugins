@@ -2926,7 +2926,7 @@ function computePlanBudget(content, caps, dailyPath) {
         inventoryWarned.add(key);
         warnings.push({
           code: PLAN_LINT_INVENTORY_LABEL,
-          message: `${component} is an inventory label, not a theme`,
+          message: `${component} is an inventory label, not a type`,
           line: entry.line,
         });
       }
@@ -2973,7 +2973,7 @@ function computePlanBudget(content, caps, dailyPath) {
   if (themes.over) {
     warnings.push({
       code: PLAN_LINT_THEME_CAP,
-      message: `today's plan has ${themes.count}/${themes.cap} themes`,
+      message: `today's plan has ${themes.count}/${themes.cap} types`,
     });
   }
   if (links.over) {
@@ -30301,7 +30301,7 @@ function statsChartTooltip(metric, point, report) {
     lines.push(part.dimension + ": " + part.label + " — " + part.formatted);
   }
   if (!ranked.length && safeMetric.id === "worked") {
-    lines.push("No theme parts for this point");
+    lines.push("No type parts for this point");
   }
   return lines.join("\n");
 }
@@ -32105,7 +32105,7 @@ class BobLedgerToolsStatsPanelsMixin {
     const point = statsPanelSelectedHomePoint(metric, report, viewModel.state);
     const model = statsPanelThemeRows(metric, point);
     if (!model.rows.length) {
-      section.appendChild(this.statsPanelNote(doc, "No theme breakdown is in this report."));
+      section.appendChild(this.statsPanelNote(doc, "No type breakdown is in this report."));
       return true;
     }
     const max = Math.max(0, ...model.rows.map((row) => (statsFinite(row.value) ? row.value : 0)));
@@ -33279,7 +33279,7 @@ function timeLaneSegmentTitle(segment) {
   const share = segment && typeof segment.share === "string" ? segment.share : "";
   const parts = [label, display, share].filter(Boolean);
   let title = parts.join(" · ");
-  if (segment && segment.unconfigured) title += " · not in your themes";
+  if (segment && segment.unconfigured) title += " · not in your types";
   return title;
 }
 
@@ -33963,15 +33963,15 @@ function dayStripLanesFor(state, mix, themes, view) {
   }
   const rootsName = mix && mix.dimension === "area" ? "areas" : "root parents";
   const title = sane === "themes"
-    ? "Showing themes only \u00b7 click for both"
+    ? "Showing types only \u00b7 click for both"
     : sane === "roots"
-      ? "Showing " + rootsName + " only \u00b7 click for themes only"
-      : "Showing " + rootsName + " and themes \u00b7 click for " + rootsName + " only";
+      ? "Showing " + rootsName + " only \u00b7 click for types only"
+      : "Showing " + rootsName + " and types \u00b7 click for " + rootsName + " only";
   const ariaLabel = sane === "themes"
-    ? "Day stats bars: themes only. Activate for " + rootsName + " and themes."
+    ? "Day stats bars: types only. Activate for " + rootsName + " and types."
     : sane === "roots"
-      ? "Day stats bars: " + rootsName + " only. Activate for themes only."
-      : "Day stats bars: " + rootsName + " and themes. Activate for " + rootsName + " only.";
+      ? "Day stats bars: " + rootsName + " only. Activate for types only."
+      : "Day stats bars: " + rootsName + " and types. Activate for " + rootsName + " only.";
   return {
     view: sane,
     shown,
@@ -34185,7 +34185,7 @@ function dayStripThemeMix(report, worked, day, context) {
       : { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" } };
     const titleLines = ["Time by type", ...built.segments.map((segment) => segment.label + " " + segment.display)];
     if (dayStripThemeHasSplitSession(report, day)) {
-      titleLines.push("Pomodoros with several themes are split evenly between them.");
+      titleLines.push("Pomodoros with several types are split evenly between them.");
     }
     return {
       segments: built.segments,
@@ -34244,14 +34244,14 @@ function dayStripLaneLayout(input) {
     let title = "";
     let ariaLabel = "";
     if (view === "both") {
-      title = "Showing " + rootsName + " and themes \u00b7 click for " + rootsName + " only";
-      ariaLabel = "Day stats bars: " + rootsName + " and themes. Activate for " + rootsName + " only.";
+      title = "Showing " + rootsName + " and types \u00b7 click for " + rootsName + " only";
+      ariaLabel = "Day stats bars: " + rootsName + " and types. Activate for " + rootsName + " only.";
     } else if (view === "roots") {
-      title = "Showing " + rootsName + " only \u00b7 click for themes only";
-      ariaLabel = "Day stats bars: " + rootsName + " only. Activate for themes only.";
+      title = "Showing " + rootsName + " only \u00b7 click for types only";
+      ariaLabel = "Day stats bars: " + rootsName + " only. Activate for types only.";
     } else {
-      title = "Showing themes only \u00b7 click for both";
-      ariaLabel = "Day stats bars: themes only. Activate for " + rootsName + " and themes.";
+      title = "Showing types only \u00b7 click for both";
+      ariaLabel = "Day stats bars: types only. Activate for " + rootsName + " and types.";
     }
     if (state === "skeleton") {
       const shown = view === "both" ? ["roots", "themes"] : [view];
@@ -34286,8 +34286,8 @@ function dayStripLaneLayout(input) {
       shown: [],
       switchable: false,
       next: "roots",
-      title: "Showing root parents and themes \u00b7 click for root parents only",
-      ariaLabel: "Day stats bars: root parents and themes. Activate for root parents only.",
+      title: "Showing root parents and types \u00b7 click for root parents only",
+      ariaLabel: "Day stats bars: root parents and types. Activate for root parents only.",
     };
   }
 }
@@ -37736,8 +37736,8 @@ class BobLedgerToolsDayStripPlanHostMixin {
       const message = view === "roots"
         ? "Day stats bars: root parents only"
         : view === "themes"
-          ? "Day stats bars: themes only"
-          : "Day stats bars: root parents and themes";
+          ? "Day stats bars: types only"
+          : "Day stats bars: root parents and types";
       try {
         new Notice(message);
       } catch (error) {
@@ -50917,7 +50917,7 @@ function pomodoroThemesEmptyReport() {
 // Decode one writer call (`hide`, `unhide`, `color`, `rename`): the
 // `{ ok, ... }` shape, with `{ ok: false, code }` on refusal even at a
 // nonzero exit. A non-JSON reply means the installed bob predates the
-// writers; callers report "Update bob to hide themes".
+// writers; callers report "Update bob to hide types".
 function pomodoroThemesDecodeWrite(stdout, stderr) {
   let body = null;
   try {
@@ -50926,7 +50926,7 @@ function pomodoroThemesDecodeWrite(stdout, stderr) {
     return {
       ok: false,
       code: "unsupported",
-      message: "Update bob to hide themes.",
+      message: "Update bob to hide types.",
       detail: statsFirstLine(stderr),
     };
   }
@@ -51253,41 +51253,6 @@ function pomodoroThemeSingleNonExemptComponent(name, exemptKeys) {
   }
   const canonical = pomodoroThemeCanonicalName(choices[0]);
   return canonical ? { name: canonical, key: pomodoroThemeNormalizeKey(canonical) } : null;
-}
-
-function pomodoroThemePlanChange(options = {}) {
-  const opts = options && typeof options === "object" ? options : {};
-  const none = { action: "none" };
-  if (opts.deliberate !== true) {
-    return none;
-  }
-  const shownKey = pomodoroThemeKeyOf(opts.suggestion);
-  if (!shownKey) {
-    return none;
-  }
-  const destination = pomodoroThemeSingleNonExemptComponent(
-    opts.destinationName,
-    opts.exemptKeys,
-  );
-  if (!destination) {
-    return none;
-  }
-  const field = opts.field && typeof opts.field === "object" ? opts.field : {};
-  const state = field.state || (typeof opts.field === "string" ? opts.field : "none");
-  const fieldKey =
-    typeof field.key === "string"
-      ? pomodoroThemeNormalizeKey(field.key)
-      : typeof opts.fieldKey === "string"
-        ? pomodoroThemeNormalizeKey(opts.fieldKey)
-        : null;
-  const inheritedKey = pomodoroThemeKeyOf(opts.inherited);
-  if (inheritedKey === destination.key) {
-    return state === "none" ? none : { action: "clear" };
-  }
-  if (state === "set" && fieldKey === destination.key) {
-    return none;
-  }
-  return { action: "set", name: destination.name, key: destination.key };
 }
 
 function pomodoroThemeLedgerNames(content) {
@@ -52258,7 +52223,7 @@ function taskThemeMarkModel(fieldState, resolution) {
         repair,
         hue: null,
         hueSource: null,
-        label: raw || "theme",
+        label: raw || "type",
         id: null,
       };
       try {
@@ -52330,7 +52295,7 @@ function taskThemeMarkModel(fieldState, resolution) {
 }
 
 // The raw display text for a repair model: the first field's trimmed value
-// when present, else the literal `theme`. Never throws.
+// when present, else the literal `type`. Never throws.
 function taskThemeMarkRawValue(fieldState) {
   try {
     const fields =
@@ -52343,11 +52308,11 @@ function taskThemeMarkRawValue(fieldState) {
         typeof pomodoroThemeCanonicalName === "function"
           ? pomodoroThemeCanonicalName(first.value)
           : null;
-      return canonical || first.value.trim() || "theme";
+      return canonical || first.value.trim() || "type";
     }
-    return "theme";
+    return "type";
   } catch (error) {
-    return "theme";
+    return "type";
   }
 }
 
@@ -52411,7 +52376,7 @@ function taskThemeReasonFor(inherited) {
 
 // Lazy tooltip copy for one mark. `value` is the pill text, `kind` is the
 // model kind, and `reason` is the `taskThemeReasonFor` phrase (or null for
-// no default). Unknown pills read `Unknown theme`; repair reads
+// no default). Unknown pills read `Unknown type`; repair reads
 // `Needs repair`; otherwise the reason (or `no default`) names the default.
 // The hint is always last and no copy ever contains `::`, so Dataview never
 // rescans it. Never throws.
@@ -52426,24 +52391,24 @@ function taskThemeSafeTooltipCopy(text) {
 function taskThemeTooltipText(value, kind, reason) {
   try {
     const name = taskThemeSafeTooltipCopy(
-      typeof value === "string" && value ? value : "theme",
+      typeof value === "string" && value ? value : "type",
     );
     const hint = TASK_THEME_MARK_HINT;
     if (kind === "repair") {
-      return "Task theme " + name + " \u00b7 Needs repair \u00b7 " + hint;
+      return "Task type " + name + " \u00b7 Needs repair \u00b7 " + hint;
     }
     if (kind === "unknown") {
-      return "Task theme " + name + " \u00b7 Unknown theme \u00b7 " + hint;
+      return "Task type " + name + " \u00b7 Unknown type \u00b7 " + hint;
     }
     if (reason === undefined) {
-      return "Task theme " + name + " \u00b7 " + hint;
+      return "Task type " + name + " \u00b7 " + hint;
     }
     const middle = taskThemeSafeTooltipCopy(
       typeof reason === "string" && reason ? reason : "no default here",
     );
-    return "Task theme " + name + " \u00b7 " + middle + " \u00b7 " + hint;
+    return "Task type " + name + " \u00b7 " + middle + " \u00b7 " + hint;
   } catch (error) {
-    return "Task theme \u00b7 " + TASK_THEME_MARK_HINT;
+    return "Task type \u00b7 " + TASK_THEME_MARK_HINT;
   }
 }
 
@@ -56759,7 +56724,7 @@ class BobLedgerToolsPomodoroThemesMixin {
         return Promise.resolve({
           ok: false,
           code: "unavailable",
-          message: "Theme history needs the desktop app.",
+          message: "Task type history needs the desktop app.",
           detail: "",
           tried: [],
         });
@@ -56805,7 +56770,7 @@ class BobLedgerToolsPomodoroThemesMixin {
           error: {
             ok: false,
             code: "unavailable",
-            message: "Theme history needs the desktop app.",
+            message: "Task type history needs the desktop app.",
             detail: "",
           },
         });
@@ -57383,7 +57348,7 @@ class BobLedgerToolsPomodoroThemesMixin {
         return Promise.resolve({
           ok: false,
           code: "unavailable",
-          message: "Theme writes need the desktop app.",
+          message: "Task type changes need the desktop app.",
           detail: "",
         });
       }
@@ -57440,7 +57405,7 @@ class BobLedgerToolsPomodoroThemesMixin {
     try {
       const display = String(name || "").trim();
       if (!display) {
-        return { ok: false, code: "invalid_name", message: "Name a theme to hide." };
+        return { ok: false, code: "invalid_name", message: "Name a type to hide." };
       }
       const result = await this.themesWriteSpawn(["themes", "hide", display]);
       return this.apiThemesWriteAftermath(result);
@@ -57454,7 +57419,7 @@ class BobLedgerToolsPomodoroThemesMixin {
     try {
       const display = String(name || "").trim();
       if (!display) {
-        return { ok: false, code: "invalid_name", message: "Name a theme to unhide." };
+        return { ok: false, code: "invalid_name", message: "Name a type to unhide." };
       }
       const result = await this.themesWriteSpawn(["themes", "unhide", display]);
       return this.apiThemesWriteAftermath(result);
@@ -57469,7 +57434,7 @@ class BobLedgerToolsPomodoroThemesMixin {
     try {
       const display = String(name || "").trim();
       if (!display) {
-        return { ok: false, code: "invalid_name", message: "Name a theme to color." };
+        return { ok: false, code: "invalid_name", message: "Name a type to color." };
       }
       const slot =
         hue === null || hue === undefined || String(hue).toLowerCase() === "auto"
@@ -57534,7 +57499,7 @@ function pomodoroThemesPlanLintWarnings(entries, isConfigured, similarTo) {
       const suggestion = Array.isArray(similar) ? similar[0] : null;
       warnings.push({
         code: "theme_not_configured",
-        message: `${component} isn't one of your configured themes${suggestion ? `; did you mean ${suggestion}?` : ""}`,
+        message: `${component} isn't one of your configured types${suggestion ? `; did you mean ${suggestion}?` : ""}`,
         line: entry.line,
       });
     }
@@ -57567,7 +57532,6 @@ class BobLedgerToolsTaskThemeApiMixin {
       taskThemeOf: (text) => pomodoroThemeTaskFieldState(text),
       setTaskTheme: (text, name) => pomodoroThemeSetTaskTheme(text, name),
       clearTaskTheme: (text) => pomodoroThemeClearTaskTheme(text),
-      planThemeChange: (options) => this.pomodoroThemePlanThemeChange(options),
       effectiveTypeFor: (request) => this.taskTypeEffectiveTypeFor(request),
       typeComponentsOf: (name) => this.taskTypeComponentsOf(name),
       typeAgrees: (taskKey, entryName) => this.taskTypeAgrees(taskKey, entryName),
@@ -57741,34 +57705,6 @@ class BobLedgerToolsTaskThemeApiMixin {
       });
     } catch (error) {
       return null;
-    }
-  }
-
-  // Deprecated: the link-picker and Task Card phases replace this with
-  // `planRetype`. The default path keeps the legacy write rule byte for
-  // byte; only the keep-type path (`linkOnce`) delegates to `planRetype`.
-  pomodoroThemePlanThemeChange(options) {
-    try {
-      const opts = options && typeof options === "object" ? options : {};
-      if (opts.linkOnce === true) {
-        const outcome = this.taskTypePlanRetype({ ...opts, keepType: true });
-        if (!outcome) {
-          return { action: "none" };
-        }
-        if (outcome.kind === "merge") {
-          return { action: "merge", name: outcome.name };
-        }
-        if (outcome.kind === "set") {
-          return { action: "set", name: outcome.name, key: outcome.key };
-        }
-        if (outcome.kind === "clear") {
-          return { action: "clear" };
-        }
-        return { action: "none" };
-      }
-      return pomodoroThemePlanChange(opts);
-    } catch (error) {
-      return { action: "none" };
     }
   }
 
@@ -58320,7 +58256,7 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
         if (typeof this.addCommand === "function") {
           this.addCommand({
             id: "toggle-pomodoro-theme-colors",
-            name: "Toggle Pomodoro theme colors",
+            name: "Toggle task type colors",
             callback: () => this.togglePomodoroThemeColors(),
           });
         }
@@ -58393,8 +58329,8 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
       try {
         new Notice(
           this.pomodoroThemeColorsEnabled
-            ? "Pomodoro theme colors on"
-            : "Pomodoro theme colors off",
+            ? "Task type colors on"
+            : "Task type colors off",
         );
       } catch (error) {
         // Notice is best-effort.
@@ -58464,7 +58400,7 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
           ? ` · ${entry.days_used} days`
           : "";
       const unconfigured = this.pomodoroThemeIsConfigured(key) === false
-        ? " · not in your themes"
+        ? " · not in your types"
         : "";
       return `${name} · ${hue}${days}${unconfigured}`;
     } catch (error) {
@@ -68614,7 +68550,6 @@ module.exports.helpers = {
   pomodoroThemeTaskFieldState,
   pomodoroThemeSetTaskTheme,
   pomodoroThemeClearTaskTheme,
-  pomodoroThemePlanChange,
   pomodoroThemeLedgerNames,
   pomodoroThemeCanonicalDailyPath,
   pomodoroThemeTaskMark,

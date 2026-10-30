@@ -52,7 +52,7 @@ const CM_SHEET_ICON_FALLBACK = {
 // so there is nothing to detect.
 const CM_SHEET_SURFACE_ROWS = [
   { plugin: "bob-ledger-tools", id: "open-today-daily-note", title: "Today's daily note", section: "daily" },
-  { plugin: "bob-navigation-hotkeys", id: "open-pomodoro-themes-manager", title: "Pomodoro themes manager", section: "daily" },
+  { plugin: "bob-navigation-hotkeys", id: "open-pomodoro-themes-manager", title: "Task types manager", section: "daily" },
   { plugin: "bob-ledger-tools", id: "open-stats", title: "Stats dashboard", section: "daily" },
   { plugin: "bob-navigation-hotkeys", id: "open-dash-tasks", title: "Dash tasks", section: "tasks" },
   { plugin: "bob-navigation-hotkeys", id: "open-relation-labels-manager", title: "Relation labels manager", section: "tasks" },

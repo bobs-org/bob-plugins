@@ -189,7 +189,7 @@ function taskThemeMarkModel(fieldState, resolution) {
         repair,
         hue: null,
         hueSource: null,
-        label: raw || "theme",
+        label: raw || "type",
         id: null,
       };
       try {
@@ -261,7 +261,7 @@ function taskThemeMarkModel(fieldState, resolution) {
 }
 
 // The raw display text for a repair model: the first field's trimmed value
-// when present, else the literal `theme`. Never throws.
+// when present, else the literal `type`. Never throws.
 function taskThemeMarkRawValue(fieldState) {
   try {
     const fields =
@@ -274,11 +274,11 @@ function taskThemeMarkRawValue(fieldState) {
         typeof pomodoroThemeCanonicalName === "function"
           ? pomodoroThemeCanonicalName(first.value)
           : null;
-      return canonical || first.value.trim() || "theme";
+      return canonical || first.value.trim() || "type";
     }
-    return "theme";
+    return "type";
   } catch (error) {
-    return "theme";
+    return "type";
   }
 }
 
@@ -342,7 +342,7 @@ function taskThemeReasonFor(inherited) {
 
 // Lazy tooltip copy for one mark. `value` is the pill text, `kind` is the
 // model kind, and `reason` is the `taskThemeReasonFor` phrase (or null for
-// no default). Unknown pills read `Unknown theme`; repair reads
+// no default). Unknown pills read `Unknown type`; repair reads
 // `Needs repair`; otherwise the reason (or `no default`) names the default.
 // The hint is always last and no copy ever contains `::`, so Dataview never
 // rescans it. Never throws.
@@ -357,24 +357,24 @@ function taskThemeSafeTooltipCopy(text) {
 function taskThemeTooltipText(value, kind, reason) {
   try {
     const name = taskThemeSafeTooltipCopy(
-      typeof value === "string" && value ? value : "theme",
+      typeof value === "string" && value ? value : "type",
     );
     const hint = TASK_THEME_MARK_HINT;
     if (kind === "repair") {
-      return "Task theme " + name + " \u00b7 Needs repair \u00b7 " + hint;
+      return "Task type " + name + " \u00b7 Needs repair \u00b7 " + hint;
     }
     if (kind === "unknown") {
-      return "Task theme " + name + " \u00b7 Unknown theme \u00b7 " + hint;
+      return "Task type " + name + " \u00b7 Unknown type \u00b7 " + hint;
     }
     if (reason === undefined) {
-      return "Task theme " + name + " \u00b7 " + hint;
+      return "Task type " + name + " \u00b7 " + hint;
     }
     const middle = taskThemeSafeTooltipCopy(
       typeof reason === "string" && reason ? reason : "no default here",
     );
-    return "Task theme " + name + " \u00b7 " + middle + " \u00b7 " + hint;
+    return "Task type " + name + " \u00b7 " + middle + " \u00b7 " + hint;
   } catch (error) {
-    return "Task theme \u00b7 " + TASK_THEME_MARK_HINT;
+    return "Task type \u00b7 " + TASK_THEME_MARK_HINT;
   }
 }
 

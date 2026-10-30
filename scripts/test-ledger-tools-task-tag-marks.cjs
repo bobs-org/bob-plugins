@@ -1002,7 +1002,11 @@ test("styles.css contract: teal identity ink, glyph, both hosts, hover, hide in 
   assert.ok(css.indexOf("-webkit-print-color-adjust: exact") !== -1);
   assert.ok(css.indexOf("prefers-reduced-motion") !== -1);
   assert.ok(css.indexOf("color: transparent") !== -1);
-  assert.ok(css.indexOf("content: attr(data-bob-type)") !== -1);
+  assert.ok(css.indexOf('content: "#" attr(data-bob-type);') !== -1);
+  assert.ok(css.indexOf(".bob-task-tag-mark[data-bob-type]:not(.bob-ref-task-mark):not(.bob-pre-task-mark):not(.bob-post-task-mark)::before") !== -1);
+  assert.ok(css.indexOf("min-width: 0;\n  padding: 0.06em 0.28em;") !== -1);
+  assert.ok(css.indexOf(".bob-task-tag-mark[data-bob-type].bob-ref-task-mark::after") !== -1);
+  assert.ok(css.indexOf("content: attr(data-bob-type)") !== -1, "book and checklist marks keep glyph plus name");
   assert.ok(css.indexOf("--bob-type-ink-blue") !== -1);
   assert.ok(
     css.indexOf(

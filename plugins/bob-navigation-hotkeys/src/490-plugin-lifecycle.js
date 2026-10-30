@@ -120,7 +120,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     // No default hotkey: the manager is a browsing surface, not a cursor action.
     this.addCommand({
       id: "open-pomodoro-themes-manager",
-      name: "Pomodoro themes",
+      name: "Task types",
       callback: () => this.openPomodoroThemesManager(),
     });
 

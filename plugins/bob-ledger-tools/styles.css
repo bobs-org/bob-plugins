@@ -1775,8 +1775,8 @@ li.task-list-item[data-task="-"] .bob-task-tag-mark,
   opacity: 0.75;
 }
 
-/* Explicit `#TYPE` identity (D11): hash geometry stays; the name is
-   drawn with `::after` from `data-bob-type` so reading-view hosts
+/* Explicit `#TYPE` identity (D11): typed hash marks draw the complete
+   `#TYPE` text in `::after`; reading-view hosts
    create no nodes. Type ink mixes each palette slot 55% toward
    `--text-normal`. `--bob-task-tag-color` still wins when set. */
 
@@ -1787,13 +1787,24 @@ body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type] {
   padding: 0.06em 0.28em 0.06em 1.28em;
 }
 
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]::before {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]:not(.bob-ref-task-mark):not(.bob-pre-task-mark):not(.bob-post-task-mark) {
+  min-width: 0;
+  padding: 0.06em 0.28em;
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]:not(.bob-ref-task-mark):not(.bob-pre-task-mark):not(.bob-post-task-mark)::before {
+  display: none;
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-ref-task-mark::before,
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-pre-task-mark::before,
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-post-task-mark::before {
   inset: 0.06em auto 0.06em 0.14em;
   width: 1.08em;
 }
 
 body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]::after {
-  content: attr(data-bob-type);
+  content: "#" attr(data-bob-type);
   font-family: var(--font-interface);
   font-size: 1em;
   font-weight: 600;
@@ -1801,6 +1812,12 @@ body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]::after {
   line-height: 1.08em;
   color: var(--bob-task-tag-ink);
   vertical-align: 0;
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-ref-task-mark::after,
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-pre-task-mark::after,
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-post-task-mark::after {
+  content: attr(data-bob-type);
 }
 
 body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="blue"] {

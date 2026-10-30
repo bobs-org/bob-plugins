@@ -299,41 +299,6 @@ function pomodoroThemeSingleNonExemptComponent(name, exemptKeys) {
   return canonical ? { name: canonical, key: pomodoroThemeNormalizeKey(canonical) } : null;
 }
 
-function pomodoroThemePlanChange(options = {}) {
-  const opts = options && typeof options === "object" ? options : {};
-  const none = { action: "none" };
-  if (opts.deliberate !== true) {
-    return none;
-  }
-  const shownKey = pomodoroThemeKeyOf(opts.suggestion);
-  if (!shownKey) {
-    return none;
-  }
-  const destination = pomodoroThemeSingleNonExemptComponent(
-    opts.destinationName,
-    opts.exemptKeys,
-  );
-  if (!destination) {
-    return none;
-  }
-  const field = opts.field && typeof opts.field === "object" ? opts.field : {};
-  const state = field.state || (typeof opts.field === "string" ? opts.field : "none");
-  const fieldKey =
-    typeof field.key === "string"
-      ? pomodoroThemeNormalizeKey(field.key)
-      : typeof opts.fieldKey === "string"
-        ? pomodoroThemeNormalizeKey(opts.fieldKey)
-        : null;
-  const inheritedKey = pomodoroThemeKeyOf(opts.inherited);
-  if (inheritedKey === destination.key) {
-    return state === "none" ? none : { action: "clear" };
-  }
-  if (state === "set" && fieldKey === destination.key) {
-    return none;
-  }
-  return { action: "set", name: destination.name, key: destination.key };
-}
-
 function pomodoroThemeLedgerNames(content) {
   const names = new Map();
   const lines = String(content == null ? "" : content).split("\n");

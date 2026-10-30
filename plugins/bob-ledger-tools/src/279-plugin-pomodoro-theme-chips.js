@@ -74,7 +74,7 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
         if (typeof this.addCommand === "function") {
           this.addCommand({
             id: "toggle-pomodoro-theme-colors",
-            name: "Toggle Pomodoro theme colors",
+            name: "Toggle task type colors",
             callback: () => this.togglePomodoroThemeColors(),
           });
         }
@@ -147,8 +147,8 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
       try {
         new Notice(
           this.pomodoroThemeColorsEnabled
-            ? "Pomodoro theme colors on"
-            : "Pomodoro theme colors off",
+            ? "Task type colors on"
+            : "Task type colors off",
         );
       } catch (error) {
         // Notice is best-effort.
@@ -218,7 +218,7 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
           ? ` · ${entry.days_used} days`
           : "";
       const unconfigured = this.pomodoroThemeIsConfigured(key) === false
-        ? " · not in your themes"
+        ? " · not in your types"
         : "";
       return `${name} · ${hue}${days}${unconfigured}`;
     } catch (error) {

@@ -545,7 +545,7 @@ function successorNoticeText(model = {}) {
     const count = Number(failure.count);
     const themed = unblocked.filter((row) => row && row.theme_changed === true);
     const themeClause = themed.length > 0
-      ? ` · task theme ${themed.length === 1 && themed[0].theme_action === "clear" ? "cleared" : "saved"}`
+      ? ` · task type ${themed.length === 1 && themed[0].theme_action === "clear" ? "cleared" : "saved"}`
       : "";
     return `⚠ Closed ${pred} — couldn't link ${count} successor${count === 1 ? "" : "s"} (${failure.reason || "daily note changed"})${themeClause}`;
   }
@@ -581,7 +581,7 @@ function successorNoticeText(model = {}) {
     const allProjectEmpty = linked.every(isProjectEmptyRow);
     const suffix = allProjectEmpty ? projectEmptySuffix : "";
     const themedCount = linked.filter((row) => row && row.theme_changed === true).length;
-    const themeSuffix = themedCount > 0 ? ` · ${themedCount} task theme${themedCount === 1 ? "" : "s"} saved` : "";
+    const themeSuffix = themedCount > 0 ? ` · ${themedCount} task type${themedCount === 1 ? "" : "s"} saved` : "";
     if (names.length === 1) {
       const shown = linked
         .slice(0, 2)

@@ -149,7 +149,7 @@ function taskCardThemeSourceLabel(suggestion) {
     case "task":
       return suggestion.label || "this task";
     default:
-      return suggestion.label || "inherited theme";
+      return suggestion.label || "inherited type";
   }
 }
 
@@ -235,9 +235,9 @@ function taskCardThemeTargetDisplay(state) {
   const frozenParts = Object.freeze(parts);
   const unknown = Boolean(theme && state.known === false);
   const tooltip = state.needsRepair
-    ? "This task has a duplicate or invalid theme field and needs repair."
+    ? "This task has a duplicate or invalid type field and needs repair."
     : unknown
-      ? "This theme is not in the catalog; its task field remains unchanged."
+      ? "This type is not in the catalog; its task field remains unchanged."
       : null;
   return Object.freeze({
     parts: frozenParts,
@@ -297,7 +297,7 @@ function taskCardThemeTargetProjection(target, id, context, apiReady) {
       signature: `unavailable:${reason}`,
     });
   if (!apiReady) {
-    return unavailable("Ledger Tools task-theme API is unavailable");
+    return unavailable("Ledger Tools task type API is unavailable");
   }
   if (!path || line === null || !rawLine) {
     return unavailable("Task identity is unavailable");
@@ -317,7 +317,7 @@ function taskCardThemeTargetProjection(target, id, context, apiReady) {
     rawField = api.taskThemeOf(rawLine);
     rawSuggestion = api.suggestFor({ path, line: line + 1, text: content });
   } catch (_error) {
-    return unavailable("Task-theme information could not be read");
+    return unavailable("Task type information could not be read");
   }
   const field = rawField && ["none", "set", "repair"].includes(rawField.state)
     ? copyTaskCardThemeData(rawField)
@@ -434,7 +434,7 @@ function buildTaskCardThemeProjection(context = {}) {
     text = first.display.text;
   }
   const unavailableReason = !apiReady
-    ? "Ledger Tools task-theme API is unavailable"
+    ? "Ledger Tools task type API is unavailable"
     : targets.find((target) => !target.available)?.unavailableReason ||
       (targets.length === 0 ? "No task targets are available" : null);
   const display = Object.freeze({
@@ -457,7 +457,7 @@ function buildTaskCardThemeProjection(context = {}) {
       context.themeApi &&
       (typeof context.themeApi.setTaskTheme !== "function" ||
         typeof context.themeApi.clearTaskTheme !== "function")
-        ? "Ledger Tools task-theme write methods are unavailable"
+        ? "Ledger Tools task type write methods are unavailable"
         : null,
     targetCount: targets.length,
     mixed,

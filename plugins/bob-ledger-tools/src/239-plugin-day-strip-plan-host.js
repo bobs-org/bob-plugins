@@ -248,8 +248,8 @@ class BobLedgerToolsDayStripPlanHostMixin {
       const message = view === "roots"
         ? "Day stats bars: root parents only"
         : view === "themes"
-          ? "Day stats bars: themes only"
-          : "Day stats bars: root parents and themes";
+          ? "Day stats bars: types only"
+          : "Day stats bars: root parents and types";
       try {
         new Notice(message);
       } catch (error) {

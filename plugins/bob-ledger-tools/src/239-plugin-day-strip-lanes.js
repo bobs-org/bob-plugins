@@ -39,14 +39,14 @@ function dayStripLaneLayout(input) {
     let title = "";
     let ariaLabel = "";
     if (view === "both") {
-      title = "Showing " + rootsName + " and themes \u00b7 click for " + rootsName + " only";
-      ariaLabel = "Day stats bars: " + rootsName + " and themes. Activate for " + rootsName + " only.";
+      title = "Showing " + rootsName + " and types \u00b7 click for " + rootsName + " only";
+      ariaLabel = "Day stats bars: " + rootsName + " and types. Activate for " + rootsName + " only.";
     } else if (view === "roots") {
-      title = "Showing " + rootsName + " only \u00b7 click for themes only";
-      ariaLabel = "Day stats bars: " + rootsName + " only. Activate for themes only.";
+      title = "Showing " + rootsName + " only \u00b7 click for types only";
+      ariaLabel = "Day stats bars: " + rootsName + " only. Activate for types only.";
     } else {
-      title = "Showing themes only \u00b7 click for both";
-      ariaLabel = "Day stats bars: themes only. Activate for " + rootsName + " and themes.";
+      title = "Showing types only \u00b7 click for both";
+      ariaLabel = "Day stats bars: types only. Activate for " + rootsName + " and types.";
     }
     if (state === "skeleton") {
       const shown = view === "both" ? ["roots", "themes"] : [view];
@@ -81,8 +81,8 @@ function dayStripLaneLayout(input) {
       shown: [],
       switchable: false,
       next: "roots",
-      title: "Showing root parents and themes \u00b7 click for root parents only",
-      ariaLabel: "Day stats bars: root parents and themes. Activate for root parents only.",
+      title: "Showing root parents and types \u00b7 click for root parents only",
+      ariaLabel: "Day stats bars: root parents and types. Activate for root parents only.",
     };
   }
 }

@@ -71,43 +71,6 @@ function stubSetTaskTheme(line, name) {
   return `${cleared} [type:: ${name}]`;
 }
 
-function stubPlanThemeChange(options = {}) {
-  if (options.deliberate !== true) {
-    return { action: "none" };
-  }
-  const suggestion = options.suggestion;
-  const shownKey = suggestion && suggestion.theme && suggestion.theme.key
-    ? String(suggestion.theme.key).toLowerCase()
-    : "";
-  if (!shownKey) {
-    return { action: "none" };
-  }
-  const exempt = new Set(
-    (Array.isArray(options.exemptKeys) ? options.exemptKeys : []).map((key) => String(key).trim().toLowerCase()),
-  );
-  const parts = String(options.destinationName || "")
-    .split("+")
-    .map((part) => part.trim())
-    .filter((part) => part && !exempt.has(part.toLowerCase()));
-  if (parts.length !== 1) {
-    return { action: "none" };
-  }
-  const destKey = parts[0].toLowerCase();
-  const destName = parts[0].toUpperCase();
-  const inherited = options.inherited;
-  const inheritedKey = inherited && inherited.theme && inherited.theme.key
-    ? String(inherited.theme.key).toLowerCase()
-    : "";
-  const field = options.field && typeof options.field === "object" ? options.field : {};
-  if (inheritedKey && inheritedKey === destKey) {
-    return field.state === "none" ? { action: "none" } : { action: "clear" };
-  }
-  if (field.state === "set" && String(field.key || "").toLowerCase() === destKey) {
-    return { action: "none" };
-  }
-  return { action: "set", name: destName, key: destKey };
-}
-
 function stubPlanRetype(options = {}) {
   const keyOf = (value) => value && value.theme && value.theme.key
     ? String(value.theme.key).toLowerCase()
@@ -138,7 +101,6 @@ function stubThemesApi(suggestion, catalog = null) {
     taskThemeOf: stubTaskThemeOf,
     setTaskTheme: stubSetTaskTheme,
     clearTaskTheme: stubClearTaskTheme,
-    planThemeChange: stubPlanThemeChange,
     planRetype: stubPlanRetype,
     effectiveTypeFor: ({ line, text }) => {
       const sourceLine = String(text || "").split(/\r?\n/)[Number(line) - 1] || "";

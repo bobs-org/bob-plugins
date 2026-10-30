@@ -118,7 +118,7 @@ class BobLedgerToolsPomodoroThemesMixin {
         return Promise.resolve({
           ok: false,
           code: "unavailable",
-          message: "Theme history needs the desktop app.",
+          message: "Task type history needs the desktop app.",
           detail: "",
           tried: [],
         });
@@ -164,7 +164,7 @@ class BobLedgerToolsPomodoroThemesMixin {
           error: {
             ok: false,
             code: "unavailable",
-            message: "Theme history needs the desktop app.",
+            message: "Task type history needs the desktop app.",
             detail: "",
           },
         });
@@ -742,7 +742,7 @@ class BobLedgerToolsPomodoroThemesMixin {
         return Promise.resolve({
           ok: false,
           code: "unavailable",
-          message: "Theme writes need the desktop app.",
+          message: "Task type changes need the desktop app.",
           detail: "",
         });
       }
@@ -799,7 +799,7 @@ class BobLedgerToolsPomodoroThemesMixin {
     try {
       const display = String(name || "").trim();
       if (!display) {
-        return { ok: false, code: "invalid_name", message: "Name a theme to hide." };
+        return { ok: false, code: "invalid_name", message: "Name a type to hide." };
       }
       const result = await this.themesWriteSpawn(["themes", "hide", display]);
       return this.apiThemesWriteAftermath(result);
@@ -813,7 +813,7 @@ class BobLedgerToolsPomodoroThemesMixin {
     try {
       const display = String(name || "").trim();
       if (!display) {
-        return { ok: false, code: "invalid_name", message: "Name a theme to unhide." };
+        return { ok: false, code: "invalid_name", message: "Name a type to unhide." };
       }
       const result = await this.themesWriteSpawn(["themes", "unhide", display]);
       return this.apiThemesWriteAftermath(result);
@@ -828,7 +828,7 @@ class BobLedgerToolsPomodoroThemesMixin {
     try {
       const display = String(name || "").trim();
       if (!display) {
-        return { ok: false, code: "invalid_name", message: "Name a theme to color." };
+        return { ok: false, code: "invalid_name", message: "Name a type to color." };
       }
       const slot =
         hue === null || hue === undefined || String(hue).toLowerCase() === "auto"
@@ -893,7 +893,7 @@ function pomodoroThemesPlanLintWarnings(entries, isConfigured, similarTo) {
       const suggestion = Array.isArray(similar) ? similar[0] : null;
       warnings.push({
         code: "theme_not_configured",
-        message: `${component} isn't one of your configured themes${suggestion ? `; did you mean ${suggestion}?` : ""}`,
+        message: `${component} isn't one of your configured types${suggestion ? `; did you mean ${suggestion}?` : ""}`,
         line: entry.line,
       });
     }

@@ -218,7 +218,7 @@ class BobLedgerToolsStatsPanelsMixin {
     const point = statsPanelSelectedHomePoint(metric, report, viewModel.state);
     const model = statsPanelThemeRows(metric, point);
     if (!model.rows.length) {
-      section.appendChild(this.statsPanelNote(doc, "No theme breakdown is in this report."));
+      section.appendChild(this.statsPanelNote(doc, "No type breakdown is in this report."));
       return true;
     }
     const max = Math.max(0, ...model.rows.map((row) => (statsFinite(row.value) ? row.value : 0)));

@@ -562,13 +562,13 @@ function formatSuccessorThemeRowChip(row) {
       return "";
     }
     if (row.theme_changed === true && row.theme_action === "clear") {
-      return " · task theme cleared";
+      return " · task type cleared";
     }
     if (row.theme_changed === true && row.theme_action === "set" && row.theme_name) {
-      return ` · task theme ${row.theme_name}`;
+      return ` · task type ${row.theme_name}`;
     }
     if (row.theme_suggestion_changed === true) {
-      return " · task theme unchanged (suggestion changed)";
+      return " · task type unchanged (suggestion changed)";
     }
     return "";
   } catch (_error) {
@@ -582,12 +582,12 @@ function successorThemePartialFailureClause(row) {
       return null;
     }
     if (row.theme_action === "clear") {
-      return "task theme cleared";
+      return "task type cleared";
     }
     if (typeof row.theme_name === "string" && row.theme_name) {
-      return `task theme ${row.theme_name} saved`;
+      return `task type ${row.theme_name} saved`;
     }
-    return "task theme saved";
+    return "task type saved";
   } catch (_error) {
     return null;
   }

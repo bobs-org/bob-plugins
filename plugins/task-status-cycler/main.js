@@ -8519,13 +8519,13 @@ function formatSuccessorThemeRowChip(row) {
       return "";
     }
     if (row.theme_changed === true && row.theme_action === "clear") {
-      return " · task theme cleared";
+      return " · task type cleared";
     }
     if (row.theme_changed === true && row.theme_action === "set" && row.theme_name) {
-      return ` · task theme ${row.theme_name}`;
+      return ` · task type ${row.theme_name}`;
     }
     if (row.theme_suggestion_changed === true) {
-      return " · task theme unchanged (suggestion changed)";
+      return " · task type unchanged (suggestion changed)";
     }
     return "";
   } catch (_error) {
@@ -8539,12 +8539,12 @@ function successorThemePartialFailureClause(row) {
       return null;
     }
     if (row.theme_action === "clear") {
-      return "task theme cleared";
+      return "task type cleared";
     }
     if (typeof row.theme_name === "string" && row.theme_name) {
-      return `task theme ${row.theme_name} saved`;
+      return `task type ${row.theme_name} saved`;
     }
-    return "task theme saved";
+    return "task type saved";
   } catch (_error) {
     return null;
   }
@@ -9505,7 +9505,7 @@ function successorNoticeText(model = {}) {
     const count = Number(failure.count);
     const themed = unblocked.filter((row) => row && row.theme_changed === true);
     const themeClause = themed.length > 0
-      ? ` · task theme ${themed.length === 1 && themed[0].theme_action === "clear" ? "cleared" : "saved"}`
+      ? ` · task type ${themed.length === 1 && themed[0].theme_action === "clear" ? "cleared" : "saved"}`
       : "";
     return `⚠ Closed ${pred} — couldn't link ${count} successor${count === 1 ? "" : "s"} (${failure.reason || "daily note changed"})${themeClause}`;
   }
@@ -9541,7 +9541,7 @@ function successorNoticeText(model = {}) {
     const allProjectEmpty = linked.every(isProjectEmptyRow);
     const suffix = allProjectEmpty ? projectEmptySuffix : "";
     const themedCount = linked.filter((row) => row && row.theme_changed === true).length;
-    const themeSuffix = themedCount > 0 ? ` · ${themedCount} task theme${themedCount === 1 ? "" : "s"} saved` : "";
+    const themeSuffix = themedCount > 0 ? ` · ${themedCount} task type${themedCount === 1 ? "" : "s"} saved` : "";
     if (names.length === 1) {
       const shown = linked
         .slice(0, 2)

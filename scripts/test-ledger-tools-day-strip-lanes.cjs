@@ -242,19 +242,19 @@ test("layout copy uses areas under the area fallback with exact strings", () => 
     empty: false, omitted: false, dimension: "theme", title: "",
   };
   const both = helpers.dayStripLaneLayout({ state: "ready", mix: roots, themes, view: "both" });
-  assert.equal(both.title, "Showing root parents and themes \u00b7 click for root parents only");
-  assert.equal(both.ariaLabel, "Day stats bars: root parents and themes. Activate for root parents only.");
+  assert.equal(both.title, "Showing root parents and types \u00b7 click for root parents only");
+  assert.equal(both.ariaLabel, "Day stats bars: root parents and types. Activate for root parents only.");
   const rootsOnly = helpers.dayStripLaneLayout({ state: "ready", mix: roots, themes, view: "roots" });
-  assert.equal(rootsOnly.title, "Showing root parents only \u00b7 click for themes only");
-  assert.equal(rootsOnly.ariaLabel, "Day stats bars: root parents only. Activate for themes only.");
+  assert.equal(rootsOnly.title, "Showing root parents only \u00b7 click for types only");
+  assert.equal(rootsOnly.ariaLabel, "Day stats bars: root parents only. Activate for types only.");
   const themesOnly = helpers.dayStripLaneLayout({ state: "ready", mix: roots, themes, view: "themes" });
-  assert.equal(themesOnly.title, "Showing themes only \u00b7 click for both");
-  assert.equal(themesOnly.ariaLabel, "Day stats bars: themes only. Activate for root parents and themes.");
+  assert.equal(themesOnly.title, "Showing types only \u00b7 click for both");
+  assert.equal(themesOnly.ariaLabel, "Day stats bars: types only. Activate for root parents and types.");
   const areaBoth = helpers.dayStripLaneLayout({ state: "ready", mix: areaRoots, themes, view: "both" });
-  assert.equal(areaBoth.title, "Showing areas and themes \u00b7 click for areas only");
-  assert.equal(areaBoth.ariaLabel, "Day stats bars: areas and themes. Activate for areas only.");
+  assert.equal(areaBoth.title, "Showing areas and types \u00b7 click for areas only");
+  assert.equal(areaBoth.ariaLabel, "Day stats bars: areas and types. Activate for areas only.");
   const areaRootsOnly = helpers.dayStripLaneLayout({ state: "ready", mix: areaRoots, themes, view: "roots" });
-  assert.equal(areaRootsOnly.title, "Showing areas only \u00b7 click for themes only");
+  assert.equal(areaRootsOnly.title, "Showing areas only \u00b7 click for types only");
 });
 
 test("painter per view: order, first-row meta and switch, themes-first", () => {
@@ -480,7 +480,7 @@ test("command Cycle Day stats bars is registered with its Notice copy", async ()
       assert.ok(["both", "roots", "themes"].includes(view));
       assert.ok(TestNotice.messages.length > 0, "command shows a Notice");
       const message = TestNotice.messages[TestNotice.messages.length - 1];
-      assert.match(message, /^Day stats bars: (root parents and themes|root parents only|themes only)$/);
+      assert.match(message, /^Day stats bars: (root parents and types|root parents only|types only)$/);
     } finally {
       plugin.onunload();
     }

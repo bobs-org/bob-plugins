@@ -189,7 +189,7 @@ test("plan block mirrors Bob's unconfigured-theme lint and suppresses it without
   );
   assert.equal(
     lint,
-    "SNACK isn't one of your configured themes; did you mean CHORE? (line 3)  theme_not_configured",
+    "SNACK isn't one of your configured types; did you mean CHORE? (line 3)  theme_not_configured",
   );
   assert.equal(
     configuredModel.lints.some((line) => line.includes("GEAR isn't one")),

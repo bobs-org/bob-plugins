@@ -115,20 +115,55 @@ function installNavStub(plugin, seen, pickOverride = null) {
 function installRealTaskThemeApi(plugin, suggestFor) {
   const holder = plugin.app.plugins.plugins["bob-ledger-tools"];
   holder.api.caps = () => ({ exempt: ["PLAN"], strict: false, maxThemes: 5 });
+  const sources = { vocab: ["WRITE", "FIX", "BUILD", "DEEP"], exempt: ["PLAN"], inventory: [] };
+  const keyOf = (value) => {
+    const candidate = value && typeof value === "object"
+      ? value.theme && typeof value.theme === "object" ? value.theme : value
+      : null;
+    return candidate && typeof candidate.key === "string" ? candidate.key : value;
+  };
+  const entriesForPlacement = (options) => Array.isArray(options.entries)
+    ? options.entries
+    : [];
   holder.api.themes = {
     version: 1,
     suggestFor,
     taskThemeOf: ledgerThemeHelpers.pomodoroThemeTaskFieldState,
     setTaskTheme: ledgerThemeHelpers.pomodoroThemeSetTaskTheme,
     clearTaskTheme: ledgerThemeHelpers.pomodoroThemeClearTaskTheme,
-    planThemeChange: ledgerThemeHelpers.pomodoroThemePlanChange,
+    effectiveTypeFor: suggestFor,
+    typeComponentsOf: (name) => ledgerThemeHelpers.typeComponents(name, sources),
+    typeAgrees: (taskKey, entryName) =>
+      ledgerThemeHelpers.typeAgrees(keyOf(taskKey), entryName, sources),
+    planRetype: (options = {}) => {
+      const effective = options.effective !== undefined ? options.effective : options.suggestion;
+      const inherited = options.inheritedKey !== undefined ? options.inheritedKey : options.inherited;
+      return ledgerThemeHelpers.planRetype({
+        field: options.field,
+        effectiveKey: keyOf(effective),
+        effectiveName: ledgerThemeHelpers.taskTypeThemeNameOf(effective),
+        inheritedKey: keyOf(inherited),
+        destination: options.destination !== undefined ? options.destination : options.destinationName,
+        selector: options.selector,
+        keepType: options.keepType,
+        tabPick: options.tabPick,
+      }, sources);
+    },
+    planPlacement: (options = {}) => ledgerThemeHelpers.planPlacement({
+      typeKey: options.typeKey !== undefined ? options.typeKey : options.type,
+      typeName: options.typeName,
+      entries: entriesForPlacement(options),
+      exempt: options.exempt !== undefined ? options.exempt : sources.exempt,
+      ledgerKeys: options.ledgerKeys,
+      themesBefore: options.themesBefore,
+      cap: options.cap !== undefined ? options.cap : 5,
+      strict: options.strict === true,
+      alreadyQueued: options.alreadyQueued,
+    }),
     snapshot: () => ({
-        themes: ["WRITE", "FIX", "BUILD", "DEEP"].map((name) => ({
-          key: name.toLowerCase(),
-          name,
-        })),
-        configured_themes: [],
-      }),
+      themes: sources.vocab.map((name) => ({ key: name.toLowerCase(), name })),
+      configured_themes: sources.vocab.map((name) => ({ key: name.toLowerCase(), name })),
+    }),
   };
 }
 
@@ -427,7 +462,7 @@ test("default placement and a changed suggestion still link selected successors 
   const defaultRow = finalized.successors.unblocked.find((row) => row.block_id === "default-link");
   const changedRow = finalized.successors.unblocked.find((row) => row.block_id === "changed-suggestion");
   assert.equal(defaultRow.theme_changed, undefined);
-  assert.equal(defaultRow.link.entry_name, "FIX");
+  assert.equal(defaultRow.link.entry_name, "WRITE");
   assert.equal(changedRow.theme_changed, false);
   assert.equal(changedRow.theme_suggestion_changed, true);
   assert.equal(changedRow.link.entry_name, "BUILD");
@@ -569,7 +604,7 @@ test("successor theme save remains truthful when the later daily-link write fail
   assert.equal(row.link, null);
   assert.equal(row.theme_changed, true);
   assert.match(plugin.successorNoticeForModel(finalized.successors), /couldn't link 1 successor/);
-  assert.match(plugin.successorNoticeForModel(finalized.successors), /task theme saved/);
+  assert.match(plugin.successorNoticeForModel(finalized.successors), /task type saved/);
 });
 
 test("close with no [id::] performs zero vault reads and shows nothing", async () => {

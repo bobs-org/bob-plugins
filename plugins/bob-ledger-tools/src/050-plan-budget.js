@@ -803,7 +803,7 @@ function computePlanBudget(content, caps, dailyPath) {
         inventoryWarned.add(key);
         warnings.push({
           code: PLAN_LINT_INVENTORY_LABEL,
-          message: `${component} is an inventory label, not a theme`,
+          message: `${component} is an inventory label, not a type`,
           line: entry.line,
         });
       }
@@ -850,7 +850,7 @@ function computePlanBudget(content, caps, dailyPath) {
   if (themes.over) {
     warnings.push({
       code: PLAN_LINT_THEME_CAP,
-      message: `today's plan has ${themes.count}/${themes.cap} themes`,
+      message: `today's plan has ${themes.count}/${themes.cap} types`,
     });
   }
   if (links.over) {

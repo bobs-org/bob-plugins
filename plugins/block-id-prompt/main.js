@@ -7197,11 +7197,8 @@ function describePomodoroThemeFooterPreview(input = {}) {
     if (!effectiveName) {
       return null;
     }
-    const planRetype = typeof opts.planRetype === "function"
-      ? opts.planRetype
-      : opts.planThemeChange;
     const enterPlan = callPomodoroPlanRetype(
-      planRetype,
+      opts.planRetype,
       shown,
       inherited,
       rowName,
@@ -7240,7 +7237,7 @@ function describePomodoroThemeFooterPreview(input = {}) {
       return null;
     }
     const keepPlan = callPomodoroPlanRetype(
-      planRetype,
+      opts.planRetype,
       shown,
       inherited,
       rowName,

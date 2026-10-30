@@ -283,7 +283,7 @@ test("ranks, overflow, titles, meta, and area fallback", () => {
   const bob = model.roots.segments.find((segment) => segment.key === "bob.md");
   assert.match(bob.title, /bob · 28h 36m · 23%/);
   const vibe = model.themes.segments.find((segment) => segment.key === "VIBE");
-  assert.match(vibe.title, /not in your themes/);
+  assert.match(vibe.title, /not in your types/);
   assert.equal(model.meta.text, "122h 55m worked");
   assert.match(model.meta.title, /Worked Sep 30 – Oct 27/);
   assert.match(model.meta.title, /complete days; today is not included/);

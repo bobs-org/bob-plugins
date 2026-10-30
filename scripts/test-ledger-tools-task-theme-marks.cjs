@@ -451,7 +451,7 @@ test("duplicates and invalids are repair, never a pill", () => {
   assert.equal(taskThemeMarkModel({ state: "none" }, {}), null);
   assert.equal(taskThemeMarkModel(null, {}), null);
   assert.equal(taskThemeMarkRawValue({ fields: [{ value: "  WRITE  " }] }), "WRITE");
-  assert.equal(taskThemeMarkRawValue({ fields: [] }), "theme");
+  assert.equal(taskThemeMarkRawValue({ fields: [] }), "type");
 });
 
 test("no inherited ghost pill and closed history", () => {
@@ -532,18 +532,18 @@ test("unknown and known hues", () => {
 test("tooltip copy, reason phrases, and no double-colons", () => {
   assert.equal(
     taskThemeTooltipText("WRITE", "pill", "sase_blog suggests WRITE"),
-    "Task theme WRITE \u00b7 sase_blog suggests WRITE \u00b7 " + HINT,
+    "Task type WRITE \u00b7 sase_blog suggests WRITE \u00b7 " + HINT,
   );
   assert.equal(
     taskThemeTooltipText("READ", "pill", null),
-    "Task theme READ \u00b7 no default here \u00b7 " + HINT,
+    "Task type READ \u00b7 no default here \u00b7 " + HINT,
   );
   assert.equal(
     taskThemeTooltipText("READ", "pill", undefined),
-    "Task theme READ \u00b7 " + HINT,
+    "Task type READ \u00b7 " + HINT,
   );
   assert.ok(
-    taskThemeTooltipText("WRITE", "unknown", null).indexOf("Unknown theme") !== -1,
+    taskThemeTooltipText("WRITE", "unknown", null).indexOf("Unknown type") !== -1,
   );
   assert.ok(
     taskThemeTooltipText("x", "repair", null).indexOf("Needs repair") !== -1,
@@ -789,8 +789,8 @@ test("session toggle, gates, and onload wiring", () => {
       assert.equal(plugin.togglePomodoroThemeColors(), true);
       assert.ok(
         TestNotice.messages.indexOf("Task type marks off") !== -1 ||
-          TestNotice.messages.indexOf("Task theme off") !== -1 ||
-          TestNotice.messages.indexOf("Task theme marks off") !== -1,
+          TestNotice.messages.indexOf("Task type off") !== -1 ||
+          TestNotice.messages.indexOf("Task type marks off") !== -1,
       );
       // While off, the builder stays silent.
       plugin.taskThemeMarksEnabled = false;
@@ -974,7 +974,7 @@ test("repair tooltips use the raw value, never the whole field span", () => {
   const emptySource = taskThemeMarkSource(empty);
   assert.equal(emptySource.rawValue, "");
   const emptyModel = plugin.taskThemeResolveModel(emptySource, empty);
-  assert.equal(emptyModel.label, "theme");
+  assert.equal(emptyModel.label, "type");
   assert.equal(
     taskThemeTooltipText(emptyModel.label, "repair", null).indexOf("::"),
     -1,

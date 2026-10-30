@@ -278,6 +278,54 @@ test("row mousedown is defaultPrevented and scope fallback routes body keys once
   }
 });
 
+test("Ctrl+M marks with Caps Lock and layout; Ctrl+Shift+M is ignored", () => {
+  const { modal, restore } = makeSheet();
+  try {
+    assert.ok(modal.visible.length >= 2);
+    const first = modal.selectedKey;
+    pressKey(modal, "M", { ctrlKey: true });
+    assert.equal(modal.sequenceMarks.length, 1);
+    const secondKey = modal.visible.find((row) => row.key !== first).key;
+    modal.selectedKey = secondKey;
+    modal.render();
+    pressKey(modal, "m", { code: "KeyM", ctrlKey: true });
+    assert.equal(modal.sequenceMarks.length, 2);
+    modal.selectedKey = first;
+    modal.render();
+    pressKey(modal, "ь", { code: "KeyM", ctrlKey: true });
+    assert.equal(modal.sequenceMarks.length, 1);
+    modal.selectedKey = first;
+    modal.render();
+    pressKey(modal, "m", { code: "KeyM", ctrlKey: true });
+    assert.equal(modal.sequenceMarks.length, 2);
+    const before = modal.sequenceMarks.length;
+    pressKey(modal, "m", { ctrlKey: true, shiftKey: true });
+    assert.equal(modal.sequenceMarks.length, before);
+    pressKey(modal, "m", { ctrlKey: true, altKey: true });
+    assert.equal(modal.sequenceMarks.length, before);
+  } finally {
+    modal.close();
+    restore();
+  }
+});
+
+test("Ctrl+[ clears pending marks like Escape", () => {
+  const { modal, restore } = makeSheet();
+  try {
+    modal.selectedKey = modal.visible[0].key;
+    pressKey(modal, "m", { ctrlKey: true });
+    assert.equal(modal.sequenceMarks.length, 1);
+    pressKey(modal, "[", { ctrlKey: true, code: "BracketLeft" });
+    assert.equal(modal.sequenceMarks.length, 0);
+    assert.equal(modal.sheetOpen, true);
+    pressKey(modal, "[", { ctrlKey: true });
+    assert.equal(modal.sheetOpen, false);
+  } finally {
+    try { modal.close(); } catch {}
+    restore();
+  }
+});
+
 test("empty query walks every row with unique keys and survives a type-and-clear", () => {
   const BIN = "/Users/x/.cargo/bin/bob";
   const { modal, restore } = makeSheet({

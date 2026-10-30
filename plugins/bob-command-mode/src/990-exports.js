@@ -147,6 +147,7 @@ module.exports.helpers = {
   cmSheetHelpArgv,
   cmSheetMedianDuration,
   cmSheetRecentRows,
+  cmSheetSequenceStep,
   cmSheetCaptureContext,
   cmSheetRowArgv,
   cmSheetMissingPositional,

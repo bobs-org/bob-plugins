@@ -31,6 +31,7 @@ const CM_SHEET_ICONS = {
   help: "help-circle",
   recent: "history",
   plain: "command",
+  sequence: "list-ordered",
 };
 const CM_SHEET_ICON_FALLBACK = {
   network: "◉",
@@ -42,6 +43,7 @@ const CM_SHEET_ICON_FALLBACK = {
   help: "?",
   recent: "↺",
   plain: "⌘",
+  sequence: "≡",
 };
 
 // Surface rows owned by the plugin. Each runs an existing Obsidian command and
@@ -218,17 +220,103 @@ function cmSheetAgeText(ms) {
   return Math.floor(hours / 24) + "d";
 }
 
-const CM_SHEET_OUTCOME_GLYPH = { completed: "✓", attention: "◐", failed: "✗", unknown: "?", stopped: "■", running: "⟳" };
+const CM_SHEET_OUTCOME_GLYPH = { completed: "✓", attention: "◐", failed: "✗", unknown: "?", stopped: "■", running: "⟳", interrupted: "◌" };
 
-// Last four distinct replay signatures, newest first, each with outcome
-// glyph, age, and duration for the RECENT section.
-function cmSheetRecentRows(runs, nowMs, catalog) {
+// One RECENT row per sequence: step display words joined by faint ›
+// separators, "N steps" title, and an about line of step titles (or the
+// halt/interrupt note). Shares the 4-row limit and dedupe with single rows.
+function cmSheetSequenceRowAbout(group, catalog) {
+  const titles = (group.steps || []).map((step) => cmSequenceStepTitle(step, catalog));
+  const state = group.state || group.outcome || "unknown";
+  if (state === "failed" || state === "unknown" || state === "stopped") {
+    const stoppedAt = Number(group.stoppedAt) || 0;
+    const hit = (group.results || []).find((row) => row && Number(row.index) === stoppedAt && !row.skipped);
+    const reason = String((hit && hit.reason) || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean)[0] || "";
+    if (stoppedAt && reason) return "Stopped at step " + stoppedAt + ": " + reason;
+    if (stoppedAt) return "Stopped at step " + stoppedAt + " of " + group.total;
+    return titles.join(" → ");
+  }
+  if (state === "interrupted") {
+    const done = (group.results || []).filter((row) => row && !row.skipped).length;
+    return "Interrupted after step " + done + " of " + group.total;
+  }
+  return titles.join(" → ");
+}
+
+function cmSheetSequenceRecentRow(group, now, catalog) {
+  const steps = Array.isArray(group.steps) ? group.steps.map(cmSequenceStep) : [];
+  const total = Number(group.total) || steps.length;
+  const displays = steps.map((step) => cmSequenceStepDisplay(step, catalog).join(" "));
+  const path = [];
+  displays.forEach((text, index) => {
+    if (index > 0) path.push("›");
+    path.push(text);
+  });
+  const state = group.state || group.outcome || "unknown";
+  const stamp = group.finished_at || group.started_at;
+  const at = stamp ? Date.parse(stamp) : NaN;
+  const key = "recent-seq:" + group.signature;
+  return {
+    // Row keys must stay unique across the whole sheet: selection, highlighting, rowEls, and section headings are all keyed by row.key.
+    key,
+    kind: "recent",
+    path,
+    title: total + " steps",
+    about: cmSheetSequenceRowAbout(group, catalog),
+    steps,
+    sequenceId: group.id,
+    signature: group.signature,
+    total,
+    state,
+    outcome: state,
+    stoppedAt: group.stoppedAt || null,
+    required: [],
+    runKey: key,
+    glyph: state === "running" ? "⟳" : (CM_SHEET_OUTCOME_GLYPH[state] || "?"),
+    age: Number.isFinite(at) ? cmSheetAgeText(now - at) : "",
+    duration: typeof group.durationMs === "number" ? group.durationMs : null,
+    icon: "sequence",
+  };
+}
+
+// Last four distinct runs or sequences, newest first. Every record carrying
+// the same sequence.id folds into one row; steps never appear as separate
+// RECENT rows. Single and sequence rows share one dedupe set and the 4-row
+// limit. Keeping kind "recent" reuses RECENT grouping plus glyph and age.
+function cmSheetRecentRows(runs, nowMs, catalog, options = {}) {
   const now = typeof nowMs === "number" ? nowMs : Date.now();
+  const rawActive = options && options.activeSequenceIds;
+  const activeIds = rawActive instanceof Set
+    ? rawActive
+    : Array.isArray(rawActive)
+      ? new Set(rawActive.map(String))
+      : new Set();
+  let groupsById = new Map();
+  try {
+    const groups = cmSequenceHistory(runs, { activeIds });
+    for (const group of groups) {
+      if (group && group.id) groupsById.set(String(group.id), group);
+    }
+  } catch (error) {
+    groupsById = new Map();
+  }
   const seen = new Set();
+  const seenSeqId = new Set();
   const rows = [];
   for (const run of [...(runs || [])].reverse()) {
     if (rows.length >= CM_SHEET_RECENT_LIMIT) break;
     if (!run || !Array.isArray(run.argv)) continue;
+    const seqId = run.sequence && run.sequence.id ? String(run.sequence.id) : "";
+    if (seqId) {
+      if (seenSeqId.has(seqId)) continue;
+      seenSeqId.add(seqId);
+      const group = groupsById.get(seqId);
+      if (!group) continue;
+      if (seen.has(group.signature)) continue;
+      seen.add(group.signature);
+      rows.push(cmSheetSequenceRecentRow(group, now, catalog));
+      continue;
+    }
     const replay = cmReplayRun(run, catalog);
     const signature = JSON.stringify({ argv: replay.argv, preview: replay.preview });
     if (seen.has(signature)) continue;
@@ -528,7 +616,7 @@ function cmGroupSheetRows(rows, catalog, context) {
 function cmSheetFooterHints(stage) {
   if (stage === "confirm") return "⌃↵ run · esc back";
   if (stage === "output") return "r rerun · y copy · [ ] history · : list · esc back · q close";
-  return "⌃N/⌃P select · ↵ run · ⇥ args · ⇧↵ preview · ⌃↵ run now · ? help · :: vim · esc close";
+  return "⌃N/⌃P select · ↵ run · ⌃M mark · ⇥ args · ⇧↵ preview · ⌃↵ run now · ? help · :: vim · esc close";
 }
 
 // List-stage key intent. `args` and `vim` stages belong to the args-vim phase;

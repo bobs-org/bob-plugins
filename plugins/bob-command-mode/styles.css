@@ -735,3 +735,169 @@
   .bob-cmd-sheet { animation: none; }
   .bob-cmd-sheet-hint .bob-cmd-sheet-spin { animation: none; }
 }
+
+/* Bob Command Mode: sequence tray, marks, review card, and sequence rows. */
+.bob-cmd-seq-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.bob-cmd-seq-label {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-family: var(--font-interface);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.bob-cmd-seq-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 2px 4px 2px 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  animation: bob-cmd-seq-chip-in 140ms ease-out;
+}
+
+.bob-cmd-seq-num {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-cmd-seq-text {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-cmd-seq-remove {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.bob-cmd-seq-chip:hover .bob-cmd-seq-remove { opacity: 1; }
+
+.bob-cmd-seq-sep { flex: 0 0 auto; color: var(--text-faint); }
+
+.bob-cmd-seq-run {
+  min-height: 24px;
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.bob-cmd-seq-run:hover { background: var(--background-modifier-hover); }
+
+@keyframes bob-cmd-seq-chip-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+
+.bob-cmd-row.is-marked {
+  background: color-mix(in srgb, var(--interactive-accent) 7%, transparent);
+}
+
+.bob-cmd-row.is-marked.is-selected {
+  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-modifier-hover));
+  box-shadow: inset 3px 0 0 var(--text-accent);
+}
+
+.bob-cmd-row.is-marked .bob-cmd-row-icon { display: none; }
+
+.bob-cmd-row-mark {
+  display: inline-grid;
+  flex: 0 0 auto;
+  order: -1;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-family: var(--font-interface);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.bob-cmd-row-seq-sep { color: var(--text-faint); padding: 0 4px; }
+
+.bob-cmd-row-seq-part { font-family: var(--font-monospace); }
+
+.bob-cmd-seq-review-list { display: grid; gap: 6px; margin: 8px 0; }
+
+.bob-cmd-seq-review-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.bob-cmd-seq-review-index {
+  flex: 0 0 auto;
+  color: var(--interactive-accent);
+  font-family: var(--font-monospace);
+  font-weight: 700;
+}
+
+.bob-cmd-seq-review-path {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-cmd-seq-review-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-interface);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-cmd-seq-review-effect { flex: 0 0 auto; color: var(--text-muted); font-size: 11px; }
+
+.bob-cmd-seq-review-note { margin: 2px 0 4px 24px; }
+
+.bob-cmd-seq-review-stop {
+  margin-bottom: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-interface);
+  font-size: 11px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-cmd-seq-chip { animation: none; }
+}

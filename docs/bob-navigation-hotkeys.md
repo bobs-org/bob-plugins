@@ -186,14 +186,20 @@ entry survives and absorbs the selected future one; names combine
 survivor-first with ` + ` up to 48 characters). Any count is accepted but
 ignored since the operation is whole-entry.
 
-Both pickers keep today's open Pomodoros first and offer recent themes for new
-destinations or renames when the Ledger Tools `themes` catalog is available.
-Recent rows keep catalog spelling; `+` components show their theme swatches,
+Both pickers keep today's open Pomodoros first and offer recent task types for
+new destinations or renames when the Ledger Tools type catalog is available.
+Recent rows keep catalog spelling; `+` components show their type swatches,
 and typed near-duplicates show a `like NAME` hint. `Ctrl+D` hides a Recent
 suggestion and leaves a reversible hidden row; on a Today row it has no effect.
-A theme that today's ledger uses only on a done or cancelled Pomodoro still
-shows as a Recent row; only themes of the open Today rows (and, for rename,
+A type that today's ledger uses only on a done or cancelled Pomodoro still
+shows as a Recent row; only types of the open Today rows (and, for rename,
 the entry being renamed) are left out.
+
+When `Ctrl+Shift+M` moves bullets, the selected row's footer previews how each
+resolved open Task Link's type will change. Enter applies those changes with
+the ledger move; Tab cycles the chosen type component for a composite name.
+Alt+Enter keeps every moved task's current type and merges any missing types
+into the destination's Pomodoro name.
 
 The **Bob: Pomodoro themes** command (no default hotkey) opens the themes
 manager, with Active, Hidden, Possible duplicates, and All views on `Tab`.

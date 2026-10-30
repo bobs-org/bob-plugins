@@ -100,6 +100,144 @@ function movePickerEntries(content) {
   return helpers.collectPomodoroEntries(content).entries;
 }
 
+function createTaskTypeApi(defaults = {}) {
+  const vocabulary = ["BUILD", "FIX", "PLAN", "READ", "WRITE"];
+  const keyOf = (name) => String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
+  const nameOf = new Map(vocabulary.map((name) => [keyOf(name), name]));
+  const taskField = (line) => {
+    const match = /\[(?:type|theme)::\s*([^\]]+)\]/i.exec(String(line || ""));
+    if (!match) return { state: "none" };
+    return { state: "set", value: match[1].trim(), key: keyOf(match[1]) };
+  };
+  const removeFields = (line) => String(line || "").replace(/\s*\[(?:type|theme)::\s*[^\]]+\]/gi, "");
+  const setField = (line, name) => {
+    const clean = removeFields(line);
+    const id = clean.search(/\s\^[A-Za-z0-9-]+\s*$/);
+    const at = id < 0 ? clean.length : id;
+    return `${clean.slice(0, at).trimEnd()} [type:: ${name}]${clean.slice(at)}`;
+  };
+  const clearField = (line) => removeFields(line);
+  const typeComponentsOf = (name) => String(name || "")
+    .split("+")
+    .map((component) => component.trim())
+    .filter(Boolean)
+    .map((component) => ({
+      name: component,
+      key: keyOf(component),
+      isType: nameOf.has(keyOf(component)),
+    }));
+  const effectiveTypeFor = ({ text, line }) => {
+    const rawLine = String(text || "").split(/\r?\n/)[line - 1] || "";
+    const id = /\^([A-Za-z0-9-]+)/.exec(rawLine)?.[1] || "";
+    const field = taskField(rawLine);
+    const inheritedName = defaults[id] || "BUILD";
+    const currentName = field.state === "set" ? field.value : inheritedName;
+    const inherited = {
+      theme: { key: keyOf(inheritedName), name: inheritedName },
+      source: "note",
+      label: "from dev",
+    };
+    return {
+      theme: { key: keyOf(currentName), name: currentName },
+      source: field.state === "set" ? "task" : "note",
+      label: field.state === "set" ? "this task" : "from dev",
+      ...(field.state === "set" ? { inherited } : {}),
+    };
+  };
+  const planRetype = ({ field, effective, inherited, destination, keepType, tabPick }) => {
+    const components = typeComponentsOf(destination);
+    const candidates = components.filter((component) => component.isType);
+    if (!candidates.length) return { kind: "container" };
+    const effectiveKey = effective?.theme?.key || null;
+    if (effectiveKey && components.some((component) => component.key === effectiveKey)) {
+      return { kind: "consistent" };
+    }
+    if (keepType) {
+      const currentName = effective?.theme?.name || "";
+      return currentName
+        ? { kind: "merge", name: `${String(destination).trim()} + ${currentName}` }
+        : { kind: "container" };
+    }
+    const chosen = candidates.find((component) => component.key === keyOf(tabPick)) ||
+      candidates.find((component) => component.key !== keyOf("PLAN")) || candidates[0];
+    const inheritedKey = inherited?.theme?.key || null;
+    return inheritedKey === chosen.key
+      ? { kind: "clear" }
+      : { kind: "set", name: nameOf.get(chosen.key) || chosen.name, key: chosen.key };
+  };
+  return {
+    version: 1,
+    available: () => ({ available: false }),
+    typeComponentsOf,
+    taskThemeOf: taskField,
+    effectiveTypeFor,
+    planRetype,
+    setTaskTheme: setField,
+    clearTaskTheme: clearField,
+    isConfigured: (key) => nameOf.has(keyOf(key)),
+  };
+}
+
+function createTaskTypeMoveFixture(options = {}) {
+  const sourceContent = options.sourceContent || [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- [[Tasks#^one]]",
+    "- [ ] () — FIX",
+    "\t- keep",
+  ].join("\n");
+  const file = { path: "Tasks.md", basename: "Tasks", extension: "md" };
+  const notes = new Map([[file.path, options.taskContent || "- [ ] #task One ^one"]]);
+  const files = new Map([[file.path, file]]);
+  const processCalls = [];
+  const api = createTaskTypeApi(options.defaults);
+  const app = {
+    plugins: { plugins: { "bob-ledger-tools": { api: { themes: api } } } },
+    workspace: { getLeavesOfType: () => [] },
+    metadataCache: {
+      getFirstLinkpathDest: (link) => link === "Tasks" ? file : null,
+    },
+    vault: {
+      getAbstractFileByPath: (path) => files.get(path) || null,
+      cachedRead: async (target) => notes.get(target.path) ?? null,
+      process: async (target, transform) => {
+        processCalls.push(target.path);
+        notes.set(target.path, transform(notes.get(target.path) || ""));
+      },
+    },
+  };
+  const harness = createPomodoroMovePickerHarness({
+    content: sourceContent,
+    cursor: { line: 2, ch: 0 },
+    app,
+  });
+  const discovery = helpers.discoverMovablePomodoroBulletTargets(
+    sourceContent,
+    2,
+    options.additionalCount || 0,
+  );
+  const session = Object.freeze({
+    sourceFile: harness.sourceFile,
+    sourcePath: harness.sourceFile.path,
+    sourceView: harness.view,
+    editor: harness.editor,
+    sourceContent,
+    cursor: Object.freeze({ line: 2, ch: 0 }),
+    scroll: null,
+    countExplicit: false,
+    discovery,
+    entries: discovery.context.entries,
+    sourceEntry: discovery.context.entry,
+  });
+  harness.plugin.restoreTaskMoveSourceContext = () => {};
+  return { ...harness, api, file, notes, processCalls, session };
+}
+
+function textOf(element) {
+  return String(element && element.textContent || "") +
+    ((element && element.children) || []).map(textOf).join("");
+}
+
 test("done-today themes stay Recent in bullet-move and entry pickers", () => {
   const content = [
     "## Pomodoros",
@@ -647,4 +785,212 @@ test("task move picker closes before commit while other pickers retain delayed c
     await selection;
     assert.deepEqual(events, openResult ? ["open", "close"] : ["open"]);
   }
+});
+
+test("Pomodoro move picker previews the type, keep-type merge, and Tab component live", async () => {
+  const sourceContent = [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- [[Tasks#^one]]",
+    "- [ ] () — BUILD + FIX",
+    "\t- destination work",
+  ].join("\n");
+  const fixture = createTaskTypeMoveFixture({
+    sourceContent,
+    defaults: { one: "READ" },
+  });
+  const picker = new helpers.PomodoroBulletMovePickerModal(
+    fixture.plugin.app,
+    fixture.plugin,
+    fixture.session,
+  );
+  picker.open();
+  for (let attempt = 0; attempt < 20 && picker.moveTypePreviewState === "loading"; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  assert.equal(picker.moveTypePreviewState, "ready", JSON.stringify(picker.moveTypePreview));
+  assert.equal(picker.moveTypePreview.records.length, 1);
+  assert.match(
+    textOf(picker.footerEl),
+    /→ BUILD · task becomes BUILD · dev suggests READ · ⌥↵ keep READ \(BUILD \+ FIX \+ READ\) · ⇥ FIX/,
+  );
+
+  const event = {
+    key: "Tab",
+    shiftKey: false,
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    preventDefault() { this.prevented = true; },
+    stopPropagation() { this.stopped = true; },
+  };
+  picker.handleKeydown(event);
+  assert.equal(event.prevented, true);
+  assert.match(
+    textOf(picker.footerEl),
+    /→ FIX · task becomes FIX · dev suggests READ · ⌥↵ keep READ \(BUILD \+ FIX \+ READ\) · ⇥ BUILD/,
+  );
+  picker.close();
+});
+
+test("Pomodoro move Enter retypes an open linked task with a checked closed-note write", async () => {
+  const fixture = createTaskTypeMoveFixture();
+  const destination = fixture.session.entries.find((entry) => entry.name === "FIX");
+  assert.ok(destination);
+  const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
+    fixture.session,
+    { kind: "existing", entry: destination },
+    { typePreviewState: "ready" },
+  );
+
+  assert.equal(applied, true);
+  assert.match(fixture.notes.get("Tasks.md"), /\[type:: FIX\]/);
+  assert.deepEqual(fixture.processCalls, ["Tasks.md"]);
+  assert.match(fixture.editor.getValue(), /\t- \[\[Tasks#\^one\]\]/);
+  assert.equal(notices.at(-1), "Moved 1 bullet to FIX · 1 task now FIX");
+});
+
+test("Pomodoro move Alt+Enter merges missing moved task types in move order and leaves fields alone", async () => {
+  const sourceContent = [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- [[Tasks#^one]]",
+    "\t- [[Tasks#^two]]",
+    "- [ ] () — FIX",
+    "\t- destination work",
+  ].join("\n");
+  const fixture = createTaskTypeMoveFixture({
+    sourceContent,
+    taskContent: "- [ ] #task One ^one\n- [ ] #task Two ^two",
+    defaults: { one: "BUILD", two: "WRITE" },
+    additionalCount: 1,
+  });
+  const destination = fixture.session.entries.find((entry) => entry.name === "FIX");
+  const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
+    fixture.session,
+    { kind: "existing", entry: destination },
+    { typeMode: "keepType", typePreviewState: "ready" },
+  );
+
+  assert.equal(applied, true);
+  assert.match(fixture.editor.getValue(), /— FIX \+ BUILD \+ WRITE/);
+  assert.equal(fixture.notes.get("Tasks.md"), "- [ ] #task One ^one\n- [ ] #task Two ^two");
+  assert.deepEqual(fixture.processCalls, []);
+  assert.equal(notices.at(-1), "Moved 2 bullets to FIX + BUILD + WRITE · keeps task types");
+});
+
+test("Pomodoro move applies a multi-bullet retype in one closed-note write", async () => {
+  const sourceContent = [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- [[Tasks#^one]]",
+    "\t- [[Tasks#^two]]",
+    "- [ ] () — FIX",
+    "\t- destination work",
+  ].join("\n");
+  const fixture = createTaskTypeMoveFixture({
+    sourceContent,
+    taskContent: "- [ ] #task One ^one\n- [ ] #task Two ^two",
+    defaults: { one: "BUILD", two: "WRITE" },
+    additionalCount: 1,
+  });
+  const destination = fixture.session.entries.find((entry) => entry.name === "FIX");
+  const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
+    fixture.session,
+    { kind: "existing", entry: destination },
+    { typePreviewState: "ready" },
+  );
+
+  assert.equal(applied, true);
+  assert.equal((fixture.notes.get("Tasks.md").match(/\[type:: FIX\]/g) || []).length, 2);
+  assert.deepEqual(fixture.processCalls, ["Tasks.md"]);
+  assert.equal(notices.at(-1), "Moved 2 bullets to FIX · 2 tasks now FIX");
+});
+
+test("Pomodoro move refuses a linked-note buffer changed after the footer preview", async () => {
+  const fixture = createTaskTypeMoveFixture();
+  const picker = new helpers.PomodoroBulletMovePickerModal(
+    fixture.plugin.app,
+    fixture.plugin,
+    fixture.session,
+  );
+  picker.open();
+  for (let attempt = 0; attempt < 20 && picker.moveTypePreviewState === "loading"; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal(picker.moveTypePreviewState, "ready");
+  fixture.notes.set("Tasks.md", "- [ ] #task Changed after preview ^one");
+
+  const destination = fixture.session.entries.find((entry) => entry.name === "FIX");
+  const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
+    fixture.session,
+    { kind: "existing", entry: destination },
+    {
+      typePreviewState: picker.moveTypePreviewState,
+      typePreview: picker.moveTypePreview,
+    },
+  );
+
+  assert.equal(applied, false);
+  assert.equal(fixture.editor.getValue(), fixture.session.sourceContent);
+  assert.equal(fixture.notes.get("Tasks.md"), "- [ ] #task Changed after preview ^one");
+  assert.deepEqual(fixture.processCalls, []);
+  assert.match(notices.at(-1), /changed after preview/);
+  picker.close();
+});
+
+test("Pomodoro move preserves types under labels and unnamed containers, and allows PLAN", async () => {
+  for (const destinationName of ["LATER", null, "PLAN"]) {
+    const sourceContent = [
+      "## Pomodoros",
+      "- [ ] () — SOURCE",
+      "\t- [[Tasks#^one]]",
+      `- [ ] ()${destinationName ? ` — ${destinationName}` : ""}`,
+      "\t- destination work",
+    ].join("\n");
+    const fixture = createTaskTypeMoveFixture({ sourceContent });
+    const destination = fixture.session.entries.find((entry) =>
+      entry.entryLine !== fixture.session.discovery.entryLine,
+    );
+    const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
+      fixture.session,
+      { kind: "existing", entry: destination },
+      { typePreviewState: "ready" },
+    );
+    assert.equal(applied, true, destinationName || "unnamed");
+    if (destinationName === "PLAN") {
+      assert.match(fixture.notes.get("Tasks.md"), /\[type:: PLAN\]/);
+    } else {
+      assert.equal(fixture.notes.get("Tasks.md"), "- [ ] #task One ^one");
+      assert.deepEqual(fixture.processCalls, []);
+    }
+  }
+});
+
+test("Pomodoro move to a new named entry retypes the linked task", async () => {
+  const fixture = createTaskTypeMoveFixture();
+  const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
+    fixture.session,
+    { kind: "new", name: "WRITE" },
+    { typePreviewState: "ready" },
+  );
+  assert.equal(applied, true);
+  assert.match(fixture.editor.getValue(), /— WRITE/);
+  assert.match(fixture.notes.get("Tasks.md"), /\[type:: WRITE\]/);
+});
+
+test("Pomodoro move clears an explicit type that matches the inherited destination", async () => {
+  const fixture = createTaskTypeMoveFixture({
+    taskContent: "- [ ] #task One [type:: WRITE] ^one",
+    defaults: { one: "FIX" },
+  });
+  const destination = fixture.session.entries.find((entry) => entry.name === "FIX");
+  const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
+    fixture.session,
+    { kind: "existing", entry: destination },
+    { typePreviewState: "ready" },
+  );
+  assert.equal(applied, true);
+  assert.equal(fixture.notes.get("Tasks.md"), "- [ ] #task One ^one");
 });

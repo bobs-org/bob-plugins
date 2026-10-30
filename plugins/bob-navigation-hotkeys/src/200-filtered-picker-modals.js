@@ -564,6 +564,7 @@ class TaskMoveDestinationPickerModal extends FilteredPickerModal {
 
 class PomodoroBulletMovePickerModal extends FilteredPickerModal {
   constructor(app, plugin, session) {
+    let modal = null;
     const themesApi = getNavigationPomodoroThemesApi(app);
     const discovery = session && session.discovery ? session.discovery : {};
     const sourceEntry = session && session.sourceEntry ? session.sourceEntry : null;
@@ -603,26 +604,33 @@ class PomodoroBulletMovePickerModal extends FilteredPickerModal {
         `${selectedCount} bullet${selectedCount === 1 ? "" : "s"} from Pomodoro #${sourcePosition} · ${destinationCount} destination${destinationCount === 1 ? "" : "s"} · = same name · =NAME split${clampedText}`,
       renderItem: (row, rowEl, query) =>
         renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi),
-      closeBeforeOpenItem: true,
-      openItem: (row) => {
+      closeBeforeOpenItem: false,
+      openItem: async (row) => {
         if (!row || row.kind === "invalid") {
           return false;
         }
-        if (row.kind === "split") {
-          return plugin.commitPomodoroBulletSplitSession(session, row);
-        }
-        return plugin.commitPomodoroBulletMoveSession(
+        const destination = row.kind === "recent"
+          ? {
+              ...row,
+              kind: "new",
+              preserveSpelling: true,
+            }
+          : row;
+        const options = modal
+          ? pomodoroBulletMovePickerCommitOptions(modal, row)
+          : {};
+        const result = await plugin.commitPomodoroBulletMoveSession(
           session,
-          row.kind === "recent"
-            ? {
-                ...row,
-                kind: row.operation === "rename" ? "rename" : "new",
-                preserveSpelling: true,
-              }
-            : row,
+          destination,
+          options,
         );
+        if (modal) {
+          modal.pendingMoveTypeMode = "retype";
+        }
+        return result;
       },
     });
+    modal = this;
     this.plugin = plugin;
     this.session = session;
     this.themeEntryMode = false;

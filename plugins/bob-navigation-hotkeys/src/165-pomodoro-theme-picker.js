@@ -1,4 +1,4 @@
-// Recent Pomodoro theme rows shared by nav's bullet and whole-entry pickers.
+// Recent task type rows shared by nav's Pomodoro move and rename pickers.
 // Ledger Tools api.themes owns catalog scanning, ranking, hue, and writes.
 const NAV_POMODORO_THEME_HUES = [
   "blue",
@@ -16,6 +16,8 @@ const POMODORO_BULLET_MOVE_HINTS = [
   { keys: ["^N", "^P"], label: "Move" },
   { keys: ["^D"], label: "Hide / undo" },
   { keys: ["↵"], label: "Move" },
+  { keys: ["⌥↵"], label: "Keep types" },
+  { keys: ["⇥"], label: "Cycle type" },
   { keys: ["esc"], label: "Dismiss" },
 ];
 
@@ -439,7 +441,7 @@ async function toggleNavigationPomodoroThemeVisibility(modal) {
     return;
   }
   if (row.kind === "existing") {
-    new Notice("Today's Pomodoros stay visible; Ctrl+D hides Recent themes");
+    new Notice("Today's Pomodoros stay visible; Ctrl+D hides Recent types");
     return;
   }
   const hiddenNames = row.kind === "recent" && row.hidden
@@ -450,7 +452,7 @@ async function toggleNavigationPomodoroThemeVisibility(modal) {
   const hideName = row.kind === "recent" && !row.hidden ? row.name : null;
   const method = hideName ? "hide" : hiddenNames.length ? "unhide" : null;
   if (!method || !api || typeof api[method] !== "function") {
-    new Notice("Ctrl+D hides Recent themes; this row has nothing to change");
+    new Notice("Ctrl+D hides Recent types; this row has nothing to change");
     return;
   }
   if (modal.themeWriteInFlight) {
@@ -462,7 +464,7 @@ async function toggleNavigationPomodoroThemeVisibility(modal) {
     const results = await Promise.all(names.map((name) => api[method](name)));
     const failure = results.find((result) => !result || result.ok !== true);
     if (failure) {
-      new Notice(failure.message || "Could not update the theme suggestion");
+      new Notice(failure.message || "Could not update the type suggestion");
       return;
     }
     if (method === "hide") {
@@ -487,7 +489,7 @@ async function toggleNavigationPomodoroThemeVisibility(modal) {
       modal.renderResults();
     }
   } catch (_error) {
-    new Notice("Could not update the theme suggestion");
+    new Notice("Could not update the type suggestion");
   } finally {
     modal.themeWriteInFlight = false;
   }

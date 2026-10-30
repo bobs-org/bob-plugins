@@ -297,7 +297,34 @@ function createPomodoroMovePickerHarness(harnessOptions = {}) {
   );
   const view = { editor, file: sourceFile };
   const plugin = new NavigationHotkeysPlugin();
-  plugin.app = harnessOptions.app || {};
+  const app = harnessOptions.app || {};
+  const plugins = app.plugins && app.plugins.plugins
+    ? { ...app.plugins.plugins }
+    : {};
+  const ledgerPlugin = plugins["bob-ledger-tools"] || {};
+  const api = ledgerPlugin.api || {};
+  const themes = api.themes || {};
+  plugins["bob-ledger-tools"] = {
+    ...ledgerPlugin,
+    api: {
+      ...api,
+      themes: {
+        ...themes,
+        version: themes.version || 1,
+        available: themes.available || (() => ({ available: false })),
+        taskThemeOf: themes.taskThemeOf || (() => ({ state: "none" })),
+        effectiveTypeFor: themes.effectiveTypeFor || (() => null),
+        planRetype: themes.planRetype || (() => ({ kind: "container" })),
+        ...(themes.typeComponentsOf
+          ? { typeComponentsOf: themes.typeComponentsOf }
+          : {}),
+      },
+    },
+  };
+  plugin.app = {
+    ...app,
+    plugins: { ...(app.plugins || {}), plugins },
+  };
   plugin.getActiveMarkdownView = () => view;
   return { editor, plugin, sourceFile, view };
 }

@@ -322,7 +322,7 @@ test("commitPomodoroBulletMoveSession applies one guarded same-file transaction"
   });
 
   assert.equal(expectedPlan.sourcePomodoroDeleted, true);
-  assert.equal(await plugin.commitPomodoroBulletMoveSession(session, row), true);
+  assert.equal(await plugin.commitPomodoroBulletMoveSession(session, row), true, notices.at(-1));
   assert.equal(editor.getValue(), expectedPlan.after);
   assert.equal(editor.transactions.length, 1);
   assert.equal(editor.undoGroups, 1);
@@ -366,7 +366,7 @@ test("Pomodoro move notice identifies a newly created unconfigured theme", async
   );
   assert.equal(
     notices.at(-1),
-    "Moved 1 bullet to new Pomodoro SNACK · SNACK isn't one of your themes",
+    "Moved 1 bullet to new Pomodoro SNACK · SNACK isn't one of your types",
   );
 });
 

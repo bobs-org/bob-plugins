@@ -34,7 +34,7 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi) {
   const titleEl = textEl.createDiv({ cls: "bob-cnp-row-title" });
   if (kind === "recent" || kind === "new" || kind === "rename") {
     const rename = kind === "rename" || (kind === "recent" && row.operation === "rename");
-    titleEl.appendText(rename ? "Rename to " : "New Pomodoro ");
+      titleEl.appendText(rename ? "Rename Pomodoro to " : "New Pomodoro ");
     renderNavigationPomodoroThemeSwatches(titleEl, themesApi, row.name);
     appendHighlighted(titleEl, row.name, query);
   } else {
@@ -60,8 +60,8 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi) {
       cls: `bob-cnp-row-status is-recent-theme${row.hidden ? " is-hidden-theme" : ""}`,
       text: row.hidden ? "Hidden" : "Recent",
       attr: {
-        title: row.hidden ? "Hidden from Recent; Ctrl+D to unhide" : "Recent Pomodoro theme",
-        "aria-label": row.hidden ? "Hidden theme" : "Recent theme",
+        title: row.hidden ? "Hidden from Recent; Ctrl+D to unhide" : "Recent task type",
+        "aria-label": row.hidden ? "Hidden type" : "Recent type",
       },
     });
     return;
@@ -74,10 +74,10 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi) {
     if (row.unconfigured) {
       badgesEl.createDiv({
         cls: "bob-cnp-row-status is-warning",
-        text: "Not in your themes",
+      text: "Not a configured type",
         attr: {
-          title: "This name isn't in your configured themes",
-          "aria-label": "Not in your themes",
+          title: "This name isn't in your configured types",
+          "aria-label": "Not a configured type",
         },
       });
     }

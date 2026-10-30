@@ -292,6 +292,30 @@ class TaskStatusCyclerPomodoroMixin {
       return false;
     }
 
+    // Event Task clock close (061-event-task-clock.js): rewrite bare plain
+    // links to Event Tasks by the meeting clock before the normal flow, so
+    // ended meetings complete and future/past ones defer-and-carry.
+    const eventTaskClockRewrites = planEventTaskClockRewrites(
+      lines,
+      context.pomodoroLine,
+      section,
+      {
+        sourcePath,
+        todayPath: this.getEventTaskClockTodayPath(),
+        nowMinutes: this.getEventTaskClockNowMinutes(),
+      },
+    );
+    if (eventTaskClockRewrites.length > 0) {
+      for (const rewrite of eventTaskClockRewrites) {
+        this.replaceEditorLine(rewrite.line, rewrite.lineText, editor);
+      }
+      lines = this.getEditorLineTexts(editor);
+      section = findPomodorosSectionInLines(lines);
+      if (!isPomodoroTaskLine(lines, section, context.pomodoroLine)) {
+        return false;
+      }
+    }
+
     const subBulletRange = getSubBulletBlockRange(
       lines,
       context.pomodoroLine,

@@ -45,6 +45,15 @@ none. A Pomodoro close whose children are all deferred `#` links deletes the
 closed entry instead of leaving it childless, carrying the stripped links to
 the created placeholder.
 
+On a timed Pomodoro close, a bare plain link to an Event Task in the same
+daily note's `## Events` section closes by the meeting clock instead: the
+meeting that ended inside the session completes (counted, never carried),
+later and earlier meetings defer and carry without starting, and a meeting
+running at close starts and carries as usual. The close uses now when the
+note is today's note, otherwise the session's written end; an untimed `()`
+close, embedded links, authored `#` deferrals, and other-note links keep
+their existing behavior.
+
 `Ctrl+Enter` on a selected Task Link — embedded or plain, including inside an
 open Pomodoro — closes the linked task and strikes the link through as
 `~~[[…]]~~`; pressing it again reopens both. Plain links close root-only,

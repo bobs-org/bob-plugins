@@ -7,6 +7,7 @@
   "051-relation-line-grammar.js",
   "055-obsidian-task-toggle-ranges.js",
   "060-pomodoro.js",
+  "061-event-task-clock.js",
   "070-block-links.js",
   "080-dependencies.js",
   "084-project-parent.js",

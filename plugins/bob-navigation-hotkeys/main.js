@@ -89205,6 +89205,64 @@ class BobNavigationHotkeysNotesMoveMixin {
   }
 }
 // ---- src/650-plugin-move-commit.js ----
+// gesture-retype: note moves relocate the live link when the inherited
+// type changes, and Pomodoro renames retype linked tasks. Pure helpers
+// below never write; the commit methods apply them with the existing
+// guarded writes and rollback.
+function gestureRetypeFieldIsExplicit(field) {
+  return Boolean(field && typeof field === "object" && field.state === "set");
+}
+
+function gestureRetypeFieldIsRepair(field) {
+  return Boolean(field && typeof field === "object" && field.state === "repair");
+}
+
+function gestureRetypeEffectiveParts(effective) {
+  const theme = effective && effective.theme && typeof effective.theme === "object"
+    ? effective.theme
+    : null;
+  const inherited = effective && effective.inherited && typeof effective.inherited === "object"
+    ? effective.inherited
+    : null;
+  return Object.freeze({
+    key: theme && typeof theme.key === "string" ? theme.key : null,
+    name: theme && typeof theme.name === "string" ? theme.name : null,
+    inherited,
+    theme,
+  });
+}
+
+function gestureRetypeMoveShouldRelocate(field, sourceEffective, destEffective) {
+  if (!field || typeof field !== "object") return null;
+  if (field.state !== "none") return null;
+  const source = gestureRetypeEffectiveParts(sourceEffective);
+  const dest = gestureRetypeEffectiveParts(destEffective);
+  if (!dest.key || !dest.name) return null;
+  if (source.key === dest.key) return null;
+  return Object.freeze({ key: dest.key, name: dest.name });
+}
+
+function gestureRetypeRenamePlanForTask(api, record, destinationName, tabPick) {
+  if (!api || typeof api.planRetype !== "function") return null;
+  if (!record || typeof record !== "object") return null;
+  if (gestureRetypeFieldIsRepair(record.field)) return null;
+  let plan = null;
+  try {
+    plan = api.planRetype({
+      field: record.field,
+      effective: record.effective,
+      inherited: record.inherited,
+      destination: destinationName,
+      ...(tabPick ? { tabPick } : {}),
+    });
+  } catch (_error) {
+    return null;
+  }
+  if (!plan || typeof plan !== "object") return null;
+  if (plan.kind !== "set" && plan.kind !== "clear") return null;
+  return plan;
+}
+
 class BobNavigationHotkeysMoveCommitMixin {
 
   async commitPomodoroBulletMoveSession(session, row, options = {}) {
@@ -89271,7 +89329,57 @@ class BobNavigationHotkeysMoveCommitMixin {
       return false;
     }
 
-    const afterLines = splitMarkdownContent(plan.after).lines;
+    // gesture-retype: renaming a Pomodoro entry retypes its linked tasks
+    // (D6 Enter per linked task). Planned before the daily write so a
+    // routing failure aborts with nothing written.
+    let renameTypePlans = [];
+    let renameTaskWrites = { valid: true, local: [], groups: [] };
+    let renameTypeApi = null;
+    if (isRename) {
+      try {
+        const freshPreview = await resolvePomodoroBulletMoveTypePreview(this, session);
+        if (freshPreview.error) {
+          new Notice(`${freshPreview.error}; nothing was changed`);
+          return false;
+        }
+        renameTypeApi = freshPreview.api;
+        renameTypePlans = renameTypeApi
+          ? pomodoroBulletMoveTypePlanRows(renameTypeApi, freshPreview, plan.name, {})
+          : [];
+        if (renameTypePlans.some((item) => !item.plan)) {
+          new Notice("Task type routing could not plan this rename; nothing was changed");
+          return false;
+        }
+        renameTaskWrites = pomodoroBulletMoveTaskWrites(
+          renameTypeApi,
+          renameTypePlans,
+          normalizeVaultRelativePath(session.sourcePath),
+        );
+        if (!renameTaskWrites.valid) {
+          new Notice(`${renameTaskWrites.error}; nothing was changed`);
+          return false;
+        }
+      } catch (_error) {
+        renameTypePlans = [];
+        renameTaskWrites = { valid: true, local: [], groups: [] };
+        renameTypeApi = null;
+      }
+    }
+
+    let renameSourceAfter = plan.after;
+    if (isRename) {
+      const localApplied = applyPomodoroBulletMoveLocalTaskWrites(
+        renameSourceAfter,
+        renameTaskWrites.local || [],
+      );
+      if (!localApplied.valid) {
+        new Notice("A linked task changed during the rename; nothing was changed");
+        return false;
+      }
+      renameSourceAfter = localApplied.content;
+    }
+
+    const afterLines = splitMarkdownContent(renameSourceAfter).lines;
     let finalCursor;
     if (isMove) {
       const firstMovedLine = Math.min(
@@ -89311,13 +89419,13 @@ class BobNavigationHotkeysMoveCommitMixin {
       applied = applyEditorContentTransaction(
         session.editor,
         session.sourceContent,
-        plan.after,
+        renameSourceAfter,
         finalCursor,
       );
     } catch (error) {
-      applied = String(session.editor.getValue() || "") === plan.after;
+      applied = String(session.editor.getValue() || "") === renameSourceAfter;
     }
-    if (!applied || String(session.editor.getValue() || "") !== plan.after) {
+    if (!applied || String(session.editor.getValue() || "") !== renameSourceAfter) {
       new Notice(
         isRename
           ? "Pomodoro rename failed; nothing was changed"
@@ -89327,15 +89435,40 @@ class BobNavigationHotkeysMoveCommitMixin {
     }
 
     this.restoreTaskMoveSourceContext(session);
+    let renameFailedGroups = 0;
+    if (isRename) {
+      renameFailedGroups = await pomodoroBulletMoveApplyNoteGroups(
+        this,
+        (renameTaskWrites && renameTaskWrites.groups) || [],
+      );
+    }
     const themeWarningSuffix = isRename
       ? navigationPomodoroThemeUnconfiguredNames(
           getNavigationPomodoroThemesApi(this.app),
           plan.name,
         ).map((name) => ` · ${name} isn't one of your themes`).join("")
       : "";
+    if (isRename && renameFailedGroups > 0) {
+      new Notice(
+        `Renamed Pomodoro #${session.sourceEntry.position} to ${plan.name} · task type update incomplete; check the type mismatch mark`,
+      );
+      return true;
+    }
+    let renameTypeSuffix = "";
+    if (isRename) {
+      try {
+        renameTypeSuffix = pomodoroBulletMoveTypeToast(
+          renameTypePlans,
+          "retype",
+          plan.name,
+        );
+      } catch (_error) {
+        renameTypeSuffix = "";
+      }
+    }
     new Notice(
       isRename
-        ? `Renamed Pomodoro #${session.sourceEntry.position} to ${plan.name}${themeWarningSuffix}`
+        ? `Renamed Pomodoro #${session.sourceEntry.position} to ${plan.name}${renameTypeSuffix}${themeWarningSuffix}`
         : buildPomodoroEntryMoveNotice(plan, session.discovery, destinationLabel),
     );
     return true;
@@ -89552,12 +89685,27 @@ class BobNavigationHotkeysMoveCommitMixin {
     const clamped = session.discovery.clamped
       ? ` (requested ${session.discovery.requestedCount}; reached end of note)`
       : "";
-    const moveNoticeText =
+    let moveNoticeText =
       `Moved ${count} task${count === 1 ? "" : "s"} to ${destinationName}${clamped}` +
       formatTaskMoveProjectCountsNotice(
         plan.blockedOnDestinationCount,
         plan.recoveredOnMoveCount,
       );
+    try {
+      const relocated = Array.isArray(result.relocated) ? result.relocated : [];
+      if (relocated.length > 0) {
+        const firstTo = relocated[0] && relocated[0].to;
+        const sameTo =
+          typeof firstTo === "string" &&
+          firstTo.length > 0 &&
+          relocated.every((entry) => entry && entry.to === firstTo);
+        moveNoticeText += sameTo
+          ? ` · ${relocated.length} task${relocated.length === 1 ? "" : "s"} now ${firstTo}`
+          : ` · ${relocated.length} link${relocated.length === 1 ? "" : "s"} moved`;
+      }
+    } catch (_error) {
+      // Relocation suffix is best-effort only.
+    }
     new Notice(moveNoticeText);
     return true;
   }
@@ -90307,6 +90455,180 @@ async function commitPomodoroBulletMoveWithRetype(plugin, session, row, options 
 // the route prompt, and the routed move commit. `promptInboxRoute` and
 // `commitInboxRoute` never throw and never reject: every failure resolves
 // to a cancel or a structured `{ ok: false }` result with nothing written.
+function gestureRetypeExtractTaskBlockId(rawLine) {
+  const text = String(rawLine || "");
+  const match = /\^([A-Za-z0-9-]+)\s*$/.exec(text);
+  return match ? match[1] : null;
+}
+
+function gestureRetypeFindTaskLineByBlockId(content, blockId) {
+  const lines = splitMarkdownContent(String(content || "")).lines;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = String(lines[index] || "");
+    if (!/- \[[ xX*\/\?\-]\]/.test(line) || !line.includes("#task")) continue;
+    if (gestureRetypeExtractTaskBlockId(line) === blockId) {
+      return { line: index, rawLine: line };
+    }
+  }
+  return null;
+}
+
+function planNoteMoveLedgerRelocation(plugin, options = {}) {
+  const sourcePath = normalizeVaultRelativePath(options.sourcePath);
+  const destinationPath = normalizeVaultRelativePath(options.destinationPath);
+  const sourceContent = String(options.sourceContent || "");
+  const targets = Array.isArray(options.targets) ? options.targets : [];
+  const snapshots = options.snapshots instanceof Map ? options.snapshots : new Map();
+  const plan = options.plan && typeof options.plan === "object" ? options.plan : null;
+  const dailyEdits = new Map();
+  const relocated = [];
+  if (!sourcePath || !destinationPath || !plan || !plan.changes) {
+    return { dailyEdits, relocated, refused: null };
+  }
+  let api = null;
+  try {
+    api = getNavigationPomodoroThemesApi(plugin && plugin.app);
+  } catch (_error) {
+    api = null;
+  }
+  if (!api || typeof api.taskThemeOf !== "function" || typeof api.effectiveTypeFor !== "function" || typeof api.planRelocation !== "function") {
+    return { dailyEdits, relocated, refused: null };
+  }
+  const destAfter = plan.changes.get(destinationPath);
+  const destContent = destAfter ? String(destAfter.after || "") : String(snapshots.get(destinationPath) || "");
+  // Post-move daily contents: snapshots overridden by plan postimages.
+  const postMove = new Map(snapshots);
+  if (plan.changes instanceof Map) {
+    for (const [path, change] of plan.changes.entries()) {
+      if (change && typeof change.after === "string") postMove.set(path, change.after);
+    }
+  }
+  for (const target of targets) {
+    const sourceLine = Number.isInteger(target && target.line) ? target.line : -1;
+    const rawLine = typeof target.rawLine === "string" ? target.rawLine : String((splitMarkdownContent(sourceContent).lines[sourceLine] || ""));
+    if (!rawLine || !isOpenObsidianTaskLine(rawLine)) continue;
+    const blockId = gestureRetypeExtractTaskBlockId(rawLine);
+    if (!blockId) continue;
+    let field = null;
+    try {
+      field = api.taskThemeOf(rawLine);
+    } catch (_error) {
+      field = null;
+    }
+    if (!field || field.state !== "none") continue;
+    let sourceEffective = null;
+    let destEffective = null;
+    try {
+      sourceEffective = api.effectiveTypeFor({ path: sourcePath, line: sourceLine + 1, text: sourceContent });
+    } catch (_error) {
+      sourceEffective = null;
+    }
+    const destFound = gestureRetypeFindTaskLineByBlockId(destContent, blockId);
+    if (!destFound) continue;
+    try {
+      destEffective = api.effectiveTypeFor({ path: destinationPath, line: destFound.line + 1, text: destContent });
+    } catch (_error) {
+      destEffective = null;
+    }
+    const newType = gestureRetypeMoveShouldRelocate(field, sourceEffective, destEffective);
+    if (!newType) continue;
+    // Find live link across post-move notes.
+    let live = null;
+    let livePath = null;
+    let liveContent = null;
+    for (const [path, content] of postMove.entries()) {
+      let built = null;
+      try {
+        built = taskCardTypeLedgerEntries(String(content || ""));
+      } catch (_error) {
+        built = null;
+      }
+      if (!built || !Array.isArray(built.details)) continue;
+      let found = null;
+      try {
+        found = taskCardTypeFindLiveLink(built.details, blockId);
+      } catch (_error) {
+        found = null;
+      }
+      if (!found || found.multiple === true) {
+        if (found && found.multiple === true) {
+          live = null;
+          livePath = null;
+          break;
+        }
+        continue;
+      }
+      if (live) {
+        live = null;
+        livePath = null;
+        break;
+      }
+      live = { built, found };
+      livePath = path;
+      liveContent = String(content || "");
+    }
+    if (!live || !livePath) continue;
+    // Apply any prior daily edits for this path in this loop.
+    if (dailyEdits.has(livePath)) {
+      liveContent = dailyEdits.get(livePath).after;
+      try {
+        const rebuilt = taskCardTypeLedgerEntries(liveContent);
+        const refound = taskCardTypeFindLiveLink(rebuilt.details, blockId);
+        if (!refound || refound.multiple === true) continue;
+        live = { built: rebuilt, found: refound };
+      } catch (_error) {
+        continue;
+      }
+    }
+    let relocation = null;
+    try {
+      relocation = api.planRelocation({
+        entries: live.built.entries,
+        liveLink: live.found.entryIndex,
+        typeKey: newType.key,
+        typeName: newType.name,
+      });
+    } catch (_error) {
+      relocation = null;
+    }
+    if (!relocation || relocation.kind === "unchanged") continue;
+    if (relocation.kind === "refused") {
+      return {
+        dailyEdits,
+        relocated,
+        refused: {
+          typeName: relocation.typeName || newType.name,
+          themesBefore: Number(relocation.themesBefore) || 0,
+          cap: Number(relocation.cap) || 0,
+        },
+      };
+    }
+    let applied = null;
+    try {
+      applied = taskCardTypeApplyLedgerEdit(liveContent, relocation, live.found, live.built.details);
+    } catch (_error) {
+      applied = null;
+    }
+    if (!applied || applied.valid !== true || applied.after === liveContent) continue;
+    const before = snapshots.get(livePath);
+    if (typeof before !== "string") continue;
+    // If daily already has a repair edit in plan.changes, keep its before.
+    const existing = plan.changes.get(livePath);
+    const baseBefore = existing && typeof existing.before === "string" ? existing.before : before;
+    dailyEdits.set(livePath, Object.freeze({ before: baseBefore, after: applied.after }));
+    postMove.set(livePath, applied.after);
+    const sourceEntry = live.built.entries[live.found.entryIndex];
+    relocated.push(Object.freeze({
+      route: destinationPath.replace(/\.md$/, ""),
+      blockId,
+      from: sourceEntry && typeof sourceEntry.name === "string" ? sourceEntry.name : null,
+      to: relocation.newName || relocation.name || newType.name,
+      type: newType.name,
+    }));
+  }
+  return { dailyEdits, relocated, refused: null };
+}
+
 class BobNavigationHotkeysInboxRouteMixin {
 
   // Shared move plan-and-write core: snapshots the vault, plans with
@@ -90429,6 +90751,48 @@ class BobNavigationHotkeysInboxRouteMixin {
       return { ok: false, reason: `${plan.error}; nothing was moved` };
     }
 
+    // gesture-retype: note moves relocate the live link when the inherited
+    // type changes (D8). A task with an explicit field keeps its type.
+    let noteMoveRelocated = [];
+    try {
+      const relocation = planNoteMoveLedgerRelocation.call(this, {
+        sourcePath,
+        destinationPath,
+        sourceContent,
+        targets,
+        snapshots,
+        plan,
+      });
+      if (relocation && relocation.refused) {
+        return {
+          ok: false,
+          reason: `plan.strict: ${relocation.refused.typeName} would be type ${relocation.refused.themesBefore + 1} of ${relocation.refused.cap} · nothing written`,
+        };
+      }
+      if (relocation && relocation.dailyEdits && relocation.dailyEdits.size > 0) {
+        for (const [dailyPath, edit] of relocation.dailyEdits.entries()) {
+          const existing = plan.changes.get(dailyPath);
+          if (existing) {
+            plan.changes.set(
+              dailyPath,
+              Object.freeze({ before: existing.before, after: edit.after }),
+            );
+          } else {
+            const before = snapshots.get(dailyPath);
+            if (typeof before === "string") {
+              plan.changes.set(
+                dailyPath,
+                Object.freeze({ before, after: edit.after }),
+              );
+            }
+          }
+        }
+        noteMoveRelocated = relocation.relocated || [];
+      }
+    } catch (_error) {
+      noteMoveRelocated = [];
+    }
+
     const sourceChange = plan.changes.get(sourcePath);
     const sourceLines = splitMarkdownContent(sourceChange.after).lines;
     const sourceLine = Math.min(
@@ -90515,6 +90879,7 @@ class BobNavigationHotkeysInboxRouteMixin {
       destinationName,
       nextSourceLine: sourceLine,
       finalCursor,
+      relocated: noteMoveRelocated,
     };
   }
 

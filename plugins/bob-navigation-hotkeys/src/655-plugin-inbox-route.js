@@ -4,6 +4,180 @@
 // the route prompt, and the routed move commit. `promptInboxRoute` and
 // `commitInboxRoute` never throw and never reject: every failure resolves
 // to a cancel or a structured `{ ok: false }` result with nothing written.
+function gestureRetypeExtractTaskBlockId(rawLine) {
+  const text = String(rawLine || "");
+  const match = /\^([A-Za-z0-9-]+)\s*$/.exec(text);
+  return match ? match[1] : null;
+}
+
+function gestureRetypeFindTaskLineByBlockId(content, blockId) {
+  const lines = splitMarkdownContent(String(content || "")).lines;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = String(lines[index] || "");
+    if (!/- \[[ xX*\/\?\-]\]/.test(line) || !line.includes("#task")) continue;
+    if (gestureRetypeExtractTaskBlockId(line) === blockId) {
+      return { line: index, rawLine: line };
+    }
+  }
+  return null;
+}
+
+function planNoteMoveLedgerRelocation(plugin, options = {}) {
+  const sourcePath = normalizeVaultRelativePath(options.sourcePath);
+  const destinationPath = normalizeVaultRelativePath(options.destinationPath);
+  const sourceContent = String(options.sourceContent || "");
+  const targets = Array.isArray(options.targets) ? options.targets : [];
+  const snapshots = options.snapshots instanceof Map ? options.snapshots : new Map();
+  const plan = options.plan && typeof options.plan === "object" ? options.plan : null;
+  const dailyEdits = new Map();
+  const relocated = [];
+  if (!sourcePath || !destinationPath || !plan || !plan.changes) {
+    return { dailyEdits, relocated, refused: null };
+  }
+  let api = null;
+  try {
+    api = getNavigationPomodoroThemesApi(plugin && plugin.app);
+  } catch (_error) {
+    api = null;
+  }
+  if (!api || typeof api.taskThemeOf !== "function" || typeof api.effectiveTypeFor !== "function" || typeof api.planRelocation !== "function") {
+    return { dailyEdits, relocated, refused: null };
+  }
+  const destAfter = plan.changes.get(destinationPath);
+  const destContent = destAfter ? String(destAfter.after || "") : String(snapshots.get(destinationPath) || "");
+  // Post-move daily contents: snapshots overridden by plan postimages.
+  const postMove = new Map(snapshots);
+  if (plan.changes instanceof Map) {
+    for (const [path, change] of plan.changes.entries()) {
+      if (change && typeof change.after === "string") postMove.set(path, change.after);
+    }
+  }
+  for (const target of targets) {
+    const sourceLine = Number.isInteger(target && target.line) ? target.line : -1;
+    const rawLine = typeof target.rawLine === "string" ? target.rawLine : String((splitMarkdownContent(sourceContent).lines[sourceLine] || ""));
+    if (!rawLine || !isOpenObsidianTaskLine(rawLine)) continue;
+    const blockId = gestureRetypeExtractTaskBlockId(rawLine);
+    if (!blockId) continue;
+    let field = null;
+    try {
+      field = api.taskThemeOf(rawLine);
+    } catch (_error) {
+      field = null;
+    }
+    if (!field || field.state !== "none") continue;
+    let sourceEffective = null;
+    let destEffective = null;
+    try {
+      sourceEffective = api.effectiveTypeFor({ path: sourcePath, line: sourceLine + 1, text: sourceContent });
+    } catch (_error) {
+      sourceEffective = null;
+    }
+    const destFound = gestureRetypeFindTaskLineByBlockId(destContent, blockId);
+    if (!destFound) continue;
+    try {
+      destEffective = api.effectiveTypeFor({ path: destinationPath, line: destFound.line + 1, text: destContent });
+    } catch (_error) {
+      destEffective = null;
+    }
+    const newType = gestureRetypeMoveShouldRelocate(field, sourceEffective, destEffective);
+    if (!newType) continue;
+    // Find live link across post-move notes.
+    let live = null;
+    let livePath = null;
+    let liveContent = null;
+    for (const [path, content] of postMove.entries()) {
+      let built = null;
+      try {
+        built = taskCardTypeLedgerEntries(String(content || ""));
+      } catch (_error) {
+        built = null;
+      }
+      if (!built || !Array.isArray(built.details)) continue;
+      let found = null;
+      try {
+        found = taskCardTypeFindLiveLink(built.details, blockId);
+      } catch (_error) {
+        found = null;
+      }
+      if (!found || found.multiple === true) {
+        if (found && found.multiple === true) {
+          live = null;
+          livePath = null;
+          break;
+        }
+        continue;
+      }
+      if (live) {
+        live = null;
+        livePath = null;
+        break;
+      }
+      live = { built, found };
+      livePath = path;
+      liveContent = String(content || "");
+    }
+    if (!live || !livePath) continue;
+    // Apply any prior daily edits for this path in this loop.
+    if (dailyEdits.has(livePath)) {
+      liveContent = dailyEdits.get(livePath).after;
+      try {
+        const rebuilt = taskCardTypeLedgerEntries(liveContent);
+        const refound = taskCardTypeFindLiveLink(rebuilt.details, blockId);
+        if (!refound || refound.multiple === true) continue;
+        live = { built: rebuilt, found: refound };
+      } catch (_error) {
+        continue;
+      }
+    }
+    let relocation = null;
+    try {
+      relocation = api.planRelocation({
+        entries: live.built.entries,
+        liveLink: live.found.entryIndex,
+        typeKey: newType.key,
+        typeName: newType.name,
+      });
+    } catch (_error) {
+      relocation = null;
+    }
+    if (!relocation || relocation.kind === "unchanged") continue;
+    if (relocation.kind === "refused") {
+      return {
+        dailyEdits,
+        relocated,
+        refused: {
+          typeName: relocation.typeName || newType.name,
+          themesBefore: Number(relocation.themesBefore) || 0,
+          cap: Number(relocation.cap) || 0,
+        },
+      };
+    }
+    let applied = null;
+    try {
+      applied = taskCardTypeApplyLedgerEdit(liveContent, relocation, live.found, live.built.details);
+    } catch (_error) {
+      applied = null;
+    }
+    if (!applied || applied.valid !== true || applied.after === liveContent) continue;
+    const before = snapshots.get(livePath);
+    if (typeof before !== "string") continue;
+    // If daily already has a repair edit in plan.changes, keep its before.
+    const existing = plan.changes.get(livePath);
+    const baseBefore = existing && typeof existing.before === "string" ? existing.before : before;
+    dailyEdits.set(livePath, Object.freeze({ before: baseBefore, after: applied.after }));
+    postMove.set(livePath, applied.after);
+    const sourceEntry = live.built.entries[live.found.entryIndex];
+    relocated.push(Object.freeze({
+      route: destinationPath.replace(/\.md$/, ""),
+      blockId,
+      from: sourceEntry && typeof sourceEntry.name === "string" ? sourceEntry.name : null,
+      to: relocation.newName || relocation.name || newType.name,
+      type: newType.name,
+    }));
+  }
+  return { dailyEdits, relocated, refused: null };
+}
+
 class BobNavigationHotkeysInboxRouteMixin {
 
   // Shared move plan-and-write core: snapshots the vault, plans with
@@ -126,6 +300,48 @@ class BobNavigationHotkeysInboxRouteMixin {
       return { ok: false, reason: `${plan.error}; nothing was moved` };
     }
 
+    // gesture-retype: note moves relocate the live link when the inherited
+    // type changes (D8). A task with an explicit field keeps its type.
+    let noteMoveRelocated = [];
+    try {
+      const relocation = planNoteMoveLedgerRelocation.call(this, {
+        sourcePath,
+        destinationPath,
+        sourceContent,
+        targets,
+        snapshots,
+        plan,
+      });
+      if (relocation && relocation.refused) {
+        return {
+          ok: false,
+          reason: `plan.strict: ${relocation.refused.typeName} would be type ${relocation.refused.themesBefore + 1} of ${relocation.refused.cap} · nothing written`,
+        };
+      }
+      if (relocation && relocation.dailyEdits && relocation.dailyEdits.size > 0) {
+        for (const [dailyPath, edit] of relocation.dailyEdits.entries()) {
+          const existing = plan.changes.get(dailyPath);
+          if (existing) {
+            plan.changes.set(
+              dailyPath,
+              Object.freeze({ before: existing.before, after: edit.after }),
+            );
+          } else {
+            const before = snapshots.get(dailyPath);
+            if (typeof before === "string") {
+              plan.changes.set(
+                dailyPath,
+                Object.freeze({ before, after: edit.after }),
+              );
+            }
+          }
+        }
+        noteMoveRelocated = relocation.relocated || [];
+      }
+    } catch (_error) {
+      noteMoveRelocated = [];
+    }
+
     const sourceChange = plan.changes.get(sourcePath);
     const sourceLines = splitMarkdownContent(sourceChange.after).lines;
     const sourceLine = Math.min(
@@ -212,6 +428,7 @@ class BobNavigationHotkeysInboxRouteMixin {
       destinationName,
       nextSourceLine: sourceLine,
       finalCursor,
+      relocated: noteMoveRelocated,
     };
   }
 

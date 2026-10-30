@@ -11370,6 +11370,23 @@ function getHomeDirectoryPath() {
 }
 
 // ---- src/100-yank-and-paths.js ----
+// Exact `_conflicts` path segment, matching vault-sync copies and bob-cli.
+function isConflictsNotePath(path) {
+  return String(path || "")
+    .split("/")
+    .some((part) => part === "_conflicts");
+}
+
+function isGeneratedNotePath(path) {
+  return String(path || "")
+    .split("/")
+    .some((part) => part === "_generated");
+}
+
+function isChildNotePickerExcludedPath(path) {
+  return isConflictsNotePath(path) || isGeneratedNotePath(path);
+}
+
 function getYankPathText(kind, relativePath, basePath, homePath) {
   const vaultRelativePath = normalizeVaultRelativePath(relativePath);
 
@@ -26945,12 +26962,6 @@ function parentNoteBasenameFromPath(path) {
   return leaf.toLowerCase().endsWith(".md") ? leaf.slice(0, -3) : leaf;
 }
 
-function isConflictsNotePath(path) {
-  return String(path || "")
-    .split("/")
-    .some((part) => part === "_conflicts");
-}
-
 function isTerminalProjectNoteInfo(noteInfo) {
   if (!noteInfo || noteInfo.kind !== "project") {
     return false;
@@ -30586,7 +30597,8 @@ function buildDependencyEditNoticeWithProject(summary, names = {}) {
 // Sub-project discovery and the pure top-down subtree planner
 // (`docs/task-dependencies.md` §13.3, §13.6, §13.19 PDS6/PDS15, PDG8–PDG13).
 // parent(K) matches bob projects sync's scalar wikilink (alias and heading
-// dropped, path kept) and resolves like NoteIndex::resolve.
+// dropped, path kept) and resolves like NoteIndex::resolve. `_conflicts/`
+// copies are skipped so they are never children and never resolve as parents.
 
 const PROJECT_SUBTREE_MAX_DEPTH = 16;
 
@@ -30763,7 +30775,7 @@ function buildProjectChildrenMap(files, frontmatterOf) {
   const notePaths = [];
   for (const file of list) {
     const path = filePathOf(file);
-    if (!path) {
+    if (!path || isConflictsNotePath(path)) {
       continue;
     }
     notePaths.push(path);
@@ -34944,7 +34956,8 @@ function collectTaskMoveDestinations(files, sourcePath, getNoteInfo) {
         path &&
         MARKDOWN_EXTENSION_RE.test(path) &&
         path !== source &&
-        !TASK_MOVE_TEMPLATE_PATHS.has(path)
+        !TASK_MOVE_TEMPLATE_PATHS.has(path) &&
+        !isConflictsNotePath(path)
       );
     })
     .map((file) => ({ file, noteInfo: infoFor(file) }))
@@ -88782,6 +88795,7 @@ class BobNavigationHotkeysNotesMoveMixin {
       .filter(
         (file) =>
           file.path !== parentFile.path &&
+          !isChildNotePickerExcludedPath(file.path) &&
           this.frontmatterFieldPointsToFile(
             this.app.metadataCache.getFileCache(file)?.frontmatter,
             "parent",
@@ -98252,6 +98266,9 @@ Object.assign(module.exports.helpers, {
   parentEmptyStateText,
   PARENT_PICKER_HINTS,
   ParentNotePickerModal,
+  isConflictsNotePath,
+  isGeneratedNotePath,
+  isChildNotePickerExcludedPath,
 });
 // ---- src/702-relation-mention-exports.js ----
 // §19 text-mention exports (`docs/task-relations.md` §19). Kept in this

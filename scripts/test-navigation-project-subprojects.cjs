@@ -203,6 +203,28 @@ test("buildProjectChildrenMap and descendants BFS skip cycles and cap depth", ()
   assert.equal(deep.includes("P17.md"), false);
 });
 
+test("buildProjectChildrenMap skips vault-sync conflict copies", () => {
+  const files = [
+    { path: "sase.md", text: parentNote() },
+    {
+      path: "child.md",
+      text: projectNote({ parent: '"[[sase]]"' }),
+    },
+    {
+      path: "_conflicts/child.kellys-mbp-2026-10-23T224729-0400.md",
+      text: projectNote({ parent: '"[[sase]]"' }),
+    },
+  ];
+  const children = buildProjectChildrenMap(files, (file) =>
+    projectParentFieldFromNoteText(file.text),
+  );
+  assert.deepEqual(children.get("sase.md"), ["child.md"]);
+  assert.equal(
+    (children.get("sase.md") || []).some((path) => path.includes("_conflicts")),
+    false,
+  );
+});
+
 test("PDS6: area, terminal, daily, and self-parent notes are not children", () => {
   const files = [
     { path: "N.md", text: parentNote() },

@@ -18,6 +18,7 @@ const {
   parentEmptyStateText,
   PARENT_PICKER_HINTS,
   ParentNotePickerModal,
+  isConflictsNotePath,
 } = helpers;
 
 function collectText(node) {
@@ -273,6 +274,14 @@ test("ranking prefers the current parent, kind weight, children, and recency", (
   assert.ok(names.indexOf("popular") < names.indexOf("plain") || names.indexOf("popular") < names.indexOf("recent"));
 });
 
+test("isConflictsNotePath matches an exact _conflicts path segment", () => {
+  assert.equal(isConflictsNotePath("_conflicts/x.md"), true);
+  assert.equal(isConflictsNotePath("a/_conflicts/x.md"), true);
+  assert.equal(isConflictsNotePath("_conflicts.md"), false);
+  assert.equal(isConflictsNotePath("my_conflicts/x.md"), false);
+  assert.equal(isConflictsNotePath("x.md"), false);
+});
+
 test("ranking excludes self, descendants, and _conflicts, and caps at 50", () => {
   const records = [
     rec("root.md"),
@@ -495,6 +504,52 @@ function stubOnload(plugin, commands) {
   plugin.registerCountedLaneToggleInputListeners = () => {};
   plugin.registerClearSearchHighlightInputListeners = () => {};
 }
+
+test("collectChildNotes hides _conflicts copies and _generated notes", () => {
+  const filesByPath = new Map();
+  const addFile = (path, parentTarget) => {
+    const basename = path.split("/").pop().replace(/\.md$/, "");
+    const file = { path, basename, extension: "md", name: `${basename}.md` };
+    filesByPath.set(path, file);
+    return { file, parentTarget };
+  };
+  const spec = [
+    addFile("dev.md", null),
+    addFile("dev_tools.md", "dev"),
+    addFile("_conflicts/sase.kellys-mbp-2026-10-23T224729-0400.md", "dev"),
+    addFile("_generated/queries/query/links/dev_links.md", "dev"),
+  ];
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = {
+    metadataCache: {
+      getFileCache: (file) => {
+        const match = spec.find((entry) => entry.file.path === file.path);
+        return {
+          frontmatter: match && match.parentTarget
+            ? { parent: `[[${match.parentTarget}]]` }
+            : {},
+        };
+      },
+      getFirstLinkpathDest: (lookup) => {
+        const needle = String(lookup || "").replace(/\.md$/, "");
+        for (const file of filesByPath.values()) {
+          if (file.basename === needle || file.path.replace(/\.md$/, "") === needle) {
+            return file;
+          }
+        }
+        return null;
+      },
+    },
+    vault: {
+      getMarkdownFiles: () => Array.from(filesByPath.values()),
+    },
+  };
+  const children = plugin.collectChildNotes(filesByPath.get("dev.md"));
+  assert.deepEqual(
+    children.map((file) => file.path),
+    ["dev_tools.md"],
+  );
+});
 
 test("change-parent-note is registered with Ctrl+Shift+-", () => {
   const plugin = new NavigationHotkeysPlugin();

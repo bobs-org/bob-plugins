@@ -258,7 +258,9 @@ the moved task; `N<Ctrl+Shift+M>` moves it plus the next N movable tasks. A
 move never advances the review walk, even from a landed row: the next `]s` /
 `[s` resumes at the moved row's walk neighbour, with `Ctrl+O` returning to the
 post-removal source seam and `Ctrl+I` returning to the first moved task without
-undoing the move.
+undoing the move. The move and inbox-route destination lists, and Open child
+note, never offer `bob vault-sync` conflict copies under `_conflicts/`; Open
+child note also hides `_generated/` notes.
 
 Project conversion and reversal keep Depends-On and inline dates on task lines.
 Promoting a task with real project tasks expands each live dedicated Pomodoro

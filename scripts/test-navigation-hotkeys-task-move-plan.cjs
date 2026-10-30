@@ -164,6 +164,7 @@ test("task move removal handles disjoint ranges, blank seams, and CRLF", () => {
 });
 
 test("task move destinations include areas and only open projects", () => {
+  const conflictPath = "_conflicts/Wip.kellys-mbp-2026-10-23T224729-0400.md";
   const files = [
     { path: "z/Waiting.md", basename: "Waiting" },
     { path: "Source.md", basename: "Source" },
@@ -172,6 +173,7 @@ test("task move destinations include areas and only open projects", () => {
     { path: "c/Done.md", basename: "Done" },
     { path: "d/Unknown.md", basename: "Unknown" },
     { path: "_templates/new_project.md", basename: "new_project" },
+    { path: conflictPath, basename: "Wip.kellys-mbp-2026-10-23T224729-0400" },
   ];
   const info = new Map([
     ["z/Waiting.md", helpers.getChildNoteInfo({ type: "[[project]]", status: "waiting" })],
@@ -181,6 +183,7 @@ test("task move destinations include areas and only open projects", () => {
     ["c/Done.md", helpers.getChildNoteInfo({ type: "[[project]]", status: "done" })],
     ["d/Unknown.md", helpers.getChildNoteInfo({ type: "[[project]]", status: "mystery" })],
     ["_templates/new_project.md", helpers.getChildNoteInfo({ type: "[[area]]" })],
+    [conflictPath, helpers.getChildNoteInfo({ type: "[[project]]", status: "wip" })],
   ]);
   const destinations = helpers.collectTaskMoveDestinations(
     files,
@@ -190,6 +193,10 @@ test("task move destinations include areas and only open projects", () => {
   assert.deepEqual(
     destinations.map((entry) => entry.file.path),
     ["a/Area.md", "b/Wip.md", "z/Waiting.md"],
+  );
+  assert.equal(
+    destinations.some((entry) => entry.file.path === conflictPath),
+    false,
   );
   assert.match(
     helpers.getChildNoteSearchText(

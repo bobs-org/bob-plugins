@@ -19,6 +19,7 @@ class BobNavigationHotkeysNotesMoveMixin {
       .filter(
         (file) =>
           file.path !== parentFile.path &&
+          !isChildNotePickerExcludedPath(file.path) &&
           this.frontmatterFieldPointsToFile(
             this.app.metadataCache.getFileCache(file)?.frontmatter,
             "parent",

@@ -1,3 +1,20 @@
+// Exact `_conflicts` path segment, matching vault-sync copies and bob-cli.
+function isConflictsNotePath(path) {
+  return String(path || "")
+    .split("/")
+    .some((part) => part === "_conflicts");
+}
+
+function isGeneratedNotePath(path) {
+  return String(path || "")
+    .split("/")
+    .some((part) => part === "_generated");
+}
+
+function isChildNotePickerExcludedPath(path) {
+  return isConflictsNotePath(path) || isGeneratedNotePath(path);
+}
+
 function getYankPathText(kind, relativePath, basePath, homePath) {
   const vaultRelativePath = normalizeVaultRelativePath(relativePath);
 

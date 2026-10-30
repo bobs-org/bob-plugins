@@ -16,12 +16,6 @@ function parentNoteBasenameFromPath(path) {
   return leaf.toLowerCase().endsWith(".md") ? leaf.slice(0, -3) : leaf;
 }
 
-function isConflictsNotePath(path) {
-  return String(path || "")
-    .split("/")
-    .some((part) => part === "_conflicts");
-}
-
 function isTerminalProjectNoteInfo(noteInfo) {
   if (!noteInfo || noteInfo.kind !== "project") {
     return false;

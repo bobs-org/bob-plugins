@@ -635,7 +635,8 @@ function collectTaskMoveDestinations(files, sourcePath, getNoteInfo) {
         path &&
         MARKDOWN_EXTENSION_RE.test(path) &&
         path !== source &&
-        !TASK_MOVE_TEMPLATE_PATHS.has(path)
+        !TASK_MOVE_TEMPLATE_PATHS.has(path) &&
+        !isConflictsNotePath(path)
       );
     })
     .map((file) => ({ file, noteInfo: infoFor(file) }))

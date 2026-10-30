@@ -1,7 +1,8 @@
 // Sub-project discovery and the pure top-down subtree planner
 // (`docs/task-dependencies.md` §13.3, §13.6, §13.19 PDS6/PDS15, PDG8–PDG13).
 // parent(K) matches bob projects sync's scalar wikilink (alias and heading
-// dropped, path kept) and resolves like NoteIndex::resolve.
+// dropped, path kept) and resolves like NoteIndex::resolve. `_conflicts/`
+// copies are skipped so they are never children and never resolve as parents.
 
 const PROJECT_SUBTREE_MAX_DEPTH = 16;
 
@@ -178,7 +179,7 @@ function buildProjectChildrenMap(files, frontmatterOf) {
   const notePaths = [];
   for (const file of list) {
     const path = filePathOf(file);
-    if (!path) {
+    if (!path || isConflictsNotePath(path)) {
       continue;
     }
     notePaths.push(path);

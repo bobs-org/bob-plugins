@@ -210,6 +210,33 @@ test("route destinations drop every inbox note, the source, and templates", () =
   );
 });
 
+test("inbox-route destinations omit vault-sync conflict copies", () => {
+  const conflictPath = "_conflicts/Wip.kellys-mbp-2026-10-23T224729-0400.md";
+  const files = [
+    { path: "Health.md", basename: "Health" },
+    { path: "Ship.md", basename: "Ship" },
+    { path: conflictPath, basename: "Wip.kellys-mbp-2026-10-23T224729-0400" },
+  ];
+  const info = new Map([
+    ["Health.md", helpers.getChildNoteInfo({ type: "[[area]]" })],
+    ["Ship.md", helpers.getChildNoteInfo({ type: "[[project]]", status: "wip" })],
+    [conflictPath, helpers.getChildNoteInfo({ type: "[[project]]", status: "wip" })],
+  ]);
+  const destinations = helpers.filterInboxRouteDestinations(
+    helpers.collectTaskMoveDestinations(
+      files,
+      "mac_inbox.md",
+      (file) => info.get(file.path),
+    ),
+    (path) => path === "inbox.md" || path === "mac_inbox.md",
+    "mac_inbox.md",
+  );
+  assert.deepEqual(
+    destinations.map((entry) => entry.file.path),
+    ["Health.md", "Ship.md"],
+  );
+});
+
 const AREA_DEST = ["---", 'type: "[[area]]"', "---", "", "## Tasks", ""].join("\n");
 const OPEN_PROJECT_DEST = ["---", 'type: "[[project]]"', "status: wip", "---", "", "## Tasks", ""].join("\n");
 const CLOSED_PROJECT_DEST = ["---", 'type: "[[project]]"', "status: done", "---", "", "## Tasks", ""].join("\n");

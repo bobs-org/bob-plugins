@@ -9,4 +9,7 @@ Object.assign(module.exports.helpers, {
   parentEmptyStateText,
   PARENT_PICKER_HINTS,
   ParentNotePickerModal,
+  isConflictsNotePath,
+  isGeneratedNotePath,
+  isChildNotePickerExcludedPath,
 });

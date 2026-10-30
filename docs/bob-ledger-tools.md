@@ -59,9 +59,9 @@ thematic breaks, YAML frontmatter delimiters, and other multi-hyphen text keep
 Obsidian's normal Tab behavior.
 
 The plugin also renders a live `bob-plan` block: a `TODAY 3/3 · 7/10` chip with
-the theme and link budget (its tooltip lists each theme with its link count),
+the type and link budget (its tooltip lists each type with its link count),
 `PENDING n/10`, `NEXT n/15`, and `READY n/100` chips that open the matching
-dashboard sections, the `★ GOALS · DECKS · BOB` theme line with the highlight
+dashboard sections, the `★ GOALS · DECKS · BOB` type line with the highlight
 starred, and one muted line per lint. READY is the shared live current backlog
 (Today excluded) and never changes the PLAN status; READY over its cap adds a
 `ready_cap_exceeded` lint line. PENDING and NEXT show the live dashboard section
@@ -70,7 +70,7 @@ unready) and turn red only for a strict section excess, while whole-lane
 pressure stays in the tooltip. `next_cap_exceeded` / `pending_cap_exceeded`
 lint lines appear only when the matching badge is red and quote its section
 count. Older daily notes follow
-today's live lanes while keeping their own TODAY theme and link budget.
+today's live lanes while keeping their own TODAY type and link budget.
 
 Today is read from the ledger at render time — the open tasks with a dedicated
 Task Link under today's open Pomodoros — and kept in a synchronous cache that
@@ -121,8 +121,8 @@ restores the unmarked rendering:
   teal identity hash glyph; Tasks query results hide the tag entirely because
   every row is already a task. Adjacent `#task #ref` pairs render as one teal
   open-book mark.
-- The task theme mark renders each explicit `[theme:: NAME]` /
-  `(theme:: NAME)` field on a task line as one readable PT6 pill in Live
+- The task type mark renders each explicit `[type:: NAME]` field (and legacy
+  `[theme:: NAME]` field) on a task line as one readable `#TYPE` mark in Live
   Preview, Reading view, and Tasks/Dataview task rows. The pill text is
   the canonical component spelling with normal text color and the shared
   16% light / 24% dark hue tint; there is no glyph and no `theme` label.
@@ -130,16 +130,16 @@ restores the unmarked rendering:
   invalid fields show the dashed repair treatment instead of a
   trustworthy pill. No field means no pill, even when a note or reading
   default exists; a stored field on a closed task still shows its
-  history. Native Dataview `theme | NAME` chips are replaced only when they
+  history. Native Dataview `type | NAME` chips are replaced only when they
   represent an explicit task-line field; a page-default `task.theme` is
   left alone. Surrounding links, emphasis, tags, and nested lists stay in
   place. Touching the field in Live Preview reveals the source; clicking
   the pill puts the caret in the field. Hover or focus resolves the
   inherited reason lazily from the originating note
-  (`Task theme FIX · sase_blog suggests WRITE · Ctrl+Shift+P t to change`;
+  (`Task type FIX · sase_blog suggests WRITE · Ctrl+Shift+P t to change`;
   reading and no-default rows use their shared phrases). Source
   mode, fenced code, inline code, and prose stay raw. The **Toggle task
-  theme marks** session command (default on) restores raw fields without
+  type marks** session command (default on) restores raw fields without
   writing them, independent of **Toggle Pomodoro theme colors** (default
   on), which keeps readable pills when colors are off.
 - The root mark renders each explicit `[root:: NOTE]` / `(root:: NOTE)` task
@@ -155,14 +155,14 @@ daily `bob-plan` blocks as live section-over-cap counts that agree with their
 Tasks sections (the BLOCKED badge stays informational and neutral with no
 cap), the CROWDED chip, the `bob-ready-notes` ranked-bar block, `## Tasks`
 heading chips, Pomodoro home chips (quiet lowercase chips with area-hue dots
-derived from linked task notes, following each task's `[root:: NOTE]` field), Pomodoro theme pills (one soft tint per
+derived from linked task notes, following each task's `[root:: NOTE]` field), Pomodoro type pills (one soft tint per
 `+`-separated component of the ` — NAME` tail, with a gray pill for exempt
-themes such as PLAN, a tooltip naming the hue and day count, and a session
+types such as PLAN, a tooltip naming the hue and day count, and a session
 toggle now active in every window through the shared tint gate), and the display-only 🍅 Today mark on open
 task lines linked under today's open Pomodoros, with a session toggle and a
 jump to the Task Link. A name the catalog does not know stays neutral on the
 cursor line while it is typed.
-The shared behavior and hue contract is [Pomodoro themes](https://bobs-org.github.io/pomodoro-themes/).
+The shared behavior and hue contract is [Task types](https://bobs-org.github.io/task-types/).
 
 The **Day strip** is a read-only daily Stats receipt rendered above the
 `bob-plan` badges of canonical daily notes, in Live Preview and Reading view.
@@ -170,18 +170,17 @@ It shows that note's own day as a row of stacked stats (a small uppercase
 label over a large value over a quiet typical-day line on each numeric
 fact), followed by two lanes on the same working
 minutes: the root-parent legend with `so far · HH:MM` over the
-root-parent bar, then a theme legend over the full-width theme bar that
+root-parent bar, then a type legend over the full-width type bar that
 separates the strip from the badges — and paints from bob's Stats
 report; it never changes the note and never writes the vault. A quiet
 switch at the right of the top lane cycles both bars → root parents only
-→ themes only, for every daily note at once; the choice is remembered on
+→ types only, for every daily note at once; the choice is remembered on
 this device. Review
 closed shows a green check, a red ✕, or the yellow In Progress half-ring
 while today's review is still open. The roots bar groups working time
 by root parent (falling back to areas with an honest "Time by area" label when
-bob predates `root_parent`). The theme bar groups the same minutes by
-Pomodoro theme and wears each theme's hue; clicking it opens Stats on
-the Themes view. Each legend fits as many names as its line holds.
+bob predates `root_parent`). The type bar groups the same minutes by task type and wears each type's hue;
+clicking it opens Stats on the Types view. Each legend fits as many names as its line holds.
 Daily notes without a `bob-plan` block show no strip. To place one explicitly,
 add a `bob-day-stats` code fence in any note, optionally with `day: YYYY-MM-DD`.
 A fence placed inside a daily note simply renders its own strip.
@@ -193,10 +192,10 @@ Depends-On rows only, with a session toggle; `waiting on N` counts open
 prerequisites only. Open BLOCKS rows add ＋ to open the reverse Blocks stage
 and hover × to remove a dependent. The Stats `bob-stats` block renders two window time bars above the tiles
 that split the selected window's worked minutes by root parent and by
-Pomodoro theme, then the responsive Root parents panel with Root parents
-and Themes views, area groups with sub-project disclosure, bucket fix-it
-copy, and session drill-down, plus task counts; the Themes view wears
-each theme's hue on its bars, with exempt themes and `other` in gray. The `★` theme line of
+task type, then the responsive Root parents panel with Root parents
+and Types views, area groups with sub-project disclosure, bucket fix-it
+copy, and session drill-down, plus task counts; the Types view wears
+each type's hue on its bars, with exempt types and `other` in gray. The `★` type line of
 the plan block renders the same pills. The read-only `bob-reading-board` block
 renders a Reading / Next / Ready / Snoozed kanban of the reading queue drawn
 entirely from `bob ref list` JSON — wake dates and waiting-on reasons come from
@@ -248,7 +247,7 @@ its only registered default hotkey.
 `bob-day-stats` fence.
 
 `Cycle Day stats bars` cycles the Day strip bars switch (both bars → root
-parents only → themes only) for every strip on this device, with a Notice
+parents only → types only) for every strip on this device, with a Notice
 naming the new view. It works with no strip on screen, since it changes the
 view the next strip paints.
 
@@ -264,7 +263,7 @@ when pressed again on that home tab.
 
 When Bob Command Mode is enabled, this plugin listens for its
 `bob-command-mode:run-finished` workspace event and refreshes the caches a
-finished run invalidates: the theme catalog, relation labels and the relation
+finished run invalidates: the type catalog, relation labels and the relation
 index, stats data, the Reading Board, and the plan, freshness, and Today
 views. Tags this plugin does not own are ignored.
 

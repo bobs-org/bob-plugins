@@ -116,7 +116,7 @@ Pomodoros, and marks dependency-blocked tasks.
 
 `Ctrl+Shift+Enter` and `^^` stamp the target task's freshness
 (`[fresh:: today]`) through Bob Ledger Tools whenever they rewrite its line.
-A theme-only edit on an already Next task does not stamp freshness.
+A type-only edit on an already Next task does not stamp freshness.
 Link, unlink, and Task Link notices append the live plan budget
 (`· plan T/3 · L/10`, with 🔴 when over the cap) from Bob Ledger Tools.
 

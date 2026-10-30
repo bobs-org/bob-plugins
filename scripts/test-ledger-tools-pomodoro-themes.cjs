@@ -644,33 +644,6 @@ test("theme task-field vectors execute parse, byte-preserving setters, and clear
   }
 });
 
-test("theme write-rule vectors execute the deliberate-choice decision", () => {
-  assert.ok(fixture.write_rule.length > 0);
-  for (const item of fixture.write_rule) {
-    if (item.rust_only) {
-      continue;
-    }
-    const field =
-      item.field === "none"
-        ? { state: "none" }
-        : item.field === "set"
-          ? { state: "set", key: item.field_key }
-          : { state: "repair", repair: "invalid" };
-    const change = pomodoroThemePlanChange({
-      field,
-      suggestion: item.suggestion,
-      inherited: item.inherited,
-      destinationName: item.destination,
-      exemptKeys: item.exempt,
-      deliberate: item.deliberate,
-    });
-    assert.equal(change.action, item.expected, `write_rule: ${item.id}`);
-    if (item.expected === "set") {
-      assert.equal(change.name, item.name, `write_rule: ${item.id}`);
-    }
-  }
-});
-
 function routingSources(caseItem) {
   return {
     vocab: caseItem.vocab,

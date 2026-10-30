@@ -105,15 +105,12 @@ notice reports the outcome exactly once. Successor picks carrying a destination
 override insert at the verified existing entry or a created `- [ ] () — NAME`
 placeholder.
 
-Only a deliberate retarget with a shown suggestion can remember the task theme:
-the picked successor's `[theme:: NAME]` field is set or cleared through the
-Ledger Tools write rule after status recovery and before block-ID/freshness
-assembly. Default anchor/implicit placements, unpicked offers, link-once
-(`Alt+Enter`), untouched preselection, missing suggestions, stale tasks or
-destinations, and unnamed/all-exempt/composite destinations never write. A
-changed suggestion keeps the link but skips the field and reports why; a saved
-theme survives a later daily-link failure and the same-day take-back restores
-the consolidated post-image consistently.
+Successor offers use the selected task's effective type to choose a destination.
+An explicit retarget applies the retype rule to keep its field and live Task Link
+in agreement. Default placements, unpicked offers, stale tasks, and stale
+destinations do not write a type field. A later daily-link failure preserves the
+task's committed type change, and a same-day take-back restores the consolidated
+post-image consistently.
 
 Reopening the predecessor the same day through `Ctrl+Enter` takes back
 untouched successor links and restores their statuses from an in-memory receipt

@@ -574,9 +574,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       if (
         !fresh ||
         fresh.actionableCount !== cached.actionableCount ||
-        fresh.counts.roll !== cached.counts.roll ||
-        fresh.counts.decay !== cached.counts.decay ||
-        fresh.counts.cancel !== cached.counts.cancel ||
+        !samePriorityRecommendationCounts(fresh.counts, cached.counts) ||
         Boolean(fresh.unavailableReason) !==
           Boolean(cached.unavailableReason)
       ) {
@@ -611,10 +609,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
     const entries = Array.isArray(cached.entries) ? cached.entries : [];
     const schedulingEntries = entries.filter(
       (entry) =>
-        entry &&
-        entry.recommendation &&
-        (entry.recommendation.kind === "roll" ||
-          entry.recommendation.kind === "decay"),
+        entry && isDatedPriorityRecommendation(entry.recommendation),
     );
     const countedAction = this.describeInboxRouteCountedRollAction(cached);
     const runCountedRoll = async (schedulingWorkLog) =>
@@ -681,9 +676,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       if (
         !fresh ||
         fresh.actionableCount !== cached.actionableCount ||
-        fresh.counts.roll !== cached.counts.roll ||
-        fresh.counts.decay !== cached.counts.decay ||
-        fresh.counts.cancel !== cached.counts.cancel ||
+        !samePriorityRecommendationCounts(fresh.counts, cached.counts) ||
         Boolean(fresh.unavailableReason) !==
           Boolean(cached.unavailableReason)
       ) {
@@ -703,10 +696,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
     const entries = Array.isArray(cached.entries) ? cached.entries : [];
     const schedulingEntries = entries.filter(
       (entry) =>
-        entry &&
-        entry.recommendation &&
-        (entry.recommendation.kind === "roll" ||
-          entry.recommendation.kind === "decay"),
+        entry && isDatedPriorityRecommendation(entry.recommendation),
     );
     if (schedulingEntries.length === 0) {
       return await this.plugin.applyLinkRecommendedRoll(this);

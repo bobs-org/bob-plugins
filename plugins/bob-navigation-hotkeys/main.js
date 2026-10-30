@@ -3688,8 +3688,43 @@ function planPriorityRollRecommendation(options = {}) {
       }
     }
   }
+  const baseDate =
+    options.baseDate instanceof Date ? options.baseDate : new Date();
+  const random = typeof options.random === "function" ? options.random : Math.random;
+  const currentScheduled = normalizeBulletPropertyValue(options.currentScheduled);
   if (currentValue === "") {
-    return null;
+    const assignLevel = levels[0] || null;
+    if (
+      !assignLevel ||
+      !normalizeBulletPropertyValue(assignLevel.label) ||
+      !normalizeBulletPropertyValue(assignLevel.value) ||
+      !getPriorityRollBounds(assignLevel)
+    ) {
+      return null;
+    }
+    const assignRoll = rollPriorityRecommendationDate(
+      assignLevel,
+      baseDate,
+      random,
+      currentScheduled,
+    );
+    return Object.freeze({
+      kind: "assign",
+      level: assignLevel,
+      levelIndex: 0,
+      fromLabel: IMPLICIT_PRIORITY_LEVEL_LABEL,
+      streak: 0,
+      limit: getPriorityLevelRollLimit(property, assignLevel),
+      step: null,
+      date: formatBulletPropertyDate(assignRoll.date),
+      offset: assignRoll.offset,
+      reason: formatPriorityRollScheduleReason({
+        source: "priority",
+        fromLevelLabel: IMPLICIT_PRIORITY_LEVEL_LABEL,
+        level: assignLevel,
+        rolledDays: assignRoll.offset,
+      }),
+    });
   }
   const level =
     property.levelsByValue instanceof Map
@@ -3704,10 +3739,6 @@ function planPriorityRollRecommendation(options = {}) {
     ? Math.max(0, Math.floor(Number(streak)))
     : 0;
   const limit = getPriorityLevelRollLimit(property, level);
-  const baseDate =
-    options.baseDate instanceof Date ? options.baseDate : new Date();
-  const random = typeof options.random === "function" ? options.random : Math.random;
-  const currentScheduled = normalizeBulletPropertyValue(options.currentScheduled);
 
   if (limit === null || streakCount < limit) {
     const step = limit === null ? null : streakCount + 1;
@@ -3783,6 +3814,36 @@ function planPriorityRollRecommendation(options = {}) {
     offset: null,
     reason: formatPriorityDecayCancelReason({ level, streak: streakCount }),
   });
+}
+
+// Whether a recommendation carries a pre-rolled date (roll, decay, and
+// assign all do; cancel and unavailable do not).
+function isDatedPriorityRecommendation(recommendation) {
+  return Boolean(
+    recommendation &&
+      (recommendation.kind === "roll" ||
+        recommendation.kind === "decay" ||
+        recommendation.kind === "assign"),
+  );
+}
+
+// Compare two count maps for the reroll guards: same roll/decay/cancel/assign
+// totals. Missing maps count as zero.
+function samePriorityRecommendationCounts(a, b) {
+  const left = (a && typeof a === "object" && a.counts) || a || {};
+  const right = (b && typeof b === "object" && b.counts) || b || {};
+  return (
+    numericOrDefault(left.roll, 0) === numericOrDefault(right.roll, 0) &&
+    numericOrDefault(left.decay, 0) === numericOrDefault(right.decay, 0) &&
+    numericOrDefault(left.cancel, 0) === numericOrDefault(right.cancel, 0) &&
+    numericOrDefault(left.assign, 0) === numericOrDefault(right.assign, 0)
+  );
+}
+
+// The level label bound to card key `1`, for batch copy fallbacks.
+function getPriorityAssignLevelLabel(property) {
+  const levels = property && Array.isArray(property.levels) ? property.levels : [];
+  return normalizeBulletPropertyValue(levels[0] && levels[0].label);
 }
 
 // Pure copy for the `scheduled` row's roll-preview line. All display strings
@@ -3874,6 +3935,30 @@ function buildPriorityRollPreviewModel(recommendation, baseDate) {
     });
   }
 
+  if (kind === "assign") {
+    const level = recommendation.level || {};
+    const label = normalizeBulletPropertyValue(level.label);
+    if (!label) {
+      return null;
+    }
+    const dated = formatDatedLine(recommendation.date);
+    const fromLabel =
+      normalizeBulletPropertyValue(recommendation.fromLabel) ||
+      IMPLICIT_PRIORITY_LEVEL_LABEL;
+    return Object.freeze({
+      kind: "assign",
+      icon: "signal-high",
+      tone: "accent",
+      action: `${fromLabel} → ${label}`,
+      dateText: dated.dateText,
+      dateValue: normalizeBulletPropertyValue(recommendation.date),
+      meta: "no priority",
+      metaTone: "info",
+      footerLabel: `Set ${label}`,
+      ariaLabel: `Ctrl+Enter: set ${label} (no priority) to ${dated.ariaDate}`,
+    });
+  }
+
   if (kind === "cancel") {
     const level = recommendation.level || {};
     const label = normalizeBulletPropertyValue(level.label);
@@ -3934,7 +4019,7 @@ function planPriorityRollRecommendationsForTargets(
       property: property || null,
       schedulesName: "",
       entries: Object.freeze([]),
-      counts: Object.freeze({ roll: 0, decay: 0, cancel: 0, unavailable: 0 }),
+      counts: Object.freeze({ roll: 0, decay: 0, cancel: 0, assign: 0, unavailable: 0 }),
       total: list.length,
       actionableCount: 0,
       skippedCount: list.length,
@@ -3955,6 +4040,7 @@ function planPriorityRollRecommendationsForTargets(
   let roll = 0;
   let decay = 0;
   let cancel = 0;
+  let assign = 0;
   let unavailable = 0;
   const dated = [];
   let unavailableReason = null;
@@ -3997,36 +4083,26 @@ function planPriorityRollRecommendationsForTargets(
     const currentValue = normalizeBulletPropertyValue(
       field && field.value,
     );
-    if (!currentValue) {
-      entries.push(
-        Object.freeze({
-          line: lineIndex,
-          rawLine,
-          recommendation: null,
-          skipped: "no-priority",
-          currentValue: "",
-        }),
-      );
-      continue;
-    }
-    const level =
-      property.levelsByValue instanceof Map
-        ? property.levelsByValue.get(currentValue)
-        : (Array.isArray(property.levels) ? property.levels : []).find(
-            (candidate) =>
-              candidate && candidate.value === currentValue,
-          );
-    if (!level) {
-      entries.push(
-        Object.freeze({
-          line: lineIndex,
-          rawLine,
-          recommendation: null,
-          skipped: "unconfigured",
-          currentValue,
-        }),
-      );
-      continue;
+    if (currentValue) {
+      const level =
+        property.levelsByValue instanceof Map
+          ? property.levelsByValue.get(currentValue)
+          : (Array.isArray(property.levels) ? property.levels : []).find(
+              (candidate) =>
+                candidate && candidate.value === currentValue,
+            );
+      if (!level) {
+        entries.push(
+          Object.freeze({
+            line: lineIndex,
+            rawLine,
+            recommendation: null,
+            skipped: "unconfigured",
+            currentValue,
+          }),
+        );
+        continue;
+      }
     }
     let currentScheduled = "";
     try {
@@ -4077,6 +4153,9 @@ function planPriorityRollRecommendationsForTargets(
     } else if (recommendation.kind === "decay") {
       decay += 1;
       dated.push(recommendation.date);
+    } else if (recommendation.kind === "assign") {
+      assign += 1;
+      dated.push(recommendation.date);
     } else if (recommendation.kind === "cancel") {
       cancel += 1;
     } else if (recommendation.kind === "unavailable") {
@@ -4100,6 +4179,7 @@ function planPriorityRollRecommendationsForTargets(
       entry.recommendation &&
       (entry.recommendation.kind === "roll" ||
         entry.recommendation.kind === "decay" ||
+        entry.recommendation.kind === "assign" ||
         entry.recommendation.kind === "cancel"),
   );
   const sortedDates = dated
@@ -4132,7 +4212,7 @@ function planPriorityRollRecommendationsForTargets(
     property,
     schedulesName,
     entries: Object.freeze(entries),
-    counts: Object.freeze({ roll, decay, cancel, unavailable }),
+    counts: Object.freeze({ roll, decay, cancel, assign, unavailable }),
     total: list.length,
     actionableCount: actionable.length,
     skippedCount,
@@ -4161,7 +4241,7 @@ function planLinkRollBatchSummary(resolvedTargets, property, options = {}) {
       property: property || null,
       schedulesName: "",
       entries: Object.freeze([]),
-      counts: Object.freeze({ roll: 0, decay: 0, cancel: 0, unavailable: 0 }),
+      counts: Object.freeze({ roll: 0, decay: 0, cancel: 0, assign: 0, unavailable: 0 }),
       total: 0,
       actionableCount: 0,
       skippedCount: 0,
@@ -4198,7 +4278,7 @@ function planLinkRollBatchSummary(resolvedTargets, property, options = {}) {
       );
     }
   }
-  const counts = { roll: 0, decay: 0, cancel: 0, unavailable: 0 };
+  const counts = { roll: 0, decay: 0, cancel: 0, assign: 0, unavailable: 0 };
   let actionableCount = 0;
   let skippedCount = 0;
   let unavailableReason = null;
@@ -4207,6 +4287,7 @@ function planLinkRollBatchSummary(resolvedTargets, property, options = {}) {
     counts.roll += summary.counts.roll;
     counts.decay += summary.counts.decay;
     counts.cancel += summary.counts.cancel;
+    counts.assign += summary.counts.assign || 0;
     counts.unavailable += summary.counts.unavailable;
     actionableCount += summary.actionableCount;
     skippedCount += summary.skippedCount;
@@ -4298,12 +4379,18 @@ function buildBatchPriorityRollPreviewModel(summary) {
   const roll = Math.max(0, Math.floor(numericOrDefault(counts.roll, 0)));
   const decayCount = Math.max(0, Math.floor(numericOrDefault(counts.decay, 0)));
   const cancelCount = Math.max(0, Math.floor(numericOrDefault(counts.cancel, 0)));
+  const assignCount = Math.max(0, Math.floor(numericOrDefault(counts.assign, 0)));
+  const assignLabel = normalizeBulletPropertyValue(
+    summary.property
+      ? getPriorityAssignLevelLabel(summary.property)
+      : "",
+  );
   const actionable = Math.max(
     0,
     Math.floor(
       numericOrDefault(
         summary.actionableCount,
-        roll + decayCount + cancelCount,
+        roll + decayCount + cancelCount + assignCount,
       ),
     ),
   );
@@ -4342,6 +4429,9 @@ function buildBatchPriorityRollPreviewModel(summary) {
   if (cancelCount > 0) {
     parts.push(`${cancelCount} cancel`);
   }
+  if (assignCount > 0) {
+    parts.push(assignLabel ? `${assignCount} set ${assignLabel}` : `${assignCount} set`);
+  }
   const action = `${actionable} ${actionable === 1 ? "task" : "tasks"}${
     parts.length > 0 ? ` · ${parts.join(" · ")}` : ""
   }`;
@@ -4358,7 +4448,8 @@ function buildBatchPriorityRollPreviewModel(summary) {
     Math.floor(numericOrDefault(summary.skippedCount, 0)),
   );
   const meta = skipped > 0 ? `${skipped} skipped` : "";
-  const allRoll = roll === actionable && decayCount === 0 && cancelCount === 0;
+  const allRoll =
+    roll === actionable && decayCount === 0 && cancelCount === 0 && assignCount === 0;
   const footerLabel = allRoll
     ? `Roll ${actionable} ${actionable === 1 ? "task" : "tasks"}`
     : `Apply ${actionable} ${actionable === 1 ? "recommendation" : "recommendations"}`;
@@ -5903,10 +5994,7 @@ function planRecommendedRollBatch(
     }
     if (recommendation.kind === "cancel") {
       cancelEntries.push({ target, recommendation });
-    } else if (
-      recommendation.kind === "roll" ||
-      recommendation.kind === "decay"
-    ) {
+    } else if (isDatedPriorityRecommendation(recommendation)) {
       updateEntries.push({ target, recommendation });
     }
   }
@@ -6029,6 +6117,9 @@ function planRecommendedRollBatch(
   const decayedCount = updateEntries.filter(
     (entry) => entry.recommendation.kind === "decay",
   ).length;
+  const assignedCount = updateEntries.filter(
+    (entry) => entry.recommendation.kind === "assign",
+  ).length;
   const cancelledCount = cancelEntries.length;
   const futureScheduledTaskLines = priorityPlan
     ? Array.from(priorityPlan.futureScheduledTaskLines || [])
@@ -6047,6 +6138,7 @@ function planRecommendedRollBatch(
     priorityPlan,
     rolledCount,
     decayedCount,
+    assignedCount,
     cancelledCount,
     futureScheduledTaskLines: Object.freeze(futureScheduledTaskLines),
     cancelledEntries: Object.freeze(cancelledEntries),
@@ -20176,7 +20268,7 @@ function isRecommendedRollKeydown(event) {
 }
 
 // The task's current level label for a recommendation: the roll/cancel level,
-// or the decay's from level.
+// the decay's from level, or the implicit P0 for an assign.
 function getPriorityRollCurrentLabel(recommendation) {
   if (!recommendation) {
     return "";
@@ -20185,6 +20277,9 @@ function getPriorityRollCurrentLabel(recommendation) {
     return normalizeBulletPropertyValue(
       recommendation.fromLevel && recommendation.fromLevel.label,
     );
+  }
+  if (recommendation.kind === "assign") {
+    return IMPLICIT_PRIORITY_LEVEL_LABEL;
   }
   return normalizeBulletPropertyValue(
     recommendation.level && recommendation.level.label,
@@ -20541,7 +20636,11 @@ function isSamePriorityRollTarget(cached, fresh) {
         normalizeBulletPropertyValue(fresh.toLevel && fresh.toLevel.label)
     );
   }
-  if (cached.kind === "roll" || cached.kind === "cancel") {
+  if (
+    cached.kind === "roll" ||
+    cached.kind === "assign" ||
+    cached.kind === "cancel"
+  ) {
     return (
       normalizeBulletPropertyValue(cached.level && cached.level.label) ===
       normalizeBulletPropertyValue(fresh.level && fresh.level.label)
@@ -39498,6 +39597,12 @@ function buildPriorityNoticeModel(options = {}) {
 function buildBatchPriorityRollNoticeModel(batch, options = {}) {
   const counts = (batch && batch.counts) || {};
   const rolled = Math.max(0, Math.floor(numericOrDefault(counts.roll, 0)));
+  const assigned = Math.max(0, Math.floor(numericOrDefault(counts.assign, 0)));
+  const assignLabel = normalizeBulletPropertyValue(
+    batch && batch.property
+      ? getPriorityAssignLevelLabel(batch.property)
+      : "",
+  );
   const decayed = Math.max(0, Math.floor(numericOrDefault(counts.decay, 0)));
   const cancelled = Math.max(0, Math.floor(numericOrDefault(counts.cancel, 0)));
   const actionable = Math.max(
@@ -39505,7 +39610,7 @@ function buildBatchPriorityRollNoticeModel(batch, options = {}) {
     Math.floor(
       numericOrDefault(
         batch && batch.actionableCount,
-        rolled + decayed + cancelled,
+        rolled + assigned + decayed + cancelled,
       ),
     ),
   );
@@ -39527,6 +39632,16 @@ function buildBatchPriorityRollNoticeModel(batch, options = {}) {
     leadingChips.push(
       Object.freeze({
         text: `${rolled} rolled`,
+        tone: "info",
+      }),
+    );
+  }
+  if (assigned > 0) {
+    leadingChips.push(
+      Object.freeze({
+        text: assignLabel
+          ? `${assigned} set ${assignLabel}`
+          : `${assigned} set`,
         tone: "info",
       }),
     );
@@ -45817,6 +45932,7 @@ function taskCardPriorityRecommendation(context, session, priorityProperty) {
     const actionable =
       (summary.counts.roll || 0) +
       (summary.counts.decay || 0) +
+      (summary.counts.assign || 0) +
       (summary.counts.cancel || 0);
     if (actionable === 0 && !summary.unavailableReason) {
       return null;
@@ -45845,6 +45961,7 @@ function taskCardPriorityRecommendation(context, session, priorityProperty) {
     const actionable =
       (summary.counts.roll || 0) +
       (summary.counts.decay || 0) +
+      (summary.counts.assign || 0) +
       (summary.counts.cancel || 0);
     if (actionable === 0 && !summary.unavailableReason) {
       return null;
@@ -45909,6 +46026,7 @@ function taskCardPriorityRecommendation(context, session, priorityProperty) {
     effects: Object.freeze({
       roll: recommendation.kind === "roll" ? 1 : 0,
       decay: recommendation.kind === "decay" ? 1 : 0,
+      assign: recommendation.kind === "assign" ? 1 : 0,
       cancel: recommendation.kind === "cancel" ? 1 : 0,
       unavailable: recommendation.kind === "unavailable" ? 1 : 0,
     }),
@@ -49306,6 +49424,12 @@ function renderTaskCardView(container, model, options = {}) {
     if (recommendation.kind === "batch") {
       const counts = recommendation.effects || {};
       const skipped = recommendation.skippedCount || 0;
+      const assignCount = Math.max(0, Math.floor(numericOrDefault(counts.assign, 0)));
+      const assignLabel = normalizeBulletPropertyValue(
+        recommendation.source &&
+          recommendation.source.property &&
+          getPriorityAssignLevelLabel(recommendation.source.property),
+      );
       banner.createDiv({
         cls: "bob-task-card-banner-batch",
         text: [
@@ -49315,6 +49439,11 @@ function renderTaskCardView(container, model, options = {}) {
           counts.roll ? `${counts.roll} roll` : "",
           counts.decay ? `${counts.decay} decay` : "",
           counts.cancel ? `${counts.cancel} cancel` : "",
+          assignCount
+            ? assignLabel
+              ? `${assignCount} set ${assignLabel}`
+              : `${assignCount} set`
+            : "",
           skipped ? `${skipped} skipped` : "",
         ]
           .filter(Boolean)
@@ -50039,6 +50168,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       effects: Object.freeze({
         roll: source.kind === "roll" ? 1 : 0,
         decay: source.kind === "decay" ? 1 : 0,
+        assign: source.kind === "assign" ? 1 : 0,
         cancel: source.kind === "cancel" ? 1 : 0,
       }),
       targetCount: 1,
@@ -53615,6 +53745,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       const actionable =
         (summary.counts.roll || 0) +
         (summary.counts.decay || 0) +
+        (summary.counts.assign || 0) +
         (summary.counts.cancel || 0);
       const hasAny =
         actionable > 0 || Boolean(summary.unavailableReason);
@@ -53671,6 +53802,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       const actionable =
         (summary.counts.roll || 0) +
         (summary.counts.decay || 0) +
+        (summary.counts.assign || 0) +
         (summary.counts.cancel || 0);
       const hasAny =
         actionable > 0 || Boolean(summary.unavailableReason);
@@ -53736,11 +53868,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
     if (!fresh || fresh.actionableCount <= 0 || fresh.unavailableReason) {
       return false;
     }
-    if (
-      fresh.counts.roll !== cached.counts.roll ||
-      fresh.counts.decay !== cached.counts.decay ||
-      fresh.counts.cancel !== cached.counts.cancel
-    ) {
+    if (!samePriorityRecommendationCounts(fresh.counts, cached.counts)) {
       return false;
     }
     this.linkRollBatch = fresh;
@@ -53781,11 +53909,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
     if (!fresh || fresh.actionableCount <= 0 || fresh.unavailableReason) {
       return false;
     }
-    if (
-      fresh.counts.roll !== cached.counts.roll ||
-      fresh.counts.decay !== cached.counts.decay ||
-      fresh.counts.cancel !== cached.counts.cancel
-    ) {
+    if (!samePriorityRecommendationCounts(fresh.counts, cached.counts)) {
       return false;
     }
     this.countedRollBatch = fresh;
@@ -53880,7 +54004,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         this.returnHome({ rebuild: true });
         return false;
       }
-      if (cached.kind === "roll" || cached.kind === "decay") {
+      if (isDatedPriorityRecommendation(cached)) {
         return await this.maybeOfferRecommendedWorkLog(cached);
       }
       if (cached.kind === "cancel") {
@@ -53907,7 +54031,10 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       if (cached.kind === "roll") {
         return await this.applyRecommendedRollWrite(cached);
       }
-      return await this.applyRecommendedDecayWrite(cached);
+      if (cached.kind === "decay") {
+        return await this.applyRecommendedDecayWrite(cached);
+      }
+      return await this.applyRecommendedAssignWrite(cached);
     }
     const scheduleSummary = cached.date
       ? `scheduled → ${normalizeBulletPropertyValue(cached.date)}`
@@ -53929,7 +54056,10 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         if (cached.kind === "roll") {
           return await this.applyRecommendedRollWrite(cached, schedulingWorkLog);
         }
-        return await this.applyRecommendedDecayWrite(cached, schedulingWorkLog);
+        if (cached.kind === "decay") {
+          return await this.applyRecommendedDecayWrite(cached, schedulingWorkLog);
+        }
+        return await this.applyRecommendedAssignWrite(cached, schedulingWorkLog);
       },
     });
   }
@@ -54136,6 +54266,49 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
     return await decayWrite();
   }
 
+  async applyRecommendedAssignWrite(recommendation, schedulingWorkLog = null) {
+    const property = this.findPriorityPropertyByName(
+      recommendation.priorityName,
+    );
+    if (!property || !recommendation.level) {
+      new Notice("Task changed while the picker was open; nothing was written");
+      return false;
+    }
+    const liveContext = getProjectNotePropertyContext(
+      this.getEditorContent(),
+      this.cursor.line,
+    );
+    const levelLabel = normalizeBulletPropertyValue(
+      recommendation.level && recommendation.level.label,
+    );
+    const assignAction = {
+      label: levelLabel ? `set ${levelLabel}` : "set priority",
+    };
+    const assignWrite = async () =>
+      await this.plugin.setBulletPriorityValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.lineText,
+        property,
+        recommendation.level,
+        {
+          propertyContext: liveContext,
+          baseDate: this.valueBaseDate,
+          random: this.priorityRandom,
+          precomputedRoll: {
+            date: recommendation.date,
+            offset: recommendation.offset,
+          },
+          schedulingWorkLog,
+        },
+      );
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(assignAction, assignWrite);
+    }
+    return await assignWrite();
+  }
+
   async applyRecommendedCancelWrite(recommendation) {
     return await this.plugin.applyTaskCancelFromPicker(this, {
       reason: formatPriorityDecayCancelReason({
@@ -54248,8 +54421,8 @@ function formatQuickRollWindowDays(level) {
 
 // Concise preview of exactly what Alt+P would do, from the same
 // recommendation the key uses. Frozen `{ ok: true, kind, line, compact,
-// detail }`, or frozen `{ ok: false, reason }` for unavailable, no
-// priority, closed, and non-task lines. `cancelConfirms` selects the
+// detail }`, or frozen `{ ok: false, reason }` for unavailable, closed,
+// and non-task lines. `cancelConfirms` selects the
 // confirm (default) or immediate-cancel strings.
 function planQuickRollPreview(recommendation, options = {}) {
   const rawLabel = options.keyLabel;
@@ -54320,6 +54493,26 @@ function planQuickRollPreview(recommendation, options = {}) {
       detail: windowDays
         ? `${keyLabel}: decay ${fromLabel} → ${toLabel}, ${windowDays}`
         : `${keyLabel}: decay ${fromLabel} → ${toLabel}`,
+    });
+  }
+  if (kind === "assign") {
+    const label = normalizeBulletPropertyValue(
+      recommendation.level && recommendation.level.label,
+    );
+    if (!label) {
+      return Object.freeze({ ok: false, reason: "no-level" });
+    }
+    const window = formatQuickRollWindow(recommendation.level);
+    const windowDays = formatQuickRollWindowDays(recommendation.level);
+    const compact = `${keyLabel} set ${label}`;
+    return Object.freeze({
+      ok: true,
+      kind: "assign",
+      line: window ? `${compact} · ${window}` : compact,
+      compact,
+      detail: windowDays
+        ? `${keyLabel}: no priority — set ${label}, ${windowDays}`
+        : `${keyLabel}: no priority — set ${label}`,
     });
   }
   if (kind === "cancel") {
@@ -62104,9 +62297,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       if (
         !fresh ||
         fresh.actionableCount !== cached.actionableCount ||
-        fresh.counts.roll !== cached.counts.roll ||
-        fresh.counts.decay !== cached.counts.decay ||
-        fresh.counts.cancel !== cached.counts.cancel ||
+        !samePriorityRecommendationCounts(fresh.counts, cached.counts) ||
         Boolean(fresh.unavailableReason) !==
           Boolean(cached.unavailableReason)
       ) {
@@ -62141,10 +62332,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
     const entries = Array.isArray(cached.entries) ? cached.entries : [];
     const schedulingEntries = entries.filter(
       (entry) =>
-        entry &&
-        entry.recommendation &&
-        (entry.recommendation.kind === "roll" ||
-          entry.recommendation.kind === "decay"),
+        entry && isDatedPriorityRecommendation(entry.recommendation),
     );
     const countedAction = this.describeInboxRouteCountedRollAction(cached);
     const runCountedRoll = async (schedulingWorkLog) =>
@@ -62211,9 +62399,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
       if (
         !fresh ||
         fresh.actionableCount !== cached.actionableCount ||
-        fresh.counts.roll !== cached.counts.roll ||
-        fresh.counts.decay !== cached.counts.decay ||
-        fresh.counts.cancel !== cached.counts.cancel ||
+        !samePriorityRecommendationCounts(fresh.counts, cached.counts) ||
         Boolean(fresh.unavailableReason) !==
           Boolean(cached.unavailableReason)
       ) {
@@ -62233,10 +62419,7 @@ class BulletPropertyPickerVaultCommitMixin extends FilteredPickerModal {
     const entries = Array.isArray(cached.entries) ? cached.entries : [];
     const schedulingEntries = entries.filter(
       (entry) =>
-        entry &&
-        entry.recommendation &&
-        (entry.recommendation.kind === "roll" ||
-          entry.recommendation.kind === "decay"),
+        entry && isDatedPriorityRecommendation(entry.recommendation),
     );
     if (schedulingEntries.length === 0) {
       return await this.plugin.applyLinkRecommendedRoll(this);
@@ -77704,9 +77887,7 @@ class BobNavigationHotkeysCountedRollMixin {
     if (
       !fresh ||
       fresh.actionableCount !== cached.actionableCount ||
-      fresh.counts.roll !== cached.counts.roll ||
-      fresh.counts.decay !== cached.counts.decay ||
-      fresh.counts.cancel !== cached.counts.cancel ||
+      !samePriorityRecommendationCounts(fresh.counts, cached.counts) ||
       Boolean(fresh.unavailableReason) !== Boolean(cached.unavailableReason)
     ) {
       new Notice("Task changed while the picker was open; nothing was written");
@@ -77728,12 +77909,7 @@ class BobNavigationHotkeysCountedRollMixin {
         .map((entry) => [entry.line, entry.recommendation]),
     );
     const updateLines = fresh.entries
-      .filter(
-        (entry) =>
-          entry.recommendation &&
-          (entry.recommendation.kind === "roll" ||
-            entry.recommendation.kind === "decay"),
-      )
+      .filter((entry) => isDatedPriorityRecommendation(entry.recommendation))
       .map((entry) => entry.line);
     let recoveryByLine = null;
     if (updateLines.length > 0) {
@@ -77947,11 +78123,7 @@ class BobNavigationHotkeysCountedRollMixin {
     const scheduledValues = [];
     if (priorityPlan && priorityPlan.content !== undefined) {
       for (const entry of fresh.entries) {
-        if (
-          entry.recommendation &&
-          (entry.recommendation.kind === "roll" ||
-            entry.recommendation.kind === "decay")
-        ) {
+        if (isDatedPriorityRecommendation(entry.recommendation)) {
           scheduledValues.push(entry.recommendation.date);
         }
       }
@@ -78067,9 +78239,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     if (
       !fresh ||
       fresh.actionableCount !== cached.actionableCount ||
-      fresh.counts.roll !== cached.counts.roll ||
-      fresh.counts.decay !== cached.counts.decay ||
-      fresh.counts.cancel !== cached.counts.cancel ||
+      !samePriorityRecommendationCounts(fresh.counts, cached.counts) ||
       Boolean(fresh.unavailableReason) !== Boolean(cached.unavailableReason)
     ) {
       new Notice("Task changed while the picker was open; nothing was written");
@@ -78123,11 +78293,8 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       if (recommendationsByLine.size === 0) {
         continue;
       }
-      const updateEntries = summary.entries.filter(
-        (entry) =>
-          entry.recommendation &&
-          (entry.recommendation.kind === "roll" ||
-            entry.recommendation.kind === "decay"),
+      const updateEntries = summary.entries.filter((entry) =>
+        isDatedPriorityRecommendation(entry.recommendation),
       );
       let recoveryByLine = null;
       if (
@@ -78295,11 +78462,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
 
     const scheduledValues = [];
     for (const entry of fresh.entries) {
-      if (
-        entry.recommendation &&
-        (entry.recommendation.kind === "roll" ||
-          entry.recommendation.kind === "decay")
-      ) {
+      if (isDatedPriorityRecommendation(entry.recommendation)) {
         scheduledValues.push(entry.recommendation.date);
       }
     }
@@ -98150,7 +98313,7 @@ module.exports.helpers = {
   formatPriorityDecayScheduleReason,
   formatPriorityDecayCancelReason,
   buildPriorityDecayScheduleLogPayload,
-  isSamePriorityRollTarget,
+  isSamePriorityRollTarget, isDatedPriorityRecommendation, samePriorityRecommendationCounts, getPriorityAssignLevelLabel,
   isRecommendedRollKeydown,
   getBulletPropertyStageTwoHints,
   getPriorityRollCurrentLabel,

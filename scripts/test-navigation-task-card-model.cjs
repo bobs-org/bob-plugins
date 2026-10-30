@@ -955,3 +955,49 @@ test("recurring cancellation and blocked lanes expose reasons instead of writes"
   assert.equal(lane.unavailableReason, "Blocked is derived");
   assert.equal(key(blocked, "n", { altKey: true }).type, "unavailable");
 });
+
+test("unprioritized single task recommends assign P1 with dated preview", () => {
+  const config = buildConfig();
+  const content = "- [ ] #task Fresh [scheduled:: 2026-10-01] ^fresh";
+  const model = helpers.planTaskCard({
+    config,
+    content,
+    lineText: content,
+    cursorLine: 0,
+    baseDate: new Date(2026, 8, 30),
+    random: () => 0,
+  });
+  const rec = model.recommendation;
+  assert.ok(rec);
+  assert.equal(rec.kind, "single");
+  assert.equal(rec.source.kind, "assign");
+  assert.equal(rec.source.level.label, "P1");
+  assert.equal(rec.preview.action, "P0 → P1");
+  assert.equal(rec.preview.meta, "no priority");
+  assert.equal(rec.preview.footerLabel, "Set P1");
+  assert.match(rec.preview.ariaLabel, /Ctrl\+Enter: set P1 \(no priority\)/);
+  assert.equal(rec.effects.assign, 1);
+  const mixed = helpers.planTaskCard({
+    config,
+    content: [
+      "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+      "- [ ] #task B [scheduled:: 2026-10-01] ^b",
+    ].join("\n"),
+    taskSession: {
+      valid: true,
+      explicit: true,
+      targets: [
+        { line: 0, rawLine: "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a" },
+        { line: 1, rawLine: "- [ ] #task B [scheduled:: 2026-10-01] ^b" },
+      ],
+      content: [
+        "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01] ^a",
+        "- [ ] #task B [scheduled:: 2026-10-01] ^b",
+      ].join("\n"),
+    },
+    baseDate: new Date(2026, 8, 30),
+    random: () => 0,
+  });
+  assert.ok(mixed.recommendation);
+  assert.equal(mixed.recommendation.effects.assign, 1);
+});

@@ -40,9 +40,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
     if (
       !fresh ||
       fresh.actionableCount !== cached.actionableCount ||
-      fresh.counts.roll !== cached.counts.roll ||
-      fresh.counts.decay !== cached.counts.decay ||
-      fresh.counts.cancel !== cached.counts.cancel ||
+      !samePriorityRecommendationCounts(fresh.counts, cached.counts) ||
       Boolean(fresh.unavailableReason) !== Boolean(cached.unavailableReason)
     ) {
       new Notice("Task changed while the picker was open; nothing was written");
@@ -96,11 +94,8 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       if (recommendationsByLine.size === 0) {
         continue;
       }
-      const updateEntries = summary.entries.filter(
-        (entry) =>
-          entry.recommendation &&
-          (entry.recommendation.kind === "roll" ||
-            entry.recommendation.kind === "decay"),
+      const updateEntries = summary.entries.filter((entry) =>
+        isDatedPriorityRecommendation(entry.recommendation),
       );
       let recoveryByLine = null;
       if (
@@ -268,11 +263,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
 
     const scheduledValues = [];
     for (const entry of fresh.entries) {
-      if (
-        entry.recommendation &&
-        (entry.recommendation.kind === "roll" ||
-          entry.recommendation.kind === "decay")
-      ) {
+      if (isDatedPriorityRecommendation(entry.recommendation)) {
         scheduledValues.push(entry.recommendation.date);
       }
     }

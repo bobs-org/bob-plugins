@@ -59,10 +59,7 @@ function planRecommendedRollBatch(
     }
     if (recommendation.kind === "cancel") {
       cancelEntries.push({ target, recommendation });
-    } else if (
-      recommendation.kind === "roll" ||
-      recommendation.kind === "decay"
-    ) {
+    } else if (isDatedPriorityRecommendation(recommendation)) {
       updateEntries.push({ target, recommendation });
     }
   }
@@ -185,6 +182,9 @@ function planRecommendedRollBatch(
   const decayedCount = updateEntries.filter(
     (entry) => entry.recommendation.kind === "decay",
   ).length;
+  const assignedCount = updateEntries.filter(
+    (entry) => entry.recommendation.kind === "assign",
+  ).length;
   const cancelledCount = cancelEntries.length;
   const futureScheduledTaskLines = priorityPlan
     ? Array.from(priorityPlan.futureScheduledTaskLines || [])
@@ -203,6 +203,7 @@ function planRecommendedRollBatch(
     priorityPlan,
     rolledCount,
     decayedCount,
+    assignedCount,
     cancelledCount,
     futureScheduledTaskLines: Object.freeze(futureScheduledTaskLines),
     cancelledEntries: Object.freeze(cancelledEntries),

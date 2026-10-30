@@ -10,7 +10,8 @@ setting or activation date. It opens for the task under the cursor, a
 dedicated Task Link's target, or a counted batch.
 
 `Alt+P` (command `bob-navigation-hotkeys:roll-by-recommendation`) applies the
-Task Card's recommended roll, decay, or confirmed cancel in one key.
+Task Card's recommended roll, decay, or confirmed cancel in one key,
+or sets P1 on a task with no priority.
 
 `Ctrl+Shift+B` (command
 `bob-navigation-hotkeys:task-card-depends-on`) opens the Depends-On
@@ -38,7 +39,7 @@ the owning task's Links or Linked-from stage.
 | `1`–`4` | Set that configured priority level and its frozen displayed date; extra configured levels receive unique digits through `9`. |
 | `0` | Clear priority to implicit P0 and keep the scheduled date. |
 | `Ctrl+Enter` | Apply the cached recommendation (with a `Cmd+Enter` alias). |
-| `Alt+P` | Apply the cached recommendation; it aliases Ctrl+Enter. |
+| `Alt+P` | Apply the cached recommendation; it aliases Ctrl+Enter. On a task with no priority it sets P1. |
 | `Ctrl+R` | Regenerate the recommendation and priority previews without writing; in the relation-label stage, open rename mode for the selected existing label. |
 | `Enter` | Open the selected action; Schedule is the default. |
 | `b` | Open Blocked by (Depends on). |
@@ -67,7 +68,8 @@ Schedule task Work summary stage.
 | A roll or decay is available | Writes through the Ctrl+Enter path without showing the card, then shows the usual priority notice. |
 | A Next or Pending task needs a Work summary | Shows the summary stage; Enter, blank Enter, or a second Alt+P submits. |
 | The recommendation is cancel | Shows the danger banner without writing. A second Alt+P or Ctrl+Enter cancels; Escape keeps the task. |
-| No priority can roll or a recommendation is unavailable | Shows the card and a notice without writing. |
+| The task has no priority (implicit P0) | Sets the first configured level (P1) and a date in its window through the Ctrl+Enter path, as if `1` were pressed. The Schedule Log reads `P0 → P1`. |
+| No recommendation is available | Shows the card and a notice without writing. |
 | The task is in an inbox | Opens the route prompt before writing; backing out returns to the visible card. |
 | A counted batch or Task Link batch includes a cancel | Waits on the card for confirmation before changing any target. |
 | The cursor is on a Depends-On, BLOCKS, LINKS, or LINKED FROM line | Applies the recommendation to the owning task. |

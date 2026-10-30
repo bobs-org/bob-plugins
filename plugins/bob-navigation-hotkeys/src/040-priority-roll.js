@@ -35,8 +35,43 @@ function planPriorityRollRecommendation(options = {}) {
       }
     }
   }
+  const baseDate =
+    options.baseDate instanceof Date ? options.baseDate : new Date();
+  const random = typeof options.random === "function" ? options.random : Math.random;
+  const currentScheduled = normalizeBulletPropertyValue(options.currentScheduled);
   if (currentValue === "") {
-    return null;
+    const assignLevel = levels[0] || null;
+    if (
+      !assignLevel ||
+      !normalizeBulletPropertyValue(assignLevel.label) ||
+      !normalizeBulletPropertyValue(assignLevel.value) ||
+      !getPriorityRollBounds(assignLevel)
+    ) {
+      return null;
+    }
+    const assignRoll = rollPriorityRecommendationDate(
+      assignLevel,
+      baseDate,
+      random,
+      currentScheduled,
+    );
+    return Object.freeze({
+      kind: "assign",
+      level: assignLevel,
+      levelIndex: 0,
+      fromLabel: IMPLICIT_PRIORITY_LEVEL_LABEL,
+      streak: 0,
+      limit: getPriorityLevelRollLimit(property, assignLevel),
+      step: null,
+      date: formatBulletPropertyDate(assignRoll.date),
+      offset: assignRoll.offset,
+      reason: formatPriorityRollScheduleReason({
+        source: "priority",
+        fromLevelLabel: IMPLICIT_PRIORITY_LEVEL_LABEL,
+        level: assignLevel,
+        rolledDays: assignRoll.offset,
+      }),
+    });
   }
   const level =
     property.levelsByValue instanceof Map
@@ -51,10 +86,6 @@ function planPriorityRollRecommendation(options = {}) {
     ? Math.max(0, Math.floor(Number(streak)))
     : 0;
   const limit = getPriorityLevelRollLimit(property, level);
-  const baseDate =
-    options.baseDate instanceof Date ? options.baseDate : new Date();
-  const random = typeof options.random === "function" ? options.random : Math.random;
-  const currentScheduled = normalizeBulletPropertyValue(options.currentScheduled);
 
   if (limit === null || streakCount < limit) {
     const step = limit === null ? null : streakCount + 1;
@@ -130,6 +161,36 @@ function planPriorityRollRecommendation(options = {}) {
     offset: null,
     reason: formatPriorityDecayCancelReason({ level, streak: streakCount }),
   });
+}
+
+// Whether a recommendation carries a pre-rolled date (roll, decay, and
+// assign all do; cancel and unavailable do not).
+function isDatedPriorityRecommendation(recommendation) {
+  return Boolean(
+    recommendation &&
+      (recommendation.kind === "roll" ||
+        recommendation.kind === "decay" ||
+        recommendation.kind === "assign"),
+  );
+}
+
+// Compare two count maps for the reroll guards: same roll/decay/cancel/assign
+// totals. Missing maps count as zero.
+function samePriorityRecommendationCounts(a, b) {
+  const left = (a && typeof a === "object" && a.counts) || a || {};
+  const right = (b && typeof b === "object" && b.counts) || b || {};
+  return (
+    numericOrDefault(left.roll, 0) === numericOrDefault(right.roll, 0) &&
+    numericOrDefault(left.decay, 0) === numericOrDefault(right.decay, 0) &&
+    numericOrDefault(left.cancel, 0) === numericOrDefault(right.cancel, 0) &&
+    numericOrDefault(left.assign, 0) === numericOrDefault(right.assign, 0)
+  );
+}
+
+// The level label bound to card key `1`, for batch copy fallbacks.
+function getPriorityAssignLevelLabel(property) {
+  const levels = property && Array.isArray(property.levels) ? property.levels : [];
+  return normalizeBulletPropertyValue(levels[0] && levels[0].label);
 }
 
 // Pure copy for the `scheduled` row's roll-preview line. All display strings
@@ -221,6 +282,30 @@ function buildPriorityRollPreviewModel(recommendation, baseDate) {
     });
   }
 
+  if (kind === "assign") {
+    const level = recommendation.level || {};
+    const label = normalizeBulletPropertyValue(level.label);
+    if (!label) {
+      return null;
+    }
+    const dated = formatDatedLine(recommendation.date);
+    const fromLabel =
+      normalizeBulletPropertyValue(recommendation.fromLabel) ||
+      IMPLICIT_PRIORITY_LEVEL_LABEL;
+    return Object.freeze({
+      kind: "assign",
+      icon: "signal-high",
+      tone: "accent",
+      action: `${fromLabel} → ${label}`,
+      dateText: dated.dateText,
+      dateValue: normalizeBulletPropertyValue(recommendation.date),
+      meta: "no priority",
+      metaTone: "info",
+      footerLabel: `Set ${label}`,
+      ariaLabel: `Ctrl+Enter: set ${label} (no priority) to ${dated.ariaDate}`,
+    });
+  }
+
   if (kind === "cancel") {
     const level = recommendation.level || {};
     const label = normalizeBulletPropertyValue(level.label);
@@ -281,7 +366,7 @@ function planPriorityRollRecommendationsForTargets(
       property: property || null,
       schedulesName: "",
       entries: Object.freeze([]),
-      counts: Object.freeze({ roll: 0, decay: 0, cancel: 0, unavailable: 0 }),
+      counts: Object.freeze({ roll: 0, decay: 0, cancel: 0, assign: 0, unavailable: 0 }),
       total: list.length,
       actionableCount: 0,
       skippedCount: list.length,
@@ -302,6 +387,7 @@ function planPriorityRollRecommendationsForTargets(
   let roll = 0;
   let decay = 0;
   let cancel = 0;
+  let assign = 0;
   let unavailable = 0;
   const dated = [];
   let unavailableReason = null;
@@ -344,36 +430,26 @@ function planPriorityRollRecommendationsForTargets(
     const currentValue = normalizeBulletPropertyValue(
       field && field.value,
     );
-    if (!currentValue) {
-      entries.push(
-        Object.freeze({
-          line: lineIndex,
-          rawLine,
-          recommendation: null,
-          skipped: "no-priority",
-          currentValue: "",
-        }),
-      );
-      continue;
-    }
-    const level =
-      property.levelsByValue instanceof Map
-        ? property.levelsByValue.get(currentValue)
-        : (Array.isArray(property.levels) ? property.levels : []).find(
-            (candidate) =>
-              candidate && candidate.value === currentValue,
-          );
-    if (!level) {
-      entries.push(
-        Object.freeze({
-          line: lineIndex,
-          rawLine,
-          recommendation: null,
-          skipped: "unconfigured",
-          currentValue,
-        }),
-      );
-      continue;
+    if (currentValue) {
+      const level =
+        property.levelsByValue instanceof Map
+          ? property.levelsByValue.get(currentValue)
+          : (Array.isArray(property.levels) ? property.levels : []).find(
+              (candidate) =>
+                candidate && candidate.value === currentValue,
+            );
+      if (!level) {
+        entries.push(
+          Object.freeze({
+            line: lineIndex,
+            rawLine,
+            recommendation: null,
+            skipped: "unconfigured",
+            currentValue,
+          }),
+        );
+        continue;
+      }
     }
     let currentScheduled = "";
     try {
@@ -424,6 +500,9 @@ function planPriorityRollRecommendationsForTargets(
     } else if (recommendation.kind === "decay") {
       decay += 1;
       dated.push(recommendation.date);
+    } else if (recommendation.kind === "assign") {
+      assign += 1;
+      dated.push(recommendation.date);
     } else if (recommendation.kind === "cancel") {
       cancel += 1;
     } else if (recommendation.kind === "unavailable") {
@@ -447,6 +526,7 @@ function planPriorityRollRecommendationsForTargets(
       entry.recommendation &&
       (entry.recommendation.kind === "roll" ||
         entry.recommendation.kind === "decay" ||
+        entry.recommendation.kind === "assign" ||
         entry.recommendation.kind === "cancel"),
   );
   const sortedDates = dated
@@ -479,7 +559,7 @@ function planPriorityRollRecommendationsForTargets(
     property,
     schedulesName,
     entries: Object.freeze(entries),
-    counts: Object.freeze({ roll, decay, cancel, unavailable }),
+    counts: Object.freeze({ roll, decay, cancel, assign, unavailable }),
     total: list.length,
     actionableCount: actionable.length,
     skippedCount,
@@ -508,7 +588,7 @@ function planLinkRollBatchSummary(resolvedTargets, property, options = {}) {
       property: property || null,
       schedulesName: "",
       entries: Object.freeze([]),
-      counts: Object.freeze({ roll: 0, decay: 0, cancel: 0, unavailable: 0 }),
+      counts: Object.freeze({ roll: 0, decay: 0, cancel: 0, assign: 0, unavailable: 0 }),
       total: 0,
       actionableCount: 0,
       skippedCount: 0,
@@ -545,7 +625,7 @@ function planLinkRollBatchSummary(resolvedTargets, property, options = {}) {
       );
     }
   }
-  const counts = { roll: 0, decay: 0, cancel: 0, unavailable: 0 };
+  const counts = { roll: 0, decay: 0, cancel: 0, assign: 0, unavailable: 0 };
   let actionableCount = 0;
   let skippedCount = 0;
   let unavailableReason = null;
@@ -554,6 +634,7 @@ function planLinkRollBatchSummary(resolvedTargets, property, options = {}) {
     counts.roll += summary.counts.roll;
     counts.decay += summary.counts.decay;
     counts.cancel += summary.counts.cancel;
+    counts.assign += summary.counts.assign || 0;
     counts.unavailable += summary.counts.unavailable;
     actionableCount += summary.actionableCount;
     skippedCount += summary.skippedCount;
@@ -645,12 +726,18 @@ function buildBatchPriorityRollPreviewModel(summary) {
   const roll = Math.max(0, Math.floor(numericOrDefault(counts.roll, 0)));
   const decayCount = Math.max(0, Math.floor(numericOrDefault(counts.decay, 0)));
   const cancelCount = Math.max(0, Math.floor(numericOrDefault(counts.cancel, 0)));
+  const assignCount = Math.max(0, Math.floor(numericOrDefault(counts.assign, 0)));
+  const assignLabel = normalizeBulletPropertyValue(
+    summary.property
+      ? getPriorityAssignLevelLabel(summary.property)
+      : "",
+  );
   const actionable = Math.max(
     0,
     Math.floor(
       numericOrDefault(
         summary.actionableCount,
-        roll + decayCount + cancelCount,
+        roll + decayCount + cancelCount + assignCount,
       ),
     ),
   );
@@ -689,6 +776,9 @@ function buildBatchPriorityRollPreviewModel(summary) {
   if (cancelCount > 0) {
     parts.push(`${cancelCount} cancel`);
   }
+  if (assignCount > 0) {
+    parts.push(assignLabel ? `${assignCount} set ${assignLabel}` : `${assignCount} set`);
+  }
   const action = `${actionable} ${actionable === 1 ? "task" : "tasks"}${
     parts.length > 0 ? ` · ${parts.join(" · ")}` : ""
   }`;
@@ -705,7 +795,8 @@ function buildBatchPriorityRollPreviewModel(summary) {
     Math.floor(numericOrDefault(summary.skippedCount, 0)),
   );
   const meta = skipped > 0 ? `${skipped} skipped` : "";
-  const allRoll = roll === actionable && decayCount === 0 && cancelCount === 0;
+  const allRoll =
+    roll === actionable && decayCount === 0 && cancelCount === 0 && assignCount === 0;
   const footerLabel = allRoll
     ? `Roll ${actionable} ${actionable === 1 ? "task" : "tasks"}`
     : `Apply ${actionable} ${actionable === 1 ? "recommendation" : "recommendations"}`;

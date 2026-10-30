@@ -17,7 +17,11 @@ function isSamePriorityRollTarget(cached, fresh) {
         normalizeBulletPropertyValue(fresh.toLevel && fresh.toLevel.label)
     );
   }
-  if (cached.kind === "roll" || cached.kind === "cancel") {
+  if (
+    cached.kind === "roll" ||
+    cached.kind === "assign" ||
+    cached.kind === "cancel"
+  ) {
     return (
       normalizeBulletPropertyValue(cached.level && cached.level.label) ===
       normalizeBulletPropertyValue(fresh.level && fresh.level.label)

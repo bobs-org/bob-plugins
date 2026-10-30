@@ -877,7 +877,7 @@ function isRecommendedRollKeydown(event) {
 }
 
 // The task's current level label for a recommendation: the roll/cancel level,
-// or the decay's from level.
+// the decay's from level, or the implicit P0 for an assign.
 function getPriorityRollCurrentLabel(recommendation) {
   if (!recommendation) {
     return "";
@@ -886,6 +886,9 @@ function getPriorityRollCurrentLabel(recommendation) {
     return normalizeBulletPropertyValue(
       recommendation.fromLevel && recommendation.fromLevel.label,
     );
+  }
+  if (recommendation.kind === "assign") {
+    return IMPLICIT_PRIORITY_LEVEL_LABEL;
   }
   return normalizeBulletPropertyValue(
     recommendation.level && recommendation.level.label,

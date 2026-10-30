@@ -285,6 +285,12 @@ function renderTaskCardView(container, model, options = {}) {
     if (recommendation.kind === "batch") {
       const counts = recommendation.effects || {};
       const skipped = recommendation.skippedCount || 0;
+      const assignCount = Math.max(0, Math.floor(numericOrDefault(counts.assign, 0)));
+      const assignLabel = normalizeBulletPropertyValue(
+        recommendation.source &&
+          recommendation.source.property &&
+          getPriorityAssignLevelLabel(recommendation.source.property),
+      );
       banner.createDiv({
         cls: "bob-task-card-banner-batch",
         text: [
@@ -294,6 +300,11 @@ function renderTaskCardView(container, model, options = {}) {
           counts.roll ? `${counts.roll} roll` : "",
           counts.decay ? `${counts.decay} decay` : "",
           counts.cancel ? `${counts.cancel} cancel` : "",
+          assignCount
+            ? assignLabel
+              ? `${assignCount} set ${assignLabel}`
+              : `${assignCount} set`
+            : "",
           skipped ? `${skipped} skipped` : "",
         ]
           .filter(Boolean)

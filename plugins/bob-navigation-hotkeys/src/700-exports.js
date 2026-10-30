@@ -894,7 +894,7 @@ module.exports.helpers = {
   formatPriorityDecayScheduleReason,
   formatPriorityDecayCancelReason,
   buildPriorityDecayScheduleLogPayload,
-  isSamePriorityRollTarget,
+  isSamePriorityRollTarget, isDatedPriorityRecommendation, samePriorityRecommendationCounts, getPriorityAssignLevelLabel,
   isRecommendedRollKeydown,
   getBulletPropertyStageTwoHints,
   getPriorityRollCurrentLabel,

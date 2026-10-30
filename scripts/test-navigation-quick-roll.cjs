@@ -338,27 +338,110 @@ test("a cancel recommendation waits for the visible card and the second Alt+P ca
   assert.equal(escaped.plugin.activeBulletPropertyPicker, null);
 });
 
-test("no priority and unavailable recurring tasks reveal the card without writing", () => {
+test("Alt+P assigns P1 on a task with no priority", async () => {
   notices.length = 0;
-  const noPriority = createTaskHarness(
+  const harness = createTaskHarness(
     "- [ ] #task No priority [scheduled:: 2026-10-01] ^none",
   );
+  harness.plugin.rollByRecommendation(harness.editor, rollOptions(harness));
+  await waitUntil(() => !harness.plugin.activeBulletPropertyPicker);
+  const written = harness.editor.getValue();
+  assert.match(written, /\[priority:: high\]/);
+  assert.match(written, /\[scheduled:: 2026-10-0[2-7]\]/);
+  assert.match(written, /🎲 P0 → P1 · in \*\*[2-7]\*\* \(2–7\) days/);
+  assert.match(written, /SCHEDULE LOG/);
+  assert.ok(
+    notices.some((message) => message.includes("priority → P1 (high)")),
+    `expected plain priority notice, got ${JSON.stringify(notices)}`,
+  );
+  assert.ok(
+    !notices.includes("No priority to roll — pick a level (1–4)"),
+    "assign must not show the no-priority notice",
+  );
+});
+
+test("Alt+P assign matches Ctrl+Enter on the visible card", async () => {
+  const content = "- [ ] #task No priority [scheduled:: 2026-10-01] ^none";
+  const quick = await runTaskAction(content, "quick");
+  const card = await runTaskAction(content, "card");
+  assert.deepEqual(quick, card);
+  assert.match(quick.content, /\[priority:: high\]/);
+  assert.match(quick.content, /🎲 P0 → P1/);
+});
+
+test("Alt+P assign routes through inbox and Next work summary", async () => {
+  // Assign reuses the same Work summary machinery as roll/decay: the
+  // dedicated Next/Pending summary flow is pinned by the existing
+  // "Alt+P hides immediate rolls" test. Here we prove the assign write
+  // itself plus inbox routing.
+  const next = createTaskHarness(
+    "- [ ] #task Next no priority [scheduled:: 2026-10-01] ^next",
+  );
+  next.plugin.rollByRecommendation(next.editor, rollOptions(next));
+  await waitUntil(() => !next.plugin.activeBulletPropertyPicker);
+  assert.match(next.editor.getValue(), /\[priority:: high\]/);
+  assert.match(next.editor.getValue(), /🎲 P0 → P1/);
+
+  notices.length = 0;
+  const inbox = createTaskHarness(
+    "- [ ] #task Inbox no priority [scheduled:: 2026-10-01] ^inbox",
+    { file: { path: "inbox.md", basename: "inbox", extension: "md" } },
+  );
+  const order = [];
+  inbox.plugin.computeInboxRouteContext = () => ({ sourcePath: "inbox.md" });
+  inbox.plugin.promptInboxRoute = async ({ suspend }) => {
+    order.push("route");
+    suspend.hide();
+    suspend.restore();
+    return { kind: "stay" };
+  };
+  const originalWrite = inbox.plugin.setBulletPriorityValue.bind(inbox.plugin);
+  inbox.plugin.setBulletPriorityValue = async (...args) => {
+    order.push("write");
+    return await originalWrite(...args);
+  };
+  inbox.plugin.rollByRecommendation(inbox.editor, rollOptions(inbox));
+  await waitUntil(() => !inbox.plugin.activeBulletPropertyPicker);
+  assert.deepEqual(order, ["route", "write"]);
+  assert.match(inbox.editor.getValue(), /\[priority:: high\]/);
+});
+
+test("Alt+P on an unusable P1 level reveals the card without writing", () => {
+  notices.length = 0;
+  const good = createPriorityPickerConfig();
+  const goodPriority = good.properties.find((item) => item.name === "priority");
+  const badConfig = {
+    properties: [
+      { name: "scheduled", values: "date" },
+      {
+        name: goodPriority.name,
+        values: "priority",
+        schedules: goodPriority.schedules,
+        levels: [{ label: "P1", value: "high" }],
+        levelsByValue: new Map([["high", { label: "P1", value: "high" }]]),
+        decay: goodPriority.decay,
+      },
+    ],
+  };
+  const harness = createTaskHarness(
+    "- [ ] #task No priority [scheduled:: 2026-10-01] ^none",
+    { config: badConfig },
+  );
   let writes = 0;
-  noPriority.plugin.setBulletPriorityValue = async () => {
+  harness.plugin.setBulletPriorityValue = async () => {
     writes += 1;
     return true;
   };
-  noPriority.plugin.rollByRecommendation(
-    noPriority.editor,
-    rollOptions(noPriority),
-  );
-  const nonePicker = noPriority.plugin.activeBulletPropertyPicker;
-  assert.ok(nonePicker);
-  assert.equal(nonePicker.containerEl.classes.includes("bob-task-card-quick-pending"), false);
+  harness.plugin.rollByRecommendation(harness.editor, rollOptions(harness, { config: badConfig }));
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  assert.ok(picker);
+  assert.equal(picker.containerEl.classes.includes("bob-task-card-quick-pending"), false);
   assert.equal(writes, 0);
   assert.ok(notices.includes("No priority to roll — pick a level (1–4)"));
-  nonePicker.close();
+  picker.close();
+});
 
+test("unavailable recurring tasks reveal the card without writing", () => {
   notices.length = 0;
   const recurring = createTaskHarness([
     "- [ ] #task Recurring [priority:: lowest] [scheduled:: 2026-10-01] 🔁 ^recurring",
@@ -377,8 +460,25 @@ test("no priority and unavailable recurring tasks reveal the card without writin
     false,
   );
   assert.ok(notices.length > 0);
-  assert.equal(writes, 0);
   recurringPicker.close();
+});
+
+test("a landed review row advances once after Alt+P assigns P1", async () => {
+  const harness = createTaskHarness(
+    "- [ ] #task Landed no priority [scheduled:: 2026-10-01] ^landed",
+  );
+  const advances = [];
+  harness.plugin.captureReviewGesture = () => ({ landing: true });
+  harness.plugin.continueReviewWalkAfter = (origin, outcome) => {
+    advances.push({ origin, outcome });
+  };
+  harness.plugin.rollByRecommendation(harness.editor, rollOptions(harness));
+  await waitUntil(() => !harness.plugin.activeBulletPropertyPicker);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(advances.length, 1);
+  assert.equal(advances[0].origin.landing, true);
+  assert.equal(advances[0].outcome.kind, "card");
+  assert.match(harness.editor.getValue(), /\[priority:: high\]/);
 });
 
 test("inbox routing is shown before the write and a managed line redirects to its owner", async () => {

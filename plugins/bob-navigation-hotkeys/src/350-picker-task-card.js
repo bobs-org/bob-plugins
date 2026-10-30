@@ -212,6 +212,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       effects: Object.freeze({
         roll: source.kind === "roll" ? 1 : 0,
         decay: source.kind === "decay" ? 1 : 0,
+        assign: source.kind === "assign" ? 1 : 0,
         cancel: source.kind === "cancel" ? 1 : 0,
       }),
       targetCount: 1,

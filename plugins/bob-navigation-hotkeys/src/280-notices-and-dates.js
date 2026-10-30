@@ -120,6 +120,12 @@ function buildPriorityNoticeModel(options = {}) {
 function buildBatchPriorityRollNoticeModel(batch, options = {}) {
   const counts = (batch && batch.counts) || {};
   const rolled = Math.max(0, Math.floor(numericOrDefault(counts.roll, 0)));
+  const assigned = Math.max(0, Math.floor(numericOrDefault(counts.assign, 0)));
+  const assignLabel = normalizeBulletPropertyValue(
+    batch && batch.property
+      ? getPriorityAssignLevelLabel(batch.property)
+      : "",
+  );
   const decayed = Math.max(0, Math.floor(numericOrDefault(counts.decay, 0)));
   const cancelled = Math.max(0, Math.floor(numericOrDefault(counts.cancel, 0)));
   const actionable = Math.max(
@@ -127,7 +133,7 @@ function buildBatchPriorityRollNoticeModel(batch, options = {}) {
     Math.floor(
       numericOrDefault(
         batch && batch.actionableCount,
-        rolled + decayed + cancelled,
+        rolled + assigned + decayed + cancelled,
       ),
     ),
   );
@@ -149,6 +155,16 @@ function buildBatchPriorityRollNoticeModel(batch, options = {}) {
     leadingChips.push(
       Object.freeze({
         text: `${rolled} rolled`,
+        tone: "info",
+      }),
+    );
+  }
+  if (assigned > 0) {
+    leadingChips.push(
+      Object.freeze({
+        text: assignLabel
+          ? `${assigned} set ${assignLabel}`
+          : `${assigned} set`,
         tone: "info",
       }),
     );

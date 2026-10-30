@@ -627,9 +627,32 @@ test("the default ladder walks P2 roll, decay, P3 roll, decay, P4 roll, cancel",
 test("the planner returns null without a configured priority", () => {
   const property = decayProperty();
   const baseDate = new Date(2026, 8, 30);
+  const assigned = helpers.planPriorityRollRecommendation({
+    property,
+    currentValue: "",
+    streak: 0,
+    baseDate,
+    random: () => 0,
+  });
+  assert.equal(assigned && assigned.kind, "assign");
+  assert.equal(assigned && assigned.level && assigned.level.label, "P1");
+  assert.equal(assigned && assigned.levelIndex, 0);
+  assert.equal(assigned && assigned.fromLabel, "P0");
+  assert.equal(assigned && assigned.date, "2026-10-02");
+  assert.equal(assigned && assigned.offset, 2);
+  assert.equal(assigned && assigned.reason, "🎲 P0 → P1 · in **2** (2–7) days");
+  // An unusable first level (no valid window) still returns null.
+  const unusableProperty = {
+    name: "priority",
+    values: "priority",
+    schedules: "scheduled",
+    levels: [{ label: "P1", value: "high" }],
+    levelsByValue: new Map([["high", { label: "P1", value: "high" }]]),
+    decay: { enabled: true, rolls: 1 },
+  };
   assert.equal(
     helpers.planPriorityRollRecommendation({
-      property,
+      property: unusableProperty,
       currentValue: "",
       streak: 0,
       baseDate,
@@ -1147,20 +1170,20 @@ test("picker-counted plans one recommendation per target with skips", () => {
     property,
     { baseDate: new Date(2026, 8, 30), random: () => 0 },
   );
-  assert.deepEqual(summary.counts, { roll: 1, decay: 1, cancel: 1, unavailable: 0 });
-  assert.equal(summary.actionableCount, 3);
-  assert.equal(summary.skippedCount, 2);
+  assert.deepEqual(summary.counts, { roll: 1, decay: 1, cancel: 1, assign: 1, unavailable: 0 });
+  assert.equal(summary.actionableCount, 4);
+  assert.equal(summary.skippedCount, 1);
   assert.equal(summary.hasRecommendation, true);
   assert.equal(summary.allRollSameLevel, false);
   const kinds = summary.entries.map((entry) =>
     entry.recommendation ? entry.recommendation.kind : null,
   );
-  assert.deepEqual(kinds, ["roll", "decay", "cancel", null, null]);
+  assert.deepEqual(kinds, ["roll", "decay", "cancel", "assign", null]);
   assert.deepEqual(
     summary.entries.map((entry) => entry.skipped),
-    [null, null, null, "no-priority", "closed"],
+    [null, null, null, null, "closed"],
   );
-  assert.equal(summary.dateStart, "2026-10-08");
+  assert.equal(summary.dateStart, "2026-10-02");
   assert.equal(summary.dateEnd, "2026-10-31");
   assert.equal(summary.unavailableReason, null);
   assert.equal(Object.isFrozen(summary), true);
@@ -1182,13 +1205,13 @@ test("picker-counted batch preview, footer and notice copy", () => {
     { icon: preview.icon, tone: preview.tone, kind: preview.kind },
     { icon: "ban", tone: "danger", kind: "cancel" },
   );
-  assert.equal(preview.action, "3 tasks · 1 roll · 1 decay · 1 cancel");
-  assert.equal(preview.dateText, "2026-10-08 → 2026-10-31");
-  assert.equal(preview.meta, "2 skipped");
-  assert.equal(preview.footerLabel, "Apply 3 recommendations");
+  assert.equal(preview.action, "4 tasks · 1 roll · 1 decay · 1 cancel · 1 set P1");
+  assert.equal(preview.dateText, "2026-10-02 → 2026-10-31");
+  assert.equal(preview.meta, "1 skipped");
+  assert.equal(preview.footerLabel, "Apply 4 recommendations");
   assert.equal(
     preview.ariaLabel,
-    "Ctrl+Enter: 3 tasks · 1 roll · 1 decay · 1 cancel, 2026-10-08 → 2026-10-31, 2 skipped",
+    "Ctrl+Enter: 4 tasks · 1 roll · 1 decay · 1 cancel · 1 set P1, 2026-10-02 → 2026-10-31, 1 skipped",
   );
 
   const rollsOnly = helpers.planPriorityRollRecommendationsForTargets(
@@ -1217,17 +1240,18 @@ test("picker-counted batch preview, footer and notice copy", () => {
     scheduledValues: ["2026-10-08", "2026-10-31"],
     outcome: { blockedTaskCount: 2, removedPomodoroLinkCount: 1 },
   });
-  assert.equal(notice.pill, "Rolled 3 tasks");
+  assert.equal(notice.pill, "Rolled 4 tasks");
   assert.equal(notice.iconName, "dices");
   assert.deepEqual(
-    notice.chips.slice(0, 3),
+    notice.chips.slice(0, 4),
     [
       { text: "1 rolled", tone: "info" },
+      { text: "1 set P1", tone: "info" },
       { text: "1 decayed", tone: "warn" },
       { text: "1 cancelled", tone: "warn" },
     ],
   );
-  assert.match(notice.text, /Rolled 3 tasks/);
+  assert.match(notice.text, /Rolled 4 tasks/);
   assert.match(notice.text, /1 rolled/);
   assert.equal(Object.isFrozen(preview), true);
   assert.equal(Object.isFrozen(notice), true);
@@ -1273,6 +1297,82 @@ test("picker-counted composes cancel then set-priority into one postimage", () =
   assert.match(plan.content, /\[cancelled:: 2026-09-30\]/);
   assert.equal(plan.changed, true);
   assert.equal(Object.isFrozen(plan), true);
+});
+
+test("picker-counted assigns P1 alongside roll and decay in one transaction", () => {
+  const property = decayProperty();
+  const content = countedContent();
+  const targets = countedTargets(content, [0, 2, 8]);
+  const session = { valid: true, explicit: true, targets };
+  const summary = helpers.planPriorityRollRecommendationsForTargets(
+    content,
+    targets,
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  assert.deepEqual(summary.counts, { roll: 1, decay: 1, cancel: 0, assign: 1, unavailable: 0 });
+  const byLine = new Map(
+    summary.entries
+      .filter((entry) => entry.recommendation)
+      .map((entry) => [entry.line, entry.recommendation]),
+  );
+  const plan = helpers.planRecommendedRollBatch(content, session, byLine, {
+    property,
+    dateText: "2026-09-30",
+    baseDate: new Date(2026, 8, 30),
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.rolledCount, 1);
+  assert.equal(plan.decayedCount, 1);
+  assert.equal(plan.assignedCount, 1);
+  assert.equal(plan.cancelledCount, 0);
+  assert.match(plan.content, /\[priority:: high\] \[scheduled:: 2026-10-02\]/);
+  assert.match(plan.content, /🎲 P0 → P1 · in \*\*2\*\* \(2–7\) days/);
+});
+
+test("picker-counted keeps an unconfigured value skipped", () => {
+  const property = decayProperty();
+  const content = [
+    "- [ ] #task A [priority:: medium] [scheduled:: 2026-10-01]",
+    "- [ ] #task Weird [priority:: highest] [scheduled:: 2026-10-01]",
+  ].join("\n");
+  const targets = countedTargets(content, [0, 1]);
+  const summary = helpers.planPriorityRollRecommendationsForTargets(
+    content,
+    targets,
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  assert.deepEqual(summary.counts, { roll: 1, decay: 0, cancel: 0, assign: 0, unavailable: 0 });
+  assert.equal(summary.actionableCount, 1);
+  assert.equal(summary.skippedCount, 1);
+  assert.deepEqual(
+    summary.entries.map((entry) => entry.skipped),
+    [null, "unconfigured"],
+  );
+});
+
+test("freshness decay card output is unchanged for P0", () => {
+  const card = helpers.planFreshnessDecayCard({
+    keeps: 3,
+    intervalDays: 7,
+    freshnessDecay: { enabled: true, keeps: 3, enter: null },
+    property: decayProperty(),
+    baseDate: new Date(2026, 9, 8),
+    random: () => 0,
+    currentScheduled: "2026-10-01",
+    currentValue: "",
+  });
+  assert.equal(card.fromLabel, "P0");
+  assert.ok(card.notNow.available);
+  assert.equal(card.notNow.kind, "entry");
+  assert.equal(card.notNow.levelLabel, "P2");
+  assert.equal(card.notNow.offset, 8);
+  assert.equal(card.notNow.date, "2026-10-16");
+  assert.equal(
+    card.notNow.reason,
+    "🎲 P0 → P2 decay · in **8** (8–30) days · kept 3×",
+  );
 });
 
 test("picker-counted refuses a recurring cancel as one batch", () => {
@@ -1647,10 +1747,10 @@ test("picker-links aggregates one recommendation per note", () => {
     baseDate: new Date(2026, 8, 30),
     random: () => 0,
   });
-  assert.deepEqual(summary.counts, { roll: 1, decay: 1, cancel: 1, unavailable: 0 });
+  assert.deepEqual(summary.counts, { roll: 1, decay: 1, cancel: 1, assign: 1, unavailable: 0 });
   assert.equal(summary.total, 4);
-  assert.equal(summary.actionableCount, 3);
-  assert.equal(summary.skippedCount, 1);
+  assert.equal(summary.actionableCount, 4);
+  assert.equal(summary.skippedCount, 0);
   assert.equal(summary.hasRecommendation, true);
   assert.equal(summary.allRollSameLevel, false);
   assert.deepEqual(
@@ -1661,18 +1761,18 @@ test("picker-links aggregates one recommendation per note", () => {
     summary.entries.map((entry) =>
       entry.recommendation ? entry.recommendation.kind : entry.skipped,
     ),
-    ["roll", "decay", "cancel", "no-priority"],
+    ["roll", "decay", "cancel", "assign"],
   );
-  assert.equal(summary.dateStart, "2026-10-08");
+  assert.equal(summary.dateStart, "2026-10-02");
   assert.equal(summary.dateEnd, "2026-10-31");
   assert.equal(summary.groups.length, 2);
   assert.equal(summary.groups[0].summary.actionableCount, 2);
-  assert.equal(summary.groups[1].summary.actionableCount, 1);
+  assert.equal(summary.groups[1].summary.actionableCount, 2);
   assert.equal(Object.isFrozen(summary), true);
   assert.equal(Object.isFrozen(summary.entries[0]), true);
 
   const batchPreview = helpers.buildBatchPriorityRollPreviewModel(summary);
-  assert.equal(batchPreview.action, "3 tasks · 1 roll · 1 decay · 1 cancel");
+  assert.equal(batchPreview.action, "4 tasks · 1 roll · 1 decay · 1 cancel · 1 set P1");
 
   const single = helpers.planLinkRollBatchSummary(
     linkResolvedTargets(notes, [["Tasks.md", 0]]),
@@ -1692,8 +1792,8 @@ test("picker-links aggregates one recommendation per note", () => {
     summary,
     new Date(2026, 8, 30),
   );
-  assert.equal(multiPreview.action, "3 tasks · 1 roll · 1 decay · 1 cancel");
-  assert.equal(multiPreview.footerLabel, "Apply 3 recommendations");
+  assert.equal(multiPreview.action, "4 tasks · 1 roll · 1 decay · 1 cancel · 1 set P1");
+  assert.equal(multiPreview.footerLabel, "Apply 4 recommendations");
   assert.equal(helpers.buildLinkRollPreviewModel(null), null);
   assert.equal(
     helpers.buildLinkRollPreviewModel(
@@ -2362,9 +2462,39 @@ test("picker-single Enter opens the date stage; Ctrl+Enter takes the recommendat
   assert.equal(harness.editor.undoGroups, 0);
 });
 
-test("picker-single P0 and closed tasks have no preview and Ctrl+Enter writes nothing", async () => {
+test("picker-single P0 assigns P1 and closed tasks have no preview", async () => {
+  notices.length = 0;
+  const assignContent = "- [ ] #task D [scheduled:: 2026-10-01] ^d";
+  const assignHarness = createRollPickerHarness({ content: assignContent });
+  assert.equal(assignHarness.open(), true);
+  const assignPicker = assignHarness.plugin.activeBulletPropertyPicker;
+  assert.equal(assignPicker.priorityRollRecommendation.kind, "assign");
+  assert.equal(assignPicker.taskCardModel.recommendation.source.kind, "assign");
+  assert.equal(assignPicker.taskCardModel.recommendation.preview.action, "P0 → P1");
+  assert.equal(assignPicker.taskCardModel.recommendation.preview.meta, "no priority");
+  selectRollPropertyRow(assignPicker, "scheduled");
+  const assignBefore = notices.length;
+  assignPicker.handleKeydown(rollCtrlEnter());
+  await flushRollWrites(assignHarness.plugin, assignBefore);
+  assert.equal(assignHarness.plugin.activeBulletPropertyPicker, null);
+  assert.equal(assignHarness.editor.undoGroups, 1);
+  assert.match(assignHarness.editor.content, /\[priority:: high\]/);
+  assert.match(assignHarness.editor.content, /\[scheduled:: 2026-10-02\]/);
+  assert.match(assignHarness.editor.content, /🎲 P0 → P1 · in \*\*2\*\* \(2–7\) days/);
+  const streak = helpers.getPriorityRollStreak(assignHarness.editor.content, 0, "P1");
+  assert.equal(streak, 0);
+  const next = helpers.planPriorityRollRecommendation({
+    property: decayProperty(),
+    content: assignHarness.editor.content,
+    taskLine: 0,
+    baseDate: new Date(2026, 8, 30),
+    random: () => 0,
+  });
+  assert.equal(next.kind, "roll");
+  assert.equal(next.level.label, "P1");
+  assert.equal(next.step, 1);
+
   for (const content of [
-    "- [ ] #task D [scheduled:: 2026-10-01] ^d",
     "- [x] #task E [priority:: medium] [scheduled:: 2026-10-01] ^e",
   ]) {
     notices.length = 0;
@@ -2565,7 +2695,7 @@ test("picker-counted Ctrl+Enter applies a mixed roll/decay/cancel batch in one u
   assert.equal(harness.open({ countExplicit: true, additionalTaskCount: 3 }), true);
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.equal(picker.isCountedSession(), true);
-  assert.deepEqual(picker.countedRollBatch.counts, { roll: 1, decay: 1, cancel: 1, unavailable: 0 });
+  assert.deepEqual(picker.countedRollBatch.counts, { roll: 1, decay: 1, cancel: 1, assign: 0, unavailable: 0 });
   selectRollPropertyRow(picker, "scheduled");
   const before = notices.length;
   picker.handleKeydown(rollCtrlEnter());

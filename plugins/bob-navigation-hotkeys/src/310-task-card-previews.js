@@ -185,6 +185,7 @@ function taskCardPriorityRecommendation(context, session, priorityProperty) {
     const actionable =
       (summary.counts.roll || 0) +
       (summary.counts.decay || 0) +
+      (summary.counts.assign || 0) +
       (summary.counts.cancel || 0);
     if (actionable === 0 && !summary.unavailableReason) {
       return null;
@@ -213,6 +214,7 @@ function taskCardPriorityRecommendation(context, session, priorityProperty) {
     const actionable =
       (summary.counts.roll || 0) +
       (summary.counts.decay || 0) +
+      (summary.counts.assign || 0) +
       (summary.counts.cancel || 0);
     if (actionable === 0 && !summary.unavailableReason) {
       return null;
@@ -277,6 +279,7 @@ function taskCardPriorityRecommendation(context, session, priorityProperty) {
     effects: Object.freeze({
       roll: recommendation.kind === "roll" ? 1 : 0,
       decay: recommendation.kind === "decay" ? 1 : 0,
+      assign: recommendation.kind === "assign" ? 1 : 0,
       cancel: recommendation.kind === "cancel" ? 1 : 0,
       unavailable: recommendation.kind === "unavailable" ? 1 : 0,
     }),

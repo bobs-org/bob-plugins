@@ -58,6 +58,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       const actionable =
         (summary.counts.roll || 0) +
         (summary.counts.decay || 0) +
+        (summary.counts.assign || 0) +
         (summary.counts.cancel || 0);
       const hasAny =
         actionable > 0 || Boolean(summary.unavailableReason);
@@ -114,6 +115,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       const actionable =
         (summary.counts.roll || 0) +
         (summary.counts.decay || 0) +
+        (summary.counts.assign || 0) +
         (summary.counts.cancel || 0);
       const hasAny =
         actionable > 0 || Boolean(summary.unavailableReason);
@@ -179,11 +181,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
     if (!fresh || fresh.actionableCount <= 0 || fresh.unavailableReason) {
       return false;
     }
-    if (
-      fresh.counts.roll !== cached.counts.roll ||
-      fresh.counts.decay !== cached.counts.decay ||
-      fresh.counts.cancel !== cached.counts.cancel
-    ) {
+    if (!samePriorityRecommendationCounts(fresh.counts, cached.counts)) {
       return false;
     }
     this.linkRollBatch = fresh;
@@ -224,11 +222,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
     if (!fresh || fresh.actionableCount <= 0 || fresh.unavailableReason) {
       return false;
     }
-    if (
-      fresh.counts.roll !== cached.counts.roll ||
-      fresh.counts.decay !== cached.counts.decay ||
-      fresh.counts.cancel !== cached.counts.cancel
-    ) {
+    if (!samePriorityRecommendationCounts(fresh.counts, cached.counts)) {
       return false;
     }
     this.countedRollBatch = fresh;
@@ -323,7 +317,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         this.returnHome({ rebuild: true });
         return false;
       }
-      if (cached.kind === "roll" || cached.kind === "decay") {
+      if (isDatedPriorityRecommendation(cached)) {
         return await this.maybeOfferRecommendedWorkLog(cached);
       }
       if (cached.kind === "cancel") {
@@ -350,7 +344,10 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       if (cached.kind === "roll") {
         return await this.applyRecommendedRollWrite(cached);
       }
-      return await this.applyRecommendedDecayWrite(cached);
+      if (cached.kind === "decay") {
+        return await this.applyRecommendedDecayWrite(cached);
+      }
+      return await this.applyRecommendedAssignWrite(cached);
     }
     const scheduleSummary = cached.date
       ? `scheduled → ${normalizeBulletPropertyValue(cached.date)}`
@@ -372,7 +369,10 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         if (cached.kind === "roll") {
           return await this.applyRecommendedRollWrite(cached, schedulingWorkLog);
         }
-        return await this.applyRecommendedDecayWrite(cached, schedulingWorkLog);
+        if (cached.kind === "decay") {
+          return await this.applyRecommendedDecayWrite(cached, schedulingWorkLog);
+        }
+        return await this.applyRecommendedAssignWrite(cached, schedulingWorkLog);
       },
     });
   }
@@ -577,6 +577,49 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       return await this.runInboxRoutedCommit(decayAction, decayWrite);
     }
     return await decayWrite();
+  }
+
+  async applyRecommendedAssignWrite(recommendation, schedulingWorkLog = null) {
+    const property = this.findPriorityPropertyByName(
+      recommendation.priorityName,
+    );
+    if (!property || !recommendation.level) {
+      new Notice("Task changed while the picker was open; nothing was written");
+      return false;
+    }
+    const liveContext = getProjectNotePropertyContext(
+      this.getEditorContent(),
+      this.cursor.line,
+    );
+    const levelLabel = normalizeBulletPropertyValue(
+      recommendation.level && recommendation.level.label,
+    );
+    const assignAction = {
+      label: levelLabel ? `set ${levelLabel}` : "set priority",
+    };
+    const assignWrite = async () =>
+      await this.plugin.setBulletPriorityValue(
+        this.editor,
+        this.cursor,
+        this.filePath,
+        this.lineText,
+        property,
+        recommendation.level,
+        {
+          propertyContext: liveContext,
+          baseDate: this.valueBaseDate,
+          random: this.priorityRandom,
+          precomputedRoll: {
+            date: recommendation.date,
+            offset: recommendation.offset,
+          },
+          schedulingWorkLog,
+        },
+      );
+    if (typeof this.runInboxRoutedCommit === "function") {
+      return await this.runInboxRoutedCommit(assignAction, assignWrite);
+    }
+    return await assignWrite();
   }
 
   async applyRecommendedCancelWrite(recommendation) {

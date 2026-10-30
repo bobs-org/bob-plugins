@@ -277,6 +277,20 @@ test("the preview table strings are exact", () => {
     compact: "Alt+P cancel",
     detail: "Alt+P: cancel — decayed past P4",
   });
+
+  const assign = quickRollPreviewForLine({
+    config: standardConfig(),
+    content: NOPRIORITY,
+    line: 0,
+    tier: "next",
+  });
+  assert.deepEqual(assign, {
+    ok: true,
+    kind: "assign",
+    line: "Alt+P set P1 · 2–7d",
+    compact: "Alt+P set P1",
+    detail: "Alt+P: no priority — set P1, 2–7 days out",
+  });
 });
 
 test("checklist tiers and unpreviewable rows report ok:false", () => {
@@ -288,10 +302,20 @@ test("checklist tiers and unpreviewable rows report ok:false", () => {
       tier,
     );
   }
-  assert.equal(
-    quickRollPreviewForLine({ config, content: NOPRIORITY, line: 0, tier: "next" }).ok,
-    false,
-  );
+  assert.deepEqual(quickRollPreviewForLine({ config, content: NOPRIORITY, line: 0, tier: "next" }), {
+    ok: true,
+    kind: "assign",
+    line: "Alt+P set P1 · 2–7d",
+    compact: "Alt+P set P1",
+    detail: "Alt+P: no priority — set P1, 2–7 days out",
+  });
+  for (const tier of ["pre", "post"]) {
+    assert.deepEqual(
+      quickRollPreviewForLine({ config, content: NOPRIORITY, line: 0, tier }),
+      { ok: false, reason: "checklist-tier" },
+      `nopriority ${tier}`,
+    );
+  }
   assert.equal(
     quickRollPreviewForLine({ config, content: CLOSED, line: 0, tier: "next" }).ok,
     false,

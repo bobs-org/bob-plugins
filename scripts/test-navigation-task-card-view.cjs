@@ -3020,3 +3020,31 @@ test("theme menu stays grey when hueFor is missing or throws, and header matches
   assert.match(STYLES, /\.bob-task-card-theme-pill\.is-muted\s*\{[^}]*border-color: color-mix/s);
   assert.match(STYLES, /\.bob-task-card-theme-option-pill \.bob-cnp-theme-swatch\.is-muted,\s*\.bob-task-card-theme-pill \.bob-cnp-theme-swatch\.is-muted\s*\{\s*background-color: var\(--text-faint\);\s*border-color: transparent;/s);
 });
+
+test("assign batch preview carries set P1 for the banner", () => {
+  const { helpers } = require("../plugins/bob-navigation-hotkeys/main.js");
+  const config = helpers.validateBulletPropertyConfig({
+    properties: [
+      { name: "scheduled", values: "date" },
+      {
+        name: "priority",
+        values: "priority",
+        schedules: "scheduled",
+        levels: [
+          { label: "P1", value: "high", min_days: 2, max_days: 7 },
+          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
+        ],
+      },
+    ],
+  });
+  const property = config.properties.find((item) => item.name === "priority");
+  const summary = helpers.planPriorityRollRecommendationsForTargets(
+    "- [ ] #task B [scheduled:: 2026-10-01] ^b",
+    [{ line: 0, rawLine: "- [ ] #task B [scheduled:: 2026-10-01] ^b" }],
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  const preview = helpers.buildBatchPriorityRollPreviewModel(summary);
+  assert.match(preview.action, /1 set P1/);
+  assert.equal(preview.footerLabel, "Apply 1 recommendation");
+});

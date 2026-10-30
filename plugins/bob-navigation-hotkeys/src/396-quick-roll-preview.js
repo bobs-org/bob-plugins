@@ -99,8 +99,8 @@ function formatQuickRollWindowDays(level) {
 
 // Concise preview of exactly what Alt+P would do, from the same
 // recommendation the key uses. Frozen `{ ok: true, kind, line, compact,
-// detail }`, or frozen `{ ok: false, reason }` for unavailable, no
-// priority, closed, and non-task lines. `cancelConfirms` selects the
+// detail }`, or frozen `{ ok: false, reason }` for unavailable, closed,
+// and non-task lines. `cancelConfirms` selects the
 // confirm (default) or immediate-cancel strings.
 function planQuickRollPreview(recommendation, options = {}) {
   const rawLabel = options.keyLabel;
@@ -171,6 +171,26 @@ function planQuickRollPreview(recommendation, options = {}) {
       detail: windowDays
         ? `${keyLabel}: decay ${fromLabel} → ${toLabel}, ${windowDays}`
         : `${keyLabel}: decay ${fromLabel} → ${toLabel}`,
+    });
+  }
+  if (kind === "assign") {
+    const label = normalizeBulletPropertyValue(
+      recommendation.level && recommendation.level.label,
+    );
+    if (!label) {
+      return Object.freeze({ ok: false, reason: "no-level" });
+    }
+    const window = formatQuickRollWindow(recommendation.level);
+    const windowDays = formatQuickRollWindowDays(recommendation.level);
+    const compact = `${keyLabel} set ${label}`;
+    return Object.freeze({
+      ok: true,
+      kind: "assign",
+      line: window ? `${compact} · ${window}` : compact,
+      compact,
+      detail: windowDays
+        ? `${keyLabel}: no priority — set ${label}, ${windowDays}`
+        : `${keyLabel}: no priority — set ${label}`,
     });
   }
   if (kind === "cancel") {

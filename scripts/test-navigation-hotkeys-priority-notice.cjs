@@ -680,10 +680,12 @@ test("priority picker writes project priority and schedule inline atomically", a
 test("counted priority picker rolls an independent schedule for every task", async () => {
   notices.length = 0;
   const rolls = [0, 0.5, 0.999999];
+  let index = 0;
+  const cyclingRandom = () => rolls[index++ % rolls.length];
   const harness = createBulletPropertyPickerHarness({
     config: createPriorityPickerConfig(),
     baseDate: new Date(2026, 7, 3),
-    random: () => rolls.shift(),
+    random: cyclingRandom,
   });
 
   await choosePriorityLevel(harness, "P1", {
@@ -1027,4 +1029,35 @@ test("priority notice keeps the Lucide icon without a usable mark api", () => {
     findFragmentNode(batchRoot, nodeHasClass("bob-nh-notice-glyph")),
     null,
   );
+});
+
+test("batch priority notice carries an assign chip", () => {
+  const { helpers } = require("../plugins/bob-navigation-hotkeys/main.js");
+  const config = helpers.validateBulletPropertyConfig({
+    properties: [
+      { name: "scheduled", values: "date" },
+      {
+        name: "priority",
+        values: "priority",
+        schedules: "scheduled",
+        levels: [
+          { label: "P1", value: "high", min_days: 2, max_days: 7 },
+          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
+        ],
+      },
+    ],
+  });
+  const property = config.properties.find((item) => item.name === "priority");
+  const summary = helpers.planPriorityRollRecommendationsForTargets(
+    "- [ ] #task B [scheduled:: 2026-10-01] ^b",
+    [{ line: 0, rawLine: "- [ ] #task B [scheduled:: 2026-10-01] ^b" }],
+    property,
+    { baseDate: new Date(2026, 8, 30), random: () => 0 },
+  );
+  const notice = helpers.buildBatchPriorityRollNoticeModel(summary, {
+    baseDate: new Date(2026, 8, 30),
+    scheduledValues: [summary.dateStart],
+    outcome: {},
+  });
+  assert.ok(notice.chips.some((chip) => chip.text === "1 set P1" && chip.tone === "info"));
 });

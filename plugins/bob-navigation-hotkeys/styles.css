@@ -950,6 +950,10 @@
   color: color-mix(in srgb, var(--text-accent) 88%, transparent);
 }
 
+.bob-cnp-roll-preview.is-assign {
+  color: color-mix(in srgb, var(--text-accent) 88%, transparent);
+}
+
 .bob-cnp-roll-preview.is-decay {
   color: var(--color-orange);
 }

@@ -472,11 +472,11 @@ function buildTaskCardThemeHeader(projection) {
   }
   const display = projection.display;
   const parts = Object.freeze([
-    Object.freeze({ type: "label", text: "Theme " }),
+    Object.freeze({ type: "label", text: "Type " }),
     ...display.parts,
   ]);
   return Object.freeze({
-    text: `Theme ${display.text}`,
+    text: `Type ${display.text}`,
     parts,
     state: display.state || "unavailable",
     unknown: display.unknown === true,

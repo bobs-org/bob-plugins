@@ -601,13 +601,13 @@ function planTaskCard(context = {}) {
       kind: "property",
       action: "theme",
       propertyName: "theme",
-      label: "Theme",
+      label: "Type",
       enabled: themeProjection.available && themeProjection.editable,
       unavailableReason: !themeProjection.available
-        ? themeProjection.unavailableReason || "Theme is unavailable"
+        ? themeProjection.unavailableReason || "Type is unavailable"
         : themeProjection.editable
           ? null
-          : themeProjection.editUnavailableReason || "Theme editing is unavailable",
+          : themeProjection.editUnavailableReason || "Type editing is unavailable",
       detail: themeProjection.display.text,
       mixed: themeProjection.mixed,
       valueState: themeProjection.display.state || "unavailable",

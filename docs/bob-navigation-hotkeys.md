@@ -111,7 +111,7 @@ Task Link's linked task after focusing its note, and open the owner's stage on
 a Depends-On or BLOCKS line. On a LINKS or LINKED FROM line,
 `Ctrl+Shift+B` / `Ctrl+Shift+Alt+B` open the owner's Depends on / Blocks stage.
 
-Any card gesture that writes closes the card. The card offers a Theme row (`t`, `Enter` to open): Use default first with its inherited reason, then Today, Recent, and a validated typed name; `Ctrl+D` on the Theme row clears to Use default without touching hide state. Theme-only edits preserve status, links, and freshness and never advance the review walk. The card's Cancel action (`x`)
+Any card gesture that writes closes the card. The card offers a Type row (`t`, `Enter` to open): Use default first with its inherited reason, then Today, Recent, and a validated typed name; any type including PLAN is choosable. `Ctrl+D` on the Type row clears to Use default through the same relocate path without touching hide state. Type edits set `[type:: ...]`, then relocate the live Task Link (D8, absorb) with a consequence line, strict refusal, and one gesture; they preserve status and freshness and never advance the review walk. The card's Cancel action (`x`)
 closes the task as Cancelled with an optional reason kept in a first-child
 Cancel Log, pruning its links from today's open Pomodoros. The card level strip
 and priority notices render the shared signal-bar priority mark, falling back

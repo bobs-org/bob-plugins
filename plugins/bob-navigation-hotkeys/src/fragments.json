@@ -77,6 +77,7 @@
   "313-task-card-theme-projection.js",
   "314-task-card-key-model.js",
   "315-task-card-theme-stage.js",
+  "316-task-card-type-relocation.js",
   "320-task-card-header.js",
   "330-task-card-view.js",
   "340-picker-core.js",

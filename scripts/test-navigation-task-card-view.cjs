@@ -561,7 +561,7 @@ test("card renderer paints header, banner, strip, stable rows, more, and footer 
   assert.ok(list.focused);
 });
 
-test("Task Card theme header shows unknown and repair signals without invoking setters", () => {
+test("Task Card type header shows unknown and repair signals without invoking setters", () => {
   const line = "- [ ] #task Historical [theme:: OLD] ^old";
   let writes = 0;
   const model = makeModel({
@@ -607,7 +607,7 @@ test("Task Card theme header shows unknown and repair signals without invoking s
   );
   assert.ok(themeLine.classes.includes("is-unknown"));
   const themeText = flattenText(themeLine).replace(/\s+/g, " ");
-  assert.match(themeText, /Theme \[OLD\] this task/);
+  assert.match(themeText, /Type \[OLD\] this task/);
   assert.match(themeText, /sase_blog suggests WRITE/);
   assert.ok(themeValue.classes.includes("is-unknown"));
   assert.equal(themeValue.attributes.title.includes("not in the catalog"), true);
@@ -618,7 +618,7 @@ test("Task Card theme header shows unknown and repair signals without invoking s
   assert.match(flattenText(themeDot), /●/);
   assert.ok(themeRow);
   assert.equal(themeRow.attributes["aria-disabled"], "false");
-  assert.match(flattenText(themeRow), /t Theme/);
+  assert.match(flattenText(themeRow), /t Type/);
   assert.equal(writes, 0);
 });
 
@@ -994,7 +994,7 @@ test("Task Card opens the compact card with dialog semantics and a close control
   assert.equal(modal.isOpen, false);
 });
 
-test("Theme property row is selectable while its editor remains read-only", () => {
+test("Type property row is selectable while its editor remains read-only", () => {
   const { modal, editor } = openPropertyPicker();
   const row = descendants(modal.contentEl).find(
     (item) => item.attributes.id === "bob-task-card-row-theme",
@@ -1217,7 +1217,7 @@ test("linked Task Card theme writes report a later-note failure as a partial sav
   await nextTurn();
   assert.match(vault.notes["Tasks/Alpha.md"], /\[type:: FIX\]/);
   assert.doesNotMatch(vault.notes["Tasks/Beta.md"], /\[theme:: FIX\]/);
-  assert.ok(notices.some((message) => /Theme saved on 1 task · failed in 1 note/.test(message)));
+  assert.ok(notices.some((message) => /Type saved on 1 task · failed in 1 note/.test(message)));
   assert.equal(modal.isOpen, false);
 });
 
@@ -2974,7 +2974,7 @@ test("theme menu uses colored pills, grey PLAN, source markers, and distinct kin
     assert.ok(swatch.classes.includes(`is-${hue}`));
     assert.equal(pill.attributes["data-theme-hue"], hue === "muted" ? "none" : hue);
     assert.equal(swatch.attributes["aria-hidden"], "true");
-    assert.equal(swatch.attributes.title, hue === "muted" ? "No theme color" : "Theme hue: yellow");
+    assert.equal(swatch.attributes.title, hue === "muted" ? "No type color" : "Type hue: yellow");
     assert.equal(flattenText(pill), key.toUpperCase());
     assert.equal(byClass(row, "bob-cnp-row-path").length, 0);
     assert.equal(byClass(row, "bob-cnp-row-status").length, 1);

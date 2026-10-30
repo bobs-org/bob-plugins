@@ -45685,13 +45685,13 @@ function planTaskCard(context = {}) {
       kind: "property",
       action: "theme",
       propertyName: "theme",
-      label: "Theme",
+      label: "Type",
       enabled: themeProjection.available && themeProjection.editable,
       unavailableReason: !themeProjection.available
-        ? themeProjection.unavailableReason || "Theme is unavailable"
+        ? themeProjection.unavailableReason || "Type is unavailable"
         : themeProjection.editable
           ? null
-          : themeProjection.editUnavailableReason || "Theme editing is unavailable",
+          : themeProjection.editUnavailableReason || "Type editing is unavailable",
       detail: themeProjection.display.text,
       mixed: themeProjection.mixed,
       valueState: themeProjection.display.state || "unavailable",
@@ -46744,11 +46744,11 @@ function buildTaskCardThemeHeader(projection) {
   }
   const display = projection.display;
   const parts = Object.freeze([
-    Object.freeze({ type: "label", text: "Theme " }),
+    Object.freeze({ type: "label", text: "Type " }),
     ...display.parts,
   ]);
   return Object.freeze({
-    text: `Theme ${display.text}`,
+    text: `Type ${display.text}`,
     parts,
     state: display.state || "unavailable",
     unknown: display.unknown === true,
@@ -47020,12 +47020,12 @@ const TASK_CARD_ROW_SHORTCUTS = Object.freeze({
 });
 
 // ---- src/315-task-card-theme-stage.js ----
-// Pure Task Card theme stage model and direct-edit planner. It never writes.
+// Pure Task Card type stage model and direct-edit planner. It never writes.
 // The modal supplies the live projection, theme API, and snapshots; this
 // layer plans per-target set/clear/no-op edits and stage rows. Selecting Use
-// default always clears; selecting the inherited theme also clears. Other
-// choices follow the shared link write rule shape (single non-exempt
-// component, catalog spelling) without requiring a shown suggestion.
+// default always clears; selecting the inherited type also clears. Other
+// choices are any single type component (including PLAN and other exempt
+// types) with catalog spelling, without requiring a shown suggestion.
 function taskCardThemeNormalizeKey(value) {
   return String(value || "")
     .trim()
@@ -47123,20 +47123,12 @@ function taskCardThemeExemptKeys(api, ledgerApi) {
   }
 }
 
-function taskCardThemeSingleComponent(name, exemptKeys) {
+function taskCardThemeSingleComponent(name) {
   const text = String(name == null ? "" : name).trim();
   if (!text || text === "(unnamed)") {
     return null;
   }
-  const exempt = new Set(
-    (Array.isArray(exemptKeys) ? exemptKeys : [])
-      .map((value) => taskCardThemeNormalizeKey(value))
-      .filter(Boolean),
-  );
-  const choices = taskCardThemeSplitComponents(text).filter(
-    (component) =>
-      !exempt.has(taskCardThemeNormalizeKey(component)),
-  );
+  const choices = taskCardThemeSplitComponents(text);
   if (choices.length !== 1) {
     return null;
   }
@@ -47147,32 +47139,23 @@ function taskCardThemeSingleComponent(name, exemptKeys) {
   return { name: canonical, key: taskCardThemeNormalizeKey(canonical) };
 }
 
-function taskCardThemeValidateNewName(raw, api, exemptKeys) {
+function taskCardThemeValidateNewName(raw, api) {
   const canonical = taskCardThemeCanonicalName(raw);
   if (!canonical) {
     return Object.freeze({
       valid: false,
       name: null,
       key: null,
-      error: "Theme name is invalid",
+      error: "Type name is invalid",
     });
   }
-  const single = taskCardThemeSingleComponent(canonical, exemptKeys);
+  const single = taskCardThemeSingleComponent(canonical);
   if (!single) {
-    const parts = taskCardThemeSplitComponents(canonical);
-    if (parts.length !== 1) {
-      return Object.freeze({
-        valid: false,
-        name: null,
-        key: null,
-        error: "Composite themes cannot be set on a task",
-      });
-    }
     return Object.freeze({
       valid: false,
       name: null,
       key: null,
-      error: "Exempt themes cannot be set on a task",
+      error: "Composite types cannot be set on a task",
     });
   }
   const spelling =
@@ -47185,8 +47168,15 @@ function taskCardThemeStageInheritedReason(inherited) {
     return "no default";
   }
   const name = inherited.theme.name || inherited.theme.key || "default";
+  if (inherited.source === "default") {
+    return `${name} default type`;
+  }
   const sourceLabel = taskCardThemeSourceLabel(inherited);
   return `${name} from ${sourceLabel}`;
+}
+
+function taskCardTypeInheritedReason(inherited) {
+  return taskCardThemeStageInheritedReason(inherited);
 }
 
 function taskCardThemeInheritedSourceText(inherited) {
@@ -47212,8 +47202,12 @@ function taskCardThemeNoticeContext(edit) {
   };
 }
 
+function taskCardTypeUnchangedNotice(edits) {
+  return taskCardThemeUnchangedNotice(edits);
+}
+
 function taskCardThemeUnchangedNotice(edits) {
-  const fallback = "Themes are already set; nothing was written";
+  const fallback = "Types are already set; nothing was written";
   try {
     if (!Array.isArray(edits) || edits.length === 0) return fallback;
     const entries = edits.map((edit) => {
@@ -47229,7 +47223,7 @@ function taskCardThemeUnchangedNotice(edits) {
       const { kind, name, source, reading } = first;
       if (kind === "default") {
         const reason = source ? `${name} from ${source}` : reading ? `${name} for reading tasks` : name;
-        text = name ? `Already using the default (${reason})` : "No theme override to clear";
+        text = name ? `Already using the default (${reason})` : "No type override to clear";
       } else if (typeof name !== "string" || !name) {
         return fallback;
       } else if (kind === "same") {
@@ -47262,22 +47256,71 @@ function taskCardThemeUnchangedNotice(edits) {
   }
 }
 
-function taskCardThemeSavedNotice(edit) {
+function taskCardTypeSavedNotice(edit, relocation) {
+  return taskCardThemeSavedNotice(edit, relocation);
+}
+
+function taskCardTypeNoticeInheritedReason(edit) {
+  const { name, source, reading } = taskCardThemeNoticeContext(edit);
+  if (!name) return null;
+  if (source) return `${name} from ${source}`;
+  if (reading) return `${name} for reading tasks`;
+  return name;
+}
+
+function taskCardThemeSavedNotice(edit, relocation) {
   try {
+    const moved = relocation && relocation.moved === true
+      ? relocation.destinationName || relocation.newTypeName || null
+      : null;
+    const partial = relocation && relocation.partial === true;
     if (edit && edit.action === "set" && typeof edit.name === "string" && edit.name) {
-      return `Theme ${edit.name} saved`;
+      if (partial) {
+        return `Type ${edit.name} set · link not moved — Ctrl+Shift+M to move it`;
+      }
+      if (moved) {
+        return `Type ${edit.name} · link moved to ${moved}`;
+      }
+      return `Type ${edit.name}`;
     }
-    if (!edit || edit.action !== "clear") return "Theme saved";
+    if (!edit || edit.action !== "clear") return "Type saved";
     const { name, source, reading } = taskCardThemeNoticeContext(edit);
-    if (!name) return "Theme cleared to default";
+    const inheritedLong = name
+      ? (source ? `${name} from ${source}`
+        : reading ? `${name} for reading tasks` : name)
+      : null;
+    const inheritedShort = (() => {
+      try {
+        const reason = taskCardThemeStageInheritedReason(edit.target && edit.target.inherited);
+        return reason && reason !== "no default" ? reason : inheritedLong;
+      } catch (_error) {
+        return inheritedLong;
+      }
+    })();
+    if (!name) {
+      if (partial) {
+        return "Type cleared · link not moved — Ctrl+Shift+M to move it";
+      }
+      return moved ? `Type cleared · link moved to ${moved}` : "Type cleared to default";
+    }
+    if (partial) {
+      return inheritedShort
+        ? `Type cleared · ${inheritedShort} · link not moved — Ctrl+Shift+M to move it`
+        : "Type cleared · link not moved — Ctrl+Shift+M to move it";
+    }
+    if (moved) {
+      return inheritedShort
+        ? `Type cleared · ${inheritedShort} · link moved to ${moved}`
+        : `Type cleared · link moved to ${moved}`;
+    }
     const prefix = edit.reason === "select-inherited-clears"
-      ? edit.target.field && edit.target.field.state === "repair" ? "Theme fields repaired" : "Override removed"
-      : "Theme cleared";
+      ? edit.target.field && edit.target.field.state === "repair" ? "Type fields repaired" : "Override removed"
+      : "Type cleared";
     const reason = source ? `${name} is inherited from ${source}`
       : reading ? `${name} is the default for reading tasks` : `${name} is this task's default`;
     return `${prefix}; ${reason}`;
   } catch (_error) {
-    return "Theme saved";
+    return "Type saved";
   }
 }
 
@@ -47463,10 +47506,7 @@ function buildTaskCardThemeStageModel(projection, api, options = {}) {
     );
   }
   if (trimmedQuery) {
-    const exempt = taskCardThemeExemptKeys(api, opts.ledgerApi);
-    const validated = exempt.available
-      ? taskCardThemeValidateNewName(trimmedQuery, api, exempt.keys)
-      : { valid: false };
+    const validated = taskCardThemeValidateNewName(trimmedQuery, api);
     if (validated.valid && remember(validated.key)) {
       rows.push(
         Object.freeze({
@@ -47474,7 +47514,7 @@ function buildTaskCardThemeStageModel(projection, api, options = {}) {
           key: validated.key,
           name: validated.name,
           title: validated.name,
-          detail: "New theme",
+          detail: "New type",
         }),
       );
     }
@@ -47521,7 +47561,7 @@ function planTaskCardThemeEdits(projection, selection, api, options = {}) {
     return Object.freeze({ valid: false, error: "No editable tasks", edits: Object.freeze([]) });
   }
   if (!selection || typeof selection !== "object") {
-    return Object.freeze({ valid: false, error: "No theme choice", edits: Object.freeze([]) });
+    return Object.freeze({ valid: false, error: "No type choice", edits: Object.freeze([]) });
   }
   if (selection.kind === "default") {
     const edits = targets.map((target) =>
@@ -47542,13 +47582,13 @@ function planTaskCardThemeEdits(projection, selection, api, options = {}) {
       ? selection.key
       : "";
   if (!key) {
-    return Object.freeze({ valid: false, error: "Theme name is invalid", edits: Object.freeze([]) });
+    return Object.freeze({ valid: false, error: "Type name is invalid", edits: Object.freeze([]) });
   }
-  const candidate = taskCardThemeSingleComponent(rawName, []);
+  const candidate = taskCardThemeSingleComponent(rawName);
   if (!candidate) {
     const error = taskCardThemeSplitComponents(rawName).length !== 1
-      ? "Composite themes cannot be set on a task"
-      : "Theme name is invalid";
+      ? "Composite types cannot be set on a task"
+      : "Type name is invalid";
     return Object.freeze({ valid: false, error, edits: Object.freeze([]) });
   }
   const spelling = taskCardThemeCatalogSpelling(api, candidate.key, candidate.name) || candidate.name;
@@ -47586,24 +47626,6 @@ function planTaskCardThemeEdits(projection, selection, api, options = {}) {
       reason: "set-theme",
     });
   });
-  if (planned.some((edit) => edit.action === "set")) {
-    const exempt = taskCardThemeExemptKeys(api, opts.ledgerApi);
-    if (!exempt.available) {
-      return Object.freeze({
-        valid: false,
-        error: "Theme eligibility is unavailable; Ledger Tools caps could not be read",
-        edits: Object.freeze([]),
-      });
-    }
-    const exemptKey = new Set(exempt.keys.map(taskCardThemeNormalizeKey));
-    if (exemptKey.has(candidate.key)) {
-      return Object.freeze({
-        valid: false,
-        error: "Exempt themes cannot be set on a task",
-        edits: Object.freeze([]),
-      });
-    }
-  }
   const edits = planned;
   return Object.freeze({ valid: true, error: null, edits: Object.freeze(edits) });
 }
@@ -47661,6 +47683,377 @@ function taskCardThemeRevalidateEdit(edit, freshProjection) {
     return { ok: false, reason: "Task changed; reopen the card" };
   }
   return { ok: true, fresh, reason: null };
+}
+// ---- src/316-task-card-type-relocation.js ----
+// Pure Task Card type relocation helpers (D8). They never write.
+// The picker supplies the field edit, today's daily snapshot, and the
+// Ledger Tools type API; these helpers plan the ledger side, render the
+// D10 consequence line, and apply the ledger edit with the bullet-move
+// subtree primitive and the existing placeholder-cleanup rule.
+function taskCardTypeNewTypeForEdit(edit) {
+  if (!edit || typeof edit !== "object") {
+    return null;
+  }
+  if (edit.action === "set" && typeof edit.key === "string" && edit.key) {
+    const name = typeof edit.name === "string" && edit.name ? edit.name : edit.key;
+    return Object.freeze({ key: edit.key, name });
+  }
+  if (edit.action === "clear") {
+    const inherited = edit.target && edit.target.inherited;
+    const theme = inherited && inherited.theme;
+    if (theme && (theme.key || theme.name)) {
+      const key = typeof theme.key === "string" && theme.key
+        ? theme.key
+        : String(theme.name || "").trim().toLowerCase().replace(/\s+/g, " ");
+      const name = typeof theme.name === "string" && theme.name
+        ? theme.name
+        : theme.key;
+      if (key) {
+        return Object.freeze({ key, name: name || key });
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
+function taskCardTypeLedgerEntries(dailyContent) {
+  const text = String(dailyContent || "");
+  let rawEntries = [];
+  try {
+    const collected = collectPomodoroEntries(text);
+    if (collected && Array.isArray(collected.entries)) {
+      rawEntries = collected.entries;
+    }
+  } catch (_error) {
+    rawEntries = [];
+  }
+  let lines = [];
+  try {
+    lines = splitMarkdownContent(text).lines;
+  } catch (_error) {
+    lines = text.split(/\r?\n/);
+  }
+  const timedOpen = rawEntries.filter(
+    (entry) => entry && entry.open === true && entry.placeholder !== true,
+  );
+  const runningLine = timedOpen.length === 1 ? timedOpen[0].entryLine : null;
+  const entries = [];
+  const details = [];
+  for (const raw of rawEntries) {
+    const running = raw.entryLine === runningLine;
+    const linksList = [];
+    const start = Number.isInteger(raw.childStartLine) ? raw.childStartLine : null;
+    const end = Number.isInteger(raw.childEndLineExclusive) ? raw.childEndLineExclusive : null;
+    if (start !== null && end !== null) {
+      for (let line = start; line < end; line += 1) {
+        let link = null;
+        try {
+          link = parseLinkPickerTaskLink(String(lines[line] || ""));
+        } catch (_error) {
+          link = null;
+        }
+        if (link) {
+          linksList.push(Object.freeze({
+            line,
+            rawLine: String(lines[line] || ""),
+            blockId: link.blockId,
+            target: link.target,
+          }));
+        }
+      }
+    }
+    entries.push(Object.freeze({
+      name: typeof raw.name === "string" ? raw.name : raw.name == null ? null : String(raw.name),
+      open: raw.open === true,
+      running,
+      links: linksList.length,
+    }));
+    details.push(Object.freeze({
+      entryLine: raw.entryLine,
+      childStartLine: start,
+      childEndLineExclusive: end,
+      placeholder: raw.placeholder === true,
+      name: typeof raw.name === "string" ? raw.name : raw.name == null ? null : String(raw.name),
+      open: raw.open === true,
+      running,
+      linksList: Object.freeze(linksList),
+    }));
+  }
+  return Object.freeze({ entries: Object.freeze(entries), details: Object.freeze(details) });
+}
+
+function taskCardTypeLedgerKeys(entries, api) {
+  const keys = new Set();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const name = entry && typeof entry.name === "string" ? entry.name : null;
+    if (!name) continue;
+    let components = null;
+    try {
+      components = api && typeof api.typeComponentsOf === "function"
+        ? api.typeComponentsOf(name)
+        : null;
+    } catch (_error) {
+      components = null;
+    }
+    if (!Array.isArray(components)) continue;
+    for (const component of components) {
+      if (component && component.isType === true && component.key) {
+        keys.add(String(component.key));
+      }
+    }
+  }
+  return [...keys];
+}
+
+function taskCardTypeFindLiveLink(details, blockId) {
+  const id = typeof blockId === "string" ? blockId.trim() : "";
+  if (!id) return null;
+  const matches = [];
+  const list = Array.isArray(details) ? details : [];
+  for (let entryIndex = 0; entryIndex < list.length; entryIndex += 1) {
+    const detail = list[entryIndex];
+    const links = detail && Array.isArray(detail.linksList) ? detail.linksList : [];
+    for (const item of links) {
+      if (item && item.blockId === id) {
+        matches.push(Object.freeze({ entryIndex, line: item.line, rawLine: item.rawLine, entry: detail }));
+      }
+    }
+  }
+  if (matches.length === 0) return null;
+  if (matches.length !== 1) return Object.freeze({ multiple: true, matches: Object.freeze(matches) });
+  return matches[0];
+}
+
+function taskCardTypeConsequence(edit, relocationInfo) {
+  const info = relocationInfo && typeof relocationInfo === "object" ? relocationInfo : {};
+  const relocation = info.relocation || null;
+  const sourceName = typeof info.sourceEntryName === "string" && info.sourceEntryName
+    ? info.sourceEntryName
+    : "FIX";
+  const newType = info.newType && typeof info.newType.name === "string" && info.newType.name
+    ? info.newType.name
+    : typeof info.newTypeName === "string" && info.newTypeName
+      ? info.newTypeName
+      : null;
+  if (!relocation || relocation.kind === "unchanged") {
+    if (info.hasLiveLink !== true) {
+      return "no live link · ledger unchanged";
+    }
+    return `already under ${newType || sourceName}`;
+  }
+  if (relocation.kind === "refused") {
+    const typeName = relocation.typeName || newType || "TYPE";
+    const cap = Number(relocation.cap) || 0;
+    const before = Number(relocation.themesBefore) || 0;
+    return `plan.strict: ${typeName} would be type ${before + 1} of ${cap} · nothing written`;
+  }
+  if (relocation.kind === "renameEntry" || relocation.kind === "appendComponent") {
+    const next = typeof relocation.newName === "string" && relocation.newName
+      ? relocation.newName
+      : newType || sourceName;
+    return `running ${sourceName} becomes ${next}`;
+  }
+  if (relocation.kind === "moveTo") {
+    return `link moves ${sourceName} → ${newType || sourceName}`;
+  }
+  if (relocation.kind === "renamePlaceholder") {
+    return `${sourceName} placeholder becomes ${newType || sourceName}`;
+  }
+  if (relocation.kind === "createBelow") {
+    const name = typeof relocation.name === "string" && relocation.name
+      ? relocation.name
+      : newType || sourceName;
+    return `new ${name} Pomodoro below ${sourceName}`;
+  }
+  return "no live link · ledger unchanged";
+}
+
+function taskCardTypeApplyLedgerEdit(dailyContent, relocation, liveLink, details) {
+  const text = String(dailyContent || "");
+  if (!relocation || relocation.kind === "unchanged" || relocation.kind === "refused") {
+    return Object.freeze({ valid: true, after: text, changed: false });
+  }
+  let lines = [];
+  let lineEnding = "\n";
+  try {
+    const split = splitMarkdownContent(text);
+    lines = split.lines;
+    lineEnding = split.lineEnding || "\n";
+  } catch (_error) {
+    return Object.freeze({ valid: false, error: "Daily note could not be read", after: text });
+  }
+  const list = Array.isArray(details) ? details : [];
+  if (relocation.kind === "renameEntry" || relocation.kind === "appendComponent" || relocation.kind === "renamePlaceholder") {
+    const detail = list[relocation.index];
+    if (!detail || !Number.isInteger(detail.entryLine)) {
+      return Object.freeze({ valid: false, error: "Pomodoro entry changed; reopen the card", after: text });
+    }
+    const plan = planPomodoroEntryRename(text, {
+      sourceEntryLine: detail.entryLine,
+      sourceRawLine: String(lines[detail.entryLine] || ""),
+      name: relocation.newName,
+      preserveSpelling: true,
+    });
+    if (!plan.valid) {
+      return Object.freeze({ valid: false, error: plan.error || "Pomodoro entry could not be renamed", after: text });
+    }
+    return Object.freeze({ valid: true, after: plan.after, changed: plan.after !== text });
+  }
+  if (relocation.kind === "moveTo") {
+    const source = list[relocation.from];
+    const dest = list[relocation.to];
+    if (!source || !dest || !liveLink || !Number.isInteger(liveLink.line)) {
+      return Object.freeze({ valid: false, error: "Task link changed; reopen the card", after: text });
+    }
+    if (String(lines[liveLink.line] || "") !== liveLink.rawLine) {
+      return Object.freeze({ valid: false, error: "Task link changed; reopen the card", after: text });
+    }
+    const plan = planPomodoroBulletMove(text, {
+      targets: [{ line: liveLink.line, rawLine: liveLink.rawLine }],
+      sourceEntryLine: source.entryLine,
+      sourceRawLine: String(lines[source.entryLine] || ""),
+      destination: { kind: "existing", entryLine: dest.entryLine },
+      preserveSourceEntry: source.placeholder !== true,
+    });
+    if (!plan.valid) {
+      return Object.freeze({ valid: false, error: plan.error || "Task link could not be moved", after: text });
+    }
+    return Object.freeze({ valid: true, after: plan.after, changed: plan.after !== text });
+  }
+  if (relocation.kind === "createBelow") {
+    const source = list[relocation.from];
+    if (!source || !liveLink || !Number.isInteger(liveLink.line)) {
+      return Object.freeze({ valid: false, error: "Task link changed; reopen the card", after: text });
+    }
+    if (String(lines[liveLink.line] || "") !== liveLink.rawLine) {
+      return Object.freeze({ valid: false, error: "Task link changed; reopen the card", after: text });
+    }
+    const plan = planPomodoroBulletMove(text, {
+      targets: [{ line: liveLink.line, rawLine: liveLink.rawLine }],
+      sourceEntryLine: source.entryLine,
+      sourceRawLine: String(lines[source.entryLine] || ""),
+      destination: { kind: "new", name: relocation.name, preserveSpelling: true },
+      preserveSourceEntry: source.placeholder !== true,
+    });
+    if (!plan.valid) {
+      return Object.freeze({ valid: false, error: plan.error || "Task link could not be moved", after: text });
+    }
+    return Object.freeze({ valid: true, after: plan.after, changed: plan.after !== text });
+  }
+  return Object.freeze({ valid: false, error: "Task link could not be moved", after: text });
+}
+
+function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
+  const working = { content: String(dailyContent || ""), moves: [], refused: null };
+  let built = null;
+  try {
+    built = taskCardTypeLedgerEntries(working.content);
+  } catch (_error) {
+    return { valid: false, error: "Daily note could not be read", moves: [], refused: null, content: working.content };
+  }
+  for (const edit of Array.isArray(edits) ? edits : []) {
+    const newType = taskCardTypeNewTypeForEdit(edit);
+    if (!newType) continue;
+    const blockId = edit.target && edit.target.identity && edit.target.identity.blockId;
+    let details = built.details;
+    let entries = built.entries;
+    try {
+      const rebuilt = taskCardTypeLedgerEntries(working.content);
+      details = rebuilt.details;
+      entries = rebuilt.entries;
+      built = rebuilt;
+    } catch (_error) {
+      // Keep the last good snapshot.
+    }
+    const found = taskCardTypeFindLiveLink(details, blockId);
+    if (!found || found.multiple === true) continue;
+    let relocation = null;
+    try {
+      relocation = api.planRelocation({
+        entries,
+        liveLink: found.entryIndex,
+        typeKey: newType.key,
+        typeName: newType.name,
+      });
+    } catch (_error) {
+      relocation = null;
+    }
+    if (!relocation) continue;
+    if (relocation.kind === "refused") {
+      const sourceName = entries[found.entryIndex] && entries[found.entryIndex].name;
+      return {
+        valid: true,
+        refused: { relocation, sourceName, newType, edit },
+        moves: working.moves,
+        content: working.content,
+      };
+    }
+    if (relocation.kind === "unchanged") continue;
+    const applied = taskCardTypeApplyLedgerEdit(working.content, relocation, found, details);
+    if (!applied.valid) {
+      return { valid: false, error: applied.error || "Task link could not be moved", moves: working.moves, refused: null, content: working.content };
+    }
+    if (applied.changed) {
+      working.content = applied.after;
+    }
+    const sourceName = entries[found.entryIndex] && entries[found.entryIndex].name;
+    let destinationName = newType.name;
+    try {
+      const rebuilt = taskCardTypeLedgerEntries(working.content);
+      if (relocation.kind === "moveTo" && rebuilt.entries[relocation.to]) {
+        destinationName = rebuilt.entries[relocation.to].name || newType.name;
+      } else if ((relocation.kind === "renameEntry" || relocation.kind === "appendComponent" || relocation.kind === "renamePlaceholder") && typeof relocation.newName === "string" && relocation.newName) {
+        destinationName = relocation.newName;
+      } else if (relocation.kind === "createBelow" && typeof relocation.name === "string" && relocation.name) {
+        destinationName = relocation.name;
+      }
+    } catch (_error) {
+      // Destination naming is best-effort.
+    }
+    working.moves.push(Object.freeze({ edit, relocation, liveLink: found, sourceName, destinationName, newType }));
+  }
+  return { valid: true, error: null, moves: working.moves, refused: null, content: working.content };
+}
+
+async function writeTaskCardTypeDailyContent(deps, snapshot, preimage, nextContent) {
+  const plugin = deps && deps.plugin;
+  const app = deps && deps.app;
+  if (!snapshot || typeof nextContent !== "string") return false;
+  if (String(preimage || "") === String(nextContent || "")) return true;
+  const dailyPath = normalizeVaultRelativePath(snapshot.dailyPath || "");
+  if (!dailyPath) return false;
+  try {
+    const openEditor = plugin && typeof plugin.getOpenMarkdownEditorForPath === "function"
+      ? plugin.getOpenMarkdownEditorForPath(dailyPath)
+      : (snapshot.editor && typeof snapshot.editor.getValue === "function" ? snapshot.editor : null);
+    if (openEditor && typeof openEditor.getValue === "function") {
+      if (String(openEditor.getValue() || "") !== String(preimage || "")) {
+        return false;
+      }
+      const cursor = typeof openEditor.getCursor === "function" ? openEditor.getCursor() : null;
+      const applied = applyEditorContentTransaction(openEditor, String(preimage || ""), String(nextContent || ""), cursor ? { line: cursor.line, ch: cursor.ch } : null);
+      return applied && String(openEditor.getValue() || "") === String(nextContent || "");
+    }
+  } catch (_error) {
+    return false;
+  }
+  try {
+    const vault = app && app.vault;
+    const file = snapshot.file || (vault && typeof vault.getAbstractFileByPath === "function" ? vault.getAbstractFileByPath(dailyPath) : null);
+    if (!vault || typeof vault.process !== "function" || !file) return false;
+    let wrote = false;
+    await vault.process(file, (content) => {
+      if (String(content || "") !== String(preimage || "")) {
+        throw new Error("Daily note preimage changed");
+      }
+      wrote = true;
+      return String(nextContent || "");
+    });
+    return wrote;
+  } catch (_error) {
+    return false;
+  }
 }
 // ---- src/320-task-card-header.js ----
 function buildTaskCardHeader(details = {}) {
@@ -48135,11 +48528,11 @@ function renderTaskCardThemeHeader(container, theme) {
   const line = container.createDiv({
     cls: `bob-task-card-theme-line${stateClass}${theme.unknown ? " is-unknown" : ""}${theme.needsRepair ? " is-repair" : ""}${theme.mixed ? " is-mixed" : ""}`,
     attr: {
-      "aria-label": theme.text || "Theme unavailable",
-      title: theme.tooltip || theme.text || "Theme unavailable",
+      "aria-label": theme.text || "Type unavailable",
+      title: theme.tooltip || theme.text || "Type unavailable",
     },
   });
-  line.setAttribute("aria-label", theme.text || "Theme unavailable");
+  line.setAttribute("aria-label", theme.text || "Type unavailable");
   if (theme.tooltip || theme.text) {
     line.setAttribute("title", theme.tooltip || theme.text);
   }
@@ -49938,9 +50331,10 @@ function buildTaskCardThemeRuntimeContext(modal) {
   });
 }
 // ---- src/352-picker-task-card-theme-stage.js ----
-// Task Card theme stage: t/Enter opens a filtered theme picker, Ctrl+D on
-// the Theme row clears to Use default. All commits use the Ledger Tools
-// string setters on exact task lines with preimage guards; no status, link,
+// Task Card type stage: t/Enter opens a filtered type picker, Ctrl+D on
+// the Type row clears to Use default. All commits set the task type via the
+// Ledger Tools string setters on exact task lines with preimage guards,
+// then relocate the live Task Link (D8) as a checked ledger step; no status,
 // ID, freshness, schedule, Work Log, or review-walk effects.
 class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
   getTaskCardThemeApi() {
@@ -49967,6 +50361,140 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     } catch (_error) {
       return null;
     }
+  }
+
+  taskCardTypeBaseDate() {
+    try {
+      if (this.fixedValueBaseDate instanceof Date) return this.fixedValueBaseDate;
+      if (this.valueBaseDate instanceof Date) return this.valueBaseDate;
+    } catch (_error) {
+      // Fall through to today.
+    }
+    return new Date();
+  }
+
+  async taskCardTypeDailySnapshot() {
+    const plugin = this.plugin;
+    const sourcePath = normalizeVaultRelativePath(this.filePath || "");
+    let sourceContent = "";
+    try {
+      sourceContent = String(
+        typeof this.getEditorContent === "function" ? this.getEditorContent() || "" : "",
+      );
+    } catch (_error) {
+      sourceContent = "";
+    }
+    if (plugin && typeof plugin.readDeferredPomodoroSnapshot === "function") {
+      try {
+        const snapshot = await plugin.readDeferredPomodoroSnapshot(this.app, {
+          sourcePath,
+          sourceContent,
+          today: this.taskCardTypeBaseDate(),
+        });
+        if (snapshot) {
+          if (snapshot.sameFile === true) {
+            return Object.freeze({
+              dailyPath: normalizeVaultRelativePath(snapshot.dailyPath || sourcePath),
+              content: sourceContent,
+              sameFile: true,
+              editor: null,
+              file: snapshot.file || null,
+              snapshot,
+            });
+          }
+          if (typeof snapshot.content === "string") {
+            return Object.freeze({
+              dailyPath: normalizeVaultRelativePath(snapshot.dailyPath || ""),
+              content: snapshot.content,
+              sameFile: false,
+              editor: snapshot.editor || null,
+              file: snapshot.file || null,
+              snapshot,
+            });
+          }
+          return null;
+        }
+      } catch (_error) {
+        // No vault fallback: without the deferred snapshot there is no
+        // ledger preview, so the field edit applies without relocation.
+      }
+    }
+    return null;
+  }
+
+  taskCardTypePreviewKey(selection) {
+    if (!selection || typeof selection !== "object") return "none";
+    if (selection.kind === "default") return "default";
+    return `type:${String(selection.key || selection.name || "").toLowerCase()}`;
+  }
+
+  taskCardTypeConsequenceForSelection(selection) {
+    try {
+      const projection = this.taskCardThemeStageProjection;
+      const api = this.getTaskCardThemeApi();
+      if (!projection || !api) return "Checking live link…";
+      const plan = planTaskCardThemeEdits(projection, selection, api, { ledgerApi: this.getTaskCardLedgerApi() });
+      if (!plan.valid) return plan.error || "That type cannot be set on a task";
+      const edits = Array.isArray(plan.edits) ? plan.edits : [];
+      const actionable = edits.filter((edit) => edit && (edit.action === "set" || edit.action === "clear"));
+      if (actionable.length === 0) return "No type change · ledger unchanged";
+      const preview = this.taskCardTypeLedgerPreview;
+      if (!preview || preview.loading === true) return "Checking live link…";
+      if (!preview || typeof preview.content !== "string") return "no live link · ledger unchanged";
+      const built = taskCardTypeLedgerEntries(preview.content);
+      const first = actionable[0];
+      const newType = taskCardTypeNewTypeForEdit(first);
+      const blockId = first.target && first.target.identity && first.target.identity.blockId;
+      const found = taskCardTypeFindLiveLink(built.details, blockId);
+      if (!found || found.multiple === true) return "no live link · ledger unchanged";
+      if (!newType) {
+        const sourceName = built.entries[found.entryIndex] && built.entries[found.entryIndex].name;
+        return `already under ${sourceName || "ledger"}`;
+      }
+      let relocation = null;
+      try {
+        relocation = api.planRelocation({
+          entries: built.entries,
+          liveLink: found.entryIndex,
+          typeKey: newType.key,
+          typeName: newType.name,
+        });
+      } catch (_error) {
+        relocation = null;
+      }
+      const sourceName = built.entries[found.entryIndex] && built.entries[found.entryIndex].name;
+      return taskCardTypeConsequence(first, {
+        relocation,
+        hasLiveLink: true,
+        sourceEntryName: sourceName,
+        newType,
+      });
+    } catch (_error) {
+      return "no live link · ledger unchanged";
+    }
+  }
+
+  taskCardTypeRefreshLedgerPreview() {
+    const generation = this.taskCardThemeStageGeneration;
+    this.taskCardTypeLedgerPreview = Object.freeze({ loading: true });
+    void this.taskCardTypeDailySnapshot().then((snapshot) => {
+      if (!this.taskCardThemeStageIsActive(generation)) return;
+      if (!snapshot || typeof snapshot.content !== "string") {
+        this.taskCardTypeLedgerPreview = Object.freeze({ loading: false, content: null });
+      } else {
+        this.taskCardTypeLedgerPreview = Object.freeze({ loading: false, content: snapshot.content, snapshot });
+      }
+      try {
+        if (typeof this.renderResults === "function" && this.stage === "value") {
+          this.renderResults();
+        }
+      } catch (_error) {
+        // Preview refresh is best-effort.
+      }
+    }).catch(() => {
+      if (!this.taskCardThemeStageIsActive(generation)) return;
+      this.taskCardTypeLedgerPreview = Object.freeze({ loading: false, content: null });
+    });
   }
 
   currentTaskCardThemeProjection() {
@@ -50023,16 +50551,16 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     if (!projection || !projection.available) {
       new Notice(
         (projection && projection.unavailableReason) ||
-          "Theme editing is unavailable",
+          "Type editing is unavailable",
       );
       return false;
     }
     if (!api) {
-      new Notice("Ledger Tools task-theme API is unavailable");
+      new Notice("Ledger Tools task-type API is unavailable");
       return false;
     }
     if (typeof api.setTaskTheme !== "function" || typeof api.clearTaskTheme !== "function") {
-      new Notice("Ledger Tools task-theme write methods are unavailable");
+      new Notice("Ledger Tools task-type write methods are unavailable");
       return false;
     }
     this.taskCardThemeStageProjection = projection;
@@ -50103,6 +50631,8 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     this.taskCardThemeStageRows = null;
     this.taskCardThemeQuery = "";
     this.taskCardThemeSelectedKey = null;
+    this.taskCardTypeLedgerPreview = null;
+    this.taskCardTypeBaseSubtitle = null;
   }
 
   showTaskCardThemeStage(options = {}) {
@@ -50112,13 +50642,13 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     const projection = options.projection || this.taskCardThemeStageProjection ||
       this.freshTaskCardThemeProjection() || this.currentTaskCardThemeProjection();
     if (!projection || !projection.available) {
-      new Notice((projection && projection.unavailableReason) || "Theme editing is unavailable");
+      new Notice((projection && projection.unavailableReason) || "Type editing is unavailable");
       this.returnToTaskCard({ rebuild: true });
       return;
     }
     const api = this.getTaskCardThemeApi();
     if (!api) {
-      new Notice("Ledger Tools task-theme API is unavailable");
+      new Notice("Ledger Tools task-type API is unavailable");
       this.returnToTaskCard({ rebuild: true });
       return;
     }
@@ -50150,25 +50680,40 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     }
     this.selectedIndex = selectedIndex;
     this.taskCardThemeStageRows = items;
-    const subtitle = stage.mixed
+    const baseSubtitle = stage.mixed
       ? `${formatCountLabel(stage.targetCount, "task")} · Use default clears each task to its own default`
       : stage.defaultDetail
         ? `${stage.defaultDetail}`
-        : "Choose a theme";
+        : "Choose a type";
+    this.taskCardTypeBaseSubtitle = baseSubtitle;
     this.applyOptions({
       items,
-      title: "Theme",
+      title: "Type",
       headerIcon: "palette",
-      inputLabel: "Filter themes",
-      placeholder: "Type a theme name or filter",
-      resultsLabel: "themes",
-      emptyText: "No matching themes",
+      inputLabel: "Filter types",
+      placeholder: "Type a type name or filter",
+      resultsLabel: "types",
+      emptyText: "No matching types",
       footerHints: [
         { keys: ["↵"], label: "Apply" },
         { keys: ["^D"], label: "Use default" },
         { keys: ["esc"], label: "Close without writing" },
       ],
-      getSubtitle: () => subtitle,
+      getSubtitle: () => {
+        try {
+          const visible = Array.isArray(this.visibleItems) ? this.visibleItems : [];
+          const selected = visible[this.selectedIndex] || visible[0] || null;
+          if (!selected) return this.taskCardTypeBaseSubtitle || baseSubtitle;
+          const selection = selected.themeKind === "default"
+            ? { kind: "default", key: "__default", name: null }
+            : { kind: selected.themeKind, key: selected.themeKey, name: selected.themeName };
+          const consequence = this.taskCardTypeConsequenceForSelection(selection);
+          const base = this.taskCardTypeBaseSubtitle || baseSubtitle;
+          return consequence ? `${base} · ${consequence}` : base;
+        } catch (_error) {
+          return baseSubtitle;
+        }
+      },
       filterItem: (item, nextQuery) => fuzzyMatchesText(item.searchText, nextQuery),
       renderItem: (item, rowEl, query) => this.renderTaskCardThemeStageItem(item, rowEl, query),
       openItem: (item) => this.commitTaskCardThemeStageItem(item),
@@ -50179,6 +50724,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
         this.inputEl.value = query;
       }
     }
+    this.taskCardTypeRefreshLedgerPreview();
   }
 
   renderTaskCardThemeStageItem(item, rowEl, query) {
@@ -50205,13 +50751,13 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       });
       pill.createSpan({
         cls: `bob-cnp-theme-swatch ${hueClass}`,
-        attr: { "aria-hidden": "true", title: hue ? `Theme hue: ${hue}` : "No theme color" },
+        attr: { "aria-hidden": "true", title: hue ? `Type hue: ${hue}` : "No type color" },
       });
       const name = pill.createSpan({ cls: "bob-task-card-theme-option-name" });
       appendHighlighted(name, item.title || item.themeName || item.themeKey, query);
     }
     const detail = item.themeKind === "default" ? item.detail
-      : item.themeKind === "new" ? "New theme"
+      : item.themeKind === "new" ? "New type"
         : item.themeKind === "inherited-unknown" ? "current default · not in catalog"
           : item.inheritedDefault && item.inheritedFrom
             ? item.inheritedFrom === "reading tasks" ? "default for reading tasks" : `inherited from ${item.inheritedFrom}`
@@ -50260,24 +50806,81 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     const api = this.getTaskCardThemeApi();
     try {
       if (!projection || !projection.available) {
-        new Notice((projection && projection.unavailableReason) || "Theme editing is unavailable");
+        new Notice((projection && projection.unavailableReason) || "Type editing is unavailable");
         return false;
       }
       if (!api || typeof api.setTaskTheme !== "function" || typeof api.clearTaskTheme !== "function") {
-        new Notice("Ledger Tools task-theme API is unavailable");
+        new Notice("Ledger Tools task-type API is unavailable");
         return false;
       }
       const ledgerApi = this.getTaskCardLedgerApi();
       const plan = planTaskCardThemeEdits(projection, selection, api, { ledgerApi });
       if (!plan.valid) {
-        new Notice(plan.error || "That theme cannot be set on a task");
+        new Notice(plan.error || "That type cannot be set on a task");
         return false;
       }
       let edits = plan.edits;
       if (this.isLinkSession()) {
         if (!isCurrent()) return false;
-        const applied = await this.writeTaskCardLinkedThemeEdits(edits, api, selection, isCurrent);
-        if (applied !== true || !isCurrent()) return false;
+        const actionable = edits.filter((edit) => edit && (edit.action === "set" || edit.action === "clear"));
+        if (actionable.length === 0) {
+          const applied = await this.writeTaskCardLinkedThemeEdits(edits, api, selection, isCurrent);
+          if (applied !== true || !isCurrent()) return false;
+        } else {
+          const snapshot = await this.taskCardTypeDailySnapshot();
+          let ledgerPlan = { valid: true, moves: [], refused: null, content: snapshot ? snapshot.content : null };
+          if (snapshot && typeof snapshot.content === "string") {
+            ledgerPlan = planTaskCardTypeLedgerMoves(actionable, snapshot.content, api);
+          }
+          if (ledgerPlan.refused) {
+            const info = ledgerPlan.refused;
+            new Notice(taskCardTypeConsequence(actionable[0], {
+              relocation: info.relocation,
+              hasLiveLink: true,
+              sourceEntryName: info.sourceName,
+              newType: info.newType,
+            }));
+            return false;
+          }
+          if (!ledgerPlan.valid) {
+            new Notice(`${ledgerPlan.error || "Task link could not be moved"}; nothing was written`);
+            return false;
+          }
+          const applied = await this.writeTaskCardLinkedThemeEdits(edits, api, selection, isCurrent, { silent: ledgerPlan.moves.length > 0 });
+          if (applied !== true || !isCurrent()) return false;
+          if (ledgerPlan.moves.length > 0 && snapshot && typeof snapshot.content === "string") {
+            const fresh = await this.taskCardTypeDailySnapshot();
+            const base = fresh && typeof fresh.content === "string" ? fresh.content : snapshot.content;
+            const replanned = planTaskCardTypeLedgerMoves(actionable, base, api);
+            if (replanned.refused) {
+              const info = replanned.refused;
+              new Notice(taskCardTypeConsequence(actionable[0], {
+                relocation: info.relocation,
+                hasLiveLink: true,
+                sourceEntryName: info.sourceName,
+                newType: info.newType,
+              }));
+              return false;
+            }
+            if (!replanned.valid || replanned.content === base) {
+              const first = replanned.moves[0] || ledgerPlan.moves[0];
+              new Notice(taskCardThemeSavedNotice(actionable[0], first ? { moved: false, partial: true } : { moved: false, partial: true }));
+              if (!isCurrent()) return false;
+            } else {
+              const target = fresh || snapshot;
+              const wrote = await writeTaskCardTypeDailyContent({ plugin: this.plugin, app: this.app }, target, base, replanned.content);
+              const first = replanned.moves[0];
+              if (!wrote) {
+                new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
+              } else if (first) {
+                new Notice(taskCardThemeSavedNotice(actionable[0], { moved: true, destinationName: first.destinationName, newTypeName: first.newType.name }));
+              } else {
+                new Notice(taskCardThemeSavedNotice(actionable[0], null));
+              }
+              if (!isCurrent()) return false;
+            }
+          }
+        }
       } else {
         const fresh = this.freshTaskCardThemeProjection();
         if (!fresh || !fresh.available) {
@@ -50299,14 +50902,70 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
             { ledgerApi },
           );
           if (!freshPlan.valid) {
-            new Notice(freshPlan.error || "That theme cannot be set on a task");
+            new Notice(freshPlan.error || "That type cannot be set on a task");
             return false;
           }
           edits.push(...freshPlan.edits);
         }
         if (!isCurrent()) return false;
-        const applied = await this.writeTaskCardThemeEdits(edits, api, isCurrent);
-        if (applied !== true || !isCurrent()) return false;
+        const actionable = edits.filter((edit) => edit && (edit.action === "set" || edit.action === "clear"));
+        if (actionable.length === 0) {
+          const applied = await this.writeTaskCardThemeEdits(edits, api, isCurrent);
+          if (applied !== true || !isCurrent()) return false;
+        } else {
+          const snapshot = await this.taskCardTypeDailySnapshot();
+          let ledgerPlan = { valid: true, moves: [], refused: null, content: snapshot ? snapshot.content : null };
+          if (snapshot && typeof snapshot.content === "string") {
+            ledgerPlan = planTaskCardTypeLedgerMoves(actionable, snapshot.content, api);
+          }
+          if (ledgerPlan.refused) {
+            const info = ledgerPlan.refused;
+            new Notice(taskCardTypeConsequence(actionable[0], {
+              relocation: info.relocation,
+              hasLiveLink: true,
+              sourceEntryName: info.sourceName,
+              newType: info.newType,
+            }));
+            return false;
+          }
+          if (!ledgerPlan.valid) {
+            new Notice(`${ledgerPlan.error || "Task link could not be moved"}; nothing was written`);
+            return false;
+          }
+          const applied = await this.writeTaskCardThemeEdits(edits, api, isCurrent, { silent: ledgerPlan.moves.length > 0 });
+          if (applied !== true || !isCurrent()) return false;
+          if (ledgerPlan.moves.length > 0 && snapshot && typeof snapshot.content === "string") {
+            const freshSnapshot = await this.taskCardTypeDailySnapshot();
+            const base = freshSnapshot && typeof freshSnapshot.content === "string" ? freshSnapshot.content : snapshot.content;
+            const replanned = planTaskCardTypeLedgerMoves(actionable, base, api);
+            if (replanned.refused) {
+              const info = replanned.refused;
+              new Notice(taskCardTypeConsequence(actionable[0], {
+                relocation: info.relocation,
+                hasLiveLink: true,
+                sourceEntryName: info.sourceName,
+                newType: info.newType,
+              }));
+              return false;
+            }
+            if (!replanned.valid || replanned.content === base) {
+              new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
+              if (!isCurrent()) return false;
+            } else {
+              const target = freshSnapshot || snapshot;
+              const wrote = await writeTaskCardTypeDailyContent({ plugin: this.plugin, app: this.app }, target, base, replanned.content);
+              const first = replanned.moves[0];
+              if (!wrote) {
+                new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
+              } else if (first) {
+                new Notice(taskCardThemeSavedNotice(actionable[0], { moved: true, destinationName: first.destinationName, newTypeName: first.newType.name }));
+              } else {
+                new Notice(taskCardThemeSavedNotice(actionable[0], null));
+              }
+              if (!isCurrent()) return false;
+            }
+          }
+        }
       }
       this.clearTaskCardThemeSubscription();
       this.taskCardThemeStageGeneration = (this.taskCardThemeStageGeneration || 0) + 1;
@@ -50314,7 +50973,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       this.taskCardThemeStageRows = null;
       this.taskCardThemeQuery = "";
       this.taskCardThemeSelectedKey = null;
-      // Theme-only edits never advance the review walk.
+      // Type edits never advance the review walk.
       this.reviewOrigin = null;
       this.reviewBeforeLine = "";
       this.reviewLineIndex = null;
@@ -50328,7 +50987,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     }
   }
 
-  async writeTaskCardThemeEdits(edits, api, isCurrent = () => true) {
+  async writeTaskCardThemeEdits(edits, api, isCurrent = () => true, options = {}) {
     if (!isCurrent()) return false;
     if (!Array.isArray(edits) || edits.length === 0) {
       return false;
@@ -50337,9 +50996,9 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       return false;
     }
     if (this.isCountedSession()) {
-      return await this.writeTaskCardCountedThemeEdits(edits, api);
+      return await this.writeTaskCardCountedThemeEdits(edits, api, options);
     }
-    return await this.writeTaskCardSingleThemeEdits(edits, api);
+    return await this.writeTaskCardSingleThemeEdits(edits, api, options);
   }
 
   taskCardThemeNewLineFor(rawLine, edit, api) {
@@ -50367,13 +51026,14 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     }
   }
 
-  async writeTaskCardSingleThemeEdits(edits, api) {
+  async writeTaskCardSingleThemeEdits(edits, api, options = {}) {
+    const silent = options && options.silent === true;
     const edit = edits[0];
     if (!edit) {
       return false;
     }
     if (this.isTaskCardThemeClosedLine(edit.target.identity.rawLine)) {
-      new Notice("Closed tasks keep their theme history; nothing was written");
+      new Notice("Closed tasks keep their type history; nothing was written");
       return false;
     }
     const editor = this.editor;
@@ -50393,18 +51053,18 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       return false;
     }
     if (edit.action === "none") {
-      new Notice(taskCardThemeUnchangedNotice([edit]));
+      if (!silent) new Notice(taskCardThemeUnchangedNotice([edit]));
       return true;
     }
     const nextLine = this.taskCardThemeNewLineFor(lines[line], edit, api);
     if (nextLine === lines[line]) {
-      new Notice(taskCardThemeUnchangedNotice([edit]));
+      if (!silent) new Notice(taskCardThemeUnchangedNotice([edit]));
       return true;
     }
     const cursor = typeof editor.getCursor === "function" ? editor.getCursor() : this.cursor;
     const applied = replaceEditorLine(editor, line, lines[line], nextLine);
     if (!applied) {
-      new Notice("Could not write the theme; nothing was written");
+      if (!silent) new Notice("Could not write the type; nothing was written");
       return false;
     }
     if (cursor && typeof editor.setCursor === "function") {
@@ -50414,11 +51074,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
         // Cursor restore is best-effort.
       }
     }
-    new Notice(taskCardThemeSavedNotice(edit));
+    if (!silent) new Notice(taskCardThemeSavedNotice(edit));
     return true;
   }
 
-  async writeTaskCardCountedThemeEdits(edits, api) {
+  async writeTaskCardCountedThemeEdits(edits, api, options = {}) {
+    const silent = options && options.silent === true;
     const editor = this.editor;
     if (!editor || typeof editor.getValue !== "function") {
       new Notice("No active markdown editor");
@@ -50453,7 +51114,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       }
     }
     if (changed === 0) {
-      new Notice(skippedClosed > 0 ? `Closed tasks keep their theme history; nothing was written` : taskCardThemeUnchangedNotice(unchanged));
+      if (!silent) new Notice(skippedClosed > 0 ? `Closed tasks keep their type history; nothing was written` : taskCardThemeUnchangedNotice(unchanged));
       return skippedClosed === 0;
     }
     const ending = content.includes("\r\n") ? "\r\n" : "\n";
@@ -50461,16 +51122,19 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     const cursor = typeof editor.getCursor === "function" ? editor.getCursor() : this.cursor;
     const applied = applyEditorContentTransaction(editor, content, nextContent, cursor ? { line: cursor.line, ch: cursor.ch } : null);
     if (!applied || String(editor.getValue() || "") !== nextContent) {
-      new Notice("Could not write themes; no tasks were updated");
+      if (!silent) new Notice("Could not write types; no tasks were updated");
       return false;
     }
-    new Notice(
-      `Theme saved on ${formatCountLabel(changed, "task")}${skippedClosed > 0 ? ` (${skippedClosed} closed skipped)` : ""}`,
-    );
+    if (!silent) {
+      new Notice(
+        `Type saved on ${formatCountLabel(changed, "task")}${skippedClosed > 0 ? ` (${skippedClosed} closed skipped)` : ""}`,
+      );
+    }
     return true;
   }
 
-  async writeTaskCardLinkedThemeEdits(edits, api, selection, isCurrent = () => true) {
+  async writeTaskCardLinkedThemeEdits(edits, api, selection, isCurrent = () => true, options = {}) {
+    const silent = options && options.silent === true;
     let changed = 0;
     let skippedClosed = 0;
     const unchanged = [];
@@ -50488,7 +51152,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     }
     if (!isCurrent()) return false;
     if (!files) {
-      new Notice("Could not read linked task notes; no themes were written");
+      if (!silent) new Notice("Could not read linked task notes; no types were written");
       return false;
     }
     const preparedEdits = [];
@@ -50506,7 +51170,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       }
       const freshContent = files.get(targetPath);
       if (typeof freshContent !== "string") {
-        new Notice(`Could not read ${targetPath}; no themes were written`);
+        if (!silent) new Notice(`Could not read ${targetPath}; no types were written`);
         return false;
       }
       const freshLines = freshContent.split(/\r?\n/);
@@ -50536,7 +51200,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
         ledgerApi: this.getTaskCardLedgerApi(),
       });
       if (!freshPlan.valid) {
-        new Notice(freshPlan.error || "That theme cannot be set on a task");
+        if (!silent) new Notice(freshPlan.error || "That type cannot be set on a task");
         return false;
       }
       const freshEdit = freshPlan.edits[0];
@@ -50578,7 +51242,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       changed += 1;
     }
     if (changed === 0 && failures.length === 0 && skippedStale === 0 && skippedClosed > 0) {
-      new Notice("Closed tasks keep their theme history; nothing was written");
+      new Notice("Closed tasks keep their type history; nothing was written");
       return false;
     }
     if (changed === 0 && failures.length === 0 && skippedStale > 0) {
@@ -50586,20 +51250,24 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       return false;
     }
     if (changed === 0 && failures.length === 0) {
-      new Notice(taskCardThemeUnchangedNotice(unchanged));
+      if (!silent) new Notice(taskCardThemeUnchangedNotice(unchanged));
       return true;
     }
     if (failures.length > 0 || skippedStale > 0) {
-      new Notice(
-        `Theme saved on ${formatCountLabel(changed, "task")}${failures.length > 0 ? ` · failed in ${failures.length} note${failures.length === 1 ? "" : "s"}` : ""}${skippedStale > 0 ? ` · ${skippedStale} stale skipped` : ""}${skippedClosed > 0 ? ` · ${skippedClosed} closed skipped` : ""}`,
-      );
+      if (!silent) {
+        new Notice(
+          `Type saved on ${formatCountLabel(changed, "task")}${failures.length > 0 ? ` · failed in ${failures.length} note${failures.length === 1 ? "" : "s"}` : ""}${skippedStale > 0 ? ` · ${skippedStale} stale skipped` : ""}${skippedClosed > 0 ? ` · ${skippedClosed} closed skipped` : ""}`,
+        );
+      }
       return changed > 0;
     }
-    new Notice(
-      edits.length === 1 && changed === 1 && skippedClosed === 0
-        ? taskCardThemeSavedNotice(preparedEdits[0].edit)
-        : `Theme saved on ${formatCountLabel(changed, "task")}${skippedClosed > 0 ? ` (${skippedClosed} closed skipped)` : ""}`,
-    );
+    if (!silent) {
+      new Notice(
+        edits.length === 1 && changed === 1 && skippedClosed === 0
+          ? taskCardThemeSavedNotice(preparedEdits[0].edit)
+          : `Type saved on ${formatCountLabel(changed, "task")}${skippedClosed > 0 ? ` (${skippedClosed} closed skipped)` : ""}`,
+      );
+    }
     return true;
   }
 
@@ -50622,7 +51290,7 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           this.close();
         }
       }).catch(() => {
-        new Notice("Could not clear the theme");
+        new Notice("Could not clear the type");
       }).finally(() => {
         this.opening = false;
       });
@@ -96089,14 +96757,14 @@ module.exports.helpers = {
   getBulletPropertyCurrentLabel,
   createBulletPropertyItems,
   buildTaskCardPriorityPreviews,
-  buildTaskCardThemeProjection,
-  buildTaskCardThemeHeader,
-  buildTaskCardThemeRuntimeContext,
-  taskCardThemeNormalizeKey, taskCardThemeCanonicalName,
-  taskCardThemeCatalogSpelling, taskCardThemeExemptKeys,
-  taskCardThemeSingleComponent, taskCardThemeValidateNewName,
-  buildTaskCardThemeStageModel, planTaskCardThemeEdits,
-  taskCardThemeRevalidateEdit,
+  buildTaskCardThemeProjection, buildTaskCardThemeHeader, buildTaskCardThemeRuntimeContext,
+  taskCardThemeNormalizeKey, taskCardThemeCanonicalName, taskCardThemeCatalogSpelling, taskCardThemeExemptKeys,
+  taskCardThemeSingleComponent, taskCardThemeValidateNewName, buildTaskCardThemeStageModel, planTaskCardThemeEdits,
+  taskCardThemeRevalidateEdit, taskCardThemeStageItem, taskCardThemeUnchangedNotice, taskCardThemeSavedNotice,
+  taskCardThemeNoticeContext, taskCardThemeInheritedSourceText,
+  taskCardTypeNewTypeForEdit, taskCardTypeLedgerEntries, taskCardTypeLedgerKeys, taskCardTypeFindLiveLink,
+  taskCardTypeConsequence, taskCardTypeApplyLedgerEdit, planTaskCardTypeLedgerMoves, writeTaskCardTypeDailyContent,
+  taskCardTypeInheritedReason, taskCardTypeSavedNotice, taskCardTypeUnchangedNotice, taskCardTypeNoticeInheritedReason,
   planTaskCard,
   taskCardBlocksAvailabilityReason,
   taskCardBlocksSummary,

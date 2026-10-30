@@ -324,7 +324,14 @@ function planRelocation(input) {
   const themesBefore = Number(opts.themesBefore) || 0;
   const cap = Number(opts.cap) || 0;
   if (strict && addsTheme && themesBefore + 1 > cap) {
-    return { kind: "refused", code: "strict_cap" };
+    return {
+      kind: "refused",
+      code: "strict_cap",
+      typeKey: key,
+      typeName,
+      themesBefore,
+      cap,
+    };
   }
   return { kind: "createBelow", from, name: typeName };
 }

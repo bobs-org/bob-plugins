@@ -1,9 +1,9 @@
-// Pure Task Card theme stage model and direct-edit planner. It never writes.
+// Pure Task Card type stage model and direct-edit planner. It never writes.
 // The modal supplies the live projection, theme API, and snapshots; this
 // layer plans per-target set/clear/no-op edits and stage rows. Selecting Use
-// default always clears; selecting the inherited theme also clears. Other
-// choices follow the shared link write rule shape (single non-exempt
-// component, catalog spelling) without requiring a shown suggestion.
+// default always clears; selecting the inherited type also clears. Other
+// choices are any single type component (including PLAN and other exempt
+// types) with catalog spelling, without requiring a shown suggestion.
 function taskCardThemeNormalizeKey(value) {
   return String(value || "")
     .trim()
@@ -101,20 +101,12 @@ function taskCardThemeExemptKeys(api, ledgerApi) {
   }
 }
 
-function taskCardThemeSingleComponent(name, exemptKeys) {
+function taskCardThemeSingleComponent(name) {
   const text = String(name == null ? "" : name).trim();
   if (!text || text === "(unnamed)") {
     return null;
   }
-  const exempt = new Set(
-    (Array.isArray(exemptKeys) ? exemptKeys : [])
-      .map((value) => taskCardThemeNormalizeKey(value))
-      .filter(Boolean),
-  );
-  const choices = taskCardThemeSplitComponents(text).filter(
-    (component) =>
-      !exempt.has(taskCardThemeNormalizeKey(component)),
-  );
+  const choices = taskCardThemeSplitComponents(text);
   if (choices.length !== 1) {
     return null;
   }
@@ -125,32 +117,23 @@ function taskCardThemeSingleComponent(name, exemptKeys) {
   return { name: canonical, key: taskCardThemeNormalizeKey(canonical) };
 }
 
-function taskCardThemeValidateNewName(raw, api, exemptKeys) {
+function taskCardThemeValidateNewName(raw, api) {
   const canonical = taskCardThemeCanonicalName(raw);
   if (!canonical) {
     return Object.freeze({
       valid: false,
       name: null,
       key: null,
-      error: "Theme name is invalid",
+      error: "Type name is invalid",
     });
   }
-  const single = taskCardThemeSingleComponent(canonical, exemptKeys);
+  const single = taskCardThemeSingleComponent(canonical);
   if (!single) {
-    const parts = taskCardThemeSplitComponents(canonical);
-    if (parts.length !== 1) {
-      return Object.freeze({
-        valid: false,
-        name: null,
-        key: null,
-        error: "Composite themes cannot be set on a task",
-      });
-    }
     return Object.freeze({
       valid: false,
       name: null,
       key: null,
-      error: "Exempt themes cannot be set on a task",
+      error: "Composite types cannot be set on a task",
     });
   }
   const spelling =
@@ -163,8 +146,15 @@ function taskCardThemeStageInheritedReason(inherited) {
     return "no default";
   }
   const name = inherited.theme.name || inherited.theme.key || "default";
+  if (inherited.source === "default") {
+    return `${name} default type`;
+  }
   const sourceLabel = taskCardThemeSourceLabel(inherited);
   return `${name} from ${sourceLabel}`;
+}
+
+function taskCardTypeInheritedReason(inherited) {
+  return taskCardThemeStageInheritedReason(inherited);
 }
 
 function taskCardThemeInheritedSourceText(inherited) {
@@ -190,8 +180,12 @@ function taskCardThemeNoticeContext(edit) {
   };
 }
 
+function taskCardTypeUnchangedNotice(edits) {
+  return taskCardThemeUnchangedNotice(edits);
+}
+
 function taskCardThemeUnchangedNotice(edits) {
-  const fallback = "Themes are already set; nothing was written";
+  const fallback = "Types are already set; nothing was written";
   try {
     if (!Array.isArray(edits) || edits.length === 0) return fallback;
     const entries = edits.map((edit) => {
@@ -207,7 +201,7 @@ function taskCardThemeUnchangedNotice(edits) {
       const { kind, name, source, reading } = first;
       if (kind === "default") {
         const reason = source ? `${name} from ${source}` : reading ? `${name} for reading tasks` : name;
-        text = name ? `Already using the default (${reason})` : "No theme override to clear";
+        text = name ? `Already using the default (${reason})` : "No type override to clear";
       } else if (typeof name !== "string" || !name) {
         return fallback;
       } else if (kind === "same") {
@@ -240,22 +234,71 @@ function taskCardThemeUnchangedNotice(edits) {
   }
 }
 
-function taskCardThemeSavedNotice(edit) {
+function taskCardTypeSavedNotice(edit, relocation) {
+  return taskCardThemeSavedNotice(edit, relocation);
+}
+
+function taskCardTypeNoticeInheritedReason(edit) {
+  const { name, source, reading } = taskCardThemeNoticeContext(edit);
+  if (!name) return null;
+  if (source) return `${name} from ${source}`;
+  if (reading) return `${name} for reading tasks`;
+  return name;
+}
+
+function taskCardThemeSavedNotice(edit, relocation) {
   try {
+    const moved = relocation && relocation.moved === true
+      ? relocation.destinationName || relocation.newTypeName || null
+      : null;
+    const partial = relocation && relocation.partial === true;
     if (edit && edit.action === "set" && typeof edit.name === "string" && edit.name) {
-      return `Theme ${edit.name} saved`;
+      if (partial) {
+        return `Type ${edit.name} set · link not moved — Ctrl+Shift+M to move it`;
+      }
+      if (moved) {
+        return `Type ${edit.name} · link moved to ${moved}`;
+      }
+      return `Type ${edit.name}`;
     }
-    if (!edit || edit.action !== "clear") return "Theme saved";
+    if (!edit || edit.action !== "clear") return "Type saved";
     const { name, source, reading } = taskCardThemeNoticeContext(edit);
-    if (!name) return "Theme cleared to default";
+    const inheritedLong = name
+      ? (source ? `${name} from ${source}`
+        : reading ? `${name} for reading tasks` : name)
+      : null;
+    const inheritedShort = (() => {
+      try {
+        const reason = taskCardThemeStageInheritedReason(edit.target && edit.target.inherited);
+        return reason && reason !== "no default" ? reason : inheritedLong;
+      } catch (_error) {
+        return inheritedLong;
+      }
+    })();
+    if (!name) {
+      if (partial) {
+        return "Type cleared · link not moved — Ctrl+Shift+M to move it";
+      }
+      return moved ? `Type cleared · link moved to ${moved}` : "Type cleared to default";
+    }
+    if (partial) {
+      return inheritedShort
+        ? `Type cleared · ${inheritedShort} · link not moved — Ctrl+Shift+M to move it`
+        : "Type cleared · link not moved — Ctrl+Shift+M to move it";
+    }
+    if (moved) {
+      return inheritedShort
+        ? `Type cleared · ${inheritedShort} · link moved to ${moved}`
+        : `Type cleared · link moved to ${moved}`;
+    }
     const prefix = edit.reason === "select-inherited-clears"
-      ? edit.target.field && edit.target.field.state === "repair" ? "Theme fields repaired" : "Override removed"
-      : "Theme cleared";
+      ? edit.target.field && edit.target.field.state === "repair" ? "Type fields repaired" : "Override removed"
+      : "Type cleared";
     const reason = source ? `${name} is inherited from ${source}`
       : reading ? `${name} is the default for reading tasks` : `${name} is this task's default`;
     return `${prefix}; ${reason}`;
   } catch (_error) {
-    return "Theme saved";
+    return "Type saved";
   }
 }
 
@@ -441,10 +484,7 @@ function buildTaskCardThemeStageModel(projection, api, options = {}) {
     );
   }
   if (trimmedQuery) {
-    const exempt = taskCardThemeExemptKeys(api, opts.ledgerApi);
-    const validated = exempt.available
-      ? taskCardThemeValidateNewName(trimmedQuery, api, exempt.keys)
-      : { valid: false };
+    const validated = taskCardThemeValidateNewName(trimmedQuery, api);
     if (validated.valid && remember(validated.key)) {
       rows.push(
         Object.freeze({
@@ -452,7 +492,7 @@ function buildTaskCardThemeStageModel(projection, api, options = {}) {
           key: validated.key,
           name: validated.name,
           title: validated.name,
-          detail: "New theme",
+          detail: "New type",
         }),
       );
     }
@@ -499,7 +539,7 @@ function planTaskCardThemeEdits(projection, selection, api, options = {}) {
     return Object.freeze({ valid: false, error: "No editable tasks", edits: Object.freeze([]) });
   }
   if (!selection || typeof selection !== "object") {
-    return Object.freeze({ valid: false, error: "No theme choice", edits: Object.freeze([]) });
+    return Object.freeze({ valid: false, error: "No type choice", edits: Object.freeze([]) });
   }
   if (selection.kind === "default") {
     const edits = targets.map((target) =>
@@ -520,13 +560,13 @@ function planTaskCardThemeEdits(projection, selection, api, options = {}) {
       ? selection.key
       : "";
   if (!key) {
-    return Object.freeze({ valid: false, error: "Theme name is invalid", edits: Object.freeze([]) });
+    return Object.freeze({ valid: false, error: "Type name is invalid", edits: Object.freeze([]) });
   }
-  const candidate = taskCardThemeSingleComponent(rawName, []);
+  const candidate = taskCardThemeSingleComponent(rawName);
   if (!candidate) {
     const error = taskCardThemeSplitComponents(rawName).length !== 1
-      ? "Composite themes cannot be set on a task"
-      : "Theme name is invalid";
+      ? "Composite types cannot be set on a task"
+      : "Type name is invalid";
     return Object.freeze({ valid: false, error, edits: Object.freeze([]) });
   }
   const spelling = taskCardThemeCatalogSpelling(api, candidate.key, candidate.name) || candidate.name;
@@ -564,24 +604,6 @@ function planTaskCardThemeEdits(projection, selection, api, options = {}) {
       reason: "set-theme",
     });
   });
-  if (planned.some((edit) => edit.action === "set")) {
-    const exempt = taskCardThemeExemptKeys(api, opts.ledgerApi);
-    if (!exempt.available) {
-      return Object.freeze({
-        valid: false,
-        error: "Theme eligibility is unavailable; Ledger Tools caps could not be read",
-        edits: Object.freeze([]),
-      });
-    }
-    const exemptKey = new Set(exempt.keys.map(taskCardThemeNormalizeKey));
-    if (exemptKey.has(candidate.key)) {
-      return Object.freeze({
-        valid: false,
-        error: "Exempt themes cannot be set on a task",
-        edits: Object.freeze([]),
-      });
-    }
-  }
   const edits = planned;
   return Object.freeze({ valid: true, error: null, edits: Object.freeze(edits) });
 }

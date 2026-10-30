@@ -116,6 +116,35 @@ function makeThemeApi(options = {}) {
       if (!Object.prototype.hasOwnProperty.call(options, "caps")) return { exempt: ["PLAN"] };
       return typeof options.caps === "function" ? options.caps() : options.caps;
     },
+    typeComponentsOf(name) {
+      try {
+        return ledgerHelpers.typeComponents(name, {
+          vocab: ["BUILD", "CHORE", "FIX", "MEET", "PLAN", "READ", "WRITE"],
+          exempt: ["PLAN"],
+          inventory: [],
+        });
+      } catch (_e) {
+        return [];
+      }
+    },
+    planRelocation(relocationOptions) {
+      const opts = relocationOptions && typeof relocationOptions === "object" ? relocationOptions : {};
+      return ledgerHelpers.planRelocation({
+        entries: opts.entries,
+        liveLink: opts.liveLink,
+        typeKey: opts.typeKey !== undefined ? opts.typeKey : opts.type,
+        typeName: opts.typeName,
+        sources: {
+          vocab: ["BUILD", "CHORE", "FIX", "MEET", "PLAN", "READ", "WRITE"],
+          exempt: ["PLAN"],
+          inventory: [],
+        },
+        ledgerKeys: opts.ledgerKeys || [],
+        themesBefore: opts.themesBefore || 0,
+        cap: opts.cap || 3,
+        strict: opts.strict || false,
+      });
+    },
   };
   return api;
 }
@@ -205,7 +234,7 @@ test("Use default clears every target including none, exempt, repair, and mixed"
   assert.ok(planMixed.edits.every((e) => e.action === "clear"));
 });
 
-test("selecting inherited clears; other choices set with catalog spelling and exempt guard", () => {
+test("selecting inherited clears; other choices set with catalog spelling including PLAN", () => {
   const line = "- [ ] #task Example [theme:: FIX] ^example";
   const inherited = noteSuggestion("WRITE");
   const api = makeThemeApi({
@@ -222,7 +251,9 @@ test("selecting inherited clears; other choices set with catalog spelling and ex
   const after = api.setTaskTheme("- [ ] #task Plain ^a", planSet.edits[0].name);
   assert.ok(after.includes("[type:: BUILD]"));
   const planExempt = helpers.planTaskCardThemeEdits(model.themeProjection, { kind: "recent", key: "plan", name: "PLAN" }, api, {});
-  assert.equal(planExempt.valid, false);
+  assert.equal(planExempt.valid, true);
+  assert.equal(planExempt.edits[0].action, "set");
+  assert.equal(planExempt.edits[0].name, "PLAN");
   const planComposite = helpers.planTaskCardThemeEdits(model.themeProjection, { kind: "new", key: "a+b", name: "A + B" }, api, {});
   assert.equal(planComposite.valid, false);
   const planInvalid = helpers.planTaskCardThemeEdits(model.themeProjection, { kind: "new", key: "", name: "!!!" }, api, {});
@@ -300,7 +331,7 @@ test("known inherited theme remains in Today or Recent; unknown inherited row is
   assert.ok(unknownStage.rows.some((row) => row.kind === "inherited-unknown" && row.key === "old"));
 });
 
-test("theme sets fail closed on missing, throwing, asynchronous, or malformed caps while default clears", () => {
+test("type sets need no caps gate; default clears", () => {
   const line = "- [ ] #task Plain [root:: root-byte] ^plain";
   for (const caps of [
     null,
@@ -312,8 +343,8 @@ test("theme sets fail closed on missing, throwing, asynchronous, or malformed ca
     const api = makeThemeApi({ caps });
     const model = makeModel({ content: line, lineText: line, themeApi: api });
     const set = helpers.planTaskCardThemeEdits(model.themeProjection, { kind: "new", key: "BUILD", name: "BUILD" }, api, {});
-    assert.equal(set.valid, false);
-    assert.match(set.error, /eligibility is unavailable/);
+    assert.equal(set.valid, true);
+    assert.equal(set.edits[0].action, "set");
     const clear = helpers.planTaskCardThemeEdits(model.themeProjection, { kind: "default" }, api, {});
     assert.equal(clear.valid, true);
     assert.equal(clear.edits[0].action, "clear");
@@ -411,7 +442,7 @@ test("theme notices explain every single-target no-op source and default", () =>
     [noticeEdit("default", project), "Already using the default (WRITE from project note launch)"],
     [noticeEdit("default", reading), "Already using the default (READ for reading tasks)"],
     [noticeEdit("default", unknown), "Already using the default (WRITE)"],
-    [noticeEdit("default", null), "No theme override to clear"],
+    [noticeEdit("default", null), "No type override to clear"],
   ];
   for (const [edit, expected] of cases) {
     assert.equal(helpers.taskCardThemeUnchangedNotice([edit]), `${expected}; nothing was written`);
@@ -439,7 +470,7 @@ test("theme no-op batches distinguish shared sources, different sources, explici
     assert.equal(helpers.taskCardThemeUnchangedNotice(edits), `${expected}; nothing was written`);
   }
   for (const edits of [[], null, [null], [{}], [inherited, same], [inherited, defaultEdit], [noticeEdit("inherited", null)]]) {
-    assert.equal(helpers.taskCardThemeUnchangedNotice(edits), "Themes are already set; nothing was written");
+    assert.equal(helpers.taskCardThemeUnchangedNotice(edits), "Types are already set; nothing was written");
   }
 });
 
@@ -452,13 +483,13 @@ test("theme save notices distinguish removed overrides, repaired fields, and def
   ];
   for (const [inherited, reason] of sources) {
     assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("inherited", inherited, "set")), `Override removed; ${reason}`);
-    assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("inherited", inherited, "repair")), `Theme fields repaired; ${reason}`);
-    assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("default", inherited)), `Theme cleared; ${reason}`);
+    assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("inherited", inherited, "repair")), `Type fields repaired; ${reason}`);
+    assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("default", inherited)), `Type cleared; ${reason}`);
   }
-  assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("set")), "Theme MEET saved");
-  assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("default", null)), "Theme cleared to default");
+  assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("set")), "Type MEET");
+  assert.equal(helpers.taskCardThemeSavedNotice(noticeEdit("default", null)), "Type cleared to default");
   for (const edit of [null, {}, { get action() { throw new Error("invalid edit"); } }]) {
-    assert.equal(helpers.taskCardThemeSavedNotice(edit), "Theme saved");
+    assert.equal(helpers.taskCardThemeSavedNotice(edit), "Type saved");
   }
 });
 
@@ -491,4 +522,201 @@ test("stage rows keep subtitle and search fields while marking only a single inh
     assert.equal(row.inheritedDefault, true);
     assert.equal(row.inheritedFrom, inheritedFrom);
   }
+});
+
+test("Use default names the default type source without from", () => {
+  const inherited = { theme: theme("CHORE", "chore"), source: "default", label: "default type" };
+  const projection = { mixed: false, targets: [{ available: true, inherited }] };
+  const stage = helpers.buildTaskCardThemeStageModel(projection, makeThemeApi(), {});
+  assert.equal(stage.defaultDetail, "Use default · CHORE default type");
+  assert.equal(stage.rows[0].detail, "CHORE default type");
+});
+
+function taskCardTypeEditFor(action, key, name, blockId, inherited) {
+  return {
+    action,
+    key: action === "set" ? key : null,
+    name: action === "set" ? name : null,
+    reason: action === "clear" ? "use-default" : "set-theme",
+    target: {
+      identity: { id: `id-${blockId}`, path: "Tasks/Alpha.md", line: 0, rawLine: `- [ ] #task Example ^${blockId}`, blockId },
+      inherited: inherited || null,
+      field: { state: "none" },
+    },
+  };
+}
+
+function dailyNoteWithLink(entryName, blockId, extraEntries = "") {
+  const lines = [
+    "## Pomodoros",
+    `- [ ] () — ${entryName}`,
+    `\t- [[Tasks/Alpha#^${blockId}]]`,
+  ];
+  if (extraEntries) lines.push(extraEntries);
+  return lines.join("\n");
+}
+
+test("task-card-relocate: unlinked backlog retype is field-only", () => {
+  const api = makeThemeApi();
+  const edit = taskCardTypeEditFor("set", "build", "BUILD", "no-link-here", noteSuggestion("WRITE", "dev"));
+  const daily = dailyNoteWithLink("FIX", "other-id");
+  const built = helpers.taskCardTypeLedgerEntries(daily);
+  assert.equal(built.entries.length, 1);
+  const found = helpers.taskCardTypeFindLiveLink(built.details, "no-link-here");
+  assert.equal(found, null);
+  const plan = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
+  assert.equal(plan.valid, true);
+  assert.equal(plan.refused, null);
+  assert.equal(plan.moves.length, 0);
+  assert.equal(plan.content, daily);
+  const consequence = helpers.taskCardTypeConsequence(edit, { relocation: { kind: "unchanged" }, hasLiveLink: false, sourceEntryName: "FIX", newType: { key: "build", name: "BUILD" } });
+  assert.equal(consequence, "no live link · ledger unchanged");
+});
+
+test("task-card-relocate: planned link moves into existing planned BUILD", () => {
+  const api = makeThemeApi();
+  const edit = taskCardTypeEditFor("set", "build", "BUILD", "task-1", noteSuggestion("FIX", "dev"));
+  const daily = [
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[Tasks/Alpha#^task-1]]",
+    "- [ ] () — BUILD",
+    "\t- [[Tasks/Other#^other]]",
+  ].join("\n");
+  const planned = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
+  assert.equal(planned.valid, true);
+  assert.equal(planned.refused, null);
+  assert.equal(planned.moves.length, 1);
+  assert.equal(planned.moves[0].relocation.kind, "moveTo");
+  assert.equal(planned.moves[0].destinationName, "BUILD");
+  assert.ok(planned.content.includes("- [ ] () — BUILD"));
+  const consequence = helpers.taskCardTypeConsequence(edit, {
+    relocation: planned.moves[0].relocation,
+    hasLiveLink: true,
+    sourceEntryName: "FIX",
+    newType: { key: "build", name: "BUILD" },
+  });
+  assert.equal(consequence, "link moves FIX → BUILD");
+  assert.equal(helpers.taskCardThemeSavedNotice(edit, { moved: true, destinationName: "BUILD" }), "Type BUILD · link moved to BUILD");
+});
+
+test("task-card-relocate: sole placeholder renames in place", () => {
+  const api = makeThemeApi();
+  const edit = taskCardTypeEditFor("set", "build", "BUILD", "sole-1", noteSuggestion("FIX", "dev"));
+  const daily = dailyNoteWithLink("FIX", "sole-1");
+  const planned = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
+  assert.equal(planned.valid, true);
+  assert.equal(planned.moves.length, 1);
+  assert.equal(planned.moves[0].relocation.kind, "renamePlaceholder");
+  assert.ok(planned.content.includes("- [ ] () — BUILD"));
+  assert.equal(
+    helpers.taskCardTypeConsequence(edit, {
+      relocation: planned.moves[0].relocation,
+      hasLiveLink: true,
+      sourceEntryName: "FIX",
+      newType: { key: "build", name: "BUILD" },
+    }),
+    "FIX placeholder becomes BUILD",
+  );
+});
+
+test("task-card-relocate: crowded placeholder creates below the source", () => {
+  const api = makeThemeApi();
+  const edit = taskCardTypeEditFor("set", "build", "BUILD", "crowd-1", noteSuggestion("FIX", "dev"));
+  const daily = [
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[Tasks/Alpha#^crowd-1]]",
+    "\t- [[Tasks/Other#^crowd-2]]",
+  ].join("\n");
+  const planned = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
+  assert.equal(planned.valid, true);
+  assert.equal(planned.moves.length, 1);
+  assert.equal(planned.moves[0].relocation.kind, "createBelow");
+  assert.ok(planned.content.includes("new BUILD Pomodoro below FIX") === false);
+  assert.ok(planned.content.includes("- [ ] () — BUILD"));
+  assert.equal(
+    helpers.taskCardTypeConsequence(edit, {
+      relocation: planned.moves[0].relocation,
+      hasLiveLink: true,
+      sourceEntryName: "FIX",
+      newType: { key: "build", name: "BUILD" },
+    }),
+    "new BUILD Pomodoro below FIX",
+  );
+});
+
+test("task-card-relocate: running sole renames, running crowded appends", () => {
+  const api = makeThemeApi();
+  const timed = (name, links) => ({ name, open: true, running: true, links });
+  const sole = api.planRelocation({ entries: [timed("FIX", 1)], liveLink: 0, typeKey: "build", typeName: "BUILD" });
+  assert.equal(sole.kind, "renameEntry");
+  assert.equal(sole.newName, "BUILD");
+  const crowded = api.planRelocation({ entries: [timed("FIX", 2)], liveLink: 0, typeKey: "build", typeName: "BUILD" });
+  assert.equal(crowded.kind, "appendComponent");
+  assert.equal(crowded.newName, "FIX + BUILD");
+  assert.equal(
+    helpers.taskCardTypeConsequence(taskCardTypeEditFor("set", "build", "BUILD", "r1"), {
+      relocation: sole, hasLiveLink: true, sourceEntryName: "FIX", newType: { key: "build", name: "BUILD" },
+    }),
+    "running FIX becomes BUILD",
+  );
+  assert.equal(
+    helpers.taskCardTypeConsequence(taskCardTypeEditFor("set", "build", "BUILD", "r2"), {
+      relocation: crowded, hasLiveLink: true, sourceEntryName: "FIX", newType: { key: "build", name: "BUILD" },
+    }),
+    "running FIX becomes FIX + BUILD",
+  );
+});
+
+test("task-card-relocate: already under and strict refusal copy", () => {
+  const edit = taskCardTypeEditFor("set", "build", "BUILD", "a1");
+  assert.equal(
+    helpers.taskCardTypeConsequence(edit, {
+      relocation: { kind: "unchanged" }, hasLiveLink: true, sourceEntryName: "FIX", newType: { key: "build", name: "BUILD" },
+    }),
+    "already under BUILD",
+  );
+  const refused = { kind: "refused", code: "strict_cap", typeKey: "build", typeName: "BUILD", themesBefore: 3, cap: 3 };
+  assert.equal(
+    helpers.taskCardTypeConsequence(edit, {
+      relocation: refused, hasLiveLink: true, sourceEntryName: "FIX", newType: { key: "build", name: "BUILD" },
+    }),
+    "plan.strict: BUILD would be type 4 of 3 · nothing written",
+  );
+  const clearEdit = taskCardTypeEditFor("clear", null, null, "c1", noteSuggestion("BUILD", "dev"));
+  assert.equal(helpers.taskCardThemeSavedNotice(clearEdit, { moved: true, destinationName: "BUILD" }), "Type cleared · BUILD from dev · link moved to BUILD");
+  assert.equal(helpers.taskCardThemeSavedNotice(edit, { moved: false, partial: true }), "Type BUILD set · link not moved — Ctrl+Shift+M to move it");
+});
+
+test("task-card-relocate: daily write is one undo with preimage guard", async () => {
+  const daily = dailyNoteWithLink("FIX", "w1");
+  const edit = taskCardTypeEditFor("set", "build", "BUILD", "w1", noteSuggestion("FIX", "dev"));
+  const api = makeThemeApi();
+  const planned = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
+  assert.equal(planned.moves.length, 1);
+  let transactions = 0;
+  let stored = daily;
+  const editor = {
+    getValue: () => stored,
+    transaction: ({ changes }) => {
+      transactions += 1;
+      let lines = stored.split("\n");
+      const sorted = changes.slice().sort((a, b) => b.from.line - a.from.line);
+      for (const change of sorted) {
+        lines[change.from.line] = change.text;
+      }
+      stored = lines.join("\n");
+    },
+    getCursor: () => ({ line: 0, ch: 0 }),
+    setCursor: () => {},
+  };
+  const snapshot = { dailyPath: "2026/20261028.md", content: daily, sameFile: false, editor: null, file: { path: "2026/20261028.md" }, snapshot: null };
+  const deps = { plugin: { getOpenMarkdownEditorForPath: () => editor }, app: { vault: null } };
+  const wrote = await helpers.writeTaskCardTypeDailyContent(deps, snapshot, daily, planned.content);
+  assert.equal(wrote, true);
+  assert.equal(transactions, 1);
+  assert.ok(stored.includes("- [ ] () — BUILD"));
+  const stale = await helpers.writeTaskCardTypeDailyContent(deps, snapshot, "stale preimage", planned.content);
+  assert.equal(stale, false);
 });

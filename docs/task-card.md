@@ -46,10 +46,10 @@ the owning task's Links or Linked-from stage.
 | `l` | Open Links to (task relations); in its filter, `~` flips direction. |
 | `⇧L` | Open Linked from (task relations); in its filter, `~` flips direction. |
 | `f` | Open Review every (Refresh). |
-| `t` | Open Theme; `Enter` on the Theme row opens the same stage. The stage offers Use default first with its inherited reason, then Today, Recent, and a validated typed new name. Theme rows use Bob's reported hue in a tinted pill with a swatch; uncolored themes (exempt or unconfigured), such as PLAN, are grey. The inherited theme's row is marked Default. |
+| `t` | Open Type; `Enter` on the Type row opens the same stage. The stage offers Use default first with its inherited reason (`Use default · BUILD from dev`, `Use default · CHORE default type`), then Today, Recent, and a validated typed new name. Any type is choosable, including PLAN and other exempt types. Type rows use Bob's reported hue in a tinted pill with a swatch; uncolored types (exempt or unconfigured), such as PLAN, are grey. The inherited type's row is marked Default. A consequence line under the selected row states the live-link outcome before Enter (`link moves FIX → BUILD`, `running FIX becomes BUILD`, `FIX placeholder becomes BUILD`, `new BUILD Pomodoro below FIX`, `no live link · ledger unchanged`, `already under BUILD`, or the `plan.strict` refusal, which writes nothing). |
 | `x` | Open the cancel-reason stage; the key alone never cancels. |
 | `Alt+N` | Commit to Next or release to Ready. |
-| `Ctrl+D` | Delete the selected property; Schedule is selected by default. On Theme, clear to Use default (field clearing only, never Recent hide; theme need not be in the configured property list). On Links to, clear all outgoing relations (a cleared source that still mentions the target keeps a `(💬 mentions)` entry); Linked from is generated and refuses clearing. In the relation-label stage, hide or unhide the selected label; row zero toggles one-off instead. |
+| `Ctrl+D` | Delete the selected property; Schedule is selected by default. On Type, clear to Use default through the same relocate path (field clearing only, never Recent hide; type need not be in the configured property list). On Links to, clear all outgoing relations (a cleared source that still mentions the target keeps a `(💬 mentions)` entry); Linked from is generated and refuses clearing. In the relation-label stage, hide or unhide the selected label; row zero toggles one-off instead. |
 | `Ctrl+H` | In the relation-label stage, show or hide the Hidden section. |
 | Backspace on an empty field or Back | Return to the card without writing. |
 | Escape, `q`, `Q` | Close and discard uncommitted state. `q` does not close while a text field is focused. |
@@ -75,8 +75,8 @@ Schedule task Work summary stage.
 ## Scope and previews
 
 The header shows the cleaned task text, note, lane, priority, schedule,
-dependency counts, and review interval, plus a Theme line (`Theme [X] this
-task`, `Theme [X] from note`, `Theme none · t to set`) with catalog spelling,
+dependency counts, and review interval, plus a Type line (`Type [X] this
+task`, `Type [X] from note`, `Type none · t to set`) with catalog spelling,
 declaring-note hue dot, and unknown/repair/mixed signals with tooltips; color
 is never the only signal. Batch cards name their scope and mixed values and
 never imply a value or default applies to all targets when it differs.
@@ -84,17 +84,26 @@ Counted sessions identify their N+1-item scope and mixed values. Task Links
 show `via Task Link` and name their target notes. Each priority level shows
 its exact ISO date; batches show a date span and per-target details.
 
-A theme-only edit writes only `[theme:: ...]` fields through the Ledger Tools
-setters with guarded identity and a revalidated default: selecting Use default
-always clears (including invalid, duplicate, and none defaults), selecting the
-inherited theme also clears, and other choices follow the single non-exempt
-component rule with catalog spelling. On a task with no override, choosing its
-inherited theme writes nothing; the notice names the theme and its declaring area
+A type edit writes the `[type:: ...]` field through the Ledger Tools setters
+with guarded identity and a revalidated default, then relocates the task's
+live Task Link (D8, `running_retype = absorb`) as a checked ledger step that
+reuses the Pomodoro bullet-move subtree primitive and the existing
+placeholder-cleanup rule. Selecting Use default always clears (including
+invalid, duplicate, and none defaults), selecting the inherited type also
+clears, and any single type — including PLAN and other exempt types — is
+choosable with catalog spelling. On a task with no override, choosing its
+inherited type writes nothing; the notice names the type and its declaring area
 or project note, for example, `WRITE is already inherited from area note job;
-nothing was written`. Closed tasks keep their history. No
-status, Task Link, ID, route, freshness, stamp, schedule, Work Log, or
-review-walk change is caused by a theme-only edit; `Back`, `Escape`, and
-`Ctrl+[` write nothing.
+nothing was written`. Closed tasks keep their history. No status, ID, route,
+freshness, stamp, schedule, Work Log, or review-walk change is caused by a
+type edit; the edit never advances the walk and never stamps freshness. A
+backlog task without a live link gains none, so no new Today membership is
+created. With `plan.strict: true`, a creation past the cap refuses the whole
+edit: neither the field nor the link changes (`plan.strict: BUILD would be
+type 4 of 3 · nothing written`). A partial ledger failure after a durable
+field write shows `Type BUILD set · link not moved — Ctrl+Shift+M to move it`
+and leaves the `type_mismatch` lint and ledger mark to show the drift.
+`Back`, `Escape`, and `Ctrl+[` write nothing.
 
 Choosing the same priority level again is deliberate: selecting `2`
 on a P2 task resets its roll streak. Unbound letters, `/`, and

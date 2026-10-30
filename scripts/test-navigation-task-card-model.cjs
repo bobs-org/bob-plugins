@@ -198,7 +198,7 @@ test("card model builds stable rows, scope metadata, and an existing recommendat
   );
 });
 
-test("Task Card theme projection distinguishes explicit themes and inherited note defaults", () => {
+test("Task Card type projection distinguishes explicit themes and inherited note defaults", () => {
   const line = "- [ ] #task Example [theme:: FIX] ^example";
   const inherited = noteSuggestion("WRITE");
   const { api, calls } = makeTaskThemeApi({
@@ -233,7 +233,7 @@ test("Task Card theme projection distinguishes explicit themes and inherited not
   assert.equal(row.unavailableReason, null);
   assert.equal(row.detail, "[FIX] this task · ● sase_blog suggests WRITE");
   assert.equal(ordered.shortcut, "t");
-  assert.equal(model.header.theme.text, "Theme [FIX] this task · ● sase_blog suggests WRITE");
+  assert.equal(model.header.theme.text, "Type [FIX] this task · ● sase_blog suggests WRITE");
   assert.ok(Object.isFrozen(model.themeProjection));
   assert.ok(Object.isFrozen(model.themeProjection.targets));
   assert.ok(Object.isFrozen(model.themeProjection.targets[0].identity));

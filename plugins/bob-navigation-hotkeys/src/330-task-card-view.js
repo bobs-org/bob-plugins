@@ -55,11 +55,11 @@ function renderTaskCardThemeHeader(container, theme) {
   const line = container.createDiv({
     cls: `bob-task-card-theme-line${stateClass}${theme.unknown ? " is-unknown" : ""}${theme.needsRepair ? " is-repair" : ""}${theme.mixed ? " is-mixed" : ""}`,
     attr: {
-      "aria-label": theme.text || "Theme unavailable",
-      title: theme.tooltip || theme.text || "Theme unavailable",
+      "aria-label": theme.text || "Type unavailable",
+      title: theme.tooltip || theme.text || "Type unavailable",
     },
   });
-  line.setAttribute("aria-label", theme.text || "Theme unavailable");
+  line.setAttribute("aria-label", theme.text || "Type unavailable");
   if (theme.tooltip || theme.text) {
     line.setAttribute("title", theme.tooltip || theme.text);
   }

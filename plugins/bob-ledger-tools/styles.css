@@ -4006,6 +4006,40 @@ body.theme-dark.bob-calendar-events .bob-calendar-event-time[data-state="running
   background: color-mix(in srgb, var(--bob-calendar-event-hue, var(--interactive-accent)) 24%, transparent);
 }
 
+.bob-calendar-events .cm-line.bob-calendar-sync-stamp,
+.bob-calendar-events p.bob-calendar-sync-stamp {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-style: italic;
+  padding-top: 0.2em;
+}
+
+.bob-calendar-events .bob-calendar-sync-stamp a,
+.bob-calendar-events .cm-line.bob-calendar-sync-stamp a,
+.bob-calendar-events .cm-line.bob-calendar-sync-stamp .cm-link,
+.bob-calendar-events .cm-line.bob-calendar-sync-stamp .cm-underline {
+  color: inherit;
+  --link-color: inherit;
+  --link-external-color: inherit;
+  text-decoration: none;
+}
+
+.bob-calendar-events .bob-calendar-sync-stamp a:hover,
+.bob-calendar-events .cm-line.bob-calendar-sync-stamp a:hover,
+.bob-calendar-events .cm-line.bob-calendar-sync-stamp .cm-link:hover {
+  text-decoration: underline;
+}
+
+.bob-calendar-events .cm-line.bob-calendar-sync-stamp[data-state="stale"],
+.bob-calendar-events p.bob-calendar-sync-stamp[data-state="stale"] {
+  color: var(--text-warning);
+}
+
+.bob-calendar-events .cm-line.bob-calendar-sync-stamp[data-state="stale"]::after,
+.bob-calendar-events p.bob-calendar-sync-stamp[data-state="stale"]::after {
+  content: " · stale";
+}
+
 .bob-pomo-theme-colors .bob-pomo-theme-unconfigured {
   outline: 1px dashed color-mix(in srgb, var(--text-warning, var(--color-orange)) 70%, transparent);
   outline-offset: 1px;

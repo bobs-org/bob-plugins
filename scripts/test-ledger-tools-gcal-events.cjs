@@ -35,8 +35,10 @@ const {
   gcalEventsHasPomodorosSection,
   gcalEventsScanMarkdown,
   gcalEventsShouldSyncCreatedFile,
+  gcalEventsStampState,
   gcalEventsTimeState,
   gcalEventsWaitForPomodoros,
+  GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES,
   todayDailyPath,
 } = LedgerToolsPlugin.helpers;
 
@@ -64,6 +66,69 @@ test("calendar scan stays within an unfenced Events section", () => {
   ]);
   assert.deepEqual(scan.rows[2].tags.map((tag) => tag.name), ["maybe"]);
   assert.deepEqual(scan.rows[0].badges.map((badge) => badge.badge), ["📅"]);
+  assert.equal(scan.stamp, null);
+});
+
+test("calendar scan finds same-day and dated Events stamps and ignores lookalikes", () => {
+  const sameDay = "*↻ synced 14:05 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/30?authuser=you%40example.com)*";
+  const dated = "*↻ synced Thu 2026-10-29 21:40 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/31?authuser=you%40example.com)*";
+  const withRows = [
+    "↻ outside",
+    "## Events",
+    "",
+    sameDay,
+    "- [*] #task **0830-0900** Interview [📅](https://calendar.test/e) ^interview",
+    "- ↻ list row",
+    "```",
+    "↻ fenced",
+    "```",
+    "## Pomodoros",
+    dated,
+  ];
+  const scan = gcalEventsScanMarkdown(withRows, { isToday: true, nowMinutes: 8 * 60 + 45 });
+  assert.equal(scan.stamp.line, 3);
+  assert.equal(scan.stamp.glyphStart, sameDay.indexOf("↻"));
+  assert.deepEqual(scan.stamp.synced, { date: null, minutes: 14 * 60 + 5 });
+  assert.deepEqual(scan.rows.map((row) => [row.kind, row.time, row.state]), [
+    ["task", "0830-0900", "running"],
+  ]);
+
+  const datedOnly = [
+    "## Events",
+    "",
+    dated,
+    "## Pomodoros",
+  ];
+  const datedScan = gcalEventsScanMarkdown(datedOnly);
+  assert.equal(datedScan.rows.length, 0);
+  assert.equal(datedScan.stamp.line, 2);
+  assert.deepEqual(datedScan.stamp.synced, { date: "2026-10-29", minutes: 21 * 60 + 40 });
+
+  const emptySection = gcalEventsScanMarkdown(["## Events", "", sameDay, "## Pomodoros"]);
+  assert.equal(emptySection.rows.length, 0);
+  assert.equal(emptySection.stamp.synced.minutes, 14 * 60 + 5);
+
+  const underscore = gcalEventsScanMarkdown([
+    "## Events",
+    "",
+    "_↻ synced 12:00 · [you@example.com](https://example.com)_",
+    "## Pomodoros",
+  ]);
+  assert.deepEqual(underscore.stamp.synced, { date: null, minutes: 12 * 60 });
+});
+
+test("stamp state stays fresh on change, including old, future, and dated stamps", () => {
+  assert.equal(GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES, null);
+  const now = new Date(2026, 9, 30, 14, 50, 0);
+  const fresh = { synced: { date: null, minutes: 14 * 60 + 5 } };
+  const old = { synced: { date: null, minutes: 8 * 60 } };
+  const future = { synced: { date: null, minutes: 18 * 60 } };
+  const dated = { synced: { date: "2026-10-29", minutes: 21 * 60 + 40 } };
+  assert.equal(gcalEventsStampState(fresh, { isToday: true, now }), "fresh");
+  assert.equal(gcalEventsStampState(old, { isToday: true, now }), "fresh");
+  assert.equal(gcalEventsStampState(future, { isToday: true, now }), "fresh");
+  assert.equal(gcalEventsStampState(dated, { isToday: true, now }), "fresh");
+  assert.equal(gcalEventsStampState(old, { isToday: false, now }), "fresh");
 });
 
 test("event clock state distinguishes future, running, and past", () => {

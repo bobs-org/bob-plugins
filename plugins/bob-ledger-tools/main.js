@@ -65545,6 +65545,9 @@ class BobLedgerToolsTodayLocationMixin {
 const GCAL_EVENTS_POLL_MS = 250;
 const GCAL_EVENTS_WAIT_MS = 15000;
 const GCAL_EVENTS_REFRESH_MS = 60000;
+// `stamp_refresh = on_change`: age never paints today's stamp stale.
+const GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES = null;
+const GCAL_EVENTS_STAMP_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const GCAL_EVENTS_PALETTE = [
   "blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red",
 ];
@@ -65608,12 +65611,123 @@ function gcalEventsTimeState(span, nowMinutes, isToday, isTask) {
   return "past";
 }
 
+function gcalEventsIsListItem(line) {
+  const rest = String(line || "").replace(/^[ \t]+/, "");
+  const marker = rest.charAt(0);
+  if (marker === "-" || marker === "*" || marker === "+") {
+    return rest.length === 1 || /[ \t]/.test(rest.charAt(1));
+  }
+  const digits = rest.match(/^\d+/);
+  if (!digits) return false;
+  const after = rest.slice(digits[0].length);
+  return after.charAt(0) === "." || after.charAt(0) === ")"
+    ? after.length === 1 || /[ \t]/.test(after.charAt(1))
+    : false;
+}
+
+function gcalEventsIsAtxHeading(line) {
+  return /^ {0,3}#{1,6}(?:[ \t]|$)/.test(String(line || ""));
+}
+
+function gcalEventsRecognizeStampLine(line) {
+  if (gcalEventsIsListItem(line) || gcalEventsIsAtxHeading(line)) return false;
+  const stripped = String(line || "").replace(/^[ \t]+/, "").replace(/^[*_]+/, "");
+  return stripped.startsWith("↻");
+}
+
+function gcalEventsStampGlyphStart(line) {
+  const raw = String(line || "");
+  const prefix = raw.match(/^[ \t]*[*_]*/);
+  const start = prefix ? prefix[0].length : 0;
+  return raw.charAt(start) === "↻" ? start : Math.max(0, raw.indexOf("↻"));
+}
+
+function gcalEventsParseStampSynced(body) {
+  let rest = String(body || "").trim();
+  rest = rest.replace(/^[*_]+/, "").replace(/[*_]+$/, "").trim();
+  if (rest.startsWith("↻")) rest = rest.slice("↻".length).trimStart();
+  if (!rest.startsWith("synced")) return null;
+  rest = rest.slice("synced".length).trimStart();
+  let date = null;
+  let hour;
+  let minute;
+  const dated = /^[A-Za-z]{3} (\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2})/.exec(rest);
+  const clock = /^(\d{2}):(\d{2})/.exec(rest);
+  if (dated) {
+    date = dated[1];
+    hour = Number(dated[2]);
+    minute = Number(dated[3]);
+    rest = rest.slice(dated[0].length);
+  } else if (clock) {
+    hour = Number(clock[1]);
+    minute = Number(clock[2]);
+    rest = rest.slice(clock[0].length);
+  } else {
+    return null;
+  }
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour > 23 || minute > 59) return null;
+  rest = rest.trimStart();
+  if (!rest.startsWith("·")) return null;
+  return { date, minutes: hour * 60 + minute };
+}
+
+function gcalEventsStampFromLine(line, index) {
+  if (!gcalEventsRecognizeStampLine(line)) return null;
+  const synced = gcalEventsParseStampSynced(line);
+  if (!synced) return null;
+  return { line: index, glyphStart: gcalEventsStampGlyphStart(line), synced };
+}
+
+function gcalEventsStampWhenText(stamp) {
+  if (!stamp || !stamp.synced || !Number.isFinite(stamp.synced.minutes)) return "";
+  const hour = Math.floor(stamp.synced.minutes / 60);
+  const minute = stamp.synced.minutes % 60;
+  const clock = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  if (!stamp.synced.date) return clock;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(stamp.synced.date);
+  if (!match) return clock;
+  const dt = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(dt.getTime())) return clock;
+  return `${GCAL_EVENTS_STAMP_WEEKDAYS[dt.getDay()]} ${stamp.synced.date} ${clock}`;
+}
+
+function gcalEventsStampTitle(stamp, state) {
+  const when = gcalEventsStampWhenText(stamp);
+  if (state === "stale") return `No Google Calendar sync since ${when} · run bob gcal doctor`;
+  return `Google Calendar · synced ${when}`;
+}
+
+function gcalEventsStampSyncedMs(synced, now) {
+  if (!synced || !Number.isFinite(synced.minutes)) return null;
+  const hour = Math.floor(synced.minutes / 60);
+  const minute = synced.minutes % 60;
+  if (synced.date) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(synced.date);
+    if (!match) return null;
+    return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), hour, minute, 0, 0).getTime();
+  }
+  const basis = now instanceof Date ? now : new Date();
+  return new Date(basis.getFullYear(), basis.getMonth(), basis.getDate(), hour, minute, 0, 0).getTime();
+}
+
+function gcalEventsStampState(stamp, options = {}) {
+  const opts = options && typeof options === "object" ? options : {};
+  const now = opts.now instanceof Date ? opts.now : new Date();
+  const threshold = GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES;
+  if (threshold == null || opts.isToday !== true || !stamp || !stamp.synced) return "fresh";
+  const syncedMs = gcalEventsStampSyncedMs(stamp.synced, now);
+  if (syncedMs == null || syncedMs > now.getTime()) return "fresh";
+  if ((now.getTime() - syncedMs) / 60000 > threshold) return "stale";
+  return "fresh";
+}
+
 function gcalEventsScanMarkdown(lines, options = {}) {
   const source = Array.isArray(lines) ? lines : [];
   const opts = options && typeof options === "object" ? options : {};
   const section = gcalEventsFindSection(source, "Events");
-  if (!section) return { section: null, rows: [] };
+  if (!section) return { section: null, rows: [], stamp: null };
   const rows = [];
+  let stamp = null;
   let fence = null;
   for (let index = section.start; index < section.end; index += 1) {
     const line = String(source[index] || "");
@@ -65627,6 +65741,10 @@ function gcalEventsScanMarkdown(lines, options = {}) {
     if (fenceMatch) {
       fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
       continue;
+    }
+    if (!stamp) {
+      const found = gcalEventsStampFromLine(line, index);
+      if (found) stamp = found;
     }
     const prefix = /^[-*+]\s+(?:\[([ xX*?/-])\]\s+#task\s+)?\*\*(\d{4}-\d{4}|all day)\*\*/i.exec(line);
     if (!prefix) continue;
@@ -65667,7 +65785,7 @@ function gcalEventsScanMarkdown(lines, options = {}) {
       badges,
     });
   }
-  return { section, rows };
+  return { section, rows, stamp };
 }
 
 function gcalEventsShouldSyncCreatedFile(enabled, file, app, now = new Date()) {
@@ -65950,12 +66068,23 @@ class BobLedgerToolsGcalEventsMixin {
       const today = isTodayDailyFile(this.app, info.file);
       const now = new Date();
       const scanned = gcalEventsScanMarkdown(lines, { isToday: today, nowMinutes: now.getHours() * 60 + now.getMinutes() });
-      if (!scanned.rows.length) return Decoration.none;
+      if (!scanned.rows.length && !scanned.stamp) return Decoration.none;
       const starts = [];
       let offset = 0;
       for (const line of lines) { starts.push(offset); offset += line.length + 1; }
       const decorations = [];
       const hue = this.calendarEventMeetHue();
+      if (scanned.stamp && typeof Decoration.line === "function") {
+        const state = gcalEventsStampState(scanned.stamp, { isToday: today, now });
+        decorations.push({
+          from: starts[scanned.stamp.line],
+          to: starts[scanned.stamp.line],
+          decoration: Decoration.line({
+            class: "bob-calendar-sync-stamp",
+            attributes: { "data-state": state, title: gcalEventsStampTitle(scanned.stamp, state) },
+          }),
+        });
+      }
       for (const row of scanned.rows) {
         const base = starts[row.line];
         if (row.kind === "context" && typeof Decoration.line === "function") {
@@ -65999,11 +66128,84 @@ class BobLedgerToolsGcalEventsMixin {
     } catch (error) {}
   }
 
+  calendarEventSetStampState(record, now = new Date()) {
+    try {
+      if (!record || !record.el) return;
+      const state = gcalEventsStampState(record.stamp, {
+        isToday: isTodayDailyFile(this.app, { path: record.path }, { now }),
+        now,
+      });
+      record.el.classList.add("bob-calendar-sync-stamp");
+      record.el.setAttribute("data-state", state);
+      record.el.setAttribute("title", gcalEventsStampTitle(record.stamp, state));
+    } catch (error) {}
+  }
+
+  calendarEventSourceLines(ctx) {
+    try {
+      const path = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      const workspace = this.app && this.app.workspace;
+      if (!path || !workspace || typeof workspace.getLeavesOfType !== "function") return null;
+      for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+        const view = leaf && leaf.view;
+        const file = view && view.file;
+        if (!file || file.path !== path) continue;
+        if (view.editor && typeof view.editor.getValue === "function") {
+          return String(view.editor.getValue() || "").replace(/\r\n/g, "\n").split("\n");
+        }
+        const cm = view.editor && view.editor.cm;
+        if (cm && cm.state && cm.state.doc && typeof cm.state.doc.toString === "function") {
+          return cm.state.doc.toString().split("\n");
+        }
+      }
+    } catch (error) {}
+    return null;
+  }
+
+  calendarEventStampParagraphInEvents(p, ctx) {
+    try {
+      if (ctx && typeof ctx.getSectionInfo === "function") {
+        const info = ctx.getSectionInfo(p);
+        const lines = this.calendarEventSourceLines(ctx);
+        if (info && lines && Number.isInteger(info.lineStart)) {
+          const scanned = gcalEventsScanMarkdown(lines);
+          if (scanned.stamp && scanned.stamp.line === info.lineStart) return scanned.stamp;
+          if (scanned.section && info.lineStart >= scanned.section.start && info.lineStart < scanned.section.end) {
+            return gcalEventsStampFromLine(lines[info.lineStart], info.lineStart);
+          }
+          return null;
+        }
+      }
+    } catch (error) {}
+    if (!this.calendarEventFollowsEventsHeading(p)) return null;
+    return gcalEventsStampFromLine(`*${String(p && p.textContent || "").trim()}*`, 0);
+  }
+
   renderCalendarEventsIn(el, ctx) {
     try {
       const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
       if (!this.calendarEventsPaintEnabled || !PLAN_DAILY_PATH_RE.test(sourcePath)) return;
       if (!this.calendarEventReadingRoots) this.calendarEventReadingRoots = new Set();
+      const paragraphs = [];
+      if (el && String(el.tagName || "").toUpperCase() === "P") paragraphs.push(el);
+      const found = el && typeof el.querySelectorAll === "function" ? el.querySelectorAll("p") : [];
+      for (const node of found || []) paragraphs.push(node);
+      for (const p of paragraphs) {
+        const text = String(p && p.textContent || "").trim();
+        if (!text.startsWith("↻ synced")) continue;
+        const stamp = this.calendarEventStampParagraphInEvents(p, ctx);
+        if (!stamp) continue;
+        const record = { kind: "stamp", path: sourcePath, el: p, stamp };
+        this.calendarEventReadingRoots.add(record);
+        this.calendarEventSetStampState(record);
+        try {
+          if (typeof MarkdownRenderChild === "function" && ctx && typeof ctx.addChild === "function") {
+            const child = new MarkdownRenderChild(p);
+            child.onunload = () => this.calendarEventReadingRoots.delete(record);
+            ctx.addChild(child);
+          }
+        } catch (error) {}
+      }
       const lists = el && typeof el.querySelectorAll === "function" ? el.querySelectorAll("ul, ol") : [];
       for (const list of lists || []) {
         if (!this.calendarEventListFollowsEventsHeading(list)) continue;
@@ -66041,9 +66243,9 @@ class BobLedgerToolsGcalEventsMixin {
     }
   }
 
-  calendarEventListFollowsEventsHeading(list) {
+  calendarEventFollowsEventsHeading(node) {
     try {
-      let sibling = list && list.previousSibling;
+      let sibling = node && node.previousSibling;
       let guard = 0;
       while (sibling && guard < 100) {
         guard += 1;
@@ -66054,6 +66256,10 @@ class BobLedgerToolsGcalEventsMixin {
       }
     } catch (error) {}
     return false;
+  }
+
+  calendarEventListFollowsEventsHeading(list) {
+    return this.calendarEventFollowsEventsHeading(list);
   }
 
   refreshCalendarEventPaint() {
@@ -66071,6 +66277,10 @@ class BobLedgerToolsGcalEventsMixin {
       }
       const now = new Date();
       for (const record of this.calendarEventReadingRoots || []) {
+        if (record && record.kind === "stamp") {
+          this.calendarEventSetStampState(record, now);
+          continue;
+        }
         if (isTodayDailyFile(this.app, { path: record.path }, { now })) this.calendarEventSetReadingState(record, now);
       }
     } catch (error) {}
@@ -68457,8 +68667,10 @@ module.exports.helpers = {
   gcalEventsHasPomodorosSection,
   gcalEventsScanMarkdown,
   gcalEventsTimeState,
+  gcalEventsStampState,
   gcalEventsShouldSyncCreatedFile,
   gcalEventsWaitForPomodoros,
+  GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES,
   addLocalMinutes,
   addLocalDays,
   formatOffsetTime,

@@ -403,7 +403,17 @@ function buildBasenameIndex(paths) {
     }
     return locatorFor(path);
   }
-  return { locatorFor, linkTargetFor };
+  // Both link strings in one stem resolution: the archive check is
+  // cheaper than a second `locatorFor` pass, and the snapshot
+  // decorates thousands of rows per open.
+  function locatorAndTargetFor(path) {
+    const locator = locatorFor(path);
+    if (taskWikilinkIsArchivePath(path)) {
+      return [locator, taskWikilinkPathWithoutExtension(path)];
+    }
+    return [locator, locator];
+  }
+  return { locatorFor, linkTargetFor, locatorAndTargetFor };
 }
 
 // Mirror of `previous_daily_note` with the anchor passed as a Date:

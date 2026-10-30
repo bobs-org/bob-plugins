@@ -373,3 +373,69 @@ test("guards mirror bob, minus the read-only check", () => {
     "",
   );
 });
+
+test("fused scorer matches the layered scorer across randomized rows and queries", () => {
+  // The per-keystroke fast path (`scoreLoweredFieldsWithTerms` over
+  // reordered lowered fields) must agree exactly with the layered
+  // `matchScoreWikilinkTasks` over bob's field order, and
+  // `orderForWikilinkPicker` must order identically with and without
+  // the snapshot field cache.
+  let seed = 20261030;
+  const next = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  const words = ["task", "Task", "number", "alpha", "Trains", "zzz", "op", "note-12", "t", "e", "^", "a b", "12", "t-1", "inbox", "Café", "naïve", "x"];
+  const pick = () => words[Math.floor(next() * words.length)];
+  const rows = [];
+  for (let i = 0; i < 300; i += 1) {
+    const blockId = next() < 0.7 ? `id-${Math.floor(next() * 40)}` : null;
+    const statuses = [" ", " ", " ", "/", "*", "x"];
+    rows.push({
+      notePath: `notes/topic-${Math.floor(next() * 9)}/note-${i}.md`,
+      line: i,
+      status: statuses[Math.floor(next() * statuses.length)],
+      blockId,
+      hidden: next() < 0.2,
+      section: next() < 0.6 ? `Section ${Math.floor(next() * 5)}` : undefined,
+      searchText: `${pick()} ${pick()} ${i}`,
+      displayText: "",
+      duplicateId: false,
+      open: next() < 0.8,
+      locator: `note-${i}`,
+      linkTarget: `note-${i}`,
+    });
+  }
+  const queries = ["", "task", "task number", "zzz", "id-3", "t", "alpha Trains", "12", "café", "a b", "note-1 id-2"];
+  for (const query of queries) {
+    for (const row of rows) {
+      const raw = helpers.taskWikilinkSearchFields(row);
+      const layered = helpers.matchScoreWikilinkTasks(raw, query);
+      const lowered = helpers.loweredTaskWikilinkSearchFields(row);
+      assert.equal(
+        helpers.matchScoreLoweredFields(lowered, query),
+        layered,
+        `lowered entry matches layered for ${JSON.stringify(query)}`,
+      );
+      assert.equal(
+        helpers.scoreLoweredFieldsWithTerms(lowered, helpers.splitWikilinkQueryTerms(query)),
+        layered,
+        `fused scorer matches layered for ${JSON.stringify(query)}`,
+      );
+    }
+    const owners = [null, rows[0].notePath];
+    for (const owner of owners) {
+      const plain = helpers.orderForWikilinkPicker(
+        rows.map((row) => ({ ...row, loweredSearchFields: undefined })),
+        query,
+        owner,
+      );
+      const cached = helpers.orderForWikilinkPicker(rows, query, owner);
+      assert.deepEqual(
+        cached.map((row) => `${row.notePath}:${row.line}`),
+        plain.map((row) => `${row.notePath}:${row.line}`),
+        `cached and uncached order agree for ${JSON.stringify(query)}`,
+      );
+    }
+  }
+});

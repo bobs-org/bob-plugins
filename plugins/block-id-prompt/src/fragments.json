@@ -6,6 +6,7 @@
   "030-tasks-and-dependencies.js",
   "031-task-wikilink-rules.js",
   "032-task-wikilink-rank.js",
+  "036-task-wikilink-index.js",
   "040-editor-pomodoro-and-logs.js",
   "050-source-discovery-and-edits.js",
   "060-link-cleanup-and-deletion.js",

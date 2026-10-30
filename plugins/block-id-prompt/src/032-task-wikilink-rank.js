@@ -25,7 +25,40 @@ function taskWikilinkSearchFields(row) {
 }
 
 function taskWikilinkIsWordChar(character) {
+  const code = character.charCodeAt(0);
+  if (code < 128) {
+    return (
+      (code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122)
+    );
+  }
   return /[\p{L}\p{N}]/u.test(character);
+}
+
+// Tiers 3/2/1 over one lowercased field, or null: the prefix,
+// word-prefix, and substring checks. The word-prefix scan uses the
+// native `indexOf` to visit only the indices where the term actually
+// occurs instead of probing every index: identical tiers, linear
+// instead of quadratic behavior on long fields.
+function substringTierOfWikilinkField(field, term) {
+  if (field.startsWith(term)) {
+    return 3;
+  }
+  let at = field.indexOf(term, 1);
+  let seen = false;
+  while (at !== -1) {
+    seen = true;
+    if (!taskWikilinkIsWordChar(field[at - 1])) {
+      return 2;
+    }
+    at = field.indexOf(term, at + 1);
+  }
+  return seen ? 1 : null;
+}
+
+function taskWikilinkSubstringTier(field, term) {
+  return substringTierOfWikilinkField(field, term);
 }
 
 // One term's best tier over the lowercased fields, or null when it
@@ -33,19 +66,9 @@ function taskWikilinkIsWordChar(character) {
 // word prefix (the preceding character is not alphanumeric), 1 for a
 // substring, and 0 for an in-order subsequence.
 function taskWikilinkFieldTier(field, term) {
-  if (field.startsWith(term)) {
-    return 3;
-  }
-  for (let index = 1; index < field.length; index += 1) {
-    if (
-      field.startsWith(term, index) &&
-      !taskWikilinkIsWordChar(field[index - 1])
-    ) {
-      return 2;
-    }
-  }
-  if (field.includes(term)) {
-    return 1;
+  const tier = taskWikilinkSubstringTier(field, term);
+  if (tier !== null) {
+    return tier;
   }
   if (taskWikilinkIsSubsequence(field, term)) {
     return 0;
@@ -66,25 +89,94 @@ function taskWikilinkIsSubsequence(field, term) {
   return wanted === term.length;
 }
 
-// Total tier score for raw (unlowercased) searchable fields against a
-// query, or null when any whitespace-separated term matches nothing.
-// An empty query scores zero, so callers rank matches and canonical
-// order with one comparator.
-function matchScoreWikilinkTasks(rawFields, query) {
-  const terms = String(query)
+// Lowercased searchable fields for one row, in hit-likelihood order:
+// search text first (text queries hit it and break earliest), then the
+// block ID, the `locator:block-id` composite, the locator, the note
+// path, and the section. The SET of strings is exactly bob's
+// `dependency_search_fields`, only reordered: scoring takes the max
+// over fields, so order never changes a score, it only decides how
+// soon tier 3 ends the term. Snapshot rows from `TaskWikilinkIndex`
+// carry this array precomputed as `loweredSearchFields` so every
+// per-keystroke rank reuses it; any other row computes it on demand.
+function loweredTaskWikilinkSearchFields(row) {
+  if (row && Array.isArray(row.loweredSearchFields)) {
+    return row.loweredSearchFields;
+  }
+  const lower = (value) => String(value).toLowerCase();
+  const fields = [lower(row.searchText)];
+  if (row.blockId) {
+    fields.push(lower(row.blockId));
+    fields.push(lower(`${row.locator}:${row.blockId}`));
+  }
+  fields.push(lower(row.locator));
+  fields.push(lower(row.notePath));
+  if (row.section) {
+    fields.push(lower(row.section));
+  }
+  return fields;
+}
+
+function splitWikilinkQueryTerms(query) {
+  return String(query)
     .split(/\s+/)
     .filter((term) => term !== "")
     .map((term) => term.toLowerCase());
+}
+
+// Total tier score over already-lowercased fields and pre-split terms.
+// This is the hot loop behind every keystroke: one call per row, with
+// the field-tier body inline so thousands of rows don't pay a call per
+// field. It returns exactly what the layered
+// `taskWikilinkFieldTier`-per-field loop returns — the max tier per
+// term — which the ranker differential test pins across randomized
+// rows and queries. Two max-preserving prunes keep it in budget:
+// tier 3 ends the term outright, and once the best tier so far is 2
+// only a field prefix (tier 3) can still win, so the remaining
+// `indexOf` scans are skipped; likewise the subsequence check runs
+// only while no tier has been found at all.
+function scoreLoweredFieldsWithTerms(fields, terms) {
+  // Indexed loops, not for..of: iterator protocol overhead dominates
+  // at 60k field visits per keystroke over a 5,000-row vault.
   let total = 0;
-  for (const term of terms) {
+  for (let t = 0; t < terms.length; t += 1) {
+    const term = terms[t];
     let best = null;
-    for (const field of rawFields) {
-      const tier = taskWikilinkFieldTier(
-        String(field).toLowerCase(),
-        term,
-      );
+    for (let f = 0; f < fields.length; f += 1) {
+      const field = fields[f];
+      let tier = null;
+      if (field.startsWith(term)) {
+        tier = 3;
+      } else if (best === null || best < 2) {
+        let at = field.indexOf(term, 1);
+        while (at !== -1) {
+          tier = 1;
+          // Inline the ASCII fast path of `taskWikilinkIsWordChar`
+          // (non-ASCII still delegates): a cross-fragment call here
+          // blocks inlining of this 60k-visits-per-keystroke loop.
+          const prev = field.charCodeAt(at - 1);
+          const wordChar =
+            prev < 128
+              ? (prev >= 48 && prev <= 57) ||
+                (prev >= 65 && prev <= 90) ||
+                (prev >= 97 && prev <= 122)
+              : taskWikilinkIsWordChar(field[at - 1]);
+          if (!wordChar) {
+            tier = 2;
+            break;
+          }
+          at = field.indexOf(term, at + 1);
+        }
+        if (tier === null && best === null) {
+          if (taskWikilinkIsSubsequence(field, term)) {
+            tier = 0;
+          }
+        }
+      }
       if (tier !== null && (best === null || tier > best)) {
         best = tier;
+        if (best === 3) {
+          break;
+        }
       }
     }
     if (best === null) {
@@ -93,6 +185,25 @@ function matchScoreWikilinkTasks(rawFields, query) {
     total += best;
   }
   return total;
+}
+
+// Total tier score over already-lowercased fields. Parses the query,
+// then delegates to the fused scorer, so both entry points agree.
+function matchScoreLoweredFields(fields, query) {
+  return scoreLoweredFieldsWithTerms(fields, splitWikilinkQueryTerms(query));
+}
+
+// Total tier score for raw (unlowercased) searchable fields against a
+// query, or null when any whitespace-separated term matches nothing.
+// An empty query scores zero, so callers rank matches and canonical
+// order with one comparator.
+function matchScoreWikilinkTasks(rawFields, query) {
+  // Lowercase once per call, not once per term: per-keystroke ranking
+  // over thousands of rows must not re-allocate every field per term.
+  return matchScoreLoweredFields(
+    rawFields.map((field) => String(field).toLowerCase()),
+    query,
+  );
 }
 
 // Stable picker group rank for a task: same-note open tasks first,
@@ -135,29 +246,34 @@ function compareCanonicalWikilinkKeys(left, right) {
 // it without burying actionable rows. The sort is stable, so full ties
 // keep catalog (path/line) order.
 function orderForWikilinkPicker(rows, query, ownerPath) {
+  // Terms parse once per keystroke, not once per row.
+  const terms = splitWikilinkQueryTerms(query);
   const scored = [];
   for (const row of rows) {
-    const score = matchScoreWikilinkTasks(
-      taskWikilinkSearchFields(row),
-      query,
+    const score = scoreLoweredFieldsWithTerms(
+      loweredTaskWikilinkSearchFields(row),
+      terms,
     );
     if (score !== null) {
-      scored.push({ row, score });
+      // The canonical key is computed once per row, not once per sort
+      // comparison: identical order, linear instead of log-linear key
+      // builds over thousands of rows.
+      scored.push({
+        row,
+        score,
+        openOrder: row.open ? 0 : 1,
+        key: canonicalKeyWikilinkTask(row, ownerPath),
+      });
     }
   }
   scored.sort((left, right) => {
-    const openOrder =
-      (left.row.open ? 0 : 1) - (right.row.open ? 0 : 1);
-    if (openOrder !== 0) {
-      return openOrder;
+    if (left.openOrder !== right.openOrder) {
+      return left.openOrder - right.openOrder;
     }
     if (right.score !== left.score) {
       return right.score - left.score;
     }
-    return compareCanonicalWikilinkKeys(
-      canonicalKeyWikilinkTask(left.row, ownerPath),
-      canonicalKeyWikilinkTask(right.row, ownerPath),
-    );
+    return compareCanonicalWikilinkKeys(left.key, right.key);
   });
   return scored.map((entry) => entry.row);
 }

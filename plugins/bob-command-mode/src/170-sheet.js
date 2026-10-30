@@ -202,7 +202,7 @@ class CommandModeSheetModal extends Modal {
     ];
     if (!this.query.trim()) {
       this.refreshRecords();
-      this.rows = [...cmSheetRecentRows(this.runRecords, Date.now()), ...this.rows];
+      this.rows = [...cmSheetRecentRows(this.runRecords, Date.now(), this.catalog), ...this.rows];
     }
     this.frecency = cmSheetFrecencyMap(this.runRecords, this.rows, Date.now(), this.host);
     this.recomputeVisible();
@@ -453,7 +453,9 @@ class CommandModeSheetModal extends Modal {
     if (!row || row.unavailable) return { ok: false, reason: row && row.unavailable ? row.unavailable : "no row" };
     if (row.kind === "surface") return this.runSurface(row);
     if (row.kind === "plain") return this.runPlain(row);
-    if (row.kind === "recent") return this.rerunRecent(row);
+    if (row.kind === "recent" && row.preview && row.hasPreview) {
+      return this.runPreview(row, row.argv);
+    }
     const missing = cmSheetMissingPositional(row);
     if (missing) {
       this.hint = "Needs " + missing;
@@ -462,6 +464,8 @@ class CommandModeSheetModal extends Modal {
       return { ok: false, reason: "missing " + missing };
     }
     const argv = cmSheetRowArgv(row);
+    const trigger = row.kind === "recent" ? "sheet-recent" : "sheet";
+    const entryOpts = row.entryId ? { entryId: row.entryId } : {};
     if (opts.preview || (row.policy === "preview-first" && !opts.force)) {
       return this.runPreview(row, argv);
     }
@@ -472,15 +476,15 @@ class CommandModeSheetModal extends Modal {
       return { ok: true, stage: "confirm" };
     }
     if (row.presentation === "report") {
-      return this.runReport(row, argv, { preview: false });
+      return this.runReport(row, argv, { preview: false, trigger });
     }
     if (row.presentation === "inline") {
       this.close();
-      return this.runner().run(argv, { entryId: row.entryId, title: row.title, trigger: "sheet" });
+      return this.runner().run(argv, { ...entryOpts, title: row.title, trigger });
     }
     this.close();
     return this.runner().run(argv, {
-      entryId: row.entryId, title: row.title, trigger: "sheet",
+      ...entryOpts, title: row.title, trigger,
       ...(opts.force ? { skipGuards: true } : {}),
     });
   }
@@ -510,20 +514,6 @@ class CommandModeSheetModal extends Modal {
       return { ok: false, reason: "no output view yet" };
     }
     return this.runReport({ ...row, title: "bob help" }, ["--help"], { preview: false });
-  }
-
-  async rerunRecent(row) {
-    const runner = this.runner();
-    if (!runner) return { ok: false, reason: "no runner" };
-    const argv = [...(row.argv || [])];
-    if (row.presentation === "report") {
-      return this.runReport(row, argv, { preview: false, entryId: row.entryId || undefined });
-    }
-    this.close();
-    return runner.run(argv, {
-      ...(row.entryId ? { entryId: row.entryId } : {}),
-      title: row.title, trigger: "sheet-recent",
-    });
   }
 
   async runPreview(row, argv) {
@@ -562,7 +552,7 @@ class CommandModeSheetModal extends Modal {
     if (!runner) return { ok: false, reason: "no runner" };
     const settled = await this.runWithWaitingLine(row.title || "Report", () => runner.run(argv, {
       ...(opts.entryId !== undefined ? { entryId: opts.entryId } : (row.entryId ? { entryId: row.entryId } : {})),
-      title: row.title || "Report", trigger: "sheet",
+      title: row.title || "Report", trigger: opts.trigger || "sheet",
       ...(opts.preview ? { preview: true } : {}),
       ...(opts.skipGuards ? { skipGuards: true } : {}),
     }));
@@ -876,9 +866,13 @@ class CommandModeSheetModal extends Modal {
     if (!record || !Array.isArray(record.argv)) return { ok: false, reason: "nothing to rerun" };
     const runner = this.runner();
     if (!runner) return { ok: false, reason: "no runner" };
-    return runner.run([...record.argv], {
-      ...(record.entry_id ? { entryId: record.entry_id } : {}),
-      title: record.title, trigger: "sheet-rerun",
+    const replay = cmReplayRun(record, this.catalog);
+    // A record only exists for a run that cleared its guard: it was previewed
+    // then applied, confirmed, or forced.
+    return runner.run(replay.argv, {
+      ...(replay.entryId ? { entryId: replay.entryId } : {}),
+      title: record.title, trigger: "sheet-rerun", preview: replay.preview,
+      ...(replay.preview ? {} : { skipGuards: true }),
     }).then((settled) => {
       if (settled && settled.runId) {
         this.outputRunId = settled.runId;

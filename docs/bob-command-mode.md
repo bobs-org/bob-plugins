@@ -36,7 +36,8 @@ Every catalog entry whose positionals are all optional and whose policy is
 are generated from the cached catalog at load, so the inventory scanner does
 not list them here. Each one runs its entry through the same run engine and
 finishes with an outcome toast. `Bob: Rerun last command` repeats the newest
-recorded command with its original arguments and preview setting.
+recorded command with its original arguments and preview setting; a replay of
+an applied run does not ask for its preview or confirmation again.
 `Bob: Show last output` opens the output pager on the newest run.
 
 ## Keyboard and Vim
@@ -129,8 +130,11 @@ empty query shows RECENT runs, FOR THIS NOTE rows filled from the active note
 (ref, area, project, and article notes each get their own rows), FROM CLIPBOARD
 rows for an http(s) URL, and one section per catalog section plus surface rows
 that run existing Obsidian commands (daily note, task types manager, stats, tasks,
-relation labels, reading board, article formatting). Unavailable rows stay
-visible and dimmed with their reason. `Enter` runs, `Tab` names argument mode
+relation labels, reading board, article formatting). RECENT rows show the
+command without the bob path; Enter reruns it under the command's preview or
+confirm guard, Ctrl+Enter reruns it now, and a recorded preview reruns as a
+preview. Unavailable rows stay visible and dimmed with their reason. `Enter`
+runs, `Tab` names argument mode
 (it lands with the args-vim phase), `Shift+Enter` dry-runs a preview into the
 sheet, `Ctrl+Enter` runs now, and a trailing `?` shows `bob <path> --help` for
 the selected row. Preview-first rows stream their preview in place and apply

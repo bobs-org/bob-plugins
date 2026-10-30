@@ -40,12 +40,11 @@ function cmChipIsOverdue(record, ageMs) {
 }
 
 function cmChipShortArgv(record) {
-  const argv = Array.isArray(record && record.argv) ? [...record.argv] : [];
-  if (argv.length && (argv[0] === "bob" || /(?:^|\/)bob$/.test(String(argv[0])))) argv.shift();
+  const args = cmRecordArgs(record);
   try {
-    return cmFormatArgv(["bob", ...argv]);
+    return cmFormatArgv(["bob", ...args]);
   } catch (error) {
-    return "bob " + argv.join(" ");
+    return "bob " + args.join(" ");
   }
 }
 

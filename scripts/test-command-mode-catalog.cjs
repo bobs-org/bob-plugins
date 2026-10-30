@@ -67,6 +67,65 @@ test("argv assembly puts preview args before fixed args", () => {
   assert.deepEqual(helpers.cmAssembleArgv(entry, ["u"], {}), ["ref", "create", "u"]);
 });
 
+test("cmRecordArgs strips a leading bob binary and leaves queued argv", () => {
+  assert.deepEqual(helpers.cmRecordArgs({ argv: ["bob", "task", "reconcile"] }), ["task", "reconcile"]);
+  assert.deepEqual(
+    helpers.cmRecordArgs({ argv: ["/Users/x/.cargo/bin/bob", "plan"] }),
+    ["plan"],
+  );
+  assert.deepEqual(
+    helpers.cmRecordArgs({ argv: ["/tmp/fake-bob.cjs", "plan"], bob_path: "/tmp/fake-bob.cjs" }),
+    ["plan"],
+  );
+  assert.deepEqual(helpers.cmRecordArgs({ argv: ["vault-sync", "run"] }), ["vault-sync", "run"]);
+  const named = { argv: ["/tmp/fake-bob.cjs", "plan"], bob_path: "/tmp/fake-bob.cjs" };
+  assert.equal(helpers.cmPagerDisplayArgv(named), "bob plan");
+});
+
+test("cmReplayRun is the inverse of cmAssembleArgv", () => {
+  const catalog = fixtureCatalog();
+  const plan = helpers.cmEntryById(catalog, "plan");
+  const create = helpers.cmEntryById(catalog, "ref-create");
+  const withFixed = { ...create, fixed: ["-f", "json"] };
+  const cases = [
+    { entry: plan, record: { entry_id: "plan", preview: false, argv: ["bob", "plan"] } },
+    {
+      entry: create,
+      record: {
+        entry_id: "ref-create", preview: true,
+        argv: ["/Users/x/.cargo/bin/bob", "ref", "create", "--dry-run", "https://x"],
+      },
+    },
+    {
+      entry: withFixed,
+      catalog: { entries: [withFixed] },
+      record: {
+        entry_id: "ref-create", preview: true,
+        argv: ["bob", "ref", "create", "--dry-run", "-f", "json", "https://x"],
+      },
+    },
+  ];
+  for (const item of cases) {
+    const replay = helpers.cmReplayRun(item.record, item.catalog || catalog);
+    assert.deepEqual(
+      helpers.cmAssembleArgv(item.entry, replay.argv.slice(item.entry.path.length), { preview: replay.preview }),
+      helpers.cmRecordArgs(item.record),
+    );
+    assert.equal(replay.entryId, item.entry.id);
+    assert.equal(replay.preview, Boolean(item.record.preview));
+  }
+  const keepDryRun = helpers.cmReplayRun({
+    entry_id: "ref-create", preview: false,
+    argv: ["bob", "ref", "create", "--dry-run", "https://x"],
+  }, catalog);
+  assert.deepEqual(keepDryRun.argv, ["ref", "create", "--dry-run", "https://x"]);
+  assert.equal(keepDryRun.preview, false);
+  const unknown = helpers.cmReplayRun({
+    entry_id: "missing", preview: true, argv: ["bob", "mystery"],
+  }, catalog);
+  assert.deepEqual(unknown, { argv: ["mystery"], preview: false, entryId: null });
+});
+
 test("palette entries need policy run and all-optional positionals", () => {
   const ids = helpers.cmCommandPaletteEntries(fixtureCatalog()).map((entry) => entry.id);
   assert.ok(ids.includes("plan"));

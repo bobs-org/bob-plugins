@@ -15,6 +15,7 @@ const {
   makeApp,
   makeRunner,
   takeNotices,
+  fixtureCatalog,
 } = require("./command-mode-harness.cjs");
 
 const FAKE_BOB = path.join(__dirname, "fixtures", "fake-bob.cjs");
@@ -435,4 +436,72 @@ test("rerun-last preserves arguments and preview mode; Apply carries the replay 
   ]);
   assert.equal(calls[0].options.preview, true);
   assert.equal(calls[1].options.preview, false);
+});
+
+function renameCatalog() {
+  const base = fixtureCatalog();
+  return {
+    ...base,
+    entries: [
+      ...base.entries,
+      {
+        id: "ref-rename", path: ["ref", "rename"], fixed: [], title: "Rename a reference",
+        about: "Rename", section: "vault", keywords: ["rename"],
+        effect: "syncs", network: false, presentation: "action",
+        policy: "preview-first", preview: ["--dry-run"], confirm: null, budget_secs: 60,
+        args: [
+          { name: "REF", slot: "ref", required: true, repeat: false },
+          { name: "NAME", slot: "text", required: true, repeat: false },
+        ],
+        exit_codes: [], adapter: null, hosts: [], invalidates: ["references"],
+      },
+    ],
+  };
+}
+
+function pluginWithRealRunner() {
+  const restore = installDocument();
+  const catalog = renameCatalog();
+  const base = makeRunner({ catalog });
+  base.runner.deps.env = {
+    ...process.env,
+    XDG_STATE_HOME: base.tmpState,
+    PATH: "/usr/bin:/bin",
+    FAKE_BOB_EXIT: "0",
+  };
+  base.runner.deps.resolveBob = () => ({ path: FAKE_BOB, source: "candidate", tried: [FAKE_BOB] });
+  const plugin = new BobCommandModePlugin(makeApp());
+  plugin.commandModeRunner = base.runner;
+  plugin.commandModeCatalog = catalog;
+  return { restore, base, plugin };
+}
+
+test("commandModeRerun retries an applied preview-first run and Apply carries the seed", async () => {
+  const { restore, base, plugin } = pluginWithRealRunner();
+  try {
+    const applied = await base.runner.run(["ref", "rename", "old.md", "New"], {
+      entryId: "ref-rename", title: "Rename a reference", skipGuards: true,
+    });
+    assert.ok(applied.ok, applied.reason);
+    const retried = await plugin.commandModeRerun(helpers.cmPagerFindRecord(base.runner, applied.runId));
+    assert.ok(retried.ok && retried.runId, retried.reason);
+    const retriedRecord = helpers.cmPagerFindRecord(base.runner, retried.runId);
+    assert.deepEqual(helpers.cmRecordArgs(retriedRecord), ["ref", "rename", "old.md", "New"]);
+    assert.equal(retriedRecord.preview, false);
+    const preview = await base.runner.run(["ref", "rename", "old.md", "New"], {
+      entryId: "ref-rename", title: "Rename a reference", preview: true,
+    });
+    assert.ok(preview.ok, preview.reason);
+    const appliedCarry = await plugin.commandModeRerun(
+      helpers.cmPagerFindRecord(base.runner, preview.runId),
+      { carry: ["--seed", "0x0000002a"], preview: false },
+    );
+    assert.ok(appliedCarry.ok && appliedCarry.runId, appliedCarry.reason);
+    const carryRecord = helpers.cmPagerFindRecord(base.runner, appliedCarry.runId);
+    assert.ok(!helpers.cmRecordArgs(carryRecord).includes("--dry-run"));
+    assert.deepEqual(helpers.cmRecordArgs(carryRecord), ["ref", "rename", "old.md", "New", "--seed", "0x0000002a"]);
+    assert.equal(carryRecord.preview, false);
+  } finally {
+    restore();
+  }
 });

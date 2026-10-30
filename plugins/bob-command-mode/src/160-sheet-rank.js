@@ -205,7 +205,7 @@ function cmSheetFrecencyMap(runs, rows, nowMs, host) {
 
 function cmSheetRunKey(run) {
   if (run && run.entry_id) return "entry:" + run.entry_id;
-  return "argv:" + JSON.stringify((run && run.argv) || []);
+  return "argv:" + JSON.stringify(cmRecordArgs(run));
 }
 
 function cmSheetAgeText(ms) {
@@ -220,29 +220,38 @@ function cmSheetAgeText(ms) {
 
 const CM_SHEET_OUTCOME_GLYPH = { completed: "✓", attention: "◐", failed: "✗", unknown: "?", stopped: "■", running: "⟳" };
 
-// Last four distinct argv, newest first, each with outcome glyph, age, and
-// duration for the RECENT section.
-function cmSheetRecentRows(runs, nowMs) {
+// Last four distinct replay signatures, newest first, each with outcome
+// glyph, age, and duration for the RECENT section.
+function cmSheetRecentRows(runs, nowMs, catalog) {
   const now = typeof nowMs === "number" ? nowMs : Date.now();
   const seen = new Set();
   const rows = [];
   for (const run of [...(runs || [])].reverse()) {
     if (rows.length >= CM_SHEET_RECENT_LIMIT) break;
     if (!run || !Array.isArray(run.argv)) continue;
-    const signature = JSON.stringify(run.argv);
+    const replay = cmReplayRun(run, catalog);
+    const signature = JSON.stringify({ argv: replay.argv, preview: replay.preview });
     if (seen.has(signature)) continue;
     seen.add(signature);
+    const entry = replay.entryId ? cmEntryById(catalog, replay.entryId) : null;
     const at = cmSheetRunTimeMs(run);
     rows.push({
-      key: run.entry_id ? "entry:" + run.entry_id : "argv:" + signature,
+      key: "recent:" + signature,
       kind: "recent",
-      path: run.argv[0] === "bob" ? run.argv.slice(1) : [...run.argv],
+      path: cmRecordArgs(run),
       title: run.title || run.entry_id || "Last command",
       about: run.summary || "",
-      argv: [...run.argv],
-      entryId: run.entry_id || null,
-      presentation: run.presentation || "action",
-      policy: "run",
+      argv: [...replay.argv],
+      preview: replay.preview,
+      entryId: replay.entryId,
+      presentation: entry
+        ? cmNormalizePresentation(entry.presentation)
+        : cmNormalizePresentation(run.presentation || "action"),
+      policy: entry ? cmNormalizePolicy(entry.policy) : "run",
+      hasPreview: Boolean(entry && Array.isArray(entry.preview) && entry.preview.length > 0),
+      confirm: entry && entry.policy === "confirm" ? String(entry.confirm || "") : null,
+      required: [],
+      runKey: cmSheetRunKey(run),
       outcome: run.outcome || "unknown",
       glyph: CM_SHEET_OUTCOME_GLYPH[run.outcome] || "?",
       age: at === null ? "" : cmSheetAgeText(now - at),
@@ -255,8 +264,8 @@ function cmSheetRecentRows(runs, nowMs) {
 
 // Median of the row's last 10 local durations; null when under the floor.
 function cmSheetMedianDuration(runs, row, host) {
-  const signature = row.kind === "recent" && row.argv
-    ? "argv:" + JSON.stringify(row.argv)
+  const signature = row.kind === "recent" && row.runKey
+    ? row.runKey
     : row.key;
   const durations = [];
   for (const run of [...(runs || [])].reverse()) {

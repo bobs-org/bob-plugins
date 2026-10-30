@@ -148,3 +148,47 @@ function cmRetentionSweep(fsModule, runsDir, options = {}) {
   }
   return removed;
 }
+
+// User-facing argv for a stored run: drop a leading bob binary when the
+// record actually stored one. Queued and spawn-failed records keep bare args.
+function cmRecordArgs(record) {
+  const argv = Array.isArray(record && record.argv) ? [...record.argv] : [];
+  if (!argv.length) return argv;
+  const first = String(argv[0] || "");
+  if (!first) return argv;
+  const bobPath = record && record.bob_path ? String(record.bob_path) : "";
+  if (first === "bob" || (bobPath && first === bobPath) || /(?:^|\/)bob$/.test(first)) {
+    return argv.slice(1);
+  }
+  return argv;
+}
+
+function cmDropLeadingWords(words, prefix) {
+  const list = Array.isArray(words) ? [...words] : [];
+  const head = Array.isArray(prefix) ? prefix.map(String) : [];
+  if (!head.length) return list;
+  for (let index = 0; index < head.length; index += 1) {
+    if (String(list[index] || "") !== head[index]) return list;
+  }
+  return list.slice(head.length);
+}
+
+// Inverse of cmAssembleArgv: path + preview + fixed + user args. Preview
+// flags drop only when this record was itself a preview, so a real run whose
+// user args include `--dry-run` replays unchanged.
+function cmReplayRun(record, catalog) {
+  const words = cmRecordArgs(record);
+  const entry = record && record.entry_id ? cmEntryById(catalog, record.entry_id) : null;
+  const path = entry && Array.isArray(entry.path) ? entry.path : [];
+  if (!entry || !path.length || path.some((word, index) => words[index] !== word)) {
+    return { argv: words, preview: false, entryId: null };
+  }
+  let rest = words.slice(path.length);
+  if (record && record.preview) rest = cmDropLeadingWords(rest, entry.preview);
+  rest = cmDropLeadingWords(rest, entry.fixed);
+  return {
+    argv: [...path, ...rest],
+    preview: Boolean(record && record.preview),
+    entryId: entry.id,
+  };
+}

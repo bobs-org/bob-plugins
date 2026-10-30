@@ -572,3 +572,182 @@ test("unavailable rows never activate", async () => {
     restore();
   }
 });
+
+function recentRecord(overrides = {}) {
+  return {
+    id: "run-" + String(overrides.id || "1"),
+    argv: ["/usr/bin/bob", "vault-sync", "run"],
+    entry_id: "vault-sync",
+    title: "Sync vault now",
+    preview: false,
+    presentation: "action",
+    outcome: "completed",
+    summary: "Done",
+    started_at: "2026-10-26T12:00:00.000Z",
+    finished_at: "2026-10-26T12:00:01.000Z",
+    bob_path: "/usr/bin/bob",
+    ...overrides,
+  };
+}
+
+function selectedRecentCount(modal) {
+  let count = 0;
+  for (const el of (modal.rowEls || new Map()).values()) {
+    if ((el.classes || []).includes("is-selected")) count += 1;
+  }
+  return count;
+}
+
+test("RECENT rows drop the bob binary and keep unique keys", () => {
+  const catalog = sheetCatalog();
+  const now = Date.parse("2026-10-26T14:00:00.000Z");
+  const rows = helpers.cmSheetRecentRows([
+    recentRecord({
+      id: "a", argv: ["/Users/x/.cargo/bin/bob", "vault-sync", "run"],
+      started_at: "2026-10-26T12:00:00.000Z",
+    }),
+    recentRecord({
+      id: "b", argv: ["/opt/bob", "vault-sync", "run"], bob_path: "/opt/bob",
+      started_at: "2026-10-26T13:00:00.000Z",
+    }),
+    recentRecord({
+      id: "c", entry_id: "ref-rename", title: "Rename a reference", preview: true,
+      argv: ["/usr/bin/bob", "ref", "rename", "--dry-run", "old.md", "New"],
+      started_at: "2026-10-26T13:30:00.000Z",
+    }),
+    recentRecord({
+      id: "d", entry_id: "task-archive", title: "Archive done tasks",
+      argv: ["/usr/bin/bob", "task", "archive"], presentation: "action",
+      started_at: "2026-10-26T13:45:00.000Z",
+    }),
+  ], now, catalog);
+  assert.equal(rows.length, 3);
+  assert.ok(rows.every((row) => row.key.startsWith("recent:")));
+  assert.equal(new Set(rows.map((row) => row.key)).size, rows.length);
+  assert.ok(rows.every((row) => !row.path.some((word) => /(?:^|\/)bob$/.test(String(word)))));
+  const preview = rows.find((row) => row.entryId === "ref-rename");
+  assert.deepEqual(preview.path, ["ref", "rename", "--dry-run", "old.md", "New"]);
+  assert.deepEqual(preview.argv, ["ref", "rename", "old.md", "New"]);
+  assert.equal(preview.preview, true);
+  assert.equal(preview.policy, "preview-first");
+  assert.equal(preview.hasPreview, true);
+  assert.equal(preview.confirm, null);
+  const archive = rows.find((row) => row.entryId === "task-archive");
+  assert.equal(archive.policy, "confirm");
+  assert.equal(archive.confirm, "Archive every done task?");
+  assert.equal(archive.hasPreview, false);
+});
+
+test("RECENT vault-sync reruns without doubling the path", async () => {
+  const { restore, base, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const first = await base.runner.run(["vault-sync", "run"], {
+      entryId: "vault-sync", title: "Sync vault now", trigger: "sheet",
+    });
+    assert.ok(first.ok && first.runId, first.reason);
+    const stored = helpers.cmPagerFindRecord(base.runner, first.runId);
+    assert.equal(stored.argv[0], FAKE_BOB);
+    const modal = openSheet(plugin);
+    const recent = modal.visible.find((row) => row.kind === "recent");
+    assert.ok(recent);
+    assert.ok(!recent.path.includes(FAKE_BOB));
+    assert.ok(!sheetText(modal.contentEl).includes(FAKE_BOB));
+    const entered = await modal.activateRow(recent, {});
+    assert.ok(entered.ok && entered.runId, entered.reason);
+    assert.deepEqual(helpers.cmRecordArgs(helpers.cmPagerFindRecord(base.runner, entered.runId)), ["vault-sync", "run"]);
+    const again = openSheet(plugin);
+    const recentAgain = again.visible.find((row) => row.kind === "recent");
+    const forced = await again.activateRow(recentAgain, { force: true });
+    assert.ok(forced.ok && forced.runId, forced.reason);
+    assert.deepEqual(helpers.cmRecordArgs(helpers.cmPagerFindRecord(base.runner, forced.runId)), ["vault-sync", "run"]);
+  } finally {
+    restore();
+  }
+});
+
+test("two RECENT rows for one entry select one at a time", async () => {
+  const { restore, base, plugin } = sheetHarness(sheetCatalog());
+  try {
+    assert.ok((await base.runner.run(["ready", "areas/a.md"], { entryId: "ready", title: "Ready lanes" })).ok);
+    assert.ok((await base.runner.run(["ready", "areas/b.md"], { entryId: "ready", title: "Ready lanes" })).ok);
+    const modal = openSheet(plugin);
+    const recent = modal.visible.filter((row) => row.kind === "recent");
+    assert.ok(recent.length >= 2);
+    assert.equal(recent[0].entryId, "ready");
+    assert.equal(recent[1].entryId, "ready");
+    assert.notEqual(recent[0].key, recent[1].key);
+    assert.equal(modal.selectedKey, recent[0].key);
+    assert.equal(selectedRecentCount(modal), 1);
+    pressKey(modal, "n", { ctrlKey: true });
+    assert.equal(modal.selectedKey, recent[1].key);
+    assert.equal(selectedRecentCount(modal), 1);
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("RECENT preview-first and confirm rows honor their guards", async () => {
+  const { restore, base, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const applied = await base.runner.run(["ref", "rename", "old.md", "New"], {
+      entryId: "ref-rename", title: "Rename a reference", skipGuards: true,
+    });
+    assert.ok(applied.ok, applied.reason);
+    const preview = await base.runner.run(["ref", "rename", "old.md", "New"], {
+      entryId: "ref-rename", title: "Rename a reference", preview: true,
+    });
+    assert.ok(preview.ok, preview.reason);
+    const archived = await base.runner.run(["task", "archive"], {
+      entryId: "task-archive", title: "Archive done tasks", skipGuards: true,
+    });
+    assert.ok(archived.ok, archived.reason);
+    const modal = openSheet(plugin);
+    const previewRow = modal.visible.find((row) => row.kind === "recent" && row.preview);
+    const appliedRow = modal.visible.find((row) => row.kind === "recent" && row.entryId === "ref-rename" && !row.preview);
+    const archiveRow = modal.visible.find((row) => row.kind === "recent" && row.entryId === "task-archive");
+    assert.ok(previewRow && appliedRow && archiveRow);
+    const previewed = await modal.activateRow(previewRow, {});
+    assert.ok(previewed.runId, previewed.reason);
+    assert.equal(modal.stage, "output");
+    assert.ok(modal.previewOf);
+    assert.ok(helpers.cmPagerFindRecord(base.runner, previewed.runId).argv.includes("--dry-run"));
+    modal.backToList();
+    const guarded = await modal.activateRow(appliedRow, {});
+    assert.ok(guarded.runId, guarded.reason);
+    assert.equal(modal.stage, "output");
+    assert.ok(modal.previewOf);
+    assert.ok(helpers.cmPagerFindRecord(base.runner, guarded.runId).argv.includes("--dry-run"));
+    modal.backToList();
+    const forced = await modal.activateRow(appliedRow, { force: true });
+    assert.ok(forced.ok && forced.runId, forced.reason);
+    assert.ok(!helpers.cmPagerFindRecord(base.runner, forced.runId).argv.includes("--dry-run"));
+    const confirmSheet = openSheet(plugin);
+    const archiveAgain = confirmSheet.visible.find((row) => row.kind === "recent" && row.entryId === "task-archive");
+    const confirming = await confirmSheet.activateRow(archiveAgain, {});
+    assert.equal(confirming.stage, "confirm");
+    assert.equal(confirmSheet.stage, "confirm");
+    const ran = await confirmSheet.activateRow(archiveAgain, { force: true });
+    assert.ok(ran.ok && ran.runId, ran.reason);
+  } finally {
+    restore();
+  }
+});
+
+test("in-sheet r reruns vault-sync without doubling the path", async () => {
+  const { restore, base, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const first = await base.runner.run(["vault-sync", "run"], {
+      entryId: "vault-sync", title: "Sync vault now",
+    });
+    assert.ok(first.ok && first.runId, first.reason);
+    const modal = openSheet(plugin);
+    modal.outputView = { record: helpers.cmPagerFindRecord(base.runner, first.runId) };
+    const settled = await modal.rerunOutput();
+    assert.ok(settled.ok && settled.runId, settled.reason);
+    assert.deepEqual(helpers.cmRecordArgs(helpers.cmPagerFindRecord(base.runner, settled.runId)), ["vault-sync", "run"]);
+    modal.close();
+  } finally {
+    restore();
+  }
+});

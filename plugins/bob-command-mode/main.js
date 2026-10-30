@@ -664,6 +664,50 @@ function cmRetentionSweep(fsModule, runsDir, options = {}) {
   }
   return removed;
 }
+
+// User-facing argv for a stored run: drop a leading bob binary when the
+// record actually stored one. Queued and spawn-failed records keep bare args.
+function cmRecordArgs(record) {
+  const argv = Array.isArray(record && record.argv) ? [...record.argv] : [];
+  if (!argv.length) return argv;
+  const first = String(argv[0] || "");
+  if (!first) return argv;
+  const bobPath = record && record.bob_path ? String(record.bob_path) : "";
+  if (first === "bob" || (bobPath && first === bobPath) || /(?:^|\/)bob$/.test(first)) {
+    return argv.slice(1);
+  }
+  return argv;
+}
+
+function cmDropLeadingWords(words, prefix) {
+  const list = Array.isArray(words) ? [...words] : [];
+  const head = Array.isArray(prefix) ? prefix.map(String) : [];
+  if (!head.length) return list;
+  for (let index = 0; index < head.length; index += 1) {
+    if (String(list[index] || "") !== head[index]) return list;
+  }
+  return list.slice(head.length);
+}
+
+// Inverse of cmAssembleArgv: path + preview + fixed + user args. Preview
+// flags drop only when this record was itself a preview, so a real run whose
+// user args include `--dry-run` replays unchanged.
+function cmReplayRun(record, catalog) {
+  const words = cmRecordArgs(record);
+  const entry = record && record.entry_id ? cmEntryById(catalog, record.entry_id) : null;
+  const path = entry && Array.isArray(entry.path) ? entry.path : [];
+  if (!entry || !path.length || path.some((word, index) => words[index] !== word)) {
+    return { argv: words, preview: false, entryId: null };
+  }
+  let rest = words.slice(path.length);
+  if (record && record.preview) rest = cmDropLeadingWords(rest, entry.preview);
+  rest = cmDropLeadingWords(rest, entry.fixed);
+  return {
+    argv: [...path, ...rest],
+    preview: Boolean(record && record.preview),
+    entryId: entry.id,
+  };
+}
 // ---- src/060-runner.js ----
 // Bob Command Mode: detached file-backed run engine (spawn, tail, queue,
 // guards, budgets, stop, reload adoption). The plugin wires real modules and
@@ -2216,33 +2260,20 @@ class BobCommandModePlugin extends Plugin {
     const runner = this.commandModeRunner;
     const current = record || (runner && runner.newestRecord());
     if (!runner || !current || !Array.isArray(current.argv)) return Promise.resolve({ ok: false, reason: "no command to rerun" });
-    let words = [...current.argv];
-    if (words.length && (words[0] === "bob" || words[0] === current.bob_path || /(?:^|\/)bob$/.test(String(words[0])))) words.shift();
-    const entry = current.entry_id ? cmEntryById(runner.catalog(), current.entry_id) : null;
-    if (entry && Array.isArray(entry.path) && entry.path.every((word, index) => words[index] === word)) {
-      let rest = words.slice(entry.path.length);
-      const previewFlags = Array.isArray(entry.preview) ? new Set(entry.preview.map(String)) : new Set();
-      rest = rest.filter((word) => !previewFlags.has(String(word)));
-      if (Array.isArray(entry.fixed)) {
-        let cursor = 0;
-        for (const fixed of entry.fixed) {
-          const index = rest.indexOf(String(fixed), cursor);
-          if (index >= 0) {
-            rest.splice(index, 1);
-            cursor = index;
-          }
-        }
-      }
-      words = [...entry.path, ...rest];
-    }
+    const replay = cmReplayRun(current, runner.catalog());
     const carry = Array.isArray(options.carry) ? options.carry.map(String) : [];
-    words.push(...carry);
+    const argv = [...replay.argv, ...carry];
     const preview = options.preview === undefined ? Boolean(current.preview) : Boolean(options.preview);
-    return runner.run(words, {
-      entryId: current.entry_id || undefined,
+    // A record only exists for a run that cleared its guard: it was previewed
+    // then applied, confirmed, or forced. An Apply (`preview: false` over a
+    // preview record) is the toast equivalent of the sheet's applyPreview,
+    // which already skips the gate.
+    return runner.run(argv, {
+      ...(replay.entryId ? { entryId: replay.entryId } : {}),
       title: current.title || undefined,
       trigger: "retry",
       preview,
+      ...(preview ? {} : { skipGuards: true }),
     });
   }
 
@@ -2506,9 +2537,7 @@ function cmToastTitle(outcome = {}) {
 
 function cmToastArgv(outcome = {}) {
   const record = cmToastRun(outcome);
-  const argv = Array.isArray(record.argv) ? [...record.argv] : [];
-  if (argv.length && (argv[0] === "bob" || /(?:^|\/)bob$/.test(String(argv[0])))) argv.shift();
-  return cmFormatArgv(["bob", ...argv]);
+  return cmFormatArgv(["bob", ...cmRecordArgs(record)]);
 }
 
 function cmToastActions(outcome = {}) {
@@ -2614,12 +2643,11 @@ function cmChipIsOverdue(record, ageMs) {
 }
 
 function cmChipShortArgv(record) {
-  const argv = Array.isArray(record && record.argv) ? [...record.argv] : [];
-  if (argv.length && (argv[0] === "bob" || /(?:^|\/)bob$/.test(String(argv[0])))) argv.shift();
+  const args = cmRecordArgs(record);
   try {
-    return cmFormatArgv(["bob", ...argv]);
+    return cmFormatArgv(["bob", ...args]);
   } catch (error) {
-    return "bob " + argv.join(" ");
+    return "bob " + args.join(" ");
   }
 }
 
@@ -3586,9 +3614,7 @@ function cmPagerCopyOutput(chunks) {
 }
 
 function cmPagerDisplayArgv(record) {
-  const argv = Array.isArray(record && record.argv) ? [...record.argv] : [];
-  if (argv.length && (argv[0] === "bob" || /(?:^|\/)bob$/.test(String(argv[0])))) argv.shift();
-  return cmFormatArgv(["bob", ...argv]);
+  return cmFormatArgv(["bob", ...cmRecordArgs(record)]);
 }
 
 function cmPagerCopyCommand(record) {
@@ -4506,7 +4532,7 @@ function cmSheetFrecencyMap(runs, rows, nowMs, host) {
 
 function cmSheetRunKey(run) {
   if (run && run.entry_id) return "entry:" + run.entry_id;
-  return "argv:" + JSON.stringify((run && run.argv) || []);
+  return "argv:" + JSON.stringify(cmRecordArgs(run));
 }
 
 function cmSheetAgeText(ms) {
@@ -4521,29 +4547,38 @@ function cmSheetAgeText(ms) {
 
 const CM_SHEET_OUTCOME_GLYPH = { completed: "✓", attention: "◐", failed: "✗", unknown: "?", stopped: "■", running: "⟳" };
 
-// Last four distinct argv, newest first, each with outcome glyph, age, and
-// duration for the RECENT section.
-function cmSheetRecentRows(runs, nowMs) {
+// Last four distinct replay signatures, newest first, each with outcome
+// glyph, age, and duration for the RECENT section.
+function cmSheetRecentRows(runs, nowMs, catalog) {
   const now = typeof nowMs === "number" ? nowMs : Date.now();
   const seen = new Set();
   const rows = [];
   for (const run of [...(runs || [])].reverse()) {
     if (rows.length >= CM_SHEET_RECENT_LIMIT) break;
     if (!run || !Array.isArray(run.argv)) continue;
-    const signature = JSON.stringify(run.argv);
+    const replay = cmReplayRun(run, catalog);
+    const signature = JSON.stringify({ argv: replay.argv, preview: replay.preview });
     if (seen.has(signature)) continue;
     seen.add(signature);
+    const entry = replay.entryId ? cmEntryById(catalog, replay.entryId) : null;
     const at = cmSheetRunTimeMs(run);
     rows.push({
-      key: run.entry_id ? "entry:" + run.entry_id : "argv:" + signature,
+      key: "recent:" + signature,
       kind: "recent",
-      path: run.argv[0] === "bob" ? run.argv.slice(1) : [...run.argv],
+      path: cmRecordArgs(run),
       title: run.title || run.entry_id || "Last command",
       about: run.summary || "",
-      argv: [...run.argv],
-      entryId: run.entry_id || null,
-      presentation: run.presentation || "action",
-      policy: "run",
+      argv: [...replay.argv],
+      preview: replay.preview,
+      entryId: replay.entryId,
+      presentation: entry
+        ? cmNormalizePresentation(entry.presentation)
+        : cmNormalizePresentation(run.presentation || "action"),
+      policy: entry ? cmNormalizePolicy(entry.policy) : "run",
+      hasPreview: Boolean(entry && Array.isArray(entry.preview) && entry.preview.length > 0),
+      confirm: entry && entry.policy === "confirm" ? String(entry.confirm || "") : null,
+      required: [],
+      runKey: cmSheetRunKey(run),
       outcome: run.outcome || "unknown",
       glyph: CM_SHEET_OUTCOME_GLYPH[run.outcome] || "?",
       age: at === null ? "" : cmSheetAgeText(now - at),
@@ -4556,8 +4591,8 @@ function cmSheetRecentRows(runs, nowMs) {
 
 // Median of the row's last 10 local durations; null when under the floor.
 function cmSheetMedianDuration(runs, row, host) {
-  const signature = row.kind === "recent" && row.argv
-    ? "argv:" + JSON.stringify(row.argv)
+  const signature = row.kind === "recent" && row.runKey
+    ? row.runKey
     : row.key;
   const durations = [];
   for (const run of [...(runs || [])].reverse()) {
@@ -5056,7 +5091,7 @@ class CommandModeSheetModal extends Modal {
     ];
     if (!this.query.trim()) {
       this.refreshRecords();
-      this.rows = [...cmSheetRecentRows(this.runRecords, Date.now()), ...this.rows];
+      this.rows = [...cmSheetRecentRows(this.runRecords, Date.now(), this.catalog), ...this.rows];
     }
     this.frecency = cmSheetFrecencyMap(this.runRecords, this.rows, Date.now(), this.host);
     this.recomputeVisible();
@@ -5307,7 +5342,9 @@ class CommandModeSheetModal extends Modal {
     if (!row || row.unavailable) return { ok: false, reason: row && row.unavailable ? row.unavailable : "no row" };
     if (row.kind === "surface") return this.runSurface(row);
     if (row.kind === "plain") return this.runPlain(row);
-    if (row.kind === "recent") return this.rerunRecent(row);
+    if (row.kind === "recent" && row.preview && row.hasPreview) {
+      return this.runPreview(row, row.argv);
+    }
     const missing = cmSheetMissingPositional(row);
     if (missing) {
       this.hint = "Needs " + missing;
@@ -5316,6 +5353,8 @@ class CommandModeSheetModal extends Modal {
       return { ok: false, reason: "missing " + missing };
     }
     const argv = cmSheetRowArgv(row);
+    const trigger = row.kind === "recent" ? "sheet-recent" : "sheet";
+    const entryOpts = row.entryId ? { entryId: row.entryId } : {};
     if (opts.preview || (row.policy === "preview-first" && !opts.force)) {
       return this.runPreview(row, argv);
     }
@@ -5326,15 +5365,15 @@ class CommandModeSheetModal extends Modal {
       return { ok: true, stage: "confirm" };
     }
     if (row.presentation === "report") {
-      return this.runReport(row, argv, { preview: false });
+      return this.runReport(row, argv, { preview: false, trigger });
     }
     if (row.presentation === "inline") {
       this.close();
-      return this.runner().run(argv, { entryId: row.entryId, title: row.title, trigger: "sheet" });
+      return this.runner().run(argv, { ...entryOpts, title: row.title, trigger });
     }
     this.close();
     return this.runner().run(argv, {
-      entryId: row.entryId, title: row.title, trigger: "sheet",
+      ...entryOpts, title: row.title, trigger,
       ...(opts.force ? { skipGuards: true } : {}),
     });
   }
@@ -5364,20 +5403,6 @@ class CommandModeSheetModal extends Modal {
       return { ok: false, reason: "no output view yet" };
     }
     return this.runReport({ ...row, title: "bob help" }, ["--help"], { preview: false });
-  }
-
-  async rerunRecent(row) {
-    const runner = this.runner();
-    if (!runner) return { ok: false, reason: "no runner" };
-    const argv = [...(row.argv || [])];
-    if (row.presentation === "report") {
-      return this.runReport(row, argv, { preview: false, entryId: row.entryId || undefined });
-    }
-    this.close();
-    return runner.run(argv, {
-      ...(row.entryId ? { entryId: row.entryId } : {}),
-      title: row.title, trigger: "sheet-recent",
-    });
   }
 
   async runPreview(row, argv) {
@@ -5416,7 +5441,7 @@ class CommandModeSheetModal extends Modal {
     if (!runner) return { ok: false, reason: "no runner" };
     const settled = await this.runWithWaitingLine(row.title || "Report", () => runner.run(argv, {
       ...(opts.entryId !== undefined ? { entryId: opts.entryId } : (row.entryId ? { entryId: row.entryId } : {})),
-      title: row.title || "Report", trigger: "sheet",
+      title: row.title || "Report", trigger: opts.trigger || "sheet",
       ...(opts.preview ? { preview: true } : {}),
       ...(opts.skipGuards ? { skipGuards: true } : {}),
     }));
@@ -5730,9 +5755,13 @@ class CommandModeSheetModal extends Modal {
     if (!record || !Array.isArray(record.argv)) return { ok: false, reason: "nothing to rerun" };
     const runner = this.runner();
     if (!runner) return { ok: false, reason: "no runner" };
-    return runner.run([...record.argv], {
-      ...(record.entry_id ? { entryId: record.entry_id } : {}),
-      title: record.title, trigger: "sheet-rerun",
+    const replay = cmReplayRun(record, this.catalog);
+    // A record only exists for a run that cleared its guard: it was previewed
+    // then applied, confirmed, or forced.
+    return runner.run(replay.argv, {
+      ...(replay.entryId ? { entryId: replay.entryId } : {}),
+      title: record.title, trigger: "sheet-rerun", preview: replay.preview,
+      ...(replay.preview ? {} : { skipGuards: true }),
     }).then((settled) => {
       if (settled && settled.runId) {
         this.outputRunId = settled.runId;
@@ -7124,6 +7153,8 @@ module.exports.helpers = {
   cmEnsureRunsDir,
   cmRunFilePaths,
   cmNewRecord,
+  cmRecordArgs,
+  cmReplayRun,
   cmWriteRecord,
   cmReadJsonFile,
   cmReadReceipt,

@@ -451,33 +451,20 @@ class BobCommandModePlugin extends Plugin {
     const runner = this.commandModeRunner;
     const current = record || (runner && runner.newestRecord());
     if (!runner || !current || !Array.isArray(current.argv)) return Promise.resolve({ ok: false, reason: "no command to rerun" });
-    let words = [...current.argv];
-    if (words.length && (words[0] === "bob" || words[0] === current.bob_path || /(?:^|\/)bob$/.test(String(words[0])))) words.shift();
-    const entry = current.entry_id ? cmEntryById(runner.catalog(), current.entry_id) : null;
-    if (entry && Array.isArray(entry.path) && entry.path.every((word, index) => words[index] === word)) {
-      let rest = words.slice(entry.path.length);
-      const previewFlags = Array.isArray(entry.preview) ? new Set(entry.preview.map(String)) : new Set();
-      rest = rest.filter((word) => !previewFlags.has(String(word)));
-      if (Array.isArray(entry.fixed)) {
-        let cursor = 0;
-        for (const fixed of entry.fixed) {
-          const index = rest.indexOf(String(fixed), cursor);
-          if (index >= 0) {
-            rest.splice(index, 1);
-            cursor = index;
-          }
-        }
-      }
-      words = [...entry.path, ...rest];
-    }
+    const replay = cmReplayRun(current, runner.catalog());
     const carry = Array.isArray(options.carry) ? options.carry.map(String) : [];
-    words.push(...carry);
+    const argv = [...replay.argv, ...carry];
     const preview = options.preview === undefined ? Boolean(current.preview) : Boolean(options.preview);
-    return runner.run(words, {
-      entryId: current.entry_id || undefined,
+    // A record only exists for a run that cleared its guard: it was previewed
+    // then applied, confirmed, or forced. An Apply (`preview: false` over a
+    // preview record) is the toast equivalent of the sheet's applyPreview,
+    // which already skips the gate.
+    return runner.run(argv, {
+      ...(replay.entryId ? { entryId: replay.entryId } : {}),
       title: current.title || undefined,
       trigger: "retry",
       preview,
+      ...(preview ? {} : { skipGuards: true }),
     });
   }
 

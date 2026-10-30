@@ -32,9 +32,7 @@ function cmToastTitle(outcome = {}) {
 
 function cmToastArgv(outcome = {}) {
   const record = cmToastRun(outcome);
-  const argv = Array.isArray(record.argv) ? [...record.argv] : [];
-  if (argv.length && (argv[0] === "bob" || /(?:^|\/)bob$/.test(String(argv[0])))) argv.shift();
-  return cmFormatArgv(["bob", ...argv]);
+  return cmFormatArgv(["bob", ...cmRecordArgs(record)]);
 }
 
 function cmToastActions(outcome = {}) {

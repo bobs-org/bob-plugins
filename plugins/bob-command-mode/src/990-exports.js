@@ -67,6 +67,8 @@ module.exports.helpers = {
   cmEnsureRunsDir,
   cmRunFilePaths,
   cmNewRecord,
+  cmRecordArgs,
+  cmReplayRun,
   cmWriteRecord,
   cmReadJsonFile,
   cmReadReceipt,

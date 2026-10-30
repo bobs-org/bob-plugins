@@ -364,7 +364,7 @@ test("legend is a keyboard stop, bar is aria-hidden, and activation does not fet
       const legend = byAttr(el, "data-stats-focus-key", "lanes-themes")[0];
       assert.equal(legend.getAttribute("role"), "button");
       assert.equal(legend.getAttribute("tabindex"), "0");
-      assert.match(legend.getAttribute("aria-label"), /Time by theme/);
+      assert.match(legend.getAttribute("aria-label"), /Time by type/);
       const bar = byClass(el, "bob-stats-lane-bar").find((node) =>
         (node.getAttribute("class") || "").includes("bob-stats-lane-themes"));
       assert.equal(bar.getAttribute("aria-hidden"), "true");

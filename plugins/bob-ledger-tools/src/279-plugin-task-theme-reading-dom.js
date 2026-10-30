@@ -153,7 +153,7 @@ function taskThemeIsThemeInlineField(node) {
           taskThemeAttr(current, "data-dv-key") ||
           "",
       ).toLowerCase();
-      if (key === "theme") {
+      if (key === "theme" || key === "type") {
         return true;
       }
       const kids = taskThemeChildList(current);

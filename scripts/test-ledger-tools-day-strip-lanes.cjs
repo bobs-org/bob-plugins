@@ -375,12 +375,12 @@ test("switch activation: click, Enter, Space call cycleLanes once with focus", (
 test("group aria-label names only the shown lanes", () => {
   const both = modelFor(fixtures.today, { laneView: "both" });
   assert.match(both.ariaLabel, /Time by root parent:/);
-  assert.match(both.ariaLabel, /Time by theme:/);
+  assert.match(both.ariaLabel, /Time by type:/);
   const roots = modelFor(fixtures.today, { laneView: "roots" });
   assert.match(roots.ariaLabel, /Time by root parent:/);
-  assert.doesNotMatch(roots.ariaLabel, /Time by theme:/);
+  assert.doesNotMatch(roots.ariaLabel, /Time by type:/);
   const themes = modelFor(fixtures.today, { laneView: "themes" });
-  assert.match(themes.ariaLabel, /Time by theme:/);
+  assert.match(themes.ariaLabel, /Time by type:/);
   assert.doesNotMatch(themes.ariaLabel, /Time by root parent:/);
   const areaRoots = modelFor(fixtures.areaOnly, { laneView: "both" });
   assert.match(areaRoots.ariaLabel, /Time by area:/);

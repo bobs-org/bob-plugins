@@ -347,7 +347,7 @@ function statsWindowLanesModel(report, context) {
       const fallback = context && typeof context.themeHueFor === "function" ? context.themeHueFor : null;
       const segments = timeLaneThemeSegments(safeReport, themeEntries, fallback);
       if (segments.length) {
-        themes = statsWindowBuildLane(safeReport, worked, "theme", "Time by theme", "themes", segments, span);
+        themes = statsWindowBuildLane(safeReport, worked, "theme", "Time by type", "themes", segments, span);
       }
     }
     if (roots.omitted && themes.omitted) return statsWindowLanesOmitted();

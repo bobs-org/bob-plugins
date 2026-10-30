@@ -12027,6 +12027,187 @@ if (WidgetType && typeof WidgetType === "function") {
     }
   };
 }
+// ---- src/137-ledger-type-marks.js ----
+// --- Ledger type-agreement marks: pure mark-core ----------------------------
+// Owned by D11 in plan:202610/task_types.md. Prefixes a live Task Link
+// with `#TYPE` when the linked task disagrees with its Pomodoro, or
+// quietly when the entry has two or more type components. Never throws.
+
+function ledgerTypeMarkLinks(content) {
+  try {
+    const found = [];
+    todayEachOpenEntry(content, (entry) => {
+      try {
+        const range = entry.range;
+        if (!range || range.length === 0) {
+          return;
+        }
+        const childIndent = todayIndentLen(entry.lines[range[0]]);
+        for (const sub of range) {
+          try {
+            if (todayIndentLen(entry.lines[sub]) !== childIndent) {
+              continue;
+            }
+            const bullet = todayBulletBody(entry.lines[sub]);
+            if (!bullet) {
+              continue;
+            }
+            const match = progressMarkMatchFromBody(bullet.body);
+            if (!match) {
+              continue;
+            }
+            found.push(
+              Object.freeze({
+                line: sub,
+                ch: bullet.bodyStart + match.prefix + match.token.start,
+                target: match.token.pathPart,
+                blockId: match.token.blockId,
+                entryName: entry.entryName,
+              }),
+            );
+          } catch (error) {
+            continue;
+          }
+        }
+      } catch (error) {
+        // One entry never breaks the scan.
+      }
+    });
+    return Object.freeze(found);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+function ledgerTypeMarkKind(taskKey, entryName, sources) {
+  try {
+    if (!taskKey) {
+      return null;
+    }
+    const agrees =
+      typeof typeAgrees === "function"
+        ? typeAgrees(taskKey, entryName, sources)
+        : true;
+    const components =
+      typeof typeComponents === "function"
+        ? typeComponents(entryName, sources)
+        : [];
+    const typeCount = components.filter((item) => item && item.isType).length;
+    if (!agrees) {
+      return "disagree";
+    }
+    if (typeCount >= 2) {
+      return "composite";
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function buildLedgerTypeMarkElement(doc, model) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") {
+      return null;
+    }
+    const spec = model && typeof model === "object" ? model : {};
+    const typeName =
+      typeof spec.type === "string" && spec.type ? spec.type : "";
+    if (!typeName) {
+      return null;
+    }
+    const span = doc.createElement("span");
+    let classes = "bob-ledger-type-mark";
+    if (spec.kind === "disagree") {
+      classes += " is-disagree";
+    } else if (spec.kind === "composite") {
+      classes += " is-composite";
+    }
+    span.setAttribute("class", classes);
+    span.setAttribute("role", "img");
+    span.setAttribute("data-bob-type", typeName);
+    if (typeof spec.hue === "string" && spec.hue) {
+      span.setAttribute("data-bob-type-hue", spec.hue);
+    }
+    const tooltip =
+      spec.kind === "disagree"
+        ? ledgerTypeDisagreeTooltip(typeName, spec.entryName)
+        : typeName;
+    if (tooltip) {
+      span.setAttribute("aria-label", tooltip);
+      span.setAttribute("title", tooltip);
+      span.setAttribute("data-tooltip-position", "top");
+    }
+    return span;
+  } catch (error) {
+    return null;
+  }
+}
+
+let LedgerTypeMarkWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  LedgerTypeMarkWidget = class extends WidgetType {
+    constructor(model) {
+      super();
+      this.model = model && typeof model === "object" ? model : {};
+      this.key = [
+        this.model.type || "",
+        this.model.hue || "",
+        this.model.kind || "",
+        this.model.entryName || "",
+      ].join("|");
+    }
+
+    eq(other) {
+      return (
+        Boolean(other) &&
+        other instanceof LedgerTypeMarkWidget &&
+        other.key === this.key
+      );
+    }
+
+    toDOM(view) {
+      const dom = buildLedgerTypeMarkElement(
+        typeof document !== "undefined" ? document : null,
+        this.model,
+      );
+      if (!dom) {
+        return typeof document !== "undefined" && document
+          ? document.createElement("span")
+          : null;
+      }
+      try {
+        dom.addEventListener("mousedown", (event) => {
+          try {
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            let anchor = null;
+            try {
+              anchor =
+                view && typeof view.posAtDOM === "function"
+                  ? view.posAtDOM(dom)
+                  : null;
+            } catch (error) {
+              anchor = null;
+            }
+            if (typeof anchor === "number") {
+              view.dispatch({ selection: { anchor } });
+            }
+            if (view && typeof view.focus === "function") {
+              view.focus();
+            }
+          } catch (error) {
+            // Cursor placement is best-effort.
+          }
+        });
+      } catch (error) {
+        // A listener-free mark still renders.
+      }
+      return dom;
+    }
+  };
+}
 // ---- src/138-task-tag-marks.js ----
 // --- Task tag marks: pure mark-core -------------------------------------
 // Owned by the `docs/task-tag-marks.md` display contract in bob-cli.
@@ -12208,6 +12389,16 @@ function taskTagMarkRanges(lineText) {
     }
     const tokens = taskTagMarkTokenRanges(lineText);
     const found = [];
+    let field = null;
+    try {
+      field = taskTagTypeFieldOf(lineText);
+    } catch (error) {
+      field = null;
+    }
+    const type =
+      field && typeof field.type === "string" && field.type ? field.type : null;
+    const fieldState =
+      field && typeof field.fieldState === "string" ? field.fieldState : "none";
     for (const token of tokens) {
       try {
         if (!token || typeof token.from !== "number" || typeof token.to !== "number") {
@@ -12215,7 +12406,15 @@ function taskTagMarkRanges(lineText) {
         }
         const pairEnd = refTaskPairEnd(lineText, token.to);
         if (pairEnd !== -1) {
-          found.push(Object.freeze({ from: token.from, to: pairEnd, kind: "ref" }));
+          found.push(
+            Object.freeze({
+              from: token.from,
+              to: pairEnd,
+              kind: "ref",
+              type,
+              fieldState,
+            }),
+          );
         } else {
           const checklistRun = checklistTaskRunEnd(lineText, token.to);
           found.push(
@@ -12223,6 +12422,8 @@ function taskTagMarkRanges(lineText) {
               from: token.from,
               to: checklistRun ? checklistRun.to : token.to,
               kind: checklistRun ? checklistRun.kind : "task",
+              type,
+              fieldState,
             }),
           );
         }
@@ -12504,7 +12705,7 @@ function refTaskPairAnchor(taskAnchor) {
 // `data-tooltip-position`. Never creates or removes nodes, so it is
 // idempotent and survives Dataview's `innerHTML` round trip. Returns
 // true on success, false otherwise. Never throws.
-function annotateTaskTagMark(el) {
+function annotateTaskTagMark(el, identity, inheritedEnabled) {
   try {
     if (!el || typeof el !== "object") {
       return false;
@@ -12526,16 +12727,26 @@ function annotateTaskTagMark(el) {
     } catch (error) {
       return false;
     }
+    const tooltip = taskTagIdentityTooltip(identity);
+    const aria = taskTagIdentityAria(identity);
     try {
       if (typeof el.setAttribute === "function") {
-        el.setAttribute("aria-label", TASK_TAG_MARK_TOOLTIP);
+        el.setAttribute("aria-label", aria);
         el.setAttribute("data-tooltip-position", "top");
+        if (identity && identity.type) {
+          el.setAttribute("title", tooltip);
+        }
       } else {
-        el["aria-label"] = TASK_TAG_MARK_TOOLTIP;
+        el["aria-label"] = aria;
         el["data-tooltip-position"] = "top";
       }
     } catch (error) {
       return false;
+    }
+    try {
+      applyTaskTagTypeAttrs(el, identity, inheritedEnabled);
+    } catch (error) {
+      // Type attributes are best-effort.
     }
     return true;
   } catch (error) {
@@ -12551,12 +12762,12 @@ function annotateTaskTagMark(el) {
 // for copy, Dataview's `innerHTML` round trip, and toggle restore.
 // Never creates or removes nodes. Returns true on success, false
 // otherwise. Never throws.
-function annotateRefTaskMark(taskAnchor, refAnchor) {
+function annotateRefTaskMark(taskAnchor, refAnchor, identity, inheritedEnabled) {
   try {
     if (!taskAnchor || typeof taskAnchor !== "object") {
       return false;
     }
-    if (!annotateTaskTagMark(taskAnchor)) {
+    if (!annotateTaskTagMark(taskAnchor, identity, inheritedEnabled)) {
       return false;
     }
     try {
@@ -12573,12 +12784,17 @@ function annotateRefTaskMark(taskAnchor, refAnchor) {
       return false;
     }
     try {
+      const shown = taskTagIdentityShown(identity, inheritedEnabled);
+      const aria = shown ? taskTagIdentityAria(identity) : REF_TASK_MARK_LABEL;
+      const tooltip = identity
+        ? taskTagIdentityTooltip(identity)
+        : REF_TASK_MARK_TOOLTIP;
       if (typeof taskAnchor.setAttribute === "function") {
-        taskAnchor.setAttribute("aria-label", REF_TASK_MARK_LABEL);
-        taskAnchor.setAttribute("title", REF_TASK_MARK_TOOLTIP);
+        taskAnchor.setAttribute("aria-label", aria || REF_TASK_MARK_LABEL);
+        taskAnchor.setAttribute("title", tooltip || REF_TASK_MARK_TOOLTIP);
       } else {
-        taskAnchor["aria-label"] = REF_TASK_MARK_LABEL;
-        taskAnchor.title = REF_TASK_MARK_TOOLTIP;
+        taskAnchor["aria-label"] = aria || REF_TASK_MARK_LABEL;
+        taskAnchor.title = tooltip || REF_TASK_MARK_TOOLTIP;
       }
     } catch (error) {
       return false;
@@ -12669,6 +12885,9 @@ function stripTaskTagMark(el) {
         el.removeAttribute("aria-label");
         el.removeAttribute("data-tooltip-position");
         el.removeAttribute("title");
+        el.removeAttribute("data-bob-type");
+        el.removeAttribute("data-bob-type-hue");
+        el.removeAttribute("data-bob-type-state");
       } else {
         try {
           delete el["aria-label"];
@@ -12703,7 +12922,7 @@ function stripTaskTagMark(el) {
 // variant class, accessible label, and tooltip as `title`.
 // `doc` provides `createElement` so tests can pass a fake document.
 // Never throws: bad input yields null.
-function buildTaskTagMarkElement(doc, kind) {
+function buildTaskTagMarkElement(doc, kind, identity, inheritedEnabled) {
   try {
     if (!doc || typeof doc.createElement !== "function") {
       return null;
@@ -12713,27 +12932,42 @@ function buildTaskTagMarkElement(doc, kind) {
       return null;
     }
     try {
+      const typedTooltip = identity ? taskTagIdentityTooltip(identity) : null;
+      const typedAria =
+        identity && identity.inherited !== true
+          ? taskTagIdentityAria(identity)
+          : null;
       if (kind === "pre" || kind === "post") {
         span.setAttribute(
           "class",
           "bob-task-tag-mark " + CHECKLIST_TASK_MARK_CLASSES[kind],
         );
         span.setAttribute("role", "img");
-        span.setAttribute("aria-label", CHECKLIST_TASK_MARK_LABELS[kind]);
-        span.setAttribute("title", CHECKLIST_TASK_MARK_TOOLTIPS[kind]);
+        span.setAttribute(
+          "aria-label",
+          typedAria || CHECKLIST_TASK_MARK_LABELS[kind],
+        );
+        span.setAttribute(
+          "title",
+          typedTooltip || CHECKLIST_TASK_MARK_TOOLTIPS[kind],
+        );
         span.setAttribute("data-tooltip-position", "top");
       } else if (kind === "ref") {
         span.setAttribute("class", "bob-task-tag-mark " + REF_TASK_MARK_CLASS);
         span.setAttribute("role", "img");
-        span.setAttribute("aria-label", REF_TASK_MARK_LABEL);
-        span.setAttribute("title", REF_TASK_MARK_TOOLTIP);
+        span.setAttribute("aria-label", typedAria || REF_TASK_MARK_LABEL);
+        span.setAttribute("title", typedTooltip || REF_TASK_MARK_TOOLTIP);
         span.setAttribute("data-tooltip-position", "top");
       } else {
         span.setAttribute("class", "bob-task-tag-mark");
         span.setAttribute("role", "img");
-        span.setAttribute("aria-label", TASK_TAG_MARK_TOOLTIP);
+        span.setAttribute("aria-label", typedAria || TASK_TAG_MARK_TOOLTIP);
         span.setAttribute("data-tooltip-position", "top");
+        if (typedTooltip) {
+          span.setAttribute("title", typedTooltip);
+        }
       }
+      applyTaskTagTypeAttrs(span, identity, inheritedEnabled);
     } catch (error) {
       return null;
     }
@@ -12790,9 +13024,24 @@ let TaskTagMarkWidget = null;
 let RefTaskMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   TaskTagMarkWidget = class extends WidgetType {
-    constructor() {
+    constructor(identity, inheritedEnabled) {
       super();
-      this.key = "task-tag-mark";
+      this.identity = identity || null;
+      this.inheritedEnabled = inheritedEnabled === true;
+      const type =
+        this.identity && typeof this.identity.type === "string"
+          ? this.identity.type
+          : "";
+      const hue =
+        this.identity && typeof this.identity.hue === "string"
+          ? this.identity.hue
+          : "";
+      const state =
+        this.identity && typeof this.identity.state === "string"
+          ? this.identity.state
+          : "";
+      this.key = "task-tag-mark|" + type + "|" + hue + "|" + state + "|" +
+        String(this.inheritedEnabled);
     }
 
     eq(other) {
@@ -12806,6 +13055,9 @@ if (WidgetType && typeof WidgetType === "function") {
     toDOM(view) {
       const dom = buildTaskTagMarkElement(
         typeof document !== "undefined" ? document : null,
+        "task",
+        this.identity,
+        this.inheritedEnabled,
       );
       // In tests `document` is undefined and the caller passes a fake
       // doc via `buildTaskTagMarkElement` directly; never throw here.
@@ -12821,9 +13073,24 @@ if (WidgetType && typeof WidgetType === "function") {
     }
   };
   RefTaskMarkWidget = class extends WidgetType {
-    constructor() {
+    constructor(identity, inheritedEnabled) {
       super();
-      this.key = "ref-task-mark";
+      this.identity = identity || null;
+      this.inheritedEnabled = inheritedEnabled === true;
+      const type =
+        this.identity && typeof this.identity.type === "string"
+          ? this.identity.type
+          : "";
+      const hue =
+        this.identity && typeof this.identity.hue === "string"
+          ? this.identity.hue
+          : "";
+      const state =
+        this.identity && typeof this.identity.state === "string"
+          ? this.identity.state
+          : "";
+      this.key = "ref-task-mark|" + type + "|" + hue + "|" + state + "|" +
+        String(this.inheritedEnabled);
     }
 
     eq(other) {
@@ -12838,6 +13105,8 @@ if (WidgetType && typeof WidgetType === "function") {
       const dom = buildTaskTagMarkElement(
         typeof document !== "undefined" ? document : null,
         "ref",
+        this.identity,
+        this.inheritedEnabled,
       );
       // In tests `document` is undefined and the caller passes a fake
       // doc via `buildTaskTagMarkElement` directly; never throw here.
@@ -13241,24 +13510,38 @@ function checklistAddClass(el, className) {
 // Annotate the task hash as the PRE sunrise or POST flag and hide both
 // partner anchors in place, retaining their text for copy, Dataview,
 // and toggle restore. Never creates or removes nodes.
-function annotateChecklistTaskMark(taskAnchor, run) {
+function annotateChecklistTaskMark(taskAnchor, run, identity, inheritedEnabled) {
   try {
     const kind = run && run.kind;
-    if (!CHECKLIST_TASK_MARK_CLASSES[kind] || !annotateTaskTagMark(taskAnchor)) {
+    if (
+      !CHECKLIST_TASK_MARK_CLASSES[kind] ||
+      !annotateTaskTagMark(taskAnchor, identity, inheritedEnabled)
+    ) {
       return false;
     }
     if (!checklistAddClass(taskAnchor, CHECKLIST_TASK_MARK_CLASSES[kind])) {
       return false;
     }
-    const label = CHECKLIST_TASK_MARK_LABELS[kind];
-    const tooltip = CHECKLIST_TASK_MARK_TOOLTIPS[kind];
+    const shown = taskTagIdentityShown(identity, inheritedEnabled);
+    const label = shown
+      ? taskTagIdentityAria(identity)
+      : CHECKLIST_TASK_MARK_LABELS[kind];
+    const tooltip = identity
+      ? taskTagIdentityTooltip(identity)
+      : CHECKLIST_TASK_MARK_TOOLTIPS[kind];
     try {
       if (typeof taskAnchor.setAttribute === "function") {
-        taskAnchor.setAttribute("aria-label", label);
-        taskAnchor.setAttribute("title", tooltip);
+        taskAnchor.setAttribute(
+          "aria-label",
+          label || CHECKLIST_TASK_MARK_LABELS[kind],
+        );
+        taskAnchor.setAttribute(
+          "title",
+          tooltip || CHECKLIST_TASK_MARK_TOOLTIPS[kind],
+        );
       } else {
-        taskAnchor["aria-label"] = label;
-        taskAnchor.title = tooltip;
+        taskAnchor["aria-label"] = label || CHECKLIST_TASK_MARK_LABELS[kind];
+        taskAnchor.title = tooltip || CHECKLIST_TASK_MARK_TOOLTIPS[kind];
       }
     } catch (error) {
       return false;
@@ -13300,10 +13583,33 @@ function stripChecklistTaskHidden(el) {
 let ChecklistTaskMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   ChecklistTaskMarkWidget = class extends WidgetType {
-    constructor(kind) {
+    constructor(kind, identity, inheritedEnabled) {
       super();
       this.kind = kind === "post" ? "post" : "pre";
-      this.key = this.kind + "-task-mark";
+      this.identity = identity || null;
+      this.inheritedEnabled = inheritedEnabled === true;
+      const type =
+        this.identity && typeof this.identity.type === "string"
+          ? this.identity.type
+          : "";
+      const hue =
+        this.identity && typeof this.identity.hue === "string"
+          ? this.identity.hue
+          : "";
+      const state =
+        this.identity && typeof this.identity.state === "string"
+          ? this.identity.state
+          : "";
+      this.key =
+        this.kind +
+        "-task-mark|" +
+        type +
+        "|" +
+        hue +
+        "|" +
+        state +
+        "|" +
+        String(this.inheritedEnabled);
     }
 
     eq(other) {
@@ -13318,6 +13624,8 @@ if (WidgetType && typeof WidgetType === "function") {
       const dom = buildTaskTagMarkElement(
         typeof document !== "undefined" ? document : null,
         this.kind,
+        this.identity,
+        this.inheritedEnabled,
       );
       if (!dom) {
         return typeof document !== "undefined" && document
@@ -13328,6 +13636,452 @@ if (WidgetType && typeof WidgetType === "function") {
       return dom;
     }
   };
+}
+// ---- src/138-task-type-identity.js ----
+// --- Task type identity for the #task slot (D11) ------------------------
+// Owned by the `docs/task-tag-marks.md` display contract in bob-cli.
+// Pure helpers only: the explicit `[type::]` / `[theme::]` field on a
+// task line, identity state (explicit / inherited / muted /
+// unconfigured / repair), tooltip and aria copy, and data-attribute
+// application for Live Preview widgets and reading-view `a.tag` hosts.
+// Hue lookup stays in the plugin so this file never spawns bob.
+// Every helper is synchronous and never throws. Never put `::` in
+// tooltip or aria text, because Dataview re-scans rendered text.
+
+const TASK_TYPE_IDENTITY_HINT = "Ctrl+Shift+P t to change";
+const TASK_TYPE_IDENTITY_STATES = Object.freeze([
+  "explicit",
+  "inherited",
+  "muted",
+  "unconfigured",
+  "repair",
+]);
+
+function taskTagTypeSafeCopy(text) {
+  try {
+    return String(text == null ? "" : text).replace(/::/g, ":");
+  } catch (error) {
+    return "";
+  }
+}
+
+// The explicit type field on `lineText`, or a none/repair record.
+// `type` is the canonical ALL-CAPS name, `"?"` for repair, or null
+// when the line has no field. Never throws.
+function taskTagTypeFieldOf(lineText) {
+  try {
+    if (typeof lineText !== "string" || lineText === "") {
+      return Object.freeze({
+        type: null,
+        key: null,
+        fieldState: "none",
+        repair: null,
+      });
+    }
+    if (typeof pomodoroThemeTaskFieldState !== "function") {
+      return Object.freeze({
+        type: null,
+        key: null,
+        fieldState: "none",
+        repair: null,
+      });
+    }
+    const state = pomodoroThemeTaskFieldState(lineText);
+    if (!state || typeof state !== "object") {
+      return Object.freeze({
+        type: null,
+        key: null,
+        fieldState: "none",
+        repair: null,
+      });
+    }
+    if (state.state === "repair") {
+      return Object.freeze({
+        type: "?",
+        key: null,
+        fieldState: "repair",
+        repair: state.repair === "duplicate" ? "duplicate" : "invalid",
+      });
+    }
+    if (state.state === "set") {
+      const type =
+        typeof state.value === "string" && state.value ? state.value : null;
+      const key = typeof state.key === "string" && state.key ? state.key : null;
+      if (!type) {
+        return Object.freeze({
+          type: "?",
+          key: null,
+          fieldState: "repair",
+          repair: "invalid",
+        });
+      }
+      return Object.freeze({
+        type,
+        key,
+        fieldState: "set",
+        repair: null,
+      });
+    }
+    return Object.freeze({
+      type: null,
+      key: null,
+      fieldState: "none",
+      repair: null,
+    });
+  } catch (error) {
+    return Object.freeze({
+      type: null,
+      key: null,
+      fieldState: "none",
+      repair: null,
+    });
+  }
+}
+
+function taskTagTypeHueSourceOf(hueInfo) {
+  try {
+    if (!hueInfo || typeof hueInfo !== "object") {
+      return null;
+    }
+    if (typeof hueInfo.hue_source === "string" && hueInfo.hue_source) {
+      return hueInfo.hue_source;
+    }
+    if (typeof hueInfo.hueSource === "string" && hueInfo.hueSource) {
+      return hueInfo.hueSource;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Visual identity state for one mark. Repair wins, then unconfigured
+// (unknown / unconfigured hue source), then muted (exempt / auto),
+// then inherited, then explicit. Never throws.
+function taskTagIdentityKind(options) {
+  try {
+    const opts = options && typeof options === "object" ? options : {};
+    if (opts.repair === true || opts.fieldState === "repair") {
+      return "repair";
+    }
+    const hueSource = taskTagTypeHueSourceOf(opts);
+    const known = opts.known !== false;
+    if (known === false || hueSource === "unconfigured") {
+      return "unconfigured";
+    }
+    if (hueSource === "exempt" || hueSource === "auto") {
+      return "muted";
+    }
+    if (opts.inherited === true) {
+      return "inherited";
+    }
+    return "explicit";
+  } catch (error) {
+    return "explicit";
+  }
+}
+
+function taskTagIdentityFromField(field, hueInfo, extra) {
+  try {
+    const source = field && typeof field === "object" ? field : {};
+    const more = extra && typeof extra === "object" ? extra : {};
+    if (source.fieldState === "repair") {
+      return Object.freeze({
+        type: "?",
+        key: null,
+        hue: null,
+        hueSource: null,
+        state: "repair",
+        inherited: false,
+        reason: null,
+        suggest: more.suggest || null,
+      });
+    }
+    if (source.fieldState !== "set" || !source.type) {
+      return null;
+    }
+    const hue =
+      hueInfo && typeof hueInfo.hue === "string" && hueInfo.hue
+        ? hueInfo.hue
+        : null;
+    const hueSource = taskTagTypeHueSourceOf(hueInfo);
+    const known =
+      hueInfo && Object.prototype.hasOwnProperty.call(hueInfo, "configured")
+        ? hueInfo.configured !== false
+        : more.known !== false;
+    const state = taskTagIdentityKind({
+      fieldState: "set",
+      known,
+      hue_source: hueSource,
+    });
+    return Object.freeze({
+      type: source.type,
+      key: source.key,
+      hue: state === "unconfigured" || state === "repair" ? null : hue,
+      hueSource,
+      state,
+      inherited: false,
+      reason: more.reason || null,
+      suggest: more.suggest || null,
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskTagIdentityFromInherited(name, key, hueInfo, extra) {
+  try {
+    const type = typeof name === "string" && name ? name : null;
+    if (!type) {
+      return null;
+    }
+    const more = extra && typeof extra === "object" ? extra : {};
+    const hue =
+      hueInfo && typeof hueInfo.hue === "string" && hueInfo.hue
+        ? hueInfo.hue
+        : null;
+    const hueSource = taskTagTypeHueSourceOf(hueInfo);
+    const known =
+      hueInfo && Object.prototype.hasOwnProperty.call(hueInfo, "configured")
+        ? hueInfo.configured !== false
+        : more.known !== false;
+    const state = taskTagIdentityKind({
+      inherited: true,
+      known,
+      hue_source: hueSource,
+    });
+    return Object.freeze({
+      type,
+      key: typeof key === "string" && key ? key : null,
+      hue: state === "unconfigured" ? null : hue,
+      hueSource,
+      state: state === "explicit" ? "inherited" : state,
+      inherited: true,
+      reason: more.reason || null,
+      suggest: null,
+      from: more.from || null,
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskTagInheritedFromPhrase(identity) {
+  try {
+    if (!identity || typeof identity !== "object") {
+      return null;
+    }
+    if (typeof identity.from === "string" && identity.from) {
+      return identity.from;
+    }
+    const reason = identity.reason;
+    if (reason && typeof reason === "object") {
+      const from =
+        reason.from && typeof reason.from === "object" ? reason.from : null;
+      if (from && typeof from.stem === "string" && from.stem) {
+        return from.stem;
+      }
+      if (reason.source === "reading") {
+        return "reading";
+      }
+      if (typeof reason.label === "string" && reason.label) {
+        return reason.label;
+      }
+      if (typeof reason.source === "string" && reason.source) {
+        return reason.source;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskTagSuggestPhrase(identity) {
+  try {
+    if (!identity || typeof identity !== "object") {
+      return null;
+    }
+    const suggest = identity.suggest;
+    if (typeof suggest === "string" && suggest) {
+      return suggest;
+    }
+    if (suggest && typeof suggest === "object") {
+      try {
+        if (typeof taskThemeReasonFor === "function") {
+          const phrase = taskThemeReasonFor(suggest);
+          if (typeof phrase === "string" && phrase) {
+            return phrase;
+          }
+        }
+      } catch (error) {
+        // Fall through to a local phrase.
+      }
+      const theme =
+        suggest.theme && typeof suggest.theme === "object"
+          ? suggest.theme
+          : null;
+      const name =
+        theme && typeof theme.name === "string" && theme.name
+          ? theme.name
+          : typeof suggest.name === "string"
+            ? suggest.name
+            : null;
+      const from =
+        suggest.from && typeof suggest.from === "object" ? suggest.from : null;
+      const stem =
+        from && typeof from.stem === "string" && from.stem ? from.stem : null;
+      if (stem && name) {
+        return stem + " suggests " + name;
+      }
+      if (name) {
+        return "suggests " + name;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Hover tooltip. Never contains `::`. Inherited glyphs use
+// `BUILD · from dev`. Explicit fields use
+// `FIX · set on this task · dev suggests BUILD · Ctrl+Shift+P t to change`.
+function taskTagIdentityTooltip(identity) {
+  try {
+    if (!identity || typeof identity !== "object") {
+      return TASK_TAG_MARK_TOOLTIP;
+    }
+    const name = taskTagTypeSafeCopy(identity.type || "");
+    if (identity.state === "repair" || name === "?") {
+      return "#? \u00b7 needs repair\n" + TASK_TYPE_IDENTITY_HINT;
+    }
+    if (!name) {
+      return TASK_TAG_MARK_TOOLTIP;
+    }
+    if (identity.inherited === true || identity.state === "inherited") {
+      const from = taskTagTypeSafeCopy(taskTagInheritedFromPhrase(identity) || "");
+      return from ? name + " \u00b7 from " + from : name;
+    }
+    const parts = [name + " \u00b7 set on this task"];
+    const suggest = taskTagTypeSafeCopy(taskTagSuggestPhrase(identity) || "");
+    if (suggest) {
+      parts.push(suggest);
+    }
+    parts.push(TASK_TYPE_IDENTITY_HINT);
+    return parts.join(" \u00b7 ");
+  } catch (error) {
+    return TASK_TAG_MARK_TOOLTIP;
+  }
+}
+
+function taskTagIdentityAria(identity) {
+  try {
+    if (!identity || typeof identity !== "object") {
+      return TASK_TAG_MARK_TOOLTIP;
+    }
+    const name = taskTagTypeSafeCopy(identity.type || "");
+    if (!name || identity.inherited === true) {
+      return TASK_TAG_MARK_TOOLTIP;
+    }
+    if (identity.state === "repair" || name === "?") {
+      return "#task \u00b7 type ?";
+    }
+    return "#task \u00b7 type " + name;
+  } catch (error) {
+    return TASK_TAG_MARK_TOOLTIP;
+  }
+}
+
+function taskTagIdentityShown(identity, inheritedEnabled) {
+  try {
+    if (!identity || typeof identity !== "object") {
+      return false;
+    }
+    if (identity.state === "repair" || identity.type === "?") {
+      return true;
+    }
+    if (!identity.type) {
+      return false;
+    }
+    if (identity.inherited === true) {
+      return inheritedEnabled === true;
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function ledgerTypeDisagreeTooltip(taskType, entryName) {
+  try {
+    const typeName = taskTagTypeSafeCopy(taskType || "");
+    const entry = taskTagTypeSafeCopy(entryName || "");
+    if (!typeName) {
+      return "";
+    }
+    const under = entry ? " under " + entry : "";
+    return (
+      typeName +
+      " task" +
+      under +
+      " \u00b7 Ctrl+Shift+M to move \u00b7 Ctrl+Shift+P t to retype"
+    );
+  } catch (error) {
+    return "";
+  }
+}
+
+// Apply identity data attributes in place. Reading view uses
+// `data-bob-type` plus CSS `::after` so the post-processor creates no
+// nodes. When the name is not shown, attributes are stripped so the
+// hash (or book, or checklist glyph) stands alone. Never throws.
+function applyTaskTagTypeAttrs(el, identity, inheritedEnabled) {
+  try {
+    if (!el || typeof el !== "object") {
+      return false;
+    }
+    const show = taskTagIdentityShown(identity, inheritedEnabled);
+    const name =
+      show && identity && typeof identity.type === "string" && identity.type
+        ? identity.type
+        : "";
+    const hue =
+      show && identity && typeof identity.hue === "string" && identity.hue
+        ? identity.hue
+        : "";
+    const state =
+      show && identity && typeof identity.state === "string" && identity.state
+        ? identity.state
+        : "";
+    const setAttr = (key, value) => {
+      if (typeof el.setAttribute === "function") {
+        if (value) {
+          el.setAttribute(key, value);
+        } else if (typeof el.removeAttribute === "function") {
+          el.removeAttribute(key);
+        }
+      } else if (value) {
+        el[key] = value;
+      } else {
+        try {
+          delete el[key];
+        } catch (error) {
+          // Best-effort.
+        }
+      }
+    };
+    setAttr("data-bob-type", name);
+    setAttr("data-bob-type-hue", hue);
+    setAttr("data-bob-type-state", state);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function clearTaskTagTypeAttrs(el) {
+  return applyTaskTagTypeAttrs(el, null, false);
 }
 // ---- src/139-unblocked-glyph.js ----
 // --- Unblocked hand-off glyph: pure mark-core ---------------------------
@@ -20268,6 +21022,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupPriorityMarks();
     this.setupDateMarks();
     this.setupProgressMarks();
+    this.setupLedgerTypeMarks();
     this.setupTodayMarks();
     this.setupPomodoroHomeChips();
     this.setupTaskThemeMarks();
@@ -31346,7 +32101,7 @@ class BobLedgerToolsStatsPanelsMixin {
       return true;
     }
     const max = Math.max(0, ...model.rows.map((row) => (statsFinite(row.value) ? row.value : 0)));
-    const list = statsEl(doc, "ul", { class: "bob-stats-panel-bars", "aria-label": "Themes" });
+    const list = statsEl(doc, "ul", { class: "bob-stats-panel-bars", "aria-label": "Types" });
     const fallback =
       typeof this.pomodoroThemeHueFor === "function"
         ? (themeKey, name) => this.pomodoroThemeHueFor(themeKey, name)
@@ -31999,11 +32754,11 @@ class BobLedgerToolsStatsHomesMixin {
     const choices = hasRoots
       ? [
         { id: "roots", label: "Root parents", disabled: false },
-        { id: "themes", label: "Themes", disabled: false },
+        { id: "themes", label: "Types", disabled: false },
       ]
       : [
         { id: "areas", label: "Areas & projects", disabled: !available },
-        { id: "themes", label: "Themes", disabled: false },
+        { id: "themes", label: "Types", disabled: false },
       ];
     for (const choice of choices) {
       const button = statsEl(doc, "button", {
@@ -32831,7 +33586,7 @@ function statsWindowLanesModel(report, context) {
       const fallback = context && typeof context.themeHueFor === "function" ? context.themeHueFor : null;
       const segments = timeLaneThemeSegments(safeReport, themeEntries, fallback);
       if (segments.length) {
-        themes = statsWindowBuildLane(safeReport, worked, "theme", "Time by theme", "themes", segments, span);
+        themes = statsWindowBuildLane(safeReport, worked, "theme", "Time by type", "themes", segments, span);
       }
     }
     if (roots.omitted && themes.omitted) return statsWindowLanesOmitted();
@@ -33233,7 +33988,7 @@ function dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes, show
     }
   }
   if (showThemes && themes && !themes.omitted && themes.segments.length) {
-    label += " Time by theme: " + themes.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
+    label += " Time by type: " + themes.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   }
   return label;
 }
@@ -33280,7 +34035,7 @@ function dayStripModel(report, day, context) {
         provisional: false,
       }));
       const mix = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "root_parent", title: "Time by root parent" };
-      const themes = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "theme", title: "Time by theme" };
+      const themes = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "theme", title: "Time by type" };
       const lanes = dayStripLanesFor("skeleton", mix, themes, laneView);
       return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, themes, lanes, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
     }
@@ -33420,7 +34175,7 @@ function dayStripThemeMix(report, worked, day, context) {
     const built = typeof timeLaneLegend === "function" && typeof timeLaneThemeSegments === "function"
       ? timeLaneLegend(report, "theme", timeLaneThemeSegments(report, entries, fallback))
       : { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" } };
-    const titleLines = ["Time by theme", ...built.segments.map((segment) => segment.label + " " + segment.display)];
+    const titleLines = ["Time by type", ...built.segments.map((segment) => segment.label + " " + segment.display)];
     if (dayStripThemeHasSplitSession(report, day)) {
       titleLines.push("Pomodoros with several themes are split evenly between them.");
     }
@@ -34039,7 +34794,7 @@ function dayStripLaneMix(model, lane) {
 }
 
 function dayStripLaneSentence(mix, lane) {
-  if (lane === "themes") return "Time by theme";
+  if (lane === "themes") return "Time by type";
   return mix && mix.dimension === "area" ? "Time by area" : "Time by root parent";
 }
 
@@ -34056,7 +34811,7 @@ function dayStripRenderMix(doc, model, handlers, lane) {
   const sentence = dayStripLaneSentence(mix, lane);
   const node = dayStripLink(doc, "bob-day-strip-mix", sentence, mix.title);
   const legend = statsEl(doc, "span", { class: "bob-day-strip-legend" });
-  const skeletonLabel = lane === "themes" ? "Theme" : "Area";
+  const skeletonLabel = lane === "themes" ? "Type" : "Area";
   const entries = skeleton
     ? [
       { label: skeletonLabel, legendLabel: skeletonLabel, display: "0m", rank: 1 },
@@ -41847,6 +42602,16 @@ class BobLedgerToolsTaskTagMarksMixin {
       if (typeof this.taskTagMarksEnabled !== "boolean") {
         this.taskTagMarksEnabled = true;
       }
+      if (typeof this.inheritedTaskTypesEnabled !== "boolean") {
+        this.inheritedTaskTypesEnabled = false;
+      }
+      if (!(this.taskTagIdentityCache instanceof Map)) {
+        try {
+          this.taskTagIdentityCache = new Map();
+        } catch (error) {
+          this.taskTagIdentityCache = null;
+        }
+      }
       this.applyMarkGateClass(
         "bob-task-tag-marks",
         this.taskTagMarksEnabled,
@@ -41862,9 +42627,19 @@ class BobLedgerToolsTaskTagMarksMixin {
             name: "Toggle task tag marks",
             callback: () => this.toggleTaskTagMarks(),
           });
+          this.addCommand({
+            id: "toggle-inherited-task-types",
+            name: "Toggle inherited task types",
+            callback: () => this.toggleInheritedTaskTypes(),
+          });
         }
       } catch (error) {
         // The toggle is best-effort.
+      }
+      try {
+        this.taskTagWireIdentityRefresh();
+      } catch (error) {
+        // Catalog refresh is best-effort.
       }
       try {
         const extension = this.createTaskTagMarkExtension();
@@ -42185,12 +42960,22 @@ class BobLedgerToolsTaskTagMarksMixin {
                     // A `ref` range spans the whole `#task #ref` pair,
                     // so one open-book decoration replaces both tags
                     // and one cursor touch reveals both.
+                    const identity = this.taskTagIdentityForLine(
+                      line.text,
+                      filePath,
+                    );
+                    const inheritedEnabled =
+                      this.inheritedTaskTypesEnabled === true;
                     const widget =
                       source && (source.kind === "pre" || source.kind === "post")
-                        ? new ChecklistTaskMarkWidget(source.kind)
+                        ? new ChecklistTaskMarkWidget(
+                            source.kind,
+                            identity,
+                            inheritedEnabled,
+                          )
                         : source && source.kind === "ref"
-                          ? new RefTaskMarkWidget()
-                          : new TaskTagMarkWidget();
+                          ? new RefTaskMarkWidget(identity, inheritedEnabled)
+                          : new TaskTagMarkWidget(identity, inheritedEnabled);
                     builder.add(
                       absFrom,
                       absTo,
@@ -42289,11 +43074,12 @@ class BobLedgerToolsTaskTagMarksMixin {
   // Annotate one eligible `#task` anchor: ref pairs take precedence,
   // then canonical checklist runs, then the ordinary hash. Returns
   // true on success, false otherwise. Never throws.
-  annotateTaskTagAnchor(anchor) {
+  annotateTaskTagAnchor(anchor, identity, inheritedEnabled) {
     try {
       if (!anchor || typeof anchor !== "object") {
         return false;
       }
+      const shownInherited = inheritedEnabled === true;
       let partner = null;
       try {
         partner = refTaskPairAnchor(anchor);
@@ -42301,13 +43087,18 @@ class BobLedgerToolsTaskTagMarksMixin {
         partner = null;
       }
       if (partner) {
-        return annotateRefTaskMark(anchor, partner);
+        return annotateRefTaskMark(anchor, partner, identity, shownInherited);
       }
       const checklistRun = checklistTaskRunAnchors(anchor);
       if (checklistRun) {
-        return annotateChecklistTaskMark(anchor, checklistRun);
+        return annotateChecklistTaskMark(
+          anchor,
+          checklistRun,
+          identity,
+          shownInherited,
+        );
       }
-      return annotateTaskTagMark(anchor);
+      return annotateTaskTagMark(anchor, identity, shownInherited);
     } catch (error) {
       return false;
     }
@@ -42321,6 +43112,7 @@ class BobLedgerToolsTaskTagMarksMixin {
       if (!el || !ctx) {
         return;
       }
+      const inheritedEnabled = this.inheritedTaskTypesEnabled === true;
       const anchors = this.taskTagMarkCandidateAnchors(el);
       for (const anchor of anchors) {
         try {
@@ -42330,7 +43122,8 @@ class BobLedgerToolsTaskTagMarksMixin {
           if (!taskTagMarkElementEligible(anchor, el)) {
             continue;
           }
-          this.annotateTaskTagAnchor(anchor);
+          const identity = this.taskTagIdentityForRenderedAnchor(anchor, ctx);
+          this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled);
         } catch (error) {
           continue;
         }
@@ -42350,11 +43143,13 @@ class BobLedgerToolsTaskTagMarksMixin {
         return 0;
       }
       let count = 0;
+      const inheritedEnabled = this.inheritedTaskTypesEnabled === true;
       const anchors = this.taskTagMarkCandidateAnchors(root);
       for (const anchor of anchors) {
         try {
           if (taskTagMarkElementEligible(anchor, root)) {
-            if (this.annotateTaskTagAnchor(anchor)) {
+            const identity = this.taskTagIdentityForRenderedAnchor(anchor, null);
+            if (this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled)) {
               count += 1;
             }
           }
@@ -42554,6 +43349,354 @@ class BobLedgerToolsTaskTagMarksMixin {
       }
     } catch (error) {
       // Editor refresh never throws.
+    }
+  }
+}
+// ---- src/264-plugin-task-tag-type.js ----
+// --- Task tag type identity: catalog, cache, inherited toggle --------------
+// `BobLedgerToolsTaskTagTypeMixin`, installed after the task-tag-marks
+// mixin. Resolves explicit and inherited `#TYPE` identity from the
+// cached theme catalog and `effectiveTypeFor` cascade. Never spawns
+// bob per row. Stale cache yields a generic glyph (null identity).
+class BobLedgerToolsTaskTagTypeMixin {
+  taskTagClearIdentityCache() {
+    try {
+      if (this.taskTagIdentityCache && typeof this.taskTagIdentityCache.clear === "function") {
+        this.taskTagIdentityCache.clear();
+      }
+    } catch (error) {
+      this.taskTagIdentityCache = null;
+    }
+  }
+
+  taskTagWireIdentityRefresh() {
+    try {
+      if (this.taskTagIdentityRefreshWired) {
+        return true;
+      }
+      this.taskTagIdentityRefreshWired = true;
+      try {
+        if (typeof this.onThemesChange === "function") {
+          this.onThemesChange(() => {
+            this.taskTagClearIdentityCache();
+            try {
+              this.refreshTaskTagMarkEditors();
+            } catch (error) {
+              // Editor refresh is best-effort.
+            }
+            try {
+              if (this.taskTagMarksEnabled) {
+                this.annotateTaskTagMarksInDocument();
+              }
+            } catch (error) {
+              // Document re-annotation is best-effort.
+            }
+            try {
+              this.refreshLedgerTypeMarkEditors();
+            } catch (error) {
+              // Ledger marks are best-effort.
+            }
+          });
+        }
+      } catch (error) {
+        // Theme catalog refresh is best-effort.
+      }
+      const metadataCache = this.app && this.app.metadataCache;
+      if (
+        metadataCache &&
+        typeof metadataCache.on === "function" &&
+        typeof this.registerEvent === "function"
+      ) {
+        try {
+          this.registerEvent(
+            metadataCache.on("changed", () => {
+              this.taskTagClearIdentityCache();
+              try {
+                this.refreshTaskTagMarkEditors();
+              } catch (error) {
+                // Editor refresh is best-effort.
+              }
+              try {
+                this.refreshLedgerTypeMarkEditors();
+              } catch (error) {
+                // Ledger marks are best-effort.
+              }
+            }),
+          );
+        } catch (error) {
+          // Metadata refresh is best-effort.
+        }
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  taskTagSuggestForLine(lineText, filePath) {
+    try {
+      if (typeof pomodoroThemeSuggestWithDiagnostics !== "function") {
+        return null;
+      }
+      const caps = loadPlanCaps().caps;
+      const dailyPath =
+        typeof this.pomodoroThemeTodayPath === "function"
+          ? this.pomodoroThemeTodayPath()
+          : null;
+      let catalog = null;
+      try {
+        if (typeof this.pomodoroThemeSuggestCatalog === "function") {
+          catalog = this.pomodoroThemeSuggestCatalog(
+            dailyPath,
+            filePath,
+            null,
+          );
+        }
+      } catch (error) {
+        catalog = null;
+      }
+      const result = pomodoroThemeSuggestWithDiagnostics({
+        path: typeof filePath === "string" ? filePath : "",
+        line: String(lineText || ""),
+        dailyPath,
+        metadataCache: this.app && this.app.metadataCache,
+        vault: this.app && this.app.vault,
+        catalog,
+        config: {
+          readingTheme:
+            caps && Object.prototype.hasOwnProperty.call(caps, "readingTheme")
+              ? caps.readingTheme
+              : "READ",
+          defaultType:
+            caps && Object.prototype.hasOwnProperty.call(caps, "defaultType")
+              ? caps.defaultType
+              : null,
+        },
+        themeRef:
+          typeof this.pomodoroThemeRef === "function"
+            ? (key, name, known) => this.pomodoroThemeRef(key, name, known)
+            : undefined,
+      });
+      return result && result.suggestion ? result.suggestion : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskTagIdentityForLine(lineText, filePath) {
+    try {
+      const cacheKey = String(filePath || "") + "\0" + String(lineText || "");
+      if (
+        this.taskTagIdentityCache &&
+        typeof this.taskTagIdentityCache.get === "function" &&
+        this.taskTagIdentityCache.has(cacheKey)
+      ) {
+        return this.taskTagIdentityCache.get(cacheKey);
+      }
+      const field =
+        typeof taskTagTypeFieldOf === "function"
+          ? taskTagTypeFieldOf(lineText)
+          : null;
+      let identity = null;
+      if (field && field.fieldState === "repair") {
+        identity = taskTagIdentityFromField(field, null, {});
+      } else if (field && field.fieldState === "set") {
+        let hueInfo = null;
+        try {
+          if (typeof this.pomodoroThemeHueFor === "function") {
+            hueInfo = this.pomodoroThemeHueFor(field.key, field.type);
+          }
+        } catch (error) {
+          hueInfo = null;
+        }
+        let suggestion = null;
+        try {
+          suggestion = this.taskTagSuggestForLine(lineText, filePath);
+        } catch (error) {
+          suggestion = null;
+        }
+        const inherited =
+          suggestion && suggestion.inherited && typeof suggestion.inherited === "object"
+            ? suggestion.inherited
+            : suggestion && suggestion.source !== "task"
+              ? suggestion
+              : null;
+        identity = taskTagIdentityFromField(field, hueInfo, {
+          suggest: inherited,
+        });
+      } else {
+        const suggestion = this.taskTagSuggestForLine(lineText, filePath);
+        const theme =
+          suggestion && suggestion.theme && typeof suggestion.theme === "object"
+            ? suggestion.theme
+            : null;
+        const name = theme && typeof theme.name === "string" ? theme.name : null;
+        const key = theme && typeof theme.key === "string" ? theme.key : null;
+        if (name) {
+          let hueInfo = null;
+          try {
+            if (typeof this.pomodoroThemeHueFor === "function") {
+              hueInfo = this.pomodoroThemeHueFor(key, name);
+            }
+          } catch (error) {
+            hueInfo = null;
+          }
+          identity = taskTagIdentityFromInherited(name, key, hueInfo, {
+            reason: suggestion,
+            from:
+              suggestion &&
+              suggestion.from &&
+              typeof suggestion.from.stem === "string"
+                ? suggestion.from.stem
+                : null,
+          });
+        }
+      }
+      try {
+        if (
+          this.taskTagIdentityCache &&
+          typeof this.taskTagIdentityCache.set === "function"
+        ) {
+          this.taskTagIdentityCache.set(cacheKey, identity);
+        }
+      } catch (error) {
+        // Cache writes are best-effort.
+      }
+      return identity;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskTagSyntheticLineFromAnchor(anchor) {
+    try {
+      let current = anchor;
+      let li = null;
+      let guard = 0;
+      while (current && guard < 100) {
+        guard += 1;
+        let tag = "";
+        try {
+          tag = String(current.tagName || current.nodeName || "").toUpperCase();
+        } catch (error) {
+          tag = "";
+        }
+        if (tag === "LI") {
+          li = current;
+          break;
+        }
+        current = current.parentNode || null;
+      }
+      if (!li) {
+        return "";
+      }
+      let typeValue = "";
+      try {
+        const nodes =
+          typeof li.querySelectorAll === "function"
+            ? li.querySelectorAll("[data-dv-norm-key], [data-dv-key]")
+            : [];
+        const list = typeof nodes.length === "number" ? nodes : [];
+        for (const node of list) {
+          try {
+            const key = String(
+              (typeof node.getAttribute === "function" &&
+                (node.getAttribute("data-dv-norm-key") ||
+                  node.getAttribute("data-dv-key"))) ||
+                "",
+            ).toLowerCase();
+            if (key !== "type" && key !== "theme") {
+              continue;
+            }
+            const parent = node.parentNode || node;
+            const valueNode =
+              parent && typeof parent.querySelector === "function"
+                ? parent.querySelector(".inline-field-value")
+                : null;
+            const raw =
+              valueNode && typeof valueNode.textContent === "string"
+                ? valueNode.textContent
+                : typeof node.textContent === "string"
+                  ? node.textContent
+                  : "";
+            if (raw && raw.trim()) {
+              typeValue = raw.trim();
+              break;
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      } catch (error) {
+        typeValue = "";
+      }
+      if (typeValue) {
+        return "- [ ] #task [type:: " + typeValue + "]";
+      }
+      const text =
+        typeof li.textContent === "string" ? li.textContent : "";
+      return text ? "- [ ] " + text : "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  taskTagIdentityForRenderedAnchor(anchor, ctx) {
+    try {
+      let lineText = "";
+      const path =
+        ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      try {
+        const host =
+          anchor && typeof anchor.closest === "function"
+            ? anchor.closest("li") || anchor
+            : anchor;
+        const info =
+          ctx && typeof ctx.getSectionInfo === "function"
+            ? ctx.getSectionInfo(host)
+            : null;
+        if (info && typeof info.text === "string" && info.text) {
+          lineText = info.text;
+        }
+      } catch (error) {
+        lineText = "";
+      }
+      if (!lineText) {
+        lineText = this.taskTagSyntheticLineFromAnchor(anchor);
+      }
+      return this.taskTagIdentityForLine(lineText, path);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  toggleInheritedTaskTypes() {
+    try {
+      this.inheritedTaskTypesEnabled = !this.inheritedTaskTypesEnabled;
+      const enabled = this.inheritedTaskTypesEnabled === true;
+      this.taskTagClearIdentityCache();
+      try {
+        if (this.taskTagMarksEnabled) {
+          this.annotateTaskTagMarksInDocument();
+        }
+      } catch (error) {
+        // Document re-annotation is best-effort.
+      }
+      try {
+        this.refreshTaskTagMarkEditors();
+      } catch (error) {
+        // Editor refresh is best-effort.
+      }
+      try {
+        new Notice(
+          enabled ? "Inherited task types on" : "Inherited task types off",
+        );
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return enabled;
+    } catch (error) {
+      return this.inheritedTaskTypesEnabled;
     }
   }
 }
@@ -46143,6 +47286,353 @@ class BobLedgerToolsProgressMarksMixin {
           return false;
         },
       });
+    }
+  }
+}
+// ---- src/268-plugin-ledger-type-marks.js ----
+// --- Ledger type-agreement marks: Live Preview -----------------------------
+// `BobLedgerToolsLedgerTypeMarksMixin`. Prefixes disagreeing (and
+// composite-agreeing) Task Links with `#TYPE` using cached
+// `effectiveTypeFor` / `typeAgrees`. Never spawns bob per row. Stale
+// cache yields no prefix rather than a confidently wrong type.
+class BobLedgerToolsLedgerTypeMarksMixin {
+  setupLedgerTypeMarks() {
+    try {
+      if (typeof this.ledgerTypeMarksEnabled !== "boolean") {
+        this.ledgerTypeMarksEnabled = true;
+      }
+      if (!(this.ledgerTypeLineCache instanceof Map)) {
+        try {
+          this.ledgerTypeLineCache = new Map();
+        } catch (error) {
+          this.ledgerTypeLineCache = null;
+        }
+      }
+      try {
+        const extension = this.createLedgerTypeMarkExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview marks are best-effort.
+      }
+    } catch (error) {
+      // Setup never throws.
+    }
+  }
+
+  ledgerTypeMarksAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          StateEffect &&
+          typeof StateEffect.define === "function" &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          LedgerTypeMarkWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createLedgerTypeMarkExtension() {
+    try {
+      if (!this.ledgerTypeMarksAvailable()) {
+        return null;
+      }
+      if (
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const MarkPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildLedgerTypeMarkDecorations(view);
+          } catch (error) {
+            try {
+              this.decorations = Decoration.none;
+            } catch (inner) {
+              this.decorations = null;
+            }
+          }
+        }
+
+        update(u) {
+          try {
+            if (
+              u &&
+              (u.docChanged || u.viewportChanged || u.selectionSet)
+            ) {
+              this.decorations = plugin.buildLedgerTypeMarkDecorations(u.view);
+            }
+          } catch (error) {
+            // Keep previous decorations on failure.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(MarkPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  ledgerTypeLineTextFor(target, blockId, dailyPath, liveDocText) {
+    try {
+      const resolved =
+        typeof this.progressMarkResolveTarget === "function"
+          ? this.progressMarkResolveTarget(target, dailyPath)
+          : null;
+      if (!resolved) {
+        return null;
+      }
+      const id = String(blockId || "");
+      if (!id) {
+        return null;
+      }
+      const cacheKey = resolved + "#^" + id;
+      if (
+        this.ledgerTypeLineCache &&
+        typeof this.ledgerTypeLineCache.get === "function" &&
+        this.ledgerTypeLineCache.has(cacheKey)
+      ) {
+        return this.ledgerTypeLineCache.get(cacheKey);
+      }
+      const findLine = (text) => {
+        if (typeof text !== "string" || text === "") {
+          return null;
+        }
+        const escaped = progressMarkEscapeBlockId(id);
+        const pattern = new RegExp(
+          "(?:^|\\s)\\^" + escaped + "(?:\\s|$)",
+        );
+        const lines = text.replace(/\r\n/g, "\n").split("\n");
+        for (const line of lines) {
+          if (pattern.test(String(line || ""))) {
+            return String(line);
+          }
+        }
+        return null;
+      };
+      let lineText = null;
+      try {
+        if (
+          typeof liveDocText === "string" &&
+          liveDocText !== "" &&
+          typeof sameVaultPath === "function" &&
+          sameVaultPath(resolved, dailyPath)
+        ) {
+          lineText = findLine(liveDocText);
+        }
+      } catch (error) {
+        lineText = null;
+      }
+      if (!lineText) {
+        try {
+          const workspace = this.app && this.app.workspace;
+          const leaves =
+            workspace && typeof workspace.getLeavesOfType === "function"
+              ? workspace.getLeavesOfType("markdown") || []
+              : [];
+          for (const leaf of leaves) {
+            try {
+              const view = leaf && leaf.view;
+              const filePath = view && view.file && view.file.path;
+              const editor = view && view.editor;
+              if (
+                !editor ||
+                typeof editor.getValue !== "function" ||
+                typeof filePath !== "string" ||
+                (typeof sameVaultPath === "function" &&
+                  !sameVaultPath(filePath, resolved))
+              ) {
+                continue;
+              }
+              lineText = findLine(editor.getValue());
+              if (lineText) {
+                break;
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+        } catch (error) {
+          lineText = null;
+        }
+      }
+      try {
+        if (
+          lineText &&
+          this.ledgerTypeLineCache &&
+          typeof this.ledgerTypeLineCache.set === "function"
+        ) {
+          this.ledgerTypeLineCache.set(cacheKey, lineText);
+        }
+      } catch (error) {
+        // Cache writes are best-effort.
+      }
+      return lineText;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  buildLedgerTypeMarkDecorations(view) {
+    try {
+      if (!this.ledgerTypeMarksEnabled) {
+        return Decoration.none;
+      }
+      if (!Decoration || !RangeSetBuilder || !LedgerTypeMarkWidget) {
+        return Decoration.none;
+      }
+      if (!editorInfoField || !editorLivePreviewField) {
+        return Decoration.none;
+      }
+      let live = null;
+      try {
+        live = view.state.field(editorLivePreviewField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      if (!live) {
+        return Decoration.none;
+      }
+      let info = null;
+      try {
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const filePath =
+        info && info.file && typeof info.file.path === "string"
+          ? info.file.path
+          : null;
+      if (!filePath) {
+        return Decoration.none;
+      }
+      const doc = view.state.doc;
+      if (!doc || typeof doc.toString !== "function") {
+        return Decoration.none;
+      }
+      const content = doc.toString();
+      const dailyPath =
+        typeof this.pomodoroThemeTodayPath === "function"
+          ? this.pomodoroThemeTodayPath()
+          : filePath;
+      const links = ledgerTypeMarkLinks(content);
+      if (!links.length) {
+        return Decoration.none;
+      }
+      const sources =
+        typeof this.taskTypeSources === "function"
+          ? this.taskTypeSources()
+          : { vocab: null, exempt: ["PLAN"], inventory: [] };
+      const builder = new RangeSetBuilder();
+      const ranges = (view && view.visibleRanges) || [];
+      for (const link of links) {
+        try {
+          if (!link || typeof link.blockId !== "string") {
+            continue;
+          }
+          const lineText = this.ledgerTypeLineTextFor(
+            link.target,
+            link.blockId,
+            dailyPath,
+            content,
+          );
+          if (!lineText) {
+            continue;
+          }
+          const identity = this.taskTagIdentityForLine
+            ? this.taskTagIdentityForLine(lineText, link.target || filePath)
+            : null;
+          const typeName =
+            identity && typeof identity.type === "string" ? identity.type : "";
+          const typeKey =
+            identity && typeof identity.key === "string" ? identity.key : null;
+          if (!typeName || identity.inherited === true) {
+            continue;
+          }
+          const kind = ledgerTypeMarkKind(typeKey || typeName, link.entryName, sources);
+          if (!kind) {
+            continue;
+          }
+          let line = null;
+          try {
+            line = doc.line(link.line + 1);
+          } catch (error) {
+            continue;
+          }
+          if (!line || typeof line.from !== "number") {
+            continue;
+          }
+          const pos = line.from + link.ch;
+          let visible = false;
+          for (const range of ranges) {
+            try {
+              if (
+                range &&
+                typeof range.from === "number" &&
+                typeof range.to === "number" &&
+                pos >= range.from &&
+                pos <= range.to
+              ) {
+                visible = true;
+                break;
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+          if (!visible) {
+            continue;
+          }
+          builder.add(
+            pos,
+            pos,
+            Decoration.widget({
+              widget: new LedgerTypeMarkWidget({
+                type: typeName,
+                hue: identity.hue || null,
+                kind,
+                entryName: link.entryName,
+              }),
+              side: -2,
+            }),
+          );
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  refreshLedgerTypeMarkEditors() {
+    try {
+      if (this.ledgerTypeLineCache && typeof this.ledgerTypeLineCache.clear === "function") {
+        this.ledgerTypeLineCache.clear();
+      }
+      this.refreshTaskTagMarkEditors();
+    } catch (error) {
+      // Refresh never throws.
     }
   }
 }
@@ -50976,52 +52466,19 @@ function buildTaskThemeMarkElement(doc, model, options) {
     const settings =
       options && typeof options === "object" ? options : {};
     const foldSpace = Boolean(settings.foldSpace);
-    const decorative = Boolean(settings.decorative);
     const span = doc.createElement("span");
-    let classes = "bob-pomo-theme";
-    if (model.kind === "unknown") {
-      classes += " bob-pomo-theme-unknown";
-    } else if (model.kind === "repair") {
-      classes += " bob-pomo-theme-repair";
-    } else if (model.kind === "pill") {
-      if (
-        model.hueSource === "exempt" ||
-        model.hueSource === "unconfigured"
-      ) {
-        classes += " bob-pomo-theme-muted";
-      }
-      if (model.hueSource === "unconfigured") {
-        classes += " bob-pomo-theme-unconfigured";
-      }
-    }
-    span.setAttribute("class", classes);
+    span.setAttribute("class", "bob-task-theme-fold");
+    span.setAttribute("data-task-theme-kind", String(model.kind));
+    span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
     if (typeof model.key === "string" && model.key) {
       span.setAttribute("data-theme-key", String(model.key));
     } else if (typeof model.value === "string" && model.value) {
       span.setAttribute("data-theme-key", String(model.value));
     }
-    if (model.kind === "pill" && typeof model.hue === "string" && model.hue) {
-      span.setAttribute("data-theme-hue", String(model.hue));
-    }
-    span.setAttribute("data-task-theme-kind", String(model.kind));
-    span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
     if (model.kind === "repair" && model.repair) {
       span.setAttribute("data-theme-repair", String(model.repair));
     }
-    if (decorative) {
-      span.setAttribute("aria-hidden", "true");
-    } else {
-      const initial =
-        model.kind === "repair"
-          ? taskThemeTooltipText(model.label, "repair", null)
-          : model.kind === "unknown"
-            ? taskThemeTooltipText(model.label, "unknown", null)
-            : taskThemeTooltipText(model.label, "pill", undefined);
-      span.setAttribute("role", "img");
-      span.setAttribute("aria-label", String(initial || ""));
-      span.setAttribute("data-tooltip-position", "top");
-    }
-    span.appendChild(doc.createTextNode(String(model.label)));
+    span.setAttribute("aria-hidden", "true");
     return span;
   } catch (error) {
     return null;
@@ -52027,7 +53484,7 @@ class BobLedgerToolsTaskThemeEditorMixin {
         if (typeof this.addCommand === "function") {
           this.addCommand({
             id: "toggle-task-theme-marks",
-            name: "Toggle task theme marks",
+            name: "Toggle task type marks",
             callback: () => this.toggleTaskThemeMarks(),
           });
         }
@@ -52870,7 +54327,7 @@ class BobLedgerToolsTaskThemeEditorMixin {
         // Tasks re-render is best-effort.
       }
       try {
-        new Notice(enabled ? "Task theme marks on" : "Task theme off");
+        new Notice(enabled ? "Task type marks on" : "Task type marks off");
       } catch (error) {
         // Notice is best-effort.
       }
@@ -53138,7 +54595,7 @@ function taskThemeIsThemeInlineField(node) {
           taskThemeAttr(current, "data-dv-key") ||
           "",
       ).toLowerCase();
-      if (key === "theme") {
+      if (key === "theme" || key === "type") {
         return true;
       }
       const kids = taskThemeChildList(current);
@@ -63983,11 +65440,13 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,
   BobLedgerToolsTaskTagMarksMixin,
+  BobLedgerToolsTaskTagTypeMixin,
   BobLedgerToolsPriorityMarksMixin,
   BobLedgerToolsMarkGateMixin,
   BobLedgerToolsDateMarksMixin,
   BobLedgerToolsDateMarksTasksMixin,
   BobLedgerToolsProgressMarksMixin,
+  BobLedgerToolsLedgerTypeMarksMixin,
   BobLedgerToolsProgressMarksReadingMixin,
   BobLedgerToolsPomodoroHomeChipsMixin,
   BobLedgerToolsPomodoroHomeChipsReadingMixin,
@@ -66286,6 +67745,20 @@ module.exports.helpers = {
   progressMarkLiveStatus,
   buildProgressMarkElement,
   ensureProgressMarksRefresh,
+  TASK_TYPE_IDENTITY_HINT,
+  taskTagTypeSafeCopy,
+  taskTagTypeFieldOf,
+  taskTagIdentityKind,
+  taskTagIdentityFromField,
+  taskTagIdentityFromInherited,
+  taskTagIdentityTooltip,
+  taskTagIdentityAria,
+  taskTagIdentityShown,
+  ledgerTypeDisagreeTooltip,
+  applyTaskTagTypeAttrs,
+  ledgerTypeMarkLinks,
+  ledgerTypeMarkKind,
+  buildLedgerTypeMarkElement,
   UNBLOCKED_GLYPH_TEXT,
   unblockedGlyphTooltip,
   unblockedGlyphTaskId,

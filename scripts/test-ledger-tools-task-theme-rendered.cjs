@@ -402,11 +402,11 @@ function matches(node, selector) {
   if (!node || node.nodeType !== 1) {
     return false;
   }
-  if (selector === ".bob-pomo-theme[data-task-theme-kind]") {
+  if (selector === ".bob-task-theme-fold[data-task-theme-kind]") {
     return (
       String(node.className || "")
         .split(/\s+/)
-        .includes("bob-pomo-theme") && Boolean(node.getAttribute("data-task-theme-kind"))
+        .includes("bob-task-theme-fold") && Boolean(node.getAttribute("data-task-theme-kind"))
     );
   }
   if (selector === ".bob-task-theme-host") {
@@ -527,13 +527,13 @@ test("rendered views wrap a single-node explicit field and keep surrounding text
   li.appendChild(em);
   li.appendChild(fx.text(" [theme:: WRITE] leftover", fx.doc));
   plugin.renderTaskThemeMarksIn(fx.root, ctxFor("notes/a.md"));
-  assert.equal(countClass(fx.root, "bob-pomo-theme"), 1);
+  assert.equal(countClass(fx.root, "bob-task-theme-fold"), 1);
   assert.equal(countClass(fx.root, "bob-task-theme-host"), 1);
   assert.equal(countClass(fx.root, "bob-task-theme-native"), 1);
-  const pill = findClass(fx.root, "bob-pomo-theme");
+  const pill = findClass(fx.root, "bob-task-theme-fold");
   assert.equal(pill.getAttribute("data-task-theme-kind"), "pill");
   assert.equal(pill.getAttribute("data-theme-key"), "write");
-  assert.equal(collectText(pill), "WRITE");
+  assert.equal(collectText(pill), "");
   assert.ok(collectText(fx.root).indexOf("Do thing") !== -1);
   assert.ok(collectText(fx.root).indexOf("leftover") !== -1);
   const emphasis = (function findEm(node) {
@@ -566,7 +566,7 @@ test("rendered views join a field split across adjacent text nodes", () => {
   li.appendChild(fx.text("Ship it [theme::", fx.doc));
   li.appendChild(fx.text(" WRITE]", fx.doc));
   plugin.renderTaskThemeMarksIn(fx.root, ctxFor("notes/a.md"));
-  assert.equal(countClass(fx.root, "bob-pomo-theme"), 1);
+  assert.equal(countClass(fx.root, "bob-task-theme-fold"), 1);
   assert.ok(collectText(fx.root).indexOf("Ship it") !== -1);
   const native = findClass(fx.root, "bob-task-theme-native");
   assert.ok(collectText(native).indexOf("theme::") !== -1);
@@ -597,7 +597,7 @@ test("paren delimiter, unknown, duplicate repair, and invalid repair", () => {
       node.nodeType === 1 &&
       String(node.className || "")
         .split(/\s+/)
-        .includes("bob-pomo-theme")
+        .includes("bob-task-theme-fold")
     ) {
       pills.push(node);
     }
@@ -645,9 +645,9 @@ test("code, prose, nested rows, existing pills, and table cells stay raw", () =>
   plugin.renderTaskThemeMarksIn(fx.root, ctxFor("notes/a.md"));
   assert.equal(collectText(code).indexOf("[theme:: WRITE]") !== -1, true);
   assert.equal(collectText(para).indexOf("[theme:: WRITE]") !== -1, true);
-  assert.equal(countClass(td, "bob-pomo-theme"), 0);
-  assert.equal(countClass(child, "bob-pomo-theme"), 1);
-  assert.equal(countClass(existing, "bob-pomo-theme"), 0);
+  assert.equal(countClass(td, "bob-task-theme-fold"), 0);
+  assert.equal(countClass(child, "bob-task-theme-fold"), 1);
+  assert.equal(countClass(existing, "bob-task-theme-fold"), 0);
 });
 
 test("Dataview inline-field chips on task rows become pills; page fields do not", () => {
@@ -685,10 +685,26 @@ test("Dataview inline-field chips on task rows become pills; page fields do not"
   pageField.appendChild(pageValue);
   cell.appendChild(pageField);
   plugin.renderTaskThemeMarksIn(fx.root, ctxFor("dash.md"));
-  assert.equal(countClass(li, "bob-pomo-theme"), 1);
-  assert.equal(collectText(findClass(li, "bob-pomo-theme")), "FIX");
-  assert.equal(countClass(cell, "bob-pomo-theme"), 0);
+  assert.equal(countClass(li, "bob-task-theme-fold"), 1);
+  assert.equal(collectText(findClass(li, "bob-task-theme-fold")), "");
+  assert.equal(countClass(cell, "bob-task-theme-fold"), 0);
   assert.ok(taskThemeIsThemeInlineField(pageField));
+});
+
+test("rendered views fold an explicit [type::] field the same way as [theme::]", () => {
+  const plugin = pluginWithThemeStubs();
+  const fx = fakeRenderEl();
+  const li = taskLi(fx);
+  li.appendChild(fx.text("Ship it [type:: FIX]", fx.doc));
+  plugin.renderTaskThemeMarksIn(fx.root, ctxFor("notes/a.md"));
+  assert.equal(countClass(li, "bob-task-theme-fold"), 1);
+  assert.equal(collectText(findClass(li, "bob-task-theme-fold")), "");
+  const field = fx.doc.createElement("span");
+  field.className = "dataview inline-field";
+  const key = fx.doc.createElement("span");
+  key.setAttribute("data-dv-norm-key", "type");
+  field.appendChild(key);
+  assert.equal(taskThemeIsThemeInlineField(field), true);
 });
 
 test("query rows keep the originating note, never the dashboard path", () => {
@@ -732,7 +748,7 @@ test("without provenance a dashboard query does not invent an origin", () => {
   plugin.renderTaskThemeMarksIn(fx.root, ctxFor("dashboard/dash.md"));
   const pillHost = findClass(li, "bob-task-theme-host");
   assert.equal(pillHost, null);
-  assert.equal(countClass(li, "bob-pomo-theme"), 0);
+  assert.equal(countClass(li, "bob-task-theme-fold"), 0);
 });
 
 test("idempotent re-render, clone, lazy hover, toggle, and unload restore", () => {
@@ -759,7 +775,7 @@ test("idempotent re-render, clone, lazy hover, toggle, and unload restore", () =
   plugin.renderTaskThemeMarksIn(fx.root, ctxFor("notes/a.md"));
   assert.ok(countClass(fx.root, "bob-task-theme-host") >= 2);
 
-  const pill = findClass(cloneLi, "bob-pomo-theme");
+  const pill = findClass(cloneLi, "bob-task-theme-fold");
   assert.ok(pill);
   assert.equal(plugin.taskThemeEnrichMarkElement(null, pill), true);
   const label = pill.getAttribute("aria-label");
@@ -774,7 +790,7 @@ test("idempotent re-render, clone, lazy hover, toggle, and unload restore", () =
   plugin.taskThemeCancelScheduledWork();
   const restored = plugin.taskThemeRestoreRenderedHosts(fx.root);
   assert.ok(restored >= 1);
-  assert.equal(countClass(cloneLi, "bob-pomo-theme"), 0);
+  assert.equal(countClass(cloneLi, "bob-task-theme-fold"), 0);
   assert.ok(collectText(cloneLi).indexOf("[theme:: WRITE]") !== -1);
 });
 
@@ -804,7 +820,7 @@ test("detached and pending Tasks rows retry then drop on disable", () => {
   assert.equal(plugin.tasksTaskThemeMarksQueue.length, 1);
   row.setAttribute("data-task", " ");
   frames.shift()();
-  assert.equal(countClass(row, "bob-pomo-theme"), 1);
+  assert.equal(countClass(row, "bob-task-theme-fold"), 1);
 
   const pending = fx.doc.createElement("li");
   pending.className = "plugin-tasks-list-item";
@@ -954,7 +970,7 @@ test("rendered hover supplies source text and skips unresolved enrichment", () =
   host.appendChild(li);
   li.appendChild(fx.text("Write [theme:: WRITE]", fx.doc));
   plugin.renderTaskThemeMarksIn(fx.root, ctxFor("dashboard/dash.md"));
-  const pill = findClass(li, "bob-pomo-theme");
+  const pill = findClass(li, "bob-task-theme-fold");
   assert.ok(pill);
   assert.equal(plugin.taskThemeEnrichMarkElement(null, pill), true);
   assert.ok(requests.length >= 1);
@@ -978,10 +994,10 @@ test("native wrappers stay accessible when the marks gate is off", () => {
   li.appendChild(fx.text("Do [theme:: WRITE]", fx.doc));
   plugin.renderTaskThemeMarksIn(fx.root, ctxFor("notes/a.md"));
   const native = findClass(li, "bob-task-theme-native");
-  const pill = findClass(li, "bob-pomo-theme");
+  const pill = findClass(li, "bob-task-theme-fold");
   assert.ok(native);
   assert.equal(native.getAttribute("aria-hidden"), "true");
-  assert.equal(pill.getAttribute("aria-hidden"), null);
+  assert.equal(pill.getAttribute("aria-hidden"), "true");
   plugin.taskThemeMarksEnabled = false;
   plugin.taskThemeSyncNativeAccessibility(fx.root);
   assert.equal(native.getAttribute("aria-hidden"), null);
@@ -989,7 +1005,7 @@ test("native wrappers stay accessible when the marks gate is off", () => {
   plugin.taskThemeMarksEnabled = true;
   plugin.taskThemeSyncNativeAccessibility(fx.root);
   assert.equal(native.getAttribute("aria-hidden"), "true");
-  assert.equal(pill.getAttribute("aria-hidden"), null);
+  assert.equal(pill.getAttribute("aria-hidden"), "true");
 });
 
 test("setup refresh and hover teardown cover rendered roots", () => {
@@ -1005,7 +1021,7 @@ test("setup refresh and hover teardown cover rendered roots", () => {
   const li = taskLi(fx);
   li.appendChild(fx.text("Do [theme:: WRITE]", fx.doc));
   plugin.renderTaskThemeMarksIn(fx.root, ctxFor("notes/a.md"));
-  const pill = findClass(li, "bob-pomo-theme");
+  const pill = findClass(li, "bob-task-theme-fold");
   assert.ok(pill);
   const gen = plugin.taskThemeMarksGeneration || 0;
   plugin.themesNotifyChanged("journal");

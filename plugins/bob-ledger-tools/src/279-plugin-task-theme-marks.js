@@ -412,52 +412,19 @@ function buildTaskThemeMarkElement(doc, model, options) {
     const settings =
       options && typeof options === "object" ? options : {};
     const foldSpace = Boolean(settings.foldSpace);
-    const decorative = Boolean(settings.decorative);
     const span = doc.createElement("span");
-    let classes = "bob-pomo-theme";
-    if (model.kind === "unknown") {
-      classes += " bob-pomo-theme-unknown";
-    } else if (model.kind === "repair") {
-      classes += " bob-pomo-theme-repair";
-    } else if (model.kind === "pill") {
-      if (
-        model.hueSource === "exempt" ||
-        model.hueSource === "unconfigured"
-      ) {
-        classes += " bob-pomo-theme-muted";
-      }
-      if (model.hueSource === "unconfigured") {
-        classes += " bob-pomo-theme-unconfigured";
-      }
-    }
-    span.setAttribute("class", classes);
+    span.setAttribute("class", "bob-task-theme-fold");
+    span.setAttribute("data-task-theme-kind", String(model.kind));
+    span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
     if (typeof model.key === "string" && model.key) {
       span.setAttribute("data-theme-key", String(model.key));
     } else if (typeof model.value === "string" && model.value) {
       span.setAttribute("data-theme-key", String(model.value));
     }
-    if (model.kind === "pill" && typeof model.hue === "string" && model.hue) {
-      span.setAttribute("data-theme-hue", String(model.hue));
-    }
-    span.setAttribute("data-task-theme-kind", String(model.kind));
-    span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
     if (model.kind === "repair" && model.repair) {
       span.setAttribute("data-theme-repair", String(model.repair));
     }
-    if (decorative) {
-      span.setAttribute("aria-hidden", "true");
-    } else {
-      const initial =
-        model.kind === "repair"
-          ? taskThemeTooltipText(model.label, "repair", null)
-          : model.kind === "unknown"
-            ? taskThemeTooltipText(model.label, "unknown", null)
-            : taskThemeTooltipText(model.label, "pill", undefined);
-      span.setAttribute("role", "img");
-      span.setAttribute("aria-label", String(initial || ""));
-      span.setAttribute("data-tooltip-position", "top");
-    }
-    span.appendChild(doc.createTextNode(String(model.label)));
+    span.setAttribute("aria-hidden", "true");
     return span;
   } catch (error) {
     return null;

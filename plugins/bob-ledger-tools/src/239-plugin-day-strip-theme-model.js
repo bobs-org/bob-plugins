@@ -70,7 +70,7 @@ function dayStripThemeMix(report, worked, day, context) {
     const built = typeof timeLaneLegend === "function" && typeof timeLaneThemeSegments === "function"
       ? timeLaneLegend(report, "theme", timeLaneThemeSegments(report, entries, fallback))
       : { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" } };
-    const titleLines = ["Time by theme", ...built.segments.map((segment) => segment.label + " " + segment.display)];
+    const titleLines = ["Time by type", ...built.segments.map((segment) => segment.label + " " + segment.display)];
     if (dayStripThemeHasSplitSession(report, day)) {
       titleLines.push("Pomodoros with several themes are split evenly between them.");
     }

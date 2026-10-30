@@ -668,6 +668,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupPriorityMarks();
     this.setupDateMarks();
     this.setupProgressMarks();
+    this.setupLedgerTypeMarks();
     this.setupTodayMarks();
     this.setupPomodoroHomeChips();
     this.setupTaskThemeMarks();

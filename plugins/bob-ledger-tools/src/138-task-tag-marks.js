@@ -178,6 +178,16 @@ function taskTagMarkRanges(lineText) {
     }
     const tokens = taskTagMarkTokenRanges(lineText);
     const found = [];
+    let field = null;
+    try {
+      field = taskTagTypeFieldOf(lineText);
+    } catch (error) {
+      field = null;
+    }
+    const type =
+      field && typeof field.type === "string" && field.type ? field.type : null;
+    const fieldState =
+      field && typeof field.fieldState === "string" ? field.fieldState : "none";
     for (const token of tokens) {
       try {
         if (!token || typeof token.from !== "number" || typeof token.to !== "number") {
@@ -185,7 +195,15 @@ function taskTagMarkRanges(lineText) {
         }
         const pairEnd = refTaskPairEnd(lineText, token.to);
         if (pairEnd !== -1) {
-          found.push(Object.freeze({ from: token.from, to: pairEnd, kind: "ref" }));
+          found.push(
+            Object.freeze({
+              from: token.from,
+              to: pairEnd,
+              kind: "ref",
+              type,
+              fieldState,
+            }),
+          );
         } else {
           const checklistRun = checklistTaskRunEnd(lineText, token.to);
           found.push(
@@ -193,6 +211,8 @@ function taskTagMarkRanges(lineText) {
               from: token.from,
               to: checklistRun ? checklistRun.to : token.to,
               kind: checklistRun ? checklistRun.kind : "task",
+              type,
+              fieldState,
             }),
           );
         }
@@ -474,7 +494,7 @@ function refTaskPairAnchor(taskAnchor) {
 // `data-tooltip-position`. Never creates or removes nodes, so it is
 // idempotent and survives Dataview's `innerHTML` round trip. Returns
 // true on success, false otherwise. Never throws.
-function annotateTaskTagMark(el) {
+function annotateTaskTagMark(el, identity, inheritedEnabled) {
   try {
     if (!el || typeof el !== "object") {
       return false;
@@ -496,16 +516,26 @@ function annotateTaskTagMark(el) {
     } catch (error) {
       return false;
     }
+    const tooltip = taskTagIdentityTooltip(identity);
+    const aria = taskTagIdentityAria(identity);
     try {
       if (typeof el.setAttribute === "function") {
-        el.setAttribute("aria-label", TASK_TAG_MARK_TOOLTIP);
+        el.setAttribute("aria-label", aria);
         el.setAttribute("data-tooltip-position", "top");
+        if (identity && identity.type) {
+          el.setAttribute("title", tooltip);
+        }
       } else {
-        el["aria-label"] = TASK_TAG_MARK_TOOLTIP;
+        el["aria-label"] = aria;
         el["data-tooltip-position"] = "top";
       }
     } catch (error) {
       return false;
+    }
+    try {
+      applyTaskTagTypeAttrs(el, identity, inheritedEnabled);
+    } catch (error) {
+      // Type attributes are best-effort.
     }
     return true;
   } catch (error) {
@@ -521,12 +551,12 @@ function annotateTaskTagMark(el) {
 // for copy, Dataview's `innerHTML` round trip, and toggle restore.
 // Never creates or removes nodes. Returns true on success, false
 // otherwise. Never throws.
-function annotateRefTaskMark(taskAnchor, refAnchor) {
+function annotateRefTaskMark(taskAnchor, refAnchor, identity, inheritedEnabled) {
   try {
     if (!taskAnchor || typeof taskAnchor !== "object") {
       return false;
     }
-    if (!annotateTaskTagMark(taskAnchor)) {
+    if (!annotateTaskTagMark(taskAnchor, identity, inheritedEnabled)) {
       return false;
     }
     try {
@@ -543,12 +573,17 @@ function annotateRefTaskMark(taskAnchor, refAnchor) {
       return false;
     }
     try {
+      const shown = taskTagIdentityShown(identity, inheritedEnabled);
+      const aria = shown ? taskTagIdentityAria(identity) : REF_TASK_MARK_LABEL;
+      const tooltip = identity
+        ? taskTagIdentityTooltip(identity)
+        : REF_TASK_MARK_TOOLTIP;
       if (typeof taskAnchor.setAttribute === "function") {
-        taskAnchor.setAttribute("aria-label", REF_TASK_MARK_LABEL);
-        taskAnchor.setAttribute("title", REF_TASK_MARK_TOOLTIP);
+        taskAnchor.setAttribute("aria-label", aria || REF_TASK_MARK_LABEL);
+        taskAnchor.setAttribute("title", tooltip || REF_TASK_MARK_TOOLTIP);
       } else {
-        taskAnchor["aria-label"] = REF_TASK_MARK_LABEL;
-        taskAnchor.title = REF_TASK_MARK_TOOLTIP;
+        taskAnchor["aria-label"] = aria || REF_TASK_MARK_LABEL;
+        taskAnchor.title = tooltip || REF_TASK_MARK_TOOLTIP;
       }
     } catch (error) {
       return false;
@@ -639,6 +674,9 @@ function stripTaskTagMark(el) {
         el.removeAttribute("aria-label");
         el.removeAttribute("data-tooltip-position");
         el.removeAttribute("title");
+        el.removeAttribute("data-bob-type");
+        el.removeAttribute("data-bob-type-hue");
+        el.removeAttribute("data-bob-type-state");
       } else {
         try {
           delete el["aria-label"];
@@ -673,7 +711,7 @@ function stripTaskTagMark(el) {
 // variant class, accessible label, and tooltip as `title`.
 // `doc` provides `createElement` so tests can pass a fake document.
 // Never throws: bad input yields null.
-function buildTaskTagMarkElement(doc, kind) {
+function buildTaskTagMarkElement(doc, kind, identity, inheritedEnabled) {
   try {
     if (!doc || typeof doc.createElement !== "function") {
       return null;
@@ -683,27 +721,42 @@ function buildTaskTagMarkElement(doc, kind) {
       return null;
     }
     try {
+      const typedTooltip = identity ? taskTagIdentityTooltip(identity) : null;
+      const typedAria =
+        identity && identity.inherited !== true
+          ? taskTagIdentityAria(identity)
+          : null;
       if (kind === "pre" || kind === "post") {
         span.setAttribute(
           "class",
           "bob-task-tag-mark " + CHECKLIST_TASK_MARK_CLASSES[kind],
         );
         span.setAttribute("role", "img");
-        span.setAttribute("aria-label", CHECKLIST_TASK_MARK_LABELS[kind]);
-        span.setAttribute("title", CHECKLIST_TASK_MARK_TOOLTIPS[kind]);
+        span.setAttribute(
+          "aria-label",
+          typedAria || CHECKLIST_TASK_MARK_LABELS[kind],
+        );
+        span.setAttribute(
+          "title",
+          typedTooltip || CHECKLIST_TASK_MARK_TOOLTIPS[kind],
+        );
         span.setAttribute("data-tooltip-position", "top");
       } else if (kind === "ref") {
         span.setAttribute("class", "bob-task-tag-mark " + REF_TASK_MARK_CLASS);
         span.setAttribute("role", "img");
-        span.setAttribute("aria-label", REF_TASK_MARK_LABEL);
-        span.setAttribute("title", REF_TASK_MARK_TOOLTIP);
+        span.setAttribute("aria-label", typedAria || REF_TASK_MARK_LABEL);
+        span.setAttribute("title", typedTooltip || REF_TASK_MARK_TOOLTIP);
         span.setAttribute("data-tooltip-position", "top");
       } else {
         span.setAttribute("class", "bob-task-tag-mark");
         span.setAttribute("role", "img");
-        span.setAttribute("aria-label", TASK_TAG_MARK_TOOLTIP);
+        span.setAttribute("aria-label", typedAria || TASK_TAG_MARK_TOOLTIP);
         span.setAttribute("data-tooltip-position", "top");
+        if (typedTooltip) {
+          span.setAttribute("title", typedTooltip);
+        }
       }
+      applyTaskTagTypeAttrs(span, identity, inheritedEnabled);
     } catch (error) {
       return null;
     }
@@ -760,9 +813,24 @@ let TaskTagMarkWidget = null;
 let RefTaskMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   TaskTagMarkWidget = class extends WidgetType {
-    constructor() {
+    constructor(identity, inheritedEnabled) {
       super();
-      this.key = "task-tag-mark";
+      this.identity = identity || null;
+      this.inheritedEnabled = inheritedEnabled === true;
+      const type =
+        this.identity && typeof this.identity.type === "string"
+          ? this.identity.type
+          : "";
+      const hue =
+        this.identity && typeof this.identity.hue === "string"
+          ? this.identity.hue
+          : "";
+      const state =
+        this.identity && typeof this.identity.state === "string"
+          ? this.identity.state
+          : "";
+      this.key = "task-tag-mark|" + type + "|" + hue + "|" + state + "|" +
+        String(this.inheritedEnabled);
     }
 
     eq(other) {
@@ -776,6 +844,9 @@ if (WidgetType && typeof WidgetType === "function") {
     toDOM(view) {
       const dom = buildTaskTagMarkElement(
         typeof document !== "undefined" ? document : null,
+        "task",
+        this.identity,
+        this.inheritedEnabled,
       );
       // In tests `document` is undefined and the caller passes a fake
       // doc via `buildTaskTagMarkElement` directly; never throw here.
@@ -791,9 +862,24 @@ if (WidgetType && typeof WidgetType === "function") {
     }
   };
   RefTaskMarkWidget = class extends WidgetType {
-    constructor() {
+    constructor(identity, inheritedEnabled) {
       super();
-      this.key = "ref-task-mark";
+      this.identity = identity || null;
+      this.inheritedEnabled = inheritedEnabled === true;
+      const type =
+        this.identity && typeof this.identity.type === "string"
+          ? this.identity.type
+          : "";
+      const hue =
+        this.identity && typeof this.identity.hue === "string"
+          ? this.identity.hue
+          : "";
+      const state =
+        this.identity && typeof this.identity.state === "string"
+          ? this.identity.state
+          : "";
+      this.key = "ref-task-mark|" + type + "|" + hue + "|" + state + "|" +
+        String(this.inheritedEnabled);
     }
 
     eq(other) {
@@ -808,6 +894,8 @@ if (WidgetType && typeof WidgetType === "function") {
       const dom = buildTaskTagMarkElement(
         typeof document !== "undefined" ? document : null,
         "ref",
+        this.identity,
+        this.inheritedEnabled,
       );
       // In tests `document` is undefined and the caller passes a fake
       // doc via `buildTaskTagMarkElement` directly; never throw here.

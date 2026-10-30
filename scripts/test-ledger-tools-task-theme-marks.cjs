@@ -487,22 +487,22 @@ test("unknown and known hues", () => {
 
   const doc = fakeElementDoc();
   const pillEl = buildTaskThemeMarkElement(doc, known, {});
-  assert.equal(pillEl.attrs.class, "bob-pomo-theme");
+  assert.equal(pillEl.attrs.class, "bob-task-theme-fold");
   assert.equal(pillEl.attrs["data-theme-key"], "write");
-  assert.equal(pillEl.attrs["data-theme-hue"], "aqua");
   assert.equal(pillEl.attrs["data-task-theme-kind"], "pill");
-  assert.ok(pillEl.children.length >= 1);
+  assert.equal(pillEl.attrs["aria-hidden"], "true");
+  assert.equal(pillEl.children.length, 0);
 
   const unknownEl = buildTaskThemeMarkElement(doc, unknown, {});
-  assert.ok(unknownEl.attrs.class.indexOf("bob-pomo-theme-unknown") !== -1);
-  assert.equal(unknownEl.attrs["data-theme-hue"], undefined);
+  assert.equal(unknownEl.attrs.class, "bob-task-theme-fold");
+  assert.equal(unknownEl.attrs["data-task-theme-kind"], "unknown");
 
   const repair = taskThemeMarkModel(
     { state: "repair", repair: "invalid", fields: [{ value: "???" }] },
     {},
   );
   const repairEl = buildTaskThemeMarkElement(doc, repair, {});
-  assert.ok(repairEl.attrs.class.indexOf("bob-pomo-theme-repair") !== -1);
+  assert.equal(repairEl.attrs.class, "bob-task-theme-fold");
   assert.equal(repairEl.attrs["data-theme-repair"], "invalid");
 
   const exempt = taskThemeMarkModel(field, {
@@ -511,7 +511,7 @@ test("unknown and known hues", () => {
     hueSource: "exempt",
   });
   const exemptEl = buildTaskThemeMarkElement(doc, exempt, {});
-  assert.ok(exemptEl.attrs.class.indexOf("bob-pomo-theme-muted") !== -1);
+  assert.equal(exemptEl.attrs.class, "bob-task-theme-fold");
 
   const unconfigured = taskThemeMarkModel(field, {
     known: true,
@@ -519,10 +519,7 @@ test("unknown and known hues", () => {
     hueSource: "unconfigured",
   });
   const unconfiguredEl = buildTaskThemeMarkElement(doc, unconfigured, {});
-  assert.ok(unconfiguredEl.attrs.class.indexOf("bob-pomo-theme-muted") !== -1);
-  assert.ok(
-    unconfiguredEl.attrs.class.indexOf("bob-pomo-theme-unconfigured") !== -1,
-  );
+  assert.equal(unconfiguredEl.attrs.class, "bob-task-theme-fold");
 
   assert.equal(buildTaskThemeMarkElement(null, known, {}), null);
   assert.equal(buildTaskThemeMarkElement(doc, null, {}), null);
@@ -791,7 +788,8 @@ test("session toggle, gates, and onload wiring", () => {
       assert.equal(plugin.toggleTaskThemeMarks(), true);
       assert.equal(plugin.togglePomodoroThemeColors(), true);
       assert.ok(
-        TestNotice.messages.indexOf("Task theme off") !== -1 ||
+        TestNotice.messages.indexOf("Task type marks off") !== -1 ||
+          TestNotice.messages.indexOf("Task theme off") !== -1 ||
           TestNotice.messages.indexOf("Task theme marks off") !== -1,
       );
       // While off, the builder stays silent.
@@ -934,6 +932,8 @@ test("styles.css contract for task theme pills", () => {
   assert.ok(css.indexOf("body:not(.bob-task-theme-marks) .bob-pomo-theme[data-task-theme-kind]") !== -1);
   assert.ok(css.indexOf("body.bob-task-theme-marks .bob-task-theme-native") !== -1);
   assert.ok(css.indexOf('[data-dv-norm-key="theme"]') !== -1);
+  assert.ok(css.indexOf('[data-dv-norm-key="type"]') !== -1);
+  assert.ok(css.indexOf(".bob-task-theme-fold") !== -1);
   assert.ok(css.indexOf("body.bob-task-theme-marks .markdown-source-view.is-live-preview") !== -1);
 });
 

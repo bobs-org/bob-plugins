@@ -421,12 +421,12 @@ class PomodoroThemesManagerModal extends FilteredPickerModal {
     const themesApi = getNavigationPomodoroThemesApi(app);
     super(app, {
       items: [],
-      title: "Pomodoro themes",
+      title: "Types",
       headerIcon: "timer",
-      inputLabel: "Filter Pomodoro themes",
-      placeholder: "Filter themes — Tab switches view",
-      resultsLabel: "Pomodoro themes",
-      emptyText: "No themes match",
+      inputLabel: "Filter types",
+      placeholder: "Filter types — Tab switches view",
+      resultsLabel: "Types",
+      emptyText: "No types match",
       footerHints: POMODORO_THEMES_MANAGER_HINTS,
       getSubtitle: () => this.managerSubtitle(),
       filterItem: (row, query) => filterPomodoroThemesManagerRows([row], query).length > 0,

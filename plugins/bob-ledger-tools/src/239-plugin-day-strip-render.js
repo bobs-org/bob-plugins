@@ -396,7 +396,7 @@ function dayStripLaneMix(model, lane) {
 }
 
 function dayStripLaneSentence(mix, lane) {
-  if (lane === "themes") return "Time by theme";
+  if (lane === "themes") return "Time by type";
   return mix && mix.dimension === "area" ? "Time by area" : "Time by root parent";
 }
 
@@ -413,7 +413,7 @@ function dayStripRenderMix(doc, model, handlers, lane) {
   const sentence = dayStripLaneSentence(mix, lane);
   const node = dayStripLink(doc, "bob-day-strip-mix", sentence, mix.title);
   const legend = statsEl(doc, "span", { class: "bob-day-strip-legend" });
-  const skeletonLabel = lane === "themes" ? "Theme" : "Area";
+  const skeletonLabel = lane === "themes" ? "Type" : "Area";
   const entries = skeleton
     ? [
       { label: skeletonLabel, legendLabel: skeletonLabel, display: "0m", rank: 1 },

@@ -60,7 +60,7 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi) {
       cls: `bob-cnp-row-status is-recent-theme${row.hidden ? " is-hidden-theme" : ""}`,
       text: row.hidden ? "Hidden" : "Recent",
       attr: {
-        title: row.hidden ? "Hidden from Recent; Ctrl+D to unhide" : "Recent task type",
+        title: row.hidden ? "Type hidden from Recent; Ctrl+D to unhide" : "Recent task type",
         "aria-label": row.hidden ? "Hidden type" : "Recent type",
       },
     });

@@ -382,7 +382,7 @@ function dayStripAriaLabel(day, dateWords, provisional, facts, mix, themes, show
     }
   }
   if (showThemes && themes && !themes.omitted && themes.segments.length) {
-    label += " Time by theme: " + themes.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
+    label += " Time by type: " + themes.segments.map((segment) => segment.label + " " + segment.display).join(", ") + ".";
   }
   return label;
 }
@@ -429,7 +429,7 @@ function dayStripModel(report, day, context) {
         provisional: false,
       }));
       const mix = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "root_parent", title: "Time by root parent" };
-      const themes = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "theme", title: "Time by theme" };
+      const themes = { segments: [], legend: [], overflow: [], overflowDefault: { count: 0, title: "" }, empty: false, omitted: false, skeleton: true, dimension: "theme", title: "Time by type" };
       const lanes = dayStripLanesFor("skeleton", mix, themes, laneView);
       return { state: "skeleton", day, dateWords, provisional: false, asOf: "", metaText: "so far · 00:00", facts, mix, themes, lanes, ariaLabel: "Day stats for " + dateWords.full + ". Loading.", stale: false, error: null };
     }

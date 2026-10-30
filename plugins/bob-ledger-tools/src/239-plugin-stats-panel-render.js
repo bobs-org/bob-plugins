@@ -222,7 +222,7 @@ class BobLedgerToolsStatsPanelsMixin {
       return true;
     }
     const max = Math.max(0, ...model.rows.map((row) => (statsFinite(row.value) ? row.value : 0)));
-    const list = statsEl(doc, "ul", { class: "bob-stats-panel-bars", "aria-label": "Themes" });
+    const list = statsEl(doc, "ul", { class: "bob-stats-panel-bars", "aria-label": "Types" });
     const fallback =
       typeof this.pomodoroThemeHueFor === "function"
         ? (themeKey, name) => this.pomodoroThemeHueFor(themeKey, name)

@@ -1002,6 +1002,20 @@ test("styles.css contract: teal identity ink, glyph, both hosts, hover, hide in 
   assert.ok(css.indexOf("-webkit-print-color-adjust: exact") !== -1);
   assert.ok(css.indexOf("prefers-reduced-motion") !== -1);
   assert.ok(css.indexOf("color: transparent") !== -1);
+  assert.ok(css.indexOf("content: attr(data-bob-type)") !== -1);
+  assert.ok(css.indexOf("--bob-type-ink-blue") !== -1);
+  assert.ok(
+    css.indexOf(
+      "color-mix(in srgb, var(--bob-hue-blue) 55%, var(--text-normal))",
+    ) !== -1,
+  );
+  assert.ok(
+    css.indexOf(
+      'body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="repair"]',
+    ) !== -1,
+  );
+  assert.ok(css.indexOf(".bob-ledger-type-mark") !== -1);
+  assert.ok(css.indexOf(".bob-ledger-type-mark.is-disagree") !== -1);
 });
 
 test("TT20-TT28 verbatim: the #task #ref pair yields one ref range spanning both tokens", () => {
@@ -1076,14 +1090,14 @@ test("Live Preview ref decorations replace the whole pair and reveal both tags a
   assert.equal(built.adds[0].from, 6);
   assert.equal(built.adds[0].to, 16);
   const widget = built.adds[0].value.widget;
-  assert.equal(widget.key, "ref-task-mark");
+  assert.match(widget.key, /^ref-task-mark\|/);
   const rebuilt = plugin.buildTaskTagMarkDecorations(makeView({ lines: [line] }));
   assert.equal(widget.eq(rebuilt.adds[0].value.widget), true);
   // A hash widget and a book widget never compare equal.
   const hash = plugin.buildTaskTagMarkDecorations(
     makeView({ lines: ["- [ ] #task Plain"] }),
   ).adds[0].value.widget;
-  assert.equal(hash.key, "task-tag-mark");
+  assert.match(hash.key, /^task-tag-mark\|/);
   assert.equal(widget.eq(hash), false);
   assert.equal(hash.eq(widget), false);
   // Reveal is inclusive over the whole span: a cursor touching either
@@ -1433,7 +1447,11 @@ test("CK live preview and widget vectors: one stable glyph replaces the full run
   ];
   const built = plugin.buildTaskTagMarkDecorations(makeView({ lines }));
   assert.deepEqual(
-    built.adds.map((add) => [add.from, add.to, add.value.widget.key]),
+    built.adds.map((add) => [
+      add.from,
+      add.to,
+      add.value.widget.key.split("|")[0],
+    ]),
     [
       [6, 21, "pre-task-mark"],
       [40, 56, "post-task-mark"],

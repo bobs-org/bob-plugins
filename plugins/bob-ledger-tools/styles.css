@@ -1775,6 +1775,81 @@ li.task-list-item[data-task="-"] .bob-task-tag-mark,
   opacity: 0.75;
 }
 
+/* Explicit `#TYPE` identity (D11): hash geometry stays; the name is
+   drawn with `::after` from `data-bob-type` so reading-view hosts
+   create no nodes. Type ink mixes each palette slot 55% toward
+   `--text-normal`. `--bob-task-tag-color` still wins when set. */
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type] {
+  width: auto;
+  min-width: 1.08em;
+  overflow: visible;
+  padding: 0.06em 0.28em 0.06em 1.28em;
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]::before {
+  inset: 0.06em auto 0.06em 0.14em;
+  width: 1.08em;
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]::after {
+  content: attr(data-bob-type);
+  font-family: var(--font-interface);
+  font-size: 1em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.08em;
+  color: var(--bob-task-tag-ink);
+  vertical-align: 0;
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="blue"] {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-blue));
+}
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="orange"] {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-orange));
+}
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="aqua"] {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-aqua));
+}
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="yellow"] {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-yellow));
+}
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="magenta"] {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-magenta));
+}
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="green"] {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-green));
+}
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="violet"] {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-violet));
+}
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-hue="red"] {
+  --bob-task-tag-ink: var(--bob-task-tag-color, var(--bob-type-ink-red));
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="muted"] {
+  --bob-task-tag-ink: color-mix(in srgb, var(--bob-task-tag-ink) 55%, var(--text-faint));
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="unconfigured"] {
+  --bob-task-tag-ink: var(--text-muted);
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="unconfigured"]::after {
+  text-decoration: underline dotted;
+  text-underline-offset: 0.12em;
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="inherited"]::after {
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type-state="repair"] {
+  --bob-task-tag-ink: color-mix(in srgb, var(--bob-hue-orange) 70%, var(--text-normal));
+}
+
 /* Tasks query results (tasks_results = hide): every row is a `#task`
    task by the global filter, so the tag carries no information and is
    hidden with `display: none`. CSS only; no JS touches Tasks' DOM, so
@@ -1981,6 +2056,47 @@ body.bob-task-tag-marks .plugin-tasks-list-item .task-description a.tag:is([data
   body.bob-task-tag-marks .bob-task-tag-mark {
     transition: none;
   }
+}
+
+/* Ledger type-agreement marks (D11): `#TYPE` before a Task Link that
+   disagrees with its Pomodoro, or a quiet prefix when the entry has
+   two or more type components. */
+
+.bob-ledger-type-mark {
+  display: inline-block;
+  margin-right: 0.28em;
+  font-family: var(--font-interface);
+  font-size: 0.8em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  vertical-align: 0.05em;
+  color: var(--bob-task-tag-color, var(--bob-task-tag-hue));
+  cursor: default;
+}
+
+.bob-ledger-type-mark[data-bob-type]::after {
+  content: "#" attr(data-bob-type);
+}
+
+.bob-ledger-type-mark[data-bob-type-hue="blue"] { color: var(--bob-task-tag-color, var(--bob-type-ink-blue)); }
+.bob-ledger-type-mark[data-bob-type-hue="orange"] { color: var(--bob-task-tag-color, var(--bob-type-ink-orange)); }
+.bob-ledger-type-mark[data-bob-type-hue="aqua"] { color: var(--bob-task-tag-color, var(--bob-type-ink-aqua)); }
+.bob-ledger-type-mark[data-bob-type-hue="yellow"] { color: var(--bob-task-tag-color, var(--bob-type-ink-yellow)); }
+.bob-ledger-type-mark[data-bob-type-hue="magenta"] { color: var(--bob-task-tag-color, var(--bob-type-ink-magenta)); }
+.bob-ledger-type-mark[data-bob-type-hue="green"] { color: var(--bob-task-tag-color, var(--bob-type-ink-green)); }
+.bob-ledger-type-mark[data-bob-type-hue="violet"] { color: var(--bob-task-tag-color, var(--bob-type-ink-violet)); }
+.bob-ledger-type-mark[data-bob-type-hue="red"] { color: var(--bob-task-tag-color, var(--bob-type-ink-red)); }
+
+.bob-ledger-type-mark.is-disagree {
+  text-decoration: underline dashed;
+  text-decoration-color: var(--bob-hue-orange);
+  text-underline-offset: 0.14em;
+}
+
+.bob-ledger-type-mark.is-composite {
+  font-weight: 500;
+  opacity: 0.8;
 }
 
 /* Task Link In Progress marks (bob-cli-56 progress-marks): one small
@@ -3501,6 +3617,14 @@ body.bob-today-marks-off .bob-today-mark {
   --bob-hue-green: var(--bob-area-green);
   --bob-hue-violet: var(--bob-area-violet);
   --bob-hue-red: var(--bob-area-red);
+  --bob-type-ink-blue: color-mix(in srgb, var(--bob-hue-blue) 55%, var(--text-normal));
+  --bob-type-ink-orange: color-mix(in srgb, var(--bob-hue-orange) 55%, var(--text-normal));
+  --bob-type-ink-aqua: color-mix(in srgb, var(--bob-hue-aqua) 55%, var(--text-normal));
+  --bob-type-ink-yellow: color-mix(in srgb, var(--bob-hue-yellow) 55%, var(--text-normal));
+  --bob-type-ink-magenta: color-mix(in srgb, var(--bob-hue-magenta) 55%, var(--text-normal));
+  --bob-type-ink-green: color-mix(in srgb, var(--bob-hue-green) 55%, var(--text-normal));
+  --bob-type-ink-violet: color-mix(in srgb, var(--bob-hue-violet) 55%, var(--text-normal));
+  --bob-type-ink-red: color-mix(in srgb, var(--bob-hue-red) 55%, var(--text-normal));
 }
 
 .theme-dark {
@@ -3520,6 +3644,14 @@ body.bob-today-marks-off .bob-today-mark {
   --bob-hue-green: var(--bob-area-green);
   --bob-hue-violet: var(--bob-area-violet);
   --bob-hue-red: var(--bob-area-red);
+  --bob-type-ink-blue: color-mix(in srgb, var(--bob-hue-blue) 55%, var(--text-normal));
+  --bob-type-ink-orange: color-mix(in srgb, var(--bob-hue-orange) 55%, var(--text-normal));
+  --bob-type-ink-aqua: color-mix(in srgb, var(--bob-hue-aqua) 55%, var(--text-normal));
+  --bob-type-ink-yellow: color-mix(in srgb, var(--bob-hue-yellow) 55%, var(--text-normal));
+  --bob-type-ink-magenta: color-mix(in srgb, var(--bob-hue-magenta) 55%, var(--text-normal));
+  --bob-type-ink-green: color-mix(in srgb, var(--bob-hue-green) 55%, var(--text-normal));
+  --bob-type-ink-violet: color-mix(in srgb, var(--bob-hue-violet) 55%, var(--text-normal));
+  --bob-type-ink-red: color-mix(in srgb, var(--bob-hue-red) 55%, var(--text-normal));
 }
 
 /* Pomodoro theme pills (PT6 visual language): names wear a tint, places
@@ -3763,10 +3895,15 @@ body.bob-task-theme-marks .bob-task-theme-native {
   display: inline;
 }
 
-body.bob-task-theme-marks .markdown-source-view.is-live-preview .dataview.inline-field:has(> :is(.inline-field-key, .inline-field-standalone-value)[data-dv-norm-key="theme"]) {
+body.bob-task-theme-marks .markdown-source-view.is-live-preview .dataview.inline-field:has(> :is(.inline-field-key, .inline-field-standalone-value)[data-dv-norm-key="theme"]),
+body.bob-task-theme-marks .markdown-source-view.is-live-preview .dataview.inline-field:has(> :is(.inline-field-key, .inline-field-standalone-value)[data-dv-norm-key="type"]) {
   opacity: 1;
   border-style: dashed;
   border-color: color-mix(in srgb, var(--color-orange) 55%, transparent);
+}
+
+.bob-task-theme-fold {
+  display: none;
 }
 
 /* Swatch for dense rows: 8pt rounded square (radius 2) before the name.

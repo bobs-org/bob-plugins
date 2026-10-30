@@ -342,6 +342,7 @@ test("manager opens, cycles views, filters, and hides through the stubbed api", 
     ? new helpers.PomodoroThemesManagerModal(harness.plugin.app, harness.plugin)
     : null;
   assert.ok(picker, "manager modal is exported");
+  assert.equal(picker.title, "Types");
   picker.open();
   await tick();
   await tick();

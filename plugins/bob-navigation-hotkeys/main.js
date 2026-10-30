@@ -18371,6 +18371,7 @@ async function toggleNavigationPomodoroThemeVisibility(modal) {
       modal.selectedIndex = selectedIndex;
       modal.renderResults();
     }
+    new Notice(method === "hide" ? "Type hidden from Recent" : "Type shown in Recent");
   } catch (_error) {
     new Notice("Could not update the type suggestion");
   } finally {
@@ -23576,7 +23577,7 @@ function renderPomodoroBulletMovePickerRow(row, rowEl, query, themesApi) {
       cls: `bob-cnp-row-status is-recent-theme${row.hidden ? " is-hidden-theme" : ""}`,
       text: row.hidden ? "Hidden" : "Recent",
       attr: {
-        title: row.hidden ? "Hidden from Recent; Ctrl+D to unhide" : "Recent task type",
+        title: row.hidden ? "Type hidden from Recent; Ctrl+D to unhide" : "Recent task type",
         "aria-label": row.hidden ? "Hidden type" : "Recent type",
       },
     });
@@ -24062,12 +24063,12 @@ class PomodoroThemesManagerModal extends FilteredPickerModal {
     const themesApi = getNavigationPomodoroThemesApi(app);
     super(app, {
       items: [],
-      title: "Pomodoro themes",
+      title: "Types",
       headerIcon: "timer",
-      inputLabel: "Filter Pomodoro themes",
-      placeholder: "Filter themes — Tab switches view",
-      resultsLabel: "Pomodoro themes",
-      emptyText: "No themes match",
+      inputLabel: "Filter types",
+      placeholder: "Filter types — Tab switches view",
+      resultsLabel: "Types",
+      emptyText: "No types match",
       footerHints: POMODORO_THEMES_MANAGER_HINTS,
       getSubtitle: () => this.managerSubtitle(),
       filterItem: (row, query) => filterPomodoroThemesManagerRows([row], query).length > 0,

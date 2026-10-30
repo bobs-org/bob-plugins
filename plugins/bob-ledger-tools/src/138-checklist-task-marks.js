@@ -385,24 +385,38 @@ function checklistAddClass(el, className) {
 // Annotate the task hash as the PRE sunrise or POST flag and hide both
 // partner anchors in place, retaining their text for copy, Dataview,
 // and toggle restore. Never creates or removes nodes.
-function annotateChecklistTaskMark(taskAnchor, run) {
+function annotateChecklistTaskMark(taskAnchor, run, identity, inheritedEnabled) {
   try {
     const kind = run && run.kind;
-    if (!CHECKLIST_TASK_MARK_CLASSES[kind] || !annotateTaskTagMark(taskAnchor)) {
+    if (
+      !CHECKLIST_TASK_MARK_CLASSES[kind] ||
+      !annotateTaskTagMark(taskAnchor, identity, inheritedEnabled)
+    ) {
       return false;
     }
     if (!checklistAddClass(taskAnchor, CHECKLIST_TASK_MARK_CLASSES[kind])) {
       return false;
     }
-    const label = CHECKLIST_TASK_MARK_LABELS[kind];
-    const tooltip = CHECKLIST_TASK_MARK_TOOLTIPS[kind];
+    const shown = taskTagIdentityShown(identity, inheritedEnabled);
+    const label = shown
+      ? taskTagIdentityAria(identity)
+      : CHECKLIST_TASK_MARK_LABELS[kind];
+    const tooltip = identity
+      ? taskTagIdentityTooltip(identity)
+      : CHECKLIST_TASK_MARK_TOOLTIPS[kind];
     try {
       if (typeof taskAnchor.setAttribute === "function") {
-        taskAnchor.setAttribute("aria-label", label);
-        taskAnchor.setAttribute("title", tooltip);
+        taskAnchor.setAttribute(
+          "aria-label",
+          label || CHECKLIST_TASK_MARK_LABELS[kind],
+        );
+        taskAnchor.setAttribute(
+          "title",
+          tooltip || CHECKLIST_TASK_MARK_TOOLTIPS[kind],
+        );
       } else {
-        taskAnchor["aria-label"] = label;
-        taskAnchor.title = tooltip;
+        taskAnchor["aria-label"] = label || CHECKLIST_TASK_MARK_LABELS[kind];
+        taskAnchor.title = tooltip || CHECKLIST_TASK_MARK_TOOLTIPS[kind];
       }
     } catch (error) {
       return false;
@@ -444,10 +458,33 @@ function stripChecklistTaskHidden(el) {
 let ChecklistTaskMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   ChecklistTaskMarkWidget = class extends WidgetType {
-    constructor(kind) {
+    constructor(kind, identity, inheritedEnabled) {
       super();
       this.kind = kind === "post" ? "post" : "pre";
-      this.key = this.kind + "-task-mark";
+      this.identity = identity || null;
+      this.inheritedEnabled = inheritedEnabled === true;
+      const type =
+        this.identity && typeof this.identity.type === "string"
+          ? this.identity.type
+          : "";
+      const hue =
+        this.identity && typeof this.identity.hue === "string"
+          ? this.identity.hue
+          : "";
+      const state =
+        this.identity && typeof this.identity.state === "string"
+          ? this.identity.state
+          : "";
+      this.key =
+        this.kind +
+        "-task-mark|" +
+        type +
+        "|" +
+        hue +
+        "|" +
+        state +
+        "|" +
+        String(this.inheritedEnabled);
     }
 
     eq(other) {
@@ -462,6 +499,8 @@ if (WidgetType && typeof WidgetType === "function") {
       const dom = buildTaskTagMarkElement(
         typeof document !== "undefined" ? document : null,
         this.kind,
+        this.identity,
+        this.inheritedEnabled,
       );
       if (!dom) {
         return typeof document !== "undefined" && document

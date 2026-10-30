@@ -39,11 +39,11 @@ class BobLedgerToolsStatsHomesMixin {
     const choices = hasRoots
       ? [
         { id: "roots", label: "Root parents", disabled: false },
-        { id: "themes", label: "Themes", disabled: false },
+        { id: "themes", label: "Types", disabled: false },
       ]
       : [
         { id: "areas", label: "Areas & projects", disabled: !available },
-        { id: "themes", label: "Themes", disabled: false },
+        { id: "themes", label: "Types", disabled: false },
       ];
     for (const choice of choices) {
       const button = statsEl(doc, "button", {

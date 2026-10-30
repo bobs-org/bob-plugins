@@ -11,6 +11,16 @@ class BobLedgerToolsTaskTagMarksMixin {
       if (typeof this.taskTagMarksEnabled !== "boolean") {
         this.taskTagMarksEnabled = true;
       }
+      if (typeof this.inheritedTaskTypesEnabled !== "boolean") {
+        this.inheritedTaskTypesEnabled = false;
+      }
+      if (!(this.taskTagIdentityCache instanceof Map)) {
+        try {
+          this.taskTagIdentityCache = new Map();
+        } catch (error) {
+          this.taskTagIdentityCache = null;
+        }
+      }
       this.applyMarkGateClass(
         "bob-task-tag-marks",
         this.taskTagMarksEnabled,
@@ -26,9 +36,19 @@ class BobLedgerToolsTaskTagMarksMixin {
             name: "Toggle task tag marks",
             callback: () => this.toggleTaskTagMarks(),
           });
+          this.addCommand({
+            id: "toggle-inherited-task-types",
+            name: "Toggle inherited task types",
+            callback: () => this.toggleInheritedTaskTypes(),
+          });
         }
       } catch (error) {
         // The toggle is best-effort.
+      }
+      try {
+        this.taskTagWireIdentityRefresh();
+      } catch (error) {
+        // Catalog refresh is best-effort.
       }
       try {
         const extension = this.createTaskTagMarkExtension();
@@ -349,12 +369,22 @@ class BobLedgerToolsTaskTagMarksMixin {
                     // A `ref` range spans the whole `#task #ref` pair,
                     // so one open-book decoration replaces both tags
                     // and one cursor touch reveals both.
+                    const identity = this.taskTagIdentityForLine(
+                      line.text,
+                      filePath,
+                    );
+                    const inheritedEnabled =
+                      this.inheritedTaskTypesEnabled === true;
                     const widget =
                       source && (source.kind === "pre" || source.kind === "post")
-                        ? new ChecklistTaskMarkWidget(source.kind)
+                        ? new ChecklistTaskMarkWidget(
+                            source.kind,
+                            identity,
+                            inheritedEnabled,
+                          )
                         : source && source.kind === "ref"
-                          ? new RefTaskMarkWidget()
-                          : new TaskTagMarkWidget();
+                          ? new RefTaskMarkWidget(identity, inheritedEnabled)
+                          : new TaskTagMarkWidget(identity, inheritedEnabled);
                     builder.add(
                       absFrom,
                       absTo,
@@ -453,11 +483,12 @@ class BobLedgerToolsTaskTagMarksMixin {
   // Annotate one eligible `#task` anchor: ref pairs take precedence,
   // then canonical checklist runs, then the ordinary hash. Returns
   // true on success, false otherwise. Never throws.
-  annotateTaskTagAnchor(anchor) {
+  annotateTaskTagAnchor(anchor, identity, inheritedEnabled) {
     try {
       if (!anchor || typeof anchor !== "object") {
         return false;
       }
+      const shownInherited = inheritedEnabled === true;
       let partner = null;
       try {
         partner = refTaskPairAnchor(anchor);
@@ -465,13 +496,18 @@ class BobLedgerToolsTaskTagMarksMixin {
         partner = null;
       }
       if (partner) {
-        return annotateRefTaskMark(anchor, partner);
+        return annotateRefTaskMark(anchor, partner, identity, shownInherited);
       }
       const checklistRun = checklistTaskRunAnchors(anchor);
       if (checklistRun) {
-        return annotateChecklistTaskMark(anchor, checklistRun);
+        return annotateChecklistTaskMark(
+          anchor,
+          checklistRun,
+          identity,
+          shownInherited,
+        );
       }
-      return annotateTaskTagMark(anchor);
+      return annotateTaskTagMark(anchor, identity, shownInherited);
     } catch (error) {
       return false;
     }
@@ -485,6 +521,7 @@ class BobLedgerToolsTaskTagMarksMixin {
       if (!el || !ctx) {
         return;
       }
+      const inheritedEnabled = this.inheritedTaskTypesEnabled === true;
       const anchors = this.taskTagMarkCandidateAnchors(el);
       for (const anchor of anchors) {
         try {
@@ -494,7 +531,8 @@ class BobLedgerToolsTaskTagMarksMixin {
           if (!taskTagMarkElementEligible(anchor, el)) {
             continue;
           }
-          this.annotateTaskTagAnchor(anchor);
+          const identity = this.taskTagIdentityForRenderedAnchor(anchor, ctx);
+          this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled);
         } catch (error) {
           continue;
         }
@@ -514,11 +552,13 @@ class BobLedgerToolsTaskTagMarksMixin {
         return 0;
       }
       let count = 0;
+      const inheritedEnabled = this.inheritedTaskTypesEnabled === true;
       const anchors = this.taskTagMarkCandidateAnchors(root);
       for (const anchor of anchors) {
         try {
           if (taskTagMarkElementEligible(anchor, root)) {
-            if (this.annotateTaskTagAnchor(anchor)) {
+            const identity = this.taskTagIdentityForRenderedAnchor(anchor, null);
+            if (this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled)) {
               count += 1;
             }
           }

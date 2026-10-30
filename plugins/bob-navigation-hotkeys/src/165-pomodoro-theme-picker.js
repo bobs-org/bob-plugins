@@ -488,6 +488,7 @@ async function toggleNavigationPomodoroThemeVisibility(modal) {
       modal.selectedIndex = selectedIndex;
       modal.renderResults();
     }
+    new Notice(method === "hide" ? "Type hidden from Recent" : "Type shown in Recent");
   } catch (_error) {
     new Notice("Could not update the type suggestion");
   } finally {

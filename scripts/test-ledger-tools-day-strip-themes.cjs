@@ -220,12 +220,12 @@ test("theme mix labels, ranks, overflow, titles, and aria follow the report", ()
   assert.equal(mix.overflowDefault.count, 1);
   assert.equal(mix.overflow.length, 1);
   assert.equal(mix.overflow[0].key, "DECKS");
-  assert.match(mix.title, /^Time by theme\n/);
+  assert.match(mix.title, /^Time by type\n/);
   assert.match(mix.title, /Pomodoros with several themes are split evenly between them\.$/);
   const noSplit = themeMix(fixtures.today);
   assert.equal(noSplit.title.includes("Pomodoros with several themes"), false);
   const model = modelFor(fixtures.screenshotDay);
-  assert.match(model.ariaLabel, /Time by theme: SASE 40m, BOB 20m, DECKS 10m, GTD 45m\./);
+  assert.match(model.ariaLabel, /Time by type: SASE 40m, BOB 20m, DECKS 10m, GTD 45m\./);
   const hiddenStillShown = themeMix(fixtures.themeCollision);
   assert.ok(hiddenStillShown.segments.some((segment) => segment.key === "VIBE"), "hidden-from-Recent themes still appear");
 });

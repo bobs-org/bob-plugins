@@ -39,7 +39,7 @@ class BobLedgerToolsTaskThemeEditorMixin {
         if (typeof this.addCommand === "function") {
           this.addCommand({
             id: "toggle-task-theme-marks",
-            name: "Toggle task theme marks",
+            name: "Toggle task type marks",
             callback: () => this.toggleTaskThemeMarks(),
           });
         }
@@ -882,7 +882,7 @@ class BobLedgerToolsTaskThemeEditorMixin {
         // Tasks re-render is best-effort.
       }
       try {
-        new Notice(enabled ? "Task theme marks on" : "Task theme off");
+        new Notice(enabled ? "Task type marks on" : "Task type marks off");
       } catch (error) {
         // Notice is best-effort.
       }

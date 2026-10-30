@@ -57,7 +57,7 @@ test("plan budget suffix: link Notice appends the meter computed on post-write d
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(noticeMessages, ["Linked to Current · Next · plan 1/3 · 2/10"]);
+  assert.deepEqual(noticeMessages, ["Linked under Current · Next · plan 1/3 · 2/10"]);
   assert.equal(seen.length, 2);
   assert.ok(
     !seen[0].includes("[[Tasks#^ship]]"),
@@ -82,7 +82,7 @@ test("plan budget suffix: link Notice omits the meter when the ledger-tools API 
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(noticeMessages, ["Linked to Current · Next"]);
+  assert.deepEqual(noticeMessages, ["Linked under Current · Next"]);
 });
 
 test("plan budget suffix: unlink Notice marks an over-cap plan with 🔴", async () => {

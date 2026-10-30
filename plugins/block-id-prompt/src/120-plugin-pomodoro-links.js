@@ -719,7 +719,13 @@ class BlockIdPromptPomodoroLinksMixin {
       CANONICAL_BLOCK_LINK_PREFIX,
     );
 
-    const pomodoroPlan = planPomodoroLinkInsertion(dailyContent, {
+    const themeWrite = resolvePomodoroLinkThemeWrite(
+      this,
+      source,
+      source.pomodoroTarget || null,
+      taskContent,
+    );
+    const pomodoroPlan = planPomodoroLinkWithTypeMerge(dailyContent, {
       blockId: id,
       targetPath: taskFile.path,
       sourcePath: dailyFile.path,
@@ -727,7 +733,7 @@ class BlockIdPromptPomodoroLinksMixin {
         this.resolveReferenceDestination(reference, referrerPath),
       linkText,
       target: source.pomodoroTarget || null,
-    });
+    }, themeWrite);
     if (pomodoroPlan.error) {
       new Notice(
         this.pomodoroPlanErrorNotice(
@@ -738,13 +744,6 @@ class BlockIdPromptPomodoroLinksMixin {
       );
       return false;
     }
-
-    const themeWrite = resolvePomodoroLinkThemeWrite(
-      this,
-      source,
-      pomodoroPlan,
-      taskContent,
-    );
     const plan = planTargetTaskUpdate(taskContent, source.line, {
       activationEligible: true,
       forceNext: true,

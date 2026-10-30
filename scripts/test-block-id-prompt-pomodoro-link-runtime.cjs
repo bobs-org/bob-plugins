@@ -199,7 +199,7 @@ test("task-mode toggle decides on link presence: linked In Progress prompts, unl
   assert.equal(unlinked.editor.getValue(), "- [/] #task Ship it ^ship");
   assert.equal(unlinked.writes.length, 1);
   assert.ok(unlinked.writes[0].content.includes("[[Tasks#^ship]]"));
-  assert.equal(lastNotice(), "Linked to Current · stays In Progress");
+  assert.equal(lastNotice(), "Linked under Current · stays In Progress");
 });
 
 test("task-mode toggle: linked Next unlinks and stays Next; unlinked Next links and stays Next", async () => {
@@ -229,7 +229,7 @@ test("task-mode toggle: linked Next unlinks and stays Next; unlinked Next links 
   assert.equal(unlinked.editor.getValue(), "- [*] #task Ship it ^ship");
   assert.equal(unlinked.writes.length, 1);
   assert.ok(unlinked.writes[0].content.includes("[[Tasks#^ship]]"));
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
 });
 
 test("task-mode toggle: linked only under a completed Pomodoro links again", async () => {
@@ -250,7 +250,7 @@ test("task-mode toggle: linked only under a completed Pomodoro links again", asy
   assert.equal(h.writes.length, 1);
   assert.ok(h.writes[0].content.includes("- [ ] Current (10:00-10:25)\n  - [[Tasks#^ship]]"));
   assert.ok(h.writes[0].content.includes("- [x] Done (09:00-09:25)\n  - [[Tasks#^ship]]"));
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
 });
 
 test("task-mode toggle: a task without a block ID is never linked and prompts for one", async () => {
@@ -731,7 +731,7 @@ test("review-walk: existing-ID link hands its Linked notice to continue with no 
   assert.equal(calls[0][0], "capture");
   assert.equal(calls[0][1], h.editor);
   assert.deepEqual(reviewContinueCalls(calls), [
-    ["continue", origin, { kind: "link-today", notice: "Linked to Current · stays Next" }],
+    ["continue", origin, { kind: "link-today", notice: "Linked under Current · stays Next" }],
   ]);
   assert.deepEqual(noticeMessages, []);
 });
@@ -763,7 +763,7 @@ test("review-walk: prompted-ID link continues after submit", async () => {
   assert.equal(result, true);
   assert.equal(h.editor.getValue(), "- [*] #task Ship it ^ship");
   assert.deepEqual(reviewContinueCalls(calls), [
-    ["continue", origin, { kind: "link-today", notice: "Linked to Current · stays Next" }],
+    ["continue", origin, { kind: "link-today", notice: "Linked under Current · stays Next" }],
   ]);
   assert.deepEqual(noticeMessages, []);
 });
@@ -904,7 +904,7 @@ test("inbox-route: non-inbox notes and task-link mode never prompt", async () =>
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
   assert.deepEqual(routePromptCalls(routeCalls), []);
   assert.deepEqual(routeCommitCalls(routeCalls), []);
 
@@ -953,7 +953,7 @@ test("inbox-route: stay matches today", async () => {
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
   assert.ok(h.writes[0].content.includes("[[Tasks#^ship]]"));
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
   const [promptCall] = routePromptCalls(routeCalls);
   assert.equal(promptCall[1].path, "Tasks.md");
   assert.equal(promptCall[1].line, 0);
@@ -1000,7 +1000,7 @@ test("inbox-route: move links, then moves, with one composed toast and a route c
       origin,
       {
         kind: "route",
-        notice: "Linked to Current · stays Next · moved to health",
+        notice: "Linked under Current · stays Next · moved to health",
         handledRefs,
       },
     ],
@@ -1054,7 +1054,7 @@ test("inbox-route: a new block ID goes through the ID prompt first, then the rou
     [
       "continue",
       origin,
-      { kind: "route", notice: "Linked to Current · stays Next · moved to health", handledRefs: [] },
+      { kind: "route", notice: "Linked under Current · stays Next · moved to health", handledRefs: [] },
     ],
   ]);
   assert.deepEqual(noticeMessages, []);
@@ -1088,7 +1088,7 @@ test("inbox-route: a move failure gives the partial notice plus a link-today con
     "Not moved: health is closed · still in Tasks",
   ]);
   assert.deepEqual(reviewContinueCalls(calls), [
-    ["continue", origin, { kind: "link-today", notice: "Linked to Current · stays Next" }],
+    ["continue", origin, { kind: "link-today", notice: "Linked under Current · stays Next" }],
   ]);
 });
 
@@ -1099,7 +1099,7 @@ test("review-walk: no nav or nav v2 keeps today's notices", async () => {
   });
   assert.equal(noNav.plugin.getReviewWalkApi(), null);
   await noNav.plugin.openPomodoroTaskLink(noNav.editor, noNav.view);
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
 
   const v2 = createTaskModeHarness({
     taskContent: "- [*] #task Ship it ^ship",
@@ -1110,7 +1110,7 @@ test("review-walk: no nav or nav v2 keeps today's notices", async () => {
   };
   assert.equal(v2.plugin.getReviewWalkApi(), null);
   await v2.plugin.openPomodoroTaskLink(v2.editor, v2.view);
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
 
   const noContinue = createTaskModeHarness({
     taskContent: "- [*] #task Ship it ^ship",
@@ -1125,7 +1125,7 @@ test("review-walk: no nav or nav v2 keeps today's notices", async () => {
   };
   assert.equal(noContinue.plugin.getReviewWalkApi(), null);
   await noContinue.plugin.openPomodoroTaskLink(noContinue.editor, noContinue.view);
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
 });
 
 test("inbox-route: source drift during route prompt refuses without writes", async () => {

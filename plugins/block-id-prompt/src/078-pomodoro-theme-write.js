@@ -1,7 +1,7 @@
-// Guarded task-theme write for Link to today (plan:202610/task_theme_link_picker.md
-// guarded-theme-write). Pure helpers: revalidate the shown suggestion, apply
-// the Ledger Tools write rule and setters, and attach notice metadata. The
-// 120 mixin stays a thin call site.
+// Task-type write for Link to today (plan:202610/task_types.md
+// link-picker-retype). Pure helpers: revalidate the shown suggestion, apply
+// planRetype, merge a keep-type destination name, and attach notice metadata.
+// The 120 mixin stays a thin call site.
 function pomodoroPlanDestinationName(pomodoroPlan) {
   try {
     const destination = pomodoroPlan && pomodoroPlan.destination;
@@ -16,7 +16,37 @@ function pomodoroPlanDestinationName(pomodoroPlan) {
 }
 
 function emptyPomodoroThemeWrite() {
-  return { themeEdit: null, suggestionChanged: false, destinationThemeName: null };
+  return {
+    themeEdit: null,
+    suggestionChanged: false,
+    destinationThemeName: null,
+    mergeName: null,
+    keepsName: null,
+    retypeKind: null,
+  };
+}
+
+function pomodoroTargetDestinationName(target) {
+  try {
+    if (!target || typeof target !== "object") {
+      return null;
+    }
+    if (target.kind === "new") {
+      const name = target.name;
+      return typeof name === "string" && name.trim() ? name : null;
+    }
+    if (target.kind === "existing") {
+      const parts = parsePomodoroEntryParts(target.entryText || "");
+      if (parts && typeof parts.name === "string" && parts.name) {
+        return parts.name;
+      }
+      const title = target.title;
+      return typeof title === "string" && title.trim() ? title : null;
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
 }
 
 function pomodoroThemeSuggestionIdentity(suggestion) {
@@ -187,25 +217,25 @@ function pomodoroThemeWriteLineText(taskContent, line) {
   return line < lines.length ? lines[line] : "";
 }
 
-function resolvePomodoroLinkThemeWrite(plugin, source, pomodoroPlan, taskContent) {
+function resolvePomodoroLinkThemeWrite(plugin, source, target, taskContent) {
   try {
     const intent = normalizePomodoroLinkPickerThemeIntent(
       source && source.pomodoroTarget && source.pomodoroTarget.themeIntent,
     );
-    if (!intent || intent.linkOnce === true || intent.deliberate !== true || !intent.shown) {
+    if (!intent) {
       return emptyPomodoroThemeWrite();
     }
-    const destinationName = pomodoroPlanDestinationName(pomodoroPlan);
+    const destinationName = pomodoroTargetDestinationName(
+      target || (source && source.pomodoroTarget),
+    ) || pomodoroPlanDestinationName(target);
     if (!destinationName) {
       return emptyPomodoroThemeWrite();
     }
     const themesApi = getBlockPomodoroThemesApi(plugin && plugin.app);
-    const ledgerApi = getBlockPomodoroLedgerApi(plugin && plugin.app);
     if (
       !themesApi ||
       typeof themesApi.suggestFor !== "function" ||
-      typeof themesApi.taskThemeOf !== "function" ||
-      typeof themesApi.planThemeChange !== "function" ||
+      typeof themesApi.planRetype !== "function" ||
       typeof themesApi.setTaskTheme !== "function" ||
       typeof themesApi.clearTaskTheme !== "function"
     ) {
@@ -221,46 +251,58 @@ function resolvePomodoroLinkThemeWrite(plugin, source, pomodoroPlan, taskContent
     try {
       current = themesApi.suggestFor({ path, line: oneBasedLine, text });
     } catch (_error) {
-      return { themeEdit: null, suggestionChanged: true, destinationThemeName: null };
+      return { ...emptyPomodoroThemeWrite(), suggestionChanged: true };
     }
-    const shownIdentity = pomodoroThemeSuggestionIdentity(intent.shown);
-    const currentIdentity = pomodoroThemeSuggestionIdentity(current);
-    if (!pomodoroThemeSuggestionsMatch(shownIdentity, currentIdentity)) {
-      return { themeEdit: null, suggestionChanged: true, destinationThemeName: null };
+    if (intent.shown) {
+      const shownIdentity = pomodoroThemeSuggestionIdentity(intent.shown);
+      const currentIdentity = pomodoroThemeSuggestionIdentity(current);
+      if (!pomodoroThemeSuggestionsMatch(shownIdentity, currentIdentity)) {
+        return { ...emptyPomodoroThemeWrite(), suggestionChanged: true };
+      }
     }
-    const lineText = pomodoroThemeWriteLineText(text, source.line);
-    let field = null;
+    const effective = current && current.theme ? current : intent.shown;
+    if (!effective || typeof effective !== "object" || !effective.theme) {
+      return emptyPomodoroThemeWrite();
+    }
+    const inherited = pomodoroThemeWriteInherited(effective);
+    let outcome = null;
     try {
-      field = themesApi.taskThemeOf(lineText);
-    } catch (_error) {
-      return emptyPomodoroThemeWrite();
-    }
-    if (!field || typeof field !== "object") {
-      return emptyPomodoroThemeWrite();
-    }
-    const inherited = pomodoroThemeWriteInherited(intent.shown);
-    const exemptKeys = pomodoroThemeWriteExemptKeys(ledgerApi);
-    if (!exemptKeys.available) {
-      return emptyPomodoroThemeWrite();
-    }
-    let change = null;
-    try {
-      change = themesApi.planThemeChange({
-        field,
-        suggestion: intent.shown,
+      outcome = themesApi.planRetype({
+        effective,
         inherited,
-        destinationName,
-        exemptKeys: exemptKeys.keys,
-        deliberate: true,
+        destination: destinationName,
+        keepType: intent.linkOnce === true,
+        tabPick: intent.tabPick,
       });
     } catch (_error) {
       return emptyPomodoroThemeWrite();
     }
-    if (!change || (change.action !== "set" && change.action !== "clear")) {
+    if (!outcome || typeof outcome !== "object") {
       return emptyPomodoroThemeWrite();
     }
-    if (change.action === "set") {
-      const name = pomodoroThemeCatalogSpelling(themesApi, change.key, change.name);
+    const keepsName = pomodoroTypeThemeName(effective);
+    if (outcome.kind === "merge" && typeof outcome.name === "string" && outcome.name) {
+      return {
+        themeEdit: null,
+        suggestionChanged: false,
+        destinationThemeName: outcome.name,
+        mergeName: outcome.name,
+        keepsName,
+        retypeKind: "merge",
+      };
+    }
+    if (outcome.kind === "container" || outcome.kind === "consistent") {
+      return {
+        themeEdit: null,
+        suggestionChanged: false,
+        destinationThemeName: destinationName,
+        mergeName: null,
+        keepsName,
+        retypeKind: outcome.kind,
+      };
+    }
+    if (outcome.kind === "set") {
+      const name = pomodoroThemeCatalogSpelling(themesApi, outcome.key, outcome.name);
       if (!name) {
         return emptyPomodoroThemeWrite();
       }
@@ -272,28 +314,106 @@ function resolvePomodoroLinkThemeWrite(plugin, source, pomodoroPlan, taskContent
         },
         suggestionChanged: false,
         destinationThemeName: name,
+        mergeName: null,
+        keepsName: null,
+        retypeKind: "set",
       };
     }
-    const inheritedTheme = inherited && inherited.theme && typeof inherited.theme === "object"
-      ? inherited.theme
-      : intent.shown.theme;
-    const destinationThemeName = pomodoroThemeCatalogSpelling(
-      themesApi,
-      inheritedTheme && inheritedTheme.key,
-      inheritedTheme && inheritedTheme.name,
-    );
-    return {
-      themeEdit: {
-        action: "clear",
-        name: null,
-        apply: (line) => themesApi.clearTaskTheme(line),
-      },
-      suggestionChanged: false,
-      destinationThemeName,
-    };
+    if (outcome.kind === "clear") {
+      const inheritedTheme = inherited && inherited.theme && typeof inherited.theme === "object"
+        ? inherited.theme
+        : effective.theme;
+      const destinationThemeName = pomodoroThemeCatalogSpelling(
+        themesApi,
+        inheritedTheme && inheritedTheme.key,
+        inheritedTheme && inheritedTheme.name,
+      );
+      return {
+        themeEdit: {
+          action: "clear",
+          name: null,
+          apply: (line) => themesApi.clearTaskTheme(line),
+        },
+        suggestionChanged: false,
+        destinationThemeName,
+        mergeName: null,
+        keepsName: null,
+        retypeKind: "clear",
+      };
+    }
+    return emptyPomodoroThemeWrite();
   } catch (_error) {
     return emptyPomodoroThemeWrite();
   }
+}
+
+function pomodoroTargetWithKeepTypeMerge(target, themeWrite) {
+  const mergeName = themeWrite && themeWrite.mergeName;
+  if (!target || !mergeName || target.kind !== "new") {
+    return target || null;
+  }
+  return { ...target, name: mergeName, preserveSpelling: true };
+}
+
+function rewritePomodoroEntryNameLine(lineText, newName) {
+  const raw = String(lineText || "");
+  const hasCR = raw.endsWith("\r");
+  const line = hasCR ? raw.slice(0, -1) : raw;
+  const dash = " — ";
+  const index = line.indexOf(dash);
+  const next = index >= 0
+    ? `${line.slice(0, index + dash.length)}${newName}`
+    : `${line.replace(/[ \t]+$/, "")}${dash}${newName}`;
+  return hasCR ? `${next}\r` : next;
+}
+
+function applyPomodoroKeepTypeMerge(plan, snapshot, themeWrite) {
+  try {
+    const mergeName = themeWrite && themeWrite.mergeName;
+    if (!plan || plan.error || !mergeName) {
+      return plan;
+    }
+    if (!plan.destination || plan.destination.kind !== "existing") {
+      if (plan.destination) {
+        plan.destination.name = mergeName;
+        plan.destination.title = mergeName;
+      }
+      return plan;
+    }
+    const content = String(snapshot || "");
+    const lines = content.split("\n");
+    const entryLine = plan.destination.entryLine;
+    if (!Number.isInteger(entryLine) || entryLine < 0 || entryLine >= lines.length) {
+      return plan;
+    }
+    const original = lines[entryLine];
+    const next = rewritePomodoroEntryNameLine(original, mergeName);
+    if (next === original) {
+      plan.destination.name = mergeName;
+      plan.destination.title = mergeName;
+      return plan;
+    }
+    const start = lineStartIndexFromLines(lines, entryLine);
+    const edit = { start, end: start + original.length, replacement: next };
+    const edits = [...(plan.edits || []), edit];
+    if (!validateNonOverlappingEdits(edits)) {
+      return plan;
+    }
+    plan.edits = edits;
+    plan.content = applyTextEdits(content, edits);
+    plan.hasChanges = true;
+    plan.destination = { ...plan.destination, name: mergeName, title: mergeName };
+    return plan;
+  } catch (_error) {
+    return plan;
+  }
+}
+
+function planPomodoroLinkWithTypeMerge(dailyContent, insertOptions, themeWrite) {
+  const options = insertOptions && typeof insertOptions === "object" ? insertOptions : {};
+  const target = pomodoroTargetWithKeepTypeMerge(options.target, themeWrite);
+  const plan = planPomodoroLinkInsertion(dailyContent, { ...options, target });
+  return applyPomodoroKeepTypeMerge(plan, dailyContent, themeWrite);
 }
 
 function attachPomodoroLinkThemeOutcome(plan, themeWrite) {
@@ -308,6 +428,13 @@ function attachPomodoroLinkThemeOutcome(plan, themeWrite) {
     && write.destinationThemeName
     ? write.destinationThemeName
     : null;
+  plan.themeKeepsName = typeof write.keepsName === "string" && write.keepsName
+    ? write.keepsName
+    : null;
+  plan.themeMergeName = typeof write.mergeName === "string" && write.mergeName
+    ? write.mergeName
+    : null;
+  plan.themeRetypeKind = typeof write.retypeKind === "string" ? write.retypeKind : null;
   return plan;
 }
 
@@ -317,13 +444,16 @@ function formatPomodoroThemeLinkChip(plan) {
       return "";
     }
     if (plan.themeChanged === true && plan.themeAction === "clear") {
-      return " · task theme cleared";
+      return " · type cleared";
     }
     if (plan.themeChanged === true && plan.themeAction === "set" && plan.themeName) {
-      return ` · task theme ${plan.themeName}`;
+      return ` · type ${plan.themeName}`;
+    }
+    if (plan.themeKeepsName) {
+      return ` · keeps ${plan.themeKeepsName}`;
     }
     if (plan.themeSuggestionChanged === true) {
-      return " · task theme unchanged (suggestion changed)";
+      return " · type unchanged (suggestion changed)";
     }
     return "";
   } catch (_error) {
@@ -337,12 +467,12 @@ function pomodoroThemePartialFailureClause(plan) {
       return null;
     }
     if (plan.themeAction === "clear") {
-      return "task theme cleared";
+      return "type cleared";
     }
     if (typeof plan.themeName === "string" && plan.themeName) {
-      return `task theme ${plan.themeName} saved`;
+      return `type ${plan.themeName} set`;
     }
-    return "task theme saved";
+    return "type saved";
   } catch (_error) {
     return null;
   }

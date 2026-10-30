@@ -1,6 +1,6 @@
-// Stable selection, suggestion reasons, and link-once intent for the Link to
-// today picker (plan:202610/task_theme_link_picker.md picker-intent). Pure
-// helpers over the task-aware theme snapshot; the modal in 085 owns the DOM.
+// Stable selection, suggestion reasons, and keep-type intent for the Link to
+// today picker (plan:202610/task_types.md link-picker-retype). Pure helpers
+// over the task-aware type snapshot; the modal in 085 owns the DOM.
 function pomodoroPickerRowKey(row) {
   return row && typeof row.key === "string" ? row.key : null;
 }
@@ -139,42 +139,140 @@ function pomodoroThemeSuggestedLabelSuffix(suggestion) {
   return `, suggested, ${reason.text}`;
 }
 
-// Middle segment of the field-change footer: whose default the pending edit
-// is measured against. A task-field suggestion defers to its inherited
-// default; a missing inherited default reports `no default here`.
-function describePomodoroThemeSuggestionSource(target) {
+function pomodoroTypeThemeName(target) {
+  const theme = target && target.theme && typeof target.theme === "object"
+    ? target.theme
+    : null;
+  return theme && typeof theme.name === "string" && theme.name ? theme.name : null;
+}
+
+function pomodoroTypeInheritedSuggestion(shown) {
+  if (!shown || typeof shown !== "object") {
+    return null;
+  }
+  return shown.source === "task"
+    ? (shown.inherited && typeof shown.inherited === "object" ? shown.inherited : null)
+    : shown;
+}
+
+function pomodoroTypeComponentCandidates(themesApi, destinationName) {
   try {
-    if (!target || typeof target !== "object") {
-      return "no default here";
+    if (themesApi && typeof themesApi.typeComponentsOf === "function") {
+      const rows = themesApi.typeComponentsOf(destinationName);
+      if (Array.isArray(rows)) {
+        return rows.filter((row) =>
+          row && row.isType === true
+          && typeof row.name === "string" && row.name
+          && typeof row.key === "string" && row.key
+        );
+      }
     }
-    const theme = target.theme && typeof target.theme === "object" ? target.theme : null;
-    const name = theme && typeof theme.name === "string" && theme.name ? theme.name : null;
-    if (!name) {
-      return "no default here";
-    }
-    if (target.source === "note") {
-      const from = target.from && typeof target.from === "object" ? target.from : null;
-      const stem = from && typeof from.stem === "string" && from.stem ? from.stem : null;
-      return stem ? `${stem} suggests ${name}` : `note suggests ${name}`;
-    }
-    if (target.source === "reading") {
-      return `reading tasks suggest ${name}`;
-    }
-    if (target.source === "task") {
-      return `this task suggests ${name}`;
-    }
-    return `suggests ${name}`;
   } catch (_error) {
-    return "no default here";
+    // Fall through to a name split so the footer still works.
+  }
+  return String(destinationName || "")
+    .split("+")
+    .map((raw) => raw.trim())
+    .filter(Boolean)
+    .map((name) => ({
+      name,
+      key: asciiLowercasePomodoroText(name.replace(/\s+/g, " ")),
+      isType: true,
+    }));
+}
+
+function defaultPomodoroTypeTabPick(candidates, exemptKeys) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  if (list.length === 0) {
+    return null;
+  }
+  const exempt = new Set(
+    (Array.isArray(exemptKeys) ? exemptKeys : [])
+      .map((key) => asciiLowercasePomodoroText(String(key || "").trim()))
+      .filter(Boolean),
+  );
+  const chosen = list.find((row) => !exempt.has(row.key)) || list[0];
+  return chosen ? chosen.key : null;
+}
+
+function pomodoroTypeCandidateByKey(candidates, key) {
+  const want = asciiLowercasePomodoroText(String(key || "").trim());
+  if (!want) {
+    return null;
+  }
+  return (Array.isArray(candidates) ? candidates : []).find((row) => row.key === want) || null;
+}
+
+// Cycle the Tab pick among a composite destination's type components.
+// Returns null when there are fewer than two candidates.
+function nextPomodoroTypeTabPick(input = {}) {
+  try {
+    const opts = input && typeof input === "object" ? input : {};
+    const candidates = pomodoroTypeComponentCandidates(opts.themesApi, opts.rowName);
+    if (candidates.length < 2) {
+      return null;
+    }
+    const current = opts.current || defaultPomodoroTypeTabPick(candidates, opts.exemptKeys);
+    const index = candidates.findIndex((row) => row.key === current);
+    const start = index >= 0 ? index : 0;
+    const delta = opts.backwards === true ? -1 : 1;
+    const next = candidates[(start + delta + candidates.length) % candidates.length];
+    return next ? next.key : null;
+  } catch (_error) {
+    return null;
   }
 }
 
-// Preview of the pending theme-field edit for the footer, e.g.
-// `this task becomes FIX · sase_blog suggests WRITE · ⌥↵ link once` or
-// `task theme cleared · sase_blog suggests WRITE · ⌥↵ link once`.
-// Returns null when no effective edit is pending, so the caller hides the
-// second footer line. taskThemeOf/planThemeChange come from the Ledger Tools
-// themes API; every failure degrades to no preview.
+function describePomodoroTypeFooterSource(target, short) {
+  try {
+    if (!target || typeof target !== "object") {
+      return "";
+    }
+    const name = pomodoroTypeThemeName(target);
+    if (target.source === "note") {
+      const from = target.from && typeof target.from === "object" ? target.from : null;
+      const stem = from && typeof from.stem === "string" && from.stem ? from.stem : null;
+      if (short === true) {
+        return stem ? `from ${stem}` : "";
+      }
+      return stem && name ? `${stem} suggests ${name}` : "";
+    }
+    if (target.source === "reading") {
+      return short === true ? "from reading task" : (name ? `reading tasks suggest ${name}` : "");
+    }
+    if (target.source === "default") {
+      return short === true ? "default type" : (name ? `default type ${name}` : "default type");
+    }
+    if (target.source === "task") {
+      return name ? `this task suggests ${name}` : "";
+    }
+    return name ? `suggests ${name}` : "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function callPomodoroPlanRetype(planRetype, shown, inherited, destination, keepType, tabPick) {
+  if (typeof planRetype !== "function") {
+    return null;
+  }
+  try {
+    return planRetype({
+      effective: shown,
+      inherited,
+      destination,
+      keepType: keepType === true,
+      tabPick: tabPick || undefined,
+    });
+  } catch (_error) {
+    return null;
+  }
+}
+
+// D10 consequence line for the highlighted Link to today row. Always stated
+// before Enter; silence is a bug. `⇥ …` appears only for a composite with
+// two or more type components. planRetype comes from Ledger Tools; every
+// failure degrades to no preview.
 function describePomodoroThemeFooterPreview(input = {}) {
   try {
     const opts = input && typeof input === "object" ? input : {};
@@ -183,52 +281,80 @@ function describePomodoroThemeFooterPreview(input = {}) {
     if (!rowName || !shown) {
       return null;
     }
-    if (typeof opts.taskThemeOf !== "function" || typeof opts.planThemeChange !== "function") {
+    const inherited = pomodoroTypeInheritedSuggestion(shown);
+    const effectiveName = pomodoroTypeThemeName(shown);
+    if (!effectiveName) {
       return null;
     }
-    const lineText = typeof opts.lineText === "string" ? opts.lineText : "";
-    let field = null;
-    try {
-      field = opts.taskThemeOf(lineText);
-    } catch (_error) {
-      return null;
-    }
-    if (!field || typeof field !== "object") {
-      return null;
-    }
-    const inherited = shown.source === "task"
-      ? (shown.inherited && typeof shown.inherited === "object" ? shown.inherited : null)
-      : shown;
-    const exemptKeys = Array.isArray(opts.exemptKeys) ? opts.exemptKeys : [];
-    let plan = null;
-    try {
-      plan = opts.planThemeChange({
-        field,
-        suggestion: shown,
-        inherited,
-        destinationName: rowName,
-        exemptKeys,
-        deliberate: opts.deliberate === true,
-      });
-    } catch (_error) {
-      return null;
-    }
-    if (!plan || (plan.action !== "set" && plan.action !== "clear")) {
-      return null;
-    }
-    let first = null;
-    if (plan.action === "set") {
-      first = typeof plan.name === "string" && plan.name ? `this task becomes ${plan.name}` : null;
-    } else {
-      first = "task theme cleared";
-    }
-    if (!first) {
-      return null;
-    }
-    const middle = describePomodoroThemeSuggestionSource(
-      shown.source === "task" ? inherited : shown,
+    const planRetype = typeof opts.planRetype === "function"
+      ? opts.planRetype
+      : opts.planThemeChange;
+    const enterPlan = callPomodoroPlanRetype(
+      planRetype,
+      shown,
+      inherited,
+      rowName,
+      false,
+      opts.tabPick,
     );
-    return `${first} · ${middle} · ⌥↵ link once`;
+    if (!enterPlan || typeof enterPlan !== "object" || !enterPlan.kind) {
+      return null;
+    }
+    let arrow = rowName;
+    let consequence = `keeps ${effectiveName}`;
+    let source = "";
+    if (enterPlan.kind === "set" && typeof enterPlan.name === "string" && enterPlan.name) {
+      arrow = enterPlan.name;
+      consequence = `task becomes ${enterPlan.name}`;
+      source = describePomodoroTypeFooterSource(inherited || shown, false);
+    } else if (enterPlan.kind === "clear") {
+      const candidates = pomodoroTypeComponentCandidates(opts.themesApi, rowName);
+      const chosen = pomodoroTypeCandidateByKey(candidates, opts.tabPick)
+        || pomodoroTypeCandidateByKey(
+          candidates,
+          defaultPomodoroTypeTabPick(candidates, opts.exemptKeys),
+        );
+      arrow = (chosen && chosen.name)
+        || pomodoroTypeThemeName(inherited)
+        || rowName;
+      consequence = "type cleared";
+      source = describePomodoroTypeFooterSource(inherited || shown, true);
+    } else if (enterPlan.kind === "container" || enterPlan.kind === "consistent") {
+      arrow = rowName;
+      consequence = `keeps ${effectiveName}`;
+    } else if (enterPlan.kind === "merge" && typeof enterPlan.name === "string" && enterPlan.name) {
+      arrow = enterPlan.name;
+      consequence = `keeps ${effectiveName}`;
+    } else {
+      return null;
+    }
+    const keepPlan = callPomodoroPlanRetype(
+      planRetype,
+      shown,
+      inherited,
+      rowName,
+      true,
+      opts.tabPick,
+    );
+    const keep = keepPlan && keepPlan.kind === "merge" && typeof keepPlan.name === "string" && keepPlan.name
+      ? `⌥↵ keep ${effectiveName} (${keepPlan.name})`
+      : "";
+    const candidates = pomodoroTypeComponentCandidates(opts.themesApi, rowName);
+    let tab = "";
+    if (candidates.length >= 2) {
+      const current = opts.tabPick || defaultPomodoroTypeTabPick(candidates, opts.exemptKeys);
+      const nextKey = nextPomodoroTypeTabPick({
+        themesApi: opts.themesApi,
+        rowName,
+        current,
+        exemptKeys: opts.exemptKeys,
+      });
+      const next = pomodoroTypeCandidateByKey(candidates, nextKey);
+      if (next && next.name) {
+        tab = `⇥ ${next.name}`;
+      }
+    }
+    return [`→ ${arrow}`, consequence, source, keep, tab].filter(Boolean).join(" · ");
   } catch (_error) {
     return null;
   }
@@ -236,7 +362,7 @@ function describePomodoroThemeFooterPreview(input = {}) {
 
 // Strict validation for the additive themeIntent on a committed choice.
 // Anything malformed is dropped so a bad intent can never enable a write;
-// absent intent keeps the legacy return shape.
+// absent intent keeps the legacy return shape. `tabPick` is optional.
 function normalizePomodoroLinkPickerThemeIntent(intent) {
   try {
     if (!intent || typeof intent !== "object" || Array.isArray(intent)) {
@@ -248,8 +374,12 @@ function normalizePomodoroLinkPickerThemeIntent(intent) {
     if (typeof intent.linkOnce !== "boolean") {
       return null;
     }
+    const tabPick = typeof intent.tabPick === "string" && intent.tabPick
+      ? intent.tabPick
+      : null;
+    const withTab = (base) => (tabPick ? { ...base, tabPick } : base);
     if (intent.shown === undefined || intent.shown === null) {
-      return { deliberate: intent.deliberate, linkOnce: intent.linkOnce, shown: null };
+      return withTab({ deliberate: intent.deliberate, linkOnce: intent.linkOnce, shown: null });
     }
     if (typeof intent.shown !== "object") {
       return null;
@@ -261,7 +391,11 @@ function normalizePomodoroLinkPickerThemeIntent(intent) {
     if (typeof theme.key !== "string" || !theme.key) {
       return null;
     }
-    return { deliberate: intent.deliberate, linkOnce: intent.linkOnce, shown: intent.shown };
+    return withTab({
+      deliberate: intent.deliberate,
+      linkOnce: intent.linkOnce,
+      shown: intent.shown,
+    });
   } catch (_error) {
     return null;
   }

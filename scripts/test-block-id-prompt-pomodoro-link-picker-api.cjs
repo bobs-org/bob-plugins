@@ -212,13 +212,13 @@ test("task-aware choices retain a valid themeIntent; absent intent keeps the leg
       kind: "new",
       name: "WRITE",
       preserveSpelling: true,
-      themeIntent: { deliberate: true, linkOnce: false, shown: null },
+      themeIntent: { deliberate: true, linkOnce: false, shown: null, tabPick: "write" },
     }),
     {
       kind: "new",
       name: "WRITE",
       preserveSpelling: true,
-      themeIntent: { deliberate: true, linkOnce: false, shown: null },
+      themeIntent: { deliberate: true, linkOnce: false, shown: null, tabPick: "write" },
     },
   );
 });

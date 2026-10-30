@@ -27,17 +27,19 @@ Navigation Hotkeys uses this picker for successor offers. An optional
 `task: { path, line, text, displayText, status }` request member enables
 task-aware preselection: `line` is one-based and `text` is the full live
 Markdown note. Calls without it keep the generic successor picker. `pick()`
-itself does not write a task theme. Task-aware picks carry an additive
-`themeIntent: { deliberate, linkOnce, shown }` on the committed choice:
+itself does not write a task type. Task-aware picks carry an additive
+`themeIntent: { deliberate, linkOnce, shown, tabPick? }` on the committed choice:
 `deliberate` is true when the committed row differs from the suggested default
 or a query is typed (Shift+Enter named commits are always deliberate, Alt+Enter
-link-once commits never are), `linkOnce` is true only for Alt+Enter, and `shown`
-is the suggestion actually presented (or null). Ctrl+Shift+Enter consumes that
-intent in the existing task-line edit after revalidating `shown` against a
-fresh `suggestFor`; a deliberate exception is remembered, Alt+Enter is
-link-once, and a stale or missing suggestion skips the field. Picks without
-task context keep the legacy shape, and a malformed optional intent is dropped
-so it can never enable a write. The namespace version stays 1.
+keep-type commits never are), `linkOnce` is true only for Alt+Enter, `shown`
+is the suggestion actually presented (or null), and `tabPick` is the cycled
+composite type key after Tab. Ctrl+Shift+Enter consumes that intent in the
+existing task-line edit after revalidating a present `shown` against a fresh
+`suggestFor`; a missing `shown` retypes from the live suggestion. Enter applies
+`planRetype`. Alt+Enter is the keep-type merge and does not write a field. A
+stale shown suggestion skips the field. Picks without task context keep the
+legacy shape, and a malformed optional intent is dropped so it can never
+enable a write. The namespace version stays 1.
 
 ## Bob Ledger Tools
 

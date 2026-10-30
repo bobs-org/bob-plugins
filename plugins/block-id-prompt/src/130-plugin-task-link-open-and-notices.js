@@ -390,17 +390,14 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       && plan.themeDestinationName
       ? plan.themeDestinationName
       : null;
-    const remembered = plan && plan.themeChanged === true
-      && (plan.themeAction === "set" || plan.themeAction === "clear");
+    const destName = destTheme
+      || (destination && (destination.name || destination.title))
+      || null;
     let prefix = "Linked";
-    if (remembered && destTheme) {
-      prefix = `Linked under ${destTheme}`;
-    } else if (destination) {
-      if (destination.kind === "created") {
-        prefix = `Linked to new ${destination.name || destination.title}`;
-      } else if (destination.title) {
-        prefix = `Linked to ${destination.title}`;
-      }
+    if (destName) {
+      prefix = `Linked under ${destName}`;
+    } else if (destination && destination.kind === "created") {
+      prefix = `Linked to new ${destination.name || destination.title}`;
     }
     const base = plan.statusChanged
       ? `${prefix} · Next`
@@ -421,7 +418,7 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
         )
       : [];
     const themeWarningSuffix = themeWarnings
-      .map((name) => ` · ${name} isn't one of your themes`)
+      .map((name) => ` · ${name} isn't one of your types`)
       .join("");
 
     return `${base}${suffix}${themeChip}${this.futureLinkCleanupNoticeSuffix(pomodoroPlan.removedCount)}${this.planBudgetNoticeSuffix(pomodoroPlan && pomodoroPlan.content)}${themeWarningSuffix}`;

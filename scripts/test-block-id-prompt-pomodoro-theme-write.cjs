@@ -77,20 +77,20 @@ function noteSuggestion(overrides = {}) {
 }
 
 function stubClearTaskTheme(line) {
-  return String(line).replace(/[ \t]*[\[(]theme::[^\]\n\)]*[\]\)]/g, "");
+  return String(line).replace(/[ \t]*[\[(](?:theme|type)::[^\]\n\)]*[\]\)]/g, "");
 }
 
 function stubSetTaskTheme(line, name) {
   const cleared = stubClearTaskTheme(line).replace(/[ \t]+$/g, "");
   const idMatch = cleared.match(/^(.*?)([ \t]+\^[A-Za-z0-9_-]+)$/);
   if (idMatch) {
-    return `${idMatch[1]} [theme:: ${name}]${idMatch[2]}`;
+    return `${idMatch[1]} [type:: ${name}]${idMatch[2]}`;
   }
-  return `${cleared} [theme:: ${name}]`;
+  return `${cleared} [type:: ${name}]`;
 }
 
 function stubTaskThemeOf(line) {
-  const matches = [...String(line).matchAll(/[\[(]theme::\s*([^\]\n\)]*)[\]\)]/g)];
+  const matches = [...String(line).matchAll(/[\[(](?:theme|type)::\s*([^\]\n\)]*)[\]\)]/g)];
   if (matches.length === 0) {
     return { state: "none" };
   }
@@ -104,42 +104,91 @@ function stubTaskThemeOf(line) {
   return { state: "set", value: value.toUpperCase(), key: value.toLowerCase(), fields: matches };
 }
 
-function stubPlanThemeChange(options = {}) {
-  if (options.deliberate !== true) {
-    return { action: "none" };
+function suggestionKeyOf(value) {
+  if (value == null || value === "") {
+    return null;
   }
-  const suggestion = options.suggestion;
-  const shownKey = suggestion && suggestion.theme && suggestion.theme.key
-    ? String(suggestion.theme.key).toLowerCase()
-    : "";
-  if (!shownKey) {
-    return { action: "none" };
+  if (typeof value === "string") {
+    return value.trim().toLowerCase() || null;
   }
-  const exempt = new Set(
-    (Array.isArray(options.exemptKeys) ? options.exemptKeys : [])
-      .map((key) => String(key).trim().toLowerCase()),
-  );
-  const parts = String(options.destinationName || "")
-    .split("+")
-    .map((part) => part.trim())
-    .filter((part) => part && !exempt.has(part.toLowerCase()));
-  if (parts.length !== 1) {
-    return { action: "none" };
+  const theme = value.theme && typeof value.theme === "object" ? value.theme : value;
+  const key = theme && typeof theme.key === "string" ? theme.key.trim().toLowerCase() : "";
+  return key || null;
+}
+
+function suggestionNameOf(value) {
+  if (typeof value === "string") {
+    return value.trim().toUpperCase();
   }
-  const destKey = parts[0].toLowerCase();
-  const destName = parts[0].toUpperCase();
-  const inherited = options.inherited;
-  const inheritedKey = inherited && inherited.theme && inherited.theme.key
-    ? String(inherited.theme.key).toLowerCase()
-    : "";
-  const field = options.field && typeof options.field === "object" ? options.field : {};
-  if (inheritedKey && inheritedKey === destKey) {
-    return field.state === "none" ? { action: "none" } : { action: "clear" };
+  const theme = value && value.theme && typeof value.theme === "object" ? value.theme : value;
+  if (theme && typeof theme.name === "string" && theme.name) {
+    return theme.name;
   }
-  if (field.state === "set" && field.key === destKey) {
-    return { action: "none" };
+  const key = suggestionKeyOf(value);
+  return key ? key.toUpperCase() : "";
+}
+
+function stubPlanRetype(options = {}) {
+  const destination = String(options.destination || options.destinationName || "");
+  const parts = destination.split("+").map((part) => part.trim()).filter(Boolean);
+  const typeParts = parts.filter((part) => part.toLowerCase() !== "later");
+  if (typeParts.length === 0) {
+    return { kind: "container" };
   }
-  return { action: "set", name: destName, key: destKey };
+  const effectiveKey = suggestionKeyOf(options.effective || options.suggestion);
+  const destKeys = parts.map((part) => part.toLowerCase());
+  if (effectiveKey && destKeys.includes(effectiveKey)) {
+    return { kind: "consistent" };
+  }
+  if (options.keepType === true) {
+    return { kind: "merge", name: `${destination.trim()} + ${suggestionNameOf(options.effective || options.suggestion)}` };
+  }
+  let chosen = null;
+  if (options.tabPick) {
+    const want = String(options.tabPick).trim().toLowerCase();
+    chosen = typeParts.find((part) => part.toLowerCase() === want) || null;
+  }
+  if (!chosen) {
+    const exempt = new Set(
+      (Array.isArray(options.exemptKeys) ? options.exemptKeys : ["PLAN"])
+        .map((key) => String(key).trim().toLowerCase()),
+    );
+    chosen = typeParts.find((part) => !exempt.has(part.toLowerCase())) || typeParts[0];
+  }
+  const inheritedKey = suggestionKeyOf(options.inherited);
+  if (inheritedKey && inheritedKey === chosen.toLowerCase()) {
+    return { kind: "clear" };
+  }
+  return { kind: "set", name: chosen.toUpperCase(), key: chosen.toLowerCase() };
+}
+
+function realPlanRetype(options = {}, catalog = [], exempt = ["PLAN"]) {
+  return LedgerThemeHelpers.planRetype({
+    effectiveKey: suggestionKeyOf(options.effective || options.suggestion),
+    effectiveName: suggestionNameOf(options.effective || options.suggestion),
+    inheritedKey: suggestionKeyOf(options.inherited),
+    destination: options.destination || options.destinationName,
+    keepType: options.keepType === true,
+    tabPick: options.tabPick,
+  }, {
+    vocab: catalog.map((theme) => theme.key),
+    exempt,
+    inventory: ["LATER"],
+  });
+}
+
+function suggestForLine(text, lineIndex, fallback) {
+  const lines = String(text || "").split("\n");
+  const line = Number.isInteger(lineIndex) && lineIndex >= 0 ? lines[lineIndex] || "" : "";
+  const field = stubTaskThemeOf(line);
+  if (field.state === "set") {
+    return {
+      theme: { key: field.key, name: field.value, known: true, hue: "orange", hue_source: "hash" },
+      source: "task",
+      inherited: fallback,
+    };
+  }
+  return fallback;
 }
 
 function installThemeWriteApis(plugin, options = {}) {
@@ -170,7 +219,10 @@ function installThemeWriteApis(plugin, options = {}) {
         planBudget: options.planBudget || (() => null),
         themes: {
           version: 1,
-          suggestFor: options.suggestFor || (() => suggestion),
+          suggestFor: options.suggestFor || ((request) => {
+            const oneBased = request && Number.isInteger(request.line) ? request.line : 1;
+            return suggestForLine(request && request.text, oneBased - 1, suggestion);
+          }),
           taskThemeOf: options.taskThemeOf || (options.useRealHelpers
             ? LedgerThemeHelpers.pomodoroThemeTaskFieldState
             : stubTaskThemeOf),
@@ -186,9 +238,18 @@ function installThemeWriteApis(plugin, options = {}) {
               ? LedgerThemeHelpers.pomodoroThemeClearTaskTheme(text)
               : stubClearTaskTheme(text);
           },
-          planThemeChange: options.planThemeChange || (options.useRealHelpers
-            ? LedgerThemeHelpers.pomodoroThemePlanChange
-            : stubPlanThemeChange),
+          planRetype: options.planRetype || ((opts) => (options.useRealHelpers
+            ? realPlanRetype(opts, catalog, options.exempt || ["PLAN"])
+            : stubPlanRetype(opts))),
+          typeComponentsOf: (name) => String(name || "")
+            .split("+")
+            .map((raw) => raw.trim())
+            .filter(Boolean)
+            .map((component) => ({
+              name: component,
+              key: component.toLowerCase(),
+              isType: component.toLowerCase() !== "later",
+            })),
           snapshot: () => ({ themes: catalog }),
           isKnownTheme: (key) => catalog.some((theme) => theme.key === String(key).toLowerCase()),
         },
@@ -210,6 +271,14 @@ function existingTarget(name, intent) {
     entryText: `- [ ] () — ${name}`,
     title: name,
     themeIntent: intent,
+  };
+}
+
+function taskFieldSuggestion(name, inherited = noteSuggestion()) {
+  return {
+    theme: { key: name.toLowerCase(), name, known: true, hue: "orange", hue_source: "hash" },
+    source: "task",
+    inherited,
   };
 }
 
@@ -336,7 +405,7 @@ test("planTargetTaskUpdate applies themeEdit after lane changes and before a new
   assert.equal(plan.themeChanged, true);
   assert.equal(plan.themeAction, "set");
   assert.equal(plan.themeName, "FIX");
-  assert.equal(plan.content, "- [*] #task Ship it [theme:: FIX] ^ship");
+  assert.equal(plan.content, "- [*] #task Ship it [type:: FIX] ^ship");
   assert.equal(plan.hasChanges, true);
 });
 
@@ -362,7 +431,7 @@ test("planTargetTaskUpdate theme-only Next task never stamps freshness", () => {
   assert.equal(plan.statusChanged, false);
   assert.equal(plan.themeChanged, true);
   assert.equal(plan.hasChanges, true);
-  assert.equal(plan.content, "- [*] #task Ship it [theme:: FIX] ^ship");
+  assert.equal(plan.content, "- [*] #task Ship it [type:: FIX] ^ship");
 });
 
 test("planTargetTaskUpdate stamps a lane rewrite after the theme field is in place", () => {
@@ -385,8 +454,8 @@ test("planTargetTaskUpdate stamps a lane rewrite after the theme field is in pla
   assert.equal(plan.statusChanged, true);
   assert.equal(plan.themeChanged, true);
   assert.equal(plan.freshnessChanged, true);
-  assert.deepEqual(seen, ["- [*] #task Ship it [theme:: FIX] ^ship"]);
-  assert.equal(plan.content, "- [*] #task Ship it [theme:: FIX] ^ship [fresh:: 2026-08-15]");
+  assert.deepEqual(seen, ["- [*] #task Ship it [type:: FIX] ^ship"]);
+  assert.equal(plan.content, "- [*] #task Ship it [type:: FIX] ^ship [fresh:: 2026-08-15]");
 });
 
 test("planTargetTaskUpdate without themeEdit preserves an authored theme field", () => {
@@ -415,22 +484,22 @@ test("planTargetTaskUpdate clears a theme field and keeps CRLF plus a trailing b
   assert.equal(plan.content, "- [*] #task Ship it ^ship\r");
 });
 
-test("a deliberate named destination sets the task theme in the same cross-note write", async () => {
+test("a named destination retypes the task in the same cross-note write", async () => {
   const { result, editor, writes, setterCalls } = await linkWithIntent({
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: namedDaily("FIX"),
     intent: deliberateIntent(),
   });
   assert.equal(result, true);
-  assert.equal(editor.getValue(), "- [*] #task Ship it [theme:: FIX] ^ship");
+  assert.equal(editor.getValue(), "- [*] #task Ship it [type:: FIX] ^ship");
   assert.equal(writes.length, 1);
   assert.equal(writes[0].path, "Daily.md");
   assert.ok(writes[0].content.includes("[[Tasks#^ship]]"));
   assert.equal(setterCalls.length, 1);
-  assert.equal(lastNotice(), "Linked under FIX · stays Next · task theme FIX");
+  assert.equal(lastNotice(), "Linked under FIX · stays Next · type FIX");
 });
 
-test("unavailable current caps skip only the task-theme edit and retain lane, ID, and freshness edits", async () => {
+test("unavailable current caps still retype the task and retain lane, ID, and freshness edits", async () => {
   const invalidCaps = [
     { noCaps: true },
     { caps: () => { throw new Error("caps failed"); } },
@@ -442,7 +511,7 @@ test("unavailable current caps skip only the task-theme edit and retain lane, ID
     const { result, editor, setterCalls } = await linkWithIntent({
       taskContent: "- [ ] #task Ship it [theme:: authored]",
       dailyContent: namedDaily("FIX"),
-      intent: deliberateIntent(),
+      intent: deliberateIntent(taskFieldSuggestion("AUTHORED")),
       isNewId: true,
       apis: {
         useRealHelpers: true,
@@ -455,11 +524,10 @@ test("unavailable current caps skip only the task-theme edit and retain lane, ID
     assert.equal(result, true);
     assert.equal(
       editor.getValue(),
-      "- [*] #task Ship it [theme:: authored] ^ship [fresh:: 2026-08-15]",
-      "the current task field stays byte-for-byte while lane and ID edits still land",
+      "- [*] #task Ship it [type:: FIX] ^ship [fresh:: 2026-08-15]",
     );
-    assert.equal(setterCalls.length, 0);
-    assert.doesNotMatch(lastNotice(), /task theme (?:FIX|saved|cleared)/);
+    assert.equal(setterCalls.length, 1);
+    assert.match(lastNotice(), /type FIX$/);
   }
 });
 
@@ -487,7 +555,7 @@ test("real Ledger Tools planner writes with an empty exempt list and custom exem
     assert.equal(result, true);
     assert.equal(editor.getValue(), `- [*] #task Ship it [type:: ${item.expected}] ^ship`);
     assert.equal(setterCalls[0][0], "set");
-    assert.match(lastNotice(), new RegExp(`task theme ${item.expected}$`));
+    assert.match(lastNotice(), new RegExp(`type ${item.expected}$`));
   }
 });
 
@@ -505,14 +573,14 @@ test("a Ready scheduled task sets Next, logs the date, and remembers the theme",
   assert.equal(
     editor.getValue(),
     [
-      "- [*] #task Ship it [theme:: FIX] ^ship",
+      "- [*] #task Ship it [type:: FIX] ^ship",
       "  - 🗓️ **SCHEDULE LOG**",
       "  \t- _2026-08-20 → 2026-08-15_ — 🍅 pulled into today's Pomodoro",
     ].join("\n"),
   );
   assert.equal(
     lastNotice(),
-    "Linked under FIX · Next · removed future schedule · logged schedule change · task theme FIX",
+    "Linked under FIX · Next · removed future schedule · logged schedule change · type FIX",
   );
 });
 
@@ -521,12 +589,12 @@ test("choosing the inherited destination clears an existing task theme", async (
     taskContent: "- [*] #task Ship it [theme:: FIX] ^ship",
     dailyContent: namedDaily("WRITE"),
     destination: "WRITE",
-    intent: deliberateIntent(),
+    intent: deliberateIntent(taskFieldSuggestion("FIX")),
   });
   assert.equal(result, true);
   assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
   assert.equal(setterCalls[0][0], "clear");
-  assert.equal(lastNotice(), "Linked under WRITE · stays Next · task theme cleared");
+  assert.equal(lastNotice(), "Linked under WRITE · stays Next · type cleared");
 });
 
 test("a theme-only Next task with a new block ID still stamps because the ID rewrote the line", async () => {
@@ -546,10 +614,10 @@ test("a theme-only Next task with a new block ID still stamps because the ID rew
     },
   });
   assert.equal(result, true);
-  assert.ok(seen[0].includes("[theme:: FIX]"));
+  assert.ok(seen[0].includes("[type:: FIX]"));
   assert.equal(
     editor.getValue(),
-    "- [*] #task Ship it [theme:: FIX] ^ship [fresh:: 2026-08-15]",
+    "- [*] #task Ship it [type:: FIX] ^ship [fresh:: 2026-08-15]",
   );
 });
 
@@ -561,7 +629,7 @@ test("duplicate and paren theme fields repair only on an eligible deliberate wri
     intent: deliberateIntent(),
   });
   assert.equal(result, true);
-  assert.equal(editor.getValue(), "- [*] #task Ship it [theme:: BUILD] ^ship");
+  assert.equal(editor.getValue(), "- [*] #task Ship it [type:: BUILD] ^ship");
 });
 
 test("a stale shown suggestion links and skips the theme edit", async () => {
@@ -587,7 +655,7 @@ test("a stale shown suggestion links and skips the theme edit", async () => {
   assert.equal(setterCalls.length, 0);
   assert.equal(
     lastNotice(),
-    "Linked to FIX · stays Next · task theme unchanged (suggestion changed)",
+    "Linked under FIX · stays Next · type unchanged (suggestion changed)",
   );
 });
 
@@ -603,11 +671,11 @@ test("decorative catalog metadata on a live suggestion does not skip the write",
     },
   });
   assert.equal(result, true);
-  assert.equal(editor.getValue(), "- [*] #task Ship it [theme:: FIX] ^ship");
+  assert.equal(editor.getValue(), "- [*] #task Ship it [type:: FIX] ^ship");
 });
 
-test("Alt+Enter link-once never writes a task theme", async () => {
-  const { result, editor, setterCalls } = await linkWithIntent({
+test("Alt+Enter keep-type merges the current type into the destination name", async () => {
+  const { result, editor, setterCalls, writes } = await linkWithIntent({
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: namedDaily("FIX"),
     intent: { deliberate: false, linkOnce: true, shown: noteSuggestion() },
@@ -615,7 +683,24 @@ test("Alt+Enter link-once never writes a task theme", async () => {
   assert.equal(result, true);
   assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
   assert.equal(setterCalls.length, 0);
-  assert.equal(lastNotice(), "Linked to FIX · stays Next");
+  assert.ok(writes[0].content.includes("— FIX + WRITE"));
+  assert.ok(writes[0].content.includes("[[Tasks#^ship]]"));
+  assert.equal(lastNotice(), "Linked under FIX + WRITE · stays Next · keeps WRITE");
+});
+
+test("Alt+Enter on a container equals Enter and keeps the type", async () => {
+  const { result, editor, setterCalls, writes } = await linkWithIntent({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: namedDaily("LATER"),
+    destination: "LATER",
+    intent: { deliberate: false, linkOnce: true, shown: noteSuggestion() },
+  });
+  assert.equal(result, true);
+  assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.equal(setterCalls.length, 0);
+  assert.ok(writes[0].content.includes("— LATER"));
+  assert.doesNotMatch(writes[0].content, /LATER \+/);
+  assert.equal(lastNotice(), "Linked under LATER · stays Next · keeps WRITE");
 });
 
 test("untouched default (not deliberate) links without storing a field", async () => {
@@ -628,6 +713,7 @@ test("untouched default (not deliberate) links without storing a field", async (
   assert.equal(result, true);
   assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
   assert.equal(setterCalls.length, 0);
+  assert.equal(lastNotice(), "Linked under WRITE · stays Next · keeps WRITE");
 });
 
 test("absent theme APIs leave the picker write path usable without a field", async () => {
@@ -651,7 +737,7 @@ test("absent theme APIs leave the picker write path usable without a field", asy
   const result = await plugin.applyPomodoroTaskLink(source, "ship", false);
   assert.equal(result, true);
   assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
-  assert.equal(lastNotice(), "Linked to FIX · stays Next");
+  assert.equal(lastNotice(), "Linked under FIX · stays Next");
 });
 
 test("a blocked dependency consumption never writes a theme field", async () => {
@@ -716,9 +802,9 @@ test("same-note combined edit writes the theme and the link in one editor transa
   assert.equal(result, true);
   assert.equal(replaceCalls, 2);
   const next = editor.getValue();
-  assert.ok(next.includes("- [*] #task Ship it [theme:: FIX] ^ship"));
+  assert.ok(next.includes("- [*] #task Ship it [type:: FIX] ^ship"));
   assert.ok(next.includes("[[#^ship]]"));
-  assert.equal(lastNotice(), "Linked under FIX · stays Next · task theme FIX");
+  assert.equal(lastNotice(), "Linked under FIX · stays Next · type FIX");
 });
 
 test("a failed daily write after a saved theme reports the theme and the link failure", async () => {
@@ -729,25 +815,25 @@ test("a failed daily write after a saved theme reports the theme and the link fa
     dailyFailAfter: 1,
   });
   assert.equal(result, false);
-  assert.equal(editor.getValue(), "- [*] #task Ship it [theme:: FIX] ^ship");
-  assert.equal(lastNotice(), "Task theme FIX saved, but Daily.md could not be updated");
+  assert.equal(editor.getValue(), "- [*] #task Ship it [type:: FIX] ^ship");
+  assert.equal(lastNotice(), "Type FIX set, but Daily.md could not be updated");
 });
 
-test("catalog spelling wins over a canonical planThemeChange name", async () => {
+test("catalog spelling wins over a canonical planRetype name", async () => {
   const { editor } = await linkWithIntent({
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: namedDaily("FIX"),
     intent: deliberateIntent(),
     apis: {
       catalog: [{ key: "fix", name: "Fix" }],
-      planThemeChange: () => ({ action: "set", name: "FIX", key: "fix" }),
+      planRetype: () => ({ kind: "set", name: "FIX", key: "fix" }),
     },
   });
-  assert.equal(editor.getValue(), "- [*] #task Ship it [theme:: Fix] ^ship");
-  assert.equal(lastNotice(), "Linked under Fix · stays Next · task theme Fix");
+  assert.equal(editor.getValue(), "- [*] #task Ship it [type:: Fix] ^ship");
+  assert.equal(lastNotice(), "Linked under Fix · stays Next · type Fix");
 });
 
-test("an inbox task with no shown suggestion does not remember a destination default", async () => {
+test("an inbox task with no shown suggestion retypes from the live suggestion", async () => {
   const h = createTaskModeHarness({
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: namedDaily("FIX"),
@@ -776,8 +862,8 @@ test("an inbox task with no shown suggestion does not remember a destination def
   });
   const result = await h.plugin.applyPomodoroTaskLink(source, "ship", false);
   assert.equal(result, true);
-  assert.equal(h.editor.getValue(), "- [*] #task Ship it ^ship");
-  assert.doesNotMatch(lastNotice(), /task theme/);
+  assert.equal(h.editor.getValue(), "- [*] #task Ship it [type:: FIX] ^ship");
+  assert.match(lastNotice(), /type FIX/);
 });
 
 test("malformed themeIntent never enables a write", async () => {
@@ -797,14 +883,26 @@ test("themeIntent survives normalizePomodoroLinkPickerChoice for a later consume
     helpers.normalizePomodoroLinkPickerChoice({
       kind: "new",
       name: "FIX",
-      themeIntent: { deliberate: true, linkOnce: false, shown },
+      themeIntent: { deliberate: true, linkOnce: false, shown, tabPick: "fix" },
     }),
     {
       kind: "new",
       name: "FIX",
-      themeIntent: { deliberate: true, linkOnce: false, shown },
+      themeIntent: { deliberate: true, linkOnce: false, shown, tabPick: "fix" },
     },
   );
+});
+
+test("Tab pick chooses that type component of a composite destination", async () => {
+  const { result, editor } = await linkWithIntent({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: namedDaily("FIX + BUILD"),
+    destination: "FIX + BUILD",
+    intent: { deliberate: true, linkOnce: false, shown: noteSuggestion(), tabPick: "build" },
+  });
+  assert.equal(result, true);
+  assert.equal(editor.getValue(), "- [*] #task Ship it [type:: BUILD] ^ship");
+  assert.equal(lastNotice(), "Linked under BUILD · stays Next · type BUILD");
 });
 
 test("unlink preserves an authored task theme", async () => {

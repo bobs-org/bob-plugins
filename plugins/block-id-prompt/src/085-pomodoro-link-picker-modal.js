@@ -166,6 +166,7 @@ class PomodoroLinkPickerModal extends Modal {
     );
     this.interacted = false;
     this.initialKey = null;
+    this.tabPickKey = null;
     this.themeFooterEl = null;
     this.needsBlockId = safeRequest.needsBlockId === true;
     this.now = safeRequest.now || null;
@@ -319,9 +320,8 @@ class PomodoroLinkPickerModal extends Modal {
         attr: { "aria-live": "polite" },
       });
     }
-    // Second footer line: the live pending theme-field edit preview. It is
-    // refreshed on every selection/query/refresh change and shown only for
-    // an effective edit.
+    // Second footer line: the live D10 retype consequence. It is refreshed
+    // on every selection/query/refresh/Tab change.
     this.themeFooterEl = footerEl.createDiv({
       cls: "bid-ppk-theme-footer",
       attr: { "aria-live": "polite" },
@@ -343,6 +343,7 @@ class PomodoroLinkPickerModal extends Modal {
         deliberate: deliberate === true,
         linkOnce: linkOnce === true,
         shown: this.shownSuggestion,
+        ...(this.tabPickKey ? { tabPick: this.tabPickKey } : {}),
       };
     }
     return choice;
@@ -379,23 +380,14 @@ class PomodoroLinkPickerModal extends Modal {
     const preview = this.taskAware
       ? describePomodoroThemeFooterPreview({
         rowName: destinationPomodoroRowName(this.rows[this.selectedIndex]),
-        deliberate: this.deliberateForSelectedRow(),
-        lineText: this.taskLineText || "",
         shown: this.shownSuggestion,
+        tabPick: this.tabPickKey,
         exemptKeys: (this.model && this.model.themeSnapshot && this.model.themeSnapshot.exemptKeys) || [],
-        taskThemeOf: (line) => {
+        themesApi: this.themesApi,
+        planRetype: (options) => {
           try {
-            return this.themesApi && typeof this.themesApi.taskThemeOf === "function"
-              ? this.themesApi.taskThemeOf(line)
-              : null;
-          } catch (_error) {
-            return null;
-          }
-        },
-        planThemeChange: (options) => {
-          try {
-            return this.themesApi && typeof this.themesApi.planThemeChange === "function"
-              ? this.themesApi.planThemeChange(options)
+            return this.themesApi && typeof this.themesApi.planRetype === "function"
+              ? this.themesApi.planRetype(options)
               : null;
           } catch (_error) {
             return null;
@@ -441,13 +433,19 @@ class PomodoroLinkPickerModal extends Modal {
       return;
     }
 
+    if (event.key === "Tab") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.cycleTypeTabPick(event.shiftKey === true);
+      return;
+    }
+
     if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
-      // Alt+Enter links once without remembering a theme, before the
-      // generic Enter/Shift branch. A habitual double tap links to the
-      // current/next Pomodoro, so Ctrl+Shift+Enter commits exactly like
-      // Enter — before the Shift branch.
+      // Alt+Enter keeps the type and merges it into the destination name.
+      // A habitual double tap links to the current/next Pomodoro, so
+      // Ctrl+Shift+Enter commits exactly like Enter — before the Shift branch.
       if (event.altKey) {
         this.commitLinkOnce();
       } else if (event.shiftKey && !event.ctrlKey) {
@@ -490,7 +488,23 @@ class PomodoroLinkPickerModal extends Modal {
     }
 
     this.selectedIndex = selectable[position];
+    this.tabPickKey = null;
     this.renderRows();
+  }
+
+  cycleTypeTabPick(backwards) {
+    const next = nextPomodoroTypeTabPick({
+      themesApi: this.themesApi,
+      rowName: destinationPomodoroRowName(this.rows[this.selectedIndex]),
+      current: this.tabPickKey,
+      backwards: backwards === true,
+      exemptKeys: (this.model && this.model.themeSnapshot && this.model.themeSnapshot.exemptKeys) || [],
+    });
+    if (next == null) {
+      return;
+    }
+    this.tabPickKey = next;
+    this.updateThemeFooter();
   }
 
   // Selection stays stable across asynchronous refreshes. Refreshes update
@@ -506,6 +520,7 @@ class PomodoroLinkPickerModal extends Modal {
       this.hiddenThemeRows.clear();
     }
     const previousKey = selectedPomodoroPickerKey(this.rows, this.selectedIndex);
+    const previousTabPick = this.tabPickKey;
     if (
       !queryChanged && origin === "refresh" &&
       refreshBlockPomodoroThemePickerSnapshot(this.model, this.themesApi)
@@ -540,6 +555,11 @@ class PomodoroLinkPickerModal extends Modal {
       if (origin === "init") {
         this.initialKey = selectedPomodoroPickerKey(this.rows, this.selectedIndex);
       }
+    }
+    if (selectedPomodoroPickerKey(this.rows, this.selectedIndex) !== previousKey) {
+      this.tabPickKey = null;
+    } else {
+      this.tabPickKey = previousTabPick;
     }
     this.renderRows();
   }
@@ -622,7 +642,7 @@ class PomodoroLinkPickerModal extends Modal {
     } else if (row.kind === "recent") {
       label = `New Pomodoro ${row.name}, Recent, ${formatBlockPomodoroThemeRecentMeta(row.theme)}`;
     } else if (row.kind === "new") {
-      label = `${row.unconfigured ? "Not in your themes, " : ""}New Pomodoro ${row.name}`;
+      label = `${row.unconfigured ? "Not in your types, " : ""}New Pomodoro ${row.name}`;
     } else {
       return row.message || "";
     }
@@ -792,8 +812,8 @@ class PomodoroLinkPickerModal extends Modal {
     if (row.unconfigured) {
       rightEl.createDiv({
         cls: "bid-ppk-pill is-warning",
-        text: "Not in your themes",
-        attr: { title: "This name isn't in your configured themes" },
+        text: "Not in your types",
+        attr: { title: "This name isn't in your configured types" },
       });
     }
     if (row.hiddenThemes && row.hiddenThemes.length > 0) {
@@ -860,10 +880,10 @@ class PomodoroLinkPickerModal extends Modal {
   createThemeText(row) {
     const meter = this.createThemeMeter(row);
     if (meter && meter.themes.over) {
-      return `+1 theme · ${meter.themes.count}/${meter.themes.cap}`;
+      return `+1 type · ${meter.themes.count}/${meter.themes.cap}`;
     }
 
-    return "+1 theme";
+    return "+1 type";
   }
 
   renderNoticeRow(rowEl, row) {
@@ -921,8 +941,8 @@ class PomodoroLinkPickerModal extends Modal {
     this.settleChoice(this.choiceForRow(row, deliberate, false));
   }
 
-  // Alt+Enter commits the selected row once: linkOnce without remembering
-  // a theme, so deliberate stays false even on a non-default row.
+  // Alt+Enter keeps the current type: link plus a D6 merge, no field write.
+  // Container and already-agreeing destinations equal Enter.
   commitLinkOnce() {
     const row = this.rows[this.selectedIndex];
     if (!row || !row.selectable) {

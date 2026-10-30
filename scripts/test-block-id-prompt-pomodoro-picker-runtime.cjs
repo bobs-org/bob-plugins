@@ -76,7 +76,7 @@ test("picker opens only on the link direction, never on unlink", async () => {
   });
   await unlinked.plugin.openPomodoroTaskLink(unlinked.editor, unlinked.view);
   assert.equal(unlinked.plugin.pickerRequests.length, 1);
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
   assert.ok(unlinked.writes[0].content.includes("[[Tasks#^ship]]"));
 });
 
@@ -242,7 +242,7 @@ test("picking a non-default entry links there", async () => {
   };
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
   assert.equal(h.plugin.pickerRequests.length, 1);
-  assert.equal(lastNotice(), "Linked to TWO · stays Next");
+  assert.equal(lastNotice(), "Linked under TWO · stays Next");
   const written = h.writes[0].content;
   const lines = written.split("\n");
   const twoIndex = lines.findIndex((line) => line.includes("— TWO"));
@@ -299,7 +299,7 @@ test("a no-ID task gets picker, then the block-ID prompt with the target carried
   assert.equal(result, true);
   assert.equal(h.editor.getValue(), "- [*] #task Ship it ^ship");
   assert.ok(h.writes[0].content.includes("[[Tasks#^ship]]"));
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
 });
 
 test("inbox order is picker, then route, then write", async () => {
@@ -324,7 +324,7 @@ test("inbox order is picker, then route, then write", async () => {
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
   assert.deepEqual(order, ["picker", "route-prompt"]);
   assert.equal(h.writes.length, 1);
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
 });
 
 test("a review-walk landing continues with link-today and the new text", async () => {
@@ -337,7 +337,7 @@ test("a review-walk landing continues with link-today and the new text", async (
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
   assert.ok(h.writes[0].content.includes("[[Tasks#^ship]]"));
   assert.deepEqual(reviewContinueCalls(calls), [
-    ["continue", origin, { kind: "link-today", notice: "Linked to Current · stays Next" }],
+    ["continue", origin, { kind: "link-today", notice: "Linked under Current · stays Next" }],
   ]);
   assert.deepEqual(noticeMessages, []);
 });
@@ -366,7 +366,7 @@ test("an all-closed ledger creates a new entry after the last completed block", 
   const doneIndex = lines.findIndex((line) => line.includes("— DONE"));
   assert.ok(createdIndex > doneIndex);
   assert.ok(written.includes("[[Tasks#^ship]]"));
-  assert.equal(lastNotice(), "Linked to new DEEP WORK · stays Next");
+  assert.equal(lastNotice(), "Linked under DEEP WORK · stays Next");
 });
 
 test("several running entries allow an explicit pick", async () => {
@@ -386,7 +386,7 @@ test("several running entries allow an explicit pick", async () => {
     };
   };
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
-  assert.equal(lastNotice(), "Linked to TWO · stays Next");
+  assert.equal(lastNotice(), "Linked under TWO · stays Next");
   assert.ok(h.writes[0].content.includes("[[Tasks#^ship]]"));
 });
 
@@ -479,7 +479,7 @@ test("the task note being the daily note uses one editor transaction", async () 
   await plugin.openPomodoroTaskLink(editor, view);
   assert.equal(plugin.pickerRequests.length, 1);
   assert.ok(editor.getValue().includes("[[#^ship]]"));
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
 });
 
 test("promptOpen blocks re-entry while the picker is open", async () => {
@@ -506,7 +506,7 @@ test("promptOpen blocks re-entry while the picker is open", async () => {
   releasePicker();
   await first;
   assert.equal(h.plugin.promptOpen, false);
-  assert.equal(lastNotice(), "Linked to Current · stays Next");
+  assert.equal(lastNotice(), "Linked under Current · stays Next");
 });
 
 test("direct picker request carries the task line text for the footer", async () => {

@@ -36,29 +36,29 @@ one, typing filters the list or names a new Pomodoro. A block ID prompt follows
 when the task still needs one.
 
 Today's open Pomodoros stay first. When the Ledger Tools `themes` catalog is
-available, the picker also offers recent themes for new Pomodoros, with a
+available, the picker also offers recent types for new Pomodoros, with a
 swatch for each `+` component and a `like NAME` hint on near-duplicates. A
-recent row keeps its catalog spelling. `Ctrl+D` hides that theme from Recent
+recent row keeps its catalog spelling. `Ctrl+D` hides that type from Recent
 suggestions; the row remains as a reversible hidden suggestion. Typing the name
-still works, and `Ctrl+D` on a Today row leaves it unchanged. A theme that
+still works, and `Ctrl+D` on a Today row leaves it unchanged. A type that
 today's ledger uses only on a done or cancelled Pomodoro still shows as a
-Recent row; only themes of the open Today rows are left out.
+Recent row; only types of the open Today rows are left out.
 
-When Ledger Tools can suggest a theme for the cursor task, empty search
+When Ledger Tools can suggest a type for the cursor task, empty search
 preselects that Pomodoro in place (or offers a new one when creation is
 allowed) and labels the row `Suggested · this task`, `Suggested · reading
-task`, or `Suggested · from ● <stem>`. A second
-footer line appears only when the selected row would set or clear the task
-theme, for example `this task becomes FIX · sase_blog suggests WRITE · ⌥↵
-link once`. Enter on the untouched default links without storing a field.
-Choosing a different row, typing a query, or Shift+Enter to name a Pomodoro
-is a deliberate exception: the same task-line edit writes or clears
-`[theme:: X]` and the notice reads `Linked under FIX · task theme FIX` or
-`Linked under WRITE · task theme cleared`. `Alt+Enter` always links once
-and never changes the field. If the suggestion's write-relevant identity
-changed since the picker opened, the link still happens and the notice ends
-`· task theme unchanged (suggestion changed)`. Inbox notes usually have no
-suggestion, so routing a task never writes a theme onto the inbox line.
+task`, or `Suggested · from ● <stem>`. A second footer line always states
+the retype consequence, for example `→ FIX · task becomes FIX · sase_blog
+suggests WRITE · ⌥↵ keep WRITE (FIX + WRITE)`. Tab cycles the chosen type
+on a composite (`⇥ BUILD`). Enter applies `planRetype`: a named destination
+writes or clears `[type:: X]`, a matching destination keeps the type, and a
+container such as LATER keeps it too. The notice reads `Linked under FIX ·
+type FIX`, `Linked under WRITE · type cleared`, or `Linked under LATER ·
+keeps WRITE`. `Alt+Enter` keeps the current type and merges it into the
+destination name (`FIX + WRITE`) without a field write. If the suggestion's
+write-relevant identity changed since the picker opened, the link still
+happens and the notice ends `· type unchanged (suggestion changed)`. Inbox
+notes with no shown suggestion still retype from the live `suggestFor`.
 
 Linking applies lane changes: Ready and Blocked tasks become Next, while Next
 and In Progress tasks stay unchanged. A `^^` task-picker link that is the sole

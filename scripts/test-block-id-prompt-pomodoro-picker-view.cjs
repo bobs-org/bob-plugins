@@ -144,7 +144,7 @@ function openPicker(options = {}) {
 // enough to exercise the footer's wiring: single non-exempt destination
 // components set, matching inherited defaults clear, anything else is none.
 function stubTaskThemeOf(lineText) {
-  const fields = [...String(lineText || "").matchAll(/\[theme::\s*([^\]]*)\]/g)]
+  const fields = [...String(lineText || "").matchAll(/\[(?:theme|type)::\s*([^\]]*)\]/g)]
     .map((match) => match[1].trim())
     .filter(Boolean);
   if (fields.length === 0) {
@@ -156,39 +156,80 @@ function stubTaskThemeOf(lineText) {
   return { state: "set", value: fields[0].toUpperCase(), key: fields[0].toLowerCase() };
 }
 
-function stubPlanThemeChange({ field, suggestion, inherited, destinationName, exemptKeys, deliberate }) {
-  const keyOf = (value) => {
-    if (!value || typeof value !== "object") {
-      return null;
-    }
-    const theme = value.theme;
-    const raw = theme && typeof theme.key === "string"
-      ? theme.key
-      : (typeof value.key === "string" ? value.key : "");
-    const key = raw.trim().toLowerCase();
-    return key || null;
-  };
-  if (deliberate !== true || !keyOf(suggestion)) {
-    return { action: "none" };
+function suggestionKeyOf(value) {
+  if (value == null || value === "") {
+    return null;
   }
-  const exempt = new Set(
-    (Array.isArray(exemptKeys) ? exemptKeys : []).map((key) => String(key).trim().toLowerCase()),
+  if (typeof value === "string") {
+    return value.trim().toLowerCase() || null;
+  }
+  const theme = value.theme && typeof value.theme === "object" ? value.theme : value;
+  const key = theme && typeof theme.key === "string" ? theme.key.trim().toLowerCase() : "";
+  return key || null;
+}
+
+function suggestionNameOf(value) {
+  if (typeof value === "string") {
+    return value.trim().toUpperCase();
+  }
+  const theme = value && value.theme && typeof value.theme === "object" ? value.theme : value;
+  if (theme && typeof theme.name === "string" && theme.name) {
+    return theme.name;
+  }
+  const key = suggestionKeyOf(value);
+  return key ? key.toUpperCase() : "";
+}
+
+function stubPlanRetype(options = {}) {
+  const destination = String(options.destination || options.destinationName || "");
+  const parts = destination.split("+").map((part) => part.trim()).filter(Boolean);
+  const typeParts = parts.filter((part) => part.toLowerCase() !== "later");
+  if (typeParts.length === 0) {
+    return { kind: "container" };
+  }
+  const effectiveKey = suggestionKeyOf(options.effective || options.suggestion);
+  const destKeys = parts.map((part) => part.toLowerCase());
+  if (effectiveKey && destKeys.includes(effectiveKey)) {
+    return { kind: "consistent" };
+  }
+  if (options.keepType === true) {
+    return {
+      kind: "merge",
+      name: `${destination.trim()} + ${suggestionNameOf(options.effective || options.suggestion)}`,
+    };
+  }
+  let chosen = null;
+  if (options.tabPick) {
+    const want = String(options.tabPick).trim().toLowerCase();
+    chosen = typeParts.find((part) => part.toLowerCase() === want) || null;
+  }
+  if (!chosen) {
+    const exempt = new Set(
+      (Array.isArray(options.exemptKeys) ? options.exemptKeys : ["PLAN"])
+        .map((key) => String(key).trim().toLowerCase()),
+    );
+    chosen = typeParts.find((part) => !exempt.has(part.toLowerCase())) || typeParts[0];
+  }
+  const inherited = options.inherited;
+  const inheritedKey = suggestionKeyOf(
+    inherited && inherited.source === "task" ? inherited.inherited : inherited,
   );
-  const parts = String(destinationName || "")
+  if (inheritedKey && inheritedKey === chosen.toLowerCase()) {
+    return { kind: "clear" };
+  }
+  return { kind: "set", name: chosen.toUpperCase(), key: chosen.toLowerCase() };
+}
+
+function stubTypeComponentsOf(name) {
+  return String(name || "")
     .split("+")
-    .map((part) => part.trim())
-    .filter((part) => part && !exempt.has(part.toLowerCase()));
-  if (parts.length !== 1) {
-    return { action: "none" };
-  }
-  const destKey = parts[0].toLowerCase();
-  if (keyOf(inherited) === destKey) {
-    return field && field.state !== "none" ? { action: "clear" } : { action: "none" };
-  }
-  if (field && field.state === "set" && field.key === destKey) {
-    return { action: "none" };
-  }
-  return { action: "set", name: parts[0].toUpperCase(), key: destKey };
+    .map((raw) => raw.trim())
+    .filter(Boolean)
+    .map((component) => ({
+      name: component,
+      key: component.toLowerCase(),
+      isType: component.toLowerCase() !== "later",
+    }));
 }
 
 function createThemesApi(initialThemes, extra = {}) {
@@ -213,6 +254,8 @@ function createThemesApi(initialThemes, extra = {}) {
     },
     hueFor: (key) => ({ hue: String(key).startsWith("focus") ? "aqua" : "blue", hue_source: "test" }),
     similarTo: (name) => String(name).toLowerCase().startsWith("fix") ? ["FIXES"] : [],
+    planRetype: stubPlanRetype,
+    typeComponentsOf: stubTypeComponentsOf,
     onChange: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
     hide: (name) => {
       writes.push(["hide", name]);
@@ -274,6 +317,14 @@ function noteSuggestion() {
       chain: ["Areas/sase_blog.md"],
       hue: "aqua",
     },
+  };
+}
+
+function taskFieldSuggestion(name, inherited = noteSuggestion()) {
+  return {
+    theme: { key: name.toLowerCase(), name, known: true, hue: "orange", hue_source: "hash" },
+    source: "task",
+    inherited,
   };
 }
 
@@ -515,7 +566,7 @@ test("create row meta, divider, and theme badge", () => {
     "after CAPTURE · becomes next up",
   );
   assert.equal(textOf(findByClass(create, "bid-ppk-pill")), "New");
-  assert.equal(textOf(findByClass(create, "bid-ppk-theme")), "+1 theme");
+  assert.equal(textOf(findByClass(create, "bid-ppk-theme")), "+1 type");
   assert.ok(!findByClass(create, "bid-ppk-theme").classes.includes("is-over"));
   modal.close();
 
@@ -573,7 +624,7 @@ test("theme badge turns red over cap; a throwing budget hides the detail", () =>
   const modal = openPicker({ budget: overBudget });
   type(modal, "focus");
   const theme = findByClass(modal.contentEl, "bid-ppk-theme");
-  assert.equal(textOf(theme), "+1 theme · 4/3");
+  assert.equal(textOf(theme), "+1 type · 4/3");
   assert.ok(theme.classes.includes("is-over"));
   modal.close();
 
@@ -585,7 +636,7 @@ test("theme badge turns red over cap; a throwing budget hides the detail", () =>
   };
   const plain = openPicker({ budget: throwing });
   type(plain, "focus");
-  assert.equal(textOf(findByClass(plain.contentEl, "bid-ppk-theme")), "+1 theme");
+  assert.equal(textOf(findByClass(plain.contentEl, "bid-ppk-theme")), "+1 type");
   plain.close();
 });
 
@@ -954,7 +1005,7 @@ test("link success notice names an unconfigured theme after creating its Pomodor
   );
   assert.equal(
     notice,
-    "Linked to new SNACK · Next · SNACK isn't one of your themes",
+    "Linked under SNACK · Next · SNACK isn't one of your types",
   );
 });
 
@@ -1027,7 +1078,8 @@ function openSuggestedEntryPicker({ suggestion = noteSuggestion(), lineText = "-
   });
   const themesApi = createThemesApi(themes, {
     taskThemeOf: stubTaskThemeOf,
-    planThemeChange: stubPlanThemeChange,
+    planRetype: stubPlanRetype,
+    typeComponentsOf: stubTypeComponentsOf,
     ...extra,
   });
   return openPicker({ themesApi, lineText, themeSnapshot: snapshot });
@@ -1087,7 +1139,7 @@ test("reading and note suggestions render their own reasons and footer phrases",
   };
   const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
   const snapshot = makeThemeSnapshot(probe, { suggestion: note, choice: { kind: "entry", index: 0 } });
-  const themesApi = createThemesApi([], { taskThemeOf: stubTaskThemeOf, planThemeChange: stubPlanThemeChange });
+  const themesApi = createThemesApi([], { taskThemeOf: stubTaskThemeOf, planRetype: stubPlanRetype });
   const noteModal = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
   const noteRows = findAllByClass(noteModal.contentEl, "bid-ppk-row");
   assert.match(textOf(findByClass(noteRows[0], "bid-ppk-suggest")), /Suggested · from\s+.*gtd_daily/);
@@ -1097,36 +1149,35 @@ test("reading and note suggestions render their own reasons and footer phrases",
 
 test("footer previews the pending set and clear with the suggestion source", () => {
   const modal = openSuggestedEntryPicker();
-  // Untouched default CAPTURE: single non-exempt component, deliberate via
-  // seeded initial-key difference below; first force deliberate by typing.
   type(modal, "capture");
   const shown = footerText(modal);
   assert.equal(shown.hidden, false);
   assert.equal(
     shown.text,
-    "this task becomes CAPTURE · sase_blog suggests WRITE · ⌥↵ link once",
+    "→ CAPTURE · task becomes CAPTURE · sase_blog suggests WRITE · ⌥↵ keep WRITE (CAPTURE + WRITE)",
   );
   modal.close();
 
-  const clearModal = openSuggestedEntryPicker({ lineText: "- [*] #task Ship it [theme:: WRITE]" });
+  const clearModal = openSuggestedEntryPicker({
+    suggestion: taskFieldSuggestion("FIX"),
+    lineText: "- [*] #task Ship it [type:: FIX]",
+  });
   type(clearModal, "write");
-  // WRITE matches the inherited default: the pending edit clears the field.
   const cleared = footerText(clearModal);
   assert.equal(cleared.hidden, false);
   assert.equal(
     cleared.text,
-    "task theme cleared · sase_blog suggests WRITE · ⌥↵ link once",
+    "→ WRITE · type cleared · from sase_blog · ⌥↵ keep FIX (WRITE + FIX)",
   );
   clearModal.close();
 });
 
-test("footer hides without task context, APIs, suggestion, or effective edit", () => {
+test("footer hides without task context or theme APIs", () => {
   const plain = openPicker();
   assert.equal(footerText(plain).hidden, true);
   assert.equal(footerText(plain).text, "");
   plain.close();
 
-  // No theme APIs: task-aware but no preview.
   const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
   const snapshot = makeThemeSnapshot(probe, {
     suggestion: noteSuggestion(),
@@ -1135,12 +1186,84 @@ test("footer hides without task context, APIs, suggestion, or effective edit", (
   const noApis = openPicker({ lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
   assert.equal(footerText(noApis).hidden, true);
   noApis.close();
+});
 
-  // Effective edit absent: destination already matches the task field.
-  const settled = openSuggestedEntryPicker({ lineText: "- [*] #task Ship it [theme:: CAPTURE]" });
+test("footer states a keep consequence when the destination already agrees", () => {
+  const settled = openSuggestedEntryPicker({
+    suggestion: taskFieldSuggestion("CAPTURE"),
+    lineText: "- [*] #task Ship it [type:: CAPTURE]",
+  });
   type(settled, "capture");
-  assert.equal(footerText(settled).hidden, true);
+  const shown = footerText(settled);
+  assert.equal(shown.hidden, false);
+  assert.equal(shown.text, "→ CAPTURE · keeps CAPTURE");
   settled.close();
+});
+
+test("footer previews PLAN, LATER, and Tab cycling on a composite", () => {
+  const later = openSuggestedEntryPicker();
+  type(later, "later");
+  assert.equal(footerText(later).hidden, false);
+  assert.equal(footerText(later).text, "→ LATER · keeps WRITE");
+  later.close();
+
+  const planDaily = ["## Pomodoros", "- [ ] () — PLAN + FIX", "- [ ] () — LATER"].join("\n");
+  const planProbe = helpers.buildPomodoroLinkPickerModel(planDaily, { now: NOW });
+  const planSnapshot = makeThemeSnapshot(planProbe, {
+    suggestion: noteSuggestion(),
+    choice: { kind: "entry", index: 0 },
+  });
+  const planModal = openPicker({
+    daily: planDaily,
+    themesApi: createThemesApi([], {
+      taskThemeOf: stubTaskThemeOf,
+      planRetype: stubPlanRetype,
+      typeComponentsOf: stubTypeComponentsOf,
+    }),
+    lineText: "- [*] #task Ship it",
+    themeSnapshot: planSnapshot,
+  });
+  assert.equal(selectedTitle(planModal), "PLAN + FIX");
+  assert.equal(
+    footerText(planModal).text,
+    "→ FIX · task becomes FIX · sase_blog suggests WRITE · ⌥↵ keep WRITE (PLAN + FIX + WRITE) · ⇥ PLAN",
+  );
+  pressKey(planModal, "Tab");
+  assert.equal(planModal.tabPickKey, "plan");
+  assert.equal(
+    footerText(planModal).text,
+    "→ PLAN · task becomes PLAN · sase_blog suggests WRITE · ⌥↵ keep WRITE (PLAN + FIX + WRITE) · ⇥ FIX",
+  );
+  planModal.close();
+
+  const compositeDaily = ["## Pomodoros", "- [ ] () — FIX + BUILD", "- [ ] () — LATER"].join("\n");
+  const compositeProbe = helpers.buildPomodoroLinkPickerModel(compositeDaily, { now: NOW });
+  const compositeSnapshot = makeThemeSnapshot(compositeProbe, {
+    suggestion: noteSuggestion(),
+    choice: { kind: "entry", index: 0 },
+  });
+  const composite = openPicker({
+    daily: compositeDaily,
+    themesApi: createThemesApi([], {
+      taskThemeOf: stubTaskThemeOf,
+      planRetype: stubPlanRetype,
+      typeComponentsOf: stubTypeComponentsOf,
+    }),
+    lineText: "- [*] #task Ship it",
+    themeSnapshot: compositeSnapshot,
+  });
+  assert.equal(selectedTitle(composite), "FIX + BUILD");
+  assert.equal(
+    footerText(composite).text,
+    "→ FIX · task becomes FIX · sase_blog suggests WRITE · ⌥↵ keep WRITE (FIX + BUILD + WRITE) · ⇥ BUILD",
+  );
+  pressKey(composite, "Tab");
+  assert.equal(composite.tabPickKey, "build");
+  assert.equal(
+    footerText(composite).text,
+    "→ BUILD · task becomes BUILD · sase_blog suggests WRITE · ⌥↵ keep WRITE (FIX + BUILD + WRITE) · ⇥ FIX",
+  );
+  composite.close();
 });
 
 test("footer refreshes on selection moves and hides on inert rows", async () => {
@@ -1179,7 +1302,7 @@ test("untouched refresh preserves a still-eligible suggested entry; arrivals ado
   const emptyDaily = ["## Pomodoros", "- [x] () — DONE"].join("\n");
   let catalog = [];
   let emit = null;
-  const api = createThemesApi([], { taskThemeOf: stubTaskThemeOf, planThemeChange: stubPlanThemeChange });
+  const api = createThemesApi([], { taskThemeOf: stubTaskThemeOf, planRetype: stubPlanRetype });
   api.historyRows = ({ query = "", limit = 5, exclusions = new Set() } = {}) => {
     const needle = String(query).trim().toLowerCase();
     return catalog
@@ -1266,7 +1389,7 @@ test("suggestion never recomputes on refresh and survives API changes", async ()
     [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2 }],
     {
       taskThemeOf: stubTaskThemeOf,
-      planThemeChange: stubPlanThemeChange,
+      planRetype: stubPlanRetype,
       suggestFor: () => {
         suggestCalls += 1;
         throw new Error("suggestFor must not run on refresh");
@@ -1307,7 +1430,7 @@ test("deferred fetch makes an unknown suggestion eligible and settles the untouc
   let suggestCalls = 0;
   const themesApi = createThemesApi([], {
     taskThemeOf: stubTaskThemeOf,
-    planThemeChange: stubPlanThemeChange,
+    planRetype: stubPlanRetype,
     suggestFor: () => {
       suggestCalls += 1;
       return noteSuggestion();
@@ -1392,7 +1515,7 @@ test("onChange adopts a newly eligible existing match only before interaction", 
   let emit = null;
   const themesApi = createThemesApi([], {
     taskThemeOf: stubTaskThemeOf,
-    planThemeChange: stubPlanThemeChange,
+    planRetype: stubPlanRetype,
     isKnownTheme: (key) => key === "write" && known,
     historyRows: ({ exclusions = new Set() } = {}) => catalog.filter((row) => !exclusions.has(row.key)),
     onChange: (listener) => { emit = listener; return () => {}; },
@@ -1426,7 +1549,7 @@ test("refresh after arrows and after typing then clearing keeps the settled user
   let emit = null;
   const themesApi = createThemesApi([], {
     taskThemeOf: stubTaskThemeOf,
-    planThemeChange: stubPlanThemeChange,
+    planRetype: stubPlanRetype,
     isKnownTheme: (key) => key === "write" && known,
     onChange: (listener) => { emit = listener; return () => {}; },
   });
@@ -1456,7 +1579,7 @@ test("typed theme suggestion decorates the final Recent row without changing PT7
   const catalog = [{ key: "write", name: "Write", last_used: "2026-08-15", days_used: 2 }];
   const themesApi = createThemesApi(catalog, {
     taskThemeOf: stubTaskThemeOf,
-    planThemeChange: stubPlanThemeChange,
+    planRetype: stubPlanRetype,
   });
   const plain = openPicker({ themesApi });
   type(plain, "wri");
@@ -1589,7 +1712,7 @@ test("Ctrl+D on the suggested create row is consumed without writes", async () =
   });
   const themesApi = createThemesApi(
     [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2, hidden: true }],
-    { taskThemeOf: stubTaskThemeOf, planThemeChange: stubPlanThemeChange },
+    { taskThemeOf: stubTaskThemeOf, planRetype: stubPlanRetype },
   );
   const modal = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
   assert.equal(modal.rows[modal.selectedIndex].suggestedCreate, true);

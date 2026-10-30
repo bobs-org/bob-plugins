@@ -866,13 +866,13 @@ async function toggleBlockPomodoroThemeVisibility(modal) {
     return;
   }
   if (row.kind === "existing") {
-    new Notice("Today's Pomodoros stay visible; Ctrl+D hides Recent themes");
+    new Notice("Today's Pomodoros stay visible; Ctrl+D hides Recent types");
     return;
   }
   // The suggested create row is the picker's current recommendation: Ctrl+D
   // is consumed without hide/unhide calls, including a hidden suggestion.
   if (row.suggestedCreate === true) {
-    new Notice("Suggested Pomodoros stay put; Ctrl+D hides Recent themes only");
+    new Notice("Suggested Pomodoros stay put; Ctrl+D hides Recent types only");
     return;
   }
   const hiddenNames = row.kind === "recent" && row.hidden
@@ -883,7 +883,7 @@ async function toggleBlockPomodoroThemeVisibility(modal) {
   const hideName = row.kind === "recent" && !row.hidden ? row.name : null;
   const method = hideName ? "hide" : hiddenNames.length ? "unhide" : null;
   if (!method || !api || typeof api[method] !== "function") {
-    new Notice("Ctrl+D hides Recent themes; this row has nothing to change");
+    new Notice("Ctrl+D hides Recent types; this row has nothing to change");
     return;
   }
   if (modal.themeWriteInFlight) {
@@ -895,7 +895,7 @@ async function toggleBlockPomodoroThemeVisibility(modal) {
     const results = await Promise.all(names.map((name) => api[method](name)));
     const failure = results.find((result) => !result || result.ok !== true);
     if (failure) {
-      new Notice(failure.message || "Could not update the theme suggestion");
+      new Notice(failure.message || "Could not update the type suggestion");
       return;
     }
     if (method === "hide") {
@@ -915,7 +915,7 @@ async function toggleBlockPomodoroThemeVisibility(modal) {
       modal.renderRows();
     }
   } catch (_error) {
-    new Notice("Could not update the theme suggestion");
+    new Notice("Could not update the type suggestion");
   } finally {
     modal.themeWriteInFlight = false;
   }

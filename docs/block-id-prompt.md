@@ -12,10 +12,10 @@ Block ID Prompt helps create and manage stable block identifiers and task links 
 | --- | --- |
 | Name | Block ID Prompt |
 | ID | `block-id-prompt` |
-| Version | 1.33.3 |
+| Version | 1.34.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, Ctrl+Shift+Enter asks where the task goes before linking or unlinking, then moves it with the toggle applied (nav inboxRoute v1). Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = suggested, else current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent task types with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. |
+| Description | Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Typing (( opens the Task Wikilink Picker to insert a [[note#^id]] link to any vault task. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, Ctrl+Shift+Enter asks where the task goes before linking or unlinking, then moves it with the toggle applied (nav inboxRoute v1). Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = suggested, else current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent task types with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -23,6 +23,7 @@ Block ID Prompt helps create and manage stable block identifiers and task links 
 
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
+| Link a task here | `link-task-wikilink` | — |
 | Rename selected block ID | `rename-selected-block-id` | Ctrl+6 |
 | Toggle task Pomodoro link | `link-task-to-pomodoro` | Ctrl+Shift+Enter |
 <!-- END GENERATED: commands -->
@@ -78,6 +79,30 @@ Unlinking an In Progress task first opens an optional work-summary prompt titled
 `Unlink task`; a nonblank summary is recorded as a locally dated entry such as
 `*2026-08-15* — Added coverage` under a tab-indented managed `🛠️ **WORK LOG**`
 child bullet.
+
+## Linking any task with `((`
+
+Typing `((` anywhere prose is allowed opens the **Task Wikilink Picker**, a
+vault-wide card over every task. The picker auto-opens only when the edit you
+just made wrote the second `(`. What lands in the note is a plain
+`[[note#^id]]` block link, with the caret after `]]`. Escape leaves the
+`((query))` text you typed; Backspace on an empty filter undoes the trigger
+the way the editor would (`()` for a closed token, `(` for an unclosed one).
+
+The command **Link a task here** (`link-task-wikilink`) reopens the picker on
+demand, with no default hotkey. Inside a `((` token it uses that token; a
+single-line selection seeds the filter and is replaced on accept; otherwise it
+inserts at the caret. Managed lines (Depends-On, BLOCKS, LINKS, LINKED FROM)
+and excluded contexts such as fenced code never open it.
+
+`((` differs from `^^`: it searches the whole vault, includes completed
+history, and names the note in every link (`[[note#^id]]`, never `[[#^id]]`).
+`^^` stays the per-note picker that completes a `[[note#` marker. Until a
+task has a block ID, the card explains that Enter will name it; naming itself
+lands in a later change.
+
+Keys: `↑↓` move, `↵` / Tab insert the selected identified link, `esc` clears a
+filter or closes, and `⌫` on an empty filter undoes `((`.
 
 ## Task Link selection
 

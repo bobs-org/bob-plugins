@@ -403,6 +403,298 @@
   }
 }
 
+/* Task Wikilink Picker. Namespaced under bid-twl-* on the shared bid-tlp frame. */
+
+.modal.bid-twl-modal .bid-tlp-status-pill.is-next {
+  color: var(--color-blue, #3d7ea6);
+  border-color: color-mix(in srgb, var(--color-blue, #3d7ea6) 45%, transparent);
+}
+
+.bid-twl-header-glyph {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-bold);
+  letter-spacing: 0.02em;
+}
+
+.bid-twl-search {
+  position: relative;
+}
+
+.bid-twl-count {
+  flex: 0 0 11ch;
+  color: var(--text-faint);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bid-twl-search-progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  width: 0;
+  background-color: var(--interactive-accent);
+  opacity: 0;
+}
+
+.bid-twl-search-progress.is-active {
+  opacity: 1;
+}
+
+.bid-twl-row {
+  min-height: 34px;
+  padding-top: var(--size-2-2);
+  padding-bottom: var(--size-2-2);
+}
+
+.bid-twl-row.is-hidden {
+  opacity: 0.55;
+}
+
+.bid-twl-row.is-disabled {
+  cursor: default;
+}
+
+.bid-twl-status-pill.is-done,
+.bid-twl-status-pill.is-cancelled {
+  color: var(--text-faint);
+  border-color: var(--background-modifier-border);
+}
+
+.bid-twl-code {
+  padding: 0 0.25em;
+  border-radius: var(--radius-s);
+  background-color: var(--background-secondary);
+  font-family: var(--font-monospace);
+}
+
+.bid-twl-inline-link {
+  color: var(--link-color);
+}
+
+.bid-twl-badges {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--size-2-1);
+  min-width: 0;
+}
+
+.bid-twl-hidden-mark {
+  display: inline-flex;
+  color: var(--text-faint);
+}
+
+.bid-twl-hidden-mark svg {
+  width: 12px;
+  height: 12px;
+}
+
+.bid-twl-history,
+.bid-twl-guard {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.bid-twl-add-id {
+  display: inline-flex;
+  margin-left: var(--size-2-2);
+  padding: 0 6px;
+  border: 1px dashed color-mix(in srgb, var(--interactive-accent) 55%, transparent);
+  border-radius: var(--radius-s);
+  color: var(--interactive-accent);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.bid-twl-locator {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  min-width: 0;
+  max-width: 42%;
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.bid-twl-locator.is-disabled {
+  color: var(--text-faint);
+  opacity: 0.7;
+}
+
+.bid-twl-locator-folder {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+}
+
+.bid-twl-locator-file {
+  flex: 0 0 auto;
+  color: var(--link-color);
+}
+
+.bid-twl-locator-hash {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.bid-twl-locator-id {
+  flex: 0 0 auto;
+  color: var(--text-accent);
+}
+
+.bid-twl-note {
+  position: sticky;
+  top: 22px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+  padding: var(--size-2-1) var(--size-4-3);
+  background-color: var(--background-primary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.bid-twl-note-icon {
+  display: inline-flex;
+  color: var(--text-faint);
+}
+
+.bid-twl-note-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.bid-twl-note-locator {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.bid-twl-note-count {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: var(--radius-s);
+  background-color: var(--background-secondary);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.bid-twl-group.is-hidden {
+  color: var(--text-faint);
+  font-weight: var(--font-normal);
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.bid-twl-detail {
+  box-sizing: border-box;
+  flex: 0 0 84px;
+  height: 84px;
+  padding: var(--size-2-2) var(--size-4-4);
+  overflow: hidden;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.bid-twl-detail-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.bid-twl-detail-meta {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bid-twl-detail-action {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bid-twl-detail-action.is-identified {
+  color: var(--link-color);
+}
+
+.bid-twl-detail-action.is-guarded {
+  color: var(--text-faint);
+}
+
+.bid-twl-warning {
+  flex-basis: 100%;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.bid-twl-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bid-twl-search,
+  .bid-twl-row,
+  .bid-twl-search-progress {
+    transition: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .bid-twl-row.is-selected {
+    border-left-width: 4px;
+    background-color: color-mix(in srgb, var(--interactive-accent) 22%, transparent);
+  }
+
+  .bid-twl-locator-file,
+  .bid-twl-inline-link {
+    text-decoration: underline;
+  }
+
+  .bid-twl-search {
+    border-width: 2px;
+  }
+}
+
+@media (max-width: 700px) {
+  .bid-twl-locator {
+    max-width: 36%;
+  }
+}
+
+@media (max-width: 620px) {
+  .bid-twl-locator-folder {
+    display: none;
+  }
+}
+
 /* Pomodoro link picker. bid-ppk-* */
 
 .modal.bid-ppk-modal {

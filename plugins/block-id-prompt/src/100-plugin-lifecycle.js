@@ -28,6 +28,15 @@ class BlockIdPromptPlugin extends Plugin {
         this.openPomodoroTaskLink(editor, view),
     });
 
+    this.addCommand({
+      id: "link-task-wikilink",
+      name: "Link a task here",
+      editorCallback: (editor, view) =>
+        this.linkTaskWikilinkCommand(editor, view),
+    });
+
+    this.startTaskWikilinkIndex();
+
     this.registerEditorExtension(
       EditorView.updateListener.of((update) => this.scheduleScan(update)),
     );
@@ -40,6 +49,8 @@ class BlockIdPromptPlugin extends Plugin {
   }
 
   scheduleScan(update) {
+    this.recordTaskWikilinkWrittenRanges(update);
+
     if (!update.docChanged) {
       return;
     }
@@ -76,6 +87,7 @@ class BlockIdPromptPlugin extends Plugin {
     }
 
     if (!this.hasSingleCursor(view.editor)) {
+      this.clearTaskWikilinkWrittenRanges();
       return;
     }
 
@@ -90,6 +102,10 @@ class BlockIdPromptPlugin extends Plugin {
     }
 
     const lineText = view.editor.getLine(cursor.line) || "";
+    if (this.maybeOpenTaskWikilinkFromEditor(view, file, cursor, lineText)) {
+      return;
+    }
+
     const taskMarker = findTaskPickerMarkerNearCursor(lineText, cursor.ch || 0);
     if (taskMarker) {
       if (lineIsInsideCodeFence(view.editor, cursor.line)) {
@@ -416,6 +432,8 @@ class BlockIdPromptPlugin extends Plugin {
     } catch (_error) {
       this.activePomodoroLinkPicker = null;
     }
+    this.taskWikilinkWrittenRanges = [];
+    this.taskWikilinkIndex = null;
     // Drop the picker capability first so nav retargeting degrades to no
     // hint the moment this plugin unloads (mixed-version sessions never
     // call into a torn-down picker).

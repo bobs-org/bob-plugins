@@ -11446,6 +11446,1481 @@ class PomodoroLinkPickerModal extends Modal {
     }
   }
 }
+// ---- src/087-task-wikilink-picker-modal.js ----
+// Task Wikilink Picker modal: the vault-wide `((` card. State, keys, and
+// streaming refresh live here; row/section/detail plans come from 088.
+
+class TaskWikilinkPickerModal extends Modal {
+  constructor(app, plugin, source, snapshot) {
+    super(app);
+    this.plugin = plugin;
+    this.source = source;
+    this.snapshot = snapshot || { rows: [], ready: true, scanned: 0, total: 0 };
+    this.query = source && source.query ? String(source.query) : "";
+    this.selectedKey = source && source.pickerState && source.pickerState.selectedKey
+      ? source.pickerState.selectedKey
+      : null;
+    this.rowLimit = TASK_WIKILINK_PICKER_WINDOW;
+    this.narrow = false;
+    this.completed = false;
+    this.accepting = false;
+    this.unsubscribe = null;
+    this.inputEl = null;
+    this.countEl = null;
+    this.progressEl = null;
+    this.resultsEl = null;
+    this.detailEl = null;
+    this.footerEl = null;
+    this.liveEl = null;
+    this.plan = null;
+  }
+
+  pickerState() {
+    return {
+      query: this.query,
+      selectedKey: this.selectedKey,
+      rowLimit: this.rowLimit,
+      scrollTop: this.resultsEl ? this.resultsEl.scrollTop || 0 : 0,
+    };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this.modalEl.addClass("bid-tlp-modal");
+    this.modalEl.addClass("bid-twl-modal");
+    contentEl.addClass("bid-tlp");
+    contentEl.addClass("bid-twl");
+
+    const header = contentEl.createDiv({ cls: "bid-tlp-header bid-twl-header" });
+    const headerIcon = header.createDiv({ cls: "bid-tlp-header-icon bid-twl-header-icon" });
+    headerIcon.createSpan({ cls: "bid-twl-header-glyph", text: "((" });
+    const headerText = header.createDiv({ cls: "bid-tlp-header-text" });
+    this.titleEl = headerText.createDiv({ cls: "bid-tlp-title" });
+    this.subtitleEl = headerText.createDiv({ cls: "bid-tlp-subtitle" });
+
+    const searchEl = contentEl.createDiv({ cls: "bid-tlp-search bid-twl-search" });
+    const searchIcon = searchEl.createDiv({ cls: "bid-tlp-search-icon" });
+    applyIcon(searchIcon, "search");
+    this.inputEl = searchEl.createEl("input", {
+      cls: "bid-tlp-input bid-twl-input",
+      attr: {
+        type: "text",
+        role: "combobox",
+        "aria-autocomplete": "list",
+        "aria-expanded": "true",
+        "aria-controls": TASK_WIKILINK_PICKER_LIST_ID,
+        "aria-label": TASK_WIKILINK_PICKER_PLACEHOLDER,
+        placeholder: TASK_WIKILINK_PICKER_PLACEHOLDER,
+      },
+    });
+    this.inputEl.value = this.query;
+    this.countEl = searchEl.createDiv({ cls: "bid-twl-count" });
+    this.progressEl = searchEl.createDiv({ cls: "bid-twl-search-progress" });
+    this.inputEl.addEventListener("input", () => {
+      this.query = this.inputEl.value;
+      this.selectedKey = null;
+      this.rowLimit = TASK_WIKILINK_PICKER_WINDOW;
+      this.renderAll();
+    });
+    this.inputEl.addEventListener("keydown", (event) => this.handleKeydown(event));
+
+    this.resultsEl = contentEl.createDiv({
+      cls: "bid-tlp-results bid-twl-results",
+      attr: {
+        id: TASK_WIKILINK_PICKER_LIST_ID,
+        role: "listbox",
+        "aria-label": "Vault tasks",
+      },
+    });
+    this.resultsEl.addEventListener("scroll", () => this.onResultsScroll());
+
+    this.detailEl = contentEl.createDiv({ cls: "bid-twl-detail" });
+    this.footerEl = contentEl.createDiv({ cls: "bid-tlp-footer bid-twl-footer" });
+    this.liveEl = contentEl.createDiv({
+      cls: "bid-twl-live",
+      attr: { "aria-live": "polite", role: "status" },
+    });
+
+    this.renderAll();
+    this.subscribeToIndex();
+    if (this.source && this.source.pickerState && Number.isInteger(this.source.pickerState.scrollTop)) {
+      this.resultsEl.scrollTop = this.source.pickerState.scrollTop;
+    }
+    window.setTimeout(() => {
+      if (this.inputEl) {
+        this.inputEl.focus();
+      }
+    }, 0);
+  }
+
+  subscribeToIndex() {
+    if (this.unsubscribe) {
+      return;
+    }
+    const snapshot = this.snapshot;
+    if (!snapshot || typeof snapshot.subscribe !== "function") {
+      return;
+    }
+    this.unsubscribe = snapshot.subscribe(() => {
+      this.refreshFromIndex();
+    });
+  }
+
+  refreshFromIndex() {
+    if (!this.plugin || typeof this.plugin.taskWikilinkSnapshot !== "function") {
+      return;
+    }
+    const next = this.plugin.taskWikilinkSnapshot(this.source);
+    if (!next) {
+      return;
+    }
+    this.snapshot = next;
+    this.renderAll();
+  }
+
+  onClose() {
+    if (this.unsubscribe) {
+      try {
+        this.unsubscribe();
+      } catch (error) {
+        // Teardown must never throw from a modal close.
+      }
+      this.unsubscribe = null;
+    }
+    this.modalEl.removeClass("bid-tlp-modal");
+    this.modalEl.removeClass("bid-twl-modal");
+    this.contentEl.empty();
+    if (this.plugin) {
+      this.plugin.lastPromptKey = null;
+      this.plugin.promptOpen = false;
+    }
+  }
+
+  currentNarrow() {
+    try {
+      const width = this.modalEl && this.modalEl.clientWidth;
+      if (Number.isInteger(width) && width > 0) {
+        return width < 620;
+      }
+    } catch (error) {
+      // Fall through to the last known flag.
+    }
+    return this.narrow;
+  }
+
+  buildPlan() {
+    this.narrow = this.currentNarrow();
+    const plugin = this.plugin;
+    const index = plugin && plugin.taskWikilinkIndex;
+    const blockIdsByPath = new Map();
+    if (index && index.entries) {
+      for (const [path, entry] of index.entries) {
+        blockIdsByPath.set(path, entry.blockIds || new Set());
+      }
+    }
+    let isInboxNote = null;
+    try {
+      const route = plugin && typeof plugin.getInboxRouteApi === "function"
+        ? plugin.getInboxRouteApi()
+        : null;
+      if (route && typeof route.isInboxNote === "function") {
+        isInboxNote = (path) => route.isInboxNote(path);
+      }
+    } catch (error) {
+      isInboxNote = null;
+    }
+    this.plan = buildTaskWikilinkPickerPlan({
+      rows: this.snapshot.rows || [],
+      query: this.query,
+      ownerPath: this.source && this.source.sourcePath,
+      source: this.source,
+      selectedKey: this.selectedKey,
+      rowLimit: this.rowLimit,
+      renderAll: this.rowLimit >= Number.MAX_SAFE_INTEGER / 4,
+      narrow: this.narrow,
+      progress: {
+        ready: this.snapshot.ready,
+        scanned: this.snapshot.scanned,
+        total: this.snapshot.total,
+      },
+      warningNote: index && typeof index.warningNote === "function" ? index.warningNote() : null,
+      blockIdsByPath,
+      isInboxNote,
+      now: plugin && typeof plugin.now === "function" ? plugin.now() : new Date(),
+    });
+    if (this.plan.selected) {
+      this.selectedKey = this.plan.selected.key;
+    }
+    this.rowLimit = this.plan.window.rowLimit;
+    return this.plan;
+  }
+
+  renderAll() {
+    const plan = this.buildPlan();
+    if (this.titleEl) {
+      this.titleEl.setText(plan.header.title);
+    }
+    if (this.subtitleEl) {
+      this.subtitleEl.setText(plan.header.subtitle);
+    }
+    if (this.countEl) {
+      this.countEl.setText(plan.search.countText);
+    }
+    if (this.progressEl) {
+      this.progressEl.classList.toggle("is-active", Boolean(plan.search.indexing));
+      if (plan.search.indexing && plan.search.indexing.total) {
+        const ratio = plan.search.indexing.scanned / plan.search.indexing.total;
+        this.progressEl.style.width = `${Math.max(0, Math.min(1, ratio)) * 100}%`;
+      } else {
+        this.progressEl.style.width = "0%";
+      }
+    }
+    if (this.inputEl && plan.selected) {
+      this.inputEl.setAttribute(
+        "aria-activedescendant",
+        `bid-twl-row-${String(plan.selected.key).replace(/[^A-Za-z0-9_-]+/g, "-")}`,
+      );
+    } else if (this.inputEl) {
+      this.inputEl.removeAttribute("aria-activedescendant");
+    }
+    this.renderResults(plan);
+    this.renderDetail(plan);
+    this.renderFooter(plan);
+    if (this.liveEl) {
+      const live = [plan.live.count, plan.live.selected].filter(Boolean).join(". ");
+      this.liveEl.setText(live);
+    }
+  }
+
+  renderResults(plan) {
+    if (!this.resultsEl) {
+      return;
+    }
+    this.resultsEl.empty();
+    if (plan.empty) {
+      const emptyEl = this.resultsEl.createDiv({ cls: "bid-tlp-empty bid-twl-empty" });
+      emptyEl.createDiv({ cls: "bid-tlp-empty-text", text: plan.empty.message });
+      return;
+    }
+    for (const item of plan.items) {
+      if (item.kind === "section") {
+        renderTaskWikilinkSection(this.resultsEl, item);
+      } else if (item.kind === "note") {
+        renderTaskWikilinkNoteHeader(this.resultsEl, item);
+      } else if (item.kind === "row") {
+        const rowEl = renderTaskWikilinkRow(this.resultsEl, item, {
+          onClick: (clicked) => this.acceptKey(clicked.key),
+        });
+        if (item.selected) {
+          this.scrollRowIntoView(rowEl);
+        }
+      }
+    }
+  }
+
+  renderDetail(plan) {
+    if (!this.detailEl) {
+      return;
+    }
+    this.detailEl.empty();
+    const detail = plan.detail;
+    if (!detail) {
+      return;
+    }
+    const titleEl = this.detailEl.createDiv({ cls: "bid-twl-detail-title" });
+    appendTaskWikilinkTitle(titleEl, detail.titleParts);
+    this.detailEl.createDiv({ cls: "bid-twl-detail-meta", text: detail.meta });
+    const actionEl = this.detailEl.createDiv({
+      cls: `bid-twl-detail-action is-${detail.action.kind}`,
+    });
+    if (detail.action.kind === "identified" && detail.action.replacement) {
+      actionEl.createSpan({ text: "↵ inserts " });
+      actionEl.createSpan({
+        cls: "bid-twl-inline-link",
+        text: detail.action.replacement,
+      });
+    } else {
+      actionEl.setText(detail.action.text);
+    }
+  }
+
+  renderFooter(plan) {
+    if (!this.footerEl) {
+      return;
+    }
+    this.footerEl.empty();
+    for (const hint of plan.footer.hints) {
+      const group = this.footerEl.createDiv({ cls: "bid-tlp-hint" });
+      for (const key of hint.keys) {
+        group.createEl("kbd", { cls: "bid-tlp-kbd", text: key });
+      }
+      group.createEl("span", { cls: "bid-tlp-hint-label", text: hint.label });
+    }
+    if (plan.footer.warningNote) {
+      this.footerEl.createDiv({
+        cls: "bid-twl-warning",
+        text: plan.footer.warningNote,
+      });
+    }
+  }
+
+  onResultsScroll() {
+    if (!this.resultsEl || !this.plan || !this.plan.window.canExtend) {
+      return;
+    }
+    const el = this.resultsEl;
+    const remaining = (el.scrollHeight || 0) - (el.scrollTop || 0) - (el.clientHeight || 0);
+    if (remaining < 120) {
+      this.extendWindow();
+    }
+  }
+
+  extendWindow() {
+    if (!this.plan || !this.plan.window.canExtend) {
+      return;
+    }
+    this.rowLimit = this.plan.window.rowLimit + TASK_WIKILINK_PICKER_WINDOW;
+    this.renderAll();
+  }
+
+  renderThroughEnd() {
+    this.rowLimit = Number.MAX_SAFE_INTEGER / 4;
+    this.renderAll();
+  }
+
+  scrollRowIntoView(rowEl) {
+    if (!rowEl || typeof rowEl.scrollIntoView !== "function") {
+      return;
+    }
+    try {
+      rowEl.scrollIntoView({ block: "nearest" });
+    } catch (error) {
+      try {
+        rowEl.scrollIntoView(false);
+      } catch (ignoredError) {
+        // Scrolling is optional.
+      }
+    }
+  }
+
+  moveSelection(delta) {
+    const keys = this.plan ? this.plan.selectableKeys : [];
+    if (keys.length === 0) {
+      return;
+    }
+    const current = Math.max(0, keys.indexOf(this.selectedKey));
+    const next = (current + delta % keys.length + keys.length) % keys.length;
+    this.selectedKey = keys[next];
+    if (next + 1 > this.rowLimit) {
+      this.rowLimit = Math.ceil((next + 1) / TASK_WIKILINK_PICKER_WINDOW) * TASK_WIKILINK_PICKER_WINDOW;
+    }
+    this.renderAll();
+  }
+
+  jumpSelection(toEnd) {
+    const keys = this.plan ? this.plan.selectableKeys : [];
+    if (keys.length === 0) {
+      return;
+    }
+    if (toEnd) {
+      this.renderThroughEnd();
+      this.selectedKey = keys[keys.length - 1];
+    } else {
+      this.selectedKey = keys[0];
+    }
+    this.renderAll();
+  }
+
+  handleKeydown(event) {
+    if (event.key === "ArrowDown" && (event.metaKey || event.ctrlKey) && !event.altKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.jumpSelection(true);
+      return;
+    }
+    if (event.key === "ArrowUp" && (event.metaKey || event.ctrlKey) && !event.altKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.jumpSelection(false);
+      return;
+    }
+    if (event.key === "ArrowDown" || isCtrlKey(event, "n") || isCtrlKey(event, "j")) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.moveSelection(1);
+      return;
+    }
+    if (event.key === "ArrowUp" || isCtrlKey(event, "p") || isCtrlKey(event, "k")) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.moveSelection(-1);
+      return;
+    }
+    if (event.key === "PageDown") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.moveSelection(10);
+      return;
+    }
+    if (event.key === "PageUp") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.moveSelection(-10);
+      return;
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      if (event.shiftKey || event.altKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      this.acceptSelected();
+      return;
+    }
+    if (event.key === "Escape" || isCtrlKey(event, "[")) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (String(this.query || "") !== "") {
+        this.query = "";
+        if (this.inputEl) {
+          this.inputEl.value = "";
+        }
+        this.selectedKey = null;
+        this.rowLimit = TASK_WIKILINK_PICKER_WINDOW;
+        this.renderAll();
+        return;
+      }
+      this.close();
+      return;
+    }
+    if (event.key === "Backspace" && String(this.inputEl ? this.inputEl.value : this.query) === "") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.undoTriggerAndClose();
+    }
+  }
+
+  acceptSelected() {
+    const selected = this.plan && this.plan.selected;
+    if (!selected || selected.disabled) {
+      return;
+    }
+    this.acceptKey(selected.key);
+  }
+
+  acceptKey(key) {
+    const selected = (this.plan && this.plan.items || []).find(
+      (item) => item.kind === "row" && item.key === key,
+    ) || (this.plan && this.plan.selected && this.plan.selected.key === key
+      ? this.plan.selected
+      : null);
+    if (!selected || selected.disabled) {
+      return;
+    }
+    if (!selected.identified) {
+      return;
+    }
+    if (this.accepting) {
+      return;
+    }
+    this.accepting = true;
+    const source = this.source;
+    const plugin = this.plugin;
+    Promise.resolve(plugin.acceptTaskWikilinkIdentified(source, selected))
+      .then((result) => {
+        this.accepting = false;
+        if (result && result.ok) {
+          this.completed = true;
+          this.close();
+          return;
+        }
+        if (result && result.stale) {
+          this.refreshFromIndex();
+        }
+      })
+      .catch(() => {
+        this.accepting = false;
+      });
+  }
+
+  undoTriggerAndClose() {
+    const source = this.source;
+    const removal = source && source.removal;
+    if (!removal || !source.editor || typeof source.editor.getLine !== "function") {
+      this.close();
+      return;
+    }
+    const lineText = source.editor.getLine(source.line) || "";
+    const from = { line: source.line, ch: removal.start };
+    const to = { line: source.line, ch: removal.end };
+    const expected = lineText.slice(removal.start, removal.end);
+    if (removal.start > lineText.length || removal.end > lineText.length) {
+      this.close();
+      return;
+    }
+    void expected;
+    if (this.plugin && typeof this.plugin.suppressEditorScans === "function") {
+      this.plugin.suppressEditorScans();
+    }
+    const caret = { line: source.line, ch: removal.caretCh };
+    if (typeof source.editor.transaction === "function") {
+      source.editor.transaction({
+        changes: [{ from, to, text: removal.insert || "" }],
+        selections: [{ from: caret, to: caret }],
+      });
+    } else {
+      source.editor.replaceRange(removal.insert || "", from, to);
+      if (typeof source.editor.setCursor === "function") {
+        source.editor.setCursor(caret);
+      }
+    }
+    this.completed = true;
+    this.close();
+  }
+}
+// ---- src/088-task-wikilink-picker-view.js ----
+// Pure render plans and DOM builders for the Task Wikilink Picker card.
+//
+// Groups, locators, action lines, counts, windowing, and title tokens are
+// planned here so tests can assert the card without opening a Modal. The
+// modal (087) owns keys, selection, and Obsidian I/O.
+
+const TASK_WIKILINK_PICKER_WINDOW = 100;
+const TASK_WIKILINK_PICKER_TITLE = "Link to a task";
+const TASK_WIKILINK_PICKER_PLACEHOLDER =
+  "Search every task by text, note, or ^id";
+const TASK_WIKILINK_PICKER_LIST_ID = "bid-twl-list";
+const TASK_WIKILINK_UNLINKABLE_PATH_RE = /[\[\]|#^]/;
+const TASK_WIKILINK_TITLE_URL_RE =
+  /(?:https?:\/\/|ftp:\/\/|mailto:|www\.)[^\s<>"`\]]+/;
+const TASK_WIKILINK_WIKI_RE = /\[\[([^\]\n]+?)\]\]/;
+const TASK_WIKILINK_MD_LINK_RE = /\[([^\]\n]*)\]\(([^)\n]+)\)/;
+const TASK_WIKILINK_CODE_RE = /`([^`\n]+)`/;
+const TASK_WIKILINK_DAILY_PATH_RE = /^(\d{4})\/(\d{4})(\d{2})(\d{2})\.md$/;
+const TASK_WIKILINK_NOTE_KIND_ICONS = {
+  daily: "calendar-days",
+  ref: "book-open",
+  done: "archive",
+  project: "folder-kanban",
+  inbox: "inbox",
+  file: "file-text",
+};
+const TASK_WIKILINK_GROUP_LABELS = {
+  in_this_note: "This note",
+  in_progress: "In progress",
+  next: "Next",
+  open: "Other open tasks",
+  hidden: "Hidden",
+  completed: "Completed history",
+};
+
+function taskWikilinkRowKey(row) {
+  return `${row && row.notePath ? row.notePath : ""}|${row && Number.isInteger(row.line) ? row.line : ""}`;
+}
+
+function taskWikilinkSourceBasename(path) {
+  const file = String(path || "").split("/").pop() || "";
+  return file || String(path || "");
+}
+
+function taskWikilinkPathStem(path) {
+  return String(path || "").replace(/\.[mM][dD]$/, "");
+}
+
+function taskWikilinkIsDailyNotePath(path) {
+  const match = TASK_WIKILINK_DAILY_PATH_RE.exec(String(path || ""));
+  if (!match || match[1] !== match[2]) {
+    return false;
+  }
+  const year = Number(match[2]);
+  const month = Number(match[3]);
+  const day = Number(match[4]);
+  const check = new Date(year, month - 1, day);
+  return (
+    check.getFullYear() === year &&
+    check.getMonth() === month - 1 &&
+    check.getDate() === day
+  );
+}
+
+function taskWikilinkNoteKind(path, options) {
+  const notePath = String(path || "");
+  const root = notePath.split("/")[0];
+  if (root === "done") {
+    return "done";
+  }
+  if (root === "ref") {
+    return "ref";
+  }
+  const hints = options || {};
+  if (hints.inboxPaths && hints.inboxPaths.has(notePath)) {
+    return "inbox";
+  }
+  if (typeof hints.isInboxNote === "function") {
+    try {
+      if (hints.isInboxNote(notePath)) {
+        return "inbox";
+      }
+    } catch (error) {
+      // Note-kind icons are decorative; a throwing inbox API stays a file.
+    }
+  }
+  if (notePath === "inbox.md" || notePath.endsWith("/inbox.md")) {
+    return "inbox";
+  }
+  if (hints.prjPaths && hints.prjPaths.has(notePath)) {
+    return "project";
+  }
+  if (taskWikilinkIsDailyNotePath(notePath)) {
+    return "daily";
+  }
+  return "file";
+}
+
+function taskWikilinkNoteKindIcon(kind) {
+  return TASK_WIKILINK_NOTE_KIND_ICONS[kind] || TASK_WIKILINK_NOTE_KIND_ICONS.file;
+}
+
+function formatTaskWikilinkCount(value) {
+  const number = Number(value) || 0;
+  return number.toLocaleString("en-US");
+}
+
+function taskWikilinkCountText(shown, total, query) {
+  if (!total) {
+    return "0 tasks";
+  }
+  if (query) {
+    if (!shown) {
+      return "No matches";
+    }
+    return `${formatTaskWikilinkCount(shown)} of ${formatTaskWikilinkCount(total)}`;
+  }
+  return `${formatTaskWikilinkCount(total)} tasks`;
+}
+
+function taskWikilinkIndexingText(scanned, total) {
+  return `Indexing · ${formatTaskWikilinkCount(scanned)} of ${formatTaskWikilinkCount(total)} notes`;
+}
+
+function taskWikilinkStatusGlyph(status) {
+  if (status === "/") {
+    return "[/]";
+  }
+  if (status === "*") {
+    return "[*]";
+  }
+  if (status === BLOCKED_OBSIDIAN_TASK_STATUS) {
+    return "[?]";
+  }
+  if (status === "x" || status === "X") {
+    return "✓";
+  }
+  if (status === "-") {
+    return "✕";
+  }
+  return "[ ]";
+}
+
+function taskWikilinkStatusClass(status) {
+  if (status === "/") {
+    return "active";
+  }
+  if (status === "*") {
+    return "next";
+  }
+  if (status === BLOCKED_OBSIDIAN_TASK_STATUS) {
+    return "blocked";
+  }
+  if (status === "x" || status === "X") {
+    return "done";
+  }
+  if (status === "-") {
+    return "cancelled";
+  }
+  return "todo";
+}
+
+function taskWikilinkStatusName(status) {
+  if (status === "/") {
+    return "In Progress";
+  }
+  if (status === "*") {
+    return "Next";
+  }
+  if (status === BLOCKED_OBSIDIAN_TASK_STATUS) {
+    return "Blocked";
+  }
+  if (status === "x" || status === "X") {
+    return "Done";
+  }
+  if (status === "-") {
+    return "Cancelled";
+  }
+  return "Open";
+}
+
+function taskWikilinkPathIsUnlinkable(path) {
+  return TASK_WIKILINK_UNLINKABLE_PATH_RE.test(String(path || ""));
+}
+
+function pickerDisabledReasonFor(row, options) {
+  if (!row) {
+    return null;
+  }
+  if (taskWikilinkPathIsUnlinkable(row.notePath)) {
+    return "This note's name can't be linked";
+  }
+  const source = options && options.source;
+  if (
+    source &&
+    source.sourcePath === row.notePath &&
+    Number.isInteger(source.line) &&
+    source.line === row.line
+  ) {
+    return "The task you're typing in";
+  }
+  return disabledReasonFor(row, options);
+}
+
+function taskWikilinkGuardPresentation(reason, row) {
+  if (!reason) {
+    return null;
+  }
+  const lower = String(reason).toLowerCase();
+  if (lower.startsWith("archived")) {
+    const stem = taskWikilinkPathStem(row && row.notePath);
+    return {
+      badge: "archived",
+      full: `Archived tasks can't get an ID · it lives in ${stem}`,
+    };
+  }
+  if (lower.includes("previous daily")) {
+    return {
+      badge: "read-only",
+      full: "The previous daily note is read-only",
+    };
+  }
+  const duplicate = /duplicate block id (\^[^\s]+) in (.+)$/i.exec(reason);
+  if (duplicate) {
+    return {
+      badge: `duplicate ${duplicate[1]}`,
+      full: `Duplicate block ID ${duplicate[1]} in ${duplicate[2]}`,
+    };
+  }
+  if (lower.includes("can't be linked")) {
+    return {
+      badge: "unlinkable",
+      full: "This note's name can't be linked",
+    };
+  }
+  if (lower.includes("typing in")) {
+    return {
+      badge: "the task you're in",
+      full: "The task you're typing in",
+    };
+  }
+  return { badge: reason, full: reason };
+}
+
+function taskWikilinkHostOfUrl(url) {
+  const raw = String(url || "");
+  try {
+    const withProtocol = /^(https?:\/\/|ftp:\/\/|mailto:)/i.test(raw)
+      ? raw
+      : `https://${raw.replace(/^\/\//, "")}`;
+    const parsed = new URL(withProtocol);
+    return parsed.hostname || raw;
+  } catch (error) {
+    return raw;
+  }
+}
+
+function taskWikilinkWikiShownText(body) {
+  const pipe = body.indexOf("|");
+  return pipe === -1 ? body : body.slice(pipe + 1);
+}
+
+function findNextTaskWikilinkTitleToken(source, from) {
+  let best = null;
+  function consider(start, end, part) {
+    if (!Number.isInteger(start) || start < from) {
+      return;
+    }
+    if (!best || start < best.start) {
+      best = { start, end, part };
+    }
+  }
+  const slice = source.slice(from);
+  const code = TASK_WIKILINK_CODE_RE.exec(slice);
+  if (code) {
+    const start = from + code.index;
+    consider(start, start + code[0].length, { type: "code", text: code[1] });
+  }
+  const wiki = TASK_WIKILINK_WIKI_RE.exec(slice);
+  if (wiki) {
+    const start = from + wiki.index;
+    consider(start, start + wiki[0].length, {
+      type: "link",
+      text: taskWikilinkWikiShownText(wiki[1]),
+    });
+  }
+  const md = TASK_WIKILINK_MD_LINK_RE.exec(slice);
+  if (md) {
+    const start = from + md.index;
+    consider(start, start + md[0].length, { type: "link", text: md[1] });
+  }
+  const url = TASK_WIKILINK_TITLE_URL_RE.exec(slice);
+  if (url) {
+    const start = from + url.index;
+    consider(start, start + url[0].length, {
+      type: "url",
+      text: taskWikilinkHostOfUrl(url[0]),
+    });
+  }
+  return best;
+}
+
+function parseTaskWikilinkTitleParts(displayText) {
+  const source = String(displayText === null || displayText === undefined ? "" : displayText);
+  const parts = [];
+  let index = 0;
+  while (index < source.length) {
+    const next = findNextTaskWikilinkTitleToken(source, index);
+    if (!next) {
+      parts.push({ type: "text", text: source.slice(index) });
+      break;
+    }
+    if (next.start > index) {
+      parts.push({ type: "text", text: source.slice(index, next.start) });
+    }
+    parts.push(next.part);
+    index = next.end;
+  }
+  return parts;
+}
+
+function highlightTaskWikilinkText(text, terms) {
+  const source = String(text === null || text === undefined ? "" : text);
+  const wanted = (terms || []).filter((term) => term);
+  if (!source || wanted.length === 0) {
+    return [{ text: source, hl: false }];
+  }
+  const lower = source.toLowerCase();
+  const ranges = [];
+  for (const term of wanted) {
+    const needle = term.toLowerCase();
+    let at = lower.indexOf(needle);
+    while (at !== -1) {
+      ranges.push([at, at + needle.length]);
+      at = lower.indexOf(needle, at + needle.length);
+    }
+  }
+  if (ranges.length === 0) {
+    return [{ text: source, hl: false }];
+  }
+  ranges.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  const merged = [];
+  for (const range of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && range[0] <= last[1]) {
+      last[1] = Math.max(last[1], range[1]);
+    } else {
+      merged.push([range[0], range[1]]);
+    }
+  }
+  const parts = [];
+  let index = 0;
+  for (const [start, end] of merged) {
+    if (start > index) {
+      parts.push({ text: source.slice(index, start), hl: false });
+    }
+    parts.push({ text: source.slice(start, end), hl: true });
+    index = end;
+  }
+  if (index < source.length) {
+    parts.push({ text: source.slice(index), hl: false });
+  }
+  return parts;
+}
+
+function taskWikilinkHighlightedTitleParts(displayText, query) {
+  const terms = splitWikilinkQueryTerms(query);
+  return parseTaskWikilinkTitleParts(displayText).map((part) => ({
+    type: part.type,
+    spans: highlightTaskWikilinkText(part.text, terms),
+  }));
+}
+
+function taskWikilinkLocatorParts(row, options) {
+  const narrow = Boolean(options && options.narrow);
+  const locator = String((row && row.locator) || taskWikilinkPathStem(row && row.notePath));
+  const slash = locator.lastIndexOf("/");
+  const folder = !narrow && slash !== -1 ? locator.slice(0, slash + 1) : "";
+  const filename = slash === -1 || narrow ? locator.split("/").pop() : locator.slice(slash + 1);
+  const disabled = Boolean(options && options.disabled);
+  const identified = Boolean(row && row.blockId);
+  return {
+    folder,
+    filename,
+    hash: identified ? "#^" : "",
+    id: identified ? String(row.blockId) : "",
+    addId: !identified && !disabled,
+    disabled,
+  };
+}
+
+function taskWikilinkSuggestedBlockId(row, blockIds) {
+  if (!row || row.blockId) {
+    return null;
+  }
+  const reserved = blockIds instanceof Set ? [...blockIds] : blockIds || [];
+  try {
+    return suggestPromptBlockId(row.rawLine, "", { reservedIds: reserved });
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskWikilinkActionLine(row, options) {
+  const guard = options && options.guard;
+  if (guard) {
+    return { kind: "guarded", text: guard.full };
+  }
+  if (row && row.blockId) {
+    const target = (options && options.linkTarget) || row.linkTarget || taskWikilinkPathStem(row.notePath);
+    const replacement = `[[${target}#^${row.blockId}]]`;
+    return { kind: "identified", text: `↵ inserts ${replacement}`, replacement };
+  }
+  const suggestion = (options && options.suggestion) || taskWikilinkSuggestedBlockId(row, options && options.blockIds);
+  const note = taskWikilinkSourceBasename(row && row.notePath);
+  if (suggestion) {
+    return {
+      kind: "idless",
+      text: `↵ names it ^${suggestion} in ${note}, then links it`,
+      suggestion,
+    };
+  }
+  return {
+    kind: "idless",
+    text: `↵ names it in ${note}, then links it`,
+    suggestion: null,
+  };
+}
+
+function taskWikilinkEmptyMessage(query, total) {
+  if (!total) {
+    return "No tasks in this vault yet";
+  }
+  const shown = String(query || "").trim();
+  if (shown) {
+    return `No tasks match "${shown}" · try fewer words`;
+  }
+  return "No tasks in this vault yet";
+}
+
+function taskWikilinkFooterHints(queryEmpty, narrow) {
+  const hints = [
+    { keys: ["↑", "↓"], label: "move" },
+    { keys: ["↵"], label: "insert link" },
+    { keys: ["esc"], label: "clear · close" },
+  ];
+  if (queryEmpty && !narrow) {
+    hints.push({ keys: ["⌫"], label: 'back to "("' });
+  }
+  return hints;
+}
+
+function collectTaskWikilinkPrjPaths(rows) {
+  const paths = new Set();
+  for (const row of rows || []) {
+    if (row && row.blockId === "prj") {
+      paths.add(row.notePath);
+    }
+  }
+  return paths;
+}
+
+function taskWikilinkSelectableRows(rows, query, ownerPath) {
+  const terms = String(query || "").trim();
+  if (!terms) {
+    return Array.isArray(rows) ? rows : [];
+  }
+  return orderForWikilinkPicker(rows, query, ownerPath);
+}
+
+function buildTaskWikilinkGroupedItems(rows, context) {
+  const items = [];
+  let currentGroup = null;
+  let currentNote = null;
+  let hiddenOpen = false;
+  const noteCounts = new Map();
+  for (const row of rows) {
+    if (row.open && groupForWikilinkTask(row, context.ownerPath) === "open" && !row.hidden) {
+      noteCounts.set(row.notePath, (noteCounts.get(row.notePath) || 0) + 1);
+    }
+  }
+
+  function pushSection(id) {
+    items.push({
+      kind: "section",
+      id,
+      label: TASK_WIKILINK_GROUP_LABELS[id],
+      sticky: true,
+      variant: id,
+    });
+  }
+
+  function pushNoteHeader(row) {
+    const noteKind = taskWikilinkNoteKind(row.notePath, context.noteKind);
+    items.push({
+      kind: "note",
+      path: row.notePath,
+      locator: row.locator || taskWikilinkPathStem(row.notePath),
+      noteKind,
+      icon: taskWikilinkNoteKindIcon(noteKind),
+      count: noteCounts.get(row.notePath) || 0,
+      sticky: true,
+    });
+  }
+
+  for (const row of rows) {
+    const group = groupForWikilinkTask(row, context.ownerPath);
+    if (group !== currentGroup) {
+      currentGroup = group;
+      currentNote = null;
+      hiddenOpen = false;
+      pushSection(group);
+    }
+    if (group === "open") {
+      if (row.hidden) {
+        if (!hiddenOpen) {
+          hiddenOpen = true;
+          currentNote = null;
+          pushSection("hidden");
+        }
+      } else if (row.notePath !== currentNote) {
+        currentNote = row.notePath;
+        pushNoteHeader(row);
+      }
+    }
+    items.push(buildTaskWikilinkRowItem(row, context));
+  }
+  return items;
+}
+
+function buildTaskWikilinkFilteredItems(rowItems) {
+  const items = [];
+  let sawCompleted = false;
+  for (const item of rowItems) {
+    if (item.group === "completed" && !sawCompleted) {
+      sawCompleted = true;
+      items.push({
+        kind: "section",
+        id: "completed",
+        label: TASK_WIKILINK_GROUP_LABELS.completed,
+        sticky: true,
+        variant: "completed",
+      });
+    }
+    items.push(item);
+  }
+  return items;
+}
+
+function buildTaskWikilinkRowItem(row, context) {
+  const reason = pickerDisabledReasonFor(row, context.guardOptions);
+  const guard = taskWikilinkGuardPresentation(reason, row);
+  const disabled = Boolean(reason);
+  const identified = Boolean(row.blockId) && !disabled;
+  const blockIds =
+    context.blockIdsByPath &&
+    (context.blockIdsByPath.get
+      ? context.blockIdsByPath.get(row.notePath)
+      : context.blockIdsByPath[row.notePath]);
+  const suggestion = identified
+    ? null
+    : taskWikilinkSuggestedBlockId(row, blockIds);
+  const locator = taskWikilinkLocatorParts(row, {
+    narrow: context.narrow,
+    disabled,
+  });
+  const action = taskWikilinkActionLine(row, {
+    guard,
+    suggestion,
+    blockIds,
+    linkTarget: row.linkTarget,
+  });
+  const replacement = identified
+    ? replacementForWikilinkTask(row, reason)
+    : "";
+  const kind = taskWikilinkNoteKind(row.notePath, context.noteKind);
+  return {
+    kind: "row",
+    key: taskWikilinkRowKey(row),
+    row,
+    group: groupForWikilinkTask(row, context.ownerPath),
+    disabled,
+    reason,
+    guard,
+    identified,
+    hidden: Boolean(row.hidden),
+    blocked: row.status === BLOCKED_OBSIDIAN_TASK_STATUS,
+    status: {
+      glyph: taskWikilinkStatusGlyph(row.status),
+      className: taskWikilinkStatusClass(row.status),
+      name: taskWikilinkStatusName(row.status),
+    },
+    titleParts: taskWikilinkHighlightedTitleParts(row.displayText, context.query),
+    badges: {
+      blocked: row.status === BLOCKED_OBSIDIAN_TASK_STATUS,
+      hidden: Boolean(row.hidden),
+      history:
+        row.status === "x" || row.status === "X"
+          ? "Done"
+          : row.status === "-"
+            ? "Cancelled"
+            : null,
+    },
+    locator,
+    action,
+    replacement,
+    suggestion,
+    noteKind: kind,
+    noteIcon: taskWikilinkNoteKindIcon(kind),
+    section: row.section || null,
+    line: Number.isInteger(row.line) ? row.line + 1 : null,
+    displayText: row.displayText,
+  };
+}
+
+function windowTaskWikilinkItems(items, rowLimit) {
+  const limit =
+    Number.isInteger(rowLimit) && rowLimit > 0
+      ? rowLimit
+      : TASK_WIKILINK_PICKER_WINDOW;
+  const totalRows = items.filter((item) => item.kind === "row").length;
+  const out = [];
+  let renderedRows = 0;
+  for (const item of items) {
+    if (item.kind === "row") {
+      if (renderedRows >= limit) {
+        break;
+      }
+      renderedRows += 1;
+    }
+    out.push(item);
+  }
+  while (out.length && out[out.length - 1].kind !== "row") {
+    out.pop();
+  }
+  return {
+    items: out,
+    renderedRows,
+    totalRows,
+    exhausted: renderedRows >= totalRows,
+    canExtend: renderedRows < totalRows,
+  };
+}
+
+function taskWikilinkDetailPlan(selected, context) {
+  if (!selected) {
+    return null;
+  }
+  const locator = selected.locator;
+  const locatorText = `${locator.folder || ""}${locator.filename || ""}${locator.hash || ""}${locator.id || ""}`;
+  const meta = [
+    selected.status.name,
+    locatorText,
+    selected.section ? `› ${selected.section}` : null,
+    Number.isInteger(selected.line) ? `line ${selected.line}` : null,
+  ].filter(Boolean);
+  return {
+    titleParts: selected.titleParts,
+    displayText: selected.displayText,
+    meta: meta.join(" · "),
+    metaParts: {
+      status: selected.status.name,
+      icon: selected.noteIcon,
+      locator: locatorText,
+      section: selected.section,
+      line: selected.line,
+    },
+    action: selected.action,
+  };
+}
+
+function buildTaskWikilinkPickerPlan(input) {
+  const options = input || {};
+  const query = String(options.query || "");
+  const ownerPath = options.ownerPath || (options.source && options.source.sourcePath) || null;
+  const allRows = Array.isArray(options.rows) ? options.rows : [];
+  const ranked = taskWikilinkSelectableRows(allRows, query, ownerPath);
+  const previousDailyPath =
+    options.previousDailyPath ||
+    previousDailyNotePath(
+      allRows.map((row) => row.notePath),
+      options.now || new Date(),
+    );
+  const noteKind = {
+    inboxPaths: options.inboxPaths || null,
+    isInboxNote: options.isInboxNote || null,
+    prjPaths: options.prjPaths || collectTaskWikilinkPrjPaths(allRows),
+  };
+  const context = {
+    ownerPath,
+    query,
+    narrow: Boolean(options.narrow),
+    blockIdsByPath: options.blockIdsByPath || new Map(),
+    noteKind,
+    guardOptions: {
+      previousDailyPath,
+      source: options.source || null,
+    },
+  };
+  const filtered = Boolean(String(query).trim());
+  const plannedItems = filtered
+    ? buildTaskWikilinkFilteredItems(
+        ranked.map((row) => buildTaskWikilinkRowItem(row, context)),
+      )
+    : buildTaskWikilinkGroupedItems(ranked, context);
+
+  const selectedKey = options.selectedKey || null;
+  const selectable = plannedItems.filter((item) => item.kind === "row");
+  let selectedIndex = 0;
+  if (selectedKey) {
+    const found = selectable.findIndex((item) => item.key === selectedKey);
+    if (found !== -1) {
+      selectedIndex = found;
+    }
+  }
+  if (selectable.length === 0) {
+    selectedIndex = 0;
+  } else {
+    selectedIndex = Math.min(Math.max(selectedIndex, 0), selectable.length - 1);
+  }
+  const selected = selectable[selectedIndex] || null;
+  let rowLimit =
+    Number.isInteger(options.rowLimit) && options.rowLimit > 0
+      ? options.rowLimit
+      : TASK_WIKILINK_PICKER_WINDOW;
+  if (options.renderAll) {
+    rowLimit = selectable.length || TASK_WIKILINK_PICKER_WINDOW;
+  } else if (selectedIndex + 1 > rowLimit) {
+    rowLimit = Math.ceil((selectedIndex + 1) / TASK_WIKILINK_PICKER_WINDOW) * TASK_WIKILINK_PICKER_WINDOW;
+  }
+  const windowed = windowTaskWikilinkItems(plannedItems, rowLimit);
+  const progress = options.progress || { ready: true, scanned: 0, total: 0 };
+  const indexing = progress.ready
+    ? null
+    : {
+        scanned: progress.scanned || 0,
+        total: progress.total || 0,
+        text: taskWikilinkIndexingText(progress.scanned || 0, progress.total || 0),
+      };
+  const sourcePath = (options.source && options.source.sourcePath) || ownerPath || "";
+  const totalVaultRows = allRows.length;
+  return {
+    header: {
+      iconText: "((",
+      title: TASK_WIKILINK_PICKER_TITLE,
+      subtitle: `Inserts [[note#^id]] in ${taskWikilinkSourceBasename(sourcePath) || "this note"}`,
+    },
+    search: {
+      placeholder: TASK_WIKILINK_PICKER_PLACEHOLDER,
+      countText: indexing
+        ? indexing.text
+        : taskWikilinkCountText(selectable.length, totalVaultRows, String(query).trim()),
+      indexing,
+    },
+    items: windowed.items.map((item) => {
+      if (item.kind !== "row") {
+        return item;
+      }
+      return {
+        ...item,
+        selected: selected ? item.key === selected.key : false,
+      };
+    }),
+    window: {
+      rowLimit,
+      renderedRows: windowed.renderedRows,
+      totalRows: windowed.totalRows,
+      canExtend: windowed.canExtend,
+      exhausted: windowed.exhausted,
+      windowSize: TASK_WIKILINK_PICKER_WINDOW,
+    },
+    empty:
+      selectable.length === 0
+        ? { message: taskWikilinkEmptyMessage(query, totalVaultRows) }
+        : null,
+    detail: taskWikilinkDetailPlan(selected, context),
+    footer: {
+      hints: taskWikilinkFooterHints(!String(query).trim(), Boolean(options.narrow)),
+      warningNote: options.warningNote || null,
+    },
+    live: {
+      count: indexing
+        ? indexing.text
+        : `${formatTaskWikilinkCount(selectable.length)} of ${formatTaskWikilinkCount(totalVaultRows)} tasks`,
+      selected: selected ? selected.displayText : "",
+    },
+    selected,
+    selectedIndex,
+    selectableKeys: selectable.map((item) => item.key),
+    query,
+    narrow: Boolean(options.narrow),
+    listId: TASK_WIKILINK_PICKER_LIST_ID,
+  };
+}
+
+function appendTaskWikilinkHighlighted(el, spans) {
+  for (const span of spans || []) {
+    if (span.hl) {
+      el.createSpan({ cls: "bid-tlp-hl bid-twl-hl", text: span.text });
+    } else {
+      el.appendText(span.text);
+    }
+  }
+}
+
+function appendTaskWikilinkTitle(el, titleParts) {
+  for (const part of titleParts || []) {
+    if (part.type === "code") {
+      const codeEl = el.createSpan({ cls: "bid-twl-code" });
+      appendTaskWikilinkHighlighted(codeEl, part.spans);
+    } else if (part.type === "link" || part.type === "url") {
+      const linkEl = el.createSpan({ cls: "bid-twl-inline-link" });
+      appendTaskWikilinkHighlighted(linkEl, part.spans);
+    } else {
+      appendTaskWikilinkHighlighted(el, part.spans);
+    }
+  }
+}
+
+function renderTaskWikilinkLocator(el, locator) {
+  const wrap = el.createDiv({
+    cls: locator.disabled ? "bid-twl-locator is-disabled" : "bid-twl-locator",
+  });
+  if (locator.folder) {
+    wrap.createSpan({ cls: "bid-twl-locator-folder", text: locator.folder });
+  }
+  wrap.createSpan({ cls: "bid-twl-locator-file", text: locator.filename || "" });
+  if (locator.hash) {
+    wrap.createSpan({ cls: "bid-twl-locator-hash", text: locator.hash });
+  }
+  if (locator.id) {
+    wrap.createSpan({ cls: "bid-twl-locator-id", text: locator.id });
+  }
+  if (locator.addId) {
+    wrap.createSpan({ cls: "bid-twl-add-id", text: "⊕ Add ID" });
+  }
+  return wrap;
+}
+
+function renderTaskWikilinkSection(el, item) {
+  const headerEl = el.createDiv({
+    cls: `bid-tlp-group bid-twl-group is-${item.variant || item.id}`,
+    attr: { role: "presentation", "aria-hidden": "true" },
+  });
+  headerEl.createSpan({ cls: "bid-tlp-group-label", text: item.label });
+  return headerEl;
+}
+
+function renderTaskWikilinkNoteHeader(el, item) {
+  const headerEl = el.createDiv({
+    cls: "bid-twl-note",
+    attr: { role: "presentation", "aria-hidden": "true" },
+  });
+  const iconEl = headerEl.createSpan({
+    cls: "bid-twl-note-icon",
+    attr: { "aria-hidden": "true" },
+  });
+  applyIcon(iconEl, item.icon);
+  const locatorEl = headerEl.createSpan({ cls: "bid-twl-note-locator" });
+  const slash = String(item.locator || "").lastIndexOf("/");
+  if (slash !== -1) {
+    locatorEl.createSpan({
+      cls: "bid-twl-locator-folder",
+      text: item.locator.slice(0, slash + 1),
+    });
+    locatorEl.createSpan({
+      cls: "bid-twl-locator-file",
+      text: item.locator.slice(slash + 1),
+    });
+  } else {
+    locatorEl.createSpan({
+      cls: "bid-twl-locator-file",
+      text: item.locator || "",
+    });
+  }
+  headerEl.createSpan({
+    cls: "bid-twl-note-count",
+    text: String(item.count || 0),
+  });
+  return headerEl;
+}
+
+function renderTaskWikilinkRow(el, item, options) {
+  const rowEl = el.createDiv({
+    cls: [
+      "bid-tlp-row",
+      "bid-twl-row",
+      item.selected ? "is-selected" : "",
+      item.disabled ? "is-disabled" : "",
+      item.hidden ? "is-hidden" : "",
+      item.blocked ? "is-blocked" : "",
+    ]
+      .filter(Boolean)
+      .join(" "),
+    attr: {
+      id: `bid-twl-row-${String(item.key).replace(/[^A-Za-z0-9_-]+/g, "-")}`,
+      role: "option",
+      "aria-selected": item.selected ? "true" : "false",
+      "aria-disabled": item.disabled ? "true" : "false",
+    },
+  });
+  rowEl.createDiv({
+    cls: `bid-tlp-status-pill bid-twl-status-pill is-${item.status.className}`,
+    text: item.status.glyph,
+  });
+  const textEl = rowEl.createDiv({ cls: "bid-tlp-row-text bid-twl-row-text" });
+  const titleEl = textEl.createDiv({ cls: "bid-tlp-row-title bid-twl-row-title" });
+  appendTaskWikilinkTitle(titleEl, item.titleParts);
+  const badgesEl = textEl.createDiv({ cls: "bid-twl-badges" });
+  if (item.badges.blocked) {
+    const chip = badgesEl.createSpan({ cls: "bid-tlp-blocked-chip bid-twl-blocked" });
+    chip.createSpan({ cls: "bid-twl-blocked-label", text: "🔒 Blocked" });
+  }
+  if (item.badges.hidden) {
+    const hiddenEl = badgesEl.createSpan({
+      cls: "bid-twl-hidden-mark",
+      attr: { "aria-label": "Hidden" },
+    });
+    applyIcon(hiddenEl, "eye-off");
+  }
+  if (item.badges.history) {
+    badgesEl.createSpan({
+      cls: "bid-twl-history",
+      text: item.badges.history,
+    });
+  }
+  if (item.guard) {
+    badgesEl.createSpan({
+      cls: "bid-twl-guard",
+      text: item.guard.badge,
+    });
+  }
+  renderTaskWikilinkLocator(rowEl, item.locator);
+  if (options && typeof options.onClick === "function") {
+    rowEl.addEventListener("mousedown", (event) => event.preventDefault());
+    rowEl.addEventListener("click", () => options.onClick(item));
+  }
+  return rowEl;
+}
 // ---- src/090-prompt-modals.js ----
 class BlockIdPromptModal extends Modal {
   constructor(app, plugin, source) {
@@ -12261,6 +13736,15 @@ class BlockIdPromptPlugin extends Plugin {
         this.openPomodoroTaskLink(editor, view),
     });
 
+    this.addCommand({
+      id: "link-task-wikilink",
+      name: "Link a task here",
+      editorCallback: (editor, view) =>
+        this.linkTaskWikilinkCommand(editor, view),
+    });
+
+    this.startTaskWikilinkIndex();
+
     this.registerEditorExtension(
       EditorView.updateListener.of((update) => this.scheduleScan(update)),
     );
@@ -12273,6 +13757,8 @@ class BlockIdPromptPlugin extends Plugin {
   }
 
   scheduleScan(update) {
+    this.recordTaskWikilinkWrittenRanges(update);
+
     if (!update.docChanged) {
       return;
     }
@@ -12309,6 +13795,7 @@ class BlockIdPromptPlugin extends Plugin {
     }
 
     if (!this.hasSingleCursor(view.editor)) {
+      this.clearTaskWikilinkWrittenRanges();
       return;
     }
 
@@ -12323,6 +13810,10 @@ class BlockIdPromptPlugin extends Plugin {
     }
 
     const lineText = view.editor.getLine(cursor.line) || "";
+    if (this.maybeOpenTaskWikilinkFromEditor(view, file, cursor, lineText)) {
+      return;
+    }
+
     const taskMarker = findTaskPickerMarkerNearCursor(lineText, cursor.ch || 0);
     if (taskMarker) {
       if (lineIsInsideCodeFence(view.editor, cursor.line)) {
@@ -12649,6 +14140,8 @@ class BlockIdPromptPlugin extends Plugin {
     } catch (_error) {
       this.activePomodoroLinkPicker = null;
     }
+    this.taskWikilinkWrittenRanges = [];
+    this.taskWikilinkIndex = null;
     // Drop the picker capability first so nav retargeting degrades to no
     // hint the moment this plugin unloads (mixed-version sessions never
     // call into a torn-down picker).
@@ -14520,6 +16013,422 @@ class BlockIdPromptPomodoroLinkPickerApiMixin {
     }
   }
 }
+// ---- src/128-plugin-task-wikilinks.js ----
+// `((` Task Wikilink Picker wiring: written-range accumulation, the
+// `link-task-wikilink` command, snapshot opens, and identified-link insert.
+
+class BlockIdPromptTaskWikilinksMixin {
+  ensureTaskWikilinkIndex() {
+    if (this.taskWikilinkIndex) {
+      return this.taskWikilinkIndex;
+    }
+    this.taskWikilinkIndex = new TaskWikilinkIndex();
+    this.taskWikilinkWrittenRanges = [];
+    return this.taskWikilinkIndex;
+  }
+
+  startTaskWikilinkIndex() {
+    const index = this.ensureTaskWikilinkIndex();
+    index.attachLiveUpdates(this, this.app);
+    const workspace = this.app && this.app.workspace;
+    const start = () => {
+      void index.warmUpFromVault(this.app);
+    };
+    if (workspace && typeof workspace.onLayoutReady === "function") {
+      workspace.onLayoutReady(start);
+    } else {
+      start();
+    }
+  }
+
+  recordTaskWikilinkWrittenRanges(update) {
+    if (!update || !update.docChanged) {
+      return;
+    }
+    if (!Array.isArray(this.taskWikilinkWrittenRanges)) {
+      this.taskWikilinkWrittenRanges = [];
+    }
+    const changeSet = taskWikilinkChangeSetFromUpdate(update);
+    if (taskWikilinkUpdateIsUserInput(update)) {
+      addTaskWikilinkChanges(this.taskWikilinkWrittenRanges, changeSet);
+    } else {
+      mapTaskWikilinkRanges(this.taskWikilinkWrittenRanges, changeSet);
+    }
+  }
+
+  clearTaskWikilinkWrittenRanges() {
+    this.taskWikilinkWrittenRanges = [];
+  }
+
+  editorMarkdownLines(editor) {
+    if (!editor) {
+      return [];
+    }
+    if (typeof editor.lineCount === "function") {
+      const lines = [];
+      const count = editor.lineCount();
+      for (let index = 0; index < count; index += 1) {
+        lines.push(editor.getLine(index) || "");
+      }
+      return lines;
+    }
+    if (typeof editor.getValue === "function") {
+      return String(editor.getValue() || "").split("\n");
+    }
+    return [];
+  }
+
+  editorLineStartOffset(editor, line) {
+    let offset = 0;
+    for (let index = 0; index < line; index += 1) {
+      offset += (editor.getLine(index) || "").length + 1;
+    }
+    return offset;
+  }
+
+  isTaskWikilinkReadingView(view) {
+    try {
+      if (view && typeof view.getMode === "function" && view.getMode() === "preview") {
+        return true;
+      }
+      const state = view && typeof view.getState === "function" ? view.getState() : null;
+      if (state && state.mode === "preview") {
+        return true;
+      }
+    } catch (error) {
+      return false;
+    }
+    return false;
+  }
+
+  isTaskWikilinkComposing(view) {
+    try {
+      if (view && view.editor && view.editor.cm && view.editor.cm.composing) {
+        return true;
+      }
+    } catch (error) {
+      return false;
+    }
+    return false;
+  }
+
+  taskWikilinkSourceFromToken(editor, sourcePath, line, lineText, token, extra) {
+    return {
+      kind: "task-wikilink",
+      trigger: "((",
+      editor,
+      sourcePath,
+      line,
+      replaceStart: token.replaceStart,
+      replaceEnd: token.replaceEnd,
+      startCh: token.replaceStart,
+      endCh: token.replaceEnd,
+      query: token.query || "",
+      raw: lineText.slice(token.replaceStart, token.replaceEnd),
+      removal: token.removal || null,
+      opener: token.opener,
+      closer: token.closer,
+      ...(extra || {}),
+    };
+  }
+
+  maybeOpenTaskWikilinkFromEditor(view, file, cursor, lineText) {
+    const editor = view.editor;
+    if (this.isTaskWikilinkReadingView(view) || this.isTaskWikilinkComposing(view)) {
+      const token = findTaskWikilinkToken(lineText, cursor.ch || 0);
+      this.clearTaskWikilinkWrittenRanges();
+      return Boolean(token);
+    }
+    const token = findTaskWikilinkToken(lineText, cursor.ch || 0);
+    if (!token) {
+      this.clearTaskWikilinkWrittenRanges();
+      return false;
+    }
+    const lines = this.editorMarkdownLines(editor);
+    const context = taskWikilinkContextAt(lines, cursor.line, cursor.ch || 0);
+    const lineStart = this.editorLineStartOffset(editor, cursor.line);
+    const wroteSecond = taskWikilinkWrittenSecondParen(
+      token,
+      this.taskWikilinkWrittenRanges,
+      lineStart,
+    );
+    this.clearTaskWikilinkWrittenRanges();
+    if (!context.allowed) {
+      if (wroteSecond && context.notice) {
+        const key = `twl-notice:${file.path}:${cursor.line}:${token.opener}`;
+        if (this.lastPromptKey !== key) {
+          new Notice(context.notice);
+          this.lastPromptKey = key;
+        }
+      }
+      return true;
+    }
+    if (!wroteSecond) {
+      return true;
+    }
+    this.openTaskWikilinkPicker(
+      this.taskWikilinkSourceFromToken(editor, file.path, cursor.line, lineText, token),
+    );
+    return true;
+  }
+
+  linkTaskWikilinkCommand(editor, view) {
+    const markdownView =
+      view instanceof MarkdownView
+        ? view
+        : this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!(markdownView instanceof MarkdownView) || !editor) {
+      new Notice("Task wikilinks can't go here");
+      return;
+    }
+    if (this.isTaskWikilinkReadingView(markdownView) || this.isTaskWikilinkComposing(markdownView)) {
+      new Notice("Task wikilinks can't go here");
+      return;
+    }
+    if (!this.hasSingleCursor(editor)) {
+      new Notice("Task wikilinks can't go here");
+      return;
+    }
+    const file = markdownView.file || this.app.workspace.getActiveFile();
+    if (!(file instanceof TFile) || file.extension !== "md") {
+      new Notice("Task wikilinks can't go here");
+      return;
+    }
+    const selection = getSingleEditorSelection(editor);
+    const cursor = selection && selection.head;
+    if (!isEditorPosition(cursor)) {
+      new Notice("Task wikilinks can't go here");
+      return;
+    }
+    const lineText = editor.getLine(cursor.line) || "";
+    const context = taskWikilinkContextAt(
+      this.editorMarkdownLines(editor),
+      cursor.line,
+      cursor.ch || 0,
+    );
+    if (!context.allowed) {
+      new Notice(context.notice || "Task wikilinks can't go here");
+      return;
+    }
+    if (this.promptOpen) {
+      return;
+    }
+    const token = findTaskWikilinkToken(lineText, cursor.ch || 0);
+    if (token) {
+      this.openTaskWikilinkPicker(
+        this.taskWikilinkSourceFromToken(editor, file.path, cursor.line, lineText, token, {
+          fromCommand: true,
+        }),
+      );
+      return;
+    }
+    if (selection && !selection.empty && selection.from.line === selection.to.line) {
+      const raw = lineText.slice(selection.from.ch, selection.to.ch);
+      this.openTaskWikilinkPicker({
+        kind: "task-wikilink",
+        trigger: "((",
+        editor,
+        sourcePath: file.path,
+        line: selection.from.line,
+        replaceStart: selection.from.ch,
+        replaceEnd: selection.to.ch,
+        startCh: selection.from.ch,
+        endCh: selection.to.ch,
+        query: raw,
+        raw,
+        removal: null,
+        fromCommand: true,
+        selectionReplacement: true,
+      });
+      return;
+    }
+    this.openTaskWikilinkPicker({
+      kind: "task-wikilink",
+      trigger: "((",
+      editor,
+      sourcePath: file.path,
+      line: cursor.line,
+      replaceStart: cursor.ch,
+      replaceEnd: cursor.ch,
+      startCh: cursor.ch,
+      endCh: cursor.ch,
+      query: "",
+      raw: "",
+      removal: null,
+      fromCommand: true,
+    });
+  }
+
+  taskWikilinkSnapshot(source) {
+    const index = this.ensureTaskWikilinkIndex();
+    const overlays = index.collectEditorOverlays(this.app);
+    if (source && source.editor && source.sourcePath && typeof source.editor.getValue === "function") {
+      try {
+        overlays.set(source.sourcePath, String(source.editor.getValue() || ""));
+      } catch (error) {
+        // Source overlay is best-effort; disk rows still paint.
+      }
+    }
+    return index.snapshot({
+      ownerPath: source && source.sourcePath,
+      overlays,
+      statOf: index.vaultStatOf(this.app),
+    });
+  }
+
+  openTaskWikilinkPicker(source) {
+    if (this.promptOpen) {
+      return;
+    }
+    this.ensureTaskWikilinkIndex();
+    const key = sourceKey(source);
+    this.lastPromptKey = key;
+    this.promptOpen = true;
+    const snapshot = this.taskWikilinkSnapshot(source);
+    new TaskWikilinkPickerModal(this.app, this, source, snapshot).open();
+    void this.taskWikilinkIndex.drainReparseQueue(this.app);
+  }
+
+  taskWikilinkTokenStillPresent(source) {
+    if (!source || !source.editor || typeof source.editor.getLine !== "function") {
+      return false;
+    }
+    const lineText = source.editor.getLine(source.line) || "";
+    const current = lineText.slice(source.replaceStart, source.replaceEnd);
+    return current === source.raw;
+  }
+
+  countTaskWikilinkBlockId(path, content, blockId) {
+    const settings =
+      (this.taskWikilinkIndex && this.taskWikilinkIndex.settings) ||
+      defaultTaskWikilinkSettings();
+    const rows = parseNoteTaskRows(path, String(content || ""), settings);
+    const matches = rows.filter((row) => row.blockId === blockId);
+    if (matches.length === 0) {
+      return { count: 0, taskLine: null };
+    }
+    if (matches.length > 1 || matches[0].duplicateId) {
+      return { count: 2, taskLine: matches[0].line };
+    }
+    return { count: 1, taskLine: matches[0].line };
+  }
+
+  async acceptTaskWikilinkIdentified(source, item) {
+    const row = item && item.row;
+    if (!row || !row.blockId) {
+      return { ok: false };
+    }
+    if (!this.taskWikilinkTokenStillPresent(source)) {
+      new Notice("Task wikilink not inserted: the ((…)) text changed");
+      return { ok: false, stale: true };
+    }
+    const file = this.app.vault.getAbstractFileByPath
+      ? this.app.vault.getAbstractFileByPath(row.notePath)
+      : null;
+    const targetFile = file instanceof TFile ? file : { path: row.notePath };
+    const authoritative = await readAuthoritativePromptTargetContent(this, source, targetFile);
+    if (!authoritative || typeof authoritative.content !== "string") {
+      new Notice(`Task wikilink not inserted: ${row.notePath} no longer has ^${row.blockId}`);
+      this.refreshTaskWikilinkNote(row.notePath, null);
+      return { ok: false, stale: true };
+    }
+    const found = this.countTaskWikilinkBlockId(row.notePath, authoritative.content, row.blockId);
+    if (found.count === 0) {
+      new Notice(`Task wikilink not inserted: ${row.notePath} no longer has ^${row.blockId}`);
+      this.refreshTaskWikilinkNote(row.notePath, authoritative.content);
+      return { ok: false, stale: true };
+    }
+    if (found.count > 1) {
+      new Notice(`Task wikilink not inserted: ^${row.blockId} is now duplicated in ${row.notePath}`);
+      this.refreshTaskWikilinkNote(row.notePath, authoritative.content);
+      return { ok: false, stale: true };
+    }
+    if (found.taskLine !== row.line) {
+      new Notice(`Task wikilink not inserted: the task line changed in ${row.notePath}`);
+      this.refreshTaskWikilinkNote(row.notePath, authoritative.content);
+      return { ok: false, stale: true };
+    }
+    let linkTarget = row.linkTarget || taskWikilinkPathStem(row.notePath);
+    try {
+      const dest =
+        this.app.metadataCache &&
+        typeof this.app.metadataCache.getFirstLinkpathDest === "function"
+          ? this.app.metadataCache.getFirstLinkpathDest(linkTarget, source.sourcePath)
+          : null;
+      if (!dest || dest.path !== row.notePath) {
+        linkTarget = taskWikilinkPathStem(row.notePath);
+      }
+    } catch (error) {
+      linkTarget = taskWikilinkPathStem(row.notePath);
+    }
+    const replacement = `[[${linkTarget}#^${row.blockId}]]`;
+    if (!this.taskWikilinkTokenStillPresent(source)) {
+      new Notice("Task wikilink not inserted: the ((…)) text changed");
+      return { ok: false, stale: true };
+    }
+    this.suppressEditorScans();
+    const from = { line: source.line, ch: source.replaceStart };
+    const to = { line: source.line, ch: source.replaceEnd };
+    const caret = {
+      line: source.line,
+      ch: source.replaceStart + replacement.length,
+    };
+    if (typeof source.editor.transaction === "function") {
+      source.editor.transaction({
+        changes: [{ from, to, text: replacement }],
+        selections: [{ from: caret, to: caret }],
+      });
+    } else {
+      source.editor.replaceRange(replacement, from, to);
+      setEditorCursorIfPossible(source.editor, caret);
+    }
+    return { ok: true, replacement };
+  }
+
+  refreshTaskWikilinkNote(path, content) {
+    const index = this.ensureTaskWikilinkIndex();
+    if (typeof content === "string") {
+      index.refreshPaths([{ path, content }]);
+      return;
+    }
+    void index.refreshPathsFromVault(this.app, [path]);
+  }
+}
+
+function taskWikilinkChangeSetFromUpdate(update) {
+  const changes = [];
+  if (!update || !update.changes || typeof update.changes.iterChanges !== "function") {
+    return changes;
+  }
+  update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+    const text =
+      inserted && typeof inserted.toString === "function"
+        ? inserted.toString()
+        : String(inserted || "");
+    changes.push({ from: fromA, to: toA, text });
+  });
+  return changes;
+}
+
+function taskWikilinkUpdateIsUserInput(update) {
+  const transactions = (update && update.transactions) || [];
+  if (transactions.length === 0) {
+    return false;
+  }
+  let sawInput = false;
+  for (const transaction of transactions) {
+    if (!transaction || typeof transaction.isUserEvent !== "function") {
+      continue;
+    }
+    if (transaction.isUserEvent("undo") || transaction.isUserEvent("redo")) {
+      return false;
+    }
+    if (transaction.isUserEvent("input")) {
+      sawInput = true;
+    }
+  }
+  return sawInput;
+}
 // ---- src/130-plugin-task-link-open-and-notices.js ----
 class BlockIdPromptTaskLinkOpenAndNoticesMixin {
   // Delete the selected Task Link and today's open-Pomodoro duplicates,
@@ -15868,6 +17777,7 @@ installBlockIdPromptMixins(BlockIdPromptPlugin, [
   BlockIdPromptPomodoroLinksMixin,
   BlockIdPromptPomodoroLinkPickerMixin,
   BlockIdPromptPomodoroLinkPickerApiMixin,
+  BlockIdPromptTaskWikilinksMixin,
   BlockIdPromptPomodoroInboxRouteMixin,
   BlockIdPromptTaskLinkOpenAndNoticesMixin,
   BlockIdPromptTargetPlansAndRewritesMixin,
@@ -16002,6 +17912,30 @@ module.exports.helpers = {
   TASK_WIKILINK_INDEX_MAX_WARNINGS,
   TASK_WIKILINK_INDEX_REPAINT_MS,
   TaskWikilinkIndex,
+  TaskWikilinkPickerModal,
+  TASK_WIKILINK_PICKER_WINDOW,
+  TASK_WIKILINK_PICKER_TITLE,
+  TASK_WIKILINK_PICKER_PLACEHOLDER,
+  buildTaskWikilinkPickerPlan,
+  pickerDisabledReasonFor,
+  parseTaskWikilinkTitleParts,
+  taskWikilinkHighlightedTitleParts,
+  taskWikilinkLocatorParts,
+  taskWikilinkActionLine,
+  taskWikilinkCountText,
+  taskWikilinkIndexingText,
+  taskWikilinkEmptyMessage,
+  taskWikilinkFooterHints,
+  taskWikilinkNoteKind,
+  taskWikilinkNoteKindIcon,
+  taskWikilinkRowKey,
+  taskWikilinkStatusGlyph,
+  taskWikilinkStatusName,
+  taskWikilinkGuardPresentation,
+  windowTaskWikilinkItems,
+  formatTaskWikilinkCount,
+  taskWikilinkChangeSetFromUpdate,
+  taskWikilinkUpdateIsUserInput,
   buildBasenameIndex,
   canonicalKeyWikilinkTask,
   compareCanonicalWikilinkKeys,
@@ -16038,4 +17972,9 @@ module.exports.helpers = {
   getDirectAddPromptRootLine,
   BlockIdPromptModal,
   TaskLinkPickerModal,
+  appendTaskWikilinkTitle,
+  renderTaskWikilinkRow,
+  renderTaskWikilinkSection,
+  renderTaskWikilinkNoteHeader,
+  renderTaskWikilinkLocator,
 };

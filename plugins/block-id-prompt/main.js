@@ -2701,6 +2701,661 @@ function findLocalMarkdownBlockRange(lines, lineNumber) {
   return range ? includeFollowingStandaloneBlockIds(lines, range) : null;
 }
 
+// ---- src/031-task-wikilink-rules.js ----
+// Pure vault-wide task model for the `((` Task Wikilink Picker.
+//
+// This mirrors bob-cli's `capture_task_wikilinks` pool: `discover` over
+// every task-bearing note (`capture_dependency_tasks`), the canonical
+// order and link targets (`capture_link_tasks`, `task_dependencies`),
+// and the guard rules. Parity is pinned by
+// `scripts/fixtures/task_wikilinks/vectors.json`, a verbatim copy of
+// bob-cli's `tests/fixtures/task_wikilinks/vectors.json`.
+//
+// Everything here is pure: no Obsidian imports, no vault reads. Callers
+// feed note paths and texts; tests drive every function directly.
+
+// Bob's task line grammar (`note_tasks::parse_task_line`): leading
+// whitespace, a literal `- [`, exactly one status character, `] `, and a
+// body carrying the global filter token. Blockquotes, `*`/`+` bullets,
+// and numbered lists never match, exactly like bob.
+const TASK_WIKILINK_LINE_RE = /^(\s*)- \[(.)\] ([\s\S]*)$/u;
+
+// Bob's inline-field grammar (`note_tasks::INLINE_FIELD_RE`), which the
+// search text drops. This is narrower than the picker's display regex on
+// purpose: parity follows bob, not the card.
+const TASK_WIKILINK_INLINE_FIELD_RE = /\[[A-Za-z][A-Za-z0-9_-]*::\s*[^\]]*\]/g;
+
+// Bob's always-excluded note directory names (`native.rs`), plus the dot
+// directories `collect_note_paths` skips. Matched case-sensitively.
+const TASK_WIKILINK_EXCLUDED_DIRS = new Set([
+  ".bob",
+  ".git",
+  ".obsidian",
+  "_conflicts",
+  "_generated",
+  "_templates",
+]);
+
+// Bob's default status types (`task_status_hooks::settings`), keyed by
+// status symbol. Unknown symbols read as TODO, exactly like bob.
+const TASK_WIKILINK_DEFAULT_STATUS_TYPES = {
+  " ": "TODO",
+  x: "DONE",
+  X: "DONE",
+  "/": "IN_PROGRESS",
+  "*": "ON_HOLD",
+  "-": "CANCELLED",
+};
+
+const TASK_WIKILINK_OPEN_TYPES = new Set([
+  "TODO",
+  "IN_PROGRESS",
+  "ON_HOLD",
+]);
+
+function defaultTaskWikilinkSettings() {
+  return {
+    globalFilter: "#task",
+    statusTypes: { ...TASK_WIKILINK_DEFAULT_STATUS_TYPES },
+  };
+}
+
+// Mirror of `parse_tasks_settings` for the fields the picker needs: the
+// global filter plus the symbol-to-type overlay from the Tasks
+// `data.json` core and custom statuses.
+function taskWikilinkSettingsFromTasksJson(data) {
+  const settings = defaultTaskWikilinkSettings();
+  if (!data || typeof data !== "object") {
+    return settings;
+  }
+  if (typeof data.globalFilter === "string" && data.globalFilter !== "") {
+    settings.globalFilter = data.globalFilter;
+  }
+  const statusSettings =
+    data.statusSettings && typeof data.statusSettings === "object"
+      ? data.statusSettings
+      : {};
+  for (const collection of ["coreStatuses", "customStatuses"]) {
+    const statuses = statusSettings[collection];
+    if (!Array.isArray(statuses)) {
+      continue;
+    }
+    for (const status of statuses) {
+      if (!status || typeof status.symbol !== "string") {
+        continue;
+      }
+      const chars = Array.from(status.symbol);
+      if (chars.length !== 1) {
+        continue;
+      }
+      settings.statusTypes[chars[0]] = taskWikilinkTypeName(status.type);
+    }
+  }
+  return settings;
+}
+
+function taskWikilinkTypeName(value) {
+  switch (value) {
+    case "DONE":
+      return "DONE";
+    case "IN_PROGRESS":
+      return "IN_PROGRESS";
+    case "ON_HOLD":
+      return "ON_HOLD";
+    case "CANCELLED":
+      return "CANCELLED";
+    case "NON_TASK":
+      return "NON_TASK";
+    case "EMPTY":
+      return "EMPTY";
+    default:
+      return "TODO";
+  }
+}
+
+// Mirror of `markdown::fence_marker`: at most three leading spaces, then
+// three or more backticks or tildes.
+function taskWikilinkFenceMarker(line) {
+  const spaces = line.match(/^ */)[0].length;
+  if (spaces > 3) {
+    return null;
+  }
+  const rest = line.slice(spaces);
+  const character = rest[0];
+  if (character !== "`" && character !== "~") {
+    return null;
+  }
+  let length = 0;
+  while (rest[length] === character) {
+    length += 1;
+  }
+  return length >= 3 ? { character, length } : null;
+}
+
+// Mirror of `markdown::closes_fence`: the same fence character, at least
+// as long, with nothing but whitespace after it.
+function taskWikilinkClosesFence(line, open) {
+  const marker = taskWikilinkFenceMarker(line);
+  if (!marker) {
+    return false;
+  }
+  return (
+    marker.character === open.character &&
+    marker.length >= open.length &&
+    line.trimStart().slice(marker.length).trim() === ""
+  );
+}
+
+// Mirror of `markdown::atx_heading` plus `strip_closing_atx_hashes`:
+// up to three leading spaces, 1-6 hashes, whitespace or end after them,
+// and closing hashes that only count after a whitespace run.
+function taskWikilinkAtxHeading(line) {
+  const spaces = line.match(/^ */)[0].length;
+  if (spaces > 3) {
+    return null;
+  }
+  const rest = line.slice(spaces);
+  const hashes = rest.match(/^#+/);
+  if (!hashes || hashes[0].length > 6) {
+    return null;
+  }
+  const after = rest.slice(hashes[0].length);
+  if (after !== "" && !/^\s/.test(after)) {
+    return null;
+  }
+  return taskWikilinkStripClosingHashes(after.trim());
+}
+
+function taskWikilinkStripClosingHashes(title) {
+  const trimmed = title.trimEnd();
+  const withoutHashes = trimmed.replace(/#+$/, "");
+  if (withoutHashes.length === trimmed.length) {
+    return trimmed;
+  }
+  if (withoutHashes === "" || /\s$/.test(withoutHashes)) {
+    return withoutHashes.trimEnd();
+  }
+  return trimmed;
+}
+
+// Mirror of `collect_done::trailing_block_id_in_line`: the last `^` on
+// the trimmed line opens the ID when every byte after it is ASCII
+// alphanumeric or `-` and the byte before it is whitespace (or absent).
+function taskWikilinkTrailingBlockId(lineText) {
+  const trimmed = String(lineText).trimEnd();
+  const caret = trimmed.lastIndexOf("^");
+  if (caret === -1) {
+    return null;
+  }
+  const id = trimmed.slice(caret + 1);
+  if (id === "" || !/^[A-Za-z0-9-]+$/.test(id)) {
+    return null;
+  }
+  if (caret > 0 && !/\s/.test(trimmed[caret - 1])) {
+    return null;
+  }
+  return id;
+}
+
+function taskWikilinkHasExactTag(lineText, tag) {
+  return String(lineText).split(/\s+/).includes(tag);
+}
+
+// Mirror of `capture_tasks::indentation_depth`: spaces accumulate in
+// fours; any other whitespace consumes the run plus one level.
+function taskWikilinkIndentationDepth(indentation) {
+  let depth = 0;
+  let spaces = 0;
+  for (const character of String(indentation)) {
+    if (character === " ") {
+      spaces += 1;
+    } else {
+      depth += Math.ceil(spaces / 4) + 1;
+      spaces = 0;
+    }
+  }
+  return depth + Math.ceil(spaces / 4);
+}
+
+// Mirror of `note_tasks::clean_description`: strip the trailing block
+// ID, blank inline fields, then drop the global filter token plus an
+// ASCII case-insensitive `#ref` directly after it.
+function taskWikilinkSearchText(body, globalFilter, blockId) {
+  let text = String(body);
+  if (blockId) {
+    const suffix = `^${blockId}`;
+    const trimmed = text.trimEnd();
+    if (trimmed.endsWith(suffix)) {
+      text = trimmed.slice(0, -suffix.length);
+    }
+  }
+  text = text.replace(TASK_WIKILINK_INLINE_FIELD_RE, " ");
+  const out = [];
+  let prevDroppedFilter = false;
+  for (const token of text.split(/\s+/).filter((part) => part !== "")) {
+    if (globalFilter !== "" && token === globalFilter) {
+      prevDroppedFilter = true;
+      continue;
+    }
+    if (prevDroppedFilter && token.toLowerCase() === "#ref") {
+      prevDroppedFilter = false;
+      continue;
+    }
+    prevDroppedFilter = false;
+    out.push(token);
+  }
+  return out.join(" ");
+}
+
+// Every `#task` checkbox line in a note, mirroring `note_tasks::scan`
+// through `capture_dependency_tasks::discover`: lines of every status
+// outside strictly-closed frontmatter and fenced code, with the section
+// (nearest ATX heading), depth, hidden and project-blocked flags, the
+// search text bob ranks, the display text the card renders, and the
+// within-note duplicate-ID flag (which counts trailing IDs on every
+// surviving line, task or not, exactly like bob's block-ID map).
+//
+// `line` is 0-based internally and 1-based on the wire, like bob.
+function parseNoteTaskRows(notePath, content, settings) {
+  const active = settings || defaultTaskWikilinkSettings();
+  const lines = String(content)
+    .split("\n")
+    .map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+  let start = 0;
+  if (lines.length > 0 && lines[0].trimEnd() === "---") {
+    const close = lines.findIndex(
+      (line, index) => index > 0 && line.trimEnd() === "---",
+    );
+    if (close !== -1) {
+      start = close + 1;
+    }
+  }
+  const fenced = new Set();
+  let open = null;
+  for (let index = start; index < lines.length; index += 1) {
+    if (open) {
+      fenced.add(index);
+      if (taskWikilinkClosesFence(lines[index], open)) {
+        open = null;
+      }
+    } else {
+      const marker = taskWikilinkFenceMarker(lines[index]);
+      if (marker) {
+        fenced.add(index);
+        open = marker;
+      }
+    }
+  }
+  const idCounts = new Map();
+  for (let index = start; index < lines.length; index += 1) {
+    if (fenced.has(index)) {
+      continue;
+    }
+    const id = taskWikilinkTrailingBlockId(lines[index]);
+    if (id) {
+      idCounts.set(id, (idCounts.get(id) || 0) + 1);
+    }
+  }
+  const rows = [];
+  let section;
+  for (let index = start; index < lines.length; index += 1) {
+    if (fenced.has(index)) {
+      continue;
+    }
+    const heading = taskWikilinkAtxHeading(lines[index]);
+    if (heading !== null) {
+      section = heading;
+    }
+    const match = TASK_WIKILINK_LINE_RE.exec(lines[index]);
+    if (!match) {
+      continue;
+    }
+    const body = match[3];
+    if (
+      active.globalFilter !== "" &&
+      !body.split(/\s+/).includes(active.globalFilter)
+    ) {
+      continue;
+    }
+    const blockId = taskWikilinkTrailingBlockId(lines[index]);
+    const statusType = active.statusTypes[match[2]] || "TODO";
+    rows.push({
+      notePath,
+      line: index,
+      rawLine: lines[index],
+      status: match[2],
+      blockId: blockId || null,
+      hidden: taskWikilinkHasExactTag(lines[index], "#hide"),
+      prjBlocked: taskWikilinkHasExactTag(lines[index], "#prj_is_blocked"),
+      section,
+      depth: taskWikilinkIndentationDepth(match[1]),
+      searchText: taskWikilinkSearchText(body, active.globalFilter, blockId),
+      displayText: cleanTaskDisplayText(lines[index]),
+      duplicateId: blockId ? (idCounts.get(blockId) || 0) > 1 : false,
+      open: TASK_WIKILINK_OPEN_TYPES.has(statusType),
+    });
+  }
+  return rows;
+}
+
+// Mirror of `collect_note_paths` plus
+// `is_always_excluded_note_directory_name`: dotted and always-excluded
+// directory components never contribute notes; a file only needs a
+// case-insensitive `.md` extension (so a dotted root file still counts,
+// exactly like bob).
+function isTaskWikilinkNotePath(path) {
+  const parts = String(path).split("/");
+  const file = parts.pop();
+  if (!/\.[mM][dD]$/.test(file || "")) {
+    return false;
+  }
+  return parts.every(
+    (dir) => !dir.startsWith(".") && !TASK_WIKILINK_EXCLUDED_DIRS.has(dir),
+  );
+}
+
+function taskWikilinkPathWithoutExtension(path) {
+  const without = String(path).replace(/\.[mM][dD]$/, "");
+  return without.split("/").join("/");
+}
+
+function taskWikilinkIsArchivePath(path) {
+  return String(path).split("/")[0] === "done";
+}
+
+// Mirror of `locator_for` plus `cross_note_link_target` over a basename
+// index: archive paths always keep the vault-relative path without
+// `.md`; otherwise the file stem when it resolves to exactly this path
+// (an exact `stem.md` hit first, else a unique case-insensitive
+// basename), else the full path without `.md`.
+function buildBasenameIndex(paths) {
+  const exact = new Set(paths);
+  const byStem = new Map();
+  for (const path of paths) {
+    const file = String(path).split("/").pop();
+    const stem = file.replace(/\.[mM][dD]$/, "");
+    const key = stem.toLowerCase();
+    if (!byStem.has(key)) {
+      byStem.set(key, []);
+    }
+    byStem.get(key).push(path);
+  }
+  function resolveStem(stem) {
+    const candidate = `${stem}.md`;
+    if (exact.has(candidate)) {
+      return candidate;
+    }
+    const group = byStem.get(stem.toLowerCase()) || [];
+    return group.length === 1 ? group[0] : null;
+  }
+  function stemOf(path) {
+    return String(path)
+      .split("/")
+      .pop()
+      .replace(/\.[mM][dD]$/, "");
+  }
+  function locatorFor(path) {
+    const stem = stemOf(path);
+    if (resolveStem(stem) === path) {
+      return stem;
+    }
+    return taskWikilinkPathWithoutExtension(path);
+  }
+  function linkTargetFor(path) {
+    if (taskWikilinkIsArchivePath(path)) {
+      return taskWikilinkPathWithoutExtension(path);
+    }
+    return locatorFor(path);
+  }
+  return { locatorFor, linkTargetFor };
+}
+
+// Mirror of `previous_daily_note` with the anchor passed as a Date:
+// the latest canonical `YYYY/YYYYMMDD.md` daily before the anchor day.
+function previousDailyNotePath(paths, now) {
+  const anchor = now instanceof Date ? now : new Date(now);
+  const anchorDay =
+    anchor.getFullYear() * 10000 +
+    (anchor.getMonth() + 1) * 100 +
+    anchor.getDate();
+  let best = null;
+  for (const path of paths) {
+    const match = /^(\d{4})\/(\d{4})(\d{2})(\d{2})\.md$/.exec(String(path));
+    if (!match) {
+      continue;
+    }
+    if (match[1] !== match[2]) {
+      continue;
+    }
+    const year = Number(match[2]);
+    const month = Number(match[3]);
+    const day = Number(match[4]);
+    const check = new Date(year, month - 1, day);
+    if (
+      check.getFullYear() !== year ||
+      check.getMonth() !== month - 1 ||
+      check.getDate() !== day
+    ) {
+      continue;
+    }
+    const stamp = year * 10000 + month * 100 + day;
+    if (stamp < anchorDay && (!best || stamp > best.stamp)) {
+      best = { path, stamp };
+    }
+  }
+  return best ? best.path : null;
+}
+
+// Mirror of `capture_task_wikilinks::disabled_reason`, minus the
+// read-only check: in Obsidian a failed write reports instead.
+function disabledReasonFor(row, options) {
+  const previousDailyPath = options ? options.previousDailyPath : null;
+  if (row.duplicateId) {
+    return `duplicate block ID ^${row.blockId} in ${row.notePath}`;
+  }
+  if (row.blockId) {
+    return null;
+  }
+  if (taskWikilinkIsArchivePath(row.notePath)) {
+    return "archived tasks can't get an id";
+  }
+  if (previousDailyPath && previousDailyPath === row.notePath) {
+    return "the previous daily note is read-only";
+  }
+  return null;
+}
+
+// Mirror of `capture_dependency_tasks::group_for`.
+function groupForWikilinkTask(row, ownerPath) {
+  if (!row.open) {
+    return "completed";
+  }
+  if (ownerPath && ownerPath === row.notePath) {
+    return "in_this_note";
+  }
+  if (row.status === "/") {
+    return "in_progress";
+  }
+  if (row.status === "*") {
+    return "next";
+  }
+  return "open";
+}
+// ---- src/032-task-wikilink-rank.js ----
+// Ranker for the `((` Task Wikilink Picker: the searchable fields,
+// tiered AND matcher, and picker order. This mirrors
+// `capture_dependency_tasks::dependency_search_fields`,
+// `capture_link_tasks::match_score`, and
+// `capture_dependency_tasks::order_for_picker` (with `group_for` and
+// the canonical key), so a warm vault paints in the same order bob
+// would serve. Pure: no Obsidian imports.
+
+// Raw searchable fields for a parsed task row, in bob's order:
+// `locator:block-id` and the block ID (identified rows only), the
+// search text, the locator, the full note path, and the section.
+function taskWikilinkSearchFields(row) {
+  const fields = [];
+  if (row.blockId) {
+    fields.push(`${row.locator}:${row.blockId}`);
+    fields.push(row.blockId);
+  }
+  fields.push(row.searchText);
+  fields.push(row.locator);
+  fields.push(row.notePath);
+  if (row.section) {
+    fields.push(row.section);
+  }
+  return fields;
+}
+
+function taskWikilinkIsWordChar(character) {
+  return /[\p{L}\p{N}]/u.test(character);
+}
+
+// One term's best tier over the lowercased fields, or null when it
+// matches nothing. Tiers, best first: 3 for a field prefix, 2 for a
+// word prefix (the preceding character is not alphanumeric), 1 for a
+// substring, and 0 for an in-order subsequence.
+function taskWikilinkFieldTier(field, term) {
+  if (field.startsWith(term)) {
+    return 3;
+  }
+  for (let index = 1; index < field.length; index += 1) {
+    if (
+      field.startsWith(term, index) &&
+      !taskWikilinkIsWordChar(field[index - 1])
+    ) {
+      return 2;
+    }
+  }
+  if (field.includes(term)) {
+    return 1;
+  }
+  if (taskWikilinkIsSubsequence(field, term)) {
+    return 0;
+  }
+  return null;
+}
+
+function taskWikilinkIsSubsequence(field, term) {
+  let wanted = 0;
+  for (const cell of field) {
+    if (cell === term[wanted]) {
+      wanted += 1;
+      if (wanted === term.length) {
+        return true;
+      }
+    }
+  }
+  return wanted === term.length;
+}
+
+// Total tier score for raw (unlowercased) searchable fields against a
+// query, or null when any whitespace-separated term matches nothing.
+// An empty query scores zero, so callers rank matches and canonical
+// order with one comparator.
+function matchScoreWikilinkTasks(rawFields, query) {
+  const terms = String(query)
+    .split(/\s+/)
+    .filter((term) => term !== "")
+    .map((term) => term.toLowerCase());
+  let total = 0;
+  for (const term of terms) {
+    let best = null;
+    for (const field of rawFields) {
+      const tier = taskWikilinkFieldTier(
+        String(field).toLowerCase(),
+        term,
+      );
+      if (tier !== null && (best === null || tier > best)) {
+        best = tier;
+      }
+    }
+    if (best === null) {
+      return null;
+    }
+    total += best;
+  }
+  return total;
+}
+
+// Stable picker group rank for a task: same-note open tasks first,
+// then In Progress, Next, other open tasks, then completed history.
+function canonicalKeyWikilinkTask(row, ownerPath) {
+  let section;
+  if (!row.open) {
+    section = 4;
+  } else if (ownerPath && ownerPath === row.notePath) {
+    section = 0;
+  } else if (row.status === "/") {
+    section = 1;
+  } else if (row.status === "*") {
+    section = 2;
+  } else {
+    section = 3;
+  }
+  const hidden = row.hidden ? 1 : 0;
+  const note = section === 0 ? "" : row.notePath;
+  return [section, hidden, note, row.line];
+}
+
+function compareCanonicalWikilinkKeys(left, right) {
+  if (left[0] !== right[0]) {
+    return left[0] - right[0];
+  }
+  if (left[1] !== right[1]) {
+    return left[1] - right[1];
+  }
+  if (left[2] !== right[2]) {
+    return left[2] < right[2] ? -1 : 1;
+  }
+  return left[3] - right[3];
+}
+
+// Order parsed rows for the picker: query matches first (open matches
+// by score, then completed-history matches by score, ties keeping
+// canonical order), or the plain canonical order for an empty query.
+// Completed history always trails open matches so searches still find
+// it without burying actionable rows. The sort is stable, so full ties
+// keep catalog (path/line) order.
+function orderForWikilinkPicker(rows, query, ownerPath) {
+  const scored = [];
+  for (const row of rows) {
+    const score = matchScoreWikilinkTasks(
+      taskWikilinkSearchFields(row),
+      query,
+    );
+    if (score !== null) {
+      scored.push({ row, score });
+    }
+  }
+  scored.sort((left, right) => {
+    const openOrder =
+      (left.row.open ? 0 : 1) - (right.row.open ? 0 : 1);
+    if (openOrder !== 0) {
+      return openOrder;
+    }
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+    return compareCanonicalWikilinkKeys(
+      canonicalKeyWikilinkTask(left.row, ownerPath),
+      canonicalKeyWikilinkTask(right.row, ownerPath),
+    );
+  });
+  return scored.map((entry) => entry.row);
+}
+
+// The bytes an accepted identified row splices: the backend
+// `[[target#^id]]` form shared with `capture-task-id`'s
+// `wikilink_replacement`. ID-less and guarded rows resolve through the
+// explicit Add block ID flow instead, so they splice nothing.
+function replacementForWikilinkTask(row, disabledReason) {
+  if (!row.blockId || disabledReason) {
+    return "";
+  }
+  return `[[${row.linkTarget}#^${row.blockId}]]`;
+}
 // ---- src/040-editor-pomodoro-and-logs.js ----
 function isEditorPosition(position) {
   return (
@@ -14453,6 +15108,19 @@ module.exports.helpers = {
   taskIdKeysFromLine,
   taskPickerRevertCursorCh,
   taskPickerRevertReplacement,
+  buildBasenameIndex,
+  canonicalKeyWikilinkTask,
+  defaultTaskWikilinkSettings,
+  disabledReasonFor,
+  groupForWikilinkTask,
+  isTaskWikilinkNotePath,
+  matchScoreWikilinkTasks,
+  orderForWikilinkPicker,
+  parseNoteTaskRows,
+  previousDailyNotePath,
+  replacementForWikilinkTask,
+  taskWikilinkSearchFields,
+  taskWikilinkSettingsFromTasksJson,
   taskStatusClass,
   todayDailyPath,
   workSummaryContainsDataviewInlineField,

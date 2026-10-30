@@ -4,6 +4,8 @@
   "020-markers-and-references.js",
   "022-task-wikilink-token.js",
   "030-tasks-and-dependencies.js",
+  "031-task-wikilink-rules.js",
+  "032-task-wikilink-rank.js",
   "040-editor-pomodoro-and-logs.js",
   "050-source-discovery-and-edits.js",
   "060-link-cleanup-and-deletion.js",

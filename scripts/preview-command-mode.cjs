@@ -37,13 +37,17 @@ function findChromium() {
 
 function safeJson(value) { return JSON.stringify(value).replace(/</g, "\\u003c"); }
 
-function makeHtml(css, utility, toasts, chip, ansi, pager) {
+function makeHtml(css, utility, catalog, runStore, sequenceModel, toasts, sequenceToast, chip, ansi, pager) {
   const template = fs.readFileSync(path.join(__dirname, "preview-command-mode.template.html"), "utf8");
   return template
     .replace("__OBSIDIAN_BASELINE_CSS__", () => BASELINE)
     .replace("__PRODUCTION_CSS__", () => css)
     .replace("__UTILITY_SOURCE__", () => utility)
+    .replace("__CATALOG_SOURCE__", () => catalog)
+    .replace("__RUN_STORE_SOURCE__", () => runStore)
+    .replace("__SEQUENCE_MODEL_SOURCE__", () => sequenceModel)
     .replace("__TOAST_SOURCE__", () => toasts)
+    .replace("__SEQUENCE_TOAST_SOURCE__", () => sequenceToast)
     .replace("__CHIP_SOURCE__", () => chip)
     .replace("__ANSI_SOURCE__", () => ansi)
     .replace("__PAGER_SOURCE__", () => pager);
@@ -120,7 +124,11 @@ async function main() {
   const html = makeHtml(
     fs.readFileSync(path.join(pluginRoot, "styles.css"), "utf8"),
     fs.readFileSync(path.join(pluginRoot, "src/020-util.js"), "utf8"),
+    fs.readFileSync(path.join(pluginRoot, "src/040-catalog.js"), "utf8"),
+    fs.readFileSync(path.join(pluginRoot, "src/050-run-store.js"), "utf8"),
+    fs.readFileSync(path.join(pluginRoot, "src/056-sequence-model.js"), "utf8"),
     fs.readFileSync(path.join(pluginRoot, "src/110-toasts.js"), "utf8"),
+    fs.readFileSync(path.join(pluginRoot, "src/115-sequence-toast.js"), "utf8"),
     fs.readFileSync(path.join(pluginRoot, "src/120-status-chip.js"), "utf8"),
     fs.readFileSync(path.join(pluginRoot, "src/140-ansi-and-links.js"), "utf8"),
     fs.readFileSync(path.join(pluginRoot, "src/150-pager.js"), "utf8"),
@@ -163,7 +171,7 @@ async function main() {
       "",
       "Rendered from production toast, chip, ANSI, and pager fragments plus `styles.css` under an Obsidian baseline stylesheet.",
       "",
-      "Cases: completed, attention with Scan intake, failed stderr summary, unknown, stopped; one run, two runs, queued, overdue, settled completed, and settled failed; pager running, completed with ANSI and links, failed stderr, and JSON.",
+      "Cases: single-run outcome cards, completed and halted sequence cards; one run, two runs, queued, overdue, sequence running and queued, completed and halted settles; pager running, completed with ANSI and links, failed stderr, JSON, and a sequence step.",
       "",
       ...screenshots.map((file) => "- " + path.basename(file)),
       "",

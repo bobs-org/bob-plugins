@@ -110,6 +110,9 @@ function cmPagerLoadPayload(runner, runId) {
 
 function cmBuildPagerView(payload, options = {}) {
   const record = (payload && payload.record) || {};
+  const sequenceStamp = record.sequence && typeof record.sequence === "object"
+    ? { index: Number(record.sequence.index), total: Number(record.sequence.total) }
+    : null;
   const nowMs = typeof options.nowMs === "number" ? options.nowMs : Date.now();
   const rawChunks = Array.isArray(options.chunks)
     ? options.chunks
@@ -126,6 +129,9 @@ function cmBuildPagerView(payload, options = {}) {
     record,
     status: cmPagerStatusMeta(record, nowMs, options.queuedBehind || ""),
     argv: cmPagerDisplayArgv(record),
+    ...(sequenceStamp && Number.isFinite(sequenceStamp.index) && Number.isFinite(sequenceStamp.total)
+      ? { sequence: sequenceStamp }
+      : {}),
     started: cmFormatStartTime(record.started_at),
     history,
     stopVisible: record.outcome === "running",
@@ -213,7 +219,11 @@ function cmRenderPagerView(root, view, handlers = {}) {
   const argv = cmPagerEl("code", "bob-cmd-pager-argv", view.argv);
   argv.setAttribute("title", view.argv);
   const started = cmPagerEl("span", "bob-cmd-pager-started", view.started);
-  header.append(pill, argv, started);
+  header.append(pill, argv);
+  if (view.sequence) {
+    header.appendChild(cmPagerEl("span", "bob-cmd-pager-seq", "step " + view.sequence.index + " of " + view.sequence.total));
+  }
+  header.appendChild(started);
   if (view.history && view.history.label) {
     header.appendChild(cmPagerEl("span", "bob-cmd-pager-index", view.history.label));
   }
@@ -238,7 +248,6 @@ function cmRenderPagerView(root, view, handlers = {}) {
     truncated.addEventListener("click", () => { if (typeof handlers.onOpenLog === "function") handlers.onOpenLog(); });
     root.appendChild(truncated);
   }
-
   const body = cmPagerEl("div", "bob-cmd-pager-body" + (view.wrap ? " is-wrap" : ""));
   body.setAttribute("tabindex", "0");
   let offset = 0;

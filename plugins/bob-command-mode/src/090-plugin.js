@@ -260,6 +260,7 @@ class BobCommandModePlugin extends Plugin {
       (runId) => this.commandModeOpenOutput(runId),
       (runId) => this.commandModeProgressText(runId),
       chipState,
+      { sequences: this.commandModeSequenceSnapshots() },
     );
     this.commandModeChipRunId = result && result.runId ? result.runId : (result && result.visible ? this.commandModeChipRunId : null);
     if (!result || !result.visible) {

@@ -409,7 +409,7 @@ test("plugin suppresses per-step toasts and skips chip settle for an active sequ
     assert.equal(summary.outcome, "completed");
     const notes = takeNotices();
     assert.equal(notes.length, 1, JSON.stringify(notes));
-    assert.match(notes[0], /bob sequence · 2\/2 completed/);
+    assert.match(notes[0], /Sequence · 2 commands/);
     assert.equal(chipState.settle, null);
   } finally {
     base.runner.dispose();

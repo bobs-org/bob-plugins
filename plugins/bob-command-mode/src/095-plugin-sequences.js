@@ -83,6 +83,7 @@ BobCommandModePlugin.prototype.commandModeRunSequence = async function commandMo
       onStepFinish: (index, result) => {
         live.results = Array.isArray(live.results) ? live.results : [];
         live.results[index] = result;
+        live.index = Math.min(index + 2, stored.length);
         cmSequenceCallHook(opts.onStepFinish, index, result);
       },
     });
@@ -100,25 +101,110 @@ BobCommandModePlugin.prototype.commandModeRunSequence = async function commandMo
 
 BobCommandModePlugin.prototype.commandModeSequenceFinished = function commandModeSequenceFinished(summary) {
   if (!summary) return;
-  const total = Number(summary.total) || 0;
-  const clock = cmFormatClock(summary.durationMs);
-  let message;
-  if (summary.outcome === "interrupted") {
-    message = "bob sequence interrupted · " + clock;
-  } else if (summary.stoppedAt) {
-    const halt = Array.isArray(summary.results)
-      ? summary.results.find((row) => row && Number(row.index) === Number(summary.stoppedAt))
-      : null;
-    const reason = halt && halt.reason ? String(halt.reason) : "";
-    message = "bob sequence stopped at " + summary.stoppedAt + "/" + total
-      + (reason ? " · " + reason : "");
-  } else {
-    const done = Array.isArray(summary.results)
-      ? summary.results.filter((row) => row && !row.skipped).length
-      : total;
-    message = "bob sequence · " + done + "/" + total + " " + (summary.outcome || "completed") + " in " + clock;
+  const catalog = this.commandModeRunner && typeof this.commandModeRunner.catalog === "function"
+    ? this.commandModeRunner.catalog()
+    : null;
+  const model = cmSequenceToastModel(summary, catalog);
+  const focusRunId = model.focusRunId;
+  const chipState = this.commandModeChipState();
+  if (chipState && chipState.shown instanceof Set && chipState.shown.has(model.id)) {
+    const index = model.stoppedAt || model.total;
+    const step = model.steps[index - 1] || {};
+    chipState.settle = {
+      runId: focusRunId,
+      title: String(step.title || cmSequenceStepTitle(step, catalog) || "bob"),
+      outcome: model.outcome,
+      durationMs: model.durationMs,
+      atMs: Date.now(),
+      sequence: {
+        id: model.id,
+        step: index + "/" + model.total,
+        stepTitle: String(step.title || cmSequenceStepTitle(step, catalog) || "bob"),
+        total: model.total,
+      },
+    };
+    try {
+      if (this.commandModeStatusEl) this.commandModeRefreshStatusChip(chipState.settle.atMs);
+    } catch (error) {
+      // Paint is best effort here; the timer repaints within 250 ms.
+    }
   }
-  new Notice(message);
+
+  const stickyKey = "sequence:" + model.signature;
+  const stickyCards = this.commandModeStickyNotices || (this.commandModeStickyNotices = new Map());
+  const previous = stickyCards.get(stickyKey);
+  if (previous) {
+    try { if (typeof previous.hide === "function") previous.hide(); }
+    catch (error) { /* A previous card may already be closed. */ }
+    stickyCards.delete(stickyKey);
+  }
+  const fragment = cmCreateSequenceToastFragment(
+    model,
+    (action) => this.commandModeRunSequenceToastAction(action, model),
+    (runId) => { if (runId) return this.commandModeOpenOutput(runId); },
+  );
+  const duration = CM_TOAST_META[model.outcome] ? CM_TOAST_META[model.outcome].duration : CM_TOAST_META.unknown.duration;
+  let card;
+  try {
+    card = new Notice(fragment || (model.title + " · " + model.duration), duration);
+  } catch (error) {
+    return;
+  }
+  if (model.sticky) stickyCards.set(stickyKey, card);
+  this.commandModeMaybeNotifySequence(summary, model);
+};
+
+BobCommandModePlugin.prototype.commandModeMaybeNotifySequence = function commandModeMaybeNotifySequence(summary, model) {
+  if (this.settings && this.settings.osNotifications === false || Number(summary && summary.durationMs) <= 15000) return false;
+  try {
+    if (typeof document !== "undefined" && typeof document.hasFocus === "function" && document.hasFocus()) return false;
+    if (typeof Notification !== "function") return false;
+    const notification = new Notification(model.title, {
+      body: (model.lines || []).slice(0, 4).map((line) => line.title + (line.duration ? " · " + line.duration : "")).join("\n"),
+    });
+    notification.onclick = () => {
+      try { if (typeof window !== "undefined" && typeof window.focus === "function") window.focus(); }
+      catch (error) { /* The shell may not expose focus. */ }
+      if (model.focusRunId) void this.commandModeOpenOutput(model.focusRunId);
+    };
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
+BobCommandModePlugin.prototype.commandModeRunSequenceToastAction = async function commandModeRunSequenceToastAction(action, model = {}) {
+  if (!action || !action.id) return { ok: false, reason: "unknown action" };
+  const runner = this.commandModeRunner;
+  const catalog = runner && typeof runner.catalog === "function" ? runner.catalog() : null;
+  switch (action.id) {
+    case "output":
+      return model.focusRunId ? this.commandModeOpenOutput(model.focusRunId) : { ok: false, reason: "run not found" };
+    case "resume": {
+      if (!model.id || !model.stoppedAt) return { ok: false, reason: "sequence cannot resume" };
+      return this.commandModeRunSequence(model.steps, {
+        id: model.id,
+        startedAtMs: model.startedAtMs,
+        startIndex: model.stoppedAt - 1,
+        priorResults: model.results,
+        trigger: "retry",
+      });
+    }
+    case "rerun":
+      return this.commandModeRunSequence(model.steps, { trigger: "retry" });
+    case "copy": {
+      try {
+        const clipboard = typeof navigator !== "undefined" && navigator.clipboard;
+        if (!clipboard || typeof clipboard.writeText !== "function") return { ok: false, reason: "clipboard unavailable" };
+        await clipboard.writeText(cmSequenceCopyText(model.steps, catalog));
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, reason: String((error && error.message) || error) };
+      }
+    }
+    default:
+      return { ok: false, reason: "unknown action: " + action.id };
+  }
 };
 
 BobCommandModePlugin.prototype.commandModeRerunLast = function commandModeRerunLast() {

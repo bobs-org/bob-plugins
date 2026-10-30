@@ -56,6 +56,118 @@ function cmChipBudgetMins(record) {
   return Math.max(1, Math.round(Number(record.budget_secs) / 60) || 0);
 }
 
+function cmChipSequenceResult(sequence, index) {
+  const results = Array.isArray(sequence && sequence.results) ? sequence.results : [];
+  return results.find((row) => row && Number(row.index) === index) || results[index - 1] || null;
+}
+
+function cmChipSequenceActiveRecord(records, id) {
+  return records.find((record) => record && record.sequence && String(record.sequence.id || "") === String(id || "")) || null;
+}
+
+function cmChipSequenceAge(sequence, nowMs) {
+  const started = typeof sequence.startedAtMs === "number"
+    ? sequence.startedAtMs
+    : Date.parse(sequence.started_at || "");
+  return Number.isFinite(started) ? Math.max(0, nowMs - started) : 0;
+}
+
+function cmChipSequenceGlyph(outcome) {
+  return (cmChipToastMeta()[outcome] || cmChipToastMeta().unknown).glyph;
+}
+
+function cmChipSequenceModel(active, sequences, now, progress, revealMs) {
+  const sequence = [...sequences].sort((left, right) =>
+    (Number(left.startedAtMs) || 0) - (Number(right.startedAtMs) || 0),
+  ).pop();
+  const id = String(sequence.id || "");
+  const currentRecord = cmChipSequenceActiveRecord(active, id);
+  const steps = Array.isArray(sequence.steps) ? sequence.steps : [];
+  const total = Math.max(1, Number(sequence.total) || steps.length || 1);
+  const currentIndex = currentRecord && currentRecord.sequence
+    ? Number(currentRecord.sequence.index)
+    : Number(sequence.index);
+  const index = Math.max(1, Math.min(total, Number.isFinite(currentIndex) && currentIndex > 0 ? currentIndex : 1));
+  const age = cmChipSequenceAge(sequence, now);
+  const otherVisible = active.some((record) => record !== currentRecord && cmChipRecordAge(record, now) >= revealMs);
+  if (age < revealMs && !otherVisible) {
+    return { visible: false, runs: active.length, count: active.length, runId: null };
+  }
+
+  const overdue = active.some((record) => cmChipIsOverdue(record, cmChipRecordAge(record, now)));
+  const queued = currentRecord && currentRecord.outcome === "queued";
+  const tone = overdue ? "is-overdue" : queued ? "is-queued" : "is-running";
+  const clock = cmFormatClock(age);
+  const count = Math.max(1, active.length);
+  const step = index + "/" + total;
+  const current = steps[index - 1] || {};
+  const stepTitle = String(current.title || (currentRecord && cmChipRunTitle(currentRecord)) || "bob");
+  const results = Array.isArray(sequence.results) ? sequence.results : [];
+  let runId = currentRecord && currentRecord.id ? currentRecord.id : null;
+  if (!runId) {
+    for (let i = results.length - 1; i >= 0; i -= 1) {
+      if (results[i] && results[i].runId) { runId = results[i].runId; break; }
+    }
+  }
+
+  const lines = ["bob · sequence " + index + " of " + total + " · " + clock];
+  for (let i = 1; i <= total; i += 1) {
+    const result = cmChipSequenceResult(sequence, i);
+    const item = steps[i - 1] || {};
+    const title = String(item.title || "bob");
+    if (i === index && currentRecord) {
+      const duration = cmFormatClock(cmChipRecordAge(currentRecord, now));
+      lines.push("● " + title + " · " + duration + (queued ? " · queued" : ""));
+      const display = Array.isArray(item.display) ? item.display : [];
+      if (display.length) lines.push("  " + cmFormatArgv(["bob", ...display]));
+      let last = "";
+      try { last = String(progress(currentRecord.id) || "").trim(); } catch (error) { last = ""; }
+      if (last) lines.push("  Last: " + last);
+    } else if (result && result.skipped) {
+      lines.push("○ " + title + " · skipped");
+    } else if (result && result.outcome) {
+      const duration = typeof result.durationMs === "number" ? " · " + cmFormatClock(result.durationMs) : "";
+      lines.push(cmChipSequenceGlyph(result.outcome) + " " + title + duration);
+    } else {
+      lines.push("○ " + title);
+    }
+  }
+
+  const otherActive = active.filter((record) => !(record && record.sequence && String(record.sequence.id || "") === id));
+  const maxRows = 4;
+  for (const record of [...otherActive].reverse().slice(0, maxRows)) {
+    const runAge = cmChipRecordAge(record, now);
+    let runClock = "0:00";
+    try { runClock = cmFormatClock(runAge); } catch (error) { /* Keep fallback. */ }
+    let title = cmChipRunTitle(record) + " · " + runClock;
+    if (record.outcome === "queued") title += " · queued";
+    else if (cmChipIsOverdue(record, runAge)) title += " · past its ~" + cmChipBudgetMins(record) + " min budget";
+    else if (record.adopted) title += " · adopted after reload";
+    lines.push(title, cmChipShortArgv(record));
+    let last = "";
+    try { last = String(progress(record.id) || "").trim(); } catch (error) { last = ""; }
+    if (last) lines.push("Last: " + last);
+  }
+  if (otherActive.length > maxRows) lines.push("…and " + (otherActive.length - maxRows) + " more");
+  lines.push("Click to open output");
+  return {
+    visible: true,
+    tone,
+    outcome: null,
+    label: "bob",
+    count,
+    step,
+    stepTitle,
+    sequenceId: id,
+    clock,
+    clockMs: age,
+    tooltip: lines.join("\n\n"),
+    runId,
+    runs: active.length,
+    leaving: false,
+  };
+}
+
 // Pure model for the brand indicator (indicator_label = brand, indicator_runs = all).
 // records: live plus adopted unfinished runs. state: {shown:Set, settle:null|{...}}.
 // progressFor(runId): last progress line. Returns {visible, tone, outcome,
@@ -72,6 +184,9 @@ function cmStatusChipModel(records, nowMs, state, progressFor, options = {}) {
     (record) => record && (record.outcome === "running" || record.outcome === "queued"),
   );
   const ages = active.map((record) => cmChipRecordAge(record, now));
+  const sequences = Array.isArray(options.sequences) ? options.sequences.filter((item) => item && item.id) : [];
+
+  if (sequences.length) return cmChipSequenceModel(active, sequences, now, progress, revealMs);
 
   if (active.length) {
     if (ages.every((age) => age < revealMs)) {
@@ -155,9 +270,16 @@ function cmStatusChipModel(records, nowMs, state, progressFor, options = {}) {
       outcome,
       label: "bob",
       count: 1,
+      ...(settle.sequence ? {
+        step: String(settle.sequence.step || ""),
+        stepTitle: String(settle.sequence.stepTitle || settle.title || "bob"),
+        sequenceId: String(settle.sequence.id || ""),
+      } : {}),
       clock: clockText,
       clockMs: settle.durationMs || 0,
-      tooltip,
+      tooltip: settle.sequence
+        ? "bob · sequence " + String(settle.sequence.step || "") + " · " + clockText + "\n\n" + settle.title + " · " + entry.label + "\n\nClick to open output"
+        : tooltip,
       runId: settle.runId,
       runs: 0,
       leaving,
@@ -167,7 +289,7 @@ function cmStatusChipModel(records, nowMs, state, progressFor, options = {}) {
   return { visible: false, runs: 0, count: 0, runId: null };
 }
 
-function cmChipEnsureChildren(element) {
+function cmChipEnsureChildren(element, needsSequence) {
   const doc = (typeof document !== "undefined" && document) || null;
   const children = Array.from(element.children || []);
   const find = (cls) => {
@@ -181,7 +303,8 @@ function cmChipEnsureChildren(element) {
   let mark = find("bob-cmd-chip-mark");
   let label = find("bob-cmd-chip-label");
   let clock = find("bob-cmd-chip-clock");
-  if (mark && label && clock) return { mark, label, clock, created: false };
+  let step = find("bob-cmd-chip-step");
+  let title = find("bob-cmd-chip-title");
   const create = (cls, text) => {
     if (doc && typeof doc.createElement === "function") {
       const el = doc.createElement("span");
@@ -210,7 +333,6 @@ function cmChipEnsureChildren(element) {
   }
   if (!label) label = create("bob-cmd-chip-label", "bob");
   if (!clock) clock = create("bob-cmd-chip-clock", "0:00");
-  // Append in anatomy order exactly once; never reorder afterwards.
   let created = false;
   for (const node of [mark, label, clock]) {
     const present = children.includes(node);
@@ -221,7 +343,21 @@ function cmChipEnsureChildren(element) {
       created = true;
     }
   }
-  return { mark, label, clock, created };
+  const insertBefore = (node, reference) => {
+    if (typeof element.insertBefore === "function") element.insertBefore(node, reference);
+    else if (typeof element.appendChild === "function") element.appendChild(node);
+    children.push(node);
+    created = true;
+  };
+  if (needsSequence && !step) {
+    step = create("bob-cmd-chip-step");
+    insertBefore(step, clock);
+  }
+  if (needsSequence && !title) {
+    title = create("bob-cmd-chip-title");
+    insertBefore(title, clock);
+  }
+  return { mark, label, step, title, clock, created };
 }
 
 function cmChipToneClasses() {
@@ -257,7 +393,7 @@ function cmChipApplyTone(element, model) {
 
 // Idempotent paint. Keeps the current signature with an optional trailing
 // state for the preview script and old callers. Never recreates the mark.
-function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () => {}, progressFor = () => "", state) {
+function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () => {}, progressFor = () => "", state, options = {}) {
   if (!element) return { visible: false, runs: 0 };
   let progressFn = progressFor;
   let chipState = state;
@@ -272,12 +408,13 @@ function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () =>
       chipState.shown = new Set();
     }
   }
-  const model = cmStatusChipModel(records, nowMs, chipState || null, progressFn);
+  const renderOptions = options && typeof options === "object" ? options : {};
+  const model = cmStatusChipModel(records, nowMs, chipState || null, progressFn, renderOptions);
   const active = (Array.isArray(records) ? records : []).filter(
     (record) => record && (record.outcome === "running" || record.outcome === "queued"),
   );
   // One engine, one honest busy signal: any active run replaces a settle at once.
-  if (chipState && active.length && chipState.settle) chipState.settle = null;
+  if (chipState && (active.length || (Array.isArray(renderOptions.sequences) && renderOptions.sequences.length)) && chipState.settle) chipState.settle = null;
   if (!model.visible) {
     // Expired settles clear so the next paint stays hidden.
     if (chipState && chipState.settle) {
@@ -302,10 +439,19 @@ function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () =>
     for (const record of active) {
       if (record && record.id) chipState.shown.add(record.id);
     }
+    if (model.sequenceId) chipState.shown.add(model.sequenceId);
   }
-  const parts = cmChipEnsureChildren(element);
+  const parts = cmChipEnsureChildren(element, Boolean(model.step));
   const countText = model.count > 1 ? "bob ×" + model.count : "bob";
   if (parts.label.textContent !== countText) parts.label.textContent = countText;
+  if (parts.step) {
+    parts.step.textContent = model.step || "";
+    parts.step.style.display = model.step ? "" : "none";
+  }
+  if (parts.title) {
+    parts.title.textContent = model.stepTitle || "";
+    parts.title.style.display = model.stepTitle ? "" : "none";
+  }
   if (parts.clock.textContent !== model.clock) parts.clock.textContent = model.clock;
   try {
     if (parts.mark.textContent !== (model.tone === "is-settled" ? (cmChipToastMeta()[model.outcome] || {}).glyph || "" : "")) {
@@ -340,5 +486,5 @@ function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () =>
     // Best effort.
   }
   const overdue = model.tone === "is-overdue";
-  return { visible: true, runs: model.runs || model.count, overdue, runId };
+  return { visible: true, runs: model.runs || model.count, overdue, runId, step: model.step || null, stepTitle: model.stepTitle || null };
 }

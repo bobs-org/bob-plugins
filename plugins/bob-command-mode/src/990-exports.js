@@ -95,6 +95,8 @@ module.exports.helpers = {
   cmToastDuration,
   cmToastSummary,
   cmCreateToastFragment,
+  cmSequenceToastModel,
+  cmCreateSequenceToastFragment,
   cmRenderStatusChip,
   cmCreateApi,
   cmCreateRootApi,

@@ -108,6 +108,33 @@ test("interleave replay preserves arrival order for copy", () => {
   assert.equal(helpers.cmPagerCopyCommand(record), "bob vault-sync run");
 });
 
+test("stamped sequence runs add a step label to the pager header", () => {
+  const restore = installDocument({ focused: true });
+  try {
+    const view = helpers.cmBuildPagerView({
+      record: {
+        id: "seq-step",
+        argv: ["/usr/bin/bob", "task", "reconcile"],
+        outcome: "completed",
+        started_at: "2026-10-26T15:00:00.000Z",
+        sequence: { id: "seq-one", index: 2, total: 3 },
+      },
+      stdout: Buffer.from("done\n"),
+      stderr: Buffer.alloc(0),
+    });
+    assert.deepEqual(view.sequence, { index: 2, total: 3 });
+    const { ElementStub } = require("./modal-harness.cjs");
+    const root = new ElementStub({ tag: "div" });
+    helpers.cmRenderPagerView(root, view);
+    const header = root.children.find((child) => child.classList.contains("bob-cmd-pager-header"));
+    const sequence = header.children.find((child) => child.classList.contains("bob-cmd-pager-seq"));
+    assert.equal(sequence.textContent, "step 2 of 3");
+    assert.ok(header.children.indexOf(sequence) > header.children.findIndex((child) => child.classList.contains("bob-cmd-pager-argv")));
+  } finally {
+    restore();
+  }
+});
+
 test("pager keys: scroll, wrap, search, copy, history, stop, close", () => {
   const searchOff = helpers.cmDefaultPagerSearch();
   assert.deepEqual(helpers.cmHandlePagerKey({ key: "j" }, { search: searchOff }), { type: "scroll", delta: "line", dir: 1 });

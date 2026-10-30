@@ -2565,6 +2565,7 @@ class BobCommandModePlugin extends Plugin {
       (runId) => this.commandModeOpenOutput(runId),
       (runId) => this.commandModeProgressText(runId),
       chipState,
+      { sequences: this.commandModeSequenceSnapshots() },
     );
     this.commandModeChipRunId = result && result.runId ? result.runId : (result && result.visible ? this.commandModeChipRunId : null);
     if (!result || !result.visible) {
@@ -3084,6 +3085,7 @@ BobCommandModePlugin.prototype.commandModeRunSequence = async function commandMo
       onStepFinish: (index, result) => {
         live.results = Array.isArray(live.results) ? live.results : [];
         live.results[index] = result;
+        live.index = Math.min(index + 2, stored.length);
         cmSequenceCallHook(opts.onStepFinish, index, result);
       },
     });
@@ -3101,25 +3103,110 @@ BobCommandModePlugin.prototype.commandModeRunSequence = async function commandMo
 
 BobCommandModePlugin.prototype.commandModeSequenceFinished = function commandModeSequenceFinished(summary) {
   if (!summary) return;
-  const total = Number(summary.total) || 0;
-  const clock = cmFormatClock(summary.durationMs);
-  let message;
-  if (summary.outcome === "interrupted") {
-    message = "bob sequence interrupted · " + clock;
-  } else if (summary.stoppedAt) {
-    const halt = Array.isArray(summary.results)
-      ? summary.results.find((row) => row && Number(row.index) === Number(summary.stoppedAt))
-      : null;
-    const reason = halt && halt.reason ? String(halt.reason) : "";
-    message = "bob sequence stopped at " + summary.stoppedAt + "/" + total
-      + (reason ? " · " + reason : "");
-  } else {
-    const done = Array.isArray(summary.results)
-      ? summary.results.filter((row) => row && !row.skipped).length
-      : total;
-    message = "bob sequence · " + done + "/" + total + " " + (summary.outcome || "completed") + " in " + clock;
+  const catalog = this.commandModeRunner && typeof this.commandModeRunner.catalog === "function"
+    ? this.commandModeRunner.catalog()
+    : null;
+  const model = cmSequenceToastModel(summary, catalog);
+  const focusRunId = model.focusRunId;
+  const chipState = this.commandModeChipState();
+  if (chipState && chipState.shown instanceof Set && chipState.shown.has(model.id)) {
+    const index = model.stoppedAt || model.total;
+    const step = model.steps[index - 1] || {};
+    chipState.settle = {
+      runId: focusRunId,
+      title: String(step.title || cmSequenceStepTitle(step, catalog) || "bob"),
+      outcome: model.outcome,
+      durationMs: model.durationMs,
+      atMs: Date.now(),
+      sequence: {
+        id: model.id,
+        step: index + "/" + model.total,
+        stepTitle: String(step.title || cmSequenceStepTitle(step, catalog) || "bob"),
+        total: model.total,
+      },
+    };
+    try {
+      if (this.commandModeStatusEl) this.commandModeRefreshStatusChip(chipState.settle.atMs);
+    } catch (error) {
+      // Paint is best effort here; the timer repaints within 250 ms.
+    }
   }
-  new Notice(message);
+
+  const stickyKey = "sequence:" + model.signature;
+  const stickyCards = this.commandModeStickyNotices || (this.commandModeStickyNotices = new Map());
+  const previous = stickyCards.get(stickyKey);
+  if (previous) {
+    try { if (typeof previous.hide === "function") previous.hide(); }
+    catch (error) { /* A previous card may already be closed. */ }
+    stickyCards.delete(stickyKey);
+  }
+  const fragment = cmCreateSequenceToastFragment(
+    model,
+    (action) => this.commandModeRunSequenceToastAction(action, model),
+    (runId) => { if (runId) return this.commandModeOpenOutput(runId); },
+  );
+  const duration = CM_TOAST_META[model.outcome] ? CM_TOAST_META[model.outcome].duration : CM_TOAST_META.unknown.duration;
+  let card;
+  try {
+    card = new Notice(fragment || (model.title + " · " + model.duration), duration);
+  } catch (error) {
+    return;
+  }
+  if (model.sticky) stickyCards.set(stickyKey, card);
+  this.commandModeMaybeNotifySequence(summary, model);
+};
+
+BobCommandModePlugin.prototype.commandModeMaybeNotifySequence = function commandModeMaybeNotifySequence(summary, model) {
+  if (this.settings && this.settings.osNotifications === false || Number(summary && summary.durationMs) <= 15000) return false;
+  try {
+    if (typeof document !== "undefined" && typeof document.hasFocus === "function" && document.hasFocus()) return false;
+    if (typeof Notification !== "function") return false;
+    const notification = new Notification(model.title, {
+      body: (model.lines || []).slice(0, 4).map((line) => line.title + (line.duration ? " · " + line.duration : "")).join("\n"),
+    });
+    notification.onclick = () => {
+      try { if (typeof window !== "undefined" && typeof window.focus === "function") window.focus(); }
+      catch (error) { /* The shell may not expose focus. */ }
+      if (model.focusRunId) void this.commandModeOpenOutput(model.focusRunId);
+    };
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
+BobCommandModePlugin.prototype.commandModeRunSequenceToastAction = async function commandModeRunSequenceToastAction(action, model = {}) {
+  if (!action || !action.id) return { ok: false, reason: "unknown action" };
+  const runner = this.commandModeRunner;
+  const catalog = runner && typeof runner.catalog === "function" ? runner.catalog() : null;
+  switch (action.id) {
+    case "output":
+      return model.focusRunId ? this.commandModeOpenOutput(model.focusRunId) : { ok: false, reason: "run not found" };
+    case "resume": {
+      if (!model.id || !model.stoppedAt) return { ok: false, reason: "sequence cannot resume" };
+      return this.commandModeRunSequence(model.steps, {
+        id: model.id,
+        startedAtMs: model.startedAtMs,
+        startIndex: model.stoppedAt - 1,
+        priorResults: model.results,
+        trigger: "retry",
+      });
+    }
+    case "rerun":
+      return this.commandModeRunSequence(model.steps, { trigger: "retry" });
+    case "copy": {
+      try {
+        const clipboard = typeof navigator !== "undefined" && navigator.clipboard;
+        if (!clipboard || typeof clipboard.writeText !== "function") return { ok: false, reason: "clipboard unavailable" };
+        await clipboard.writeText(cmSequenceCopyText(model.steps, catalog));
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, reason: String((error && error.message) || error) };
+      }
+    }
+    default:
+      return { ok: false, reason: "unknown action: " + action.id };
+  }
 };
 
 BobCommandModePlugin.prototype.commandModeRerunLast = function commandModeRerunLast() {
@@ -3276,6 +3363,159 @@ function cmCreateToastFragment(outcome = {}, onAction = () => {}, onOutput = () 
   fragment.appendChild(card);
   return fragment;
 }
+// ---- src/115-sequence-toast.js ----
+// Bob Command Mode: one summary card for a completed command sequence.
+
+function cmSequenceToastStoppedAt(summary) {
+  const explicit = Number(summary && summary.stoppedAt);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const results = Array.isArray(summary && summary.results) ? summary.results : [];
+  const halt = results.find((row) => row && CM_SEQUENCE_HALT.has(String(row.outcome || "")));
+  return halt ? Number(halt.index) || null : null;
+}
+
+function cmSequenceToastReason(value) {
+  const lines = cmStripAnsi(String(value || ""))
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines[0] || "";
+}
+
+function cmSequenceToastModel(summary = {}, catalog) {
+  const source = summary && typeof summary === "object" ? summary : {};
+  const steps = Array.isArray(source.steps) ? source.steps.map(cmSequenceStep) : [];
+  const results = Array.isArray(source.results) ? source.results : [];
+  const total = Math.max(0, Number(source.total) || steps.length);
+  const rawOutcome = String(source.outcome || "unknown");
+  const outcome = CM_TOAST_META[rawOutcome] ? rawOutcome : "unknown";
+  const stoppedAt = cmSequenceToastStoppedAt(source);
+  const lines = Array.from({ length: total }, (_, offset) => {
+    const index = offset + 1;
+    const result = results.find((row) => row && Number(row.index) === index) || null;
+    const skipped = Boolean(result && result.skipped);
+    const stepOutcome = result && CM_TOAST_META[result.outcome] ? result.outcome : "unknown";
+    const reason = !skipped && stoppedAt === index
+      ? cmSequenceToastReason(result && result.reason)
+      : "";
+    return {
+      index,
+      title: cmSequenceStepTitle(steps[offset] || {}, catalog),
+      outcome: skipped ? "skipped" : stepOutcome,
+      glyph: skipped ? "○" : CM_TOAST_META[stepOutcome].glyph,
+      duration: skipped
+        ? "skipped"
+        : result && typeof result.durationMs === "number"
+          ? cmFormatClock(result.durationMs)
+          : "",
+      reason,
+      skipped,
+    };
+  });
+  const title = stoppedAt
+    ? "Sequence stopped at step " + stoppedAt + " of " + total
+    : outcome === "attention"
+      ? "Sequence needs attention · " + total + " commands"
+      : outcome === "interrupted"
+        ? "Sequence interrupted · " + total + " commands"
+        : "Sequence · " + total + " commands";
+  const actions = [{ id: "output", label: "Output" }];
+  if (stoppedAt) {
+    actions.push({ id: "resume", label: "Resume from " + stoppedAt });
+    actions.push({ id: "rerun", label: "Rerun all" });
+  } else {
+    actions.push({ id: "rerun", label: "Rerun" });
+  }
+  actions.push({ id: "copy", label: "Copy" });
+  return {
+    id: String(source.id || ""),
+    signature: String(source.signature || cmSequenceSignature(steps)),
+    outcome,
+    tone: outcome,
+    title,
+    duration: cmFormatClock(Number(source.durationMs) || 0),
+    durationMs: Number(source.durationMs) || 0,
+    total,
+    stoppedAt,
+    startedAtMs: typeof source.startedAtMs === "number"
+      ? source.startedAtMs
+      : Date.parse(source.started_at || ""),
+    steps,
+    results,
+    lines,
+    actions,
+    focusRunId: cmSequenceFocusRunId({ ...source, steps, results, stoppedAt }, catalog),
+    sticky: outcome === "failed" || outcome === "unknown",
+    ariaLive: outcome === "failed" || outcome === "unknown" ? "assertive" : "polite",
+  };
+}
+
+function cmSequenceToastNode(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = String(text);
+  return element;
+}
+
+function cmCreateSequenceToastFragment(model, onAction = () => {}, onOutput = () => {}) {
+  if (typeof document === "undefined" || !document.createDocumentFragment) return null;
+  const fragment = document.createDocumentFragment();
+  const card = cmSequenceToastNode("section", "bob-cmd-toast bob-cmd-toast-sequence is-" + model.tone);
+  card.setAttribute("role", "status");
+  card.setAttribute("aria-live", model.ariaLive);
+
+  const header = cmSequenceToastNode("div", "bob-cmd-toast-header");
+  const meta = CM_TOAST_META[model.outcome] || CM_TOAST_META.unknown;
+  const mark = cmSequenceToastNode("span", "bob-cmd-toast-mark", meta.glyph);
+  mark.setAttribute("aria-hidden", "true");
+  header.append(
+    mark,
+    cmSequenceToastNode("span", "bob-cmd-toast-title", model.title),
+    cmSequenceToastNode("span", "bob-cmd-toast-duration", model.duration),
+  );
+  card.appendChild(header);
+
+  const body = cmSequenceToastNode("div", "bob-cmd-toast-body bob-cmd-toast-sequence-body");
+  const list = cmSequenceToastNode("div", "bob-cmd-toast-steps");
+  for (const line of model.lines || []) {
+    const row = cmSequenceToastNode("div", "bob-cmd-toast-step" + (line.skipped ? " is-skipped" : " is-" + line.outcome));
+    const heading = cmSequenceToastNode("div", "bob-cmd-toast-step-row");
+    const glyph = cmSequenceToastNode("span", "bob-cmd-toast-step-glyph", line.glyph);
+    glyph.setAttribute("aria-hidden", "true");
+    heading.append(
+      glyph,
+      cmSequenceToastNode("span", "bob-cmd-toast-step-title", line.title),
+      cmSequenceToastNode("span", "bob-cmd-toast-step-duration", line.duration),
+    );
+    row.appendChild(heading);
+    if (line.reason) row.appendChild(cmSequenceToastNode("div", "bob-cmd-toast-step-reason", line.reason));
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+  body.addEventListener("click", (event) => {
+    if (event && event.defaultPrevented) return;
+    onOutput(model.focusRunId);
+  });
+  card.appendChild(body);
+
+  const actions = cmSequenceToastNode("div", "bob-cmd-toast-actions");
+  for (const action of model.actions || []) {
+    const button = cmSequenceToastNode("button", "bob-cmd-toast-action", action.label);
+    button.type = "button";
+    button.setAttribute("data-action-id", action.id);
+    button.addEventListener("click", (event) => {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      onAction(action, model);
+    });
+    actions.appendChild(button);
+  }
+  card.appendChild(actions);
+  fragment.appendChild(card);
+  return fragment;
+}
 // ---- src/120-status-chip.js ----
 // Bob Command Mode: live status-bar run indicator. Runner state stays authoritative.
 // Brand indicator: icon-led ring plus `bob`, count, and clock. Model is pure;
@@ -3335,6 +3575,118 @@ function cmChipBudgetMins(record) {
   return Math.max(1, Math.round(Number(record.budget_secs) / 60) || 0);
 }
 
+function cmChipSequenceResult(sequence, index) {
+  const results = Array.isArray(sequence && sequence.results) ? sequence.results : [];
+  return results.find((row) => row && Number(row.index) === index) || results[index - 1] || null;
+}
+
+function cmChipSequenceActiveRecord(records, id) {
+  return records.find((record) => record && record.sequence && String(record.sequence.id || "") === String(id || "")) || null;
+}
+
+function cmChipSequenceAge(sequence, nowMs) {
+  const started = typeof sequence.startedAtMs === "number"
+    ? sequence.startedAtMs
+    : Date.parse(sequence.started_at || "");
+  return Number.isFinite(started) ? Math.max(0, nowMs - started) : 0;
+}
+
+function cmChipSequenceGlyph(outcome) {
+  return (cmChipToastMeta()[outcome] || cmChipToastMeta().unknown).glyph;
+}
+
+function cmChipSequenceModel(active, sequences, now, progress, revealMs) {
+  const sequence = [...sequences].sort((left, right) =>
+    (Number(left.startedAtMs) || 0) - (Number(right.startedAtMs) || 0),
+  ).pop();
+  const id = String(sequence.id || "");
+  const currentRecord = cmChipSequenceActiveRecord(active, id);
+  const steps = Array.isArray(sequence.steps) ? sequence.steps : [];
+  const total = Math.max(1, Number(sequence.total) || steps.length || 1);
+  const currentIndex = currentRecord && currentRecord.sequence
+    ? Number(currentRecord.sequence.index)
+    : Number(sequence.index);
+  const index = Math.max(1, Math.min(total, Number.isFinite(currentIndex) && currentIndex > 0 ? currentIndex : 1));
+  const age = cmChipSequenceAge(sequence, now);
+  const otherVisible = active.some((record) => record !== currentRecord && cmChipRecordAge(record, now) >= revealMs);
+  if (age < revealMs && !otherVisible) {
+    return { visible: false, runs: active.length, count: active.length, runId: null };
+  }
+
+  const overdue = active.some((record) => cmChipIsOverdue(record, cmChipRecordAge(record, now)));
+  const queued = currentRecord && currentRecord.outcome === "queued";
+  const tone = overdue ? "is-overdue" : queued ? "is-queued" : "is-running";
+  const clock = cmFormatClock(age);
+  const count = Math.max(1, active.length);
+  const step = index + "/" + total;
+  const current = steps[index - 1] || {};
+  const stepTitle = String(current.title || (currentRecord && cmChipRunTitle(currentRecord)) || "bob");
+  const results = Array.isArray(sequence.results) ? sequence.results : [];
+  let runId = currentRecord && currentRecord.id ? currentRecord.id : null;
+  if (!runId) {
+    for (let i = results.length - 1; i >= 0; i -= 1) {
+      if (results[i] && results[i].runId) { runId = results[i].runId; break; }
+    }
+  }
+
+  const lines = ["bob · sequence " + index + " of " + total + " · " + clock];
+  for (let i = 1; i <= total; i += 1) {
+    const result = cmChipSequenceResult(sequence, i);
+    const item = steps[i - 1] || {};
+    const title = String(item.title || "bob");
+    if (i === index && currentRecord) {
+      const duration = cmFormatClock(cmChipRecordAge(currentRecord, now));
+      lines.push("● " + title + " · " + duration + (queued ? " · queued" : ""));
+      const display = Array.isArray(item.display) ? item.display : [];
+      if (display.length) lines.push("  " + cmFormatArgv(["bob", ...display]));
+      let last = "";
+      try { last = String(progress(currentRecord.id) || "").trim(); } catch (error) { last = ""; }
+      if (last) lines.push("  Last: " + last);
+    } else if (result && result.skipped) {
+      lines.push("○ " + title + " · skipped");
+    } else if (result && result.outcome) {
+      const duration = typeof result.durationMs === "number" ? " · " + cmFormatClock(result.durationMs) : "";
+      lines.push(cmChipSequenceGlyph(result.outcome) + " " + title + duration);
+    } else {
+      lines.push("○ " + title);
+    }
+  }
+
+  const otherActive = active.filter((record) => !(record && record.sequence && String(record.sequence.id || "") === id));
+  const maxRows = 4;
+  for (const record of [...otherActive].reverse().slice(0, maxRows)) {
+    const runAge = cmChipRecordAge(record, now);
+    let runClock = "0:00";
+    try { runClock = cmFormatClock(runAge); } catch (error) { /* Keep fallback. */ }
+    let title = cmChipRunTitle(record) + " · " + runClock;
+    if (record.outcome === "queued") title += " · queued";
+    else if (cmChipIsOverdue(record, runAge)) title += " · past its ~" + cmChipBudgetMins(record) + " min budget";
+    else if (record.adopted) title += " · adopted after reload";
+    lines.push(title, cmChipShortArgv(record));
+    let last = "";
+    try { last = String(progress(record.id) || "").trim(); } catch (error) { last = ""; }
+    if (last) lines.push("Last: " + last);
+  }
+  if (otherActive.length > maxRows) lines.push("…and " + (otherActive.length - maxRows) + " more");
+  lines.push("Click to open output");
+  return {
+    visible: true,
+    tone,
+    outcome: null,
+    label: "bob",
+    count,
+    step,
+    stepTitle,
+    sequenceId: id,
+    clock,
+    clockMs: age,
+    tooltip: lines.join("\n\n"),
+    runId,
+    runs: active.length,
+    leaving: false,
+  };
+}
+
 // Pure model for the brand indicator (indicator_label = brand, indicator_runs = all).
 // records: live plus adopted unfinished runs. state: {shown:Set, settle:null|{...}}.
 // progressFor(runId): last progress line. Returns {visible, tone, outcome,
@@ -3351,6 +3703,9 @@ function cmStatusChipModel(records, nowMs, state, progressFor, options = {}) {
     (record) => record && (record.outcome === "running" || record.outcome === "queued"),
   );
   const ages = active.map((record) => cmChipRecordAge(record, now));
+  const sequences = Array.isArray(options.sequences) ? options.sequences.filter((item) => item && item.id) : [];
+
+  if (sequences.length) return cmChipSequenceModel(active, sequences, now, progress, revealMs);
 
   if (active.length) {
     if (ages.every((age) => age < revealMs)) {
@@ -3434,9 +3789,16 @@ function cmStatusChipModel(records, nowMs, state, progressFor, options = {}) {
       outcome,
       label: "bob",
       count: 1,
+      ...(settle.sequence ? {
+        step: String(settle.sequence.step || ""),
+        stepTitle: String(settle.sequence.stepTitle || settle.title || "bob"),
+        sequenceId: String(settle.sequence.id || ""),
+      } : {}),
       clock: clockText,
       clockMs: settle.durationMs || 0,
-      tooltip,
+      tooltip: settle.sequence
+        ? "bob · sequence " + String(settle.sequence.step || "") + " · " + clockText + "\n\n" + settle.title + " · " + entry.label + "\n\nClick to open output"
+        : tooltip,
       runId: settle.runId,
       runs: 0,
       leaving,
@@ -3446,7 +3808,7 @@ function cmStatusChipModel(records, nowMs, state, progressFor, options = {}) {
   return { visible: false, runs: 0, count: 0, runId: null };
 }
 
-function cmChipEnsureChildren(element) {
+function cmChipEnsureChildren(element, needsSequence) {
   const doc = (typeof document !== "undefined" && document) || null;
   const children = Array.from(element.children || []);
   const find = (cls) => {
@@ -3460,7 +3822,8 @@ function cmChipEnsureChildren(element) {
   let mark = find("bob-cmd-chip-mark");
   let label = find("bob-cmd-chip-label");
   let clock = find("bob-cmd-chip-clock");
-  if (mark && label && clock) return { mark, label, clock, created: false };
+  let step = find("bob-cmd-chip-step");
+  let title = find("bob-cmd-chip-title");
   const create = (cls, text) => {
     if (doc && typeof doc.createElement === "function") {
       const el = doc.createElement("span");
@@ -3489,7 +3852,6 @@ function cmChipEnsureChildren(element) {
   }
   if (!label) label = create("bob-cmd-chip-label", "bob");
   if (!clock) clock = create("bob-cmd-chip-clock", "0:00");
-  // Append in anatomy order exactly once; never reorder afterwards.
   let created = false;
   for (const node of [mark, label, clock]) {
     const present = children.includes(node);
@@ -3500,7 +3862,21 @@ function cmChipEnsureChildren(element) {
       created = true;
     }
   }
-  return { mark, label, clock, created };
+  const insertBefore = (node, reference) => {
+    if (typeof element.insertBefore === "function") element.insertBefore(node, reference);
+    else if (typeof element.appendChild === "function") element.appendChild(node);
+    children.push(node);
+    created = true;
+  };
+  if (needsSequence && !step) {
+    step = create("bob-cmd-chip-step");
+    insertBefore(step, clock);
+  }
+  if (needsSequence && !title) {
+    title = create("bob-cmd-chip-title");
+    insertBefore(title, clock);
+  }
+  return { mark, label, step, title, clock, created };
 }
 
 function cmChipToneClasses() {
@@ -3536,7 +3912,7 @@ function cmChipApplyTone(element, model) {
 
 // Idempotent paint. Keeps the current signature with an optional trailing
 // state for the preview script and old callers. Never recreates the mark.
-function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () => {}, progressFor = () => "", state) {
+function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () => {}, progressFor = () => "", state, options = {}) {
   if (!element) return { visible: false, runs: 0 };
   let progressFn = progressFor;
   let chipState = state;
@@ -3551,12 +3927,13 @@ function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () =>
       chipState.shown = new Set();
     }
   }
-  const model = cmStatusChipModel(records, nowMs, chipState || null, progressFn);
+  const renderOptions = options && typeof options === "object" ? options : {};
+  const model = cmStatusChipModel(records, nowMs, chipState || null, progressFn, renderOptions);
   const active = (Array.isArray(records) ? records : []).filter(
     (record) => record && (record.outcome === "running" || record.outcome === "queued"),
   );
   // One engine, one honest busy signal: any active run replaces a settle at once.
-  if (chipState && active.length && chipState.settle) chipState.settle = null;
+  if (chipState && (active.length || (Array.isArray(renderOptions.sequences) && renderOptions.sequences.length)) && chipState.settle) chipState.settle = null;
   if (!model.visible) {
     // Expired settles clear so the next paint stays hidden.
     if (chipState && chipState.settle) {
@@ -3581,10 +3958,19 @@ function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () =>
     for (const record of active) {
       if (record && record.id) chipState.shown.add(record.id);
     }
+    if (model.sequenceId) chipState.shown.add(model.sequenceId);
   }
-  const parts = cmChipEnsureChildren(element);
+  const parts = cmChipEnsureChildren(element, Boolean(model.step));
   const countText = model.count > 1 ? "bob ×" + model.count : "bob";
   if (parts.label.textContent !== countText) parts.label.textContent = countText;
+  if (parts.step) {
+    parts.step.textContent = model.step || "";
+    parts.step.style.display = model.step ? "" : "none";
+  }
+  if (parts.title) {
+    parts.title.textContent = model.stepTitle || "";
+    parts.title.style.display = model.stepTitle ? "" : "none";
+  }
   if (parts.clock.textContent !== model.clock) parts.clock.textContent = model.clock;
   try {
     if (parts.mark.textContent !== (model.tone === "is-settled" ? (cmChipToastMeta()[model.outcome] || {}).glyph || "" : "")) {
@@ -3619,7 +4005,7 @@ function cmRenderStatusChip(element, records, nowMs = Date.now(), onOpen = () =>
     // Best effort.
   }
   const overdue = model.tone === "is-overdue";
-  return { visible: true, runs: model.runs || model.count, overdue, runId };
+  return { visible: true, runs: model.runs || model.count, overdue, runId, step: model.step || null, stepTitle: model.stepTitle || null };
 }
 // ---- src/130-adapters.js ----
 // Bob Command Mode: catalog-keyed outcome adapters. These stay pure: action
@@ -4545,6 +4931,9 @@ function cmPagerLoadPayload(runner, runId) {
 
 function cmBuildPagerView(payload, options = {}) {
   const record = (payload && payload.record) || {};
+  const sequenceStamp = record.sequence && typeof record.sequence === "object"
+    ? { index: Number(record.sequence.index), total: Number(record.sequence.total) }
+    : null;
   const nowMs = typeof options.nowMs === "number" ? options.nowMs : Date.now();
   const rawChunks = Array.isArray(options.chunks)
     ? options.chunks
@@ -4561,6 +4950,9 @@ function cmBuildPagerView(payload, options = {}) {
     record,
     status: cmPagerStatusMeta(record, nowMs, options.queuedBehind || ""),
     argv: cmPagerDisplayArgv(record),
+    ...(sequenceStamp && Number.isFinite(sequenceStamp.index) && Number.isFinite(sequenceStamp.total)
+      ? { sequence: sequenceStamp }
+      : {}),
     started: cmFormatStartTime(record.started_at),
     history,
     stopVisible: record.outcome === "running",
@@ -4648,7 +5040,11 @@ function cmRenderPagerView(root, view, handlers = {}) {
   const argv = cmPagerEl("code", "bob-cmd-pager-argv", view.argv);
   argv.setAttribute("title", view.argv);
   const started = cmPagerEl("span", "bob-cmd-pager-started", view.started);
-  header.append(pill, argv, started);
+  header.append(pill, argv);
+  if (view.sequence) {
+    header.appendChild(cmPagerEl("span", "bob-cmd-pager-seq", "step " + view.sequence.index + " of " + view.sequence.total));
+  }
+  header.appendChild(started);
   if (view.history && view.history.label) {
     header.appendChild(cmPagerEl("span", "bob-cmd-pager-index", view.history.label));
   }
@@ -4673,7 +5069,6 @@ function cmRenderPagerView(root, view, handlers = {}) {
     truncated.addEventListener("click", () => { if (typeof handlers.onOpenLog === "function") handlers.onOpenLog(); });
     root.appendChild(truncated);
   }
-
   const body = cmPagerEl("div", "bob-cmd-pager-body" + (view.wrap ? " is-wrap" : ""));
   body.setAttribute("tabindex", "0");
   let offset = 0;
@@ -7858,6 +8253,8 @@ module.exports.helpers = {
   cmToastDuration,
   cmToastSummary,
   cmCreateToastFragment,
+  cmSequenceToastModel,
+  cmCreateSequenceToastFragment,
   cmRenderStatusChip,
   cmCreateApi,
   cmCreateRootApi,

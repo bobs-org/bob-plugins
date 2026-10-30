@@ -12,6 +12,7 @@
   "090-plugin.js",
   "095-plugin-sequences.js",
   "110-toasts.js",
+  "115-sequence-toast.js",
   "120-status-chip.js",
   "130-adapters.js",
   "140-ansi-and-links.js",

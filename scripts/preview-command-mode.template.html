@@ -51,7 +51,11 @@ __PRODUCTION_CSS__
 </main>
 <script>
 __UTILITY_SOURCE__
+__CATALOG_SOURCE__
+__RUN_STORE_SOURCE__
+__SEQUENCE_MODEL_SOURCE__
 __TOAST_SOURCE__
+__SEQUENCE_TOAST_SOURCE__
 __CHIP_SOURCE__
 class Modal { constructor(app) { this.app = app; } open() {} close() {} }
 __ANSI_SOURCE__
@@ -65,6 +69,7 @@ window.commandModePreview = {
     cards.replaceChildren();
     chips.replaceChildren();
     pagers.replaceChildren();
+    const base = Date.parse("2026-10-26T15:00:00.000Z");
     const cases = [
       { title:"Completed", outcome:"completed", runId:"done", record:{ id:"done", title:"Deploy plugins", argv:["/opt/homebrew/bin/bob","plugins","sync"], duration_ms:4312, summary:"Deployed 2: bob-ledger-tools, bob-command-mode", entry_id:"plugins-sync" } },
       { title:"Needs attention", outcome:"attention", runId:"attention", actions:[{id:"run",label:"Scan intake"}], record:{ id:"attention", title:"Scan Highlights library", argv:["/usr/local/bin/bob","ref","scan"], duration_ms:18421, summary:"3 PDF writes held", entry_id:"ref-scan" } },
@@ -88,19 +93,62 @@ window.commandModePreview = {
       }
       cards.appendChild(section);
     }
-    const base = Date.parse("2026-10-26T15:00:00.000Z");
+    const sequenceSteps = [
+      { argv:["vault-sync","run"], entry_id:"vault-sync", title:"Sync vault now" },
+      { argv:["task","reconcile"], entry_id:"task-reconcile", title:"Reconcile tasks" },
+      { argv:["plan"], entry_id:"plan", title:"Today's plan" },
+    ];
+    const sequenceCases = [
+      {
+        title:"Sequence completed",
+        summary:{ id:"seq-complete", signature:"sequence-complete", steps:sequenceSteps, total:3, outcome:"completed", stoppedAt:null, startedAtMs:base-42000, durationMs:42000, results:[
+          {index:1,runId:"seq-run-1",outcome:"completed",durationMs:30000},
+          {index:2,runId:"seq-run-2",outcome:"completed",durationMs:9000},
+          {index:3,runId:"seq-run-3",outcome:"completed",durationMs:3000},
+        ] },
+      },
+      {
+        title:"Sequence stopped",
+        summary:{ id:"seq-halt", signature:"sequence-halt", steps:[...sequenceSteps,{argv:["ref","rename","a","b"],entry_id:"ref-rename",title:"Rename a reference"}], total:4, outcome:"failed", stoppedAt:2, startedAtMs:base-35000, durationMs:35000, results:[
+          {index:1,runId:"seq-halt-1",outcome:"completed",durationMs:30000},
+          {index:2,runId:"seq-halt-2",outcome:"failed",reason:"Commit pending edits first",durationMs:5000},
+          {index:3,skipped:true},
+          {index:4,skipped:true},
+        ] },
+      },
+    ];
+    for (const item of sequenceCases) {
+      const section = document.createElement("article");
+      section.className = "preview-case";
+      const heading = document.createElement("h2");
+      heading.textContent = item.title;
+      const model = cmSequenceToastModel(item.summary, null);
+      section.append(heading, cmCreateSequenceToastFragment(model, () => {}, () => {}));
+      cards.appendChild(section);
+    }
     const chipStrip = document.createElement("div");
     chipStrip.className = "preview-chip-strip";
     chipStrip.setAttribute("role", "status");
     chipStrip.setAttribute("aria-label", "Mock status-bar strip");
     chips.appendChild(chipStrip);
+    const liveSequence = {
+      id:"seq-live", total:3, index:2, startedAtMs:base-42000,
+      steps:[
+        {title:"Sync vault now",display:["vault-sync","run"]},
+        {title:"Reconcile tasks",display:["task","reconcile"]},
+        {title:"Today's plan",display:["plan"]},
+      ],
+      results:[{index:1,runId:"seq-live-1",outcome:"completed",durationMs:30000}],
+    };
     const chipCases = [
       { label:"One run", records:[{id:"one",title:"ref create",outcome:"running",effect:"writes",budget_secs:180,started_at:new Date(base-42000).toISOString(),argv:["/usr/local/bin/bob","ref","create","paper.pdf"]}] },
       { label:"Two runs", records:[{id:"two-a",title:"Scan",outcome:"running",effect:"writes",budget_secs:180,started_at:new Date(base-65000).toISOString(),argv:["/usr/local/bin/bob","ref","scan"]},{id:"two-b",title:"Plan",outcome:"running",effect:"reads",budget_secs:60,started_at:new Date(base-12000).toISOString(),argv:["/usr/local/bin/bob","plan"]}] },
       { label:"Queued", records:[{id:"q-one",title:"Sync vault",outcome:"queued",effect:"writes",budget_secs:180,started_at:new Date(base-5000).toISOString(),argv:["/usr/local/bin/bob","vault-sync","run"]}] },
       { label:"Overdue writer", records:[{id:"late",title:"Sync vault",outcome:"running",effect:"writes",budget_secs:180,started_at:new Date(base-181000).toISOString(),argv:["/usr/local/bin/bob","vault-sync","run"]}] },
-      { label:"Settled completed", records:[], state:{ shown:new Set(["done"]), settle:{ runId:"done", title:"Deploy plugins", outcome:"completed", durationMs:4312, atMs:base-500 } } },
-      { label:"Settled failed", records:[], state:{ shown:new Set(["fail"]), settle:{ runId:"fail", title:"Sync vault now", outcome:"failed", durationMs:1201, atMs:base-500 } } },
+      { label:"Sequence running · 2/3", records:[{id:"seq-live-2",title:"Reconcile tasks",outcome:"running",effect:"writes",budget_secs:180,started_at:new Date(base-12000).toISOString(),argv:["/usr/local/bin/bob","task","reconcile"],sequence:{id:"seq-live",index:2,total:3}}], options:{sequences:[liveSequence]} },
+      { label:"Sequence queued · 2/3", records:[{id:"seq-queued-2",title:"Reconcile tasks",outcome:"queued",effect:"writes",budget_secs:180,started_at:new Date(base-12000).toISOString(),argv:["/usr/local/bin/bob","task","reconcile"],sequence:{id:"seq-live",index:2,total:3}}], options:{sequences:[liveSequence]} },
+      { label:"Settled completed", records:[], state:{ shown:new Set(["seq-done"]), settle:{ runId:"seq-run-3", title:"Today's plan", outcome:"completed", durationMs:42000, atMs:base-500, sequence:{id:"seq-done",step:"3/3",stepTitle:"Today's plan",total:3} } } },
+      { label:"Settled halted", records:[], state:{ shown:new Set(["seq-failed"]), settle:{ runId:"seq-run-2", title:"Reconcile tasks", outcome:"failed", durationMs:35000, atMs:base-500, sequence:{id:"seq-failed",step:"2/4",stepTitle:"Reconcile tasks",total:4} } } },
     ];
     for (const item of chipCases) {
       const section = document.createElement("article");
@@ -111,7 +159,7 @@ window.commandModePreview = {
       chip.className = "bob-cmd-chip";
       section.append(heading, chip);
       chipStrip.appendChild(section);
-      cmRenderStatusChip(chip, item.records, base, () => {}, () => "pulling updates", item.state);
+      cmRenderStatusChip(chip, item.records, base, () => {}, () => "pulling updates", item.state, item.options);
     }
     const app = {
       vault: { getAbstractFileByPath: (target) => (String(target).endsWith(".md") ? { path: target } : null) },
@@ -135,7 +183,7 @@ window.commandModePreview = {
       },
       {
         title: "JSON",
-        record: { id: "json", title: "Hide a theme", argv: ["/usr/bin/bob", "themes", "hide", "DEEP WORK"], outcome: "completed", duration_ms: 1240, exit_code: 0, started_at: new Date(base - 2000).toISOString(), interleave: [["out", 40]] },
+        record: { id: "json", title: "Hide a theme", argv: ["/usr/bin/bob", "themes", "hide", "DEEP WORK"], outcome: "completed", duration_ms: 1240, exit_code: 0, started_at: new Date(base - 2000).toISOString(), interleave: [["out", 40]], sequence:{id:"seq-json",index:2,total:3} },
         chunks: [{ stream: "out", text: '{"ok":true,"hidden":["DEEP WORK"]}\n' }],
       },
     ];

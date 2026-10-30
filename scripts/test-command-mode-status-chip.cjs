@@ -92,6 +92,15 @@ class DomLikeElement {
     return child;
   }
 
+  insertBefore(child, reference) {
+    const found = this._children.indexOf(child);
+    if (found >= 0) this._children.splice(found, 1);
+    const index = this._children.indexOf(reference);
+    child.parentNode = this;
+    this._children.splice(index >= 0 ? index : this._children.length, 0, child);
+    return child;
+  }
+
   addEventListener(type, callback) {
     (this.listeners[type] || (this.listeners[type] = [])).push(callback);
   }
@@ -218,6 +227,96 @@ test("settle shows outcome glyph for 1600 ms, then leaving, then hidden", () => 
   const failed = helpers.cmRenderStatusChip(chip2, [], NOW + 500, () => {}, () => "", failedState);
   assert.equal(failed.visible, true);
   assert.ok(chip2.classList.contains("is-failed"));
+});
+
+test("sequence model shows step, sequence clock, tooltip, and between-step visibility", () => {
+  const active = run("step-2", 12000, {
+    title: "Reconcile tasks",
+    sequence: { id: "seq-one", index: 2, total: 3 },
+  });
+  const sequence = {
+    id: "seq-one", total: 3, index: 2, startedAtMs: NOW - 42000,
+    steps: [
+      { title: "Sync vault now", display: ["vault-sync", "run"] },
+      { title: "Reconcile tasks", display: ["task", "reconcile"] },
+      { title: "Today's plan", display: ["plan"] },
+    ],
+    results: [{ index: 1, runId: "step-1", outcome: "completed", durationMs: 30000 }],
+  };
+  const state = { shown: new Set(), settle: null };
+  const model = helpers.cmStatusChipModel([active], NOW, state, () => "reconciled 12 tasks", { sequences: [sequence] });
+  assert.equal(model.step, "2/3");
+  assert.equal(model.stepTitle, "Reconcile tasks");
+  assert.equal(model.clock, "0:42");
+  assert.equal(model.runId, "step-2");
+  assert.match(model.tooltip, /bob · sequence 2 of 3 · 0:42/);
+  assert.match(model.tooltip, /✓ Sync vault now · 0:30/);
+  assert.match(model.tooltip, /bob task reconcile/);
+  assert.match(model.tooltip, /Last: reconciled 12 tasks/);
+
+  const between = {
+    ...sequence,
+    index: 3,
+    results: [...sequence.results, { index: 2, runId: "step-2", outcome: "completed", durationMs: 12000 }],
+  };
+  const betweenModel = helpers.cmStatusChipModel([], NOW, state, () => "", { sequences: [between] });
+  assert.equal(betweenModel.visible, true);
+  assert.equal(betweenModel.step, "3/3");
+  assert.equal(betweenModel.runId, "step-2");
+  state.settle = { runId: "old", title: "Old run", outcome: "completed", durationMs: 1000, atMs: NOW };
+  const betweenChip = chipEl();
+  const betweenPaint = helpers.cmRenderStatusChip(betweenChip, [], NOW, () => {}, () => "", state, { sequences: [between] });
+  assert.equal(betweenPaint.visible, true);
+  assert.equal(state.settle, null);
+});
+
+test("sequence chip lazily inserts step and title before the clock and hides them when idle", () => {
+  const restore = installDomLikeDocument();
+  try {
+    const chip = new DomLikeElement("status-bar-item bob-cmd-chip");
+    const state = { shown: new Set(), settle: null };
+    helpers.cmRenderStatusChip(chip, [run("plain", 5000)], NOW, () => {}, () => "", state);
+    assert.deepEqual(Array.from(chip.children).map((child) => child.className), [
+      "bob-cmd-chip-mark", "bob-cmd-chip-label", "bob-cmd-chip-clock",
+    ]);
+    const sequence = {
+      id: "seq-paint", index: 2, total: 3, startedAtMs: NOW - 5000,
+      steps: [{ title: "Sync vault", display: ["vault-sync", "run"] }, { title: "Reconcile tasks", display: ["task", "reconcile"] }, { title: "Plan", display: ["plan"] }],
+      results: [],
+    };
+    const record = run("seq-run", 2500, { sequence: { id: "seq-paint", index: 2, total: 3 } });
+    helpers.cmRenderStatusChip(chip, [record], NOW, () => {}, () => "", state, { sequences: [sequence] });
+    assert.deepEqual(Array.from(chip.children).map((child) => child.className), [
+      "bob-cmd-chip-mark", "bob-cmd-chip-label", "bob-cmd-chip-step", "bob-cmd-chip-title", "bob-cmd-chip-clock",
+    ]);
+    assert.equal(domChild(chip, "bob-cmd-chip-step").textContent, "2/3");
+    assert.equal(domChild(chip, "bob-cmd-chip-title").textContent, "Reconcile tasks");
+    helpers.cmRenderStatusChip(chip, [record], NOW, () => {}, () => "", state, { sequences: [sequence] });
+    assert.equal(chip.children.length, 5);
+    helpers.cmRenderStatusChip(chip, [run("plain", 5000)], NOW, () => {}, () => "", state);
+    assert.equal(domChild(chip, "bob-cmd-chip-step").style.display, "none");
+    assert.equal(domChild(chip, "bob-cmd-chip-title").style.display, "none");
+  } finally {
+    restore();
+  }
+});
+
+test("sequence settle displays its final step and opens the focus run", () => {
+  const chip = chipEl();
+  const opened = [];
+  const state = {
+    shown: new Set(["seq-settled"]),
+    settle: {
+      runId: "focus-run", title: "Today's plan", outcome: "completed", durationMs: 42000, atMs: NOW,
+      sequence: { id: "seq-settled", step: "3/3", stepTitle: "Today's plan", total: 3 },
+    },
+  };
+  const result = helpers.cmRenderStatusChip(chip, [], NOW + 500, (id) => opened.push(id), () => "", state);
+  assert.equal(result.step, "3/3");
+  assert.equal(result.stepTitle, "Today's plan");
+  assert.match(chip.getAttribute("aria-label"), /bob · sequence 3\/3 · 0:42/);
+  chip.onclick();
+  assert.deepEqual(opened, ["focus-run"]);
 });
 
 test("a new run during a settle shows running at once and click opens the settled run", () => {

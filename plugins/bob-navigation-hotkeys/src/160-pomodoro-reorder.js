@@ -587,6 +587,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
 
   const dailyPath = normalizeVaultRelativePath(options.dailyPath);
   const noteIndex = options.noteIndex || null;
+  const dedicatedOnly = options && options.dedicatedOnly === true;
   const targetKeys = new Set(
     targetList.map(
       (target) =>
@@ -698,10 +699,12 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
     const removedChild = subtreeCandidates.some(
       (candidate) => candidate.start >= entryStart && candidate.start < entryEnd,
     );
-    const tokenChild = matches.some(
-      (match) =>
-        match.line > range.entryLine && match.line < childEndExclusive,
-    );
+    const tokenChild = dedicatedOnly
+      ? false
+      : matches.some(
+          (match) =>
+            match.line > range.entryLine && match.line < childEndExclusive,
+        );
     if (!removedChild && !tokenChild) {
       continue;
     }
@@ -789,12 +792,14 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
   // A merged EOF run may now start earlier, after a different blank seam.
   if (subtreeEdits.length > 0) normalizeEofDeletion(subtreeEdits.at(-1));
 
-  const tokenMatches = matches.filter(
-    (match) =>
-      !subtreeEdits.some(
-        (edit) => edit.start <= match.start && edit.end >= match.end,
-      ),
-  );
+  const tokenMatches = dedicatedOnly
+    ? []
+    : matches.filter(
+        (match) =>
+          !subtreeEdits.some(
+            (edit) => edit.start <= match.start && edit.end >= match.end,
+          ),
+      );
   const tokenMatchesByLine = new Map();
   for (const match of tokenMatches) {
     if (!tokenMatchesByLine.has(match.line)) {

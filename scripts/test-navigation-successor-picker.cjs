@@ -790,3 +790,21 @@ test("open-editor text wins the refresh and reentry is refused while awaiting", 
   assert.equal(await pending, null);
 });
 
+
+test("retarget:false hides the hint, ignores Ctrl+Shift+Enter, and drops destinations", async () => {
+  const plugin = new NavigationHotkeysPlugin();
+  plugin.app = { plugins: { plugins: {} } };
+  const model = {
+    title: "Promoted to project · pull in successors",
+    predecessors: [{ notePath: "S.md", blockId: "s", text: "Source" }],
+    groups: [{ group: "project", header: "Proj", project: "P.md", rows: [row("P.md#^a", 1)], folded: { hidden: 0, alreadyPlanned: 0, subProjects: 0 } }],
+  };
+  const modal = new helpers.SuccessorOfferPickerModal(plugin.app, model, () => {}, { retarget: false });
+  assert.ok(!modal.footerHints.some((hint) => hint.label === "retarget"));
+  assert.equal(await modal.retargetRowsForDestination(), false);
+  modal.pickerOpen = true;
+  let prevented = false;
+  modal.handleKeydown({ key: "Enter", ctrlKey: true, shiftKey: true, altKey: false, preventDefault: () => { prevented = true; }, stopPropagation: () => {} });
+  assert.equal(prevented, true);
+  modal.close();
+});

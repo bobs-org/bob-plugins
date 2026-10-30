@@ -47,6 +47,8 @@ function addSuccessorPickerClasses(element, ...classes) {
 
 class SuccessorOfferPickerModal extends FilteredPickerModal {
   constructor(app, model, onSettle, options = {}) {
+    const retargetEnabled =
+      !options || typeof options !== "object" || options.retarget !== false;
     const normalized = normalizeSuccessorPickerModel(model);
     super(app, {
       items: [],
@@ -59,6 +61,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       footerHints: SUCCESSOR_PICKER_FOOTER_HINTS.slice(),
     });
     this.model = normalized;
+    this.retargetEnabled = retargetEnabled;
     this.onSettle = typeof onSettle === "function" ? onSettle : () => {};
     this.now = typeof options.now === "function" ? options.now : () => Date.now();
     this.openedAt = null;
@@ -69,7 +72,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     this.destinationOverrides = new Map();
     this.retargetingDestination = false;
     try {
-      if (getSuccessorDestinationPickerApi(this.app)) {
+      if (retargetEnabled && getSuccessorDestinationPickerApi(this.app)) {
         this.footerHints = SUCCESSOR_PICKER_FOOTER_HINTS.concat([SUCCESSOR_PICKER_RETARGET_HINT]);
       }
     } catch (_error) {
@@ -142,6 +145,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
   }
 
   async retargetRowsForDestination() {
+    if (this.retargetEnabled === false) {
+      return false;
+    }
     if (this.retargetingDestination === true || this.successorPickerRetargetAborted()) {
       return false;
     }
@@ -206,7 +212,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     ) {
       event.preventDefault();
       event.stopPropagation();
-      void this.retargetRowsForDestination();
+      if (this.retargetEnabled !== false) {
+        void this.retargetRowsForDestination();
+      }
       return;
     }
     if (event.key === "Enter") {
@@ -637,7 +645,7 @@ class BobNavigationHotkeysSuccessorPickerMixin {
     }
   }
 
-  pickSuccessorOffers(model) {
+  pickSuccessorOffers(model, options = {}) {
     try {
       if (
         this.successorPickerUnavailable === true ||
@@ -647,6 +655,8 @@ class BobNavigationHotkeysSuccessorPickerMixin {
         return Promise.resolve(null);
       }
       this.holdReviewWalkForSuccessorPicker();
+      const retargetEnabled =
+        !options || typeof options !== "object" || options.retarget !== false;
       return new Promise((resolve) => {
         let modal = null;
         let settled = false;
@@ -673,9 +683,11 @@ class BobNavigationHotkeysSuccessorPickerMixin {
                 if (!allowed.has(key) || pickedKeys.has(key)) continue;
                 pickedKeys.add(key);
                 const item = { key };
-                const destination = normalizeSuccessorDestinationOverride(pick && pick.destination);
-                if (destination) {
-                  item.destination = destination;
+                if (retargetEnabled) {
+                  const destination = normalizeSuccessorDestinationOverride(pick && pick.destination);
+                  if (destination) {
+                    item.destination = destination;
+                  }
                 }
                 picks.push(item);
               }
@@ -692,7 +704,7 @@ class BobNavigationHotkeysSuccessorPickerMixin {
             this.app,
             model,
             settle,
-            { now: () => this.successorPickerNow() },
+            { now: () => this.successorPickerNow(), retarget: retargetEnabled },
           );
           this.activeSuccessorPicker = modal;
           modal.open();

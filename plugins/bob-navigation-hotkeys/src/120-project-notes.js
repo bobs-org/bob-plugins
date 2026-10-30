@@ -481,298 +481,78 @@ function parseProjectPromotionDedicatedLink(line) {
   });
 }
 
-function buildProjectPromotionReplacementLines(
-  originalLine,
-  projectPathWithoutMd,
-  targetBlockIds,
-) {
-  const parsed = parseProjectPromotionDedicatedLink(originalLine);
-  if (!parsed) {
-    return null;
-  }
-  if (parsed.strikeOpen || parsed.strikeClose) {
-    return null;
-  }
-  if (
-    parsed.checkbox !== null &&
-    POMODORO_LEDGER_CLOSED_STATUSES.has(parsed.checkbox)
-  ) {
-    return null;
-  }
-  const projectRef = String(projectPathWithoutMd || "").trim();
-  if (!projectRef) {
-    return null;
-  }
-  const ids = Array.isArray(targetBlockIds) ? targetBlockIds : [];
-  if (ids.length === 0) {
-    return null;
-  }
-  const embedPrefix = parsed.embedded ? "!" : "";
-  const suffixText = parsed.suffix ? parsed.suffix.replace(/^[ \t]*/, " ") : "";
-  const lines = [];
-  ids.forEach((blockId, order) => {
-    const id = String(blockId || "").trim();
-    if (!id) {
-      return;
-    }
-    if (order === 0) {
-      const checkboxText =
-        parsed.checkbox !== null ? `[${parsed.checkbox}] ` : "";
-      lines.push(
-        `${parsed.prefix}${checkboxText}${parsed.markerRun}${embedPrefix}[[${projectRef}#^${id}]]${suffixText}`,
-      );
-    } else {
-      lines.push(
-        `${parsed.prefix}${embedPrefix}[[${projectRef}#^${id}]]${suffixText}`,
-      );
-    }
-  });
-  return Object.freeze(lines);
-}
-
-function planProjectPromotionFileEdits(content, filePath, options) {
+function planPromotionProjectHistoryRewrites(content, filePath, options) {
   const text = String(content || "");
   const opts = options && typeof options === "object" ? options : {};
   const sourcePath = normalizeVaultRelativePath(opts.sourcePath || "");
   const sourceBlockId = String(opts.sourceBlockId || "").trim();
-  const projectPathWithoutMd = String(
-    opts.projectPathWithoutMd || opts.projectBasename || "",
-  ).trim();
-  const projectBasename = String(
-    opts.projectBasename || opts.projectPathWithoutMd || "",
-  )
-    .trim()
-    .split("/")
-    .pop();
-  const targetBlockIds = Array.isArray(opts.targetBlockIds)
-    ? opts.targetBlockIds.map((id) => String(id || "").trim()).filter(Boolean)
-    : [];
-  const today = opts.today instanceof Date ? opts.today : new Date();
-  const index =
-    opts.fileIndex && typeof opts.fileIndex === "object"
-      ? opts.fileIndex
-      : createProjectPromotionLinkIndex(opts.files || []);
-  const empty = Object.freeze({
-    content: text,
-    changed: false,
-    expandedCount: 0,
-    legacyCount: 0,
-  });
-  if (!sourcePath || !sourceBlockId || !projectPathWithoutMd || !projectBasename) {
-    return empty;
-  }
-  if (targetBlockIds.length === 0) {
-    return empty;
-  }
-  if (!isProjectPromotionEligibleDailyPath(filePath, today)) {
-    return empty;
-  }
-  const splitted = splitMarkdownContent(text);
-  const lines = splitted.lines;
-  const lineEnding = splitted.lineEnding;
-  const contexts = getMarkdownLineContexts(text);
-  const section = findPomodorosSectionRange(text);
-  if (!section) {
-    return empty;
-  }
-  const ranges = collectOpenPomodoroRanges(lines, contexts, section);
-  if (ranges.length === 0) {
-    return empty;
-  }
-  const expansions = [];
-  for (const range of ranges) {
-    for (
-      let lineIndex = range.startLine;
-      lineIndex <= range.endLine;
-      lineIndex += 1
-    ) {
-      const context = contexts[lineIndex];
-      if (context && (context.inFrontmatter || context.inFence)) {
-        continue;
-      }
-      const lineText = String(lines[lineIndex] || "");
-      if (!PROJECT_LIST_ITEM_RE.test(lineText)) {
-        continue;
-      }
-      if (findNearestParentListItem(lines, lineIndex) !== range.entryLine) {
-        continue;
-      }
-      const parsed = parseProjectPromotionDedicatedLink(lineText);
-      if (!parsed) {
-        continue;
-      }
-      if (parsed.strikeOpen || parsed.strikeClose) {
-        continue;
-      }
-      if (
-        parsed.checkbox !== null &&
-        POMODORO_LEDGER_CLOSED_STATUSES.has(parsed.checkbox)
-      ) {
-        continue;
-      }
-      if (parsed.blockId !== sourceBlockId) {
-        continue;
-      }
-      const resolved = resolveProjectPromotionLinkTarget(
-        parsed.target,
-        filePath,
-        index,
-      );
-      if (!resolved || normalizeVaultRelativePath(resolved) !== sourcePath) {
-        continue;
-      }
-      const replacementLines = buildProjectPromotionReplacementLines(
-        lineText,
-        projectPathWithoutMd,
-        targetBlockIds,
-      );
-      if (!replacementLines || replacementLines.length === 0) {
-        continue;
-      }
-      const block = findCurrentBulletChildBlock(lines, lineIndex);
-      const subtreeEnd =
-        block && Number.isFinite(block.endLineExclusive)
-          ? block.endLineExclusive
-          : lineIndex + 1;
-      expansions.push(
-        Object.freeze({
-          lineIndex,
-          originalLine: lineText,
-          replacementLines,
-          subtreeStart: lineIndex + 1,
-          subtreeEnd: Math.max(lineIndex + 1, subtreeEnd),
-        }),
-      );
-    }
-  }
-  if (expansions.length === 0) {
-    return empty;
-  }
-  const covered = new Set();
-  for (const expansion of expansions) {
-    for (
-      let lineIndex = expansion.lineIndex;
-      lineIndex < expansion.subtreeEnd;
-      lineIndex += 1
-    ) {
-      covered.add(lineIndex);
-    }
-  }
-  const nextLines = lines.slice();
-  const sorted = expansions.slice().sort((a, b) => b.lineIndex - a.lineIndex);
-  for (const expansion of sorted) {
-    const subtreeLines = nextLines.slice(
-      expansion.subtreeStart,
-      expansion.subtreeEnd,
-    );
-    const first = expansion.replacementLines[0];
-    const rest = expansion.replacementLines.slice(1);
-    const replacement = [first, ...subtreeLines, ...rest];
-    nextLines.splice(
-      expansion.lineIndex,
-      expansion.subtreeEnd - expansion.lineIndex,
-      ...replacement,
-    );
-  }
+  const projectBasename = String(opts.projectBasename || opts.projectPathWithoutMd || "").trim().split("/").pop();
+  const childBlockIds = new Set(
+    (Array.isArray(opts.targetBlockIds) ? opts.targetBlockIds : Array.isArray(opts.childBlockIds) ? opts.childBlockIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean),
+  );
+  const index = opts.fileIndex && typeof opts.fileIndex === "object" ? opts.fileIndex : createProjectPromotionLinkIndex(opts.files || []);
+  const empty = Object.freeze({ content: text, changed: false, expandedCount: 0, legacyCount: 0 });
+  if (!sourcePath || !sourceBlockId || !projectBasename) return empty;
+  const lines = text.split(/\r?\n/);
+  const ending = text.includes("\r\n") ? "\r\n" : "\n";
   let legacyCount = 0;
-  const markdownLinkRe =
-    /\[([^\]\n]*)\]\(([^)\s]*?)#\^([A-Za-z0-9-]+)(?:\s+[^)]*)?\)/g;
-  for (let lineIndex = 0; lineIndex < nextLines.length; lineIndex += 1) {
-    let lineText = String(nextLines[lineIndex] || "");
+  const nextLines = lines.map((originalLine) => {
+    let lineText = String(originalLine || "");
     const originalLineText = lineText;
     const wikiOccurrences = collectPomodoroBlockLinkOccurrences(lineText);
     const wikiReplacements = [];
     for (const occurrence of wikiOccurrences) {
-      if (occurrence.blockId !== sourceBlockId) {
-        continue;
-      }
-      const resolved = resolveProjectPromotionLinkTarget(
-        occurrence.target,
-        filePath,
-        index,
-      );
-      if (!resolved || normalizeVaultRelativePath(resolved) !== sourcePath) {
-        continue;
-      }
+      const isSource = occurrence.blockId === sourceBlockId;
+      const isChild = childBlockIds.has(occurrence.blockId);
+      if (!isSource && !isChild) continue;
+      const resolved = resolveProjectPromotionLinkTarget(occurrence.target, filePath, index);
+      if (!resolved) continue;
+      if (isSource && normalizeVaultRelativePath(resolved) !== sourcePath) continue;
       let linkOnlyStart = occurrence.start;
-      const markerMatch = /^(?:🍅[ \t]+)*/.exec(
-        lineText.slice(occurrence.start, occurrence.end),
-      );
-      if (markerMatch) {
-        linkOnlyStart = occurrence.start + markerMatch[0].length;
-      }
+      const markerMatch = /^(?:🍅[ \t]+)*/.exec(lineText.slice(occurrence.start, occurrence.end));
+      if (markerMatch) linkOnlyStart = occurrence.start + markerMatch[0].length;
       const originalLink = lineText.slice(linkOnlyStart, occurrence.end);
-      const replacementLink = rewriteBlockIdLinkOriginal(
-        originalLink,
-        projectBasename,
-        "prj",
-      );
-      if (!replacementLink) {
-        continue;
-      }
+      const replacementLink = rewriteBlockIdLinkOriginal(originalLink, projectBasename, "prj");
+      if (!replacementLink) continue;
       wikiReplacements.push({ start: linkOnlyStart, end: occurrence.end, replacementLink });
     }
-    wikiReplacements
-      .sort((a, b) => b.start - a.start)
-      .forEach((item) => {
-        lineText =
-          lineText.slice(0, item.start) +
-          item.replacementLink +
-          lineText.slice(item.end);
-        legacyCount += 1;
-      });
+    wikiReplacements.sort((a, b) => b.start - a.start).forEach((item) => {
+      lineText = lineText.slice(0, item.start) + item.replacementLink + lineText.slice(item.end);
+      legacyCount += 1;
+    });
+    const markdownLinkRe = /\[([^\]\n]*)\]\(([^)\s]*?)#\^([A-Za-z0-9-]+)(?:\s+[^)]*)?\)/g;
     markdownLinkRe.lastIndex = 0;
     let markdownMatch = null;
     const markdownReplacements = [];
     while ((markdownMatch = markdownLinkRe.exec(lineText)) !== null) {
       const targetText = String(markdownMatch[2] || "").trim();
       const blockId = markdownMatch[3];
-      if (blockId !== sourceBlockId) {
-        continue;
-      }
+      const isSource = blockId === sourceBlockId;
+      const isChild = childBlockIds.has(blockId);
+      if (!isSource && !isChild) continue;
       const strippedTarget = targetText.replace(/\.md$/i, "");
-      const resolved = resolveProjectPromotionLinkTarget(
-        strippedTarget || targetText,
-        filePath,
-        index,
-      );
-      if (!resolved || normalizeVaultRelativePath(resolved) !== sourcePath) {
-        continue;
-      }
+      const resolved = resolveProjectPromotionLinkTarget(strippedTarget || targetText, filePath, index);
+      if (!resolved) continue;
+      if (isSource && normalizeVaultRelativePath(resolved) !== sourcePath) continue;
       const originalLink = markdownMatch[0];
-      const replacementLink = rewriteBlockIdLinkOriginal(
-        originalLink,
-        projectBasename,
-        "prj",
-      );
-      if (!replacementLink) {
-        continue;
-      }
-      markdownReplacements.push({
-        start: markdownMatch.index,
-        end: markdownMatch.index + originalLink.length,
-        replacementLink,
-      });
+      const replacementLink = rewriteBlockIdLinkOriginal(originalLink, projectBasename, "prj");
+      if (!replacementLink) continue;
+      markdownReplacements.push({ start: markdownMatch.index, end: markdownMatch.index + originalLink.length, replacementLink });
     }
-    markdownReplacements
-      .sort((a, b) => b.start - a.start)
-      .forEach((item) => {
-        lineText =
-          lineText.slice(0, item.start) +
-          item.replacementLink +
-          lineText.slice(item.end);
-        legacyCount += 1;
-      });
-    if (lineText !== originalLineText) {
-      nextLines[lineIndex] = lineText;
-    }
-  }
-  return Object.freeze({
-    content: nextLines.join(lineEnding),
-    changed: nextLines.join(lineEnding) !== text,
-    expandedCount: expansions.length,
-    legacyCount,
+    markdownReplacements.sort((a, b) => b.start - a.start).forEach((item) => {
+      lineText = lineText.slice(0, item.start) + item.replacementLink + lineText.slice(item.end);
+      legacyCount += 1;
+    });
+    return lineText === originalLineText ? originalLine : lineText;
   });
+  const next = nextLines.join(ending);
+  return Object.freeze({ content: next, changed: next !== text, expandedCount: 0, legacyCount });
+}
+
+function planProjectPromotionFileEdits(content, filePath, options) {
+  return planPromotionProjectHistoryRewrites(content, filePath, options);
 }
 
 function parseIntegerText(text) {

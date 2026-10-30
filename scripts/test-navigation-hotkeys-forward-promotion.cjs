@@ -138,6 +138,7 @@ function createProjectForwardHarness(options) {
       },
     },
   };
+  const createdArgs = [];
   const templater = {
     create_new_note_from_template: async (
       template,
@@ -145,6 +146,7 @@ function createProjectForwardHarness(options) {
       basename,
       open,
     ) => {
+      createdArgs.push({ template, folder, basename, open });
       const createdPath = `${basename}.md`;
       const createdFile = {
         path: createdPath,
@@ -175,10 +177,13 @@ function createProjectForwardHarness(options) {
       );
       return leaf && leaf.view ? leaf.view.editor || null : null;
     });
-  return { plugin, editor, view, contents, fileByPath, sourceFile, templateFile };
+  plugin.pickSuccessorOffers =
+    options.pickSuccessorOffers || (async () => null);
+  plugin.focusTaskMoveDestination = async () => true;
+  return { plugin, editor, view, contents, fileByPath, sourceFile, templateFile, createdArgs };
 }
 
-test("promotion targets enumerate real tasks and assign stable IDs", () => {
+test("promotion successor rows enumerate, classify, and key offers", () => {
   const content = [
     "---",
     'type: "[[project]]"',
@@ -193,818 +198,418 @@ test("promotion targets enumerate real tasks and assign stable IDs", () => {
     "  - nested note",
     "- [x] #task Done already ^done",
     "- [?] #task Blocked one",
+    "- [ ] #task Future [scheduled:: 2099-01-01]",
+    "- [ ] #task Hidden one #hide",
     "- [ ] #task (REPLACE WITH TASK DESCRIPTION)",
     "- plain note",
     "- [ ] plain checkbox",
-    "",
-    "```",
-    "- [ ] #task Fenced example",
-    "```",
   ].join("\n");
-  const first = helpers.planProjectPromotionTargets(content);
-  assert.equal(first.error, null);
-  assert.equal(first.targets.length, 4);
-  assert.deepEqual(
-    first.targets.map((target) => target.blockId),
-    ["design", first.targets[1].blockId, "done", first.targets[3].blockId],
-  );
-  assert.equal(first.targets[0].blockId, "design");
-  assert.equal(first.targets[2].blockId, "done");
-  const second = helpers.planProjectPromotionTargets(first.content);
-  assert.equal(second.error, null);
-  assert.deepEqual(
-    second.targets.map((target) => target.blockId),
-    first.targets.map((target) => target.blockId),
-  );
-  assert.equal(second.content, first.content);
-  const duplicate = helpers.planProjectPromotionTargets(
-    [
-      "---",
-      "---",
-      "- [ ] #task #prj Ship ^prj",
-      "## Tasks",
-      "- [ ] #task One ^same",
-      "- [ ] #task Two ^same",
-    ].join("\n"),
-  );
-  assert.match(duplicate.error, /duplicated/);
-  const placeholderOnly = helpers.planProjectPromotionTargets(
-    [
-      "- [ ] #task #prj Ship ^prj",
-      "## Tasks",
-      "- [ ] #task (REPLACE WITH TASK DESCRIPTION)",
-    ].join("\n"),
-  );
-  assert.equal(placeholderOnly.error, null);
-  assert.deepEqual(placeholderOnly.targets, []);
+  const plan = helpers.planPromotionSuccessorRows(content, {
+    projectPath: "Work_ship.md",
+    today: new Date(2026, 8, 30),
+    liveLinkedIds: new Set(),
+    destinationLabel: "BUILD",
+  });
+  const byText = new Map(plan.rows.map((row) => [row.text, row]));
+  assert.ok(byText.has("Design"));
+  assert.ok(byText.has("Test"));
+  assert.ok(![...byText.keys()].some((text) => /Done already/.test(text)));
+  assert.equal(byText.get("Blocked one").selectable, false);
+  assert.equal(byText.get("Blocked one").mutedReason, "blocked");
+  assert.match(byText.get("Future").mutedReason, /scheduled/);
+  assert.equal(byText.get("Future").selectable, false);
+  assert.equal(plan.folded.hidden, 1);
+  assert.equal(byText.get("Design").key, "Work_ship.md#^design");
+  assert.match(byText.get("Test").key, /^Work_ship\.md@[0-9a-f]{8}$/);
+  assert.equal(byText.get("Test").needsBlockId, true);
+  assert.equal(byText.get("Design").needsBlockId, false);
 });
 
-test("promotion file planner expands live links and preserves history", () => {
+test("promotion successor keys disambiguate duplicate digests", () => {
+  const content = [
+    "- [ ] #task #prj Ship ^prj",
+    "## Tasks",
+    "- [ ] #task Repeat",
+    "- [ ] #task Repeat",
+  ].join("\n");
+  const plan = helpers.planPromotionSuccessorRows(content, {
+    projectPath: "P.md",
+    today: new Date(2026, 8, 30),
+    liveLinkedIds: new Set(),
+  });
+  assert.equal(plan.rows.length, 2);
+  assert.notEqual(plan.rows[0].key, plan.rows[1].key);
+  assert.match(plan.rows[1].key, /~2$/);
+});
+
+test("promotion planned links find the anchor in ledger order", () => {
   const today = new Date(2026, 8, 30);
   const todayPath = promotionDailyPath(today);
-  const futurePath = promotionDailyPath(new Date(2026, 9, 1));
-  const pastPath = promotionDailyPath(new Date(2026, 8, 29));
-  const files = [
-    { path: "Areas/Work.md" },
-    { path: todayPath },
-    { path: futurePath },
-    { path: pastPath },
-    { path: "Work_ship.md" },
-  ];
+  const files = [{ path: "Areas/Work.md" }, { path: todayPath }, { path: "Work_ship.md" }];
   const index = helpers.createProjectPromotionLinkIndex(files);
-  const options = {
-    sourcePath: "Areas/Work.md",
-    sourceBlockId: "ship",
-    projectPathWithoutMd: "Work_ship",
-    projectBasename: "Work_ship",
-    targetBlockIds: ["design", "test"],
-    today,
-    fileIndex: index,
-  };
-  const live = [
+  const content = [
     "## Pomodoros",
     "",
-    "- [x] (**0900-0930** [t:: 30m])",
-    "  - [[Areas/Work#^ship]]",
     "- [ ] (**0930-1000** [t:: 30m])",
     "  - [[Areas/Work#^ship]]",
     "- [ ] () — BUILD",
     "  - [[Areas/Work#^ship]]",
   ].join("\n");
-  const planned = helpers.planProjectPromotionFileEdits(live, todayPath, options);
-  assert.equal(planned.expandedCount, 2);
-  assert.equal(planned.legacyCount, 1);
-  assert.deepEqual(planned.content.split("\n"), [
-    "## Pomodoros",
-    "",
-    "- [x] (**0900-0930** [t:: 30m])",
-    "  - [[Work_ship#^prj]]",
-    "- [ ] (**0930-1000** [t:: 30m])",
-    "  - [[Work_ship#^design]]",
-    "  - [[Work_ship#^test]]",
-    "- [ ] () — BUILD",
-    "  - [[Work_ship#^design]]",
-    "  - [[Work_ship#^test]]",
-  ]);
-  const future = helpers.planProjectPromotionFileEdits(live, futurePath, options);
-  assert.equal(future.expandedCount, 2);
-  const past = helpers.planProjectPromotionFileEdits(live, pastPath, options);
-  assert.equal(past.changed, false);
-  assert.equal(past.expandedCount, 0);
-  const yearEnd = helpers.planProjectPromotionFileEdits(
-    live,
-    "2026/20260101.md",
-    {
-      ...options,
-      today: new Date(2025, 11, 31),
-      fileIndex: helpers.createProjectPromotionLinkIndex([
-        { path: "Areas/Work.md" },
-        { path: "2026/20260101.md" },
-        { path: "Work_ship.md" },
-      ]),
-    },
-  );
-  assert.equal(yearEnd.expandedCount, 2);
-});
-
-test("promotion file planner handles forms, whitespace, and subtrees", () => {
-  const today = new Date(2026, 8, 30);
-  const todayPath = promotionDailyPath(today);
-  const files = [
-    { path: "Areas/Work.md" },
-    { path: todayPath },
-    { path: "Work_ship.md" },
-    { path: "Other.md" },
-  ];
-  const index = helpers.createProjectPromotionLinkIndex(files);
-  const baseOptions = {
+  const links = helpers.findPromotionPlannedLinks(content, todayPath, {
     sourcePath: "Areas/Work.md",
     sourceBlockId: "ship",
-    projectPathWithoutMd: "Work_ship",
-    projectBasename: "Work_ship",
-    targetBlockIds: ["design", "test"],
-    today,
     fileIndex: index,
-  };
-  const content = [
-    "## Pomodoros",
-    "",
-    "- [ ] (**0930-1000** [t:: 30m])",
-    "  - [ ] 🍅 🍅 [[Areas/Work#^ship|Old desc]] #",
-    "    - child note kept once",
-    "  - ![[Areas/Work#^ship]]",
-    "  - ~~[[Areas/Work#^ship]]~~",
-    "  - [x] [[Areas/Work#^ship]]",
-    "  - [[Other#^ship]]",
-    "  - unrelated bullet",
-    "  See [[Areas/Work#^ship]] in prose",
-  ].join("\n");
-  const planned = helpers.planProjectPromotionFileEdits(content, todayPath, baseOptions);
-  assert.equal(planned.expandedCount, 2);
-  const lines = planned.content.split("\n");
-  assert.equal(lines[3], "  - [ ] 🍅 🍅 [[Work_ship#^design]] #");
-  assert.equal(lines[4], "    - child note kept once");
-  assert.equal(lines[5], "  - [[Work_ship#^test]] #");
-  assert.equal(lines[6], "  - ![[Work_ship#^design]]");
-  assert.equal(lines[7], "  - ![[Work_ship#^test]]");
-  assert.match(planned.content, /\[\[Work_ship#\^prj\]\]/);
-  assert.match(planned.content, /\[\[Other#\^ship\]\]/);
-  const tabContent = [
-    "## Pomodoros",
-    "",
-    "- [ ] (**0930-1000**)",
-    "\t- [[Areas/Work#^ship]]",
-  ].join("\n");
-  const tabPlanned = helpers.planProjectPromotionFileEdits(tabContent, todayPath, baseOptions);
-  assert.equal(tabPlanned.expandedCount, 1);
-  assert.match(tabPlanned.content, /\t- \[\[Work_ship#\^design\]\]/);
-  const crlf = [
-    "## Pomodoros",
-    "",
-    "- [ ] (**0930-1000**)",
-    "  - [[Areas/Work#^ship]]",
-  ].join("\r\n");
-  const crlfPlanned = helpers.planProjectPromotionFileEdits(crlf, todayPath, baseOptions);
-  assert.equal(crlfPlanned.expandedCount, 1);
-  assert.equal(crlfPlanned.content.includes("\r\n"), true);
-  const noNewline = [
-    "## Pomodoros",
-    "",
-    "- [ ] (**0930-1000**)",
-    "  - [[Areas/Work#^ship]]",
-  ].join("\n");
-  const noNewlinePlanned = helpers.planProjectPromotionFileEdits(noNewline, todayPath, baseOptions);
-  assert.equal(noNewlinePlanned.expandedCount, 1);
+  });
+  assert.equal(links.length, 2);
+  assert.equal(links[0].entryLine < links[1].entryLine, true);
 });
 
-test("promotion file planner keeps compatibility for non-live references", () => {
+test("promotion picker model carries title, predecessor, group, and keys", () => {
+  const rows = [
+    { key: "P.md#^a", text: "Alpha", notePath: "P.md", status: "*", destinationLabel: "BUILD", needsBlockId: false, selectable: true, line: 1, rawLine: "- [*] #task Alpha ^a", blockId: "a" },
+    { key: "P.md@1234abcd", text: "Beta", notePath: "P.md", status: " ", destinationLabel: "BUILD", needsBlockId: true, selectable: true, line: 2, rawLine: "- [ ] #task Beta", blockId: null },
+  ];
+  const model = helpers.buildPromotionSuccessorModel(
+    { rows, folded: { hidden: 1, alreadyPlanned: 2 } },
+    { sourcePath: "S.md", sourceBlockId: "s", sourceDescription: "Source task", projectPath: "P.md", projectDescription: "Proj", destinationLabel: "BUILD" },
+  );
+  assert.equal(model.title, "Promoted to project · pull in successors");
+  assert.equal(model.predecessors.length, 1);
+  assert.equal(model.groups.length, 1);
+  assert.equal(model.groups[0].group, "project");
+  assert.equal(model.groups[0].folded.hidden, 1);
+  assert.equal(model.groups[0].folded.alreadyPlanned, 2);
+  assert.equal(model.budget, null);
+});
+
+test("promotion notice line 2 covers every row of the table", () => {
+  assert.match(helpers.buildPromotionNoticeLine2({ picks: [{ text: "Hide history" }], anchorLabel: "BUILD" }), /Next in BUILD/);
+  assert.match(helpers.buildPromotionNoticeLine2({ picks: [{ text: "A" }, { text: "B" }], anchorLabel: "BUILD" }), /2 Next in BUILD/);
+  assert.match(
+    helpers.buildPromotionNoticeLine2({ picks: [], anchorLabel: "BUILD", offerCount: 2 }),
+    /Removed the BUILD link/,
+  );
+  assert.match(helpers.buildPromotionNoticeLine2({ picks: [], anchorLabel: "BUILD", blocked: true }), /project is Blocked/);
+  assert.match(helpers.buildPromotionNoticeLine2({ picks: [], anchorLabel: "BUILD", nothingOfferable: true }), /no project tasks/);
+  assert.match(
+    helpers.buildPromotionNoticeLine2({ picks: [{ text: "A" }], anchorLabel: "BUILD", notPulledCount: 1 }),
+    /not pulled in/,
+  );
+  assert.match(
+    helpers.buildPromotionNoticeLine2({ picks: [{ text: "A" }], anchorLabel: "BUILD", moreRemovedCount: 1 }),
+    /more Pomodoro link removed/,
+  );
+  assert.match(
+    helpers.buildPromotionNoticeLine2({ picks: [{ text: "A" }], anchorLabel: "BUILD", refusedCount: 1 }),
+    /couldn't link 1/,
+  );
+});
+
+test("promotion history rewrites references one-to-one to #^prj", () => {
   const today = new Date(2026, 8, 30);
   const todayPath = promotionDailyPath(today);
-  const files = [
-    { path: "Areas/Work.md" },
-    { path: todayPath },
-    { path: "Work_ship.md" },
-    { path: "Notes.md" },
-  ];
+  const files = [{ path: "Areas/Work.md" }, { path: todayPath }, { path: "Work_ship.md" }];
   const index = helpers.createProjectPromotionLinkIndex(files);
-  const options = {
+  const content = ["## Pomodoros", "", "- [x] (**0900-0930**)", "  - [[Areas/Work#^ship]]", "See [[Areas/Work#^ship]] in prose"].join("\n");
+  const result = helpers.planPromotionHistoryRewrites(content, todayPath, {
     sourcePath: "Areas/Work.md",
     sourceBlockId: "ship",
-    projectPathWithoutMd: "Work_ship",
     projectBasename: "Work_ship",
-    targetBlockIds: ["design", "test"],
-    today,
+    childBlockIds: [],
     fileIndex: index,
-  };
-  const content = [
-    "---",
-    "ref: \"[[Areas/Work#^ship]]\"",
-    "---",
-    "",
-    "## Pomodoros",
-    "",
-    "- [ ] (**0930-1000**)",
-    "  - [[Areas/Work#^ship]]",
-    "    - nested [[Areas/Work#^ship]] reference",
-    "  See [[Areas/Work#^ship]] in prose",
-    "  [Ship](Areas/Work.md#^ship)",
-    "",
-    "```",
-    "- [ ] (**0930-1000**)",
-    "  - [[Areas/Work#^ship]]",
-    "```",
-  ].join("\n");
-  const planned = helpers.planProjectPromotionFileEdits(content, todayPath, options);
-  assert.equal(planned.expandedCount, 1);
-  assert.match(planned.content, /ref: "\[\[Work_ship#\^prj\]\]"/);
-  assert.match(planned.content, /nested \[\[Work_ship#\^prj\]\] reference/);
-  assert.match(planned.content, /See \[\[Work_ship#\^prj\]\] in prose/);
-  assert.match(planned.content, /\[Ship\]\(Work_ship\.md#\^prj\)/);
-  const nonDaily = helpers.planProjectPromotionFileEdits(content, "Notes.md", options);
-  assert.equal(nonDaily.changed, false);
-  const ambiguousIndex = helpers.createProjectPromotionLinkIndex([
-    { path: "A/Work.md" },
-    { path: "B/Work.md" },
-    { path: todayPath },
-    { path: "Work_ship.md" },
-  ]);
-  const ambiguous = helpers.planProjectPromotionFileEdits(
-    [
-      "## Pomodoros",
-      "",
-      "- [ ] (**0930-1000**)",
-      "  - [[Work#^ship]]",
-    ].join("\n"),
-    todayPath,
-    {
-      ...options,
-      sourcePath: "A/Work.md",
-      fileIndex: ambiguousIndex,
-    },
-  );
-  assert.equal(ambiguous.changed, false);
-  assert.equal(ambiguous.expandedCount, 0);
+  });
+  assert.equal(result.changed, true);
+  assert.match(result.content, /\[\[Work_ship#\^prj\]\]/);
+  assert.doesNotMatch(result.content, /Areas\/Work#\^ship/);
 });
 
-test("forward promotion expands live links, persists anchors, and removes the source", async () => {
+test("PS1 promotion offers the new tasks and links only the pick", async () => {
   notices.length = 0;
   const today = new Date(2026, 8, 30);
   const todayPath = promotionDailyPath(today);
-  const futurePath = promotionDailyPath(new Date(2026, 9, 1));
   const sourceContent = [
-    "---",
-    'type: "[[area]]"',
-    "---",
-    "",
-    "## Tasks",
-    "",
-    "- [ ] #task Ship it ^ship",
-    "\t- Design",
-    "\t- Test",
+    "---", 'type: "[[area]]"', "---", "", "## Tasks", "",
+    "- [*] #task Command-mode improvements ^command-mode-improvements",
+    "\t- Hide command history and sort commands based on recently used.",
+    "\t- Add support for bulk commands.",
   ].join("\n");
-  const todayContent = [
-    "## Pomodoros",
-    "",
-    "- [x] (**0900-0930** [t:: 30m])",
-    "  - [[Areas/Work#^ship]]",
-    "- [ ] (**0930-1000** [t:: 30m])",
-    "  - [[Areas/Work#^ship]]",
-  ].join("\n");
-  const futureContent = [
-    "## Pomodoros",
-    "",
-    "- [ ] () — BUILD",
-    "  - [[Areas/Work#^ship]]",
-  ].join("\n");
+  const harness = createProjectForwardHarness({
+    sourcePath: "bob.md",
+    sourceContent,
+    today,
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**1510-1600** [t:: 50m]) — BUILD", "\t- [[bob#^command-mode-improvements]]"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async (model) => {
+      assert.equal(model.title, "Promoted to project · pull in successors");
+      const selectable = model.groups[0].rows.filter((row) => row.selectable);
+      assert.equal(selectable.length, 2);
+      return { picks: [{ key: selectable[0].key }] };
+    },
+  });
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.equal(harness.createdArgs[0].open, false);
+  const createdPath = "bob_command_mode_improvements.md";
+  const projectContent = harness.contents[createdPath];
+  assert.match(projectContent, /\^/);
+  assert.match(harness.contents[todayPath], new RegExp(`\\[\\[${createdPath.replace(/\.md$/, "")}#\\^`));
+  assert.doesNotMatch(harness.contents["bob.md"], /Command-mode improvements/);
+  assert.doesNotMatch(harness.contents[todayPath], /\[\[bob#\^command-mode-improvements\]\]/);
+  assert.match(notices.at(-1), /Next in BUILD/);
+});
+
+test("PS3 Esc consumes the anchor without linking", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  const sourceContent = ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n");
+  const harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent,
+    today,
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]", "- [ ] () — OTHER", "  - other link"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async () => null,
+  });
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.doesNotMatch(harness.contents[todayPath], /Areas\/Work#\^ship/);
+  assert.match(harness.contents[todayPath], /OTHER/);
+  assert.match(notices.at(-1), /not pulled in/);
+});
+
+test("PS4 template placeholder consumes without a picker", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  let pickerCalled = false;
+  const harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship"].join("\n"),
+    today,
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async () => { pickerCalled = true; return null; },
+  });
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.equal(pickerCalled, false);
+  assert.doesNotMatch(harness.contents[todayPath], /Areas\/Work#\^ship/);
+  assert.doesNotMatch(harness.contents[todayPath], /#\^prj/);
+  assert.match(notices.at(-1), /no project tasks to pull in/);
+});
+
+test("PS5 blocked project offers nothing and consumes links", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  let pickerCalled = false;
+  const harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it [scheduled:: 2099-01-01] ^ship", "\t- Design"].join("\n"),
+    today,
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async () => { pickerCalled = true; return null; },
+  });
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.equal(pickerCalled, false);
+  assert.match(notices.at(-1), /project is Blocked/);
+});
+
+test("PS6 no planned link leaves children untouched", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  let pickerCalled = false;
+  const harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design"].join("\n"),
+    today,
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - unrelated"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async () => { pickerCalled = true; return null; },
+  });
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.equal(pickerCalled, false);
+  assert.match(harness.contents["Work_ship.md"], /Design/);
+});
+
+test("PS7 struck, closed, prose, past, and later links are handled", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  const laterPath = promotionDailyPath(new Date(2026, 9, 1));
+  const pastPath = promotionDailyPath(new Date(2026, 8, 29));
+  const sourceContent = ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design"].join("\n");
   const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
     sourceContent,
     today,
     extraFiles: [
-      { path: todayPath, content: todayContent },
-      { path: futurePath, content: futureContent },
+      { path: todayPath, content: ["## Pomodoros", "", "- [x] (**0900-0930**)", "  - [[Areas/Work#^ship]]", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]", "  See [[Areas/Work#^ship]] in prose"].join("\n") },
+      { path: laterPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") },
+      { path: pastPath, content: ["## Pomodoros", "", "- [x] (**0900-0930**)", "  - [[Areas/Work#^ship]]"].join("\n") },
     ],
-    backlinks: {
-      [todayPath]: [{ original: "[[Areas/Work#^ship]]", link: "Areas/Work#^ship" }],
-      [futurePath]: [{ original: "[[Areas/Work#^ship]]", link: "Areas/Work#^ship" }],
-    },
+    backlinks: {},
+    pickSuccessorOffers: async () => null,
   });
-  assert.equal(
-    await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view),
-    true,
-  );
-  const createdPath = "Work_ship.md";
-  assert.ok(Object.prototype.hasOwnProperty.call(harness.contents, createdPath));
-  const projectContent = harness.contents[createdPath];
-  assert.match(projectContent, /\^design/);
-  assert.match(projectContent, /\^test/);
-  assert.doesNotMatch(harness.contents[todayPath], /\[\[Areas\/Work#\^ship\]\]/);
-  assert.doesNotMatch(harness.contents[futurePath], /\[\[Areas\/Work#\^ship\]\]/);
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
   assert.match(harness.contents[todayPath], /\[\[Work_ship#\^prj\]\]/);
-  assert.match(harness.contents[todayPath], /\[\[Work_ship#\^design\]\]/);
-  assert.match(harness.contents[todayPath], /\[\[Work_ship#\^test\]\]/);
-  assert.match(harness.contents[futurePath], /\[\[Work_ship#\^design\]\]/);
-  assert.doesNotMatch(harness.contents["Areas/Work.md"], /Ship it/);
-  assert.match(notices.at(-1), /Created project Work_ship/);
+  assert.doesNotMatch(harness.contents[laterPath], /Areas\/Work#\^ship/);
 });
 
-test("forward promotion preserves a concurrent frontmatter write before anchoring", async () => {
+test("PS9 lagging open editor completes with open:false and late open", async () => {
   notices.length = 0;
   const today = new Date(2026, 8, 30);
   const todayPath = promotionDailyPath(today);
-  const sourceContent = [
-    "---",
-    'type: "[[area]]"',
-    "---",
-    "",
-    "## Tasks",
-    "",
-    "- [ ] #task Ship it ^ship",
-    "\t- Design",
-    "\t- Test",
-  ].join("\n");
-  let frontmatterWritten = false;
-  let harness;
-  harness = createProjectForwardHarness({
-    sourcePath: "Areas/Work.md",
-    sourceContent,
-    today,
-    extraFiles: [
-      {
-        path: todayPath,
-        content: [
-          "## Pomodoros",
-          "",
-          "- [ ] (**0930-1000**)",
-          "  - [[Areas/Work#^ship]]",
-        ].join("\n"),
-      },
-    ],
-    backlinks: {
-      [todayPath]: [{ original: "[[Areas/Work#^ship]]", link: "Areas/Work#^ship" }],
-    },
-    process: async (file, fn) => {
-      let next = fn(harness.contents[file.path]);
-      if (file.path === "Work_ship.md" && !frontmatterWritten) {
-        frontmatterWritten = true;
-        next = [
-          "---",
-          "task_count: 2",
-          "open_task_count: 2",
-          "---",
-          "",
-          next,
-        ].join("\n");
-      }
-      harness.contents[file.path] = next;
-      return next;
-    },
-  });
-  assert.equal(
-    await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view),
-    true,
-  );
-  const projectContent = harness.contents["Work_ship.md"];
-  assert.match(projectContent, /^task_count: 2$/m);
-  assert.match(projectContent, /^open_task_count: 2$/m);
-  assert.match(projectContent, /\^design/);
-  assert.match(projectContent, /\^test/);
-  assert.match(harness.contents[todayPath], /\[\[Work_ship#\^design\]\]/);
-  assert.doesNotMatch(harness.contents["Areas/Work.md"], /Ship it/);
-  assert.match(notices.at(-1), /Created project Work_ship/);
-});
-
-test("forward promotion rebases anchors in an open project editor", async () => {
-  notices.length = 0;
-  const today = new Date(2026, 8, 30);
-  const todayPath = promotionDailyPath(today);
-  const sourceContent = [
-    "---",
-    'type: "[[area]]"',
-    "---",
-    "",
-    "## Tasks",
-    "",
-    "- [ ] #task Ship it ^ship",
-    "\t- Design",
-    "\t- Test",
-  ].join("\n");
+  const sourceContent = ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n");
   const projectEditor = new TransactionEditor("", { line: 0, ch: 0 });
   const projectLeaf = { view: { file: null, editor: projectEditor } };
-  let frontmatterWritten = false;
-  let harness;
-  harness = createProjectForwardHarness({
+  let sourceReadsAfterCreate = 0;
+  let created = false;
+  const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
     sourceContent,
     today,
     leaves: [projectLeaf],
-    onCreate: (file) => {
-      projectLeaf.view.file = file;
-      projectEditor.content = harness.contents[file.path];
-    },
-    extraFiles: [
-      {
-        path: todayPath,
-        content: [
-          "## Pomodoros",
-          "",
-          "- [ ] (**0930-1000**)",
-          "  - [[Areas/Work#^ship]]",
-        ].join("\n"),
-      },
-    ],
-    backlinks: {
-      [todayPath]: [{ original: "[[Areas/Work#^ship]]", link: "Areas/Work#^ship" }],
-    },
-    process: async (file, fn) => {
-      let next = fn(harness.contents[file.path]);
-      if (file.path === "Work_ship.md" && !frontmatterWritten) {
-        frontmatterWritten = true;
-        next = [
-          "---",
-          "task_count: 2",
-          "open_task_count: 2",
-          "---",
-          "",
-          next,
-        ].join("\n");
-        projectEditor.content = next;
-      }
-      harness.contents[file.path] = next;
-      return next;
-    },
-  });
-  const openEditorResult = await harness.plugin.createProjectNoteFromTask(
-    harness.editor,
-    harness.view,
-  );
-  assert.equal(openEditorResult, true);
-  assert.match(projectEditor.getValue(), /^task_count: 2$/m);
-  assert.match(projectEditor.getValue(), /^open_task_count: 2$/m);
-  assert.match(projectEditor.getValue(), /\^design/);
-  assert.match(projectEditor.getValue(), /\^test/);
-  assert.match(harness.contents[todayPath], /\[\[Work_ship#\^test\]\]/);
-  assert.doesNotMatch(harness.contents["Areas/Work.md"], /Ship it/);
-  assert.match(notices.at(-1), /Created project Work_ship/);
-});
-
-test("forward promotion refuses a concurrent edit to a task line being anchored", async () => {
-  notices.length = 0;
-  const today = new Date(2026, 8, 30);
-  const todayPath = promotionDailyPath(today);
-  const sourceContent = [
-    "---",
-    'type: "[[area]]"',
-    "---",
-    "",
-    "## Tasks",
-    "",
-    "- [ ] #task Ship it ^ship",
-    "\t- Design",
-    "\t- Test",
-  ].join("\n");
-  const harness = createProjectForwardHarness({
-    sourcePath: "Areas/Work.md",
-    sourceContent,
-    today,
-    extraFiles: [
-      {
-        path: todayPath,
-        content: [
-          "## Pomodoros",
-          "",
-          "- [ ] (**0930-1000**)",
-          "  - [[Areas/Work#^ship]]",
-        ].join("\n"),
-      },
-    ],
-    backlinks: {
-      [todayPath]: [{ original: "[[Areas/Work#^ship]]", link: "Areas/Work#^ship" }],
-    },
-    process: async (file, fn) => {
-      let next = fn(harness.contents[file.path]);
-      if (file.path === "Work_ship.md") {
-        next = next.replace("#task Design", "#task Revised design");
-      }
-      harness.contents[file.path] = next;
-      return next;
-    },
-  });
-  assert.equal(
-    await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view),
-    true,
-  );
-  assert.match(notices.at(-1), /project anchors could not be persisted; source task was kept/);
-  assert.match(harness.contents["Areas/Work.md"], /Ship it/);
-  assert.match(harness.contents[todayPath], /\[\[Areas\/Work#\^ship\]\]/);
-  assert.match(harness.contents["Work_ship.md"], /#task Revised design/);
-  assert.doesNotMatch(harness.contents["Work_ship.md"], /#task Revised design \^design/);
-});
-
-test("forward promotion uses zero-task fallback and keeps reverse one-to-one", async () => {
-  notices.length = 0;
-  const today = new Date(2026, 8, 30);
-  const todayPath = promotionDailyPath(today);
-  const sourceContent = [
-    "---",
-    'type: "[[area]]"',
-    "---",
-    "",
-    "## Tasks",
-    "",
-    "- [ ] #task Ship it ^ship",
-  ].join("\n");
-  const harness = createProjectForwardHarness({
-    sourcePath: "Areas/Work.md",
-    sourceContent,
-    today,
-    extraFiles: [
-      {
-        path: todayPath,
-        content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n"),
-      },
-    ],
-    backlinks: {
-      [todayPath]: [{ original: "[[Areas/Work#^ship]]", link: "Areas/Work#^ship" }],
-    },
-  });
-  assert.equal(
-    await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view),
-    true,
-  );
-  assert.equal(harness.contents[todayPath].includes("[[Work_ship#^prj]]"), true);
-  assert.equal(harness.contents[todayPath].includes("[[Work_ship#^design]]"), false);
-  assert.doesNotMatch(harness.contents["Areas/Work.md"], /Ship it/);
-});
-
-test("forward promotion retains the source on ambiguous, stale, and write failures", async () => {
-  const today = new Date(2026, 8, 30);
-  const todayPath = promotionDailyPath(today);
-  const sourceContent = [
-    "---",
-    'type: "[[area]]"',
-    "---",
-    "",
-    "## Tasks",
-    "",
-    "- [ ] #task Ship it ^ship",
-    "\t- Design",
-    "\t- Test",
-  ].join("\n");
-  const dailyContent = [
-    "## Pomodoros",
-    "",
-    "- [ ] (**0930-1000**)",
-    "  - [[Areas/Work#^ship]]",
-  ].join("\n");
-  notices.length = 0;
-  const duplicateSource = [
-    "---",
-    'type: "[[area]]"',
-    "---",
-    "",
-    "## Tasks",
-    "",
-    "- [ ] #task Ship it ^ship",
-    "\t- [ ] #task One ^same",
-    "\t- [ ] #task Two ^same",
-  ].join("\n");
-  const ambiguous = createProjectForwardHarness({
-    sourcePath: "Areas/Work.md",
-    sourceContent: duplicateSource,
-    today,
-    extraFiles: [{ path: todayPath, content: dailyContent }],
-    backlinks: {
-      [todayPath]: [{ original: "[[Areas/Work#^ship]]", link: "Areas/Work#^ship" }],
-    },
-  });
-  assert.equal(
-    await ambiguous.plugin.createProjectNoteFromTask(ambiguous.editor, ambiguous.view),
-    true,
-  );
-  assert.match(notices.at(-1), /duplicated; source task was kept/);
-  assert.match(ambiguous.contents["Areas/Work.md"], /Ship it/);
-
-  notices.length = 0;
-  const stale = createProjectForwardHarness({
-    sourcePath: "Areas/Work.md",
-    sourceContent,
-    today,
-    extraFiles: [{ path: todayPath, content: dailyContent }],
-    backlinks: {
-      [todayPath]: [{ original: "[[Areas/Work#^ship]]", link: "Areas/Work#^ship" }],
-    },
-    process: async (file, fn) => {
-      if (file.path === "Work_ship.md") {
-        throw new Error("stale project");
-      }
-      return fn(`unexpected ${file.path}`);
-    },
-    read: async () => {
-      throw new Error("unreadable");
-    },
-    cachedRead: async () => {
-      throw new Error("unreadable");
-    },
-  });
-  assert.equal(
-    await stale.plugin.createProjectNoteFromTask(stale.editor, stale.view),
-    false,
-  );
-  assert.match(stale.contents["Areas/Work.md"], /Ship it/);
-});
-
-test("forward promotion discovers live links without a backlink cache and uses one open-editor write", async () => {
-  notices.length = 0;
-  const today = new Date(2026, 8, 30);
-  const todayPath = promotionDailyPath(today);
-  const sourceContent = [
-    "---",
-    'type: "[[area]]"',
-    "---",
-    "",
-    "## Tasks",
-    "",
-    "- [ ] #task Ship it ^ship",
-    "\t- Design",
-  ].join("\n");
-  const openDaily = new TransactionEditor(
-    ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n"),
-    { line: 0, ch: 0 },
-  );
-  const harness = createProjectForwardHarness({
-    sourcePath: "Areas/Work.md",
-    sourceContent,
-    today,
-    extraFiles: [{ path: todayPath, content: openDaily.getValue() }],
+    onCreate: (file) => { created = true; projectLeaf.view.file = file; },
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
     backlinks: {},
-    leaves: [{ view: { file: { path: todayPath }, editor: openDaily } }],
+    pickSuccessorOffers: async () => null,
+    getOpenEditor: (lookupPath) => {
+      if (created && lookupPath === "Areas/Work.md") sourceReadsAfterCreate += 1;
+      if (lookupPath === "Areas/Work.md") return harness.editor;
+      return null;
+    },
   });
-  harness.fileByPath[todayPath] = { path: todayPath, basename: todayPath.split("/").pop().replace(/\.md$/, ""), extension: "md" };
-  const beforeTransactions = openDaily.transactions.length;
-  assert.equal(
-    await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view),
-    true,
-  );
-  assert.ok(openDaily.transactions.length > beforeTransactions);
-  assert.match(openDaily.getValue(), /\[\[Work_ship#\^design\]\]/);
-  assert.doesNotMatch(openDaily.getValue(), /Areas\/Work#\^ship/);
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.equal(harness.createdArgs[0].open, false);
   assert.doesNotMatch(harness.contents["Areas/Work.md"], /Ship it/);
 });
 
-test("forward conversion carries a Depends-On line and reverse restores it", async () => {
+test("PS11 source change during pick trashes the note", async () => {
   notices.length = 0;
   const today = new Date(2026, 8, 30);
-  const sourceContent = [
-    "---",
-    'type: "[[area]]"',
-    "---",
-    "",
-    "## Tasks",
-    "",
-    "- [ ] #task Ship it [dependsOn:: Areas__Work__prereq] ^ship",
-    "  - ⛓️ **DEPENDS ON:** [[#^prereq]]",
-    "  - [ ] #task Follow up ^follow-up",
-    "- [ ] #task Prereq ^prereq",
-  ].join("\n");
-  let harness;
-  harness = createProjectForwardHarness({
+  const todayPath = promotionDailyPath(today);
+  const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
-    sourceContent,
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design"].join("\n"),
     today,
-    processFrontMatter: async (file, fn) => {
-      const frontmatter = {};
-      fn(frontmatter);
-      const yaml = Object.entries(frontmatter)
-        .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
-        .join("\n");
-      const current = harness.contents[file.path] || "";
-      harness.contents[file.path] = current.startsWith("---\n")
-        ? current.replace(/^---\n/, `---\n${yaml}\n`)
-        : `---\n${yaml}\n---\n\n${current}`;
-      return frontmatter;
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async () => {
+      harness.contents["Areas/Work.md"] = harness.contents["Areas/Work.md"].replace("Ship it", "Changed it");
+      return null;
     },
   });
   harness.plugin.app.fileManager.trashFile = async (file) => {
     delete harness.contents[file.path];
     delete harness.fileByPath[file.path];
   };
-  assert.equal(
-    await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view),
-    true,
-  );
-  const createdPath = "Work_ship.md";
-  assert.ok(Object.prototype.hasOwnProperty.call(harness.contents, createdPath));
-  const projectContent = harness.contents[createdPath];
-  assert.match(projectContent, /^- \[\?\] #task #prj Ship it/m);
-  assert.match(projectContent, /⛓️ \*\*DEPENDS ON:\*\* \[\[Work#\^prereq\]\]/);
-  assert.match(
-    projectContent,
-    /^- \[\?\] #task Follow up .*#prj_is_blocked \^follow-up$/m,
-  );
-  assert.doesNotMatch(harness.contents["Areas/Work.md"], /Ship it/);
-  assert.match(harness.contents["Areas/Work.md"], /\^prereq/);
-
-  const reverseEditor = new TransactionEditor(projectContent, {
-    line: projectContent.split("\n").findIndex((line) => /\^prj(?:\s|$)/.test(line)),
-    ch: 0,
-  });
-  const reverseView = {
-    file: harness.fileByPath[createdPath],
-    editor: reverseEditor,
-    save: async () => {
-      harness.contents[createdPath] = reverseEditor.getValue();
-    },
-  };
-  assert.equal(
-    await harness.plugin.createProjectNoteFromTask(reverseEditor, reverseView),
-    true,
-  );
-  const restored = harness.contents["Areas/Work.md"];
-  assert.match(restored, /^- \[\?\] #task Ship it/m);
-  assert.match(restored, /⛓️ \*\*DEPENDS ON:\*\*/);
-  assert.match(restored, /\^prereq/);
-  assert.doesNotMatch(restored, /Work_ship#\^prj/);
-  assert.equal(
-    Object.prototype.hasOwnProperty.call(harness.contents, createdPath),
-    false,
-  );
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.match(notices.at(-1), /nothing was promoted/);
+  assert.equal(Object.prototype.hasOwnProperty.call(harness.contents, "Work_ship.md"), false);
 });
 
-test("reverse conversion re-keys a cross-note prerequisite BLOCKS link", async () => {
+test("PS13 lossy children and unresolvable Depends-On create nothing", async () => {
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  notices.length = 0;
+  const missing = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "  - \u26d3\ufe0f **DEPENDS ON:** [[Missing#^gone]]"].join("\n"),
+    today,
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
+    backlinks: {},
+  });
+  assert.equal(await missing.plugin.createProjectNoteFromTask(missing.editor, missing.view), false);
+  assert.match(notices.at(-1), /nothing was promoted/);
+  assert.equal(Object.prototype.hasOwnProperty.call(missing.contents, "Work_ship.md"), false);
+});
+
+test("PS2 picking both keeps the sub-bullet under the first", async () => {
   notices.length = 0;
   const today = new Date(2026, 8, 30);
-  const sourceContent = [
-    "---",
-    'type: "[[area]]"',
-    "---",
-    "",
-    "## Tasks",
-    "",
-    "- [ ] #task Ship it [dependsOn:: Other__Prereqs__prereq] ^ship",
-    "  - ⛓️ **DEPENDS ON:** [[Prereqs#^prereq]]",
-    "  - [ ] #task Follow up ^follow-up",
-  ].join("\n");
-  const prerequisitePath = "Other/Prereqs.md";
-  const prerequisiteContent = [
-    "---",
-    'type: "[[area]]"',
-    "---",
-    "",
-    "## Tasks",
-    "",
-    "- [ ] #task Prerequisite [id:: Other__Prereqs__prereq] ^prereq",
-  ].join("\n");
-  let harness;
-  harness = createProjectForwardHarness({
+  const todayPath = promotionDailyPath(today);
+  const harness = createProjectForwardHarness({
     sourcePath: "Areas/Work.md",
-    sourceContent,
-    extraFiles: [{ path: prerequisitePath, content: prerequisiteContent }],
-    backlinks: {
-      [prerequisitePath]: [
-        { link: "Work_ship#^prj", original: "[[Work_ship#^prj]]" },
-      ],
-    },
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n"),
     today,
-    processFrontMatter: async (file, fn) => {
-      const frontmatter = {};
-      fn(frontmatter);
-      const yaml = Object.entries(frontmatter)
-        .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
-        .join("\n");
-      const current = harness.contents[file.path] || "";
-      harness.contents[file.path] = current.startsWith("---\n")
-        ? current.replace(/^---\n/, `---\n${yaml}\n`)
-        : `---\n${yaml}\n---\n\n${current}`;
-      return frontmatter;
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**) — BUILD", "  - [[Areas/Work#^ship]]", "    - child kept once"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async (model) => {
+      const selectable = model.groups[0].rows.filter((row) => row.selectable);
+      return { picks: selectable.map((row) => ({ key: row.key })) };
     },
   });
-  harness.plugin.app.fileManager.trashFile = async (file) => {
-    delete harness.contents[file.path];
-    delete harness.fileByPath[file.path];
-  };
-  assert.equal(
-    await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view),
-    true,
-  );
-  const createdPath = "Work_ship.md";
-  const projectContent = harness.contents[createdPath];
-  const reverseEditor = new TransactionEditor(projectContent, {
-    line: projectContent.split("\n").findIndex((line) => /\^prj(?:\s|$)/.test(line)),
-    ch: 0,
-  });
-  const reverseView = {
-    file: harness.fileByPath[createdPath],
-    editor: reverseEditor,
-    save: async () => {
-      harness.contents[createdPath] = reverseEditor.getValue();
-    },
-  };
-  assert.equal(
-    await harness.plugin.createProjectNoteFromTask(reverseEditor, reverseView),
-    true,
-  );
-  assert.match(harness.contents[prerequisitePath], /\[\[Work#\^ship\]\]/);
-  assert.doesNotMatch(harness.contents[prerequisitePath], /Work_ship#\^prj/);
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  const lines = harness.contents[todayPath].split("\n");
+  const firstLink = lines.findIndex((line) => /Work_ship#\^/.test(line));
+  assert.ok(firstLink >= 0);
+  assert.match(lines[firstLink + 1], /child kept once/);
+  assert.match(notices.at(-1), /2 Next in BUILD/);
 });
 
+test("PS10 concurrent note edits still apply picks by key", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  const harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n"),
+    today,
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async (model) => {
+      const selectable = model.groups[0].rows.filter((row) => row.selectable);
+      harness.contents["Work_ship.md"] = ["---", "task_count: 2", "---", "", harness.contents["Work_ship.md"]].join("\n");
+      harness.contents[todayPath] = ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]", "  - unrelated"].join("\n");
+      return { picks: selectable.map((row) => ({ key: row.key })) };
+    },
+  });
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.match(harness.contents[todayPath], /Work_ship#\^/);
+});
+
+test("PS12 deleted pick applies the rest with a refusal suffix", async () => {
+  notices.length = 0;
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  const harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Test"].join("\n"),
+    today,
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async (model) => {
+      const selectable = model.groups[0].rows.filter((row) => row.selectable);
+      const victim = selectable[1] ? selectable[1].text : selectable[0].text;
+      harness.contents["Work_ship.md"] = harness.contents["Work_ship.md"].split("\n").filter((line) => !line.includes(victim)).join("\n");
+      return { picks: selectable.map((row) => ({ key: row.key })) };
+    },
+  });
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.match(notices.at(-1), /couldn't link 1/);
+});
+
+test("PS14 picker model shape and retarget off", async () => {
+  const today = new Date(2026, 8, 30);
+  const todayPath = promotionDailyPath(today);
+  let seenModel = null;
+  let seenOptions = null;
+  const harness = createProjectForwardHarness({
+    sourcePath: "Areas/Work.md",
+    sourceContent: ["---", 'type: "[[area]]"', "---", "", "## Tasks", "", "- [ ] #task Ship it ^ship", "\t- Design", "\t- Design"].join("\n"),
+    today,
+    extraFiles: [{ path: todayPath, content: ["## Pomodoros", "", "- [ ] (**0930-1000**)", "  - [[Areas/Work#^ship]]"].join("\n") }],
+    backlinks: {},
+    pickSuccessorOffers: async (model, options) => { seenModel = model; seenOptions = options; return null; },
+  });
+  const originalPick = harness.plugin.pickSuccessorOffers;
+  harness.plugin.pickSuccessorOffers = async (model, options) => {
+    seenOptions = options;
+    return originalPick(model, options);
+  };
+  assert.equal(await harness.plugin.createProjectNoteFromTask(harness.editor, harness.view), true);
+  assert.ok(seenModel);
+  assert.equal(seenOptions.retarget, false);
+  assert.equal(seenModel.budget, null);
+});

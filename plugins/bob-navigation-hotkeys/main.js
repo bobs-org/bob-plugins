@@ -13804,298 +13804,78 @@ function parseProjectPromotionDedicatedLink(line) {
   });
 }
 
-function buildProjectPromotionReplacementLines(
-  originalLine,
-  projectPathWithoutMd,
-  targetBlockIds,
-) {
-  const parsed = parseProjectPromotionDedicatedLink(originalLine);
-  if (!parsed) {
-    return null;
-  }
-  if (parsed.strikeOpen || parsed.strikeClose) {
-    return null;
-  }
-  if (
-    parsed.checkbox !== null &&
-    POMODORO_LEDGER_CLOSED_STATUSES.has(parsed.checkbox)
-  ) {
-    return null;
-  }
-  const projectRef = String(projectPathWithoutMd || "").trim();
-  if (!projectRef) {
-    return null;
-  }
-  const ids = Array.isArray(targetBlockIds) ? targetBlockIds : [];
-  if (ids.length === 0) {
-    return null;
-  }
-  const embedPrefix = parsed.embedded ? "!" : "";
-  const suffixText = parsed.suffix ? parsed.suffix.replace(/^[ \t]*/, " ") : "";
-  const lines = [];
-  ids.forEach((blockId, order) => {
-    const id = String(blockId || "").trim();
-    if (!id) {
-      return;
-    }
-    if (order === 0) {
-      const checkboxText =
-        parsed.checkbox !== null ? `[${parsed.checkbox}] ` : "";
-      lines.push(
-        `${parsed.prefix}${checkboxText}${parsed.markerRun}${embedPrefix}[[${projectRef}#^${id}]]${suffixText}`,
-      );
-    } else {
-      lines.push(
-        `${parsed.prefix}${embedPrefix}[[${projectRef}#^${id}]]${suffixText}`,
-      );
-    }
-  });
-  return Object.freeze(lines);
-}
-
-function planProjectPromotionFileEdits(content, filePath, options) {
+function planPromotionProjectHistoryRewrites(content, filePath, options) {
   const text = String(content || "");
   const opts = options && typeof options === "object" ? options : {};
   const sourcePath = normalizeVaultRelativePath(opts.sourcePath || "");
   const sourceBlockId = String(opts.sourceBlockId || "").trim();
-  const projectPathWithoutMd = String(
-    opts.projectPathWithoutMd || opts.projectBasename || "",
-  ).trim();
-  const projectBasename = String(
-    opts.projectBasename || opts.projectPathWithoutMd || "",
-  )
-    .trim()
-    .split("/")
-    .pop();
-  const targetBlockIds = Array.isArray(opts.targetBlockIds)
-    ? opts.targetBlockIds.map((id) => String(id || "").trim()).filter(Boolean)
-    : [];
-  const today = opts.today instanceof Date ? opts.today : new Date();
-  const index =
-    opts.fileIndex && typeof opts.fileIndex === "object"
-      ? opts.fileIndex
-      : createProjectPromotionLinkIndex(opts.files || []);
-  const empty = Object.freeze({
-    content: text,
-    changed: false,
-    expandedCount: 0,
-    legacyCount: 0,
-  });
-  if (!sourcePath || !sourceBlockId || !projectPathWithoutMd || !projectBasename) {
-    return empty;
-  }
-  if (targetBlockIds.length === 0) {
-    return empty;
-  }
-  if (!isProjectPromotionEligibleDailyPath(filePath, today)) {
-    return empty;
-  }
-  const splitted = splitMarkdownContent(text);
-  const lines = splitted.lines;
-  const lineEnding = splitted.lineEnding;
-  const contexts = getMarkdownLineContexts(text);
-  const section = findPomodorosSectionRange(text);
-  if (!section) {
-    return empty;
-  }
-  const ranges = collectOpenPomodoroRanges(lines, contexts, section);
-  if (ranges.length === 0) {
-    return empty;
-  }
-  const expansions = [];
-  for (const range of ranges) {
-    for (
-      let lineIndex = range.startLine;
-      lineIndex <= range.endLine;
-      lineIndex += 1
-    ) {
-      const context = contexts[lineIndex];
-      if (context && (context.inFrontmatter || context.inFence)) {
-        continue;
-      }
-      const lineText = String(lines[lineIndex] || "");
-      if (!PROJECT_LIST_ITEM_RE.test(lineText)) {
-        continue;
-      }
-      if (findNearestParentListItem(lines, lineIndex) !== range.entryLine) {
-        continue;
-      }
-      const parsed = parseProjectPromotionDedicatedLink(lineText);
-      if (!parsed) {
-        continue;
-      }
-      if (parsed.strikeOpen || parsed.strikeClose) {
-        continue;
-      }
-      if (
-        parsed.checkbox !== null &&
-        POMODORO_LEDGER_CLOSED_STATUSES.has(parsed.checkbox)
-      ) {
-        continue;
-      }
-      if (parsed.blockId !== sourceBlockId) {
-        continue;
-      }
-      const resolved = resolveProjectPromotionLinkTarget(
-        parsed.target,
-        filePath,
-        index,
-      );
-      if (!resolved || normalizeVaultRelativePath(resolved) !== sourcePath) {
-        continue;
-      }
-      const replacementLines = buildProjectPromotionReplacementLines(
-        lineText,
-        projectPathWithoutMd,
-        targetBlockIds,
-      );
-      if (!replacementLines || replacementLines.length === 0) {
-        continue;
-      }
-      const block = findCurrentBulletChildBlock(lines, lineIndex);
-      const subtreeEnd =
-        block && Number.isFinite(block.endLineExclusive)
-          ? block.endLineExclusive
-          : lineIndex + 1;
-      expansions.push(
-        Object.freeze({
-          lineIndex,
-          originalLine: lineText,
-          replacementLines,
-          subtreeStart: lineIndex + 1,
-          subtreeEnd: Math.max(lineIndex + 1, subtreeEnd),
-        }),
-      );
-    }
-  }
-  if (expansions.length === 0) {
-    return empty;
-  }
-  const covered = new Set();
-  for (const expansion of expansions) {
-    for (
-      let lineIndex = expansion.lineIndex;
-      lineIndex < expansion.subtreeEnd;
-      lineIndex += 1
-    ) {
-      covered.add(lineIndex);
-    }
-  }
-  const nextLines = lines.slice();
-  const sorted = expansions.slice().sort((a, b) => b.lineIndex - a.lineIndex);
-  for (const expansion of sorted) {
-    const subtreeLines = nextLines.slice(
-      expansion.subtreeStart,
-      expansion.subtreeEnd,
-    );
-    const first = expansion.replacementLines[0];
-    const rest = expansion.replacementLines.slice(1);
-    const replacement = [first, ...subtreeLines, ...rest];
-    nextLines.splice(
-      expansion.lineIndex,
-      expansion.subtreeEnd - expansion.lineIndex,
-      ...replacement,
-    );
-  }
+  const projectBasename = String(opts.projectBasename || opts.projectPathWithoutMd || "").trim().split("/").pop();
+  const childBlockIds = new Set(
+    (Array.isArray(opts.targetBlockIds) ? opts.targetBlockIds : Array.isArray(opts.childBlockIds) ? opts.childBlockIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean),
+  );
+  const index = opts.fileIndex && typeof opts.fileIndex === "object" ? opts.fileIndex : createProjectPromotionLinkIndex(opts.files || []);
+  const empty = Object.freeze({ content: text, changed: false, expandedCount: 0, legacyCount: 0 });
+  if (!sourcePath || !sourceBlockId || !projectBasename) return empty;
+  const lines = text.split(/\r?\n/);
+  const ending = text.includes("\r\n") ? "\r\n" : "\n";
   let legacyCount = 0;
-  const markdownLinkRe =
-    /\[([^\]\n]*)\]\(([^)\s]*?)#\^([A-Za-z0-9-]+)(?:\s+[^)]*)?\)/g;
-  for (let lineIndex = 0; lineIndex < nextLines.length; lineIndex += 1) {
-    let lineText = String(nextLines[lineIndex] || "");
+  const nextLines = lines.map((originalLine) => {
+    let lineText = String(originalLine || "");
     const originalLineText = lineText;
     const wikiOccurrences = collectPomodoroBlockLinkOccurrences(lineText);
     const wikiReplacements = [];
     for (const occurrence of wikiOccurrences) {
-      if (occurrence.blockId !== sourceBlockId) {
-        continue;
-      }
-      const resolved = resolveProjectPromotionLinkTarget(
-        occurrence.target,
-        filePath,
-        index,
-      );
-      if (!resolved || normalizeVaultRelativePath(resolved) !== sourcePath) {
-        continue;
-      }
+      const isSource = occurrence.blockId === sourceBlockId;
+      const isChild = childBlockIds.has(occurrence.blockId);
+      if (!isSource && !isChild) continue;
+      const resolved = resolveProjectPromotionLinkTarget(occurrence.target, filePath, index);
+      if (!resolved) continue;
+      if (isSource && normalizeVaultRelativePath(resolved) !== sourcePath) continue;
       let linkOnlyStart = occurrence.start;
-      const markerMatch = /^(?:🍅[ \t]+)*/.exec(
-        lineText.slice(occurrence.start, occurrence.end),
-      );
-      if (markerMatch) {
-        linkOnlyStart = occurrence.start + markerMatch[0].length;
-      }
+      const markerMatch = /^(?:🍅[ \t]+)*/.exec(lineText.slice(occurrence.start, occurrence.end));
+      if (markerMatch) linkOnlyStart = occurrence.start + markerMatch[0].length;
       const originalLink = lineText.slice(linkOnlyStart, occurrence.end);
-      const replacementLink = rewriteBlockIdLinkOriginal(
-        originalLink,
-        projectBasename,
-        "prj",
-      );
-      if (!replacementLink) {
-        continue;
-      }
+      const replacementLink = rewriteBlockIdLinkOriginal(originalLink, projectBasename, "prj");
+      if (!replacementLink) continue;
       wikiReplacements.push({ start: linkOnlyStart, end: occurrence.end, replacementLink });
     }
-    wikiReplacements
-      .sort((a, b) => b.start - a.start)
-      .forEach((item) => {
-        lineText =
-          lineText.slice(0, item.start) +
-          item.replacementLink +
-          lineText.slice(item.end);
-        legacyCount += 1;
-      });
+    wikiReplacements.sort((a, b) => b.start - a.start).forEach((item) => {
+      lineText = lineText.slice(0, item.start) + item.replacementLink + lineText.slice(item.end);
+      legacyCount += 1;
+    });
+    const markdownLinkRe = /\[([^\]\n]*)\]\(([^)\s]*?)#\^([A-Za-z0-9-]+)(?:\s+[^)]*)?\)/g;
     markdownLinkRe.lastIndex = 0;
     let markdownMatch = null;
     const markdownReplacements = [];
     while ((markdownMatch = markdownLinkRe.exec(lineText)) !== null) {
       const targetText = String(markdownMatch[2] || "").trim();
       const blockId = markdownMatch[3];
-      if (blockId !== sourceBlockId) {
-        continue;
-      }
+      const isSource = blockId === sourceBlockId;
+      const isChild = childBlockIds.has(blockId);
+      if (!isSource && !isChild) continue;
       const strippedTarget = targetText.replace(/\.md$/i, "");
-      const resolved = resolveProjectPromotionLinkTarget(
-        strippedTarget || targetText,
-        filePath,
-        index,
-      );
-      if (!resolved || normalizeVaultRelativePath(resolved) !== sourcePath) {
-        continue;
-      }
+      const resolved = resolveProjectPromotionLinkTarget(strippedTarget || targetText, filePath, index);
+      if (!resolved) continue;
+      if (isSource && normalizeVaultRelativePath(resolved) !== sourcePath) continue;
       const originalLink = markdownMatch[0];
-      const replacementLink = rewriteBlockIdLinkOriginal(
-        originalLink,
-        projectBasename,
-        "prj",
-      );
-      if (!replacementLink) {
-        continue;
-      }
-      markdownReplacements.push({
-        start: markdownMatch.index,
-        end: markdownMatch.index + originalLink.length,
-        replacementLink,
-      });
+      const replacementLink = rewriteBlockIdLinkOriginal(originalLink, projectBasename, "prj");
+      if (!replacementLink) continue;
+      markdownReplacements.push({ start: markdownMatch.index, end: markdownMatch.index + originalLink.length, replacementLink });
     }
-    markdownReplacements
-      .sort((a, b) => b.start - a.start)
-      .forEach((item) => {
-        lineText =
-          lineText.slice(0, item.start) +
-          item.replacementLink +
-          lineText.slice(item.end);
-        legacyCount += 1;
-      });
-    if (lineText !== originalLineText) {
-      nextLines[lineIndex] = lineText;
-    }
-  }
-  return Object.freeze({
-    content: nextLines.join(lineEnding),
-    changed: nextLines.join(lineEnding) !== text,
-    expandedCount: expansions.length,
-    legacyCount,
+    markdownReplacements.sort((a, b) => b.start - a.start).forEach((item) => {
+      lineText = lineText.slice(0, item.start) + item.replacementLink + lineText.slice(item.end);
+      legacyCount += 1;
+    });
+    return lineText === originalLineText ? originalLine : lineText;
   });
+  const next = nextLines.join(ending);
+  return Object.freeze({ content: next, changed: next !== text, expandedCount: 0, legacyCount });
+}
+
+function planProjectPromotionFileEdits(content, filePath, options) {
+  return planPromotionProjectHistoryRewrites(content, filePath, options);
 }
 
 function parseIntegerText(text) {
@@ -14219,137 +13999,385 @@ function getFenceOpening(line) {
   };
 }
 
-// ---- src/121-project-promotion-anchor-plan.js ----
-function rebaseProjectPromotionAnchorPlan(seedContent, currentContent, promotionPlan) {
-  const seedLines = splitMarkdownContent(String(seedContent || "")).lines;
-  const current = splitMarkdownContent(String(currentContent || ""));
-  const currentLines = current.lines.slice();
-  const plannedTargets = Array.isArray(promotionPlan && promotionPlan.targets)
-    ? promotionPlan.targets
-    : [];
-  const groups = new Map();
+// ---- src/122-project-promotion-successors.js ----
+// Pure promotion-successor planner (plan:202610/promotion_successor_offers.md).
+// No vault reads, no editor writes. Shared scope with 120-project-notes.js,
+// 140-scheduled-recovery.js, 160-pomodoro-reorder.js, and the 206 picker model.
 
-  for (const target of plannedTargets) {
-    const seedLine = Number.isInteger(target && target.line)
-      ? String(seedLines[target.line] || "")
-      : "";
-    if (!seedLine) {
-      return Object.freeze({
-        ok: false,
-        content: null,
-        targets: Object.freeze([]),
-      });
+function promotionSuccessorFnv1aHex(text) {
+  let hash = 0x811c9dc5;
+  const source = String(text || "");
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0").slice(0, 8).toLowerCase();
+}
+
+function promotionSuccessorScheduledDate(lineText) {
+  const match = /\[scheduled::\s*(\d{4})-(\d{2})-(\d{2})\s*\]/.exec(String(lineText || ""));
+  if (!match) return null;
+  return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+function promotionSuccessorTodayText(today) {
+  const base = today instanceof Date ? today : new Date();
+  const year = base.getFullYear();
+  const month = String(base.getMonth() + 1).padStart(2, "0");
+  const day = String(base.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function promotionSuccessorHasHideToken(lineText) {
+  return /(^|\s)#hide(\s|$)/.test(String(lineText || ""));
+}
+
+function promotionTruncateTaskText(text, maxLength = 48) {
+  const clean = String(text || "").trim().replace(/\s+/g, " ");
+  if (clean.length <= maxLength) return clean;
+  return `${clean.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function promotionSuccessorLinkForId(projectPath, blockId, fileIndex) {
+  const id = String(blockId || "").trim();
+  const normalized = normalizeVaultRelativePath(projectPath || "");
+  const withoutMd = normalized.replace(/\.md$/i, "");
+  const basename = withoutMd.split("/").pop() || withoutMd;
+  let ref = withoutMd;
+  try {
+    if (fileIndex && fileIndex.basenames instanceof Map) {
+      const key = String(basename || "").toLowerCase();
+      if (key && fileIndex.basenames.get(key) === normalized) {
+        ref = basename;
+      }
+    } else {
+      ref = basename;
     }
-    if (getTrailingBlockId(seedLine)) {
+  } catch (_error) {
+    ref = basename;
+  }
+  return `[[${ref}#^${id}]]`;
+}
+
+function planPromotionSuccessorRows(projectContent, options = {}) {
+  const text = String(projectContent || "");
+  const projectPath = normalizeVaultRelativePath(options.projectPath || "");
+  const today = options.today instanceof Date ? options.today : new Date();
+  const todayText = promotionSuccessorTodayText(today);
+  const liveLinkedIds = options.liveLinkedIds instanceof Set
+    ? options.liveLinkedIds
+    : new Set(options.liveLinkedIds || []);
+  const splitted = splitMarkdownContent(text);
+  const lines = splitted.lines;
+  const contexts = getMarkdownLineContexts(text);
+  const rows = [];
+  const digestCounts = new Map();
+  const digestOrder = new Map();
+  const candidates = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const context = contexts[index];
+    if (context && (context.inFrontmatter || context.inFence)) continue;
+    const lineText = String(lines[index] || "");
+    if (!OBSIDIAN_TASK_LINE_RE.test(lineText)) continue;
+    if (!isObsidianTaskLine(lineText)) continue;
+    if (isProjectLifecycleTaskLine(lineText)) continue;
+    if (lineText.includes(PROJECT_TASKS_PLACEHOLDER)) continue;
+    const status = getObsidianTaskCheckboxStatus(lineText);
+    if (status === null) continue;
+    if (POMODORO_LEDGER_CLOSED_STATUSES.has(status)) continue;
+    const blockId = getTrailingBlockId(lineText);
+    const display = cleanTaskDisplayText(lineText);
+    const digest = promotionSuccessorFnv1aHex(display);
+    const seen = digestCounts.get(digest) || 0;
+    digestCounts.set(digest, seen + 1);
+    if (!digestOrder.has(digest)) digestOrder.set(digest, []);
+    digestOrder.get(digest).push(index);
+    candidates.push({ line: index, text: lineText, status, blockId, display, digest });
+  }
+  let hidden = 0;
+  let alreadyPlanned = 0;
+  const seenKeys = new Set();
+  for (const candidate of candidates) {
+    if (promotionSuccessorHasHideToken(candidate.text)) {
+      hidden += 1;
       continue;
     }
-    if (!groups.has(seedLine)) {
-      groups.set(seedLine, []);
+    if (candidate.blockId && liveLinkedIds.has(candidate.blockId)) {
+      alreadyPlanned += 1;
+      continue;
     }
-    groups.get(seedLine).push(target);
-  }
-
-  if (groups.size === 0) {
-    return Object.freeze({
-      ok: true,
-      content: String(currentContent || ""),
-      targets: Object.freeze(plannedTargets.slice()),
-    });
-  }
-
-  const contexts = getMarkdownLineContexts(String(currentContent || ""));
-  const isProjectTaskLine = (index) => {
-    const context = contexts[index];
-    const line = String(currentLines[index] || "");
-    return !(
-      (context && (context.inFrontmatter || context.inFence)) ||
-      !OBSIDIAN_TASK_LINE_RE.test(line) ||
-      !isObsidianTaskLine(line) ||
-      isProjectLifecycleTaskLine(line) ||
-      line.includes(PROJECT_TASKS_PLACEHOLDER)
-    );
-  };
-  const targetLines = new Map();
-
-  for (const [seedLine, targets] of groups) {
-    const targetByAnchoredLine = new Map(
-      targets.map((target) => [
-        appendBlockIdToLine(seedLine, target.blockId),
-        target,
-      ]),
-    );
-    const candidates = [];
-    for (let index = 0; index < currentLines.length; index += 1) {
-      if (!isProjectTaskLine(index)) {
-        continue;
-      }
-      const line = String(currentLines[index] || "");
-      if (line === seedLine || targetByAnchoredLine.has(line)) {
-        candidates.push(index);
+    let selectable = true;
+    let mutedReason = "";
+    if (candidate.status === "?") {
+      selectable = false;
+      mutedReason = "blocked";
+    } else {
+      const scheduled = promotionSuccessorScheduledDate(candidate.text);
+      if (scheduled && scheduled > todayText) {
+        selectable = false;
+        const date = new Date(`${scheduled}T00:00:00`);
+        const label = Number.isNaN(date.getTime())
+          ? scheduled
+          : date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        mutedReason = `scheduled ${label}`;
       }
     }
-    if (candidates.length !== targets.length) {
-      return Object.freeze({
-        ok: false,
-        content: null,
-        targets: Object.freeze([]),
-      });
+    let key;
+    if (candidate.blockId) {
+      key = `${projectPath}#^${candidate.blockId}`;
+    } else {
+      const order = (digestOrder.get(candidate.digest) || []).indexOf(candidate.line) + 1;
+      const base = `${projectPath}@${candidate.digest}`;
+      key = order <= 1 ? base : `${base}~${order}`;
     }
-
-    const assigned = new Set();
-    for (const index of candidates) {
-      const target = targetByAnchoredLine.get(String(currentLines[index] || ""));
-      if (!target) {
-        continue;
-      }
-      if (assigned.has(target)) {
-        return Object.freeze({
-          ok: false,
-          content: null,
-          targets: Object.freeze([]),
-        });
-      }
-      assigned.add(target);
-      targetLines.set(index, target);
-    }
-
-    const remainingTargets = targets.filter((target) => !assigned.has(target));
-    const remainingLines = candidates.filter((index) => !targetLines.has(index));
-    if (remainingTargets.length !== remainingLines.length) {
-      return Object.freeze({
-        ok: false,
-        content: null,
-        targets: Object.freeze([]),
-      });
-    }
-    remainingLines.forEach((index, offset) => {
-      targetLines.set(index, remainingTargets[offset]);
-    });
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    rows.push(Object.freeze({
+      key,
+      text: candidate.display,
+      notePath: projectPath,
+      status: candidate.status,
+      destinationLabel: String(options.destinationLabel || ""),
+      needsBlockId: !candidate.blockId,
+      selectable,
+      ...(mutedReason ? { mutedReason } : {}),
+      line: candidate.line,
+      rawLine: candidate.text,
+      blockId: candidate.blockId,
+    }));
   }
-
-  for (const [index, target] of targetLines) {
-    const otherLines = currentLines.filter((_line, otherIndex) => otherIndex !== index);
-    if (blockIdExistsInContent(otherLines.join(current.lineEnding), target.blockId)) {
-      return Object.freeze({
-        ok: false,
-        content: null,
-        targets: Object.freeze([]),
-      });
-    }
-  }
-
-  for (const [index, target] of targetLines) {
-    const line = String(currentLines[index] || "");
-    if (!getTrailingBlockId(line)) {
-      currentLines[index] = appendBlockIdToLine(line, target.blockId);
-    }
-  }
-
   return Object.freeze({
-    ok: true,
-    content: currentLines.join(current.lineEnding),
-    targets: Object.freeze(plannedTargets.slice()),
+    rows: Object.freeze(rows),
+    folded: Object.freeze({ hidden, alreadyPlanned }),
   });
+}
+
+function findPromotionPlannedLinks(dailyContent, dailyPath, options = {}) {
+  const text = String(dailyContent || "");
+  const sourcePath = normalizeVaultRelativePath(options.sourcePath || "");
+  const sourceBlockId = String(options.sourceBlockId || "").trim();
+  const filePath = normalizeVaultRelativePath(dailyPath || "");
+  if (!sourcePath || !sourceBlockId || !filePath) return Object.freeze([]);
+  const index = options.fileIndex && typeof options.fileIndex === "object"
+    ? options.fileIndex
+    : createProjectPromotionLinkIndex(options.files || []);
+  const splitted = splitMarkdownContent(text);
+  const lines = splitted.lines;
+  const contexts = getMarkdownLineContexts(text);
+  const section = findPomodorosSectionRange(text);
+  if (!section) return Object.freeze([]);
+  const ranges = collectOpenPomodoroRanges(lines, contexts, section);
+  if (ranges.length === 0) return Object.freeze([]);
+  const found = [];
+  for (const range of ranges) {
+    const entryText = String(lines[range.entryLine] || "");
+    let destinationLabel = "";
+    try {
+      const parts = typeof parsePomodoroEntryLineParts === "function"
+        ? parsePomodoroEntryLineParts(entryText)
+        : null;
+      if (parts && parts.name) destinationLabel = parts.name;
+    } catch (_error) {
+      destinationLabel = "";
+    }
+    if (!destinationLabel) {
+      const nameMatch = /—\s*(.+?)\s*$/.exec(entryText);
+      if (nameMatch) destinationLabel = nameMatch[1].trim();
+    }
+    if (!destinationLabel) {
+      const spanMatch = /\(\*\*(\d{4}-\d{4})\*\*\)/.exec(entryText);
+      if (spanMatch) destinationLabel = spanMatch[1];
+    }
+    for (let lineIndex = range.startLine; lineIndex <= range.endLine; lineIndex += 1) {
+      const context = contexts[lineIndex];
+      if (context && (context.inFrontmatter || context.inFence)) continue;
+      const lineText = String(lines[lineIndex] || "");
+      if (!PROJECT_LIST_ITEM_RE.test(lineText)) continue;
+      if (findNearestParentListItem(lines, lineIndex) !== range.entryLine) continue;
+      const parsed = parseProjectPromotionDedicatedLink(lineText);
+      if (!parsed) continue;
+      if (parsed.strikeOpen || parsed.strikeClose) continue;
+      if (parsed.checkbox !== null && POMODORO_LEDGER_CLOSED_STATUSES.has(parsed.checkbox)) continue;
+      if (parsed.blockId !== sourceBlockId) continue;
+      const resolved = resolveProjectPromotionLinkTarget(parsed.target, filePath, index);
+      if (!resolved || normalizeVaultRelativePath(resolved) !== sourcePath) continue;
+      const block = findCurrentBulletChildBlock(lines, lineIndex);
+      found.push(Object.freeze({
+        dailyPath: filePath,
+        entryLine: range.entryLine,
+        bulletLine: lineIndex,
+        entryText,
+        destinationLabel,
+        lineText,
+        subtreeEnd: block && Number.isFinite(block.endLineExclusive) ? block.endLineExclusive : lineIndex + 1,
+      }));
+    }
+  }
+  return Object.freeze(found);
+}
+
+function buildPromotionSuccessorModel(offerPlan, options = {}) {
+  const rows = Array.isArray(offerPlan && offerPlan.rows) ? offerPlan.rows : [];
+  const selectable = rows.filter((row) => row && row.selectable);
+  const sourcePath = normalizeVaultRelativePath(options.sourcePath || "");
+  const sourceBlockId = String(options.sourceBlockId || "").trim();
+  const sourceText = String(options.sourceDescription || "").trim();
+  const projectPath = normalizeVaultRelativePath(options.projectPath || "");
+  const header = String(options.projectDescription || "").trim();
+  const destinationLabel = String(options.destinationLabel || "");
+  const modelRows = selectable.map((row) => Object.freeze({
+    key: row.key,
+    text: row.text,
+    notePath: row.notePath,
+    status: row.status,
+    destinationLabel: destinationLabel || row.destinationLabel || "",
+    needsBlockId: row.needsBlockId === true,
+    selectable: true,
+    ...(row.mutedReason ? { mutedReason: row.mutedReason } : {}),
+  }));
+  const muted = rows.filter((row) => row && !row.selectable);
+  for (const row of muted) {
+    modelRows.push(Object.freeze({
+      key: row.key,
+      text: row.text,
+      notePath: row.notePath,
+      status: row.status,
+      destinationLabel: destinationLabel || row.destinationLabel || "",
+      needsBlockId: row.needsBlockId === true,
+      selectable: false,
+      mutedReason: row.mutedReason || "blocked",
+    }));
+  }
+  if (modelRows.length === 0 || selectable.length === 0) return null;
+  const folded = offerPlan && offerPlan.folded ? offerPlan.folded : { hidden: 0, alreadyPlanned: 0 };
+  return Object.freeze({
+    title: "Promoted to project · pull in successors",
+    predecessors: Object.freeze([Object.freeze({
+      notePath: sourcePath,
+      blockId: sourceBlockId,
+      text: sourceText,
+    })]),
+    groups: Object.freeze([Object.freeze({
+      group: "project",
+      header,
+      project: projectPath,
+      rows: Object.freeze(modelRows),
+      folded: Object.freeze({
+        hidden: Number(folded.hidden) || 0,
+        alreadyPlanned: Number(folded.alreadyPlanned) || 0,
+        subProjects: 0,
+      }),
+    })]),
+    budget: null,
+    selectableCount: selectable.length,
+    taskRowCount: rows.length,
+  });
+}
+
+// Extracted legacy history pass: every non-planned reference to the source or a
+// moved child becomes <project>#^prj. Pure; past daily notes get only this rewrite.
+function planPromotionHistoryRewrites(content, filePath, options = {}) {
+  const text = String(content || "");
+  const sourcePath = normalizeVaultRelativePath(options.sourcePath || "");
+  const sourceBlockId = String(options.sourceBlockId || "").trim();
+  const projectBasename = String(options.projectBasename || "").trim();
+  if (!sourcePath || !sourceBlockId || !projectBasename) {
+    return Object.freeze({ content: text, changed: false, count: 0 });
+  }
+  const index = options.fileIndex && typeof options.fileIndex === "object"
+    ? options.fileIndex
+    : createProjectPromotionLinkIndex(options.files || []);
+  const childIds = new Set(
+    (Array.isArray(options.childBlockIds) ? options.childBlockIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean),
+  );
+  const lines = text.split(/\r?\n/);
+  const ending = text.includes("\r\n") ? "\r\n" : "\n";
+  let count = 0;
+  const nextLines = lines.map((originalLine) => {
+    let lineText = String(originalLine || "");
+    const original = lineText;
+    const wikiOccurrences = collectPomodoroBlockLinkOccurrences(lineText);
+    const wikiReplacements = [];
+    for (const occurrence of wikiOccurrences) {
+      const id = occurrence.blockId;
+      const isSource = id === sourceBlockId;
+      const isChild = childIds.has(id);
+      if (!isSource && !isChild) continue;
+      const resolved = resolveProjectPromotionLinkTarget(occurrence.target, filePath, index);
+      if (!resolved) continue;
+      const resolvedPath = normalizeVaultRelativePath(resolved);
+      if (isSource && resolvedPath !== sourcePath) continue;
+      let linkOnlyStart = occurrence.start;
+      const markerMatch = /^(?:🍅[ \t]+)*/.exec(lineText.slice(occurrence.start, occurrence.end));
+      if (markerMatch) linkOnlyStart = occurrence.start + markerMatch[0].length;
+      const originalLink = lineText.slice(linkOnlyStart, occurrence.end);
+      const replacementLink = rewriteBlockIdLinkOriginal(originalLink, projectBasename, "prj");
+      if (!replacementLink) continue;
+      wikiReplacements.push({ start: linkOnlyStart, end: occurrence.end, replacementLink });
+    }
+    wikiReplacements.sort((a, b) => b.start - a.start).forEach((item) => {
+      lineText = lineText.slice(0, item.start) + item.replacementLink + lineText.slice(item.end);
+      count += 1;
+    });
+    const markdownLinkRe = /\[([^\]\n]*)\]\(([^)\s]*?)#\^([A-Za-z0-9-]+)(?:\s+[^)]*)?\)/g;
+    markdownLinkRe.lastIndex = 0;
+    let markdownMatch = null;
+    const markdownReplacements = [];
+    while ((markdownMatch = markdownLinkRe.exec(lineText)) !== null) {
+      const targetText = String(markdownMatch[2] || "").trim();
+      const blockId = markdownMatch[3];
+      const isSource = blockId === sourceBlockId;
+      const isChild = childIds.has(blockId);
+      if (!isSource && !isChild) continue;
+      const strippedTarget = targetText.replace(/\.md$/i, "");
+      const resolved = resolveProjectPromotionLinkTarget(strippedTarget || targetText, filePath, index);
+      if (!resolved) continue;
+      if (isSource && normalizeVaultRelativePath(resolved) !== sourcePath) continue;
+      const originalLink = markdownMatch[0];
+      const replacementLink = rewriteBlockIdLinkOriginal(originalLink, projectBasename, "prj");
+      if (!replacementLink) continue;
+      markdownReplacements.push({ start: markdownMatch.index, end: markdownMatch.index + originalLink.length, replacementLink });
+    }
+    markdownReplacements.sort((a, b) => b.start - a.start).forEach((item) => {
+      lineText = lineText.slice(0, item.start) + item.replacementLink + lineText.slice(item.end);
+      count += 1;
+    });
+    return lineText === original ? originalLine : lineText;
+  });
+  const next = nextLines.join(ending);
+  return Object.freeze({ content: next, changed: next !== text, count });
+}
+
+function buildPromotionNoticeLine2(options = {}) {
+  const picks = Array.isArray(options.picks) ? options.picks : [];
+  const anchorLabel = String(options.anchorLabel || "").trim() || "Pomodoro";
+  const offerCount = Number(options.offerCount) || 0;
+  const notPulled = Number(options.notPulledCount) || 0;
+  const moreRemoved = Number(options.moreRemovedCount) || 0;
+  const refused = Number(options.refusedCount) || 0;
+  const blocked = options.blocked === true;
+  const nothingOfferable = options.nothingOfferable === true;
+  const describePick = (pick) => promotionTruncateTaskText(pick && pick.text ? pick.text : "");
+  if (blocked) return `Removed the ${anchorLabel} link · project is Blocked`;
+  if (nothingOfferable) return `Removed the ${anchorLabel} link · no project tasks to pull in`;
+  if (picks.length === 0) {
+    return `Removed the ${anchorLabel} link · ${offerCount} project task${offerCount === 1 ? "" : "s"} not pulled in`;
+  }
+  let head;
+  if (picks.length === 1) {
+    head = `Next in ${anchorLabel}: ${describePick(picks[0])}`;
+  } else {
+    const shown = picks.slice(0, 3).map(describePick).join(", ");
+    const extra = picks.length > 3 ? ` +${picks.length - 3}` : "";
+    head = `${picks.length} Next in ${anchorLabel}: ${shown}${extra}`;
+  }
+  const suffixes = [];
+  if (notPulled > 0) suffixes.push(`${notPulled} not pulled in`);
+  if (moreRemoved > 0) suffixes.push(`${moreRemoved} more Pomodoro link${moreRemoved === 1 ? "" : "s"} removed`);
+  if (refused > 0) suffixes.push(`couldn't link ${refused} (project note changed)`);
+  return suffixes.length > 0 ? `${head} · ${suffixes.join(" · ")}` : head;
 }
 // ---- src/130-fences-and-status.js ----
 function isClosingFence(line, openingFence) {
@@ -17583,6 +17611,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
 
   const dailyPath = normalizeVaultRelativePath(options.dailyPath);
   const noteIndex = options.noteIndex || null;
+  const dedicatedOnly = options && options.dedicatedOnly === true;
   const targetKeys = new Set(
     targetList.map(
       (target) =>
@@ -17694,10 +17723,12 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
     const removedChild = subtreeCandidates.some(
       (candidate) => candidate.start >= entryStart && candidate.start < entryEnd,
     );
-    const tokenChild = matches.some(
-      (match) =>
-        match.line > range.entryLine && match.line < childEndExclusive,
-    );
+    const tokenChild = dedicatedOnly
+      ? false
+      : matches.some(
+          (match) =>
+            match.line > range.entryLine && match.line < childEndExclusive,
+        );
     if (!removedChild && !tokenChild) {
       continue;
     }
@@ -17785,12 +17816,14 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
   // A merged EOF run may now start earlier, after a different blank seam.
   if (subtreeEdits.length > 0) normalizeEofDeletion(subtreeEdits.at(-1));
 
-  const tokenMatches = matches.filter(
-    (match) =>
-      !subtreeEdits.some(
-        (edit) => edit.start <= match.start && edit.end >= match.end,
-      ),
-  );
+  const tokenMatches = dedicatedOnly
+    ? []
+    : matches.filter(
+        (match) =>
+          !subtreeEdits.some(
+            (edit) => edit.start <= match.start && edit.end >= match.end,
+          ),
+      );
   const tokenMatchesByLine = new Map();
   for (const match of tokenMatches) {
     if (!tokenMatchesByLine.has(match.line)) {
@@ -25605,6 +25638,8 @@ function addSuccessorPickerClasses(element, ...classes) {
 
 class SuccessorOfferPickerModal extends FilteredPickerModal {
   constructor(app, model, onSettle, options = {}) {
+    const retargetEnabled =
+      !options || typeof options !== "object" || options.retarget !== false;
     const normalized = normalizeSuccessorPickerModel(model);
     super(app, {
       items: [],
@@ -25617,6 +25652,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       footerHints: SUCCESSOR_PICKER_FOOTER_HINTS.slice(),
     });
     this.model = normalized;
+    this.retargetEnabled = retargetEnabled;
     this.onSettle = typeof onSettle === "function" ? onSettle : () => {};
     this.now = typeof options.now === "function" ? options.now : () => Date.now();
     this.openedAt = null;
@@ -25627,7 +25663,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     this.destinationOverrides = new Map();
     this.retargetingDestination = false;
     try {
-      if (getSuccessorDestinationPickerApi(this.app)) {
+      if (retargetEnabled && getSuccessorDestinationPickerApi(this.app)) {
         this.footerHints = SUCCESSOR_PICKER_FOOTER_HINTS.concat([SUCCESSOR_PICKER_RETARGET_HINT]);
       }
     } catch (_error) {
@@ -25700,6 +25736,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
   }
 
   async retargetRowsForDestination() {
+    if (this.retargetEnabled === false) {
+      return false;
+    }
     if (this.retargetingDestination === true || this.successorPickerRetargetAborted()) {
       return false;
     }
@@ -25764,7 +25803,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     ) {
       event.preventDefault();
       event.stopPropagation();
-      void this.retargetRowsForDestination();
+      if (this.retargetEnabled !== false) {
+        void this.retargetRowsForDestination();
+      }
       return;
     }
     if (event.key === "Enter") {
@@ -26195,7 +26236,7 @@ class BobNavigationHotkeysSuccessorPickerMixin {
     }
   }
 
-  pickSuccessorOffers(model) {
+  pickSuccessorOffers(model, options = {}) {
     try {
       if (
         this.successorPickerUnavailable === true ||
@@ -26205,6 +26246,8 @@ class BobNavigationHotkeysSuccessorPickerMixin {
         return Promise.resolve(null);
       }
       this.holdReviewWalkForSuccessorPicker();
+      const retargetEnabled =
+        !options || typeof options !== "object" || options.retarget !== false;
       return new Promise((resolve) => {
         let modal = null;
         let settled = false;
@@ -26231,9 +26274,11 @@ class BobNavigationHotkeysSuccessorPickerMixin {
                 if (!allowed.has(key) || pickedKeys.has(key)) continue;
                 pickedKeys.add(key);
                 const item = { key };
-                const destination = normalizeSuccessorDestinationOverride(pick && pick.destination);
-                if (destination) {
-                  item.destination = destination;
+                if (retargetEnabled) {
+                  const destination = normalizeSuccessorDestinationOverride(pick && pick.destination);
+                  if (destination) {
+                    item.destination = destination;
+                  }
                 }
                 picks.push(item);
               }
@@ -26250,7 +26295,7 @@ class BobNavigationHotkeysSuccessorPickerMixin {
             this.app,
             model,
             settle,
-            { now: () => this.successorPickerNow() },
+            { now: () => this.successorPickerNow(), retarget: retargetEnabled },
           );
           this.activeSuccessorPicker = modal;
           modal.open();
@@ -92016,7 +92061,7 @@ class BobNavigationHotkeysInboxRouteMixin {
 // ---- src/660-plugin-project-notes.js ----
 class BobNavigationHotkeysProjectNoteMixin {
 
-  async createProjectNoteFile(creatingFile, basename) {
+  async createProjectNoteFile(creatingFile, basename, options = {}) {
     const templaterPlugin = this.getTemplaterPlugin();
     if (!templaterPlugin) {
       new Notice("Templater is not available");
@@ -92045,6 +92090,11 @@ class BobNavigationHotkeysProjectNoteMixin {
         ? this.app.vault.getRoot()
         : "";
 
+    const openAfterCreate =
+      options && typeof options === "object" && options.open === false
+        ? false
+        : true;
+
     let createdFile = null;
     try {
       createdFile =
@@ -92052,7 +92102,7 @@ class BobNavigationHotkeysProjectNoteMixin {
           templateFile,
           folder,
           resolvedBasename,
-          true,
+          openAfterCreate,
         );
     } catch (error) {
       new Notice("Could not create project note");
@@ -92347,522 +92397,9 @@ class BobNavigationHotkeysProjectNoteMixin {
     }
   }
 
-  async writeProjectPromotionAnchors(path, file, seedContent, promotionPlan) {
-    const normalized = normalizeVaultRelativePath(path);
-    if (
-      !normalized ||
-      normalizeVaultRelativePath(file && file.path) !== normalized
-    ) {
-      throw new Error(`Promotion file path changed: ${normalized}`);
-    }
-    const rebase = (content) => {
-      const result = rebaseProjectPromotionAnchorPlan(
-        seedContent,
-        String(content || ""),
-        promotionPlan,
-      );
-      if (!result.ok) {
-        throw new Error(`Promotion preimage changed: ${normalized}`);
-      }
-      return result;
-    };
-    const editor = this.getOpenMarkdownEditorForPath(normalized);
-    if (editor && typeof editor.getValue === "function") {
-      const before = String(editor.getValue() || "");
-      const result = rebase(before);
-      if (
-        result.content !== before &&
-        (!applyEditorContentTransaction(editor, before, result.content) ||
-          String(editor.getValue() || "") !== result.content)
-      ) {
-        throw new Error(`Promotion editor write failed: ${normalized}`);
-      }
-      return result;
-    }
-
-    const vault = this.app && this.app.vault;
-    if (!vault || typeof vault.process !== "function") {
-      throw new Error(`Vault content updates are unavailable: ${normalized}`);
-    }
-    let result = null;
-    let transformed = false;
-    await vault.process(file, (content) => {
-      result = rebase(content);
-      transformed = true;
-      return result.content;
-    });
-    if (!transformed || !result) {
-      throw new Error(`Promotion file write failed: ${normalized}`);
-    }
-    return result;
-  }
 }
 // ---- src/665-plugin-project-conversion.js ----
 class BobNavigationHotkeysProjectConversionMixin {
-
-  async createProjectNoteFromTask(editor, view) {
-    const sourceFile = view && view.file;
-    if (!editor || !this.isMarkdownFile(sourceFile)) {
-      new Notice(
-        "Open an area or project note before creating a project from a task",
-      );
-      return false;
-    }
-
-    if (!this.isAreaOrProjectNote(sourceFile)) {
-      new Notice(
-        "Project notes can only be created from an area or project note",
-      );
-      return false;
-    }
-
-    const cursor = getEditorCursor(editor);
-    if (!cursor) {
-      new Notice("Place the cursor on an open #task checkbox");
-      return false;
-    }
-
-    const lineText = getEditorLineText(editor, cursor.line);
-    if (lineText === null) {
-      new Notice("Place the cursor on an open #task checkbox");
-      return false;
-    }
-
-    if (
-      isProjectLifecycleTaskLine(lineText) &&
-      isProjectLifecycleTaskAtLine(editor.getValue(), cursor.line)
-    ) {
-      return this.convertProjectNoteToTask(editor, view, cursor, lineText);
-    }
-
-    const parsedTask = parseProjectSourceTaskLine(lineText);
-    if (!parsedTask) {
-      new Notice(getProjectSourceTaskLineNoticeText(lineText));
-      return false;
-    }
-    if (parsedTask.scheduleError) {
-      new Notice(parsedTask.scheduleError);
-      return false;
-    }
-
-    if (!this.app.vault || typeof this.app.vault.process !== "function") {
-      new Notice("Vault content updates are unavailable");
-      return false;
-    }
-
-    const sourceBlock = getProjectSourceTaskBlock(
-      editor,
-      cursor.line,
-      lineText,
-    ) || {
-      startLine: cursor.line,
-      endLineExclusive: cursor.line + 1,
-      lines: [lineText],
-      childLines: [],
-    };
-
-    const sourceDependencyBlock = collectProjectSourceDependencyBlock(
-      sourceBlock.lines.join("\n"),
-      0,
-    );
-    if (!sourceDependencyBlock.valid) {
-      new Notice(sourceDependencyBlock.error);
-      return false;
-    }
-    const sourceChildLines = sourceBlock.childLines.filter(
-      (_line, index) => !sourceDependencyBlock.lineIndices.includes(index + 1),
-    );
-
-    const createdDate = formatProjectTaskCreatedDate(new Date());
-    let convertedChildTaskLines = [];
-    let convertedChildSections = [];
-    let convertedManagedLogLines = [];
-    let childConversionLossy = false;
-    const hasChildContent = sourceChildLines.some(
-      (line) => String(line || "").trim() !== "",
-    );
-    if (hasChildContent) {
-      const conversion = buildProjectSeedFromChildBullets(
-        sourceChildLines,
-        createdDate,
-      );
-      if (
-        conversion.lossless &&
-        (conversion.taskLines.length > 0 ||
-          conversion.sections.length > 0 ||
-          conversion.managedLogLines.length > 0)
-      ) {
-        convertedChildTaskLines = conversion.taskLines;
-        convertedChildSections = conversion.sections;
-        convertedManagedLogLines = conversion.managedLogLines;
-      } else {
-        childConversionLossy = true;
-      }
-    }
-
-    const sourceBasename =
-      sourceFile.basename ||
-      getVaultPathBasenameWithoutExtension(sourceFile.path);
-    let projectBasename = null;
-    let blockIdBacklinkRewrites = [];
-    if (parsedTask.blockId) {
-      projectBasename = getProjectBasenameFromTaskBlockId(
-        sourceBasename,
-        parsedTask.blockId,
-      );
-      if (!projectBasename) {
-        new Notice("Could not derive project note name from task block ID");
-        return false;
-      }
-
-      if (this.projectNoteBasenameExists(projectBasename, sourceFile)) {
-        new Notice(`Note "${projectBasename}" already exists; rename it first`);
-        return false;
-      }
-
-      blockIdBacklinkRewrites = this.getProjectTaskBlockIdBacklinkRewrites(
-        sourceFile,
-        parsedTask.blockId,
-      );
-    }
-
-    if (!view || typeof view.save !== "function") {
-      new Notice("Could not save source note");
-      return false;
-    }
-
-    try {
-      await view.save();
-    } catch (error) {
-      new Notice("Could not save source note");
-      return false;
-    }
-
-    const createdFile = await this.createProjectNoteFile(
-      sourceFile,
-      projectBasename || undefined,
-    );
-    if (!createdFile) {
-      return false;
-    }
-
-    let seedResult = null;
-    try {
-      await this.app.vault.process(createdFile, (content) => {
-        seedResult = buildProjectContentFromTask(content, parsedTask, {
-          projectPath: createdFile.path,
-          today: new Date(),
-          childTaskLines: convertedChildTaskLines,
-          sections: convertedChildSections,
-          managedLogLines: convertedManagedLogLines,
-        });
-        return seedResult.content;
-      });
-    } catch (error) {
-      new Notice("Could not seed project task");
-      return false;
-    }
-
-    if (!seedResult || !seedResult.seeded) {
-      new Notice("Project task placeholder not found; source task was kept");
-      return true;
-    }
-
-    if (convertedChildTaskLines.length > 0 && !seedResult.tasksInserted) {
-      new Notice(
-        "Created project, but the Tasks section was missing; source task was kept",
-      );
-      return true;
-    }
-
-    if (
-      convertedManagedLogLines.length > 0 &&
-      !seedResult.managedLogsInserted
-    ) {
-      new Notice(
-        "Created project, but the task logs could not be added; source task was kept",
-      );
-      return true;
-    }
-
-    const sectionsHandled =
-      (seedResult.sectionsInserted || 0) + (seedResult.sectionsCreated || 0);
-    if (
-      convertedChildSections.length > 0 &&
-      sectionsHandled < convertedChildSections.length
-    ) {
-      new Notice(
-        "Created project, but a section could not be added; source task was kept",
-      );
-      return true;
-    }
-
-    if (childConversionLossy) {
-      new Notice(
-        "Created project, but child bullets could not be converted; source task was kept",
-      );
-      return true;
-    }
-
-    const sourcePath = normalizeVaultRelativePath(sourceFile.path);
-    const childBlockIds = new Set(
-      convertedChildTaskLines
-        .map((line) => getTrailingBlockId(line))
-        .filter(Boolean),
-    );
-    const dependencyRefs = [];
-    let droppedResidentDependencyCount = 0;
-    for (const target of sourceDependencyBlock.targets) {
-      const targetFile = target.note
-        ? this.resolveLinkTargetFile(target.note, sourceFile.path)
-        : sourceFile;
-      if (!this.isMarkdownFile(targetFile)) {
-        new Notice("A Depends-On target could not be resolved; the source task was kept");
-        return true;
-      }
-      const targetPath = normalizeVaultRelativePath(targetFile.path);
-      if (
-        targetPath === sourcePath &&
-        (childBlockIds.has(target.blockId) || target.blockId === parsedTask.blockId)
-      ) {
-        droppedResidentDependencyCount += 1;
-        continue;
-      }
-      dependencyRefs.push({ path: targetPath, blockId: target.blockId });
-    }
-
-    let projectContent = seedResult.content;
-    if (dependencyRefs.length > 0) {
-      const files = new Map([[createdFile.path, projectContent]]);
-      for (const target of dependencyRefs) {
-        if (files.has(target.path)) continue;
-        if (target.path === sourcePath) {
-          files.set(target.path, String(editor.getValue() || ""));
-          continue;
-        }
-        const targetContent = await this.readDependencyNoteContent(
-          target.path,
-          null,
-          createdFile.path,
-        );
-        if (targetContent === null) {
-          new Notice("A Depends-On target could not be read; the source task was kept");
-          return true;
-        }
-        files.set(target.path, targetContent);
-      }
-      const projectLine = findProjectLifecycleTaskIndex(projectContent);
-      const dependencyPlan = planDependencyEdit({
-        content: projectContent,
-        parentLine: projectLine,
-        parentPath: createdFile.path,
-        add: dependencyRefs,
-        remove: [],
-        files,
-        vaultFiles: [
-          ...(this.readDependencyVaultFileList() || []),
-          normalizeVaultRelativePath(createdFile.path),
-        ],
-        resolveLinkpath: this.dependencyLinkpathResolver(),
-        blocksLinesEnabled: loadBlocksLinesEnabled(),
-        // Design §5: the seed may already have flipped residents to `[?]`
-        // (future inline date), so transfer reads their pre-seed lanes.
-        projectLaneStatuses: [
-          parsedTask.status,
-          ...convertedChildTaskLines.map((line) =>
-            getObsidianTaskCheckboxStatus(String(line || ""))
-          ),
-        ],
-      });
-      if (!dependencyPlan.ok) {
-        new Notice(`Could not preserve the Depends-On line (${dependencyPlan.reason}); the source task was kept`);
-        return true;
-      }
-      if (dependencyPlan.changed) {
-        let committed = false;
-        for (const preparation of dependencyPlan.preparations || []) {
-          const prepared = await this.prepareDependencyTargetNote(
-            preparation.path,
-            preparation,
-          );
-          if (!prepared || prepared.ok !== true) {
-            new Notice(`Could not prepare a Depends-On target (${prepared && prepared.reason || "target-preparation-failed"}); the source task was kept`);
-            return true;
-          }
-        }
-        try {
-          await this.app.vault.process(createdFile, (current) => {
-            if (String(current || "") !== projectContent) return current;
-            committed = true;
-            return dependencyPlan.nextContent;
-          });
-        } catch (_error) {
-          committed = false;
-        }
-        if (!committed) {
-          new Notice("Could not finish the Depends-On write; the source task was kept");
-          return true;
-        }
-        projectContent = dependencyPlan.nextContent;
-        await this.finishBlocksFollowUps(dependencyPlan.blocksFollowUps);
-      }
-    }
-
-    const projectIsBlocked = projectLooksBlockedByPrjShortcut(projectContent);
-    let dailyCleanupFailed = false;
-    let sameFileCleanup = null;
-    if (projectIsBlocked && (parsedTask.blockId || childBlockIds.size > 0)) {
-      const snapshot = await this.readDeferredPomodoroSnapshot(this.app, {
-        sourcePath,
-        sourceContent: String(editor.getValue() || ""),
-        today: new Date(),
-      });
-      const targets = [parsedTask.blockId, ...childBlockIds]
-        .filter(Boolean)
-        .map((blockId) => ({
-        path: sourcePath,
-        blockId,
-        }));
-      if (snapshot) {
-        const dailyContent = snapshot.sameFile
-          ? String(editor.getValue() || "")
-          : snapshot.content;
-        const cleanup = planDeferredPomodoroLinkCleanup(
-          dailyContent,
-          targets,
-          {
-            dailyPath: snapshot.dailyPath,
-            noteIndex: snapshot.noteIndex,
-          },
-        );
-        if (cleanup.changed) {
-          if (snapshot.sameFile) {
-            sameFileCleanup = {
-              targets,
-              dailyPath: snapshot.dailyPath,
-              noteIndex: snapshot.noteIndex,
-            };
-          } else {
-            dailyCleanupFailed = !(await this.writeDeferredPomodoroCleanup(
-              snapshot,
-              cleanup,
-            ));
-          }
-        }
-      }
-    }
-
-    let updatedLinkCount = 0;
-    if (parsedTask.blockId) {
-      let expanded = false;
-      if (!projectIsBlocked) {
-        const promotionPlan = planProjectPromotionTargets(projectContent);
-        if (promotionPlan.error) {
-          new Notice(
-            `Created project, but ${promotionPlan.error}; source task was kept`,
-          );
-          return true;
-        }
-        const promotionToday =
-          this.promotionTodayForTests instanceof Date
-            ? this.promotionTodayForTests
-            : new Date();
-        const expansionResult = await this.applyProjectPromotionBacklinkExpansion(
-          {
-            sourceFile,
-            createdFile,
-            sourceBlockId: parsedTask.blockId,
-            seedContent: projectContent,
-            promotionPlan,
-            blockIdBacklinkRewrites,
-            today: promotionToday,
-          },
-        );
-        if (expansionResult.expanded) {
-          expanded = true;
-          updatedLinkCount = expansionResult.updatedLinkCount;
-          if (expansionResult.failed) {
-            if (expansionResult.error) {
-              new Notice(
-                `Created project, but ${expansionResult.error}; source task was kept`,
-              );
-            } else {
-              const linkText =
-                expansionResult.failedLinkCount === 1 ? "link" : "links";
-              new Notice(
-                `Created project, but ${expansionResult.failedLinkCount} block ${linkText} could not be updated; source task was kept`,
-              );
-            }
-            return true;
-          }
-        }
-      }
-      if (!expanded && blockIdBacklinkRewrites.length > 0) {
-        const rewriteResult = await this.applyBlockIdLinkRewrites(
-          blockIdBacklinkRewrites,
-          createdFile.basename,
-        );
-        updatedLinkCount = rewriteResult.updatedLinkCount;
-        if (rewriteResult.failed) {
-          const linkText =
-            rewriteResult.failedLinkCount === 1 ? "link" : "links";
-          new Notice(
-            `Created project, but ${rewriteResult.failedLinkCount} block ${linkText} could not be updated; source task was kept`,
-          );
-          return true;
-        }
-      }
-    }
-
-    let removedSourceTask = false;
-    try {
-      await this.app.vault.process(sourceFile, (content) => {
-        const base = sameFileCleanup
-          ? planDeferredPomodoroLinkCleanup(
-              content,
-              sameFileCleanup.targets,
-              {
-                dailyPath: sameFileCleanup.dailyPath,
-                noteIndex: sameFileCleanup.noteIndex,
-              },
-            ).content
-          : content;
-        const result = removeTaskBlockFromContent(base, sourceBlock);
-        removedSourceTask = result.removed;
-        return result.content;
-      });
-    } catch (error) {
-      new Notice("Created project, but could not remove the source task");
-      return true;
-    }
-
-    if (!removedSourceTask) {
-      new Notice(
-        "Created project, but the source task changed and was not removed",
-      );
-      return true;
-    }
-
-    let notice = getProjectFromTaskNoticeText(
-        parsedTask.description,
-        sourceBasename,
-        projectBasename ? createdFile.basename : undefined,
-        updatedLinkCount,
-        sectionsHandled,
-        convertedManagedLogLines
-          .map((line) => {
-            const parsed = parseManagedTaskLogParentBullet(line);
-            return parsed ? parsed.kind : null;
-          })
-          .filter(Boolean),
-      );
-    if (droppedResidentDependencyCount > 0) {
-      notice += ` · dropped ${formatCountLabel(droppedResidentDependencyCount, "prerequisite")} that became project residents`;
-    }
-    if (dailyCleanupFailed) notice += " · Pomodoro links not removed";
-    new Notice(notice);
-    return true;
-  }
 
   async convertProjectNoteToTask(editor, view, cursor, lineText) {
     const vault = this.app && this.app.vault;
@@ -93467,275 +93004,882 @@ async function applyPlannedBlockIdLinkRewrites(args = {}) {
   }
   return Object.freeze({ failedLinkCount, failedPaths });
 }
-// ---- src/670-plugin-project-files.js ----
-class BobNavigationHotkeysProjectFileMixin {
+// ---- src/667-plugin-project-promotion.js ----
+// Forward promotion: task -> project with successor offers
+// (plan:202610/promotion_successor_offers.md). Pure planning lives in
+// 122-project-promotion-successors.js; this mixin owns vault orchestration.
 
-  async applyProjectPromotionBacklinkExpansion(options) {
-    const opts = options && typeof options === "object" ? options : {};
-    const sourceFile = opts.sourceFile;
-    const createdFile = opts.createdFile;
-    const sourceBlockId = String(opts.sourceBlockId || "").trim();
-    const seedContent = String(opts.seedContent || "");
-    const promotionPlan = opts.promotionPlan;
-    const blockIdBacklinkRewrites = Array.isArray(opts.blockIdBacklinkRewrites)
-      ? opts.blockIdBacklinkRewrites
-      : [];
-    const today =
-      opts.today instanceof Date ? opts.today : new Date();
-    const empty = Object.freeze({
-      updatedLinkCount: 0,
-      failedLinkCount: 0,
-      failed: false,
-      error: null,
-      expanded: false,
-    });
-    if (!sourceFile || !createdFile || !sourceBlockId || !promotionPlan) {
-      return empty;
+class BobNavigationHotkeysProjectPromotionMixin {
+
+  async createProjectNoteFromTask(editor, view) {
+    const sourceFile = view && view.file;
+    if (!editor || !this.isMarkdownFile(sourceFile)) {
+      new Notice("Open an area or project note before creating a project from a task");
+      return false;
     }
-    if (promotionPlan.error) {
-      return Object.freeze({
-        updatedLinkCount: 0,
-        failedLinkCount: 0,
-        failed: true,
-        error: "target block IDs are ambiguous",
-        expanded: false,
-      });
+    if (!this.isAreaOrProjectNote(sourceFile)) {
+      new Notice("Project notes can only be created from an area or project note");
+      return false;
     }
-    const targets = Array.isArray(promotionPlan.targets)
-      ? promotionPlan.targets
-      : [];
-    if (targets.length === 0) {
-      return empty;
+    const cursor = getEditorCursor(editor);
+    if (!cursor) {
+      new Notice("Place the cursor on an open #task checkbox");
+      return false;
     }
-    const targetBlockIds = targets.map((target) => target.blockId);
-    const vault = this.app && this.app.vault;
-    if (!vault || typeof vault.process !== "function") {
-      return Object.freeze({
-        updatedLinkCount: 0,
-        failedLinkCount: 0,
-        failed: true,
-        error: "vault updates are unavailable",
-        expanded: false,
-      });
+    const lineText = getEditorLineText(editor, cursor.line);
+    if (lineText === null) {
+      new Notice("Place the cursor on an open #task checkbox");
+      return false;
     }
-    const buffers = getOpenMarkdownBufferContents(this.app);
-    if (buffers && buffers.ambiguous) {
-      return Object.freeze({
-        updatedLinkCount: 0,
-        failedLinkCount: 0,
-        failed: true,
-        error: "open notes conflict",
-        expanded: false,
-      });
+    if (isProjectLifecycleTaskLine(lineText) && isProjectLifecycleTaskAtLine(editor.getValue(), cursor.line)) {
+      return this.convertProjectNoteToTask(editor, view, cursor, lineText);
     }
-    let markdownFiles = [];
-    try {
-      markdownFiles =
-        typeof vault.getMarkdownFiles === "function"
-          ? vault.getMarkdownFiles() || []
-          : [];
-    } catch (error) {
-      markdownFiles = [];
+    const parsedTask = parseProjectSourceTaskLine(lineText);
+    if (!parsedTask) {
+      new Notice(getProjectSourceTaskLineNoticeText(lineText));
+      return false;
     }
-    const fileIndex = createProjectPromotionLinkIndex(markdownFiles);
+    if (parsedTask.scheduleError) {
+      new Notice(parsedTask.scheduleError);
+      return false;
+    }
+    if (!this.app.vault || typeof this.app.vault.process !== "function") {
+      new Notice("Vault content updates are unavailable");
+      return false;
+    }
+    const sourceBlock = getProjectSourceTaskBlock(editor, cursor.line, lineText) || {
+      startLine: cursor.line,
+      endLineExclusive: cursor.line + 1,
+      lines: [lineText],
+      childLines: [],
+    };
+    const sourceDependencyBlock = collectProjectSourceDependencyBlock(sourceBlock.lines.join("\n"), 0);
+    if (!sourceDependencyBlock.valid) {
+      new Notice(sourceDependencyBlock.error);
+      return false;
+    }
+    const sourceChildLines = sourceBlock.childLines.filter(
+      (_line, index) => !sourceDependencyBlock.lineIndices.includes(index + 1),
+    );
+    const createdDate = formatProjectTaskCreatedDate(new Date());
+    let convertedChildTaskLines = [];
+    let convertedChildSections = [];
+    let convertedManagedLogLines = [];
+    let childConversionLossy = false;
+    const hasChildContent = sourceChildLines.some((line) => String(line || "").trim() !== "");
+    if (hasChildContent) {
+      const conversion = buildProjectSeedFromChildBullets(sourceChildLines, createdDate);
+      if (conversion.lossless && (conversion.taskLines.length > 0 || conversion.sections.length > 0 || conversion.managedLogLines.length > 0)) {
+        convertedChildTaskLines = conversion.taskLines;
+        convertedChildSections = conversion.sections;
+        convertedManagedLogLines = conversion.managedLogLines;
+      } else {
+        childConversionLossy = true;
+      }
+    }
+    if (childConversionLossy) {
+      new Notice("Child bullets could not be converted; nothing was promoted");
+      return false;
+    }
+    const sourceBasename = sourceFile.basename || getVaultPathBasenameWithoutExtension(sourceFile.path);
+    let projectBasename = null;
+    let blockIdBacklinkRewrites = [];
+    if (parsedTask.blockId) {
+      projectBasename = getProjectBasenameFromTaskBlockId(sourceBasename, parsedTask.blockId);
+      if (!projectBasename) {
+        new Notice("Could not derive project note name from task block ID");
+        return false;
+      }
+      if (this.projectNoteBasenameExists(projectBasename, sourceFile)) {
+        new Notice(`Note "${projectBasename}" already exists; rename it first`);
+        return false;
+      }
+      blockIdBacklinkRewrites = this.getProjectTaskBlockIdBacklinkRewrites(sourceFile, parsedTask.blockId);
+    }
     const sourcePath = normalizeVaultRelativePath(sourceFile.path);
+    const childBlockIds = new Set(convertedChildTaskLines.map((line) => getTrailingBlockId(line)).filter(Boolean));
+    const dependencyRefs = [];
+    let droppedResidentDependencyCount = 0;
+    for (const target of sourceDependencyBlock.targets) {
+      const targetFile = target.note ? this.resolveLinkTargetFile(target.note, sourceFile.path) : sourceFile;
+      if (!this.isMarkdownFile(targetFile)) {
+        new Notice("A Depends-On target could not be resolved; nothing was promoted");
+        return false;
+      }
+      const targetPath = normalizeVaultRelativePath(targetFile.path);
+      if (targetPath === sourcePath && (childBlockIds.has(target.blockId) || target.blockId === parsedTask.blockId)) {
+        droppedResidentDependencyCount += 1;
+        continue;
+      }
+      dependencyRefs.push({ path: targetPath, blockId: target.blockId });
+    }
+    if (!view || typeof view.save !== "function") {
+      new Notice("Could not save source note");
+      return false;
+    }
+    try {
+      await view.save();
+    } catch (error) {
+      new Notice("Could not save source note");
+      return false;
+    }
+    const sourceSnapshot = String(editor && typeof editor.getValue === "function" ? editor.getValue() : "");
+    const createdFile = await this.createProjectNoteFile(sourceFile, projectBasename || undefined, { open: false });
+    if (!createdFile) return false;
     const createdPath = normalizeVaultRelativePath(createdFile.path);
-    const projectPathWithoutMd = createdPath.replace(/\.md$/i, "");
-    const projectBasename =
-      (createdFile.basename ||
-        getVaultPathBasenameWithoutExtension(createdPath) ||
-        "").trim();
-    if (!projectPathWithoutMd || !projectBasename) {
-      return Object.freeze({
-        updatedLinkCount: 0,
-        failedLinkCount: 0,
-        failed: true,
-        error: "project note name is unavailable",
-        expanded: false,
-      });
-    }
-    const candidatePaths = new Set();
-    for (const rewrite of blockIdBacklinkRewrites) {
-      const rewritePath = normalizeVaultRelativePath(
-        (rewrite && rewrite.path) || "",
-      );
-      if (rewritePath) {
-        candidatePaths.add(rewritePath);
-      }
-    }
-    for (const file of markdownFiles) {
-      const filePath = normalizeVaultRelativePath(
-        (file && file.path) || "",
-      );
-      if (
-        filePath &&
-        isProjectPromotionEligibleDailyPath(filePath, today)
-      ) {
-        candidatePaths.add(filePath);
-      }
-    }
-    const fileByPath = new Map();
-    for (const file of markdownFiles) {
-      const filePath = normalizeVaultRelativePath(
-        (file && file.path) || "",
-      );
-      if (filePath && !fileByPath.has(filePath)) {
-        fileByPath.set(filePath, file);
-      }
-    }
-    const expansionWrites = [];
-    for (const candidatePath of candidatePaths) {
-      if (!isProjectPromotionEligibleDailyPath(candidatePath, today)) {
-        continue;
-      }
-      const file =
-        fileByPath.get(candidatePath) ||
-        (typeof vault.getAbstractFileByPath === "function"
-          ? vault.getAbstractFileByPath(candidatePath)
-          : null);
-      if (!this.isMarkdownFile(file)) {
-        continue;
-      }
-      const snapshot = await this.readProjectPromotionCandidateContent(
-        candidatePath,
-        file,
-        buffers,
-      );
-      if (snapshot === null) {
-        return Object.freeze({
-          updatedLinkCount: 0,
-          failedLinkCount: 0,
-          failed: true,
-          error: `daily note could not be read: ${candidatePath}`,
-          expanded: false,
-        });
-      }
-      const plan = planProjectPromotionFileEdits(snapshot, candidatePath, {
-        sourcePath,
-        sourceBlockId,
-        projectPathWithoutMd,
-        projectBasename,
-        targetBlockIds,
-        today,
-        fileIndex,
-      });
-      if (!plan.changed || plan.expandedCount === 0) {
-        continue;
-      }
-      expansionWrites.push(
-        Object.freeze({
-          path: candidatePath,
-          file,
-          before: snapshot,
-          after: plan.content,
-          expandedCount: plan.expandedCount,
-          legacyCount: plan.legacyCount,
-        }),
-      );
-    }
-    if (expansionWrites.length === 0) {
-      return empty;
-    }
-    const updatedProjectContent = promotionPlan.content;
-    if (updatedProjectContent !== seedContent) {
+    const trashCreated = async () => {
       try {
-        await this.writeProjectPromotionAnchors(
-          createdPath,
-          createdFile,
-          seedContent,
-          promotionPlan,
-        );
-      } catch (error) {
-        return Object.freeze({
-          updatedLinkCount: 0,
-          failedLinkCount: 0,
-          failed: true,
-          error: "project anchors could not be persisted",
-          expanded: true,
-        });
+        if (this.app.fileManager && typeof this.app.fileManager.trashFile === "function") {
+          await this.app.fileManager.trashFile(createdFile);
+          return true;
+        }
+      } catch (_error) {
+        return false;
       }
-      const verifyContent = await this.readProjectPromotionCandidateContent(
-        createdPath,
-        createdFile,
-        getOpenMarkdownBufferContents(this.app),
-      );
-      if (verifyContent === null) {
-        return Object.freeze({
-          updatedLinkCount: 0,
-          failedLinkCount: 0,
-          failed: true,
-          error: "project note could not be verified",
-          expanded: true,
+      return false;
+    };
+    const failBeforeReference = async (message) => {
+      const trashed = await trashCreated();
+      new Notice(trashed ? `${message}; nothing was promoted` : `${message}; delete ${createdFile.basename} before retrying`);
+      return true;
+    };
+    let seedResult = null;
+    try {
+      await this.app.vault.process(createdFile, (content) => {
+        seedResult = buildProjectContentFromTask(content, parsedTask, {
+          projectPath: createdFile.path,
+          today: new Date(),
+          childTaskLines: convertedChildTaskLines,
+          sections: convertedChildSections,
+          managedLogLines: convertedManagedLogLines,
         });
+        return seedResult.content;
+      });
+    } catch (error) {
+      await failBeforeReference("Could not seed project task");
+      return true;
+    }
+    if (!seedResult || !seedResult.seeded) {
+      await failBeforeReference("Project task placeholder not found");
+      return true;
+    }
+    if (convertedChildTaskLines.length > 0 && !seedResult.tasksInserted) {
+      await failBeforeReference("The Tasks section was missing");
+      return true;
+    }
+    if (convertedManagedLogLines.length > 0 && !seedResult.managedLogsInserted) {
+      await failBeforeReference("The task logs could not be added");
+      return true;
+    }
+    const sectionsHandled = (seedResult.sectionsInserted || 0) + (seedResult.sectionsCreated || 0);
+    if (convertedChildSections.length > 0 && sectionsHandled < convertedChildSections.length) {
+      await failBeforeReference("A section could not be added");
+      return true;
+    }
+    let projectContent = seedResult.content;
+    if (dependencyRefs.length > 0) {
+      const files = new Map([[createdFile.path, projectContent]]);
+      for (const target of dependencyRefs) {
+        if (files.has(target.path)) continue;
+        if (target.path === sourcePath) {
+          files.set(target.path, sourceSnapshot);
+          continue;
+        }
+        const targetContent = await this.readDependencyNoteContent(target.path, null, createdFile.path);
+        if (targetContent === null) {
+          await failBeforeReference("A Depends-On target could not be read");
+          return true;
+        }
+        files.set(target.path, targetContent);
       }
-      for (const target of targets) {
-        if (!blockIdExistsInContent(verifyContent, target.blockId)) {
-          return Object.freeze({
-            updatedLinkCount: 0,
-            failedLinkCount: 0,
-            failed: true,
-            error: "project anchors changed before ledger writes",
-            expanded: true,
+      const projectLine = findProjectLifecycleTaskIndex(projectContent);
+      const dependencyPlan = planDependencyEdit({
+        content: projectContent,
+        parentLine: projectLine,
+        parentPath: createdFile.path,
+        add: dependencyRefs,
+        remove: [],
+        files,
+        vaultFiles: [...(this.readDependencyVaultFileList() || []), createdPath],
+        resolveLinkpath: this.dependencyLinkpathResolver(),
+        blocksLinesEnabled: loadBlocksLinesEnabled(),
+        projectLaneStatuses: [parsedTask.status, ...convertedChildTaskLines.map((line) => getObsidianTaskCheckboxStatus(String(line || "")))],
+      });
+      if (!dependencyPlan.ok) {
+        await failBeforeReference(`Could not preserve the Depends-On line (${dependencyPlan.reason})`);
+        return true;
+      }
+      if (dependencyPlan.changed) {
+        let committed = false;
+        for (const preparation of dependencyPlan.preparations || []) {
+          const prepared = await this.prepareDependencyTargetNote(preparation.path, preparation);
+          if (!prepared || prepared.ok !== true) {
+            await failBeforeReference(`Could not prepare a Depends-On target (${prepared && prepared.reason || "target-preparation-failed"})`);
+            return true;
+          }
+        }
+        try {
+          await this.app.vault.process(createdFile, (current) => {
+            if (String(current || "") !== projectContent) return current;
+            committed = true;
+            return dependencyPlan.nextContent;
           });
+        } catch (_error) {
+          committed = false;
+        }
+        if (!committed) {
+          await failBeforeReference("Could not finish the Depends-On write");
+          return true;
+        }
+        projectContent = dependencyPlan.nextContent;
+        await this.finishBlocksFollowUps(dependencyPlan.blocksFollowUps);
+      }
+    }
+    const projectIsBlocked = projectLooksBlockedByPrjShortcut(projectContent);
+    const promotionToday = this.promotionTodayForTests instanceof Date ? this.promotionTodayForTests : new Date();
+    let vaultFiles = [];
+    try {
+      vaultFiles = (this.app.vault.getMarkdownFiles && this.app.vault.getMarkdownFiles()) || [];
+    } catch (_error) {
+      vaultFiles = [];
+    }
+    const fileIndex = createProjectPromotionLinkIndex(vaultFiles);
+    const readNoteByPath = async (lookupPath) => {
+      const normalized = normalizeVaultRelativePath(lookupPath);
+      const buffers = getOpenMarkdownBufferContents(this.app);
+      if (buffers && !buffers.ambiguous && buffers.has(normalized)) return String(buffers.get(normalized) || "");
+      const editorForPath = this.getOpenMarkdownEditorForPath(normalized);
+      if (editorForPath && typeof editorForPath.getValue === "function") return String(editorForPath.getValue() || "");
+      const file = vaultFiles.find((candidate) => normalizeVaultRelativePath(candidate.path) === normalized)
+        || (this.app.vault.getAbstractFileByPath ? this.app.vault.getAbstractFileByPath(normalized) : null);
+      if (!file) return null;
+      try {
+        if (typeof this.app.vault.cachedRead === "function") return String((await this.app.vault.cachedRead(file)) || "");
+        return String((await this.app.vault.read(file)) || "");
+      } catch (_error) {
+        return null;
+      }
+    };
+    const eligibleDailyPaths = vaultFiles
+      .map((file) => normalizeVaultRelativePath(file.path))
+      .filter((filePath) => filePath && isProjectPromotionEligibleDailyPath(filePath, promotionToday));
+    const plannedByPath = new Map();
+    let anchor = null;
+    if (parsedTask.blockId) {
+      for (const dailyPath of eligibleDailyPaths) {
+        const dailyText = await readNoteByPath(dailyPath);
+        if (typeof dailyText !== "string") continue;
+        const links = findPromotionPlannedLinks(dailyText, dailyPath, {
+          sourcePath,
+          sourceBlockId: parsedTask.blockId,
+          fileIndex,
+        });
+        if (links.length > 0) plannedByPath.set(dailyPath, { text: dailyText, links });
+      }
+      const isTodayPath = (dailyPath) => {
+        try {
+          const daily = canonicalRecoveryDailyDate(dailyPath);
+          const base = getLocalDateStart(promotionToday);
+          const todayValue = base.getFullYear() * 10000 + (base.getMonth() + 1) * 100 + base.getDate();
+          return Boolean(daily && daily.value === todayValue);
+        } catch (_error) {
+          return false;
+        }
+      };
+      const orderedPaths = [...plannedByPath.keys()].sort();
+      const todayPaths = orderedPaths.filter(isTodayPath);
+      const searchPaths = todayPaths.length > 0 ? todayPaths : orderedPaths;
+      for (const dailyPath of searchPaths) {
+        const entry = plannedByPath.get(dailyPath);
+        const sorted = entry.links.slice().sort((a, b) => a.entryLine - b.entryLine || a.bulletLine - b.bulletLine);
+        if (sorted.length > 0) {
+          anchor = { ...sorted[0], dailyPath };
+          break;
         }
       }
     }
-    let expandedTotal = 0;
-    let legacyFromExpansions = 0;
-    try {
-      for (const write of expansionWrites) {
-        await this.writeProjectPromotionFileChange(
-          write.path,
-          write.file,
-          write.before,
-          write.after,
-        );
-        expandedTotal += write.expandedCount;
-        legacyFromExpansions += write.legacyCount;
+    let picks = null;
+    let offerPlan = null;
+    let liveLinkedChildIds = new Set();
+    if (anchor && !projectIsBlocked && parsedTask.blockId) {
+      for (const [, entry] of plannedByPath) {
+        for (const link of entry.links) {
+          void link;
+        }
       }
-    } catch (error) {
-      return Object.freeze({
-        updatedLinkCount: expandedTotal + legacyFromExpansions,
-        failedLinkCount: 0,
-        failed: true,
-        error: "daily note changed during promotion",
-        expanded: true,
+      const anchorText = (plannedByPath.get(anchor.dailyPath) || {}).text || "";
+      const childIdOccurrences = new Map();
+      try {
+        const lines = anchorText.split(/\r?\n/);
+        for (const line of lines) {
+          for (const occurrence of collectPomodoroBlockLinkOccurrences(String(line || ""))) {
+            if (occurrence.struck) continue;
+            const resolved = resolveProjectPromotionLinkTarget(occurrence.target, anchor.dailyPath, fileIndex);
+            if (resolved && normalizeVaultRelativePath(resolved) === sourcePath && childBlockIds.has(occurrence.blockId)) {
+              liveLinkedChildIds.add(occurrence.blockId);
+            }
+          }
+        }
+      } catch (_error) {
+        liveLinkedChildIds = new Set();
+      }
+      const projectDescription = (() => {
+        try {
+          const rows = collectProjectNoteTaskRows(projectContent);
+          const prj = rows.prj[0];
+          return prj ? cleanTaskDisplayText(prj.text) : "";
+        } catch (_error) {
+          return "";
+        }
+      })();
+      offerPlan = planPromotionSuccessorRows(projectContent, {
+        projectPath: createdPath,
+        today: promotionToday,
+        liveLinkedIds: liveLinkedChildIds,
+        destinationLabel: anchor.destinationLabel || "",
       });
-    }
-    const expandedPaths = new Set(
-      expansionWrites.map((write) => write.path),
-    );
-    const legacyOnlyRewrites = blockIdBacklinkRewrites.filter((rewrite) => {
-      const rewritePath = normalizeVaultRelativePath(
-        (rewrite && rewrite.path) || "",
-      );
-      return rewritePath && !expandedPaths.has(rewritePath);
-    });
-    let legacyUpdated = 0;
-    if (legacyOnlyRewrites.length > 0) {
-      const legacyResult = await this.applyBlockIdLinkRewrites(
-        legacyOnlyRewrites,
-        projectBasename,
-      );
-      legacyUpdated = legacyResult.updatedLinkCount;
-      if (legacyResult.failed) {
-        return Object.freeze({
-          updatedLinkCount: expandedTotal + legacyFromExpansions + legacyUpdated,
-          failedLinkCount: legacyResult.failedLinkCount,
-          failed: true,
-          error: null,
-          expanded: true,
+      const selectableCount = offerPlan.rows.filter((row) => row.selectable).length;
+      if (selectableCount > 0) {
+        const header = projectDescription;
+        const model = buildPromotionSuccessorModel(offerPlan, {
+          sourcePath,
+          sourceBlockId: parsedTask.blockId,
+          sourceDescription: parsedTask.description || "",
+          projectPath: createdPath,
+          projectDescription: header,
+          destinationLabel: anchor.destinationLabel || "",
         });
+        if (model) {
+          try {
+            const result = await this.pickSuccessorOffers(model, { retarget: false });
+            picks = result && Array.isArray(result.picks) ? result.picks : null;
+          } catch (_error) {
+            picks = null;
+          }
+        }
       }
     }
-    return Object.freeze({
-      updatedLinkCount: expandedTotal + legacyFromExpansions + legacyUpdated,
-      failedLinkCount: 0,
-      failed: false,
-      error: null,
-      expanded: true,
-    });
+    const pickedKeys = new Set((picks || []).map((pick) => pick.key));
+    const pickedRows = offerPlan ? offerPlan.rows.filter((row) => pickedKeys.has(row.key)) : [];
+    const revalidateSource = await readNoteByPath(sourcePath);
+    if (typeof revalidateSource !== "string") {
+      await failBeforeReference("Source task changed while choosing");
+      return true;
+    }
+    try {
+      const check = removeTaskBlockFromContent(revalidateSource, sourceBlock);
+      if (!check.removed) {
+        await failBeforeReference("Source task changed while choosing");
+        return true;
+      }
+    } catch (_error) {
+      await failBeforeReference("Source task changed while choosing");
+      return true;
+    }
+    let refusedCount = 0;
+    let projectApplied = projectContent;
+    let mintedByKey = new Map();
+    if (pickedRows.length > 0) {
+      try {
+        const applied = this.applyPromotionSuccessorPicks(projectContent, pickedRows, {
+          createdPath,
+          today: promotionToday,
+        });
+        if (!applied) {
+          await failBeforeReference("Project tasks could not be linked");
+          return true;
+        }
+        if (applied.refused > 0) refusedCount = applied.refused;
+        mintedByKey = applied.mintedByKey instanceof Map ? applied.mintedByKey : new Map();
+        projectApplied = applied.content;
+      } catch (_error) {
+        await failBeforeReference("Project tasks could not be linked");
+        return true;
+      }
+      if (projectApplied === null) {
+        await failBeforeReference("Project tasks could not be linked");
+        return true;
+      }
+    }
+    if (pickedRows.length > 0 || projectApplied !== projectContent) {
+      let committed = false;
+      const beforeProject = projectContent;
+      try {
+        await this.app.vault.process(createdFile, (current) => {
+          if (String(current || "") !== beforeProject) throw new Error("project changed");
+          committed = true;
+          return projectApplied;
+        });
+      } catch (_error) {
+        const freshProject = await readNoteByPath(createdPath);
+        if (typeof freshProject !== "string") {
+          await failBeforeReference("Project tasks could not be linked");
+          return true;
+        }
+        let reapplied = null;
+        try {
+          reapplied = this.applyPromotionSuccessorPicks(freshProject, pickedRows, { createdPath, today: promotionToday });
+        } catch (_retryError) {
+          reapplied = null;
+        }
+        if (!reapplied) {
+          await failBeforeReference("Project tasks could not be linked");
+          return true;
+        }
+        if (reapplied.refused > 0) refusedCount += reapplied.refused;
+        for (const [key, id] of reapplied.mintedByKey) {
+          if (!mintedByKey.has(key)) mintedByKey.set(key, id);
+        }
+        try {
+          await this.app.vault.process(createdFile, (current) => {
+            if (String(current || "") !== freshProject) throw new Error("project changed");
+            committed = true;
+            return reapplied.content;
+          });
+        } catch (_retryError) {
+          await failBeforeReference("Project tasks could not be linked");
+          return true;
+        }
+        if (!committed) {
+          await failBeforeReference("Project tasks could not be linked");
+          return true;
+        }
+        projectContent = reapplied.content;
+        projectApplied = reapplied.content;
+      }
+      if (!committed) {
+        await failBeforeReference("Project tasks could not be linked");
+        return true;
+      }
+      projectContent = projectApplied;
+    }
+    const childIdsForHistory = [...childBlockIds];
+    const ledgerResults = [];
+    if (parsedTask.blockId) {
+      const anchorDailyPath = anchor ? anchor.dailyPath : null;
+      const pathsToWrite = new Set([...plannedByPath.keys()]);
+      for (const dailyPath of [...pathsToWrite].sort()) {
+        const entry = plannedByPath.get(dailyPath);
+        const before = entry.text;
+        let after = before;
+        let anchorReplacement = null;
+        if (dailyPath === anchorDailyPath && pickedRows.length > 0) {
+          anchorReplacement = this.planPromotionAnchorReplacement(before, anchor, pickedRows, {
+            projectPath: createdPath,
+            fileIndex,
+            anchorLabel: anchor.destinationLabel || "",
+            mintedByKey,
+          });
+          if (anchorReplacement) after = anchorReplacement.content;
+        }
+        const isAnchorFile = dailyPath === anchorDailyPath;
+        const consumeTargets = [{ path: sourcePath, blockId: parsedTask.blockId }];
+        if (!projectIsBlocked) {
+          for (const childId of childBlockIds) consumeTargets.push({ path: sourcePath, blockId: childId });
+        }
+        let consumed = after;
+        if (isAnchorFile && anchorReplacement) {
+          consumed = this.consumePromotionPlannedLinksExceptAnchor(after, anchor, consumeTargets, { dailyPath, sourcePath, sourceBlockId: parsedTask.blockId, fileIndex });
+        } else {
+          consumed = this.consumeAllPromotionPlannedLinks(after, consumeTargets, { dailyPath, sourcePath, sourceBlockId: parsedTask.blockId, fileIndex });
+        }
+        after = consumed;
+        if (!projectIsBlocked && pickedRows.length > 0) {
+          after = this.repointPromotionChildLinks(after, dailyPath, {
+            sourcePath,
+            projectPath: createdPath,
+            childIds: childBlockIds,
+            fileIndex,
+          });
+        }
+        const history = planPromotionHistoryRewrites(after, dailyPath, {
+          sourcePath,
+          sourceBlockId: parsedTask.blockId,
+          projectBasename: createdFile.basename,
+          childBlockIds: childIdsForHistory,
+          fileIndex,
+        });
+        after = history.content;
+        if (after === before) continue;
+        const file = vaultFiles.find((candidate) => normalizeVaultRelativePath(candidate.path) === dailyPath)
+          || (this.app.vault.getAbstractFileByPath ? this.app.vault.getAbstractFileByPath(dailyPath) : null);
+        const writeOnce = async (expectedBefore, nextAfter) => {
+          await this.writeProjectPromotionFileChange(dailyPath, file, expectedBefore, nextAfter);
+        };
+        try {
+          await writeOnce(before, after);
+        } catch (_error) {
+          const fresh = await readNoteByPath(dailyPath);
+          if (typeof fresh !== "string") {
+            await failBeforeReference("Daily note changed during promotion");
+            return true;
+          }
+          let replanned = fresh;
+          if (dailyPath === anchorDailyPath && pickedRows.length > 0) {
+            const retryAnchorLinks = findPromotionPlannedLinks(fresh, dailyPath, { sourcePath, sourceBlockId: parsedTask.blockId, fileIndex });
+            const retryAnchor = retryAnchorLinks.slice().sort((a, b) => a.entryLine - b.entryLine || a.bulletLine - b.bulletLine)[0];
+            if (retryAnchor) {
+              const retryReplacement = this.planPromotionAnchorReplacement(fresh, { ...retryAnchor, dailyPath }, pickedRows, { projectPath: createdPath, fileIndex, anchorLabel: retryAnchor.destinationLabel || "", mintedByKey });
+              if (retryReplacement) replanned = retryReplacement.content;
+            }
+          }
+          replanned = this.consumeAllPromotionPlannedLinks(replanned, consumeTargets, { dailyPath, sourcePath, sourceBlockId: parsedTask.blockId, fileIndex });
+          if (!projectIsBlocked && pickedRows.length > 0) {
+            replanned = this.repointPromotionChildLinks(replanned, dailyPath, { sourcePath, projectPath: createdPath, childIds: childBlockIds, fileIndex });
+          }
+          replanned = planPromotionHistoryRewrites(replanned, dailyPath, {
+            sourcePath,
+            sourceBlockId: parsedTask.blockId,
+            projectBasename: createdFile.basename,
+            childBlockIds: childIdsForHistory,
+            fileIndex,
+          }).content;
+          if (replanned === fresh) continue;
+          try {
+            await writeOnce(fresh, replanned);
+          } catch (_retryError) {
+            await failBeforeReference("Daily note changed during promotion");
+            return true;
+          }
+          after = replanned;
+        }
+        ledgerResults.push({ path: dailyPath, after });
+      }
+    }
+    let updatedLinkCount = pickedRows.length;
+    if (parsedTask.blockId && blockIdBacklinkRewrites.length > 0) {
+      const writtenPaths = new Set(ledgerResults.map((entry) => entry.path));
+      const remaining = blockIdBacklinkRewrites.filter((rewrite) => !writtenPaths.has(normalizeVaultRelativePath(rewrite.path)));
+      if (remaining.length > 0 && !projectIsBlocked) {
+        const rewriteResult = await this.applyBlockIdLinkRewrites(remaining, createdFile.basename);
+        updatedLinkCount += rewriteResult.updatedLinkCount;
+        if (rewriteResult.failed) {
+          new Notice(`Created project, but ${rewriteResult.failedLinkCount} block ${rewriteResult.failedLinkCount === 1 ? "link" : "links"} could not be updated; source task was kept`);
+          return true;
+        }
+      } else if (remaining.length > 0 && projectIsBlocked) {
+        const rewriteResult = await this.applyBlockIdLinkRewrites(remaining.map((rewrite) => ({ ...rewrite })), createdFile.basename, "prj");
+        void rewriteResult;
+      }
+    }
+    let removedSourceTask = false;
+    try {
+      await this.app.vault.process(sourceFile, (content) => {
+        const result = removeTaskBlockFromContent(content, sourceBlock);
+        removedSourceTask = result.removed;
+        return result.content;
+      });
+    } catch (error) {
+      new Notice("Created project, but could not remove the source task");
+      return true;
+    }
+    if (!removedSourceTask) {
+      new Notice("Created project, but the source task changed and was not removed");
+      return true;
+    }
+    const prjLineIndex = findProjectLifecycleTaskIndex(projectContent);
+    const prjLineText = String((projectContent.split(/\r?\n/)[prjLineIndex] || ""));
+    await this.focusTaskMoveDestination(createdFile, { line: prjLineIndex, text: prjLineText, blockId: "prj" });
+    let notice = getProjectFromTaskNoticeText(parsedTask.description, sourceBasename, createdFile.basename, updatedLinkCount, (seedResult.sectionsInserted || 0) + (seedResult.sectionsCreated || 0), (convertedManagedLogLines.map((line) => { const parsed = parseManagedTaskLogParentBullet(line); return parsed ? parsed.kind : null; }).filter(Boolean)));
+    if (droppedResidentDependencyCount > 0) notice += ` · dropped ${formatCountLabel(droppedResidentDependencyCount, "prerequisite")} that became project residents`;
+    if (parsedTask.blockId) {
+      const anchorLabel = (anchor && anchor.destinationLabel) || "Pomodoro";
+      if (projectIsBlocked) {
+        notice += `\nRemoved the ${anchorLabel} link · project is Blocked`;
+      } else if (!anchor) {
+        notice += "";
+      } else if (!offerPlan || offerPlan.rows.length === 0) {
+        notice += `\nRemoved the ${anchorLabel} link · no project tasks to pull in`;
+      } else if (pickedRows.length === 0) {
+        const total = offerPlan.rows.filter((row) => row.selectable).length + (offerPlan.folded.hidden || 0);
+        void total;
+        const offerCount = offerPlan.rows.filter((row) => row.selectable).length + (offerPlan.folded.hidden || 0) + (offerPlan.folded.alreadyPlanned || 0);
+        const selectableCount = offerPlan.rows.filter((row) => row.selectable).length;
+        const count = selectableCount + (offerPlan.folded.hidden || 0);
+        notice += `\nRemoved the ${anchorLabel} link · ${count} project task${count === 1 ? "" : "s"} not pulled in`;
+        void offerCount;
+      } else {
+        const notPulled = offerPlan.rows.filter((row) => row.selectable && !pickedKeys.has(row.key)).length + (offerPlan.folded.hidden || 0);
+        const moreRemoved = Math.max(0, plannedByPath.size > 0 ? [...plannedByPath.values()].reduce((sum, entry) => sum + entry.links.length, 0) - 1 : 0);
+        notice += `\n${buildPromotionNoticeLine2({ picks: pickedRows, anchorLabel, notPulledCount: notPulled, moreRemovedCount: moreRemoved, refusedCount })}`;
+      }
+    }
+    new Notice(notice);
+    return true;
   }
+
+  applyPromotionSuccessorPicks(projectContent, pickedRows, options = {}) {
+    const text = String(projectContent || "");
+    const createdPath = normalizeVaultRelativePath(options.projectPath || options.createdPath || "");
+    const today = options.today instanceof Date ? options.today : new Date();
+    const dateText = promotionSuccessorTodayText(today);
+    let stamper = null;
+    let stampFallback = null;
+    try {
+      stamper = typeof this.getFreshnessStampLine === "function" ? this.getFreshnessStampLine() : null;
+    } catch (_error) {
+      stamper = null;
+    }
+    const { lines, lineEnding } = splitMarkdownContent(text);
+    const nextLines = lines.slice();
+    const reserved = new Set(["prj"]);
+    for (let index = 0; index < nextLines.length; index += 1) {
+      const id = getTrailingBlockId(String(nextLines[index] || ""));
+      if (id) reserved.add(id);
+    }
+    const digestTable = new Map();
+    for (const row of pickedRows) {
+      if (row.blockId) continue;
+      const digest = promotionSuccessorFnv1aHex(cleanTaskDisplayText(row.rawLine || row.text));
+      if (!digestTable.has(digest)) digestTable.set(digest, []);
+    }
+    for (let index = 0; index < nextLines.length; index += 1) {
+      const lineText = String(nextLines[index] || "");
+      if (!OBSIDIAN_TASK_LINE_RE.test(lineText) || !isObsidianTaskLine(lineText) || isProjectLifecycleTaskLine(lineText) || lineText.includes(PROJECT_TASKS_PLACEHOLDER)) continue;
+      const digest = promotionSuccessorFnv1aHex(cleanTaskDisplayText(lineText));
+      if (digestTable.has(digest)) digestTable.get(digest).push(index);
+    }
+    let refused = 0;
+    const usedLines = new Set();
+    const mintedByKey = new Map();
+    for (const row of pickedRows) {
+      let targetLine = -1;
+      if (row.blockId) {
+        for (let index = 0; index < nextLines.length; index += 1) {
+          if (usedLines.has(index)) continue;
+          if (getTrailingBlockId(String(nextLines[index] || "")) === row.blockId) {
+            targetLine = index;
+            break;
+          }
+        }
+        if (targetLine < 0) {
+          for (let index = 0; index < nextLines.length; index += 1) {
+            if (usedLines.has(index)) continue;
+            if (cleanTaskDisplayText(String(nextLines[index] || "")) === row.text && getObsidianTaskCheckboxStatus(String(nextLines[index] || "")) !== null) {
+              targetLine = index;
+              break;
+            }
+          }
+        }
+      } else {
+        const digest = promotionSuccessorFnv1aHex(cleanTaskDisplayText(row.rawLine || row.text));
+        const candidates = (digestTable.get(digest) || []).filter((line) => !usedLines.has(line));
+        if (candidates.length > 0) {
+          const orderMatch = String(row.key || "").match(/~(\d+)$/);
+          const order = orderMatch ? Number(orderMatch[1]) : 1;
+          targetLine = candidates[Math.min(order - 1, candidates.length - 1)];
+        }
+      }
+      if (targetLine < 0) {
+        refused += 1;
+        continue;
+      }
+      usedLines.add(targetLine);
+      let line = String(nextLines[targetLine] || "");
+      if (!getTrailingBlockId(line)) {
+        const minted = suggestBlockIdFromTask(cleanTaskDisplayText(line), nextLines.join(lineEnding), { reservedIds: reserved });
+        line = appendBlockIdToLine(line, minted);
+        reserved.add(minted);
+        mintedByKey.set(row.key, minted);
+      } else {
+        mintedByKey.set(row.key, getTrailingBlockId(line));
+      }
+      const status = getObsidianTaskCheckboxStatus(line);
+      if (status === " ") {
+        line = line.replace(OBSIDIAN_TASK_LINE_RE, (match, box, body) => match.replace(`[${box}]`, "[*]"));
+      }
+      try {
+        if (stamper) line = applyFreshStampLine(line, stamper, dateText);
+        else if (stampFallback) line = stampFallback(line);
+        else {
+          if (!/\[fresh::/.test(line)) {
+            const idMatch = /(\s*\^[A-Za-z0-9-]+)(\s*)$/.exec(line);
+            if (idMatch) line = line.replace(/(\s*\^[A-Za-z0-9-]+)(\s*)$/, ` [fresh:: ${dateText}]$1$2`);
+            else line = `${line} [fresh:: ${dateText}]`;
+          }
+        }
+      } catch (_error) {
+        if (!/\[fresh::/.test(line)) line = `${line} [fresh:: ${dateText}]`;
+      }
+      nextLines[targetLine] = line;
+    }
+    return { content: nextLines.join(lineEnding), refused, mintedByKey };
+  }
+
+  planPromotionAnchorReplacement(dailyContent, anchor, pickedRows, options = {}) {
+    const text = String(dailyContent || "");
+    const projectPath = normalizeVaultRelativePath(options.projectPath || "");
+    const fileIndex = options.fileIndex || null;
+    const mintedByKey = options.mintedByKey instanceof Map ? options.mintedByKey : new Map();
+    const lines = text.split(/\r?\n/);
+    const ending = text.includes("\r\n") ? "\r\n" : "\n";
+    const bulletLine = anchor.bulletLine;
+    const anchorLine = String(lines[bulletLine] || "");
+    const prefixMatch = /^(\s*(?:[-*+]|\d+[.)])\s+)(.*)$/.exec(anchorLine);
+    if (!prefixMatch) return null;
+    const prefix = prefixMatch[1];
+    const subtreeEnd = anchor.subtreeEnd || bulletLine + 1;
+    const subtreeLines = lines.slice(bulletLine + 1, subtreeEnd);
+    const successorLines = [];
+    for (const row of pickedRows) {
+      const id = row.blockId || mintedByKey.get(row.key);
+      if (!id) continue;
+      successorLines.push(`${prefix}${promotionSuccessorLinkForId(projectPath, id, fileIndex)}`);
+    }
+    if (successorLines.length === 0) return null;
+    const replacement = [successorLines[0], ...subtreeLines, ...successorLines.slice(1)];
+    const nextLines = lines.slice();
+    nextLines.splice(bulletLine, subtreeEnd - bulletLine, ...replacement);
+    return { content: nextLines.join(ending) };
+  }
+
+  removePromotionBulletsAtLines(dailyContent, bulletLines) {
+    const text = String(dailyContent || "");
+    if (!Array.isArray(bulletLines) || bulletLines.length === 0) return text;
+    const sorted = bulletLines.slice().sort((a, b) => b.line - a.line);
+    const lines = text.split(/\r?\n/);
+    const ending = text.includes("\r\n") ? "\r\n" : "\n";
+    const removals = sorted.map((entry) => {
+      const start = entry.line;
+      const end = entry.end || entry.line + 1;
+      return { start, end };
+    });
+    const merged = [];
+    for (const removal of removals) {
+      const last = merged[merged.length - 1];
+      if (last && removal.start <= last.end && removal.end >= last.start) {
+        last.start = Math.min(last.start, removal.start);
+        last.end = Math.max(last.end, removal.end);
+      } else {
+        merged.push({ ...removal });
+      }
+    }
+    merged.sort((a, b) => b.start - a.start);
+    const nextLines = lines.slice();
+    for (const removal of merged) {
+      nextLines.splice(removal.start, removal.end - removal.start);
+    }
+    let next = nextLines.join(ending);
+    next = this.deletePromotionEmptiedEntries(next);
+    return next;
+  }
+
+  deletePromotionEmptiedEntries(dailyContent) {
+    const text = String(dailyContent || "");
+    const splitted = splitMarkdownContent(text);
+    const lines = splitted.lines;
+    const ending = splitted.lineEnding;
+    const contexts = getMarkdownLineContexts(text);
+    const section = findPomodorosSectionRange(text);
+    if (!section) return text;
+    const ranges = collectOpenPomodoroRanges(lines, contexts, section);
+    const toDelete = [];
+    for (const range of ranges) {
+      const entryBlock = findCurrentBulletChildBlock(lines, range.entryLine);
+      const childEnd = Math.min(entryBlock.endLineExclusive, section.endLine + 1);
+      let remaining = 0;
+      for (let line = entryBlock.startLine; line < childEnd; line += 1) {
+        if (line === range.entryLine) continue;
+        const lineText = String(lines[line] || "");
+        if (contexts[line] && contexts[line].inFence) continue;
+        if (!PROJECT_LIST_ITEM_RE.test(lineText)) continue;
+        remaining += 1;
+      }
+      if (remaining === 0) {
+        let endExclusive = childEnd;
+        if (range.entryLine > 0 && lines[range.entryLine - 1].trim() === "" && endExclusive < lines.length && lines[endExclusive].trim() === "") {
+          endExclusive += 1;
+        }
+        toDelete.push({ start: range.entryLine, end: endExclusive });
+      }
+    }
+    if (toDelete.length === 0) return text;
+    toDelete.sort((a, b) => b.start - a.start);
+    const nextLines = lines.slice();
+    for (const removal of toDelete) {
+      nextLines.splice(removal.start, removal.end - removal.start);
+    }
+    return nextLines.join(ending);
+  }
+
+  consumePromotionPlannedLinksExceptAnchor(dailyContent, anchor, targets, options = {}) {
+    const text = String(dailyContent || "");
+    const sourcePath = normalizeVaultRelativePath(options.sourcePath || "");
+    const fileIndex = options.fileIndex || null;
+    const dailyPath = normalizeVaultRelativePath(options.dailyPath || (anchor && anchor.dailyPath) || "");
+    const links = findPromotionPlannedLinks(text, dailyPath, { sourcePath, sourceBlockId: options.sourceBlockId || "", fileIndex });
+    const removals = [];
+    for (const link of links) {
+      if (link.bulletLine === anchor.bulletLine && link.entryLine === anchor.entryLine) continue;
+      removals.push({ line: link.bulletLine, end: link.subtreeEnd });
+    }
+    if (removals.length === 0) return text;
+    return this.removePromotionBulletsAtLines(text, removals);
+  }
+
+  consumeAllPromotionPlannedLinks(dailyContent, targets, options = {}) {
+    const text = String(dailyContent || "");
+    const sourcePath = normalizeVaultRelativePath(options.sourcePath || "");
+    const sourceBlockId = String(options.sourceBlockId || "").trim();
+    const fileIndex = options.fileIndex || null;
+    const dailyPath = normalizeVaultRelativePath(options.dailyPath || "");
+    if (!sourcePath || !sourceBlockId || !dailyPath) {
+      if (!Array.isArray(targets) || targets.length === 0) return text;
+      return text;
+    }
+    const links = findPromotionPlannedLinks(text, dailyPath, { sourcePath, sourceBlockId, fileIndex });
+    if (links.length === 0) return text;
+    return this.removePromotionBulletsAtLines(text, links.map((link) => ({ line: link.bulletLine, end: link.subtreeEnd })));
+  }
+
+  repointPromotionChildLinks(dailyContent, dailyPath, options = {}) {
+    const text = String(dailyContent || "");
+    const sourcePath = normalizeVaultRelativePath(options.sourcePath || "");
+    const projectPath = normalizeVaultRelativePath(options.projectPath || "");
+    const fileIndex = options.fileIndex || null;
+    const childIds = options.childIds instanceof Set ? options.childIds : new Set(options.childIds || []);
+    if (!sourcePath || !projectPath || childIds.size === 0) return text;
+    const filePath = normalizeVaultRelativePath(dailyPath || "");
+    const splitted = splitMarkdownContent(text);
+    const lines = splitted.lines;
+    const ending = splitted.lineEnding;
+    const contexts = getMarkdownLineContexts(text);
+    const section = findPomodorosSectionRange(text);
+    if (!section) return text;
+    const ranges = collectOpenPomodoroRanges(lines, contexts, section);
+    const entryByLine = new Map();
+    for (const range of ranges) {
+      for (let line = range.startLine; line <= range.endLine; line += 1) entryByLine.set(line, range);
+    }
+    let changed = false;
+    const nextLines = lines.slice();
+    for (let lineIndex = 0; lineIndex < nextLines.length; lineIndex += 1) {
+      if (!entryByLine.has(lineIndex)) continue;
+      const context = contexts[lineIndex];
+      if (context && (context.inFrontmatter || context.inFence)) continue;
+      const lineText = String(nextLines[lineIndex] || "");
+      if (!PROJECT_LIST_ITEM_RE.test(lineText)) continue;
+      const parsed = parseProjectPromotionDedicatedLink(lineText);
+      if (!parsed || parsed.strikeOpen || parsed.strikeClose) continue;
+      if (parsed.checkbox !== null && POMODORO_LEDGER_CLOSED_STATUSES.has(parsed.checkbox)) continue;
+      if (!childIds.has(parsed.blockId)) continue;
+      const resolved = resolveProjectPromotionLinkTarget(parsed.target, filePath, fileIndex);
+      if (!resolved || normalizeVaultRelativePath(resolved) !== sourcePath) continue;
+      const link = promotionSuccessorLinkForId(projectPath, parsed.blockId, fileIndex);
+      const prefixMatch = /^(\s*(?:[-*+]|\d+[.)])\s+)(.*)$/.exec(lineText);
+      if (!prefixMatch) continue;
+      const checkboxText = parsed.checkbox !== null ? `[${parsed.checkbox}] ` : "";
+      const suffixText = parsed.suffix ? parsed.suffix.replace(/^[ \t]*/, " ") : "";
+      const embedPrefix = parsed.embedded ? "!" : "";
+      nextLines[lineIndex] = `${prefixMatch[1]}${checkboxText}${parsed.markerRun}${embedPrefix}${link}${suffixText}`;
+      changed = true;
+    }
+    return changed ? nextLines.join(ending) : text;
+  }
+
+}
+// ---- src/670-plugin-project-files.js ----
+class BobNavigationHotkeysProjectFileMixin {
 
   showCreatedNoteNotice(file, fallbackPath) {
     new Notice(getCreatedNoteNoticeText(file, fallbackPath));
@@ -97427,6 +97571,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysInboxRouteMixin,
   BobNavigationHotkeysProjectNoteMixin,
   BobNavigationHotkeysProjectConversionMixin,
+  BobNavigationHotkeysProjectPromotionMixin,
   BobNavigationHotkeysProjectFileMixin,
   BobNavigationHotkeysGoToTaskUriMixin,
   BobNavigationHotkeysOpenNotesUriMixin,
@@ -97603,8 +97748,8 @@ module.exports.helpers = {
   createProjectPromotionLinkIndex,
   resolveProjectPromotionLinkTarget,
   parseProjectPromotionDedicatedLink,
-  buildProjectPromotionReplacementLines,
-  planProjectPromotionFileEdits,
+  planPromotionProjectHistoryRewrites, planProjectPromotionFileEdits, promotionSuccessorFnv1aHex,
+  planPromotionSuccessorRows, findPromotionPlannedLinks, buildPromotionSuccessorModel, planPromotionHistoryRewrites, buildPromotionNoticeLine2, promotionSuccessorLinkForId, promotionTruncateTaskText,
   getProjectFromTaskNoticeText,
   getFutureProjectSchedule,
   isFutureInlineScheduledValue,

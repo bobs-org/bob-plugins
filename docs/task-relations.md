@@ -61,7 +61,7 @@ this plugin implements the live side of it.
 - `labelSuggestions` never includes the reserved `💬 mentions` spelling.
   On LINKS any `💬…` label is malformed; on LINKED FROM exactly `💬 mentions`
   is a typed mention entry and any other `💬…` label is malformed.
-- `relations.linked_from_mentions` (default `false` in
+- `relations.linked_from_mentions` (default `true` in
   `~/.config/bob/config.yml`) gates everything: when off, no mention rows
   are published and `scanMentions` returns `[]`. Chips for mentions render
   in the next phase; this phase only indexes.

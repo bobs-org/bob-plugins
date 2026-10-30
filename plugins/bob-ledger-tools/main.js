@@ -21353,9 +21353,9 @@ class BobLedgerToolsPlugin extends Plugin {
   }
 }
 // ---- src/171-relation-index-lifecycle.js ----
-// §19 kill switch: `relations.linked_from_mentions` (default false).
-// Missing, invalid, or unreadable values stay disabled so the switch is
-// lossless; cache by mtime/size like nav's loader. Warns in the
+// §19 kill switch: `relations.linked_from_mentions` (default true).
+// Missing, invalid, or unreadable values follow the enabled default; cache
+// by mtime/size like nav's loader. Warns in the
 // `linked_from_lines` wording pattern on invalid values.
 let relationIndexMentionsConfigCache = { key: null, value: false };
 
@@ -21397,7 +21397,7 @@ function loadRelationIndexMentionsEnabled(options = {}) {
   if (key != null && relationIndexMentionsConfigCache.key === key) {
     return relationIndexMentionsConfigCache.value;
   }
-  let enabled = false;
+  let enabled = true;
   try {
     const parse = options.parseYaml === undefined
       ? (typeof parseYaml === "function" ? parseYaml : null)
@@ -21408,14 +21408,14 @@ function loadRelationIndexMentionsEnabled(options = {}) {
       if (typeof value === "boolean") {
         enabled = value;
       } else if (value !== undefined && value !== null) {
-        enabled = false;
+        enabled = true;
         if (typeof console !== "undefined" && typeof console.warn === "function") {
-          console.warn("relations.linked_from_mentions is invalid; treating as false");
+          console.warn("relations.linked_from_mentions is invalid; treating as true");
         }
       }
     }
   } catch (_error) {
-    enabled = false;
+    enabled = true;
   }
   if (key != null) relationIndexMentionsConfigCache = { key, value: enabled };
   return enabled;

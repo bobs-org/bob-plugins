@@ -1483,7 +1483,7 @@ function loadRelationsLinkedFromMentionsEnabled(options = {}) {
   if (key != null && relationsLinkedFromMentionsConfigCache.key === key) {
     return relationsLinkedFromMentionsConfigCache.value;
   }
-  let enabled = false;
+  let enabled = true;
   try {
     const parse = options.parseYaml === undefined ? parseYaml : options.parseYaml;
     if (typeof parse === "function") {
@@ -1492,14 +1492,14 @@ function loadRelationsLinkedFromMentionsEnabled(options = {}) {
       if (typeof value === "boolean") {
         enabled = value;
       } else if (value !== undefined && value !== null) {
-        enabled = false;
+        enabled = true;
         if (typeof console !== "undefined" && typeof console.warn === "function") {
-          console.warn("relations.linked_from_mentions is invalid; treating as false");
+          console.warn("relations.linked_from_mentions is invalid; treating as true");
         }
       }
     }
   } catch (_error) {
-    enabled = false;
+    enabled = true;
   }
   if (key != null) relationsLinkedFromMentionsConfigCache = { key, value: enabled };
   return enabled;

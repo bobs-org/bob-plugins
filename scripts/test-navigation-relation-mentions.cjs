@@ -239,7 +239,7 @@ test("MN15: applyRelationEdit surfaces the reserved-label message", async () => 
   assert.equal(outcome.notice, "💬 is reserved for text mentions");
 });
 
-test("mentions kill switch defaults off, honors true, and warns invalid", () => {
+test("mentions kill switch defaults on, honors false, and warns invalid", () => {
   helpers.resetRelationsLinkedFromMentionsConfigCache();
   const makeFs = (contents) => ({
     statSync: () => ({ mtimeMs: 10, size: contents.length }),
@@ -263,7 +263,7 @@ test("mentions kill switch defaults off, honors true, and warns invalid", () => 
       fsModule: { statSync: () => null, readFileSync: () => { throw Object.assign(new Error("no"), { code: "ENOENT" }); } },
       parseYaml: parse,
     }),
-    false,
+    true,
   );
   helpers.resetRelationsLinkedFromMentionsConfigCache();
   assert.equal(
@@ -272,7 +272,7 @@ test("mentions kill switch defaults off, honors true, and warns invalid", () => 
       fsModule: makeFs("x"),
       parseYaml: () => parse("yes"),
     }),
-    false,
+    true,
   );
 });
 

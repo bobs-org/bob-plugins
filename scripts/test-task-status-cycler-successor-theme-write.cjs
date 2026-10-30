@@ -44,7 +44,7 @@ function noteSuggestion(overrides = {}) {
 
 function stubTaskThemeOf(line) {
   const text = String(line || "");
-  const matches = [...text.matchAll(/[\[(]theme::\s*([^\]\)\n]*)[\]\)]/g)];
+  const matches = [...text.matchAll(/[\[(](?:type|theme)::\s*([^\]\)\n]*)[\]\)]/g)];
   if (matches.length === 0) {
     return { state: "none" };
   }
@@ -59,16 +59,16 @@ function stubTaskThemeOf(line) {
 }
 
 function stubClearTaskTheme(line) {
-  return String(line || "").replace(/[ \t]*[\[(]theme::[^\]\)\n]*[\]\)]/g, "");
+  return String(line || "").replace(/[ \t]*[\[(](?:type|theme)::[^\]\)\n]*[\]\)]/g, "");
 }
 
 function stubSetTaskTheme(line, name) {
   const cleared = stubClearTaskTheme(line).replace(/[ \t]+$/g, "");
   const idMatch = cleared.match(/^(.*?)([ \t]+\^[A-Za-z0-9_-]+)$/);
   if (idMatch) {
-    return `${idMatch[1]} [theme:: ${name}]${idMatch[2]}`;
+    return `${idMatch[1]} [type:: ${name}]${idMatch[2]}`;
   }
-  return `${cleared} [theme:: ${name}]`;
+  return `${cleared} [type:: ${name}]`;
 }
 
 function stubPlanThemeChange(options = {}) {
@@ -108,6 +108,29 @@ function stubPlanThemeChange(options = {}) {
   return { action: "set", name: destName, key: destKey };
 }
 
+function stubPlanRetype(options = {}) {
+  const keyOf = (value) => value && value.theme && value.theme.key
+    ? String(value.theme.key).toLowerCase()
+    : (typeof value === "string" ? value.toLowerCase() : "");
+  const effectiveKey = keyOf(options.effective);
+  const inheritedKey = keyOf(options.inherited);
+  const candidates = String(options.destination || "")
+    .split("+")
+    .map((part) => part.trim())
+    .filter((part) => part && part.toLowerCase() !== "plan");
+  if (candidates.length === 0) {
+    return { kind: "container" };
+  }
+  const destinationKey = candidates[0].toLowerCase();
+  if (effectiveKey && candidates.some((part) => part.toLowerCase() === effectiveKey)) {
+    return { kind: "consistent" };
+  }
+  if (inheritedKey && inheritedKey === destinationKey) {
+    return { kind: "clear" };
+  }
+  return { kind: "set", key: destinationKey, name: candidates[0].toUpperCase() };
+}
+
 function stubThemesApi(suggestion, catalog = null) {
   return {
     version: 1,
@@ -116,6 +139,27 @@ function stubThemesApi(suggestion, catalog = null) {
     setTaskTheme: stubSetTaskTheme,
     clearTaskTheme: stubClearTaskTheme,
     planThemeChange: stubPlanThemeChange,
+    planRetype: stubPlanRetype,
+    effectiveTypeFor: ({ line, text }) => {
+      const sourceLine = String(text || "").split(/\r?\n/)[Number(line) - 1] || "";
+      const field = stubTaskThemeOf(sourceLine);
+      if (field.state !== "set") {
+        return suggestion;
+      }
+      if (suggestion && suggestion.theme && suggestion.theme.key === field.key) {
+        return suggestion;
+      }
+      return {
+        ...(suggestion || {}),
+        theme: {
+          ...((suggestion && suggestion.theme) || {}),
+          key: field.key,
+          name: field.value,
+        },
+        source: "task",
+        inherited: suggestion,
+      };
+    },
     snapshot: () => ({
       themes: catalog || [{ key: "write", name: "WRITE" }, { key: "fix", name: "FIX" }, { key: "build", name: "BUILD" }],
       configured_themes: [],
@@ -126,6 +170,22 @@ function stubThemesApi(suggestion, catalog = null) {
 function stubLedgerApi(exempt = ["PLAN"]) {
   return {
     caps: () => ({ exempt, strict: false, maxThemes: 5 }),
+  };
+}
+
+function stubTypedPlacementApi(kind, index = null, name = "WRITE") {
+  const suggestion = noteSuggestion();
+  return {
+    ...stubThemesApi(suggestion),
+    effectiveTypeFor: () => suggestion,
+    typeAgrees: (type, entryName) => String(entryName || "")
+      .split("+")
+      .some((part) => part.trim().toLowerCase() === String(type).toLowerCase()),
+    planPlacement: () => kind === "entry"
+      ? { kind, index }
+      : kind === "create"
+        ? { kind, name }
+        : { kind },
   };
 }
 
@@ -154,8 +214,77 @@ function offerKeyFor(plan, blockId) {
   return row.offer.key;
 }
 
+test("successor default placement follows the effective task type", () => {
+  const notes = {
+    "sase.md": "- [x] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo\n- [?] #task Follower [type:: WRITE] [dependsOn:: sase__fix-apollo] ^follower",
+  };
+  const { plan } = planFixture({
+    day: FIX_DAY,
+    notes,
+    closed: FIX_CLOSED,
+    options: {
+      successorTheme: {
+        themesApi: stubTypedPlacementApi("entry", 1),
+        ledgerApi: stubLedgerApi(),
+      },
+    },
+  });
+  const row = plan.unblocked.find((item) => item.block_id === "follower");
+  assert.equal(row.offer.destination.entry_name, "WRITE");
+  assert.equal(row.link.entry_name, "WRITE");
+  assert.equal(row.theme_changed || false, false, "default placement never retypes the task");
+  assert.deepEqual(plan.placements[0].override, {
+    kind: "existing",
+    entryLine: 5,
+    entryText: "- [ ] () — WRITE",
+  });
+});
+
+test("successor default placement creates a typed entry when needed", () => {
+  const notes = {
+    "sase.md": "- [x] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo\n- [?] #task Follower [type:: WRITE] [dependsOn:: sase__fix-apollo] ^follower",
+  };
+  const { plan } = planFixture({
+    day: FIX_DAY,
+    notes,
+    closed: FIX_CLOSED,
+    options: {
+      successorTheme: {
+        themesApi: stubTypedPlacementApi("create"),
+        ledgerApi: stubLedgerApi(),
+      },
+    },
+  });
+  const row = plan.unblocked.find((item) => item.block_id === "follower");
+  assert.equal(row.offer.destination.entry_name, "WRITE");
+  assert.equal(row.link.entry_name, "WRITE");
+  assert.deepEqual(plan.placements[0].override, { kind: "new", name: "WRITE" });
+});
+
+test("strict type-cap refusal leaves the successor unlinked", () => {
+  const notes = {
+    "sase.md": "- [x] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo\n- [?] #task Follower [type:: WRITE] [dependsOn:: sase__fix-apollo] ^follower",
+  };
+  const { plan } = planFixture({
+    day: FIX_DAY,
+    notes,
+    closed: FIX_CLOSED,
+    options: {
+      successorTheme: {
+        themesApi: stubTypedPlacementApi("refused"),
+        ledgerApi: stubLedgerApi(),
+      },
+    },
+  });
+  const row = plan.unblocked.find((item) => item.block_id === "follower");
+  assert.equal(row.link, null);
+  assert.equal(row.not_linked, "strict_cap");
+  assert.equal(row.offer.selected, false);
+  assert.equal(plan.placements.length, 0);
+});
+
 // Set via an existing bucket.
-test("successor retarget to existing FIX writes [theme:: FIX]", () => {
+test("successor retarget to existing FIX writes [type:: FIX]", () => {
   const notes = {
     "sase.md": "- [?] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo\n- [?] #task Follower [dependsOn:: sase__fix-apollo] ^follower",
   };
@@ -176,15 +305,15 @@ test("successor retarget to existing FIX writes [theme:: FIX]", () => {
   assert.equal(row.theme_action, "set");
   assert.equal(row.theme_name, "FIX");
   const edit = plan.edits.find((item) => item.path === "sase.md" && item.line === row.line);
-  assert.ok(edit.after.includes("[theme:: FIX]"), edit.after);
+  assert.ok(edit.after.includes("[type:: FIX]"), edit.after);
 });
 
 // Clear selects the inherited key.
 test("successor retarget selecting the inherited key clears the field", () => {
   const notes = {
-    "sase.md": "- [?] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo\n- [?] #task Follower [theme:: WRITE] [dependsOn:: sase__fix-apollo] ^follower",
+    "sase.md": "- [?] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo\n- [?] #task Follower [type:: FIX] [dependsOn:: sase__fix-apollo] ^follower",
   };
-  const shown = noteSuggestion();
+  const shown = noteSuggestion({ theme: { key: "fix", name: "FIX" } });
   const inherited = noteSuggestion({ theme: { key: "write", name: "WRITE" } });
   const withInherited = { ...shown, source: "task", inherited };
   const key = offerKeyFor(planFixture({ day: FIX_DAY, notes, closed: FIX_CLOSED }).plan, "follower");
@@ -211,7 +340,7 @@ test("successor retarget selecting the inherited key clears the field", () => {
   assert.equal(row.theme_changed, true);
   assert.equal(row.theme_action, "clear");
   const edit = cleared.edits.find((item) => item.path === "sase.md" && item.line === row.line);
-  assert.ok(!edit.after.includes("[theme::"), edit.after);
+  assert.ok(!edit.after.includes("[type::"), edit.after);
 });
 
 // Same-key no-op retains exact bytes.
@@ -220,8 +349,8 @@ test("same-key successor retarget is a byte-preserving no-op", () => {
   const notes = {
     "sase.md": `- [?] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo\n${before}`,
   };
-  // Field FIX already equals destination FIX; default WRITE differs, so no rewrite.
-  const shown = noteSuggestion();
+  // The effective type and explicit destination are both FIX, so D6 is consistent.
+  const shown = noteSuggestion({ theme: { key: "fix", name: "FIX" } });
   const key = offerKeyFor(planFixture({ day: FIX_DAY, notes, closed: FIX_CLOSED }).plan, "follower");
   const { plan } = planFixture({
     day: FIX_DAY, notes, closed: FIX_CLOSED,
@@ -356,7 +485,7 @@ test("two retargeted successors remember different themes", () => {
   ]);
   const themesApi = {
     ...stubThemesApi(shownWrite),
-    suggestFor: ({ path, line }) => {
+    effectiveTypeFor: ({ path, line }) => {
       const text = notes["sase.md"].split("\n")[line - 1] || "";
       if (text.includes("^one")) {
         return shownWrite;
@@ -519,13 +648,13 @@ test("theme edit persists when the daily insertion later fails", () => {
   assert.equal(row.theme_changed, true);
   assert.equal(row.theme_name, "FIX");
   const edit = plan.edits.find((item) => item.path === "sase.md" && item.line === row.line);
-  assert.ok(edit.after.includes("[theme:: FIX]"), edit.after);
+  assert.ok(edit.after.includes("[type:: FIX]"), edit.after);
   // Simulate the daily write failing after the task write: the insertion
   // planner skips on moved daily text, but the task edit stays themed.
   const movedDay = FIX_DAY.replace("- [ ] () — FIX", "- [ ] () — MOVED");
   const inserted = helpers.planSuccessorInsertions(movedDay, plan.placements, {});
   assert.equal(inserted.skipped.length, 1);
-  assert.ok(edit.after.includes("[theme:: FIX]"));
+  assert.ok(edit.after.includes("[type:: FIX]"));
   assert.equal(row.theme_changed, true);
 });
 
@@ -540,7 +669,7 @@ test("daily-note successors use the daily snapshot for suggestFor", () => {
   let seen = null;
   const themesApi = {
     ...stubThemesApi(shown),
-    suggestFor: (request) => {
+    effectiveTypeFor: (request) => {
       seen = request;
       return shown;
     },

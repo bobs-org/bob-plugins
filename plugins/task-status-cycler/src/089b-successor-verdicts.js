@@ -190,12 +190,28 @@ function applySuccessorVerdicts(context) {
 
   const mintedByNote = new Map();
   const offers = [];
+  const typedDefaultDestinations = new Map();
   for (const mark of uniqueMarks) {
     const task = mark.task;
     const key = keyByTask.get(task);
     const group = mark.group || (mark.pullIn ? "project_finished" : "hand_off");
-    const destination = successorOfferDestination(mark.anchor, mark.implicit, dailyBefore, dailyPath);
-    const selected = successorSelectionPicks(selection, key);
+    const requested = successorSelectionPicks(selection, key);
+    const noteText = projectNoteTextFor(noteTexts, task.path);
+    const placement = successorOfferTypedDestination({
+      anchor: mark.anchor,
+      implicit: mark.implicit,
+      dailyLines: dailyBefore,
+      dailyPath,
+      task,
+      noteText,
+      themesApi: successorThemesApi,
+      explicitOverride: destinations.get(String(key)),
+    });
+    const destination = placement.destination;
+    const selected = requested && !placement.refusal;
+    if (placement.placementOverride && !destinations.has(String(key))) {
+      typedDefaultDestinations.set(String(key), placement.placementOverride);
+    }
     const needsBlockId = !task.blockId;
     const offer = {
       key: String(key),
@@ -206,12 +222,12 @@ function applySuccessorVerdicts(context) {
       selected,
       block_id_needed: needsBlockId,
     };
-    const noteText = projectNoteTextFor(noteTexts, task.path);
     offers.push({
       key: offer.key, text: successorDisplayText(task), notePath: task.path, status: task.status,
       destination, needsBlockId, group, project: offer.project || null,
       anchor: mark.anchor, implicit: mark.implicit || null, predecessorRows: mark.predecessorRows || [],
       task, line: task.line,
+      placementRefusal: placement.refusal,
       ...(noteText ? { noteText } : {}),
     });
     if (!selected) {
@@ -257,7 +273,7 @@ function applySuccessorVerdicts(context) {
         inbox: typeof isInbox === "function" ? isInbox(task.path) === true : false,
         unblocked_by: mark.predecessorRows || [],
         link: null,
-        not_linked: "not_selected",
+        not_linked: requested && placement.refusal ? placement.refusal : "not_selected",
         trigger: mark.pullIn ? "project_empty" : "dependency",
         hide_removed: hideRemoved,
         offer: { ...offer, selected: false },
@@ -445,7 +461,8 @@ function applySuccessorVerdicts(context) {
       // Reuse the early override already used for the theme decision so the
       // insertion planner consumes the same resolved name.
       const override = successorEarlyOverride
-        || normalizeSuccessorPickDestination(destinations.get(String(key)));
+        || normalizeSuccessorPickDestination(destinations.get(String(key)))
+        || typedDefaultDestinations.get(String(key));
       if (override) {
         placement.override = override;
       }

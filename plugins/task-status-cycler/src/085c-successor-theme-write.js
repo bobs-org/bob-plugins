@@ -14,6 +14,159 @@ function emptySuccessorThemeWrite() {
   return { themeEdit: null, suggestionChanged: false, destinationThemeName: null };
 }
 
+// Pick each successor's default entry by its effective task type (D7).
+// Explicit picker destinations remain authoritative. The returned override
+// is an insertion-plan input derived from the same staged daily lines.
+function successorOfferTypedDestination(options = {}) {
+  const opts = options && typeof options === "object" ? options : {};
+  const destination = successorOfferDestination(
+    opts.anchor,
+    opts.implicit,
+    opts.dailyLines,
+    opts.dailyPath,
+  );
+  const result = { destination, placementOverride: null, refusal: null };
+  const themesApi = opts.themesApi;
+  const task = opts.task && typeof opts.task === "object" ? opts.task : null;
+  const taskPath = task && typeof task.path === "string" ? task.path : "";
+  const taskLine = Number.isInteger(task && task.line) ? task.line : null;
+  const noteText = typeof opts.noteText === "string" ? opts.noteText : null;
+  if (!themesApi || !taskPath || taskLine == null || taskLine < 0 || noteText == null) {
+    return result;
+  }
+  const dailyLines = Array.isArray(opts.dailyLines)
+    ? opts.dailyLines.map((line) => String(line ?? ""))
+    : String(opts.dailyLines ?? "").split(/\r?\n/);
+  const explicit = normalizeSuccessorPickDestination(opts.explicitOverride);
+  if (explicit) {
+    if (explicit.kind === "new") {
+      result.destination = {
+        day_file: String(opts.dailyPath || ""),
+        entry_name: explicit.name,
+        entry_role: "created",
+        fallback: false,
+      };
+      return result;
+    }
+    const entry = parseSuccessorLedgerEntries(dailyLines).find(
+      (item) => item.entryLine === explicit.entryLine && item.open &&
+        String(dailyLines[item.entryLine] || "").replace(/\r$/, "") === explicit.entryText,
+    );
+    if (entry) {
+      result.destination = {
+        day_file: String(opts.dailyPath || ""),
+        entry_name: String(entry.name || ""),
+        entry_role: "typed",
+        fallback: false,
+      };
+      return result;
+    }
+  }
+  let suggestion = null;
+  try {
+    suggestion = typeof themesApi.effectiveTypeFor === "function"
+      ? themesApi.effectiveTypeFor({ path: taskPath, line: taskLine + 1, text: noteText })
+      : null;
+  } catch (_error) {
+    suggestion = null;
+  }
+  const theme = suggestion && suggestion.theme && typeof suggestion.theme === "object"
+    ? suggestion.theme
+    : null;
+  const typeKey = theme && typeof theme.key === "string" ? theme.key : "";
+  if (!typeKey) {
+    return result;
+  }
+  try {
+    if (typeof themesApi.typeAgrees === "function" &&
+        themesApi.typeAgrees(typeKey, destination.entry_name)) {
+      return result;
+    }
+  } catch (_error) {
+    return result;
+  }
+  let entries = [];
+  try {
+    entries = parseSuccessorLedgerEntries(dailyLines).map((entry) => {
+      const parts = parsePomodoroEntryLineParts(String(dailyLines[entry.entryLine] || ""));
+      return {
+        name: entry.name,
+        open: entry.open === true,
+        running: entry.open === true && !!parts && parts.placeholder !== true,
+      };
+    });
+  } catch (_error) {
+    return result;
+  }
+  let placed = null;
+  try {
+    placed = typeof themesApi.planPlacement === "function"
+      ? themesApi.planPlacement({
+        type: typeKey,
+        typeName: typeof theme.name === "string" ? theme.name : typeKey,
+        entries,
+        alreadyQueued: false,
+        path: taskPath,
+        text: noteText,
+      })
+      : null;
+  } catch (_error) {
+    placed = null;
+  }
+  if (!placed || typeof placed !== "object") {
+    return result;
+  }
+  if (placed.kind === "entry" && Number.isInteger(placed.index) && entries[placed.index]) {
+    const target = parseSuccessorLedgerEntries(dailyLines)[placed.index];
+    if (!target || !target.open) {
+      return result;
+    }
+    const anchorLine = opts.anchor && Number.isInteger(opts.anchor.entryLine)
+      ? opts.anchor.entryLine
+      : opts.implicit && Number.isInteger(opts.implicit.entryLine)
+        ? opts.implicit.entryLine
+        : null;
+    if (anchorLine === target.entryLine) {
+      return result;
+    }
+    result.destination = {
+      day_file: String(opts.dailyPath || ""),
+      entry_name: String(target.name || ""),
+      entry_role: "typed",
+      fallback: false,
+    };
+    result.placementOverride = {
+      kind: "existing",
+      entryLine: target.entryLine,
+      entryText: String(dailyLines[target.entryLine] || "").replace(/\r$/, ""),
+    };
+    return result;
+  }
+  if (placed.kind === "create") {
+    const name = typeof placed.name === "string" && placed.name
+      ? placed.name
+      : (typeof theme.name === "string" ? theme.name : typeKey);
+    result.destination = {
+      day_file: String(opts.dailyPath || ""),
+      entry_name: name,
+      entry_role: "created",
+      fallback: false,
+    };
+    result.placementOverride = { kind: "new", name };
+    return result;
+  }
+  if (placed.kind === "refused") {
+    result.destination = {
+      day_file: String(opts.dailyPath || ""),
+      entry_name: typeof theme.name === "string" ? theme.name : typeKey,
+      entry_role: "created",
+      fallback: false,
+    };
+    result.refusal = "strict_cap";
+  }
+  return result;
+}
+
 function successorThemeSuggestionIdentity(suggestion) {
   try {
     if (!suggestion || typeof suggestion !== "object") {
@@ -298,12 +451,10 @@ function resolveSuccessorThemeWrite(options = {}) {
       return emptySuccessorThemeWrite();
     }
     const themesApi = opts.themesApi || null;
-    const ledgerApi = opts.ledgerApi || null;
     if (
       !themesApi ||
-      typeof themesApi.suggestFor !== "function" ||
-      typeof themesApi.taskThemeOf !== "function" ||
-      typeof themesApi.planThemeChange !== "function" ||
+      typeof themesApi.effectiveTypeFor !== "function" ||
+      typeof themesApi.planRetype !== "function" ||
       typeof themesApi.setTaskTheme !== "function" ||
       typeof themesApi.clearTaskTheme !== "function"
     ) {
@@ -345,7 +496,7 @@ function resolveSuccessorThemeWrite(options = {}) {
     }
     let current = null;
     try {
-      current = themesApi.suggestFor({ path: taskPath, line: oneBased, text: noteText });
+      current = themesApi.effectiveTypeFor({ path: taskPath, line: oneBased, text: noteText });
     } catch (_error) {
       return { themeEdit: null, suggestionChanged: true, destinationThemeName: null };
     }
@@ -354,37 +505,21 @@ function resolveSuccessorThemeWrite(options = {}) {
     if (!successorThemeSuggestionsMatch(shownIdentity, currentIdentity)) {
       return { themeEdit: null, suggestionChanged: true, destinationThemeName: null };
     }
-    let field = null;
-    try {
-      field = themesApi.taskThemeOf(lineText);
-    } catch (_error) {
-      return emptySuccessorThemeWrite();
-    }
-    if (!field || typeof field !== "object") {
-      return emptySuccessorThemeWrite();
-    }
     const inherited = successorThemeWriteInherited(intent.shown);
-    const exemptKeys = successorThemeWriteExemptKeys(ledgerApi);
-    if (!exemptKeys.available) {
-      return emptySuccessorThemeWrite();
-    }
     let change = null;
     try {
-      change = themesApi.planThemeChange({
-        field,
-        suggestion: intent.shown,
+      change = themesApi.planRetype({
+        effective: current,
         inherited,
-        destinationName,
-        exemptKeys: exemptKeys.keys,
-        deliberate: true,
+        destination: destinationName,
       });
     } catch (_error) {
       return emptySuccessorThemeWrite();
     }
-    if (!change || (change.action !== "set" && change.action !== "clear")) {
+    if (!change || (change.kind !== "set" && change.kind !== "clear")) {
       return emptySuccessorThemeWrite();
     }
-    if (change.action === "set") {
+    if (change.kind === "set") {
       const name = successorThemeCatalogSpelling(themesApi, change.key, change.name);
       if (!name) {
         return emptySuccessorThemeWrite();

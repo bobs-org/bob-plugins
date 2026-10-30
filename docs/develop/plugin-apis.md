@@ -332,7 +332,7 @@ preimage }` so `Ctrl+Shift+Enter` can retarget through
 `pomodoroLinkPicker.pick({ task })`. `line` is one-based and `text` is
 the full matching note; `preimage` is the original task line used to
 refuse a changed or missing source before the nested picker. Older rows
-without `task` still retarget, without permission to edit a theme.
+without `task` still retarget, without permission to edit a task type.
 Destination overrides may carry additive `themeIntent` and
 `preserveSpelling`. Both navigation's
 `normalizeSuccessorDestinationOverride` and the cycler's
@@ -340,14 +340,17 @@ Destination overrides may carry additive `themeIntent` and
 malformed one without rejecting the destination, and let `linkOnce`
 override `deliberate`. Marked-row retargets run one picker per target
 in displayed order and publish overrides only when every pick succeeds.
-The context transport and nested picker never mutate a task field. The
-cycler consumes a valid deliberate `themeIntent` in the successor task edit:
-it revalidates `shown` against a fresh `suggestFor`, delegates to
-`api.themes.planThemeChange`, and applies `setTaskTheme`/`clearTaskTheme`
-after status recovery and before block-ID/freshness assembly. Ordinary
-successor placement never writes; link-once, untouched preselection, missing
-or changed suggestions, and stale or refused destinations skip the field
-while keeping the link.
+The context transport and nested picker never mutate a task field. For a
+successor's default destination, the cycler resolves the task's effective
+type with `effectiveTypeFor` and asks `planPlacement` to keep a matching
+open Pomodoro, select another matching entry, or create the typed entry.
+Strict-cap refusal leaves a requested successor unlinked. Default placement
+does not edit the task field. An explicit retarget carries a valid deliberate
+`themeIntent`; the cycler revalidates `shown` against a fresh
+`effectiveTypeFor`, delegates to `planRetype`, and applies
+`setTaskTheme`/`clearTaskTheme` after status recovery and before
+block-ID/freshness assembly. Link-once, untouched preselection, missing or
+changed suggestions, and stale or refused destinations skip the field edit.
 `blocks.openStage(ref)` and
 `blocks.removeDependent(ownerRef, target)` resolve to result
 objects. `relations.removeLink(sourceRef, targetRef)` removes the

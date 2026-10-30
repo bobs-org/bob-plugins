@@ -91,7 +91,7 @@ function renderTaskCardThemeHeader(container, theme) {
       if (part.type === "value" && part.themeKey) {
         span.textContent = "";
         const pill = span.createSpan({
-          cls: `bob-task-card-theme-pill${part.hue ? ` is-${part.hue}` : ""}`,
+          cls: `bob-task-card-theme-pill${part.hue ? ` is-${part.hue}` : " is-muted"}`,
         });
         pill.createSpan({
           cls: `bob-cnp-theme-swatch${part.hue ? ` is-${part.hue}` : " is-muted"}`,

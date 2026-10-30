@@ -1,7 +1,8 @@
 // --- Task theme fields: pure PT13 mirror of bob-cli task_theme.rs -------
-// This file never reads or writes vault files. Offsets are JavaScript string
-// offsets (UTF-16), so editor callers can use them without translating Rust
-// byte ranges.
+// Canonical `[type:: X]` with legacy `[theme:: X]` still read; every setter
+// emits `[type::]` and removes both spellings. This file never reads or
+// writes vault files. Offsets are JavaScript string offsets (UTF-16), so
+// editor callers can use them without translating Rust byte ranges.
 
 function pomodoroThemeCanonicalName(raw) {
   if (typeof raw !== "string") {
@@ -50,7 +51,7 @@ function pomodoroThemeInlineFields(line) {
 
 function pomodoroThemeTaskFieldState(line) {
   const fields = pomodoroThemeInlineFields(line).filter(
-    (field) => field.key === "theme",
+    (field) => field.key === "type" || field.key === "theme",
   );
   if (fields.length === 0) {
     return { state: "none" };
@@ -82,7 +83,7 @@ function pomodoroThemeLineEnding(line) {
 
 function pomodoroThemeRemoveTaskFields(line) {
   const fields = pomodoroThemeInlineFields(line).filter(
-    (field) => field.key === "theme",
+    (field) => field.key === "type" || field.key === "theme",
   );
   if (fields.length === 0) {
     return String(line == null ? "" : line);
@@ -244,7 +245,7 @@ function pomodoroThemeSetTaskTheme(line, name) {
   const { body, ending } = pomodoroThemeLineEnding(text);
   const cleared = pomodoroThemeRemoveTaskFields(body);
   const insertion = pomodoroThemeTrailingMetadataStart(cleared);
-  let insert = `[theme:: ${String(name == null ? "" : name)}]`;
+  let insert = `[type:: ${String(name == null ? "" : name)}]`;
   if (insertion > 0 && !/[ \t]$/.test(cleared.slice(0, insertion))) {
     insert = ` ${insert}`;
   }

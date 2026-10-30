@@ -220,7 +220,7 @@ test("selecting inherited clears; other choices set with catalog spelling and ex
   assert.equal(planSet.edits[0].action, "set");
   assert.equal(planSet.edits[0].name, "BUILD");
   const after = api.setTaskTheme("- [ ] #task Plain ^a", planSet.edits[0].name);
-  assert.ok(after.includes("[theme:: BUILD]"));
+  assert.ok(after.includes("[type:: BUILD]"));
   const planExempt = helpers.planTaskCardThemeEdits(model.themeProjection, { kind: "recent", key: "plan", name: "PLAN" }, api, {});
   assert.equal(planExempt.valid, false);
   const planComposite = helpers.planTaskCardThemeEdits(model.themeProjection, { kind: "new", key: "a+b", name: "A + B" }, api, {});
@@ -229,7 +229,7 @@ test("selecting inherited clears; other choices set with catalog spelling and ex
   assert.equal(planInvalid.valid, false);
 });
 
-test("new theme with no suggestion sets; same-key is byte-preserving no-op", () => {
+test("new theme with no suggestion sets; same-key is a plan no-op", () => {
   const line = "- [ ] #task Plain ^a";
   const api = makeThemeApi({ suggestions: {}, catalog: [{ key: "deep work", name: "DEEP WORK" }] });
   const model = makeModel({ content: line, lineText: line, themeApi: api });
@@ -238,7 +238,7 @@ test("new theme with no suggestion sets; same-key is byte-preserving no-op", () 
   assert.equal(plan.valid, true);
   assert.equal(plan.edits[0].action, "set");
   const after = api.setTaskTheme(line, plan.edits[0].name);
-  assert.ok(after.includes("[theme:: DEEP WORK]"));
+  assert.ok(after.includes("[type:: DEEP WORK]"));
   assert.ok(after.startsWith("- [ ] #task Plain"));
   assert.ok(after.endsWith("^a"));
   const setLine = "- [ ] #task Has [theme:: BUILD] ^h";
@@ -250,7 +250,7 @@ test("new theme with no suggestion sets; same-key is byte-preserving no-op", () 
   const model2 = makeModel({ content: setLine, lineText: setLine, themeApi: api2 });
   const noop = helpers.planTaskCardThemeEdits(model2.themeProjection, { kind: "recent", key: "build", name: "BUILD" }, api2, {});
   assert.equal(noop.edits[0].action, "none");
-  assert.equal(api2.setTaskTheme(setLine, "BUILD"), setLine);
+  assert.equal(api2.setTaskTheme(setLine, "BUILD"), "- [ ] #task Has [type:: BUILD] ^h");
 });
 
 test("stage dedupes by key, preserves query, and keeps unknown inherited selectable", () => {
@@ -351,9 +351,10 @@ test("persisted post-images preserve status, links, root, and freshness bytes", 
   assert.ok(after.includes("[fresh:: today]"));
   assert.ok(after.includes("[priority:: medium]"));
   assert.ok(after.includes("[root:: project]"));
-  assert.ok(after.includes("[theme:: BUILD]"));
+  assert.ok(after.includes("[type:: BUILD]"));
   assert.ok(after.endsWith("^ship"));
   const cleared = api.clearTaskTheme(after);
+  assert.ok(!cleared.includes("[type::"));
   assert.ok(!cleared.includes("[theme::"));
   assert.ok(cleared.includes("[[Notes/Other]]"));
   assert.ok(cleared.includes("[fresh:: today]"));

@@ -56,6 +56,22 @@ function navigationPomodoroThemeAvailable(api) {
 
 function navigationPomodoroThemeComponents(api, name) {
   try {
+    if (api && typeof api.typeComponentsOf === "function") {
+      const rows = api.typeComponentsOf(name);
+      if (Array.isArray(rows)) {
+        const mapped = [];
+        for (const row of rows) {
+          if (row && typeof row.name === "string" && typeof row.key === "string") {
+            mapped.push({ raw: row.name, key: row.key });
+          }
+        }
+        return mapped;
+      }
+    }
+  } catch (_error) {
+    // Theme display remains optional.
+  }
+  try {
     if (api && typeof api.componentsOf === "function") {
       const rows = api.componentsOf(name);
       if (Array.isArray(rows)) {

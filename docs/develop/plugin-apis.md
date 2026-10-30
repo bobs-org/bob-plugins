@@ -190,7 +190,8 @@ an older bob without the writers resolves `code: "unsupported"`.
 `onChange(callback)` subscribes to catalog changes and returns an
 unsubscribe function. The `--bob-hue-*` tokens in the ledger stylesheet are
 the single source for theme color; later picker surfaces reuse them. The JS
-mirrors of the hue rule, the journal fold, and the PT7 ranking are pinned by
+mirrors of the hue rule, the journal fold, the PT7 ranking, and the D4–D8
+routing planners are pinned by
 `scripts/fixtures/pomodoro_themes/vectors.json`, copied byte-for-byte from
 bob-cli. See the [Pomodoro themes contract](https://bobs-org.github.io/pomodoro-themes/)
 for the shared catalog, hue, and menu rules.
@@ -198,7 +199,11 @@ for the shared catalog, hue, and menu rules.
 The v1 namespace also exposes synchronous task-theme helpers:
 `suggestFor({ path, line, text? })`, `taskThemeOf(text)`,
 `setTaskTheme(text, name)`, `clearTaskTheme(text)`,
-`planThemeChange(options)`, and `isKnownTheme(key)`. `suggestFor` uses a
+`planThemeChange(options)`, and `isKnownTheme(key)`, plus the additive
+task-type routing surface: `effectiveTypeFor(request)`,
+`typeComponentsOf(name)`, `typeAgrees(taskKey, entryName)`,
+`planRetype(options)`, `planPlacement(options)`, and
+`planRelocation(options)`. `suggestFor` uses a
 vault-relative `path`, a one-based integer line number, and optional full live
 Markdown text. When `text` is omitted it reads that line only from an open
 editor whose path matches; it returns `null` when the path/line cannot be read
@@ -208,7 +213,12 @@ stale Tasks metadata. Suggestions contain the Rust `ThemeRef` shape and
 always have `inherited`, including `null`. A valid task `[root:: NOTE]` field
 starts the note-default walk at that note; a field needing repair falls back
 to the task's own residence. A repaired theme field adds
-`repair: "duplicate" | "invalid"` only when a suggestion remains. `from`
+`repair: "duplicate" | "invalid"` only when a suggestion remains. After the
+note walk finds nothing, the cascade falls through to `plan.default_type`
+(source `default`, label `default type`); `off` stops the note walk but still
+falls through to the default. A note whose `task_type:` and legacy `theme:`
+defaults disagree reports a `type_default_conflict` warning through the same
+channel as `theme_default_invalid`, and `task_type:` wins. `from`
 contains the declaring note's path, lowercase stem, `area`/`project` kind,
 root-area hue when available, and the residence-to-declarer path chain.
 Rust-compatible serialized `ThemeRef` values omit `known` when true and omit
@@ -217,21 +227,48 @@ Rust-compatible serialized `ThemeRef` values omit `known` when true and omit
 `taskThemeOf` returns `{ state: "none" }`,
 `{ state: "set", value, key, fields }`, or
 `{ state: "repair", repair, fields }`; field spans use JavaScript UTF-16
-offsets. The parser accepts both `[theme:: value]` and `(theme:: value)` with
-Rust's spacing and name rules. The two setters return rewritten strings and do
-not write the vault. `planThemeChange({ field, suggestion, inherited,
- destinationName, exemptKeys, deliberate })` returns `{ action: "none" }`,
-`{ action: "clear" }`, or `{ action: "set", name, key }`. `suggestion` and
-`inherited` may be the corresponding suggestion objects or theme keys. Its
-write rule requires a deliberate choice and a shown suggestion, and clears a
-field when the selected theme matches the inherited one.
+offsets. The parser accepts the `type` and `theme` keys in both
+`[key:: value]` and `(key:: value)` forms with Rust's spacing and name rules;
+two or more type-ish fields on one line are the `duplicate` repair state.
+`setTaskTheme` emits `[type:: NAME]` and removes both spellings; the two
+setters return rewritten strings and do not write the vault.
+`planThemeChange({ field, suggestion, inherited,
+ destinationName, exemptKeys, deliberate })` is deprecated: the default path
+keeps the legacy write rule byte for byte, and only the keep-type path
+(`linkOnce: true`) delegates to `planRetype`, returning
+`{ action: "merge", name }` for the merge. It returns `{ action: "none" }`,
+`{ action: "clear" }`, `{ action: "set", name, key }`, or the keep-type
+`{ action: "merge", name }`. `suggestion` and
+`inherited` may be the corresponding suggestion objects or theme keys. The
+legacy write rule requires a deliberate choice and a shown suggestion, and
+clears a field when the selected theme matches the inherited one. New callers
+use `planRetype` directly.
+
+`effectiveTypeFor(request)` runs the same cascade as `suggestFor` (field,
+reading task, note defaults, then `plan.default_type`) and returns the full
+suggestion or `null`. `typeComponentsOf(name)` returns `{ name, key, isType }`
+rows per D4. `typeAgrees(taskKey, entryName)` answers the D5 invariant; a
+missing type always agrees. `planRetype({ effective, effectiveName?,
+inherited, destination, selector?, keepType?, tabPick?, sources? })` returns
+`{ kind }` with `container`, `consistent`, `merge`, `set`, or `clear`
+outcomes per D6; `effective` and `inherited` accept suggestion objects or keys.
+`planPlacement({ type, typeName?, entries, alreadyQueued?, ...overrides })`
+returns `entry`, `create`, `refused`, `alreadyQueued`, or `noType` per D7, and
+`planRelocation({ entries, liveLink, type, typeName?, ...overrides })` returns
+`unchanged`, `renameEntry`, `appendComponent`, `moveTo`, `renamePlaceholder`,
+`createBelow`, or `refused` per D8. Vocabulary, exempt, and inventory come
+from the configured-rows snapshot and plan caps; `exempt`, `ledgerKeys`,
+`themesBefore`, `cap`, and `strict` accept explicit overrides. None of the
+routing methods spawns bob, writes the vault, or throws: unusable input
+resolves to `null` (`typeComponentsOf` resolves to `[]`, `typeAgrees` to
+`true`).
 
 `isKnownTheme(key)` is synchronous and read-only. It checks the cached theme
 catalog and today's Pomodoro names, preferring an open daily editor so unsaved
 components count immediately. Hidden names remain known. Suggestion warnings
 such as invalid note defaults are available from the exported pure resolver
 helper for contract tests; `suggestFor` returns only a suggestion or `null`,
-not a command-response envelope. All six additions are additive under
+not a command-response envelope. All additions are additive under
 `themes` v1; the root API remains v3.
 
 Explicit `[theme:: NAME]` / `(theme:: NAME)` fields render as PT13 pills in

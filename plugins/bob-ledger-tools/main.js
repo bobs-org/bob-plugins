@@ -2162,6 +2162,7 @@ function defaultPlanCaps() {
     exempt: ["PLAN"],
     inventoryLabels: ["LATER", "MISC", "NEW FEATURES", "SASE"],
     readingTheme: "READ",
+    defaultType: null,
   };
 }
 
@@ -2239,6 +2240,7 @@ function effectivePlanCaps(caps) {
       defaults.inventoryLabels,
     ),
     readingTheme: planEffectiveReadingTheme(raw.readingTheme, defaults.readingTheme),
+    defaultType: planEffectiveDefaultType(raw.defaultType, defaults.defaultType),
   };
 }
 
@@ -2247,6 +2249,17 @@ function planEffectiveReadingTheme(value, fallback) {
     return fallback;
   }
   if (value === null || (typeof value === "string" && value.trim().toLowerCase() === "off")) {
+    return null;
+  }
+  const canonical = pomodoroThemeCanonicalName(value);
+  return canonical || fallback;
+}
+
+function planEffectiveDefaultType(value, fallback) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (typeof value === "string" && value.trim().toLowerCase() === "off") {
     return null;
   }
   const canonical = pomodoroThemeCanonicalName(value);
@@ -2344,18 +2357,46 @@ function coercePlanCaps(block) {
       strict = strictValue;
     }
   }
+  // `reading_type` is canonical; `reading_theme` stays a legacy alias.
+  // Both present is a plan config error, reported here as an invalid block.
+  const readingTypeValue =
+    raw.reading_type !== undefined ? raw.reading_type : raw.readingType;
   const readingThemeValue = pick("reading_theme", "readingTheme");
+  if (readingTypeValue !== undefined && readingThemeValue !== undefined) {
+    invalid = true;
+  }
+  const readingValue =
+    readingTypeValue !== undefined ? readingTypeValue : readingThemeValue;
   let readingTheme = defaults.readingTheme;
-  if (readingThemeValue !== undefined) {
-    if (typeof readingThemeValue === "string") {
-      if (readingThemeValue.trim().toLowerCase() === "off") {
+  if (readingValue !== undefined) {
+    if (typeof readingValue === "string") {
+      if (readingValue.trim().toLowerCase() === "off") {
         readingTheme = null;
       } else {
-        const canonical = pomodoroThemeCanonicalName(readingThemeValue);
+        const canonical = pomodoroThemeCanonicalName(readingValue);
         if (!canonical) {
           invalid = true;
         } else {
           readingTheme = canonical;
+        }
+      }
+    } else {
+      invalid = true;
+    }
+  }
+  const defaultTypeValue =
+    raw.default_type !== undefined ? raw.default_type : raw.defaultType;
+  let defaultType = defaults.defaultType;
+  if (defaultTypeValue !== undefined && defaultTypeValue !== null) {
+    if (typeof defaultTypeValue === "string") {
+      if (defaultTypeValue.trim().toLowerCase() === "off") {
+        defaultType = null;
+      } else {
+        const canonical = pomodoroThemeCanonicalName(defaultTypeValue);
+        if (!canonical) {
+          invalid = true;
+        } else {
+          defaultType = canonical;
         }
       }
     } else {
@@ -2383,6 +2424,7 @@ function coercePlanCaps(block) {
       defaults.inventoryLabels,
     ),
     readingTheme,
+    defaultType,
   };
   // Like Rust, any invalid value falls back to the full default block.
   if (invalid) {
@@ -49415,9 +49457,10 @@ function pomodoroThemesDecodeWrite(stdout, stderr) {
 
 // ---- src/279-plugin-task-theme-model.js ----
 // --- Task theme fields: pure PT13 mirror of bob-cli task_theme.rs -------
-// This file never reads or writes vault files. Offsets are JavaScript string
-// offsets (UTF-16), so editor callers can use them without translating Rust
-// byte ranges.
+// Canonical `[type:: X]` with legacy `[theme:: X]` still read; every setter
+// emits `[type::]` and removes both spellings. This file never reads or
+// writes vault files. Offsets are JavaScript string offsets (UTF-16), so
+// editor callers can use them without translating Rust byte ranges.
 
 function pomodoroThemeCanonicalName(raw) {
   if (typeof raw !== "string") {
@@ -49466,7 +49509,7 @@ function pomodoroThemeInlineFields(line) {
 
 function pomodoroThemeTaskFieldState(line) {
   const fields = pomodoroThemeInlineFields(line).filter(
-    (field) => field.key === "theme",
+    (field) => field.key === "type" || field.key === "theme",
   );
   if (fields.length === 0) {
     return { state: "none" };
@@ -49498,7 +49541,7 @@ function pomodoroThemeLineEnding(line) {
 
 function pomodoroThemeRemoveTaskFields(line) {
   const fields = pomodoroThemeInlineFields(line).filter(
-    (field) => field.key === "theme",
+    (field) => field.key === "type" || field.key === "theme",
   );
   if (fields.length === 0) {
     return String(line == null ? "" : line);
@@ -49660,7 +49703,7 @@ function pomodoroThemeSetTaskTheme(line, name) {
   const { body, ending } = pomodoroThemeLineEnding(text);
   const cleared = pomodoroThemeRemoveTaskFields(body);
   const insertion = pomodoroThemeTrailingMetadataStart(cleared);
-  let insert = `[theme:: ${String(name == null ? "" : name)}]`;
+  let insert = `[type:: ${String(name == null ? "" : name)}]`;
   if (insertion > 0 && !/[ \t]$/.test(cleared.slice(0, insertion))) {
     insert = ` ${insert}`;
   }
@@ -49838,26 +49881,55 @@ function pomodoroHomeResolveTaskThemeFacts(
   }
 }
 
-function pomodoroThemeNoteDefault(frontmatter) {
-  if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) {
-    return { kind: "absent" };
-  }
-  const raw = frontmatter.theme;
+function pomodoroThemeParseSingleNoteDefault(raw) {
   if (raw === undefined || raw === null) {
-    return { kind: "absent" };
+    return null;
   }
   if (typeof raw !== "string") {
     return { kind: "invalid" };
   }
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { kind: "absent" };
+    return null;
   }
   if (trimmed.toLowerCase() === "off") {
     return { kind: "off" };
   }
   const name = pomodoroThemeCanonicalName(trimmed);
   return name ? { kind: "name", name } : { kind: "invalid" };
+}
+
+function pomodoroThemeNoteDefaultsEqual(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (left.kind === "name") {
+    return left.name === right.name;
+  }
+  return true;
+}
+
+function pomodoroThemeNoteDefault(frontmatter) {
+  if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) {
+    return { kind: "absent" };
+  }
+  const canonical = pomodoroThemeParseSingleNoteDefault(frontmatter.task_type);
+  const legacy = pomodoroThemeParseSingleNoteDefault(frontmatter.theme);
+  const conflict =
+    canonical !== null &&
+    legacy !== null &&
+    !pomodoroThemeNoteDefaultsEqual(canonical, legacy);
+  const winning = canonical !== null ? canonical : legacy;
+  if (winning === null) {
+    return { kind: "absent" };
+  }
+  if (conflict) {
+    return { ...winning, conflict: true };
+  }
+  return { ...winning };
 }
 // ---- src/279-plugin-task-theme-suggest.js ----
 // --- Task theme suggestion resolver: PT13 mirror of bob-cli -------------
@@ -49987,6 +50059,9 @@ function pomodoroThemeResolveNoteDefault(path, line, options) {
     if (theme.kind === "absent") {
       continue;
     }
+    if (theme.conflict === true) {
+      result.warnings.push({ code: "type_default_conflict", path: item.path });
+    }
     if (theme.kind === "off") {
       return result;
     }
@@ -50025,14 +50100,66 @@ function pomodoroThemeResolveNoteDefault(path, line, options) {
   return result;
 }
 
+function pomodoroThemeDefaultTypeName(config) {
+  const source = config && typeof config === "object" ? config : {};
+  const raw =
+    source.default_type !== undefined
+      ? source.default_type
+      : source.defaultType !== undefined
+        ? source.defaultType
+        : null;
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.toLowerCase() === "off") {
+    return null;
+  }
+  return pomodoroThemeCanonicalName(trimmed);
+}
+
+function pomodoroThemeWithGlobalDefault(resolved, config, options) {
+  const settled = resolved && typeof resolved === "object"
+    ? resolved
+    : { suggestion: null, warnings: [] };
+  if (settled.suggestion) {
+    return settled;
+  }
+  const name = pomodoroThemeDefaultTypeName(config);
+  if (!name) {
+    return settled;
+  }
+  const key = pomodoroThemeNormalizeKey(name);
+  return {
+    suggestion: pomodoroThemeMakeSuggestion(
+      key,
+      name,
+      "default",
+      "default type",
+      options,
+    ),
+    warnings: settled.warnings,
+  };
+}
+
 function pomodoroThemeResolveWithoutTaskField(path, line, options) {
   const config = options.config && typeof options.config === "object" ? options.config : {};
+  // `reading_type` is canonical; `reading_theme` stays a legacy alias.
+  // A both-present block is rejected by coercePlanCaps; the resolver
+  // prefers the canonical spelling.
   const configuredReading =
-    config.readingTheme !== undefined
-      ? config.readingTheme
-      : config.reading_theme !== undefined
-        ? config.reading_theme
-        : "READ";
+    config.reading_type !== undefined
+      ? config.reading_type
+      : config.readingType !== undefined
+        ? config.readingType
+        : config.readingTheme !== undefined
+          ? config.readingTheme
+          : config.reading_theme !== undefined
+            ? config.reading_theme
+            : "READ";
   const readingName =
     configuredReading === null ||
     (typeof configuredReading === "string" && configuredReading.trim().toLowerCase() === "off")
@@ -50051,14 +50178,22 @@ function pomodoroThemeResolveWithoutTaskField(path, line, options) {
       warnings: [],
     };
   }
-  return pomodoroThemeResolveNoteDefault(path, line, options);
+  return pomodoroThemeWithGlobalDefault(
+    pomodoroThemeResolveNoteDefault(path, line, options),
+    config,
+    options,
+  );
 }
 
 function pomodoroThemeSuggestWithDiagnostics(options = {}) {
   const opts = options && typeof options === "object" ? options : {};
   const path = typeof opts.path === "string" ? opts.path : "";
   if (opts.newTask === true) {
-    return pomodoroThemeResolveNoteDefault(path, null, opts);
+    return pomodoroThemeWithGlobalDefault(
+      pomodoroThemeResolveNoteDefault(path, null, opts),
+      opts.config,
+      opts,
+    );
   }
   const line = String(opts.line == null ? "" : opts.line);
   const mark = pomodoroThemeTaskMark(line);
@@ -50094,6 +50229,337 @@ function pomodoroThemeSuggestWithDiagnostics(options = {}) {
     };
   }
   return inherited;
+}
+// ---- src/279-plugin-task-type-routing.js ----
+// --- Task type routing: pure JS mirror of bob-cli routing.rs (D4-D8) ---
+// Agreement, retype, placement, and relocation planners over plain data.
+// Vocabulary, exempt, and inventory ride the `sources` argument as raw name
+// lists (`{ vocab, exempt, inventory }`); a null or empty `vocab` means no
+// configured vocabulary. Vectors in
+// `scripts/fixtures/pomodoro_themes/vectors.json` are copied byte-for-byte
+// from bob-cli; the Rust suite there is the source of truth. This file never
+// spawns bob and never touches the vault, so it also runs on mobile.
+
+// Normalize one raw `sources` argument into key sets. `vocab` stays null
+// when no vocabulary is configured (missing, null, or empty), exactly like
+// Rust's `parse_themes_config` returning `Ok(None)`.
+function normalizeTaskTypeSources(sources) {
+  const raw = sources && typeof sources === "object" ? sources : {};
+  const keySet = (values) => new Set(
+    (Array.isArray(values) ? values : [])
+      .map((value) => pomodoroThemeNormalizeKey(value))
+      .filter(Boolean),
+  );
+  const vocabList = Array.isArray(raw.vocab) ? raw.vocab : null;
+  const vocab = vocabList && vocabList.length > 0 ? keySet(vocabList) : null;
+  return {
+    vocab,
+    exempt: keySet(raw.exempt),
+    inventory: keySet(raw.inventory),
+  };
+}
+
+// Classify each component of a Pomodoro name (D4). Unnamed entries and
+// `(unnamed)` have no components. An entry with no type components is a
+// container. With a configured vocabulary a component is a type component
+// iff its key is in the vocabulary; otherwise every component except
+// inventory labels is a type component.
+function typeComponents(name, sources) {
+  const sets = normalizeTaskTypeSources(sources);
+  const text = String(name == null ? "" : name).trim();
+  if (!text || text === "(unnamed)") {
+    return [];
+  }
+  return pomodoroThemeSplitComponents(text).map((component) => {
+    const key = pomodoroThemeNormalizeKey(component);
+    const isType = sets.vocab !== null
+      ? sets.vocab.has(key)
+      : !sets.inventory.has(key);
+    return { name: component, key, isType };
+  });
+}
+
+// Agreement invariant (D5): a live Task Link sits under a Pomodoro whose
+// name includes its task's type, or under a container.
+function typeAgrees(taskKey, entryName, sources) {
+  if (taskKey === null || taskKey === undefined || taskKey === "") {
+    return true;
+  }
+  const key = pomodoroThemeNormalizeKey(taskKey);
+  if (!key) {
+    return true;
+  }
+  const components = typeComponents(entryName, sources);
+  if (components.every((item) => !item.isType)) {
+    return true;
+  }
+  if (entryName === null || entryName === undefined) {
+    return true;
+  }
+  return pomodoroThemeSplitComponents(String(entryName))
+    .some((component) => pomodoroThemeNormalizeKey(component) === key);
+}
+
+function taskTypeStripSelector(raw) {
+  let text = String(raw == null ? "" : raw).trim();
+  if (text.startsWith("#") || text.startsWith("=")) {
+    text = text.slice(1);
+  }
+  text = text.trim();
+  if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) {
+    return text.slice(1, -1);
+  }
+  return text;
+}
+
+// How a link landing in Pomodoro D retypes its task (D6). `effectiveKey` is
+// the task's current effective type and `inheritedKey` the same cascade
+// without the task field; `selector` is the authored `#NAME` / `=name`
+// text, `keepType` the keep-type merge path, and `tabPick` the cycled
+// composite choice.
+function planRetype(input, sources) {
+  const opts = input && typeof input === "object" ? input : {};
+  const sets = normalizeTaskTypeSources(sources);
+  const destination = String(opts.destination == null ? "" : opts.destination);
+  const components = typeComponents(destination, sources);
+  if (components.every((item) => !item.isType)) {
+    return { kind: "container" };
+  }
+  const effectiveKey = opts.effectiveKey == null || opts.effectiveKey === ""
+    ? null
+    : pomodoroThemeNormalizeKey(opts.effectiveKey);
+  if (effectiveKey) {
+    const entryKeys = new Set(
+      pomodoroThemeSplitComponents(destination).map((component) =>
+        pomodoroThemeNormalizeKey(component),
+      ),
+    );
+    if (entryKeys.has(effectiveKey)) {
+      return { kind: "consistent" };
+    }
+  }
+  if (opts.keepType === true) {
+    const current = opts.effectiveName || opts.effectiveKey || "";
+    const canonical = pomodoroThemeCanonicalName(current) || String(current || "");
+    return { kind: "merge", name: `${destination.trim()} + ${canonical}` };
+  }
+  const candidates = components.filter((item) => item.isType);
+  if (candidates.length === 0) {
+    return { kind: "container" };
+  }
+  let chosen = null;
+  if (opts.selector !== null && opts.selector !== undefined) {
+    const want = pomodoroThemeNormalizeKey(taskTypeStripSelector(opts.selector));
+    if (want) {
+      chosen = candidates.find((item) => item.key === want)
+        || candidates.find((item) => item.key.startsWith(want))
+        || null;
+    }
+  }
+  if (!chosen && opts.tabPick !== null && opts.tabPick !== undefined) {
+    const want = pomodoroThemeNormalizeKey(opts.tabPick);
+    chosen = candidates.find((item) => item.key === want) || null;
+  }
+  if (!chosen) {
+    chosen = candidates.find((item) => !sets.exempt.has(item.key))
+      || candidates[0];
+  }
+  const inheritedKey = opts.inheritedKey == null || opts.inheritedKey === ""
+    ? null
+    : pomodoroThemeNormalizeKey(opts.inheritedKey);
+  if (inheritedKey && inheritedKey === chosen.key) {
+    return { kind: "clear" };
+  }
+  return { kind: "set", name: chosen.name, key: chosen.key };
+}
+
+function taskTypeIsExactEntry(name, key, exempt) {
+  if (name === null || name === undefined) {
+    return false;
+  }
+  const kept = pomodoroThemeSplitComponents(String(name))
+    .map((component) => pomodoroThemeNormalizeKey(component))
+    .filter((component) => component === key || !exempt.has(component));
+  return kept.length === 1 && kept[0] === key;
+}
+
+function taskTypeContainsKey(name, key) {
+  if (name === null || name === undefined) {
+    return false;
+  }
+  return pomodoroThemeSplitComponents(String(name)).some(
+    (component) => pomodoroThemeNormalizeKey(component) === key,
+  );
+}
+
+// Where Bob puts the Pomodoro for type T (D7). Unlike menus, placement may
+// create entries for unknown or unconfigured names. With no effective type
+// the caller keeps today's implicit current/next selection.
+function planPlacement(input) {
+  const opts = input && typeof input === "object" ? input : {};
+  if (opts.typeKey === null || opts.typeKey === undefined || opts.typeKey === "") {
+    return { kind: "noType" };
+  }
+  const key = pomodoroThemeNormalizeKey(opts.typeKey);
+  if (!key) {
+    return { kind: "noType" };
+  }
+  if (opts.alreadyQueued === true) {
+    return { kind: "alreadyQueued" };
+  }
+  const entries = Array.isArray(opts.entries) ? opts.entries : [];
+  const exempt = new Set(
+    (Array.isArray(opts.exempt) ? opts.exempt : [])
+      .map((value) => pomodoroThemeNormalizeKey(value))
+      .filter(Boolean),
+  );
+  const runningExact = entries.findIndex(
+    (entry) => entry && entry.open === true && entry.running === true
+      && taskTypeIsExactEntry(entry.name, key, exempt),
+  );
+  if (runningExact >= 0) {
+    return { kind: "entry", index: runningExact };
+  }
+  const openExact = entries.findIndex(
+    (entry) => entry && entry.open === true && entry.running !== true
+      && taskTypeIsExactEntry(entry.name, key, exempt),
+  );
+  if (openExact >= 0) {
+    return { kind: "entry", index: openExact };
+  }
+  const containing = entries.findIndex(
+    (entry) => entry && entry.open === true
+      && taskTypeContainsKey(entry.name, key),
+  );
+  if (containing >= 0) {
+    return { kind: "entry", index: containing };
+  }
+  const ledgerKeys = new Set(
+    (Array.isArray(opts.ledgerKeys) ? opts.ledgerKeys : [])
+      .map((value) => pomodoroThemeNormalizeKey(value))
+      .filter(Boolean),
+  );
+  const addsTheme = !exempt.has(key) && !ledgerKeys.has(key);
+  const strict = opts.strict === true;
+  const themesBefore = Number(opts.themesBefore) || 0;
+  const cap = Number(opts.cap) || 0;
+  if (strict && addsTheme && themesBefore + 1 > cap) {
+    return { kind: "refused", code: "strict_cap" };
+  }
+  const name = typeof opts.typeName === "string" && opts.typeName
+    ? opts.typeName
+    : key;
+  return { kind: "create", name };
+}
+
+// Replace an entry's type components with X, keeping labels in order with X
+// in the first type component's position.
+function replaceTypeComponents(name, typeName, sources) {
+  const fallback = typeof typeName === "string" && typeName ? typeName : "";
+  if (name === null || name === undefined) {
+    return fallback;
+  }
+  const classified = typeComponents(name, sources);
+  if (classified.length === 0) {
+    return fallback;
+  }
+  const parts = [];
+  let placed = false;
+  for (const item of classified) {
+    if (!item.isType) {
+      parts.push(item.name);
+    } else if (!placed) {
+      parts.push(fallback);
+      placed = true;
+    }
+  }
+  if (!placed) {
+    parts.push(fallback);
+  }
+  return parts.join(" + ");
+}
+
+// What happens to the live ledger when a task's type becomes X (D8,
+// `running_retype = absorb`: running entries keep the task).
+function planRelocation(input) {
+  const opts = input && typeof input === "object" ? input : {};
+  const entries = Array.isArray(opts.entries) ? opts.entries : [];
+  const from = opts.liveLink;
+  if (!Number.isInteger(from) || from < 0 || from >= entries.length) {
+    return { kind: "unchanged" };
+  }
+  const entry = entries[from];
+  if (!entry || entry.open !== true) {
+    return { kind: "unchanged" };
+  }
+  const key = pomodoroThemeNormalizeKey(opts.typeKey);
+  if (!key) {
+    return { kind: "unchanged" };
+  }
+  const typeName = typeof opts.typeName === "string" && opts.typeName
+    ? opts.typeName
+    : key;
+  if (typeAgrees(key, entry.name, opts.sources)) {
+    return { kind: "unchanged" };
+  }
+  if (entry.running === true) {
+    if (Number(entry.links) <= 1) {
+      return {
+        kind: "renameEntry",
+        index: from,
+        newName: replaceTypeComponents(entry.name, typeName, opts.sources),
+      };
+    }
+    const base = entry.name === null || entry.name === undefined
+      ? ""
+      : String(entry.name);
+    return {
+      kind: "appendComponent",
+      index: from,
+      newName: `${base} + ${typeName}`,
+    };
+  }
+  // Steps 1-3 of place(X), skipping running entries.
+  const planned = entries.map((item) => ({
+    name: item ? item.name : null,
+    open: !!item && item.open === true && item.running !== true,
+    running: false,
+  }));
+  const sets = normalizeTaskTypeSources(opts.sources);
+  const placed = planPlacement({
+    typeKey: key,
+    typeName,
+    entries: planned,
+    exempt: [...sets.exempt],
+    ledgerKeys: opts.ledgerKeys,
+    themesBefore: opts.themesBefore,
+    cap: opts.cap,
+    strict: false,
+    alreadyQueued: false,
+  });
+  if (placed.kind === "entry" && placed.index !== from) {
+    return { kind: "moveTo", from, to: placed.index };
+  }
+  if (Number(entry.links) <= 1) {
+    return {
+      kind: "renamePlaceholder",
+      index: from,
+      newName: replaceTypeComponents(entry.name, typeName, opts.sources),
+    };
+  }
+  const ledgerKeys = new Set(
+    (Array.isArray(opts.ledgerKeys) ? opts.ledgerKeys : [])
+      .map((value) => pomodoroThemeNormalizeKey(value))
+      .filter(Boolean),
+  );
+  const addsTheme = !sets.exempt.has(key) && !ledgerKeys.has(key);
+  const strict = opts.strict === true;
+  const themesBefore = Number(opts.themesBefore) || 0;
+  const cap = Number(opts.cap) || 0;
+  if (strict && addsTheme && themesBefore + 1 > cap) {
+    return { kind: "refused", code: "strict_cap" };
+  }
+  return { kind: "createBelow", from, name: typeName };
 }
 // ---- src/279-plugin-task-theme-marks.js ----
 // --- Task theme marks: pure explicit-field mark model ---------------------
@@ -55629,9 +56095,209 @@ class BobLedgerToolsTaskThemeApiMixin {
       taskThemeOf: (text) => pomodoroThemeTaskFieldState(text),
       setTaskTheme: (text, name) => pomodoroThemeSetTaskTheme(text, name),
       clearTaskTheme: (text) => pomodoroThemeClearTaskTheme(text),
-      planThemeChange: (options) => pomodoroThemePlanChange(options),
+      planThemeChange: (options) => this.pomodoroThemePlanThemeChange(options),
+      effectiveTypeFor: (request) => this.taskTypeEffectiveTypeFor(request),
+      typeComponentsOf: (name) => this.taskTypeComponentsOf(name),
+      typeAgrees: (taskKey, entryName) => this.taskTypeAgrees(taskKey, entryName),
+      planRetype: (options) => this.taskTypePlanRetype(options),
+      planPlacement: (options) => this.taskTypePlanPlacement(options),
+      planRelocation: (options) => this.taskTypePlanRelocation(options),
       isKnownTheme: (key) => this.pomodoroThemeIsKnown(key),
     });
+  }
+
+  // Routing sources for the task-type planners: the vocabulary comes from
+  // the configured-rows snapshot, exempt and inventory labels from plan
+  // caps. Never throws; unknown caps degrade to the plan defaults.
+  taskTypeSources() {
+    try {
+      const rows = this.pomodoroThemesConfiguredRows();
+      const vocab = Array.isArray(rows) && rows.length > 0
+        ? rows.map((row) => row && row.key).filter(Boolean)
+        : null;
+      let exempt = ["PLAN"];
+      let inventory = [];
+      try {
+        const caps = loadPlanCaps().caps;
+        if (caps && Array.isArray(caps.exempt)) {
+          exempt = caps.exempt;
+        }
+        if (caps && Array.isArray(caps.inventoryLabels)) {
+          inventory = caps.inventoryLabels;
+        }
+      } catch (error) {
+        // Plan caps stay at their documented defaults.
+      }
+      return { vocab, exempt, inventory };
+    } catch (error) {
+      return { vocab: null, exempt: ["PLAN"], inventory: [] };
+    }
+  }
+
+  taskTypeComponentsOf(name) {
+    try {
+      return typeComponents(name, this.taskTypeSources());
+    } catch (error) {
+      return [];
+    }
+  }
+
+  taskTypeAgrees(taskKey, entryName) {
+    try {
+      const key = taskKey && typeof taskKey === "object"
+        ? pomodoroThemeKeyOf(taskKey.theme || taskKey)
+        : taskKey;
+      return typeAgrees(key, entryName, this.taskTypeSources());
+    } catch (error) {
+      return true;
+    }
+  }
+
+  taskTypePlanRetype(options) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      const effective = opts.effective !== undefined ? opts.effective : opts.suggestion;
+      const inherited = opts.inheritedKey !== undefined ? opts.inheritedKey : opts.inherited;
+      return planRetype(
+        {
+          field: opts.field,
+          effectiveKey: effective && typeof effective === "object"
+            ? pomodoroThemeKeyOf(effective.theme || effective)
+            : effective,
+          effectiveName: taskTypeThemeNameOf(effective),
+          inheritedKey: inherited && typeof inherited === "object"
+            ? pomodoroThemeKeyOf(inherited.theme || inherited)
+            : inherited,
+          destination: opts.destination !== undefined ? opts.destination : opts.destinationName,
+          selector: opts.selector,
+          keepType: opts.keepType,
+          tabPick: opts.tabPick,
+        },
+        opts.sources !== undefined ? opts.sources : this.taskTypeSources(),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskTypeLedgerKeysAndCount(overrides) {
+    const opts = overrides && typeof overrides === "object" ? overrides : {};
+    if (Array.isArray(opts.ledgerKeys)) {
+      return {
+        ledgerKeys: opts.ledgerKeys,
+        themesBefore: Number.isInteger(opts.themesBefore)
+          ? opts.themesBefore
+          : opts.ledgerKeys.length,
+      };
+    }
+    try {
+      const dailyPath = this.pomodoroThemeTodayPath();
+      const names = this.pomodoroThemeTodayNames(
+        dailyPath,
+        typeof opts.path === "string" ? opts.path : "",
+        typeof opts.text === "string" ? opts.text : undefined,
+      );
+      const keys = names instanceof Map ? [...names.keys()] : [];
+      return {
+        ledgerKeys: keys,
+        themesBefore: Number.isInteger(opts.themesBefore)
+          ? opts.themesBefore
+          : keys.length,
+      };
+    } catch (error) {
+      return { ledgerKeys: [], themesBefore: 0 };
+    }
+  }
+
+  taskTypePlanPlacement(options) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      let exempt;
+      let cap;
+      let strict;
+      try {
+        const caps = loadPlanCaps().caps;
+        exempt = caps.exempt;
+        cap = caps.maxThemes;
+        strict = caps.strict;
+      } catch (error) {
+        exempt = ["PLAN"];
+        cap = 3;
+        strict = false;
+      }
+      const ledger = this.taskTypeLedgerKeysAndCount(opts);
+      return planPlacement({
+        typeKey: opts.typeKey !== undefined ? opts.typeKey : opts.type,
+        typeName: opts.typeName,
+        entries: opts.entries,
+        exempt: opts.exempt !== undefined ? opts.exempt : exempt,
+        ledgerKeys: ledger.ledgerKeys,
+        themesBefore: ledger.themesBefore,
+        cap: opts.cap !== undefined ? opts.cap : cap,
+        strict: opts.strict !== undefined ? opts.strict : strict,
+        alreadyQueued: opts.alreadyQueued,
+      });
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskTypePlanRelocation(options) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      let cap;
+      let strict;
+      try {
+        const caps = loadPlanCaps().caps;
+        cap = caps.maxThemes;
+        strict = caps.strict;
+      } catch (error) {
+        cap = 3;
+        strict = false;
+      }
+      const ledger = this.taskTypeLedgerKeysAndCount(opts);
+      return planRelocation({
+        entries: opts.entries,
+        liveLink: opts.liveLink,
+        typeKey: opts.typeKey !== undefined ? opts.typeKey : opts.type,
+        typeName: opts.typeName,
+        sources: opts.sources !== undefined ? opts.sources : this.taskTypeSources(),
+        ledgerKeys: ledger.ledgerKeys,
+        themesBefore: ledger.themesBefore,
+        cap: opts.cap !== undefined ? opts.cap : cap,
+        strict: opts.strict !== undefined ? opts.strict : strict,
+      });
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Deprecated: the link-picker and Task Card phases replace this with
+  // `planRetype`. The default path keeps the legacy write rule byte for
+  // byte; only the keep-type path (`linkOnce`) delegates to `planRetype`.
+  pomodoroThemePlanThemeChange(options) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      if (opts.linkOnce === true) {
+        const outcome = this.taskTypePlanRetype({ ...opts, keepType: true });
+        if (!outcome) {
+          return { action: "none" };
+        }
+        if (outcome.kind === "merge") {
+          return { action: "merge", name: outcome.name };
+        }
+        if (outcome.kind === "set") {
+          return { action: "set", name: outcome.name, key: outcome.key };
+        }
+        if (outcome.kind === "clear") {
+          return { action: "clear" };
+        }
+        return { action: "none" };
+      }
+      return pomodoroThemePlanChange(opts);
+    } catch (error) {
+      return { action: "none" };
+    }
   }
 
   pomodoroThemeTodayPath() {
@@ -56041,6 +56707,11 @@ class BobLedgerToolsTaskThemeApiMixin {
   }
 
   pomodoroThemeSuggestFor(request) {
+    const suggestion = this.taskTypeEffectiveTypeFor(request);
+    return suggestion;
+  }
+
+  taskTypeEffectiveTypeFor(request) {
     try {
       const input = this.pomodoroThemeReadTaskLine(request);
       if (!input) {
@@ -56067,6 +56738,10 @@ class BobLedgerToolsTaskThemeApiMixin {
             caps && Object.prototype.hasOwnProperty.call(caps, "readingTheme")
               ? caps.readingTheme
               : "READ",
+          defaultType:
+            caps && Object.prototype.hasOwnProperty.call(caps, "defaultType")
+              ? caps.defaultType
+              : null,
         },
         themeRef: (key, name, known) => this.pomodoroThemeRef(key, name, known),
       });
@@ -56075,6 +56750,26 @@ class BobLedgerToolsTaskThemeApiMixin {
       return null;
     }
   }
+}
+
+function taskTypeThemeNameOf(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const theme = value.theme && typeof value.theme === "object" ? value.theme : null;
+  if (theme && typeof theme.name === "string" && theme.name) {
+    return theme.name;
+  }
+  if (typeof value.name === "string" && value.name) {
+    return value.name;
+  }
+  if (theme && typeof theme.key === "string" && theme.key) {
+    return theme.key;
+  }
+  return null;
 }
 // ---- src/279-plugin-pomodoro-theme-chips.js ----
 // --- Pomodoro theme pills: Live Preview --------------------------------
@@ -65894,6 +66589,15 @@ module.exports.helpers = {
   pomodoroThemeSuggestWithDiagnostics,
   pomodoroHomeResolveTaskThemeFacts,
   pomodoroThemeNoteDefault,
+  pomodoroThemeParseSingleNoteDefault,
+  pomodoroThemeDefaultTypeName,
+  typeComponents,
+  typeAgrees,
+  planRetype,
+  planPlacement,
+  planRelocation,
+  replaceTypeComponents,
+  taskTypeThemeNameOf,
   rootMarkFieldState,
   rootMarkRootPath,
   rootMarkLinksTarget,

@@ -6036,6 +6036,22 @@ function blockPomodoroThemeAvailable(api) {
 
 function blockPomodoroThemeComponents(api, name) {
   try {
+    if (api && typeof api.typeComponentsOf === "function") {
+      const rows = api.typeComponentsOf(name);
+      if (Array.isArray(rows)) {
+        const mapped = [];
+        for (const row of rows) {
+          if (row && typeof row.name === "string" && typeof row.key === "string") {
+            mapped.push({ raw: row.name, key: row.key });
+          }
+        }
+        return mapped;
+      }
+    }
+  } catch (_error) {
+    // The picker stays usable if a newer themes namespace misbehaves.
+  }
+  try {
     if (api && typeof api.componentsOf === "function") {
       const rows = api.componentsOf(name);
       if (Array.isArray(rows)) {

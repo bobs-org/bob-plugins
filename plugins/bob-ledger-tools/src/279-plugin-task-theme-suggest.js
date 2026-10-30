@@ -125,6 +125,9 @@ function pomodoroThemeResolveNoteDefault(path, line, options) {
     if (theme.kind === "absent") {
       continue;
     }
+    if (theme.conflict === true) {
+      result.warnings.push({ code: "type_default_conflict", path: item.path });
+    }
     if (theme.kind === "off") {
       return result;
     }
@@ -163,14 +166,66 @@ function pomodoroThemeResolveNoteDefault(path, line, options) {
   return result;
 }
 
+function pomodoroThemeDefaultTypeName(config) {
+  const source = config && typeof config === "object" ? config : {};
+  const raw =
+    source.default_type !== undefined
+      ? source.default_type
+      : source.defaultType !== undefined
+        ? source.defaultType
+        : null;
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.toLowerCase() === "off") {
+    return null;
+  }
+  return pomodoroThemeCanonicalName(trimmed);
+}
+
+function pomodoroThemeWithGlobalDefault(resolved, config, options) {
+  const settled = resolved && typeof resolved === "object"
+    ? resolved
+    : { suggestion: null, warnings: [] };
+  if (settled.suggestion) {
+    return settled;
+  }
+  const name = pomodoroThemeDefaultTypeName(config);
+  if (!name) {
+    return settled;
+  }
+  const key = pomodoroThemeNormalizeKey(name);
+  return {
+    suggestion: pomodoroThemeMakeSuggestion(
+      key,
+      name,
+      "default",
+      "default type",
+      options,
+    ),
+    warnings: settled.warnings,
+  };
+}
+
 function pomodoroThemeResolveWithoutTaskField(path, line, options) {
   const config = options.config && typeof options.config === "object" ? options.config : {};
+  // `reading_type` is canonical; `reading_theme` stays a legacy alias.
+  // A both-present block is rejected by coercePlanCaps; the resolver
+  // prefers the canonical spelling.
   const configuredReading =
-    config.readingTheme !== undefined
-      ? config.readingTheme
-      : config.reading_theme !== undefined
-        ? config.reading_theme
-        : "READ";
+    config.reading_type !== undefined
+      ? config.reading_type
+      : config.readingType !== undefined
+        ? config.readingType
+        : config.readingTheme !== undefined
+          ? config.readingTheme
+          : config.reading_theme !== undefined
+            ? config.reading_theme
+            : "READ";
   const readingName =
     configuredReading === null ||
     (typeof configuredReading === "string" && configuredReading.trim().toLowerCase() === "off")
@@ -189,14 +244,22 @@ function pomodoroThemeResolveWithoutTaskField(path, line, options) {
       warnings: [],
     };
   }
-  return pomodoroThemeResolveNoteDefault(path, line, options);
+  return pomodoroThemeWithGlobalDefault(
+    pomodoroThemeResolveNoteDefault(path, line, options),
+    config,
+    options,
+  );
 }
 
 function pomodoroThemeSuggestWithDiagnostics(options = {}) {
   const opts = options && typeof options === "object" ? options : {};
   const path = typeof opts.path === "string" ? opts.path : "";
   if (opts.newTask === true) {
-    return pomodoroThemeResolveNoteDefault(path, null, opts);
+    return pomodoroThemeWithGlobalDefault(
+      pomodoroThemeResolveNoteDefault(path, null, opts),
+      opts.config,
+      opts,
+    );
   }
   const line = String(opts.line == null ? "" : opts.line);
   const mark = pomodoroThemeTaskMark(line);

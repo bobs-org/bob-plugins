@@ -338,14 +338,14 @@ test("Ctrl+Enter carries per-task theme intents through both pick normalizers an
   await pressCtrlEnterAndSettle(plugin, editor);
 
   assert.match(editor.getLine(0), /^- \[x\]/, "the real Ctrl+Enter close landed");
-  assert.match(harness.getSource("a.md"), /\[theme:: BUILD\]/);
-  assert.match(harness.getSource("b.md"), /\[theme:: FIX\]/);
-  assert.match(harness.getSource(DAILY_PATH), /\[theme:: DEEP\]/);
+  assert.match(harness.getSource("a.md"), /\[type:: BUILD\]/);
+  assert.match(harness.getSource("b.md"), /\[type:: FIX\]/);
+  assert.match(harness.getSource(DAILY_PATH), /\[type:: DEEP\]/);
   assert.match(harness.getSource("a.md"), /\[\*\].*\^changelog/);
   assert.match(harness.getSource("b.md"), /\[\*\].*\^launch/);
   assert.match(harness.getSource(DAILY_PATH), /\t- \[\[a#\^changelog\]\]/);
   assert.match(harness.getSource(DAILY_PATH), /\t- \[\[b#\^launch\]\]/);
-  assert.match(harness.getSource(DAILY_PATH), /\[\*\] #task Local follow-up.*\[theme:: DEEP\]/);
+  assert.match(harness.getSource(DAILY_PATH), /\[\*\] #task Local follow-up.*\[type:: DEEP\]/);
   assert.ok(harness.getSource(DAILY_PATH).includes(`\t- [[${DAILY_PATH.split("/").pop().replace(/\.md$/i, "")}#^local]]`));
   assert.equal(suggestCalls.some((request) => request.path === "a.md"), true);
   assert.equal(suggestCalls.some((request) => request.path === "b.md"), true);
@@ -495,7 +495,7 @@ test("project-finished successor writes its selected theme with real task-theme 
 
   assert.equal(result.resolved, true);
   assert.equal(result.changed, true);
-  assert.match(harness.getSource(parentPath), /^- \[\*\] #task #prj Parent project \[theme:: BUILD\] \^prj$/m);
+  assert.match(harness.getSource(parentPath), /^- \[\*\] #task #prj Parent project \[type:: BUILD\] \^prj$/m);
   assert.doesNotMatch(harness.getSource(parentPath), /#hide/);
   assert.match(editor.getValue(), /\t- \[\[parent#\^prj\]\]/);
   assert.equal(seen.length, 1);
@@ -560,7 +560,7 @@ test("successor theme save remains truthful when the later daily-link write fail
 
   await pressCtrlEnterAndSettle(plugin, editor);
 
-  assert.match(harness.getSource("a.md"), /\[theme:: BUILD\]/);
+  assert.match(harness.getSource("a.md"), /\[type:: BUILD\]/);
   assert.ok(writes.includes("a.md"), "the guarded task-note edit was saved first");
   assert.ok(writes.includes(DAILY_PATH), "the daily insertion was attempted afterward");
   assert.equal(finalized.successors.failure.count, 1);

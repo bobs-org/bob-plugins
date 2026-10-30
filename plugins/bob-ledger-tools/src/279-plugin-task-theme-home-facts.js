@@ -63,24 +63,53 @@ function pomodoroHomeResolveTaskThemeFacts(
   }
 }
 
-function pomodoroThemeNoteDefault(frontmatter) {
-  if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) {
-    return { kind: "absent" };
-  }
-  const raw = frontmatter.theme;
+function pomodoroThemeParseSingleNoteDefault(raw) {
   if (raw === undefined || raw === null) {
-    return { kind: "absent" };
+    return null;
   }
   if (typeof raw !== "string") {
     return { kind: "invalid" };
   }
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { kind: "absent" };
+    return null;
   }
   if (trimmed.toLowerCase() === "off") {
     return { kind: "off" };
   }
   const name = pomodoroThemeCanonicalName(trimmed);
   return name ? { kind: "name", name } : { kind: "invalid" };
+}
+
+function pomodoroThemeNoteDefaultsEqual(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (left.kind === "name") {
+    return left.name === right.name;
+  }
+  return true;
+}
+
+function pomodoroThemeNoteDefault(frontmatter) {
+  if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) {
+    return { kind: "absent" };
+  }
+  const canonical = pomodoroThemeParseSingleNoteDefault(frontmatter.task_type);
+  const legacy = pomodoroThemeParseSingleNoteDefault(frontmatter.theme);
+  const conflict =
+    canonical !== null &&
+    legacy !== null &&
+    !pomodoroThemeNoteDefaultsEqual(canonical, legacy);
+  const winning = canonical !== null ? canonical : legacy;
+  if (winning === null) {
+    return { kind: "absent" };
+  }
+  if (conflict) {
+    return { ...winning, conflict: true };
+  }
+  return { ...winning };
 }

@@ -39,6 +39,7 @@ function defaultPlanCaps() {
     exempt: ["PLAN"],
     inventoryLabels: ["LATER", "MISC", "NEW FEATURES", "SASE"],
     readingTheme: "READ",
+    defaultType: null,
   };
 }
 
@@ -116,6 +117,7 @@ function effectivePlanCaps(caps) {
       defaults.inventoryLabels,
     ),
     readingTheme: planEffectiveReadingTheme(raw.readingTheme, defaults.readingTheme),
+    defaultType: planEffectiveDefaultType(raw.defaultType, defaults.defaultType),
   };
 }
 
@@ -124,6 +126,17 @@ function planEffectiveReadingTheme(value, fallback) {
     return fallback;
   }
   if (value === null || (typeof value === "string" && value.trim().toLowerCase() === "off")) {
+    return null;
+  }
+  const canonical = pomodoroThemeCanonicalName(value);
+  return canonical || fallback;
+}
+
+function planEffectiveDefaultType(value, fallback) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (typeof value === "string" && value.trim().toLowerCase() === "off") {
     return null;
   }
   const canonical = pomodoroThemeCanonicalName(value);
@@ -221,18 +234,46 @@ function coercePlanCaps(block) {
       strict = strictValue;
     }
   }
+  // `reading_type` is canonical; `reading_theme` stays a legacy alias.
+  // Both present is a plan config error, reported here as an invalid block.
+  const readingTypeValue =
+    raw.reading_type !== undefined ? raw.reading_type : raw.readingType;
   const readingThemeValue = pick("reading_theme", "readingTheme");
+  if (readingTypeValue !== undefined && readingThemeValue !== undefined) {
+    invalid = true;
+  }
+  const readingValue =
+    readingTypeValue !== undefined ? readingTypeValue : readingThemeValue;
   let readingTheme = defaults.readingTheme;
-  if (readingThemeValue !== undefined) {
-    if (typeof readingThemeValue === "string") {
-      if (readingThemeValue.trim().toLowerCase() === "off") {
+  if (readingValue !== undefined) {
+    if (typeof readingValue === "string") {
+      if (readingValue.trim().toLowerCase() === "off") {
         readingTheme = null;
       } else {
-        const canonical = pomodoroThemeCanonicalName(readingThemeValue);
+        const canonical = pomodoroThemeCanonicalName(readingValue);
         if (!canonical) {
           invalid = true;
         } else {
           readingTheme = canonical;
+        }
+      }
+    } else {
+      invalid = true;
+    }
+  }
+  const defaultTypeValue =
+    raw.default_type !== undefined ? raw.default_type : raw.defaultType;
+  let defaultType = defaults.defaultType;
+  if (defaultTypeValue !== undefined && defaultTypeValue !== null) {
+    if (typeof defaultTypeValue === "string") {
+      if (defaultTypeValue.trim().toLowerCase() === "off") {
+        defaultType = null;
+      } else {
+        const canonical = pomodoroThemeCanonicalName(defaultTypeValue);
+        if (!canonical) {
+          invalid = true;
+        } else {
+          defaultType = canonical;
         }
       }
     } else {
@@ -260,6 +301,7 @@ function coercePlanCaps(block) {
       defaults.inventoryLabels,
     ),
     readingTheme,
+    defaultType,
   };
   // Like Rust, any invalid value falls back to the full default block.
   if (invalid) {

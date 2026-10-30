@@ -485,7 +485,7 @@ test("real Ledger Tools planner writes with an empty exempt list and custom exem
       },
     });
     assert.equal(result, true);
-    assert.equal(editor.getValue(), `- [*] #task Ship it [theme:: ${item.expected}] ^ship`);
+    assert.equal(editor.getValue(), `- [*] #task Ship it [type:: ${item.expected}] ^ship`);
     assert.equal(setterCalls[0][0], "set");
     assert.match(lastNotice(), new RegExp(`task theme ${item.expected}$`));
   }

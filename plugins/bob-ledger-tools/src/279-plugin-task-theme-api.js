@@ -23,9 +23,209 @@ class BobLedgerToolsTaskThemeApiMixin {
       taskThemeOf: (text) => pomodoroThemeTaskFieldState(text),
       setTaskTheme: (text, name) => pomodoroThemeSetTaskTheme(text, name),
       clearTaskTheme: (text) => pomodoroThemeClearTaskTheme(text),
-      planThemeChange: (options) => pomodoroThemePlanChange(options),
+      planThemeChange: (options) => this.pomodoroThemePlanThemeChange(options),
+      effectiveTypeFor: (request) => this.taskTypeEffectiveTypeFor(request),
+      typeComponentsOf: (name) => this.taskTypeComponentsOf(name),
+      typeAgrees: (taskKey, entryName) => this.taskTypeAgrees(taskKey, entryName),
+      planRetype: (options) => this.taskTypePlanRetype(options),
+      planPlacement: (options) => this.taskTypePlanPlacement(options),
+      planRelocation: (options) => this.taskTypePlanRelocation(options),
       isKnownTheme: (key) => this.pomodoroThemeIsKnown(key),
     });
+  }
+
+  // Routing sources for the task-type planners: the vocabulary comes from
+  // the configured-rows snapshot, exempt and inventory labels from plan
+  // caps. Never throws; unknown caps degrade to the plan defaults.
+  taskTypeSources() {
+    try {
+      const rows = this.pomodoroThemesConfiguredRows();
+      const vocab = Array.isArray(rows) && rows.length > 0
+        ? rows.map((row) => row && row.key).filter(Boolean)
+        : null;
+      let exempt = ["PLAN"];
+      let inventory = [];
+      try {
+        const caps = loadPlanCaps().caps;
+        if (caps && Array.isArray(caps.exempt)) {
+          exempt = caps.exempt;
+        }
+        if (caps && Array.isArray(caps.inventoryLabels)) {
+          inventory = caps.inventoryLabels;
+        }
+      } catch (error) {
+        // Plan caps stay at their documented defaults.
+      }
+      return { vocab, exempt, inventory };
+    } catch (error) {
+      return { vocab: null, exempt: ["PLAN"], inventory: [] };
+    }
+  }
+
+  taskTypeComponentsOf(name) {
+    try {
+      return typeComponents(name, this.taskTypeSources());
+    } catch (error) {
+      return [];
+    }
+  }
+
+  taskTypeAgrees(taskKey, entryName) {
+    try {
+      const key = taskKey && typeof taskKey === "object"
+        ? pomodoroThemeKeyOf(taskKey.theme || taskKey)
+        : taskKey;
+      return typeAgrees(key, entryName, this.taskTypeSources());
+    } catch (error) {
+      return true;
+    }
+  }
+
+  taskTypePlanRetype(options) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      const effective = opts.effective !== undefined ? opts.effective : opts.suggestion;
+      const inherited = opts.inheritedKey !== undefined ? opts.inheritedKey : opts.inherited;
+      return planRetype(
+        {
+          field: opts.field,
+          effectiveKey: effective && typeof effective === "object"
+            ? pomodoroThemeKeyOf(effective.theme || effective)
+            : effective,
+          effectiveName: taskTypeThemeNameOf(effective),
+          inheritedKey: inherited && typeof inherited === "object"
+            ? pomodoroThemeKeyOf(inherited.theme || inherited)
+            : inherited,
+          destination: opts.destination !== undefined ? opts.destination : opts.destinationName,
+          selector: opts.selector,
+          keepType: opts.keepType,
+          tabPick: opts.tabPick,
+        },
+        opts.sources !== undefined ? opts.sources : this.taskTypeSources(),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskTypeLedgerKeysAndCount(overrides) {
+    const opts = overrides && typeof overrides === "object" ? overrides : {};
+    if (Array.isArray(opts.ledgerKeys)) {
+      return {
+        ledgerKeys: opts.ledgerKeys,
+        themesBefore: Number.isInteger(opts.themesBefore)
+          ? opts.themesBefore
+          : opts.ledgerKeys.length,
+      };
+    }
+    try {
+      const dailyPath = this.pomodoroThemeTodayPath();
+      const names = this.pomodoroThemeTodayNames(
+        dailyPath,
+        typeof opts.path === "string" ? opts.path : "",
+        typeof opts.text === "string" ? opts.text : undefined,
+      );
+      const keys = names instanceof Map ? [...names.keys()] : [];
+      return {
+        ledgerKeys: keys,
+        themesBefore: Number.isInteger(opts.themesBefore)
+          ? opts.themesBefore
+          : keys.length,
+      };
+    } catch (error) {
+      return { ledgerKeys: [], themesBefore: 0 };
+    }
+  }
+
+  taskTypePlanPlacement(options) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      let exempt;
+      let cap;
+      let strict;
+      try {
+        const caps = loadPlanCaps().caps;
+        exempt = caps.exempt;
+        cap = caps.maxThemes;
+        strict = caps.strict;
+      } catch (error) {
+        exempt = ["PLAN"];
+        cap = 3;
+        strict = false;
+      }
+      const ledger = this.taskTypeLedgerKeysAndCount(opts);
+      return planPlacement({
+        typeKey: opts.typeKey !== undefined ? opts.typeKey : opts.type,
+        typeName: opts.typeName,
+        entries: opts.entries,
+        exempt: opts.exempt !== undefined ? opts.exempt : exempt,
+        ledgerKeys: ledger.ledgerKeys,
+        themesBefore: ledger.themesBefore,
+        cap: opts.cap !== undefined ? opts.cap : cap,
+        strict: opts.strict !== undefined ? opts.strict : strict,
+        alreadyQueued: opts.alreadyQueued,
+      });
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskTypePlanRelocation(options) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      let cap;
+      let strict;
+      try {
+        const caps = loadPlanCaps().caps;
+        cap = caps.maxThemes;
+        strict = caps.strict;
+      } catch (error) {
+        cap = 3;
+        strict = false;
+      }
+      const ledger = this.taskTypeLedgerKeysAndCount(opts);
+      return planRelocation({
+        entries: opts.entries,
+        liveLink: opts.liveLink,
+        typeKey: opts.typeKey !== undefined ? opts.typeKey : opts.type,
+        typeName: opts.typeName,
+        sources: opts.sources !== undefined ? opts.sources : this.taskTypeSources(),
+        ledgerKeys: ledger.ledgerKeys,
+        themesBefore: ledger.themesBefore,
+        cap: opts.cap !== undefined ? opts.cap : cap,
+        strict: opts.strict !== undefined ? opts.strict : strict,
+      });
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Deprecated: the link-picker and Task Card phases replace this with
+  // `planRetype`. The default path keeps the legacy write rule byte for
+  // byte; only the keep-type path (`linkOnce`) delegates to `planRetype`.
+  pomodoroThemePlanThemeChange(options) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      if (opts.linkOnce === true) {
+        const outcome = this.taskTypePlanRetype({ ...opts, keepType: true });
+        if (!outcome) {
+          return { action: "none" };
+        }
+        if (outcome.kind === "merge") {
+          return { action: "merge", name: outcome.name };
+        }
+        if (outcome.kind === "set") {
+          return { action: "set", name: outcome.name, key: outcome.key };
+        }
+        if (outcome.kind === "clear") {
+          return { action: "clear" };
+        }
+        return { action: "none" };
+      }
+      return pomodoroThemePlanChange(opts);
+    } catch (error) {
+      return { action: "none" };
+    }
   }
 
   pomodoroThemeTodayPath() {
@@ -435,6 +635,11 @@ class BobLedgerToolsTaskThemeApiMixin {
   }
 
   pomodoroThemeSuggestFor(request) {
+    const suggestion = this.taskTypeEffectiveTypeFor(request);
+    return suggestion;
+  }
+
+  taskTypeEffectiveTypeFor(request) {
     try {
       const input = this.pomodoroThemeReadTaskLine(request);
       if (!input) {
@@ -461,6 +666,10 @@ class BobLedgerToolsTaskThemeApiMixin {
             caps && Object.prototype.hasOwnProperty.call(caps, "readingTheme")
               ? caps.readingTheme
               : "READ",
+          defaultType:
+            caps && Object.prototype.hasOwnProperty.call(caps, "defaultType")
+              ? caps.defaultType
+              : null,
         },
         themeRef: (key, name, known) => this.pomodoroThemeRef(key, name, known),
       });
@@ -469,4 +678,24 @@ class BobLedgerToolsTaskThemeApiMixin {
       return null;
     }
   }
+}
+
+function taskTypeThemeNameOf(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const theme = value.theme && typeof value.theme === "object" ? value.theme : null;
+  if (theme && typeof theme.name === "string" && theme.name) {
+    return theme.name;
+  }
+  if (typeof value.name === "string" && value.name) {
+    return value.name;
+  }
+  if (theme && typeof theme.key === "string" && theme.key) {
+    return theme.key;
+  }
+  return null;
 }

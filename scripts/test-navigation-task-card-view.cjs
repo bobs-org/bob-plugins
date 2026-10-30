@@ -1030,7 +1030,7 @@ test("Task Card theme stage shows a typed new theme on input and commits the rea
   pressKey(modal, "Enter");
   await nextTurn();
   const after = editor.getValue();
-  assert.match(after, /\[theme:: BRAND NEW\]/);
+  assert.match(after, /\[type:: BRAND NEW\]/);
   assert.match(after, /\[\[Notes\/Keep\]\]/);
   assert.match(after, /\[fresh:: today\]/);
   assert.match(after, /\[root:: project\]/);
@@ -1055,7 +1055,7 @@ test("Task Card theme row click and Ctrl+D use real setters and keep repair hist
   assert.ok(rowIndex >= 0);
   click(byClass(clicked.modal.resultsEl, "bob-cnp-row")[rowIndex]);
   await nextTurn();
-  assert.match(clickEditor.getValue(), /\[theme:: FIX\]/);
+  assert.match(clickEditor.getValue(), /\[type:: FIX\]/);
   assert.match(clickEditor.getValue(), /\[root:: work\]/);
   assert.equal(clicked.modal.isOpen, false);
 
@@ -1152,8 +1152,8 @@ test("counted Task Card theme edits use one editor transaction for all selected 
   click(byClass(modal.resultsEl, "bob-cnp-row")[fixIndex]);
   await nextTurn();
   const after = editor.getValue();
-  assert.match(after, /First .*\[theme:: FIX\].*\[root:: one\].*\^first/);
-  assert.match(after, /Second .*\[theme:: FIX\].*\[root:: two\].*\^second/);
+  assert.match(after, /First .*\[type:: FIX\].*\[root:: one\].*\^first/);
+  assert.match(after, /Second .*\[type:: FIX\].*\[root:: two\].*\^second/);
   assert.deepEqual(editor.writeCounts(), { transactions: 1, replacements: 0 });
   assert.equal(modal.isOpen, false);
 });
@@ -1182,8 +1182,8 @@ test("linked Task Card theme edits recompute full-note inheritance and write two
   const fixIndex = modal.visibleItems.findIndex((item) => item.themeKey === "fix");
   click(byClass(modal.resultsEl, "bob-cnp-row")[fixIndex]);
   await nextTurn();
-  assert.match(vault.notes["Tasks/Shared.md"], /Alpha .*\[theme:: FIX\].*\[root:: alpha-root\].*\^alpha/);
-  assert.match(vault.notes["Tasks/Shared.md"], /Beta .*\[theme:: FIX\].*\[root:: beta-root\].*\^beta/);
+  assert.match(vault.notes["Tasks/Shared.md"], /Alpha .*\[type:: FIX\].*\[root:: alpha-root\].*\^alpha/);
+  assert.match(vault.notes["Tasks/Shared.md"], /Beta .*\[type:: FIX\].*\[root:: beta-root\].*\^beta/);
   assert.deepEqual(vault.writes, ["Tasks/Shared.md", "Tasks/Shared.md"]);
   assert.ok(themeHarness.apiCalls.some((call) => call.text === note), "suggestFor receives the full matched note");
   assert.equal(modal.isOpen, false);
@@ -1215,7 +1215,7 @@ test("linked Task Card theme writes report a later-note failure as a partial sav
   const fixIndex = modal.visibleItems.findIndex((item) => item.themeKey === "fix");
   click(byClass(modal.resultsEl, "bob-cnp-row")[fixIndex]);
   await nextTurn();
-  assert.match(vault.notes["Tasks/Alpha.md"], /\[theme:: FIX\]/);
+  assert.match(vault.notes["Tasks/Alpha.md"], /\[type:: FIX\]/);
   assert.doesNotMatch(vault.notes["Tasks/Beta.md"], /\[theme:: FIX\]/);
   assert.ok(notices.some((message) => /Theme saved on 1 task · failed in 1 note/.test(message)));
   assert.equal(modal.isOpen, false);

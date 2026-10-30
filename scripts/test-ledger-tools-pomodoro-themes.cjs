@@ -95,6 +95,13 @@ const {
   pomodoroThemePlanChange,
   pomodoroThemeLedgerNames,
   pomodoroThemeSuggestWithDiagnostics,
+  pomodoroThemeNoteDefault,
+  pomodoroThemeDefaultTypeName,
+  typeComponents,
+  typeAgrees,
+  planRetype,
+  planPlacement,
+  planRelocation,
 } = LedgerToolsPlugin.helpers;
 
 const fixturePath = path.join(
@@ -664,13 +671,153 @@ test("theme write-rule vectors execute the deliberate-choice decision", () => {
   }
 });
 
+function routingSources(caseItem) {
+  return {
+    vocab: caseItem.vocab,
+    exempt: caseItem.exempt,
+    inventory: caseItem.inventory,
+  };
+}
+
+test("type vectors: agreement answers the D5 invariant", () => {
+  assert.ok(fixture.agree.length > 0, "vectors carry agree cases");
+  for (const item of fixture.agree) {
+    if (item.rust_only) {
+      continue;
+    }
+    assert.equal(
+      typeAgrees(item.task, item.entry, routingSources(item)),
+      item.expected,
+      `agree: ${item.name}`,
+    );
+  }
+});
+
+test("type vectors: retype keeps agreement with the D6 rule", () => {
+  assert.ok(fixture.retype.length > 0, "vectors carry retype cases");
+  for (const item of fixture.retype) {
+    if (item.rust_only) {
+      continue;
+    }
+    const got = planRetype(
+      {
+        field: item.field,
+        effectiveKey: item.effective,
+        effectiveName: item.effective_name,
+        inheritedKey: item.inherited,
+        destination: item.destination,
+        selector: item.selector,
+        keepType: item.keep_type,
+        tabPick: item.tab_pick,
+      },
+      routingSources(item),
+    );
+    assert.equal(got.kind, item.expected.kind, `retype kind: ${item.name}`);
+    if (item.expected.name !== undefined) {
+      assert.equal(got.name, item.expected.name, `retype name: ${item.name}`);
+    }
+    if (item.expected.key !== undefined) {
+      assert.equal(got.key, item.expected.key, `retype key: ${item.name}`);
+    }
+  }
+});
+
+test("type vectors: placement picks the Pomodoro for a type", () => {
+  assert.ok(fixture.place.length > 0, "vectors carry place cases");
+  const kinds = {
+    entry: "entry",
+    create: "create",
+    refused: "refused",
+    already_queued: "alreadyQueued",
+    no_type: "noType",
+  };
+  for (const item of fixture.place) {
+    if (item.rust_only) {
+      continue;
+    }
+    const got = planPlacement({
+      typeKey: item.type,
+      typeName: item.type_name,
+      entries: item.entries,
+      exempt: item.exempt,
+      ledgerKeys: item.ledger_keys,
+      themesBefore: item.themes_before,
+      cap: item.cap,
+      strict: item.strict,
+      alreadyQueued: item.already_queued,
+    });
+    assert.equal(got.kind, kinds[item.expected.kind], `place kind: ${item.name}`);
+    if (item.expected.index !== undefined) {
+      assert.equal(got.index, item.expected.index, `place index: ${item.name}`);
+    }
+    if (item.expected.name !== undefined) {
+      assert.equal(got.name, item.expected.name, `place name: ${item.name}`);
+    }
+    if (item.expected.code !== undefined) {
+      assert.equal(got.code, item.expected.code, `place code: ${item.name}`);
+    }
+  }
+});
+
+test("type vectors: relocation moves the live link with a type", () => {
+  assert.ok(fixture.relocate.length > 0, "vectors carry relocate cases");
+  const kinds = {
+    unchanged: "unchanged",
+    rename_entry: "renameEntry",
+    append_component: "appendComponent",
+    move_to: "moveTo",
+    rename_placeholder: "renamePlaceholder",
+    create_below: "createBelow",
+    refused: "refused",
+  };
+  for (const item of fixture.relocate) {
+    if (item.rust_only) {
+      continue;
+    }
+    const got = planRelocation({
+      entries: item.entries,
+      liveLink: item.live_link,
+      typeKey: item.type,
+      typeName: item.type_name,
+      sources: routingSources(item),
+      ledgerKeys: item.ledger_keys,
+      themesBefore: item.themes_before,
+      cap: item.cap,
+      strict: item.strict,
+    });
+    assert.equal(got.kind, kinds[item.expected.kind], `relocate kind: ${item.name}`);
+    if (item.expected.index !== undefined) {
+      assert.equal(got.index, item.expected.index, `relocate index: ${item.name}`);
+    }
+    if (item.expected.new_name !== undefined) {
+      assert.equal(got.newName, item.expected.new_name, `relocate name: ${item.name}`);
+    }
+    if (item.expected.from !== undefined) {
+      assert.equal(got.from, item.expected.from, `relocate from: ${item.name}`);
+    }
+    if (item.expected.to !== undefined) {
+      assert.equal(got.to, item.expected.to, `relocate to: ${item.name}`);
+    }
+    if (item.expected.name !== undefined) {
+      assert.equal(got.name, item.expected.name, `relocate create: ${item.name}`);
+    }
+    if (item.expected.code !== undefined) {
+      assert.equal(got.code, item.expected.code, `relocate code: ${item.name}`);
+    }
+  }
+});
+
 test("theme suggestion vectors execute Rust precedence, origins, diagnostics, and live names", () => {
   assert.ok(fixture.suggest.cases.length > 0);
   assert.deepEqual(obsidianFrontmatter(fixture.suggest.notes["unindented_list.md"]).theme, ["WRITE"]);
   const miniVault = createThemeMiniVault(fixture.suggest.notes);
   for (const item of fixture.suggest.cases) {
     const config = item.config
-      ? { reading_theme: item.config.reading_theme, exempt: item.config.exempt }
+      ? {
+        reading_theme: item.config.reading_theme,
+        exempt: item.config.exempt,
+        default_type: item.config.default_type,
+      }
       : { readingTheme: "READ", exempt: ["PLAN"] };
     const result = pomodoroThemeSuggestWithDiagnostics({
       path: item.residence,
@@ -734,6 +881,7 @@ test("task-theme API is additive, synchronous, path-bound, and read-only", () =>
     "available", "fetch", "snapshot", "isConfigured", "hueFor", "componentsOf",
     "historyRows", "similarTo", "hide", "unhide", "color", "rename", "onChange",
     "suggestFor", "taskThemeOf", "setTaskTheme", "clearTaskTheme", "planThemeChange", "isKnownTheme",
+    "effectiveTypeFor", "typeComponentsOf", "typeAgrees", "planRetype", "planPlacement", "planRelocation",
   ]) {
     assert.equal(typeof api[member], "function", `themes.${member} is present`);
   }
@@ -767,9 +915,14 @@ test("task-theme API is additive, synchronous, path-bound, and read-only", () =>
   assert.equal(api.suggestFor({ path: "Task.md", line: 3 }), null);
   assert.equal(api.suggestFor({ path: "Missing.md", line: 1, text: "- [ ] Plain task" }), null);
   assert.equal(api.taskThemeOf("- [ ] X (theme ::  WRITE )").value, "WRITE");
+  assert.equal(api.taskThemeOf("- [ ] X [type:: BUILD] [theme:: FIX] ^id").state, "repair");
+  assert.equal(api.taskThemeOf("- [ ] X [type:: BUILD] ^id").value, "BUILD");
   assert.equal(api.setTaskTheme("- [ ] 😀 Café [fresh:: 2026-10-28]", "WRITE"),
-    "- [ ] 😀 Café [theme:: WRITE] [fresh:: 2026-10-28]");
+    "- [ ] 😀 Café [type:: WRITE] [fresh:: 2026-10-28]");
+  assert.equal(api.setTaskTheme("- [ ] Café [theme:: WRITE] ^id", "FIX"),
+    "- [ ] Café [type:: FIX] ^id");
   assert.equal(api.clearTaskTheme("- [ ] Café [theme:: WRITE] ^id"), "- [ ] Café ^id");
+  assert.equal(api.clearTaskTheme("- [ ] Café [type:: WRITE] [theme:: FIX] ^id"), "- [ ] Café ^id");
   assert.deepEqual(
     api.planThemeChange({
       field: api.taskThemeOf("- [ ] Task"),
@@ -783,6 +936,235 @@ test("task-theme API is additive, synchronous, path-bound, and read-only", () =>
   );
   assert.equal(spawned, 0, "synchronous suggestions do not fetch history");
   assert.equal(writes, 0, "field helpers do not mutate the vault");
+});
+
+test("note defaults read task_type first with a conflict warning", () => {
+  assert.deepEqual(pomodoroThemeNoteDefault({ task_type: "BUILD", theme: "FIX" }), {
+    kind: "name",
+    name: "BUILD",
+    conflict: true,
+  });
+  assert.deepEqual(pomodoroThemeNoteDefault({ theme: "WRITE" }), {
+    kind: "name",
+    name: "WRITE",
+  });
+  assert.deepEqual(pomodoroThemeNoteDefault({ task_type: "off", theme: "off" }), {
+    kind: "off",
+  });
+  assert.deepEqual(pomodoroThemeNoteDefault({ task_type: "   " }), { kind: "absent" });
+  assert.deepEqual(pomodoroThemeNoteDefault({ task_type: ["BUILD"] }), { kind: "invalid" });
+  assert.equal(pomodoroThemeDefaultTypeName({ default_type: "chore" }), "CHORE");
+  assert.equal(pomodoroThemeDefaultTypeName({ defaultType: " off " }), null);
+  assert.equal(pomodoroThemeDefaultTypeName({}), null);
+  assert.equal(pomodoroThemeDefaultTypeName({ default_type: 7 }), null);
+});
+
+test("suggestion cascade falls through to plan.default_type", () => {
+  const miniVault = createThemeMiniVault({
+    "job.md": "---\ntype: [[area]]\ncolor: aqua\ntheme: WRITE\n---\n",
+    "both.md": "---\ntype: [[project]]\nparent: [[job]]\ntask_type: BUILD\ntheme: FIX\n---\n",
+  });
+  const base = {
+    dailyPath: "2026/20261028.md",
+    metadataCache: miniVault.metadataCache,
+    vault: miniVault.vault,
+    catalog: catalogForSuggest(),
+  };
+  const withDefault = (extra = {}) => ({
+    ...base,
+    config: { readingTheme: "READ", exempt: ["PLAN"], default_type: "CHORE", ...extra },
+  });
+  // No note default anywhere: the global default applies.
+  const fallback = pomodoroThemeSuggestWithDiagnostics({
+    ...withDefault(),
+    path: "nowhere.md",
+    line: "- [ ] Plain task ^x",
+  });
+  assert.equal(fallback.suggestion.source, "default");
+  assert.equal(fallback.suggestion.label, "default type");
+  assert.equal(fallback.suggestion.theme.key, "chore");
+  // `off` stops the note walk but still falls through to the default.
+  const offChild = createThemeMiniVault({
+    "dev.md": "---\ntype: [[area]]\ncolor: blue\ntheme: BUILD\n---\n",
+    "off_child.md": "---\ntype: [[project]]\nparent: [[dev]]\ntheme: off\n---\n",
+  });
+  const offResult = pomodoroThemeSuggestWithDiagnostics({
+    ...withDefault(),
+    metadataCache: offChild.metadataCache,
+    vault: offChild.vault,
+    path: "off_child.md",
+    line: "- [ ] No default here ^none",
+  });
+  assert.equal(offResult.suggestion.source, "default");
+  assert.equal(offResult.suggestion.theme.key, "chore");
+  // Daily notes have no walk of their own, so the default applies.
+  const daily = pomodoroThemeSuggestWithDiagnostics({
+    ...withDefault(),
+    path: "2026/20261028.md",
+    line: "- [ ] Plain task ^x",
+  });
+  assert.equal(daily.suggestion.source, "default");
+  // A note default still beats the global default.
+  const noted = pomodoroThemeSuggestWithDiagnostics({
+    ...withDefault(),
+    path: "job.md",
+    line: "- [ ] Work in job ^job",
+  });
+  assert.equal(noted.suggestion.source, "note");
+  assert.equal(noted.suggestion.theme.key, "write");
+  // Without a configured default the walk stays empty.
+  const noDefault = pomodoroThemeSuggestWithDiagnostics({
+    ...base,
+    config: { readingTheme: "READ", exempt: ["PLAN"] },
+    path: "nowhere.md",
+    line: "- [ ] Plain task ^x",
+  });
+  assert.equal(noDefault.suggestion, null);
+  // Closed tasks never take the default.
+  const closed = pomodoroThemeSuggestWithDiagnostics({
+    ...withDefault(),
+    path: "nowhere.md",
+    line: "- [x] Done task ^x",
+  });
+  assert.equal(closed.suggestion, null);
+  // A task_type/theme conflict warns and the canonical spelling wins.
+  const conflicted = pomodoroThemeSuggestWithDiagnostics({
+    ...withDefault(),
+    path: "both.md",
+    line: "- [ ] Both defaults ^both",
+  });
+  assert.equal(conflicted.suggestion.source, "note");
+  assert.equal(conflicted.suggestion.theme.key, "build");
+  assert.deepEqual(
+    conflicted.warnings.map((warning) => [warning.code, warning.path]),
+    [["type_default_conflict", "both.md"]],
+  );
+});
+
+test("planThemeChange keeps the legacy rule and merges only for linkOnce", () => {
+  const plugin = new LedgerToolsPlugin({});
+  plugin.pomodoroThemesCache = {
+    report: {
+      ...LedgerToolsPlugin.helpers.pomodoroThemesEmptyReport(),
+      configured_themes: [
+        { key: "build", name: "BUILD" },
+        { key: "fix", name: "FIX" },
+        { key: "write", name: "WRITE" },
+        { key: "chore", name: "CHORE" },
+      ],
+    },
+  };
+  const api = plugin.pomodoroThemesApi();
+  const shown = { theme: { key: "build", name: "BUILD", known: true } };
+  const inherited = { theme: { key: "chore", name: "CHORE", known: true } };
+  assert.deepEqual(
+    api.planThemeChange({
+      field: { state: "none" },
+      suggestion: shown,
+      inherited,
+      destinationName: "FIX",
+      exemptKeys: ["PLAN"],
+      deliberate: true,
+    }),
+    { action: "set", name: "FIX", key: "fix" },
+  );
+  assert.deepEqual(
+    api.planThemeChange({
+      field: { state: "none" },
+      suggestion: shown,
+      inherited,
+      destinationName: "FIX",
+      exemptKeys: ["PLAN"],
+      deliberate: true,
+      linkOnce: true,
+    }),
+    { action: "merge", name: "FIX + BUILD" },
+  );
+});
+
+test("themes routing API answers agreement, retype, placement, and relocation", () => {
+  const plugin = new LedgerToolsPlugin({});
+  plugin.pomodoroThemesCache = {
+    report: {
+      ...LedgerToolsPlugin.helpers.pomodoroThemesEmptyReport(),
+      configured_themes: [
+        { key: "build", name: "BUILD" },
+        { key: "fix", name: "FIX" },
+      ],
+    },
+  };
+  const api = plugin.pomodoroThemesApi();
+  assert.deepEqual(api.typeComponentsOf("BUILD + LATER"), [
+    { name: "BUILD", key: "build", isType: true },
+    { name: "LATER", key: "later", isType: false },
+  ]);
+  assert.equal(api.typeAgrees("build", "BUILD"), true);
+  assert.equal(api.typeAgrees("build", "FIX"), false);
+  assert.equal(api.typeAgrees(null, "FIX"), true);
+  const sources = {
+    vocab: ["BUILD", "CHORE", "FIX", "MEET", "PLAN", "READ", "WRITE"],
+    exempt: ["PLAN"],
+    inventory: ["LATER"],
+  };
+  assert.deepEqual(
+    api.planRetype({
+      effective: { theme: { key: "write", name: "WRITE" } },
+      inherited: { theme: { key: "chore", name: "CHORE" } },
+      destination: "BUILD + FIX",
+      sources,
+    }),
+    { kind: "set", name: "BUILD", key: "build" },
+  );
+  assert.deepEqual(
+    api.planPlacement({
+      type: "chore",
+      typeName: "CHORE",
+      entries: [],
+      exempt: ["PLAN"],
+      ledgerKeys: ["BUILD"],
+      themesBefore: 1,
+      cap: 3,
+      strict: false,
+    }),
+    { kind: "create", name: "CHORE" },
+  );
+  assert.deepEqual(
+    api.planRelocation({
+      entries: [{ name: "FIX", open: true, running: false, links: 2 }],
+      liveLink: 0,
+      type: "build",
+      typeName: "BUILD",
+      sources,
+      ledgerKeys: ["FIX"],
+      themesBefore: 1,
+      cap: 3,
+      strict: false,
+    }),
+    { kind: "createBelow", from: 0, name: "BUILD" },
+  );
+});
+
+test("effectiveTypeFor runs the suggest cascade for a task line", () => {
+  const miniVault = createThemeMiniVault({
+    "Task2.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme: BUILD\n---\n",
+    "job.md": "---\ntype: [[area]]\ncolor: aqua\ntheme: WRITE\n---\n",
+  });
+  const plugin = new LedgerToolsPlugin({
+    metadataCache: miniVault.metadataCache,
+    vault: miniVault.vault,
+  });
+  plugin.pomodoroThemesCache = {
+    report: LedgerToolsPlugin.helpers.pomodoroThemesEmptyReport(),
+  };
+  plugin.pomodoroThemeHueFor = () => ({ hue: "blue", hue_source: "area", configured: null });
+  const api = plugin.pomodoroThemesApi();
+  const suggestion = api.effectiveTypeFor({
+    path: "Task2.md",
+    line: 1,
+    text: "- [ ] Plain task ^x",
+  });
+  assert.equal(suggestion.source, "note");
+  assert.equal(suggestion.theme.key, "build");
 });
 
 test("muted exempt pill is gray while unconfigured stays transparent", () => {

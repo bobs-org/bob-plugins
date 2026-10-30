@@ -350,6 +350,7 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
     exempt: ["GTD", "ADMIN"],
     inventoryLabels: ["LATER"],
     readingTheme: "DEEP WORK",
+    defaultType: null,
   });
   assert.deepEqual(
     parsePlanCaps({
@@ -384,6 +385,40 @@ test("reading theme config defaults to READ, accepts off, and rejects invalid va
   assert.equal(listValue.invalid, true);
   assert.equal(listValue.caps.readingTheme, "READ");
   assert.equal(coercePlanCaps({ readingTheme: "BUILD + FIX" }).invalid, true);
+});
+
+test("reading_type is canonical with reading_theme as the legacy alias", () => {
+  assert.equal(
+    parsePlanCaps({ plan: { reading_type: " study  group " } }).readingTheme,
+    "STUDY GROUP",
+  );
+  assert.equal(
+    parsePlanCaps({ plan: { readingType: " off " } }).readingTheme,
+    null,
+  );
+  const both = coercePlanCaps({ reading_type: "READ", reading_theme: "READ" });
+  assert.equal(both.invalid, true);
+  assert.deepEqual(both.caps, defaultPlanCaps());
+  const mixed = coercePlanCaps({ readingType: "READ", reading_theme: "READ" });
+  assert.equal(mixed.invalid, true);
+});
+
+test("default_type config stays null without a name and rejects invalid values", () => {
+  assert.equal(defaultPlanCaps().defaultType, null);
+  assert.equal(
+    parsePlanCaps({ plan: { default_type: " chore " } }).defaultType,
+    "CHORE",
+  );
+  assert.equal(
+    parsePlanCaps({ plan: { defaultType: " off " } }).defaultType,
+    null,
+  );
+  assert.equal(parsePlanCaps({ plan: { default_type: null } }).defaultType, null);
+  assert.equal(parsePlanCaps({ plan: {} }).defaultType, null);
+  assert.equal(coercePlanCaps({ default_type: "BUILD + FIX" }).invalid, true);
+  assert.equal(coercePlanCaps({ default_type: 7 }).invalid, true);
+  const effective = parsePlanCaps({ plan: { default_type: "CHORE" } });
+  assert.equal(effective.readingTheme, "READ");
 });
 
 function laneTask(overrides = {}) {

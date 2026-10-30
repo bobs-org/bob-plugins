@@ -20,6 +20,8 @@ const DEMOTION_STALE_NOTICE =
   "The note changed. Retry Toggle Obsidian task to move the bullet.";
 const DEMOTION_MISSING_SECTION_NOTICE =
   "That section is no longer available. Retry Toggle Obsidian task to move the bullet.";
+const POMODOROS_TASK_MOVE_NOTICE =
+  "Task rows stay out of the Pomodoros ledger. Keep this row in Events.";
 const TASKS_DESTINATION_REJECTION = "Tasks is not a valid destination.";
 const TASK_SECTION_PROMPT_KIND = {
   promotion: "promotion",
@@ -199,6 +201,17 @@ function isLineInMarkdownSectionDirectBody(section, line) {
     return false;
   }
   return line > section.headingLine && line < section.nextHeadingLine;
+}
+
+function isColumnZeroTaskRow(line) {
+  return /^[-*+]\s+\[[ xX*?/-]\]\s+#task(?:\s|$)/i.test(String(line || ""));
+}
+
+function blocksTaskMoveIntoPomodoros(sourceLines, section) {
+  return Boolean(
+    section && normalizeHeadingTitle(section.title) === "pomodoros" &&
+    (Array.isArray(sourceLines) ? sourceLines : [sourceLines]).some(isColumnZeroTaskRow),
+  );
 }
 
 // Find the first Markdown section whose heading appears at or after startLine in

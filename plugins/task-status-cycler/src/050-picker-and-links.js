@@ -544,6 +544,9 @@ function getObsidianTaskToggleDocumentPlan(
   if (!nextSection) {
     return inPlacePlan;
   }
+  if (blocksTaskMoveIntoPomodoros(sourceLineText, nextSection)) {
+    return { mode: "refuse", message: POMODOROS_TASK_MOVE_NOTICE };
+  }
 
   return (
     buildObsidianTaskSectionMovePlan(

@@ -1357,6 +1357,8 @@ const DEMOTION_STALE_NOTICE =
   "The note changed. Retry Toggle Obsidian task to move the bullet.";
 const DEMOTION_MISSING_SECTION_NOTICE =
   "That section is no longer available. Retry Toggle Obsidian task to move the bullet.";
+const POMODOROS_TASK_MOVE_NOTICE =
+  "Task rows stay out of the Pomodoros ledger. Keep this row in Events.";
 const TASKS_DESTINATION_REJECTION = "Tasks is not a valid destination.";
 const TASK_SECTION_PROMPT_KIND = {
   promotion: "promotion",
@@ -1536,6 +1538,17 @@ function isLineInMarkdownSectionDirectBody(section, line) {
     return false;
   }
   return line > section.headingLine && line < section.nextHeadingLine;
+}
+
+function isColumnZeroTaskRow(line) {
+  return /^[-*+]\s+\[[ xX*?/-]\]\s+#task(?:\s|$)/i.test(String(line || ""));
+}
+
+function blocksTaskMoveIntoPomodoros(sourceLines, section) {
+  return Boolean(
+    section && normalizeHeadingTitle(section.title) === "pomodoros" &&
+    (Array.isArray(sourceLines) ? sourceLines : [sourceLines]).some(isColumnZeroTaskRow),
+  );
 }
 
 // Find the first Markdown section whose heading appears at or after startLine in
@@ -2808,6 +2821,9 @@ function getObsidianTaskToggleDocumentPlan(
   if (!nextSection) {
     return inPlacePlan;
   }
+  if (blocksTaskMoveIntoPomodoros(sourceLineText, nextSection)) {
+    return { mode: "refuse", message: POMODOROS_TASK_MOVE_NOTICE };
+  }
 
   return (
     buildObsidianTaskSectionMovePlan(
@@ -3234,7 +3250,7 @@ function getObsidianTaskToggleRangeDocumentPlan(
   const single = getObsidianTaskToggleDocumentPlan(
     lines, activeLine, cursorCh, createdDateString,
   );
-  if (!single || !Number.isInteger(additionalItems) || additionalItems <= 0) {
+  if (!single || single.mode === "refuse" || !Number.isInteger(additionalItems) || additionalItems <= 0) {
     return single;
   }
 
@@ -3299,6 +3315,9 @@ function getObsidianTaskToggleRangeDocumentPlan(
   const nextSection = findNextMarkdownSection(remaining, sourceBlocks[0].startLine);
   if (!nextSection) {
     return replacePlan;
+  }
+  if (blocksTaskMoveIntoPomodoros(items.map((item) => item.sourceLineText), nextSection)) {
+    return { mode: "refuse", message: POMODOROS_TASK_MOVE_NOTICE };
   }
   return buildObsidianTaskSectionMovePlan(
     remaining,
@@ -20211,6 +20230,11 @@ class TaskStatusCyclerEditorEditsMixin {
 
     if (plan.mode === "prompt") {
       return this.openDemotionSectionPicker(editor, view, plan);
+    }
+
+    if (plan.mode === "refuse") {
+      new Notice(plan.message || POMODOROS_TASK_MOVE_NOTICE);
+      return true;
     }
 
     if (plan.mode === "move") {

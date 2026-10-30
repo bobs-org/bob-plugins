@@ -51,7 +51,7 @@ function getObsidianTaskToggleRangeDocumentPlan(
   const single = getObsidianTaskToggleDocumentPlan(
     lines, activeLine, cursorCh, createdDateString,
   );
-  if (!single || !Number.isInteger(additionalItems) || additionalItems <= 0) {
+  if (!single || single.mode === "refuse" || !Number.isInteger(additionalItems) || additionalItems <= 0) {
     return single;
   }
 
@@ -116,6 +116,9 @@ function getObsidianTaskToggleRangeDocumentPlan(
   const nextSection = findNextMarkdownSection(remaining, sourceBlocks[0].startLine);
   if (!nextSection) {
     return replacePlan;
+  }
+  if (blocksTaskMoveIntoPomodoros(items.map((item) => item.sourceLineText), nextSection)) {
+    return { mode: "refuse", message: POMODOROS_TASK_MOVE_NOTICE };
   }
   return buildObsidianTaskSectionMovePlan(
     remaining,

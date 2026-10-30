@@ -36,6 +36,11 @@ class TaskStatusCyclerEditorEditsMixin {
       return this.openDemotionSectionPicker(editor, view, plan);
     }
 
+    if (plan.mode === "refuse") {
+      new Notice(plan.message || POMODOROS_TASK_MOVE_NOTICE);
+      return true;
+    }
+
     if (plan.mode === "move") {
       return this.applyObsidianTaskMovePlan(editor, plan, view);
     }

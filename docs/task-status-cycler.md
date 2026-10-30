@@ -74,7 +74,9 @@ and converts once to checkbox, `#task`, and `created`, including in-place when
 the bullet is already there; other destinations keep the bullet plain).
 Demoting from `Tasks` prompts for an existing or new destination; other
 demotions go to the next Markdown section, and emptied non-`Tasks` source
-sections are removed.
+sections are removed. The toggle refuses to move a column-zero `#task` row
+into `## Pomodoros` and shows a notice, so an Event Task cannot become a ledger
+entry.
 
 A Blocked `[?]` task cycles to Ready or Cancelled with `Alt+]` / `Alt+[` —
 retiring its own uniquely future `scheduled` date and prepending a `🔓

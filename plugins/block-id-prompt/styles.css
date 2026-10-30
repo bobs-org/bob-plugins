@@ -659,6 +659,20 @@
   clip: rect(0, 0, 0, 0);
 }
 
+.bid-twl-name-insert {
+  margin: 0 0 var(--size-2-3);
+  color: var(--link-color);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+
+.bid-twl-name-validation {
+  margin: 0 0 var(--size-2-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bid-twl-search,
   .bid-twl-row,

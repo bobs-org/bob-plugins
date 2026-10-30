@@ -1,6 +1,25 @@
 // `((` Task Wikilink Picker wiring: written-range accumulation, the
 // `link-task-wikilink` command, snapshot opens, and identified-link insert.
 
+function taskWikilinkLineForIdentity(content, task) {
+  const lines = String(content || "").split("\n");
+  if (
+    task && Number.isInteger(task.line) &&
+    lines[task.line] === task.rawLine
+  ) {
+    return { line: task.line, rawLine: task.rawLine };
+  }
+  const matches = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    if (lines[line] === (task && task.rawLine)) {
+      matches.push(line);
+    }
+  }
+  return matches.length === 1
+    ? { line: matches[0], rawLine: task.rawLine }
+    : null;
+}
+
 class BlockIdPromptTaskWikilinksMixin {
   ensureTaskWikilinkIndex() {
     if (this.taskWikilinkIndex) {
@@ -280,6 +299,33 @@ class BlockIdPromptTaskWikilinksMixin {
     const lineText = source.editor.getLine(source.line) || "";
     const current = lineText.slice(source.replaceStart, source.replaceEnd);
     return current === source.raw;
+  }
+
+  async validateTaskWikilinkId(source, id) {
+    if (!BLOCK_ID_RE.test(String(id || ""))) {
+      return { valid: false, message: "Use letters, numbers, and dashes" };
+    }
+    if (!this.taskWikilinkTokenStillPresent(source)) {
+      return { valid: false, message: "The ((…)) text changed" };
+    }
+    const destination = await this.readDestinationForValidation(source);
+    if (!destination || destination.content === null) {
+      return { valid: false, message: "The target note could not be checked" };
+    }
+    if (destination.file.path !== source.task.notePath) {
+      return { valid: false, message: "The task note no longer resolves" };
+    }
+    const task = taskWikilinkLineForIdentity(destination.content, source.task);
+    if (!task) {
+      return { valid: false, message: "The selected task moved or changed" };
+    }
+    if (getTrailingBlockId(task.rawLine)) {
+      return { valid: false, message: "The task already has a block ID" };
+    }
+    if (blockTokenMatches(destination.content, id).length > 0) {
+      return { valid: false, message: `^${id} already exists in ${destination.file.path}` };
+    }
+    return { valid: true, message: "Ready to add the ID and link" };
   }
 
   countTaskWikilinkBlockId(path, content, blockId) {

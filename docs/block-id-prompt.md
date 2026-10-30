@@ -98,8 +98,15 @@ and excluded contexts such as fenced code never open it.
 `((` differs from `^^`: it searches the whole vault, includes completed
 history, and names the note in every link (`[[note#^id]]`, never `[[#^id]]`).
 `^^` stays the per-note picker that completes a `[[note#` marker. Until a
-task has a block ID, the card explains that Enter will name it; naming itself
-lands in a later change.
+task has a block ID, Enter opens **Name this task to link it**. The prompt
+prefills and selects a suggested ID, shows the resulting block link, and checks
+for duplicate IDs in the target note. **Add ID & link** writes the ID and link;
+Back, Escape, or an outside click returns to the picker with its filter and
+selection restored. Closed tasks can be named outside `done/`; archived tasks,
+the previous daily note, duplicate IDs, unlinkable note names, and the task
+currently holding the `((` token stay guarded. If the task moved while the prompt
+was open, a unique exact line match lets Bob finish safely; ambiguous or changed
+lines leave the picker available for a fresh selection.
 
 Keys: `↑↓` move, `↵` / Tab insert the selected identified link, `esc` clears a
 filter or closes, and `⌫` on an empty filter undoes `((`.

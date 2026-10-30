@@ -557,7 +557,7 @@ test("^^ marker still opens the per-note picker when (( is absent", () => {
   assert.equal(harness.plugin.promptOpen, false);
 });
 
-test("ID-less Enter is a no-op in this phase", () => {
+test("ID-less Enter opens naming mode with the picker state", async () => {
   const harness = createPlugin({
     files: {
       "note.md": "See ((opus))",
@@ -578,8 +578,27 @@ test("ID-less Enter is a no-op in this phase", () => {
   picker.query = "opus";
   if (picker.inputEl) picker.inputEl.value = "opus";
   picker.renderAll();
-  const before = harness.editor.getValue();
-  pressKey(picker, "Enter");
-  assert.equal(harness.editor.getValue(), before);
-  assert.equal(picker.isOpen, true);
+  const selected = picker.plan.selected;
+  assert.ok(selected && !selected.identified);
+  let promptSource = null;
+  harness.plugin.selectTaskLinkTask = async (pickedSource, task, pickerState) => ({
+    promptSource: {
+      ...pickedSource,
+      kind: "link-task-complete",
+      trigger: "((",
+      targetText: task.linkTarget,
+      task,
+      pickerState,
+    },
+  });
+  harness.plugin.openBlockIdPrompt = (source) => {
+    promptSource = source;
+  };
+  picker.acceptSelected();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(picker.isOpen, false);
+  assert.equal(promptSource.kind, "link-task-complete");
+  assert.equal(promptSource.trigger, "((");
+  assert.equal(promptSource.pickerState.query, "opus");
+  assert.equal(promptSource.task.notePath, selected.row.notePath);
 });

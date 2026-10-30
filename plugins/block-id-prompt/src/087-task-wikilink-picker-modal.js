@@ -471,18 +471,25 @@ class TaskWikilinkPickerModal extends Modal {
     if (!selected || selected.disabled) {
       return;
     }
-    if (!selected.identified) {
-      return;
-    }
     if (this.accepting) {
       return;
     }
     this.accepting = true;
     const source = this.source;
     const plugin = this.plugin;
-    Promise.resolve(plugin.acceptTaskWikilinkIdentified(source, selected))
+    const pickerState = this.pickerState();
+    const accept = selected.identified
+      ? plugin.acceptTaskWikilinkIdentified(source, selected)
+      : plugin.selectTaskLinkTask(source, selected.row, pickerState);
+    Promise.resolve(accept)
       .then((result) => {
         this.accepting = false;
+        if (result && result.promptSource) {
+          this.completed = true;
+          this.close();
+          window.setTimeout(() => plugin.openBlockIdPrompt(result.promptSource), 0);
+          return;
+        }
         if (result && result.ok) {
           this.completed = true;
           this.close();

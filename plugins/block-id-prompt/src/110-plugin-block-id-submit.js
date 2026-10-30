@@ -224,12 +224,29 @@ class BlockIdPromptBlockIdSubmitMixin {
       return false;
     }
 
-    if (!this.taskLineStillPresent(destination.content, source.task, destination.file.path)) {
+    if (source.trigger === "((" && destination.file.path !== source.task.notePath) {
+      new Notice("Task link blocked: selected task note no longer resolves");
+      return false;
+    }
+
+    let task = source.task;
+    if (source.trigger === "((") {
+      const relocated = taskWikilinkLineForIdentity(destination.content, source.task);
+      if (!relocated) {
+        new Notice(`Task link blocked: selected task moved or changed in ${destination.file.path}`);
+        return false;
+      }
+      if (getTrailingBlockId(relocated.rawLine)) {
+        new Notice(`Task link stopped: selected task already has a block ID in ${destination.file.path}`);
+        return false;
+      }
+      task = { ...source.task, line: relocated.line, rawLine: relocated.rawLine };
+    } else if (!this.taskLineStillPresent(destination.content, source.task, destination.file.path)) {
       return false;
     }
 
     const activationEligible = sourceQualifiesForPomodoroActivation(source);
-    const plan = planTargetTaskUpdate(destination.content, source.task.line, {
+    const plan = planTargetTaskUpdate(destination.content, task.line, {
       newBlockId: newId,
       activationEligible,
       now: this.now(),
@@ -261,9 +278,13 @@ class BlockIdPromptBlockIdSubmitMixin {
       return true;
     }
 
-    new Notice(
-      `Added block ID and linked task${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}`,
-    );
+    if (source.trigger === "((") {
+      new Notice(`Added ^${newId} to ${destination.file.path}`);
+    } else {
+      new Notice(
+        `Added block ID and linked task${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}`,
+      );
+    }
     return true;
   }
 

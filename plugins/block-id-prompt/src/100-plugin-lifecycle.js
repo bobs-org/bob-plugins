@@ -284,7 +284,7 @@ class BlockIdPromptPlugin extends Plugin {
     this.revertTaskPickerMarker(source, { quiet: true });
   }
 
-  async selectTaskLinkTask(source, task) {
+  async selectTaskLinkTask(source, task, pickerState = null) {
     if (task.existingId) {
       return this.completeTaskLinkWithExistingId(source, task);
     }
@@ -297,9 +297,13 @@ class BlockIdPromptPlugin extends Plugin {
       promptSource: {
         ...source,
         kind: "link-task-complete",
+        targetText: task.linkTarget || taskWikilinkPathStem(task.notePath),
+        blockPrefix: CANONICAL_BLOCK_LINK_PREFIX,
+        aliasSuffix: "",
         task: { ...task },
         previewText: task.displayText,
         prefillId: false,
+        pickerState: pickerState || null,
       },
     };
   }
@@ -386,6 +390,17 @@ class BlockIdPromptPlugin extends Plugin {
   }
 
   cancelBlockIdPrompt(source) {
+    if (source.trigger === "((" && source.pickerState) {
+      this.lastPromptKey = null;
+      window.setTimeout(() => {
+        this.openTaskWikilinkPicker({
+          ...source,
+          kind: "task-wikilink",
+          pickerState: source.pickerState,
+        });
+      }, 0);
+      return;
+    }
     if (source.kind === "link-task-complete") {
       this.revertTaskPickerMarker(source, { quiet: true });
       return;

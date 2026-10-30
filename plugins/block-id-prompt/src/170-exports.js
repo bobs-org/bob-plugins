@@ -150,6 +150,7 @@ module.exports.helpers = {
   formatTaskWikilinkCount,
   taskWikilinkChangeSetFromUpdate,
   taskWikilinkUpdateIsUserInput,
+  taskWikilinkLineForIdentity,
   buildBasenameIndex,
   canonicalKeyWikilinkTask,
   compareCanonicalWikilinkKeys,

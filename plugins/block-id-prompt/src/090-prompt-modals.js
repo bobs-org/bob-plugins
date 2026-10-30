@@ -13,14 +13,34 @@ class BlockIdPromptModal extends Modal {
     this.userEdited = false;
     this.userMovedFocus = false;
     this.closed = false;
+    this.validationRequest = 0;
+    this.validationMessageEl = null;
+    this.insertLineEl = null;
+    this.subtitleEl = null;
   }
 
   onOpen() {
     this.closed = false;
     this.contentEl.empty();
-    this.contentEl.createEl("h2", { text: "Block ID" });
+    const wikilinkMode = this.source.trigger === "((";
+    this.contentEl.createEl("h2", {
+      text: wikilinkMode ? "Name this task to link it" : "Block ID",
+    });
+    if (wikilinkMode) {
+      this.subtitleEl = this.contentEl.createEl("div", {
+        text: `Adds ^${this.source.prefillSuggestion || "…"} to ${this.source.task.notePath}`,
+      });
+    }
     this.createPreviewEl();
     this.loadPreview();
+    if (wikilinkMode) {
+      this.insertLineEl = this.contentEl.createEl("div", { cls: "bid-twl-name-insert" });
+      this.validationMessageEl = this.contentEl.createEl("div", {
+        cls: "bid-twl-name-validation",
+        attr: { "aria-live": "polite", role: "status" },
+      });
+      this.updateWikilinkPreview(this.source.prefillSuggestion || "");
+    }
 
     const isExplicit =
       Boolean(this.source.prefillId) && Boolean(this.source.oldId);
@@ -34,6 +54,10 @@ class BlockIdPromptModal extends Modal {
       }
       text.inputEl.addEventListener("input", () => {
         this.userEdited = true;
+        if (wikilinkMode) {
+          this.updateWikilinkPreview(text.getValue());
+          void this.validateWikilinkId(text.getValue());
+        }
       });
       text.inputEl.addEventListener("blur", () => {
         this.userMovedFocus = true;
@@ -51,16 +75,16 @@ class BlockIdPromptModal extends Modal {
     new Setting(this.contentEl)
       .addButton((button) =>
         button
-          .setButtonText("Cancel")
+          .setButtonText(wikilinkMode ? "Back" : "Cancel")
           .onClick(() => this.close()),
       )
       .addButton((button) => {
         this.saveButton = button;
         button
-          .setButtonText("Save")
+          .setButtonText(wikilinkMode ? "Add ID & link" : "Save")
           .setCta()
           .onClick(() => this.submit());
-        if (!isExplicit) {
+        if (!isExplicit || wikilinkMode) {
           this.setSaveDisabled(true);
         }
       });
@@ -163,6 +187,9 @@ class BlockIdPromptModal extends Modal {
         ? result.suggestion
         : null;
     if (!suggestion) {
+      if (this.source.trigger === "((") {
+        this.setWikilinkValidation("Use letters, numbers, and dashes");
+      }
       window.setTimeout(() => {
         if (this.closed || !this.input || !this.input.inputEl) {
           return;
@@ -186,6 +213,10 @@ class BlockIdPromptModal extends Modal {
       input.setValue(suggestion);
     } catch (error) {
       return;
+    }
+    if (this.source.trigger === "((") {
+      this.updateWikilinkPreview(suggestion);
+      void this.validateWikilinkId(suggestion);
     }
 
     // Select the untouched generated value once; never steal focus back
@@ -211,6 +242,50 @@ class BlockIdPromptModal extends Modal {
         // Focus is best effort; the seeded value already stands.
       }
     }, 0);
+  }
+
+  updateWikilinkPreview(value) {
+    if (this.source.trigger !== "((") {
+      return;
+    }
+    const id = String(value || "").trim();
+    if (this.subtitleEl) {
+      this.subtitleEl.setText(`Adds ^${id || "…"} to ${this.source.task.notePath} now`);
+    }
+    if (this.insertLineEl) {
+      const target = `${this.source.targetText}#^${id || "<id>"}`;
+      this.insertLineEl.setText(`Inserts [[${target}]]`);
+    }
+  }
+
+  setWikilinkValidation(message, valid = false) {
+    if (this.validationMessageEl) {
+      this.validationMessageEl.setText(message || "");
+    }
+    this.setSaveDisabled(!valid);
+  }
+
+  async validateWikilinkId(value) {
+    if (this.source.trigger !== "((") {
+      return;
+    }
+    const id = String(value || "").trim();
+    const request = ++this.validationRequest;
+    if (!BLOCK_ID_RE.test(id)) {
+      this.setWikilinkValidation("Use letters, numbers, and dashes");
+      return;
+    }
+    this.setWikilinkValidation("Checking ID…");
+    let result = null;
+    try {
+      result = await this.plugin.validateTaskWikilinkId(this.source, id);
+    } catch (error) {
+      result = { valid: false, message: "The target note could not be checked" };
+    }
+    if (this.closed || request !== this.validationRequest) {
+      return;
+    }
+    this.setWikilinkValidation(result && result.message, Boolean(result && result.valid));
   }
 
   createPreviewEl() {

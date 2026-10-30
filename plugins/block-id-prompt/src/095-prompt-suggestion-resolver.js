@@ -151,7 +151,7 @@ async function resolvePromptBlockIdSuggestion(plugin, source) {
     }
 
     if (source.kind === "link-task-complete") {
-      const task = source.task;
+      let task = source.task;
       if (!task || typeof task.rawLine !== "string") {
         return { suggestion: null, notice: null };
       }
@@ -178,7 +178,17 @@ async function resolvePromptBlockIdSuggestion(plugin, source) {
         };
       }
       const currentLine = contentLineAt(snapshot.content, task.line);
-      if (currentLine === null || currentLine !== task.rawLine) {
+      if (source.trigger === "((") {
+        const relocated = taskWikilinkLineForIdentity(snapshot.content, task);
+        if (!relocated) {
+          return {
+            suggestion: null,
+            notice: `Task link blocked: selected task moved or changed in ${targetFile.path}`,
+          };
+        }
+        task = { ...task, line: relocated.line, rawLine: relocated.rawLine };
+        source.task = task;
+      } else if (currentLine === null || currentLine !== task.rawLine) {
         return {
           suggestion: null,
           notice: `Task link blocked: selected task changed in ${targetFile.path}`,

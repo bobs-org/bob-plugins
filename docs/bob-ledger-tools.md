@@ -268,8 +268,8 @@ shows at most one Notice per day. The toggle is session-only.
 **Toggle calendar event painting** is also a session-only toggle. Events rows
 in Live Preview and Reading view show quiet time pills, context tags, and
 calendar/video/location badges. The Bob-owned `↻ synced` line under `## Events`
-paints as a muted caption; it means last change, so the painter never marks it
-stale. On today's note, a meeting in progress gets the MEET hue and a past
+paints as a muted caption; it shows the last `bob gcal sync` run; sync runs on
+demand, so the painter never marks it stale. On today's note, a meeting in progress gets the MEET hue and a past
 meeting dims. The clock refreshes once a minute while today's note is active.
 Painting reads the note and never changes it.
 

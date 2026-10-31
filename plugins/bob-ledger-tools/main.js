@@ -65545,7 +65545,8 @@ class BobLedgerToolsTodayLocationMixin {
 const GCAL_EVENTS_POLL_MS = 250;
 const GCAL_EVENTS_WAIT_MS = 15000;
 const GCAL_EVENTS_REFRESH_MS = 60000;
-// `stamp_refresh = on_change`: age never paints today's stamp stale.
+// The stamp records the last `bob gcal sync` run. Sync runs on demand,
+// so age never paints it stale.
 const GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES = null;
 const GCAL_EVENTS_STAMP_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const GCAL_EVENTS_PALETTE = [

@@ -144,6 +144,22 @@ pager in place, and `Esc` returns to the list with the query intact. While a
 report, preview, or help run is in flight, the sheet footer shows a running line
 until its output opens.
 
+Press `Ctrl+M` on a bob command row to mark it as the next sequence step. The
+tray shows marked commands in order; `Ctrl+M` toggles a mark, and the mouse
+Run button starts the sequence. Only bob command rows can be marked. A single
+mark behaves like running that row. With two or more marks, `Enter` runs the
+sequence and first shows one review card if any step needs confirmation or is
+preview-first; `Ctrl+Enter` starts it without that card. Steps run in order
+and stop at the first failed, unknown, or stopped result. Needs-attention
+results continue to the next step, and the final summary card reports the
+sequence outcome.
+
+With marks pending, `Backspace` on an empty query removes the last step.
+`Escape` clears all marks and leaves the sheet open; a second `Escape` closes
+it. Marks are temporary and disappear when the sheet closes. RECENT groups a
+sequence into one row that reruns it as a unit. **Bob: Rerun last command**
+also reruns the whole sequence when the newest run was one of its steps.
+
 ## Run engine
 
 Runs are detached, file-backed children: `spawn(bobPath, argv)` with output

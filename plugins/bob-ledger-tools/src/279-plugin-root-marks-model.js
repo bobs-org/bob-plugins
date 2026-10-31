@@ -28,49 +28,21 @@ function rootMarkStem(path) {
   }
 }
 
-// Resolve the root parent named by an existing note. An area names itself;
-// otherwise a `root: true` project wins, then the outermost project. Parent
-// wrappers are traversed with the same resolver helpers and depth bound.
+// Resolve the root parent named by an existing note. This is the Pomodoro
+// home resolver's `root` (R2), so root marks and chips cannot disagree: an
+// area names itself; otherwise the first `root: true` project, then the
+// outermost project, below the first area. No home returns null.
 function rootMarkRootPath(targetPath, sourcePath, metadataCache, vault, warnings, seen) {
   try {
-    const targetFile = pomodoroHomeResolveFile(
+    const home = pomodoroHomeResolve(
       targetPath,
-      sourcePath,
       sourcePath,
       metadataCache,
       vault,
+      Array.isArray(warnings) ? warnings : [],
+      seen instanceof Set ? seen : new Set(),
     );
-    if (!targetFile || typeof targetFile.path !== "string") return null;
-    const chain = [];
-    const visited = new Set();
-    let current = targetFile;
-    for (let depth = 0; current && depth < POMODORO_HOME_MAX_DEPTH; depth += 1) {
-      const path = String(current.path || "");
-      const key = path.toLowerCase();
-      if (!path || visited.has(key)) break;
-      visited.add(key);
-      const read = pomodoroHomeReadFrontmatter(current, metadataCache, vault);
-      const frontmatter = read && read.frontmatter ? read.frontmatter : {};
-      const type = pomodoroHomeType(frontmatter);
-      const item = { path, type, frontmatter };
-      chain.push(item);
-      if (depth === 0 && type === "area") return path;
-      if (type === "project" && frontmatter.root === true) return path;
-      const parentTarget = pomodoroHomeParentTarget(frontmatter.parent);
-      if (!parentTarget || pomodoroHomePathEqual(parentTarget, path)) break;
-      current = pomodoroHomeResolveFile(
-        parentTarget,
-        path,
-        sourcePath,
-        metadataCache,
-        vault,
-      );
-    }
-    const projects = chain.filter((item) => item.type === "project");
-    if (projects.length > 0) return projects[projects.length - 1].path;
-    const area = chain.find((item) => item.type === "area");
-    if (area) return area.path;
-    return null;
+    return home && typeof home.root === "string" && home.root ? home.root : null;
   } catch (error) {
     return null;
   }

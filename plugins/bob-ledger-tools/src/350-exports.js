@@ -594,6 +594,7 @@ module.exports.helpers = {
   pomodoroHomeStem,
   pomodoroHomeLinkTarget,
   pomodoroHomeType,
+  pomodoroHomeRootFlag,
   pomodoroHomeParentTarget,
   pomodoroHomePercentages,
   pomodoroHomeFnv1a,

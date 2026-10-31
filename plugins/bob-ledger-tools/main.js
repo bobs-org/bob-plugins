@@ -16245,7 +16245,9 @@ function buildBlocksChipElement(doc, model, options) {
 // --- Pomodoro home chips: pure mirror of bob-cli pomodoro homes -----------
 // The shared Rust contract and vectors live in bob-cli. This mirror only
 // resolves each dedicated Task Link to its current area/project home and
-// derives the quiet label, chip, and area hue. It never writes note text.
+// derives the quiet label, chip, and area hue. The label, chip, hue, and
+// tooltip name root parents (R2, R7); `parts` stay per nearest home. It never
+// writes note text.
 
 const POMODORO_HOME_MAX_DEPTH = 16;
 const POMODORO_HOME_SLOT_ORDER = [
@@ -16349,6 +16351,43 @@ function pomodoroHomeType(frontmatter) {
   return "other";
 }
 
+// Mirrors Rust's `trim_yaml_scalar(..).eq_ignore_ascii_case("true")`: a YAML
+// boolean `true` or a string that trims to `true` in any case.
+function pomodoroHomeRootFlag(frontmatter) {
+  const raw = frontmatter && typeof frontmatter === "object" ? frontmatter.root : undefined;
+  if (raw === true) {
+    return true;
+  }
+  return typeof raw === "string" && raw.trim().toLowerCase() === "true";
+}
+
+// R2: an area is its own root; a project's root is the first `root: true`
+// project in chain[h..a] (a = first area above the home, else the chain end),
+// else the last project there. Non-project, non-area notes are walked through.
+function pomodoroHomeRootIndex(chain, homeIndex) {
+  if (chain[homeIndex].type === "area") {
+    return homeIndex;
+  }
+  let end = chain.length;
+  for (let index = homeIndex + 1; index < chain.length; index += 1) {
+    if (chain[index].type === "area") {
+      end = index;
+      break;
+    }
+  }
+  let last = homeIndex;
+  for (let index = homeIndex; index < end; index += 1) {
+    if (chain[index].type !== "project") {
+      continue;
+    }
+    if (pomodoroHomeRootFlag(chain[index].frontmatter)) {
+      return index;
+    }
+    last = index;
+  }
+  return last;
+}
+
 function pomodoroHomeParentTarget(raw) {
   if (raw == null) {
     return "";
@@ -16404,21 +16443,76 @@ function pomodoroHomePercentages(weights) {
   return result;
 }
 
-function pomodoroHomeDisplayLabel(parts) {
-  const ranked = (Array.isArray(parts) ? parts : []).slice().sort((left, right) => {
-    const shareDelta = (right.share || 0) - (left.share || 0);
-    if (shareDelta !== 0) {
-      return shareDelta;
+// R7 root groups: parts bucketed by root parent in root order (the ledger
+// order of each root's first part). Share, tasks, and minutes are sums. The
+// hue is the root's first part's hue.
+function pomodoroHomeRootGroups(parts) {
+  const groups = [];
+  const byRoot = new Map();
+  for (const part of Array.isArray(parts) ? parts : []) {
+    const key = part._root || part.key;
+    let group = byRoot.get(key);
+    if (!group) {
+      group = {
+        key,
+        label: part._rootLabel || part.label,
+        share: 0,
+        tasks: 0,
+        minutes: 0,
+        order: groups.length,
+        first: Number.isInteger(part._order) ? part._order : groups.length,
+        hue: part.hue || null,
+      };
+      byRoot.set(key, group);
+      groups.push(group);
     }
-    return (left._order || 0) - (right._order || 0);
+    group.share += part.share || 0;
+    group.tasks += part.tasks || 0;
+    group.minutes += part.minutes || 0;
+    if (Number.isInteger(part._order)) {
+      group.first = Math.min(group.first, part._order);
+    }
+  }
+  return groups;
+}
+
+// Share descending; ties keep root order.
+function pomodoroHomeRankRoots(groups) {
+  return (Array.isArray(groups) ? groups : []).slice().sort((left, right) => {
+    const shareDelta = (right.share || 0) - (left.share || 0);
+    return shareDelta !== 0 ? shareDelta : (left.order || 0) - (right.order || 0);
   });
-  const shown = ranked.slice(0, 2).map((part) => part.label);
+}
+
+function pomodoroHomeDisplayLabel(groups) {
+  const ranked = pomodoroHomeRankRoots(groups);
+  const shown = ranked.slice(0, 2).map((group) => group.label);
   if (shown.length === 0) {
     return "";
   }
   return ranked.length > shown.length
     ? `${shown.join(" · ")} +${ranked.length - shown.length}`
     : shown.join(" · ");
+}
+
+// The case-insensitive `+` component set of a session name (Rust
+// `name_components`: trim each piece, drop empties, lowercase).
+function pomodoroHomeNameComponents(name) {
+  return new Set(
+    String(name || "")
+      .split("+")
+      .map((piece) => piece.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function pomodoroHomeNameMatchesRoots(name, groups) {
+  const names = pomodoroHomeNameComponents(name);
+  if (names.size === 0) {
+    return false;
+  }
+  const labels = new Set(groups.map((group) => String(group.label).toLowerCase()));
+  return names.size === labels.size && Array.from(names).every((item) => labels.has(item));
 }
 
 function pomodoroHomeLineMinutes(line, timeRange) {
@@ -16650,6 +16744,7 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
       ? chain[nearestAreaIndex].path
       : null;
   const home = chain[homeIndex];
+  const root = chain[pomodoroHomeRootIndex(chain, homeIndex)];
   const hue = topArea
     ? pomodoroHomeHueForArea(topArea.file, topArea.frontmatter, warnings, seen)
     : null;
@@ -16661,10 +16756,13 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
     area_label: topArea ? pomodoroHomeStem(topArea.path).toLowerCase() : "unfiled",
     subarea,
     hue,
+    root: root.path,
+    root_label: pomodoroHomeStem(root.path).toLowerCase(),
     chain: chain.map((item) => item.path),
   };
 }
 
+// Buckets are their own root: `@unfiled` / `@unlinked`, labelled without the `@`.
 function pomodoroHomeBucketPart(key, label, area, areaLabel, hue) {
   return {
     key,
@@ -16674,6 +16772,8 @@ function pomodoroHomeBucketPart(key, label, area, areaLabel, hue) {
     area_label: areaLabel,
     hue,
     subarea: null,
+    root: key,
+    root_label: label,
   };
 }
 
@@ -16882,15 +16982,7 @@ function pomodoroHomeShareParts(entry, dailyPath, metadataCache, vault, warnings
           "Task Link could not be resolved.",
         );
       }
-      resolved.push({
-        key: "@unfiled",
-        label: "unfiled",
-        kind: "bucket",
-        area: "@unfiled",
-        area_label: "unfiled",
-        subarea: null,
-        hue: null,
-      });
+      resolved.push(pomodoroHomeBucketPart("@unfiled", "unfiled", "@unfiled", "unfiled", null));
     }
   }
   if (resolved.length === 0) {
@@ -16947,6 +17039,8 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnin
     area_label: part.area_label || "unfiled",
     hue: part.hue || null,
     tasks: part.tasks,
+    _root: part.root || part.key,
+    _rootLabel: part.root_label || part.label,
     _order: Number.isInteger(part.sourceOrder) ? part.sourceOrder : index,
     ...(attributed ? { minutes: Number.isInteger(part.minutes) ? part.minutes : 0 } : {}),
   }));
@@ -16967,7 +17061,10 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnin
     part.share = shares[index] || 0;
     part._order = Number.isInteger(part._order) ? part._order : index;
   });
-  const label = aggregate.kind === "unlinked" ? "" : pomodoroHomeDisplayLabel(parts);
+  // R7: label, chip, hue, and tooltip name root parents; parts and lead_home
+  // keep the nearest-home granularity.
+  const roots = pomodoroHomeRootGroups(parts);
+  const label = aggregate.kind === "unlinked" ? "" : pomodoroHomeDisplayLabel(roots);
   let lead = null;
   if (parts.length > 0) {
     lead = parts.reduce((best, part) => {
@@ -16983,18 +17080,32 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnin
       return best;
     }, null);
   }
-  const chip = aggregate.kind === "unlinked" ? null : label || null;
+  const chip =
+    aggregate.kind === "unlinked" || !label || pomodoroHomeNameMatchesRoots(entry.name, roots)
+      ? null
+      : label;
+  // The lead root has the most distinct tasks; ties go to the first task in
+  // ledger order. Its hue is its first part's hue.
+  const leadRoot = roots.reduce((best, group) => {
+    if (!best) {
+      return group;
+    }
+    if (group.tasks > best.tasks || (group.tasks === best.tasks && group.first < best.first)) {
+      return group;
+    }
+    return best;
+  }, null);
   return {
     state: attributed ? "attributed" : "forecast",
     kind: aggregate.kind,
     label,
     chip,
-    hue: lead ? lead.hue : null,
-    parts: parts.map(({ _order, ...part }) => part),
+    hue: leadRoot ? leadRoot.hue : null,
+    parts: parts.map(({ _order, _root, _rootLabel, ...part }) => part),
     lead_home: lead ? lead.key : "@unlinked",
-    tooltip: parts
-      .filter((part) => part.tasks > 0)
-      .map((part) => `${part.label} · ${part.tasks} ${part.tasks === 1 ? "task" : "tasks"}${attributed ? ` · ${part.minutes}m` : ""}`)
+    tooltip: pomodoroHomeRankRoots(roots)
+      .filter((group) => group.tasks > 0)
+      .map((group) => `${group.label} · ${group.tasks} ${group.tasks === 1 ? "task" : "tasks"}${attributed ? ` · ${group.minutes}m` : ""}`)
       .join("\n"),
   };
 }
@@ -53129,49 +53240,21 @@ function rootMarkStem(path) {
   }
 }
 
-// Resolve the root parent named by an existing note. An area names itself;
-// otherwise a `root: true` project wins, then the outermost project. Parent
-// wrappers are traversed with the same resolver helpers and depth bound.
+// Resolve the root parent named by an existing note. This is the Pomodoro
+// home resolver's `root` (R2), so root marks and chips cannot disagree: an
+// area names itself; otherwise the first `root: true` project, then the
+// outermost project, below the first area. No home returns null.
 function rootMarkRootPath(targetPath, sourcePath, metadataCache, vault, warnings, seen) {
   try {
-    const targetFile = pomodoroHomeResolveFile(
+    const home = pomodoroHomeResolve(
       targetPath,
-      sourcePath,
       sourcePath,
       metadataCache,
       vault,
+      Array.isArray(warnings) ? warnings : [],
+      seen instanceof Set ? seen : new Set(),
     );
-    if (!targetFile || typeof targetFile.path !== "string") return null;
-    const chain = [];
-    const visited = new Set();
-    let current = targetFile;
-    for (let depth = 0; current && depth < POMODORO_HOME_MAX_DEPTH; depth += 1) {
-      const path = String(current.path || "");
-      const key = path.toLowerCase();
-      if (!path || visited.has(key)) break;
-      visited.add(key);
-      const read = pomodoroHomeReadFrontmatter(current, metadataCache, vault);
-      const frontmatter = read && read.frontmatter ? read.frontmatter : {};
-      const type = pomodoroHomeType(frontmatter);
-      const item = { path, type, frontmatter };
-      chain.push(item);
-      if (depth === 0 && type === "area") return path;
-      if (type === "project" && frontmatter.root === true) return path;
-      const parentTarget = pomodoroHomeParentTarget(frontmatter.parent);
-      if (!parentTarget || pomodoroHomePathEqual(parentTarget, path)) break;
-      current = pomodoroHomeResolveFile(
-        parentTarget,
-        path,
-        sourcePath,
-        metadataCache,
-        vault,
-      );
-    }
-    const projects = chain.filter((item) => item.type === "project");
-    if (projects.length > 0) return projects[projects.length - 1].path;
-    const area = chain.find((item) => item.type === "area");
-    if (area) return area.path;
-    return null;
+    return home && typeof home.root === "string" && home.root ? home.root : null;
   } catch (error) {
     return null;
   }
@@ -69245,6 +69328,7 @@ module.exports.helpers = {
   pomodoroHomeStem,
   pomodoroHomeLinkTarget,
   pomodoroHomeType,
+  pomodoroHomeRootFlag,
   pomodoroHomeParentTarget,
   pomodoroHomePercentages,
   pomodoroHomeFnv1a,

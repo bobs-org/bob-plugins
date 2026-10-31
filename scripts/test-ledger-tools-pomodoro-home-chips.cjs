@@ -90,6 +90,7 @@ const {
   pomodoroHomeLinkFromBody,
   pomodoroHomeModels,
   pomodoroHomeParseEntries,
+  pomodoroHomeRootFlag,
   pomodoroHomeTaskHome,
   rootMarkModel,
 } = LedgerToolsPlugin.helpers;
@@ -161,6 +162,12 @@ function parseFrontmatter(note) {
     let value = field[2];
     if (value.startsWith("[")) {
       values[field[1]] = parseYamlFlow(value, 0).value;
+      continue;
+    }
+    // Obsidian parses a bare `true` / `false` into a boolean; quoted values
+    // stay strings.
+    if (value === "true" || value === "false") {
+      values[field[1]] = value === "true";
       continue;
     }
     if (
@@ -609,7 +616,8 @@ test("Reading view appends a forecast chip before its Task Link list", () => {
   assert.equal(plugin.renderPomodoroHomeReadingRecord(record), true);
   assert.equal(record.chip.getAttribute("data-home-state"), "forecast");
   assert.equal(record.chip.getAttribute("data-home-hue"), "blue");
-  assert.equal(record.chip.children[1].textContent, "sase_blog");
+  // A sub-project is labelled by its root parent.
+  assert.equal(record.chip.children[1].textContent, "sase");
   assert.equal(entry.children.at(-2), record.chip);
   assert.equal(plugin.pomodoroHomeReadingEntry(entry, "2026/20261018.md").entry.name, "BLOG");
   assert.equal(
@@ -626,6 +634,8 @@ test("Reading view appends a forecast chip before its Task Link list", () => {
     1,
   );
 
+  // Re-parenting sase_blog under dev makes it a top-level project, so it is
+  // its own root parent again.
   notes["sase_blog.md"] = notes["sase_blog.md"].replace("parent: [[sase]]", "parent: [[dev]]");
   anchor.setAttribute("data-href", "sase_blog#^home-chip");
   assert.equal(plugin.renderPomodoroHomeReadingRecord(record), true);
@@ -708,7 +718,7 @@ test("Live Preview places a chip widget at the end of the Pomodoro line", () => 
   const decorations = plugin.buildPomodoroHomeChipDecorations({ state });
   assert.equal(decorations.length, 1);
   assert.equal(decorations[0].from, lines[0].length + 1 + lines[1].length);
-  assert.equal(decorations[0].value.widget.model.chip, "sase_blog");
+  assert.equal(decorations[0].value.widget.model.chip, "sase");
   assert.equal(decorations[0].value.widget.model.state, "forecast");
 });
 
@@ -884,4 +894,106 @@ test("Obsidian frontmatter shapes unwrap nested wikilink arrays", () => {
   assert.equal(LedgerToolsPlugin.helpers.pomodoroHomeParentTarget(["[[dev]]"]), "");
   assert.equal(LedgerToolsPlugin.helpers.pomodoroHomeParentTarget("dev"), "");
   assert.deepEqual(LedgerToolsPlugin.helpers.pomodoroHomePercentages([1, 1, 1]), [34, 33, 33]);
+});
+
+test("the root flag accepts a boolean true or a string that trims to true", () => {
+  assert.equal(pomodoroHomeRootFlag({ root: true }), true);
+  assert.equal(pomodoroHomeRootFlag({ root: "true" }), true);
+  assert.equal(pomodoroHomeRootFlag({ root: " TRUE " }), true);
+  assert.equal(pomodoroHomeRootFlag({ root: "True" }), true);
+  assert.equal(pomodoroHomeRootFlag({ root: false }), false);
+  assert.equal(pomodoroHomeRootFlag({ root: "yes" }), false);
+  assert.equal(pomodoroHomeRootFlag({ root: "" }), false);
+  assert.equal(pomodoroHomeRootFlag({ root: ["true"] }), false);
+  assert.equal(pomodoroHomeRootFlag({}), false);
+  assert.equal(pomodoroHomeRootFlag(null), false);
+  // The flag is read from the parsed shapes Obsidian produces.
+  assert.equal(parseFrontmatter("---\nroot: true\n---\n").root, true);
+  assert.equal(parseFrontmatter('---\nroot: "TRUE"\n---\n').root, "TRUE");
+});
+
+test("the tooltip has one line per root parent in label order; parts stay per home", () => {
+  const vector = fixture.cases.find((item) => item.name === "root-parent-chips");
+  assert.ok(vector);
+  const { metadataCache, vault } = fakeVault(fixture.notes);
+  const result = pomodoroHomeModels(
+    `## Pomodoros\n${vector.pomodoros}`,
+    vector.daily_path,
+    metadataCache,
+    vault,
+    taskLineForBlock(fixture.notes),
+  );
+  assert.deepEqual(
+    result.entries.map((entry) => entry.tooltip),
+    [
+      "sase · 2 tasks",
+      "rooted_blog · 2 tasks · 10m",
+      "sase · 2 tasks\nbob · 2 tasks",
+      "quoted_root · 1 task · 5m",
+    ],
+  );
+  // The nearest-home parts are untouched, and the lead home stays per home.
+  assert.deepEqual(
+    result.entries[2].parts.map((part) => part.key),
+    ["sase_goals.md", "sase_blog.md", "bob.md"],
+  );
+  assert.equal(result.entries[2].lead_home, "bob.md");
+  assert.equal(result.entries[2].hue, "blue");
+});
+
+test("a session linking a project and its sub-project reads as the root parent only", () => {
+  const { metadataCache, vault } = fakeVault(fixture.notes);
+  const result = pomodoroHomeModels(
+    "## Pomodoros\n- [ ] (1010-1035) — BUILD\n  - [[bob#^a]]\n  - [[sase_blog_notes#^b]]\n  - [[bob#^c]]\n",
+    "2026/20261018.md",
+    metadataCache,
+    vault,
+    null,
+  );
+  const [entry] = result.entries;
+  // bob holds two of the three tasks, so it ranks first by share.
+  assert.equal(entry.label, "bob · sase");
+  assert.equal(entry.chip, "bob · sase");
+  const sole = pomodoroHomeModels(
+    "## Pomodoros\n- [ ] (1010-1035) — BUILD\n  - [[sase#^a]]\n  - [[sase_goals#^b]]\n  - [[sase_blog_notes#^c]]\n",
+    "2026/20261018.md",
+    metadataCache,
+    vault,
+    null,
+  ).entries[0];
+  assert.equal(sole.label, "sase");
+  assert.equal(sole.chip, "sase");
+  assert.deepEqual(
+    sole.parts.map((part) => part.label),
+    ["sase", "sase_goals", "sase_blog_notes"],
+  );
+});
+
+test("root marks and chips resolve the same root parent", () => {
+  const { metadataCache, vault } = fakeVault(fixture.notes);
+  const { rootMarkRootPath, pomodoroHomeResolve } = LedgerToolsPlugin.helpers;
+  const expected = {
+    "sase_blog_notes.md": "sase.md",
+    "sase_goals.md": "sase.md",
+    "rooted_blog_notes.md": "rooted_blog.md",
+    "rooted_blog.md": "rooted_blog.md",
+    "quoted_root_child.md": "quoted_root.md",
+    "dev.md": "dev.md",
+    "gtd_daily.md": "gtd_daily.md",
+    "cycle_a.md": "cycle_b.md",
+    "bob.md": "bob.md",
+  };
+  for (const [target, root] of Object.entries(expected)) {
+    const home = pomodoroHomeResolve(target, "2026/20261018.md", metadataCache, vault, [], new Set());
+    assert.equal(home.root, root, `home root for ${target}`);
+    assert.equal(
+      rootMarkRootPath(target, "2026/20261018.md", metadataCache, vault, [], new Set()),
+      root,
+      `root mark root for ${target}`,
+    );
+  }
+  assert.equal(
+    rootMarkRootPath("unfiled.md", "2026/20261018.md", metadataCache, vault, [], new Set()),
+    null,
+  );
 });

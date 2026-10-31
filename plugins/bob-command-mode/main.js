@@ -6127,6 +6127,20 @@ function cmSheetReadClipboard() {
   }
 }
 
+function cmSheetActiveSequenceIds(plugin) {
+  if (!plugin) return [];
+  try {
+    if (typeof plugin.commandModeSequenceMap === "function") {
+      const map = plugin.commandModeSequenceMap();
+      if (map && typeof map.keys === "function") return [...map.keys()].map(String);
+    }
+    if (plugin.commandModeSequences instanceof Map) return [...plugin.commandModeSequences.keys()].map(String);
+  } catch (error) {
+    return [];
+  }
+  return [];
+}
+
 function cmSheetRowArgv(row) {
   if (row && Array.isArray(row.argv)) return [...row.argv];
   const base = (row && Array.isArray(row.basePath) && row.basePath) ||
@@ -6251,7 +6265,9 @@ class CommandModeSheetModal extends Modal {
     ];
     if (!this.query.trim()) {
       this.refreshRecords();
-      this.rows = [...cmSheetRecentRows(this.runRecords, Date.now(), this.catalog), ...this.rows];
+      this.rows = [...cmSheetRecentRows(this.runRecords, Date.now(), this.catalog, {
+        activeSequenceIds: cmSheetActiveSequenceIds(this.plugin),
+      }), ...this.rows];
     }
     this.frecency = cmSheetFrecencyMap(this.runRecords, this.rows, Date.now(), this.host);
     this.recomputeVisible();
@@ -6374,8 +6390,13 @@ class CommandModeSheetModal extends Modal {
     if (row.effect && row.effect !== "opens") chips.createEl("span", { cls: "bob-cmd-chip-" + row.effect, text: row.effect });
     if (row.effect === "opens") chips.createEl("span", { cls: "bob-cmd-chip-opens", text: "opens" });
     if (row.hasPreview) chips.createEl("kbd", { cls: "bob-cmd-kbd", text: "⇧↵" });
-    const duration = cmSheetMedianDuration(this.runRecords, row, this.host);
-    if (duration !== null) chips.createEl("span", { cls: "bob-cmd-row-duration", text: cmFormatDuration(duration) });
+    const isSequenceRow = Boolean(row.sequenceId || (Array.isArray(row.steps) && row.kind === "recent"));
+    if (isSequenceRow) {
+      if (typeof row.duration === "number") chips.createEl("span", { cls: "bob-cmd-row-duration", text: cmFormatDuration(row.duration) });
+    } else {
+      const duration = cmSheetMedianDuration(this.runRecords, row, this.host);
+      if (duration !== null) chips.createEl("span", { cls: "bob-cmd-row-duration", text: cmFormatDuration(duration) });
+    }
     if (row.kind === "recent") {
       chips.createEl("span", { cls: "bob-cmd-row-glyph", text: row.glyph || "?" });
       if (row.age) chips.createEl("span", { cls: "bob-cmd-row-age", text: row.age });
@@ -6384,12 +6405,16 @@ class CommandModeSheetModal extends Modal {
     if (selected && (row.about || row.tagline)) {
       this.aboutEl = list.createEl("div", { cls: "bob-cmd-row-about", text: row.tagline || row.about });
     }
-    el.addEventListener("click", () => {
-      this.selectedKey = row.key;
-      void this.activateRow(row, {});
+    el.addEventListener("click", (event) => {
+      this.handleRowClick(row, event);
     });
     this.rowEls.set(row.key, el);
     return el;
+  }
+
+  handleRowClick(row, event) {
+    this.selectedKey = row.key;
+    void this.activateRow(row, {});
   }
 
   renderFooter() {
@@ -8253,6 +8278,59 @@ function cmSheetSequenceMarks(sheet) {
   return sheet.sequenceMarks;
 }
 
+function cmSheetChildByClass(el, className) {
+  const kids = el && el.children ? Array.from(el.children) : [];
+  return kids.find((child) => (
+    child && child.classList && typeof child.classList.contains === "function" && child.classList.contains(className)
+  )) || null;
+}
+
+function cmSheetAddClass(el, className) {
+  if (!el || !className) return;
+  if (el.classList && typeof el.classList.contains === "function" && typeof el.classList.add === "function") {
+    if (!el.classList.contains(className)) el.classList.add(className);
+    return;
+  }
+  if (Array.isArray(el.classes) && !el.classes.includes(className)) el.classes.push(className);
+}
+
+function cmSheetSequenceActionableRow(sheet, mark) {
+  if (mark && mark.row) return mark.row;
+  const catalog = sheet && sheet.catalog;
+  const stored = cmSequenceStep(mark || {});
+  const replay = cmReplayRun({ argv: stored.argv, entry_id: stored.entry_id }, catalog);
+  const entryId = replay.entryId || null;
+  const entry = entryId ? cmEntryById(catalog, entryId) : null;
+  const argv = Array.isArray(replay.argv) && replay.argv.length ? [...replay.argv] : [...stored.argv];
+  const presentation = entry
+    ? cmNormalizePresentation(entry.presentation)
+    : ((mark && mark.presentation) || "action");
+  const policy = entry
+    ? cmNormalizePolicy(entry.policy)
+    : ((mark && mark.policy) || "run");
+  const hasPreview = entry
+    ? Boolean(Array.isArray(entry.preview) && entry.preview.length)
+    : Boolean(mark && mark.hasPreview);
+  const confirm = entry && entry.policy === "confirm"
+    ? String(entry.confirm || "")
+    : (mark && mark.confirm !== undefined ? mark.confirm : null);
+  const path = entry && Array.isArray(entry.path) ? [...entry.path] : [...argv];
+  return {
+    key: (mark && mark.key) || cmSequenceStepSignature(stored),
+    kind: entry ? "entry" : "typed",
+    path,
+    title: (entry && entry.title) || stored.title || argv.join(" ") || "bob",
+    argv,
+    entryId,
+    presentation,
+    policy,
+    hasPreview,
+    confirm,
+    required: [],
+    userArgs: entry && Array.isArray(entry.path) ? argv.slice(entry.path.length) : argv,
+  };
+}
+
 function cmSheetIsMarkKey(event) {
   if (!event || typeof event.key !== "string") return false;
   if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return false;
@@ -8559,24 +8637,10 @@ async function cmSheetSequenceEnterRun(sheet, force) {
   if (!marks.length) return { ok: false, reason: "no marks" };
   if (marks.length === 1) {
     const single = marks[0];
-    const row = single.row;
+    const row = cmSheetSequenceActionableRow(sheet, single);
     cmSheetSequenceClear(sheet);
+    sheet.confirmSequence = null;
     sheet.render();
-    if (!row) {
-      const runner = typeof sheet.runner === "function" ? sheet.runner() : null;
-      if (!runner) return { ok: false, reason: "no runner" };
-      try {
-        sheet.close();
-      } catch (error) {
-        // Best effort.
-      }
-      return runner.run([...single.argv], {
-        ...(single.entry_id ? { entryId: single.entry_id } : {}),
-        title: single.title || (single.display || []).join(" "),
-        trigger: "sheet",
-        ...(force ? { skipGuards: true } : {}),
-      });
-    }
     return cmOriginalSheetActivateRowSeq.call(sheet, row, force ? { force: true } : {});
   }
   if (!force) {
@@ -8601,24 +8665,20 @@ CommandModeSheetModal.prototype.renderRow = function renderRowWithSequenceMarks(
     const marks = cmSheetSequenceMarks(this);
     const isSequenceRow = cmSheetSequenceIsSequenceRow(row);
     if (isSequenceRow && Array.isArray(row.path)) {
-      const pathEl = (el.children || []).find((child) => Array.isArray(child.classes) && child.classes.includes("bob-cmd-row-path"));
-      if (pathEl) {
+      const pathEl = cmSheetChildByClass(el, "bob-cmd-row-path");
+      if (pathEl && typeof pathEl.empty === "function") {
         pathEl.empty();
         row.path.forEach((part) => {
           if (part === "›") pathEl.createEl("span", { cls: "bob-cmd-row-seq-sep", text: "›" });
           else pathEl.createEl("span", { cls: "bob-cmd-row-seq-part", text: String(part) });
         });
       }
-      if (typeof row.duration === "number") {
-        const chipsEl = (el.children || []).find((child) => Array.isArray(child.classes) && child.classes.includes("bob-cmd-row-chips"));
-        if (chipsEl) chipsEl.createEl("span", { cls: "bob-cmd-row-duration", text: cmFormatDuration(row.duration) });
-      }
     }
     if (!isSequenceRow && row && row.key) {
       const signature = cmSequenceStepSignature({ argv: cmSheetRowArgv(row), entry_id: row.entryId || null });
       const position = marks.findIndex((mark) => mark && mark.key === signature);
       if (position >= 0) {
-        if (!el.classes.includes("is-marked")) el.classes.push("is-marked");
+        cmSheetAddClass(el, "is-marked");
         const badge = el.createEl("span", { cls: "bob-cmd-row-mark", text: String(position + 1) });
         try {
           if (typeof badge.setAttribute === "function") badge.setAttribute("aria-label", "Step " + (position + 1));
@@ -8627,41 +8687,46 @@ CommandModeSheetModal.prototype.renderRow = function renderRowWithSequenceMarks(
         }
       }
     }
-    if (el._listeners && el._listeners.click) el._listeners.click = [];
-    el.addEventListener("click", (event) => {
-      const ctrlClick = Boolean(event && (event.ctrlKey || event.metaKey));
-      const pending = cmSheetSequenceMarks(this).length > 0;
-      if (ctrlClick || pending) {
-        if (event) {
-          if (typeof event.preventDefault === "function") event.preventDefault();
-          if (typeof event.stopPropagation === "function") event.stopPropagation();
-        }
-        this.selectedKey = row.key;
-        if (cmSheetSequenceIsSequenceRow(row)) cmSheetSequenceGroupToggle(this, row, this.catalog);
-        else {
-          const built = cmSheetSequenceStep(row, this.catalog);
-          if (built && built.refused) {
-            this.hint = built.refused;
-            this.render();
-            this.refocusInput();
-            return;
-          }
-          const missing = cmSheetMissingPositional(row);
-          if (missing) {
-            if (typeof this.enterArgumentStage === "function") this.enterArgumentStage(row);
-            return;
-          }
-          cmSheetSequenceToggle(this, built);
-        }
-        return;
-      }
-      this.selectedKey = row.key;
-      void this.activateRow(row, {});
-    });
   } catch (error) {
     // Mark rendering is best effort.
   }
   return el;
+};
+
+const cmOriginalSheetHandleRowClickSeq = CommandModeSheetModal.prototype.handleRowClick;
+CommandModeSheetModal.prototype.handleRowClick = function handleRowClickWithSequence(row, event) {
+  const ctrlClick = Boolean(event && (event.ctrlKey || event.metaKey));
+  const pending = cmSheetSequenceMarks(this).length > 0;
+  if (ctrlClick || pending) {
+    if (event) {
+      if (typeof event.preventDefault === "function") event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+    }
+    this.selectedKey = row.key;
+    if (cmSheetSequenceIsSequenceRow(row)) {
+      cmSheetSequenceGroupToggle(this, row, this.catalog);
+      return;
+    }
+    const built = cmSheetSequenceStep(row, this.catalog);
+    if (built && built.refused) {
+      this.hint = built.refused;
+      this.render();
+      this.refocusInput();
+      return;
+    }
+    const missing = cmSheetMissingPositional(row);
+    if (missing) {
+      if (typeof this.enterArgumentStage === "function") this.enterArgumentStage(row);
+      return;
+    }
+    cmSheetSequenceToggle(this, built);
+    return;
+  }
+  if (typeof cmOriginalSheetHandleRowClickSeq === "function") {
+    return cmOriginalSheetHandleRowClickSeq.call(this, row, event);
+  }
+  this.selectedKey = row.key;
+  void this.activateRow(row, {});
 };
 
 const cmOriginalSheetRenderFooterSeq = CommandModeSheetModal.prototype.renderFooter;
@@ -8929,9 +8994,15 @@ CommandModeSheetModal.prototype.handleSheetKeydown = function handleSheetKeydown
     return result;
   }
   if (this.stage === "args") {
+    if (!marks.length) {
+      const result = cmOriginalSheetKeydownSeq.call(this, event);
+      if (result) cmHandledSheetKeys.add(event);
+      return result;
+    }
     const ctrl = Boolean(event.ctrlKey);
     const shift = Boolean(event.shiftKey);
     const meta = Boolean(event.metaKey);
+    const alt = Boolean(event.altKey);
     if (event.key === "Enter" && shift && !ctrl && !meta) {
       consume();
       this.hint = "⇧↵ previews one command — ↵ runs the sequence";
@@ -8939,17 +9010,20 @@ CommandModeSheetModal.prototype.handleSheetKeydown = function handleSheetKeydown
       this.refocusInput();
       return done();
     }
-    if (event.key === "Enter" && !shift && !meta) {
+    if (event.key === "Enter" && !shift && !meta && !alt) {
       const rendered = (typeof cmArgRenderedRows === "function" ? cmArgRenderedRows(this) : []) || [];
       const highlighted = this.argSelectedKey && rendered.some((item) => item && item.key === this.argSelectedKey);
-      if (highlighted) {
+      if (highlighted && !ctrl) {
         const result = cmOriginalSheetKeydownSeq.call(this, event);
         if (result) cmHandledSheetKeys.add(event);
         return result;
       }
       consume();
-      const force = Boolean(ctrl && !shift);
-      void cmSheetSequenceAddAndRunFromArgs(this, force);
+      if (highlighted && ctrl) {
+        const selected = rendered.find((item) => item && item.key === this.argSelectedKey);
+        if (selected && typeof this.acceptArgumentCompletion === "function") this.acceptArgumentCompletion(selected);
+      }
+      void cmSheetSequenceAddAndRunFromArgs(this, Boolean(ctrl && !shift));
       return done();
     }
     const result = cmOriginalSheetKeydownSeq.call(this, event);

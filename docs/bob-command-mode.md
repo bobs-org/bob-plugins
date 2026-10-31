@@ -36,40 +36,48 @@ Every catalog entry whose positionals are all optional and whose policy is
 are generated from the cached catalog at load, so the inventory scanner does
 not list them here. Each one runs its entry through the same run engine and
 finishes with an outcome toast. `Bob: Rerun last command` repeats the newest
-recorded command with its original arguments and preview setting; a replay of
-an applied run does not ask for its preview or confirmation again.
+recorded command with its original arguments and preview setting, or the whole
+sequence when that newest run was a sequence step; a replay of an applied run
+does not ask for its preview or confirmation again.
 `Bob: Show last output` opens the output pager on the newest run.
 
 ## Keyboard and Vim
 
 With Vim mode enabled, `:` in normal mode opens the sheet. `Escape` (or
-`Ctrl+[` everywhere in command mode) closes it. In the list, `↑` / `↓` and
-`Ctrl+P` / `Ctrl+N` (any letter case or layout) move between rows and keep
-the highlight in view with the cursor in the query; `Enter` runs, `Tab` opens
-argument mode, `Shift+Enter` previews, `Ctrl+Enter` runs without preview,
-and `?` after a query opens `bob <command> --help`. Typing `::` opens Vim's
-ex line. Vim commands such as `:%s/foo/bar/` and `:42` are routed to Vim, and
-matching `exmap` commands can be selected from suggestions. The catalog also
-includes named Pomodoro session actions to start, stop, extend, and shorten a
+`Ctrl+[` everywhere in command mode) closes it unless marks are pending, in
+which case the first press clears the marks and a second press closes the
+sheet. In the list, `↑` / `↓` and `Ctrl+P` / `Ctrl+N` (any letter case or
+layout) move between rows and keep the highlight in view with the cursor in
+the query; `Enter` runs, `Tab` opens argument mode, `Ctrl+M` (any letter case
+or layout, Ctrl alone) marks a bob command as the next sequence step,
+`Shift+Enter` previews, `Ctrl+Enter` runs without preview, and `?` after a
+query opens `bob <command> --help`. Typing `::` opens Vim's ex line. Vim
+commands such as `:%s/foo/bar/` and `:42` are routed to Vim, and matching
+`exmap` commands can be selected from suggestions. The catalog also includes
+named Pomodoro session actions to start, stop, extend, and shorten a
 session. Free-text `bob capture TEXT` is not accepted in command mode; use
 the dedicated capture workflow for free-text capture.
 
 In argument mode, `Tab` accepts the selected completion, arrows or
 `Ctrl+P` / `Ctrl+N` move through completions in the order shown with the
 selected completion kept in view, and `Enter` accepts a completion.
-`Shift+Enter` previews and `Ctrl+Enter` runs the typed command; `Escape` (or
-`Ctrl+[`) returns to the list. A preview is applied with `Ctrl+Enter`. A
-writer without a preview requires `Ctrl+Enter` or the Run button on its
-confirmation card. In Vim mode, `Ctrl+N` / `Ctrl+P` move through mappings and
-`Ctrl+[` returns to the list; the confirm card and both output views use
-`Ctrl+[` exactly like `Escape`.
+`Shift+Enter` previews and `Ctrl+Enter` runs the typed command; `Ctrl+M`
+marks the completed command. With marks pending, `Enter` adds the completed
+command and runs the sequence, `Ctrl+Enter` does the same without the review
+card, and `Shift+Enter` warns instead of previewing. `Escape` (or `Ctrl+[`)
+returns to the list. A preview is applied with `Ctrl+Enter`. A writer without
+a preview requires `Ctrl+Enter` or the Run button on its confirmation card.
+In Vim mode, `Ctrl+N` / `Ctrl+P` move through mappings and `Ctrl+[` returns
+to the list; the confirm card and both output views use `Ctrl+[` exactly like
+`Escape`.
 
 In the pager, `j` / `k` scroll a line and `d` / `u` scroll half a page;
 `g` / `G` go to the start or end. `/` starts search, `n` / `N` move between
 matches, and `w` toggles wrapping. `y` copies output, `Y` copies the
 shell-quoted command, `r` reruns, and `[` / `]` move through history.
-`:` returns to the list, `Escape` returns to the prior stage, and `q` closes
-the sheet.
+On a sequence step the pager shows `step i of n` after the argv; `r` and `Y`
+still apply to that single step. `:` returns to the list, `Escape` returns to
+the prior stage, and `q` closes the sheet.
 
 Bind Vim's keys with non-recursive mappings so replaying `:` cannot reopen
 the sheet recursively:
@@ -95,11 +103,15 @@ unknown cards remain until dismissed. The status-bar chip appears after a run
 has lasted 400 ms. It shows a spinning ring, `bob`, and the longest run's
 clock (with `×N` when several runs are active); a queued-only indicator shows a
 dashed ring, an overdue writer turns amber and slows its spin, and a finished
-run briefly shows its outcome glyph before fading. Hovering lists each run with
+run briefly shows its outcome glyph before fading. A running sequence replaces
+that anatomy with `N/M`, the current step title, and the sequence wall clock.
+Hovering lists each run with
 its command, progress, and queued, overdue, or adopted state; clicking (or
 `Enter`/`Space`) opens the output. Runs adopted after a reload appear with an
 adopted mark. Every run the command-mode engine owns lights the indicator:
-sheet, palette, toast-action, and sibling-plugin API runs.
+sheet, palette, toast-action, and sibling-plugin API runs. A finished sequence
+shows one summary card with Output, Copy (the steps joined by `&&`), Rerun or
+Rerun all, and Resume from k when it halted.
 
 The `gcal-sync` outcome adapter summarizes added calendar rows and links, for
 example `Calendar · +2 tasks, +1 context, MEET +2 links`. A no-op sync reports
@@ -144,29 +156,56 @@ pager in place, and `Esc` returns to the list with the query intact. While a
 report, preview, or help run is in flight, the sheet footer shows a running line
 until its output opens.
 
-Press `Ctrl+M` on a bob command row to mark it as the next sequence step. The
-tray shows marked commands in order; `Ctrl+M` toggles a mark, and the mouse
-Run button starts the sequence. Only bob command rows can be marked. A single
-mark behaves like running that row. With two or more marks, `Enter` runs the
-sequence and first shows one review card if any step needs confirmation or is
-preview-first; `Ctrl+Enter` starts it without that card. Steps run in order
-and stop at the first failed, unknown, or stopped result. Needs-attention
-results continue to the next step, and the final summary card reports the
-sequence outcome.
+Click a row to run it. `Ctrl`/`Cmd`+click marks it instead. With marks
+pending, a click toggles that row's mark and never runs it.
 
-With marks pending, `Backspace` on an empty query removes the last step.
-`Escape` clears all marks and leaves the sheet open; a second `Escape` closes
-it. Marks are temporary and disappear when the sheet closes. RECENT groups a
-sequence into one row that reruns it as a unit. **Bob: Rerun last command**
-also reruns the whole sequence when the newest run was one of its steps.
+## Sequences
+
+`Ctrl+M` marks the selected bob command as the next step. The highlight stays
+on the row so its number badge is visible, and the query is selected so the
+next search can replace it. Marked rows show a filled accent badge and a faint
+tint. A tray under the input lists the steps in order with a **Run N ↵**
+button. `Ctrl+M` on a marked row unmarks it and renumbers the rest. Only bob
+command rows can join a sequence (catalog, FOR THIS NOTE, FROM CLIPBOARD, typed
+`bob` commands, and non-preview RECENT runs). Surface, Vim, unavailable, and
+preview rows refuse with a hint.
+
+A row that still needs positionals opens argument mode. There, `Ctrl+M` marks
+the typed command once it is complete (`Needs NAME` otherwise). With marks
+pending, `Enter` with no highlighted completion adds the command if it is
+complete and runs the sequence; `Ctrl+Enter` does the same without the review
+card, and also adds a highlighted completion's command if it is missing.
+`Shift+Enter` warns and runs nothing. Incomplete arguments leave the marks
+intact.
+
+One mark runs exactly like activating that row: reports stay in the sheet,
+preview-first commands preview, and confirm commands show their card. Nothing
+is stamped as a sequence. Two or more marks start a sequence. `Enter` shows
+one review card if any step is `confirm` or `preview-first`; `Ctrl+Enter` or
+**Run all** starts immediately. `Esc` or **Back** returns to the list with the
+marks intact. Starting closes the sheet and runs steps in order, including
+reads. The sequence halts at the first failed, unknown, or stopped result;
+needs-attention continues and the summary takes the attention tone. Resume
+from k skips completed steps; Rerun all starts a new id; Copy joins the
+commands with `&&`; Output focuses the relevant run. If that sequence is
+already running, the sheet stays open with "That sequence is already running".
+
+`Ctrl+M` on a RECENT sequence row loads its steps (or unloads them if they are
+already marked). RECENT folds each sequence into one row, occupying a single
+slot of the four, with `›` separators and a wall-duration chip. A running
+sequence shows `⟳`; after a reload an incomplete sequence with no live id
+shows interrupted (`◌`). Marks last only while the sheet is open.
 
 ## Run engine
 
 Runs are detached, file-backed children: `spawn(bobPath, argv)` with output
 to per-run files under `command-mode/runs/` in the host state directory, an
 exit receipt when the catalog advertises `run-receipt`, and a JSON run record
-per run. Writers run one at a time behind a save-every-open-note guard; reads
-run in parallel. Read budgets kill the child, writer budgets mark the run
+per run. Writers run one at a time behind a save-every-open-note guard; ordinary reads
+run in parallel. Steps inside a sequence, including reads, run one at a time.
+Each sequence step's record may carry an optional `sequence` stamp
+(`id`, `index`, `total`, `started_at`, `steps`) with schema 1 unchanged.
+Read budgets kill the child, writer budgets mark the run
 overdue, and stop is offered only for runs this instance spawned. A plugin
 reload adopts unfinished records from their receipts, or reports unknown when
 no receipt arrives in time.

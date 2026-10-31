@@ -38,15 +38,25 @@ body { margin:0; padding:28px; background:var(--background-secondary); color:var
 .preview-pager-case { min-width:0; padding:10px; border:1px solid var(--background-modifier-border); border-radius:10px; background:var(--background-secondary); }
 .preview-pager-case h2 { margin:0 0 9px; color:var(--text-muted); font-size:10px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; }
 .preview-pager-case .bob-cmd-pager-view { max-height:280px; border:1px solid var(--background-modifier-border); border-radius:10px; background:var(--background-primary); }
-@media (max-width:740px) { body{padding:14px}.preview-grid{grid-template-columns:1fr}.preview-chips{grid-template-columns:1fr}.preview-pagers{grid-template-columns:1fr} }
+.preview-sheets { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:22px; }
+.preview-sheet-case { min-width:0; padding:10px; border:1px solid var(--background-modifier-border); border-radius:10px; background:var(--background-secondary); }
+.preview-sheet-case h2 { margin:0 0 9px; color:var(--text-muted); font-size:10px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; }
+.preview-sheet-case .bob-cmd-sheet { border:1px solid var(--background-modifier-border); border-radius:10px; background:var(--background-primary); overflow:hidden; }
+.preview-sheet-case .bob-cmd-sheet-header { display:flex; justify-content:space-between; padding:8px 14px 0; color:var(--text-muted); font-size:12px; }
+.preview-sheet-case .bob-cmd-sheet-input-wrap { display:flex; gap:8px; align-items:center; padding:6px 14px 8px; }
+.preview-sheet-case .bob-cmd-sheet-input { flex:1; height:28px; border:0; background:transparent; color:var(--text-normal); font:13px var(--font-monospace); }
+.preview-sheet-case .bob-cmd-sheet-list { padding-bottom:8px; }
+.preview-sheet-case .bob-cmd-sheet-footer { padding:6px 14px 10px; color:var(--text-muted); font-size:11px; border-top:1px solid var(--background-modifier-border); }
+@media (max-width:740px) { body{padding:14px}.preview-grid{grid-template-columns:1fr}.preview-chips{grid-template-columns:1fr}.preview-pagers{grid-template-columns:1fr}.preview-sheets{grid-template-columns:1fr} }
 __PRODUCTION_CSS__
 </style>
 </head>
 <body data-theme="light">
 <main class="preview-shell">
-  <header class="preview-heading"><h1>Bob Command Mode</h1><span>Toast, chip, and output pager</span></header>
+  <header class="preview-heading"><h1>Bob Command Mode</h1><span>Toast, chip, sheet sequences, and output pager</span></header>
   <section class="preview-grid" id="cards"></section>
   <section class="preview-chips" id="chips"></section>
+  <section class="preview-sheets" id="sheets"></section>
   <section class="preview-pagers" id="pagers"></section>
 </main>
 <script>
@@ -65,9 +75,11 @@ window.commandModePreview = {
     document.body.dataset.theme = theme;
     const cards = document.getElementById("cards");
     const chips = document.getElementById("chips");
+    const sheets = document.getElementById("sheets");
     const pagers = document.getElementById("pagers");
     cards.replaceChildren();
     chips.replaceChildren();
+    sheets.replaceChildren();
     pagers.replaceChildren();
     const base = Date.parse("2026-10-26T15:00:00.000Z");
     const cases = [
@@ -187,6 +199,84 @@ window.commandModePreview = {
         chunks: [{ stream: "out", text: '{"ok":true,"hidden":["DEEP WORK"]}\n' }],
       },
     ];
+    const sheetFrames = [
+      {
+        title: "Marked rows and tray",
+        html: `
+          <div class="bob-cmd-sheet">
+            <div class="bob-cmd-sheet-header"><span>bob</span><span>athena · bob 0.9.3</span></div>
+            <div class="bob-cmd-sheet-input-wrap"><span>❯</span><input class="bob-cmd-sheet-input" value="plan" readonly></div>
+            <div class="bob-cmd-seq-tray">
+              <span class="bob-cmd-seq-label">SEQUENCE</span>
+              <span class="bob-cmd-seq-chip"><span class="bob-cmd-seq-num">1</span><span class="bob-cmd-seq-text">vault-sync run</span><button class="bob-cmd-seq-remove">×</button></span>
+              <span class="bob-cmd-seq-sep">›</span>
+              <span class="bob-cmd-seq-chip"><span class="bob-cmd-seq-num">2</span><span class="bob-cmd-seq-text">plan</span><button class="bob-cmd-seq-remove">×</button></span>
+              <button class="bob-cmd-seq-run">Run 2 ↵</button>
+            </div>
+            <div class="bob-cmd-sheet-list">
+              <div class="bob-cmd-sheet-section">DAILY WORKFLOW</div>
+              <div class="bob-cmd-row is-selected is-marked">
+                <span class="bob-cmd-row-mark">2</span>
+                <span class="bob-cmd-row-icon">·</span>
+                <span class="bob-cmd-row-path">plan</span>
+                <span class="bob-cmd-row-title">Today's plan</span>
+                <span class="bob-cmd-row-chips"><span class="bob-cmd-chip-reads">reads</span></span>
+              </div>
+              <div class="bob-cmd-row is-marked">
+                <span class="bob-cmd-row-mark">1</span>
+                <span class="bob-cmd-row-icon">·</span>
+                <span class="bob-cmd-row-path">vault-sync run</span>
+                <span class="bob-cmd-row-title">Sync vault now</span>
+                <span class="bob-cmd-row-chips"><span class="bob-cmd-chip-syncs">syncs</span></span>
+              </div>
+            </div>
+            <div class="bob-cmd-sheet-footer"><span class="bob-cmd-sheet-hint">⌃M unmark · ↵ run 2 · ⌃↵ run 2 now · ⌫ unmark last · esc clear marks</span></div>
+          </div>`,
+      },
+      {
+        title: "Review card",
+        html: `
+          <div class="bob-cmd-sheet">
+            <div class="bob-cmd-confirm bob-cmd-seq-review">
+              <div class="bob-cmd-confirm-title">Run 3 commands in order</div>
+              <div class="bob-cmd-seq-review-list">
+                <div class="bob-cmd-seq-review-row"><span class="bob-cmd-seq-review-index">(1)</span><span class="bob-cmd-seq-review-path">vault-sync run</span><span class="bob-cmd-seq-review-title">Sync vault now</span><span class="bob-cmd-seq-review-effect">syncs</span></div>
+                <div class="bob-cmd-seq-review-row"><span class="bob-cmd-seq-review-index">(2)</span><span class="bob-cmd-seq-review-path">task archive</span><span class="bob-cmd-seq-review-title">Archive done tasks</span><span class="bob-cmd-seq-review-effect">writes</span></div>
+                <div class="bob-cmd-confirm-text bob-cmd-seq-review-note">⚠ asks first: Archive every done task?</div>
+                <div class="bob-cmd-seq-review-row"><span class="bob-cmd-seq-review-index">(3)</span><span class="bob-cmd-seq-review-path">plan</span><span class="bob-cmd-seq-review-title">Today's plan</span><span class="bob-cmd-seq-review-effect">reads</span></div>
+              </div>
+              <div class="bob-cmd-seq-review-stop">Stops at the first failure · open notes save before each writer</div>
+              <div class="bob-cmd-confirm-actions"><button class="bob-cmd-confirm-run">Run all ⌃↵</button><button class="bob-cmd-confirm-back">Back</button></div>
+            </div>
+          </div>`,
+      },
+      {
+        title: "RECENT sequence",
+        html: `
+          <div class="bob-cmd-sheet">
+            <div class="bob-cmd-sheet-list">
+              <div class="bob-cmd-sheet-section">RECENT</div>
+              <div class="bob-cmd-row is-selected">
+                <span class="bob-cmd-row-icon">≡</span>
+                <span class="bob-cmd-row-path"><span class="bob-cmd-row-seq-part">vault-sync run</span><span class="bob-cmd-row-seq-sep">›</span><span class="bob-cmd-row-seq-part">plan</span></span>
+                <span class="bob-cmd-row-title">2 steps</span>
+                <span class="bob-cmd-row-chips"><span class="bob-cmd-row-duration">0:06</span><span class="bob-cmd-row-glyph">⟳</span><span class="bob-cmd-row-age">2m</span></span>
+              </div>
+              <div class="bob-cmd-row-about">Sync vault now → Today's plan</div>
+            </div>
+          </div>`,
+      },
+    ];
+    for (const item of sheetFrames) {
+      const section = document.createElement("article");
+      section.className = "preview-sheet-case";
+      const heading = document.createElement("h2");
+      heading.textContent = item.title;
+      const host = document.createElement("div");
+      host.innerHTML = item.html;
+      section.append(heading, host);
+      sheets.appendChild(section);
+    }
     const records = pagerCases.map((item) => item.record);
     pagerCases.forEach((item, index) => {
       const section = document.createElement("article");

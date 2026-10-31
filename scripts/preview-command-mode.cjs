@@ -171,7 +171,7 @@ async function main() {
       "",
       "Rendered from production toast, chip, ANSI, and pager fragments plus `styles.css` under an Obsidian baseline stylesheet.",
       "",
-      "Cases: single-run outcome cards, completed and halted sequence cards; one run, two runs, queued, overdue, sequence running and queued, completed and halted settles; pager running, completed with ANSI and links, failed stderr, JSON, and a sequence step.",
+      "Cases: single-run outcome cards, completed and halted sequence cards; one run, two runs, queued, overdue, sequence running and queued, completed and halted settles; marked rows with tray, review card, and RECENT sequence row; pager running, completed with ANSI and links, failed stderr, JSON, and a sequence step.",
       "",
       ...screenshots.map((file) => "- " + path.basename(file)),
       "",

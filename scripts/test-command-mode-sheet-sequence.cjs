@@ -11,7 +11,7 @@ const {
   installDocument,
   makeApp,
 } = require("./command-mode-harness.cjs");
-const { pressKey } = require("./modal-harness.cjs");
+const { pressKey, click } = require("./modal-harness.cjs");
 
 const FAKE_BOB = path.join(__dirname, "fixtures", "fake-bob.cjs");
 
@@ -681,4 +681,270 @@ test("RECENT Enter reruns all steps and Ctrl+M loads and unloads them", async ()
   } finally {
     restore();
   }
+});
+
+test("clicking a descendant toggles while marks are pending", () => {
+  const { restore, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const modal = openSheet(plugin);
+    modal.query = "";
+    modal.rebuildRows();
+    modal.render();
+    const plan = findByKey(modal, "entry:plan");
+    const el = modal.rowEls.get(plan.key);
+    const path = (el.children || []).find((child) => child.classList && child.classList.contains("bob-cmd-row-path"));
+    assert.ok(path);
+    el.listeners.click({ ctrlKey: true, preventDefault() {}, stopPropagation() {} });
+    assert.equal(modal.sequenceMarks.length, 1);
+    click(path);
+    assert.equal(modal.sequenceMarks.length, 0);
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("no-mark argument Shift+Enter still previews", async () => {
+  const { restore, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const modal = openSheet(plugin);
+    const row = modal.rows.find((candidate) => candidate.key === "entry:ref-rename");
+    assert.ok(row);
+    modal.enterArgumentStage(row);
+    modal.query = "old.md New";
+    modal.render();
+    let previewed = 0;
+    const original = modal.runArgumentStage.bind(modal);
+    modal.runArgumentStage = async (opts) => {
+      previewed += 1;
+      assert.equal(Boolean(opts && opts.preview), true);
+      return { ok: true, previewed: true };
+    };
+    pressKey(modal, "Enter", { shiftKey: true });
+    assert.equal(previewed, 1);
+    assert.doesNotMatch(sheetText(modal.contentEl), /previews one command/);
+    modal.close();
+    void original;
+  } finally {
+    restore();
+  }
+});
+
+test("marked argument Ctrl+Enter with a highlighted completion adds and runs now", async () => {
+  const { restore, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const calls = [];
+    plugin.commandModeSequenceIsActive = () => false;
+    plugin.commandModeRunSequence = async (steps) => { calls.push(steps); return { ok: true }; };
+    const modal = openSheet(plugin);
+    modal.query = "";
+    modal.rebuildRows();
+    modal.render();
+    modal.selectedKey = findByKey(modal, "entry:plan").key;
+    markSelected(modal);
+    const show = modal.visible.find((row) => row.key === "entry:ref-show");
+    modal.enterArgumentStage(show);
+    modal.query = "";
+    modal.argSelectedKey = "choice";
+    modal.argCompletionGroups = [{ title: "Notes", rows: [{ key: "choice", insertValue: "refs/a.md", value: "refs/a.md" }] }];
+    modal.render();
+    pressKey(modal, "Enter", { ctrlKey: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].length, 2);
+    assert.deepEqual(calls[0][1].argv, ["ref", "show", "refs/a.md"]);
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("incomplete marked arguments leave marks and show the missing positional", () => {
+  const { restore, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const modal = openSheet(plugin);
+    modal.query = "";
+    modal.rebuildRows();
+    modal.render();
+    modal.selectedKey = findByKey(modal, "entry:plan").key;
+    markSelected(modal);
+    const show = modal.visible.find((row) => row.key === "entry:ref-show");
+    modal.enterArgumentStage(show);
+    modal.query = "";
+    modal.render();
+    pressKey(modal, "Enter");
+    assert.equal(modal.sequenceMarks.length, 1);
+    assert.match(sheetText(modal.contentEl), /Needs NOTE/);
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+function historyMark(entryId, argv, title, extras = {}) {
+  const stored = helpers.cmSequenceStep({ argv, entry_id: entryId, title });
+  return {
+    argv: [...stored.argv],
+    entry_id: stored.entry_id,
+    title: stored.title,
+    key: helpers.cmSequenceStepSignature(stored),
+    display: [...argv],
+    effect: extras.effect || "reads",
+    policy: extras.policy || "run",
+    confirm: extras.confirm || null,
+    hasPreview: Boolean(extras.hasPreview),
+    presentation: extras.presentation || "action",
+    row: null,
+  };
+}
+
+test("a RECENT sequence reduced to one report uses the normal activation chain", async () => {
+  const { restore, plugin } = sheetHarness(sheetCatalog());
+  try {
+    let sequenceRuns = 0;
+    plugin.commandModeRunSequence = async () => { sequenceRuns += 1; return { ok: true }; };
+    const modal = openSheet(plugin);
+    modal.sequenceMarks = [historyMark("plan", ["plan"], "Today's plan", { presentation: "report" })];
+    modal.render();
+    pressKey(modal, "Enter");
+    for (let i = 0; i < 200 && modal.stage !== "output"; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(sequenceRuns, 0);
+    assert.equal(modal.stage, "output");
+    assert.equal(modal.sheetOpen, true);
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("a RECENT sequence reduced to one confirm opens its card", () => {
+  const { restore, plugin } = sheetHarness(sheetCatalog());
+  try {
+    let sequenceRuns = 0;
+    plugin.commandModeRunSequence = async () => { sequenceRuns += 1; return { ok: true }; };
+    const modal = openSheet(plugin);
+    modal.sequenceMarks = [historyMark("task-archive", ["task", "archive"], "Archive done tasks", {
+      policy: "confirm", confirm: "Archive every done task?", effect: "writes",
+    })];
+    modal.render();
+    pressKey(modal, "Enter");
+    assert.equal(sequenceRuns, 0);
+    assert.equal(modal.stage, "confirm");
+    assert.equal(modal.sheetOpen, true);
+    assert.match(sheetText(modal.contentEl), /Archive every done task/);
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("a RECENT sequence reduced to one preview-first command previews", async () => {
+  const { restore, plugin } = sheetHarness(sheetCatalog());
+  try {
+    let sequenceRuns = 0;
+    plugin.commandModeRunSequence = async () => { sequenceRuns += 1; return { ok: true }; };
+    const modal = openSheet(plugin);
+    modal.sequenceMarks = [historyMark("ref-rename", ["ref", "rename", "old.md", "New"], "Rename a reference", {
+      policy: "preview-first", hasPreview: true, effect: "syncs",
+    })];
+    modal.render();
+    pressKey(modal, "Enter");
+    for (let i = 0; i < 200 && modal.stage !== "output" && modal.hint == null; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(sequenceRuns, 0);
+    assert.notEqual(modal.stage, "list");
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("rebuildRows passes live sequence ids so a running sequence shows ⟳", () => {
+  const { restore, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const catalog = sheetCatalog();
+    const steps = [
+      { argv: ["vault-sync", "run"], entry_id: "vault-sync", title: "Sync vault now" },
+      { argv: ["plan"], entry_id: "plan", title: "Today's plan" },
+    ];
+    const running = stampedRecord({
+      index0: 0, steps, id: "seq-live", runId: "live-0", outcome: "running",
+      extra: { finished_at: null, duration_ms: null },
+    });
+    helpers.cmWriteRecord(fs, plugin.commandModeRunner.runsDir(), running);
+    plugin.commandModeSequences = new Map([["seq-live", { id: "seq-live", index: 1, steps }]]);
+    const modal = openSheet(plugin);
+    modal.catalog = catalog;
+    plugin.commandModeCatalog = catalog;
+    modal.refreshRecords();
+    modal.rebuildRows();
+    modal.render();
+    const row = modal.visible.find((item) => item.kind === "recent" && item.sequenceId === "seq-live");
+    assert.ok(row);
+    assert.equal(row.state, "running");
+    assert.equal(row.glyph, "⟳");
+    const el = modal.rowEls.get(row.key);
+    assert.ok(el);
+    const seps = (el.children || []).flatMap((child) => (child.children || []).filter((part) => (
+      part.classList && part.classList.contains("bob-cmd-row-seq-sep")
+    )));
+    assert.equal(seps.length, 1);
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("an active sequence refuses a duplicate rerun without closing the sheet", async () => {
+  const { restore, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const catalog = sheetCatalog();
+    const steps = [
+      { argv: ["vault-sync", "run"], entry_id: "vault-sync", title: "Sync vault now" },
+      { argv: ["plan"], entry_id: "plan", title: "Today's plan" },
+    ];
+    const running = stampedRecord({
+      index0: 0, steps, id: "seq-live", runId: "live-0", outcome: "running",
+      extra: { finished_at: null, duration_ms: null },
+    });
+    helpers.cmWriteRecord(fs, plugin.commandModeRunner.runsDir(), running);
+    plugin.commandModeSequences = new Map([["seq-live", { id: "seq-live", index: 1, steps }]]);
+    plugin.commandModeSequenceIsActive = (signature) => {
+      const wanted = helpers.cmSequenceSignature(steps);
+      return signature === wanted;
+    };
+    let started = 0;
+    plugin.commandModeRunSequence = async () => { started += 1; return { ok: true }; };
+    const modal = openSheet(plugin);
+    modal.catalog = catalog;
+    plugin.commandModeCatalog = catalog;
+    modal.refreshRecords();
+    modal.rebuildRows();
+    modal.render();
+    const row = modal.visible.find((item) => item.kind === "recent" && item.sequenceId === "seq-live");
+    modal.selectedKey = row.key;
+    const result = await modal.activateRow(row, {});
+    assert.equal(started, 0);
+    assert.equal(modal.sheetOpen, true);
+    assert.match(sheetText(modal.contentEl), /already running/);
+    assert.equal(result.reason, "already running");
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("an incomplete sequence with no active id stays interrupted after reload", () => {
+  const catalog = sheetCatalog();
+  const steps = [
+    { argv: ["vault-sync", "run"], entry_id: "vault-sync", title: "Sync vault now" },
+    { argv: ["plan"], entry_id: "plan", title: "Today's plan" },
+  ];
+  const runs = [stampedRecord({ index0: 0, steps, id: "seq-int", runId: "i-0" })];
+  const rows = helpers.cmSheetRecentRows(runs, Date.parse("2026-10-26T14:00:00.000Z"), catalog, { activeSequenceIds: [] });
+  assert.equal(rows[0].state, "interrupted");
+  assert.equal(rows[0].glyph, "◌");
 });

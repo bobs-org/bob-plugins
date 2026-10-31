@@ -78,6 +78,20 @@ function cmSheetReadClipboard() {
   }
 }
 
+function cmSheetActiveSequenceIds(plugin) {
+  if (!plugin) return [];
+  try {
+    if (typeof plugin.commandModeSequenceMap === "function") {
+      const map = plugin.commandModeSequenceMap();
+      if (map && typeof map.keys === "function") return [...map.keys()].map(String);
+    }
+    if (plugin.commandModeSequences instanceof Map) return [...plugin.commandModeSequences.keys()].map(String);
+  } catch (error) {
+    return [];
+  }
+  return [];
+}
+
 function cmSheetRowArgv(row) {
   if (row && Array.isArray(row.argv)) return [...row.argv];
   const base = (row && Array.isArray(row.basePath) && row.basePath) ||
@@ -202,7 +216,9 @@ class CommandModeSheetModal extends Modal {
     ];
     if (!this.query.trim()) {
       this.refreshRecords();
-      this.rows = [...cmSheetRecentRows(this.runRecords, Date.now(), this.catalog), ...this.rows];
+      this.rows = [...cmSheetRecentRows(this.runRecords, Date.now(), this.catalog, {
+        activeSequenceIds: cmSheetActiveSequenceIds(this.plugin),
+      }), ...this.rows];
     }
     this.frecency = cmSheetFrecencyMap(this.runRecords, this.rows, Date.now(), this.host);
     this.recomputeVisible();
@@ -325,8 +341,13 @@ class CommandModeSheetModal extends Modal {
     if (row.effect && row.effect !== "opens") chips.createEl("span", { cls: "bob-cmd-chip-" + row.effect, text: row.effect });
     if (row.effect === "opens") chips.createEl("span", { cls: "bob-cmd-chip-opens", text: "opens" });
     if (row.hasPreview) chips.createEl("kbd", { cls: "bob-cmd-kbd", text: "⇧↵" });
-    const duration = cmSheetMedianDuration(this.runRecords, row, this.host);
-    if (duration !== null) chips.createEl("span", { cls: "bob-cmd-row-duration", text: cmFormatDuration(duration) });
+    const isSequenceRow = Boolean(row.sequenceId || (Array.isArray(row.steps) && row.kind === "recent"));
+    if (isSequenceRow) {
+      if (typeof row.duration === "number") chips.createEl("span", { cls: "bob-cmd-row-duration", text: cmFormatDuration(row.duration) });
+    } else {
+      const duration = cmSheetMedianDuration(this.runRecords, row, this.host);
+      if (duration !== null) chips.createEl("span", { cls: "bob-cmd-row-duration", text: cmFormatDuration(duration) });
+    }
     if (row.kind === "recent") {
       chips.createEl("span", { cls: "bob-cmd-row-glyph", text: row.glyph || "?" });
       if (row.age) chips.createEl("span", { cls: "bob-cmd-row-age", text: row.age });
@@ -335,12 +356,16 @@ class CommandModeSheetModal extends Modal {
     if (selected && (row.about || row.tagline)) {
       this.aboutEl = list.createEl("div", { cls: "bob-cmd-row-about", text: row.tagline || row.about });
     }
-    el.addEventListener("click", () => {
-      this.selectedKey = row.key;
-      void this.activateRow(row, {});
+    el.addEventListener("click", (event) => {
+      this.handleRowClick(row, event);
     });
     this.rowEls.set(row.key, el);
     return el;
+  }
+
+  handleRowClick(row, event) {
+    this.selectedKey = row.key;
+    void this.activateRow(row, {});
   }
 
   renderFooter() {

@@ -37259,6 +37259,24 @@ function preflightInboxRoute(options = {}) {
   }
 }
 
+// Lane action label for the route picker subtitle, for example
+// `commit to Next` or `release to Ready`. `mode` is the `planTaskLaneBatch`
+// mode (`"commit"` or `"release"`); anything else maps to `toggle lane`.
+function formatLaneRouteActionLabel(mode) {
+  try {
+    const text = String(mode || "").trim().toLowerCase();
+    if (text === "commit") {
+      return "commit to Next";
+    }
+    if (text === "release") {
+      return "release to Ready";
+    }
+  } catch (error) {
+    // Fall through to the generic label below.
+  }
+  return "toggle lane";
+}
+
 // Short lower-case action label for the route picker subtitle and footer,
 // for example `set P2`, `schedule Fri Oct 9`, or `link to today`. Gates
 // pass `{ label }` (or a plain string); `{ verb, detail }` composes.
@@ -63777,6 +63795,18 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
           ? this.getEditorContent()
           : "";
       if (this.isCountedSession && this.isCountedSession()) {
+        try {
+          const probe = planTaskLaneBatch(content, this.taskSession, {});
+          if (
+            probe &&
+            probe.valid === true &&
+            (probe.mode === "commit" || probe.mode === "release")
+          ) {
+            return { label: formatLaneRouteActionLabel(probe.mode) };
+          }
+        } catch (error) {
+          // Fall through to the generic label below.
+        }
         return { label: "toggle lane" };
       }
       const line =
@@ -63786,11 +63816,11 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
             )
           : String(this.lineText || "");
       const status = getObsidianTaskCheckboxStatus(line);
-      if (status === "*") {
-        return { label: "commit to Next" };
+      if (status === " ") {
+        return { label: formatLaneRouteActionLabel("commit") };
       }
-      if (status === "/" || status === " ") {
-        return { label: "release to Ready" };
+      if (status === "*" || status === "/") {
+        return { label: formatLaneRouteActionLabel("release") };
       }
       return { label: "toggle lane" };
     } catch (error) {
@@ -68425,11 +68455,13 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     }
     // Review-walk auto-advance (nav-gestures): capture after the pending
     // Vim count is consumed and before dispatch. While the gesture lock is
-    // held the key is swallowed with no write.
+    // held the key is swallowed with no write. Off a landing, Alt+N also
+    // answers from any due walk row (`dueRow`), so the cursor row decides.
+    const onTask = isObsidianTaskAtLine(content, cursor.line);
     let reviewOrigin = null;
     try {
       if (typeof this.captureReviewGesture === "function") {
-        const captured = this.captureReviewGesture(cm);
+        const captured = this.captureReviewGesture(cm, { dueRow: onTask });
         if (captured && captured.busy === true) {
           return false;
         }
@@ -68450,7 +68482,6 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         // `continueReviewWalkAfter` never throws; best effort only.
       }
     };
-    const onTask = isObsidianTaskAtLine(content, cursor.line);
     if (onTask) {
       const origin = reviewOrigin;
       reviewOrigin = null;
@@ -68835,6 +68866,31 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         summary = answer.summary;
       }
     }
+    // Inbox routing (route-gate): on an inbox task ask where the task goes
+    // after the action's own prompts and before the write. Esc cancels the
+    // whole gesture with nothing written; stay runs today's write; move acts
+    // then moves. The pre-write re-check below also covers edits made while
+    // the picker was open.
+    let laneRouteGate = { kind: "none" };
+    if (typeof this.promptLaneInboxRoute === "function") {
+      try {
+        laneRouteGate = await this.promptLaneInboxRoute({
+          cm,
+          filePath,
+          content,
+          cursor,
+          mode: probe.mode,
+          additionalTaskCount: options.countExplicit
+            ? options.additionalTaskCount
+            : 0,
+        });
+      } catch (error) {
+        laneRouteGate = { kind: "none" };
+      }
+    }
+    if (!laneRouteGate || laneRouteGate.kind === "cancel") {
+      return false;
+    }
     const plan = planTaskLaneBatch(content, session, {
       summary,
       dateText,
@@ -68960,27 +69016,243 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       releasedPendingCount,
       laneBudgets,
     });
+    const sourceLines = String(content || "").split(/\r?\n/);
+    const laneHandledRefs = session.targets
+      .filter((target) => target && Number.isInteger(target.line))
+      .map((target) =>
+        Object.freeze({
+          path: filePath,
+          line: target.line,
+          raw: String(sourceLines[target.line] ?? target.rawLine ?? ""),
+        }),
+      );
+    if (
+      laneRouteGate &&
+      laneRouteGate.kind === "move" &&
+      typeof this.finishLaneInboxRoute === "function"
+    ) {
+      return await this.finishLaneInboxRoute({
+        cm,
+        filePath,
+        gate: laneRouteGate,
+        laneNoticeText,
+        handledRefs: laneHandledRefs,
+        settle:
+          settleTaskLaneReview && reviewOrigin ? settleTaskLaneReview : null,
+      });
+    }
     if (settleTaskLaneReview && reviewOrigin) {
       // The separate Pomodoro-prune warning stays its own notice; the lane
       // text becomes the advance preamble.
-      const sourceLines = String(content || "").split(/\r?\n/);
       settleTaskLaneReview({
         kind: "lane",
-        handledRefs: session.targets
-          .filter((target) => target && Number.isInteger(target.line))
-          .map((target) =>
-            Object.freeze({
-              path: filePath,
-              line: target.line,
-              raw: String(sourceLines[target.line] ?? target.rawLine ?? ""),
-            }),
-          ),
+        handledRefs: laneHandledRefs,
         notice: laneNoticeText,
       });
     } else {
       new Notice(laneNoticeText);
     }
     return true;
+  }
+}
+// ---- src/511-plugin-lane-inbox-route.js ----
+// Lane inbox routing (route-core): Alt+N on an inbox task asks where the
+// task goes as the last step before it writes. Armed only when
+// `computeInboxRouteContext` arms it (inbox note plus an open #task, never
+// Task Link sessions — the caller only routes the on-task path). Refusals
+// come first and never prompt; a Pending release keeps its Work Log prompt
+// first and Esc there cancels with no route prompt. `promptInboxRoute`
+// opens after the action's own prompts and right before the write; Esc
+// cancels the whole gesture with nothing written; on success the helper
+// settles `route` and on move failure the lane outcome plus the partial
+// notice separately. Never throws.
+class BobNavigationHotkeysLaneInboxRouteMixin {
+  // Ask where an inbox task goes before an Alt+N write. Resolves
+  // `{ kind: "move", path, name, expected, startLine, additionalTaskCount }`,
+  // `{ kind: "stay" }` (today's in-place write), `{ kind: "cancel" }`
+  // (nothing is written), or `{ kind: "none" }` (not armed: behave as
+  // today). An internal error resolves `none`. Never throws.
+  async promptLaneInboxRoute(options = {}) {
+    try {
+      const cm =
+        options.cm && typeof options.cm.getValue === "function"
+          ? options.cm
+          : null;
+      const filePath =
+        typeof options.filePath === "string" ? options.filePath : "";
+      const content = String(options.content || "");
+      const cursor =
+        options.cursor && typeof options.cursor === "object"
+          ? options.cursor
+          : null;
+      if (!cm || !filePath || !cursor || !Number.isInteger(cursor.line)) {
+        return { kind: "none" };
+      }
+      const mode = String(options.mode || "");
+      if (mode !== "commit" && mode !== "release") {
+        return { kind: "none" };
+      }
+      const additional = Math.max(
+        0,
+        Math.floor(numericOrDefault(options.additionalTaskCount, 0)),
+      );
+      let session = null;
+      try {
+        session = discoverCountedObsidianTaskTargets(
+          content,
+          cursor.line,
+          additional,
+        );
+      } catch (error) {
+        session = null;
+      }
+      if (!session || session.valid !== true) {
+        return { kind: "none" };
+      }
+      let armed = null;
+      try {
+        armed = this.computeInboxRouteContext({
+          filePath,
+          content,
+          cursor,
+          taskSession: additional > 0 ? session : null,
+        });
+      } catch (error) {
+        armed = null;
+      }
+      if (!armed) {
+        return { kind: "none" };
+      }
+      let expected = null;
+      try {
+        expected = captureInboxRouteExpected(
+          discoverMovableObsidianTaskTargets(content, cursor.line, additional)
+            .targets,
+        );
+      } catch (error) {
+        expected = null;
+      }
+      if (!expected || expected.length === 0) {
+        return { kind: "none" };
+      }
+      let route = null;
+      try {
+        route = await this.promptInboxRoute({
+          editor: cm,
+          sourcePath: filePath,
+          startLine: cursor.line,
+          additionalTaskCount: additional,
+          actionLabel: formatLaneRouteActionLabel(mode),
+          cancelLabel: "cancel",
+          reservedBlockIds: new Set(),
+        });
+      } catch (error) {
+        return { kind: "none" };
+      }
+      if (route && route.kind === "move" && route.path) {
+        return {
+          kind: "move",
+          path: route.path,
+          name: String(route.name || ""),
+          expected,
+          startLine: cursor.line,
+          additionalTaskCount: additional,
+        };
+      }
+      if (route && route.kind === "stay") {
+        return {
+          kind: "stay",
+          expected,
+          startLine: cursor.line,
+          additionalTaskCount: additional,
+        };
+      }
+      if (route && route.kind === "cancel") {
+        return { kind: "cancel" };
+      }
+      return { kind: "cancel" };
+    } catch (error) {
+      return { kind: "none" };
+    }
+  }
+
+  // Commit the routed move after the lane write. On success one composed
+  // toast (the lane text, then the move notice); on a walk origin it settles
+  // `{ kind: "route" }` once, otherwise it shows the notice. When the lane
+  // committed but the move failed, settle (or show) today's `lane` outcome
+  // with the plain lane text, then show the move notice on its own. Never
+  // throws.
+  async finishLaneInboxRoute(options = {}) {
+    const laneNoticeText = String(options.laneNoticeText || "");
+    const handledRefs = Array.isArray(options.handledRefs)
+      ? options.handledRefs
+      : [];
+    const settle =
+      typeof options.settle === "function" ? options.settle : null;
+    const filePath =
+      typeof options.filePath === "string" ? options.filePath : "";
+    const gate =
+      options.gate && typeof options.gate === "object" ? options.gate : null;
+    try {
+      let inboxName = "inbox";
+      try {
+        inboxName =
+          getVaultPathBasenameWithoutExtension(filePath) || "inbox";
+      } catch (error) {
+        inboxName = "inbox";
+      }
+      let move = null;
+      try {
+        move = await this.commitInboxRoute({
+          editor: options.cm,
+          sourcePath: filePath,
+          startLine:
+            gate && Number.isInteger(gate.startLine) ? gate.startLine : null,
+          additionalTaskCount:
+            gate && Number.isInteger(gate.additionalTaskCount)
+              ? gate.additionalTaskCount
+              : 0,
+          expected: gate && Array.isArray(gate.expected) ? gate.expected : [],
+          destinationPath: gate ? gate.path : "",
+        });
+      } catch (error) {
+        move = null;
+      }
+      if (move && move.ok === true) {
+        const composed = laneNoticeText
+          ? `${laneNoticeText}\n${String(move.notice || "")}`.trim()
+          : String(move.notice || "");
+        const refs = Array.isArray(move.handledRefs) ? move.handledRefs : [];
+        if (settle) {
+          settle({ kind: "route", handledRefs: refs, notice: composed });
+        } else {
+          new Notice(composed);
+        }
+        return true;
+      }
+      const partial =
+        move && move.notice
+          ? String(move.notice)
+          : `Not moved · still in ${inboxName}`;
+      if (settle) {
+        settle({ kind: "lane", handledRefs, notice: laneNoticeText });
+      } else {
+        new Notice(laneNoticeText);
+      }
+      new Notice(partial);
+      return true;
+    } catch (error) {
+      try {
+        if (settle) {
+          settle({ kind: "lane", handledRefs, notice: laneNoticeText });
+        } else if (laneNoticeText) {
+          new Notice(laneNoticeText);
+        }
+      } catch (ignoredError) {
+        // Notices are best-effort.
+      }
+      return true;
+    }
   }
 }
 // ---- src/520-plugin-lane-links-and-review.js ----
@@ -71916,79 +72188,39 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     }
   }
 
-  // Synchronous landing check when a gesture starts. Null means "not on a
-  // landing, behave normally"; REVIEW_WALK_BUSY means "swallow the key,
-  // write nothing"; otherwise the frozen origin, which took the gesture
-  // lock and must be settled exactly once via continueReviewWalkAfter.
-  captureReviewGesture(editor) {
+  // One shared origin builder for landing and due-row captures: bumps the
+  // sequence, takes the gesture lock, snapshots the pre-write queue, and
+  // registers the successor owner. `source` carries the answering row's
+  // `{ path, line, text, key, tier }`; due-row origins also set
+  // `offLanding: true`. Returns the frozen origin, or null. Never throws.
+  buildReviewGestureOrigin(found, queueBefore, todayText, source) {
     try {
-      if (this.reviewWalkBusy()) {
-        return REVIEW_WALK_BUSY;
-      }
-      const landing = this.reviewLanding;
-      if (!landing) {
-        return null;
-      }
-      const todayText = this.laneReleaseDateText({});
-      if (landing.day !== todayText) {
-        return null;
-      }
-      const view = this.getActiveMarkdownView();
       if (
-        !view ||
-        !view.file ||
-        !view.editor ||
-        view.editor !== editor ||
-        view.file.path !== landing.path
+        !found ||
+        typeof found !== "object" ||
+        !Array.isArray(queueBefore) ||
+        !source ||
+        typeof source !== "object"
       ) {
-        return null;
-      }
-      const cursor = getEditorCursor(editor);
-      const text = cursor ? getEditorLine(editor, cursor.line) : null;
-      if (text === null || String(text) !== landing.text) {
-        return null;
-      }
-      const queueBefore = this.readFreshnessQueue(
-        getReviewFreshnessApi(this.app),
-      );
-      let found = null;
-      try {
-        const textIndex = findReviewResumeIndex(queueBefore, {
-          path: landing.path,
-          text: landing.text,
-          line: cursor.line + 1,
-        });
-        if (textIndex >= 0) {
-          found = queueBefore[textIndex];
-        }
-      } catch (error) {
-        found = null;
-      }
-      if (!found) {
-        found = queueBefore.find(
-          (candidate) => {
-            try {
-              return reviewQueueEntryKey(candidate) === landing.key;
-            } catch (error) {
-              return false;
-            }
-          },
-        );
-      }
-      if (!found) {
         return null;
       }
       this.reviewGestureSeq =
         Math.floor(numericOrDefault(this.reviewGestureSeq, 0)) + 1;
       this.takeReviewWalkLock(REVIEW_GESTURE_LOCK_MS);
+      // An off-landing answer starts from the answered row: the landing
+      // anchor's unanswered rows stay walkable, while the durable
+      // answered-accumulator still carries answered history.
+      const usePriors = !source || source.offLanding !== true;
       const anchor = this.reviewAnchor;
       const priorKeys =
+        usePriors &&
         anchor &&
         reviewAnchorIsCurrentDay(anchor, todayText) &&
         Array.isArray(anchor.keys)
           ? anchor.keys.slice()
           : [];
       const priorKeyTexts =
+        usePriors &&
         anchor &&
         reviewAnchorIsCurrentDay(anchor, todayText) &&
         anchor.keyTexts &&
@@ -71999,22 +72231,22 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         found && typeof found.text === "string" && found.text.trim()
           ? found.text.trim()
           : "task";
-      let rowKey = landing.key;
+      let rowKey = source.key;
       try {
         rowKey = reviewQueueEntryKey(found);
       } catch (error) {
-        rowKey = landing.key;
+        rowKey = source.key;
       }
       const origin = Object.freeze({
         seq: this.reviewGestureSeq,
         epoch: Math.floor(numericOrDefault(this.reviewLandingEpoch, 0)),
         day: todayText,
-        path: landing.path,
-        line: cursor.line,
-        text: landing.text,
-        key: landing.key,
+        path: source.path,
+        line: source.line,
+        text: source.text,
+        key: source.key,
         rowKey,
-        tier: landing.tier || null,
+        tier: source.tier || null,
         taskText,
         rank: Number.isInteger(found.rank) ? found.rank : null,
         queueBefore: Object.freeze(
@@ -72022,9 +72254,96 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         ),
         priorKeys: Object.freeze(priorKeys),
         priorKeyTexts,
+        offLanding: source.offLanding === true,
       });
       this.beginReviewSuccessorGestureOwner(origin, "capture");
       return origin;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Synchronous landing check when a gesture starts. Null means "not on a
+  // landing, behave normally"; REVIEW_WALK_BUSY means "swallow the key,
+  // write nothing"; otherwise the frozen origin, which took the gesture
+  // lock and must be settled exactly once via continueReviewWalkAfter.
+  // `options.dueRow` (Alt+N only) also answers from any due walk row: when
+  // the landing path returns null, a due-row capture is attempted. The
+  // public `api.reviewWalk.capture` stays landing-only.
+  captureReviewGesture(editor, options = {}) {
+    try {
+      if (this.reviewWalkBusy()) {
+        return REVIEW_WALK_BUSY;
+      }
+      const todayText = this.laneReleaseDateText({});
+      const landing = this.reviewLanding;
+      if (landing && landing.day === todayText) {
+        const view = this.getActiveMarkdownView();
+        if (
+          view &&
+          view.file &&
+          view.editor &&
+          view.editor === editor &&
+          view.file.path === landing.path
+        ) {
+          const cursor = getEditorCursor(editor);
+          const text = cursor ? getEditorLine(editor, cursor.line) : null;
+          if (text !== null && String(text) === landing.text) {
+            const queueBefore = this.readFreshnessQueue(
+              getReviewFreshnessApi(this.app),
+            );
+            let found = null;
+            try {
+              const textIndex = findReviewResumeIndex(queueBefore, {
+                path: landing.path,
+                text: landing.text,
+                line: cursor.line + 1,
+              });
+              if (textIndex >= 0) {
+                found = queueBefore[textIndex];
+              }
+            } catch (error) {
+              found = null;
+            }
+            if (!found) {
+              found = queueBefore.find(
+                (candidate) => {
+                  try {
+                    return reviewQueueEntryKey(candidate) === landing.key;
+                  } catch (error) {
+                    return false;
+                  }
+                },
+              );
+            }
+            if (found) {
+              return this.buildReviewGestureOrigin(
+                found,
+                queueBefore,
+                todayText,
+                {
+                  path: landing.path,
+                  line: cursor.line,
+                  text: landing.text,
+                  key: landing.key,
+                  tier: landing.tier || null,
+                },
+              );
+            }
+          }
+        }
+      }
+      if (!options || options.dueRow !== true) {
+        return null;
+      }
+      if (typeof this.captureReviewDueRowGesture === "function") {
+        try {
+          return this.captureReviewDueRowGesture(editor);
+        } catch (error) {
+          return null;
+        }
+      }
+      return null;
     } catch (error) {
       return null;
     }
@@ -72066,13 +72385,20 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       const seq = Math.floor(numericOrDefault(this.reviewGestureSeq, 0));
       const epoch = Math.floor(numericOrDefault(this.reviewLandingEpoch, 0));
       const todayText = this.laneReleaseDateText({});
+      // An off-landing (due-row) origin is stale on a sequence, epoch, or
+      // day mismatch only: a landing elsewhere does not block it, while a
+      // new landing after capture (an epoch bump) still does.
+      const offLanding =
+        origin &&
+        typeof origin === "object" &&
+        origin.offLanding === true;
       const stale =
         !origin ||
         typeof origin !== "object" ||
         origin.seq !== seq ||
         origin.epoch !== epoch ||
-        !this.reviewLanding ||
-        this.reviewLanding.key !== origin.key ||
+        (!offLanding &&
+          (!this.reviewLanding || this.reviewLanding.key !== origin.key)) ||
         todayText !== origin.day;
       if (stale) {
         showNotice(notice);
@@ -72572,6 +72898,91 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     );
     new Notice(notice);
     return true;
+  }
+}
+// ---- src/536a-plugin-review-due-row.js ----
+// Due-row review capture (nav-gestures): Alt+N answers from any due walk
+// row, not only the exact `]s` landing. The cursor row counts when the
+// pre-write freshness queue holds an entry with the same note path and the
+// exact current line text; any review group counts. After a resolving write
+// the walk advances exactly once to the answered row's walk successor,
+// planned anchor-only from the pre-write queue. A task that is not due
+// keeps today's behavior (plain notice, no advance). Never throws.
+class BobNavigationHotkeysReviewDueRowMixin {
+  // Synchronous due-row check for Alt+N (`options.dueRow`). Requires the
+  // active view's editor to be `editor`, finds the cursor row in the
+  // pre-write queue with `findReviewResumeIndex`, and builds the origin
+  // with the shared builder. Returns null when there is no match: the
+  // gesture then behaves as today. Never throws.
+  captureReviewDueRowGesture(editor) {
+    try {
+      const view = this.getActiveMarkdownView();
+      if (
+        !view ||
+        !view.file ||
+        typeof view.file.path !== "string" ||
+        !view.editor ||
+        view.editor !== editor
+      ) {
+        return null;
+      }
+      const cursor = getEditorCursor(editor);
+      const lineText = cursor ? getEditorLine(editor, cursor.line) : null;
+      if (!cursor || lineText === null) {
+        return null;
+      }
+      const todayText = this.laneReleaseDateText({});
+      const queueBefore = this.readFreshnessQueue(
+        getReviewFreshnessApi(this.app),
+      );
+      if (!Array.isArray(queueBefore) || queueBefore.length === 0) {
+        return null;
+      }
+      let found = null;
+      try {
+        const index = findReviewResumeIndex(queueBefore, {
+          path: view.file.path,
+          text: lineText,
+          line: cursor.line + 1,
+        });
+        if (index >= 0) {
+          found = queueBefore[index];
+        }
+      } catch (error) {
+        found = null;
+      }
+      if (!found) {
+        return null;
+      }
+      let key = "";
+      try {
+        key = reviewQueueEntryKey(found);
+      } catch (error) {
+        return null;
+      }
+      if (!key) {
+        return null;
+      }
+      let tier = null;
+      try {
+        tier = reviewEntryMachineTier(found) || null;
+      } catch (error) {
+        tier = null;
+      }
+      if (typeof this.buildReviewGestureOrigin !== "function") {
+        return null;
+      }
+      return this.buildReviewGestureOrigin(found, queueBefore, todayText, {
+        path: view.file.path,
+        line: cursor.line,
+        text: lineText,
+        key,
+        tier,
+        offLanding: true,
+      });
+    } catch (error) {
+      return null;
+    }
   }
 }
 // ---- src/537-plugin-review-move-park.js ----
@@ -97528,11 +97939,13 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysQuickRollMixin,
   BobNavigationHotkeysQuickRollPreviewMixin,
   BobNavigationHotkeysLinkCommitLaneMixin,
+  BobNavigationHotkeysLaneInboxRouteMixin,
   BobNavigationHotkeysLaneReviewMixin,
   BobNavigationHotkeysTaskLinkLaneMixin,
   BobNavigationHotkeysFreshnessDecayMixin,
   BobNavigationHotkeysChecklistWalkMixin,
   BobNavigationHotkeysReviewAdvanceMixin,
+  BobNavigationHotkeysReviewDueRowMixin,
   BobNavigationHotkeysWalkLandingMixin,
   BobNavigationHotkeysLaneWalkMixin,
   BobNavigationHotkeysBracketRepeatMixin,
@@ -98162,7 +98575,7 @@ module.exports.helpers = {
   verifyInboxRouteTargets,
   filterInboxRouteDestinations,
   preflightInboxRoute,
-  formatInboxRouteActionLabel,
+  formatLaneRouteActionLabel, formatInboxRouteActionLabel,
   formatInboxRouteMoveNotice,
   formatInboxRouteTaskSubtitle,
   createInboxRouteApi,

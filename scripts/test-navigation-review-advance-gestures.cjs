@@ -502,10 +502,13 @@ test("Alt+N on a checklist landing stays with the plain notice", async () => {
   assert.doesNotMatch(notices[0], /Review \d+\/\d+/);
 });
 
-test("Alt+N off a landing behaves exactly as today", async () => {
+test("Alt+N off a landing on a task that is not due behaves exactly as today", async () => {
   clearNotices();
   const fixture = makePlugin({ rows: nextQueue(["One", "Two"]), activePath: "walk.md" });
   assert.equal(fixture.plugin.reviewLanding, null);
+  // A task line the queue does not know: in place, no advance.
+  fixture.editor.content = `${fixture.editor.content}\n- [*] #task Offqueue`;
+  fixture.editor.setCursor(2, 0);
 
   assert.equal(
     await fixture.plugin.toggleTaskLane(fixture.editor, { skipReleasePrompt: true }),
@@ -513,10 +516,11 @@ test("Alt+N off a landing behaves exactly as today", async () => {
   );
   await flushAll(fixture.plugin);
 
-  assert.match(fixture.editor.content.split("\n")[0], /^- \[ \] #task One/);
+  assert.match(fixture.editor.content.split("\n")[2], /^- \[ \] #task Offqueue/);
   assert.equal(fixture.plugin.reviewLanding, null);
   assert.equal(notices.length, 1);
   assert.match(notices[0], /→ Ready · 1 task/);
+  assert.doesNotMatch(notices[0], /Review \d+\/\d+/);
 });
 
 test("Alt+N while the gesture lock is held is swallowed", async () => {

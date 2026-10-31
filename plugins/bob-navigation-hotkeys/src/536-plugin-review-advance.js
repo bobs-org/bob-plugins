@@ -224,79 +224,39 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     }
   }
 
-  // Synchronous landing check when a gesture starts. Null means "not on a
-  // landing, behave normally"; REVIEW_WALK_BUSY means "swallow the key,
-  // write nothing"; otherwise the frozen origin, which took the gesture
-  // lock and must be settled exactly once via continueReviewWalkAfter.
-  captureReviewGesture(editor) {
+  // One shared origin builder for landing and due-row captures: bumps the
+  // sequence, takes the gesture lock, snapshots the pre-write queue, and
+  // registers the successor owner. `source` carries the answering row's
+  // `{ path, line, text, key, tier }`; due-row origins also set
+  // `offLanding: true`. Returns the frozen origin, or null. Never throws.
+  buildReviewGestureOrigin(found, queueBefore, todayText, source) {
     try {
-      if (this.reviewWalkBusy()) {
-        return REVIEW_WALK_BUSY;
-      }
-      const landing = this.reviewLanding;
-      if (!landing) {
-        return null;
-      }
-      const todayText = this.laneReleaseDateText({});
-      if (landing.day !== todayText) {
-        return null;
-      }
-      const view = this.getActiveMarkdownView();
       if (
-        !view ||
-        !view.file ||
-        !view.editor ||
-        view.editor !== editor ||
-        view.file.path !== landing.path
+        !found ||
+        typeof found !== "object" ||
+        !Array.isArray(queueBefore) ||
+        !source ||
+        typeof source !== "object"
       ) {
-        return null;
-      }
-      const cursor = getEditorCursor(editor);
-      const text = cursor ? getEditorLine(editor, cursor.line) : null;
-      if (text === null || String(text) !== landing.text) {
-        return null;
-      }
-      const queueBefore = this.readFreshnessQueue(
-        getReviewFreshnessApi(this.app),
-      );
-      let found = null;
-      try {
-        const textIndex = findReviewResumeIndex(queueBefore, {
-          path: landing.path,
-          text: landing.text,
-          line: cursor.line + 1,
-        });
-        if (textIndex >= 0) {
-          found = queueBefore[textIndex];
-        }
-      } catch (error) {
-        found = null;
-      }
-      if (!found) {
-        found = queueBefore.find(
-          (candidate) => {
-            try {
-              return reviewQueueEntryKey(candidate) === landing.key;
-            } catch (error) {
-              return false;
-            }
-          },
-        );
-      }
-      if (!found) {
         return null;
       }
       this.reviewGestureSeq =
         Math.floor(numericOrDefault(this.reviewGestureSeq, 0)) + 1;
       this.takeReviewWalkLock(REVIEW_GESTURE_LOCK_MS);
+      // An off-landing answer starts from the answered row: the landing
+      // anchor's unanswered rows stay walkable, while the durable
+      // answered-accumulator still carries answered history.
+      const usePriors = !source || source.offLanding !== true;
       const anchor = this.reviewAnchor;
       const priorKeys =
+        usePriors &&
         anchor &&
         reviewAnchorIsCurrentDay(anchor, todayText) &&
         Array.isArray(anchor.keys)
           ? anchor.keys.slice()
           : [];
       const priorKeyTexts =
+        usePriors &&
         anchor &&
         reviewAnchorIsCurrentDay(anchor, todayText) &&
         anchor.keyTexts &&
@@ -307,22 +267,22 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         found && typeof found.text === "string" && found.text.trim()
           ? found.text.trim()
           : "task";
-      let rowKey = landing.key;
+      let rowKey = source.key;
       try {
         rowKey = reviewQueueEntryKey(found);
       } catch (error) {
-        rowKey = landing.key;
+        rowKey = source.key;
       }
       const origin = Object.freeze({
         seq: this.reviewGestureSeq,
         epoch: Math.floor(numericOrDefault(this.reviewLandingEpoch, 0)),
         day: todayText,
-        path: landing.path,
-        line: cursor.line,
-        text: landing.text,
-        key: landing.key,
+        path: source.path,
+        line: source.line,
+        text: source.text,
+        key: source.key,
         rowKey,
-        tier: landing.tier || null,
+        tier: source.tier || null,
         taskText,
         rank: Number.isInteger(found.rank) ? found.rank : null,
         queueBefore: Object.freeze(
@@ -330,9 +290,96 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         ),
         priorKeys: Object.freeze(priorKeys),
         priorKeyTexts,
+        offLanding: source.offLanding === true,
       });
       this.beginReviewSuccessorGestureOwner(origin, "capture");
       return origin;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Synchronous landing check when a gesture starts. Null means "not on a
+  // landing, behave normally"; REVIEW_WALK_BUSY means "swallow the key,
+  // write nothing"; otherwise the frozen origin, which took the gesture
+  // lock and must be settled exactly once via continueReviewWalkAfter.
+  // `options.dueRow` (Alt+N only) also answers from any due walk row: when
+  // the landing path returns null, a due-row capture is attempted. The
+  // public `api.reviewWalk.capture` stays landing-only.
+  captureReviewGesture(editor, options = {}) {
+    try {
+      if (this.reviewWalkBusy()) {
+        return REVIEW_WALK_BUSY;
+      }
+      const todayText = this.laneReleaseDateText({});
+      const landing = this.reviewLanding;
+      if (landing && landing.day === todayText) {
+        const view = this.getActiveMarkdownView();
+        if (
+          view &&
+          view.file &&
+          view.editor &&
+          view.editor === editor &&
+          view.file.path === landing.path
+        ) {
+          const cursor = getEditorCursor(editor);
+          const text = cursor ? getEditorLine(editor, cursor.line) : null;
+          if (text !== null && String(text) === landing.text) {
+            const queueBefore = this.readFreshnessQueue(
+              getReviewFreshnessApi(this.app),
+            );
+            let found = null;
+            try {
+              const textIndex = findReviewResumeIndex(queueBefore, {
+                path: landing.path,
+                text: landing.text,
+                line: cursor.line + 1,
+              });
+              if (textIndex >= 0) {
+                found = queueBefore[textIndex];
+              }
+            } catch (error) {
+              found = null;
+            }
+            if (!found) {
+              found = queueBefore.find(
+                (candidate) => {
+                  try {
+                    return reviewQueueEntryKey(candidate) === landing.key;
+                  } catch (error) {
+                    return false;
+                  }
+                },
+              );
+            }
+            if (found) {
+              return this.buildReviewGestureOrigin(
+                found,
+                queueBefore,
+                todayText,
+                {
+                  path: landing.path,
+                  line: cursor.line,
+                  text: landing.text,
+                  key: landing.key,
+                  tier: landing.tier || null,
+                },
+              );
+            }
+          }
+        }
+      }
+      if (!options || options.dueRow !== true) {
+        return null;
+      }
+      if (typeof this.captureReviewDueRowGesture === "function") {
+        try {
+          return this.captureReviewDueRowGesture(editor);
+        } catch (error) {
+          return null;
+        }
+      }
+      return null;
     } catch (error) {
       return null;
     }
@@ -374,13 +421,20 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       const seq = Math.floor(numericOrDefault(this.reviewGestureSeq, 0));
       const epoch = Math.floor(numericOrDefault(this.reviewLandingEpoch, 0));
       const todayText = this.laneReleaseDateText({});
+      // An off-landing (due-row) origin is stale on a sequence, epoch, or
+      // day mismatch only: a landing elsewhere does not block it, while a
+      // new landing after capture (an epoch bump) still does.
+      const offLanding =
+        origin &&
+        typeof origin === "object" &&
+        origin.offLanding === true;
       const stale =
         !origin ||
         typeof origin !== "object" ||
         origin.seq !== seq ||
         origin.epoch !== epoch ||
-        !this.reviewLanding ||
-        this.reviewLanding.key !== origin.key ||
+        (!offLanding &&
+          (!this.reviewLanding || this.reviewLanding.key !== origin.key)) ||
         todayText !== origin.day;
       if (stale) {
         showNotice(notice);

@@ -338,11 +338,13 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     }
     // Review-walk auto-advance (nav-gestures): capture after the pending
     // Vim count is consumed and before dispatch. While the gesture lock is
-    // held the key is swallowed with no write.
+    // held the key is swallowed with no write. Off a landing, Alt+N also
+    // answers from any due walk row (`dueRow`), so the cursor row decides.
+    const onTask = isObsidianTaskAtLine(content, cursor.line);
     let reviewOrigin = null;
     try {
       if (typeof this.captureReviewGesture === "function") {
-        const captured = this.captureReviewGesture(cm);
+        const captured = this.captureReviewGesture(cm, { dueRow: onTask });
         if (captured && captured.busy === true) {
           return false;
         }
@@ -363,7 +365,6 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         // `continueReviewWalkAfter` never throws; best effort only.
       }
     };
-    const onTask = isObsidianTaskAtLine(content, cursor.line);
     if (onTask) {
       const origin = reviewOrigin;
       reviewOrigin = null;
@@ -748,6 +749,31 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         summary = answer.summary;
       }
     }
+    // Inbox routing (route-gate): on an inbox task ask where the task goes
+    // after the action's own prompts and before the write. Esc cancels the
+    // whole gesture with nothing written; stay runs today's write; move acts
+    // then moves. The pre-write re-check below also covers edits made while
+    // the picker was open.
+    let laneRouteGate = { kind: "none" };
+    if (typeof this.promptLaneInboxRoute === "function") {
+      try {
+        laneRouteGate = await this.promptLaneInboxRoute({
+          cm,
+          filePath,
+          content,
+          cursor,
+          mode: probe.mode,
+          additionalTaskCount: options.countExplicit
+            ? options.additionalTaskCount
+            : 0,
+        });
+      } catch (error) {
+        laneRouteGate = { kind: "none" };
+      }
+    }
+    if (!laneRouteGate || laneRouteGate.kind === "cancel") {
+      return false;
+    }
     const plan = planTaskLaneBatch(content, session, {
       summary,
       dateText,
@@ -873,21 +899,37 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       releasedPendingCount,
       laneBudgets,
     });
+    const sourceLines = String(content || "").split(/\r?\n/);
+    const laneHandledRefs = session.targets
+      .filter((target) => target && Number.isInteger(target.line))
+      .map((target) =>
+        Object.freeze({
+          path: filePath,
+          line: target.line,
+          raw: String(sourceLines[target.line] ?? target.rawLine ?? ""),
+        }),
+      );
+    if (
+      laneRouteGate &&
+      laneRouteGate.kind === "move" &&
+      typeof this.finishLaneInboxRoute === "function"
+    ) {
+      return await this.finishLaneInboxRoute({
+        cm,
+        filePath,
+        gate: laneRouteGate,
+        laneNoticeText,
+        handledRefs: laneHandledRefs,
+        settle:
+          settleTaskLaneReview && reviewOrigin ? settleTaskLaneReview : null,
+      });
+    }
     if (settleTaskLaneReview && reviewOrigin) {
       // The separate Pomodoro-prune warning stays its own notice; the lane
       // text becomes the advance preamble.
-      const sourceLines = String(content || "").split(/\r?\n/);
       settleTaskLaneReview({
         kind: "lane",
-        handledRefs: session.targets
-          .filter((target) => target && Number.isInteger(target.line))
-          .map((target) =>
-            Object.freeze({
-              path: filePath,
-              line: target.line,
-              raw: String(sourceLines[target.line] ?? target.rawLine ?? ""),
-            }),
-          ),
+        handledRefs: laneHandledRefs,
         notice: laneNoticeText,
       });
     } else {

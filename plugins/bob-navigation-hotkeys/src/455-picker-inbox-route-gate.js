@@ -618,6 +618,18 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
           ? this.getEditorContent()
           : "";
       if (this.isCountedSession && this.isCountedSession()) {
+        try {
+          const probe = planTaskLaneBatch(content, this.taskSession, {});
+          if (
+            probe &&
+            probe.valid === true &&
+            (probe.mode === "commit" || probe.mode === "release")
+          ) {
+            return { label: formatLaneRouteActionLabel(probe.mode) };
+          }
+        } catch (error) {
+          // Fall through to the generic label below.
+        }
         return { label: "toggle lane" };
       }
       const line =
@@ -627,11 +639,11 @@ class BulletPropertyPickerInboxRouteGateMixin extends FilteredPickerModal {
             )
           : String(this.lineText || "");
       const status = getObsidianTaskCheckboxStatus(line);
-      if (status === "*") {
-        return { label: "commit to Next" };
+      if (status === " ") {
+        return { label: formatLaneRouteActionLabel("commit") };
       }
-      if (status === "/" || status === " ") {
-        return { label: "release to Ready" };
+      if (status === "*" || status === "/") {
+        return { label: formatLaneRouteActionLabel("release") };
       }
       return { label: "toggle lane" };
     } catch (error) {

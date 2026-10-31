@@ -578,7 +578,7 @@ module.exports.helpers = {
   verifyInboxRouteTargets,
   filterInboxRouteDestinations,
   preflightInboxRoute,
-  formatInboxRouteActionLabel,
+  formatLaneRouteActionLabel, formatInboxRouteActionLabel,
   formatInboxRouteMoveNotice,
   formatInboxRouteTaskSubtitle,
   createInboxRouteApi,

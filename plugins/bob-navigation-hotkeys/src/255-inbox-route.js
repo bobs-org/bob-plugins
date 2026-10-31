@@ -189,6 +189,24 @@ function preflightInboxRoute(options = {}) {
   }
 }
 
+// Lane action label for the route picker subtitle, for example
+// `commit to Next` or `release to Ready`. `mode` is the `planTaskLaneBatch`
+// mode (`"commit"` or `"release"`); anything else maps to `toggle lane`.
+function formatLaneRouteActionLabel(mode) {
+  try {
+    const text = String(mode || "").trim().toLowerCase();
+    if (text === "commit") {
+      return "commit to Next";
+    }
+    if (text === "release") {
+      return "release to Ready";
+    }
+  } catch (error) {
+    // Fall through to the generic label below.
+  }
+  return "toggle lane";
+}
+
 // Short lower-case action label for the route picker subtitle and footer,
 // for example `set P2`, `schedule Fri Oct 9`, or `link to today`. Gates
 // pass `{ label }` (or a plain string); `{ verb, detail }` composes.

@@ -490,7 +490,18 @@ function keepInboxViewModel(options = {}) {
     if (state === "auth") {
       return keepInboxSigninView(opts, targetPath, nowMs);
     }
+    const checkedAt = keep.checked_at || null;
+    const checkedDate = keepInboxParseTime(checkedAt);
+    const dayMs = 24 * 60 * 60 * 1000;
+    const recent =
+      checkedDate !== null &&
+      Number.isFinite(nowMs - checkedDate.getTime()) &&
+      nowMs - checkedDate.getTime() >= 0 &&
+      nowMs - checkedDate.getTime() <= dayMs;
     if (state === "ok" && keep.stale !== true) {
+      if (!recent) {
+        return keepInboxUnknownView(opts, targetPath, nowMs, keep, inboxDoc);
+      }
       const total = keep.pull && Number.isFinite(Number(keep.pull.total))
         ? Number(keep.pull.total)
         : null;
@@ -500,14 +511,6 @@ function keepInboxViewModel(options = {}) {
       return keepInboxZeroView(opts, targetPath, nowMs, keep, inboxDoc);
     }
     // Stale or failure states with a verified host.
-    const checkedAt = keep.checked_at || null;
-    const checkedDate = keepInboxParseTime(checkedAt);
-    const dayMs = 24 * 60 * 60 * 1000;
-    const recent =
-      checkedDate !== null &&
-      Number.isFinite(nowMs - checkedDate.getTime()) &&
-      nowMs - checkedDate.getTime() >= 0 &&
-      nowMs - checkedDate.getTime() <= dayMs;
     const total = keep.pull && Number.isFinite(Number(keep.pull.total))
       ? Number(keep.pull.total)
       : null;

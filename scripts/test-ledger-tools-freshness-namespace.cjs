@@ -9,6 +9,7 @@ const {
   makeFreshnessApp,
   withMissingConfig,
   makeStatusEl,
+  makeStatusItemFactory,
 } = require("./ledger-tools-harness.cjs");
 test("freshness namespace v12 exposes unblock TICKLER metadata and writers", () => {
   withMissingConfig(() => {
@@ -530,7 +531,7 @@ test("status bar clicks through, falling back to rotten", () => {
     };
     app.workspace.openLinkText = (target) => opened.push(target);
     const plugin = new LedgerToolsPlugin(app, {});
-    plugin.addStatusBarItem = () => el;
+    plugin.addStatusBarItem = makeStatusItemFactory(el);
     plugin.onload();
     try {
       assert.equal(plugin.freshnessStatusEl, el);
@@ -554,7 +555,7 @@ test("status bar clicks through, falling back to rotten", () => {
     fallbackApp.workspace.openLinkText = (target) =>
       fallbackOpened.push(target);
     const fallback = new LedgerToolsPlugin(fallbackApp, {});
-    fallback.addStatusBarItem = () => fallbackEl;
+    fallback.addStatusBarItem = makeStatusItemFactory(fallbackEl);
     fallback.onload();
     try {
       fallback.updateFreshnessStatusBar();

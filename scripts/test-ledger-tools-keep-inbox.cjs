@@ -351,6 +351,25 @@ test("fresh, zero, stale, unknown, and signin tones", () => {
   assert.equal(signin.keep.text, "");
 });
 
+test("old verified ok counts become unknown until checked again", () => {
+  for (const total of [3, 0]) {
+    const view = keepInboxViewModel({
+      status: spawnOk({
+        keep: {
+          state: "ok",
+          stale: false,
+          pull: { total },
+          checked_at: "2026-10-29T18:02:00Z",
+        },
+      }),
+      now: FIXED_NOW,
+    });
+    assert.equal(view.keep.tone, "unknown");
+    assert.equal(view.keep.text, "–");
+    assert.ok(view.keep.tooltip.includes("Last checked"));
+  }
+});
+
 test("unsupported hides Keep and lives only with the default file", () => {
   const bad = { ok: false, code: "unsupported", message: "nope" };
   const withFile = keepInboxViewModel({
@@ -630,6 +649,44 @@ test("focus triggers coalesce to one refresh per fifteen seconds", async (t) => 
   assert.equal(calls.length, 2);
 });
 
+test("unattended focus reads cached status without refreshing Keep", async (t) => {
+  const priorDocument = global.document;
+  global.document = { visibilityState: "visible", hasFocus: () => false };
+  t.after(() => {
+    if (priorDocument === undefined) delete global.document;
+    else global.document = priorDocument;
+  });
+  const plugin = makeActionPlugin();
+  const calls = respondWith(plugin, statusReport());
+  await plugin.keepInboxOnFocus("window-focus");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ["gkeep", "status", "-f", "json"]);
+});
+
+test("unconfigured focus cache reads are throttled for ten minutes", async (t) => {
+  const priorDocument = global.document;
+  const priorDateNow = Date.now;
+  let now = FIXED_NOW.getTime();
+  Date.now = () => now;
+  global.document = { visibilityState: "visible", hasFocus: () => false };
+  t.after(() => {
+    Date.now = priorDateNow;
+    if (priorDocument === undefined) delete global.document;
+    else global.document = priorDocument;
+  });
+  const plugin = makeActionPlugin();
+  const calls = respondWith(plugin, statusReport({ top: { configured: false } }));
+  await plugin.keepInboxOnFocus("window-focus");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ["gkeep", "status", "-f", "json"]);
+  await plugin.keepInboxOnFocus("visibility");
+  assert.equal(calls.length, 1);
+  now += 10 * 60 * 1000;
+  await plugin.keepInboxOnFocus("online");
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].args, ["gkeep", "status", "-f", "json"]);
+});
+
 test("single flight queues one request and upgrades it from cache to forced", async () => {
   const plugin = makeActionPlugin();
   const calls = [];
@@ -675,6 +732,11 @@ test("forced check feedback follows the bob refresh result", async () => {
       notice: "Google Keep was checked 8 s ago",
     },
     {
+      name: "floor after old success",
+      keep: { checked_at: "2026-10-31T14:00:00Z", refresh: { ran: false, skipped: "floor" } },
+      notice: "Google Keep was checked less than a minute ago",
+    },
+    {
       name: "rate-limited",
       keep: { state: "rate_limited", next_check_at: "2026-10-31T16:30:00Z", refresh: { ran: false, skipped: "backoff" } },
       notice: "Google asked Bob to slow down · try after 16:30",
@@ -696,7 +758,7 @@ test("forced check feedback follows the bob refresh result", async () => {
     assert.equal(notices[0] || null, refreshCase.notice, refreshCase.name);
     seen.push(refreshCase.name);
   }
-  assert.deepEqual(seen, ["success", "failure", "floor", "rate-limited", "in-flight", "busy pull"]);
+  assert.deepEqual(seen, ["success", "failure", "floor", "floor after old success", "rate-limited", "in-flight", "busy pull"]);
   assert.ok(plugin.keepInboxInFlightRereadTimer !== null);
 });
 
@@ -709,7 +771,7 @@ test("bulb clicks route by tone and missing Command Mode gives a preview hint", 
   assert.equal(notices.pop(), "Preview with: bob gkeep pull -d");
   plugin.keepInboxLastView = { keep: { tone: "signin" } };
   clicked({ preventDefault() {}, stopPropagation() {} });
-  assert.equal(notices.pop(), "Preview with: bob gkeep doctor -d");
+  assert.equal(notices.pop(), "Preview with: Run bob gkeep doctor in a terminal");
 
   const commands = [];
   const commandModePlugin = makeActionPlugin({

@@ -252,7 +252,8 @@ there is work, outlined when clear, dashed when last-known, and
 `lightbulb-off` when sign-in expired; the inbox is a plain numeral (faint
 at zero, `–` when unknown). The whole item hides when Keep is not
 configured or before the first status read; the Keep pill hides while
-Keep never verified on this host.
+Keep never verified on this host. A successful count last checked more
+than a day ago shows `–` until the next check.
 
 The Keep count comes from `bob gkeep status`; the inbox count is recomputed
 from the Tasks plugin cache on every `obsidian-tasks-plugin:cache-update`,
@@ -262,7 +263,9 @@ never decides backoff. It runs `bob gkeep status -r` after layout settles,
 on focus/visibility/online events, and when bob's `next_check_at` arrives,
 but only while Obsidian is visible, focused, and has seen keyboard, pointer,
 or wheel input in the last ten minutes. Unattended due checks wait for the
-next input; Bob still applies its own freshness, budget, and backoff gates.
+next input; without attention, focus only re-reads Bob's cached status, at
+most every ten seconds, or every ten minutes while Keep is not configured.
+Bob still applies its own freshness, budget, and backoff gates.
 
 Click the bulb when its count is fresh to open Command Mode at a dry-run
 `gkeep pull` preview; click it when clear, stale, or unknown to check now.

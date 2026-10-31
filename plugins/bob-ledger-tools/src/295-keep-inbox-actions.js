@@ -150,7 +150,7 @@ BobLedgerToolsKeepInboxMixin.prototype.setupKeepInboxActions = function () {
       if (tone === "fresh") {
         void self.keepInboxActionPreview(["gkeep", "pull"], "bob gkeep pull -d");
       } else if (tone === "signin") {
-        void self.keepInboxActionPreview(["gkeep", "doctor"], "bob gkeep doctor -d");
+        void self.keepInboxActionPreview(["gkeep", "doctor"], "Run bob gkeep doctor in a terminal");
       } else {
         void self.keepInboxCheckNow();
       }
@@ -218,8 +218,13 @@ BobLedgerToolsKeepInboxMixin.prototype.keepInboxActionScheduleInitialCheck = fun
   }, KEEP_INBOX_ACTION_INITIAL_DELAY_MS);
 };
 
+const keepInboxViewOnFocus = BobLedgerToolsKeepInboxMixin.prototype.keepInboxOnFocus;
 BobLedgerToolsKeepInboxMixin.prototype.keepInboxOnFocus = function (reason) {
-  this.keepInboxActionTryAutomatic(reason || "focus");
+  if (this.keepInboxActionCanRefresh() && this.keepInboxActionAttended()) {
+    return this.keepInboxActionTryAutomatic(reason || "focus");
+  }
+  keepInboxViewOnFocus.call(this, reason);
+  return Promise.resolve(null);
 };
 
 BobLedgerToolsKeepInboxMixin.prototype.keepInboxActionTryAutomatic = function (reason) {
@@ -402,9 +407,12 @@ BobLedgerToolsKeepInboxMixin.prototype.keepInboxCheckNow = function () {
         return result;
       }
       if (refresh.skipped === "floor") {
-        const checked = keepInboxNowMs(keep.checked_at || keep.last_contact_at);
-        const seconds = checked ? Math.max(0, Math.floor((this.keepInboxActionNow() - checked) / 1000)) : 0;
-        try { new Notice("Google Keep was checked " + seconds + " s ago"); } catch (error) {}
+        const checked = keepInboxNowMs(keep.checked_at);
+        const age = checked ? this.keepInboxActionNow() - checked : null;
+        const message = age !== null && age >= 0 && age <= 60 * 1000
+          ? "Google Keep was checked " + Math.floor(age / 1000) + " s ago"
+          : "Google Keep was checked less than a minute ago";
+        try { new Notice(message); } catch (error) {}
       } else if (refresh.skipped === "backoff" && keep.state === "rate_limited") {
         const after = keepInboxActionFormatClock(keep.next_check_at);
         try {
@@ -519,7 +527,7 @@ BobLedgerToolsKeepInboxMixin.prototype.keepInboxActionShowMenu = function (event
   }
   if (commandMode) {
     this.keepInboxActionAddMenuItem(menu, "Keep setup check", "stethoscope", () => {
-      void this.keepInboxActionPreview(["gkeep", "doctor"], "bob gkeep doctor -d");
+      void this.keepInboxActionPreview(["gkeep", "doctor"], "Run bob gkeep doctor in a terminal");
     });
   }
   this.keepInboxActionAddMenuItem(menu, "Hide until restart", "eye-off", () => {

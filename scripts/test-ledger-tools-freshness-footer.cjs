@@ -220,6 +220,18 @@ function makeStatusEl() {
   return el;
 }
 
+function makeStatusItemFactory(first) {
+  let isFirst = true;
+  return () => {
+    if (isFirst) {
+      isFirst = false;
+      return first;
+    }
+    // Obsidian returns a distinct status bar element for each item.
+    return makeStatusEl();
+  };
+}
+
 function findChild(el, className) {
   const walk = (node) => {
     if (node.classList && node.classList.has(className)) {
@@ -1093,7 +1105,7 @@ test("status bar 0-1-0 transitions hide without a reload", () => {
     app.plugins.plugins["obsidian-tasks-plugin"].getTasks = () => tasks;
     const el = makeStatusEl();
     const plugin = new LedgerToolsPlugin(app, {});
-    plugin.addStatusBarItem = () => el;
+    plugin.addStatusBarItem = makeStatusItemFactory(el);
     plugin.onload();
     try {
       plugin.updateFreshnessStatusBar();
@@ -1119,7 +1131,7 @@ test("cursor-only updates reuse a warm memo", () => {
     const app = makeFreshnessApp({ tasks });
     const el = makeStatusEl();
     const plugin = new LedgerToolsPlugin(app, {});
-    plugin.addStatusBarItem = () => el;
+    plugin.addStatusBarItem = makeStatusItemFactory(el);
     plugin.onload();
     try {
       plugin.updateFreshnessStatusBar();
@@ -1145,7 +1157,7 @@ test("unload disconnects the observer and click handler", () => {
     const app = makeFreshnessApp({ tasks });
     const el = makeStatusEl();
     const plugin = new LedgerToolsPlugin(app, {});
-    plugin.addStatusBarItem = () => el;
+    plugin.addStatusBarItem = makeStatusItemFactory(el);
     plugin.onload();
     try {
       plugin.updateFreshnessStatusBar();
@@ -1525,7 +1537,7 @@ test("status bar wires nav api.quickRoll into the hint slot", () => {
     const app = quickRollPluginApp({ navApi, cursor: quickRollCursor() });
     const el = makeStatusEl();
     const plugin = new LedgerToolsPlugin(app, {});
-    plugin.addStatusBarItem = () => el;
+    plugin.addStatusBarItem = makeStatusItemFactory(el);
     plugin.onload();
     try {
       plugin.updateFreshnessStatusBar();
@@ -1573,7 +1585,7 @@ test("status bar ignores missing, v0, or throwing quickRoll namespaces", () => {
       const app = quickRollPluginApp({ navApi, cursor: quickRollCursor() });
       const el = makeStatusEl();
       const plugin = new LedgerToolsPlugin(app, {});
-      plugin.addStatusBarItem = () => el;
+      plugin.addStatusBarItem = makeStatusItemFactory(el);
       plugin.onload();
       try {
         plugin.updateFreshnessStatusBar();

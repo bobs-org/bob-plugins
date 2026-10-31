@@ -278,6 +278,18 @@ function makeStatusEl() {
   return el;
 }
 
+function makeStatusItemFactory(first) {
+  let isFirst = true;
+  return () => {
+    if (isFirst) {
+      isFirst = false;
+      return first;
+    }
+    // Obsidian returns a distinct status bar element for each item.
+    return makeStatusEl();
+  };
+}
+
 function checklistTaskRow(line, tags, overrides = {}) {
   const symbol = freshnessTaskStatus(line);
   const statusType =
@@ -345,5 +357,6 @@ module.exports = {
   makeFreshnessApp,
   withMissingConfig,
   makeStatusEl,
+  makeStatusItemFactory,
   checklistTaskRow,
 };

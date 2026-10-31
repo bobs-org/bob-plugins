@@ -192,4 +192,7 @@ module.exports.helpers = {
   renderTaskWikilinkSection,
   renderTaskWikilinkNoteHeader,
   renderTaskWikilinkLocator,
+  renderTaskWikilinkResults,
+  renderTaskWikilinkDetail,
+  renderTaskWikilinkFooter,
 };

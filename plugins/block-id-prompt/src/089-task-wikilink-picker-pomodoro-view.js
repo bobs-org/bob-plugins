@@ -77,3 +77,78 @@ function taskWikilinkPomodoroConsequenceText(row, detail, suggestion, note) {
   }
   return clauses.join(" · ");
 }
+
+function renderTaskWikilinkResults(el, plan, options) {
+  el.empty();
+  if (!plan) {
+    return null;
+  }
+  if (plan.empty) {
+    const emptyEl = el.createDiv({ cls: "bid-tlp-empty bid-twl-empty" });
+    emptyEl.createDiv({ cls: "bid-tlp-empty-text", text: plan.empty.message });
+    return null;
+  }
+  let selectedEl = null;
+  for (const item of plan.items || []) {
+    if (item.kind === "section") {
+      renderTaskWikilinkSection(el, item);
+    } else if (item.kind === "note") {
+      renderTaskWikilinkNoteHeader(el, item);
+    } else if (item.kind === "row") {
+      const rowEl = renderTaskWikilinkRow(el, item, options);
+      if (item.selected) {
+        selectedEl = rowEl;
+      }
+    }
+  }
+  return selectedEl;
+}
+
+function renderTaskWikilinkDetail(el, detail) {
+  el.empty();
+  if (!detail) {
+    return;
+  }
+  const titleEl = el.createDiv({ cls: "bid-twl-detail-title" });
+  appendTaskWikilinkTitle(titleEl, detail.titleParts);
+  const metaEl = el.createDiv({ cls: "bid-twl-detail-meta" });
+  if (detail.metaParts && detail.metaParts.icon) {
+    const iconEl = metaEl.createSpan({
+      cls: "bid-twl-detail-icon",
+      attr: { "aria-hidden": "true" },
+    });
+    applyIcon(iconEl, detail.metaParts.icon);
+  }
+  metaEl.createSpan({ cls: "bid-twl-detail-meta-text", text: detail.meta });
+  const action = detail.action || {};
+  const actionEl = el.createDiv({
+    cls: `bid-twl-detail-action is-${action.kind || "identified"}`,
+  });
+  if (action.kind === "identified" && action.replacement) {
+    actionEl.createSpan({ text: "↵ inserts " });
+    actionEl.createSpan({
+      cls: "bid-twl-inline-link",
+      text: action.replacement,
+    });
+  } else {
+    actionEl.setText(action.text || "");
+  }
+}
+
+function renderTaskWikilinkFooter(el, footer) {
+  el.empty();
+  const hints = footer && footer.hints ? footer.hints : [];
+  for (const hint of hints) {
+    const group = el.createDiv({ cls: "bid-tlp-hint" });
+    for (const key of hint.keys || []) {
+      group.createEl("kbd", { cls: "bid-tlp-kbd", text: key });
+    }
+    group.createEl("span", { cls: "bid-tlp-hint-label", text: hint.label });
+  }
+  if (footer && footer.warningNote) {
+    el.createDiv({
+      cls: "bid-twl-warning",
+      text: footer.warningNote,
+    });
+  }
+}

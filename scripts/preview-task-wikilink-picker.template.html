@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task Wikilink Picker preview</title>
+<style>
+__OBSIDIAN_BASELINE_CSS__
+body[data-theme="light"] {
+  --background-primary:#fcfcfd; --background-secondary:#f0f1f4; --background-modifier-border:#d7d9df;
+  --background-modifier-border-hover:#c2c6ce; --background-modifier-hover:#e5e7ec;
+  --text-normal:#252832; --text-muted:#727783; --text-faint:#999eaa; --text-accent:#624bb8;
+  --interactive-accent:#7457ce; --interactive-normal:#f4f4f6; --link-color:#5b4cb0;
+  --color-green:#27865e; --color-orange:#b87918; --color-red:#c44950; --color-blue:#3d7ea6; --color-yellow:#b8902b;
+  --shadow-l:0 12px 32px #20263a22; color-scheme:light;
+}
+body[data-theme="dark"] {
+  --background-primary:#202226; --background-secondary:#292c32; --background-modifier-border:#41454d;
+  --background-modifier-border-hover:#555b66; --background-modifier-hover:#383c44;
+  --text-normal:#e4e5e9; --text-muted:#a3a7b0; --text-faint:#7c818c; --text-accent:#b6a0ff;
+  --interactive-accent:#a78bf2; --interactive-normal:#30333a; --link-color:#b6a0ff;
+  --color-green:#73c99d; --color-orange:#e8b55e; --color-red:#ee797e; --color-blue:#7eb6d4; --color-yellow:#e8b55e;
+  --shadow-l:0 12px 32px #0008; color-scheme:dark;
+}
+html, body { margin:0; padding:0; background:var(--background-secondary); color:var(--text-normal); font:14px var(--font-interface); }
+.preview-stage { box-sizing:border-box; min-height:100vh; padding:28px; display:flex; align-items:flex-start; justify-content:center; }
+.modal {
+  box-sizing:border-box;
+  background:var(--background-primary);
+  border:1px solid var(--background-modifier-border);
+  border-radius:var(--radius-l);
+  box-shadow:var(--shadow-l);
+}
+.modal.bid-tlp-modal { width:min(92vw, 900px); }
+.setting-item { display:flex; align-items:center; gap:12px; margin:10px 0; }
+.setting-item-info { flex:0 0 48px; color:var(--text-muted); font-size:12px; }
+.setting-item-control { flex:1; display:flex; gap:8px; }
+.setting-item-control input {
+  flex:1; height:var(--input-height); padding:0 10px; border:1px solid var(--background-modifier-border);
+  border-radius:var(--radius-s); background:var(--background-primary); color:var(--text-normal); font:14px var(--font-interface);
+}
+button { display:inline-flex; align-items:center; justify-content:center; height:var(--input-height); padding:4px 12px;
+  border:1px solid var(--background-modifier-border); border-radius:5px; background:var(--interactive-normal);
+  color:var(--text-normal); font:500 13px var(--font-interface); }
+button.mod-cta { background:var(--interactive-accent); color:#fff; border-color:transparent; }
+.bid-twl-name-prompt { width:min(92vw, 520px); padding:22px 24px 18px; }
+.bid-twl-name-prompt h2 { margin:0 0 4px; font-size:18px; }
+.bid-twl-name-prompt .bid-twl-name-subtitle { color:var(--text-muted); font-size:12px; margin:0 0 12px; }
+.bid-twl-name-preview {
+  background:var(--background-secondary); border:1px solid var(--background-modifier-border); border-radius:4px;
+  color:var(--text-muted); line-height:1.5; margin:0 0 12px; padding:10px 12px; white-space:pre-wrap;
+}
+__PRODUCTION_CSS__
+</style>
+</head>
+<body data-theme="light">
+<div class="preview-stage" id="stage"></div>
+<script>
+const BLOCKED_OBSIDIAN_TASK_STATUS = "?";
+function applyAttrs(el, options) {
+  if (!options) return el;
+  if (options.cls) el.className = String(options.cls);
+  if (options.text != null) el.textContent = String(options.text);
+  if (options.attr) {
+    for (const [key, value] of Object.entries(options.attr)) {
+      if (value != null) el.setAttribute(key, String(value));
+    }
+  }
+  return el;
+}
+HTMLElement.prototype.createDiv = function(options) {
+  const el = document.createElement("div");
+  applyAttrs(el, options);
+  this.appendChild(el);
+  return el;
+};
+HTMLElement.prototype.createSpan = function(options) {
+  const el = document.createElement("span");
+  applyAttrs(el, options);
+  this.appendChild(el);
+  return el;
+};
+HTMLElement.prototype.createEl = function(tag, options) {
+  const el = document.createElement(tag);
+  applyAttrs(el, options);
+  this.appendChild(el);
+  return el;
+};
+HTMLElement.prototype.addClass = function(name) { this.classList.add(name); return this; };
+HTMLElement.prototype.removeClass = function(name) { this.classList.remove(name); return this; };
+HTMLElement.prototype.empty = function() { this.replaceChildren(); return this; };
+HTMLElement.prototype.setText = function(text) { this.textContent = text == null ? "" : String(text); return this; };
+HTMLElement.prototype.appendText = function(text) { this.appendChild(document.createTextNode(text == null ? "" : String(text))); return this; };
+const ICONS = {
+  search: "M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z",
+  "calendar-days": "M8 2v4M16 2v4M3 10h18M5 6h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z",
+  "book-open": "M2 4h7a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H2zM22 4h-7a3 3 0 0 0-3 3v13a3 3 0 0 1 3-3h7z",
+  archive: "M3 5h18v4H3zM5 9v10h14V9M10 13h4",
+  "folder-kanban": "M3 7h6l2 2h10v11H3zM8 14v3M12 12v5M16 16v1",
+  inbox: "M3 12h5l2 3h4l2-3h5v7H3zM3 12l3-7h12l3 7",
+  "file-text": "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h5",
+  "eye-off": "M3 3l18 18M10.6 10.6A3 3 0 0 0 13.4 13.4M9.9 5.1A10 10 0 0 1 21 12a10 10 0 0 1-1.7 2.5M6.1 6.1A10 10 0 0 0 3 12a10 10 0 0 0 9 6 10 10 0 0 0 3.2-.5",
+};
+function setIcon(el, name) {
+  const path = ICONS[name] || ICONS["file-text"];
+  el.replaceChildren();
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const node = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  node.setAttribute("d", path);
+  svg.appendChild(node);
+  el.appendChild(svg);
+}
+function applyIcon(el, iconName) {
+  if (!el) return;
+  try { setIcon(el, iconName); } catch (_error) { /* decorative */ }
+}
+__NAMING_SOURCE__
+__RULES_SOURCE__
+__RANK_SOURCE__
+__VIEW_SOURCE__
+__POMODORO_VIEW_SOURCE__
+
+const CASES = __CASES_JSON__;
+
+function toMapOfSets(record) {
+  const map = new Map();
+  for (const [path, ids] of Object.entries(record || {})) {
+    map.set(path, new Set(ids || []));
+  }
+  return map;
+}
+
+function renderCard(stage, spec, width) {
+  const modal = document.createElement("div");
+  modal.className = "modal bid-tlp-modal bid-twl-modal";
+  if (spec.pomodoroContext) modal.classList.add("is-pomodoro");
+  modal.style.width = width + "px";
+  modal.style.maxWidth = width + "px";
+  modal.style.height = "760px";
+  const content = modal.createDiv({ cls: "bid-tlp bid-twl" });
+  const header = content.createDiv({ cls: "bid-tlp-header bid-twl-header" });
+  const headerIcon = header.createDiv({ cls: "bid-tlp-header-icon bid-twl-header-icon" });
+  headerIcon.createSpan({ cls: "bid-twl-header-glyph", text: spec.pomodoroContext ? "🍅" : "((" });
+  const headerText = header.createDiv({ cls: "bid-tlp-header-text" });
+  const titleEl = headerText.createDiv({ cls: "bid-tlp-title" });
+  const subtitleEl = headerText.createDiv({ cls: "bid-tlp-subtitle" });
+  const searchEl = content.createDiv({ cls: "bid-tlp-search bid-twl-search" });
+  const searchIcon = searchEl.createDiv({ cls: "bid-tlp-search-icon" });
+  applyIcon(searchIcon, "search");
+  const input = searchEl.createEl("input", {
+    cls: "bid-tlp-input bid-twl-input",
+    attr: {
+      type: "text",
+      role: "combobox",
+      "aria-autocomplete": "list",
+      "aria-expanded": "true",
+      "aria-controls": "bid-twl-list",
+      placeholder: "Search every task by text, note, or ^id",
+    },
+  });
+  const countEl = searchEl.createDiv({ cls: "bid-twl-count" });
+  const progressEl = searchEl.createDiv({ cls: "bid-twl-search-progress" });
+  const bannerEl = content.createDiv({ cls: "bid-twl-pomodoro-banner" });
+  const resultsEl = content.createDiv({
+    cls: "bid-tlp-results bid-twl-results",
+    attr: { id: "bid-twl-list", role: "listbox", "aria-label": "Vault tasks" },
+  });
+  const detailEl = content.createDiv({ cls: "bid-twl-detail" });
+  const footerEl = content.createDiv({ cls: "bid-tlp-footer bid-twl-footer" });
+  const plan = buildTaskWikilinkPickerPlan({
+    rows: spec.rows,
+    query: spec.query || "",
+    ownerPath: spec.ownerPath,
+    source: spec.source,
+    selectedKey: spec.selectedKey || null,
+    renderAll: true,
+    narrow: width < 620,
+    progress: spec.progress || { ready: true, scanned: 0, total: 0 },
+    warningNote: spec.warningNote || null,
+    blockIdsByPath: toMapOfSets(spec.blockIdsByPath),
+    inboxPaths: new Set(spec.inboxPaths || ["mac_inbox.md"]),
+    now: new Date(spec.now || "2026-10-30T12:00:00"),
+    pomodoroContext: spec.pomodoroContext || null,
+    pomodoroDetail: spec.pomodoroDetail || null,
+    pomodoroRaised: spec.pomodoroRaised || null,
+  });
+  titleEl.setText(plan.header.title);
+  headerIcon.querySelector(".bid-twl-header-glyph").textContent = plan.header.iconText;
+  subtitleEl.setText(plan.header.subtitle);
+  input.value = spec.query || "";
+  countEl.setText(plan.search.countText);
+  progressEl.classList.toggle("is-active", Boolean(plan.search.indexing));
+  if (plan.search.indexing && plan.search.indexing.total) {
+    progressEl.style.width = `${Math.max(0, Math.min(1, plan.search.indexing.scanned / plan.search.indexing.total)) * 100}%`;
+  }
+  bannerEl.setText(plan.banner || "");
+  bannerEl.style.display = plan.banner ? "" : "none";
+  const selectedEl = renderTaskWikilinkResults(resultsEl, plan);
+  renderTaskWikilinkDetail(detailEl, plan.detail);
+  renderTaskWikilinkFooter(footerEl, plan.footer);
+  stage.replaceChildren(modal);
+  if (selectedEl && typeof selectedEl.scrollIntoView === "function") {
+    selectedEl.scrollIntoView({ block: "center" });
+  }
+}
+
+function renderNamePrompt(stage, spec, width) {
+  const modal = document.createElement("div");
+  modal.className = "modal bid-twl-name-prompt";
+  modal.style.width = Math.min(width, 520) + "px";
+  modal.createEl("h2", { text: "Name this task to link it" });
+  modal.createEl("div", {
+    cls: "bid-twl-name-subtitle",
+    text: `Adds ^${spec.suggestion} to ${spec.notePath} now`,
+  });
+  modal.createEl("div", { cls: "bid-twl-name-preview", text: spec.preview });
+  modal.createEl("div", {
+    cls: "bid-twl-name-insert",
+    text: `Inserts [[${spec.targetText}#^${spec.suggestion}]]`,
+  });
+  modal.createEl("div", { cls: "bid-twl-name-validation", text: spec.validation || "" });
+  const setting = modal.createDiv({ cls: "setting-item" });
+  setting.createDiv({ cls: "setting-item-info", text: "ID" });
+  const control = setting.createDiv({ cls: "setting-item-control" });
+  const input = control.createEl("input", {
+    attr: { type: "text", value: spec.suggestion, "aria-label": "Block ID" },
+  });
+  input.value = spec.suggestion;
+  const buttons = modal.createDiv({ cls: "setting-item" });
+  const buttonRow = buttons.createDiv({ cls: "setting-item-control" });
+  buttonRow.createEl("button", { text: "Back" });
+  const save = buttonRow.createEl("button", { cls: "mod-cta", text: "Add ID & link" });
+  save.disabled = Boolean(spec.validation);
+  stage.replaceChildren(modal);
+  input.focus();
+  input.select();
+}
+
+window.taskWikilinkPreview = {
+  render(theme, caseId, width) {
+    document.body.dataset.theme = theme;
+    document.documentElement.classList.toggle("theme-dark", theme === "dark");
+    document.documentElement.classList.toggle("theme-light", theme !== "dark");
+    const spec = CASES[caseId];
+    if (!spec) throw new Error("unknown preview case: " + caseId);
+    const stage = document.getElementById("stage");
+    if (spec.kind === "naming") renderNamePrompt(stage, spec, width);
+    else renderCard(stage, spec, width);
+    return true;
+  },
+};
+window.taskWikilinkPreviewReady = true;
+</script>
+</body>
+</html>

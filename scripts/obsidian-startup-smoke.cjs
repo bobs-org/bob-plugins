@@ -343,8 +343,15 @@ class CdpClient {
   }
 
   static connect(endpoint, timeoutMs) {
-    const WebSocketClient = typeof globalThis.WebSocket === "function" ? globalThis.WebSocket : null;
-    if (!WebSocketClient) throw new Error("Node 22+ WebSocket is required for the CDP client");
+    let WebSocketClient = typeof globalThis.WebSocket === "function" ? globalThis.WebSocket : null;
+    if (!WebSocketClient) {
+      try {
+        WebSocketClient = require("undici").WebSocket;
+      } catch {
+        WebSocketClient = null;
+      }
+    }
+    if (!WebSocketClient) throw new Error("WebSocket is required for the CDP client (Node 22+ or undici)");
     return lib.withTimeout(
       new Promise((resolve, reject) => {
         let socket;

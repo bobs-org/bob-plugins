@@ -303,31 +303,17 @@ class TaskWikilinkPickerModal extends Modal {
     if (!this.resultsEl) {
       return;
     }
-    this.resultsEl.empty();
-    if (plan.empty) {
-      const emptyEl = this.resultsEl.createDiv({ cls: "bid-tlp-empty bid-twl-empty" });
-      emptyEl.createDiv({ cls: "bid-tlp-empty-text", text: plan.empty.message });
-      return;
-    }
-    for (const item of plan.items) {
-      if (item.kind === "section") {
-        renderTaskWikilinkSection(this.resultsEl, item);
-      } else if (item.kind === "note") {
-        renderTaskWikilinkNoteHeader(this.resultsEl, item);
-      } else if (item.kind === "row") {
-        const rowEl = renderTaskWikilinkRow(this.resultsEl, item, {
-          onClick: (clicked) => {
-            this.selectedKey = clicked.key;
-            this.renderAll();
-            if (!this.pomodoroContext || this.pomodoroDependenciesReady) {
-              this.acceptKey(clicked.key);
-            }
-          },
-        });
-        if (item.selected) {
-          this.scrollRowIntoView(rowEl);
+    const selectedEl = renderTaskWikilinkResults(this.resultsEl, plan, {
+      onClick: (clicked) => {
+        this.selectedKey = clicked.key;
+        this.renderAll();
+        if (!this.pomodoroContext || this.pomodoroDependenciesReady) {
+          this.acceptKey(clicked.key);
         }
-      }
+      },
+    });
+    if (selectedEl) {
+      this.scrollRowIntoView(selectedEl);
     }
   }
 
@@ -335,46 +321,14 @@ class TaskWikilinkPickerModal extends Modal {
     if (!this.detailEl) {
       return;
     }
-    this.detailEl.empty();
-    const detail = plan.detail;
-    if (!detail) {
-      return;
-    }
-    const titleEl = this.detailEl.createDiv({ cls: "bid-twl-detail-title" });
-    appendTaskWikilinkTitle(titleEl, detail.titleParts);
-    this.detailEl.createDiv({ cls: "bid-twl-detail-meta", text: detail.meta });
-    const actionEl = this.detailEl.createDiv({
-      cls: `bid-twl-detail-action is-${detail.action.kind}`,
-    });
-    if (detail.action.kind === "identified" && detail.action.replacement) {
-      actionEl.createSpan({ text: "↵ inserts " });
-      actionEl.createSpan({
-        cls: "bid-twl-inline-link",
-        text: detail.action.replacement,
-      });
-    } else {
-      actionEl.setText(detail.action.text);
-    }
+    renderTaskWikilinkDetail(this.detailEl, plan.detail);
   }
 
   renderFooter(plan) {
     if (!this.footerEl) {
       return;
     }
-    this.footerEl.empty();
-    for (const hint of plan.footer.hints) {
-      const group = this.footerEl.createDiv({ cls: "bid-tlp-hint" });
-      for (const key of hint.keys) {
-        group.createEl("kbd", { cls: "bid-tlp-kbd", text: key });
-      }
-      group.createEl("span", { cls: "bid-tlp-hint-label", text: hint.label });
-    }
-    if (plan.footer.warningNote) {
-      this.footerEl.createDiv({
-        cls: "bid-twl-warning",
-        text: plan.footer.warningNote,
-      });
-    }
+    renderTaskWikilinkFooter(this.footerEl, plan.footer);
   }
 
   onResultsScroll() {

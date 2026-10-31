@@ -307,3 +307,9 @@ test("caret-task and unlinkable-path guards disable the row", () => {
   assert.equal(unlinkable.disabled, true);
   assert.equal(unlinkable.action.text, "This note's name can't be linked");
 });
+
+test("card DOM helpers are exported for Chromium previews", () => {
+  assert.equal(typeof helpers.renderTaskWikilinkResults, "function");
+  assert.equal(typeof helpers.renderTaskWikilinkDetail, "function");
+  assert.equal(typeof helpers.renderTaskWikilinkFooter, "function");
+});

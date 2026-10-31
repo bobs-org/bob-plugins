@@ -72,6 +72,10 @@ class BlockIdPromptPlugin extends Plugin {
   }
 
   inspectActiveEditor(cmView) {
+    const writtenRanges = Array.isArray(this.taskWikilinkWrittenRanges)
+      ? this.taskWikilinkWrittenRanges
+      : [];
+    this.clearTaskWikilinkWrittenRanges();
     if (this.promptOpen) {
       return;
     }
@@ -102,7 +106,7 @@ class BlockIdPromptPlugin extends Plugin {
     }
 
     const lineText = view.editor.getLine(cursor.line) || "";
-    if (this.maybeOpenTaskWikilinkFromEditor(view, file, cursor, lineText)) {
+    if (this.maybeOpenTaskWikilinkFromEditor(view, file, cursor, lineText, writtenRanges)) {
       return;
     }
 
@@ -296,7 +300,12 @@ class BlockIdPromptPlugin extends Plugin {
       return this.completeTaskLinkWithExistingId(source, task);
     }
 
-    if (!this.sourceMarkerStillPresent(source)) {
+    if (source.trigger === "((") {
+      if (!this.taskWikilinkTokenStillPresent(source)) {
+        new Notice("Task wikilink not inserted: the ((…)) text changed");
+        return null;
+      }
+    } else if (!this.sourceMarkerStillPresent(source)) {
       return null;
     }
 
@@ -311,20 +320,21 @@ class BlockIdPromptPlugin extends Plugin {
       task = { ...prepared.task, pomodoroTarget: prepared.target };
     }
 
-    return {
-      promptSource: {
-        ...source,
-        kind: "link-task-complete",
-        targetText: task.linkTarget || taskWikilinkPathStem(task.notePath),
-        blockPrefix: CANONICAL_BLOCK_LINK_PREFIX,
-        aliasSuffix: "",
-        task: { ...task },
-        previewText: task.displayText,
-        prefillId: false,
-        pickerState: pickerState || null,
-        pomodoroTarget: task.pomodoroTarget || null,
-      },
+    const promptSource = {
+      ...source,
+      kind: "link-task-complete",
+      task: { ...task },
+      previewText: task.displayText,
+      prefillId: false,
+      pickerState: pickerState || null,
+      pomodoroTarget: task.pomodoroTarget || null,
     };
+    if (source.trigger === "((") {
+      promptSource.targetText = task.linkTarget || taskWikilinkPathStem(task.notePath);
+      promptSource.blockPrefix = CANONICAL_BLOCK_LINK_PREFIX;
+      promptSource.aliasSuffix = "";
+    }
+    return { promptSource };
   }
 
   async completeTaskLinkWithExistingId(source, task) {
@@ -334,7 +344,12 @@ class BlockIdPromptPlugin extends Plugin {
         pomodoroTarget: source.pomodoroTarget || task.pomodoroTarget,
       });
     }
-    if (!this.sourceMarkerStillPresent(source)) {
+    if (source.trigger === '((') {
+      if (!this.taskWikilinkTokenStillPresent(source)) {
+        new Notice("Task wikilink not inserted: the ((…)) text changed");
+        return null;
+      }
+    } else if (!this.sourceMarkerStillPresent(source)) {
       return null;
     }
 

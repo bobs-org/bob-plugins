@@ -255,14 +255,28 @@ function orderForWikilinkPicker(rows, query, ownerPath) {
       terms,
     );
     if (score !== null) {
-      // The canonical key is computed once per row, not once per sort
-      // comparison: identical order, linear instead of log-linear key
-      // builds over thousands of rows.
+      // Store the canonical key's parts once per row without allocating
+      // a second array for every selectable task.
+      let section;
+      if (!row.open) {
+        section = 4;
+      } else if (ownerPath && ownerPath === row.notePath) {
+        section = 0;
+      } else if (row.status === "/") {
+        section = 1;
+      } else if (row.status === "*") {
+        section = 2;
+      } else {
+        section = 3;
+      }
       scored.push({
         row,
         score,
         openOrder: row.open ? 0 : 1,
-        key: canonicalKeyWikilinkTask(row, ownerPath),
+        section,
+        hidden: row.hidden ? 1 : 0,
+        note: section === 0 ? "" : row.notePath,
+        line: row.line,
       });
     }
   }
@@ -273,7 +287,16 @@ function orderForWikilinkPicker(rows, query, ownerPath) {
     if (right.score !== left.score) {
       return right.score - left.score;
     }
-    return compareCanonicalWikilinkKeys(left.key, right.key);
+    if (left.section !== right.section) {
+      return left.section - right.section;
+    }
+    if (left.hidden !== right.hidden) {
+      return left.hidden - right.hidden;
+    }
+    if (left.note !== right.note) {
+      return left.note < right.note ? -1 : 1;
+    }
+    return left.line - right.line;
   });
   return scored.map((entry) => entry.row);
 }

@@ -127,7 +127,7 @@ class BlockIdPromptPomodoroDependencyMixin {
     if (
       options.returnDetails !== true &&
       plan.unresolvedIds && plan.unresolvedIds.length > 0 &&
-      failures.length > 0
+      (failures.length > 0 || options.indexReady === false)
     ) {
       new Notice(
         "Task link blocked: dependency status could not be checked; no Pomodoro link was created",
@@ -137,7 +137,7 @@ class BlockIdPromptPomodoroDependencyMixin {
         : true;
     }
     const projectBlocked = plan.inheritedProjectBlocked ||
-      plan.projectDependencyBlocked || plan.projectScheduleIsFuture ||
+      (plan.projectDependencyBlocked && !plan.projectOwnPrerequisites) || plan.projectScheduleIsFuture ||
       plan.projectDateRefusal;
     if (options.returnDetails === true && projectBlocked) {
       if (plan.inheritedProjectBlocked) {
@@ -170,6 +170,7 @@ class BlockIdPromptPomodoroDependencyMixin {
     }
     if (
       options.returnDetails === true &&
+      plan.unresolvedIds && plan.unresolvedIds.length > 0 &&
       (failures.length > 0 || options.indexReady === false)
     ) {
       new Notice(
@@ -256,7 +257,8 @@ class BlockIdPromptPomodoroDependencyMixin {
       new Notice(`Task blocked · project reason in ${plan.projectPath || targetPath} · no Pomodoro link created`);
     }
     if (options.returnDetails === true) {
-      const kind = plan.inheritedProjectBlocked || plan.projectDependencyBlocked ||
+      const kind = plan.inheritedProjectBlocked ||
+        (plan.projectDependencyBlocked && !plan.projectOwnPrerequisites) ||
         plan.projectScheduleIsFuture || plan.projectDateRefusal
         ? "project"
         : plan.dependencyBlocked

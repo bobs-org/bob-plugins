@@ -116,3 +116,38 @@ test("wikilink naming adds an ID to a moved closed task and links the original t
   assert.equal(plannedStart, targetContent.indexOf(rawLine));
   assert.equal(lastNotice(), "Added ^finished to Tasks.md");
 });
+
+test("^^ naming preserves a cross-note target and alias through the final link", async () => {
+  resetNotices();
+  const targetContent = "- [ ] #task Ship it";
+  const task = helpers.collectTaskPickerItems(targetContent)[0];
+  const sourceLine = "  - [[Tasks#^^|alias]]";
+  const markerCh = sourceLine.indexOf("^^") + 2;
+  const editor = createEditor(sourceLine, { line: 0, ch: markerCh });
+  const marker = helpers.findTaskPickerMarkerNearCursor(sourceLine, markerCh);
+  const source = {
+    ...marker,
+    trigger: "^^",
+    editor,
+    sourcePath: "Daily.md",
+    line: 0,
+  };
+  const plugin = new Plugin();
+  plugin.now = () => new Date(2026, 9, 30);
+  plugin.getFreshnessStampLine = () => (line) => line;
+  plugin.getFreshnessDateText = () => "2026-10-30";
+  plugin.suppressEditorScans = () => {};
+  plugin.readDestinationForValidation = async () => ({
+    file: { path: "Tasks.md" },
+    content: targetContent,
+  });
+  plugin.resolveReferenceDestination = () => ({ path: "Tasks.md" });
+  plugin.applyTargetTaskPlan = async () => true;
+
+  const selected = await plugin.selectTaskLinkTask(source, task);
+  assert.equal(selected.promptSource.targetText, "Tasks");
+  assert.equal(selected.promptSource.blockPrefix, "#^");
+  assert.equal(selected.promptSource.aliasSuffix, "|alias");
+  assert.equal(await plugin.submitLinkTaskBlockId(selected.promptSource, "ship"), true);
+  assert.equal(editor.getLine(0), "  - [[Tasks#^ship|alias]]");
+});

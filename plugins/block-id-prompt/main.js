@@ -1520,12 +1520,13 @@ function taskWikilinkLineInFence(docLines, line) {
 // line, so a closed `$$x$$` excludes just its inside.
 function taskWikilinkDollarBlockInside(docLines, line, ch) {
   let inside = false;
+  const stateLines = taskWikilinkBlockStateLines(docLines, line, ch);
   for (let current = 0; current < line; current += 1) {
-    if (taskWikilinkCountOccurrences(taskWikilinkStripCodeSpans((docLines || [])[current] || ""), "$$") % 2 === 1) {
+    if (taskWikilinkCountOccurrences(taskWikilinkStripCodeSpans(stateLines[current] || ""), "$$") % 2 === 1) {
       inside = !inside;
     }
   }
-  const prefix = taskWikilinkStripCodeSpans(String((docLines || [])[line] || "").slice(0, ch));
+  const prefix = taskWikilinkStripCodeSpans(stateLines[line] || "");
   if (taskWikilinkCountOccurrences(prefix, "$$") % 2 === 1) {
     inside = !inside;
   }
@@ -1535,12 +1536,13 @@ function taskWikilinkDollarBlockInside(docLines, line, ch) {
 // Same toggle shape for `%%` comment blocks and inline `%%…%%`.
 function taskWikilinkPercentBlockInside(docLines, line, ch) {
   let inside = false;
+  const stateLines = taskWikilinkBlockStateLines(docLines, line, ch);
   for (let current = 0; current < line; current += 1) {
-    if (taskWikilinkCountOccurrences(taskWikilinkStripCodeSpans((docLines || [])[current] || ""), "%%") % 2 === 1) {
+    if (taskWikilinkCountOccurrences(taskWikilinkStripCodeSpans(stateLines[current] || ""), "%%") % 2 === 1) {
       inside = !inside;
     }
   }
-  const prefix = taskWikilinkStripCodeSpans(String((docLines || [])[line] || "").slice(0, ch));
+  const prefix = taskWikilinkStripCodeSpans(stateLines[line] || "");
   if (taskWikilinkCountOccurrences(prefix, "%%") % 2 === 1) {
     inside = !inside;
   }
@@ -1552,6 +1554,7 @@ function taskWikilinkPercentBlockInside(docLines, line, ch) {
 // the caret.
 function taskWikilinkHtmlCommentInside(docLines, line, ch) {
   let inside = false;
+  const stateLines = taskWikilinkBlockStateLines(docLines, line, ch);
   const applyMarkers = (text) => {
     TASK_WIKILINK_HTML_MARKER_RE.lastIndex = 0;
     let match;
@@ -1561,9 +1564,9 @@ function taskWikilinkHtmlCommentInside(docLines, line, ch) {
     TASK_WIKILINK_HTML_MARKER_RE.lastIndex = 0;
   };
   for (let current = 0; current < line; current += 1) {
-    applyMarkers(String((docLines || [])[current] || ""));
+    applyMarkers(stateLines[current] || "");
   }
-  applyMarkers(String((docLines || [])[line] || "").slice(0, ch));
+  applyMarkers(stateLines[line] || "");
   return inside;
 }
 
@@ -1578,6 +1581,36 @@ function taskWikilinkFrontmatterEnd(docLines) {
     }
   }
   return lines.length;
+}
+
+// State markers in YAML and fenced code are inert to the note grammar.
+function taskWikilinkBlockStateLines(docLines, line, ch) {
+  const lines = Array.isArray(docLines) ? docLines : [];
+  const frontmatterEnd = taskWikilinkFrontmatterEnd(lines);
+  const stateLines = [];
+  let activeFence = null;
+  for (let current = 0; current <= line; current += 1) {
+    const text = String(lines[current] || "");
+    if (frontmatterEnd !== -1 && current <= frontmatterEnd) {
+      stateLines.push("");
+      continue;
+    }
+    if (activeFence) {
+      stateLines.push("");
+      if (isClosingFence(text, activeFence)) {
+        activeFence = null;
+      }
+      continue;
+    }
+    const openingFence = getFenceOpening(text);
+    if (openingFence) {
+      stateLines.push("");
+      activeFence = openingFence;
+      continue;
+    }
+    stateLines.push(current === line ? text.slice(0, ch) : text);
+  }
+  return stateLines;
 }
 
 // Classify the caret for the `((` trigger: `{ allowed, notice }`.
@@ -1622,8 +1655,15 @@ function taskWikilinkContextAt(docLines, line, ch) {
   if (isTaskRelationLine(lineText)) {
     return { allowed: false, notice: taskRelationLineNotice(lineText) };
   }
-  if (isPomodoroEntryLine(lineText)) {
-    return { allowed: false, notice: null };
+  const pomodoros = findPomodorosSectionRange(lines);
+  if (pomodoros && line >= pomodoros.startLine && line <= pomodoros.endLine) {
+    const token = findTaskWikilinkToken(lineText, caret);
+    const withoutToken = token
+      ? `${lineText.slice(0, token.replaceStart)}${lineText.slice(token.replaceEnd)}`
+      : lineText;
+    if (isPomodoroEntryLine(withoutToken)) {
+      return { allowed: false, notice: null };
+    }
   }
 
   if (taskWikilinkSpanCovers(taskWikilinkInlineCodeSpans(lineText), caret)) {
@@ -2428,6 +2468,7 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     inheritedProjectBlocked ||
     (resident && (projectOpen.length > 0 || !projectScheduleIsFuture)) ||
     (target.blockId === "prj" && ownOpen.length > 0);
+  const projectOwnPrerequisites = target.blockId === "prj" && ownOpen.length > 0;
   const dependencyBlocked = ownOpen.length > 0 || projectDependencyBlocked ||
     projectOpen.length > 0;
   const openPrerequisites = [...new Set([...ownOpen, ...projectOpen])];
@@ -2502,6 +2543,7 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     openPrerequisites,
     openPrerequisiteCount: openPrerequisites.length,
     projectDependencyBlocked,
+    projectOwnPrerequisites,
     inheritedProjectBlocked,
     projectParent: inheritedProjectBlocked ? project.parent : null,
     projectScheduleIsFuture,
@@ -3456,14 +3498,28 @@ function orderForWikilinkPicker(rows, query, ownerPath) {
       terms,
     );
     if (score !== null) {
-      // The canonical key is computed once per row, not once per sort
-      // comparison: identical order, linear instead of log-linear key
-      // builds over thousands of rows.
+      // Store the canonical key's parts once per row without allocating
+      // a second array for every selectable task.
+      let section;
+      if (!row.open) {
+        section = 4;
+      } else if (ownerPath && ownerPath === row.notePath) {
+        section = 0;
+      } else if (row.status === "/") {
+        section = 1;
+      } else if (row.status === "*") {
+        section = 2;
+      } else {
+        section = 3;
+      }
       scored.push({
         row,
         score,
         openOrder: row.open ? 0 : 1,
-        key: canonicalKeyWikilinkTask(row, ownerPath),
+        section,
+        hidden: row.hidden ? 1 : 0,
+        note: section === 0 ? "" : row.notePath,
+        line: row.line,
       });
     }
   }
@@ -3474,7 +3530,16 @@ function orderForWikilinkPicker(rows, query, ownerPath) {
     if (right.score !== left.score) {
       return right.score - left.score;
     }
-    return compareCanonicalWikilinkKeys(left.key, right.key);
+    if (left.section !== right.section) {
+      return left.section - right.section;
+    }
+    if (left.hidden !== right.hidden) {
+      return left.hidden - right.hidden;
+    }
+    if (left.note !== right.note) {
+      return left.note < right.note ? -1 : 1;
+    }
+    return left.line - right.line;
   });
   return scored.map((entry) => entry.row);
 }
@@ -10455,6 +10520,9 @@ class TaskLinkPickerModal extends Modal {
       if (!result) {
         return;
       }
+      if (result.keepOpen) {
+        return;
+      }
 
       promptSource = result.promptSource || null;
       this.completed = true;
@@ -11463,17 +11531,27 @@ class TaskWikilinkPickerModal extends Modal {
     this.plugin = plugin;
     this.source = source;
     this.snapshot = snapshot || { rows: [], ready: true, scanned: 0, total: 0 };
-    this.query = source && source.query ? String(source.query) : "";
+    const pickerState = source && source.pickerState;
+    this.query = pickerState && typeof pickerState.query === "string"
+      ? pickerState.query
+      : source && source.query
+        ? String(source.query)
+        : "";
     this.pomodoroContext = plugin && typeof plugin.taskWikilinkPomodoroContext === "function"
       ? plugin.taskWikilinkPomodoroContext(source)
       : null;
     this.pomodoroDependencies = null;
     this.pomodoroDependenciesReady = !this.pomodoroContext;
     this.pomodoroDetailCache = new Map();
-    this.selectedKey = source && source.pickerState && source.pickerState.selectedKey
-      ? source.pickerState.selectedKey
+    this.selectedKey = pickerState && pickerState.selectedKey
+      ? pickerState.selectedKey
       : null;
-    this.rowLimit = TASK_WIKILINK_PICKER_WINDOW;
+    this.rowLimit = pickerState && Number.isInteger(pickerState.rowLimit) && pickerState.rowLimit > 0
+      ? pickerState.rowLimit
+      : TASK_WIKILINK_PICKER_WINDOW;
+    this.restoreScrollTop = pickerState && Number.isFinite(pickerState.scrollTop)
+      ? pickerState.scrollTop
+      : null;
     this.narrow = false;
     this.completed = false;
     this.accepting = false;
@@ -11565,9 +11643,6 @@ class TaskWikilinkPickerModal extends Modal {
     this.renderAll();
     this.subscribeToIndex();
     this.loadPomodoroDependencies();
-    if (this.source && this.source.pickerState && Number.isInteger(this.source.pickerState.scrollTop)) {
-      this.resultsEl.scrollTop = this.source.pickerState.scrollTop;
-    }
     window.setTimeout(() => {
       if (this.inputEl) {
         this.inputEl.focus();
@@ -11655,7 +11730,24 @@ class TaskWikilinkPickerModal extends Modal {
     }
     let pomodoroDetail = null;
     const rows = this.snapshot.rows || [];
+    const pomodoroGuards = new Map();
     if (this.pomodoroContext) {
+      for (const row of rows) {
+        if (!row || !row.open) {
+          continue;
+        }
+        if (
+          row.blockId && this.plugin &&
+          this.plugin.taskWikilinkPomodoroAlreadyLinked(this.pomodoroContext, row, row.blockId)
+        ) {
+          pomodoroGuards.set(taskWikilinkRowKey(row), "Already in this Pomodoro");
+        } else if (hasProjectBlockedResidentTag(row.rawLine)) {
+          pomodoroGuards.set(
+            taskWikilinkRowKey(row),
+            `Blocked by its project ${row.notePath} · move the ^prj Schedule`,
+          );
+        }
+      }
       if (!this.pomodoroDependenciesReady) {
         pomodoroDetail = { checking: true };
       } else {
@@ -11703,6 +11795,7 @@ class TaskWikilinkPickerModal extends Modal {
       pomodoroContext: this.pomodoroContext,
       pomodoroDetail,
       pomodoroRaised: this.source && this.source.pomodoroRaised,
+      pomodoroGuards,
     });
     if (this.plan.selected) {
       this.selectedKey = this.plan.selected.key;
@@ -11752,6 +11845,10 @@ class TaskWikilinkPickerModal extends Modal {
     if (this.liveEl) {
       const live = [plan.live.count, plan.live.selected].filter(Boolean).join(". ");
       this.liveEl.setText(live);
+    }
+    if (this.resultsEl && this.restoreScrollTop !== null) {
+      this.resultsEl.scrollTop = this.restoreScrollTop;
+      this.restoreScrollTop = null;
     }
   }
 
@@ -11832,7 +11929,9 @@ class TaskWikilinkPickerModal extends Modal {
       return;
     }
     const current = Math.max(0, keys.indexOf(this.selectedKey));
-    const next = (current + delta % keys.length + keys.length) % keys.length;
+    const next = Math.abs(delta) === 1
+      ? (current + delta + keys.length) % keys.length
+      : Math.max(0, Math.min(keys.length - 1, current + delta));
     this.selectedKey = keys[next];
     if (next + 1 > this.rowLimit) {
       this.rowLimit = Math.ceil((next + 1) / TASK_WIKILINK_PICKER_WINDOW) * TASK_WIKILINK_PICKER_WINDOW;
@@ -11928,6 +12027,35 @@ class TaskWikilinkPickerModal extends Modal {
       event.preventDefault();
       event.stopPropagation();
       this.undoTriggerAndClose();
+    }
+  }
+
+  // Obsidian binds this scope's Escape to Modal's onEscapeKey at
+  // construction, and the scope chain is first-registered-wins, so an
+  // appended scope handler could never preempt the default close.
+  // Overriding onEscapeKey instead: a non-empty filter clears and the
+  // modal stays open; an empty filter closes exactly like Modal does.
+  // (The global key handler runs in the capture phase, before the input
+  // listener, so the input-level Escape branch only fires in tests.)
+  onEscapeKey(event) {
+    if (String(this.query || "") !== "") {
+      this.query = "";
+      if (this.inputEl) {
+        this.inputEl.value = "";
+      }
+      this.selectedKey = null;
+      this.rowLimit = TASK_WIKILINK_PICKER_WINDOW;
+      this.renderAll();
+      if (event && !event.defaultPrevented && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      return false;
+    }
+    if (event && !event.defaultPrevented) {
+      event.preventDefault();
+      this.close();
+    } else if (!event) {
+      this.close();
     }
   }
 
@@ -12036,12 +12164,16 @@ class TaskWikilinkPickerModal extends Modal {
     const lineText = source.editor.getLine(source.line) || "";
     const from = { line: source.line, ch: removal.start };
     const to = { line: source.line, ch: removal.end };
-    const expected = lineText.slice(removal.start, removal.end);
-    if (removal.start > lineText.length || removal.end > lineText.length) {
+    if (
+      removal.start > lineText.length ||
+      removal.end > lineText.length ||
+      lineText.slice(source.startCh, source.endCh) !== source.raw
+    ) {
+      new Notice("Task wikilink not inserted: the ((…)) text changed");
+      this.completed = true;
       this.close();
       return;
     }
-    void expected;
     if (this.plugin && typeof this.plugin.suppressEditorScans === "function") {
       this.plugin.suppressEditorScans();
     }
@@ -12262,6 +12394,13 @@ function pickerDisabledReasonFor(row, options) {
     source.line === row.line
   ) {
     return "The task you're typing in";
+  }
+  const pomodoroGuards = options && options.pomodoroGuards;
+  const rowGuard = pomodoroGuards && typeof pomodoroGuards.get === "function"
+    ? pomodoroGuards.get(taskWikilinkRowKey(row))
+    : null;
+  if (rowGuard) {
+    return rowGuard;
   }
   return disabledReasonFor(row, options);
 }
@@ -12759,6 +12898,7 @@ function buildTaskWikilinkPickerPlan(input) {
     guardOptions: {
       previousDailyPath,
       source: options.source || null,
+      pomodoroGuards: options.pomodoroGuards || null,
     },
   };
   const filtered = Boolean(String(query).trim());
@@ -14128,6 +14268,10 @@ class BlockIdPromptPlugin extends Plugin {
   }
 
   inspectActiveEditor(cmView) {
+    const writtenRanges = Array.isArray(this.taskWikilinkWrittenRanges)
+      ? this.taskWikilinkWrittenRanges
+      : [];
+    this.clearTaskWikilinkWrittenRanges();
     if (this.promptOpen) {
       return;
     }
@@ -14158,7 +14302,7 @@ class BlockIdPromptPlugin extends Plugin {
     }
 
     const lineText = view.editor.getLine(cursor.line) || "";
-    if (this.maybeOpenTaskWikilinkFromEditor(view, file, cursor, lineText)) {
+    if (this.maybeOpenTaskWikilinkFromEditor(view, file, cursor, lineText, writtenRanges)) {
       return;
     }
 
@@ -14352,7 +14496,12 @@ class BlockIdPromptPlugin extends Plugin {
       return this.completeTaskLinkWithExistingId(source, task);
     }
 
-    if (!this.sourceMarkerStillPresent(source)) {
+    if (source.trigger === "((") {
+      if (!this.taskWikilinkTokenStillPresent(source)) {
+        new Notice("Task wikilink not inserted: the ((…)) text changed");
+        return null;
+      }
+    } else if (!this.sourceMarkerStillPresent(source)) {
       return null;
     }
 
@@ -14367,20 +14516,21 @@ class BlockIdPromptPlugin extends Plugin {
       task = { ...prepared.task, pomodoroTarget: prepared.target };
     }
 
-    return {
-      promptSource: {
-        ...source,
-        kind: "link-task-complete",
-        targetText: task.linkTarget || taskWikilinkPathStem(task.notePath),
-        blockPrefix: CANONICAL_BLOCK_LINK_PREFIX,
-        aliasSuffix: "",
-        task: { ...task },
-        previewText: task.displayText,
-        prefillId: false,
-        pickerState: pickerState || null,
-        pomodoroTarget: task.pomodoroTarget || null,
-      },
+    const promptSource = {
+      ...source,
+      kind: "link-task-complete",
+      task: { ...task },
+      previewText: task.displayText,
+      prefillId: false,
+      pickerState: pickerState || null,
+      pomodoroTarget: task.pomodoroTarget || null,
     };
+    if (source.trigger === "((") {
+      promptSource.targetText = task.linkTarget || taskWikilinkPathStem(task.notePath);
+      promptSource.blockPrefix = CANONICAL_BLOCK_LINK_PREFIX;
+      promptSource.aliasSuffix = "";
+    }
+    return { promptSource };
   }
 
   async completeTaskLinkWithExistingId(source, task) {
@@ -14390,7 +14540,12 @@ class BlockIdPromptPlugin extends Plugin {
         pomodoroTarget: source.pomodoroTarget || task.pomodoroTarget,
       });
     }
-    if (!this.sourceMarkerStillPresent(source)) {
+    if (source.trigger === '((') {
+      if (!this.taskWikilinkTokenStillPresent(source)) {
+        new Notice("Task wikilink not inserted: the ((…)) text changed");
+        return null;
+      }
+    } else if (!this.sourceMarkerStillPresent(source)) {
       return null;
     }
 
@@ -15811,7 +15966,7 @@ class BlockIdPromptPomodoroDependencyMixin {
     if (
       options.returnDetails !== true &&
       plan.unresolvedIds && plan.unresolvedIds.length > 0 &&
-      failures.length > 0
+      (failures.length > 0 || options.indexReady === false)
     ) {
       new Notice(
         "Task link blocked: dependency status could not be checked; no Pomodoro link was created",
@@ -15821,7 +15976,7 @@ class BlockIdPromptPomodoroDependencyMixin {
         : true;
     }
     const projectBlocked = plan.inheritedProjectBlocked ||
-      plan.projectDependencyBlocked || plan.projectScheduleIsFuture ||
+      (plan.projectDependencyBlocked && !plan.projectOwnPrerequisites) || plan.projectScheduleIsFuture ||
       plan.projectDateRefusal;
     if (options.returnDetails === true && projectBlocked) {
       if (plan.inheritedProjectBlocked) {
@@ -15854,6 +16009,7 @@ class BlockIdPromptPomodoroDependencyMixin {
     }
     if (
       options.returnDetails === true &&
+      plan.unresolvedIds && plan.unresolvedIds.length > 0 &&
       (failures.length > 0 || options.indexReady === false)
     ) {
       new Notice(
@@ -15940,7 +16096,8 @@ class BlockIdPromptPomodoroDependencyMixin {
       new Notice(`Task blocked · project reason in ${plan.projectPath || targetPath} · no Pomodoro link created`);
     }
     if (options.returnDetails === true) {
-      const kind = plan.inheritedProjectBlocked || plan.projectDependencyBlocked ||
+      const kind = plan.inheritedProjectBlocked ||
+        (plan.projectDependencyBlocked && !plan.projectOwnPrerequisites) ||
         plan.projectScheduleIsFuture || plan.projectDateRefusal
         ? "project"
         : plan.dependencyBlocked
@@ -16584,6 +16741,32 @@ function taskWikilinkLineForIdentity(content, task) {
     : null;
 }
 
+function dispatchTaskWikilinkCompletion(editor, changes, caret) {
+  const cm = editor && editor.cm;
+  if (!cm || typeof cm.dispatch !== "function" || !cm.state || !cm.state.doc) {
+    return false;
+  }
+  try {
+    const mapped = (changes || []).map((change) => ({
+      from: change.from,
+      to: change.to,
+      insert: change.insert,
+    }));
+    if (mapped.length === 0) {
+      return false;
+    }
+    cm.dispatch({
+      changes: mapped.length === 1 ? mapped[0] : mapped,
+      selection: { anchor: caret },
+      userEvent: "input.complete",
+      scrollIntoView: true,
+    });
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
 class BlockIdPromptTaskWikilinksMixin {
   ensureTaskWikilinkIndex() {
     if (this.taskWikilinkIndex) {
@@ -16699,7 +16882,7 @@ class BlockIdPromptTaskWikilinksMixin {
     };
   }
 
-  maybeOpenTaskWikilinkFromEditor(view, file, cursor, lineText) {
+  maybeOpenTaskWikilinkFromEditor(view, file, cursor, lineText, writtenRanges = this.taskWikilinkWrittenRanges) {
     const editor = view.editor;
     if (this.isTaskWikilinkReadingView(view) || this.isTaskWikilinkComposing(view)) {
       const token = findTaskWikilinkToken(lineText, cursor.ch || 0);
@@ -16716,7 +16899,7 @@ class BlockIdPromptTaskWikilinksMixin {
     const lineStart = this.editorLineStartOffset(editor, cursor.line);
     const wroteSecond = taskWikilinkWrittenSecondParen(
       token,
-      this.taskWikilinkWrittenRanges,
+      writtenRanges,
       lineStart,
     );
     this.clearTaskWikilinkWrittenRanges();
@@ -16973,6 +17156,21 @@ class BlockIdPromptTaskWikilinksMixin {
       line: source.line,
       ch: source.replaceStart + replacement.length,
     };
+    const fromIndex = editorPositionToIndex(source.editor.getValue(), from);
+    const toIndex = editorPositionToIndex(source.editor.getValue(), to);
+    // The caret is after the replacement, so it may not map into the
+    // pre-change document. CM6 expects the post-change offset here.
+    const caretIndex = fromIndex === null ? null : fromIndex + replacement.length;
+    if (
+      fromIndex !== null && toIndex !== null && caretIndex !== null &&
+      dispatchTaskWikilinkCompletion(source.editor, [{
+        from: fromIndex,
+        to: toIndex,
+        insert: replacement,
+      }], caretIndex)
+    ) {
+      return { ok: true, replacement };
+    }
     if (typeof source.editor.transaction === "function") {
       source.editor.transaction({
         changes: [{ from, to, text: replacement }],
@@ -17191,7 +17389,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     if (plan.projectDateRefusal) {
       return `Project date blocked · move the project date from the ^prj Schedule action in ${projectPath}`;
     }
-    if (plan.projectDependencyBlocked) {
+    if (plan.projectDependencyBlocked && !plan.projectOwnPrerequisites) {
       return `Blocked by project prerequisites · move the ^prj Schedule in ${projectPath}`;
     }
     return null;
@@ -17248,15 +17446,15 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     const failures = dependencySnapshot && Array.isArray(dependencySnapshot.failures)
       ? dependencySnapshot.failures
       : [];
-    if (
-      !dependencySnapshot || dependencySnapshot.indexReady === false ||
-      failures.length > 0
-    ) {
+    const unresolvedWithUnavailableRead = Boolean(
+      plan && (plan.unresolvedIds || []).length > 0 &&
+      (failures.length > 0 || dependencySnapshot && dependencySnapshot.indexReady === false)
+    );
+    if (!plan && (failures.length > 0 || !dependencySnapshot || dependencySnapshot.indexReady === false)) {
       detail.dependencyUnavailable = true;
     }
     if (plan && plan.blocked) {
-      const unavailable = (plan.unresolvedIds || []).length > 0 &&
-        failures.length > 0;
+      const unavailable = unresolvedWithUnavailableRead;
       const projectGuard = this.taskWikilinkPomodoroProjectGuard(plan, row.notePath);
       if (projectGuard) {
         detail.guardText = projectGuard;
@@ -17287,7 +17485,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       : this.sourceMarkerStillPresent(source, { quiet: true });
     if (!sourcePresent) {
       new Notice("Task link stopped: the source link changed");
-      return { handled: true, kind: "stale" };
+      return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
     }
     const chosenTarget = options.pomodoroTarget || task.pomodoroTarget || source.pomodoroTarget || null;
     if (
@@ -17297,30 +17495,42 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       new Notice("Task link stopped: the source Pomodoro changed");
       return { handled: true, kind: "stale" };
     }
-    const file = this.resolveTaskFile(task.notePath) ||
+    let taskPath = task.notePath;
+    if (source.trigger !== "((") {
+      let destination = source.destinationPath || null;
+      if (!destination && typeof this.resolveReferenceDestination === "function") {
+        try {
+          destination = this.resolveReferenceDestination(source.targetText, source.sourcePath);
+        } catch (_error) {
+          destination = null;
+        }
+      }
+      taskPath = typeof destination === "string" ? destination : destination && destination.path;
+    }
+    const file = this.resolveTaskFile(taskPath) ||
       (this.app.vault && this.app.vault.getAbstractFileByPath
-        ? this.app.vault.getAbstractFileByPath(task.notePath)
+        ? this.app.vault.getAbstractFileByPath(taskPath)
         : null);
     if (!file) {
       new Notice("Task link blocked: target note could not be resolved");
-      return { handled: true, kind: "stale" };
+      return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
     }
     const authoritative = await readAuthoritativePromptTargetContent(this, source, file);
     if (!authoritative || typeof authoritative.content !== "string") {
-      new Notice(`Task link blocked: ${task.notePath} could not be read`);
-      return { handled: true, kind: "stale" };
+      new Notice(`Task link blocked: ${taskPath} could not be read`);
+      return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
     }
-    let currentTask = { ...task };
+    let currentTask = { ...task, notePath: taskPath };
     if (source.trigger === "((" && options.isNewId === true) {
       const relocated = taskWikilinkLineForIdentity(authoritative.content, task);
       if (!relocated) {
-        new Notice(`Task link blocked: selected task moved or changed in ${task.notePath}`);
-        return { handled: true, kind: "stale" };
+        new Notice(`Task link blocked: selected task moved or changed in ${taskPath}`);
+        return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
       }
       currentTask = { ...currentTask, ...relocated };
     } else if ((authoritative.content.split("\n")[task.line] || "") !== task.rawLine) {
-      new Notice(`Task link blocked: selected task changed in ${task.notePath}`);
-      return { handled: true, kind: "stale" };
+      new Notice(`Task link blocked: selected task changed in ${taskPath}`);
+      return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
     }
     const taskMatch = getObsidianTaskLineMatch(currentTask.rawLine);
     if (!taskMatch || !OPEN_OBSIDIAN_TASK_STATUSES.has(taskMatch[1])) {
@@ -17340,8 +17550,8 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     if (id) {
       const matches = blockTokenMatches(authoritative.content, id);
       if (options.isNewId === true ? matches.length > 0 : matches.length !== 1) {
-        new Notice(`Block ID ^${id} is no longer unique in ${task.notePath}`);
-        return { handled: true, kind: "stale" };
+        new Notice(`Block ID ^${id} is no longer unique in ${taskPath}`);
+        return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
       }
       if (this.taskWikilinkPomodoroAlreadyLinked(context, currentTask, id)) {
         new Notice("Already in this Pomodoro");
@@ -17425,7 +17635,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     const written = dependency && dependency.writtenDocuments instanceof Map
       ? dependency.writtenDocuments
       : new Map();
-    const openIds = new Set((plan && plan.openPrerequisites || []).map(String));
+    const promotedIds = new Set((plan && plan.promoted || []).map(String));
     const nextDocuments = documents.map((document) => ({
       path: document.path,
       text: written.has(document.path) ? written.get(document.path) : document.text,
@@ -17438,7 +17648,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       const keys = [record.taskId, record.blockId ? taskWikilinkPomodoroCanonicalId(record.path, record.blockId) : null]
         .filter(Boolean)
         .map(String);
-      return keys.some((key) => openIds.has(key));
+      return keys.some((key) => promotedIds.has(key));
     });
     const rows = [];
     for (const document of nextDocuments) {
@@ -17470,7 +17680,9 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       isNewId: options.isNewId === true,
     });
     if (prepared.handled) {
-      return prepared.result || (prepared.kind === "stale" ? { stale: true } : null);
+      return prepared.result || (prepared.kind === "stale"
+        ? source.trigger === "^^" ? { keepOpen: true } : { stale: true }
+        : null);
     }
     const themeSource = {
       sourcePath: prepared.task.notePath,
@@ -17504,13 +17716,16 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       return { stale: true };
     }
     const linkTarget = this.taskWikilinkLinkTarget(prepared.task, source.sourcePath);
+    const completionBase = source.trigger === '(('
+      ? {
+          ...source,
+          targetText: linkTarget,
+          blockPrefix: CANONICAL_BLOCK_LINK_PREFIX,
+          aliasSuffix: "",
+        }
+      : source;
     const completionSource = this.adjustSourceForPlan(
-      {
-        ...source,
-        targetText: linkTarget,
-        blockPrefix: CANONICAL_BLOCK_LINK_PREFIX,
-        aliasSuffix: "",
-      },
+      completionBase,
       prepared.task.notePath,
       plan,
     );
@@ -17530,8 +17745,11 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     const dailyContent = source.editor && typeof source.editor.getValue === "function"
       ? source.editor.getValue()
       : null;
+    const addedIdNotice = options.isNewId === true
+      ? "Added ^" + id + " to " + prepared.task.notePath + " · "
+      : "";
     new Notice(
-      `Linked under ${entryName}${themeChip}${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}${this.planBudgetNoticeSuffix(dailyContent)}`,
+      addedIdNotice + `Linked under ${entryName}${themeChip}${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}${this.planBudgetNoticeSuffix(dailyContent)}`,
     );
     return { ok: true, completed: true };
   }
@@ -18463,6 +18681,16 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
 
     this.suppressEditorScans();
     const sorted = [...edits].sort((left, right) => right.start - left.start);
+    if (
+      source.trigger === "((" &&
+      dispatchTaskWikilinkCompletion(
+        source.editor,
+        sorted.map((edit) => ({ from: edit.start, to: edit.end, insert: edit.replacement })),
+        markerStart + replacement.length,
+      )
+    ) {
+      return { removedCount: cleanup.removedCount };
+    }
     for (const edit of sorted) {
       source.editor.replaceRange(
         edit.replacement,

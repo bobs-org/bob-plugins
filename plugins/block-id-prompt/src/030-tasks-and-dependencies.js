@@ -657,6 +657,7 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     inheritedProjectBlocked ||
     (resident && (projectOpen.length > 0 || !projectScheduleIsFuture)) ||
     (target.blockId === "prj" && ownOpen.length > 0);
+  const projectOwnPrerequisites = target.blockId === "prj" && ownOpen.length > 0;
   const dependencyBlocked = ownOpen.length > 0 || projectDependencyBlocked ||
     projectOpen.length > 0;
   const openPrerequisites = [...new Set([...ownOpen, ...projectOpen])];
@@ -731,6 +732,7 @@ function planTaskLinkBlockConsumption(documents, targetPath, targetLine, today =
     openPrerequisites,
     openPrerequisiteCount: openPrerequisites.length,
     projectDependencyBlocked,
+    projectOwnPrerequisites,
     inheritedProjectBlocked,
     projectParent: inheritedProjectBlocked ? project.parent : null,
     projectScheduleIsFuture,

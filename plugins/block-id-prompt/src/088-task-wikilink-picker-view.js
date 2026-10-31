@@ -199,6 +199,13 @@ function pickerDisabledReasonFor(row, options) {
   ) {
     return "The task you're typing in";
   }
+  const pomodoroGuards = options && options.pomodoroGuards;
+  const rowGuard = pomodoroGuards && typeof pomodoroGuards.get === "function"
+    ? pomodoroGuards.get(taskWikilinkRowKey(row))
+    : null;
+  if (rowGuard) {
+    return rowGuard;
+  }
   return disabledReasonFor(row, options);
 }
 
@@ -695,6 +702,7 @@ function buildTaskWikilinkPickerPlan(input) {
     guardOptions: {
       previousDailyPath,
       source: options.source || null,
+      pomodoroGuards: options.pomodoroGuards || null,
     },
   };
   const filtered = Boolean(String(query).trim());

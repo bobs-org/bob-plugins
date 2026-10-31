@@ -24,9 +24,12 @@ const DAILY_NOTE = [
   "## Pomodoros",
   "- [ ] FIX (09:20-09:50)",
   "  - ",
+  "- [ ] BUILD (10:00-10:30)",
+  "  - [[Tasks#|alias]]",
   "",
   "## Notes",
   "Type here: ",
+  "- [ ] Follow up",
   "",
 ].join("\n");
 
@@ -436,6 +439,25 @@ async function typeText(client, value) {
   }
 }
 
+async function typeTextFast(client, value) {
+  for (const char of value) {
+    if (char === "(") await dispatchKey(client, "(", { code: "Digit9", vk: 57, modifiers: 8, text: "(", pause: 0 });
+    else if (char === ")") await dispatchKey(client, ")", { code: "Digit0", vk: 48, modifiers: 8, text: ")", pause: 0 });
+    else await dispatchKey(client, char, { pause: 0 });
+  }
+}
+
+async function waitForFast(client, expression, predicate, label, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await client.evaluate(expression);
+    if (predicate(last)) return last;
+    await sleep(10);
+  }
+  throw new Error(`timed out waiting for ${label}: ${JSON.stringify(last)}`);
+}
+
 const EDITOR_PROBE = `(() => { try {
   const view = window.app && window.app.workspace && window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
   const editor = view && view.editor;
@@ -475,6 +497,17 @@ const PICKER_PROBE = `(() => { try {
     selected: selected && selected.textContent || "",
     action: actionText,
     checking: /checking|unavailable/i.test(actionText + " " + liveText),
+  };
+} catch (e) { return { open: false, error: String(e && e.message || e) }; } })()`;
+
+const TASK_PICKER_PROBE = `(() => { try {
+  const modal = document.querySelector(".modal.bid-tlp-modal, .bid-tlp-modal");
+  const input = modal && modal.querySelector("input");
+  const selected = modal && modal.querySelector(".bid-tlp-row.is-selected");
+  return {
+    open: Boolean(modal),
+    query: input && input.value || "",
+    selected: selected && selected.textContent || "",
   };
 } catch (e) { return { open: false, error: String(e && e.message || e) }; } })()`;
 
@@ -867,6 +900,57 @@ async function runE2e(parsed) {
     const undone = await client.evaluate(EDITOR_PROBE);
     record("undo-restores-token", undone && String(undone.lineText || undone.text || "").includes("(("), undone && undone.lineText);
 
+    const fastPrep = await prepareTyping(fixture.daily, "source", "Type here:");
+    record("open-fast-burst", fastPrep.opened && fastPrep.opened.ok);
+    await typeTextFast(client, "((opus");
+    const fastPicker = await waitForFast(
+      client,
+      PICKER_PROBE,
+      (value) => value && value.open && /opus/i.test(String(value.query || "")),
+      "fast-burst-picker",
+    );
+    const readyAt = Date.now();
+    await dispatchKey(client, "Enter", { text: "\r", vk: 13, code: "Enter", pause: 0 });
+    const enterDelayMs = Date.now() - readyAt;
+    record("fast-burst-enter", fastPicker.open && enterDelayMs <= 150, `${enterDelayMs} ms after picker became ready`);
+    await waitFor(client, PICKER_PROBE, (value) => value && value.open === false, "fast-burst-closes");
+    await dispatchKey(client, "z", { modifiers: 2, code: "KeyZ", vk: 90, text: "", pause: 0 });
+    await sleep(120);
+    const fastUndo = await client.evaluate(EDITOR_PROBE);
+    record("fast-burst-one-undo", fastUndo && String(fastUndo.lineText || "").includes("((opus))"), fastUndo && fastUndo.lineText);
+
+    const escapePrep = await prepareTyping(fixture.daily, "source", "Type here:");
+    record("open-escape-filter", escapePrep.opened && escapePrep.opened.ok);
+    await typeText(client, "((opus");
+    await assertPicker(true, "escape-filter-picker");
+    await dispatchKey(client, "Escape");
+    const clearedFilter = await waitFor(
+      client,
+      PICKER_PROBE,
+      (value) => value && value.open && value.query === "",
+      "escape-clears-filter",
+    );
+    record("escape-clears-keeps-open", clearedFilter.open && clearedFilter.query === "");
+    await dispatchKey(client, "Escape");
+    await assertPicker(false, "escape-closes-after-clear");
+    const escapeText = await client.evaluate(EDITOR_PROBE);
+    record("second-escape-leaves-text", escapeText && String(escapeText.lineText || "").includes("((opus))"), escapeText && escapeText.lineText);
+
+    const taskLinePrep = await prepareTyping(fixture.daily, "source", "Follow up");
+    record("open-top-level-task-line", taskLinePrep.opened && taskLinePrep.opened.ok);
+    // The token grammar needs a space before `((`, so separate it from the
+    // task text like a user would; the picker then opens on the auto-pair.
+    await typeText(client, " ((");
+    const topLevelPicker = await assertPicker(true, "top-level-task-auto-pair-opens");
+    const topLevelEditor = await client.evaluate(EDITOR_PROBE);
+    record(
+      "top-level-task-auto-pair",
+      topLevelPicker && topLevelEditor && String(topLevelEditor.lineText || "").includes("(())"),
+      topLevelEditor && topLevelEditor.lineText,
+    );
+    await dispatchKey(client, "Escape");
+    await assertPicker(false, "top-level-task-escape");
+
     await dispatchKey(client, "Escape");
     await sleep(80);
     const reopen = await prepareTyping(fixture.daily, "source", "Type here:");
@@ -971,6 +1055,54 @@ async function runE2e(parsed) {
       "pomodoro-promotes-and-retypes",
       typeof tasksText === "string" && /\[\*\] #task Ready work/.test(tasksText),
       String(tasksText).slice(0, 220),
+    );
+
+    const rapidPrep = await prepareTyping(fixture.daily, "source", "[[Tasks#|alias]]");
+    record("open-pomodoro-rapid-marker", rapidPrep.opened && rapidPrep.opened.ok);
+    await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+      const editor = view && view.editor;
+      if (!editor) return false;
+      const line = editor.getLine(editor.getCursor().line) || "";
+      const ch = line.indexOf("#") + 1;
+      editor.setCursor({ line: editor.getCursor().line, ch });
+      if (typeof editor.focus === "function") editor.focus();
+      const cm = view.containerEl && view.containerEl.querySelector(".cm-content");
+      if (cm && typeof cm.focus === "function") cm.focus();
+      return true;
+    })()`);
+    await typeText(client, "^^");
+    const rapidPicker = await waitFor(
+      client,
+      TASK_PICKER_PROBE,
+      (value) => value && value.open,
+      "pomodoro-rapid-picker",
+      6000,
+    );
+    await typeText(client, "Ship opus");
+    const rapidSelection = await waitFor(
+      client,
+      TASK_PICKER_PROBE,
+      (value) => value && value.open && /Ship opus/i.test(String(value.selected || "")),
+      "pomodoro-rapid-selected-task",
+      6000,
+    );
+    await dispatchKey(client, "Enter", { text: "\r", vk: 13, code: "Enter" });
+    await waitFor(client, TASK_PICKER_PROBE, (value) => value && !value.open, "pomodoro-rapid-closes", 6000);
+    await sleep(300);
+    const rapidLinked = await client.evaluate(EDITOR_PROBE);
+    record(
+      "pomodoro-rapid-links-existing-id",
+      rapidPicker.open && rapidSelection.open && rapidLinked && String(rapidLinked.text || "").includes("[[Tasks#^opus-demo|alias]]"),
+      rapidLinked && rapidLinked.lineText,
+    );
+    const rapidTasksText = await client.evaluate(
+      `(() => (async () => window.app.vault.cachedRead(window.app.vault.getAbstractFileByPath("Tasks.md")))())()`,
+    );
+    record(
+      "pomodoro-rapid-promotes-existing-task",
+      typeof rapidTasksText === "string" && /\[\*\] #task Ship opus blender demo/.test(rapidTasksText),
+      String(rapidTasksText).slice(0, 180),
     );
 
     const fencedOpen = await prepareTyping(fixture.fenced, "source", "const pair = ");

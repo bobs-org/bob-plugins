@@ -605,3 +605,220 @@ test("ID-less Enter opens naming mode with the picker state", async () => {
   assert.equal(promptSource.pickerState.query, "opus");
   assert.equal(promptSource.task.notePath, selected.row.notePath);
 });
+
+test("Page Down clamps at the final selectable row instead of wrapping", () => {
+  const tasks = Array.from({ length: 50 }, (_, index) =>
+    `- [ ] #task Task ${index} ^task-${index}`,
+  ).join("\n");
+  const harness = createPlugin({
+    files: { "note.md": "See ((", "Tasks.md": tasks },
+    activePath: "note.md",
+    cursor: { line: 0, ch: 6 },
+  });
+  const source = openFromToken(harness);
+  const picker = new helpers.TaskWikilinkPickerModal(
+    harness.plugin.app,
+    harness.plugin,
+    source,
+    harness.plugin.taskWikilinkSnapshot(source),
+  );
+  picker.open();
+  const keys = picker.plan.selectableKeys;
+  assert.ok(keys.length > 10);
+  picker.selectedKey = keys[keys.length - 3];
+  picker.moveSelection(10);
+  assert.equal(picker.selectedKey, keys[keys.length - 1]);
+});
+
+test("naming cancel paths restore query, selection, row limit, and scroll", () => {
+  const harness = createPlugin({
+    files: { "note.md": "See ((", "Tasks.md": VAULT["Tasks.md"] },
+    activePath: "note.md",
+    cursor: { line: 0, ch: 6 },
+  });
+  const source = openFromToken(harness);
+  const snapshot = harness.plugin.taskWikilinkSnapshot(source);
+  const keys = helpers.buildTaskWikilinkPickerPlan({ rows: snapshot.rows, ownerPath: "note.md" }).selectableKeys;
+  const pickerState = { query: "", selectedKey: keys[0], rowLimit: 24, scrollTop: 73 };
+  let resumed = null;
+  harness.plugin.openTaskWikilinkPicker = (value) => { resumed = value; };
+  for (const closeGesture of ["Back", "Escape", "outside click"]) {
+    resumed = null;
+    harness.plugin.cancelBlockIdPrompt({
+      ...source,
+      kind: "link-task-complete",
+      pickerState,
+      query: "stale query should not win",
+    });
+    assert.ok(resumed, `${closeGesture} should reopen the picker`);
+    const restored = new helpers.TaskWikilinkPickerModal(
+      harness.plugin.app,
+      harness.plugin,
+      resumed,
+      snapshot,
+    );
+    restored.open();
+    assert.equal(restored.query, "", `${closeGesture} query`);
+    assert.equal(restored.selectedKey, keys[0], `${closeGesture} selection`);
+    assert.equal(restored.rowLimit, 24, `${closeGesture} row limit`);
+    assert.equal(restored.resultsEl.scrollTop, 73, `${closeGesture} scroll`);
+  }
+});
+
+test("a scan that exits early clears old written ranges before a later scan", () => {
+  const harness = createPlugin({
+    files: { "note.md": "See ((" },
+    activePath: "note.md",
+    cursor: { line: 0, ch: 6 },
+  });
+  harness.plugin.recordTaskWikilinkWrittenRanges(
+    makeUpdate({ from: 4, to: 4, text: "((", view: harness.editor.cm }),
+  );
+  harness.plugin.app.workspace.getActiveViewOfType = () => null;
+  harness.plugin.inspectActiveEditor(harness.editor.cm);
+  assert.deepEqual(harness.plugin.taskWikilinkWrittenRanges, []);
+  harness.plugin.app.workspace.getActiveViewOfType = () => harness.view;
+  harness.plugin.inspectActiveEditor(harness.editor.cm);
+  assert.equal(harness.plugin.promptOpen, false);
+});
+
+test("identified accept dispatches one isolated CodeMirror completion event", async () => {
+  const harness = createPlugin({
+    files: { "note.md": "See ((turn))", "Tasks.md": VAULT["Tasks.md"] },
+    activePath: "note.md",
+    cursor: { line: 0, ch: 8 },
+  });
+  const source = openFromToken(harness);
+  const snapshot = harness.plugin.taskWikilinkSnapshot(source);
+  const item = helpers.buildTaskWikilinkPickerPlan({
+    rows: snapshot.rows,
+    query: "turn",
+    ownerPath: "note.md",
+    source,
+    renderAll: true,
+  }).selected;
+  const calls = [];
+  harness.editor.cm = {
+    state: { doc: {} },
+    dispatch: (transaction) => calls.push(transaction),
+  };
+  const result = await harness.plugin.acceptTaskWikilinkIdentified(source, item);
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].changes, {
+    from: source.replaceStart,
+    to: source.replaceEnd,
+    insert: item.replacement,
+  });
+  assert.equal(calls[0].selection.anchor, source.replaceStart + item.replacement.length);
+  assert.equal(calls[0].userEvent, "input.complete");
+  assert.equal(calls[0].scrollIntoView, true);
+});
+
+test("guarded rows never open the naming prompt", () => {
+  const harness = createPlugin({
+    files: {
+      "note.md": "See ((",
+      "done/old.md": "- [ ] #task Old task",
+    },
+    activePath: "note.md",
+    cursor: { line: 0, ch: 6 },
+  });
+  const source = openFromToken(harness);
+  const picker = new helpers.TaskWikilinkPickerModal(
+    harness.plugin.app,
+    harness.plugin,
+    source,
+    harness.plugin.taskWikilinkSnapshot(source),
+  );
+  picker.open();
+  assert.equal(picker.plan.selected.disabled, true);
+  let selected = false;
+  harness.plugin.selectTaskLinkTask = () => { selected = true; };
+  picker.acceptSelected();
+  assert.equal(selected, false);
+  assert.equal(picker.isOpen, true);
+});
+
+test("cheap Pomodoro guards disable non-selected duplicate rows", () => {
+  const tasks = [
+    "- [ ] #task Already linked ^linked",
+    "- [ ] #task Choose this ^choose",
+  ].join("\n");
+  const harness = createPlugin({
+    files: { "note.md": "## Pomodoros\n- [ ] Current (09:20-09:50)\n  - ((", "Tasks.md": tasks },
+    activePath: "note.md",
+    cursor: { line: 2, ch: 5 },
+  });
+  const source = openFromToken(harness);
+  const context = { title: "Current", range: "09:20–09:50", sourcePath: "note.md", entry: { links: [] } };
+  harness.plugin.taskWikilinkPomodoroContext = () => context;
+  harness.plugin.taskWikilinkPomodoroAlreadyLinked = (_context, row) => row.blockId === "linked";
+  harness.plugin.taskWikilinkPomodoroDocuments = async () => ({ documents: [], failures: [] });
+  const picker = new helpers.TaskWikilinkPickerModal(
+    harness.plugin.app,
+    harness.plugin,
+    source,
+    harness.plugin.taskWikilinkSnapshot(source),
+  );
+  picker.open();
+  const duplicate = picker.plan.items.find((item) => item.kind === "row" && item.row.blockId === "linked");
+  assert.ok(duplicate);
+  assert.equal(duplicate.disabled, true);
+  assert.equal(duplicate.reason, "Already in this Pomodoro");
+});
+
+test("stale Backspace closes with a notice and leaves the changed token alone", () => {
+  const harness = createPlugin({
+    files: { "note.md": "Hi ((q))" },
+    activePath: "note.md",
+    cursor: { line: 0, ch: 5 },
+  });
+  const source = openFromToken(harness);
+  const picker = new helpers.TaskWikilinkPickerModal(
+    harness.plugin.app,
+    harness.plugin,
+    source,
+    harness.plugin.taskWikilinkSnapshot(source),
+  );
+  picker.open();
+  harness.editor.replaceRange("((changed))", { line: 0, ch: source.startCh }, { line: 0, ch: source.endCh });
+  pressKey(picker, "Backspace");
+  assert.equal(harness.editor.getValue(), "Hi ((changed))");
+  assert.match(lastNotice(), /the \(\(…\)\) text changed/);
+  assert.equal(picker.isOpen, false);
+});
+
+
+test("onEscapeKey clears a non-empty filter first and closes on an empty one", () => {
+  const harness = createPlugin({
+    files: { "note.md": "See ((", "Tasks.md": VAULT["Tasks.md"] },
+    activePath: "note.md",
+    cursor: { line: 0, ch: 6 },
+  });
+  const source = openFromToken(harness);
+  const picker = new helpers.TaskWikilinkPickerModal(
+    harness.plugin.app,
+    harness.plugin,
+    source,
+    harness.plugin.taskWikilinkSnapshot(source),
+  );
+  picker.open();
+  // Real Obsidian binds the scope Escape to onEscapeKey at construction
+  // and runs it in the capture phase, so exercise the override directly.
+  picker.query = "opus";
+  if (picker.inputEl) picker.inputEl.value = "opus";
+  let prevented = false;
+  picker.onEscapeKey({ preventDefault: () => { prevented = true; }, defaultPrevented: false });
+  assert.equal(prevented, true);
+  assert.equal(picker.query, "");
+  assert.equal(picker.inputEl.value, "");
+  assert.equal(picker.isOpen, true);
+
+  prevented = false;
+  const second = { preventDefault: () => { prevented = true; }, defaultPrevented: false };
+  picker.onEscapeKey(second);
+  assert.equal(prevented, true);
+  assert.equal(picker.isOpen, false);
+  assert.equal(harness.editor.getValue(), "See ((opus".slice(0, 6));
+});

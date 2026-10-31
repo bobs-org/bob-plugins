@@ -346,12 +346,13 @@ function taskWikilinkLineInFence(docLines, line) {
 // line, so a closed `$$x$$` excludes just its inside.
 function taskWikilinkDollarBlockInside(docLines, line, ch) {
   let inside = false;
+  const stateLines = taskWikilinkBlockStateLines(docLines, line, ch);
   for (let current = 0; current < line; current += 1) {
-    if (taskWikilinkCountOccurrences(taskWikilinkStripCodeSpans((docLines || [])[current] || ""), "$$") % 2 === 1) {
+    if (taskWikilinkCountOccurrences(taskWikilinkStripCodeSpans(stateLines[current] || ""), "$$") % 2 === 1) {
       inside = !inside;
     }
   }
-  const prefix = taskWikilinkStripCodeSpans(String((docLines || [])[line] || "").slice(0, ch));
+  const prefix = taskWikilinkStripCodeSpans(stateLines[line] || "");
   if (taskWikilinkCountOccurrences(prefix, "$$") % 2 === 1) {
     inside = !inside;
   }
@@ -361,12 +362,13 @@ function taskWikilinkDollarBlockInside(docLines, line, ch) {
 // Same toggle shape for `%%` comment blocks and inline `%%…%%`.
 function taskWikilinkPercentBlockInside(docLines, line, ch) {
   let inside = false;
+  const stateLines = taskWikilinkBlockStateLines(docLines, line, ch);
   for (let current = 0; current < line; current += 1) {
-    if (taskWikilinkCountOccurrences(taskWikilinkStripCodeSpans((docLines || [])[current] || ""), "%%") % 2 === 1) {
+    if (taskWikilinkCountOccurrences(taskWikilinkStripCodeSpans(stateLines[current] || ""), "%%") % 2 === 1) {
       inside = !inside;
     }
   }
-  const prefix = taskWikilinkStripCodeSpans(String((docLines || [])[line] || "").slice(0, ch));
+  const prefix = taskWikilinkStripCodeSpans(stateLines[line] || "");
   if (taskWikilinkCountOccurrences(prefix, "%%") % 2 === 1) {
     inside = !inside;
   }
@@ -378,6 +380,7 @@ function taskWikilinkPercentBlockInside(docLines, line, ch) {
 // the caret.
 function taskWikilinkHtmlCommentInside(docLines, line, ch) {
   let inside = false;
+  const stateLines = taskWikilinkBlockStateLines(docLines, line, ch);
   const applyMarkers = (text) => {
     TASK_WIKILINK_HTML_MARKER_RE.lastIndex = 0;
     let match;
@@ -387,9 +390,9 @@ function taskWikilinkHtmlCommentInside(docLines, line, ch) {
     TASK_WIKILINK_HTML_MARKER_RE.lastIndex = 0;
   };
   for (let current = 0; current < line; current += 1) {
-    applyMarkers(String((docLines || [])[current] || ""));
+    applyMarkers(stateLines[current] || "");
   }
-  applyMarkers(String((docLines || [])[line] || "").slice(0, ch));
+  applyMarkers(stateLines[line] || "");
   return inside;
 }
 
@@ -404,6 +407,36 @@ function taskWikilinkFrontmatterEnd(docLines) {
     }
   }
   return lines.length;
+}
+
+// State markers in YAML and fenced code are inert to the note grammar.
+function taskWikilinkBlockStateLines(docLines, line, ch) {
+  const lines = Array.isArray(docLines) ? docLines : [];
+  const frontmatterEnd = taskWikilinkFrontmatterEnd(lines);
+  const stateLines = [];
+  let activeFence = null;
+  for (let current = 0; current <= line; current += 1) {
+    const text = String(lines[current] || "");
+    if (frontmatterEnd !== -1 && current <= frontmatterEnd) {
+      stateLines.push("");
+      continue;
+    }
+    if (activeFence) {
+      stateLines.push("");
+      if (isClosingFence(text, activeFence)) {
+        activeFence = null;
+      }
+      continue;
+    }
+    const openingFence = getFenceOpening(text);
+    if (openingFence) {
+      stateLines.push("");
+      activeFence = openingFence;
+      continue;
+    }
+    stateLines.push(current === line ? text.slice(0, ch) : text);
+  }
+  return stateLines;
 }
 
 // Classify the caret for the `((` trigger: `{ allowed, notice }`.
@@ -448,8 +481,15 @@ function taskWikilinkContextAt(docLines, line, ch) {
   if (isTaskRelationLine(lineText)) {
     return { allowed: false, notice: taskRelationLineNotice(lineText) };
   }
-  if (isPomodoroEntryLine(lineText)) {
-    return { allowed: false, notice: null };
+  const pomodoros = findPomodorosSectionRange(lines);
+  if (pomodoros && line >= pomodoros.startLine && line <= pomodoros.endLine) {
+    const token = findTaskWikilinkToken(lineText, caret);
+    const withoutToken = token
+      ? `${lineText.slice(0, token.replaceStart)}${lineText.slice(token.replaceEnd)}`
+      : lineText;
+    if (isPomodoroEntryLine(withoutToken)) {
+      return { allowed: false, notice: null };
+    }
   }
 
   if (taskWikilinkSpanCovers(taskWikilinkInlineCodeSpans(lineText), caret)) {

@@ -93,7 +93,10 @@ The command **Link a task here** (`link-task-wikilink`) reopens the picker on
 demand, with no default hotkey. Inside a `((` token it uses that token; a
 single-line selection seeds the filter and is replaced on accept; otherwise it
 inserts at the caret. Managed lines (Depends-On, BLOCKS, LINKS, LINKED FROM)
-and excluded contexts such as fenced code never open it.
+and excluded contexts never open it: frontmatter, fenced code, math and comment
+blocks, inline code or math, links, and URLs. Pomodoro-entry lines are excluded
+only inside the daily note's Pomodoros section; a task with a time range elsewhere
+can still use `((`.
 
 `((` differs from `^^`: it searches the whole vault, includes completed
 history, and names the note in every link (`[[note#^id]]`, never `[[#^id]]`).
@@ -122,8 +125,11 @@ A `^^` task-picker marker that is itself the only content of an open Pomodoro
 sub-bullet uses the same gate and commit. It refuses closed targets and
 project-blocked tasks; when only the target's own prerequisites block it, the
 prerequisites are raised and the marker returns to `[[note#^]]` without linking
-the target. Successful `((` and `^^` commits share lane, freshness, schedule,
-Schedule Log, type, cleanup, and plan-budget handling.
+the target. The picker keeps the typed target and alias, and a stale selection
+leaves the picker open with a Notice. Successful `((` and `^^` commits share
+lane, freshness, schedule, Schedule Log, type, cleanup, and plan-budget handling.
+Pomodoro commits that add an ID announce `Added ^id to note.md ·` before the
+link result.
 
 Keys: `↑↓` move, `↵` / Tab insert the selected identified link, `esc` clears a
 filter or closes, and `⌫` on an empty filter undoes `((`.
@@ -171,9 +177,11 @@ Link, unlink, and Task Link notices append the live plan budget
 
 Project Schedule comes from the `^prj` task. A future-scheduled `^prj` link is
 refused only when its date is the sole remaining reason, with dependency
-reasons reported first; a direct link raises a Ready `^prj` to Next. A tagged
-`#prj_is_blocked` `^prj` is refused as blocked by its parent project without
-raising prerequisites.
+reasons reported first; a direct link raises a Ready `^prj` to Next. In
+Pomodoro mode, a `^prj` blocked only by its own prerequisites is treated as
+prerequisite-blocked and raises them to Next. A tagged `#prj_is_blocked` `^prj`,
+an inherited project block, or a project date remains refused without raising
+those prerequisites.
 
 On an inbox note, `Ctrl+Shift+Enter` asks where the task goes before linking or
 unlinking, then moves it with the toggle applied. A `Ctrl+Shift+Enter` link

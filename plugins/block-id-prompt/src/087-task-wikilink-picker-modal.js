@@ -7,17 +7,27 @@ class TaskWikilinkPickerModal extends Modal {
     this.plugin = plugin;
     this.source = source;
     this.snapshot = snapshot || { rows: [], ready: true, scanned: 0, total: 0 };
-    this.query = source && source.query ? String(source.query) : "";
+    const pickerState = source && source.pickerState;
+    this.query = pickerState && typeof pickerState.query === "string"
+      ? pickerState.query
+      : source && source.query
+        ? String(source.query)
+        : "";
     this.pomodoroContext = plugin && typeof plugin.taskWikilinkPomodoroContext === "function"
       ? plugin.taskWikilinkPomodoroContext(source)
       : null;
     this.pomodoroDependencies = null;
     this.pomodoroDependenciesReady = !this.pomodoroContext;
     this.pomodoroDetailCache = new Map();
-    this.selectedKey = source && source.pickerState && source.pickerState.selectedKey
-      ? source.pickerState.selectedKey
+    this.selectedKey = pickerState && pickerState.selectedKey
+      ? pickerState.selectedKey
       : null;
-    this.rowLimit = TASK_WIKILINK_PICKER_WINDOW;
+    this.rowLimit = pickerState && Number.isInteger(pickerState.rowLimit) && pickerState.rowLimit > 0
+      ? pickerState.rowLimit
+      : TASK_WIKILINK_PICKER_WINDOW;
+    this.restoreScrollTop = pickerState && Number.isFinite(pickerState.scrollTop)
+      ? pickerState.scrollTop
+      : null;
     this.narrow = false;
     this.completed = false;
     this.accepting = false;
@@ -109,9 +119,6 @@ class TaskWikilinkPickerModal extends Modal {
     this.renderAll();
     this.subscribeToIndex();
     this.loadPomodoroDependencies();
-    if (this.source && this.source.pickerState && Number.isInteger(this.source.pickerState.scrollTop)) {
-      this.resultsEl.scrollTop = this.source.pickerState.scrollTop;
-    }
     window.setTimeout(() => {
       if (this.inputEl) {
         this.inputEl.focus();
@@ -199,7 +206,24 @@ class TaskWikilinkPickerModal extends Modal {
     }
     let pomodoroDetail = null;
     const rows = this.snapshot.rows || [];
+    const pomodoroGuards = new Map();
     if (this.pomodoroContext) {
+      for (const row of rows) {
+        if (!row || !row.open) {
+          continue;
+        }
+        if (
+          row.blockId && this.plugin &&
+          this.plugin.taskWikilinkPomodoroAlreadyLinked(this.pomodoroContext, row, row.blockId)
+        ) {
+          pomodoroGuards.set(taskWikilinkRowKey(row), "Already in this Pomodoro");
+        } else if (hasProjectBlockedResidentTag(row.rawLine)) {
+          pomodoroGuards.set(
+            taskWikilinkRowKey(row),
+            `Blocked by its project ${row.notePath} · move the ^prj Schedule`,
+          );
+        }
+      }
       if (!this.pomodoroDependenciesReady) {
         pomodoroDetail = { checking: true };
       } else {
@@ -247,6 +271,7 @@ class TaskWikilinkPickerModal extends Modal {
       pomodoroContext: this.pomodoroContext,
       pomodoroDetail,
       pomodoroRaised: this.source && this.source.pomodoroRaised,
+      pomodoroGuards,
     });
     if (this.plan.selected) {
       this.selectedKey = this.plan.selected.key;
@@ -296,6 +321,10 @@ class TaskWikilinkPickerModal extends Modal {
     if (this.liveEl) {
       const live = [plan.live.count, plan.live.selected].filter(Boolean).join(". ");
       this.liveEl.setText(live);
+    }
+    if (this.resultsEl && this.restoreScrollTop !== null) {
+      this.resultsEl.scrollTop = this.restoreScrollTop;
+      this.restoreScrollTop = null;
     }
   }
 
@@ -376,7 +405,9 @@ class TaskWikilinkPickerModal extends Modal {
       return;
     }
     const current = Math.max(0, keys.indexOf(this.selectedKey));
-    const next = (current + delta % keys.length + keys.length) % keys.length;
+    const next = Math.abs(delta) === 1
+      ? (current + delta + keys.length) % keys.length
+      : Math.max(0, Math.min(keys.length - 1, current + delta));
     this.selectedKey = keys[next];
     if (next + 1 > this.rowLimit) {
       this.rowLimit = Math.ceil((next + 1) / TASK_WIKILINK_PICKER_WINDOW) * TASK_WIKILINK_PICKER_WINDOW;
@@ -472,6 +503,35 @@ class TaskWikilinkPickerModal extends Modal {
       event.preventDefault();
       event.stopPropagation();
       this.undoTriggerAndClose();
+    }
+  }
+
+  // Obsidian binds this scope's Escape to Modal's onEscapeKey at
+  // construction, and the scope chain is first-registered-wins, so an
+  // appended scope handler could never preempt the default close.
+  // Overriding onEscapeKey instead: a non-empty filter clears and the
+  // modal stays open; an empty filter closes exactly like Modal does.
+  // (The global key handler runs in the capture phase, before the input
+  // listener, so the input-level Escape branch only fires in tests.)
+  onEscapeKey(event) {
+    if (String(this.query || "") !== "") {
+      this.query = "";
+      if (this.inputEl) {
+        this.inputEl.value = "";
+      }
+      this.selectedKey = null;
+      this.rowLimit = TASK_WIKILINK_PICKER_WINDOW;
+      this.renderAll();
+      if (event && !event.defaultPrevented && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      return false;
+    }
+    if (event && !event.defaultPrevented) {
+      event.preventDefault();
+      this.close();
+    } else if (!event) {
+      this.close();
     }
   }
 
@@ -580,12 +640,16 @@ class TaskWikilinkPickerModal extends Modal {
     const lineText = source.editor.getLine(source.line) || "";
     const from = { line: source.line, ch: removal.start };
     const to = { line: source.line, ch: removal.end };
-    const expected = lineText.slice(removal.start, removal.end);
-    if (removal.start > lineText.length || removal.end > lineText.length) {
+    if (
+      removal.start > lineText.length ||
+      removal.end > lineText.length ||
+      lineText.slice(source.startCh, source.endCh) !== source.raw
+    ) {
+      new Notice("Task wikilink not inserted: the ((…)) text changed");
+      this.completed = true;
       this.close();
       return;
     }
-    void expected;
     if (this.plugin && typeof this.plugin.suppressEditorScans === "function") {
       this.plugin.suppressEditorScans();
     }

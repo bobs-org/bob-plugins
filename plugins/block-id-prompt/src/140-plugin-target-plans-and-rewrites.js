@@ -348,6 +348,16 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
 
     this.suppressEditorScans();
     const sorted = [...edits].sort((left, right) => right.start - left.start);
+    if (
+      source.trigger === "((" &&
+      dispatchTaskWikilinkCompletion(
+        source.editor,
+        sorted.map((edit) => ({ from: edit.start, to: edit.end, insert: edit.replacement })),
+        markerStart + replacement.length,
+      )
+    ) {
+      return { removedCount: cleanup.removedCount };
+    }
     for (const edit of sorted) {
       source.editor.replaceRange(
         edit.replacement,

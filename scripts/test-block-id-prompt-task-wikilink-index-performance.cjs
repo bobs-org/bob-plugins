@@ -1,4 +1,5 @@
-// Task Wikilink Index performance test: the budgets from phase
+// Task Wikilink Index CPU-performance test: CPU time avoids charging
+// scheduler preemption to index work. The budgets from phase
 // `index` of plan 202610/obsidian_task_wikilinks.md, in the style of
 // `test-navigation-dependencies-stage-performance.cjs`.
 //
@@ -19,8 +20,6 @@ const COLD_BUILD_BUDGET_MS = 1500;
 const CHUNK_BUDGET_MS = 16;
 const SNAPSHOT_BUDGET_MS = 50;
 const KEYSTROKE_BUDGET_MS = 12;
-
-const syncSchedule = (callback) => callback();
 
 // A realistic vault mix: most notes carry one task amid prose, some are
 // prose-only, and a few are daily notes. Sizes stay small so the test
@@ -88,40 +87,52 @@ function buildIndex(noteCount, options = {}) {
 async function coldBuildTimed(noteCount, { yieldAfterMs = 12 } = {}) {
   const { index, app } = buildIndex(noteCount);
   const chunks = [];
-  const start = process.hrtime.bigint();
+  const chunkCpuMs = [];
+  let previousScheduleEnd = cpuTimeMs();
+  const schedule = (callback) => {
+    const scheduledAt = cpuTimeMs();
+    chunkCpuMs.push(scheduledAt - previousScheduleEnd);
+    callback();
+    previousScheduleEnd = cpuTimeMs();
+  };
+  const start = cpuTimeMs();
   const result = await index.warmUpFromVault(app, {
-    schedule: syncSchedule,
+    schedule,
     yieldAfterMs,
     onChunk: (chunk) => chunks.push(chunk),
   });
-  const ms = Number(process.hrtime.bigint() - start) / 1e6;
-  return { index, app, result, chunks, ms };
+  const cpuMs = cpuTimeMs() - start;
+  return { index, app, result, chunks, chunkCpuMs, cpuMs };
 }
 
-// Absolute timing budgets (cold total, chunk ceiling, snapshot,
-// keystroke) are asserted on the BEST of several attempts: on a
-// shared machine a scheduling stall can inflate any single
-// wall-clock measurement several-fold, which is measurement error
-// rather than a performance signal. A genuine algorithmic regression
-// exceeds the budget on every attempt, so the signal survives; only
-// the stall noise is filtered. The tightest budget (the 12 ms
-// keystroke) gets five attempts, the roomier ones three. Relative
-// assertions (near-linear growth) and the no-reads assertion need no
-// such tolerance.
-async function bestOf(run, attempts) {
+// CPU time measures work done by the test thread, so a descheduled process
+// does not make an otherwise cheap chunk look over budget. A short real
+// delay between samples lets separate contention bursts affect different
+// attempts. Snapshot gets five samples and rank gets seven.
+function cpuTimeMs() {
+  const usage = typeof process.threadCpuUsage === "function"
+    ? process.threadCpuUsage()
+    : process.cpuUsage();
+  return (usage.user + usage.system) / 1000;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function bestOf(run, attempts, delayMs = 10) {
   let best = Infinity;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     best = Math.min(best, await run());
+    if (attempt + 1 < attempts) {
+      await delay(delayMs);
+    }
   }
   return best;
 }
 
 function worstChunkMs(chunks) {
-  let worst = 0;
-  for (const chunk of chunks) {
-    worst = Math.max(worst, chunk.chunkMs);
-  }
-  return worst;
+  return Math.max(0, ...chunks);
 }
 
 test("cold build of 6,500 notes / 5,000 tasks fits 1.5 s in chunks of at most 16 ms", async () => {
@@ -129,29 +140,25 @@ test("cold build of 6,500 notes / 5,000 tasks fits 1.5 s in chunks of at most 16
   assert.equal(built.result.total, 6500);
   assert.equal(built.result.scanned, 6500);
   assert.ok(built.chunks.length > 1, `expected chunked yields, saw ${built.chunks.length}`);
-  // One shared set of samples feeds both wall-clock assertions, so a
-  // slow box costs three builds instead of six.
+  // Three builds feed both the total and chunk budgets.
   const samples = [built];
   for (let attempt = 1; attempt < 3; attempt += 1) {
+    await delay(10);
     samples.push(await coldBuildTimed(6500, { yieldAfterMs: 1 }));
   }
-  const worst = Math.min(...samples.map((sample) => worstChunkMs(sample.chunks)));
+  const worst = Math.min(...samples.map((sample) => worstChunkMs(sample.chunkCpuMs)));
   assert.ok(
     worst <= CHUNK_BUDGET_MS,
     `worst chunk ${worst.toFixed(1)} ms exceeds ${CHUNK_BUDGET_MS} ms`,
   );
-  const ms = Math.min(...samples.map((sample) => sample.ms));
+  const ms = Math.min(...samples.map((sample) => sample.cpuMs));
   assert.ok(ms <= COLD_BUILD_BUDGET_MS, `cold build ${ms.toFixed(1)} ms exceeds budget`);
   const taskRows = built.index.snapshot({}).rows;
   assert.ok(taskRows.length >= 5000, `expected 5,000+ rows, saw ${taskRows.length}`);
 });
 
-// The budgets below describe steady-state costs: a warm vault where
-// V8 has already compiled the rank path (as it is after the first
-// keystrokes in a real session). Each measurement warms up with
-// untimed runs first, so one-time JIT/GC effects can't flake the
-// assertion; a genuine algorithmic regression still exceeds the
-// budget several times over.
+// The budgets below describe steady-state CPU costs after an untimed
+// warmup of the rank path.
 function settleRankPath(rows) {
   helpers.orderForWikilinkPicker(rows, "trains", null);
   helpers.orderForWikilinkPicker(rows, "task number", null);
@@ -162,11 +169,11 @@ test("warm snapshot plus order takes at most 50 ms", async () => {
   settleRankPath(index.snapshot({}).rows);
   let ordered = null;
   const ms = await bestOf(async () => {
-    const start = process.hrtime.bigint();
+    const start = cpuTimeMs();
     const snap = index.snapshot({});
     ordered = helpers.orderForWikilinkPicker(snap.rows, "trains", null);
-    return Number(process.hrtime.bigint() - start) / 1e6;
-  }, 3);
+    return cpuTimeMs() - start;
+  }, 5);
   assert.ok(ordered.length > 0);
   assert.ok(ms <= SNAPSHOT_BUDGET_MS, `snapshot plus order ${ms.toFixed(1)} ms exceeds budget`);
 });
@@ -178,10 +185,10 @@ test("one keystroke rank of 5,000 rows takes at most 12 ms", async () => {
   settleRankPath(rows);
   let ranked = null;
   const ms = await bestOf(async () => {
-    const start = process.hrtime.bigint();
+    const start = cpuTimeMs();
     ranked = helpers.orderForWikilinkPicker(rows, "task number", null);
-    return Number(process.hrtime.bigint() - start) / 1e6;
-  }, 5);
+    return cpuTimeMs() - start;
+  }, 7);
   assert.ok(ranked.length > 0);
   assert.ok(ms <= KEYSTROKE_BUDGET_MS, `keystroke rank ${ms.toFixed(1)} ms exceeds budget`);
 });
@@ -197,12 +204,21 @@ test("no vault reads happen while filtering", async () => {
 });
 
 test("cold build growth stays near-linear over a 6x step", async () => {
-  const small = await coldBuildTimed(500);
-  const large = await coldBuildTimed(3000);
+  async function bestColdBuild(noteCount) {
+    let best = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const sample = await coldBuildTimed(noteCount);
+      if (!best || sample.cpuMs < best.cpuMs) best = sample;
+      if (attempt < 2) await delay(10);
+    }
+    return best;
+  }
+  const small = await bestColdBuild(500);
+  const large = await bestColdBuild(3000);
   assert.equal(small.result.total, 500);
   assert.equal(large.result.total, 3000);
   assert.ok(
-    large.ms < Math.max(120, small.ms * 6),
-    `3000-note build ${large.ms.toFixed(1)} ms grows too fast over 500-note ${small.ms.toFixed(1)} ms`,
+    large.cpuMs < Math.max(120, small.cpuMs * 6),
+    `3000-note build ${large.cpuMs.toFixed(1)} ms grows too fast over 500-note ${small.cpuMs.toFixed(1)} ms`,
   );
 });

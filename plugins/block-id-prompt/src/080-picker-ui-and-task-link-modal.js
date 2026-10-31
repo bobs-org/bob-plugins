@@ -516,6 +516,9 @@ class TaskLinkPickerModal extends Modal {
       if (!result) {
         return;
       }
+      if (result.keepOpen) {
+        return;
+      }
 
       promptSource = result.promptSource || null;
       this.completed = true;

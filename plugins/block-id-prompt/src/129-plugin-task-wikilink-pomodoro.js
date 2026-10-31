@@ -159,7 +159,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     if (plan.projectDateRefusal) {
       return `Project date blocked · move the project date from the ^prj Schedule action in ${projectPath}`;
     }
-    if (plan.projectDependencyBlocked) {
+    if (plan.projectDependencyBlocked && !plan.projectOwnPrerequisites) {
       return `Blocked by project prerequisites · move the ^prj Schedule in ${projectPath}`;
     }
     return null;
@@ -216,15 +216,15 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     const failures = dependencySnapshot && Array.isArray(dependencySnapshot.failures)
       ? dependencySnapshot.failures
       : [];
-    if (
-      !dependencySnapshot || dependencySnapshot.indexReady === false ||
-      failures.length > 0
-    ) {
+    const unresolvedWithUnavailableRead = Boolean(
+      plan && (plan.unresolvedIds || []).length > 0 &&
+      (failures.length > 0 || dependencySnapshot && dependencySnapshot.indexReady === false)
+    );
+    if (!plan && (failures.length > 0 || !dependencySnapshot || dependencySnapshot.indexReady === false)) {
       detail.dependencyUnavailable = true;
     }
     if (plan && plan.blocked) {
-      const unavailable = (plan.unresolvedIds || []).length > 0 &&
-        failures.length > 0;
+      const unavailable = unresolvedWithUnavailableRead;
       const projectGuard = this.taskWikilinkPomodoroProjectGuard(plan, row.notePath);
       if (projectGuard) {
         detail.guardText = projectGuard;
@@ -255,7 +255,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       : this.sourceMarkerStillPresent(source, { quiet: true });
     if (!sourcePresent) {
       new Notice("Task link stopped: the source link changed");
-      return { handled: true, kind: "stale" };
+      return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
     }
     const chosenTarget = options.pomodoroTarget || task.pomodoroTarget || source.pomodoroTarget || null;
     if (
@@ -265,30 +265,42 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       new Notice("Task link stopped: the source Pomodoro changed");
       return { handled: true, kind: "stale" };
     }
-    const file = this.resolveTaskFile(task.notePath) ||
+    let taskPath = task.notePath;
+    if (source.trigger !== "((") {
+      let destination = source.destinationPath || null;
+      if (!destination && typeof this.resolveReferenceDestination === "function") {
+        try {
+          destination = this.resolveReferenceDestination(source.targetText, source.sourcePath);
+        } catch (_error) {
+          destination = null;
+        }
+      }
+      taskPath = typeof destination === "string" ? destination : destination && destination.path;
+    }
+    const file = this.resolveTaskFile(taskPath) ||
       (this.app.vault && this.app.vault.getAbstractFileByPath
-        ? this.app.vault.getAbstractFileByPath(task.notePath)
+        ? this.app.vault.getAbstractFileByPath(taskPath)
         : null);
     if (!file) {
       new Notice("Task link blocked: target note could not be resolved");
-      return { handled: true, kind: "stale" };
+      return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
     }
     const authoritative = await readAuthoritativePromptTargetContent(this, source, file);
     if (!authoritative || typeof authoritative.content !== "string") {
-      new Notice(`Task link blocked: ${task.notePath} could not be read`);
-      return { handled: true, kind: "stale" };
+      new Notice(`Task link blocked: ${taskPath} could not be read`);
+      return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
     }
-    let currentTask = { ...task };
+    let currentTask = { ...task, notePath: taskPath };
     if (source.trigger === "((" && options.isNewId === true) {
       const relocated = taskWikilinkLineForIdentity(authoritative.content, task);
       if (!relocated) {
-        new Notice(`Task link blocked: selected task moved or changed in ${task.notePath}`);
-        return { handled: true, kind: "stale" };
+        new Notice(`Task link blocked: selected task moved or changed in ${taskPath}`);
+        return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
       }
       currentTask = { ...currentTask, ...relocated };
     } else if ((authoritative.content.split("\n")[task.line] || "") !== task.rawLine) {
-      new Notice(`Task link blocked: selected task changed in ${task.notePath}`);
-      return { handled: true, kind: "stale" };
+      new Notice(`Task link blocked: selected task changed in ${taskPath}`);
+      return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
     }
     const taskMatch = getObsidianTaskLineMatch(currentTask.rawLine);
     if (!taskMatch || !OPEN_OBSIDIAN_TASK_STATUSES.has(taskMatch[1])) {
@@ -308,8 +320,8 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     if (id) {
       const matches = blockTokenMatches(authoritative.content, id);
       if (options.isNewId === true ? matches.length > 0 : matches.length !== 1) {
-        new Notice(`Block ID ^${id} is no longer unique in ${task.notePath}`);
-        return { handled: true, kind: "stale" };
+        new Notice(`Block ID ^${id} is no longer unique in ${taskPath}`);
+        return { handled: true, kind: "stale", result: source.trigger === "^^" ? { keepOpen: true } : null };
       }
       if (this.taskWikilinkPomodoroAlreadyLinked(context, currentTask, id)) {
         new Notice("Already in this Pomodoro");
@@ -393,7 +405,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     const written = dependency && dependency.writtenDocuments instanceof Map
       ? dependency.writtenDocuments
       : new Map();
-    const openIds = new Set((plan && plan.openPrerequisites || []).map(String));
+    const promotedIds = new Set((plan && plan.promoted || []).map(String));
     const nextDocuments = documents.map((document) => ({
       path: document.path,
       text: written.has(document.path) ? written.get(document.path) : document.text,
@@ -406,7 +418,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       const keys = [record.taskId, record.blockId ? taskWikilinkPomodoroCanonicalId(record.path, record.blockId) : null]
         .filter(Boolean)
         .map(String);
-      return keys.some((key) => openIds.has(key));
+      return keys.some((key) => promotedIds.has(key));
     });
     const rows = [];
     for (const document of nextDocuments) {
@@ -438,7 +450,9 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       isNewId: options.isNewId === true,
     });
     if (prepared.handled) {
-      return prepared.result || (prepared.kind === "stale" ? { stale: true } : null);
+      return prepared.result || (prepared.kind === "stale"
+        ? source.trigger === "^^" ? { keepOpen: true } : { stale: true }
+        : null);
     }
     const themeSource = {
       sourcePath: prepared.task.notePath,
@@ -472,13 +486,16 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       return { stale: true };
     }
     const linkTarget = this.taskWikilinkLinkTarget(prepared.task, source.sourcePath);
+    const completionBase = source.trigger === '(('
+      ? {
+          ...source,
+          targetText: linkTarget,
+          blockPrefix: CANONICAL_BLOCK_LINK_PREFIX,
+          aliasSuffix: "",
+        }
+      : source;
     const completionSource = this.adjustSourceForPlan(
-      {
-        ...source,
-        targetText: linkTarget,
-        blockPrefix: CANONICAL_BLOCK_LINK_PREFIX,
-        aliasSuffix: "",
-      },
+      completionBase,
       prepared.task.notePath,
       plan,
     );
@@ -498,8 +515,11 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     const dailyContent = source.editor && typeof source.editor.getValue === "function"
       ? source.editor.getValue()
       : null;
+    const addedIdNotice = options.isNewId === true
+      ? "Added ^" + id + " to " + prepared.task.notePath + " · "
+      : "";
     new Notice(
-      `Linked under ${entryName}${themeChip}${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}${this.planBudgetNoticeSuffix(dailyContent)}`,
+      addedIdNotice + `Linked under ${entryName}${themeChip}${activationSuccessSuffix(plan)}${this.futureLinkCleanupNoticeSuffix(completion.removedCount)}${this.planBudgetNoticeSuffix(dailyContent)}`,
     );
     return { ok: true, completed: true };
   }

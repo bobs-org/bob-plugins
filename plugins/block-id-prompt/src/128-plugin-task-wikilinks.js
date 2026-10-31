@@ -20,6 +20,32 @@ function taskWikilinkLineForIdentity(content, task) {
     : null;
 }
 
+function dispatchTaskWikilinkCompletion(editor, changes, caret) {
+  const cm = editor && editor.cm;
+  if (!cm || typeof cm.dispatch !== "function" || !cm.state || !cm.state.doc) {
+    return false;
+  }
+  try {
+    const mapped = (changes || []).map((change) => ({
+      from: change.from,
+      to: change.to,
+      insert: change.insert,
+    }));
+    if (mapped.length === 0) {
+      return false;
+    }
+    cm.dispatch({
+      changes: mapped.length === 1 ? mapped[0] : mapped,
+      selection: { anchor: caret },
+      userEvent: "input.complete",
+      scrollIntoView: true,
+    });
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
 class BlockIdPromptTaskWikilinksMixin {
   ensureTaskWikilinkIndex() {
     if (this.taskWikilinkIndex) {
@@ -135,7 +161,7 @@ class BlockIdPromptTaskWikilinksMixin {
     };
   }
 
-  maybeOpenTaskWikilinkFromEditor(view, file, cursor, lineText) {
+  maybeOpenTaskWikilinkFromEditor(view, file, cursor, lineText, writtenRanges = this.taskWikilinkWrittenRanges) {
     const editor = view.editor;
     if (this.isTaskWikilinkReadingView(view) || this.isTaskWikilinkComposing(view)) {
       const token = findTaskWikilinkToken(lineText, cursor.ch || 0);
@@ -152,7 +178,7 @@ class BlockIdPromptTaskWikilinksMixin {
     const lineStart = this.editorLineStartOffset(editor, cursor.line);
     const wroteSecond = taskWikilinkWrittenSecondParen(
       token,
-      this.taskWikilinkWrittenRanges,
+      writtenRanges,
       lineStart,
     );
     this.clearTaskWikilinkWrittenRanges();
@@ -409,6 +435,21 @@ class BlockIdPromptTaskWikilinksMixin {
       line: source.line,
       ch: source.replaceStart + replacement.length,
     };
+    const fromIndex = editorPositionToIndex(source.editor.getValue(), from);
+    const toIndex = editorPositionToIndex(source.editor.getValue(), to);
+    // The caret is after the replacement, so it may not map into the
+    // pre-change document. CM6 expects the post-change offset here.
+    const caretIndex = fromIndex === null ? null : fromIndex + replacement.length;
+    if (
+      fromIndex !== null && toIndex !== null && caretIndex !== null &&
+      dispatchTaskWikilinkCompletion(source.editor, [{
+        from: fromIndex,
+        to: toIndex,
+        insert: replacement,
+      }], caretIndex)
+    ) {
+      return { ok: true, replacement };
+    }
     if (typeof source.editor.transaction === "function") {
       source.editor.transaction({
         changes: [{ from, to, text: replacement }],

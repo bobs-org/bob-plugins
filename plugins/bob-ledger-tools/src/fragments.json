@@ -119,6 +119,7 @@
   "292-keep-inbox-model.js",
   "293-keep-inbox-render.js",
   "294-keep-inbox-indicator.js",
+  "295-keep-inbox-actions.js",
   "300-plugin-vim-and-snippets.js",
   "310-install-methods.js",
   "320-plan-lane-and-config.js",

@@ -10,13 +10,39 @@ class TestPlugin {
     this.app = app;
   }
 }
+const notices = [];
+class TestNotice {
+  constructor(message) {
+    notices.push(String(message));
+  }
+}
+class TestMenuItem {
+  setTitle(title) { this.title = title; return this; }
+  setIcon(icon) { this.icon = icon; return this; }
+  onClick(callback) { this.callback = callback; return this; }
+}
+class TestMenu {
+  static instances = [];
+  constructor() {
+    this.items = [];
+    TestMenu.instances.push(this);
+  }
+  addItem(callback) {
+    const item = new TestMenuItem();
+    callback(item);
+    this.items.push(item);
+    return this;
+  }
+  showAtMouseEvent(event) { this.event = event; }
+}
 
 const originalLoad = Module._load;
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     return {
       MarkdownView: TestMarkdownView,
-      Notice: class {},
+      Menu: TestMenu,
+      Notice: TestNotice,
       Platform: { isDesktopApp: true },
       Plugin: TestPlugin,
       normalizePath: (value) => value,
@@ -457,4 +483,293 @@ test("gkeep command-mode tag routes to the Keep inbox refresh", () => {
   plugin.setupCommandModeRunRefresh();
   app.handler({ invalidates: ["gkeep"] });
   assert.deepEqual(calls, ["recount", "read"]);
+});
+
+function makeActionPlugin(options = {}) {
+  const app = {
+    plugins: { plugins: {} },
+    workspace: { onLayoutReady: () => ({ layout: true }) },
+    vault: { getAbstractFileByPath: () => ({ path: "gkeep_inbox.md" }) },
+  };
+  if (options.commandMode) {
+    app.plugins.plugins["bob-command-mode"] = {
+      api: { commandMode: options.commandMode },
+    };
+  }
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.keepInboxEl = makeStatusEl();
+  plugin.keepInboxParts = {
+    keepButton: makeStatusEl(),
+    keepCount: makeStatusEl(),
+    inboxButton: makeStatusEl(),
+  };
+  plugin.keepInboxEnabled = true;
+  plugin.keepInboxLastStatus = { ok: true, report: statusReport() };
+  plugin.keepInboxUpdateView = () => {};
+  plugin.keepInboxRecountFromTasks = () => {};
+  plugin.registerEvent = () => {};
+  plugin.registerDomEvent = (target, name, callback) => {
+    if (!target.handlers) target.handlers = {};
+    target.handlers[name] = callback;
+  };
+  plugin.addCommand = (command) => {
+    if (!plugin.testCommands) plugin.testCommands = [];
+    plugin.testCommands.push(command);
+  };
+  plugin.apiStatsBobPath = () => ({ path: "/bin/bob", source: "test" });
+  plugin.statsVaultBasePath = () => "/vault";
+  plugin.keepInboxActionNow = () => plugin.testNow;
+  plugin.testNow = FIXED_NOW.getTime();
+  plugin.testTimers = new Map();
+  plugin.testNextTimer = 1;
+  plugin.keepInboxActionSetTimeout = (callback, delay) => {
+    const id = plugin.testNextTimer++;
+    plugin.testTimers.set(id, { callback, delay });
+    return id;
+  };
+  plugin.keepInboxActionClearTimeout = (id) => plugin.testTimers.delete(id);
+  plugin.setupKeepInboxActions();
+  return plugin;
+}
+
+function jsonStatus(report) {
+  return JSON.stringify(report);
+}
+
+function respondWith(plugin, report, calls = []) {
+  plugin.keepInboxExecFile = (path, args, options, callback) => {
+    calls.push({ path, args, options, callback });
+    callback(null, jsonStatus(report), "");
+  };
+  return calls;
+}
+
+test("automatic checks require attention and a deferred timer fires on input", async (t) => {
+  const priorDocument = global.document;
+  const priorWindow = global.window;
+  const documentStub = { visibilityState: "visible", hasFocus: () => false, handlers: {} };
+  global.document = documentStub;
+  global.window = { handlers: {} };
+  t.after(() => {
+    if (priorDocument === undefined) delete global.document;
+    else global.document = priorDocument;
+    if (priorWindow === undefined) delete global.window;
+    else global.window = priorWindow;
+  });
+  const plugin = makeActionPlugin();
+  const calls = respondWith(plugin, statusReport());
+  plugin.keepInboxLastInputAt = plugin.testNow;
+  plugin.keepInboxActionScheduleNextCheck("2026-10-31T16:30:00Z");
+  const timer = plugin.keepInboxNextCheckTimer;
+  assert.equal(plugin.testTimers.get(timer).delay, 30 * 60 * 1000);
+  plugin.testTimers.get(timer).callback();
+  assert.equal(plugin.keepInboxAutoDue, true);
+  assert.equal(calls.length, 0);
+
+  documentStub.hasFocus = () => true;
+  plugin.keepInboxActionOnInput();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ["gkeep", "status", "-r", "-f", "json"]);
+  assert.equal(calls[0].options.timeout, 60000);
+  await Promise.resolve();
+  assert.equal(plugin.keepInboxAutoDue, false);
+});
+
+test("status timers clamp to one minute through two hours and null cancels", () => {
+  const plugin = makeActionPlugin();
+  plugin.keepInboxActionScheduleNextCheck("2026-10-31T15:59:00Z");
+  let timer = plugin.keepInboxNextCheckTimer;
+  assert.equal(plugin.testTimers.get(timer).delay, 60 * 1000);
+  plugin.keepInboxActionScheduleNextCheck("2026-11-01T00:00:00Z");
+  timer = plugin.keepInboxNextCheckTimer;
+  assert.equal(plugin.testTimers.get(timer).delay, 2 * 60 * 60 * 1000);
+  plugin.keepInboxActionScheduleNextCheck(null);
+  assert.equal(plugin.keepInboxNextCheckTimer, null);
+  assert.equal(plugin.testTimers.size, 0);
+});
+
+test("layout schedules its first automatic check after fifteen seconds", async (t) => {
+  const priorDocument = global.document;
+  global.document = { visibilityState: "visible", hasFocus: () => true };
+  t.after(() => {
+    if (priorDocument === undefined) delete global.document;
+    else global.document = priorDocument;
+  });
+  const plugin = makeActionPlugin();
+  plugin.keepInboxLastInputAt = plugin.testNow;
+  const calls = respondWith(plugin, statusReport());
+  plugin.keepInboxActionScheduleInitialCheck();
+  const timer = plugin.keepInboxInitialCheckTimer;
+  assert.equal(plugin.testTimers.get(timer).delay, 15 * 1000);
+  plugin.testTimers.get(timer).callback();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ["gkeep", "status", "-r", "-f", "json"]);
+  await Promise.resolve();
+});
+
+test("focus triggers coalesce to one refresh per fifteen seconds", async (t) => {
+  const priorDocument = global.document;
+  global.document = { visibilityState: "visible", hasFocus: () => true };
+  t.after(() => {
+    if (priorDocument === undefined) delete global.document;
+    else global.document = priorDocument;
+  });
+  const plugin = makeActionPlugin();
+  plugin.keepInboxLastInputAt = plugin.testNow;
+  const calls = respondWith(plugin, statusReport());
+  const first = plugin.keepInboxOnFocus("window-focus");
+  const second = plugin.keepInboxOnFocus("visibility");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ["gkeep", "status", "-r", "-f", "json"]);
+  plugin.keepInboxActionOnInput();
+  assert.equal(calls.length, 1);
+  assert.equal(plugin.keepInboxAutoDue, false);
+  await Promise.all([first, second]);
+  plugin.testNow += 15000;
+  await plugin.keepInboxOnFocus("online");
+  assert.equal(calls.length, 2);
+});
+
+test("single flight queues one request and upgrades it from cache to forced", async () => {
+  const plugin = makeActionPlugin();
+  const calls = [];
+  plugin.keepInboxExecFile = (path, args, options, callback) => {
+    calls.push({ args, options, callback });
+  };
+  const cache = plugin.keepInboxRequestRead("test-cache");
+  const automatic = plugin.keepInboxEnqueueStatusRequest("automatic", "test-auto");
+  const forced = plugin.keepInboxCheckNow();
+  const lowerPriority = plugin.keepInboxRequestRead("test-queued-cache");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ["gkeep", "status", "-f", "json"]);
+  calls[0].callback(null, jsonStatus(statusReport()), "");
+  await cache;
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].args, ["gkeep", "status", "-r", "-m", "0", "-f", "json"]);
+  assert.equal(calls[1].options.timeout, 60000);
+  calls[1].callback(null, jsonStatus(statusReport({
+    keep: { refresh: { ran: true, skipped: null } },
+  })), "");
+  const results = await Promise.all([automatic, forced, lowerPriority]);
+  assert.equal(results.every((result) => result.ok), true);
+  assert.equal(calls.length, 2);
+});
+
+test("forced check feedback follows the bob refresh result", async () => {
+  const plugin = makeActionPlugin();
+  const seen = [];
+  for (const refreshCase of [
+    {
+      name: "success",
+      keep: { refresh: { ran: true, skipped: null } },
+      notice: null,
+    },
+    {
+      name: "failure",
+      keep: { state: "offline", error: { message: "network down" }, refresh: { ran: true, skipped: null } },
+      notice: "Couldn't check Google Keep: network down",
+    },
+    {
+      name: "floor",
+      keep: { checked_at: "2026-10-31T15:59:52Z", refresh: { ran: false, skipped: "floor" } },
+      notice: "Google Keep was checked 8 s ago",
+    },
+    {
+      name: "rate-limited",
+      keep: { state: "rate_limited", next_check_at: "2026-10-31T16:30:00Z", refresh: { ran: false, skipped: "backoff" } },
+      notice: "Google asked Bob to slow down · try after 16:30",
+    },
+    {
+      name: "in-flight",
+      keep: { refresh: { ran: false, skipped: "in_flight" } },
+      notice: "A Keep check is already running",
+    },
+    {
+      name: "busy pull",
+      keep: { refresh: { ran: false, skipped: "busy" } },
+      notice: "A Keep pull is running",
+    },
+  ]) {
+    notices.length = 0;
+    respondWith(plugin, statusReport({ keep: refreshCase.keep }));
+    await plugin.keepInboxCheckNow();
+    assert.equal(notices[0] || null, refreshCase.notice, refreshCase.name);
+    seen.push(refreshCase.name);
+  }
+  assert.deepEqual(seen, ["success", "failure", "floor", "rate-limited", "in-flight", "busy pull"]);
+  assert.ok(plugin.keepInboxInFlightRereadTimer !== null);
+});
+
+test("bulb clicks route by tone and missing Command Mode gives a preview hint", async () => {
+  notices.length = 0;
+  const plugin = makeActionPlugin();
+  const clicked = plugin.keepInboxParts.keepButton.handlers.click;
+  plugin.keepInboxLastView = { keep: { tone: "fresh" } };
+  clicked({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(notices.pop(), "Preview with: bob gkeep pull -d");
+  plugin.keepInboxLastView = { keep: { tone: "signin" } };
+  clicked({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(notices.pop(), "Preview with: bob gkeep doctor -d");
+
+  const commands = [];
+  const commandModePlugin = makeActionPlugin({
+    commandMode: { preview: async (argv) => { commands.push(argv); return { ok: true }; } },
+  });
+  commandModePlugin.keepInboxLastView = { keep: { tone: "fresh" } };
+  await commandModePlugin.keepInboxParts.keepButton.handlers.click({
+    preventDefault() {}, stopPropagation() {},
+  });
+  assert.deepEqual(commands, [["gkeep", "pull"]]);
+  assert.deepEqual(commandModePlugin.testCommands.map((command) => [command.id, command.name]), [
+    ["check-google-keep-now", "Check Google Keep now"],
+    ["toggle-keep-inbox-indicator", "Toggle Keep inbox indicator"],
+  ]);
+});
+
+test("context menus omit Command Mode actions when its preview API is unavailable", () => {
+  TestMenu.instances.length = 0;
+  const plugin = makeActionPlugin();
+  const context = { preventDefault() {} };
+  plugin.keepInboxParts.inboxButton.handlers.contextmenu(context);
+  const withoutApi = TestMenu.instances.at(-1);
+  assert.deepEqual(withoutApi.items.map((item) => item.title), [
+    "Check Google Keep now",
+    "Open gkeep_inbox.md",
+    "Hide until restart",
+  ]);
+
+  const withApi = makeActionPlugin({ commandMode: { preview: async () => ({ ok: true }) } });
+  withApi.keepInboxParts.keepButton.handlers.contextmenu(context);
+  const withCommandMode = TestMenu.instances.at(-1);
+  assert.deepEqual(withCommandMode.items.map((item) => item.title), [
+    "Check Google Keep now",
+    "Preview Keep pull…",
+    "Open gkeep_inbox.md",
+    "Keep setup check",
+    "Hide until restart",
+  ]);
+});
+
+test("turning the indicator off prevents all new automatic and forced checks", async () => {
+  const plugin = makeActionPlugin();
+  const calls = respondWith(plugin, statusReport());
+  assert.equal(plugin.keepInboxToggleEnabled(), false);
+  assert.equal(await plugin.keepInboxCheckNow(), null);
+  assert.equal(await plugin.keepInboxActionTryAutomatic("test"), null);
+  assert.equal(calls.length, 0);
+  assert.equal(plugin.keepInboxEnabled, false);
+});
+
+test("verified transition to auth shows one sign-in notice per session", () => {
+  notices.length = 0;
+  const plugin = makeActionPlugin();
+  plugin.keepInboxActionApplyStatus({
+    ok: true,
+    report: statusReport({ keep: { state: "auth", verified: true, next_check_at: null } }),
+  });
+  plugin.keepInboxActionApplyStatus({
+    ok: true,
+    report: statusReport({ keep: { state: "auth", verified: true, next_check_at: null } }),
+  });
+  assert.deepEqual(notices, ["Google Keep sign-in expired · run bob gkeep login in a terminal"]);
 });

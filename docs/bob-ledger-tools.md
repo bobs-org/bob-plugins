@@ -23,6 +23,7 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
+| Check Google Keep now | `check-google-keep-now` | — |
 | Cycle Day stats bars | `cycle-day-stats-bars` | — |
 | Expand Bob snippet | `expand-ledger-time-range-snippet` | — |
 | Go to today's Task Link | `go-to-today-task-link` | — |
@@ -32,6 +33,7 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | Open today's daily note | `open-today-daily-note` | — |
 | Toggle Day stats | `toggle-day-stats` | — |
 | Toggle Google Calendar sync on daily-note creation | `toggle-gcal-sync-on-create` | — |
+| Toggle Keep inbox indicator | `toggle-keep-inbox-indicator` | — |
 | Toggle Pomodoro home chips | `toggle-pomodoro-home-chips` | — |
 | Toggle Task Link In Progress marks | `toggle-progress-marks` | — |
 | Toggle Today marks | `toggle-today-marks` | — |
@@ -252,14 +254,33 @@ at zero, `–` when unknown). The whole item hides when Keep is not
 configured or before the first status read; the Keep pill hides while
 Keep never verified on this host.
 
-The Keep count comes only from `bob gkeep status` (cache only, never a
-network read in this release); the inbox count is recomputed from the
-Tasks plugin cache on every `obsidian-tasks-plugin:cache-update`, falling
-back to bob's cached `inbox.open` before Tasks is ready. The plugin never
-reads the vault file for the Keep count, never reads a credential, and
-never decides backoff. Clicking the inbox opens the target note at its
-first open top-level task; a missing note shows a Notice and never
-creates the file. The Keep pill keeps tooltips only in this release.
+The Keep count comes from `bob gkeep status`; the inbox count is recomputed
+from the Tasks plugin cache on every `obsidian-tasks-plugin:cache-update`,
+falling back to bob's cached `inbox.open` before Tasks is ready. The plugin
+never reads the vault file for the Keep count, never reads a credential, and
+never decides backoff. It runs `bob gkeep status -r` after layout settles,
+on focus/visibility/online events, and when bob's `next_check_at` arrives,
+but only while Obsidian is visible, focused, and has seen keyboard, pointer,
+or wheel input in the last ten minutes. Unattended due checks wait for the
+next input; Bob still applies its own freshness, budget, and backoff gates.
+
+Click the bulb when its count is fresh to open Command Mode at a dry-run
+`gkeep pull` preview; click it when clear, stale, or unknown to check now.
+After sign-in expires, the bulb opens the `gkeep doctor` report. Right-click
+either count for Check Google Keep now, Preview Keep pull, Open
+`gkeep_inbox.md`, Keep setup check, or Hide until restart. The palette also
+offers **Check Google Keep now** and **Toggle Keep inbox indicator**. Preview
+and setup actions need Command Mode; without its preview API the bulb explains
+the matching `bob` command to run. User-triggered checks pulse the bulb, while
+background checks stay still. Bob caps unattended-safe checks with its own
+30-minute default interval and a 48-check daily budget (about 16 checks in
+eight attended hours); setting `gkeep.check_interval: off` disables automatic
+Keep checks without affecting manual checks.
+
+Clicking the inbox opens the target note at its first open top-level task; a
+missing note shows a Notice and never creates the file. Turning off the
+session toggle stops automatic and manual `-r` requests until the next
+Obsidian restart.
 
 ## Session toggles
 

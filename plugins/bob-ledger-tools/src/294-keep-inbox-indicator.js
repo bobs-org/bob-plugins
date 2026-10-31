@@ -1,6 +1,5 @@
-// Keep inbox indicator (keep-indicator-view): cache-only `bob-keep-inbox`
-// status-bar item. The Keep count comes only from `bob gkeep status`
-// (cache only, never `-r` in this release); the inbox count is recomputed
+// Keep inbox indicator (keep-indicator-view): `bob-keep-inbox` status-bar
+// item. bob owns the Keep count and check gates; the inbox count is recomputed
 // from the Tasks cache. Desktop only, calm by default, never writes.
 
 const KEEP_INBOX_STATUS_TIMEOUT_MS = 15000;
@@ -228,6 +227,11 @@ class BobLedgerToolsKeepInboxMixin {
     } catch (error) {
       // A status bar without a click still shows the counts.
     }
+    try {
+      this.setupKeepInboxActions();
+    } catch (error) {
+      // Actions never block the two read-only counts.
+    }
     this.keepInboxSubscribe();
     // Initial paint hides until the first read (no flash).
     try {
@@ -247,6 +251,9 @@ class BobLedgerToolsKeepInboxMixin {
               this.keepInboxRecountFromTasks("layout-ready");
             } catch (error) {}
             void this.keepInboxRequestRead("layout-ready");
+            try {
+              this.keepInboxActionScheduleInitialCheck();
+            } catch (error) {}
           }),
         );
       }
@@ -294,7 +301,7 @@ class BobLedgerToolsKeepInboxMixin {
     try {
       const vault = this.app && this.app.vault;
       if (vault && typeof vault.on === "function" && typeof this.registerEvent === "function") {
-        for (const event of ["modify", "rename", "create", "delete"]) {
+        for (const event of ["modify", "rename"]) {
           this.registerEvent(
             vault.on(event, (file, oldPath) => {
               try {

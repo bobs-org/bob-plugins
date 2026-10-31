@@ -5425,3 +5425,166 @@ body:not(.bob-root-marks) .bob-root-mark-native {
     animation: none;
   }
 }
+
+/* Keep inbox indicator (keep-indicator-view): calm intake item beside the
+   review footer. The review footer keeps `margin-right: auto`; this item
+   never flexes so the footer shrinks first. */
+.bob-keep-inbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  flex: 0 0 auto;
+  font-size: var(--font-ui-smaller, 12px);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-interface);
+  color: var(--text-normal);
+  line-height: 1;
+  --bob-keep-ink-l: 0.52;
+}
+.theme-dark .bob-keep-inbox {
+  --bob-keep-ink-l: 0.8;
+}
+.bob-keep-inbox {
+  --bob-keep-ink: oklch(from var(--color-yellow) var(--bob-keep-ink-l) min(c, 0.16) h);
+}
+.bob-keep-inbox-hidden {
+  display: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  flex: 0 0 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+.bob-keep-pill,
+.bob-keep-inbox-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  padding: 0 0.15em;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  line-height: inherit;
+}
+.bob-keep-pill:hover,
+.bob-keep-inbox-btn:hover {
+  background: var(--background-modifier-hover);
+}
+.bob-keep-pill:focus,
+.bob-keep-inbox-btn:focus {
+  outline: none;
+}
+.bob-keep-pill:focus-visible,
+.bob-keep-inbox-btn:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-s, 4px);
+}
+.bob-keep-pill-icon svg,
+.bob-keep-inbox-icon svg,
+.bob-keep-connector-icon svg {
+  width: 1.05em;
+  height: 1.05em;
+}
+.bob-keep-pill {
+  border-radius: 999px;
+  padding: 0 0.5em 0 0.4em;
+  gap: 0.3em;
+  line-height: 1.35;
+  border: 1px solid transparent;
+}
+.bob-keep-pill[data-keep-tone="fresh"] {
+  background: color-mix(in oklch, var(--color-yellow) 17%, transparent);
+  border-color: color-mix(in oklch, var(--color-yellow) 30%, transparent);
+  color: var(--bob-keep-ink);
+}
+.bob-keep-pill[data-keep-tone="fresh"] .bob-keep-pill-count {
+  font-weight: 600;
+}
+.bob-keep-pill[data-keep-tone="zero"] {
+  background: transparent;
+  border-color: var(--background-modifier-border);
+  color: var(--text-faint);
+}
+.bob-keep-pill[data-keep-tone="stale"],
+.bob-keep-pill[data-keep-tone="unknown"],
+.bob-keep-pill[data-keep-tone="signin"] {
+  background: transparent;
+  border-style: dashed;
+  border-color: color-mix(in oklch, var(--color-yellow) 45%, var(--text-faint));
+  color: var(--text-muted);
+}
+.bob-keep-connector {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+}
+.bob-keep-connector-icon svg {
+  width: 0.85em;
+  height: 0.85em;
+}
+.bob-keep-inbox-btn .bob-keep-inbox-icon {
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+}
+.bob-keep-inbox-btn .bob-keep-inbox-count {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+.bob-keep-inbox-btn[data-inbox-tone="zero"] .bob-keep-inbox-count {
+  color: var(--text-faint);
+  font-weight: 500;
+}
+.bob-keep-inbox-btn[data-inbox-tone="unknown"] .bob-keep-inbox-count {
+  color: var(--text-faint);
+}
+.bob-keep-omit {
+  display: none !important;
+}
+.bob-keep-inbox[data-keep-tone="fresh"] .bob-keep-pill-icon,
+.bob-keep-inbox[data-keep-tone="fresh"] .bob-keep-pill-count {
+  color: var(--bob-keep-ink);
+}
+/* User-initiated checks pulse the bulb; background work never animates. */
+.bob-keep-inbox[data-checking="true"] .bob-keep-pill-icon {
+  animation: bob-keep-bulb-pulse 1.2s ease-in-out infinite;
+}
+@keyframes bob-keep-bulb-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.bob-keep-pill-count-enter {
+  animation: bob-keep-count-enter 240ms ease-out;
+}
+@keyframes bob-keep-count-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-keep-inbox[data-checking="true"] .bob-keep-pill-icon {
+    animation: none;
+    opacity: 0.6;
+  }
+  .bob-keep-pill-count-enter {
+    animation: none;
+  }
+}
+@media (forced-colors: active) {
+  .bob-keep-pill[data-keep-tone="fresh"] {
+    forced-color-adjust: none;
+    background: Highlight;
+    border-color: Highlight;
+    color: HighlightText;
+  }
+}

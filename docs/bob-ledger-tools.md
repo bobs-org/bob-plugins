@@ -240,6 +240,27 @@ The `noteReady` surface backs the read-only per-note Ready cap: each
 area/project note's Ready lane against `plan.max_ready_per_note` (default 5)
 with per-note `ready_cap` overrides and crowded/full/room states.
 
+## Keep inbox indicator
+
+The desktop status bar shows a `bob-keep-inbox` item beside the review
+footer: a gold bulb pill counting the Google Keep notes a default
+`bob gkeep pull` would take, a chevron connector, and an inbox-tray count
+of open top-level tasks in `gkeep_inbox.md`. The bulb is gold-filled when
+there is work, outlined when clear, dashed when last-known, and
+`lightbulb-off` when sign-in expired; the inbox is a plain numeral (faint
+at zero, `–` when unknown). The whole item hides when Keep is not
+configured or before the first status read; the Keep pill hides while
+Keep never verified on this host.
+
+The Keep count comes only from `bob gkeep status` (cache only, never a
+network read in this release); the inbox count is recomputed from the
+Tasks plugin cache on every `obsidian-tasks-plugin:cache-update`, falling
+back to bob's cached `inbox.open` before Tasks is ready. The plugin never
+reads the vault file for the Keep count, never reads a credential, and
+never decides backoff. Clicking the inbox opens the target note at its
+first open top-level task; a missing note shows a Notice and never
+creates the file. The Keep pill keeps tooltips only in this release.
+
 ## Session toggles
 
 Every `Toggle …` command in the generated table above is a session-only toggle

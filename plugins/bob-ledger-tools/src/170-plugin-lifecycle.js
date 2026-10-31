@@ -663,7 +663,7 @@ class BobLedgerToolsPlugin extends Plugin {
       this.registerEvent(ref);
     });
 
-    this.setupFreshnessStatusBar();
+    this.setupStatusBarItems();
     this.scheduleFreshnessStatusBar();
     this.setupFreshnessMarks();
     this.setupTaskTagMarks();

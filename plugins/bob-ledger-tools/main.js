@@ -21647,7 +21647,7 @@ class BobLedgerToolsPlugin extends Plugin {
       this.registerEvent(ref);
     });
 
-    this.setupFreshnessStatusBar();
+    this.setupStatusBarItems();
     this.scheduleFreshnessStatusBar();
     this.setupFreshnessMarks();
     this.setupTaskTagMarks();
@@ -64581,6 +64581,8 @@ class BobLedgerToolsCommandModeRefreshMixin {
             this.refreshReferencesForCommandModeRun();
           } else if (tag === "tasks") {
             this.refreshTasksForCommandModeRun();
+          } else if (tag === "gkeep") {
+            this.refreshKeepInboxForCommandModeRun();
           }
           // Unknown tags belong to other plugins; ignore them.
         } catch (error) {
@@ -66370,6 +66372,2008 @@ class BobLedgerToolsGcalEventsMixin {
     } catch (error) {}
   }
 }
+// ---- src/292-keep-inbox-model.js ----
+// Keep inbox indicator model (keep-indicator-view): pure view model for the
+// `bob-keep-inbox` status-bar item. No Obsidian, no spawn, no vault access.
+// Every function is pure and never throws; invalid input degrades to a
+// hidden or unknown frame, never an exception.
+
+const KEEP_INBOX_DEFAULT_TARGET = "gkeep_inbox.md";
+const KEEP_INBOX_UNKNOWN_GLYPH = "–";
+
+function keepInboxAsString(value) {
+  try {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (value === null || value === undefined) {
+      return "";
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+    return "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function keepInboxIsTopLevelTask(task) {
+  try {
+    if (!task || typeof task !== "object") {
+      return false;
+    }
+    const indentation =
+      typeof task.indentation === "string" ? task.indentation : "";
+    return indentation === "";
+  } catch (error) {
+    return false;
+  }
+}
+
+function keepInboxTaskPath(task) {
+  try {
+    if (!task || typeof task !== "object") {
+      return "";
+    }
+    if (typeof task.path === "string" && task.path) {
+      return task.path;
+    }
+    if (task.file && typeof task.file.path === "string") {
+      return task.file.path;
+    }
+    return "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function keepInboxTaskSymbol(task) {
+  try {
+    if (!task || typeof task !== "object") {
+      return "";
+    }
+    if (task.status && typeof task.status.symbol === "string") {
+      return task.status.symbol;
+    }
+    if (typeof task.statusSymbol === "string") {
+      return task.statusSymbol;
+    }
+    if (typeof task.symbol === "string") {
+      return task.symbol;
+    }
+    return "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function keepInboxSamePath(left, right) {
+  try {
+    const a = keepInboxAsString(left).trim();
+    const b = keepInboxAsString(right).trim();
+    if (!a || !b) {
+      return false;
+    }
+    if (a === b) {
+      return true;
+    }
+    const norm = (value) =>
+      String(value || "")
+        .replace(/\\/g, "/")
+        .replace(/^\.\//, "")
+        .trim();
+    return norm(a) === norm(b);
+  } catch (error) {
+    return false;
+  }
+}
+
+// Inbox predicate: count open top-level Tasks-plugin tasks in the target
+// note. Open means any status symbol but done (`x`/`X`) or cancelled (`-`),
+// so Blocked (`?`), Next (`*`), and In Progress (`/`) count. Nested lines
+// never count, even with `#task`; fenced lines never reach us because Tasks
+// does not emit them. Never throws.
+function keepInboxOpenCount(tasks, path) {
+  try {
+    const target = keepInboxAsString(path).trim();
+    if (!target || !Array.isArray(tasks)) {
+      return 0;
+    }
+    let open = 0;
+    for (const task of tasks) {
+      try {
+        if (!keepInboxIsTopLevelTask(task)) {
+          continue;
+        }
+        if (!keepInboxSamePath(keepInboxTaskPath(task), target)) {
+          continue;
+        }
+        const symbol = keepInboxTaskSymbol(task);
+        if (!symbol) {
+          continue;
+        }
+        if (symbol === "x" || symbol === "X" || symbol === "-") {
+          continue;
+        }
+        open += 1;
+      } catch (error) {
+        // One bad row never breaks the count.
+      }
+    }
+    return open;
+  } catch (error) {
+    return 0;
+  }
+}
+
+// `bob gkeep status -f json` decoder for the footer. `schema_version: 1`
+// decodes; anything else (old bob, non-JSON, missing bob, config-error
+// documents without a Keep observation) is `unsupported` so the Keep
+// segment hides and the inbox falls back. Never throws; never rejects.
+function keepInboxDecodeStatus(stdout, stderr, exitCode) {
+  const fail = (code, message) => ({
+    ok: false,
+    code,
+    message,
+    detail: keepInboxFirstLine(stderr),
+  });
+  try {
+    let body = null;
+    try {
+      body = JSON.parse(String(stdout || ""));
+    } catch (error) {
+      return fail(
+        "unsupported",
+        "bob gkeep status returned invalid JSON.",
+      );
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return fail("unsupported", "bob gkeep status returned no report.");
+    }
+    if (body.schema_version !== 1) {
+      return fail(
+        "unsupported",
+        "bob gkeep status is not schema_version 1.",
+      );
+    }
+    if (body.ok === false) {
+      const error =
+        body.error && typeof body.error === "object" ? body.error : {};
+      const kind =
+        typeof error.kind === "string" && error.kind ? error.kind : "bob-error";
+      const message =
+        typeof error.message === "string" && error.message
+          ? error.message
+          : "bob gkeep status failed.";
+      return {
+        ok: false,
+        code: kind === "config" ? "unsupported" : kind,
+        message,
+        detail: keepInboxFirstLine(stderr),
+        report: body,
+      };
+    }
+    if (body.ok !== true || typeof body.configured !== "boolean") {
+      return fail("unsupported", "bob gkeep status returned no report.");
+    }
+    return { ok: true, report: body };
+  } catch (error) {
+    return fail("unsupported", "bob gkeep status could not be decoded.");
+  }
+}
+
+function keepInboxFirstLine(stderr) {
+  try {
+    const text = String(stderr === undefined ? "" : stderr);
+    const line = text
+      .split("\n")
+      .map((part) => part.trim())
+      .find(Boolean);
+    return line || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function keepInboxParseTime(value) {
+  try {
+    if (!value) {
+      return null;
+    }
+    const date = new Date(String(value));
+    const time = date.getTime();
+    return Number.isFinite(time) ? date : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function keepInboxNowMs(now) {
+  try {
+    if (now instanceof Date) {
+      const time = now.getTime();
+      return Number.isFinite(time) ? time : Date.now();
+    }
+    if (typeof now === "number" && Number.isFinite(now)) {
+      return now;
+    }
+    if (typeof now === "string" && now) {
+      const date = new Date(now);
+      const time = date.getTime();
+      if (Number.isFinite(time)) {
+        return time;
+      }
+    }
+    return Date.now();
+  } catch (error) {
+    return Date.now();
+  }
+}
+
+const KEEP_INBOX_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+function keepInboxPad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function keepInboxClockText(date) {
+  try {
+    if (!(date instanceof Date)) {
+      return "";
+    }
+    return (
+      keepInboxPad2(date.getUTCHours()) +
+      ":" +
+      keepInboxPad2(date.getUTCMinutes())
+    );
+  } catch (error) {
+    return "";
+  }
+}
+
+function keepInboxFullDateText(date) {
+  try {
+    if (!(date instanceof Date)) {
+      return "";
+    }
+    const month = KEEP_INBOX_MONTHS[date.getUTCMonth()] || "";
+    const day = date.getUTCDate();
+    return month + " " + day + ", " + keepInboxClockText(date);
+  } catch (error) {
+    return "";
+  }
+}
+
+// Relative age for tooltips: `just now` (<1m), `N min ago`, `N h ago`,
+// else `Oct 30, 18:02`. UTC keeps tests deterministic.
+function keepInboxRelativeAge(checkedAt, nowMs) {
+  try {
+    const date = keepInboxParseTime(checkedAt);
+    if (!date) {
+      return "";
+    }
+    const diffMs = nowMs - date.getTime();
+    if (!Number.isFinite(diffMs) || diffMs < 0) {
+      return "just now";
+    }
+    const minute = 60 * 1000;
+    const hour = 60 * minute;
+    if (diffMs < minute) {
+      return "just now";
+    }
+    if (diffMs < hour) {
+      const minutes = Math.floor(diffMs / minute);
+      return minutes <= 1 ? "1 min ago" : minutes + " min ago";
+    }
+    if (diffMs < 24 * hour) {
+      const hours = Math.floor(diffMs / hour);
+      return hours <= 1 ? "1 h ago" : hours + " h ago";
+    }
+    return keepInboxFullDateText(date);
+  } catch (error) {
+    return "";
+  }
+}
+
+function keepInboxRelativeAgeLong(checkedAt, nowMs) {
+  try {
+    const short = keepInboxRelativeAge(checkedAt, nowMs);
+    if (short === "just now") {
+      return "just now";
+    }
+    if (/min ago$/.test(short)) {
+      const n = short.split(" ")[0];
+      return n === "1" ? "1 minute ago" : n + " minutes ago";
+    }
+    if (/ h ago$/.test(short)) {
+      const n = short.split(" ")[0];
+      return n === "1" ? "1 hour ago" : n + " hours ago";
+    }
+    return short;
+  } catch (error) {
+    return "";
+  }
+}
+
+function keepInboxBreakdownParts(pull) {
+  try {
+    const parts = [];
+    const safe = pull && typeof pull === "object" ? pull : {};
+    const freshNew = Number(safe.new);
+    const links = Number(safe.links);
+    const revised = Number(safe.revised);
+    const pending = Number(safe.pending);
+    if (Number.isFinite(freshNew) && freshNew > 0) {
+      parts.push(freshNew + " new");
+    }
+    if (Number.isFinite(links) && links > 0) {
+      parts.push(
+        links === 1 ? "1 link → reading queue" : links + " links → reading queue",
+      );
+    }
+    if (Number.isFinite(revised) && revised > 0) {
+      parts.push(revised + " revised");
+    }
+    if (Number.isFinite(pending) && pending > 0) {
+      parts.push(pending + " archive-only");
+    }
+    return parts;
+  } catch (error) {
+    return [];
+  }
+}
+
+function keepInboxStaysParts(stays) {
+  try {
+    const parts = [];
+    const safe = stays && typeof stays === "object" ? stays : {};
+    const pinned = Number(safe.pinned);
+    const shared = Number(safe.shared);
+    const empty = Number(safe.empty);
+    if (Number.isFinite(pinned) && pinned > 0) {
+      parts.push(
+        pinned === 1 ? "1 pinned stays in Keep" : pinned + " pinned stay in Keep",
+      );
+    }
+    if (Number.isFinite(shared) && shared > 0) {
+      parts.push(
+        shared === 1 ? "1 shared stays in Keep" : shared + " shared stay in Keep",
+      );
+    }
+    if (Number.isFinite(empty) && empty > 0) {
+      parts.push(
+        empty === 1 ? "1 empty stays in Keep" : empty + " empty stay in Keep",
+      );
+    }
+    return parts;
+  } catch (error) {
+    return [];
+  }
+}
+
+function keepInboxHiddenView(paintKey) {
+  return {
+    visible: false,
+    keep: {
+      visible: false,
+      tone: "hidden",
+      icon: "",
+      text: "",
+      tooltip: "",
+      aria: "",
+    },
+    connector: { visible: false },
+    inbox: {
+      visible: false,
+      tone: "hidden",
+      icon: "",
+      text: "",
+      tooltip: "",
+      aria: "",
+    },
+    paintKey: paintKey || "hidden",
+  };
+}
+
+// Pure view model implementing the plan's Visibility states and tooltip
+// copy. `status` is the last `bobSpawnJson` result (`{ok, report}`), a raw
+// status report, or null before the first read. `inboxCount` is the live
+// Tasks-cache count; `tasksReady` says the Tasks cache answered;
+// `defaultTargetExists` covers the unsupported fallback; `enabled` is the
+// session toggle (default on); `now` fixes relative ages in tests. Never
+// throws.
+function keepInboxViewModel(options = {}) {
+  try {
+    const opts = options && typeof options === "object" ? options : {};
+    const enabled = opts.enabled !== false;
+    if (!enabled) {
+      return keepInboxHiddenView("hidden-disabled");
+    }
+    const rawStatus = opts.status === undefined ? null : opts.status;
+    if (rawStatus === null || rawStatus === undefined) {
+      return keepInboxHiddenView("hidden-noread");
+    }
+    let report = null;
+    let unsupported = false;
+    if (
+      rawStatus &&
+      typeof rawStatus === "object" &&
+      ("ok" in rawStatus || "report" in rawStatus || "code" in rawStatus)
+    ) {
+      if (rawStatus.ok === true && rawStatus.report) {
+        report = rawStatus.report;
+      } else if (rawStatus.report && typeof rawStatus.report === "object") {
+        // A config-error document still carries a report for the inbox
+        // path, but the Keep segment hides as unsupported.
+        report = rawStatus.report;
+        unsupported = true;
+      } else {
+        unsupported = true;
+      }
+    } else if (rawStatus && typeof rawStatus === "object") {
+      report = rawStatus;
+    } else {
+      return keepInboxHiddenView("hidden-bad-status");
+    }
+    if (unsupported || !report || typeof report !== "object") {
+      return keepInboxUnsupportedView(opts);
+    }
+    if (report.schema_version !== 1) {
+      return keepInboxUnsupportedView(opts);
+    }
+    if (report.configured === false) {
+      return keepInboxHiddenView("hidden-unconfigured");
+    }
+    const keep = report.keep && typeof report.keep === "object" ? report.keep : {};
+    const inboxDoc =
+      report.inbox && typeof report.inbox === "object" ? report.inbox : {};
+    const targetPath =
+      keepInboxAsString(inboxDoc.path).trim() || KEEP_INBOX_DEFAULT_TARGET;
+    const nowMs = keepInboxNowMs(opts.now);
+    const tasksReady = opts.tasksReady === true;
+    // Verified gates the Keep segment: never succeeded hides it.
+    const verified = keep.verified === true;
+    const state = typeof keep.state === "string" ? keep.state : "";
+    if (!verified && state !== "ok") {
+      // `unverified` (never succeeded): Keep hidden, inbox live.
+      if (state === "" || state === "unverified") {
+        return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unverified");
+      }
+      // A failure before the first success also hides Keep.
+      if (verified !== true) {
+        return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unverified");
+      }
+    }
+    if (!verified) {
+      return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unverified");
+    }
+    // Verified Keep states below.
+    if (state === "auth") {
+      return keepInboxSigninView(opts, targetPath, nowMs);
+    }
+    if (state === "ok" && keep.stale !== true) {
+      const total = keep.pull && Number.isFinite(Number(keep.pull.total))
+        ? Number(keep.pull.total)
+        : null;
+      if (total !== null && total > 0) {
+        return keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc);
+      }
+      return keepInboxZeroView(opts, targetPath, nowMs, keep, inboxDoc);
+    }
+    // Stale or failure states with a verified host.
+    const checkedAt = keep.checked_at || null;
+    const checkedDate = keepInboxParseTime(checkedAt);
+    const dayMs = 24 * 60 * 60 * 1000;
+    const recent =
+      checkedDate !== null &&
+      Number.isFinite(nowMs - checkedDate.getTime()) &&
+      nowMs - checkedDate.getTime() >= 0 &&
+      nowMs - checkedDate.getTime() <= dayMs;
+    const total = keep.pull && Number.isFinite(Number(keep.pull.total))
+      ? Number(keep.pull.total)
+      : null;
+    if (keep.stale === true && recent && total !== null) {
+      return keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc);
+    }
+    return keepInboxUnknownView(opts, targetPath, nowMs, keep, inboxDoc);
+  } catch (error) {
+    return keepInboxHiddenView("hidden-error");
+  }
+}
+
+function keepInboxUnsupportedView(opts) {
+  try {
+    const exists = opts.defaultTargetExists === true;
+    if (!exists) {
+      return keepInboxHiddenView("hidden-unsupported-missing");
+    }
+    const targetPath = KEEP_INBOX_DEFAULT_TARGET;
+    const nowMs = keepInboxNowMs(opts.now);
+    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, null);
+    const view = {
+      visible: true,
+      keep: {
+        visible: false,
+        tone: "hidden",
+        icon: "",
+        text: "",
+        tooltip: "",
+        aria: "",
+      },
+      connector: { visible: false },
+      inbox: { visible: true, ...inbox },
+      paintKey: "",
+    };
+    view.paintKey = keepInboxPaintKey(view);
+    return view;
+  } catch (error) {
+    return keepInboxHiddenView("hidden-error");
+  }
+}
+
+function keepInboxInboxOnlyView(opts, targetPath, nowMs, reason) {
+  try {
+    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, null);
+    const view = {
+      visible: true,
+      keep: {
+        visible: false,
+        tone: "hidden",
+        icon: "",
+        text: "",
+        tooltip: "",
+        aria: "",
+      },
+      connector: { visible: false },
+      inbox: { visible: true, ...inbox },
+      paintKey: "",
+    };
+    view.paintKey = keepInboxPaintKey(view) + "\0" + reason;
+    return view;
+  } catch (error) {
+    return keepInboxHiddenView("hidden-error");
+  }
+}
+
+function keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc) {
+  try {
+    const tasksReady = opts.tasksReady === true;
+    const path = keepInboxAsString(targetPath).trim() || KEEP_INBOX_DEFAULT_TARGET;
+    const exists = inboxDoc && typeof inboxDoc.exists === "boolean"
+      ? inboxDoc.exists
+      : null;
+    if (exists === false) {
+      return {
+        tone: "unknown",
+        icon: "inbox",
+        text: KEEP_INBOX_UNKNOWN_GLYPH,
+        tooltip: path + " not found\nClick to open the inbox",
+        aria: path + " not found",
+      };
+    }
+    if (tasksReady) {
+      const count = Number(opts.inboxCount);
+      const open = Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
+      if (open > 0) {
+        return {
+          tone: "count",
+          icon: "inbox",
+          text: String(open),
+          tooltip:
+            path +
+            " · " +
+            (open === 1 ? "1 open task to triage" : open + " open tasks to triage") +
+            "\nClick to open the inbox",
+          aria: open === 1
+            ? "1 open task in " + path
+            : open + " open tasks in " + path,
+        };
+      }
+      return {
+        tone: "zero",
+        icon: "inbox",
+        text: "0",
+        tooltip: path + " · inbox is clear\nClick to open the inbox",
+        aria: "inbox is clear in " + path,
+      };
+    }
+    // Tasks not ready: bob's cached inbox.open, else unknown.
+    const fallback = inboxDoc && Number.isFinite(Number(inboxDoc.open))
+      ? Number(inboxDoc.open)
+      : null;
+    if (fallback !== null && fallback >= 0) {
+      const open = Math.floor(fallback);
+      if (open > 0) {
+        return {
+          tone: "count",
+          icon: "inbox",
+          text: String(open),
+          tooltip:
+            path +
+            " · " +
+            (open === 1 ? "1 open task to triage" : open + " open tasks to triage") +
+            "\nClick to open the inbox",
+          aria: open === 1
+            ? "1 open task in " + path
+            : open + " open tasks in " + path,
+        };
+      }
+      return {
+        tone: "zero",
+        icon: "inbox",
+        text: "0",
+        tooltip: path + " · inbox is clear\nClick to open the inbox",
+        aria: "inbox is clear in " + path,
+      };
+    }
+    return {
+      tone: "unknown",
+      icon: "inbox",
+      text: KEEP_INBOX_UNKNOWN_GLYPH,
+      tooltip: "Inbox count appears once Tasks loads\nClick to open the inbox",
+      aria: "inbox count unknown in " + path,
+    };
+  } catch (error) {
+    return {
+      tone: "unknown",
+      icon: "inbox",
+      text: KEEP_INBOX_UNKNOWN_GLYPH,
+      tooltip: "Inbox count appears once Tasks loads\nClick to open the inbox",
+      aria: "inbox count unknown",
+    };
+  }
+}
+
+function keepInboxCheckedLine(keep, nowMs) {
+  try {
+    const age = keepInboxRelativeAge(keep.checked_at, nowMs);
+    if (!age) {
+      return "";
+    }
+    if (age === "just now") {
+      return "Checked just now";
+    }
+    return "Checked " + age;
+  } catch (error) {
+    return "";
+  }
+}
+
+function keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc) {
+  try {
+    const total = Number(keep.pull.total);
+    const breakdown = keepInboxBreakdownParts(keep.pull).join(" · ");
+    const stays = keepInboxStaysParts(keep.stays).join(" · ");
+    const lines = ["Google Keep · " + total + " notes to pull"];
+    if (breakdown) {
+      lines.push(breakdown);
+    }
+    if (stays) {
+      lines.push(stays);
+    }
+    const checked = keepInboxCheckedLine(keep, nowMs);
+    if (checked) {
+      lines.push(checked);
+    }
+    lines.push("Click to preview the pull · right-click for more");
+    const tooltip = lines.join("\n");
+    const ageLong = keepInboxRelativeAgeLong(keep.checked_at, nowMs);
+    const aria = total === 1
+      ? "1 Google Keep note to pull, checked " + ageLong
+      : total + " Google Keep notes to pull, checked " + ageLong;
+    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const view = {
+      visible: true,
+      keep: {
+        visible: true,
+        tone: "fresh",
+        icon: "lightbulb",
+        text: String(total),
+        tooltip,
+        aria,
+      },
+      connector: { visible: true },
+      inbox: { visible: true, ...inbox },
+      paintKey: "",
+    };
+    view.connector.visible = view.keep.visible && view.inbox.visible;
+    view.paintKey = keepInboxPaintKey(view);
+    return view;
+  } catch (error) {
+    return keepInboxHiddenView("hidden-error");
+  }
+}
+
+function keepInboxZeroView(opts, targetPath, nowMs, keep, inboxDoc) {
+  try {
+    const stays = keepInboxStaysParts(keep.stays).join(" · ");
+    const lines = ["Google Keep · nothing to pull"];
+    if (stays) {
+      lines.push(stays);
+    }
+    const checked = keepInboxCheckedLine(keep, nowMs);
+    if (checked) {
+      lines.push(checked);
+    }
+    lines.push("Click to check now");
+    const tooltip = lines.join("\n");
+    const ageLong = keepInboxRelativeAgeLong(keep.checked_at, nowMs);
+    const aria = "Google Keep inbox is clear, checked " + ageLong;
+    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const view = {
+      visible: true,
+      keep: {
+        visible: true,
+        tone: "zero",
+        icon: "lightbulb",
+        text: "0",
+        tooltip,
+        aria,
+      },
+      connector: { visible: true },
+      inbox: { visible: true, ...inbox },
+      paintKey: "",
+    };
+    view.connector.visible = view.keep.visible && view.inbox.visible;
+    view.paintKey = keepInboxPaintKey(view);
+    return view;
+  } catch (error) {
+    return keepInboxHiddenView("hidden-error");
+  }
+}
+
+function keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc) {
+  try {
+    const total = Number(keep.pull.total);
+    const checkedDate = keepInboxParseTime(keep.checked_at);
+    const asOf = checkedDate ? keepInboxClockText(checkedDate) : "";
+    const firstLine = asOf
+      ? "Google Keep · " + total + " notes to pull, as of " + asOf
+      : "Google Keep · " + total + " notes to pull";
+    const breakdown = keepInboxBreakdownParts(keep.pull).join(" · ");
+    const lines = [firstLine];
+    if (breakdown) {
+      lines.push(breakdown);
+    }
+    const state = typeof keep.state === "string" ? keep.state : "";
+    const errorDoc =
+      keep.error && typeof keep.error === "object" ? keep.error : null;
+    const nextDate = keepInboxParseTime(keep.next_check_at);
+    const nextClock = nextDate ? keepInboxClockText(nextDate) : "";
+    if (state === "ok") {
+      lines.push("A pull changed Keep since this count · rechecking soon");
+    } else if (state === "offline") {
+      const sinceDate = keepInboxParseTime(
+        (errorDoc && errorDoc.since) || null,
+      );
+      const sinceClock = sinceDate ? keepInboxClockText(sinceDate) : "";
+      if (sinceClock && nextClock) {
+        lines.push(
+          "Offline since " + sinceClock + " · next try about " + nextClock,
+        );
+      } else if (sinceClock) {
+        lines.push("Offline since " + sinceClock);
+      } else if (nextClock) {
+        lines.push("Offline · next try about " + nextClock);
+      } else {
+        lines.push("Offline · will retry soon");
+      }
+    } else if (state === "locked") {
+      lines.push("Can't read the Keep token without a passphrase prompt");
+      lines.push("Run bob gkeep list in a terminal once to unlock");
+    } else if (state === "rate_limited") {
+      if (nextClock) {
+        lines.push("Google asked Bob to slow down · next check after " + nextClock);
+      } else {
+        lines.push("Google asked Bob to slow down");
+      }
+    } else if (state === "error") {
+      const message = errorDoc && typeof errorDoc.message === "string"
+        ? errorDoc.message.split("\n")[0].trim()
+        : "";
+      if (message) {
+        lines.push("Keep check failed: " + message);
+      } else {
+        lines.push("Keep check failed");
+      }
+      lines.push("Run bob gkeep doctor");
+    } else {
+      const message = errorDoc && typeof errorDoc.message === "string"
+        ? errorDoc.message.split("\n")[0].trim()
+        : "";
+      if (message) {
+        lines.push("Keep check failed: " + message);
+      }
+      lines.push("Run bob gkeep doctor");
+    }
+    if (state !== "ok" && state !== "locked") {
+      lines.push("Click to check now");
+    } else if (state === "locked") {
+      lines.push("Click to check now");
+    } else {
+      lines.push("Click to check now");
+    }
+    const tooltip = lines.join("\n");
+    const ageLong = keepInboxRelativeAgeLong(keep.checked_at, nowMs);
+    const aria = total === 1
+      ? "1 Google Keep note to pull, as of " + ageLong
+      : total + " Google Keep notes to pull, as of " + ageLong;
+    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const view = {
+      visible: true,
+      keep: {
+        visible: true,
+        tone: "stale",
+        icon: "lightbulb",
+        text: String(total),
+        tooltip,
+        aria,
+      },
+      connector: { visible: true },
+      inbox: { visible: true, ...inbox },
+      paintKey: "",
+    };
+    view.connector.visible = view.keep.visible && view.inbox.visible;
+    view.paintKey = keepInboxPaintKey(view);
+    return view;
+  } catch (error) {
+    return keepInboxHiddenView("hidden-error");
+  }
+}
+
+function keepInboxUnknownView(opts, targetPath, nowMs, keep, inboxDoc) {
+  try {
+    const checkedDate = keepInboxParseTime(keep.checked_at);
+    const lines = ["Google Keep · count unknown"];
+    if (checkedDate) {
+      lines.push("Last checked " + keepInboxFullDateText(checkedDate));
+    }
+    lines.push("Click to check now");
+    const tooltip = lines.join("\n");
+    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const view = {
+      visible: true,
+      keep: {
+        visible: true,
+        tone: "unknown",
+        icon: "lightbulb",
+        text: KEEP_INBOX_UNKNOWN_GLYPH,
+        tooltip,
+        aria: "Google Keep count unknown",
+      },
+      connector: { visible: true },
+      inbox: { visible: true, ...inbox },
+      paintKey: "",
+    };
+    view.connector.visible = view.keep.visible && view.inbox.visible;
+    view.paintKey = keepInboxPaintKey(view);
+    return view;
+  } catch (error) {
+    return keepInboxHiddenView("hidden-error");
+  }
+}
+
+function keepInboxSigninView(opts, targetPath, nowMs) {
+  try {
+    const tooltip = [
+      "Google Keep sign-in expired",
+      "Run bob gkeep login in a terminal",
+      "Click for the Keep setup check",
+    ].join("\n");
+    const inboxDoc = opts.status && opts.status.report && opts.status.report.inbox
+      ? opts.status.report.inbox
+      : opts.status && opts.status.inbox
+        ? opts.status.inbox
+        : null;
+    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const view = {
+      visible: true,
+      keep: {
+        visible: true,
+        tone: "signin",
+        icon: "lightbulb-off",
+        text: "",
+        tooltip,
+        aria: "Google Keep sign-in expired",
+      },
+      connector: { visible: true },
+      inbox: { visible: true, ...inbox },
+      paintKey: "",
+    };
+    view.connector.visible = view.keep.visible && view.inbox.visible;
+    view.paintKey = keepInboxPaintKey(view);
+    return view;
+  } catch (error) {
+    return keepInboxHiddenView("hidden-error");
+  }
+}
+
+function keepInboxPaintKey(view) {
+  try {
+    if (!view || typeof view !== "object") {
+      return "hidden";
+    }
+    if (!view.visible) {
+      return "hidden";
+    }
+    const keep = view.keep || {};
+    const inbox = view.inbox || {};
+    const connector = view.connector || {};
+    return [
+      "1",
+      keep.visible ? "1" : "0",
+      keep.tone || "",
+      keep.icon || "",
+      keep.text || "",
+      keep.tooltip || "",
+      keep.aria || "",
+      connector.visible ? "1" : "0",
+      inbox.visible ? "1" : "0",
+      inbox.tone || "",
+      inbox.text || "",
+      inbox.tooltip || "",
+      inbox.aria || "",
+    ].join("\0");
+  } catch (error) {
+    return "hidden-error";
+  }
+}
+// ---- src/293-keep-inbox-render.js ----
+// Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
+// status-bar item. Pure DOM helpers plus one paint entry point; no spawn,
+// no vault, no Obsidian imports (globals are probed). Never throws.
+
+function keepInboxSetText(node, text) {
+  if (!node) {
+    return;
+  }
+  const value = text == null ? "" : String(text);
+  try {
+    if (typeof node.setText === "function") {
+      node.setText(value);
+    } else if ("textContent" in node) {
+      node.textContent = value;
+    }
+  } catch (error) {
+    // Cosmetic.
+  }
+}
+
+function keepInboxSetAttr(node, name, value) {
+  if (!node || !name) {
+    return;
+  }
+  try {
+    if (typeof node.setAttribute === "function") {
+      node.setAttribute(name, value);
+    } else if (name === "title") {
+      node.title = value;
+    }
+  } catch (error) {
+    // Cosmetic.
+  }
+}
+
+function keepInboxRemoveAttr(node, name) {
+  if (!node || !name) {
+    return;
+  }
+  try {
+    if (typeof node.removeAttribute === "function") {
+      node.removeAttribute(name);
+    }
+  } catch (error) {
+    // Cosmetic.
+  }
+}
+
+function keepInboxToggleClass(node, name, on) {
+  if (!node || !name) {
+    return;
+  }
+  try {
+    if (node.classList && typeof node.classList.add === "function") {
+      if (on) {
+        node.classList.add(name);
+      } else if (typeof node.classList.remove === "function") {
+        node.classList.remove(name);
+      }
+      return;
+    }
+    if (typeof node.addClass === "function" && on) {
+      node.addClass(name);
+      return;
+    }
+    if (typeof node.removeClass === "function" && !on) {
+      node.removeClass(name);
+    }
+  } catch (error) {
+    // Cosmetic.
+  }
+}
+
+function keepInboxCreateChild(parent, tag, className) {
+  if (!parent) {
+    return null;
+  }
+  try {
+    if (typeof parent.createEl === "function") {
+      return parent.createEl(tag, { cls: className });
+    }
+  } catch (error) {
+    // Fall through to DOM.
+  }
+  try {
+    const doc =
+      parent.ownerDocument ||
+      (typeof document !== "undefined" ? document : null);
+    if (doc && typeof doc.createElement === "function") {
+      const node = doc.createElement(tag);
+      if (className) {
+        node.className = className;
+      }
+      if (typeof parent.appendChild === "function") {
+        parent.appendChild(node);
+      }
+      return node;
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function keepInboxSetIcon(node, name) {
+  if (!node || !name) {
+    return;
+  }
+  try {
+    const setter =
+      typeof setIcon === "function"
+        ? setIcon
+        : typeof window !== "undefined" && typeof window.setIcon === "function"
+          ? window.setIcon
+          : null;
+    if (setter) {
+      setter(node, name);
+      return;
+    }
+  } catch (error) {
+    // Fall through to the data-icon marker below.
+  }
+  try {
+    if (typeof node.setAttribute === "function") {
+      node.setAttribute("data-icon", name);
+    }
+  } catch (error) {
+    // Cosmetic.
+  }
+  try {
+    if (!node.textContent) {
+      node.textContent = "";
+    }
+  } catch (error) {
+    // Cosmetic.
+  }
+}
+
+function keepInboxApplyTooltip(node, text) {
+  if (!node) {
+    return;
+  }
+  const value = text == null ? "" : String(text);
+  if (!value) {
+    return;
+  }
+  try {
+    const setter =
+      typeof setTooltip === "function"
+        ? setTooltip
+        : typeof window !== "undefined" && typeof window.setTooltip === "function"
+          ? window.setTooltip
+          : null;
+    if (setter) {
+      setter(node, value, { placement: "top" });
+      try {
+        if (typeof node.removeAttribute === "function") {
+          node.removeAttribute("title");
+        } else if ("title" in node) {
+          node.title = "";
+        }
+      } catch (error) {
+        // Best-effort: never hold both tooltip and title.
+      }
+      return;
+    }
+  } catch (error) {
+    // Fall through to title.
+  }
+  keepInboxSetAttr(node, "title", value);
+}
+
+function keepInboxEnsureDom(el) {
+  if (!el) {
+    return null;
+  }
+  if (el._bobKeepInboxParts && el._bobKeepInboxParts.keepButton) {
+    return el._bobKeepInboxParts;
+  }
+  try {
+    if (typeof el.empty === "function") {
+      el.empty();
+    } else if ("textContent" in el) {
+      el.textContent = "";
+    }
+  } catch (error) {
+    // Rebuild below.
+  }
+  const keepButton = keepInboxCreateChild(el, "button", "bob-keep-pill");
+  if (!keepButton) {
+    return null;
+  }
+  keepInboxSetAttr(keepButton, "type", "button");
+  const keepIcon = keepInboxCreateChild(keepButton, "span", "bob-keep-pill-icon");
+  const keepCount = keepInboxCreateChild(keepButton, "span", "bob-keep-pill-count");
+  const connector = keepInboxCreateChild(el, "span", "bob-keep-connector");
+  let connectorIcon = null;
+  if (connector) {
+    connectorIcon = keepInboxCreateChild(connector, "span", "bob-keep-connector-icon");
+    keepInboxSetAttr(connector, "aria-hidden", "true");
+  }
+  const inboxButton = keepInboxCreateChild(el, "button", "bob-keep-inbox-btn");
+  if (!inboxButton) {
+    return null;
+  }
+  keepInboxSetAttr(inboxButton, "type", "button");
+  const inboxIcon = keepInboxCreateChild(inboxButton, "span", "bob-keep-inbox-icon");
+  const inboxCount = keepInboxCreateChild(inboxButton, "span", "bob-keep-inbox-count");
+  const parts = {
+    keepButton,
+    keepIcon,
+    keepCount,
+    connector,
+    connectorIcon,
+    inboxButton,
+    inboxIcon,
+    inboxCount,
+  };
+  el._bobKeepInboxParts = parts;
+  // Recompute tooltips on hover so ages stay current without a repaint.
+  try {
+    const refresh = () => {
+      try {
+        const view = el._bobKeepInboxView;
+        if (view && view.visible) {
+          keepInboxApplyTooltip(keepButton, view.keep.tooltip);
+          keepInboxApplyTooltip(inboxButton, view.inbox.tooltip);
+        }
+      } catch (error) {
+        // Hover tooltips are best-effort.
+      }
+    };
+    if (typeof keepButton.addEventListener === "function") {
+      keepButton.addEventListener("mouseenter", refresh);
+    }
+    if (typeof inboxButton.addEventListener === "function") {
+      inboxButton.addEventListener("mouseenter", refresh);
+    }
+  } catch (error) {
+    // Listeners are best-effort.
+  }
+  return parts;
+}
+
+function keepInboxSetOmitted(node, omitted) {
+  keepInboxToggleClass(node, "bob-keep-omit", omitted);
+  if (!node) {
+    return;
+  }
+  if (omitted) {
+    keepInboxSetAttr(node, "hidden", "hidden");
+  } else if (typeof node.removeAttribute === "function") {
+    try {
+      node.removeAttribute("hidden");
+    } catch (error) {
+      // Cosmetic.
+    }
+  }
+}
+
+// Paint the status-bar item. Skips unchanged frames by paint key (like the
+// review footer); the one-minute repaint is free. Never throws.
+function keepInboxPaint(el, view) {
+  if (!el) {
+    return null;
+  }
+  const safe = view && typeof view === "object" ? view : null;
+  if (!safe || !safe.visible) {
+    keepInboxToggleClass(el, "bob-keep-inbox-hidden", true);
+    keepInboxSetAttr(el, "aria-hidden", "true");
+    try {
+      el._bobKeepInboxView = safe;
+      el._bobKeepInboxPaintKey = (safe && safe.paintKey) || "hidden";
+    } catch (error) {
+      // Cache is best-effort.
+    }
+    return el._bobKeepInboxParts || null;
+  }
+  if (el._bobKeepInboxPaintKey === safe.paintKey && el._bobKeepInboxParts) {
+    return el._bobKeepInboxParts;
+  }
+  const parts = keepInboxEnsureDom(el);
+  if (!parts) {
+    return null;
+  }
+  keepInboxToggleClass(el, "bob-keep-inbox-hidden", false);
+  keepInboxSetAttr(el, "aria-hidden", "false");
+  // Keep segment.
+  const keep = safe.keep || {};
+  keepInboxSetOmitted(parts.keepButton, !keep.visible);
+  keepInboxSetAttr(el, "data-keep-tone", keep.visible ? keep.tone || "" : "hidden");
+  if (parts.keepButton) {
+    keepInboxSetAttr(parts.keepButton, "data-keep-tone", keep.tone || "");
+    try {
+      parts.keepButton.disabled = !keep.visible;
+      parts.keepButton.tabIndex = keep.visible ? 0 : -1;
+    } catch (error) {
+      // Focus management is best-effort.
+    }
+  }
+  if (keep.visible) {
+    keepInboxSetIcon(parts.keepIcon, keep.icon || "lightbulb");
+    keepInboxSetText(parts.keepCount, keep.text || "");
+    keepInboxSetOmitted(parts.keepCount, !keep.text);
+    keepInboxSetAttr(parts.keepButton, "aria-label", keep.aria || keep.tooltip || "");
+    keepInboxApplyTooltip(parts.keepButton, keep.tooltip || "");
+  } else {
+    keepInboxSetText(parts.keepCount, "");
+    keepInboxRemoveAttr(parts.keepButton, "aria-label");
+  }
+  // Connector shows only when both segments show.
+  const showConnector = Boolean(
+    safe.connector && safe.connector.visible && keep.visible && safe.inbox && safe.inbox.visible,
+  );
+  keepInboxSetOmitted(parts.connector, !showConnector);
+  if (showConnector && parts.connectorIcon) {
+    keepInboxSetIcon(parts.connectorIcon, "chevron-right");
+  }
+  // Inbox segment.
+  const inbox = safe.inbox || {};
+  keepInboxSetOmitted(parts.inboxButton, !inbox.visible);
+  keepInboxSetAttr(el, "data-inbox-tone", inbox.visible ? inbox.tone || "" : "hidden");
+  if (parts.inboxButton) {
+    keepInboxSetAttr(parts.inboxButton, "data-inbox-tone", inbox.tone || "");
+    try {
+      parts.inboxButton.disabled = !inbox.visible;
+      parts.inboxButton.tabIndex = inbox.visible ? 0 : -1;
+    } catch (error) {
+      // Focus management is best-effort.
+    }
+  }
+  if (inbox.visible) {
+    keepInboxSetIcon(parts.inboxIcon, inbox.icon || "inbox");
+    keepInboxSetText(parts.inboxCount, inbox.text || "");
+    keepInboxSetAttr(parts.inboxButton, "aria-label", inbox.aria || inbox.tooltip || "");
+    keepInboxApplyTooltip(parts.inboxButton, inbox.tooltip || "");
+  } else {
+    keepInboxSetText(parts.inboxCount, "");
+    keepInboxRemoveAttr(parts.inboxButton, "aria-label");
+  }
+  try {
+    el._bobKeepInboxView = safe;
+    el._bobKeepInboxPaintKey = safe.paintKey;
+  } catch (error) {
+    // Cache is best-effort.
+  }
+  return parts;
+}
+// ---- src/294-keep-inbox-indicator.js ----
+// Keep inbox indicator (keep-indicator-view): cache-only `bob-keep-inbox`
+// status-bar item. The Keep count comes only from `bob gkeep status`
+// (cache only, never `-r` in this release); the inbox count is recomputed
+// from the Tasks cache. Desktop only, calm by default, never writes.
+
+const KEEP_INBOX_STATUS_TIMEOUT_MS = 15000;
+const KEEP_INBOX_TASKS_DEBOUNCE_MS = 150;
+const KEEP_INBOX_FOCUS_THROTTLE_MS = 10 * 1000;
+const KEEP_INBOX_UNCONFIGURED_FOCUS_THROTTLE_MS = 10 * 60 * 1000;
+const KEEP_INBOX_MODIFY_DEBOUNCE_MS = 2000;
+const KEEP_INBOX_REPAINT_MS = 60 * 1000;
+
+function keepInboxIsDesktop() {
+  try {
+    const platform = typeof Platform !== "undefined" ? Platform : null;
+    if (platform && platform.isDesktopApp === false) {
+      return false;
+    }
+    if (platform && platform.isMobile === true) {
+      return false;
+    }
+    return true;
+  } catch (error) {
+    return true;
+  }
+}
+
+function keepInboxTaskLineNumber(task) {
+  try {
+    if (!task || typeof task !== "object") {
+      return null;
+    }
+    const candidates = [];
+    if (Number.isInteger(task.lineNumber)) {
+      candidates.push({ value: task.lineNumber, base: 0 });
+    }
+    if (Number.isInteger(task.line)) {
+      candidates.push({ value: task.line, base: 1 });
+    }
+    if (task.taskLocation && Number.isInteger(task.taskLocation.lineNumber)) {
+      candidates.push({ value: task.taskLocation.lineNumber, base: 0 });
+    }
+    if (task.location && Number.isInteger(task.location.lineNumber)) {
+      candidates.push({ value: task.location.lineNumber, base: 0 });
+    }
+    if (task.taskLocation && Number.isInteger(task.taskLocation.line)) {
+      candidates.push({ value: task.taskLocation.line, base: 1 });
+    }
+    for (const candidate of candidates) {
+      const zero = candidate.base === 1 ? candidate.value - 1 : candidate.value;
+      if (Number.isInteger(zero) && zero >= 0) {
+        return zero;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function keepInboxFirstOpenLineFromTasks(tasks, targetPath) {
+  try {
+    if (!Array.isArray(tasks) || !targetPath) {
+      return null;
+    }
+    let best = null;
+    for (const task of tasks) {
+      try {
+        if (!keepInboxIsTopLevelTask(task)) {
+          continue;
+        }
+        if (!keepInboxSamePath(keepInboxTaskPath(task), targetPath)) {
+          continue;
+        }
+        const symbol = keepInboxTaskSymbol(task);
+        if (!symbol || symbol === "x" || symbol === "X" || symbol === "-") {
+          continue;
+        }
+        const line = keepInboxTaskLineNumber(task);
+        if (line === null) {
+          continue;
+        }
+        if (best === null || line < best) {
+          best = line;
+        }
+      } catch (error) {
+        // One bad row never blocks the jump.
+      }
+    }
+    return best;
+  } catch (error) {
+    return null;
+  }
+}
+
+function keepInboxFirstOpenLineFromText(contents) {
+  try {
+    if (typeof contents !== "string" || !contents) {
+      return null;
+    }
+    const lines = contents.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      // Top-level only: no indent. Fenced lines are skipped by tracking
+      // code fences, mirroring the ledger scan.
+      if (/^[ \t]/.test(line)) {
+        continue;
+      }
+      const match = /^([-*+]\s+|\d+[.)]\s+)\[([^\]])\]/.exec(line);
+      if (!match) {
+        continue;
+      }
+      const symbol = match[2];
+      if (symbol === "x" || symbol === "X" || symbol === "-") {
+        continue;
+      }
+      return index;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+class BobLedgerToolsKeepInboxMixin {
+  setupStatusBarItems() {
+    try {
+      this.setupFreshnessStatusBar();
+    } catch (error) {
+      // The review footer owns its errors; the Keep item still mounts.
+    }
+    try {
+      this.setupKeepInboxIndicator();
+    } catch (error) {
+      // The Keep item never breaks the review footer.
+    }
+  }
+
+  setupKeepInboxIndicator() {
+    if (!keepInboxIsDesktop()) {
+      return;
+    }
+    if (typeof this.addStatusBarItem !== "function") {
+      return;
+    }
+    if (this.keepInboxEl) {
+      return;
+    }
+    if (typeof this.keepInboxEnabled !== "boolean") {
+      this.keepInboxEnabled = true;
+    }
+    let el = null;
+    try {
+      el = this.addStatusBarItem();
+    } catch (error) {
+      return;
+    }
+    if (!el) {
+      return;
+    }
+    this.keepInboxEl = el;
+    this.keepInboxLastStatus = null;
+    this.keepInboxLastView = null;
+    this.keepInboxPaintKey = "";
+    this.keepInboxTasksReady = false;
+    this.keepInboxCount = 0;
+    this.keepInboxReadInFlight = false;
+    this.keepInboxReadQueued = false;
+    this.keepInboxLastReadAt = 0;
+    this.keepInboxLastFocusReadAt = 0;
+    this.keepInboxModifyTimer = null;
+    this.keepInboxTasksTimer = null;
+    try {
+      if (typeof el.addClass === "function") {
+        el.addClass("bob-keep-inbox");
+      } else if (el.classList && typeof el.classList.add === "function") {
+        el.classList.add("bob-keep-inbox");
+      }
+      if (typeof el.setAttribute === "function") {
+        el.setAttribute("aria-hidden", "true");
+      }
+    } catch (error) {
+      // Cosmetic only; the paint below still applies.
+    }
+    let parts = null;
+    try {
+      parts = keepInboxEnsureDom(el);
+    } catch (error) {
+      parts = null;
+    }
+    this.keepInboxParts = parts;
+    // Inbox click only in this release; the Keep pill keeps tooltips.
+    try {
+      const inboxButton = parts && parts.inboxButton;
+      const self = this;
+      const onInboxClick = (event) => {
+        try {
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+        } catch (error) {
+          // Best-effort.
+        }
+        void self.openKeepInboxNote();
+      };
+      this.keepInboxClickBound = onInboxClick;
+      if (inboxButton && typeof inboxButton.addEventListener === "function") {
+        inboxButton.addEventListener("click", onInboxClick);
+      } else if (typeof el.addEventListener === "function") {
+        el.addEventListener("click", (event) => {
+          try {
+            const target = event && event.target;
+            const inInbox =
+              target &&
+              parts &&
+              parts.inboxButton &&
+              typeof parts.inboxButton.contains === "function"
+                ? parts.inboxButton.contains(target)
+                : false;
+            if (inInbox || target === parts.inboxButton) {
+              onInboxClick(event);
+            }
+          } catch (error) {
+            // Click routing is best-effort.
+          }
+        });
+      }
+    } catch (error) {
+      // A status bar without a click still shows the counts.
+    }
+    this.keepInboxSubscribe();
+    // Initial paint hides until the first read (no flash).
+    try {
+      this.keepInboxUpdateView();
+    } catch (error) {
+      // Paint is best-effort.
+    }
+  }
+
+  keepInboxSubscribe() {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.onLayoutReady === "function") {
+        this.registerEvent(
+          workspace.onLayoutReady(() => {
+            try {
+              this.keepInboxRecountFromTasks("layout-ready");
+            } catch (error) {}
+            void this.keepInboxRequestRead("layout-ready");
+          }),
+        );
+      }
+    } catch (error) {
+      // Layout scheduling is best-effort.
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.on === "function" && typeof this.registerEvent === "function") {
+        this.registerEvent(
+          workspace.on("obsidian-tasks-plugin:cache-update", () => {
+            try {
+              this.keepInboxRecountFromTasks("cache-update");
+            } catch (error) {}
+          }),
+        );
+      }
+    } catch (error) {
+      // Tasks subscription is best-effort.
+    }
+    try {
+      if (typeof window !== "undefined" && window && typeof this.registerDomEvent === "function") {
+        this.registerDomEvent(window, "focus", () => {
+          try {
+            this.keepInboxOnFocus("window-focus");
+          } catch (error) {}
+        });
+      }
+    } catch (error) {
+      // Focus handling is best-effort.
+    }
+    try {
+      if (typeof document !== "undefined" && document && typeof this.registerDomEvent === "function") {
+        this.registerDomEvent(document, "visibilitychange", () => {
+          try {
+            if (document.visibilityState === "visible") {
+              this.keepInboxOnFocus("visibility");
+            }
+          } catch (error) {}
+        });
+      }
+    } catch (error) {
+      // Visibility handling is best-effort.
+    }
+    try {
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.on === "function" && typeof this.registerEvent === "function") {
+        for (const event of ["modify", "rename", "create", "delete"]) {
+          this.registerEvent(
+            vault.on(event, (file, oldPath) => {
+              try {
+                this.keepInboxOnVaultEvent(event, file, oldPath);
+              } catch (error) {}
+            }),
+          );
+        }
+      }
+    } catch (error) {
+      // Vault events are best-effort (they catch terminal pulls).
+    }
+    try {
+      if (
+        typeof this.registerInterval === "function" &&
+        typeof window !== "undefined" &&
+        typeof window.setInterval === "function"
+      ) {
+        // One-minute repaint keeps ages and the 24h unknown flip honest;
+        // the paint key makes it free.
+        this.registerInterval(
+          window.setInterval(() => {
+            try {
+              this.keepInboxUpdateView();
+            } catch (error) {
+              // Best-effort repaint only.
+            }
+          }, KEEP_INBOX_REPAINT_MS),
+        );
+      }
+    } catch (error) {
+      // The timer is best-effort.
+    }
+  }
+
+  keepInboxTargetPath() {
+    try {
+      const report =
+        this.keepInboxLastStatus && this.keepInboxLastStatus.report
+          ? this.keepInboxLastStatus.report
+          : null;
+      const docPath =
+        report && report.inbox && typeof report.inbox.path === "string"
+          ? report.inbox.path.trim()
+          : "";
+      if (docPath) {
+        return docPath;
+      }
+    } catch (error) {
+      // Fall through to the default.
+    }
+    return KEEP_INBOX_DEFAULT_TARGET;
+  }
+
+  keepInboxRecountFromTasks(reason) {
+    try {
+      if (this.keepInboxTasksTimer !== null && this.keepInboxTasksTimer !== undefined) {
+        return;
+      }
+      const schedule =
+        typeof window !== "undefined" && typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      const self = this;
+      this.keepInboxTasksTimer = schedule(() => {
+        self.keepInboxTasksTimer = null;
+        try {
+          self.keepInboxRecountNow(reason);
+        } catch (error) {
+          // Recount is best-effort.
+        }
+      }, KEEP_INBOX_TASKS_DEBOUNCE_MS);
+      if (this.keepInboxTasksTimer && typeof this.keepInboxTasksTimer.unref === "function") {
+        try {
+          this.keepInboxTasksTimer.unref();
+        } catch (error) {}
+      }
+    } catch (error) {
+      try {
+        this.keepInboxRecountNow(reason);
+      } catch (inner) {
+        // Best-effort.
+      }
+    }
+  }
+
+  keepInboxRecountNow(reason) {
+    let tasks = null;
+    try {
+      tasks = typeof planBlockTasks === "function" ? planBlockTasks(this.app) : null;
+    } catch (error) {
+      tasks = null;
+    }
+    if (!Array.isArray(tasks)) {
+      this.keepInboxTasksReady = false;
+      this.keepInboxUpdateView();
+      return;
+    }
+    this.keepInboxTasksReady = true;
+    let target = KEEP_INBOX_DEFAULT_TARGET;
+    try {
+      target = this.keepInboxTargetPath();
+    } catch (error) {
+      target = KEEP_INBOX_DEFAULT_TARGET;
+    }
+    let count = 0;
+    try {
+      count = keepInboxOpenCount(tasks, target);
+    } catch (error) {
+      count = 0;
+    }
+    this.keepInboxCount = count;
+    this.keepInboxUpdateView();
+  }
+
+  keepInboxOnFocus(reason) {
+    let now = 0;
+    try {
+      now = Date.now();
+    } catch (error) {
+      now = 0;
+    }
+    const last = Number(this.keepInboxLastFocusReadAt) || 0;
+    const report =
+      this.keepInboxLastStatus && this.keepInboxLastStatus.report
+        ? this.keepInboxLastStatus.report
+        : null;
+    const unconfigured = report ? report.configured === false : false;
+    const throttle = unconfigured
+      ? KEEP_INBOX_UNCONFIGURED_FOCUS_THROTTLE_MS
+      : KEEP_INBOX_FOCUS_THROTTLE_MS;
+    if (now - last < throttle) {
+      // Coalesce; the minute repaint still keeps ages honest.
+      try {
+        this.keepInboxUpdateView();
+      } catch (error) {}
+      return;
+    }
+    this.keepInboxLastFocusReadAt = now;
+    this.keepInboxRecountFromTasks(reason);
+    void this.keepInboxRequestRead(reason);
+  }
+
+  keepInboxOnVaultEvent(event, file, oldPath) {
+    try {
+      const path = file && typeof file.path === "string" ? file.path : "";
+      const old = typeof oldPath === "string" ? oldPath : "";
+      let target = KEEP_INBOX_DEFAULT_TARGET;
+      try {
+        target = this.keepInboxTargetPath();
+      } catch (error) {
+        target = KEEP_INBOX_DEFAULT_TARGET;
+      }
+      const matches =
+        (path && keepInboxSamePath(path, target)) ||
+        (old && keepInboxSamePath(old, target));
+      if (!matches) {
+        return;
+      }
+      if (this.keepInboxModifyTimer !== null && this.keepInboxModifyTimer !== undefined) {
+        try {
+          const clear =
+            typeof window !== "undefined" && typeof window.clearTimeout === "function"
+              ? window.clearTimeout
+              : clearTimeout;
+          clear(this.keepInboxModifyTimer);
+        } catch (error) {}
+        this.keepInboxModifyTimer = null;
+      }
+      const schedule =
+        typeof window !== "undefined" && typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      const self = this;
+      this.keepInboxModifyTimer = schedule(() => {
+        self.keepInboxModifyTimer = null;
+        try {
+          self.keepInboxRecountFromTasks("vault-" + event);
+        } catch (error) {}
+        void self.keepInboxRequestRead("vault-" + event);
+      }, KEEP_INBOX_MODIFY_DEBOUNCE_MS);
+    } catch (error) {
+      // Vault handling is best-effort.
+    }
+  }
+
+  refreshKeepInboxForCommandModeRun() {
+    try {
+      this.keepInboxRecountFromTasks("command-mode");
+    } catch (error) {}
+    void this.keepInboxRequestRead("command-mode");
+  }
+
+  keepInboxRequestRead(reason) {
+    if (this.keepInboxReadInFlight) {
+      this.keepInboxReadQueued = true;
+      return Promise.resolve(null);
+    }
+    return this.keepInboxReadNow(reason);
+  }
+
+  async keepInboxReadNow(reason) {
+    if (!this.keepInboxEl) {
+      return null;
+    }
+    if (this.keepInboxReadInFlight) {
+      this.keepInboxReadQueued = true;
+      return null;
+    }
+    this.keepInboxReadInFlight = true;
+    try {
+      let result = null;
+      try {
+        const resolveBobPath = () =>
+          typeof this.apiStatsBobPath === "function"
+            ? this.apiStatsBobPath()
+            : { path: "bob", source: "path" };
+        const getVaultPath = () =>
+          typeof this.statsVaultBasePath === "function"
+            ? this.statsVaultBasePath()
+            : null;
+        result = await bobSpawnJson(["gkeep", "status", "-f", "json"], keepInboxDecodeStatus, {
+          commandLabel: "bob gkeep status",
+          resolveBobPath,
+          getVaultPath,
+          timeout: KEEP_INBOX_STATUS_TIMEOUT_MS,
+        });
+      } catch (error) {
+        result = null;
+      }
+      if (result && typeof result === "object") {
+        this.keepInboxLastStatus = result;
+        try {
+          if (typeof Date.now === "function") {
+            this.keepInboxLastReadAt = Date.now();
+            if (reason === "window-focus" || reason === "visibility" || reason === "layout-ready") {
+              this.keepInboxLastFocusReadAt = this.keepInboxLastReadAt;
+            }
+          }
+        } catch (error) {
+          // Timestamps are best-effort.
+        }
+      }
+      try {
+        this.keepInboxUpdateView();
+      } catch (error) {
+        // Paint is best-effort.
+      }
+      return result;
+    } finally {
+      this.keepInboxReadInFlight = false;
+      if (this.keepInboxReadQueued) {
+        this.keepInboxReadQueued = false;
+        void this.keepInboxReadNow("queued");
+      }
+    }
+  }
+
+  keepInboxUpdateView() {
+    const el = this.keepInboxEl;
+    if (!el) {
+      return null;
+    }
+    let report = null;
+    try {
+      report = this.keepInboxLastStatus;
+    } catch (error) {
+      report = null;
+    }
+    let view = null;
+    try {
+      const inboxDoc =
+        report && report.report && report.report.inbox ? report.report.inbox : null;
+      view = keepInboxViewModel({
+        status: report,
+        inboxCount: this.keepInboxCount,
+        tasksReady: this.keepInboxTasksReady === true,
+        defaultTargetExists: this.keepInboxDefaultTargetExists(inboxDoc),
+        enabled: this.keepInboxEnabled !== false,
+        now: new Date(),
+      });
+    } catch (error) {
+      view = null;
+    }
+    if (!view) {
+      return null;
+    }
+    this.keepInboxLastView = view;
+    try {
+      this.keepInboxParts = keepInboxPaint(el, view);
+    } catch (error) {
+      // The status bar never throws.
+    }
+    return view;
+  }
+
+  keepInboxDefaultTargetExists(inboxDoc) {
+    try {
+      if (inboxDoc && typeof inboxDoc.exists === "boolean") {
+        return inboxDoc.exists;
+      }
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.getAbstractFileByPath === "function") {
+        const target = this.keepInboxTargetPath();
+        return Boolean(vault.getAbstractFileByPath(target));
+      }
+    } catch (error) {
+      // Existence checks are best-effort.
+    }
+    // Optimistic when the vault cannot answer: the unsupported row hides
+    // only when the default file is known missing.
+    return true;
+  }
+
+  async openKeepInboxNote() {
+    let target = KEEP_INBOX_DEFAULT_TARGET;
+    try {
+      target = this.keepInboxTargetPath();
+    } catch (error) {
+      target = KEEP_INBOX_DEFAULT_TARGET;
+    }
+    let file = null;
+    try {
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.getAbstractFileByPath === "function") {
+        file = vault.getAbstractFileByPath(target);
+      }
+    } catch (error) {
+      file = null;
+    }
+    if (!file) {
+      try {
+        new Notice(target + " not found");
+      } catch (error) {}
+      return false;
+    }
+    let leaf = null;
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.getLeaf === "function") {
+        leaf = workspace.getLeaf(false);
+      }
+    } catch (error) {
+      leaf = null;
+    }
+    if (!leaf || typeof leaf.openFile !== "function") {
+      return false;
+    }
+    try {
+      await leaf.openFile(file);
+    } catch (error) {
+      return false;
+    }
+    let line = null;
+    try {
+      const tasks =
+        typeof planBlockTasks === "function" ? planBlockTasks(this.app) : null;
+      if (Array.isArray(tasks)) {
+        line = keepInboxFirstOpenLineFromTasks(tasks, target);
+      }
+    } catch (error) {
+      line = null;
+    }
+    if (line === null || line === undefined) {
+      try {
+        const vault = this.app && this.app.vault;
+        if (vault && typeof vault.read === "function") {
+          const contents = await vault.read(file);
+          line = keepInboxFirstOpenLineFromText(contents);
+        }
+      } catch (error) {
+        line = null;
+      }
+    }
+    if (line === null || line === undefined) {
+      return true;
+    }
+    try {
+      const view = leaf.view;
+      const editor = view && view.editor;
+      if (editor && typeof editor.setCursor === "function") {
+        editor.setCursor({ line, ch: 0 });
+        if (typeof editor.focus === "function") {
+          editor.focus();
+        }
+        if (typeof editor.scrollIntoView === "function") {
+          editor.scrollIntoView({ line, ch: 0 });
+        }
+      }
+    } catch (error) {
+      // Cursor placement is best-effort.
+    }
+    return true;
+  }
+}
 // ---- src/300-plugin-vim-and-snippets.js ----
 class BobLedgerToolsVimSnippetsMixin {
   registerVimMappings() {
@@ -66772,6 +68776,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsRelationRenderMixin,
   BobLedgerToolsRelationMentionCardMixin,
   BobLedgerToolsCommandModeRefreshMixin,
+  BobLedgerToolsKeepInboxMixin,
   BobLedgerToolsTodayLocationMixin,
   BobLedgerToolsTodayMarksMixin,
   BobLedgerToolsTodayMarksReadingMixin,
@@ -68959,6 +70964,35 @@ module.exports.helpers = {
   freshnessFooterEnsureDom,
   freshnessFooterPaint,
   freshnessFooterFit,
+  KEEP_INBOX_DEFAULT_TARGET,
+  KEEP_INBOX_UNKNOWN_GLYPH,
+  keepInboxAsString,
+  keepInboxIsTopLevelTask,
+  keepInboxTaskPath,
+  keepInboxTaskSymbol,
+  keepInboxSamePath,
+  keepInboxOpenCount,
+  keepInboxDecodeStatus,
+  keepInboxFirstLine,
+  keepInboxParseTime,
+  keepInboxRelativeAge,
+  keepInboxRelativeAgeLong,
+  keepInboxBreakdownParts,
+  keepInboxStaysParts,
+  keepInboxHiddenView,
+  keepInboxViewModel,
+  keepInboxUnsupportedView,
+  keepInboxInboxOnlyView,
+  keepInboxPaintKey,
+  keepInboxSetText,
+  keepInboxSetAttr,
+  keepInboxSetIcon,
+  keepInboxApplyTooltip,
+  keepInboxEnsureDom,
+  keepInboxPaint,
+  keepInboxTaskLineNumber,
+  keepInboxFirstOpenLineFromTasks,
+  keepInboxFirstOpenLineFromText,
   freshnessDayNumberForDateText,
   freshnessReviewModel,
   freshnessReviewUnavailable,

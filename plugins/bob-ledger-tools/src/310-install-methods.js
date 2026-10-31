@@ -71,6 +71,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsRelationRenderMixin,
   BobLedgerToolsRelationMentionCardMixin,
   BobLedgerToolsCommandModeRefreshMixin,
+  BobLedgerToolsKeepInboxMixin,
   BobLedgerToolsTodayLocationMixin,
   BobLedgerToolsTodayMarksMixin,
   BobLedgerToolsTodayMarksReadingMixin,

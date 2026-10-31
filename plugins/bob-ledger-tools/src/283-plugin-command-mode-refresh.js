@@ -46,6 +46,8 @@ class BobLedgerToolsCommandModeRefreshMixin {
             this.refreshReferencesForCommandModeRun();
           } else if (tag === "tasks") {
             this.refreshTasksForCommandModeRun();
+          } else if (tag === "gkeep") {
+            this.refreshKeepInboxForCommandModeRun();
           }
           // Unknown tags belong to other plugins; ignore them.
         } catch (error) {

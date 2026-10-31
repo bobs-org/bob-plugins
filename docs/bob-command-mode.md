@@ -229,6 +229,12 @@ Other plugins reach the engine through
 `app.plugins.plugins["bob-command-mode"].api.commandMode` (version 1):
 `run(argv, opts)` settles `{ok, runId, outcome, exitCode, reason?}` and never
 rejects, `openOutput(runId)` opens that run in the output pager,
+`preview(argv)` opens the sheet (focusing one that is already open) straight
+into that command's preview stage and settles `{ok, runId, stage}` with `stage`
+`"preview"` (or `"report"` for a report row, which streams in the output
+stage) or `{ok: false, reason}` for excluded, unknown, unavailable, Windows, or
+preview-less action rows; it never applies a write and never rejects, and
+consumers feature-detect `typeof api.commandMode.preview === "function"`,
 `onRunFinished(cb)` subscribes to finishes, and `catalog()` and
 `lastRun()` read the cached catalog and newest record. Every finish also fires
 `bob-command-mode:run-finished` on the workspace with `{runId, argv, entryId,

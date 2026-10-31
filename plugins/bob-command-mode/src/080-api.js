@@ -2,6 +2,8 @@
 
 function cmCreateApi(runner, options = {}) {
   const openOutput = options.openOutput || null;
+  const openSheet = options.openSheet || null;
+  const getSheet = options.getSheet || null;
   const api = {
     version: CM_API_VERSION,
     // Run bob argv under the same guards as the sheet. Settles
@@ -32,6 +34,13 @@ function cmCreateApi(runner, options = {}) {
         }
       }
       return Promise.resolve({ ok: false, reason: "no output view yet" });
+    },
+    // Open the command sheet straight into argv's preview stage (or, for a
+    // report row, its output stage). Never applies a write and never rejects.
+    // Settles {ok, runId, stage: "preview" | "report"} or {ok: false, reason}.
+    preview(argv, previewOpts = {}) {
+      void previewOpts;
+      return cmApiPreview(runner, { openSheet, getSheet }, argv);
     },
     // Subscribe to finished runs. Returns an unsubscribe function.
     onRunFinished(callback) {
@@ -69,6 +78,38 @@ function cmCreateApi(runner, options = {}) {
     },
   };
   return Object.freeze(api);
+}
+
+async function cmApiPreview(runner, hooks, argv) {
+  const refuse = (reason) => ({ ok: false, reason: String(reason) });
+  try {
+    const words = Array.isArray(argv) ? argv.map(String) : [];
+    if (!words.length) return refuse("no command given");
+    const catalog = runner.catalog();
+    if (!catalog) return refuse("catalog unavailable");
+    const entry = cmFindEntryForArgv(catalog, words);
+    if (!entry) return refuse("unknown command");
+    const excluded = cmExcludedReason(catalog, words);
+    if (excluded) return refuse(excluded);
+    if (runner.deps && runner.deps.isWin32) return refuse("Bob command mode supports Linux and macOS");
+    const row = cmSheetEntryRows(catalog, runner.host).find((candidate) => candidate.entryId === entry.id);
+    if (!row) return refuse("unknown command");
+    if (row.unavailable) return refuse(row.unavailable);
+    const hasPreview = Boolean(row.hasPreview);
+    // A row with neither a preview nor a report would apply, so refuse it.
+    if (!hasPreview && row.presentation !== "report") return refuse("no preview for this command");
+    if (typeof hooks.openSheet !== "function") return refuse("no command sheet");
+    const opened = hooks.openSheet();
+    if (!opened || opened.ok === false) return refuse((opened && opened.reason) || "sheet failed to open");
+    const sheet = typeof hooks.getSheet === "function" ? hooks.getSheet() : null;
+    if (!sheet || typeof sheet.runPreview !== "function") return refuse("no command sheet");
+    const userArgs = words.slice(entry.path.length);
+    const settled = await sheet.runPreview({ ...row, userArgs }, words);
+    if (!settled || !settled.runId) return refuse((settled && settled.reason) || "preview failed to start");
+    return { ok: true, runId: settled.runId, stage: hasPreview ? "preview" : "report" };
+  } catch (error) {
+    return refuse((error && error.message) || error || "preview failed");
+  }
 }
 
 function cmCreateRootApi(commandMode) {

@@ -496,6 +496,96 @@ test("Shift+Enter previews first and Apply reruns without the preview flag", asy
   }
 });
 
+function previewApi(plugin) {
+  return helpers.cmCreateApi(plugin.commandModeRunner, {
+    openSheet: () => {
+      if (plugin.commandModeSheet && plugin.commandModeSheet.sheetOpen) return { ok: true, focused: true };
+      openSheet(plugin);
+      return { ok: true, opened: true };
+    },
+    getSheet: () => plugin.commandModeSheet,
+  });
+}
+
+test("api.preview opens the sheet into a preview-first row's preview stage", async () => {
+  const { restore, base, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const api = previewApi(plugin);
+    assert.equal(plugin.commandModeSheet, null);
+    const settled = await api.preview(["ref", "rename", "refs/a.md", "New name"]);
+    assert.equal(settled.ok, true);
+    assert.equal(settled.stage, "preview");
+    assert.ok(settled.runId);
+    const modal = plugin.commandModeSheet;
+    assert.equal(modal.stage, "output");
+    assert.equal(modal.previewRunId, settled.runId);
+    assert.ok(modal.previewOf);
+    const record = helpers.cmPagerFindRecord(base.runner, settled.runId);
+    assert.ok(record.argv.includes("--dry-run"));
+    assert.deepEqual(record.argv.slice(-2), ["refs/a.md", "New name"]);
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
+test("api.preview opens a report row in the output stage", async () => {
+  const { restore, base, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const settled = await previewApi(plugin).preview(["plan"]);
+    assert.equal(settled.ok, true);
+    assert.equal(settled.stage, "report");
+    assert.equal(plugin.commandModeSheet.stage, "output");
+    assert.ok(helpers.cmPagerFindRecord(base.runner, settled.runId).argv.includes("plan"));
+    plugin.commandModeSheet.close();
+  } finally {
+    restore();
+  }
+});
+
+test("api.preview refuses excluded, unknown, unapplied-write, and unavailable rows", async () => {
+  const catalog = sheetCatalog();
+  catalog.entries.push({
+    id: "mac-only", path: ["mac", "only"], fixed: [], title: "Mac only",
+    about: "Mac", section: "vault", keywords: [], effect: "reads", network: false,
+    presentation: "report", policy: "run", preview: null, confirm: null, budget_secs: 60,
+    args: [], exit_codes: [], adapter: null, hosts: ["no-such-host"], invalidates: [],
+  });
+  const { restore, base, plugin } = sheetHarness(catalog);
+  try {
+    const api = previewApi(plugin);
+    const before = base.runner.newestRecord();
+    for (const argv of [[], ["nope"], ["capture", "hello"], ["vault-sync", "run"], ["task", "archive"]]) {
+      const settled = await api.preview(argv);
+      assert.equal(settled.ok, false, JSON.stringify(argv));
+      assert.ok(settled.reason);
+    }
+    base.runner.host = "other";
+    assert.equal((await api.preview(["mac", "only"])).ok, false);
+    assert.equal(plugin.commandModeSheet, null);
+    assert.equal(base.runner.newestRecord(), before);
+    const noHooks = await helpers.cmCreateApi(base.runner).preview(["plan"]);
+    assert.equal(noHooks.ok, false);
+  } finally {
+    restore();
+  }
+});
+
+test("api.preview focuses an already-open sheet and replaces its stage", async () => {
+  const { restore, plugin } = sheetHarness(sheetCatalog());
+  try {
+    const modal = openSheet(plugin);
+    assert.equal(modal.stage, "list");
+    const settled = await previewApi(plugin).preview(["ref", "rename", "refs/a.md", "New name"]);
+    assert.equal(settled.ok, true);
+    assert.equal(plugin.commandModeSheet, modal);
+    assert.equal(modal.stage, "output");
+    modal.close();
+  } finally {
+    restore();
+  }
+});
+
 test("missing positionals enter argument mode instead of running", async () => {
   const { restore, base, plugin } = sheetHarness(sheetCatalog());
   try {

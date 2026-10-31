@@ -50,6 +50,8 @@ class BobCommandModePlugin extends Plugin {
     });
     this.api = cmCreateRootApi(cmCreateApi(this.commandModeRunner, {
       openOutput: (runId) => this.commandModeOpenOutput(runId),
+      openSheet: () => this.commandModeOpenSheet(),
+      getSheet: () => this.commandModeSheet,
     }));
     this.addSettingTab(new BobCommandModeSettingTab(this.app, this));
     this.addCommand({

@@ -665,13 +665,7 @@ class BobLedgerToolsPlugin extends Plugin {
 
     this.setupStatusBarItems();
     this.scheduleFreshnessStatusBar();
-    this.setupFreshnessMarks();
-    this.setupTaskTagMarks();
-    this.setupPriorityMarks();
-    this.setupDateMarks();
-    this.setupProgressMarks();
-    this.setupLedgerTypeMarks();
-    this.setupTodayMarks();
+    this.setupMarkFamilies();
     this.setupPomodoroHomeChips();
     this.setupTaskThemeMarks();
     this.setupPomodoroThemeChips();

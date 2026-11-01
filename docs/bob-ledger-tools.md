@@ -43,6 +43,7 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | Toggle root marks | `toggle-root-marks` | — |
 | Toggle task date marks | `toggle-date-marks` | — |
 | Toggle task freshness marks | `toggle-freshness-marks` | — |
+| Toggle task link marks | `toggle-task-link-marks` | — |
 | Toggle task priority marks | `toggle-priority-marks` | — |
 | Toggle task tag marks | `toggle-task-tag-marks` | — |
 | Toggle task type colors | `toggle-pomodoro-theme-colors` | — |

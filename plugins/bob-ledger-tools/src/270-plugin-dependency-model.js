@@ -35,6 +35,10 @@ class BobLedgerToolsDependencyModelMixin {
         return memo.dependencyTasksIndex;
       }
       const map = new Map();
+      // Keys seen more than once (a duplicate block id): the first task
+      // keeps the index slot, and task link marks treat the key as
+      // ambiguous and draw no ring.
+      const duplicates = new Set();
       const list = Array.isArray(memo.tasks) ? memo.tasks : [];
       for (const task of list) {
         try {
@@ -49,6 +53,8 @@ class BobLedgerToolsDependencyModelMixin {
           const key = path + "\u0000" + String(blockId);
           if (!map.has(key)) {
             map.set(key, task);
+          } else {
+            duplicates.add(key);
           }
         } catch (error) {
           continue;
@@ -56,12 +62,28 @@ class BobLedgerToolsDependencyModelMixin {
       }
       try {
         memo.dependencyTasksIndex = map;
+        memo.dependencyTasksDuplicates = duplicates;
       } catch (error) {
         // An uncacheable memo still returns a correct index.
       }
       return map;
     } catch (error) {
       return new Map();
+    }
+  }
+
+  // The `path\0blockId` keys that more than one Tasks row carries, from
+  // the same pass (and the same memo lifecycle) as `dependencyTasksIndex`.
+  // An uncacheable memo reports none. Never throws.
+  dependencyTasksDuplicateKeys() {
+    try {
+      this.dependencyTasksIndex();
+      const memo = this.freshnessEnsureMemo();
+      return memo && memo.dependencyTasksDuplicates instanceof Set
+        ? memo.dependencyTasksDuplicates
+        : new Set();
+    } catch (error) {
+      return new Set();
     }
   }
 

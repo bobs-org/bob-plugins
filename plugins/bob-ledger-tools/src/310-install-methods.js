@@ -76,6 +76,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsTodayMarksMixin,
   BobLedgerToolsTodayMarksReadingMixin,
   BobLedgerToolsTodayMarksReadingClicksMixin,
+  BobLedgerToolsTaskLinkMarksMixin,
+  BobLedgerToolsTaskLinkMarksResolveMixin,
   BobLedgerToolsGcalEventsMixin,
   BobLedgerToolsVimSnippetsMixin,
 ]);

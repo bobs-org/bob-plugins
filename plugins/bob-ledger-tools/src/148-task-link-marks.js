@@ -602,56 +602,67 @@ function taskLinkMarkIsManagedRowText(line) {
   }
 }
 
-// Document-level line eligibility (TC): whether prose links on
-// `lines[index]` may wear rings. False for fences, frontmatter,
-// multi-line `%%…%%` comments, managed edge rows, and dedicated ledger
-// rows (`ledger_rows = skip`); true everywhere else, including task
-// lines, log entries, nested or mixed ledger children, area-note
-// bullets, daily-note non-ledger sections, headings, blockquotes, and
-// callouts. Never throws.
+// Document-level line eligibility (TC) with the fence, comment, and
+// frontmatter walks done once: `taskLinkMarkDocContext(lines, path)`
+// returns a frozen `{eligible(index), inert(index)}` for one document
+// version (`inert` is the fence, comment, or frontmatter verdict), so a
+// Live Preview build over thousands of lines never rescans the whole
+// document per link line. `eligible(index)` is false for fences,
+// frontmatter, multi-line `%%…%%` comments, managed edge rows, and
+// dedicated ledger rows (`ledger_rows = skip`); true everywhere else,
+// including task lines, log entries, nested or mixed ledger children,
+// area-note bullets, daily-note non-ledger sections, headings,
+// blockquotes, and callouts. Never throws.
+function taskLinkMarkDocContext(lines, path) {
+  try {
+    const list = Array.isArray(lines) ? lines : [];
+    const frontEnd = taskLinkMarkFrontmatterEnd(list);
+    const fenced = taskLinkMarkFencedLines(list);
+    const commented = taskLinkMarkCommentedLines(list);
+    const inert = (index) =>
+      typeof index === "number" &&
+      (index <= frontEnd || fenced.has(index) || commented.has(index));
+    const eligible = (index) => {
+      try {
+        if (typeof index !== "number" || index < 0 || index >= list.length) {
+          return false;
+        }
+        if (inert(index)) {
+          return false;
+        }
+        const line = String(list[index] || "");
+        try {
+          if (typeof mentionIsEdgeLine === "function" && mentionIsEdgeLine(line)) {
+            return false;
+          }
+        } catch (error) {
+          // A failed recogniser never opens a ring.
+        }
+        if (taskLinkMarkIsManagedRowText(line)) {
+          return false;
+        }
+        if (taskLinkMarkIsLedgerTaskLinkLine(list, index, path)) {
+          return false;
+        }
+        return true;
+      } catch (error) {
+        return false;
+      }
+    };
+    return Object.freeze({ eligible, inert });
+  } catch (error) {
+    return Object.freeze({ eligible: () => false, inert: () => true });
+  }
+}
+
+// One-shot form of `taskLinkMarkDocContext(lines, path).eligible(index)`.
+// Never throws.
 function taskLinkMarkLineEligible(lines, index, path) {
   try {
     if (!Array.isArray(lines) || typeof index !== "number") {
       return false;
     }
-    if (index < 0 || index >= lines.length) {
-      return false;
-    }
-    const frontEnd = taskLinkMarkFrontmatterEnd(lines);
-    if (index <= frontEnd) {
-      return false;
-    }
-    const fenced = taskLinkMarkFencedLines(lines);
-    if (fenced.has(index)) {
-      return false;
-    }
-    const commented = taskLinkMarkCommentedLines(lines);
-    if (commented.has(index)) {
-      return false;
-    }
-    const line = String(lines[index] || "");
-    try {
-      if (typeof mentionIsEdgeLine === "function" && mentionIsEdgeLine(line)) {
-        return false;
-      }
-    } catch (error) {
-      // A failed recogniser never opens a ring.
-    }
-    try {
-      if (taskLinkMarkIsManagedRowText(line)) {
-        return false;
-      }
-    } catch (error) {
-      return false;
-    }
-    try {
-      if (taskLinkMarkIsLedgerTaskLinkLine(lines, index, path)) {
-        return false;
-      }
-    } catch (error) {
-      return false;
-    }
-    return true;
+    return taskLinkMarkDocContext(lines, path).eligible(index);
   } catch (error) {
     return false;
   }

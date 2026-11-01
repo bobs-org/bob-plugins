@@ -94,9 +94,8 @@ test("public pick accepts one-based full-note task context and suggests once", a
   const taskText = "## Tasks\n- [*] #task Ship it ^ship";
   const calls = [];
   const ledgerApi = {
-    caps: () => ({ maxThemes: 3, strict: false, exempt: ["PLAN"] }),
+    caps: () => ({ exempt: ["PLAN"] }),
     planBudget: () => ({
-      themes: { count: 1, cap: 3, over: false },
       links: { count: 0, cap: 10, over: false },
       status: "ok",
     }),
@@ -161,8 +160,8 @@ test("public pick without task context stays generic; missing themes degrades sa
   });
   let calls = 0;
   const fakeApi = {
-    caps: () => ({ maxThemes: 3, strict: false, exempt: ["PLAN"] }),
-    planBudget: () => ({ themes: { count: 0, cap: 3 }, links: { count: 0, cap: 10 } }),
+    caps: () => ({ exempt: ["PLAN"] }),
+    planBudget: () => ({ links: { count: 0, cap: 10 } }),
     themes: { version: 1, suggestFor: () => { calls += 1; return null; } },
   };
   const generic = makeFake(fakeApi);

@@ -8557,22 +8557,6 @@ function chooseBlockPomodoroThemePreselection(input = {}) {
     return { kind: "fallback", code: "creation_blocked" };
   }
 
-  const ledgerKeys = new Set(
-    (Array.isArray(input.ledgerKeys) ? input.ledgerKeys : [])
-      .map(normalizeBlockPomodoroThemeKey)
-      .filter(Boolean),
-  );
-  const addsTheme = !exempt.has(key) && !ledgerKeys.has(key);
-  const strict = input.strict === true;
-  const themesBefore = Number.isInteger(input.themesBefore) ? input.themesBefore : 0;
-  const cap = Number.isInteger(input.maxThemes)
-    ? input.maxThemes
-    : Number.isInteger(input.cap)
-      ? input.cap
-      : Number.MAX_SAFE_INTEGER;
-  if (strict && addsTheme && themesBefore + 1 > cap) {
-    return { kind: "fallback", code: "strict_cap" };
-  }
   return { kind: "create" };
 }
 
@@ -8669,16 +8653,11 @@ function refreshBlockPomodoroThemePickerSnapshot(model, api) {
     if (!suggestion || !suggestion.theme || typeof suggestion.theme.known !== "boolean") {
       return false;
     }
-    const meter = snapshot.planMeter && snapshot.planMeter.themes;
     const choice = chooseBlockPomodoroThemePreselection({
       suggestion,
       entries: snapshot.entries,
       exemptKeys: snapshot.exemptKeys,
-      ledgerKeys: snapshot.ledgerKeys,
       creationAllowed: Boolean(model.creation && model.creation.allowed),
-      strict: snapshot.strict,
-      themesBefore: meter && meter.count,
-      maxThemes: snapshot.maxThemes,
       alreadyQueued: false,
     });
     if (!choice) {
@@ -8708,7 +8687,7 @@ function getBlockPomodoroLedgerApi(app) {
   }
 }
 
-function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
+function safeBlockPomodoroThemePickerSnapshot(app, model, task) {
   try {
     if (
       !task || typeof task.path !== "string" || !task.path ||
@@ -8721,8 +8700,7 @@ function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
     const ledgerApi = getBlockPomodoroLedgerApi(app);
     if (
       !themesApi || typeof themesApi.suggestFor !== "function" ||
-      !ledgerApi || typeof ledgerApi.caps !== "function" ||
-      typeof ledgerApi.planBudget !== "function"
+      !ledgerApi || typeof ledgerApi.caps !== "function"
     ) {
       return null;
     }
@@ -8745,24 +8723,15 @@ function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
     }
 
     const rawCaps = ledgerApi.caps();
-    const meter = meterSnapshot;
     if (
       !rawCaps || typeof rawCaps !== "object" || typeof rawCaps.then === "function" ||
-      typeof rawCaps.strict !== "boolean" || !Array.isArray(rawCaps.exempt) ||
-      !Number.isInteger(rawCaps.maxThemes) || rawCaps.maxThemes < 1 ||
-      !meter || typeof meter !== "object" || typeof meter.then === "function" ||
-      !meter.themes || !Number.isInteger(meter.themes.count) ||
-      !Number.isInteger(meter.themes.cap)
+      !Array.isArray(rawCaps.exempt)
     ) {
       return null;
     }
-    const caps = {
-      exemptKeys: rawCaps.exempt
-        .map(normalizeBlockPomodoroThemeKey)
-        .filter(Boolean),
-      strict: rawCaps.strict,
-      maxThemes: rawCaps.maxThemes,
-    };
+    const exemptKeys = rawCaps.exempt
+      .map(normalizeBlockPomodoroThemeKey)
+      .filter(Boolean);
     let known = semanticSuggestion.theme.known === true;
     if (typeof themesApi.isKnownTheme === "function") {
       const reported = themesApi.isKnownTheme(semanticSuggestion.theme.key);
@@ -8791,16 +8760,11 @@ function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
         .map((component) => normalizeBlockPomodoroThemeKey(component.key))
         .filter(Boolean),
     }));
-    const ledgerKeys = [...new Set(entries.flatMap((entry) => entry.componentKeys))];
     const choice = chooseBlockPomodoroThemePreselection({
       suggestion,
       entries,
-      exemptKeys: caps.exemptKeys,
-      ledgerKeys,
+      exemptKeys,
       creationAllowed: Boolean(model && model.creation && model.creation.allowed),
-      strict: caps.strict,
-      themesBefore: meter.themes.count,
-      maxThemes: caps.maxThemes,
       alreadyQueued: false,
     });
     if (!choice) {
@@ -8811,13 +8775,7 @@ function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
       suggestion,
       choice,
       entries,
-      exemptKeys: caps.exemptKeys,
-      strict: caps.strict,
-      maxThemes: caps.maxThemes,
-      planMeter: {
-        themes: { count: meter.themes.count, cap: meter.themes.cap, over: meter.themes.over === true },
-      },
-      ledgerKeys,
+      exemptKeys,
     };
   } catch (_error) {
     // Optional theme APIs never make the base picker unavailable.
@@ -10615,56 +10573,36 @@ function pomodoroLinkPickerRowLabel(entry, progress) {
   return parts.filter(Boolean).join(", ");
 }
 
-// Best-effort read of the current plan meter: a throw or a misshapen meter
-// hides the meter instead of breaking the picker.
+// Best-effort read of the current Task Link meter: a throw or a misshapen
+// meter hides it instead of breaking the picker.
 function readPomodoroLinkBudgetMeter(budget) {
   try {
     const meter = budget ? budget.current : null;
     if (
       !meter ||
-      !meter.themes ||
       !meter.links ||
-      !Number.isInteger(meter.themes.count) ||
-      !Number.isInteger(meter.themes.cap) ||
       !Number.isInteger(meter.links.count) ||
       !Number.isInteger(meter.links.cap)
     ) {
       return null;
     }
 
-    return meter;
+    return {
+      links: {
+        count: meter.links.count,
+        cap: meter.links.cap,
+        over: meter.links.over === true,
+      },
+      over: meter.links.over === true,
+    };
   } catch (error) {
     return null;
   }
 }
 
-// Best-effort projection for a new name: a throw or a misshapen meter
-// hides the theme badge detail instead of breaking the picker.
-function readPomodoroLinkNewNameMeter(budget, name) {
-  try {
-    if (!budget || typeof budget.forNewName !== "function") {
-      return null;
-    }
-
-    const meter = budget.forNewName(name);
-    if (
-      !meter ||
-      !meter.themes ||
-      !Number.isInteger(meter.themes.count) ||
-      !Number.isInteger(meter.themes.cap)
-    ) {
-      return null;
-    }
-
-    return meter;
-  } catch (error) {
-    return null;
-  }
-}
-
-// Footer meter text (`plan 2/3 · 6/10`).
+// Footer meter text (`plan 6/10`).
 function formatPomodoroLinkMeter(meter) {
-  return `plan ${meter.themes.count}/${meter.themes.cap} · ${meter.links.count}/${meter.links.cap}`;
+  return `plan ${meter.links.count}/${meter.links.cap}`;
 }
 
 // Create-row meta: where the new entry would land, plus whether it becomes
@@ -11368,11 +11306,6 @@ class PomodoroLinkPickerModal extends Modal {
         text: `like ${similar}`,
       });
     }
-    rightEl.createDiv({
-      cls: `bid-ppk-theme${this.createThemeOver(row) ? " is-over" : ""}`,
-      text: this.createThemeText(row),
-    });
-
     if (isSelected) {
       const keycap = rightEl.createDiv({ cls: "bid-ppk-keycap" });
       applyIcon(keycap, "corner-down-left");
@@ -11406,24 +11339,6 @@ class PomodoroLinkPickerModal extends Modal {
       const keycap = rightEl.createDiv({ cls: "bid-ppk-keycap" });
       applyIcon(keycap, "corner-down-left");
     }
-  }
-
-  createThemeMeter(row) {
-    return readPomodoroLinkNewNameMeter(this.budget, row.name);
-  }
-
-  createThemeOver(row) {
-    const meter = this.createThemeMeter(row);
-    return Boolean(meter && meter.themes && meter.themes.over);
-  }
-
-  createThemeText(row) {
-    const meter = this.createThemeMeter(row);
-    if (meter && meter.themes.over) {
-      return `+1 type · ${meter.themes.count}/${meter.themes.cap}`;
-    }
-
-    return "+1 type";
   }
 
   renderNoticeRow(rowEl, row) {
@@ -16119,9 +16034,7 @@ class BlockIdPromptPomodoroDependencyMixin {
 
 }
 // ---- src/122-plugin-pomodoro-link-picker.js ----
-// Shared meter and creation projection for direct picker opens and the
-// versioned public API. A supplied task is projected through the same guarded
-// Pomodoro insertion planner in either entry point.
+// Shared Task Link meter for direct picker opens and the versioned public API.
 // The task's own line text (one-based line into the full live note) powers
 // the footer's pending-edit preview; its presence marks a pick task-aware.
 // Anything unreadable degrades to "" while staying task-aware.
@@ -16137,58 +16050,8 @@ function taskLineTextAt(text, oneBasedLine) {
   }
 }
 
-function createBlockPomodoroLinkPickerBudget(plugin, options = {}) {
-  const current = plugin.readPlanBudgetMeter(options.dailyContent);
-  const task = options.task || {};
-  const taskFile = options.taskFile || null;
-  const dailyContent = options.dailyContent;
-  const dailyPath = options.dailyPath;
-  const taskPath = options.taskPath || (taskFile && taskFile.path) || task.path || "";
-  return {
-    current,
-    forNewName(name) {
-      try {
-        const canonical = canonicalizePomodoroLinkName(name);
-        if (!canonical.valid) {
-          return null;
-        }
-        const blockId = task.existingId || task.blockId || task.id || "pomodoro-picker-projection";
-        let linkTargetText = "";
-        try {
-          if (taskFile && dailyPath !== taskFile.path) {
-            linkTargetText = plugin.buildPomodoroLinkTargetText(taskFile, dailyPath);
-          }
-        } catch (_error) {
-          linkTargetText = "";
-        }
-        let linkText = null;
-        try {
-          linkText = sourceReplacement(
-            { targetText: linkTargetText, aliasSuffix: "" },
-            blockId,
-            CANONICAL_BLOCK_LINK_PREFIX,
-          );
-        } catch (_error) {
-          return null;
-        }
-        const planned = planExplicitPomodoroLinkInsertion(dailyContent, {
-          blockId,
-          targetPath: taskPath,
-          sourcePath: dailyPath,
-          resolveTarget: (reference, referrerPath) =>
-            plugin.resolveReferenceDestination(reference, referrerPath),
-          linkText,
-          target: { kind: "new", name: canonical.name },
-        });
-        if (!planned || planned.error || typeof planned.content !== "string") {
-          return null;
-        }
-        return plugin.readPlanBudgetMeter(planned.content);
-      } catch (_error) {
-        return null;
-      }
-    },
-  };
+function createBlockPomodoroLinkPickerBudget(plugin, dailyContent) {
+  return { current: plugin.readPlanBudgetMeter(dailyContent) };
 }
 
 function attachBlockPomodoroThemePickerSnapshot(model, snapshot) {
@@ -16256,16 +16119,7 @@ class BlockIdPromptPomodoroLinkPickerMixin {
       const displayText =
         task.displayText ||
         (typeof task.rawLine === "string" ? cleanTaskDisplayText(task.rawLine) : "(untitled task)");
-      const pickerSnapshot = dailyContent;
-      const pickerDailyPath = dailyFile.path;
-      const pickerTaskPath = taskFile ? taskFile.path : source.sourcePath;
-      const budget = createBlockPomodoroLinkPickerBudget(this, {
-        dailyContent: pickerSnapshot,
-        dailyPath: pickerDailyPath,
-        task,
-        taskFile,
-        taskPath: pickerTaskPath,
-      });
+      const budget = createBlockPomodoroLinkPickerBudget(this, dailyContent);
       let taskText = "";
       try {
         taskText = source.editor.getValue();
@@ -16280,7 +16134,6 @@ class BlockIdPromptPomodoroLinkPickerMixin {
           line: source.line + 1,
           text: taskText,
         },
-        budget.current,
       );
       attachBlockPomodoroThemePickerSnapshot(model, themeSnapshot);
 
@@ -16649,20 +16502,13 @@ class BlockIdPromptPomodoroLinkPickerApiMixin {
         })()
         : null;
       const budget = taskContext
-        ? createBlockPomodoroLinkPickerBudget(this, {
-          dailyContent,
-          dailyPath: dailyFile.path,
-          task: taskContext,
-          taskFile,
-          taskPath: taskFile.path,
-        })
+        ? createBlockPomodoroLinkPickerBudget(this, dailyContent)
         : null;
       const themeSnapshot = taskContext
         ? safeBlockPomodoroThemePickerSnapshot(
           this.app,
           model,
           taskContext,
-          budget.current,
         )
         : null;
       attachBlockPomodoroThemePickerSnapshot(model, themeSnapshot);
@@ -18288,23 +18134,17 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       if (!budget || typeof budget !== "object" || typeof budget.then === "function") {
         return null;
       }
-      const themes = budget.themes;
       const links = budget.links;
       if (
-        !themes ||
         !links ||
-        !Number.isInteger(themes.count) ||
-        !Number.isInteger(themes.cap) ||
         !Number.isInteger(links.count) ||
         !Number.isInteger(links.cap)
       ) {
         return null;
       }
-      const themesOver = themes.over === true;
       const linksOver = links.over === true;
-      const over = budget.status === "over" || themesOver || linksOver;
+      const over = linksOver;
       return {
-        themes: { count: themes.count, cap: themes.cap, over: themesOver },
         links: { count: links.count, cap: links.cap, over: linksOver },
         over,
         status: budget.status,
@@ -18314,8 +18154,8 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     }
   }
 
-  // Plan-budget meter for Ctrl+Shift+Enter Notices: ` · plan T/Tc · L/Lc`,
-  // with a trailing ` 🔴` when over the cap. Computed synchronously from the
+  // Plan-budget meter for Ctrl+Shift+Enter Notices: ` · plan L/Lc`,
+  // with a trailing ` 🔴` when links are over the cap. Computed synchronously
   // post-write daily content through bob-ledger-tools' public API. Returns ""
   // (no suffix) when the API is missing, the budget shape is unexpected, or
   // the daily note wasn't part of the operation (non-string content). Warns
@@ -18325,8 +18165,8 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     if (!meter) {
       return "";
     }
-    const over = meter.over === true;
-    return ` · plan ${meter.themes.count}/${meter.themes.cap} · ${meter.links.count}/${meter.links.cap}${over ? " 🔴" : ""}`;
+    const over = meter.links.over === true;
+    return ` · plan ${meter.links.count}/${meter.links.cap}${over ? " 🔴" : ""}`;
   }
 
 }

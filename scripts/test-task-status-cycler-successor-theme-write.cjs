@@ -131,7 +131,7 @@ function stubThemesApi(suggestion, catalog = null) {
 
 function stubLedgerApi(exempt = ["PLAN"]) {
   return {
-    caps: () => ({ exempt, strict: false, maxThemes: 5 }),
+    caps: () => ({ exempt }),
   };
 }
 
@@ -221,28 +221,6 @@ test("successor default placement creates a typed entry when needed", () => {
   assert.equal(row.offer.destination.entry_name, "WRITE");
   assert.equal(row.link.entry_name, "WRITE");
   assert.deepEqual(plan.placements[0].override, { kind: "new", name: "WRITE" });
-});
-
-test("strict type-cap refusal leaves the successor unlinked", () => {
-  const notes = {
-    "sase.md": "- [x] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo\n- [?] #task Follower [type:: WRITE] [dependsOn:: sase__fix-apollo] ^follower",
-  };
-  const { plan } = planFixture({
-    day: FIX_DAY,
-    notes,
-    closed: FIX_CLOSED,
-    options: {
-      successorTheme: {
-        themesApi: stubTypedPlacementApi("refused"),
-        ledgerApi: stubLedgerApi(),
-      },
-    },
-  });
-  const row = plan.unblocked.find((item) => item.block_id === "follower");
-  assert.equal(row.link, null);
-  assert.equal(row.not_linked, "strict_cap");
-  assert.equal(row.offer.selected, false);
-  assert.equal(plan.placements.length, 0);
 });
 
 // Set via an existing bucket.

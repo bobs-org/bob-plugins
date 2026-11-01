@@ -155,12 +155,6 @@ function taskCardTypeConsequence(edit, relocationInfo) {
     }
     return `already under ${newType || sourceName}`;
   }
-  if (relocation.kind === "refused") {
-    const typeName = relocation.typeName || newType || "TYPE";
-    const cap = Number(relocation.cap) || 0;
-    const before = Number(relocation.themesBefore) || 0;
-    return `plan.strict: ${typeName} would be type ${before + 1} of ${cap} · nothing written`;
-  }
   if (relocation.kind === "renameEntry" || relocation.kind === "appendComponent") {
     const next = typeof relocation.newName === "string" && relocation.newName
       ? relocation.newName
@@ -184,7 +178,7 @@ function taskCardTypeConsequence(edit, relocationInfo) {
 
 function taskCardTypeApplyLedgerEdit(dailyContent, relocation, liveLink, details) {
   const text = String(dailyContent || "");
-  if (!relocation || relocation.kind === "unchanged" || relocation.kind === "refused") {
+  if (!relocation || relocation.kind === "unchanged") {
     return Object.freeze({ valid: true, after: text, changed: false });
   }
   let lines = [];
@@ -258,12 +252,12 @@ function taskCardTypeApplyLedgerEdit(dailyContent, relocation, liveLink, details
 }
 
 function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
-  const working = { content: String(dailyContent || ""), moves: [], refused: null };
+  const working = { content: String(dailyContent || ""), moves: [] };
   let built = null;
   try {
     built = taskCardTypeLedgerEntries(working.content);
   } catch (_error) {
-    return { valid: false, error: "Daily note could not be read", moves: [], refused: null, content: working.content };
+    return { valid: false, error: "Daily note could not be read", moves: [], content: working.content };
   }
   for (const edit of Array.isArray(edits) ? edits : []) {
     const newType = taskCardTypeNewTypeForEdit(edit);
@@ -293,19 +287,10 @@ function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
       relocation = null;
     }
     if (!relocation) continue;
-    if (relocation.kind === "refused") {
-      const sourceName = entries[found.entryIndex] && entries[found.entryIndex].name;
-      return {
-        valid: true,
-        refused: { relocation, sourceName, newType, edit },
-        moves: working.moves,
-        content: working.content,
-      };
-    }
     if (relocation.kind === "unchanged") continue;
     const applied = taskCardTypeApplyLedgerEdit(working.content, relocation, found, details);
     if (!applied.valid) {
-      return { valid: false, error: applied.error || "Task link could not be moved", moves: working.moves, refused: null, content: working.content };
+      return { valid: false, error: applied.error || "Task link could not be moved", moves: working.moves, content: working.content };
     }
     if (applied.changed) {
       working.content = applied.after;
@@ -326,7 +311,7 @@ function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
     }
     working.moves.push(Object.freeze({ edit, relocation, liveLink: found, sourceName, destinationName, newType }));
   }
-  return { valid: true, error: null, moves: working.moves, refused: null, content: working.content };
+  return { valid: true, error: null, moves: working.moves, content: working.content };
 }
 
 async function writeTaskCardTypeDailyContent(deps, snapshot, preimage, nextContent) {

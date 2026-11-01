@@ -34,12 +34,10 @@ function workBadgeTone(count, cap) {
   return "blue";
 }
 
-// TODAY tone: ledger-availability check plus the theme-overflow override.
+// TODAY tone: ledger-availability check plus the Task Link meter.
 // `budget` is a plan budget (`computePlanBudget` / `emptyPlanBudget`
-// shape). Missing section, missing/invalid theme or link meters, or a
-// missing budget is unavailable (null). Themes over cap force red,
-// including when links are zero; themes exactly at cap keep the
-// link-based tone. Both fractions remain displayed by callers.
+// shape). Missing section, missing/invalid link meter, or a missing budget
+// is unavailable (null).
 function todayBadgeTone(budget) {
   try {
     if (!budget || typeof budget !== "object" || Array.isArray(budget)) {
@@ -48,20 +46,8 @@ function todayBadgeTone(budget) {
     if (budget.hasSection !== true) {
       return null;
     }
-    const themes = budget.themes;
     const links = budget.links;
-    if (!themes || typeof themes !== "object" || Array.isArray(themes)) {
-      return null;
-    }
     if (!links || typeof links !== "object" || Array.isArray(links)) {
-      return null;
-    }
-    if (
-      !Number.isInteger(themes.count) ||
-      themes.count < 0 ||
-      !Number.isInteger(themes.cap) ||
-      themes.cap < 1
-    ) {
       return null;
     }
     if (
@@ -71,9 +57,6 @@ function todayBadgeTone(budget) {
       links.cap < 1
     ) {
       return null;
-    }
-    if (themes.count > themes.cap) {
-      return "red";
     }
     return workBadgeTone(links.count, links.cap);
   } catch (error) {

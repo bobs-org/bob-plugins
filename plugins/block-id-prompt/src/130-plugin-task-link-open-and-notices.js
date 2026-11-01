@@ -515,23 +515,17 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       if (!budget || typeof budget !== "object" || typeof budget.then === "function") {
         return null;
       }
-      const themes = budget.themes;
       const links = budget.links;
       if (
-        !themes ||
         !links ||
-        !Number.isInteger(themes.count) ||
-        !Number.isInteger(themes.cap) ||
         !Number.isInteger(links.count) ||
         !Number.isInteger(links.cap)
       ) {
         return null;
       }
-      const themesOver = themes.over === true;
       const linksOver = links.over === true;
-      const over = budget.status === "over" || themesOver || linksOver;
+      const over = linksOver;
       return {
-        themes: { count: themes.count, cap: themes.cap, over: themesOver },
         links: { count: links.count, cap: links.cap, over: linksOver },
         over,
         status: budget.status,
@@ -541,8 +535,8 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     }
   }
 
-  // Plan-budget meter for Ctrl+Shift+Enter Notices: ` · plan T/Tc · L/Lc`,
-  // with a trailing ` 🔴` when over the cap. Computed synchronously from the
+  // Plan-budget meter for Ctrl+Shift+Enter Notices: ` · plan L/Lc`,
+  // with a trailing ` 🔴` when links are over the cap. Computed synchronously
   // post-write daily content through bob-ledger-tools' public API. Returns ""
   // (no suffix) when the API is missing, the budget shape is unexpected, or
   // the daily note wasn't part of the operation (non-string content). Warns
@@ -552,8 +546,8 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     if (!meter) {
       return "";
     }
-    const over = meter.over === true;
-    return ` · plan ${meter.themes.count}/${meter.themes.cap} · ${meter.links.count}/${meter.links.cap}${over ? " 🔴" : ""}`;
+    const over = meter.links.over === true;
+    return ` · plan ${meter.links.count}/${meter.links.cap}${over ? " 🔴" : ""}`;
   }
 
 }

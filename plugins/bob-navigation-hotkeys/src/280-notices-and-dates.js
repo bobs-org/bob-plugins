@@ -435,21 +435,16 @@ function getCancelPlanBudgetChip(app, dailyContent) {
     ) {
       return "";
     }
-    const themes = budget.themes;
     const links = budget.links;
     if (
-      !themes ||
       !links ||
-      !Number.isInteger(themes.count) ||
-      !Number.isInteger(themes.cap) ||
       !Number.isInteger(links.count) ||
       !Number.isInteger(links.cap)
     ) {
       return "";
     }
-    const over =
-      budget.status === "over" || themes.over === true || links.over === true;
-    return `plan ${themes.count}/${themes.cap} · ${links.count}/${links.cap}${over ? " 🔴" : ""}`;
+    const over = links.over === true;
+    return `plan ${links.count}/${links.cap}${over ? " 🔴" : ""}`;
   } catch (error) {
     return "";
   }

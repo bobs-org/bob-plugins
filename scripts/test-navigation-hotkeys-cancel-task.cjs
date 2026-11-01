@@ -626,7 +626,7 @@ test("buildCancelNoticeModel text covers every chip", () => {
     removedPomodoroLinkCount: 2,
     reopenedDependents: 1,
     recoveryRan: true,
-    planChip: "plan 3/5 · 7/10",
+    planChip: "plan 7/10",
     skippedClosedCount: 1,
   });
   assert.equal(model.level, "Cancelled");
@@ -636,7 +636,7 @@ test("buildCancelNoticeModel text covers every chip", () => {
   assert.equal(model.reasonMuted, false);
   assert.equal(
     model.text,
-    "Cancelled 3 tasks via Task Links · “Superseded by X” · removed 2 Pomodoro links · unblocked 1 dependent · plan 3/5 · 7/10 · skipped 1 closed",
+    "Cancelled 3 tasks via Task Links · “Superseded by X” · removed 2 Pomodoro links · unblocked 1 dependent · plan 7/10 · skipped 1 closed",
   );
   assert.deepEqual(
     model.chips.map((chip) => chip.tone),

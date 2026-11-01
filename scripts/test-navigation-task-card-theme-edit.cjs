@@ -566,7 +566,6 @@ test("task-card-relocate: unlinked backlog retype is field-only", () => {
   assert.equal(found, null);
   const plan = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
   assert.equal(plan.valid, true);
-  assert.equal(plan.refused, null);
   assert.equal(plan.moves.length, 0);
   assert.equal(plan.content, daily);
   const consequence = helpers.taskCardTypeConsequence(edit, { relocation: { kind: "unchanged" }, hasLiveLink: false, sourceEntryName: "FIX", newType: { key: "build", name: "BUILD" } });
@@ -585,7 +584,6 @@ test("task-card-relocate: planned link moves into existing planned BUILD", () =>
   ].join("\n");
   const planned = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
   assert.equal(planned.valid, true);
-  assert.equal(planned.refused, null);
   assert.equal(planned.moves.length, 1);
   assert.equal(planned.moves[0].relocation.kind, "moveTo");
   assert.equal(planned.moves[0].destinationName, "BUILD");
@@ -669,7 +667,7 @@ test("task-card-relocate: running sole renames, running crowded appends", () => 
   );
 });
 
-test("task-card-relocate: already under and strict refusal copy", () => {
+test("task-card-relocate: already under copy", () => {
   const edit = taskCardTypeEditFor("set", "build", "BUILD", "a1");
   assert.equal(
     helpers.taskCardTypeConsequence(edit, {
@@ -677,12 +675,12 @@ test("task-card-relocate: already under and strict refusal copy", () => {
     }),
     "already under BUILD",
   );
-  const refused = { kind: "refused", code: "strict_cap", typeKey: "build", typeName: "BUILD", themesBefore: 3, cap: 3 };
+  const createsBelow = { kind: "createBelow", from: 0, name: "BUILD" };
   assert.equal(
     helpers.taskCardTypeConsequence(edit, {
-      relocation: refused, hasLiveLink: true, sourceEntryName: "FIX", newType: { key: "build", name: "BUILD" },
+      relocation: createsBelow, hasLiveLink: true, sourceEntryName: "FIX", newType: { key: "build", name: "BUILD" },
     }),
-    "plan.strict: BUILD would be type 4 of 3 · nothing written",
+    "new BUILD Pomodoro below FIX",
   );
   const clearEdit = taskCardTypeEditFor("clear", null, null, "c1", noteSuggestion("BUILD", "dev"));
   assert.equal(helpers.taskCardThemeSavedNotice(clearEdit, { moved: true, destinationName: "BUILD" }), "Type cleared · BUILD from dev · link moved to BUILD");

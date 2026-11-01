@@ -1,5 +1,5 @@
 // Work badge tones: shared count-to-limit colors for TODAY, PENDING,
-// NEXT, and READY (`todayBadgeTone` theme-overflow override included).
+// NEXT, and READY.
 // Boundary vectors live here; lane/READY models and DOM update paths are
 // exercised at their real boundaries, not via string mirrors.
 const assert = require("node:assert/strict");
@@ -146,33 +146,30 @@ test("workBadgeTone never coerces invalid input to zero", () => {
 });
 
 // --- TODAY vectors --------------------------------------------------------
-function ledgerBudget(themesCount, themesCap, linksCount, linksCap) {
+function ledgerBudget(linksCount, linksCap) {
   return {
     hasSection: true,
-    themes: { count: themesCount, cap: themesCap, over: themesCount > themesCap },
     links: { count: linksCount, cap: linksCap, over: linksCount > linksCap },
-    status: themesCount > themesCap || linksCount > linksCap ? "over" : "ok",
+    status: linksCount > linksCap ? "over" : "ok",
     themeNames: [],
     entries: [],
     warnings: [],
   };
 }
 
-test("TODAY links bands with themes at cap 3", () => {
-  assert.equal(todayBadgeTone(ledgerBudget(3, 3, 0, 10)), "grey");
-  assert.equal(todayBadgeTone(ledgerBudget(3, 3, 3, 10)), "blue");
-  assert.equal(todayBadgeTone(ledgerBudget(3, 3, 4, 10)), "green");
-  assert.equal(todayBadgeTone(ledgerBudget(3, 3, 6, 10)), "yellow");
-  assert.equal(todayBadgeTone(ledgerBudget(3, 3, 8, 10)), "orange");
-  assert.equal(todayBadgeTone(ledgerBudget(3, 3, 10, 10)), "magenta");
-  assert.equal(todayBadgeTone(ledgerBudget(3, 3, 11, 10)), "red");
+test("TODAY tone follows the Task Link meter", () => {
+  assert.equal(todayBadgeTone(ledgerBudget(0, 10)), "grey");
+  assert.equal(todayBadgeTone(ledgerBudget(3, 10)), "blue");
+  assert.equal(todayBadgeTone(ledgerBudget(4, 10)), "green");
+  assert.equal(todayBadgeTone(ledgerBudget(6, 10)), "yellow");
+  assert.equal(todayBadgeTone(ledgerBudget(8, 10)), "orange");
+  assert.equal(todayBadgeTone(ledgerBudget(10, 10)), "magenta");
+  assert.equal(todayBadgeTone(ledgerBudget(11, 10)), "red");
 });
 
-test("TODAY theme overflow forces red, exact cap does not", () => {
-  assert.equal(todayBadgeTone(ledgerBudget(4, 3, 0, 10)), "red");
-  assert.equal(todayBadgeTone(ledgerBudget(4, 3, 5, 10)), "red");
-  assert.equal(todayBadgeTone(ledgerBudget(4, 3, 11, 10)), "red");
-  assert.equal(todayBadgeTone(ledgerBudget(3, 3, 3, 10)), "blue");
+test("type count never forces TODAY red", () => {
+  assert.equal(todayBadgeTone({ ...ledgerBudget(0, 10), themes: { count: 99, cap: 3, over: true } }), "grey");
+  assert.equal(todayBadgeTone({ ...ledgerBudget(11, 10), themes: { count: 0, cap: 3, over: false } }), "red");
 });
 
 test("TODAY unavailable stays neutral, empty section is grey", () => {
@@ -187,7 +184,7 @@ test("TODAY unavailable stays neutral, empty section is grey", () => {
   assert.equal(missing.hasSection, false);
   assert.equal(todayBadgeTone(missing), null);
   // Unrelated lint warnings do not select the tone.
-  const warned = ledgerBudget(2, 3, 3, 10);
+  const warned = ledgerBudget(3, 10);
   warned.warnings.push({ code: "duplicate_open_pomodoro_name", message: "x" });
   assert.equal(todayBadgeTone(warned), "blue");
 });
@@ -414,7 +411,7 @@ test("READY DOM keeps exactly one tone and daily/dashboard models agree", () => 
   }
 });
 
-test("daily TODAY chip uses the theme-overflow tone", async () => {
+test("daily TODAY chip follows links when type count is high", async () => {
   const savedXdg = process.env.XDG_CONFIG_HOME;
   process.env.XDG_CONFIG_HOME = "/definitely/missing/work-tone-test";
   const app = makeApp({
@@ -437,14 +434,10 @@ test("daily TODAY chip uses the theme-overflow tone", async () => {
       String(child.cls || "").split(/\s+/).includes("bob-plan-plan"),
     );
     assert.ok(todayChip, "expected the TODAY chip");
-    // 4 themes over the default cap of 3 forces red.
-    assert.ok(tonesIn(todayChip.cls).includes("bob-work-tone-red"));
-    // Historical daily keeps its own TODAY ledger: an older note with one
-    // theme stays blue while TODAY uses the current day for lanes.
-    const oldEl = paintNode("div");
-    plugin.paintPlanBlock(oldEl, "2026/20260101.md");
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
+    // Four distinct types and four links are below the link cap, so the chip
+    // follows the link meter instead of turning red for the former type cap.
+    assert.ok(tonesIn(todayChip.cls).includes("bob-work-tone-green"));
+    assert.ok(!tonesIn(todayChip.cls).includes("bob-work-tone-red"));
   } finally {
     plugin.onunload();
     if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
@@ -534,7 +527,7 @@ test("dashboard integration uses Work tones, TODAY override, and keeps Work orde
   const plugin = new LedgerToolsPlugin(app, {});
   try {
     plugin.onload();
-    plugin.planBudgetForCallers = () => Promise.resolve({ hasSection: true, themes: { count: 4, cap: 3, over: true }, links: { count: 0, cap: 10, over: false }, status: "over", themeNames: [], entries: [], warnings: [] });
+    plugin.planBudgetForCallers = () => Promise.resolve({ hasSection: true, links: { count: 0, cap: 10, over: false }, status: "ok", themeNames: [], entries: [], warnings: [] });
     plugin.dashboardLaneBudget = (lane) => (lane === "next" ? { section: 10, lane: 17, count: 10, laneCount: 17, today: 7, cap: 15, over: false } : { section: 4, lane: 4, count: 4, laneCount: 4, today: 0, cap: 10, over: false });
     plugin.readyBudget = () => ({ count: 15, cap: 100, over: false });
     const ledgerApi = plugin.api;
@@ -586,7 +579,7 @@ test("dashboard fallbacks keep Work tones without plugin renderers or colors", a
   const plugin = new LedgerToolsPlugin(app, {});
   try {
     plugin.onload();
-    plugin.planBudgetForCallers = () => Promise.resolve({ hasSection: true, themes: { count: 2, cap: 3, over: false }, links: { count: 4, cap: 10, over: false }, status: "ok", themeNames: [], entries: [], warnings: [] });
+    plugin.planBudgetForCallers = () => Promise.resolve({ hasSection: true, links: { count: 4, cap: 10, over: false }, status: "ok", themeNames: [], entries: [], warnings: [] });
     plugin.dashboardLaneBudget = (lane) => (lane === "next" ? { section: 12, lane: 12, count: 12, laneCount: 12, today: 0, cap: 15, over: false } : { section: 10, lane: 10, count: 10, laneCount: 10, today: 0, cap: 10, over: false });
     plugin.readyBudget = () => ({ count: 60, cap: 100, over: false });
     const oldApi = { ...plugin.api };

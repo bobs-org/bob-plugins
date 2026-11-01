@@ -182,7 +182,7 @@ test("READY custom-cap boundary", () => {
   assert.equal(past.cap, 5);
 });
 
-test("READY over is independent of the PLAN ledger status", () => {
+test("READY over is independent of type count and the PLAN ledger status", () => {
   const model = planBlockModel({
     content: "## Pomodoros\n\n- [ ] () — ONE\n- [ ] () — TWO\n- [ ] () — THREE\n- [ ] () — FOUR\n",
     tasks: [readyTask({ path: "notes/a.md" })],
@@ -192,9 +192,9 @@ test("READY over is independent of the PLAN ledger status", () => {
     app: {},
     isToday: () => false,
   });
-  assert.equal(model.budget.status, "over");
+  assert.equal(model.budget.status, "ok");
   assert.equal(model.readyText, "READY 1/100");
-  assert.equal(model.over, true);
+  assert.equal(model.over, false);
   const calm = planBlockModel({
     content: "## Pomodoros\n\n- [ ] () — GOALS\n",
     tasks: Array.from({ length: 101 }, (_, index) =>
@@ -209,6 +209,7 @@ test("READY over is independent of the PLAN ledger status", () => {
   assert.equal(calm.budget.status, "ok");
   assert.equal(calm.readyText, "READY 101/100");
   assert.equal(calm.ready.over, true);
+  assert.equal(calm.over, true);
   // READY over never changes the PLAN status.
   assert.equal(calm.budget.status, "ok");
 });

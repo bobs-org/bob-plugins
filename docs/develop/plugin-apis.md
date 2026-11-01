@@ -242,13 +242,13 @@ missing type always agrees. `planRetype({ effective, effectiveName?,
 inherited, destination, selector?, keepType?, tabPick?, sources? })` returns
 `{ kind }` with `container`, `consistent`, `merge`, `set`, or `clear`
 outcomes per D6; `effective` and `inherited` accept suggestion objects or keys.
-`planPlacement({ type, typeName?, entries, alreadyQueued?, ...overrides })`
-returns `entry`, `create`, `refused`, `alreadyQueued`, or `noType` per D7, and
-`planRelocation({ entries, liveLink, type, typeName?, ...overrides })` returns
+`planPlacement({ type, typeName?, entries, alreadyQueued?, exempt? })`
+returns `entry`, `create`, `alreadyQueued`, or `noType` per D7, and
+`planRelocation({ entries, liveLink, type, typeName?, sources? })` returns
 `unchanged`, `renameEntry`, `appendComponent`, `moveTo`, `renamePlaceholder`,
-`createBelow`, or `refused` per D8. Vocabulary, exempt, and inventory come
-from the configured-rows snapshot and plan caps; `exempt`, `ledgerKeys`,
-`themesBefore`, `cap`, and `strict` accept explicit overrides. None of the
+or `createBelow` per D8. Vocabulary, exempt, and inventory come from the
+configured-rows snapshot and plan config; only `exempt` accepts an explicit
+placement override. None of the
 routing methods spawns bob, writes the vault, or throws: unusable input
 resolves to `null` (`typeComponentsOf` resolves to `[]`, `typeAgrees` to
 `true`).

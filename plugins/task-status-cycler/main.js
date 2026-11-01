@@ -8044,7 +8044,7 @@ function successorOfferTypedDestination(options = {}) {
     opts.dailyLines,
     opts.dailyPath,
   );
-  const result = { destination, placementOverride: null, refusal: null };
+  const result = { destination, placementOverride: null };
   const themesApi = opts.themesApi;
   const task = opts.task && typeof opts.task === "object" ? opts.task : null;
   const taskPath = task && typeof task.path === "string" ? task.path : "";
@@ -8173,15 +8173,6 @@ function successorOfferTypedDestination(options = {}) {
     };
     result.placementOverride = { kind: "new", name };
     return result;
-  }
-  if (placed.kind === "refused") {
-    result.destination = {
-      day_file: String(opts.dailyPath || ""),
-      entry_name: typeof theme.name === "string" ? theme.name : typeKey,
-      entry_role: "created",
-      fallback: false,
-    };
-    result.refusal = "strict_cap";
   }
   return result;
 }

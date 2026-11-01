@@ -63,8 +63,8 @@ alone, and `--`, `---`, and longer hyphen runs are untouched so Markdown
 thematic breaks, YAML frontmatter delimiters, and other multi-hyphen text keep
 Obsidian's normal Tab behavior.
 
-The plugin also renders a live `bob-plan` block: a `TODAY 3/3 · 7/10` chip with
-the type and link budget (its tooltip lists each type with its link count),
+The plugin also renders a live `bob-plan` block: a `TODAY 7/10` chip for the
+Task Link budget (its tooltip lists each type with its link count),
 `PENDING n/10`, `NEXT n/15`, and `READY n/100` chips that open the matching
 dashboard sections, the `★ GOALS · DECKS · BOB` type line with the highlight
 starred, and one muted line per lint. READY is the shared live current backlog
@@ -75,7 +75,7 @@ unready) and turn red only for a strict section excess, while whole-lane
 pressure stays in the tooltip. `next_cap_exceeded` / `pending_cap_exceeded`
 lint lines appear only when the matching badge is red and quote its section
 count. Older daily notes follow
-today's live lanes while keeping their own TODAY type and link budget.
+today's live lanes while keeping their own TODAY link budget.
 
 Today is read from the ledger at render time — the open tasks with a dedicated
 Task Link under today's open Pomodoros — and kept in a synchronous cache that

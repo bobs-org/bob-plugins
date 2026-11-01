@@ -168,9 +168,8 @@ test("direct picker captures one task suggestion with a one-based line and live 
     plugins: {
       "bob-ledger-tools": {
         api: {
-          caps: () => ({ maxThemes: 3, strict: true, exempt: ["PLAN"] }),
+          caps: () => ({ exempt: ["PLAN"] }),
           planBudget: () => ({
-            themes: { count: 0, cap: 3, over: false },
             links: { count: 0, cap: 10, over: false },
             status: "ok",
           }),
@@ -206,7 +205,8 @@ test("direct picker captures one task suggestion with a one-based line and live 
   assert.deepEqual(suggestionCalls, [{ path: "Tasks.md", line: 2, text: taskText }]);
   assert.equal(pickerRequest.model.themeSuggestion.theme.name, "WRITE");
   assert.deepEqual(pickerRequest.model.themePreselection, { kind: "create" });
-  assert.equal(pickerRequest.budget.current.themes.count, 0);
+  assert.equal(pickerRequest.budget.current.links.count, 0);
+  assert.equal(Object.hasOwn(pickerRequest.budget.current, "themes"), false);
 });
 
 test("missing task-theme APIs leave the direct picker on its existing default", async () => {

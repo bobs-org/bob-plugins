@@ -673,11 +673,7 @@ test("shared task-theme preselection vectors match the bob-cli model", () => {
       suggestion: vector.suggestion,
       entries: vector.entries,
       exemptKeys: vector.exempt,
-      ledgerKeys: vector.ledger_keys,
       creationAllowed: vector.creation_allowed,
-      strict: vector.strict,
-      themesBefore: vector.themes_before,
-      maxThemes: vector.cap,
       alreadyQueued: vector.already_queued,
     });
     const expected = vector.expected.kind === "entry"
@@ -689,7 +685,7 @@ test("shared task-theme preselection vectors match the bob-cli model", () => {
   }
 });
 
-test("task-theme preselection normalizes non-default exemptions and cap additions", () => {
+test("task-theme preselection normalizes exemptions without a type cap", () => {
   const choose = helpers.chooseBlockPomodoroThemePreselection;
   const suggestion = { key: "write", name: "WRITE", known: true };
   assert.deepEqual(choose({
@@ -702,21 +698,13 @@ test("task-theme preselection normalizes non-default exemptions and cap addition
     suggestion: { key: "plan", name: "PLAN", known: true },
     entries: [],
     exemptKeys: ["plan"],
-    ledgerKeys: [],
     creationAllowed: true,
-    strict: true,
-    themesBefore: 3,
-    maxThemes: 3,
   }), { kind: "create" });
   assert.deepEqual(choose({
     suggestion,
     entries: [],
     exemptKeys: [],
-    ledgerKeys: ["WRITE"],
     creationAllowed: true,
-    strict: true,
-    themesBefore: 3,
-    maxThemes: 3,
   }), { kind: "create" });
 });
 

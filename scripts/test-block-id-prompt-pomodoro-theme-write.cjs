@@ -212,8 +212,6 @@ function installThemeWriteApis(plugin, options = {}) {
         ...(!options.noCaps ? {
           caps: options.caps || (() => ({
             exempt: options.exempt || ["PLAN"],
-            strict: false,
-            maxThemes: 3,
           })),
         } : {}),
         planBudget: options.planBudget || (() => null),

@@ -1,6 +1,4 @@
-// Shared meter and creation projection for direct picker opens and the
-// versioned public API. A supplied task is projected through the same guarded
-// Pomodoro insertion planner in either entry point.
+// Shared Task Link meter for direct picker opens and the versioned public API.
 // The task's own line text (one-based line into the full live note) powers
 // the footer's pending-edit preview; its presence marks a pick task-aware.
 // Anything unreadable degrades to "" while staying task-aware.
@@ -16,58 +14,8 @@ function taskLineTextAt(text, oneBasedLine) {
   }
 }
 
-function createBlockPomodoroLinkPickerBudget(plugin, options = {}) {
-  const current = plugin.readPlanBudgetMeter(options.dailyContent);
-  const task = options.task || {};
-  const taskFile = options.taskFile || null;
-  const dailyContent = options.dailyContent;
-  const dailyPath = options.dailyPath;
-  const taskPath = options.taskPath || (taskFile && taskFile.path) || task.path || "";
-  return {
-    current,
-    forNewName(name) {
-      try {
-        const canonical = canonicalizePomodoroLinkName(name);
-        if (!canonical.valid) {
-          return null;
-        }
-        const blockId = task.existingId || task.blockId || task.id || "pomodoro-picker-projection";
-        let linkTargetText = "";
-        try {
-          if (taskFile && dailyPath !== taskFile.path) {
-            linkTargetText = plugin.buildPomodoroLinkTargetText(taskFile, dailyPath);
-          }
-        } catch (_error) {
-          linkTargetText = "";
-        }
-        let linkText = null;
-        try {
-          linkText = sourceReplacement(
-            { targetText: linkTargetText, aliasSuffix: "" },
-            blockId,
-            CANONICAL_BLOCK_LINK_PREFIX,
-          );
-        } catch (_error) {
-          return null;
-        }
-        const planned = planExplicitPomodoroLinkInsertion(dailyContent, {
-          blockId,
-          targetPath: taskPath,
-          sourcePath: dailyPath,
-          resolveTarget: (reference, referrerPath) =>
-            plugin.resolveReferenceDestination(reference, referrerPath),
-          linkText,
-          target: { kind: "new", name: canonical.name },
-        });
-        if (!planned || planned.error || typeof planned.content !== "string") {
-          return null;
-        }
-        return plugin.readPlanBudgetMeter(planned.content);
-      } catch (_error) {
-        return null;
-      }
-    },
-  };
+function createBlockPomodoroLinkPickerBudget(plugin, dailyContent) {
+  return { current: plugin.readPlanBudgetMeter(dailyContent) };
 }
 
 function attachBlockPomodoroThemePickerSnapshot(model, snapshot) {
@@ -135,16 +83,7 @@ class BlockIdPromptPomodoroLinkPickerMixin {
       const displayText =
         task.displayText ||
         (typeof task.rawLine === "string" ? cleanTaskDisplayText(task.rawLine) : "(untitled task)");
-      const pickerSnapshot = dailyContent;
-      const pickerDailyPath = dailyFile.path;
-      const pickerTaskPath = taskFile ? taskFile.path : source.sourcePath;
-      const budget = createBlockPomodoroLinkPickerBudget(this, {
-        dailyContent: pickerSnapshot,
-        dailyPath: pickerDailyPath,
-        task,
-        taskFile,
-        taskPath: pickerTaskPath,
-      });
+      const budget = createBlockPomodoroLinkPickerBudget(this, dailyContent);
       let taskText = "";
       try {
         taskText = source.editor.getValue();
@@ -159,7 +98,6 @@ class BlockIdPromptPomodoroLinkPickerMixin {
           line: source.line + 1,
           text: taskText,
         },
-        budget.current,
       );
       attachBlockPomodoroThemePickerSnapshot(model, themeSnapshot);
 

@@ -75,56 +75,36 @@ function pomodoroLinkPickerRowLabel(entry, progress) {
   return parts.filter(Boolean).join(", ");
 }
 
-// Best-effort read of the current plan meter: a throw or a misshapen meter
-// hides the meter instead of breaking the picker.
+// Best-effort read of the current Task Link meter: a throw or a misshapen
+// meter hides it instead of breaking the picker.
 function readPomodoroLinkBudgetMeter(budget) {
   try {
     const meter = budget ? budget.current : null;
     if (
       !meter ||
-      !meter.themes ||
       !meter.links ||
-      !Number.isInteger(meter.themes.count) ||
-      !Number.isInteger(meter.themes.cap) ||
       !Number.isInteger(meter.links.count) ||
       !Number.isInteger(meter.links.cap)
     ) {
       return null;
     }
 
-    return meter;
+    return {
+      links: {
+        count: meter.links.count,
+        cap: meter.links.cap,
+        over: meter.links.over === true,
+      },
+      over: meter.links.over === true,
+    };
   } catch (error) {
     return null;
   }
 }
 
-// Best-effort projection for a new name: a throw or a misshapen meter
-// hides the theme badge detail instead of breaking the picker.
-function readPomodoroLinkNewNameMeter(budget, name) {
-  try {
-    if (!budget || typeof budget.forNewName !== "function") {
-      return null;
-    }
-
-    const meter = budget.forNewName(name);
-    if (
-      !meter ||
-      !meter.themes ||
-      !Number.isInteger(meter.themes.count) ||
-      !Number.isInteger(meter.themes.cap)
-    ) {
-      return null;
-    }
-
-    return meter;
-  } catch (error) {
-    return null;
-  }
-}
-
-// Footer meter text (`plan 2/3 · 6/10`).
+// Footer meter text (`plan 6/10`).
 function formatPomodoroLinkMeter(meter) {
-  return `plan ${meter.themes.count}/${meter.themes.cap} · ${meter.links.count}/${meter.links.cap}`;
+  return `plan ${meter.links.count}/${meter.links.cap}`;
 }
 
 // Create-row meta: where the new entry would land, plus whether it becomes
@@ -828,11 +808,6 @@ class PomodoroLinkPickerModal extends Modal {
         text: `like ${similar}`,
       });
     }
-    rightEl.createDiv({
-      cls: `bid-ppk-theme${this.createThemeOver(row) ? " is-over" : ""}`,
-      text: this.createThemeText(row),
-    });
-
     if (isSelected) {
       const keycap = rightEl.createDiv({ cls: "bid-ppk-keycap" });
       applyIcon(keycap, "corner-down-left");
@@ -866,24 +841,6 @@ class PomodoroLinkPickerModal extends Modal {
       const keycap = rightEl.createDiv({ cls: "bid-ppk-keycap" });
       applyIcon(keycap, "corner-down-left");
     }
-  }
-
-  createThemeMeter(row) {
-    return readPomodoroLinkNewNameMeter(this.budget, row.name);
-  }
-
-  createThemeOver(row) {
-    const meter = this.createThemeMeter(row);
-    return Boolean(meter && meter.themes && meter.themes.over);
-  }
-
-  createThemeText(row) {
-    const meter = this.createThemeMeter(row);
-    if (meter && meter.themes.over) {
-      return `+1 type · ${meter.themes.count}/${meter.themes.cap}`;
-    }
-
-    return "+1 type";
   }
 
   renderNoticeRow(rowEl, row) {

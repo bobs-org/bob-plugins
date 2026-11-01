@@ -1063,7 +1063,7 @@ test("older daily notes follow today's dashboard lanes", async () => {
     await new Promise((resolve) => setImmediate(resolve));
     assert.ok(oldReads.includes("2026/20250101.md"));
     const container = dailyEl.children[0];
-    assert.match(container.attrs["aria-label"], /TODAY 1\/3 · 1\/10/);
+    assert.match(container.attrs["aria-label"], /TODAY 1\/10/);
     assert.equal(laneValue(findLaneAnchor(dailyEl, "next")), "2/15");
     const dashHost = paintNode("div");
     const dash = plugin.paintDashboardLaneElement(

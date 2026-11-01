@@ -298,10 +298,6 @@ function makeThemeSnapshot(model, { suggestion, choice, exemptKeys = ["PLAN"] })
         .filter(Boolean),
     })),
     exemptKeys,
-    strict: false,
-    maxThemes: 3,
-    planMeter: { themes: { count: 1, cap: 3, over: false } },
-    ledgerKeys: ["capture", "later"],
   };
 }
 
@@ -552,7 +548,7 @@ test("filtering ranks, highlights, and clearing restores the default", () => {
   modal.close();
 });
 
-test("create row meta, divider, and theme badge", () => {
+test("create row meta and divider", () => {
   const modal = openPicker();
   type(modal, "focus");
   const rows = findAllByClass(modal.contentEl, "bid-ppk-row");
@@ -566,8 +562,6 @@ test("create row meta, divider, and theme badge", () => {
     "after CAPTURE · becomes next up",
   );
   assert.equal(textOf(findByClass(create, "bid-ppk-pill")), "New");
-  assert.equal(textOf(findByClass(create, "bid-ppk-theme")), "+1 type");
-  assert.ok(!findByClass(create, "bid-ppk-theme").classes.includes("is-over"));
   modal.close();
 
   const again = openPicker({
@@ -616,28 +610,12 @@ test("exact open names suppress the create row; prefix matches keep it", () => {
   modal.close();
 });
 
-test("theme badge turns red over cap; a throwing budget hides the detail", () => {
-  const overBudget = {
-    current: null,
-    forNewName: () => ({ themes: { count: 4, cap: 3, over: true } }),
-  };
-  const modal = openPicker({ budget: overBudget });
+test("create rows have no type budget badge", () => {
+  const modal = openPicker({ budget: { current: { links: { count: 6, cap: 10, over: false }, over: false } } });
   type(modal, "focus");
-  const theme = findByClass(modal.contentEl, "bid-ppk-theme");
-  assert.equal(textOf(theme), "+1 type · 4/3");
-  assert.ok(theme.classes.includes("is-over"));
+  const create = findAllByClass(modal.contentEl, "bid-ppk-row")[0];
+  assert.equal(findByClass(create, "bid-ppk-theme"), null);
   modal.close();
-
-  const throwing = {
-    current: null,
-    forNewName: () => {
-      throw new Error("ledger down");
-    },
-  };
-  const plain = openPicker({ budget: throwing });
-  type(plain, "focus");
-  assert.equal(textOf(findByClass(plain.contentEl, "bid-ppk-theme")), "+1 type");
-  plain.close();
 });
 
 test("invalid rows explain the grammar and are inert on Enter", async () => {
@@ -758,15 +736,13 @@ test("footer hints and plan meter", () => {
   const metered = openPicker({
     budget: {
       current: {
-        themes: { count: 2, cap: 3, over: false },
         links: { count: 6, cap: 10, over: false },
         over: false,
       },
-      forNewName: () => null,
     },
   });
   const meter = findByClass(metered.contentEl, "bid-ppk-meter");
-  assert.equal(textOf(meter), "plan 2/3 · 6/10");
+  assert.equal(textOf(meter), "plan 6/10");
   assert.equal(meter.getAttribute("aria-live"), "polite");
   assert.ok(!meter.classes.includes("is-over"));
   metered.close();
@@ -774,11 +750,9 @@ test("footer hints and plan meter", () => {
   const over = openPicker({
     budget: {
       current: {
-        themes: { count: 4, cap: 3, over: true },
         links: { count: 6, cap: 10, over: true },
         over: true,
       },
-      forNewName: () => null,
     },
   });
   assert.ok(findByClass(over.contentEl, "bid-ppk-meter").classes.includes("is-over"));

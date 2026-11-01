@@ -607,7 +607,7 @@ function assertThemeSuggestion(id, expected, got) {
 
 test("theme fixture preserves preselect vectors from bob-cli", () => {
   assert.ok(Array.isArray(fixture.preselect));
-  assert.equal(fixture.preselect.length, 8);
+  assert.equal(fixture.preselect.length, 7);
 });
 
 test("theme task-field vectors execute parse, byte-preserving setters, and clear", () => {
@@ -699,7 +699,6 @@ test("type vectors: placement picks the Pomodoro for a type", () => {
   const kinds = {
     entry: "entry",
     create: "create",
-    refused: "refused",
     already_queued: "alreadyQueued",
     no_type: "noType",
   };
@@ -712,10 +711,6 @@ test("type vectors: placement picks the Pomodoro for a type", () => {
       typeName: item.type_name,
       entries: item.entries,
       exempt: item.exempt,
-      ledgerKeys: item.ledger_keys,
-      themesBefore: item.themes_before,
-      cap: item.cap,
-      strict: item.strict,
       alreadyQueued: item.already_queued,
     });
     assert.equal(got.kind, kinds[item.expected.kind], `place kind: ${item.name}`);
@@ -724,9 +719,6 @@ test("type vectors: placement picks the Pomodoro for a type", () => {
     }
     if (item.expected.name !== undefined) {
       assert.equal(got.name, item.expected.name, `place name: ${item.name}`);
-    }
-    if (item.expected.code !== undefined) {
-      assert.equal(got.code, item.expected.code, `place code: ${item.name}`);
     }
   }
 });
@@ -740,7 +732,6 @@ test("type vectors: relocation moves the live link with a type", () => {
     move_to: "moveTo",
     rename_placeholder: "renamePlaceholder",
     create_below: "createBelow",
-    refused: "refused",
   };
   for (const item of fixture.relocate) {
     if (item.rust_only) {
@@ -752,10 +743,6 @@ test("type vectors: relocation moves the live link with a type", () => {
       typeKey: item.type,
       typeName: item.type_name,
       sources: routingSources(item),
-      ledgerKeys: item.ledger_keys,
-      themesBefore: item.themes_before,
-      cap: item.cap,
-      strict: item.strict,
     });
     assert.equal(got.kind, kinds[item.expected.kind], `relocate kind: ${item.name}`);
     if (item.expected.index !== undefined) {
@@ -1041,10 +1028,6 @@ test("themes routing API answers agreement, retype, placement, and relocation", 
       typeName: "CHORE",
       entries: [],
       exempt: ["PLAN"],
-      ledgerKeys: ["BUILD"],
-      themesBefore: 1,
-      cap: 3,
-      strict: false,
     }),
     { kind: "create", name: "CHORE" },
   );
@@ -1055,10 +1038,6 @@ test("themes routing API answers agreement, retype, placement, and relocation", 
       type: "build",
       typeName: "BUILD",
       sources,
-      ledgerKeys: ["FIX"],
-      themesBefore: 1,
-      cap: 3,
-      strict: false,
     }),
     { kind: "createBelow", from: 0, name: "BUILD" },
   );

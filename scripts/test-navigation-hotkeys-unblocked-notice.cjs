@@ -69,7 +69,6 @@ function planBudgetApp() {
           api: {
             planBudget: () => ({
               status: "ok",
-              themes: { count: 3, cap: 3, over: false },
               links: { count: 10, cap: 10, over: false },
             }),
           },
@@ -152,7 +151,7 @@ test("unblocked card renders a single linked row with receipt and chips", () => 
     nodeHasClass("bob-nh-notice-chip"),
   ).map((node) => node.text);
   assert.ok(chips.includes("Next"));
-  assert.ok(chips.includes("plan 3/3 · 10/10"));
+  assert.ok(chips.includes("plan 10/10"));
   assert.ok(chips.includes("added ^relaunch-failed-agents"));
   assert.ok(chips.includes("Alt+N releases"));
 });
@@ -809,7 +808,7 @@ test("keep-moving card: one pick reads as a Keep ‹N› moving card with ⏭, t
   assert.equal(findFragmentNode(root, nodeHasClass("bob-nh-unblock-text")).text, "Ship the badge renderer");
   const chips = collectFragmentNodes(root, nodeHasClass("bob-nh-notice-chip")).map((node) => node.text);
   assert.ok(chips.includes("Pending"), "a Pending pick shows its lane (never In Progress or a symbol)");
-  assert.ok(chips.includes("plan 3/3 · 10/10"));
+  assert.ok(chips.includes("plan 10/10"));
   assert.ok(chips.includes("Alt+N releases"));
   assert.equal(
     chips.some((chip) => chip.startsWith("keeps")),

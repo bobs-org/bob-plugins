@@ -133,20 +133,13 @@ class BlockIdPromptPomodoroLinkPickerApiMixin {
         })()
         : null;
       const budget = taskContext
-        ? createBlockPomodoroLinkPickerBudget(this, {
-          dailyContent,
-          dailyPath: dailyFile.path,
-          task: taskContext,
-          taskFile,
-          taskPath: taskFile.path,
-        })
+        ? createBlockPomodoroLinkPickerBudget(this, dailyContent)
         : null;
       const themeSnapshot = taskContext
         ? safeBlockPomodoroThemePickerSnapshot(
           this.app,
           model,
           taskContext,
-          budget.current,
         )
         : null;
       attachBlockPomodoroThemePickerSnapshot(model, themeSnapshot);

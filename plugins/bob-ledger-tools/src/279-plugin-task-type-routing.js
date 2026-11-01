@@ -201,18 +201,6 @@ function planPlacement(input) {
   if (containing >= 0) {
     return { kind: "entry", index: containing };
   }
-  const ledgerKeys = new Set(
-    (Array.isArray(opts.ledgerKeys) ? opts.ledgerKeys : [])
-      .map((value) => pomodoroThemeNormalizeKey(value))
-      .filter(Boolean),
-  );
-  const addsTheme = !exempt.has(key) && !ledgerKeys.has(key);
-  const strict = opts.strict === true;
-  const themesBefore = Number(opts.themesBefore) || 0;
-  const cap = Number(opts.cap) || 0;
-  if (strict && addsTheme && themesBefore + 1 > cap) {
-    return { kind: "refused", code: "strict_cap" };
-  }
   const name = typeof opts.typeName === "string" && opts.typeName
     ? opts.typeName
     : key;
@@ -298,10 +286,6 @@ function planRelocation(input) {
     typeName,
     entries: planned,
     exempt: [...sets.exempt],
-    ledgerKeys: opts.ledgerKeys,
-    themesBefore: opts.themesBefore,
-    cap: opts.cap,
-    strict: false,
     alreadyQueued: false,
   });
   if (placed.kind === "entry" && placed.index !== from) {
@@ -312,25 +296,6 @@ function planRelocation(input) {
       kind: "renamePlaceholder",
       index: from,
       newName: replaceTypeComponents(entry.name, typeName, opts.sources),
-    };
-  }
-  const ledgerKeys = new Set(
-    (Array.isArray(opts.ledgerKeys) ? opts.ledgerKeys : [])
-      .map((value) => pomodoroThemeNormalizeKey(value))
-      .filter(Boolean),
-  );
-  const addsTheme = !sets.exempt.has(key) && !ledgerKeys.has(key);
-  const strict = opts.strict === true;
-  const themesBefore = Number(opts.themesBefore) || 0;
-  const cap = Number(opts.cap) || 0;
-  if (strict && addsTheme && themesBefore + 1 > cap) {
-    return {
-      kind: "refused",
-      code: "strict_cap",
-      typeKey: key,
-      typeName,
-      themesBefore,
-      cap,
     };
   }
   return { kind: "createBelow", from, name: typeName };

@@ -121,8 +121,6 @@ test("conformance: merged name with duplicate", () => {
   );
   assert.equal(budget.hasSection, true);
   assert.deepEqual(budget.themeNames, ["BOB", "DECKS"]);
-  assert.equal(budget.themes.count, 2);
-  assert.equal(budget.themes.over, false);
   assert.equal(budget.links.count, 2);
   assert.equal(budget.status, "ok");
   assert.deepEqual(codes(budget), ["duplicate_open_pomodoro_name"]);
@@ -166,7 +164,6 @@ test("conformance: unnamed placeholders", () => {
       "- [ ] () — GOALS\n",
   );
   assert.deepEqual(budget.themeNames, ["(unnamed)", "GOALS"]);
-  assert.equal(budget.themes.count, 2);
   assert.equal(budget.links.count, 1);
 });
 
@@ -230,12 +227,11 @@ test("conformance: open inventory label", () => {
     "## Pomodoros\n" + "\n" + "- [ ] () — LATER\n" + "    - [[task#^aaa]]\n",
   );
   assert.deepEqual(budget.themeNames, ["LATER"]);
-  assert.equal(budget.themes.count, 1);
   assert.deepEqual(codes(budget), ["inventory_label_open"]);
 });
 
-// docs/plan.md conformance example 6: four themes (over the cap).
-test("conformance: over the cap", () => {
+// Type names remain visible without a type-count limit.
+test("conformance: many types do not put the plan over budget", () => {
   const budget = computePlanBudget(
     "## Pomodoros\n" +
       "\n" +
@@ -244,9 +240,10 @@ test("conformance: over the cap", () => {
       "- [ ] () — THREE\n" +
       "- [ ] () — FOUR\n",
   );
-  assert.equal(budget.themes.count, 4);
-  assert.equal(budget.status, "over");
-  assert.deepEqual(codes(budget), ["plan_theme_cap_exceeded"]);
+  assert.deepEqual(budget.themeNames, ["ONE", "TWO", "THREE", "FOUR"]);
+  assert.equal(budget.links.count, 0);
+  assert.equal(budget.status, "ok");
+  assert.deepEqual(codes(budget), []);
 });
 
 // docs/plan.md conformance example 7: a `[-]` entry and a completed entry.
@@ -262,11 +259,10 @@ test("conformance: cancelled and completed entries", () => {
       "    - [[task#^ccc]]\n",
   );
   assert.deepEqual(budget.themeNames, ["GOALS"]);
-  assert.equal(budget.themes.count, 1);
   assert.equal(budget.links.count, 1);
 });
 
-test("exactly at the cap is fine", () => {
+test("type count does not affect budget status", () => {
   const budget = computePlanBudget(
     "## Pomodoros\n" +
       "\n" +
@@ -315,12 +311,19 @@ test("highlight is the first open non-exempt entry; running is the timed one", (
   assert.equal(budget.entries[2].running, false);
 });
 
-test("coercePlanCaps ignores a legacy max_now instead of failing", () => {
-  const { caps, invalid } = coercePlanCaps({ max_now: 20, maxNext: 7 });
+test("coercePlanCaps ignores retired plan keys instead of failing", () => {
+  const { caps, invalid } = coercePlanCaps({
+    max_now: 20,
+    max_themes: 0,
+    strict: true,
+    maxNext: 7,
+  });
   assert.equal(invalid, false);
   assert.equal(caps.maxNext, 7);
   assert.equal(caps.maxPending, 10);
   assert.equal(caps.maxReady, 100);
+  assert.equal(Object.hasOwn(caps, "maxThemes"), false);
+  assert.equal(Object.hasOwn(caps, "strict"), false);
 });
 
 test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
@@ -329,24 +332,20 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
   assert.deepEqual(parsePlanCaps({}), defaultPlanCaps());
   const caps = parsePlanCaps({
     plan: {
-      max_themes: 5,
       max_links: 12,
       max_next: 20,
       max_pending: 12,
-      strict: true,
       exempt: ["GTD", "ADMIN"],
       inventory_labels: ["LATER"],
       reading_theme: "deep   work",
     },
   });
   assert.deepEqual(caps, {
-    maxThemes: 5,
     maxLinks: 12,
     maxNext: 20,
     maxPending: 12,
     maxReady: 100,
     maxReadyPerNote: 5,
-    strict: true,
     exempt: ["GTD", "ADMIN"],
     inventoryLabels: ["LATER"],
     readingTheme: "DEEP WORK",
@@ -355,11 +354,9 @@ test("parsePlanCaps defaults, overrides, and invalid fallbacks", () => {
   assert.deepEqual(
     parsePlanCaps({
       plan: {
-        max_themes: 0,
         max_links: 2.5,
         max_next: "many",
         max_pending: 0,
-        strict: "yes",
         exempt: [""],
         inventory_labels: "LATER",
       },
@@ -452,15 +449,13 @@ test("loadPlanCaps reads plan: and flags invalid values", () => {
   const good = loadPlanCaps({
     fsModule: {
       readFileSync: () =>
-        JSON.stringify({ plan: { max_themes: 2, strict: true } }),
+        JSON.stringify({ plan: { max_links: 9 } }),
     },
     parseYaml: (text) => JSON.parse(text),
     Platform: { isDesktopApp: true },
     configPath: "/cfg/bob/config.yml",
   });
-  assert.equal(good.caps.maxThemes, 2);
-  assert.equal(good.caps.strict, true);
-  assert.equal(good.caps.maxLinks, 10);
+  assert.equal(good.caps.maxLinks, 9);
   assert.equal(good.invalid, false);
   assert.equal(good.configPath, "/cfg/bob/config.yml");
 
@@ -474,17 +469,6 @@ test("loadPlanCaps reads plan: and flags invalid values", () => {
   });
   assert.equal(badReading.invalid, true);
   assert.equal(badReading.caps.readingTheme, "READ");
-
-  const bad = loadPlanCaps({
-    fsModule: {
-      readFileSync: () => JSON.stringify({ plan: { max_themes: 0 } }),
-    },
-    parseYaml: (text) => JSON.parse(text),
-    Platform: { isDesktopApp: true },
-    configPath: "/cfg/bob/config.yml",
-  });
-  assert.deepEqual(bad.caps, defaultPlanCaps());
-  assert.equal(bad.invalid, true);
 
   const missing = loadPlanCaps({
     fsModule: {
@@ -544,7 +528,7 @@ test("planBlockModel renders chips, themes, and lints", () => {
     app: {},
     isToday: (task) => task.blockLink === " ^aaa",
   });
-  assert.equal(model.planText, "TODAY 1/3 · 1/10");
+  assert.equal(model.planText, "TODAY 1/10");
   // Linked Next is TODAY: the daily badge follows the dashboard section.
   assert.equal(model.nextText, "NEXT 0/15");
   assert.equal(model.next.count, 1);
@@ -643,10 +627,8 @@ test("plugin exposes the versioned api and registers the bob-plan block", async 
 
 test("invalid plan block falls back to full defaults", () => {
   for (const block of [
-    { max_themes: "many" },
-    { strict: "yes" },
     { exempt: "GTD" },
-    { max_themes: 5, exempt: ["GTD", 7] },
+    { exempt: ["GTD", 7] },
   ]) {
     const { caps, invalid } = coercePlanCaps(block);
     assert.equal(invalid, true);
@@ -662,7 +644,6 @@ test("entries require column-0 dash-space with one status char", () => {
   ]) {
     const budget = computePlanBudget(content);
     assert.equal(budget.links.count, 0, content);
-    assert.equal(budget.themes.count, 0, content);
   }
 });
 

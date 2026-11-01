@@ -495,19 +495,9 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (applied !== true || !isCurrent()) return false;
         } else {
           const snapshot = await this.taskCardTypeDailySnapshot();
-          let ledgerPlan = { valid: true, moves: [], refused: null, content: snapshot ? snapshot.content : null };
+          let ledgerPlan = { valid: true, moves: [], content: snapshot ? snapshot.content : null };
           if (snapshot && typeof snapshot.content === "string") {
             ledgerPlan = planTaskCardTypeLedgerMoves(actionable, snapshot.content, api);
-          }
-          if (ledgerPlan.refused) {
-            const info = ledgerPlan.refused;
-            new Notice(taskCardTypeConsequence(actionable[0], {
-              relocation: info.relocation,
-              hasLiveLink: true,
-              sourceEntryName: info.sourceName,
-              newType: info.newType,
-            }));
-            return false;
           }
           if (!ledgerPlan.valid) {
             new Notice(`${ledgerPlan.error || "Task link could not be moved"}; nothing was written`);
@@ -519,16 +509,6 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
             const fresh = await this.taskCardTypeDailySnapshot();
             const base = fresh && typeof fresh.content === "string" ? fresh.content : snapshot.content;
             const replanned = planTaskCardTypeLedgerMoves(actionable, base, api);
-            if (replanned.refused) {
-              const info = replanned.refused;
-              new Notice(taskCardTypeConsequence(actionable[0], {
-                relocation: info.relocation,
-                hasLiveLink: true,
-                sourceEntryName: info.sourceName,
-                newType: info.newType,
-              }));
-              return false;
-            }
             if (!replanned.valid || replanned.content === base) {
               const first = replanned.moves[0] || ledgerPlan.moves[0];
               new Notice(taskCardThemeSavedNotice(actionable[0], first ? { moved: false, partial: true } : { moved: false, partial: true }));
@@ -581,19 +561,9 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (applied !== true || !isCurrent()) return false;
         } else {
           const snapshot = await this.taskCardTypeDailySnapshot();
-          let ledgerPlan = { valid: true, moves: [], refused: null, content: snapshot ? snapshot.content : null };
+          let ledgerPlan = { valid: true, moves: [], content: snapshot ? snapshot.content : null };
           if (snapshot && typeof snapshot.content === "string") {
             ledgerPlan = planTaskCardTypeLedgerMoves(actionable, snapshot.content, api);
-          }
-          if (ledgerPlan.refused) {
-            const info = ledgerPlan.refused;
-            new Notice(taskCardTypeConsequence(actionable[0], {
-              relocation: info.relocation,
-              hasLiveLink: true,
-              sourceEntryName: info.sourceName,
-              newType: info.newType,
-            }));
-            return false;
           }
           if (!ledgerPlan.valid) {
             new Notice(`${ledgerPlan.error || "Task link could not be moved"}; nothing was written`);
@@ -605,16 +575,6 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
             const freshSnapshot = await this.taskCardTypeDailySnapshot();
             const base = freshSnapshot && typeof freshSnapshot.content === "string" ? freshSnapshot.content : snapshot.content;
             const replanned = planTaskCardTypeLedgerMoves(actionable, base, api);
-            if (replanned.refused) {
-              const info = replanned.refused;
-              new Notice(taskCardTypeConsequence(actionable[0], {
-                relocation: info.relocation,
-                hasLiveLink: true,
-                sourceEntryName: info.sourceName,
-                newType: info.newType,
-              }));
-              return false;
-            }
             if (!replanned.valid || replanned.content === base) {
               new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
               if (!isCurrent()) return false;

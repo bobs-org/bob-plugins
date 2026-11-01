@@ -35,7 +35,7 @@ class BobLedgerToolsTaskThemeApiMixin {
 
   // Routing sources for the task-type planners: the vocabulary comes from
   // the configured-rows snapshot, exempt and inventory labels from plan
-  // caps. Never throws; unknown caps degrade to the plan defaults.
+  // config. Never throws; unavailable settings degrade to the plan defaults.
   taskTypeSources() {
     try {
       const rows = this.pomodoroThemesConfiguredRows();
@@ -107,61 +107,15 @@ class BobLedgerToolsTaskThemeApiMixin {
     }
   }
 
-  taskTypeLedgerKeysAndCount(overrides) {
-    const opts = overrides && typeof overrides === "object" ? overrides : {};
-    if (Array.isArray(opts.ledgerKeys)) {
-      return {
-        ledgerKeys: opts.ledgerKeys,
-        themesBefore: Number.isInteger(opts.themesBefore)
-          ? opts.themesBefore
-          : opts.ledgerKeys.length,
-      };
-    }
-    try {
-      const dailyPath = this.pomodoroThemeTodayPath();
-      const names = this.pomodoroThemeTodayNames(
-        dailyPath,
-        typeof opts.path === "string" ? opts.path : "",
-        typeof opts.text === "string" ? opts.text : undefined,
-      );
-      const keys = names instanceof Map ? [...names.keys()] : [];
-      return {
-        ledgerKeys: keys,
-        themesBefore: Number.isInteger(opts.themesBefore)
-          ? opts.themesBefore
-          : keys.length,
-      };
-    } catch (error) {
-      return { ledgerKeys: [], themesBefore: 0 };
-    }
-  }
-
   taskTypePlanPlacement(options) {
     try {
       const opts = options && typeof options === "object" ? options : {};
-      let exempt;
-      let cap;
-      let strict;
-      try {
-        const caps = loadPlanCaps().caps;
-        exempt = caps.exempt;
-        cap = caps.maxThemes;
-        strict = caps.strict;
-      } catch (error) {
-        exempt = ["PLAN"];
-        cap = 3;
-        strict = false;
-      }
-      const ledger = this.taskTypeLedgerKeysAndCount(opts);
+      const sources = this.taskTypeSources();
       return planPlacement({
         typeKey: opts.typeKey !== undefined ? opts.typeKey : opts.type,
         typeName: opts.typeName,
         entries: opts.entries,
-        exempt: opts.exempt !== undefined ? opts.exempt : exempt,
-        ledgerKeys: ledger.ledgerKeys,
-        themesBefore: ledger.themesBefore,
-        cap: opts.cap !== undefined ? opts.cap : cap,
-        strict: opts.strict !== undefined ? opts.strict : strict,
+        exempt: opts.exempt !== undefined ? opts.exempt : sources.exempt,
         alreadyQueued: opts.alreadyQueued,
       });
     } catch (error) {
@@ -172,27 +126,12 @@ class BobLedgerToolsTaskThemeApiMixin {
   taskTypePlanRelocation(options) {
     try {
       const opts = options && typeof options === "object" ? options : {};
-      let cap;
-      let strict;
-      try {
-        const caps = loadPlanCaps().caps;
-        cap = caps.maxThemes;
-        strict = caps.strict;
-      } catch (error) {
-        cap = 3;
-        strict = false;
-      }
-      const ledger = this.taskTypeLedgerKeysAndCount(opts);
       return planRelocation({
         entries: opts.entries,
         liveLink: opts.liveLink,
         typeKey: opts.typeKey !== undefined ? opts.typeKey : opts.type,
         typeName: opts.typeName,
         sources: opts.sources !== undefined ? opts.sources : this.taskTypeSources(),
-        ledgerKeys: ledger.ledgerKeys,
-        themesBefore: ledger.themesBefore,
-        cap: opts.cap !== undefined ? opts.cap : cap,
-        strict: opts.strict !== undefined ? opts.strict : strict,
       });
     } catch (error) {
       return null;

@@ -1,7 +1,7 @@
 # Pomodoro theme vectors
 
 `vectors.json` was copied byte-for-byte from bob-cli commit
-`17504745c584e7e0bffc25342ce3791e3857560c`, at
+`3de72bfd844248d30b3c9aa0eaa01454fa6b0cc5`, at
 `tests/fixtures/pomodoro_themes/vectors.json`. The Rust suite in bob-cli is the
 source of truth; this test runs every case that is not marked `rust_only`. Cases
 carry `components`, `hue` (with an explicit `areas` input under

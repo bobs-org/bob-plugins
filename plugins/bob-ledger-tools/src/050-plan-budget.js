@@ -6,7 +6,6 @@
 const PLAN_UNNAMED_THEME = "(unnamed)";
 const PLAN_CONFIG_RELATIVE_PATH = "bob/config.yml";
 const PLAN_TASKS_PLUGIN_ID = "obsidian-tasks-plugin";
-const PLAN_LINT_THEME_CAP = "plan_theme_cap_exceeded";
 const PLAN_LINT_LINK_CAP = "plan_link_cap_exceeded";
 const PLAN_LINT_DUPLICATE_NAME = "duplicate_open_pomodoro_name";
 const PLAN_LINT_INVENTORY_LABEL = "inventory_label_open";
@@ -29,13 +28,11 @@ const TODAY_RELOAD_EVENT = "obsidian-tasks-plugin:reload-open-search-results";
 
 function defaultPlanCaps() {
   return {
-    maxThemes: 3,
     maxLinks: 10,
     maxNext: 15,
     maxPending: 10,
     maxReady: 100,
     maxReadyPerNote: 5,
-    strict: false,
     exempt: ["PLAN"],
     inventoryLabels: ["LATER", "MISC", "NEW FEATURES", "SASE"],
     readingTheme: "READ",
@@ -100,7 +97,6 @@ function effectivePlanCaps(caps) {
   const raw =
     caps && typeof caps === "object" && !Array.isArray(caps) ? caps : {};
   return {
-    maxThemes: planCapOrDefault(raw.maxThemes, defaults.maxThemes),
     maxLinks: planCapOrDefault(raw.maxLinks, defaults.maxLinks),
     maxNext: planCapOrDefault(raw.maxNext, defaults.maxNext),
     maxPending: planCapOrDefault(raw.maxPending, defaults.maxPending),
@@ -109,8 +105,6 @@ function effectivePlanCaps(caps) {
       raw.maxReadyPerNote,
       defaults.maxReadyPerNote,
     ),
-    strict:
-      typeof raw.strict === "boolean" ? raw.strict : defaults.strict,
     exempt: planStringListOrDefault(raw.exempt, defaults.exempt),
     inventoryLabels: planStringListOrDefault(
       raw.inventoryLabels,
@@ -225,15 +219,6 @@ function coercePlanCaps(block) {
     }
     return out;
   };
-  const strictValue = pick("strict", "strict");
-  let strict = defaults.strict;
-  if (strictValue !== undefined) {
-    if (typeof strictValue !== "boolean") {
-      invalid = true;
-    } else {
-      strict = strictValue;
-    }
-  }
   // `reading_type` is canonical; `reading_theme` stays a legacy alias.
   // Both present is a plan config error, reported here as an invalid block.
   const readingTypeValue =
@@ -280,10 +265,9 @@ function coercePlanCaps(block) {
       invalid = true;
     }
   }
-  // Unknown keys (including a legacy `max_now`) stay ignored, so an old
-  // config loads without error.
+  // Unknown keys (including retired `max_now`, `max_themes`, and `strict`)
+  // stay ignored, so an old config loads without error.
   const caps = {
-    maxThemes: cap("max_themes", "maxThemes", defaults.maxThemes),
     maxLinks: cap("max_links", "maxLinks", defaults.maxLinks),
     maxNext: cap("max_next", "maxNext", defaults.maxNext),
     maxPending: cap("max_pending", "maxPending", defaults.maxPending),
@@ -293,7 +277,6 @@ function coercePlanCaps(block) {
       "maxReadyPerNote",
       defaults.maxReadyPerNote,
     ),
-    strict,
     exempt: list("exempt", "exempt", defaults.exempt),
     inventoryLabels: list(
       "inventory_labels",
@@ -314,7 +297,6 @@ function emptyPlanBudget(caps) {
   const effective = effectivePlanCaps(caps);
   return {
     hasSection: false,
-    themes: { count: 0, cap: effective.maxThemes, over: false },
     links: { count: 0, cap: effective.maxLinks, over: false },
     status: "ok",
     themeNames: [],
@@ -844,15 +826,8 @@ function computePlanBudget(content, caps, dailyPath) {
     entries[highlightIndex].highlight = true;
   }
 
-  const themes = planMeter(themeNames.length, effective.maxThemes);
   const links = planMeter(seenLinks.size, effective.maxLinks);
-  const status = themes.over || links.over ? "over" : "ok";
-  if (themes.over) {
-    warnings.push({
-      code: PLAN_LINT_THEME_CAP,
-      message: `today's plan has ${themes.count}/${themes.cap} types`,
-    });
-  }
+  const status = links.over ? "over" : "ok";
   if (links.over) {
     warnings.push({
       code: PLAN_LINT_LINK_CAP,
@@ -862,7 +837,6 @@ function computePlanBudget(content, caps, dailyPath) {
 
   return {
     hasSection: true,
-    themes,
     links,
     status,
     themeNames,

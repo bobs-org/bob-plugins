@@ -32,7 +32,7 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
   const dailyEdits = new Map();
   const relocated = [];
   if (!sourcePath || !destinationPath || !plan || !plan.changes) {
-    return { dailyEdits, relocated, refused: null };
+    return { dailyEdits, relocated };
   }
   let api = null;
   try {
@@ -41,7 +41,7 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
     api = null;
   }
   if (!api || typeof api.taskThemeOf !== "function" || typeof api.effectiveTypeFor !== "function" || typeof api.planRelocation !== "function") {
-    return { dailyEdits, relocated, refused: null };
+    return { dailyEdits, relocated };
   }
   const destAfter = plan.changes.get(destinationPath);
   const destContent = destAfter ? String(destAfter.after || "") : String(snapshots.get(destinationPath) || "");
@@ -141,17 +141,6 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
       relocation = null;
     }
     if (!relocation || relocation.kind === "unchanged") continue;
-    if (relocation.kind === "refused") {
-      return {
-        dailyEdits,
-        relocated,
-        refused: {
-          typeName: relocation.typeName || newType.name,
-          themesBefore: Number(relocation.themesBefore) || 0,
-          cap: Number(relocation.cap) || 0,
-        },
-      };
-    }
     let applied = null;
     try {
       applied = taskCardTypeApplyLedgerEdit(liveContent, relocation, live.found, live.built.details);
@@ -175,7 +164,7 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
       type: newType.name,
     }));
   }
-  return { dailyEdits, relocated, refused: null };
+  return { dailyEdits, relocated };
 }
 
 class BobNavigationHotkeysInboxRouteMixin {
@@ -312,12 +301,6 @@ class BobNavigationHotkeysInboxRouteMixin {
         snapshots,
         plan,
       });
-      if (relocation && relocation.refused) {
-        return {
-          ok: false,
-          reason: `plan.strict: ${relocation.refused.typeName} would be type ${relocation.refused.themesBefore + 1} of ${relocation.refused.cap} · nothing written`,
-        };
-      }
       if (relocation && relocation.dailyEdits && relocation.dailyEdits.size > 0) {
         for (const [dailyPath, edit] of relocation.dailyEdits.entries()) {
           const existing = plan.changes.get(dailyPath);

@@ -33,13 +33,11 @@ function stubPlanBudgetApi(plugin, budget) {
 
 const PLAN_BUDGET_OK = {
   status: "ok",
-  themes: { count: 1, cap: 3, over: false },
   links: { count: 2, cap: 10, over: false },
 };
 
 const PLAN_BUDGET_OVER = {
   status: "over",
-  themes: { count: 4, cap: 3, over: true },
   links: { count: 11, cap: 10, over: true },
 };
 
@@ -57,7 +55,7 @@ test("plan budget suffix: link Notice appends the meter computed on post-write d
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
-  assert.deepEqual(noticeMessages, ["Linked under Current · Next · plan 1/3 · 2/10"]);
+  assert.deepEqual(noticeMessages, ["Linked under Current · Next · plan 2/10"]);
   assert.equal(seen.length, 2);
   assert.ok(
     !seen[0].includes("[[Tasks#^ship]]"),
@@ -100,7 +98,7 @@ test("plan budget suffix: unlink Notice marks an over-cap plan with 🔴", async
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
   assert.deepEqual(noticeMessages, [
-    "Unlinked · stays Next · plan 4/3 · 11/10 🔴",
+    "Unlinked · stays Next · plan 11/10 🔴",
   ]);
 });
 
@@ -141,7 +139,7 @@ test("plan budget suffix: Task Link Notice appends the meter from post-write dai
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
   assert.deepEqual(noticeMessages, [
-    "Task Link removed · stays Next · plan 1/3 · 2/10",
+    "Task Link removed · stays Next · plan 2/10",
   ]);
   assert.equal(seen.length, 1);
   assert.ok(seen[0].includes("## Pomodoros"), "budget runs on daily content");
@@ -411,33 +409,29 @@ test("Ctrl+Shift+Enter on a malformed Depends-On line is refused without deletin
   assert.equal(lastNotice(), "⛓ Dependency link — edit it with Ctrl+Shift+P");
 });
 
-test("readPlanBudgetMeter keeps per-cap over flags independent", () => {
+test("readPlanBudgetMeter ignores stale theme meters and follows links only", () => {
   const plugin = new Plugin();
   plugin.app = {};
   stubPlanBudgetApi(plugin, {
-    status: "over",
-    themes: { count: 2, cap: 3, over: false },
-    links: { count: 11, cap: 10, over: true },
-  });
-  const meter = plugin.readPlanBudgetMeter("## Pomodoros\n- [ ] () — FOCUS");
-  assert.equal(meter.themes.over, false);
-  assert.equal(meter.links.over, true);
-  assert.equal(meter.over, true);
-  assert.deepEqual([meter.themes.count, meter.themes.cap], [2, 3]);
-  assert.deepEqual([meter.links.count, meter.links.cap], [11, 10]);
-});
-
-test("readPlanBudgetMeter keeps per-cap over flags independent (mirror)", () => {
-  const plugin = new Plugin();
-  plugin.app = {};
-  stubPlanBudgetApi(plugin, {
-    status: "over",
-    themes: { count: 4, cap: 3, over: true },
+    status: "ok",
+    themes: { count: 99, cap: 1, over: true },
     links: { count: 2, cap: 10, over: false },
   });
   const meter = plugin.readPlanBudgetMeter("## Pomodoros\n- [ ] () — FOCUS");
-  assert.equal(meter.themes.over, true);
-  assert.equal(meter.links.over, false);
+  assert.equal(meter.over, false);
+  assert.equal(Object.hasOwn(meter, "themes"), false);
+  assert.deepEqual([meter.links.count, meter.links.cap], [2, 10]);
+});
+
+test("readPlanBudgetMeter marks an over-link plan red", () => {
+  const plugin = new Plugin();
+  plugin.app = {};
+  stubPlanBudgetApi(plugin, {
+    status: "over",
+    links: { count: 11, cap: 10, over: true },
+  });
+  const meter = plugin.readPlanBudgetMeter("## Pomodoros\n- [ ] () — FOCUS");
+  assert.equal(meter.links.over, true);
   assert.equal(meter.over, true);
 });
 

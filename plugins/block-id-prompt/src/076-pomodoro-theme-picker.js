@@ -356,22 +356,6 @@ function chooseBlockPomodoroThemePreselection(input = {}) {
     return { kind: "fallback", code: "creation_blocked" };
   }
 
-  const ledgerKeys = new Set(
-    (Array.isArray(input.ledgerKeys) ? input.ledgerKeys : [])
-      .map(normalizeBlockPomodoroThemeKey)
-      .filter(Boolean),
-  );
-  const addsTheme = !exempt.has(key) && !ledgerKeys.has(key);
-  const strict = input.strict === true;
-  const themesBefore = Number.isInteger(input.themesBefore) ? input.themesBefore : 0;
-  const cap = Number.isInteger(input.maxThemes)
-    ? input.maxThemes
-    : Number.isInteger(input.cap)
-      ? input.cap
-      : Number.MAX_SAFE_INTEGER;
-  if (strict && addsTheme && themesBefore + 1 > cap) {
-    return { kind: "fallback", code: "strict_cap" };
-  }
   return { kind: "create" };
 }
 
@@ -468,16 +452,11 @@ function refreshBlockPomodoroThemePickerSnapshot(model, api) {
     if (!suggestion || !suggestion.theme || typeof suggestion.theme.known !== "boolean") {
       return false;
     }
-    const meter = snapshot.planMeter && snapshot.planMeter.themes;
     const choice = chooseBlockPomodoroThemePreselection({
       suggestion,
       entries: snapshot.entries,
       exemptKeys: snapshot.exemptKeys,
-      ledgerKeys: snapshot.ledgerKeys,
       creationAllowed: Boolean(model.creation && model.creation.allowed),
-      strict: snapshot.strict,
-      themesBefore: meter && meter.count,
-      maxThemes: snapshot.maxThemes,
       alreadyQueued: false,
     });
     if (!choice) {
@@ -507,7 +486,7 @@ function getBlockPomodoroLedgerApi(app) {
   }
 }
 
-function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
+function safeBlockPomodoroThemePickerSnapshot(app, model, task) {
   try {
     if (
       !task || typeof task.path !== "string" || !task.path ||
@@ -520,8 +499,7 @@ function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
     const ledgerApi = getBlockPomodoroLedgerApi(app);
     if (
       !themesApi || typeof themesApi.suggestFor !== "function" ||
-      !ledgerApi || typeof ledgerApi.caps !== "function" ||
-      typeof ledgerApi.planBudget !== "function"
+      !ledgerApi || typeof ledgerApi.caps !== "function"
     ) {
       return null;
     }
@@ -544,24 +522,15 @@ function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
     }
 
     const rawCaps = ledgerApi.caps();
-    const meter = meterSnapshot;
     if (
       !rawCaps || typeof rawCaps !== "object" || typeof rawCaps.then === "function" ||
-      typeof rawCaps.strict !== "boolean" || !Array.isArray(rawCaps.exempt) ||
-      !Number.isInteger(rawCaps.maxThemes) || rawCaps.maxThemes < 1 ||
-      !meter || typeof meter !== "object" || typeof meter.then === "function" ||
-      !meter.themes || !Number.isInteger(meter.themes.count) ||
-      !Number.isInteger(meter.themes.cap)
+      !Array.isArray(rawCaps.exempt)
     ) {
       return null;
     }
-    const caps = {
-      exemptKeys: rawCaps.exempt
-        .map(normalizeBlockPomodoroThemeKey)
-        .filter(Boolean),
-      strict: rawCaps.strict,
-      maxThemes: rawCaps.maxThemes,
-    };
+    const exemptKeys = rawCaps.exempt
+      .map(normalizeBlockPomodoroThemeKey)
+      .filter(Boolean);
     let known = semanticSuggestion.theme.known === true;
     if (typeof themesApi.isKnownTheme === "function") {
       const reported = themesApi.isKnownTheme(semanticSuggestion.theme.key);
@@ -590,16 +559,11 @@ function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
         .map((component) => normalizeBlockPomodoroThemeKey(component.key))
         .filter(Boolean),
     }));
-    const ledgerKeys = [...new Set(entries.flatMap((entry) => entry.componentKeys))];
     const choice = chooseBlockPomodoroThemePreselection({
       suggestion,
       entries,
-      exemptKeys: caps.exemptKeys,
-      ledgerKeys,
+      exemptKeys,
       creationAllowed: Boolean(model && model.creation && model.creation.allowed),
-      strict: caps.strict,
-      themesBefore: meter.themes.count,
-      maxThemes: caps.maxThemes,
       alreadyQueued: false,
     });
     if (!choice) {
@@ -610,13 +574,7 @@ function safeBlockPomodoroThemePickerSnapshot(app, model, task, meterSnapshot) {
       suggestion,
       choice,
       entries,
-      exemptKeys: caps.exemptKeys,
-      strict: caps.strict,
-      maxThemes: caps.maxThemes,
-      planMeter: {
-        themes: { count: meter.themes.count, cap: meter.themes.cap, over: meter.themes.over === true },
-      },
-      ledgerKeys,
+      exemptKeys,
     };
   } catch (_error) {
     // Optional theme APIs never make the base picker unavailable.

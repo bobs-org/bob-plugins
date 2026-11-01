@@ -114,7 +114,7 @@ function installNavStub(plugin, seen, pickOverride = null) {
 
 function installRealTaskThemeApi(plugin, suggestFor) {
   const holder = plugin.app.plugins.plugins["bob-ledger-tools"];
-  holder.api.caps = () => ({ exempt: ["PLAN"], strict: false, maxThemes: 5 });
+  holder.api.caps = () => ({ exempt: ["PLAN"] });
   const sources = { vocab: ["WRITE", "FIX", "BUILD", "DEEP"], exempt: ["PLAN"], inventory: [] };
   const keyOf = (value) => {
     const candidate = value && typeof value === "object"

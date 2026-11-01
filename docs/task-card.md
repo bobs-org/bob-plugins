@@ -47,7 +47,7 @@ the owning task's Links or Linked-from stage.
 | `l` | Open Links to (task relations); in its filter, `~` flips direction. |
 | `⇧L` | Open Linked from (task relations); in its filter, `~` flips direction. |
 | `f` | Open Review every (Refresh). |
-| `t` | Open Type; `Enter` on the Type row opens the same stage. The stage offers Use default first with its inherited reason (`Use default · BUILD from dev`, `Use default · CHORE default type`), then Today, Recent, and a validated typed new name. Any type is choosable, including PLAN and other exempt types. Type rows use Bob's reported hue in a tinted pill with a swatch; uncolored types (exempt or unconfigured), such as PLAN, are grey. The inherited type's row is marked Default. A consequence line under the selected row states the live-link outcome before Enter (`link moves FIX → BUILD`, `running FIX becomes BUILD`, `FIX placeholder becomes BUILD`, `new BUILD Pomodoro below FIX`, `no live link · ledger unchanged`, `already under BUILD`, or the `plan.strict` refusal, which writes nothing). |
+| `t` | Open Type; `Enter` on the Type row opens the same stage. The stage offers Use default first with its inherited reason (`Use default · BUILD from dev`, `Use default · CHORE default type`), then Today, Recent, and a validated typed new name. Any type is choosable, including PLAN and other exempt types. Type rows use Bob's reported hue in a tinted pill with a swatch; uncolored types (exempt or unconfigured), such as PLAN, are grey. The inherited type's row is marked Default. A consequence line under the selected row states the live-link outcome before Enter (`link moves FIX → BUILD`, `running FIX becomes BUILD`, `FIX placeholder becomes BUILD`, `new BUILD Pomodoro below FIX`, `no live link · ledger unchanged`, or `already under BUILD`). |
 | `x` | Open the cancel-reason stage; the key alone never cancels. |
 | `Alt+N` | Commit to Next or release to Ready. |
 | `Ctrl+D` | Delete the selected property; Schedule is selected by default. On Type, clear to Use default through the same relocate path (field clearing only, never Recent hide; type need not be in the configured property list). On Links to, clear all outgoing relations (a cleared source that still mentions the target keeps a `(💬 mentions)` entry); Linked from is generated and refuses clearing. In the relation-label stage, hide or unhide the selected label; row zero toggles one-off instead. |
@@ -100,11 +100,10 @@ nothing was written`. Closed tasks keep their history. No status, ID, route,
 freshness, stamp, schedule, Work Log, or review-walk change is caused by a
 type edit; the edit never advances the walk and never stamps freshness. A
 backlog task without a live link gains none, so no new Today membership is
-created. With `plan.strict: true`, a creation past the cap refuses the whole
-edit: neither the field nor the link changes (`plan.strict: BUILD would be
-type 4 of 3 · nothing written`). A partial ledger failure after a durable
-field write shows `Type BUILD set · link not moved — Ctrl+Shift+M to move it`
-and leaves the `type_mismatch` lint and ledger mark to show the drift.
+created. Types are never capped, so adding a type does not block the field or
+link update. A partial ledger failure after a durable field write shows
+`Type BUILD set · link not moved — Ctrl+Shift+M to move it` and leaves the
+`type_mismatch` lint and ledger mark to show the drift.
 `Back`, `Escape`, and `Ctrl+[` write nothing.
 
 Choosing the same priority level again is deliberate: selecting `2`

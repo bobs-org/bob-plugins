@@ -40189,21 +40189,16 @@ function getCancelPlanBudgetChip(app, dailyContent) {
     ) {
       return "";
     }
-    const themes = budget.themes;
     const links = budget.links;
     if (
-      !themes ||
       !links ||
-      !Number.isInteger(themes.count) ||
-      !Number.isInteger(themes.cap) ||
       !Number.isInteger(links.count) ||
       !Number.isInteger(links.cap)
     ) {
       return "";
     }
-    const over =
-      budget.status === "over" || themes.over === true || links.over === true;
-    return `plan ${themes.count}/${themes.cap} · ${links.count}/${links.cap}${over ? " 🔴" : ""}`;
+    const over = links.over === true;
+    return `plan ${links.count}/${links.cap}${over ? " 🔴" : ""}`;
   } catch (error) {
     return "";
   }
@@ -48931,12 +48926,6 @@ function taskCardTypeConsequence(edit, relocationInfo) {
     }
     return `already under ${newType || sourceName}`;
   }
-  if (relocation.kind === "refused") {
-    const typeName = relocation.typeName || newType || "TYPE";
-    const cap = Number(relocation.cap) || 0;
-    const before = Number(relocation.themesBefore) || 0;
-    return `plan.strict: ${typeName} would be type ${before + 1} of ${cap} · nothing written`;
-  }
   if (relocation.kind === "renameEntry" || relocation.kind === "appendComponent") {
     const next = typeof relocation.newName === "string" && relocation.newName
       ? relocation.newName
@@ -48960,7 +48949,7 @@ function taskCardTypeConsequence(edit, relocationInfo) {
 
 function taskCardTypeApplyLedgerEdit(dailyContent, relocation, liveLink, details) {
   const text = String(dailyContent || "");
-  if (!relocation || relocation.kind === "unchanged" || relocation.kind === "refused") {
+  if (!relocation || relocation.kind === "unchanged") {
     return Object.freeze({ valid: true, after: text, changed: false });
   }
   let lines = [];
@@ -49034,12 +49023,12 @@ function taskCardTypeApplyLedgerEdit(dailyContent, relocation, liveLink, details
 }
 
 function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
-  const working = { content: String(dailyContent || ""), moves: [], refused: null };
+  const working = { content: String(dailyContent || ""), moves: [] };
   let built = null;
   try {
     built = taskCardTypeLedgerEntries(working.content);
   } catch (_error) {
-    return { valid: false, error: "Daily note could not be read", moves: [], refused: null, content: working.content };
+    return { valid: false, error: "Daily note could not be read", moves: [], content: working.content };
   }
   for (const edit of Array.isArray(edits) ? edits : []) {
     const newType = taskCardTypeNewTypeForEdit(edit);
@@ -49069,19 +49058,10 @@ function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
       relocation = null;
     }
     if (!relocation) continue;
-    if (relocation.kind === "refused") {
-      const sourceName = entries[found.entryIndex] && entries[found.entryIndex].name;
-      return {
-        valid: true,
-        refused: { relocation, sourceName, newType, edit },
-        moves: working.moves,
-        content: working.content,
-      };
-    }
     if (relocation.kind === "unchanged") continue;
     const applied = taskCardTypeApplyLedgerEdit(working.content, relocation, found, details);
     if (!applied.valid) {
-      return { valid: false, error: applied.error || "Task link could not be moved", moves: working.moves, refused: null, content: working.content };
+      return { valid: false, error: applied.error || "Task link could not be moved", moves: working.moves, content: working.content };
     }
     if (applied.changed) {
       working.content = applied.after;
@@ -49102,7 +49082,7 @@ function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
     }
     working.moves.push(Object.freeze({ edit, relocation, liveLink: found, sourceName, destinationName, newType }));
   }
-  return { valid: true, error: null, moves: working.moves, refused: null, content: working.content };
+  return { valid: true, error: null, moves: working.moves, content: working.content };
 }
 
 async function writeTaskCardTypeDailyContent(deps, snapshot, preimage, nextContent) {
@@ -51929,19 +51909,9 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (applied !== true || !isCurrent()) return false;
         } else {
           const snapshot = await this.taskCardTypeDailySnapshot();
-          let ledgerPlan = { valid: true, moves: [], refused: null, content: snapshot ? snapshot.content : null };
+          let ledgerPlan = { valid: true, moves: [], content: snapshot ? snapshot.content : null };
           if (snapshot && typeof snapshot.content === "string") {
             ledgerPlan = planTaskCardTypeLedgerMoves(actionable, snapshot.content, api);
-          }
-          if (ledgerPlan.refused) {
-            const info = ledgerPlan.refused;
-            new Notice(taskCardTypeConsequence(actionable[0], {
-              relocation: info.relocation,
-              hasLiveLink: true,
-              sourceEntryName: info.sourceName,
-              newType: info.newType,
-            }));
-            return false;
           }
           if (!ledgerPlan.valid) {
             new Notice(`${ledgerPlan.error || "Task link could not be moved"}; nothing was written`);
@@ -51953,16 +51923,6 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
             const fresh = await this.taskCardTypeDailySnapshot();
             const base = fresh && typeof fresh.content === "string" ? fresh.content : snapshot.content;
             const replanned = planTaskCardTypeLedgerMoves(actionable, base, api);
-            if (replanned.refused) {
-              const info = replanned.refused;
-              new Notice(taskCardTypeConsequence(actionable[0], {
-                relocation: info.relocation,
-                hasLiveLink: true,
-                sourceEntryName: info.sourceName,
-                newType: info.newType,
-              }));
-              return false;
-            }
             if (!replanned.valid || replanned.content === base) {
               const first = replanned.moves[0] || ledgerPlan.moves[0];
               new Notice(taskCardThemeSavedNotice(actionable[0], first ? { moved: false, partial: true } : { moved: false, partial: true }));
@@ -52015,19 +51975,9 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (applied !== true || !isCurrent()) return false;
         } else {
           const snapshot = await this.taskCardTypeDailySnapshot();
-          let ledgerPlan = { valid: true, moves: [], refused: null, content: snapshot ? snapshot.content : null };
+          let ledgerPlan = { valid: true, moves: [], content: snapshot ? snapshot.content : null };
           if (snapshot && typeof snapshot.content === "string") {
             ledgerPlan = planTaskCardTypeLedgerMoves(actionable, snapshot.content, api);
-          }
-          if (ledgerPlan.refused) {
-            const info = ledgerPlan.refused;
-            new Notice(taskCardTypeConsequence(actionable[0], {
-              relocation: info.relocation,
-              hasLiveLink: true,
-              sourceEntryName: info.sourceName,
-              newType: info.newType,
-            }));
-            return false;
           }
           if (!ledgerPlan.valid) {
             new Notice(`${ledgerPlan.error || "Task link could not be moved"}; nothing was written`);
@@ -52039,16 +51989,6 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
             const freshSnapshot = await this.taskCardTypeDailySnapshot();
             const base = freshSnapshot && typeof freshSnapshot.content === "string" ? freshSnapshot.content : snapshot.content;
             const replanned = planTaskCardTypeLedgerMoves(actionable, base, api);
-            if (replanned.refused) {
-              const info = replanned.refused;
-              new Notice(taskCardTypeConsequence(actionable[0], {
-                relocation: info.relocation,
-                hasLiveLink: true,
-                sourceEntryName: info.sourceName,
-                newType: info.newType,
-              }));
-              return false;
-            }
             if (!replanned.valid || replanned.content === base) {
               new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
               if (!isCurrent()) return false;
@@ -92044,7 +91984,7 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
   const dailyEdits = new Map();
   const relocated = [];
   if (!sourcePath || !destinationPath || !plan || !plan.changes) {
-    return { dailyEdits, relocated, refused: null };
+    return { dailyEdits, relocated };
   }
   let api = null;
   try {
@@ -92053,7 +91993,7 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
     api = null;
   }
   if (!api || typeof api.taskThemeOf !== "function" || typeof api.effectiveTypeFor !== "function" || typeof api.planRelocation !== "function") {
-    return { dailyEdits, relocated, refused: null };
+    return { dailyEdits, relocated };
   }
   const destAfter = plan.changes.get(destinationPath);
   const destContent = destAfter ? String(destAfter.after || "") : String(snapshots.get(destinationPath) || "");
@@ -92153,17 +92093,6 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
       relocation = null;
     }
     if (!relocation || relocation.kind === "unchanged") continue;
-    if (relocation.kind === "refused") {
-      return {
-        dailyEdits,
-        relocated,
-        refused: {
-          typeName: relocation.typeName || newType.name,
-          themesBefore: Number(relocation.themesBefore) || 0,
-          cap: Number(relocation.cap) || 0,
-        },
-      };
-    }
     let applied = null;
     try {
       applied = taskCardTypeApplyLedgerEdit(liveContent, relocation, live.found, live.built.details);
@@ -92187,7 +92116,7 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
       type: newType.name,
     }));
   }
-  return { dailyEdits, relocated, refused: null };
+  return { dailyEdits, relocated };
 }
 
 class BobNavigationHotkeysInboxRouteMixin {
@@ -92324,12 +92253,6 @@ class BobNavigationHotkeysInboxRouteMixin {
         snapshots,
         plan,
       });
-      if (relocation && relocation.refused) {
-        return {
-          ok: false,
-          reason: `plan.strict: ${relocation.refused.typeName} would be type ${relocation.refused.themesBefore + 1} of ${relocation.refused.cap} · nothing written`,
-        };
-      }
       if (relocation && relocation.dailyEdits && relocation.dailyEdits.size > 0) {
         for (const [dailyPath, edit] of relocation.dailyEdits.entries()) {
           const existing = plan.changes.get(dailyPath);

@@ -941,7 +941,7 @@ function planBlockModel({
     hasContent: typeof content === "string",
     hasTasks,
     planText: budget.hasSection
-      ? `TODAY ${budget.themes.count}/${budget.themes.cap} · ${budget.links.count}/${budget.links.cap}`
+      ? `TODAY ${budget.links.count}/${budget.links.cap}`
       : "TODAY –",
     todayTone,
     planTitle: budget.hasSection

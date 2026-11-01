@@ -65982,8 +65982,9 @@ class BobLedgerToolsTaskLinkMarksMixin {
     }
   }
 
-  // metadataCache `changed` / `resolved` and vault `rename` / `delete`
-  // each schedule the one coalesced refresh. Never throws.
+  // metadataCache `changed` / `resolved`, vault `rename` / `delete`, and
+  // Tasks' TODAY_RELOAD_EVENT each schedule the one coalesced refresh.
+  // Never throws.
   setupTaskLinkMarkListeners() {
     try {
       if (typeof this.registerEvent !== "function") {
@@ -65999,6 +66000,18 @@ class BobLedgerToolsTaskLinkMarksMixin {
       if (vault && typeof vault.on === "function") {
         this.registerEvent(vault.on("rename", schedule));
         this.registerEvent(vault.on("delete", schedule));
+      }
+      const workspace = this.app && this.app.workspace;
+      if (
+        workspace &&
+        typeof workspace.on === "function" &&
+        typeof TODAY_RELOAD_EVENT === "string"
+      ) {
+        try {
+          this.registerEvent(workspace.on(TODAY_RELOAD_EVENT, schedule));
+        } catch (error) {
+          // Tasks query reload is best-effort.
+        }
       }
     } catch (error) {
       // Liveness is best-effort.
@@ -66758,7 +66771,8 @@ class BobLedgerToolsTaskLinkMarksResolveMixin {
 // Owned by bob-cli docs/task-link-marks.md (bob-cli-f5 phase reading).
 // The shared resolver and ring host come from the Live Preview phase.
 // Reading post-processing is source-path aware and leaves the vault text
-// untouched. Refreshes only revisit stamped anchors, including popouts.
+// untouched. Refreshes revisit stamped anchors and unstamped Tasks /
+// Dataview query rows, including popouts.
 
 const TASK_LINK_MARK_READING_DETACHED_RETRIES = 3;
 const TASK_LINK_MARK_READING_PENDING_RETRIES = 60;
@@ -67003,7 +67017,27 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
     }
   }
 
-  taskLinkMarkReadingSourcePathFor(anchor, ctx) {
+  // Tasks MarkdownRenderer.render(task.path) runs our post-processor
+  // on a description fragment already inside the query row. Trust that
+  // ctx.sourcePath only then. A parent-note processor (query file path)
+  // must not leak onto nested query rows whose origin is unproven.
+  taskLinkMarkReadingRenderRootIsInsideRow(row, renderRoot) {
+    try {
+      if (!row || !renderRoot) return false;
+      let current = renderRoot;
+      let guard = 0;
+      while (current && guard < 100) {
+        guard += 1;
+        if (current === row) return true;
+        current = current.parentNode || null;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  taskLinkMarkReadingSourcePathFor(anchor, ctx, renderRoot) {
     try {
       const row = typeof taskThemeClosestRow === "function"
         ? taskThemeClosestRow(anchor)
@@ -67012,7 +67046,18 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
         const origin = typeof this.taskThemeOriginFor === "function"
           ? this.taskThemeOriginFor(row, anchor, ctx)
           : null;
-        return origin && typeof origin.path === "string" ? origin.path : "";
+        if (origin && typeof origin.path === "string" && origin.path) {
+          return origin.path;
+        }
+        if (
+          ctx &&
+          typeof ctx.sourcePath === "string" &&
+          ctx.sourcePath &&
+          this.taskLinkMarkReadingRenderRootIsInsideRow(row, renderRoot)
+        ) {
+          return ctx.sourcePath;
+        }
+        return "";
       }
       return ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
     } catch (error) {
@@ -67032,6 +67077,18 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
       return null;
     } catch (error) {
       return null;
+    }
+  }
+
+  // A Tasks/Dataview row pass must not stamp nested child list items
+  // (DEPENDS ON, LINKS, mixed prose). Those rows have their own owners.
+  taskLinkMarkReadingAnchorBelongsToRow(anchor, row) {
+    try {
+      if (!row) return true;
+      const owner = this.taskLinkMarkReadingClosestListItem(anchor);
+      return !owner || owner === row;
+    } catch (error) {
+      return true;
     }
   }
 
@@ -67060,7 +67117,7 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
       // Reading DOM text no longer contains the Markdown bold delimiters
       // that the source-line parsers require. Match only rendered labels
       // at the beginning of a list row, after the optional managed glyph.
-      return /^\s*(?:[-*+]|\d+[.)])\s+(?:(?:⛓️?|🔗|🪢|🧱|🚧|🧩)\s+)?\*{0,2}(?:DEPENDS\s+ON|DEPENDENCIES|BLOCKS|BLOCKING|LINKS(?:\s+TO)?|LINKED\s+FROM|BACKLINKS|SUB-PROJECTS)\b\*{0,2}\s*:?/iu.test(text);
+      return /^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:(?:⛓️?|🔗|🪢|🧱|🚧|🧩)\s+)?\*{0,2}(?:DEPENDS\s+ON|DEPENDENCIES|BLOCKS|BLOCKING|LINKS(?:\s+TO)?|LINKED\s+FROM|BACKLINKS|SUB-PROJECTS)\b\*{0,2}\s*:?/iu.test(text);
     } catch (error) {
       return false;
     }
@@ -67285,14 +67342,21 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
       const resolved = new Map();
       const doc = el.ownerDocument || (this.taskLinkMarkReadingTag(el) === "#DOCUMENT" ? el : null);
       this.taskLinkMarkReadingBindClicks(doc);
+      const renderRow = this.taskLinkMarkReadingTag(el) === "LI" &&
+        this.taskLinkMarkReadingIsQueryRow(el, el)
+        ? el
+        : null;
       for (const anchor of anchors) {
         try {
+          if (renderRow && !this.taskLinkMarkReadingAnchorBelongsToRow(anchor, renderRow)) {
+            continue;
+          }
           if (!this.taskLinkMarkReadingIsCandidate(anchor)) {
             this.taskLinkMarkReadingRemoveAttribute(anchor, "data-bob-task-link-src");
             this.taskLinkMarkReadingRemoveHost(anchor);
             continue;
           }
-          const sourcePath = this.taskLinkMarkReadingSourcePathFor(anchor, ctx);
+          const sourcePath = this.taskLinkMarkReadingSourcePathFor(anchor, ctx, el);
           if (!sourcePath) {
             this.taskLinkMarkReadingRemoveAttribute(anchor, "data-bob-task-link-src");
             this.taskLinkMarkReadingRemoveHost(anchor);
@@ -67410,6 +67474,35 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
     }
   }
 
+  taskLinkMarkReadingQueryRows(root) {
+    const rows = [];
+    try {
+      const add = (node) => {
+        try {
+          if (
+            !node ||
+            this.taskLinkMarkReadingTag(node) !== "LI" ||
+            !this.taskLinkMarkReadingIsQueryRow(node, node)
+          ) {
+            return;
+          }
+          if (rows.indexOf(node) === -1) rows.push(node);
+        } catch (error) {
+          // One bad node never hides the rest.
+        }
+      };
+      add(root);
+      if (root && typeof root.querySelectorAll === "function") {
+        for (const node of Array.from(root.querySelectorAll("li") || [])) {
+          add(node);
+        }
+      }
+    } catch (error) {
+      // Query-row discovery is best-effort.
+    }
+    return rows;
+  }
+
   sweepTaskLinkMarksReading(options = {}) {
     try {
       const resolved = new Map();
@@ -67424,6 +67517,36 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
               continue;
             }
             this.taskLinkMarkReadingReconcile(anchor, sourcePath, { allowSwap, resolved });
+          } catch (error) {
+            continue;
+          }
+        }
+        // Tasks injects `li.plugin-tasks-list-item` after Markdown
+        // post-processing. Stamp unstamped query-row candidates whose
+        // origin path is proven (data-task-path / backlink).
+        for (const row of this.taskLinkMarkReadingQueryRows(doc)) {
+          try {
+            const origin = typeof this.taskThemeOriginFor === "function"
+              ? this.taskThemeOriginFor(row, row, null)
+              : null;
+            const ctx = {
+              sourcePath: origin && typeof origin.path === "string" ? origin.path : "",
+            };
+            for (const anchor of this.taskLinkMarkReadingAnchors(row, "a.internal-link")) {
+              try {
+                if (!this.taskLinkMarkReadingAnchorBelongsToRow(anchor, row)) continue;
+                if (this.taskLinkMarkReadingAttribute(anchor, "data-bob-task-link-src")) {
+                  continue;
+                }
+                if (!this.taskLinkMarkReadingIsCandidate(anchor)) continue;
+                const sourcePath = this.taskLinkMarkReadingSourcePathFor(anchor, ctx, row);
+                if (!sourcePath) continue;
+                this.taskLinkMarkReadingSetAttribute(anchor, "data-bob-task-link-src", sourcePath);
+                this.taskLinkMarkReadingReconcile(anchor, sourcePath, { allowSwap, resolved });
+              } catch (error) {
+                continue;
+              }
+            }
           } catch (error) {
             continue;
           }

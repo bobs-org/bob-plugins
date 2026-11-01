@@ -90,8 +90,9 @@ class BobLedgerToolsTaskLinkMarksMixin {
     }
   }
 
-  // metadataCache `changed` / `resolved` and vault `rename` / `delete`
-  // each schedule the one coalesced refresh. Never throws.
+  // metadataCache `changed` / `resolved`, vault `rename` / `delete`, and
+  // Tasks' TODAY_RELOAD_EVENT each schedule the one coalesced refresh.
+  // Never throws.
   setupTaskLinkMarkListeners() {
     try {
       if (typeof this.registerEvent !== "function") {
@@ -107,6 +108,18 @@ class BobLedgerToolsTaskLinkMarksMixin {
       if (vault && typeof vault.on === "function") {
         this.registerEvent(vault.on("rename", schedule));
         this.registerEvent(vault.on("delete", schedule));
+      }
+      const workspace = this.app && this.app.workspace;
+      if (
+        workspace &&
+        typeof workspace.on === "function" &&
+        typeof TODAY_RELOAD_EVENT === "string"
+      ) {
+        try {
+          this.registerEvent(workspace.on(TODAY_RELOAD_EVENT, schedule));
+        } catch (error) {
+          // Tasks query reload is best-effort.
+        }
       }
     } catch (error) {
       // Liveness is best-effort.

@@ -269,7 +269,9 @@ test("embeds render, while embed headers, metadata, plugin chips, and managed ed
   const chipRow = el(doc, "li", { class: "bob-dep-row" }, chipLink);
   const edgeLink = link(doc, "target.md#^edge");
   const edgeRow = el(doc, "li", {}, "- DEPENDS ON: ", edgeLink);
-  const root = el(doc, "div", {}, header, embed, struck, properties, chipRow, edgeRow);
+  const renderedLinks = link(doc, "target.md#^links");
+  const renderedEdge = el(doc, "li", {}, "🪢 LINKS: ", renderedLinks);
+  const root = el(doc, "div", {}, header, embed, struck, properties, chipRow, edgeRow, renderedEdge);
   processorFor(plugin)(root, { sourcePath: source });
   assert.equal(hostBefore(headerLink), null);
   assert.ok(hostBefore(embedLink));
@@ -277,6 +279,7 @@ test("embeds render, while embed headers, metadata, plugin chips, and managed ed
   assert.equal(hostBefore(propertyLink), null);
   assert.equal(hostBefore(chipLink), null);
   assert.equal(hostBefore(edgeLink), null);
+  assert.equal(hostBefore(renderedLinks), null);
 });
 
 test("Pomodoro ledger links stay unmarked; mixed and deeper rows remain eligible", () => {
@@ -363,6 +366,53 @@ test("a Tasks query row resolves against its own task path; unknown query paths 
   assert.equal(hostBefore(noPathLink), null);
   assert.equal(calls[0].sourcePath, "tasks/own.md");
   assert.equal(calls.some((call) => call.sourcePath === "dash.md"), false);
+});
+
+test("a Tasks description render uses ctx.sourcePath when the query row has no origin path", () => {
+  const doc = makeDocument();
+  const calls = [];
+  const { plugin } = makePlugin(doc, (input) => { calls.push(input); return hitFor(input); });
+  const anchor = link(doc, "areas/work#^ready-1");
+  const description = el(doc, "span", { class: "task-description" }, anchor);
+  const row = el(doc, "li", { class: "plugin-tasks-list-item", "data-task": "*" }, description);
+  processorFor(plugin)(description, { sourcePath: "areas/work.md" });
+  assert.equal(anchor.getAttribute("data-bob-task-link-src"), "areas/work.md");
+  assert.ok(hostBefore(anchor));
+  assert.equal(calls[0].sourcePath, "areas/work.md");
+});
+
+test("a Tasks row pass does not stamp nested DEPENDS ON or LINKS children", () => {
+  const doc = makeDocument();
+  const { plugin } = makePlugin(doc, (input) => hitFor(input));
+  const title = link(doc, "areas/work#^ready-1");
+  const depends = link(doc, "areas/work#^next-1");
+  const links = link(doc, "areas/work#^wip-1");
+  const nested = el(doc, "ul", {}, el(doc, "li", {}, "⛓️ DEPENDS ON: ", depends), el(doc, "li", {}, "🪢 LINKS: ", links));
+  const row = el(doc, "li", { class: "plugin-tasks-list-item", "data-task": " " }, title, nested);
+  processorFor(plugin)(row, { sourcePath: "managed.md" });
+  assert.ok(hostBefore(title));
+  assert.equal(hostBefore(depends), null);
+  assert.equal(hostBefore(links), null);
+});
+
+test("sweep stamps Tasks query rows that appear after the Markdown post-processor", () => {
+  const doc = makeDocument();
+  const { plugin } = makePlugin(doc, (input) => hitFor(input));
+  const root = el(doc, "div", {});
+  doc.body.appendChild(root);
+  processorFor(plugin)(root, { sourcePath: "queries.md" });
+  const anchor = link(doc, "areas/work#^ready-1");
+  const row = el(
+    doc,
+    "li",
+    { class: "plugin-tasks-list-item", "data-task": "*", "data-task-path": "areas/work.md" },
+    anchor,
+  );
+  root.appendChild(row);
+  assert.equal(hostBefore(anchor), null);
+  plugin.sweepTaskLinkMarksReading();
+  assert.equal(anchor.getAttribute("data-bob-task-link-src"), "areas/work.md");
+  assert.ok(hostBefore(anchor));
 });
 
 test("stamped-anchor sweep updates in place and removes marks when targets stop resolving", () => {

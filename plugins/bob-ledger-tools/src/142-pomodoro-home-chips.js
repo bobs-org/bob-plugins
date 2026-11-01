@@ -902,13 +902,24 @@ function buildPomodoroHomeChipElement(doc, model) {
     const chip = doc.createElement("span");
     chip.setAttribute("class", "bob-pomodoro-home-chip");
     chip.setAttribute("role", "img");
-    chip.setAttribute("aria-label", `Pomodoro home: ${model.label}`);
+    chip.setAttribute(
+      "aria-label",
+      `Pomodoro home: ${model.label}${model.untracked ? " (untracked)" : ""}`,
+    );
     chip.setAttribute("data-home-state", model.state || "forecast");
     if (model.hue) {
       chip.setAttribute("data-home-hue", model.hue);
     }
-    if (model.tooltip) {
-      chip.setAttribute("title", model.tooltip);
+    // An untracked session is on the calendar and off the clock: the chip
+    // is outlined with a dashed line and says so in its tooltip.
+    if (model.untracked) {
+      chip.setAttribute("data-home-untracked", "true");
+    }
+    const tooltip = [model.untracked ? "untracked · not counted" : "", model.tooltip || ""]
+      .filter(Boolean)
+      .join("\n");
+    if (tooltip) {
+      chip.setAttribute("title", tooltip);
     }
     const dot = doc.createElement("span");
     dot.setAttribute("class", "bob-pomodoro-home-dot");

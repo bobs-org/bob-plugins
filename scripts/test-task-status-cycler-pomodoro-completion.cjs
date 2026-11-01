@@ -966,3 +966,23 @@ test("deferred-only successor relocation uses the inserted placeholder", () => {
   );
 });
 
+
+test("Ctrl+Enter closes an untracked Pomodoro without adding [t::] or touching its span", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] (**1200-1300**) — MEET",
+    "  - [[#^lunch]]",
+    "- [ ] () — BOB",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  const replacements = new Map(
+    plan.edits
+      .filter((edit) => edit.type === "replaceLine")
+      .map((edit) => [edit.line, edit.lineText]),
+  );
+  assert.equal(replacements.get(1), "- [x] (**1200-1300**) — MEET");
+  for (const text of replacements.values()) {
+    assert.equal(text.includes("[t::"), false);
+  }
+});

@@ -596,7 +596,13 @@ function changePomodoroLineUnits(line, units) {
     0,
     currentMinutes + numericOrDefault(units, 0) * STEP_MINUTES,
   );
-  const metadata = durationMetadata(nextMinutes, range.metadata);
+  // A timed row without [t::] (or the legacy stopwatch) is an untracked
+  // session: it stays untracked, so its other metadata is left untouched.
+  const rangeText = String(line || "").slice(range.startCh, range.endCh);
+  const untracked = !durationField(rangeText) && !legacyStopwatchDuration(rangeText);
+  const metadata = untracked
+    ? range.metadata
+    : durationMetadata(nextMinutes, range.metadata);
   const nextEndMinutes = addMinutes(range.startMinutes, nextMinutes);
   const text = String(line || "");
   const newRange = formatTimeRange(

@@ -9,6 +9,7 @@ const GCAL_EVENTS_REFRESH_MS = 60000;
 // so age never paints it stale.
 const GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES = null;
 const GCAL_EVENTS_STAMP_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const GCAL_EVENTS_UNTRACKED_TITLE = "Untracked · on the calendar, off the clock";
 const GCAL_EVENTS_PALETTE = [
   "blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red",
 ];
@@ -233,6 +234,9 @@ function gcalEventsScanMarkdown(lines, options = {}) {
       const at = line.indexOf(badge);
       if (at >= 0) badges.push({ badge, start: at, end: at + badge.length });
     }
+    // `#untracked` marks an Event Task whose session is off the clock; only
+    // task rows carry it (context rows are stripped of the token by sync).
+    const untrackedTag = isTask ? eventTaskUntrackedTagRange(line) : null;
     rows.push({
       line: index,
       kind: isTask ? "task" : "context",
@@ -244,6 +248,8 @@ function gcalEventsScanMarkdown(lines, options = {}) {
       state: gcalEventsTimeState(time, opts.nowMinutes, opts.isToday === true, isTask),
       tags,
       badges,
+      untracked: untrackedTag !== null,
+      untrackedTag,
     });
   }
   return { section, rows, stamp };
@@ -555,7 +561,24 @@ class BobLedgerToolsGcalEventsMixin {
           const attributes = { "data-time": row.time };
           if (row.state) attributes["data-state"] = row.state;
           if (row.state === "running" && hue) attributes["data-theme-hue"] = hue;
+          if (row.untracked) attributes["data-untracked"] = "true";
           decorations.push({ from: base + row.timeStart, to: base + row.timeEnd, decoration: Decoration.mark({ class: "bob-calendar-event-time", attributes }) });
+        }
+        if (row.untrackedTag) {
+          const { start, end } = row.untrackedTag;
+          decorations.push({
+            from: base + start,
+            to: base + end,
+            decoration: Decoration.mark({
+              class: "bob-calendar-event-untracked",
+              attributes: { title: GCAL_EVENTS_UNTRACKED_TITLE, "data-untracked": "true" },
+            }),
+          });
+          decorations.push({
+            from: base + start,
+            to: base + start + 1,
+            decoration: Decoration.mark({ class: "bob-calendar-event-untracked-hash" }),
+          });
         }
         for (const tag of row.tags) {
           decorations.push({ from: base + tag.start, to: base + tag.end, decoration: Decoration.mark({ class: "bob-calendar-event-tag", attributes: { "data-tag": tag.name } }) });
@@ -687,6 +710,7 @@ class BobLedgerToolsGcalEventsMixin {
           for (const link of links || []) {
             if (/[📅📹📍]/.test(String(link.textContent || "")) && link.classList) link.classList.add("bob-calendar-event-badge");
           }
+          if (isTask) this.calendarEventPaintUntrackedTag(row, timeEl);
           const record = { path: sourcePath, time, isTask, timeEl };
           this.calendarEventReadingRoots.add(record);
           this.calendarEventSetReadingState(record);
@@ -702,6 +726,31 @@ class BobLedgerToolsGcalEventsMixin {
     } catch (error) {
       // Reading view painting is best-effort and never writes the note.
     }
+  }
+
+  // Reading view renders `#untracked` as a tag link. Mark it, fold its `#`
+  // into a hidden span, and dash the row's time pill. The note is untouched.
+  calendarEventPaintUntrackedTag(row, timeEl) {
+    try {
+      const tags = row.querySelectorAll ? row.querySelectorAll("a.tag") : [];
+      for (const tag of tags || []) {
+        const text = String(tag.textContent || "").trim();
+        if (!/^#untracked$/i.test(text)) continue;
+        if (tag.classList) tag.classList.add("bob-calendar-event-untracked");
+        tag.setAttribute("data-untracked", "true");
+        tag.setAttribute("title", GCAL_EVENTS_UNTRACKED_TITLE);
+        const doc = tag.ownerDocument;
+        if (doc && typeof doc.createElement === "function" && typeof tag.replaceChildren === "function") {
+          const hash = doc.createElement("span");
+          hash.className = "bob-calendar-event-untracked-hash";
+          hash.textContent = "#";
+          tag.replaceChildren(hash, doc.createTextNode(text.slice(1)));
+        }
+        if (timeEl) timeEl.setAttribute("data-untracked", "true");
+        return true;
+      }
+    } catch (error) {}
+    return false;
   }
 
   calendarEventFollowsEventsHeading(node) {

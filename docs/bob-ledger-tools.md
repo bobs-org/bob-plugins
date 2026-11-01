@@ -12,10 +12,10 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.81.1 |
+| Version | 1.82.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Expand Bob daily-note snippets and ledger time ranges, navigate and adjust Pomodoro entries, render the live plan-budget bob-plan block, track task freshness including [unblocked::] TICKLERs, render [priority::] fields as signal-bar priority marks, render created/scheduled/completion/cancelled dates and `[repeat:: …]` rules as compact date-family marks (including date and recurrence marks in full and short Tasks query results), render `#task` tags as a teal hash task-tag mark (hidden in Tasks query results) and `#task #ref` pairs as an open-book ref mark, and render canonical `#task #gtd #pre` / `#task #gtd #post` runs as teal sunrise / flag identity marks across Live Preview, reading view, and Tasks rows. Render Depends-On lines as live dependency chips plus generated BLOCKS rows with live dependents, last-blocker keys, stale-entry styling, and frees-N summaries. Open BLOCKS rows add ＋ / hover × through nav api.blocks when present. Index raw task LINKS rows plus inert text mentions through api.relationIndex v2, with unsaved editor overlays, typed linkedFrom rows, a pure scanMentions helper, and label suggestions. Render Task Links under today's open Pomodoros with In Progress half-ring marks and read-time unblocked hand-off glyphs. Fetch `bob stats` JSON with stale-while-revalidate caching and render the responsive Stats page `bob-stats` block with metric-family context, accessible daily drill-down, definition disclosures, tiles, window time bars, and table. Fetch `bob ref list` JSON with a bounded stale-while-revalidate cache, decode audio paths, and provide pure Reading Board lane, card, Snoozed group, ordering, and validated fence models. Render the read-only `bob-reading-board` code block, a Reading / Next / Ready / Snoozed kanban of the reading queue drawn entirely from `bob ref list` JSON (wake dates and waiting-on reasons from bob, never from vault text), with keyed background refresh errors, repaint-safe navigation, roving keyboard focus, click and modifier routing to Obsidian navigation, the optional Highlights PDF hand-off through nav `openReferencePdf`, and the Open Reading Board command. Derive quiet lowercase Pomodoro home chips that name each linked task's root parent in Live Preview and Reading view, with area-hue dots, a tooltip, and a toggle. Show a display-only 🍅 Today mark on open task lines linked under today's open Pomodoros in Live Preview and Reading view, with a session toggle and jumps to the Task Link. Task relation lines are excluded from the plan Task Link count. Render 🪢 LINKS and LINKED FROM rows as live relation chips from that index, with label pills, inverse phrases, stale and broken styling, closed-row collapse, and ＋ / hover × through nav api.relations v1 when present. While the cursor is on a review row, the footer shows the Alt+P roll preview from nav api.quickRoll v1 in its hint slot and full sentence in its tooltip, with each review group painted in its tier color. In source-note Live Preview and Reading view, the freshness mark tooltip adds a `🥀 N keeps logged · last <date> — <reason>` line from the task's Rotten Log, counting `kept in Next` entries too; Tasks and Dataview query rows never show it. Share the task type catalog through api.themes v1 and render Pomodoro name type pills with stable hues in Live Preview, Reading view, the plan block, and the Stats Types panel, with a session toggle; render explicit [type:: NAME] task fields as a colored #TYPE in the #task slot (folding the field, no trailing pill) with inherited-type and type-mark session toggles, mark disagreeing Task Links in today's ledger, and keep type colors active in every window. Render the read-only Day strip above the bob-plan badges of canonical daily notes with a quiet typical-day line under each numeric fact, support the bob-day-stats fence, and provide the Toggle Day stats session command and the Cycle Day stats bars command. api.laneWalk v2 serves the Pending/Next/Ready-off-Today walk list behind the navigation ]w / [w and ]W / [W keys. Run quiet `bob gcal sync` after the current daily note is created and paint Event Tasks and context rows in Live Preview and Reading view. Render a small status ring in front of every rendered link whose target is a `#task` line, with a session toggle. |
+| Description | Expand Bob daily-note snippets and ledger time ranges, navigate and adjust Pomodoro entries, render the live plan-budget bob-plan block, track task freshness including [unblocked::] TICKLERs, render [priority::] fields as signal-bar priority marks, render created/scheduled/completion/cancelled dates and `[repeat:: …]` rules as compact date-family marks (including date and recurrence marks in full and short Tasks query results), render `#task` tags as a teal hash task-tag mark (hidden in Tasks query results) and `#task #ref` pairs as an open-book ref mark, and render canonical `#task #gtd #pre` / `#task #gtd #post` runs as teal sunrise / flag identity marks across Live Preview, reading view, and Tasks rows. Render Depends-On lines as live dependency chips plus generated BLOCKS rows with live dependents, last-blocker keys, stale-entry styling, and frees-N summaries. Open BLOCKS rows add ＋ / hover × through nav api.blocks when present. Index raw task LINKS rows plus inert text mentions through api.relationIndex v2, with unsaved editor overlays, typed linkedFrom rows, a pure scanMentions helper, and label suggestions. Render Task Links under today's open Pomodoros with In Progress half-ring marks and read-time unblocked hand-off glyphs. Fetch `bob stats` JSON with stale-while-revalidate caching and render the responsive Stats page `bob-stats` block with metric-family context, accessible daily drill-down, definition disclosures, tiles, window time bars, and table. Fetch `bob ref list` JSON with a bounded stale-while-revalidate cache, decode audio paths, and provide pure Reading Board lane, card, Snoozed group, ordering, and validated fence models. Render the read-only `bob-reading-board` code block, a Reading / Next / Ready / Snoozed kanban of the reading queue drawn entirely from `bob ref list` JSON (wake dates and waiting-on reasons from bob, never from vault text), with keyed background refresh errors, repaint-safe navigation, roving keyboard focus, click and modifier routing to Obsidian navigation, the optional Highlights PDF hand-off through nav `openReferencePdf`, and the Open Reading Board command. Derive quiet lowercase Pomodoro home chips that name each linked task's root parent in Live Preview and Reading view, with area-hue dots, a tooltip, and a toggle. Show a display-only 🍅 Today mark on open task lines linked under today's open Pomodoros in Live Preview and Reading view, with a session toggle and jumps to the Task Link. Task relation lines are excluded from the plan Task Link count. Render 🪢 LINKS and LINKED FROM rows as live relation chips from that index, with label pills, inverse phrases, stale and broken styling, closed-row collapse, and ＋ / hover × through nav api.relations v1 when present. While the cursor is on a review row, the footer shows the Alt+P roll preview from nav api.quickRoll v1 in its hint slot and full sentence in its tooltip, with each review group painted in its tier color. In source-note Live Preview and Reading view, the freshness mark tooltip adds a `🥀 N keeps logged · last <date> — <reason>` line from the task's Rotten Log, counting `kept in Next` entries too; Tasks and Dataview query rows never show it. Share the task type catalog through api.themes v1 and render Pomodoro name type pills with stable hues in Live Preview, Reading view, the plan block, and the Stats Types panel, with a session toggle; render explicit [type:: NAME] task fields as a colored #TYPE in the #task slot (folding the field, no trailing pill) with inherited-type and type-mark session toggles, mark disagreeing Task Links in today's ledger, and keep type colors active in every window. Render the read-only Day strip above the bob-plan badges of canonical daily notes with a quiet typical-day line under each numeric fact, support the bob-day-stats fence, and provide the Toggle Day stats session command and the Cycle Day stats bars command. api.laneWalk v2 serves the Pending/Next/Ready-off-Today walk list behind the navigation ]w / [w and ]W / [W keys. Run quiet `bob gcal sync` after the current daily note is created and paint Event Tasks and context rows (a dashed time pill and mark for `#untracked` Event Tasks) in Live Preview and Reading view, with `se<X>` starts that follow a MEET's event run and warn before running into an event. Render a small status ring in front of every rendered link whose target is a `#task` line, with a session toggle. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -62,6 +62,34 @@ hyphen to an em dash plus a trailing space; existing suffix whitespace is left
 alone, and `--`, `---`, and longer hyphen runs are untouched so Markdown
 thematic breaks, YAML frontmatter delimiters, and other multi-hyphen text keep
 Obsidian's normal Tab behavior.
+
+### Calendar-aware starts
+
+`se<X>` + Tab inside a Pomodoro `()` mirrors `bob capture`'s `=<X>` for calendar
+sessions, pinned by bob-cli's shared `meet_event_run` vectors.
+
+On a session named `MEET`, an empty `se` follows the session's **event run**:
+the earliest open, not-yet-ended Event Task linked as a plain same-note
+`[[#^id]]` child, plus every following one that touches or overlaps it and
+shares its trackedness. The range is the run's real span, and a late join starts
+where today's latest closed session ended. A run that starts more than 25 minutes
+away still writes its future start and raises a Notice
+(`pomodoro_event_run_later`) naming the `se5` escape hatch. A counted `se5` keeps
+its explicit span.
+
+Every `se<X>` on a MEET also follows the `[t::]` rule: a timed row **with**
+`[t:: Nm]` is tracked, and a timed row **without** it is an *untracked session*,
+on the calendar and off the clock. `[t::]` is omitted exactly when the event run
+is non-empty and untracked (an `#untracked` Event Task); every other session is
+tracked. Swapping sessions and `~K` drops are capture-only gestures.
+
+Starting, extending, or shifting a non-MEET session raises a Notice when its new
+span newly crosses the start of an open Event Task that is not in its own lineup
+(`pomodoro_runs_past_event`): `⚠ BOB 1150-1215 runs 15m into Standup (1200-1230) ·
+se2 ends at 1200`. It covers `se<X>` + Tab, `N\p`, `N\o`, and `N\O`; `N\P`
+and closes never warn, and the write is never blocked. `N\p`, `N\P`, `N\o`,
+and `N\O` keep an untracked row untracked, and `Ctrl+Enter` closes it without
+adding `[t::]`.
 
 The plugin also renders a live `bob-plan` block: a `TODAY 7/10` chip for the
 Task Link budget (its tooltip lists each type with its link count),
@@ -180,7 +208,7 @@ cap), the CROWDED chip, the `bob-ready-notes` ranked-bar block, `## Tasks`
 heading chips, Pomodoro home chips (quiet lowercase chips with area-hue dots
 that name each linked task's root parent, so a project and its sub-projects read as one
 root, following each task's `[root:: NOTE]` field; the tooltip lists each root's tasks and
-minutes), Pomodoro type pills (one soft tint per
+minutes, and an untracked session's chip is dashed with "untracked · not counted" first), Pomodoro type pills (one soft tint per
 `+`-separated component of the ` — NAME` tail, with a gray pill for exempt
 types such as PLAN, a tooltip naming the hue and day count, and a session
 toggle now active in every window through the shared tint gate), and the display-only 🍅 Today mark on open
@@ -342,6 +370,16 @@ paints as a muted caption; it shows the last `bob gcal sync` run; sync runs on
 demand, so the painter never marks it stale. On today's note, a meeting in progress gets the MEET hue and a past
 meeting dims. The clock refreshes once a minute while today's note is active.
 Painting reads the note and never changes it.
+
+An Event Task carrying a standalone `#untracked` tag (sync writes it for a
+Google event tagged `#untracked`; hand-written rows may carry it too) is *off
+the clock*: its tag paints as a quiet mark (a `timer-off` icon and the word
+"untracked" in muted ink with a dashed outline, tooltip "Untracked · on the
+calendar, off the clock") and its time pill switches to a dashed outline, in
+Live Preview and Reading view. The `#` is folded away unless the cursor is on
+the line. A `#untracked` inside a code span or Markdown link is not a tag. The
+session that links such an event is written without `[t::]`, so its Pomodoro
+home chip is dashed too and its tooltip leads with "untracked · not counted".
 
 `Ctrl+9` reuses an already open tab showing today's daily note in any window
 before using the current tab or opening a new one, including a background tab

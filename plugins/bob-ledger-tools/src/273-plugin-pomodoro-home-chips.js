@@ -23,7 +23,7 @@ if (WidgetType && typeof WidgetType === "function") {
     constructor(model) {
       super();
       this.model = model || {};
-      this.key = `${this.model.chip || ""}|${this.model.state || ""}|${this.model.hue || ""}|${this.model.tooltip || ""}`;
+      this.key = `${this.model.chip || ""}|${this.model.state || ""}|${this.model.hue || ""}|${this.model.untracked ? "untracked" : ""}|${this.model.tooltip || ""}`;
     }
 
     eq(other) {

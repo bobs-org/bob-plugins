@@ -210,17 +210,38 @@ class BobLedgerToolsVimSnippetsMixin {
       return false;
     }
 
-    return replaceEditorLine(cm, target.line, target.lineText, newLineText);
+    const replaced = replaceEditorLine(cm, target.line, target.lineText, newLineText);
+    if (replaced && units > 0) {
+      this.noticeEventRewrite(lines, target.line, "extend", target.entry.range, newLineText);
+    }
+    return replaced;
+  }
+
+  // Mirror of bob capture's run-past-event warning for `\p`, `\o`, `\O`.
+  // The notice never blocks the write.
+  noticeEventRewrite(lines, line, kind, oldRange, newLineText) {
+    try {
+      const notice = eventRunRewriteNotice(lines, line, kind, oldRange, parseTimeRange(newLineText));
+      if (notice) {
+        new Notice(notice.message);
+      }
+    } catch (error) {
+      // Notices are advisory.
+    }
   }
 
   offsetPomodoroRange(cm, minutes) {
-    return this.rewritePomodoroRange(cm, (range) => ({
-      startMinutes: addMinutes(range.startMinutes, minutes),
-      endMinutes: addMinutes(range.endMinutes, minutes),
-    }));
+    return this.rewritePomodoroRange(
+      cm,
+      (range) => ({
+        startMinutes: addMinutes(range.startMinutes, minutes),
+        endMinutes: addMinutes(range.endMinutes, minutes),
+      }),
+      minutes > 0 ? "later" : "earlier",
+    );
   }
 
-  rewritePomodoroRange(cm, buildRange) {
+  rewritePomodoroRange(cm, buildRange, kind = null) {
     const lines = getEditorLines(cm);
     const cursorLine = getEditorCursorLine(cm);
     if (!lines || cursorLine === null) {
@@ -247,7 +268,11 @@ class BobLedgerToolsVimSnippetsMixin {
       return false;
     }
 
-    return replaceEditorLine(cm, target.line, target.lineText, newLineText);
+    const replaced = replaceEditorLine(cm, target.line, target.lineText, newLineText);
+    if (replaced && kind) {
+      this.noticeEventRewrite(lines, target.line, kind, target.entry.range, newLineText);
+    }
+    return replaced;
   }
 
   expandFromActiveEditor(cmView) {
@@ -281,6 +306,14 @@ class BobLedgerToolsVimSnippetsMixin {
         line: expansion.line,
         ch: expansionCursorCh(expansion),
       });
+    }
+
+    for (const notice of expansion.notices || []) {
+      try {
+        new Notice(notice.message);
+      } catch (error) {
+        // Notices are advisory.
+      }
     }
 
     return true;
@@ -321,7 +354,34 @@ class BobLedgerToolsVimSnippetsMixin {
 
     const line = editor.getLine(cursor.line);
     const expansion = findExpansion(line, cursor.ch);
+    if (!expansion) {
+      return null;
+    }
 
-    return expansion ? { ...expansion, line: cursor.line } : null;
+    const located = { ...expansion, line: cursor.line };
+    return this.applyEventRunToEditorExpansion(editor, located);
+  }
+
+  // `se<X>` on a MEET follows the session's event run and the [t::] rule; on
+  // any other session it only raises the run-past-event notice. Anything
+  // that goes wrong leaves the plain expansion alone.
+  applyEventRunToEditorExpansion(editor, located) {
+    try {
+      if (!/^se/.test(String(located.trigger || ""))) {
+        return located;
+      }
+      const lines = getEditorLines(editor);
+      if (!lines) {
+        return located;
+      }
+      const adjusted = applyEventRunToExpansion(lines, located.line, located, new Date());
+      return {
+        ...adjusted.expansion,
+        line: located.line,
+        notices: adjusted.notices,
+      };
+    } catch (error) {
+      return located;
+    }
   }
 }

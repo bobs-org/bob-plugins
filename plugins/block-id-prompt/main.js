@@ -4620,13 +4620,29 @@ function normalizeWorkSummary(value) {
     .replace(/\s+/g, " ");
 }
 
-function formatWorkLogEntry(summary, dateParts) {
+// Work Log stamps are `YYYY-MM-DD HH:MM` in the writer's local wall-clock
+// time, truncated to the minute (never rounded). See bob-cli
+// `docs/reference/vault-format.md` for the canonical vault grammar. The
+// stamp is the write instant: callers read the clock once per gesture, at
+// commit, and format it once.
+function formatWorkLogStamp(date) {
+  const current = date instanceof Date ? date : new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const day = formatCalendarDate({
+    year: current.getFullYear(),
+    month: current.getMonth() + 1,
+    day: current.getDate(),
+  });
+  return `${day} ${pad(current.getHours())}:${pad(current.getMinutes())}`;
+}
+
+function formatWorkLogEntry(summary, stampText) {
   const normalizedSummary = normalizeWorkSummary(summary);
   if (!normalizedSummary) {
     return "";
   }
 
-  return `${WORK_LOG_ENTRY_EMPHASIS}${formatCalendarDate(dateParts)}${WORK_LOG_ENTRY_EMPHASIS}${WORK_LOG_ENTRY_SEPARATOR}${normalizedSummary}`;
+  return `${WORK_LOG_ENTRY_EMPHASIS}${String(stampText || "")}${WORK_LOG_ENTRY_EMPHASIS}${WORK_LOG_ENTRY_SEPARATOR}${normalizedSummary}`;
 }
 
 function workSummaryContainsDataviewInlineField(value) {
@@ -4635,11 +4651,13 @@ function workSummaryContainsDataviewInlineField(value) {
 
 function workSummaryPromptState(value, options = {}) {
   const summary = normalizeWorkSummary(value);
-  const date = options.date || localTodayParts(options.now);
-  const formattedEntry = summary ? formatWorkLogEntry(summary, date) : "";
+  // The preview formats the clock at render time; the written stamp is read
+  // again at commit.
+  const stamp = options.stamp || formatWorkLogStamp(options.now);
+  const formattedEntry = summary ? formatWorkLogEntry(summary, stamp) : "";
   return {
     summary,
-    date,
+    stamp,
     formattedEntry,
     isBlank: summary.length === 0,
     hasDataviewWarning: summary.includes("::"),
@@ -4889,7 +4907,7 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary, options = {
       content,
       edits: [],
       summary,
-      workLogDate: null,
+      workLogStamp: null,
       workLogFormattedEntry: "",
       workLogEntryAdded: false,
       workLogInsertLine: null,
@@ -4897,8 +4915,8 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary, options = {
     };
   }
 
-  const workLogDate = options.date || localTodayParts(options.now);
-  const workLogFormattedEntry = formatWorkLogEntry(summary, workLogDate);
+  const workLogStamp = options.stamp || formatWorkLogStamp(options.now);
+  const workLogFormattedEntry = formatWorkLogEntry(summary, workLogStamp);
 
   const lines = content.split("\n");
   if (!Number.isInteger(taskLine) || taskLine < 0 || taskLine >= lines.length) {
@@ -4953,7 +4971,7 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary, options = {
     content: applyTextEdits(content, edits),
     edits,
     summary,
-    workLogDate,
+    workLogStamp,
     workLogFormattedEntry,
     workLogEntryAdded: true,
     workLogInsertLine,
@@ -13629,7 +13647,6 @@ class WorkSummaryPromptModal extends Modal {
     super(app);
     this.plugin = plugin;
     this.source = source;
-    this.workLogDate = localTodayParts(plugin.now());
     this.completed = false;
     this.submitting = false;
     this.inputEl = null;
@@ -13733,7 +13750,7 @@ class WorkSummaryPromptModal extends Modal {
     }
 
     const state = workSummaryPromptState(this.inputEl ? this.inputEl.value : "", {
-      date: this.workLogDate,
+      now: this.plugin.now(),
     });
     if (this.primaryButton && typeof this.primaryButton.setButtonText === "function") {
       this.primaryButton.setButtonText(state.primaryButtonText);
@@ -13757,7 +13774,7 @@ class WorkSummaryPromptModal extends Modal {
       });
       entryEl.createEl("em", {
         cls: "bid-wlp-preview-date",
-        text: formatCalendarDate(state.date),
+        text: state.stamp,
       });
       entryEl.createSpan({
         cls: "bid-wlp-preview-separator",
@@ -13781,10 +13798,11 @@ class WorkSummaryPromptModal extends Modal {
 
     this.submitting = true;
     try {
+      // The stamp is read at commit inside submitPomodoroWorkSummary, never
+      // at the time the prompt opened.
       const accepted = await this.plugin.submitPomodoroWorkSummary(
         this.source,
         this.inputEl ? this.inputEl.value : "",
-        { workLogDate: this.workLogDate },
       );
       if (accepted) {
         this.completed = true;
@@ -15377,14 +15395,15 @@ class BlockIdPromptPomodoroLinksMixin {
   // cancelWorkSummaryPrompt, leaving everything untouched.
   async submitPomodoroWorkSummary(source, rawSummary, options = {}) {
     const normalizedSummary = normalizeWorkSummary(rawSummary);
-    const workLogDate = normalizedSummary
-      ? options.workLogDate || localTodayParts(this.now())
+    // One clock read per gesture, at commit (Enter in the prompt).
+    const workLogStamp = normalizedSummary
+      ? options.workLogStamp || formatWorkLogStamp(this.now())
       : null;
     if (source.kind === TASK_LINK_OPEN_SOURCE_KIND) {
       try {
         return await this.applyTaskLinkOpen(source, {
           workSummary: normalizedSummary,
-          workLogDate,
+          workLogStamp,
         });
       } catch (error) {
         return false;
@@ -15394,7 +15413,7 @@ class BlockIdPromptPomodoroLinksMixin {
     try {
       const result = await this.applyPomodoroTaskUnlink(source, {
         workSummary: normalizedSummary,
-        workLogDate,
+        workLogStamp,
       });
       if (result === false && source && source.inboxRouteCancelled === true) {
         source.inboxRouteCancelled = false;
@@ -15632,7 +15651,7 @@ class BlockIdPromptPomodoroLinksMixin {
     let workLogPlan = null;
     if (normalizedSummary) {
       workLogPlan = planWorkLogInsertion(taskContent, source.line, normalizedSummary, {
-        date: options.workLogDate || localTodayParts(this.now()),
+        stamp: options.workLogStamp || formatWorkLogStamp(this.now()),
       });
       if (!workLogPlan) {
         new Notice(`Unlink stopped: selected task changed in ${source.sourcePath}`);
@@ -17705,7 +17724,7 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     let workLogPlan = null;
     if (target.status === "/" && normalizedSummary) {
       workLogPlan = planWorkLogInsertion(target.content, target.line, normalizedSummary, {
-        date: options.workLogDate || localTodayParts(this.now()),
+        stamp: options.workLogStamp || formatWorkLogStamp(this.now()),
       });
       if (!workLogPlan) {
         new Notice(`Task link stopped: linked task changed in ${target.path}`);
@@ -19040,6 +19059,7 @@ module.exports.helpers = {
   formatCalendarDate,
   formatDailyDate,
   formatWorkLogEntry,
+  formatWorkLogStamp,
   getCaretCompletionDestination,
   getDailyNotesOptions,
   identityFreshStampLine,
@@ -19165,6 +19185,7 @@ module.exports.helpers = {
   findOpenPromptTargetEditors,
   getDirectAddPromptRootLine,
   BlockIdPromptModal,
+  WorkSummaryPromptModal,
   TaskLinkPickerModal,
   appendTaskWikilinkTitle,
   renderTaskWikilinkRow,

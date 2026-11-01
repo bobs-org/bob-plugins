@@ -76,9 +76,12 @@ open entries it empties.
 A linked task unlinks instead: its links under today's open Pomodoros are
 removed without changing closed history, and the checkbox is never written.
 Unlinking an In Progress task first opens an optional work-summary prompt titled
-`Unlink task`; a nonblank summary is recorded as a locally dated entry such as
-`*2026-08-15* — Added coverage` under a tab-indented managed `🛠️ **WORK LOG**`
-child bullet.
+`Unlink task`; a nonblank summary is recorded as an entry stamped with the
+local minute it was written, such as `*2026-08-15 14:32* — Added coverage`,
+under a tab-indented managed `🛠️ **WORK LOG**` child bullet. The prompt's
+preview shows the stamp live, but the written stamp is read once at commit
+(Enter), so a prompt left open across midnight stamps the commit time. Older
+date-only entries are never rewritten.
 
 ## Linking any task with `((`
 

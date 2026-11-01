@@ -380,7 +380,7 @@ function planEventTaskClockRewrites(lines, pomodoroLine, section, options = {}) 
 }
 
 class TaskStatusCyclerEventTaskClockMixin {
-  // Overridable seams for tests (mirrors `getPomodoroWorkLogDateString`).
+  // Overridable seams for tests (mirrors `getPomodoroWorkLogStamp`).
   getEventTaskClockTodayPath() {
     try {
       return todayDailyPath(this.app);

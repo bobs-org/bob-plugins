@@ -962,7 +962,7 @@ const LIVE_DAILY = helpers.todayDailyPath({}, LIVE_NOW);
 function makePlugin(harness, editor, path) {
   const plugin = new TaskStatusCyclerPlugin();
   plugin.getScheduleLogDateString = () => LIVE_TODAY;
-  plugin.getPomodoroWorkLogDateString = () => LIVE_TODAY;
+  plugin.getPomodoroWorkLogStamp = () => `${LIVE_TODAY} 12:00`;
   plugin.scheduleCenterEditorLineInView = () => {};
   attachActiveMarkdownView(plugin, harness, editor, path);
   if (!harness.app.commands) {

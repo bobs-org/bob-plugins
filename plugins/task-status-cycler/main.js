@@ -722,25 +722,37 @@ function childIndentUnitForIndent(parentIndent) {
   return indent && !indent.includes("\t") ? indent : CHILD_BULLET_INDENT_UNIT;
 }
 
-function formatWorkLogEntryBody(summary, dateString) {
-  return `${WORK_LOG_ENTRY_EMPHASIS}${dateString}${WORK_LOG_ENTRY_EMPHASIS}${WORK_LOG_ENTRY_SEPARATOR}${summary}`;
+// Work Log stamps are `YYYY-MM-DD HH:MM` in the writer's local wall-clock
+// time, truncated to the minute (never rounded). See bob-cli
+// `docs/reference/vault-format.md` for the canonical vault grammar. The
+// stamp is the write instant: one clock read per Pomodoro close, formatted
+// once (see getPomodoroWorkLogStamp).
+function formatWorkLogStamp(date) {
+  const current = date instanceof Date ? date : new Date();
+  const hour = String(current.getHours()).padStart(2, "0");
+  const minute = String(current.getMinutes()).padStart(2, "0");
+  return `${formatLocalDate(current)} ${hour}:${minute}`;
+}
+
+function formatWorkLogEntryBody(summary, stampText) {
+  return `${WORK_LOG_ENTRY_EMPHASIS}${stampText}${WORK_LOG_ENTRY_EMPHASIS}${WORK_LOG_ENTRY_SEPARATOR}${summary}`;
 }
 
 // Renders a Task Link sub-bullet's collected descendant tree (see
 // collectPomodoroWorkLogDescendantTree) as Work Log entry lines: each depth-1
-// node becomes a dated `*<date>* — <body>` entry at `entryIndent`, and its
+// node becomes a stamped `*<stamp>* — <body>` entry at `entryIndent`, and its
 // deeper descendants are carried beneath it, keeping their relative depth,
 // re-indented one childIndentUnitForIndent step per level. A node whose body
 // is empty after trimming is dropped along with its whole subtree, since a
-// deeper node without a dated parent has nothing to hang beneath.
-function buildWorkLogEntryLines(descendantRoots, entryIndent, entryMarker, dateString) {
+// deeper node without a stamped parent has nothing to hang beneath.
+function buildWorkLogEntryLines(descendantRoots, entryIndent, entryMarker, stampText) {
   const lines = [];
   for (const node of descendantRoots || []) {
     if (!node.bodyText) {
       continue;
     }
     lines.push(
-      `${entryIndent}${entryMarker} ${formatWorkLogEntryBody(node.bodyText, dateString)}`,
+      `${entryIndent}${entryMarker} ${formatWorkLogEntryBody(node.bodyText, stampText)}`,
     );
     appendWorkLogChildLines(node.children, entryIndent, lines);
   }
@@ -779,7 +791,7 @@ function appendWorkLogChildLines(children, parentIndent, lines) {
 // each independently prepending above the other. When present it skips
 // marker detection and appends immediately after the prior group's entries,
 // reusing their indent and marker style.
-function planPomodoroWorkLogGroupInsertion(lines, taskLine, descendantRoots, dateString, priorInsertion = null) {
+function planPomodoroWorkLogGroupInsertion(lines, taskLine, descendantRoots, stampText, priorInsertion = null) {
   let insertLine;
   let entryIndent;
   let entryMarker;
@@ -825,7 +837,7 @@ function planPomodoroWorkLogGroupInsertion(lines, taskLine, descendantRoots, dat
     descendantRoots,
     entryIndent,
     entryMarker,
-    dateString,
+    stampText,
   );
   if (entryLines.length === 0) {
     return null;
@@ -4675,7 +4687,7 @@ function planEventTaskClockRewrites(lines, pomodoroLine, section, options = {}) 
 }
 
 class TaskStatusCyclerEventTaskClockMixin {
-  // Overridable seams for tests (mirrors `getPomodoroWorkLogDateString`).
+  // Overridable seams for tests (mirrors `getPomodoroWorkLogStamp`).
   getEventTaskClockTodayPath() {
     try {
       return todayDailyPath(this.app);
@@ -20005,7 +20017,9 @@ class TaskStatusCyclerPomodoroMixin {
   // link, an unreadable file, or a failed write is logged and must not block
   // the other groups or undo the completion that already applied.
   async writePomodoroWorkLogNoteGroups(groups, context) {
-    const dateString = this.getPomodoroWorkLogDateString(context.activePath);
+    // One clock read per close, at the write: every group and target of this
+    // close shares one byte-identical stamp.
+    const stampText = this.getPomodoroWorkLogStamp();
     const activeNoteInsertions = [];
     const priorInsertionsByTarget = new Map();
 
@@ -20033,7 +20047,7 @@ class TaskStatusCyclerPomodoroMixin {
         const result = await this.writePomodoroWorkLogEntriesToTarget(
           resolvedTarget,
           group.descendantRoots,
-          dateString,
+          stampText,
           context,
           priorInsertionsByTarget.get(targetKey) || null,
         );
@@ -20062,7 +20076,7 @@ class TaskStatusCyclerPomodoroMixin {
   async writePomodoroWorkLogEntriesToTarget(
     resolvedTarget,
     descendantRoots,
-    dateString,
+    stampText,
     context,
     priorInsertion,
   ) {
@@ -20071,7 +20085,7 @@ class TaskStatusCyclerPomodoroMixin {
         context.editor,
         resolvedTarget.line,
         descendantRoots,
-        dateString,
+        stampText,
         priorInsertion,
       );
     }
@@ -20080,18 +20094,18 @@ class TaskStatusCyclerPomodoroMixin {
       resolvedTarget.file,
       resolvedTarget.blockId,
       descendantRoots,
-      dateString,
+      stampText,
       priorInsertion,
     );
   }
 
-  writePomodoroWorkLogEntriesInEditor(editor, taskLine, descendantRoots, dateString, priorInsertion) {
+  writePomodoroWorkLogEntriesInEditor(editor, taskLine, descendantRoots, stampText, priorInsertion) {
     const lines = this.getEditorLineTexts(editor);
     const plan = planPomodoroWorkLogGroupInsertion(
       lines,
       taskLine,
       descendantRoots,
-      dateString,
+      stampText,
       priorInsertion,
     );
     if (!plan) {
@@ -20106,7 +20120,7 @@ class TaskStatusCyclerPomodoroMixin {
     };
   }
 
-  async writePomodoroWorkLogEntriesInVault(file, blockId, descendantRoots, dateString, priorInsertion) {
+  async writePomodoroWorkLogEntriesInVault(file, blockId, descendantRoots, stampText, priorInsertion) {
     if (!this.app.vault) {
       return null;
     }
@@ -20125,7 +20139,7 @@ class TaskStatusCyclerPomodoroMixin {
         lines,
         taskLine,
         descendantRoots,
-        dateString,
+        stampText,
         priorInsertion,
       );
       if (!plan) {
@@ -22366,11 +22380,13 @@ class TaskStatusCyclerTargetsMixin {
     return formatLocalDate();
   }
 
-  // The date stamped on Pomodoro Work Log entries: the daily note's own date
-  // when `activePath` is one, else today. Closing yesterday's Pomodoro must
-  // not stamp today's date.
-  getPomodoroWorkLogDateString(activePath) {
-    return getDailyNoteDateFromPath(activePath) || formatLocalDate();
+  // The `YYYY-MM-DD HH:MM` stamp on Pomodoro Work Log entries: the write
+  // instant, never the daily note's filename date. Closing yesterday's
+  // forgotten session this morning stamps this morning. Read once per close
+  // by writePomodoroWorkLogNoteGroups; overridable so tests can inject a
+  // fixed instant.
+  getPomodoroWorkLogStamp() {
+    return formatWorkLogStamp(new Date());
   }
 
   isOpenDoneTaskStatus(taskStatus) {
@@ -22745,6 +22761,7 @@ module.exports.helpers = {
   formatPomodoroPlaceholderLine,
   formatScheduleLogEntry,
   formatWorkLogEntryBody,
+  formatWorkLogStamp,
   getDailyNoteDateFromPath,
   getPomodoroWorkLogTaskLinkTarget,
   getBlockLineFromCache,

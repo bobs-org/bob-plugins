@@ -428,7 +428,7 @@ test("Task Link on an In Progress target prompts, then keeps the lane with a Wor
       content: [
         "- [/] #task Ship it ^ship",
         "\t- 🛠️ **WORK LOG**",
-        "\t\t- *2026-08-15* — Finished cleanup",
+        "\t\t- *2026-08-15 14:32* — Finished cleanup",
       ].join("\n"),
     },
   ]);

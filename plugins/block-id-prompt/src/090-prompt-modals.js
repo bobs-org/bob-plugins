@@ -387,7 +387,6 @@ class WorkSummaryPromptModal extends Modal {
     super(app);
     this.plugin = plugin;
     this.source = source;
-    this.workLogDate = localTodayParts(plugin.now());
     this.completed = false;
     this.submitting = false;
     this.inputEl = null;
@@ -491,7 +490,7 @@ class WorkSummaryPromptModal extends Modal {
     }
 
     const state = workSummaryPromptState(this.inputEl ? this.inputEl.value : "", {
-      date: this.workLogDate,
+      now: this.plugin.now(),
     });
     if (this.primaryButton && typeof this.primaryButton.setButtonText === "function") {
       this.primaryButton.setButtonText(state.primaryButtonText);
@@ -515,7 +514,7 @@ class WorkSummaryPromptModal extends Modal {
       });
       entryEl.createEl("em", {
         cls: "bid-wlp-preview-date",
-        text: formatCalendarDate(state.date),
+        text: state.stamp,
       });
       entryEl.createSpan({
         cls: "bid-wlp-preview-separator",
@@ -539,10 +538,11 @@ class WorkSummaryPromptModal extends Modal {
 
     this.submitting = true;
     try {
+      // The stamp is read at commit inside submitPomodoroWorkSummary, never
+      // at the time the prompt opened.
       const accepted = await this.plugin.submitPomodoroWorkSummary(
         this.source,
         this.inputEl ? this.inputEl.value : "",
-        { workLogDate: this.workLogDate },
       );
       if (accepted) {
         this.completed = true;

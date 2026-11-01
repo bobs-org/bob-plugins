@@ -317,25 +317,37 @@ function childIndentUnitForIndent(parentIndent) {
   return indent && !indent.includes("\t") ? indent : CHILD_BULLET_INDENT_UNIT;
 }
 
-function formatWorkLogEntryBody(summary, dateString) {
-  return `${WORK_LOG_ENTRY_EMPHASIS}${dateString}${WORK_LOG_ENTRY_EMPHASIS}${WORK_LOG_ENTRY_SEPARATOR}${summary}`;
+// Work Log stamps are `YYYY-MM-DD HH:MM` in the writer's local wall-clock
+// time, truncated to the minute (never rounded). See bob-cli
+// `docs/reference/vault-format.md` for the canonical vault grammar. The
+// stamp is the write instant: one clock read per Pomodoro close, formatted
+// once (see getPomodoroWorkLogStamp).
+function formatWorkLogStamp(date) {
+  const current = date instanceof Date ? date : new Date();
+  const hour = String(current.getHours()).padStart(2, "0");
+  const minute = String(current.getMinutes()).padStart(2, "0");
+  return `${formatLocalDate(current)} ${hour}:${minute}`;
+}
+
+function formatWorkLogEntryBody(summary, stampText) {
+  return `${WORK_LOG_ENTRY_EMPHASIS}${stampText}${WORK_LOG_ENTRY_EMPHASIS}${WORK_LOG_ENTRY_SEPARATOR}${summary}`;
 }
 
 // Renders a Task Link sub-bullet's collected descendant tree (see
 // collectPomodoroWorkLogDescendantTree) as Work Log entry lines: each depth-1
-// node becomes a dated `*<date>* — <body>` entry at `entryIndent`, and its
+// node becomes a stamped `*<stamp>* — <body>` entry at `entryIndent`, and its
 // deeper descendants are carried beneath it, keeping their relative depth,
 // re-indented one childIndentUnitForIndent step per level. A node whose body
 // is empty after trimming is dropped along with its whole subtree, since a
-// deeper node without a dated parent has nothing to hang beneath.
-function buildWorkLogEntryLines(descendantRoots, entryIndent, entryMarker, dateString) {
+// deeper node without a stamped parent has nothing to hang beneath.
+function buildWorkLogEntryLines(descendantRoots, entryIndent, entryMarker, stampText) {
   const lines = [];
   for (const node of descendantRoots || []) {
     if (!node.bodyText) {
       continue;
     }
     lines.push(
-      `${entryIndent}${entryMarker} ${formatWorkLogEntryBody(node.bodyText, dateString)}`,
+      `${entryIndent}${entryMarker} ${formatWorkLogEntryBody(node.bodyText, stampText)}`,
     );
     appendWorkLogChildLines(node.children, entryIndent, lines);
   }
@@ -374,7 +386,7 @@ function appendWorkLogChildLines(children, parentIndent, lines) {
 // each independently prepending above the other. When present it skips
 // marker detection and appends immediately after the prior group's entries,
 // reusing their indent and marker style.
-function planPomodoroWorkLogGroupInsertion(lines, taskLine, descendantRoots, dateString, priorInsertion = null) {
+function planPomodoroWorkLogGroupInsertion(lines, taskLine, descendantRoots, stampText, priorInsertion = null) {
   let insertLine;
   let entryIndent;
   let entryMarker;
@@ -420,7 +432,7 @@ function planPomodoroWorkLogGroupInsertion(lines, taskLine, descendantRoots, dat
     descendantRoots,
     entryIndent,
     entryMarker,
-    dateString,
+    stampText,
   );
   if (entryLines.length === 0) {
     return null;

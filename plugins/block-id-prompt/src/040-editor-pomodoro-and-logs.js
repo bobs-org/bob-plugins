@@ -300,13 +300,29 @@ function normalizeWorkSummary(value) {
     .replace(/\s+/g, " ");
 }
 
-function formatWorkLogEntry(summary, dateParts) {
+// Work Log stamps are `YYYY-MM-DD HH:MM` in the writer's local wall-clock
+// time, truncated to the minute (never rounded). See bob-cli
+// `docs/reference/vault-format.md` for the canonical vault grammar. The
+// stamp is the write instant: callers read the clock once per gesture, at
+// commit, and format it once.
+function formatWorkLogStamp(date) {
+  const current = date instanceof Date ? date : new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const day = formatCalendarDate({
+    year: current.getFullYear(),
+    month: current.getMonth() + 1,
+    day: current.getDate(),
+  });
+  return `${day} ${pad(current.getHours())}:${pad(current.getMinutes())}`;
+}
+
+function formatWorkLogEntry(summary, stampText) {
   const normalizedSummary = normalizeWorkSummary(summary);
   if (!normalizedSummary) {
     return "";
   }
 
-  return `${WORK_LOG_ENTRY_EMPHASIS}${formatCalendarDate(dateParts)}${WORK_LOG_ENTRY_EMPHASIS}${WORK_LOG_ENTRY_SEPARATOR}${normalizedSummary}`;
+  return `${WORK_LOG_ENTRY_EMPHASIS}${String(stampText || "")}${WORK_LOG_ENTRY_EMPHASIS}${WORK_LOG_ENTRY_SEPARATOR}${normalizedSummary}`;
 }
 
 function workSummaryContainsDataviewInlineField(value) {
@@ -315,11 +331,13 @@ function workSummaryContainsDataviewInlineField(value) {
 
 function workSummaryPromptState(value, options = {}) {
   const summary = normalizeWorkSummary(value);
-  const date = options.date || localTodayParts(options.now);
-  const formattedEntry = summary ? formatWorkLogEntry(summary, date) : "";
+  // The preview formats the clock at render time; the written stamp is read
+  // again at commit.
+  const stamp = options.stamp || formatWorkLogStamp(options.now);
+  const formattedEntry = summary ? formatWorkLogEntry(summary, stamp) : "";
   return {
     summary,
-    date,
+    stamp,
     formattedEntry,
     isBlank: summary.length === 0,
     hasDataviewWarning: summary.includes("::"),
@@ -569,7 +587,7 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary, options = {
       content,
       edits: [],
       summary,
-      workLogDate: null,
+      workLogStamp: null,
       workLogFormattedEntry: "",
       workLogEntryAdded: false,
       workLogInsertLine: null,
@@ -577,8 +595,8 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary, options = {
     };
   }
 
-  const workLogDate = options.date || localTodayParts(options.now);
-  const workLogFormattedEntry = formatWorkLogEntry(summary, workLogDate);
+  const workLogStamp = options.stamp || formatWorkLogStamp(options.now);
+  const workLogFormattedEntry = formatWorkLogEntry(summary, workLogStamp);
 
   const lines = content.split("\n");
   if (!Number.isInteger(taskLine) || taskLine < 0 || taskLine >= lines.length) {
@@ -633,7 +651,7 @@ function planWorkLogInsertion(preimageContent, taskLine, rawSummary, options = {
     content: applyTextEdits(content, edits),
     edits,
     summary,
-    workLogDate,
+    workLogStamp,
     workLogFormattedEntry,
     workLogEntryAdded: true,
     workLogInsertLine,

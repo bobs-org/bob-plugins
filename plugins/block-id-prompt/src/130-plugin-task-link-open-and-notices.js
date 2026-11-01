@@ -86,7 +86,7 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     let workLogPlan = null;
     if (target.status === "/" && normalizedSummary) {
       workLogPlan = planWorkLogInsertion(target.content, target.line, normalizedSummary, {
-        date: options.workLogDate || localTodayParts(this.now()),
+        stamp: options.workLogStamp || formatWorkLogStamp(this.now()),
       });
       if (!workLogPlan) {
         new Notice(`Task link stopped: linked task changed in ${target.path}`);

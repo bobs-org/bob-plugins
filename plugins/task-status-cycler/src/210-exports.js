@@ -55,6 +55,7 @@ module.exports.helpers = {
   formatPomodoroPlaceholderLine,
   formatScheduleLogEntry,
   formatWorkLogEntryBody,
+  formatWorkLogStamp,
   getDailyNoteDateFromPath,
   getPomodoroWorkLogTaskLinkTarget,
   getBlockLineFromCache,

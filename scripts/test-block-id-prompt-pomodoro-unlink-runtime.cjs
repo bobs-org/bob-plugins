@@ -2,11 +2,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   Plugin,
+  helpers,
   noticeMessages,
   resetNotices,
   lastNotice,
-  localDate,
-  WORK_LOG_DATE,
+  WORK_LOG_NOW,
+  WORK_LOG_STAMP,
   createEditor,
   sourceForPomodoroLink,
   createTaskModeHarness,
@@ -58,7 +59,7 @@ test("In Progress unlink with a summary keeps the lane and creates a Work Log", 
   const plugin = new Plugin();
   plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
   plugin.suppressEditorScans = () => {};
-  plugin.now = () => localDate(2026, 8, 15);
+  plugin.now = () => WORK_LOG_NOW;
 
   const result = await plugin.submitPomodoroWorkSummary(source, " Added\ncoverage ");
 
@@ -69,7 +70,7 @@ test("In Progress unlink with a summary keeps the lane and creates a Work Log", 
       "- [/] #task Ship it",
       "  - Keep detail",
       "  - 🛠️ **WORK LOG**",
-      "    - *2026-08-15* — Added coverage",
+      "    - *2026-08-15 14:32* — Added coverage",
     ].join("\n"),
   );
   assert.equal(lastNotice(), "Unlinked · stays In Progress · Work Log updated");
@@ -183,7 +184,7 @@ test("In Progress unlink removes cross-note Pomodoro links and logs work without
   plugin.resolveReferenceDestination = (reference) =>
     reference.targetText === "Tasks" ? { path: "Tasks.md" } : null;
   plugin.suppressEditorScans = () => {};
-  plugin.now = () => localDate(2026, 8, 15);
+  plugin.now = () => WORK_LOG_NOW;
 
   const result = await plugin.submitPomodoroWorkSummary(source, "Finished cleanup");
 
@@ -201,7 +202,7 @@ test("In Progress unlink removes cross-note Pomodoro links and logs work without
     [
       "- [/] #task Ship it ^ship",
       "\t- 🛠️ **WORK LOG**",
-      "\t\t- *2026-08-15* — Finished cleanup",
+      "\t\t- *2026-08-15 14:32* — Finished cleanup",
     ].join("\n"),
   );
   assert.equal(lastNotice(), "Unlinked · stays In Progress · Work Log updated");
@@ -272,7 +273,7 @@ test("same-note In Progress unlink merges cleanup and Work Log in the active edi
   plugin.resolveReferenceDestination = (reference) =>
     reference.targetText === "" ? { path: "Daily.md" } : null;
   plugin.suppressEditorScans = () => {};
-  plugin.now = () => localDate(2026, 8, 15);
+  plugin.now = () => WORK_LOG_NOW;
 
   const result = await plugin.submitPomodoroWorkSummary(source, "Paused after tests");
 
@@ -282,7 +283,7 @@ test("same-note In Progress unlink merges cleanup and Work Log in the active edi
     [
       "- [/] #task Ship it ^ship",
       "\t- 🛠️ **WORK LOG**",
-      "\t\t- *2026-08-15* — Paused after tests",
+      "\t\t- *2026-08-15 14:32* — Paused after tests",
       "## Pomodoros",
       "- [x] Done (09:00-09:25)",
       "  - [[#^ship]]",
@@ -352,7 +353,7 @@ test("Next unlink reports retryable partial failure when cleanup succeeds but th
 
   const result = await plugin.applyPomodoroTaskUnlink(source, {
     workSummary: "Logged locally",
-    workLogDate: WORK_LOG_DATE,
+    workLogStamp: WORK_LOG_STAMP,
   });
 
   assert.equal(result, false);
@@ -591,7 +592,7 @@ test("inbox-route: In Progress unlink with a Work summary routes", async () => {
   plugin.resolveReferenceDestination = (reference) =>
     reference.targetText === "Tasks" ? { path: "Tasks.md" } : null;
   plugin.suppressEditorScans = () => {};
-  plugin.now = () => localDate(2026, 8, 15);
+  plugin.now = () => WORK_LOG_NOW;
   const routeCalls = [];
   installUnlinkRoute(plugin, routeCalls, {
     promptOutcome: { kind: "move", path: "health.md", name: "health" },
@@ -755,7 +756,7 @@ test("same-note unlink maps a task below removed entries through Work-summary in
   plugin.resolveReferenceDestination = (reference) =>
     reference.targetText === "" ? { path: "Daily.md" } : null;
   plugin.suppressEditorScans = () => {};
-  plugin.now = () => localDate(2026, 8, 15);
+  plugin.now = () => WORK_LOG_NOW;
 
   const result = await plugin.submitPomodoroWorkSummary(source, "Wrapped up");
   assert.equal(result, true);
@@ -767,10 +768,93 @@ test("same-note unlink maps a task below removed entries through Work-summary in
       "  - keep",
       "- [/] #task Ship it ^ship",
       "\t- 🛠️ **WORK LOG**",
-      "\t\t- *2026-08-15* — Wrapped up",
+      "\t\t- *2026-08-15 14:32* — Wrapped up",
     ].join("\n"),
   );
   // Task was on line 5; the removed entry above shifts it to line 3. The
   // Work Log inserts below it, so the cursor stays on the task line.
   assert.deepEqual(editor.cursor, { line: 3, ch: 9 });
+});
+
+// A tiny stand-in for Obsidian's DOM helpers, enough to render the Work
+// summary prompt's preview and read back what it shows.
+function fakeElement(tag = "div", init = {}) {
+  const el = {
+    tag,
+    cls: init.cls || "",
+    text: init.text || "",
+    children: [],
+    attrs: {},
+    empty() {
+      this.children = [];
+    },
+    setAttribute(name, value) {
+      this.attrs[name] = value;
+    },
+    createDiv(options) {
+      return this.createEl("div", options);
+    },
+    createSpan(options) {
+      return this.createEl("span", options);
+    },
+    createEl(childTag, options) {
+      const child = fakeElement(childTag, options);
+      this.children.push(child);
+      return child;
+    },
+    toggleClass() {},
+  };
+  return el;
+}
+
+function previewEntryText(previewEl) {
+  const entry = previewEl.children.find((child) => child.cls === "bid-wlp-preview-entry");
+  assert.ok(entry, "preview shows an entry row");
+  return entry.children.map((child) => child.text).join("");
+}
+
+test("the unlink preview shows the write-instant stamp and re-renders on the clock", () => {
+  const editor = createEditor("- [/] #task Ship it ^ship");
+  const plugin = new Plugin();
+  let clock = new Date(2026, 7, 15, 23, 59, 41);
+  plugin.now = () => clock;
+  const modal = new helpers.WorkSummaryPromptModal({}, plugin, sourceForPomodoroLink(editor, "Tasks.md", 0));
+  modal.inputEl = { value: "Added coverage" };
+  modal.previewEl = fakeElement();
+
+  modal.updatePreview();
+  assert.equal(previewEntryText(modal.previewEl), "2026-08-15 23:59 — Added coverage");
+  assert.equal(modal.previewEl.attrs["aria-label"], "*2026-08-15 23:59* — Added coverage");
+
+  clock = new Date(2026, 7, 16, 0, 1, 2);
+  modal.updatePreview();
+  assert.equal(previewEntryText(modal.previewEl), "2026-08-16 00:01 — Added coverage");
+});
+
+test("a prompt opened at 23:59 and committed at 00:01 stamps the commit instant", async () => {
+  resetNotices();
+  const editor = createEditor(["- [/] #task Ship it", "  - Keep detail"].join("\n"));
+  const source = sourceForPomodoroLink(editor, "Tasks.md", 0);
+  const plugin = new Plugin();
+  plugin.resolveTaskFile = (path) => (path === "Tasks.md" ? { path: "Tasks.md" } : null);
+  plugin.suppressEditorScans = () => {};
+  let clock = new Date(2026, 7, 15, 23, 59, 50);
+  plugin.now = () => clock;
+  const modal = new helpers.WorkSummaryPromptModal({}, plugin, source);
+  modal.close = () => {};
+  modal.inputEl = { value: "Added coverage" };
+
+  clock = new Date(2026, 7, 16, 0, 1, 7);
+  await modal.submit();
+
+  assert.equal(modal.completed, true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "- [/] #task Ship it",
+      "  - Keep detail",
+      "  - 🛠️ **WORK LOG**",
+      "    - *2026-08-16 00:01* — Added coverage",
+    ].join("\n"),
+  );
 });

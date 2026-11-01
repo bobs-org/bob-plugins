@@ -38,12 +38,16 @@ Task Status Cycler changes task and Pomodoro states in Bob's workflow.
 `Ctrl+Enter` on a Pomodoro completes it: worked-on links carry above deferred
 `#`-marked links, each in source order; a closed named Pomodoro's name is
 copied onto the Pomodoro that completion creates; and each Task Link
-sub-bullet's sub-sub-bullets are copied as locally dated entries such as
-`*2026-08-26* — Read research notes` into that link's task, under a
-tab-indented managed `🛠️ **WORK LOG**` child bullet created when the task has
-none. A Pomodoro close whose children are all deferred `#` links deletes the
-closed entry instead of leaving it childless, carrying the stripped links to
-the created placeholder.
+sub-bullet's sub-sub-bullets are copied as entries stamped with the local
+minute of the close, such as `*2026-08-26 14:32* — Read research notes`, into
+that link's task, under a tab-indented managed `🛠️ **WORK LOG**` child bullet
+created when the task has none. One close reads the clock once, so every entry
+it writes carries the same stamp; the stamp is the write instant, never the
+daily note's filename date, so closing yesterday's forgotten session this
+morning stamps this morning. Older date-only entries are never rewritten. A
+Pomodoro close whose children are all deferred `#` links deletes the closed
+entry instead of leaving it childless, carrying the stripped links to the
+created placeholder.
 
 On a timed Pomodoro close, a bare plain link to an Event Task in the same
 daily note's `## Events` section closes by the meeting clock instead: the

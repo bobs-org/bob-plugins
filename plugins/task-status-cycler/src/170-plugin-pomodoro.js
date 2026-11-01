@@ -11,7 +11,9 @@ class TaskStatusCyclerPomodoroMixin {
   // link, an unreadable file, or a failed write is logged and must not block
   // the other groups or undo the completion that already applied.
   async writePomodoroWorkLogNoteGroups(groups, context) {
-    const dateString = this.getPomodoroWorkLogDateString(context.activePath);
+    // One clock read per close, at the write: every group and target of this
+    // close shares one byte-identical stamp.
+    const stampText = this.getPomodoroWorkLogStamp();
     const activeNoteInsertions = [];
     const priorInsertionsByTarget = new Map();
 
@@ -39,7 +41,7 @@ class TaskStatusCyclerPomodoroMixin {
         const result = await this.writePomodoroWorkLogEntriesToTarget(
           resolvedTarget,
           group.descendantRoots,
-          dateString,
+          stampText,
           context,
           priorInsertionsByTarget.get(targetKey) || null,
         );
@@ -68,7 +70,7 @@ class TaskStatusCyclerPomodoroMixin {
   async writePomodoroWorkLogEntriesToTarget(
     resolvedTarget,
     descendantRoots,
-    dateString,
+    stampText,
     context,
     priorInsertion,
   ) {
@@ -77,7 +79,7 @@ class TaskStatusCyclerPomodoroMixin {
         context.editor,
         resolvedTarget.line,
         descendantRoots,
-        dateString,
+        stampText,
         priorInsertion,
       );
     }
@@ -86,18 +88,18 @@ class TaskStatusCyclerPomodoroMixin {
       resolvedTarget.file,
       resolvedTarget.blockId,
       descendantRoots,
-      dateString,
+      stampText,
       priorInsertion,
     );
   }
 
-  writePomodoroWorkLogEntriesInEditor(editor, taskLine, descendantRoots, dateString, priorInsertion) {
+  writePomodoroWorkLogEntriesInEditor(editor, taskLine, descendantRoots, stampText, priorInsertion) {
     const lines = this.getEditorLineTexts(editor);
     const plan = planPomodoroWorkLogGroupInsertion(
       lines,
       taskLine,
       descendantRoots,
-      dateString,
+      stampText,
       priorInsertion,
     );
     if (!plan) {
@@ -112,7 +114,7 @@ class TaskStatusCyclerPomodoroMixin {
     };
   }
 
-  async writePomodoroWorkLogEntriesInVault(file, blockId, descendantRoots, dateString, priorInsertion) {
+  async writePomodoroWorkLogEntriesInVault(file, blockId, descendantRoots, stampText, priorInsertion) {
     if (!this.app.vault) {
       return null;
     }
@@ -131,7 +133,7 @@ class TaskStatusCyclerPomodoroMixin {
         lines,
         taskLine,
         descendantRoots,
-        dateString,
+        stampText,
         priorInsertion,
       );
       if (!plan) {

@@ -50,7 +50,10 @@ function localDate(year, month, day) {
   return new Date(year, month - 1, day);
 }
 
-const WORK_LOG_DATE = { year: 2026, month: 8, day: 15 };
+// The fixed write instant for Work Log tests: 14:32:59 local, so the stamp
+// proves the seconds are truncated, never rounded.
+const WORK_LOG_NOW = new Date(2026, 7, 15, 14, 32, 59);
+const WORK_LOG_STAMP = "2026-08-15 14:32";
 
 function createEditor(content) {
   let value = content;
@@ -158,7 +161,7 @@ function createTaskModeHarness({ taskContent, dailyContent, taskPath = "Tasks.md
   plugin.resolveReferenceDestination = (reference) =>
     reference.targetText === "Tasks" ? { path: "Tasks.md" } : null;
   plugin.suppressEditorScans = () => {};
-  plugin.now = () => localDate(2026, 8, 15);
+  plugin.now = () => WORK_LOG_NOW;
   plugin.pickerRequests = [];
   plugin.promptPomodoroLinkTarget = async (request) => {
     plugin.pickerRequests.push(request);
@@ -236,7 +239,7 @@ function createTaskLinkHarness({
     return dailyPath ? createTFile(dailyPath) : null;
   };
   plugin.suppressEditorScans = () => {};
-  plugin.now = () => localDate(2026, 8, 15);
+  plugin.now = () => WORK_LOG_NOW;
   plugin.pickerRequests = [];
   plugin.promptPomodoroLinkTarget = async (request) => {
     plugin.pickerRequests.push(request);
@@ -311,7 +314,8 @@ module.exports = {
   resetNotices,
   lastNotice,
   localDate,
-  WORK_LOG_DATE,
+  WORK_LOG_NOW,
+  WORK_LOG_STAMP,
   createEditor,
   applyPlannedEdits,
   sourceForTaskPicker,

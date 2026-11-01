@@ -609,11 +609,13 @@ class TaskStatusCyclerTargetsMixin {
     return formatLocalDate();
   }
 
-  // The date stamped on Pomodoro Work Log entries: the daily note's own date
-  // when `activePath` is one, else today. Closing yesterday's Pomodoro must
-  // not stamp today's date.
-  getPomodoroWorkLogDateString(activePath) {
-    return getDailyNoteDateFromPath(activePath) || formatLocalDate();
+  // The `YYYY-MM-DD HH:MM` stamp on Pomodoro Work Log entries: the write
+  // instant, never the daily note's filename date. Closing yesterday's
+  // forgotten session this morning stamps this morning. Read once per close
+  // by writePomodoroWorkLogNoteGroups; overridable so tests can inject a
+  // fixed instant.
+  getPomodoroWorkLogStamp() {
+    return formatWorkLogStamp(new Date());
   }
 
   isOpenDoneTaskStatus(taskStatus) {

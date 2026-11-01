@@ -463,14 +463,15 @@ class BlockIdPromptPomodoroLinksMixin {
   // cancelWorkSummaryPrompt, leaving everything untouched.
   async submitPomodoroWorkSummary(source, rawSummary, options = {}) {
     const normalizedSummary = normalizeWorkSummary(rawSummary);
-    const workLogDate = normalizedSummary
-      ? options.workLogDate || localTodayParts(this.now())
+    // One clock read per gesture, at commit (Enter in the prompt).
+    const workLogStamp = normalizedSummary
+      ? options.workLogStamp || formatWorkLogStamp(this.now())
       : null;
     if (source.kind === TASK_LINK_OPEN_SOURCE_KIND) {
       try {
         return await this.applyTaskLinkOpen(source, {
           workSummary: normalizedSummary,
-          workLogDate,
+          workLogStamp,
         });
       } catch (error) {
         return false;
@@ -480,7 +481,7 @@ class BlockIdPromptPomodoroLinksMixin {
     try {
       const result = await this.applyPomodoroTaskUnlink(source, {
         workSummary: normalizedSummary,
-        workLogDate,
+        workLogStamp,
       });
       if (result === false && source && source.inboxRouteCancelled === true) {
         source.inboxRouteCancelled = false;
@@ -718,7 +719,7 @@ class BlockIdPromptPomodoroLinksMixin {
     let workLogPlan = null;
     if (normalizedSummary) {
       workLogPlan = planWorkLogInsertion(taskContent, source.line, normalizedSummary, {
-        date: options.workLogDate || localTodayParts(this.now()),
+        stamp: options.workLogStamp || formatWorkLogStamp(this.now()),
       });
       if (!workLogPlan) {
         new Notice(`Unlink stopped: selected task changed in ${source.sourcePath}`);

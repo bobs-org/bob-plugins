@@ -34,6 +34,7 @@
   "145a-relation-inverse-phrase.js",
   "146-relation-chip-model.js",
   "147-relation-label-model.js",
+  "148-task-link-marks.js",
   "150-dependency-element.js",
   "152-blocks-widget.js",
   "153-relation-widget.js",

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bob task link marks preview</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body { padding: 0 16px 24px; font: 15px/1.5 system-ui, sans-serif; }
+    body.theme-light {
+      color-scheme: light;
+      --color-red: #e93147; --color-orange: #ec7500; --color-yellow: #e0ac00;
+      --color-green: #08b94e; --color-cyan: #00bfbc; --color-blue: #086ddd;
+      --color-purple: #7852ee; --color-pink: #d53984;
+      --text-normal: #222222; --text-muted: #5c5c5c; --text-faint: #ababab;
+      --text-accent: #7852ee;
+      --background-secondary: #f6f6f6;
+      --task-status-next: var(--color-green, #08b94e);
+      --task-status-in-progress: #c69026;
+      --task-status-blocked: #c65367;
+      --task-status-done: var(--text-muted);
+      --task-status-cancelled: var(--text-muted);
+      background: #fff; color: var(--text-normal);
+    }
+    body.theme-dark {
+      color-scheme: dark;
+      --color-red: #fb464c; --color-orange: #e9973f; --color-yellow: #e0de71;
+      --color-green: #44cf6e; --color-cyan: #53dfdd; --color-blue: #027aff;
+      --color-purple: #a882ff; --color-pink: #fa99cd;
+      --text-normal: #dadada; --text-muted: #b3b3b3; --text-faint: #666666;
+      --text-accent: #a882ff;
+      --background-secondary: #262626;
+      --task-status-next: var(--color-green, #44cf6e);
+      --task-status-in-progress: #e0ac00;
+      --task-status-blocked: #fb464c;
+      --task-status-done: var(--text-muted);
+      --task-status-cancelled: var(--text-muted);
+      background: #1c1c1c; color: var(--text-normal);
+    }
+    #preview-root { width: 100%; padding: 12px 0; }
+    .preview-title { margin: 0 0 6px; color: var(--text-muted); font-size: 12px; }
+    .preview-case { margin: 0 0 18px; }
+    .preview-case a { color: var(--text-accent); }
+    .preview-label { color: var(--text-muted); font-size: 12px; margin: 8px 0 2px; }
+  </style>
+  <style id="production-task-link-css">__PRODUCTION_CSS__</style>
+</head>
+<body class="theme-light bob-task-link-marks bob-progress-marks">
+  <main id="preview-root"></main>
+  <script>
+  window.__previewError = "";
+  window.addEventListener("error", (event) => {
+    window.__previewError = String(event.message || event.error || "script error");
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    window.__previewError = String(event.reason || "promise rejection");
+  });
+  (() => {
+    "use strict";
+    const states = ["ready", "next", "in-progress", "blocked", "done", "cancelled"];
+    const labels = {
+      ready: "Ready", next: "Next", "in-progress": "In Progress",
+      blocked: "Blocked", done: "Done", cancelled: "Cancelled",
+    };
+    function mark(state) {
+      const span = document.createElement("span");
+      span.className = "bob-task-link-mark";
+      span.setAttribute("data-state", state);
+      span.setAttribute("role", "img");
+      span.setAttribute("aria-label", `Preview\n${labels[state]} \u00b7 bob`);
+      return span;
+    }
+    function linkRow(state, text) {
+      const wrap = document.createElement("span");
+      wrap.appendChild(mark(state));
+      const link = document.createElement("a");
+      link.className = "internal-link";
+      link.textContent = text;
+      wrap.appendChild(link);
+      return wrap;
+    }
+    function renderCase(title, build) {
+      const section = document.createElement("section");
+      section.className = "preview-case";
+      const heading = document.createElement("h2");
+      heading.className = "preview-title";
+      heading.textContent = title;
+      section.appendChild(heading);
+      section.appendChild(build());
+      return section;
+    }
+    function render() {
+      const root = document.querySelector("#preview-root");
+      root.replaceChildren();
+      root.appendChild(renderCase("Paragraph \u00b7 one ring per state", () => {
+        const p = document.createElement("p");
+        states.forEach((state, i) => {
+          if (i) p.appendChild(document.createTextNode(" \u00b7 "));
+          p.appendChild(linkRow(state, `bob > ^${state}`));
+        });
+        return p;
+      }));
+      root.appendChild(renderCase("Heading", () => {
+        const h = document.createElement("h3");
+        h.appendChild(linkRow("next", "bob > ^ship"));
+        h.appendChild(document.createTextNode(" ships today"));
+        return h;
+      }));
+      root.appendChild(renderCase("Task line \u00b7 after the identity hash", () => {
+        const div = document.createElement("div");
+        div.textContent = "- [ ] \u2317 ";
+        div.appendChild(linkRow("in-progress", "bob > ^fix"));
+        div.appendChild(document.createTextNode(" crashes on save"));
+        return div;
+      }));
+      root.appendChild(renderCase("Blockquote", () => {
+        const q = document.createElement("blockquote");
+        q.appendChild(linkRow("blocked", "bob > ^gcal-projects"));
+        q.appendChild(document.createTextNode(" is blocked, see also "));
+        q.appendChild(document.createTextNode("dev_tools > ^z-241023-0r"));
+        return q;
+      }));
+      root.appendChild(renderCase("Struck link", () => {
+        const p = document.createElement("p");
+        const del = document.createElement("del");
+        del.appendChild(linkRow("done", "bob > ^old"));
+        p.appendChild(del);
+        return p;
+      }));
+      root.appendChild(renderCase("Dense sentence \u00b7 three task links, two non-task links", () => {
+        const p = document.createElement("p");
+        p.appendChild(document.createTextNode("Ship "));
+        p.appendChild(linkRow("ready", "bob > ^a"));
+        p.appendChild(document.createTextNode(", then "));
+        p.appendChild(linkRow("next", "bob > ^b"));
+        p.appendChild(document.createTextNode(" and "));
+        p.appendChild(linkRow("in-progress", "bob > ^c"));
+        p.appendChild(document.createTextNode("; see dev_tools > ^z-241023-0r and Plan."));
+        return p;
+      }));
+      return true;
+    }
+    function measure() {
+      const marks = Array.from(document.querySelectorAll(".bob-task-link-mark"));
+      const boxes = marks.map((node) => {
+        const rect = node.getBoundingClientRect();
+        return { state: node.getAttribute("data-state"), width: rect.width, height: rect.height };
+      });
+      const lines = Array.from(document.querySelectorAll("#preview-root p, #preview-root h3, #preview-root blockquote, #preview-root div"));
+      const heights = lines.map((node) => Math.round(node.getBoundingClientRect().height * 10) / 10);
+      document.body.classList.remove("bob-task-link-marks");
+      const plain = lines.map((node) => Math.round(node.getBoundingClientRect().height * 10) / 10);
+      document.body.classList.add("bob-task-link-marks");
+      const drift = heights.map((h, i) => Math.abs(h - plain[i]));
+      return { boxes, heights, plain, drift };
+    }
+    window.taskLinkMarksPreview = { render: (width, theme) => {
+      document.body.className = `theme-${theme} bob-task-link-marks bob-progress-marks`;
+      const root = document.querySelector("#preview-root");
+      root.style.width = `${width}px`;
+      render();
+      return { width, theme, ...measure() };
+    } };
+    render();
+    window.__previewReady = true;
+  })();
+  </script>
+</body>
+</html>

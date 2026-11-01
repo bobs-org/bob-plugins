@@ -2266,6 +2266,173 @@ body:not(.bob-progress-marks) .bob-progress-mark {
   }
 }
 
+/* Task link marks (task-link-marks): one small status ring before each
+   rendered link whose target is a `#task` line. Display-only; nothing
+   ever writes it. Contract: bob-cli `docs/task-link-marks.md`.
+   Geometry (viewBox `0 0 16 16`, tunable ±0.3 units): ring
+   `circle cx 8 cy 8 r 6.05`, `stroke-width 1.9`; Next dot `r 2.35`;
+   Blocked bar `M5.1 8h5.8`; Cancelled slash `M5.3 10.7 10.7 5.3`
+   (round caps, `stroke-width 1.9`); Done is a `r 7` disc with the
+   check `M5 8.3 7.1 10.4 11 6.1` knocked out via an SVG mask.
+   In Progress reuses `--bob-progress-glyph` verbatim. One mask
+   definition per state below, shared by the Live Preview widget and
+   the Reading-view host. */
+
+body {
+  --bob-task-link-glyph-ready: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.9'%3E%3Ccircle cx='8' cy='8' r='6.05'/%3E%3C/svg%3E");
+  --bob-task-link-glyph-next: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.05' fill='none' stroke='black' stroke-width='1.9'/%3E%3Ccircle cx='8' cy='8' r='2.35' fill='black' stroke='none'/%3E%3C/svg%3E");
+  --bob-task-link-glyph-blocked: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6.05'/%3E%3Cpath d='M5.1 8h5.8'/%3E%3C/svg%3E");
+  --bob-task-link-glyph-done: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cmask id='k'%3E%3Crect width='16' height='16' fill='white'/%3E%3Cpath d='M5 8.3 7.1 10.4 11 6.1' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/mask%3E%3Ccircle cx='8' cy='8' r='7' fill='black' mask='url(%23k)'/%3E%3C/svg%3E");
+  --bob-task-link-glyph-cancelled: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6.05'/%3E%3Cpath d='M5.3 10.7 10.7 5.3'/%3E%3C/svg%3E");
+}
+
+/* Host: `span.bob-task-link-mark[data-state]` emitted by the plugin's
+   JS (Live Preview widget plus Reading-view post-processor), with the
+   glyph drawn by the per-state mask layer. */
+
+.bob-task-link-mark {
+  --bob-task-link-ink: var(--bob-task-link-ready-color, var(--bob-task-tag-color, var(--bob-task-tag-hue)));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  margin-inline: 0.04em 0.24em;
+  border-radius: 999px;
+  line-height: 1;
+  vertical-align: -0.13em;
+  user-select: none;
+  cursor: default;
+  text-decoration: none;
+  opacity: 0.92;
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.bob-task-link-mark::before {
+  content: "";
+  width: 0.86em;
+  height: 0.86em;
+  background-color: var(--bob-task-link-ink);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.bob-task-link-mark[data-state="ready"] {
+  --bob-task-link-ink: var(--bob-task-link-ready-color, var(--bob-task-tag-color, var(--bob-task-tag-hue)));
+  --bob-task-link-glyph: var(--bob-task-link-glyph-ready);
+}
+
+.bob-task-link-mark[data-state="ready"]::before {
+  -webkit-mask-image: var(--bob-task-link-glyph-ready);
+  mask-image: var(--bob-task-link-glyph-ready);
+}
+
+.bob-task-link-mark[data-state="next"] {
+  --bob-task-link-ink: var(--bob-task-link-next-color, var(--task-status-next, var(--color-green)));
+  --bob-task-link-glyph: var(--bob-task-link-glyph-next);
+}
+
+.bob-task-link-mark[data-state="next"]::before {
+  -webkit-mask-image: var(--bob-task-link-glyph-next);
+  mask-image: var(--bob-task-link-glyph-next);
+}
+
+.bob-task-link-mark[data-state="in-progress"] {
+  --bob-task-link-ink: var(--bob-task-link-in-progress-color, var(--task-status-in-progress, var(--color-yellow)));
+  --bob-task-link-glyph: var(--bob-progress-glyph);
+}
+
+.bob-task-link-mark[data-state="in-progress"]::before {
+  -webkit-mask-image: var(--bob-progress-glyph);
+  mask-image: var(--bob-progress-glyph);
+}
+
+.bob-task-link-mark[data-state="blocked"] {
+  --bob-task-link-ink: var(--bob-task-link-blocked-color, var(--task-status-blocked, var(--color-red)));
+  --bob-task-link-glyph: var(--bob-task-link-glyph-blocked);
+}
+
+.bob-task-link-mark[data-state="blocked"]::before {
+  -webkit-mask-image: var(--bob-task-link-glyph-blocked);
+  mask-image: var(--bob-task-link-glyph-blocked);
+}
+
+.bob-task-link-mark[data-state="done"] {
+  --bob-task-link-ink: var(--bob-task-link-done-color, var(--task-status-done, var(--text-muted)));
+  --bob-task-link-glyph: var(--bob-task-link-glyph-done);
+  opacity: 0.8;
+}
+
+.bob-task-link-mark[data-state="done"]::before {
+  -webkit-mask-image: var(--bob-task-link-glyph-done);
+  mask-image: var(--bob-task-link-glyph-done);
+}
+
+.bob-task-link-mark[data-state="cancelled"] {
+  --bob-task-link-ink: var(--bob-task-link-cancelled-color, var(--task-status-cancelled, var(--text-muted)));
+  --bob-task-link-glyph: var(--bob-task-link-glyph-cancelled);
+  opacity: 0.8;
+}
+
+.bob-task-link-mark[data-state="cancelled"]::before {
+  -webkit-mask-image: var(--bob-task-link-glyph-cancelled);
+  mask-image: var(--bob-task-link-glyph-cancelled);
+}
+
+body.bob-task-link-marks .bob-task-link-mark:hover {
+  opacity: 1;
+  background-color: color-mix(in srgb, var(--bob-task-link-ink) 12%, transparent);
+}
+
+body.bob-task-link-marks .bob-task-link-mark[data-state="task-link-mark-swap"] {
+  animation: bob-task-link-mark-swap 180ms cubic-bezier(0.2, 0.9, 0.3, 1.25);
+}
+
+@keyframes bob-task-link-mark-swap {
+  from {
+    opacity: 0.3;
+    scale: 0.6;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+body:not(.bob-task-link-marks) .bob-task-link-mark {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-task-link-mark {
+    transition: none;
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .bob-task-link-mark::before {
+    background-color: CanvasText;
+  }
+}
+
+@media print {
+  .bob-task-link-mark {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
 /* Unblocked hand-off glyph (bob-cli-5w ledger_glyph):
    `span.bob-unblocked-glyph` emitted by the plugin's JS (Live Preview
    widget plus Reading-view post-processor), a faint read-time 🔓 after

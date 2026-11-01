@@ -31,6 +31,16 @@ class TaskLinkLanePromptModal extends Modal {
       );
   }
 
+  workLogClockNow() {
+    if (this.fixedWorkLogNow instanceof Date) {
+      return this.fixedWorkLogNow;
+    }
+    if (this.options.now instanceof Date) {
+      return this.options.now;
+    }
+    return new Date();
+  }
+
   taskLinkLaneDateText() {
     if (typeof this.options.dateText === "string" && this.options.dateText) {
       return String(this.options.dateText);
@@ -38,29 +48,16 @@ class TaskLinkLanePromptModal extends Modal {
     if (typeof this.options.stampText === "string" && this.options.stampText) {
       return String(this.options.stampText);
     }
-    const now =
-      this.options.now instanceof Date
-        ? this.options.now
-        : this.fixedWorkLogNow instanceof Date
-          ? this.fixedWorkLogNow
-          : new Date();
-    return formatWorkLogStamp(now);
+    return formatWorkLogStamp(this.workLogClockNow());
   }
 
   taskLinkLaneStampText() {
+    // Preview derives its stamp from the render-time clock. Explicit
+    // stampText (tests) wins; day-only dateText is never a stamp.
     if (typeof this.options.stampText === "string" && this.options.stampText) {
       return String(this.options.stampText);
     }
-    if (typeof this.options.dateText === "string" && this.options.dateText) {
-      return String(this.options.dateText);
-    }
-    const now =
-      this.options.now instanceof Date
-        ? this.options.now
-        : this.fixedWorkLogNow instanceof Date
-          ? this.fixedWorkLogNow
-          : new Date();
-    return formatWorkLogStamp(now);
+    return formatWorkLogStamp(this.workLogClockNow());
   }
 
   onOpen() {

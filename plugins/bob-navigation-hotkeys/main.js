@@ -22115,6 +22115,16 @@ class TaskLinkLanePromptModal extends Modal {
       );
   }
 
+  workLogClockNow() {
+    if (this.fixedWorkLogNow instanceof Date) {
+      return this.fixedWorkLogNow;
+    }
+    if (this.options.now instanceof Date) {
+      return this.options.now;
+    }
+    return new Date();
+  }
+
   taskLinkLaneDateText() {
     if (typeof this.options.dateText === "string" && this.options.dateText) {
       return String(this.options.dateText);
@@ -22122,29 +22132,16 @@ class TaskLinkLanePromptModal extends Modal {
     if (typeof this.options.stampText === "string" && this.options.stampText) {
       return String(this.options.stampText);
     }
-    const now =
-      this.options.now instanceof Date
-        ? this.options.now
-        : this.fixedWorkLogNow instanceof Date
-          ? this.fixedWorkLogNow
-          : new Date();
-    return formatWorkLogStamp(now);
+    return formatWorkLogStamp(this.workLogClockNow());
   }
 
   taskLinkLaneStampText() {
+    // Preview derives its stamp from the render-time clock. Explicit
+    // stampText (tests) wins; day-only dateText is never a stamp.
     if (typeof this.options.stampText === "string" && this.options.stampText) {
       return String(this.options.stampText);
     }
-    if (typeof this.options.dateText === "string" && this.options.dateText) {
-      return String(this.options.dateText);
-    }
-    const now =
-      this.options.now instanceof Date
-        ? this.options.now
-        : this.fixedWorkLogNow instanceof Date
-          ? this.fixedWorkLogNow
-          : new Date();
-    return formatWorkLogStamp(now);
+    return formatWorkLogStamp(this.workLogClockNow());
   }
 
   onOpen() {
@@ -53099,16 +53096,7 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
         };
         return await this.applySelectedValue(plan.dateItem, {
           scheduleLog,
-          schedulingWorkLog: summary
-            ? {
-                summary,
-                stampText: formatWorkLogStamp(
-                  this.fixedWorkLogNow instanceof Date
-                    ? this.fixedWorkLogNow
-                    : new Date(),
-                ),
-              }
-            : null,
+          schedulingWorkLog: summary ? { summary } : null,
         });
       },
     });
@@ -53425,9 +53413,16 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
 
   renderSchedulingWorkLogPreviewItem(item, rowEl, query) {
     const pending = this.pendingScheduleWorkLog;
-    const stampText = pending
-      ? pending.stampText || pending.dateText || ""
-      : "";
+    // Preview derives its stamp from the render-time clock. Explicit
+    // pending stampText (tests) wins; day-only dateText is never a stamp.
+    const stampText =
+      pending && typeof pending.stampText === "string" && pending.stampText && this.fixedWorkLogNow instanceof Date
+        ? pending.stampText
+        : formatWorkLogStamp(
+            this.fixedWorkLogNow instanceof Date
+              ? this.fixedWorkLogNow
+              : new Date(),
+          );
     const state = item.empty ? "empty" : item.hasInlineField ? "warning" : "valid";
     addElementClasses(rowEl, "bob-cnp-schedule-work-log-row", `is-${state}`);
 
@@ -53573,16 +53568,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       dispatch: async (summary) =>
         await this.applySelectedValue(item, {
           scheduleLog,
-          schedulingWorkLog: summary
-            ? {
-                summary,
-                stampText: formatWorkLogStamp(
-                  this.fixedWorkLogNow instanceof Date
-                    ? this.fixedWorkLogNow
-                    : new Date(),
-                ),
-              }
-            : null,
+          schedulingWorkLog: summary ? { summary } : null,
         }),
     });
   }
@@ -53652,16 +53638,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
         scheduleSummary,
         dispatch: async (summary) =>
           await this.plugin.applyLinkPickerPriorityValue(this, item, {
-            schedulingWorkLog: summary
-              ? {
-                  summary,
-                  stampText: formatWorkLogStamp(
-                    this.fixedWorkLogNow instanceof Date
-                      ? this.fixedWorkLogNow
-                      : new Date(),
-                  ),
-                }
-              : null,
+            schedulingWorkLog: summary ? { summary } : null,
             precomputedByPath,
           }),
       });
@@ -53694,16 +53671,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
         scheduleSummary,
         dispatch: async (summary) =>
           await this.applySelectedValue(item, {
-            schedulingWorkLog: summary
-              ? {
-                  summary,
-                  stampText: formatWorkLogStamp(
-                    this.fixedWorkLogNow instanceof Date
-                      ? this.fixedWorkLogNow
-                      : new Date(),
-                  ),
-                }
-              : null,
+            schedulingWorkLog: summary ? { summary } : null,
             precomputedRollByLine: rollByLine,
             precomputedScheduledValueByLine: scheduledValueByLine,
           }),
@@ -53733,16 +53701,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       scheduleSummary,
       dispatch: async (summary) =>
         await this.applySelectedValue(item, {
-          schedulingWorkLog: summary
-            ? {
-                summary,
-                stampText: formatWorkLogStamp(
-                  this.fixedWorkLogNow instanceof Date
-                    ? this.fixedWorkLogNow
-                    : new Date(),
-                ),
-              }
-            : null,
+          schedulingWorkLog: summary ? { summary } : null,
           precomputedRoll,
         }),
     });
@@ -53970,6 +53929,12 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
     });
   }
 
+  workLogClockNow() {
+    return this.fixedWorkLogNow instanceof Date
+      ? this.fixedWorkLogNow
+      : new Date();
+  }
+
   showLaneReleaseReasonStage(laneItem) {
     this.stage = "lane-release-reason";
     this.valueBaseDate =
@@ -53978,17 +53943,14 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
       1,
       Math.floor(numericOrDefault(laneItem && laneItem.targetCount, 1)),
     );
-    const laneStamp = formatWorkLogStamp(
-      this.fixedWorkLogNow instanceof Date
-        ? this.fixedWorkLogNow
-        : new Date(),
-    );
+    // Work Log stamps sample at render/commit time, never frozen at open.
+    // dateText stays day-only for the subtitle; stampText is resolved live.
     this.pendingLaneRelease = Object.freeze({
       title: "Release task",
       laneKind: (laneItem && laneItem.laneKind) || "task",
       openCount,
-      dateText: laneStamp,
-      stampText: laneStamp,
+      dateText: formatBulletPropertyDate(this.valueBaseDate),
+      stampText: null,
     });
     this.clearLocalTaskMarks();
     this.selectedIndex = 0;
@@ -54091,9 +54053,11 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
 
   renderLaneReleaseReasonPreviewItem(item, rowEl, query) {
     const pending = this.pendingLaneRelease;
-    const stampText = pending
-      ? pending.stampText || pending.dateText || ""
-      : "";
+    // Preview derives its stamp from the render-time clock. Explicit
+    // pending stampText (tests) wins; day-only dateText is never a stamp.
+    const stampText = pending && typeof pending.stampText === "string" && pending.stampText
+      ? pending.stampText
+      : formatWorkLogStamp(this.workLogClockNow());
     addElementClasses(rowEl, "bob-cnp-lane-release-reason-row", "is-valid");
     const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
     applyIcon(rowIcon, "arrow-down-to-line");
@@ -54138,15 +54102,18 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
     if (!pending || !item) {
       return false;
     }
-    return this.applyInboxRoutedLaneToggle({
-      summary: item.empty ? "" : item.reason,
-      dateText: pending.stampText || pending.dateText,
-      stampText: pending.stampText || pending.dateText,
-      now:
-        this.fixedWorkLogNow instanceof Date
-          ? this.fixedWorkLogNow
-          : new Date(),
-    });
+    // Commit stamp is sampled inside the eventual write callback (after any
+    // inbox route wait). Pass through only explicit test injection; never a
+    // frozen opening snapshot. Downstream samples fixedWorkLogNow or the live
+    // clock at write time.
+    const payload = { summary: item.empty ? "" : item.reason };
+    if (typeof pending.stampText === "string" && pending.stampText) {
+      payload.stampText = pending.stampText;
+    }
+    if (this.fixedWorkLogNow instanceof Date) {
+      payload.now = this.fixedWorkLogNow;
+    }
+    return this.applyInboxRoutedLaneToggle(payload);
   }
 
 
@@ -54573,16 +54540,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       targets,
       scheduleSummary,
       dispatch: async (summary) => {
-        const schedulingWorkLog = summary
-          ? {
-              summary,
-              dateText: formatBulletPropertyDate(
-                this.valueBaseDate instanceof Date
-                  ? this.valueBaseDate
-                  : getLocalDateStart(new Date()),
-              ),
-            }
-          : null;
+        const schedulingWorkLog = summary ? { summary } : null;
         if (cached.kind === "roll") {
           return await this.applyRecommendedRollWrite(cached, schedulingWorkLog);
         }
@@ -54677,6 +54635,23 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         : `set ${recommendation.level || "priority"}`,
     };
     const rollWrite = async () => {
+      // Work Log clock sampled here, inside the eventual write callback
+      // (after any inbox route wait). One shared stamp; explicit stamp wins.
+      let writeSchedulingWorkLog = schedulingWorkLog;
+      if (writeSchedulingWorkLog && writeSchedulingWorkLog.summary) {
+        const explicit =
+          typeof writeSchedulingWorkLog.stampText === "string" && writeSchedulingWorkLog.stampText
+            ? writeSchedulingWorkLog.stampText
+            : null;
+        const writeNow =
+          this.fixedWorkLogNow instanceof Date
+            ? this.fixedWorkLogNow
+            : new Date();
+        writeSchedulingWorkLog = {
+          summary: writeSchedulingWorkLog.summary,
+          stampText: explicit || formatWorkLogStamp(writeNow),
+        };
+      }
       const nextHint = planNextPriorityRollHint(property, recommendation);
       const rollOption = {
         kind: "roll",
@@ -54710,7 +54685,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
             from: scheduledField ? scheduledField.value : "",
             to: recommendation.date,
           }),
-          schedulingWorkLog,
+          schedulingWorkLog: writeSchedulingWorkLog,
           buildNotice: (outcome) =>
             buildPriorityNoticeModel({
               property,
@@ -54762,8 +54737,23 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         ? `decay to ${recommendation.toLevel.label || recommendation.toLevel.value || "next"}`
         : "decay",
     };
-    const decayWrite = async () =>
-      await this.plugin.setBulletPriorityValue(
+    const decayWrite = async () => {
+      let writeSchedulingWorkLog = schedulingWorkLog;
+      if (writeSchedulingWorkLog && writeSchedulingWorkLog.summary) {
+        const explicit =
+          typeof writeSchedulingWorkLog.stampText === "string" && writeSchedulingWorkLog.stampText
+            ? writeSchedulingWorkLog.stampText
+            : null;
+        const writeNow =
+          this.fixedWorkLogNow instanceof Date
+            ? this.fixedWorkLogNow
+            : new Date();
+        writeSchedulingWorkLog = {
+          summary: writeSchedulingWorkLog.summary,
+          stampText: explicit || formatWorkLogStamp(writeNow),
+        };
+      }
+      return await this.plugin.setBulletPriorityValue(
         this.editor,
         this.cursor,
         this.filePath,
@@ -54779,7 +54769,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
             offset: recommendation.offset,
           },
           scheduleReasonOverride: recommendation.reason,
-          schedulingWorkLog,
+          schedulingWorkLog: writeSchedulingWorkLog,
           noticeRoll: {
             kind: "decay",
             fromLevel: getPriorityRollCurrentLabel(recommendation),
@@ -54790,6 +54780,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
           },
         },
       );
+    };
     if (typeof this.runInboxRoutedCommit === "function") {
       return await this.runInboxRoutedCommit(decayAction, decayWrite);
     }
@@ -54814,8 +54805,23 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
     const assignAction = {
       label: levelLabel ? `set ${levelLabel}` : "set priority",
     };
-    const assignWrite = async () =>
-      await this.plugin.setBulletPriorityValue(
+    const assignWrite = async () => {
+      let writeSchedulingWorkLog = schedulingWorkLog;
+      if (writeSchedulingWorkLog && writeSchedulingWorkLog.summary) {
+        const explicit =
+          typeof writeSchedulingWorkLog.stampText === "string" && writeSchedulingWorkLog.stampText
+            ? writeSchedulingWorkLog.stampText
+            : null;
+        const writeNow =
+          this.fixedWorkLogNow instanceof Date
+            ? this.fixedWorkLogNow
+            : new Date();
+        writeSchedulingWorkLog = {
+          summary: writeSchedulingWorkLog.summary,
+          stampText: explicit || formatWorkLogStamp(writeNow),
+        };
+      }
+      return await this.plugin.setBulletPriorityValue(
         this.editor,
         this.cursor,
         this.filePath,
@@ -54830,9 +54836,10 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
             date: recommendation.date,
             offset: recommendation.offset,
           },
-          schedulingWorkLog,
+          schedulingWorkLog: writeSchedulingWorkLog,
         },
       );
+    };
     if (typeof this.runInboxRoutedCommit === "function") {
       return await this.runInboxRoutedCommit(assignAction, assignWrite);
     }
@@ -63560,6 +63567,22 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
 
     const selectedAction = this.describeInboxRouteSelectedValueAction(item);
     const selectedWrite = async () => {
+      // Work Log clock sampled here, inside the eventual write callback
+      // (after any inbox route wait). One shared stamp per gesture; explicit
+      // stampText (tests) wins.
+      let writeSchedulingWorkLog = schedulingWorkLog;
+      if (writeSchedulingWorkLog && typeof writeSchedulingWorkLog.summary === "string" && writeSchedulingWorkLog.summary.trim()) {
+        const explicitStamp =
+          typeof writeSchedulingWorkLog.stampText === "string" && writeSchedulingWorkLog.stampText
+            ? writeSchedulingWorkLog.stampText
+            : null;
+        const writeNow =
+          this.fixedWorkLogNow instanceof Date
+            ? this.fixedWorkLogNow
+            : new Date();
+        const writeStamp = explicitStamp || formatWorkLogStamp(writeNow);
+        writeSchedulingWorkLog = { summary: writeSchedulingWorkLog.summary, stampText: writeStamp };
+      }
       if (this.isCountedSession()) {
         if (this.selectedPropertyItem.property.values === "priority") {
           return await this.plugin.setCountedBulletPriorityValue(
@@ -63572,7 +63595,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
             {
               baseDate: this.valueBaseDate,
               random: this.priorityRandom,
-              schedulingWorkLog,
+              schedulingWorkLog: writeSchedulingWorkLog,
               precomputedRollByLine: options.precomputedRollByLine,
               precomputedScheduledValueByLine:
                 options.precomputedScheduledValueByLine,
@@ -63588,7 +63611,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.taskSession,
           this.selectedPropertyItem.property.name,
           item.value,
-          { scheduleLog: options.scheduleLog, schedulingWorkLog },
+          { scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
         );
       }
 
@@ -63604,7 +63627,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
             propertyContext: this.propertyContext,
             baseDate: this.valueBaseDate,
             random: this.priorityRandom,
-            schedulingWorkLog,
+            schedulingWorkLog: writeSchedulingWorkLog,
             precomputedRoll: options.precomputedRoll,
           },
         );
@@ -63618,7 +63641,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.lineText,
           this.selectedPropertyItem.currentValue,
           item.value,
-          { scheduleLog: options.scheduleLog, schedulingWorkLog },
+          { scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
         );
       }
 
@@ -63631,7 +63654,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           filePath: this.filePath,
           expectedLine: this.lineText,
           scheduleLog: options.scheduleLog,
-          schedulingWorkLog,
+          schedulingWorkLog: writeSchedulingWorkLog,
         },
       );
     };
@@ -69338,9 +69361,6 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       return false;
     }
     let summary = "";
-    const workLogNow = options.now instanceof Date ? options.now : new Date();
-    const stampText =
-      options.stampText || formatWorkLogStamp(workLogNow);
     if (probe.mode === "release") {
       const needsReason = probe.released.some(
         (entry) => entry.fromStatus === "/",
@@ -69378,10 +69398,20 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     if (!laneRouteGate || laneRouteGate.kind === "cancel") {
       return false;
     }
+    // Work Log clock: sample once after awaited input and routing settle,
+    // before planning writes. Explicit stampText wins for tests; otherwise
+    // format the injected now or the live clock. One stamp per gesture.
+    const commitNow =
+      options.now instanceof Date
+        ? options.now
+        : options.workLogNow instanceof Date
+          ? options.workLogNow
+          : new Date();
+    const stampText = options.stampText || formatWorkLogStamp(commitNow);
     const plan = planTaskLaneBatch(content, session, {
       summary,
       stampText,
-      now: workLogNow,
+      now: commitNow,
       stampLine: this.getFreshnessStampLine(),
       freshDateText: this.getFreshnessDateText(),
     });
@@ -69803,8 +69833,6 @@ class BobNavigationHotkeysLaneReviewMixin {
     }
     void probeMode;
     let summary = "";
-    const workLogNow = options.now instanceof Date ? options.now : new Date();
-    const stampText = options.stampText || formatWorkLogStamp(workLogNow);
     // A release with an In Progress target asks once for an optional summary.
     let needsReason = false;
     for (const group of groups) {
@@ -69824,12 +69852,22 @@ class BobNavigationHotkeysLaneReviewMixin {
       }
       summary = answer.summary;
     }
+    // Work Log clock: sample once after awaited input settles, before
+    // planning writes. Explicit stampText wins for tests; one stamp per
+    // gesture across all notes.
+    const commitNow =
+      options.now instanceof Date
+        ? options.now
+        : options.workLogNow instanceof Date
+          ? options.workLogNow
+          : new Date();
+    const stampText = options.stampText || formatWorkLogStamp(commitNow);
     const planned = [];
     for (const group of groups) {
       const plan = planTaskLaneBatch(group.content, group.session, {
         summary,
         stampText,
-        now: workLogNow,
+        now: commitNow,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
       });
@@ -70688,14 +70726,6 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         );
       }
       const laneBudgets = readLaneBudgets(this.app);
-      const workLogNow =
-        request.now instanceof Date
-          ? request.now
-          : request.workLogNow instanceof Date
-            ? request.workLogNow
-            : new Date();
-      const stampText =
-        request.stampText || formatWorkLogStamp(workLogNow);
       let summary = "";
       if (mode === "pause") {
         const pausable = resolution.targets.filter(
@@ -70703,24 +70733,42 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
             getObsidianTaskCheckboxStatus(target.rawLine || "") === "/",
         );
         if (pausable.length > 0) {
-          const answer = await this.requestTaskLinkLaneSummary({
-            targets: pausable,
-            stampText,
-            now: workLogNow,
-          });
+          // Preview samples the render-time clock: pass through only
+          // explicit test injection, never a frozen opening stamp, so the
+          // modal stays live until the next input.
+          const modalOptions = { targets: pausable };
+          if (typeof request.stampText === "string" && request.stampText) {
+            modalOptions.stampText = request.stampText;
+          }
+          if (request.now instanceof Date) {
+            modalOptions.now = request.now;
+          } else if (request.workLogNow instanceof Date) {
+            modalOptions.now = request.workLogNow;
+          }
+          const answer = await this.requestTaskLinkLaneSummary(modalOptions);
           if (answer.cancelled) {
             return Object.freeze({ ok: false, reason: "cancelled" });
           }
           summary = answer.summary;
         }
       }
+      // Work Log clock: sample once after awaited input settles, before
+      // planning writes. Explicit stampText wins for tests; one stamp per
+      // gesture across all notes.
+      const commitNow =
+        request.now instanceof Date
+          ? request.now
+          : request.workLogNow instanceof Date
+            ? request.workLogNow
+            : new Date();
+      const stampText = request.stampText || formatWorkLogStamp(commitNow);
       const planned = [];
       for (const group of groups) {
         const plan = planTaskLinkLaneBatch(group.content, group.session, {
           mode,
           summary,
           stampText,
-          now: workLogNow,
+          now: commitNow,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
         });
@@ -76531,13 +76579,20 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
     const summary =
       typeof options.summary === "string" ? options.summary : "";
-    const workLogNow = options.now instanceof Date ? options.now : new Date();
+    // Work Log clock sampled here, inside the eventual write callback (after
+    // any inbox route wait). Explicit stampText wins for tests; otherwise use
+    // the picker's fixed clock or the live clock. Day-only dateText is never
+    // a Work Log stamp.
+    const workLogNow =
+      options.now instanceof Date
+        ? options.now
+        : picker.fixedWorkLogNow instanceof Date
+          ? picker.fixedWorkLogNow
+          : new Date();
     const stampText =
       typeof options.stampText === "string" && options.stampText
         ? String(options.stampText)
-        : typeof options.dateText === "string" && options.dateText
-          ? String(options.dateText)
-          : formatWorkLogStamp(workLogNow);
+        : formatWorkLogStamp(workLogNow);
     if (picker.linkSession) {
       const resolved = Array.isArray(picker.linkSession.resolved)
         ? picker.linkSession.resolved

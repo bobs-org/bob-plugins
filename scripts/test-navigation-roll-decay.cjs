@@ -2782,7 +2782,7 @@ async function confirmSchedulingWorkLogStage(picker, summary = "") {
   return await picker.openItemAtIndex(0);
 }
 
-test("recommended roll on Pending offers a Work Log with the frozen date", async () => {
+test("recommended roll on Pending offers a Work Log with the write stamp", async () => {
   notices.length = 0;
   const content = "- [/] #task A [priority:: medium] [scheduled:: 2026-09-01] ^a";
   const harness = createRollPickerHarness({ content });
@@ -2799,7 +2799,7 @@ test("recommended roll on Pending offers a Work Log with the frozen date", async
   assert.match(picker.getSchedulingWorkLogSubtitle(), new RegExp(frozenDate));
   await confirmSchedulingWorkLogStage(picker, "Rolled work");
   assert.ok(harness.editor.content.includes(`[scheduled:: ${frozenDate}]`));
-  assert.match(harness.editor.content, /\*2026-09-30\* — Rolled work/);
+  assert.match(harness.editor.content, /\*\d{4}-\d{2}-\d{2} \d{2}:\d{2}\* — Rolled work/);
   assert.match(harness.editor.content, /🛠️ \*\*WORK LOG\*\*/);
 });
 

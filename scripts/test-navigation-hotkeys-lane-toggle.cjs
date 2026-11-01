@@ -59,7 +59,7 @@ test("planTaskLaneBatch logs a nonblank summary on released In Progress tasks on
   const session = helpers.discoverCountedObsidianTaskTargets(content, 0, 1);
   const plan = helpers.planTaskLaneBatch(content, session, {
     summary: "  did the thing  ",
-    dateText: "2026-09-30",
+    stampText: "2026-09-30 14:32",
   });
   assert.equal(plan.valid, true);
   assert.equal(plan.mode, "release");
@@ -68,11 +68,11 @@ test("planTaskLaneBatch logs a nonblank summary on released In Progress tasks on
   assert.equal(lines[0], "- [ ] #task Next ^a1");
   assert.equal(lines[1], "- [ ] #task Working ^b1");
   assert.match(plan.content, /WORK LOG/);
-  assert.match(plan.content, /\*2026-09-30\* — did the thing/);
+  assert.match(plan.content, /\*2026-09-30 14:32\* — did the thing/);
   // Blank summaries write nothing.
   const blank = helpers.planTaskLaneBatch(content, session, {
     summary: "   ",
-    dateText: "2026-09-30",
+    stampText: "2026-09-30 14:32",
   });
   assert.equal(blank.valid, true);
   assert.equal(blank.workLogWrittenCount, 0);

@@ -559,6 +559,22 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
 
     const selectedAction = this.describeInboxRouteSelectedValueAction(item);
     const selectedWrite = async () => {
+      // Work Log clock sampled here, inside the eventual write callback
+      // (after any inbox route wait). One shared stamp per gesture; explicit
+      // stampText (tests) wins.
+      let writeSchedulingWorkLog = schedulingWorkLog;
+      if (writeSchedulingWorkLog && typeof writeSchedulingWorkLog.summary === "string" && writeSchedulingWorkLog.summary.trim()) {
+        const explicitStamp =
+          typeof writeSchedulingWorkLog.stampText === "string" && writeSchedulingWorkLog.stampText
+            ? writeSchedulingWorkLog.stampText
+            : null;
+        const writeNow =
+          this.fixedWorkLogNow instanceof Date
+            ? this.fixedWorkLogNow
+            : new Date();
+        const writeStamp = explicitStamp || formatWorkLogStamp(writeNow);
+        writeSchedulingWorkLog = { summary: writeSchedulingWorkLog.summary, stampText: writeStamp };
+      }
       if (this.isCountedSession()) {
         if (this.selectedPropertyItem.property.values === "priority") {
           return await this.plugin.setCountedBulletPriorityValue(
@@ -571,7 +587,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
             {
               baseDate: this.valueBaseDate,
               random: this.priorityRandom,
-              schedulingWorkLog,
+              schedulingWorkLog: writeSchedulingWorkLog,
               precomputedRollByLine: options.precomputedRollByLine,
               precomputedScheduledValueByLine:
                 options.precomputedScheduledValueByLine,
@@ -587,7 +603,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.taskSession,
           this.selectedPropertyItem.property.name,
           item.value,
-          { scheduleLog: options.scheduleLog, schedulingWorkLog },
+          { scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
         );
       }
 
@@ -603,7 +619,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
             propertyContext: this.propertyContext,
             baseDate: this.valueBaseDate,
             random: this.priorityRandom,
-            schedulingWorkLog,
+            schedulingWorkLog: writeSchedulingWorkLog,
             precomputedRoll: options.precomputedRoll,
           },
         );
@@ -617,7 +633,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           this.lineText,
           this.selectedPropertyItem.currentValue,
           item.value,
-          { scheduleLog: options.scheduleLog, schedulingWorkLog },
+          { scheduleLog: options.scheduleLog, schedulingWorkLog: writeSchedulingWorkLog },
         );
       }
 
@@ -630,7 +646,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
           filePath: this.filePath,
           expectedLine: this.lineText,
           scheduleLog: options.scheduleLog,
-          schedulingWorkLog,
+          schedulingWorkLog: writeSchedulingWorkLog,
         },
       );
     };

@@ -621,16 +621,7 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
         };
         return await this.applySelectedValue(plan.dateItem, {
           scheduleLog,
-          schedulingWorkLog: summary
-            ? {
-                summary,
-                stampText: formatWorkLogStamp(
-                  this.fixedWorkLogNow instanceof Date
-                    ? this.fixedWorkLogNow
-                    : new Date(),
-                ),
-              }
-            : null,
+          schedulingWorkLog: summary ? { summary } : null,
         });
       },
     });

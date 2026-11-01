@@ -57,8 +57,6 @@ class BobNavigationHotkeysLaneReviewMixin {
     }
     void probeMode;
     let summary = "";
-    const workLogNow = options.now instanceof Date ? options.now : new Date();
-    const stampText = options.stampText || formatWorkLogStamp(workLogNow);
     // A release with an In Progress target asks once for an optional summary.
     let needsReason = false;
     for (const group of groups) {
@@ -78,12 +76,22 @@ class BobNavigationHotkeysLaneReviewMixin {
       }
       summary = answer.summary;
     }
+    // Work Log clock: sample once after awaited input settles, before
+    // planning writes. Explicit stampText wins for tests; one stamp per
+    // gesture across all notes.
+    const commitNow =
+      options.now instanceof Date
+        ? options.now
+        : options.workLogNow instanceof Date
+          ? options.workLogNow
+          : new Date();
+    const stampText = options.stampText || formatWorkLogStamp(commitNow);
     const planned = [];
     for (const group of groups) {
       const plan = planTaskLaneBatch(group.content, group.session, {
         summary,
         stampText,
-        now: workLogNow,
+        now: commitNow,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
       });

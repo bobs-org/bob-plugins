@@ -97,14 +97,6 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         );
       }
       const laneBudgets = readLaneBudgets(this.app);
-      const workLogNow =
-        request.now instanceof Date
-          ? request.now
-          : request.workLogNow instanceof Date
-            ? request.workLogNow
-            : new Date();
-      const stampText =
-        request.stampText || formatWorkLogStamp(workLogNow);
       let summary = "";
       if (mode === "pause") {
         const pausable = resolution.targets.filter(
@@ -112,24 +104,42 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
             getObsidianTaskCheckboxStatus(target.rawLine || "") === "/",
         );
         if (pausable.length > 0) {
-          const answer = await this.requestTaskLinkLaneSummary({
-            targets: pausable,
-            stampText,
-            now: workLogNow,
-          });
+          // Preview samples the render-time clock: pass through only
+          // explicit test injection, never a frozen opening stamp, so the
+          // modal stays live until the next input.
+          const modalOptions = { targets: pausable };
+          if (typeof request.stampText === "string" && request.stampText) {
+            modalOptions.stampText = request.stampText;
+          }
+          if (request.now instanceof Date) {
+            modalOptions.now = request.now;
+          } else if (request.workLogNow instanceof Date) {
+            modalOptions.now = request.workLogNow;
+          }
+          const answer = await this.requestTaskLinkLaneSummary(modalOptions);
           if (answer.cancelled) {
             return Object.freeze({ ok: false, reason: "cancelled" });
           }
           summary = answer.summary;
         }
       }
+      // Work Log clock: sample once after awaited input settles, before
+      // planning writes. Explicit stampText wins for tests; one stamp per
+      // gesture across all notes.
+      const commitNow =
+        request.now instanceof Date
+          ? request.now
+          : request.workLogNow instanceof Date
+            ? request.workLogNow
+            : new Date();
+      const stampText = request.stampText || formatWorkLogStamp(commitNow);
       const planned = [];
       for (const group of groups) {
         const plan = planTaskLinkLaneBatch(group.content, group.session, {
           mode,
           summary,
           stampText,
-          now: workLogNow,
+          now: commitNow,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
         });

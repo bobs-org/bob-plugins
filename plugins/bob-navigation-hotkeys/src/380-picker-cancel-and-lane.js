@@ -214,6 +214,12 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
     });
   }
 
+  workLogClockNow() {
+    return this.fixedWorkLogNow instanceof Date
+      ? this.fixedWorkLogNow
+      : new Date();
+  }
+
   showLaneReleaseReasonStage(laneItem) {
     this.stage = "lane-release-reason";
     this.valueBaseDate =
@@ -222,17 +228,14 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
       1,
       Math.floor(numericOrDefault(laneItem && laneItem.targetCount, 1)),
     );
-    const laneStamp = formatWorkLogStamp(
-      this.fixedWorkLogNow instanceof Date
-        ? this.fixedWorkLogNow
-        : new Date(),
-    );
+    // Work Log stamps sample at render/commit time, never frozen at open.
+    // dateText stays day-only for the subtitle; stampText is resolved live.
     this.pendingLaneRelease = Object.freeze({
       title: "Release task",
       laneKind: (laneItem && laneItem.laneKind) || "task",
       openCount,
-      dateText: laneStamp,
-      stampText: laneStamp,
+      dateText: formatBulletPropertyDate(this.valueBaseDate),
+      stampText: null,
     });
     this.clearLocalTaskMarks();
     this.selectedIndex = 0;
@@ -335,9 +338,11 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
 
   renderLaneReleaseReasonPreviewItem(item, rowEl, query) {
     const pending = this.pendingLaneRelease;
-    const stampText = pending
-      ? pending.stampText || pending.dateText || ""
-      : "";
+    // Preview derives its stamp from the render-time clock. Explicit
+    // pending stampText (tests) wins; day-only dateText is never a stamp.
+    const stampText = pending && typeof pending.stampText === "string" && pending.stampText
+      ? pending.stampText
+      : formatWorkLogStamp(this.workLogClockNow());
     addElementClasses(rowEl, "bob-cnp-lane-release-reason-row", "is-valid");
     const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
     applyIcon(rowIcon, "arrow-down-to-line");
@@ -382,15 +387,18 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
     if (!pending || !item) {
       return false;
     }
-    return this.applyInboxRoutedLaneToggle({
-      summary: item.empty ? "" : item.reason,
-      dateText: pending.stampText || pending.dateText,
-      stampText: pending.stampText || pending.dateText,
-      now:
-        this.fixedWorkLogNow instanceof Date
-          ? this.fixedWorkLogNow
-          : new Date(),
-    });
+    // Commit stamp is sampled inside the eventual write callback (after any
+    // inbox route wait). Pass through only explicit test injection; never a
+    // frozen opening snapshot. Downstream samples fixedWorkLogNow or the live
+    // clock at write time.
+    const payload = { summary: item.empty ? "" : item.reason };
+    if (typeof pending.stampText === "string" && pending.stampText) {
+      payload.stampText = pending.stampText;
+    }
+    if (this.fixedWorkLogNow instanceof Date) {
+      payload.now = this.fixedWorkLogNow;
+    }
+    return this.applyInboxRoutedLaneToggle(payload);
   }
 
 

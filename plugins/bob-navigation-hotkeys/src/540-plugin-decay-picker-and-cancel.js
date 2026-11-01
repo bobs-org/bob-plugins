@@ -367,13 +367,20 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
     const summary =
       typeof options.summary === "string" ? options.summary : "";
-    const workLogNow = options.now instanceof Date ? options.now : new Date();
+    // Work Log clock sampled here, inside the eventual write callback (after
+    // any inbox route wait). Explicit stampText wins for tests; otherwise use
+    // the picker's fixed clock or the live clock. Day-only dateText is never
+    // a Work Log stamp.
+    const workLogNow =
+      options.now instanceof Date
+        ? options.now
+        : picker.fixedWorkLogNow instanceof Date
+          ? picker.fixedWorkLogNow
+          : new Date();
     const stampText =
       typeof options.stampText === "string" && options.stampText
         ? String(options.stampText)
-        : typeof options.dateText === "string" && options.dateText
-          ? String(options.dateText)
-          : formatWorkLogStamp(workLogNow);
+        : formatWorkLogStamp(workLogNow);
     if (picker.linkSession) {
       const resolved = Array.isArray(picker.linkSession.resolved)
         ? picker.linkSession.resolved

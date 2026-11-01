@@ -356,16 +356,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
       targets,
       scheduleSummary,
       dispatch: async (summary) => {
-        const schedulingWorkLog = summary
-          ? {
-              summary,
-              dateText: formatBulletPropertyDate(
-                this.valueBaseDate instanceof Date
-                  ? this.valueBaseDate
-                  : getLocalDateStart(new Date()),
-              ),
-            }
-          : null;
+        const schedulingWorkLog = summary ? { summary } : null;
         if (cached.kind === "roll") {
           return await this.applyRecommendedRollWrite(cached, schedulingWorkLog);
         }
@@ -460,6 +451,23 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         : `set ${recommendation.level || "priority"}`,
     };
     const rollWrite = async () => {
+      // Work Log clock sampled here, inside the eventual write callback
+      // (after any inbox route wait). One shared stamp; explicit stamp wins.
+      let writeSchedulingWorkLog = schedulingWorkLog;
+      if (writeSchedulingWorkLog && writeSchedulingWorkLog.summary) {
+        const explicit =
+          typeof writeSchedulingWorkLog.stampText === "string" && writeSchedulingWorkLog.stampText
+            ? writeSchedulingWorkLog.stampText
+            : null;
+        const writeNow =
+          this.fixedWorkLogNow instanceof Date
+            ? this.fixedWorkLogNow
+            : new Date();
+        writeSchedulingWorkLog = {
+          summary: writeSchedulingWorkLog.summary,
+          stampText: explicit || formatWorkLogStamp(writeNow),
+        };
+      }
       const nextHint = planNextPriorityRollHint(property, recommendation);
       const rollOption = {
         kind: "roll",
@@ -493,7 +501,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
             from: scheduledField ? scheduledField.value : "",
             to: recommendation.date,
           }),
-          schedulingWorkLog,
+          schedulingWorkLog: writeSchedulingWorkLog,
           buildNotice: (outcome) =>
             buildPriorityNoticeModel({
               property,
@@ -545,8 +553,23 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
         ? `decay to ${recommendation.toLevel.label || recommendation.toLevel.value || "next"}`
         : "decay",
     };
-    const decayWrite = async () =>
-      await this.plugin.setBulletPriorityValue(
+    const decayWrite = async () => {
+      let writeSchedulingWorkLog = schedulingWorkLog;
+      if (writeSchedulingWorkLog && writeSchedulingWorkLog.summary) {
+        const explicit =
+          typeof writeSchedulingWorkLog.stampText === "string" && writeSchedulingWorkLog.stampText
+            ? writeSchedulingWorkLog.stampText
+            : null;
+        const writeNow =
+          this.fixedWorkLogNow instanceof Date
+            ? this.fixedWorkLogNow
+            : new Date();
+        writeSchedulingWorkLog = {
+          summary: writeSchedulingWorkLog.summary,
+          stampText: explicit || formatWorkLogStamp(writeNow),
+        };
+      }
+      return await this.plugin.setBulletPriorityValue(
         this.editor,
         this.cursor,
         this.filePath,
@@ -562,7 +585,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
             offset: recommendation.offset,
           },
           scheduleReasonOverride: recommendation.reason,
-          schedulingWorkLog,
+          schedulingWorkLog: writeSchedulingWorkLog,
           noticeRoll: {
             kind: "decay",
             fromLevel: getPriorityRollCurrentLabel(recommendation),
@@ -573,6 +596,7 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
           },
         },
       );
+    };
     if (typeof this.runInboxRoutedCommit === "function") {
       return await this.runInboxRoutedCommit(decayAction, decayWrite);
     }
@@ -597,8 +621,23 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
     const assignAction = {
       label: levelLabel ? `set ${levelLabel}` : "set priority",
     };
-    const assignWrite = async () =>
-      await this.plugin.setBulletPriorityValue(
+    const assignWrite = async () => {
+      let writeSchedulingWorkLog = schedulingWorkLog;
+      if (writeSchedulingWorkLog && writeSchedulingWorkLog.summary) {
+        const explicit =
+          typeof writeSchedulingWorkLog.stampText === "string" && writeSchedulingWorkLog.stampText
+            ? writeSchedulingWorkLog.stampText
+            : null;
+        const writeNow =
+          this.fixedWorkLogNow instanceof Date
+            ? this.fixedWorkLogNow
+            : new Date();
+        writeSchedulingWorkLog = {
+          summary: writeSchedulingWorkLog.summary,
+          stampText: explicit || formatWorkLogStamp(writeNow),
+        };
+      }
+      return await this.plugin.setBulletPriorityValue(
         this.editor,
         this.cursor,
         this.filePath,
@@ -613,9 +652,10 @@ class BulletPropertyPickerRollWriteMixin extends FilteredPickerModal {
             date: recommendation.date,
             offset: recommendation.offset,
           },
-          schedulingWorkLog,
+          schedulingWorkLog: writeSchedulingWorkLog,
         },
       );
+    };
     if (typeof this.runInboxRoutedCommit === "function") {
       return await this.runInboxRoutedCommit(assignAction, assignWrite);
     }

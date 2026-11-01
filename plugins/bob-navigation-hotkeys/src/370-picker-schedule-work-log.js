@@ -276,9 +276,16 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
 
   renderSchedulingWorkLogPreviewItem(item, rowEl, query) {
     const pending = this.pendingScheduleWorkLog;
-    const stampText = pending
-      ? pending.stampText || pending.dateText || ""
-      : "";
+    // Preview derives its stamp from the render-time clock. Explicit
+    // pending stampText (tests) wins; day-only dateText is never a stamp.
+    const stampText =
+      pending && typeof pending.stampText === "string" && pending.stampText && this.fixedWorkLogNow instanceof Date
+        ? pending.stampText
+        : formatWorkLogStamp(
+            this.fixedWorkLogNow instanceof Date
+              ? this.fixedWorkLogNow
+              : new Date(),
+          );
     const state = item.empty ? "empty" : item.hasInlineField ? "warning" : "valid";
     addElementClasses(rowEl, "bob-cnp-schedule-work-log-row", `is-${state}`);
 
@@ -424,16 +431,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       dispatch: async (summary) =>
         await this.applySelectedValue(item, {
           scheduleLog,
-          schedulingWorkLog: summary
-            ? {
-                summary,
-                stampText: formatWorkLogStamp(
-                  this.fixedWorkLogNow instanceof Date
-                    ? this.fixedWorkLogNow
-                    : new Date(),
-                ),
-              }
-            : null,
+          schedulingWorkLog: summary ? { summary } : null,
         }),
     });
   }
@@ -503,16 +501,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
         scheduleSummary,
         dispatch: async (summary) =>
           await this.plugin.applyLinkPickerPriorityValue(this, item, {
-            schedulingWorkLog: summary
-              ? {
-                  summary,
-                  stampText: formatWorkLogStamp(
-                    this.fixedWorkLogNow instanceof Date
-                      ? this.fixedWorkLogNow
-                      : new Date(),
-                  ),
-                }
-              : null,
+            schedulingWorkLog: summary ? { summary } : null,
             precomputedByPath,
           }),
       });
@@ -545,16 +534,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
         scheduleSummary,
         dispatch: async (summary) =>
           await this.applySelectedValue(item, {
-            schedulingWorkLog: summary
-              ? {
-                  summary,
-                  stampText: formatWorkLogStamp(
-                    this.fixedWorkLogNow instanceof Date
-                      ? this.fixedWorkLogNow
-                      : new Date(),
-                  ),
-                }
-              : null,
+            schedulingWorkLog: summary ? { summary } : null,
             precomputedRollByLine: rollByLine,
             precomputedScheduledValueByLine: scheduledValueByLine,
           }),
@@ -584,16 +564,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       scheduleSummary,
       dispatch: async (summary) =>
         await this.applySelectedValue(item, {
-          schedulingWorkLog: summary
-            ? {
-                summary,
-                stampText: formatWorkLogStamp(
-                  this.fixedWorkLogNow instanceof Date
-                    ? this.fixedWorkLogNow
-                    : new Date(),
-                ),
-              }
-            : null,
+          schedulingWorkLog: summary ? { summary } : null,
           precomputedRoll,
         }),
     });

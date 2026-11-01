@@ -740,9 +740,6 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       return false;
     }
     let summary = "";
-    const workLogNow = options.now instanceof Date ? options.now : new Date();
-    const stampText =
-      options.stampText || formatWorkLogStamp(workLogNow);
     if (probe.mode === "release") {
       const needsReason = probe.released.some(
         (entry) => entry.fromStatus === "/",
@@ -780,10 +777,20 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     if (!laneRouteGate || laneRouteGate.kind === "cancel") {
       return false;
     }
+    // Work Log clock: sample once after awaited input and routing settle,
+    // before planning writes. Explicit stampText wins for tests; otherwise
+    // format the injected now or the live clock. One stamp per gesture.
+    const commitNow =
+      options.now instanceof Date
+        ? options.now
+        : options.workLogNow instanceof Date
+          ? options.workLogNow
+          : new Date();
+    const stampText = options.stampText || formatWorkLogStamp(commitNow);
     const plan = planTaskLaneBatch(content, session, {
       summary,
       stampText,
-      now: workLogNow,
+      now: commitNow,
       stampLine: this.getFreshnessStampLine(),
       freshDateText: this.getFreshnessDateText(),
     });

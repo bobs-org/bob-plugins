@@ -101,9 +101,24 @@ class BlockIdPromptPomodoroLinksMixin {
         }
       }
 
-      // The picker is the one constant first step of the link gesture:
-      // Pomodoro picker → (block-ID prompt) → (inbox route picker) →
+      // The route picker is the one constant first step of the link gesture:
+      // (inbox route picker) → Pomodoro picker → (block-ID prompt) →
       // write. Cancelling it can never leave a half-assigned block ID.
+      let inboxRouteGate;
+      this.promptOpen = true;
+      try {
+        inboxRouteGate = await this.gatePomodoroToggleInboxRoute(source, "link to today", []);
+      } finally {
+        this.promptOpen = false;
+      }
+      if (!inboxRouteGate || inboxRouteGate.kind === "cancel") {
+        return;
+      }
+      if (revalidatePomodoroToggleSourceAfterRoute(source, {}) !== true) {
+        new Notice(`Task link blocked: selected task changed in ${source.sourcePath}`);
+        return;
+      }
+      source.inboxRouteGate = inboxRouteGate;
       const pomodoroTarget = await this.choosePomodoroLinkTarget(source);
       if (!pomodoroTarget) {
         return;
@@ -430,6 +445,26 @@ class BlockIdPromptPomodoroLinksMixin {
       return false;
     }
 
+    const inboxGate = source && source.inboxRouteGate;
+    if (inboxGate && inboxGate.kind === "move" && typeof inboxGate.path === "string" && inboxGate.path) {
+      const destinationFile = typeof this.resolveTaskFile === "function"
+        ? this.resolveTaskFile(inboxGate.path)
+        : null;
+      if (!destinationFile) {
+        new Notice(`Task link blocked: ${inboxGate.path} could not be read`);
+        return false;
+      }
+      const destinationContent = await this.readFileSnapshot(destinationFile, source);
+      if (destinationContent === null) {
+        new Notice(`Task link blocked: ${inboxGate.path} could not be read`);
+        return false;
+      }
+      if (blockTokenMatches(destinationContent, newId).length > 0) {
+        new Notice(`Block ID '${newId}' already exists in ${inboxGate.path}`);
+        return false;
+      }
+    }
+
     try {
       const result = await this.applyPomodoroTaskLink(source, newId, true);
       if (result === false && source && source.inboxRouteCancelled === true) {
@@ -511,24 +546,37 @@ class BlockIdPromptPomodoroLinksMixin {
       return false;
     }
 
-    // Inbox routing gate (link-toggle-gate): on an inbox task, ask where
-    // the task goes before writing. Cancel writes nothing and flags the
-    // source so the block-ID/Work-summary submit can cancel the whole
-    // toggle (truthy sentinel closes the original modal); stay is today's
-    // behavior; move links first and routes after the write commits.
-    const routeGate = await this.gatePomodoroToggleInboxRoute(
-      source,
-      "link to today",
-      isNewId ? [id] : [],
-    );
-    if (!routeGate || routeGate.kind === "cancel") {
-      if (source) source.inboxRouteCancelled = true;
-      return false;
-    }
-    if (source) source.inboxRouteCancelled = false;
-    if (revalidatePomodoroToggleSourceAfterRoute(source, { isNewId, newId: isNewId ? id : null }) !== true) {
-      new Notice(`Task link blocked: selected task changed in ${source.sourcePath}`);
-      return false;
+    // Inbox routing gate (link-toggle-gate): the link direction routes
+    // first in openPomodoroTaskLink, so a stored inboxRouteGate is reused
+    // here without prompting. Direct callers without one keep today's gate
+    // call with the reserved ID; stay is today's behavior; move links first
+    // and routes after the write commits.
+    let routeGate = null;
+    if (source && source.inboxRouteGate) {
+      routeGate = source.inboxRouteGate;
+      if (source) source.inboxRouteCancelled = false;
+      if (revalidatePomodoroToggleSourceAfterRoute(source, { isNewId, newId: isNewId ? id : null }) !== true) {
+        new Notice(`Task link blocked: selected task changed in ${source.sourcePath}`);
+        return false;
+      }
+    } else {
+      routeGate = await this.gatePomodoroToggleInboxRoute(
+        source,
+        "link to today",
+        isNewId ? [id] : [],
+      );
+      if (!routeGate || routeGate.kind === "cancel") {
+        if (source) source.inboxRouteCancelled = true;
+        return false;
+      }
+      if (source) {
+        source.inboxRouteCancelled = false;
+        source.inboxRouteGate = routeGate;
+      }
+      if (revalidatePomodoroToggleSourceAfterRoute(source, { isNewId, newId: isNewId ? id : null }) !== true) {
+        new Notice(`Task link blocked: selected task changed in ${source.sourcePath}`);
+        return false;
+      }
     }
 
     let taskFile = this.app && this.app.vault

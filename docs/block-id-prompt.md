@@ -12,10 +12,10 @@ Block ID Prompt helps create and manage stable block identifiers and task links 
 | --- | --- |
 | Name | Block ID Prompt |
 | ID | `block-id-prompt` |
-| Version | 1.34.0 |
+| Version | 1.35.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Typing (( opens the Task Wikilink Picker to insert a [[note#^id]] link to any vault task. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, Ctrl+Shift+Enter asks where the task goes before linking or unlinking, then moves it with the toggle applied (nav inboxRoute v1). Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = suggested, else current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent task types with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. |
+| Description | Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Typing (( opens the Task Wikilink Picker to insert a [[note#^id]] link to any vault task. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, a Ctrl+Shift+Enter link asks where the task goes first, and Link to today then suggests the destination's type; an unlink asks right before writing, then moves it with the toggle applied (nav inboxRoute v1). Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = suggested, else current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent task types with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -58,8 +58,10 @@ type FIX`, `Linked under WRITE · type cleared`, or `Linked under LATER ·
 keeps WRITE`. `Alt+Enter` keeps the current type and merges it into the
 destination name (`FIX + WRITE`) without a field write. If the suggestion's
 write-relevant identity changed since the picker opened, the link still
-happens and the notice ends `· type unchanged (suggestion changed)`. Inbox
-notes with no shown suggestion still retype from the live `suggestFor`.
+happens and the notice ends `· type unchanged (suggestion changed)`. A routed
+inbox link retypes from the destination's `suggestFor`
+(`{ path: <dest>, line: 1, text: <task line> }`), so picking the suggested
+Pomodoro writes no `[type::]` field.
 
 Linking applies lane changes: Ready and Blocked tasks become Next, while Next
 and In Progress tasks stay unchanged. A `^^` task-picker link that is the sole
@@ -186,10 +188,15 @@ prerequisite-blocked and raises them to Next. A tagged `#prj_is_blocked` `^prj`,
 an inherited project block, or a project date remains refused without raising
 those prerequisites.
 
-On an inbox note, `Ctrl+Shift+Enter` asks where the task goes before linking or
-unlinking, then moves it with the toggle applied. A `Ctrl+Shift+Enter` link
-from the row the review walk just landed on advances the walk once to the next
-remaining item.
+On an inbox note, a `Ctrl+Shift+Enter` link asks where the task goes first:
+the route picker opens, then Link to today suggests the destination's type
+with a `→ <dest>` chip, then the block-ID prompt (which refuses an ID that
+already exists in the destination) before the write and the move. `⇧↵` in the
+route picker keeps the task in the inbox with today's inbox-based suggestion.
+An unlink keeps its order: the optional Work summary prompt first, then the
+route picker right before the write. A `Ctrl+Shift+Enter` link from the row
+the review walk just landed on advances the walk once to the next remaining
+item.
 
 The plugin exposes the Link to today picker as `api.pomodoroLinkPicker` v1 so
 the navigation successor picker can retarget rows per row. `pick()` also accepts

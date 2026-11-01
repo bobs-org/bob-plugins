@@ -9717,6 +9717,32 @@ function pomodoroThemeWriteLineText(taskContent, line) {
   return line < lines.length ? lines[line] : "";
 }
 
+// Shared suggestion context for the Ctrl+Shift+Enter link direction. The
+// Ledger Tools cascade reads only path (residence chain), line, and the
+// task's own line text, so a routed task suggests from a one-line virtual
+// note at the destination.
+function pomodoroLinkThemeTaskContext(source, liveText) {
+  try {
+    const gate = source && source.inboxRouteGate;
+    if (
+      gate && gate.kind === "move" &&
+      typeof gate.path === "string" && gate.path
+    ) {
+      const lineText = pomodoroThemeWriteLineText(
+        typeof liveText === "string" ? liveText : "",
+        source && source.line,
+      );
+      return { path: gate.path, line: 1, text: lineText };
+    }
+  } catch (_error) {
+    // Fall through to the inbox context below.
+  }
+  const path = source && typeof source.sourcePath === "string" ? source.sourcePath : "";
+  const line = Number.isInteger(source && source.line) ? source.line + 1 : 0;
+  const text = typeof liveText === "string" ? liveText : "";
+  return { path, line, text };
+}
+
 function resolvePomodoroLinkThemeWrite(plugin, source, target, taskContent) {
   try {
     const intent = normalizePomodoroLinkPickerThemeIntent(
@@ -9741,15 +9767,16 @@ function resolvePomodoroLinkThemeWrite(plugin, source, target, taskContent) {
     ) {
       return emptyPomodoroThemeWrite();
     }
-    const path = source && typeof source.sourcePath === "string" ? source.sourcePath : "";
-    const oneBasedLine = Number.isInteger(source && source.line) ? source.line + 1 : 0;
-    const text = typeof taskContent === "string" ? taskContent : "";
-    if (!path || oneBasedLine < 1) {
+    const context = pomodoroLinkThemeTaskContext(
+      source,
+      typeof taskContent === "string" ? taskContent : "",
+    );
+    if (!context.path || context.line < 1) {
       return emptyPomodoroThemeWrite();
     }
     let current = null;
     try {
-      current = themesApi.suggestFor({ path, line: oneBasedLine, text });
+      current = themesApi.suggestFor({ path: context.path, line: context.line, text: context.text });
     } catch (_error) {
       return { ...emptyPomodoroThemeWrite(), suggestionChanged: true };
     }
@@ -10667,6 +10694,8 @@ class PomodoroLinkPickerModal extends Modal {
     this.needsBlockId = safeRequest.needsBlockId === true;
     this.now = safeRequest.now || null;
     this.budget = safeRequest.budget || null;
+    const route = safeRequest.route || null;
+    this.routeName = route && typeof route.name === "string" && route.name ? route.name : null;
     this.query = "";
     this.rows = [];
     this.selectedIndex = -1;
@@ -10751,6 +10780,13 @@ class PomodoroLinkPickerModal extends Modal {
     const side = header.createDiv({ cls: "bid-ppk-header-side" });
     const lane = pomodoroLinkPickerLaneChip(this.taskStatus);
     side.createDiv({ cls: lane.cls, text: lane.text });
+    if (this.routeName) {
+      side.createDiv({
+        cls: "bid-ppk-route",
+        text: `→ ${this.routeName}`,
+        attr: { title: `Moves to ${this.routeName} after linking` },
+      });
+    }
     if (this.needsBlockId) {
       side.createDiv({
         cls: "bid-ppk-blockid",
@@ -15033,9 +15069,24 @@ class BlockIdPromptPomodoroLinksMixin {
         }
       }
 
-      // The picker is the one constant first step of the link gesture:
-      // Pomodoro picker → (block-ID prompt) → (inbox route picker) →
+      // The route picker is the one constant first step of the link gesture:
+      // (inbox route picker) → Pomodoro picker → (block-ID prompt) →
       // write. Cancelling it can never leave a half-assigned block ID.
+      let inboxRouteGate;
+      this.promptOpen = true;
+      try {
+        inboxRouteGate = await this.gatePomodoroToggleInboxRoute(source, "link to today", []);
+      } finally {
+        this.promptOpen = false;
+      }
+      if (!inboxRouteGate || inboxRouteGate.kind === "cancel") {
+        return;
+      }
+      if (revalidatePomodoroToggleSourceAfterRoute(source, {}) !== true) {
+        new Notice(`Task link blocked: selected task changed in ${source.sourcePath}`);
+        return;
+      }
+      source.inboxRouteGate = inboxRouteGate;
       const pomodoroTarget = await this.choosePomodoroLinkTarget(source);
       if (!pomodoroTarget) {
         return;
@@ -15362,6 +15413,26 @@ class BlockIdPromptPomodoroLinksMixin {
       return false;
     }
 
+    const inboxGate = source && source.inboxRouteGate;
+    if (inboxGate && inboxGate.kind === "move" && typeof inboxGate.path === "string" && inboxGate.path) {
+      const destinationFile = typeof this.resolveTaskFile === "function"
+        ? this.resolveTaskFile(inboxGate.path)
+        : null;
+      if (!destinationFile) {
+        new Notice(`Task link blocked: ${inboxGate.path} could not be read`);
+        return false;
+      }
+      const destinationContent = await this.readFileSnapshot(destinationFile, source);
+      if (destinationContent === null) {
+        new Notice(`Task link blocked: ${inboxGate.path} could not be read`);
+        return false;
+      }
+      if (blockTokenMatches(destinationContent, newId).length > 0) {
+        new Notice(`Block ID '${newId}' already exists in ${inboxGate.path}`);
+        return false;
+      }
+    }
+
     try {
       const result = await this.applyPomodoroTaskLink(source, newId, true);
       if (result === false && source && source.inboxRouteCancelled === true) {
@@ -15443,24 +15514,37 @@ class BlockIdPromptPomodoroLinksMixin {
       return false;
     }
 
-    // Inbox routing gate (link-toggle-gate): on an inbox task, ask where
-    // the task goes before writing. Cancel writes nothing and flags the
-    // source so the block-ID/Work-summary submit can cancel the whole
-    // toggle (truthy sentinel closes the original modal); stay is today's
-    // behavior; move links first and routes after the write commits.
-    const routeGate = await this.gatePomodoroToggleInboxRoute(
-      source,
-      "link to today",
-      isNewId ? [id] : [],
-    );
-    if (!routeGate || routeGate.kind === "cancel") {
-      if (source) source.inboxRouteCancelled = true;
-      return false;
-    }
-    if (source) source.inboxRouteCancelled = false;
-    if (revalidatePomodoroToggleSourceAfterRoute(source, { isNewId, newId: isNewId ? id : null }) !== true) {
-      new Notice(`Task link blocked: selected task changed in ${source.sourcePath}`);
-      return false;
+    // Inbox routing gate (link-toggle-gate): the link direction routes
+    // first in openPomodoroTaskLink, so a stored inboxRouteGate is reused
+    // here without prompting. Direct callers without one keep today's gate
+    // call with the reserved ID; stay is today's behavior; move links first
+    // and routes after the write commits.
+    let routeGate = null;
+    if (source && source.inboxRouteGate) {
+      routeGate = source.inboxRouteGate;
+      if (source) source.inboxRouteCancelled = false;
+      if (revalidatePomodoroToggleSourceAfterRoute(source, { isNewId, newId: isNewId ? id : null }) !== true) {
+        new Notice(`Task link blocked: selected task changed in ${source.sourcePath}`);
+        return false;
+      }
+    } else {
+      routeGate = await this.gatePomodoroToggleInboxRoute(
+        source,
+        "link to today",
+        isNewId ? [id] : [],
+      );
+      if (!routeGate || routeGate.kind === "cancel") {
+        if (source) source.inboxRouteCancelled = true;
+        return false;
+      }
+      if (source) {
+        source.inboxRouteCancelled = false;
+        source.inboxRouteGate = routeGate;
+      }
+      if (revalidatePomodoroToggleSourceAfterRoute(source, { isNewId, newId: isNewId ? id : null }) !== true) {
+        new Notice(`Task link blocked: selected task changed in ${source.sourcePath}`);
+        return false;
+      }
     }
 
     let taskFile = this.app && this.app.vault
@@ -16148,11 +16232,7 @@ class BlockIdPromptPomodoroLinkPickerMixin {
       const themeSnapshot = safeBlockPomodoroThemePickerSnapshot(
         this.app,
         model,
-        {
-          path: source.sourcePath,
-          line: source.line + 1,
-          text: taskText,
-        },
+        pomodoroLinkThemeTaskContext(source, taskText),
       );
       attachBlockPomodoroThemePickerSnapshot(model, themeSnapshot);
 
@@ -16169,6 +16249,10 @@ class BlockIdPromptPomodoroLinkPickerMixin {
         now: this.now(),
         budget,
       };
+      const routeGate = source && source.inboxRouteGate;
+      if (routeGate && routeGate.kind === "move" && typeof routeGate.name === "string" && routeGate.name) {
+        request.route = { name: routeGate.name };
+      }
 
       this.promptOpen = true;
       heldPromptOpen = true;

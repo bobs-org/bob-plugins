@@ -831,7 +831,7 @@ test("catalog spelling wins over a canonical planRetype name", async () => {
   assert.equal(lastNotice(), "Linked under Fix · stays Next · type Fix");
 });
 
-test("an inbox task with no shown suggestion retypes from the live suggestion", async () => {
+test("a routed inbox task retypes from the destination suggestion", async () => {
   const h = createTaskModeHarness({
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: namedDaily("FIX"),
@@ -849,10 +849,16 @@ test("an inbox task with no shown suggestion retypes from the live suggestion", 
       reason: null,
     },
   });
+  const suggestionCalls = [];
   installThemeWriteApis(h.plugin, {
     suggestion: noteSuggestion(),
+    suggestFor: (request) => {
+      suggestionCalls.push(request);
+      return noteSuggestion();
+    },
   });
   const source = sourceForPomodoroLink(h.editor, "mac_inbox.md", 0);
+  source.inboxRouteGate = { kind: "move", path: "Areas/sase_blog.md", name: "sase_blog" };
   source.pomodoroTarget = existingTarget("FIX", {
     deliberate: true,
     linkOnce: false,
@@ -862,6 +868,117 @@ test("an inbox task with no shown suggestion retypes from the live suggestion", 
   assert.equal(result, true);
   assert.equal(h.editor.getValue(), "- [*] #task Ship it [type:: FIX] ^ship");
   assert.match(lastNotice(), /type FIX/);
+  assert.deepEqual(suggestionCalls, [
+    { path: "Areas/sase_blog.md", line: 1, text: "- [*] #task Ship it ^ship" },
+  ]);
+});
+
+test("the inbox and the destination inherit different types, and the user picks the destination's suggested Pomodoro", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: namedDaily("FIX"),
+    taskPath: "mac_inbox.md",
+  });
+  installMockInboxRoute(h.plugin, [], {
+    inboxPaths: ["mac_inbox.md"],
+    promptOutcome: { kind: "move", path: "Areas/sase_blog.md", name: "sase_blog" },
+    commitResult: {
+      ok: true,
+      name: "sase_blog",
+      count: 1,
+      notice: "",
+      handledRefs: [],
+      reason: null,
+    },
+  });
+  const inboxSuggestion = noteSuggestion({
+    theme: { key: "build", name: "BUILD", known: true, hue: "yellow", hue_source: "hash" },
+    source: "note",
+    label: "from inbox",
+    from: {
+      path: "mac_inbox.md",
+      stem: "mac_inbox",
+      kind: "area",
+      chain: ["mac_inbox.md"],
+      hue: "aqua",
+    },
+  });
+  const destinationSuggestion = noteSuggestion({
+    theme: { key: "fix", name: "FIX", known: true, hue: "violet", hue_source: "hash" },
+    source: "note",
+    label: "from sase_blog",
+    from: {
+      path: "Areas/sase_blog.md",
+      stem: "sase_blog",
+      kind: "area",
+      chain: ["Areas/sase_blog.md"],
+      hue: "aqua",
+    },
+  });
+  installThemeWriteApis(h.plugin, {
+    suggestion: destinationSuggestion,
+    suggestFor: () => destinationSuggestion,
+  });
+  const source = sourceForPomodoroLink(h.editor, "mac_inbox.md", 0);
+  source.inboxRouteGate = { kind: "move", path: "Areas/sase_blog.md", name: "sase_blog" };
+  source.pomodoroTarget = existingTarget("FIX", {
+    deliberate: true,
+    linkOnce: false,
+    shown: destinationSuggestion,
+  });
+  void inboxSuggestion;
+  const result = await h.plugin.applyPomodoroTaskLink(source, "ship", false);
+  assert.equal(result, true);
+  assert.equal(h.editor.getValue(), "- [*] #task Ship it ^ship");
+  assert.doesNotMatch(lastNotice(), /suggestion changed/);
+  assert.match(lastNotice(), /Linked under FIX/);
+});
+
+test("a routed link that picks a different type writes the field", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: namedDaily("BUILD"),
+    taskPath: "mac_inbox.md",
+  });
+  installMockInboxRoute(h.plugin, [], {
+    inboxPaths: ["mac_inbox.md"],
+    promptOutcome: { kind: "move", path: "Areas/sase_blog.md", name: "sase_blog" },
+    commitResult: {
+      ok: true,
+      name: "sase_blog",
+      count: 1,
+      notice: "",
+      handledRefs: [],
+      reason: null,
+    },
+  });
+  const destinationSuggestion = noteSuggestion({
+    theme: { key: "write", name: "WRITE", known: true, hue: "violet", hue_source: "hash" },
+    source: "note",
+    label: "from sase_blog",
+    from: {
+      path: "Areas/sase_blog.md",
+      stem: "sase_blog",
+      kind: "area",
+      chain: ["Areas/sase_blog.md"],
+      hue: "aqua",
+    },
+  });
+  installThemeWriteApis(h.plugin, {
+    suggestion: destinationSuggestion,
+    suggestFor: () => destinationSuggestion,
+  });
+  const source = sourceForPomodoroLink(h.editor, "mac_inbox.md", 0);
+  source.inboxRouteGate = { kind: "move", path: "Areas/sase_blog.md", name: "sase_blog" };
+  source.pomodoroTarget = existingTarget("BUILD", {
+    deliberate: true,
+    linkOnce: false,
+    shown: destinationSuggestion,
+  });
+  const result = await h.plugin.applyPomodoroTaskLink(source, "ship", false);
+  assert.equal(result, true);
+  assert.equal(h.editor.getValue(), "- [*] #task Ship it [type:: BUILD] ^ship");
+  assert.match(lastNotice(), /type BUILD/);
 });
 
 test("malformed themeIntent never enables a write", async () => {

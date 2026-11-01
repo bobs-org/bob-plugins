@@ -954,6 +954,7 @@ test("inbox-route: stay matches today", async () => {
 
   assert.ok(h.writes[0].content.includes("[[Tasks#^ship]]"));
   assert.equal(lastNotice(), "Linked under Current · stays Next");
+  assert.equal(routePromptCalls(routeCalls).length, 1);
   const [promptCall] = routePromptCalls(routeCalls);
   assert.equal(promptCall[1].path, "Tasks.md");
   assert.equal(promptCall[1].line, 0);
@@ -987,6 +988,7 @@ test("inbox-route: move links, then moves, with one composed toast and a route c
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
 
   assert.ok(h.writes[0].content.includes("[[Tasks#^ship]]"));
+  assert.equal(routePromptCalls(routeCalls).length, 1);
   const [commitCall] = routeCommitCalls(routeCalls);
   assert.equal(commitCall[1].path, "Tasks.md");
   assert.equal(commitCall[1].line, 0);
@@ -1008,7 +1010,7 @@ test("inbox-route: move links, then moves, with one composed toast and a route c
   assert.deepEqual(noticeMessages, []);
 });
 
-test("inbox-route: a new block ID goes through the ID prompt first, then the route, with the reserved ID passed", async () => {
+test("inbox-route: a new block ID goes through the route, then the picker, then the ID prompt", async () => {
   const h = createTaskModeHarness({
     taskContent: "- [*] #task Ship it",
     dailyContent: UNLINKED_DAILY,
@@ -1028,6 +1030,16 @@ test("inbox-route: a new block ID goes through the ID prompt first, then the rou
       reason: null,
     },
   });
+  h.plugin.resolveTaskFile = (path) => {
+    if (path === "Tasks.md") return { path: "Tasks.md" };
+    if (path === "health.md") return { path: "health.md" };
+    return null;
+  };
+  const originalRead = h.plugin.app.vault.read;
+  h.plugin.app.vault.read = async (target) => {
+    if (target.path === "health.md") return "- [ ] #task Other ^other";
+    return originalRead(target);
+  };
   let promptedWith = null;
   h.plugin.openBlockIdPrompt = (source) => {
     promptedWith = source;
@@ -1036,7 +1048,14 @@ test("inbox-route: a new block ID goes through the ID prompt first, then the rou
 
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
   assert.ok(promptedWith);
-  assert.deepEqual(routePromptCalls(routeCalls), []);
+  assert.equal(routePromptCalls(routeCalls).length, 1);
+  const [promptCall] = routePromptCalls(routeCalls);
+  assert.deepEqual(promptCall[1].reservedBlockIds, []);
+  assert.deepEqual(promptedWith.inboxRouteGate, {
+    kind: "move",
+    path: "health.md",
+    name: "health",
+  });
 
   const origin = promptedWith.reviewOrigin;
   h.plugin.promptOpen = false;
@@ -1044,8 +1063,7 @@ test("inbox-route: a new block ID goes through the ID prompt first, then the rou
 
   assert.equal(result, true);
   assert.equal(h.editor.getValue(), "- [*] #task Ship it ^fresh");
-  const [promptCall] = routePromptCalls(routeCalls);
-  assert.deepEqual(promptCall[1].reservedBlockIds, ["fresh"]);
+  assert.equal(routePromptCalls(routeCalls).length, 1);
   const [commitCall] = routeCommitCalls(routeCalls);
   assert.deepEqual(commitCall[1].expected, [
     { line: 0, raw: "- [*] #task Ship it", blockId: "fresh" },
@@ -1058,6 +1076,47 @@ test("inbox-route: a new block ID goes through the ID prompt first, then the rou
     ],
   ]);
   assert.deepEqual(noticeMessages, []);
+});
+
+test("inbox-route: a submitted ID that already exists in the destination keeps the prompt open", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it",
+    dailyContent: UNLINKED_DAILY,
+    taskPath: "mac_inbox.md",
+  });
+  installMockReviewWalk(h.plugin, []);
+  const routeCalls = [];
+  installMockInboxRoute(h.plugin, routeCalls, {
+    inboxPaths: ["mac_inbox.md"],
+    promptOutcome: { kind: "move", path: "health.md", name: "health" },
+  });
+  h.plugin.resolveTaskFile = (path) => {
+    if (path === "mac_inbox.md") return { path: "mac_inbox.md" };
+    if (path === "health.md") return { path: "health.md" };
+    return null;
+  };
+  const store = { "health.md": "- [ ] #task Other ^fresh" };
+  h.plugin.app.vault.read = async (target) => {
+    if (target.path === "Daily.md") return UNLINKED_DAILY;
+    if (target.path in store) return store[target.path];
+    return null;
+  };
+  let promptedWith = null;
+  h.plugin.openBlockIdPrompt = (source) => {
+    promptedWith = source;
+    h.plugin.promptOpen = true;
+  };
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+  assert.ok(promptedWith);
+  h.plugin.promptOpen = false;
+  const before = h.editor.getValue();
+  resetNotices();
+  const result = await h.plugin.submitPomodoroTaskLinkBlockId(promptedWith, "fresh");
+  assert.equal(result, false);
+  assert.equal(h.editor.getValue(), before);
+  assert.deepEqual(h.writes, []);
+  assert.equal(lastNotice(), "Block ID 'fresh' already exists in health.md");
+  assert.deepEqual(routeCommitCalls(routeCalls), []);
 });
 
 test("inbox-route: a move failure gives the partial notice plus a link-today continue", async () => {
@@ -1154,7 +1213,7 @@ test("inbox-route: source drift during route prompt refuses without writes", asy
   assert.deepEqual(routeCalls.filter((e) => e[0] === "commit"), []);
 });
 
-test("inbox-route: block-ID route cancel returns sentinel and settles null once", async () => {
+test("inbox-route: route cancel up front writes nothing, opens no ID prompt, and settles null once", async () => {
   const h = createTaskModeHarness({
     taskContent: "- [*] #task Ship it",
     dailyContent: UNLINKED_DAILY,
@@ -1172,16 +1231,20 @@ test("inbox-route: block-ID route cancel returns sentinel and settles null once"
     promptedWith = source;
     h.plugin.promptOpen = true;
   };
-  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
-  assert.ok(promptedWith);
-  const origin = promptedWith.reviewOrigin;
-  assert.ok(origin);
-  h.plugin.promptOpen = false;
+  const pickerCalls = [];
+  const originalPicker = h.plugin.promptPomodoroLinkTarget;
+  h.plugin.promptPomodoroLinkTarget = async (request) => {
+    pickerCalls.push(request);
+    return originalPicker(request);
+  };
   const before = h.editor.getValue();
-  const result = await h.plugin.submitPomodoroTaskLinkBlockId(promptedWith, "ship");
-  assert.equal(result, "route-cancelled");
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+  assert.equal(promptedWith, null);
+  assert.deepEqual(pickerCalls, []);
   assert.equal(h.editor.getValue(), before);
   assert.deepEqual(h.writes, []);
+  assert.equal(routePromptCalls(routeCalls).length, 1);
+  assert.deepEqual(routeCommitCalls(routeCalls), []);
   const continues = calls.filter((e) => e[0] === "continue");
   assert.equal(continues.length, 1);
   assert.deepEqual(continues[0][2], null);

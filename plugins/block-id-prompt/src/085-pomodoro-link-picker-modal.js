@@ -151,6 +151,8 @@ class PomodoroLinkPickerModal extends Modal {
     this.needsBlockId = safeRequest.needsBlockId === true;
     this.now = safeRequest.now || null;
     this.budget = safeRequest.budget || null;
+    const route = safeRequest.route || null;
+    this.routeName = route && typeof route.name === "string" && route.name ? route.name : null;
     this.query = "";
     this.rows = [];
     this.selectedIndex = -1;
@@ -235,6 +237,13 @@ class PomodoroLinkPickerModal extends Modal {
     const side = header.createDiv({ cls: "bid-ppk-header-side" });
     const lane = pomodoroLinkPickerLaneChip(this.taskStatus);
     side.createDiv({ cls: lane.cls, text: lane.text });
+    if (this.routeName) {
+      side.createDiv({
+        cls: "bid-ppk-route",
+        text: `→ ${this.routeName}`,
+        attr: { title: `Moves to ${this.routeName} after linking` },
+      });
+    }
     if (this.needsBlockId) {
       side.createDiv({
         cls: "bid-ppk-blockid",

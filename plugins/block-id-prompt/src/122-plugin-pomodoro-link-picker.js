@@ -93,11 +93,7 @@ class BlockIdPromptPomodoroLinkPickerMixin {
       const themeSnapshot = safeBlockPomodoroThemePickerSnapshot(
         this.app,
         model,
-        {
-          path: source.sourcePath,
-          line: source.line + 1,
-          text: taskText,
-        },
+        pomodoroLinkThemeTaskContext(source, taskText),
       );
       attachBlockPomodoroThemePickerSnapshot(model, themeSnapshot);
 
@@ -114,6 +110,10 @@ class BlockIdPromptPomodoroLinkPickerMixin {
         now: this.now(),
         budget,
       };
+      const routeGate = source && source.inboxRouteGate;
+      if (routeGate && routeGate.kind === "move" && typeof routeGate.name === "string" && routeGate.name) {
+        request.route = { name: routeGate.name };
+      }
 
       this.promptOpen = true;
       heldPromptOpen = true;

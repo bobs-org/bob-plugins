@@ -302,7 +302,7 @@ test("a no-ID task gets picker, then the block-ID prompt with the target carried
   assert.equal(lastNotice(), "Linked under Current · stays Next");
 });
 
-test("inbox order is picker, then route, then write", async () => {
+test("inbox order is route, then picker, then write", async () => {
   const h = createTaskModeHarness({
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: UNLINKED_DAILY,
@@ -322,9 +322,145 @@ test("inbox order is picker, then route, then write", async () => {
     },
   });
   await h.plugin.openPomodoroTaskLink(h.editor, h.view);
-  assert.deepEqual(order, ["picker", "route-prompt"]);
+  assert.deepEqual(order, ["route-prompt", "picker"]);
   assert.equal(h.writes.length, 1);
   assert.equal(lastNotice(), "Linked under Current · stays Next");
+});
+
+test("a route cancel never opens the picker and writes nothing", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  const order = [];
+  const originalPrompt = h.plugin.promptPomodoroLinkTarget;
+  h.plugin.promptPomodoroLinkTarget = async (request) => {
+    order.push("picker");
+    return originalPrompt(request);
+  };
+  const routeCalls = [];
+  installMockInboxRoute(h.plugin, routeCalls, {
+    inboxPaths: ["Tasks.md"],
+    promptOutcome: { kind: "cancel" },
+  });
+  const before = h.editor.getValue();
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+  assert.deepEqual(order, []);
+  assert.equal(h.editor.getValue(), before);
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(noticeMessages, []);
+  assert.equal(routeCalls.filter((entry) => entry[0] === "prompt").length, 1);
+});
+
+test("a routed move suggests from the destination with a one-line virtual note", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  const suggestionCalls = [];
+  h.plugin.app.plugins = h.plugin.app.plugins || { plugins: {} };
+  h.plugin.app.plugins.plugins["bob-ledger-tools"] = {
+    api: {
+      caps: () => ({ exempt: ["PLAN"] }),
+      planBudget: () => null,
+      themes: {
+        version: 1,
+        suggestFor(request) {
+          suggestionCalls.push(request);
+          return null;
+        },
+        isKnownTheme: () => false,
+        componentsOf: (name) => String(name || "").split("+").map((raw) => ({
+          raw: raw.trim(),
+          key: raw.trim().toLowerCase().replace(/\s+/g, " "),
+        })),
+      },
+    },
+  };
+  installMockInboxRoute(h.plugin, [], {
+    inboxPaths: ["Tasks.md"],
+    promptOutcome: { kind: "move", path: "Areas/sase_blog.md", name: "sase_blog" },
+  });
+  let pickerRequest = null;
+  h.plugin.promptPomodoroLinkTarget = async (request) => {
+    pickerRequest = request;
+    return null;
+  };
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+  assert.deepEqual(suggestionCalls, [
+    { path: "Areas/sase_blog.md", line: 1, text: "- [*] #task Ship it ^ship" },
+  ]);
+  assert.ok(pickerRequest);
+});
+
+test("a routed stay suggests from the inbox path", async () => {
+  const h = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  const suggestionCalls = [];
+  h.plugin.app.plugins = h.plugin.app.plugins || { plugins: {} };
+  h.plugin.app.plugins.plugins["bob-ledger-tools"] = {
+    api: {
+      caps: () => ({ exempt: ["PLAN"] }),
+      planBudget: () => null,
+      themes: {
+        version: 1,
+        suggestFor(request) {
+          suggestionCalls.push(request);
+          return null;
+        },
+        isKnownTheme: () => false,
+        componentsOf: (name) => String(name || "").split("+").map((raw) => ({
+          raw: raw.trim(),
+          key: raw.trim().toLowerCase().replace(/\s+/g, " "),
+        })),
+      },
+    },
+  };
+  installMockInboxRoute(h.plugin, [], {
+    inboxPaths: ["Tasks.md"],
+    promptOutcome: { kind: "stay" },
+  });
+  h.plugin.promptPomodoroLinkTarget = async () => null;
+  await h.plugin.openPomodoroTaskLink(h.editor, h.view);
+  assert.ok(suggestionCalls.length >= 1);
+  assert.equal(suggestionCalls[0].path, "Tasks.md");
+  assert.equal(suggestionCalls[0].line, 1);
+});
+
+test("a routed move carries the destination chip and a stay carries none", async () => {
+  const moved = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  installMockInboxRoute(moved.plugin, [], {
+    inboxPaths: ["Tasks.md"],
+    promptOutcome: { kind: "move", path: "Areas/sase_blog.md", name: "sase_blog" },
+  });
+  let movedRequest = null;
+  moved.plugin.promptPomodoroLinkTarget = async (request) => {
+    movedRequest = request;
+    return null;
+  };
+  await moved.plugin.openPomodoroTaskLink(moved.editor, moved.view);
+  assert.deepEqual(movedRequest && movedRequest.route, { name: "sase_blog" });
+
+  const stayed = createTaskModeHarness({
+    taskContent: "- [*] #task Ship it ^ship",
+    dailyContent: UNLINKED_DAILY,
+  });
+  installMockInboxRoute(stayed.plugin, [], {
+    inboxPaths: ["Tasks.md"],
+    promptOutcome: { kind: "stay" },
+  });
+  let stayedRequest = null;
+  stayed.plugin.promptPomodoroLinkTarget = async (request) => {
+    stayedRequest = request;
+    return null;
+  };
+  await stayed.plugin.openPomodoroTaskLink(stayed.editor, stayed.view);
+  assert.equal(stayedRequest && stayedRequest.route, undefined);
 });
 
 test("a review-walk landing continues with link-today and the new text", async () => {

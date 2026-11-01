@@ -217,6 +217,32 @@ function pomodoroThemeWriteLineText(taskContent, line) {
   return line < lines.length ? lines[line] : "";
 }
 
+// Shared suggestion context for the Ctrl+Shift+Enter link direction. The
+// Ledger Tools cascade reads only path (residence chain), line, and the
+// task's own line text, so a routed task suggests from a one-line virtual
+// note at the destination.
+function pomodoroLinkThemeTaskContext(source, liveText) {
+  try {
+    const gate = source && source.inboxRouteGate;
+    if (
+      gate && gate.kind === "move" &&
+      typeof gate.path === "string" && gate.path
+    ) {
+      const lineText = pomodoroThemeWriteLineText(
+        typeof liveText === "string" ? liveText : "",
+        source && source.line,
+      );
+      return { path: gate.path, line: 1, text: lineText };
+    }
+  } catch (_error) {
+    // Fall through to the inbox context below.
+  }
+  const path = source && typeof source.sourcePath === "string" ? source.sourcePath : "";
+  const line = Number.isInteger(source && source.line) ? source.line + 1 : 0;
+  const text = typeof liveText === "string" ? liveText : "";
+  return { path, line, text };
+}
+
 function resolvePomodoroLinkThemeWrite(plugin, source, target, taskContent) {
   try {
     const intent = normalizePomodoroLinkPickerThemeIntent(
@@ -241,15 +267,16 @@ function resolvePomodoroLinkThemeWrite(plugin, source, target, taskContent) {
     ) {
       return emptyPomodoroThemeWrite();
     }
-    const path = source && typeof source.sourcePath === "string" ? source.sourcePath : "";
-    const oneBasedLine = Number.isInteger(source && source.line) ? source.line + 1 : 0;
-    const text = typeof taskContent === "string" ? taskContent : "";
-    if (!path || oneBasedLine < 1) {
+    const context = pomodoroLinkThemeTaskContext(
+      source,
+      typeof taskContent === "string" ? taskContent : "",
+    );
+    if (!context.path || context.line < 1) {
       return emptyPomodoroThemeWrite();
     }
     let current = null;
     try {
-      current = themesApi.suggestFor({ path, line: oneBasedLine, text });
+      current = themesApi.suggestFor({ path: context.path, line: context.line, text: context.text });
     } catch (_error) {
       return { ...emptyPomodoroThemeWrite(), suggestionChanged: true };
     }

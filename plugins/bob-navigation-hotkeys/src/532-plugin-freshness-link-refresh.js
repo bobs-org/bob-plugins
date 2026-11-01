@@ -157,51 +157,53 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
           history: readRottenLog(group.content, item.target.line),
         }));
     });
+    const laneTargets = stampTargetsByGroup.flatMap(({ group, targets }) =>
+      targets.filter((target) => isNextRottenLogTargetRawLine(target.raw)).map((target) => {
+        const resolvedGroup = linkResolved.find((item) => item.group === group);
+        const item = (resolvedGroup && resolvedGroup.resolved || [])
+          .find((candidate) => candidate.target.line === target.line);
+        return {
+          raw: target.raw,
+          entry: item && item.match && item.match.ok ? item.match.entry : null,
+          history: readRottenLog(group.content, target.line),
+          target,
+          group,
+        };
+      }),
+    );
+    const promptPlan = planFreshnessRefreshPrompt({
+      singleKeep: false,
+      rottenTargets: rottenTargets.map((item) => ({
+        raw: item.target.raw,
+        entry: item.match.entry,
+        keep: item.keep,
+        history: item.history,
+      })),
+      workTargets: eligibleTargets,
+      laneTargets,
+    });
     let summary = "";
     let keepReason = "";
-    if (rottenTargets.length > 0 && eligibleTargets.length > 0) {
+    if (promptPlan.kind === "batch") {
       const result = await this.requestFreshnessRefreshAnswers({
-        keepTargets: rottenTargets.map((item) => ({
-          raw: item.target.raw,
-          entry: item.match.entry,
-          keep: item.keep,
-          history: item.history,
-        })),
-        showWorkField: true,
-        summary: options.summary,
+        keepTargets: promptPlan.keepTargets,
+        showWorkField: promptPlan.showWorkField,
+        ...(promptPlan.showWorkField ? { summary: options.summary } : {}),
         keepReason: options.keepReason,
         dateText: options.dateText,
         totalCount: linkStamped,
         eligibleCount: eligibleTargets.length,
       });
       if (result.failed) {
-        new Notice("Could not open combined refresh prompt; no tasks were updated");
+        new Notice(promptPlan.showWorkField
+          ? "Could not open combined refresh prompt; no tasks were updated"
+          : "Could not open Keep reason prompt; no tasks were updated");
         return false;
       }
       if (result.cancelled) return false;
       summary = result.summary;
       keepReason = result.keepReason;
-    } else if (rottenTargets.length > 0) {
-      const result = await this.requestFreshnessRefreshAnswers({
-        keepTargets: rottenTargets.map((item) => ({
-          raw: item.target.raw,
-          entry: item.match.entry,
-          keep: item.keep,
-          history: item.history,
-        })),
-        showWorkField: false,
-        keepReason: options.keepReason,
-        dateText: options.dateText,
-        totalCount: linkStamped,
-        eligibleCount: 0,
-      });
-      if (result.failed) {
-        new Notice("Could not open Keep reason prompt; no tasks were updated");
-        return false;
-      }
-      if (result.cancelled) return false;
-      keepReason = result.keepReason;
-    } else if (eligibleTargets.length > 0) {
+    } else if (promptPlan.kind === "work-only") {
       const result = await this.requestFreshnessRefreshSummary({
         summary: options.summary,
         dateText: options.dateText,
@@ -217,7 +219,7 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
       }
       summary = result.summary;
     }
-    const promptShown = rottenTargets.length > 0 || eligibleTargets.length > 0;
+    const promptShown = promptPlan.kind !== "none";
     if (promptShown) {
       if (this.laneReleaseDateText() !== localDayBefore) {
         new Notice("Day changed while the prompt was open; nothing was written");
@@ -251,6 +253,9 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
       const groupRottenLines = rottenTargets
         .filter((item) => item.group === group)
         .map((item) => item.target.line);
+      const groupLaneLines = laneTargets
+        .filter((item) => item.group === group)
+        .map((item) => item.target.line);
       const plan = planFreshStampBatchWithLogs(
         group.content,
         targets,
@@ -260,6 +265,7 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
           workSummary: summary,
           keepReason,
           rottenLines: groupRottenLines,
+          laneLines: groupLaneLines,
         },
       );
       if (!plan.ok) {

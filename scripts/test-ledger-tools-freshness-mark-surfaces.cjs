@@ -174,6 +174,7 @@ const {
   freshnessMarkConsensus,
   freshnessTaskStatus,
   freshnessMarkRottenLogLine,
+  freshnessMarkRottenLogSummaryFromListItem,
   freshnessMarkInTaskQuery,
 } = helpers;
 
@@ -976,6 +977,29 @@ test("reading view shows the rotten line and excludes Tasks and Dataview rows", 
   wrap.appendChild(tasks.text("Buy milk [fresh:: 2026-10-05] done", tasks.doc));
   plugin.renderFreshnessMarksIn(tasks.root, { sourcePath: "a.md" });
   assert.equal(countMarks(tasks.root), 1);
+});
+
+test("reading-view DOM history counts a Next lane entry", () => {
+  const emphasis = { tagName: "EM", textContent: "2026-10-16", children: [] };
+  const entry = {
+    tagName: "LI",
+    textContent: "2026-10-16 — still needed · kept in Next",
+    children: [emphasis],
+  };
+  const entryList = { tagName: "UL", children: [entry] };
+  const markerLabel = { nodeType: 3, nodeValue: "🥀 **ROTTEN LOG**" };
+  const marker = {
+    tagName: "LI",
+    textContent: "🥀 **ROTTEN LOG**",
+    childNodes: [markerLabel, entryList],
+    children: [entryList],
+  };
+  const taskList = { tagName: "UL", children: [marker] };
+  const task = { children: [taskList] };
+  assert.equal(
+    freshnessMarkRottenLogSummaryFromListItem(task, "2026-10-23"),
+    "🥀 1 keep logged · last Oct 16 — still needed",
+  );
 });
 
 test("query-row consensus stays byte-identical with and without a Rotten Log", () => {

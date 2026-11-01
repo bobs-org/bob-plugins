@@ -1122,11 +1122,12 @@ test("duplicate Task Links to one target stamp and count once", async () => {
   assert.match(notices[notices.length - 1], /kept 1×/);
 });
 
-test("counted Task Link sessions combine Pending work and Rotten keep logs", async () => {
+test("counted Task Link sessions route Pending, counted, and Next answers to separate logs", async () => {
   clearNotices();
   const rottenRaw = TARGET_LINE;
   const pendingRaw = "- [/] #task Pending linked work ^p";
-  const noteMap = new Map([["Target.md", [rottenRaw, pendingRaw].join("\n")]]);
+  const nextRaw = "- [*] #task Next linked work [fresh:: 2026-10-01] [keeps:: 2] ^n";
+  const noteMap = new Map([["Target.md", [rottenRaw, pendingRaw, nextRaw].join("\n")]]);
   const pendingEntry = rottenEntry({
     key: "Target.md:2", path: "Target.md", line: 2,
     originalMarkdown: pendingRaw, text: "Pending linked work",
@@ -1139,9 +1140,15 @@ test("counted Task Link sessions combine Pending work and Rotten keep logs", asy
       originalMarkdown: rottenRaw, text: "Linked keep",
     }),
     pendingEntry,
+    rottenEntry({
+      key: "Target.md:3", path: "Target.md", line: 3,
+      originalMarkdown: nextRaw, text: "Next linked work",
+      state: "fresh", tier: "next", tierLabel: "NEXT", lane: "next",
+      fresh: "2026-10-01", keeps: 2, rank: 2,
+    }),
   ], BASE_COUNTS);
   const plugin = makeLinkPlugin({
-    cursorContent: ["- [ ] [[Target#^abc]]", "- [ ] [[Target#^p]]"].join("\n"),
+    cursorContent: ["- [ ] [[Target#^abc]]", "- [ ] [[Target#^p]]", "- [ ] [[Target#^n]]"].join("\n"),
     cursorLine: 0,
     noteMap,
     freshness,
@@ -1151,7 +1158,8 @@ test("counted Task Link sessions combine Pending work and Rotten keep logs", asy
   plugin.requestFreshnessRefreshAnswers = async (options) => {
     promptCalls += 1;
     assert.equal(options.showWorkField, true);
-    assert.equal(options.keepTargets.length, 1);
+    assert.equal(options.keepTargets.length, 2);
+    assert.deepEqual(options.keepTargets.map((target) => target.kind), ["counted", "lane"]);
     return await originalPrompt({
       ...options,
       summary: "Reviewed the intro",
@@ -1159,15 +1167,18 @@ test("counted Task Link sessions combine Pending work and Rotten keep logs", asy
     });
   };
   const ok = await plugin.refreshTaskFreshness(plugin.view.editor, {
-    dateText: DATE, countExplicit: true, additionalTaskCount: 1,
+    dateText: DATE, countExplicit: true, additionalTaskCount: 2,
   });
   assert.equal(ok, true);
   assert.equal(promptCalls, 1);
   const after = noteMap.get("Target.md");
   assert.equal((after.match(/Reviewed the intro/g) || []).length, 1);
   assert.equal((after.match(/still useful · kept 3×/g) || []).length, 1);
+  assert.match(after, /still useful · kept in Next/);
+  assert.match(after, /\[\*\] #task Next linked work \[fresh:: 2026-10-08\] \[keeps:: 2\] \^n/);
   assert.match(after, /WORK LOG/);
   assert.match(after, /ROTTEN LOG/);
+  assert.equal(helpers.readRottenLog(after, after.split("\n").findIndex((line) => line.includes("^n"))).entries[0].lane, "next");
   assert.equal(plugin.writes.length, 1);
 });
 

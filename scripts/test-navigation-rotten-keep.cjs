@@ -144,6 +144,78 @@ test("Pending retains its Work summary prompt", async () => {
   assert.doesNotMatch(f.editor.content, /ROTTEN LOG/);
 });
 
+for (const reason of ["", "still useful in Next"]) {
+  test(`single Next keep ${reason || "with a blank reason"} stamps and preserves the streak`, async () => {
+    const raw = RAW.replace("[ ]", "[*]");
+    const nextEntry = row(raw, {
+      lane: "next", tier: "next", tierLabel: "NEXT", state: "fresh",
+    });
+    const f = fixture({ content: raw, entry: nextEntry });
+    const pending = f.run();
+    const modal = modals.at(-1);
+    assert.match(text(modal.contentEl), /Keep in Next\?/);
+    assert.equal(modal.inputEl.getAttribute("placeholder"), "Why keep it in Next? (optional · ↵ to skip)");
+    modal.inputEl.value = reason;
+    modal.inputEl.listeners.input();
+    if (!reason) {
+      assert.match(text(modal.previewEl), /No entry/);
+      assert.match(text(modal.previewEl), /Refresh only; no Rotten Log entry/);
+      assert.equal(modal.refreshButton.textContent, "Keep");
+    } else {
+      assert.match(text(modal.previewEl), /still useful in Next · kept in Next/);
+      assert.equal(modal.refreshButton.textContent, "Keep & log");
+    }
+    pressKey(modal, "Enter");
+    assert.equal(await pending, true);
+    assert.equal(f.editor.transactions.length, 1);
+    assert.match(f.editor.content, /\[fresh:: 2026-10-23\]/);
+    assert.match(f.editor.content, /\[keeps:: 2\]/);
+    const history = h.readRottenLog(f.editor.content, 0);
+    assert.equal(history.entries.length, reason ? 1 : 0);
+    if (reason) assert.equal(history.entries[0].lane, "next");
+    else assert.equal(history.status, "missing");
+  });
+}
+
+test("early Next task prompts without a queue entry; Ctrl+Alt+F logs then advances", async () => {
+  const raw = RAW.replace("[ ]", "[*]");
+  const early = fixture({ content: raw, entry: null });
+  const earlyPending = early.run();
+  assert.equal(modals.length, 1);
+  assert.match(text(modals[0].contentEl), /Keep in Next\?/);
+  pressKey(modals[0], "Escape");
+  assert.equal(await earlyPending, false);
+  assert.equal(early.editor.transactions.length, 0);
+
+  const nextEntry = row(raw, { lane: "next", tier: "next", tierLabel: "NEXT", state: "fresh" });
+  const f = fixture({ content: raw, entry: nextEntry });
+  let advances = 0;
+  f.plugin.jumpToDueTask = async () => { advances += 1; return true; };
+  const pending = f.run({ advance: true });
+  const modal = modals.at(-1);
+  assert.equal(modal.refreshButton.textContent, "Keep & next");
+  modal.inputEl.value = "stays in the lane";
+  modal.inputEl.listeners.input();
+  assert.equal(modal.refreshButton.textContent, "Keep, log & next");
+  pressKey(modal, "Enter");
+  assert.equal(await pending, true);
+  assert.equal(advances, 1);
+  assert.match(f.editor.content, /stays in the lane · kept in Next/);
+});
+
+test("Esc on a Next keep writes nothing and does not advance", async () => {
+  const raw = RAW.replace("[ ]", "[*]");
+  const f = fixture({ content: raw, entry: row(raw, { lane: "next", tier: "next" }) });
+  let advances = 0;
+  f.plugin.jumpToDueTask = async () => { advances += 1; };
+  const pending = f.run({ advance: true });
+  pressKey(modals.at(-1), "Escape");
+  assert.equal(await pending, false);
+  assert.equal(f.editor.content, raw);
+  assert.equal(f.editor.transactions.length, 0);
+  assert.equal(advances, 0);
+});
+
 test("counted mixed sessions use one Work-first prompt and route each answer to its log", async () => {
   const pendingRaw = "- [/] #task Finish intro ^pending";
   const content = [pendingRaw, RAW].join("\n");
@@ -246,6 +318,46 @@ test("combined planner inserts nested targets bottom-up and preserves CRLF", () 
   assert.match(plan.content, /existing child/);
 });
 
+test("Next lane logs are optional, uncounted, and refuse only a requested ambiguous entry", () => {
+  const next = "- [*] #task Next task [fresh:: 2026-10-14] [keeps:: 2]";
+  const blank = h.planFreshStampBatchWithLogs(next, [{ line: 0 }], keep, DATE,
+    { laneLines: [0], keepReason: "" });
+  assert.equal(blank.ok, true);
+  assert.equal(blank.rottenLogWrittenCount, 0);
+  assert.doesNotMatch(blank.content, /ROTTEN LOG/);
+  assert.match(blank.content, /\[keeps:: 2\]/);
+  assert.match(blank.content, /\[fresh:: 2026-10-23\]/);
+
+  const logged = h.planFreshStampBatchWithLogs(next, [{ line: 0 }], keep, DATE,
+    { laneLines: [0], keepReason: "still needed" });
+  assert.equal(logged.ok, true);
+  assert.equal(logged.rottenLogWrittenCount, 1);
+  assert.match(logged.content, /\*2026-10-23\* — still needed · kept in Next/);
+  assert.match(logged.content, /\[keeps:: 2\]/);
+  assert.deepEqual(h.readRottenLog(logged.content, 0).entries[0], {
+    indent: "\t\t", marker: "-", date: "2026-10-23", reason: "still needed",
+    keeps: null, lane: "next",
+  });
+
+  const existing = next + "\n\t- 🥀 **ROTTEN LOG**\n\t\t- *2026-10-16* — old · kept 1×";
+  const reused = h.planFreshStampBatchWithLogs(existing, [{ line: 0 }], keep, DATE,
+    { laneLines: [0], keepReason: "still useful" });
+  assert.equal(reused.ok, true);
+  assert.equal((reused.content.match(/🥀 \*\*ROTTEN LOG\*\*/g) || []).length, 1);
+  assert.match(reused.content, /\*2026-10-23\* — still useful · kept in Next/);
+
+  const ambiguous = next + "\n\t- 🥀 **ROTTEN LOG**\n\t- 🥀 **ROTTEN LOG**";
+  const blankAmbiguous = h.planFreshStampBatchWithLogs(ambiguous, [{ line: 0 }], keep, DATE,
+    { laneLines: [0], keepReason: "" });
+  assert.equal(blankAmbiguous.ok, true);
+  assert.equal(blankAmbiguous.rottenLogWrittenCount, 0);
+  const refused = h.planFreshStampBatchWithLogs(ambiguous, [{ line: 0 }], keep, DATE,
+    { laneLines: [0], keepReason: "still useful" });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.refusal, "rotten-log-ambiguous");
+  assert.equal(refused.rottenLogWrittenCount, 0);
+});
+
 test("prompt copy separates streak from history and previews exact formatter output", () => {
   const base = { raw: RAW, entry: row(), dateText: DATE, keepsBefore: 2, keepsAfter: 3 };
   const empty = h.buildRottenKeepPromptModel(base);
@@ -259,6 +371,38 @@ test("prompt copy separates streak from history and previews exact formatter out
   const many = h.buildRottenKeepPromptModel({ ...base, history: { status: "ok", entries: Array(5).fill(entry) }, advance: true });
   assert.equal(many.historyRows.length, 3); assert.equal(many.olderCount, 2);
   assert.match(many.subtitleLines[1], /5 keeps logged/); assert.equal(many.enterHint, "Keep, log & next");
+});
+
+test("Next keep model skips blank entries, has no streak, and gates unreadable typed history", () => {
+  const base = {
+    raw: "- [*] #task Keep next [fresh:: 2026-10-14] [keeps:: 2]",
+    lane: "next", dateText: DATE,
+    entry: { fresh: "2026-10-14", ageDays: 9, tierLabel: "NEXT" },
+    history: { status: "missing", entries: [] },
+  };
+  const blank = h.buildRottenKeepPromptModel(base);
+  assert.equal(blank.title, "Keep in Next?");
+  assert.match(blank.subtitleLines[0], /NEXT · 9d/);
+  assert.equal(blank.subtitleLines[1], "none logged yet");
+  assert.equal(blank.placeholder, "Why keep it in Next? (optional · ↵ to skip)");
+  assert.equal(blank.previewTitle, "No entry");
+  assert.equal(blank.previewDestination, "Refresh only; no Rotten Log entry");
+  assert.equal(blank.enterHint, "Keep");
+  assert.equal(h.buildRottenKeepPromptModel({ ...base, advance: true }).enterHint, "Keep & next");
+
+  const typed = h.buildRottenKeepPromptModel({ ...base, reason: "still needed" });
+  assert.equal(typed.previewEntryText, "*2026-10-23* — still needed · kept in Next");
+  assert.equal(typed.enterHint, "Keep & log");
+  assert.equal(h.buildRottenKeepPromptModel({ ...base, reason: "still needed", advance: true }).enterHint, "Keep, log & next");
+
+  const unreadable = { ...base, history: { status: "ambiguous", entries: [] } };
+  assert.equal(h.buildRottenKeepPromptModel(unreadable).disabled, false);
+  assert.equal(h.buildRottenKeepPromptModel({ ...unreadable, reason: "still needed" }).disabled, true);
+  const nextEntry = { date: "2026-10-16", reason: "keep in lane", keeps: null, lane: "next" };
+  const earlier = h.buildRottenKeepPromptModel({
+    ...base, history: { status: "ok", entries: [nextEntry] },
+  });
+  assert.equal(earlier.historyRows[0].kept, "kept in Next");
 });
 
 test("keep stage warns for inline fields, ignores IME Enter, and swallows both keep chords", async () => {

@@ -1,6 +1,8 @@
 // §19 text-mention exports (`docs/task-relations.md` §19). Kept in this
 // sibling fragment so src/700-exports.js stays under the 1000-line cap.
 Object.assign(module.exports.helpers, {
+  planFreshnessRefreshPrompt,
+  isNextRottenLogTargetRawLine,
   loadRelationsLinkedFromMentionsEnabled,
   resetRelationsLinkedFromMentionsConfigCache,
   TASK_MENTION_LABEL,

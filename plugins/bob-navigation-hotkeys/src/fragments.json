@@ -32,6 +32,7 @@
   "190-summary-modals.js",
   "192-freshness-refresh-summary-modal.js",
   "195-rotten-keep.js",
+  "197-freshness-refresh-prompt-plan.js",
   "196-task-link-lane-modal.js",
   "200-filtered-picker-modals.js",
   "200a-pomodoro-bullet-type-move.js",

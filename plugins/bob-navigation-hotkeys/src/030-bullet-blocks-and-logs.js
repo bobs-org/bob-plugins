@@ -167,26 +167,6 @@ function parseManagedTaskLogParentBullet(line) {
   return null;
 }
 
-function formatRottenLogEntryText({ date, reason, keeps }) {
-  const normalized = normalizeScheduleReasonText(reason);
-  const safeReason = normalized.empty ? SCHEDULE_LOG_SKIPPED_REASON_TEXT : normalized.reason;
-  const day = String(date || "");
-  const count = Math.floor(numericOrDefault(keeps, 0));
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || count < 1 || count > 999) {
-    return "";
-  }
-  return `*${day}*${SCHEDULE_LOG_SEPARATOR}${safeReason} · kept ${count}×`;
-}
-
-function parseRottenLogEntryBullet(line) {
-  const match = ROTTEN_LOG_ENTRY_RE.exec(String(line || ""));
-  if (!match) return null;
-  const { indent, marker, date, reason, keeps } = match.groups;
-  const count = Number(keeps);
-  if (count < 1 || count > 999) return null;
-  return Object.freeze({ indent, marker, date, reason, keeps: count });
-}
-
 function findManagedTaskLogParents(lines, taskLine, kind) {
   const source = Array.isArray(lines) ? lines : String(lines || "").split(/\r?\n/);
   const taskIndex = Math.floor(numericOrDefault(taskLine, Number.NaN));

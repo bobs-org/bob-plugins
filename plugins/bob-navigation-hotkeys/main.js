@@ -406,7 +406,7 @@ const ROTTEN_LOG_PARENT_RE = buildManagedTaskLogParentRe(
   [ROTTEN_LOG_LABEL, "Rotten log"],
 );
 const ROTTEN_LOG_ENTRY_RE = new RegExp(
-  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+\\*(?<date>\\d{4}-\\d{2}-\\d{2})\\*${SCHEDULE_LOG_SEPARATOR}(?<reason>.+) · kept (?<keeps>\\d{1,3})×$`,
+  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+\\*(?<date>\\d{4}-\\d{2}-\\d{2})\\*${SCHEDULE_LOG_SEPARATOR}(?<reason>.+) · (?:kept (?<keeps>\\d{1,3})×|kept in (?<lane>Next))$`,
 );
 const SCHEDULE_LOG_ENTRY_RE = new RegExp(
   `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emphasis>\\*\\*?)(?:(?<from>.+?)${SCHEDULE_LOG_TRANSITION})?(?<to>.+?)\\k<emphasis>${SCHEDULE_LOG_SEPARATOR}(?<reason>.+)$`,
@@ -2843,26 +2843,6 @@ function parseManagedTaskLogParentBullet(line) {
   }
 
   return null;
-}
-
-function formatRottenLogEntryText({ date, reason, keeps }) {
-  const normalized = normalizeScheduleReasonText(reason);
-  const safeReason = normalized.empty ? SCHEDULE_LOG_SKIPPED_REASON_TEXT : normalized.reason;
-  const day = String(date || "");
-  const count = Math.floor(numericOrDefault(keeps, 0));
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || count < 1 || count > 999) {
-    return "";
-  }
-  return `*${day}*${SCHEDULE_LOG_SEPARATOR}${safeReason} · kept ${count}×`;
-}
-
-function parseRottenLogEntryBullet(line) {
-  const match = ROTTEN_LOG_ENTRY_RE.exec(String(line || ""));
-  if (!match) return null;
-  const { indent, marker, date, reason, keeps } = match.groups;
-  const count = Number(keeps);
-  if (count < 1 || count > 999) return null;
-  return Object.freeze({ indent, marker, date, reason, keeps: count });
 }
 
 function findManagedTaskLogParents(lines, taskLine, kind) {
@@ -21384,6 +21364,11 @@ class FreshnessRefreshSummaryModal extends Modal {
       this.keepStage = new RottenKeepReasonStage(contentEl, {
         ...this.options.keep,
         dateText: this.options.dateText,
+        onModel: (model) => {
+          if (!this.refreshButton) return;
+          this.refreshButton.setText(model.enterHint);
+          this.refreshButton.disabled = model.disabled;
+        },
         onSubmit: () => this.submit(),
         onCancel: () => this.close(),
       });
@@ -21391,8 +21376,9 @@ class FreshnessRefreshSummaryModal extends Modal {
       this.previewEl = this.keepStage.previewEl;
       const actions = contentEl.createDiv({ cls: "bob-cnp-modal-actions" });
       actions.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
-      this.refreshButton = actions.createEl("button", { text: "Keep & log" });
-      this.refreshButton.disabled = buildRottenKeepPromptModel(this.options.keep).disabled;
+      const model = buildRottenKeepPromptModel(this.options.keep);
+      this.refreshButton = actions.createEl("button", { text: model.enterHint });
+      this.refreshButton.disabled = model.disabled;
       this.refreshButton.addEventListener("click", () => this.submit());
       window.setTimeout(() => { if (this.keepStage) this.keepStage.focus(); }, 0);
       return;
@@ -21464,6 +21450,7 @@ class FreshnessRefreshSummaryModal extends Modal {
   renderBatchFields(contentEl) {
     const keepTargets = this.options.keepTargets || [];
     const showWorkField = this.options.showWorkField === true;
+    const hasCountedTargets = keepTargets.some((target) => target.kind !== "lane");
     const totalCount = Math.max(
       1,
       Math.floor(numericOrDefault(this.options.totalCount, keepTargets.length)),
@@ -21508,7 +21495,9 @@ class FreshnessRefreshSummaryModal extends Modal {
         cls: "bob-cnp-input",
         attr: {
           "aria-label": "Keep reason",
-          placeholder: "Why keep them as written? (optional · ↵ logs 🤷)",
+          placeholder: hasCountedTargets
+            ? "Why keep them as written? (optional · ↵ logs 🤷)"
+            : "Why keep them in Next? (optional · ↵ to skip)",
           type: "text",
         },
       });
@@ -21550,13 +21539,7 @@ class FreshnessRefreshSummaryModal extends Modal {
     }
     const actions = contentEl.createDiv({ cls: "bob-cnp-modal-actions" });
     actions.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
-    this.refreshButton = actions.createEl("button", {
-      text: showWorkField && keepTargets.length ? "Refresh & log" : keepTargets.length ? "Keep & log" : "Refresh",
-    });
-    this.refreshButton.disabled = keepTargets.some((target) => {
-      const history = target && target.history;
-      return history && ["unknown", "ambiguous"].includes(history.status);
-    });
+    this.refreshButton = actions.createEl("button", { text: "Refresh" });
     this.refreshButton.addEventListener("click", () => this.submit());
     this.renderBatchPreview();
     window.setTimeout(() => {
@@ -21616,6 +21599,7 @@ class FreshnessRefreshSummaryModal extends Modal {
         const title = cleanTaskDisplayText(
           target.raw || entry.originalMarkdown || entry.text || "Task",
         );
+        const isLane = target.kind === "lane";
         const keeps = target.keep && Number.isInteger(target.keep.keepsAfter)
           ? target.keep.keepsAfter
           : parseKeepsCount(target.raw || entry.originalMarkdown || "");
@@ -21630,20 +21614,25 @@ class FreshnessRefreshSummaryModal extends Modal {
         const text = row.createDiv({ cls: "bob-cnp-row-text" });
         text.createDiv({
           cls: "bob-cnp-row-title",
-          text: `${title} · kept ${keeps}× · ${logged}`,
+          text: isLane ? `${title} · Next · ${count} logged`
+            : `${title} · kept ${keeps}× · ${logged}`,
         });
         text.createDiv({
           cls: "bob-cnp-row-meta",
-          text: formatRottenLogEntryText({
-            date: this.options.dateText,
-            reason,
-            keeps,
-          }),
+          text: isLane
+            ? reason
+              ? formatRottenLogEntryText({ date: this.options.dateText, reason, lane: "next" })
+              : "no entry (blank reason)"
+            : formatRottenLogEntryText({ date: this.options.dateText, reason, keeps }),
         });
       }
+      const willWriteCount = targets.filter((target) => target.kind !== "lane").length +
+        (reason ? targets.filter((target) => target.kind === "lane").length : 0);
       const destination = this.keepPreviewEl.createDiv({
         cls: "bob-cnp-row-meta bob-cnp-schedule-reason-preview",
-        text: `Writes one entry under 🥀 **ROTTEN LOG** on each of the ${targets.length} qualifying ${targets.length === 1 ? "task" : "tasks"}`,
+        text: willWriteCount === 0
+          ? "Refresh only; no Rotten Log entry"
+          : `Writes one entry under 🥀 **ROTTEN LOG** on each of the ${willWriteCount} qualifying ${willWriteCount === 1 ? "task" : "tasks"}`,
       });
       if (destination && typeof destination.setAttribute === "function") {
         destination.setAttribute("aria-live", "polite");
@@ -21651,19 +21640,38 @@ class FreshnessRefreshSummaryModal extends Modal {
     }
     if (this.hintsEl) {
       this.hintsEl.empty();
+      const reason = normalizeLaneWorkSummary(this.keepInputEl && this.keepInputEl.value);
+      const hasCounted = this.options.keepTargets.some((target) => target.kind !== "lane");
+      const hasLane = this.options.keepTargets.some((target) => target.kind === "lane");
+      const actionLabel = this.options.showWorkField && this.options.keepTargets.length
+        ? "Refresh, log & continue"
+        : hasCounted ? "Keep & log"
+          : hasLane ? reason ? "Keep & log" : "Keep"
+            : "Refresh";
       const enter = this.hintsEl.createSpan({ cls: "bob-cnp-hint" });
       enter.createEl("kbd", { cls: "bob-cnp-kbd", text: "↵" });
       enter.createSpan({
         cls: "bob-cnp-hint-label",
-        text: this.options.showWorkField && this.options.keepTargets.length
-          ? "Refresh, log & continue"
-          : this.options.keepTargets.length
-            ? "Keep & log"
-            : "Refresh",
+        text: actionLabel,
       });
       const escape = this.hintsEl.createSpan({ cls: "bob-cnp-hint" });
       escape.createEl("kbd", { cls: "bob-cnp-kbd", text: "esc" });
       escape.createSpan({ cls: "bob-cnp-hint-label", text: "Cancel" });
+    }
+    if (this.refreshButton) {
+      const reason = normalizeLaneWorkSummary(this.keepInputEl && this.keepInputEl.value);
+      const hasCounted = this.options.keepTargets.some((target) => target.kind !== "lane");
+      const hasLane = this.options.keepTargets.some((target) => target.kind === "lane");
+      this.refreshButton.setText(this.options.showWorkField && this.options.keepTargets.length
+        ? "Refresh & log"
+        : hasCounted ? "Keep & log"
+          : hasLane ? reason ? "Keep & log" : "Keep"
+            : "Refresh");
+      this.refreshButton.disabled = this.options.keepTargets.some((target) => {
+        const history = target && target.history;
+        const ambiguous = history && ["unknown", "ambiguous"].includes(history.status);
+        return Boolean(ambiguous && (target.kind !== "lane" || reason));
+      });
     }
   }
 
@@ -21741,7 +21749,10 @@ class FreshnessRefreshSummaryModal extends Modal {
       }
       return;
     }
-    if (this.completed || (this.options.keep && buildRottenKeepPromptModel(this.options.keep).disabled)) {
+    if (this.completed || (this.options.keep && buildRottenKeepPromptModel({
+      ...this.options.keep,
+      reason: this.inputEl ? this.inputEl.value : "",
+    }).disabled)) {
       return;
     }
     this.completed = true;
@@ -21793,12 +21804,36 @@ function classifyRottenKeepTarget({ match, raw, stamper, dateText } = {}) {
 
 // Stamps and child entries form a single plan. No caller can commit a stamp
 // when its predicted keep cannot be logged. Line coordinates are pre-write.
+function formatRottenLogEntryText({ date, reason, keeps, lane }) {
+  const day = String(date || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "";
+  const normalized = normalizeScheduleReasonText(reason);
+  if (lane === "next") {
+    if (normalized.empty) return "";
+    return "*" + day + "*" + SCHEDULE_LOG_SEPARATOR + normalized.reason + " · kept in Next";
+  }
+  const safeReason = normalized.empty ? SCHEDULE_LOG_SKIPPED_REASON_TEXT : normalized.reason;
+  const count = Math.floor(numericOrDefault(keeps, 0));
+  if (count < 1 || count > 999) return "";
+  return "*" + day + "*" + SCHEDULE_LOG_SEPARATOR + safeReason + " · kept " + count + "×";
+}
+
+function parseRottenLogEntryBullet(line) {
+  const match = ROTTEN_LOG_ENTRY_RE.exec(String(line || ""));
+  if (!match) return null;
+  const { indent, marker, date, reason, keeps, lane } = match.groups;
+  const count = keeps === undefined ? null : Number(keeps);
+  if (count !== null && (count < 1 || count > 999)) return null;
+  return Object.freeze({ indent, marker, date, reason, keeps: count, lane: lane === "Next" ? "next" : null });
+}
+
 function planFreshStampBatchWithLogs(content, targets, stamper, dateText, options = {}) {
   const plan = planFreshStampBatch(content, targets, stamper, dateText);
   const refuse = (refusal) => ({ ok: false, refusal, content, stamped: [],
     workLogWrittenCount: 0, rottenLogWrittenCount: 0 });
   if (!plan.ok) return { ...plan, workLogWrittenCount: 0, rottenLogWrittenCount: 0 };
   const rottenLines = new Set(options.rottenLines || []);
+  const laneLines = new Set(options.laneLines || []);
   for (const line of rottenLines) {
     const entries = plan.stamped.filter((entry) => entry.line === line);
     if (entries.length !== 1 || entries[0].before === entries[0].after ||
@@ -21820,6 +21855,20 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
         kind: MANAGED_TASK_LOG_KIND_ROTTEN,
         entryText: formatRottenLogEntryText({ date: dateText, reason: options.keepReason,
           keeps: parseKeepsCount(entry.after) }),
+      });
+      if (!insertion.valid) return refuse(insertion.reason === "ambiguous-markers"
+        ? "rotten-log-ambiguous" : "rotten-log-invalid");
+      if (!applyManagedTaskLogEntryToLines(lines, insertion)) return refuse("rotten-log-invalid");
+      rottenLogWrittenCount += 1;
+    } else if (laneLines.has(entry.line) && !rottenLines.has(entry.line) &&
+        isNextRottenLogTargetRawLine(entry.before)) {
+      const entryText = formatRottenLogEntryText({
+        date: dateText, reason: options.keepReason, lane: "next",
+      });
+      if (!entryText) continue;
+      const insertion = planManagedTaskLogEntry(lines.join(lineEnding), entry.line, {
+        kind: MANAGED_TASK_LOG_KIND_ROTTEN,
+        entryText,
       });
       if (!insertion.valid) return refuse(insertion.reason === "ambiguous-markers"
         ? "rotten-log-ambiguous" : "rotten-log-invalid");
@@ -21855,34 +21904,48 @@ function buildRottenKeepPromptModel(options = {}) {
   const keepsAfter = options.keepsAfter || Math.min(keepsBefore + 1, 999);
   const entry = options.entry || {};
   const today = reviewParseDayNumber(options.dateText);
-  const fresh = reviewParseDayNumber(entry.fresh);
+  const rawFresh = /\[fresh::\s*(\d{4}-\d{2}-\d{2})\s*\]/.exec(String(options.raw || ""));
+  const fresh = reviewParseDayNumber(entry.fresh || (rawFresh && rawFresh[1]));
   const age = Number.isFinite(entry.ageDays) ? entry.ageDays
     : today !== null && fresh !== null ? Math.max(0, today - fresh) : null;
+  const lane = options.lane === "next";
   const subtitle = [cleanTaskDisplayText(options.raw || entry.originalMarkdown || entry.text || ""),
-    String(entry.tierLabel || entry.tier || "ROTTEN").toUpperCase(),
+    lane ? "NEXT" : String(entry.tierLabel || entry.tier || "ROTTEN").toUpperCase(),
     age === null ? "" : `${age}d`].filter(Boolean).join(" · ");
   const reason = normalizeLaneWorkSummary(options.reason);
-  const streak = options.decayCard
+  const streak = lane ? "" : options.decayCard
     ? `Kept ${keepsBefore} reviews in a row · this keep makes ${keepsAfter}`
     : keepsBefore ? `kept ${keepsBefore} in a row` : "";
+  const previewEntryText = formatRottenLogEntryText({ date: options.dateText, reason,
+    keeps: keepsAfter, lane: lane ? "next" : undefined });
   return {
-    title: "Keep as written?",
+    title: lane ? "Keep in Next?" : "Keep as written?",
     subtitleLines: [subtitle, [streak, logged].filter(Boolean).join(" · ")],
-    placeholder: "Why keep it as written? (optional · ↵ logs 🤷)",
-    previewEntryText: formatRottenLogEntryText({ date: options.dateText, reason, keeps: keepsAfter }),
+    placeholder: lane ? "Why keep it in Next? (optional · ↵ to skip)"
+      : "Why keep it as written? (optional · ↵ logs 🤷)",
+    previewEntryText,
     empty: !reason,
+    previewTitle: lane && !reason ? "No entry" : previewEntryText,
+    previewDestination: lane && !reason
+      ? "Refresh only; no Rotten Log entry"
+      : history.status === "missing" || history.status === "none"
+        ? "Adds 🥀 ROTTEN LOG as the task's last child"
+        : "Prepends under 🥀 ROTTEN LOG",
     warning: reason.includes("::") ? '"::" creates a Dataview inline field on this bullet' : "",
     destinationText: history.status === "missing" || history.status === "none"
       ? "Adds 🥀 ROTTEN LOG as the task's last child" : "Prepends under 🥀 ROTTEN LOG",
     historyRows: entries.slice(0, 3).map((item) => ({
       date: reviewShortDate(item.date), reason: item.reason,
-      kept: `kept ${item.keeps ?? item.kept}×`,
+      kept: item.lane === "next" ? "kept in Next" : `kept ${item.keeps ?? item.kept}×`,
       empty: item.reason === SCHEDULE_LOG_SKIPPED_REASON_TEXT,
     })),
     olderCount: Math.max(0, count - 3),
-    enterHint: options.advance ? "Keep, log & next" : "Keep & log",
+    enterHint: lane
+      ? options.advance ? (reason ? "Keep, log & next" : "Keep & next")
+        : (reason ? "Keep & log" : "Keep")
+      : options.advance ? "Keep, log & next" : "Keep & log",
     escapeHint: "Cancel",
-    disabled: ambiguous,
+    disabled: lane ? Boolean(reason) && ambiguous : ambiguous,
   };
 }
 
@@ -21918,10 +21981,12 @@ class RottenKeepReasonStage {
       if (model.olderCount) this.root.createDiv({ cls: "bob-cnp-row-meta", text: `+ ${model.olderCount} older` });
     }
     const hints = this.root.createDiv({ cls: "bob-cnp-footer" });
+    this.enterHintEl = null;
     for (const [key, label] of [["↵", model.enterHint], ["esc", model.escapeHint]]) {
       const hint = hints.createSpan({ cls: "bob-cnp-hint" });
       hint.createEl("kbd", { cls: "bob-cnp-kbd", text: key });
-      hint.createSpan({ cls: "bob-cnp-hint-label", text: label });
+      const labelEl = hint.createSpan({ cls: "bob-cnp-hint-label", text: label });
+      if (key === "↵") this.enterHintEl = labelEl;
     }
     this.inputEl.addEventListener("input", () => this.renderPreview());
     this.inputEl.addEventListener("keydown", (event) => {
@@ -21943,16 +22008,18 @@ class RottenKeepReasonStage {
   renderPreview() {
     if (!this.previewEl) return;
     const model = buildRottenKeepPromptModel({ ...this.options, reason: this.value() });
+    if (this.enterHintEl) this.enterHintEl.setText(model.enterHint);
     this.previewEl.empty();
     const row = this.previewEl.createDiv({ cls: `bob-cnp-row bob-cnp-schedule-reason-row ${model.empty ? "is-empty" : model.warning ? "is-warning" : "is-valid"}` });
     row.createDiv({ cls: "bob-cnp-row-icon", text: "✓" });
     const text = row.createDiv({ cls: "bob-cnp-row-text" });
-    text.createDiv({ cls: "bob-cnp-row-title", text: model.previewEntryText });
+    text.createDiv({ cls: "bob-cnp-row-title", text: model.previewTitle || model.previewEntryText });
     if (model.warning) text.createDiv({ cls: "bob-cnp-row-meta", text: model.warning });
-    text.createDiv({ cls: "bob-cnp-schedule-reason-preview", text: model.destinationText });
+    text.createDiv({ cls: "bob-cnp-schedule-reason-preview", text: model.previewDestination || model.destinationText });
+    if (typeof this.options.onModel === "function") this.options.onModel(model);
   }
   submit() {
-    if (this.completed || buildRottenKeepPromptModel(this.options).disabled) return;
+    if (this.completed || buildRottenKeepPromptModel({ ...this.options, reason: this.value() }).disabled) return;
     this.completed = true;
     if (typeof this.options.onSubmit === "function") this.options.onSubmit(this.value());
   }
@@ -21962,6 +22029,29 @@ class RottenKeepReasonStage {
     this.inputEl = null;
     this.previewEl = null;
   }
+}
+// ---- src/197-freshness-refresh-prompt-plan.js ----
+function planFreshnessRefreshPrompt({
+  singleKeep = false,
+  rottenTargets = [],
+  workTargets = [],
+  laneTargets = [],
+} = {}) {
+  const counted = (Array.isArray(rottenTargets) ? rottenTargets : [])
+    .map((target) => ({ ...target, kind: "counted" }));
+  const lanes = (Array.isArray(laneTargets) ? laneTargets : [])
+    .map((target) => ({ ...target, kind: "lane" }));
+  const keepTargets = [...counted, ...lanes];
+  const showWorkField = Array.isArray(workTargets) && workTargets.length > 0;
+  let kind = "none";
+  if (singleKeep && keepTargets.length === 1 && !showWorkField) {
+    kind = keepTargets[0].kind === "lane" ? "single-lane" : "single-rotten";
+  } else if (keepTargets.length > 0) {
+    kind = "batch";
+  } else if (showWorkField) {
+    kind = "work-only";
+  }
+  return Object.freeze({ kind, showWorkField, keepTargets: Object.freeze(keepTargets) });
 }
 // ---- src/196-task-link-lane-modal.js ----
 // Move to Next prompt for the Task Link lane toggle (plan
@@ -33600,6 +33690,11 @@ function isPendingWorkLogTargetRawLine(rawLine) {
     getObsidianTaskCheckboxStatus(line) === "/" &&
     isObsidianTaskLine(line)
   );
+}
+
+function isNextRottenLogTargetRawLine(rawLine) {
+  const line = String(rawLine || "");
+  return getObsidianTaskCheckboxStatus(line) === "*" && isObsidianTaskLine(line);
 }
 
 function normalizeSchedulingWorkSummary(value) {
@@ -69931,18 +70026,41 @@ class BobNavigationHotkeysLaneReviewMixin {
         ...item,
         history: readRottenLog(content, item.target.line),
       }));
+    const laneTargets = keepTargets
+      .filter((target) => isNextRottenLogTargetRawLine(target.raw))
+      .map((target) => {
+        const item = resolved.find((candidate) => candidate.target.line === target.line);
+        return {
+          raw: target.raw,
+          entry: item && item.match && item.match.ok ? item.match.entry : null,
+          history: readRottenLog(content, target.line),
+          target,
+        };
+      });
+    const promptPlan = planFreshnessRefreshPrompt({
+      singleKeep,
+      rottenTargets: rottenTargets.map((item) => ({
+        raw: item.target.raw,
+        entry: item.match.entry,
+        keep: item.keep,
+        history: item.history,
+      })),
+      workTargets: eligibleTargets,
+      laneTargets,
+    });
     let keepReason = "";
     let summary = "";
-    if (singleKeep && rottenTargets.length) {
-      const item = rottenTargets[0];
+    if (promptPlan.kind === "single-rotten" || promptPlan.kind === "single-lane") {
+      const item = promptPlan.keepTargets[0];
       const result = await this.requestFreshnessRefreshAnswers({
         keepReason: options.keepReason,
         dateText: options.dateText,
         keep: {
-          raw: item.target.raw,
-          entry: item.match.entry,
+          raw: item.raw,
+          entry: item.entry,
           ...item.keep,
           history: item.history,
+          ...(item.kind === "lane" ? { lane: "next" } : {}),
           advance: options.advance === true,
         },
       });
@@ -69952,49 +70070,26 @@ class BobNavigationHotkeysLaneReviewMixin {
       }
       if (result.cancelled) return false;
       keepReason = result.keepReason;
-    } else if (rottenTargets.length && eligibleTargets.length) {
+    } else if (promptPlan.kind === "batch") {
       const result = await this.requestFreshnessRefreshAnswers({
-        keepTargets: rottenTargets.map((item) => ({
-          raw: item.target.raw,
-          entry: item.match.entry,
-          keep: item.keep,
-          history: item.history,
-        })),
-        showWorkField: true,
+        keepTargets: promptPlan.keepTargets,
+        showWorkField: promptPlan.showWorkField,
         keepReason: options.keepReason,
-        summary: options.summary,
+        ...(promptPlan.showWorkField ? { summary: options.summary } : {}),
         dateText: options.dateText,
         totalCount: keepTargets.length,
         eligibleCount: eligibleTargets.length,
       });
       if (result.failed) {
-        new Notice("Could not open combined refresh prompt; no tasks were updated");
+        new Notice(promptPlan.showWorkField
+          ? "Could not open combined refresh prompt; no tasks were updated"
+          : "Could not open Keep reason prompt; no tasks were updated");
         return false;
       }
       if (result.cancelled) return false;
       keepReason = result.keepReason;
       summary = result.summary;
-    } else if (rottenTargets.length) {
-      const result = await this.requestFreshnessRefreshAnswers({
-        keepTargets: rottenTargets.map((item) => ({
-          raw: item.target.raw,
-          entry: item.match.entry,
-          keep: item.keep,
-          history: item.history,
-        })),
-        showWorkField: false,
-        keepReason: options.keepReason,
-        dateText: options.dateText,
-        totalCount: keepTargets.length,
-        eligibleCount: 0,
-      });
-      if (result.failed) {
-        new Notice("Could not open Keep reason prompt; no tasks were updated");
-        return false;
-      }
-      if (result.cancelled) return false;
-      keepReason = result.keepReason;
-    } else if (eligibleTargets.length > 0) {
+    } else if (promptPlan.kind === "work-only") {
       const result = await this.requestFreshnessRefreshSummary({
         summary: options.summary,
         dateText: options.dateText,
@@ -70010,7 +70105,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       }
       summary = result.summary;
     }
-    if (rottenTargets.length > 0 || eligibleTargets.length > 0) {
+    if (promptPlan.kind !== "none") {
       if (this.laneReleaseDateText() !== localDayBefore) {
         new Notice("Day changed while the prompt was open; nothing was written");
         return false;
@@ -70038,7 +70133,12 @@ class BobNavigationHotkeysLaneReviewMixin {
       keepTargets,
       options.stamper,
       options.dateText,
-      { workSummary: summary, keepReason, rottenLines: rottenTargets.map((item) => item.target.line) },
+      {
+        workSummary: summary,
+        keepReason,
+        rottenLines: rottenTargets.map((item) => item.target.line),
+        laneLines: laneTargets.map((item) => item.target.line),
+      },
     );
     if (!plan.ok) {
       new Notice(freshStampRefusalNotice(plan.refusal));
@@ -71318,51 +71418,53 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
           history: readRottenLog(group.content, item.target.line),
         }));
     });
+    const laneTargets = stampTargetsByGroup.flatMap(({ group, targets }) =>
+      targets.filter((target) => isNextRottenLogTargetRawLine(target.raw)).map((target) => {
+        const resolvedGroup = linkResolved.find((item) => item.group === group);
+        const item = (resolvedGroup && resolvedGroup.resolved || [])
+          .find((candidate) => candidate.target.line === target.line);
+        return {
+          raw: target.raw,
+          entry: item && item.match && item.match.ok ? item.match.entry : null,
+          history: readRottenLog(group.content, target.line),
+          target,
+          group,
+        };
+      }),
+    );
+    const promptPlan = planFreshnessRefreshPrompt({
+      singleKeep: false,
+      rottenTargets: rottenTargets.map((item) => ({
+        raw: item.target.raw,
+        entry: item.match.entry,
+        keep: item.keep,
+        history: item.history,
+      })),
+      workTargets: eligibleTargets,
+      laneTargets,
+    });
     let summary = "";
     let keepReason = "";
-    if (rottenTargets.length > 0 && eligibleTargets.length > 0) {
+    if (promptPlan.kind === "batch") {
       const result = await this.requestFreshnessRefreshAnswers({
-        keepTargets: rottenTargets.map((item) => ({
-          raw: item.target.raw,
-          entry: item.match.entry,
-          keep: item.keep,
-          history: item.history,
-        })),
-        showWorkField: true,
-        summary: options.summary,
+        keepTargets: promptPlan.keepTargets,
+        showWorkField: promptPlan.showWorkField,
+        ...(promptPlan.showWorkField ? { summary: options.summary } : {}),
         keepReason: options.keepReason,
         dateText: options.dateText,
         totalCount: linkStamped,
         eligibleCount: eligibleTargets.length,
       });
       if (result.failed) {
-        new Notice("Could not open combined refresh prompt; no tasks were updated");
+        new Notice(promptPlan.showWorkField
+          ? "Could not open combined refresh prompt; no tasks were updated"
+          : "Could not open Keep reason prompt; no tasks were updated");
         return false;
       }
       if (result.cancelled) return false;
       summary = result.summary;
       keepReason = result.keepReason;
-    } else if (rottenTargets.length > 0) {
-      const result = await this.requestFreshnessRefreshAnswers({
-        keepTargets: rottenTargets.map((item) => ({
-          raw: item.target.raw,
-          entry: item.match.entry,
-          keep: item.keep,
-          history: item.history,
-        })),
-        showWorkField: false,
-        keepReason: options.keepReason,
-        dateText: options.dateText,
-        totalCount: linkStamped,
-        eligibleCount: 0,
-      });
-      if (result.failed) {
-        new Notice("Could not open Keep reason prompt; no tasks were updated");
-        return false;
-      }
-      if (result.cancelled) return false;
-      keepReason = result.keepReason;
-    } else if (eligibleTargets.length > 0) {
+    } else if (promptPlan.kind === "work-only") {
       const result = await this.requestFreshnessRefreshSummary({
         summary: options.summary,
         dateText: options.dateText,
@@ -71378,7 +71480,7 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
       }
       summary = result.summary;
     }
-    const promptShown = rottenTargets.length > 0 || eligibleTargets.length > 0;
+    const promptShown = promptPlan.kind !== "none";
     if (promptShown) {
       if (this.laneReleaseDateText() !== localDayBefore) {
         new Notice("Day changed while the prompt was open; nothing was written");
@@ -71412,6 +71514,9 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
       const groupRottenLines = rottenTargets
         .filter((item) => item.group === group)
         .map((item) => item.target.line);
+      const groupLaneLines = laneTargets
+        .filter((item) => item.group === group)
+        .map((item) => item.target.line);
       const plan = planFreshStampBatchWithLogs(
         group.content,
         targets,
@@ -71421,6 +71526,7 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
           workSummary: summary,
           keepReason,
           rottenLines: groupRottenLines,
+          laneLines: groupLaneLines,
         },
       );
       if (!plan.ok) {
@@ -99021,6 +99127,8 @@ Object.assign(module.exports.helpers, {
 // §19 text-mention exports (`docs/task-relations.md` §19). Kept in this
 // sibling fragment so src/700-exports.js stays under the 1000-line cap.
 Object.assign(module.exports.helpers, {
+  planFreshnessRefreshPrompt,
+  isNextRottenLogTargetRawLine,
   loadRelationsLinkedFromMentionsEnabled,
   resetRelationsLinkedFromMentionsConfigCache,
   TASK_MENTION_LABEL,

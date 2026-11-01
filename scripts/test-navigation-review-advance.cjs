@@ -1039,7 +1039,7 @@ test("advance: Ctrl+Alt+F stamps through the shared tail with one composed toast
   const { plugin, editor } = fixture;
   await land(fixture, "first");
   assert.equal(
-    await plugin.refreshTaskFreshness(editor, { advance: true, dateText: DATE }),
+    await plugin.refreshTaskFreshness(editor, { advance: true, dateText: DATE, keepReason: "" }),
     true,
   );
   assert.match(editor.getLine(0), /\[fresh:: 2026-10-08\]/, "the row is stamped");
@@ -1544,7 +1544,7 @@ test("return: its own stamp ends it", async () => {
   const { plugin, editor } = fixture;
   await land(fixture, "first");
   clearNotices();
-  assert.equal(await plugin.refreshTaskFreshness(editor, { dateText: DATE }), true, "Alt+F stamps the landed row");
+  assert.equal(await plugin.refreshTaskFreshness(editor, { dateText: DATE, keepReason: "" }), true, "Alt+F stamps the landed row after blank Enter");
   assert.equal(plugin.reviewWalkCurrent, null, "the current task ends");
   editor.state.lines.push("# filler 4");
   editor.setCursor(3, 0);
@@ -1560,7 +1560,7 @@ test("return: a stamp elsewhere does not end it", async () => {
   await land(fixture, "first");
   editor.setCursor(2, 0);
   clearNotices();
-  assert.equal(await plugin.refreshTaskFreshness(editor, { dateText: DATE }), true, "Alt+F on Three");
+  assert.equal(await plugin.refreshTaskFreshness(editor, { dateText: DATE, keepReason: "" }), true, "Alt+F on Three after blank Enter");
   assert.ok(plugin.reviewWalkCurrent, "the current task survives");
   editor.state.lines.push("# filler 4");
   editor.setCursor(3, 0);

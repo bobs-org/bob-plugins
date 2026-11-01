@@ -667,18 +667,41 @@ class BobNavigationHotkeysLaneReviewMixin {
         ...item,
         history: readRottenLog(content, item.target.line),
       }));
+    const laneTargets = keepTargets
+      .filter((target) => isNextRottenLogTargetRawLine(target.raw))
+      .map((target) => {
+        const item = resolved.find((candidate) => candidate.target.line === target.line);
+        return {
+          raw: target.raw,
+          entry: item && item.match && item.match.ok ? item.match.entry : null,
+          history: readRottenLog(content, target.line),
+          target,
+        };
+      });
+    const promptPlan = planFreshnessRefreshPrompt({
+      singleKeep,
+      rottenTargets: rottenTargets.map((item) => ({
+        raw: item.target.raw,
+        entry: item.match.entry,
+        keep: item.keep,
+        history: item.history,
+      })),
+      workTargets: eligibleTargets,
+      laneTargets,
+    });
     let keepReason = "";
     let summary = "";
-    if (singleKeep && rottenTargets.length) {
-      const item = rottenTargets[0];
+    if (promptPlan.kind === "single-rotten" || promptPlan.kind === "single-lane") {
+      const item = promptPlan.keepTargets[0];
       const result = await this.requestFreshnessRefreshAnswers({
         keepReason: options.keepReason,
         dateText: options.dateText,
         keep: {
-          raw: item.target.raw,
-          entry: item.match.entry,
+          raw: item.raw,
+          entry: item.entry,
           ...item.keep,
           history: item.history,
+          ...(item.kind === "lane" ? { lane: "next" } : {}),
           advance: options.advance === true,
         },
       });
@@ -688,49 +711,26 @@ class BobNavigationHotkeysLaneReviewMixin {
       }
       if (result.cancelled) return false;
       keepReason = result.keepReason;
-    } else if (rottenTargets.length && eligibleTargets.length) {
+    } else if (promptPlan.kind === "batch") {
       const result = await this.requestFreshnessRefreshAnswers({
-        keepTargets: rottenTargets.map((item) => ({
-          raw: item.target.raw,
-          entry: item.match.entry,
-          keep: item.keep,
-          history: item.history,
-        })),
-        showWorkField: true,
+        keepTargets: promptPlan.keepTargets,
+        showWorkField: promptPlan.showWorkField,
         keepReason: options.keepReason,
-        summary: options.summary,
+        ...(promptPlan.showWorkField ? { summary: options.summary } : {}),
         dateText: options.dateText,
         totalCount: keepTargets.length,
         eligibleCount: eligibleTargets.length,
       });
       if (result.failed) {
-        new Notice("Could not open combined refresh prompt; no tasks were updated");
+        new Notice(promptPlan.showWorkField
+          ? "Could not open combined refresh prompt; no tasks were updated"
+          : "Could not open Keep reason prompt; no tasks were updated");
         return false;
       }
       if (result.cancelled) return false;
       keepReason = result.keepReason;
       summary = result.summary;
-    } else if (rottenTargets.length) {
-      const result = await this.requestFreshnessRefreshAnswers({
-        keepTargets: rottenTargets.map((item) => ({
-          raw: item.target.raw,
-          entry: item.match.entry,
-          keep: item.keep,
-          history: item.history,
-        })),
-        showWorkField: false,
-        keepReason: options.keepReason,
-        dateText: options.dateText,
-        totalCount: keepTargets.length,
-        eligibleCount: 0,
-      });
-      if (result.failed) {
-        new Notice("Could not open Keep reason prompt; no tasks were updated");
-        return false;
-      }
-      if (result.cancelled) return false;
-      keepReason = result.keepReason;
-    } else if (eligibleTargets.length > 0) {
+    } else if (promptPlan.kind === "work-only") {
       const result = await this.requestFreshnessRefreshSummary({
         summary: options.summary,
         dateText: options.dateText,
@@ -746,7 +746,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       }
       summary = result.summary;
     }
-    if (rottenTargets.length > 0 || eligibleTargets.length > 0) {
+    if (promptPlan.kind !== "none") {
       if (this.laneReleaseDateText() !== localDayBefore) {
         new Notice("Day changed while the prompt was open; nothing was written");
         return false;
@@ -774,7 +774,12 @@ class BobNavigationHotkeysLaneReviewMixin {
       keepTargets,
       options.stamper,
       options.dateText,
-      { workSummary: summary, keepReason, rottenLines: rottenTargets.map((item) => item.target.line) },
+      {
+        workSummary: summary,
+        keepReason,
+        rottenLines: rottenTargets.map((item) => item.target.line),
+        laneLines: laneTargets.map((item) => item.target.line),
+      },
     );
     if (!plan.ok) {
       new Notice(freshStampRefusalNotice(plan.refusal));

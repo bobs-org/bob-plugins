@@ -9291,13 +9291,12 @@ function buildFreshnessMarkElement(doc, model, options) {
 // `readRottenLog` / `findManagedTaskLogParents` in
 // `plugins/bob-navigation-hotkeys/src/030-bullet-blocks-and-logs.js`.
 // This file mirrors those byte-for-byte so Live Preview and reading view
-// count exactly what nav counts. Do not diverge without updating nav,
-// the Rust `parse_managed_task_log_marker` in
-// `src/native/capture/sub_bullet.rs`, and `docs/freshness.md` §11.
+// count exactly what nav counts. Do not diverge without updating nav and
+// `docs/freshness.md` §11.
 const FRESHNESS_ROTTEN_PARENT_RE =
   /^(?<indent>\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?<emoji>🥀\uFE0F?[ \t]+)?\*\*(?<label>ROTTEN LOG|Rotten log):?\*\*[ \t]*$/;
 const FRESHNESS_ROTTEN_ENTRY_RE =
-  /^(?<indent>\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+\*(?<date>\d{4}-\d{2}-\d{2})\* — (?<reason>.+) · kept (?<keeps>\d{1,3})×$/;
+  /^(?<indent>\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+\*(?<date>\d{4}-\d{2}-\d{2})\* — (?<reason>.+) · (?:kept (?<keeps>\d{1,3})×|kept in (?<lane>Next))$/;
 const FRESHNESS_ROTTEN_LIST_ITEM_RE =
   /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s/;
 
@@ -9388,11 +9387,11 @@ function freshnessRottenParseEntry(line) {
     const match = FRESHNESS_ROTTEN_ENTRY_RE.exec(String(line || ""));
     if (!match) return null;
     const groups = (match && match.groups) || {};
-    const count = Number(groups.keeps);
-    if (!Number.isInteger(count) || count < 1 || count > 999) return null;
+    const count = groups.keeps === undefined ? null : Number(groups.keeps);
+    if (count !== null && (!Number.isInteger(count) || count < 1 || count > 999)) return null;
     const reason = String(groups.reason || "").trim();
     if (!reason) return null;
-    return { date: groups.date, reason, keeps: count };
+    return { date: groups.date, reason, keeps: count, lane: groups.lane === "Next" ? "next" : null };
   } catch (error) {
     return null;
   }
@@ -9404,7 +9403,7 @@ function freshnessRottenParseEntry(line) {
 // (two or more direct-child markers). Only direct children of the task
 // count as markers, and only direct children of the marker count as
 // entries, each exactly `*YYYY-MM-DD* — <reason> · kept N×` with N
-// from 1 to 999. Never throws.
+// from 1 to 999, or `*YYYY-MM-DD* — <reason> · kept in Next`. Never throws.
 function freshnessMarkRottenLogHistory(lines, taskLine) {
   try {
     const source = Array.isArray(lines)
@@ -9574,15 +9573,15 @@ function freshnessMarkRottenLogSummaryFromListItem(taskItem, todayText) {
         if (!/^(LI)$/i.test(item.tagName || "")) continue;
         const text = String(item.textContent || "").trim();
         const match = text.match(
-          /^(\d{4}-\d{2}-\d{2})\s+—\s+(.+?)\s+·\s+kept\s+(\d{1,3})×$/,
+          /^(\d{4}-\d{2}-\d{2})\s+—\s+(.+?)\s+·\s+(?:kept\s+(\d{1,3})×|kept in (Next))$/,
         );
         if (!match) continue;
-        const count = Number(match[3]);
-        if (!Number.isInteger(count) || count < 1 || count > 999) continue;
+        const count = match[3] === undefined ? null : Number(match[3]);
+        if (count !== null && (!Number.isInteger(count) || count < 1 || count > 999)) continue;
         const reason = String(match[2] || "").trim();
         if (!reason) continue;
         if (!freshnessRottenEntryHasEmphasis(item, match[1])) continue;
-        entries.push({ date: match[1], reason, keeps: count });
+        entries.push({ date: match[1], reason, keeps: count, lane: match[4] === "Next" ? "next" : null });
       }
     }
     if (!entries.length) return null;

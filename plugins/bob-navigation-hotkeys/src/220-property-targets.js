@@ -691,6 +691,11 @@ function isPendingWorkLogTargetRawLine(rawLine) {
   );
 }
 
+function isNextRottenLogTargetRawLine(rawLine) {
+  const line = String(rawLine || "");
+  return getObsidianTaskCheckboxStatus(line) === "*" && isObsidianTaskLine(line);
+}
+
 function normalizeSchedulingWorkSummary(value) {
   return normalizeLaneWorkSummary(value);
 }

@@ -20,12 +20,36 @@ function classifyRottenKeepTarget({ match, raw, stamper, dateText } = {}) {
 
 // Stamps and child entries form a single plan. No caller can commit a stamp
 // when its predicted keep cannot be logged. Line coordinates are pre-write.
+function formatRottenLogEntryText({ date, reason, keeps, lane }) {
+  const day = String(date || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "";
+  const normalized = normalizeScheduleReasonText(reason);
+  if (lane === "next") {
+    if (normalized.empty) return "";
+    return "*" + day + "*" + SCHEDULE_LOG_SEPARATOR + normalized.reason + " · kept in Next";
+  }
+  const safeReason = normalized.empty ? SCHEDULE_LOG_SKIPPED_REASON_TEXT : normalized.reason;
+  const count = Math.floor(numericOrDefault(keeps, 0));
+  if (count < 1 || count > 999) return "";
+  return "*" + day + "*" + SCHEDULE_LOG_SEPARATOR + safeReason + " · kept " + count + "×";
+}
+
+function parseRottenLogEntryBullet(line) {
+  const match = ROTTEN_LOG_ENTRY_RE.exec(String(line || ""));
+  if (!match) return null;
+  const { indent, marker, date, reason, keeps, lane } = match.groups;
+  const count = keeps === undefined ? null : Number(keeps);
+  if (count !== null && (count < 1 || count > 999)) return null;
+  return Object.freeze({ indent, marker, date, reason, keeps: count, lane: lane === "Next" ? "next" : null });
+}
+
 function planFreshStampBatchWithLogs(content, targets, stamper, dateText, options = {}) {
   const plan = planFreshStampBatch(content, targets, stamper, dateText);
   const refuse = (refusal) => ({ ok: false, refusal, content, stamped: [],
     workLogWrittenCount: 0, rottenLogWrittenCount: 0 });
   if (!plan.ok) return { ...plan, workLogWrittenCount: 0, rottenLogWrittenCount: 0 };
   const rottenLines = new Set(options.rottenLines || []);
+  const laneLines = new Set(options.laneLines || []);
   for (const line of rottenLines) {
     const entries = plan.stamped.filter((entry) => entry.line === line);
     if (entries.length !== 1 || entries[0].before === entries[0].after ||
@@ -47,6 +71,20 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
         kind: MANAGED_TASK_LOG_KIND_ROTTEN,
         entryText: formatRottenLogEntryText({ date: dateText, reason: options.keepReason,
           keeps: parseKeepsCount(entry.after) }),
+      });
+      if (!insertion.valid) return refuse(insertion.reason === "ambiguous-markers"
+        ? "rotten-log-ambiguous" : "rotten-log-invalid");
+      if (!applyManagedTaskLogEntryToLines(lines, insertion)) return refuse("rotten-log-invalid");
+      rottenLogWrittenCount += 1;
+    } else if (laneLines.has(entry.line) && !rottenLines.has(entry.line) &&
+        isNextRottenLogTargetRawLine(entry.before)) {
+      const entryText = formatRottenLogEntryText({
+        date: dateText, reason: options.keepReason, lane: "next",
+      });
+      if (!entryText) continue;
+      const insertion = planManagedTaskLogEntry(lines.join(lineEnding), entry.line, {
+        kind: MANAGED_TASK_LOG_KIND_ROTTEN,
+        entryText,
       });
       if (!insertion.valid) return refuse(insertion.reason === "ambiguous-markers"
         ? "rotten-log-ambiguous" : "rotten-log-invalid");
@@ -82,34 +120,48 @@ function buildRottenKeepPromptModel(options = {}) {
   const keepsAfter = options.keepsAfter || Math.min(keepsBefore + 1, 999);
   const entry = options.entry || {};
   const today = reviewParseDayNumber(options.dateText);
-  const fresh = reviewParseDayNumber(entry.fresh);
+  const rawFresh = /\[fresh::\s*(\d{4}-\d{2}-\d{2})\s*\]/.exec(String(options.raw || ""));
+  const fresh = reviewParseDayNumber(entry.fresh || (rawFresh && rawFresh[1]));
   const age = Number.isFinite(entry.ageDays) ? entry.ageDays
     : today !== null && fresh !== null ? Math.max(0, today - fresh) : null;
+  const lane = options.lane === "next";
   const subtitle = [cleanTaskDisplayText(options.raw || entry.originalMarkdown || entry.text || ""),
-    String(entry.tierLabel || entry.tier || "ROTTEN").toUpperCase(),
+    lane ? "NEXT" : String(entry.tierLabel || entry.tier || "ROTTEN").toUpperCase(),
     age === null ? "" : `${age}d`].filter(Boolean).join(" · ");
   const reason = normalizeLaneWorkSummary(options.reason);
-  const streak = options.decayCard
+  const streak = lane ? "" : options.decayCard
     ? `Kept ${keepsBefore} reviews in a row · this keep makes ${keepsAfter}`
     : keepsBefore ? `kept ${keepsBefore} in a row` : "";
+  const previewEntryText = formatRottenLogEntryText({ date: options.dateText, reason,
+    keeps: keepsAfter, lane: lane ? "next" : undefined });
   return {
-    title: "Keep as written?",
+    title: lane ? "Keep in Next?" : "Keep as written?",
     subtitleLines: [subtitle, [streak, logged].filter(Boolean).join(" · ")],
-    placeholder: "Why keep it as written? (optional · ↵ logs 🤷)",
-    previewEntryText: formatRottenLogEntryText({ date: options.dateText, reason, keeps: keepsAfter }),
+    placeholder: lane ? "Why keep it in Next? (optional · ↵ to skip)"
+      : "Why keep it as written? (optional · ↵ logs 🤷)",
+    previewEntryText,
     empty: !reason,
+    previewTitle: lane && !reason ? "No entry" : previewEntryText,
+    previewDestination: lane && !reason
+      ? "Refresh only; no Rotten Log entry"
+      : history.status === "missing" || history.status === "none"
+        ? "Adds 🥀 ROTTEN LOG as the task's last child"
+        : "Prepends under 🥀 ROTTEN LOG",
     warning: reason.includes("::") ? '"::" creates a Dataview inline field on this bullet' : "",
     destinationText: history.status === "missing" || history.status === "none"
       ? "Adds 🥀 ROTTEN LOG as the task's last child" : "Prepends under 🥀 ROTTEN LOG",
     historyRows: entries.slice(0, 3).map((item) => ({
       date: reviewShortDate(item.date), reason: item.reason,
-      kept: `kept ${item.keeps ?? item.kept}×`,
+      kept: item.lane === "next" ? "kept in Next" : `kept ${item.keeps ?? item.kept}×`,
       empty: item.reason === SCHEDULE_LOG_SKIPPED_REASON_TEXT,
     })),
     olderCount: Math.max(0, count - 3),
-    enterHint: options.advance ? "Keep, log & next" : "Keep & log",
+    enterHint: lane
+      ? options.advance ? (reason ? "Keep, log & next" : "Keep & next")
+        : (reason ? "Keep & log" : "Keep")
+      : options.advance ? "Keep, log & next" : "Keep & log",
     escapeHint: "Cancel",
-    disabled: ambiguous,
+    disabled: lane ? Boolean(reason) && ambiguous : ambiguous,
   };
 }
 
@@ -145,10 +197,12 @@ class RottenKeepReasonStage {
       if (model.olderCount) this.root.createDiv({ cls: "bob-cnp-row-meta", text: `+ ${model.olderCount} older` });
     }
     const hints = this.root.createDiv({ cls: "bob-cnp-footer" });
+    this.enterHintEl = null;
     for (const [key, label] of [["↵", model.enterHint], ["esc", model.escapeHint]]) {
       const hint = hints.createSpan({ cls: "bob-cnp-hint" });
       hint.createEl("kbd", { cls: "bob-cnp-kbd", text: key });
-      hint.createSpan({ cls: "bob-cnp-hint-label", text: label });
+      const labelEl = hint.createSpan({ cls: "bob-cnp-hint-label", text: label });
+      if (key === "↵") this.enterHintEl = labelEl;
     }
     this.inputEl.addEventListener("input", () => this.renderPreview());
     this.inputEl.addEventListener("keydown", (event) => {
@@ -170,16 +224,18 @@ class RottenKeepReasonStage {
   renderPreview() {
     if (!this.previewEl) return;
     const model = buildRottenKeepPromptModel({ ...this.options, reason: this.value() });
+    if (this.enterHintEl) this.enterHintEl.setText(model.enterHint);
     this.previewEl.empty();
     const row = this.previewEl.createDiv({ cls: `bob-cnp-row bob-cnp-schedule-reason-row ${model.empty ? "is-empty" : model.warning ? "is-warning" : "is-valid"}` });
     row.createDiv({ cls: "bob-cnp-row-icon", text: "✓" });
     const text = row.createDiv({ cls: "bob-cnp-row-text" });
-    text.createDiv({ cls: "bob-cnp-row-title", text: model.previewEntryText });
+    text.createDiv({ cls: "bob-cnp-row-title", text: model.previewTitle || model.previewEntryText });
     if (model.warning) text.createDiv({ cls: "bob-cnp-row-meta", text: model.warning });
-    text.createDiv({ cls: "bob-cnp-schedule-reason-preview", text: model.destinationText });
+    text.createDiv({ cls: "bob-cnp-schedule-reason-preview", text: model.previewDestination || model.destinationText });
+    if (typeof this.options.onModel === "function") this.options.onModel(model);
   }
   submit() {
-    if (this.completed || buildRottenKeepPromptModel(this.options).disabled) return;
+    if (this.completed || buildRottenKeepPromptModel({ ...this.options, reason: this.value() }).disabled) return;
     this.completed = true;
     if (typeof this.options.onSubmit === "function") this.options.onSubmit(this.value());
   }

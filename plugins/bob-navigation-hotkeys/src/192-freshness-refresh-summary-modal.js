@@ -23,6 +23,11 @@ class FreshnessRefreshSummaryModal extends Modal {
       this.keepStage = new RottenKeepReasonStage(contentEl, {
         ...this.options.keep,
         dateText: this.options.dateText,
+        onModel: (model) => {
+          if (!this.refreshButton) return;
+          this.refreshButton.setText(model.enterHint);
+          this.refreshButton.disabled = model.disabled;
+        },
         onSubmit: () => this.submit(),
         onCancel: () => this.close(),
       });
@@ -30,8 +35,9 @@ class FreshnessRefreshSummaryModal extends Modal {
       this.previewEl = this.keepStage.previewEl;
       const actions = contentEl.createDiv({ cls: "bob-cnp-modal-actions" });
       actions.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
-      this.refreshButton = actions.createEl("button", { text: "Keep & log" });
-      this.refreshButton.disabled = buildRottenKeepPromptModel(this.options.keep).disabled;
+      const model = buildRottenKeepPromptModel(this.options.keep);
+      this.refreshButton = actions.createEl("button", { text: model.enterHint });
+      this.refreshButton.disabled = model.disabled;
       this.refreshButton.addEventListener("click", () => this.submit());
       window.setTimeout(() => { if (this.keepStage) this.keepStage.focus(); }, 0);
       return;
@@ -103,6 +109,7 @@ class FreshnessRefreshSummaryModal extends Modal {
   renderBatchFields(contentEl) {
     const keepTargets = this.options.keepTargets || [];
     const showWorkField = this.options.showWorkField === true;
+    const hasCountedTargets = keepTargets.some((target) => target.kind !== "lane");
     const totalCount = Math.max(
       1,
       Math.floor(numericOrDefault(this.options.totalCount, keepTargets.length)),
@@ -147,7 +154,9 @@ class FreshnessRefreshSummaryModal extends Modal {
         cls: "bob-cnp-input",
         attr: {
           "aria-label": "Keep reason",
-          placeholder: "Why keep them as written? (optional · ↵ logs 🤷)",
+          placeholder: hasCountedTargets
+            ? "Why keep them as written? (optional · ↵ logs 🤷)"
+            : "Why keep them in Next? (optional · ↵ to skip)",
           type: "text",
         },
       });
@@ -189,13 +198,7 @@ class FreshnessRefreshSummaryModal extends Modal {
     }
     const actions = contentEl.createDiv({ cls: "bob-cnp-modal-actions" });
     actions.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
-    this.refreshButton = actions.createEl("button", {
-      text: showWorkField && keepTargets.length ? "Refresh & log" : keepTargets.length ? "Keep & log" : "Refresh",
-    });
-    this.refreshButton.disabled = keepTargets.some((target) => {
-      const history = target && target.history;
-      return history && ["unknown", "ambiguous"].includes(history.status);
-    });
+    this.refreshButton = actions.createEl("button", { text: "Refresh" });
     this.refreshButton.addEventListener("click", () => this.submit());
     this.renderBatchPreview();
     window.setTimeout(() => {
@@ -255,6 +258,7 @@ class FreshnessRefreshSummaryModal extends Modal {
         const title = cleanTaskDisplayText(
           target.raw || entry.originalMarkdown || entry.text || "Task",
         );
+        const isLane = target.kind === "lane";
         const keeps = target.keep && Number.isInteger(target.keep.keepsAfter)
           ? target.keep.keepsAfter
           : parseKeepsCount(target.raw || entry.originalMarkdown || "");
@@ -269,20 +273,25 @@ class FreshnessRefreshSummaryModal extends Modal {
         const text = row.createDiv({ cls: "bob-cnp-row-text" });
         text.createDiv({
           cls: "bob-cnp-row-title",
-          text: `${title} · kept ${keeps}× · ${logged}`,
+          text: isLane ? `${title} · Next · ${count} logged`
+            : `${title} · kept ${keeps}× · ${logged}`,
         });
         text.createDiv({
           cls: "bob-cnp-row-meta",
-          text: formatRottenLogEntryText({
-            date: this.options.dateText,
-            reason,
-            keeps,
-          }),
+          text: isLane
+            ? reason
+              ? formatRottenLogEntryText({ date: this.options.dateText, reason, lane: "next" })
+              : "no entry (blank reason)"
+            : formatRottenLogEntryText({ date: this.options.dateText, reason, keeps }),
         });
       }
+      const willWriteCount = targets.filter((target) => target.kind !== "lane").length +
+        (reason ? targets.filter((target) => target.kind === "lane").length : 0);
       const destination = this.keepPreviewEl.createDiv({
         cls: "bob-cnp-row-meta bob-cnp-schedule-reason-preview",
-        text: `Writes one entry under 🥀 **ROTTEN LOG** on each of the ${targets.length} qualifying ${targets.length === 1 ? "task" : "tasks"}`,
+        text: willWriteCount === 0
+          ? "Refresh only; no Rotten Log entry"
+          : `Writes one entry under 🥀 **ROTTEN LOG** on each of the ${willWriteCount} qualifying ${willWriteCount === 1 ? "task" : "tasks"}`,
       });
       if (destination && typeof destination.setAttribute === "function") {
         destination.setAttribute("aria-live", "polite");
@@ -290,19 +299,38 @@ class FreshnessRefreshSummaryModal extends Modal {
     }
     if (this.hintsEl) {
       this.hintsEl.empty();
+      const reason = normalizeLaneWorkSummary(this.keepInputEl && this.keepInputEl.value);
+      const hasCounted = this.options.keepTargets.some((target) => target.kind !== "lane");
+      const hasLane = this.options.keepTargets.some((target) => target.kind === "lane");
+      const actionLabel = this.options.showWorkField && this.options.keepTargets.length
+        ? "Refresh, log & continue"
+        : hasCounted ? "Keep & log"
+          : hasLane ? reason ? "Keep & log" : "Keep"
+            : "Refresh";
       const enter = this.hintsEl.createSpan({ cls: "bob-cnp-hint" });
       enter.createEl("kbd", { cls: "bob-cnp-kbd", text: "↵" });
       enter.createSpan({
         cls: "bob-cnp-hint-label",
-        text: this.options.showWorkField && this.options.keepTargets.length
-          ? "Refresh, log & continue"
-          : this.options.keepTargets.length
-            ? "Keep & log"
-            : "Refresh",
+        text: actionLabel,
       });
       const escape = this.hintsEl.createSpan({ cls: "bob-cnp-hint" });
       escape.createEl("kbd", { cls: "bob-cnp-kbd", text: "esc" });
       escape.createSpan({ cls: "bob-cnp-hint-label", text: "Cancel" });
+    }
+    if (this.refreshButton) {
+      const reason = normalizeLaneWorkSummary(this.keepInputEl && this.keepInputEl.value);
+      const hasCounted = this.options.keepTargets.some((target) => target.kind !== "lane");
+      const hasLane = this.options.keepTargets.some((target) => target.kind === "lane");
+      this.refreshButton.setText(this.options.showWorkField && this.options.keepTargets.length
+        ? "Refresh & log"
+        : hasCounted ? "Keep & log"
+          : hasLane ? reason ? "Keep & log" : "Keep"
+            : "Refresh");
+      this.refreshButton.disabled = this.options.keepTargets.some((target) => {
+        const history = target && target.history;
+        const ambiguous = history && ["unknown", "ambiguous"].includes(history.status);
+        return Boolean(ambiguous && (target.kind !== "lane" || reason));
+      });
     }
   }
 
@@ -380,7 +408,10 @@ class FreshnessRefreshSummaryModal extends Modal {
       }
       return;
     }
-    if (this.completed || (this.options.keep && buildRottenKeepPromptModel(this.options.keep).disabled)) {
+    if (this.completed || (this.options.keep && buildRottenKeepPromptModel({
+      ...this.options.keep,
+      reason: this.inputEl ? this.inputEl.value : "",
+    }).disabled)) {
       return;
     }
     this.completed = true;

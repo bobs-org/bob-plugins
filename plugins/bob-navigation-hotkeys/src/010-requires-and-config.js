@@ -404,7 +404,7 @@ const ROTTEN_LOG_PARENT_RE = buildManagedTaskLogParentRe(
   [ROTTEN_LOG_LABEL, "Rotten log"],
 );
 const ROTTEN_LOG_ENTRY_RE = new RegExp(
-  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+\\*(?<date>\\d{4}-\\d{2}-\\d{2})\\*${SCHEDULE_LOG_SEPARATOR}(?<reason>.+) · kept (?<keeps>\\d{1,3})×$`,
+  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+\\*(?<date>\\d{4}-\\d{2}-\\d{2})\\*${SCHEDULE_LOG_SEPARATOR}(?<reason>.+) · (?:kept (?<keeps>\\d{1,3})×|kept in (?<lane>Next))$`,
 );
 const SCHEDULE_LOG_ENTRY_RE = new RegExp(
   `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emphasis>\\*\\*?)(?:(?<from>.+?)${SCHEDULE_LOG_TRANSITION})?(?<to>.+?)\\k<emphasis>${SCHEDULE_LOG_SEPARATOR}(?<reason>.+)$`,

@@ -75,6 +75,25 @@ test("entry parsing accepts valid entries and rejects bad counts", () => {
   assert.ok(good);
   assert.equal(good.date, "2026-10-16");
   assert.equal(good.keeps, 2);
+  assert.equal(good.lane, null);
+  const nextText = h.formatRottenLogEntryText({
+    date: "2026-10-16", reason: "still important", lane: "next",
+  });
+  assert.equal(nextText, "*2026-10-16* — still important · kept in Next");
+  assert.deepEqual(
+    h.parseRottenLogEntryBullet("\t- " + nextText),
+    { indent: "\t", marker: "-", date: "2026-10-16", reason: "still important", keeps: null, lane: "next" },
+  );
+  assert.equal(h.formatRottenLogEntryText({
+    date: "2026-10-16", reason: "  ", lane: "next",
+  }), "", "a blank Next reason does not create a log entry");
+  for (const invalid of ["kept in next", "kept in Pending", "kept 0×"]) {
+    assert.equal(
+      h.parseRottenLogEntryBullet("\t- *2026-10-16* — r · " + invalid),
+      null,
+      invalid + " is rejected",
+    );
+  }
   assert.equal(
     h.parseRottenLogEntryBullet("\t- *2026-10-16* — r · kept 0×"),
     null,

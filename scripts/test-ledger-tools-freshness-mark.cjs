@@ -823,6 +823,16 @@ test("rotten marker vectors reject mismatched emoji and missing spaces", () => {
     freshnessMarkRottenLogSummary(good.split("\n"), 0, "2026-10-23"),
     "🥀 1 keep logged · last Oct 16 — old reason",
   );
+  const next = "- [ ] #task T [fresh:: 2026-10-01]\n\t- 🥀 **ROTTEN LOG**\n\t\t- *2026-10-16* — still needed · kept in Next\n";
+  const nextHistory = freshnessMarkRottenLogHistory(next.split("\n"), 0);
+  assert.equal(nextHistory.status, "ok");
+  assert.deepEqual(nextHistory.entries[0], {
+    date: "2026-10-16", reason: "still needed", keeps: null, lane: "next",
+  });
+  assert.equal(
+    freshnessMarkRottenLogSummary(next.split("\n"), 0, "2026-10-23"),
+    "🥀 1 keep logged · last Oct 16 — still needed",
+  );
 });
 
 test("rotten line splices before the action line and reaches aria-label", () => {

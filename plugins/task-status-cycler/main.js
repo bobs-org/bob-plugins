@@ -7392,7 +7392,7 @@ function buildSuccessorPickerModel(options = {}) {
         header = headers.get(project) || `Project ${String(project || "").split("/").pop() || project}`;
       } else if (group === "keep_moving") {
         const stem = String(project || "").split("/").pop().replace(/\.md$/i, "") || String(project || "");
-        header = `Keep ${stem} moving`;
+        header = `Keep ‹${stem}› moving`;
       }
       byGroup.set(key, {
         group,
@@ -7499,7 +7499,7 @@ function buildSuccessorPickerModel(options = {}) {
   const keepOnly = groups.length > 0 && groups.every((entry) => entry.group === "keep_moving");
   const keepProjects = [...new Set(groups.filter((entry) => entry.group === "keep_moving").map((entry) => entry.project))];
   const keepTitle = keepProjects.length === 1
-    ? `Keep ${String(keepProjects[0]).split("/").pop().replace(/\.md$/i, "")} moving`
+    ? `Keep ‹${String(keepProjects[0]).split("/").pop().replace(/\.md$/i, "")}› moving`
     : `Keep ${keepProjects.length} projects moving`;
   const model = {
     title: keepOnly
@@ -12155,23 +12155,19 @@ function successorKeepMovingNoticeText(model, baseNotice) {
   if (!rows.length) return typeof baseNotice === "function" ? baseNotice(source) : "";
   const normal = Array.isArray(source.unblocked) ? source.unblocked : [];
   const picked = rows.filter((row) => row && row.link && !row.not_linked);
-  const attempted = rows.filter((row) => row && row.offer && row.offer.selected === true);
+  if (source.failure && Number(source.failure.count) > 0) {
+    return baseNotice({ ...source, keep_moving: [], unblocked: [...normal, ...rows] });
+  }
+  if (normal.length) {
+    return baseNotice({ ...source, keep_moving: [], unblocked: [...normal, ...picked] });
+  }
+  if (!picked.length) {
+    return "";
+  }
   const stems = [...new Set(picked.map((row) =>
     String(row.offer && row.offer.project || row.note_path || "").split("/").pop().replace(/\.md$/i, ""),
   ).filter(Boolean))];
-  const phrase = stems.length === 1 ? stems[0] : `${stems.length || 1} projects`;
-  if (normal.length) {
-    const mixed = baseNotice({ ...source, keep_moving: [], unblocked: [...normal, ...picked] });
-    if (!mixed) return mixed;
-    return picked.length ? `${mixed} · keeps ${phrase} moving` : mixed;
-  }
-  if (!picked.length) {
-    if (attempted.length) {
-      const failure = source.failure && Number(source.failure.count) > 0 ? ` (${source.failure.reason || "daily note changed"})` : "";
-      return `⚠ Couldn't link ${attempted.length} keep-moving task${attempted.length === 1 ? "" : "s"}${failure}`;
-    }
-    return "";
-  }
+  const suffix = stems.length === 1 ? `keeps ‹${stems[0]}› moving` : `keeps ${stems.length || 1} projects moving`;
   if (picked.length === 1) {
     const row = picked[0];
     const text = truncateSuccessorNoticeText(row.text);
@@ -12181,16 +12177,13 @@ function successorKeepMovingNoticeText(model, baseNotice) {
       ? `Next in new ${name || "session"} session (next up): `
       : name ? `Next in ${name}: ` : `Next at line ${link.line || "?"}: `;
     const theme = typeof formatSuccessorThemeRowChip === "function" ? formatSuccessorThemeRowChip(row) : "";
-    return `⏭ ${where}${text}${theme} · keeps ${phrase} moving`;
+    return `⏭ ${where}${text}${theme} · ${suffix}`;
   }
   const names = [...new Set(picked.map((row) => row.link && row.link.entry_name || "").filter(Boolean))];
   const destination = names.length === 1 ? `→ ${names[0]}` : names.length ? `· ${names.join(", ")}` : "";
   const themeCount = picked.filter((row) => row.theme_changed === true).length;
   const theme = themeCount ? ` · ${themeCount} task type${themeCount === 1 ? "" : "s"} saved` : "";
-  const failure = source.failure && Number(source.failure.count) > picked.length
-    ? ` · ${Number(source.failure.count) - picked.length} couldn't link`
-    : "";
-  return `⏭ ${picked.length} linked ${destination} · keeps ${phrase} moving${theme}${failure}`;
+  return `⏭ ${picked.length} linked ${destination} · ${suffix}${theme}`;
 }
 // ---- src/090-source-and-formatting.js ----
 function getLineTextFromSourceText(sourceText, lineNumber) {

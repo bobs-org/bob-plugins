@@ -239,7 +239,7 @@ function buildSuccessorPickerModel(options = {}) {
         header = headers.get(project) || `Project ${String(project || "").split("/").pop() || project}`;
       } else if (group === "keep_moving") {
         const stem = String(project || "").split("/").pop().replace(/\.md$/i, "") || String(project || "");
-        header = `Keep ${stem} moving`;
+        header = `Keep ‹${stem}› moving`;
       }
       byGroup.set(key, {
         group,
@@ -346,7 +346,7 @@ function buildSuccessorPickerModel(options = {}) {
   const keepOnly = groups.length > 0 && groups.every((entry) => entry.group === "keep_moving");
   const keepProjects = [...new Set(groups.filter((entry) => entry.group === "keep_moving").map((entry) => entry.project))];
   const keepTitle = keepProjects.length === 1
-    ? `Keep ${String(keepProjects[0]).split("/").pop().replace(/\.md$/i, "")} moving`
+    ? `Keep ‹${String(keepProjects[0]).split("/").pop().replace(/\.md$/i, "")}› moving`
     : `Keep ${keepProjects.length} projects moving`;
   const model = {
     title: keepOnly

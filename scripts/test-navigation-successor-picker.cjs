@@ -1020,3 +1020,99 @@ test("keep_moving picks reuse the normal pick/retarget paths: keys and destinati
   pressKey(modal, "Enter");
   assert.deepEqual(await pending, { picks: [{ key: "km:pending" }] });
 });
+
+test("cycler keep-moving model survives nav normalization with identical copy", () => {
+  const projectPath = "sase_badges.md";
+  const dayPath = "2026/20261101.md";
+  const today = "2026-11-01";
+  const day = ["# 2026-11-01", "", "## Pomodoros", "- [ ] () — FIX", "\t- [[sase_badges#^spec]]"].join("\n");
+  const noteText = [
+    "---", 'type: "[[project]]"', "status: wip", "parent: [[sase]]", "---",
+    "- [ ] #task Badge project ^prj",
+    "- [x] #task Draft the badge spec ^spec",
+    "- [/] #task Pending work ^pending",
+    "- [*] #task Next work ^next",
+    "- [ ] #task Ready work ^ready",
+    "- [?] #task Blocked ^blocked",
+    "- [ ] #task Future [scheduled:: 2026-12-01] ^future",
+    "- [ ] #task Hidden #hide ^hidden",
+  ].join("\n");
+  const notes = { [projectPath]: noteText };
+  const tasks = cyclerHelpers.tasksFromDocuments(Object.entries(notes).map(([path, text]) => ({ path, text })));
+  const plan = cyclerHelpers.planSuccessors({
+    closed: [{ path: projectPath, blockId: "spec", text: "- [x] #task Draft the badge spec ^spec" }],
+    index: cyclerHelpers.buildDependentsIndex(tasks),
+    dailyBefore: day,
+    dailyAfter: day,
+    dailyPath: dayPath,
+    today,
+    noteTexts: notes,
+    keepMoving: true,
+    dependencySnapshotAvailable: true,
+    leafProject: () => true,
+    selection: [],
+  });
+  const model = cyclerHelpers.buildSuccessorPickerModel({
+    predecessors: [{ note_path: projectPath, block_id: "spec", text: "Draft the badge spec" }],
+    offers: plan.offers,
+    foldedByProject: plan.foldedByProject,
+  });
+  const normalized = helpers.normalizeSuccessorPickerModel(model);
+  assert.ok(normalized);
+  assert.deepEqual(normalized.groups.map((group) => group.group), ["keep_moving"]);
+  const group = normalized.groups[0];
+  assert.equal(group.caption, "✓ Draft the badge spec was the last sase_badges task planned today");
+  assert.equal(group.tag, "ready in sase_badges · not dependents");
+  assert.deepEqual(group.folded, { hidden: 1, alreadyPlanned: 0, subProjects: 0, blocked: 1, scheduled: 1 });
+  assert.deepEqual(group.rows.map((row) => row.lane), ["Pending", "Next", "Ready"]);
+  assert.equal(normalized.title, model.title);
+  assert.equal(normalized.title, "Keep ‹sase_badges› moving");
+  assert.equal(helpers.successorPickerGroupTitle(group), model.groups[0].header);
+
+  const selected = cyclerHelpers.planSuccessors({
+    closed: [{ path: projectPath, blockId: "spec", text: "- [x] #task Draft the badge spec ^spec" }],
+    index: cyclerHelpers.buildDependentsIndex(tasks),
+    dailyBefore: day,
+    dailyAfter: day,
+    dailyPath: dayPath,
+    today,
+    noteTexts: notes,
+    keepMoving: true,
+    dependencySnapshotAvailable: true,
+    leafProject: () => true,
+    selection: "all",
+  });
+  const noticeModel = {
+    predecessors: [{ note_path: projectPath, block_id: "spec", text: "Draft the badge spec" }],
+    unblocked: selected.unblocked,
+    keep_moving: selected.keep_moving,
+    failure: null,
+  };
+  assert.equal(helpers.buildUnblockedNoticeModel(noticeModel).text, cyclerHelpers.successorNoticeText(noticeModel));
+  const oneRow = selected.keep_moving.find((row) => String(row.text || "").includes("Ready work")) || selected.keep_moving[0];
+  const oneModel = {
+    predecessors: noticeModel.predecessors,
+    unblocked: [],
+    keep_moving: [oneRow],
+    failure: null,
+  };
+  assert.equal(helpers.buildUnblockedNoticeModel(oneModel).text, cyclerHelpers.successorNoticeText(oneModel));
+  const mixedModel = {
+    predecessors: noticeModel.predecessors,
+    unblocked: [{
+      text: "Normal task", status_symbol: "*", status_name: "Next",
+      link: { entry_name: "FIX" }, trigger: "dependency", not_linked: null,
+    }],
+    keep_moving: [oneRow],
+    failure: null,
+  };
+  assert.equal(helpers.buildUnblockedNoticeModel(mixedModel).text, cyclerHelpers.successorNoticeText(mixedModel));
+  const failedRow = { ...oneRow, link: null, not_linked: "failed", offer: { ...(oneRow.offer || {}), selected: true } };
+  const failureModel = {
+    predecessors: noticeModel.predecessors,
+    unblocked: [],
+    keep_moving: [failedRow],
+    failure: { count: 1, reason: "daily note changed" },
+  };
+  assert.equal(helpers.buildUnblockedNoticeModel(failureModel).text, cyclerHelpers.successorNoticeText(failureModel));
+});

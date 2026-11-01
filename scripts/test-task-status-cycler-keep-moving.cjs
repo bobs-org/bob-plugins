@@ -1,13 +1,20 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const {
   TaskStatusCyclerPlugin,
+  MarkdownView,
   helpers,
   notices,
   createInMemoryObsidianApp,
   createTextEditor,
   attachActiveMarkdownView,
+  flushAsyncActions,
 } = require("./task-status-cycler-harness.cjs");
+
+process.env.XDG_CONFIG_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "bob-keep-moving-"));
 
 const TODAY = "2026-11-01";
 const DAY_PATH = "2026/20261101.md";
@@ -321,9 +328,9 @@ test("KM copy, folds, title, lane labels, notices, and config parser/cache match
     offers: plan.offers,
     foldedByProject: plan.foldedByProject,
   });
-  assert.equal(model.title, "Keep sase_badges moving");
+  assert.equal(model.title, "Keep ‹sase_badges› moving");
   const group = model.groups[0];
-  assert.equal(group.header, "Keep sase_badges moving");
+  assert.equal(group.header, "Keep ‹sase_badges› moving");
   assert.equal(group.tag, "ready in sase_badges · not dependents");
   assert.equal(group.caption, "✓ Draft the badge spec was the last sase_badges task planned today");
   assert.equal(group.rows[0].lane, "Ready");
@@ -333,13 +340,13 @@ test("KM copy, folds, title, lane labels, notices, and config parser/cache match
   assert.equal(unpicked, "");
   const picked = purePlan({ residents: ["- [ ] #task Write badge docs ^docs"], options: { selection: "all" } }).plan;
   assert.equal(helpers.successorNoticeText({ keep_moving: picked.keep_moving, unblocked: [] }),
-    "⏭ Next in FIX: Write badge docs · keeps sase_badges moving");
+    "⏭ Next in FIX: Write badge docs · keeps ‹sase_badges› moving");
   const mixed = helpers.successorNoticeText({
     unblocked: [{ text: "Normal task", status_symbol: "*", status_name: "Next", link: { entry_name: "FIX" } }],
     keep_moving: picked.keep_moving,
   });
   assert.match(mixed, /^🔓/);
-  assert.match(mixed, /keeps sase_badges moving/);
+  assert.doesNotMatch(mixed, /keeps/);
   assert.equal(helpers.parseSuccessorKeepMoving("plan:\n  keep_moving: false"), false);
   assert.equal(helpers.parseSuccessorKeepMoving("plan: { keep_moving: false, link_unblocked: true }"), false);
   assert.equal(helpers.parseSuccessorKeepMoving("plan:\n  keep_moving: nope"), true);
@@ -371,13 +378,14 @@ function installMetadata(app) {
   app.metadataCache.getCache = (path) => frontmatter[path] ? { frontmatter: frontmatter[path] } : null;
 }
 
-function installPicker(plugin, version, picked, noticeCalls) {
+function installPicker(plugin, version, picked, noticeCalls, noticeVersion = 1) {
   plugin.app.plugins.plugins["bob-navigation-hotkeys"] = {
     api: {
       successors: {
         version,
         async pick(model) {
           picked.models.push(model);
+          if (picked.returnNull === true) return null;
           const keys = [];
           for (const group of model.groups || []) for (const row of group.rows || []) {
             if (row.selectable) keys.push({ key: row.key });
@@ -386,9 +394,48 @@ function installPicker(plugin, version, picked, noticeCalls) {
           return { picks: picked.choose ? keys : [] };
         },
       },
-      notice: { version: 1, showUnblocked(model) { noticeCalls.push(model); return true; } },
+      notice: { version: noticeVersion, showUnblocked(model) { noticeCalls.push(model); return true; } },
     },
   };
+}
+
+function makeRealPlugin(harness, editor, activePath) {
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.getScheduleLogDateString = () => TODAY;
+  plugin.getPomodoroWorkLogDateString = () => TODAY;
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor, activePath);
+  if (!harness.app.commands) {
+    harness.app.commands = { commands: {}, executeCommandById: () => false };
+  }
+  return plugin;
+}
+
+async function settleReal(plugin) {
+  for (let round = 0; round < 10; round += 1) {
+    await flushAsyncActions();
+  }
+  try {
+    await plugin.referenceMutationQueue;
+  } catch (error) {
+    // finalize results carry failures; the queue itself must stay usable.
+  }
+  for (let round = 0; round < 10; round += 1) {
+    await flushAsyncActions();
+  }
+}
+
+function openKeepMovingProject(extraResidents = ["- [ ] #task Ship the badge renderer ^renderer"]) {
+  return [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "parent: [[sase]]",
+    "---",
+    "- [ ] #task Badge project ^prj",
+    "- [ ] #task Draft the badge spec ^spec",
+    ...extraResidents,
+  ].join("\n");
 }
 
 test("KM24/KM28: real close wiring offers once, applies a pick, and same-day reopen takes it back", async () => {
@@ -486,4 +533,195 @@ test("KM19/KM32: picker v1 and a failed G3 day-byte gate add no keep-moving plan
   });
   assert.equal((older.keep_moving || []).length, 0);
   assert.equal(v1.models.length, 0);
+});
+
+test("KM1: Obsidian daily-note link close offers keep-moving and links after the struck predecessor", async () => {
+  notices.length = 0;
+  helpers.resetSuccessorKeepMovingCache();
+  const projectText = openKeepMovingProject();
+  const harness = createInMemoryObsidianApp({ [PROJECT_PATH]: projectText, "sase.md": "", "dev.md": "", [DAY_PATH]: DAY });
+  installMetadata(harness.app);
+  const editor = createTextEditor(DAY, { line: 4, ch: 5 });
+  const plugin = makeRealPlugin(harness, editor, DAY_PATH);
+  const picked = { models: [], choose: true };
+  const noticeCalls = [];
+  installPicker(plugin, 2, picked, noticeCalls, 2);
+  const result = await plugin.handleActiveTaskBlockLinkOpenDone(editor, { path: DAY_PATH });
+  await settleReal(plugin);
+  assert.equal(result.changed, true);
+  assert.equal(picked.models.length, 1);
+  assert.equal(picked.models[0].groups.length, 1);
+  assert.equal(picked.models[0].groups[0].group, "keep_moving");
+  const updatedProject = harness.getSource(PROJECT_PATH);
+  const resident = updatedProject.split("\n").find((line) => line.includes("^renderer"));
+  assert.match(resident, /\[\*\]/);
+  const dayAfter = editor.getValue();
+  assert.match(dayAfter, /~~\[\[sase_badges#\^spec\]\]~~/);
+  assert.match(dayAfter, /\[\[sase_badges#\^renderer\]\]/);
+  assert.ok(dayAfter.indexOf("~~[[sase_badges#^spec]]~~") < dayAfter.indexOf("[[sase_badges#^renderer]]"));
+});
+
+test("KM26: own-note Ctrl+Enter offers keep-moving with notice v2 card and v1 plain text", async () => {
+  for (const noticeVersion of [2, 1]) {
+    notices.length = 0;
+    helpers.resetSuccessorKeepMovingCache();
+    const projectText = openKeepMovingProject();
+    const harness = createInMemoryObsidianApp({ [PROJECT_PATH]: projectText, "sase.md": "", "dev.md": "", [DAY_PATH]: DAY });
+    installMetadata(harness.app);
+    const predecessorLine = projectText.split("\n").findIndex((line) => line.includes("^spec"));
+    const editor = createTextEditor(projectText, { line: predecessorLine, ch: 4 });
+    const plugin = makeRealPlugin(harness, editor, PROJECT_PATH);
+    const picked = { models: [], choose: true };
+    const noticeCalls = [];
+    installPicker(plugin, 2, picked, noticeCalls, noticeVersion);
+    const taskStatus = plugin.getActiveTaskStatus(editor);
+    const wrote = await plugin.toggleActiveCheckboxOpenDoneAndPropagate(editor, { path: PROJECT_PATH }, taskStatus, {});
+    await settleReal(plugin);
+    assert.equal(wrote, true);
+    assert.equal(picked.models.length, 1);
+    assert.equal(picked.models[0].groups.length, 1);
+    assert.equal(picked.models[0].groups[0].group, "keep_moving");
+    const updatedProject = editor.getValue();
+    assert.match(updatedProject.split("\n").find((line) => line.includes("^renderer")), /\[\*\]/);
+    if (noticeVersion === 2) {
+      assert.equal(noticeCalls.length, 1);
+      assert.equal(noticeCalls[0].keep_moving.length, 1);
+      assert.equal(noticeCalls[0].unblocked.length, 0);
+      assert.equal(notices.length, 0);
+    } else {
+      assert.equal(
+        String(notices[notices.length - 1] && (notices[notices.length - 1].message || notices[notices.length - 1])),
+        "⏭ Next in FIX: Ship the badge renderer · keeps ‹sase_badges› moving",
+      );
+    }
+  }
+});
+
+test("KM26: Alt+] into Done offers keep-moving and links the resident", async () => {
+  notices.length = 0;
+  helpers.resetSuccessorKeepMovingCache();
+  const projectText = openKeepMovingProject().replace(
+    "- [ ] #task Draft the badge spec ^spec",
+    "- [*] #task Draft the badge spec ^spec",
+  );
+  const harness = createInMemoryObsidianApp({ [PROJECT_PATH]: projectText, "sase.md": "", "dev.md": "", [DAY_PATH]: DAY });
+  installMetadata(harness.app);
+  const predecessorLine = projectText.split("\n").findIndex((line) => line.includes("^spec"));
+  const editor = createTextEditor(projectText, { line: predecessorLine, ch: 4 });
+  const plugin = makeRealPlugin(harness, editor, PROJECT_PATH);
+  const picked = { models: [], choose: true };
+  const noticeCalls = [];
+  installPicker(plugin, 2, picked, noticeCalls, 2);
+  const view = Object.assign(new MarkdownView(), { editor, file: { path: PROJECT_PATH } });
+  assert.equal(plugin.handleCycleCommand(false, editor, view, 1), true);
+  await settleReal(plugin);
+  assert.match(editor.getValue().split("\n")[predecessorLine], /\[x\]/);
+  assert.equal(picked.models.length, 1);
+  assert.equal(picked.models[0].groups[0].group, "keep_moving");
+  assert.match(editor.getValue().split("\n").find((line) => line.includes("^renderer")), /\[\*\]/);
+  assert.match(harness.getSource(DAY_PATH), /\[\[sase_badges#\^renderer\]\]/);
+});
+
+test("KM27: walk landing awaits the picker and returns the plain text with no card", async () => {
+  notices.length = 0;
+  helpers.resetSuccessorKeepMovingCache();
+  const projectText = openKeepMovingProject();
+  const harness = createInMemoryObsidianApp({ [PROJECT_PATH]: projectText, "sase.md": "", "dev.md": "", [DAY_PATH]: DAY });
+  installMetadata(harness.app);
+  const predecessorLine = projectText.split("\n").findIndex((line) => line.includes("^spec"));
+  const editor = createTextEditor(projectText, { line: predecessorLine, ch: 4 });
+  const plugin = makeRealPlugin(harness, editor, PROJECT_PATH);
+  const picked = { models: [], choose: true };
+  const noticeCalls = [];
+  installPicker(plugin, 2, picked, noticeCalls, 2);
+  const taskStatus = plugin.getActiveTaskStatus(editor);
+  const box = {};
+  const wrote = await plugin.toggleActiveCheckboxOpenDoneAndPropagate(
+    editor,
+    { path: PROJECT_PATH },
+    taskStatus,
+    { successorNoticeTarget: "return", successorNoticeBox: box },
+  );
+  assert.equal(wrote, true);
+  assert.equal(picked.models.length, 1);
+  assert.equal(box.text, "⏭ Next in FIX: Ship the badge renderer · keeps ‹sase_badges› moving");
+  assert.equal(noticeCalls.length, 0);
+  assert.equal(notices.length, 0);
+});
+
+test("KM25: Esc leaves the resident and the day byte-identical with no notice", async () => {
+  notices.length = 0;
+  helpers.resetSuccessorKeepMovingCache();
+  const projectText = openKeepMovingProject();
+  const harness = createInMemoryObsidianApp({ [PROJECT_PATH]: projectText, "sase.md": "", "dev.md": "", [DAY_PATH]: DAY });
+  installMetadata(harness.app);
+  const predecessorLine = projectText.split("\n").findIndex((line) => line.includes("^spec"));
+  const editor = createTextEditor(projectText, { line: predecessorLine, ch: 4 });
+  const plugin = makeRealPlugin(harness, editor, PROJECT_PATH);
+  const picked = { models: [], choose: true, returnNull: true };
+  const noticeCalls = [];
+  installPicker(plugin, 2, picked, noticeCalls, 2);
+  const dayBefore = harness.getSource(DAY_PATH);
+  const residentBefore = projectText.split("\n").find((line) => line.includes("^renderer"));
+  const taskStatus = plugin.getActiveTaskStatus(editor);
+  const wrote = await plugin.toggleActiveCheckboxOpenDoneAndPropagate(editor, { path: PROJECT_PATH }, taskStatus, {});
+  await settleReal(plugin);
+  assert.equal(wrote, true);
+  assert.equal(picked.models.length, 1);
+  const residentAfter = editor.getValue().split("\n").find((line) => line.includes("^renderer"));
+  assert.equal(residentAfter, residentBefore);
+  assert.ok(!residentAfter.includes("[*]"));
+  assert.ok(!residentAfter.includes("[fresh::"));
+  assert.equal((residentAfter.match(/\^[A-Za-z0-9_-]+/g) || []).length, 1);
+  assert.equal(harness.getSource(DAY_PATH), dayBefore);
+  assert.equal(noticeCalls.length, 0);
+  assert.equal(notices.length, 0);
+});
+
+test("notice-form parity: one, several, mixed, and failure copy matches nav v2", () => {
+  const one = purePlan({ residents: ["- [ ] #task Ship the badge renderer ^renderer"], options: { selection: "all" } }).plan;
+  assert.equal(
+    helpers.successorNoticeText({ keep_moving: one.keep_moving, unblocked: [] }),
+    "⏭ Next in FIX: Ship the badge renderer · keeps ‹sase_badges› moving",
+  );
+  const several = purePlan({
+    residents: [
+      "- [ ] #task Ship the badge renderer ^renderer",
+      "- [ ] #task Write badge docs ^docs",
+    ],
+    options: { selection: "all" },
+  }).plan;
+  assert.equal(
+    helpers.successorNoticeText({ keep_moving: several.keep_moving, unblocked: [] }),
+    "⏭ 2 linked → FIX · keeps ‹sase_badges› moving",
+  );
+  const mixed = helpers.successorNoticeText({
+    predecessors: [{ note_path: PROJECT_PATH, block_id: "spec", text: "Draft the badge spec" }],
+    unblocked: [{
+      text: "Normal task", status_symbol: "*", status_name: "Next",
+      link: { entry_name: "FIX" }, trigger: "dependency", not_linked: null,
+    }],
+    keep_moving: one.keep_moving,
+  });
+  assert.equal(mixed, "🔓 2 linked → FIX: Normal task, Ship the badge renderer");
+  const failedRow = {
+    ...one.keep_moving[0],
+    link: null,
+    not_linked: "failed",
+    offer: { ...(one.keep_moving[0].offer || {}), selected: true },
+  };
+  const allFailed = helpers.successorNoticeText({
+    predecessors: [{ note_path: PROJECT_PATH, block_id: "spec", text: "Draft the badge spec" }],
+    unblocked: [],
+    keep_moving: [failedRow],
+    failure: { count: 1, reason: "daily note changed" },
+  });
+  assert.equal(allFailed, "⚠ Closed Draft the badge spec — couldn't link 1 successor (daily note changed)");
+  const partial = helpers.successorNoticeText({
+    predecessors: [{ note_path: PROJECT_PATH, block_id: "spec", text: "Draft the badge spec" }],
+    unblocked: [],
+    keep_moving: [one.keep_moving[0], failedRow],
+    failure: { count: 1, reason: "daily note changed" },
+  });
+  assert.equal(partial, "⚠ Closed Draft the badge spec — couldn't link 1 successor (daily note changed)");
 });

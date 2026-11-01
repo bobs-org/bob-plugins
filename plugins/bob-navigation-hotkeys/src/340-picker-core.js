@@ -95,6 +95,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.inboxRoute = context.inboxRoute || null;
     this.inboxRouteCommitInFlight = false;
     this.inboxRouteResult = null;
+    this.fixedWorkLogNow =
+      context.now instanceof Date
+        ? context.now
+        : context.workLogNow instanceof Date
+          ? context.workLogNow
+          : null;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     // The Ctrl+Enter recommendation is previewed once when the picker opens
     // (what you see is what you get): the write reuses exactly this date and

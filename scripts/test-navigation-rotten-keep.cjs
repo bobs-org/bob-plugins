@@ -53,7 +53,7 @@ function fixture({ content = RAW, entry = row(), version = 6, keepLine = keep } 
     vault: { getAbstractFileByPath: () => null } };
   plugin.laneReleaseDateText = (options = {}) => options.dateText || DATE;
   plugin.reviewAnchor = { before: true };
-  const run = (options = {}) => plugin.refreshTaskFreshness(editor, { dateText: DATE, ...options });
+  const run = (options = {}) => plugin.refreshTaskFreshness(editor, { dateText: DATE, now: new Date(2026, 9, 23, 14, 32), workLogStampText: "2026-10-23 14:32", ...options });
   return { plugin, editor, run, freshness };
 }
 
@@ -252,7 +252,7 @@ test("counted mixed sessions use one Work-first prompt and route each answer to 
 
   assert.equal(await pending, true);
   assert.equal(f.editor.transactions.length, 1);
-  assert.match(f.editor.content, /\n\t- 🛠️ \*\*WORK LOG\*\*\n\t\t- \*2026-10-23\* — Finished the intro/);
+  assert.match(f.editor.content, /\n\t- 🛠️ \*\*WORK LOG\*\*\n\t\t- \*2026-10-23 14:32\* — Finished the intro/);
   assert.match(f.editor.content, /\n\t- 🥀 \*\*ROTTEN LOG\*\*\n\t\t- \*2026-10-23\* — still the primer · kept 3×/);
 });
 

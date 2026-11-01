@@ -373,6 +373,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         additionalTaskCount,
         summary: options.summary,
         dateText: options.dateText,
+        stampText: options.stampText,
+        now: options.now,
         skipReleasePrompt: options.skipReleasePrompt,
         reviewOrigin: origin,
       });
@@ -387,6 +389,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         linkDiscovery: options.linkDiscovery || null,
         summary: options.summary,
         dateText: options.dateText,
+        stampText: options.stampText,
+        now: options.now,
         skipReleasePrompt: options.skipReleasePrompt,
       });
     }
@@ -736,7 +740,9 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       return false;
     }
     let summary = "";
-    const dateText = this.laneReleaseDateText(options);
+    const workLogNow = options.now instanceof Date ? options.now : new Date();
+    const stampText =
+      options.stampText || formatWorkLogStamp(workLogNow);
     if (probe.mode === "release") {
       const needsReason = probe.released.some(
         (entry) => entry.fromStatus === "/",
@@ -776,7 +782,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     }
     const plan = planTaskLaneBatch(content, session, {
       summary,
-      dateText,
+      stampText,
+      now: workLogNow,
       stampLine: this.getFreshnessStampLine(),
       freshDateText: this.getFreshnessDateText(),
     });

@@ -624,10 +624,10 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
           schedulingWorkLog: summary
             ? {
                 summary,
-                dateText: formatBulletPropertyDate(
-                  this.valueBaseDate instanceof Date
-                    ? this.valueBaseDate
-                    : getLocalDateStart(new Date()),
+                stampText: formatWorkLogStamp(
+                  this.fixedWorkLogNow instanceof Date
+                    ? this.fixedWorkLogNow
+                    : new Date(),
                 ),
               }
             : null,

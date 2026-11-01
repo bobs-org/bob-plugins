@@ -265,13 +265,14 @@ test("toggleTaskLane release logs the summary on In Progress tasks", async () =>
   assert.equal(
     await plugin.toggleTaskLane(editor, {
       summary: "parked for later",
-      dateText: "2026-09-30",
+      stampText: "2026-09-30 14:32",
+      now: new Date(2026, 8, 30, 14, 32),
     }),
     true,
   );
   assert.match(editor.content, /- \[ \] #task Working \^a1/);
   assert.match(editor.content, /WORK LOG/);
-  assert.match(editor.content, /\*2026-09-30\* — parked for later/);
+  assert.match(editor.content, /\*2026-09-30 14:32\* — parked for later/);
   assert.match(notices.at(-1), /→ Ready · 1 task/);
 });
 

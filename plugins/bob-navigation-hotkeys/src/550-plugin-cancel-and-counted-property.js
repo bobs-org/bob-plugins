@@ -573,8 +573,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
           options.reopenBlocksStage === true ||
           options.reopenLinksStage === true ||
           options.reopenLinkedFromStage === true,
-        random: options.random,
-        baseDate: options.baseDate,
+        random: options.random, baseDate: options.baseDate,
+        now: options.now, workLogNow: options.workLogNow,
         reviewOrigin,
         reviewLineIndex: cursor.line,
         reviewBeforeLine: lineText,

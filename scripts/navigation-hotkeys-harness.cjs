@@ -374,6 +374,7 @@ function createBulletPropertyPickerHarness(harnessOptions = {}) {
       config,
       random: options.random || harnessOptions.random,
       baseDate: options.baseDate || harnessOptions.baseDate,
+      now: options.now || harnessOptions.now,
       ...options,
     });
   return { config, editor, file, open, plugin };

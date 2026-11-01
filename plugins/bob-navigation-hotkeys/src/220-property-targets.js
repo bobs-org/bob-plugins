@@ -545,7 +545,8 @@ function getLinkPickerSessionSubtitle(session) {
 //   skipped and counted in the Notice ("Blocked is derived").
 // - Done, cancelled and non-task targets keep the existing session refusals.
 // - `summary` (optional) is prepended to each released In Progress task's
-//   Work Log; a blank summary writes nothing. `dateText` is `YYYY-MM-DD`.
+//   Work Log; a blank summary writes nothing. `stampText` is
+//   `YYYY-MM-DD HH:MM`.
 //   Work Log planning mirrors block-id-prompt's pure `planWorkLogInsertion`
 //   (see `plugins/block-id-prompt/main.js`): prepend under the existing
 //   marker when one is a direct child, else append a new marker plus entry
@@ -558,12 +559,26 @@ function normalizeLaneWorkSummary(value) {
     .replace(/\s+/g, " ");
 }
 
-function formatLaneWorkLogEntry(summary, dateText) {
+function formatWorkLogStamp(date) {
+  // Work Log stamps are `YYYY-MM-DD HH:MM` in the writer's local wall-clock
+  // time, truncated to the minute. See bob-cli `docs/reference/vault-format.md`
+  // for the canonical vault grammar.
+  const current = date instanceof Date ? date : new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const year = current.getFullYear();
+  const month = pad(current.getMonth() + 1);
+  const day = pad(current.getDate());
+  const hour = pad(current.getHours());
+  const minute = pad(current.getMinutes());
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+}
+
+function formatLaneWorkLogEntry(summary, stampText) {
   const normalized = normalizeLaneWorkSummary(summary);
   if (!normalized) {
     return "";
   }
-  return `*${String(dateText || "")}* — ${normalized}`;
+  return `*${String(stampText || "")}* — ${normalized}`;
 }
 
 function findLaneWorkLogParent(lines, taskLine) {
@@ -619,12 +634,12 @@ function getLaneTaskChildIndent(lines, taskLine) {
 
 // Insert one Work Log entry into `workingLines` (mutated in place) for the
 // task at `taskLine`. Returns true when an entry was added.
-function insertLaneWorkLogEntry(workingLines, taskLine, summary, dateText) {
+function insertLaneWorkLogEntry(workingLines, taskLine, summary, stampText) {
   const normalized = normalizeLaneWorkSummary(summary);
   if (!normalized) {
     return false;
   }
-  const entryText = formatLaneWorkLogEntry(normalized, dateText);
+  const entryText = formatLaneWorkLogEntry(normalized, stampText);
   if (!entryText) {
     return false;
   }
@@ -707,14 +722,22 @@ function hasSchedulingWorkLogInput(workLog) {
   return Boolean(normalizeSchedulingWorkSummary(workLog.summary));
 }
 
-function resolveSchedulingWorkLogDateText(workLog, fallbackDate) {
+function resolveSchedulingWorkLogStampText(workLog, fallbackStamp, now) {
+  if (workLog && typeof workLog.stampText === "string" && workLog.stampText) {
+    return String(workLog.stampText);
+  }
   if (workLog && typeof workLog.dateText === "string" && workLog.dateText) {
     return String(workLog.dateText);
   }
-  if (typeof fallbackDate === "string" && fallbackDate) {
-    return String(fallbackDate);
+  if (typeof fallbackStamp === "string" && fallbackStamp) {
+    return String(fallbackStamp);
   }
-  return formatBulletPropertyDate(getLocalDateStart(new Date()));
+  const current = now instanceof Date ? now : new Date();
+  return formatWorkLogStamp(current);
+}
+
+function resolveSchedulingWorkLogDateText(workLog, fallbackDate) {
+  return resolveSchedulingWorkLogStampText(workLog, fallbackDate, undefined);
 }
 
 // Note-plus-identity key for a scheduling target. Linked notes can share a

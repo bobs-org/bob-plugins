@@ -225,7 +225,14 @@ class FreshnessRefreshSummaryModal extends Modal {
       text.createDiv({
         cls: "bob-cnp-row-title",
         text: summary
-          ? formatLaneWorkLogEntry(summary, String(this.options.dateText || ""))
+          ? formatLaneWorkLogEntry(
+              summary,
+              formatWorkLogStamp(
+                this.options.now instanceof Date
+                  ? this.options.now
+                  : new Date(),
+              ),
+            )
           : "No summary",
       });
       if (hasInlineField) {
@@ -356,7 +363,9 @@ class FreshnessRefreshSummaryModal extends Modal {
       text: summary
         ? formatLaneWorkLogEntry(
             summary,
-            String(this.options.dateText || ""),
+            formatWorkLogStamp(
+              this.options.now instanceof Date ? this.options.now : new Date(),
+            ),
           )
         : "No summary",
     });

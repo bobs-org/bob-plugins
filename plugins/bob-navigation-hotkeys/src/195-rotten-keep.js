@@ -59,6 +59,17 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
   }
   const { lines, lineEnding } = splitMarkdownContent(plan.content);
   const summary = normalizeLaneWorkSummary(options.workSummary);
+  const workLogStamp =
+    typeof options.workLogStampText === "string" &&
+    options.workLogStampText
+      ? String(options.workLogStampText)
+      : typeof options.stampText === "string" && options.stampText
+        ? String(options.stampText)
+        : options.now instanceof Date
+          ? formatWorkLogStamp(options.now)
+          : options.workSummary
+            ? formatWorkLogStamp(new Date())
+            : String(dateText || "");
   let workLogWrittenCount = 0;
   let rottenLogWrittenCount = 0;
   const entries = [...plan.stamped].sort((a, b) => b.line - a.line);
@@ -91,7 +102,8 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
       if (!applyManagedTaskLogEntryToLines(lines, insertion)) return refuse("rotten-log-invalid");
       rottenLogWrittenCount += 1;
     } else if (summary && isPendingWorkLogTargetRawLine(entry.before)) {
-      if (insertLaneWorkLogEntry(lines, entry.line, summary, dateText)) workLogWrittenCount += 1;
+      if (insertLaneWorkLogEntry(lines, entry.line, summary, workLogStamp))
+        workLogWrittenCount += 1;
     }
   }
   return { ...plan, content: lines.join(lineEnding), workLogWrittenCount, rottenLogWrittenCount };

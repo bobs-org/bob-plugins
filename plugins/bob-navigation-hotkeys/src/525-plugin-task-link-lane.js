@@ -97,7 +97,14 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         );
       }
       const laneBudgets = readLaneBudgets(this.app);
-      const dateText = this.laneReleaseDateText();
+      const workLogNow =
+        request.now instanceof Date
+          ? request.now
+          : request.workLogNow instanceof Date
+            ? request.workLogNow
+            : new Date();
+      const stampText =
+        request.stampText || formatWorkLogStamp(workLogNow);
       let summary = "";
       if (mode === "pause") {
         const pausable = resolution.targets.filter(
@@ -107,7 +114,8 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         if (pausable.length > 0) {
           const answer = await this.requestTaskLinkLaneSummary({
             targets: pausable,
-            dateText,
+            stampText,
+            now: workLogNow,
           });
           if (answer.cancelled) {
             return Object.freeze({ ok: false, reason: "cancelled" });
@@ -120,7 +128,8 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         const plan = planTaskLinkLaneBatch(group.content, group.session, {
           mode,
           summary,
-          dateText,
+          stampText,
+          now: workLogNow,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
         });
@@ -232,7 +241,9 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
       try {
         modal = new TaskLinkLanePromptModal(this.app, {
           tasks,
-          dateText: options.dateText,
+          dateText: options.stampText || options.dateText,
+          stampText: options.stampText || options.dateText,
+          now: options.now instanceof Date ? options.now : undefined,
           onDone: (result) => {
             if (result === null) {
               finish({ cancelled: true, summary: "" });

@@ -367,10 +367,13 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
     const summary =
       typeof options.summary === "string" ? options.summary : "";
-    const dateText =
-      typeof options.dateText === "string" && options.dateText
-        ? String(options.dateText)
-        : formatBulletPropertyDate(getLocalDateStart(new Date()));
+    const workLogNow = options.now instanceof Date ? options.now : new Date();
+    const stampText =
+      typeof options.stampText === "string" && options.stampText
+        ? String(options.stampText)
+        : typeof options.dateText === "string" && options.dateText
+          ? String(options.dateText)
+          : formatWorkLogStamp(workLogNow);
     if (picker.linkSession) {
       const resolved = Array.isArray(picker.linkSession.resolved)
         ? picker.linkSession.resolved
@@ -385,7 +388,8 @@ class BobNavigationHotkeysDecayCancelMixin {
       for (const group of groups) {
         const plan = planTaskLaneBatch(group.content, group.session, {
           summary,
-          dateText,
+          stampText,
+          now: workLogNow,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
         });
@@ -533,7 +537,8 @@ class BobNavigationHotkeysDecayCancelMixin {
     const laneBudgets = readLaneBudgets(this.app);
     const plan = planTaskLaneBatch(writeContext.content, session, {
       summary,
-      dateText,
+      stampText,
+      now: workLogNow,
       stampLine: this.getFreshnessStampLine(),
       freshDateText: this.getFreshnessDateText(),
     });

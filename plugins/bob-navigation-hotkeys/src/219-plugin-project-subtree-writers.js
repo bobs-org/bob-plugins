@@ -233,8 +233,15 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
     const workLogSummary = wantsWorkLog
       ? normalizeSchedulingWorkSummary(schedulingWorkLogInput.summary)
       : "";
-    const workLogDateText = wantsWorkLog
-      ? resolveSchedulingWorkLogDateText(schedulingWorkLogInput, undefined)
+    const commitNow = options.now instanceof Date ? options.now : new Date();
+    const fallbackStamp =
+      options.stampText || options.workLogStampText || undefined;
+    const workLogStampText = wantsWorkLog
+      ? resolveSchedulingWorkLogStampText(
+          schedulingWorkLogInput,
+          fallbackStamp,
+          commitNow,
+        )
       : "";
     let preplannedScheduleLog = null;
     if (foldedDailyContent !== null) {
@@ -285,7 +292,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
             mutable,
             effectiveCursorLine,
             workLogSummary,
-            workLogDateText,
+            workLogStampText,
           )
         ) {
           workLogWritten = true;
@@ -330,7 +337,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
           mutable,
           effectiveCursorLine,
           workLogSummary,
-          workLogDateText,
+          workLogStampText,
         )
       ) {
         workLogWritten = true;

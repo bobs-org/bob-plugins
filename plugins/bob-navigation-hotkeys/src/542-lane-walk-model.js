@@ -385,8 +385,9 @@ function planLaneWalkLaneJump(list, options = {}) {
 
 // Latest Work Log entry for the task at 0-based `taskLine` in `content`.
 // Built on `findManagedTaskLogParents(..., WORK)`. Entries are newest-first
-// `*YYYY-MM-DD* — summary`. More than one WORK LOG marker, a missing
-// parent, or a malformed newest entry means no chip (null).
+// `*YYYY-MM-DD HH:MM* — summary` or legacy `*YYYY-MM-DD* — summary`.
+// More than one WORK LOG marker, a missing parent, or a malformed newest
+// entry means no chip (null).
 function readLatestWorkLog(content, taskLine) {
   try {
     const lines = String(content || "").split(/\r?\n/);
@@ -427,9 +428,10 @@ function readLatestWorkLog(content, taskLine) {
       return null;
     }
     const newest = entries[0];
-    const match = /^\s*(?:[-*+]|\d+[.)])\s+\*(\d{4}-\d{2}-\d{2})\*\s+—\s+(.+?)\s*$/.exec(
-      newest,
-    );
+    const match =
+      /^\s*(?:[-*+]|\d+[.)])\s+\*(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?\*\s+—\s+(.+?)\s*$/.exec(
+        newest,
+      );
     if (!match) {
       return null;
     }
@@ -437,13 +439,33 @@ function readLatestWorkLog(content, taskLine) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return null;
     }
-    const summaryRaw = String(match[2] || "").trim();
+    let time = null;
+    if (match[2] !== undefined && match[2] !== null) {
+      const timeText = String(match[2]);
+      if (!/^\d{2}:\d{2}$/.test(timeText)) {
+        return null;
+      }
+      const hour = Number(timeText.slice(0, 2));
+      const minute = Number(timeText.slice(3, 5));
+      if (
+        !Number.isInteger(hour) ||
+        !Number.isInteger(minute) ||
+        hour < 0 ||
+        hour > 23 ||
+        minute < 0 ||
+        minute > 59
+      ) {
+        return null;
+      }
+      time = timeText;
+    }
+    const summaryRaw = String(match[3] || "").trim();
     if (!summaryRaw) {
       return null;
     }
     const summary =
       summaryRaw.length > 48 ? `${summaryRaw.slice(0, 48)}…` : summaryRaw;
-    return Object.freeze({ date, summary });
+    return Object.freeze({ date, time, summary });
   } catch (error) {
     return null;
   }
@@ -456,6 +478,16 @@ function laneWalkNoteName(path) {
 
 function laneWalkHintAction(lane) {
   return lane === "ready" ? "next" : "release";
+}
+
+function laneWalkWorkLogLabel(workLog) {
+  if (!workLog || !workLog.date || !workLog.summary) {
+    return "";
+  }
+  const datePart = reviewShortDate(workLog.date);
+  const timePart =
+    typeof workLog.time === "string" && workLog.time ? ` ${workLog.time}` : "";
+  return `🛠️ ${datePart}${timePart} — ${workLog.summary}`;
 }
 
 // Pure notice model for one landing. `context` is
@@ -647,9 +679,7 @@ function formatLaneWalkNoticeText(model) {
     const title = String(model.title || "").trim() || "(untitled task)";
     const parts = [`${head} — ${title}`];
     if (model.workLog && model.workLog.date && model.workLog.summary) {
-      parts.push(
-        `🛠️ ${reviewShortDate(model.workLog.date)} — ${model.workLog.summary}`,
-      );
+      parts.push(laneWalkWorkLogLabel(model.workLog));
     } else if (model.created) {
       parts.push(`created ${reviewShortDate(model.created)}`);
     }

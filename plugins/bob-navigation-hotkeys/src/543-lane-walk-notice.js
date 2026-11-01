@@ -108,7 +108,7 @@ function renderLaneWalkNoticeFragment(model, root) {
   if (model.workLog && model.workLog.date && model.workLog.summary) {
     chipsEl.createSpan({
       cls: "bob-nh-notice-chip",
-      text: `🛠️ ${reviewShortDate(model.workLog.date)} — ${model.workLog.summary}`,
+      text: laneWalkWorkLogLabel(model.workLog),
     });
   } else if (model.created) {
     chipsEl.createSpan({

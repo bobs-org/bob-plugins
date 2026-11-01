@@ -171,7 +171,13 @@ function planTaskLinkLaneBatch(content, session, options = {}) {
     }
   }
   const summary = normalizeLaneWorkSummary(options.summary);
-  const dateText = String(options.dateText || "");
+  const stampText = String(options.stampText || options.dateText || "");
+  const commitNow = options.now instanceof Date ? options.now : null;
+  const resolvedStamp =
+    stampText ||
+    (options.summary !== undefined || options.stampText !== undefined
+      ? formatWorkLogStamp(commitNow || new Date())
+      : "");
   const laneStamper = resolveFreshStamper(options);
   const laneFreshDateText = resolveFreshDateText(options);
   const workingLines = source.lines.slice();
@@ -238,7 +244,14 @@ function planTaskLinkLaneBatch(content, session, options = {}) {
       }),
     );
     if (mode === "pause" && summary) {
-      if (insertLaneWorkLogEntry(workingLines, target.line, summary, dateText)) {
+      if (
+        insertLaneWorkLogEntry(
+          workingLines,
+          target.line,
+          summary,
+          resolvedStamp,
+        )
+      ) {
         workLogWrittenCount += 1;
       }
     }
@@ -368,21 +381,30 @@ function buildTaskLinkLaneNotice(details = {}) {
   return text;
 }
 
-// Pure state for the Move to Next prompt: normalized summary, today's date,
-// the formatted Work Log preview (blank when nothing would be logged), the
-// `::` Dataview warning flag, and the call-to-action button text.
+// Pure state for the Move to Next prompt: normalized summary, the Work Log
+// stamp, the formatted Work Log preview (blank when nothing would be
+// logged), the `::` Dataview warning flag, and the call-to-action button
+// text.
 function taskLinkLanePromptState(summary, options = {}) {
   const normalized = normalizeLaneWorkSummary(summary);
-  const date =
-    options && typeof options.date === "string" && options.date
-      ? String(options.date)
-      : formatBulletPropertyDate(getLocalDateStart(new Date()));
+  const stamp =
+    options && typeof options.stampText === "string" && options.stampText
+      ? String(options.stampText)
+      : options && typeof options.date === "string" && options.date
+        ? String(options.date)
+        : formatWorkLogStamp(
+            options && options.now instanceof Date
+              ? options.now
+              : new Date(),
+          );
+  const date = stamp;
   const formattedEntry = normalized
-    ? formatLaneWorkLogEntry(normalized, date)
+    ? formatLaneWorkLogEntry(normalized, stamp)
     : "";
   return Object.freeze({
     summary: normalized,
     date,
+    stampText: stamp,
     formattedEntry,
     isBlank: normalized.length === 0,
     hasDataviewWarning: normalized.includes("::"),

@@ -112,7 +112,7 @@ function applySchedulingWorkLogsToLines(
   mappedLinesByOriginal,
   eligibleOriginalLines,
   summary,
-  dateText,
+  stampText,
 ) {
   const normalized = normalizeSchedulingWorkSummary(summary);
   if (!normalized || !Array.isArray(workingLines)) {
@@ -142,7 +142,7 @@ function applySchedulingWorkLogsToLines(
         workingLines,
         entry.currentLine,
         normalized,
-        dateText,
+        stampText,
       )
     ) {
       written += 1;
@@ -153,7 +153,7 @@ function applySchedulingWorkLogsToLines(
 
 // Plan a lane commit/release across the task lines of one note's content.
 // Commit wins when any target is Ready; otherwise release. Pass `summary`
-// plus `dateText` to log an optional Work Log entry on each released In
+// plus `stampText` to log an optional Work Log entry on each released In
 // Progress task (blank writes nothing). Stale preimages (a line changed or
 // stopped being a task) refuse the whole batch.
 function planTaskLaneBatch(content, session, options = {}) {
@@ -198,7 +198,15 @@ function planTaskLaneBatch(content, session, options = {}) {
   const hasReady = statuses.some((status) => status === " ");
   const mode = hasReady ? "commit" : "release";
   const summary = normalizeLaneWorkSummary(options.summary);
-  const dateText = String(options.dateText || "");
+  const stampText = String(
+    options.stampText || options.dateText || "",
+  );
+  const commitNow = options.now instanceof Date ? options.now : null;
+  const resolvedStamp =
+    stampText ||
+    (options.summary !== undefined || options.stampText !== undefined
+      ? formatWorkLogStamp(commitNow || new Date())
+      : "");
   // Freshness is the last transformation of the task line (nav-stamps). The
   // stamper itself refuses closed and recurring lines, so those never stamp.
   // Pure planners take the stamper as an injected option (identity by default).
@@ -261,7 +269,14 @@ function planTaskLaneBatch(content, session, options = {}) {
         }),
       );
       if (status === "/" && summary) {
-        if (insertLaneWorkLogEntry(workingLines, target.line, summary, dateText)) {
+        if (
+          insertLaneWorkLogEntry(
+            workingLines,
+            target.line,
+            summary,
+            resolvedStamp,
+          )
+        ) {
           workLogWrittenCount += 1;
         }
       }

@@ -734,16 +734,20 @@ function planCountedBulletPropertyBatch(
           }
         }
       }
-      const workLogDateText = resolveSchedulingWorkLogDateText(
+      const commitNow = options.now instanceof Date ? options.now : new Date();
+      const fallbackStamp =
+        options.stampText || options.workLogStampText || undefined;
+      const workLogStampText = resolveSchedulingWorkLogStampText(
         schedulingWorkLogInput,
-        undefined,
+        fallbackStamp,
+        commitNow,
       );
       schedulingWorkLogWrittenCount = applySchedulingWorkLogsToLines(
         source.lines,
         mappedByOriginal,
         eligibleOriginalLines,
         schedulingWorkLogInput.summary,
-        workLogDateText,
+        workLogStampText,
       );
     }
   }

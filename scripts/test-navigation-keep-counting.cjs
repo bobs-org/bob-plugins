@@ -692,6 +692,8 @@ test("Pending Alt+F writes its summary with the stamp in one edit", async () => 
   });
   const ok = await plugin.refreshTaskFreshness(editor, {
     keepReason: "", dateText: DATE,
+    now: new Date(2026, 9, 8, 14, 32),
+    workLogStampText: "2026-10-08 14:32",
     summary: "Finished the review",
   });
   assert.equal(ok, true);
@@ -701,7 +703,7 @@ test("Pending Alt+F writes its summary with the stamp in one edit", async () => 
     [
       "- [/] #task Pending work [fresh:: 2026-10-08]",
       "\t- 🛠️ **WORK LOG**",
-      "\t\t- *2026-10-08* — Finished the review",
+      "\t\t- *2026-10-08 14:32* — Finished the review",
     ].join("\n"),
   );
   assert.match(notices[notices.length - 1], /1 Work Log/);

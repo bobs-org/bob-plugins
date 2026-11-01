@@ -6075,6 +6075,13 @@ function planRecommendedRollBatch(
         scheduleLog: { automatic: true, reasonByLine },
         schedulingWorkLog:
           details.schedulingWorkLog || details.workLog || null,
+        now: details.now instanceof Date ? details.now : undefined,
+        stampText:
+          typeof details.stampText === "string"
+            ? details.stampText
+            : typeof details.workLogStampText === "string"
+              ? details.workLogStampText
+              : undefined,
         stampLine:
           typeof details.stampLine === "function"
             ? details.stampLine
@@ -21566,7 +21573,14 @@ class FreshnessRefreshSummaryModal extends Modal {
       text.createDiv({
         cls: "bob-cnp-row-title",
         text: summary
-          ? formatLaneWorkLogEntry(summary, String(this.options.dateText || ""))
+          ? formatLaneWorkLogEntry(
+              summary,
+              formatWorkLogStamp(
+                this.options.now instanceof Date
+                  ? this.options.now
+                  : new Date(),
+              ),
+            )
           : "No summary",
       });
       if (hasInlineField) {
@@ -21697,7 +21711,9 @@ class FreshnessRefreshSummaryModal extends Modal {
       text: summary
         ? formatLaneWorkLogEntry(
             summary,
-            String(this.options.dateText || ""),
+            formatWorkLogStamp(
+              this.options.now instanceof Date ? this.options.now : new Date(),
+            ),
           )
         : "No summary",
     });
@@ -21843,6 +21859,17 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
   }
   const { lines, lineEnding } = splitMarkdownContent(plan.content);
   const summary = normalizeLaneWorkSummary(options.workSummary);
+  const workLogStamp =
+    typeof options.workLogStampText === "string" &&
+    options.workLogStampText
+      ? String(options.workLogStampText)
+      : typeof options.stampText === "string" && options.stampText
+        ? String(options.stampText)
+        : options.now instanceof Date
+          ? formatWorkLogStamp(options.now)
+          : options.workSummary
+            ? formatWorkLogStamp(new Date())
+            : String(dateText || "");
   let workLogWrittenCount = 0;
   let rottenLogWrittenCount = 0;
   const entries = [...plan.stamped].sort((a, b) => b.line - a.line);
@@ -21875,7 +21902,8 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
       if (!applyManagedTaskLogEntryToLines(lines, insertion)) return refuse("rotten-log-invalid");
       rottenLogWrittenCount += 1;
     } else if (summary && isPendingWorkLogTargetRawLine(entry.before)) {
-      if (insertLaneWorkLogEntry(lines, entry.line, summary, dateText)) workLogWrittenCount += 1;
+      if (insertLaneWorkLogEntry(lines, entry.line, summary, workLogStamp))
+        workLogWrittenCount += 1;
     }
   }
   return { ...plan, content: lines.join(lineEnding), workLogWrittenCount, rottenLogWrittenCount };
@@ -22091,7 +22119,32 @@ class TaskLinkLanePromptModal extends Modal {
     if (typeof this.options.dateText === "string" && this.options.dateText) {
       return String(this.options.dateText);
     }
-    return formatBulletPropertyDate(getLocalDateStart(new Date()));
+    if (typeof this.options.stampText === "string" && this.options.stampText) {
+      return String(this.options.stampText);
+    }
+    const now =
+      this.options.now instanceof Date
+        ? this.options.now
+        : this.fixedWorkLogNow instanceof Date
+          ? this.fixedWorkLogNow
+          : new Date();
+    return formatWorkLogStamp(now);
+  }
+
+  taskLinkLaneStampText() {
+    if (typeof this.options.stampText === "string" && this.options.stampText) {
+      return String(this.options.stampText);
+    }
+    if (typeof this.options.dateText === "string" && this.options.dateText) {
+      return String(this.options.dateText);
+    }
+    const now =
+      this.options.now instanceof Date
+        ? this.options.now
+        : this.fixedWorkLogNow instanceof Date
+          ? this.fixedWorkLogNow
+          : new Date();
+    return formatWorkLogStamp(now);
   }
 
   onOpen() {
@@ -22203,7 +22256,7 @@ class TaskLinkLanePromptModal extends Modal {
     }
     const state = taskLinkLanePromptState(
       this.inputEl ? this.inputEl.value : "",
-      { date: this.taskLinkLaneDateText() },
+      { stampText: this.taskLinkLaneStampText() },
     );
     if (
       this.primaryButton &&
@@ -32631,8 +32684,15 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
     const workLogSummary = wantsWorkLog
       ? normalizeSchedulingWorkSummary(schedulingWorkLogInput.summary)
       : "";
-    const workLogDateText = wantsWorkLog
-      ? resolveSchedulingWorkLogDateText(schedulingWorkLogInput, undefined)
+    const commitNow = options.now instanceof Date ? options.now : new Date();
+    const fallbackStamp =
+      options.stampText || options.workLogStampText || undefined;
+    const workLogStampText = wantsWorkLog
+      ? resolveSchedulingWorkLogStampText(
+          schedulingWorkLogInput,
+          fallbackStamp,
+          commitNow,
+        )
       : "";
     let preplannedScheduleLog = null;
     if (foldedDailyContent !== null) {
@@ -32683,7 +32743,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
             mutable,
             effectiveCursorLine,
             workLogSummary,
-            workLogDateText,
+            workLogStampText,
           )
         ) {
           workLogWritten = true;
@@ -32728,7 +32788,7 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
           mutable,
           effectiveCursorLine,
           workLogSummary,
-          workLogDateText,
+          workLogStampText,
         )
       ) {
         workLogWritten = true;
@@ -33661,7 +33721,8 @@ function getLinkPickerSessionSubtitle(session) {
 //   skipped and counted in the Notice ("Blocked is derived").
 // - Done, cancelled and non-task targets keep the existing session refusals.
 // - `summary` (optional) is prepended to each released In Progress task's
-//   Work Log; a blank summary writes nothing. `dateText` is `YYYY-MM-DD`.
+//   Work Log; a blank summary writes nothing. `stampText` is
+//   `YYYY-MM-DD HH:MM`.
 //   Work Log planning mirrors block-id-prompt's pure `planWorkLogInsertion`
 //   (see `plugins/block-id-prompt/main.js`): prepend under the existing
 //   marker when one is a direct child, else append a new marker plus entry
@@ -33674,12 +33735,26 @@ function normalizeLaneWorkSummary(value) {
     .replace(/\s+/g, " ");
 }
 
-function formatLaneWorkLogEntry(summary, dateText) {
+function formatWorkLogStamp(date) {
+  // Work Log stamps are `YYYY-MM-DD HH:MM` in the writer's local wall-clock
+  // time, truncated to the minute. See bob-cli `docs/reference/vault-format.md`
+  // for the canonical vault grammar.
+  const current = date instanceof Date ? date : new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const year = current.getFullYear();
+  const month = pad(current.getMonth() + 1);
+  const day = pad(current.getDate());
+  const hour = pad(current.getHours());
+  const minute = pad(current.getMinutes());
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+}
+
+function formatLaneWorkLogEntry(summary, stampText) {
   const normalized = normalizeLaneWorkSummary(summary);
   if (!normalized) {
     return "";
   }
-  return `*${String(dateText || "")}* — ${normalized}`;
+  return `*${String(stampText || "")}* — ${normalized}`;
 }
 
 function findLaneWorkLogParent(lines, taskLine) {
@@ -33735,12 +33810,12 @@ function getLaneTaskChildIndent(lines, taskLine) {
 
 // Insert one Work Log entry into `workingLines` (mutated in place) for the
 // task at `taskLine`. Returns true when an entry was added.
-function insertLaneWorkLogEntry(workingLines, taskLine, summary, dateText) {
+function insertLaneWorkLogEntry(workingLines, taskLine, summary, stampText) {
   const normalized = normalizeLaneWorkSummary(summary);
   if (!normalized) {
     return false;
   }
-  const entryText = formatLaneWorkLogEntry(normalized, dateText);
+  const entryText = formatLaneWorkLogEntry(normalized, stampText);
   if (!entryText) {
     return false;
   }
@@ -33823,14 +33898,22 @@ function hasSchedulingWorkLogInput(workLog) {
   return Boolean(normalizeSchedulingWorkSummary(workLog.summary));
 }
 
-function resolveSchedulingWorkLogDateText(workLog, fallbackDate) {
+function resolveSchedulingWorkLogStampText(workLog, fallbackStamp, now) {
+  if (workLog && typeof workLog.stampText === "string" && workLog.stampText) {
+    return String(workLog.stampText);
+  }
   if (workLog && typeof workLog.dateText === "string" && workLog.dateText) {
     return String(workLog.dateText);
   }
-  if (typeof fallbackDate === "string" && fallbackDate) {
-    return String(fallbackDate);
+  if (typeof fallbackStamp === "string" && fallbackStamp) {
+    return String(fallbackStamp);
   }
-  return formatBulletPropertyDate(getLocalDateStart(new Date()));
+  const current = now instanceof Date ? now : new Date();
+  return formatWorkLogStamp(current);
+}
+
+function resolveSchedulingWorkLogDateText(workLog, fallbackDate) {
+  return resolveSchedulingWorkLogStampText(workLog, fallbackDate, undefined);
 }
 
 // Note-plus-identity key for a scheduling target. Linked notes can share a
@@ -34052,7 +34135,7 @@ function applySchedulingWorkLogsToLines(
   mappedLinesByOriginal,
   eligibleOriginalLines,
   summary,
-  dateText,
+  stampText,
 ) {
   const normalized = normalizeSchedulingWorkSummary(summary);
   if (!normalized || !Array.isArray(workingLines)) {
@@ -34082,7 +34165,7 @@ function applySchedulingWorkLogsToLines(
         workingLines,
         entry.currentLine,
         normalized,
-        dateText,
+        stampText,
       )
     ) {
       written += 1;
@@ -34093,7 +34176,7 @@ function applySchedulingWorkLogsToLines(
 
 // Plan a lane commit/release across the task lines of one note's content.
 // Commit wins when any target is Ready; otherwise release. Pass `summary`
-// plus `dateText` to log an optional Work Log entry on each released In
+// plus `stampText` to log an optional Work Log entry on each released In
 // Progress task (blank writes nothing). Stale preimages (a line changed or
 // stopped being a task) refuse the whole batch.
 function planTaskLaneBatch(content, session, options = {}) {
@@ -34138,7 +34221,15 @@ function planTaskLaneBatch(content, session, options = {}) {
   const hasReady = statuses.some((status) => status === " ");
   const mode = hasReady ? "commit" : "release";
   const summary = normalizeLaneWorkSummary(options.summary);
-  const dateText = String(options.dateText || "");
+  const stampText = String(
+    options.stampText || options.dateText || "",
+  );
+  const commitNow = options.now instanceof Date ? options.now : null;
+  const resolvedStamp =
+    stampText ||
+    (options.summary !== undefined || options.stampText !== undefined
+      ? formatWorkLogStamp(commitNow || new Date())
+      : "");
   // Freshness is the last transformation of the task line (nav-stamps). The
   // stamper itself refuses closed and recurring lines, so those never stamp.
   // Pure planners take the stamper as an injected option (identity by default).
@@ -34201,7 +34292,14 @@ function planTaskLaneBatch(content, session, options = {}) {
         }),
       );
       if (status === "/" && summary) {
-        if (insertLaneWorkLogEntry(workingLines, target.line, summary, dateText)) {
+        if (
+          insertLaneWorkLogEntry(
+            workingLines,
+            target.line,
+            summary,
+            resolvedStamp,
+          )
+        ) {
           workLogWrittenCount += 1;
         }
       }
@@ -36295,7 +36393,13 @@ function planTaskLinkLaneBatch(content, session, options = {}) {
     }
   }
   const summary = normalizeLaneWorkSummary(options.summary);
-  const dateText = String(options.dateText || "");
+  const stampText = String(options.stampText || options.dateText || "");
+  const commitNow = options.now instanceof Date ? options.now : null;
+  const resolvedStamp =
+    stampText ||
+    (options.summary !== undefined || options.stampText !== undefined
+      ? formatWorkLogStamp(commitNow || new Date())
+      : "");
   const laneStamper = resolveFreshStamper(options);
   const laneFreshDateText = resolveFreshDateText(options);
   const workingLines = source.lines.slice();
@@ -36362,7 +36466,14 @@ function planTaskLinkLaneBatch(content, session, options = {}) {
       }),
     );
     if (mode === "pause" && summary) {
-      if (insertLaneWorkLogEntry(workingLines, target.line, summary, dateText)) {
+      if (
+        insertLaneWorkLogEntry(
+          workingLines,
+          target.line,
+          summary,
+          resolvedStamp,
+        )
+      ) {
         workLogWrittenCount += 1;
       }
     }
@@ -36492,21 +36603,30 @@ function buildTaskLinkLaneNotice(details = {}) {
   return text;
 }
 
-// Pure state for the Move to Next prompt: normalized summary, today's date,
-// the formatted Work Log preview (blank when nothing would be logged), the
-// `::` Dataview warning flag, and the call-to-action button text.
+// Pure state for the Move to Next prompt: normalized summary, the Work Log
+// stamp, the formatted Work Log preview (blank when nothing would be
+// logged), the `::` Dataview warning flag, and the call-to-action button
+// text.
 function taskLinkLanePromptState(summary, options = {}) {
   const normalized = normalizeLaneWorkSummary(summary);
-  const date =
-    options && typeof options.date === "string" && options.date
-      ? String(options.date)
-      : formatBulletPropertyDate(getLocalDateStart(new Date()));
+  const stamp =
+    options && typeof options.stampText === "string" && options.stampText
+      ? String(options.stampText)
+      : options && typeof options.date === "string" && options.date
+        ? String(options.date)
+        : formatWorkLogStamp(
+            options && options.now instanceof Date
+              ? options.now
+              : new Date(),
+          );
+  const date = stamp;
   const formattedEntry = normalized
-    ? formatLaneWorkLogEntry(normalized, date)
+    ? formatLaneWorkLogEntry(normalized, stamp)
     : "";
   return Object.freeze({
     summary: normalized,
     date,
+    stampText: stamp,
     formattedEntry,
     isBlank: normalized.length === 0,
     hasDataviewWarning: normalized.includes("::"),
@@ -38386,16 +38506,20 @@ function planCountedBulletPropertyBatch(
           }
         }
       }
-      const workLogDateText = resolveSchedulingWorkLogDateText(
+      const commitNow = options.now instanceof Date ? options.now : new Date();
+      const fallbackStamp =
+        options.stampText || options.workLogStampText || undefined;
+      const workLogStampText = resolveSchedulingWorkLogStampText(
         schedulingWorkLogInput,
-        undefined,
+        fallbackStamp,
+        commitNow,
       );
       schedulingWorkLogWrittenCount = applySchedulingWorkLogsToLines(
         source.lines,
         mappedByOriginal,
         eligibleOriginalLines,
         schedulingWorkLogInput.summary,
-        workLogDateText,
+        workLogStampText,
       );
     }
   }
@@ -50334,6 +50458,12 @@ class BulletPropertyPickerModal extends FilteredPickerModal {
     this.inboxRoute = context.inboxRoute || null;
     this.inboxRouteCommitInFlight = false;
     this.inboxRouteResult = null;
+    this.fixedWorkLogNow =
+      context.now instanceof Date
+        ? context.now
+        : context.workLogNow instanceof Date
+          ? context.workLogNow
+          : null;
     this.valueBaseDate = this.fixedValueBaseDate || getLocalDateStart(new Date());
     // The Ctrl+Enter recommendation is previewed once when the picker opens
     // (what you see is what you get): the write reuses exactly this date and
@@ -52972,10 +53102,10 @@ class BulletPropertyPickerScheduleReviewMixin extends FilteredPickerModal {
           schedulingWorkLog: summary
             ? {
                 summary,
-                dateText: formatBulletPropertyDate(
-                  this.valueBaseDate instanceof Date
-                    ? this.valueBaseDate
-                    : getLocalDateStart(new Date()),
+                stampText: formatWorkLogStamp(
+                  this.fixedWorkLogNow instanceof Date
+                    ? this.fixedWorkLogNow
+                    : new Date(),
                 ),
               }
             : null,
@@ -53186,10 +53316,10 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
           cls: "bob-cnp-schedule-work-log-effects",
           text: formatLaneWorkLogEntry(
             item.summary,
-            formatBulletPropertyDate(
-              this.valueBaseDate instanceof Date
-                ? this.valueBaseDate
-                : getLocalDateStart(new Date()),
+            formatWorkLogStamp(
+              this.fixedWorkLogNow instanceof Date
+                ? this.fixedWorkLogNow
+                : new Date(),
             ),
           ),
         });
@@ -53295,7 +53425,9 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
 
   renderSchedulingWorkLogPreviewItem(item, rowEl, query) {
     const pending = this.pendingScheduleWorkLog;
-    const dateText = pending ? pending.dateText : "";
+    const stampText = pending
+      ? pending.stampText || pending.dateText || ""
+      : "";
     const state = item.empty ? "empty" : item.hasInlineField ? "warning" : "valid";
     addElementClasses(rowEl, "bob-cnp-schedule-work-log-row", `is-${state}`);
 
@@ -53313,7 +53445,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
     } else {
       appendHighlighted(
         titleEl,
-        formatLaneWorkLogEntry(item.reason, dateText),
+        formatLaneWorkLogEntry(item.reason, stampText),
         query,
       );
       if (item.hasInlineField) {
@@ -53388,10 +53520,10 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       return await dispatch("");
     }
     const isBatch = totalCount > 1;
-    const dateText = formatBulletPropertyDate(
-      this.valueBaseDate instanceof Date
-        ? this.valueBaseDate
-        : getLocalDateStart(new Date()),
+    const stampText = formatWorkLogStamp(
+      this.fixedWorkLogNow instanceof Date
+        ? this.fixedWorkLogNow
+        : new Date(),
     );
     const title = isBatch
       ? `Schedule ${totalCount} tasks`
@@ -53401,7 +53533,8 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       isBatch,
       eligibleCount,
       totalCount,
-      dateText,
+      dateText: stampText,
+      stampText,
       scheduleSummary: String(options.scheduleSummary || ""),
       resume: dispatch,
     });
@@ -53443,10 +53576,10 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
           schedulingWorkLog: summary
             ? {
                 summary,
-                dateText: formatBulletPropertyDate(
-                  this.valueBaseDate instanceof Date
-                    ? this.valueBaseDate
-                    : getLocalDateStart(new Date()),
+                stampText: formatWorkLogStamp(
+                  this.fixedWorkLogNow instanceof Date
+                    ? this.fixedWorkLogNow
+                    : new Date(),
                 ),
               }
             : null,
@@ -53520,7 +53653,14 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
         dispatch: async (summary) =>
           await this.plugin.applyLinkPickerPriorityValue(this, item, {
             schedulingWorkLog: summary
-              ? { summary, dateText: formatBulletPropertyDate(baseDate) }
+              ? {
+                  summary,
+                  stampText: formatWorkLogStamp(
+                    this.fixedWorkLogNow instanceof Date
+                      ? this.fixedWorkLogNow
+                      : new Date(),
+                  ),
+                }
               : null,
             precomputedByPath,
           }),
@@ -53555,7 +53695,14 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
         dispatch: async (summary) =>
           await this.applySelectedValue(item, {
             schedulingWorkLog: summary
-              ? { summary, dateText: formatBulletPropertyDate(baseDate) }
+              ? {
+                  summary,
+                  stampText: formatWorkLogStamp(
+                    this.fixedWorkLogNow instanceof Date
+                      ? this.fixedWorkLogNow
+                      : new Date(),
+                  ),
+                }
               : null,
             precomputedRollByLine: rollByLine,
             precomputedScheduledValueByLine: scheduledValueByLine,
@@ -53587,7 +53734,14 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       dispatch: async (summary) =>
         await this.applySelectedValue(item, {
           schedulingWorkLog: summary
-            ? { summary, dateText: formatBulletPropertyDate(baseDate) }
+            ? {
+                summary,
+                stampText: formatWorkLogStamp(
+                  this.fixedWorkLogNow instanceof Date
+                    ? this.fixedWorkLogNow
+                    : new Date(),
+                ),
+              }
             : null,
           precomputedRoll,
         }),
@@ -53824,11 +53978,17 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
       1,
       Math.floor(numericOrDefault(laneItem && laneItem.targetCount, 1)),
     );
+    const laneStamp = formatWorkLogStamp(
+      this.fixedWorkLogNow instanceof Date
+        ? this.fixedWorkLogNow
+        : new Date(),
+    );
     this.pendingLaneRelease = Object.freeze({
       title: "Release task",
       laneKind: (laneItem && laneItem.laneKind) || "task",
       openCount,
-      dateText: formatBulletPropertyDate(this.valueBaseDate),
+      dateText: laneStamp,
+      stampText: laneStamp,
     });
     this.clearLocalTaskMarks();
     this.selectedIndex = 0;
@@ -53931,7 +54091,9 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
 
   renderLaneReleaseReasonPreviewItem(item, rowEl, query) {
     const pending = this.pendingLaneRelease;
-    const dateText = pending ? pending.dateText : "";
+    const stampText = pending
+      ? pending.stampText || pending.dateText || ""
+      : "";
     addElementClasses(rowEl, "bob-cnp-lane-release-reason-row", "is-valid");
     const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
     applyIcon(rowIcon, "arrow-down-to-line");
@@ -53946,7 +54108,7 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
     } else {
       appendHighlighted(
         titleEl,
-        formatLaneWorkLogEntry(item.reason, dateText),
+        formatLaneWorkLogEntry(item.reason, stampText),
         query,
       );
       if (item.hasInlineField) {
@@ -53978,7 +54140,12 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
     }
     return this.applyInboxRoutedLaneToggle({
       summary: item.empty ? "" : item.reason,
-      dateText: pending.dateText,
+      dateText: pending.stampText || pending.dateText,
+      stampText: pending.stampText || pending.dateText,
+      now:
+        this.fixedWorkLogNow instanceof Date
+          ? this.fixedWorkLogNow
+          : new Date(),
     });
   }
 
@@ -66115,16 +66282,8 @@ function planFreshStampBatch(content, targetLines, stamper, dateText) {
 // refusal behavior, then one entry is prepended for each stamped pre-write
 // Pending (`[/]`) task. The shared inserter preserves marker ownership,
 // indentation, line endings, and existing child blocks.
-function planFreshStampBatchWithWorkLogs(
-  content,
-  targetLines,
-  stamper,
-  dateText,
-  summary,
-) {
-  return planFreshStampBatchWithLogs(content, targetLines, stamper, dateText, {
-    workSummary: summary,
-  });
+function planFreshStampBatchWithWorkLogs(content, targetLines, stamper, dateText, summary, options = {}) {
+  return planFreshStampBatchWithLogs(content, targetLines, stamper, dateText, { workSummary: summary, ...(options && typeof options === "object" ? options : {}) });
 }
 
 // True when the line already carries today's stamp (re-stamping it repairs
@@ -68792,6 +68951,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         additionalTaskCount,
         summary: options.summary,
         dateText: options.dateText,
+        stampText: options.stampText,
+        now: options.now,
         skipReleasePrompt: options.skipReleasePrompt,
         reviewOrigin: origin,
       });
@@ -68806,6 +68967,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         linkDiscovery: options.linkDiscovery || null,
         summary: options.summary,
         dateText: options.dateText,
+        stampText: options.stampText,
+        now: options.now,
         skipReleasePrompt: options.skipReleasePrompt,
       });
     }
@@ -69155,7 +69318,9 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       return false;
     }
     let summary = "";
-    const dateText = this.laneReleaseDateText(options);
+    const workLogNow = options.now instanceof Date ? options.now : new Date();
+    const stampText =
+      options.stampText || formatWorkLogStamp(workLogNow);
     if (probe.mode === "release") {
       const needsReason = probe.released.some(
         (entry) => entry.fromStatus === "/",
@@ -69195,7 +69360,8 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     }
     const plan = planTaskLaneBatch(content, session, {
       summary,
-      dateText,
+      stampText,
+      now: workLogNow,
       stampLine: this.getFreshnessStampLine(),
       freshDateText: this.getFreshnessDateText(),
     });
@@ -69617,7 +69783,8 @@ class BobNavigationHotkeysLaneReviewMixin {
     }
     void probeMode;
     let summary = "";
-    const dateText = this.laneReleaseDateText(options);
+    const workLogNow = options.now instanceof Date ? options.now : new Date();
+    const stampText = options.stampText || formatWorkLogStamp(workLogNow);
     // A release with an In Progress target asks once for an optional summary.
     let needsReason = false;
     for (const group of groups) {
@@ -69641,7 +69808,8 @@ class BobNavigationHotkeysLaneReviewMixin {
     for (const group of groups) {
       const plan = planTaskLaneBatch(group.content, group.session, {
         summary,
-        dateText,
+        stampText,
+        now: workLogNow,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
       });
@@ -69939,6 +70107,9 @@ class BobNavigationHotkeysLaneReviewMixin {
         advance,
         summary: options.summary,
         keepReason: options.keepReason,
+        now: options.now,
+        workLogStampText: options.workLogStampText,
+        stampText: options.stampText,
       });
     }
     if (parseLinkPickerTaskLink(lineText)) {
@@ -69950,6 +70121,9 @@ class BobNavigationHotkeysLaneReviewMixin {
         advance,
         summary: options.summary,
         keepReason: options.keepReason,
+        now: options.now,
+        workLogStampText: options.workLogStampText,
+        stampText: options.stampText,
         linkDiscovery: options.linkDiscovery || null,
       });
     }
@@ -70010,6 +70184,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       try {
         modal = new FreshnessRefreshSummaryModal(this.app, {
           dateText: options.dateText,
+          now: options.now,
           keep: options.keep,
           keepTargets: batchMode ? options.keepTargets : undefined,
           showWorkField: options.showWorkField,
@@ -70256,6 +70431,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       const result = await this.requestFreshnessRefreshAnswers({
         keepReason: options.keepReason,
         dateText: options.dateText,
+        now: options.now,
         keep: {
           raw: item.raw,
           entry: item.entry,
@@ -70278,6 +70454,7 @@ class BobNavigationHotkeysLaneReviewMixin {
         keepReason: options.keepReason,
         ...(promptPlan.showWorkField ? { summary: options.summary } : {}),
         dateText: options.dateText,
+        now: options.now,
         totalCount: keepTargets.length,
         eligibleCount: eligibleTargets.length,
       });
@@ -70294,6 +70471,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       const result = await this.requestFreshnessRefreshSummary({
         summary: options.summary,
         dateText: options.dateText,
+        now: options.now,
         totalCount: keepTargets.length,
         eligibleCount: eligibleTargets.length,
       });
@@ -70336,6 +70514,8 @@ class BobNavigationHotkeysLaneReviewMixin {
       options.dateText,
       {
         workSummary: summary,
+        workLogStampText: options.workLogStampText || options.stampText,
+        now: options.now,
         keepReason,
         rottenLines: rottenTargets.map((item) => item.target.line),
         laneLines: laneTargets.map((item) => item.target.line),
@@ -70488,7 +70668,14 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         );
       }
       const laneBudgets = readLaneBudgets(this.app);
-      const dateText = this.laneReleaseDateText();
+      const workLogNow =
+        request.now instanceof Date
+          ? request.now
+          : request.workLogNow instanceof Date
+            ? request.workLogNow
+            : new Date();
+      const stampText =
+        request.stampText || formatWorkLogStamp(workLogNow);
       let summary = "";
       if (mode === "pause") {
         const pausable = resolution.targets.filter(
@@ -70498,7 +70685,8 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         if (pausable.length > 0) {
           const answer = await this.requestTaskLinkLaneSummary({
             targets: pausable,
-            dateText,
+            stampText,
+            now: workLogNow,
           });
           if (answer.cancelled) {
             return Object.freeze({ ok: false, reason: "cancelled" });
@@ -70511,7 +70699,8 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         const plan = planTaskLinkLaneBatch(group.content, group.session, {
           mode,
           summary,
-          dateText,
+          stampText,
+          now: workLogNow,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
         });
@@ -70623,7 +70812,9 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
       try {
         modal = new TaskLinkLanePromptModal(this.app, {
           tasks,
-          dateText: options.dateText,
+          dateText: options.stampText || options.dateText,
+          stampText: options.stampText || options.dateText,
+          now: options.now instanceof Date ? options.now : undefined,
           onDone: (result) => {
             if (result === null) {
               finish({ cancelled: true, summary: "" });
@@ -75170,8 +75361,9 @@ function planLaneWalkLaneJump(list, options = {}) {
 
 // Latest Work Log entry for the task at 0-based `taskLine` in `content`.
 // Built on `findManagedTaskLogParents(..., WORK)`. Entries are newest-first
-// `*YYYY-MM-DD* — summary`. More than one WORK LOG marker, a missing
-// parent, or a malformed newest entry means no chip (null).
+// `*YYYY-MM-DD HH:MM* — summary` or legacy `*YYYY-MM-DD* — summary`.
+// More than one WORK LOG marker, a missing parent, or a malformed newest
+// entry means no chip (null).
 function readLatestWorkLog(content, taskLine) {
   try {
     const lines = String(content || "").split(/\r?\n/);
@@ -75212,9 +75404,10 @@ function readLatestWorkLog(content, taskLine) {
       return null;
     }
     const newest = entries[0];
-    const match = /^\s*(?:[-*+]|\d+[.)])\s+\*(\d{4}-\d{2}-\d{2})\*\s+—\s+(.+?)\s*$/.exec(
-      newest,
-    );
+    const match =
+      /^\s*(?:[-*+]|\d+[.)])\s+\*(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?\*\s+—\s+(.+?)\s*$/.exec(
+        newest,
+      );
     if (!match) {
       return null;
     }
@@ -75222,13 +75415,33 @@ function readLatestWorkLog(content, taskLine) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return null;
     }
-    const summaryRaw = String(match[2] || "").trim();
+    let time = null;
+    if (match[2] !== undefined && match[2] !== null) {
+      const timeText = String(match[2]);
+      if (!/^\d{2}:\d{2}$/.test(timeText)) {
+        return null;
+      }
+      const hour = Number(timeText.slice(0, 2));
+      const minute = Number(timeText.slice(3, 5));
+      if (
+        !Number.isInteger(hour) ||
+        !Number.isInteger(minute) ||
+        hour < 0 ||
+        hour > 23 ||
+        minute < 0 ||
+        minute > 59
+      ) {
+        return null;
+      }
+      time = timeText;
+    }
+    const summaryRaw = String(match[3] || "").trim();
     if (!summaryRaw) {
       return null;
     }
     const summary =
       summaryRaw.length > 48 ? `${summaryRaw.slice(0, 48)}…` : summaryRaw;
-    return Object.freeze({ date, summary });
+    return Object.freeze({ date, time, summary });
   } catch (error) {
     return null;
   }
@@ -75241,6 +75454,16 @@ function laneWalkNoteName(path) {
 
 function laneWalkHintAction(lane) {
   return lane === "ready" ? "next" : "release";
+}
+
+function laneWalkWorkLogLabel(workLog) {
+  if (!workLog || !workLog.date || !workLog.summary) {
+    return "";
+  }
+  const datePart = reviewShortDate(workLog.date);
+  const timePart =
+    typeof workLog.time === "string" && workLog.time ? ` ${workLog.time}` : "";
+  return `🛠️ ${datePart}${timePart} — ${workLog.summary}`;
 }
 
 // Pure notice model for one landing. `context` is
@@ -75432,9 +75655,7 @@ function formatLaneWalkNoticeText(model) {
     const title = String(model.title || "").trim() || "(untitled task)";
     const parts = [`${head} — ${title}`];
     if (model.workLog && model.workLog.date && model.workLog.summary) {
-      parts.push(
-        `🛠️ ${reviewShortDate(model.workLog.date)} — ${model.workLog.summary}`,
-      );
+      parts.push(laneWalkWorkLogLabel(model.workLog));
     } else if (model.created) {
       parts.push(`created ${reviewShortDate(model.created)}`);
     }
@@ -75560,7 +75781,7 @@ function renderLaneWalkNoticeFragment(model, root) {
   if (model.workLog && model.workLog.date && model.workLog.summary) {
     chipsEl.createSpan({
       cls: "bob-nh-notice-chip",
-      text: `🛠️ ${reviewShortDate(model.workLog.date)} — ${model.workLog.summary}`,
+      text: laneWalkWorkLogLabel(model.workLog),
     });
   } else if (model.created) {
     chipsEl.createSpan({
@@ -76290,10 +76511,13 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
     const summary =
       typeof options.summary === "string" ? options.summary : "";
-    const dateText =
-      typeof options.dateText === "string" && options.dateText
-        ? String(options.dateText)
-        : formatBulletPropertyDate(getLocalDateStart(new Date()));
+    const workLogNow = options.now instanceof Date ? options.now : new Date();
+    const stampText =
+      typeof options.stampText === "string" && options.stampText
+        ? String(options.stampText)
+        : typeof options.dateText === "string" && options.dateText
+          ? String(options.dateText)
+          : formatWorkLogStamp(workLogNow);
     if (picker.linkSession) {
       const resolved = Array.isArray(picker.linkSession.resolved)
         ? picker.linkSession.resolved
@@ -76308,7 +76532,8 @@ class BobNavigationHotkeysDecayCancelMixin {
       for (const group of groups) {
         const plan = planTaskLaneBatch(group.content, group.session, {
           summary,
-          dateText,
+          stampText,
+          now: workLogNow,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
         });
@@ -76456,7 +76681,8 @@ class BobNavigationHotkeysDecayCancelMixin {
     const laneBudgets = readLaneBudgets(this.app);
     const plan = planTaskLaneBatch(writeContext.content, session, {
       summary,
-      dateText,
+      stampText,
+      now: workLogNow,
       stampLine: this.getFreshnessStampLine(),
       freshDateText: this.getFreshnessDateText(),
     });
@@ -77825,8 +78051,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
           options.reopenBlocksStage === true ||
           options.reopenLinksStage === true ||
           options.reopenLinkedFromStage === true,
-        random: options.random,
-        baseDate: options.baseDate,
+        random: options.random, baseDate: options.baseDate,
+        now: options.now, workLogNow: options.workLogNow,
         reviewOrigin,
         reviewLineIndex: cursor.line,
         reviewBeforeLine: lineText,
@@ -79044,6 +79270,8 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         ? getLocalDateStart(picker.valueBaseDate)
         : getLocalDateStart(new Date());
     const dateText = formatBulletPropertyDate(baseDate);
+    const workLogNow = options.now instanceof Date ? options.now : new Date();
+    const workLogStamp = formatWorkLogStamp(workLogNow);
     const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
@@ -79117,6 +79345,8 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           baseDate,
           recoveryByLine,
           schedulingWorkLog: options.schedulingWorkLog || options.workLog,
+          now: workLogNow,
+          stampText: workLogStamp,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
           markUnblockedLine: navFreshnessMarkUnblockedLine(
@@ -79743,16 +79973,21 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           projectSchedulingWorkLogInput.summary,
         );
         if (summary) {
-          const dateText = resolveSchedulingWorkLogDateText(
+          const commitNow =
+            options.now instanceof Date ? options.now : new Date();
+          const fallbackStamp =
+            options.stampText || options.workLogStampText || undefined;
+          const stampText = resolveSchedulingWorkLogStampText(
             projectSchedulingWorkLogInput,
-            undefined,
+            fallbackStamp,
+            commitNow,
           );
           if (
             insertLaneWorkLogEntry(
               plannedSource.lines,
               plan.cursorLine,
               summary,
-              dateText,
+              stampText,
             )
           ) {
             projectWorkLogWritten = true;
@@ -98734,14 +98969,13 @@ module.exports.helpers = {
   groupLinkPickerTargetsByNote,
   getLinkPickerSessionSubtitle,
   normalizeLaneWorkSummary,
-  formatLaneWorkLogEntry,
+  formatWorkLogStamp, formatLaneWorkLogEntry,
   findLaneWorkLogParent,
   insertLaneWorkLogEntry,
-  isSchedulingWorkLogStatus,
-  isSchedulingWorkLogRawLine,
+  isSchedulingWorkLogStatus, isSchedulingWorkLogRawLine,
   normalizeSchedulingWorkSummary,
   hasSchedulingWorkLogInput,
-  resolveSchedulingWorkLogDateText,
+  resolveSchedulingWorkLogStampText, resolveSchedulingWorkLogDateText,
   schedulingWorkLogTargetIdentity,
   freezeSchedulingWorkLogTargets,
   collectSchedulingWorkLogTargetIdentities,
@@ -99280,6 +99514,7 @@ module.exports.helpers = {
   planLaneWalkLaneJump,
   buildLaneWalkAnchor,
   readLatestWorkLog,
+  laneWalkWorkLogLabel,
   buildLaneWalkNoticeModel,
   buildLaneWalkEmptyNoticeModel,
   formatLaneWalkNoticeText,

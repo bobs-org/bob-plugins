@@ -438,6 +438,7 @@ test("fresh stamp plus Work Log prepends only stamped Pending targets", () => {
     (line) => line,
     "2026-10-08",
     "  Finished\tparent :: note  ",
+    { workLogStampText: "2026-10-08 14:32", now: new Date(2026, 9, 8, 14, 32) },
   );
   assert.equal(plan.ok, true);
   assert.equal(plan.workLogWrittenCount, 2);
@@ -448,11 +449,11 @@ test("fresh stamp plus Work Log prepends only stamped Pending targets", () => {
       "  - 🗓️ **SCHEDULE LOG**",
       "    - *2026-10-07* — moved the date",
       "  - 🛠️ **WORK LOG**",
-      "    + *2026-10-08* — Finished parent :: note",
+      "    + *2026-10-08 14:32* — Finished parent :: note",
       "    + *2026-10-06* — older parent work",
       "  - [/] #task Child ^child",
       "    - 🛠️ **WORK LOG**",
-      "      - *2026-10-08* — Finished parent :: note",
+      "      - *2026-10-08 14:32* — Finished parent :: note",
       "      - *2026-10-05* — child work",
       "- [*] #task Next",
     ].join("\r\n"),

@@ -201,7 +201,7 @@ test("planTaskLinkLaneBatch starts Next targets and leaves the rest alone", () =
   const plan = helpers.planTaskLinkLaneBatch(
     content,
     laneSession(content, 0, 1, 2, 3, 4),
-    { mode: "start", summary: "", dateText: "2026-10-07" },
+    { mode: "start", summary: "", stampText: "2026-10-07 14:32", now: new Date(2026, 9, 7, 14, 32) },
   );
   assert.equal(plan.valid, true);
   assert.equal(plan.mode, "start");
@@ -229,7 +229,7 @@ test("planTaskLinkLaneBatch pauses with one shared Work Log entry", () => {
   const plan = helpers.planTaskLinkLaneBatch(
     content,
     laneSession(content, 0, 1, 2),
-    { mode: "pause", summary: "Finished the API review", dateText: "2026-10-07" },
+    { mode: "pause", summary: "Finished the API review", stampText: "2026-10-07 14:32", now: new Date(2026, 9, 7, 14, 32) },
   );
   assert.equal(plan.valid, true);
   assert.equal(plan.mode, "pause");
@@ -245,14 +245,14 @@ test("planTaskLinkLaneBatch pauses with one shared Work Log entry", () => {
     "- [*] #task C ^a3",
   ]);
   assert.equal(
-    plan.content.split("*2026-10-07* — Finished the API review").length - 1,
+    plan.content.split("*2026-10-07 14:32* — Finished the API review").length - 1,
     2,
   );
   // A blank summary pauses without logging.
   const blank = helpers.planTaskLinkLaneBatch(
     content,
     laneSession(content, 0, 2),
-    { mode: "pause", summary: "   ", dateText: "2026-10-07" },
+    { mode: "pause", summary: "   ", stampText: "2026-10-07 14:32", now: new Date(2026, 9, 7, 14, 32) },
   );
   assert.equal(blank.valid, true);
   assert.equal(blank.workLogWrittenCount, 0);
@@ -291,14 +291,14 @@ test("planTaskLinkLaneBatch dedupes lines and refuses stale preimages", () => {
         Object.freeze({ line: 0, rawLine: content }),
       ],
     },
-    { mode: "start", summary: "", dateText: "2026-10-07" },
+    { mode: "start", summary: "", stampText: "2026-10-07 14:32", now: new Date(2026, 9, 7, 14, 32) },
   );
   assert.equal(dupe.valid, true);
   assert.equal(dupe.moved.length, 1);
   const stale = helpers.planTaskLinkLaneBatch(
     "- [*] #task A ^a1",
     laneSession("- [/] #task A ^a1", 0),
-    { mode: "start", summary: "", dateText: "2026-10-07" },
+    { mode: "start", summary: "", stampText: "2026-10-07 14:32", now: new Date(2026, 9, 7, 14, 32) },
   );
   assert.equal(stale.valid, false);
   assert.equal(stale.stale, true);
@@ -390,21 +390,21 @@ test("buildTaskLinkLaneNotice renders start, pause, logs, skips, and budgets", (
 
 test("taskLinkLanePromptState drives the Move to Next prompt", () => {
   const { taskLinkLanePromptState } = helpers;
-  const blank = taskLinkLanePromptState("   ", { date: "2026-10-07" });
+  const blank = taskLinkLanePromptState("   ", { stampText: "2026-10-07 14:32" });
   assert.equal(blank.isBlank, true);
   assert.equal(blank.primaryButtonText, "Move to Next");
   assert.equal(blank.formattedEntry, "");
   assert.equal(blank.hasDataviewWarning, false);
   assert.equal(blank.summary, "");
-  assert.equal(blank.date, "2026-10-07");
+  assert.equal(blank.date, "2026-10-07 14:32");
   const filled = taskLinkLanePromptState("Finished the API review", {
-    date: "2026-10-07",
+    stampText: "2026-10-07 14:32",
   });
   assert.equal(filled.isBlank, false);
   assert.equal(filled.primaryButtonText, "Log & move to Next");
-  assert.equal(filled.formattedEntry, "*2026-10-07* — Finished the API review");
+  assert.equal(filled.formattedEntry, "*2026-10-07 14:32* — Finished the API review");
   assert.equal(filled.hasDataviewWarning, false);
-  const warned = taskLinkLanePromptState("a :: b", { date: "2026-10-07" });
+  const warned = taskLinkLanePromptState("a :: b", { stampText: "2026-10-07 14:32" });
   assert.equal(warned.hasDataviewWarning, true);
 });
 
@@ -414,7 +414,7 @@ test("TaskLinkLanePromptModal submits, previews live, and cancels silently", () 
     {},
     {
       tasks: [{ displayText: "Fix the parser crash", path: "Tasks.md" }],
-      dateText: "2026-10-07",
+      stampText: "2026-10-07 14:32",
       onDone: (result) => seen.push(result),
     },
   );
@@ -437,7 +437,7 @@ test("TaskLinkLanePromptModal submits, previews live, and cancels silently", () 
   assert.equal(modal.primaryButton.textContent, "Log & move to Next");
   assert.equal(
     modal.previewEl.getAttribute("aria-label"),
-    "*2026-10-07* — Finished the API review",
+    "*2026-10-07 14:32* — Finished the API review",
   );
   modal.inputEl.value = "a :: b";
   modal.updatePreview();
@@ -464,7 +464,7 @@ test("TaskLinkLanePromptModal submits, previews live, and cancels silently", () 
     {},
     {
       tasks: [{ displayText: "A", path: "T.md" }],
-      dateText: "2026-10-07",
+      stampText: "2026-10-07 14:32",
       onDone: (result) => cancelled.push(result),
     },
   );
@@ -484,7 +484,7 @@ test("TaskLinkLanePromptModal renders the batch context card", () => {
         { displayText: "C", path: "T.md" },
         { displayText: "D", path: "T.md" },
       ],
-      dateText: "2026-10-07",
+      stampText: "2026-10-07 14:32",
       onDone: (result) => seen.push(result),
     },
   );

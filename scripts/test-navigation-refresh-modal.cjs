@@ -126,6 +126,7 @@ test("Pending refresh modal previews the dated Work Log and confirms once", () =
     {},
     {
       dateText: "2026-10-08",
+      now: new Date(2026, 9, 8, 14, 32),
       totalCount: 3,
       eligibleCount: 1,
       onDone: (value) => results.push(value),
@@ -143,7 +144,7 @@ test("Pending refresh modal previews the dated Work Log and confirms once", () =
 
   modal.inputEl.value = "Checked the API :: field";
   modal.inputEl.listeners.input();
-  assert.match(flattenText(modal.previewEl), /\*2026-10-08\* — Checked the API :: field/);
+  assert.match(flattenText(modal.previewEl), /\*2026-10-08 14:32\* — Checked the API :: field/);
   assert.match(flattenText(modal.previewEl), /Dataview inline field/);
   assert.match(flattenText(modal.previewEl), /WORK LOG/);
   assert.match(flattenText(modal.hintsEl), /Refresh & log summary/);

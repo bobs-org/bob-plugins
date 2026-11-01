@@ -57,7 +57,8 @@ class BobNavigationHotkeysLaneReviewMixin {
     }
     void probeMode;
     let summary = "";
-    const dateText = this.laneReleaseDateText(options);
+    const workLogNow = options.now instanceof Date ? options.now : new Date();
+    const stampText = options.stampText || formatWorkLogStamp(workLogNow);
     // A release with an In Progress target asks once for an optional summary.
     let needsReason = false;
     for (const group of groups) {
@@ -81,7 +82,8 @@ class BobNavigationHotkeysLaneReviewMixin {
     for (const group of groups) {
       const plan = planTaskLaneBatch(group.content, group.session, {
         summary,
-        dateText,
+        stampText,
+        now: workLogNow,
         stampLine: this.getFreshnessStampLine(),
         freshDateText: this.getFreshnessDateText(),
       });
@@ -379,6 +381,9 @@ class BobNavigationHotkeysLaneReviewMixin {
         advance,
         summary: options.summary,
         keepReason: options.keepReason,
+        now: options.now,
+        workLogStampText: options.workLogStampText,
+        stampText: options.stampText,
       });
     }
     if (parseLinkPickerTaskLink(lineText)) {
@@ -390,6 +395,9 @@ class BobNavigationHotkeysLaneReviewMixin {
         advance,
         summary: options.summary,
         keepReason: options.keepReason,
+        now: options.now,
+        workLogStampText: options.workLogStampText,
+        stampText: options.stampText,
         linkDiscovery: options.linkDiscovery || null,
       });
     }
@@ -450,6 +458,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       try {
         modal = new FreshnessRefreshSummaryModal(this.app, {
           dateText: options.dateText,
+          now: options.now,
           keep: options.keep,
           keepTargets: batchMode ? options.keepTargets : undefined,
           showWorkField: options.showWorkField,
@@ -696,6 +705,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       const result = await this.requestFreshnessRefreshAnswers({
         keepReason: options.keepReason,
         dateText: options.dateText,
+        now: options.now,
         keep: {
           raw: item.raw,
           entry: item.entry,
@@ -718,6 +728,7 @@ class BobNavigationHotkeysLaneReviewMixin {
         keepReason: options.keepReason,
         ...(promptPlan.showWorkField ? { summary: options.summary } : {}),
         dateText: options.dateText,
+        now: options.now,
         totalCount: keepTargets.length,
         eligibleCount: eligibleTargets.length,
       });
@@ -734,6 +745,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       const result = await this.requestFreshnessRefreshSummary({
         summary: options.summary,
         dateText: options.dateText,
+        now: options.now,
         totalCount: keepTargets.length,
         eligibleCount: eligibleTargets.length,
       });
@@ -776,6 +788,8 @@ class BobNavigationHotkeysLaneReviewMixin {
       options.dateText,
       {
         workSummary: summary,
+        workLogStampText: options.workLogStampText || options.stampText,
+        now: options.now,
         keepReason,
         rottenLines: rottenTargets.map((item) => item.target.line),
         laneLines: laneTargets.map((item) => item.target.line),

@@ -222,11 +222,17 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
       1,
       Math.floor(numericOrDefault(laneItem && laneItem.targetCount, 1)),
     );
+    const laneStamp = formatWorkLogStamp(
+      this.fixedWorkLogNow instanceof Date
+        ? this.fixedWorkLogNow
+        : new Date(),
+    );
     this.pendingLaneRelease = Object.freeze({
       title: "Release task",
       laneKind: (laneItem && laneItem.laneKind) || "task",
       openCount,
-      dateText: formatBulletPropertyDate(this.valueBaseDate),
+      dateText: laneStamp,
+      stampText: laneStamp,
     });
     this.clearLocalTaskMarks();
     this.selectedIndex = 0;
@@ -329,7 +335,9 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
 
   renderLaneReleaseReasonPreviewItem(item, rowEl, query) {
     const pending = this.pendingLaneRelease;
-    const dateText = pending ? pending.dateText : "";
+    const stampText = pending
+      ? pending.stampText || pending.dateText || ""
+      : "";
     addElementClasses(rowEl, "bob-cnp-lane-release-reason-row", "is-valid");
     const rowIcon = rowEl.createDiv({ cls: "bob-cnp-row-icon" });
     applyIcon(rowIcon, "arrow-down-to-line");
@@ -344,7 +352,7 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
     } else {
       appendHighlighted(
         titleEl,
-        formatLaneWorkLogEntry(item.reason, dateText),
+        formatLaneWorkLogEntry(item.reason, stampText),
         query,
       );
       if (item.hasInlineField) {
@@ -376,7 +384,12 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
     }
     return this.applyInboxRoutedLaneToggle({
       summary: item.empty ? "" : item.reason,
-      dateText: pending.dateText,
+      dateText: pending.stampText || pending.dateText,
+      stampText: pending.stampText || pending.dateText,
+      now:
+        this.fixedWorkLogNow instanceof Date
+          ? this.fixedWorkLogNow
+          : new Date(),
     });
   }
 

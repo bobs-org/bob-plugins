@@ -160,6 +160,13 @@ function planRecommendedRollBatch(
         scheduleLog: { automatic: true, reasonByLine },
         schedulingWorkLog:
           details.schedulingWorkLog || details.workLog || null,
+        now: details.now instanceof Date ? details.now : undefined,
+        stampText:
+          typeof details.stampText === "string"
+            ? details.stampText
+            : typeof details.workLogStampText === "string"
+              ? details.workLogStampText
+              : undefined,
         stampLine:
           typeof details.stampLine === "function"
             ? details.stampLine

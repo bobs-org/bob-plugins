@@ -617,16 +617,8 @@ function planFreshStampBatch(content, targetLines, stamper, dateText) {
 // refusal behavior, then one entry is prepended for each stamped pre-write
 // Pending (`[/]`) task. The shared inserter preserves marker ownership,
 // indentation, line endings, and existing child blocks.
-function planFreshStampBatchWithWorkLogs(
-  content,
-  targetLines,
-  stamper,
-  dateText,
-  summary,
-) {
-  return planFreshStampBatchWithLogs(content, targetLines, stamper, dateText, {
-    workSummary: summary,
-  });
+function planFreshStampBatchWithWorkLogs(content, targetLines, stamper, dateText, summary, options = {}) {
+  return planFreshStampBatchWithLogs(content, targetLines, stamper, dateText, { workSummary: summary, ...(options && typeof options === "object" ? options : {}) });
 }
 
 // True when the line already carries today's stamp (re-stamping it repairs

@@ -56,6 +56,8 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
         ? getLocalDateStart(picker.valueBaseDate)
         : getLocalDateStart(new Date());
     const dateText = formatBulletPropertyDate(baseDate);
+    const workLogNow = options.now instanceof Date ? options.now : new Date();
+    const workLogStamp = formatWorkLogStamp(workLogNow);
     const groups = groupLinkPickerTargetsByNote(linkSession.resolved);
     if (groups.length === 0) {
       new Notice("Could not update task; no tasks were updated");
@@ -129,6 +131,8 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           baseDate,
           recoveryByLine,
           schedulingWorkLog: options.schedulingWorkLog || options.workLog,
+          now: workLogNow,
+          stampText: workLogStamp,
           stampLine: this.getFreshnessStampLine(),
           freshDateText: this.getFreshnessDateText(),
           markUnblockedLine: navFreshnessMarkUnblockedLine(
@@ -755,16 +759,21 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
           projectSchedulingWorkLogInput.summary,
         );
         if (summary) {
-          const dateText = resolveSchedulingWorkLogDateText(
+          const commitNow =
+            options.now instanceof Date ? options.now : new Date();
+          const fallbackStamp =
+            options.stampText || options.workLogStampText || undefined;
+          const stampText = resolveSchedulingWorkLogStampText(
             projectSchedulingWorkLogInput,
-            undefined,
+            fallbackStamp,
+            commitNow,
           );
           if (
             insertLaneWorkLogEntry(
               plannedSource.lines,
               plan.cursorLine,
               summary,
-              dateText,
+              stampText,
             )
           ) {
             projectWorkLogWritten = true;

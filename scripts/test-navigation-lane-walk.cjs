@@ -1050,3 +1050,78 @@ test("identity: lane keys match the queue key helper", () => {
   const queue = makeQueue([laneEntry({ lane: "pending", line: 7, text: "a" })]);
   assert.equal(queue.entries[0].key, reviewQueueEntryKey(queue.entries[0]));
 });
+
+test("nav-stamp: readLatestWorkLog parses stamped and legacy entries", () => {
+  const stamped = [
+    "- [/] #task a",
+    "\t- 🛠️ **WORK LOG**",
+    "\t\t- *2026-11-01 14:32* — Finished the API review",
+  ].join("\n");
+  assert.deepEqual(readLatestWorkLog(stamped, 0), {
+    date: "2026-11-01",
+    time: "14:32",
+    summary: "Finished the API review",
+  });
+  const legacy = [
+    "- [/] #task a",
+    "\t- 🛠️ **WORK LOG**",
+    "\t\t- *2026-10-28* — Older entry",
+  ].join("\n");
+  assert.deepEqual(readLatestWorkLog(legacy, 0), {
+    date: "2026-10-28",
+    time: null,
+    summary: "Older entry",
+  });
+  const starred = [
+    "- [/] #task a",
+    "\t- 🛠️ **WORK LOG**",
+    "\t\t* *2026-11-01 14:32* — Starred bullet",
+  ].join("\n");
+  const parsed = readLatestWorkLog(starred, 0);
+  assert.equal(parsed.date, "2026-11-01");
+  assert.equal(parsed.time, "14:32");
+  for (const badLine of [
+    "\t\t- *2026-11-01 9:05* — x",
+    "\t\t- *2026-11-01 14:32:10* — x",
+    "\t\t- *2026-11-01T14:32* — x",
+  ]) {
+    const bad = ["- [/] #task a", "\t- 🛠️ **WORK LOG**", badLine].join("\n");
+    assert.equal(readLatestWorkLog(bad, 0), null);
+  }
+});
+
+test("nav-stamp: laneWalkWorkLogLabel renders chip with and without time", () => {
+  const { laneWalkWorkLogLabel } = helpers;
+  assert.equal(
+    laneWalkWorkLogLabel({
+      date: "2026-11-01",
+      time: "14:32",
+      summary: "Finished the API review",
+    }),
+    "🛠️ Nov 1 14:32 — Finished the API review",
+  );
+  assert.equal(
+    laneWalkWorkLogLabel({ date: "2026-10-28", time: null, summary: "Older entry" }),
+    "🛠️ Oct 28 — Older entry",
+  );
+});
+
+test("nav-stamp: formatWorkLogStamp truncates seconds and zero-pads", () => {
+  const { formatWorkLogStamp } = helpers;
+  assert.equal(
+    formatWorkLogStamp(new Date(2026, 10, 1, 14, 32, 59)),
+    "2026-11-01 14:32",
+  );
+  assert.equal(
+    formatWorkLogStamp(new Date(2026, 10, 1, 9, 5, 0)),
+    "2026-11-01 09:05",
+  );
+  assert.equal(
+    formatWorkLogStamp(new Date(2026, 11, 31, 23, 59, 59)),
+    "2026-12-31 23:59",
+  );
+  assert.equal(
+    formatWorkLogStamp(new Date(2027, 0, 1, 0, 0, 0)),
+    "2027-01-01 00:00",
+  );
+});

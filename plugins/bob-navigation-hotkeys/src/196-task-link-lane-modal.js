@@ -35,7 +35,32 @@ class TaskLinkLanePromptModal extends Modal {
     if (typeof this.options.dateText === "string" && this.options.dateText) {
       return String(this.options.dateText);
     }
-    return formatBulletPropertyDate(getLocalDateStart(new Date()));
+    if (typeof this.options.stampText === "string" && this.options.stampText) {
+      return String(this.options.stampText);
+    }
+    const now =
+      this.options.now instanceof Date
+        ? this.options.now
+        : this.fixedWorkLogNow instanceof Date
+          ? this.fixedWorkLogNow
+          : new Date();
+    return formatWorkLogStamp(now);
+  }
+
+  taskLinkLaneStampText() {
+    if (typeof this.options.stampText === "string" && this.options.stampText) {
+      return String(this.options.stampText);
+    }
+    if (typeof this.options.dateText === "string" && this.options.dateText) {
+      return String(this.options.dateText);
+    }
+    const now =
+      this.options.now instanceof Date
+        ? this.options.now
+        : this.fixedWorkLogNow instanceof Date
+          ? this.fixedWorkLogNow
+          : new Date();
+    return formatWorkLogStamp(now);
   }
 
   onOpen() {
@@ -147,7 +172,7 @@ class TaskLinkLanePromptModal extends Modal {
     }
     const state = taskLinkLanePromptState(
       this.inputEl ? this.inputEl.value : "",
-      { date: this.taskLinkLaneDateText() },
+      { stampText: this.taskLinkLaneStampText() },
     );
     if (
       this.primaryButton &&

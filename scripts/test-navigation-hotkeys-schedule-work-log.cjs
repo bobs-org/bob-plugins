@@ -73,6 +73,7 @@ function schedulingReviewHarness(content, extra = {}) {
     content,
     cursor: { line: 0, ch: 0 },
     baseDate: new Date(2026, 9, 2),
+    now: new Date(2026, 9, 2, 14, 32),
     ...extra,
   });
 }
@@ -91,7 +92,7 @@ test("single Pending explicit date opens one review and writes both logs", async
   assert.match(harness.editor.content, /\[scheduled:: 2026-10-05\]/);
   assert.match(harness.editor.content, /🗓️ \*\*SCHEDULE LOG\*\*/);
   assert.match(harness.editor.content, /\*2026-10-05\* — replan/);
-  assert.match(harness.editor.content, /\*2026-10-02\* — Did the thing/);
+  assert.match(harness.editor.content, /\*2026-10-02 14:32\* — Did the thing/);
   assert.match(harness.editor.content, /🛠️ \*\*WORK LOG\*\*/);
   assert.match(notices.at(-1), /1 Work Log/);
 });
@@ -147,7 +148,7 @@ test("future scheduling on Pending marks Blocked but still writes the Work Log",
   const picker = await openSchedulingReview(harness, "2026-11-02");
   await confirmScheduleReasonStage(picker, "later", "Did prep");
   assert.match(harness.editor.content, /- \[\?\] #task Pending work/);
-  assert.match(harness.editor.content, /\*2026-10-02\* — Did prep/);
+  assert.match(harness.editor.content, /\*2026-10-02 14:32\* — Did prep/);
 });
 
 test("tomorrow date on Pending still offers the Work Log", async () => {
@@ -155,7 +156,7 @@ test("tomorrow date on Pending still offers the Work Log", async () => {
   const picker = await openSchedulingReview(harness, "2026-10-03");
   assert.ok(picker.scheduleReviewSummaryEl);
   await confirmScheduleReasonStage(picker, "", "Worked tomorrow");
-  assert.match(harness.editor.content, /\*2026-10-02\* — Worked tomorrow/);
+  assert.match(harness.editor.content, /\*2026-10-02 14:32\* — Worked tomorrow/);
 });
 
 test("priority pick on Pending freezes its roll and offers the Work Log", async () => {
@@ -171,7 +172,7 @@ test("priority pick on Pending freezes its roll and offers the Work Log", async 
   await confirmSchedulingWorkLogStage(picker, "Priority work");
   const expectedDate = frozen.match(/(\d{4}-\d{2}-\d{2})/)[1];
   assert.ok(harness.editor.content.includes(`[scheduled:: ${expectedDate}]`));
-  assert.match(harness.editor.content, /\*2026-10-02\* — Priority work/);
+  assert.match(harness.editor.content, /\*2026-10-02 14:32\* — Priority work/);
   assert.match(harness.editor.content, /🎲 P0 → P1/);
 });
 
@@ -194,7 +195,7 @@ test("counted mixed statuses share one summary only on Pending and Next", async 
   await confirmScheduleReasonStage(picker, "batch", "Shared work");
   assert.equal(harness.editor.undoGroups, beforeUndo + 1);
   const after = harness.editor.content;
-  assert.equal((after.match(/\*2026-10-02\* — Shared work/g) || []).length, 2);
+  assert.equal((after.match(/\*2026-10-02 14:32\* — Shared work/g) || []).length, 2);
   assert.ok(after.includes("- [/] #task Pending one"));
   assert.ok(after.includes("- [*] #task Next two"));
   assert.doesNotMatch(after, /Ready three[^]*🛠️ \*\*WORK LOG\*\*/);
@@ -224,7 +225,7 @@ test("counted planner composes Schedule and Work Logs bottom-up above later targ
       operation: "set",
       today: new Date(2026, 9, 2),
       scheduleLog: { reason: "batch" },
-      schedulingWorkLog: { summary: "Did work", dateText: "2026-10-02" },
+      schedulingWorkLog: { summary: "Did work", stampText: "2026-10-02 14:32" },
     },
   );
   assert.equal(plan.valid, true);
@@ -235,7 +236,7 @@ test("counted planner composes Schedule and Work Logs bottom-up above later targ
   const secondTask = lines.findIndex((line) => line.includes("Second"));
   assert.ok(firstTask < secondTask);
   assert.equal(
-    String(plan.content).match(/\*2026-10-02\* — Did work/g).length,
+    String(plan.content).match(/\*2026-10-02 14:32\* — Did work/g).length,
     2,
   );
   assert.ok(String(plan.content).includes("🗓️ **SCHEDULE LOG**"));
@@ -253,12 +254,12 @@ test("counted planner writes a Work Log even when the date is unchanged", () => 
   const plan = helpers.planCountedBulletPropertyBatch(line, session, "scheduled", "2026-10-05", {
     operation: "set",
     today: new Date(2026, 9, 2),
-    schedulingWorkLog: { summary: "Still worked", dateText: "2026-10-02" },
+    schedulingWorkLog: { summary: "Still worked", stampText: "2026-10-02 14:32" },
   });
   assert.equal(plan.valid, true);
   assert.equal(plan.changed, true);
   assert.equal(plan.schedulingWorkLogWrittenCount, 1);
-  assert.match(plan.content, /\*2026-10-02\* — Still worked/);
+  assert.match(plan.content, /\*2026-10-02 14:32\* — Still worked/);
 });
 
 test("scheduling Work Log ownership keeps nested logs and CRLF endings", () => {
@@ -275,12 +276,12 @@ test("scheduling Work Log ownership keeps nested logs and CRLF endings", () => {
   const plan = helpers.planCountedBulletPropertyBatch(content, session, "scheduled", "2026-10-05", {
     operation: "set",
     today: new Date(2026, 9, 2),
-    schedulingWorkLog: { summary: "New **markdown** work", dateText: "2026-10-02" },
+    schedulingWorkLog: { summary: "New **markdown** work", stampText: "2026-10-02 14:32" },
   });
   assert.equal(plan.valid, true);
   assert.equal(plan.schedulingWorkLogWrittenCount, 2);
   assert.ok(plan.content.includes("\r\n"));
-  assert.match(plan.content, /\*2026-10-02\* — New \*\*markdown\*\* work/);
+  assert.match(plan.content, /\*2026-10-02 14:32\* — New \*\*markdown\*\* work/);
   assert.match(plan.content, /\*2026-10-01\* — Old work/);
 });
 
@@ -321,3 +322,29 @@ test("scheduling prompts never leak into lane or cancel stages", async () => {
   assert.equal(harness.editor.content, "- [/] #task Pending ^a");
 });
 
+
+test("nav-stamp: batch write shares one stamp across every target", async () => {
+  const content = [
+    "- [/] #task Pending one ^a",
+    "- [*] #task Next two ^b",
+  ].join("\n");
+  const harness = schedulingReviewHarness(content);
+  const picker = await openSchedulingReview(harness, "2026-10-03", {
+    countExplicit: true,
+    additionalTaskCount: 1,
+  });
+  await confirmScheduleReasonStage(picker, "batch", "Shared work");
+  const matches = harness.editor.content.match(/\*2026-10-02 14:32\* — Shared work/g) || [];
+  assert.equal(matches.length, 2);
+});
+
+test("nav-stamp: prompt opened at 23:59 commits at 00:01 with the new date", async () => {
+  const harness = schedulingReviewHarness("- [/] #task Pending work ^a", {
+    baseDate: new Date(2026, 9, 2, 23, 59),
+    now: new Date(2026, 9, 2, 23, 59),
+  });
+  const picker = await openSchedulingReview(harness, "2026-10-05");
+  picker.fixedWorkLogNow = new Date(2026, 9, 3, 0, 1);
+  await confirmScheduleReasonStage(picker, "replan", "Late work");
+  assert.match(harness.editor.content, /\*2026-10-03 00:01\* — Late work/);
+});

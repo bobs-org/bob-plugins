@@ -271,6 +271,10 @@ function pomodoroHomeNameMatchesRoots(name, groups) {
   return names.size === labels.size && Array.from(names).every((item) => labels.has(item));
 }
 
+function pomodoroHomeLineIsUntracked(line, timeRange) {
+  return Boolean(timeRange) && !durationField(line);
+}
+
 function pomodoroHomeLineMinutes(line, timeRange) {
   const field = durationField(line);
   if (field) {
@@ -279,7 +283,9 @@ function pomodoroHomeLineMinutes(line, timeRange) {
       return fieldMinutes;
     }
   }
-  return pomodoroHomeDuration(timeRange);
+  // A timed row without [t::] is untracked: 0 minutes. The clock span is
+  // not a duration. Untimed placeholders stay null.
+  return timeRange ? 0 : null;
 }
 
 function pomodoroHomeCacheFor(file, metadataCache, vault) {
@@ -620,6 +626,7 @@ function pomodoroHomeParseEntries(content) {
         status: parsed.state,
         name: name || "",
         minutes: pomodoroHomeLineMinutes(lines[index], leading.timeRange),
+        untracked: pomodoroHomeLineIsUntracked(lines[index], leading.timeRange),
         links,
       });
     }
@@ -857,6 +864,7 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnin
     label,
     chip,
     hue: leadRoot ? leadRoot.hue : null,
+    ...(entry.untracked ? { untracked: true } : {}),
     parts: parts.map(({ _order, _root, _rootLabel, ...part }) => part),
     lead_home: lead ? lead.key : "@unlinked",
     tooltip: pomodoroHomeRankRoots(roots)

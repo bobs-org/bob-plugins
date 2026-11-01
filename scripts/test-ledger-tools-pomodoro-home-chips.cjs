@@ -257,6 +257,9 @@ function expectedEntry(entry) {
     label: entry.label,
     chip: entry.chip,
     hue: entry.hue,
+    ...(Object.prototype.hasOwnProperty.call(entry, "untracked")
+      ? { untracked: entry.untracked }
+      : {}),
     parts: entry.parts.map((part) => {
       const copy = {};
       for (const key of [

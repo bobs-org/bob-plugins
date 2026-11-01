@@ -67,7 +67,12 @@ The plugin also renders a live `bob-plan` block: a `TODAY 7/10` chip for the
 Task Link budget (its tooltip lists each type with its link count),
 `PENDING n/10`, `NEXT n/15`, and `READY n/100` chips that open the matching
 dashboard sections, the `★ GOALS · DECKS · BOB` type line with the highlight
-starred, and one muted line per lint. READY is the shared live current backlog
+starred, a hue-ringed roots line of today's root parents (`○ bob 5  ○ sase 2`)
+directly after the type line, and one muted line per lint. Each real root is a
+quiet link that opens its note; the faint count is how many open Today tasks
+sit under that root, and `unfiled` is a dashed non-interactive bucket. The
+roots line is a view, never a budget: it is omitted when Tasks is unavailable
+or Today is empty. READY is the shared live current backlog
 (Today excluded) and never changes the PLAN status; READY over its cap adds a
 `ready_cap_exceeded` lint line. PENDING and NEXT show the live dashboard section
 counts (Today excluded; `–` when Tasks or the current-day Today cache is

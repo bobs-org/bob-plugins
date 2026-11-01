@@ -809,6 +809,7 @@ function planBlockModel({
   hueFor,
   themeConfigured,
   themeSimilarTo,
+  taskLineForBlock,
 }) {
   const effective = effectivePlanCaps(caps);
   const targetPath = planBlockTargetPath(app, sourcePath);
@@ -990,6 +991,7 @@ function planBlockModel({
     pendingDashboard: pendingDash,
     ready,
     lane: reviewLane,
+    todayRoots: planBlockTodayRoots(budget, content, targetPath, app, hasTasks ? taskList : null, taskLineForBlock),
   };
 }
 

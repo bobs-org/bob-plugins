@@ -450,7 +450,7 @@ class BobLedgerToolsPlugin extends Plugin {
     if (metadataCache && typeof metadataCache.on === "function") {
       this.registerEvent(
         metadataCache.on("changed", (file, data) => {
-          this.schedulePlanBlockRerenderForFile(file);
+          this.schedulePlanBlockRerender();
           this.refreshTodayCacheForChangedFile(file, data);
           this.refreshFreshnessForChangedFile(file, data);
           this.refreshNoteReadyForChangedFile(file);

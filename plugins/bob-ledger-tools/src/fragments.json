@@ -28,6 +28,7 @@
   "140-dependency-model.js",
   "141-blocks-model.js",
   "142-pomodoro-home-chips.js",
+  "142b-plan-today-roots.js",
   "143-today-marks.js",
   "144-relation-line-grammar.js",
   "145-relation-index-model.js",

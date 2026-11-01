@@ -549,6 +549,7 @@ class BobLedgerToolsTodayLocationMixin {
           hueFor: (key, name) => this.pomodoroThemeHueFor(key, name),
           themeConfigured: (key) => this.pomodoroThemeIsConfigured(key),
           themeSimilarTo: (name) => this.pomodoroThemeSimilarTo(name),
+          taskLineForBlock: (path, blockId) => this.pomodoroHomeChipTaskLineForBlock(path, blockId),
         });
         const container = el.createDiv({ cls: "bob-plan" });
         try {
@@ -619,6 +620,18 @@ class BobLedgerToolsTodayLocationMixin {
             cls: "bob-plan-themes",
             text: model.themesText,
           });
+        }
+        if (Array.isArray(model.todayRoots) && model.todayRoots.length > 0) {
+          try {
+            paintPlanTodayRoots(container, model.todayRoots, paintSource, (stem, newLeaf) => {
+              const workspace = this.app && this.app.workspace;
+              if (workspace && typeof workspace.openLinkText === "function") {
+                workspace.openLinkText(stem, paintSource, newLeaf);
+              }
+            });
+          } catch (error) {
+            // Roots line degrades; chips stay.
+          }
         }
         for (const lint of model.lints) {
           container.createEl("div", {

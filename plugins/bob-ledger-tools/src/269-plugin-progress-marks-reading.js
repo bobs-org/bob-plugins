@@ -15,7 +15,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
   // mapping (via `ctx.getSectionInfo`) cannot serve full-note
   // reading views, which carry no section info, so the row's
   // ancestors carry the D3 rules instead. Never throws.
-  progressMarkReadingContext(li, el) {
+  progressMarkReadingContext(li, el, options = {}) {
     try {
       if (!li || li.nodeType !== 1) {
         return null;
@@ -72,11 +72,26 @@ class BobLedgerToolsProgressMarksReadingMixin {
       if (!anchor) {
         return null;
       }
-      // Tight lists render inline content directly in the row; a
-      // wrapped anchor belongs to richer content, never a bare link.
+      const includeStruck = Boolean(options && options.includeStruck);
+      let linkContainer = anchor;
+      // Reading view wraps optional Markdown strike-through in a del/s
+      // element. Task link mark filtering also examines struck ledger
+      // rows, while progress marks keep their original exclusion.
       try {
         if (anchor.parentNode !== li) {
-          return null;
+          const wrapper = anchor.parentNode || null;
+          const wrapperTag = tagOf(wrapper);
+          const wrapperChildren = (wrapper && wrapper.childNodes) || [];
+          if (
+            !includeStruck ||
+            !["S", "DEL", "STRIKE"].includes(wrapperTag) ||
+            wrapper.parentNode !== li ||
+            wrapperChildren.length !== 1 ||
+            wrapperChildren[0] !== anchor
+          ) {
+            return null;
+          }
+          linkContainer = wrapper;
         }
       } catch (error) {
         return null;
@@ -89,7 +104,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
         while (current && current !== li && guard < 100) {
           guard += 1;
           const tag = tagOf(current);
-          if (tag === "S" || tag === "DEL" || tag === "STRIKE") {
+          if (!includeStruck && (tag === "S" || tag === "DEL" || tag === "STRIKE")) {
             return null;
           }
           current = current.parentNode || null;
@@ -133,7 +148,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
         let afterText = "";
         for (const child of children) {
           try {
-            if (child === anchor) {
+            if (child === linkContainer) {
               seenAnchor = true;
               continue;
             }
@@ -204,7 +219,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
         if (typeof entryTask !== "string") {
           return null;
         }
-        if (/^[xX-]$/.test(entryTask)) {
+        if (/^[xX-]$/.test(entryTask) && !(options && options.includeClosedEntry)) {
           return null;
         }
         // The entry's top-level list lives under a `## Pomodoros`

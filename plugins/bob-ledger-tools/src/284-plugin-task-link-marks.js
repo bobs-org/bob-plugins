@@ -474,7 +474,7 @@ class BobLedgerToolsTaskLinkMarksMixin {
       // A toggle is a fresh start: no ring swaps for changes made while
       // the marks were off.
       this.taskLinkMarkViewStates = new WeakMap();
-      this.runTaskLinkMarksRefresh();
+      this.runTaskLinkMarksRefresh(false);
       try {
         new Notice(enabled ? "Task link marks on" : "Task link marks off");
       } catch (error) {
@@ -563,7 +563,7 @@ class BobLedgerToolsTaskLinkMarksMixin {
       }
       this.taskLinkMarksTimer = this.taskLinkMarksTimerHost().set(() => {
         this.taskLinkMarksTimer = null;
-        this.runTaskLinkMarksRefresh();
+        this.runTaskLinkMarksRefresh(true);
       }, 120);
     } catch (error) {
       this.taskLinkMarksTimer = null;
@@ -584,13 +584,13 @@ class BobLedgerToolsTaskLinkMarksMixin {
   // A refresh pass: rebuild every Live Preview editor and, when the
   // Reading-view phase is installed, sweep its stamped anchors. Never
   // throws.
-  runTaskLinkMarksRefresh() {
+  runTaskLinkMarksRefresh(allowSwap = false) {
     try {
       this.taskLinkMarkTargets = new Set();
       this.refreshTaskLinkMarkEditors();
       try {
         if (typeof this.sweepTaskLinkMarksReading === "function") {
-          this.sweepTaskLinkMarksReading();
+          this.sweepTaskLinkMarksReading({ allowSwap });
         }
       } catch (error) {
         // The Reading sweep is best-effort.

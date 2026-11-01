@@ -118,6 +118,7 @@
   "283-plugin-command-mode-refresh.js",
   "284-plugin-task-link-marks.js",
   "284a-plugin-task-link-marks-resolve.js",
+  "285-plugin-task-link-marks-reading.js",
   "290-plugin-today-and-location.js",
   "291-plugin-gcal-events.js",
   "292-keep-inbox-model.js",

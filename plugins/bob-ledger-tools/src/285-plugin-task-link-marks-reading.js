@@ -7,6 +7,21 @@
 
 const TASK_LINK_MARK_READING_DETACHED_RETRIES = 3;
 const TASK_LINK_MARK_READING_PENDING_RETRIES = 60;
+// How many stamped Reading anchors are remembered (weakly) so the sweep can
+// reach sections that Obsidian rendered and then detached from the page.
+const TASK_LINK_MARK_READING_TRACK_MAX = 2000;
+const TASK_LINK_MARK_READING_TRACK_SLACK = 250;
+
+// Managed-row recognition in rendered lists. Labels are case-sensitive, as
+// in the source parsers; the glyph set is the managed rows' own marks.
+const TASK_LINK_MARK_READING_LABELS =
+  "(?:DEPENDS ON|DEPENDENCIES|BLOCKS|BLOCKING|LINKS(?: TO)?|LINKED FROM|BACKLINKS|Sub-projects)";
+const TASK_LINK_MARK_READING_LEAD_TEXT_RE = /^[\s⛓🔗🪢🧱🚧🧩\uFE0F]*$/u;
+const TASK_LINK_MARK_READING_LABEL_RE = new RegExp(`^${TASK_LINK_MARK_READING_LABELS}\\s*:?$`, "u");
+const TASK_LINK_MARK_READING_FLAT_ROW_RE = new RegExp(
+  `^\\s*(?:(?:[-*+]|\\d+[.)])\\s+(?:[⛓🔗🪢🧱🚧🧩]\\uFE0F?\\s*)*|(?:[⛓🔗🪢🧱🚧🧩]\\uFE0F?\\s*)+)${TASK_LINK_MARK_READING_LABELS}\\s*:`,
+  "u",
+);
 
 class BobLedgerToolsTaskLinkMarksReadingMixin {
   setupTaskLinkMarksReading() {
@@ -340,15 +355,54 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
     }
   }
 
+  // The first significant child of a list item's own content: whitespace
+  // and glyph-only text, task checkboxes, and one level of loose-list `<p>`
+  // are looked through. Returns a node or null. Never throws.
+  taskLinkMarkReadingLeadNode(parent, depth = 0) {
+    try {
+      for (const child of Array.from((parent && parent.childNodes) || [])) {
+        if (!child) continue;
+        if (child.nodeType === 3) {
+          const value = String(child.nodeValue !== undefined && child.nodeValue !== null ? child.nodeValue : child.textContent || "");
+          if (TASK_LINK_MARK_READING_LEAD_TEXT_RE.test(value)) continue;
+          return child;
+        }
+        if (child.nodeType !== 1) continue;
+        const tag = this.taskLinkMarkReadingTag(child);
+        if (tag === "INPUT") continue;
+        if (tag === "P" && depth === 0) {
+          const inner = this.taskLinkMarkReadingLeadNode(child, 1);
+          if (inner) return inner;
+          continue;
+        }
+        return child;
+      }
+    } catch (error) {
+      // Fall through: no lead node means no structural verdict.
+    }
+    return null;
+  }
+
+  // Whether a rendered list item is a managed row (DEPENDS ON, BLOCKS,
+  // LINKS, LINKED FROM, Sub-projects, or their legacy labels). Ordinary
+  // prose that merely starts with a label word, such as "Links worth
+  // reading:", is not one. Three checks, any of which suffices:
+  // `mentionIsEdgeLine` on the row's own text (the source contract);
+  // structure, where the row leads with a bold managed label
+  // (`**DEPENDS ON:**` renders as <strong>DEPENDS ON:</strong>); and, for
+  // flattened rendered text, the exact uppercase label followed by a colon
+  // after a managed glyph or a literal bullet. Never throws.
   taskLinkMarkReadingOwnRowIsEdge(li) {
     try {
       if (typeof dependencyReadingOwnText !== "function") return false;
       const text = dependencyReadingOwnText(li);
       if (typeof mentionIsEdgeLine === "function" && mentionIsEdgeLine(text)) return true;
-      // Reading DOM text no longer contains the Markdown bold delimiters
-      // that the source-line parsers require. Match only rendered labels
-      // at the beginning of a list row, after the optional managed glyph.
-      return /^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:(?:⛓️?|🔗|🪢|🧱|🚧|🧩)\s+)?\*{0,2}(?:DEPENDS\s+ON|DEPENDENCIES|BLOCKS|BLOCKING|LINKS(?:\s+TO)?|LINKED\s+FROM|BACKLINKS|SUB-PROJECTS)\b\*{0,2}\s*:?/iu.test(text);
+      const lead = this.taskLinkMarkReadingLeadNode(li);
+      if (lead && lead.nodeType === 1 && ["STRONG", "B"].includes(this.taskLinkMarkReadingTag(lead))) {
+        const label = String(lead.textContent || "").replace(/\s+/gu, " ").trim();
+        if (TASK_LINK_MARK_READING_LABEL_RE.test(label)) return true;
+      }
+      return TASK_LINK_MARK_READING_FLAT_ROW_RE.test(text);
     } catch (error) {
       return false;
     }
@@ -495,13 +549,18 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
         this.taskLinkMarkReadingState = taskLinkMarkNewViewState();
       }
       const now = typeof this.taskLinkMarksNow === "function" ? this.taskLinkMarksNow() : Date.now();
-      const swap = taskLinkMarkSwapFor(
+      // A quiet reconcile (a ring that is off the page) records the new
+      // state but never swaps: nobody sees it change, and it must not
+      // animate when it is scrolled into view later.
+      const quiet = Boolean(options && options.quiet);
+      const swapped = taskLinkMarkSwapFor(
         this.taskLinkMarkReadingState,
         hit.key,
         hit.state,
         now,
-        Boolean(options && options.allowSwap),
+        Boolean(options && options.allowSwap) && !quiet,
       );
+      const swap = quiet ? false : swapped;
       const tooltip = taskLinkMarkTooltip({
         title: hit.title,
         state: hit.state,
@@ -533,6 +592,50 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
     } catch (error) {
       // A bad link never breaks the note renderer.
     }
+  }
+
+  // Obsidian post-processes every Reading section when a note opens, but
+  // keeps the ones outside the viewport in memory, detached from the page.
+  // A document sweep cannot see their anchors, so a status change made
+  // meanwhile would leave stale rings that reappear on scroll. Stamped
+  // anchors are therefore remembered weakly (bounded) and the sweep also
+  // visits the detached ones. Never throws.
+  taskLinkMarkReadingTrack(anchor) {
+    try {
+      if (!anchor || typeof WeakRef !== "function" || typeof WeakSet !== "function") return;
+      if (!(this.taskLinkMarkReadingTrackedSet instanceof WeakSet)) {
+        this.taskLinkMarkReadingTrackedSet = new WeakSet();
+      }
+      if (this.taskLinkMarkReadingTrackedSet.has(anchor)) return;
+      this.taskLinkMarkReadingTrackedSet.add(anchor);
+      if (!Array.isArray(this.taskLinkMarkReadingTracked)) this.taskLinkMarkReadingTracked = [];
+      this.taskLinkMarkReadingTracked.push(new WeakRef(anchor));
+      if (this.taskLinkMarkReadingTracked.length > TASK_LINK_MARK_READING_TRACK_MAX + TASK_LINK_MARK_READING_TRACK_SLACK) {
+        this.taskLinkMarkReadingTrackedAnchors();
+        const overflow = this.taskLinkMarkReadingTracked.length - TASK_LINK_MARK_READING_TRACK_MAX;
+        if (overflow > 0) this.taskLinkMarkReadingTracked.splice(0, overflow);
+      }
+    } catch (error) {
+      // Tracking is best-effort: the document sweep still covers the page.
+    }
+  }
+
+  // The live tracked anchors, dropping collected ones. Never throws.
+  taskLinkMarkReadingTrackedAnchors() {
+    const anchors = [];
+    try {
+      const alive = [];
+      for (const ref of Array.isArray(this.taskLinkMarkReadingTracked) ? this.taskLinkMarkReadingTracked : []) {
+        const anchor = ref && typeof ref.deref === "function" ? ref.deref() : null;
+        if (!anchor) continue;
+        alive.push(ref);
+        anchors.push(anchor);
+      }
+      this.taskLinkMarkReadingTracked = alive;
+    } catch (error) {
+      // A failed prune leaves the list as it was.
+    }
+    return anchors;
   }
 
   taskLinkMarkReadingAnchors(root, selector) {
@@ -594,6 +697,7 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
             continue;
           }
           this.taskLinkMarkReadingSetAttribute(anchor, "data-bob-task-link-src", sourcePath);
+          this.taskLinkMarkReadingTrack(anchor);
           this.taskLinkMarkReadingReconcile(anchor, sourcePath, { resolved });
         } catch (error) {
           continue;
@@ -773,6 +877,7 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
                 const sourcePath = this.taskLinkMarkReadingSourcePathFor(anchor, ctx, row);
                 if (!sourcePath) continue;
                 this.taskLinkMarkReadingSetAttribute(anchor, "data-bob-task-link-src", sourcePath);
+                this.taskLinkMarkReadingTrack(anchor);
                 this.taskLinkMarkReadingReconcile(anchor, sourcePath, { allowSwap, resolved });
               } catch (error) {
                 continue;
@@ -781,6 +886,21 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
           } catch (error) {
             continue;
           }
+        }
+      }
+      // Rendered sections that Obsidian detached (scrolled out of view)
+      // are in no document, so reconcile them here, quietly, in place.
+      for (const anchor of this.taskLinkMarkReadingTrackedAnchors()) {
+        try {
+          if (anchor.isConnected !== false) continue;
+          const sourcePath = this.taskLinkMarkReadingAttribute(anchor, "data-bob-task-link-src");
+          if (!sourcePath) {
+            this.taskLinkMarkReadingRemoveHost(anchor);
+            continue;
+          }
+          this.taskLinkMarkReadingReconcile(anchor, sourcePath, { allowSwap: false, quiet: true, resolved });
+        } catch (error) {
+          continue;
         }
       }
     } catch (error) {

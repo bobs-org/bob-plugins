@@ -403,6 +403,7 @@ module.exports.helpers = {
   taskLinkMarkStateFromSymbol,
   taskLinkMarkTooltip,
   taskLinkMarkDocContext,
+  taskLinkMarkIsManagedRowText,
   taskLinkMarkLiveDocModel,
   taskLinkMarkLiveLookup,
   taskLinkMarkLineIndexAt,

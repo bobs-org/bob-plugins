@@ -431,7 +431,7 @@ class BobLedgerToolsTaskLinkMarksMixin {
           if (!TASK_LINK_MARK_LINE_PREFILTER.test(text)) {
             continue;
           }
-          const spans = taskLinkMarkSpans(text);
+          const spans = taskLinkMarkSpans(text, model.ctx.excluded(index));
           if (spans.length === 0 || !model.ctx.eligible(index)) {
             continue;
           }

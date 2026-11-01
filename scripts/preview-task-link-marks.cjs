@@ -136,19 +136,39 @@ async function capturePage(client, output) {
   fs.writeFileSync(output, Buffer.from(response.data, "base64"));
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  fs.mkdirSync(args.out, { recursive: true });
-  const css = fs.readFileSync(path.join(pluginRoot, "styles.css"), "utf8");
-  const htmlFile = path.join(args.out, "index.html");
-  fs.writeFileSync(htmlFile, makeHtml({ css }));
+// Launch headless Chromium on the preview page. `extraArgs` carry flags such
+// as `--force-prefers-reduced-motion`. Chromium's DevTools socket lives under
+// its profile and TMPDIR, so both stay short (`/tmp`) to dodge the Unix
+// socket path limit on long workspace paths. Returns `{client, version,
+// close}`.
+async function openPreviewPage(htmlFile, extraArgs = []) {
   const chromium = findChromium();
   const profile = fs.mkdtempSync(path.join("/tmp", "bob-task-link-marks-chromium-"));
   const child = spawn(chromium, [
     "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
-    "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank",
+    "--remote-debugging-port=0", `--user-data-dir=${profile}`, ...extraArgs, "about:blank",
   ], { stdio: "ignore", env: { ...process.env, TMPDIR: "/tmp" } });
   let client = null;
+  const close = async () => {
+    if (client) {
+      try { client.socket.close(); } catch (error) { /* best-effort */ }
+    }
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise((resolve) => {
+        child.once("exit", resolve);
+        child.kill("SIGTERM");
+      });
+    }
+    await sleep(250);
+    try {
+      fs.rmSync(profile, { recursive: true, force: true });
+    } catch (error) {
+      await sleep(500);
+      try {
+        fs.rmSync(profile, { recursive: true, force: true });
+      } catch (ignored) { /* best-effort profile cleanup */ }
+    }
+  };
   try {
     const activePortFile = path.join(profile, "DevToolsActivePort");
     await waitForFile(activePortFile);
@@ -167,8 +187,55 @@ async function main() {
     await client.call("Page.navigate", { url: pathToFileURL(htmlFile).href });
     await waitForPreview(client);
     const browser = await client.call("Browser.getVersion");
-    const matrix = [];
-    const failures = [];
+    return { client, version: browser.product || "Chromium", close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
+
+// Judge one motion probe (`window.taskLinkMarksPreview.motion()`). Under
+// reduced motion every swapped and plain ring must compute no animation and
+// no transition; under normal motion the swap animation and the 120 ms
+// transition must still be there. Returns a list of failure strings.
+function checkMotionRings(probe, reduced) {
+  const failures = [];
+  const label = reduced ? "reduced motion" : "normal motion";
+  if (!probe || probe.reduced !== reduced) {
+    failures.push(`${label}: matchMedia(prefers-reduced-motion) is ${probe && probe.reduced}, expected ${reduced}`);
+  }
+  const rings = (probe && probe.rings) || [];
+  if (rings.length === 0) failures.push(`${label}: the probe measured no rings`);
+  for (const ring of rings) {
+    const who = `${ring.state}${ring.swap ? " swap" : ""} ring`;
+    const transitions = String(ring.transitionDuration).split(",").map((part) => part.trim());
+    if (reduced) {
+      if (ring.animationName !== "none") failures.push(`${label}: ${who} computes animation-name ${ring.animationName}`);
+      if (!transitions.every((part) => part === "0s")) failures.push(`${label}: ${who} computes transition-duration ${ring.transitionDuration}`);
+    } else {
+      if (ring.swap && ring.animationName !== "bob-task-link-mark-swap") failures.push(`${label}: ${who} computes animation-name ${ring.animationName}`);
+      if (ring.swap && ring.animationDuration !== "0.18s") failures.push(`${label}: ${who} computes animation-duration ${ring.animationDuration}`);
+      if (!ring.swap && ring.animationName !== "none") failures.push(`${label}: ${who} computes animation-name ${ring.animationName}`);
+      if (!transitions.some((part) => part === "0.12s")) failures.push(`${label}: ${who} computes transition-duration ${ring.transitionDuration}`);
+    }
+  }
+  return failures;
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  fs.mkdirSync(args.out, { recursive: true });
+  const css = fs.readFileSync(path.join(pluginRoot, "styles.css"), "utf8");
+  const htmlFile = path.join(args.out, "index.html");
+  fs.writeFileSync(htmlFile, makeHtml({ css }));
+  const matrix = [];
+  const failures = [];
+  const motion = {};
+  let browserName = "Chromium";
+  const page = await openPreviewPage(htmlFile);
+  try {
+    const { client } = page;
+    browserName = page.version;
     for (const theme of ["light", "dark"]) {
       await client.call("Emulation.setDeviceMetricsOverride", {
         width: 932, height: 1600, deviceScaleFactor: 1, mobile: false,
@@ -189,57 +256,64 @@ async function main() {
       failures.push(...checks.map((check) => `${theme}: ${check}`));
       matrix.push(entry);
     }
-    const summary = {
-      browser: browser.product || "Chromium",
-      rendererRevision: spawnSync("git", ["rev-parse", "--short=12", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim(),
-      matrix,
-      failures,
-    };
-    fs.writeFileSync(path.join(args.out, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
-    const lines = [
-      "# Task link marks Chromium preview",
-      "",
-      `- Browser: ${summary.browser}.`,
-      `- Renderer checkout revision: ${summary.rendererRevision}.`,
-      "- Fixtures: paragraph, heading, task line, blockquote, struck link, dense sentence.",
-      "- Matrix: 900 px in light and dark default-theme colors.",
-      "- Checks: every ring box is square and non-empty; line heights match with rings on/off.",
-      "",
-      "| Theme | Boxes | Max drift | Result | Screenshot |",
-      "| --- | --- | ---: | --- | --- |",
-      ...matrix.map((entry) => `| ${entry.theme} | ${entry.boxes.length} | ${Math.max(0, ...entry.drift)}px | ${entry.failures.length ? "FAIL" : "pass"} | ${entry.screenshot} |`),
-      "",
-      failures.length ? "Failures:" : "All preview checks passed.",
-      ...failures.map((failure) => `- ${failure}`),
-      "",
-    ];
-    fs.writeFileSync(path.join(args.out, "summary.md"), `${lines.join("\n")}\n`);
-    console.log(`Task link marks preview written to ${args.out}`);
-    console.log(`${matrix.length} theme renders; ${failures.length} failed checks.`);
-    if (failures.length) process.exitCode = 1;
+    motion.normal = await client.evaluate("window.taskLinkMarksPreview.motion()");
+    failures.push(...checkMotionRings(motion.normal, false));
   } finally {
-    if (client) {
-      try { client.socket.close(); } catch (error) { /* best-effort */ }
-    }
-    if (child.exitCode === null && child.signalCode === null) {
-      await new Promise((resolve) => {
-        child.once("exit", resolve);
-        child.kill("SIGTERM");
-      });
-    }
-    await sleep(250);
-    try {
-      fs.rmSync(profile, { recursive: true, force: true });
-    } catch (error) {
-      await sleep(500);
-      try {
-        fs.rmSync(profile, { recursive: true, force: true });
-      } catch (ignored) { /* best-effort profile cleanup */ }
-    }
+    await page.close();
   }
+  // A second browser forced into reduced motion proves the production CSS
+  // computes no animation or transition for a swapped ring.
+  const reducedPage = await openPreviewPage(htmlFile, ["--force-prefers-reduced-motion"]);
+  try {
+    motion.reduced = await reducedPage.client.evaluate("window.taskLinkMarksPreview.motion()");
+    failures.push(...checkMotionRings(motion.reduced, true));
+  } finally {
+    await reducedPage.close();
+  }
+  const summary = {
+    browser: browserName,
+    rendererRevision: spawnSync("git", ["rev-parse", "--short=12", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim(),
+    matrix,
+    motion,
+    failures,
+  };
+  fs.writeFileSync(path.join(args.out, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+  const lines = [
+    "# Task link marks Chromium preview",
+    "",
+    `- Browser: ${summary.browser}.`,
+    `- Renderer checkout revision: ${summary.rendererRevision}.`,
+    "- Fixtures: paragraph, heading, task line, blockquote, struck link, dense sentence.",
+    "- Matrix: 900 px in light and dark default-theme colors.",
+    "- Checks: every ring box is square and non-empty; line heights match with rings on/off.",
+    "- Motion: computed animation and transition of swapped and plain rings, in normal motion and with `--force-prefers-reduced-motion`.",
+    "",
+    "| Theme | Boxes | Max drift | Result | Screenshot |",
+    "| --- | --- | ---: | --- | --- |",
+    ...matrix.map((entry) => `| ${entry.theme} | ${entry.boxes.length} | ${Math.max(0, ...entry.drift)}px | ${entry.failures.length ? "FAIL" : "pass"} | ${entry.screenshot} |`),
+    "",
+    "| Motion | matchMedia reduce | Swap animation-name | Swap transition-duration |",
+    "| --- | --- | --- | --- |",
+    ...["normal", "reduced"].map((key) => {
+      const swap = (motion[key].rings || []).find((ring) => ring.swap) || {};
+      return `| ${key} | ${motion[key].reduced} | ${swap.animationName} | ${swap.transitionDuration} |`;
+    }),
+    "",
+    failures.length ? "Failures:" : "All preview checks passed.",
+    ...failures.map((failure) => `- ${failure}`),
+    "",
+  ];
+  fs.writeFileSync(path.join(args.out, "summary.md"), `${lines.join("\n")}\n`);
+  console.log(`Task link marks preview written to ${args.out}`);
+  console.log(`${matrix.length} theme renders, 2 motion renders; ${failures.length} failed checks.`);
+  if (failures.length) process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error(error && error.stack ? error.stack : error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error && error.stack ? error.stack : error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { findChromium, checkMotionRings };

@@ -491,6 +491,66 @@ test("TC vectors verbatim through the decoration builder", () => {
   assert.equal(count(["> [!note] See [[bob#^fix]]"], 0, SOURCE), 1);
 });
 
+test("TC14-TC18 vectors through the decoration builder (bob-cli-f5)", () => {
+  const env = bobEnv();
+  const count = (lines, index, filePath) => ringsOnLine(env, lines, index, filePath).length;
+  const link = "[[bob#^fix]]";
+  // A four-backtick fence is not closed by a three-backtick line.
+  const nested = ["````markdown", "```", link, "````", link];
+  assert.equal(count(nested, 2, SOURCE), 0, "link inside the longer fence");
+  assert.equal(count(nested, 4, SOURCE), 1, "prose after the real closer");
+  // Tilde fences, shorter marker runs, and fence-like content.
+  assert.equal(count(["~~~~", link, "~~~", link, "~~~~", link], 3, SOURCE), 0);
+  assert.equal(count(["~~~~", link, "~~~", link, "~~~~", link], 5, SOURCE), 1);
+  assert.equal(count(["```", "```js", link, "```", link], 2, SOURCE), 0);
+  assert.equal(count(["```", "```js", link, "```", link], 4, SOURCE), 1);
+  // `%%` in inline code is a literal delimiter, not a comment opener.
+  assert.equal(count(["`%%` is a literal delimiter", link], 1, SOURCE), 1);
+  // `%%` inside a fenced block does not change later prose either.
+  assert.equal(count(["```", "%%", "```", link], 3, SOURCE), 1);
+  // A real multi-line comment hides its middle, and the text on its opening
+  // and closing lines outside the comment keeps its ring.
+  const comment = [link + " %% " + link, link, link + " %% " + link, link];
+  assert.deepEqual(
+    ringsOnLine(env, comment, 0, SOURCE).map((ring) => ring.from),
+    [0],
+    "the link before the opener rings, the one inside does not",
+  );
+  assert.equal(count(comment, 1, SOURCE), 0, "a line wholly inside the comment");
+  assert.deepEqual(
+    ringsOnLine(env, comment, 2, SOURCE).map((ring) => ring.from - (comment[0].length + 1 + comment[1].length + 1)),
+    [comment[2].lastIndexOf("[[")],
+    "the link before the closing delimiter is comment text; the one after rings",
+  );
+  const closing = ["%% hidden", "after %% " + link, link];
+  assert.equal(count(closing, 1, SOURCE), 1, "text after the closing delimiter is prose");
+  assert.equal(count(closing, 2, SOURCE), 1);
+  // TC19: ordinary prose that begins with a managed-label word keeps its
+  // ring, while the actual managed rows stay unmarked.
+  for (const prose of [
+    "Links worth reading: " + link,
+    "- Links worth reading: " + link,
+    "Review **LINKS** in " + link,
+    "**LINKS:** no list marker or glyph " + link,
+    "- Blocks of time: " + link,
+  ]) {
+    assert.equal(count([prose], 0, SOURCE), 1, prose);
+  }
+  for (const row of [
+    "- ⛓️ **DEPENDS ON:** " + link,
+    "- **BLOCKS:** " + link,
+    "  - 🪢 **LINKS:** " + link,
+    "- **LINKED FROM:** " + link,
+    "- 🧩 **Sub-projects:** " + link,
+    "- **LINKS** malformed " + link,
+  ]) {
+    assert.equal(count([row], 0, SOURCE), 0, row);
+  }
+  // Block ids inside a fence or comment never feed the live line map.
+  const live = helpers.taskLinkMarkLiveDocModel(["```", "- [ ] #task Hidden ^fix", "```"].join("\n"), SOURCE);
+  assert.equal(live.blocks.has("fix"), false);
+});
+
 test("the builder honors the other eligibility rules", () => {
   const env = bobEnv();
   // Embeds, headings, notes, and plain checklist links get nothing.
@@ -1131,28 +1191,53 @@ test("a viewport-limited build over a 1,000-line note stays fast", () => {
     offset += line.length + 1;
   }
   const hr = () => Number(process.hrtime.bigint()) / 1e6;
+  // CPU time with a warm-up and best-of samples, as the other performance
+  // tests do (`test-block-id-prompt-task-wikilink-index-performance.cjs`):
+  // a full-suite run once failed this guard at 29.6 ms on a wall-clock
+  // sample that scheduler preemption or a GC pause had inflated.
+  const cpuMs = () => {
+    const usage = process.cpuUsage();
+    return (usage.user + usage.system) / 1000;
+  };
+  const bestOf = (samples, run) => {
+    let best = Infinity;
+    for (let sample = 0; sample < samples; sample += 1) {
+      const started = cpuMs();
+      run(sample);
+      best = Math.min(best, cpuMs() - started);
+    }
+    return best;
+  };
   // Cold: the first build splits the document and walks its fences once.
   const viewport = makeView(text, SOURCE, { ranges: [{ from: starts[400], to: starts[460] }] });
-  const t0 = hr();
   const cold = ringsOf(env, viewport);
-  const coldMs = hr() - t0;
   assert.equal(cold.length, 122, "two task links on each of 61 visible lines");
-  assert.ok(coldMs < 100, `cold viewport build took ${coldMs.toFixed(1)}ms`);
+  // Every sample is a new document version, so it pays the cold cost.
+  const coldMs = bestOf(3, (sample) => {
+    const fresh = makeView(`${text}${" ".repeat(sample + 1)}`, SOURCE, { ranges: [{ from: starts[400], to: starts[460] }] });
+    assert.equal(ringsOf(env, fresh).length, 122);
+  });
+  assert.ok(coldMs < 100, `cold viewport build took ${coldMs.toFixed(1)}ms of CPU`);
   // Warm: the same document version, a scrolled viewport.
-  const scrolled = makeView(text, SOURCE, { ranges: [{ from: starts[500], to: starts[560] }] });
-  scrolled.state.doc = viewport.state.doc;
-  const t1 = hr();
-  const warm = ringsOf(env, scrolled);
-  const warmMs = hr() - t1;
+  const scrollTo = (first) => {
+    const scrolled = makeView(text, SOURCE, { ranges: [{ from: starts[first], to: starts[first + 60] }] });
+    scrolled.state.doc = viewport.state.doc;
+    return scrolled;
+  };
+  const warm = ringsOf(env, scrollTo(500));
   assert.equal(warm.length, 122);
-  assert.ok(warmMs < 25, `warm viewport build took ${warmMs.toFixed(1)}ms`);
+  const warmMs = bestOf(5, (sample) => {
+    assert.equal(ringsOf(env, scrollTo(500 + sample * 7)).length, 122);
+  });
+  assert.ok(warmMs < 25, `warm viewport build took ${warmMs.toFixed(1)}ms of CPU`);
   // A keystroke: a new document version rebuilds the model, then the viewport.
-  const typed = makeView(`${text} `, SOURCE, { ranges: [{ from: starts[500], to: starts[560] }] });
-  const t3 = hr();
-  const keystroke = ringsOf(env, typed, "doc");
-  const keystrokeMs = hr() - t3;
+  const keystroke = ringsOf(env, makeView(`${text} `, SOURCE, { ranges: [{ from: starts[500], to: starts[560] }] }), "doc");
   assert.equal(keystroke.length, 122);
-  assert.ok(keystrokeMs < 25, `keystroke rebuild took ${keystrokeMs.toFixed(1)}ms`);
+  const keystrokeMs = bestOf(5, (sample) => {
+    const typed = makeView(`${text} ${"x".repeat(sample + 2)}`, SOURCE, { ranges: [{ from: starts[500], to: starts[560] }] });
+    assert.equal(ringsOf(env, typed, "doc").length, 122);
+  });
+  assert.ok(keystrokeMs < 25, `keystroke rebuild took ${keystrokeMs.toFixed(1)}ms of CPU`);
   // The whole note: 2,000 task links, 3 resolver lookups at most per unique id.
   const full = makeView(text, SOURCE);
   full.state.doc = viewport.state.doc;

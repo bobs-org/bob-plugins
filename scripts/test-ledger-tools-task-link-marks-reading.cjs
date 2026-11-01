@@ -282,6 +282,151 @@ test("embeds render, while embed headers, metadata, plugin chips, and managed ed
   assert.equal(hostBefore(renderedLinks), null);
 });
 
+test("TC19-TC20 vectors: ordinary prose starting with a managed label word still rings (bob-cli-f5)", () => {
+  const doc = makeDocument();
+  const { plugin } = makePlugin(doc, (input) => hitFor(input));
+  const prose = [];
+  const rows = [];
+  // The landing audit's reproduction, then other label-word openings.
+  for (const [lead, id] of [
+    ["Links worth reading: ", "worth"],
+    ["Links: ", "colon"],
+    ["Blocks of time: ", "blocks"],
+    ["Linked from my notes, ", "linked"],
+    ["Depends on the weather: ", "depends"],
+    ["Backlinks are useful: ", "back"],
+    ["Sub-projects are fine: ", "sub"],
+    ["LINKS worth reading ", "caps"],
+  ]) {
+    const anchor = link(doc, `target.md#^${id}`);
+    prose.push(anchor);
+    rows.push(el(doc, "li", {}, lead, anchor));
+  }
+  const root = el(doc, "ul", {}, ...rows);
+  processorFor(plugin)(root, { sourcePath: "notes/source.md" });
+  for (const anchor of prose) {
+    assert.ok(hostBefore(anchor), anchor.getAttribute("data-href"));
+  }
+});
+
+test("TC20 vector: a bold managed label owns the row, with or without a task checkbox", () => {
+  const doc = makeDocument();
+  const { plugin } = makePlugin(doc, (input) => hitFor(input));
+  const managed = [];
+  const rows = [];
+  const bold = (label) => el(doc, "strong", {}, label);
+  for (const [glyph, label, id] of [
+    ["⛓️ ", "DEPENDS ON:", "depends"],
+    ["", "BLOCKS:", "blocks"],
+    ["🪢 ", "LINKS:", "links"],
+    ["", "LINKED FROM:", "from"],
+    ["🧩 ", "Sub-projects:", "sub"],
+    ["", "LINKS", "nocolon"],
+  ]) {
+    const anchor = link(doc, `target.md#^${id}`);
+    managed.push(anchor);
+    const children = glyph ? [glyph, bold(label), " ", anchor] : [bold(label), " ", anchor];
+    rows.push(el(doc, "li", {}, ...children));
+  }
+  // A task checkbox before the label, and a loose-list paragraph wrapper.
+  const checkbox = link(doc, "target.md#^checkbox");
+  managed.push(checkbox);
+  rows.push(el(doc, "li", {}, el(doc, "input", { type: "checkbox", class: "task-list-item-checkbox" }), bold("BLOCKS:"), " ", checkbox));
+  const loose = link(doc, "target.md#^loose");
+  managed.push(loose);
+  rows.push(el(doc, "li", {}, el(doc, "p", {}, "⛓️ ", bold("DEPENDS ON:"), " ", loose)));
+  // Bold prose that is not a managed label keeps its ring.
+  const boldProse = link(doc, "target.md#^boldprose");
+  rows.push(el(doc, "li", {}, bold("Links worth reading:"), " ", boldProse));
+  const root = el(doc, "ul", {}, ...rows);
+  processorFor(plugin)(root, { sourcePath: "notes/source.md" });
+  for (const anchor of managed) {
+    assert.equal(hostBefore(anchor), null, anchor.getAttribute("data-href"));
+  }
+  assert.ok(hostBefore(boldProse));
+});
+
+test("closeout: a managed label later in a row does not suppress it", () => {
+  const doc = makeDocument();
+  const { plugin } = makePlugin(doc, (input) => hitFor(input));
+  const anchor = link(doc, "target.md#^later");
+  const bold = el(doc, "strong", {}, "LINKS");
+  const row = el(doc, "li", {}, "See the ", bold, " section: ", anchor);
+  const flat = link(doc, "target.md#^flat");
+  const flatRow = el(doc, "li", {}, "Review the LINKS: section ", flat);
+  processorFor(plugin)(el(doc, "ul", {}, row, flatRow), { sourcePath: "notes/source.md" });
+  assert.ok(hostBefore(anchor));
+  assert.ok(hostBefore(flat));
+});
+
+test("closeout: a rendered Reading section that Obsidian detached still updates, and never swaps (bob-cli-f5)", () => {
+  // The real-Obsidian e2e found it: Obsidian post-processes every section
+  // when a note opens but keeps the off-screen ones detached from the page,
+  // so a document sweep never saw their anchors and a ring far down a long
+  // note reappeared stale (Ready) after its task was completed elsewhere.
+  const doc = makeDocument();
+  let state = "ready";
+  const { plugin } = makePlugin(doc, (input) => hitFor(input, state));
+  const onPage = link(doc, "target.md#^swap");
+  const offPage = link(doc, "target.md#^swap");
+  let offPageConnected = true;
+  Object.defineProperty(onPage, "isConnected", { get: () => true });
+  Object.defineProperty(offPage, "isConnected", { get: () => offPageConnected });
+  const visibleRoot = el(doc, "div", {}, onPage);
+  const hiddenRoot = el(doc, "div", {}, offPage);
+  doc.body.appendChild(visibleRoot);
+  doc.body.appendChild(hiddenRoot);
+  processorFor(plugin)(visibleRoot, { sourcePath: "notes/source.md" });
+  processorFor(plugin)(hiddenRoot, { sourcePath: "notes/source.md" });
+  assert.equal(hostBefore(onPage).getAttribute("data-state"), "ready");
+  assert.equal(hostBefore(offPage).getAttribute("data-state"), "ready");
+
+  // The section scrolls out of view: Obsidian detaches it from the page.
+  doc.body.removeChild(hiddenRoot);
+  offPageConnected = false;
+  state = "done";
+  plugin.sweepTaskLinkMarksReading({ allowSwap: true });
+  // The visible ring swaps; the off-page one updates in place, quietly.
+  assert.equal(hostBefore(onPage).getAttribute("data-state"), "done");
+  assert.equal(hostBefore(onPage).classList.contains("bob-task-link-mark-swap"), true);
+  assert.equal(hostBefore(offPage).getAttribute("data-state"), "done");
+  assert.equal(hostBefore(offPage).classList.contains("bob-task-link-mark-swap"), false);
+  assert.match(hostBefore(offPage).getAttribute("aria-label"), /Done/);
+
+  // It scrolls back in, well after the swap window: already Done, no swap.
+  doc.body.appendChild(hiddenRoot);
+  offPageConnected = true;
+  plugin.taskLinkMarksClock = () => 5000;
+  plugin.sweepTaskLinkMarksReading({ allowSwap: true });
+  assert.equal(hostBefore(offPage).getAttribute("data-state"), "done");
+  assert.equal(hostBefore(offPage).classList.contains("bob-task-link-mark-swap"), false);
+  assert.equal(hostBefore(onPage).classList.contains("bob-task-link-mark-swap"), false);
+
+  // A detached anchor that is no longer a candidate loses its ring.
+  doc.body.removeChild(hiddenRoot);
+  offPageConnected = false;
+  offPage.removeAttribute("data-bob-task-link-src");
+  plugin.sweepTaskLinkMarksReading({ allowSwap: true });
+  assert.equal(hostBefore(offPage), null);
+});
+
+test("closeout: detached-anchor tracking is weak and bounded", () => {
+  const doc = makeDocument();
+  const { plugin } = makePlugin(doc, (input) => hitFor(input));
+  for (let index = 0; index < 2400; index += 1) {
+    plugin.taskLinkMarkReadingTrack({ index });
+  }
+  // Pruned back to the cap once it passed the cap plus slack.
+  assert.ok(plugin.taskLinkMarkReadingTracked.length <= 2250, `tracked ${plugin.taskLinkMarkReadingTracked.length}`);
+  assert.ok(plugin.taskLinkMarkReadingTracked.length >= 2000);
+  // The same anchor is only tracked once.
+  const same = link(doc, "target.md#^once");
+  const before = plugin.taskLinkMarkReadingTracked.length;
+  plugin.taskLinkMarkReadingTrack(same);
+  plugin.taskLinkMarkReadingTrack(same);
+  assert.equal(plugin.taskLinkMarkReadingTracked.length, before + 1);
+});
+
 test("Pomodoro ledger links stay unmarked; mixed and deeper rows remain eligible", () => {
   const doc = makeDocument();
   const { plugin } = makePlugin(doc, (input) => hitFor(input));

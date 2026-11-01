@@ -19878,27 +19878,86 @@ function relationLabelsDecodeWrite(stdout, stderr) {
 // `dependencyCleanTaskText` for tooltips. The mark is truthful, never
 // guessing: only provably task targets get rings.
 
-function taskLinkMarkInlineCommentRanges(lineText) {
+const TASK_LINK_MARK_NO_RANGES = Object.freeze([]);
+
+// One line of Markdown in one pass: the ranges that are inline code
+// (`` `…` `` with a matching backtick run) or a `%%…%%` comment, scanned
+// left to right so the first delimiter wins. A `%%` inside inline code is
+// literal text, and a backtick inside a comment is comment text.
+// `inComment` says a multi-line comment is still open from an earlier
+// line: the line then starts excluded up to its closing `%%`, and text
+// after that delimiter is ordinary prose. An unpaired `%%` runs to the
+// end of the line and leaves the comment open. Returns `{ranges, open,
+// whole}`: `open` is whether a comment is still open after the line, and
+// `whole` is whether the line began inside a comment that this line never
+// closed. Never throws.
+function taskLinkMarkScanLine(lineText, inComment) {
   try {
     const text = String(lineText || "");
-    const ranges = [];
-    let search = 0;
-    for (;;) {
-      const open = text.indexOf("%%", search);
-      if (open === -1) {
-        break;
-      }
-      const close = text.indexOf("%%", open + 2);
-      if (close === -1) {
-        ranges.push({ start: open, end: text.length });
-        break;
-      }
-      ranges.push({ start: open, end: close + 2 });
-      search = close + 2;
+    const length = text.length;
+    let open = Boolean(inComment);
+    if (!open && text.indexOf("`") === -1 && text.indexOf("%%") === -1) {
+      return { ranges: TASK_LINK_MARK_NO_RANGES, open: false, whole: false };
     }
-    return ranges;
+    const ranges = [];
+    let at = 0;
+    if (open) {
+      const close = text.indexOf("%%");
+      if (close === -1) {
+        return { ranges: [{ start: 0, end: length }], open: true, whole: true };
+      }
+      ranges.push({ start: 0, end: close + 2 });
+      open = false;
+      at = close + 2;
+    }
+    while (at < length) {
+      const char = text[at];
+      if (char === "`") {
+        let run = at;
+        while (text[run] === "`") {
+          run += 1;
+        }
+        const width = run - at;
+        let search = run;
+        let close = -1;
+        while (search < length) {
+          if (text[search] !== "`") {
+            search += 1;
+            continue;
+          }
+          const start = search;
+          while (text[search] === "`") {
+            search += 1;
+          }
+          if (search - start === width) {
+            close = search;
+            break;
+          }
+        }
+        if (close === -1) {
+          at = run;
+        } else {
+          ranges.push({ start: at, end: close });
+          at = close;
+        }
+        continue;
+      }
+      if (char === "%" && text[at + 1] === "%") {
+        const close = text.indexOf("%%", at + 2);
+        if (close === -1) {
+          ranges.push({ start: at, end: length });
+          open = true;
+          break;
+        }
+        ranges.push({ start: at, end: close + 2 });
+        at = close + 2;
+        continue;
+      }
+      at += 1;
+    }
+    return { ranges, open, whole: false };
   } catch (error) {
-    return [];
+    return { ranges: TASK_LINK_MARK_NO_RANGES, open: false, whole: false };
   }
 }
 
@@ -19977,29 +20036,27 @@ function taskLinkMarkStruckAt(text, open, end) {
   }
 }
 
-// `taskLinkMarkSpans(lineText)` returns a frozen array of frozen
-// `{at, linkpath, blockId, kind, alias}` in UTF-16 offsets, where `at`
-// is where the ring goes (the link start, or the opening `~~` of a
+// `taskLinkMarkSpans(lineText, excluded)` returns a frozen array of
+// frozen `{at, linkpath, blockId, kind, alias}` in UTF-16 offsets, where
+// `at` is where the ring goes (the link start, or the opening `~~` of a
 // struck link). Wikilinks give `kind: "wiki"`, Markdown links give
-// `kind: "md"`. Embeds, inline code, inline `%%…%%`, schemes, and bad
-// ids give no span. Never throws.
-function taskLinkMarkSpans(lineText) {
+// `kind: "md"`. Embeds, inline code, `%%…%%` comments, schemes, and bad
+// ids give no span. `excluded` is the optional `{start, end}` list of
+// code and comment ranges for this line from the document context
+// (`taskLinkMarkDocContext(...).excluded(index)`), which also knows a
+// multi-line comment opened above; without it the line is scanned alone.
+// Never throws.
+function taskLinkMarkSpans(lineText, excluded) {
   try {
     const text = String(lineText || "");
     if (text === "" || (text.indexOf("#^") === -1 && text.toLowerCase().indexOf("#%5e") === -1)) {
       return Object.freeze([]);
     }
-    let code = [];
+    let masked = [];
     try {
-      code = relationInlineCodeRanges(text);
+      masked = Array.isArray(excluded) ? excluded : taskLinkMarkScanLine(text, false).ranges;
     } catch (error) {
-      code = [];
-    }
-    let commented = [];
-    try {
-      commented = taskLinkMarkInlineCommentRanges(text);
-    } catch (error) {
-      commented = [];
+      masked = [];
     }
     const spans = [];
     // Wikilinks `[[path#^id]]` / `[[path#^id|alias]]` / `[[#^id]]`.
@@ -20017,10 +20074,7 @@ function taskLinkMarkSpans(lineText) {
         const end = close + 2;
         cursor = end;
         try {
-          if (taskLinkMarkPosExcluded(code, open, end)) {
-            continue;
-          }
-          if (taskLinkMarkPosExcluded(commented, open, end)) {
+          if (taskLinkMarkPosExcluded(masked, open, end)) {
             continue;
           }
           const embedded = open > 0 && text[open - 1] === "!";
@@ -20087,10 +20141,7 @@ function taskLinkMarkSpans(lineText) {
           if (embedded) {
             continue;
           }
-          if (taskLinkMarkPosExcluded(code, openBracket, linkEnd)) {
-            continue;
-          }
-          if (taskLinkMarkPosExcluded(commented, openBracket, linkEnd)) {
+          if (taskLinkMarkPosExcluded(masked, openBracket, linkEnd)) {
             continue;
           }
           let rawDest = text.slice(destOpen, destClose).trim();
@@ -20376,93 +20427,111 @@ function taskLinkMarkFrontmatterEnd(lines) {
   }
 }
 
-function taskLinkMarkFencedLines(lines) {
+// A fenced-code opener: leading whitespace (list-item nesting), then a run
+// of three or more backticks or tildes. A backtick fence's info string
+// cannot hold a backtick, so ``` ``code`` ``` style inline code is not a
+// fence. Returns `{char, length}` or null. Never throws.
+function taskLinkMarkFenceOpener(line) {
   try {
-    const fenced = new Set();
-    let marker = null;
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = String(lines[index] || "");
-      const match = line.match(/^\s*(`{3,}|~{3,})/u);
-      if (!marker && match) {
-        marker = match[1][0];
-        fenced.add(index);
-      } else if (marker) {
-        fenced.add(index);
-        if (match && match[1][0] === marker) {
-          marker = null;
-        }
-      }
+    const match = /^[ \t]*(`{3,}|~{3,})([^\n]*)$/u.exec(String(line || ""));
+    if (!match) {
+      return null;
     }
-    return fenced;
+    if (match[1][0] === "`" && match[2].indexOf("`") !== -1) {
+      return null;
+    }
+    return { char: match[1][0], length: match[1].length };
   } catch (error) {
-    return new Set();
+    return null;
   }
 }
 
-function taskLinkMarkCommentedLines(lines) {
-  // Document-walker set: lines strictly inside a multi-line `%%…%%`
-  // comment (an odd `%%` count precedes the line). Single-line inline
-  // pairs stay span-level through `taskLinkMarkSpans`, so a prose line
-  // with links outside the pair remains eligible.
+// Whether `line` closes the fence `open`: the same marker character, at
+// least as long as the opener, and nothing after it but whitespace.
+// Shorter runs and fence-like lines with an info string are content.
+function taskLinkMarkFenceCloses(line, open) {
   try {
-    const list = Array.isArray(lines) ? lines : String(lines || "").split("\n");
-    const commented = new Set();
-    let open = false;
-    for (let index = 0; index < list.length; index += 1) {
-      const text = String(list[index] || "");
-      let count = 0;
-      let at = 0;
-      for (;;) {
-        const found = text.indexOf("%%", at);
-        if (found === -1) {
-          break;
-        }
-        count += 1;
-        at = found + 2;
-      }
-      if (open) {
-        commented.add(index);
-      }
-      if (count % 2 === 1) {
-        open = !open;
-      }
-    }
-    return commented;
+    const match = /^[ \t]*(`{3,}|~{3,})\s*$/u.exec(String(line || ""));
+    return Boolean(match) && match[1][0] === open.char && match[1].length >= open.length;
   } catch (error) {
-    return new Set();
+    return false;
   }
 }
+
+// The one document walk that owns fence and comment context, run once per
+// document version. A fence line and every line inside a fence are fenced;
+// fenced lines never touch comment state, and a `%%` or backtick there is
+// literal. Outside fences each line is tokenised by `taskLinkMarkScanLine`
+// with the comment state carried over, so code and comments never corrupt
+// each other. Returns `{fenced, whole, excluded}`: the fenced line set,
+// the lines wholly inside a multi-line comment, and the per-line
+// `{start, end}` code and comment ranges. Lines that open or close a
+// multi-line comment stay eligible: only their comment part is excluded.
+// Frontmatter lines (up to `frontEnd`) take no part. Never throws.
+function taskLinkMarkDocWalk(list, frontEnd) {
+  const fenced = new Set();
+  const whole = new Set();
+  const excluded = new Map();
+  try {
+    let fence = null;
+    let comment = false;
+    for (let index = Math.max(0, frontEnd + 1); index < list.length; index += 1) {
+      const line = String(list[index] || "");
+      if (fence) {
+        fenced.add(index);
+        if (taskLinkMarkFenceCloses(line, fence)) {
+          fence = null;
+        }
+        continue;
+      }
+      if (!comment) {
+        const opener = taskLinkMarkFenceOpener(line);
+        if (opener) {
+          fenced.add(index);
+          fence = opener;
+          continue;
+        }
+      }
+      const scan = taskLinkMarkScanLine(line, comment);
+      if (scan.ranges.length > 0) {
+        excluded.set(index, scan.ranges);
+      }
+      if (scan.whole) {
+        whole.add(index);
+      }
+      comment = scan.open;
+    }
+  } catch (error) {
+    // A failed walk keeps whatever it collected.
+  }
+  return { fenced, whole, excluded };
+}
+
+// Managed-row shape at the start of a source line: an optional list marker
+// (and checkbox), the managed glyphs, then the bold managed label
+// (`**DEPENDS ON:**`, `**LINKS**:`, `**Sub-projects**`). Labels are
+// case-sensitive, as in the Rust and plugin parsers. A line with no list
+// marker needs a glyph, as the `⛓️ **DEPENDS ON:** …` shorthand writes it.
+// Ordinary prose that merely contains a label word is not a managed row.
+const TASK_LINK_MARK_MANAGED_LABEL =
+  "\\*\\*[ \\t]*(?:DEPENDS[ \\t]+ON|DEPENDENCIES|BLOCKS|BLOCKING|LINKS(?:[ \\t]+TO)?|LINKED[ \\t]+FROM|BACKLINKS|Sub-projects)[ \\t]*:?[ \\t]*\\*\\*";
+const TASK_LINK_MARK_MANAGED_GLYPH = "(?:[⛓🔗🪢🧱🚧🧩]\\uFE0F?[ \\t]*)";
+const TASK_LINK_MARK_MANAGED_ROW_RE = new RegExp(
+  "^[ \\t]*(?:(?:[-*+]|\\d+[.)])[ \\t]+(?:\\[[^\\]\\n]\\][ \\t]+)?" +
+    TASK_LINK_MARK_MANAGED_GLYPH + "*|" + TASK_LINK_MARK_MANAGED_GLYPH + "+)" +
+    TASK_LINK_MARK_MANAGED_LABEL,
+  "u",
+);
 
 // Bare managed-row text (no list marker required): the TC5 shorthand
 // writes `⛓️ **DEPENDS ON:** …` without its bullet, and malformed rows
 // still own the line. The `mentionIsEdgeLine` verdicts cover the listed
-// forms; this text fallback covers the shorthand so truthfulness never
-// depends on a bullet. Never throws.
+// forms; this text fallback covers the shorthand and anything those
+// parsers refuse, anchored at the row start so prose that mentions
+// `**LINKS**` later in the line keeps its rings. Never throws.
 function taskLinkMarkIsManagedRowText(line) {
   try {
-    const text = String(line || "");
-    if (text.includes("⛓️") && text.includes("DEPENDS ON")) {
-      return true;
-    }
-    if (text.includes("**DEPENDS ON")) {
-      return true;
-    }
-    if (text.includes("**BLOCKS")) {
-      return true;
-    }
-    if (text.includes("**LINKS")) {
-      return true;
-    }
-    if (text.includes("**LINKED FROM")) {
-      return true;
-    }
-    if (text.includes("**Sub-projects")) {
-      return true;
-    }
-    if (text.includes("🧩") && text.includes("Sub-projects")) {
-      return true;
-    }
-    return false;
+    return TASK_LINK_MARK_MANAGED_ROW_RE.test(String(line || ""));
   } catch (error) {
     return false;
   }
@@ -20470,24 +20539,27 @@ function taskLinkMarkIsManagedRowText(line) {
 
 // Document-level line eligibility (TC) with the fence, comment, and
 // frontmatter walks done once: `taskLinkMarkDocContext(lines, path)`
-// returns a frozen `{eligible(index), inert(index)}` for one document
-// version (`inert` is the fence, comment, or frontmatter verdict), so a
-// Live Preview build over thousands of lines never rescans the whole
-// document per link line. `eligible(index)` is false for fences,
-// frontmatter, multi-line `%%…%%` comments, managed edge rows, and
-// dedicated ledger rows (`ledger_rows = skip`); true everywhere else,
-// including task lines, log entries, nested or mixed ledger children,
-// area-note bullets, daily-note non-ledger sections, headings,
-// blockquotes, and callouts. Never throws.
+// returns a frozen `{eligible(index), inert(index), excluded(index)}` for
+// one document version (`inert` is the fence, whole-comment, or
+// frontmatter verdict; `excluded` is the line's code and comment ranges
+// for `taskLinkMarkSpans`), so a Live Preview build over thousands of
+// lines never rescans the whole document per link line. `eligible(index)`
+// is false for fences, frontmatter, lines wholly inside a multi-line
+// `%%…%%` comment, managed edge rows, and dedicated ledger rows
+// (`ledger_rows = skip`); true everywhere else, including the lines that
+// open or close a comment (their text outside the comment is prose), task
+// lines, log entries, nested or mixed ledger children, area-note bullets,
+// daily-note non-ledger sections, headings, blockquotes, and callouts.
+// Never throws.
 function taskLinkMarkDocContext(lines, path) {
   try {
     const list = Array.isArray(lines) ? lines : [];
     const frontEnd = taskLinkMarkFrontmatterEnd(list);
-    const fenced = taskLinkMarkFencedLines(list);
-    const commented = taskLinkMarkCommentedLines(list);
+    const walk = taskLinkMarkDocWalk(list, frontEnd);
     const inert = (index) =>
       typeof index === "number" &&
-      (index <= frontEnd || fenced.has(index) || commented.has(index));
+      (index <= frontEnd || walk.fenced.has(index) || walk.whole.has(index));
+    const excluded = (index) => walk.excluded.get(index) || TASK_LINK_MARK_NO_RANGES;
     const eligible = (index) => {
       try {
         if (typeof index !== "number" || index < 0 || index >= list.length) {
@@ -20515,9 +20587,13 @@ function taskLinkMarkDocContext(lines, path) {
         return false;
       }
     };
-    return Object.freeze({ eligible, inert });
+    return Object.freeze({ eligible, inert, excluded });
   } catch (error) {
-    return Object.freeze({ eligible: () => false, inert: () => true });
+    return Object.freeze({
+      eligible: () => false,
+      inert: () => true,
+      excluded: () => TASK_LINK_MARK_NO_RANGES,
+    });
   }
 }
 
@@ -66322,7 +66398,7 @@ class BobLedgerToolsTaskLinkMarksMixin {
           if (!TASK_LINK_MARK_LINE_PREFILTER.test(text)) {
             continue;
           }
-          const spans = taskLinkMarkSpans(text);
+          const spans = taskLinkMarkSpans(text, model.ctx.excluded(index));
           if (spans.length === 0 || !model.ctx.eligible(index)) {
             continue;
           }
@@ -66775,6 +66851,21 @@ class BobLedgerToolsTaskLinkMarksResolveMixin {
 
 const TASK_LINK_MARK_READING_DETACHED_RETRIES = 3;
 const TASK_LINK_MARK_READING_PENDING_RETRIES = 60;
+// How many stamped Reading anchors are remembered (weakly) so the sweep can
+// reach sections that Obsidian rendered and then detached from the page.
+const TASK_LINK_MARK_READING_TRACK_MAX = 2000;
+const TASK_LINK_MARK_READING_TRACK_SLACK = 250;
+
+// Managed-row recognition in rendered lists. Labels are case-sensitive, as
+// in the source parsers; the glyph set is the managed rows' own marks.
+const TASK_LINK_MARK_READING_LABELS =
+  "(?:DEPENDS ON|DEPENDENCIES|BLOCKS|BLOCKING|LINKS(?: TO)?|LINKED FROM|BACKLINKS|Sub-projects)";
+const TASK_LINK_MARK_READING_LEAD_TEXT_RE = /^[\s⛓🔗🪢🧱🚧🧩\uFE0F]*$/u;
+const TASK_LINK_MARK_READING_LABEL_RE = new RegExp(`^${TASK_LINK_MARK_READING_LABELS}\\s*:?$`, "u");
+const TASK_LINK_MARK_READING_FLAT_ROW_RE = new RegExp(
+  `^\\s*(?:(?:[-*+]|\\d+[.)])\\s+(?:[⛓🔗🪢🧱🚧🧩]\\uFE0F?\\s*)*|(?:[⛓🔗🪢🧱🚧🧩]\\uFE0F?\\s*)+)${TASK_LINK_MARK_READING_LABELS}\\s*:`,
+  "u",
+);
 
 class BobLedgerToolsTaskLinkMarksReadingMixin {
   setupTaskLinkMarksReading() {
@@ -67108,15 +67199,54 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
     }
   }
 
+  // The first significant child of a list item's own content: whitespace
+  // and glyph-only text, task checkboxes, and one level of loose-list `<p>`
+  // are looked through. Returns a node or null. Never throws.
+  taskLinkMarkReadingLeadNode(parent, depth = 0) {
+    try {
+      for (const child of Array.from((parent && parent.childNodes) || [])) {
+        if (!child) continue;
+        if (child.nodeType === 3) {
+          const value = String(child.nodeValue !== undefined && child.nodeValue !== null ? child.nodeValue : child.textContent || "");
+          if (TASK_LINK_MARK_READING_LEAD_TEXT_RE.test(value)) continue;
+          return child;
+        }
+        if (child.nodeType !== 1) continue;
+        const tag = this.taskLinkMarkReadingTag(child);
+        if (tag === "INPUT") continue;
+        if (tag === "P" && depth === 0) {
+          const inner = this.taskLinkMarkReadingLeadNode(child, 1);
+          if (inner) return inner;
+          continue;
+        }
+        return child;
+      }
+    } catch (error) {
+      // Fall through: no lead node means no structural verdict.
+    }
+    return null;
+  }
+
+  // Whether a rendered list item is a managed row (DEPENDS ON, BLOCKS,
+  // LINKS, LINKED FROM, Sub-projects, or their legacy labels). Ordinary
+  // prose that merely starts with a label word, such as "Links worth
+  // reading:", is not one. Three checks, any of which suffices:
+  // `mentionIsEdgeLine` on the row's own text (the source contract);
+  // structure, where the row leads with a bold managed label
+  // (`**DEPENDS ON:**` renders as <strong>DEPENDS ON:</strong>); and, for
+  // flattened rendered text, the exact uppercase label followed by a colon
+  // after a managed glyph or a literal bullet. Never throws.
   taskLinkMarkReadingOwnRowIsEdge(li) {
     try {
       if (typeof dependencyReadingOwnText !== "function") return false;
       const text = dependencyReadingOwnText(li);
       if (typeof mentionIsEdgeLine === "function" && mentionIsEdgeLine(text)) return true;
-      // Reading DOM text no longer contains the Markdown bold delimiters
-      // that the source-line parsers require. Match only rendered labels
-      // at the beginning of a list row, after the optional managed glyph.
-      return /^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:(?:⛓️?|🔗|🪢|🧱|🚧|🧩)\s+)?\*{0,2}(?:DEPENDS\s+ON|DEPENDENCIES|BLOCKS|BLOCKING|LINKS(?:\s+TO)?|LINKED\s+FROM|BACKLINKS|SUB-PROJECTS)\b\*{0,2}\s*:?/iu.test(text);
+      const lead = this.taskLinkMarkReadingLeadNode(li);
+      if (lead && lead.nodeType === 1 && ["STRONG", "B"].includes(this.taskLinkMarkReadingTag(lead))) {
+        const label = String(lead.textContent || "").replace(/\s+/gu, " ").trim();
+        if (TASK_LINK_MARK_READING_LABEL_RE.test(label)) return true;
+      }
+      return TASK_LINK_MARK_READING_FLAT_ROW_RE.test(text);
     } catch (error) {
       return false;
     }
@@ -67263,13 +67393,18 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
         this.taskLinkMarkReadingState = taskLinkMarkNewViewState();
       }
       const now = typeof this.taskLinkMarksNow === "function" ? this.taskLinkMarksNow() : Date.now();
-      const swap = taskLinkMarkSwapFor(
+      // A quiet reconcile (a ring that is off the page) records the new
+      // state but never swaps: nobody sees it change, and it must not
+      // animate when it is scrolled into view later.
+      const quiet = Boolean(options && options.quiet);
+      const swapped = taskLinkMarkSwapFor(
         this.taskLinkMarkReadingState,
         hit.key,
         hit.state,
         now,
-        Boolean(options && options.allowSwap),
+        Boolean(options && options.allowSwap) && !quiet,
       );
+      const swap = quiet ? false : swapped;
       const tooltip = taskLinkMarkTooltip({
         title: hit.title,
         state: hit.state,
@@ -67301,6 +67436,50 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
     } catch (error) {
       // A bad link never breaks the note renderer.
     }
+  }
+
+  // Obsidian post-processes every Reading section when a note opens, but
+  // keeps the ones outside the viewport in memory, detached from the page.
+  // A document sweep cannot see their anchors, so a status change made
+  // meanwhile would leave stale rings that reappear on scroll. Stamped
+  // anchors are therefore remembered weakly (bounded) and the sweep also
+  // visits the detached ones. Never throws.
+  taskLinkMarkReadingTrack(anchor) {
+    try {
+      if (!anchor || typeof WeakRef !== "function" || typeof WeakSet !== "function") return;
+      if (!(this.taskLinkMarkReadingTrackedSet instanceof WeakSet)) {
+        this.taskLinkMarkReadingTrackedSet = new WeakSet();
+      }
+      if (this.taskLinkMarkReadingTrackedSet.has(anchor)) return;
+      this.taskLinkMarkReadingTrackedSet.add(anchor);
+      if (!Array.isArray(this.taskLinkMarkReadingTracked)) this.taskLinkMarkReadingTracked = [];
+      this.taskLinkMarkReadingTracked.push(new WeakRef(anchor));
+      if (this.taskLinkMarkReadingTracked.length > TASK_LINK_MARK_READING_TRACK_MAX + TASK_LINK_MARK_READING_TRACK_SLACK) {
+        this.taskLinkMarkReadingTrackedAnchors();
+        const overflow = this.taskLinkMarkReadingTracked.length - TASK_LINK_MARK_READING_TRACK_MAX;
+        if (overflow > 0) this.taskLinkMarkReadingTracked.splice(0, overflow);
+      }
+    } catch (error) {
+      // Tracking is best-effort: the document sweep still covers the page.
+    }
+  }
+
+  // The live tracked anchors, dropping collected ones. Never throws.
+  taskLinkMarkReadingTrackedAnchors() {
+    const anchors = [];
+    try {
+      const alive = [];
+      for (const ref of Array.isArray(this.taskLinkMarkReadingTracked) ? this.taskLinkMarkReadingTracked : []) {
+        const anchor = ref && typeof ref.deref === "function" ? ref.deref() : null;
+        if (!anchor) continue;
+        alive.push(ref);
+        anchors.push(anchor);
+      }
+      this.taskLinkMarkReadingTracked = alive;
+    } catch (error) {
+      // A failed prune leaves the list as it was.
+    }
+    return anchors;
   }
 
   taskLinkMarkReadingAnchors(root, selector) {
@@ -67362,6 +67541,7 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
             continue;
           }
           this.taskLinkMarkReadingSetAttribute(anchor, "data-bob-task-link-src", sourcePath);
+          this.taskLinkMarkReadingTrack(anchor);
           this.taskLinkMarkReadingReconcile(anchor, sourcePath, { resolved });
         } catch (error) {
           continue;
@@ -67541,6 +67721,7 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
                 const sourcePath = this.taskLinkMarkReadingSourcePathFor(anchor, ctx, row);
                 if (!sourcePath) continue;
                 this.taskLinkMarkReadingSetAttribute(anchor, "data-bob-task-link-src", sourcePath);
+                this.taskLinkMarkReadingTrack(anchor);
                 this.taskLinkMarkReadingReconcile(anchor, sourcePath, { allowSwap, resolved });
               } catch (error) {
                 continue;
@@ -67549,6 +67730,21 @@ class BobLedgerToolsTaskLinkMarksReadingMixin {
           } catch (error) {
             continue;
           }
+        }
+      }
+      // Rendered sections that Obsidian detached (scrolled out of view)
+      // are in no document, so reconcile them here, quietly, in place.
+      for (const anchor of this.taskLinkMarkReadingTrackedAnchors()) {
+        try {
+          if (anchor.isConnected !== false) continue;
+          const sourcePath = this.taskLinkMarkReadingAttribute(anchor, "data-bob-task-link-src");
+          if (!sourcePath) {
+            this.taskLinkMarkReadingRemoveHost(anchor);
+            continue;
+          }
+          this.taskLinkMarkReadingReconcile(anchor, sourcePath, { allowSwap: false, quiet: true, resolved });
+        } catch (error) {
+          continue;
         }
       }
     } catch (error) {
@@ -74786,6 +74982,7 @@ module.exports.helpers = {
   taskLinkMarkStateFromSymbol,
   taskLinkMarkTooltip,
   taskLinkMarkDocContext,
+  taskLinkMarkIsManagedRowText,
   taskLinkMarkLiveDocModel,
   taskLinkMarkLiveLookup,
   taskLinkMarkLineIndexAt,

@@ -272,6 +272,19 @@ function dailyLedger(bodyLines) {
   ];
 }
 
+test("TS16-TS17 vectors verbatim: code delimiters and comment text", () => {
+  // TS16 `%%` in inline code is literal.
+  {
+    const spans = taskLinkMarkSpans("`%%` then [[bob#^fix]]");
+    assert.deepEqual(spans.map(spanSummary), [{ at: 10, linkpath: "bob", blockId: "fix", kind: "wiki", alias: null }]);
+  }
+  // TS17 text after a closed comment is prose.
+  {
+    const spans = taskLinkMarkSpans("%% hidden %% [[bob#^fix]]");
+    assert.deepEqual(spans.map(spanSummary), [{ at: 13, linkpath: "bob", blockId: "fix", kind: "wiki", alias: null }]);
+  }
+});
+
 test("TC vectors verbatim: document-level line eligibility", () => {
   // TC1 prose line in an area note.
   assert.equal(eligible(["See [[bob#^fix]] now"], 0, AREA), true);
@@ -329,6 +342,138 @@ test("TC vectors verbatim: document-level line eligibility", () => {
   assert.equal(eligible(["# See [[bob#^fix]]"], 0, AREA), true);
   assert.equal(eligible(["> See [[bob#^fix]]"], 0, AREA), true);
   assert.equal(eligible(["> [!note] See [[bob#^fix]]"], 0, AREA), true);
+});
+
+test("TC14-TC15 vectors: a closing fence matches its opener", () => {
+  const link = "[[bob#^fix]]";
+  // A four-backtick fence is not closed by a three-backtick line (the
+  // landing audit's reproduction): both the three-backtick line and the
+  // link inside stay fenced, and the four-backtick closer ends the fence.
+  const lines = ["````markdown", "```", link, "````", link];
+  assert.equal(eligible(lines, 2, AREA), false, "link inside a longer fence");
+  assert.equal(eligible(lines, 1, AREA), false, "shorter run inside a longer fence");
+  assert.equal(eligible(lines, 3, AREA), false, "the closing fence line");
+  assert.equal(eligible(lines, 4, AREA), true, "prose after the real closer");
+  // A longer closer closes a shorter opener.
+  assert.equal(eligible(["```", link, "`````", link], 3, AREA), true);
+  // Tilde fences: only a tilde run of enough length closes one, and a
+  // backtick run is content.
+  assert.equal(eligible(["~~~~", link, "~~~", link, "~~~~", link], 3, AREA), false);
+  assert.equal(eligible(["~~~~", link, "~~~", link, "~~~~", link], 5, AREA), true);
+  assert.equal(eligible(["~~~", link, "```", link, "~~~", link], 3, AREA), false);
+  assert.equal(eligible(["~~~", link, "```", link, "~~~", link], 5, AREA), true);
+  assert.equal(eligible(["```", link, "~~~", link, "```", link], 3, AREA), false);
+  // Fence-like content: a closing line cannot carry an info string, and
+  // trailing spaces are fine.
+  assert.equal(eligible(["```", "```js", link, "```  ", link], 2, AREA), false);
+  assert.equal(eligible(["```", "```js", link, "```  ", link], 4, AREA), true);
+  // A backtick fence's info string cannot hold a backtick, so the line is
+  // inline code and opens nothing.
+  assert.equal(eligible(["```a`b```", link], 1, AREA), true);
+  // An unclosed fence runs to the end of the document.
+  assert.equal(eligible(["```", link, link], 2, AREA), false);
+  // Indented fences (list-item nesting) open and close the same way.
+  assert.equal(eligible(["- item", "  ```", "  " + link, "  ```", "  " + link], 2, AREA), false);
+  assert.equal(eligible(["- item", "  ```", "  " + link, "  ```", "  " + link], 4, AREA), true);
+  // Fence lines never touch comment state, and comments never open fences.
+  assert.equal(eligible(["```", "%%", "```", link], 3, AREA), true);
+  assert.equal(eligible(["%%", "```", "%%", link], 3, AREA), true);
+  assert.equal(eligible(["%%", "```", link, "%%", link], 4, AREA), true);
+});
+
+test("TC16-TC17 vectors: code delimiters never open comments", () => {
+  const link = "[[bob#^fix]]";
+  // The landing audit's reproduction: `%%` in inline code is literal.
+  assert.equal(eligible(["`%%` is a literal delimiter", link], 1, AREA), true);
+  assert.equal(eligible(["``a %% b`` text", link], 1, AREA), true);
+  // The same line's own links stay eligible and scan normally.
+  assert.equal(
+    taskLinkMarkSpans("`%%` then [[bob#^fix]]").map(spanSummary).length,
+    1,
+  );
+  // A fenced `%%` run never changes later prose.
+  assert.equal(eligible(["```", "%%", "```", link], 3, AREA), true);
+  assert.equal(eligible(["```", "%% open", "```", "text", link], 4, AREA), true);
+  // A real `%%` outside the fence still opens a comment.
+  assert.equal(eligible(["```", "%% open", "```", "%% more", link], 4, AREA), false);
+  // Backticks inside a comment are comment text, not code.
+  assert.equal(eligible(["%% `", "still comment", "%%", link], 1, AREA), false);
+  assert.equal(eligible(["%% `", "still comment", "%%", link], 3, AREA), true);
+  // An unmatched backtick run is literal and does not hide a comment.
+  assert.equal(eligible(["a ` b %%", "hidden " + link, "%%", link], 1, AREA), false);
+  assert.equal(eligible(["a ` b %%", "hidden " + link, "%%", link], 3, AREA), true);
+});
+
+test("TC18 vector: real multi-line comments exclude only the comment", () => {
+  const link = "[[bob#^fix]]";
+  const lines = [
+    "before " + link + " %% opens here " + link,
+    "all hidden " + link,
+    "closes %% after " + link,
+    "plain " + link,
+  ];
+  const ctx = helpers.taskLinkMarkDocContext(lines, AREA);
+  // The opener and closer lines stay eligible; only the middle is inert.
+  assert.equal(ctx.eligible(0), true);
+  assert.equal(ctx.eligible(1), false);
+  assert.equal(ctx.inert(1), true);
+  assert.equal(ctx.eligible(2), true);
+  assert.equal(ctx.inert(2), false);
+  assert.equal(ctx.eligible(3), true);
+  // Span-level exclusions agree with the document: the link before the
+  // opening delimiter rings, the one after it does not.
+  const opener = taskLinkMarkSpans(lines[0], ctx.excluded(0));
+  assert.deepEqual(opener.map((span) => span.at), [7]);
+  // Text after the closing delimiter is prose again.
+  const closer = taskLinkMarkSpans(lines[2], ctx.excluded(2));
+  assert.deepEqual(closer.map((span) => span.at), [lines[2].indexOf("[[")]);
+  // Scanned alone, the closing line's stray `%%` looks like an opener, which
+  // is why the builder always passes the document's ranges.
+  assert.equal(taskLinkMarkSpans(lines[2]).length, 0);
+  // A comment closed on the same line as another opener keeps nesting out:
+  // `%% a %% text %% b` leaves `text` visible and opens a new comment.
+  const mixed = ["%% a %% " + link + " %% b", "hidden " + link, "%%", link];
+  const mixedCtx = helpers.taskLinkMarkDocContext(mixed, AREA);
+  assert.deepEqual(taskLinkMarkSpans(mixed[0], mixedCtx.excluded(0)).map((span) => span.at), [8]);
+  assert.equal(mixedCtx.eligible(1), false);
+  assert.equal(mixedCtx.eligible(3), true);
+  // Comment text inside frontmatter never opens a comment for the body.
+  assert.equal(eligible(["---", "note: '%%'", "---", link], 3, AREA), true);
+});
+
+test("TC19 vector: the managed row source fallback is anchored at the row start", () => {
+  const managed = helpers.taskLinkMarkIsManagedRowText;
+  for (const row of [
+    "⛓️ **DEPENDS ON:** [[#^a]]",
+    "⛓ **DEPENDS ON:** [[#^a]]",
+    "- ⛓️ **DEPENDS ON:** [[#^a]]",
+    "- [ ] **BLOCKS:** [[#^a]]",
+    "  - 🪢 **LINKS:** [[#^a]]",
+    "- **LINKED FROM:** [[#^a]]",
+    "- **LINKS**: [[#^a]]",
+    "- 🧩 **Sub-projects:** [[#^a]]",
+    "🧩 **Sub-projects:** [[#^a]]",
+    "- **DEPENDS ON** malformed [[#^a]]",
+  ]) {
+    assert.equal(managed(row), true, row);
+    assert.equal(eligible([row], 0, AREA), false, row);
+  }
+  // Prose that merely mentions a label word is not a managed row.
+  for (const prose of [
+    "Links worth reading: [[bob#^fix]]",
+    "- Links worth reading: [[bob#^fix]]",
+    "- see the **LINKS** section and [[bob#^fix]]",
+    "Review **LINKS** in [[bob#^fix]]",
+    "**LINKS:** without a list marker or glyph [[bob#^fix]]",
+    "- DEPENDS ON: plain [[bob#^fix]]",
+    "- **links** lower case [[bob#^fix]]",
+  ]) {
+    assert.equal(managed(prose), false, prose);
+    assert.equal(eligible([prose], 0, AREA), true, prose);
+  }
+  // The recognised `mentionIsEdgeLine` contract is unchanged: a bulleted
+  // line holding a managed label is a (malformed) managed row.
+  assert.equal(eligible(["- notes about **DEPENDS ON:** rows [[bob#^fix]]"], 0, AREA), false);
 });
 
 test("pure TR vectors verbatim: parser plus state model", () => {

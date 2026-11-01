@@ -33,6 +33,7 @@ const AREA_NOTE = [
   "- [ ] Pack charger ^plain-1",
   "Some text ^block-1",
   "- [ ] #task Follow up on [[areas/work#^ready-1|the ready task]] ^follow-1",
+  "- [ ] #task Swap target ^swap-1",
   "",
 ].join("\n");
 
@@ -83,6 +84,24 @@ const DAILY_NOTE = [
   "Daily notes prose: [[areas/work#^blocked-1]]",
   "",
 ].join("\n");
+
+// Swap sources. Each holds two instances of the swap target, an unrelated
+// already-Done ring and an unrelated Ready ring (controls that must never
+// animate), then a long run of filler and a tail instance that is far below
+// the first screen, so scrolling materialises it after the swap.
+const SWAP_FILLER = Array.from({ length: 120 }, (_, index) => `Filler paragraph ${index + 1}.\n`).join("\n");
+
+function swapSourceNote(kind) {
+  return [
+    `# Swap ${kind}`,
+    "",
+    `Swap ${kind} source: [[areas/work#^swap-1]] and again [[areas/work#^swap-1|alias]]. Control: [[areas/work#^done-1]] and [[areas/work#^ready-1]].`,
+    "",
+    SWAP_FILLER,
+    "Swap tail: [[areas/work#^swap-1]]",
+    "",
+  ].join("\n");
+}
 
 const QUERY_NOTE = [
   "# Queries",
@@ -185,7 +204,18 @@ function probeExecutable(executable) {
   } catch {
     return { ok: false, reason: `Obsidian executable is not executable: ${executable}` };
   }
-  const probed = spawnSync(executable, ["--help"], { encoding: "utf8", timeout: 20_000 });
+  // The probe starts the real app once, so give it a throwaway profile
+  // instead of the user's own Obsidian profile.
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-tlm-e2e-probe-"));
+  let probed;
+  try {
+    probed = spawnSync(executable, ["--no-sandbox", `--user-data-dir=${scratch}`, "--help"], {
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
   const combined = String((probed.stdout || "") + (probed.stderr || ""));
   if (/unable to find Obsidian/i.test(combined)) {
     return {
@@ -247,6 +277,8 @@ function buildFixture(vaultDir) {
   writeNote(path.join(vaultDir, "managed.md"), MANAGED_NOTE);
   writeNote(path.join(vaultDir, "2026/20261101.md"), DAILY_NOTE);
   writeNote(path.join(vaultDir, "queries.md"), QUERY_NOTE);
+  writeNote(path.join(vaultDir, "swap-live.md"), swapSourceNote("live"));
+  writeNote(path.join(vaultDir, "swap-reading.md"), swapSourceNote("reading"));
 
   const enabled = [];
   for (const plugin of readExpectedPlugins()) {
@@ -295,6 +327,8 @@ function buildFixture(vaultDir) {
     managed: "managed.md",
     daily: "2026/20261101.md",
     queries: "queries.md",
+    swapLive: "swap-live.md",
+    swapReading: "swap-reading.md",
     enabled,
     tasksPlugin,
   };
@@ -631,10 +665,127 @@ function runSelfTest() {
     }
     const readingState = markdownViewState("preview");
     if (readingState.mode !== "preview") throw new Error("Reading view must open as mode:preview");
+    runSwapSelfTest(tmp, fixture);
     console.log("offline self-test complete (not an Obsidian pass)");
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+// Offline checks for the natural-refresh and single-swap acceptance logic.
+// These prove the judges reject the weak evidence the old check accepted (a
+// boolean "saw a swap", an unrelated Done ring, a forced refresh) without
+// needing a real Obsidian.
+function runSwapSelfTest(tmp, fixture) {
+  const assertThat = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+
+  // Fixtures: a dedicated swap target, two instances plus controls per source,
+  // and a tail instance below a long run of filler.
+  const area = fs.readFileSync(path.join(tmp, fixture.area), "utf8");
+  assertThat(area.includes("- [ ] #task Swap target ^swap-1"), "area note missing the swap target");
+  for (const [file, kind] of [[fixture.swapLive, "live"], [fixture.swapReading, "reading"]]) {
+    const note = fs.readFileSync(path.join(tmp, file), "utf8");
+    const first = note.split("\n").find((line) => line.startsWith(`Swap ${kind} source:`)) || "";
+    assertThat((first.match(/\^swap-1/g) || []).length === 2, `${file} must link the swap target twice in its first paragraph`);
+    assertThat(first.includes("^done-1") && first.includes("^ready-1"), `${file} must hold an unrelated Done and Ready control`);
+    assertThat(note.includes("Filler paragraph 120."), `${file} must hold enough filler to scroll`);
+    assertThat(note.trimEnd().split("\n").pop().startsWith("Swap tail:"), `${file} must end with the tail instance`);
+  }
+
+  // Ring identity comes from block text and ordinal, never from state.
+  const fakeBlock = (text, count) => {
+    const rings = Array.from({ length: count }, () => ({ closest: () => block }));
+    const block = {
+      textContent: text,
+      querySelectorAll: () => rings,
+    };
+    return { block, rings };
+  };
+  const roleOfRing = (text, count, index) => {
+    const { block, rings } = fakeBlock(text, count);
+    const ring = rings[index];
+    ring.closest = (selector) => (/cm-line|p/.test(selector) ? block : null);
+    return ringRole(ring);
+  };
+  const liveText = "Swap live source: areas/work > ^swap-1 and again alias. Control: a and b.";
+  assertThat(
+    [0, 1, 2, 3].map((index) => roleOfRing(liveText, 4, index)).join(",") === "target,target,control-done,control-ready",
+    "ring roles by ordinal",
+  );
+  assertThat(roleOfRing("Swap tail: areas/work > ^swap-1", 1, 0) === "target", "tail ring is a target");
+  assertThat(roleOfRing("See the six: x", 6, 0) === "other", "other blocks are not swap rings");
+  assertThat(ringSurface({ closest: (selector) => (selector === ".cm-editor" ? {} : null) }) === "live", "Live Preview surface");
+  assertThat(ringSurface({ closest: (selector) => (/markdown-preview-view/.test(selector) ? {} : null) }) === "reading", "Reading surface");
+
+  // A good swap: two rendered instances per surface, each animated once.
+  const ring = (id, surface, role, state) => ({ id, surface, role, state, visible: true });
+  const start = (id, surface, role, state = "done", animationName = SWAP_ANIMATION) => ({ id, surface, role, state, animationName });
+  const before = [
+    ring(1, "live", "target", "ready"), ring(2, "live", "target", "ready"),
+    ring(3, "live", "control-done", "done"), ring(4, "live", "control-ready", "ready"),
+    ring(5, "reading", "target", "ready"), ring(6, "reading", "target", "ready"),
+    ring(7, "reading", "control-done", "done"), ring(8, "reading", "control-ready", "ready"),
+  ];
+  const after = [
+    ring(11, "live", "target", "done"), ring(12, "live", "target", "done"),
+    ring(3, "live", "control-done", "done"), ring(4, "live", "control-ready", "ready"),
+    ring(5, "reading", "target", "done"), ring(6, "reading", "target", "done"),
+    ring(7, "reading", "control-done", "done"), ring(8, "reading", "control-ready", "ready"),
+  ];
+  const goodStarts = [
+    start(11, "live", "target"), start(12, "live", "target"),
+    start(5, "reading", "target"), start(6, "reading", "target"),
+  ];
+  const good = judgeSwap({ before, after, starts: goodStarts });
+  assertThat(good.ok, `a clean swap must pass: ${good.problems.join("; ")}`);
+  assertThat(good.summary.live.targetStarts === 2 && good.summary.reading.distinctElements === 2, "good swap summary");
+
+  const mustFail = (name, input, pattern) => {
+    const verdict = judgeSwap(input);
+    assertThat(!verdict.ok, `${name} must fail`);
+    assertThat(pattern.test(verdict.problems.join("; ")), `${name} must report ${pattern}: ${verdict.problems.join("; ")}`);
+  };
+  // The old check: only "some Done ring swapped". An unrelated Done control
+  // animating, with no target swap, is not success.
+  mustFail("an unrelated Done ring animating alone",
+    { before, after, starts: [start(3, "live", "control-done"), start(7, "reading", "control-done")] },
+    /expected exactly 2 swap start/);
+  mustFail("no animation at all", { before, after, starts: [] }, /expected exactly 2 swap start/);
+  mustFail("one surface never swapping",
+    { before, after, starts: goodStarts.filter((entry) => entry.surface === "live") }, /reading: expected exactly 2/);
+  mustFail("a target ring animating twice",
+    { before, after, starts: [...goodStarts, start(11, "live", "target")] }, /more than once|expected exactly 2/);
+  mustFail("an extra swap on a control",
+    { before, after, starts: [...goodStarts, start(4, "reading", "control-ready", "ready")] }, /unrelated ring/);
+  mustFail("a stale target ring",
+    { before, after: after.map((entry) => (entry.id === 12 ? { ...entry, state: "ready" } : entry)), starts: goodStarts }, /not Done after/);
+  mustFail("a target that was already Done before",
+    { before: before.map((entry) => (entry.id === 1 ? { ...entry, state: "done" } : entry)), after, starts: goodStarts }, /not Ready before/);
+  mustFail("a control ring that changed",
+    { before, after: after.map((entry) => (entry.id === 4 ? { ...entry, state: "done" } : entry)), starts: goodStarts }, /control-ready changed/);
+  mustFail("no rendered rings", { before: [], after: [], starts: [] }, /no rendered target ring/);
+  // Animations other than the swap never count.
+  mustFail("a different animation name",
+    { before, after, starts: goodStarts.map((entry) => ({ ...entry, animationName: "other" })) }, /expected exactly 2 swap start/);
+
+  // Quiet steps: first paint, unchanged refresh, scroll, rerender.
+  assertThat(judgeQuiet("first paint", [], 0).ok, "no starts is quiet");
+  assertThat(judgeQuiet("scroll", goodStarts, goodStarts.length).ok, "no new starts since the baseline is quiet");
+  const noisy = judgeQuiet("rerender", [...goodStarts, start(20, "live", "target")], goodStarts.length);
+  assertThat(!noisy.ok && /rerender: unexpected swap start on live\/target/.test(noisy.problems.join(";")), "a new start after the baseline fails");
+  assertThat(!judgeQuiet("first paint", [start(1, "reading", "target", "ready")], 0).ok, "a first-paint swap fails");
+
+  // The acceptance path may not drive the refresh itself. The only mention of
+  // the refresh methods is the count-only spy, which wraps by name.
+  const source = fs.readFileSync(__filename, "utf8");
+  const forced = new RegExp(
+    ["\\.(?:run|schedule)Task", "LinkMarksRefresh\\(|\\.sweepTask", "LinkMarksReading\\(|\\.refreshTask", "LinkMarkEditors\\("].join(""),
+  );
+  assertThat(!forced.test(source), "the e2e must not call the plugin's refresh methods; trigger a normal task edit and observe");
+  assertThat(/animationstart/.test(ANIM_INSTALL), "the recorder must count real animationstart events");
+  assertThat(!source.includes(["swap-once", '", ', "saw", "Swap,"].join("")), "swap-once must be judged from counted starts, not a boolean");
 }
 
 async function openNote(client, file, mode) {
@@ -687,6 +838,236 @@ function statesOf(probe, needle) {
 function visibleStates(probe) {
   const marks = probe && Array.isArray(probe.marks) ? probe.marks : [];
   return marks.filter((mark) => mark && mark.visible !== false).map((mark) => mark.state).sort();
+}
+
+// --- Natural cross-note refresh and single-swap evidence ----------------------
+//
+// The swap fixtures hold two instances of one target task per source, plus
+// an unrelated already-Done ring and an unrelated Ready ring (controls). A
+// ring's identity in the page comes from its block text and ordinal, never
+// from its state, so an already-Done control can never be mistaken for the
+// ring that changed. The page records every real CSS `animationstart` of the
+// swap animation per ring element; the judges below turn that record into
+// verdicts. The acceptance path triggers only a normal task edit and then
+// watches: it never calls the plugin's refresh methods itself.
+
+const SWAP_ANIMATION = "bob-task-link-mark-swap";
+const SWAP_REFRESH_BOUND_MS = 3000;
+const SWAP_SURFACES = ["live", "reading"];
+
+// Page-side helpers; serialised into the probes with Function.prototype
+// .toString, so they must stay self-contained (no closure references).
+function ringSurface(el) {
+  if (el.closest(".cm-editor")) return "live";
+  if (el.closest(".markdown-preview-view, .markdown-reading-view, .markdown-rendered")) return "reading";
+  return "other";
+}
+
+function ringRole(el) {
+  const block = el.closest(".cm-line, p");
+  if (!block) return "other";
+  const text = String(block.textContent || "").replace(/\s+/g, " ").trim();
+  const rings = Array.from(block.querySelectorAll(".bob-task-link-mark"));
+  const ordinal = rings.indexOf(el);
+  if (/^Swap (live|reading) source/.test(text)) {
+    return ordinal < 2 ? "target" : ordinal === 2 ? "control-done" : "control-ready";
+  }
+  if (/^Swap tail/.test(text)) return "target";
+  return "other";
+}
+
+const ANIM_INSTALL = `(() => {
+  const ringSurface = ${ringSurface.toString()};
+  const ringRole = ${ringRole.toString()};
+  const previous = window.__tlmAnim;
+  if (previous) {
+    previous.starts.length = 0;
+    return { installed: true, reused: true };
+  }
+  const rec = { starts: [], ids: new WeakMap(), next: 1 };
+  rec.idOf = (el) => {
+    if (!rec.ids.has(el)) rec.ids.set(el, rec.next++);
+    return rec.ids.get(el);
+  };
+  document.addEventListener("animationstart", (event) => {
+    const el = event.target;
+    if (!el || !el.classList || !el.classList.contains("bob-task-link-mark")) return;
+    rec.starts.push({
+      id: rec.idOf(el),
+      animationName: event.animationName,
+      surface: ringSurface(el),
+      role: ringRole(el),
+      state: el.getAttribute("data-state"),
+      at: Math.round(performance.now()),
+    });
+  }, true);
+  window.__tlmAnim = rec;
+  return { installed: true, reused: false };
+})()`;
+
+// Every ring in the page with its identity, plus the animation starts so
+// far and the plugin's own schedule/run call counts (observational spies).
+const SWAP_SNAPSHOT_PROBE = `(() => { try {
+  const ringSurface = ${ringSurface.toString()};
+  const ringRole = ${ringRole.toString()};
+  const rec = window.__tlmAnim;
+  if (!rec) return { error: "animation recorder missing", rings: [], starts: [] };
+  const visible = (el) => {
+    if (!el || !el.getClientRects || el.getClientRects().length === 0) return false;
+    let node = el;
+    while (node && node.nodeType === 1) {
+      const style = window.getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      node = node.parentElement;
+    }
+    return true;
+  };
+  const rings = Array.from(document.querySelectorAll(".bob-task-link-mark")).map((el) => ({
+    id: rec.idOf(el),
+    surface: ringSurface(el),
+    role: ringRole(el),
+    state: el.getAttribute("data-state"),
+    label: el.getAttribute("aria-label") || "",
+    swap: el.classList.contains("bob-task-link-mark-swap"),
+    visible: visible(el),
+  }));
+  const spy = window.__tlmSpy || { schedule: 0, run: 0 };
+  return { rings, starts: rec.starts.slice(), spy: { schedule: spy.schedule, run: spy.run } };
+} catch (e) { return { error: String(e && e.message || e), rings: [], starts: [] }; } })()`;
+
+// Count-only spies on the plugin's coalesced refresh. They observe the
+// natural event path (metadata, vault, and Tasks events call these) and
+// never call, schedule, or replace the behaviour.
+const SPY_INSTALL = `(() => {
+  const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+  if (!plugin) return { error: "plugin missing" };
+  if (window.__tlmSpy) return { reused: true };
+  const spy = { schedule: 0, run: 0 };
+  const wrap = (name, key) => {
+    const original = plugin[name];
+    if (typeof original !== "function") return;
+    plugin[name] = function spied() {
+      spy[key] += 1;
+      return original.apply(this, arguments);
+    };
+  };
+  wrap("scheduleTaskLinkMarksRefresh", "schedule");
+  wrap("runTaskLinkMarksRefresh", "run");
+  window.__tlmSpy = spy;
+  return { installed: true };
+})()`;
+
+// Computed motion of a swapped ring in the real app, under the production
+// stylesheet and Obsidian's own CSS. Reduced motion is emulated through CDP.
+const MOTION_PROBE = `(() => {
+  const host = document.createElement("span");
+  host.className = "bob-task-link-mark bob-task-link-mark-swap";
+  host.setAttribute("data-state", "ready");
+  document.body.appendChild(host);
+  const style = getComputedStyle(host);
+  const out = {
+    reduced: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    gate: document.body.classList.contains("bob-task-link-marks"),
+    animationName: style.animationName,
+    transitionDuration: style.transitionDuration,
+  };
+  host.remove();
+  return out;
+})()`;
+
+// Reading-view section state, for triage when a ring is stale after a scroll:
+// whether Obsidian keeps rendered sections detached from the page, and what
+// each section's rings say. Read-only; uses Obsidian's renderer internals.
+const READING_SECTIONS_PROBE = `(() => { try {
+  const { readingLeaf } = window.__tlmLeaves || {};
+  const renderer = readingLeaf && readingLeaf.view && readingLeaf.view.previewMode && readingLeaf.view.previewMode.renderer;
+  const sections = renderer && Array.isArray(renderer.sections) ? renderer.sections : [];
+  return {
+    total: sections.length,
+    sections: sections
+      .map((section, index) => {
+        const el = section && section.el;
+        const rings = el && el.querySelectorAll ? Array.from(el.querySelectorAll(".bob-task-link-mark")) : [];
+        return {
+          index,
+          rendered: Boolean(section && section.rendered),
+          connected: Boolean(el && el.isConnected),
+          rings: rings.map((ring) => ring.getAttribute("data-state")),
+          text: el ? String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 40) : "",
+        };
+      })
+      .filter((entry) => entry.rings.length > 0 || /Swap/.test(entry.text)),
+  };
+} catch (e) { return { error: String(e && e.message || e) }; } })()`;
+
+function ringsFor(rings, surface, role) {
+  return (Array.isArray(rings) ? rings : []).filter(
+    (ring) => ring && ring.surface === surface && ring.role === role && ring.visible !== false,
+  );
+}
+
+function swapStartsFor(starts, surface) {
+  return (Array.isArray(starts) ? starts : []).filter(
+    (start) => start && start.surface === surface && start.animationName === SWAP_ANIMATION,
+  );
+}
+
+// Verdict for the natural status change. `before` and `after` are ring
+// lists; `starts` is the animation-start record covering only the window
+// between them. Exactly one swap start per rendered target instance on each
+// surface, each on its own element, none on a control ring, and every
+// rendered target ring Done afterwards. Returns {ok, problems, summary}.
+function judgeSwap(input) {
+  const problems = [];
+  const summary = {};
+  const { before, after, starts } = input || {};
+  for (const surface of SWAP_SURFACES) {
+    const rendered = ringsFor(before, surface, "target");
+    const expected = rendered.length;
+    const notReady = rendered.filter((ring) => ring.state !== "ready");
+    const afterTargets = ringsFor(after, surface, "target");
+    const notDone = afterTargets.filter((ring) => ring.state !== "done");
+    const surfaceStarts = swapStartsFor(starts, surface);
+    const targetStarts = surfaceStarts.filter((start) => start.role === "target");
+    const otherStarts = surfaceStarts.filter((start) => start.role !== "target");
+    const distinct = new Set(targetStarts.map((start) => start.id));
+    summary[surface] = {
+      renderedBefore: expected,
+      doneAfter: afterTargets.length - notDone.length,
+      targetStarts: targetStarts.length,
+      distinctElements: distinct.size,
+      otherStarts: otherStarts.length,
+    };
+    if (expected === 0) problems.push(`${surface}: no rendered target ring before the change`);
+    if (notReady.length) problems.push(`${surface}: ${notReady.length} target ring(s) were not Ready before the change`);
+    if (afterTargets.length < expected) problems.push(`${surface}: ${afterTargets.length} target ring(s) after, ${expected} before`);
+    if (notDone.length) problems.push(`${surface}: target ring(s) not Done after the edit: ${notDone.map((ring) => ring.state).join(",")}`);
+    if (targetStarts.length !== expected) {
+      problems.push(`${surface}: expected exactly ${expected} swap start(s) (one per rendered instance), saw ${targetStarts.length}`);
+    }
+    if (distinct.size !== targetStarts.length) {
+      problems.push(`${surface}: a target ring played the swap more than once (${targetStarts.length} starts on ${distinct.size} element(s))`);
+    }
+    if (otherStarts.length) {
+      problems.push(`${surface}: unrelated ring(s) animated: ${otherStarts.map((start) => `${start.role}/${start.state}`).join(",")}`);
+    }
+    for (const role of ["control-done", "control-ready"]) {
+      const was = ringsFor(before, surface, role).map((ring) => ring.state).join(",");
+      const now = ringsFor(after, surface, role).map((ring) => ring.state).join(",");
+      if (was !== now) problems.push(`${surface}: ${role} changed from ${was || "none"} to ${now || "none"}`);
+    }
+  }
+  return { ok: problems.length === 0, problems, summary };
+}
+
+// Verdict for a step that must not create a swap: first paint, an unchanged
+// refresh, scrolling, or a rerender. `baseline` is how many swap starts were
+// already recorded before the step.
+function judgeQuiet(label, starts, baseline) {
+  const all = (Array.isArray(starts) ? starts : []).filter((start) => start && start.animationName === SWAP_ANIMATION);
+  const extra = all.slice(baseline);
+  const problems = extra.map((start) => `${label}: unexpected swap start on ${start.surface}/${start.role} (${start.state})`);
+  return { ok: problems.length === 0, problems, count: all.length };
 }
 
 async function waitForMarks(client, predicate, label, timeoutMs = 8000) {
@@ -874,75 +1255,268 @@ async function runE2e(parsed) {
     record("reading-depends-none", statesOf(managedReading, /DEPENDS ON/).length === 0, statesOf(managedReading, /DEPENDS ON/).join(","));
     record("reading-links-none", statesOf(managedReading, /LINKS:/).length === 0, statesOf(managedReading, /LINKS:/).join(","));
 
-    await openNote(client, fixture.prose, "live");
-    await sleep(400);
-    await waitForMarks(client, (value) => statesOf(value, /See the six/).includes("ready"), "prose-ready-before-complete", 8000);
-
-    const completed = await client.evaluate(
+    // --- Natural cross-note refresh, one swap per rendered instance ------------
+    // Two sources stay open side by side: swap-live.md in Live Preview and
+    // swap-reading.md in Reading view. Each links the swap target twice and
+    // holds an unrelated Done ring and an unrelated Ready ring. The only
+    // trigger is an ordinary edit of the target task in a third note, then we
+    // watch the DOM and the real CSS animation starts.
+    const snapshot = () => client
+      .evaluate(SWAP_SNAPSHOT_PROBE)
+      .catch((error) => ({ error: String(error && error.message || error), rings: [], starts: [] }));
+    const editArea = (from, to) => client.evaluate(
       `(() => (async () => {
-        const target = ${JSON.stringify(fixture.area)};
-        const abstract = window.app.vault.getAbstractFileByPath(target);
-        if (!abstract) return { ok: false, error: "missing " + target };
+        const abstract = window.app.vault.getAbstractFileByPath(${JSON.stringify(fixture.area)});
+        if (!abstract) return { ok: false, error: "missing area note" };
         const text = await window.app.vault.read(abstract);
-        const next = text.replace("- [ ] #task Ready task ^ready-1", "- [x] #task Ready task ^ready-1");
-        if (next === text) return { ok: false, error: "ready line not found" };
+        const next = text.replace(${JSON.stringify(from)}, ${JSON.stringify(to)});
+        if (next === text) return { ok: false, error: "line not found: " + ${JSON.stringify(from)} };
         await window.app.vault.modify(abstract, next);
         return { ok: true };
       })())()`,
       lib.RPC_TIMEOUT_MS,
     );
-    record("complete-ready-task", completed && completed.ok, completed && (completed.error || "modified"));
+    const quiet = async (name, label, baseline, waitMs) => {
+      await sleep(waitMs);
+      const now = await snapshot();
+      const verdict = judgeQuiet(label, now.starts, baseline);
+      record(name, verdict.ok, verdict.ok ? `${verdict.count} swap start(s) total` : verdict.problems.join("; "));
+      return now;
+    };
 
-    const RESOLVE_PROBE = `(() => { try {
-      const plugin = window.app.plugins.plugins["bob-ledger-tools"];
-      const hit = plugin && typeof plugin.taskLinkMarkResolve === "function"
-        ? plugin.taskLinkMarkResolve({ linkpath: "areas/work", blockId: "ready-1", sourcePath: "prose.md" })
-        : null;
-      const tasksPlugin = window.app.plugins.plugins["obsidian-tasks-plugin"];
-      const tasks = tasksPlugin && typeof tasksPlugin.getTasks === "function" ? tasksPlugin.getTasks() : [];
-      const task = (Array.isArray(tasks) ? tasks : []).find((row) => row && (row.blockId === "ready-1" || /\\^ready-1/.test(String(row.originalMarkdown || ""))));
-      const cache = window.app.metadataCache.getCache("areas/work.md");
-      const block = cache && cache.blocks && (cache.blocks["ready-1"] || cache.blocks["^ready-1"]);
-      const line = block && block.position && block.position.start && block.position.start.line;
-      const item = Array.isArray(cache && cache.listItems) ? cache.listItems.find((entry) => entry && entry.position && entry.position.start && entry.position.start.line === line) : null;
-      return {
-        state: hit && hit.state || null,
-        taskSymbol: task && task.status && (task.status.symbol || task.status.name) || (task && task.status) || null,
-        cacheTask: item && item.task || null,
-      };
-    } catch (e) { return { error: String(e && e.message || e) }; } })()`;
+    const spyInstalled = await client.evaluate(SPY_INSTALL);
+    record("swap-spies-installed", Boolean(spyInstalled && !spyInstalled.error), JSON.stringify(spyInstalled));
+    await client.evaluate(ANIM_INSTALL);
 
-    let sawSwap = false;
-    let afterComplete = null;
-    let resolveProbe = null;
-    let forcedRefresh = false;
-    const swapDeadline = Date.now() + REFRESH_WAIT_MS;
-    while (Date.now() < swapDeadline) {
-      resolveProbe = await client.evaluate(RESOLVE_PROBE).catch((error) => ({ error: String(error && error.message || error) }));
-      if (resolveProbe && resolveProbe.state === "done" && !forcedRefresh) {
-        forcedRefresh = true;
-        await client.evaluate(`(() => {
-          const plugin = window.app.plugins.plugins["bob-ledger-tools"];
-          if (plugin && typeof plugin.runTaskLinkMarksRefresh === "function") plugin.runTaskLinkMarksRefresh(true);
-          return true;
-        })()`);
-      }
-      afterComplete = await client.evaluate(MARKS_PROBE).catch((error) => ({ error: String(error && error.message || error), marks: [] }));
-      const six = afterComplete && afterComplete.marks
-        ? afterComplete.marks.filter((mark) => mark && mark.visible !== false && /See the six/.test(String(mark.context || "")))
-        : [];
-      if (six.some((mark) => mark.swap && mark.state === "done")) sawSwap = true;
-      if (six.some((mark) => mark.state === "done") && sawSwap) break;
-      if (six.some((mark) => mark.state === "done") && forcedRefresh && Date.now() > swapDeadline - 500) break;
-      await sleep(20);
+    const layout = await client.evaluate(
+      `(() => (async () => {
+        const ws = window.app.workspace;
+        const file = (p) => window.app.vault.getAbstractFileByPath(p);
+        const liveFile = file(${JSON.stringify(fixture.swapLive)});
+        const readingFile = file(${JSON.stringify(fixture.swapReading)});
+        if (!liveFile || !readingFile) return { ok: false, error: "swap source missing" };
+        const liveLeaf = ws.getLeaf(false);
+        await liveLeaf.openFile(liveFile, { state: { mode: "source", source: false } });
+        const readingLeaf = ws.getLeaf("split", "vertical");
+        await readingLeaf.openFile(readingFile, { state: { mode: "preview", source: false } });
+        window.__tlmLeaves = { liveLeaf, readingLeaf };
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        return {
+          ok: true,
+          live: liveLeaf.view.getState().mode + "/" + liveLeaf.view.getState().source,
+          reading: readingLeaf.view.getState().mode,
+        };
+      })())()`,
+      lib.RPC_TIMEOUT_MS,
+    );
+    record("swap-sources-open", layout && layout.ok && layout.live === "source/false" && layout.reading === "preview", JSON.stringify(layout));
+
+    const bothRendered = (value) => SWAP_SURFACES.every((surface) => ringsFor(value && value.rings, surface, "target").length >= 2);
+    let opened = await snapshot();
+    const renderDeadline = Date.now() + 10_000;
+    while (!bothRendered(opened) && Date.now() < renderDeadline) {
+      await sleep(150);
+      opened = await snapshot();
     }
-    const sixAfter = statesOf(afterComplete, /See the six/);
+    record(
+      "swap-sources-rendered",
+      bothRendered(opened),
+      SWAP_SURFACES.map((surface) => `${surface}=${ringsFor(opened.rings, surface, "target").map((ring) => ring.state).join(",")}`).join(" "),
+    );
+    // First paint: rings appear with no swap animation, on both surfaces.
+    await quiet("swap-first-paint-none", "first paint", 0, 800);
+
+    // An unchanged refresh: an ordinary edit of an unrelated line in the
+    // target note fires the same events but changes no ring.
+    const unrelated = await editArea("Some text ^block-1", "Some text, edited ^block-1");
+    record("swap-unrelated-edit", unrelated && unrelated.ok, unrelated && (unrelated.error || "modified"));
+    await quiet("swap-unchanged-refresh-none", "unchanged refresh", 0, 1500);
+
+    // The change under test.
+    const beforeChange = await snapshot();
+    const spyBefore = beforeChange.spy || { schedule: 0, run: 0 };
+    const baseline = beforeChange.starts.length;
+    const changedAt = Date.now();
+    const completed = await editArea("- [ ] #task Swap target ^swap-1", "- [x] #task Swap target ^swap-1");
+    record("complete-swap-target", completed && completed.ok, completed && (completed.error || "modified"));
+    const updatedAfterMs = {};
+    let latest = beforeChange;
+    while (Date.now() - changedAt < SWAP_REFRESH_BOUND_MS) {
+      latest = await snapshot();
+      for (const surface of SWAP_SURFACES) {
+        const targets = ringsFor(latest.rings, surface, "target");
+        if (updatedAfterMs[surface] === undefined && targets.length > 0 && targets.every((ring) => ring.state === "done")) {
+          updatedAfterMs[surface] = Date.now() - changedAt;
+        }
+      }
+      if (SWAP_SURFACES.every((surface) => updatedAfterMs[surface] !== undefined)) break;
+      await sleep(40);
+    }
+    for (const surface of SWAP_SURFACES) {
+      const name = surface === "live" ? "cross-note-live-preview-updates" : "cross-note-reading-updates";
+      const ms = updatedAfterMs[surface];
+      record(name, ms !== undefined, ms !== undefined
+        ? `target ring Done ${ms}ms after the edit (bound ${SWAP_REFRESH_BOUND_MS}ms)`
+        : `still ${ringsFor(latest.rings, surface, "target").map((ring) => ring.state).join(",") || "no rings"} after ${SWAP_REFRESH_BOUND_MS}ms`);
+    }
+    // Let any duplicate swap show itself before judging.
+    await sleep(1500);
+    const afterChange = await snapshot();
+    const spyAfter = afterChange.spy || { schedule: 0, run: 0 };
+    record(
+      "cross-note-natural-events",
+      spyAfter.schedule > spyBefore.schedule && spyAfter.run > spyBefore.run,
+      `coalesced refresh scheduled ${spyAfter.schedule - spyBefore.schedule}x and ran ${spyAfter.run - spyBefore.run}x from vault/metadata/Tasks events; the harness never calls it`,
+    );
+    const swapVerdict = judgeSwap({
+      before: beforeChange.rings,
+      after: afterChange.rings,
+      starts: afterChange.starts.slice(baseline),
+    });
+    const swapPerSurface = (surface) => {
+      const entry = swapVerdict.summary[surface];
+      return `${entry.targetStarts} swap start(s) on ${entry.distinctElements} element(s) for ${entry.renderedBefore} rendered instance(s); ${entry.otherStarts} unrelated`;
+    };
     record(
       "cross-note-ready-becomes-done",
-      sixAfter.includes("done") && !sixAfter.includes("ready"),
-      `${sixAfter.join(",")} resolve=${JSON.stringify(resolveProbe)}`,
+      SWAP_SURFACES.every((surface) => swapVerdict.summary[surface].doneAfter === swapVerdict.summary[surface].renderedBefore && swapVerdict.summary[surface].renderedBefore > 0),
+      SWAP_SURFACES.map((surface) => `${surface}: ${swapVerdict.summary[surface].doneAfter}/${swapVerdict.summary[surface].renderedBefore} Done`).join("; "),
     );
-    record("cross-note-swap-once", sawSwap, `sawSwap=${sawSwap} resolve=${resolveProbe && resolveProbe.state}`);
+    record("cross-note-swap-once", swapVerdict.ok, swapVerdict.ok
+      ? SWAP_SURFACES.map((surface) => `${surface}: ${swapPerSurface(surface)}`).join("; ")
+      : swapVerdict.problems.join("; "));
+    const settledStarts = afterChange.starts.length;
+    report.swap = {
+      refreshBoundMs: SWAP_REFRESH_BOUND_MS,
+      updatedAfterMs,
+      verdict: swapVerdict,
+      starts: afterChange.starts,
+      spy: { before: spyBefore, after: spyAfter },
+    };
+
+    // Nothing further may swap: another unchanged refresh, scrolling the
+    // tail instances into view, and rerendering both surfaces.
+    const unrelatedAgain = await editArea("Some text, edited ^block-1", "Some text, edited again ^block-1");
+    record("swap-unrelated-edit-after", unrelatedAgain && unrelatedAgain.ok, unrelatedAgain && (unrelatedAgain.error || "modified"));
+    await quiet("swap-unchanged-refresh-after-none", "unchanged refresh after the swap", settledStarts, 1500);
+
+    const scrollTo = (bottom) => client.evaluate(
+      `(() => (async () => {
+        const { liveLeaf, readingLeaf } = window.__tlmLeaves;
+        const cm = liveLeaf.view.editor.cm;
+        const reading = readingLeaf.view.containerEl.querySelector(".markdown-preview-view");
+        const bottom = ${bottom ? "true" : "false"};
+        cm.scrollDOM.scrollTop = bottom ? cm.scrollDOM.scrollHeight : 0;
+        if (reading) reading.scrollTop = bottom ? reading.scrollHeight : 0;
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        return {
+          live: { top: Math.round(cm.scrollDOM.scrollTop), height: cm.scrollDOM.scrollHeight, client: cm.scrollDOM.clientHeight },
+          reading: reading ? { top: Math.round(reading.scrollTop), height: reading.scrollHeight, client: reading.clientHeight } : null,
+        };
+      })())()`,
+      lib.RPC_TIMEOUT_MS,
+    );
+    const bottomScroll = await scrollTo(true);
+    const atBottom = await snapshot();
+    const scrolled = SWAP_SURFACES.every((surface) => bottomScroll && bottomScroll[surface] && bottomScroll[surface].top > 0);
+    record("swap-scrolled-to-tail", scrolled, JSON.stringify(bottomScroll));
+    const tailStates = SWAP_SURFACES.map((surface) => `${surface}=${ringsFor(atBottom.rings, surface, "target").map((ring) => ring.state).join(",")}`);
+    record(
+      "swap-tail-rings-done",
+      SWAP_SURFACES.every((surface) => {
+        const targets = ringsFor(atBottom.rings, surface, "target");
+        return targets.length > 0 && targets.every((ring) => ring.state === "done");
+      }),
+      tailStates.join(" ") + " sections=" + JSON.stringify(await client.evaluate(READING_SECTIONS_PROBE)),
+    );
+    await scrollTo(false);
+    await quiet("swap-scroll-none", "scrolling", settledStarts, 600);
+
+    const rerendered = await client.evaluate(
+      `(() => (async () => {
+        const { liveLeaf, readingLeaf } = window.__tlmLeaves;
+        readingLeaf.view.previewMode.rerender(true);
+        const view = liveLeaf.view;
+        const current = view.getState();
+        await view.setState(Object.assign({}, current, { mode: "source", source: true }), { history: false });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        await view.setState(Object.assign({}, current, { mode: "source", source: false }), { history: false });
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        return { ok: true };
+      })())()`,
+      lib.RPC_TIMEOUT_MS,
+    );
+    record("swap-rerendered", rerendered && rerendered.ok, JSON.stringify(rerendered));
+    const afterRerender = await quiet("swap-rerender-none", "rerender", settledStarts, 600);
+    record(
+      "swap-rerender-rings-done",
+      SWAP_SURFACES.every((surface) => {
+        const targets = ringsFor(afterRerender.rings, surface, "target");
+        return targets.length >= 2 && targets.every((ring) => ring.state === "done");
+      }),
+      SWAP_SURFACES.map((surface) => `${surface}=${ringsFor(afterRerender.rings, surface, "target").map((ring) => ring.state).join(",")}`).join(" "),
+    );
+
+    // Reduced motion in the real app: the swap animation and the transitions
+    // must compute to none, while normal motion keeps the swap.
+    const emulate = (value) => client.call(
+      "Emulation.setEmulatedMedia",
+      { features: [{ name: "prefers-reduced-motion", value }] },
+      lib.RPC_TIMEOUT_MS,
+    );
+    let motionNormal = null;
+    let motionReduced = null;
+    try {
+      await emulate("no-preference");
+      motionNormal = await client.evaluate(MOTION_PROBE);
+      await emulate("reduce");
+      motionReduced = await client.evaluate(MOTION_PROBE);
+    } finally {
+      await emulate("no-preference").catch(() => {});
+    }
+    record(
+      "motion-normal-keeps-swap",
+      Boolean(motionNormal) && motionNormal.gate === true && motionNormal.reduced === false && motionNormal.animationName === SWAP_ANIMATION,
+      JSON.stringify(motionNormal),
+    );
+    record(
+      "motion-reduced-disables-swap",
+      Boolean(motionReduced) && motionReduced.reduced === true && motionReduced.animationName === "none" &&
+        String(motionReduced.transitionDuration).split(",").every((part) => part.trim() === "0s"),
+      JSON.stringify(motionReduced),
+    );
+    report.motion = { normal: motionNormal, reduced: motionReduced };
+
+    // Screenshots of the swapped, settled state, side by side.
+    const splitLight = path.join(outDir, "e2e-task-link-marks-swap-light.png");
+    await capturePage(client, splitLight);
+    report.screenshots.push(splitLight);
+    await client.evaluate(`(() => {
+      document.body.classList.remove("theme-light");
+      document.body.classList.add("theme-dark");
+      return true;
+    })()`);
+    await sleep(250);
+    const splitDark = path.join(outDir, "e2e-task-link-marks-swap-dark.png");
+    await capturePage(client, splitDark);
+    report.screenshots.push(splitDark);
+    await client.evaluate(`(() => {
+      document.body.classList.remove("theme-dark");
+      document.body.classList.add("theme-light");
+      return true;
+    })()`);
+
+    // Back to one pane for the remaining checks.
+    await client.evaluate(
+      `(() => {
+        const { liveLeaf, readingLeaf } = window.__tlmLeaves || {};
+        if (readingLeaf) readingLeaf.detach();
+        if (liveLeaf) window.app.workspace.setActiveLeaf(liveLeaf, { focus: true });
+        delete window.__tlmLeaves;
+        return true;
+      })()`,
+    );
+    await sleep(300);
 
     await openNote(client, fixture.prose, "live");
     await sleep(300);

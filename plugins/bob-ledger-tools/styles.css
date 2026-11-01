@@ -2413,8 +2413,15 @@ body:not(.bob-task-link-marks) .bob-task-link-mark {
   display: none;
 }
 
+/* The swap rule above is `body.bob-task-link-marks .bob-task-link-mark
+   .bob-task-link-mark-swap`, which outranks a bare `.bob-task-link-mark`,
+   so the reduced-motion reset repeats the same selector (equal
+   specificity, later in the cascade) and a swapped ring computes
+   `animation-name: none` and no transition. */
 @media (prefers-reduced-motion: reduce) {
-  .bob-task-link-mark {
+  .bob-task-link-mark,
+  body.bob-task-link-marks .bob-task-link-mark,
+  body.bob-task-link-marks .bob-task-link-mark.bob-task-link-mark-swap {
     transition: none;
     animation: none;
   }

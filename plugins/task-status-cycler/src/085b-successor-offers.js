@@ -20,7 +20,7 @@ function successorDigestForTask(task) {
     const raw = task && task.rawLine != null
       ? successorBodyAfterStatusBox(task.rawLine)
       : String((task && task.text) || "");
-    const cleaned = cleanDescription(raw, "#task", (task && task.blockId) || null);
+    const cleaned = cleanDescription(raw, task && task.globalFilter || "#task", (task && task.blockId) || null);
     return successorFnv1aHex(cleaned);
   } catch (error) {
     return "00000000";
@@ -96,10 +96,18 @@ function buildSuccessorNoteDigestTable(noteTexts) {
     const rows = [];
     for (let line = 0; line < lines.length; line += 1) {
       const parsed = parseTaskDependencyLine(lines[line], path, line);
-      if (!parsed) {
+      const reference = !parsed && successorKeepMovingIsReferenceLine(lines[line]);
+      const status = reference ? getTaskStatusForLine(lines[line], line) : null;
+      if (!parsed && !status) {
         continue;
       }
-      const fake = { rawLine: parsed.lineText, text: parsed.lineText, blockId: parsed.blockId };
+      const rawLine = parsed ? parsed.lineText : lines[line];
+      const fake = {
+        rawLine,
+        text: rawLine,
+        blockId: parsed ? parsed.blockId : getTrailingBlockId(rawLine),
+        ...(reference ? { globalFilter: "#ref" } : {}),
+      };
       rows.push({ digest: successorDigestForTask(fake), line });
     }
     rows.sort((a, b) => a.line - b.line);
@@ -229,11 +237,18 @@ function buildSuccessorPickerModel(options = {}) {
         header = "Project finished";
       } else if (group === "project") {
         header = headers.get(project) || `Project ${String(project || "").split("/").pop() || project}`;
+      } else if (group === "keep_moving") {
+        const stem = String(project || "").split("/").pop().replace(/\.md$/i, "") || String(project || "");
+        header = `Keep ${stem} moving`;
       }
       byGroup.set(key, {
         group,
         ...(project ? { project } : {}),
         header,
+        ...(group === "keep_moving" ? {
+          caption: "",
+          tag: `ready in ${String(project || "").split("/").pop().replace(/\.md$/i, "")} · not dependents`,
+        } : {}),
         rows: [],
       });
     }
@@ -253,6 +268,21 @@ function buildSuccessorPickerModel(options = {}) {
       needsBlockId: offer.needsBlockId === true,
       selectable: true,
     };
+    if (entry.group === "keep_moving") {
+      row.lane = successorKeepMovingLaneName(offer.status) || successorStatusName(offer.status);
+      const preds = Array.isArray(offer.predecessorRows) ? offer.predecessorRows : [];
+      const names = preds.map((pred) => {
+        const raw = String(pred && pred.text || "");
+        const body = raw.match(TASK_LINE_RE) ? successorBodyAfterStatusBox(raw) : raw;
+        return truncateSuccessorNoticeText(cleanDescription(body, "#task", pred && pred.block_id || null));
+      }).filter(Boolean);
+      if (!entry.caption && names.length) {
+        const stem = String(entry.project || "").split("/").pop().replace(/\.md$/i, "");
+        entry.caption = names.length === 1
+          ? `✓ ${names[0]} was the last ${stem} task planned today`
+          : `✓ ${names[0]} and ${names.length - 1} more were the last ${stem} tasks planned today`;
+      }
+    }
     const taskContext = buildSuccessorPickerTaskContext(offer);
     if (taskContext) {
       row.task = taskContext;
@@ -294,13 +324,34 @@ function buildSuccessorPickerModel(options = {}) {
           hidden: folded.hidden || 0,
           alreadyPlanned: folded.alreadyPlanned || 0,
           subProjects: folded.subProjects || 0,
+          ...(folded.blocked > 0 ? { blocked: folded.blocked } : {}),
+          ...(folded.scheduled > 0 ? { scheduled: folded.scheduled } : {}),
         };
       }
       groups.push(entry);
     }
   }
+  for (const entry of byGroup.values()) {
+    if (entry.group !== "keep_moving") continue;
+    const folded = foldedByProject.get(entry.project || "") || {};
+    if (folded.blocked > 0 || folded.scheduled > 0 || folded.hidden > 0) {
+      entry.folded = {
+        ...(folded.blocked > 0 ? { blocked: folded.blocked } : {}),
+        ...(folded.scheduled > 0 ? { scheduled: folded.scheduled } : {}),
+        ...(folded.hidden > 0 ? { hidden: folded.hidden } : {}),
+      };
+    }
+    groups.push(entry);
+  }
+  const keepOnly = groups.length > 0 && groups.every((entry) => entry.group === "keep_moving");
+  const keepProjects = [...new Set(groups.filter((entry) => entry.group === "keep_moving").map((entry) => entry.project))];
+  const keepTitle = keepProjects.length === 1
+    ? `Keep ${String(keepProjects[0]).split("/").pop().replace(/\.md$/i, "")} moving`
+    : `Keep ${keepProjects.length} projects moving`;
   const model = {
-    title: predecessors.length === 1
+    title: keepOnly
+      ? keepTitle
+      : predecessors.length === 1
       ? `Pull in successors of ${predecessors[0].text || "task"}`
       : `Pull in successors (${predecessors.length} closed)`,
     predecessors: predecessors.map((pred) => ({
@@ -673,15 +724,32 @@ function successorGroupOrder(group) {
   if (group === "project") {
     return 1;
   }
-  return 2;
+  if (group === "project_finished") {
+    return 2;
+  }
+  return group === "keep_moving" ? 3 : 2;
 }
 
 function successorOfferOrderCompare(left, right) {
-  return successorGroupOrder(left.group) - successorGroupOrder(right.group) ||
-    successorAnchorPosition(left.anchor) - successorAnchorPosition(right.anchor) ||
-    (left.anchor.bulletLine ?? -1) - (right.anchor.bulletLine ?? -1) ||
-    String(left.notePath || "").localeCompare(String(right.notePath || "")) ||
-    (Number(left.line) || 0) - (Number(right.line) || 0);
+  const groupOrder = successorGroupOrder(left.group) - successorGroupOrder(right.group);
+  if (groupOrder) return groupOrder;
+  const anchorOrder = successorAnchorPosition(left.anchor) - successorAnchorPosition(right.anchor);
+  if (anchorOrder) return anchorOrder;
+  if (left.group === "keep_moving" || right.group === "keep_moving") {
+    const bulletOrder = (left.anchor.bulletLine ?? -1) - (right.anchor.bulletLine ?? -1);
+    if (bulletOrder) return bulletOrder;
+    const pathOrder = String(left.notePath || "").localeCompare(String(right.notePath || ""));
+    if (pathOrder) return pathOrder;
+    const laneOrder = (SUCCESSOR_KEEP_MOVING_LANES[left.task && left.task.status] ?? 99) -
+      (SUCCESSOR_KEEP_MOVING_LANES[right.task && right.task.status] ?? 99);
+    if (laneOrder) return laneOrder;
+  } else {
+    const bulletOrder = (left.anchor.bulletLine ?? -1) - (right.anchor.bulletLine ?? -1);
+    if (bulletOrder) return bulletOrder;
+    const pathOrder = String(left.notePath || "").localeCompare(String(right.notePath || ""));
+    if (pathOrder) return pathOrder;
+  }
+  return (Number(left.line) || 0) - (Number(right.line) || 0);
 }
 
 // One project-resident verdict for PROJECT OFFERS (§12.2). Returns a

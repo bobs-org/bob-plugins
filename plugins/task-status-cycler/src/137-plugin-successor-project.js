@@ -22,6 +22,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         gated: true,
         predecessors: [],
         unblocked: [],
+        keep_moving: [],
         still_blocked: [],
         daily_path: "",
         daily_content: null,
@@ -33,6 +34,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
           String(identity.taskId)
         ),
       );
+      const cancelledClose = active.closeKind === "cancelled";
+      const pickerApi = cancelledClose ? null : getSuccessorPickerApi(this.app);
+      const pickerV2 = !!(pickerApi && Number(pickerApi.version) >= 2);
       let today = null;
       try {
         today = typeof active.today === "string" && active.today
@@ -58,6 +62,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
           closedNoteTexts[identity.path] = text;
         }
       }
+      const keepMovingPotentialPaths = !cancelledClose && pickerV2
+        ? successorKeepMovingPotentialProjects(identities, closedNoteTexts, today)
+        : [];
       const pullInPaths = projectPullInCandidatePaths(
         identities,
         closedNoteTexts,
@@ -90,7 +97,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         today,
         notePaths,
       );
-      const needsDependents = projectPullInNeedsDependents(
+      let needsDependents = projectPullInNeedsDependents(
         identities,
         closedNoteTexts,
         today,
@@ -98,7 +105,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       );
       if (
         closedTaskIds.size === 0 && pullInPaths.length === 0 &&
-        pullInParentCandidates.length === 0
+        pullInParentCandidates.length === 0 && keepMovingPotentialPaths.length === 0
       ) {
         return quietGate;
       }
@@ -108,7 +115,6 @@ class TaskStatusCyclerSuccessorProjectMixin {
       } catch (error) {
         linkUnblocked = true;
       }
-      const cancelledClose = active.closeKind === "cancelled";
       if (cancelledClose) {
         linkUnblocked = false;
       }
@@ -149,8 +155,37 @@ class TaskStatusCyclerSuccessorProjectMixin {
       ) {
         planClosingEntry = hint.line;
       }
+      const keepMovingBaseline = dailyBefore.slice();
+      const dayBaselineText = keepMovingBaseline.join("\n");
+      const keepMovingGatePaths = linkUnblocked && !cancelledClose
+        ? keepMovingPotentialPaths.filter((path) => identities.some((identity) =>
+          identity && String(identity.path || "") === String(path) && identity.blockId &&
+          dayBaselineText.includes(`#^${identity.blockId}`),
+        ))
+        : [];
+      let keepMovingEnabled = false;
+      if (keepMovingGatePaths.length > 0 && pickerV2) {
+        try {
+          const configOptions = active.keepMovingConfig && typeof active.keepMovingConfig === "object"
+            ? active.keepMovingConfig
+            : {};
+          keepMovingEnabled = loadKeepMoving(configOptions) !== false;
+        } catch (_error) {
+          keepMovingEnabled = true;
+        }
+      }
+      const keepMovingCandidatePaths = keepMovingEnabled ? keepMovingGatePaths : [];
+      if (keepMovingCandidatePaths.length > 0 &&
+          successorKeepMovingNeedsDependents(keepMovingCandidatePaths, identities, closedNoteTexts, today)) {
+        needsDependents = true;
+      }
+      if (closedTaskIds.size === 0 && pullInPaths.length === 0 &&
+          pullInParentCandidates.length === 0 && keepMovingCandidatePaths.length === 0) {
+        return quietGate;
+      }
       let tasks = [];
       let noteTexts = new Map();
+      let dependencySnapshotAvailable = false;
       for (const [path, text] of Object.entries(closedNoteTexts)) {
         noteTexts.set(path, text);
       }
@@ -158,9 +193,11 @@ class TaskStatusCyclerSuccessorProjectMixin {
         const pool = await this.buildSuccessorPool(closedTaskIds, active, cache);
         tasks = pool.tasks;
         noteTexts = pool.noteTexts;
+        dependencySnapshotAvailable = pool.warm === true;
         if (!pool.warm) {
           const cold = await this.readSuccessorColdDocuments(active, cache);
-          if (cold.documents.length === 0 && !vault) {
+          dependencySnapshotAvailable = cold.complete === true;
+          if (cold.documents.length === 0 && !vault && keepMovingCandidatePaths.length === 0) {
             return null;
           }
           tasks = tasksFromDocuments(cold.documents);
@@ -234,6 +271,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       for (const [path, text] of noteTexts) {
         noteTextsObject[path] = text;
       }
+      let keepMovingAnchorHints = new Map();
       const planFirst = (selection, dailyB, dailyA, tasksForPlan, notesObj, closingForPlan, destinations) => {
         try {
           return planSuccessors({
@@ -255,6 +293,13 @@ class TaskStatusCyclerSuccessorProjectMixin {
             noteTexts: notesObj,
             notePaths,
             successorTheme: successorThemeForPass,
+            keepMoving: keepMovingEnabled && pickerV2,
+            keepMovingCandidatePaths,
+            keepMovingBaseline,
+            keepMovingCurrentDay: dailyA,
+            dependencySnapshotAvailable,
+            keepMovingAnchorHints,
+            app: this.app,
           });
         } catch (error) {
           return null;
@@ -264,6 +309,11 @@ class TaskStatusCyclerSuccessorProjectMixin {
       let plan = planFirst(null, dailyBefore, dailyAfter, tasks, noteTextsObject, planClosingEntry);
       if (!plan) {
         return null;
+      }
+      for (const offer of plan.offers || []) {
+        if (offer && offer.group === "keep_moving" && offer.project && !keepMovingAnchorHints.has(offer.project)) {
+          keepMovingAnchorHints.set(offer.project, offer.anchor);
+        }
       }
       // One picker for the entire close batch (§12.13). Defensive detection;
       // null/empty/malformed/exception means no picks. Without a picker API,
@@ -280,7 +330,6 @@ class TaskStatusCyclerSuccessorProjectMixin {
       } catch (error) {
         originalOfferByKey = new Map();
       }
-      const pickerApi = cancelledClose ? null : getSuccessorPickerApi(this.app);
       let selectedDestinations = new Map();
       if (selectableOffers.length > 0 && pickerApi) {
         let model = null;
@@ -334,7 +383,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
               affected.add(String(offer.notePath));
             }
           }
-          for (const row of plan.unblocked || []) {
+          for (const row of successorPlanRows(plan)) {
             if (row && row.note_path) {
               affected.add(String(row.note_path));
             }
@@ -362,6 +411,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
             dailyFresh = await this.readSuccessorNoteText(dailyPath, active, cache);
           }
           const freshNoteTexts = new Map();
+          const unavailableFreshNotes = new Set();
+          if (dailyPath) {
+            if (typeof dailyFresh === "string") {
+              freshNoteTexts.set(dailyPath, dailyFresh);
+            } else {
+              unavailableFreshNotes.add(dailyPath);
+            }
+          }
           for (const path of affected) {
             if (path === dailyPath) {
               continue;
@@ -369,13 +426,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
             const text = await this.readSuccessorNoteText(path, active, cache);
             if (typeof text === "string") {
               freshNoteTexts.set(path, text);
+            } else {
+              unavailableFreshNotes.add(path);
             }
           }
-          // Preserve C's notes when re-read misses (deleted notes stay missing).
+          // Preserve untouched snapshots, but never revive an affected note
+          // whose fresh read failed or whose file was deleted.
           for (const [path, text] of noteTexts) {
-            if (!freshNoteTexts.has(path) && affected.has(String(path))) {
-              freshNoteTexts.set(path, text);
-            } else if (!freshNoteTexts.has(path)) {
+            if (!freshNoteTexts.has(path) && !unavailableFreshNotes.has(path) && !affected.has(String(path))) {
               freshNoteTexts.set(path, text);
             }
           }
@@ -539,9 +597,10 @@ class TaskStatusCyclerSuccessorProjectMixin {
       }
       const noteOutcome = await applySuccessorNoteEditsWithUnblockedGuard(this, plan, active);
       if (noteOutcome.failed > 0) {
+        const planRows = successorPlanRows(plan);
         const failedRows = new Set();
-        for (let index = 0; index < plan.unblocked.length; index += 1) {
-          if (plan.unblocked[index].not_linked === "failed") {
+        for (let index = 0; index < planRows.length; index += 1) {
+          if (planRows[index] && planRows[index].not_linked === "failed") {
             failedRows.add(index);
           }
         }
@@ -586,7 +645,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
               ) {
                 continue;
               }
-              const row = plan.unblocked[placement.rowIndex];
+              const row = successorPlanRows(plan)[placement.rowIndex];
               if (row && typeof row === "object" && row.link) {
                 row.link = null;
                 row.not_linked = "failed";
@@ -642,7 +701,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         }
       } else if (plan.placements.length > 0) {
         for (const placement of plan.placements) {
-          const row = plan.unblocked[placement && placement.rowIndex];
+          const row = successorPlanRows(plan)[placement && placement.rowIndex];
           if (row && typeof row === "object" && row.link) {
             row.link = null;
             row.not_linked = "failed";
@@ -677,7 +736,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       let dailyContent = null;
       if (
         dailyPath &&
-        (plan.unblocked.length > 0 || noteOutcome.failed > 0)
+        (plan.unblocked.length > 0 || (plan.keep_moving || []).length > 0 || noteOutcome.failed > 0)
       ) {
         try {
           cache.delete(dailyPath);
@@ -697,6 +756,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         version: 1,
         predecessors,
         unblocked: plan.unblocked,
+        keep_moving: plan.keep_moving || [],
         still_blocked: plan.still_blocked,
         daily_path: dailyPath || "",
         daily_content: dailyContent,

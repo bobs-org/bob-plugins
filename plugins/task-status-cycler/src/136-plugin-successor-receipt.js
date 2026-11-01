@@ -54,8 +54,8 @@ class TaskStatusCyclerSuccessorReceiptMixin {
   // byte-for-byte. Failed picks gain no receipt. Never throws.
   rememberSuccessorPass(closedIdentities, plan, insertion, info) {
     try {
-      const rows = plan && Array.isArray(plan.unblocked)
-        ? plan.unblocked.filter((row) =>
+      const rows = plan
+        ? successorPlanRows(plan).filter((row) =>
           row && (
             (row.link && !row.not_linked) ||
             row.trigger === "project_empty"

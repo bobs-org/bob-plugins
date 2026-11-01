@@ -34,6 +34,8 @@ function applySuccessorVerdicts(context) {
   const projectHeaders = context.projectHeaders instanceof Map ? context.projectHeaders : new Map();
 
   const unblocked = [];
+  const keep_moving = [];
+  const rows = [];
   let placements = [];
 
   // DEDUP (§12.2): one row per task identity; a resident also directly
@@ -47,7 +49,8 @@ function applySuccessorVerdicts(context) {
     if (group === "project") {
       return 1;
     }
-    return 2;
+    if (group === "project_finished") return 2;
+    return group === "keep_moving" ? 3 : 2;
   };
   for (const mark of successorMarks) {
     if (!mark || !mark.task || !mark.task.path) {
@@ -110,6 +113,11 @@ function applySuccessorVerdicts(context) {
     offerNumberByKey.set(keyByTask.get(mark.task), index + 1);
   });
 
+  const appendRow = (row, group) => {
+    rows.push(row);
+    (group === "keep_moving" ? keep_moving : unblocked).push(row);
+    return rows.length - 1;
+  };
   const pushRow = (task, rank, extra) => {
     const pullIn = extra.pullIn === true;
     const before = task.rawLine != null ? String(task.rawLine) : null;
@@ -158,14 +166,13 @@ function applySuccessorVerdicts(context) {
       unblocked_by: extra.predecessorRows || [],
       link: extra.link || null,
       not_linked: extra.not_linked == null ? null : extra.not_linked,
-      trigger: pullIn ? "project_empty" : "dependency",
+      trigger: extra.trigger || (pullIn ? "project_empty" : "dependency"),
       hide_removed: hideRemoved,
     };
     if (isOffer) {
       row.offer = extra.offer;
     }
-    unblocked.push(row);
-    return unblocked.length - 1;
+    return appendRow(row, extra.group || (extra.offer && extra.offer.group));
   };
 
   const pushRecover = (recover, alwaysReason) => {
@@ -231,6 +238,26 @@ function applySuccessorVerdicts(context) {
       ...(noteText ? { noteText } : {}),
     });
     if (!selected) {
+      if (group === "keep_moving") {
+        appendRow({
+          note_path: task.path,
+          block_id: task.blockId || "",
+          line: task.line,
+          text: successorDisplayText(task),
+          previous_status_symbol: task.status,
+          previous_status_name: successorStatusName(task.status),
+          status_symbol: task.status,
+          status_name: successorStatusName(task.status),
+          inbox: typeof isInbox === "function" ? isInbox(task.path) === true : false,
+          unblocked_by: mark.predecessorRows || [],
+          link: null,
+          not_linked: "not_selected",
+          trigger: "last_planned",
+          hide_removed: false,
+          offer: { ...offer, selected: false },
+        }, "keep_moving");
+        continue;
+      }
       // Unpicked: recover exactly as today's recover rule (WRITE rule kept),
       // no mint, no link, no stamp. Emitted even when unchanged (SO8).
       const rank = mark.pullIn && mark.raiseToNext
@@ -261,7 +288,7 @@ function applySuccessorVerdicts(context) {
         edits.push({ path: task.path, line: task.line, before, after });
       }
       const text = mark.pullIn ? projectPullInDisplayText(task, after != null ? after : before) : successorDisplayText(task);
-      unblocked.push({
+      appendRow({
         note_path: task.path,
         block_id: task.blockId || "",
         line: task.line,
@@ -274,10 +301,10 @@ function applySuccessorVerdicts(context) {
         unblocked_by: mark.predecessorRows || [],
         link: null,
         not_linked: requested && placement.refusal ? placement.refusal : "not_selected",
-        trigger: mark.pullIn ? "project_empty" : "dependency",
+        trigger: mark.pullIn ? "project_empty" : (mark.trigger || "dependency"),
         hide_removed: hideRemoved,
         offer: { ...offer, selected: false },
-      });
+      }, group);
       continue;
     }
     // Picked (§12.4 PICK): raise Ready/Blocked to Next without demoting
@@ -392,7 +419,7 @@ function applySuccessorVerdicts(context) {
             mintedByNote.set(task.path, collectSuccessorUsedIds(stagedText ?? ""));
           }
           const used = mintedByNote.get(task.path);
-          blockId = mintBlockId(cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), "#task"), used);
+          blockId = mintBlockId(cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), task.globalFilter || "#task"), used);
           used.add(blockId);
           blockIdCreated = true;
         }
@@ -414,12 +441,14 @@ function applySuccessorVerdicts(context) {
         mintedByNote.set(task.path, collectSuccessorUsedIds(""));
       }
       const used = mintedByNote.get(task.path);
-      blockId = mintBlockId(cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), "#task"), used);
+      blockId = mintBlockId(cleanDescription(successorBodyAfterStatusBox(task.rawLine || ""), task.globalFilter || "#task"), used);
       used.add(blockId);
       blockIdCreated = true;
     }
     const rowIndex = pushRow(task, rank, {
       pullIn: mark.pullIn === true,
+      group,
+      trigger: mark.trigger,
       linked: true,
       after,
       blockId,
@@ -443,18 +472,18 @@ function applySuccessorVerdicts(context) {
     // pullIn picks the rewrite+stamp line is likewise consolidated.)
     if (rowIndex != null) {
       if (successorThemeChanged || successorThemeSuggestionChanged) {
-        unblocked[rowIndex].theme_changed = successorThemeChanged === true;
-        unblocked[rowIndex].theme_action = successorThemeAction;
-        unblocked[rowIndex].theme_name = successorThemeName;
-        unblocked[rowIndex].theme_destination_name = successorThemeDestinationName;
-        unblocked[rowIndex].theme_suggestion_changed = successorThemeSuggestionChanged === true;
+        rows[rowIndex].theme_changed = successorThemeChanged === true;
+        rows[rowIndex].theme_action = successorThemeAction;
+        rows[rowIndex].theme_name = successorThemeName;
+        rows[rowIndex].theme_destination_name = successorThemeDestinationName;
+        rows[rowIndex].theme_suggestion_changed = successorThemeSuggestionChanged === true;
       }
       const placement = {
         key: String(key),
         rowIndex,
         anchor: mark.anchor,
         implicit: mark.implicit || null,
-        blockLink: unblocked[rowIndex].link.block_link,
+        blockLink: rows[rowIndex].link.block_link,
       };
       // Per-row destination override (§12.13): validated here so a stale
       // shape from an older picker falls back to the planned anchor.
@@ -474,6 +503,8 @@ function applySuccessorVerdicts(context) {
   // insertion planner.
   return {
     unblocked,
+    keep_moving,
+    rows,
     still_blocked: stillBlocked,
     edits,
     placements,

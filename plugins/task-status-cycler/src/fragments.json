@@ -19,6 +19,7 @@
   "088-project-blocking.js",
   "089-successor-project.js",
   "089b-successor-verdicts.js",
+  "089c-successor-keep-moving.js",
   "090-source-and-formatting.js",
   "100-editor-and-modal.js",
   "110-plugin-lifecycle.js",

@@ -259,13 +259,17 @@ function projectRemainingCount(sourceText, scheduleApplies, skipKeys, notePath) 
     if (!status || PROJECT_CLOSED_MARKS.has(status.rawSymbol)) {
       continue;
     }
-    if (!lineMatchesTasksGlobalFilterText(text)) {
+    if (!lineMatchesTasksGlobalFilterText(text) && !successorKeepMovingIsReferenceLine(text)) {
       continue;
     }
     if (lineHasTrailingPrjAnchor(text)) {
       continue;
     }
-    const parsed = parseTaskDependencyLine(text, "", line);
+    const parsed = parseTaskDependencyLine(text, "", line) ||
+      (successorKeepMovingIsReferenceLine(text) ? {
+        blockId: getTrailingBlockId(text),
+        taskId: parseTaskDependencyMetadata(text).taskId,
+      } : null);
     if (parsed && skipKeys && notePath && (
       (parsed.blockId && skipKeys.has(`${notePath}\0^${parsed.blockId}`)) ||
       (parsed.taskId && skipKeys.has(`${notePath}\0id:${parsed.taskId}`))

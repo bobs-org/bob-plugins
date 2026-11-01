@@ -528,7 +528,7 @@ function truncateSuccessorNoticeText(text, limit = SUCCESSOR_NOTICE_TEXT_LIMIT) 
 // model (`{ predecessors, unblocked, still_blocked, failure }`). One notice
 // per gesture; silence (`""`) when nothing was unblocked. Never leads with
 // a block ID; task text truncates at 48 characters with `…`.
-function successorNoticeText(model = {}) {
+function successorNoticeTextBase(model = {}) {
   const source = model && typeof model === "object" ? model : {};
   const predecessors = Array.isArray(source.predecessors) ? source.predecessors : [];
   const unblocked = Array.isArray(source.unblocked) ? source.unblocked : [];
@@ -648,6 +648,10 @@ function successorNoticeText(model = {}) {
     return `🔓 Unblocked: ${shown.join(", ")}${more}${suffix}`;
   }
   return "";
+}
+
+function successorNoticeText(model = {}) {
+  return successorKeepMovingNoticeText(model, successorNoticeTextBase);
 }
 
 // --- Loaders ---
@@ -925,5 +929,59 @@ function loadLinkUnblocked(options = {}) {
   if (key != null) {
     successorLinkUnblockedCache = { key, result };
   }
+  return result;
+}
+
+let successorKeepMovingCache = { key: null, result: true };
+
+function resetSuccessorKeepMovingCache() {
+  successorKeepMovingCache = { key: null, result: true };
+}
+
+function parseSuccessorKeepMoving(text) {
+  let inPlan = false;
+  for (const line of String(text || "").split(/\r?\n/)) {
+    if (/^\s*(#|$)/.test(line)) continue;
+    const top = line.match(/^([A-Za-z0-9_-]+)\s*:(.*)$/);
+    if (top) {
+      inPlan = top[1] === "plan";
+      if (inPlan) {
+        const rest = top[2].trim();
+        const flow = rest.match(/keep_moving\s*:\s*([^,\s}]+)/i);
+        if (flow) return parseSuccessorLinkUnblockedScalar(flow[1]);
+        if (/^\{.*\}$/.test(rest)) return true;
+      }
+      continue;
+    }
+    if (inPlan) {
+      const nested = line.match(/^\s+keep_moving\s*:\s*(\S+)/i);
+      if (nested) return parseSuccessorLinkUnblockedScalar(nested[1]);
+    }
+  }
+  return true;
+}
+
+// Same config path, stat cache, and conservative default as link_unblocked.
+function loadKeepMoving(options = {}) {
+  const env = options.env ||
+    (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule = options.osModule === undefined
+    ? successorRequireOptionalNodeModule("os")
+    : options.osModule;
+  const fsModule = options.fsModule === undefined
+    ? successorRequireOptionalNodeModule("fs")
+    : options.fsModule;
+  const configPath = options.configPath || successorPlanConfigPath({ env, osModule });
+  if (!fsModule || typeof fsModule.readFileSync !== "function") return true;
+  const statKey = successorConfigStatKey(fsModule, configPath);
+  const key = statKey == null ? null : `${configPath}|${statKey}`;
+  if (key != null && successorKeepMovingCache.key === key) return successorKeepMovingCache.result;
+  let result = true;
+  try {
+    result = parseSuccessorKeepMoving(fsModule.readFileSync(configPath, "utf8"));
+  } catch (_error) {
+    result = true;
+  }
+  if (key != null) successorKeepMovingCache = { key, result };
   return result;
 }

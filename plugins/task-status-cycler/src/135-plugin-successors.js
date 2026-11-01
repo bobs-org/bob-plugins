@@ -253,10 +253,11 @@ class TaskStatusCyclerSuccessorsMixin {
   // recovers. Returns `{ documents }`. Never throws.
   async readSuccessorColdDocuments(context, cache) {
     const documents = [];
+    let complete = true;
     try {
       const vault = this.app && this.app.vault;
       if (!vault || typeof vault.getMarkdownFiles !== "function") {
-        return { documents };
+        return { documents, complete: false };
       }
       const openEditors = this.getOpenMarkdownEditors(context || {});
       const files = vault.getMarkdownFiles().filter(
@@ -273,6 +274,7 @@ class TaskStatusCyclerSuccessorsMixin {
                 ? await vault.read(file)
                 : null;
           if (typeof text !== "string") {
+            complete = false;
             continue;
           }
           documents.push({ path: file.path, text });
@@ -281,12 +283,14 @@ class TaskStatusCyclerSuccessorsMixin {
           }
         } catch (error) {
           // Best effort: one unreadable note must not block the pass.
+          complete = false;
         }
       }
     } catch (error) {
       // Best effort.
+      complete = false;
     }
-    return { documents };
+    return { documents, complete };
   }
 
   // Re-locate a Pomodoro-line close's entry by pre-edit headline (Work Log
@@ -385,7 +389,7 @@ class TaskStatusCyclerSuccessorsMixin {
       if (!failureReason) {
         failureReason = reason;
       }
-      const row = plan.unblocked[rowIndex];
+      const row = successorPlanRows(plan)[rowIndex];
       if (row && typeof row === "object") {
         row.link = null;
         row.not_linked = "failed";
@@ -405,9 +409,10 @@ class TaskStatusCyclerSuccessorsMixin {
       });
       const vault = this.app && this.app.vault;
       const openEditors = this.getOpenMarkdownEditors(context || {});
+      const planRows = successorPlanRows(plan);
       const rowForEdit = (edit) => {
-        for (let index = 0; index < plan.unblocked.length; index += 1) {
-          const row = plan.unblocked[index];
+        for (let index = 0; index < planRows.length; index += 1) {
+          const row = planRows[index];
           if (
             row &&
             row.note_path === edit.path &&
@@ -525,7 +530,7 @@ class TaskStatusCyclerSuccessorsMixin {
       if (!failureReason) {
         failureReason = reason;
       }
-      const row = plan.unblocked[placement && placement.rowIndex];
+      const row = successorPlanRows(plan)[placement && placement.rowIndex];
       if (row && typeof row === "object") {
         row.link = null;
         row.not_linked = "failed";
@@ -652,7 +657,7 @@ class TaskStatusCyclerSuccessorsMixin {
         }
       }
       placements.forEach((placement, order) => {
-        const row = plan.unblocked[placement && placement.rowIndex];
+        const row = successorPlanRows(plan)[placement && placement.rowIndex];
         if (!row || typeof row !== "object") {
           return;
         }
@@ -713,7 +718,8 @@ class TaskStatusCyclerSuccessorsMixin {
         return text;
       }
       const api = this.getNavNoticeApi();
-      if (api) {
+      const hasKeepMoving = Array.isArray(model.keep_moving) && model.keep_moving.length > 0;
+      if (api && (!hasKeepMoving || Number(api.version) >= 2)) {
         try {
           const shown = api.showUnblocked(model);
           if (shown !== false) {

@@ -379,10 +379,13 @@ function successorDisplayText(task, globalFilter = "#task") {
   if (!task) {
     return "";
   }
+  const filter = globalFilter === "#task" && task.globalFilter
+    ? task.globalFilter
+    : globalFilter;
   if (task.rawLine) {
     return cleanDescription(
       successorBodyAfterStatusBox(task.rawLine),
-      globalFilter,
+      filter,
       task.blockId || null,
     );
   }
@@ -546,47 +549,8 @@ function successorOrderCompare(left, right) {
   );
 }
 
-// Plan the successor-offer write set (§12.2). Options:
-//
-// - `closed`: identities this gesture moved open → Done
-//   (`[{ path, blockId, taskId, text, rootKey? }]`); matching uses only the
-//   `[id::]` (`taskId`) values.
-// - `index`: a `buildDependentsIndex` result over the staged post-close
-//   snapshot.
-// - `dailyBefore`: day text (or lines) before the gesture — the
-//   already-planned baseline and anchor source.
-// - `dailyAfter`: day text (or lines) after the gesture for the derived
-//   recover rank (defaults to `dailyBefore`; the strike never moves a
-//   dependent's own links, but pass the post text when the same close can
-//   drop them, e.g. `=x~K`).
-// - `dailyPath`: vault-relative day path (day-file link exception, row
-//   `day_file`).
-// - `today`: `"YYYY-MM-DD"` (defaults to today).
-// - `linkUnblocked`: the `plan.link_unblocked` kill switch (default true).
-// - `cancelled`: a cancel close recovers only; rows report `cancelled`.
-// - `isInbox`: `(path) => boolean` (default: root `inbox.md` check).
-// - `basenameCounts`: lowercase-basename → vault-wide note count for the
-//   §12.4 link form.
-// - `closingEntry`: 0-based line of the Pomodoro this gesture closes.
-// - `noteTexts`: `{ path: text }` staged note bodies for mint used-IDs.
-// - `selection`: offer selection — null/undefined/[] links nothing (plan
-//   offers only); `"all"` links every selectable offer; an array/Set of
-//   offer keys links that subset (SO2–SO5, vector fixtures).
-// - `destinations`: per-row override Map (key → `{kind: "existing",
-//   entryLine, entryText} | {kind: "new", name}`); a picked row with one
-//   inserts at the overridden entry instead of its anchor (§12.13).
-// - `stampLine`: freshness stamper `(line, dateText) => string` from
-//   `this.getFreshnessStampLine()`; null preserves the safe no-stamp
-//   behavior (§12.4 PICK).
-//
-// Note `line` in rows is 0-based (mirroring Rust's `line_index`); day-file
-// `entry_line`/`line` in placements are 1-based (per §12.5). Returns
-// `{ unblocked, still_blocked, edits, placements, unblocked_check }` with
-// §12.5 snake_case rows; `edits` are `{ path, line, before, after }`
-// (`before`/`after` are null when the source line is unknown, e.g. a cache
-// task without `originalMarkdown` — the wiring re-reads the vault).
-// `placements` carry `rowIndex` into `unblocked` and are already in ORDER
-// (anchor ledger position, then note path, then line).
+// Plan the successor-offer write set (§12.2, §12.15). Lines are zero-based;
+// placement ledger lines are one-based. The caller owns reads and writes.
 function planSuccessors(options = {}) {
   const closed = Array.isArray(options.closed) ? options.closed : [];
   const index =
@@ -634,11 +598,8 @@ function planSuccessors(options = {}) {
   const successorTheme = options.successorTheme && typeof options.successorTheme === "object" ? options.successorTheme : null;
 
   const empty = {
-    unblocked: [],
-    still_blocked: [],
-    edits: [],
-    placements: [],
-    unblocked_check: "checked",
+    unblocked: [], keep_moving: [], rows: [], still_blocked: [], edits: [], placements: [],
+    unblocked_check: "checked", offers: [], foldedByProject: new Map(), projectHeaders: new Map(),
   };
 
   const closedTaskIds = new Set();
@@ -662,10 +623,28 @@ function planSuccessors(options = {}) {
     selection,
     stampLine,
   });
-  const applyContext = (recovers, successorMarks, stillBlocked, projectTagStripEdits, hasLiveLink, extra = {}) =>
-    applySuccessorVerdicts({
+  const applyContext = (recovers, successorMarks, stillBlocked, projectTagStripEdits, hasLiveLink, extra = {}) => {
+    const keepMoving = extra.keepMovingPlan || planSuccessorKeepMoving({
+      enabled: options.keepMoving === true && linkUnblocked && !cancelledClose,
+      closed, index, noteTexts, notePaths, today, dailyPath, dailyBefore,
+      baseline: options.keepMovingBaseline ?? dailyBefore,
+      currentDay: options.keepMovingCurrentDay ?? dailyAfter,
+      candidatePaths: options.keepMovingCandidatePaths,
+      dependencySnapshotAvailable: options.dependencySnapshotAvailable,
+      existingMarks: successorMarks,
+      leafProject: options.leafProject || (options.app
+        ? (path) => successorLeafProject(options.app, path)
+        : null),
+      closingEntry,
+      anchorHints: options.keepMovingAnchorHints,
+    });
+    const folded = extra.foldedByProject instanceof Map
+      ? new Map(extra.foldedByProject)
+      : new Map();
+    for (const [path, counts] of keepMoving.foldedByProject) folded.set(path, counts);
+    return applySuccessorVerdicts({
       recovers,
-      successorMarks,
+      successorMarks: [...successorMarks, ...keepMoving.marks],
       stillBlocked,
       projectTagStripEdits,
       dailyPath,
@@ -683,16 +662,31 @@ function planSuccessors(options = {}) {
       closingEntry,
       hasLiveLink,
       projectOffers: extra.projectOffers || [],
-      foldedByProject: extra.foldedByProject || new Map(),
+      foldedByProject: folded,
       projectHeaders: extra.projectHeaders || new Map(),
       successorTheme,
     });
+  };
   // GATE: no `[id::]` in C and no pull-in candidate → nothing.
   // A `[?]` R pull-in still recovers N's residents via the same
   // project-recovery wiring as the id branch (P3).
   if (closedTaskIds.size === 0) {
     if (!pullIns.hasCandidates) {
-      return empty;
+      const keepMovingPlan = planSuccessorKeepMoving({
+        enabled: options.keepMoving === true && linkUnblocked && !cancelledClose,
+        closed, index, noteTexts, notePaths, today, dailyPath, dailyBefore,
+        baseline: options.keepMovingBaseline ?? dailyBefore,
+        currentDay: options.keepMovingCurrentDay ?? dailyAfter,
+        candidatePaths: options.keepMovingCandidatePaths,
+        dependencySnapshotAvailable: options.dependencySnapshotAvailable,
+        existingMarks: [],
+        leafProject: options.leafProject || (options.app
+          ? (path) => successorLeafProject(options.app, path)
+          : null),
+        closingEntry,
+      });
+      if (!keepMovingPlan.marks.length) return empty;
+      return applyContext([], [], [], [], () => false, { keepMovingPlan });
     }
     const liveAfterEntries = parseSuccessorLedgerEntries(dailyAfter);
     const hasLiveLink = (task) =>

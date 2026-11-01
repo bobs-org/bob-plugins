@@ -292,8 +292,8 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `inboxRoute` | 1 | Test an inbox path and prompt or commit a route. |
 | `quickRoll` | 1 | Preview the `Alt+P` roll for a review row. |
 | `taskLinkLane` | 1 | Match a Pomodoro Task Link and toggle its Next/In Progress lane. |
-| `notice` | 1 | Show the Unblocked card. |
-| `successors` | 1 | Ask which offered successor links to add. |
+| `notice` | 2 | Show the Unblocked card; v2 also renders `keep_moving` rows. |
+| `successors` | 2 | Ask which offered successor links to add; v2 accepts the `keep_moving` group. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
 | `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` opens the Links direction; the reverse direction settles `{ ok: false }` until both stage directions ship. |
 | `openReferencePdf(path)` | Additive member | Open a vault-relative PDF in Highlights; resolves `{ ok, reason? }`. |
@@ -340,6 +340,20 @@ does not edit the task field. An explicit retarget carries a valid deliberate
 `setTaskTheme`/`clearTaskTheme` after status recovery and before
 block-ID/freshness assembly. Link-once, untouched preselection, missing or
 changed suggestions, and stale or refused destinations skip the field edit.
+`successors` v2 (keep-moving, `docs/task-dependencies.md` §12.13 and
+§12.15 in bob-cli) adds a fourth group, `keep_moving`, which offers a
+leaf project's ready tasks when a close drains its last planned task. A
+group may carry a `caption` (the why line) and a `tag` (the contrast tag,
+right-aligned on the heading), and its `folded` counts gain `blocked` and
+`scheduled`. A `keep_moving` group folds into one
+`2 blocked · 1 scheduled later · 1 hidden` line. Rows may carry a `lane`
+(`Pending`, `Next`, `Ready`, or `Blocked`); every group shows the lane name
+and derives it from `status` when `lane` is absent, so a raw status symbol is
+never displayed. When every group is `keep_moving` the title (if the model
+omits one) is `Keep ‹N› moving` / `Keep 2 projects moving` and the header icon
+is `skip-forward`. Unknown groups are still dropped and v1 models render
+exactly as before. Callers must offer `keep_moving` groups only when
+`api.successors?.version >= 2`, because an older navigation drops the group.
 `blocks.openStage(ref)` and
 `blocks.removeDependent(ownerRef, target)` resolve to result
 objects. `relations.removeLink(sourceRef, targetRef)` removes the
@@ -350,6 +364,14 @@ absent direction) and settles `{ ok: false, reason: "unavailable" }`
 otherwise. Callers
 feature-detect `api.relations?.version >= 1` before showing chip
 controls. `notice.showUnblocked(model)` presents the Unblocked card.
+`notice` v2 reads an optional `keep_moving` row array (the same row shape as
+`unblocked`, with `trigger: "last_planned"` and an `offer.project`). Only
+picked rows (those with a `link`) are shown. When every row is keep-moving the
+card reads `Keep ‹N› moving` with ⏭ in the glyph slot and the class
+`is-keep-moving`; in a mixed card the keep-moving rows follow the dependency
+rows with a `keeps ‹N› moving` chip and count as linked. A card with nothing
+picked is silent. Callers add `keep_moving` rows only when
+`api.notice?.version >= 2`.
 
 Async navigation methods settle to result objects or `null` rather
 than rejecting. `taskLinkLane.matches` is synchronous and

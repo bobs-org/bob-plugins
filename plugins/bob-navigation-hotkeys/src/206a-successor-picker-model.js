@@ -150,6 +150,67 @@ function successorPickerNoteName(path) {
   return leaf.toLowerCase().endsWith(".md") ? leaf.slice(0, -3) : leaf;
 }
 
+// Lane names shown on every picker row (§12.13 picker API v2): the raw
+// status symbol is never displayed. A supplied `lane` wins when it is one of
+// the four lane names; otherwise the lane derives from the row `status`, which
+// is either a status symbol (" ", "*", "/", "?") or already a lane name.
+const SUCCESSOR_PICKER_LANE_BY_SYMBOL = Object.freeze({
+  " ": "Ready",
+  "*": "Next",
+  "/": "Pending",
+  "?": "Blocked",
+});
+const SUCCESSOR_PICKER_LANE_NAMES = Object.freeze(["Pending", "Next", "Ready", "Blocked"]);
+
+function successorPickerLaneName(lane, status) {
+  const named = successorPickerText(lane).toLowerCase();
+  const byName = SUCCESSOR_PICKER_LANE_NAMES.find((name) => name.toLowerCase() === named);
+  if (byName) {
+    return byName;
+  }
+  if (typeof status === "string" && SUCCESSOR_PICKER_LANE_BY_SYMBOL[status]) {
+    return SUCCESSOR_PICKER_LANE_BY_SYMBOL[status];
+  }
+  const text = successorPickerText(status);
+  if (!text) {
+    return "";
+  }
+  const byStatusName = SUCCESSOR_PICKER_LANE_NAMES.find((name) => name.toLowerCase() === text.toLowerCase());
+  if (byStatusName) {
+    return byStatusName;
+  }
+  // An unmapped single-character mark is a raw symbol, never shown.
+  return text.length === 1 ? "" : text;
+}
+
+// Picker title (§12.15 copy table). An explicit model title always wins;
+// without one, a model whose groups are all keep_moving reads `Keep ‹N›
+// moving` / `Keep k projects moving`.
+function successorPickerKeepMovingProject(group) {
+  const fromProject = successorPickerNoteName(group && group.project);
+  if (fromProject) {
+    return fromProject;
+  }
+  const first = group && Array.isArray(group.rows) ? group.rows[0] : null;
+  return successorPickerNoteName(first && first.notePath) || "project";
+}
+
+function successorPickerAllKeepMoving(groups) {
+  return Array.isArray(groups) && groups.length > 0 &&
+    groups.every((group) => group && group.group === "keep_moving");
+}
+
+function successorPickerKeepMovingTitle(groups) {
+  const names = [];
+  for (const group of groups) {
+    const name = successorPickerKeepMovingProject(group);
+    if (!names.includes(name)) {
+      names.push(name);
+    }
+  }
+  return names.length === 1 ? `Keep ‹${names[0]}› moving` : `Keep ${names.length} projects moving`;
+}
+
 // Optional validated task context for `api.pick({task})`. `line` is
 // one-based and `text` is the full note. `preimage` is the original task
 // line used to refuse a changed/missing source before the nested picker.
@@ -192,7 +253,7 @@ function normalizeSuccessorPickerModel(model) {
     if (!model || typeof model !== "object" || !Array.isArray(model.groups)) {
       return null;
     }
-    const allowedGroups = new Set(["hand_off", "project", "project_finished"]);
+    const allowedGroups = new Set(["hand_off", "project", "project_finished", "keep_moving"]);
     const seenKeys = new Set();
     const groups = [];
     let selectableCount = 0;
@@ -223,6 +284,7 @@ function normalizeSuccessorPickerModel(model) {
           text,
           notePath: row.notePath,
           status: successorPickerText(row.status),
+          lane: successorPickerLaneName(row.lane, row.status),
           destinationLabel: successorPickerText(row.destinationLabel),
           needsBlockId: row.needsBlockId === true,
           selectable: row.selectable,
@@ -242,11 +304,15 @@ function normalizeSuccessorPickerModel(model) {
             hidden: successorPickerCount(source.folded.hidden),
             alreadyPlanned: successorPickerCount(source.folded.alreadyPlanned),
             subProjects: successorPickerCount(source.folded.subProjects),
+            blocked: successorPickerCount(source.folded.blocked),
+            scheduled: successorPickerCount(source.folded.scheduled),
           })
-        : Object.freeze({ hidden: 0, alreadyPlanned: 0, subProjects: 0 });
+        : Object.freeze({ hidden: 0, alreadyPlanned: 0, subProjects: 0, blocked: 0, scheduled: 0 });
       groups.push(Object.freeze({
         group: source.group,
         header: successorPickerText(source.header),
+        caption: successorPickerText(source.caption),
+        tag: successorPickerText(source.tag),
         project: successorPickerText(source.project),
         rows: Object.freeze(rows),
         folded,
@@ -268,11 +334,14 @@ function normalizeSuccessorPickerModel(model) {
           text: successorPickerText(row.text),
         }))
       : [];
+    const keepMovingOnly = successorPickerAllKeepMoving(groups);
     return Object.freeze({
-      title: successorPickerText(model.title) || "Choose successor tasks",
+      title: successorPickerText(model.title) ||
+        (keepMovingOnly ? successorPickerKeepMovingTitle(groups) : "Choose successor tasks"),
       predecessors: Object.freeze(predecessors),
       groups: Object.freeze(groups),
       budget,
+      keepMovingOnly,
       selectableCount,
       taskRowCount,
     });

@@ -697,11 +697,11 @@ test("unblocked text truncates to 48 characters with an ellipsis", () => {
   assert.equal(helpers.formatUnblockedScheduledDate("not-a-date"), "not-a-date");
 });
 
-test("nav api exposes additive notice v1 and keeps version 3", () => {
+test("nav api exposes additive notice v2 and keeps version 3", () => {
   const api = helpers.createDependencyNavApi({ app: {} });
   assert.equal(api.version, 3);
   assert.ok(api.notice);
-  assert.equal(api.notice.version, 1);
+  assert.equal(api.notice.version, 2);
   assert.equal(typeof api.notice.showUnblocked, "function");
   assert.equal(Object.isFrozen(api.notice), true);
   assert.equal(api.notice.showUnblocked({ unblocked: [], failure: null }), false);
@@ -722,4 +722,271 @@ test("unblocked stylesheet scopes notice overrides and uses task tokens", () => 
   assert.doesNotMatch(block, /\brgb\(/i);
   assert.doesNotMatch(block, /\bhsl\(/i);
   assert.match(block, /\.bob-nh-unblock-row/);
+});
+
+// ---------------------------------------------------------------------------
+// Notice API v2 (docs/task-dependencies.md §12.13, §12.15): keep_moving rows.
+
+function keepMovingLink(overrides = {}) {
+  return {
+    day_file: "2026/20261101.md",
+    entry_name: "FIX",
+    entry_line: 37,
+    entry_created: false,
+    next_up: false,
+    line: 40,
+    block_link: "[[sase_badges#^ship-renderer]]",
+    block_id_created: false,
+    ...overrides,
+  };
+}
+
+function keepMovingRow(overrides = {}) {
+  return {
+    note_path: "projects/sase_badges.md",
+    block_id: "ship-renderer",
+    line: 12,
+    text: "Ship the badge renderer",
+    previous_status_symbol: "/",
+    previous_status_name: "In Progress",
+    status_symbol: "/",
+    status_name: "In Progress",
+    inbox: false,
+    trigger: "last_planned",
+    offer: { group: "keep_moving", project: "projects/sase_badges.md" },
+    unblocked_by: [
+      { note_path: "projects/sase_badges.md", block_id: "draft-spec", text: "Draft the badge spec" },
+    ],
+    link: keepMovingLink(),
+    not_linked: null,
+    ...overrides,
+  };
+}
+
+function keepMovingOnlyModel(rows = [keepMovingRow()], overrides = {}) {
+  return {
+    version: 1,
+    predecessors: [
+      { note_path: "projects/sase_badges.md", block_id: "draft-spec", text: "Draft the badge spec" },
+    ],
+    unblocked: [],
+    keep_moving: rows,
+    still_blocked: [],
+    daily_path: "2026/20261101.md",
+    daily_content: null,
+    failure: null,
+    ...overrides,
+  };
+}
+
+test("keep-moving card: one pick reads as a Keep ‹N› moving card with ⏭, the lane, and no 🔓 or 'unblocked'", () => {
+  const view = helpers.buildUnblockedNoticeModel(
+    keepMovingOnlyModel([keepMovingRow()], { daily_content: "## Pomodoros\n- [ ] () — FIX\n" }),
+    { app: planBudgetApp() },
+  );
+  assert.ok(view);
+  assert.equal(view.keepMovingOnly, true);
+  assert.equal(view.title, "Keep ‹sase_badges› moving");
+  assert.equal(view.glyph, "⏭");
+  assert.equal(view.countPill, "1 → FIX");
+  assert.equal(view.receipt, "✓ Draft the badge spec");
+  assert.equal(
+    view.text,
+    "⏭ Next in FIX: Ship the badge renderer · keeps ‹sase_badges› moving",
+  );
+  assert.doesNotMatch(view.text, /🔓|unblocked/i);
+
+  const root = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(view, root, { app: planBudgetApp() });
+  const card = findFragmentNode(root, nodeHasClass("bob-nh-notice"));
+  assert.ok(card.classes.includes("is-unblock"));
+  assert.ok(card.classes.includes("is-keep-moving"));
+  assert.equal(card.attrs["aria-label"], view.text);
+  assert.equal(findFragmentNode(root, nodeHasClass("bob-nh-notice-glyph")).text, "⏭");
+  assert.equal(findFragmentNode(root, nodeHasClass("bob-nh-notice-level")).text, "Keep ‹sase_badges› moving");
+  assert.equal(findFragmentNode(root, nodeHasClass("bob-nh-notice-count")).text, "1 → FIX");
+  assert.equal(findFragmentNode(root, nodeHasClass("bob-nh-notice-receipt")).text, "✓ Draft the badge spec");
+  assert.equal(findFragmentNode(root, nodeHasClass("bob-nh-unblock-text")).text, "Ship the badge renderer");
+  const chips = collectFragmentNodes(root, nodeHasClass("bob-nh-notice-chip")).map((node) => node.text);
+  assert.ok(chips.includes("Pending"), "a Pending pick shows its lane (never In Progress or a symbol)");
+  assert.ok(chips.includes("plan 3/3 · 10/10"));
+  assert.ok(chips.includes("Alt+N releases"));
+  assert.equal(
+    chips.some((chip) => chip.startsWith("keeps")),
+    false,
+    "the title already says it; the chip is only for mixed cards",
+  );
+  const rowGlyph = findFragmentNode(root, nodeHasClass("bob-nh-unblock-glyph"));
+  assert.equal(rowGlyph.text, "＋");
+});
+
+test("keep-moving card: several picks, created sessions, several destinations, and several projects", () => {
+  const second = keepMovingRow({
+    block_id: "wire-readme",
+    text: "Wire badges into the README",
+    status_symbol: "*",
+    status_name: "Next",
+    link: keepMovingLink({ line: 41 }),
+  });
+  const two = helpers.buildUnblockedNoticeModel(keepMovingOnlyModel([keepMovingRow(), second]), {});
+  assert.equal(two.countPill, "2 → FIX");
+  assert.equal(two.text, "⏭ 2 linked → FIX · keeps ‹sase_badges› moving");
+
+  const elsewhere = keepMovingRow({
+    block_id: "wire-readme",
+    text: "Wire badges into the README",
+    link: keepMovingLink({ entry_name: "BOB" }),
+  });
+  const split = helpers.buildUnblockedNoticeModel(keepMovingOnlyModel([keepMovingRow(), elsewhere]), {});
+  assert.equal(split.countPill, "2 linked");
+  assert.equal(split.text, "⏭ 2 linked · FIX, BOB · keeps ‹sase_badges› moving");
+
+  const created = helpers.buildUnblockedNoticeModel(
+    keepMovingOnlyModel([keepMovingRow({ link: keepMovingLink({ entry_created: true, next_up: true }) })]),
+    {},
+  );
+  assert.equal(created.countPill, "1 → new FIX session · next up");
+  assert.equal(
+    created.text,
+    "⏭ Next in new FIX session (next up): Ship the badge renderer · keeps ‹sase_badges› moving",
+  );
+
+  const other = keepMovingRow({
+    note_path: "projects/sase_docs.md",
+    block_id: "fix-docs",
+    text: "Fix the docs",
+    offer: { group: "keep_moving", project: "projects/sase_docs.md" },
+    link: keepMovingLink({ line: 42 }),
+  });
+  const projects = helpers.buildUnblockedNoticeModel(keepMovingOnlyModel([keepMovingRow(), other]), {});
+  assert.equal(projects.title, "Keep 2 projects moving");
+  assert.equal(projects.text, "⏭ 2 linked → FIX · keeps 2 projects moving");
+});
+
+test("keep-moving lane names come from the status symbol: Pending, Next, Ready, Blocked", () => {
+  assert.equal(helpers.keepMovingRowLane({ status_symbol: "/" }), "Pending");
+  assert.equal(helpers.keepMovingRowLane({ status_symbol: "*", status_name: "Next" }), "Next");
+  assert.equal(helpers.keepMovingRowLane({ status_symbol: " " }), "Ready");
+  assert.equal(helpers.keepMovingRowLane({ status_symbol: "?" }), "Blocked");
+  assert.equal(helpers.keepMovingRowLane({ status_name: "In Progress" }), "Pending");
+  assert.equal(helpers.keepMovingRowLane({ status_name: "Next" }), "Next");
+  assert.equal(helpers.keepMovingRowLane({}), "");
+});
+
+test("keep-moving notices are silent when nothing was picked, and unpicked rows never render", () => {
+  const unpicked = keepMovingRow({ link: null, not_linked: "not_selected" });
+  assert.equal(helpers.buildUnblockedNoticeModel(keepMovingOnlyModel([unpicked]), {}), null);
+  assert.equal(helpers.showUnblockedNotice({}, keepMovingOnlyModel([unpicked])), false);
+  assert.equal(helpers.buildUnblockedNoticeModel(keepMovingOnlyModel([]), {}), null);
+  const mixedUnpicked = helpers.buildUnblockedNoticeModel(
+    keepMovingOnlyModel([unpicked, keepMovingRow({ block_id: "other", text: "Other pick" })]),
+    {},
+  );
+  assert.equal(mixedUnpicked.linked.length, 0, "keep-moving rows are not dependency 'linked' rows");
+  assert.equal(mixedUnpicked.keepMoving.length, 1, "only the picked row is reported");
+});
+
+test("a mixed card keeps the 🔓 forms, counts keep-moving picks as linked, and renders them last with the chip", () => {
+  const view = helpers.buildUnblockedNoticeModel(
+    singleLinkedModel({
+      keep_moving: [keepMovingRow()],
+      still_blocked: [
+        { note_path: "sase.md", block_id: "waiting", text: "Waiting task", waits_on: 2, trigger: "dependency", reason: "dependency", scheduled: null, inbox: false },
+      ],
+    }),
+    {},
+  );
+  assert.equal(view.keepMovingOnly, false);
+  assert.equal(view.title, "Unblocked");
+  assert.equal(view.glyph, "🔓");
+  assert.match(view.text, /^🔓 2 linked → FIX: /);
+  assert.equal(view.countPill, "2 → FIX");
+  assert.deepEqual(
+    view.rows.map((entry) => `${entry.kind}:${entry.row.block_id}`),
+    ["linked:relaunch-failed-agents", "stillBlocked:waiting", "linked:ship-renderer"],
+    "keep-moving rows come after every dependency row",
+  );
+  const root = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(view, root, {});
+  const card = findFragmentNode(root, nodeHasClass("bob-nh-notice"));
+  assert.equal(card.classes.includes("is-keep-moving"), false);
+  assert.equal(findFragmentNode(root, nodeHasClass("bob-nh-notice-glyph")).text, "🔓");
+  assert.equal(findFragmentNode(root, nodeHasClass("bob-nh-notice-level")).text, "Unblocked");
+  const keepChips = collectFragmentNodes(root, nodeHasClass("is-keep-moving"))
+    .filter((node) => node.classes.includes("bob-nh-notice-chip"))
+    .map((node) => node.text);
+  assert.deepEqual(keepChips, ["keeps ‹sase_badges› moving"]);
+  const rowEls = collectFragmentNodes(root, nodeHasClass("bob-nh-unblock-row"));
+  assert.equal(rowEls.length, 3);
+  assert.equal(rowEls[2].classes.includes("is-keep-moving"), true);
+  assert.equal(rowEls[0].classes.includes("is-keep-moving"), false);
+});
+
+test("a keep-moving failure keeps the failure text and an older model without keep_moving is unchanged", () => {
+  const failed = helpers.buildUnblockedNoticeModel(
+    keepMovingOnlyModel([keepMovingRow()], { failure: { count: 1, reason: "disk full" } }),
+    {},
+  );
+  assert.equal(failed.text, "⚠ Closed Draft the badge spec — couldn't link 1 successor (disk full)");
+  const v1 = helpers.buildUnblockedNoticeModel(singleLinkedModel(), {});
+  assert.equal(v1.keepMovingOnly, false);
+  assert.equal(v1.glyph, "🔓");
+  assert.equal(v1.keepMoving.length, 0);
+  assert.equal(v1.text, "🔓 Next in FIX: Re-launch all failed agents on apollo!");
+  const root = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(v1, root, {});
+  assert.equal(findFragmentNode(root, nodeHasClass("is-keep-moving")), null);
+});
+
+test("keep-moving notice falls back to its plain ⏭ line without a DOM", () => {
+  const previous = global.document;
+  delete global.document;
+  notices.length = 0;
+  try {
+    assert.equal(helpers.showUnblockedNotice({}, keepMovingOnlyModel()), true);
+    assert.match(notices[0], /^⏭ Next in FIX: Ship the badge renderer · keeps ‹sase_badges› moving$/);
+  } finally {
+    if (previous !== undefined) global.document = previous;
+  }
+});
+
+test("pull_in counts that include keep-moving offers never bring back the 🔓 forms on a keep-moving card", () => {
+  const view = helpers.buildUnblockedNoticeModel(
+    keepMovingOnlyModel([keepMovingRow()], { pull_in: { supported: true, offer_count: 4, picked_count: 1 } }),
+    {},
+  );
+  assert.equal(view.keepMovingOnly, true);
+  assert.equal(view.countPill, "1 → FIX");
+  assert.equal(view.text, "⏭ Next in FIX: Ship the badge renderer · keeps ‹sase_badges› moving");
+});
+
+test("keep-moving title and suffix helpers follow the copy table", () => {
+  const row = (project) => ({ keepMovingProject: project });
+  assert.equal(helpers.keepMovingTitle([row("a")]), "Keep ‹a› moving");
+  assert.equal(helpers.keepMovingTitle([row("a"), row("a")]), "Keep ‹a› moving");
+  assert.equal(helpers.keepMovingTitle([row("a"), row("b")]), "Keep 2 projects moving");
+  assert.equal(helpers.keepMovingSuffix([row("a")]), "keeps ‹a› moving");
+  assert.equal(helpers.keepMovingSuffix([row("a"), row("b"), row("c")]), "keeps 3 projects moving");
+});
+
+test("keep-moving stylesheet uses only existing tokens inside the scoped notice and picker blocks", () => {
+  const stylesPath = path.join(__dirname, "../plugins/bob-navigation-hotkeys/styles.css");
+  const styles = fs.readFileSync(stylesPath, "utf8");
+  const noticeStart = styles.indexOf(".bob-nh-notice.is-unblock.is-keep-moving");
+  assert.notEqual(noticeStart, -1);
+  const noticeBlock = styles.slice(noticeStart, styles.indexOf("/* Vault-wide Depends", noticeStart));
+  assert.match(noticeBlock, /--task-status-next/);
+  assert.match(noticeBlock, /\.bob-nh-notice-chip\.is-keep-moving/);
+  const pickerStart = styles.indexOf(".bob-successor-group-titlebar");
+  assert.notEqual(pickerStart, -1);
+  const pickerBlock = styles.slice(pickerStart, styles.indexOf("@media", pickerStart));
+  assert.match(pickerBlock, /\.bob-successor-group\.is-keep_moving/);
+  assert.match(pickerBlock, /--task-status-next/);
+  assert.match(pickerBlock, /\.bob-successor-group-caption/);
+  assert.match(pickerBlock, /\.bob-successor-group-tag/);
+  for (const block of [noticeBlock, pickerBlock]) {
+    assert.doesNotMatch(block, /#[0-9a-f]{3,8}\b/i);
+    assert.doesNotMatch(block, /\brgba?\(/i);
+    assert.doesNotMatch(block, /\bhsla?\(/i);
+  }
 });

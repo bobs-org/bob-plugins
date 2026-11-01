@@ -808,3 +808,215 @@ test("retarget:false hides the hint, ignores Ctrl+Shift+Enter, and drops destina
   assert.equal(prevented, true);
   modal.close();
 });
+
+// ---------------------------------------------------------------------------
+// Picker API v2 (docs/task-dependencies.md §12.13, §12.15): keep_moving
+// groups, caption, tag, folded blocked/scheduled, row lanes, title and icon.
+
+const KM_PROJECT = "projects/sase_badges.md";
+const KM_CAPTION = "✓ Draft the badge spec was the last sase_badges task planned today";
+const KM_TAG = "ready in sase_badges · not dependents";
+
+function keepMovingGroup(options = {}) {
+  return {
+    group: "keep_moving",
+    header: "Keep ‹sase_badges› moving",
+    caption: KM_CAPTION,
+    tag: KM_TAG,
+    project: KM_PROJECT,
+    rows: [
+      row("km:pending", 1, { text: "Ship the badge renderer", notePath: KM_PROJECT, status: "/", destinationLabel: "FIX" }),
+      row("km:next", 2, { text: "Wire badges into the README", notePath: KM_PROJECT, status: "*", destinationLabel: "FIX" }),
+      row("km:ready", 3, { text: "Write badge docs", notePath: KM_PROJECT, status: " ", destinationLabel: "FIX", needsBlockId: true }),
+    ],
+    folded: { hidden: 1, alreadyPlanned: 0, subProjects: 0, blocked: 2, scheduled: 1 },
+    ...options,
+  };
+}
+
+function keepMovingModel(groups = [keepMovingGroup()], extra = {}) {
+  return {
+    predecessors: [{ notePath: KM_PROJECT, blockId: "draft-spec", text: "Draft the badge spec" }],
+    groups,
+    budget: { links: 6, max: 10 },
+    ...extra,
+  };
+}
+
+test("picker API v2 renders a keep_moving group: title, caption, tag, lanes, fold line, and the skip-forward icon", async () => {
+  const plugin = makePlugin();
+  assert.equal(plugin.api.successors.version, 2);
+  const { pending, modal } = await openPicker(plugin, keepMovingModel());
+  assert.equal(modal.title, "Keep ‹sase_badges› moving", "only-keep_moving models derive the picker title");
+  assert.equal(modal.headerIcon, "skip-forward");
+  assert.ok(modal.contentEl.classes.includes("is-keep-moving-only"));
+  const group = findAll(modal.resultsEl, "bob-successor-group")[0];
+  assert.ok(group.classes.includes("is-keep_moving"));
+  assert.equal(findAll(group, "bob-successor-group-title")[0].textContent, "Keep ‹sase_badges› moving");
+  assert.equal(findAll(group, "bob-successor-group-tag")[0].textContent, KM_TAG);
+  assert.equal(findAll(group, "bob-successor-group-caption")[0].textContent, KM_CAPTION);
+  const tagParent = findAll(group, "bob-successor-group-titlebar")[0];
+  assert.ok(findAll(tagParent, "bob-successor-group-tag").length === 1, "the tag shares the title line");
+  const details = findAll(group, "bob-successor-row-details").map((el) => el.textContent);
+  assert.deepEqual(details, [
+    "sase_badges · Pending · → FIX",
+    "sase_badges · Next · → FIX",
+    "sase_badges · Ready · → FIX · needs ^id",
+  ], "rows show lane names, never raw symbols");
+  const folds = findAll(group, "bob-successor-folded-count").map((el) => el.textContent);
+  assert.deepEqual(folds, ["2 blocked · 1 scheduled later · 1 hidden"], "one fold line, zero parts omitted");
+  assert.match(allText(modal.footerEl), /plan 6\/10 → 7\/10/);
+  pressKey(modal, "a", { ctrlKey: true });
+  assert.match(allText(modal.footerEl), /plan 6\/10 → 9\/10/);
+  await finishWithEnter(plugin, modal);
+  assert.deepEqual((await pending).picks.map((pick) => pick.key), ["km:pending", "km:next", "km:ready"]);
+});
+
+test("a keep_moving fold line omits zero parts and orders blocked, scheduled later, hidden", () => {
+  const fold = (folded) => helpers.successorPickerFoldedLines(
+    helpers.normalizeSuccessorPickerModel(keepMovingModel([keepMovingGroup({ folded })])).groups[0],
+  );
+  assert.deepEqual(fold({ blocked: 2, scheduled: 1, hidden: 1 }), ["2 blocked · 1 scheduled later · 1 hidden"]);
+  assert.deepEqual(fold({ scheduled: 3 }), ["3 scheduled later"]);
+  assert.deepEqual(fold({ hidden: 1 }), ["1 hidden"]);
+  assert.deepEqual(fold({}), []);
+  assert.deepEqual(fold(undefined), []);
+});
+
+test("picker titles follow the keep_moving copy table; an explicit title always wins", () => {
+  const two = keepMovingModel([
+    keepMovingGroup(),
+    keepMovingGroup({ project: "projects/sase_docs.md", header: "Keep ‹sase_docs› moving" }),
+  ]);
+  two.groups[1].rows = [row("km:docs", 9, { text: "Fix docs", notePath: "projects/sase_docs.md", status: "*" })];
+  assert.equal(helpers.normalizeSuccessorPickerModel(two).title, "Keep 2 projects moving");
+  assert.equal(helpers.normalizeSuccessorPickerModel(keepMovingModel()).title, "Keep ‹sase_badges› moving");
+  assert.equal(helpers.normalizeSuccessorPickerModel(keepMovingModel(undefined, { title: "Choose" })).title, "Choose");
+  // A model with a non-keep_moving group keeps the existing default title.
+  const mixed = keepMovingModel([modelFor(1).groups[0], keepMovingGroup()]);
+  assert.equal(helpers.normalizeSuccessorPickerModel(mixed).title, "Choose successor tasks");
+  assert.equal(helpers.normalizeSuccessorPickerModel(mixed).keepMovingOnly, false);
+  // The project name falls back to the first row's note when `project` is absent.
+  const bare = keepMovingModel([keepMovingGroup({ project: "" })]);
+  assert.equal(helpers.normalizeSuccessorPickerModel(bare).title, "Keep ‹sase_badges› moving");
+});
+
+test("a mixed picker keeps the generic icon and renders keep_moving last with the same heading", async () => {
+  const plugin = makePlugin();
+  const handOffs = modelFor(1, { group: "hand_off" }).groups[0];
+  const project = modelFor(1, { group: "project", keyPrefix: "p" }).groups[0];
+  const { pending, modal } = await openPicker(plugin, keepMovingModel([keepMovingGroup(), handOffs, project]));
+  assert.equal(modal.headerIcon, "git-pull-request");
+  assert.equal(modal.contentEl.classes.includes("is-keep-moving-only"), false);
+  assert.equal(modal.title, "Choose successor tasks");
+  // Groups render in model order: the cycler supplies keep_moving last; nav never reorders.
+  const titles = findAll(modal.resultsEl, "bob-successor-group-title").map((el) => el.textContent);
+  assert.deepEqual(titles, ["Keep ‹sase_badges› moving", "Hand-offs", "Project ‹large-project›"]);
+  modal.close();
+  await pending;
+
+  const ordered = await openPicker(makePlugin(), keepMovingModel([handOffs, project, keepMovingGroup()]));
+  const orderedTitles = findAll(ordered.modal.resultsEl, "bob-successor-group-title").map((el) => el.textContent);
+  assert.deepEqual(orderedTitles, ["Hand-offs", "Project ‹large-project›", "Keep ‹sase_badges› moving"]);
+  const lastGroup = findAll(ordered.modal.resultsEl, "bob-successor-group").pop();
+  assert.ok(lastGroup.classes.includes("is-keep_moving"));
+  assert.equal(findAll(lastGroup, "bob-successor-group-caption").length, 1);
+  assert.equal(findAll(lastGroup, "bob-successor-group-tag").length, 1);
+  const earlier = findAll(ordered.modal.resultsEl, "bob-successor-group").slice(0, 2);
+  for (const el of earlier) {
+    assert.equal(findAll(el, "bob-successor-group-caption").length, 0, "dependent groups have no caption");
+    assert.equal(findAll(el, "bob-successor-group-tag").length, 0, "dependent groups have no tag");
+  }
+  ordered.modal.close();
+  await ordered.pending;
+});
+
+test("v1 models render exactly as before: no caption, tag, or titlebar, and rows keep their v1 details", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, modelFor(2, {
+    group: "hand_off",
+    folded: { hidden: 1, alreadyPlanned: 2, subProjects: 1 },
+  }));
+  assert.equal(modal.title, "Choose successors");
+  assert.equal(modal.headerIcon, "git-pull-request");
+  assert.equal(findAll(modal.resultsEl, "bob-successor-group-caption").length, 0);
+  assert.equal(findAll(modal.resultsEl, "bob-successor-group-tag").length, 0);
+  assert.equal(findAll(modal.resultsEl, "bob-successor-group-titlebar").length, 0);
+  assert.deepEqual(
+    findAll(modal.resultsEl, "bob-successor-folded-count").map((el) => el.textContent),
+    ["1 hidden", "2 already planned", "1 sub-project stays blocked until the next reconcile"],
+    "legacy fold keys keep one line per count",
+  );
+  const details = findAll(modal.resultsEl, "bob-successor-row-details").map((el) => el.textContent);
+  assert.deepEqual(details[0], "project-1 · Ready · → BOB");
+  modal.close();
+  await pending;
+});
+
+test("legacy groups render the additive blocked and scheduled folds as their own lines", () => {
+  const normalized = helpers.normalizeSuccessorPickerModel({
+    ...modelFor(1),
+    groups: [{ ...modelFor(1).groups[0], folded: { hidden: 1, blocked: 2, scheduled: 3 } }],
+  });
+  assert.deepEqual(helpers.successorPickerFoldedLines(normalized.groups[0]), ["1 hidden", "2 blocked", "3 scheduled later"]);
+});
+
+test("rows show lane names for every group and never a raw status symbol", () => {
+  const lane = helpers.successorPickerLaneName;
+  assert.equal(lane(undefined, " "), "Ready");
+  assert.equal(lane(undefined, "*"), "Next");
+  assert.equal(lane(undefined, "/"), "Pending");
+  assert.equal(lane(undefined, "?"), "Blocked");
+  assert.equal(lane("Pending", " "), "Pending", "a supplied lane wins");
+  assert.equal(lane("next", "/"), "Next", "lane names match case-insensitively");
+  assert.equal(lane("bogus", "*"), "Next", "an unknown lane falls back to the status");
+  assert.equal(lane(undefined, "Ready"), "Ready", "v1 callers already pass lane names");
+  assert.equal(lane(undefined, "In Progress"), "In Progress", "unmapped words pass through");
+  assert.equal(lane(undefined, "~"), "", "an unmapped symbol is hidden");
+  assert.equal(lane(undefined, ""), "");
+  const rowFor = (status) => helpers.normalizeSuccessorPickerModel(
+    modelFor(1, { rowOptions: () => ({ status }) }),
+  ).groups[0].rows[0];
+  assert.equal(rowFor("*").lane, "Next");
+  const withLane = helpers.normalizeSuccessorPickerModel({
+    ...modelFor(1),
+    groups: [{ ...modelFor(1).groups[0], rows: [{ ...modelFor(1).groups[0].rows[0], status: "x", lane: "Pending" }] }],
+  });
+  assert.equal(withLane.groups[0].rows[0].lane, "Pending");
+});
+
+test("unknown groups are still dropped and a keep_moving-only model with no selectable row is unusable", async () => {
+  const unknown = { ...keepMovingGroup(), group: "surprise" };
+  assert.equal(helpers.normalizeSuccessorPickerModel(keepMovingModel([unknown])), null);
+  const kept = helpers.normalizeSuccessorPickerModel(keepMovingModel([unknown, keepMovingGroup()]));
+  assert.deepEqual(kept.groups.map((group) => group.group), ["keep_moving"]);
+  const muted = keepMovingGroup();
+  muted.rows = muted.rows.map((item) => ({ ...item, selectable: false, mutedReason: "blocked" }));
+  assert.equal(await makePlugin().api.successors.pick(keepMovingModel([muted])), null);
+});
+
+test("the filter reaches keep_moving groups by caption, tag, and lane", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, keepMovingModel());
+  const visibleKeys = () => modal.visibleItems.filter((item) => item.kind === "offer").map((item) => item.row.key);
+  modal.inputEl.value = "not dependents";
+  modal.renderResults();
+  assert.deepEqual(visibleKeys(), ["km:pending", "km:next", "km:ready"], "the tag matches the whole group");
+  modal.inputEl.value = "last sase_badges task";
+  modal.renderResults();
+  assert.equal(visibleKeys().length, 3, "the caption matches the whole group");
+  modal.inputEl.value = "pending";
+  modal.renderResults();
+  assert.deepEqual(visibleKeys(), ["km:pending"], "the lane name filters rows");
+  modal.close();
+  await pending;
+});
+
+test("keep_moving picks reuse the normal pick/retarget paths: keys and destinations round-trip", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, keepMovingModel());
+  pressKey(modal, "Tab");
+  plugin.setNow(1350);
+  pressKey(modal, "Enter");
+  assert.deepEqual(await pending, { picks: [{ key: "km:pending" }] });
+});

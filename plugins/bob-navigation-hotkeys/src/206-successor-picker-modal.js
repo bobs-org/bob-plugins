@@ -16,12 +16,37 @@ function successorPickerGroupTitle(group) {
   if (group.group === "project_finished") {
     return "Project finished";
   }
+  if (group.group === "keep_moving") {
+    return `Keep ‹${successorPickerKeepMovingProject(group)}› moving`;
+  }
   const note = successorPickerNoteName(group.project);
   return `Project ‹${note || "project"}›`;
 }
 
+// Folded-count lines. Legacy groups keep one line per count. A keep_moving
+// group folds into the single `2 blocked · 1 scheduled later · 1 hidden`
+// line (zero parts omitted, §12.15 copy table).
 function successorPickerFoldedLines(group) {
   const folded = group.folded || {};
+  if (group.group === "keep_moving") {
+    const parts = [];
+    if (folded.blocked > 0) {
+      parts.push(`${folded.blocked} blocked`);
+    }
+    if (folded.scheduled > 0) {
+      parts.push(`${folded.scheduled} scheduled later`);
+    }
+    if (folded.hidden > 0) {
+      parts.push(`${folded.hidden} hidden`);
+    }
+    if (folded.alreadyPlanned > 0) {
+      parts.push(`${folded.alreadyPlanned} already planned`);
+    }
+    if (folded.subProjects > 0) {
+      parts.push(`${folded.subProjects} sub-project${folded.subProjects === 1 ? "" : "s"}`);
+    }
+    return parts.length > 0 ? [parts.join(" · ")] : [];
+  }
   const lines = [];
   if (folded.hidden > 0) {
     lines.push(`${folded.hidden} hidden`);
@@ -32,6 +57,12 @@ function successorPickerFoldedLines(group) {
   if (folded.subProjects > 0) {
     const count = folded.subProjects;
     lines.push(`${count} sub-project${count === 1 ? " stays" : "s stay"} blocked until the next reconcile`);
+  }
+  if (folded.blocked > 0) {
+    lines.push(`${folded.blocked} blocked`);
+  }
+  if (folded.scheduled > 0) {
+    lines.push(`${folded.scheduled} scheduled later`);
   }
   return lines;
 }
@@ -53,7 +84,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     super(app, {
       items: [],
       title: normalized ? normalized.title : "Choose successor tasks",
-      headerIcon: "git-pull-request",
+      headerIcon: normalized && normalized.keepMovingOnly ? "skip-forward" : "git-pull-request",
       inputLabel: "Filter successor offers",
       placeholder: "Filter tasks, notes, and groups",
       resultsLabel: "Successor offers",
@@ -106,6 +137,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       this.openedAt = this.currentTime();
       super.onOpen();
       addSuccessorPickerClasses(this.contentEl, "bob-cnp-successor");
+      if (this.model && this.model.keepMovingOnly) {
+        addSuccessorPickerClasses(this.contentEl, "is-keep-moving-only");
+      }
       addSuccessorPickerClasses(this.modalEl, "bob-cnp-successor-modal");
       this.renderAll();
     } catch (error) {
@@ -333,12 +367,13 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     if (!query) {
       return group.rows.map((row, index) => ({ row, index }));
     }
-    const context = [group.header, group.project, successorPickerGroupTitle(group)].join(" ").toLowerCase();
+    const context = [group.header, group.caption, group.tag, group.project, successorPickerGroupTitle(group)]
+      .join(" ").toLowerCase();
     if (context.includes(query)) {
       return group.rows.map((row, index) => ({ row, index }));
     }
     return group.rows.map((row, index) => ({ row, index })).filter(({ row }) =>
-      [row.text, row.notePath, row.status, row.destinationLabel, row.mutedReason].join(" ").toLowerCase().includes(query),
+      [row.text, row.notePath, row.status, row.lane, row.destinationLabel, row.mutedReason].join(" ").toLowerCase().includes(query),
     );
   }
 
@@ -391,7 +426,18 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       }
       const groupEl = this.resultsEl.createDiv({ cls: `bob-successor-group is-${group.group}` });
       const heading = groupEl.createDiv({ cls: "bob-successor-group-heading" });
-      heading.createDiv({ cls: "bob-successor-group-title", text: successorPickerGroupTitle(group) });
+      // A group tag (keep_moving contrast tag) shares the title line,
+      // right-aligned; groups without one keep the bare title div.
+      const titleRow = group.tag
+        ? heading.createDiv({ cls: "bob-successor-group-titlebar" })
+        : heading;
+      titleRow.createDiv({ cls: "bob-successor-group-title", text: successorPickerGroupTitle(group) });
+      if (group.tag) {
+        titleRow.createSpan({ cls: "bob-successor-group-tag", text: group.tag });
+      }
+      if (group.caption) {
+        heading.createDiv({ cls: "bob-successor-group-caption", text: group.caption });
+      }
       if (group.group === "project" && group.header) {
         heading.createDiv({ cls: "bob-successor-project-task", text: group.header });
       }
@@ -420,7 +466,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         const note = successorPickerNoteName(row.notePath);
         const details = [];
         if (note) details.push(note);
-        if (row.status) details.push(row.status);
+        if (row.lane) details.push(row.lane);
         let shownDestination = row.destinationLabel;
         try {
           const override = this.destinationOverrides && this.destinationOverrides.get(row.key);
@@ -545,7 +591,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
 
 function createSuccessorPickerApi(plugin) {
   return Object.freeze({
-    version: 1,
+    version: 2,
     pick(model) {
       try {
         if (!plugin || plugin.successorPickerUnavailable === true || typeof plugin.pickSuccessorOffers !== "function") {

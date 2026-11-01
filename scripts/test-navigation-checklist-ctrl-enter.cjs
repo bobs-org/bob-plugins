@@ -544,3 +544,72 @@ test("completion failure preserves cursor and landing and reports the Tasks fail
   assert.equal(fixture.plugin.reviewLanding, landing);
   assert.equal(notices.at(-1), "Not completed — not-closed");
 });
+
+// Nav phase (§12.15): a keep-moving picker and its ⏭ notice line compose into
+// the single walk toast exactly like a dependency pull-in; the walk holds while
+// the keep_moving picker is open and advances once after it settles.
+test("a keep-moving picker holds the checklist landing and its ⏭ notice joins the single walk toast", async () => {
+  const queue = queueFor(["Check weather", "Brush teeth"]);
+  const project = "projects/sase_badges.md";
+  const model = {
+    predecessors: [{ notePath: "gtd_daily.md", blockId: "weather", text: "Check weather" }],
+    groups: [{
+      group: "keep_moving",
+      header: "Keep ‹sase_badges› moving",
+      caption: "✓ Check weather was the last sase_badges task planned today",
+      tag: "ready in sase_badges · not dependents",
+      project,
+      rows: [{ key: "opaque:ship", text: "Ship the badge renderer", notePath: project, status: "/", destinationLabel: "JOB", needsBlockId: false, selectable: true }],
+      folded: { hidden: 0, alreadyPlanned: 0, subProjects: 0, blocked: 1, scheduled: 0 },
+    }],
+  };
+  let plugin = null;
+  const complete = async (editor) => {
+    const picks = await plugin.api.successors.pick(model);
+    assert.deepEqual(picks, { picks: [{ key: "opaque:ship" }] });
+    const notice = helpers.buildUnblockedNoticeModel({
+      predecessors: [{ note_path: "gtd_daily.md", block_id: "weather", text: "Check weather" }],
+      unblocked: [],
+      keep_moving: [{
+        note_path: project,
+        block_id: "ship",
+        text: "Ship the badge renderer",
+        status_symbol: "/",
+        offer: { group: "keep_moving", project },
+        link: { entry_name: "JOB", entry_created: false, next_up: false },
+      }],
+      still_blocked: [],
+      failure: null,
+    }, {});
+    return {
+      ...await completeAtCursor()(editor),
+      successorNotice: notice.text,
+    };
+  };
+  const fixture = makePlugin({ queue, content: queue.map((row) => row.originalMarkdown).join("\n"), complete });
+  plugin = fixture.plugin;
+  await land(plugin, "first");
+  const startingEpoch = plugin.reviewLandingEpoch;
+  clearNotices();
+  const completion = claim(plugin, fixture.editor);
+  await Promise.resolve();
+  const modal = plugin.activeSuccessorPicker;
+  assert.ok(modal, "the keep_moving model opens the actual nav picker");
+  assert.equal(modal.headerIcon, "skip-forward");
+  assert.equal(plugin.reviewWalkBusy(), true, "the picker holds the walk gesture lock");
+  assert.deepEqual(await claim(plugin, fixture.editor), { ok: false, reason: "busy" }, "duplicate Ctrl+Enter is swallowed");
+  assert.equal(plugin.reviewLandingEpoch, startingEpoch);
+  plugin.advanceReviewClock(400);
+  pressKey(modal, "Tab");
+  pressKey(modal, "Enter");
+  assert.equal(plugin.reviewLandingEpoch, startingEpoch, "closing the picker does not itself advance the walk");
+  assert.deepEqual(await completion, { ok: true });
+  await plugin.vimJumpHistoryChain;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await plugin.vimJumpHistoryChain;
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /#pre Brush teeth/, "the walk advanced exactly once");
+  assert.equal(plugin.reviewSuccessorWalkHold, null);
+  assert.equal(notices.length, 1, "the picker and the walk use one toast");
+  assert.match(notices[0], /⏭ Next in JOB: Ship the badge renderer · keeps ‹sase_badges› moving/);
+  assert.doesNotMatch(notices[0], /🔓|unblocked/i);
+});

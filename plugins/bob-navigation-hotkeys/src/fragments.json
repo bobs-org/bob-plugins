@@ -173,5 +173,6 @@
   "690-install-plugin-mixins.js",
   "700-exports.js",
   "701-exports-parent-change.js",
-  "702-relation-mention-exports.js"
+  "702-relation-mention-exports.js",
+  "703-successor-keep-moving-exports.js"
 ]

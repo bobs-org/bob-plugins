@@ -25439,6 +25439,67 @@ function successorPickerNoteName(path) {
   return leaf.toLowerCase().endsWith(".md") ? leaf.slice(0, -3) : leaf;
 }
 
+// Lane names shown on every picker row (§12.13 picker API v2): the raw
+// status symbol is never displayed. A supplied `lane` wins when it is one of
+// the four lane names; otherwise the lane derives from the row `status`, which
+// is either a status symbol (" ", "*", "/", "?") or already a lane name.
+const SUCCESSOR_PICKER_LANE_BY_SYMBOL = Object.freeze({
+  " ": "Ready",
+  "*": "Next",
+  "/": "Pending",
+  "?": "Blocked",
+});
+const SUCCESSOR_PICKER_LANE_NAMES = Object.freeze(["Pending", "Next", "Ready", "Blocked"]);
+
+function successorPickerLaneName(lane, status) {
+  const named = successorPickerText(lane).toLowerCase();
+  const byName = SUCCESSOR_PICKER_LANE_NAMES.find((name) => name.toLowerCase() === named);
+  if (byName) {
+    return byName;
+  }
+  if (typeof status === "string" && SUCCESSOR_PICKER_LANE_BY_SYMBOL[status]) {
+    return SUCCESSOR_PICKER_LANE_BY_SYMBOL[status];
+  }
+  const text = successorPickerText(status);
+  if (!text) {
+    return "";
+  }
+  const byStatusName = SUCCESSOR_PICKER_LANE_NAMES.find((name) => name.toLowerCase() === text.toLowerCase());
+  if (byStatusName) {
+    return byStatusName;
+  }
+  // An unmapped single-character mark is a raw symbol, never shown.
+  return text.length === 1 ? "" : text;
+}
+
+// Picker title (§12.15 copy table). An explicit model title always wins;
+// without one, a model whose groups are all keep_moving reads `Keep ‹N›
+// moving` / `Keep k projects moving`.
+function successorPickerKeepMovingProject(group) {
+  const fromProject = successorPickerNoteName(group && group.project);
+  if (fromProject) {
+    return fromProject;
+  }
+  const first = group && Array.isArray(group.rows) ? group.rows[0] : null;
+  return successorPickerNoteName(first && first.notePath) || "project";
+}
+
+function successorPickerAllKeepMoving(groups) {
+  return Array.isArray(groups) && groups.length > 0 &&
+    groups.every((group) => group && group.group === "keep_moving");
+}
+
+function successorPickerKeepMovingTitle(groups) {
+  const names = [];
+  for (const group of groups) {
+    const name = successorPickerKeepMovingProject(group);
+    if (!names.includes(name)) {
+      names.push(name);
+    }
+  }
+  return names.length === 1 ? `Keep ‹${names[0]}› moving` : `Keep ${names.length} projects moving`;
+}
+
 // Optional validated task context for `api.pick({task})`. `line` is
 // one-based and `text` is the full note. `preimage` is the original task
 // line used to refuse a changed/missing source before the nested picker.
@@ -25481,7 +25542,7 @@ function normalizeSuccessorPickerModel(model) {
     if (!model || typeof model !== "object" || !Array.isArray(model.groups)) {
       return null;
     }
-    const allowedGroups = new Set(["hand_off", "project", "project_finished"]);
+    const allowedGroups = new Set(["hand_off", "project", "project_finished", "keep_moving"]);
     const seenKeys = new Set();
     const groups = [];
     let selectableCount = 0;
@@ -25512,6 +25573,7 @@ function normalizeSuccessorPickerModel(model) {
           text,
           notePath: row.notePath,
           status: successorPickerText(row.status),
+          lane: successorPickerLaneName(row.lane, row.status),
           destinationLabel: successorPickerText(row.destinationLabel),
           needsBlockId: row.needsBlockId === true,
           selectable: row.selectable,
@@ -25531,11 +25593,15 @@ function normalizeSuccessorPickerModel(model) {
             hidden: successorPickerCount(source.folded.hidden),
             alreadyPlanned: successorPickerCount(source.folded.alreadyPlanned),
             subProjects: successorPickerCount(source.folded.subProjects),
+            blocked: successorPickerCount(source.folded.blocked),
+            scheduled: successorPickerCount(source.folded.scheduled),
           })
-        : Object.freeze({ hidden: 0, alreadyPlanned: 0, subProjects: 0 });
+        : Object.freeze({ hidden: 0, alreadyPlanned: 0, subProjects: 0, blocked: 0, scheduled: 0 });
       groups.push(Object.freeze({
         group: source.group,
         header: successorPickerText(source.header),
+        caption: successorPickerText(source.caption),
+        tag: successorPickerText(source.tag),
         project: successorPickerText(source.project),
         rows: Object.freeze(rows),
         folded,
@@ -25557,11 +25623,14 @@ function normalizeSuccessorPickerModel(model) {
           text: successorPickerText(row.text),
         }))
       : [];
+    const keepMovingOnly = successorPickerAllKeepMoving(groups);
     return Object.freeze({
-      title: successorPickerText(model.title) || "Choose successor tasks",
+      title: successorPickerText(model.title) ||
+        (keepMovingOnly ? successorPickerKeepMovingTitle(groups) : "Choose successor tasks"),
       predecessors: Object.freeze(predecessors),
       groups: Object.freeze(groups),
       budget,
+      keepMovingOnly,
       selectableCount,
       taskRowCount,
     });
@@ -25697,12 +25766,37 @@ function successorPickerGroupTitle(group) {
   if (group.group === "project_finished") {
     return "Project finished";
   }
+  if (group.group === "keep_moving") {
+    return `Keep ‹${successorPickerKeepMovingProject(group)}› moving`;
+  }
   const note = successorPickerNoteName(group.project);
   return `Project ‹${note || "project"}›`;
 }
 
+// Folded-count lines. Legacy groups keep one line per count. A keep_moving
+// group folds into the single `2 blocked · 1 scheduled later · 1 hidden`
+// line (zero parts omitted, §12.15 copy table).
 function successorPickerFoldedLines(group) {
   const folded = group.folded || {};
+  if (group.group === "keep_moving") {
+    const parts = [];
+    if (folded.blocked > 0) {
+      parts.push(`${folded.blocked} blocked`);
+    }
+    if (folded.scheduled > 0) {
+      parts.push(`${folded.scheduled} scheduled later`);
+    }
+    if (folded.hidden > 0) {
+      parts.push(`${folded.hidden} hidden`);
+    }
+    if (folded.alreadyPlanned > 0) {
+      parts.push(`${folded.alreadyPlanned} already planned`);
+    }
+    if (folded.subProjects > 0) {
+      parts.push(`${folded.subProjects} sub-project${folded.subProjects === 1 ? "" : "s"}`);
+    }
+    return parts.length > 0 ? [parts.join(" · ")] : [];
+  }
   const lines = [];
   if (folded.hidden > 0) {
     lines.push(`${folded.hidden} hidden`);
@@ -25713,6 +25807,12 @@ function successorPickerFoldedLines(group) {
   if (folded.subProjects > 0) {
     const count = folded.subProjects;
     lines.push(`${count} sub-project${count === 1 ? " stays" : "s stay"} blocked until the next reconcile`);
+  }
+  if (folded.blocked > 0) {
+    lines.push(`${folded.blocked} blocked`);
+  }
+  if (folded.scheduled > 0) {
+    lines.push(`${folded.scheduled} scheduled later`);
   }
   return lines;
 }
@@ -25734,7 +25834,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     super(app, {
       items: [],
       title: normalized ? normalized.title : "Choose successor tasks",
-      headerIcon: "git-pull-request",
+      headerIcon: normalized && normalized.keepMovingOnly ? "skip-forward" : "git-pull-request",
       inputLabel: "Filter successor offers",
       placeholder: "Filter tasks, notes, and groups",
       resultsLabel: "Successor offers",
@@ -25787,6 +25887,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       this.openedAt = this.currentTime();
       super.onOpen();
       addSuccessorPickerClasses(this.contentEl, "bob-cnp-successor");
+      if (this.model && this.model.keepMovingOnly) {
+        addSuccessorPickerClasses(this.contentEl, "is-keep-moving-only");
+      }
       addSuccessorPickerClasses(this.modalEl, "bob-cnp-successor-modal");
       this.renderAll();
     } catch (error) {
@@ -26014,12 +26117,13 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     if (!query) {
       return group.rows.map((row, index) => ({ row, index }));
     }
-    const context = [group.header, group.project, successorPickerGroupTitle(group)].join(" ").toLowerCase();
+    const context = [group.header, group.caption, group.tag, group.project, successorPickerGroupTitle(group)]
+      .join(" ").toLowerCase();
     if (context.includes(query)) {
       return group.rows.map((row, index) => ({ row, index }));
     }
     return group.rows.map((row, index) => ({ row, index })).filter(({ row }) =>
-      [row.text, row.notePath, row.status, row.destinationLabel, row.mutedReason].join(" ").toLowerCase().includes(query),
+      [row.text, row.notePath, row.status, row.lane, row.destinationLabel, row.mutedReason].join(" ").toLowerCase().includes(query),
     );
   }
 
@@ -26072,7 +26176,18 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       }
       const groupEl = this.resultsEl.createDiv({ cls: `bob-successor-group is-${group.group}` });
       const heading = groupEl.createDiv({ cls: "bob-successor-group-heading" });
-      heading.createDiv({ cls: "bob-successor-group-title", text: successorPickerGroupTitle(group) });
+      // A group tag (keep_moving contrast tag) shares the title line,
+      // right-aligned; groups without one keep the bare title div.
+      const titleRow = group.tag
+        ? heading.createDiv({ cls: "bob-successor-group-titlebar" })
+        : heading;
+      titleRow.createDiv({ cls: "bob-successor-group-title", text: successorPickerGroupTitle(group) });
+      if (group.tag) {
+        titleRow.createSpan({ cls: "bob-successor-group-tag", text: group.tag });
+      }
+      if (group.caption) {
+        heading.createDiv({ cls: "bob-successor-group-caption", text: group.caption });
+      }
       if (group.group === "project" && group.header) {
         heading.createDiv({ cls: "bob-successor-project-task", text: group.header });
       }
@@ -26101,7 +26216,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         const note = successorPickerNoteName(row.notePath);
         const details = [];
         if (note) details.push(note);
-        if (row.status) details.push(row.status);
+        if (row.lane) details.push(row.lane);
         let shownDestination = row.destinationLabel;
         try {
           const override = this.destinationOverrides && this.destinationOverrides.get(row.key);
@@ -26226,7 +26341,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
 
 function createSuccessorPickerApi(plugin) {
   return Object.freeze({
-    version: 1,
+    version: 2,
     pick(model) {
       try {
         if (!plugin || plugin.successorPickerUnavailable === true || typeof plugin.pickSuccessorOffers !== "function") {
@@ -40630,8 +40745,9 @@ function getLocalTaskDependencyIdentifier(task, filePath = "") {
 // ---- src/285-unblocked-notice.js ----
 // Unblocked successor notice card (plan:202610/successor_offers.md §12.6,
 // `nav_card`). Pure model plus the `bob-nh-notice is-unblock` fragment and
-// the additive `api.notice` v1 factory. Nothing here reads the vault; the
-// cycler passes the shared snake_case notice model and this file renders it.
+// the additive `api.notice` factory (v2 adds keep-moving rows, §12.15).
+// Nothing here reads the vault; the cycler passes the shared snake_case
+// notice model and this file renders it.
 const UNBLOCKED_NOTICE_MAX_TEXT_LENGTH = 48;
 
 const UNBLOCKED_NOTICE_NOT_LINKED_REASONS = Object.freeze({
@@ -40696,6 +40812,62 @@ function unblockedRowLane(row) {
     return UNBLOCKED_NOTICE_STATUS_NAMES[symbol];
   }
   return "";
+}
+
+// Keep-moving rows (§12.15) name the lane a pick lands in. `/` is Pending
+// here (never "In Progress"), and the raw symbol is never shown.
+const KEEP_MOVING_LANE_BY_SYMBOL = Object.freeze({
+  " ": "Ready",
+  "*": "Next",
+  "/": "Pending",
+  "?": "Blocked",
+});
+
+function keepMovingRowLane(row) {
+  const symbol = row && row.status_symbol;
+  if (typeof symbol === "string" && KEEP_MOVING_LANE_BY_SYMBOL[symbol]) {
+    return KEEP_MOVING_LANE_BY_SYMBOL[symbol];
+  }
+  const named = unblockedNoticeText(row && row.status_name);
+  return named === "In Progress" ? "Pending" : named;
+}
+
+// ‹N› for a keep-moving row: the offer's project note, else the row's own
+// note (a keep-moving row is always a resident of N).
+function keepMovingProjectName(row) {
+  const offer = row && row.offer && typeof row.offer === "object" ? row.offer : null;
+  return (
+    unblockedShortNoteName(offer && offer.project) ||
+    unblockedShortNoteName(row && row.note_path) ||
+    "project"
+  );
+}
+
+function keepMovingProjectNames(rows) {
+  const names = [];
+  for (const row of rows) {
+    const name = row.keepMovingProject || "project";
+    if (!names.includes(name)) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+// `keeps ‹N› moving` / `keeps 2 projects moving` (§12.15 copy table).
+function keepMovingSuffix(rows) {
+  const names = keepMovingProjectNames(rows);
+  return names.length === 1
+    ? `keeps ‹${names[0]}› moving`
+    : `keeps ${names.length} projects moving`;
+}
+
+// `Keep ‹N› moving` / `Keep 2 projects moving`.
+function keepMovingTitle(rows) {
+  const names = keepMovingProjectNames(rows);
+  return names.length === 1
+    ? `Keep ‹${names[0]}› moving`
+    : `Keep ${names.length} projects moving`;
 }
 
 // `2026-10-13` → `Oct 13`. Falls back to the raw text when it is not a
@@ -40792,6 +40964,31 @@ function unblockedEntryDisplayName(entryName) {
   return name || "today";
 }
 
+// ⏭ forms for a notice whose rows are all keep-moving picks (§12.15 copy
+// table). Never uses 🔓 or the word "unblocked".
+function keepMovingFallbackText(linked) {
+  const suffix = keepMovingSuffix(linked);
+  if (linked.length === 1) {
+    const row = linked[0];
+    const name = unblockedEntryDisplayName(row.entryName);
+    if (row.entryCreated) {
+      const nextUp = row.nextUp ? " (next up)" : "";
+      return `⏭ Next in new ${name} session${nextUp}: ${truncateUnblockedText(row.text)} · ${suffix}`;
+    }
+    return `⏭ Next in ${name}: ${truncateUnblockedText(row.text)} · ${suffix}`;
+  }
+  const names = [];
+  for (const row of linked) {
+    const name = unblockedEntryDisplayName(row.entryName);
+    if (!names.includes(name)) {
+      names.push(name);
+    }
+  }
+  return names.length === 1
+    ? `⏭ ${linked.length} linked → ${names[0]} · ${suffix}`
+    : `⏭ ${linked.length} linked · ${names.join(", ")} · ${suffix}`;
+}
+
 // Plain-text fallback and card aria-label. Follows the §12.6 notice-text
 // table: one linked, several linked (one entry / several entries), created
 // continuation, breaker, recovered-only, and partial failure.
@@ -40810,6 +41007,9 @@ function unblockedFallbackText(summary) {
     const reason = unblockedNoticeText(summary.failure.reason);
     const noun = count === 1 ? "successor" : "successors";
     return `⚠ Closed ${predText} — couldn't link ${count} ${noun}${reason ? ` (${reason})` : ""}`;
+  }
+  if (summary.onlyKeepMoving && linked.length > 0) {
+    return keepMovingFallbackText(linked);
   }
   if (summary.pullIn && summary.pullIn.current) {
     const destinationText = summary.pullIn.destinations.length > 0
@@ -40911,7 +41111,18 @@ function buildUnblockedNoticeModel(model, options = {}) {
     const hasProjectStillBlocked = stillBlocked.some(
       (row) => unblockedNoticeText(row.trigger) === "project_empty",
     );
-    if (unblocked.length === 0 && !hasFailure && !hasProjectStillBlocked) {
+    // Keep-moving rows (notice v2, §12.15) arrive in their own array. Only
+    // picked rows (with a `link`) are reported: an unpicked keep-moving offer
+    // recovered nothing, so it stays silent.
+    const keepMovingSource = unblockedNoticeList(model.keep_moving).filter(
+      (row) => row && typeof row === "object" && row.link && typeof row.link === "object",
+    );
+    if (
+      unblocked.length === 0 &&
+      keepMovingSource.length === 0 &&
+      !hasFailure &&
+      !hasProjectStillBlocked
+    ) {
       return null;
     }
     const dailyPath = unblockedNoticeText(model.daily_path);
@@ -40957,6 +41168,30 @@ function buildUnblockedNoticeModel(model, options = {}) {
         );
       }
     }
+    const keepMoving = keepMovingSource.map((row) => {
+      const link = row.link;
+      return Object.freeze({
+        note_path: unblockedNoticeText(row.note_path),
+        block_id: unblockedNoticeText(row.block_id),
+        text: truncateUnblockedText(row.text),
+        fullText: unblockedNoticeText(row.text),
+        inbox: row.inbox === true,
+        lane: keepMovingRowLane(row),
+        trigger: "last_planned",
+        projectEmpty: false,
+        keepMoving: true,
+        keepMovingProject: keepMovingProjectName(row),
+        previousStatusSymbol: unblockedNoticeText(row.previous_status_symbol),
+        statusSymbol: unblockedNoticeText(row.status_symbol),
+        hideRemoved: false,
+        entryName: unblockedNoticeText(link.entry_name),
+        entryCreated: link.entry_created === true,
+        nextUp: link.next_up === true,
+        blockIdCreated: link.block_id_created === true,
+        blockLink: unblockedNoticeText(link.block_link),
+      });
+    });
+
     const still = stillBlocked.map((row) => {
       const waitsOn = Math.max(
         0,
@@ -40988,27 +41223,37 @@ function buildUnblockedNoticeModel(model, options = {}) {
       });
     });
 
+    // Keep-moving picks count as linked in every summary; the card is a
+    // keep-moving card only when nothing but keep-moving picks is reported.
+    const allLinked = [...linked, ...keepMoving];
+    const onlyKeepMoving =
+      keepMoving.length > 0 &&
+      linked.length === 0 &&
+      recovered.length === 0 &&
+      stillBlocked.length === 0;
     const breakerCount = recovered.filter(
       (row) => row.notLinked === "breaker",
     ).length;
     const isBreaker =
-      linked.length === 0 &&
+      allLinked.length === 0 &&
       recovered.length > 0 &&
       breakerCount === recovered.length;
 
-    const pullIn = unblockedPullInSummary(model, linked, recovered);
+    const pullIn = unblockedPullInSummary(model, allLinked, recovered);
 
     const total = unblocked.length + still.length;
+    // Keep-moving rows render after every dependency row (§12.15).
     const ordered = Object.freeze([
       ...linked.map((row) => ({ kind: "linked", row })),
       ...recovered.map((row) => ({ kind: "recovered", row })),
       ...still.map((row) => ({ kind: "stillBlocked", row })),
+      ...keepMoving.map((row) => ({ kind: "linked", row })),
     ]);
     const visibleRows = ordered.slice(0, 3);
     const moreCount = Math.max(0, ordered.length - visibleRows.length);
 
     let countPill = "";
-    if (pullIn && pullIn.current) {
+    if (pullIn && pullIn.current && !onlyKeepMoving) {
       const destinationText = pullIn.destinations.length > 0
         ? ` → ${pullIn.destinations.join(", ")}`
         : "";
@@ -41018,23 +41263,23 @@ function buildUnblockedNoticeModel(model, options = {}) {
       countPill = `${pullIn.pulledIn} pulled in${pullIn.notPulledIn > 0 ? ` · ${pullIn.notPulledIn} not pulled in` : ""}${noDestination}${destinationText}`;
     } else if (isBreaker) {
       countPill = `${unblocked.length} · not linked`;
-    } else if (linked.length > 0) {
+    } else if (allLinked.length > 0) {
       const names = [];
-      for (const row of linked) {
+      for (const row of allLinked) {
         const name = unblockedEntryDisplayName(row.entryName);
         if (!names.includes(name)) {
           names.push(name);
         }
       }
-      const created = linked.some((row) => row.entryCreated);
+      const created = allLinked.some((row) => row.entryCreated);
       if (names.length === 1) {
         countPill = created
-          ? `${linked.length} → new ${names[0]} session`
-          : `${linked.length} → ${names[0]}`;
+          ? `${allLinked.length} → new ${names[0]} session`
+          : `${allLinked.length} → ${names[0]}`;
       } else {
-        countPill = `${linked.length} linked`;
+        countPill = `${allLinked.length} linked`;
       }
-      if (linked.some((row) => row.nextUp)) {
+      if (allLinked.some((row) => row.nextUp)) {
         countPill += " · next up";
       }
     } else if (unblocked.length > 0) {
@@ -41059,7 +41304,7 @@ function buildUnblockedNoticeModel(model, options = {}) {
     } catch (error) {
       planChip = "";
     }
-    const minted = linked.filter((row) => row.blockIdCreated);
+    const minted = allLinked.filter((row) => row.blockIdCreated);
     let addedChip = "";
     if (minted.length === 1 && minted[0].block_id) {
       addedChip = `added ^${minted[0].block_id}`;
@@ -41073,12 +41318,13 @@ function buildUnblockedNoticeModel(model, options = {}) {
     if (addedChip) {
       chips.push(Object.freeze({ text: addedChip, tone: "ok" }));
     }
-    if (linked.length > 0) {
+    if (allLinked.length > 0) {
       chips.push(Object.freeze({ text: "Alt+N releases", tone: "muted" }));
     }
 
     const summary = {
-      linked,
+      linked: allLinked,
+      onlyKeepMoving,
       recovered,
       predecessors,
       pullIn,
@@ -41102,6 +41348,9 @@ function buildUnblockedNoticeModel(model, options = {}) {
       moreCount,
       isBreaker,
       pullIn,
+      keepMoving: Object.freeze(keepMoving),
+      keepMovingOnly: onlyKeepMoving,
+      glyph: onlyKeepMoving ? "⏭" : "🔓",
       showLegacyBreaker: isBreaker && !(pullIn && pullIn.current),
       failure: hasFailure ? Object.freeze(failure) : null,
       dailyPath,
@@ -41109,8 +41358,9 @@ function buildUnblockedNoticeModel(model, options = {}) {
       receipt,
       chips: Object.freeze(chips),
       text,
-      title:
-        ordered.length > 0 && ordered.every((entry) => entry.row.projectEmpty)
+      title: onlyKeepMoving
+        ? keepMovingTitle(keepMoving)
+        : ordered.length > 0 && ordered.every((entry) => entry.row.projectEmpty)
           ? "Project empty"
           : "Unblocked",
       durationMs,
@@ -41191,15 +41441,16 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
     return null;
   }
   const app = settings.app;
+  const keepMovingOnly = model.keepMovingOnly === true;
   const card = root.createDiv({
-    cls: "bob-nh-notice is-unblock",
+    cls: `bob-nh-notice is-unblock${keepMovingOnly ? " is-keep-moving" : ""}`,
     attr: { "aria-label": model.text },
   });
   const headerEl = card.createDiv({ cls: "bob-nh-notice-header" });
   const iconEl = headerEl.createSpan({ cls: "bob-nh-notice-icon" });
   iconEl.createSpan({
     cls: "bob-nh-notice-glyph",
-    text: "🔓",
+    text: keepMovingOnly ? "⏭" : "🔓",
     attr: { "aria-hidden": "true" },
   });
   headerEl.createSpan({ cls: "bob-nh-notice-level", text: model.title || "Unblocked" });
@@ -41232,7 +41483,7 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
       }
       if (kind === "linked") {
         const rowEl = rowsEl.createDiv({
-          cls: "bob-nh-unblock-row is-linked is-clickable",
+          cls: `bob-nh-unblock-row is-linked is-clickable${row.keepMoving ? " is-keep-moving" : ""}`,
         });
         rowEl.createSpan({
           cls: "bob-nh-unblock-glyph",
@@ -41253,6 +41504,12 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
           rowEl.createSpan({
             cls: "bob-nh-notice-chip is-muted",
             text: "no open tasks",
+          });
+        }
+        if (row.keepMoving && !keepMovingOnly) {
+          rowEl.createSpan({
+            cls: "bob-nh-notice-chip is-keep-moving",
+            text: keepMovingSuffix([row]),
           });
         }
         const extra = [];
@@ -41417,15 +41674,17 @@ function showUnblockedNotice(app, model, options = {}) {
   }
 }
 
-// Additive `api.notice` v1 factory. Kept here (rather than inline in 480)
-// so `480-review-jump-and-nav-api.js` stays under the 1000-line fragment
-// limit. The api itself stays `version: 3`; this member carries its own
-// version like `reviewWalk`.
+// Additive `api.notice` factory (v2: the model reads an optional
+// `keep_moving` row array, §12.13/§12.15). Kept here (rather than inline in
+// 480) so `480-review-jump-and-nav-api.js` stays under the 1000-line
+// fragment limit. The api itself stays `version: 3`; this member carries its
+// own version like `reviewWalk`. v1 callers pass models without
+// `keep_moving` and render exactly as before.
 function createNoticeApi(plugin) {
   const app =
     plugin && typeof plugin === "object" ? plugin.app : undefined;
   return Object.freeze({
-    version: 1,
+    version: 2,
     showUnblocked: (model) => showUnblockedNotice(app, model),
   });
 }
@@ -66197,8 +66456,10 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // object and never rejecting. Plugins never import each other's
 // `main.js`: bob-ledger-tools feature-detects `api?.version >= 1` and
 // task-status-cycler feature-detects `api?.taskLinkLane?.version >= 1`.
-// `notice` is the additive Unblocked card (`api.notice` v1, §12.6);
-// callers feature-detect `api.notice?.version >= 1`.
+// `notice` is the additive Unblocked card (`api.notice`, §12.6); v2 adds
+// keep-moving rows (§12.15). `successors` is the offer picker; v2 accepts
+// the `keep_moving` group (§12.13). Callers feature-detect the member
+// versions (`api.notice?.version >= 2`, `api.successors?.version >= 2`).
 // `relations` is the additive LINKS writer (`api.relations` v0): `removeLink`
 // works now; `openStage` settles `{ok: false}` until both stage directions
 // land and the namespace rises to v1.
@@ -99153,4 +99414,18 @@ Object.assign(module.exports.helpers, {
   relationMentionDependencyIdentities,
   relationMentionLinksIdentities,
   relationMentionSourceOwnerLine,
+});
+// ---- src/703-successor-keep-moving-exports.js ----
+// Keep-moving presentation exports (`docs/task-dependencies.md` §12.13 and
+// §12.15: picker API v2, notice API v2). Kept in this sibling fragment so
+// src/700-exports.js stays under the 1000-line cap.
+Object.assign(module.exports.helpers, {
+  successorPickerGroupTitle,
+  successorPickerFoldedLines,
+  successorPickerLaneName,
+  successorPickerKeepMovingTitle,
+  keepMovingRowLane,
+  keepMovingSuffix,
+  keepMovingTitle,
+  keepMovingFallbackText,
 });

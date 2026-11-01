@@ -1,7 +1,8 @@
 // Unblocked successor notice card (plan:202610/successor_offers.md §12.6,
 // `nav_card`). Pure model plus the `bob-nh-notice is-unblock` fragment and
-// the additive `api.notice` v1 factory. Nothing here reads the vault; the
-// cycler passes the shared snake_case notice model and this file renders it.
+// the additive `api.notice` factory (v2 adds keep-moving rows, §12.15).
+// Nothing here reads the vault; the cycler passes the shared snake_case
+// notice model and this file renders it.
 const UNBLOCKED_NOTICE_MAX_TEXT_LENGTH = 48;
 
 const UNBLOCKED_NOTICE_NOT_LINKED_REASONS = Object.freeze({
@@ -66,6 +67,62 @@ function unblockedRowLane(row) {
     return UNBLOCKED_NOTICE_STATUS_NAMES[symbol];
   }
   return "";
+}
+
+// Keep-moving rows (§12.15) name the lane a pick lands in. `/` is Pending
+// here (never "In Progress"), and the raw symbol is never shown.
+const KEEP_MOVING_LANE_BY_SYMBOL = Object.freeze({
+  " ": "Ready",
+  "*": "Next",
+  "/": "Pending",
+  "?": "Blocked",
+});
+
+function keepMovingRowLane(row) {
+  const symbol = row && row.status_symbol;
+  if (typeof symbol === "string" && KEEP_MOVING_LANE_BY_SYMBOL[symbol]) {
+    return KEEP_MOVING_LANE_BY_SYMBOL[symbol];
+  }
+  const named = unblockedNoticeText(row && row.status_name);
+  return named === "In Progress" ? "Pending" : named;
+}
+
+// ‹N› for a keep-moving row: the offer's project note, else the row's own
+// note (a keep-moving row is always a resident of N).
+function keepMovingProjectName(row) {
+  const offer = row && row.offer && typeof row.offer === "object" ? row.offer : null;
+  return (
+    unblockedShortNoteName(offer && offer.project) ||
+    unblockedShortNoteName(row && row.note_path) ||
+    "project"
+  );
+}
+
+function keepMovingProjectNames(rows) {
+  const names = [];
+  for (const row of rows) {
+    const name = row.keepMovingProject || "project";
+    if (!names.includes(name)) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+// `keeps ‹N› moving` / `keeps 2 projects moving` (§12.15 copy table).
+function keepMovingSuffix(rows) {
+  const names = keepMovingProjectNames(rows);
+  return names.length === 1
+    ? `keeps ‹${names[0]}› moving`
+    : `keeps ${names.length} projects moving`;
+}
+
+// `Keep ‹N› moving` / `Keep 2 projects moving`.
+function keepMovingTitle(rows) {
+  const names = keepMovingProjectNames(rows);
+  return names.length === 1
+    ? `Keep ‹${names[0]}› moving`
+    : `Keep ${names.length} projects moving`;
 }
 
 // `2026-10-13` → `Oct 13`. Falls back to the raw text when it is not a
@@ -162,6 +219,31 @@ function unblockedEntryDisplayName(entryName) {
   return name || "today";
 }
 
+// ⏭ forms for a notice whose rows are all keep-moving picks (§12.15 copy
+// table). Never uses 🔓 or the word "unblocked".
+function keepMovingFallbackText(linked) {
+  const suffix = keepMovingSuffix(linked);
+  if (linked.length === 1) {
+    const row = linked[0];
+    const name = unblockedEntryDisplayName(row.entryName);
+    if (row.entryCreated) {
+      const nextUp = row.nextUp ? " (next up)" : "";
+      return `⏭ Next in new ${name} session${nextUp}: ${truncateUnblockedText(row.text)} · ${suffix}`;
+    }
+    return `⏭ Next in ${name}: ${truncateUnblockedText(row.text)} · ${suffix}`;
+  }
+  const names = [];
+  for (const row of linked) {
+    const name = unblockedEntryDisplayName(row.entryName);
+    if (!names.includes(name)) {
+      names.push(name);
+    }
+  }
+  return names.length === 1
+    ? `⏭ ${linked.length} linked → ${names[0]} · ${suffix}`
+    : `⏭ ${linked.length} linked · ${names.join(", ")} · ${suffix}`;
+}
+
 // Plain-text fallback and card aria-label. Follows the §12.6 notice-text
 // table: one linked, several linked (one entry / several entries), created
 // continuation, breaker, recovered-only, and partial failure.
@@ -180,6 +262,9 @@ function unblockedFallbackText(summary) {
     const reason = unblockedNoticeText(summary.failure.reason);
     const noun = count === 1 ? "successor" : "successors";
     return `⚠ Closed ${predText} — couldn't link ${count} ${noun}${reason ? ` (${reason})` : ""}`;
+  }
+  if (summary.onlyKeepMoving && linked.length > 0) {
+    return keepMovingFallbackText(linked);
   }
   if (summary.pullIn && summary.pullIn.current) {
     const destinationText = summary.pullIn.destinations.length > 0
@@ -281,7 +366,18 @@ function buildUnblockedNoticeModel(model, options = {}) {
     const hasProjectStillBlocked = stillBlocked.some(
       (row) => unblockedNoticeText(row.trigger) === "project_empty",
     );
-    if (unblocked.length === 0 && !hasFailure && !hasProjectStillBlocked) {
+    // Keep-moving rows (notice v2, §12.15) arrive in their own array. Only
+    // picked rows (with a `link`) are reported: an unpicked keep-moving offer
+    // recovered nothing, so it stays silent.
+    const keepMovingSource = unblockedNoticeList(model.keep_moving).filter(
+      (row) => row && typeof row === "object" && row.link && typeof row.link === "object",
+    );
+    if (
+      unblocked.length === 0 &&
+      keepMovingSource.length === 0 &&
+      !hasFailure &&
+      !hasProjectStillBlocked
+    ) {
       return null;
     }
     const dailyPath = unblockedNoticeText(model.daily_path);
@@ -327,6 +423,30 @@ function buildUnblockedNoticeModel(model, options = {}) {
         );
       }
     }
+    const keepMoving = keepMovingSource.map((row) => {
+      const link = row.link;
+      return Object.freeze({
+        note_path: unblockedNoticeText(row.note_path),
+        block_id: unblockedNoticeText(row.block_id),
+        text: truncateUnblockedText(row.text),
+        fullText: unblockedNoticeText(row.text),
+        inbox: row.inbox === true,
+        lane: keepMovingRowLane(row),
+        trigger: "last_planned",
+        projectEmpty: false,
+        keepMoving: true,
+        keepMovingProject: keepMovingProjectName(row),
+        previousStatusSymbol: unblockedNoticeText(row.previous_status_symbol),
+        statusSymbol: unblockedNoticeText(row.status_symbol),
+        hideRemoved: false,
+        entryName: unblockedNoticeText(link.entry_name),
+        entryCreated: link.entry_created === true,
+        nextUp: link.next_up === true,
+        blockIdCreated: link.block_id_created === true,
+        blockLink: unblockedNoticeText(link.block_link),
+      });
+    });
+
     const still = stillBlocked.map((row) => {
       const waitsOn = Math.max(
         0,
@@ -358,27 +478,37 @@ function buildUnblockedNoticeModel(model, options = {}) {
       });
     });
 
+    // Keep-moving picks count as linked in every summary; the card is a
+    // keep-moving card only when nothing but keep-moving picks is reported.
+    const allLinked = [...linked, ...keepMoving];
+    const onlyKeepMoving =
+      keepMoving.length > 0 &&
+      linked.length === 0 &&
+      recovered.length === 0 &&
+      stillBlocked.length === 0;
     const breakerCount = recovered.filter(
       (row) => row.notLinked === "breaker",
     ).length;
     const isBreaker =
-      linked.length === 0 &&
+      allLinked.length === 0 &&
       recovered.length > 0 &&
       breakerCount === recovered.length;
 
-    const pullIn = unblockedPullInSummary(model, linked, recovered);
+    const pullIn = unblockedPullInSummary(model, allLinked, recovered);
 
     const total = unblocked.length + still.length;
+    // Keep-moving rows render after every dependency row (§12.15).
     const ordered = Object.freeze([
       ...linked.map((row) => ({ kind: "linked", row })),
       ...recovered.map((row) => ({ kind: "recovered", row })),
       ...still.map((row) => ({ kind: "stillBlocked", row })),
+      ...keepMoving.map((row) => ({ kind: "linked", row })),
     ]);
     const visibleRows = ordered.slice(0, 3);
     const moreCount = Math.max(0, ordered.length - visibleRows.length);
 
     let countPill = "";
-    if (pullIn && pullIn.current) {
+    if (pullIn && pullIn.current && !onlyKeepMoving) {
       const destinationText = pullIn.destinations.length > 0
         ? ` → ${pullIn.destinations.join(", ")}`
         : "";
@@ -388,23 +518,23 @@ function buildUnblockedNoticeModel(model, options = {}) {
       countPill = `${pullIn.pulledIn} pulled in${pullIn.notPulledIn > 0 ? ` · ${pullIn.notPulledIn} not pulled in` : ""}${noDestination}${destinationText}`;
     } else if (isBreaker) {
       countPill = `${unblocked.length} · not linked`;
-    } else if (linked.length > 0) {
+    } else if (allLinked.length > 0) {
       const names = [];
-      for (const row of linked) {
+      for (const row of allLinked) {
         const name = unblockedEntryDisplayName(row.entryName);
         if (!names.includes(name)) {
           names.push(name);
         }
       }
-      const created = linked.some((row) => row.entryCreated);
+      const created = allLinked.some((row) => row.entryCreated);
       if (names.length === 1) {
         countPill = created
-          ? `${linked.length} → new ${names[0]} session`
-          : `${linked.length} → ${names[0]}`;
+          ? `${allLinked.length} → new ${names[0]} session`
+          : `${allLinked.length} → ${names[0]}`;
       } else {
-        countPill = `${linked.length} linked`;
+        countPill = `${allLinked.length} linked`;
       }
-      if (linked.some((row) => row.nextUp)) {
+      if (allLinked.some((row) => row.nextUp)) {
         countPill += " · next up";
       }
     } else if (unblocked.length > 0) {
@@ -429,7 +559,7 @@ function buildUnblockedNoticeModel(model, options = {}) {
     } catch (error) {
       planChip = "";
     }
-    const minted = linked.filter((row) => row.blockIdCreated);
+    const minted = allLinked.filter((row) => row.blockIdCreated);
     let addedChip = "";
     if (minted.length === 1 && minted[0].block_id) {
       addedChip = `added ^${minted[0].block_id}`;
@@ -443,12 +573,13 @@ function buildUnblockedNoticeModel(model, options = {}) {
     if (addedChip) {
       chips.push(Object.freeze({ text: addedChip, tone: "ok" }));
     }
-    if (linked.length > 0) {
+    if (allLinked.length > 0) {
       chips.push(Object.freeze({ text: "Alt+N releases", tone: "muted" }));
     }
 
     const summary = {
-      linked,
+      linked: allLinked,
+      onlyKeepMoving,
       recovered,
       predecessors,
       pullIn,
@@ -472,6 +603,9 @@ function buildUnblockedNoticeModel(model, options = {}) {
       moreCount,
       isBreaker,
       pullIn,
+      keepMoving: Object.freeze(keepMoving),
+      keepMovingOnly: onlyKeepMoving,
+      glyph: onlyKeepMoving ? "⏭" : "🔓",
       showLegacyBreaker: isBreaker && !(pullIn && pullIn.current),
       failure: hasFailure ? Object.freeze(failure) : null,
       dailyPath,
@@ -479,8 +613,9 @@ function buildUnblockedNoticeModel(model, options = {}) {
       receipt,
       chips: Object.freeze(chips),
       text,
-      title:
-        ordered.length > 0 && ordered.every((entry) => entry.row.projectEmpty)
+      title: onlyKeepMoving
+        ? keepMovingTitle(keepMoving)
+        : ordered.length > 0 && ordered.every((entry) => entry.row.projectEmpty)
           ? "Project empty"
           : "Unblocked",
       durationMs,
@@ -561,15 +696,16 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
     return null;
   }
   const app = settings.app;
+  const keepMovingOnly = model.keepMovingOnly === true;
   const card = root.createDiv({
-    cls: "bob-nh-notice is-unblock",
+    cls: `bob-nh-notice is-unblock${keepMovingOnly ? " is-keep-moving" : ""}`,
     attr: { "aria-label": model.text },
   });
   const headerEl = card.createDiv({ cls: "bob-nh-notice-header" });
   const iconEl = headerEl.createSpan({ cls: "bob-nh-notice-icon" });
   iconEl.createSpan({
     cls: "bob-nh-notice-glyph",
-    text: "🔓",
+    text: keepMovingOnly ? "⏭" : "🔓",
     attr: { "aria-hidden": "true" },
   });
   headerEl.createSpan({ cls: "bob-nh-notice-level", text: model.title || "Unblocked" });
@@ -602,7 +738,7 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
       }
       if (kind === "linked") {
         const rowEl = rowsEl.createDiv({
-          cls: "bob-nh-unblock-row is-linked is-clickable",
+          cls: `bob-nh-unblock-row is-linked is-clickable${row.keepMoving ? " is-keep-moving" : ""}`,
         });
         rowEl.createSpan({
           cls: "bob-nh-unblock-glyph",
@@ -623,6 +759,12 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
           rowEl.createSpan({
             cls: "bob-nh-notice-chip is-muted",
             text: "no open tasks",
+          });
+        }
+        if (row.keepMoving && !keepMovingOnly) {
+          rowEl.createSpan({
+            cls: "bob-nh-notice-chip is-keep-moving",
+            text: keepMovingSuffix([row]),
           });
         }
         const extra = [];
@@ -787,15 +929,17 @@ function showUnblockedNotice(app, model, options = {}) {
   }
 }
 
-// Additive `api.notice` v1 factory. Kept here (rather than inline in 480)
-// so `480-review-jump-and-nav-api.js` stays under the 1000-line fragment
-// limit. The api itself stays `version: 3`; this member carries its own
-// version like `reviewWalk`.
+// Additive `api.notice` factory (v2: the model reads an optional
+// `keep_moving` row array, §12.13/§12.15). Kept here (rather than inline in
+// 480) so `480-review-jump-and-nav-api.js` stays under the 1000-line
+// fragment limit. The api itself stays `version: 3`; this member carries its
+// own version like `reviewWalk`. v1 callers pass models without
+// `keep_moving` and render exactly as before.
 function createNoticeApi(plugin) {
   const app =
     plugin && typeof plugin === "object" ? plugin.app : undefined;
   return Object.freeze({
-    version: 1,
+    version: 2,
     showUnblocked: (model) => showUnblockedNotice(app, model),
   });
 }

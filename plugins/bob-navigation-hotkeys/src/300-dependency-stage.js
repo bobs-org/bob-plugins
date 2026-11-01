@@ -809,7 +809,9 @@ function createBulletPropertyValueItems(propertyItem, baseDate) {
   const property = propertyItem.property;
   const currentValue = propertyItem.currentValue || "";
   if (property.values === "date") {
-    return createBulletPropertyDateItems(baseDate, currentValue);
+    return createBulletPropertyDateItems(baseDate, currentValue, {
+      includeToday: normalizeBulletPropertyName(property.name) !== "scheduled",
+    });
   }
 
   if (property.values === "local_task_id") {

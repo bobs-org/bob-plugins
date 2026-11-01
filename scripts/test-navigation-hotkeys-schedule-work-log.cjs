@@ -150,12 +150,12 @@ test("future scheduling on Pending marks Blocked but still writes the Work Log",
   assert.match(harness.editor.content, /\*2026-10-02\* — Did prep/);
 });
 
-test("today date on Pending still offers the Work Log", async () => {
+test("tomorrow date on Pending still offers the Work Log", async () => {
   const harness = schedulingReviewHarness("- [/] #task Pending work ^a");
-  const picker = await openSchedulingReview(harness, "2026-10-02");
+  const picker = await openSchedulingReview(harness, "2026-10-03");
   assert.ok(picker.scheduleReviewSummaryEl);
-  await confirmScheduleReasonStage(picker, "", "Worked today");
-  assert.match(harness.editor.content, /\*2026-10-02\* — Worked today/);
+  await confirmScheduleReasonStage(picker, "", "Worked tomorrow");
+  assert.match(harness.editor.content, /\*2026-10-02\* — Worked tomorrow/);
 });
 
 test("priority pick on Pending freezes its roll and offers the Work Log", async () => {
@@ -184,7 +184,7 @@ test("counted mixed statuses share one summary only on Pending and Next", async 
     "- [?] #task Blocked four ^d",
   ].join("\n");
   const harness = schedulingReviewHarness(content);
-  const picker = await openSchedulingReview(harness, "2026-10-02", {
+  const picker = await openSchedulingReview(harness, "2026-10-03", {
     countExplicit: true,
     additionalTaskCount: 3,
   });

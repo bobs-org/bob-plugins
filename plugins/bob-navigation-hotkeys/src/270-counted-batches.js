@@ -509,7 +509,7 @@ function createBulletPropertyDateValueItem(
   };
 }
 
-function createBulletPropertyDateItems(baseDate, currentValue) {
+function createBulletPropertyDateItems(baseDate, currentValue, options = {}) {
   const today = getLocalDateStart(baseDate);
   const saturday = addLocalDateDays(
     today,
@@ -521,8 +521,11 @@ function createBulletPropertyDateItems(baseDate, currentValue) {
     getDaysUntilWeekday(today, 1, false),
   );
 
-  return [
-    ["Today", today],
+  const presets = [];
+  if (options.includeToday !== false) {
+    presets.push(["Today", today]);
+  }
+  presets.push(
     ["Tomorrow", addLocalDateDays(today, 1)],
     ["In 2 days", addLocalDateDays(today, 2)],
     ["In 3 days", addLocalDateDays(today, 3)],
@@ -532,7 +535,8 @@ function createBulletPropertyDateItems(baseDate, currentValue) {
     ["In 1 week", addLocalDateDays(today, 7)],
     ["In 2 weeks", addLocalDateDays(today, 14)],
     ["In 1 month", addLocalDateMonths(today, 1)],
-  ].map(([label, date]) =>
+  );
+  return presets.map(([label, date]) =>
     createBulletPropertyDateValueItem(label, date, currentValue),
   );
 }

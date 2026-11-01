@@ -120,7 +120,7 @@ test("scheduled picker pins a priority roll only for configured current prioriti
     "scheduled",
   );
 
-  assert.equal(picker.items.length, 11);
+  assert.equal(picker.items.length, 10);
   assert.deepEqual(
     {
       label: picker.items[0].label,
@@ -160,7 +160,7 @@ test("scheduled picker pins a priority roll only for configured current prioriti
       withoutSuggestion,
       "scheduled",
     );
-    assert.equal(plainPicker.items.length, 10);
+    assert.equal(plainPicker.items.length, 9);
     assert.equal(plainPicker.items.some((item) => item.priorityRoll), false);
     assert.equal(
       plainPicker.footerHints.some((hint) => hint.keys.includes("^R")),
@@ -281,7 +281,7 @@ test("counted scheduled picker requires one shared configured priority", async (
     countExplicit: true,
     additionalTaskCount: 1,
   });
-  assert.equal(mixedPicker.items.length, 10);
+  assert.equal(mixedPicker.items.length, 9);
   assert.equal(mixedPicker.items.some((item) => item.priorityRoll), false);
 
   const common = createBulletPropertyPickerHarness({
@@ -300,7 +300,7 @@ test("counted scheduled picker requires one shared configured priority", async (
   // picker-counted: when every target is a same-level roll the batch
   // recommendation replaces the shared-date pinned row (per-target dates would
   // duplicate it), so there is no pinned row but the batch preview remains.
-  assert.equal(commonPicker.items.length, 10);
+  assert.equal(commonPicker.items.length, 9);
   assert.equal(commonPicker.items.some((item) => item.priorityRoll), false);
   const batchPreview =
     commonPicker.getRollPreviewForDateProperty("scheduled");

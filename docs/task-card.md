@@ -41,7 +41,7 @@ the owning task's Links or Linked-from stage.
 | `Ctrl+Enter` | Apply the cached recommendation (with a `Cmd+Enter` alias). |
 | `Alt+P` | Apply the cached recommendation; it aliases Ctrl+Enter. On a task with no priority it sets P1. |
 | `Ctrl+R` | Regenerate the recommendation and priority previews without writing; in the relation-label stage, open rename mode for the selected existing label. |
-| `Enter` | Open the selected action; Schedule is the default. |
+| `Enter` | Open the selected action; Schedule is the default. The Schedule stage preselects Tomorrow (or the pinned priority roll when the task has a priority), so `Enter Enter` picks Tomorrow before the usual reason review. |
 | `b` | Open Blocked by (Depends on). |
 | `⇧B` | Open Blocks (reverse Depends on). |
 | `l` | Open Links to (task relations); in its filter, `~` flips direction. |
@@ -114,7 +114,9 @@ list properties stay in More; choosing one opens its value stage.
 
 ## Scheduling input
 
-The date field accepts a bare day count (`0` means today and
+The Schedule stage's presets start at Tomorrow, which is preselected, and
+there is no Today preset. Today is still reachable by typing `0` or its ISO
+date. The date field accepts a bare day count (`0` means today and
 `1` means tomorrow), unsigned relative values with `d`,
 `w`, or `m`, weekday names `mon` through
 `sun` for the next occurrence strictly after today, ISO dates,
@@ -128,7 +130,7 @@ skips the reason by using the blank-reason rule, but does not skip an
 applicable Work summary. Otherwise, one combined Reason and Work summary
 review appears. Invalid, negative, overflowing, or ambiguous input never
 writes. Other date properties opened from More use the strict parser: ISO,
-`M/D`, `M-D`, `+Nd/w/m`, and presets.
+`M/D`, `M-D`, `+Nd/w/m`, and presets, and those properties keep the Today preset.
 
 A blank reason records `🤷 no reason given` only when the target
 already has a Schedule Log. A blank Work summary writes no Work Log. Priority

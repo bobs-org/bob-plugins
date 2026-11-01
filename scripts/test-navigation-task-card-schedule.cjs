@@ -543,3 +543,84 @@ test("Ctrl+Enter still takes the recommended roll from the Task Card date stage"
   await nextTurn();
   assert.equal(applied, 1);
 });
+
+test("Schedule stage defaults to Tomorrow with no Today row", () => {
+  const { modal } = openScheduleStage({
+    content: "- [ ] #task Ready work ^ready",
+  });
+  assert.ok(!modal.visibleItems.some((item) => item.label === "Today"));
+  assert.equal(modal.visibleItems[0].label, "Tomorrow");
+  assert.equal(modal.visibleItems[0].value, "2026-10-04");
+  assert.equal(modal.selectedIndex, 0);
+});
+
+test("Enter on the default picks Tomorrow and Shift+Enter commits it", async () => {
+  const { modal } = openScheduleStage({
+    content: "- [ ] #task Ready work ^ready",
+  });
+  assert.equal(modal.visibleItems[0].value, "2026-10-04");
+  pressInputKey(modal, "Enter");
+  await nextTurn();
+  assert.equal(modal.stage, "schedule-review");
+  assert.equal(modal.pendingScheduleReason.to, "2026-10-04");
+
+  const captured = [];
+  const shifted = openScheduleStage({
+    content: "- [ ] #task Ready work ^ready",
+  });
+  shifted.plugin.setBulletPropertyValue = async (_editor, _cursor, name, value, options) => {
+    captured.push({ name, value, scheduleLog: options.scheduleLog });
+    return true;
+  };
+  pressInputKey(shifted.modal, "Enter", { shiftKey: true });
+  await nextTurn();
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].value, "2026-10-04");
+  assert.equal(captured[0].scheduleLog.reason, "");
+});
+
+test("Today stays reachable by typing 0", () => {
+  const { modal } = openScheduleStage({
+    content: "- [ ] #task Ready work ^ready",
+  });
+  typeQuery(modal, "0");
+  const typed = modal.visibleItems[0];
+  assert.equal(typed.typedSchedule, true);
+  assert.equal(typed.valid, true);
+  assert.equal(typed.value, "2026-10-03");
+});
+
+test("priority task keeps the pinned roll preselected with no Today row", () => {
+  const { modal } = openScheduleStage();
+  assert.ok(!modal.visibleItems.some((item) => item.label === "Today"));
+  assert.equal(modal.visibleItems[0].priorityRoll, true);
+  assert.equal(modal.selectedIndex, 0);
+  assert.ok(
+    modal.visibleItems.some(
+      (item) => item.label === "Tomorrow" && item.value === "2026-10-04",
+    ),
+  );
+});
+
+test("date helper scope: scheduled drops Today, other date properties keep it", () => {
+  const base = new Date(2026, 9, 3);
+  const withToday = helpers.createBulletPropertyDateItems(base, "");
+  assert.equal(withToday[0].label, "Today");
+  const withoutToday = helpers.createBulletPropertyDateItems(base, "", {
+    includeToday: false,
+  });
+  assert.equal(withoutToday[0].label, "Tomorrow");
+  assert.equal(withoutToday[0].value, "2026-10-04");
+  assert.ok(!withoutToday.some((item) => item.label === "Today"));
+  const scheduledItems = helpers.createBulletPropertyValueItems(
+    { property: { name: "scheduled", values: "date" }, currentValue: "" },
+    base,
+  );
+  assert.ok(!scheduledItems.some((item) => item.label === "Today"));
+  assert.equal(scheduledItems[0].label, "Tomorrow");
+  const dueItems = helpers.createBulletPropertyValueItems(
+    { property: { name: "due", values: "date" }, currentValue: "" },
+    base,
+  );
+  assert.equal(dueItems[0].label, "Today");
+});

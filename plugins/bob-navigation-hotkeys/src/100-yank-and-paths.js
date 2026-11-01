@@ -580,7 +580,7 @@ function normalizeNestedChildLine(lineText, directChildIndent) {
   return `${relativeIndent}${content}`;
 }
 
-// Re-indent a line nested below a project-note section bullet. Identical to
+// Re-indent a line nested below a project-note drawer. Identical to
 // normalizeNestedChildLine() except an empty relative indent stays empty: a
 // section's direct children become top-level notes at column 0 rather than
 // nesting under a converted task.
@@ -903,13 +903,13 @@ function normalizeProjectSectionTitle(title) {
 // project's `## Tasks` section, note sections destined for other headers, and
 // managed task-log child lines for the `^prj` task. Direct child list items
 // (those at the shallowest child indentation) become top-level tasks unless they
-// qualify as a managed schedule- or work-log marker or as a section bullet: no
+// qualify as a managed schedule- or work-log marker or as a drawer: no
 // checkbox, an ALL-CAPS title (see PROJECT_SECTION_TITLE_RE), and at least one
-// nonblank list item nested deeper than it. A qualifying section bullet's
+// nonblank list item nested deeper than it. A qualifying drawer's
 // descendants are copied in verbatim as that section's notes instead; a
-// non-qualifying bullet keeps today's task-conversion behavior. Two section
-// bullets whose titles normalize equally merge into one section, in source
-// order. Returns { taskLines, sections, managedLogLines, lossless }, where
+// non-qualifying bullet keeps today's task-conversion behavior. Two drawers
+// whose titles normalize equally merge into one section, in source order.
+// Returns { taskLines, sections, managedLogLines, lossless }, where
 // `sections` is [{ title, noteLines }] in source order, `managedLogLines` is
 // already re-indented for insertion under `^prj` (schedule and work logs in
 // source order), and `lossless` is false when any nonblank child line could not

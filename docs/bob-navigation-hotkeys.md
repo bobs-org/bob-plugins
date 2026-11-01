@@ -279,7 +279,7 @@ to `false` to stop navigation gestures from writing BLOCKS lines).
 note. Its `Ctrl+Shift+Alt+N` shortcut from the original README is a custom
 vault binding, not a registered default or a plugin keydown handler. The same
 command on a project's `^prj` task converts the note back into a parent-task
-block in the parent's `## Tasks` section, carrying its tasks, section bullets,
+block in the parent's `## Tasks` section, carrying its tasks, drawers,
 and project-task subtree, repointing `#^prj` links, then trashing the project
 note. If backlink rewriting fails, the restored task remains and the project
 note is kept with a notice.

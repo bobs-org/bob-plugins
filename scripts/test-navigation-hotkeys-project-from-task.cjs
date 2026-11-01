@@ -622,7 +622,7 @@ test("insertProjectSectionNotes creates a new section using the document's CRLF 
   );
 });
 
-test("buildProjectSeedFromChildBullets merges section bullets with equally-normalized titles in source order", () => {
+test("buildProjectSeedFromChildBullets merges drawers with equally-normalized titles in source order", () => {
   const result = helpers.buildProjectSeedFromChildBullets(
     [
       "  - OPEN QUESTIONS",
@@ -642,6 +642,52 @@ test("buildProjectSeedFromChildBullets merges section bullets with equally-norma
   assert.deepEqual(result.taskLines, [
     "- [ ] #task Draft the API [created::2026-08-12]",
   ]);
+});
+
+test("a Bob-written drawer promotes to a title-case section and reverses to the same drawer key", () => {
+  // bob capture writes a new drawer as a two-space child bullet, with its
+  // contents nested four spaces beneath it.
+  const drawerLines = ["  - API DESIGN", "    - Must stay backward compatible"];
+  const seeded = helpers.buildProjectSeedFromChildBullets(
+    drawerLines,
+    "2026-08-12",
+  );
+  assert.deepEqual(seeded.sections, [
+    {
+      title: "Api Design",
+      noteLines: ["- Must stay backward compatible"],
+    },
+  ]);
+
+  const promoted = helpers.buildProjectContentFromTask(
+    [
+      "---",
+      'parent: "[[Engineering]]"',
+      'template: "[[new_project]]"',
+      'type: "[[project]]"',
+      "status: wip",
+      "created: 2026-08-12T09:00:00-04:00",
+      "---",
+      "",
+      "- [ ] #task #prj (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^prj",
+      "",
+      "## Tasks",
+      "",
+      "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::<date>]",
+    ].join("\n"),
+    { description: "Ship the API", priority: null },
+    { sections: seeded.sections },
+  );
+  assert.match(promoted.content, /## Api Design\n\n- Must stay backward compatible/);
+
+  const reversed = helpers.buildTaskBlockFromProjectNote(promoted.content, {
+    noteBasename: "Engineering_api",
+    parentBasename: "Engineering",
+    now: new Date("2026-08-12T12:00:00Z"),
+  });
+  assert.equal(reversed.valid, true, reversed.error || "project reversal failed");
+  assert.ok(reversed.lines.includes("\t- API DESIGN"));
+  assert.ok(reversed.lines.includes("\t\t- Must stay backward compatible"));
 });
 
 test("buildProjectSeedFromChildBullets splits a mixed child block into tasks and sections, preserving relative note depth verbatim", () => {
@@ -705,7 +751,7 @@ test("buildProjectSeedFromChildBullets marks lossless false for content that fit
   ]);
 });
 
-test("buildProjectContentFromTask appends a TASKS section bullet's notes after the converted child tasks", () => {
+test("buildProjectContentFromTask appends TASKS drawer notes after the converted child tasks", () => {
   const content = [
     "- [ ] #task #prj (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^prj",
     "",

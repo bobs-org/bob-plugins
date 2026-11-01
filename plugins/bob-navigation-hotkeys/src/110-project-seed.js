@@ -30,7 +30,7 @@ function buildProjectSeedFromChildBullets(childLines, createdDateString) {
   }
 
   // Pre-pass: for each direct-child line, record whether a nonblank list item
-  // is nested deeper than it before the next direct child (section-bullet
+  // is nested deeper than it before the next direct child (drawer
   // eligibility needs this lookahead), and the indent of the shallowest such
   // nested list item (the base for re-indenting that section's notes).
   const directChildIndexes = [];

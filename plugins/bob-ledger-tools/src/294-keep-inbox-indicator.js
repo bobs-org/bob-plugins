@@ -1,6 +1,6 @@
 // Keep inbox indicator (keep-indicator-view): `bob-keep-inbox` status-bar
-// item. bob owns the Keep count and check gates; the inbox count is recomputed
-// from the Tasks cache. Desktop only, calm by default, never writes.
+// item. bob owns the Keep count and check gates; the inbox-tree count is
+// recomputed from the Tasks cache. Desktop only, calm by default, never writes.
 
 const KEEP_INBOX_STATUS_TIMEOUT_MS = 15000;
 const KEEP_INBOX_TASKS_DEBOUNCE_MS = 150;
@@ -163,6 +163,7 @@ class BobLedgerToolsKeepInboxMixin {
     this.keepInboxPaintKey = "";
     this.keepInboxTasksReady = false;
     this.keepInboxCount = 0;
+    this.keepInboxTreeNotes = [];
     this.keepInboxReadInFlight = false;
     this.keepInboxReadQueued = false;
     this.keepInboxLastReadAt = 0;
@@ -200,7 +201,7 @@ class BobLedgerToolsKeepInboxMixin {
         } catch (error) {
           // Best-effort.
         }
-        void self.openKeepInboxNote();
+        void self.openKeepInboxTreeNote(event);
       };
       this.keepInboxClickBound = onInboxClick;
       if (inboxButton && typeof inboxButton.addEventListener === "function") {
@@ -397,23 +398,29 @@ class BobLedgerToolsKeepInboxMixin {
     }
     if (!Array.isArray(tasks)) {
       this.keepInboxTasksReady = false;
+      this.keepInboxCount = 0;
+      this.keepInboxTreeNotes = [];
       this.keepInboxUpdateView();
       return;
     }
     this.keepInboxTasksReady = true;
-    let target = KEEP_INBOX_DEFAULT_TARGET;
+    const memo = new Map();
+    let counted = { total: 0, notes: [] };
     try {
-      target = this.keepInboxTargetPath();
+      const metadataCache = this.app && this.app.metadataCache;
+      const vault = this.app && this.app.vault;
+      counted = keepInboxTreeCounts(tasks, (path) =>
+        keepInboxTreeMember(path, metadataCache, vault, memo),
+      );
     } catch (error) {
-      target = KEEP_INBOX_DEFAULT_TARGET;
+      counted = { total: 0, notes: [] };
     }
-    let count = 0;
-    try {
-      count = keepInboxOpenCount(tasks, target);
-    } catch (error) {
-      count = 0;
-    }
-    this.keepInboxCount = count;
+    this.keepInboxCount = counted && Number.isFinite(Number(counted.total))
+      ? Number(counted.total)
+      : 0;
+    this.keepInboxTreeNotes = counted && Array.isArray(counted.notes)
+      ? counted.notes
+      : [];
     this.keepInboxUpdateView();
   }
 
@@ -578,6 +585,7 @@ class BobLedgerToolsKeepInboxMixin {
       view = keepInboxViewModel({
         status: report,
         inboxCount: this.keepInboxCount,
+        inboxNotes: this.keepInboxTreeNotes,
         tasksReady: this.keepInboxTasksReady === true,
         defaultTargetExists: this.keepInboxDefaultTargetExists(inboxDoc),
         enabled: this.keepInboxEnabled !== false,
@@ -616,10 +624,30 @@ class BobLedgerToolsKeepInboxMixin {
     return true;
   }
 
-  async openKeepInboxNote() {
+  async openKeepInboxTreeNote(event) {
+    let path = KEEP_INBOX_TREE_ROOT;
+    try {
+      const notes = Array.isArray(this.keepInboxTreeNotes)
+        ? this.keepInboxTreeNotes
+        : [];
+      const first = notes[0];
+      if (first && typeof first.path === "string" && first.path.trim()) {
+        path = first.path.trim();
+      }
+    } catch (error) {
+      path = KEEP_INBOX_TREE_ROOT;
+    }
+    return this.openKeepInboxNote(path);
+  }
+
+  async openKeepInboxNote(path) {
     let target = KEEP_INBOX_DEFAULT_TARGET;
     try {
-      target = this.keepInboxTargetPath();
+      if (typeof path === "string" && path.trim()) {
+        target = path.trim();
+      } else {
+        target = this.keepInboxTargetPath();
+      }
     } catch (error) {
       target = KEEP_INBOX_DEFAULT_TARGET;
     }

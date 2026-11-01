@@ -66468,11 +66468,12 @@ function keepInboxSamePath(left, right) {
   }
 }
 
-// Inbox predicate: count open top-level Tasks-plugin tasks in the target
+// Inbox predicate: count open top-level Tasks-plugin tasks in one target
 // note. Open means any status symbol but done (`x`/`X`) or cancelled (`-`),
 // so Blocked (`?`), Next (`*`), and In Progress (`/`) count. Nested lines
 // never count, even with `#task`; fenced lines never reach us because Tasks
-// does not emit them. Never throws.
+// does not emit them. The footer now sums the same predicate over the inbox
+// tree. Never throws.
 function keepInboxOpenCount(tasks, path) {
   try {
     const target = keepInboxAsString(path).trim();
@@ -66831,10 +66832,12 @@ function keepInboxFinalizeView(view, keySuffix) {
 // pill is the one count-less Keep state still painted), and the whole
 // item hides when both segments are hidden. `status` is the last
 // `bobSpawnJson` result (`{ok, report}`), a raw status report, or null
-// before the first read. `inboxCount` is the live Tasks-cache count;
-// `tasksReady` says the Tasks cache answered; `defaultTargetExists`
-// covers the unsupported fallback; `enabled` is the session toggle
-// (default on); `now` fixes relative ages in tests. Never throws.
+// before the first read. `inboxCount` is the inbox-tree total from the
+// Tasks cache; `inboxNotes` is the per-note breakdown; `tasksReady`
+// says the Tasks cache answered; bob's `inbox.open` is not read.
+// `defaultTargetExists` covers the unsupported fallback; `enabled` is
+// the session toggle (default on); `now` fixes relative ages in tests.
+// Never throws.
 function keepInboxViewModel(options = {}) {
   try {
     const opts = options && typeof options === "object" ? options : {};
@@ -66878,31 +66881,26 @@ function keepInboxViewModel(options = {}) {
       return keepInboxHiddenView("hidden-unconfigured");
     }
     const keep = report.keep && typeof report.keep === "object" ? report.keep : {};
-    const inboxDoc =
-      report.inbox && typeof report.inbox === "object" ? report.inbox : {};
-    const targetPath =
-      keepInboxAsString(inboxDoc.path).trim() || KEEP_INBOX_DEFAULT_TARGET;
     const nowMs = keepInboxNowMs(opts.now);
-    const tasksReady = opts.tasksReady === true;
     // Verified gates the Keep segment: never succeeded hides it.
     const verified = keep.verified === true;
     const state = typeof keep.state === "string" ? keep.state : "";
     if (!verified && state !== "ok") {
       // `unverified` (never succeeded): Keep hidden, inbox live.
       if (state === "" || state === "unverified") {
-        return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unverified");
+        return keepInboxInboxOnlyView(opts, "unverified");
       }
       // A failure before the first success also hides Keep.
       if (verified !== true) {
-        return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unverified");
+        return keepInboxInboxOnlyView(opts, "unverified");
       }
     }
     if (!verified) {
-      return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unverified");
+      return keepInboxInboxOnlyView(opts, "unverified");
     }
     // Verified Keep states below.
     if (state === "auth") {
-      return keepInboxSigninView(opts, targetPath, nowMs);
+      return keepInboxSigninView(opts);
     }
     const checkedAt = keep.checked_at || null;
     const checkedDate = keepInboxParseTime(checkedAt);
@@ -66914,24 +66912,24 @@ function keepInboxViewModel(options = {}) {
       nowMs - checkedDate.getTime() <= dayMs;
     if (state === "ok" && keep.stale !== true) {
       if (!recent) {
-        return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unknown");
+        return keepInboxInboxOnlyView(opts, "unknown");
       }
       const total = keep.pull && Number.isFinite(Number(keep.pull.total))
         ? Number(keep.pull.total)
         : null;
       if (total !== null && total > 0) {
-        return keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc);
+        return keepInboxFreshView(opts, nowMs, keep);
       }
-      return keepInboxInboxOnlyView(opts, targetPath, nowMs, "zero");
+      return keepInboxInboxOnlyView(opts, "zero");
     }
     // Stale or failure states with a verified host.
     const total = keep.pull && Number.isFinite(Number(keep.pull.total))
       ? Number(keep.pull.total)
       : null;
     if (keep.stale === true && recent && total !== null && total > 0) {
-      return keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc);
+      return keepInboxStaleView(opts, nowMs, keep);
     }
-    return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unknown");
+    return keepInboxInboxOnlyView(opts, "unknown");
   } catch (error) {
     return keepInboxHiddenView("hidden-error");
   }
@@ -66943,9 +66941,7 @@ function keepInboxUnsupportedView(opts) {
     if (!exists) {
       return keepInboxHiddenView("hidden-unsupported-missing");
     }
-    const targetPath = KEEP_INBOX_DEFAULT_TARGET;
-    const nowMs = keepInboxNowMs(opts.now);
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, null);
+    const inbox = keepInboxInboxPart(opts);
     return keepInboxFinalizeView({
       visible: true,
       keep: {
@@ -66965,14 +66961,9 @@ function keepInboxUnsupportedView(opts) {
   }
 }
 
-function keepInboxInboxOnlyView(opts, targetPath, nowMs, reason) {
+function keepInboxInboxOnlyView(opts, reason) {
   try {
-    const inboxDoc = opts.status && opts.status.report && opts.status.report.inbox
-      ? opts.status.report.inbox
-      : opts.status && opts.status.inbox
-        ? opts.status.inbox
-        : null;
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const inbox = keepInboxInboxPart(opts);
     return keepInboxFinalizeView({
       visible: true,
       keep: {
@@ -66992,62 +66983,62 @@ function keepInboxInboxOnlyView(opts, targetPath, nowMs, reason) {
   }
 }
 
-function keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc) {
+function keepInboxInboxPart(opts) {
   try {
-    const tasksReady = opts.tasksReady === true;
-    const path = keepInboxAsString(targetPath).trim() || KEEP_INBOX_DEFAULT_TARGET;
-    const exists = inboxDoc && typeof inboxDoc.exists === "boolean"
-      ? inboxDoc.exists
-      : null;
-    if (exists === false) {
+    if (opts.tasksReady !== true) {
       return keepInboxHiddenInboxPart();
     }
-    if (tasksReady) {
-      const count = Number(opts.inboxCount);
-      const open = Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
-      if (open > 0) {
-        return {
-          visible: true,
-          tone: "count",
-          icon: "inbox",
-          text: String(open),
-          tooltip:
-            path +
-            " · " +
-            (open === 1 ? "1 open task to triage" : open + " open tasks to triage") +
-            "\nClick to open the inbox",
-          aria: open === 1
-            ? "1 open task in " + path
-            : open + " open tasks in " + path,
-        };
+    const count = Number(opts.inboxCount);
+    const open = Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
+    if (open <= 0) {
+      return keepInboxHiddenInboxPart();
+    }
+    const taskWord = open === 1 ? "1 open task to triage" : open + " open tasks to triage";
+    const aria = open === 1 ? "1 open task in the inbox" : open + " open tasks in the inbox";
+    const lines = ["Inbox · " + taskWord];
+    const rawNotes = Array.isArray(opts.inboxNotes) ? opts.inboxNotes.slice() : [];
+    const notes = rawNotes.filter((note) => note && (note.path || note.label));
+    notes.sort(keepInboxTreeNoteOrder);
+    if (notes.length > 0) {
+      const shown = notes.slice(0, 4);
+      const rest = notes.length - shown.length;
+      const parts = shown.map((note) => {
+        let label = keepInboxAsString(note && note.label).trim();
+        if (!label) {
+          try {
+            label = pomodoroHomeStem(note && note.path);
+          } catch (error) {
+            label = "";
+          }
+        }
+        const n = Number(note && note.open);
+        const countText = Number.isFinite(n) ? String(Math.floor(n)) : "0";
+        return (label || "inbox") + " " + countText;
+      });
+      if (rest > 0) {
+        parts.push("+" + rest + " more");
       }
-      return keepInboxHiddenInboxPart();
-    }
-    // Tasks not ready: bob's cached inbox.open, else hidden.
-    const fallback = inboxDoc && Number.isFinite(Number(inboxDoc.open))
-      ? Number(inboxDoc.open)
-      : null;
-    if (fallback !== null && fallback >= 0) {
-      const open = Math.floor(fallback);
-      if (open > 0) {
-        return {
-          visible: true,
-          tone: "count",
-          icon: "inbox",
-          text: String(open),
-          tooltip:
-            path +
-            " · " +
-            (open === 1 ? "1 open task to triage" : open + " open tasks to triage") +
-            "\nClick to open the inbox",
-          aria: open === 1
-            ? "1 open task in " + path
-            : open + " open tasks in " + path,
-        };
+      lines.push(parts.join(" · "));
+      let stem = keepInboxAsString(notes[0] && notes[0].label).trim();
+      if (!stem) {
+        try {
+          stem = pomodoroHomeStem(notes[0] && notes[0].path);
+        } catch (error) {
+          stem = "";
+        }
       }
-      return keepInboxHiddenInboxPart();
+      lines.push("Click to open " + (stem || "the inbox"));
+    } else {
+      lines.push("Click to open the inbox");
     }
-    return keepInboxHiddenInboxPart();
+    return {
+      visible: true,
+      tone: "count",
+      icon: "inbox",
+      text: String(open),
+      tooltip: lines.join("\n"),
+      aria,
+    };
   } catch (error) {
     return keepInboxHiddenInboxPart();
   }
@@ -67068,7 +67059,7 @@ function keepInboxCheckedLine(keep, nowMs) {
   }
 }
 
-function keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc) {
+function keepInboxFreshView(opts, nowMs, keep) {
   try {
     const total = Number(keep.pull.total);
     const breakdown = keepInboxBreakdownParts(keep.pull).join(" · ");
@@ -67090,7 +67081,7 @@ function keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc) {
     const aria = total === 1
       ? "1 Google Keep note to pull, checked " + ageLong
       : total + " Google Keep notes to pull, checked " + ageLong;
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const inbox = keepInboxInboxPart(opts);
     return keepInboxFinalizeView({
       visible: true,
       keep: {
@@ -67110,7 +67101,7 @@ function keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc) {
   }
 }
 
-function keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc) {
+function keepInboxStaleView(opts, nowMs, keep) {
   try {
     const total = Number(keep.pull.total);
     const checkedDate = keepInboxParseTime(keep.checked_at);
@@ -67186,7 +67177,7 @@ function keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc) {
     const aria = total === 1
       ? "1 Google Keep note to pull, as of " + ageLong
       : total + " Google Keep notes to pull, as of " + ageLong;
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const inbox = keepInboxInboxPart(opts);
     return keepInboxFinalizeView({
       visible: true,
       keep: {
@@ -67206,19 +67197,14 @@ function keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc) {
   }
 }
 
-function keepInboxSigninView(opts, targetPath, nowMs) {
+function keepInboxSigninView(opts) {
   try {
     const tooltip = [
       "Google Keep sign-in expired",
       "Run bob gkeep login in a terminal",
       "Click for the Keep setup check",
     ].join("\n");
-    const inboxDoc = opts.status && opts.status.report && opts.status.report.inbox
-      ? opts.status.report.inbox
-      : opts.status && opts.status.inbox
-        ? opts.status.inbox
-        : null;
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const inbox = keepInboxInboxPart(opts);
     return keepInboxFinalizeView({
       visible: true,
       keep: {
@@ -67266,6 +67252,216 @@ function keepInboxPaintKey(view) {
     ].join("\0");
   } catch (error) {
     return "hidden-error";
+  }
+}
+// ---- src/292a-keep-inbox-tree.js ----
+// Keep inbox tree (keep-indicator-view): membership and per-note open
+// counts for the footer inbox tray. A member is `inbox.md` or an area
+// note whose parent chain reaches it. Intermediate notes of any type are
+// walked through. Never throws.
+
+const KEEP_INBOX_TREE_ROOT = "inbox.md";
+
+function keepInboxTreeNormalizePath(path) {
+  try {
+    return String(path || "")
+      .replace(/\\/g, "/")
+      .replace(/^\.\//, "")
+      .trim();
+  } catch (error) {
+    return "";
+  }
+}
+
+function keepInboxTreeStore(memo, path, answer) {
+  try {
+    if (memo && typeof memo.set === "function" && path) {
+      memo.set(path, answer);
+    }
+  } catch (error) {
+    // Memo is best-effort.
+  }
+  return answer;
+}
+
+function keepInboxTreeMember(path, metadataCache, vault, memo) {
+  try {
+    const normalized = keepInboxTreeNormalizePath(path);
+    if (!normalized) {
+      return false;
+    }
+    try {
+      if (memo && typeof memo.get === "function" && memo.has(normalized)) {
+        return Boolean(memo.get(normalized));
+      }
+    } catch (error) {
+      // A broken memo never blocks membership.
+    }
+    if (keepInboxSamePath(normalized, KEEP_INBOX_TREE_ROOT)) {
+      return keepInboxTreeStore(memo, normalized, true);
+    }
+    let file = null;
+    try {
+      if (vault && typeof vault.getAbstractFileByPath === "function") {
+        file = vault.getAbstractFileByPath(normalized);
+      }
+    } catch (error) {
+      file = null;
+    }
+    if (!file || typeof file.path !== "string") {
+      return keepInboxTreeStore(memo, normalized, false);
+    }
+    let startFrontmatter = {};
+    try {
+      const read = pomodoroHomeReadFrontmatter(file, metadataCache, vault);
+      startFrontmatter = read && read.frontmatter ? read.frontmatter : {};
+    } catch (error) {
+      startFrontmatter = {};
+    }
+    let startType = "other";
+    try {
+      startType = pomodoroHomeType(startFrontmatter);
+    } catch (error) {
+      startType = "other";
+    }
+    if (startType !== "area") {
+      return keepInboxTreeStore(memo, normalized, false);
+    }
+    const visited = new Set();
+    let current = file;
+    for (let depth = 0; current && depth < POMODORO_HOME_MAX_DEPTH; depth += 1) {
+      const currentPath = keepInboxTreeNormalizePath(current.path);
+      if (!currentPath) {
+        return keepInboxTreeStore(memo, normalized, false);
+      }
+      const key = currentPath.toLowerCase();
+      if (visited.has(key)) {
+        return keepInboxTreeStore(memo, normalized, false);
+      }
+      visited.add(key);
+      let frontmatter = {};
+      try {
+        const read = pomodoroHomeReadFrontmatter(current, metadataCache, vault);
+        frontmatter = read && read.frontmatter ? read.frontmatter : {};
+      } catch (error) {
+        frontmatter = {};
+      }
+      let parentTarget = "";
+      try {
+        parentTarget = pomodoroHomeParentTarget(frontmatter.parent);
+      } catch (error) {
+        parentTarget = "";
+      }
+      if (!parentTarget) {
+        return keepInboxTreeStore(memo, normalized, false);
+      }
+      let parentFile = null;
+      try {
+        parentFile = pomodoroHomeResolveFile(
+          parentTarget,
+          current.path,
+          current.path,
+          metadataCache,
+          vault,
+        );
+      } catch (error) {
+        parentFile = null;
+      }
+      if (!parentFile || typeof parentFile.path !== "string") {
+        return keepInboxTreeStore(memo, normalized, false);
+      }
+      const parentPath = keepInboxTreeNormalizePath(parentFile.path);
+      if (keepInboxSamePath(parentPath, KEEP_INBOX_TREE_ROOT)) {
+        return keepInboxTreeStore(memo, normalized, true);
+      }
+      current = parentFile;
+    }
+    return keepInboxTreeStore(memo, normalized, false);
+  } catch (error) {
+    return false;
+  }
+}
+
+function keepInboxTreeNoteOrder(left, right) {
+  const leftOpen = Number(left && left.open);
+  const rightOpen = Number(right && right.open);
+  const leftCount = Number.isFinite(leftOpen) ? leftOpen : 0;
+  const rightCount = Number.isFinite(rightOpen) ? rightOpen : 0;
+  if (rightCount !== leftCount) {
+    return rightCount - leftCount;
+  }
+  const leftPath = keepInboxAsString(left && left.path);
+  const rightPath = keepInboxAsString(right && right.path);
+  if (leftPath < rightPath) {
+    return -1;
+  }
+  if (leftPath > rightPath) {
+    return 1;
+  }
+  return 0;
+}
+
+function keepInboxTreeCounts(tasks, isMember) {
+  try {
+    if (!Array.isArray(tasks)) {
+      return { total: 0, notes: [] };
+    }
+    const membership = new Map();
+    const counts = new Map();
+    const memberOf = (path) => {
+      if (membership.has(path)) {
+        return membership.get(path);
+      }
+      let answer = false;
+      try {
+        answer = typeof isMember === "function" ? Boolean(isMember(path)) : false;
+      } catch (error) {
+        answer = false;
+      }
+      membership.set(path, answer);
+      return answer;
+    };
+    for (const task of tasks) {
+      try {
+        if (!keepInboxIsTopLevelTask(task)) {
+          continue;
+        }
+        const symbol = keepInboxTaskSymbol(task);
+        if (!symbol || symbol === "x" || symbol === "X" || symbol === "-") {
+          continue;
+        }
+        const path = keepInboxTreeNormalizePath(keepInboxTaskPath(task));
+        if (!path) {
+          continue;
+        }
+        if (!memberOf(path)) {
+          continue;
+        }
+        const prior = counts.get(path) || 0;
+        counts.set(path, prior + 1);
+      } catch (error) {
+        // One bad row never breaks the tree count.
+      }
+    }
+    const notes = [];
+    let total = 0;
+    for (const [path, open] of counts) {
+      if (!(open > 0)) {
+        continue;
+      }
+      let label = "";
+      try {
+        label = pomodoroHomeStem(path);
+      } catch (error) {
+        label = "";
+      }
+      notes.push({ path, label, open });
+      total += open;
+    }
+    notes.sort(keepInboxTreeNoteOrder);
+    return { total, notes };
+  } catch (error) {
+    return { total: 0, notes: [] };
   }
 }
 // ---- src/293-keep-inbox-render.js ----
@@ -67624,8 +67820,8 @@ function keepInboxPaint(el, view) {
 }
 // ---- src/294-keep-inbox-indicator.js ----
 // Keep inbox indicator (keep-indicator-view): `bob-keep-inbox` status-bar
-// item. bob owns the Keep count and check gates; the inbox count is recomputed
-// from the Tasks cache. Desktop only, calm by default, never writes.
+// item. bob owns the Keep count and check gates; the inbox-tree count is
+// recomputed from the Tasks cache. Desktop only, calm by default, never writes.
 
 const KEEP_INBOX_STATUS_TIMEOUT_MS = 15000;
 const KEEP_INBOX_TASKS_DEBOUNCE_MS = 150;
@@ -67788,6 +67984,7 @@ class BobLedgerToolsKeepInboxMixin {
     this.keepInboxPaintKey = "";
     this.keepInboxTasksReady = false;
     this.keepInboxCount = 0;
+    this.keepInboxTreeNotes = [];
     this.keepInboxReadInFlight = false;
     this.keepInboxReadQueued = false;
     this.keepInboxLastReadAt = 0;
@@ -67825,7 +68022,7 @@ class BobLedgerToolsKeepInboxMixin {
         } catch (error) {
           // Best-effort.
         }
-        void self.openKeepInboxNote();
+        void self.openKeepInboxTreeNote(event);
       };
       this.keepInboxClickBound = onInboxClick;
       if (inboxButton && typeof inboxButton.addEventListener === "function") {
@@ -68022,23 +68219,29 @@ class BobLedgerToolsKeepInboxMixin {
     }
     if (!Array.isArray(tasks)) {
       this.keepInboxTasksReady = false;
+      this.keepInboxCount = 0;
+      this.keepInboxTreeNotes = [];
       this.keepInboxUpdateView();
       return;
     }
     this.keepInboxTasksReady = true;
-    let target = KEEP_INBOX_DEFAULT_TARGET;
+    const memo = new Map();
+    let counted = { total: 0, notes: [] };
     try {
-      target = this.keepInboxTargetPath();
+      const metadataCache = this.app && this.app.metadataCache;
+      const vault = this.app && this.app.vault;
+      counted = keepInboxTreeCounts(tasks, (path) =>
+        keepInboxTreeMember(path, metadataCache, vault, memo),
+      );
     } catch (error) {
-      target = KEEP_INBOX_DEFAULT_TARGET;
+      counted = { total: 0, notes: [] };
     }
-    let count = 0;
-    try {
-      count = keepInboxOpenCount(tasks, target);
-    } catch (error) {
-      count = 0;
-    }
-    this.keepInboxCount = count;
+    this.keepInboxCount = counted && Number.isFinite(Number(counted.total))
+      ? Number(counted.total)
+      : 0;
+    this.keepInboxTreeNotes = counted && Array.isArray(counted.notes)
+      ? counted.notes
+      : [];
     this.keepInboxUpdateView();
   }
 
@@ -68203,6 +68406,7 @@ class BobLedgerToolsKeepInboxMixin {
       view = keepInboxViewModel({
         status: report,
         inboxCount: this.keepInboxCount,
+        inboxNotes: this.keepInboxTreeNotes,
         tasksReady: this.keepInboxTasksReady === true,
         defaultTargetExists: this.keepInboxDefaultTargetExists(inboxDoc),
         enabled: this.keepInboxEnabled !== false,
@@ -68241,10 +68445,30 @@ class BobLedgerToolsKeepInboxMixin {
     return true;
   }
 
-  async openKeepInboxNote() {
+  async openKeepInboxTreeNote(event) {
+    let path = KEEP_INBOX_TREE_ROOT;
+    try {
+      const notes = Array.isArray(this.keepInboxTreeNotes)
+        ? this.keepInboxTreeNotes
+        : [];
+      const first = notes[0];
+      if (first && typeof first.path === "string" && first.path.trim()) {
+        path = first.path.trim();
+      }
+    } catch (error) {
+      path = KEEP_INBOX_TREE_ROOT;
+    }
+    return this.openKeepInboxNote(path);
+  }
+
+  async openKeepInboxNote(path) {
     let target = KEEP_INBOX_DEFAULT_TARGET;
     try {
-      target = this.keepInboxTargetPath();
+      if (typeof path === "string" && path.trim()) {
+        target = path.trim();
+      } else {
+        target = this.keepInboxTargetPath();
+      }
     } catch (error) {
       target = KEEP_INBOX_DEFAULT_TARGET;
     }
@@ -71462,12 +71686,15 @@ module.exports.helpers = {
   freshnessFooterPaint,
   freshnessFooterFit,
   KEEP_INBOX_DEFAULT_TARGET,
+  KEEP_INBOX_TREE_ROOT,
   keepInboxAsString,
   keepInboxIsTopLevelTask,
   keepInboxTaskPath,
   keepInboxTaskSymbol,
   keepInboxSamePath,
   keepInboxOpenCount,
+  keepInboxTreeMember,
+  keepInboxTreeCounts,
   keepInboxDecodeStatus,
   keepInboxFirstLine,
   keepInboxParseTime,

@@ -247,24 +247,28 @@ with per-note `ready_cap` overrides and crowded/full/room states.
 The desktop status bar shows a `bob-keep-inbox` item beside the review
 footer: a gold bulb pill counting the Google Keep notes a default
 `bob gkeep pull` would take, a chevron connector, and an inbox-tray count
-of open top-level tasks in `gkeep_inbox.md`. Each segment appears only
-while its count is above zero, and the item disappears when both are
-zero. The bulb is gold when fresh and dashed when last-known. The Keep
-pill also hides when its count is unknown or Keep is unverified. After
-sign-in expires, a dashed `lightbulb-off` pill still shows. The whole
-item hides when Keep is not configured or before the first status read.
+of open top-level tasks in the inbox tree: `inbox.md` and every area note
+below it at any depth via `parent`, such as `mac_inbox.md` and
+`gkeep_inbox.md`. Project and untyped notes filed under it do not count.
+Each segment appears only while its count is above zero, and the item
+disappears when both are zero. The bulb is gold when fresh and dashed when
+last-known. The Keep pill also hides when its count is unknown or Keep is
+unverified. After sign-in expires, a dashed `lightbulb-off` pill still
+shows. The whole item hides when Keep is not configured or before the
+first status read.
 
-The Keep count comes from `bob gkeep status`; the inbox count is recomputed
-from the Tasks plugin cache on every `obsidian-tasks-plugin:cache-update`,
-falling back to bob's cached `inbox.open` before Tasks is ready. The plugin
-never reads the vault file for the Keep count, never reads a credential, and
-never decides backoff. It runs `bob gkeep status -r` after layout settles,
-on focus/visibility/online events, and when bob's `next_check_at` arrives,
-but only while Obsidian is visible, focused, and has seen keyboard, pointer,
-or wheel input in the last ten minutes. Unattended due checks wait for the
-next input; without attention, focus only re-reads Bob's cached status, at
-most every ten seconds, or every ten minutes while Keep is not configured.
-Bob still applies its own freshness, budget, and backoff gates.
+The Keep count comes from `bob gkeep status`; the inbox-tree count is
+recomputed from the Tasks plugin cache on every
+`obsidian-tasks-plugin:cache-update`. The inbox tray stays hidden until
+Tasks is ready. The plugin never reads the vault file for the Keep count,
+never reads a credential, and never decides backoff. It runs
+`bob gkeep status -r` after layout settles, on focus/visibility/online
+events, and when bob's `next_check_at` arrives, but only while Obsidian
+is visible, focused, and has seen keyboard, pointer, or wheel input in the
+last ten minutes. Unattended due checks wait for the next input; without
+attention, focus only re-reads Bob's cached status, at most every ten
+seconds, or every ten minutes while Keep is not configured. Bob still
+applies its own freshness, budget, and backoff gates.
 
 Click the bulb when its count is fresh to open Command Mode at a dry-run
 `gkeep pull` preview; click a stale bulb to check now. After sign-in
@@ -281,10 +285,12 @@ its own 30-minute default interval and a 48-check daily budget (about 16
 checks in eight attended hours); setting `gkeep.check_interval: off`
 disables automatic Keep checks without affecting manual checks.
 
-Clicking the inbox opens the target note at its first open top-level task; a
-missing note shows a Notice and never creates the file. Turning off the
-session toggle stops automatic and manual `-r` requests until the next
-Obsidian restart.
+Hovering the inbox lists each note's open count. Clicking the inbox opens
+the note with the most open tasks (then the earliest path) at its first
+open top-level task; a missing note shows a Notice and never creates the
+file. The context menu's **Open `gkeep_inbox.md`** still opens the Keep
+pull target. Turning off the session toggle stops automatic and manual
+`-r` requests until the next Obsidian restart.
 
 ## Session toggles
 

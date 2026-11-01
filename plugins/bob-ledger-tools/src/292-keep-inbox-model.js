@@ -93,11 +93,12 @@ function keepInboxSamePath(left, right) {
   }
 }
 
-// Inbox predicate: count open top-level Tasks-plugin tasks in the target
+// Inbox predicate: count open top-level Tasks-plugin tasks in one target
 // note. Open means any status symbol but done (`x`/`X`) or cancelled (`-`),
 // so Blocked (`?`), Next (`*`), and In Progress (`/`) count. Nested lines
 // never count, even with `#task`; fenced lines never reach us because Tasks
-// does not emit them. Never throws.
+// does not emit them. The footer now sums the same predicate over the inbox
+// tree. Never throws.
 function keepInboxOpenCount(tasks, path) {
   try {
     const target = keepInboxAsString(path).trim();
@@ -456,10 +457,12 @@ function keepInboxFinalizeView(view, keySuffix) {
 // pill is the one count-less Keep state still painted), and the whole
 // item hides when both segments are hidden. `status` is the last
 // `bobSpawnJson` result (`{ok, report}`), a raw status report, or null
-// before the first read. `inboxCount` is the live Tasks-cache count;
-// `tasksReady` says the Tasks cache answered; `defaultTargetExists`
-// covers the unsupported fallback; `enabled` is the session toggle
-// (default on); `now` fixes relative ages in tests. Never throws.
+// before the first read. `inboxCount` is the inbox-tree total from the
+// Tasks cache; `inboxNotes` is the per-note breakdown; `tasksReady`
+// says the Tasks cache answered; bob's `inbox.open` is not read.
+// `defaultTargetExists` covers the unsupported fallback; `enabled` is
+// the session toggle (default on); `now` fixes relative ages in tests.
+// Never throws.
 function keepInboxViewModel(options = {}) {
   try {
     const opts = options && typeof options === "object" ? options : {};
@@ -503,31 +506,26 @@ function keepInboxViewModel(options = {}) {
       return keepInboxHiddenView("hidden-unconfigured");
     }
     const keep = report.keep && typeof report.keep === "object" ? report.keep : {};
-    const inboxDoc =
-      report.inbox && typeof report.inbox === "object" ? report.inbox : {};
-    const targetPath =
-      keepInboxAsString(inboxDoc.path).trim() || KEEP_INBOX_DEFAULT_TARGET;
     const nowMs = keepInboxNowMs(opts.now);
-    const tasksReady = opts.tasksReady === true;
     // Verified gates the Keep segment: never succeeded hides it.
     const verified = keep.verified === true;
     const state = typeof keep.state === "string" ? keep.state : "";
     if (!verified && state !== "ok") {
       // `unverified` (never succeeded): Keep hidden, inbox live.
       if (state === "" || state === "unverified") {
-        return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unverified");
+        return keepInboxInboxOnlyView(opts, "unverified");
       }
       // A failure before the first success also hides Keep.
       if (verified !== true) {
-        return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unverified");
+        return keepInboxInboxOnlyView(opts, "unverified");
       }
     }
     if (!verified) {
-      return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unverified");
+      return keepInboxInboxOnlyView(opts, "unverified");
     }
     // Verified Keep states below.
     if (state === "auth") {
-      return keepInboxSigninView(opts, targetPath, nowMs);
+      return keepInboxSigninView(opts);
     }
     const checkedAt = keep.checked_at || null;
     const checkedDate = keepInboxParseTime(checkedAt);
@@ -539,24 +537,24 @@ function keepInboxViewModel(options = {}) {
       nowMs - checkedDate.getTime() <= dayMs;
     if (state === "ok" && keep.stale !== true) {
       if (!recent) {
-        return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unknown");
+        return keepInboxInboxOnlyView(opts, "unknown");
       }
       const total = keep.pull && Number.isFinite(Number(keep.pull.total))
         ? Number(keep.pull.total)
         : null;
       if (total !== null && total > 0) {
-        return keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc);
+        return keepInboxFreshView(opts, nowMs, keep);
       }
-      return keepInboxInboxOnlyView(opts, targetPath, nowMs, "zero");
+      return keepInboxInboxOnlyView(opts, "zero");
     }
     // Stale or failure states with a verified host.
     const total = keep.pull && Number.isFinite(Number(keep.pull.total))
       ? Number(keep.pull.total)
       : null;
     if (keep.stale === true && recent && total !== null && total > 0) {
-      return keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc);
+      return keepInboxStaleView(opts, nowMs, keep);
     }
-    return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unknown");
+    return keepInboxInboxOnlyView(opts, "unknown");
   } catch (error) {
     return keepInboxHiddenView("hidden-error");
   }
@@ -568,9 +566,7 @@ function keepInboxUnsupportedView(opts) {
     if (!exists) {
       return keepInboxHiddenView("hidden-unsupported-missing");
     }
-    const targetPath = KEEP_INBOX_DEFAULT_TARGET;
-    const nowMs = keepInboxNowMs(opts.now);
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, null);
+    const inbox = keepInboxInboxPart(opts);
     return keepInboxFinalizeView({
       visible: true,
       keep: {
@@ -590,14 +586,9 @@ function keepInboxUnsupportedView(opts) {
   }
 }
 
-function keepInboxInboxOnlyView(opts, targetPath, nowMs, reason) {
+function keepInboxInboxOnlyView(opts, reason) {
   try {
-    const inboxDoc = opts.status && opts.status.report && opts.status.report.inbox
-      ? opts.status.report.inbox
-      : opts.status && opts.status.inbox
-        ? opts.status.inbox
-        : null;
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const inbox = keepInboxInboxPart(opts);
     return keepInboxFinalizeView({
       visible: true,
       keep: {
@@ -617,62 +608,62 @@ function keepInboxInboxOnlyView(opts, targetPath, nowMs, reason) {
   }
 }
 
-function keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc) {
+function keepInboxInboxPart(opts) {
   try {
-    const tasksReady = opts.tasksReady === true;
-    const path = keepInboxAsString(targetPath).trim() || KEEP_INBOX_DEFAULT_TARGET;
-    const exists = inboxDoc && typeof inboxDoc.exists === "boolean"
-      ? inboxDoc.exists
-      : null;
-    if (exists === false) {
+    if (opts.tasksReady !== true) {
       return keepInboxHiddenInboxPart();
     }
-    if (tasksReady) {
-      const count = Number(opts.inboxCount);
-      const open = Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
-      if (open > 0) {
-        return {
-          visible: true,
-          tone: "count",
-          icon: "inbox",
-          text: String(open),
-          tooltip:
-            path +
-            " · " +
-            (open === 1 ? "1 open task to triage" : open + " open tasks to triage") +
-            "\nClick to open the inbox",
-          aria: open === 1
-            ? "1 open task in " + path
-            : open + " open tasks in " + path,
-        };
+    const count = Number(opts.inboxCount);
+    const open = Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
+    if (open <= 0) {
+      return keepInboxHiddenInboxPart();
+    }
+    const taskWord = open === 1 ? "1 open task to triage" : open + " open tasks to triage";
+    const aria = open === 1 ? "1 open task in the inbox" : open + " open tasks in the inbox";
+    const lines = ["Inbox · " + taskWord];
+    const rawNotes = Array.isArray(opts.inboxNotes) ? opts.inboxNotes.slice() : [];
+    const notes = rawNotes.filter((note) => note && (note.path || note.label));
+    notes.sort(keepInboxTreeNoteOrder);
+    if (notes.length > 0) {
+      const shown = notes.slice(0, 4);
+      const rest = notes.length - shown.length;
+      const parts = shown.map((note) => {
+        let label = keepInboxAsString(note && note.label).trim();
+        if (!label) {
+          try {
+            label = pomodoroHomeStem(note && note.path);
+          } catch (error) {
+            label = "";
+          }
+        }
+        const n = Number(note && note.open);
+        const countText = Number.isFinite(n) ? String(Math.floor(n)) : "0";
+        return (label || "inbox") + " " + countText;
+      });
+      if (rest > 0) {
+        parts.push("+" + rest + " more");
       }
-      return keepInboxHiddenInboxPart();
-    }
-    // Tasks not ready: bob's cached inbox.open, else hidden.
-    const fallback = inboxDoc && Number.isFinite(Number(inboxDoc.open))
-      ? Number(inboxDoc.open)
-      : null;
-    if (fallback !== null && fallback >= 0) {
-      const open = Math.floor(fallback);
-      if (open > 0) {
-        return {
-          visible: true,
-          tone: "count",
-          icon: "inbox",
-          text: String(open),
-          tooltip:
-            path +
-            " · " +
-            (open === 1 ? "1 open task to triage" : open + " open tasks to triage") +
-            "\nClick to open the inbox",
-          aria: open === 1
-            ? "1 open task in " + path
-            : open + " open tasks in " + path,
-        };
+      lines.push(parts.join(" · "));
+      let stem = keepInboxAsString(notes[0] && notes[0].label).trim();
+      if (!stem) {
+        try {
+          stem = pomodoroHomeStem(notes[0] && notes[0].path);
+        } catch (error) {
+          stem = "";
+        }
       }
-      return keepInboxHiddenInboxPart();
+      lines.push("Click to open " + (stem || "the inbox"));
+    } else {
+      lines.push("Click to open the inbox");
     }
-    return keepInboxHiddenInboxPart();
+    return {
+      visible: true,
+      tone: "count",
+      icon: "inbox",
+      text: String(open),
+      tooltip: lines.join("\n"),
+      aria,
+    };
   } catch (error) {
     return keepInboxHiddenInboxPart();
   }
@@ -693,7 +684,7 @@ function keepInboxCheckedLine(keep, nowMs) {
   }
 }
 
-function keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc) {
+function keepInboxFreshView(opts, nowMs, keep) {
   try {
     const total = Number(keep.pull.total);
     const breakdown = keepInboxBreakdownParts(keep.pull).join(" · ");
@@ -715,7 +706,7 @@ function keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc) {
     const aria = total === 1
       ? "1 Google Keep note to pull, checked " + ageLong
       : total + " Google Keep notes to pull, checked " + ageLong;
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const inbox = keepInboxInboxPart(opts);
     return keepInboxFinalizeView({
       visible: true,
       keep: {
@@ -735,7 +726,7 @@ function keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc) {
   }
 }
 
-function keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc) {
+function keepInboxStaleView(opts, nowMs, keep) {
   try {
     const total = Number(keep.pull.total);
     const checkedDate = keepInboxParseTime(keep.checked_at);
@@ -811,7 +802,7 @@ function keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc) {
     const aria = total === 1
       ? "1 Google Keep note to pull, as of " + ageLong
       : total + " Google Keep notes to pull, as of " + ageLong;
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const inbox = keepInboxInboxPart(opts);
     return keepInboxFinalizeView({
       visible: true,
       keep: {
@@ -831,19 +822,14 @@ function keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc) {
   }
 }
 
-function keepInboxSigninView(opts, targetPath, nowMs) {
+function keepInboxSigninView(opts) {
   try {
     const tooltip = [
       "Google Keep sign-in expired",
       "Run bob gkeep login in a terminal",
       "Click for the Keep setup check",
     ].join("\n");
-    const inboxDoc = opts.status && opts.status.report && opts.status.report.inbox
-      ? opts.status.report.inbox
-      : opts.status && opts.status.inbox
-        ? opts.status.inbox
-        : null;
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    const inbox = keepInboxInboxPart(opts);
     return keepInboxFinalizeView({
       visible: true,
       keep: {

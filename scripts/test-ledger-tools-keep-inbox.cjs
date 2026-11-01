@@ -79,10 +79,13 @@ const { helpers } = LedgerToolsPlugin;
 const {
   keepInboxDecodeStatus,
   keepInboxOpenCount,
+  keepInboxTreeMember,
+  keepInboxTreeCounts,
   keepInboxViewModel,
   keepInboxPaint,
   keepInboxEnsureDom,
   bobSpawnJson,
+  KEEP_INBOX_TREE_ROOT,
 } = helpers;
 
 const FIXED_NOW = new Date("2026-10-31T16:00:00Z");
@@ -120,6 +123,79 @@ function statusReport(overrides = {}) {
 
 function spawnOk(overrides = {}) {
   return { ok: true, report: statusReport(overrides) };
+}
+
+function makeFakeVault(notes) {
+  const files = (notes || []).map((note) => ({
+    path: note.path,
+    frontmatter: note.frontmatter || {},
+  }));
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  const byStem = new Map();
+  for (const file of files) {
+    const name = String(file.path || "").split("/").pop() || "";
+    const stem = name.replace(/\.md$/i, "");
+    if (stem && !byStem.has(stem)) {
+      byStem.set(stem, file);
+    }
+  }
+  return {
+    vault: {
+      getAbstractFileByPath(path) {
+        return byPath.get(path) || null;
+      },
+      async read() {
+        return "";
+      },
+      on() {
+        return {};
+      },
+    },
+    metadataCache: {
+      getFileCache(file) {
+        const actual = file && typeof file.path === "string" ? byPath.get(file.path) : null;
+        return actual ? { frontmatter: actual.frontmatter } : null;
+      },
+      getFirstLinkpathDest(name) {
+        const stem = String(name || "").replace(/\.md$/i, "");
+        return byStem.get(stem) || null;
+      },
+      on() {
+        return {};
+      },
+    },
+  };
+}
+
+function inboxTreeNotes() {
+  return [
+    { path: "inbox.md", frontmatter: { type: "area", parent: "[[gtd]]" } },
+    { path: "mac_inbox.md", frontmatter: { type: "area", parent: "[[inbox]]" } },
+    { path: "gkeep_inbox.md", frontmatter: { type: "area", parent: "[[inbox]]" } },
+    { path: "mac_overflow.md", frontmatter: { type: "area", parent: "[[mac_inbox]]" } },
+    { path: "gkeep_gdocs_inbox_dump.md", frontmatter: { type: "project", parent: "[[mac_inbox]]" } },
+    { path: "dump_area.md", frontmatter: { type: "area", parent: "[[gkeep_gdocs_inbox_dump]]" } },
+    { path: "inbox_overflow.md", frontmatter: { parent: [["inbox"]] } },
+    { path: "area.md", frontmatter: { type: "area" } },
+    { path: "elsewhere.md", frontmatter: { type: "area", parent: "[[area]]" } },
+    { path: "missing_parent.md", frontmatter: { type: "area", parent: "[[no_such_note]]" } },
+    { path: "loop_a.md", frontmatter: { type: "area", parent: "[[loop_b]]" } },
+    { path: "loop_b.md", frontmatter: { type: "area", parent: "[[loop_a]]" } },
+  ];
+}
+
+function treeMember(path, notes = inboxTreeNotes()) {
+  const fake = makeFakeVault(notes);
+  return keepInboxTreeMember(path, fake.metadataCache, fake.vault, new Map());
+}
+
+function openTask(path, extra = {}) {
+  return {
+    path,
+    indentation: extra.indentation || "",
+    status: { symbol: extra.symbol || " " },
+    lineNumber: extra.lineNumber || 0,
+  };
 }
 
 // Parity fixture (identical text in bob-cli and bob-plugins tests; both
@@ -264,6 +340,59 @@ test("parity fixture counts 5 open top-level tasks", () => {
   assert.equal(keepInboxOpenCount(parityTasks(), "gkeep_inbox.md"), 5);
   assert.equal(keepInboxOpenCount([], "gkeep_inbox.md"), 0);
   assert.equal(keepInboxOpenCount(null, "gkeep_inbox.md"), 0);
+});
+
+test("inbox tree membership walks area notes under inbox.md", () => {
+  assert.equal(KEEP_INBOX_TREE_ROOT, "inbox.md");
+  assert.equal(treeMember("inbox.md"), true);
+  assert.equal(treeMember("mac_inbox.md"), true);
+  assert.equal(treeMember("gkeep_inbox.md"), true);
+  assert.equal(treeMember("mac_overflow.md"), true);
+  assert.equal(treeMember("dump_area.md"), true);
+  assert.equal(treeMember("gkeep_gdocs_inbox_dump.md"), false);
+  assert.equal(treeMember("inbox_overflow.md"), false);
+  assert.equal(treeMember("elsewhere.md"), false);
+  assert.equal(treeMember("missing_parent.md"), false);
+  assert.equal(treeMember("loop_a.md"), false);
+  assert.equal(treeMember("loop_b.md"), false);
+});
+
+test("keepInboxTreeCounts skips nested done cancelled and non-members", () => {
+  const seen = [];
+  const isMember = (path) => {
+    seen.push(path);
+    return path === "gkeep_inbox.md" || path === "mac_inbox.md";
+  };
+  const tasks = [
+    openTask("gkeep_inbox.md"),
+    openTask("gkeep_inbox.md"),
+    openTask("gkeep_inbox.md", { indentation: "  " }),
+    openTask("gkeep_inbox.md", { symbol: "x" }),
+    openTask("gkeep_inbox.md", { symbol: "-" }),
+    openTask("mac_inbox.md"),
+    openTask("alpha.md"),
+    openTask("elsewhere.md"),
+    openTask("inbox_overflow.md"),
+  ];
+  const counted = keepInboxTreeCounts(tasks, isMember);
+  assert.equal(counted.total, 3);
+  assert.deepEqual(
+    counted.notes.map((note) => [note.path, note.label, note.open]),
+    [
+      ["gkeep_inbox.md", "gkeep_inbox", 2],
+      ["mac_inbox.md", "mac_inbox", 1],
+    ],
+  );
+  assert.deepEqual(seen, ["gkeep_inbox.md", "mac_inbox.md", "alpha.md", "elsewhere.md", "inbox_overflow.md"]);
+  const tied = keepInboxTreeCounts(
+    [openTask("zeta.md"), openTask("alpha.md"), openTask("zeta.md")],
+    (path) => path === "alpha.md" || path === "zeta.md",
+  );
+  assert.deepEqual(
+    tied.notes.map((note) => note.path),
+    ["zeta.md", "alpha.md"],
+  );
+  assert.deepEqual(keepInboxTreeCounts(null, isMember), { total: 0, notes: [] });
 });
 
 test("hidden before the first read and when unconfigured", () => {
@@ -441,21 +570,21 @@ test("unsupported hides Keep and lives only with a positive inbox count", () => 
   assert.equal(withoutFile.visible, false);
 });
 
-test("tasks-not-ready falls back to bob's inbox.open; missing and unknown hide", () => {
+test("tasks-not-ready hides the inbox even when bob's inbox.open is positive", () => {
   const fallback = keepInboxViewModel({
     status: spawnOk(),
     tasksReady: false,
     now: FIXED_NOW,
   });
-  assert.equal(fallback.inbox.visible, true);
-  assert.equal(fallback.inbox.text, "1");
-  const missing = keepInboxViewModel({
+  assert.equal(fallback.inbox.visible, false);
+  const missingTarget = keepInboxViewModel({
     status: spawnOk({ inbox: { path: "gkeep_inbox.md", exists: false, open: null } }),
-    inboxCount: 0,
+    inboxCount: 3,
     tasksReady: true,
     now: FIXED_NOW,
   });
-  assert.equal(missing.inbox.visible, false);
+  assert.equal(missingTarget.inbox.visible, true);
+  assert.equal(missingTarget.inbox.text, "3");
   const unknown = keepInboxViewModel({
     status: spawnOk({ inbox: { path: "gkeep_inbox.md", exists: true, open: undefined } }),
     tasksReady: false,
@@ -484,8 +613,52 @@ test("tooltip and aria copy with a fixed now", () => {
   assert.ok(fresh.keep.tooltip.includes("1 new"));
   assert.ok(fresh.keep.tooltip.includes("Checked 4 min ago"));
   assert.ok(fresh.keep.aria.includes("3 Google Keep notes to pull"));
-  assert.equal(fresh.inbox.tooltip, "gkeep_inbox.md · 1 open task to triage\nClick to open the inbox");
-  assert.equal(fresh.inbox.aria, "1 open task in gkeep_inbox.md");
+  assert.equal(fresh.inbox.tooltip, "Inbox · 1 open task to triage\nClick to open the inbox");
+  assert.equal(fresh.inbox.aria, "1 open task in the inbox");
+});
+
+test("inbox tooltip lists the tree breakdown and names the click target", () => {
+  const tree = keepInboxViewModel({
+    status: spawnOk(),
+    inboxCount: 6,
+    inboxNotes: [
+      { path: "gkeep_inbox.md", label: "gkeep_inbox", open: 4 },
+      { path: "mac_inbox.md", label: "mac_inbox", open: 2 },
+    ],
+    tasksReady: true,
+    now: FIXED_NOW,
+  });
+  assert.equal(
+    tree.inbox.tooltip,
+    "Inbox · 6 open tasks to triage\ngkeep_inbox 4 · mac_inbox 2\nClick to open gkeep_inbox",
+  );
+  assert.equal(tree.inbox.aria, "6 open tasks in the inbox");
+  const capped = keepInboxViewModel({
+    status: spawnOk({ keep: { pull: { total: 0, new: 0, links: 0, revised: 0, pending: 0 } } }),
+    inboxCount: 9,
+    inboxNotes: [
+      { path: "e.md", label: "e", open: 1 },
+      { path: "d.md", label: "d", open: 1 },
+      { path: "c.md", label: "c", open: 1 },
+      { path: "b.md", label: "b", open: 2 },
+      { path: "a.md", label: "a", open: 3 },
+      { path: "f.md", label: "f", open: 1 },
+    ],
+    tasksReady: true,
+    now: FIXED_NOW,
+  });
+  assert.equal(
+    capped.inbox.tooltip,
+    "Inbox · 9 open tasks to triage\na 3 · b 2 · c 1 · d 1 · +2 more\nClick to open a",
+  );
+  const generic = keepInboxViewModel({
+    status: spawnOk(),
+    inboxCount: 2,
+    tasksReady: true,
+    now: FIXED_NOW,
+  });
+  assert.equal(generic.inbox.tooltip, "Inbox · 2 open tasks to triage\nClick to open the inbox");
+  assert.equal(generic.inbox.aria, "2 open tasks in the inbox");
 });
 
 test("paint draws Lucide icons from the obsidian setIcon export", () => {
@@ -930,6 +1103,105 @@ test("turning the indicator off prevents all new automatic and forced checks", a
   assert.equal(await plugin.keepInboxActionTryAutomatic("test"), null);
   assert.equal(calls.length, 0);
   assert.equal(plugin.keepInboxEnabled, false);
+});
+
+test("keepInboxRecountNow stores the inbox-tree total and notes", () => {
+  const fake = makeFakeVault(inboxTreeNotes());
+  const tasks = [
+    openTask("gkeep_inbox.md"),
+    openTask("gkeep_inbox.md"),
+    openTask("mac_inbox.md"),
+    openTask("gkeep_gdocs_inbox_dump.md"),
+    openTask("inbox_overflow.md"),
+    openTask("dump_area.md"),
+  ];
+  const app = {
+    plugins: { plugins: { "obsidian-tasks-plugin": { getTasks: () => tasks } } },
+    workspace: { onLayoutReady: () => ({}), on: () => ({}) },
+    vault: fake.vault,
+    metadataCache: fake.metadataCache,
+  };
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.keepInboxUpdateView = () => {};
+  plugin.keepInboxRecountNow("test");
+  assert.equal(plugin.keepInboxTasksReady, true);
+  assert.equal(plugin.keepInboxCount, 4);
+  assert.deepEqual(
+    plugin.keepInboxTreeNotes.map((note) => [note.path, note.open]),
+    [
+      ["gkeep_inbox.md", 2],
+      ["dump_area.md", 1],
+      ["mac_inbox.md", 1],
+    ],
+  );
+});
+
+test("inbox click opens the note with the most open tasks", async () => {
+  const fake = makeFakeVault(inboxTreeNotes());
+  const opened = [];
+  const leaf = {
+    openFile: async (file) => {
+      opened.push(file && file.path);
+    },
+    view: { editor: { setCursor() {}, focus() {}, scrollIntoView() {} } },
+  };
+  const app = {
+    plugins: { plugins: {} },
+    workspace: {
+      onLayoutReady: () => ({}),
+      on: () => ({}),
+      getLeaf: () => leaf,
+    },
+    vault: fake.vault,
+    metadataCache: fake.metadataCache,
+  };
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.addStatusBarItem = () => makeStatusEl();
+  plugin.registerEvent = () => {};
+  plugin.registerDomEvent = () => {};
+  plugin.registerInterval = () => {};
+  plugin.setupKeepInboxIndicator();
+  const clicks = [];
+  const originalOpen = plugin.openKeepInboxTreeNote.bind(plugin);
+  plugin.openKeepInboxTreeNote = async (event) => {
+    clicks.push(event);
+    return originalOpen(event);
+  };
+  plugin.keepInboxTreeNotes = [
+    { path: "gkeep_inbox.md", label: "gkeep_inbox", open: 4 },
+    { path: "mac_inbox.md", label: "mac_inbox", open: 2 },
+  ];
+  plugin.keepInboxParts.inboxButton.handlers.click({ preventDefault() {} });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(clicks.length, 1);
+  assert.deepEqual(opened, ["gkeep_inbox.md"]);
+  opened.length = 0;
+  plugin.keepInboxTreeNotes = [];
+  await plugin.openKeepInboxTreeNote();
+  assert.deepEqual(opened, ["inbox.md"]);
+});
+
+test("context menu Open gkeep_inbox.md still opens the Keep target", async () => {
+  const opened = [];
+  const plugin = makeActionPlugin();
+  plugin.app.vault.getAbstractFileByPath = (path) => ({ path });
+  plugin.app.workspace = {
+    getLeaf: () => ({
+      openFile: async (file) => {
+        opened.push(file && file.path);
+      },
+      view: { editor: {} },
+    }),
+  };
+  TestMenu.instances.length = 0;
+  plugin.keepInboxParts.inboxButton.handlers.contextmenu({ preventDefault() {} });
+  const menu = TestMenu.instances.at(-1);
+  const openItem = menu.items.find((item) => item.title === "Open gkeep_inbox.md");
+  assert.ok(openItem);
+  await openItem.callback();
+  await Promise.resolve();
+  assert.deepEqual(opened, ["gkeep_inbox.md"]);
 });
 
 test("verified transition to auth shows one sign-in notice per session", () => {

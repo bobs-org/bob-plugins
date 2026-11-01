@@ -45,6 +45,13 @@ class BobNavigationHotkeysBracketRepeatMixin {
       } catch (error) {
         // Local storage is device-local convenience; memory remains authoritative.
       }
+      try {
+        if (typeof this.refreshBracketModeIndicator === "function") {
+          this.refreshBracketModeIndicator();
+        }
+      } catch (error) {
+        // The indicator never breaks the walk.
+      }
     }
     return normalized;
   }
@@ -69,8 +76,23 @@ class BobNavigationHotkeysBracketRepeatMixin {
     const plan = planBracketRepeat(this.readBracketRepeatType(), direction);
     if (!plan) {
       new Notice(BRACKET_REPEAT_EMPTY_NOTICE);
+      try {
+        if (typeof this.flashBracketModeIndicator === "function") {
+          this.flashBracketModeIndicator("empty");
+        }
+      } catch (error) {
+        // The indicator never breaks the walk.
+      }
       return false;
     }
-    return this[plan.method](...plan.args);
+    const result = this[plan.method](...plan.args);
+    try {
+      if (typeof this.flashBracketModeIndicator === "function") {
+        this.flashBracketModeIndicator(direction < 0 ? "backward" : "forward");
+      }
+    } catch (error) {
+      // The indicator never breaks the walk.
+    }
+    return result;
   }
 }

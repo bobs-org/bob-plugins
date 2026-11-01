@@ -14,6 +14,11 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.filePositions = new Map();
     this.vimJumpHistory = createVimJumpHistory();
     this.bracketRepeatType = undefined;
+    this.bracketModeEl = null;
+    this.bracketModeParts = null;
+    this.bracketModePaintKey = undefined;
+    this.bracketModeFlashTimer = null;
+    this.bracketModeInstantFrame = null;
     this.vimJumpOperationToken = 0;
     this.vimJumpHistoryChain = Promise.resolve();
     this.vimJumpBridgeVim = null;
@@ -439,6 +444,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
       });
     });
 
+    try {
+      if (typeof this.setupBracketModeIndicator === "function") {
+        this.setupBracketModeIndicator();
+      }
+    } catch (error) {
+      // The footer never blocks startup.
+    }
+
     if (typeof this.registerObsidianProtocolHandler === "function") {
       this.registerObsidianProtocolHandler("bob-goto-task", (params) => {
         void this.handleGoToTaskUri(params);
@@ -553,6 +566,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
   onunload() {
     this.taskCardPluginUnloading = true;
+    try {
+      if (typeof this.teardownBracketModeIndicator === "function") {
+        this.teardownBracketModeIndicator();
+      }
+    } catch (error) {
+      // Best-effort during unload.
+    }
     if (this.activeImageZoomModal) {
       try {
         this.activeImageZoomModal.close();

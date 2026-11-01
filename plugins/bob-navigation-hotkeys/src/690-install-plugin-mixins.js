@@ -32,6 +32,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysWalkLandingMixin,
   BobNavigationHotkeysLaneWalkMixin,
   BobNavigationHotkeysBracketRepeatMixin,
+  BobNavigationHotkeysBracketModeIndicatorMixin,
   BobNavigationHotkeysSuccessorPickerMixin,
   BobNavigationHotkeysReviewMoveMixin,
   BobNavigationHotkeysReviewReturnMixin,

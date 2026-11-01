@@ -247,13 +247,12 @@ with per-note `ready_cap` overrides and crowded/full/room states.
 The desktop status bar shows a `bob-keep-inbox` item beside the review
 footer: a gold bulb pill counting the Google Keep notes a default
 `bob gkeep pull` would take, a chevron connector, and an inbox-tray count
-of open top-level tasks in `gkeep_inbox.md`. The bulb is gold-filled when
-there is work, outlined when clear, dashed when last-known, and
-`lightbulb-off` when sign-in expired; the inbox is a plain numeral (faint
-at zero, `–` when unknown). The whole item hides when Keep is not
-configured or before the first status read; the Keep pill hides while
-Keep never verified on this host. A successful count last checked more
-than a day ago shows `–` until the next check.
+of open top-level tasks in `gkeep_inbox.md`. Each segment appears only
+while its count is above zero, and the item disappears when both are
+zero. The bulb is gold when fresh and dashed when last-known. The Keep
+pill also hides when its count is unknown or Keep is unverified. After
+sign-in expires, a dashed `lightbulb-off` pill still shows. The whole
+item hides when Keep is not configured or before the first status read.
 
 The Keep count comes from `bob gkeep status`; the inbox count is recomputed
 from the Tasks plugin cache on every `obsidian-tasks-plugin:cache-update`,
@@ -268,17 +267,19 @@ most every ten seconds, or every ten minutes while Keep is not configured.
 Bob still applies its own freshness, budget, and backoff gates.
 
 Click the bulb when its count is fresh to open Command Mode at a dry-run
-`gkeep pull` preview; click it when clear, stale, or unknown to check now.
-After sign-in expires, the bulb opens the `gkeep doctor` report. Right-click
-either count for Check Google Keep now, Preview Keep pull, Open
-`gkeep_inbox.md`, Keep setup check, or Hide until restart. The palette also
-offers **Check Google Keep now** and **Toggle Keep inbox indicator**. Preview
-and setup actions need Command Mode; without its preview API the bulb explains
-the matching `bob` command to run. User-triggered checks pulse the bulb, while
-background checks stay still. Bob caps unattended-safe checks with its own
-30-minute default interval and a 48-check daily budget (about 16 checks in
-eight attended hours); setting `gkeep.check_interval: off` disables automatic
-Keep checks without affecting manual checks.
+`gkeep pull` preview; click a stale bulb to check now. After sign-in
+expires, the bulb opens the `gkeep doctor` report. **Check Google Keep
+now** still works from the palette while the item is hidden, and says
+when there is nothing to pull. Right-click either visible count for
+Check Google Keep now, Preview Keep pull, Open `gkeep_inbox.md`, Keep
+setup check, or Hide until restart. The palette also offers **Check
+Google Keep now** and **Toggle Keep inbox indicator**. Preview and setup
+actions need Command Mode; without its preview API the bulb explains the
+matching `bob` command to run. User-triggered checks pulse the bulb,
+while background checks stay still. Bob caps unattended-safe checks with
+its own 30-minute default interval and a 48-check daily budget (about 16
+checks in eight attended hours); setting `gkeep.check_interval: off`
+disables automatic Keep checks without affecting manual checks.
 
 Clicking the inbox opens the target note at its first open top-level task; a
 missing note shows a Notice and never creates the file. Turning off the

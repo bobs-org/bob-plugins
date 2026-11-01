@@ -36,6 +36,12 @@ class TestMenu {
   showAtMouseEvent(event) { this.event = event; }
 }
 
+const setIconCalls = [];
+function testSetIcon(node, name) {
+  setIconCalls.push({ node, name });
+  if (node) node.iconName = name;
+}
+
 const originalLoad = Module._load;
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
@@ -47,6 +53,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
       Plugin: TestPlugin,
       normalizePath: (value) => value,
       parseYaml: () => ({}),
+      setIcon: testSetIcon,
     };
   }
   if (request === "@codemirror/state") {
@@ -291,7 +298,7 @@ test("unverified hides Keep but keeps a live inbox", () => {
   assert.equal(view.connector.visible, false);
 });
 
-test("fresh, zero, stale, unknown, and signin tones", () => {
+test("fresh, stale, and signin tones", () => {
   const fresh = keepInboxViewModel({
     status: spawnOk(),
     inboxCount: 1,
@@ -302,17 +309,6 @@ test("fresh, zero, stale, unknown, and signin tones", () => {
   assert.equal(fresh.keep.text, "3");
   assert.equal(fresh.keep.icon, "lightbulb");
   assert.equal(fresh.connector.visible, true);
-
-  const zero = keepInboxViewModel({
-    status: spawnOk({ keep: { pull: { total: 0, new: 0, links: 0, revised: 0, pending: 0 } } }),
-    inboxCount: 0,
-    tasksReady: true,
-    now: FIXED_NOW,
-  });
-  assert.equal(zero.keep.tone, "zero");
-  assert.equal(zero.keep.text, "0");
-  assert.equal(zero.inbox.text, "0");
-  assert.equal(zero.inbox.tone, "zero");
 
   const stale = keepInboxViewModel({
     status: spawnOk({
@@ -329,17 +325,6 @@ test("fresh, zero, stale, unknown, and signin tones", () => {
   assert.equal(stale.keep.tone, "stale");
   assert.equal(stale.keep.text, "3");
 
-  const unknown = keepInboxViewModel({
-    status: spawnOk({
-      keep: { state: "ok", stale: true, checked_at: "2026-10-29T18:02:00Z" },
-    }),
-    inboxCount: 1,
-    tasksReady: true,
-    now: FIXED_NOW,
-  });
-  assert.equal(unknown.keep.tone, "unknown");
-  assert.equal(unknown.keep.text, "–");
-
   const signin = keepInboxViewModel({
     status: spawnOk({ keep: { state: "auth", stale: false } }),
     inboxCount: 1,
@@ -349,9 +334,63 @@ test("fresh, zero, stale, unknown, and signin tones", () => {
   assert.equal(signin.keep.tone, "signin");
   assert.equal(signin.keep.icon, "lightbulb-off");
   assert.equal(signin.keep.text, "");
+  assert.equal(signin.keep.visible, true);
+  assert.equal(signin.inbox.visible, true);
+  assert.equal(signin.connector.visible, true);
 });
 
-test("old verified ok counts become unknown until checked again", () => {
+test("each segment hides at zero and the item hides when both are empty", () => {
+  const screenshot = keepInboxViewModel({
+    status: spawnOk({ keep: { pull: { total: 4, new: 4, links: 0, revised: 0, pending: 0 } } }),
+    inboxCount: 0,
+    tasksReady: true,
+    now: FIXED_NOW,
+  });
+  assert.equal(screenshot.visible, true);
+  assert.equal(screenshot.keep.visible, true);
+  assert.equal(screenshot.keep.text, "4");
+  assert.equal(screenshot.inbox.visible, false);
+  assert.equal(screenshot.connector.visible, false);
+
+  const inboxOnly = keepInboxViewModel({
+    status: spawnOk({ keep: { pull: { total: 0, new: 0, links: 0, revised: 0, pending: 0 } } }),
+    inboxCount: 2,
+    tasksReady: true,
+    now: FIXED_NOW,
+  });
+  assert.equal(inboxOnly.visible, true);
+  assert.equal(inboxOnly.keep.visible, false);
+  assert.equal(inboxOnly.inbox.visible, true);
+  assert.equal(inboxOnly.inbox.text, "2");
+  assert.equal(inboxOnly.connector.visible, false);
+
+  const bothZero = keepInboxViewModel({
+    status: spawnOk({ keep: { pull: { total: 0, new: 0, links: 0, revised: 0, pending: 0 } } }),
+    inboxCount: 0,
+    tasksReady: true,
+    now: FIXED_NOW,
+  });
+  assert.equal(bothZero.visible, false);
+  assert.equal(bothZero.paintKey, "hidden-empty");
+
+  const staleZero = keepInboxViewModel({
+    status: spawnOk({
+      keep: {
+        state: "offline",
+        stale: true,
+        pull: { total: 0, new: 0, links: 0, revised: 0, pending: 0 },
+        error: { kind: "network", message: "down", hint: "", since: "2026-10-31T15:55:00Z", failures: 1 },
+      },
+    }),
+    inboxCount: 1,
+    tasksReady: true,
+    now: FIXED_NOW,
+  });
+  assert.equal(staleZero.keep.visible, false);
+  assert.equal(staleZero.inbox.visible, true);
+});
+
+test("old verified ok counts hide Keep until checked again", () => {
   for (const total of [3, 0]) {
     const view = keepInboxViewModel({
       status: spawnOk({
@@ -362,25 +401,37 @@ test("old verified ok counts become unknown until checked again", () => {
           checked_at: "2026-10-29T18:02:00Z",
         },
       }),
+      inboxCount: 1,
+      tasksReady: true,
       now: FIXED_NOW,
     });
-    assert.equal(view.keep.tone, "unknown");
-    assert.equal(view.keep.text, "–");
-    assert.ok(view.keep.tooltip.includes("Last checked"));
+    assert.equal(view.keep.visible, false);
+    assert.equal(view.inbox.visible, true);
+    assert.equal(view.inbox.text, "1");
   }
 });
 
-test("unsupported hides Keep and lives only with the default file", () => {
+test("unsupported hides Keep and lives only with a positive inbox count", () => {
   const bad = { ok: false, code: "unsupported", message: "nope" };
   const withFile = keepInboxViewModel({
     status: bad,
-    tasksReady: false,
+    inboxCount: 2,
+    tasksReady: true,
     defaultTargetExists: true,
     now: FIXED_NOW,
   });
   assert.equal(withFile.visible, true);
   assert.equal(withFile.keep.visible, false);
   assert.equal(withFile.inbox.visible, true);
+  assert.equal(withFile.inbox.text, "2");
+  const withFileZero = keepInboxViewModel({
+    status: bad,
+    inboxCount: 0,
+    tasksReady: true,
+    defaultTargetExists: true,
+    now: FIXED_NOW,
+  });
+  assert.equal(withFileZero.visible, false);
   const withoutFile = keepInboxViewModel({
     status: bad,
     tasksReady: false,
@@ -390,12 +441,13 @@ test("unsupported hides Keep and lives only with the default file", () => {
   assert.equal(withoutFile.visible, false);
 });
 
-test("tasks-not-ready falls back to bob's inbox.open, missing note shows –", () => {
+test("tasks-not-ready falls back to bob's inbox.open; missing and unknown hide", () => {
   const fallback = keepInboxViewModel({
     status: spawnOk(),
     tasksReady: false,
     now: FIXED_NOW,
   });
+  assert.equal(fallback.inbox.visible, true);
   assert.equal(fallback.inbox.text, "1");
   const missing = keepInboxViewModel({
     status: spawnOk({ inbox: { path: "gkeep_inbox.md", exists: false, open: null } }),
@@ -403,8 +455,22 @@ test("tasks-not-ready falls back to bob's inbox.open, missing note shows –", (
     tasksReady: true,
     now: FIXED_NOW,
   });
-  assert.equal(missing.inbox.text, "–");
-  assert.ok(missing.inbox.tooltip.includes("not found"));
+  assert.equal(missing.inbox.visible, false);
+  const unknown = keepInboxViewModel({
+    status: spawnOk({ inbox: { path: "gkeep_inbox.md", exists: true, open: undefined } }),
+    tasksReady: false,
+    now: FIXED_NOW,
+  });
+  assert.equal(unknown.inbox.visible, false);
+  const unverifiedZero = keepInboxViewModel({
+    status: spawnOk({
+      keep: { state: "unverified", verified: false, stale: false },
+    }),
+    inboxCount: 0,
+    tasksReady: true,
+    now: FIXED_NOW,
+  });
+  assert.equal(unverifiedZero.visible, false);
 });
 
 test("tooltip and aria copy with a fixed now", () => {
@@ -420,15 +486,51 @@ test("tooltip and aria copy with a fixed now", () => {
   assert.ok(fresh.keep.aria.includes("3 Google Keep notes to pull"));
   assert.equal(fresh.inbox.tooltip, "gkeep_inbox.md · 1 open task to triage\nClick to open the inbox");
   assert.equal(fresh.inbox.aria, "1 open task in gkeep_inbox.md");
+});
 
-  const zero = keepInboxViewModel({
+test("paint draws Lucide icons from the obsidian setIcon export", () => {
+  setIconCalls.length = 0;
+  const view = keepInboxViewModel({
+    status: spawnOk(),
+    inboxCount: 1,
+    tasksReady: true,
+    now: FIXED_NOW,
+  });
+  const el = makeStatusEl();
+  keepInboxPaint(el, view);
+  assert.equal(findByClass(el, "bob-keep-pill-icon").iconName, "lightbulb");
+  assert.equal(findByClass(el, "bob-keep-inbox-icon").iconName, "inbox");
+  assert.equal(findByClass(el, "bob-keep-connector-icon").iconName, "chevron-right");
+  assert.deepEqual(
+    setIconCalls.map((call) => call.name),
+    ["lightbulb", "chevron-right", "inbox"],
+  );
+});
+
+test("paint hides the item when both counts are zero and restores it", () => {
+  const visible = keepInboxViewModel({
+    status: spawnOk(),
+    inboxCount: 1,
+    tasksReady: true,
+    now: FIXED_NOW,
+  });
+  const hidden = keepInboxViewModel({
     status: spawnOk({ keep: { pull: { total: 0, new: 0, links: 0, revised: 0, pending: 0 } } }),
     inboxCount: 0,
     tasksReady: true,
     now: FIXED_NOW,
   });
-  assert.ok(zero.keep.tooltip.includes("nothing to pull"));
-  assert.equal(zero.inbox.tooltip, "gkeep_inbox.md · inbox is clear\nClick to open the inbox");
+  const el = makeStatusEl();
+  keepInboxPaint(el, visible);
+  assert.equal(el.classList.has("bob-keep-inbox-hidden"), false);
+  assert.equal(findByClass(el, "bob-keep-pill-count").textContent, "3");
+  assert.equal(findByClass(el, "bob-keep-inbox-count").textContent, "1");
+  keepInboxPaint(el, hidden);
+  assert.equal(el.classList.has("bob-keep-inbox-hidden"), true);
+  keepInboxPaint(el, visible);
+  assert.equal(el.classList.has("bob-keep-inbox-hidden"), false);
+  assert.equal(findByClass(el, "bob-keep-pill-count").textContent, "3");
+  assert.equal(findByClass(el, "bob-keep-inbox-count").textContent, "1");
 });
 
 test("paint key is stable and paint skips unchanged frames", () => {
@@ -722,6 +824,14 @@ test("forced check feedback follows the bob refresh result", async () => {
       notice: null,
     },
     {
+      name: "success empty",
+      keep: {
+        pull: { total: 0, new: 0, links: 0, revised: 0, pending: 0 },
+        refresh: { ran: true, skipped: null },
+      },
+      notice: "Google Keep · nothing to pull",
+    },
+    {
       name: "failure",
       keep: { state: "offline", error: { message: "network down" }, refresh: { ran: true, skipped: null } },
       notice: "Couldn't check Google Keep: network down",
@@ -758,7 +868,7 @@ test("forced check feedback follows the bob refresh result", async () => {
     assert.equal(notices[0] || null, refreshCase.notice, refreshCase.name);
     seen.push(refreshCase.name);
   }
-  assert.deepEqual(seen, ["success", "failure", "floor", "floor after old success", "rate-limited", "in-flight", "busy pull"]);
+  assert.deepEqual(seen, ["success", "success empty", "failure", "floor", "floor after old success", "rate-limited", "in-flight", "busy pull"]);
   assert.ok(plugin.keepInboxInFlightRereadTimer !== null);
 });
 

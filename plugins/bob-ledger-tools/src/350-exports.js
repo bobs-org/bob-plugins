@@ -226,7 +226,6 @@ module.exports.helpers = {
   freshnessFooterPaint,
   freshnessFooterFit,
   KEEP_INBOX_DEFAULT_TARGET,
-  KEEP_INBOX_UNKNOWN_GLYPH,
   keepInboxAsString,
   keepInboxIsTopLevelTask,
   keepInboxTaskPath,

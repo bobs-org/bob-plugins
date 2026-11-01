@@ -395,7 +395,12 @@ BobLedgerToolsKeepInboxMixin.prototype.keepInboxCheckNow = function () {
       if (!refresh) return result;
       if (refresh.ran === true) {
         if (keep.state === "ok") {
-          if (previousTotal !== keepInboxActionTotal(result)) this.keepInboxAnimateCountChange();
+          const total = keepInboxActionTotal(result);
+          if (total === 0) {
+            try { new Notice("Google Keep · nothing to pull"); } catch (error) {}
+          } else if (previousTotal !== total) {
+            this.keepInboxAnimateCountChange();
+          }
         } else {
           const reason = keep.error && typeof keep.error.message === "string"
             ? keep.error.message

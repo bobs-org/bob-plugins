@@ -5490,6 +5490,11 @@ body:not(.bob-root-marks) .bob-root-mark-native {
   outline-offset: 2px;
   border-radius: var(--radius-s, 4px);
 }
+.bob-keep-pill-icon,
+.bob-keep-connector-icon {
+  display: inline-flex;
+  align-items: center;
+}
 .bob-keep-pill-icon svg,
 .bob-keep-inbox-icon svg,
 .bob-keep-connector-icon svg {
@@ -5511,13 +5516,7 @@ body:not(.bob-root-marks) .bob-root-mark-native {
 .bob-keep-pill[data-keep-tone="fresh"] .bob-keep-pill-count {
   font-weight: 600;
 }
-.bob-keep-pill[data-keep-tone="zero"] {
-  background: transparent;
-  border-color: var(--background-modifier-border);
-  color: var(--text-faint);
-}
 .bob-keep-pill[data-keep-tone="stale"],
-.bob-keep-pill[data-keep-tone="unknown"],
 .bob-keep-pill[data-keep-tone="signin"] {
   background: transparent;
   border-style: dashed;
@@ -5541,13 +5540,6 @@ body:not(.bob-root-marks) .bob-root-mark-native {
 .bob-keep-inbox-btn .bob-keep-inbox-count {
   color: var(--text-normal);
   font-weight: 600;
-}
-.bob-keep-inbox-btn[data-inbox-tone="zero"] .bob-keep-inbox-count {
-  color: var(--text-faint);
-  font-weight: 500;
-}
-.bob-keep-inbox-btn[data-inbox-tone="unknown"] .bob-keep-inbox-count {
-  color: var(--text-faint);
 }
 .bob-keep-omit {
   display: none !important;

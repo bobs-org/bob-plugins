@@ -4,7 +4,6 @@
 // hidden or unknown frame, never an exception.
 
 const KEEP_INBOX_DEFAULT_TARGET = "gkeep_inbox.md";
-const KEEP_INBOX_UNKNOWN_GLYPH = "–";
 
 function keepInboxAsString(value) {
   try {
@@ -414,13 +413,53 @@ function keepInboxHiddenView(paintKey) {
   };
 }
 
+function keepInboxHiddenInboxPart() {
+  return {
+    visible: false,
+    tone: "hidden",
+    icon: "",
+    text: "",
+    tooltip: "",
+    aria: "",
+  };
+}
+
+function keepInboxFinalizeView(view, keySuffix) {
+  try {
+    if (!view || typeof view !== "object") {
+      return keepInboxHiddenView("hidden-empty");
+    }
+    const keep = view.keep && typeof view.keep === "object" ? view.keep : {};
+    const inbox = view.inbox && typeof view.inbox === "object" ? view.inbox : {};
+    view.keep = keep;
+    view.inbox = inbox;
+    view.connector = view.connector && typeof view.connector === "object"
+      ? view.connector
+      : {};
+    view.connector.visible = Boolean(keep.visible && inbox.visible);
+    if (!keep.visible && !inbox.visible) {
+      return keepInboxHiddenView("hidden-empty");
+    }
+    view.visible = true;
+    view.paintKey = keepInboxPaintKey(view);
+    if (keySuffix) {
+      view.paintKey = view.paintKey + "\0" + keySuffix;
+    }
+    return view;
+  } catch (error) {
+    return keepInboxHiddenView("hidden-error");
+  }
+}
+
 // Pure view model implementing the plan's Visibility states and tooltip
-// copy. `status` is the last `bobSpawnJson` result (`{ok, report}`), a raw
-// status report, or null before the first read. `inboxCount` is the live
-// Tasks-cache count; `tasksReady` says the Tasks cache answered;
-// `defaultTargetExists` covers the unsupported fallback; `enabled` is the
-// session toggle (default on); `now` fixes relative ages in tests. Never
-// throws.
+// copy. Each segment shows only for a positive count (the Keep sign-in
+// pill is the one count-less Keep state still painted), and the whole
+// item hides when both segments are hidden. `status` is the last
+// `bobSpawnJson` result (`{ok, report}`), a raw status report, or null
+// before the first read. `inboxCount` is the live Tasks-cache count;
+// `tasksReady` says the Tasks cache answered; `defaultTargetExists`
+// covers the unsupported fallback; `enabled` is the session toggle
+// (default on); `now` fixes relative ages in tests. Never throws.
 function keepInboxViewModel(options = {}) {
   try {
     const opts = options && typeof options === "object" ? options : {};
@@ -500,7 +539,7 @@ function keepInboxViewModel(options = {}) {
       nowMs - checkedDate.getTime() <= dayMs;
     if (state === "ok" && keep.stale !== true) {
       if (!recent) {
-        return keepInboxUnknownView(opts, targetPath, nowMs, keep, inboxDoc);
+        return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unknown");
       }
       const total = keep.pull && Number.isFinite(Number(keep.pull.total))
         ? Number(keep.pull.total)
@@ -508,16 +547,16 @@ function keepInboxViewModel(options = {}) {
       if (total !== null && total > 0) {
         return keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc);
       }
-      return keepInboxZeroView(opts, targetPath, nowMs, keep, inboxDoc);
+      return keepInboxInboxOnlyView(opts, targetPath, nowMs, "zero");
     }
     // Stale or failure states with a verified host.
     const total = keep.pull && Number.isFinite(Number(keep.pull.total))
       ? Number(keep.pull.total)
       : null;
-    if (keep.stale === true && recent && total !== null) {
+    if (keep.stale === true && recent && total !== null && total > 0) {
       return keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc);
     }
-    return keepInboxUnknownView(opts, targetPath, nowMs, keep, inboxDoc);
+    return keepInboxInboxOnlyView(opts, targetPath, nowMs, "unknown");
   } catch (error) {
     return keepInboxHiddenView("hidden-error");
   }
@@ -532,7 +571,7 @@ function keepInboxUnsupportedView(opts) {
     const targetPath = KEEP_INBOX_DEFAULT_TARGET;
     const nowMs = keepInboxNowMs(opts.now);
     const inbox = keepInboxInboxPart(opts, targetPath, nowMs, null);
-    const view = {
+    return keepInboxFinalizeView({
       visible: true,
       keep: {
         visible: false,
@@ -545,9 +584,7 @@ function keepInboxUnsupportedView(opts) {
       connector: { visible: false },
       inbox: { visible: true, ...inbox },
       paintKey: "",
-    };
-    view.paintKey = keepInboxPaintKey(view);
-    return view;
+    });
   } catch (error) {
     return keepInboxHiddenView("hidden-error");
   }
@@ -555,8 +592,13 @@ function keepInboxUnsupportedView(opts) {
 
 function keepInboxInboxOnlyView(opts, targetPath, nowMs, reason) {
   try {
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, null);
-    const view = {
+    const inboxDoc = opts.status && opts.status.report && opts.status.report.inbox
+      ? opts.status.report.inbox
+      : opts.status && opts.status.inbox
+        ? opts.status.inbox
+        : null;
+    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
+    return keepInboxFinalizeView({
       visible: true,
       keep: {
         visible: false,
@@ -569,9 +611,7 @@ function keepInboxInboxOnlyView(opts, targetPath, nowMs, reason) {
       connector: { visible: false },
       inbox: { visible: true, ...inbox },
       paintKey: "",
-    };
-    view.paintKey = keepInboxPaintKey(view) + "\0" + reason;
-    return view;
+    }, reason);
   } catch (error) {
     return keepInboxHiddenView("hidden-error");
   }
@@ -585,19 +625,14 @@ function keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc) {
       ? inboxDoc.exists
       : null;
     if (exists === false) {
-      return {
-        tone: "unknown",
-        icon: "inbox",
-        text: KEEP_INBOX_UNKNOWN_GLYPH,
-        tooltip: path + " not found\nClick to open the inbox",
-        aria: path + " not found",
-      };
+      return keepInboxHiddenInboxPart();
     }
     if (tasksReady) {
       const count = Number(opts.inboxCount);
       const open = Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
       if (open > 0) {
         return {
+          visible: true,
           tone: "count",
           icon: "inbox",
           text: String(open),
@@ -611,15 +646,9 @@ function keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc) {
             : open + " open tasks in " + path,
         };
       }
-      return {
-        tone: "zero",
-        icon: "inbox",
-        text: "0",
-        tooltip: path + " · inbox is clear\nClick to open the inbox",
-        aria: "inbox is clear in " + path,
-      };
+      return keepInboxHiddenInboxPart();
     }
-    // Tasks not ready: bob's cached inbox.open, else unknown.
+    // Tasks not ready: bob's cached inbox.open, else hidden.
     const fallback = inboxDoc && Number.isFinite(Number(inboxDoc.open))
       ? Number(inboxDoc.open)
       : null;
@@ -627,6 +656,7 @@ function keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc) {
       const open = Math.floor(fallback);
       if (open > 0) {
         return {
+          visible: true,
           tone: "count",
           icon: "inbox",
           text: String(open),
@@ -640,29 +670,11 @@ function keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc) {
             : open + " open tasks in " + path,
         };
       }
-      return {
-        tone: "zero",
-        icon: "inbox",
-        text: "0",
-        tooltip: path + " · inbox is clear\nClick to open the inbox",
-        aria: "inbox is clear in " + path,
-      };
+      return keepInboxHiddenInboxPart();
     }
-    return {
-      tone: "unknown",
-      icon: "inbox",
-      text: KEEP_INBOX_UNKNOWN_GLYPH,
-      tooltip: "Inbox count appears once Tasks loads\nClick to open the inbox",
-      aria: "inbox count unknown in " + path,
-    };
+    return keepInboxHiddenInboxPart();
   } catch (error) {
-    return {
-      tone: "unknown",
-      icon: "inbox",
-      text: KEEP_INBOX_UNKNOWN_GLYPH,
-      tooltip: "Inbox count appears once Tasks loads\nClick to open the inbox",
-      aria: "inbox count unknown",
-    };
+    return keepInboxHiddenInboxPart();
   }
 }
 
@@ -704,7 +716,7 @@ function keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc) {
       ? "1 Google Keep note to pull, checked " + ageLong
       : total + " Google Keep notes to pull, checked " + ageLong;
     const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
-    const view = {
+    return keepInboxFinalizeView({
       visible: true,
       keep: {
         visible: true,
@@ -717,48 +729,7 @@ function keepInboxFreshView(opts, targetPath, nowMs, keep, inboxDoc) {
       connector: { visible: true },
       inbox: { visible: true, ...inbox },
       paintKey: "",
-    };
-    view.connector.visible = view.keep.visible && view.inbox.visible;
-    view.paintKey = keepInboxPaintKey(view);
-    return view;
-  } catch (error) {
-    return keepInboxHiddenView("hidden-error");
-  }
-}
-
-function keepInboxZeroView(opts, targetPath, nowMs, keep, inboxDoc) {
-  try {
-    const stays = keepInboxStaysParts(keep.stays).join(" · ");
-    const lines = ["Google Keep · nothing to pull"];
-    if (stays) {
-      lines.push(stays);
-    }
-    const checked = keepInboxCheckedLine(keep, nowMs);
-    if (checked) {
-      lines.push(checked);
-    }
-    lines.push("Click to check now");
-    const tooltip = lines.join("\n");
-    const ageLong = keepInboxRelativeAgeLong(keep.checked_at, nowMs);
-    const aria = "Google Keep inbox is clear, checked " + ageLong;
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
-    const view = {
-      visible: true,
-      keep: {
-        visible: true,
-        tone: "zero",
-        icon: "lightbulb",
-        text: "0",
-        tooltip,
-        aria,
-      },
-      connector: { visible: true },
-      inbox: { visible: true, ...inbox },
-      paintKey: "",
-    };
-    view.connector.visible = view.keep.visible && view.inbox.visible;
-    view.paintKey = keepInboxPaintKey(view);
-    return view;
+    });
   } catch (error) {
     return keepInboxHiddenView("hidden-error");
   }
@@ -841,7 +812,7 @@ function keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc) {
       ? "1 Google Keep note to pull, as of " + ageLong
       : total + " Google Keep notes to pull, as of " + ageLong;
     const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
-    const view = {
+    return keepInboxFinalizeView({
       visible: true,
       keep: {
         visible: true,
@@ -854,42 +825,7 @@ function keepInboxStaleView(opts, targetPath, nowMs, keep, inboxDoc) {
       connector: { visible: true },
       inbox: { visible: true, ...inbox },
       paintKey: "",
-    };
-    view.connector.visible = view.keep.visible && view.inbox.visible;
-    view.paintKey = keepInboxPaintKey(view);
-    return view;
-  } catch (error) {
-    return keepInboxHiddenView("hidden-error");
-  }
-}
-
-function keepInboxUnknownView(opts, targetPath, nowMs, keep, inboxDoc) {
-  try {
-    const checkedDate = keepInboxParseTime(keep.checked_at);
-    const lines = ["Google Keep · count unknown"];
-    if (checkedDate) {
-      lines.push("Last checked " + keepInboxFullDateText(checkedDate));
-    }
-    lines.push("Click to check now");
-    const tooltip = lines.join("\n");
-    const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
-    const view = {
-      visible: true,
-      keep: {
-        visible: true,
-        tone: "unknown",
-        icon: "lightbulb",
-        text: KEEP_INBOX_UNKNOWN_GLYPH,
-        tooltip,
-        aria: "Google Keep count unknown",
-      },
-      connector: { visible: true },
-      inbox: { visible: true, ...inbox },
-      paintKey: "",
-    };
-    view.connector.visible = view.keep.visible && view.inbox.visible;
-    view.paintKey = keepInboxPaintKey(view);
-    return view;
+    });
   } catch (error) {
     return keepInboxHiddenView("hidden-error");
   }
@@ -908,7 +844,7 @@ function keepInboxSigninView(opts, targetPath, nowMs) {
         ? opts.status.inbox
         : null;
     const inbox = keepInboxInboxPart(opts, targetPath, nowMs, inboxDoc);
-    const view = {
+    return keepInboxFinalizeView({
       visible: true,
       keep: {
         visible: true,
@@ -921,10 +857,7 @@ function keepInboxSigninView(opts, targetPath, nowMs) {
       connector: { visible: true },
       inbox: { visible: true, ...inbox },
       paintKey: "",
-    };
-    view.connector.visible = view.keep.visible && view.inbox.visible;
-    view.paintKey = keepInboxPaintKey(view);
-    return view;
+    });
   } catch (error) {
     return keepInboxHiddenView("hidden-error");
   }

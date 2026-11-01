@@ -1,6 +1,17 @@
 // Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
 // status-bar item. Pure DOM helpers plus one paint entry point; no spawn,
-// no vault, no Obsidian imports (globals are probed). Never throws.
+// no vault. `setIcon` is captured from `obsidian` at load time. Never throws.
+
+let KeepInboxObsidianSetIcon = null;
+try {
+  const obsidianMod = require("obsidian");
+  KeepInboxObsidianSetIcon =
+    obsidianMod && typeof obsidianMod.setIcon === "function"
+      ? obsidianMod.setIcon
+      : null;
+} catch (error) {
+  KeepInboxObsidianSetIcon = null;
+}
 
 function keepInboxSetText(node, text) {
   if (!node) {
@@ -107,14 +118,8 @@ function keepInboxSetIcon(node, name) {
     return;
   }
   try {
-    const setter =
-      typeof setIcon === "function"
-        ? setIcon
-        : typeof window !== "undefined" && typeof window.setIcon === "function"
-          ? window.setIcon
-          : null;
-    if (setter) {
-      setter(node, name);
+    if (KeepInboxObsidianSetIcon) {
+      KeepInboxObsidianSetIcon(node, name);
       return;
     }
   } catch (error) {

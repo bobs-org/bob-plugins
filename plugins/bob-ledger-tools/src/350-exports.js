@@ -369,6 +369,7 @@ module.exports.helpers = {
   blockMarkTooltip,
   blockMarkModel,
   ensureBlockMarksRefresh,
+  BLOCK_MARK_READING_PROCESSOR_ORDER,
   blockMarkDateWords,
   buildBlockMarkElement,
   blockMarkDependencyFacts,

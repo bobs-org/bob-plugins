@@ -59,10 +59,20 @@ class BobLedgerToolsBlockMarksRuntimeMixin {
         // Cache liveness is best-effort.
       }
       try {
+        if (typeof this.setupBlockMarksReading === "function") {
+          this.setupBlockMarksReading();
+        }
+      } catch (error) {
+        // Rendered-view adapter is best-effort.
+      }
+      try {
         if (typeof this.register === "function") {
           this.register(() => {
             this.cancelBlockMarksRefresh();
             this.restoreAllBlockMarkTooltips();
+            if (typeof this.teardownBlockMarksReading === "function") {
+              this.teardownBlockMarksReading();
+            }
             this.applyMarkGateClass("bob-block-marks", false);
             if (this.blockMarkEditorViews instanceof Set) {
               this.blockMarkEditorViews.clear();

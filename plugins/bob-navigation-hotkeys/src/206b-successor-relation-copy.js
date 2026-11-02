@@ -8,10 +8,11 @@ const RELATION_COPY_EVENTS = Object.freeze(["parked", "done"]);
 
 function relationCopyTruncate(text) {
   const source = String(text === null || text === undefined ? "" : text);
-  if (source.length <= RELATION_COPY_MAX_TEXT) {
+  const chars = Array.from(source);
+  if (chars.length <= RELATION_COPY_MAX_TEXT) {
     return source;
   }
-  return `${source.slice(0, RELATION_COPY_MAX_TEXT).trimEnd()}…`;
+  return `${chars.slice(0, RELATION_COPY_MAX_TEXT - 1).join("").trimEnd()}…`;
 }
 
 function relationCopyText(value) {

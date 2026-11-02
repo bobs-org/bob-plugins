@@ -16,8 +16,9 @@ const {
 
 process.env.XDG_CONFIG_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "bob-keep-moving-"));
 
-const TODAY = "2026-11-01";
-const DAY_PATH = "2026/20261101.md";
+const TODAY = helpers.formatLocalDate();
+const DAY_PATH = helpers.todayDailyPath({}, new Date(`${TODAY}T12:00:00`));
+const LATER = helpers.formatLocalDate(new Date(Date.parse(`${TODAY}T12:00:00`) + 30 * 86400000));
 const PROJECT_PATH = "sase_badges.md";
 const DAY = [
   `# ${TODAY}`,
@@ -98,7 +99,7 @@ test("KM1: an explicit pick reuses the writer, raises Ready, mints, stamps, and 
   assert.ok(row.link);
   assert.equal(row.status_symbol, "*");
   assert.match(plan.edits[0].after, /\[\*\]/);
-  assert.match(plan.edits[0].after, /\[fresh:: 2026-11-01\]/);
+  assert.match(plan.edits[0].after, new RegExp(`\\[fresh:: ${TODAY}\\]`));
   assert.match(plan.edits[0].after, /\^[A-Za-z0-9_-]+$/);
   assert.equal(plan.placements[0].rowIndex, 0);
   assert.equal(plan.placements[0].anchor.bulletLine, 4);
@@ -150,7 +151,7 @@ test("KM6/K7/K14/K16/K19/K20/K29: root, project-group, empty, blocked, disabled,
   const blockedRoots = [
     "- [?] #task Badge project ^prj",
     "- [ ] #task Badge project #prj_is_blocked ^prj",
-    "- [ ] #task Badge project [scheduled:: 2026-12-01] ^prj",
+    `- [ ] #task Badge project [scheduled:: ${LATER}] ^prj`,
   ];
   for (const rootLine of blockedRoots) {
     assert.equal(purePlan({ residents, rootLine }).plan.keep_moving.length, 0); // KM16
@@ -173,11 +174,11 @@ test("KM13/KM17/KM18/KM31: blocked, scheduled, hidden, ref, nested, and due rows
       "- [ ] #task Selectable ^ready",
       "- [?] #task Blocked and #hide ^blocked",
       "- [ ] #task Has open prerequisite [dependsOn:: ext] ^dep",
-      "- [ ] #task Scheduled later [scheduled:: 2026-12-01] ^later",
+      `- [ ] #task Scheduled later [scheduled:: ${LATER}] ^later`,
       "- [ ] #task Hidden #hide ^hidden",
       "- [ ] #ref Read this paper ^ref",
       "  - [ ] #task Nested subtask ^nested",
-      "- [ ] #task Recurring today [scheduled:: 2026-11-01] ^recurring",
+      `- [ ] #task Recurring today [scheduled:: ${TODAY}] ^recurring`,
     ],
     options: {
       dependencySnapshotAvailable: false,
@@ -189,7 +190,7 @@ test("KM13/KM17/KM18/KM31: blocked, scheduled, hidden, ref, nested, and due rows
   const silent = purePlan({ residents: [
     "- [?] #task Blocked ^blocked",
     "- [ ] #task Hidden #hide ^hidden",
-    "- [ ] #task Future [scheduled:: 2026-12-01] ^future",
+    `- [ ] #task Future [scheduled:: ${LATER}] ^future`,
   ] }).plan;
   assert.equal(silent.keep_moving.length, 0); // KM13: no selectable row means no group.
   assert.equal(silent.offers.length, 0);
@@ -320,7 +321,7 @@ test("KM copy, folds, title, lane labels, notices, and config parser/cache match
   const { plan } = purePlan({ residents: [
     "- [ ] #task Write badge docs ^docs",
       "- [?] #task Blocked ^blocked",
-    "- [ ] #task Scheduled [scheduled:: 2026-12-01] ^later",
+    `- [ ] #task Scheduled [scheduled:: ${LATER}] ^later`,
     "- [ ] #task Hidden #hide ^hidden",
   ], options: { selection: "all" } });
   const model = helpers.buildSuccessorPickerModel({

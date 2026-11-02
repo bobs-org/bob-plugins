@@ -54,6 +54,21 @@ function statsClockCapability(report) {
   }
 }
 
+// Wrap long clock values only at their " · " separators: each segment keeps
+// non-breaking spaces so "1h 05m" never splits, while the row may break
+// between segments. This shrinks min-content so 360 px viewports fit.
+function statsClockWrapValue(text) {
+  try {
+    if (typeof text !== "string" || !text) return text;
+    return text
+      .split(" · ")
+      .map((segment) => segment.replace(/ /g, "\u00A0"))
+      .join(" · ");
+  } catch (error) {
+    return text;
+  }
+}
+
 function statsMetricEffectiveClock(metric, report) {
   try {
     const safe = metric && typeof metric === "object" ? metric : {};

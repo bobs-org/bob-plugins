@@ -356,6 +356,48 @@ test("clean cached Worked paints synchronously and switching back does not spawn
   });
 });
 
+test("a failed nondefault-lens fetch falls back to Worked once and never loops", async () => {
+  await withMissingConfig(async () => {
+    const plugin = makePlugin();
+    try {
+      const view = fakeView();
+      view.el = { isShown: () => true, querySelector: () => null, textContent: "" };
+      view.statsClockSupported = true;
+      view.statsClockPreferenceApplied = true;
+      const state = plugin.statsViewStateFor(view.sourcePath);
+      state.clock = "off-clock";
+      const worked = clockReport("worked");
+      let fetches = 0;
+      let renders = 0;
+      plugin.statsPeek = (args) => {
+        if (args && args.clock === "worked") {
+          return { report: worked, fetchedAt: Date.now(), gen: 0, dirty: false };
+        }
+        return null;
+      };
+      plugin.apiStatsFetch = () => {
+        fetches += 1;
+        assert.ok(fetches <= 2, `reintroduced refetch loop: ${fetches} fetches`);
+        return Promise.resolve({ report: null, stale: false, error: { code: "failed", message: "boom" } });
+      };
+      plugin.paintStatsSkeleton = () => {};
+      plugin.renderStatsResult = () => { renders += 1; };
+      plugin.statsScheduleClockPrefetch = () => {};
+      plugin.statsClockPreference = "off-clock";
+      plugin.paintStatsBlock(view);
+      for (let tick = 0; tick < 20 && renders === 0; tick += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(renders, 1);
+      assert.ok(fetches <= 2, `expected at most two fetches, saw ${fetches}`);
+      assert.equal(plugin.statsViewStateFor(view.sourcePath).clock, "worked");
+      assert.equal(plugin.statsClockPreference, "off-clock");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
 test("cache notifications do not interrupt a foreground paint or recursively prefetch", async () => {
   await withMissingConfig(async () => {
     const plugin = makePlugin();

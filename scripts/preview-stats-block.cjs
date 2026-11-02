@@ -105,21 +105,47 @@ class CdpClient {
     return new CdpClient(socket);
   }
 
-  call(method, params = {}) {
+  call(method, params = {}, timeoutMs = 30000) {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.socket.send(JSON.stringify({ id, method, params }));
+      const timer = setTimeout(() => {
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
+          reject(new Error(`CDP call timed out after ${timeoutMs}ms: ${method}`));
+        }
+      }, timeoutMs);
+      try {
+        timer.unref?.();
+      } catch (error) {
+        // unref is best-effort.
+      }
+      this.pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
-  async evaluate(expression) {
+  async evaluate(expression, timeoutMs = 30000) {
     const response = await this.call("Runtime.evaluate", {
       expression,
       awaitPromise: true,
       returnByValue: true,
       userGesture: true,
-    });
+    }, timeoutMs);
     if (response.exceptionDetails) {
       throw new Error(response.exceptionDetails.exception && response.exceptionDetails.exception.description || response.exceptionDetails.text);
     }
@@ -153,12 +179,21 @@ async function waitForPreview(client) {
   throw new Error("The standalone preview did not finish loading.");
 }
 
-async function capture(client, file) {
-  const result = await client.call("Page.captureScreenshot", {
-    format: "png",
-    fromSurface: true,
-    captureBeyondViewport: true,
+async function capture(client, file, width = 1000) {
+  // Phase-4 lanes/panels wedge Chromium's full-page compositor path
+  // (`fromSurface:true` + `captureBeyondViewport:true` hangs on the first
+  // 1000 px matrix cell even with an idle page). Sizing the viewport to the
+  // content height first and taking a normal viewport capture avoids the
+  // compositor quirk with no product change.
+  const contentHeight = await client.evaluate(
+    `Math.max(document.documentElement ? document.documentElement.scrollHeight : 0, document.body ? document.body.scrollHeight : 0, 1)`,
+    30000,
+  );
+  const height = Math.max(1, Math.min(Math.ceil(Number(contentHeight) || 900), 20000));
+  await client.call("Emulation.setDeviceMetricsOverride", {
+    width, height, deviceScaleFactor: 1, mobile: false,
   });
+  const result = await client.call("Page.captureScreenshot", { format: "png" }, 60000);
   fs.writeFileSync(file, Buffer.from(result.data, "base64"));
 }
 
@@ -216,7 +251,12 @@ async function main() {
   const child = spawn(chromium, [
     "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
     "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank",
-  ], { stdio: "ignore", env: { ...process.env, TMPDIR: "/tmp" } });
+  ], { stdio: "ignore", detached: true, env: { ...process.env, TMPDIR: "/tmp" } });
+  try {
+    if (typeof child.unref === "function") child.unref();
+  } catch (error) {
+    // Unref is best-effort; the finally block still reaps the child.
+  }
   let client = null;
   try {
     const activePortFile = path.join(profile, "DevToolsActivePort");
@@ -268,7 +308,7 @@ async function main() {
           };
         })()`);
         const screenshot = path.join(args.out, `stats-${width}-${theme}.png`);
-        await capture(client, screenshot);
+        await capture(client, screenshot, width);
         matrix.push({ width, theme, screenshot: path.basename(screenshot), ...observation });
       }
     }
@@ -541,8 +581,22 @@ async function main() {
     fs.writeFileSync(path.join(args.out, "matrix-report.md"), report);
     console.log(JSON.stringify({ output: args.out, html: htmlFile, chromium, browser: browserVersion.product, screenshots: matrix.map((item) => path.join(args.out, item.screenshot)), interactions: interactionChecks.length }, null, 2));
   } finally {
-    if (client) client.socket.close();
-    child.kill("SIGTERM");
+    if (client) {
+      try {
+        client.socket.close();
+      } catch (error) {
+        // Socket close is best-effort.
+      }
+    }
+    try {
+      if (child.pid) process.kill(-child.pid, "SIGKILL");
+    } catch (error) {
+      try {
+        child.kill("SIGKILL");
+      } catch (inner) {
+        // Kill is best-effort.
+      }
+    }
     await new Promise((resolve) => child.once("exit", resolve));
     try {
       fs.rmSync(profile, { recursive: true, force: true });

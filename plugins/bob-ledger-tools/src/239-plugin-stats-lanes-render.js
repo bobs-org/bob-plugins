@@ -355,7 +355,7 @@ function statsWindowLanesPaintLane(doc, model, laneName, handlers, memory, morph
     dayStripAppend(row, statsEl(doc, "span", {
       class: "bob-stats-lane-meta",
       title: model.meta.title || null,
-    }, model.meta.text));
+    }, typeof statsClockWrapValue === "function" ? statsClockWrapValue(model.meta.text) : model.meta.text));
   }
   dayStripAppend(lane, row);
   const oldPairs = memory && (laneName === "themes" ? memory.themes : memory.roots);

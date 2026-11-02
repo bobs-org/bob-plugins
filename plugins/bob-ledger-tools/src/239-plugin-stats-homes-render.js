@@ -200,7 +200,7 @@ class BobLedgerToolsStatsHomesMixin {
     group.appendChild(dot);
     group.appendChild(this.statsPanelHomeLink(doc, view, row, dimension));
     const amount = (row.clock_text || row.display) + (row.share ? " · " + row.share : "");
-    group.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, amount));
+    group.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, typeof statsClockWrapValue === "function" ? statsClockWrapValue(amount) : amount));
     const sessions = metric.kind === "pomodoro"
       ? this.statsPanelHomeSessionButton(doc, view, report, metric, dimension, row, point)
       : null;
@@ -275,7 +275,7 @@ class BobLedgerToolsStatsHomesMixin {
       "aria-label": row.label + ": " + (row.clock_text || row.display) + (row.share ? " · " + row.share : ""),
     });
     top.appendChild(this.statsPanelHomeLink(doc, view, row, "project"));
-    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, (row.clock_text || row.display) + (row.share ? " · " + row.share : "")));
+    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, typeof statsClockWrapValue === "function" ? statsClockWrapValue((row.clock_text || row.display) + (row.share ? " · " + row.share : "")) : ((row.clock_text || row.display) + (row.share ? " · " + row.share : ""))));
     const sessions = metric.kind === "pomodoro"
       ? this.statsPanelHomeSessionButton(doc, view, report, metric, "project", row, point)
       : null;
@@ -352,7 +352,7 @@ class BobLedgerToolsStatsHomesMixin {
       "aria-label": row.label + ": " + (row.clock_text || row.display) + (row.share ? " · " + row.share : ""),
     });
     top.appendChild(this.statsPanelHomeLink(doc, view, row, "root_parent"));
-    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, (row.clock_text || row.display) + (row.share ? " · " + row.share : "")));
+    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, typeof statsClockWrapValue === "function" ? statsClockWrapValue((row.clock_text || row.display) + (row.share ? " · " + row.share : "")) : ((row.clock_text || row.display) + (row.share ? " · " + row.share : ""))));
     const sessions = metric.kind === "pomodoro"
       ? this.statsPanelHomeSessionButton(doc, view, report, metric, "root_parent", row, point)
       : null;
@@ -412,7 +412,7 @@ class BobLedgerToolsStatsHomesMixin {
         "aria-label": leaf.label + ": " + (leaf.clock_text || leaf.display) + (leaf.share ? " · " + leaf.share : ""),
       });
       top.appendChild(this.statsPanelHomeLink(doc, view, leaf, "project"));
-      top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, (leaf.clock_text || leaf.display) + (leaf.share ? " · " + leaf.share : "")));
+      top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, typeof statsClockWrapValue === "function" ? statsClockWrapValue((leaf.clock_text || leaf.display) + (leaf.share ? " · " + leaf.share : "")) : ((leaf.clock_text || leaf.display) + (leaf.share ? " · " + leaf.share : ""))));
       row.appendChild(top);
       const bar = this.statsPanelHomeMiniBar(doc, leaf, maxValue, metric, false);
       if (bar) row.appendChild(bar);

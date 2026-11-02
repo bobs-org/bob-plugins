@@ -3218,10 +3218,13 @@ body.bob-block-marks a.tag[data-bob-block-folded="true"] {
 }
 .bob-stats-lane-meta {
   flex: none;
+  max-width: 100%;
   margin-left: auto;
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: right;
+  min-width: 0;
 }
 .bob-stats-lane-bar {
   box-sizing: border-box;
@@ -4025,7 +4028,10 @@ body.bob-block-marks a.tag[data-bob-block-folded="true"] {
   color: var(--text-muted);
   font-size: 0.82em;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: normal;
+  min-width: 0;
+  text-align: right;
 }
 
 .bob-stats-home-sessions-toggle,

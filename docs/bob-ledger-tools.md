@@ -298,6 +298,7 @@ while today's review is still open. The roots bar groups working time
 by root parent (falling back to areas with an honest "Time by area" label when
 bob predates `root_parent`). The type bar groups the same minutes by task type and wears each type's hue;
 clicking it opens Stats on the Types view. Each legend fits as many names as its line holds.
+When the day's Worked point carries positive off-clock time, a quiet `◌ +<display> off-clock` hint renders under WORKED and opens Stats on that day with the Off-clock lens.
 Daily notes without a `bob-plan` block show no strip. To place one explicitly,
 add a `bob-day-stats` code fence in any note, optionally with `day: YYYY-MM-DD`.
 A fence placed inside a daily note simply renders its own strip.
@@ -307,12 +308,12 @@ with live dependents, last-blocker 🔑 badges, stale-entry styling, and `frees
 N` summaries. Chips render in Live Preview and Reading view on owned
 Depends-On rows only, with a session toggle; `waiting on N` counts open
 prerequisites only. Open BLOCKS rows add ＋ to open the reverse Blocks stage
-and hover × to remove a dependent. The Stats `bob-stats` block renders two window time bars above the tiles
-that split the selected window's worked minutes by root parent and by
+and hover × to remove a dependent. The Stats `bob-stats` block renders a report-driven Worked · Off-clock · Total clock control above the window bars (one checked native radio per `report.clock.options`, arrows wrap and select, `Space` activates, `c` cycles from the dash surface, remembered per device; clockless or no-adoption reports hide the control and stay on Worked without erasing the saved preference), then two window time bars above the tiles
+that split the selected window's minutes by root parent and by
 task type, then the responsive Root parents panel with Root parents
 and Types views, area groups with sub-project disclosure, bucket fix-it
 copy, and session drill-down, plus task counts; the Types view wears
-each type's hue on its bars, with exempt types and `other` in gray. The `★` type line of
+each type's hue on its bars, with exempt types and `other` in gray. Off-clock time renders as dashed outlines in the item's hue across tiles, focus charts, window lanes, and time breakdowns; under Total, a solid worked span ends in a dashed off-clock tail and off-clock sessions get a dashed edge. Total sums session minutes, so overlapping sessions count twice; it is neither occupied nor free time. The full value contract is on the [Bob Stats page](https://bobs-org.github.io/stats/). The `★` type line of
 the plan block renders the same pills. The read-only `bob-reading-board` block
 renders a Reading / Next / Ready / Snoozed kanban of the reading queue drawn
 entirely from `bob ref list` JSON — wake dates and waiting-on reasons come from

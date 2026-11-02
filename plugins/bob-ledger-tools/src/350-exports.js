@@ -539,6 +539,7 @@ module.exports.helpers = {
   statsNormalizeGroup,
   statsNormalizeClock,
   statsClockCapability,
+  statsClockWrapValue,
   statsMetricEffectiveClock,
   statsClockBreakdown,
   statsPartsClockBreakdown,

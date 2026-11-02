@@ -452,6 +452,14 @@ class BobLedgerToolsStatsBlockMixin {
         }
       } else if (args.clock !== "worked" && view.statsClockSupported === true) {
         view.statsClockSupported = false;
+        try {
+          const failedState = this.statsViewStateFor(view && view.sourcePath);
+          if (failedState) {
+            failedState.clock = "worked";
+          }
+        } catch (error) {
+          // A failed nondefault lens still settles once on Worked.
+        }
         this.paintStatsBlock(view, { prefetchClock: allowPrefetch });
         return;
       }

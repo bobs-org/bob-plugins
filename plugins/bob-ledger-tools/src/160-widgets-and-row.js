@@ -156,8 +156,11 @@ if (WidgetType && typeof WidgetType === "function") {
 
 // Whether a CodeMirror position sits inside code: the syntax node at
 // the position, or any ancestor, is a codeblock (mirroring Dataview's
-// `HyperMD-codeblock` check) or inline code. Missing trees never throw
-// and never match. Pure helper for the Live Preview decoration.
+// `HyperMD-codeblock` check) or inline code. The live CM6 tree reports
+// fenced content as `hmd-codeblock` (observed in the real-Obsidian e2e,
+// not the legacy `HyperMD-codeblock` name), so both match alongside the
+// standard Lezer markdown code names. Missing trees never throw and
+// never match. Pure helper for the Live Preview decoration.
 function freshnessMarkPosInCode(tree, pos) {
   try {
     if (!tree || typeof tree.resolveInner !== "function") {
@@ -165,10 +168,17 @@ function freshnessMarkPosInCode(tree, pos) {
     }
     let node = tree.resolveInner(pos, -1);
     while (node) {
-      const name = node.name || "";
+      const name = String((node && node.name) || "").toLowerCase();
       if (
-        name === "HyperMD-codeblock" ||
-        name.indexOf("inline-code") !== -1
+        name === "hypermd-codeblock" ||
+        name === "hmd-codeblock" ||
+        name.indexOf("inline-code") !== -1 ||
+        name === "fencedcode" ||
+        name === "codeblock" ||
+        name === "codetext" ||
+        name === "codemark" ||
+        name === "codeinfo" ||
+        name === "inlinecode"
       ) {
         return true;
       }

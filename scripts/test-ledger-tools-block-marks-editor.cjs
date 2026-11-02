@@ -77,7 +77,9 @@ Module._load = function loadWithBlockMarkEditorStubs(request) {
         return {
           resolveInner(pos) {
             const match = ranges.find((range) => pos >= range.from && pos < range.to);
-            return match ? { name: match.kind === "fence" ? "HyperMD-codeblock" : "inline-code", parent: null } : null;
+            if (!match) return null;
+            if (match.kind === "hmd-fence") return { name: "hmd-codeblock", parent: null };
+            return { name: match.kind === "fence" ? "HyperMD-codeblock" : "inline-code", parent: null };
           },
         };
       },
@@ -195,15 +197,19 @@ test("neutral rows, inline code, and fenced content stay unmarked", () => {
   const plain = "- [*] #task Next [scheduled:: 2026-11-20]";
   const inline = "- [?] `#task` example [scheduled:: 2026-11-20]";
   const fenced = "- [?] #task Example [scheduled:: 2026-11-20]";
+  const hmdFenced = "- [?] #task Live fence [scheduled:: 2026-11-20]";
   const inlineStart = inline.indexOf("#task");
   const fenceStart = fenced.indexOf("#task");
-  const text = [plain, inline, fenced].join("\n");
+  const hmdStart = hmdFenced.indexOf("#task");
+  const text = [plain, inline, fenced, hmdFenced].join("\n");
   const secondFrom = plain.length + 1;
   const thirdFrom = secondFrom + inline.length + 1;
+  const fourthFrom = thirdFrom + fenced.length + 1;
   const view = makeView(text, {
     codeRanges: [
       { from: secondFrom + inlineStart, to: secondFrom + inlineStart + 5, kind: "inline" },
       { from: thirdFrom + fenceStart, to: thirdFrom + fenceStart + 5, kind: "fence" },
+      { from: fourthFrom + hmdStart, to: fourthFrom + hmdStart + 5, kind: "hmd-fence" },
     ],
   });
   assert.equal(lineMarks(plugin.buildBlockMarkDecorations(view)).length, 0);

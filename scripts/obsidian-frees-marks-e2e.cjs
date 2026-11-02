@@ -757,10 +757,14 @@ function installTickRecorderExpr() {
     window.__fmTickHandler = (event) => {
       if (!event || event.animationName !== ${JSON.stringify(TICK_ANIMATION)}) return;
       const target = event.target;
+      if (!target || !target.classList || !target.classList.contains("bob-frees-mark-tick")) return;
+      if (!target.getClientRects || target.getClientRects().length === 0) return;
+      const line = target.closest && target.closest(".cm-line");
       window.__fmTicks.push({
         count: target && target.getAttribute ? target.getAttribute("data-count") : "",
         blockId: target && target.getAttribute ? target.getAttribute("data-block-id") : "",
         surface: target && target.closest && target.closest(".cm-editor") ? "live" : "reading",
+        context: line ? String(line.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 80) : "",
         t: Date.now(),
       });
     };
@@ -828,6 +832,12 @@ function runSelfTest() {
       throw new Error("tooltip selector must not include [data-tooltip-position]");
     }
     if (!source.includes("bob-frees-mark-tick")) throw new Error("self-test must cover the tick class");
+    if (!source.includes("assertUpdateWithinBudget") || !source.includes("assertSingleAnimation")) {
+      throw new Error("self-test must protect the timing and single-animation assertions");
+    }
+    if (!source.includes('"animationstart"')) {
+      throw new Error("tick counting must observe actual animationstart events");
+    }
     if (!source.includes("modifiers")) throw new Error("self-test must cover Mod+click");
     const emptyTip = asserts.assertExactTooltip({
       aria: asserts.expectedFc1Tooltip(),
@@ -841,6 +851,28 @@ function runSelfTest() {
       expected: asserts.expectedFc1Tooltip(),
     });
     if (!goodTip.ok) throw new Error(`exact tooltip helper failed: ${goodTip.reason}`);
+    if (!asserts.assertUpdateWithinBudget(1500).ok) {
+      throw new Error("the 1,000 ms target plus 500 ms tolerance must pass");
+    }
+    const lateUpdate = asserts.assertUpdateWithinBudget(1501);
+    if (lateUpdate.ok) throw new Error("offline self-test must reject a late update");
+    const oneAnimation = asserts.assertSingleAnimation([{ blockId: "fc1" }], "fc1");
+    if (!oneAnimation.ok) throw new Error("one actual animation event must pass");
+    const duplicateAnimations = asserts.assertSingleAnimation(
+      [{ blockId: "fc1" }, { blockId: "fc1" }],
+      "fc1",
+    );
+    if (duplicateAnimations.ok) throw new Error("offline self-test must reject duplicate animations");
+    const sameBurst = asserts.assertSingleAnimation(
+      [{ blockId: "fc1", t: 10 }, { blockId: "fc1", t: 10 }, { blockId: "fc1", t: 12 }],
+      "fc1",
+    );
+    if (!sameBurst.ok) throw new Error("same-burst DOM copies of one count change must count as one animation");
+    const lateSecondBurst = asserts.assertSingleAnimation(
+      [{ blockId: "fc1", t: 10 }, { blockId: "fc1", t: 400 }],
+      "fc1",
+    );
+    if (lateSecondBurst.ok) throw new Error("offline self-test must reject a second animation burst");
     const words = asserts.assertCompactCount({ count: "1", text: "🔑 frees 1" }, 1);
     if (words.ok) throw new Error("compact helper must reject the words form");
     const compact = asserts.assertCompactCount({ count: "1", text: "🔑1" }, 1);
@@ -1195,9 +1227,11 @@ async function runE2e(parsed) {
       if (!editor || typeof editor.getCursor !== "function") return { ok: false, error: "no editor" };
       const cursor = editor.getCursor();
       const line = editor.getLine(cursor.line);
-      return { ok: true, line: cursor.line, ch: cursor.ch, text: String(line || "").slice(0, 120), focused: document.hasFocus() };
+      const token = "[[sase#^fc1]]";
+      const expectedCh = String(line || "").indexOf(token) + token.length;
+      return { ok: true, line: cursor.line, ch: cursor.ch, expectedCh, text: String(line || "").slice(0, 120), focused: document.hasFocus() };
     })()`).catch((error) => ({ ok: false, error: String(error) }));
-    record("plain-click-places-caret", Boolean(caret && caret.ok && /fc1/.test(String(caret.text || ""))), JSON.stringify(caret).slice(0, 200));
+    record("plain-click-places-caret", Boolean(caret && caret.ok && caret.expectedCh > 0 && caret.ch === caret.expectedCh), JSON.stringify(caret).slice(0, 220));
 
     const leavesBefore = await client.evaluate(`(() => window.app.workspace.getLeavesOfType("markdown").map((leaf) => leaf.view && leaf.view.file && leaf.view.file.path))()`).catch(() => []);
     const modPoint = await markPoint(client, "fc1");
@@ -1232,10 +1266,12 @@ async function runE2e(parsed) {
       await window.app.vault.modify(abstract, next);
       return { ok: true };
     })())()`).catch((error) => ({ ok: false, error: String(error) }));
+    const editAppliedAt = Date.now();
     record("tick-edit-applied", Boolean(edited && edited.ok), JSON.stringify(edited).slice(0, 160));
     let afterCount = beforeCount;
     let ticks = [];
-    const tickDeadline = Date.now() + 4000;
+    let observedAt = null;
+    const tickDeadline = editAppliedAt + 1500;
     while (Date.now() < tickDeadline) {
       const state = await client.evaluate(`(() => {
         const mark = Array.from(document.querySelectorAll(".bob-frees-mark")).find((el) => el.getAttribute("data-block-id") === "fc1" && el.closest(".cm-editor"));
@@ -1247,12 +1283,26 @@ async function runE2e(parsed) {
       })()`).catch(() => ({ count: null, ticks: [] }));
       afterCount = state && state.count;
       ticks = (state && state.ticks) || [];
-      if (String(afterCount) === "2") break;
-      await sleep(150);
+      if (String(afterCount) === "2") {
+        observedAt = Date.now();
+        break;
+      }
+      await sleep(50);
     }
+    const elapsedMs = observedAt === null ? null : observedAt - editAppliedAt;
+    const updateTiming = asserts.assertUpdateWithinBudget(elapsedMs);
+    record("tick-count-updates", String(afterCount) === "2" && updateTiming.ok, `before=${beforeCount} after=${afterCount} elapsed=${elapsedMs === null ? "timeout" : elapsedMs}ms target=1000ms tolerance=500ms`);
+    // animationstart is the actual CSS event; wait through its 400 ms window
+    // so a second start for the changed row cannot escape this assertion.
+    await sleep(450);
+    ticks = await client.evaluate(`(() => Array.isArray(window.__fmTicks) ? window.__fmTicks : [])()`).catch(() => ticks);
     const fc1Ticks = ticks.filter((item) => item && item.blockId === "fc1" && item.surface === "live");
-    record("tick-count-updates", String(afterCount) === "2", `before=${beforeCount} after=${afterCount} within=1s`);
-    record("tick-class-once", fc1Ticks.length === 1 || (fc1Ticks.length >= 1 && fc1Ticks.length <= 2 && String(afterCount) === "2"), `ticks=${JSON.stringify(fc1Ticks).slice(0, 180)}`);
+    const singleAnimation = asserts.assertSingleAnimation(fc1Ticks, "fc1");
+    record(
+      "tick-class-once",
+      singleAnimation.ok,
+      `bursts=${singleAnimation.bursts} events=${singleAnimation.count} ${JSON.stringify(fc1Ticks).slice(0, 180)}`,
+    );
 
     report.cases = cases;
     report.skipped = skipped;

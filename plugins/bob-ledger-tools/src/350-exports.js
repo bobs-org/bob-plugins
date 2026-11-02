@@ -437,6 +437,7 @@ module.exports.helpers = {
   freesMarkTaskId,
   freesMarkCount,
   freesMarkLinkedTask,
+  freesMarkCandidateLinks,
   freesMarkLinks,
   freesMarkTooltip,
   buildFreesMarkElement,

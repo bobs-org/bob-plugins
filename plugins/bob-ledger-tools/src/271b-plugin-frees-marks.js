@@ -165,7 +165,10 @@ class BobLedgerToolsFreesMarksMixin {
         update(update) {
           try {
             if (plugin.freesMarkShouldRebuild(update)) {
-              this.decorations = plugin.buildFreesMarkDecorations(update.view);
+              this.decorations = plugin.buildFreesMarkDecorations(
+                update.view,
+                { suppressMotion: Boolean(update.viewportChanged && !update.docChanged) },
+              );
             }
           } catch (error) {
             // Keep the last good decoration set.
@@ -280,7 +283,7 @@ class BobLedgerToolsFreesMarksMixin {
     }
   }
 
-  buildFreesMarkDecorations(view) {
+  buildFreesMarkDecorations(view, options) {
     try {
       if (
         !this.freesMarksEnabled ||
@@ -324,20 +327,42 @@ class BobLedgerToolsFreesMarksMixin {
       if (!memo || !Array.isArray(memo.tasks) || memo.tasks.length === 0) {
         return Decoration.none;
       }
+      const ranges = view.visibleRanges || [];
       const entries = freesMarkCandidateLinks(doc.toString(), memo, new Date(), {
         dailyPath,
+        isVisible: (lineNumber, ch) => {
+          try {
+            const line = doc.line(lineNumber + 1);
+            if (!line || typeof line.from !== "number") return false;
+            const pos = line.from + ch;
+            return ranges.some((range) =>
+              range &&
+              typeof range.from === "number" &&
+              typeof range.to === "number" &&
+              pos >= range.from &&
+              pos <= range.to,
+            );
+          } catch (error) {
+            return false;
+          }
+        },
       });
       const builder = new RangeSetBuilder();
       const counts = this.freesMarkEditorCounts(view);
-      const ranges = view.visibleRanges || [];
+      const transitions = new Map();
       for (const entry of entries) {
         try {
-          const key = filePath + "\u0000" + entry.blockId;
-          const transition = this.rememberFreesMarkCount(
-            counts,
-            key,
-            entry.count,
-          );
+          const key = entry.ownerKey || entry.ownerPath + "\u0000" + entry.ownerBlockId;
+          if (!transitions.has(key)) {
+            transitions.set(
+              key,
+              this.rememberFreesMarkCount(counts, key, entry.count),
+            );
+          }
+          const transition = transitions.get(key);
+          if (options && options.suppressMotion && transition) {
+            transition.tick = false;
+          }
           if (entry.count < 1) {
             continue;
           }
@@ -346,22 +371,6 @@ class BobLedgerToolsFreesMarksMixin {
             continue;
           }
           const pos = line.from + entry.ch;
-          let visible = false;
-          for (const range of ranges) {
-            if (
-              range &&
-              typeof range.from === "number" &&
-              typeof range.to === "number" &&
-              pos >= range.from &&
-              pos <= range.to
-            ) {
-              visible = true;
-              break;
-            }
-          }
-          if (!visible) {
-            continue;
-          }
           builder.add(
             pos,
             pos,
@@ -407,7 +416,7 @@ class BobLedgerToolsFreesMarksMixin {
     }
   }
 
-  refreshFreesMarksEditors() {
+  refreshFreesMarksEditors(allMarkdown) {
     try {
       const refresh = ensureFreesMarksRefresh();
       const workspace = this.app && this.app.workspace;
@@ -425,7 +434,12 @@ class BobLedgerToolsFreesMarksMixin {
         try {
           const view = leaf && leaf.view ? leaf.view : null;
           const filePath = view && view.file && view.file.path;
-          if (filePath && dailyPath && !sameVaultPath(filePath, dailyPath)) {
+          if (
+            !allMarkdown &&
+            filePath &&
+            dailyPath &&
+            !sameVaultPath(filePath, dailyPath)
+          ) {
             continue;
           }
           const cm = view && view.editor && view.editor.cm;
@@ -532,7 +546,11 @@ class BobLedgerToolsFreesMarksMixin {
         return false;
       }
       this.freesMarkDay = dailyPath;
-      this.refreshFreesMarksEditors();
+      // A new daily note is a first paint. Drop prior counts so no pill
+      // inherits a tick, and invalidate yesterday's editor so its marks
+      // disappear without waiting for an edit or viewport update.
+      this.freesMarkCountsByEditor = new WeakMap();
+      this.refreshFreesMarksEditors(true);
       this.refreshFreesMarksReadingViews();
       return true;
     } catch (error) {
@@ -813,6 +831,8 @@ class BobLedgerToolsFreesMarksMixin {
         return true;
       }
       const index = unblockedGlyphIndex(memo.tasks);
+      const resolutions = new Map();
+      const counts = new Map();
       const items =
         typeof root.querySelectorAll === "function"
           ? Array.from(root.querySelectorAll("li"))
@@ -830,18 +850,39 @@ class BobLedgerToolsFreesMarksMixin {
           }
           let model = null;
           if (context) {
-            const linked = freesMarkLinkedTask(
-              index,
-              context.target,
-              context.blockId,
-              sourcePath,
-            );
+            const targetKey = String(context.target || "") + "\u0000" + String(context.blockId || "");
+            let linked;
+            if (resolutions.has(targetKey)) {
+              linked = resolutions.get(targetKey);
+            } else {
+              linked = freesMarkLinkedTask(
+                index,
+                context.target,
+                context.blockId,
+                sourcePath,
+              );
+              resolutions.set(targetKey, linked || null);
+            }
             if (linked && blocksTaskIsOpen(linked) && freesMarkTaskId(linked)) {
-              const count = freesMarkCount(linked, memo, new Date());
+              const ownerPath = freesMarkTaskPath(linked);
+              const ownerBlockId = freesMarkTaskBlockId(linked);
+              const ownerKey = ownerPath && ownerBlockId
+                ? ownerPath + "\u0000" + ownerBlockId
+                : targetKey;
+              let count;
+              if (counts.has(ownerKey)) {
+                count = counts.get(ownerKey);
+              } else {
+                count = freesMarkCount(linked, memo, new Date());
+                counts.set(ownerKey, count || null);
+              }
               if (count && count.count > 0) {
                 model = {
                   ...count,
                   blockId: context.blockId,
+                  ownerPath,
+                  ownerBlockId,
+                  ownerKey,
                   target: context.target,
                   linktext:
                     (String(context.target || "") ? String(context.target) : "") +

@@ -100,6 +100,52 @@ function assertCompactCount(mark, count) {
   return { ok: true, mark };
 }
 
+// The animation promise is about a 1 s update with a documented 500 ms
+// allowance for Obsidian's cache and editor refresh scheduling.
+function assertUpdateWithinBudget(elapsedMs, targetMs = 1000, toleranceMs = 500) {
+  const elapsed = Number(elapsedMs);
+  const target = Number(targetMs);
+  const tolerance = Number(toleranceMs);
+  const budgetMs = target + tolerance;
+  const ok = Number.isFinite(elapsed) && elapsed >= 0 && elapsed <= budgetMs;
+  return { ok, elapsedMs: elapsed, targetMs: target, toleranceMs: tolerance, budgetMs };
+}
+
+function animationBurstCount(events, windowMs = 180) {
+  const list = Array.isArray(events) ? events : [];
+  const timed = [];
+  let untimed = 0;
+  for (const event of list) {
+    const stamp = Number(event && event.t);
+    if (Number.isFinite(stamp)) timed.push(stamp);
+    else untimed += 1;
+  }
+  timed.sort((left, right) => left - right);
+  let bursts = 0;
+  let last = null;
+  for (const stamp of timed) {
+    if (last === null || stamp - last > windowMs) bursts += 1;
+    last = stamp;
+  }
+  return bursts + untimed;
+}
+
+function assertSingleAnimation(events, blockId) {
+  const matching = (Array.isArray(events) ? events : []).filter(
+    (event) => !blockId || String(event && event.blockId || "") === String(blockId),
+  );
+  // Same-millisecond starts on every visible row for one owner are one
+  // count-change burst, not extra animations. Untimed records stay distinct
+  // so the offline self-test still rejects a duplicated animation.
+  const bursts = animationBurstCount(matching);
+  return {
+    ok: bursts === 1,
+    count: matching.length,
+    bursts,
+    events: matching,
+  };
+}
+
 function collapseConsecutive(order) {
   const seq = [];
   for (const item of Array.isArray(order) ? order : []) {
@@ -297,6 +343,8 @@ module.exports = {
   markForBlockId,
   markForContext,
   assertCompactCount,
+  assertUpdateWithinBudget,
+  assertSingleAnimation,
   collapseConsecutive,
   assertGlyphThenMark,
   assertBare,

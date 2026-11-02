@@ -5,6 +5,23 @@ const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
 
+const RealDate = Date;
+const FROZEN_NOW = new RealDate(2026, 10, 2, 12, 0, 0);
+class FrozenDate extends RealDate {
+  constructor(...args) {
+    if (args.length === 0) {
+      super(FROZEN_NOW.getTime());
+    } else {
+      super(...args);
+    }
+  }
+
+  static now() {
+    return FROZEN_NOW.getTime();
+  }
+}
+global.Date = FrozenDate;
+
 const TODAY = new Date(2026, 10, 2, 12, 0, 0);
 const TODAY_PATH = "Daily/2026-11-02.md";
 const INFO_FIELD = { freesField: "info" };
@@ -144,6 +161,7 @@ Module._load = originalLoad;
 const {
   FREES_MARK_KEY,
   freesMarkCount,
+  freesMarkCandidateLinks,
   freesMarkLinks,
   freesMarkTooltip,
   buildFreesMarkElement,
@@ -378,6 +396,124 @@ test("FL1-FL16: the ledger link gates match the display contract", () => {
   // FL16: toggle-off suppresses the JavaScript decorations as well as CSS.
   plugin.freesMarksEnabled = false;
   assert.equal(decorationRows(plugin.buildFreesMarkDecorations(makeView(daily(linkRow())))).length, 0);
+});
+
+test("motion identity is the resolved owner path and block ID", () => {
+  const one = ownerTask({ id: "one", blockId: "prj", path: "one.md" });
+  const two = ownerTask({ id: "two", blockId: "prj", path: "two.md" });
+  const tasks = [
+    one,
+    two,
+    dependent({ id: "one-d", blockId: "one-d", dependsOn: ["one"] }),
+    dependent({ id: "two-d1", blockId: "two-d1", dependsOn: ["two"] }),
+    dependent({ id: "two-d2", blockId: "two-d2", dependsOn: ["two"] }),
+  ];
+  const { plugin } = makePlugin(tasks);
+  const view = makeView(daily(linkRow("one#^prj"), linkRow("two#^prj")));
+
+  // Distinct notes with the same ^prj block have separate first-paint state.
+  let rows = decorationRows(plugin.buildFreesMarkDecorations(view));
+  assert.deepEqual(rows.map((row) => row.value.widget.model.count), [1, 2]);
+  assert.deepEqual(rows.map((row) => row.value.widget.model.tick), [false, false]);
+  assert.deepEqual(rows.map((row) => row.value.widget.model.ownerPath), ["one.md", "two.md"]);
+
+  // A warm rebuild does not reuse one owner's transition for the other.
+  rows = decorationRows(plugin.buildFreesMarkDecorations(view));
+  assert.deepEqual(rows.map((row) => row.value.widget.model.tick), [false, false]);
+  const counts = plugin.freesMarkEditorCounts(view);
+  assert.equal(counts.get("one.md\u0000prj"), 1);
+  assert.equal(counts.get("two.md\u0000prj"), 2);
+});
+
+test("duplicate and aliased links resolve and count once per owner per build", () => {
+  const owner = ownerTask({ path: "sase.md" });
+  const tasks = [owner, dependent()];
+  const memo = memoOf(tasks);
+  const content = daily(
+    linkRow("sase#^a"),
+    linkRow("sase#^a"),
+    linkRow("sase#^a|Read it"),
+  );
+  const resolved = [];
+  const counted = [];
+  const rows = freesMarkCandidateLinks(content, memo, TODAY, {
+    dailyPath: TODAY_PATH,
+    onResolve: (target) => resolved.push(target),
+    onCount: (key) => counted.push(key),
+  });
+
+  assert.equal(rows.length, 3);
+  assert.deepEqual(resolved.sort(), ["sase\u0000a"]);
+  assert.deepEqual(counted, ["sase.md\u0000a"]);
+  assert.ok(rows.every((row) => row.ownerKey === "sase.md\u0000a"));
+
+  const { plugin } = makePlugin(tasks);
+  const view = makeView(content);
+  let decorations = decorationRows(plugin.buildFreesMarkDecorations(view));
+  assert.equal(decorations.length, 3);
+  assert.deepEqual(decorations.map((row) => row.value.widget.model.tick), [false, false, false]);
+  tasks.push(dependent({ id: "d2", blockId: "d2" }));
+  plugin.freshnessEnsureMemo = () => memoOf(tasks);
+  decorations = decorationRows(plugin.buildFreesMarkDecorations(view));
+  assert.deepEqual(decorations.map((row) => row.value.widget.model.tick), [true, true, true]);
+  // Duplicate widgets share the one owner transition from this build.
+  decorations = decorationRows(plugin.buildFreesMarkDecorations(view));
+  assert.deepEqual(decorations.map((row) => row.value.widget.model.tick), [false, false, false]);
+});
+
+test("offscreen ledger targets do no resolution or count work until visible", () => {
+  const tasks = [ownerTask(), dependent()];
+  const content = daily(linkRow());
+  const view = makeView(content);
+  view.visibleRanges = [{ from: 0, to: 1 }];
+  const { plugin } = makePlugin(tasks);
+  assert.equal(decorationRows(plugin.buildFreesMarkDecorations(view)).length, 0);
+  assert.equal(plugin.freesMarkEditorCounts(view).size, 0);
+
+  const row = makeDoc(content).line(3);
+  view.visibleRanges = [{ from: row.from, to: row.to }];
+  const visible = decorationRows(plugin.buildFreesMarkDecorations(view));
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].value.widget.model.tick, false, "scroll-in is silent");
+  assert.equal(plugin.freesMarkEditorCounts(view).get("sase.md\u0000a"), 1);
+});
+
+test("200-link / 2000-task build stays within the 25 ms budget", () => {
+  const owner = ownerTask();
+  const tasks = [owner, dependent()];
+  for (let index = 0; index < 1998; index += 1) {
+    tasks.push(ownerTask({
+      id: "unrelated-" + index,
+      blockId: "unrelated-" + index,
+      path: "unrelated/" + index + ".md",
+    }));
+  }
+  const memo = memoOf(tasks);
+  blocksDependentsIndex(memo); // model a warm freshness memo generation
+  const content = daily(...Array.from({ length: 200 }, () => linkRow()));
+  const warm = freesMarkCandidateLinks(content, memo, TODAY, { dailyPath: TODAY_PATH });
+  assert.equal(warm.length, 200);
+
+  let resolutions = 0;
+  let counts = 0;
+  const start = RealDate.now();
+  const rows = freesMarkCandidateLinks(content, memo, TODAY, {
+    dailyPath: TODAY_PATH,
+    onResolve: () => { resolutions += 1; },
+    onCount: () => { counts += 1; },
+  });
+  const elapsedMs = RealDate.now() - start;
+  assert.equal(rows.length, 200);
+  assert.equal(resolutions, 1, "the repeated target resolves once in this build");
+  assert.equal(counts, 1, "the resolved owner count runs once in this build");
+  assert.ok(elapsedMs < 25, `synthetic build took ${elapsedMs} ms (budget 25 ms)`);
+
+  // A new freshness memo generation gets new count data instead of stale cache.
+  const replacementMemo = memoOf([...tasks, dependent({ id: "d2", blockId: "d2" })]);
+  const replaced = freesMarkCandidateLinks(content, replacementMemo, TODAY, {
+    dailyPath: TODAY_PATH,
+  });
+  assert.ok(replaced.every((row) => row.count === 2));
 });
 
 function countFixture(id) {
@@ -756,6 +892,69 @@ test("Reading view inserts beside a task-link-mark sibling and through one wrapp
   );
 });
 
+test("pinned midnight invalidates yesterday and gives today's editor a silent first paint", () => {
+  const oldPath = "Daily/2026-11-01.md";
+  const todayPath = TODAY_PATH;
+  const tasks = [
+    ownerTask(),
+    dependent(),
+    dependent({ id: "d2", blockId: "d2" }),
+  ];
+  const { app, plugin } = makePlugin(tasks);
+  let currentPath = oldPath;
+  plugin.currentTodayDailyPath = () => currentPath;
+
+  const oldView = makeView(daily(linkRow()), oldPath);
+  const todayView = makeView(daily(linkRow()), todayPath);
+  const dispatches = [];
+  app.workspace.getLeavesOfType = () => [
+    {
+      view: {
+        file: { path: oldPath },
+        editor: { cm: { dispatch: (effect) => dispatches.push([oldPath, effect]) } },
+      },
+    },
+    {
+      view: {
+        file: { path: todayPath },
+        editor: { cm: { dispatch: (effect) => dispatches.push([todayPath, effect]) } },
+      },
+    },
+  ];
+  plugin.freesMarkDay = oldPath;
+  plugin.freesMarkEditorCounts(todayView).set("sase.md\u0000a", 1);
+
+  const reading = readingLedgerRoot();
+  plugin.progressMarkReadingContext = () => ({
+    anchor: reading.anchor,
+    target: "sase",
+    blockId: "a",
+  });
+  plugin.sweepFreesMarksReadingView({ el: reading, sourcePath: oldPath });
+  assert.equal(reading.querySelectorAll(".bob-frees-mark").length, 1);
+  plugin.freesMarksReadingViews = new Map([
+    [reading, { el: reading, ctx: { sourcePath: oldPath }, sourcePath: oldPath }],
+  ]);
+
+  // Cross local midnight from Nov 1 into the pinned Nov 2 test day.
+  currentPath = todayPath;
+  assert.equal(plugin.refreshFreesMarksForRollover(TODAY), true);
+  assert.deepEqual(dispatches.map(([path]) => path), [oldPath, todayPath]);
+  assert.equal(plugin.sweepFreesMarksReadingView({ el: reading, sourcePath: oldPath }), true);
+  assert.equal(reading.querySelectorAll(".bob-frees-mark").length, 0, "yesterday's Reading host is removed");
+  assert.equal(decorationRows(plugin.buildFreesMarkDecorations(oldView)).length, 0, "yesterday is bare immediately");
+
+  const todayRows = decorationRows(plugin.buildFreesMarkDecorations(todayView));
+  assert.equal(todayRows.length, 1);
+  assert.equal(todayRows[0].value.widget.model.count, 2);
+  assert.equal(todayRows[0].value.widget.model.tick, false, "midnight starts a silent count history");
+
+  // A Live Preview ↔ source-mode field transition remains a rebuild trigger.
+  const fieldState = (live) => ({ field: (field) => field === LIVE_FIELD ? live : null });
+  assert.equal(plugin.freesMarkShouldRebuild({ startState: fieldState(true), state: fieldState(false) }), true);
+  assert.equal(plugin.freesMarkShouldRebuild({ selectionSet: true }), false);
+});
+
 test("FT element and widget keep accessible attributes without a title", () => {
   const doc = fakeElementDoc();
   const model = {
@@ -779,28 +978,57 @@ test("FT element and widget keep accessible attributes without a title", () => {
   assert.equal(host.attrs["aria-label"].includes("::"), false);
   assert.equal(buildFreesMarkElement(null, model), null);
 
-  const first = new FreesMarkWidget(model, TODAY_PATH, false, {});
-  const same = new FreesMarkWidget({ ...model }, TODAY_PATH, true, {});
-  const changedCount = new FreesMarkWidget({ ...model, count: 2 }, TODAY_PATH, false, {});
-  const changedTooltip = new FreesMarkWidget({ ...model, freed: [dependent({ description: "Different" })] }, TODAY_PATH, false, {});
+  const opened = [];
+  const workspace = { openLinkText: (...args) => opened.push(args) };
+  const navigationModel = { ...model, blockId: "prj", linktext: "one#^prj" };
+  const first = new FreesMarkWidget(navigationModel, TODAY_PATH, false, workspace);
+  const same = new FreesMarkWidget({ ...navigationModel }, TODAY_PATH, true, workspace);
+  const changedCount = new FreesMarkWidget({ ...navigationModel, count: 2 }, TODAY_PATH, false, workspace);
+  const changedTooltip = new FreesMarkWidget({ ...navigationModel, freed: [dependent({ description: "Different" })] }, TODAY_PATH, false, workspace);
+  const replacement = new FreesMarkWidget({ ...navigationModel, linktext: "two#^prj" }, TODAY_PATH, false, workspace);
   assert.equal(first.eq(same), true);
   assert.equal(first.eq(changedCount), false);
   assert.equal(first.eq(changedTooltip), false);
+  assert.equal(first.eq(replacement), false, "a retargeted link replaces the widget");
+
+  const savedDocument = global.document;
+  global.document = fakeElementDoc();
+  try {
+    const replacementDom = replacement.toDOM(makeView(daily(linkRow("two#^prj"))));
+    replacementDom.handlers.mousedown({
+      button: 0,
+      metaKey: true,
+      preventDefault() {},
+    });
+    assert.deepEqual(opened, [["two#^prj", TODAY_PATH, "tab"]]);
+  } finally {
+    if (savedDocument === undefined) delete global.document;
+    else global.document = savedDocument;
+  }
 });
 
 test("Live Preview tick LRU tracks 0 → N, count changes, and the 2000-key bound", () => {
   const owner = ownerTask();
   const firstDependent = dependent();
-  let tasks = [owner, firstDependent];
+  let tasks = [owner];
   const { plugin } = makePlugin(tasks);
   const content = daily(linkRow());
   const view = makeView(content);
 
-  // First paint has no previous count and therefore no tick.
+  // First paint and warm rebuild record N = 0 without drawing or ticking.
   let rows = decorationRows(plugin.buildFreesMarkDecorations(view));
-  assert.equal(rows[0].value.widget.model.tick, false);
+  assert.equal(rows.length, 0);
+  assert.equal(plugin.freesMarkEditorCounts(view).get("sase.md\u0000a"), 0);
+  assert.equal(decorationRows(plugin.buildFreesMarkDecorations(view)).length, 0);
 
-  // A later dependency edit raises the count; an existing host ticks once.
+  // A real 0 → 1 transition from a replacement memo makes the visible pill tick.
+  tasks = [owner, firstDependent];
+  plugin.freshnessEnsureMemo = () => memoOf(tasks);
+  rows = decorationRows(plugin.buildFreesMarkDecorations(view));
+  assert.equal(rows[0].value.widget.model.count, 1);
+  assert.equal(rows[0].value.widget.model.tick, true);
+
+  // A later dependency edit changes the count; the visible host ticks once.
   tasks = [owner, firstDependent, dependent({ id: "d2", blockId: "d2" })];
   plugin.freshnessEnsureMemo = () => memoOf(tasks);
   rows = decorationRows(plugin.buildFreesMarkDecorations(view));
@@ -813,7 +1041,7 @@ test("Live Preview tick LRU tracks 0 → N, count changes, and the 2000-key boun
   rows = decorationRows(plugin.buildFreesMarkDecorations(view));
   assert.equal(rows.length, 0);
   const counts = plugin.freesMarkEditorCounts(view);
-  assert.equal(counts.get(TODAY_PATH + "\u0000a"), 0);
+  assert.equal(counts.get("sase.md\u0000a"), 0);
 
   // The per-editor LRU is bounded at the documented 2,000 keys.
   const lru = new Map();
@@ -822,6 +1050,41 @@ test("Live Preview tick LRU tracks 0 → N, count changes, and the 2000-key boun
   }
   assert.equal(lru.size, 2000);
   assert.equal(lru.has("p\u00000"), false);
+});
+
+test("viewport-only rebuilds update visible count history without animating scroll-in", () => {
+  const owner = ownerTask();
+  let tasks = [owner, dependent()];
+  const { plugin } = makePlugin(tasks);
+  const content = daily(linkRow());
+  const view = makeView(content);
+  const linkLine = makeDoc(content).line(3);
+  const linkEnd = linkLine.from + linkLine.text.indexOf("]]" ) + 2;
+  view.visibleRanges = [{ from: linkEnd, to: linkEnd }];
+
+  const extension = plugin.createFreesMarksExtension();
+  assert.ok(extension && typeof extension.cls === "function");
+  const state = new extension.cls(view);
+  assert.equal(decorationRows(state.decorations)[0].value.widget.model.tick, false);
+
+  // A dependency edit occurs while the row is offscreen; the count is not
+  // resolved there. Scrolling it back in refreshes history silently.
+  view.visibleRanges = [{ from: 0, to: 1 }];
+  tasks = [owner, dependent(), dependent({ id: "d2", blockId: "d2" })];
+  plugin.freshnessEnsureMemo = () => memoOf(tasks);
+  state.update({ view, viewportChanged: true, docChanged: false });
+  assert.equal(decorationRows(state.decorations).length, 0);
+  view.visibleRanges = [{ from: linkEnd, to: linkEnd }];
+  state.update({ view, viewportChanged: true, docChanged: false });
+  assert.equal(decorationRows(state.decorations)[0].value.widget.model.count, 2);
+  assert.equal(decorationRows(state.decorations)[0].value.widget.model.tick, false);
+
+  // A later document edit remains the one transition that animates.
+  tasks = [...tasks, dependent({ id: "d3", blockId: "d3" })];
+  plugin.freshnessEnsureMemo = () => memoOf(tasks);
+  state.update({ view, viewportChanged: false, docChanged: true });
+  assert.equal(decorationRows(state.decorations)[0].value.widget.model.count, 3);
+  assert.equal(decorationRows(state.decorations)[0].value.widget.model.tick, true);
 });
 
 test("toggle, refresh effect, and modifier navigation are wired", () => {

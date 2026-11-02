@@ -238,25 +238,69 @@ function freesMarkCandidateLinks(lines, memo, today, options) {
     }
     const index = unblockedGlyphIndex(memo.tasks);
     const rows = content.replace(/\r\n/g, "\n").split("\n");
+    // These caches live for one build only. They collapse repeated ledger
+    // targets and aliases to one owner count without surviving a Tasks memo
+    // replacement or freshness generation.
+    const resolutionCache = new Map();
+    const countCache = new Map();
     const out = [];
     for (const link of links) {
       try {
-        const linked = freesMarkLinkedTask(
-          index,
-          link.target,
-          link.blockId,
-          dailyPath,
-        );
-        if (!linked || !blocksTaskIsOpen(linked) || !freesMarkTaskId(linked)) {
-          continue;
-        }
-        const count = freesMarkCount(linked, memo, today);
-        if (!count) {
-          continue;
-        }
         const line = Number(link.line);
         const ch = Number.isInteger(line) ? freesMarkLinkEndCh(rows[line]) : null;
         if (!Number.isInteger(ch)) {
+          continue;
+        }
+        if (
+          options &&
+          typeof options.isVisible === "function" &&
+          !options.isVisible(line, ch)
+        ) {
+          continue;
+        }
+        const targetKey = String(link.target || "") + "\u0000" + String(link.blockId || "");
+        let linked;
+        if (resolutionCache.has(targetKey)) {
+          linked = resolutionCache.get(targetKey);
+        } else {
+          linked = freesMarkLinkedTask(
+            index,
+            link.target,
+            link.blockId,
+            dailyPath,
+          );
+          resolutionCache.set(targetKey, linked || null);
+          if (options && typeof options.onResolve === "function") {
+            try {
+              options.onResolve(targetKey, linked || null);
+            } catch (error) {
+              // Optional instrumentation must not affect rendering.
+            }
+          }
+        }
+        if (!linked || !blocksTaskIsOpen(linked) || !freesMarkTaskId(linked)) {
+          continue;
+        }
+        const ownerPath = freesMarkTaskPath(linked);
+        const ownerBlockId = freesMarkTaskBlockId(linked);
+        const ownerKey = ownerPath && ownerBlockId
+          ? ownerPath + "\u0000" + ownerBlockId
+          : targetKey;
+        let count;
+        if (countCache.has(ownerKey)) {
+          count = countCache.get(ownerKey);
+        } else {
+          count = freesMarkCount(linked, memo, today);
+          countCache.set(ownerKey, count || null);
+          if (options && typeof options.onCount === "function") {
+            try {
+              options.onCount(ownerKey, count || null);
+            } catch (error) {
+              // Optional instrumentation must not affect rendering.
+            }
+          }
+        }
+        if (!count) {
           continue;
         }
         out.push({
@@ -264,6 +308,9 @@ function freesMarkCandidateLinks(lines, memo, today, options) {
           ch,
           target: link.target,
           blockId: link.blockId,
+          ownerPath,
+          ownerBlockId,
+          ownerKey,
           count: count.count,
           waiting: count.waiting,
           freed: count.freed,
@@ -391,7 +438,10 @@ if (WidgetType && typeof WidgetType === "function") {
         other instanceof FreesMarkWidget &&
         other.model.blockId === this.model.blockId &&
         other.model.count === this.model.count &&
-        other.tooltip === this.tooltip
+        other.tooltip === this.tooltip &&
+        other.linktext === this.linktext &&
+        other.sourcePath === this.sourcePath &&
+        other.workspace === this.workspace
       );
     }
 

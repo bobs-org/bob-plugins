@@ -323,7 +323,10 @@ function taskRow(doc, options = {}) {
     li.appendChild(readingText(doc, " "));
   }
   if (options.prj) {
-    const prj = readingEl(doc, "a", { class: "tag" });
+    const prj = readingEl(doc, "a", {
+      class: "tag",
+      href: "#prj_is_blocked",
+    });
     prj.appendChild(readingText(doc, "#prj_is_blocked"));
     li.appendChild(prj);
     li.appendChild(readingText(doc, " "));
@@ -1160,4 +1163,48 @@ test("neutral status transition releases owned tooltip attributes", () => {
   plugin.sweepBlockMarksReading();
   assert.equal(attrsOf(row).key, null);
   assert.equal(checkboxOf(row).getAttribute("aria-label"), "Keep me");
+});
+
+function projectTagOf(li) {
+  return (li.children || []).find(
+    (child) =>
+      child &&
+      typeof child.getAttribute === "function" &&
+      child.getAttribute("href") === "#prj_is_blocked",
+  );
+}
+
+test("BM7 folds the project tag; BM19 keeps it", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const folded = taskRow(doc, {
+    dataLine: 0,
+    prj: true,
+    trailing: " Hold",
+  });
+  const kept = taskRow(doc, {
+    dataLine: 1,
+    prj: true,
+    trailing: " After [dependsOn:: x]",
+  });
+  const root = section(doc, [folded, kept]);
+  const ctx = ctxFor("Projects/Example.md", {
+    text: [
+      "- [?] #task Hold #prj_is_blocked",
+      "- [?] #task After #prj_is_blocked [dependsOn:: x]",
+    ].join("\n"),
+    lineStart: 0,
+    lineEnd: 1,
+  });
+  plugin.renderBlockMarksIn(root, ctx);
+  plugin.renderBlockMarkFoldsIn(root);
+  assert.equal(attrsOf(folded).key, "prj");
+  assert.equal(projectTagOf(folded).getAttribute("data-bob-block-folded"), "true");
+  assert.equal(attrsOf(kept).key, "dep");
+  assert.equal(projectTagOf(kept).getAttribute("data-bob-block-folded"), null);
+
+  plugin.blockMarksEnabled = false;
+  plugin.sweepBlockMarksReading();
+  plugin.sweepBlockMarkFoldsReading();
+  assert.equal(projectTagOf(folded).getAttribute("data-bob-block-folded"), null);
 });

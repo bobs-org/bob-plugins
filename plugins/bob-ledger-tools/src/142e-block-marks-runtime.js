@@ -46,6 +46,13 @@ class BobLedgerToolsBlockMarksRuntimeMixin {
         // Command registration is best-effort on limited test hosts.
       }
       try {
+        if (typeof this.setupBlockMarkFolds === "function") {
+          this.setupBlockMarkFolds();
+        }
+      } catch (error) {
+        // Redundancy folds are best-effort.
+      }
+      try {
         const extension = this.createBlockMarkExtension();
         if (extension && typeof this.registerEditorExtension === "function") {
           this.registerEditorExtension(extension);
@@ -152,6 +159,13 @@ class BobLedgerToolsBlockMarksRuntimeMixin {
       // Editor refresh is best-effort.
     }
     try {
+      if (typeof this.refreshPriorityMarkEditors === "function") {
+        this.refreshPriorityMarkEditors();
+      }
+    } catch (error) {
+      // Digit-row bar folds rebuild with the block-marks gate.
+    }
+    try {
       // The rendered-view phase supplies this hook; the Live Preview phase
       // remains independently runnable before that adapter is installed.
       if (typeof this.sweepBlockMarksReading === "function") {
@@ -159,6 +173,13 @@ class BobLedgerToolsBlockMarksRuntimeMixin {
       }
     } catch (error) {
       // Rendered hosts are best-effort.
+    }
+    try {
+      if (typeof this.sweepBlockMarkFoldsReading === "function") {
+        this.sweepBlockMarkFoldsReading();
+      }
+    } catch (error) {
+      // Project-tag folds are best-effort.
     }
   }
 

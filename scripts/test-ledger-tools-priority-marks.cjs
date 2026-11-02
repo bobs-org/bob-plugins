@@ -393,6 +393,7 @@ test("element structure and the decorative/inheritColor options", () => {
   assert.equal(span.attrs.class, "bob-priority-mark");
   assert.equal(span.attrs["data-priority"], "high");
   assert.equal(span.attrs["data-fold-space"], "true");
+  assert.equal(span.attrs["data-folded"], "false");
   assert.equal(span.attrs.role, "img");
   assert.equal(span.attrs["aria-label"], model.tooltip);
   assert.equal(span.attrs["data-tooltip-position"], "top");
@@ -422,6 +423,9 @@ test("element structure and the decorative/inheritColor options", () => {
     buildPriorityMarkElement(doc, { value: "high", glyph: "dots" }, {}),
     null,
   );
+
+  const folded = buildPriorityMarkElement(doc, model, { folded: true });
+  assert.equal(folded.attrs["data-folded"], "true");
 });
 
 function makeDoc(lines) {
@@ -616,6 +620,63 @@ test("a line with fresh and priority fields gets a disjoint decoration", () => {
       .slice(0, decorations.adds[0].from + 1)
       .indexOf("[priority::") === -1,
   );
+});
+
+test("PM18/PM19 digit rows fold only while block marks are on", () => {
+  const pm18 = "- [?] #task N [priority:: medium] [scheduled:: 2026-11-20]";
+  const bm8 = "- [?] #task F [dependsOn:: x] [priority:: low] [scheduled:: 2026-12-20]";
+  const bm9 = "- [?] #task G #prj_is_blocked [priority:: medium] [scheduled:: 2026-11-20]";
+  const bm12 = "- [*] #task J [priority:: high] [scheduled:: 2026-11-20]";
+  const plugin = pluginWithLadder();
+  plugin.blockMarkModelForLine = (_path, text) => {
+    if (text === pm18) return { key: "p2" };
+    if (text === bm8) return { key: "dep", more: "p3" };
+    if (text === bm9) return { key: "prj", more: "p2" };
+    return null;
+  };
+
+  const folded = plugin.buildPriorityMarkDecorations(makeView({ lines: [pm18] }));
+  assert.equal(folded.adds.length, 1);
+  assert.equal(folded.adds[0].value.widget.folded, true);
+
+  plugin.blockMarksEnabled = false;
+  const shown = plugin.buildPriorityMarkDecorations(makeView({ lines: [pm18] }));
+  assert.equal(shown.adds.length, 1);
+  assert.equal(shown.adds[0].value.widget.folded, false);
+  plugin.blockMarksEnabled = true;
+
+  assert.equal(
+    plugin.buildPriorityMarkDecorations(makeView({ lines: [bm8] })).adds[0].value.widget.folded,
+    false,
+  );
+  assert.equal(
+    plugin.buildPriorityMarkDecorations(makeView({ lines: [bm9] })).adds[0].value.widget.folded,
+    false,
+  );
+  assert.equal(
+    plugin.buildPriorityMarkDecorations(makeView({ lines: [bm12] })).adds[0].value.widget.folded,
+    false,
+  );
+
+  const fx = fakeRenderEl();
+  const li = taskLi(fx, pm18);
+  li.setAttribute("data-bob-block", "p2");
+  plugin.renderPriorityMarksIn(fx.root, { sourcePath: "a.md" });
+  const marks = [];
+  const stack = [fx.root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (
+      node &&
+      node.nodeType === 1 &&
+      String(node.className || "").split(/\s+/).includes("bob-priority-mark")
+    ) {
+      marks.push(node);
+    }
+    for (const child of (node && node.childNodes) || []) stack.push(child);
+  }
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0].getAttribute("data-folded"), "true");
 });
 
 test("widget mousedown reveals the field at the folded offset", () => {
@@ -1208,6 +1269,8 @@ test("styles.css contract: masks, both hosts, repair flag, resting", () => {
     css.indexOf('li.task-list-item[data-task="x"] .bob-priority-mark') !== -1,
   );
   assert.ok(css.indexOf("prefers-reduced-motion") !== -1);
+  assert.ok(css.indexOf('.bob-priority-mark[data-folded="true"]') !== -1);
+  assert.ok(css.indexOf("body.bob-block-marks .bob-priority-mark[data-folded") !== -1);
 });
 
 test("mark gate holds in popout windows for both toggle states", () => {

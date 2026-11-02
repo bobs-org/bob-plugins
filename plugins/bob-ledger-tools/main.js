@@ -11049,12 +11049,14 @@ function buildPriorityMarkElement(doc, model, options) {
     const settings =
       options && typeof options === "object" ? options : {};
     const foldSpace = Boolean(settings.foldSpace);
+    const folded = Boolean(settings.folded);
     const decorative = Boolean(settings.decorative);
     const inheritColor = Boolean(settings.inheritColor);
     const span = doc.createElement("span");
     span.setAttribute("class", "bob-priority-mark");
     span.setAttribute("data-priority", String(model.value));
     span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
+    span.setAttribute("data-folded", folded ? "true" : "false");
     if (inheritColor) {
       span.setAttribute("data-inherit-color", "true");
     }
@@ -11083,21 +11085,26 @@ function buildPriorityMarkElement(doc, model, options) {
 let PriorityMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   PriorityMarkWidget = class extends WidgetType {
-    constructor(model, foldSpace) {
+    constructor(model, foldSpace, folded) {
       super();
       this.model = model;
       this.foldSpace = Boolean(foldSpace);
+      this.folded = Boolean(folded);
       let key = "";
       try {
         key =
           String((model && model.key) || JSON.stringify(model)) +
           "|" +
-          (this.foldSpace ? "1" : "0");
+          (this.foldSpace ? "1" : "0") +
+          "|" +
+          (this.folded ? "1" : "0");
       } catch (error) {
         key =
           String((model && model.value) || "") +
           "|" +
-          (this.foldSpace ? "1" : "0");
+          (this.foldSpace ? "1" : "0") +
+          "|" +
+          (this.folded ? "1" : "0");
       }
       this.key = key;
     }
@@ -11114,7 +11121,7 @@ if (WidgetType && typeof WidgetType === "function") {
       const dom = buildPriorityMarkElement(
         typeof document !== "undefined" ? document : null,
         this.model,
-        { foldSpace: this.foldSpace },
+        { foldSpace: this.foldSpace, folded: this.folded },
       );
       // In tests `document` is undefined and the caller passes a fake
       // doc via `buildPriorityMarkElement` directly; never throw here.
@@ -17665,6 +17672,53 @@ function blockMarkModel(lineText, ctx) {
     return null;
   }
 }
+
+// Digit block-mark keys: the checkbox already names the ladder level, so
+// the priority bars on that row fold. Never throws.
+function blockMarkIsDigitKey(key) {
+  try {
+    return key === "p1" || key === "p2" || key === "p3" || key === "p4";
+  } catch (error) {
+    return false;
+  }
+}
+
+const BLOCK_MARK_PRJ_TAG = "#prj_is_blocked";
+
+// The exact `#prj_is_blocked` token on `lineText` (not
+// `#prj_is_blocked_old`), quote-aware via the inline-code mask.
+// `foldSpace` is true when a single U+0020 precedes the hash.
+// Returns `{ tagStart, tagEnd, foldSpace }` in UTF-16 offsets, or
+// null. Never throws.
+function blockMarkProjectTagSource(lineText) {
+  try {
+    if (typeof lineText !== "string" || lineText === "") {
+      return null;
+    }
+    const visible =
+      typeof blockMarkMaskInlineCode === "function"
+        ? blockMarkMaskInlineCode(lineText)
+        : lineText;
+    const pattern = /(?:^|\s)#prj_is_blocked(?![A-Za-z0-9_/-])/g;
+    const match = pattern.exec(visible);
+    if (!match) {
+      return null;
+    }
+    const foldSpace = /^\s/.test(match[0]);
+    const tagStart = match.index + (foldSpace ? 1 : 0);
+    const tagEnd = tagStart + BLOCK_MARK_PRJ_TAG.length;
+    if (lineText.slice(tagStart, tagEnd) !== BLOCK_MARK_PRJ_TAG) {
+      return null;
+    }
+    return Object.freeze({
+      tagStart,
+      tagEnd,
+      foldSpace,
+    });
+  } catch (error) {
+    return null;
+  }
+}
 // ---- src/142d-block-marks-render.js ----
 // --- Blocked-reason marks: miniature renderer ------------------------------
 // Owned by bob-cli `docs/blocked-marks.md`. `buildBlockMarkElement` is the
@@ -17836,6 +17890,13 @@ class BobLedgerToolsBlockMarksRuntimeMixin {
         // Command registration is best-effort on limited test hosts.
       }
       try {
+        if (typeof this.setupBlockMarkFolds === "function") {
+          this.setupBlockMarkFolds();
+        }
+      } catch (error) {
+        // Redundancy folds are best-effort.
+      }
+      try {
         const extension = this.createBlockMarkExtension();
         if (extension && typeof this.registerEditorExtension === "function") {
           this.registerEditorExtension(extension);
@@ -17942,6 +18003,13 @@ class BobLedgerToolsBlockMarksRuntimeMixin {
       // Editor refresh is best-effort.
     }
     try {
+      if (typeof this.refreshPriorityMarkEditors === "function") {
+        this.refreshPriorityMarkEditors();
+      }
+    } catch (error) {
+      // Digit-row bar folds rebuild with the block-marks gate.
+    }
+    try {
       // The rendered-view phase supplies this hook; the Live Preview phase
       // remains independently runnable before that adapter is installed.
       if (typeof this.sweepBlockMarksReading === "function") {
@@ -17949,6 +18017,13 @@ class BobLedgerToolsBlockMarksRuntimeMixin {
       }
     } catch (error) {
       // Rendered hosts are best-effort.
+    }
+    try {
+      if (typeof this.sweepBlockMarkFoldsReading === "function") {
+        this.sweepBlockMarkFoldsReading();
+      }
+    } catch (error) {
+      // Project-tag folds are best-effort.
     }
   }
 
@@ -19722,6 +19797,96 @@ class BobLedgerToolsBlockMarksReadingMixin {
       // The rendered-host sweep is best-effort.
     }
   }
+}
+// ---- src/142h-block-mark-folds.js ----
+// --- Blocked-reason marks: redundancy-fold widgets ------------------------
+// Empty Live Preview widgets for the `#prj_is_blocked` pill on `prj`
+// rows. Digit-row priority bars reuse `PriorityMarkWidget` with
+// `data-folded="true"`. Every helper is synchronous and never throws.
+
+function buildBlockMarkPrjFoldElement(doc, options) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") {
+      return null;
+    }
+    const settings = options && typeof options === "object" ? options : {};
+    const foldSpace = Boolean(settings.foldSpace);
+    const span = doc.createElement("span");
+    span.setAttribute("class", "bob-block-prj-fold");
+    span.setAttribute("data-folded", "true");
+    span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
+    span.setAttribute("aria-hidden", "true");
+    return span;
+  } catch (error) {
+    return null;
+  }
+}
+
+let BlockMarkPrjFoldWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  BlockMarkPrjFoldWidget = class extends WidgetType {
+    constructor(foldSpace) {
+      super();
+      this.foldSpace = Boolean(foldSpace);
+      this.key = this.foldSpace ? "1" : "0";
+    }
+
+    eq(other) {
+      return (
+        Boolean(other) &&
+        other instanceof BlockMarkPrjFoldWidget &&
+        other.key === this.key
+      );
+    }
+
+    toDOM(view) {
+      const dom = buildBlockMarkPrjFoldElement(
+        typeof document !== "undefined" ? document : null,
+        { foldSpace: this.foldSpace },
+      );
+      if (!dom) {
+        try {
+          return typeof document !== "undefined" && document
+            ? document.createElement("span")
+            : null;
+        } catch (error) {
+          return null;
+        }
+      }
+      try {
+        const self = this;
+        dom.addEventListener("mousedown", (event) => {
+          try {
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            let anchor = null;
+            try {
+              anchor =
+                view && typeof view.posAtDOM === "function"
+                  ? view.posAtDOM(dom)
+                  : null;
+            } catch (error) {
+              anchor = null;
+            }
+            if (typeof anchor === "number" && view && typeof view.dispatch === "function") {
+              view.dispatch({
+                selection: { anchor: anchor + (self.foldSpace ? 1 : 0) },
+              });
+            }
+            if (view && typeof view.focus === "function") {
+              view.focus();
+            }
+          } catch (error) {
+            // Reveal is best-effort.
+          }
+        });
+      } catch (error) {
+        // A listener-free fold still occupies the range.
+      }
+      return dom;
+    }
+  };
 }
 // ---- src/142-pomodoro-home-chips.js ----
 // --- Pomodoro home chips: pure mirror of bob-cli pomodoro homes -----------
@@ -51212,6 +51377,18 @@ class BobLedgerToolsPriorityMarksMixin {
                     if (!inCode) {
                       const model = priorityMarkModel(source.value, ladder);
                       if (model) {
+                        let folded = false;
+                        try {
+                          folded =
+                            typeof this.priorityMarkFoldedForLine ===
+                              "function" &&
+                            this.priorityMarkFoldedForLine(
+                              filePath,
+                              line.text,
+                            );
+                        } catch (error) {
+                          folded = false;
+                        }
                         const from =
                           line.from +
                           source.fieldStart -
@@ -51223,6 +51400,7 @@ class BobLedgerToolsPriorityMarksMixin {
                             widget: new PriorityMarkWidget(
                               model,
                               source.foldSpace,
+                              folded,
                             ),
                           }),
                         );
@@ -51556,8 +51734,21 @@ class BobLedgerToolsPriorityMarksMixin {
           }
           const beforeText = value.slice(0, source.fieldStart);
           const afterText = value.slice(source.fieldEnd);
+          let folded = false;
+          try {
+            folded =
+              typeof this.priorityMarkFoldedForRow === "function" &&
+              this.priorityMarkFoldedForRow(
+                ctx && ctx.sourcePath,
+                value,
+                li,
+              );
+          } catch (error) {
+            folded = false;
+          }
           const markEl = buildPriorityMarkElement(docNode, model, {
             foldSpace: false,
+            folded,
           });
           if (!markEl) {
             continue;
@@ -56006,6 +56197,411 @@ class BobLedgerToolsBlockMarksMixin {
       });
     } catch (error) {
       return Object.freeze({ version: 1, model: () => null });
+    }
+  }
+}
+// ---- src/272d-plugin-block-mark-folds.js ----
+// --- Blocked-reason marks: fold what the box already says -----------------
+// Digit rows fold their priority bars in `265-plugin-priority-marks.js`
+// via `priorityMarkFoldedForLine`. This mixin folds the exact
+// `#prj_is_blocked` token on `prj` rows in Live Preview and reading
+// view, and keeps both folds gated on `blockMarksEnabled`.
+const BLOCK_MARK_FOLDS_READING_PROCESSOR_ORDER = 45;
+
+class BobLedgerToolsBlockMarkFoldsMixin {
+  setupBlockMarkFolds() {
+    try {
+      try {
+        const extension = this.createBlockMarkFoldExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview tag folds are best-effort.
+      }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor(
+            (el, ctx) => this.renderBlockMarkFoldsIn(el, ctx),
+            BLOCK_MARK_FOLDS_READING_PROCESSOR_ORDER,
+          );
+        }
+      } catch (error) {
+        // Reading-view tag folds are best-effort.
+      }
+    } catch (error) {
+      // Fold setup never throws.
+    }
+  }
+
+  priorityMarkFoldedForLine(path, lineText) {
+    try {
+      if (this.blockMarksEnabled === false) return false;
+      if (typeof this.blockMarkModelForLine !== "function") return false;
+      const model = this.blockMarkModelForLine(path || "", lineText);
+      return typeof blockMarkIsDigitKey === "function"
+        ? blockMarkIsDigitKey(model && model.key)
+        : false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  priorityMarkFoldedForRow(path, lineText, li) {
+    try {
+      if (this.blockMarksEnabled === false) return false;
+      if (li) {
+        let classText = "";
+        try {
+          if (li.classList && typeof li.classList.contains === "function") {
+            if (li.classList.contains("plugin-tasks-list-item")) return false;
+          }
+          classText =
+            typeof li.className === "string"
+              ? li.className
+              : typeof li.getAttribute === "function"
+                ? li.getAttribute("class") || ""
+                : "";
+        } catch (error) {
+          classText = "";
+        }
+        if (
+          classText &&
+          String(classText).split(/\s+/).indexOf("plugin-tasks-list-item") !== -1
+        ) {
+          return false;
+        }
+      }
+      if (li && typeof li.getAttribute === "function") {
+        const key = li.getAttribute("data-bob-block");
+        if (typeof blockMarkIsDigitKey === "function" && blockMarkIsDigitKey(key)) {
+          return true;
+        }
+        if (key) return false;
+      }
+      return this.priorityMarkFoldedForLine(path, lineText);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  blockMarksFoldsAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          typeof Decoration.replace === "function" &&
+          RangeSetBuilder &&
+          StateEffect &&
+          typeof StateEffect.define === "function" &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          BlockMarkPrjFoldWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createBlockMarkFoldExtension() {
+    try {
+      if (
+        !this.blockMarksFoldsAvailable() ||
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        !Prec ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const FoldPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildBlockMarkFoldDecorations(view);
+          } catch (error) {
+            this.decorations = Decoration.none;
+          }
+        }
+
+        update(update) {
+          try {
+            if (plugin.blockMarkFoldShouldRebuild(update)) {
+              this.decorations = plugin.buildBlockMarkFoldDecorations(update.view);
+            }
+          } catch (error) {
+            // Keep the previous valid decorations on a failed rebuild.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(FoldPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  blockMarkFoldShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") return false;
+      if (update.docChanged || update.viewportChanged || update.selectionSet) {
+        return true;
+      }
+      return typeof this.blockMarkShouldRebuild === "function"
+        ? this.blockMarkShouldRebuild(update)
+        : false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildBlockMarkFoldDecorations(view) {
+    try {
+      if (
+        this.blockMarksEnabled === false ||
+        !view ||
+        !view.state ||
+        !Decoration ||
+        typeof Decoration.replace !== "function" ||
+        !RangeSetBuilder ||
+        !BlockMarkPrjFoldWidget ||
+        !editorInfoField ||
+        !editorLivePreviewField
+      ) {
+        return Decoration.none;
+      }
+      let live = false;
+      let info = null;
+      try {
+        live = view.state.field(editorLivePreviewField) === true;
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const path =
+        info && info.file && typeof info.file.path === "string"
+          ? info.file.path
+          : "";
+      if (!live || !path) return Decoration.none;
+
+      let tree = null;
+      try {
+        if (typeof syntaxTree === "function") tree = syntaxTree(view.state);
+        else if (syntaxTree && typeof syntaxTree.resolveInner === "function") {
+          tree = syntaxTree;
+        }
+      } catch (error) {
+        tree = null;
+      }
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") return Decoration.none;
+      const docLength =
+        typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      let selectionRanges = [];
+      try {
+        selectionRanges =
+          (view.state.selection && view.state.selection.ranges) || [];
+      } catch (error) {
+        selectionRanges = [];
+      }
+      const builder = new RangeSetBuilder();
+      for (const range of view.visibleRanges || []) {
+        try {
+          if (!range || typeof range.from !== "number") continue;
+          let pos = Math.max(0, range.from);
+          const end = Math.min(
+            typeof range.to === "number" ? range.to : docLength,
+            docLength,
+          );
+          let guard = 0;
+          while (pos <= end && guard < 10000) {
+            guard += 1;
+            let line = null;
+            try {
+              line = doc.lineAt(pos);
+            } catch (error) {
+              break;
+            }
+            if (!line || typeof line.text !== "string") break;
+            try {
+              const model =
+                typeof this.blockMarkModelForEditorLine === "function"
+                  ? this.blockMarkModelForEditorLine(path, line, tree)
+                  : this.blockMarkModelForLine(path, line.text);
+              if (model && model.key === "prj") {
+                const source = blockMarkProjectTagSource(line.text);
+                if (source) {
+                  const absFrom =
+                    line.from + source.tagStart - (source.foldSpace ? 1 : 0);
+                  const absTo = line.from + source.tagEnd;
+                  let revealed = false;
+                  for (const selection of selectionRanges) {
+                    try {
+                      if (
+                        selection &&
+                        typeof selection.from === "number" &&
+                        typeof selection.to === "number" &&
+                        selection.from <= absTo &&
+                        selection.to >= absFrom
+                      ) {
+                        revealed = true;
+                        break;
+                      }
+                    } catch (error) {
+                      continue;
+                    }
+                  }
+                  if (!revealed) {
+                    let inCode = false;
+                    try {
+                      if (tree && typeof freshnessMarkPosInCode === "function") {
+                        inCode = freshnessMarkPosInCode(tree, absFrom);
+                      }
+                    } catch (error) {
+                      inCode = false;
+                    }
+                    if (!inCode) {
+                      builder.add(
+                        absFrom,
+                        absTo,
+                        Decoration.replace({
+                          widget: new BlockMarkPrjFoldWidget(source.foldSpace),
+                        }),
+                      );
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              // One bad line never breaks the build.
+            }
+            if (typeof line.to !== "number" || line.to >= end) break;
+            if (line.to < pos) break;
+            pos = line.to + 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  blockMarkFoldIsProjectTag(node) {
+    try {
+      if (!node) return false;
+      const tag = String(node.tagName || node.nodeName || "").toUpperCase();
+      if (tag !== "A") return false;
+      let isTag = false;
+      try {
+        if (node.classList && typeof node.classList.contains === "function") {
+          isTag = node.classList.contains("tag");
+        }
+      } catch (error) {
+        isTag = false;
+      }
+      if (!isTag) {
+        const classText =
+          typeof node.className === "string"
+            ? node.className
+            : typeof node.getAttribute === "function"
+              ? node.getAttribute("class") || ""
+              : "";
+        isTag = String(classText).split(/\s+/).indexOf("tag") !== -1;
+      }
+      if (!isTag) return false;
+      const href =
+        typeof node.getAttribute === "function" ? node.getAttribute("href") : "";
+      const dataName =
+        typeof node.getAttribute === "function"
+          ? node.getAttribute("data-tag-name")
+          : "";
+      if (href !== "#prj_is_blocked" && dataName !== "#prj_is_blocked") {
+        return false;
+      }
+      const text = String(node.textContent || "").trim();
+      return text === "" || text === "#prj_is_blocked";
+    } catch (error) {
+      return false;
+    }
+  }
+
+  blockMarkFoldApplyProjectTag(li, fold) {
+    try {
+      const own =
+        typeof this.blockMarkReadingOwnElements === "function"
+          ? this.blockMarkReadingOwnElements(li)
+          : [];
+      for (const node of own) {
+        try {
+          if (!this.blockMarkFoldIsProjectTag(node)) continue;
+          if (fold) {
+            if (typeof node.setAttribute === "function") {
+              node.setAttribute("data-bob-block-folded", "true");
+            }
+          } else if (typeof node.removeAttribute === "function") {
+            node.removeAttribute("data-bob-block-folded");
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Tag annotation is best-effort.
+    }
+  }
+
+  renderBlockMarkFoldsIn(el) {
+    try {
+      if (!el) return;
+      const rows =
+        typeof this.blockMarkReadingCandidateRows === "function"
+          ? this.blockMarkReadingCandidateRows(el)
+          : [];
+      for (const li of rows) {
+        try {
+          const key =
+            typeof this.blockMarkReadingAttr === "function"
+              ? this.blockMarkReadingAttr(li, "data-bob-block")
+              : li && typeof li.getAttribute === "function"
+                ? li.getAttribute("data-bob-block")
+                : null;
+          const fold = this.blockMarksEnabled !== false && key === "prj";
+          this.blockMarkFoldApplyProjectTag(li, fold);
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // The post-processor is synchronous and never throws.
+    }
+  }
+
+  sweepBlockMarkFoldsReading() {
+    try {
+      const hosts =
+        this.blockMarkReadingHosts instanceof Set
+          ? Array.from(this.blockMarkReadingHosts)
+          : [];
+      for (const rec of hosts) {
+        try {
+          if (!rec || !rec.el) continue;
+          this.renderBlockMarkFoldsIn(rec.el);
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // The rendered-host sweep is best-effort.
     }
   }
 }
@@ -78779,6 +79375,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBlockMarksEditorMixin,
   BobLedgerToolsBlockMarksReadingDomMixin,
   BobLedgerToolsBlockMarksReadingMixin,
+  BobLedgerToolsBlockMarkFoldsMixin,
   BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,
@@ -81121,8 +81718,12 @@ module.exports.helpers = {
   blockMarkClassify,
   blockMarkTooltip,
   blockMarkModel,
+  blockMarkIsDigitKey,
+  blockMarkProjectTagSource,
+  buildBlockMarkPrjFoldElement,
   ensureBlockMarksRefresh,
   BLOCK_MARK_READING_PROCESSOR_ORDER,
+  BLOCK_MARK_FOLDS_READING_PROCESSOR_ORDER,
   blockMarkDateWords,
   buildBlockMarkElement,
   blockMarkDependencyFacts,

@@ -256,6 +256,11 @@ test("paint covers miniature, Live Preview, and reading rows under one gate", ()
     "the losing-reason pip is painted",
   );
   assert.ok(
+    section.indexOf(".bob-block-prj-fold") !== -1 &&
+      section.indexOf("a.tag[data-bob-block-folded=\"true\"]") !== -1,
+    "prj-row tag folds are painted",
+  );
+  assert.ok(
     section.indexOf('content: "1"') !== -1 &&
     section.indexOf('content: "4"') !== -1 &&
     section.indexOf('content: "&"') !== -1,

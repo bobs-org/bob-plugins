@@ -349,12 +349,14 @@ function buildPriorityMarkElement(doc, model, options) {
     const settings =
       options && typeof options === "object" ? options : {};
     const foldSpace = Boolean(settings.foldSpace);
+    const folded = Boolean(settings.folded);
     const decorative = Boolean(settings.decorative);
     const inheritColor = Boolean(settings.inheritColor);
     const span = doc.createElement("span");
     span.setAttribute("class", "bob-priority-mark");
     span.setAttribute("data-priority", String(model.value));
     span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
+    span.setAttribute("data-folded", folded ? "true" : "false");
     if (inheritColor) {
       span.setAttribute("data-inherit-color", "true");
     }
@@ -383,21 +385,26 @@ function buildPriorityMarkElement(doc, model, options) {
 let PriorityMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   PriorityMarkWidget = class extends WidgetType {
-    constructor(model, foldSpace) {
+    constructor(model, foldSpace, folded) {
       super();
       this.model = model;
       this.foldSpace = Boolean(foldSpace);
+      this.folded = Boolean(folded);
       let key = "";
       try {
         key =
           String((model && model.key) || JSON.stringify(model)) +
           "|" +
-          (this.foldSpace ? "1" : "0");
+          (this.foldSpace ? "1" : "0") +
+          "|" +
+          (this.folded ? "1" : "0");
       } catch (error) {
         key =
           String((model && model.value) || "") +
           "|" +
-          (this.foldSpace ? "1" : "0");
+          (this.foldSpace ? "1" : "0") +
+          "|" +
+          (this.folded ? "1" : "0");
       }
       this.key = key;
     }
@@ -414,7 +421,7 @@ if (WidgetType && typeof WidgetType === "function") {
       const dom = buildPriorityMarkElement(
         typeof document !== "undefined" ? document : null,
         this.model,
-        { foldSpace: this.foldSpace },
+        { foldSpace: this.foldSpace, folded: this.folded },
       );
       // In tests `document` is undefined and the caller passes a fake
       // doc via `buildPriorityMarkElement` directly; never throw here.

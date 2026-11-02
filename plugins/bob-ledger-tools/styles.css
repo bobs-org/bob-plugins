@@ -1364,6 +1364,31 @@ body {
   margin-inline-start: 0.3em;
 }
 
+/* Digit block-mark rows: the checkbox already names the level, so the
+   bars collapse to zero width while both gates are on. Cursor and click
+   still reveal the raw field. */
+body.bob-block-marks .bob-priority-mark[data-folded="true"] {
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  opacity: 0;
+  background: none;
+  vertical-align: 0;
+}
+
+body.bob-block-marks .bob-priority-mark[data-folded="true"][data-fold-space="true"] {
+  margin-inline-start: 0.3em;
+}
+
+body.bob-block-marks .bob-priority-mark[data-folded="true"] .bob-priority-mark-glyph {
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
 .bob-priority-mark:hover {
   opacity: 1;
   background-color: color-mix(in srgb, currentColor 10%, transparent);
@@ -2987,6 +3012,38 @@ body.bob-block-marks span.bob-block-mark[data-bob-block][data-bob-block-more]::a
   body.bob-block-marks span.bob-block-mark[data-bob-block] {
     transition: none;
   }
+}
+
+/* `prj` rows: the chevron already says the project is blocked, so the
+   `#prj_is_blocked` pill folds. Live Preview replaces the token with an
+   empty widget; reading view marks the exact `a.tag`. Either gate off
+   restores the raw look. Never `display: none` or `!important`. */
+body.bob-block-marks .bob-block-prj-fold {
+  display: inline-block;
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  vertical-align: 0;
+}
+
+body.bob-block-marks .bob-block-prj-fold[data-fold-space="true"] {
+  margin-inline-start: 0.3em;
+}
+
+body.bob-block-marks a.tag[data-bob-block-folded="true"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Blocked-reason marks (BM) paint: end. */

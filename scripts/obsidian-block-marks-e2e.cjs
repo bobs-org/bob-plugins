@@ -646,6 +646,63 @@ const LINE_HEIGHT_PROBE = `(() => { try {
   };
 } catch (e) { return { error: String(e && e.message || e) }; } })()`;
 
+// Digit-row bar folds and prj-row `#prj_is_blocked` pill folds. The
+// harness scrolls before evaluating so Live Preview widgets exist.
+const FOLDS_PROBE = `(() => { try {
+  const visibleWidth = (el) => {
+    if (!el || !el.getBoundingClientRect) return 0;
+    const rect = el.getBoundingClientRect();
+    const cs = window.getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden") return 0;
+    const clip = String(cs.clipPath || cs.webkitClipPath || "");
+    if (clip.indexOf("inset(50%)") !== -1) return 0;
+    return Math.round(rect.width || 0);
+  };
+  const pick = (needle) => {
+    const nodes = document.querySelectorAll(".HyperMD-task-line, .cm-line, li.task-list-item, li, p");
+    return Array.from(nodes).find((node) => String(node.textContent || "").includes(needle)) || null;
+  };
+  const row = (needle) => {
+    const host = pick(needle);
+    if (!host) return { found: false, needle };
+    const mark = host.querySelector ? host.querySelector(".bob-priority-mark") : null;
+    const foldWidget = host.querySelector ? host.querySelector(".bob-block-prj-fold") : null;
+    const tags = host.querySelectorAll
+      ? Array.from(host.querySelectorAll("a.tag, .cm-hashtag"))
+      : [];
+    const prjTag = tags.find((tag) => {
+      const href = tag.getAttribute ? tag.getAttribute("href") : "";
+      const name = tag.getAttribute ? tag.getAttribute("data-tag-name") : "";
+      const text = String(tag.textContent || "");
+      return href === "#prj_is_blocked" || name === "#prj_is_blocked" || /#?prj_is_blocked(?![A-Za-z0-9_/-])/.test(text);
+    }) || null;
+    const markFoldedAttr = Boolean(mark && mark.getAttribute("data-folded") === "true");
+    const markWidth = mark ? visibleWidth(mark) : null;
+    const tagFoldedAttr = Boolean(prjTag && prjTag.getAttribute("data-bob-block-folded") === "true");
+    const tagWidth = prjTag ? visibleWidth(prjTag) : (foldWidget ? visibleWidth(foldWidget) : null);
+    const prjFolded = Boolean(foldWidget) || tagFoldedAttr || (prjTag && tagWidth <= 4);
+    return {
+      found: true,
+      folded: Boolean(mark) && (markFoldedAttr || (typeof markWidth === "number" && markWidth <= 4)),
+      markWidth,
+      markFoldedAttr,
+      prjFolded,
+      tagWidth,
+      tagFoldedAttr,
+      hasFoldWidget: Boolean(foldWidget),
+      hasMark: Boolean(mark),
+      hasTag: Boolean(prjTag),
+    };
+  };
+  return {
+    bm1: row("BM1 p2 vector"),
+    bm7: row("BM7 prj vector"),
+    bm8: row("BM8 dep pip"),
+    bm9: row("BM9 prj pip"),
+    bm19: row("BM19 dep over prj"),
+  };
+} catch (e) { return { error: String(e && e.message || e) }; } })()`;
+
 const EXPECTED_KEYS = Object.freeze({
   BM1: "p2",
   BMp3: "p3",
@@ -816,6 +873,7 @@ function runSelfTest() {
       throw new Error("the e2e must not call the plugin refresh methods; trigger normal edits and observe");
     }
     if (!source.includes("data-bob-block")) throw new Error("self-test must cover the owned row attributes");
+    if (!source.includes("FOLDS_PROBE")) throw new Error("self-test must cover redundancy fold probes");
     if (!source.includes("toggle-block-marks")) throw new Error("self-test must cover the session toggle");
     if (!source.includes("Input.dispatchMouseEvent")) throw new Error("self-test must cover CDP hover");
     if (!source.includes("setCssEnabledStatus")) throw new Error("self-test must cover snippet disable via customCss");
@@ -1049,6 +1107,29 @@ async function namedHostProbe(client, hostSelector, marker) {
   return client.evaluate(`(${HOST_MARKS_PROBE_FN})(${JSON.stringify(hostSelector)}, ${JSON.stringify(marker)})`);
 }
 
+async function collectFolds(client) {
+  const keys = ["bm1", "bm7", "bm8", "bm9", "bm19"];
+  const union = {};
+  const steps = [0, 0.5, 1];
+  for (const fraction of steps) {
+    await client.evaluate(`(() => {
+      const f = ${fraction};
+      const editor = document.querySelector(".cm-scroller");
+      if (editor) editor.scrollTop = f * editor.scrollHeight;
+      const preview = document.querySelector(".markdown-preview-view");
+      if (preview) preview.scrollTop = f * preview.scrollHeight;
+      return true;
+    })()`).catch(() => false);
+    await sleep(700);
+    const probe = await client.evaluate(FOLDS_PROBE).catch((e) => ({ error: String(e) }));
+    if (probe && probe.error && !union.error) union.error = probe.error;
+    for (const key of keys) {
+      if (probe && probe[key] && probe[key].found) union[key] = probe[key];
+    }
+  }
+  return union;
+}
+
 async function runE2e(parsed) {
   const executable = findExecutable(parsed.executable);
   const probe = probeExecutable(executable);
@@ -1189,6 +1270,12 @@ async function runE2e(parsed) {
     const lpChild = markForMarker(live.marks, "BMChild");
     record("lp-nested-independent", lpParent.visible.length > 0 && lpChild.visible.length > 0 && lpParent.visible[0].key === "dep" && lpChild.visible[0].key === "date",
       `parent=${lpParent.visible[0] && lpParent.visible[0].key} child=${lpChild.visible[0] && lpChild.visible[0].key}`);
+    const lpFolds = await collectFolds(client);
+    record("lp-BM1-bars-folded", Boolean(lpFolds && lpFolds.bm1 && lpFolds.bm1.folded === true && lpFolds.bm1.markWidth <= 4), JSON.stringify(lpFolds && lpFolds.bm1).slice(0, 180));
+    record("lp-BM8-bars-shown", Boolean(lpFolds && lpFolds.bm8 && lpFolds.bm8.folded === false && lpFolds.bm8.markWidth > 4), JSON.stringify(lpFolds && lpFolds.bm8).slice(0, 180));
+    record("lp-BM9-bars-shown", Boolean(lpFolds && lpFolds.bm9 && lpFolds.bm9.folded === false && lpFolds.bm9.markWidth > 4), JSON.stringify(lpFolds && lpFolds.bm9).slice(0, 180));
+    record("lp-BM7-pill-folded", Boolean(lpFolds && lpFolds.bm7 && lpFolds.bm7.prjFolded === true), JSON.stringify(lpFolds && lpFolds.bm7).slice(0, 180));
+    record("lp-BM19-pill-kept", Boolean(lpFolds && lpFolds.bm19 && lpFolds.bm19.prjFolded === false && lpFolds.bm19.tagWidth > 4), JSON.stringify(lpFolds && lpFolds.bm19).slice(0, 180));
     // (Fence tree-name recording moved to the refresh-edit rebuild below.)
 
     const shotLiveLight = path.join(outDir, "e2e-block-marks-live-light.png");
@@ -1221,6 +1308,10 @@ async function runE2e(parsed) {
     const rdChild = markForMarker(reading.marks, "BMChild");
     record("reading-nested-independent", rdParent.visible.length > 0 && rdChild.visible.length > 0 && rdParent.visible[0].key === "dep" && rdChild.visible[0].key === "date",
       `parent=${rdParent.visible[0] && rdParent.visible[0].key} child=${rdChild.visible[0] && rdChild.visible[0].key}`);
+    const readingFolds = await collectFolds(client);
+    record("reading-BM1-bars-folded", Boolean(readingFolds && readingFolds.bm1 && readingFolds.bm1.folded === true), JSON.stringify(readingFolds && readingFolds.bm1).slice(0, 180));
+    record("reading-BM7-pill-folded", Boolean(readingFolds && readingFolds.bm7 && readingFolds.bm7.prjFolded === true), JSON.stringify(readingFolds && readingFolds.bm7).slice(0, 180));
+    record("reading-BM19-pill-kept", Boolean(readingFolds && readingFolds.bm19 && readingFolds.bm19.prjFolded === false), JSON.stringify(readingFolds && readingFolds.bm19).slice(0, 180));
     // Quote diagnostic: the BM20 row is a quoted task; the reading adapter
     // maps it through section text plus data-line, so record what it saw.
     const quoteDiag = await client.evaluate(`(() => (async () => {

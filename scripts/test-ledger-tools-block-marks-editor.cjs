@@ -24,6 +24,7 @@ const StubStateEffect = {
 const StubDecoration = {
   none: { none: true },
   line: (spec) => ({ line: true, ...spec }),
+  replace: (spec) => ({ replace: true, ...spec }),
 };
 
 class StubPlugin {
@@ -123,10 +124,11 @@ function makeDoc(text) {
   };
 }
 
-function stateFor(text, { live = true, path = "Projects/Example.md", codeRanges = [] } = {}) {
+function stateFor(text, { live = true, path = "Projects/Example.md", codeRanges = [], selection = [] } = {}) {
   return {
     doc: makeDoc(text),
     codeRanges,
+    selection: { ranges: selection },
     field(field) {
       if (field === editorLivePreviewField) return live;
       if (field === editorInfoField) return { file: { path } };
@@ -176,6 +178,10 @@ function makeView(text, options = {}) {
 
 function lineMarks(decorations) {
   return (decorations && decorations.adds || []).filter((entry) => entry.value && entry.value.line);
+}
+
+function replaceMarks(decorations) {
+  return (decorations && decorations.adds || []).filter((entry) => entry.value && entry.value.replace);
 }
 
 const WAITING = `- [?] #task Water plants [scheduled:: ${FUTURE}]`;
@@ -446,4 +452,42 @@ test("unscanned collect does not restore mouseover tooltip bindings", () => {
   assert.equal(attrs.get("aria-label"), "Existing name");
   assert.equal(attrs.get("data-tooltip-position"), "left");
   instance.destroy();
+});
+
+test("prj rows fold the project tag; dep-over-prj keeps it; selection reveals", () => {
+  const { plugin } = makePlugin();
+  const prj = "- [?] #task E #prj_is_blocked";
+  const source = LedgerToolsPlugin.helpers.blockMarkProjectTagSource(prj);
+  assert.ok(source);
+  const view = makeView(prj);
+  const folds = replaceMarks(plugin.buildBlockMarkFoldDecorations(view));
+  assert.equal(folds.length, 1);
+  assert.equal(folds[0].from, source.tagStart - (source.foldSpace ? 1 : 0));
+  assert.equal(folds[0].to, source.tagEnd);
+  assert.equal(folds[0].value.widget.foldSpace, true);
+
+  const rebuilt = replaceMarks(plugin.buildBlockMarkFoldDecorations(view));
+  assert.equal(folds[0].value.widget.eq(rebuilt[0].value.widget), true);
+
+  const kept = "- [?] #task P #prj_is_blocked [dependsOn:: dep]";
+  assert.equal(
+    replaceMarks(plugin.buildBlockMarkFoldDecorations(makeView(kept))).length,
+    0,
+  );
+
+  const revealed = replaceMarks(
+    plugin.buildBlockMarkFoldDecorations(
+      makeView(prj, {
+        selection: [{ from: source.tagStart, to: source.tagStart }],
+      }),
+    ),
+  );
+  assert.equal(revealed.length, 0);
+
+  plugin.blockMarksEnabled = false;
+  assert.equal(plugin.buildBlockMarkFoldDecorations(makeView(prj)), StubDecoration.none);
+  plugin.blockMarksEnabled = true;
+
+  assert.equal(plugin.blockMarkFoldShouldRebuild({ selectionSet: true }), true);
+  assert.equal(plugin.blockMarkShouldRebuild({ selectionSet: true }), false);
 });

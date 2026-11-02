@@ -72,6 +72,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBlockMarksEditorMixin,
   BobLedgerToolsBlockMarksReadingDomMixin,
   BobLedgerToolsBlockMarksReadingMixin,
+  BobLedgerToolsBlockMarkFoldsMixin,
   BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,

@@ -448,3 +448,50 @@ function blockMarkModel(lineText, ctx) {
     return null;
   }
 }
+
+// Digit block-mark keys: the checkbox already names the ladder level, so
+// the priority bars on that row fold. Never throws.
+function blockMarkIsDigitKey(key) {
+  try {
+    return key === "p1" || key === "p2" || key === "p3" || key === "p4";
+  } catch (error) {
+    return false;
+  }
+}
+
+const BLOCK_MARK_PRJ_TAG = "#prj_is_blocked";
+
+// The exact `#prj_is_blocked` token on `lineText` (not
+// `#prj_is_blocked_old`), quote-aware via the inline-code mask.
+// `foldSpace` is true when a single U+0020 precedes the hash.
+// Returns `{ tagStart, tagEnd, foldSpace }` in UTF-16 offsets, or
+// null. Never throws.
+function blockMarkProjectTagSource(lineText) {
+  try {
+    if (typeof lineText !== "string" || lineText === "") {
+      return null;
+    }
+    const visible =
+      typeof blockMarkMaskInlineCode === "function"
+        ? blockMarkMaskInlineCode(lineText)
+        : lineText;
+    const pattern = /(?:^|\s)#prj_is_blocked(?![A-Za-z0-9_/-])/g;
+    const match = pattern.exec(visible);
+    if (!match) {
+      return null;
+    }
+    const foldSpace = /^\s/.test(match[0]);
+    const tagStart = match.index + (foldSpace ? 1 : 0);
+    const tagEnd = tagStart + BLOCK_MARK_PRJ_TAG.length;
+    if (lineText.slice(tagStart, tagEnd) !== BLOCK_MARK_PRJ_TAG) {
+      return null;
+    }
+    return Object.freeze({
+      tagStart,
+      tagEnd,
+      foldSpace,
+    });
+  } catch (error) {
+    return null;
+  }
+}

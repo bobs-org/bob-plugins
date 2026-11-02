@@ -61,6 +61,8 @@ const {
   blockMarkClassify,
   blockMarkTooltip,
   blockMarkModel,
+  blockMarkIsDigitKey,
+  blockMarkProjectTagSource,
 } = LedgerToolsPlugin.helpers;
 
 const TODAY = "2026-11-01";
@@ -311,4 +313,39 @@ test("model keys are stable for equal results and change with a changed mark", (
   const changed = modelFor("- [?] #task A [priority:: medium] [scheduled:: 2026-11-21]");
   assert.equal(first.modelKey, second.modelKey);
   assert.notEqual(first.modelKey, changed.modelKey);
+});
+
+test("fold helpers: digit keys, BM1/BM8/BM9 bars, BM7/BM19 pills", () => {
+  assert.equal(blockMarkIsDigitKey("p1"), true);
+  assert.equal(blockMarkIsDigitKey("p4"), true);
+  assert.equal(blockMarkIsDigitKey("dep"), false);
+  assert.equal(blockMarkIsDigitKey("prj"), false);
+  assert.equal(blockMarkIsDigitKey(null), false);
+
+  const bm1 = modelFor(BM_VECTORS[0].line);
+  const bm8 = modelFor(BM_VECTORS[7].line);
+  const bm9 = modelFor(BM_VECTORS[8].line);
+  const bm7 = modelFor(BM_VECTORS[6].line);
+  const bm19 = modelFor(BM_VECTORS[18].line);
+  assert.equal(blockMarkIsDigitKey(bm1.key), true, "BM1 bars fold");
+  assert.equal(blockMarkIsDigitKey(bm8.key), false, "BM8 bars shown");
+  assert.equal(blockMarkIsDigitKey(bm9.key), false, "BM9 bars shown");
+
+  const bm7Source = blockMarkProjectTagSource(BM_VECTORS[6].line);
+  assert.ok(bm7Source);
+  assert.equal(bm7.key, "prj");
+  assert.equal(
+    BM_VECTORS[6].line.slice(bm7Source.tagStart, bm7Source.tagEnd),
+    "#prj_is_blocked",
+  );
+  assert.equal(bm7Source.foldSpace, true);
+
+  const bm19Source = blockMarkProjectTagSource(BM_VECTORS[18].line);
+  assert.ok(bm19Source);
+  assert.equal(bm19.key, "dep");
+  assert.equal(blockMarkProjectTagSource("- [?] #task L #prj_is_blocked_old"), null);
+  assert.equal(
+    blockMarkProjectTagSource("- [?] #task R `#prj_is_blocked`"),
+    null,
+  );
 });

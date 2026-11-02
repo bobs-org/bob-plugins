@@ -914,3 +914,250 @@ test("retained canonical text survives later field-transforming processors", () 
   assert.equal(attrsOf(row).key, "date");
   assert.equal(plugin.diskReads(), 0);
 });
+
+test("landing: recycled fallback row must drop the old scheduled reason", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const row = taskRow(doc, { trailing: ` Hand [scheduled:: ${FUTURE}]` });
+  const root = section(doc, [row]);
+  const ctx = { sourcePath: "Projects/Example.md" };
+  plugin.renderBlockMarksIn(root, ctx);
+  assert.equal(attrsOf(row).key, "date");
+  row.childNodes[row.childNodes.length - 1].nodeValue = " Replacement without a date";
+  plugin.sweepBlockMarksReading();
+  assert.equal(attrsOf(row).key, null);
+});
+
+test("landing: off-state sweep must preserve a later external tooltip", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const row = taskRow(doc, { dataLine: 0, aria: "Original" });
+  const root = section(doc, [row]);
+  plugin.renderBlockMarksIn(
+    root,
+    ctxFor("Projects/Example.md", {
+      text: `- [?] #task Hand [scheduled:: ${FUTURE}]`,
+      lineStart: 0,
+      lineEnd: 0,
+    }),
+  );
+  plugin.blockMarksEnabled = false;
+  plugin.sweepBlockMarksReading();
+  const box = checkboxOf(row);
+  box.setAttribute("aria-label", "New external label");
+  plugin.sweepBlockMarksReading();
+  assert.equal(box.getAttribute("aria-label"), "New external label");
+});
+
+test("landing: a Tasks row used as processor root must stay excluded", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const row = taskRow(doc, {
+    extraClass: "plugin-tasks-list-item",
+    trailing: ` Hand [scheduled:: ${FUTURE}]`,
+  });
+  plugin.renderBlockMarksIn(row, { sourcePath: "Projects/Example.md" });
+  assert.equal(attrsOf(row).key, null);
+});
+
+test("landing: Dataview without proven origin must remain neutral", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const host = readingEl(doc, "div", { class: "block-language-dataview" });
+  const row = taskRow(doc, { trailing: ` Hand [scheduled:: ${FUTURE}]` });
+  host.appendChild(row);
+  plugin.renderBlockMarksIn(host, { sourcePath: "Queries/Inbox.md" });
+  assert.equal(attrsOf(row).key, null);
+});
+
+test("Dataview transformed rows recover canonical text from the Tasks cache", () => {
+  const plugin = makePlugin([
+    OPEN_TASK,
+    {
+      id: "bm4",
+      status: { type: "TODO" },
+      path: "block-marks.md",
+      description: "BM4 dep vector #task [dependsOn:: x]",
+    },
+  ]);
+  const doc = readingDoc();
+  const host = readingEl(doc, "div", { class: "block-language-dataview" });
+  const row = taskRow(doc, { trailing: " BM4 dep vector", path: "block-marks.md" });
+  const field = readingEl(doc, "span", { class: "dataview inline-field" });
+  field.appendChild(readingText(doc, "x"));
+  row.appendChild(field);
+  host.appendChild(row);
+  plugin.renderBlockMarksIn(host, { sourcePath: "Queries/Inbox.md" });
+  assert.equal(attrsOf(row).key, "dep");
+
+  const unproven = taskRow(doc, { trailing: " BM4 dep vector" });
+  const unprovenField = readingEl(doc, "span", { class: "dataview inline-field" });
+  unprovenField.appendChild(readingText(doc, "x"));
+  unproven.appendChild(unprovenField);
+  host.appendChild(unproven);
+  plugin.renderBlockMarksIn(host, { sourcePath: "Queries/Inbox.md" });
+  assert.equal(attrsOf(unproven).key, null);
+});
+
+test("Dataview file links prove origin without data-task-path", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const host = readingEl(doc, "div", { class: "block-language-dataview" });
+  const row = taskRow(doc, { trailing: " Review", prj: true });
+  const link = readingEl(doc, "a", { class: "internal-link", "data-href": "Projects/Example.md" });
+  link.appendChild(readingText(doc, "Example"));
+  row.appendChild(link);
+  host.appendChild(row);
+  plugin.renderBlockMarksIn(host, { sourcePath: "Queries/Inbox.md" });
+  assert.equal(attrsOf(row).key, "prj");
+  assert.match(checkboxOf(row).getAttribute("aria-label"), /via project Example/);
+});
+
+test("code and pre processor roots stay excluded like Tasks roots", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const row = taskRow(doc, { trailing: ` Hand [scheduled:: ${FUTURE}]` });
+  const pre = readingEl(doc, "pre");
+  pre.appendChild(row);
+  plugin.renderBlockMarksIn(pre, { sourcePath: "Projects/Example.md" });
+  assert.equal(attrsOf(row).key, null);
+
+  const coded = taskRow(doc, { trailing: ` Hand [scheduled:: ${FUTURE}]` });
+  const code = readingEl(doc, "code");
+  code.appendChild(coded);
+  plugin.renderBlockMarksIn(code, { sourcePath: "Projects/Example.md" });
+  assert.equal(attrsOf(coded).key, null);
+});
+
+test("source-note fallback still paints when section mapping is absent", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const row = taskRow(doc, { trailing: ` Hand [scheduled:: ${FUTURE}]` });
+  const root = section(doc, [row]);
+  plugin.renderBlockMarksIn(root, { sourcePath: "Projects/Example.md" });
+  assert.equal(attrsOf(row).key, "date");
+});
+
+test("query origin-loss and same-status origin-change invalidate retained marks", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const host = readingEl(doc, "div", { class: "block-language-dataview" });
+  const row = taskRow(doc, {
+    trailing: " Review",
+    prj: true,
+    path: "Projects/Example.md",
+  });
+  host.appendChild(row);
+  plugin.renderBlockMarksIn(host, { sourcePath: "Queries/Inbox.md" });
+  assert.equal(attrsOf(row).key, "prj");
+  const box = checkboxOf(row);
+  assert.match(box.getAttribute("aria-label"), /via project Example/);
+  assert.doesNotMatch(box.getAttribute("aria-label"), /Inbox/);
+
+  row.removeAttribute("data-task-path");
+  plugin.sweepBlockMarksReading();
+  assert.equal(attrsOf(row).key, null);
+
+  row.setAttribute("data-task-path", "Projects/Other.md");
+  plugin.sweepBlockMarksReading();
+  assert.equal(attrsOf(row).key, "prj");
+  assert.match(checkboxOf(row).getAttribute("aria-label"), /via project Other/);
+  assert.doesNotMatch(checkboxOf(row).getAttribute("aria-label"), /Example/);
+});
+
+test("repeated off sweeps, unload, and toggle after an external aria edit", () => {
+  TestNotice.messages.length = 0;
+  const plugin = makePlugin();
+  plugin.applyMarkGateClass = () => {};
+  plugin.refreshBlockMarkEditors = () => {};
+  const doc = readingDoc();
+  const row = taskRow(doc, {
+    dataLine: 0,
+    trailing: ` Hand [scheduled:: ${FUTURE}]`,
+    aria: "Original",
+  });
+  const root = section(doc, [row]);
+  const ctx = ctxFor("Projects/Example.md", {
+    text: `- [?] #task Hand [scheduled:: ${FUTURE}]`,
+    lineStart: 0,
+    lineEnd: 0,
+  });
+  plugin.renderBlockMarksIn(root, ctx);
+  const box = checkboxOf(row);
+  assert.match(box.getAttribute("aria-label"), /^Blocked · until /);
+
+  plugin.blockMarksEnabled = false;
+  plugin.sweepBlockMarksReading();
+  plugin.sweepBlockMarksReading();
+  assert.equal(box.getAttribute("aria-label"), "Original");
+
+  box.setAttribute("aria-label", "External after off");
+  plugin.blockMarksEnabled = true;
+  plugin.sweepBlockMarksReading();
+  assert.equal(attrsOf(row).key, "date");
+  assert.match(box.getAttribute("aria-label"), /^Blocked · until /);
+  plugin.blockMarksEnabled = false;
+  plugin.sweepBlockMarksReading();
+  assert.equal(box.getAttribute("aria-label"), "External after off");
+
+  plugin.blockMarksEnabled = true;
+  plugin.sweepBlockMarksReading();
+  plugin.teardownBlockMarksReading();
+  assert.equal(attrsOf(row).key, null);
+  assert.equal(box.getAttribute("aria-label"), "External after off");
+});
+
+test("replacement checkbox nodes do not inherit the previous node's attributes", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const row = taskRow(doc, {
+    dataLine: 0,
+    trailing: ` Hand [scheduled:: ${FUTURE}]`,
+    aria: "Original",
+  });
+  const root = section(doc, [row]);
+  plugin.renderBlockMarksIn(
+    root,
+    ctxFor("Projects/Example.md", {
+      text: `- [?] #task Hand [scheduled:: ${FUTURE}]`,
+      lineStart: 0,
+      lineEnd: 0,
+    }),
+  );
+  const oldBox = checkboxOf(row);
+  assert.match(oldBox.getAttribute("aria-label"), /^Blocked · until /);
+  row.removeChild(oldBox);
+  const fresh = readingEl(doc, "input", {
+    class: "task-list-item-checkbox",
+    type: "checkbox",
+  });
+  fresh.setAttribute("aria-label", "Replacement");
+  row.insertBefore(fresh, row.childNodes[0] || null);
+  plugin.blockMarksEnabled = false;
+  plugin.sweepBlockMarksReading();
+  assert.equal(fresh.getAttribute("aria-label"), "Replacement");
+  assert.match(oldBox.getAttribute("aria-label"), /^Blocked · until /);
+});
+
+test("neutral status transition releases owned tooltip attributes", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const row = taskRow(doc, {
+    dataLine: 0,
+    trailing: ` Hand [scheduled:: ${FUTURE}]`,
+    aria: "Keep me",
+  });
+  const root = section(doc, [row]);
+  plugin.renderBlockMarksIn(
+    root,
+    ctxFor("Projects/Example.md", {
+      text: `- [?] #task Hand [scheduled:: ${FUTURE}]`,
+      lineStart: 0,
+      lineEnd: 0,
+    }),
+  );
+  row.setAttribute("data-task", "*");
+  plugin.sweepBlockMarksReading();
+  assert.equal(attrsOf(row).key, null);
+  assert.equal(checkboxOf(row).getAttribute("aria-label"), "Keep me");
+});

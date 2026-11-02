@@ -382,3 +382,68 @@ test("setup owns the gate and plugin-registered unload cleanup", () => {
   cleanup();
   assert.deepEqual(gates, [["bob-block-marks", true], ["bob-block-marks", false]]);
 });
+
+function tooltipInput(attrs) {
+  const row = {
+    parentElement: null,
+    classList: { contains: (name) => name === "HyperMD-task-line" },
+  };
+  return {
+    tagName: "INPUT",
+    isConnected: true,
+    parentElement: row,
+    classList: { contains: (name) => name === "task-list-item-checkbox" },
+    getAttribute: (name) => (attrs.has(name) ? attrs.get(name) : null),
+    setAttribute: (name, value) => attrs.set(name, String(value)),
+    removeAttribute: (name) => attrs.delete(name),
+  };
+}
+
+test("requestMeasure write-pass attaches tooltips after rebuild", () => {
+  const { plugin } = makePlugin();
+  plugin.blockMarksTimers = { set: () => 1, clear: () => {} };
+  const attrs = new Map();
+  const input = tooltipInput(attrs);
+  const view = makeView(WAITING);
+  view.posAtDOM = () => 0;
+  const measures = [];
+  view.requestMeasure = (spec) => {
+    measures.push(spec);
+    const collected = spec.read(view);
+    spec.write(collected, view);
+  };
+  view.dom.querySelectorAll = (sel) => {
+    if (String(sel).includes("task-list-item-checkbox")) return [input];
+    return [];
+  };
+  plugin.createBlockMarkExtension();
+  const instance = new capturedMarkClass(view);
+  assert.equal(measures.length, 1);
+  assert.match(attrs.get("aria-label") || "", /^Blocked · until /);
+  assert.equal(attrs.get("data-tooltip-position"), "top");
+
+  view.state = stateFor("- [*] #task Water plants", { path: "Projects/Example.md" });
+  instance.update({ docChanged: true, view });
+  assert.ok(measures.length >= 2, "rebuild schedules another measure");
+  assert.equal(attrs.has("aria-label"), false);
+  instance.destroy();
+});
+
+test("unscanned collect does not restore mouseover tooltip bindings", () => {
+  const { plugin } = makePlugin();
+  plugin.blockMarksTimers = { set: () => 1, clear: () => {} };
+  const attrs = new Map([["aria-label", "Existing name"], ["data-tooltip-position", "left"]]);
+  const input = tooltipInput(attrs);
+  const view = makeView(WAITING);
+  view.posAtDOM = () => 0;
+  plugin.createBlockMarkExtension();
+  const instance = new capturedMarkClass(view);
+  instance.onMouseOver({ target: input });
+  assert.match(attrs.get("aria-label"), /^Blocked · until /);
+  plugin.applyBlockMarkTooltipTargets(view, { targets: [], scanned: false });
+  assert.match(attrs.get("aria-label"), /^Blocked · until /);
+  plugin.applyBlockMarkTooltipTargets(view, { targets: [], scanned: true });
+  assert.equal(attrs.get("aria-label"), "Existing name");
+  assert.equal(attrs.get("data-tooltip-position"), "left");
+  instance.destroy();
+});

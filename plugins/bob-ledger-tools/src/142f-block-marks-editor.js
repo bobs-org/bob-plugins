@@ -43,6 +43,11 @@ class BobLedgerToolsBlockMarksEditorMixin {
           } catch (error) {
             this.decorations = Decoration.none;
           }
+          try {
+            plugin.scheduleBlockMarkTooltipMeasure(view);
+          } catch (error) {
+            // Write-pass tooltip attachment is best-effort.
+          }
         }
 
         update(update) {
@@ -50,6 +55,7 @@ class BobLedgerToolsBlockMarksEditorMixin {
             if (plugin.blockMarkShouldRebuild(update)) {
               this.decorations = plugin.buildBlockMarkDecorations(update.view);
               plugin.refreshBlockMarkTooltipsForView(update.view);
+              plugin.scheduleBlockMarkTooltipMeasure(update.view);
             }
           } catch (error) {
             // Keep the previous valid decorations on a failed rebuild.
@@ -383,6 +389,70 @@ class BobLedgerToolsBlockMarksEditorMixin {
       for (const input of Array.from(bindings.keys())) this.restoreBlockMarkTooltipInput(input);
     } catch (error) {
       // Plugin cleanup is best-effort.
+    }
+  }
+
+  collectBlockMarkTooltipTargets(view) {
+    const found = [];
+    try {
+      if (!view || !view.dom || typeof view.dom.querySelectorAll !== "function") {
+        return { targets: found, scanned: false };
+      }
+      const inputs = Array.from(view.dom.querySelectorAll("input.task-list-item-checkbox"));
+      for (const input of inputs) {
+        try {
+          const resolved = this.blockMarkEditorRowForInput(view, input);
+          found.push({ input, model: resolved && resolved.model });
+        } catch (error) {
+          continue;
+        }
+      }
+      return { targets: found, scanned: true };
+    } catch (error) {
+      return { targets: found, scanned: false };
+    }
+  }
+
+  applyBlockMarkTooltipTargets(view, collected) {
+    try {
+      const pack = collected && typeof collected === "object" ? collected : { targets: [], scanned: false };
+      const targets = Array.isArray(pack.targets) ? pack.targets : [];
+      const seen = new Set();
+      for (const target of targets) {
+        if (!target || !target.input) continue;
+        seen.add(target.input);
+        this.setBlockMarkTooltipInput(target.input, view, target.model);
+      }
+      if (!pack.scanned) return;
+      const bindings = this.blockMarkTooltipBindings;
+      if (!(bindings instanceof Map)) return;
+      for (const [input, record] of Array.from(bindings.entries())) {
+        if (!record || record.view !== view) continue;
+        if (!seen.has(input)) this.restoreBlockMarkTooltipInput(input);
+      }
+    } catch (error) {
+      // Write-pass application is best-effort.
+    }
+  }
+
+  scheduleBlockMarkTooltipMeasure(view) {
+    try {
+      if (!view) return;
+      if (typeof view.requestMeasure === "function") {
+        const plugin = this;
+        view.requestMeasure({
+          read(measuredView) {
+            return plugin.collectBlockMarkTooltipTargets(measuredView || view);
+          },
+          write(collected, measuredView) {
+            plugin.applyBlockMarkTooltipTargets(measuredView || view, collected);
+          },
+        });
+        return;
+      }
+      this.applyBlockMarkTooltipTargets(view, this.collectBlockMarkTooltipTargets(view));
+    } catch (error) {
+      // Missing requestMeasure falls back to a synchronous write.
     }
   }
 }

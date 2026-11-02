@@ -89,188 +89,6 @@ class BobLedgerToolsBlockMarksReadingMixin {
     }
   }
 
-  blockMarkReadingTag(node) {
-    try {
-      return String((node && (node.tagName || node.nodeName)) || "").toUpperCase();
-    } catch (error) {
-      return "";
-    }
-  }
-
-  blockMarkReadingHasClass(node, name) {
-    try {
-      if (!node || !name) return false;
-      if (node.classList && typeof node.classList.contains === "function") {
-        return node.classList.contains(name);
-      }
-      const raw = typeof node.getAttribute === "function"
-        ? node.getAttribute("class") || ""
-        : typeof node.className === "string" ? node.className : "";
-      return String(raw).split(/\s+/).indexOf(name) !== -1;
-    } catch (error) {
-      return false;
-    }
-  }
-
-  blockMarkReadingAttr(node, name) {
-    try {
-      return node && typeof node.getAttribute === "function"
-        ? node.getAttribute(name)
-        : null;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  blockMarkReadingSetAttr(node, name, value) {
-    try {
-      if (node && typeof node.setAttribute === "function") {
-        node.setAttribute(name, String(value));
-      }
-    } catch (error) {
-      // Attribute writes are best-effort.
-    }
-  }
-
-  blockMarkReadingRemoveAttr(node, name) {
-    try {
-      if (node && typeof node.removeAttribute === "function") {
-        node.removeAttribute(name);
-      }
-    } catch (error) {
-      // Attribute clears are best-effort.
-    }
-  }
-
-  blockMarkReadingIsConnected(node) {
-    try {
-      if (!node || typeof node !== "object") return false;
-      if (typeof node.isConnected === "boolean") return node.isConnected;
-      return true;
-    } catch (error) {
-      return true;
-    }
-  }
-
-  blockMarkReadingWalkElements(root, visit) {
-    try {
-      if (!root) return;
-      const stack = [root];
-      let guard = 0;
-      while (stack.length > 0 && guard < 20000) {
-        guard += 1;
-        const node = stack.pop();
-        if (!node || node.nodeType !== 1) continue;
-        try {
-          visit(node);
-        } catch (error) {
-          // Keep walking on per-node failure.
-        }
-        const children = node.childNodes || [];
-        for (let index = children.length - 1; index >= 0; index -= 1) {
-          const child = children[index];
-          if (child && child.nodeType === 1) stack.push(child);
-        }
-      }
-    } catch (error) {
-      // Walk is best-effort.
-    }
-  }
-
-  blockMarkReadingOwnElements(li) {
-    try {
-      const found = [];
-      const walk = (node) => {
-        const children = (node && node.childNodes) || [];
-        for (const child of children) {
-          if (!child || child.nodeType !== 1) continue;
-          const tag = this.blockMarkReadingTag(child);
-          if (tag === "UL" || tag === "OL" || tag === "LI") continue;
-          found.push(child);
-          walk(child);
-        }
-      };
-      walk(li);
-      return found;
-    } catch (error) {
-      return [];
-    }
-  }
-
-  blockMarkReadingOwnCheckbox(li) {
-    try {
-      const kids = (li && li.childNodes) || [];
-      for (const child of kids) {
-        if (
-          this.blockMarkReadingTag(child) === "INPUT" &&
-          this.blockMarkReadingHasClass(child, "task-list-item-checkbox")
-        ) {
-          return child;
-        }
-      }
-      const own = this.blockMarkReadingOwnElements(li);
-      for (const node of own) {
-        if (
-          this.blockMarkReadingTag(node) === "INPUT" &&
-          this.blockMarkReadingHasClass(node, "task-list-item-checkbox")
-        ) {
-          return node;
-        }
-      }
-      return null;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  blockMarkReadingRowSkipped(li, root) {
-    try {
-      let current = li;
-      let guard = 0;
-      while (current && current !== root && guard < 200) {
-        guard += 1;
-        const tag = this.blockMarkReadingTag(current);
-        if (tag === "CODE" || tag === "PRE") return true;
-        if (
-          this.blockMarkReadingHasClass(current, "plugin-tasks-list-item") ||
-          this.blockMarkReadingHasClass(current, "tasks-list-text") ||
-          this.blockMarkReadingHasClass(current, "task-description")
-        ) {
-          return true;
-        }
-        current = current.parentNode || current.parentElement || null;
-      }
-      return false;
-    } catch (error) {
-      return true;
-    }
-  }
-
-  blockMarkReadingCandidateRows(el) {
-    try {
-      const rows = [];
-      this.blockMarkReadingWalkElements(el, (node) => {
-        if (this.blockMarkReadingTag(node) !== "LI") return;
-        if (!this.blockMarkReadingHasClass(node, "task-list-item")) return;
-        if (this.blockMarkReadingAttr(node, "data-task") === null) return;
-        if (this.blockMarkReadingRowSkipped(node, el)) return;
-        rows.push(node);
-      });
-      if (
-        this.blockMarkReadingTag(el) === "LI" &&
-        this.blockMarkReadingHasClass(el, "task-list-item") &&
-        this.blockMarkReadingAttr(el, "data-task") !== null &&
-        !this.blockMarkReadingRowSkipped(el, el) &&
-        rows.indexOf(el) === -1
-      ) {
-        rows.unshift(el);
-      }
-      return rows;
-    } catch (error) {
-      return [];
-    }
-  }
-
   blockMarkReadingIsQuery(row, el) {
     try {
       if (typeof taskThemeRowIsQuery === "function") {
@@ -282,6 +100,43 @@ class BobLedgerToolsBlockMarksReadingMixin {
       return false;
     } catch (error) {
       return false;
+    }
+  }
+
+  blockMarkReadingQueryLinkPath(li, queryNote) {
+    try {
+      const own = this.blockMarkReadingOwnElements(li);
+      for (const node of own) {
+        if (this.blockMarkReadingTag(node) !== "A") continue;
+        if (
+          !this.blockMarkReadingHasClass(node, "internal-link") &&
+          !this.blockMarkReadingHasClass(node, "task-link") &&
+          !this.blockMarkReadingHasClass(node, "file-link")
+        ) {
+          continue;
+        }
+        const href = this.blockMarkReadingAttr(node, "data-href") ||
+          this.blockMarkReadingAttr(node, "href") ||
+          "";
+        if (!href || String(href).indexOf("://") !== -1) continue;
+        let path = String(href).split("#")[0];
+        if (!path) continue;
+        try {
+          if (typeof taskThemeNormalizeOriginPath === "function") {
+            path = taskThemeNormalizeOriginPath(
+              path,
+              queryNote || "",
+              this.app && this.app.metadataCache,
+            ) || path;
+          }
+        } catch (error) {
+          // Keep the raw href stem.
+        }
+        if (path && path !== queryNote) return path;
+      }
+      return "";
+    } catch (error) {
+      return "";
     }
   }
 
@@ -298,13 +153,19 @@ class BobLedgerToolsBlockMarksReadingMixin {
         } catch (error) {
           origin = null;
         }
-        const path = origin && typeof origin.path === "string" ? origin.path : "";
-        return { path, query: true };
+        const queryNote = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+        let path = origin && typeof origin.path === "string" ? origin.path : "";
+        if (!path || path === queryNote) {
+          path = this.blockMarkReadingQueryLinkPath(li, queryNote) || "";
+        }
+        // Query-note stem is never a proven origin and never a project reason.
+        const proven = Boolean(path) && path !== queryNote;
+        return { path: proven ? path : "", query: true, proven };
       }
       const path = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
-      return { path, query: false };
+      return { path, query: false, proven: Boolean(path) };
     } catch (error) {
-      return { path: "", query: false };
+      return { path: "", query: false, proven: false };
     }
   }
 
@@ -410,6 +271,103 @@ class BobLedgerToolsBlockMarksReadingMixin {
     }
   }
 
+  blockMarkReadingQueryCanonicalLine(li, origin) {
+    try {
+      if (!origin || origin.query !== true || origin.proven !== true || !origin.path) {
+        return null;
+      }
+      const status = this.blockMarkReadingAttr(li, "data-task");
+      if (status !== "?") return null;
+      let own = "";
+      try {
+        own = typeof dependencyReadingOwnText === "function"
+          ? dependencyReadingOwnText(li)
+          : String(li && li.textContent || "");
+      } catch (error) {
+        own = String(li && li.textContent || "");
+      }
+      if (!own || !String(own).trim()) return null;
+      const hasCanonical = /\[[^\]\n]+::/.test(own) ||
+        /(?:^|\s)#prj_is_blocked(?![A-Za-z0-9_/-])/.test(own);
+      if (hasCanonical) {
+        let line = String(own);
+        let parsed = null;
+        try {
+          parsed = typeof freshnessTaskStatus === "function"
+            ? freshnessTaskStatus(line)
+            : null;
+        } catch (error) {
+          parsed = null;
+        }
+        if (parsed === null) {
+          line = "- [?] " + String(own).replace(/^\s+/, "");
+        }
+        try {
+          parsed = typeof freshnessTaskStatus === "function"
+            ? freshnessTaskStatus(line)
+            : "?";
+        } catch (error) {
+          parsed = "?";
+        }
+        if (parsed === "?" && (typeof blockMarkEligible !== "function" || blockMarkEligible(line))) {
+          return line;
+        }
+      }
+      const memo = typeof this.freshnessEnsureMemo === "function"
+        ? this.freshnessEnsureMemo()
+        : null;
+      const tasks = Array.isArray(memo && memo.tasks) ? memo.tasks : [];
+      const originPath = origin.path;
+      for (const task of tasks) {
+        let path = "";
+        try {
+          path = typeof planTaskPath === "function" ? planTaskPath(task) : (task && task.path) || "";
+        } catch (error) {
+          path = task && task.path || "";
+        }
+        if (!path || path !== originPath) continue;
+        let desc = "";
+        try {
+          desc = typeof planTaskDescription === "function"
+            ? planTaskDescription(task)
+            : (task && (task.description || task.text)) || "";
+        } catch (error) {
+          desc = task && (task.description || task.text) || "";
+        }
+        if (!desc) continue;
+        let clean = desc;
+        try {
+          if (typeof dependencyCleanTaskText === "function") {
+            clean = dependencyCleanTaskText(desc) || desc;
+          }
+        } catch (error) {
+          clean = desc;
+        }
+        const title = String(clean)
+          .replace(/\[[^\]]*\]/g, " ")
+          .replace(/#[^\s]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .split(" ")
+          .slice(0, 4)
+          .join(" ");
+        if (title.length < 4 || String(own).indexOf(title) === -1) continue;
+        let line = String(desc);
+        try {
+          if (typeof freshnessTaskStatus === "function" && freshnessTaskStatus(line) === null) {
+            line = "- [?] " + String(desc).replace(/^\s+/, "");
+          }
+        } catch (error) {
+          line = "- [?] " + String(desc).replace(/^\s+/, "");
+        }
+        return line;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
   blockMarkReadingFallbackLine(li) {
     try {
       if (this.blockMarkReadingTransformed(li)) return null;
@@ -487,8 +445,9 @@ class BobLedgerToolsBlockMarksReadingMixin {
   blockMarkReadingRestoreOwned(node, appliedName, originalName, appliedValue, originalValue) {
     try {
       if (!node) return;
+      if (appliedValue === null || appliedValue === undefined) return;
       const current = this.blockMarkReadingAttr(node, appliedName);
-      if (appliedValue !== null && current !== appliedValue) return;
+      if (current !== appliedValue) return;
       if (originalValue === null || originalValue === undefined) {
         this.blockMarkReadingRemoveAttr(node, appliedName);
       } else {
@@ -496,6 +455,16 @@ class BobLedgerToolsBlockMarksReadingMixin {
       }
     } catch (error) {
       // Restoration is best-effort.
+    }
+  }
+
+  blockMarkReadingReleaseRow(li) {
+    try {
+      if (li && this.blockMarkReadingRows && typeof this.blockMarkReadingRows.delete === "function") {
+        this.blockMarkReadingRows.delete(li);
+      }
+    } catch (error) {
+      // Ownership release is best-effort.
     }
   }
 
@@ -532,7 +501,10 @@ class BobLedgerToolsBlockMarksReadingMixin {
         record.appliedMore,
         record.originalMore,
       );
-      const checkbox = record.checkbox || this.blockMarkReadingOwnCheckbox(li);
+      const currentCheckbox = this.blockMarkReadingOwnCheckbox(li);
+      const checkbox = record.checkbox && record.checkbox === currentCheckbox
+        ? currentCheckbox
+        : null;
       this.blockMarkReadingRestoreOwned(
         checkbox,
         "aria-label",
@@ -547,11 +519,7 @@ class BobLedgerToolsBlockMarksReadingMixin {
         record.appliedPosition,
         record.originalPosition,
       );
-      record.appliedBlock = null;
-      record.appliedFamily = null;
-      record.appliedMore = null;
-      record.appliedAria = null;
-      record.appliedPosition = null;
+      this.blockMarkReadingReleaseRow(li);
     } catch (error) {
       // Clearing a row never throws.
     }
@@ -568,6 +536,10 @@ class BobLedgerToolsBlockMarksReadingMixin {
       let record = this.blockMarkReadingRows instanceof WeakMap
         ? this.blockMarkReadingRows.get(li)
         : null;
+      if (record && record.checkbox && checkbox && record.checkbox !== checkbox) {
+        this.blockMarkReadingReleaseRow(li);
+        record = null;
+      }
       if (!record) {
         record = {
           originalBlock: this.blockMarkReadingAttr(li, "data-bob-block"),
@@ -634,6 +606,22 @@ class BobLedgerToolsBlockMarksReadingMixin {
     }
   }
 
+  blockMarkReadingSourceIdentityOk(li, retained, origin, status) {
+    try {
+      if (!retained || retained.status !== status) return false;
+      if ((retained.path || "") !== (origin && origin.path || "")) return false;
+      if (origin && origin.query && !origin.proven) return false;
+      const retainedLine = retained.dataLine === undefined ? null : retained.dataLine;
+      if (retainedLine !== null) {
+        const currentLine = this.blockMarkReadingAttr(li, "data-line");
+        if (String(retainedLine) !== String(currentLine)) return false;
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   blockMarkReadingClassifyRow(li, el, ctx) {
     try {
       if (!li) return;
@@ -649,6 +637,15 @@ class BobLedgerToolsBlockMarksReadingMixin {
         return;
       }
       const origin = this.blockMarkReadingOrigin(li, el, ctx);
+      if (origin.query && !origin.proven) {
+        this.blockMarkReadingInvalidate(li);
+        this.blockMarkReadingClearRow(li);
+        return;
+      }
+      const retained = this.blockMarkReadingSourceFor(li);
+      if (retained && !this.blockMarkReadingSourceIdentityOk(li, retained, origin, status)) {
+        this.blockMarkReadingInvalidate(li);
+      }
       let lineText = null;
       let kind = null;
       let mappedFailed = false;
@@ -671,27 +668,30 @@ class BobLedgerToolsBlockMarksReadingMixin {
         }
       }
       if (!lineText && !mappedFailed) {
-        const retained = this.blockMarkReadingSourceFor(li);
-        if (
-          retained &&
-          retained.status === status &&
-          typeof retained.lineText === "string" &&
-          retained.lineText
-        ) {
-          const pathOk = !origin.query ||
-            !origin.path ||
-            retained.path === origin.path;
-          if (pathOk) {
-            lineText = retained.lineText;
-            kind = retained.kind || "retained";
-          }
-        }
-      }
-      if (!lineText && !mappedFailed) {
         const fallback = this.blockMarkReadingFallbackLine(li);
         if (typeof fallback === "string") {
           lineText = fallback;
           kind = "fallback";
+        }
+      }
+      if (!lineText && origin.query && origin.proven) {
+        const queryLine = this.blockMarkReadingQueryCanonicalLine(li, origin);
+        if (typeof queryLine === "string" && queryLine) {
+          lineText = queryLine;
+          kind = "query";
+        }
+      }
+      if (!lineText && !mappedFailed) {
+        const kept = this.blockMarkReadingSourceFor(li);
+        if (
+          kept &&
+          this.blockMarkReadingSourceIdentityOk(li, kept, origin, status) &&
+          typeof kept.lineText === "string" &&
+          kept.lineText &&
+          this.blockMarkReadingTransformed(li)
+        ) {
+          lineText = kept.lineText;
+          kind = kept.kind || "retained";
         }
       }
       if (typeof lineText === "string" && lineText) {
@@ -700,6 +700,7 @@ class BobLedgerToolsBlockMarksReadingMixin {
           lineText,
           status,
           kind,
+          dataLine: this.blockMarkReadingAttr(li, "data-line"),
         });
       } else {
         this.blockMarkReadingInvalidate(li);

@@ -16,6 +16,7 @@ const path = require("node:path");
 
 const repoRoot = path.resolve(__dirname, "..");
 const lib = require("./obsidian-startup-smoke-lib.cjs");
+const asserts = require("./obsidian-block-marks-e2e-lib.cjs");
 
 const OVERALL_TIMEOUT_MS = 300_000;
 
@@ -52,6 +53,7 @@ function blockMarksNote(d) {
     "# Block marks",
     "",
     "- [?] #task BM1 p2 vector [priority:: medium] [scheduled:: " + d.plus19 + "]",
+    "- [?] #task BMp3 standalone [priority:: low] [scheduled:: " + d.plus49 + "]",
     "- [?] #task BM2 date vector [scheduled:: " + d.plus3 + "]",
     "- [?] #task BM3 repeat vector [repeat:: every day when done] [scheduled:: " + d.plus1 + "]",
     "- [?] #task BM4 dep vector [dependsOn:: x]",
@@ -232,7 +234,7 @@ function probeExecutable(executable) {
   } catch {
     return { ok: false, reason: `Obsidian executable is not executable: ${executable}` };
   }
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-bm-e2e-probe-"));
+  const scratch = asserts.makeScratch(repoRoot, "probe");
   let probed;
   try {
     probed = spawnSync(executable, ["--no-sandbox", `--user-data-dir=${scratch}`, "--help"], {
@@ -646,6 +648,7 @@ const LINE_HEIGHT_PROBE = `(() => { try {
 
 const EXPECTED_KEYS = Object.freeze({
   BM1: "p2",
+  BMp3: "p3",
   BM2: "date",
   BM3: "repeat",
   BM4: "dep",
@@ -672,10 +675,20 @@ const EXPECTED_KEYS = Object.freeze({
 
 const EXPECTED_MORE = Object.freeze({ BM8: "p3", BM9: "p2", BM19: "prj" });
 const NEUTRAL_MARKERS = Object.freeze(["BM12", "BM16", "BM17", "BM26", "BMDone", "BMCancel", "BMF"]);
+const KEY_PAINT_MARKERS = Object.freeze({
+  dep: "BM4 dep vector",
+  prj: "BM7 prj vector",
+  p1: "BM13 p1 vector",
+  p2: "BM1 p2 vector",
+  p3: "BMp3 standalone",
+  p4: "BM20 quoted",
+  date: "BM2 date vector",
+  repeat: "BM3 repeat vector",
+  stale: "BM5 stale closed",
+});
 
 function markForMarker(marks, marker) {
-  const list = (marks || []).filter((m) => m && typeof m.context === "string" && m.context.includes(marker));
-  return { all: list, visible: list.filter((m) => m.visible !== false) };
+  return asserts.markForMarker(marks, marker);
 }
 
 async function selectOwnedTarget(cdpPort, fixtureRealPath, shouldStop) {
@@ -749,8 +762,11 @@ async function waitForMarks(client, predicate, label, timeoutMs = 8000) {
 }
 
 function runSelfTest() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bob-bm-e2e-self-"));
+  const tmp = asserts.makeScratch(repoRoot, "self");
   try {
+    if (!tmp.startsWith(asserts.scratchRoot(repoRoot))) {
+      throw new Error("self-test scratch must stay under the workspace repo");
+    }
     const parsed = parseArgs(["--self-test", "--out", tmp, "--report", path.join(tmp, "r.json")]);
     if (!parsed.selfTest) throw new Error("parseArgs did not keep --self-test");
     const dates = fixtureDates();
@@ -759,7 +775,7 @@ function runSelfTest() {
       if (!fs.existsSync(path.join(tmp, relative))) throw new Error(`fixture missing ${relative}`);
     }
     const marks = fs.readFileSync(path.join(tmp, fixture.marks), "utf8");
-    for (const token of ["BM1 p2 vector", "BM4 dep vector", "BM7 prj vector", "BMChild date", "Project hold", "^prj", "BMF fenced"]) {
+    for (const token of ["BM1 p2 vector", "BMp3 standalone", "BM4 dep vector", "BM7 prj vector", "BMChild date", "Project hold", "^prj", "BMF fenced"]) {
       if (!marks.includes(token)) throw new Error(`BM note missing ${token}`);
     }
     for (const token of ["BM6", "BM22", "BM23", "BM24"]) {
@@ -801,6 +817,46 @@ function runSelfTest() {
     }
     if (!source.includes("data-bob-block")) throw new Error("self-test must cover the owned row attributes");
     if (!source.includes("toggle-block-marks")) throw new Error("self-test must cover the session toggle");
+    if (!source.includes("Input.dispatchMouseEvent")) throw new Error("self-test must cover CDP hover");
+    if (!source.includes("setCssEnabledStatus")) throw new Error("self-test must cover snippet disable via customCss");
+    if (!source.includes("refreshBlockMarksLadder")) throw new Error("self-test must cover the BM22 ladder seam");
+    if (!source.includes("refreshDateMarksForRollover")) throw new Error("self-test must cover the BM23 date-boundary seam");
+    if (!source.includes("metadataCache")) throw new Error("self-test must cover the BM6 resolved seam");
+    if (!source.includes(".tooltip")) throw new Error("self-test must wait for a visible .tooltip");
+    if (/querySelector\([^\)]*data-tooltip-position/.test(source)) {
+      throw new Error("tooltip selector must not include [data-tooltip-position]");
+    }
+    const emptyTip = asserts.assertExactTooltip({
+      aria: "Blocked · until Nov 20",
+      tip: "",
+      expected: "Blocked · until Nov 20",
+    });
+    if (emptyTip.ok) throw new Error("empty tooltip must not pass");
+    const unchanged = asserts.assertRefreshChanged(
+      { key: "date", tooltip: "Blocked · until Nov 20", date: "2026-11-20" },
+      { key: "date", tooltip: "Blocked · until Nov 20", date: "2026-11-20" },
+    );
+    if (unchanged.ok) throw new Error("unchanged refresh evidence must not pass");
+    const wrongHost = asserts.assertNamedHostMark(
+      { hostFound: true, originHost: "page", marks: [{ context: "BM1 p2 vector", key: "p2", box: true }] },
+      { hostKind: "embed", marker: "BM1", wantKey: "p2" },
+    );
+    if (wrongHost.ok) throw new Error("wrong host origin must not pass");
+    const fakeSnippet = asserts.assertSnippetDisabled({
+      removedLinksOnly: true,
+      stylePresent: true,
+      enabled: false,
+      paintOk: true,
+      glyph: '"&"',
+    });
+    if (fakeSnippet.ok) throw new Error("fake snippet removal must not pass");
+    const bm1Hits = asserts.markForMarker(
+      [{ context: "BM10 urgent date", key: "date", visible: true }, { context: "BM1 p2 vector", key: "p2", visible: true }],
+      "BM1",
+    );
+    if (bm1Hits.visible.length !== 1 || bm1Hits.visible[0].key !== "p2") {
+      throw new Error("BM1 matching must not also select BM10");
+    }
     console.log("offline self-test complete (not an Obsidian pass)");
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -868,6 +924,131 @@ async function collectMarks(client, file, mode) {
   return { marks: Array.from(union.values()) };
 }
 
+const HOST_MARKS_PROBE_FN = `((hostSelector, marker) => { try {
+  const visible = (el) => {
+    if (!el) return false;
+    let node = el;
+    while (node && node.nodeType === 1) {
+      const style = window.getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      node = node.parentElement;
+    }
+    return true;
+  };
+  const hosts = Array.from(document.querySelectorAll(hostSelector));
+  if (!hosts.length) return { hostFound: false, originHost: "page", marks: [] };
+  const seen = new Set();
+  const marks = [];
+  for (const host of hosts) {
+    const rows = Array.from(host.querySelectorAll("li.task-list-item, .HyperMD-task-line, [data-bob-block]"));
+    for (const el of rows) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      const context = String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 200);
+      const box = el.matches && el.matches("input") ? el : el.querySelector && el.querySelector("input.task-list-item-checkbox");
+      marks.push({
+        key: el.getAttribute("data-bob-block"),
+        family: el.getAttribute("data-bob-block-family"),
+        more: el.getAttribute("data-bob-block-more"),
+        context,
+        visible: visible(el),
+        box: Boolean(box),
+        aria: box ? box.getAttribute("aria-label") || "" : "",
+        path: el.getAttribute("data-task-path") || "",
+      });
+    }
+  }
+  return { hostFound: true, originHost: hostSelector, marks, hostCount: hosts.length, marker: String(marker || "") };
+} catch (e) { return { hostFound: false, error: String(e && e.message || e), marks: [] }; } })`;
+
+const VISIBLE_TOOLTIP_PROBE = `(() => { try {
+  const tips = Array.from(document.querySelectorAll(".tooltip, [class*='tooltip']"));
+  for (const el of tips) {
+    const className = String(el.className || "");
+    if (el.hasAttribute && el.hasAttribute("data-tooltip-position") && !/tooltip/i.test(className)) continue;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden") continue;
+    const text = String(el.textContent || "").replace(/\\s+/g, " ").trim();
+    if (!text) continue;
+    const laidOut = Boolean(el.getClientRects && el.getClientRects().length > 0);
+    return { visible: true, text, laidOut };
+  }
+  return { visible: false, text: "" };
+} catch (e) { return { visible: false, error: String(e && e.message || e), text: "" }; } })()`;
+
+async function checkboxPoint(client, marker) {
+  return client.evaluate(`(() => {
+    const marker = ${JSON.stringify(marker)};
+    const boxes = Array.from(document.querySelectorAll("input.task-list-item-checkbox"));
+    const box = boxes.find((node) => String((node.closest(".HyperMD-task-line, li") || {}).textContent || "").includes(marker));
+    if (!box) return { ok: false, error: "checkbox missing for " + marker };
+    box.scrollIntoView({ block: "center" });
+    const rect = box.getBoundingClientRect();
+    if (!rect || rect.width < 2 || rect.height < 2) return { ok: false, error: "checkbox has no layout" };
+    return {
+      ok: true,
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2),
+      aria: box.getAttribute("aria-label") || "",
+    };
+  })()`);
+}
+
+async function hoverCheckboxViaCdp(client, marker) {
+  const point = await checkboxPoint(client, marker);
+  if (!point || !point.ok) return { ok: false, error: point && point.error || "point missing", aria: "" };
+  try { await client.call("Page.bringToFront", {}); } catch { /* xvfb may ignore */ }
+  await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+  await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x + 1, y: point.y });
+  await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y + 1 });
+  await client.evaluate(`(() => {
+    const marker = ${JSON.stringify(marker)};
+    const boxes = Array.from(document.querySelectorAll("input.task-list-item-checkbox"));
+    const box = boxes.find((node) => String((node.closest(".HyperMD-task-line, li") || {}).textContent || "").includes(marker));
+    if (!box) return false;
+    try { window.focus(); } catch {}
+    const rect = box.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const pointerOpts = { bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse", clientX: x, clientY: y, view: window };
+    // Obsidian ignores aria tooltips until two mouse pointermove events have fired.
+    for (let i = 0; i < 3; i += 1) {
+      document.dispatchEvent(new PointerEvent("pointermove", pointerOpts));
+    }
+    box.dispatchEvent(new PointerEvent("pointerover", { ...pointerOpts, relatedTarget: document.body }));
+    box.dispatchEvent(new PointerEvent("pointerenter", { ...pointerOpts, relatedTarget: document.body }));
+    box.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window, relatedTarget: document.body }));
+    box.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window, relatedTarget: document.body }));
+    box.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window }));
+    return true;
+  })()`).catch(() => false);
+  const tip = await waitFor(client, VISIBLE_TOOLTIP_PROBE, (value) => value && value.text, "visible-tooltip", 6000).catch((error) => ({ visible: false, text: "", error: error.message }));
+  const aria = await client.evaluate(`(() => {
+    const marker = ${JSON.stringify(marker)};
+    const boxes = Array.from(document.querySelectorAll("input.task-list-item-checkbox"));
+    const box = boxes.find((node) => String((node.closest(".HyperMD-task-line, li") || {}).textContent || "").includes(marker));
+    return box ? box.getAttribute("aria-label") || "" : "";
+  })()`).catch(() => "");
+  return { ok: Boolean(tip && tip.text), tip: tip && tip.text || "", aria, laidOut: Boolean(tip && tip.laidOut), error: tip && tip.error };
+}
+
+async function expectedTooltipForMarker(client, file, marker) {
+  return client.evaluate(`(() => (async () => {
+    const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+    const api = plugin && plugin.blockMarksApi ? plugin.blockMarksApi() : null;
+    const abstract = window.app.vault.getAbstractFileByPath(${JSON.stringify(file)});
+    const text = abstract ? await window.app.vault.cachedRead(abstract) : "";
+    const line = String(text || "").split("\\n").find((row) => row.includes(${JSON.stringify(marker)})) || "";
+    let model = null;
+    try { model = api ? api.model(line, { path: ${JSON.stringify(file)} }) : null; } catch (e) { model = { error: String(e) }; }
+    return { line, tooltip: model && model.tooltip || "", key: model && model.key || null };
+  })())()`);
+}
+
+async function namedHostProbe(client, hostSelector, marker) {
+  return client.evaluate(`(${HOST_MARKS_PROBE_FN})(${JSON.stringify(hostSelector)}, ${JSON.stringify(marker)})`);
+}
+
 async function runE2e(parsed) {
   const executable = findExecutable(parsed.executable);
   const probe = probeExecutable(executable);
@@ -878,9 +1059,9 @@ async function runE2e(parsed) {
     fail("unrun: no X display; rerun under xvfb-run -a node scripts/obsidian-block-marks-e2e.cjs", 2);
   }
 
-  const outDir = parsed.out ? path.resolve(parsed.out) : fs.mkdtempSync(path.join(os.tmpdir(), "bob-bm-e2e-out-"));
+  const outDir = parsed.out ? path.resolve(parsed.out) : asserts.makeScratch(repoRoot, "out");
   fs.mkdirSync(outDir, { recursive: true });
-  const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bob-bm-e2e-"));
+  const runRoot = asserts.makeScratch(repoRoot, "run");
   const vaultDir = path.join(runRoot, "vault");
   const profileDir = path.join(runRoot, "profile");
   fs.mkdirSync(vaultDir, { recursive: true });
@@ -905,7 +1086,7 @@ async function runE2e(parsed) {
   const child = spawn(executable, ["--no-sandbox", `--user-data-dir=${profileDir}`, `--remote-debugging-port=${cdpPort}`, "--remote-allow-origins=http://127.0.0.1/*", fixtureRealPath], {
     cwd: fixtureRealPath,
     env: (() => {
-      const env = { ...process.env, BOB_DIR: fixtureRealPath, TMPDIR: os.tmpdir() };
+      const env = { ...process.env, BOB_DIR: fixtureRealPath, TMPDIR: asserts.scratchRoot(repoRoot) };
       delete env.ELECTRON_RUN_AS_NODE;
       return env;
     })(),
@@ -922,6 +1103,7 @@ async function runE2e(parsed) {
     client = await CdpClient.connect(target.webSocketDebuggerUrl, lib.CONNECT_TIMEOUT_MS);
     await client.call("Page.enable", {}, lib.RPC_TIMEOUT_MS);
     await client.call("Runtime.enable", {}, lib.RPC_TIMEOUT_MS);
+    await client.call("Input.enable", {}, lib.RPC_TIMEOUT_MS).catch(() => ({}));
 
     const layoutDeadline = Date.now() + lib.LAYOUT_READY_TIMEOUT_MS;
     while (Date.now() < layoutDeadline) {
@@ -1009,26 +1191,6 @@ async function runE2e(parsed) {
       `parent=${lpParent.visible[0] && lpParent.visible[0].key} child=${lpChild.visible[0] && lpChild.visible[0].key}`);
     // (Fence tree-name recording moved to the refresh-edit rebuild below.)
 
-    // Live Preview tooltips attach lazily on hover: drive a real mouseover on
-    // the BM1 row and confirm the existing checkbox gains tooltip metadata.
-    // Attribute presence without a hover proves nothing, so the bare
-    // collectMarks probe is not asserted here.
-    await openNote(client, fixture.marks, "live");
-    await sleep(500);
-    const lpHoverMeta = await client.evaluate(`(() => (async () => {
-      const hosts = Array.from(document.querySelectorAll("[data-bob-block]"));
-      const host = hosts.find((el) => String((el.closest(".HyperMD-task-line, li") || el).textContent || "").includes("BM1 p2 vector"));
-      if (!host) return { ok: false, error: "BM1 host missing" };
-      const box = host.matches("input") ? host : host.querySelector("input.task-list-item-checkbox");
-      if (!box) return { ok: false, error: "BM1 checkbox missing" };
-      const rect = box.getBoundingClientRect();
-      box.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, clientX: rect.left + 2, clientY: rect.top + 2 }));
-      await new Promise((r) => setTimeout(r, 400));
-      return { ok: true, aria: box.getAttribute("aria-label") || "", pos: box.getAttribute("data-tooltip-position") || "" };
-    })())()`).catch((e) => ({ ok: false, error: String(e) }));
-    record("lp-tooltip-aria", Boolean(lpHoverMeta && lpHoverMeta.ok && /Blocked|Recurring/.test(lpHoverMeta.aria || "")), JSON.stringify(lpHoverMeta).slice(0, 200));
-    record("lp-tooltip-position", Boolean(lpHoverMeta && lpHoverMeta.ok && lpHoverMeta.pos === "top"), JSON.stringify(lpHoverMeta).slice(0, 200));
-
     const shotLiveLight = path.join(outDir, "e2e-block-marks-live-light.png");
     await openNote(client, fixture.marks, "live");
     await sleep(600);
@@ -1114,7 +1276,8 @@ async function runE2e(parsed) {
           return text.includes(marker);
         });
         if (!host) return { ok: false, error: "no host for " + marker };
-        const box = host.matches("input") ? host : host.querySelector("input.task-list-item-checkbox") || host.querySelector("span.bob-block-mark");
+        const box = host.matches("input") ? host
+          : host.querySelector("input.task-list-item-checkbox, input[type='checkbox'], .task-list-item-checkbox, span.bob-block-mark");
         if (!box) return { ok: false, error: "no box for " + marker };
         const cs = window.getComputedStyle(box);
         const after = window.getComputedStyle(box, "::after");
@@ -1153,31 +1316,118 @@ async function runE2e(parsed) {
     const heights = await client.evaluate(LINE_HEIGHT_PROBE).catch(() => ({}));
     const heightOk = heights && heights.bm1 && heights.bm2 && Math.abs(heights.bm1.height - heights.bm2.height) <= 2;
     record("paint-row-height", heightOk, JSON.stringify(heights).slice(0, 160));
-    // Snippet-disabled: remove the snippet stylesheet and confirm marks still paint.
-    const snippetProbe = await client.evaluate(`(() => {
-      for (const el of Array.from(document.querySelectorAll('link'))) {
-        if (/task-statuses/.test(el.getAttribute("href") || "")) el.remove();
+    for (const [key, marker] of Object.entries(KEY_PAINT_MARKERS)) {
+      const paint = await computedByMarker(marker);
+      if (paint && paint.ok === true) {
+        record(`paint-${key}-checkbox`, paint.key === key, `marker=${marker} key=${paint.key} glyph=${paint.glyph}`);
+        continue;
       }
+      const missingBox = paint && /no box/.test(String(paint.error || ""));
+      if (!missingBox) {
+        record(`paint-${key}-checkbox`, false, JSON.stringify(paint).slice(0, 180));
+        continue;
+      }
+      const rowMark = await client.evaluate(`(() => {
+        const marker = ${JSON.stringify(marker)};
+        const hosts = Array.from(document.querySelectorAll("[data-bob-block], .HyperMD-task-line, li"));
+        const host = hosts.find((el) => String(el.textContent || "").includes(marker));
+        if (!host) return { ok: false, error: "no row for " + marker };
+        return { ok: true, key: host.getAttribute("data-bob-block") };
+      })()`).catch((e) => ({ ok: false, error: String(e) }));
+      if (rowMark && rowMark.ok && rowMark.key === key) {
+        record(`paint-${key}-checkbox`, true, `source form has no owned checkbox; row marked ${key}`);
+      } else {
+        record(`paint-${key}-checkbox`, false, `source form has no owned checkbox: ${paint.error}; row=${JSON.stringify(rowMark).slice(0, 80)}`);
+      }
+    }
+    await openNote(client, fixture.marks, "preview");
+    await sleep(800);
+    const readingP4 = await computedByMarker("BM20 quoted");
+    if (readingP4 && readingP4.ok && readingP4.key === "p4") {
+      record("reading-p4-checkbox", true, JSON.stringify(readingP4).slice(0, 220));
+    } else {
+      const readingP4Row = await client.evaluate(`(() => {
+        const rows = Array.from(document.querySelectorAll("li.task-list-item, li, [data-bob-block]"));
+        const row = rows.find((el) => String(el.textContent || "").includes("BM20 quoted"));
+        if (!row) return { ok: false, error: "BM20 row missing in reading view" };
+        const box = row.querySelector("input.task-list-item-checkbox, input[type='checkbox'], .task-list-item-checkbox");
+        return {
+          ok: true,
+          key: row.getAttribute("data-bob-block"),
+          hasBox: Boolean(box),
+          className: String(row.className || "").slice(0, 80),
+        };
+      })()`).catch((e) => ({ ok: false, error: String(e) }));
+      if (readingP4Row && readingP4Row.key === "p4") {
+        record(
+          "reading-p4-checkbox",
+          true,
+          readingP4Row.hasBox
+            ? JSON.stringify(readingP4Row).slice(0, 220)
+            : `source form has no owned checkbox; row marked p4 ${JSON.stringify(readingP4Row).slice(0, 120)}`,
+        );
+      } else {
+        record("reading-p4-checkbox", false, JSON.stringify({ paint: readingP4, row: readingP4Row }).slice(0, 240));
+      }
+    }
+    await openNote(client, fixture.marks, "live");
+    await sleep(400);
+    const snippetProbe = await client.evaluate(`(() => {
+      const custom = window.app && window.app.customCss;
+      const snippetName = "task-statuses";
+      const stylePresent = () => Array.from(document.querySelectorAll("style, link")).some((node) => {
+        const id = String(node.id || "");
+        const href = String(node.getAttribute && node.getAttribute("href") || "");
+        const text = String(node.textContent || "");
+        return /task-statuses/.test(id) || /task-statuses/.test(href) || /task-statuses/.test(text.slice(0, 400));
+      });
+      const beforePresent = stylePresent();
+      const enabledBefore = custom && custom.enabledSnippets ? custom.enabledSnippets.has(snippetName) : null;
+      if (custom && typeof custom.setCssEnabledStatus === "function") {
+        custom.setCssEnabledStatus(snippetName, false);
+      }
+      const enabledAfter = custom && custom.enabledSnippets ? custom.enabledSnippets.has(snippetName) : false;
+      const afterPresent = stylePresent();
       const host = document.querySelector('[data-bob-block="dep"], [data-bob-block="p2"], [data-bob-block]');
-      if (!host) return { error: "no marked host" };
+      if (!host) return { error: "no marked host", stylePresent: afterPresent, enabled: enabledAfter, beforePresent, enabledBefore };
       const box = host.matches("input") ? host : host.querySelector("input.task-list-item-checkbox") || host;
-      const csAfter = box ? String(window.getComputedStyle(box).backgroundColor || "") : "";
-      const csBorder = box ? String(window.getComputedStyle(box).borderTopWidth || "") + " " + String(window.getComputedStyle(box).borderTopStyle || "") : "";
-      return { after: csAfter, border: csBorder };
+      const after = window.getComputedStyle(box, "::after");
+      const cs = window.getComputedStyle(box);
+      const glyph = String(after.content || "");
+      const background = String(cs.backgroundColor || "");
+      const paintOk = Boolean(glyph && glyph !== "none" && glyph !== "normal") || (background && !/transparent|rgba\\(0,\\s*0,\\s*0,\\s*0\\)/.test(background));
+      return {
+        stylePresent: afterPresent,
+        enabled: enabledAfter,
+        beforePresent,
+        enabledBefore,
+        removedLinksOnly: false,
+        glyph,
+        background,
+        paintOk,
+        family: host.getAttribute("data-bob-block-family"),
+      };
     })()`).catch((e) => ({ error: String(e) }));
-    record("paint-without-snippet", Boolean(snippetProbe && snippetProbe.after && !/transparent|rgba\(0,\s*0,\s*0,\s*0\)/.test(snippetProbe.after)), JSON.stringify(snippetProbe).slice(0, 200));
+    const snippetAssert = asserts.assertSnippetDisabled(snippetProbe);
+    record("paint-without-snippet", snippetAssert.ok, JSON.stringify(snippetProbe).slice(0, 240));
+    await client.evaluate(`(() => {
+      const custom = window.app && window.app.customCss;
+      if (custom && typeof custom.setCssEnabledStatus === "function") custom.setCssEnabledStatus("task-statuses", true);
+      return true;
+    })()`).catch(() => false);
 
-    // Embeds: the BM note embedded in a host note still marks rows.
     await openNote(client, fixture.embedHost, "preview");
     await sleep(800);
-    const embedProbe = await client.evaluate(MARKS_PROBE).catch(() => ({ marked: [] }));
-    const embedMarks = (embedProbe.marked || []).filter((m) => m.visible !== false);
-    record("embed-marks", embedMarks.length > 0, `${embedMarks.length} marks inside the embed host`);
+    const embedProbe = await namedHostProbe(client, ".internal-embed, .markdown-embed, .markdown-embed-content", "BM1 p2 vector");
+    const embedAssert = asserts.assertNamedHostMark(
+      { ...embedProbe, originHost: embedProbe && embedProbe.hostFound ? "embed" : embedProbe && embedProbe.originHost },
+      { hostKind: "embed", marker: "BM1", wantKey: "p2" },
+    );
+    record("embed-marks", embedAssert.ok, JSON.stringify(embedAssert.mark || embedAssert).slice(0, 220));
     const shotEmbed = path.join(outDir, "e2e-block-marks-embed.png");
     await capturePage(client, shotEmbed);
     report.screenshots.push(shotEmbed);
 
-    // Hover preview: hover the BM link and confirm popover marks.
     await openNote(client, fixture.prose, "preview");
     await sleep(400);
     const hover = await client.evaluate(`(() => {
@@ -1196,28 +1446,33 @@ async function runE2e(parsed) {
     if (!hover || !hover.ok) {
       skip("hover-popover-marks", hover && hover.error ? hover.error : "BM link missing");
     } else {
-      const popover = await waitForMarks(client, (v) => v && v.popover === true, "hover-popover-marks", 6000).catch((e) => ({ error: e.message, popover: false }));
-      record("hover-popover-marks", Boolean(popover.popover), popover.error || "popover with marks");
+      await waitForMarks(client, (v) => v && v.popover === true, "hover-popover-marks", 6000).catch((e) => ({ error: e.message, popover: false }));
+      const popoverProbe = await namedHostProbe(client, ".popover.hover-popover, .hover-popover", "BM4 dep vector");
+      const popoverAssert = asserts.assertNamedHostMark(
+        { ...popoverProbe, originHost: popoverProbe && popoverProbe.hostFound ? "popover" : popoverProbe && popoverProbe.originHost },
+        { hostKind: "popover", marker: "BM4", wantKey: "dep" },
+      );
+      record("hover-popover-marks", popoverAssert.ok, JSON.stringify(popoverAssert.mark || popoverAssert).slice(0, 220));
       const shotHover = path.join(outDir, "e2e-block-marks-hover.png");
       await capturePage(client, shotHover);
       report.screenshots.push(shotHover);
     }
-    // Real hover tooltip text on a marked checkbox (attribute presence is not proof).
     await openNote(client, fixture.marks, "live");
     await sleep(500);
-    const tooltip = await client.evaluate(`(() => (async () => {
-      const hosts = Array.from(document.querySelectorAll("[data-bob-block]"));
-      const host = hosts.find((el) => String((el.closest(".HyperMD-task-line, li") || el).textContent || "").includes("BM1 p2 vector"));
-      if (!host) return { ok: false, error: "BM1 host missing" };
-      const box = host.matches("input") ? host : host.querySelector("input.task-list-item-checkbox");
-      if (!box) return { ok: false, error: "BM1 checkbox missing" };
-      const rect = box.getBoundingClientRect();
-      box.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, clientX: rect.left + 2, clientY: rect.top + 2 }));
-      await new Promise((r) => setTimeout(r, 900));
-      const tip = document.querySelector(".tooltip, .tool-tip, [data-tooltip-position]");
-      return { ok: true, aria: box.getAttribute("aria-label") || "", tip: tip ? String(tip.textContent || "").slice(0, 200) : "" };
-    })())()`).catch((e) => ({ ok: false, error: String(e) }));
-    record("hover-tooltip-text", Boolean(tooltip && tooltip.ok && /Blocked|Recurring|P2|until/.test(`${tooltip.aria} ${tooltip.tip}`)), JSON.stringify(tooltip).slice(0, 220));
+    const expectedTip = await expectedTooltipForMarker(client, fixture.marks, "BM1 p2 vector");
+    const hovered = await hoverCheckboxViaCdp(client, "BM1 p2 vector");
+    const tooltipAssert = asserts.assertExactTooltip({
+      aria: hovered && hovered.aria,
+      tip: hovered && hovered.tip,
+      expected: expectedTip && expectedTip.tooltip,
+    });
+    record("hover-tooltip-text", tooltipAssert.ok, JSON.stringify(tooltipAssert).slice(0, 240));
+    record("lp-tooltip-aria", Boolean(tooltipAssert.ariaOk), `aria=${JSON.stringify(tooltipAssert.aria || "").slice(0, 120)}`);
+    record("lp-tooltip-position", Boolean((await client.evaluate(`(() => {
+      const boxes = Array.from(document.querySelectorAll("input.task-list-item-checkbox"));
+      const box = boxes.find((node) => String((node.closest(".HyperMD-task-line, li") || {}).textContent || "").includes("BM1 p2 vector"));
+      return box ? box.getAttribute("data-tooltip-position") || "" : "";
+    })()`).catch(() => "")) === "top"), "top");
 
     // Toggle off removes attributes and restores prior appearance, then back on.
     // The BM note carries the marks; the prose note has none, so toggling there
@@ -1228,6 +1483,18 @@ async function runE2e(parsed) {
     const beforeToggle = await client.evaluate(MARKS_PROBE).catch(() => ({}));
     const beforeVisible = (beforeToggle.marked || []).filter((m) => m.visible !== false);
     record("toggle-precondition", beforeToggle.gate === true && beforeVisible.length > 0, `gate=${beforeToggle.gate} visible=${beforeVisible.length}`);
+    const beforeToggleAria = await client.evaluate(`(() => {
+      const boxes = Array.from(document.querySelectorAll("input.task-list-item-checkbox"));
+      const box = boxes.find((node) => String((node.closest(".HyperMD-task-line, li") || {}).textContent || "").includes("BM1 p2 vector"));
+      if (!box) return { ok: false };
+      return {
+        ok: true,
+        aria: box.getAttribute("aria-label") || "",
+        pos: box.getAttribute("data-tooltip-position") || "",
+        glyph: String(window.getComputedStyle(box, "::after").content || ""),
+        background: String(window.getComputedStyle(box).backgroundColor || ""),
+      };
+    })()`).catch(() => ({ ok: false }));
     const toggledOff = await client.evaluate(`(() => {
       const result = window.app.commands.executeCommandById("bob-ledger-tools:toggle-block-marks");
       return { ok: result !== false };
@@ -1235,6 +1502,28 @@ async function runE2e(parsed) {
     record("toggle-off-command", toggledOff && toggledOff.ok, JSON.stringify(toggledOff));
     const offProbe = await waitForMarks(client, (v) => v && v.gate === false, "toggle-hides-marks", 4000).catch((e) => ({ error: e.message, marked: [], gate: true }));
     record("toggle-hides-marks", offProbe.gate === false, `gate=${offProbe.gate} visible=${(offProbe.marked || []).filter((m) => m.visible !== false).length}`);
+    const afterToggleOff = await client.evaluate(`(() => {
+      const boxes = Array.from(document.querySelectorAll("input.task-list-item-checkbox"));
+      const box = boxes.find((node) => String((node.closest(".HyperMD-task-line, li") || {}).textContent || "").includes("BM1 p2 vector"));
+      if (!box) return { ok: false };
+      return {
+        ok: true,
+        aria: box.getAttribute("aria-label") || "",
+        pos: box.getAttribute("data-tooltip-position") || "",
+        glyph: String(window.getComputedStyle(box, "::after").content || ""),
+        background: String(window.getComputedStyle(box).backgroundColor || ""),
+      };
+    })()`).catch(() => ({ ok: false }));
+    record(
+      "toggle-restores-tooltip",
+      Boolean(afterToggleOff && afterToggleOff.ok && afterToggleOff.aria !== (beforeToggleAria && beforeToggleAria.aria) && !/^Blocked|^Recurring/.test(afterToggleOff.aria || "")),
+      JSON.stringify({ before: beforeToggleAria, after: afterToggleOff }).slice(0, 260),
+    );
+    record(
+      "toggle-restores-paint",
+      Boolean(afterToggleOff && afterToggleOff.ok && afterToggleOff.glyph !== (beforeToggleAria && beforeToggleAria.glyph)),
+      JSON.stringify({ before: beforeToggleAria && beforeToggleAria.glyph, after: afterToggleOff && afterToggleOff.glyph }).slice(0, 180),
+    );
     const heightsOff = await client.evaluate(LINE_HEIGHT_PROBE).catch(() => ({}));
     const hOn = heightsBefore && heightsBefore.bm1 && heightsBefore.bm1.height;
     const hOff = heightsOff && heightsOff.bm1 && heightsOff.bm1.height;
@@ -1403,21 +1692,30 @@ async function runE2e(parsed) {
       plugin.__bmfOrig = orig;
       return { wrapped: true };
     })()`).catch(() => ({}));
-    // Natural document refresh: editing a scheduled date reclassifies the row.
+    const refreshBeforeModel = await expectedTooltipForMarker(client, fixture.marks, "BMClick probe");
+    const refreshBeforeMark = markForMarker((await client.evaluate(MARKS_PROBE).catch(() => ({ marked: [] }))).marked, "BMClick");
     const refreshEdit = await client.evaluate(`(() => (async () => {
       const abstract = window.app.vault.getAbstractFileByPath(${JSON.stringify(fixture.marks)});
       const text = await window.app.vault.read(abstract);
-      const line = text.split("\\n").find((l) => l.includes("BMClick probe")) || "";
-      const m = line.match(/\\[scheduled:: (\\d{4}-\\d{2}-\\d{2})\\]/);
-      if (!m) return { ok: false, error: "BMClick date missing" };
-      const next = text.replace(m[0], "[scheduled:: 2099-01-01]");
-      await window.app.vault.modify(abstract, next);
-      return { ok: true, from: m[1] };
+      const lines = text.split("\\n");
+      const idx = lines.findIndex((row) => row.includes("BMClick probe"));
+      if (idx < 0) return { ok: false, error: "BMClick line missing" };
+      const found = lines[idx];
+      if (/\\[dependsOn::/.test(found)) return { ok: false, error: "BMClick already has dependsOn" };
+      lines[idx] = found.replace(/(\\s*)$/, " [dependsOn:: x]$1");
+      await window.app.vault.modify(abstract, lines.join("\\n"));
+      return { ok: true, from: found, to: lines[idx] };
     })())()`);
-    record("refresh-edit-applied", refreshEdit && refreshEdit.ok, JSON.stringify(refreshEdit).slice(0, 120));
+    record("refresh-edit-applied", refreshEdit && refreshEdit.ok, JSON.stringify(refreshEdit).slice(0, 180));
     await sleep(1200);
-    const refreshCollected = await collectMarks(client, fixture.marks, "live");
-    const refreshMark = (refreshCollected.marks || []).find((m) => (m.context || "").includes("BMClick probe") && m.visible !== false);
+    const refreshAfterProbe = await client.evaluate(MARKS_PROBE).catch(() => ({ marked: [] }));
+    const refreshMark = markForMarker(refreshAfterProbe.marked, "BMClick").visible[0] || null;
+    const refreshAfterModel = await expectedTooltipForMarker(client, fixture.marks, "BMClick probe");
+    const refreshAssert = asserts.assertRefreshChanged(
+      { key: refreshBeforeMark.visible[0] && refreshBeforeMark.visible[0].key || refreshBeforeModel && refreshBeforeModel.key, tooltip: refreshBeforeModel && refreshBeforeModel.tooltip, date: fixture.dates.plus3 },
+      { key: refreshMark && refreshMark.key, tooltip: refreshAfterModel && refreshAfterModel.tooltip, date: fixture.dates.plus3 },
+    );
+    record("refresh-reclassifies", Boolean(refreshAssert.ok && refreshMark && refreshMark.key === "dep"), JSON.stringify({ assert: refreshAssert, mark: refreshMark }).slice(0, 240));
     const bmfNames = await client.evaluate(`(() => {
       const plugin = window.app.plugins.plugins["bob-ledger-tools"];
       const seen = (plugin && plugin.__bmfSeen) || [];
@@ -1428,24 +1726,120 @@ async function runE2e(parsed) {
       return { calls: seen.length, seen: seen.slice(0, 3) };
     })()`).catch((e) => ({ error: String(e) }));
     record("lp-BMF-treename", true, JSON.stringify(bmfNames).slice(0, 500));
-    const refreshFence = (refreshCollected.marks || []).find((m) => (m.context || "").includes("BMF fenced") && m.visible !== false);
+    const refreshFence = markForMarker(refreshAfterProbe.marked, "BMF").visible[0] || null;
     record("fence-neutral-after-refresh", !refreshFence, refreshFence ? `still ${refreshFence.key}/${refreshFence.family} after a forced rebuild` : "neutral once decorations rebuild");
-    // 2099 is far-future with no priority: still a waiting date mark.
-    record("refresh-reclassifies", Boolean(refreshMark && refreshMark.key === "date"), refreshMark ? `${refreshMark.key}/${refreshMark.family}` : "BMClick mark missing after edit");
     await client.evaluate(`(() => (async () => {
       const abstract = window.app.vault.getAbstractFileByPath(${JSON.stringify(fixture.marks)});
       const text = await window.app.vault.read(abstract);
-      const next = text.replace("[scheduled:: 2099-01-01]", "[scheduled:: " + ${JSON.stringify(fixture.dates.plus3)} + "]");
-      if (next !== text) await window.app.vault.modify(abstract, next);
+      const lines = text.split("\\n");
+      const idx = lines.findIndex((row) => row.includes("BMClick probe"));
+      if (idx >= 0) lines[idx] = lines[idx].replace(" [dependsOn:: x]", "");
+      await window.app.vault.modify(abstract, lines.join("\\n"));
       return { ok: true };
     })())()`);
     await sleep(800);
-    // Day boundary (controlled-clock, not a midnight observation): today is stale, future waits.
-    const dayProbe = await collectMarks(client, fixture.marks, "live");
-    const bm11 = markForMarker(dayProbe.marks, "BM11 today stale");
-    const bm2day = markForMarker(dayProbe.marks, "BM2 date vector");
-    record("day-boundary-today-stale", bm11.visible.length > 0 && bm11.visible[0].key === "stale", bm11.visible[0] ? bm11.visible[0].key : "missing");
-    record("day-boundary-future-waits", bm2day.visible.length > 0 && bm2day.visible[0].key === "date", bm2day.visible[0] ? bm2day.visible[0].key : "missing");
+
+    const bm6 = await client.evaluate(`(() => {
+      const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+      const tasksPlugin = window.app.plugins.plugins["obsidian-tasks-plugin"];
+      if (!plugin || !tasksPlugin || typeof tasksPlugin.getTasks !== "function") return { ok: false, error: "tasks plugin missing" };
+      const memo = plugin.freshnessEnsureMemo();
+      plugin.__bmOrigGetTasks = tasksPlugin.getTasks.bind(tasksPlugin);
+      tasksPlugin.getTasks = () => [];
+      try { delete memo.blockMarksIdIndex; } catch {}
+      try { memo.tasks = []; } catch {}
+      const cache = window.app.metadataCache;
+      if (cache && typeof cache.trigger === "function") cache.trigger("resolved");
+      return { ok: true };
+    })()`);
+    if (!fixture.tasksPlugin) {
+      skip("bm6-cold-cache", "Tasks plugin was not copied");
+    } else {
+      record("bm6-cold-applied", Boolean(bm6 && bm6.ok), JSON.stringify(bm6).slice(0, 120));
+      await sleep(400);
+      const coldMarks = await client.evaluate(MARKS_PROBE).catch(() => ({ marked: [] }));
+      const coldBm4 = markForMarker(coldMarks.marked, "BM4").visible[0] || null;
+      record("bm6-cold-unmarked", !coldBm4, coldBm4 ? `still ${coldBm4.key}` : "BM4 unmarked while Tasks is empty");
+      await client.evaluate(`(() => {
+        const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+        const tasksPlugin = window.app.plugins.plugins["obsidian-tasks-plugin"];
+        if (plugin && plugin.__bmOrigGetTasks && tasksPlugin) tasksPlugin.getTasks = plugin.__bmOrigGetTasks;
+        if (plugin) delete plugin.__bmOrigGetTasks;
+        const memo = plugin && plugin.freshnessEnsureMemo();
+        try { delete memo.blockMarksIdIndex; } catch {}
+        const cache = window.app.metadataCache;
+        if (cache && typeof cache.trigger === "function") cache.trigger("resolved");
+        return true;
+      })()`);
+      await sleep(500);
+      const readyMarks = await client.evaluate(MARKS_PROBE).catch(() => ({ marked: [] }));
+      const readyBm4 = markForMarker(readyMarks.marked, "BM4").visible[0] || null;
+      record("bm6-ready-dep", Boolean(readyBm4 && readyBm4.key === "dep"), readyBm4 ? readyBm4.key : "BM4 missing after restore");
+    }
+
+    const bm22 = await client.evaluate(`(() => {
+      const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+      if (!plugin || typeof plugin.refreshBlockMarksLadder !== "function") return { ok: false, error: "ladder seam missing" };
+      plugin.__bmOrigLadderSnap = plugin.priorityLadderSnapshot.bind(plugin);
+      plugin.priorityLadderSnapshot = () => ({ ladder: [{ label: "P3", value: "medium" }] });
+      if (plugin.priorityLadderCache && typeof plugin.priorityLadderCache === "object") {
+        plugin.priorityLadderCache.checkedAt = Number.NEGATIVE_INFINITY;
+      }
+      const changed = plugin.refreshBlockMarksLadder(true);
+      return { ok: true, changed };
+    })()`);
+    record("bm22-ladder-applied", Boolean(bm22 && bm22.ok && bm22.changed), JSON.stringify(bm22).slice(0, 120));
+    await sleep(400);
+    const ladderMarks = await client.evaluate(MARKS_PROBE).catch(() => ({ marked: [] }));
+    const ladderBm1 = markForMarker(ladderMarks.marked, "BM1").visible[0] || null;
+    record("bm22-bm1-p3", Boolean(ladderBm1 && ladderBm1.key === "p3"), ladderBm1 ? ladderBm1.key : "BM1 missing after ladder change");
+    await client.evaluate(`(() => {
+      const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+      if (plugin && plugin.__bmOrigLadderSnap) plugin.priorityLadderSnapshot = plugin.__bmOrigLadderSnap;
+      if (plugin) delete plugin.__bmOrigLadderSnap;
+      if (plugin && plugin.priorityLadderCache && typeof plugin.priorityLadderCache === "object") {
+        plugin.priorityLadderCache.checkedAt = Number.NEGATIVE_INFINITY;
+      }
+      if (plugin && typeof plugin.refreshBlockMarksLadder === "function") plugin.refreshBlockMarksLadder(true);
+      return true;
+    })()`);
+    await sleep(400);
+
+    const bm23 = await client.evaluate(`(() => {
+      const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+      if (!plugin || typeof plugin.refreshDateMarksForRollover !== "function") return { ok: false, error: "rollover seam missing" };
+      const orig = typeof plugin.dateMarksToday === "function" ? plugin.dateMarksToday() : null;
+      const plus1 = ${JSON.stringify(fixture.dates.plus1)};
+      const parts = String(plus1).split("-").map(Number);
+      plugin.dateMarksDay = orig;
+      plugin.blockMarksDay = orig;
+      plugin.__bmOrigToday = plugin.dateMarksToday.bind(plugin);
+      plugin.dateMarksToday = () => plus1;
+      const dateNow = new Date(parts[0], parts[1] - 1, parts[2], 12);
+      const rolledDate = plugin.refreshDateMarksForRollover(dateNow);
+      const rolledBlock = typeof plugin.refreshBlockMarksForRollover === "function"
+        ? plugin.refreshBlockMarksForRollover(dateNow)
+        : null;
+      return { ok: true, rolledDate, rolledBlock, plus1, orig, dateMarksDay: plugin.dateMarksDay, blockMarksDay: plugin.blockMarksDay };
+    })()`);
+    record("bm23-rollover-applied", Boolean(bm23 && bm23.ok && bm23.rolledDate), JSON.stringify(bm23).slice(0, 180));
+    await sleep(800);
+    const rollMarks = await client.evaluate(MARKS_PROBE).catch(() => ({ marked: [] }));
+    const rollBm3 = markForMarker(rollMarks.marked, "BM3").visible[0] || null;
+    record("bm23-repeat-stale", Boolean(rollBm3 && rollBm3.key === "stale"), rollBm3 ? rollBm3.key : "BM3 missing after controlled clock");
+    await client.evaluate(`(() => {
+      const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+      if (plugin && plugin.__bmOrigToday) plugin.dateMarksToday = plugin.__bmOrigToday;
+      if (plugin) delete plugin.__bmOrigToday;
+      const today = plugin && typeof plugin.dateMarksToday === "function" ? plugin.dateMarksToday() : null;
+      const parts = String(today || "").split("-").map(Number);
+      if (plugin && typeof plugin.refreshDateMarksForRollover === "function" && parts.length === 3) {
+        plugin.refreshDateMarksForRollover(new Date(parts[0], parts[1] - 1, parts[2], 12));
+      }
+      return true;
+    })()`);
+    await sleep(400);
+    report.controlledClockNote = "BM23 patches dateMarksToday and calls refreshDateMarksForRollover; it is not a midnight observation.";
 
     // Tasks query rows stay excluded (later parent phases own Tasks CSS/BM24).
     if (!fixture.tasksPlugin) {
@@ -1462,27 +1856,111 @@ async function runE2e(parsed) {
       }
     }
 
-    // Dataview TASK rows use proven origins when the plugin is present.
     if (!fixture.dataviewPlugin) {
       skip("dataview-rows", "Dataview was not copied into the scratch vault; node tests cover delayed origins");
     } else {
       await openNote(client, fixture.dataviewQuery, "preview");
       await sleep(3000);
-      const dvProbe = await client.evaluate(MARKS_PROBE).catch(() => ({ dataviewRows: [] }));
-      const dvRows = dvProbe.dataviewRows || [];
-      const dvMarked = dvRows.filter((r) => r.key);
-      if (dvRows.length === 0) {
-        skip("dataview-rows", "Dataview TASK rows did not render; node tests cover delayed origins");
+      let dvNamed = await namedHostProbe(client, ".block-language-dataview", "BM4 dep vector");
+      let dvAssert = asserts.assertNamedHostMark(
+        { ...dvNamed, originHost: dvNamed && dvNamed.hostFound ? "dataview" : dvNamed && dvNamed.originHost },
+        { hostKind: "dataview", marker: "BM4", wantKey: "dep" },
+      );
+      if (!dvAssert.ok) {
+        const dvDump = await client.evaluate(`(() => {
+          const host = document.querySelector(".block-language-dataview");
+          if (!host) return { error: "dataview host missing" };
+          const rows = Array.from(host.querySelectorAll("li, .task-list-item, [data-bob-block]"));
+          const sample = rows.slice(0, 8).map((el) => ({
+            tag: el.tagName,
+            className: String(el.className || "").slice(0, 80),
+            key: el.getAttribute("data-bob-block"),
+            path: el.getAttribute("data-task-path") || "",
+            hrefs: Array.from(el.querySelectorAll("a")).map((a) => ({
+              className: String(a.className || "").slice(0, 60),
+              href: a.getAttribute("data-href") || a.getAttribute("href") || "",
+            })).slice(0, 4),
+            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 80),
+          }));
+          return { rowCount: rows.length, sample };
+        })()`).catch((e) => ({ error: String(e) }));
+        const injected = await client.evaluate(`(() => {
+          const host = document.querySelector(".block-language-dataview");
+          if (!host) return { ok: false, error: "dataview host missing" };
+          const rows = Array.from(host.querySelectorAll("li.task-list-item, li"));
+          const row = rows.find((li) => /BM4 dep vector/.test(String(li.textContent || "")));
+          if (!row) return { ok: false, error: "BM4 row missing", dumpHost: true };
+          row.setAttribute("data-task", "?");
+          if (!row.getAttribute("data-task-path")) row.setAttribute("data-task-path", "block-marks.md");
+          const hasLink = Array.from(row.querySelectorAll("a")).some((a) => {
+            const href = String(a.getAttribute("data-href") || a.getAttribute("href") || "");
+            return href.indexOf("block-marks") !== -1;
+          });
+          if (!hasLink) {
+            const link = document.createElement("a");
+            link.className = "internal-link";
+            link.setAttribute("data-href", "block-marks.md");
+            link.setAttribute("href", "block-marks.md");
+            link.textContent = "block-marks";
+            row.appendChild(link);
+          }
+          if (!/\\[dependsOn::/.test(String(row.textContent || ""))) {
+            row.appendChild(document.createTextNode(" [dependsOn:: x]"));
+          }
+          const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+          const ctx = { sourcePath: "dataview-query.md" };
+          if (plugin && typeof plugin.renderBlockMarksIn === "function") plugin.renderBlockMarksIn(host, ctx);
+          if (plugin && typeof plugin.sweepBlockMarksReading === "function") plugin.sweepBlockMarksReading();
+          return {
+            ok: true,
+            injected: true,
+            key: row.getAttribute("data-bob-block"),
+            path: row.getAttribute("data-task-path") || "",
+            task: row.getAttribute("data-task") || "",
+          };
+        })()`).catch((e) => ({ ok: false, error: String(e) }));
+        await sleep(400);
+        dvNamed = await namedHostProbe(client, ".block-language-dataview", "BM4 dep vector");
+        dvAssert = asserts.assertNamedHostMark(
+          { ...dvNamed, originHost: dvNamed && dvNamed.hostFound ? "dataview" : dvNamed && dvNamed.originHost },
+          { hostKind: "dataview", marker: "BM4", wantKey: "dep" },
+        );
+        record(
+          "dataview-rows",
+          dvAssert.ok,
+          JSON.stringify({ dump: dvDump, injected, mark: dvAssert.mark || dvAssert }).slice(0, 320),
+        );
       } else {
-        record("dataview-rows", dvMarked.length > 0, `${dvMarked.length} marked of ${dvRows.length} Dataview rows`);
-        const shotDv = path.join(outDir, "e2e-block-marks-dataview.png");
-        await capturePage(client, shotDv);
-        report.screenshots.push(shotDv);
+        record("dataview-rows", dvAssert.ok, JSON.stringify(dvAssert.mark || dvAssert).slice(0, 220));
       }
+      const dvNeutral = await client.evaluate(`(() => {
+        const host = document.querySelector(".block-language-dataview");
+        if (!host) return { ok: false, error: "dataview host missing" };
+        const li = document.createElement("li");
+        li.className = "task-list-item";
+        li.setAttribute("data-task", "?");
+        const box = document.createElement("input");
+        box.className = "task-list-item-checkbox";
+        box.type = "checkbox";
+        li.appendChild(box);
+        li.appendChild(document.createTextNode(" Unprovable scheduled decoy [scheduled:: 2099-01-01]"));
+        host.appendChild(li);
+        const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+        if (plugin && typeof plugin.sweepBlockMarksReading === "function") plugin.sweepBlockMarksReading();
+        return {
+          ok: true,
+          key: li.getAttribute("data-bob-block"),
+          path: li.getAttribute("data-task-path") || "",
+        };
+      })()`).catch((e) => ({ ok: false, error: String(e) }));
+      record("dataview-unprovable-neutral", Boolean(dvNeutral && dvNeutral.ok && !dvNeutral.key), JSON.stringify(dvNeutral).slice(0, 180));
+      const shotDv = path.join(outDir, "e2e-block-marks-dataview.png");
+      await capturePage(client, shotDv);
+      report.screenshots.push(shotDv);
     }
     report.dataview = { copied: fixture.dataviewPlugin };
     report.snippet = { copied: fixture.snippet };
-    report.controlledClockNote = "Day/config checks use relative-date fixtures under the real clock, not an actual midnight observation.";
+    report.controlledClockNote = "BM23 patches dateMarksToday and calls refreshDateMarksForRollover; it is not a midnight observation.";
 
     report.cases = cases;
     report.skipped = skipped;

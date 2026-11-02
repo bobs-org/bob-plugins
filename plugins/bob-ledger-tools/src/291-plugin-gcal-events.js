@@ -60,17 +60,42 @@ function gcalEventsHasPomodorosSection(source) {
   );
 }
 
-function gcalEventsTimeState(span, nowMinutes, isToday, isTask) {
-  if (!isToday || !isTask || typeof span !== "string") return null;
+function gcalEventsClockMinutes(span) {
+  if (typeof span !== "string") return null;
   const match = /^(\d{2})(\d{2})-(\d{2})(\d{2})$/.exec(span);
   if (!match) return null;
   const start = Number(match[1]) * 60 + Number(match[2]);
-  let end = Number(match[3]) * 60 + Number(match[4]);
-  if (start > 1439 || end > 1439 || !Number.isFinite(nowMinutes)) return null;
-  if (end < start) end += 1440;
-  if (nowMinutes < start) return "future";
-  if (nowMinutes < end) return "running";
+  const end = Number(match[3]) * 60 + Number(match[4]);
+  if (start > 1439 || end > 1439) return null;
+  return { start, end, endOnTimeline: end < start ? end + 1440 : end };
+}
+
+function gcalEventsNowOnTimeline(nowMinutes, start) {
+  if (!Number.isFinite(nowMinutes) || !Number.isFinite(start)) return nowMinutes;
+  return nowMinutes < start && start >= 12 * 60 ? nowMinutes + 1440 : nowMinutes;
+}
+
+function gcalEventsTimeState(span, nowMinutes, isToday, isTask, buffer) {
+  if (!isToday || !isTask || typeof span !== "string") return null;
+  const clock = gcalEventsClockMinutes(span);
+  if (!clock || !Number.isFinite(nowMinutes)) return null;
+  const occupied = eventRunBufferedSpan(clock.start, clock.endOnTimeline, buffer);
+  const now = gcalEventsNowOnTimeline(nowMinutes, occupied.startMin);
+  if (now < clock.start) return "future";
+  if (now < clock.endOnTimeline) return "running";
+  if (now < occupied.endOnTimeline) return null;
   return "past";
+}
+
+function gcalEventsBufferPhase(span, nowMinutes, isToday, isTask, buffer) {
+  if (!isToday || !isTask || eventBufferIsEmpty(buffer)) return null;
+  const clock = gcalEventsClockMinutes(span);
+  if (!clock || !Number.isFinite(nowMinutes)) return null;
+  const occupied = eventRunBufferedSpan(clock.start, clock.endOnTimeline, buffer);
+  const now = gcalEventsNowOnTimeline(nowMinutes, occupied.startMin);
+  if (now >= occupied.startMin && now < clock.start) return "lead-in";
+  if (now >= clock.endOnTimeline && now < occupied.endOnTimeline) return "lead-out";
+  return null;
 }
 
 function gcalEventsIsListItem(line) {
@@ -237,6 +262,15 @@ function gcalEventsScanMarkdown(lines, options = {}) {
     // `#untracked` marks an Event Task whose session is off the clock; only
     // task rows carry it (context rows are stripped of the token by sync).
     const untrackedTag = isTask ? eventTaskUntrackedTagRange(line) : null;
+    const bufferField = isTask ? eventRunBufferFieldRange(line) : null;
+    const buffer = bufferField && bufferField.parsed ? bufferField.parsed : EVENT_BUFFER_EMPTY;
+    const occupied = Number.isFinite(startMinutes) && Number.isFinite(endMinutes)
+      ? eventRunBufferedSpan(
+        startMinutes,
+        endMinutes < startMinutes ? endMinutes + 1440 : endMinutes,
+        buffer,
+      )
+      : null;
     rows.push({
       line: index,
       kind: isTask ? "task" : "context",
@@ -245,7 +279,15 @@ function gcalEventsScanMarkdown(lines, options = {}) {
       timeEnd,
       startMinutes,
       endMinutes,
-      state: gcalEventsTimeState(time, opts.nowMinutes, opts.isToday === true, isTask),
+      buffer: eventBufferIsEmpty(buffer) ? null : buffer,
+      bufferField: bufferField && bufferField.parsed
+        ? { start: bufferField.start, end: bufferField.end }
+        : null,
+      bufferedStartMinutes: occupied ? occupied.startMin : null,
+      bufferedEndMinutes: occupied ? occupied.endOnTimeline : null,
+      bufferedTimeRange: occupied ? occupied.timeRange : null,
+      state: gcalEventsTimeState(time, opts.nowMinutes, opts.isToday === true, isTask, buffer),
+      bufferPhase: gcalEventsBufferPhase(time, opts.nowMinutes, opts.isToday === true, isTask, buffer),
       tags,
       badges,
       untracked: untrackedTag !== null,
@@ -558,11 +600,9 @@ class BobLedgerToolsGcalEventsMixin {
           decorations.push({ from: base, to: base, decoration: Decoration.line({ class: "bob-calendar-event-context" }) });
         }
         if (row.timeEnd > row.timeStart) {
-          const attributes = { "data-time": row.time };
-          if (row.state) attributes["data-state"] = row.state;
-          if (row.state === "running" && hue) attributes["data-theme-hue"] = hue;
-          if (row.untracked) attributes["data-untracked"] = "true";
+          const attributes = gcalEventsTimeAttributes(row, hue);
           decorations.push({ from: base + row.timeStart, to: base + row.timeEnd, decoration: Decoration.mark({ class: "bob-calendar-event-time", attributes }) });
+          for (const extra of gcalEventsBufferDecorations(row, base, hue)) decorations.push(extra);
         }
         if (row.untrackedTag) {
           const { start, end } = row.untrackedTag;
@@ -599,15 +639,27 @@ class BobLedgerToolsGcalEventsMixin {
   calendarEventSetReadingState(record, now = new Date()) {
     try {
       if (!record || !record.timeEl) return;
-      const state = gcalEventsTimeState(record.time, now.getHours() * 60 + now.getMinutes(), isTodayDailyFile(this.app, { path: record.path }, { now }), record.isTask);
-      if (state) record.timeEl.setAttribute("data-state", state);
-      else record.timeEl.removeAttribute("data-state");
-      if (state === "running") {
-        const hue = this.calendarEventMeetHue();
-        if (hue) record.timeEl.setAttribute("data-theme-hue", hue);
-        else record.timeEl.removeAttribute("data-theme-hue");
-      } else {
-        record.timeEl.removeAttribute("data-theme-hue");
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const isToday = isTodayDailyFile(this.app, { path: record.path }, { now });
+      const buffer = record.buffer || EVENT_BUFFER_EMPTY;
+      const state = gcalEventsTimeState(record.time, nowMinutes, isToday, record.isTask, buffer);
+      const bufferPhase = gcalEventsBufferPhase(record.time, nowMinutes, isToday, record.isTask, buffer);
+      const hue = this.calendarEventMeetHue();
+      const modelRow = {
+        time: record.time,
+        state,
+        buffer: eventBufferIsEmpty(buffer) ? null : buffer,
+        bufferPhase,
+        untracked: record.untracked,
+        startMinutes: record.startMinutes,
+        endMinutes: record.endMinutes,
+        bufferedStartMinutes: record.bufferedStartMinutes,
+        bufferedEndMinutes: record.bufferedEndMinutes,
+        bufferedTimeRange: record.bufferedTimeRange,
+      };
+      calendarEventApplyTimeAttributes(record.timeEl, modelRow, hue);
+      if (record.rowEl) {
+        calendarEventPaintBufferWings(record.rowEl, record.timeEl, modelRow, hue);
       }
     } catch (error) {}
   }
@@ -711,7 +763,21 @@ class BobLedgerToolsGcalEventsMixin {
             if (/[📅📹📍]/.test(String(link.textContent || "")) && link.classList) link.classList.add("bob-calendar-event-badge");
           }
           if (isTask) this.calendarEventPaintUntrackedTag(row, timeEl);
-          const record = { path: sourcePath, time, isTask, timeEl };
+          const painted = this.calendarEventRowFromReading(row, ctx, time, isTask);
+          const record = {
+            path: sourcePath,
+            time,
+            isTask,
+            timeEl,
+            rowEl: row,
+            untracked: Boolean(timeEl.getAttribute && timeEl.getAttribute("data-untracked")),
+            buffer: painted && painted.buffer,
+            startMinutes: painted && painted.startMinutes,
+            endMinutes: painted && painted.endMinutes,
+            bufferedStartMinutes: painted && painted.bufferedStartMinutes,
+            bufferedEndMinutes: painted && painted.bufferedEndMinutes,
+            bufferedTimeRange: painted && painted.bufferedTimeRange,
+          };
           this.calendarEventReadingRoots.add(record);
           this.calendarEventSetReadingState(record);
           try {
@@ -725,6 +791,34 @@ class BobLedgerToolsGcalEventsMixin {
       }
     } catch (error) {
       // Reading view painting is best-effort and never writes the note.
+    }
+  }
+
+  calendarEventRowFromReading(row, ctx, time, isTask) {
+    try {
+      const clock = gcalEventsClockMinutes(time);
+      let buffer = EVENT_BUFFER_EMPTY;
+      if (ctx && typeof ctx.getSectionInfo === "function") {
+        const info = ctx.getSectionInfo(row);
+        const lines = this.calendarEventSourceLines(ctx);
+        if (info && lines && Number.isInteger(info.lineStart) && lines[info.lineStart]) {
+          buffer = eventRunParseBuffer(lines[info.lineStart]);
+        }
+      }
+      const occupied = clock
+        ? eventRunBufferedSpan(clock.start, clock.endOnTimeline, buffer)
+        : null;
+      return {
+        buffer: eventBufferIsEmpty(buffer) ? null : buffer,
+        startMinutes: clock ? clock.start : null,
+        endMinutes: clock ? clock.end : null,
+        bufferedStartMinutes: occupied ? occupied.startMin : null,
+        bufferedEndMinutes: occupied ? occupied.endOnTimeline : null,
+        bufferedTimeRange: occupied ? occupied.timeRange : null,
+        isTask,
+      };
+    } catch (error) {
+      return null;
     }
   }
 

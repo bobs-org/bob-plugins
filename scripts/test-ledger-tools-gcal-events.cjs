@@ -37,6 +37,11 @@ const {
   gcalEventsShouldSyncCreatedFile,
   gcalEventsStampState,
   gcalEventsTimeState,
+  gcalEventsBufferPhase,
+  gcalEventsTimeAttributes,
+  gcalEventsWingModel,
+  buildCalendarEventBufferWing,
+  calendarEventPaintBufferWings,
   gcalEventsWaitForPomodoros,
   GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES,
   todayDailyPath,
@@ -140,6 +145,109 @@ test("event clock state distinguishes future, running, and past", () => {
   assert.equal(gcalEventsTimeState("0830-0900", 10 * 60, true, false), null);
 });
 
+test("a buffer delays past fade and lights lead-in / lead-out wings", () => {
+  const buffer = { beforeMin: 30, afterMin: 15 };
+  assert.equal(gcalEventsTimeState("1200-1300", 11 * 60 + 40, true, true, buffer), "future");
+  assert.equal(gcalEventsBufferPhase("1200-1300", 11 * 60 + 40, true, true, buffer), "lead-in");
+  assert.equal(gcalEventsTimeState("1200-1300", 12 * 60 + 15, true, true, buffer), "running");
+  assert.equal(gcalEventsBufferPhase("1200-1300", 12 * 60 + 15, true, true, buffer), null);
+  assert.equal(gcalEventsTimeState("1200-1300", 13 * 60 + 5, true, true, buffer), null);
+  assert.equal(gcalEventsBufferPhase("1200-1300", 13 * 60 + 5, true, true, buffer), "lead-out");
+  assert.equal(gcalEventsTimeState("1200-1300", 13 * 60 + 20, true, true, buffer), "past");
+  assert.equal(gcalEventsBufferPhase("1200-1300", 13 * 60 + 20, true, true, buffer), null);
+});
+
+test("calendar scan reads [buffer::] and exposes wing data", () => {
+  const scan = gcalEventsScanMarkdown(
+    [
+      "## Events",
+      "- [*] #task **1200-1300** Lunch #untracked [buffer:: -30m +15m] [root:: love] ^lunch",
+      "- [*] #task **1400-1430** Standup ^standup",
+      "- **1500-1530** Context [buffer:: -15m]",
+    ],
+    { isToday: true, nowMinutes: 11 * 60 + 40 },
+  );
+  assert.deepEqual(scan.rows[0].buffer, { beforeMin: 30, afterMin: 15 });
+  assert.equal(scan.rows[0].bufferedTimeRange, "1130-1315");
+  assert.equal(scan.rows[0].bufferPhase, "lead-in");
+  assert.equal(scan.rows[0].state, "future");
+  assert.equal(scan.rows[1].buffer, null);
+  assert.equal(scan.rows[2].buffer, null);
+  const attrs = gcalEventsTimeAttributes(scan.rows[0], "blue");
+  assert.equal(attrs["data-buffer-before"], "30");
+  assert.equal(attrs["data-buffer-after"], "15");
+  assert.equal(attrs["data-buffer-phase"], "lead-in");
+  assert.equal(attrs.title, "Holds 11:30–13:15 · 30m before · 15m after");
+  const before = gcalEventsWingModel(scan.rows[0], "before", "blue");
+  assert.equal(before.label, "30m");
+  assert.equal(before.phase, "lead-in");
+  assert.equal(before.untracked, true);
+  const after = gcalEventsWingModel(scan.rows[0], "after", "blue");
+  assert.equal(after.label, "15m");
+  assert.equal(after.phase, null);
+});
+
+test("Reading view inserts hatched buffer wings beside the time pill", () => {
+  const attrs = () => {
+    const map = new Map();
+    return {
+      setAttribute: (name, value) => map.set(name, String(value)),
+      getAttribute: (name) => (map.has(name) ? map.get(name) : null),
+      removeAttribute: (name) => map.delete(name),
+      _map: map,
+    };
+  };
+  const children = [];
+  const wrap = {
+    classList: { contains: (name) => name === "bob-calendar-event-time-wrap" },
+    children,
+    querySelectorAll: (sel) => (sel.includes("buffer") ? children.filter((node) => node.className === "bob-calendar-event-buffer") : []),
+    insertBefore(node, ref) {
+      const at = children.indexOf(ref);
+      if (at < 0) children.unshift(node);
+      else children.splice(at, 0, node);
+      return node;
+    },
+    appendChild(node) {
+      children.push(node);
+      return node;
+    },
+  };
+  const timeEl = {
+    ...attrs(),
+    ownerDocument: {
+      createElement: (tag) => {
+        const elAttrs = attrs();
+        return {
+          tag,
+          className: "",
+          textContent: "",
+          ...elAttrs,
+        };
+      },
+    },
+    parentNode: wrap,
+  };
+  wrap.children.push(timeEl);
+  const row = { querySelectorAll: () => [] };
+  const model = {
+    buffer: { beforeMin: 30, afterMin: 15 },
+    bufferPhase: "lead-in",
+    untracked: true,
+    bufferedStartMinutes: 11 * 60 + 30,
+    bufferedEndMinutes: 13 * 60 + 15,
+    bufferedTimeRange: "1130-1315",
+  };
+  assert.equal(calendarEventPaintBufferWings(row, timeEl, model, "blue"), true);
+  assert.equal(children[0].className, "bob-calendar-event-buffer");
+  assert.equal(children[0].textContent, "30m");
+  assert.equal(children[0].getAttribute("data-side"), "before");
+  assert.equal(children[0].getAttribute("data-buffer-phase"), "lead-in");
+  assert.equal(children[0].getAttribute("data-untracked"), "true");
+  assert.equal(children[2].getAttribute("data-side"), "after");
+  assert.equal(children[2].textContent, "15m");
+});
+
 test("sync-on-create gate only accepts today's canonical daily note", () => {
   const now = new Date(2026, 9, 30, 9, 0, 0);
   const app = { internalPlugins: { plugins: {} } };
@@ -150,7 +258,7 @@ test("sync-on-create gate only accepts today's canonical daily note", () => {
 });
 
 test("create listener runs once for today's note after layout readiness", () => {
-  const now = new Date(2026, 9, 30, 9, 0, 0);
+  const now = new Date();
   const callbacks = {};
   let layoutReady;
   const app = {

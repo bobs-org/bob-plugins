@@ -4281,6 +4281,90 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme
   display: none;
 }
 
+/* `[buffer::]` is Google-owned metadata: hide it on inactive lines, like
+   the `#` of `#untracked`. Dataview's inline-field for `buffer` stays
+   hidden in Reading view. Shown while the cursor is on the line. */
+.bob-calendar-events .cm-line:not(.cm-active) .bob-calendar-event-buffer-field,
+.bob-calendar-events .bob-calendar-event-buffer-field[data-buffer-field="true"],
+.bob-calendar-events .dataview.inline-field:has([data-dv-key="buffer" i]),
+.bob-calendar-events .dataview.inline-field:has(.inline-field-key[data-dv-key="buffer" i]) {
+  display: none;
+}
+
+/* Hatched lead-in / lead-out wings fused to the time pill. The meeting
+   clock stays the pill; wings are occupied time. No animation. */
+.bob-calendar-events .bob-calendar-event-time-wrap {
+  display: inline-flex;
+  align-items: stretch;
+  vertical-align: baseline;
+}
+
+.bob-calendar-events .bob-calendar-event-buffer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.55em;
+  padding-inline: 0.32em;
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  color: color-mix(in srgb, var(--bob-calendar-event-hue, var(--text-muted)) 72%, var(--text-muted));
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--bob-calendar-event-hue, var(--text-muted)) 28%, transparent) 0 0.12em,
+    transparent 0.12em 0.32em
+  );
+  background-color: color-mix(in srgb, var(--bob-calendar-event-hue, var(--text-muted)) 8%, transparent);
+  white-space: nowrap;
+}
+
+.bob-calendar-events .bob-calendar-event-buffer[data-side="before"] {
+  border-radius: 999px 0 0 999px;
+  margin-inline-end: 0;
+}
+
+.bob-calendar-events .bob-calendar-event-buffer[data-side="after"] {
+  border-radius: 0 999px 999px 0;
+  margin-inline-start: 0;
+}
+
+.bob-calendar-events .bob-calendar-event-time[data-buffer-before] {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.bob-calendar-events .bob-calendar-event-time[data-buffer-after] {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.bob-calendar-events .bob-calendar-event-buffer[data-untracked="true"] {
+  outline: 1px dashed color-mix(in srgb, var(--text-muted) 70%, transparent);
+  outline-offset: -1px;
+  background-color: transparent;
+}
+
+.bob-calendar-events .bob-calendar-event-buffer[data-buffer-phase] {
+  outline: 1px solid color-mix(in srgb, var(--bob-calendar-event-hue, var(--interactive-accent)) 78%, transparent);
+  outline-offset: 0;
+  color: var(--text-normal);
+}
+
+.bob-calendar-events .bob-calendar-event-buffer[data-theme-hue="blue"] { --bob-calendar-event-hue: var(--bob-hue-blue); }
+.bob-calendar-events .bob-calendar-event-buffer[data-theme-hue="orange"] { --bob-calendar-event-hue: var(--bob-hue-orange); }
+.bob-calendar-events .bob-calendar-event-buffer[data-theme-hue="aqua"] { --bob-calendar-event-hue: var(--bob-hue-aqua); }
+.bob-calendar-events .bob-calendar-event-buffer[data-theme-hue="yellow"] { --bob-calendar-event-hue: var(--bob-hue-yellow); }
+.bob-calendar-events .bob-calendar-event-buffer[data-theme-hue="magenta"] { --bob-calendar-event-hue: var(--bob-hue-magenta); }
+.bob-calendar-events .bob-calendar-event-buffer[data-theme-hue="green"] { --bob-calendar-event-hue: var(--bob-hue-green); }
+.bob-calendar-events .bob-calendar-event-buffer[data-theme-hue="violet"] { --bob-calendar-event-hue: var(--bob-hue-violet); }
+.bob-calendar-events .bob-calendar-event-buffer[data-theme-hue="red"] { --bob-calendar-event-hue: var(--bob-hue-red); }
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-calendar-events .bob-calendar-event-buffer {
+    transition: none;
+  }
+}
+
 .bob-calendar-events {
   /* Lucide timer-off, drawn as a mask so it follows the ink color. */
   --bob-calendar-untracked-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 2h4'/%3E%3Cpath d='M4.6 11a8 8 0 0 0 1.7 8.7 8 8 0 0 0 8.7 1.7'/%3E%3Cpath d='M7.4 7.4a8 8 0 0 1 10.3 1 8 8 0 0 1 .9 10.2'/%3E%3Cpath d='m2 2 20 20'/%3E%3Cpath d='M12 12v-2'/%3E%3C/svg%3E");

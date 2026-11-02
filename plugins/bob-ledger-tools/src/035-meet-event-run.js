@@ -1,15 +1,20 @@
 // --- Calendar-aware Pomodoro starts: pure mirror of bob capture -----------
-// The MEET event run, the `#untracked` trackedness rule, and the
-// run-past-event notice. The shared contract is bob-cli's
-// tests/fixtures/meet_event_run/vectors.json (copied byte-for-byte under
-// scripts/fixtures/meet_event_run/). Everything here reads lines and returns
-// text or messages; it never touches the editor.
+// The MEET event run, the `#untracked` trackedness rule, `[buffer::]`
+// occupied spans, and the run-past-event notice. Shared contracts:
+// bob-cli's tests/fixtures/meet_event_run/vectors.json and
+// tests/fixtures/event_buffer/vectors.json (copied byte-for-byte under
+// scripts/fixtures/). Everything here reads lines and returns text or
+// messages; it never touches the editor.
 //
 // A timed ledger row WITH `[t:: Nm]` is tracked; a timed row WITHOUT it is an
-// untracked session: on the calendar, off the clock.
+// untracked session: on the calendar, off the clock. A `[buffer::]` field
+// widens the span the event occupies; the meeting span stays the bold clock.
 
 const EVENT_RUN_FAR_MINUTES = 25;
 const EVENT_RUN_DAY_MINUTES = 1440;
+const EVENT_BUFFER_CAP_MINUTES = 720;
+const EVENT_BUFFER_MINUS = "\u2212";
+const EVENT_BUFFER_EMPTY = Object.freeze({ beforeMin: 0, afterMin: 0 });
 const EVENT_TASK_LINE_RE =
   /^[ \t]*- \[(.)\][ \t]*(?:#task[ \t]*)?\*\*(\d{4})-(\d{4})\*\*(?=$|[ \t])/;
 const EVENT_RUN_LINK_RE =
@@ -37,6 +42,138 @@ function eventRunHumanize(minutes) {
   const rest = minutes % 60;
   if (hours === 0) return `${rest}m`;
   return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
+function eventRunClockLabel(minutes) {
+  const wrapped = ((Math.round(minutes) % EVENT_RUN_DAY_MINUTES) + EVENT_RUN_DAY_MINUTES) % EVENT_RUN_DAY_MINUTES;
+  return `${String(Math.floor(wrapped / 60)).padStart(2, "0")}:${String(wrapped % 60).padStart(2, "0")}`;
+}
+
+function eventBufferIsEmpty(buffer) {
+  return !buffer || (buffer.beforeMin === 0 && buffer.afterMin === 0);
+}
+
+function eventBufferParseToken(token) {
+  const text = String(token || "");
+  let part;
+  let rest;
+  if (text.startsWith("+")) {
+    part = "after";
+    rest = text.slice(1);
+  } else if (text.startsWith("-") || text.startsWith("\u2212") || text.startsWith("\u2013")) {
+    part = "before";
+    rest = text.slice(1);
+  } else {
+    return null;
+  }
+  const digits = /[mM]$/.test(rest) ? rest.slice(0, -1) : rest;
+  if (!digits || digits.length > 3 || !/^\d+$/.test(digits)) return null;
+  return { part, minutes: Math.min(Number(digits), EVENT_BUFFER_CAP_MINUTES) };
+}
+
+function eventBufferParse(value) {
+  const tokens = String(value || "").trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  let before = null;
+  let after = null;
+  for (const token of tokens) {
+    const parsed = eventBufferParseToken(token);
+    if (!parsed) return null;
+    if (parsed.part === "before") {
+      if (before === null) before = parsed.minutes;
+    } else if (after === null) {
+      after = parsed.minutes;
+    }
+  }
+  return { beforeMin: before || 0, afterMin: after || 0 };
+}
+
+function eventBufferBody(buffer, minus) {
+  if (eventBufferIsEmpty(buffer)) return null;
+  const before = buffer.beforeMin;
+  const after = buffer.afterMin;
+  if (before && !after) return `${minus}${before}m`;
+  if (!before && after) return `+${after}m`;
+  return `${minus}${before}m +${after}m`;
+}
+
+function eventBufferField(buffer) {
+  const body = eventBufferBody(buffer, "-");
+  return body ? `[buffer:: ${body}]` : null;
+}
+
+function eventBufferLabel(buffer) {
+  return eventBufferBody(buffer, EVENT_BUFFER_MINUS);
+}
+
+function eventBufferPartLabel(buffer, part) {
+  if (part === "before") return eventBufferLabel({ beforeMin: buffer.beforeMin, afterMin: 0 });
+  if (part === "after") return eventBufferLabel({ beforeMin: 0, afterMin: buffer.afterMin });
+  return null;
+}
+
+function eventRunBufferedSpan(startMin, endOnTimeline, buffer) {
+  const start = Number(startMin);
+  const end = Number(endOnTimeline);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return { startMin: start, endOnTimeline: end, timeRange: null };
+  }
+  if (eventBufferIsEmpty(buffer)) {
+    return {
+      startMin: start,
+      endOnTimeline: end,
+      timeRange: `${eventRunHhmm(start)}-${eventRunHhmm(end)}`,
+    };
+  }
+  const occupiedStart = Math.max(0, start - buffer.beforeMin);
+  let occupiedEnd = end + buffer.afterMin;
+  if (occupiedEnd - occupiedStart >= EVENT_RUN_DAY_MINUTES) {
+    occupiedEnd = occupiedStart + EVENT_RUN_DAY_MINUTES - 1;
+  }
+  return {
+    startMin: occupiedStart,
+    endOnTimeline: occupiedEnd,
+    timeRange: `${eventRunHhmm(occupiedStart)}-${eventRunHhmm(occupiedEnd)}`,
+  };
+}
+
+function eventRunBufferHoldsTitle(occupied) {
+  if (!occupied || occupied.timeRange == null) return "";
+  return `Holds ${eventRunClockLabel(occupied.startMin)}\u2013${eventRunClockLabel(occupied.endOnTimeline)}`;
+}
+
+function eventRunBufferTooltip(buffer, occupied) {
+  const holds = eventRunBufferHoldsTitle(occupied);
+  const parts = [];
+  if (buffer && buffer.beforeMin) parts.push(`${buffer.beforeMin}m before`);
+  if (buffer && buffer.afterMin) parts.push(`${buffer.afterMin}m after`);
+  return [holds, ...parts].filter(Boolean).join(" \u00b7 ");
+}
+
+function eventRunWithBufferLabel(title, timeRange, buffer) {
+  const label = eventBufferLabel(buffer);
+  return label ? `${title} (${timeRange} ${label})` : `${title} (${timeRange})`;
+}
+
+// First `[buffer::]` field outside code spans and Markdown links.
+// An invalid value is no buffer. Offsets match the original line.
+function eventRunBufferFieldRange(line) {
+  const masked = eventRunMaskCodeAndLinks(line);
+  const fields = typeof pomodoroThemeInlineFields === "function"
+    ? pomodoroThemeInlineFields(masked)
+    : [];
+  const field = fields.find((item) => eventRunAsciiLower(item.key) === "buffer");
+  if (!field) return null;
+  const parsed = eventBufferParse(field.value);
+  if (!parsed || eventBufferIsEmpty(parsed)) {
+    return { start: field.start, end: field.end, buffer: EVENT_BUFFER_EMPTY, parsed: null };
+  }
+  return { start: field.start, end: field.end, buffer: parsed, parsed };
+}
+
+function eventRunParseBuffer(line) {
+  const found = eventRunBufferFieldRange(line);
+  return found && found.parsed ? found.parsed : EVENT_BUFFER_EMPTY;
 }
 
 function eventRunMinutesAhead(from, to) {
@@ -128,29 +265,41 @@ function eventTaskLineIsUntracked(line) {
   return eventTaskUntrackedTagRange(line) !== null;
 }
 
-// Mirror of event_task.rs `clean_event_title`.
+function eventRunStripTrailingField(title) {
+  const trimmed = title.trimEnd();
+  const open = trimmed.lastIndexOf("[");
+  if (open < 0 || !trimmed.slice(open).includes("::") || !trimmed.endsWith("]")) return trimmed;
+  return trimmed.slice(0, open).trimEnd();
+}
+
+function eventRunStripTrailingUntracked(title) {
+  const trimmed = title.trimEnd();
+  const start = eventRunAsciiLower(trimmed).lastIndexOf("#untracked");
+  if (start < 0 || start + "#untracked".length !== trimmed.length) return trimmed;
+  if (start > 0 && !/\s/.test(trimmed[start - 1])) return trimmed;
+  return trimmed.slice(0, start).trimEnd();
+}
+
+function eventRunStripTrailingMarkdownLink(title) {
+  const trimmed = title.trimEnd();
+  const open = trimmed.lastIndexOf("[");
+  if (open < 0 || eventRunMarkdownLinkEnd(trimmed, open) !== trimmed.length) return trimmed;
+  return trimmed.slice(0, open).trimEnd();
+}
+
+// Mirror of event_task.rs `clean_event_title`: strip trailing fields,
+// `#untracked`, and Markdown links in any interleaving until nothing
+// changes, so `[buffer::]` never leaks into a title.
 function eventRunCleanTitle(after) {
   let title = String(after || "").trim();
   const id = /(?:^|\s)\^[A-Za-z0-9-]+$/.exec(title);
   if (id) title = title.slice(0, id.index).trimEnd();
   for (;;) {
-    const trimmed = title.trimEnd();
-    const open = trimmed.lastIndexOf("[");
-    if (open < 0 || !trimmed.slice(open).includes("::") || !trimmed.endsWith("]")) break;
-    title = trimmed.slice(0, open).trimEnd();
-  }
-  for (;;) {
-    const trimmed = title.trimEnd();
-    const start = eventRunAsciiLower(trimmed).lastIndexOf("#untracked");
-    if (start < 0 || start + "#untracked".length !== trimmed.length) break;
-    if (start > 0 && !/\s/.test(trimmed[start - 1])) break;
-    title = trimmed.slice(0, start).trimEnd();
-  }
-  for (;;) {
-    const trimmed = title.trimEnd();
-    const open = trimmed.lastIndexOf("[");
-    if (open < 0 || eventRunMarkdownLinkEnd(trimmed, open) !== trimmed.length) break;
-    title = trimmed.slice(0, open).trimEnd();
+    const before = title.length;
+    title = eventRunStripTrailingField(title);
+    title = eventRunStripTrailingUntracked(title);
+    title = eventRunStripTrailingMarkdownLink(title);
+    if (title.length === before) break;
   }
   const tail = /^(.*) · \*([^*]*)\*$/.exec(title);
   if (tail) title = tail[1].trimEnd();
@@ -184,13 +333,24 @@ function eventRunEventRows(lines) {
     const endMin = eventRunParseHhmm(match[3]);
     if (startMin === null || endMin === null) continue;
     const idMatch = /(?:^|\s)\^([A-Za-z0-9-]+)\s*$/.exec(line);
+    const endOnTimeline = endMin < startMin ? endMin + EVENT_RUN_DAY_MINUTES : endMin;
+    const bufferField = eventRunBufferFieldRange(line);
+    const buffer = bufferField && bufferField.parsed ? bufferField.parsed : EVENT_BUFFER_EMPTY;
+    const occupied = eventRunBufferedSpan(startMin, endOnTimeline, buffer);
     rows.push({
       lineIndex: index,
       status: match[1],
       open: !"xX-".includes(match[1]),
       startMin,
       endMin,
-      endOnTimeline: endMin < startMin ? endMin + EVENT_RUN_DAY_MINUTES : endMin,
+      endOnTimeline,
+      buffer,
+      bufferField: bufferField && bufferField.parsed
+        ? { start: bufferField.start, end: bufferField.end }
+        : null,
+      bufferedStartMin: occupied.startMin,
+      bufferedEndOnTimeline: occupied.endOnTimeline,
+      bufferedTimeRange: occupied.timeRange,
       untracked: eventTaskLineIsUntracked(line),
       blockId: idMatch ? idMatch[1] : null,
       title: eventRunCleanTitle(line.slice(match[0].length)),
@@ -259,27 +419,27 @@ function computeMeetEventRun(lines, entryIndex, nowMinutes, rows = eventRunEvent
     if (link.embedded || link.pathPart !== "") return;
     const event = eventRunById(rows, link.blockId);
     if (!event) return;
-    if (!event.open || event.endOnTimeline <= nowMinutes || event.endOnTimeline <= event.startMin) return;
+    if (!event.open || event.bufferedEndOnTimeline <= nowMinutes || event.endOnTimeline <= event.startMin) return;
     if (seen.has(link.blockId)) return;
     seen.add(link.blockId);
     candidates.push({ position, event, number: link.index });
   });
   candidates.sort(
     (left, right) =>
-      left.event.startMin - right.event.startMin ||
-      left.event.endOnTimeline - right.event.endOnTimeline ||
+      left.event.bufferedStartMin - right.event.bufferedStartMin ||
+      left.event.bufferedEndOnTimeline - right.event.bufferedEndOnTimeline ||
       left.position - right.position,
   );
   if (candidates.length === 0) return null;
   const first = candidates[0].event;
   const events = [candidates[0]];
-  let endMin = first.endOnTimeline;
+  let endMin = first.bufferedEndOnTimeline;
   for (const next of candidates.slice(1)) {
-    if (next.event.startMin > endMin || next.event.untracked !== first.untracked) break;
-    endMin = Math.max(endMin, next.event.endOnTimeline);
+    if (next.event.bufferedStartMin > endMin || next.event.untracked !== first.untracked) break;
+    endMin = Math.max(endMin, next.event.bufferedEndOnTimeline);
     events.push(next);
   }
-  return { startMin: first.startMin, endMin, untracked: first.untracked, events };
+  return { startMin: first.bufferedStartMin, endMin, untracked: first.untracked, events };
 }
 
 // End, on the day's timeline, of today's latest closed timed session.
@@ -303,67 +463,179 @@ function eventRunStartInSession(eventStart, sessionStart, sessionEnd) {
   return eventStart >= sessionStart || eventStart < sessionEnd;
 }
 
-// Open Event Tasks whose start the span newly crosses, earliest first.
-// `old` ({start, end} or null) is the span before the operator; events in the
-// session's own lineup never count.
+function eventRunMeetingInProgressAt(event, clock) {
+  const start = event.startMin;
+  const end = event.endOnTimeline;
+  const time = clock;
+  return (start < time && time < end) || (start < time + EVENT_RUN_DAY_MINUTES && time + EVENT_RUN_DAY_MINUTES < end);
+}
+
+function eventRunSessionRange(start, end) {
+  if (start === end) return null;
+  let sessionEnd = end;
+  if (sessionEnd < start) sessionEnd += EVENT_RUN_DAY_MINUTES;
+  return { start, end: sessionEnd };
+}
+
+function eventRunOverlapRange(session, eventStart, eventEnd) {
+  let best = null;
+  for (const shift of [-EVENT_RUN_DAY_MINUTES, 0, EVENT_RUN_DAY_MINUTES]) {
+    const start = eventStart + shift;
+    const end = eventEnd + shift;
+    const overlapStart = Math.max(start, session.start);
+    const overlapEnd = Math.min(end, session.end);
+    const length = overlapEnd - overlapStart;
+    if (length > 0 && (!best || length > best.length)) {
+      best = { length, overlapStart, overlapEnd, shift };
+    }
+  }
+  return best;
+}
+
+function eventRunSessionPrecedes(sessionStart, sessionEnd, target) {
+  if (sessionStart === sessionEnd || sessionStart === target) return false;
+  if (sessionEnd > sessionStart) return sessionStart < target;
+  return target > sessionStart || target < sessionEnd;
+}
+
+function eventRunStartRank(eventStart, sessionStart, sessionEnd) {
+  if (sessionEnd > sessionStart || eventStart >= sessionStart) return [0, eventStart];
+  return [1, eventStart];
+}
+
+// Shared conflict predicate. A non-MEET session `[S, E)` conflicts with
+// an open Event Task when it overlaps the occupied (buffered) span and
+// the meeting is not already in progress at `S`. Unbuffered events keep
+// the start-in-session rule.
+function eventRunSpanConflict(span, event) {
+  if (!span || !event) return null;
+  if (eventRunMeetingInProgressAt(event, span.start)) return null;
+  const session = eventRunSessionRange(span.start, span.end);
+  const occupiedStart = event.bufferedStartMin;
+  const occupiedEnd = event.bufferedEndOnTimeline;
+  const overlap = session
+    ? eventRunOverlapRange(session, occupiedStart, occupiedEnd)
+    : null;
+  if (eventBufferIsEmpty(event.buffer)) {
+    if (!eventRunStartInSession(event.startMin, span.start, span.end)) return null;
+  } else if (!overlap) {
+    return null;
+  }
+  let overlapMinutes = 0;
+  let bufferPart = null;
+  if (overlap) {
+    overlapMinutes = overlap.overlapEnd - overlap.overlapStart;
+    const meetingStart = event.startMin + overlap.shift;
+    const meetingEnd = event.endOnTimeline + overlap.shift;
+    if (
+      overlap.overlapStart >= occupiedStart + overlap.shift
+      && overlap.overlapEnd <= meetingStart
+    ) {
+      bufferPart = "before";
+    } else if (
+      overlap.overlapStart >= meetingEnd
+      && overlap.overlapEnd <= occupiedEnd + overlap.shift
+    ) {
+      bufferPart = "after";
+    }
+  }
+  return {
+    overlapMinutes,
+    bufferPart,
+    fitStartMin: eventRunSessionPrecedes(span.start, span.end, occupiedStart)
+      ? occupiedStart
+      : null,
+  };
+}
+
+// Open Event Tasks whose occupied span newly conflicts, earliest
+// buffered start first. `old` is the span before the operator; events
+// in the session's own lineup never count.
 function eventRunNewCrossings(lines, entryIndex, span, old, rows = eventRunEventRows(lines)) {
   const exclude = new Set(eventRunQueuedLinks(lines, entryIndex).map((link) => link.blockId));
-  const rank = (row) =>
-    span.end > span.start || row.startMin >= span.start ? [0, row.startMin] : [1, row.startMin];
-  return rows
-    .filter(
-      (row) =>
-        row.open &&
-        !(row.blockId && exclude.has(row.blockId)) &&
-        eventRunStartInSession(row.startMin, span.start, span.end) &&
-        !(old && eventRunStartInSession(row.startMin, old.start, old.end)),
-    )
-    .sort((left, right) => {
-      const a = rank(left);
-      const b = rank(right);
-      return a[0] - b[0] || a[1] - b[1] || left.endOnTimeline - right.endOnTimeline || left.lineIndex - right.lineIndex;
-    });
+  const crossed = [];
+  for (const row of rows) {
+    if (!row.open || (row.blockId && exclude.has(row.blockId))) continue;
+    const conflict = eventRunSpanConflict(span, row);
+    if (!conflict) continue;
+    if (old && eventRunSpanConflict(old, row)) continue;
+    crossed.push({ ...row, conflict });
+  }
+  crossed.sort((left, right) => {
+    const a = eventRunStartRank(left.bufferedStartMin, span.start, span.end);
+    const b = eventRunStartRank(right.bufferedStartMin, span.start, span.end);
+    return a[0] - b[0]
+      || a[1] - b[1]
+      || left.bufferedEndOnTimeline - right.bufferedEndOnTimeline
+      || left.lineIndex - right.lineIndex;
+  });
+  return crossed;
 }
 
 function eventRunOverlapMinutes(span, event) {
+  const conflict = event.conflict || eventRunSpanConflict(span, event);
+  if (conflict) return conflict.overlapMinutes;
   const start = span.start;
   let end = span.end;
   if (end <= start) end += EVENT_RUN_DAY_MINUTES;
-  let eventStart = event.startMin;
+  let eventStart = event.bufferedStartMin;
   if (eventStart < start) eventStart += EVENT_RUN_DAY_MINUTES;
-  let eventEnd = event.endOnTimeline;
+  let eventEnd = event.bufferedEndOnTimeline;
   if (eventEnd <= eventStart) eventEnd += EVENT_RUN_DAY_MINUTES;
   return Math.max(0, Math.min(eventEnd, end) - Math.max(eventStart, start));
 }
 
-// Fit draft: the largest same-gesture count that ends at or before the event.
-// `kind` is "start" (`se<K>[-<offset>]`), "extend" (`K\p`), "later" (`K\o`),
-// or "earlier" (`K\O`); null when no positive count fits.
+function eventRunFitTarget(event, kind) {
+  if (kind === "earlier" || eventBufferIsEmpty(event.buffer)) return event.startMin;
+  if (event.conflict && event.conflict.fitStartMin != null) return event.conflict.fitStartMin;
+  return null;
+}
+
+// Fit draft: the largest same-gesture count that ends at or before the
+// occupied start. `kind` is "start" (`se<K>[-<offset>]`), "extend"
+// (`K\p`), "later" (`K\o`), or "earlier" (`K\O`); null when no positive
+// count fits. `\O` (`--N`) names the meeting start.
 function eventRunFitToken(kind, span, old, event, offsetUnits = 0) {
+  const target = eventRunFitTarget(event, kind);
+  if (target == null) return null;
   if (kind === "start") {
-    const count = Math.floor(eventRunMinutesAhead(span.start, event.startMin) / STEP_MINUTES);
+    const count = Math.floor(eventRunMinutesAhead(span.start, target) / STEP_MINUTES);
     if (count <= 0) return null;
     return offsetUnits ? `se${count}-${offsetUnits}` : `se${count}`;
   }
   if (kind === "extend" || kind === "later") {
-    const count = Math.floor(eventRunMinutesAhead(old.end, event.startMin) / STEP_MINUTES);
+    const count = Math.floor(eventRunMinutesAhead(old.end, target) / STEP_MINUTES);
     if (count <= 0) return null;
     return kind === "extend" ? `${count}\\p` : `${count}\\o`;
   }
   if (kind === "earlier") {
-    const gap = eventRunMinutesAhead(event.startMin, old.start);
+    const gap = eventRunMinutesAhead(target, old.start);
     const count = Math.floor((gap - 1) / STEP_MINUTES);
     return gap > 0 && count > 0 ? `${count}\\O` : null;
   }
   return null;
 }
 
+function eventRunConflictTarget(event) {
+  const part = event.conflict && event.conflict.bufferPart;
+  if (part && !eventBufferIsEmpty(event.buffer)) {
+    return `${event.title}'s ${eventBufferPartLabel(event.buffer, part)} buffer (${event.timeRange})`;
+  }
+  return eventRunWithBufferLabel(event.title, event.timeRange, event.buffer);
+}
+
+function eventRunConflictEndsAt(event, fit) {
+  if (typeof fit === "string" && fit.includes("\\O")) return event.startMin;
+  if (event.conflict && event.conflict.fitStartMin != null) return event.conflict.fitStartMin;
+  return eventBufferIsEmpty(event.buffer) ? event.startMin : event.bufferedStartMin;
+}
+
 // The `pomodoro_runs_past_event` notice, worded like bob capture's warning.
 function eventRunConflictNotice(name, span, crossed, fit) {
   const first = crossed[0];
-  let message = `⚠ ${name || "session"} ${eventRunHhmm(span.start)}-${eventRunHhmm(span.end)} runs ${eventRunOverlapMinutes(span, first)}m into ${first.title} (${first.timeRange})`;
+  let message = `⚠ ${name || "session"} ${eventRunHhmm(span.start)}-${eventRunHhmm(span.end)} runs ${eventRunOverlapMinutes(span, first)}m into ${eventRunConflictTarget(first)}`;
   if (crossed.length > 1) message += ` and ${crossed.length - 1} more`;
-  if (fit) message += ` · ${fit} ends at ${eventRunHhmm(first.startMin)}`;
+  if (fit) message += ` · ${fit} ends at ${eventRunHhmm(eventRunConflictEndsAt(first, fit))}`;
   return { code: "pomodoro_runs_past_event", message };
 }
 
@@ -426,9 +698,13 @@ function applyEventRunToExpansion(lines, lineIndex, expansion, now = new Date())
         durationMinutes = endMinutes - startMinutes;
         source = "calendar";
         if (startMinutes - nowMinutes > EVENT_RUN_FAR_MINUTES) {
+          const firstEvent = run.events[0].event;
+          const title = eventBufferIsEmpty(firstEvent.buffer)
+            ? firstEvent.title
+            : eventRunWithBufferLabel(firstEvent.title, firstEvent.timeRange, firstEvent.buffer);
           result.notices.push({
             code: "pomodoro_event_run_later",
-            message: `MEET's next event, ${run.events[0].event.title}, starts at ${eventRunHhmm(startMinutes)} (${eventRunHumanize(startMinutes - nowMinutes)} from now) · type \`se5\` to start 25 minutes now`,
+            message: `MEET's next event, ${title}, starts at ${eventRunHhmm(startMinutes)} (${eventRunHumanize(startMinutes - nowMinutes)} from now) · type \`se5\` to start 25 minutes now`,
           });
         }
       }

@@ -71,11 +71,16 @@ sessions, pinned by bob-cli's shared `meet_event_run` vectors.
 On a session named `MEET`, an empty `se` follows the session's **event run**:
 the earliest open, not-yet-ended Event Task linked as a plain same-note
 `[[#^id]]` child, plus every following one that touches or overlaps it and
-shares its trackedness. The range is the run's real span, and a late join starts
-where today's latest closed session ended. A run that starts more than 25 minutes
-away still writes its future start and raises a Notice
-(`pomodoro_event_run_later`) naming the `se5` escape hatch. A counted `se5` keeps
-its explicit span.
+shares its trackedness. The occupied span is the meeting plus any
+`[buffer::]` lead-in and lead-out: candidates, sort, clustering, the written
+range, the early start, and the far-run warning all use it. A `+15` after
+Standup 1000-1030 therefore bridges to a 1045 1:1, and `se` at 11:25 for
+lunch with `-30 +15` writes `(**1130-1315**)`. A run never bridges
+trackedness. A late join starts where today's latest closed session ended. A
+run that starts more than 25 minutes away still writes its future start and
+raises a Notice (`pomodoro_event_run_later`) naming the `se5` escape hatch,
+with the buffer label on a buffered first event (`Lunch (1200-1300 −30m)`).
+A counted `se5` keeps its explicit span.
 
 Every `se<X>` on a MEET also follows the `[t::]` rule: a timed row **with**
 `[t:: Nm]` is tracked, and a timed row **without** it is an *untracked session*,
@@ -84,12 +89,17 @@ is non-empty and untracked (an `#untracked` Event Task); every other session is
 tracked. Swapping sessions and `~K` drops are capture-only gestures.
 
 Starting, extending, or shifting a non-MEET session raises a Notice when its new
-span newly crosses the start of an open Event Task that is not in its own lineup
-(`pomodoro_runs_past_event`): `⚠ BOB 1150-1215 runs 15m into Standup (1200-1230) ·
-se2 ends at 1200`. It covers `se<X>` + Tab, `N\p`, `N\o`, and `N\O`; `N\P`
-and closes never warn, and the write is never blocked. `N\p`, `N\P`, `N\o`,
-and `N\O` keep an untracked row untracked, and `Ctrl+Enter` closes it without
-adding `[t::]`.
+span newly overlaps the occupied span of an open Event Task that is not in its
+own lineup (`pomodoro_runs_past_event`): `⚠ BOB 1150-1215 runs 15m into Standup
+(1200-1230) · se2 ends at 1200`. With a buffer the overlap names the wing when
+it sits wholly inside one (`Lunch's −30m buffer (1200-1300)`) and otherwise
+carries the event's buffer label; the fit draft ends at the buffered start. A
+session starting mid-meeting stays quiet. It covers `se<X>` + Tab, `N\p`,
+`N\o`, and `N\O`; `N\P` and closes never warn, and the write is never blocked.
+`N\p`, `N\P`, `N\o`, and `N\O` keep an untracked row untracked, and
+`Ctrl+Enter` closes it without adding `[t::]`. Timed close classifies Event
+Task links by the meeting span, so a MEET closed when lunch ends still
+completes lunch even though its `+15` buffer runs on.
 
 The plugin also renders a live `bob-plan` block: a `TODAY 7/10` chip for the
 Task Link budget (its tooltip lists each type with its link count),
@@ -367,9 +377,17 @@ shows at most one Notice per day. The toggle is session-only.
 in Live Preview and Reading view show quiet time pills, context tags, and
 calendar/video/location badges. The Bob-owned `↻ synced` line under `## Events`
 paints as a muted caption; it shows the last `bob gcal sync` run; sync runs on
-demand, so the painter never marks it stale. On today's note, a meeting in progress gets the MEET hue and a past
-meeting dims. The clock refreshes once a minute while today's note is active.
-Painting reads the note and never changes it.
+demand, so the painter never marks it stale. On today's note, a meeting in
+progress gets the MEET hue and a past meeting dims. A `[buffer:: -30m +15m]`
+field paints hatched lead-in and lead-out wings fused to the time pill, labelled
+`30m` / `15m` in the event hue, dashed when the row is `#untracked`. The pill
+tooltip reads `Holds 11:30–13:15 · 30m before · 15m after`. A wing lights with
+the hue outline while that buffer is in progress (`data-buffer-phase` is
+`lead-in` or `lead-out`); the pill fades to past only after the buffered end.
+The raw `[buffer::]` field is hidden on inactive lines and Dataview's
+`.dataview.inline-field` for `buffer` is hidden in Reading view. The clock
+refreshes once a minute while today's note is active. Painting reads the note
+and never changes it.
 
 An Event Task carrying a standalone `#untracked` tag (sync writes it for a
 Google event tagged `#untracked`; hand-written rows may carry it too) is *off

@@ -283,6 +283,124 @@ test("\\p and \\o warn on new crossings only; \\P never warns", () => {
   );
 });
 
+const bufferFixture = JSON.parse(
+  fs.readFileSync(
+    path.join(
+      __dirname,
+      "../plugins/bob-ledger-tools/scripts/fixtures/event_buffer/vectors.json",
+    ),
+    "utf8",
+  ),
+);
+
+test("event_buffer row vectors: parse, buffered span, clean title, field, label", () => {
+  assert.ok(Array.isArray(bufferFixture.row) && bufferFixture.row.length > 0);
+  for (const vector of bufferFixture.row) {
+    const rows = helpers.eventRunEventRows(["## Events", vector.line, "## Pomodoros"]);
+    assert.equal(rows.length, 1, vector.id);
+    const row = rows[0];
+    assert.equal(row.title, vector.title, vector.id);
+    assert.equal(row.buffer.beforeMin, vector.before, `${vector.id} before`);
+    assert.equal(row.buffer.afterMin, vector.after, `${vector.id} after`);
+    assert.equal(row.bufferedTimeRange, vector.buffered_span, `${vector.id} span`);
+    assert.equal(helpers.eventBufferField(row.buffer), vector.field, `${vector.id} field`);
+    assert.equal(helpers.eventBufferLabel(row.buffer), vector.label, `${vector.id} label`);
+  }
+});
+
+test("event_buffer conflict vectors: shared predicate", () => {
+  assert.ok(Array.isArray(bufferFixture.conflict) && bufferFixture.conflict.length > 0);
+  for (const vector of bufferFixture.conflict) {
+    const lines = ["## Events", ...String(vector.day).replace(/\n$/, "").split("\n"), "## Pomodoros"];
+    const rows = helpers.eventRunEventRows(lines);
+    const hhmm = (value) => Number(value.slice(0, 2)) * 60 + Number(value.slice(2));
+    const span = { start: hhmm(vector.new[0]), end: hhmm(vector.new[1]) };
+    const old = vector.old
+      ? { start: hhmm(vector.old[0]), end: hhmm(vector.old[1]) }
+      : null;
+    const crossed = helpers.eventRunNewCrossings(lines, lines.length - 1, span, old, rows);
+    if (!vector.crossed) {
+      assert.equal(crossed.length, 0, vector.id);
+      continue;
+    }
+    assert.equal(crossed.length, 1, vector.id);
+    assert.equal(crossed[0].blockId, vector.crossed, vector.id);
+    assert.equal(crossed[0].conflict.overlapMinutes, vector.overlap_minutes, `${vector.id} overlap`);
+    assert.equal(crossed[0].conflict.bufferPart, vector.buffer_part, `${vector.id} part`);
+    const fit = crossed[0].conflict.fitStartMin;
+    if (vector.fit == null) {
+      assert.equal(fit, null, `${vector.id} fit`);
+    } else {
+      const hours = Math.floor(fit / 60);
+      const minutes = fit % 60;
+      assert.equal(
+        `${String(hours).padStart(2, "0")}${String(minutes).padStart(2, "0")}`,
+        vector.fit,
+        `${vector.id} fit`,
+      );
+    }
+  }
+});
+
+test("event_buffer description vectors stay bob-cli's HTML reader", () => {
+  assert.ok(Array.isArray(bufferFixture.description) && bufferFixture.description.length > 0);
+});
+
+test("a buffered se<X> start warns into the lead-in and fits at the buffered start", () => {
+  const lines = [
+    "## Events",
+    "- [ ] #task **1200-1300** Lunch [buffer:: -30m +15m] ^lunch",
+    "",
+    "## Pomodoros",
+    "- [ ] (se) — BOB",
+  ];
+  const now = new Date(2026, 10, 1, 11, 10, 0);
+  const expansion = helpers.findExpansion(lines[4], "- [ ] (se".length, now);
+  const adjusted = helpers.applyEventRunToExpansion(lines, 4, expansion, now);
+  assert.deepEqual(adjusted.notices, [
+    {
+      code: "pomodoro_runs_past_event",
+      message: "⚠ BOB 1110-1135 runs 5m into Lunch's −30m buffer (1200-1300) · se4 ends at 1130",
+    },
+  ]);
+});
+
+test("a start that runs through the meeting names the event plus its buffer label", () => {
+  const lines = [
+    "## Events",
+    "- [ ] #task **1200-1300** Lunch [buffer:: -30m +15m] ^lunch",
+    "",
+    "## Pomodoros",
+    "- [ ] (se) — BOB",
+  ];
+  const now = new Date(2026, 10, 1, 11, 10, 0);
+  lines[4] = "- [ ] (se13) — BOB";
+  const expansion = helpers.findExpansion(lines[4], "- [ ] (se13".length, now);
+  const adjusted = helpers.applyEventRunToExpansion(lines, 4, expansion, now);
+  assert.equal(
+    adjusted.notices[0].message,
+    "⚠ BOB 1110-1215 runs 45m into Lunch (1200-1300 −30m +15m) · se4 ends at 1130",
+  );
+});
+
+test("a lead-out start names the after buffer and offers no fit", () => {
+  const lines = [
+    "## Events",
+    "- [ ] #task **1200-1300** Lunch [buffer:: +15m] ^lunch",
+    "",
+    "## Pomodoros",
+    "- [ ] (se) — BOB",
+  ];
+  const now = new Date(2026, 10, 1, 13, 5, 0);
+  const expansion = helpers.findExpansion(lines[4], "- [ ] (se".length, now);
+  const adjusted = helpers.applyEventRunToExpansion(lines, 4, expansion, now);
+  assert.equal(adjusted.notices.length, 1);
+  assert.equal(
+    adjusted.notices[0].message,
+    "⚠ BOB 1305-1330 runs 10m into Lunch's +15m buffer (1200-1300)",
+  );
+});
+
 test("an Event Task with a typed #untracked tag is painted by the Event scan", () => {
   const scan = helpers.gcalEventsScanMarkdown([
     "## Events",

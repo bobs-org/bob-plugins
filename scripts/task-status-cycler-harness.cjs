@@ -119,6 +119,90 @@ function createTestDomNode(tag = "div", spec = {}) {
   return node;
 }
 
+function parseHarnessYamlScalar(raw) {
+  const value = String(raw ?? "").trim();
+  if (value === "" || value === "null" || value === "~") return value === "" ? "" : null;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (value === "[]") return [];
+  if (value.startsWith("[") && value.endsWith("]")) {
+    const inner = value.slice(1, -1).trim();
+    if (!inner) return [];
+    const parts = [];
+    let current = "";
+    let quote = null;
+    for (const ch of inner) {
+      if (quote) {
+        current += ch;
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+        current += ch;
+      } else if (ch === ",") {
+        parts.push(current);
+        current = "";
+      } else {
+        current += ch;
+      }
+    }
+    parts.push(current);
+    return parts.map((part) => parseHarnessYamlScalar(part));
+  }
+  if (/^-?\d+$/.test(value)) return Number(value);
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function parseHarnessYaml(text) {
+  const root = {};
+  const stack = [{ indent: -1, value: root, kind: "map", pending: null }];
+  for (const raw of String(text || "").split(/\n/)) {
+    const line = raw.replace(/\s+#.*$/u, "").replace(/\s+$/u, "");
+    if (!line.trim()) continue;
+    const indent = line.match(/^\s*/)[0].length;
+    const body = line.trim();
+    while (stack.length > 1 && indent <= stack[stack.length - 1].indent) stack.pop();
+    let parent = stack[stack.length - 1];
+    if (body.startsWith("- ")) {
+      if (parent.kind === "map" && parent.pending) {
+        const list = [];
+        parent.value[parent.pending] = list;
+        parent.pending = null;
+        stack.push({ indent: parent.pendingIndent, value: list, kind: "list", pending: null });
+        parent = stack[stack.length - 1];
+      }
+      if (parent.kind !== "list") throw new Error("invalid yaml list");
+      parent.value.push(parseHarnessYamlScalar(body.slice(2)));
+      continue;
+    }
+    const colon = body.indexOf(":");
+    if (colon < 0) continue;
+    const key = body.slice(0, colon).trim();
+    const rest = body.slice(colon + 1).trim();
+    const value = rest === "" ? undefined : parseHarnessYamlScalar(rest);
+    if (parent.kind === "map" && parent.pending && indent > parent.indent) {
+      const nested = {};
+      parent.value[parent.pending] = nested;
+      stack.push({ indent: parent.pendingIndent, value: nested, kind: "map", pending: null });
+      parent = stack[stack.length - 1];
+    }
+    if (parent.kind !== "map") continue;
+    if (value === undefined) {
+      parent.pending = key;
+      parent.pendingIndent = indent;
+    } else {
+      parent.value[key] = value;
+      parent.pending = null;
+    }
+  }
+  return root;
+}
+
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     MarkdownView = class MarkdownView {};
@@ -157,6 +241,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
       },
       Plugin: class Plugin {},
       setIcon: () => {},
+      parseYaml: parseHarnessYaml,
     };
   }
   if (request === "@codemirror/view") {

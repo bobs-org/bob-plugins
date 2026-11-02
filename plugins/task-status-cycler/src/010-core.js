@@ -1,4 +1,4 @@
-const { MarkdownView, Modal, Notice, Plugin, setIcon } = require("obsidian");
+const { MarkdownView, Modal, Notice, Plugin, setIcon, parseYaml } = require("obsidian");
 const { EditorView } = require("@codemirror/view");
 
 const TASKS_COMMAND_PREFIX = "obsidian-tasks-plugin:set-status-symbol-to-";

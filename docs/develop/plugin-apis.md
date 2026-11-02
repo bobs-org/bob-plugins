@@ -308,8 +308,8 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `inboxRoute` | 1 | Test an inbox path and prompt or commit a route. |
 | `quickRoll` | 1 | Preview the `Alt+P` roll for a review row. |
 | `taskLinkLane` | 1 | Match a Pomodoro Task Link and toggle its Next/In Progress lane. |
-| `notice` | 2 | Show the Unblocked card; v2 also renders `keep_moving` rows. |
-| `successors` | 2 | Ask which offered successor links to add; v2 accepts the `keep_moving` group. |
+| `notice` | 3 | Show the Unblocked card; v2 renders `keep_moving` rows and v3 renders `relation_successors`. |
+| `successors` | 3 | Ask which offered successor links to add; v2 accepts `keep_moving` and v3 accepts the `relation` group. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
 | `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` opens the Links direction; the reverse direction settles `{ ok: false }` until both stage directions ship. |
 | `openReferencePdf(path)` | Additive member | Open a vault-relative PDF in Highlights; resolves `{ ok, reason? }`. |
@@ -370,6 +370,17 @@ omits one) is `Keep ‹N› moving` / `Keep 2 projects moving` and the header ic
 is `skip-forward`. Unknown groups are still dropped and v1 models render
 exactly as before. Callers must offer `keep_moving` groups only when
 `api.successors?.version >= 2`, because an older navigation drops the group.
+`successors` v3 (relation successors, `docs/task-dependencies.md` §12.13 and
+§12.18 in bob-cli) adds a fifth group, `relation`. A relation group carries
+`header`, `caption`, `tag`, and `foldText`; `after: {notePath, blockId, text}`;
+`event: "parked"|"done"`; and `label`. `folded` may include `alreadyStarted`
+and `waitsFor`. A row on any group may carry `suffix` (several triggers) and
+`reason` (a second reason). The relation group uses a neutral left accent and
+the `link-2` icon; when every group is `relation` the modal title is the model
+title (or `‹Label› “‹T›”` / `‹Label› k tasks`) and the header icon is
+`link-2`. Unknown groups are still dropped and v1/v2 models render exactly as
+before. Callers must offer `relation` groups only when
+`api.successors?.version >= 3`.
 `blocks.openStage(ref)` and
 `blocks.removeDependent(ownerRef, target)` resolve to result
 objects. `relations.removeLink(sourceRef, targetRef)` removes the
@@ -388,6 +399,13 @@ card reads `Keep ‹N› moving` with ⏭ in the glyph slot and the class
 rows with a `keeps ‹N› moving` chip and count as linked. A card with nothing
 picked is silent. Callers add `keep_moving` rows only when
 `api.notice?.version >= 2`.
+`notice` v3 reads optional `relation_successors` and `relation_held` rows plus
+`relation_check`. An all-relation card uses `‹Label› “‹T›”` as its title, 🪢
+in the glyph slot, and the class `is-relation`. Mixed cards add a
+`‹label› “‹T›”` chip; relation picks count as linked. The receipt reads
+`✓ ‹T›` for done and `‹T› parked` for parked. Held-only and unavailable
+checks use the muted copy from §12.18. Older payloads still render as before.
+Callers add relation rows only when `api.notice?.version >= 3`.
 
 Async navigation methods settle to result objects or `null` rather
 than rejecting. `taskLinkLane.matches` is synchronous and

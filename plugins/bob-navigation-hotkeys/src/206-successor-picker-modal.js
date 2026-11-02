@@ -19,6 +19,9 @@ function successorPickerGroupTitle(group) {
   if (group.group === "keep_moving") {
     return `Keep ‹${successorPickerKeepMovingProject(group)}› moving`;
   }
+  if (group.group === "relation") {
+    return group.header || relationCopyGroupTitle(group.label, group.after && group.after.text);
+  }
   const note = successorPickerNoteName(group.project);
   return `Project ‹${note || "project"}›`;
 }
@@ -28,6 +31,17 @@ function successorPickerGroupTitle(group) {
 // line (zero parts omitted, §12.15 copy table).
 function successorPickerFoldedLines(group) {
   const folded = group.folded || {};
+  if (group.foldText) {
+    return [group.foldText];
+  }
+  if (group.group === "relation") {
+    const fold = relationCopyFold({
+      already_started: folded.alreadyStarted,
+      blocked: folded.blocked,
+      hidden: folded.hidden,
+    }, "ui");
+    return fold ? [fold] : [];
+  }
   if (group.group === "keep_moving") {
     const parts = [];
     if (folded.blocked > 0) {
@@ -84,7 +98,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     super(app, {
       items: [],
       title: normalized ? normalized.title : "Choose successor tasks",
-      headerIcon: normalized && normalized.keepMovingOnly ? "skip-forward" : "git-pull-request",
+      headerIcon: normalized && normalized.relationOnly
+        ? "link-2"
+        : normalized && normalized.keepMovingOnly ? "skip-forward" : "git-pull-request",
       inputLabel: "Filter successor offers",
       placeholder: "Filter tasks, notes, and groups",
       resultsLabel: "Successor offers",
@@ -139,6 +155,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       addSuccessorPickerClasses(this.contentEl, "bob-cnp-successor");
       if (this.model && this.model.keepMovingOnly) {
         addSuccessorPickerClasses(this.contentEl, "is-keep-moving-only");
+      }
+      if (this.model && this.model.relationOnly) {
+        addSuccessorPickerClasses(this.contentEl, "is-relation-only");
       }
       addSuccessorPickerClasses(this.modalEl, "bob-cnp-successor-modal");
       this.renderAll();
@@ -367,13 +386,13 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     if (!query) {
       return group.rows.map((row, index) => ({ row, index }));
     }
-    const context = [group.header, group.caption, group.tag, group.project, successorPickerGroupTitle(group)]
+    const context = [group.header, group.caption, group.tag, group.project, group.foldText, group.label, group.event, successorPickerGroupTitle(group)]
       .join(" ").toLowerCase();
     if (context.includes(query)) {
       return group.rows.map((row, index) => ({ row, index }));
     }
     return group.rows.map((row, index) => ({ row, index })).filter(({ row }) =>
-      [row.text, row.notePath, row.status, row.lane, row.destinationLabel, row.mutedReason].join(" ").toLowerCase().includes(query),
+      [row.text, row.notePath, row.status, row.lane, row.destinationLabel, row.mutedReason, row.suffix, row.reason].join(" ").toLowerCase().includes(query),
     );
   }
 
@@ -483,6 +502,10 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         if (details.length > 0) {
           content.createDiv({ cls: "bob-successor-row-details", text: details.join(" · ") });
         }
+        const meta = [row.suffix, row.reason].filter(Boolean);
+        if (meta.length > 0) {
+          content.createDiv({ cls: "bob-successor-row-meta", text: meta.join(" ") });
+        }
         rowEl.addEventListener("mousedown", (event) => event.preventDefault());
         rowEl.addEventListener("click", () => {
           this.selectedIndex = navIndex;
@@ -591,7 +614,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
 
 function createSuccessorPickerApi(plugin) {
   return Object.freeze({
-    version: 2,
+    version: 3,
     pick(model) {
       try {
         if (!plugin || plugin.successorPickerUnavailable === true || typeof plugin.pickSuccessorOffers !== "function") {

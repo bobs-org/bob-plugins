@@ -25972,7 +25972,7 @@ function normalizeSuccessorPickerModel(model) {
     if (!model || typeof model !== "object" || !Array.isArray(model.groups)) {
       return null;
     }
-    const allowedGroups = new Set(["hand_off", "project", "project_finished", "keep_moving"]);
+    const allowedGroups = new Set(["hand_off", "project", "project_finished", "keep_moving", "relation"]);
     const seenKeys = new Set();
     const groups = [];
     let selectableCount = 0;
@@ -25998,6 +25998,8 @@ function normalizeSuccessorPickerModel(model) {
           continue;
         }
         const task = normalizeSuccessorPickerTaskContext(row.task);
+        const suffix = successorPickerText(row.suffix);
+        const reason = successorPickerText(row.reason);
         const normalized = Object.freeze({
           key,
           text,
@@ -26009,6 +26011,8 @@ function normalizeSuccessorPickerModel(model) {
           selectable: row.selectable,
           mutedReason: successorPickerText(row.mutedReason),
           destination: row.destination,
+          ...(suffix ? { suffix } : {}),
+          ...(reason ? { reason } : {}),
           ...(task ? { task } : {}),
         });
         seenKeys.add(key);
@@ -26018,15 +26022,32 @@ function normalizeSuccessorPickerModel(model) {
           selectableCount += 1;
         }
       }
-      const folded = source.folded && typeof source.folded === "object"
+      const foldedSource = source.folded && typeof source.folded === "object" ? source.folded : {};
+      const folded = source.group === "relation"
         ? Object.freeze({
-            hidden: successorPickerCount(source.folded.hidden),
-            alreadyPlanned: successorPickerCount(source.folded.alreadyPlanned),
-            subProjects: successorPickerCount(source.folded.subProjects),
-            blocked: successorPickerCount(source.folded.blocked),
-            scheduled: successorPickerCount(source.folded.scheduled),
+            hidden: successorPickerCount(foldedSource.hidden),
+            alreadyPlanned: successorPickerCount(foldedSource.alreadyPlanned),
+            subProjects: successorPickerCount(foldedSource.subProjects),
+            blocked: successorPickerCount(foldedSource.blocked),
+            scheduled: successorPickerCount(foldedSource.scheduled),
+            alreadyStarted: successorPickerCount(foldedSource.alreadyStarted),
+            waitsFor: successorPickerCount(foldedSource.waitsFor),
           })
-        : Object.freeze({ hidden: 0, alreadyPlanned: 0, subProjects: 0, blocked: 0, scheduled: 0 });
+        : Object.freeze({
+            hidden: successorPickerCount(foldedSource.hidden),
+            alreadyPlanned: successorPickerCount(foldedSource.alreadyPlanned),
+            subProjects: successorPickerCount(foldedSource.subProjects),
+            blocked: successorPickerCount(foldedSource.blocked),
+            scheduled: successorPickerCount(foldedSource.scheduled),
+          });
+      const relationFields = source.group === "relation"
+        ? {
+            foldText: successorPickerText(source.foldText),
+            after: successorPickerNormalizeRelationAfter(source.after),
+            event: relationCopyEvent(source.event),
+            label: successorPickerText(source.label),
+          }
+        : {};
       groups.push(Object.freeze({
         group: source.group,
         header: successorPickerText(source.header),
@@ -26035,6 +26056,7 @@ function normalizeSuccessorPickerModel(model) {
         project: successorPickerText(source.project),
         rows: Object.freeze(rows),
         folded,
+        ...relationFields,
       }));
     }
     if (selectableCount === 0 || groups.length === 0) {
@@ -26054,13 +26076,17 @@ function normalizeSuccessorPickerModel(model) {
         }))
       : [];
     const keepMovingOnly = successorPickerAllKeepMoving(groups);
+    const relationOnly = successorPickerAllRelation(groups);
     return Object.freeze({
       title: successorPickerText(model.title) ||
-        (keepMovingOnly ? successorPickerKeepMovingTitle(groups) : "Choose successor tasks"),
+        (keepMovingOnly ? successorPickerKeepMovingTitle(groups) :
+          relationOnly ? successorPickerRelationTitle(groups, selectableCount) :
+            "Choose successor tasks"),
       predecessors: Object.freeze(predecessors),
       groups: Object.freeze(groups),
       budget,
       keepMovingOnly,
+      relationOnly,
       selectableCount,
       taskRowCount,
     });
@@ -26177,6 +26203,516 @@ function successorPickerRetargetRows(modal) {
   }
   return rows;
 }
+// ---- src/206b-successor-relation-copy.js ----
+// Relation-successor copy builder and picker/notice helpers
+// (`docs/task-dependencies.md` §12.13 picker/notice API v3 and §12.18).
+// Pure: no vault I/O. Driven by the copied `relation_successor` copy vectors.
+const RELATION_COPY_MAX_TEXT = 48;
+const RELATION_COPY_GLYPH = "🪢";
+const RELATION_COPY_TAG = "your links · not dependents";
+const RELATION_COPY_EVENTS = Object.freeze(["parked", "done"]);
+
+function relationCopyTruncate(text) {
+  const source = String(text === null || text === undefined ? "" : text);
+  if (source.length <= RELATION_COPY_MAX_TEXT) {
+    return source;
+  }
+  return `${source.slice(0, RELATION_COPY_MAX_TEXT).trimEnd()}…`;
+}
+
+function relationCopyText(value) {
+  return String(value === null || value === undefined ? "" : value).trim();
+}
+
+function relationCopyList(value) {
+  return Array.isArray(value) ? value.map(relationCopyText).filter(Boolean) : [];
+}
+
+function relationCopyQuote(text) {
+  return `\u201c${relationCopyTruncate(relationCopyText(text))}\u201d`;
+}
+
+function relationCopyLabelTitle(label) {
+  const value = relationCopyText(label);
+  if (!value) {
+    return "";
+  }
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function relationCopyEvent(value) {
+  const event = relationCopyText(value);
+  return RELATION_COPY_EVENTS.includes(event) ? event : "";
+}
+
+function relationCopyGroupTitle(label, target) {
+  return `${relationCopyLabelTitle(label)} ${relationCopyQuote(target)}`;
+}
+
+function relationCopyWhy(target, event) {
+  const quoted = relationCopyQuote(target);
+  if (event === "parked") {
+    return `${quoted} is parked \u00b7 Pending, off today's plan`;
+  }
+  if (event === "done") {
+    return `${quoted} is done`;
+  }
+  return "";
+}
+
+function relationCopyTag() {
+  return RELATION_COPY_TAG;
+}
+
+function relationCopyChip(label, target) {
+  return `${relationCopyText(label)} ${relationCopyQuote(target)}`;
+}
+
+function relationCopyReason(label, target) {
+  const chip = relationCopyChip(label, target);
+  return chip.trim() ? `\u00b7 ${chip}` : "";
+}
+
+function relationCopySuffix(targets) {
+  const names = relationCopyList(targets);
+  if (names.length < 2) {
+    return "";
+  }
+  if (names.length === 2) {
+    return `after ${relationCopyQuote(names[0])} and ${relationCopyQuote(names[1])}`;
+  }
+  return `after ${relationCopyQuote(names[0])} and ${names.length - 1} more`;
+}
+
+function relationCopyFold(input, style) {
+  const src = input && typeof input === "object" ? input : {};
+  const waits = relationCopyList(src.waits_for);
+  const source = relationCopyText(src.source);
+  const already = Math.max(0, Math.floor(Number(src.already_started) || 0));
+  const blocked = Math.max(0, Math.floor(Number(src.blocked) || 0));
+  const hidden = Math.max(0, Math.floor(Number(src.hidden) || 0));
+  const waitTarget = waits[0] || (style === "cli" ? relationCopyText(src.target) : "");
+  const parts = [];
+  if (source && waitTarget) {
+    parts.push(`${relationCopyQuote(source)} waits for ${relationCopyQuote(waitTarget)}`);
+    if (waits.length > 1) {
+      parts.push(`+${waits.length - 1} more waiting`);
+    }
+  }
+  if (already > 0) {
+    parts.push(`${already} already started`);
+  }
+  if (blocked > 0) {
+    parts.push(`${blocked} blocked`);
+  }
+  if (hidden > 0) {
+    parts.push(`${hidden} hidden`);
+  }
+  if (parts.length === 0) {
+    return "";
+  }
+  if (style === "cli") {
+    return `not offered  ${parts.join(" \u00b7 ")}`;
+  }
+  return ["not offered", ...parts].join(" \u00b7 ");
+}
+
+function relationCopyPickerTitle(input) {
+  const src = input && typeof input === "object" ? input : {};
+  const mixed = Array.isArray(src.mixed_groups) ? src.mixed_groups : [];
+  if (mixed.some((group) => group !== "relation") && relationCopyText(src.existing_title)) {
+    return relationCopyText(src.existing_title);
+  }
+  const targets = relationCopyList(src.targets);
+  const count = Number.isFinite(Number(src.count)) ? Math.max(0, Math.floor(Number(src.count))) : 0;
+  if (targets.length > 1) {
+    const tasks = count > 0 ? count : targets.length;
+    return `${relationCopyLabelTitle(src.label)} ${tasks} tasks`;
+  }
+  if (relationCopyText(src.target) || targets.length === 1) {
+    return relationCopyGroupTitle(src.label, src.target || targets[0]);
+  }
+  if (count > 1) {
+    return `${relationCopyLabelTitle(src.label)} ${count} tasks`;
+  }
+  return "";
+}
+
+function relationCopyLinkedNotice(input) {
+  const src = input && typeof input === "object" ? input : {};
+  const dest = relationCopyText(src.destination);
+  const chip = relationCopyChip(src.label, src.target);
+  const count = Number.isFinite(Number(src.count)) ? Math.max(1, Math.floor(Number(src.count))) : 1;
+  if (count === 1 && relationCopyText(src.source)) {
+    return `${RELATION_COPY_GLYPH} Next in ${dest}: ${relationCopyTruncate(src.source)} \u00b7 ${chip}`;
+  }
+  return `${RELATION_COPY_GLYPH} ${count} linked \u2192 ${dest} \u00b7 ${chip}`;
+}
+
+function relationCopyHeldReasonText(reason, input) {
+  const src = input && typeof input === "object" ? input : {};
+  if (reason === "waits_for") {
+    return `waits for ${relationCopyQuote(src.other_target)}`;
+  }
+  if (reason === "already_started") {
+    return "already started";
+  }
+  if (reason === "blocked") {
+    const waitsOn = Math.max(0, Math.floor(Number(src.waits_on) || 0));
+    return `blocked (waits on ${waitsOn})`;
+  }
+  if (reason === "scheduled") {
+    return `scheduled ${relationCopyText(src.date)}`;
+  }
+  if (reason === "project") {
+    return "blocked by its project";
+  }
+  if (reason === "hidden") {
+    return "hidden";
+  }
+  return "";
+}
+
+function relationCopyHeldNotice(input, reason) {
+  const src = input && typeof input === "object" ? input : {};
+  const detail = relationCopyHeldReasonText(reason || src.reason, src);
+  if (!detail) {
+    return "";
+  }
+  return `${RELATION_COPY_GLYPH} ${relationCopyQuote(src.source)} ${relationCopyText(src.label)} ${relationCopyQuote(src.target)} \u00b7 not offered: ${detail}`;
+}
+
+function relationCopyUncertainty(input) {
+  const src = input && typeof input === "object" ? input : {};
+  const labels = relationCopyList(src.labels);
+  if (labels.length === 0 && relationCopyText(src.label)) {
+    labels.push(relationCopyText(src.label));
+  }
+  const what = labels.length > 1 ? "relation" : relationCopyText(labels[0] || "relation");
+  return `${RELATION_COPY_GLYPH} Couldn't check ${what} links \u00b7 nothing offered`;
+}
+
+function relationCopyCliHeader(input) {
+  const src = input && typeof input === "object" ? input : {};
+  const event = relationCopyEvent(src.event) || "parked";
+  return `${relationCopyGroupTitle(src.label, src.target)} \u00b7 it is ${event} (your ${RELATION_COPY_GLYPH} links, not dependents)`;
+}
+
+function relationCopyReceipt(target, event) {
+  const text = relationCopyTruncate(relationCopyText(target));
+  if (!text) {
+    return "";
+  }
+  if (event === "parked") {
+    return `${text} parked`;
+  }
+  return `\u2713 ${text}`;
+}
+
+function relationCopyAlreadyParked(input) {
+  const src = input && typeof input === "object" ? input : {};
+  return `${relationCopyQuote(src.target)} is already parked \u2014 ${relationCopyQuote(src.source)} will be offered when it is done`;
+}
+
+function relationCopyAlreadyClosed(input) {
+  const src = input && typeof input === "object" ? input : {};
+  return `${relationCopyQuote(src.target)} is already closed \u2014 nothing left to wait for`;
+}
+
+function relationCopyInverseHint(input) {
+  const src = input && typeof input === "object" ? input : {};
+  return `${relationCopyQuote(src.typed)} never offers anything \u00b7 to offer ${relationCopyQuote(src.source)} after this task, use ~~ with ${relationCopyQuote(src.label)}`;
+}
+
+function relationCopyOffersVerdict(input) {
+  const src = input && typeof input === "object" ? input : {};
+  return `${RELATION_COPY_GLYPH} Offers ${relationCopyQuote(src.source)} when ${relationCopyQuote(src.target)} is parked or done \u00b7 never blocks`;
+}
+
+function relationCopyRenameWarning(input) {
+  const src = input && typeof input === "object" ? input : {};
+  return `${relationCopyQuote(src.label)} is a successor label in config.yml \u2014 update relations.successor_labels`;
+}
+
+function relationSuccessorCopyValue(input, key, expected) {
+  const src = input && typeof input === "object" ? input : {};
+  switch (key) {
+    case "title":
+      return relationCopyPickerTitle(src);
+    case "why":
+      return relationCopyWhy(src.target, relationCopyEvent(src.event));
+    case "tag":
+      return RELATION_COPY_TAG;
+    case "fold": {
+      const ui = relationCopyFold(src, "ui");
+      const cli = relationCopyFold(src, "cli");
+      if (expected === cli) return cli;
+      return ui;
+    }
+    case "suffix":
+      return relationCopySuffix(src.targets);
+    case "reason":
+      return relationCopyReason(src.label, src.target);
+    case "capsule":
+      return relationCopyLabelTitle(src.label);
+    case "notice": {
+      const candidates = [
+        relationCopyLinkedNotice(src),
+        relationCopyHeldNotice(src, src.reason),
+        relationCopyUncertainty(src),
+      ];
+      if (candidates.includes(expected)) return expected;
+      return candidates.find(Boolean) || "";
+    }
+    case "notices": {
+      const reasons = Array.isArray(src.reasons) ? src.reasons : [];
+      return reasons.map((reason) => relationCopyHeldNotice(src, reason));
+    }
+    case "header":
+      return relationCopyCliHeader(src);
+    case "linked_suffix":
+      return relationCopyReason(src.label, src.target);
+    case "notification": {
+      const count = Math.max(0, Math.floor(Number(src.count) || 0));
+      return `${RELATION_COPY_GLYPH} Pulled in ${count} \u00b7 ${relationCopyChip(src.label, src.target)}`;
+    }
+    case "badge_help":
+      return "Offered by your relation link";
+    case "target":
+      return relationCopyTruncate(src.target);
+    case "suggestion":
+      return `${RELATION_COPY_GLYPH} offers`;
+    case "relation_row":
+      return `${RELATION_COPY_GLYPH} offers source`;
+    case "list_header":
+      return `\u00b7 ${Math.max(0, Math.floor(Number(src.count) || 0))} offer`;
+    case "list_row": {
+      const count = Math.max(0, Math.floor(Number(src.count) || 0));
+      return `${count} links \u00b7 offers source`;
+    }
+    case "message": {
+      const candidates = [
+        relationCopyAlreadyParked(src),
+        relationCopyAlreadyClosed(src),
+        relationCopyOffersVerdict(src),
+        relationCopyRenameWarning(src),
+      ];
+      if (candidates.includes(expected)) return expected;
+      return candidates.find(Boolean) || "";
+    }
+    case "hint":
+      return relationCopyInverseHint(src);
+    case "code":
+      return "relation_successor_already_released";
+    default:
+      return undefined;
+  }
+}
+
+function relationSuccessorCopy(input, expected) {
+  const src = input && typeof input === "object" ? input : {};
+  const want = expected && typeof expected === "object" ? expected : {};
+  const keys = Object.keys(want).length > 0
+    ? Object.keys(want)
+    : ["title", "why", "tag", "fold", "suffix", "reason", "capsule", "notice",
+      "header", "linked_suffix", "notification", "badge_help", "target",
+      "suggestion", "relation_row", "list_header", "list_row", "message", "hint", "code"];
+  const out = {};
+  for (const key of keys) {
+    out[key] = relationSuccessorCopyValue(src, key, want[key]);
+  }
+  return Object.freeze(out);
+}
+
+function successorPickerAllRelation(groups) {
+  return Array.isArray(groups) && groups.length > 0 &&
+    groups.every((group) => group && group.group === "relation");
+}
+
+function successorPickerRelationTitle(groups, selectableCount) {
+  const labels = [];
+  const targets = [];
+  for (const group of Array.isArray(groups) ? groups : []) {
+    const label = relationCopyText(group && group.label) ||
+      relationCopyText(group && group.header);
+    if (label && !labels.includes(label)) {
+      labels.push(label);
+    }
+    const target = relationCopyText(group && group.after && group.after.text);
+    if (target && !targets.includes(target)) {
+      targets.push(target);
+    }
+  }
+  const label = labels[0] || "starts after";
+  if (targets.length === 1 && groups.length === 1) {
+    return relationCopyGroupTitle(label, targets[0]);
+  }
+  const count = Number.isFinite(Number(selectableCount))
+    ? Math.max(0, Math.floor(Number(selectableCount)))
+    : (Array.isArray(groups) ? groups.reduce((sum, group) => sum + ((group && group.rows && group.rows.length) || 0), 0) : 0);
+  return `${relationCopyLabelTitle(label)} ${count} tasks`;
+}
+
+function successorPickerNormalizeRelationAfter(after) {
+  if (!after || typeof after !== "object" || Array.isArray(after)) {
+    return Object.freeze({ notePath: "", blockId: "", text: "" });
+  }
+  return Object.freeze({
+    notePath: successorPickerText(after.notePath),
+    blockId: successorPickerText(after.blockId),
+    text: successorPickerText(after.text),
+  });
+}
+
+function relationNoticeAfterText(row) {
+  const relation = row && row.relation && typeof row.relation === "object" ? row.relation : null;
+  const after = relation && Array.isArray(relation.after) ? relation.after : [];
+  const first = after[0];
+  if (first && typeof first === "object") {
+    return relationCopyText(first.text);
+  }
+  const unblockedBy = row && Array.isArray(row.unblocked_by) ? row.unblocked_by : [];
+  return relationCopyText(unblockedBy[0] && unblockedBy[0].text);
+}
+
+function relationNoticeLabel(row) {
+  const relation = row && row.relation && typeof row.relation === "object" ? row.relation : null;
+  return relationCopyText(relation && (relation.label || relation.key));
+}
+
+function relationNoticeEvent(row) {
+  const relation = row && row.relation && typeof row.relation === "object" ? row.relation : null;
+  return relationCopyEvent(relation && relation.event);
+}
+
+function collectRelationNoticeRows(model) {
+  const rows = Array.isArray(model && model.relation_successors) ? model.relation_successors : [];
+  return rows.filter(
+    (row) => row && typeof row === "object" && row.link && typeof row.link === "object",
+  );
+}
+
+function collectRelationHeldRows(model) {
+  const rows = Array.isArray(model && model.relation_held) ? model.relation_held : [];
+  return rows.filter((row) => {
+    if (!row || typeof row !== "object") {
+      return false;
+    }
+    const reason = relationCopyText(row.reason);
+    return reason && reason !== "already_planned";
+  });
+}
+
+function relationNoticeCheck(model) {
+  const value = relationCopyText(model && model.relation_check);
+  return value === "unavailable" ? "unavailable" : value === "checked" ? "checked" : "";
+}
+
+function mapRelationNoticeLinkedRow(row) {
+  const link = row && row.link && typeof row.link === "object" ? row.link : {};
+  const label = relationNoticeLabel(row);
+  const afterText = relationNoticeAfterText(row);
+  return Object.freeze({
+    note_path: relationCopyText(row && row.note_path),
+    block_id: relationCopyText(row && row.block_id),
+    text: relationCopyTruncate(row && row.text),
+    fullText: relationCopyText(row && row.text),
+    inbox: row && row.inbox === true,
+    lane: successorPickerLaneName(row && row.status_name, row && row.status_symbol),
+    trigger: "relation",
+    projectEmpty: false,
+    relation: true,
+    relationLabel: label,
+    relationTarget: afterText,
+    relationEvent: relationNoticeEvent(row),
+    previousStatusSymbol: relationCopyText(row && row.previous_status_symbol),
+    statusSymbol: relationCopyText(row && row.status_symbol),
+    hideRemoved: false,
+    entryName: relationCopyText(link.entry_name),
+    entryCreated: link.entry_created === true,
+    nextUp: link.next_up === true,
+    blockIdCreated: link.block_id_created === true,
+    blockLink: relationCopyText(link.block_link),
+  });
+}
+
+function mapRelationHeldNoticeRow(row, scheduledText) {
+  const waitsFor = Array.isArray(row && row.waits_for) ? row.waits_for : [];
+  const other = waitsFor[0] && typeof waitsFor[0] === "object"
+    ? relationCopyText(waitsFor[0].text)
+    : relationCopyText(waitsFor[0]);
+  const reason = relationCopyText(row && row.reason);
+  const input = {
+    source: relationCopyText(row && row.text),
+    label: relationNoticeLabel(row),
+    target: relationNoticeAfterText(row),
+    reason,
+    other_target: other,
+    waits_on: row && row.waits_on,
+    date: relationCopyText(scheduledText),
+  };
+  return Object.freeze({
+    note_path: relationCopyText(row && row.note_path),
+    block_id: relationCopyText(row && row.block_id),
+    text: relationCopyTruncate(row && row.text),
+    fullText: relationCopyText(row && row.text),
+    reason,
+    notice: relationCopyHeldNotice(input, reason),
+    relationLabel: input.label,
+    relationTarget: input.target,
+  });
+}
+
+function relationNoticeFallbackText(linked, held, uncertainty) {
+  if (Array.isArray(linked) && linked.length > 0) {
+    const first = linked[0];
+    return relationCopyLinkedNotice({
+      source: first.fullText || first.text,
+      target: first.relationTarget,
+      label: first.relationLabel,
+      destination: unblockedEntryDisplayName
+        ? unblockedEntryDisplayName(first.entryName)
+        : relationCopyText(first.entryName) || "today",
+      count: linked.length,
+    });
+  }
+  if (Array.isArray(held) && held.length > 0 && held[0].notice) {
+    return held[0].notice;
+  }
+  return relationCopyText(uncertainty);
+}
+
+function relationNoticeTitleFromRows(linked, held) {
+  const sample = (Array.isArray(linked) && linked[0]) || (Array.isArray(held) && held[0]) || null;
+  if (!sample) {
+    return "";
+  }
+  return relationCopyGroupTitle(sample.relationLabel, sample.relationTarget);
+}
+
+function relationNoticeReceiptFromRows(linked, held, predecessors) {
+  const sample = (Array.isArray(linked) && linked[0]) || (Array.isArray(held) && held[0]) || null;
+  const event = sample && sample.relationEvent;
+  const target = sample && sample.relationTarget ||
+    (Array.isArray(predecessors) && predecessors[0] && predecessors[0].text);
+  return relationCopyReceipt(target, event);
+}
+
+function relationNoticeUncertaintyLine(model) {
+  if (relationNoticeCheck(model) !== "unavailable") {
+    return "";
+  }
+  const rows = Array.isArray(model && model.relation_successors) ? model.relation_successors : [];
+  const held = Array.isArray(model && model.relation_held) ? model.relation_held : [];
+  const labels = [];
+  for (const row of [...rows, ...held]) {
+    const label = relationNoticeLabel(row);
+    if (label && !labels.includes(label)) {
+      labels.push(label);
+    }
+  }
+  return relationCopyUncertainty(labels.length > 0 ? { labels } : { label: "starts after" });
+}
 // ---- src/206-successor-picker-modal.js ----
 const SUCCESSOR_PICKER_ENTER_GUARD_MS = 350;
 const SUCCESSOR_PICKER_COLLAPSE_THRESHOLD = 12;
@@ -26199,6 +26735,9 @@ function successorPickerGroupTitle(group) {
   if (group.group === "keep_moving") {
     return `Keep ‹${successorPickerKeepMovingProject(group)}› moving`;
   }
+  if (group.group === "relation") {
+    return group.header || relationCopyGroupTitle(group.label, group.after && group.after.text);
+  }
   const note = successorPickerNoteName(group.project);
   return `Project ‹${note || "project"}›`;
 }
@@ -26208,6 +26747,17 @@ function successorPickerGroupTitle(group) {
 // line (zero parts omitted, §12.15 copy table).
 function successorPickerFoldedLines(group) {
   const folded = group.folded || {};
+  if (group.foldText) {
+    return [group.foldText];
+  }
+  if (group.group === "relation") {
+    const fold = relationCopyFold({
+      already_started: folded.alreadyStarted,
+      blocked: folded.blocked,
+      hidden: folded.hidden,
+    }, "ui");
+    return fold ? [fold] : [];
+  }
   if (group.group === "keep_moving") {
     const parts = [];
     if (folded.blocked > 0) {
@@ -26264,7 +26814,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     super(app, {
       items: [],
       title: normalized ? normalized.title : "Choose successor tasks",
-      headerIcon: normalized && normalized.keepMovingOnly ? "skip-forward" : "git-pull-request",
+      headerIcon: normalized && normalized.relationOnly
+        ? "link-2"
+        : normalized && normalized.keepMovingOnly ? "skip-forward" : "git-pull-request",
       inputLabel: "Filter successor offers",
       placeholder: "Filter tasks, notes, and groups",
       resultsLabel: "Successor offers",
@@ -26319,6 +26871,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       addSuccessorPickerClasses(this.contentEl, "bob-cnp-successor");
       if (this.model && this.model.keepMovingOnly) {
         addSuccessorPickerClasses(this.contentEl, "is-keep-moving-only");
+      }
+      if (this.model && this.model.relationOnly) {
+        addSuccessorPickerClasses(this.contentEl, "is-relation-only");
       }
       addSuccessorPickerClasses(this.modalEl, "bob-cnp-successor-modal");
       this.renderAll();
@@ -26547,13 +27102,13 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     if (!query) {
       return group.rows.map((row, index) => ({ row, index }));
     }
-    const context = [group.header, group.caption, group.tag, group.project, successorPickerGroupTitle(group)]
+    const context = [group.header, group.caption, group.tag, group.project, group.foldText, group.label, group.event, successorPickerGroupTitle(group)]
       .join(" ").toLowerCase();
     if (context.includes(query)) {
       return group.rows.map((row, index) => ({ row, index }));
     }
     return group.rows.map((row, index) => ({ row, index })).filter(({ row }) =>
-      [row.text, row.notePath, row.status, row.lane, row.destinationLabel, row.mutedReason].join(" ").toLowerCase().includes(query),
+      [row.text, row.notePath, row.status, row.lane, row.destinationLabel, row.mutedReason, row.suffix, row.reason].join(" ").toLowerCase().includes(query),
     );
   }
 
@@ -26663,6 +27218,10 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         if (details.length > 0) {
           content.createDiv({ cls: "bob-successor-row-details", text: details.join(" · ") });
         }
+        const meta = [row.suffix, row.reason].filter(Boolean);
+        if (meta.length > 0) {
+          content.createDiv({ cls: "bob-successor-row-meta", text: meta.join(" ") });
+        }
         rowEl.addEventListener("mousedown", (event) => event.preventDefault());
         rowEl.addEventListener("click", () => {
           this.selectedIndex = navIndex;
@@ -26771,7 +27330,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
 
 function createSuccessorPickerApi(plugin) {
   return Object.freeze({
-    version: 2,
+    version: 3,
     pick(model) {
       try {
         if (!plugin || plugin.successorPickerUnavailable === true || typeof plugin.pickSuccessorOffers !== "function") {
@@ -41507,6 +42066,13 @@ function unblockedFallbackText(summary) {
   if (summary.onlyKeepMoving && linked.length > 0) {
     return keepMovingFallbackText(linked);
   }
+  if (summary.onlyRelation) {
+    return relationNoticeFallbackText(
+      summary.relationLinked,
+      summary.relationHeld,
+      summary.relationUncertainty,
+    ) || "🪢";
+  }
   if (summary.pullIn && summary.pullIn.current) {
     const destinationText = summary.pullIn.destinations.length > 0
       ? ` → ${summary.pullIn.destinations.join(", ")}`
@@ -41613,9 +42179,15 @@ function buildUnblockedNoticeModel(model, options = {}) {
     const keepMovingSource = unblockedNoticeList(model.keep_moving).filter(
       (row) => row && typeof row === "object" && row.link && typeof row.link === "object",
     );
+    const relationSource = collectRelationNoticeRows(model);
+    const relationHeldSource = collectRelationHeldRows(model);
+    const relationUncertainty = relationNoticeUncertaintyLine(model);
     if (
       unblocked.length === 0 &&
       keepMovingSource.length === 0 &&
+      relationSource.length === 0 &&
+      relationHeldSource.length === 0 &&
+      !relationUncertainty &&
       !hasFailure &&
       !hasProjectStillBlocked
     ) {
@@ -41719,11 +42291,21 @@ function buildUnblockedNoticeModel(model, options = {}) {
       });
     });
 
-    // Keep-moving picks count as linked in every summary; the card is a
-    // keep-moving card only when nothing but keep-moving picks is reported.
-    const allLinked = [...linked, ...keepMoving];
+    const relationLinked = relationSource.map(mapRelationNoticeLinkedRow);
+    const relationHeld = relationHeldSource.map((row) =>
+      mapRelationHeldNoticeRow(row, formatUnblockedScheduledDate(row.scheduled)),
+    );
+    // Keep-moving and relation picks count as linked in every summary.
+    const allLinked = [...linked, ...relationLinked, ...keepMoving];
     const onlyKeepMoving =
       keepMoving.length > 0 &&
+      linked.length === 0 &&
+      relationLinked.length === 0 &&
+      recovered.length === 0 &&
+      stillBlocked.length === 0;
+    const onlyRelation =
+      (relationLinked.length > 0 || relationHeld.length > 0 || Boolean(relationUncertainty)) &&
+      keepMoving.length === 0 &&
       linked.length === 0 &&
       recovered.length === 0 &&
       stillBlocked.length === 0;
@@ -41738,9 +42320,10 @@ function buildUnblockedNoticeModel(model, options = {}) {
     const pullIn = unblockedPullInSummary(model, allLinked, recovered);
 
     const total = unblocked.length + still.length;
-    // Keep-moving rows render after every dependency row (§12.15).
+    // Relation picks count as linked; keep-moving rows render last (§12.15, §12.18).
     const ordered = Object.freeze([
       ...linked.map((row) => ({ kind: "linked", row })),
+      ...relationLinked.map((row) => ({ kind: "linked", row })),
       ...recovered.map((row) => ({ kind: "recovered", row })),
       ...still.map((row) => ({ kind: "stillBlocked", row })),
       ...keepMoving.map((row) => ({ kind: "linked", row })),
@@ -41749,7 +42332,7 @@ function buildUnblockedNoticeModel(model, options = {}) {
     const moreCount = Math.max(0, ordered.length - visibleRows.length);
 
     let countPill = "";
-    if (pullIn && pullIn.current && !onlyKeepMoving) {
+    if (pullIn && pullIn.current && !onlyKeepMoving && !onlyRelation) {
       const destinationText = pullIn.destinations.length > 0
         ? ` → ${pullIn.destinations.join(", ")}`
         : "";
@@ -41782,12 +42365,12 @@ function buildUnblockedNoticeModel(model, options = {}) {
       countPill = `${unblocked.length}`;
     }
 
-    const receipt =
-      predecessors.length === 1
-        ? `✓ ${truncateUnblockedText(predecessors[0].text)}`
-        : predecessors.length > 1
-          ? `✓ ${predecessors.length} tasks`
-          : "✓ done";
+    const defaultReceipt = predecessors.length === 1
+      ? `✓ ${truncateUnblockedText(predecessors[0].text)}`
+      : predecessors.length > 1 ? `✓ ${predecessors.length} tasks` : "✓ done";
+    const receipt = onlyRelation
+      ? relationNoticeReceiptFromRows(relationLinked, relationHeld, predecessors) || defaultReceipt
+      : defaultReceipt;
 
     const app =
       options && typeof options === "object" ? options.app : undefined;
@@ -41821,6 +42404,10 @@ function buildUnblockedNoticeModel(model, options = {}) {
     const summary = {
       linked: allLinked,
       onlyKeepMoving,
+      onlyRelation,
+      relationLinked,
+      relationHeld,
+      relationUncertainty,
       recovered,
       predecessors,
       pullIn,
@@ -41846,7 +42433,11 @@ function buildUnblockedNoticeModel(model, options = {}) {
       pullIn,
       keepMoving: Object.freeze(keepMoving),
       keepMovingOnly: onlyKeepMoving,
-      glyph: onlyKeepMoving ? "⏭" : "🔓",
+      relationLinked: Object.freeze(relationLinked),
+      relationHeld: Object.freeze(relationHeld),
+      relationOnly: onlyRelation,
+      relationUncertainty,
+      glyph: onlyRelation ? RELATION_COPY_GLYPH : onlyKeepMoving ? "⏭" : "🔓",
       showLegacyBreaker: isBreaker && !(pullIn && pullIn.current),
       failure: hasFailure ? Object.freeze(failure) : null,
       dailyPath,
@@ -41854,11 +42445,13 @@ function buildUnblockedNoticeModel(model, options = {}) {
       receipt,
       chips: Object.freeze(chips),
       text,
-      title: onlyKeepMoving
-        ? keepMovingTitle(keepMoving)
-        : ordered.length > 0 && ordered.every((entry) => entry.row.projectEmpty)
-          ? "Project empty"
-          : "Unblocked",
+      title: onlyRelation
+        ? relationNoticeTitleFromRows(relationLinked, relationHeld) || "Relation"
+        : onlyKeepMoving
+          ? keepMovingTitle(keepMoving)
+          : ordered.length > 0 && ordered.every((entry) => entry.row.projectEmpty)
+            ? "Project empty"
+            : "Unblocked",
       durationMs,
     });
   } catch (error) {
@@ -41938,15 +42531,16 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
   }
   const app = settings.app;
   const keepMovingOnly = model.keepMovingOnly === true;
+  const relationOnly = model.relationOnly === true;
   const card = root.createDiv({
-    cls: `bob-nh-notice is-unblock${keepMovingOnly ? " is-keep-moving" : ""}`,
+    cls: `bob-nh-notice is-unblock${keepMovingOnly ? " is-keep-moving" : ""}${relationOnly ? " is-relation" : ""}`,
     attr: { "aria-label": model.text },
   });
   const headerEl = card.createDiv({ cls: "bob-nh-notice-header" });
   const iconEl = headerEl.createSpan({ cls: "bob-nh-notice-icon" });
   iconEl.createSpan({
     cls: "bob-nh-notice-glyph",
-    text: keepMovingOnly ? "⏭" : "🔓",
+    text: model.glyph || (keepMovingOnly ? "⏭" : "🔓"),
     attr: { "aria-hidden": "true" },
   });
   headerEl.createSpan({ cls: "bob-nh-notice-level", text: model.title || "Unblocked" });
@@ -41979,7 +42573,7 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
       }
       if (kind === "linked") {
         const rowEl = rowsEl.createDiv({
-          cls: `bob-nh-unblock-row is-linked is-clickable${row.keepMoving ? " is-keep-moving" : ""}`,
+          cls: `bob-nh-unblock-row is-linked is-clickable${row.keepMoving ? " is-keep-moving" : ""}${row.relation ? " is-relation" : ""}`,
         });
         rowEl.createSpan({
           cls: "bob-nh-unblock-glyph",
@@ -42006,6 +42600,12 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
           rowEl.createSpan({
             cls: "bob-nh-notice-chip is-keep-moving",
             text: keepMovingSuffix([row]),
+          });
+        }
+        if (row.relation && !relationOnly) {
+          rowEl.createSpan({
+            cls: "bob-nh-notice-chip is-relation",
+            text: relationCopyChip(row.relationLabel, row.relationTarget),
           });
         }
         const extra = [];
@@ -42107,6 +42707,16 @@ function renderUnblockedNoticeFragment(view, root, options = {}) {
     }
   }
 
+  const mutedRelation = relationOnly && model.relationHeld && model.relationHeld[0] &&
+    !(model.visibleRows && model.visibleRows.length)
+    ? model.relationHeld[0].notice : "";
+  for (const text of [mutedRelation, model.relationUncertainty].filter(Boolean)) {
+    card.createDiv({ cls: "bob-nh-notice-reason" }).createSpan({
+      cls: "bob-nh-notice-reason-text",
+      text,
+    });
+  }
+
   if (model.failure) {
     const failureEl = card.createDiv({ cls: "bob-nh-notice-reason" });
     const count = model.failure.count;
@@ -42170,17 +42780,17 @@ function showUnblockedNotice(app, model, options = {}) {
   }
 }
 
-// Additive `api.notice` factory (v2: the model reads an optional
-// `keep_moving` row array, §12.13/§12.15). Kept here (rather than inline in
-// 480) so `480-review-jump-and-nav-api.js` stays under the 1000-line
-// fragment limit. The api itself stays `version: 3`; this member carries its
-// own version like `reviewWalk`. v1 callers pass models without
-// `keep_moving` and render exactly as before.
+// Additive `api.notice` factory (v3: `keep_moving` plus `relation_successors`,
+// §12.13/§12.18). Kept here (rather than inline in 480) so
+// `480-review-jump-and-nav-api.js` stays under the 1000-line fragment limit.
+// The api itself stays `version: 3`; this member carries its own version like
+// `reviewWalk`. v1/v2 callers pass models without relation rows and render
+// exactly as before.
 function createNoticeApi(plugin) {
   const app =
     plugin && typeof plugin === "object" ? plugin.app : undefined;
   return Object.freeze({
-    version: 2,
+    version: 3,
     showUnblocked: (model) => showUnblockedNotice(app, model),
   });
 }
@@ -67250,9 +67860,10 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // `main.js`: bob-ledger-tools feature-detects `api?.version >= 1` and
 // task-status-cycler feature-detects `api?.taskLinkLane?.version >= 1`.
 // `notice` is the additive Unblocked card (`api.notice`, §12.6); v2 adds
-// keep-moving rows (§12.15). `successors` is the offer picker; v2 accepts
-// the `keep_moving` group (§12.13). Callers feature-detect the member
-// versions (`api.notice?.version >= 2`, `api.successors?.version >= 2`).
+// keep-moving rows (§12.15) and v3 adds `relation_successors` (§12.18).
+// `successors` is the offer picker; v2 accepts `keep_moving` and v3 accepts
+// the `relation` group (§12.13). Callers feature-detect the member
+// versions (`api.notice?.version >= 3`, `api.successors?.version >= 3`).
 // `relations` is the additive LINKS writer (`api.relations` v0): `removeLink`
 // works now; `openStage` settles `{ok: false}` until both stage directions
 // land and the namespace rises to v1.
@@ -102133,4 +102744,39 @@ Object.assign(module.exports.helpers, {
   relationSuccessorLabelsSet,
   relationSuccessorLabelForInverseKey,
   relationLabelEffectForKey,
+});
+// ---- src/706-successor-relation-exports.js ----
+// Relation-successor presentation exports (`docs/task-dependencies.md`
+// §12.13 picker/notice API v3 and §12.18). Sibling fragment so
+// src/700-exports.js stays under the 1000-line cap.
+Object.assign(module.exports.helpers, {
+  RELATION_COPY_GLYPH,
+  relationCopyTruncate,
+  relationCopyQuote,
+  relationCopyLabelTitle,
+  relationCopyGroupTitle,
+  relationCopyWhy,
+  relationCopyTag,
+  relationCopyChip,
+  relationCopyReason,
+  relationCopySuffix,
+  relationCopyFold,
+  relationCopyPickerTitle,
+  relationCopyLinkedNotice,
+  relationCopyHeldNotice,
+  relationCopyUncertainty,
+  relationCopyCliHeader,
+  relationCopyReceipt,
+  relationSuccessorCopy,
+  relationSuccessorCopyValue,
+  successorPickerAllRelation,
+  successorPickerRelationTitle,
+  collectRelationNoticeRows,
+  collectRelationHeldRows,
+  mapRelationNoticeLinkedRow,
+  mapRelationHeldNoticeRow,
+  relationNoticeFallbackText,
+  relationNoticeTitleFromRows,
+  relationNoticeReceiptFromRows,
+  relationNoticeUncertaintyLine,
 });

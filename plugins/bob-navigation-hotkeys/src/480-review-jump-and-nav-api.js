@@ -891,9 +891,10 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // `main.js`: bob-ledger-tools feature-detects `api?.version >= 1` and
 // task-status-cycler feature-detects `api?.taskLinkLane?.version >= 1`.
 // `notice` is the additive Unblocked card (`api.notice`, §12.6); v2 adds
-// keep-moving rows (§12.15). `successors` is the offer picker; v2 accepts
-// the `keep_moving` group (§12.13). Callers feature-detect the member
-// versions (`api.notice?.version >= 2`, `api.successors?.version >= 2`).
+// keep-moving rows (§12.15) and v3 adds `relation_successors` (§12.18).
+// `successors` is the offer picker; v2 accepts `keep_moving` and v3 accepts
+// the `relation` group (§12.13). Callers feature-detect the member
+// versions (`api.notice?.version >= 3`, `api.successors?.version >= 3`).
 // `relations` is the additive LINKS writer (`api.relations` v0): `removeLink`
 // works now; `openStage` settles `{ok: false}` until both stage directions
 // land and the namespace rises to v1.

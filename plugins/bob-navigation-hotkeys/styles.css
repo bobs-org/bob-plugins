@@ -1601,6 +1601,19 @@
   --bob-nh-tone: var(--task-status-next, var(--color-green));
 }
 
+/* Relation card (notice API v3, §12.18): 🪢 glyph, muted accent, no 🔓. */
+.bob-nh-notice.is-unblock.is-relation {
+  --bob-nh-level-color: var(--text-muted);
+}
+
+.bob-nh-unblock-row.is-relation .bob-nh-unblock-glyph {
+  color: var(--text-muted);
+}
+
+.bob-nh-notice .bob-nh-notice-chip.is-relation {
+  --bob-nh-tone: var(--text-muted);
+}
+
 /* Vault-wide Depends on stage (nav-stage): CURRENT / RESULTS / BLOCKED
    section dividers, guarded (disabled) rows, and cross-note guard reasons.
    Section headers sit inside the first row of their section and read as a
@@ -2820,6 +2833,12 @@
   font-size: var(--font-ui-smaller);
 }
 
+.bob-successor-row-meta {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
 .bob-successor-row.is-muted .bob-successor-row-details {
   color: var(--text-faint);
 }
@@ -2910,6 +2929,17 @@
 }
 
 .bob-successor-group.is-keep_moving .bob-successor-folded-count {
+  padding-left: calc(1.4em + var(--size-4-2));
+}
+
+/* Relation groups (picker API v3, §12.18): neutral left accent, no new
+   colour values, no status token. */
+.bob-successor-group.is-relation {
+  border-left: 3px solid var(--text-muted);
+  padding-left: var(--size-4-2);
+}
+
+.bob-successor-group.is-relation .bob-successor-folded-count {
   padding-left: calc(1.4em + var(--size-4-2));
 }
 

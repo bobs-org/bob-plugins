@@ -696,11 +696,11 @@ test("unblocked text truncates to 48 characters with an ellipsis", () => {
   assert.equal(helpers.formatUnblockedScheduledDate("not-a-date"), "not-a-date");
 });
 
-test("nav api exposes additive notice v2 and keeps version 3", () => {
+test("nav api exposes additive notice v3 and keeps version 3", () => {
   const api = helpers.createDependencyNavApi({ app: {} });
   assert.equal(api.version, 3);
   assert.ok(api.notice);
-  assert.equal(api.notice.version, 2);
+  assert.equal(api.notice.version, 3);
   assert.equal(typeof api.notice.showUnblocked, "function");
   assert.equal(Object.isFrozen(api.notice), true);
   assert.equal(api.notice.showUnblocked({ unblocked: [], failure: null }), false);
@@ -989,3 +989,203 @@ test("keep-moving stylesheet uses only existing tokens inside the scoped notice 
     assert.doesNotMatch(block, /\bhsla?\(/i);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Notice API v3 (docs/task-dependencies.md §12.13, §12.18): relation rows.
+
+function relationLink(overrides = {}) {
+  return {
+    day_file: "2026/20261102.md",
+    entry_name: "BUILD",
+    entry_line: 37,
+    entry_created: false,
+    next_up: false,
+    line: 40,
+    block_link: "[[agents#^evaluate]]",
+    block_id_created: false,
+    ...overrides,
+  };
+}
+
+function relationRow(overrides = {}) {
+  return {
+    note_path: "agents.md",
+    block_id: "evaluate",
+    line: 12,
+    text: "Prepare evaluation prompt",
+    previous_status_symbol: " ",
+    previous_status_name: "Ready",
+    status_symbol: "*",
+    status_name: "Next",
+    inbox: false,
+    trigger: "relation",
+    offer: { group: "relation", after: "agents.md#^implement" },
+    relation: {
+      label: "starts after",
+      key: "starts after",
+      event: "done",
+      after: [{ note_path: "agents.md", block_id: "implement", text: "Send implementation prompt" }],
+    },
+    unblocked_by: [
+      { note_path: "agents.md", block_id: "implement", text: "Send implementation prompt" },
+    ],
+    link: relationLink(),
+    not_linked: null,
+    ...overrides,
+  };
+}
+
+function relationOnlyModel(rows = [relationRow()], overrides = {}) {
+  return {
+    version: 1,
+    predecessors: [
+      { note_path: "agents.md", block_id: "implement", text: "Send implementation prompt" },
+    ],
+    unblocked: [],
+    relation_successors: rows,
+    still_blocked: [],
+    daily_path: "2026/20261102.md",
+    daily_content: null,
+    failure: null,
+    ...overrides,
+  };
+}
+
+test("relation card: one pick reads as a ‹Label› “‹T›” card with 🪢 and no 🔓 or 'unblocked'", () => {
+  const view = helpers.buildUnblockedNoticeModel(
+    relationOnlyModel([relationRow()], { daily_content: "## Pomodoros\n- [ ] () — BUILD\n" }),
+    { app: planBudgetApp() },
+  );
+  assert.ok(view);
+  assert.equal(view.relationOnly, true);
+  assert.equal(view.title, "Starts after \u201cSend implementation prompt\u201d");
+  assert.equal(view.glyph, "🪢");
+  assert.equal(view.receipt, "\u2713 Send implementation prompt");
+  assert.equal(
+    view.text,
+    "🪢 Next in BUILD: Prepare evaluation prompt \u00b7 starts after \u201cSend implementation prompt\u201d",
+  );
+  assert.doesNotMatch(view.text, /🔓|unblocked/i);
+
+  const root = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(view, root, { app: planBudgetApp() });
+  const card = findFragmentNode(root, nodeHasClass("bob-nh-notice"));
+  assert.ok(card.classes.includes("is-unblock"));
+  assert.ok(card.classes.includes("is-relation"));
+  assert.equal(findFragmentNode(root, nodeHasClass("bob-nh-notice-glyph")).text, "🪢");
+  assert.equal(
+    findFragmentNode(root, nodeHasClass("bob-nh-notice-level")).text,
+    "Starts after \u201cSend implementation prompt\u201d",
+  );
+  assert.equal(findFragmentNode(root, nodeHasClass("bob-nh-unblock-text")).text, "Prepare evaluation prompt");
+});
+
+test("relation card: several picks, parked receipt, and mixed 🔓 forms with a chip", () => {
+  const second = relationRow({
+    block_id: "rollout",
+    text: "Write rollout notes",
+    link: relationLink({ line: 41 }),
+  });
+  const two = helpers.buildUnblockedNoticeModel(relationOnlyModel([relationRow(), second]), {});
+  assert.equal(two.text, "🪢 2 linked \u2192 BUILD \u00b7 starts after \u201cSend implementation prompt\u201d");
+
+  const parked = helpers.buildUnblockedNoticeModel(
+    relationOnlyModel([relationRow({
+      relation: {
+        label: "starts after",
+        key: "starts after",
+        event: "parked",
+        after: [{ note_path: "agents.md", block_id: "implement", text: "Send implementation prompt" }],
+      },
+    })]),
+    {},
+  );
+  assert.equal(parked.receipt, "Send implementation prompt parked");
+
+  const mixed = helpers.buildUnblockedNoticeModel(
+    singleLinkedModel({ relation_successors: [relationRow()] }),
+    {},
+  );
+  assert.equal(mixed.relationOnly, false);
+  assert.equal(mixed.title, "Unblocked");
+  assert.equal(mixed.glyph, "🔓");
+  assert.match(mixed.text, /^🔓 2 linked/);
+  assert.doesNotMatch(mixed.text, /unblocked/i);
+  const root = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(mixed, root, {});
+  const card = findFragmentNode(root, nodeHasClass("bob-nh-notice"));
+  assert.equal(card.classes.includes("is-relation"), false);
+  const chips = collectFragmentNodes(root, nodeHasClass("is-relation"))
+    .filter((node) => node.classes.includes("bob-nh-notice-chip"))
+    .map((node) => node.text);
+  assert.deepEqual(chips, ["starts after \u201cSend implementation prompt\u201d"]);
+});
+
+test("relation notices are silent when nothing was picked, and held/uncertainty use muted copy", () => {
+  const unpicked = relationRow({ link: null, not_linked: "not_selected" });
+  assert.equal(helpers.buildUnblockedNoticeModel(relationOnlyModel([unpicked]), {}), null);
+  const held = helpers.buildUnblockedNoticeModel({
+    predecessors: [{ note_path: "agents.md", block_id: "implement", text: "Send implementation prompt" }],
+    unblocked: [],
+    relation_successors: [],
+    relation_held: [{
+      note_path: "agents.md",
+      block_id: "rollout",
+      text: "Write rollout notes",
+      reason: "already_started",
+      relation: {
+        label: "starts after",
+        key: "starts after",
+        event: "parked",
+        after: [{ note_path: "agents.md", block_id: "implement", text: "Send implementation prompt" }],
+      },
+    }],
+  }, {});
+  assert.ok(held);
+  assert.equal(held.relationOnly, true);
+  assert.equal(
+    held.text,
+    "🪢 \u201cWrite rollout notes\u201d starts after \u201cSend implementation prompt\u201d \u00b7 not offered: already started",
+  );
+  const planned = helpers.buildUnblockedNoticeModel({
+    unblocked: [],
+    relation_held: [{
+      text: "Prepare evaluation prompt",
+      reason: "already_planned",
+      relation: { label: "starts after", event: "done", after: [{ text: "Send implementation prompt" }] },
+    }],
+  }, {});
+  assert.equal(planned, null, "already-planned held rows stay silent");
+  const uncertain = helpers.buildUnblockedNoticeModel({
+    unblocked: [],
+    relation_check: "unavailable",
+  }, {});
+  assert.ok(uncertain);
+  assert.equal(uncertain.relationUncertainty, "🪢 Couldn't check starts after links \u00b7 nothing offered");
+  assert.doesNotMatch(uncertain.text, /🔓|unblocked/i);
+});
+
+test("an older model without relation_successors is unchanged under notice v3", () => {
+  const v1 = helpers.buildUnblockedNoticeModel(singleLinkedModel(), {});
+  assert.equal(v1.relationOnly, false);
+  assert.equal(v1.glyph, "🔓");
+  assert.equal(v1.relationLinked.length, 0);
+  assert.equal(v1.text, "🔓 Next in FIX: Re-launch all failed agents on apollo!");
+  const root = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(v1, root, {});
+  assert.equal(findFragmentNode(root, nodeHasClass("is-relation")), null);
+});
+
+test("relation stylesheet uses only existing tokens and no new hex values", () => {
+  const stylesPath = path.join(__dirname, "../plugins/bob-navigation-hotkeys/styles.css");
+  const styles = fs.readFileSync(stylesPath, "utf8");
+  assert.match(styles, /\.bob-successor-group\.is-relation \{/);
+  assert.match(styles, /\.bob-nh-notice\.is-unblock\.is-relation \{/);
+  const start = styles.indexOf(".bob-successor-group.is-relation");
+  const block = styles.slice(start, styles.indexOf("@media", start));
+  assert.match(block, /--text-muted/);
+  assert.doesNotMatch(block, /#[0-9a-f]{3,8}\b/i);
+  assert.doesNotMatch(block, /\brgba?\(/i);
+  assert.doesNotMatch(block, /--task-status-/);
+});
+

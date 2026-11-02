@@ -1,7 +1,9 @@
 // SO21, SO22, SO25, and SO32: the real nav picker lifecycle, selection,
 // group/filter reachability, review-walk hold, and non-rejecting API.
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
+const path = require("node:path");
 const test = require("node:test");
 const { ModalStub, click, pressKey } = require("./modal-harness.cjs");
 
@@ -54,6 +56,8 @@ function row(key, index, options = {}) {
     needsBlockId: options.needsBlockId === true,
     selectable: options.selectable !== false,
     ...(options.mutedReason ? { mutedReason: options.mutedReason } : {}),
+    ...(options.suffix ? { suffix: options.suffix } : {}),
+    ...(options.reason ? { reason: options.reason } : {}),
     ...(options.task ? { task: options.task } : {}),
   };
 }
@@ -845,7 +849,7 @@ function keepMovingModel(groups = [keepMovingGroup()], extra = {}) {
 
 test("picker API v2 renders a keep_moving group: title, caption, tag, lanes, fold line, and the skip-forward icon", async () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 2);
+  assert.equal(plugin.api.successors.version, 3);
   const { pending, modal } = await openPicker(plugin, keepMovingModel());
   assert.equal(modal.title, "Keep ‹sase_badges› moving", "only-keep_moving models derive the picker title");
   assert.equal(modal.headerIcon, "skip-forward");
@@ -1116,3 +1120,174 @@ test("cycler keep-moving model survives nav normalization with identical copy", 
   };
   assert.equal(helpers.buildUnblockedNoticeModel(failureModel).text, cyclerHelpers.successorNoticeText(failureModel));
 });
+
+// ---------------------------------------------------------------------------
+// Picker API v3 (docs/task-dependencies.md §12.13, §12.18): relation groups.
+
+const REL_TARGET = "Send implementation prompt";
+const REL_CAPTION = "\u201cSend implementation prompt\u201d is done";
+const REL_TAG = "your links \u00b7 not dependents";
+const REL_HEADER = "Starts after \u201cSend implementation prompt\u201d";
+const REL_FOLD = "not offered \u00b7 \u201cWrite rollout notes\u201d waits for \u201cShip schema change\u201d \u00b7 1 already started";
+
+function relationGroup(options = {}) {
+  return {
+    group: "relation",
+    header: REL_HEADER,
+    caption: REL_CAPTION,
+    tag: REL_TAG,
+    foldText: REL_FOLD,
+    after: { notePath: "agents.md", blockId: "implement", text: REL_TARGET },
+    event: "done",
+    label: "starts after",
+    rows: [
+      row("rel:evaluate", 1, {
+        text: "Prepare evaluation prompt",
+        notePath: "agents.md",
+        status: "*",
+        destinationLabel: "BUILD",
+        suffix: "after \u201cSend implementation prompt\u201d and \u201cDeploy release\u201d",
+      }),
+    ],
+    folded: { hidden: 1, alreadyPlanned: 0, subProjects: 0, blocked: 1, scheduled: 0, alreadyStarted: 1, waitsFor: 1 },
+    ...options,
+  };
+}
+
+function relationModel(groups = [relationGroup()], extra = {}) {
+  return {
+    predecessors: [{ notePath: "agents.md", blockId: "implement", text: REL_TARGET }],
+    groups,
+    budget: { links: 6, max: 10 },
+    ...extra,
+  };
+}
+
+test("picker API v3 renders a relation group: header, caption, tag, fold, title, and link-2 icon", async () => {
+  const plugin = makePlugin();
+  assert.equal(plugin.api.successors.version, 3);
+  const { pending, modal } = await openPicker(plugin, relationModel());
+  assert.equal(modal.title, REL_HEADER);
+  assert.equal(modal.headerIcon, "link-2");
+  assert.ok(modal.contentEl.classes.includes("is-relation-only"));
+  const group = findAll(modal.resultsEl, "bob-successor-group")[0];
+  assert.ok(group.classes.includes("is-relation"));
+  assert.equal(findAll(group, "bob-successor-group-title")[0].textContent, REL_HEADER);
+  assert.equal(findAll(group, "bob-successor-group-tag")[0].textContent, REL_TAG);
+  assert.equal(findAll(group, "bob-successor-group-caption")[0].textContent, REL_CAPTION);
+  assert.deepEqual(findAll(group, "bob-successor-folded-count").map((el) => el.textContent), [REL_FOLD]);
+  assert.deepEqual(findAll(group, "bob-successor-row-details").map((el) => el.textContent), [
+    "agents \u00b7 Next \u00b7 \u2192 BUILD",
+  ]);
+  assert.deepEqual(findAll(group, "bob-successor-row-meta").map((el) => el.textContent), [
+    "after \u201cSend implementation prompt\u201d and \u201cDeploy release\u201d",
+  ]);
+  modal.close();
+  await pending;
+});
+
+test("a mixed picker keeps the generic title and icon and renders relation with caption and tag", async () => {
+  const plugin = makePlugin();
+  const handOffs = modelFor(1, { group: "hand_off" }).groups[0];
+  const { pending, modal } = await openPicker(plugin, relationModel([handOffs, relationGroup()], {
+    title: "Pull in successors of Send implementation prompt",
+  }));
+  assert.equal(modal.headerIcon, "git-pull-request");
+  assert.equal(modal.contentEl.classes.includes("is-relation-only"), false);
+  assert.equal(modal.title, "Pull in successors of Send implementation prompt");
+  const titles = findAll(modal.resultsEl, "bob-successor-group-title").map((el) => el.textContent);
+  assert.deepEqual(titles, ["Hand-offs", REL_HEADER]);
+  const groups = findAll(modal.resultsEl, "bob-successor-group");
+  assert.ok(groups[1].classes.includes("is-relation"));
+  assert.equal(findAll(groups[0], "bob-successor-group-caption").length, 0);
+  assert.equal(findAll(groups[1], "bob-successor-group-caption").length, 1);
+  assert.equal(findAll(groups[1], "bob-successor-group-tag").length, 1);
+  modal.close();
+  await pending;
+});
+
+test("v1 and v2 models still render as before under picker API v3", async () => {
+  const plugin = makePlugin();
+  const v1 = await openPicker(plugin, modelFor(1, { group: "hand_off" }));
+  assert.equal(v1.modal.headerIcon, "git-pull-request");
+  assert.equal(findAll(v1.modal.resultsEl, "bob-successor-group-caption").length, 0);
+  assert.equal(findAll(v1.modal.resultsEl, "bob-successor-row-meta").length, 0);
+  v1.modal.close();
+  await v1.pending;
+  const v2 = await openPicker(makePlugin(), keepMovingModel());
+  assert.equal(v2.modal.headerIcon, "skip-forward");
+  assert.ok(v2.modal.contentEl.classes.includes("is-keep-moving-only"));
+  v2.modal.close();
+  await v2.pending;
+});
+
+test("unknown groups are still dropped and a relation-only model with no selectable row is unusable", async () => {
+  const unknown = { ...relationGroup(), group: "surprise" };
+  assert.equal(helpers.normalizeSuccessorPickerModel(relationModel([unknown])), null);
+  const kept = helpers.normalizeSuccessorPickerModel(relationModel([unknown, relationGroup()]));
+  assert.deepEqual(kept.groups.map((group) => group.group), ["relation"]);
+  const muted = relationGroup();
+  muted.rows = muted.rows.map((item) => ({ ...item, selectable: false, mutedReason: "blocked" }));
+  assert.equal(await makePlugin().api.successors.pick(relationModel([muted])), null);
+});
+
+test("the filter reaches relation groups by caption, tag, fold, suffix, and second reason", async () => {
+  const plugin = makePlugin();
+  const withReason = relationGroup();
+  withReason.rows[0].reason = "\u00b7 starts after \u201cSend implementation prompt\u201d";
+  const { pending, modal } = await openPicker(plugin, relationModel([withReason]));
+  const visibleKeys = () => modal.visibleItems.filter((item) => item.kind === "offer").map((item) => item.row.key);
+  modal.inputEl.value = "not dependents";
+  modal.renderResults();
+  assert.deepEqual(visibleKeys(), ["rel:evaluate"]);
+  modal.inputEl.value = "is done";
+  modal.renderResults();
+  assert.deepEqual(visibleKeys(), ["rel:evaluate"]);
+  modal.inputEl.value = "already started";
+  modal.renderResults();
+  assert.deepEqual(visibleKeys(), ["rel:evaluate"], "foldText matches the whole group");
+  modal.inputEl.value = "Deploy release";
+  modal.renderResults();
+  assert.deepEqual(visibleKeys(), ["rel:evaluate"], "row suffix filters");
+  modal.close();
+  await pending;
+});
+
+test("relation-only titles follow the copy table; an explicit title always wins", () => {
+  const one = helpers.normalizeSuccessorPickerModel(relationModel());
+  assert.equal(one.title, REL_HEADER);
+  assert.equal(one.relationOnly, true);
+  const two = relationModel([
+    relationGroup(),
+    relationGroup({
+      after: { notePath: "agents.md", blockId: "deploy", text: "Deploy release" },
+      header: "Starts after \u201cDeploy release\u201d",
+      rows: [row("rel:other", 2, { text: "Other", notePath: "agents.md", status: " " })],
+    }),
+  ]);
+  const normalizedTwo = helpers.normalizeSuccessorPickerModel(two);
+  assert.equal(normalizedTwo.title, "Starts after 2 tasks");
+  assert.equal(
+    helpers.normalizeSuccessorPickerModel(relationModel(undefined, { title: "Choose" })).title,
+    "Choose",
+  );
+  const mixed = relationModel([modelFor(1).groups[0], relationGroup()]);
+  assert.equal(helpers.normalizeSuccessorPickerModel(mixed).title, "Choose successor tasks");
+  assert.equal(helpers.normalizeSuccessorPickerModel(mixed).relationOnly, false);
+});
+
+test("relation successor copy vectors drive every copy-table string", () => {
+  const vectorsPath = path.join(
+    __dirname,
+    "../plugins/bob-navigation-hotkeys/scripts/fixtures/relation_successor/vectors.json",
+  );
+  const vectors = JSON.parse(fs.readFileSync(vectorsPath, "utf8"));
+  assert.ok(Array.isArray(vectors.copy) && vectors.copy.length > 0);
+  for (const vector of vectors.copy) {
+    const got = helpers.relationSuccessorCopy(vector.input, vector.expected);
+    for (const [key, value] of Object.entries(vector.expected)) {
+      assert.deepEqual(got[key], value, `${vector.id} ${vector.name}: ${key}`);
+    }
+  }
+});
+

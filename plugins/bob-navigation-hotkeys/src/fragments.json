@@ -42,6 +42,7 @@
   "203-pomodoro-themes-manager-actions.js",
   "205-inbox-route-picker-modal.js",
   "206a-successor-picker-model.js",
+  "206b-successor-relation-copy.js",
   "206-successor-picker-modal.js",
   "207-image-zoom-modal.js",
   "208-parent-note-picker-model.js",
@@ -180,5 +181,6 @@
   "702-relation-mention-exports.js",
   "703-successor-keep-moving-exports.js",
   "704-pomodoro-split-exports.js",
-  "705-relation-successor-exports.js"
+  "705-relation-successor-exports.js",
+  "706-successor-relation-exports.js"
 ]

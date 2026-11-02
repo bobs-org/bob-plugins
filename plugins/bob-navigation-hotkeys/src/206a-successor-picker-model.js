@@ -252,7 +252,7 @@ function normalizeSuccessorPickerModel(model) {
     if (!model || typeof model !== "object" || !Array.isArray(model.groups)) {
       return null;
     }
-    const allowedGroups = new Set(["hand_off", "project", "project_finished", "keep_moving"]);
+    const allowedGroups = new Set(["hand_off", "project", "project_finished", "keep_moving", "relation"]);
     const seenKeys = new Set();
     const groups = [];
     let selectableCount = 0;
@@ -278,6 +278,8 @@ function normalizeSuccessorPickerModel(model) {
           continue;
         }
         const task = normalizeSuccessorPickerTaskContext(row.task);
+        const suffix = successorPickerText(row.suffix);
+        const reason = successorPickerText(row.reason);
         const normalized = Object.freeze({
           key,
           text,
@@ -289,6 +291,8 @@ function normalizeSuccessorPickerModel(model) {
           selectable: row.selectable,
           mutedReason: successorPickerText(row.mutedReason),
           destination: row.destination,
+          ...(suffix ? { suffix } : {}),
+          ...(reason ? { reason } : {}),
           ...(task ? { task } : {}),
         });
         seenKeys.add(key);
@@ -298,15 +302,32 @@ function normalizeSuccessorPickerModel(model) {
           selectableCount += 1;
         }
       }
-      const folded = source.folded && typeof source.folded === "object"
+      const foldedSource = source.folded && typeof source.folded === "object" ? source.folded : {};
+      const folded = source.group === "relation"
         ? Object.freeze({
-            hidden: successorPickerCount(source.folded.hidden),
-            alreadyPlanned: successorPickerCount(source.folded.alreadyPlanned),
-            subProjects: successorPickerCount(source.folded.subProjects),
-            blocked: successorPickerCount(source.folded.blocked),
-            scheduled: successorPickerCount(source.folded.scheduled),
+            hidden: successorPickerCount(foldedSource.hidden),
+            alreadyPlanned: successorPickerCount(foldedSource.alreadyPlanned),
+            subProjects: successorPickerCount(foldedSource.subProjects),
+            blocked: successorPickerCount(foldedSource.blocked),
+            scheduled: successorPickerCount(foldedSource.scheduled),
+            alreadyStarted: successorPickerCount(foldedSource.alreadyStarted),
+            waitsFor: successorPickerCount(foldedSource.waitsFor),
           })
-        : Object.freeze({ hidden: 0, alreadyPlanned: 0, subProjects: 0, blocked: 0, scheduled: 0 });
+        : Object.freeze({
+            hidden: successorPickerCount(foldedSource.hidden),
+            alreadyPlanned: successorPickerCount(foldedSource.alreadyPlanned),
+            subProjects: successorPickerCount(foldedSource.subProjects),
+            blocked: successorPickerCount(foldedSource.blocked),
+            scheduled: successorPickerCount(foldedSource.scheduled),
+          });
+      const relationFields = source.group === "relation"
+        ? {
+            foldText: successorPickerText(source.foldText),
+            after: successorPickerNormalizeRelationAfter(source.after),
+            event: relationCopyEvent(source.event),
+            label: successorPickerText(source.label),
+          }
+        : {};
       groups.push(Object.freeze({
         group: source.group,
         header: successorPickerText(source.header),
@@ -315,6 +336,7 @@ function normalizeSuccessorPickerModel(model) {
         project: successorPickerText(source.project),
         rows: Object.freeze(rows),
         folded,
+        ...relationFields,
       }));
     }
     if (selectableCount === 0 || groups.length === 0) {
@@ -334,13 +356,17 @@ function normalizeSuccessorPickerModel(model) {
         }))
       : [];
     const keepMovingOnly = successorPickerAllKeepMoving(groups);
+    const relationOnly = successorPickerAllRelation(groups);
     return Object.freeze({
       title: successorPickerText(model.title) ||
-        (keepMovingOnly ? successorPickerKeepMovingTitle(groups) : "Choose successor tasks"),
+        (keepMovingOnly ? successorPickerKeepMovingTitle(groups) :
+          relationOnly ? successorPickerRelationTitle(groups, selectableCount) :
+            "Choose successor tasks"),
       predecessors: Object.freeze(predecessors),
       groups: Object.freeze(groups),
       budget,
       keepMovingOnly,
+      relationOnly,
       selectableCount,
       taskRowCount,
     });

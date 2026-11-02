@@ -482,7 +482,13 @@ function blocksChipModel(lineText, sourcePath, owner, memo, lookup, today, block
     const frozen = !blocksTaskIsOpen(owner);
     const reverse = blocksDependentsIndex(memo);
     const ownerId = String(owner && owner.id || "").trim();
-    const liveTasks = !frozen && ownerId ? (reverse.get(ownerId) || []) : [];
+    const ownerKey = blocksTaskKey(owner);
+    const liveTasks = !frozen && ownerId
+      ? (reverse.get(ownerId) || []).filter((task) => {
+          const key = blocksTaskKey(task);
+          return !ownerKey || !key || key !== ownerKey;
+        })
+      : [];
     const liveByKey = new Map();
     for (const task of liveTasks) {
       const key = blocksTaskKey(task);

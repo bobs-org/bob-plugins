@@ -185,6 +185,23 @@ function ensureUnblockedGlyphRefresh() {
   }
   return unblockedGlyphRefresh;
 }
+// Ledger frees marks (bob-cli-g1.2): the consolidated live-refresh
+// fan-out dispatches this lazy effect so the Tasks memo is reread without
+// changing the daily note. Keep it lazy to avoid another eager effect.
+let freesMarksRefresh = null;
+function ensureFreesMarksRefresh() {
+  if (freesMarksRefresh) {
+    return freesMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      freesMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    freesMarksRefresh = null;
+  }
+  return freesMarksRefresh;
+}
 // Today marks (bob-cli-9r mark_core): a StateEffect the
 // consolidated live-refresh fan-out dispatches so Live Preview Today
 // widgets rebuild without a doc change. Defined lazily on first

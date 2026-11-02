@@ -675,6 +675,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupPomodoroThemeChips();
     this.setupGcalEvents();
     this.setupUnblockedGlyph();
+    this.setupFreesMarks();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();

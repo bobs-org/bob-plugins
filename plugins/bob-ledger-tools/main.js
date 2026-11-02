@@ -187,6 +187,23 @@ function ensureUnblockedGlyphRefresh() {
   }
   return unblockedGlyphRefresh;
 }
+// Ledger frees marks (bob-cli-g1.2): the consolidated live-refresh
+// fan-out dispatches this lazy effect so the Tasks memo is reread without
+// changing the daily note. Keep it lazy to avoid another eager effect.
+let freesMarksRefresh = null;
+function ensureFreesMarksRefresh() {
+  if (freesMarksRefresh) {
+    return freesMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      freesMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    freesMarksRefresh = null;
+  }
+  return freesMarksRefresh;
+}
 // Today marks (bob-cli-9r mark_core): a StateEffect the
 // consolidated live-refresh fan-out dispatches so Live Preview Today
 // widgets rebuild without a doc change. Defined lazily on first
@@ -17053,7 +17070,13 @@ function blocksChipModel(lineText, sourcePath, owner, memo, lookup, today, block
     const frozen = !blocksTaskIsOpen(owner);
     const reverse = blocksDependentsIndex(memo);
     const ownerId = String(owner && owner.id || "").trim();
-    const liveTasks = !frozen && ownerId ? (reverse.get(ownerId) || []) : [];
+    const ownerKey = blocksTaskKey(owner);
+    const liveTasks = !frozen && ownerId
+      ? (reverse.get(ownerId) || []).filter((task) => {
+          const key = blocksTaskKey(task);
+          return !ownerKey || !key || key !== ownerKey;
+        })
+      : [];
     const liveByKey = new Map();
     for (const task of liveTasks) {
       const key = blocksTaskKey(task);
@@ -17252,6 +17275,473 @@ function buildBlocksChipElement(doc, model, options) {
   } catch (error) {
     return null;
   }
+}
+// ---- src/141b-frees-marks.js ----
+// --- Ledger frees marks: pure mark-core ----------------------------------
+// A display-only echo of the BLOCKS last-blocker set, shown after an
+// eligible Task Link in today's open Pomodoros. Counts and order come
+// from the same Tasks memo and helpers as BLOCKS. Never writes and never
+// throws; a cold or uncertain snapshot produces no mark.
+
+const FREES_MARK_KEY = "🔑";
+
+function freesMarkTaskId(task) {
+  try {
+    const value = task && task.id;
+    return typeof value === "string" && value.trim() !== ""
+      ? value.trim()
+      : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function freesMarkTaskPath(task) {
+  try {
+    return String(planTaskPath(task) || "");
+  } catch (error) {
+    return "";
+  }
+}
+
+function freesMarkTaskBlockId(task) {
+  try {
+    return String(planTaskBlockId(task) || "");
+  } catch (error) {
+    return "";
+  }
+}
+
+function freesMarkTaskKey(task) {
+  try {
+    const path = freesMarkTaskPath(task);
+    const blockId = freesMarkTaskBlockId(task);
+    return path && blockId ? path + "\u0000" + blockId : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function freesMarkTaskTitle(task) {
+  try {
+    const raw = planTaskDescription(task) || "";
+    return dependencyCleanTaskText(raw) || ("^" + freesMarkTaskBlockId(task));
+  } catch (error) {
+    return "^" + freesMarkTaskBlockId(task);
+  }
+}
+
+function freesMarkProjectName(task) {
+  try {
+    const path = freesMarkTaskPath(task);
+    const name = path.split("/").pop() || "project";
+    return name.replace(/\.md$/i, "");
+  } catch (error) {
+    return "project";
+  }
+}
+
+function freesMarkTaskNote(task, dailyPath) {
+  try {
+    const path = freesMarkTaskPath(task);
+    if (!path) {
+      return "this note";
+    }
+    if (dailyPath) {
+      try {
+        if (sameVaultPath(path, dailyPath)) {
+          return "this note";
+        }
+      } catch (error) {
+        if (path === dailyPath) {
+          return "this note";
+        }
+      }
+    }
+    return (path.split("/").pop() || path).replace(/\.md$/i, "");
+  } catch (error) {
+    return "this note";
+  }
+}
+
+// `owner` is the linked task X, not a dependent. Its own `[id::]` is
+// the BLOCKS reverse-index key. `freed` is sorted exactly as the
+// owner's BLOCKS row sorts new canonical links. Invalid owners return
+// null; a valid owner with no dependents returns a zero-count model.
+function freesMarkCount(owner, memo, today) {
+  try {
+    const tasks = memo && Array.isArray(memo.tasks) ? memo.tasks : [];
+    if (tasks.length === 0 || !owner || !blocksTaskIsOpen(owner)) {
+      return null;
+    }
+    const ownerId = freesMarkTaskId(owner);
+    if (!ownerId) {
+      return null;
+    }
+    const ownerKey = freesMarkTaskKey(owner);
+    const live = (blocksDependentsIndex(memo).get(ownerId) || []).filter(
+      (dependent) => {
+        if (dependent === owner) {
+          return false;
+        }
+        const key = freesMarkTaskKey(dependent);
+        return !ownerKey || !key || key !== ownerKey;
+      },
+    );
+    const freed = [];
+    for (const dependent of live) {
+      try {
+        const result = blocksLastBlocker(
+          dependent,
+          owner,
+          memo,
+          today || (memo && memo.dateText),
+        );
+        if (result && result.lastBlocker) {
+          freed.push(dependent);
+        }
+      } catch (error) {
+        // A malformed dependent is waiting, not a promise the mark can make.
+      }
+    }
+    const sourcePath = freesMarkTaskPath(owner);
+    const ordered = blocksSortLinks(
+      freed.map((task) => ({
+        task,
+        linktext: blocksCanonicalLinktext(task, sourcePath),
+      })),
+    ).map((row) => row.task);
+    return {
+      count: ordered.length,
+      waiting: Math.max(0, live.length - ordered.length),
+      freed: ordered,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+// Return a link's unique Tasks-cache target. The existing glyph resolver
+// supplies the path/block-id matching rules; this wrapper also refuses
+// duplicate matches so uncertainty stays neutral.
+function freesMarkLinkedTask(index, target, blockId, dailyPath) {
+  try {
+    const bucket =
+      index && index.byBlock instanceof Map
+        ? index.byBlock.get(String(blockId || ""))
+        : null;
+    if (!Array.isArray(bucket) || bucket.length === 0) {
+      return null;
+    }
+    const matches = bucket.filter((task) => {
+      try {
+        if (!task || task.isTask === false) {
+          return false;
+        }
+        if (
+          task.status &&
+          typeof task.status === "object" &&
+          task.status.type === "NON_TASK"
+        ) {
+          return false;
+        }
+        return unblockedGlyphTargetMatches(
+          freesMarkTaskPath(task),
+          target,
+          dailyPath,
+        );
+      } catch (error) {
+        return false;
+      }
+    });
+    const name = String(target || "");
+    const withMd = /\.md$/i.test(name) ? name : name + ".md";
+    const exact = name
+      ? matches.filter((task) => {
+          const path = freesMarkTaskPath(task);
+          return path === name || path === withMd;
+        })
+      : [];
+    const selected = exact.length > 0 ? exact : matches;
+    if (selected.length !== 1) {
+      return null;
+    }
+    const resolved = unblockedGlyphLinkedTask(
+      index,
+      target,
+      blockId,
+      dailyPath,
+    );
+    return resolved === selected[0] ? resolved : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function freesMarkLinkEndCh(lineText) {
+  try {
+    const bullet = todayBulletBody(String(lineText || ""));
+    if (!bullet) {
+      return null;
+    }
+    const match = progressMarkMatchFromBody(bullet.body);
+    if (!match || !match.token) {
+      return null;
+    }
+    return bullet.bodyStart + match.prefix + match.token.end;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Internal candidate model includes eligible zero-count links so the
+// Live Preview LRU can notice a later 0 → N change. Public
+// `freesMarkLinks` filters these to visible marks only.
+function freesMarkCandidateLinks(lines, memo, today, options) {
+  try {
+    const content = Array.isArray(lines)
+      ? lines.map((line) => String(line || "")).join("\n")
+      : typeof lines === "string"
+        ? lines
+        : "";
+    if (!content || !memo || !Array.isArray(memo.tasks) || memo.tasks.length === 0) {
+      return [];
+    }
+    const dailyPath =
+      options && typeof options.dailyPath === "string"
+        ? options.dailyPath
+        : null;
+    const links = progressMarkLinks(content);
+    if (links.length === 0) {
+      return [];
+    }
+    const index = unblockedGlyphIndex(memo.tasks);
+    const rows = content.replace(/\r\n/g, "\n").split("\n");
+    const out = [];
+    for (const link of links) {
+      try {
+        const linked = freesMarkLinkedTask(
+          index,
+          link.target,
+          link.blockId,
+          dailyPath,
+        );
+        if (!linked || !blocksTaskIsOpen(linked) || !freesMarkTaskId(linked)) {
+          continue;
+        }
+        const count = freesMarkCount(linked, memo, today);
+        if (!count) {
+          continue;
+        }
+        const line = Number(link.line);
+        const ch = Number.isInteger(line) ? freesMarkLinkEndCh(rows[line]) : null;
+        if (!Number.isInteger(ch)) {
+          continue;
+        }
+        out.push({
+          line: link.line,
+          ch,
+          target: link.target,
+          blockId: link.blockId,
+          count: count.count,
+          waiting: count.waiting,
+          freed: count.freed,
+          dailyPath,
+          linktext:
+            (String(link.target || "") ? String(link.target) : "") +
+            "#^" +
+            String(link.blockId || ""),
+        });
+      } catch (error) {
+        continue;
+      }
+    }
+    return out;
+  } catch (error) {
+    return [];
+  }
+}
+
+function freesMarkLinks(lines, memo, today, options) {
+  try {
+    return freesMarkCandidateLinks(lines, memo, today, options).filter(
+      (entry) => entry.count >= 1,
+    );
+  } catch (error) {
+    return [];
+  }
+}
+
+function freesMarkTooltip(model) {
+  try {
+    const safe = model && typeof model === "object" ? model : {};
+    const freed = Array.isArray(safe.freed) ? safe.freed : [];
+    const count = Number.isInteger(safe.count) ? safe.count : freed.length;
+    const waiting = Number.isInteger(safe.waiting) ? safe.waiting : 0;
+    const lines = [
+      "Closing this frees " + count + " task" + (count === 1 ? "" : "s"),
+    ];
+    for (const task of freed.slice(0, 3)) {
+      try {
+        const blockId = freesMarkTaskBlockId(task);
+        if (blockId === "prj") {
+          lines.push("• 🧩 " + freesMarkProjectName(task) + " project");
+          continue;
+        }
+        let title = freesMarkTaskTitle(task).trim();
+        if (title.length > 48) {
+          title = title.slice(0, 47) + "…";
+        }
+        const note = freesMarkTaskNote(task, safe.dailyPath);
+        let row = "• " + title + " · " + note;
+        if (blocksTagPresent(task, "hide")) {
+          row += " · hidden";
+        }
+        lines.push(row);
+      } catch (error) {
+        continue;
+      }
+    }
+    if (count > 3) {
+      lines.push("+" + (count - 3) + " more");
+    }
+    if (waiting > 0) {
+      lines.push("Also blocks " + waiting + " waiting on other work");
+    }
+    return lines.join("\n").replace(/::/g, ":");
+  } catch (error) {
+    return "Closing this frees 0 tasks";
+  }
+}
+
+function buildFreesMarkElement(doc, model) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || !model) {
+      return null;
+    }
+    const count = Number(model.count);
+    const blockId = String(model.blockId || "");
+    if (!Number.isInteger(count) || count < 1 || blockId === "") {
+      return null;
+    }
+    const host = doc.createElement("span");
+    host.setAttribute(
+      "class",
+      "bob-frees-mark" + (model.tick ? " bob-frees-mark-tick" : ""),
+    );
+    host.setAttribute("role", "img");
+    host.setAttribute("aria-label", freesMarkTooltip(model));
+    host.setAttribute("data-tooltip-position", "top");
+    host.setAttribute("data-count", String(count));
+    host.setAttribute("data-block-id", blockId);
+    const key = doc.createElement("span");
+    key.setAttribute("class", "bob-frees-mark-key");
+    key.textContent = FREES_MARK_KEY;
+    host.appendChild(key);
+    if (typeof doc.createTextNode === "function") {
+      host.appendChild(doc.createTextNode(String(count)));
+    } else {
+      const text = doc.createElement("span");
+      text.textContent = String(count);
+      host.appendChild(text);
+    }
+    return host;
+  } catch (error) {
+    return null;
+  }
+}
+
+let FreesMarkWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  FreesMarkWidget = class extends WidgetType {
+    constructor(model, sourcePath, tick, workspace) {
+      super();
+      this.model = model && typeof model === "object" ? { ...model } : {};
+      this.model.tick = Boolean(tick);
+      this.sourcePath = String(sourcePath || "");
+      this.linktext = String(this.model.linktext || "");
+      this.tooltip = freesMarkTooltip(this.model);
+      this.workspace = workspace || null;
+    }
+
+    eq(other) {
+      return (
+        Boolean(other) &&
+        other instanceof FreesMarkWidget &&
+        other.model.blockId === this.model.blockId &&
+        other.model.count === this.model.count &&
+        other.tooltip === this.tooltip
+      );
+    }
+
+    toDOM(view) {
+      const doc = typeof document !== "undefined" ? document : null;
+      const dom = buildFreesMarkElement(doc, this.model);
+      if (!dom || typeof dom.addEventListener !== "function") {
+        return dom;
+      }
+      dom.addEventListener("mousedown", (event) => {
+        try {
+          if (event && typeof event.button === "number" && event.button !== 0) {
+            return;
+          }
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          if (event && (event.metaKey || event.ctrlKey)) {
+            let sourcePath = this.sourcePath;
+            if (!sourcePath && editorInfoField && view && view.state) {
+              try {
+                const info = view.state.field(editorInfoField);
+                sourcePath = String(info && info.file && info.file.path || "");
+              } catch (error) {
+                sourcePath = "";
+              }
+            }
+            const workspace = this.workspace || null;
+            if (workspace && typeof workspace.openLinkText === "function") {
+              workspace.openLinkText(this.linktext, sourcePath, "tab");
+            }
+            return;
+          }
+          const anchor =
+            view && typeof view.posAtDOM === "function"
+              ? view.posAtDOM(dom)
+              : null;
+          if (typeof anchor === "number" && view && typeof view.dispatch === "function") {
+            view.dispatch({ selection: { anchor } });
+          }
+          if (view && typeof view.focus === "function") {
+            view.focus();
+          }
+        } catch (error) {
+          // The mark is read-only; cursor placement and navigation are best-effort.
+        }
+      });
+      if (this.model.tick) {
+        try {
+          const schedule =
+            typeof window !== "undefined" && typeof window.setTimeout === "function"
+              ? window.setTimeout.bind(window)
+              : setTimeout;
+          schedule(() => {
+            try {
+              if (dom.classList && typeof dom.classList.remove === "function") {
+                dom.classList.remove("bob-frees-mark-tick");
+              } else if (typeof dom.setAttribute === "function") {
+                dom.setAttribute("class", "bob-frees-mark");
+              }
+            } catch (error) {
+              // Tick cleanup is cosmetic.
+            }
+          }, 400);
+        } catch (error) {
+          // The CSS animation still runs if no timer host is available.
+        }
+      }
+      return dom;
+    }
+  };
 }
 // ---- src/142c-block-marks-model.js ----
 // --- Blocked-reason marks: pure model ------------------------------------
@@ -27126,6 +27616,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupPomodoroThemeChips();
     this.setupGcalEvents();
     this.setupUnblockedGlyph();
+    this.setupFreesMarks();
     this.scheduleFreshnessMarksRefresh();
     this.setupDependencyChips();
     this.scheduleDependencyChipsRefresh();
@@ -32316,6 +32807,11 @@ class BobLedgerToolsHeadingReviewMixin {
     }
     try {
       this.scheduleUnblockedGlyphRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleFreesMarksRefresh();
     } catch (error) {
       // One missed schedule never breaks the fan-out.
     }
@@ -55164,6 +55660,27 @@ class BobLedgerToolsProgressMarksReadingMixin {
             // link, formatting) means the body is not exactly one
             // link. The anchor itself already continued above.
             if (nodeType === 1) {
+              let classes = "";
+              try {
+                classes = String(
+                  typeof child.getAttribute === "function"
+                    ? child.getAttribute("class") || ""
+                    : child.className || "",
+                );
+              } catch (error) {
+                classes = "";
+              }
+              if (
+                options &&
+                options.allowLedgerMarks &&
+                classes
+                  .split(/\s+/)
+                  .some((name) =>
+                    ["bob-unblocked-glyph", "bob-frees-mark"].includes(name),
+                  )
+              ) {
+                continue;
+              }
               return null;
             }
           } catch (error) {
@@ -57422,6 +57939,846 @@ class BobLedgerToolsUnblockedGlyphMixin {
           return false;
         },
       });
+    }
+  }
+}
+// ---- src/271b-plugin-frees-marks.js ----
+// --- Ledger frees marks: Live Preview and Reading mixin ------------------
+// `BobLedgerToolsFreesMarksMixin`, installed after the unblocked glyph
+// mixin. The model reads `freshnessEnsureMemo()` so BLOCKS and this mark
+// share one Tasks snapshot. All methods are synchronous and defensive.
+class BobLedgerToolsFreesMarksMixin {
+  setupFreesMarks() {
+    try {
+      if (typeof this.freesMarksEnabled !== "boolean") {
+        this.freesMarksEnabled = true;
+      }
+      if (this.freesMarksTimer === undefined) {
+        this.freesMarksTimer = null;
+      }
+      if (this.freesMarksRolloverTimer === undefined) {
+        this.freesMarksRolloverTimer = null;
+      }
+      if (!(this.freesMarksReadingViews instanceof Map)) {
+        this.freesMarksReadingViews = new Map();
+      }
+      if (!(this.freesMarkCountsByEditor instanceof WeakMap)) {
+        this.freesMarkCountsByEditor = new WeakMap();
+      }
+      try {
+        this.freesMarkDay = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        this.freesMarkDay = null;
+      }
+      this.applyMarkGateClass("bob-frees-marks", this.freesMarksEnabled);
+      this.registerMarkGatePopoutSync(
+        "bob-frees-marks",
+        () => this.freesMarksEnabled,
+      );
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-frees-marks",
+            name: "Toggle Task Link frees marks",
+            callback: () => this.toggleFreesMarks(),
+          });
+        }
+      } catch (error) {
+        // The command is best-effort.
+      }
+      try {
+        const extension = this.createFreesMarksExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview is best-effort.
+      }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor(
+            (el, ctx) => this.renderFreesMarksIn(el, ctx),
+            60,
+          );
+        }
+      } catch (error) {
+        // Reading view is best-effort.
+      }
+      try {
+        const metadataCache = this.app && this.app.metadataCache;
+        if (metadataCache && typeof metadataCache.on === "function") {
+          this.registerEvent(
+            metadataCache.on("changed", (file) =>
+              this.refreshFreesMarksForChangedFile(file),
+            ),
+          );
+        }
+      } catch (error) {
+        // The daily-note hook is best-effort.
+      }
+      try {
+        if (
+          this.freesMarksRolloverTimer === null &&
+          typeof this.registerInterval === "function"
+        ) {
+          const interval = setInterval(
+            () => this.refreshFreesMarksForRollover(new Date()),
+            60 * 1000,
+          );
+          this.freesMarksRolloverTimer = interval;
+          try {
+            if (interval && typeof interval.unref === "function") {
+              interval.unref();
+            }
+          } catch (error) {
+            // A rollover poll must never keep a host process alive by itself.
+          }
+          this.registerInterval(interval);
+        }
+      } catch (error) {
+        // The midnight rollover hook is best-effort.
+      }
+      try {
+        if (typeof this.register === "function") {
+          this.register(() => this.teardownFreesMarks());
+        }
+      } catch (error) {
+        // Obsidian also runs onunload; explicit registration covers teardown paths.
+      }
+    } catch (error) {
+      // Setup is display-only and never throws.
+    }
+  }
+
+  freesMarksAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          StateEffect &&
+          typeof StateEffect.define === "function" &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          FreesMarkWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createFreesMarksExtension() {
+    try {
+      if (!this.freesMarksAvailable()) {
+        return null;
+      }
+      if (
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        !Prec ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const FreesMarksPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildFreesMarkDecorations(view);
+          } catch (error) {
+            this.decorations = Decoration.none;
+          }
+        }
+
+        update(update) {
+          try {
+            if (plugin.freesMarkShouldRebuild(update)) {
+              this.decorations = plugin.buildFreesMarkDecorations(update.view);
+            }
+          } catch (error) {
+            // Keep the last good decoration set.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(FreesMarksPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  freesMarkShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") {
+        return false;
+      }
+      if (update.docChanged || update.viewportChanged) {
+        return true;
+      }
+      try {
+        const refresh = ensureFreesMarksRefresh();
+        for (const transaction of update.transactions || []) {
+          const effects = transaction && transaction.effects;
+          if (!effects) {
+            continue;
+          }
+          for (const effect of Array.isArray(effects) ? effects : [effects]) {
+            try {
+              if (
+                effect === refresh ||
+                (refresh && typeof effect.is === "function" && effect.is(refresh))
+              ) {
+                return true;
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+        }
+      } catch (error) {
+        // Refresh effect scan is best-effort.
+      }
+      try {
+        if (editorLivePreviewField && update.startState && update.state) {
+          const before = update.startState.field(editorLivePreviewField);
+          const after = update.state.field(editorLivePreviewField);
+          if (before !== after) {
+            return true;
+          }
+        }
+        if (editorInfoField && update.startState && update.state) {
+          const before = update.startState.field(editorInfoField);
+          const after = update.state.field(editorInfoField);
+          const beforePath = before && before.file ? before.file.path : null;
+          const afterPath = after && after.file ? after.file.path : null;
+          if (beforePath !== afterPath) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // Field comparison is best-effort.
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  freesMarkEditorCounts(view) {
+    try {
+      if (!view || (typeof view !== "object" && typeof view !== "function")) {
+        return null;
+      }
+      if (!(this.freesMarkCountsByEditor instanceof WeakMap)) {
+        this.freesMarkCountsByEditor = new WeakMap();
+      }
+      let counts = this.freesMarkCountsByEditor.get(view);
+      if (!(counts instanceof Map)) {
+        counts = new Map();
+        this.freesMarkCountsByEditor.set(view, counts);
+      }
+      return counts;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  rememberFreesMarkCount(counts, key, count) {
+    try {
+      if (!(counts instanceof Map) || !key) {
+        return { tick: false, previous: undefined };
+      }
+      const existed = counts.has(key);
+      const previous = existed ? counts.get(key) : undefined;
+      counts.delete(key);
+      counts.set(key, count);
+      while (counts.size > 2000) {
+        const oldest = counts.keys().next().value;
+        counts.delete(oldest);
+      }
+      return {
+        tick: existed && previous !== count && count >= 1,
+        previous,
+      };
+    } catch (error) {
+      return { tick: false, previous: undefined };
+    }
+  }
+
+  buildFreesMarkDecorations(view) {
+    try {
+      if (
+        !this.freesMarksEnabled ||
+        !Decoration ||
+        !RangeSetBuilder ||
+        !FreesMarkWidget ||
+        !editorInfoField ||
+        !editorLivePreviewField
+      ) {
+        return Decoration.none;
+      }
+      let live = false;
+      let info = null;
+      try {
+        live = Boolean(view.state.field(editorLivePreviewField));
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const filePath =
+        info && info.file && typeof info.file.path === "string"
+          ? info.file.path
+          : null;
+      if (!live || !filePath) {
+        return Decoration.none;
+      }
+      let dailyPath = null;
+      try {
+        dailyPath = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      if (!dailyPath || !sameVaultPath(filePath, dailyPath)) {
+        return Decoration.none;
+      }
+      const doc = view.state.doc;
+      if (!doc || typeof doc.toString !== "function" || typeof doc.line !== "function") {
+        return Decoration.none;
+      }
+      const memo = this.freshnessEnsureMemo();
+      if (!memo || !Array.isArray(memo.tasks) || memo.tasks.length === 0) {
+        return Decoration.none;
+      }
+      const entries = freesMarkCandidateLinks(doc.toString(), memo, new Date(), {
+        dailyPath,
+      });
+      const builder = new RangeSetBuilder();
+      const counts = this.freesMarkEditorCounts(view);
+      const ranges = view.visibleRanges || [];
+      for (const entry of entries) {
+        try {
+          const key = filePath + "\u0000" + entry.blockId;
+          const transition = this.rememberFreesMarkCount(
+            counts,
+            key,
+            entry.count,
+          );
+          if (entry.count < 1) {
+            continue;
+          }
+          const line = doc.line(entry.line + 1);
+          if (!line || typeof line.from !== "number") {
+            continue;
+          }
+          const pos = line.from + entry.ch;
+          let visible = false;
+          for (const range of ranges) {
+            if (
+              range &&
+              typeof range.from === "number" &&
+              typeof range.to === "number" &&
+              pos >= range.from &&
+              pos <= range.to
+            ) {
+              visible = true;
+              break;
+            }
+          }
+          if (!visible) {
+            continue;
+          }
+          builder.add(
+            pos,
+            pos,
+            Decoration.widget({
+              widget: new FreesMarkWidget(
+                entry,
+                filePath,
+                transition.tick,
+                this.app && this.app.workspace,
+              ),
+              side: 2,
+            }),
+          );
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  toggleFreesMarks() {
+    try {
+      this.freesMarksEnabled = !this.freesMarksEnabled;
+      const enabled = this.freesMarksEnabled;
+      this.applyMarkGateClass("bob-frees-marks", enabled);
+      this.refreshFreesMarksEditors();
+      this.refreshFreesMarksReadingViews();
+      try {
+        new Notice(enabled ? "Frees marks on" : "Frees marks off");
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return enabled;
+    } catch (error) {
+      return Boolean(this.freesMarksEnabled);
+    }
+  }
+
+  refreshFreesMarksEditors() {
+    try {
+      const refresh = ensureFreesMarksRefresh();
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return;
+      }
+      let dailyPath = null;
+      try {
+        dailyPath = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      const leaves = workspace.getLeavesOfType("markdown") || [];
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view ? leaf.view : null;
+          const filePath = view && view.file && view.file.path;
+          if (filePath && dailyPath && !sameVaultPath(filePath, dailyPath)) {
+            continue;
+          }
+          const cm = view && view.editor && view.editor.cm;
+          if (cm && typeof cm.dispatch === "function" && refresh) {
+            cm.dispatch({ effects: refresh.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh is best-effort.
+    }
+  }
+
+  scheduleFreesMarksRefresh() {
+    try {
+      if (this.freesMarksTimer !== null && this.freesMarksTimer !== undefined) {
+        return;
+      }
+      const schedule =
+        typeof window !== "undefined" && typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      this.freesMarksTimer = schedule(() => {
+        this.freesMarksTimer = null;
+        try {
+          this.refreshFreesMarksEditors();
+          this.refreshFreesMarksReadingViews();
+        } catch (error) {
+          // One missed refresh never changes the ledger.
+        }
+      }, 120);
+    } catch (error) {
+      // No timer host; nothing to schedule.
+    }
+  }
+
+  teardownFreesMarks() {
+    try {
+      if (
+        this.freesMarksTimer !== null &&
+        this.freesMarksTimer !== undefined &&
+        typeof clearTimeout === "function"
+      ) {
+        clearTimeout(this.freesMarksTimer);
+      }
+      this.freesMarksTimer = null;
+      if (
+        this.freesMarksRolloverTimer !== null &&
+        this.freesMarksRolloverTimer !== undefined &&
+        typeof clearInterval === "function"
+      ) {
+        clearInterval(this.freesMarksRolloverTimer);
+      }
+      this.freesMarksRolloverTimer = null;
+      if (this.freesMarksReadingViews instanceof Map) {
+        this.freesMarksReadingViews.clear();
+      }
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-frees-marks");
+      }
+    } catch (error) {
+      // Timer and body-gate cleanup are best-effort.
+    }
+  }
+
+  refreshFreesMarksForChangedFile(file) {
+    try {
+      const changedPath = file && typeof file.path === "string" ? file.path : "";
+      if (!changedPath) {
+        return false;
+      }
+      const dailyPath = this.currentTodayDailyPath(new Date());
+      if (!dailyPath || !sameVaultPath(changedPath, dailyPath)) {
+        return false;
+      }
+      this.scheduleFreesMarksRefresh();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshFreesMarksForRollover(now) {
+    try {
+      const dailyPath = this.currentTodayDailyPath(
+        now instanceof Date ? now : new Date(),
+      );
+      if (!dailyPath) {
+        return false;
+      }
+      if (this.freesMarkDay === null || this.freesMarkDay === undefined) {
+        this.freesMarkDay = dailyPath;
+        return false;
+      }
+      if (sameVaultPath(this.freesMarkDay, dailyPath)) {
+        return false;
+      }
+      this.freesMarkDay = dailyPath;
+      this.refreshFreesMarksEditors();
+      this.refreshFreesMarksReadingViews();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  renderFreesMarksIn(el, ctx) {
+    try {
+      if (!el || !ctx || typeof ctx.sourcePath !== "string") {
+        return;
+      }
+      if (!(this.freesMarksReadingViews instanceof Map)) {
+        this.freesMarksReadingViews = new Map();
+      }
+      const record = { el, ctx, sourcePath: ctx.sourcePath };
+      this.freesMarksReadingViews.set(el, record);
+      this.sweepFreesMarksReadingView(record);
+      if (typeof ctx.addChild === "function") {
+        let child = null;
+        try {
+          if (typeof MarkdownRenderChild === "function") {
+            child = new MarkdownRenderChild(el);
+            child.onunload = () => {
+              if (this.freesMarksReadingViews) {
+                this.freesMarksReadingViews.delete(el);
+              }
+            };
+          }
+        } catch (error) {
+          child = null;
+        }
+        if (!child) {
+          child = {
+            unload: () => {
+              if (this.freesMarksReadingViews) {
+                this.freesMarksReadingViews.delete(el);
+              }
+            },
+          };
+        }
+        try {
+          ctx.addChild(child);
+        } catch (error) {
+          // Older hosts may reject processor children.
+        }
+      }
+    } catch (error) {
+      // Reading-view marks never throw.
+    }
+  }
+
+  refreshFreesMarksReadingViews() {
+    try {
+      if (!(this.freesMarksReadingViews instanceof Map)) {
+        return false;
+      }
+      let refreshed = false;
+      for (const [el, record] of Array.from(this.freesMarksReadingViews.entries())) {
+        try {
+          if (!el) {
+            this.freesMarksReadingViews.delete(el);
+            continue;
+          }
+          this.sweepFreesMarksReadingView(record);
+          refreshed = true;
+        } catch (error) {
+          continue;
+        }
+      }
+      return refreshed;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  freesMarkReadingOwnedHosts(li, root) {
+    try {
+      const found =
+        li && typeof li.querySelectorAll === "function"
+          ? li.querySelectorAll(".bob-frees-mark")
+          : [];
+      const hosts = [];
+      for (const host of found || []) {
+        try {
+          let node = host.parentNode || null;
+          let owner = null;
+          let guard = 0;
+          while (node && node !== root && guard < 100) {
+            guard += 1;
+            const tag = String(node.tagName || node.nodeName || "").toUpperCase();
+            if (tag === "LI") {
+              owner = node;
+              break;
+            }
+            node = node.parentNode || null;
+          }
+          if (owner === li) {
+            hosts.push(host);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return hosts;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  removeFreesMarkHost(host) {
+    try {
+      if (host && host.parentNode && typeof host.parentNode.removeChild === "function") {
+        host.parentNode.removeChild(host);
+      }
+    } catch (error) {
+      // A stale Reading-view host is harmless.
+    }
+  }
+
+  paintFreesMarkHost(host, doc, model) {
+    try {
+      if (!host || !doc || !model) {
+        return false;
+      }
+      host.setAttribute("class", "bob-frees-mark");
+      host.setAttribute("role", "img");
+      host.setAttribute("aria-label", freesMarkTooltip(model));
+      host.setAttribute("data-tooltip-position", "top");
+      host.setAttribute("data-count", String(model.count));
+      host.setAttribute("data-block-id", String(model.blockId || ""));
+      if (typeof host.removeAttribute === "function") {
+        host.removeAttribute("title");
+      }
+      host.textContent = "";
+      const key = doc.createElement("span");
+      key.setAttribute("class", "bob-frees-mark-key");
+      key.textContent = FREES_MARK_KEY;
+      host.appendChild(key);
+      if (typeof doc.createTextNode === "function") {
+        host.appendChild(doc.createTextNode(String(model.count)));
+      } else {
+        const count = doc.createElement("span");
+        count.textContent = String(model.count);
+        host.appendChild(count);
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  freesMarkReadingInsertAfter(anchor) {
+    try {
+      if (!anchor) {
+        return null;
+      }
+      let base = anchor;
+      const wrapper = anchor.parentNode || null;
+      const wrapperTag = String(wrapper && (wrapper.tagName || wrapper.nodeName) || "").toUpperCase();
+      const wrapperChildren = wrapper && wrapper.childNodes ? wrapper.childNodes : [];
+      if (
+        ["DEL", "S", "STRIKE"].includes(wrapperTag) &&
+        wrapperChildren.length === 1 &&
+        wrapperChildren[0] === anchor
+      ) {
+        base = wrapper;
+      }
+      const next = base.nextSibling || null;
+      const nextClass = String(next && (next.className || ""));
+      let isUnblocked = false;
+      try {
+        isUnblocked = Boolean(
+          next &&
+            ((next.classList && next.classList.contains("bob-unblocked-glyph")) ||
+              nextClass.split(/\s+/).includes("bob-unblocked-glyph")),
+        );
+      } catch (error) {
+        isUnblocked = nextClass.split(/\s+/).includes("bob-unblocked-glyph");
+      }
+      return isUnblocked ? next : base;
+    } catch (error) {
+      return anchor || null;
+    }
+  }
+
+  sweepFreesMarksReadingView(record) {
+    try {
+      const root = record && record.el;
+      const sourcePath = String(record && record.sourcePath || "");
+      if (!root || !sourcePath) {
+        return false;
+      }
+      const doc = root.ownerDocument || (typeof document !== "undefined" ? document : null);
+      if (!doc) {
+        return false;
+      }
+      const allHosts =
+        typeof root.querySelectorAll === "function"
+          ? Array.from(root.querySelectorAll(".bob-frees-mark"))
+          : [];
+      let dailyPath = null;
+      try {
+        dailyPath = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      if (
+        !this.freesMarksEnabled ||
+        !dailyPath ||
+        !sameVaultPath(sourcePath, dailyPath)
+      ) {
+        for (const host of allHosts) {
+          this.removeFreesMarkHost(host);
+        }
+        return true;
+      }
+      const memo = this.freshnessEnsureMemo();
+      if (!memo || !Array.isArray(memo.tasks) || memo.tasks.length === 0) {
+        for (const host of allHosts) {
+          this.removeFreesMarkHost(host);
+        }
+        return true;
+      }
+      const index = unblockedGlyphIndex(memo.tasks);
+      const items =
+        typeof root.querySelectorAll === "function"
+          ? Array.from(root.querySelectorAll("li"))
+          : [];
+      for (const li of items) {
+        try {
+          const existing = this.freesMarkReadingOwnedHosts(li, root);
+          let context = null;
+          try {
+            context = this.progressMarkReadingContext(li, root, {
+              allowLedgerMarks: true,
+            });
+          } catch (error) {
+            context = null;
+          }
+          let model = null;
+          if (context) {
+            const linked = freesMarkLinkedTask(
+              index,
+              context.target,
+              context.blockId,
+              sourcePath,
+            );
+            if (linked && blocksTaskIsOpen(linked) && freesMarkTaskId(linked)) {
+              const count = freesMarkCount(linked, memo, new Date());
+              if (count && count.count > 0) {
+                model = {
+                  ...count,
+                  blockId: context.blockId,
+                  target: context.target,
+                  linktext:
+                    (String(context.target || "") ? String(context.target) : "") +
+                    "#^" +
+                    String(context.blockId || ""),
+                  dailyPath,
+                };
+              }
+            }
+          }
+          if (!model) {
+            for (const host of existing) {
+              this.removeFreesMarkHost(host);
+            }
+            continue;
+          }
+          let host = existing[0] || null;
+          if (!host) {
+            host = buildFreesMarkElement(doc, model);
+          } else {
+            this.paintFreesMarkHost(host, doc, model);
+          }
+          if (!host) {
+            continue;
+          }
+          const after = this.freesMarkReadingInsertAfter(context.anchor);
+          const parent = after && after.parentNode;
+          if (parent && typeof parent.insertBefore === "function") {
+            if (host.parentNode !== parent || host.previousSibling !== after) {
+              parent.insertBefore(host, after.nextSibling || null);
+            }
+          }
+          for (const duplicate of existing.slice(1)) {
+            this.removeFreesMarkHost(duplicate);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      // Remove orphaned hosts whose row is no longer inside a list item.
+      for (const host of allHosts) {
+        try {
+          let node = host.parentNode || null;
+          let inList = false;
+          let guard = 0;
+          while (node && node !== root && guard < 100) {
+            guard += 1;
+            if (String(node.tagName || node.nodeName || "").toUpperCase() === "LI") {
+              inList = true;
+              break;
+            }
+            node = node.parentNode || null;
+          }
+          if (!inList) {
+            this.removeFreesMarkHost(host);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return true;
+    } catch (error) {
+      return false;
     }
   }
 }
@@ -79479,6 +80836,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBlockMarksReadingMixin,
   BobLedgerToolsBlockMarkFoldsMixin,
   BobLedgerToolsUnblockedGlyphMixin,
+  BobLedgerToolsFreesMarksMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,
   BobLedgerToolsRelationRenderMixin,
@@ -81885,6 +83243,15 @@ module.exports.helpers = {
   unblockedTodayLinks,
   buildUnblockedGlyphElement,
   ensureUnblockedGlyphRefresh,
+  FREES_MARK_KEY,
+  freesMarkTaskId,
+  freesMarkCount,
+  freesMarkLinkedTask,
+  freesMarkLinks,
+  freesMarkTooltip,
+  buildFreesMarkElement,
+  FreesMarkWidget,
+  ensureFreesMarksRefresh,
   TODAY_MARK_OPEN_STATUSES,
   todayMarkTrailingBlockId,
   todayMarkBodyStart,

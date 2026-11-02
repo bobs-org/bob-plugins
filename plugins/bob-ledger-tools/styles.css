@@ -2594,6 +2594,72 @@ body:not(.bob-unblocked-glyphs) .bob-unblocked-glyph {
   display: none;
 }
 
+/* Ledger frees marks (bob-cli-g1.2): a quiet compact 🔑 count after a
+   live Task Link whose task is the last blocker of other open tasks. */
+.bob-frees-mark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.22em;
+  margin-inline-start: 0.4em;
+  padding: 0 0.42em;
+  border-radius: 999px;
+  font-family: var(--font-interface);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  vertical-align: baseline;
+  color: var(--bob-frees-mark-color, var(--text-muted));
+  user-select: none;
+  cursor: default;
+  print-color-adjust: exact;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.bob-frees-mark-key {
+  font-size: 0.95em;
+}
+
+.bob-frees-mark:hover {
+  color: var(--text-normal);
+  background-color: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.bob-frees-mark.bob-frees-mark-tick {
+  animation: bob-frees-mark-tick 180ms cubic-bezier(0.2, 0.9, 0.3, 1.25);
+}
+
+@keyframes bob-frees-mark-tick {
+  from {
+    opacity: 0.3;
+    scale: 0.6;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-frees-mark,
+  .bob-frees-mark.bob-frees-mark-tick {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .bob-frees-mark {
+    color: CanvasText;
+  }
+}
+
+body:not(.bob-frees-marks) .bob-frees-mark {
+  display: none;
+}
+
 /* Today marks (bob-cli-9r mark_core): one warm tomato after the
    identity glyph on task lines that are on today's plan.
    Display-only; nothing ever writes it. Contract: bob-cli

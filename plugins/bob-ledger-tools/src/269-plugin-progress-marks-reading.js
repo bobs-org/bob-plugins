@@ -171,6 +171,27 @@ class BobLedgerToolsProgressMarksReadingMixin {
             // link, formatting) means the body is not exactly one
             // link. The anchor itself already continued above.
             if (nodeType === 1) {
+              let classes = "";
+              try {
+                classes = String(
+                  typeof child.getAttribute === "function"
+                    ? child.getAttribute("class") || ""
+                    : child.className || "",
+                );
+              } catch (error) {
+                classes = "";
+              }
+              if (
+                options &&
+                options.allowLedgerMarks &&
+                classes
+                  .split(/\s+/)
+                  .some((name) =>
+                    ["bob-unblocked-glyph", "bob-frees-mark"].includes(name),
+                  )
+              ) {
+                continue;
+              }
               return null;
             }
           } catch (error) {

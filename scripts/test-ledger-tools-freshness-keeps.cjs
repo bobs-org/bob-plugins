@@ -1,6 +1,8 @@
-// Tests for the keep-streak ledger-marks phase (bob-cli-3v.2):
+// Tests for the keep-streak ledger-marks phase (bob-cli-3v.2) plus the
+// ledger-mirror phase (bob-cli-g9.3):
 // `api.freshness.keepLine` (freshness namespace v5 counting; v6
-// date-independent decide/config), keeps-aware placement/config/
+// date-independent decide/config; v13 per-rung decay limits and lane
+// decide), keeps-aware placement/config/
 // evaluation, and folded keep pips.
 // `docs/freshness.md` §§2a/4/7/11-12 plus the machine-readable K/C/D/B
 // vectors in `tests/fixtures/freshness_keeps/vectors.json` (bob-cli)
@@ -88,6 +90,7 @@ const {
   coerceFreshnessDecay,
   defaultFreshnessConfig,
   freshnessCounts,
+  freshnessDecayLimitFor,
   freshnessDecideFor,
   freshnessEvaluate,
   freshnessFirstValidKeeps,
@@ -109,7 +112,14 @@ const {
 
 const D = "2026-10-08";
 const ACTIVE_DAY = "2026-10-20";
-const DECAY_DEFAULT = { enabled: true, keeps: 3, enter: null };
+const DECAY_DEFAULT = {
+  enabled: true,
+  keeps: 3,
+  pending: 3,
+  next: 3,
+  ready: 3,
+  enter: null,
+};
 const CFG = {
   interval: 7,
   intervalFromConfig: false,
@@ -544,23 +554,92 @@ test("decay false counts and displays but never asks", () => {
   const coerced = coerceFreshnessConfig({ decay: false });
   assert.equal(coerced.invalid, false);
   assert.deepEqual(coerced.config.decay, {
+    ...DECAY_DEFAULT,
     enabled: false,
-    keeps: 3,
-    enter: null,
   });
 });
 
 test("decay keeps 0 and fixed entry normalize", () => {
   const zero = coerceFreshnessConfig({ decay: { keeps: 0 } });
   assert.equal(zero.invalid, false);
-  assert.deepEqual(zero.config.decay, { enabled: true, keeps: 0, enter: null });
+  assert.deepEqual(zero.config.decay, {
+    enabled: true,
+    keeps: 0,
+    pending: 0,
+    next: 0,
+    ready: 0,
+    enter: null,
+  });
   const fixed = coerceFreshnessConfig({ decay: { keeps: 2, enter: "P1" } });
   assert.equal(fixed.invalid, false);
   assert.deepEqual(fixed.config.decay, {
     enabled: true,
     keeps: 2,
+    pending: 2,
+    next: 2,
+    ready: 2,
     enter: "P1",
   });
+});
+
+// C14-C17: per-rung overrides resolve against the keeps fallback.
+test("C14 pending override resolves while other rungs fall back", () => {
+  const coerced = coerceFreshnessConfig({ decay: { pending_keeps: 2 } });
+  assert.equal(coerced.invalid, false);
+  assert.deepEqual(coerced.config.decay, {
+    ...DECAY_DEFAULT,
+    pending: 2,
+  });
+});
+
+test("C15 fallback plus next override", () => {
+  const coerced = coerceFreshnessConfig({
+    decay: { keeps: 2, next_keeps: 5 },
+  });
+  assert.equal(coerced.invalid, false);
+  assert.deepEqual(coerced.config.decay, {
+    enabled: true,
+    keeps: 2,
+    pending: 2,
+    next: 5,
+    ready: 2,
+    enter: null,
+  });
+});
+
+test("C16 zero, false, and 999 rungs", () => {
+  const coerced = coerceFreshnessConfig({
+    decay: { pending_keeps: 0, next_keeps: false, ready_keeps: 999 },
+  });
+  assert.equal(coerced.invalid, false);
+  assert.deepEqual(coerced.config.decay, {
+    ...DECAY_DEFAULT,
+    pending: 0,
+    next: false,
+    ready: 999,
+  });
+});
+
+test("C17 null rung falls back to keeps", () => {
+  const coerced = coerceFreshnessConfig({
+    decay: { pending_keeps: null, next_keeps: 2 },
+  });
+  assert.equal(coerced.invalid, false);
+  assert.deepEqual(coerced.config.decay, {
+    ...DECAY_DEFAULT,
+    next: 2,
+  });
+});
+
+test("rung limit helper resolves numbers, false, and fallbacks", () => {
+  const decay = { enabled: true, keeps: 2, pending: 0, next: false, ready: 5 };
+  assert.equal(freshnessDecayLimitFor(decay, "pending"), 0);
+  assert.equal(freshnessDecayLimitFor(decay, "next"), false);
+  assert.equal(freshnessDecayLimitFor(decay, "ready"), 5);
+  assert.equal(freshnessDecayLimitFor({ keeps: 4 }, "pending"), 4);
+  assert.equal(freshnessDecayLimitFor({ keeps: 4 }, "next"), 4);
+  assert.equal(freshnessDecayLimitFor({ keeps: 4 }, "ready"), 4);
+  assert.equal(freshnessDecayLimitFor(null, "ready"), 3);
 });
 
 test("invalid decay shapes fail the freshness config contract", () => {
@@ -571,6 +650,12 @@ test("invalid decay shapes fail the freshness config contract", () => {
     { decay: "soon" },
     { decay: { enter: "" } },
     { decay: { enter: 2 } },
+    { decay: { pending_keeps: -1 } },
+    { decay: { next_keeps: 1000 } },
+    { decay: { ready_keeps: 2.5 } },
+    { decay: { pending_keeps: true } },
+    { decay: { next_keeps: "soon" } },
+    { decay: { ready_keeps: [1] } },
   ]) {
     const coerced = coerceFreshnessConfig(block);
     assert.equal(coerced.invalid, true, JSON.stringify(block));
@@ -664,7 +749,7 @@ test("D6 zero limit asks on every due Ready re-confirmation", () => {
   );
 });
 
-test("D7 off never asks; D8 lane rows never decide", () => {
+test("D7 off never asks; D8 an at-limit Next due row decides", () => {
   assert.equal(
     freshnessDecideFor("ready", "rotten", 9, {
       decay: { enabled: false, keeps: 3, enter: null },
@@ -675,8 +760,95 @@ test("D7 off never asks; D8 lane rows never decide", () => {
     freshnessDecideFor("next", "next", 9, {
       decay: { ...DECAY_DEFAULT },
     }),
+    true,
+  );
+});
+
+// D9-D11: WIP and Next lane rows decide at their rung limit.
+test("D9 pending at limit decides; D10-D11 below limit stay quiet", () => {
+  assert.equal(
+    freshnessDecideFor("pending", "pending", 3, {
+      decay: { ...DECAY_DEFAULT },
+    }),
+    true,
+  );
+  assert.equal(
+    freshnessDecideFor("next", "next", 2, {
+      decay: { ...DECAY_DEFAULT },
+    }),
     false,
   );
+  assert.equal(
+    freshnessDecideFor("pending", "pending", 2, {
+      decay: { ...DECAY_DEFAULT },
+    }),
+    false,
+  );
+});
+
+// D12-D13: a false rung never asks; a zero rung asks on every due keep.
+test("D12 next_keeps false never asks; D13 pending_keeps 0 always asks", () => {
+  const decay = coerceFreshnessConfig({
+    decay: { pending_keeps: 0, next_keeps: false, ready_keeps: 999 },
+  }).config.decay;
+  assert.equal(freshnessDecideFor("next", "next", 9, { decay }), false);
+  assert.equal(freshnessDecideFor("pending", "pending", 0, { decay }), true);
+});
+
+// D14-D16: Today-linked, PROJECTS, and unblock ticklers never decide.
+test("D14 today-linked lane rows never decide", () => {
+  assert.equal(
+    freshnessDecideFor(
+      "next",
+      "next",
+      9,
+      { decay: { ...DECAY_DEFAULT } },
+      undefined,
+      true,
+    ),
+    false,
+  );
+});
+
+test("D15 projects never decide; D16 unblock ticklers never decide", () => {
+  assert.equal(
+    freshnessDecideFor("ready", "projects", 9, {
+      decay: { ...DECAY_DEFAULT },
+    }),
+    false,
+  );
+  assert.equal(
+    freshnessDecideFor("ready", "tickler", 9, {
+      decay: { ...DECAY_DEFAULT },
+    }, "unblocked"),
+    false,
+  );
+});
+
+// D17-D18: a rung override decides at its own limit.
+test("D17-D18 next_keeps override of 5 decides at 5, quiet at 4", () => {
+  const decay = coerceFreshnessConfig({
+    decay: { keeps: 2, next_keeps: 5 },
+  }).config.decay;
+  assert.equal(freshnessDecideFor("next", "next", 5, { decay }), true);
+  assert.equal(freshnessDecideFor("next", "next", 4, { decay }), false);
+});
+
+test("lane rows decide through the evaluator, queue, and counts", () => {
+  const wip = sRow({
+    rawLine: "- [/] #task W [fresh:: 2026-10-19] [keeps:: 3]",
+  });
+  const evaluatedWip = freshnessEvaluate(wip, ACTIVE_DAY, CFG);
+  assert.equal(evaluatedWip.tier, "pending");
+  assert.equal(evaluatedWip.decide, true);
+  const next = sRow({
+    rawLine: "- [*] #task N [fresh:: 2026-10-19] [keeps:: 2]",
+  });
+  const evaluatedNext = freshnessEvaluate(next, ACTIVE_DAY, CFG);
+  assert.equal(evaluatedNext.tier, "next");
+  assert.equal(evaluatedNext.decide, false);
+  const counts = freshnessCounts([wip, next], ACTIVE_DAY, CFG);
+  assert.equal(counts.decide, 1);
 });
 
 test("evaluator, queue, and counts carry keeps and decide", () => {

@@ -498,11 +498,20 @@ function freshnessEvaluateWithoutRecurring(row, todayText, config) {
     tier = "rotten";
   }
 
-  // A choice is due — never permission to act — for Ready due rows at
-  // or over the keep limit. Mirrors the `decide` computation in
-  // `evaluate` in `src/native/freshness/state.rs`.
+  // A choice is due — never permission to act — for a due row at
+  // or over its rung's keep limit. Unblock ticklers, PROJECTS,
+  // recurring, checklist, and Today-linked rows never decide.
+  // Mirrors the `decide` computation in `evaluate` in
+  // `src/native/freshness/state.rs`.
   const keeps = read.keeps;
-  const decide = freshnessDecideFor(lane, tier, keeps, config, returnedBy);
+  const decide = freshnessDecideFor(
+    lane,
+    tier,
+    keeps,
+    config,
+    returnedBy,
+    safe.isToday,
+  );
 
   // Lane rows use the lane due date; an unwalked lane falls back to
   // the Ready-chain interval with no due date (L4). Lane tracker rows

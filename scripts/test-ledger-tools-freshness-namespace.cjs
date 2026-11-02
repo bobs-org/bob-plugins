@@ -11,7 +11,7 @@ const {
   makeStatusEl,
   makeStatusItemFactory,
 } = require("./ledger-tools-harness.cjs");
-test("freshness namespace v12 exposes unblock TICKLER metadata and writers", () => {
+test("freshness namespace v13 exposes per-rung decay plus unblock TICKLER writers", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -31,9 +31,10 @@ test("freshness namespace v12 exposes unblock TICKLER metadata and writers", () 
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 12);
+      assert.equal(freshness.version, 13);
       assert.equal(freshness.checklistTiers, true);
       assert.equal(freshness.recurringTier, true);
+      assert.equal(freshness.perRungDecay, true);
       assert.equal(freshness.referenceReview, undefined);
       assert.equal(freshness.refTagIdentity, undefined);
       for (const key of [
@@ -68,7 +69,14 @@ test("freshness namespace v12 exposes unblock TICKLER metadata and writers", () 
         intervalFromConfig: false,
         invalid: false,
         deprecatedStaleBudget: false,
-        decay: { enabled: true, keeps: 3, enter: null },
+        decay: {
+          enabled: true,
+          keeps: 3,
+          pending: 3,
+          next: 3,
+          ready: 3,
+          enter: null,
+        },
       });
       assert.equal(apiConfig.activeFrom, undefined);
       assert.equal(apiConfig.active, undefined);
@@ -76,6 +84,9 @@ test("freshness namespace v12 exposes unblock TICKLER metadata and writers", () 
         "enabled",
         "enter",
         "keeps",
+        "next",
+        "pending",
+        "ready",
       ]);
       assert.equal(freshness.state(tasks[0]), "new");
       assert.equal(freshness.bucket(tasks[0]), "new");

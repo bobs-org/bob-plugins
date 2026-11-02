@@ -1,5 +1,5 @@
 class BobLedgerToolsFreshnessApiMixin {
-  // --- Task freshness (freshness namespace v8) --------------------------
+  // --- Task freshness (freshness namespace v13) --------------------------
   // Rows come from the Tasks cache (`planBlockTasks`); `fresh` /
   // `refresh`/`created` come from `originalMarkdown`; frontmatter comes
   // from `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
@@ -430,6 +430,9 @@ class BobLedgerToolsFreshnessApiMixin {
             Number.isInteger(rawDecay.keeps) && rawDecay.keeps >= 0
               ? rawDecay.keeps
               : 3,
+          pending: freshnessDecayLimitFor(rawDecay, "pending"),
+          next: freshnessDecayLimitFor(rawDecay, "next"),
+          ready: freshnessDecayLimitFor(rawDecay, "ready"),
           enter:
             typeof rawDecay.enter === "string" && rawDecay.enter !== ""
               ? rawDecay.enter

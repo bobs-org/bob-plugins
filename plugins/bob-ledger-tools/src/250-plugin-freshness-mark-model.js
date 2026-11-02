@@ -270,6 +270,7 @@ class BobLedgerToolsFreshnessMarkModelMixin {
           if (row && row.rawLine === text) {
             const resolution = freshnessMarkResolution(row, dateText, config, {
               cardCapable: freshnessDecayCardCapable(this.app),
+              laneCardCapable: freshnessDecayLaneCardCapable(this.app),
             });
             if (resolution) {
               const model = buildModel({
@@ -314,6 +315,7 @@ class BobLedgerToolsFreshnessMarkModelMixin {
             hasCandidates = true;
             const resolution = freshnessMarkResolution(row, dateText, config, {
               cardCapable: freshnessDecayCardCapable(this.app),
+              laneCardCapable: freshnessDecayLaneCardCapable(this.app),
             });
             const model = buildModel({
               source,
@@ -418,6 +420,7 @@ class BobLedgerToolsFreshnessMarkModelMixin {
             hasCandidates = true;
             const resolution = freshnessMarkResolution(row, dateText, config, {
               cardCapable: freshnessDecayCardCapable(this.app),
+              laneCardCapable: freshnessDecayLaneCardCapable(this.app),
             });
             const status =
               resolution &&

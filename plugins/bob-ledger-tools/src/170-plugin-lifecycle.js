@@ -293,11 +293,10 @@ class BobLedgerToolsPlugin extends Plugin {
           }
         },
       }),
-      // Task freshness (freshness namespace v9 adds the RECURRING
-      // tier with the explicit `recurringTier` capability,
-      // `byTier.recurring`, and `recurringDue`; v8 renamed the `returned`
-      // tier, `byTier.returned`, and `reviewModel().returned` to
-      // `tickler`; v7 added checklist tiers to the same read-time
+      // Task freshness (v13 `perRungDecay` + lane `decide`; v9 adds the
+      // RECURRING tier, `byTier.recurring`, and `recurringDue`; v8
+      // renamed the `returned` tier to `tickler`; v7 added checklist
+      // tiers to the same read-time
       // queue without changing buckets or stamps; date-independent
       // decide/config, counting, and `keepLine` remain available from
       // v5. Tiered walk PRE → NEW → PROJECTS → PENDING → NEXT →
@@ -325,10 +324,11 @@ class BobLedgerToolsPlugin extends Plugin {
       // catch a throwing api. `reviewEntryView` is additive under
       // namespace v5: it formats already-evaluated queue entries.
       freshness: Object.freeze({
-        version: 12,
+        version: 13,
         trackerReview: true,
         checklistTiers: true,
         recurringTier: true,
+        perRungDecay: true,
         config: () => this.apiFreshnessConfig(),
         stampLine: (line, dateText) =>
           this.apiFreshnessStampLine(line, dateText),

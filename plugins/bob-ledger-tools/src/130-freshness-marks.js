@@ -427,8 +427,12 @@ function freshnessMarkReason(status, row, today) {
 // to act); both join model equality and consensus so ambiguous
 // rendered matches stay neutral. `decayCardCapable` (from
 // `options.cardCapable`, default false) records whether the compatible
-// nav decision card is installed; only the display affordances read
-// it, never the `decide` flag itself. Never throws.
+// nav decision card is installed, and `decayLaneCardCapable` (from
+// `options.laneCardCapable`, default false) whether nav's rung-aware
+// card supports lane rungs; only the display affordances read them,
+// never the `decide` flag itself. `decayLimit` is the row's rung
+// allowance (an integer, or `false` when that rung never asks).
+// Never throws.
 function freshnessMarkResolution(row, todayText, config, options) {
   try {
     if (!row || typeof row !== "object") {
@@ -492,9 +496,15 @@ function freshnessMarkResolution(row, todayText, config, options) {
       decide: evaluated.decide,
       decayKeeps:
         Number.isInteger(decay.keeps) && decay.keeps >= 0 ? decay.keeps : 3,
+      decayLimit: freshnessDecayLimitFor(decay, evaluated.lane),
       decayEnabled: decay.enabled !== false,
       decayCardCapable: Boolean(
         options && typeof options === "object" && options.cardCapable === true,
+      ),
+      decayLaneCardCapable: Boolean(
+        options &&
+          typeof options === "object" &&
+          options.laneCardCapable === true,
       ),
     };
   } catch (error) {
@@ -598,6 +608,7 @@ function freshnessMarkKeepsLine(keeps, options) {
 // decision glyph appears only for an enabled, capable due choice:
 // out-of-scope/closed tasks, decay-off rows, and mixed-version
 // sessions (no compatible nav card) show historical dots and no leaf.
+// Lane rows additionally need nav's rung-aware card (capability 3+).
 // Bad sources yield null. Never throws.
 function freshnessMarkModel(input) {
   try {
@@ -728,13 +739,19 @@ function freshnessMarkModel(input) {
     // The leaf replaces `refresh` only for an enabled, capable due
     // choice (`docs/freshness.md` §2a): decay is on, the resolution says
     // a choice is due, and the compatible nav decision card is
-    // installed. Everything else keeps its existing glyph and
-    // counting-only wording.
+    // installed — lane rows additionally need nav's rung-aware card
+    // (capability 3+), and below that they keep their existing glyph
+    // and counting-only wording. Everything else keeps its existing
+    // glyph and counting-only wording.
     const cardCapable = Boolean(resolution && resolution.decayCardCapable);
+    const laneCardCapable = Boolean(
+      resolution && resolution.decayLaneCardCapable,
+    );
+    const isLaneRow = tier === "pending" || tier === "next";
     const showDecision =
       tone === "due" &&
       Boolean(resolution && resolution.decide) &&
-      cardCapable &&
+      (isLaneRow ? laneCardCapable : cardCapable) &&
       resolution.decayEnabled !== false;
     if (showDecision) {
       glyph = "leaf";
@@ -768,10 +785,17 @@ function freshnessMarkModel(input) {
           ? source.keeps
           : 0;
     const decide = Boolean(resolution && resolution.decide);
-    const limit =
-      resolution && Number.isInteger(resolution.decayKeeps)
-        ? resolution.decayKeeps
-        : 3;
+    // The rung allowance drives the pips cap and the "asks" wording; a
+    // `false` rung counts and displays but never asks, so it reads as
+    // decay-off for that rung.
+    const rungLimit =
+      resolution && resolution.decayLimit !== undefined
+        ? resolution.decayLimit
+        : resolution && Number.isInteger(resolution.decayKeeps)
+          ? resolution.decayKeeps
+          : 3;
+    const rungOff = rungLimit === false;
+    const limit = rungOff ? 3 : rungLimit;
     const cap = freshnessMarkDotCap(limit);
     const shown = Math.min(keeps, cap);
     const dots = keeps > 0 ? "•".repeat(shown) : null;
@@ -779,8 +803,8 @@ function freshnessMarkModel(input) {
     const keepsLine =
       resolution != null
         ? freshnessMarkKeepsLine(keeps, {
-            active: cardCapable,
-            enabled: resolution.decayEnabled !== false,
+            active: isLaneRow ? laneCardCapable : cardCapable,
+            enabled: resolution.decayEnabled !== false && !rungOff,
             limit,
           })
         : freshnessMarkKeepsLine(keeps, {

@@ -82,6 +82,7 @@ Module._load = originalLoad;
 const {
   buildFreshnessMarkElement,
   freshnessDecayCardCapable,
+  freshnessDecayLaneCardCapable,
   freshnessMarkModel,
   freshnessMarkResolution,
   freshnessMarkSource,
@@ -120,13 +121,15 @@ function sRow(overrides = {}) {
   };
 }
 
-// Full mark model with an explicit card-capability switch.
+// Full mark model with explicit card-capability switches: `cardCapable`
+// is nav's decision card (v2+), `laneCardCapable` its rung-aware card (v3+).
 function markModel(line, options = {}) {
   const {
     today = ACTIVE_DAY,
     config = CFG,
     interval = DEFAULT_INTERVAL,
     cardCapable = false,
+    laneCardCapable = false,
     ...rowOverrides
   } = options;
   const source = freshnessMarkSource(line, today);
@@ -134,6 +137,7 @@ function markModel(line, options = {}) {
   const row = sRow({ rawLine: line, ...rowOverrides });
   const resolution = freshnessMarkResolution(row, today, config, {
     cardCapable,
+    laneCardCapable,
   });
   return freshnessMarkModel({
     source,
@@ -234,6 +238,22 @@ test("capability: a throwing app never throws", () => {
     },
   };
   assert.equal(freshnessDecayCardCapable(app), false);
+});
+
+test("lane capability: nav card v3 is lane-capable, v2 is not", () => {
+  const appFor = (version) => ({
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": { api: { freshnessDecayCard: { version } } },
+      },
+    },
+  });
+  assert.equal(freshnessDecayLaneCardCapable(appFor(3)), true);
+  assert.equal(freshnessDecayLaneCardCapable(appFor(4)), true);
+  assert.equal(freshnessDecayLaneCardCapable(appFor(2)), false);
+  assert.equal(freshnessDecayLaneCardCapable(appFor(1)), false);
+  assert.equal(freshnessDecayLaneCardCapable(null), false);
+  assert.equal(freshnessDecayLaneCardCapable({}), false);
 });
 
 // --- Leaf signal ---
@@ -354,4 +374,92 @@ test("element: non-decision marks carry data-decide false", () => {
   const model = markModel(DUE_LINE, { cardCapable: false });
   const el = buildFreshnessMarkElement(doc, model, { foldSpace: true });
   assert.equal(el.attrs["data-decide"], "false");
+});
+
+// --- Lane rows: the decay mark needs the rung-aware card (v3+) ---
+
+const NEXT_DUE_LINE = "- [*] #task Ship it [fresh:: 2026-10-19] [keeps:: 3]";
+const WIP_DUE_LINE = "- [/] #task Land it [fresh:: 2026-10-19] [keeps:: 3]";
+
+test("lane leaf: an at-limit Next row leaves only with the v3 card", () => {
+  const leaf = markModel(NEXT_DUE_LINE, {
+    cardCapable: true,
+    laneCardCapable: true,
+  });
+  assert.equal(leaf.decide, true);
+  assert.equal(leaf.tone, "due");
+  assert.equal(leaf.glyph, "leaf");
+  assert.equal(leaf.dots, "•••");
+  assert.ok(leaf.tooltip.includes("Kept 3 reviews in a row · Bob asks at 3"));
+  assert.ok(
+    leaf.tooltip.includes("Alt+F keep · Alt+N release · Ctrl+Shift+Enter today"),
+  );
+});
+
+test("lane leaf: the same row with only the v2 card keeps counting pips", () => {
+  const model = markModel(NEXT_DUE_LINE, { cardCapable: true });
+  assert.equal(model.decide, true);
+  assert.equal(model.glyph, "refresh");
+  assert.ok(model.tooltip.includes("Kept 3 reviews in a row"));
+  assert.ok(!model.tooltip.includes("Bob asks at"));
+  const doc = makeFakeDoc();
+  const el = buildFreshnessMarkElement(doc, model, { foldSpace: true });
+  assert.equal(el.attrs["data-decide"], "false");
+});
+
+test("lane leaf: an at-limit WIP row leaves only with the v3 card", () => {
+  const leaf = markModel(WIP_DUE_LINE, {
+    cardCapable: true,
+    laneCardCapable: true,
+  });
+  assert.equal(leaf.decide, true);
+  assert.equal(leaf.glyph, "leaf");
+  const quiet = markModel(WIP_DUE_LINE, { cardCapable: true });
+  assert.equal(quiet.decide, true);
+  assert.equal(quiet.glyph, "refresh");
+  assert.ok(!quiet.tooltip.includes("Bob asks at"));
+});
+
+test("lane leaf: a false rung counts and displays but never asks", () => {
+  const config = {
+    ...CFG,
+    decay: {
+      enabled: true,
+      keeps: 3,
+      pending: 3,
+      next: false,
+      ready: 3,
+      enter: null,
+    },
+  };
+  const model = markModel(NEXT_DUE_LINE, {
+    config,
+    cardCapable: true,
+    laneCardCapable: true,
+  });
+  assert.equal(model.decide, false);
+  assert.equal(model.glyph, "refresh");
+  assert.ok(model.tooltip.includes("Kept 3 reviews in a row · decay off"));
+});
+
+test("lane leaf: a per-rung limit drives the keeps wording", () => {
+  const config = {
+    ...CFG,
+    decay: {
+      enabled: true,
+      keeps: 3,
+      pending: 3,
+      next: 5,
+      ready: 3,
+      enter: null,
+    },
+  };
+  const model = markModel(NEXT_DUE_LINE, {
+    config,
+    cardCapable: true,
+    laneCardCapable: true,
+  });
+  assert.equal(model.decide, false);
+  assert.equal(model.glyph, "refresh");
+  assert.ok(model.tooltip.includes("Kept 3 reviews in a row · Bob asks at 5"));
 });

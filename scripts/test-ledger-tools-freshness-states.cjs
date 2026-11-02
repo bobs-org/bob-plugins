@@ -283,7 +283,14 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
     nextInterval: 1,
     projectInterval: null,
     rottenDailyBudget: null,
-    decay: { enabled: true, keeps: 3, enter: null },
+    decay: {
+      enabled: true,
+      keeps: 3,
+      pending: 3,
+      next: 3,
+      ready: 3,
+      enter: null,
+    },
   });
   assert.equal(freshnessBlock({}), undefined);
   assert.deepEqual(freshnessBlock({ freshness: { interval: 3 } }), {
@@ -360,7 +367,14 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
         nextInterval: 1,
         projectInterval: null,
         rottenDailyBudget: null,
-        decay: { enabled: true, keeps: 3, enter: null },
+        decay: {
+          enabled: true,
+          keeps: 3,
+          pending: 3,
+          next: 3,
+          ready: 3,
+          enter: null,
+        },
       },
     );
   }

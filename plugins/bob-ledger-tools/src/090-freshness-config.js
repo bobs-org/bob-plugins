@@ -4,7 +4,7 @@
 // `next_interval`, `rotten_daily_budget`, `decay`).
 // The removed `stale_daily_budget` key still supplies the budget for
 // one release with a deprecation lint.
-// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v8).
+// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v13).
 
 // Whether the compatible review-walk decision card is present: nav exposes
 // `api.freshnessDecayCard.version >= 2` (ungated handler contract). Version
@@ -25,6 +25,24 @@ function freshnessDecayCardCapable(app) {
   }
 }
 
+// Whether nav's rung-aware decay card is present: nav exposes
+// `api.freshnessDecayCard.version >= 3` once the card supports lane
+// rungs (WIP, Next). Lane rows show their decay mark only behind this
+// probe; below 3 they keep counting pips with truthful counting-only
+// wording. Ready rows keep the `freshnessDecayCardCapable` (>= 2)
+// probe. Never throws.
+function freshnessDecayLaneCardCapable(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins ? plugins["bob-navigation-hotkeys"] : null;
+    const api = holder ? holder.api : null;
+    const card = api ? api.freshnessDecayCard : null;
+    return Boolean(card) && Number(card.version) >= 3;
+  } catch (error) {
+    return false;
+  }
+}
+
 function defaultFreshnessConfig() {
   return {
     interval: 7,
@@ -32,23 +50,66 @@ function defaultFreshnessConfig() {
     nextInterval: 1,
     projectInterval: null,
     rottenDailyBudget: null,
-    decay: { enabled: true, keeps: 3, enter: null },
+    decay: {
+      enabled: true,
+      keeps: 3,
+      pending: 3,
+      next: 3,
+      ready: 3,
+      enter: null,
+    },
   };
 }
 
+// One rung override out of a `freshness.decay` mapping: absent or null
+// uses `fallback`; `false` means count and display but never ask; an
+// integer 0-999 is "ask at N". `true` and every other shape are
+// invalid under the freshness failure contract. Mirrors
+// `parse_rung_keeps` in `src/native/config/freshness.rs`.
+function coerceDecayRungLimit(raw, snake, camel, fallback) {
+  const value = raw[snake] !== undefined ? raw[snake] : raw[camel];
+  if (value === undefined || value === null) {
+    return { limit: fallback, invalid: false };
+  }
+  if (value === false) {
+    return { limit: false, invalid: false };
+  }
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > 999
+  ) {
+    return { limit: fallback, invalid: true };
+  }
+  return { limit: value, invalid: false };
+}
+
 // Normalize the `freshness.decay` value: absent, null, `true`, or an
-// empty mapping means enabled with 3 keeps; `false` disables asking
-// while keeping counting and display; a mapping may set `keeps`
-// (integer 0-999) and `enter` (a nonempty priority label). Anything
-// else is invalid under the freshness failure contract. Mirrors
+// empty mapping means enabled with 3 keeps on every rung; `false`
+// disables asking while keeping counting and display; a mapping may
+// set `keeps` (integer 0-999, the fallback allowance), per-rung
+// `pending_keeps` / `next_keeps` / `ready_keeps` (integer 0-999 or
+// `false`), and `enter` (a nonempty priority label). Anything else is
+// invalid under the freshness failure contract. Mirrors
 // `parse_decay_config` in `src/native/config/freshness.rs`.
 function coerceFreshnessDecay(raw) {
-  const defaults = () => ({ enabled: true, keeps: 3, enter: null });
+  const defaults = () => ({
+    enabled: true,
+    keeps: 3,
+    pending: 3,
+    next: 3,
+    ready: 3,
+    enter: null,
+  });
   if (raw === undefined || raw === null || raw === true) {
     return { decay: defaults(), invalid: false };
   }
   if (raw === false) {
-    return { decay: { enabled: false, keeps: 3, enter: null }, invalid: false };
+    return {
+      decay: { ...defaults(), enabled: false },
+      invalid: false,
+    };
   }
   if (typeof raw !== "object" || Array.isArray(raw)) {
     return { decay: defaults(), invalid: true };
@@ -66,6 +127,12 @@ function coerceFreshnessDecay(raw) {
     }
     keeps = keepsRaw;
   }
+  const pending = coerceDecayRungLimit(raw, "pending_keeps", "pendingKeeps", keeps);
+  const next = coerceDecayRungLimit(raw, "next_keeps", "nextKeeps", keeps);
+  const ready = coerceDecayRungLimit(raw, "ready_keeps", "readyKeeps", keeps);
+  if (pending.invalid || next.invalid || ready.invalid) {
+    return { decay: defaults(), invalid: true };
+  }
   let enter = null;
   const enterRaw = raw.enter;
   if (enterRaw !== undefined && enterRaw !== null) {
@@ -74,20 +141,79 @@ function coerceFreshnessDecay(raw) {
     }
     enter = enterRaw.trim();
   }
-  return { decay: { enabled: true, keeps, enter }, invalid: false };
+  return {
+    decay: {
+      enabled: true,
+      keeps,
+      pending: pending.limit,
+      next: next.limit,
+      ready: ready.limit,
+      enter,
+    },
+    invalid: false,
+  };
 }
 
-// Whether a choice is due for a Ready-lane row in `tier` with `keeps`
-// counted keeps under `config`: enabled decay, Ready lane,
-// rotten/tickler tier, keeps at or over the limit. The annotation
-// means a choice is due, not permission to execute an action. Mirrors
-// `decide_for` in `src/native/freshness/state.rs`.
-function freshnessDecideFor(lane, tier, keeps, config, returnedBy) {
+// One rung's effective keep allowance out of a normalized `decay`
+// object: an integer 0-999 ("ask at N"), or `false` (count and
+// display but never ask). A missing or misshaped rung falls back to
+// the `keeps` allowance, then 3, so older shapes keep working.
+// Mirrors the `DecayLimit` resolution in
+// `src/native/config/freshness.rs`.
+function freshnessDecayLimitFor(decay, lane) {
   try {
-    const dueTier =
-      (tier === "rotten" || tier === "tickler") &&
-      returnedBy !== "unblocked";
-    if (!dueTier || lane !== "ready") {
+    const safe =
+      decay && typeof decay === "object" && !Array.isArray(decay)
+        ? decay
+        : {};
+    const fallback =
+      Number.isInteger(safe.keeps) && safe.keeps >= 0 && safe.keeps <= 999
+        ? safe.keeps
+        : 3;
+    const key =
+      lane === "pending" ? "pending" : lane === "next" ? "next" : lane === "ready" ? "ready" : null;
+    if (key === null) {
+      return fallback;
+    }
+    const value = safe[key];
+    if (value === undefined || value === null) {
+      return fallback;
+    }
+    if (value === false) {
+      return false;
+    }
+    if (Number.isInteger(value) && value >= 0 && value <= 999) {
+      return value;
+    }
+    return fallback;
+  } catch (error) {
+    return 3;
+  }
+}
+
+// Whether a choice is due for a row in `lane`/`tier` with `keeps`
+// counted keeps under `config`: enabled decay, a rung limit of
+// "ask at L", keeps at or over L, and the due tier for that lane
+// (PENDING for pending, NEXT for next, ROTTEN/TICKLER for ready).
+// Unblock ticklers, PROJECTS, recurring, checklist, and Today-linked
+// rows never decide. The annotation means a choice is due, not
+// permission to execute an action. Mirrors `decide_for` in
+// `src/native/freshness/state.rs`.
+function freshnessDecideFor(lane, tier, keeps, config, returnedBy, isToday) {
+  try {
+    if (returnedBy === "unblocked") {
+      return false;
+    }
+    if (isToday === true) {
+      return false;
+    }
+    if (
+      tier === "projects" ||
+      tier === "pre" ||
+      tier === "post" ||
+      tier === "recurring" ||
+      tier === "new"
+    ) {
       return false;
     }
     const decay =
@@ -97,10 +223,26 @@ function freshnessDecideFor(lane, tier, keeps, config, returnedBy) {
     if (!decay.enabled) {
       return false;
     }
-    const limit =
-      Number.isInteger(decay.keeps) && decay.keeps >= 0 ? decay.keeps : 3;
+    let limit = null;
+    if (lane === "pending" && tier === "pending") {
+      limit = freshnessDecayLimitFor(decay, "pending");
+    } else if (lane === "next" && tier === "next") {
+      limit = freshnessDecayLimitFor(decay, "next");
+    } else if (
+      lane === "ready" &&
+      (tier === "rotten" || tier === "tickler")
+    ) {
+      limit = freshnessDecayLimitFor(decay, "ready");
+    } else {
+      return false;
+    }
+    if (limit === false) {
+      return false;
+    }
+    const threshold =
+      Number.isInteger(limit) && limit >= 0 ? limit : 3;
     const count = Number.isInteger(keeps) && keeps >= 0 ? keeps : 0;
-    return count >= limit;
+    return count >= threshold;
   } catch (error) {
     return false;
   }

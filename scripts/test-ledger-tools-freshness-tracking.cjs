@@ -163,7 +163,14 @@ test("obsolete reference interval keys are ignored and project config still vali
 test("references use ordinary keep decisions and the nine-tier queue shape", () => {
   const config = {
     ...CFG,
-    decay: { enabled: true, keeps: 3, enter: null },
+    decay: {
+      enabled: true,
+      keeps: 3,
+      pending: 3,
+      next: 3,
+      ready: 3,
+      enter: null,
+    },
   };
   const ref = sRow({
     path: "r.md",
@@ -342,12 +349,13 @@ test("CL8-CL12: nine tier order, checklist-only due counts, and completion seman
   assert.equal(helpers.freshnessEvaluate(missingWhenDone, D, CFG).tier, "pre");
 });
 
-test("freshness namespace v12 retains the tracker capability contract", () => {
+test("freshness namespace v13 retains the tracker capability contract", () => {
   withMissingConfig(() => {
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({}), {});
     plugin.onload();
     try {
-      assert.equal(plugin.api.freshness.version, 12);
+      assert.equal(plugin.api.freshness.version, 13);
+      assert.equal(plugin.api.freshness.perRungDecay, true);
       assert.equal(plugin.api.freshness.referenceReview, undefined);
       assert.equal(plugin.api.freshness.refTagIdentity, undefined);
       assert.equal(plugin.api.version, 3);

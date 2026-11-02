@@ -31,6 +31,8 @@
   "141-blocks-model.js",
   "142c-block-marks-model.js",
   "142d-block-marks-render.js",
+  "142e-block-marks-runtime.js",
+  "142f-block-marks-editor.js",
   "142-pomodoro-home-chips.js",
   "142b-plan-today-roots.js",
   "143-today-marks.js",

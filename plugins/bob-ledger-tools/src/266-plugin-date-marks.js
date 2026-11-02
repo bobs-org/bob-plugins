@@ -757,6 +757,13 @@ class BobLedgerToolsDateMarksMixin {
   // in place on a day change. Never throws.
   refreshDateMarksForRollover(now) {
     try {
+      try {
+        // The existing minute rollover path also refreshes the block-mark
+        // ladder cache; classification never stats the config per row.
+        this.refreshBlockMarksLadder();
+      } catch (error) {
+        // Keep the last block-mark ladder snapshot on a transient failure.
+      }
       let day = null;
       try {
         day = formatLocalDate(now instanceof Date ? now : new Date());
@@ -774,6 +781,11 @@ class BobLedgerToolsDateMarksMixin {
         return false;
       }
       this.dateMarksDay = day;
+      try {
+        this.refreshBlockMarksForRollover(now);
+      } catch (error) {
+        // Block marks share the date-mark midnight boundary.
+      }
       try {
         this.refreshDateMarkEditors();
       } catch (error) {

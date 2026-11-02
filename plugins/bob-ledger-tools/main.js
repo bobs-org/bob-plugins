@@ -17787,6 +17787,694 @@ class BobLedgerToolsBlockMarksRenderMixin {
     }
   }
 }
+// ---- src/142e-block-marks-runtime.js ----
+// --- Blocked-reason marks: session gate and refresh lifecycle -------------
+// The editor decorations live in `142f-block-marks-editor.js`. This runtime
+// keeps model inputs warm outside the rendering path and coalesces refreshes
+// from Tasks, config, local-midnight, and app-resume events.
+let blockMarksRefreshEffect = null;
+function ensureBlockMarksRefresh() {
+  if (blockMarksRefreshEffect) return blockMarksRefreshEffect;
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      blockMarksRefreshEffect = StateEffect.define();
+    }
+  } catch (error) {
+    blockMarksRefreshEffect = null;
+  }
+  return blockMarksRefreshEffect;
+}
+
+class BobLedgerToolsBlockMarksRuntimeMixin {
+  setupBlockMarks() {
+    try {
+      if (typeof this.blockMarksEnabled !== "boolean") this.blockMarksEnabled = true;
+      if (!(this.blockMarkEditorViews instanceof Set)) this.blockMarkEditorViews = new Set();
+      if (!(this.blockMarkTooltipBindings instanceof Map)) this.blockMarkTooltipBindings = new Map();
+      if (!(this.blockMarkResumeDocuments instanceof WeakSet)) this.blockMarkResumeDocuments = new WeakSet();
+      if (!(this.blockMarkResumeWindows instanceof WeakSet)) this.blockMarkResumeWindows = new WeakSet();
+      if (this.blockMarksTimer === undefined) this.blockMarksTimer = null;
+
+      this.applyMarkGateClass("bob-block-marks", this.blockMarksEnabled);
+      this.registerMarkGatePopoutSync("bob-block-marks", () => this.blockMarksEnabled);
+      this.refreshBlockMarksLadder(false);
+      try {
+        this.blockMarksDay = this.dateMarksToday();
+      } catch (error) {
+        this.blockMarksDay = null;
+      }
+
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-block-marks",
+            name: "Toggle blocked-reason marks",
+            callback: () => this.toggleBlockMarks(),
+          });
+        }
+      } catch (error) {
+        // Command registration is best-effort on limited test hosts.
+      }
+      try {
+        const extension = this.createBlockMarkExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview marks are best-effort.
+      }
+      try {
+        this.setupBlockMarkRefreshListeners();
+      } catch (error) {
+        // Cache liveness is best-effort.
+      }
+      try {
+        if (typeof this.register === "function") {
+          this.register(() => {
+            this.cancelBlockMarksRefresh();
+            this.restoreAllBlockMarkTooltips();
+            this.applyMarkGateClass("bob-block-marks", false);
+            if (this.blockMarkEditorViews instanceof Set) {
+              this.blockMarkEditorViews.clear();
+            }
+          });
+        }
+      } catch (error) {
+        // Unload cleanup is best-effort.
+      }
+    } catch (error) {
+      // Marks setup never breaks plugin startup.
+    }
+  }
+
+  setupBlockMarkRefreshListeners() {
+    try {
+      if (typeof this.registerEvent !== "function") return;
+      const schedule = () => this.scheduleBlockMarksRefresh();
+      const cache = this.app && this.app.metadataCache;
+      if (cache && typeof cache.on === "function") {
+        this.registerEvent(cache.on("changed", schedule));
+        this.registerEvent(cache.on("resolved", schedule));
+      }
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.on === "function") {
+        this.registerEvent(vault.on("rename", schedule));
+        this.registerEvent(vault.on("delete", schedule));
+      }
+    } catch (error) {
+      // Listeners are best-effort.
+    }
+  }
+
+  blockMarkTimerHost() {
+    try {
+      const injected = this.blockMarksTimers;
+      if (injected && typeof injected.set === "function" && typeof injected.clear === "function") {
+        return injected;
+      }
+    } catch (error) {
+      // Use the host timers below.
+    }
+    const host = typeof window !== "undefined" && typeof window.setTimeout === "function" ? window : null;
+    return {
+      set: (fn, ms) => (host ? host.setTimeout(fn, ms) : setTimeout(fn, ms)),
+      clear: (handle) => (host ? host.clearTimeout(handle) : clearTimeout(handle)),
+    };
+  }
+
+  scheduleBlockMarksRefresh() {
+    try {
+      if (this.blockMarksTimer !== null && this.blockMarksTimer !== undefined) return;
+      this.blockMarksTimer = this.blockMarkTimerHost().set(() => {
+        this.blockMarksTimer = null;
+        this.runBlockMarksRefresh(true);
+      }, 120);
+    } catch (error) {
+      this.blockMarksTimer = null;
+    }
+  }
+
+  cancelBlockMarksRefresh() {
+    try {
+      if (this.blockMarksTimer !== null && this.blockMarksTimer !== undefined) {
+        this.blockMarkTimerHost().clear(this.blockMarksTimer);
+      }
+    } catch (error) {
+      // Timer cancellation is best-effort.
+    }
+    this.blockMarksTimer = null;
+  }
+
+  runBlockMarksRefresh(allowSwap = false) {
+    try {
+      this.refreshBlockMarkEditors();
+    } catch (error) {
+      // Editor refresh is best-effort.
+    }
+    try {
+      // The rendered-view phase supplies this hook; the Live Preview phase
+      // remains independently runnable before that adapter is installed.
+      if (typeof this.sweepBlockMarksReading === "function") {
+        this.sweepBlockMarksReading({ allowSwap });
+      }
+    } catch (error) {
+      // Rendered hosts are best-effort.
+    }
+  }
+
+  refreshBlockMarkEditors() {
+    try {
+      const effect = ensureBlockMarksRefresh();
+      if (!effect) return;
+      const views = this.blockMarkEditorViews instanceof Set
+        ? Array.from(this.blockMarkEditorViews)
+        : [];
+      for (const view of views) {
+        try {
+          if (view && typeof view.dispatch === "function") {
+            view.dispatch({ effects: effect.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh never throws.
+    }
+  }
+
+  refreshBlockMarksLadder(force = false) {
+    try {
+      if (force && this.priorityLadderCache && typeof this.priorityLadderCache === "object") {
+        this.priorityLadderCache.checkedAt = Number.NEGATIVE_INFINITY;
+      }
+      const snapshot = typeof this.priorityLadderSnapshot === "function"
+        ? this.priorityLadderSnapshot()
+        : null;
+      const ladder = snapshot && Array.isArray(snapshot.ladder) ? snapshot.ladder : null;
+      const signature = JSON.stringify(
+        Array.isArray(ladder)
+          ? ladder
+              .map((entry) => [String(entry && entry.value || ""), String(entry && entry.label || "")])
+              .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]))
+          : null,
+      );
+      const changed = this.blockMarksLadderReady === true && signature !== this.blockMarksLadderSignature;
+      this.blockMarksLadder = ladder;
+      this.blockMarksLadderSignature = signature;
+      this.blockMarksLadderReady = true;
+      if (changed) this.scheduleBlockMarksRefresh();
+      return changed;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  blockMarkLadderForRender() {
+    try {
+      if (this.blockMarksLadderReady === true) return this.blockMarksLadder;
+      const cache = this.priorityLadderCache;
+      return cache && Array.isArray(cache.ladder) ? cache.ladder : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  refreshBlockMarksForRollover(now = new Date()) {
+    try {
+      let day = null;
+      try {
+        day = typeof formatLocalDate === "function"
+          ? formatLocalDate(now instanceof Date ? now : new Date())
+          : this.dateMarksToday();
+      } catch (error) {
+        day = null;
+      }
+      if (!day) return false;
+      if (this.blockMarksDay === null || this.blockMarksDay === undefined) {
+        this.blockMarksDay = day;
+        return false;
+      }
+      if (this.blockMarksDay === day) return false;
+      this.blockMarksDay = day;
+      this.scheduleBlockMarksRefresh();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  registerBlockMarksResumeHooks(view) {
+    try {
+      const root = view && view.dom;
+      const doc = root && root.ownerDocument;
+      if (doc && typeof doc === "object" && !this.blockMarkResumeDocuments.has(doc)) {
+        this.blockMarkResumeDocuments.add(doc);
+        if (typeof this.registerDomEvent === "function") {
+          this.registerDomEvent(doc, "visibilitychange", () => {
+            try {
+              if (doc.visibilityState === "visible") this.blockMarksOnResume();
+            } catch (error) {
+              // A closed popout is ignored.
+            }
+          });
+        }
+      }
+      const win = doc && doc.defaultView;
+      if (win && typeof win === "object" && !this.blockMarkResumeWindows.has(win)) {
+        this.blockMarkResumeWindows.add(win);
+        if (typeof this.registerDomEvent === "function") {
+          this.registerDomEvent(win, "focus", () => this.blockMarksOnResume());
+        }
+      }
+    } catch (error) {
+      // Resume hooks are best-effort.
+    }
+  }
+
+  blockMarksOnResume() {
+    try {
+      this.refreshBlockMarksLadder(true);
+    } catch (error) {
+      // Continue with the current in-memory ladder.
+    }
+    this.scheduleBlockMarksRefresh();
+  }
+
+  toggleBlockMarks() {
+    try {
+      this.blockMarksEnabled = this.blockMarksEnabled !== true;
+      const enabled = this.blockMarksEnabled;
+      this.applyMarkGateClass("bob-block-marks", enabled);
+      this.runBlockMarksRefresh(true);
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (workspace && typeof workspace.trigger === "function") {
+          workspace.trigger(TODAY_RELOAD_EVENT);
+        }
+      } catch (error) {
+        // Tasks rerender is best-effort.
+      }
+      try {
+        new Notice(enabled ? "Blocked-reason marks on" : "Blocked-reason marks off");
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return enabled;
+    } catch (error) {
+      return this.blockMarksEnabled === true;
+    }
+  }
+}
+// ---- src/142f-block-marks-editor.js ----
+// --- Blocked-reason marks: Live Preview decorations and lazy tooltips ------
+class BobLedgerToolsBlockMarksEditorMixin {
+  blockMarksEditorAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin && Decoration && RangeSetBuilder && StateEffect &&
+          typeof StateEffect.define === "function" && editorInfoField &&
+          editorLivePreviewField && typeof taskTagMarkTokenRanges === "function" &&
+          typeof blockMarkModel === "function",
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createBlockMarkExtension() {
+    try {
+      if (
+        !this.blockMarksEditorAvailable() || !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" || !Prec ||
+        typeof Prec.highest !== "function"
+      ) return null;
+      const plugin = this;
+      const MarkPluginClass = class {
+        constructor(view) {
+          this.view = view;
+          this.onMouseOver = (event) => plugin.handleBlockMarkMouseOver(view, event);
+          try {
+            if (view && view.dom && typeof view.dom.addEventListener === "function") {
+              view.dom.addEventListener("mouseover", this.onMouseOver, true);
+            }
+          } catch (error) {
+            // Lazy tooltip attachment is best-effort.
+          }
+          try {
+            plugin.blockMarkEditorViews.add(view);
+            plugin.registerBlockMarksResumeHooks(view);
+          } catch (error) {
+            // Editor tracking is best-effort.
+          }
+          try {
+            this.decorations = plugin.buildBlockMarkDecorations(view);
+          } catch (error) {
+            this.decorations = Decoration.none;
+          }
+        }
+
+        update(update) {
+          try {
+            if (plugin.blockMarkShouldRebuild(update)) {
+              this.decorations = plugin.buildBlockMarkDecorations(update.view);
+              plugin.refreshBlockMarkTooltipsForView(update.view);
+            }
+          } catch (error) {
+            // Keep the previous valid decorations on a failed rebuild.
+          }
+        }
+
+        destroy() {
+          try {
+            if (this.view && this.view.dom && typeof this.view.dom.removeEventListener === "function") {
+              this.view.dom.removeEventListener("mouseover", this.onMouseOver, true);
+            }
+          } catch (error) {
+            // A closing editor may already have detached its DOM.
+          }
+          try {
+            plugin.restoreBlockMarkTooltipsForView(this.view);
+            plugin.blockMarkEditorViews.delete(this.view);
+          } catch (error) {
+            // View cleanup is best-effort.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(MarkPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  blockMarkShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") return false;
+      if (update.docChanged || update.viewportChanged) return true;
+      try {
+        const refresh = ensureBlockMarksRefresh();
+        for (const transaction of update.transactions || []) {
+          const effects = transaction && transaction.effects;
+          for (const effect of !effects ? [] : Array.isArray(effects) ? effects : [effects]) {
+            try {
+              if (effect && (effect === refresh || (refresh && typeof effect.is === "function" && effect.is(refresh)))) {
+                return true;
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+        }
+      } catch (error) {
+        // Effect inspection is best-effort.
+      }
+      try {
+        if (editorLivePreviewField && update.startState && update.state) {
+          if (update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField)) return true;
+        }
+        if (editorInfoField && update.startState && update.state) {
+          const before = update.startState.field(editorInfoField);
+          const after = update.state.field(editorInfoField);
+          const beforePath = before && before.file ? before.file.path : null;
+          const afterPath = after && after.file ? after.file.path : null;
+          if (beforePath !== afterPath) return true;
+        }
+      } catch (error) {
+        // Field comparisons are best-effort.
+      }
+      // Selection-only changes do not change marks or tooltip ownership.
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  blockMarkVisibleTaskTag(lineText, tree, lineFrom) {
+    try {
+      if (!tree || typeof tree.resolveInner !== "function") return false;
+      const ranges = taskTagMarkTokenRanges(String(lineText || ""));
+      for (const range of ranges) {
+        try {
+          if (!freshnessMarkPosInCode(tree, lineFrom + range.from)) return true;
+        } catch (error) {
+          continue;
+        }
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  blockMarkModelForEditorLine(path, line, tree) {
+    try {
+      if (!line || typeof line.text !== "string" || !this.blockMarksEnabled) return null;
+      if (!this.blockMarkVisibleTaskTag(line.text, tree, line.from)) return null;
+      return this.blockMarkModelForLine(path, line.text);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  buildBlockMarkDecorations(view) {
+    try {
+      if (!this.blockMarksEnabled || !view || !view.state || !Decoration ||
+          typeof Decoration.line !== "function" || !RangeSetBuilder ||
+          !editorInfoField || !editorLivePreviewField) return Decoration.none;
+      let live = false;
+      let info = null;
+      try {
+        live = view.state.field(editorLivePreviewField) === true;
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const path = info && info.file && typeof info.file.path === "string" ? info.file.path : "";
+      if (!live || !path) return Decoration.none;
+
+      let tree = null;
+      try {
+        if (typeof syntaxTree === "function") tree = syntaxTree(view.state);
+        else if (syntaxTree && typeof syntaxTree.resolveInner === "function") tree = syntaxTree;
+      } catch (error) {
+        tree = null;
+      }
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") return Decoration.none;
+      const docLength = typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      const marks = new Map();
+      for (const range of view.visibleRanges || []) {
+        try {
+          if (!range || typeof range.from !== "number") continue;
+          let pos = Math.max(0, range.from);
+          const end = Math.min(typeof range.to === "number" ? range.to : docLength, docLength);
+          let guard = 0;
+          while (pos <= end && guard < 10000) {
+            guard += 1;
+            let line = null;
+            try {
+              line = doc.lineAt(pos);
+            } catch (error) {
+              break;
+            }
+            if (!line || typeof line.text !== "string") break;
+            if (!marks.has(line.from)) {
+              const model = this.blockMarkModelForEditorLine(path, line, tree);
+              if (model) marks.set(line.from, model);
+            }
+            if (line.to >= end || line.to < pos) break;
+            pos = line.to + 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+
+      const builder = new RangeSetBuilder();
+      const ordered = Array.from(marks.entries()).sort((a, b) => a[0] - b[0]);
+      for (const [from, model] of ordered) {
+        try {
+          const attributes = {
+            "data-bob-block": String(model.key),
+            "data-bob-block-family": String(model.family),
+          };
+          if (model.more) attributes["data-bob-block-more"] = String(model.more);
+          builder.add(from, from, Decoration.line({ attributes }));
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration ? Decoration.none : null;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  blockMarkEditorRowForInput(view, input) {
+    try {
+      if (!view || !view.dom || !input) return null;
+      let row = null;
+      for (let node = input; node && node !== view.dom; node = node.parentElement) {
+        try {
+          if (node.classList && node.classList.contains("HyperMD-task-line")) {
+            row = node;
+            break;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      if (!row) return null;
+      let pos = null;
+      try {
+        if (typeof view.posAtDOM === "function") pos = view.posAtDOM(input, 0);
+      } catch (error) {
+        pos = null;
+      }
+      if (!Number.isInteger(pos)) {
+        try {
+          if (typeof view.posAtDOM === "function") pos = view.posAtDOM(row, 0);
+        } catch (error) {
+          pos = null;
+        }
+      }
+      if (!Number.isInteger(pos) || !view.state || !view.state.doc || typeof view.state.doc.lineAt !== "function") return null;
+      if (view.state.field(editorLivePreviewField) !== true) return null;
+      const line = view.state.doc.lineAt(pos);
+      let info = null;
+      try {
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        info = null;
+      }
+      const path = info && info.file && typeof info.file.path === "string" ? info.file.path : "";
+      const tree = typeof syntaxTree === "function" ? syntaxTree(view.state) : null;
+      return { row, line, model: this.blockMarkModelForEditorLine(path, line, tree) };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  handleBlockMarkMouseOver(view, event) {
+    try {
+      const input = event && event.target;
+      if (!input || String(input.tagName || "").toUpperCase() !== "INPUT") return;
+      let checkbox = false;
+      try {
+        checkbox = Boolean(input.classList && input.classList.contains("task-list-item-checkbox"));
+      } catch (error) {
+        checkbox = false;
+      }
+      if (!checkbox) return;
+      const resolved = this.blockMarkEditorRowForInput(view, input);
+      this.setBlockMarkTooltipInput(input, view, resolved && resolved.model);
+    } catch (error) {
+      // Tooltip metadata is best-effort and never changes checkbox behavior.
+    }
+  }
+
+  setBlockMarkTooltipInput(input, view, model) {
+    try {
+      if (!input || !this.blockMarkTooltipBindings) return;
+      const tooltip = model && typeof model.tooltip === "string" ? model.tooltip : "";
+      if (!tooltip) {
+        this.restoreBlockMarkTooltipInput(input);
+        return;
+      }
+      let record = this.blockMarkTooltipBindings.get(input);
+      if (!record) {
+        record = {
+          view,
+          originalAria: input.getAttribute("aria-label"),
+          originalPosition: input.getAttribute("data-tooltip-position"),
+          appliedAria: null,
+          appliedPosition: null,
+        };
+        this.blockMarkTooltipBindings.set(input, record);
+      } else {
+        record.view = view;
+      }
+      const currentAria = input.getAttribute("aria-label");
+      const currentPosition = input.getAttribute("data-tooltip-position");
+      if (record.appliedAria !== null && currentAria !== record.appliedAria) record.originalAria = currentAria;
+      if (record.appliedPosition !== null && currentPosition !== record.appliedPosition) record.originalPosition = currentPosition;
+      input.setAttribute("aria-label", tooltip);
+      input.setAttribute("data-tooltip-position", "top");
+      record.appliedAria = tooltip;
+      record.appliedPosition = "top";
+    } catch (error) {
+      // Metadata attachment cannot interfere with the input.
+    }
+  }
+
+  restoreBlockMarkTooltipInput(input) {
+    try {
+      const bindings = this.blockMarkTooltipBindings;
+      const record = bindings instanceof Map ? bindings.get(input) : null;
+      if (!record) return;
+      try {
+        if (input.getAttribute("aria-label") === record.appliedAria) {
+          if (record.originalAria === null) input.removeAttribute("aria-label");
+          else input.setAttribute("aria-label", record.originalAria);
+        }
+        if (input.getAttribute("data-tooltip-position") === record.appliedPosition) {
+          if (record.originalPosition === null) input.removeAttribute("data-tooltip-position");
+          else input.setAttribute("data-tooltip-position", record.originalPosition);
+        }
+      } catch (error) {
+        // Detached inputs are still removed from the ownership map.
+      }
+      bindings.delete(input);
+    } catch (error) {
+      // Cleanup never throws.
+    }
+  }
+
+  refreshBlockMarkTooltipsForView(view) {
+    try {
+      const bindings = this.blockMarkTooltipBindings;
+      if (!(bindings instanceof Map)) return;
+      for (const [input, record] of Array.from(bindings.entries())) {
+        if (!record || record.view !== view) continue;
+        const connected = typeof input.isConnected !== "boolean" || input.isConnected;
+        const resolved = connected ? this.blockMarkEditorRowForInput(view, input) : null;
+        this.setBlockMarkTooltipInput(input, view, resolved && resolved.model);
+      }
+    } catch (error) {
+      // Existing tooltips are refreshed best-effort.
+    }
+  }
+
+  restoreBlockMarkTooltipsForView(view) {
+    try {
+      const bindings = this.blockMarkTooltipBindings;
+      if (!(bindings instanceof Map)) return;
+      for (const [input, record] of Array.from(bindings.entries())) {
+        if (record && record.view === view) this.restoreBlockMarkTooltipInput(input);
+      }
+    } catch (error) {
+      // View cleanup is best-effort.
+    }
+  }
+
+  restoreAllBlockMarkTooltips() {
+    try {
+      const bindings = this.blockMarkTooltipBindings;
+      if (!(bindings instanceof Map)) return;
+      for (const input of Array.from(bindings.keys())) this.restoreBlockMarkTooltipInput(input);
+    } catch (error) {
+      // Plugin cleanup is best-effort.
+    }
+  }
+}
 // ---- src/142-pomodoro-home-chips.js ----
 // --- Pomodoro home chips: pure mirror of bob-cli pomodoro homes -----------
 // The shared Rust contract and vectors live in bob-cli. This mirror only
@@ -30141,6 +30829,11 @@ class BobLedgerToolsHeadingReviewMixin {
     }
     try {
       this.scheduleTaskLinkMarksRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleBlockMarksRefresh();
     } catch (error) {
       // One missed schedule never breaks the fan-out.
     }
@@ -50623,6 +51316,13 @@ class BobLedgerToolsDateMarksMixin {
   // in place on a day change. Never throws.
   refreshDateMarksForRollover(now) {
     try {
+      try {
+        // The existing minute rollover path also refreshes the block-mark
+        // ladder cache; classification never stats the config per row.
+        this.refreshBlockMarksLadder();
+      } catch (error) {
+        // Keep the last block-mark ladder snapshot on a transient failure.
+      }
       let day = null;
       try {
         day = formatLocalDate(now instanceof Date ? now : new Date());
@@ -50640,6 +51340,11 @@ class BobLedgerToolsDateMarksMixin {
         return false;
       }
       this.dateMarksDay = day;
+      try {
+        this.refreshBlockMarksForRollover(now);
+      } catch (error) {
+        // Block marks share the date-mark midnight boundary.
+      }
       try {
         this.refreshDateMarkEditors();
       } catch (error) {
@@ -53805,9 +54510,24 @@ class BobLedgerToolsBlockMarksMixin {
       const index = this.blockMarksIdIndex();
       if (!index) return null;
       const tasks = Array.isArray(memo && memo.tasks) ? memo.tasks : [];
-      const projectTask = tasks.find((task) =>
-        planTaskPath(task) === path && planTaskBlockId(task) === "prj",
-      );
+      let byPath = memo.blockMarksProjectTasksByPath;
+      if (!(byPath instanceof Map)) {
+        byPath = new Map();
+        try {
+          memo.blockMarksProjectTasksByPath = byPath;
+        } catch (error) {
+          // The local map still avoids duplicate scans during this call.
+        }
+      }
+      let projectTask = null;
+      if (byPath.has(path)) {
+        projectTask = byPath.get(path);
+      } else {
+        projectTask = tasks.find((task) =>
+          planTaskPath(task) === path && planTaskBlockId(task) === "prj",
+        ) || null;
+        byPath.set(path, projectTask);
+      }
       if (!projectTask) return null;
 
       const line = planTaskDescription(projectTask) || "";
@@ -53819,8 +54539,7 @@ class BobLedgerToolsBlockMarksMixin {
       }
 
       const today = this.dateMarksToday();
-      const ladderSnapshot = this.priorityLadderSnapshot();
-      const ladder = ladderSnapshot && ladderSnapshot.ladder;
+      const ladder = this.blockMarkLadderForRender();
       const dateFacts = blockMarkDateFacts(line, today, ladder);
       if (dateFacts.invalidToday) return null;
       if (dateFacts.date) {
@@ -53839,19 +54558,13 @@ class BobLedgerToolsBlockMarksMixin {
   }
 
   // The shared model used by source-note surfaces and api.blockMarks v1.
-  // Paint and the miniature renderer ship with this phase; editor and
-  // reading-view decorations follow in later phases.
+  // The Live Preview and api.blockMarks v1 consumers share this one
+  // display-only model; neither path writes source Markdown.
   blockMarkModelForLine(path, lineText) {
     try {
       if (this.blockMarksEnabled === false) return null;
       const index = this.blockMarksIdIndex();
-      let ladder = null;
-      try {
-        const snapshot = this.priorityLadderSnapshot();
-        ladder = snapshot && snapshot.ladder;
-      } catch (error) {
-        ladder = null;
-      }
+      const ladder = this.blockMarkLadderForRender();
       let today = null;
       try {
         today = this.dateMarksToday();
@@ -69505,6 +70218,7 @@ class BobLedgerToolsTaskLinkMarksMixin {
     this.setupLedgerTypeMarks();
     this.setupTodayMarks();
     this.setupTaskLinkMarks();
+    this.setupBlockMarks();
   }
 
   setupTaskLinkMarks() {
@@ -76668,6 +77382,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBlocksModelMixin,
   BobLedgerToolsBlockMarksMixin,
   BobLedgerToolsBlockMarksRenderMixin,
+  BobLedgerToolsBlockMarksRuntimeMixin,
+  BobLedgerToolsBlockMarksEditorMixin,
   BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,
@@ -79010,6 +79726,7 @@ module.exports.helpers = {
   blockMarkClassify,
   blockMarkTooltip,
   blockMarkModel,
+  ensureBlockMarksRefresh,
   blockMarkDateWords,
   buildBlockMarkElement,
   blockMarkDependencyFacts,

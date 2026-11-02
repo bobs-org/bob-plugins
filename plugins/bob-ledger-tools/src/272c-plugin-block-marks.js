@@ -58,9 +58,24 @@ class BobLedgerToolsBlockMarksMixin {
       const index = this.blockMarksIdIndex();
       if (!index) return null;
       const tasks = Array.isArray(memo && memo.tasks) ? memo.tasks : [];
-      const projectTask = tasks.find((task) =>
-        planTaskPath(task) === path && planTaskBlockId(task) === "prj",
-      );
+      let byPath = memo.blockMarksProjectTasksByPath;
+      if (!(byPath instanceof Map)) {
+        byPath = new Map();
+        try {
+          memo.blockMarksProjectTasksByPath = byPath;
+        } catch (error) {
+          // The local map still avoids duplicate scans during this call.
+        }
+      }
+      let projectTask = null;
+      if (byPath.has(path)) {
+        projectTask = byPath.get(path);
+      } else {
+        projectTask = tasks.find((task) =>
+          planTaskPath(task) === path && planTaskBlockId(task) === "prj",
+        ) || null;
+        byPath.set(path, projectTask);
+      }
       if (!projectTask) return null;
 
       const line = planTaskDescription(projectTask) || "";
@@ -72,8 +87,7 @@ class BobLedgerToolsBlockMarksMixin {
       }
 
       const today = this.dateMarksToday();
-      const ladderSnapshot = this.priorityLadderSnapshot();
-      const ladder = ladderSnapshot && ladderSnapshot.ladder;
+      const ladder = this.blockMarkLadderForRender();
       const dateFacts = blockMarkDateFacts(line, today, ladder);
       if (dateFacts.invalidToday) return null;
       if (dateFacts.date) {
@@ -92,19 +106,13 @@ class BobLedgerToolsBlockMarksMixin {
   }
 
   // The shared model used by source-note surfaces and api.blockMarks v1.
-  // Paint and the miniature renderer ship with this phase; editor and
-  // reading-view decorations follow in later phases.
+  // The Live Preview and api.blockMarks v1 consumers share this one
+  // display-only model; neither path writes source Markdown.
   blockMarkModelForLine(path, lineText) {
     try {
       if (this.blockMarksEnabled === false) return null;
       const index = this.blockMarksIdIndex();
-      let ladder = null;
-      try {
-        const snapshot = this.priorityLadderSnapshot();
-        ladder = snapshot && snapshot.ladder;
-      } catch (error) {
-        ladder = null;
-      }
+      const ladder = this.blockMarkLadderForRender();
       let today = null;
       try {
         today = this.dateMarksToday();

@@ -55,6 +55,7 @@ if (WidgetType && typeof WidgetType === "function") {
       const sourcePath = (this.meta && this.meta.sourcePath) || "";
       const interactive = Boolean(this.meta && this.meta.interactive);
       const dom = buildDependencyChipElement(docNode, this.model, {
+        plugin,
         sourcePath,
         interactive,
         onOpen: (linktext, event) => {

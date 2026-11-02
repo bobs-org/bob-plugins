@@ -271,7 +271,15 @@ class BobLedgerToolsBlocksRenderMixin {
     const box = doc.createElement("span");
     box.setAttribute("class", "bob-dep-chip-box");
     box.setAttribute("aria-hidden", "true");
-    box.textContent = String(chip.symbol || "○");
+    let marked = null;
+    try {
+      if (chip.blockMark && typeof this.blockMarkRender === "function") {
+        marked = this.blockMarkRender(box, chip.blockMark, { decorative: true });
+      }
+    } catch (error) {
+      marked = null;
+    }
+    if (!marked) box.textContent = String(chip.symbol || "○");
     anchor.appendChild(box);
     const text = doc.createElement("span");
     text.setAttribute("class", "bob-dep-chip-text");

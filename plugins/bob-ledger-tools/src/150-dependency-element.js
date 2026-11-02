@@ -41,7 +41,15 @@ function buildDependencyChipElement(doc, model, options) {
         box.setAttribute("class", "bob-dep-chip-box");
         box.setAttribute("data-task", state);
         box.setAttribute("aria-hidden", "true");
-        box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
+        let marked = null;
+        try {
+          if (chip.blockMark && opts.plugin && typeof opts.plugin.blockMarkRender === "function") {
+            marked = opts.plugin.blockMarkRender(box, chip.blockMark, { decorative: true });
+          }
+        } catch (error) {
+          marked = null;
+        }
+        if (!marked) box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
         el.appendChild(box);
         const textEl = doc.createElement("span");
         textEl.setAttribute("class", "bob-dep-chip-text");

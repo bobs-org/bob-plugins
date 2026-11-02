@@ -398,16 +398,31 @@ test("budget link counter ignores Depends-On and BLOCKS rows (MC1/MC2)", () => {
 
 test("chip builder includes the 🔑 badge and has no edit controls", () => {
   const owner = task({ blockId: "owner", id: "root" });
-  const dep = task({ blockId: "dep", id: "dependent", dependsOn: ["root"], description: "Dependent" });
-  const model = blocksChipModel("- 🧱 **BLOCKS:** [[#^dep]]", "a.md", owner, { tasks: [owner, dep] }, lookupFor([owner, dep]));
+  const dep = task({ blockId: "dep", id: "dependent", dependsOn: ["root"], description: "Dependent", originalMarkdown: "- [?] #task Dependent [dependsOn:: root] ^dep" });
+  const mark = Object.freeze({ key: "dep", family: "held", tooltip: "Blocked · after prerequisite" });
+  const model = blocksChipModel("- 🧱 **BLOCKS:** [[#^dep]]", "a.md", owner, { tasks: [owner, dep] }, lookupFor([owner, dep]), undefined, (target, path) => {
+    assert.equal(target, dep);
+    assert.equal(path, "a.md");
+    return mark;
+  });
   const doc = new MiniDoc();
-  const el = buildBlocksChipElement(doc, model, {});
+  const plugin = { blockMarkRender(host, supplied, options) {
+    assert.equal(supplied, mark);
+    assert.equal(options.decorative, true);
+    const element = doc.createElement("span");
+    element.setAttribute("class", "bob-block-mark");
+    host.appendChild(element);
+    return element;
+  } };
+  const el = buildBlocksChipElement(doc, model, { plugin });
   assert.ok(el.classList.contains("bob-blocks-row"));
   assert.ok(el.querySelectorAll("button").length === 0);
   assert.equal(findByClass(el, "bob-dep-add").length, 0);
   assert.equal(findByClass(el, "bob-dep-chip-remove").length, 0);
   assert.equal(el.getAttribute("title"), BLOCKS_CHIP_TOOLTIP);
   assert.ok(el.childNodes.some((child) => child.childNodes.some((nested) => nested.className.includes("bob-blocks-key"))));
+  assert.match(findByClass(el, "bob-blocks-chip")[0].getAttribute("title"), /Blocked · after prerequisite/);
+  assert.equal(findByClass(el, "bob-block-mark").length, 1);
 });
 
 test("RBC1 open owner with api.blocks shows ＋ and openStage gets the 0-based line", async () => {

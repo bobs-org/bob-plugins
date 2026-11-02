@@ -83,7 +83,11 @@ class BobLedgerToolsBlocksModelMixin {
           return null;
         }
       };
-      return blocksChipModel(String(text || ""), sourcePath, ownerTask, memo, lookup, memo && memo.dateText);
+      return blocksChipModel(String(text || ""), sourcePath, ownerTask, memo, lookup, memo && memo.dateText, (task, taskPath) => {
+        const rawLine = task && (task.originalMarkdown || task.rawLine || task.lineText);
+        if (typeof rawLine !== "string" || !rawLine) return null;
+        return this.blockMarkModelForLine(taskPath || sourcePath, rawLine);
+      });
     } catch (error) {
       return null;
     }

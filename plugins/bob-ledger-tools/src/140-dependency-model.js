@@ -643,7 +643,7 @@ function dependencySymbolForState(state) {
 // `lookup(linkpath, blockId)` returns a Tasks-plugin task, `{isTask:false}`
 // for a resolved non-task block, or null for a missing target. `sourcePath`
 // decides the `↗ note` label. Never throws.
-function dependencyChipModel(lineText, sourcePath, lookup) {
+function dependencyChipModel(lineText, sourcePath, lookup, blockMarkForTask) {
   try {
     const parsed = parseDependencyLine(lineText);
     if (!parsed || parsed.verdict === "not-a-line" || parsed.verdict === "malformed") {
@@ -774,7 +774,7 @@ function dependencyChipModel(lineText, sourcePath, lookup) {
         if (scheduled) {
           tooltip += " · " + scheduled;
         }
-        chips.push({
+        const chip = {
           state,
           symbol: sym,
           text,
@@ -784,7 +784,19 @@ function dependencyChipModel(lineText, sourcePath, lookup) {
           blockId,
           tooltip,
           ariaLabel: "Dependency " + fullText + " (" + statusName + ")",
-        });
+        };
+        if (typeof blockMarkForTask === "function") {
+          try {
+            chip.blockMark = blockMarkForTask(task, taskPath) || null;
+            if (chip.blockMark && chip.blockMark.tooltip) {
+              chip.tooltip += " · " + chip.blockMark.tooltip;
+              chip.ariaLabel += "; " + chip.blockMark.tooltip;
+            }
+          } catch (error) {
+            chip.blockMark = null;
+          }
+        }
+        chips.push(chip);
       } catch (error) {
         continue;
       }

@@ -160,7 +160,15 @@ class BobLedgerToolsDependencyRenderMixin {
                 box.setAttribute("class", "bob-dep-chip-box");
                 box.setAttribute("data-task", chip && chip.state ? chip.state : "todo");
                 box.setAttribute("aria-hidden", "true");
-                box.textContent = (chip && chip.symbol) || "○";
+                let marked = null;
+                try {
+                  if (chip && chip.blockMark && typeof this.blockMarkRender === "function") {
+                    marked = this.blockMarkRender(box, chip.blockMark, { decorative: true });
+                  }
+                } catch (error) {
+                  marked = null;
+                }
+                if (!marked) box.textContent = (chip && chip.symbol) || "○";
                 const firstKids = Array.from(anchor.childNodes || []);
                 if (typeof anchor.insertBefore === "function") {
                   anchor.insertBefore(box, firstKids.length > 0 ? firstKids[0] : null);

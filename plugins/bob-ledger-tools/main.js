@@ -16351,7 +16351,7 @@ function dependencySymbolForState(state) {
 // `lookup(linkpath, blockId)` returns a Tasks-plugin task, `{isTask:false}`
 // for a resolved non-task block, or null for a missing target. `sourcePath`
 // decides the `↗ note` label. Never throws.
-function dependencyChipModel(lineText, sourcePath, lookup) {
+function dependencyChipModel(lineText, sourcePath, lookup, blockMarkForTask) {
   try {
     const parsed = parseDependencyLine(lineText);
     if (!parsed || parsed.verdict === "not-a-line" || parsed.verdict === "malformed") {
@@ -16482,7 +16482,7 @@ function dependencyChipModel(lineText, sourcePath, lookup) {
         if (scheduled) {
           tooltip += " · " + scheduled;
         }
-        chips.push({
+        const chip = {
           state,
           symbol: sym,
           text,
@@ -16492,7 +16492,19 @@ function dependencyChipModel(lineText, sourcePath, lookup) {
           blockId,
           tooltip,
           ariaLabel: "Dependency " + fullText + " (" + statusName + ")",
-        });
+        };
+        if (typeof blockMarkForTask === "function") {
+          try {
+            chip.blockMark = blockMarkForTask(task, taskPath) || null;
+            if (chip.blockMark && chip.blockMark.tooltip) {
+              chip.tooltip += " · " + chip.blockMark.tooltip;
+              chip.ariaLabel += "; " + chip.blockMark.tooltip;
+            }
+          } catch (error) {
+            chip.blockMark = null;
+          }
+        }
+        chips.push(chip);
       } catch (error) {
         continue;
       }
@@ -16974,7 +16986,7 @@ function blocksCanonicalLinktext(task, sourcePath) {
   }
 }
 
-function blocksBuildChip(task, linkpath, blockId, sourcePath, owner, memo, isLive, frozen, today) {
+function blocksBuildChip(task, linkpath, blockId, sourcePath, owner, memo, isLive, frozen, today, blockMarkForTask) {
   const taskPath = planTaskPath(task) || "";
   const id = String(blockId || planTaskBlockId(task) || "");
   const projectTask = id === "prj";
@@ -16997,7 +17009,7 @@ function blocksBuildChip(task, linkpath, blockId, sourcePath, owner, memo, isLiv
   const canonical = linkpath
     ? String(linkpath).replace(/\.md$/i, "") + "#^" + id
     : blocksCanonicalLinktext(task, sourcePath);
-  return {
+  const chip = {
     blockId: id,
     linktext: canonical,
     linkpath: linkpath || "",
@@ -17015,11 +17027,23 @@ function blocksBuildChip(task, linkpath, blockId, sourcePath, owner, memo, isLiv
     projectTask,
     live: Boolean(isLive),
   };
+  if (typeof blockMarkForTask === "function") {
+    try {
+      chip.blockMark = blockMarkForTask(task, taskPath) || null;
+      if (chip.blockMark && chip.blockMark.tooltip) {
+        chip.tooltip += " · " + chip.blockMark.tooltip;
+        chip.ariaLabel += "; " + chip.blockMark.tooltip;
+      }
+    } catch (error) {
+      chip.blockMark = null;
+    }
+  }
+  return chip;
 }
 
 // Build one row model from the stored line and the memo's live reverse index.
 // `lookup(linkpath, blockId)` resolves a stored link to a Tasks task or null.
-function blocksChipModel(lineText, sourcePath, owner, memo, lookup, today) {
+function blocksChipModel(lineText, sourcePath, owner, memo, lookup, today, blockMarkForTask) {
   try {
     const parsed = parseBlocksLine(String(lineText || ""));
     if (!parsed || (parsed.verdict !== "accept" && parsed.verdict !== "empty")) {
@@ -17046,7 +17070,7 @@ function blocksChipModel(lineText, sourcePath, owner, memo, lookup, today) {
       const task = resolved && resolved.isTask === false ? null : resolved;
       const key = blocksTaskKey(task);
       const liveTask = key ? liveByKey.get(key) : null;
-      const chip = blocksBuildChip(task, target.linkpath, target.blockId, source, owner, memo, Boolean(liveTask), frozen, today);
+      const chip = blocksBuildChip(task, target.linkpath, target.blockId, source, owner, memo, Boolean(liveTask), frozen, today, blockMarkForTask);
       if (!task) {
         chip.state = frozen ? "broken" : "stale";
         chip.symbol = "⚠";
@@ -17084,7 +17108,7 @@ function blocksChipModel(lineText, sourcePath, owner, memo, lookup, today) {
         const linktext = row.linktext;
         const hashAt = linktext.indexOf("#^");
         const linkpath = hashAt > 0 ? linktext.slice(0, hashAt) : "";
-        chips.push(blocksBuildChip(task, linkpath, blockId, source, owner, memo, true, false, today));
+        chips.push(blocksBuildChip(task, linkpath, blockId, source, owner, memo, true, false, today, blockMarkForTask));
       }
     }
     const liveCount = chips.filter((chip) => chip.live).length;
@@ -17146,7 +17170,15 @@ function buildBlocksChipElement(doc, model, options) {
       const box = doc.createElement("span");
       box.setAttribute("class", "bob-dep-chip-box");
       box.setAttribute("aria-hidden", "true");
-      box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
+      let marked = null;
+      try {
+        if (chip.blockMark && opts.plugin && typeof opts.plugin.blockMarkRender === "function") {
+          marked = opts.plugin.blockMarkRender(box, chip.blockMark, { decorative: true });
+        }
+      } catch (error) {
+        marked = null;
+      }
+      if (!marked) box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
       el.appendChild(box);
       const text = doc.createElement("span");
       text.setAttribute("class", "bob-dep-chip-text");
@@ -25324,7 +25356,15 @@ function buildDependencyChipElement(doc, model, options) {
         box.setAttribute("class", "bob-dep-chip-box");
         box.setAttribute("data-task", state);
         box.setAttribute("aria-hidden", "true");
-        box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
+        let marked = null;
+        try {
+          if (chip.blockMark && opts.plugin && typeof opts.plugin.blockMarkRender === "function") {
+            marked = opts.plugin.blockMarkRender(box, chip.blockMark, { decorative: true });
+          }
+        } catch (error) {
+          marked = null;
+        }
+        if (!marked) box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
         el.appendChild(box);
         const textEl = doc.createElement("span");
         textEl.setAttribute("class", "bob-dep-chip-text");
@@ -25854,6 +25894,7 @@ if (WidgetType && typeof WidgetType === "function") {
       const sourcePath = (this.meta && this.meta.sourcePath) || "";
       const interactive = Boolean(this.meta && this.meta.interactive);
       const dom = buildDependencyChipElement(docNode, this.model, {
+        plugin,
         sourcePath,
         interactive,
         onOpen: (linktext, event) => {
@@ -55457,7 +55498,11 @@ class BobLedgerToolsDependencyModelMixin {
           return null;
         }
       };
-      return dependencyChipModel(String(text || ""), sourcePath, lookup);
+      return dependencyChipModel(String(text || ""), sourcePath, lookup, (task, taskPath) => {
+        const rawLine = task && (task.originalMarkdown || task.rawLine || task.lineText);
+        if (typeof rawLine !== "string" || !rawLine) return null;
+        return this.blockMarkModelForLine(taskPath || sourcePath, rawLine);
+      });
     } catch (error) {
       return null;
     }
@@ -55881,7 +55926,11 @@ class BobLedgerToolsBlocksModelMixin {
           return null;
         }
       };
-      return blocksChipModel(String(text || ""), sourcePath, ownerTask, memo, lookup, memo && memo.dateText);
+      return blocksChipModel(String(text || ""), sourcePath, ownerTask, memo, lookup, memo && memo.dateText, (task, taskPath) => {
+        const rawLine = task && (task.originalMarkdown || task.rawLine || task.lineText);
+        if (typeof rawLine !== "string" || !rawLine) return null;
+        return this.blockMarkModelForLine(taskPath || sourcePath, rawLine);
+      });
     } catch (error) {
       return null;
     }
@@ -69801,7 +69850,15 @@ class BobLedgerToolsDependencyRenderMixin {
                 box.setAttribute("class", "bob-dep-chip-box");
                 box.setAttribute("data-task", chip && chip.state ? chip.state : "todo");
                 box.setAttribute("aria-hidden", "true");
-                box.textContent = (chip && chip.symbol) || "○";
+                let marked = null;
+                try {
+                  if (chip && chip.blockMark && typeof this.blockMarkRender === "function") {
+                    marked = this.blockMarkRender(box, chip.blockMark, { decorative: true });
+                  }
+                } catch (error) {
+                  marked = null;
+                }
+                if (!marked) box.textContent = (chip && chip.symbol) || "○";
                 const firstKids = Array.from(anchor.childNodes || []);
                 if (typeof anchor.insertBefore === "function") {
                   anchor.insertBefore(box, firstKids.length > 0 ? firstKids[0] : null);
@@ -70753,7 +70810,15 @@ class BobLedgerToolsBlocksRenderMixin {
     const box = doc.createElement("span");
     box.setAttribute("class", "bob-dep-chip-box");
     box.setAttribute("aria-hidden", "true");
-    box.textContent = String(chip.symbol || "○");
+    let marked = null;
+    try {
+      if (chip.blockMark && typeof this.blockMarkRender === "function") {
+        marked = this.blockMarkRender(box, chip.blockMark, { decorative: true });
+      }
+    } catch (error) {
+      marked = null;
+    }
+    if (!marked) box.textContent = String(chip.symbol || "○");
     anchor.appendChild(box);
     const text = doc.createElement("span");
     text.setAttribute("class", "bob-dep-chip-text");

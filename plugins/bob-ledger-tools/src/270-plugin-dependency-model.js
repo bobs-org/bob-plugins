@@ -144,7 +144,11 @@ class BobLedgerToolsDependencyModelMixin {
           return null;
         }
       };
-      return dependencyChipModel(String(text || ""), sourcePath, lookup);
+      return dependencyChipModel(String(text || ""), sourcePath, lookup, (task, taskPath) => {
+        const rawLine = task && (task.originalMarkdown || task.rawLine || task.lineText);
+        if (typeof rawLine !== "string" || !rawLine) return null;
+        return this.blockMarkModelForLine(taskPath || sourcePath, rawLine);
+      });
     } catch (error) {
       return null;
     }

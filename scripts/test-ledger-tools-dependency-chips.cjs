@@ -222,8 +222,8 @@ test("DP parse vectors", () => {
   }
 });
 
-function depTask({ blockId, symbol = " ", description = "Task", path = "a.md", type = "TODO" }) {
-  return { path, blockLink: " ^" + blockId, description, status: { symbol, type } };
+function depTask({ blockId, symbol = " ", description = "Task", path = "a.md", type = "TODO", originalMarkdown }) {
+  return { path, blockLink: " ^" + blockId, description, status: { symbol, type }, originalMarkdown };
 }
 
 function depLookup(entries) {
@@ -255,6 +255,16 @@ test("DC chip model vectors", () => {
   model = dependencyChipModel(lineFor("d"), "a.md", depLookup([["d", depTask({ blockId: "d", symbol: "?", description: "Blocked one", type: "ON_HOLD" })]]));
   assert.equal(model.chips[0].state, "blocked");
   assert.equal(model.summary, "waiting on 1");
+
+  const blockedLine = "- [?] #task Blocked prerequisite [scheduled:: 2026-11-20] ^d";
+  const blockedTask = depTask({ blockId: "d", symbol: "?", description: "Blocked one", type: "ON_HOLD", originalMarkdown: blockedLine });
+  const miniature = Object.freeze({ key: "date", family: "waiting", tooltip: "Blocked until date" });
+  model = dependencyChipModel(lineFor("d"), "a.md", depLookup([["d", blockedTask]]), (task, path) => {
+    assert.equal(task, blockedTask);
+    assert.equal(path, "a.md");
+    return miniature;
+  });
+  assert.equal(model.chips[0].blockMark, miniature);
 
   model = dependencyChipModel(lineFor("e"), "a.md", depLookup([["e", depTask({ blockId: "e", symbol: "x", description: "Done one", type: "DONE" })]]));
   assert.equal(model.chips[0].state, "done");
@@ -599,6 +609,26 @@ test("element hides actions without nav api v1", () => {
   const interactive = buildDependencyChipElement(doc, model, { interactive: true });
   assert.ok(collectClasses(interactive).join(" ").indexOf("bob-dep-chip-remove") !== -1);
   assert.ok(collectClasses(interactive).join(" ").indexOf("bob-dep-add") !== -1);
+
+  const mark = Object.freeze({ key: "dep", family: "held", tooltip: "Blocked after task" });
+  const markedModel = dependencyChipModel(
+    "- ⛓️ **DEPENDS ON:** [[#^a]]",
+    "a.md",
+    depLookup([["a", depTask({ blockId: "a", symbol: "?", description: "Blocked", type: "ON_HOLD" })]]),
+    () => mark,
+  );
+  const marked = buildDependencyChipElement(doc, markedModel, {
+    plugin: { blockMarkRender(host, supplied, options) {
+      assert.equal(supplied, mark);
+      assert.equal(options.decorative, true);
+      const element = doc.createElement("span");
+      element.setAttribute("class", "bob-block-mark");
+      host.appendChild(element);
+      return element;
+    } },
+  });
+  assert.ok(collectClasses(marked).join(" ").includes("bob-block-mark"));
+  assert.match(markedModel.chips[0].tooltip, /Blocked after task/);
 });
 
 test("nav api feature detection gates actions", () => {

@@ -7,6 +7,7 @@ const RELATION_INVERSE_NAMED_PAIRS = Object.freeze({
   "follow-up of": "followed up by",
   "merged into": "merged from",
   "split from": "split into",
+  "starts after": "starts before",
 });
 const RELATION_INVERSE_PARTICIPLE_BASES = Object.freeze({
   added: "add",

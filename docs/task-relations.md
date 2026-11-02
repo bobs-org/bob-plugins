@@ -173,6 +173,20 @@ cancel-and-complete selection shows
 `Closes {N} tasks · ✓ {a} · ⊘ {b} — ↵ again to confirm` and Return reads
 `↵ link & close`.
 
+When `relations.successor_labels` (such as `starts after`) is configured,
+those labels overlay the same way and carry `🪢 offers`. Selecting one shows
+the consequence `🪢 Offers “{S}” when “{T}” is parked or done · never blocks`:
+the edge never blocks, changes a status, or fires at commit — it only offers
+its source when its target is parked (Pending with no live link left today)
+or done. An already-parked target adds the amber caveat
+`“{T}” is already parked — “{S}” will be offered when it is done`, and an
+already-closed target adds `“{T}” is already closed — nothing left to wait
+for`. Typing `starts before` shows that it never offers anything and points
+to `⇧L` with `starts after`; the LINKED FROM mirror reads `starts before`.
+Renaming a successor label warns
+`“{label}” is a successor label in config.yml — update
+relations.successor_labels`.
+
 Hand-editing a configured cancel or complete label into LINKS leaves an open
 task open and shows a hint to use the Links stage or capture. Unlinking a
 cancel-label edge or relabelling it away never reopens a cancelled task; the

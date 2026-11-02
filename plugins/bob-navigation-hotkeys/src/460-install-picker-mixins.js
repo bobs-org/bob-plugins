@@ -32,6 +32,7 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerRelationStageMixin,
   BulletPropertyPickerRelationLabelVocabularyMixin,
   BulletPropertyPickerRelationClosePreviewMixin,
+  BulletPropertyPickerRelationSuccessorPreviewMixin,
   BulletPropertyPickerRelationLabelManagementMixin,
   BulletPropertyPickerVaultBatchMixin,
   BulletPropertyPickerVaultCommitMixin,

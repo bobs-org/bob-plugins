@@ -319,7 +319,26 @@ class RelationLabelRenameModal extends Modal {
       for (const line of summary.lines) {
         this.previewEl.createDiv({ cls: "bob-cnp-row-path", text: line });
       }
-      for (const note of [summary.stateNote, summary.inverseNote, ...summary.warnings].filter(Boolean)) {
+      let successorWarning = "";
+      try {
+        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+        const holder = plugins && plugins["bob-navigation-hotkeys"];
+        const load = holder && typeof holder.loadRelationsCloseLabels === "function"
+          ? holder.loadRelationsCloseLabels.bind(holder)
+          : (typeof loadRelationsCloseLabels === "function" ? loadRelationsCloseLabels : null);
+        if (load && this.from) {
+          const cfg = load();
+          if (
+            cfg && cfg.successor &&
+            relationSuccessorLabelsSet(cfg.successor).has(relationCancelLabelKey(this.from))
+          ) {
+            successorWarning = relationSuccessorRenameWarningCopy(this.from);
+          }
+        }
+      } catch (_successorWarningError) {
+        successorWarning = "";
+      }
+      for (const note of [summary.stateNote, summary.inverseNote, ...summary.warnings, successorWarning].filter(Boolean)) {
         this.previewEl.createDiv({ cls: "bob-cnp-row-path", text: note });
       }
     } else if (!this.renameError) {

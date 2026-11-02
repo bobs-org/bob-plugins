@@ -2508,14 +2508,17 @@ function loadRelationsCancelLabels(options = {}) {
   return loaded;
 }
 // ---- src/022-relations-close-labels.js ----
-// Combined cancel/complete label policy (`docs/task-relations.md` §§17–18).
-// The two kinds share one cache and one overlap check so a configured label
-// can never carry both status effects.
+// Combined cancel/complete/successor label policy (`docs/task-relations.md`
+// §§17–18 and §20 SU2). The three kinds share one cache and one overlap
+// check so a configured label can never carry more than one effect: a key
+// listed in two or more lists has no effect and is dropped from every list.
 const RELATIONS_CLOSE_LABELS_LIST_WARNINGS = Object.freeze({
   cancel:
     "invalid relations.cancel_labels in %s: expected a list of relation labels; cancelling nothing",
   complete:
     "invalid relations.complete_labels in %s: expected a list of relation labels; completing nothing",
+  successor:
+    "invalid relations.successor_labels in %s: expected a list of relation labels; offering nothing",
 });
 
 let relationsCloseLabelsConfigCache = {
@@ -2528,8 +2531,64 @@ function emptyRelationsCloseLabels() {
   return Object.freeze({
     cancel: emptyRelationsCancelLabels(),
     complete: emptyRelationsCancelLabels(),
+    successor: emptyRelationsCancelLabels(),
     warnings: Object.freeze([]),
   });
+}
+
+function relationSuccessorLabelsSet(successorLabels) {
+  return relationCancelLabelsSet(successorLabels);
+}
+
+function relationLabelEffectForKey(key, closeConfig) {
+  const normalized = relationCancelLabelKey(key);
+  if (!normalized) return null;
+  if (
+    closeConfig &&
+    closeConfig.cancel &&
+    relationCancelLabelsSet(closeConfig.cancel).has(normalized)
+  ) {
+    return "cancel";
+  }
+  if (
+    closeConfig &&
+    closeConfig.complete &&
+    relationCancelLabelsSet(closeConfig.complete).has(normalized)
+  ) {
+    return "complete";
+  }
+  if (
+    closeConfig &&
+    closeConfig.successor &&
+    relationCancelLabelsSet(closeConfig.successor).has(normalized)
+  ) {
+    return "successor";
+  }
+  return null;
+}
+
+function relationSuccessorLabelForInverseKey(key, closeConfig) {
+  const normalized = relationCancelLabelKey(key);
+  if (!normalized || !closeConfig || !closeConfig.successor) return null;
+  const keys = Array.isArray(closeConfig.successor.keys)
+    ? closeConfig.successor.keys
+    : [];
+  const labels = closeConfig.successor.labels &&
+      typeof closeConfig.successor.labels === "object"
+    ? closeConfig.successor.labels
+    : {};
+  for (const configuredKey of keys) {
+    const configuredLabel = String(labels[configuredKey] || configuredKey || "");
+    const inverse = inverseRelationPhrase(configuredLabel);
+    if (
+      inverse &&
+      !inverse.endsWith(" → this") &&
+      relationCancelLabelKey(inverse) === normalized
+    ) {
+      return configuredLabel;
+    }
+  }
+  return null;
 }
 
 function resetRelationsCloseLabelsConfigCache() {
@@ -2608,7 +2667,11 @@ function loadRelationsCloseLabels(options = {}) {
   const relations = config && config.relations;
   const warnings = [];
   const parseList = (kind) => {
-    const field = kind === "cancel" ? "cancel_labels" : "complete_labels";
+    const field = kind === "cancel"
+      ? "cancel_labels"
+      : kind === "complete"
+        ? "complete_labels"
+        : "successor_labels";
     const value = relations && relations[field];
     if (value === undefined || value === null) {
       return freezeRelationsCancelLabels([], {});
@@ -2647,15 +2710,31 @@ function loadRelationsCloseLabels(options = {}) {
 
   let cancel = parseList("cancel");
   let complete = parseList("complete");
-  const overlap = cancel.keys.filter((key) => complete.keys.includes(key));
+  let successor = parseList("successor");
+  const countIn = (key) =>
+    (cancel.keys.includes(key) ? 1 : 0) +
+    (complete.keys.includes(key) ? 1 : 0) +
+    (successor.keys.includes(key) ? 1 : 0);
+  const overlap = [...new Set([...cancel.keys, ...complete.keys, ...successor.keys])]
+    .filter((key) => countIn(key) > 1);
   if (overlap.length > 0) {
     const cancelKeys = cancel.keys.filter((key) => !overlap.includes(key));
     const completeKeys = complete.keys.filter((key) => !overlap.includes(key));
+    const successorKeys = successor.keys.filter((key) => !overlap.includes(key));
     for (const key of overlap) {
-      const label = cancel.labels[key] || complete.labels[key] || key;
-      warnings.push(
-        `relations: “${label}” is in both cancel_labels and complete_labels in ${configPath}; it closes nothing`,
-      );
+      const successorInvolved = successor.keys.includes(key);
+      if (successorInvolved) {
+        const label = successor.labels[key] || cancel.labels[key] ||
+          complete.labels[key] || key;
+        warnings.push(
+          `relations: “${label}” is in more than one of cancel_labels, complete_labels, successor_labels in ${configPath}; it has no effect`,
+        );
+      } else {
+        const label = cancel.labels[key] || complete.labels[key] || key;
+        warnings.push(
+          `relations: “${label}” is in both cancel_labels and complete_labels in ${configPath}; it closes nothing`,
+        );
+      }
     }
     cancel = freezeRelationsCancelLabels(
       cancelKeys,
@@ -2665,12 +2744,17 @@ function loadRelationsCloseLabels(options = {}) {
       completeKeys,
       Object.fromEntries(completeKeys.map((key) => [key, complete.labels[key]])),
     );
+    successor = freezeRelationsCancelLabels(
+      successorKeys,
+      Object.fromEntries(successorKeys.map((key) => [key, successor.labels[key]])),
+    );
   }
   emitRelationsCloseLabelWarnings(warnings, cacheKey, options.warn);
   return store(
     Object.freeze({
       cancel,
       complete,
+      successor,
       warnings: Object.freeze(warnings.slice()),
     }),
   );
@@ -44882,6 +44966,7 @@ const RELATION_INVERSE_NAMED_PAIRS = Object.freeze({
   "follow-up of": "followed up by",
   "merged into": "merged from",
   "split from": "split into",
+  "starts after": "starts before",
 });
 const RELATION_INVERSE_PARTICIPLE_BASES = Object.freeze({
   added: "add",
@@ -46341,6 +46426,104 @@ function mergeRelationCancelLabelSuggestions(rows, policy, query = "") {
   return out;
 }
 
+// Successor-label indications (`docs/task-relations.md` §20 SU5). A
+// configured successor label never blocks a write; it only offers its source
+// when its target is parked or done. Row meta, consequence, caveats, the
+// inverse hint, and the rename warning all come from the shared
+// `relation_successor` copy vectors.
+function relationSuccessorSuggestionMeta() {
+  return "🪢 offers";
+}
+
+function relationSuccessorRowMeta() {
+  return "🪢 offers source";
+}
+
+function relationSuccessorOffersCopy(sourceText, targetText) {
+  const source = String(sourceText || "").trim() || "that task";
+  const target = String(targetText || "").trim() || "that task";
+  return `🪢 Offers “${source}” when “${target}” is parked or done · never blocks`;
+}
+
+function relationSuccessorAlreadyParkedCopy(sourceText, targetText) {
+  const source = String(sourceText || "").trim() || "that task";
+  const target = String(targetText || "").trim() || "that task";
+  return `“${target}” is already parked — “${source}” will be offered when it is done`;
+}
+
+function relationSuccessorAlreadyClosedCopy(targetText) {
+  const target = String(targetText || "").trim() || "that task";
+  return `“${target}” is already closed — nothing left to wait for`;
+}
+
+function relationSuccessorInverseHintCopy(typed, sourceText, label) {
+  const typedText = String(typed || "").trim() || "that label";
+  const source = String(sourceText || "").trim() || "that task";
+  const name = String(label || "").trim() || "that label";
+  return `“${typedText}” never offers anything · to offer “${source}” after this task, use ⇧L with “${name}”`;
+}
+
+function relationSuccessorRenameWarningCopy(label) {
+  const name = String(label || "").trim() || "that label";
+  return `“${name}” is a successor label in config.yml — update relations.successor_labels`;
+}
+
+function relationSuccessorPreviewForAuthoring(args = {}) {
+  const sourceText = String(args.sourceText || "").trim() || "that task";
+  const targetText = String(args.targetText || "").trim() || "that task";
+  const status = args.targetStatus != null ? String(args.targetStatus) : null;
+  const live = args.targetLive === true
+    ? true
+    : args.targetLive === false
+      ? false
+      : null;
+  if (status != null && !OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+    return Object.freeze({
+      verdict: "already_closed",
+      message: relationSuccessorAlreadyClosedCopy(targetText),
+    });
+  }
+  if (status === "/" && live === false) {
+    return Object.freeze({
+      verdict: "already_parked",
+      message: relationSuccessorAlreadyParkedCopy(sourceText, targetText),
+    });
+  }
+  return Object.freeze({
+    verdict: "offers",
+    message: relationSuccessorOffersCopy(sourceText, targetText),
+  });
+}
+
+function mergeRelationSuccessorLabelSuggestions(rows, policy, query = "") {
+  const out = (Array.isArray(rows) ? rows : []).map((row) => ({ ...row }));
+  const positions = new Map(
+    out.map((row, index) => [relationCancelLabelKey(row.key || row.label), index]),
+  );
+  const keys = Array.isArray(policy && policy.keys) ? policy.keys : [];
+  const labels = policy && policy.labels && typeof policy.labels === "object"
+    ? policy.labels
+    : {};
+  for (const rawKey of keys) {
+    const key = relationCancelLabelKey(rawKey);
+    const label = String(labels[key] || rawKey || "").trim();
+    if (!key || !label) continue;
+    const existingIndex = positions.get(key);
+    if (existingIndex !== undefined) {
+      out[existingIndex] = { ...out[existingIndex], configuredSuccessor: true };
+      continue;
+    }
+    if (query && !fuzzyMatchesText(label, query)) continue;
+    positions.set(key, out.length);
+    out.push({ key, label, count: 0, hidden: false, inverse: null, configuredSuccessor: true });
+  }
+  return out;
+}
+
+function relationSuccessorInverseLabel(label, policy) {
+  return relationCancelInverseLabel(label, policy);
+}
+
 function relationCancelInverseLabel(label, policy) {
   const key = relationCancelLabelKey(label);
   if (!key) return null;
@@ -46494,6 +46677,23 @@ function relationLabelCancelConsequenceStrip(item, context = {}) {
     completed.length === 0
   ) {
     return String(preview.inverseHint);
+  }
+  if (
+    preview &&
+    preview.successorHint &&
+    cancelled.length === 0 &&
+    completed.length === 0
+  ) {
+    return String(preview.successorHint);
+  }
+  if (
+    preview &&
+    preview.configuredSuccessor &&
+    preview.successorMessage &&
+    cancelled.length === 0 &&
+    completed.length === 0
+  ) {
+    return String(preview.successorMessage);
   }
   if (preview && preview.staysCancelled) {
     return "⊘ Stays Cancelled · reopen with Alt+]";
@@ -59096,6 +59296,12 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         text: used,
       });
     }
+    if (item.configuredSuccessor) {
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta bob-cnp-relation-successor-meta",
+        text: relationSuccessorSuggestionMeta(),
+      });
+    }
     if (item.disabledReason) {
       textEl.createDiv({
         cls: item.configuredComplete
@@ -60256,6 +60462,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         return Object.freeze({
           cancel: this.plugin.loadRelationsCancelLabels(),
           complete: emptyRelationsCancelLabels(),
+          successor: emptyRelationsCancelLabels(),
           warnings: Object.freeze([]),
         });
       }
@@ -60493,9 +60700,23 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const targetCancelledCaveat = cancelledTarget
       ? `“${cancelledTarget.displayText || cancelledTarget.text || "that task"}” is Cancelled`
       : "";
+    const {
+      configuredSuccessor,
+      successorVerdict,
+      successorMessage,
+      successorHint,
+    } = this.relationSuccessorPreviewFields({
+      normalized,
+      closeConfig,
+      sourceDetails,
+      edgeTargets,
+      labelTargets,
+      linkedFrom,
+    });
     return Object.freeze({
       configured: Boolean(normalized && configuredKeys.has(relationCancelLabelKey(normalized))),
       configuredComplete: Boolean(normalized && completeKeys.has(relationCancelLabelKey(normalized))),
+      configuredSuccessor,
       sources: Object.freeze(sources),
       cancels: Object.freeze(cancels),
       refusal,
@@ -60511,6 +60732,9 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         : completeInverse
           ? `“${normalized}” never completes · to finish “${completeTargetForInverse || "that task"}”, use ${linkedFrom ? "l" : "⇧L"} with “${completeInverse}”`
           : "",
+      successorVerdict,
+      successorMessage,
+      successorHint,
       expected,
     });
   }
@@ -60642,13 +60866,20 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       });
       const completeCue = counts.completeCount > 0 && counts.cancelCount === 0;
       const cancelCue = counts.cancelCount > 0 && counts.completeCount === 0;
+      const successorCaveat = Boolean(
+        preview && preview.configuredSuccessor &&
+        (preview.successorVerdict === "already_parked" ||
+          preview.successorVerdict === "already_closed"),
+      );
       el.empty();
       el.createSpan({
         cls: completeCue
           ? "bob-cnp-consequence-strip-text bob-cnp-relation-complete-effects"
           : cancelCue
             ? "bob-cnp-consequence-strip-text bob-cnp-relation-cancel-effects"
-            : "bob-cnp-consequence-strip-text",
+            : successorCaveat
+              ? "bob-cnp-consequence-strip-text bob-cnp-relation-successor-caveat"
+              : "bob-cnp-consequence-strip-text",
         text,
       });
       if (!confirmBanner && preview && preview.targetCancelledCaveat) {
@@ -60684,14 +60915,20 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const closeConfig = this.relationCloseLabelsConfig();
     const config = closeConfig.cancel || this.relationCancelLabelsConfig();
     const completeConfig = closeConfig.complete || emptyRelationsCancelLabels();
+    const successorConfig = closeConfig.successor || emptyRelationsCancelLabels();
     const configuredComplete = relationCompleteLabelsSet(completeConfig);
-    const suggestions = mergeRelationCompleteLabelSuggestions(
-      mergeRelationCancelLabelSuggestions(
-        this.readRelationLabelSuggestions(raw, { hidden: "include" }),
-        config,
+    const configuredSuccessorKeys = relationSuccessorLabelsSet(successorConfig);
+    const suggestions = mergeRelationSuccessorLabelSuggestions(
+      mergeRelationCompleteLabelSuggestions(
+        mergeRelationCancelLabelSuggestions(
+          this.readRelationLabelSuggestions(raw, { hidden: "include" }),
+          config,
+          raw,
+        ),
+        completeConfig,
         raw,
       ),
-      completeConfig,
+      successorConfig,
       raw,
     );
     const ghosts = this.relationLabelGhosts instanceof Map
@@ -60711,9 +60948,12 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         relationCancelLabelsSet(config).has(relationCancelLabelKey(item.label));
       const completeLabel = item.configuredComplete === true ||
         configuredComplete.has(relationCancelLabelKey(item.label));
+      const successorLabel = item.configuredSuccessor === true ||
+        configuredSuccessorKeys.has(relationCancelLabelKey(item.label));
       const inverse = relationCancelInverseLabel(item.label, config) ||
-        relationCompleteInverseLabel(item.label, completeConfig);
-      const preview = configuredCancel || completeLabel || inverse
+        relationCompleteInverseLabel(item.label, completeConfig) ||
+        relationSuccessorInverseLabel(item.label, successorConfig);
+      const preview = configuredCancel || completeLabel || successorLabel || inverse
         ? this.relationCancelPreviewForLabel(item.label)
         : null;
       const disabledReason = configuredCancel && preview && preview.refusal
@@ -60725,6 +60965,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         ...item,
         configuredCancel,
         configuredComplete: completeLabel,
+        configuredSuccessor: successorLabel,
         cancelPreview: preview,
         closePreview: preview,
         disabled: item.disabled === true || Boolean(disabledReason),
@@ -60757,6 +60998,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         hidden,
         configuredCancel: existing && existing.configuredCancel === true,
         configuredComplete: existing && existing.configuredComplete === true,
+        configuredSuccessor: existing && existing.configuredSuccessor === true,
         oneOff: this.relationLabelOneOff === true,
         warning,
         warningText: warning
@@ -60780,7 +61022,8 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const hiddenRows = effective.filter((row) => row.hidden === true && relationCancelLabelKey(row.key) !== typedKey);
     const visibleLimit = 12
       + (Array.isArray(config && config.keys) ? config.keys.length : 0)
-      + (Array.isArray(completeConfig && completeConfig.keys) ? completeConfig.keys.length : 0);
+      + (Array.isArray(completeConfig && completeConfig.keys) ? completeConfig.keys.length : 0)
+      + (Array.isArray(successorConfig && successorConfig.keys) ? successorConfig.keys.length : 0);
     const toItem = (row) => decorate({
       kind: "relation-label",
       key: row.key,
@@ -60791,6 +61034,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       ghost: row.ghost === true,
       configuredCancel: row.configuredCancel === true,
       configuredComplete: row.configuredComplete === true,
+      configuredSuccessor: row.configuredSuccessor === true,
       typed: false,
       displayText: row.label,
       searchText: row.label,
@@ -61090,6 +61334,117 @@ class BulletPropertyPickerRelationClosePreviewMixin {
       expectedCloseEffects: gate.closeEffects,
       expectedCancelEffects: gate.cancelEffects,
       refusal: gate.ok ? null : Object.freeze({ reason: gate.reason, notice: gate.notice }),
+    });
+  }
+}
+// ---- src/428b-picker-relation-successor-preview.js ----
+// Successor-label authoring preview (nav_authoring phase of
+// plan:202611/starts_after_relation.md). Kept in its own fragment so the
+// relation-label vocabulary stage stays under the 1000-line cap. Installed
+// onto BulletPropertyPickerModal alongside the vocabulary mixin.
+class BulletPropertyPickerRelationSuccessorPreviewMixin {
+  relationSuccessorTargetState(targetRef) {
+    try {
+      const ref = targetRef || {};
+      let rawLine = String(ref.rawLine || "");
+      let text = String(ref.displayText || ref.text || "").trim();
+      if (!rawLine) {
+        const content = this.relationCancelContentForRef(ref);
+        const lines = String(content || "").split(/\r?\n/);
+        let line = Math.floor(numericOrDefault(ref.line, NaN));
+        const blockId = normalizeBulletPropertyValue(ref.blockId || "");
+        if (blockId) {
+          const found = findTaskLineByTrailingBlockId(lines, blockId);
+          if (found !== null) line = found;
+        }
+        if (Number.isInteger(line) && line >= 0 && line < lines.length) {
+          rawLine = String(lines[line] || "");
+        }
+      }
+      if (!text && rawLine) {
+        try {
+          text = cleanTaskDisplayText(rawLine) || "";
+        } catch (_cleanError) {
+          text = "";
+        }
+      }
+      const status = rawLine ? relationCancelSourceStatus(rawLine) : null;
+      let live = null;
+      try {
+        const stage = this.vaultStage;
+        const map = stage && stage.todayMap instanceof Map ? stage.todayMap : null;
+        const key = ref.path && ref.blockId
+          ? relationStageRowKey(ref.path, ref.blockId)
+          : null;
+        if (map && key) live = map.has(key);
+      } catch (_liveError) {
+        live = null;
+      }
+      if (!text && !rawLine) return null;
+      return Object.freeze({
+        text: text || "that task",
+        status,
+        live,
+      });
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  relationSuccessorPreviewFields(args = {}) {
+    const normalized = args.normalized;
+    const closeConfig = args.closeConfig || {};
+    const sourceDetails = Array.isArray(args.sourceDetails) ? args.sourceDetails : [];
+    const edgeTargets = Array.isArray(args.edgeTargets) ? args.edgeTargets : [];
+    const labelTargets = Array.isArray(args.labelTargets) ? args.labelTargets : [];
+    const linkedFrom = args.linkedFrom === true;
+    const successorPolicy = closeConfig.successor || emptyRelationsCancelLabels();
+    const successorKeys = relationSuccessorLabelsSet(successorPolicy);
+    const configuredSuccessor = Boolean(
+      normalized && successorKeys.has(relationCancelLabelKey(normalized)),
+    );
+    const successorInverse = normalized && !configuredSuccessor
+      ? relationSuccessorInverseLabel(normalized, successorPolicy)
+      : null;
+    const successorSourceText = (sourceDetails[0] && sourceDetails[0].text) ||
+      (linkedFrom
+        ? (labelTargets[0] && (labelTargets[0].displayText || labelTargets[0].text))
+        : (this.vaultStage && Array.isArray(this.vaultStage.sources) &&
+          this.vaultStage.sources[0] &&
+          (this.vaultStage.sources[0].displayText || this.vaultStage.sources[0].text))) ||
+      "that task";
+    const successorTargetState = edgeTargets[0]
+      ? this.relationSuccessorTargetState(edgeTargets[0])
+      : null;
+    const successorTargetText = (successorTargetState && successorTargetState.text) ||
+      (edgeTargets[0] &&
+        (edgeTargets[0].displayText || edgeTargets[0].text)) ||
+      "that task";
+    let successorVerdict = null;
+    let successorMessage = "";
+    let successorHint = "";
+    if (configuredSuccessor) {
+      const verdict = relationSuccessorPreviewForAuthoring({
+        sourceText: successorSourceText,
+        targetText: successorTargetText,
+        targetStatus: successorTargetState ? successorTargetState.status : null,
+        targetLive: successorTargetState ? successorTargetState.live : null,
+      });
+      successorVerdict = verdict.verdict;
+      successorMessage = verdict.message;
+    } else if (successorInverse) {
+      successorHint = relationSuccessorInverseHintCopy(
+        normalized,
+        successorSourceText,
+        successorInverse,
+      );
+    }
+    return Object.freeze({
+      configuredSuccessor,
+      successorInverse,
+      successorVerdict,
+      successorMessage,
+      successorHint,
     });
   }
 }
@@ -61415,7 +61770,26 @@ class RelationLabelRenameModal extends Modal {
       for (const line of summary.lines) {
         this.previewEl.createDiv({ cls: "bob-cnp-row-path", text: line });
       }
-      for (const note of [summary.stateNote, summary.inverseNote, ...summary.warnings].filter(Boolean)) {
+      let successorWarning = "";
+      try {
+        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+        const holder = plugins && plugins["bob-navigation-hotkeys"];
+        const load = holder && typeof holder.loadRelationsCloseLabels === "function"
+          ? holder.loadRelationsCloseLabels.bind(holder)
+          : (typeof loadRelationsCloseLabels === "function" ? loadRelationsCloseLabels : null);
+        if (load && this.from) {
+          const cfg = load();
+          if (
+            cfg && cfg.successor &&
+            relationSuccessorLabelsSet(cfg.successor).has(relationCancelLabelKey(this.from))
+          ) {
+            successorWarning = relationSuccessorRenameWarningCopy(this.from);
+          }
+        }
+      } catch (_successorWarningError) {
+        successorWarning = "";
+      }
+      for (const note of [summary.stateNote, summary.inverseNote, ...summary.warnings, successorWarning].filter(Boolean)) {
         this.previewEl.createDiv({ cls: "bob-cnp-row-path", text: note });
       }
     } else if (!this.renameError) {
@@ -64793,6 +65167,7 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerRelationStageMixin,
   BulletPropertyPickerRelationLabelVocabularyMixin,
   BulletPropertyPickerRelationClosePreviewMixin,
+  BulletPropertyPickerRelationSuccessorPreviewMixin,
   BulletPropertyPickerRelationLabelManagementMixin,
   BulletPropertyPickerVaultBatchMixin,
   BulletPropertyPickerVaultCommitMixin,
@@ -101736,4 +102111,26 @@ Object.assign(module.exports.helpers, {
   buildPomodoroSplitPickerRows,
   pomodoroSplitPickerPreview,
   PomodoroSplitPickerModal,
+});
+// ---- src/705-relation-successor-exports.js ----
+// Successor-label helper exports (nav_authoring phase of
+// plan:202611/starts_after_relation.md). Kept here so 700-exports.js stays
+// under the 1000-line cap.
+Object.assign(module.exports.helpers, {
+  emptyRelationsCancelLabels,
+  freezeRelationsCancelLabels,
+  emptyRelationsCloseLabels,
+  mergeRelationSuccessorLabelSuggestions,
+  relationSuccessorInverseLabel,
+  relationSuccessorSuggestionMeta,
+  relationSuccessorRowMeta,
+  relationSuccessorOffersCopy,
+  relationSuccessorAlreadyParkedCopy,
+  relationSuccessorAlreadyClosedCopy,
+  relationSuccessorInverseHintCopy,
+  relationSuccessorRenameWarningCopy,
+  relationSuccessorPreviewForAuthoring,
+  relationSuccessorLabelsSet,
+  relationSuccessorLabelForInverseKey,
+  relationLabelEffectForKey,
 });

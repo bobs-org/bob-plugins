@@ -1,11 +1,14 @@
-// Combined cancel/complete label policy (`docs/task-relations.md` §§17–18).
-// The two kinds share one cache and one overlap check so a configured label
-// can never carry both status effects.
+// Combined cancel/complete/successor label policy (`docs/task-relations.md`
+// §§17–18 and §20 SU2). The three kinds share one cache and one overlap
+// check so a configured label can never carry more than one effect: a key
+// listed in two or more lists has no effect and is dropped from every list.
 const RELATIONS_CLOSE_LABELS_LIST_WARNINGS = Object.freeze({
   cancel:
     "invalid relations.cancel_labels in %s: expected a list of relation labels; cancelling nothing",
   complete:
     "invalid relations.complete_labels in %s: expected a list of relation labels; completing nothing",
+  successor:
+    "invalid relations.successor_labels in %s: expected a list of relation labels; offering nothing",
 });
 
 let relationsCloseLabelsConfigCache = {
@@ -18,8 +21,64 @@ function emptyRelationsCloseLabels() {
   return Object.freeze({
     cancel: emptyRelationsCancelLabels(),
     complete: emptyRelationsCancelLabels(),
+    successor: emptyRelationsCancelLabels(),
     warnings: Object.freeze([]),
   });
+}
+
+function relationSuccessorLabelsSet(successorLabels) {
+  return relationCancelLabelsSet(successorLabels);
+}
+
+function relationLabelEffectForKey(key, closeConfig) {
+  const normalized = relationCancelLabelKey(key);
+  if (!normalized) return null;
+  if (
+    closeConfig &&
+    closeConfig.cancel &&
+    relationCancelLabelsSet(closeConfig.cancel).has(normalized)
+  ) {
+    return "cancel";
+  }
+  if (
+    closeConfig &&
+    closeConfig.complete &&
+    relationCancelLabelsSet(closeConfig.complete).has(normalized)
+  ) {
+    return "complete";
+  }
+  if (
+    closeConfig &&
+    closeConfig.successor &&
+    relationCancelLabelsSet(closeConfig.successor).has(normalized)
+  ) {
+    return "successor";
+  }
+  return null;
+}
+
+function relationSuccessorLabelForInverseKey(key, closeConfig) {
+  const normalized = relationCancelLabelKey(key);
+  if (!normalized || !closeConfig || !closeConfig.successor) return null;
+  const keys = Array.isArray(closeConfig.successor.keys)
+    ? closeConfig.successor.keys
+    : [];
+  const labels = closeConfig.successor.labels &&
+      typeof closeConfig.successor.labels === "object"
+    ? closeConfig.successor.labels
+    : {};
+  for (const configuredKey of keys) {
+    const configuredLabel = String(labels[configuredKey] || configuredKey || "");
+    const inverse = inverseRelationPhrase(configuredLabel);
+    if (
+      inverse &&
+      !inverse.endsWith(" → this") &&
+      relationCancelLabelKey(inverse) === normalized
+    ) {
+      return configuredLabel;
+    }
+  }
+  return null;
 }
 
 function resetRelationsCloseLabelsConfigCache() {
@@ -98,7 +157,11 @@ function loadRelationsCloseLabels(options = {}) {
   const relations = config && config.relations;
   const warnings = [];
   const parseList = (kind) => {
-    const field = kind === "cancel" ? "cancel_labels" : "complete_labels";
+    const field = kind === "cancel"
+      ? "cancel_labels"
+      : kind === "complete"
+        ? "complete_labels"
+        : "successor_labels";
     const value = relations && relations[field];
     if (value === undefined || value === null) {
       return freezeRelationsCancelLabels([], {});
@@ -137,15 +200,31 @@ function loadRelationsCloseLabels(options = {}) {
 
   let cancel = parseList("cancel");
   let complete = parseList("complete");
-  const overlap = cancel.keys.filter((key) => complete.keys.includes(key));
+  let successor = parseList("successor");
+  const countIn = (key) =>
+    (cancel.keys.includes(key) ? 1 : 0) +
+    (complete.keys.includes(key) ? 1 : 0) +
+    (successor.keys.includes(key) ? 1 : 0);
+  const overlap = [...new Set([...cancel.keys, ...complete.keys, ...successor.keys])]
+    .filter((key) => countIn(key) > 1);
   if (overlap.length > 0) {
     const cancelKeys = cancel.keys.filter((key) => !overlap.includes(key));
     const completeKeys = complete.keys.filter((key) => !overlap.includes(key));
+    const successorKeys = successor.keys.filter((key) => !overlap.includes(key));
     for (const key of overlap) {
-      const label = cancel.labels[key] || complete.labels[key] || key;
-      warnings.push(
-        `relations: “${label}” is in both cancel_labels and complete_labels in ${configPath}; it closes nothing`,
-      );
+      const successorInvolved = successor.keys.includes(key);
+      if (successorInvolved) {
+        const label = successor.labels[key] || cancel.labels[key] ||
+          complete.labels[key] || key;
+        warnings.push(
+          `relations: “${label}” is in more than one of cancel_labels, complete_labels, successor_labels in ${configPath}; it has no effect`,
+        );
+      } else {
+        const label = cancel.labels[key] || complete.labels[key] || key;
+        warnings.push(
+          `relations: “${label}” is in both cancel_labels and complete_labels in ${configPath}; it closes nothing`,
+        );
+      }
     }
     cancel = freezeRelationsCancelLabels(
       cancelKeys,
@@ -155,12 +234,17 @@ function loadRelationsCloseLabels(options = {}) {
       completeKeys,
       Object.fromEntries(completeKeys.map((key) => [key, complete.labels[key]])),
     );
+    successor = freezeRelationsCancelLabels(
+      successorKeys,
+      Object.fromEntries(successorKeys.map((key) => [key, successor.labels[key]])),
+    );
   }
   emitRelationsCloseLabelWarnings(warnings, cacheKey, options.warn);
   return store(
     Object.freeze({
       cancel,
       complete,
+      successor,
       warnings: Object.freeze(warnings.slice()),
     }),
   );

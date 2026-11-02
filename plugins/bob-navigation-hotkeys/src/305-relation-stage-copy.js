@@ -114,6 +114,104 @@ function mergeRelationCancelLabelSuggestions(rows, policy, query = "") {
   return out;
 }
 
+// Successor-label indications (`docs/task-relations.md` §20 SU5). A
+// configured successor label never blocks a write; it only offers its source
+// when its target is parked or done. Row meta, consequence, caveats, the
+// inverse hint, and the rename warning all come from the shared
+// `relation_successor` copy vectors.
+function relationSuccessorSuggestionMeta() {
+  return "🪢 offers";
+}
+
+function relationSuccessorRowMeta() {
+  return "🪢 offers source";
+}
+
+function relationSuccessorOffersCopy(sourceText, targetText) {
+  const source = String(sourceText || "").trim() || "that task";
+  const target = String(targetText || "").trim() || "that task";
+  return `🪢 Offers “${source}” when “${target}” is parked or done · never blocks`;
+}
+
+function relationSuccessorAlreadyParkedCopy(sourceText, targetText) {
+  const source = String(sourceText || "").trim() || "that task";
+  const target = String(targetText || "").trim() || "that task";
+  return `“${target}” is already parked — “${source}” will be offered when it is done`;
+}
+
+function relationSuccessorAlreadyClosedCopy(targetText) {
+  const target = String(targetText || "").trim() || "that task";
+  return `“${target}” is already closed — nothing left to wait for`;
+}
+
+function relationSuccessorInverseHintCopy(typed, sourceText, label) {
+  const typedText = String(typed || "").trim() || "that label";
+  const source = String(sourceText || "").trim() || "that task";
+  const name = String(label || "").trim() || "that label";
+  return `“${typedText}” never offers anything · to offer “${source}” after this task, use ⇧L with “${name}”`;
+}
+
+function relationSuccessorRenameWarningCopy(label) {
+  const name = String(label || "").trim() || "that label";
+  return `“${name}” is a successor label in config.yml — update relations.successor_labels`;
+}
+
+function relationSuccessorPreviewForAuthoring(args = {}) {
+  const sourceText = String(args.sourceText || "").trim() || "that task";
+  const targetText = String(args.targetText || "").trim() || "that task";
+  const status = args.targetStatus != null ? String(args.targetStatus) : null;
+  const live = args.targetLive === true
+    ? true
+    : args.targetLive === false
+      ? false
+      : null;
+  if (status != null && !OPEN_OBSIDIAN_TASK_STATUSES.has(status)) {
+    return Object.freeze({
+      verdict: "already_closed",
+      message: relationSuccessorAlreadyClosedCopy(targetText),
+    });
+  }
+  if (status === "/" && live === false) {
+    return Object.freeze({
+      verdict: "already_parked",
+      message: relationSuccessorAlreadyParkedCopy(sourceText, targetText),
+    });
+  }
+  return Object.freeze({
+    verdict: "offers",
+    message: relationSuccessorOffersCopy(sourceText, targetText),
+  });
+}
+
+function mergeRelationSuccessorLabelSuggestions(rows, policy, query = "") {
+  const out = (Array.isArray(rows) ? rows : []).map((row) => ({ ...row }));
+  const positions = new Map(
+    out.map((row, index) => [relationCancelLabelKey(row.key || row.label), index]),
+  );
+  const keys = Array.isArray(policy && policy.keys) ? policy.keys : [];
+  const labels = policy && policy.labels && typeof policy.labels === "object"
+    ? policy.labels
+    : {};
+  for (const rawKey of keys) {
+    const key = relationCancelLabelKey(rawKey);
+    const label = String(labels[key] || rawKey || "").trim();
+    if (!key || !label) continue;
+    const existingIndex = positions.get(key);
+    if (existingIndex !== undefined) {
+      out[existingIndex] = { ...out[existingIndex], configuredSuccessor: true };
+      continue;
+    }
+    if (query && !fuzzyMatchesText(label, query)) continue;
+    positions.set(key, out.length);
+    out.push({ key, label, count: 0, hidden: false, inverse: null, configuredSuccessor: true });
+  }
+  return out;
+}
+
+function relationSuccessorInverseLabel(label, policy) {
+  return relationCancelInverseLabel(label, policy);
+}
+
 function relationCancelInverseLabel(label, policy) {
   const key = relationCancelLabelKey(label);
   if (!key) return null;
@@ -267,6 +365,23 @@ function relationLabelCancelConsequenceStrip(item, context = {}) {
     completed.length === 0
   ) {
     return String(preview.inverseHint);
+  }
+  if (
+    preview &&
+    preview.successorHint &&
+    cancelled.length === 0 &&
+    completed.length === 0
+  ) {
+    return String(preview.successorHint);
+  }
+  if (
+    preview &&
+    preview.configuredSuccessor &&
+    preview.successorMessage &&
+    cancelled.length === 0 &&
+    completed.length === 0
+  ) {
+    return String(preview.successorMessage);
   }
   if (preview && preview.staysCancelled) {
     return "⊘ Stays Cancelled · reopen with Alt+]";

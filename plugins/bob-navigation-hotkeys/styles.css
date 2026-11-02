@@ -1705,6 +1705,17 @@
   color: var(--text-warning, var(--text-muted));
 }
 
+/* Successor-label cues stay neutral: relations never carry status colour.
+   The row meta is muted and only the already-parked/closed caveat is amber. */
+.bob-cnp-relation-successor-meta {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.bob-cnp-relation-successor-caveat {
+  color: var(--text-warning, var(--text-muted));
+}
+
 .bob-cnp-task-value-row.is-relation-complete-disabled {
   cursor: not-allowed;
 }

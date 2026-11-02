@@ -255,6 +255,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         return Object.freeze({
           cancel: this.plugin.loadRelationsCancelLabels(),
           complete: emptyRelationsCancelLabels(),
+          successor: emptyRelationsCancelLabels(),
           warnings: Object.freeze([]),
         });
       }
@@ -492,9 +493,23 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const targetCancelledCaveat = cancelledTarget
       ? `“${cancelledTarget.displayText || cancelledTarget.text || "that task"}” is Cancelled`
       : "";
+    const {
+      configuredSuccessor,
+      successorVerdict,
+      successorMessage,
+      successorHint,
+    } = this.relationSuccessorPreviewFields({
+      normalized,
+      closeConfig,
+      sourceDetails,
+      edgeTargets,
+      labelTargets,
+      linkedFrom,
+    });
     return Object.freeze({
       configured: Boolean(normalized && configuredKeys.has(relationCancelLabelKey(normalized))),
       configuredComplete: Boolean(normalized && completeKeys.has(relationCancelLabelKey(normalized))),
+      configuredSuccessor,
       sources: Object.freeze(sources),
       cancels: Object.freeze(cancels),
       refusal,
@@ -510,6 +525,9 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         : completeInverse
           ? `“${normalized}” never completes · to finish “${completeTargetForInverse || "that task"}”, use ${linkedFrom ? "l" : "⇧L"} with “${completeInverse}”`
           : "",
+      successorVerdict,
+      successorMessage,
+      successorHint,
       expected,
     });
   }
@@ -641,13 +659,20 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       });
       const completeCue = counts.completeCount > 0 && counts.cancelCount === 0;
       const cancelCue = counts.cancelCount > 0 && counts.completeCount === 0;
+      const successorCaveat = Boolean(
+        preview && preview.configuredSuccessor &&
+        (preview.successorVerdict === "already_parked" ||
+          preview.successorVerdict === "already_closed"),
+      );
       el.empty();
       el.createSpan({
         cls: completeCue
           ? "bob-cnp-consequence-strip-text bob-cnp-relation-complete-effects"
           : cancelCue
             ? "bob-cnp-consequence-strip-text bob-cnp-relation-cancel-effects"
-            : "bob-cnp-consequence-strip-text",
+            : successorCaveat
+              ? "bob-cnp-consequence-strip-text bob-cnp-relation-successor-caveat"
+              : "bob-cnp-consequence-strip-text",
         text,
       });
       if (!confirmBanner && preview && preview.targetCancelledCaveat) {
@@ -683,14 +708,20 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const closeConfig = this.relationCloseLabelsConfig();
     const config = closeConfig.cancel || this.relationCancelLabelsConfig();
     const completeConfig = closeConfig.complete || emptyRelationsCancelLabels();
+    const successorConfig = closeConfig.successor || emptyRelationsCancelLabels();
     const configuredComplete = relationCompleteLabelsSet(completeConfig);
-    const suggestions = mergeRelationCompleteLabelSuggestions(
-      mergeRelationCancelLabelSuggestions(
-        this.readRelationLabelSuggestions(raw, { hidden: "include" }),
-        config,
+    const configuredSuccessorKeys = relationSuccessorLabelsSet(successorConfig);
+    const suggestions = mergeRelationSuccessorLabelSuggestions(
+      mergeRelationCompleteLabelSuggestions(
+        mergeRelationCancelLabelSuggestions(
+          this.readRelationLabelSuggestions(raw, { hidden: "include" }),
+          config,
+          raw,
+        ),
+        completeConfig,
         raw,
       ),
-      completeConfig,
+      successorConfig,
       raw,
     );
     const ghosts = this.relationLabelGhosts instanceof Map
@@ -710,9 +741,12 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         relationCancelLabelsSet(config).has(relationCancelLabelKey(item.label));
       const completeLabel = item.configuredComplete === true ||
         configuredComplete.has(relationCancelLabelKey(item.label));
+      const successorLabel = item.configuredSuccessor === true ||
+        configuredSuccessorKeys.has(relationCancelLabelKey(item.label));
       const inverse = relationCancelInverseLabel(item.label, config) ||
-        relationCompleteInverseLabel(item.label, completeConfig);
-      const preview = configuredCancel || completeLabel || inverse
+        relationCompleteInverseLabel(item.label, completeConfig) ||
+        relationSuccessorInverseLabel(item.label, successorConfig);
+      const preview = configuredCancel || completeLabel || successorLabel || inverse
         ? this.relationCancelPreviewForLabel(item.label)
         : null;
       const disabledReason = configuredCancel && preview && preview.refusal
@@ -724,6 +758,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         ...item,
         configuredCancel,
         configuredComplete: completeLabel,
+        configuredSuccessor: successorLabel,
         cancelPreview: preview,
         closePreview: preview,
         disabled: item.disabled === true || Boolean(disabledReason),
@@ -756,6 +791,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         hidden,
         configuredCancel: existing && existing.configuredCancel === true,
         configuredComplete: existing && existing.configuredComplete === true,
+        configuredSuccessor: existing && existing.configuredSuccessor === true,
         oneOff: this.relationLabelOneOff === true,
         warning,
         warningText: warning
@@ -779,7 +815,8 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const hiddenRows = effective.filter((row) => row.hidden === true && relationCancelLabelKey(row.key) !== typedKey);
     const visibleLimit = 12
       + (Array.isArray(config && config.keys) ? config.keys.length : 0)
-      + (Array.isArray(completeConfig && completeConfig.keys) ? completeConfig.keys.length : 0);
+      + (Array.isArray(completeConfig && completeConfig.keys) ? completeConfig.keys.length : 0)
+      + (Array.isArray(successorConfig && successorConfig.keys) ? successorConfig.keys.length : 0);
     const toItem = (row) => decorate({
       kind: "relation-label",
       key: row.key,
@@ -790,6 +827,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       ghost: row.ghost === true,
       configuredCancel: row.configuredCancel === true,
       configuredComplete: row.configuredComplete === true,
+      configuredSuccessor: row.configuredSuccessor === true,
       typed: false,
       displayText: row.label,
       searchText: row.label,

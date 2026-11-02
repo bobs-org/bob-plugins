@@ -100,6 +100,7 @@
   "427-relation-stage-plugin.js",
   "428-picker-relation-label-vocabulary.js",
   "428a-picker-relation-close-preview.js",
+  "428b-picker-relation-successor-preview.js",
   "429-relation-label-management.js",
   "430-picker-vault-batch.js",
   "440-picker-vault-commit.js",
@@ -178,5 +179,6 @@
   "701-exports-parent-change.js",
   "702-relation-mention-exports.js",
   "703-successor-keep-moving-exports.js",
-  "704-pomodoro-split-exports.js"
+  "704-pomodoro-split-exports.js",
+  "705-relation-successor-exports.js"
 ]

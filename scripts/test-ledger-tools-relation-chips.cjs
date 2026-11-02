@@ -220,6 +220,7 @@ test("LC5 LINKED FROM shows the derived inverse phrase", () => {
     "follow-up of": "followed up by",
     "merged into": "merged from",
     "split from": "split into",
+    "starts after": "starts before",
   });
   assert.ok(Array.isArray(relationLabelVectors.inverse) && relationLabelVectors.inverse.length > 0);
   for (const vector of relationLabelVectors.inverse) {
@@ -1112,6 +1113,19 @@ test("MN linkedFrom v2 feeds mention rows and relationIndex v1 remains a fallbac
   assert.equal(incomingCalls, 1);
   assert.equal(v1.chips[0].kind, "relation");
   assert.equal(v1.chips[0].inverse, "followed up by");
+});
+
+test("SA22 LINKED FROM renders the starts-after display inverse", () => {
+  const source = task({ blockId: "evaluate", id: "evaluate", description: "Prepare evaluation prompt", status: "TODO" });
+  const model = relationChipModelForRow({
+    direction: "from",
+    lineText: "- 🪢 **LINKED FROM:** [[agents#^evaluate]] (starts after)",
+    sourcePath: "agents.md",
+    live: [liveFrom({ path: "agents.md", blockId: "evaluate" }, { label: "starts after", task: source })],
+    lookup: lookupFor([source]), resolve: resolveFor(),
+  });
+  assert.equal(model.chips[0].label, "starts after");
+  assert.equal(model.chips[0].inverse, "starts before");
 });
 
 test("MN click opens the source at its occurrence line and column, with Mod-click using a new pane", async () => {

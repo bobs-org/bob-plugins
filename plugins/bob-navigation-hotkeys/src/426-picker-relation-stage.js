@@ -839,6 +839,12 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         text: used,
       });
     }
+    if (item.configuredSuccessor) {
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta bob-cnp-relation-successor-meta",
+        text: relationSuccessorSuggestionMeta(),
+      });
+    }
     if (item.disabledReason) {
       textEl.createDiv({
         cls: item.configuredComplete

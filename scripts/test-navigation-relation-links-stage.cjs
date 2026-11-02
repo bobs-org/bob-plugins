@@ -2534,3 +2534,50 @@ test("LG16: footer offers ~ flip direction in single sessions only", () => {
       .some((hint) => hint.keys.includes("~")),
   );
 });
+
+test("SA22/SA30: successor labels overlay as configured with offers row meta and caveats", () => {
+  const successor = { keys: ["starts after"], labels: { "starts after": "starts after" } };
+  const merged = helpers.mergeRelationSuccessorLabelSuggestions(
+    [{ key: "see also", label: "see also", count: 2, hidden: false, inverse: null }],
+    successor,
+    "",
+  );
+  const overlay = merged.find((row) => row.key === "starts after");
+  assert.ok(overlay, "SA22: configured successor label overlays at zero uses");
+  assert.equal(overlay.configuredSuccessor, true);
+  assert.equal(helpers.relationSuccessorSuggestionMeta(), "🪢 offers");
+  assert.equal(
+    helpers.relationSuccessorPreviewForAuthoring({
+      sourceText: "Prepare evaluation prompt",
+      targetText: "Send implementation prompt",
+      targetStatus: " ",
+      targetLive: null,
+    }).message,
+    "🪢 Offers “Prepare evaluation prompt” when “Send implementation prompt” is parked or done · never blocks",
+  );
+  assert.equal(
+    helpers.relationSuccessorPreviewForAuthoring({
+      sourceText: "Prepare evaluation prompt",
+      targetText: "Send implementation prompt",
+      targetStatus: "/",
+      targetLive: false,
+    }).verdict,
+    "already_parked",
+    "SA30: parked target caves",
+  );
+  assert.equal(
+    helpers.relationSuccessorPreviewForAuthoring({
+      sourceText: "Prepare evaluation prompt",
+      targetText: "Send implementation prompt",
+      targetStatus: "x",
+      targetLive: false,
+    }).verdict,
+    "already_closed",
+    "SA30: closed target caves",
+  );
+  assert.equal(
+    helpers.relationSuccessorInverseLabel("starts before", successor),
+    "starts after",
+    "SA22: inverse spelling resolves to the configured label for the hint only",
+  );
+});

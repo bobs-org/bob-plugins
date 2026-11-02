@@ -1288,3 +1288,383 @@ test("MEET without an open entry below and non-MEET closes keep the immediate sl
   assert.equal(buildPlan.placedLast, false);
   assert.equal(buildPlan.edits.find((edit) => edit.type === "insertLines").line, 3);
 });
+
+test("MEET continuations ignore fenced candidates and insert before the fence", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] (**0800-0815**) — MEET",
+    "  - [[#^later]]#",
+    "- [ ] () — BUILD",
+    "```md",
+    "- [ ] () — FAKE",
+    "```",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  assert.equal(plan.placedLast, true);
+  assert.equal(plan.deferredOnlyClose, true);
+  assert.equal(plan.edits.find((edit) => edit.type === "insertLines").line, 4);
+  assert.equal(plan.cursorTargetLine, 1);
+
+  const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  assert.equal(plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor()), true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "## Pomodoros",
+      "- [ ] () — BUILD",
+      "- [ ] () — MEET",
+      "  - [[#^later]]",
+      "```md",
+      "- [ ] () — FAKE",
+      "```",
+    ].join("\n"),
+  );
+  assert.equal(editor.getCursor().line, 1);
+});
+
+test("MEET continuations ignore tilde fences and indented fakes", () => {
+  const tilde = [
+    "## Pomodoros",
+    "- [ ] (**0800-0815**) — MEET",
+    "  - [[#^later]]#",
+    "- [ ] () — BUILD",
+    "~~~md",
+    "- [ ] () — FAKE",
+    "~~~",
+  ];
+  const tildePlan = helpers.buildPomodoroCompletionPlan(
+    tilde,
+    helpers.findPomodorosSectionInLines(tilde),
+    1,
+  );
+  assert.equal(tildePlan.placedLast, true);
+  assert.equal(tildePlan.edits.find((edit) => edit.type === "insertLines").line, 4);
+
+  const indented = [
+    "## Pomodoros",
+    "- [ ] (**0800-0815**) — MEET",
+    "  - [[#^later]]#",
+    "- [ ] () — BUILD",
+    "  - [[#^build]]",
+    "  - [ ] () — FAKE indented",
+  ];
+  const indentedPlan = helpers.buildPomodoroCompletionPlan(
+    indented,
+    helpers.findPomodorosSectionInLines(indented),
+    1,
+  );
+  assert.equal(indentedPlan.placedLast, true);
+  assert.equal(indentedPlan.edits.find((edit) => edit.type === "insertLines").line, 6);
+
+  const onlyFenced = [
+    "## Pomodoros",
+    "- [ ] (**0800-0815**) — MEET",
+    "  - [[#^later]]#",
+    "```md",
+    "- [ ] () — FAKE",
+    "```",
+  ];
+  const onlyPlan = helpers.buildPomodoroCompletionPlan(
+    onlyFenced,
+    helpers.findPomodorosSectionInLines(onlyFenced),
+    1,
+  );
+  assert.equal(onlyPlan.placedLast, false);
+  assert.equal(onlyPlan.edits.find((edit) => edit.type === "insertLines").line, 3);
+});
+
+test("MEET continuations trim trailing blanks and keep interior content", () => {
+  const deferred = [
+    "## Pomodoros",
+    "- [ ] (**0800-0815**) — MEET",
+    "  - [[#^later]]#",
+    "- [ ] () — PLAN",
+    "  - plan note",
+    "",
+    "- [x] (**0700-0730**) — DONE",
+  ];
+  const deferredPlan = helpers.buildPomodoroCompletionPlan(
+    deferred,
+    helpers.findPomodorosSectionInLines(deferred),
+    1,
+  );
+  assert.equal(deferredPlan.placedLast, true);
+  assert.equal(deferredPlan.deferredOnlyClose, true);
+  assert.equal(deferredPlan.edits.find((edit) => edit.type === "insertLines").line, 5);
+  assert.equal(deferredPlan.cursorTargetLine, 1);
+
+  const deferredEditor = createTextEditor(deferred.join("\n"), { line: 1, ch: 4 });
+  const deferredPlugin = new TaskStatusCyclerPlugin();
+  deferredPlugin.scheduleCenterEditorLineInView = () => {};
+  assert.equal(
+    deferredPlugin.applyPomodoroCompletionPlan(deferredEditor, deferredPlan, deferredEditor.getCursor()),
+    true,
+  );
+  assert.equal(
+    deferredEditor.getValue(),
+    [
+      "## Pomodoros",
+      "- [ ] () — PLAN",
+      "  - plan note",
+      "- [ ] () — MEET",
+      "  - [[#^later]]",
+      "",
+      "- [x] (**0700-0730**) — DONE",
+    ].join("\n"),
+  );
+  assert.equal(deferredEditor.getCursor().line, 1);
+
+  const retained = [
+    "## Pomodoros",
+    "- [ ] (**0800-0815**) — MEET",
+    "  - note keeps the closed session",
+    "  - [[#^later]]#",
+    "- [ ] () — PLAN",
+    "  - plan note",
+    "",
+    "- [x] (**0700-0730**) — DONE",
+  ];
+  const retainedPlan = helpers.buildPomodoroCompletionPlan(
+    retained,
+    helpers.findPomodorosSectionInLines(retained),
+    1,
+  );
+  assert.equal(retainedPlan.placedLast, true);
+  assert.equal(retainedPlan.deferredOnlyClose, false);
+  assert.equal(retainedPlan.edits.find((edit) => edit.type === "insertLines").line, 6);
+  assert.equal(retainedPlan.cursorTargetLine, 3);
+
+  const retainedEditor = createTextEditor(retained.join("\n"), { line: 1, ch: 4 });
+  const retainedPlugin = new TaskStatusCyclerPlugin();
+  retainedPlugin.scheduleCenterEditorLineInView = () => {};
+  assert.equal(
+    retainedPlugin.applyPomodoroCompletionPlan(retainedEditor, retainedPlan, retainedEditor.getCursor()),
+    true,
+  );
+  assert.equal(
+    retainedEditor.getValue(),
+    [
+      "## Pomodoros",
+      "- [x] (**0800-0815**) — MEET",
+      "  - note keeps the closed session",
+      "- [ ] () — PLAN",
+      "  - plan note",
+      "- [ ] () — MEET",
+      "  - [[#^later]]",
+      "",
+      "- [x] (**0700-0730**) — DONE",
+    ].join("\n"),
+  );
+  assert.equal(retainedEditor.getCursor().line, 3);
+});
+
+test("deferred-only MEET successor lands under the created continuation, not the older MEET", () => {
+  const pre = [
+    "## Pomodoros",
+    "- [ ] (**0800-0815**) — MEET",
+    "  - [[#^later]]#",
+    "- [ ] () — MEET",
+    "  - [[#^existing]]",
+    "- [ ] () — BUILD",
+    "  - [[#^build]]",
+    "- [ ] () — PLAN",
+  ];
+  const section = helpers.findPomodorosSectionInLines(pre);
+  const plan = helpers.buildPomodoroCompletionPlan(pre, section, 1);
+  assert.equal(plan.deferredOnlyClose, true);
+  assert.equal(plan.placedLast, true);
+  assert.equal(plan.cursorTargetLine, 1);
+
+  const editor = createTextEditor(pre.join("\n"), { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  assert.equal(plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor()), true);
+  const after = editor.getValue().split("\n");
+  // Created MEET is last, older MEET unchanged, cursor on BUILD.
+  assert.deepEqual(after, [
+    "## Pomodoros",
+    "- [ ] () — MEET",
+    "  - [[#^existing]]",
+    "- [ ] () — BUILD",
+    "  - [[#^build]]",
+    "- [ ] () — PLAN",
+    "- [ ] () — MEET",
+    "  - [[#^later]]",
+  ]);
+  assert.equal(editor.getCursor().line, 1);
+  assert.equal(after[editor.getCursor().line], "- [ ] () — MEET");
+
+  // Simulate a line-shifting Work Log write above the ledger.
+  const shifted = ["# shift1", "# shift2", ...after];
+  const insert = plan.edits.find((edit) => edit && edit.type === "insertLines");
+  const blockLines = insert.lines.slice();
+  const hint = {
+    line: 1,
+    deletedClosedEntry: true,
+    createdLineText: blockLines[0],
+    createdBlockLines: blockLines.slice(),
+    createdInsertLine: insert.line,
+    createdPomodoro: true,
+    createdName: "MEET",
+  };
+  const relocated = plugin.relocateSuccessorClosingEntry(shifted, hint);
+  const expectedCreated = shifted.findIndex(
+    (line, index) => line === "- [ ] () — MEET" && shifted[index + 1] === "  - [[#^later]]",
+  );
+  assert.equal(relocated, expectedCreated);
+  // Older MEET still holds only its original link.
+  const olderIndex = shifted.findIndex(
+    (line, index) => line === "- [ ] () — MEET" && shifted[index + 1] === "  - [[#^existing]]",
+  );
+  assert.notEqual(olderIndex, -1);
+  assert.notEqual(olderIndex, expectedCreated);
+
+  const placements = [
+    {
+      key: "k1",
+      rowIndex: 0,
+      blockLink: "[[sase#^new-task]]",
+      anchor: { kind: "closing", entryLine: relocated, bulletLine: null },
+    },
+  ];
+  const insertion = helpers.planSuccessorInsertions(shifted, placements, {
+    closingEntry: relocated,
+    createdEntry: { line: relocated },
+  });
+  assert.equal(insertion.skipped.length, 0);
+  assert.equal(insertion.links.length, 1);
+  assert.equal(insertion.links[0].entry_created, true);
+  assert.equal(insertion.links[0].next_up, false);
+  const finalLines = insertion.text.split("\n");
+  const createdAfter = finalLines.findIndex(
+    (line, index) => line === "- [ ] () — MEET" && finalLines[index + 1] === "  - [[#^later]]",
+  );
+  // Successor joins the created continuation's children.
+  assert.equal(finalLines[createdAfter + 2], "\t- [[sase#^new-task]]");
+  // Older MEET unchanged: its single child is still the original link.
+  const olderAfter = finalLines.findIndex(
+    (line, index) => line === "- [ ] () — MEET" && finalLines[index + 1] === "  - [[#^existing]]",
+  );
+  assert.notEqual(olderAfter, -1);
+  assert.notEqual(finalLines[olderAfter + 2], "\t- [[sase#^new-task]]");
+});
+
+test("retained MEET successor beats same-name reuse and keeps case 3 below the close", () => {
+  const pre = [
+    "## Pomodoros",
+    "- [ ] (**0800-0815**) — MEET",
+    "  - note keeps the closed session",
+    "  - [[#^later]]#",
+    "- [ ] () — MEET",
+    "  - [[#^existing]]",
+    "- [ ] () — BUILD",
+    "  - [[#^build]]",
+  ];
+  const section = helpers.findPomodorosSectionInLines(pre);
+  const plan = helpers.buildPomodoroCompletionPlan(pre, section, 1);
+  assert.equal(plan.deferredOnlyClose, false);
+  assert.equal(plan.placedLast, true);
+  assert.equal(plan.cursorTargetLine, 3);
+
+  const editor = createTextEditor(pre.join("\n"), { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  assert.equal(plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor()), true);
+  const after = editor.getValue().split("\n");
+  assert.deepEqual(after, [
+    "## Pomodoros",
+    "- [x] (**0800-0815**) — MEET",
+    "  - note keeps the closed session",
+    "- [ ] () — MEET",
+    "  - [[#^existing]]",
+    "- [ ] () — BUILD",
+    "  - [[#^build]]",
+    "- [ ] () — MEET",
+    "  - [[#^later]]",
+  ]);
+  assert.equal(editor.getCursor().line, 3);
+
+  const shifted = ["# shift1", "# shift2", ...after];
+  const insert = plan.edits.find((edit) => edit && edit.type === "insertLines");
+  const blockLines = insert.lines.slice();
+  // Relocate the closed [x] entry by headline despite the shift.
+  const closedHint = {
+    line: 1,
+    lineText: "- [ ] (**0800-0815**) — MEET",
+    name: "MEET",
+  };
+  const relocated = plugin.relocateSuccessorClosingEntry(shifted, closedHint);
+  const expectedClosed = shifted.findIndex((line) => line.startsWith("- [x] (**0800-0815**)"));
+  assert.equal(relocated, expectedClosed);
+
+  // Block identity finds the created continuation, not the older same-name MEET.
+  let createdLine = null;
+  for (let line = relocated + 1; line + blockLines.length <= shifted.length; line += 1) {
+    let matches = true;
+    for (let index = 0; index < blockLines.length; index += 1) {
+      if (shifted[line + index] !== blockLines[index]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      createdLine = line;
+      break;
+    }
+  }
+  const expectedCreated = shifted.findIndex(
+    (line, index) => line === "- [ ] () — MEET" && shifted[index + 1] === "  - [[#^later]]",
+  );
+  assert.equal(createdLine, expectedCreated);
+  const olderIndex = shifted.findIndex(
+    (line, index) => line === "- [ ] () — MEET" && shifted[index + 1] === "  - [[#^existing]]",
+  );
+  assert.notEqual(olderIndex, -1);
+  assert.ok(olderIndex < createdLine);
+
+  const placements = [
+    {
+      key: "k1",
+      rowIndex: 0,
+      blockLink: "[[sase#^new-task]]",
+      anchor: { kind: "closing", entryLine: relocated, bulletLine: null },
+    },
+  ];
+  const insertion = helpers.planSuccessorInsertions(shifted, placements, {
+    closingEntry: relocated,
+    createdEntry: { line: createdLine },
+  });
+  assert.equal(insertion.links[0].entry_created, true);
+  assert.equal(insertion.links[0].next_up, false);
+  const finalLines = insertion.text.split("\n");
+  assert.equal(finalLines[createdLine + 2], "\t- [[sase#^new-task]]");
+  const olderAfter = finalLines.findIndex(
+    (line, index) => line === "- [ ] () — MEET" && finalLines[index + 1] === "  - [[#^existing]]",
+  );
+  assert.notEqual(finalLines[olderAfter + 2], "\t- [[sase#^new-task]]");
+
+  // Case 3 stays directly below the closed entry when no created entry exists
+  // and no open same-name entry follows: a fresh FIX close with no FIX below.
+  const case3Day = ["## Pomodoros", "- [x] () — FIX", "- [ ] () — BUILD"];
+  const case3Section = helpers.findPomodorosSectionInLines(case3Day);
+  const case3RangeEnd = helpers.getSubBulletBlockRange(case3Day, 1, case3Section).endLine;
+  const case3Placements = [
+    {
+      key: "k1",
+      rowIndex: 0,
+      blockLink: "[[sase#^new-task]]",
+      anchor: { kind: "closing", entryLine: 1, bulletLine: null },
+    },
+  ];
+  const case3 = helpers.planSuccessorInsertions(case3Day, case3Placements, {
+    closingEntry: 1,
+  });
+  // No open FIX below, so the pass mints a placeholder directly below the
+  // closed entry instead of carrying the successor to the ledger end.
+  const placeholderAt = case3.splices.find((splice) => splice.lines[0] === "- [ ] () — FIX");
+  assert.ok(placeholderAt);
+  assert.equal(placeholderAt.at, case3RangeEnd);
+});

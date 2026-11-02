@@ -454,25 +454,15 @@ class TaskStatusCyclerPomodoroMixin {
         } catch (error) {
           name = "";
         }
-        // A deferred-only close deletes the closed entry, so the relocation
-        // pass cannot find its `[x]` headline afterward: hand it the exact
-        // inserted placeholder headline, which may now sit after the last
-        // open Pomodoro.
-        let createdLineText = null;
-        if (plan.deferredOnlyClose === true && Array.isArray(plan.edits)) {
-          try {
-            const insert = plan.edits.find((edit) =>
-              edit && edit.type === "insertLines" && Array.isArray(edit.lines)
-            );
-            if (
-              insert && typeof insert.lines[0] === "string" && insert.lines[0]
-            ) {
-              createdLineText = insert.lines[0];
-            }
-          } catch (error) {
-            createdLineText = null;
-          }
-        }
+        // The relocation pass re-locates the entry and its created
+        // continuation from current text by content: a deferred-only close
+        // deletes the closed entry, and a placed-last MEET may sit after the
+        // last open Pomodoro. Block identity beats same-name reuse.
+        const createdBlock = getCreatedContinuationBlockFromPlan(plan);
+        const createdBlockLines = createdBlock ? createdBlock.blockLines : null;
+        const createdLineText = plan.deferredOnlyClose === true && createdBlockLines
+          ? createdBlockLines[0] || null
+          : null;
         successorDailyBefore = lines.slice();
         successorClosingEntry = {
           line: context.pomodoroLine,
@@ -482,6 +472,9 @@ class TaskStatusCyclerPomodoroMixin {
           createdName: typeof plan.createdPomodoroName === "string"
             ? plan.createdPomodoroName
             : "",
+          ...(createdBlockLines ? { createdBlockLines } : {}),
+          ...(createdBlock && Number.isInteger(createdBlock.insertLine)
+            ? { createdInsertLine: createdBlock.insertLine } : {}),
           ...(createdLineText != null
             ? { deletedClosedEntry: true, createdLineText }
             : {}),

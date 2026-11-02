@@ -838,6 +838,24 @@ class TaskStatusCyclerSuccessorProjectMixin {
             // placeholder: it IS the created entry, not its predecessor.
             if (hint.deletedClosedEntry === true) {
               createdEntry = { line: relocated };
+            } else if (Array.isArray(hint.createdBlockLines) && hint.createdBlockLines.length > 0) {
+              // The created continuation beats same-name reuse even when its
+              // headline matches another placeholder: match its full block.
+              try {
+                const createdLine = findCreatedContinuationEntryLine(
+                  dailyAfter,
+                  hint.createdBlockLines,
+                  typeof hint.createdName === "string" ? hint.createdName : "",
+                  relocated,
+                );
+                if (createdLine != null) {
+                  createdEntry = { line: createdLine };
+                } else {
+                  createdEntry = null;
+                }
+              } catch (error) {
+                createdEntry = null;
+              }
             } else {
               try {
                 const entries = parseSuccessorLedgerEntries(dailyAfter);

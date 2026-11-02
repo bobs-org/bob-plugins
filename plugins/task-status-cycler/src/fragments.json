@@ -8,6 +8,7 @@
   "055-obsidian-task-toggle-ranges.js",
   "060-pomodoro.js",
   "060a-pomodoro-placement.js",
+  "060b-pomodoro-continuation-identity.js",
   "061-event-task-clock.js",
   "062-pomodoro-clock.js",
   "070-block-links.js",

@@ -25,3 +25,7 @@ is off-clock (`expected_off_clock`), and an optional structured warning `code`
 
 Pin: copy this file from the bob-cli commit that adds it. A bob-plugins copy
 that predates those cases is stale.
+
+The vectors were refreshed from bob-cli's `feat(capture): place MEET
+continuation after last open Pomodoro` change; carried MEET continuations now
+follow the last open Pomodoro.

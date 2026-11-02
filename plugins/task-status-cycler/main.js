@@ -4360,9 +4360,13 @@ function getPomodoroContinuationPlacement(
     return { insertLine: immediateInsertLine, placedLast: false, firstOpenLine: null };
   }
 
+  const fenced = getFencedLineNumbers(lines);
   let firstOpenLine = null;
   let lastOpenLine = null;
   for (let line = closedLine + 1; line <= section.endLine; line += 1) {
+    if (fenced.has(line)) {
+      continue;
+    }
     if (!isPomodoroTaskLine(lines, section, line)) {
       continue;
     }
@@ -4382,11 +4386,121 @@ function getPomodoroContinuationPlacement(
     return { insertLine: immediateInsertLine, placedLast: false, firstOpenLine: null };
   }
 
+  // Rust `capture_pomodoros::pomodoro_block_range` keeps interior blanks and
+  // nested children verbatim but trims trailing blank lines. The shared
+  // `getFullPomodoroEntryEndLine` owns the full fence-aware block elsewhere,
+  // so trim locally for the new MEET anchor only.
+  const fullEndLine = getFullPomodoroEntryEndLine(lines, lastOpenLine, section);
+  let anchorEndLine = fullEndLine;
+  while (
+    anchorEndLine > lastOpenLine &&
+    !String(lines[anchorEndLine] || "").trim()
+  ) {
+    anchorEndLine -= 1;
+  }
   return {
-    insertLine: getFullPomodoroEntryEndLine(lines, lastOpenLine, section) + 1,
+    insertLine: anchorEndLine + 1,
     placedLast: true,
     firstOpenLine,
   };
+}
+// ---- src/060b-pomodoro-continuation-identity.js ----
+// Created-continuation identity for MEET placed-last (plan 202611/meet_continuation_landing_repair).
+// Pure helpers only: the planner's insert block identifies the continuation
+// the close created, so successor relocation beats same-name reuse even when
+// another open MEET shares its headline. Content search accounts for removed
+// rows, Work Log writes, and note edits that shift lines; failure returns
+// null so callers report `failed` rather than guess.
+function getCreatedContinuationBlockFromPlan(plan) {
+  try {
+    if (!plan || plan.createdPomodoro !== true || !Array.isArray(plan.edits)) {
+      return null;
+    }
+    const insert = plan.edits.find((edit) =>
+      edit && edit.type === "insertLines" && Array.isArray(edit.lines)
+    );
+    if (!insert || !Array.isArray(insert.lines) || insert.lines.length === 0) {
+      return null;
+    }
+    if (!Number.isInteger(insert.line)) {
+      return null;
+    }
+    return {
+      blockLines: insert.lines.map((line) => String(line ?? "")),
+      insertLine: insert.line,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+function findCreatedContinuationBlockLine(currentLines, blockLines, fromLine) {
+  try {
+    const lines = Array.isArray(currentLines) ? currentLines : [];
+    const block = Array.isArray(blockLines)
+      ? blockLines.map((line) => String(line ?? ""))
+      : null;
+    if (!block || block.length === 0) {
+      return null;
+    }
+    const from = Number.isInteger(fromLine) && fromLine >= 0 ? fromLine : 0;
+    for (let line = from; line + block.length <= lines.length; line += 1) {
+      let matches = true;
+      for (let index = 0; index < block.length; index += 1) {
+        if (String(lines[line + index] || "") !== block[index]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return line;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function findCreatedContinuationEntryLine(dailyAfter, blockLines, createdName, relocatedLine) {
+  try {
+    const lines = Array.isArray(dailyAfter) ? dailyAfter : [];
+    const block = Array.isArray(blockLines)
+      ? blockLines.map((line) => String(line ?? ""))
+      : null;
+    if (!block || block.length === 0) {
+      return null;
+    }
+    if (!Number.isInteger(relocatedLine)) {
+      return null;
+    }
+    const wantedName = typeof createdName === "string" ? createdName : "";
+    const entries = parseSuccessorLedgerEntries(lines);
+    for (const entry of entries) {
+      if (!entry || !entry.open) {
+        continue;
+      }
+      if (!(entry.entryLine > relocatedLine)) {
+        continue;
+      }
+      if (String(entry.name || "") !== wantedName) {
+        continue;
+      }
+      let matches = true;
+      for (let index = 0; index < block.length; index += 1) {
+        if (String(lines[entry.entryLine + index] || "") !== block[index]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return entry.entryLine;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
 }
 // ---- src/061-event-task-clock.js ----
 // Event Task clock close (plan:202610/bob_gcal_daily_events.md, phase
@@ -18097,34 +18211,41 @@ class TaskStatusCyclerSuccessorsMixin {
 
   // Re-locate a Pomodoro-line close's entry by pre-edit headline (Work Log
   // writes can shift it). A deferred-only close deletes the closed entry, so
-  // its hint instead carries the inserted placeholder headline
-  // (`deletedClosedEntry`/`createdLineText`): the verbatim placeholder wins,
-  // preferring the first match at or after the pre-edit line. Returns the
-  // 0-based line or null (callers report `failed` rather than guess). Never
-  // throws.
+  // its hint carries the inserted continuation block
+  // (`deletedClosedEntry`/`createdBlockLines` plus legacy `createdLineText`):
+  // the verbatim block wins at or after the pre-edit line, so an older
+  // same-headline MEET never shadows the created continuation. Content search
+  // absorbs removed rows and later writes; a missing block returns null so
+  // callers report `failed` rather than guess. Never throws.
   relocateSuccessorClosingEntry(currentLines, hint) {
     try {
       const lines = Array.isArray(currentLines) ? currentLines : [];
-      if (
-        hint && hint.deletedClosedEntry === true &&
-        typeof hint.createdLineText === "string" && hint.createdLineText
-      ) {
-        const wanted = hint.createdLineText;
-        let fallback = null;
-        for (let line = 0; line < lines.length; line += 1) {
-          if (String(lines[line] || "") !== wanted) {
-            continue;
+      if (hint && hint.deletedClosedEntry === true) {
+        if (Array.isArray(hint.createdBlockLines) && hint.createdBlockLines.length > 0) {
+          const found = findCreatedContinuationBlockLine(lines, hint.createdBlockLines, hint.line);
+          if (found != null) {
+            return found;
           }
-          if (Number.isInteger(hint.line) && line < hint.line) {
-            if (fallback == null) {
-              fallback = line;
-            }
-            continue;
-          }
-          return line;
+          return null;
         }
-        if (fallback != null) {
-          return fallback;
+        if (typeof hint.createdLineText === "string" && hint.createdLineText) {
+          const wanted = hint.createdLineText;
+          let fallback = null;
+          for (let line = 0; line < lines.length; line += 1) {
+            if (String(lines[line] || "") !== wanted) {
+              continue;
+            }
+            if (Number.isInteger(hint.line) && line < hint.line) {
+              if (fallback == null) {
+                fallback = line;
+              }
+              continue;
+            }
+            return line;
+          }
+          if (fallback != null) {
+            return fallback;
+          }
         }
       }
       const lineText = hint && typeof hint.lineText === "string"
@@ -20086,6 +20207,24 @@ class TaskStatusCyclerSuccessorProjectMixin {
             // placeholder: it IS the created entry, not its predecessor.
             if (hint.deletedClosedEntry === true) {
               createdEntry = { line: relocated };
+            } else if (Array.isArray(hint.createdBlockLines) && hint.createdBlockLines.length > 0) {
+              // The created continuation beats same-name reuse even when its
+              // headline matches another placeholder: match its full block.
+              try {
+                const createdLine = findCreatedContinuationEntryLine(
+                  dailyAfter,
+                  hint.createdBlockLines,
+                  typeof hint.createdName === "string" ? hint.createdName : "",
+                  relocated,
+                );
+                if (createdLine != null) {
+                  createdEntry = { line: createdLine };
+                } else {
+                  createdEntry = null;
+                }
+              } catch (error) {
+                createdEntry = null;
+              }
             } else {
               try {
                 const entries = parseSuccessorLedgerEntries(dailyAfter);
@@ -24008,25 +24147,15 @@ class TaskStatusCyclerPomodoroMixin {
         } catch (error) {
           name = "";
         }
-        // A deferred-only close deletes the closed entry, so the relocation
-        // pass cannot find its `[x]` headline afterward: hand it the exact
-        // inserted placeholder headline, which may now sit after the last
-        // open Pomodoro.
-        let createdLineText = null;
-        if (plan.deferredOnlyClose === true && Array.isArray(plan.edits)) {
-          try {
-            const insert = plan.edits.find((edit) =>
-              edit && edit.type === "insertLines" && Array.isArray(edit.lines)
-            );
-            if (
-              insert && typeof insert.lines[0] === "string" && insert.lines[0]
-            ) {
-              createdLineText = insert.lines[0];
-            }
-          } catch (error) {
-            createdLineText = null;
-          }
-        }
+        // The relocation pass re-locates the entry and its created
+        // continuation from current text by content: a deferred-only close
+        // deletes the closed entry, and a placed-last MEET may sit after the
+        // last open Pomodoro. Block identity beats same-name reuse.
+        const createdBlock = getCreatedContinuationBlockFromPlan(plan);
+        const createdBlockLines = createdBlock ? createdBlock.blockLines : null;
+        const createdLineText = plan.deferredOnlyClose === true && createdBlockLines
+          ? createdBlockLines[0] || null
+          : null;
         successorDailyBefore = lines.slice();
         successorClosingEntry = {
           line: context.pomodoroLine,
@@ -24036,6 +24165,9 @@ class TaskStatusCyclerPomodoroMixin {
           createdName: typeof plan.createdPomodoroName === "string"
             ? plan.createdPomodoroName
             : "",
+          ...(createdBlockLines ? { createdBlockLines } : {}),
+          ...(createdBlock && Number.isInteger(createdBlock.insertLine)
+            ? { createdInsertLine: createdBlock.insertLine } : {}),
           ...(createdLineText != null
             ? { deletedClosedEntry: true, createdLineText }
             : {}),

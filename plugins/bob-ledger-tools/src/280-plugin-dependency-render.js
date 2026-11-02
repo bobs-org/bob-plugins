@@ -160,15 +160,10 @@ class BobLedgerToolsDependencyRenderMixin {
                 box.setAttribute("class", "bob-dep-chip-box");
                 box.setAttribute("data-task", chip && chip.state ? chip.state : "todo");
                 box.setAttribute("aria-hidden", "true");
-                let marked = null;
-                try {
-                  if (chip && chip.blockMark && typeof this.blockMarkRender === "function") {
-                    marked = this.blockMarkRender(box, chip.blockMark, { decorative: true });
-                  }
-                } catch (error) {
-                  marked = null;
-                }
-                if (!marked) box.textContent = (chip && chip.symbol) || "○";
+                const renderFn = typeof this.blockMarkRender === "function"
+                  ? (host, model, options) => this.blockMarkRender(host, model, options)
+                  : null;
+                dependencyChipBoxFill(box, chip, renderFn, docNode);
                 const firstKids = Array.from(anchor.childNodes || []);
                 if (typeof anchor.insertBefore === "function") {
                   anchor.insertBefore(box, firstKids.length > 0 ? firstKids[0] : null);
@@ -501,7 +496,20 @@ class BobLedgerToolsDependencyRenderMixin {
             if (linkpath) {
               noteLabel = "↗ " + linkpath.split("/").pop();
             }
-            chip = { state, symbol: dependencySymbolForState(state), text, fullText, noteLabel, linktext: (linkpath ? linkpath : "") + "#^" + blockId, blockId, resolvedPath: taskPath || resolved.path, tooltip: fullText + " — " + (taskPath || source) + " · " + dependencyStatusName(state), ariaLabel: fullText };
+            chip = { state, symbol: dependencySymbolForState(state), text, fullText, noteLabel, linktext: (linkpath ? linkpath : "") + "#^" + blockId, blockId, resolvedPath: taskPath || resolved.path, tooltip: fullText + " — " + (taskPath || source) + " · " + dependencyStatusName(state), ariaLabel: "Dependency " + fullText + " (" + dependencyStatusName(state) + ")" };
+            try {
+              const rawLine = task && (task.originalMarkdown || task.rawLine || task.lineText);
+              if (typeof rawLine === "string" && rawLine && typeof self.blockMarkModelForLine === "function") {
+                chip.blockMark = self.blockMarkModelForLine(taskPath || source, rawLine) || null;
+                const reasonLine = blockMarkReasonLine(chip.blockMark);
+                if (reasonLine) {
+                  chip.tooltip += " · " + reasonLine;
+                  chip.ariaLabel += "; " + reasonLine;
+                }
+              }
+            } catch (error) {
+              chip.blockMark = null;
+            }
           }
           chips.push(chip);
           byAnchor.set(anchor, chip);

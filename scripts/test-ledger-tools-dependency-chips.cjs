@@ -148,7 +148,10 @@ Module._load = originalLoad;
 const {
   parseDependencyLine,
   dependencyChipModel,
+  blockMarkReasonLine,
+  dependencyChipBoxFill,
   buildDependencyChipElement,
+  buildBlockMarkElement,
   dependencyChipLineOwnedByTask,
   dependencyChipLineOwnedByTaskAtDoc,
   dependencyReadingOwnText,
@@ -258,13 +261,21 @@ test("DC chip model vectors", () => {
 
   const blockedLine = "- [?] #task Blocked prerequisite [scheduled:: 2026-11-20] ^d";
   const blockedTask = depTask({ blockId: "d", symbol: "?", description: "Blocked one", type: "ON_HOLD", originalMarkdown: blockedLine });
-  const miniature = Object.freeze({ key: "date", family: "waiting", tooltip: "Blocked until date" });
+  const miniature = Object.freeze({
+    key: "date",
+    family: "waiting",
+    tooltip: "Blocked · until Fri, Nov 20 · in 19 days\nCtrl+Shift+P to reschedule",
+  });
   model = dependencyChipModel(lineFor("d"), "a.md", depLookup([["d", blockedTask]]), (task, path) => {
     assert.equal(task, blockedTask);
     assert.equal(path, "a.md");
     return miniature;
   });
   assert.equal(model.chips[0].blockMark, miniature);
+  assert.match(model.chips[0].tooltip, /Blocked · until Fri, Nov 20 · in 19 days/);
+  assert.equal(model.chips[0].tooltip.includes("Ctrl+Shift"), false);
+  assert.match(model.chips[0].ariaLabel, /Blocked · until Fri, Nov 20 · in 19 days/);
+  assert.equal(model.chips[0].ariaLabel.includes("Ctrl+Shift"), false);
 
   model = dependencyChipModel(lineFor("e"), "a.md", depLookup([["e", depTask({ blockId: "e", symbol: "x", description: "Done one", type: "DONE" })]]));
   assert.equal(model.chips[0].state, "done");
@@ -610,7 +621,11 @@ test("element hides actions without nav api v1", () => {
   assert.ok(collectClasses(interactive).join(" ").indexOf("bob-dep-chip-remove") !== -1);
   assert.ok(collectClasses(interactive).join(" ").indexOf("bob-dep-add") !== -1);
 
-  const mark = Object.freeze({ key: "dep", family: "held", tooltip: "Blocked after task" });
+  const mark = Object.freeze({
+    key: "dep",
+    family: "held",
+    tooltip: "Blocked · after prerequisite\nCtrl+Shift+B to edit prerequisites",
+  });
   const markedModel = dependencyChipModel(
     "- ⛓️ **DEPENDS ON:** [[#^a]]",
     "a.md",
@@ -621,14 +636,15 @@ test("element hides actions without nav api v1", () => {
     plugin: { blockMarkRender(host, supplied, options) {
       assert.equal(supplied, mark);
       assert.equal(options.decorative, true);
-      const element = doc.createElement("span");
-      element.setAttribute("class", "bob-block-mark");
+      const element = buildBlockMarkElement(doc, supplied, options);
       host.appendChild(element);
       return element;
     } },
   });
   assert.ok(collectClasses(marked).join(" ").includes("bob-block-mark"));
-  assert.match(markedModel.chips[0].tooltip, /Blocked after task/);
+  assert.ok(collectClasses(marked).join(" ").includes("bob-dep-chip-fallback"));
+  assert.match(markedModel.chips[0].tooltip, /Blocked · after prerequisite/);
+  assert.equal(markedModel.chips[0].tooltip.includes("Ctrl+Shift"), false);
 });
 
 test("nav api feature detection gates actions", () => {
@@ -857,6 +873,37 @@ test("reading view decorates only the Depends-On row, hides chrome, stays idempo
   innerLi.appendChild(innerA);
   plugin.renderDependencyChipsIn(coded.root, { sourcePath: "a.md" });
   assert.equal(innerA.className.indexOf("bob-dep-chip"), -1);
+});
+
+test("reading view blocked chips draw a miniature and reason line", () => {
+  const blockedLine = "- [?] #task Blocked one [dependsOn:: x] ^d";
+  const tasks = [
+    depTask({ blockId: "d", symbol: "?", description: "Blocked one", path: "a.md", type: "ON_HOLD", originalMarkdown: blockedLine }),
+  ];
+  const plugin = depPluginWithTasks([], tasks);
+  plugin.blockMarkModelForLine = () => ({
+    key: "dep",
+    family: "held",
+    tooltip: "Blocked · after Open prereq\nCtrl+Shift+B to edit prerequisites",
+  });
+  const fixture = fakeReadingDoc();
+  const { li, anchors } = readingDepRow(fixture, ["d"]);
+  const model = plugin.dependencyChipModelForDomLinks(anchors, "a.md");
+  assert.ok(model && model.chips && model.chips[0], "reading model resolves the blocked target");
+  assert.equal(model.chips[0].blockMark && model.chips[0].blockMark.key, "dep");
+  assert.match(String(model.chips[0].tooltip || ""), /Blocked · after Open prereq/);
+  assert.equal(String(model.chips[0].tooltip || "").includes("Ctrl+Shift"), false);
+  assert.match(String(model.chips[0].ariaLabel || ""), /Blocked · after Open prereq/);
+  assert.equal(String(model.chips[0].ariaLabel || "").includes("Ctrl+Shift"), false);
+  plugin.renderDependencyChipsIn(fixture.root, { sourcePath: "a.md" });
+  const title = anchors[0].getAttribute("title") || "";
+  const aria = anchors[0].getAttribute("aria-label") || "";
+  assert.match(title, /Blocked · after Open prereq/);
+  assert.equal(title.includes("Ctrl+Shift"), false);
+  assert.match(aria, /Blocked · after Open prereq/);
+  assert.equal(aria.includes("Ctrl+Shift"), false);
+  const classes = collectReadingClasses(li).join(" ");
+  assert.ok(classes.indexOf("bob-dep-chip-box") !== -1, "reading chip box is present");
 });
 
 test("reading view collapses more than three Done targets to one chip", () => {
@@ -1294,6 +1341,84 @@ test("decoration evaluates ownership without copying the note", () => {
   const directView = makeDepView({ lines: direct });
   directView.state.doc = makeNoCountDepDoc(direct);
   assert.equal(plugin.buildDependencyChipDecorations(directView).adds.length, 1);
+});
+
+test("blockMarkReasonLine keeps only the first tooltip line", () => {
+  assert.equal(blockMarkReasonLine(null), "");
+  assert.equal(blockMarkReasonLine({}), "");
+  assert.equal(blockMarkReasonLine({ tooltip: 12 }), "");
+  assert.equal(
+    blockMarkReasonLine({ tooltip: "Blocked · P2 deferral · until Fri, Nov 20 · in 19 days\nCtrl+Shift+P to reschedule\nAlso via project cash" }),
+    "Blocked · P2 deferral · until Fri, Nov 20 · in 19 days",
+  );
+});
+
+test("chip box fill keeps a CSS fallback glyph beside the miniature", () => {
+  function fakeDoc() {
+    function el(tag) {
+      const node = {
+        tag, children: [], _attrs: {},
+        setAttribute(name, value) { this._attrs[name] = value; },
+        getAttribute(name) { return this._attrs[name]; },
+        appendChild(child) { this.children.push(child); return child; },
+      };
+      return node;
+    }
+    return {
+      createElement: (tag) => el(tag),
+      createTextNode: (text) => ({ text }),
+    };
+  }
+  function boxChildren(box) {
+    return box.children.map((child) => ({
+      className: child._attrs && child._attrs.class || "",
+      key: child._attrs && child._attrs["data-bob-block"] || null,
+      text: child.text || (child.children && child.children[0] && child.children[0].text) || "",
+    }));
+  }
+  const doc = fakeDoc();
+  const plugin = {
+    blockMarkRender(host, model, options) {
+      const element = buildBlockMarkElement(doc, model, options);
+      host.appendChild(element);
+      return element;
+    },
+  };
+  const families = [
+    { key: "prj", family: "held", symbol: "?" },
+    { key: "p2", family: "waiting", symbol: "?" },
+    { key: "stale", family: "stale", symbol: "?" },
+  ];
+  for (const spec of families) {
+    const box = doc.createElement("span");
+    const chip = {
+      symbol: spec.symbol,
+      blockMark: {
+        key: spec.key,
+        family: spec.family,
+        tooltip: spec.key + " reason\nCtrl+Shift+B to edit prerequisites",
+      },
+    };
+    dependencyChipBoxFill(box, chip, (host, model, options) => plugin.blockMarkRender(host, model, options), doc);
+    const kids = boxChildren(box);
+    assert.equal(kids.length, 2, spec.key + " children");
+    assert.equal(kids[0].className, "bob-block-mark");
+    assert.equal(kids[0].key, spec.key);
+    assert.equal(kids[1].className, "bob-dep-chip-fallback");
+    assert.equal(kids[1].text, "?");
+  }
+
+  const neutralBox = doc.createElement("span");
+  dependencyChipBoxFill(neutralBox, { symbol: "○", blockMark: null }, (host, model, options) => plugin.blockMarkRender(host, model, options), doc);
+  assert.equal(neutralBox.children.length, 1);
+  assert.equal(neutralBox.children[0].text, "○");
+
+  const thrown = doc.createElement("span");
+  dependencyChipBoxFill(thrown, { symbol: "?", blockMark: { key: "dep", family: "held", tooltip: "Blocked" } }, () => {
+    throw new Error("render failed");
+  }, doc);
+  assert.equal(thrown.children.length, 1);
+  assert.equal(thrown.children[0].text, "?");
 });
 
 test("toggle flips the body class and onload wires chips", () => {

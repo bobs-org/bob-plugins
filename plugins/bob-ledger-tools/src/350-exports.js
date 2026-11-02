@@ -504,6 +504,8 @@ module.exports.helpers = {
   dependencyStateFromSymbol,
   dependencySymbolForState,
   dependencyChipModel,
+  blockMarkReasonLine,
+  dependencyChipBoxFill,
   buildDependencyChipElement,
   ensureDependencyChipsRefresh,
   DASHBOARD_COLLECTIONS_VERSION,

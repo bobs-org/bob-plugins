@@ -153,6 +153,22 @@ const DATAVIEW_QUERY_NOTE = [
   "",
 ].join("\n");
 
+function chipMarksNote(d) {
+  return [
+    "# Chip marks",
+    "",
+    "- [?] #task ChipP2 p2 target [priority:: medium] [scheduled:: " + d.plus19 + "] [id:: chip-p2] ^chip-p2",
+    "  - 🧱 **BLOCKS:** [[#^chip-blocked]]",
+    "- [?] #task ChipDep dep target [dependsOn:: x] [id:: chip-dep] ^chip-dep",
+    "- [?] #task ChipPrj prj target #prj_is_blocked [id:: chip-prj] ^chip-prj",
+    "- [?] #task ChipSource waits on three [dependsOn:: chip-p2, chip-dep, chip-prj]",
+    "  - ⛓️ **DEPENDS ON:** [[#^chip-p2]] • [[#^chip-dep]] • [[#^chip-prj]]",
+    "- [?] #task ChipBlockedDependent blocked by ChipP2 [dependsOn:: chip-p2] ^chip-blocked",
+    "  - ⛓️ **DEPENDS ON:** [[#^chip-p2]]",
+    "",
+  ].join("\n");
+}
+
 const TASKS_DATA = {
   globalFilter: "#task",
   // The vault uses Dataview bracket fields ([id::], [dependsOn::],
@@ -337,6 +353,7 @@ function buildFixture(vaultDir, dates) {
   writeNote(path.join(vaultDir, "prose.md"), PROSE_NOTE);
   writeNote(path.join(vaultDir, "tasks-query.md"), TASKS_QUERY_NOTE);
   writeNote(path.join(vaultDir, "dataview-query.md"), DATAVIEW_QUERY_NOTE);
+  writeNote(path.join(vaultDir, "chip-marks.md"), chipMarksNote(d));
 
   const enabled = [];
   for (const plugin of readExpectedPlugins()) {
@@ -400,6 +417,7 @@ function buildFixture(vaultDir, dates) {
     prose: "prose.md",
     tasksQuery: "tasks-query.md",
     dataviewQuery: "dataview-query.md",
+    chips: "chip-marks.md",
     enabled,
     tasksPlugin,
     dataviewPlugin,
@@ -613,6 +631,45 @@ const MARKS_PROBE = `(() => { try {
     dataviewRows,
   };
 } catch (e) { return { error: String(e && e.message || e), marked: [] }; } })()`;
+
+// Chip miniatures: .bob-dep-chip-box > span.bob-block-mark[data-bob-block]
+const CHIPS_PROBE = `(() => { try {
+  const visible = (el) => {
+    if (!el || !el.getClientRects || el.getClientRects().length === 0) return false;
+    let node = el;
+    while (node && node.nodeType === 1) {
+      const style = window.getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      node = node.parentElement;
+    }
+    return true;
+  };
+  const chips = Array.from(document.querySelectorAll(".bob-dep-chip-box")).map((box) => {
+    const chip = box.closest(".bob-dep-chip, a.bob-dep-chip, a.bob-blocks-chip") || box.parentElement;
+    const mark = Array.from(box.children || []).find((child) => child.classList && child.classList.contains("bob-block-mark"));
+    const fallback = Array.from(box.children || []).find((child) => child.classList && child.classList.contains("bob-dep-chip-fallback"));
+    const markStyle = mark ? window.getComputedStyle(mark) : null;
+    const row = box.closest(".bob-dep-row, .bob-blocks-row, li, .cm-line");
+    const rowRect = row && row.getBoundingClientRect ? row.getBoundingClientRect() : null;
+    return {
+      key: mark ? mark.getAttribute("data-bob-block") : null,
+      markVisible: Boolean(mark && visible(mark) && markStyle && markStyle.display !== "none"),
+      markDisplay: markStyle ? String(markStyle.display || "") : null,
+      fallbackText: fallback ? String(fallback.textContent || "") : "",
+      boxText: String(box.textContent || ""),
+      tooltip: chip ? String(chip.getAttribute("title") || "") : "",
+      aria: chip ? String(chip.getAttribute("aria-label") || "") : "",
+      href: chip ? String(chip.getAttribute("data-href") || chip.getAttribute("href") || "") : "",
+      rowHeight: rowRect ? rowRect.height : null,
+      chipText: chip ? String(chip.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 160) : "",
+      isBlocks: Boolean(
+        (chip && chip.classList && chip.classList.contains("bob-blocks-chip"))
+        || (row && row.classList && row.classList.contains("bob-blocks-row")),
+      ),
+    };
+  });
+  return { gate: document.body.classList.contains("bob-block-marks"), chips };
+} catch (e) { return { error: String(e && e.message || e), chips: [] }; } })()`;
 
 // Computed paint for one owned checkbox: glyph content, pip size, hit area,
 // row height, and family colors. The harness calls this per BM row.
@@ -943,13 +1000,16 @@ function runSelfTest() {
   const tmp = asserts.makeScratch(repoRoot, "self");
   try {
     if (!tmp.startsWith(asserts.scratchRoot(repoRoot))) {
-      throw new Error("self-test scratch must stay under the workspace repo");
+      throw new Error("self-test scratch must stay under the owned scratch root");
+    }
+    if (asserts.scratchRoot(repoRoot).length > 40) {
+      throw new Error("scratch root must stay short enough for Chromium SingletonSocket");
     }
     const parsed = parseArgs(["--self-test", "--out", tmp, "--report", path.join(tmp, "r.json")]);
     if (!parsed.selfTest) throw new Error("parseArgs did not keep --self-test");
     const dates = fixtureDates();
     const fixture = buildFixture(tmp, dates);
-    for (const relative of [fixture.marks, fixture.prereqs, fixture.embedHost, fixture.prose, fixture.tasksQuery, fixture.dataviewQuery]) {
+    for (const relative of [fixture.marks, fixture.prereqs, fixture.embedHost, fixture.prose, fixture.tasksQuery, fixture.dataviewQuery, fixture.chips]) {
       if (!fs.existsSync(path.join(tmp, relative))) throw new Error(`fixture missing ${relative}`);
     }
     const marks = fs.readFileSync(path.join(tmp, fixture.marks), "utf8");
@@ -976,6 +1036,11 @@ function runSelfTest() {
     if (!tasksQuery.includes("hide priority")) throw new Error("tasks query note missing hide priority");
     const dataviewQuery = fs.readFileSync(path.join(tmp, fixture.dataviewQuery), "utf8");
     if (!dataviewQuery.includes("```dataview")) throw new Error("dataview query note missing the Dataview fence");
+    const chips = fs.readFileSync(path.join(tmp, fixture.chips), "utf8");
+    for (const token of ["ChipP2 p2 target", "ChipDep dep target", "ChipPrj prj target", "ChipSource waits on three", "ChipBlockedDependent", "⛓️ **DEPENDS ON:**", "🧱 **BLOCKS:**", "^chip-p2", "^chip-dep", "^chip-prj"]) {
+      if (!chips.includes(token)) throw new Error(`chip note missing ${token}`);
+    }
+    if (marks.includes("ChipP2 p2 target")) throw new Error("BM note must not contain the chip-mark fixture");
     const app = JSON.parse(fs.readFileSync(path.join(tmp, ".obsidian/app.json"), "utf8"));
     if (app.livePreview !== true) throw new Error("livePreview must be on");
     const core = JSON.parse(fs.readFileSync(path.join(tmp, ".obsidian/core-plugins.json"), "utf8"));
@@ -1003,6 +1068,9 @@ function runSelfTest() {
     if (!source.includes("hide-priority")) throw new Error("self-test must classify hide-priority independently of block index");
     if (!source.includes("bm24-tasks-css-digit")) throw new Error("self-test must cover BM24");
     if (!source.includes("toggle-block-marks")) throw new Error("self-test must cover the session toggle");
+    if (!source.includes("CHIPS_PROBE")) throw new Error("self-test must cover chip-mark probes");
+    if (!source.includes("chip-marks.md")) throw new Error("self-test must seed a separate chip-marks note");
+    if (!source.includes(".bob-dep-chip-box > span.bob-block-mark")) throw new Error("self-test must assert chip-box miniatures");
     if (!source.includes("Input.dispatchMouseEvent")) throw new Error("self-test must cover CDP hover");
     if (!source.includes("setCssEnabledStatus")) throw new Error("self-test must cover snippet disable via customCss");
     if (!source.includes("refreshBlockMarksLadder")) throw new Error("self-test must cover the BM22 ladder seam");
@@ -1246,6 +1314,44 @@ async function expectedTooltipForMarker(client, file, marker) {
 
 async function namedHostProbe(client, hostSelector, marker) {
   return client.evaluate(`(${HOST_MARKS_PROBE_FN})(${JSON.stringify(hostSelector)}, ${JSON.stringify(marker)})`);
+}
+
+async function collectChips(client, file, mode) {
+  await openNote(client, file, mode);
+  await sleep(800);
+  return waitFor(client, CHIPS_PROBE, (v) => v && Array.isArray(v.chips) && v.chips.length > 0, "chip boxes", 8000).catch((error) => ({
+    error: String(error && error.message || error),
+    chips: [],
+    gate: null,
+  }));
+}
+
+function visibleChips(probe) {
+  return ((probe && probe.chips) || []).filter((chip) => Number(chip.rowHeight) > 1);
+}
+
+function chipMatching(probe, needle, alt) {
+  const chips = visibleChips(probe);
+  return chips.filter((chip) => {
+    const hay = String(chip.chipText || "") + " " + String(chip.href || "");
+    return hay.includes(needle) || (alt && hay.includes(alt));
+  });
+}
+
+function assertChipFamily(record, prefix, probe, needle, wantKey, alt) {
+  const matches = chipMatching(probe, needle, alt);
+  const hit = matches.find((chip) => chip.key === wantKey) || matches[0] || null;
+  if (!hit) {
+    record(`${prefix}-${needle}-chip`, false, `no chip matching ${needle}; saw ${visibleChips(probe).map((chip) => chip.chipText).join(" | ").slice(0, 180)}`);
+    return null;
+  }
+  record(`${prefix}-${needle}-key`, hit.key === wantKey, `${needle} key=${hit.key} want=${wantKey}`);
+  record(
+    `${prefix}-${needle}-reason`,
+    Boolean(hit.tooltip || hit.aria) && !/Ctrl\+Shift/.test(String(hit.tooltip || "") + String(hit.aria || "")),
+    JSON.stringify({ tooltip: hit.tooltip, aria: hit.aria }).slice(0, 180),
+  );
+  return hit;
 }
 
 async function collectFolds(client) {
@@ -2295,6 +2401,94 @@ async function runE2e(parsed) {
     report.dataview = { copied: fixture.dataviewPlugin };
     report.snippet = { copied: fixture.snippet };
     report.controlledClockNote = "BM23 patches dateMarksToday and calls refreshDateMarksForRollover; it is not a midnight observation.";
+
+    // Chip marks live on a separate note so existing BM vectors stay untouched.
+    await openNote(client, fixture.chips, "live").catch(() => ({}));
+    await sleep(800);
+    let chipIndexReady = { ready: false };
+    for (let i = 0; i < 24; i++) {
+      chipIndexReady = await client.evaluate(`(() => { try {
+        const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+        if (!plugin || typeof plugin.blockMarksIdIndex !== "function") return { ready: false };
+        const index = plugin.blockMarksIdIndex();
+        const has = (id) => index && index.has && index.has(id);
+        return { ready: Boolean(has("chip-p2") && has("chip-dep") && has("chip-prj") && has("x")), keys: index ? Array.from(index.keys()).slice(0, 16) : null };
+      } catch (e) { return { ready: false, error: String(e && e.message || e) }; } })()`).catch((e) => ({ ready: false, error: String(e) }));
+      if (chipIndexReady && chipIndexReady.ready) break;
+      await sleep(400);
+    }
+    record("chip-tasks-index", Boolean(chipIndexReady && chipIndexReady.ready), JSON.stringify(chipIndexReady).slice(0, 200));
+
+    async function runChipSurface(mode, prefix) {
+      const probe = await collectChips(client, fixture.chips, mode);
+      const shown = visibleChips(probe);
+      record(`${prefix}-chip-boxes`, shown.length >= 3, JSON.stringify({ count: shown.length, error: probe && probe.error }).slice(0, 180));
+      const p2 = assertChipFamily(record, prefix, probe, "ChipP2 p2 target", "p2", "chip-p2");
+      assertChipFamily(record, prefix, probe, "ChipDep dep target", "dep", "chip-dep");
+      assertChipFamily(record, prefix, probe, "ChipPrj prj target", "prj", "chip-prj");
+      const blocked = shown.find((chip) => chip.isBlocks && (
+        String(chip.chipText || "").includes("ChipBlockedDependent")
+        || String(chip.href || "").includes("chip-blocked")
+      ));
+      record(`${prefix}-blocks-chip`, Boolean(blocked && blocked.key === "dep"), blocked ? JSON.stringify(blocked).slice(0, 180) : "no BLOCKS chip");
+      const heightsOn = shown.map((chip) => chip.rowHeight).filter((value) => Number.isFinite(value));
+      await client.evaluate(`(() => window.app.commands.executeCommandById("bob-ledger-tools:toggle-block-marks"))()`);
+      const offProbe = await waitFor(client, CHIPS_PROBE, (v) => v && v.gate === false, `${prefix}-chip-toggle-off`, 4000).catch((e) => ({ error: e.message, chips: [], gate: true }));
+      record(`${prefix}-chip-toggle-off`, offProbe.gate === false, `gate=${offProbe.gate}`);
+      const offShown = visibleChips(offProbe);
+      const visibleMarks = offShown.filter((chip) => chip.markVisible);
+      record(`${prefix}-chip-marks-hidden`, visibleMarks.length === 0, `visibleMarks=${visibleMarks.length}`);
+      const blockedBoxes = offShown.filter((chip) => /ChipP2 p2 target|ChipDep dep target|ChipPrj prj target|ChipBlockedDependent|chip-p2|chip-dep|chip-prj|chip-blocked/.test(String(chip.chipText || "") + String(chip.href || "")));
+      const questionVisible = blockedBoxes.length > 0 && blockedBoxes.every((chip) => String(chip.boxText || "").includes("?"));
+      record(`${prefix}-chip-question-restored`, questionVisible, JSON.stringify(blockedBoxes.map((chip) => chip.boxText)).slice(0, 180));
+      const heightsOff = offShown.map((chip) => chip.rowHeight).filter((value) => Number.isFinite(value));
+      const heightDelta = heightsOn.length && heightsOff.length
+        ? Math.max(...heightsOn.map((value, index) => Math.abs(value - (heightsOff[index] ?? value))))
+        : null;
+      record(`${prefix}-chip-row-height`, heightDelta != null && heightDelta <= 1, `delta=${heightDelta} on=${JSON.stringify(heightsOn)} off=${JSON.stringify(heightsOff)}`);
+      await client.evaluate(`(() => window.app.commands.executeCommandById("bob-ledger-tools:toggle-block-marks"))()`);
+      const onProbe = await waitFor(
+        client,
+        CHIPS_PROBE,
+        (v) => v && v.gate === true && visibleChips(v).some((chip) => chip.markVisible && chip.key === "p2"),
+        `${prefix}-chip-toggle-on`,
+        8000,
+      ).catch((e) => ({ error: e.message, chips: [], gate: false }));
+      record(
+        `${prefix}-chip-toggle-on`,
+        Boolean(onProbe.gate === true && visibleChips(onProbe).some((chip) => chip.markVisible && chip.key === "p2")),
+        JSON.stringify({ gate: onProbe.gate, error: onProbe.error, keys: visibleChips(onProbe).map((chip) => chip.key) }).slice(0, 180),
+      );
+      return p2;
+    }
+
+    await runChipSurface("live", "lp");
+    const shotChipsLiveLight = path.join(outDir, "e2e-block-marks-chips-live-light.png");
+    await openNote(client, fixture.chips, "live");
+    await sleep(500);
+    await capturePage(client, shotChipsLiveLight);
+    report.screenshots.push(shotChipsLiveLight);
+    await client.evaluate(`(() => { document.body.classList.remove("theme-light"); document.body.classList.add("theme-dark"); return true; })()`);
+    await sleep(300);
+    const shotChipsLiveDark = path.join(outDir, "e2e-block-marks-chips-live-dark.png");
+    await capturePage(client, shotChipsLiveDark);
+    report.screenshots.push(shotChipsLiveDark);
+    await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); return true; })()`);
+    await sleep(200);
+
+    await runChipSurface("preview", "reading");
+    const shotChipsReadingLight = path.join(outDir, "e2e-block-marks-chips-reading-light.png");
+    await openNote(client, fixture.chips, "preview");
+    await sleep(500);
+    await capturePage(client, shotChipsReadingLight);
+    report.screenshots.push(shotChipsReadingLight);
+    await client.evaluate(`(() => { document.body.classList.remove("theme-light"); document.body.classList.add("theme-dark"); return true; })()`);
+    await sleep(300);
+    const shotChipsReadingDark = path.join(outDir, "e2e-block-marks-chips-reading-dark.png");
+    await capturePage(client, shotChipsReadingDark);
+    report.screenshots.push(shotChipsReadingDark);
+    await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); return true; })()`);
+    await sleep(200);
 
     report.cases = cases;
     report.skipped = skipped;

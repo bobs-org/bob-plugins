@@ -72,6 +72,21 @@ class BobLedgerToolsBlocksRenderMixin {
       if (candidates.length === 0) {
         return;
       }
+      const bySection = new Map();
+      for (const candidate of candidates) {
+        const section = candidate.section;
+        const key = section && Number.isInteger(section.lineStart) && Number.isInteger(section.lineEnd)
+          ? section.lineStart + ":" + section.lineEnd
+          : "none";
+        if (!bySection.has(key)) bySection.set(key, []);
+        bySection.get(key).push(candidate);
+      }
+      for (const group of bySection.values()) {
+        for (let index = 0; index < group.length; index += 1) {
+          group[index].rowIndex = index;
+          group[index].rowCount = group.length;
+        }
+      }
       const sections = new Map();
       for (const candidate of candidates) {
         const section = candidate.section;
@@ -97,7 +112,16 @@ class BobLedgerToolsBlocksRenderMixin {
         if (ownerLine === null) {
           continue;
         }
-        const owner = (memo.tasks || []).find((task) => planTaskPath(task) === path && task.lineNumber === ownerLine) || null;
+        let owner = (memo.tasks || []).find((task) => planTaskPath(task) === path && task.lineNumber === ownerLine) || null;
+        if (!owner) {
+          const ownerId = /(?:^|\s)\^([A-Za-z0-9_-]+)\s*$/.exec(String(source.lines[ownerLine] || ""));
+          if (ownerId) {
+            const index = this.dependencyTasksIndex();
+            owner = index.get(String(path || "") + "\0" + ownerId[1])
+              || index.get(ownerId[1])
+              || null;
+          }
+        }
         if (!owner) {
           continue;
         }
@@ -118,9 +142,6 @@ class BobLedgerToolsBlocksRenderMixin {
 
   async blocksReadSectionLines(path, section) {
     try {
-      if (!section || !Number.isInteger(section.lineStart) || !Number.isInteger(section.lineEnd)) {
-        return null;
-      }
       const vault = this.app && this.app.vault;
       const file = vault && typeof vault.getAbstractFileByPath === "function" ? vault.getAbstractFileByPath(path) : null;
       if (!file || !vault || typeof vault.cachedRead !== "function") {
@@ -131,7 +152,9 @@ class BobLedgerToolsBlocksRenderMixin {
         return null;
       }
       const lines = text.split("\n");
-      return { lines, low: Math.max(0, section.lineStart), high: Math.min(lines.length - 1, section.lineEnd) };
+      const low = section && Number.isInteger(section.lineStart) ? Math.max(0, section.lineStart) : 0;
+      const high = section && Number.isInteger(section.lineEnd) ? Math.min(lines.length - 1, section.lineEnd) : lines.length - 1;
+      return { lines, low, high };
     } catch (error) {
       return null;
     }
@@ -271,15 +294,10 @@ class BobLedgerToolsBlocksRenderMixin {
     const box = doc.createElement("span");
     box.setAttribute("class", "bob-dep-chip-box");
     box.setAttribute("aria-hidden", "true");
-    let marked = null;
-    try {
-      if (chip.blockMark && typeof this.blockMarkRender === "function") {
-        marked = this.blockMarkRender(box, chip.blockMark, { decorative: true });
-      }
-    } catch (error) {
-      marked = null;
-    }
-    if (!marked) box.textContent = String(chip.symbol || "○");
+    const renderFn = typeof this.blockMarkRender === "function"
+      ? (host, model, options) => this.blockMarkRender(host, model, options)
+      : null;
+    dependencyChipBoxFill(box, chip, renderFn, doc);
     anchor.appendChild(box);
     const text = doc.createElement("span");
     text.setAttribute("class", "bob-dep-chip-text");
@@ -307,16 +325,16 @@ function blocksReadingMappedLine(lines, low, high, rowIndex, rowCount) {
     const fenced = planFencedLines(lines, low, high);
     const items = [];
     for (let index = low; index <= high; index += 1) {
-      if (!fenced.has(index) && dependencyChipHasMarker(lines[index])) {
-        items.push(index);
-      }
+      if (fenced.has(index)) continue;
+      const parsed = parseBlocksLine(lines[index]);
+      if (!parsed || (parsed.verdict !== "accept" && parsed.verdict !== "empty")) continue;
+      if (!dependencyChipLineOwnedByTask(lines, index)) continue;
+      items.push(index);
     }
     if (items.length !== rowCount || !Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= items.length) {
       return null;
     }
-    const line = items[rowIndex];
-    const parsed = parseBlocksLine(lines[line]);
-    return parsed && (parsed.verdict === "accept" || parsed.verdict === "empty") && dependencyChipLineOwnedByTask(lines, line) ? line : null;
+    return items[rowIndex];
   } catch (error) {
     return null;
   }

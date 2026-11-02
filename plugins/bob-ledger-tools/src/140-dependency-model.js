@@ -370,7 +370,7 @@ function dependencyReadingOwningTask(li, root) {
       return null;
     }
     const list = li.parentNode || null;
-    if (!list || list === root) {
+    if (!list) {
       return null;
     }
     const listTag = String((list.tagName || list.nodeName) || "").toUpperCase();
@@ -616,6 +616,21 @@ function dependencyStateFromSymbol(symbol, task) {
   }
 }
 
+// First line of a block-mark tooltip (the reason), never the
+// Ctrl+Shift teaching lines or "Also …" extras. Returns "" on bad
+// input. Never throws.
+function blockMarkReasonLine(model) {
+  try {
+    if (!model || typeof model !== "object") return "";
+    const tooltip = model.tooltip;
+    if (typeof tooltip !== "string") return "";
+    const line = tooltip.split("\n")[0];
+    return String(line || "").trim();
+  } catch (error) {
+    return "";
+  }
+}
+
 function dependencySymbolForState(state) {
   if (state === "next") {
     return "*";
@@ -788,9 +803,10 @@ function dependencyChipModel(lineText, sourcePath, lookup, blockMarkForTask) {
         if (typeof blockMarkForTask === "function") {
           try {
             chip.blockMark = blockMarkForTask(task, taskPath) || null;
-            if (chip.blockMark && chip.blockMark.tooltip) {
-              chip.tooltip += " · " + chip.blockMark.tooltip;
-              chip.ariaLabel += "; " + chip.blockMark.tooltip;
+            const reasonLine = blockMarkReasonLine(chip.blockMark);
+            if (reasonLine) {
+              chip.tooltip += " · " + reasonLine;
+              chip.ariaLabel += "; " + reasonLine;
             }
           } catch (error) {
             chip.blockMark = null;

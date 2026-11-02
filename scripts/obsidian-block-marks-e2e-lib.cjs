@@ -6,8 +6,10 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-function scratchRoot(repoRoot) {
-  return path.join(path.resolve(repoRoot), ".tmp-bm-e2e");
+function scratchRoot(_repoRoot) {
+  // Chromium's SingletonSocket is a UNIX-domain sun_path (108 bytes). Nested
+  // SASE workspaces exceed that, so keep the owned scratch under /tmp.
+  return "/tmp/bm-e2e";
 }
 
 function makeScratch(repoRoot, prefix) {

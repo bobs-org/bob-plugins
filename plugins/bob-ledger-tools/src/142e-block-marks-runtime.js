@@ -181,6 +181,13 @@ class BobLedgerToolsBlockMarksRuntimeMixin {
     } catch (error) {
       // Project-tag folds are best-effort.
     }
+    try {
+      if (typeof this.refreshDependencyChipEditors === "function") {
+        this.refreshDependencyChipEditors();
+      }
+    } catch (error) {
+      // Chip marks rebuild with the block-marks gate.
+    }
   }
 
   refreshBlockMarkEditors() {

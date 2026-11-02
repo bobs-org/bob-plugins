@@ -74,7 +74,8 @@ Module._load = originalLoad;
 const {
   parseBlocksLine, parseDependencyLine, blocksSortLinks, blocksDependentsIndex,
   blocksLastBlocker, blocksChipModel, buildBlocksChipElement, computePlanBudget,
-  BLOCKS_CHIP_TOOLTIP, BLOCKS_CHIP_EDIT_TOOLTIP,
+  BLOCKS_CHIP_TOOLTIP, BLOCKS_CHIP_EDIT_TOOLTIP, blockMarkReasonLine,
+  dependencyChipBoxFill, buildBlockMarkElement,
 } = helpers;
 
 function task({ blockId, id, dependsOn = [], description = "Task", path = "a.md", status = "TODO", symbol = " ", tags = [], scheduled, lineNumber }) {
@@ -386,6 +387,40 @@ test("Live Preview, Reading view, shared toggle, and malformed rows (BC12, BC14,
   assert.equal(malformed, null);
 });
 
+test("Reading BLOCKS chips map when the post-processor root is the nested list", async () => {
+  const owner = task({ blockId: "owner", id: "root", description: "Owner", lineNumber: 0 });
+  const dep = task({ blockId: "dep", id: "dependent", dependsOn: ["root"], description: "Dependent", lineNumber: 3 });
+  const lines = [
+    "- [ ] #task Owner ^owner",
+    "  - ⛓️ **DEPENDS ON:** [[#^x]]",
+    "  - 🧱 **BLOCKS:** [[#^dep]]",
+    "- [?] #task Dependent [dependsOn:: root] ^dep",
+  ];
+  const plugin = new LedgerToolsPlugin(makeApp([owner, dep], lines.join("\n")), {});
+  plugin.dependencyChipsEnabled = true;
+  const docNode = new MiniDoc();
+  const ownerLi = docNode.createElement("li");
+  ownerLi.appendChild(docNode.createTextNode("#task Owner"));
+  const nested = docNode.createElement("ul");
+  ownerLi.appendChild(nested);
+  const row = docNode.createElement("li");
+  row.appendChild(docNode.createTextNode("🧱 "));
+  const strong = docNode.createElement("strong");
+  strong.appendChild(docNode.createTextNode("BLOCKS:"));
+  row.appendChild(strong);
+  row.appendChild(docNode.createTextNode(" "));
+  const anchor = docNode.createElement("a");
+  anchor.classList.add("internal-link");
+  anchor.setAttribute("data-href", "#^dep");
+  anchor.setAttribute("href", "#^dep");
+  anchor.appendChild(docNode.createTextNode("Dependent"));
+  row.appendChild(anchor);
+  nested.appendChild(row);
+  await plugin.renderBlocksChipsIn(nested, { sourcePath: "a.md", getSectionInfo: () => ({ lineStart: 0, lineEnd: 3 }) });
+  assert.ok(row.classList.contains("bob-blocks-row"), "nested-list root still decorates the BLOCKS row");
+  assert.ok(anchor.classList.contains("bob-blocks-chip"));
+});
+
 test("budget link counter ignores Depends-On and BLOCKS rows (MC1/MC2)", () => {
   const content = "## Pomodoros\n\n- [ ] () — WORK\n" +
     "    - 🧱 **BLOCKS:** [[#^owner]]\n" +
@@ -398,8 +433,12 @@ test("budget link counter ignores Depends-On and BLOCKS rows (MC1/MC2)", () => {
 
 test("chip builder includes the 🔑 badge and has no edit controls", () => {
   const owner = task({ blockId: "owner", id: "root" });
-  const dep = task({ blockId: "dep", id: "dependent", dependsOn: ["root"], description: "Dependent", originalMarkdown: "- [?] #task Dependent [dependsOn:: root] ^dep" });
-  const mark = Object.freeze({ key: "dep", family: "held", tooltip: "Blocked · after prerequisite" });
+  const dep = task({ blockId: "dep", id: "dependent", dependsOn: ["root"], description: "Dependent", status: "ON_HOLD", symbol: "?", originalMarkdown: "- [?] #task Dependent [dependsOn:: root] ^dep" });
+  const mark = Object.freeze({
+    key: "dep",
+    family: "held",
+    tooltip: "Blocked · after prerequisite\nCtrl+Shift+B to edit prerequisites",
+  });
   const model = blocksChipModel("- 🧱 **BLOCKS:** [[#^dep]]", "a.md", owner, { tasks: [owner, dep] }, lookupFor([owner, dep]), undefined, (target, path) => {
     assert.equal(target, dep);
     assert.equal(path, "a.md");
@@ -409,8 +448,7 @@ test("chip builder includes the 🔑 badge and has no edit controls", () => {
   const plugin = { blockMarkRender(host, supplied, options) {
     assert.equal(supplied, mark);
     assert.equal(options.decorative, true);
-    const element = doc.createElement("span");
-    element.setAttribute("class", "bob-block-mark");
+    const element = buildBlockMarkElement(doc, supplied, options);
     host.appendChild(element);
     return element;
   } };
@@ -422,7 +460,64 @@ test("chip builder includes the 🔑 badge and has no edit controls", () => {
   assert.equal(el.getAttribute("title"), BLOCKS_CHIP_TOOLTIP);
   assert.ok(el.childNodes.some((child) => child.childNodes.some((nested) => nested.className.includes("bob-blocks-key"))));
   assert.match(findByClass(el, "bob-blocks-chip")[0].getAttribute("title"), /Blocked · after prerequisite/);
+  assert.equal(findByClass(el, "bob-blocks-chip")[0].getAttribute("title").includes("Ctrl+Shift"), false);
   assert.equal(findByClass(el, "bob-block-mark").length, 1);
+  const fallback = findByClass(el, "bob-dep-chip-fallback");
+  assert.equal(fallback.length, 1);
+  assert.equal(fallback[0].textContent, "?");
+  const box = findByClass(el, "bob-dep-chip-box")[0];
+  assert.equal(box.childNodes[0].className, "bob-block-mark");
+  assert.equal(box.childNodes[1].className, "bob-dep-chip-fallback");
+});
+
+test("BLOCKS chip box covers prj, p2, stale miniatures and a throwing render", () => {
+  const owner = task({ blockId: "owner", id: "root" });
+  const dep = task({ blockId: "dep", id: "dependent", dependsOn: ["root"], description: "Dependent", status: "ON_HOLD", symbol: "?", originalMarkdown: "- [?] #task Dependent [dependsOn:: root] ^dep" });
+  const families = [
+    { key: "prj", family: "held" },
+    { key: "p2", family: "waiting" },
+    { key: "stale", family: "stale" },
+  ];
+  for (const spec of families) {
+    const mark = Object.freeze({
+      key: spec.key,
+      family: spec.family,
+      tooltip: spec.key + " reason\nCtrl+Shift+P to reschedule",
+    });
+    const model = blocksChipModel("- 🧱 **BLOCKS:** [[#^dep]]", "a.md", owner, { tasks: [owner, dep] }, lookupFor([owner, dep]), undefined, () => mark);
+    assert.equal(blockMarkReasonLine(model.chips[0].blockMark), spec.key + " reason");
+    assert.match(model.chips[0].tooltip, new RegExp(spec.key + " reason"));
+    assert.equal(model.chips[0].tooltip.includes("Ctrl+Shift"), false);
+    const doc = new MiniDoc();
+    const el = buildBlocksChipElement(doc, model, {
+      plugin: {
+        blockMarkRender(host, supplied, options) {
+          const element = buildBlockMarkElement(doc, supplied, options);
+          host.appendChild(element);
+          return element;
+        },
+      },
+    });
+    const markEl = findByClass(el, "bob-block-mark")[0];
+    assert.equal(markEl.getAttribute("data-bob-block"), spec.key);
+    assert.equal(findByClass(el, "bob-dep-chip-fallback")[0].textContent, "?");
+  }
+
+  const doc = new MiniDoc();
+  const box = doc.createElement("span");
+  dependencyChipBoxFill(box, { symbol: "○", blockMark: null }, () => {
+    throw new Error("should not run");
+  }, doc);
+  assert.equal(box.childNodes.length, 1);
+  assert.equal(box.childNodes[0].nodeType, 3);
+  assert.equal(box.textContent, "○");
+
+  const thrown = doc.createElement("span");
+  dependencyChipBoxFill(thrown, { symbol: "?", blockMark: { key: "dep", family: "held", tooltip: "Blocked" } }, () => {
+    throw new Error("render failed");
+  }, doc);
+  assert.equal(thrown.textContent, "?");
+  assert.equal(findByClass(thrown, "bob-block-mark").length, 0);
 });
 
 test("RBC1 open owner with api.blocks shows ＋ and openStage gets the 0-based line", async () => {

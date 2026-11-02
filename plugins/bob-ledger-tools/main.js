@@ -16095,7 +16095,7 @@ function dependencyReadingOwningTask(li, root) {
       return null;
     }
     const list = li.parentNode || null;
-    if (!list || list === root) {
+    if (!list) {
       return null;
     }
     const listTag = String((list.tagName || list.nodeName) || "").toUpperCase();
@@ -16341,6 +16341,21 @@ function dependencyStateFromSymbol(symbol, task) {
   }
 }
 
+// First line of a block-mark tooltip (the reason), never the
+// Ctrl+Shift teaching lines or "Also …" extras. Returns "" on bad
+// input. Never throws.
+function blockMarkReasonLine(model) {
+  try {
+    if (!model || typeof model !== "object") return "";
+    const tooltip = model.tooltip;
+    if (typeof tooltip !== "string") return "";
+    const line = tooltip.split("\n")[0];
+    return String(line || "").trim();
+  } catch (error) {
+    return "";
+  }
+}
+
 function dependencySymbolForState(state) {
   if (state === "next") {
     return "*";
@@ -16513,9 +16528,10 @@ function dependencyChipModel(lineText, sourcePath, lookup, blockMarkForTask) {
         if (typeof blockMarkForTask === "function") {
           try {
             chip.blockMark = blockMarkForTask(task, taskPath) || null;
-            if (chip.blockMark && chip.blockMark.tooltip) {
-              chip.tooltip += " · " + chip.blockMark.tooltip;
-              chip.ariaLabel += "; " + chip.blockMark.tooltip;
+            const reasonLine = blockMarkReasonLine(chip.blockMark);
+            if (reasonLine) {
+              chip.tooltip += " · " + reasonLine;
+              chip.ariaLabel += "; " + reasonLine;
             }
           } catch (error) {
             chip.blockMark = null;
@@ -17047,9 +17063,10 @@ function blocksBuildChip(task, linkpath, blockId, sourcePath, owner, memo, isLiv
   if (typeof blockMarkForTask === "function") {
     try {
       chip.blockMark = blockMarkForTask(task, taskPath) || null;
-      if (chip.blockMark && chip.blockMark.tooltip) {
-        chip.tooltip += " · " + chip.blockMark.tooltip;
-        chip.ariaLabel += "; " + chip.blockMark.tooltip;
+      const reasonLine = blockMarkReasonLine(chip.blockMark);
+      if (reasonLine) {
+        chip.tooltip += " · " + reasonLine;
+        chip.ariaLabel += "; " + reasonLine;
       }
     } catch (error) {
       chip.blockMark = null;
@@ -17193,15 +17210,10 @@ function buildBlocksChipElement(doc, model, options) {
       const box = doc.createElement("span");
       box.setAttribute("class", "bob-dep-chip-box");
       box.setAttribute("aria-hidden", "true");
-      let marked = null;
-      try {
-        if (chip.blockMark && opts.plugin && typeof opts.plugin.blockMarkRender === "function") {
-          marked = opts.plugin.blockMarkRender(box, chip.blockMark, { decorative: true });
-        }
-      } catch (error) {
-        marked = null;
-      }
-      if (!marked) box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
+      const renderFn = opts.plugin && typeof opts.plugin.blockMarkRender === "function"
+        ? (host, model, options) => opts.plugin.blockMarkRender(host, model, options)
+        : null;
+      dependencyChipBoxFill(box, chip, renderFn, doc);
       el.appendChild(box);
       const text = doc.createElement("span");
       text.setAttribute("class", "bob-dep-chip-text");
@@ -18546,6 +18558,13 @@ class BobLedgerToolsBlockMarksRuntimeMixin {
       }
     } catch (error) {
       // Project-tag folds are best-effort.
+    }
+    try {
+      if (typeof this.refreshDependencyChipEditors === "function") {
+        this.refreshDependencyChipEditors();
+      }
+    } catch (error) {
+      // Chip marks rebuild with the block-marks gate.
     }
   }
 
@@ -25803,6 +25822,68 @@ if (WidgetType && typeof WidgetType === "function") {
   };
 }
 // ---- src/150-dependency-element.js ----
+// Fill a `.bob-dep-chip-box` with a miniature block mark plus a CSS
+// fallback glyph, or with the plain symbol when there is no mark.
+// `renderFn(host, model, { decorative })` is `blockMarkRender` or null.
+// Never throws.
+function dependencyChipBoxFill(box, chip, renderFn, doc) {
+  try {
+    if (!box) return box;
+    let documentNode = doc;
+    if (!documentNode) {
+      try {
+        documentNode = box.ownerDocument || null;
+      } catch (error) {
+        documentNode = null;
+      }
+    }
+    const symbol = String((chip && chip.symbol) || "○");
+    let marked = null;
+    try {
+      if (chip && chip.blockMark && typeof renderFn === "function") {
+        marked = renderFn(box, chip.blockMark, { decorative: true });
+      }
+    } catch (error) {
+      marked = null;
+    }
+    if (marked) {
+      try {
+        const fallback = documentNode && typeof documentNode.createElement === "function"
+          ? documentNode.createElement("span")
+          : null;
+        if (fallback && typeof fallback.setAttribute === "function") {
+          fallback.setAttribute("class", "bob-dep-chip-fallback");
+          if (documentNode && typeof documentNode.createTextNode === "function") {
+            fallback.appendChild(documentNode.createTextNode(symbol));
+          } else {
+            fallback.textContent = symbol;
+          }
+          box.appendChild(fallback);
+        }
+      } catch (error) {
+        // Fallback glyph is best-effort; the miniature already rendered.
+      }
+      return box;
+    }
+    try {
+      if (documentNode && typeof documentNode.createTextNode === "function" && typeof box.appendChild === "function") {
+        box.appendChild(documentNode.createTextNode(symbol));
+      } else {
+        box.textContent = symbol;
+      }
+    } catch (error) {
+      try {
+        box.textContent = symbol;
+      } catch (inner) {
+        // Best-effort only.
+      }
+    }
+    return box;
+  } catch (error) {
+    return box;
+  }
+}
+
 // Dependency chips: Live Preview row element. `model` is
 // `dependencyChipModel(...)`; `options` carries `{ sourcePath,
 // interactive, onOpen(linktext, event, chip), onRemove(chip, event),
@@ -25846,15 +25927,10 @@ function buildDependencyChipElement(doc, model, options) {
         box.setAttribute("class", "bob-dep-chip-box");
         box.setAttribute("data-task", state);
         box.setAttribute("aria-hidden", "true");
-        let marked = null;
-        try {
-          if (chip.blockMark && opts.plugin && typeof opts.plugin.blockMarkRender === "function") {
-            marked = opts.plugin.blockMarkRender(box, chip.blockMark, { decorative: true });
-          }
-        } catch (error) {
-          marked = null;
-        }
-        if (!marked) box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
+        const renderFn = opts.plugin && typeof opts.plugin.blockMarkRender === "function"
+          ? (host, model, options) => opts.plugin.blockMarkRender(host, model, options)
+          : null;
+        dependencyChipBoxFill(box, chip, renderFn, doc);
         el.appendChild(box);
         const textEl = doc.createElement("span");
         textEl.setAttribute("class", "bob-dep-chip-text");
@@ -71207,15 +71283,10 @@ class BobLedgerToolsDependencyRenderMixin {
                 box.setAttribute("class", "bob-dep-chip-box");
                 box.setAttribute("data-task", chip && chip.state ? chip.state : "todo");
                 box.setAttribute("aria-hidden", "true");
-                let marked = null;
-                try {
-                  if (chip && chip.blockMark && typeof this.blockMarkRender === "function") {
-                    marked = this.blockMarkRender(box, chip.blockMark, { decorative: true });
-                  }
-                } catch (error) {
-                  marked = null;
-                }
-                if (!marked) box.textContent = (chip && chip.symbol) || "○";
+                const renderFn = typeof this.blockMarkRender === "function"
+                  ? (host, model, options) => this.blockMarkRender(host, model, options)
+                  : null;
+                dependencyChipBoxFill(box, chip, renderFn, docNode);
                 const firstKids = Array.from(anchor.childNodes || []);
                 if (typeof anchor.insertBefore === "function") {
                   anchor.insertBefore(box, firstKids.length > 0 ? firstKids[0] : null);
@@ -71548,7 +71619,20 @@ class BobLedgerToolsDependencyRenderMixin {
             if (linkpath) {
               noteLabel = "↗ " + linkpath.split("/").pop();
             }
-            chip = { state, symbol: dependencySymbolForState(state), text, fullText, noteLabel, linktext: (linkpath ? linkpath : "") + "#^" + blockId, blockId, resolvedPath: taskPath || resolved.path, tooltip: fullText + " — " + (taskPath || source) + " · " + dependencyStatusName(state), ariaLabel: fullText };
+            chip = { state, symbol: dependencySymbolForState(state), text, fullText, noteLabel, linktext: (linkpath ? linkpath : "") + "#^" + blockId, blockId, resolvedPath: taskPath || resolved.path, tooltip: fullText + " — " + (taskPath || source) + " · " + dependencyStatusName(state), ariaLabel: "Dependency " + fullText + " (" + dependencyStatusName(state) + ")" };
+            try {
+              const rawLine = task && (task.originalMarkdown || task.rawLine || task.lineText);
+              if (typeof rawLine === "string" && rawLine && typeof self.blockMarkModelForLine === "function") {
+                chip.blockMark = self.blockMarkModelForLine(taskPath || source, rawLine) || null;
+                const reasonLine = blockMarkReasonLine(chip.blockMark);
+                if (reasonLine) {
+                  chip.tooltip += " · " + reasonLine;
+                  chip.ariaLabel += "; " + reasonLine;
+                }
+              }
+            } catch (error) {
+              chip.blockMark = null;
+            }
           }
           chips.push(chip);
           byAnchor.set(anchor, chip);
@@ -71968,6 +72052,21 @@ class BobLedgerToolsBlocksRenderMixin {
       if (candidates.length === 0) {
         return;
       }
+      const bySection = new Map();
+      for (const candidate of candidates) {
+        const section = candidate.section;
+        const key = section && Number.isInteger(section.lineStart) && Number.isInteger(section.lineEnd)
+          ? section.lineStart + ":" + section.lineEnd
+          : "none";
+        if (!bySection.has(key)) bySection.set(key, []);
+        bySection.get(key).push(candidate);
+      }
+      for (const group of bySection.values()) {
+        for (let index = 0; index < group.length; index += 1) {
+          group[index].rowIndex = index;
+          group[index].rowCount = group.length;
+        }
+      }
       const sections = new Map();
       for (const candidate of candidates) {
         const section = candidate.section;
@@ -71993,7 +72092,16 @@ class BobLedgerToolsBlocksRenderMixin {
         if (ownerLine === null) {
           continue;
         }
-        const owner = (memo.tasks || []).find((task) => planTaskPath(task) === path && task.lineNumber === ownerLine) || null;
+        let owner = (memo.tasks || []).find((task) => planTaskPath(task) === path && task.lineNumber === ownerLine) || null;
+        if (!owner) {
+          const ownerId = /(?:^|\s)\^([A-Za-z0-9_-]+)\s*$/.exec(String(source.lines[ownerLine] || ""));
+          if (ownerId) {
+            const index = this.dependencyTasksIndex();
+            owner = index.get(String(path || "") + "\0" + ownerId[1])
+              || index.get(ownerId[1])
+              || null;
+          }
+        }
         if (!owner) {
           continue;
         }
@@ -72014,9 +72122,6 @@ class BobLedgerToolsBlocksRenderMixin {
 
   async blocksReadSectionLines(path, section) {
     try {
-      if (!section || !Number.isInteger(section.lineStart) || !Number.isInteger(section.lineEnd)) {
-        return null;
-      }
       const vault = this.app && this.app.vault;
       const file = vault && typeof vault.getAbstractFileByPath === "function" ? vault.getAbstractFileByPath(path) : null;
       if (!file || !vault || typeof vault.cachedRead !== "function") {
@@ -72027,7 +72132,9 @@ class BobLedgerToolsBlocksRenderMixin {
         return null;
       }
       const lines = text.split("\n");
-      return { lines, low: Math.max(0, section.lineStart), high: Math.min(lines.length - 1, section.lineEnd) };
+      const low = section && Number.isInteger(section.lineStart) ? Math.max(0, section.lineStart) : 0;
+      const high = section && Number.isInteger(section.lineEnd) ? Math.min(lines.length - 1, section.lineEnd) : lines.length - 1;
+      return { lines, low, high };
     } catch (error) {
       return null;
     }
@@ -72167,15 +72274,10 @@ class BobLedgerToolsBlocksRenderMixin {
     const box = doc.createElement("span");
     box.setAttribute("class", "bob-dep-chip-box");
     box.setAttribute("aria-hidden", "true");
-    let marked = null;
-    try {
-      if (chip.blockMark && typeof this.blockMarkRender === "function") {
-        marked = this.blockMarkRender(box, chip.blockMark, { decorative: true });
-      }
-    } catch (error) {
-      marked = null;
-    }
-    if (!marked) box.textContent = String(chip.symbol || "○");
+    const renderFn = typeof this.blockMarkRender === "function"
+      ? (host, model, options) => this.blockMarkRender(host, model, options)
+      : null;
+    dependencyChipBoxFill(box, chip, renderFn, doc);
     anchor.appendChild(box);
     const text = doc.createElement("span");
     text.setAttribute("class", "bob-dep-chip-text");
@@ -72203,16 +72305,16 @@ function blocksReadingMappedLine(lines, low, high, rowIndex, rowCount) {
     const fenced = planFencedLines(lines, low, high);
     const items = [];
     for (let index = low; index <= high; index += 1) {
-      if (!fenced.has(index) && dependencyChipHasMarker(lines[index])) {
-        items.push(index);
-      }
+      if (fenced.has(index)) continue;
+      const parsed = parseBlocksLine(lines[index]);
+      if (!parsed || (parsed.verdict !== "accept" && parsed.verdict !== "empty")) continue;
+      if (!dependencyChipLineOwnedByTask(lines, index)) continue;
+      items.push(index);
     }
     if (items.length !== rowCount || !Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= items.length) {
       return null;
     }
-    const line = items[rowIndex];
-    const parsed = parseBlocksLine(lines[line]);
-    return parsed && (parsed.verdict === "accept" || parsed.verdict === "empty") && dependencyChipLineOwnedByTask(lines, line) ? line : null;
+    return items[rowIndex];
   } catch (error) {
     return null;
   }
@@ -83314,6 +83416,8 @@ module.exports.helpers = {
   dependencyStateFromSymbol,
   dependencySymbolForState,
   dependencyChipModel,
+  blockMarkReasonLine,
+  dependencyChipBoxFill,
   buildDependencyChipElement,
   ensureDependencyChipsRefresh,
   DASHBOARD_COLLECTIONS_VERSION,

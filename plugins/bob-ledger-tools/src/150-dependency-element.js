@@ -1,3 +1,65 @@
+// Fill a `.bob-dep-chip-box` with a miniature block mark plus a CSS
+// fallback glyph, or with the plain symbol when there is no mark.
+// `renderFn(host, model, { decorative })` is `blockMarkRender` or null.
+// Never throws.
+function dependencyChipBoxFill(box, chip, renderFn, doc) {
+  try {
+    if (!box) return box;
+    let documentNode = doc;
+    if (!documentNode) {
+      try {
+        documentNode = box.ownerDocument || null;
+      } catch (error) {
+        documentNode = null;
+      }
+    }
+    const symbol = String((chip && chip.symbol) || "○");
+    let marked = null;
+    try {
+      if (chip && chip.blockMark && typeof renderFn === "function") {
+        marked = renderFn(box, chip.blockMark, { decorative: true });
+      }
+    } catch (error) {
+      marked = null;
+    }
+    if (marked) {
+      try {
+        const fallback = documentNode && typeof documentNode.createElement === "function"
+          ? documentNode.createElement("span")
+          : null;
+        if (fallback && typeof fallback.setAttribute === "function") {
+          fallback.setAttribute("class", "bob-dep-chip-fallback");
+          if (documentNode && typeof documentNode.createTextNode === "function") {
+            fallback.appendChild(documentNode.createTextNode(symbol));
+          } else {
+            fallback.textContent = symbol;
+          }
+          box.appendChild(fallback);
+        }
+      } catch (error) {
+        // Fallback glyph is best-effort; the miniature already rendered.
+      }
+      return box;
+    }
+    try {
+      if (documentNode && typeof documentNode.createTextNode === "function" && typeof box.appendChild === "function") {
+        box.appendChild(documentNode.createTextNode(symbol));
+      } else {
+        box.textContent = symbol;
+      }
+    } catch (error) {
+      try {
+        box.textContent = symbol;
+      } catch (inner) {
+        // Best-effort only.
+      }
+    }
+    return box;
+  } catch (error) {
+    return box;
+  }
+}
+
 // Dependency chips: Live Preview row element. `model` is
 // `dependencyChipModel(...)`; `options` carries `{ sourcePath,
 // interactive, onOpen(linktext, event, chip), onRemove(chip, event),
@@ -41,15 +103,10 @@ function buildDependencyChipElement(doc, model, options) {
         box.setAttribute("class", "bob-dep-chip-box");
         box.setAttribute("data-task", state);
         box.setAttribute("aria-hidden", "true");
-        let marked = null;
-        try {
-          if (chip.blockMark && opts.plugin && typeof opts.plugin.blockMarkRender === "function") {
-            marked = opts.plugin.blockMarkRender(box, chip.blockMark, { decorative: true });
-          }
-        } catch (error) {
-          marked = null;
-        }
-        if (!marked) box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
+        const renderFn = opts.plugin && typeof opts.plugin.blockMarkRender === "function"
+          ? (host, model, options) => opts.plugin.blockMarkRender(host, model, options)
+          : null;
+        dependencyChipBoxFill(box, chip, renderFn, doc);
         el.appendChild(box);
         const textEl = doc.createElement("span");
         textEl.setAttribute("class", "bob-dep-chip-text");

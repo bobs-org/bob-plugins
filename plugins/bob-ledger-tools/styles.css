@@ -938,10 +938,12 @@ body.bob-fresh-marks .markdown-source-view.is-live-preview .dataview.inline-fiel
 }
 
 .bob-dep-chip-box {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-width: 1.1em;
+  overflow: visible;
   color: var(--bob-dep-accent);
   font-weight: 700;
 }
@@ -3318,6 +3320,36 @@ body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* Chip-box miniatures sit on the chip's own box. Overflow stays visible
+   so the pip is not clipped by the pill. The fallback glyph is clipped
+   while marks are on; toggling off hides the miniature through CSS so
+   the plain `?` returns immediately in both views. */
+body.bob-block-marks .bob-dep-chip {
+  overflow: visible;
+}
+
+body.bob-block-marks .bob-dep-chip-box > .bob-block-mark[data-bob-block] {
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+
+body.bob-block-marks .bob-dep-chip-box > .bob-block-mark + .bob-dep-chip-fallback {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+body:not(.bob-block-marks) .bob-dep-chip-box > .bob-block-mark {
+  display: none;
 }
 
 /* Blocked-reason marks (BM) paint: end. */

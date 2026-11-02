@@ -459,9 +459,10 @@ function blocksBuildChip(task, linkpath, blockId, sourcePath, owner, memo, isLiv
   if (typeof blockMarkForTask === "function") {
     try {
       chip.blockMark = blockMarkForTask(task, taskPath) || null;
-      if (chip.blockMark && chip.blockMark.tooltip) {
-        chip.tooltip += " · " + chip.blockMark.tooltip;
-        chip.ariaLabel += "; " + chip.blockMark.tooltip;
+      const reasonLine = blockMarkReasonLine(chip.blockMark);
+      if (reasonLine) {
+        chip.tooltip += " · " + reasonLine;
+        chip.ariaLabel += "; " + reasonLine;
       }
     } catch (error) {
       chip.blockMark = null;
@@ -605,15 +606,10 @@ function buildBlocksChipElement(doc, model, options) {
       const box = doc.createElement("span");
       box.setAttribute("class", "bob-dep-chip-box");
       box.setAttribute("aria-hidden", "true");
-      let marked = null;
-      try {
-        if (chip.blockMark && opts.plugin && typeof opts.plugin.blockMarkRender === "function") {
-          marked = opts.plugin.blockMarkRender(box, chip.blockMark, { decorative: true });
-        }
-      } catch (error) {
-        marked = null;
-      }
-      if (!marked) box.appendChild(doc.createTextNode(String(chip.symbol || "○")));
+      const renderFn = opts.plugin && typeof opts.plugin.blockMarkRender === "function"
+        ? (host, model, options) => opts.plugin.blockMarkRender(host, model, options)
+        : null;
+      dependencyChipBoxFill(box, chip, renderFn, doc);
       el.appendChild(box);
       const text = doc.createElement("span");
       text.setAttribute("class", "bob-dep-chip-text");

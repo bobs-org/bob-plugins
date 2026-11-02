@@ -312,6 +312,18 @@ test("capture-phase tooltip attaches to the existing checkbox and restores owned
   assert.ok(extension);
 });
 
+test("runBlockMarksRefresh rebuilds dependency chip editors", () => {
+  const { plugin } = makePlugin();
+  const calls = [];
+  plugin.refreshBlockMarkEditors = () => { calls.push("editors"); };
+  plugin.refreshPriorityMarkEditors = () => { calls.push("priority"); };
+  plugin.sweepBlockMarksReading = () => { calls.push("reading"); };
+  plugin.sweepBlockMarkFoldsReading = () => { calls.push("folds"); };
+  plugin.refreshDependencyChipEditors = () => { calls.push("chips"); };
+  plugin.runBlockMarksRefresh(true);
+  assert.deepEqual(calls, ["editors", "priority", "reading", "folds", "chips"]);
+});
+
 test("toggle is reversible, refreshes views, rerenders Tasks, and shows exact Notices", () => {
   StubNotice.messages.length = 0;
   const { plugin, events } = makePlugin();

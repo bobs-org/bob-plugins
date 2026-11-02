@@ -286,6 +286,18 @@ test("paint covers miniature, Live Preview, and reading rows under one gate", ()
   );
 });
 
+test("chip-box fallback rules are body-gated and never !important", () => {
+  const section = sectionCss();
+  const hideFallback = /body\.bob-block-marks\s+\.bob-dep-chip-box\s*>\s*\.bob-block-mark\s*\+\s*\.bob-dep-chip-fallback\s*\{[^}]+\}/.exec(section);
+  const hideMark = /body:not\(\.bob-block-marks\)\s+\.bob-dep-chip-box\s*>\s*\.bob-block-mark\s*\{[^}]+\}/.exec(section);
+  assert.ok(hideFallback, "marks-on clips the chip fallback glyph");
+  assert.ok(hideMark, "marks-off hides the miniature so the fallback `?` shows");
+  assert.equal(hideFallback[0].includes("!important"), false);
+  assert.equal(hideMark[0].includes("!important"), false);
+  assert.ok(hideFallback[0].includes("clip-path") || hideFallback[0].includes("display: none"));
+  assert.ok(hideMark[0].includes("display: none"));
+});
+
 test("every paint rule except the token block and motion query carries the gate", () => {
   const section = sectionCss();
   const lines = section.split("\n");

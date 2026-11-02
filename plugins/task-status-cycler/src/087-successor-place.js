@@ -659,7 +659,8 @@ function successorNoticeTextBase(model = {}) {
 }
 
 function successorNoticeText(model = {}) {
-  return successorKeepMovingNoticeText(model, successorNoticeTextBase);
+  const base = successorKeepMovingNoticeText(model, successorNoticeTextBase);
+  return successorRelationNoticeText(model, base);
 }
 
 // --- Loaders ---

@@ -37,6 +37,32 @@ class TaskStatusCyclerSuccessorProjectMixin {
       const cancelledClose = active.closeKind === "cancelled";
       const pickerApi = cancelledClose ? null : getSuccessorPickerApi(this.app);
       const pickerV2 = !!(pickerApi && Number(pickerApi.version) >= 2);
+      const relationRuntime = this.prepareSuccessorRelationRuntime(
+        active,
+        cancelledClose,
+        pickerApi,
+      );
+      const linkUnblocked = relationRuntime.linkUnblocked;
+      const relationPreflight = this.preflightSuccessorRelationIndex(
+        identities,
+        relationRuntime,
+      );
+      const relationUnavailableGate = () => {
+        const result = {
+          ...quietGate,
+          relation_successors: [],
+          relation_held: [],
+          relation_check: "unavailable",
+          relation_labels: (relationRuntime.labels.keys || []).map((key) =>
+          relationRuntime.labels.labels && relationRuntime.labels.labels[key]
+            ? relationRuntime.labels.labels[key]
+            : key,
+          ),
+          relation_picker_opened: false,
+        };
+        delete result.gated;
+        return result;
+      };
       let today = null;
       try {
         today = typeof active.today === "string" && active.today
@@ -103,20 +129,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
         today,
         notePaths,
       );
-      if (
-        closedTaskIds.size === 0 && pullInPaths.length === 0 &&
-        pullInParentCandidates.length === 0 && keepMovingPotentialPaths.length === 0
-      ) {
+      const hasExistingCandidates = closedTaskIds.size > 0 || pullInPaths.length > 0 ||
+        pullInParentCandidates.length > 0 || keepMovingPotentialPaths.length > 0;
+      if (!hasExistingCandidates && relationPreflight.state !== "candidates" &&
+          relationPreflight.state !== "unavailable") {
         return quietGate;
       }
-      let linkUnblocked = true;
-      try {
-        linkUnblocked = loadLinkUnblocked() !== false;
-      } catch (error) {
-        linkUnblocked = true;
-      }
-      if (cancelledClose) {
-        linkUnblocked = false;
+      if (!hasExistingCandidates && relationPreflight.state === "unavailable") {
+        return relationUnavailableGate();
       }
       let dailyPath = typeof active.dailyPath === "string" && active.dailyPath
         ? active.dailyPath
@@ -180,8 +200,15 @@ class TaskStatusCyclerSuccessorProjectMixin {
         needsDependents = true;
       }
       if (closedTaskIds.size === 0 && pullInPaths.length === 0 &&
-          pullInParentCandidates.length === 0 && keepMovingCandidatePaths.length === 0) {
+          pullInParentCandidates.length === 0 && keepMovingCandidatePaths.length === 0 &&
+          relationPreflight.state !== "candidates" &&
+          relationPreflight.state !== "unavailable") {
         return quietGate;
+      }
+      if (closedTaskIds.size === 0 && pullInPaths.length === 0 &&
+          pullInParentCandidates.length === 0 && keepMovingCandidatePaths.length === 0 &&
+          relationPreflight.state === "unavailable") {
+        return relationUnavailableGate();
       }
       let tasks = [];
       let noteTexts = new Map();
@@ -236,6 +263,32 @@ class TaskStatusCyclerSuccessorProjectMixin {
           noteTexts.set(path, text);
         }
       }
+      let relationPlanOptions = {};
+      let relationNotes = null;
+      if (relationPreflight.state === "unavailable") {
+        relationPlanOptions = {
+          relationSuccessorLabels: relationRuntime.labels,
+          navSuccessorsVersion: 3,
+          relationIndexReady: false,
+        };
+      } else if (relationPreflight.state === "candidates") {
+        relationNotes = await this.readSuccessorRelationInputs({
+          runtime: relationRuntime,
+          preflight: relationPreflight,
+          active,
+          cache,
+          noteTexts,
+          identities,
+          baselineDay: dailyBefore,
+          currentDay: dailyAfter,
+          dailyPath: dailyPath || "",
+          closingEntry: planClosingEntry,
+        });
+        relationPlanOptions = relationNotes.options || {};
+        for (const [path, text] of relationNotes.noteTexts || []) {
+          if (typeof text === "string") noteTexts.set(path, text);
+        }
+      }
       let basenameCounts = countSuccessorBasenames(
         this.app,
         tasks,
@@ -272,7 +325,17 @@ class TaskStatusCyclerSuccessorProjectMixin {
         noteTextsObject[path] = text;
       }
       let keepMovingAnchorHints = new Map();
-      const planFirst = (selection, dailyB, dailyA, tasksForPlan, notesObj, closingForPlan, destinations) => {
+      const planFirst = (
+        selection,
+        dailyB,
+        dailyA,
+        tasksForPlan,
+        notesObj,
+        closingForPlan,
+        destinations,
+        relationOptions = relationPlanOptions,
+        linkUnblockedForPlan = linkUnblocked,
+      ) => {
         try {
           return planSuccessors({
             closed: identities,
@@ -285,7 +348,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
             stampLine: stampLineForPass,
             selection,
             destinations,
-            linkUnblocked,
+            linkUnblocked: linkUnblockedForPlan,
             cancelled: cancelledClose,
             isInbox: getSuccessorIsInbox(this.app),
             basenameCounts,
@@ -299,6 +362,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
             keepMovingCurrentDay: dailyA,
             dependencySnapshotAvailable,
             keepMovingAnchorHints,
+            ...relationOptions,
             app: this.app,
           });
         } catch (error) {
@@ -320,6 +384,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       // apply recovery with no picks (plain "not pulled in" fallback).
       const selectableOffers = Array.isArray(plan.offers) ? plan.offers : [];
       let selectedKeys = [];
+      let pickerOpened = false;
       let originalOfferByKey = new Map();
       try {
         for (const offer of selectableOffers) {
@@ -348,12 +413,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
             stillBlocked: stillMuted,
             foldedByProject: folded,
             headers,
+            relationHeld: Array.isArray(plan.relation_held) ? plan.relation_held : [],
           });
         } catch (error) {
           model = null;
         }
         let picks = [];
         if (model && Array.isArray(model.groups) && model.groups.some((group) => Array.isArray(group.rows) && group.rows.some((row) => row.selectable))) {
+          pickerOpened = true;
           try {
             const result = await pickerApi.pick(model);
             picks = normalizeSuccessorPicks(result);
@@ -437,7 +504,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
               freshNoteTexts.set(path, text);
             }
           }
-          const freshNotesObj = {};
+          let freshNotesObj = {};
           for (const [path, text] of freshNoteTexts) {
             freshNotesObj[path] = text;
           }
@@ -523,9 +590,58 @@ class TaskStatusCyclerSuccessorProjectMixin {
             freshBefore = dailyFreshLines.slice();
             freshBefore[freshClosing] = hint.lineText;
           }
+          const freshRelationRuntime = this.prepareSuccessorRelationRuntime(
+            active,
+            cancelledClose,
+            cancelledClose ? null : getSuccessorPickerApi(this.app),
+          );
+          const freshRelationPreflight = this.preflightSuccessorRelationIndex(
+            identities,
+            freshRelationRuntime,
+          );
+          let freshRelationOptions = {};
+          if (freshRelationPreflight.state === "unavailable") {
+            freshRelationOptions = {
+              relationSuccessorLabels: freshRelationRuntime.labels,
+              navSuccessorsVersion: 3,
+              relationIndexReady: false,
+            };
+          } else if (freshRelationPreflight.state === "candidates") {
+            const freshRelation = await this.readSuccessorRelationInputs({
+              runtime: freshRelationRuntime,
+              preflight: freshRelationPreflight,
+              active,
+              cache,
+              noteTexts: freshNoteTexts,
+              identities,
+              baselineDay: freshBefore,
+              currentDay: dailyFreshLines,
+              dailyPath: dailyPath || "",
+              closingEntry: freshClosing,
+            });
+            freshRelationOptions = freshRelation.options || {};
+            for (const [path, text] of freshRelation.noteTexts || []) {
+              if (typeof text === "string") {
+                freshNoteTexts.set(path, text);
+                affected.add(path);
+              }
+            }
+          }
+          freshNotesObj = {};
+          for (const [path, text] of freshNoteTexts) freshNotesObj[path] = text;
           const freshBasenames = countSuccessorBasenames(this.app, freshTasks, identities, dailyPath, freshNoteTexts);
           basenameCounts = freshBasenames;
-          let replanned = planFirst(selectedKeys, freshBefore, dailyFreshLines, freshTasks, freshNotesObj, freshClosing, selectedDestinations);
+          let replanned = planFirst(
+            selectedKeys,
+            freshBefore,
+            dailyFreshLines,
+            freshTasks,
+            freshNotesObj,
+            freshClosing,
+            selectedDestinations,
+            freshRelationOptions,
+            freshRelationRuntime.linkUnblocked,
+          );
           if (!replanned) {
             replanned = plan;
             selectedKeys = [];
@@ -728,6 +844,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       } catch (error) {
         // Best effort: a missed receipt only loses the take-back shortcut.
       }
+      plan.relation_picker_opened = pickerOpened;
       const predecessors = identities.map((identity) => ({
         note_path: String(identity.path || ""),
         block_id: identity.blockId ? String(identity.blockId) : "",
@@ -758,6 +875,16 @@ class TaskStatusCyclerSuccessorProjectMixin {
         unblocked: plan.unblocked,
         keep_moving: plan.keep_moving || [],
         still_blocked: plan.still_blocked,
+        ...(Array.isArray(plan.relation_successors)
+          ? { relation_successors: plan.relation_successors }
+          : {}),
+        ...(Array.isArray(plan.relation_held)
+          ? { relation_held: plan.relation_held }
+          : {}),
+        ...(plan.relation_check ? { relation_check: plan.relation_check } : {}),
+        ...(Array.isArray(plan.relation_labels)
+          ? { relation_labels: plan.relation_labels }
+          : {}),
         daily_path: dailyPath || "",
         daily_content: dailyContent,
         failure: noteOutcome.failed > 0

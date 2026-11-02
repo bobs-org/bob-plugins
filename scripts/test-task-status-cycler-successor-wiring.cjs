@@ -1177,3 +1177,286 @@ test("successor apply recovers project residents without ledger v12", async () =
     1,
   );
 });
+
+let relationConfigSequence = 0;
+
+function relationConfig(raw = "") {
+  relationConfigSequence += 1;
+  const configPath = `/tmp/bob-cycler-relation-${relationConfigSequence}.yml`;
+  return {
+    configPath,
+    env: { HOME: "/tmp", XDG_CONFIG_HOME: "/tmp" },
+    fsModule: {
+      statSync: () => ({ mtimeMs: relationConfigSequence, size: raw.length }),
+      readFileSync: () => raw,
+    },
+    parseYaml: () => ({ relations: { successor_labels: ["starts after"] } }),
+  };
+}
+
+function installRelationRuntime(plugin, seen, pickOverride = null, noticeVersion = 3) {
+  installNavStub(plugin, seen, pickOverride);
+  const nav = plugin.app.plugins.plugins["bob-navigation-hotkeys"].api;
+  nav.successors.version = 3;
+  nav.notice.version = noticeVersion;
+}
+
+function relationTasksFromSources(sources) {
+  return helpers.tasksFromDocuments(
+    Object.entries(sources).map(([path, text]) => ({ path, text })),
+  ).map((task) => ({
+    path: task.path,
+    lineNumber: task.line,
+    status: task.status,
+    originalMarkdown: task.lineText,
+    description: task.text,
+    blockId: task.blockId,
+    id: task.taskId,
+    dependsOn: task.dependsOn,
+  }));
+}
+
+function makeRelationCloseFixture({ sourceText, rawConfig = "", picker = null, noticeVersion = 3 } = {}) {
+  const closed = "- [x] #task Finish prerequisite [id:: done__finish] ^finish";
+  const source = sourceText || [
+    "- [ ] #task Write follow-up ^followup",
+    "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+  ].join("\n");
+  const day = [
+    `# ${TODAY}`,
+    "",
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[done#^finish]]",
+    "- [ ] () — WRITE",
+  ].join("\n");
+  const sources = {
+    "done.md": closed,
+    "source.md": source,
+    [DAILY_PATH]: day,
+  };
+  const harness = createInMemoryObsidianApp(sources);
+  const editor = createTextEditor(day, { line: 4, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  const seen = [];
+  installRelationRuntime(plugin, seen, picker, noticeVersion);
+  installTasksStub(plugin, relationTasksFromSources(sources));
+  const relationIndex = helpers.buildFakeRelationIndex(sources);
+  plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex = {
+    version: 2,
+    ...relationIndex,
+  };
+  return {
+    closed: { path: "done.md", blockId: "finish", taskId: "done__finish", text: "Finish prerequisite" },
+    config: relationConfig(rawConfig),
+    day,
+    editor,
+    harness,
+    plugin,
+    seen,
+    source,
+  };
+}
+
+test("managed Done offers an idless relation source through picker and records a reopen receipt", async () => {
+  notices.length = 0;
+  const fixture = makeRelationCloseFixture();
+  const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+    editor: fixture.editor,
+    activePath: DAILY_PATH,
+    dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+
+  assert.ok(result.successors);
+  assert.equal(result.successors.relation_check, "checked");
+  assert.equal(result.successors.relation_successors.length, 1);
+  const row = result.successors.relation_successors[0];
+  assert.equal(row.block_id, "followup");
+  assert.ok(row.link, "the selected relation is placed in the daily ledger");
+  assert.match(fixture.harness.getSource("source.md"), /^- \[\*\] #task Write follow-up \^followup/m);
+  assert.equal(fixture.seen.length, 1);
+  assert.equal(fixture.seen[0].relation_successors.length, 1);
+  assert.ok(fixture.plugin.successorReopenReceipts().has("done.md#^finish"));
+
+  const receiptResult = await fixture.plugin.consumeSuccessorReopenReceipt(
+    [fixture.closed],
+    { activePath: DAILY_PATH, editor: fixture.editor },
+  );
+  assert.ok(receiptResult);
+  assert.match(fixture.harness.getSource("source.md"), /^- \[ \] #task Write follow-up \^followup/m);
+  assert.doesNotMatch(fixture.editor.getValue(), /\[\[source#\^followup\]\]/);
+});
+
+test("managed Done composes ordinary and relation successors in one v3 picker", async () => {
+  notices.length = 0;
+  const sourceText = [
+    "- [ ] #task Write follow-up ^followup",
+    "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+    "- [?] #task Retry the deployment [dependsOn:: done__finish] [id:: retry__deploy] ^deploy",
+  ].join("\n");
+  const fixture = makeRelationCloseFixture({ sourceText });
+  const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+    editor: fixture.editor,
+    activePath: DAILY_PATH,
+    dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+
+  assert.ok(result.successors);
+  assert.equal(result.successors.relation_successors.length, 1);
+  assert.equal(result.successors.unblocked.length, 1);
+  assert.equal(fixture.seen.length, 1);
+  assert.ok(fixture.seen[0].relation_successors.length === 1);
+  assert.match(fixture.harness.getSource("source.md"), /^- \[\*\] #task Write follow-up/m);
+  assert.match(fixture.harness.getSource("source.md"), /^- \[\*\] #task Retry the deployment/m);
+});
+
+test("a positive relation-index candidate is revalidated against the open editor after picker", async () => {
+  notices.length = 0;
+  const fixture = makeRelationCloseFixture();
+  const sourceEditor = createTextEditor(fixture.source);
+  fixture.harness.app.workspace = {
+    getLeavesOfType: () => [{ view: { file: { path: "source.md" }, editor: sourceEditor } }],
+  };
+  fixture.plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.successors.pick = async (model) => {
+    assert.equal(model.groups.some((group) => group.group === "relation"), true);
+    sourceEditor.replaceRange(
+      "  - unrelated note",
+      { line: 1, ch: 0 },
+      { line: 1, ch: sourceEditor.getLine(1).length },
+    );
+    return { picks: model.groups.flatMap((group) => group.rows || [])
+      .filter((row) => row.selectable).map((row) => ({ key: row.key })) };
+  };
+
+  const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+    editor: fixture.editor,
+    activePath: DAILY_PATH,
+    dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+
+  assert.ok(result.successors);
+  assert.equal((result.successors.relation_successors || []).length, 0);
+  assert.match(sourceEditor.getLine(0), /^- \[ \] #task Write follow-up/);
+  assert.doesNotMatch(fixture.editor.getValue(), /\[\[source#\^followup\]\]/);
+  assert.equal(fixture.plugin.successorReopenReceipts().has("done.md#^finish"), false);
+});
+
+test("no incoming relation edge performs no extra relation-source note read", async () => {
+  notices.length = 0;
+  const fixture = makeRelationCloseFixture({
+    sourceText: "- [ ] #task Unrelated follow-up ^followup",
+  });
+  const counts = countVaultReads(fixture.harness);
+  await fixture.plugin.planAndApplySuccessorsNow([fixture.closed], {
+    dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+
+  assert.equal(counts.cachedRead.includes("source.md"), false);
+  assert.equal(counts.read.includes("source.md"), false);
+});
+
+test("missing or malformed relation index reports uncertainty and falls back below notice v3", async () => {
+  for (const state of ["missing", "malformed", "unready"]) {
+    notices.length = 0;
+    const fixture = makeRelationCloseFixture({ noticeVersion: 2 });
+    if (state === "malformed") {
+      fixture.plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex = {
+        version: 2,
+        ready: () => true,
+        generation: 1,
+        incoming: () => null,
+        outgoing: () => [],
+      };
+    } else if (state === "unready") {
+      fixture.plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex = {
+        version: 2,
+        ready: () => false,
+        generation: 1,
+        incoming: () => [],
+        outgoing: () => [],
+      };
+    } else {
+      delete fixture.plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex;
+    }
+    const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+      editor: fixture.editor,
+      activePath: DAILY_PATH,
+      dailyPath: DAILY_PATH,
+      relationConfig: fixture.config,
+    });
+    assert.equal(result.successors.relation_check, "unavailable");
+    assert.equal(fixture.seen.length, 0, "v2 notice API is not given a v3 relation model");
+    assert.match(notices.join("\n"), /Couldn't check starts after links|Couldn't check your links/);
+  }
+});
+
+test("an edited successor line keeps its edits when the reopen receipt is consumed", async () => {
+  notices.length = 0;
+  const fixture = makeRelationCloseFixture();
+  await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+    editor: fixture.editor,
+    activePath: DAILY_PATH,
+    dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+  const edited = fixture.harness.getSource("source.md").replace(
+    "Write follow-up ^followup",
+    "Write follow-up after review ^followup",
+  );
+  await fixture.harness.app.vault.modify(
+    fixture.harness.app.vault.getAbstractFileByPath("source.md"),
+    edited,
+  );
+
+  const consumed = await fixture.plugin.consumeSuccessorReopenReceipt(
+    [fixture.closed],
+    { activePath: DAILY_PATH, editor: fixture.editor },
+  );
+
+  assert.ok(consumed);
+  assert.match(fixture.harness.getSource("source.md"), /^- \[\*\] #task Write follow-up after review/m);
+  assert.doesNotMatch(fixture.editor.getValue(), /\[\[source#\^followup\]\]/);
+});
+
+test("relation close honors the link_unblocked kill switch and cancellation without querying the index", async () => {
+  for (const closeKind of ["done", "cancelled"]) {
+    notices.length = 0;
+    const fixture = makeRelationCloseFixture({ rawConfig: "plan:\n  link_unblocked: false\n" });
+    let queried = 0;
+    const index = fixture.plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex;
+    fixture.plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex = {
+      ...index,
+      incoming: (...args) => { queried += 1; return index.incoming(...args); },
+    };
+    await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+      editor: fixture.editor,
+      activePath: DAILY_PATH,
+      dailyPath: DAILY_PATH,
+      closeKind,
+      relationConfig: fixture.config,
+    });
+    assert.equal(queried, 0);
+    assert.doesNotMatch(fixture.harness.getSource("source.md"), /^- \[\*\] #task Write follow-up/m);
+  }
+
+  const oldPicker = makeRelationCloseFixture();
+  oldPicker.plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.successors.version = 2;
+  let queried = 0;
+  const index = oldPicker.plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex;
+  oldPicker.plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex = {
+    ...index,
+    incoming: (...args) => { queried += 1; return index.incoming(...args); },
+  };
+  await oldPicker.plugin.finalizeClosedTasks([oldPicker.closed], {
+    editor: oldPicker.editor,
+    activePath: DAILY_PATH,
+    dailyPath: DAILY_PATH,
+    relationConfig: oldPicker.config,
+  });
+  assert.equal(queried, 0, "relationIndex is not consulted unless picker API v3 is available");
+  assert.doesNotMatch(oldPicker.harness.getSource("source.md"), /^- \[\*\] #task Write follow-up/m);
+});

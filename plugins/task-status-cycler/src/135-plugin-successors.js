@@ -717,11 +717,23 @@ class TaskStatusCyclerSuccessorsMixin {
       if (active.successorNoticeTarget === "return") {
         return text;
       }
+      const relationBearing = !!(model && typeof model === "object" && (
+        Array.isArray(model.relation_successors) ||
+        Array.isArray(model.relation_held) ||
+        model.relation_check === "unavailable"
+      ));
+      let noticeModel = model;
+      if (relationBearing) {
+        noticeModel = { ...model };
+        if (model.relation_picker_opened === true) delete noticeModel.relation_held;
+        delete noticeModel.relation_picker_opened;
+      }
       const api = this.getNavNoticeApi();
       const hasKeepMoving = Array.isArray(model.keep_moving) && model.keep_moving.length > 0;
-      if (api && (!hasKeepMoving || Number(api.version) >= 2)) {
+      const relationNoticeCompatible = !relationBearing || Number(api && api.version) >= 3;
+      if (api && relationNoticeCompatible && (!hasKeepMoving || Number(api.version) >= 2)) {
         try {
-          const shown = api.showUnblocked(model);
+          const shown = api.showUnblocked(noticeModel);
           if (shown !== false) {
             return text;
           }

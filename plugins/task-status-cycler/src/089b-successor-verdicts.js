@@ -837,6 +837,9 @@ function applySuccessorVerdicts(context) {
     }
     if (relationCheckInput === "unavailable") result.relation_check = "unavailable";
     else if (relation_successors.length > 0 || fullHeld.length > 0) result.relation_check = "checked";
+    if (relationCheckInput === "unavailable" && Array.isArray(context.relationLabels) && context.relationLabels.length > 0) {
+      result.relation_labels = context.relationLabels.map((label) => String(label));
+    }
     if (result.relation_check && !result.relation_successors && !result.relation_held && relation_successors.length === 0 && relationCheckInput !== "unavailable") {
       delete result.relation_held;
       delete result.relation_check;

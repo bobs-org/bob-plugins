@@ -648,6 +648,13 @@ function planSuccessors(options = {}) {
       relationHeld,
       relationCheck,
       relationScan,
+      relationLabels: Array.isArray(options.relationSuccessorLabels && options.relationSuccessorLabels.keys)
+        ? options.relationSuccessorLabels.keys.map((key) =>
+          options.relationSuccessorLabels.labels && options.relationSuccessorLabels.labels[key]
+            ? options.relationSuccessorLabels.labels[key]
+            : key,
+        )
+        : [],
     });
   };
   // GATE: no `[id::]` in C and no pull-in candidate → nothing, unless

@@ -331,9 +331,10 @@ class BobLedgerToolsStatsChartMixin {
         container.appendChild(label);
       }
     }
+    const spoken = statsChartClockSpeech(metric, point, report);
     const pointDisplay = typeof point.display === "string" && point.display ? point.display : "–";
     container.appendChild(statsEl(doc, "div", { class: "bob-stats-day-value" },
-      point.date + " · " + metric.label + ": " + pointDisplay));
+      spoken.speech || (point.date + " · " + metric.label + ": " + pointDisplay)));
     const quality = statsChartQualityText(point);
     if (quality) {
       container.appendChild(statsEl(doc, "div", { class: "bob-stats-day-quality" }, quality));
@@ -384,9 +385,12 @@ class BobLedgerToolsStatsChartMixin {
   }
 
   statsChartDrawMetric(doc, view, report, metric) {
+    const clock = statsMetricEffectiveClock(metric, report);
     const section = statsEl(doc, "section", {
-      class: "bob-stats-chart-section bob-stats-hue-" + statsChartMetricColor(metric),
+      class: "bob-stats-chart-section bob-stats-hue-" + statsChartMetricColor(metric) +
+        (clock === "off-clock" ? " bob-stats-chart-clock-off" : clock === "total" ? " bob-stats-chart-clock-total" : ""),
       "aria-label": metric.label + " focus chart",
+      "data-stats-clock": clock || undefined,
     });
     const header = statsEl(doc, "div", { class: "bob-stats-chart-header" });
     header.appendChild(statsEl(doc, "div", { class: "bob-stats-chart-title" }, metric.label));
@@ -432,7 +436,10 @@ class BobLedgerToolsStatsChartMixin {
     const points = Array.isArray(metric.points) ? metric.points : [];
     const wrap = statsEl(doc, "div", { class: "bob-stats-chart-wrap", "data-stats-chart": "true" });
     if (points.length === 0) {
-      wrap.appendChild(statsEl(doc, "div", { class: "bob-stats-chart-empty" }, "No chart points are available for this metric."));
+      const empty = statsClockWindowIsEmpty(metric, report)
+        ? "No off-clock time in this window"
+        : "No chart points are available for this metric.";
+      wrap.appendChild(statsEl(doc, "div", { class: "bob-stats-chart-empty" }, empty));
       section.appendChild(wrap);
       this.statsRegisterChartResize(view, wrap);
       return section;
@@ -562,22 +569,10 @@ class BobLedgerToolsStatsChartMixin {
         svg.appendChild(statsSvgEl(doc, "text", {
           x: slot.center, y: baseline - 5, "text-anchor": "middle", class: "bob-stats-chart-null-label",
         }, "–"));
-      } else if (point.value === 0) {
-        svg.appendChild(statsSvgEl(doc, "line", {
-          x1: slot.center - Math.max(1, slot.width / 2),
-          x2: slot.center + Math.max(1, slot.width / 2),
-          y1: baseline,
-          y2: baseline,
-          class: "bob-stats-chart-zero bob-stats-svg-hue-" + color + (point.provisional ? " bob-stats-chart-today" : ""),
-          "stroke-width": 2,
-        }));
       } else {
-        const path = statsRoundedTerminalBarPath(slot.x, baseline, valueY, Math.max(1, slot.width), 4);
-        svg.appendChild(statsSvgEl(doc, "path", {
-          d: path,
-          class: "bob-stats-chart-bar bob-stats-svg-hue-" + color + (point.provisional ? " bob-stats-chart-today" : ""),
-          "data-partial": point.partial === true ? "true" : null,
-        }));
+        for (const spec of statsChartValueMarkSpecs(slot, point, metric, report, baseline, domain, margin, plotHeight, color)) {
+          svg.appendChild(statsSvgEl(doc, spec.tag, spec.attrs));
+        }
       }
       const hit = statsSvgEl(doc, "rect", {
         x: slot.slotStart,
@@ -693,6 +688,7 @@ class BobLedgerToolsStatsChartMixin {
     }
     section.appendChild(legend);
     const notes = [];
+    if (statsClockWindowIsEmpty(metric, report)) notes.push("No off-clock time in this window");
     if (points.some((point) => point && point.provisional === true)) notes.push("Today is provisional.");
     if (points.some((point) => point && point.partial === true)) notes.push("Partial buckets cover only part of a week or month.");
     if (metric.since) notes.push("Tracking since " + metric.since + ".");

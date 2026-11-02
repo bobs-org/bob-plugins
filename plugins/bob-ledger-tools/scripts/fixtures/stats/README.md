@@ -20,8 +20,10 @@ version, bob-cli version/revision, clock, and requested range; its source is the
 committed golden vault. The renderer is `bob-ledger-tools@1.84.0`. The canonical
 golden has no off-clock adoption evidence, so it also checks the new renderer's
 clockless compatibility path. `synthetic-clocks.json` contains consistent
-Worked, Off-clock, and Total reports; `stats-clock-fixtures.cjs` is the reusable
-constructor for later Stats rendering tests.
+Worked, Off-clock, and Total reports plus empty Off-clock, pre-adoption
+`not_tracked`, count-Total, and pinned `family_time` cases;
+`stats-clock-fixtures.cjs` is the reusable constructor for later Stats
+rendering tests.
 
 The `synthetic-*.json` files are explicitly synthetic **presentation** fixtures. They
 cover week/month groups, signed values, populated rolling medians and prior ticks, long
@@ -36,7 +38,9 @@ config, pin, exempt, unconfigured, and `(unnamed)` hues plus long hour
 displays. These synthetic fixtures must never be treated as vault results.
 `synthetic-clocks.json` is the internally consistent exception: its Worked,
 Off-clock, and Total reports keep every point and part split aligned, and their
-summary totals exclude the provisional day.
+summary totals exclude the provisional day. Extra keys (`emptyOffClock`,
+`adoptionGap`, `countTotal`, `pinnedOffClock`) reuse that constructor for
+empty-window, adoption-gap, count, and pinned-metric preview cases.
 
 Generate the standalone browser page and screenshot matrix from the linked bob-plugins
 checkout with:

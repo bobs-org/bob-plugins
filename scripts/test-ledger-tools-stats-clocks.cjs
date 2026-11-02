@@ -3,7 +3,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const { LedgerToolsPlugin, makeFreshnessApp, withMissingConfig } = require("./ledger-tools-harness.cjs");
-const { CLOCKS, clockFixtureReport } = require("./stats-clock-fixtures.cjs");
+const {
+  CLOCKS,
+  clockFixtureReport,
+  clockEmptyOffClockReport,
+  clockAdoptionGapReport,
+  clockCountTotalReport,
+  clockPinnedOffClockReport,
+} = require("./stats-clock-fixtures.cjs");
 
 const {
   STATS_CLOCK_VALUES,
@@ -168,6 +175,10 @@ test("shared synthetic clock reports keep scalar, part, and summary splits consi
       assert.equal(metric.summary.total_clock_breakdown.worked.value + metric.summary.total_clock_breakdown.off_clock.value, summary.value);
     }
   }
+  assert.deepEqual(checkedIn.emptyOffClock, clockEmptyOffClockReport());
+  assert.deepEqual(checkedIn.adoptionGap, clockAdoptionGapReport());
+  assert.deepEqual(checkedIn.countTotal, clockCountTotalReport());
+  assert.deepEqual(checkedIn.pinnedOffClock, clockPinnedOffClockReport());
 });
 
 test("clock flags add only nondefault lenses and leave the Day strip key unchanged", async () => {

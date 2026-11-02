@@ -190,10 +190,18 @@ async function main() {
     lanes: readJson(path.join(fixturesDir, "synthetic-lanes.json")),
     empty: readJson(path.join(fixturesDir, "synthetic-empty.json")),
     allNull: readJson(path.join(fixturesDir, "synthetic-all-null.json")),
-    clocks: clockReports,
+    clocks: {
+      worked: clockReports.worked,
+      "off-clock": clockReports["off-clock"],
+      total: clockReports.total,
+    },
     clockWorked: clockReports.worked,
     clockOffClock: clockReports["off-clock"],
     clockTotal: clockReports.total,
+    clockEmpty: clockReports.emptyOffClock,
+    clockAdoption: clockReports.adoptionGap,
+    clockCount: clockReports.countTotal,
+    clockPinned: clockReports.pinnedOffClock,
   };
   const pluginSource = fs.readFileSync(path.join(pluginRoot, "main.js"), "utf8");
   const css = fs.readFileSync(path.join(pluginRoot, "styles.css"), "utf8");
@@ -352,6 +360,53 @@ async function main() {
     await key(client, "c");
     check("c is ignored while a native radio owns focus", await client.evaluate("window.statsPreview.stateFor(window.statsPreview.views[0]).clock") === "off-clock");
 
+    await client.evaluate("window.statsPreview.renderSingle('clockOffClock', 'worked', 1000, 'light')");
+    const offClockMarks = await client.evaluate(`(() => ({
+      header: document.querySelector('.bob-stats-title') && document.querySelector('.bob-stats-title').textContent,
+      dashedTile: Boolean(document.querySelector('.bob-stats-tile-clock-off')),
+      dashedBar: Boolean(document.querySelector('.bob-stats-chart-bar-clock-off')),
+      dasharray: (() => { const bar = document.querySelector('.bob-stats-chart-bar-clock-off'); return bar ? getComputedStyle(bar).strokeDasharray : ""; })(),
+      aria: document.querySelector('.bob-stats-chart-hit') && document.querySelector('.bob-stats-chart-hit').getAttribute('aria-label'),
+    }))()`);
+    check("Off-clock lens dashes tiles and chart bars", offClockMarks.header.includes("off the clock") && offClockMarks.dashedTile && offClockMarks.dashedBar && offClockMarks.dasharray && offClockMarks.dasharray !== "none" && /off-clock/.test(offClockMarks.aria || ""), JSON.stringify(offClockMarks));
+    await capture(client, path.join(args.out, "stats-clock-off-clock.png"));
+
+    await client.evaluate("window.statsPreview.renderSingle('clockTotal', 'worked', 1000, 'light')");
+    const totalMarks = await client.evaluate(`(() => ({
+      header: document.querySelector('.bob-stats-title') && document.querySelector('.bob-stats-title').textContent,
+      worked: Boolean(document.querySelector('.bob-stats-chart-bar-worked')),
+      off: Boolean(document.querySelector('.bob-stats-chart-bar-off')),
+      sparkOff: Boolean(document.querySelector('.bob-stats-bar-off')),
+      aria: document.querySelector('.bob-stats-chart-hit') && document.querySelector('.bob-stats-chart-hit').getAttribute('aria-label'),
+    }))()`);
+    check("Total lens splits a solid worked base and dashed off-clock tail", totalMarks.header === "Stats" && totalMarks.worked && totalMarks.off && totalMarks.sparkOff && /total · .+ worked · .+ off-clock/.test(totalMarks.aria || ""), JSON.stringify(totalMarks));
+    await capture(client, path.join(args.out, "stats-clock-total.png"));
+
+    await client.evaluate("window.statsPreview.renderSingle('clockEmpty', 'worked', 1000, 'light')");
+    const emptyMarks = await client.evaluate(`(() => ({
+      banner: document.querySelector('.bob-stats-clock-empty') && document.querySelector('.bob-stats-clock-empty').textContent,
+      header: document.querySelector('.bob-stats-title') && document.querySelector('.bob-stats-title').textContent,
+    }))()`);
+    check("empty Off-clock window uses the empty copy", emptyMarks.banner === "No off-clock time in this window" && /off the clock/.test(emptyMarks.header || ""), JSON.stringify(emptyMarks));
+
+    await client.evaluate("window.statsPreview.renderSingle('clockAdoption', 'worked', 1000, 'light')");
+    const adoptionMarks = await client.evaluate(`(() => ({
+      empty: Boolean(document.querySelector('.bob-stats-clock-empty')),
+      body: document.body.innerText,
+    }))()`);
+    check("adoption gap is not an empty Off-clock window", !adoptionMarks.empty && /Not tracked|Tracking since/.test(adoptionMarks.body || ""), JSON.stringify({ empty: adoptionMarks.empty, body: adoptionMarks.body.slice(0, 240) }));
+
+    await client.evaluate("window.statsPreview.renderSingle('clockCount', 'sessions', 1000, 'light')");
+    check("count Total still splits supplied breakdowns", await client.evaluate("Boolean(document.querySelector('.bob-stats-chart-bar-worked')) && Boolean(document.querySelector('.bob-stats-chart-bar-off'))"));
+
+    await client.evaluate("window.statsPreview.renderSingle('clockPinned', 'family_time', 1000, 'light')");
+    const pinnedMarks = await client.evaluate(`(() => ({
+      dashed: Boolean(document.querySelector('.bob-stats-chart-bar-clock-off')),
+      header: document.querySelector('.bob-stats-title') && document.querySelector('.bob-stats-title').textContent,
+      reportClock: window.statsPreview.views[0].report.clock.value,
+    }))()`);
+    check("pinned family_time dashes on a Worked report", pinnedMarks.dashed && /off the clock/.test(pinnedMarks.header || "") && pinnedMarks.reportClock === "worked", JSON.stringify(pinnedMarks));
+
     const definitionRect = await client.evaluate(`(() => { const n=document.querySelector('.bob-stats-definition-toggle'); const r=n.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}; })()`);
     await clickAt(client, definitionRect);
     check("definition disclosure opens", Boolean(await client.evaluate("window.statsPreview.shell.querySelector('.bob-stats-definition-panel')")));
@@ -398,6 +453,18 @@ async function main() {
       forcedColors: matchMedia('(forced-colors: active)').matches
     })`);
     check("reduced-motion and forced-colors media modes activate", media.reducedMotion && media.forcedColors, JSON.stringify(media));
+    await client.evaluate("window.statsPreview.renderSingle('clockOffClock', 'worked', 1000, 'light')");
+    await sleep(200);
+    const clockMedia = await client.evaluate(`(() => {
+      const bar = document.querySelector('.bob-stats-chart-bar-clock-off');
+      const style = bar ? getComputedStyle(bar) : {};
+      return {
+        dash: style.strokeDasharray,
+        animation: style.animationName || style.animation,
+      };
+    })()`);
+    check("forced-colors keeps Off-clock dashed strokes", Boolean(clockMedia.dash) && clockMedia.dash !== "none", JSON.stringify(clockMedia));
+    await capture(client, path.join(args.out, "stats-clock-off-forced-colors.png"));
     await client.call("Emulation.setEmulatedMedia", { features: [
       { name: "prefers-reduced-motion", value: "no-preference" },
       { name: "forced-colors", value: "none" },
@@ -456,7 +523,7 @@ async function main() {
       `- Fixture: ${fixtureMetadata.fixture_version}; schema ${fixtureMetadata.schema_version}; bob-cli@${fixtureMetadata.bob_cli_version} (${fixtureMetadata.bob_cli_revision}); SHA-256 ${fixtureHash}.`,
       `- Canonical source: ${fixtureMetadata.source}; BOB_NOW=${fixtureMetadata.bob_now}; requested range ${fixtureMetadata.requested_range}.`,
       `- Browser: ${browserVersion.product} (${browserVersion.revision}).`,
-      `- Synthetic fixtures: internally consistent Worked / Off-clock / Total reports plus month, week, empty, and all-null presentation cases; none represent vault data.`,
+      `- Synthetic fixtures: internally consistent Worked / Off-clock / Total reports plus empty Off-clock, adoption-gap, count Total, pinned family_time, month, week, empty, and all-null presentation cases; none represent vault data.`,
       "- Families rendered: Pomodoro themes, task breakdown, signed task flow, review answers, Keep rate, checklist calendar/chore grid.",
       "- Each screenshot contains all family views plus the table, open definition, and hover tooltip states.",
       "",

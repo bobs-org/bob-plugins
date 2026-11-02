@@ -639,6 +639,12 @@ class BobLedgerToolsStatsBlockMixin {
       if (lanes) root.appendChild(lanes);
       root.appendChild(this.statsTiles(doc, view, report));
       const focusMetric = metrics.find((metric) => metric.id === state.focus) || null;
+      if (focusMetric && statsClockWindowIsEmpty(focusMetric, report)) {
+        root.appendChild(statsEl(doc, "div", {
+          class: "bob-stats-clock-empty",
+          role: "status",
+        }, "No off-clock time in this window"));
+      }
       if (focusMetric) {
         root.appendChild(this.statsChartDrawMetric(doc, view, report, focusMetric));
         const panels = this.statsRenderContextPanels(doc, view, report, focusMetric);
@@ -680,7 +686,8 @@ class BobLedgerToolsStatsBlockMixin {
     const state = this.statsViewStateFor(view && view.sourcePath);
     const fence = (view && view.fence) || {};
     const header = statsEl(doc, "div", { class: "bob-stats-header" });
-    const title = statsEl(doc, "div", { class: "bob-stats-title" }, "Stats");
+    const focusMetric = (report.metrics || []).find((entry) => entry && entry.id === state.focus) || null;
+    const title = statsEl(doc, "div", { class: "bob-stats-title" }, "Stats" + statsClockHeaderSuffix(report, focusMetric));
     header.appendChild(title);
     const controls = statsEl(doc, "div", { class: "bob-stats-controls", role: "group", "aria-label": "Stats range controls" });
     const activeRange = state.range || fence.range || (report.range && report.range.preset) || STATS_DEFAULT_RANGE;
@@ -807,13 +814,19 @@ class BobLedgerToolsStatsBlockMixin {
     );
     const row = statsEl(doc, "div", { class: "bob-stats-tiles" });
     for (const id of ids) {
-      const model = statsTileModel(byId.get(id));
+      const model = statsTileModel(byId.get(id), report);
       const selected = state.focus === id;
+      const clockClass = model.clock === "off-clock"
+        ? " bob-stats-tile-clock-off"
+        : model.clock === "total"
+          ? " bob-stats-tile-clock-total"
+          : "";
       const tile = statsEl(doc, "div", {
-        class: `bob-stats-tile bob-stats-hue-${model.color}${selected ? " bob-stats-tile-selected" : ""}`,
+        class: `bob-stats-tile bob-stats-hue-${model.color}${selected ? " bob-stats-tile-selected" : ""}${clockClass}`,
         role: "button",
         tabindex: "0",
         "data-stats-focus-key": "tile:" + id,
+        "data-stats-clock": model.clock || undefined,
         "aria-label": `${model.label}: ${model.headline}${model.deltaWords ? `, ${model.deltaWords}` : ""}`,
       });
       tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-label" }, model.label.toUpperCase()));
@@ -822,36 +835,16 @@ class BobLedgerToolsStatsBlockMixin {
         tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-suffix" }, model.suffix));
       }
       if (model.delta) {
-        tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-delta" }, model.delta));
+        tile.appendChild(statsEl(doc, "div", {
+          class: model.deltaNeutral ? "bob-stats-tile-delta bob-stats-tile-delta-neutral" : "bob-stats-tile-delta",
+        }, model.delta));
       } else if (model.quality === "not_tracked") {
         const since = statsTrackingSince(report);
         tile.appendChild(
           statsEl(doc, "div", { class: "bob-stats-tile-delta" }, since ? `Tracking since ${since}` : "Not tracked yet"),
         );
       }
-      const spark = statsEl(doc, "div", { class: "bob-stats-spark", "aria-hidden": "true" });
-      for (const bar of statsSparkBars(model.spark)) {
-        const classes = ["bob-stats-bar"];
-        if (bar.empty) {
-          classes.push("bob-stats-bar-null");
-        }
-        if (bar.zero) {
-          classes.push("bob-stats-bar-zero");
-        }
-        if (bar.provisional) {
-          classes.push("bob-stats-bar-today");
-        }
-        const node = statsEl(doc, "div", { class: classes.join(" ") });
-        if (!bar.empty && !bar.zero) {
-          try {
-            node.setAttribute("style", `height: ${Math.round(bar.height * 100)}%`);
-          } catch (error) {
-            // Bar height is best-effort.
-          }
-        }
-        spark.appendChild(node);
-      }
-      tile.appendChild(spark);
+      tile.appendChild(statsSparkElement(doc, model.spark));
       const select = () => {
         state.focus = id;
         this.statsRenderLocally(view, "tile:" + id);

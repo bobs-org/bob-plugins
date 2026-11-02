@@ -157,15 +157,108 @@ function statsDefaultViewState() {
   };
 }
 
+// Geometry-only split of a supplied clock breakdown. Missing detail is
+// absent: Total never invents a zero off-clock tail.
+function statsClockBarParts(point, metric, report) {
+  try {
+    const safe = point && typeof point === "object" ? point : {};
+    const clock = statsNormalizeClock(safe.clock, null) || statsMetricEffectiveClock(metric, report);
+    const value = typeof safe.value === "number" && Number.isFinite(safe.value) ? safe.value : null;
+    const breakdown = statsClockBreakdown(safe.clock_breakdown);
+    const result = {
+      clock: clock || null,
+      value,
+      worked: null,
+      offClock: null,
+      workedShare: 0,
+      offShare: 0,
+      mode: "solid",
+    };
+    if (clock === "off-clock") {
+      result.mode = "outline";
+      if (breakdown) {
+        result.worked = breakdown.worked.value;
+        result.offClock = breakdown.off_clock.value;
+      }
+      return result;
+    }
+    if (clock === "total" && breakdown) {
+      result.worked = breakdown.worked.value;
+      result.offClock = breakdown.off_clock.value;
+      const sum = result.worked + result.offClock;
+      if (sum > 0) {
+        result.workedShare = result.worked / sum;
+        result.offShare = result.offClock / sum;
+        if (result.offClock > 0 && result.worked > 0) {
+          result.mode = "split";
+        } else if (result.offClock > 0) {
+          result.mode = "outline";
+        }
+      }
+    }
+    return result;
+  } catch (error) {
+    return { clock: null, value: null, worked: null, offClock: null, workedShare: 0, offShare: 0, mode: "solid" };
+  }
+}
+
+function statsClockComparisonNeutral(metric, report) {
+  try {
+    const safe = metric && typeof metric === "object" ? metric : {};
+    if (safe.direction === "neutral") {
+      return true;
+    }
+    const clock = statsMetricEffectiveClock(safe, report);
+    return clock === "off-clock" || clock === "total";
+  } catch (error) {
+    return false;
+  }
+}
+
+function statsClockHeaderSuffix(report, metric) {
+  return statsMetricEffectiveClock(metric, report) === "off-clock" ? " · off the clock" : "";
+}
+
+function statsClockWindowIsEmpty(metric, report) {
+  try {
+    if (statsMetricEffectiveClock(metric, report) !== "off-clock") {
+      return false;
+    }
+    const points = Array.isArray(metric && metric.points) ? metric.points : [];
+    let tracked = false;
+    let positive = false;
+    for (const point of points) {
+      if (!point || typeof point !== "object") {
+        continue;
+      }
+      if (point.quality === "not_tracked") {
+        continue;
+      }
+      tracked = true;
+      if (typeof point.value === "number" && Number.isFinite(point.value) && point.value > 0) {
+        positive = true;
+      }
+    }
+    if (!points.length) {
+      const total = metric && metric.summary && metric.summary.total;
+      return !(total && typeof total.value === "number" && total.value > 0);
+    }
+    return tracked && !positive;
+  } catch (error) {
+    return false;
+  }
+}
+
 // One tile's pure model from a report metric. Covers every unit
 // (minutes, count, signed, bool, ratio) and every quality (ok, partial,
-// missing, not_tracked). Never throws.
-function statsTileModel(metric) {
+// missing, not_tracked). Never throws. The headline is Bob's headline.
+function statsTileModel(metric, report) {
   const safe = metric && typeof metric === "object" ? metric : {};
   const id = typeof safe.id === "string" ? safe.id : "unknown";
   const label = typeof safe.label === "string" && safe.label ? safe.label : id;
   const color = typeof safe.color === "string" && safe.color ? safe.color : "gray";
   const unit = typeof safe.unit === "string" ? safe.unit : "count";
+  const clock = statsMetricEffectiveClock(safe, report);
   const summary = safe.summary && typeof safe.summary === "object" ? safe.summary : {};
   const headline = summary.headline && typeof summary.headline === "object" ? summary.headline : {};
   const delta = summary.delta && typeof summary.delta === "object" ? summary.delta : {};
@@ -182,11 +275,13 @@ function statsTileModel(metric) {
   }
   const spark = points.map((point) => {
     if (!point || typeof point !== "object") {
-      return { value: null, provisional: false };
+      return { value: null, provisional: false, clock, clock_breakdown: null };
     }
     return {
       value: typeof point.value === "number" ? point.value : null,
       provisional: point.provisional === true,
+      clock,
+      clock_breakdown: statsClockBreakdown(point.clock_breakdown),
     };
   });
   const qualities = points.map((point) =>
@@ -197,15 +292,21 @@ function statsTileModel(metric) {
     : qualities.includes("missing")
       ? "missing"
       : "not_tracked";
+  const deltaNeutral = statsClockComparisonNeutral(safe, report);
+  const deltaDisplay = deltaNeutral && typeof delta.words === "string" && delta.words
+    ? delta.words
+    : (typeof delta.display === "string" ? delta.display : "");
   return {
     id,
     label,
     color,
     unit,
+    clock,
     headline: headlineDisplay,
     suffix,
-    delta: typeof delta.display === "string" ? delta.display : "",
+    delta: deltaDisplay,
     deltaWords: typeof delta.words === "string" ? delta.words : "",
+    deltaNeutral,
     spark,
     quality,
     daysWithData:
@@ -223,19 +324,72 @@ function statsSparkBars(spark) {
   const max = values.length > 0 ? Math.max(...values, 0) : 0;
   return (Array.isArray(spark) ? spark : []).map((bar) => {
     const value = bar && typeof bar.value === "number" ? bar.value : null;
+    const parts = statsClockBarParts(bar, null, null);
+    const clockFields = {
+      clock: parts.clock,
+      mode: parts.mode,
+      workedShare: parts.workedShare,
+      offShare: parts.offShare,
+    };
     if (value === null) {
-      return { height: 0, empty: true, provisional: false, zero: false };
+      return { height: 0, empty: true, provisional: false, zero: false, ...clockFields };
     }
     if (max <= 0) {
-      return { height: 0, empty: false, provisional: bar.provisional === true, zero: true };
+      return { height: 0, empty: false, provisional: bar.provisional === true, zero: true, ...clockFields };
     }
     return {
       height: Math.max(value <= 0 ? 0 : Math.round((value / max) * 100) / 100, value > 0 ? 0.08 : 0),
       empty: false,
       provisional: bar.provisional === true,
       zero: value === 0,
+      ...clockFields,
     };
   });
+}
+
+function statsSparkBarNode(doc, bar) {
+  const classes = ["bob-stats-bar"];
+  if (bar.empty) classes.push("bob-stats-bar-null");
+  if (bar.zero) classes.push("bob-stats-bar-zero");
+  if (bar.provisional) classes.push("bob-stats-bar-today");
+  if (bar.mode === "outline" || bar.clock === "off-clock") classes.push("bob-stats-bar-clock-off");
+  if (bar.mode === "split") classes.push("bob-stats-bar-clock-total");
+  const node = statsEl(doc, "div", { class: classes.join(" ") });
+  if (bar.clock) {
+    try {
+      node.setAttribute("data-stats-clock", bar.clock);
+    } catch (error) {
+      // Clock annotation is best-effort.
+    }
+  }
+  if (!bar.empty && !bar.zero) {
+    try {
+      node.setAttribute("style", `height: ${Math.round(bar.height * 100)}%`);
+    } catch (error) {
+      // Bar height is best-effort.
+    }
+    if (bar.mode === "split") {
+      const worked = statsEl(doc, "div", { class: "bob-stats-bar-worked" });
+      const off = statsEl(doc, "div", { class: "bob-stats-bar-off" });
+      try {
+        worked.setAttribute("style", `flex: ${Math.max(1, Math.round(bar.workedShare * 100))} 1 0`);
+        off.setAttribute("style", `flex: ${Math.max(1, Math.round(bar.offShare * 100))} 1 0`);
+      } catch (error) {
+        // Split shares are best-effort.
+      }
+      node.appendChild(worked);
+      node.appendChild(off);
+    }
+  }
+  return node;
+}
+
+function statsSparkElement(doc, spark) {
+  const root = statsEl(doc, "div", { class: "bob-stats-spark", "aria-hidden": "true" });
+  for (const bar of statsSparkBars(spark)) {
+    root.appendChild(statsSparkBarNode(doc, bar));
+  }
+  return root;
 }
 
 // Table rows for the focus metric: date, value, quality/reason, top

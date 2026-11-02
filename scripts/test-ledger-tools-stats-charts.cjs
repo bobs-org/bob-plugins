@@ -5,6 +5,13 @@ const {
   makeFreshnessApp,
   withMissingConfig,
 } = require("./ledger-tools-harness.cjs");
+const {
+  clockFixtureReport,
+  clockEmptyOffClockReport,
+  clockAdoptionGapReport,
+  clockCountTotalReport,
+  clockPinnedOffClockReport,
+} = require("./stats-clock-fixtures.cjs");
 
 const helpers = LedgerToolsPlugin.helpers;
 
@@ -387,7 +394,7 @@ test("grouped chart pins honest buckets, bounds daily detail, and opens validate
       const view = { el, sourcePath: "dash_stats.md", fence: { focus: "worked" } };
       plugin.renderStatsResult(view, { report: chartReport() });
       const firstHit = el.querySelectorAll(".bob-stats-chart-hit")[0];
-      assert.match(firstHit.getAttribute("aria-label"), /6h, 10\/05–10\/10, Partial bucket, theme: SASE — 4h 55m/);
+      assert.match(firstHit.getAttribute("aria-label"), /10\/05–10\/10 · 6h worked, Partial bucket, theme: SASE — 4h 55m/);
       firstHit.dispatch("click");
       assert.equal(plugin.statsViewStateFor("dash_stats.md").pinnedDay, "2026-10-05");
       assert.match(el.text, /1h 05m/);
@@ -565,6 +572,60 @@ test("ResizeObserver redraws cached data and disconnects across rerenders and un
       plugin.onunload();
       if (original === undefined) delete global.ResizeObserver;
       else global.ResizeObserver = original;
+    }
+  });
+});
+
+test("clock lenses update Pomodoro chart marks and leave older reports and task charts alone", async () => {
+  await withMissingConfig(async () => {
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
+    plugin.onload();
+    try {
+      const doc = fakeDoc();
+      const el = fakeContainer(doc);
+      const view = { el, sourcePath: "dash_stats.md", fence: { focus: "worked" } };
+
+      plugin.renderStatsResult(view, { report: clockFixtureReport("off-clock") });
+      assert.match(el.querySelector(".bob-stats-title").textContent, /off the clock/);
+      assert.ok(el.querySelector(".bob-stats-chart-bar-clock-off"), "Off-clock bars are dashed");
+      assert.ok(el.querySelector(".bob-stats-tile-clock-off"), "Off-clock tiles are dashed");
+      assert.match(el.querySelector(".bob-stats-chart-hit").getAttribute("aria-label"), /off-clock/);
+
+      plugin.renderStatsResult(view, { report: clockFixtureReport("total") });
+      assert.equal(el.querySelector(".bob-stats-title").textContent, "Stats");
+      assert.ok(el.querySelector(".bob-stats-chart-bar-worked"), "Total bars keep a solid worked base");
+      assert.ok(el.querySelector(".bob-stats-chart-bar-off"), "Total bars keep a dashed off-clock tail");
+      assert.ok(el.querySelector(".bob-stats-bar-off"), "tile sparks split Total bars");
+      assert.match(el.querySelector(".bob-stats-chart-hit").getAttribute("aria-label"), /total · .+ worked · .+ off-clock/);
+
+      plugin.renderStatsResult(view, { report: clockEmptyOffClockReport() });
+      assert.ok(el.querySelector(".bob-stats-clock-empty"));
+      assert.match(el.text, /No off-clock time in this window/);
+
+      plugin.renderStatsResult(view, { report: clockAdoptionGapReport() });
+      assert.equal(el.querySelector(".bob-stats-clock-empty"), null);
+      assert.doesNotMatch(el.text, /No off-clock time in this window/);
+      assert.match(el.text, /Not tracked|Tracking since/);
+
+      plugin.renderStatsResult(view, { report: chartReport() });
+      assert.equal(el.querySelector(".bob-stats-chart-bar-clock-off"), null);
+      assert.equal(el.querySelector(".bob-stats-clock-empty"), null);
+      const taskView = { el: fakeContainer(doc), sourcePath: "tasks.md", fence: { focus: "habits" } };
+      plugin.renderStatsResult(taskView, { report: chartReport() });
+      assert.equal(taskView.el.querySelector(".bob-stats-chart-bar-clock-off"), null);
+      assert.equal(taskView.el.querySelector(".bob-stats-chart-clock-off"), null);
+
+      const countView = { el: fakeContainer(doc), sourcePath: "count.md", fence: { focus: "sessions" } };
+      plugin.renderStatsResult(countView, { report: clockCountTotalReport() });
+      assert.ok(countView.el.querySelector(".bob-stats-chart-bar-worked"));
+      assert.ok(countView.el.querySelector(".bob-stats-chart-bar-off"));
+
+      const pinView = { el: fakeContainer(doc), sourcePath: "pin.md", fence: { focus: "family_time" } };
+      plugin.renderStatsResult(pinView, { report: clockPinnedOffClockReport() });
+      assert.ok(pinView.el.querySelector(".bob-stats-chart-bar-clock-off"));
+      assert.match(pinView.el.querySelector(".bob-stats-title").textContent, /off the clock/);
+    } finally {
+      plugin.onunload();
     }
   });
 });

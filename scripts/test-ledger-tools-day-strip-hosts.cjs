@@ -1289,11 +1289,14 @@ test("the page honours a pinned day on its first paint", async () => {
       await settle(60);
       const detail = page.querySelector(".bob-stats-day-value");
       assert.ok(detail, "day detail renders on first paint");
+      const spoken = helpers.statsChartSpokenDate({ date: pinned, end: pinned });
       assert.match(
         detail.textContent,
-        new RegExp(pinned),
+        new RegExp(`${spoken} · .+ worked`),
         `day detail follows the pinned day, saw ${detail.textContent}`,
       );
+      const pressed = page.querySelectorAll(".bob-stats-chart-hit").find((node) => node.getAttribute("aria-pressed") === "true");
+      assert.equal(pressed && pressed.getAttribute("data-date"), pinned);
     } finally {
       plugin.onunload();
     }

@@ -195,4 +195,113 @@ function clockFixtureReport(clock = "worked") {
   };
 }
 
-module.exports = { CLOCKS, clockFixtureReport, displayMinutes };
+function clockEmptyOffClockReport() {
+  const report = clockFixtureReport("off-clock");
+  const metric = report.metrics[0];
+  metric.summary.headline = { value: 0, display: "0m", suffix: "/day", stat: "median" };
+  metric.summary.total = { value: 0, display: "0m" };
+  metric.summary.days_with_data = 0;
+  metric.summary.delta = {
+    display: "unchanged vs the prior period",
+    words: "unchanged vs the prior period",
+    sign: 0,
+  };
+  metric.direction = "neutral";
+  const zeroPoint = (day) => ({
+    date: day.date,
+    end: day.date,
+    value: 0,
+    display: "0m",
+    quality: "ok",
+    provisional: day.provisional,
+    rolling_median: day.provisional ? null : 0,
+  });
+  metric.points = DAYS.map(zeroPoint);
+  metric.daily_points = DAYS.map(zeroPoint);
+  report.clock.options = report.clock.options.map((option) => (
+    option.value === "off-clock" ? { ...option, minutes: 0, display: "0m" } : option
+  ));
+  return report;
+}
+
+function clockAdoptionGapReport() {
+  const report = clockFixtureReport("off-clock");
+  const metric = report.metrics[0];
+  metric.since = "2026-10-11";
+  report.clock.since = "2026-10-11";
+  metric.points = DAYS.map((day) => ({
+    date: day.date,
+    end: day.date,
+    value: null,
+    display: "–",
+    quality: "not_tracked",
+    provisional: day.provisional,
+  }));
+  metric.daily_points = metric.points.map((point) => ({ ...point }));
+  metric.summary.headline = { value: null, display: "–", suffix: "/day", stat: "median" };
+  metric.summary.total = { value: 0, display: "0m" };
+  metric.summary.days_with_data = 0;
+  metric.direction = "neutral";
+  return report;
+}
+
+function clockCountTotalReport() {
+  const report = clockFixtureReport("total");
+  const metric = report.metrics[0];
+  metric.id = "sessions";
+  metric.label = "Total sessions";
+  metric.unit = "count";
+  metric.definition = "Closed session counts on both clocks.";
+  metric.summary.headline = { value: 4, display: "4", suffix: "/day", stat: "median" };
+  metric.summary.total = { value: 8, display: "8" };
+  metric.summary.total_clock_breakdown = {
+    worked: { value: 5, display: "5" },
+    off_clock: { value: 3, display: "3" },
+  };
+  metric.summary.delta = {
+    display: "1 more than the prior period",
+    words: "1 more than the prior period",
+    sign: 0,
+  };
+  metric.direction = "neutral";
+  metric.points = [
+    {
+      date: "2026-10-09", end: "2026-10-09", value: 5, display: "5", quality: "ok", provisional: false,
+      clock_breakdown: { worked: { value: 3, display: "3" }, off_clock: { value: 2, display: "2" } },
+    },
+    {
+      date: "2026-10-10", end: "2026-10-10", value: 3, display: "3", quality: "ok", provisional: false,
+      clock_breakdown: { worked: { value: 2, display: "2" }, off_clock: { value: 1, display: "1" } },
+    },
+    {
+      date: "2026-10-11", end: "2026-10-11", value: 1, display: "1", quality: "ok", provisional: true,
+      clock_breakdown: { worked: { value: 1, display: "1" }, off_clock: { value: 0, display: "0" } },
+    },
+  ];
+  metric.daily_points = metric.points.map((point) => ({ ...point }));
+  report.metrics = [metric, report.metrics[2]];
+  return report;
+}
+
+function clockPinnedOffClockReport() {
+  const report = clockFixtureReport("worked");
+  const pinned = report.metrics.find((metric) => metric && metric.id === "family_time");
+  pinned.summary.headline = { value: 20, display: "20m", suffix: "/day", stat: "median" };
+  pinned.direction = "neutral";
+  pinned.summary.delta = {
+    display: "5m more than the prior period",
+    words: "5m more than the prior period",
+    sign: 0,
+  };
+  return report;
+}
+
+module.exports = {
+  CLOCKS,
+  clockFixtureReport,
+  clockEmptyOffClockReport,
+  clockAdoptionGapReport,
+  clockCountTotalReport,
+  clockPinnedOffClockReport,
+  displayMinutes,
+};

@@ -239,10 +239,127 @@ function statsChartDateLabel(point) {
   return start === end ? short(start) : short(start) + "–" + short(end);
 }
 
+const STATS_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function statsChartSpokenDate(point) {
+  const safe = point && typeof point === "object" ? point : {};
+  const start = typeof safe.date === "string" ? safe.date : "";
+  const end = typeof safe.end === "string" ? safe.end : start;
+  if (!start) {
+    return "Date unavailable";
+  }
+  if (start !== end) {
+    return statsChartDateLabel(safe);
+  }
+  const parsed = Date.parse(start + "T00:00:00Z");
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== start) {
+    return statsChartDateLabel(safe);
+  }
+  const date = new Date(parsed);
+  return STATS_WEEKDAYS[date.getUTCDay()] + " " + date.getUTCDate();
+}
+
+function statsChartClockSpeech(metric, point, report) {
+  const safe = point && typeof point === "object" ? point : {};
+  const display = typeof safe.display === "string" && safe.display ? safe.display : "–";
+  const date = statsChartSpokenDate(safe);
+  const clock = statsMetricEffectiveClock(metric, report);
+  if (!clock) {
+    return { date, display, speech: null, clock: null };
+  }
+  const breakdown = statsClockBreakdown(safe.clock_breakdown);
+  let speech;
+  if (clock === "total") {
+    speech = breakdown
+      ? date + " · " + display + " total · " + breakdown.worked.display + " worked · " + breakdown.off_clock.display + " off-clock"
+      : date + " · " + display + " total";
+  } else if (clock === "off-clock") {
+    speech = date + " · " + display + " off-clock";
+  } else {
+    speech = date + " · " + display + " worked";
+  }
+  return { date, display, speech, clock, breakdown };
+}
+
+function statsChartValueMarkSpecs(slot, point, metric, report, baseline, domain, margin, plotHeight, color) {
+  const specs = [];
+  const hue = "bob-stats-svg-hue-" + color;
+  const safe = point && typeof point === "object" ? point : {};
+  if (!slot || !statsFinite(safe.value)) {
+    return specs;
+  }
+  const provisional = safe.provisional === true;
+  const width = Math.max(1, slot.width);
+  const parts = statsClockBarParts(safe, metric, report);
+  if (safe.value === 0) {
+    specs.push({
+      tag: "line",
+      attrs: {
+        x1: slot.center - Math.max(1, width / 2),
+        x2: slot.center + Math.max(1, width / 2),
+        y1: baseline,
+        y2: baseline,
+        class: "bob-stats-chart-zero " + hue +
+          (parts.mode === "outline" ? " bob-stats-chart-bar-clock-off" : "") +
+          (provisional ? " bob-stats-chart-today" : ""),
+        "stroke-width": 2,
+      },
+    });
+    return specs;
+  }
+  const valueY = statsChartY(safe.value, domain, margin.top, plotHeight);
+  if (parts.mode === "split" && statsFinite(parts.worked) && statsFinite(parts.offClock)) {
+    const workedY = statsChartY(parts.worked, domain, margin.top, plotHeight);
+    const workedPath = statsRoundedTerminalBarPath(slot.x, baseline, workedY, width, 0);
+    const offPath = statsRoundedTerminalBarPath(slot.x, workedY, valueY, width, 4);
+    if (workedPath) {
+      specs.push({
+        tag: "path",
+        attrs: { d: workedPath, class: "bob-stats-chart-bar bob-stats-chart-bar-worked " + hue },
+      });
+    }
+    if (offPath) {
+      specs.push({
+        tag: "path",
+        attrs: { d: offPath, class: "bob-stats-chart-bar bob-stats-chart-bar-off " + hue },
+      });
+    }
+    if (provisional) {
+      specs.push({
+        tag: "rect",
+        attrs: {
+          x: slot.x,
+          y: Math.min(baseline, valueY),
+          width,
+          height: Math.max(1, Math.abs(baseline - valueY)),
+          class: "bob-stats-chart-today " + hue,
+          fill: "none",
+        },
+      });
+    }
+    return specs;
+  }
+  const path = statsRoundedTerminalBarPath(slot.x, baseline, valueY, width, 4);
+  if (!path) {
+    return specs;
+  }
+  const outline = parts.mode === "outline" ? " bob-stats-chart-bar-clock-off" : "";
+  specs.push({
+    tag: "path",
+    attrs: {
+      d: path,
+      class: "bob-stats-chart-bar" + outline + " " + hue + (provisional ? " bob-stats-chart-today" : ""),
+      "data-partial": safe.partial === true ? "true" : null,
+    },
+  });
+  return specs;
+}
+
 function statsChartTooltip(metric, point, report) {
   const safeMetric = metric && typeof metric === "object" ? metric : {};
   const safe = point && typeof point === "object" ? point : {};
-  const lines = [typeof safe.display === "string" && safe.display ? safe.display : "–", statsChartDateLabel(safe)];
+  const spoken = statsChartClockSpeech(safeMetric, safe, report);
+  const lines = spoken.speech ? [spoken.speech] : [spoken.display, spoken.date];
   if (safe.provisional === true) {
     lines.push("Provisional today");
   }

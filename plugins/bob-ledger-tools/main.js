@@ -33116,15 +33116,108 @@ function statsDefaultViewState() {
   };
 }
 
+// Geometry-only split of a supplied clock breakdown. Missing detail is
+// absent: Total never invents a zero off-clock tail.
+function statsClockBarParts(point, metric, report) {
+  try {
+    const safe = point && typeof point === "object" ? point : {};
+    const clock = statsNormalizeClock(safe.clock, null) || statsMetricEffectiveClock(metric, report);
+    const value = typeof safe.value === "number" && Number.isFinite(safe.value) ? safe.value : null;
+    const breakdown = statsClockBreakdown(safe.clock_breakdown);
+    const result = {
+      clock: clock || null,
+      value,
+      worked: null,
+      offClock: null,
+      workedShare: 0,
+      offShare: 0,
+      mode: "solid",
+    };
+    if (clock === "off-clock") {
+      result.mode = "outline";
+      if (breakdown) {
+        result.worked = breakdown.worked.value;
+        result.offClock = breakdown.off_clock.value;
+      }
+      return result;
+    }
+    if (clock === "total" && breakdown) {
+      result.worked = breakdown.worked.value;
+      result.offClock = breakdown.off_clock.value;
+      const sum = result.worked + result.offClock;
+      if (sum > 0) {
+        result.workedShare = result.worked / sum;
+        result.offShare = result.offClock / sum;
+        if (result.offClock > 0 && result.worked > 0) {
+          result.mode = "split";
+        } else if (result.offClock > 0) {
+          result.mode = "outline";
+        }
+      }
+    }
+    return result;
+  } catch (error) {
+    return { clock: null, value: null, worked: null, offClock: null, workedShare: 0, offShare: 0, mode: "solid" };
+  }
+}
+
+function statsClockComparisonNeutral(metric, report) {
+  try {
+    const safe = metric && typeof metric === "object" ? metric : {};
+    if (safe.direction === "neutral") {
+      return true;
+    }
+    const clock = statsMetricEffectiveClock(safe, report);
+    return clock === "off-clock" || clock === "total";
+  } catch (error) {
+    return false;
+  }
+}
+
+function statsClockHeaderSuffix(report, metric) {
+  return statsMetricEffectiveClock(metric, report) === "off-clock" ? " · off the clock" : "";
+}
+
+function statsClockWindowIsEmpty(metric, report) {
+  try {
+    if (statsMetricEffectiveClock(metric, report) !== "off-clock") {
+      return false;
+    }
+    const points = Array.isArray(metric && metric.points) ? metric.points : [];
+    let tracked = false;
+    let positive = false;
+    for (const point of points) {
+      if (!point || typeof point !== "object") {
+        continue;
+      }
+      if (point.quality === "not_tracked") {
+        continue;
+      }
+      tracked = true;
+      if (typeof point.value === "number" && Number.isFinite(point.value) && point.value > 0) {
+        positive = true;
+      }
+    }
+    if (!points.length) {
+      const total = metric && metric.summary && metric.summary.total;
+      return !(total && typeof total.value === "number" && total.value > 0);
+    }
+    return tracked && !positive;
+  } catch (error) {
+    return false;
+  }
+}
+
 // One tile's pure model from a report metric. Covers every unit
 // (minutes, count, signed, bool, ratio) and every quality (ok, partial,
-// missing, not_tracked). Never throws.
-function statsTileModel(metric) {
+// missing, not_tracked). Never throws. The headline is Bob's headline.
+function statsTileModel(metric, report) {
   const safe = metric && typeof metric === "object" ? metric : {};
   const id = typeof safe.id === "string" ? safe.id : "unknown";
   const label = typeof safe.label === "string" && safe.label ? safe.label : id;
   const color = typeof safe.color === "string" && safe.color ? safe.color : "gray";
   const unit = typeof safe.unit === "string" ? safe.unit : "count";
+  const clock = statsMetricEffectiveClock(safe, report);
   const summary = safe.summary && typeof safe.summary === "object" ? safe.summary : {};
   const headline = summary.headline && typeof summary.headline === "object" ? summary.headline : {};
   const delta = summary.delta && typeof summary.delta === "object" ? summary.delta : {};
@@ -33141,11 +33234,13 @@ function statsTileModel(metric) {
   }
   const spark = points.map((point) => {
     if (!point || typeof point !== "object") {
-      return { value: null, provisional: false };
+      return { value: null, provisional: false, clock, clock_breakdown: null };
     }
     return {
       value: typeof point.value === "number" ? point.value : null,
       provisional: point.provisional === true,
+      clock,
+      clock_breakdown: statsClockBreakdown(point.clock_breakdown),
     };
   });
   const qualities = points.map((point) =>
@@ -33156,15 +33251,21 @@ function statsTileModel(metric) {
     : qualities.includes("missing")
       ? "missing"
       : "not_tracked";
+  const deltaNeutral = statsClockComparisonNeutral(safe, report);
+  const deltaDisplay = deltaNeutral && typeof delta.words === "string" && delta.words
+    ? delta.words
+    : (typeof delta.display === "string" ? delta.display : "");
   return {
     id,
     label,
     color,
     unit,
+    clock,
     headline: headlineDisplay,
     suffix,
-    delta: typeof delta.display === "string" ? delta.display : "",
+    delta: deltaDisplay,
     deltaWords: typeof delta.words === "string" ? delta.words : "",
+    deltaNeutral,
     spark,
     quality,
     daysWithData:
@@ -33182,19 +33283,72 @@ function statsSparkBars(spark) {
   const max = values.length > 0 ? Math.max(...values, 0) : 0;
   return (Array.isArray(spark) ? spark : []).map((bar) => {
     const value = bar && typeof bar.value === "number" ? bar.value : null;
+    const parts = statsClockBarParts(bar, null, null);
+    const clockFields = {
+      clock: parts.clock,
+      mode: parts.mode,
+      workedShare: parts.workedShare,
+      offShare: parts.offShare,
+    };
     if (value === null) {
-      return { height: 0, empty: true, provisional: false, zero: false };
+      return { height: 0, empty: true, provisional: false, zero: false, ...clockFields };
     }
     if (max <= 0) {
-      return { height: 0, empty: false, provisional: bar.provisional === true, zero: true };
+      return { height: 0, empty: false, provisional: bar.provisional === true, zero: true, ...clockFields };
     }
     return {
       height: Math.max(value <= 0 ? 0 : Math.round((value / max) * 100) / 100, value > 0 ? 0.08 : 0),
       empty: false,
       provisional: bar.provisional === true,
       zero: value === 0,
+      ...clockFields,
     };
   });
+}
+
+function statsSparkBarNode(doc, bar) {
+  const classes = ["bob-stats-bar"];
+  if (bar.empty) classes.push("bob-stats-bar-null");
+  if (bar.zero) classes.push("bob-stats-bar-zero");
+  if (bar.provisional) classes.push("bob-stats-bar-today");
+  if (bar.mode === "outline" || bar.clock === "off-clock") classes.push("bob-stats-bar-clock-off");
+  if (bar.mode === "split") classes.push("bob-stats-bar-clock-total");
+  const node = statsEl(doc, "div", { class: classes.join(" ") });
+  if (bar.clock) {
+    try {
+      node.setAttribute("data-stats-clock", bar.clock);
+    } catch (error) {
+      // Clock annotation is best-effort.
+    }
+  }
+  if (!bar.empty && !bar.zero) {
+    try {
+      node.setAttribute("style", `height: ${Math.round(bar.height * 100)}%`);
+    } catch (error) {
+      // Bar height is best-effort.
+    }
+    if (bar.mode === "split") {
+      const worked = statsEl(doc, "div", { class: "bob-stats-bar-worked" });
+      const off = statsEl(doc, "div", { class: "bob-stats-bar-off" });
+      try {
+        worked.setAttribute("style", `flex: ${Math.max(1, Math.round(bar.workedShare * 100))} 1 0`);
+        off.setAttribute("style", `flex: ${Math.max(1, Math.round(bar.offShare * 100))} 1 0`);
+      } catch (error) {
+        // Split shares are best-effort.
+      }
+      node.appendChild(worked);
+      node.appendChild(off);
+    }
+  }
+  return node;
+}
+
+function statsSparkElement(doc, spark) {
+  const root = statsEl(doc, "div", { class: "bob-stats-spark", "aria-hidden": "true" });
+  for (const bar of statsSparkBars(spark)) {
+    root.appendChild(statsSparkBarNode(doc, bar));
+  }
+  return root;
 }
 
 // Table rows for the focus metric: date, value, quality/reason, top
@@ -33974,6 +34128,12 @@ class BobLedgerToolsStatsBlockMixin {
       if (lanes) root.appendChild(lanes);
       root.appendChild(this.statsTiles(doc, view, report));
       const focusMetric = metrics.find((metric) => metric.id === state.focus) || null;
+      if (focusMetric && statsClockWindowIsEmpty(focusMetric, report)) {
+        root.appendChild(statsEl(doc, "div", {
+          class: "bob-stats-clock-empty",
+          role: "status",
+        }, "No off-clock time in this window"));
+      }
       if (focusMetric) {
         root.appendChild(this.statsChartDrawMetric(doc, view, report, focusMetric));
         const panels = this.statsRenderContextPanels(doc, view, report, focusMetric);
@@ -34015,7 +34175,8 @@ class BobLedgerToolsStatsBlockMixin {
     const state = this.statsViewStateFor(view && view.sourcePath);
     const fence = (view && view.fence) || {};
     const header = statsEl(doc, "div", { class: "bob-stats-header" });
-    const title = statsEl(doc, "div", { class: "bob-stats-title" }, "Stats");
+    const focusMetric = (report.metrics || []).find((entry) => entry && entry.id === state.focus) || null;
+    const title = statsEl(doc, "div", { class: "bob-stats-title" }, "Stats" + statsClockHeaderSuffix(report, focusMetric));
     header.appendChild(title);
     const controls = statsEl(doc, "div", { class: "bob-stats-controls", role: "group", "aria-label": "Stats range controls" });
     const activeRange = state.range || fence.range || (report.range && report.range.preset) || STATS_DEFAULT_RANGE;
@@ -34142,13 +34303,19 @@ class BobLedgerToolsStatsBlockMixin {
     );
     const row = statsEl(doc, "div", { class: "bob-stats-tiles" });
     for (const id of ids) {
-      const model = statsTileModel(byId.get(id));
+      const model = statsTileModel(byId.get(id), report);
       const selected = state.focus === id;
+      const clockClass = model.clock === "off-clock"
+        ? " bob-stats-tile-clock-off"
+        : model.clock === "total"
+          ? " bob-stats-tile-clock-total"
+          : "";
       const tile = statsEl(doc, "div", {
-        class: `bob-stats-tile bob-stats-hue-${model.color}${selected ? " bob-stats-tile-selected" : ""}`,
+        class: `bob-stats-tile bob-stats-hue-${model.color}${selected ? " bob-stats-tile-selected" : ""}${clockClass}`,
         role: "button",
         tabindex: "0",
         "data-stats-focus-key": "tile:" + id,
+        "data-stats-clock": model.clock || undefined,
         "aria-label": `${model.label}: ${model.headline}${model.deltaWords ? `, ${model.deltaWords}` : ""}`,
       });
       tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-label" }, model.label.toUpperCase()));
@@ -34157,36 +34324,16 @@ class BobLedgerToolsStatsBlockMixin {
         tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-suffix" }, model.suffix));
       }
       if (model.delta) {
-        tile.appendChild(statsEl(doc, "div", { class: "bob-stats-tile-delta" }, model.delta));
+        tile.appendChild(statsEl(doc, "div", {
+          class: model.deltaNeutral ? "bob-stats-tile-delta bob-stats-tile-delta-neutral" : "bob-stats-tile-delta",
+        }, model.delta));
       } else if (model.quality === "not_tracked") {
         const since = statsTrackingSince(report);
         tile.appendChild(
           statsEl(doc, "div", { class: "bob-stats-tile-delta" }, since ? `Tracking since ${since}` : "Not tracked yet"),
         );
       }
-      const spark = statsEl(doc, "div", { class: "bob-stats-spark", "aria-hidden": "true" });
-      for (const bar of statsSparkBars(model.spark)) {
-        const classes = ["bob-stats-bar"];
-        if (bar.empty) {
-          classes.push("bob-stats-bar-null");
-        }
-        if (bar.zero) {
-          classes.push("bob-stats-bar-zero");
-        }
-        if (bar.provisional) {
-          classes.push("bob-stats-bar-today");
-        }
-        const node = statsEl(doc, "div", { class: classes.join(" ") });
-        if (!bar.empty && !bar.zero) {
-          try {
-            node.setAttribute("style", `height: ${Math.round(bar.height * 100)}%`);
-          } catch (error) {
-            // Bar height is best-effort.
-          }
-        }
-        spark.appendChild(node);
-      }
-      tile.appendChild(spark);
+      tile.appendChild(statsSparkElement(doc, model.spark));
       const select = () => {
         state.focus = id;
         this.statsRenderLocally(view, "tile:" + id);
@@ -34549,10 +34696,127 @@ function statsChartDateLabel(point) {
   return start === end ? short(start) : short(start) + "–" + short(end);
 }
 
+const STATS_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function statsChartSpokenDate(point) {
+  const safe = point && typeof point === "object" ? point : {};
+  const start = typeof safe.date === "string" ? safe.date : "";
+  const end = typeof safe.end === "string" ? safe.end : start;
+  if (!start) {
+    return "Date unavailable";
+  }
+  if (start !== end) {
+    return statsChartDateLabel(safe);
+  }
+  const parsed = Date.parse(start + "T00:00:00Z");
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== start) {
+    return statsChartDateLabel(safe);
+  }
+  const date = new Date(parsed);
+  return STATS_WEEKDAYS[date.getUTCDay()] + " " + date.getUTCDate();
+}
+
+function statsChartClockSpeech(metric, point, report) {
+  const safe = point && typeof point === "object" ? point : {};
+  const display = typeof safe.display === "string" && safe.display ? safe.display : "–";
+  const date = statsChartSpokenDate(safe);
+  const clock = statsMetricEffectiveClock(metric, report);
+  if (!clock) {
+    return { date, display, speech: null, clock: null };
+  }
+  const breakdown = statsClockBreakdown(safe.clock_breakdown);
+  let speech;
+  if (clock === "total") {
+    speech = breakdown
+      ? date + " · " + display + " total · " + breakdown.worked.display + " worked · " + breakdown.off_clock.display + " off-clock"
+      : date + " · " + display + " total";
+  } else if (clock === "off-clock") {
+    speech = date + " · " + display + " off-clock";
+  } else {
+    speech = date + " · " + display + " worked";
+  }
+  return { date, display, speech, clock, breakdown };
+}
+
+function statsChartValueMarkSpecs(slot, point, metric, report, baseline, domain, margin, plotHeight, color) {
+  const specs = [];
+  const hue = "bob-stats-svg-hue-" + color;
+  const safe = point && typeof point === "object" ? point : {};
+  if (!slot || !statsFinite(safe.value)) {
+    return specs;
+  }
+  const provisional = safe.provisional === true;
+  const width = Math.max(1, slot.width);
+  const parts = statsClockBarParts(safe, metric, report);
+  if (safe.value === 0) {
+    specs.push({
+      tag: "line",
+      attrs: {
+        x1: slot.center - Math.max(1, width / 2),
+        x2: slot.center + Math.max(1, width / 2),
+        y1: baseline,
+        y2: baseline,
+        class: "bob-stats-chart-zero " + hue +
+          (parts.mode === "outline" ? " bob-stats-chart-bar-clock-off" : "") +
+          (provisional ? " bob-stats-chart-today" : ""),
+        "stroke-width": 2,
+      },
+    });
+    return specs;
+  }
+  const valueY = statsChartY(safe.value, domain, margin.top, plotHeight);
+  if (parts.mode === "split" && statsFinite(parts.worked) && statsFinite(parts.offClock)) {
+    const workedY = statsChartY(parts.worked, domain, margin.top, plotHeight);
+    const workedPath = statsRoundedTerminalBarPath(slot.x, baseline, workedY, width, 0);
+    const offPath = statsRoundedTerminalBarPath(slot.x, workedY, valueY, width, 4);
+    if (workedPath) {
+      specs.push({
+        tag: "path",
+        attrs: { d: workedPath, class: "bob-stats-chart-bar bob-stats-chart-bar-worked " + hue },
+      });
+    }
+    if (offPath) {
+      specs.push({
+        tag: "path",
+        attrs: { d: offPath, class: "bob-stats-chart-bar bob-stats-chart-bar-off " + hue },
+      });
+    }
+    if (provisional) {
+      specs.push({
+        tag: "rect",
+        attrs: {
+          x: slot.x,
+          y: Math.min(baseline, valueY),
+          width,
+          height: Math.max(1, Math.abs(baseline - valueY)),
+          class: "bob-stats-chart-today " + hue,
+          fill: "none",
+        },
+      });
+    }
+    return specs;
+  }
+  const path = statsRoundedTerminalBarPath(slot.x, baseline, valueY, width, 4);
+  if (!path) {
+    return specs;
+  }
+  const outline = parts.mode === "outline" ? " bob-stats-chart-bar-clock-off" : "";
+  specs.push({
+    tag: "path",
+    attrs: {
+      d: path,
+      class: "bob-stats-chart-bar" + outline + " " + hue + (provisional ? " bob-stats-chart-today" : ""),
+      "data-partial": safe.partial === true ? "true" : null,
+    },
+  });
+  return specs;
+}
+
 function statsChartTooltip(metric, point, report) {
   const safeMetric = metric && typeof metric === "object" ? metric : {};
   const safe = point && typeof point === "object" ? point : {};
-  const lines = [typeof safe.display === "string" && safe.display ? safe.display : "–", statsChartDateLabel(safe)];
+  const spoken = statsChartClockSpeech(safeMetric, safe, report);
+  const lines = spoken.speech ? [spoken.speech] : [spoken.display, spoken.date];
   if (safe.provisional === true) {
     lines.push("Provisional today");
   }
@@ -34926,9 +35190,10 @@ class BobLedgerToolsStatsChartMixin {
         container.appendChild(label);
       }
     }
+    const spoken = statsChartClockSpeech(metric, point, report);
     const pointDisplay = typeof point.display === "string" && point.display ? point.display : "–";
     container.appendChild(statsEl(doc, "div", { class: "bob-stats-day-value" },
-      point.date + " · " + metric.label + ": " + pointDisplay));
+      spoken.speech || (point.date + " · " + metric.label + ": " + pointDisplay)));
     const quality = statsChartQualityText(point);
     if (quality) {
       container.appendChild(statsEl(doc, "div", { class: "bob-stats-day-quality" }, quality));
@@ -34979,9 +35244,12 @@ class BobLedgerToolsStatsChartMixin {
   }
 
   statsChartDrawMetric(doc, view, report, metric) {
+    const clock = statsMetricEffectiveClock(metric, report);
     const section = statsEl(doc, "section", {
-      class: "bob-stats-chart-section bob-stats-hue-" + statsChartMetricColor(metric),
+      class: "bob-stats-chart-section bob-stats-hue-" + statsChartMetricColor(metric) +
+        (clock === "off-clock" ? " bob-stats-chart-clock-off" : clock === "total" ? " bob-stats-chart-clock-total" : ""),
       "aria-label": metric.label + " focus chart",
+      "data-stats-clock": clock || undefined,
     });
     const header = statsEl(doc, "div", { class: "bob-stats-chart-header" });
     header.appendChild(statsEl(doc, "div", { class: "bob-stats-chart-title" }, metric.label));
@@ -35027,7 +35295,10 @@ class BobLedgerToolsStatsChartMixin {
     const points = Array.isArray(metric.points) ? metric.points : [];
     const wrap = statsEl(doc, "div", { class: "bob-stats-chart-wrap", "data-stats-chart": "true" });
     if (points.length === 0) {
-      wrap.appendChild(statsEl(doc, "div", { class: "bob-stats-chart-empty" }, "No chart points are available for this metric."));
+      const empty = statsClockWindowIsEmpty(metric, report)
+        ? "No off-clock time in this window"
+        : "No chart points are available for this metric.";
+      wrap.appendChild(statsEl(doc, "div", { class: "bob-stats-chart-empty" }, empty));
       section.appendChild(wrap);
       this.statsRegisterChartResize(view, wrap);
       return section;
@@ -35157,22 +35428,10 @@ class BobLedgerToolsStatsChartMixin {
         svg.appendChild(statsSvgEl(doc, "text", {
           x: slot.center, y: baseline - 5, "text-anchor": "middle", class: "bob-stats-chart-null-label",
         }, "–"));
-      } else if (point.value === 0) {
-        svg.appendChild(statsSvgEl(doc, "line", {
-          x1: slot.center - Math.max(1, slot.width / 2),
-          x2: slot.center + Math.max(1, slot.width / 2),
-          y1: baseline,
-          y2: baseline,
-          class: "bob-stats-chart-zero bob-stats-svg-hue-" + color + (point.provisional ? " bob-stats-chart-today" : ""),
-          "stroke-width": 2,
-        }));
       } else {
-        const path = statsRoundedTerminalBarPath(slot.x, baseline, valueY, Math.max(1, slot.width), 4);
-        svg.appendChild(statsSvgEl(doc, "path", {
-          d: path,
-          class: "bob-stats-chart-bar bob-stats-svg-hue-" + color + (point.provisional ? " bob-stats-chart-today" : ""),
-          "data-partial": point.partial === true ? "true" : null,
-        }));
+        for (const spec of statsChartValueMarkSpecs(slot, point, metric, report, baseline, domain, margin, plotHeight, color)) {
+          svg.appendChild(statsSvgEl(doc, spec.tag, spec.attrs));
+        }
       }
       const hit = statsSvgEl(doc, "rect", {
         x: slot.slotStart,
@@ -35288,6 +35547,7 @@ class BobLedgerToolsStatsChartMixin {
     }
     section.appendChild(legend);
     const notes = [];
+    if (statsClockWindowIsEmpty(metric, report)) notes.push("No off-clock time in this window");
     if (points.some((point) => point && point.provisional === true)) notes.push("Today is provisional.");
     if (points.some((point) => point && point.partial === true)) notes.push("Partial buckets cover only part of a week or month.");
     if (metric.since) notes.push("Tracking since " + metric.since + ".");
@@ -78446,8 +78706,14 @@ module.exports.helpers = {
   statsDocFor,
   statsParseFenceOptions,
   statsDefaultViewState,
+  statsClockBarParts,
+  statsClockComparisonNeutral,
+  statsClockHeaderSuffix,
+  statsClockWindowIsEmpty,
   statsTileModel,
   statsSparkBars,
+  statsSparkBarNode,
+  statsSparkElement,
   statsTableRows,
   statsCsv,
   statsOverviewIds,
@@ -78467,6 +78733,9 @@ module.exports.helpers = {
   statsAlignPriorPoints,
   statsResponsiveLabelDensity,
   statsChartDateLabel,
+  statsChartSpokenDate,
+  statsChartClockSpeech,
+  statsChartValueMarkSpecs,
   statsChartDailyPoints,
   statsChartParts,
   statsChartTooltip,

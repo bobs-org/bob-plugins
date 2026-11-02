@@ -2483,5 +2483,1736 @@
         "points": []
       }
     ]
+  },
+  "emptyOffClock": {
+    "ok": true,
+    "schema_version": 1,
+    "today": "2026-10-11",
+    "range": {
+      "preset": "4w",
+      "offset": 0,
+      "label": "Oct 9 – Oct 10",
+      "includes_today": true
+    },
+    "clock": {
+      "value": "off-clock",
+      "label": "Off-clock",
+      "since": "2026-10-09",
+      "options": [
+        {
+          "value": "worked",
+          "label": "Worked",
+          "description": "Closed Pomodoro minutes on the work clock.",
+          "minutes": 80,
+          "display": "1h 20m"
+        },
+        {
+          "value": "off-clock",
+          "label": "Off-clock",
+          "description": "Closed Pomodoro minutes off the clock.",
+          "minutes": 0,
+          "display": "0m"
+        },
+        {
+          "value": "total",
+          "label": "Total",
+          "description": "Closed session minutes on both clocks; overlapping sessions count twice.",
+          "minutes": 120,
+          "display": "2h 00m"
+        }
+      ]
+    },
+    "metrics": [
+      {
+        "id": "worked",
+        "label": "Off-clock",
+        "kind": "pomodoro",
+        "unit": "minutes",
+        "color": "orange",
+        "definition": "Closed session minutes on the selected clock.",
+        "source": "daily Pomodoros",
+        "since": "2026-10-09",
+        "parameters": {
+          "measure": "minutes",
+          "clock": "off-clock"
+        },
+        "summary": {
+          "headline": {
+            "value": 0,
+            "display": "0m",
+            "suffix": "/day",
+            "stat": "median"
+          },
+          "total": {
+            "value": 0,
+            "display": "0m"
+          },
+          "days_with_data": 0,
+          "delta": {
+            "display": "unchanged vs the prior period",
+            "words": "unchanged vs the prior period",
+            "sign": 0
+          }
+        },
+        "parts_summary": {
+          "theme": [
+            {
+              "key": "WORK",
+              "value": 15,
+              "display": "15m",
+              "share": "38%",
+              "label": "WORK"
+            },
+            {
+              "key": "LIFE",
+              "value": 25,
+              "display": "25m",
+              "share": "63%",
+              "label": "LIFE"
+            }
+          ],
+          "area": [
+            {
+              "key": "dev.md",
+              "value": 15,
+              "display": "15m",
+              "share": "38%",
+              "label": "dev"
+            },
+            {
+              "key": "life.md",
+              "value": 25,
+              "display": "25m",
+              "share": "63%",
+              "label": "life"
+            }
+          ],
+          "root_parent": [
+            {
+              "key": "project.md",
+              "value": 15,
+              "display": "15m",
+              "share": "38%",
+              "label": "project"
+            },
+            {
+              "key": "life.md",
+              "value": 25,
+              "display": "25m",
+              "share": "63%",
+              "label": "life"
+            }
+          ],
+          "project": [
+            {
+              "key": "project.md",
+              "value": 15,
+              "display": "15m",
+              "share": "38%",
+              "label": "project"
+            },
+            {
+              "key": "life_project.md",
+              "value": 25,
+              "display": "25m",
+              "share": "63%",
+              "label": "life_project"
+            }
+          ]
+        },
+        "points": [
+          {
+            "date": "2026-10-09",
+            "end": "2026-10-09",
+            "value": 0,
+            "display": "0m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 0
+          },
+          {
+            "date": "2026-10-10",
+            "end": "2026-10-10",
+            "value": 0,
+            "display": "0m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 0
+          },
+          {
+            "date": "2026-10-11",
+            "end": "2026-10-11",
+            "value": 0,
+            "display": "0m",
+            "quality": "ok",
+            "provisional": true,
+            "rolling_median": null
+          }
+        ],
+        "daily_points": [
+          {
+            "date": "2026-10-09",
+            "end": "2026-10-09",
+            "value": 0,
+            "display": "0m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 0
+          },
+          {
+            "date": "2026-10-10",
+            "end": "2026-10-10",
+            "value": 0,
+            "display": "0m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 0
+          },
+          {
+            "date": "2026-10-11",
+            "end": "2026-10-11",
+            "value": 0,
+            "display": "0m",
+            "quality": "ok",
+            "provisional": true,
+            "rolling_median": null
+          }
+        ],
+        "prior_points": [],
+        "direction": "neutral"
+      },
+      {
+        "id": "family_time",
+        "label": "Family time · off-clock",
+        "kind": "pomodoro",
+        "unit": "minutes",
+        "color": "green",
+        "parameters": {
+          "measure": "minutes",
+          "clock": "off-clock"
+        },
+        "summary": {
+          "total": {
+            "value": 40,
+            "display": "40m"
+          }
+        },
+        "points": [
+          {
+            "date": "2026-10-09",
+            "end": "2026-10-09",
+            "value": 30,
+            "display": "30m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 30,
+            "parts": {
+              "theme": {
+                "WORK": 10,
+                "LIFE": 20
+              },
+              "area": {
+                "dev.md": 10,
+                "life.md": 20
+              },
+              "root_parent": {
+                "project.md": 10,
+                "life.md": 20
+              },
+              "project": {
+                "project.md": 10,
+                "life_project.md": 20
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "10m",
+                "LIFE": "20m"
+              },
+              "area": {
+                "dev.md": "10m",
+                "life.md": "20m"
+              },
+              "root_parent": {
+                "project.md": "10m",
+                "life.md": "20m"
+              },
+              "project": {
+                "project.md": "10m",
+                "life_project.md": "20m"
+              }
+            }
+          },
+          {
+            "date": "2026-10-10",
+            "end": "2026-10-10",
+            "value": 10,
+            "display": "10m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 10,
+            "parts": {
+              "theme": {
+                "WORK": 5,
+                "LIFE": 5
+              },
+              "area": {
+                "dev.md": 5,
+                "life.md": 5
+              },
+              "root_parent": {
+                "project.md": 5,
+                "life.md": 5
+              },
+              "project": {
+                "project.md": 5,
+                "life_project.md": 5
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "5m",
+                "LIFE": "5m"
+              },
+              "area": {
+                "dev.md": "5m",
+                "life.md": "5m"
+              },
+              "root_parent": {
+                "project.md": "5m",
+                "life.md": "5m"
+              },
+              "project": {
+                "project.md": "5m",
+                "life_project.md": "5m"
+              }
+            }
+          },
+          {
+            "date": "2026-10-11",
+            "end": "2026-10-11",
+            "value": 0,
+            "display": "0m",
+            "quality": "ok",
+            "provisional": true,
+            "rolling_median": null,
+            "parts": {
+              "theme": {
+                "WORK": 0,
+                "LIFE": 0
+              },
+              "area": {
+                "dev.md": 0,
+                "life.md": 0
+              },
+              "root_parent": {
+                "project.md": 0,
+                "life.md": 0
+              },
+              "project": {
+                "project.md": 0,
+                "life_project.md": 0
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "0m",
+                "LIFE": "0m"
+              },
+              "area": {
+                "dev.md": "0m",
+                "life.md": "0m"
+              },
+              "root_parent": {
+                "project.md": "0m",
+                "life.md": "0m"
+              },
+              "project": {
+                "project.md": "0m",
+                "life_project.md": "0m"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "done",
+        "label": "Done",
+        "kind": "task",
+        "unit": "count",
+        "parameters": {
+          "event": "done"
+        },
+        "summary": {
+          "total": {
+            "value": 3,
+            "display": "3"
+          }
+        },
+        "points": []
+      }
+    ]
+  },
+  "adoptionGap": {
+    "ok": true,
+    "schema_version": 1,
+    "today": "2026-10-11",
+    "range": {
+      "preset": "4w",
+      "offset": 0,
+      "label": "Oct 9 – Oct 10",
+      "includes_today": true
+    },
+    "clock": {
+      "value": "off-clock",
+      "label": "Off-clock",
+      "since": "2026-10-11",
+      "options": [
+        {
+          "value": "worked",
+          "label": "Worked",
+          "description": "Closed Pomodoro minutes on the work clock.",
+          "minutes": 80,
+          "display": "1h 20m"
+        },
+        {
+          "value": "off-clock",
+          "label": "Off-clock",
+          "description": "Closed Pomodoro minutes off the clock.",
+          "minutes": 40,
+          "display": "40m"
+        },
+        {
+          "value": "total",
+          "label": "Total",
+          "description": "Closed session minutes on both clocks; overlapping sessions count twice.",
+          "minutes": 120,
+          "display": "2h 00m"
+        }
+      ]
+    },
+    "metrics": [
+      {
+        "id": "worked",
+        "label": "Off-clock",
+        "kind": "pomodoro",
+        "unit": "minutes",
+        "color": "orange",
+        "definition": "Closed session minutes on the selected clock.",
+        "source": "daily Pomodoros",
+        "since": "2026-10-11",
+        "parameters": {
+          "measure": "minutes",
+          "clock": "off-clock"
+        },
+        "summary": {
+          "headline": {
+            "value": null,
+            "display": "–",
+            "suffix": "/day",
+            "stat": "median"
+          },
+          "total": {
+            "value": 0,
+            "display": "0m"
+          },
+          "days_with_data": 0
+        },
+        "parts_summary": {
+          "theme": [
+            {
+              "key": "WORK",
+              "value": 15,
+              "display": "15m",
+              "share": "38%",
+              "label": "WORK"
+            },
+            {
+              "key": "LIFE",
+              "value": 25,
+              "display": "25m",
+              "share": "63%",
+              "label": "LIFE"
+            }
+          ],
+          "area": [
+            {
+              "key": "dev.md",
+              "value": 15,
+              "display": "15m",
+              "share": "38%",
+              "label": "dev"
+            },
+            {
+              "key": "life.md",
+              "value": 25,
+              "display": "25m",
+              "share": "63%",
+              "label": "life"
+            }
+          ],
+          "root_parent": [
+            {
+              "key": "project.md",
+              "value": 15,
+              "display": "15m",
+              "share": "38%",
+              "label": "project"
+            },
+            {
+              "key": "life.md",
+              "value": 25,
+              "display": "25m",
+              "share": "63%",
+              "label": "life"
+            }
+          ],
+          "project": [
+            {
+              "key": "project.md",
+              "value": 15,
+              "display": "15m",
+              "share": "38%",
+              "label": "project"
+            },
+            {
+              "key": "life_project.md",
+              "value": 25,
+              "display": "25m",
+              "share": "63%",
+              "label": "life_project"
+            }
+          ]
+        },
+        "points": [
+          {
+            "date": "2026-10-09",
+            "end": "2026-10-09",
+            "value": null,
+            "display": "–",
+            "quality": "not_tracked",
+            "provisional": false
+          },
+          {
+            "date": "2026-10-10",
+            "end": "2026-10-10",
+            "value": null,
+            "display": "–",
+            "quality": "not_tracked",
+            "provisional": false
+          },
+          {
+            "date": "2026-10-11",
+            "end": "2026-10-11",
+            "value": null,
+            "display": "–",
+            "quality": "not_tracked",
+            "provisional": true
+          }
+        ],
+        "daily_points": [
+          {
+            "date": "2026-10-09",
+            "end": "2026-10-09",
+            "value": null,
+            "display": "–",
+            "quality": "not_tracked",
+            "provisional": false
+          },
+          {
+            "date": "2026-10-10",
+            "end": "2026-10-10",
+            "value": null,
+            "display": "–",
+            "quality": "not_tracked",
+            "provisional": false
+          },
+          {
+            "date": "2026-10-11",
+            "end": "2026-10-11",
+            "value": null,
+            "display": "–",
+            "quality": "not_tracked",
+            "provisional": true
+          }
+        ],
+        "prior_points": [],
+        "direction": "neutral"
+      },
+      {
+        "id": "family_time",
+        "label": "Family time · off-clock",
+        "kind": "pomodoro",
+        "unit": "minutes",
+        "color": "green",
+        "parameters": {
+          "measure": "minutes",
+          "clock": "off-clock"
+        },
+        "summary": {
+          "total": {
+            "value": 40,
+            "display": "40m"
+          }
+        },
+        "points": [
+          {
+            "date": "2026-10-09",
+            "end": "2026-10-09",
+            "value": 30,
+            "display": "30m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 30,
+            "parts": {
+              "theme": {
+                "WORK": 10,
+                "LIFE": 20
+              },
+              "area": {
+                "dev.md": 10,
+                "life.md": 20
+              },
+              "root_parent": {
+                "project.md": 10,
+                "life.md": 20
+              },
+              "project": {
+                "project.md": 10,
+                "life_project.md": 20
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "10m",
+                "LIFE": "20m"
+              },
+              "area": {
+                "dev.md": "10m",
+                "life.md": "20m"
+              },
+              "root_parent": {
+                "project.md": "10m",
+                "life.md": "20m"
+              },
+              "project": {
+                "project.md": "10m",
+                "life_project.md": "20m"
+              }
+            }
+          },
+          {
+            "date": "2026-10-10",
+            "end": "2026-10-10",
+            "value": 10,
+            "display": "10m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 10,
+            "parts": {
+              "theme": {
+                "WORK": 5,
+                "LIFE": 5
+              },
+              "area": {
+                "dev.md": 5,
+                "life.md": 5
+              },
+              "root_parent": {
+                "project.md": 5,
+                "life.md": 5
+              },
+              "project": {
+                "project.md": 5,
+                "life_project.md": 5
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "5m",
+                "LIFE": "5m"
+              },
+              "area": {
+                "dev.md": "5m",
+                "life.md": "5m"
+              },
+              "root_parent": {
+                "project.md": "5m",
+                "life.md": "5m"
+              },
+              "project": {
+                "project.md": "5m",
+                "life_project.md": "5m"
+              }
+            }
+          },
+          {
+            "date": "2026-10-11",
+            "end": "2026-10-11",
+            "value": 0,
+            "display": "0m",
+            "quality": "ok",
+            "provisional": true,
+            "rolling_median": null,
+            "parts": {
+              "theme": {
+                "WORK": 0,
+                "LIFE": 0
+              },
+              "area": {
+                "dev.md": 0,
+                "life.md": 0
+              },
+              "root_parent": {
+                "project.md": 0,
+                "life.md": 0
+              },
+              "project": {
+                "project.md": 0,
+                "life_project.md": 0
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "0m",
+                "LIFE": "0m"
+              },
+              "area": {
+                "dev.md": "0m",
+                "life.md": "0m"
+              },
+              "root_parent": {
+                "project.md": "0m",
+                "life.md": "0m"
+              },
+              "project": {
+                "project.md": "0m",
+                "life_project.md": "0m"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "done",
+        "label": "Done",
+        "kind": "task",
+        "unit": "count",
+        "parameters": {
+          "event": "done"
+        },
+        "summary": {
+          "total": {
+            "value": 3,
+            "display": "3"
+          }
+        },
+        "points": []
+      }
+    ]
+  },
+  "countTotal": {
+    "ok": true,
+    "schema_version": 1,
+    "today": "2026-10-11",
+    "range": {
+      "preset": "4w",
+      "offset": 0,
+      "label": "Oct 9 – Oct 10",
+      "includes_today": true
+    },
+    "clock": {
+      "value": "total",
+      "label": "Total",
+      "since": "2026-10-09",
+      "options": [
+        {
+          "value": "worked",
+          "label": "Worked",
+          "description": "Closed Pomodoro minutes on the work clock.",
+          "minutes": 80,
+          "display": "1h 20m"
+        },
+        {
+          "value": "off-clock",
+          "label": "Off-clock",
+          "description": "Closed Pomodoro minutes off the clock.",
+          "minutes": 40,
+          "display": "40m"
+        },
+        {
+          "value": "total",
+          "label": "Total",
+          "description": "Closed session minutes on both clocks; overlapping sessions count twice.",
+          "minutes": 120,
+          "display": "2h 00m"
+        }
+      ]
+    },
+    "metrics": [
+      {
+        "id": "sessions",
+        "label": "Total sessions",
+        "kind": "pomodoro",
+        "unit": "count",
+        "color": "orange",
+        "definition": "Closed session counts on both clocks.",
+        "source": "daily Pomodoros",
+        "since": "2026-10-09",
+        "parameters": {
+          "measure": "minutes",
+          "clock": "total"
+        },
+        "summary": {
+          "headline": {
+            "value": 4,
+            "display": "4",
+            "suffix": "/day",
+            "stat": "median"
+          },
+          "total": {
+            "value": 8,
+            "display": "8"
+          },
+          "days_with_data": 2,
+          "total_clock_breakdown": {
+            "worked": {
+              "value": 5,
+              "display": "5"
+            },
+            "off_clock": {
+              "value": 3,
+              "display": "3"
+            }
+          },
+          "delta": {
+            "display": "1 more than the prior period",
+            "words": "1 more than the prior period",
+            "sign": 0
+          }
+        },
+        "parts_summary": {
+          "theme": [
+            {
+              "key": "WORK",
+              "value": 65,
+              "display": "1h 05m",
+              "share": "54%",
+              "label": "WORK",
+              "clock_breakdown": {
+                "worked": {
+                  "value": 50,
+                  "display": "50m"
+                },
+                "off_clock": {
+                  "value": 15,
+                  "display": "15m"
+                }
+              }
+            },
+            {
+              "key": "LIFE",
+              "value": 55,
+              "display": "55m",
+              "share": "46%",
+              "label": "LIFE",
+              "clock_breakdown": {
+                "worked": {
+                  "value": 30,
+                  "display": "30m"
+                },
+                "off_clock": {
+                  "value": 25,
+                  "display": "25m"
+                }
+              }
+            }
+          ],
+          "area": [
+            {
+              "key": "dev.md",
+              "value": 65,
+              "display": "1h 05m",
+              "share": "54%",
+              "label": "dev",
+              "clock_breakdown": {
+                "worked": {
+                  "value": 50,
+                  "display": "50m"
+                },
+                "off_clock": {
+                  "value": 15,
+                  "display": "15m"
+                }
+              }
+            },
+            {
+              "key": "life.md",
+              "value": 55,
+              "display": "55m",
+              "share": "46%",
+              "label": "life",
+              "clock_breakdown": {
+                "worked": {
+                  "value": 30,
+                  "display": "30m"
+                },
+                "off_clock": {
+                  "value": 25,
+                  "display": "25m"
+                }
+              }
+            }
+          ],
+          "root_parent": [
+            {
+              "key": "project.md",
+              "value": 65,
+              "display": "1h 05m",
+              "share": "54%",
+              "label": "project",
+              "clock_breakdown": {
+                "worked": {
+                  "value": 50,
+                  "display": "50m"
+                },
+                "off_clock": {
+                  "value": 15,
+                  "display": "15m"
+                }
+              }
+            },
+            {
+              "key": "life.md",
+              "value": 55,
+              "display": "55m",
+              "share": "46%",
+              "label": "life",
+              "clock_breakdown": {
+                "worked": {
+                  "value": 30,
+                  "display": "30m"
+                },
+                "off_clock": {
+                  "value": 25,
+                  "display": "25m"
+                }
+              }
+            }
+          ],
+          "project": [
+            {
+              "key": "project.md",
+              "value": 65,
+              "display": "1h 05m",
+              "share": "54%",
+              "label": "project",
+              "clock_breakdown": {
+                "worked": {
+                  "value": 50,
+                  "display": "50m"
+                },
+                "off_clock": {
+                  "value": 15,
+                  "display": "15m"
+                }
+              }
+            },
+            {
+              "key": "life_project.md",
+              "value": 55,
+              "display": "55m",
+              "share": "46%",
+              "label": "life_project",
+              "clock_breakdown": {
+                "worked": {
+                  "value": 30,
+                  "display": "30m"
+                },
+                "off_clock": {
+                  "value": 25,
+                  "display": "25m"
+                }
+              }
+            }
+          ]
+        },
+        "points": [
+          {
+            "date": "2026-10-09",
+            "end": "2026-10-09",
+            "value": 5,
+            "display": "5",
+            "quality": "ok",
+            "provisional": false,
+            "clock_breakdown": {
+              "worked": {
+                "value": 3,
+                "display": "3"
+              },
+              "off_clock": {
+                "value": 2,
+                "display": "2"
+              }
+            }
+          },
+          {
+            "date": "2026-10-10",
+            "end": "2026-10-10",
+            "value": 3,
+            "display": "3",
+            "quality": "ok",
+            "provisional": false,
+            "clock_breakdown": {
+              "worked": {
+                "value": 2,
+                "display": "2"
+              },
+              "off_clock": {
+                "value": 1,
+                "display": "1"
+              }
+            }
+          },
+          {
+            "date": "2026-10-11",
+            "end": "2026-10-11",
+            "value": 1,
+            "display": "1",
+            "quality": "ok",
+            "provisional": true,
+            "clock_breakdown": {
+              "worked": {
+                "value": 1,
+                "display": "1"
+              },
+              "off_clock": {
+                "value": 0,
+                "display": "0"
+              }
+            }
+          }
+        ],
+        "daily_points": [
+          {
+            "date": "2026-10-09",
+            "end": "2026-10-09",
+            "value": 5,
+            "display": "5",
+            "quality": "ok",
+            "provisional": false,
+            "clock_breakdown": {
+              "worked": {
+                "value": 3,
+                "display": "3"
+              },
+              "off_clock": {
+                "value": 2,
+                "display": "2"
+              }
+            }
+          },
+          {
+            "date": "2026-10-10",
+            "end": "2026-10-10",
+            "value": 3,
+            "display": "3",
+            "quality": "ok",
+            "provisional": false,
+            "clock_breakdown": {
+              "worked": {
+                "value": 2,
+                "display": "2"
+              },
+              "off_clock": {
+                "value": 1,
+                "display": "1"
+              }
+            }
+          },
+          {
+            "date": "2026-10-11",
+            "end": "2026-10-11",
+            "value": 1,
+            "display": "1",
+            "quality": "ok",
+            "provisional": true,
+            "clock_breakdown": {
+              "worked": {
+                "value": 1,
+                "display": "1"
+              },
+              "off_clock": {
+                "value": 0,
+                "display": "0"
+              }
+            }
+          }
+        ],
+        "prior_points": [],
+        "direction": "neutral"
+      },
+      {
+        "id": "done",
+        "label": "Done",
+        "kind": "task",
+        "unit": "count",
+        "parameters": {
+          "event": "done"
+        },
+        "summary": {
+          "total": {
+            "value": 3,
+            "display": "3"
+          }
+        },
+        "points": []
+      }
+    ]
+  },
+  "pinnedOffClock": {
+    "ok": true,
+    "schema_version": 1,
+    "today": "2026-10-11",
+    "range": {
+      "preset": "4w",
+      "offset": 0,
+      "label": "Oct 9 – Oct 10",
+      "includes_today": true
+    },
+    "clock": {
+      "value": "worked",
+      "label": "Worked",
+      "since": "2026-10-09",
+      "options": [
+        {
+          "value": "worked",
+          "label": "Worked",
+          "description": "Closed Pomodoro minutes on the work clock.",
+          "minutes": 80,
+          "display": "1h 20m"
+        },
+        {
+          "value": "off-clock",
+          "label": "Off-clock",
+          "description": "Closed Pomodoro minutes off the clock.",
+          "minutes": 40,
+          "display": "40m"
+        },
+        {
+          "value": "total",
+          "label": "Total",
+          "description": "Closed session minutes on both clocks; overlapping sessions count twice.",
+          "minutes": 120,
+          "display": "2h 00m"
+        }
+      ]
+    },
+    "metrics": [
+      {
+        "id": "worked",
+        "label": "Worked",
+        "kind": "pomodoro",
+        "unit": "minutes",
+        "color": "orange",
+        "definition": "Closed session minutes on the selected clock.",
+        "source": "daily Pomodoros",
+        "since": "2026-10-09",
+        "parameters": {
+          "measure": "minutes",
+          "clock": "worked"
+        },
+        "summary": {
+          "headline": {
+            "value": 40,
+            "display": "40m",
+            "suffix": "/day",
+            "stat": "median"
+          },
+          "total": {
+            "value": 80,
+            "display": "1h 20m"
+          },
+          "days_with_data": 2,
+          "total_clock_breakdown": {
+            "worked": {
+              "value": 80,
+              "display": "1h 20m"
+            },
+            "off_clock": {
+              "value": 40,
+              "display": "40m"
+            }
+          }
+        },
+        "parts_summary": {
+          "theme": [
+            {
+              "key": "WORK",
+              "value": 50,
+              "display": "50m",
+              "share": "63%",
+              "label": "WORK"
+            },
+            {
+              "key": "LIFE",
+              "value": 30,
+              "display": "30m",
+              "share": "38%",
+              "label": "LIFE"
+            }
+          ],
+          "area": [
+            {
+              "key": "dev.md",
+              "value": 50,
+              "display": "50m",
+              "share": "63%",
+              "label": "dev"
+            },
+            {
+              "key": "life.md",
+              "value": 30,
+              "display": "30m",
+              "share": "38%",
+              "label": "life"
+            }
+          ],
+          "root_parent": [
+            {
+              "key": "project.md",
+              "value": 50,
+              "display": "50m",
+              "share": "63%",
+              "label": "project"
+            },
+            {
+              "key": "life.md",
+              "value": 30,
+              "display": "30m",
+              "share": "38%",
+              "label": "life"
+            }
+          ],
+          "project": [
+            {
+              "key": "project.md",
+              "value": 50,
+              "display": "50m",
+              "share": "63%",
+              "label": "project"
+            },
+            {
+              "key": "life_project.md",
+              "value": 30,
+              "display": "30m",
+              "share": "38%",
+              "label": "life_project"
+            }
+          ]
+        },
+        "points": [
+          {
+            "date": "2026-10-09",
+            "end": "2026-10-09",
+            "value": 60,
+            "display": "1h 00m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 60,
+            "off_clock": 30,
+            "clock_breakdown": {
+              "worked": {
+                "value": 60,
+                "display": "1h 00m"
+              },
+              "off_clock": {
+                "value": 30,
+                "display": "30m"
+              }
+            },
+            "parts": {
+              "theme": {
+                "WORK": 40,
+                "LIFE": 20
+              },
+              "area": {
+                "dev.md": 40,
+                "life.md": 20
+              },
+              "root_parent": {
+                "project.md": 40,
+                "life.md": 20
+              },
+              "project": {
+                "project.md": 40,
+                "life_project.md": 20
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "40m",
+                "LIFE": "20m"
+              },
+              "area": {
+                "dev.md": "40m",
+                "life.md": "20m"
+              },
+              "root_parent": {
+                "project.md": "40m",
+                "life.md": "20m"
+              },
+              "project": {
+                "project.md": "40m",
+                "life_project.md": "20m"
+              }
+            }
+          },
+          {
+            "date": "2026-10-10",
+            "end": "2026-10-10",
+            "value": 20,
+            "display": "20m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 20,
+            "off_clock": 10,
+            "clock_breakdown": {
+              "worked": {
+                "value": 20,
+                "display": "20m"
+              },
+              "off_clock": {
+                "value": 10,
+                "display": "10m"
+              }
+            },
+            "parts": {
+              "theme": {
+                "WORK": 10,
+                "LIFE": 10
+              },
+              "area": {
+                "dev.md": 10,
+                "life.md": 10
+              },
+              "root_parent": {
+                "project.md": 10,
+                "life.md": 10
+              },
+              "project": {
+                "project.md": 10,
+                "life_project.md": 10
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "10m",
+                "LIFE": "10m"
+              },
+              "area": {
+                "dev.md": "10m",
+                "life.md": "10m"
+              },
+              "root_parent": {
+                "project.md": "10m",
+                "life.md": "10m"
+              },
+              "project": {
+                "project.md": "10m",
+                "life_project.md": "10m"
+              }
+            }
+          },
+          {
+            "date": "2026-10-11",
+            "end": "2026-10-11",
+            "value": 15,
+            "display": "15m",
+            "quality": "ok",
+            "provisional": true,
+            "rolling_median": null,
+            "parts": {
+              "theme": {
+                "WORK": 10,
+                "LIFE": 5
+              },
+              "area": {
+                "dev.md": 10,
+                "life.md": 5
+              },
+              "root_parent": {
+                "project.md": 10,
+                "life.md": 5
+              },
+              "project": {
+                "project.md": 10,
+                "life_project.md": 5
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "10m",
+                "LIFE": "5m"
+              },
+              "area": {
+                "dev.md": "10m",
+                "life.md": "5m"
+              },
+              "root_parent": {
+                "project.md": "10m",
+                "life.md": "5m"
+              },
+              "project": {
+                "project.md": "10m",
+                "life_project.md": "5m"
+              }
+            }
+          }
+        ],
+        "daily_points": [
+          {
+            "date": "2026-10-09",
+            "end": "2026-10-09",
+            "value": 60,
+            "display": "1h 00m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 60,
+            "off_clock": 30,
+            "clock_breakdown": {
+              "worked": {
+                "value": 60,
+                "display": "1h 00m"
+              },
+              "off_clock": {
+                "value": 30,
+                "display": "30m"
+              }
+            },
+            "parts": {
+              "theme": {
+                "WORK": 40,
+                "LIFE": 20
+              },
+              "area": {
+                "dev.md": 40,
+                "life.md": 20
+              },
+              "root_parent": {
+                "project.md": 40,
+                "life.md": 20
+              },
+              "project": {
+                "project.md": 40,
+                "life_project.md": 20
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "40m",
+                "LIFE": "20m"
+              },
+              "area": {
+                "dev.md": "40m",
+                "life.md": "20m"
+              },
+              "root_parent": {
+                "project.md": "40m",
+                "life.md": "20m"
+              },
+              "project": {
+                "project.md": "40m",
+                "life_project.md": "20m"
+              }
+            }
+          },
+          {
+            "date": "2026-10-10",
+            "end": "2026-10-10",
+            "value": 20,
+            "display": "20m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 20,
+            "off_clock": 10,
+            "clock_breakdown": {
+              "worked": {
+                "value": 20,
+                "display": "20m"
+              },
+              "off_clock": {
+                "value": 10,
+                "display": "10m"
+              }
+            },
+            "parts": {
+              "theme": {
+                "WORK": 10,
+                "LIFE": 10
+              },
+              "area": {
+                "dev.md": 10,
+                "life.md": 10
+              },
+              "root_parent": {
+                "project.md": 10,
+                "life.md": 10
+              },
+              "project": {
+                "project.md": 10,
+                "life_project.md": 10
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "10m",
+                "LIFE": "10m"
+              },
+              "area": {
+                "dev.md": "10m",
+                "life.md": "10m"
+              },
+              "root_parent": {
+                "project.md": "10m",
+                "life.md": "10m"
+              },
+              "project": {
+                "project.md": "10m",
+                "life_project.md": "10m"
+              }
+            }
+          },
+          {
+            "date": "2026-10-11",
+            "end": "2026-10-11",
+            "value": 15,
+            "display": "15m",
+            "quality": "ok",
+            "provisional": true,
+            "rolling_median": null,
+            "parts": {
+              "theme": {
+                "WORK": 10,
+                "LIFE": 5
+              },
+              "area": {
+                "dev.md": 10,
+                "life.md": 5
+              },
+              "root_parent": {
+                "project.md": 10,
+                "life.md": 5
+              },
+              "project": {
+                "project.md": 10,
+                "life_project.md": 5
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "10m",
+                "LIFE": "5m"
+              },
+              "area": {
+                "dev.md": "10m",
+                "life.md": "5m"
+              },
+              "root_parent": {
+                "project.md": "10m",
+                "life.md": "5m"
+              },
+              "project": {
+                "project.md": "10m",
+                "life_project.md": "5m"
+              }
+            }
+          }
+        ],
+        "prior_points": []
+      },
+      {
+        "id": "family_time",
+        "label": "Family time · off-clock",
+        "kind": "pomodoro",
+        "unit": "minutes",
+        "color": "green",
+        "parameters": {
+          "measure": "minutes",
+          "clock": "off-clock"
+        },
+        "summary": {
+          "total": {
+            "value": 40,
+            "display": "40m"
+          },
+          "headline": {
+            "value": 20,
+            "display": "20m",
+            "suffix": "/day",
+            "stat": "median"
+          },
+          "delta": {
+            "display": "5m more than the prior period",
+            "words": "5m more than the prior period",
+            "sign": 0
+          }
+        },
+        "points": [
+          {
+            "date": "2026-10-09",
+            "end": "2026-10-09",
+            "value": 30,
+            "display": "30m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 30,
+            "parts": {
+              "theme": {
+                "WORK": 10,
+                "LIFE": 20
+              },
+              "area": {
+                "dev.md": 10,
+                "life.md": 20
+              },
+              "root_parent": {
+                "project.md": 10,
+                "life.md": 20
+              },
+              "project": {
+                "project.md": 10,
+                "life_project.md": 20
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "10m",
+                "LIFE": "20m"
+              },
+              "area": {
+                "dev.md": "10m",
+                "life.md": "20m"
+              },
+              "root_parent": {
+                "project.md": "10m",
+                "life.md": "20m"
+              },
+              "project": {
+                "project.md": "10m",
+                "life_project.md": "20m"
+              }
+            }
+          },
+          {
+            "date": "2026-10-10",
+            "end": "2026-10-10",
+            "value": 10,
+            "display": "10m",
+            "quality": "ok",
+            "provisional": false,
+            "rolling_median": 10,
+            "parts": {
+              "theme": {
+                "WORK": 5,
+                "LIFE": 5
+              },
+              "area": {
+                "dev.md": 5,
+                "life.md": 5
+              },
+              "root_parent": {
+                "project.md": 5,
+                "life.md": 5
+              },
+              "project": {
+                "project.md": 5,
+                "life_project.md": 5
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "5m",
+                "LIFE": "5m"
+              },
+              "area": {
+                "dev.md": "5m",
+                "life.md": "5m"
+              },
+              "root_parent": {
+                "project.md": "5m",
+                "life.md": "5m"
+              },
+              "project": {
+                "project.md": "5m",
+                "life_project.md": "5m"
+              }
+            }
+          },
+          {
+            "date": "2026-10-11",
+            "end": "2026-10-11",
+            "value": 0,
+            "display": "0m",
+            "quality": "ok",
+            "provisional": true,
+            "rolling_median": null,
+            "parts": {
+              "theme": {
+                "WORK": 0,
+                "LIFE": 0
+              },
+              "area": {
+                "dev.md": 0,
+                "life.md": 0
+              },
+              "root_parent": {
+                "project.md": 0,
+                "life.md": 0
+              },
+              "project": {
+                "project.md": 0,
+                "life_project.md": 0
+              }
+            },
+            "parts_display": {
+              "theme": {
+                "WORK": "0m",
+                "LIFE": "0m"
+              },
+              "area": {
+                "dev.md": "0m",
+                "life.md": "0m"
+              },
+              "root_parent": {
+                "project.md": "0m",
+                "life.md": "0m"
+              },
+              "project": {
+                "project.md": "0m",
+                "life_project.md": "0m"
+              }
+            }
+          }
+        ],
+        "direction": "neutral"
+      },
+      {
+        "id": "done",
+        "label": "Done",
+        "kind": "task",
+        "unit": "count",
+        "parameters": {
+          "event": "done"
+        },
+        "summary": {
+          "total": {
+            "value": 3,
+            "display": "3"
+          }
+        },
+        "points": []
+      }
+    ]
   }
 }

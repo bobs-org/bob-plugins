@@ -89,13 +89,27 @@ class BobLedgerToolsBlockMarksReadingMixin {
     }
   }
 
+  // Query hosts only (Dataview result lists/tables, Tasks query-result
+  // containers, language-tasks/dataview blocks). A source-note li that
+  // Tasks also stamps `plugin-tasks-list-item` is not a query.
   blockMarkReadingIsQuery(row, el) {
     try {
-      if (typeof taskThemeRowIsQuery === "function") {
-        return Boolean(taskThemeRowIsQuery(row || el, el));
-      }
-      if (typeof taskThemeQueryAncestor === "function") {
-        return Boolean(taskThemeQueryAncestor(row || el, null));
+      let current = row || el;
+      let guard = 0;
+      while (current && guard < 200) {
+        guard += 1;
+        const classes =
+          typeof current.className === "string"
+            ? current.className
+            : this.blockMarkReadingAttr(current, "class") || "";
+        if (
+          typeof TASK_THEME_QUERY_HOST_RE !== "undefined" &&
+          TASK_THEME_QUERY_HOST_RE &&
+          TASK_THEME_QUERY_HOST_RE.test(String(classes || ""))
+        ) {
+          return true;
+        }
+        current = current.parentNode || current.parentElement || null;
       }
       return false;
     } catch (error) {

@@ -1,9 +1,13 @@
 // Tests for the pure blocked-reason classifier and api.blockMarks v1.
 // BM vectors below follow bob-cli `docs/blocked-marks.md` verbatim; BM24 is
-// the Tasks-results CSS vector and belongs to a later rendering phase.
+// the Tasks-results CSS vector, asserted against styles.css and the CSS
+// cascade helper (no JS writes Tasks DOM).
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
+const path = require("node:path");
 const test = require("node:test");
+const blockMarksE2e = require("./obsidian-block-marks-e2e-lib.cjs");
 
 class StubWidgetType {}
 class StubPlugin {
@@ -347,5 +351,112 @@ test("fold helpers: digit keys, BM1/BM8/BM9 bars, BM7/BM19 pills", () => {
   assert.equal(
     blockMarkProjectTagSource("- [?] #task R `#prj_is_blocked`"),
     null,
+  );
+
+  const css = fs.readFileSync(
+    path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),
+    "utf8",
+  );
+  assert.ok(
+    css.includes('li.task-list-item[data-bob-block="p2"] .task-priority'),
+    "source-note Tasks-classified digit rows clip .task-priority",
+  );
+});
+
+test("BM24 Tasks CSS cascade: digit from future scheduled + medium, no project tag", () => {
+  const key = blockMarksE2e.tasksResultCssKey({
+    dataTask: "?",
+    scheduled: "future-far",
+    priority: "medium",
+    hasPrjTag: false,
+    hasRecurring: false,
+  });
+  assert.equal(key, "p2");
+  assert.equal(
+    blockMarksE2e.tasksResultCssKey({
+      dataTask: "?",
+      scheduled: "future-3d",
+      priority: "high",
+      hasPrjTag: false,
+    }),
+    "p1",
+  );
+  assert.equal(
+    blockMarksE2e.tasksResultCssKey({
+      dataTask: "?",
+      scheduled: "future-far",
+      priority: "lowest",
+      hasPrjTag: false,
+    }),
+    "p4",
+  );
+  assert.equal(
+    blockMarksE2e.tasksResultCssKey({
+      dataTask: "?",
+      scheduled: "future-far",
+      priority: "medium",
+      hasPrjTag: true,
+    }),
+    "prj",
+  );
+  assert.equal(
+    blockMarksE2e.tasksResultCssKey({
+      dataTask: "?",
+      scheduled: "future-1d",
+      priority: "normal",
+      hasRecurring: true,
+    }),
+    "repeat",
+  );
+  assert.equal(
+    blockMarksE2e.tasksResultCssKey({
+      dataTask: "?",
+      scheduled: "future-far",
+      priority: "highest",
+    }),
+    "date",
+  );
+  assert.equal(
+    blockMarksE2e.tasksResultCssKey({
+      dataTask: "?",
+      scheduled: "today",
+      priority: "medium",
+    }),
+    "dep",
+  );
+  assert.equal(
+    blockMarksE2e.tasksResultCssKey({ dataTask: "*", scheduled: "future-far", priority: "high" }),
+    null,
+  );
+
+  const css = fs.readFileSync(
+    path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),
+    "utf8",
+  );
+  assert.ok(css.includes('ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"]'));
+  assert.ok(css.includes('[data-task-scheduled^="future-"][data-task-priority="medium"]'));
+  assert.ok(css.includes('content: "2"'));
+  assert.ok(css.includes(':has(.tag[data-tag-name="#prj_is_blocked"])'));
+  assert.ok(css.includes(":has(.task-recurring)"));
+  assert.ok(css.includes("clip-path: inset(50%)"));
+  assert.ok(
+    css.includes(
+      "body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task=\"?\"] > .task-list-item-checkbox",
+    ),
+  );
+  const tasksSection = css.slice(css.indexOf("Tasks query results: CSS-only"));
+  assert.ok(tasksSection.length > 200, "Tasks CSS section is present");
+  assert.ok(!/plugin-tasks-list-item[^{}!]*!important/.test(tasksSection));
+  assert.ok(
+    !/li\.plugin-tasks-list-item[^\n{]*\[data-bob-block\]/.test(tasksSection),
+    "Tasks CSS must not key off JS data-bob-block attributes",
+  );
+  const ungatedTasks = tasksSection.match(
+    /(?:^|\n)(?![^\n]*ul\.plugin-tasks-query-result)[^\n]*li\.plugin-tasks-list-item[^\n]*\{/g,
+  );
+  assert.equal(
+    ungatedTasks,
+    null,
+    "Tasks paint must stay inside ul.plugin-tasks-query-result so source-note lis keep JS marks",
   );
 });

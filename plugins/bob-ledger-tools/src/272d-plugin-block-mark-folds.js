@@ -47,27 +47,8 @@ class BobLedgerToolsBlockMarkFoldsMixin {
   priorityMarkFoldedForRow(path, lineText, li) {
     try {
       if (this.blockMarksEnabled === false) return false;
-      if (li) {
-        let classText = "";
-        try {
-          if (li.classList && typeof li.classList.contains === "function") {
-            if (li.classList.contains("plugin-tasks-list-item")) return false;
-          }
-          classText =
-            typeof li.className === "string"
-              ? li.className
-              : typeof li.getAttribute === "function"
-                ? li.getAttribute("class") || ""
-                : "";
-        } catch (error) {
-          classText = "";
-        }
-        if (
-          classText &&
-          String(classText).split(/\s+/).indexOf("plugin-tasks-list-item") !== -1
-        ) {
-          return false;
-        }
+      if (li && typeof this.blockMarkReadingInTasksQuery === "function") {
+        if (this.blockMarkReadingInTasksQuery(li)) return false;
       }
       if (li && typeof li.getAttribute === "function") {
         const key = li.getAttribute("data-bob-block");

@@ -782,7 +782,10 @@ test("Tasks query rows stay excluded", () => {
     trailing: ` Hand [scheduled:: ${FUTURE}]`,
     dataLine: 0,
   });
-  const root = section(doc, [row]);
+  const query = readingEl(doc, "ul", { class: "plugin-tasks-query-result" });
+  query.appendChild(row);
+  const root = readingEl(doc, "div");
+  root.appendChild(query);
   plugin.renderBlockMarksIn(
     root,
     ctxFor("Projects/Example.md", {
@@ -792,6 +795,26 @@ test("Tasks query rows stay excluded", () => {
     }),
   );
   assert.equal(attrsOf(row).key, null);
+});
+
+test("source-note lis Tasks also classifies still take JS marks", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const row = taskRow(doc, {
+    extraClass: "plugin-tasks-list-item",
+    trailing: ` Hand [scheduled:: ${FUTURE}]`,
+    dataLine: 0,
+  });
+  const root = section(doc, [row]);
+  plugin.renderBlockMarksIn(
+    root,
+    ctxFor("Projects/Example.md", {
+      text: `- [?] #task Hand [scheduled:: ${FUTURE}]`,
+      lineStart: 0,
+      lineEnd: 0,
+    }),
+  );
+  assert.equal(attrsOf(row).key, "date");
 });
 
 test("tooltip attributes restore when the mark leaves or the toggle turns off", () => {
@@ -1207,4 +1230,36 @@ test("BM7 folds the project tag; BM19 keeps it", () => {
   plugin.sweepBlockMarksReading();
   plugin.sweepBlockMarkFoldsReading();
   assert.equal(projectTagOf(folded).getAttribute("data-bob-block-folded"), null);
+});
+
+test("source-note lis Tasks also classifies still fold BM7 and keep BM19", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const folded = taskRow(doc, {
+    dataLine: 0,
+    extraClass: "plugin-tasks-list-item",
+    prj: true,
+    trailing: " Hold",
+  });
+  const kept = taskRow(doc, {
+    dataLine: 1,
+    extraClass: "plugin-tasks-list-item",
+    prj: true,
+    trailing: " After [dependsOn:: x]",
+  });
+  const root = section(doc, [folded, kept]);
+  const ctx = ctxFor("Projects/Example.md", {
+    text: [
+      "- [?] #task Hold #prj_is_blocked",
+      "- [?] #task After #prj_is_blocked [dependsOn:: x]",
+    ].join("\n"),
+    lineStart: 0,
+    lineEnd: 1,
+  });
+  plugin.renderBlockMarksIn(root, ctx);
+  plugin.renderBlockMarkFoldsIn(root);
+  assert.equal(attrsOf(folded).key, "prj");
+  assert.equal(projectTagOf(folded).getAttribute("data-bob-block-folded"), "true");
+  assert.equal(attrsOf(kept).key, "dep");
+  assert.equal(projectTagOf(kept).getAttribute("data-bob-block-folded"), null);
 });

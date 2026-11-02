@@ -1389,6 +1389,24 @@ body.bob-block-marks .bob-priority-mark[data-folded="true"] .bob-priority-mark-g
   overflow: hidden;
 }
 
+/* Source-note lis that Tasks also classifies keep `.task-priority`
+   instead of `.bob-priority-mark`. Digit rows already name the level
+   on the box, so clip those bars the same way query results do. */
+body.bob-block-marks li.task-list-item[data-bob-block="p1"] .task-priority,
+body.bob-block-marks li.task-list-item[data-bob-block="p2"] .task-priority,
+body.bob-block-marks li.task-list-item[data-bob-block="p3"] .task-priority,
+body.bob-block-marks li.task-list-item[data-bob-block="p4"] .task-priority {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 .bob-priority-mark:hover {
   opacity: 1;
   background-color: color-mix(in srgb, currentColor 10%, transparent);
@@ -2758,6 +2776,7 @@ body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task=
    at the platform defaults. */
 body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block] > .task-list-item-checkbox,
 body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block] input.task-list-item-checkbox,
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"] > .task-list-item-checkbox,
 body.bob-block-marks span.bob-block-mark[data-bob-block] {
   position: relative;
   overflow: visible;
@@ -3009,6 +3028,7 @@ body.bob-block-marks span.bob-block-mark[data-bob-block][data-bob-block-more]::a
 @media (prefers-reduced-motion: reduce) {
   body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block] > .task-list-item-checkbox,
   body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block] input.task-list-item-checkbox,
+  body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"] > .task-list-item-checkbox,
   body.bob-block-marks span.bob-block-mark[data-bob-block] {
     transition: none;
   }
@@ -3035,6 +3055,194 @@ body.bob-block-marks .bob-block-prj-fold[data-fold-space="true"] {
 }
 
 body.bob-block-marks a.tag[data-bob-block-folded="true"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Tasks query results: CSS-only marks from Tasks' own row attributes.
+   Confirmed against Tasks 8.4.0 / 8.6.0 `renderTaskLine` / `taskToHtml`:
+   `li.plugin-tasks-list-item` carries `data-task`, `data-line` (result
+   index, never the source line), `data-task-scheduled` (`today` /
+   `future-Nd` / `future-far` / `past-…`), `data-task-priority` (always,
+   even under `hide priority`), and description tags with
+   `data-tag-name`. Recurrence is a child `.task-recurring` span, not a
+   data attribute. No JS touches Tasks DOM, so there is no
+   `data-bob-block`, no pip, and no tooltip. `data-line` and
+   `input.checked` are never used to classify. Nested children cannot
+   inherit: every rule uses the child combinator on the row's own box.
+   Every selector is scoped to `ul.plugin-tasks-query-result` because
+   Tasks' markdown post-processor also marks source-note reading-view
+   `li`s with `plugin-tasks-list-item`; those rows keep JS marks and
+   BM19's kept pill. Cascade (later rules win at equal specificity):
+   `&` by elimination, then a future date (hollow `?`, or the shared
+   repeat mask when `.task-recurring` is present), then a ladder digit,
+   then `prj`. A project-tagged row always shows `prj` because Tasks
+   rows cannot see open prerequisites. */
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"] {
+  background-color: color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 13%, transparent);
+  border-inline-start: 2px solid var(--task-status-blocked, var(--color-red, #c65367));
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"] > .task-list-item-checkbox:checked {
+  --bob-block-ink: #ffffff;
+  border-color: var(--bob-block-held-fill);
+  background-color: var(--bob-block-held-fill);
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"] > .task-list-item-checkbox:checked::after {
+  content: "&";
+  color: #ffffff;
+  background-color: transparent;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"] {
+  background-color: color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 5.5%, transparent);
+  border-inline-start: 2px solid color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 45%, transparent);
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"] > .task-list-item-checkbox:checked {
+  --bob-block-ink: var(--bob-block-ink-1);
+  border: 1.5px solid var(--bob-block-ink);
+  background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"] > .task-list-item-checkbox:checked::after {
+  content: "?";
+  color: var(--bob-block-ink);
+  background-color: transparent;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"]:has(.task-recurring) > .task-list-item-checkbox:checked {
+  --bob-block-ink: var(--bob-block-ink-4);
+  border: 1.5px solid var(--bob-block-ink);
+  background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"]:has(.task-recurring) > .task-list-item-checkbox:checked::after {
+  content: "";
+  color: transparent;
+  background-color: var(--bob-block-ink);
+  -webkit-mask-image: var(--bob-date-glyph-repeat);
+  mask-image: var(--bob-date-glyph-repeat);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"][data-task-priority="high"] > .task-list-item-checkbox:checked {
+  --bob-block-ink: var(--bob-block-ink-1);
+  border: 1.5px solid var(--bob-block-ink);
+  background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"][data-task-priority="medium"] > .task-list-item-checkbox:checked {
+  --bob-block-ink: var(--bob-block-ink-2);
+  border: 1.5px solid var(--bob-block-ink);
+  background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"][data-task-priority="low"] > .task-list-item-checkbox:checked {
+  --bob-block-ink: var(--bob-block-ink-3);
+  border: 1.5px solid var(--bob-block-ink);
+  background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"][data-task-priority="lowest"] > .task-list-item-checkbox:checked {
+  --bob-block-ink: var(--bob-block-ink-4);
+  border: 1.5px solid var(--bob-block-ink);
+  background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"][data-task-priority="high"] > .task-list-item-checkbox:checked::after {
+  content: "1";
+  color: var(--bob-block-ink);
+  background-color: transparent;
+  font-variant-numeric: tabular-nums;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"][data-task-priority="medium"] > .task-list-item-checkbox:checked::after {
+  content: "2";
+  color: var(--bob-block-ink);
+  background-color: transparent;
+  font-variant-numeric: tabular-nums;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"][data-task-priority="low"] > .task-list-item-checkbox:checked::after {
+  content: "3";
+  color: var(--bob-block-ink);
+  background-color: transparent;
+  font-variant-numeric: tabular-nums;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"][data-task-priority="lowest"] > .task-list-item-checkbox:checked::after {
+  content: "4";
+  color: var(--bob-block-ink);
+  background-color: transparent;
+  font-variant-numeric: tabular-nums;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"]:has(.tag[data-tag-name="#prj_is_blocked"]),
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"]:has(.tag[href="#prj_is_blocked"]) {
+  background-color: color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 13%, transparent);
+  border-inline-start: 2px solid var(--task-status-blocked, var(--color-red, #c65367));
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"]:has(.tag[data-tag-name="#prj_is_blocked"]) > .task-list-item-checkbox:checked,
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"]:has(.tag[href="#prj_is_blocked"]) > .task-list-item-checkbox:checked {
+  --bob-block-ink: #ffffff;
+  border-color: var(--bob-block-held-fill);
+  background-color: var(--bob-block-held-fill);
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"]:has(.tag[data-tag-name="#prj_is_blocked"]) > .task-list-item-checkbox:checked::after,
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"]:has(.tag[href="#prj_is_blocked"]) > .task-list-item-checkbox:checked::after {
+  content: "";
+  color: transparent;
+  background-color: #ffffff;
+  -webkit-mask-image: var(--bob-block-glyph-chevron);
+  mask-image: var(--bob-block-glyph-chevron);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+/* Digit rows already say the priority on the box; `prj` rows already
+   say the project is blocked. Clip, never `display: none`. A `prj`
+   row keeps its bars because the box is a chevron, not a digit. */
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"]:is(
+  [data-task-priority="high"],
+  [data-task-priority="medium"],
+  [data-task-priority="low"],
+  [data-task-priority="lowest"]
+):not(:has(.tag[data-tag-name="#prj_is_blocked"])):not(:has(.tag[href="#prj_is_blocked"])) .task-priority,
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"] .tag[data-tag-name="#prj_is_blocked"],
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"] .tag[href="#prj_is_blocked"] {
   position: absolute;
   width: 1px;
   height: 1px;

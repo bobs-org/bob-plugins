@@ -121,6 +121,23 @@ const PROSE_NOTE = [
 const TASKS_QUERY_NOTE = [
   "# Tasks query",
   "",
+  "## Hide priority",
+  "",
+  "```tasks",
+  "path includes block-marks",
+  "description includes BM1 p2 vector",
+  "hide priority",
+  "```",
+  "",
+  "## Short",
+  "",
+  "```tasks",
+  "path includes block-marks",
+  "short mode",
+  "```",
+  "",
+  "## Full",
+  "",
   "```tasks",
   "path includes block-marks",
   "```",
@@ -658,40 +675,64 @@ const FOLDS_PROBE = `(() => { try {
     if (clip.indexOf("inset(50%)") !== -1) return 0;
     return Math.round(rect.width || 0);
   };
+  const isShown = (el) => {
+    if (!el || !el.getBoundingClientRect) return false;
+    let node = el;
+    while (node && node.nodeType === 1) {
+      const cs = window.getComputedStyle(node);
+      if (cs.display === "none" || cs.visibility === "hidden") return false;
+      node = node.parentElement;
+    }
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
   const pick = (needle) => {
-    const nodes = document.querySelectorAll(".HyperMD-task-line, .cm-line, li.task-list-item, li, p");
-    return Array.from(nodes).find((node) => String(node.textContent || "").includes(needle)) || null;
+    const match = (selector) => Array.from(document.querySelectorAll(selector)).find((node) => {
+      if (node.closest && node.closest("ul.plugin-tasks-query-result")) return false;
+      if (!isShown(node)) return false;
+      return String(node.textContent || "").includes(needle);
+    });
+    return match(".HyperMD-task-line") || match("li.task-list-item") || match(".cm-line") || match("p") || null;
+  };
+  const isPrjTag = (tag) => {
+    if (!tag) return false;
+    const href = tag.getAttribute ? tag.getAttribute("href") : "";
+    const name = tag.getAttribute ? tag.getAttribute("data-tag-name") : "";
+    const text = String(tag.textContent || "");
+    return href === "#prj_is_blocked" || name === "#prj_is_blocked" || /#?prj_is_blocked(?![A-Za-z0-9_/-])/.test(text);
   };
   const row = (needle) => {
     const host = pick(needle);
     if (!host) return { found: false, needle };
     const mark = host.querySelector ? host.querySelector(".bob-priority-mark") : null;
+    const taskPriority = (!mark && host.querySelector)
+      ? host.querySelector(".task-priority")
+      : null;
+    const foldMark = mark || taskPriority;
     const foldWidget = host.querySelector ? host.querySelector(".bob-block-prj-fold") : null;
     const tags = host.querySelectorAll
-      ? Array.from(host.querySelectorAll("a.tag, .cm-hashtag"))
+      ? Array.from(host.querySelectorAll("a.tag, .cm-hashtag, [data-tag-name], [href='#prj_is_blocked']"))
       : [];
-    const prjTag = tags.find((tag) => {
-      const href = tag.getAttribute ? tag.getAttribute("href") : "";
-      const name = tag.getAttribute ? tag.getAttribute("data-tag-name") : "";
-      const text = String(tag.textContent || "");
-      return href === "#prj_is_blocked" || name === "#prj_is_blocked" || /#?prj_is_blocked(?![A-Za-z0-9_/-])/.test(text);
-    }) || null;
+    const prjTag = tags.find(isPrjTag) || null;
     const markFoldedAttr = Boolean(mark && mark.getAttribute("data-folded") === "true");
-    const markWidth = mark ? visibleWidth(mark) : null;
+    const markWidth = foldMark ? visibleWidth(foldMark) : null;
     const tagFoldedAttr = Boolean(prjTag && prjTag.getAttribute("data-bob-block-folded") === "true");
-    const tagWidth = prjTag ? visibleWidth(prjTag) : (foldWidget ? visibleWidth(foldWidget) : null);
-    const prjFolded = Boolean(foldWidget) || tagFoldedAttr || (prjTag && tagWidth <= 4);
+    const textHasTag = /(?:^|[^A-Za-z0-9_/#])#prj_is_blocked(?![A-Za-z0-9_/-])/.test(String(host.textContent || ""));
+    const tagWidth = prjTag
+      ? visibleWidth(prjTag)
+      : (foldWidget ? visibleWidth(foldWidget) : (textHasTag && !foldWidget ? Math.max(8, Math.round((host.getBoundingClientRect().width || 80) * 0.08)) : null));
+    const prjFolded = Boolean(foldWidget || tagFoldedAttr || (prjTag && tagWidth <= 4));
     return {
       found: true,
-      folded: Boolean(mark) && (markFoldedAttr || (typeof markWidth === "number" && markWidth <= 4)),
+      folded: Boolean(foldMark) && (markFoldedAttr || (typeof markWidth === "number" && markWidth <= 4)),
       markWidth,
       markFoldedAttr,
       prjFolded,
       tagWidth,
       tagFoldedAttr,
       hasFoldWidget: Boolean(foldWidget),
-      hasMark: Boolean(mark),
-      hasTag: Boolean(prjTag),
+      hasMark: Boolean(foldMark),
+      hasTag: Boolean(prjTag) || Boolean(textHasTag && !foldWidget),
     };
   };
   return {
@@ -702,6 +743,86 @@ const FOLDS_PROBE = `(() => { try {
     bm19: row("BM19 dep over prj"),
   };
 } catch (e) { return { error: String(e && e.message || e) }; } })()`;
+
+// CSS-only Tasks query rows: attributes Tasks 8.4.0/8.6.0 actually writes,
+// plus computed checkbox paint. Never classify from data-line or input.checked.
+const TASKS_ROWS_PROBE = `(() => { try {
+  const visibleWidth = (el) => {
+    if (!el || !el.getBoundingClientRect) return 0;
+    const rect = el.getBoundingClientRect();
+    const cs = window.getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden") return 0;
+    const clip = String(cs.clipPath || cs.webkitClipPath || "");
+    if (clip.indexOf("inset(50%)") !== -1) return 0;
+    return Math.round(rect.width || 0);
+  };
+  const describe = (row, layout) => {
+    const box = row.querySelector(":scope > .task-list-item-checkbox, :scope > input.task-list-item-checkbox");
+    const after = box ? window.getComputedStyle(box, "::after") : null;
+    const cs = box ? window.getComputedStyle(box) : null;
+    const priority = row.querySelector(".task-priority");
+    const tags = row.querySelectorAll ? Array.from(row.querySelectorAll("a.tag, .tag")) : [];
+    const prjTag = tags.find((tag) => {
+      const href = tag.getAttribute ? tag.getAttribute("href") : "";
+      const name = tag.getAttribute ? tag.getAttribute("data-tag-name") : "";
+      const text = String(tag.textContent || "");
+      return href === "#prj_is_blocked" || name === "#prj_is_blocked" || /#?prj_is_blocked(?![A-Za-z0-9_/-])/.test(text);
+    }) || null;
+    const attrNames = row.getAttributeNames ? row.getAttributeNames() : [];
+    return {
+      text: String(row.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 180),
+      dataTask: row.getAttribute("data-task") || "",
+      dataLine: row.getAttribute("data-line") || "",
+      scheduled: row.getAttribute("data-task-scheduled") || "",
+      priority: row.getAttribute("data-task-priority") || "",
+      statusName: row.getAttribute("data-task-status-name") || "",
+      statusType: row.getAttribute("data-task-status-type") || "",
+      attrNames,
+      jsMarked: row.hasAttribute("data-bob-block"),
+      jsKey: row.getAttribute("data-bob-block") || "",
+      hasRecurring: Boolean(row.querySelector(".task-recurring")),
+      hasPrjTag: Boolean(prjTag),
+      prjTagWidth: prjTag ? visibleWidth(prjTag) : null,
+      priorityWidth: priority ? visibleWidth(priority) : null,
+      hasPriorityEl: Boolean(priority),
+      glyph: after ? String(after.content || "") : "",
+      glyphColor: after ? String(after.color || "") : "",
+      mask: after ? String(after.webkitMaskImage || after.maskImage || "") : "",
+      border: cs ? String(cs.borderTopWidth || "") + " " + String(cs.borderTopStyle || "") : "",
+      background: cs ? String(cs.backgroundColor || "") : "",
+      layout,
+      checked: box ? Boolean(box.checked) : null,
+    };
+  };
+  const layoutOf = (block) => {
+    if (block.classList.contains("tasks-layout-short-mode")) return "short";
+    let node = block.closest(".block-language-tasks") || block;
+    let prev = node.previousElementSibling;
+    for (let i = 0; i < 6 && prev; i += 1, prev = prev.previousElementSibling) {
+      const text = String(prev.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+      if (text.indexOf("hide priority") === 0) return "hide-priority";
+      if (text === "short") return "short";
+      if (text === "full") return "full";
+    }
+    const sample = block.querySelector("li.plugin-tasks-list-item");
+    if (sample && !sample.querySelector(".task-priority")) return "hide-priority";
+    return "full";
+  };
+  const blocks = Array.from(document.querySelectorAll("ul.plugin-tasks-query-result"));
+  const rows = [];
+  blocks.forEach((block) => {
+    const layout = layoutOf(block);
+    Array.from(block.querySelectorAll("li.plugin-tasks-list-item")).forEach((row) => {
+      rows.push(describe(row, layout));
+    });
+  });
+  return {
+    count: rows.length,
+    blocks: blocks.length,
+    gate: document.body.classList.contains("bob-block-marks"),
+    rows,
+  };
+} catch (e) { return { error: String(e && e.message || e), rows: [] }; } })()`;
 
 const EXPECTED_KEYS = Object.freeze({
   BM1: "p2",
@@ -851,6 +972,8 @@ function runSelfTest() {
     if (!prose.includes("[[block-marks]]")) throw new Error("prose note missing the hover link");
     const tasksQuery = fs.readFileSync(path.join(tmp, fixture.tasksQuery), "utf8");
     if (!tasksQuery.includes("```tasks")) throw new Error("tasks query note missing the Tasks fence");
+    if (!tasksQuery.includes("short mode")) throw new Error("tasks query note missing short mode");
+    if (!tasksQuery.includes("hide priority")) throw new Error("tasks query note missing hide priority");
     const dataviewQuery = fs.readFileSync(path.join(tmp, fixture.dataviewQuery), "utf8");
     if (!dataviewQuery.includes("```dataview")) throw new Error("dataview query note missing the Dataview fence");
     const app = JSON.parse(fs.readFileSync(path.join(tmp, ".obsidian/app.json"), "utf8"));
@@ -874,6 +997,11 @@ function runSelfTest() {
     }
     if (!source.includes("data-bob-block")) throw new Error("self-test must cover the owned row attributes");
     if (!source.includes("FOLDS_PROBE")) throw new Error("self-test must cover redundancy fold probes");
+    if (!source.includes("TASKS_ROWS_PROBE")) throw new Error("self-test must cover Tasks attribute probes");
+    if (!source.includes("data-task-scheduled")) throw new Error("self-test must cover Tasks scheduled attributes");
+    if (!source.includes("tasks-layout-short-mode")) throw new Error("self-test must classify short mode from the Tasks layout class");
+    if (!source.includes("hide-priority")) throw new Error("self-test must classify hide-priority independently of block index");
+    if (!source.includes("bm24-tasks-css-digit")) throw new Error("self-test must cover BM24");
     if (!source.includes("toggle-block-marks")) throw new Error("self-test must cover the session toggle");
     if (!source.includes("Input.dispatchMouseEvent")) throw new Error("self-test must cover CDP hover");
     if (!source.includes("setCssEnabledStatus")) throw new Error("self-test must cover snippet disable via customCss");
@@ -915,6 +1043,19 @@ function runSelfTest() {
     if (bm1Hits.visible.length !== 1 || bm1Hits.visible[0].key !== "p2") {
       throw new Error("BM1 matching must not also select BM10");
     }
+    const bm24Key = asserts.tasksResultCssKey({
+      dataTask: "?",
+      priority: "medium",
+      scheduled: "future-far",
+      hasPrjTag: false,
+      hasRecurring: false,
+    });
+    if (bm24Key !== "p2") throw new Error(`BM24 css key must be p2, got ${bm24Key}`);
+    const jsMarked = asserts.assertTasksCssMark(
+      { dataTask: "?", scheduled: "future-far", priority: "medium", jsMarked: true, glyph: '"2"' },
+      { marker: "BM1", wantKey: "p2", wantGlyph: "2" },
+    );
+    if (jsMarked.ok) throw new Error("JS-marked Tasks rows must fail the CSS-only assertion");
     console.log("offline self-test complete (not an Obsidian pass)");
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -1932,18 +2073,120 @@ async function runE2e(parsed) {
     await sleep(400);
     report.controlledClockNote = "BM23 patches dateMarksToday and calls refreshDateMarksForRollover; it is not a midnight observation.";
 
-    // Tasks query rows stay excluded (later parent phases own Tasks CSS/BM24).
+    // Tasks query results: CSS-only marks from Tasks' own row attributes (BM24).
     if (!fixture.tasksPlugin) {
-      skip("tasks-query-excluded", "Tasks plugin was not copied into the scratch vault; node tests cover query rows");
+      skip("tasks-query-css", "Tasks plugin was not copied into the scratch vault; node tests cover query CSS");
     } else {
       await openNote(client, fixture.tasksQuery, "preview");
-      await sleep(2500);
-      const tasksProbe = await client.evaluate(MARKS_PROBE).catch(() => ({ taskRows: [] }));
-      const markedTasks = (tasksProbe.taskRows || []).filter((r) => r.marked);
-      if ((tasksProbe.taskRows || []).length === 0) {
-        skip("tasks-query-excluded", "Tasks query rows did not render; node tests cover query rows");
+      await sleep(800);
+      await client.evaluate(`(() => {
+        const preview = document.querySelector(".markdown-preview-view");
+        if (preview) preview.scrollTop = preview.scrollHeight;
+        return true;
+      })()`).catch(() => false);
+      await sleep(600);
+      await client.evaluate(`(() => {
+        const preview = document.querySelector(".markdown-preview-view");
+        if (preview) preview.scrollTop = 0;
+        return true;
+      })()`).catch(() => false);
+      const layoutsReady = (probe) => {
+        const rows = (probe && probe.rows) || [];
+        const layouts = new Set(rows.map((row) => row.layout));
+        return rows.length > 0 && layouts.has("full") && layouts.has("short") && layouts.has("hide-priority");
+      };
+      let tasksProbe = null;
+      try {
+        tasksProbe = await waitFor(client, TASKS_ROWS_PROBE, layoutsReady, "tasks-query-layouts", 12000);
+      } catch (_error) {
+        tasksProbe = await client.evaluate(TASKS_ROWS_PROBE).catch(() => ({ rows: [] }));
+      }
+      if (!(tasksProbe.rows || []).length) {
+        skip("tasks-query-css", "Tasks query rows did not render; node tests cover query CSS");
       } else {
-        record("tasks-query-excluded", markedTasks.length === 0, `${markedTasks.length} marked of ${(tasksProbe.taskRows || []).length} Tasks rows`);
+        const pick = (marker, layout) => (tasksProbe.rows || []).find((row) => (
+          asserts.contextHasMarker(row && row.text, marker) && (!layout || row.layout === layout)
+        )) || null;
+        const jsMarked = (tasksProbe.rows || []).filter((row) => row.jsMarked);
+        record("tasks-query-no-js-attrs", jsMarked.length === 0, `${jsMarked.length} JS-marked of ${(tasksProbe.rows || []).length} Tasks rows`);
+
+        const bm1 = pick("BM1", "full");
+        const bm24 = asserts.assertTasksCssMark(bm1, {
+          marker: "BM1",
+          wantKey: "p2",
+          wantGlyph: "2",
+          wantMask: false,
+          hidePriority: true,
+        });
+        record(
+          "bm24-tasks-css-digit",
+          Boolean(bm24.ok && bm1 && String(bm1.scheduled || "").startsWith("future-") && bm1.priority === "medium" && bm1.dataTask === "?"),
+          JSON.stringify({ ok: bm24.ok, reason: bm24.reason, scheduled: bm1 && bm1.scheduled, priority: bm1 && bm1.priority, dataLine: bm1 && bm1.dataLine, attrs: bm1 && bm1.attrNames }).slice(0, 360),
+        );
+        report.tasksAttributes = {
+          versionHint: "Tasks 8.4.0 contract / installed 8.6.0 renderTaskLine",
+          sample: (tasksProbe.rows || []).filter((row) => row.layout === "full").slice(0, 8).map((row) => ({
+            text: row.text,
+            dataTask: row.dataTask,
+            dataLine: row.dataLine,
+            scheduled: row.scheduled,
+            priority: row.priority,
+            hasRecurring: row.hasRecurring,
+            hasPrjTag: row.hasPrjTag,
+            attrNames: row.attrNames,
+          })),
+        };
+
+        const bm2 = asserts.assertTasksCssMark(pick("BM2", "full"), { marker: "BM2", wantKey: "date", wantGlyph: "?", wantMask: false });
+        record("tasks-BM2-date", bm2.ok, bm2.reason || "date");
+        const bm3 = asserts.assertTasksCssMark(pick("BM3", "full"), { marker: "BM3", wantKey: "repeat", wantGlyph: "", wantMask: true });
+        record("tasks-BM3-repeat", bm3.ok, bm3.reason || "repeat");
+        const bm4 = asserts.assertTasksCssMark(pick("BM4", "full"), { marker: "BM4", wantKey: "dep", wantGlyph: "&", wantMask: false });
+        record("tasks-BM4-dep", bm4.ok, bm4.reason || "dep");
+        const bm7 = asserts.assertTasksCssMark(pick("BM7", "full"), { marker: "BM7", wantKey: "prj", wantGlyph: "", wantMask: true, hidePrjTag: true });
+        record("tasks-BM7-prj", bm7.ok, bm7.reason || "prj");
+        const bm10 = asserts.assertTasksCssMark(pick("BM10", "full"), { marker: "BM10", wantKey: "date", wantGlyph: "?", wantMask: false });
+        record("tasks-BM10-highest-date", bm10.ok, bm10.reason || "date");
+        const bm12 = pick("BM12", "full");
+        record("tasks-BM12-untouched", Boolean(bm12 && bm12.dataTask === "*" && !bm12.jsMarked), JSON.stringify(bm12 && { dataTask: bm12.dataTask, glyph: bm12.glyph }).slice(0, 160));
+        const bm19 = asserts.assertTasksCssMark(pick("BM19", "full"), { marker: "BM19", wantKey: "prj", wantGlyph: "", wantMask: true, hidePrjTag: true });
+        record("tasks-BM19-prj-limit", bm19.ok, bm19.reason || "prj-over-dep known limit");
+
+        const bm1Short = asserts.assertTasksCssMark(pick("BM1", "short"), { marker: "BM1-short", wantKey: "p2", wantGlyph: "2" });
+        record("tasks-short-BM1", bm1Short.ok, bm1Short.reason || "short");
+        const bm1Hide = asserts.assertTasksCssMark(pick("BM1", "hide-priority"), { marker: "BM1-hide-priority", wantKey: "p2", wantGlyph: "2" });
+        record("tasks-hide-priority-BM1", bm1Hide.ok, bm1Hide.reason || "hide-priority still classifies from data-task-priority");
+
+        const shotTasksLight = path.join(outDir, "e2e-block-marks-tasks-light.png");
+        await capturePage(client, shotTasksLight);
+        report.screenshots.push(shotTasksLight);
+        await client.evaluate(`(() => { document.body.classList.remove("theme-light"); document.body.classList.add("theme-dark"); return true; })()`);
+        await sleep(400);
+        const shotTasksDark = path.join(outDir, "e2e-block-marks-tasks-dark.png");
+        await capturePage(client, shotTasksDark);
+        report.screenshots.push(shotTasksDark);
+        await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); return true; })()`);
+        await sleep(300);
+
+        await client.evaluate(`(() => window.app.commands.executeCommandById("bob-ledger-tools:toggle-block-marks"))()`);
+        await sleep(400);
+        const offTasks = await client.evaluate(TASKS_ROWS_PROBE).catch(() => ({ rows: [], gate: true }));
+        const offBm1 = (offTasks.rows || []).find((row) => asserts.contextHasMarker(row && row.text, "BM1") && row.layout === "full") || null;
+        const offGlyph = asserts.computedContentGlyph(offBm1 && offBm1.glyph);
+        record(
+          "tasks-toggle-restores",
+          Boolean(offTasks.gate === false && offBm1 && offGlyph !== "2"),
+          JSON.stringify({ gate: offTasks.gate, glyph: offGlyph, background: offBm1 && offBm1.background }).slice(0, 220),
+        );
+        await client.evaluate(`(() => window.app.commands.executeCommandById("bob-ledger-tools:toggle-block-marks"))()`);
+        await sleep(400);
+        tasksProbe = await client.evaluate(TASKS_ROWS_PROBE).catch(() => ({ rows: [], gate: false }));
+        const onBm1 = (tasksProbe.rows || []).find((row) => asserts.contextHasMarker(row && row.text, "BM1") && row.layout === "full") || null;
+        record(
+          "tasks-toggle-restores-on",
+          Boolean(tasksProbe.gate === true && asserts.computedContentGlyph(onBm1 && onBm1.glyph) === "2"),
+          JSON.stringify({ gate: tasksProbe.gate, glyph: onBm1 && onBm1.glyph }).slice(0, 180),
+        );
       }
     }
 

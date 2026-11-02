@@ -86,6 +86,68 @@ function assertSnippetDisabled(probe) {
   return { ok: true };
 }
 
+// Mirror of the CSS-only Tasks-results cascade in styles.css. Tasks rows
+// cannot see open prerequisites, so a project tag always wins. Digit
+// membership is the stored ladder value on a future scheduled date.
+function tasksResultCssKey(row) {
+  if (!row || String(row.dataTask || "") !== "?") return null;
+  if (row.hasPrjTag) return "prj";
+  const future = String(row.scheduled || "").startsWith("future-");
+  const priority = String(row.priority || "");
+  if (future && priority === "high") return "p1";
+  if (future && priority === "medium") return "p2";
+  if (future && priority === "low") return "p3";
+  if (future && priority === "lowest") return "p4";
+  if (future && row.hasRecurring) return "repeat";
+  if (future) return "date";
+  return "dep";
+}
+
+function computedContentGlyph(content) {
+  const raw = String(content || "").trim();
+  if (!raw || raw === "none" || raw === "normal") return "";
+  const unquoted = raw.replace(/^["']|["']$/g, "");
+  return unquoted === "none" ? "" : unquoted;
+}
+
+function maskIsDrawn(mask) {
+  const value = String(mask || "").trim().toLowerCase();
+  if (!value || value === "none") return false;
+  return value.indexOf("url(") !== -1;
+}
+
+function assertTasksCssMark(row, { marker, wantKey, wantGlyph, wantMask, hidePriority, hidePrjTag } = {}) {
+  if (!row) return { ok: false, reason: `${marker || "row"} missing` };
+  if (row.jsMarked) return { ok: false, reason: `${marker} has JS data-bob-block`, row };
+  const key = tasksResultCssKey(row);
+  if (wantKey && key !== wantKey) {
+    return { ok: false, reason: `${marker} cssKey=${key} want=${wantKey}`, row };
+  }
+  const glyph = computedContentGlyph(row.glyph);
+  if (wantGlyph != null && glyph !== wantGlyph) {
+    return { ok: false, reason: `${marker} glyph=${JSON.stringify(glyph)} want=${JSON.stringify(wantGlyph)}`, row };
+  }
+  if (wantMask === true && !maskIsDrawn(row.mask)) {
+    return { ok: false, reason: `${marker} missing mask`, row };
+  }
+  if (wantMask === false && maskIsDrawn(row.mask)) {
+    return { ok: false, reason: `${marker} unexpected mask`, row };
+  }
+  if (hidePriority === true && !(typeof row.priorityWidth === "number" && row.priorityWidth <= 4)) {
+    return { ok: false, reason: `${marker} priority glyph still visible`, row };
+  }
+  if (hidePriority === false && row.priorityWidth != null && row.priorityWidth <= 4) {
+    return { ok: false, reason: `${marker} priority glyph clipped`, row };
+  }
+  if (hidePrjTag === true && !(typeof row.prjTagWidth === "number" && row.prjTagWidth <= 4)) {
+    return { ok: false, reason: `${marker} #prj_is_blocked still visible`, row };
+  }
+  if (hidePrjTag === false && row.hasPrjTag && row.prjTagWidth != null && row.prjTagWidth <= 4) {
+    return { ok: false, reason: `${marker} #prj_is_blocked clipped`, row };
+  }
+  return { ok: true, key, glyph, row };
+}
+
 module.exports = {
   scratchRoot,
   makeScratch,
@@ -97,4 +159,8 @@ module.exports = {
   assertRefreshChanged,
   assertNamedHostMark,
   assertSnippetDisabled,
+  tasksResultCssKey,
+  computedContentGlyph,
+  maskIsDrawn,
+  assertTasksCssMark,
 };

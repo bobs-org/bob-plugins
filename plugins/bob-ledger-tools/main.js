@@ -18769,24 +18769,43 @@ class BobLedgerToolsBlockMarksReadingDomMixin {
     }
   }
 
+  // Tasks query results are CSS-only. Source-note lis that Tasks also
+  // classifies as `plugin-tasks-list-item` still take JS marks and folds.
+  blockMarkReadingInTasksQuery(node) {
+    try {
+      let current = node;
+      let guard = 0;
+      while (current && guard < 200) {
+        guard += 1;
+        if (this.blockMarkReadingHasClass(current, "plugin-tasks-query-result")) {
+          return true;
+        }
+        current = current.parentNode || current.parentElement || null;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
   // Inspect the processor root itself as well as ancestors, so a Tasks
-  // or code/pre node passed as `el` is excluded. Nested lists still
+  // query or code/pre node passed as `el` is excluded. Nested lists still
   // walk independently because each candidate is checked on its own.
   blockMarkReadingRowSkipped(li, root) {
     try {
+      if (this.blockMarkReadingInTasksQuery(li)) return true;
+      if (
+        li === root &&
+        this.blockMarkReadingHasClass(li, "plugin-tasks-list-item")
+      ) {
+        return true;
+      }
       let current = li;
       let guard = 0;
       while (current && guard < 200) {
         guard += 1;
         const tag = this.blockMarkReadingTag(current);
         if (tag === "CODE" || tag === "PRE") return true;
-        if (
-          this.blockMarkReadingHasClass(current, "plugin-tasks-list-item") ||
-          this.blockMarkReadingHasClass(current, "tasks-list-text") ||
-          this.blockMarkReadingHasClass(current, "task-description")
-        ) {
-          return true;
-        }
         if (current === root) break;
         current = current.parentNode || current.parentElement || null;
       }
@@ -18913,13 +18932,27 @@ class BobLedgerToolsBlockMarksReadingMixin {
     }
   }
 
+  // Query hosts only (Dataview result lists/tables, Tasks query-result
+  // containers, language-tasks/dataview blocks). A source-note li that
+  // Tasks also stamps `plugin-tasks-list-item` is not a query.
   blockMarkReadingIsQuery(row, el) {
     try {
-      if (typeof taskThemeRowIsQuery === "function") {
-        return Boolean(taskThemeRowIsQuery(row || el, el));
-      }
-      if (typeof taskThemeQueryAncestor === "function") {
-        return Boolean(taskThemeQueryAncestor(row || el, null));
+      let current = row || el;
+      let guard = 0;
+      while (current && guard < 200) {
+        guard += 1;
+        const classes =
+          typeof current.className === "string"
+            ? current.className
+            : this.blockMarkReadingAttr(current, "class") || "";
+        if (
+          typeof TASK_THEME_QUERY_HOST_RE !== "undefined" &&
+          TASK_THEME_QUERY_HOST_RE &&
+          TASK_THEME_QUERY_HOST_RE.test(String(classes || ""))
+        ) {
+          return true;
+        }
+        current = current.parentNode || current.parentElement || null;
       }
       return false;
     } catch (error) {
@@ -56273,27 +56306,8 @@ class BobLedgerToolsBlockMarkFoldsMixin {
   priorityMarkFoldedForRow(path, lineText, li) {
     try {
       if (this.blockMarksEnabled === false) return false;
-      if (li) {
-        let classText = "";
-        try {
-          if (li.classList && typeof li.classList.contains === "function") {
-            if (li.classList.contains("plugin-tasks-list-item")) return false;
-          }
-          classText =
-            typeof li.className === "string"
-              ? li.className
-              : typeof li.getAttribute === "function"
-                ? li.getAttribute("class") || ""
-                : "";
-        } catch (error) {
-          classText = "";
-        }
-        if (
-          classText &&
-          String(classText).split(/\s+/).indexOf("plugin-tasks-list-item") !== -1
-        ) {
-          return false;
-        }
+      if (li && typeof this.blockMarkReadingInTasksQuery === "function") {
+        if (this.blockMarkReadingInTasksQuery(li)) return false;
       }
       if (li && typeof li.getAttribute === "function") {
         const key = li.getAttribute("data-bob-block");

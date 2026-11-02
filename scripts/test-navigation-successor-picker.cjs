@@ -517,14 +517,14 @@ test("themeIntent and preserveSpelling survive both destination normalizers", ()
     kind: "new",
     name: "Write",
     preserveSpelling: true,
-    themeIntent: { deliberate: true, linkOnce: false, shown: WRITE_SHOWN },
+    themeIntent: { deliberate: true, retype: false, shown: WRITE_SHOWN },
   };
   const nav = normalizeSuccessorDestinationOverride(valid);
   assert.deepEqual(nav, {
     kind: "new",
     name: "Write",
     preserveSpelling: true,
-    themeIntent: { deliberate: true, linkOnce: false, shown: WRITE_SHOWN },
+    themeIntent: { deliberate: true, retype: false, shown: WRITE_SHOWN },
   });
   const cycler = cyclerHelpers.normalizeSuccessorPickDestination(nav);
   assert.deepEqual(cycler, nav);
@@ -533,28 +533,28 @@ test("themeIntent and preserveSpelling survive both destination normalizers", ()
     entryLine: 4,
     entryText: "- [ ] () — DEEP",
     title: "DEEP",
-    themeIntent: { deliberate: false, linkOnce: false, shown: DEEP_SHOWN },
+    themeIntent: { deliberate: false, retype: false, shown: DEEP_SHOWN },
   });
   assert.deepEqual(cyclerHelpers.normalizeSuccessorPickDestination(existing), existing);
   assert.deepEqual(
-    normalizeSuccessorThemeIntent({ deliberate: true, linkOnce: true, shown: WRITE_SHOWN }),
-    { deliberate: false, linkOnce: true, shown: WRITE_SHOWN },
+    normalizeSuccessorThemeIntent({ deliberate: true, retype: true, shown: WRITE_SHOWN }),
+    { deliberate: true, retype: true, shown: WRITE_SHOWN },
   );
   assert.deepEqual(
-    cyclerHelpers.normalizeSuccessorThemeIntent({ deliberate: true, linkOnce: true, shown: null }),
-    { deliberate: false, linkOnce: true, shown: null },
+    cyclerHelpers.normalizeSuccessorThemeIntent({ deliberate: true, retype: true, shown: null }),
+    { deliberate: true, retype: true, shown: null },
   );
 });
 
 test("malformed themeIntent is dropped without rejecting a valid destination", () => {
   const { normalizeSuccessorDestinationOverride } = helpers;
   const malformed = [
-    { deliberate: "yes", linkOnce: false, shown: null },
-    { deliberate: true, linkOnce: 1, shown: null },
-    { deliberate: true, linkOnce: false, shown: "write" },
-    { deliberate: true, linkOnce: false, shown: {} },
-    { deliberate: true, linkOnce: false, shown: { theme: {} } },
-    { deliberate: true, linkOnce: false, shown: { theme: { key: "" } } },
+    { deliberate: "yes", retype: false, shown: null },
+    { deliberate: true, retype: 1, shown: null },
+    { deliberate: true, retype: false, shown: "write" },
+    { deliberate: true, retype: false, shown: {} },
+    { deliberate: true, retype: false, shown: { theme: {} } },
+    { deliberate: true, retype: false, shown: { theme: { key: "" } } },
     "intent",
     42,
   ];
@@ -613,7 +613,7 @@ test("task-aware retargets pass each successor's context, including a non-first 
       return {
         kind: "new",
         name: "WRITE",
-        themeIntent: { deliberate: true, linkOnce: false, shown: WRITE_SHOWN },
+        themeIntent: { deliberate: true, retype: false, shown: WRITE_SHOWN },
       };
     }
     return {
@@ -621,7 +621,7 @@ test("task-aware retargets pass each successor's context, including a non-first 
       entryLine: 5,
       entryText: "- [ ] () — DEEP",
       title: "DEEP",
-      themeIntent: { deliberate: false, linkOnce: false, shown: DEEP_SHOWN },
+      themeIntent: { deliberate: false, retype: false, shown: DEEP_SHOWN },
     };
   }, { files: { [write.path]: write.text, [deep.path]: deep.text } });
   const { pending, modal } = await openPicker(plugin, taskAwareModel([write, deep]));
@@ -672,18 +672,18 @@ test("old rows retarget without a task request and cannot acquire theme permissi
   assert.equal(result.picks[0].destination.themeIntent, undefined);
 });
 
-test("Alt+Enter link-once and untouched preselection keep validated intent", async () => {
+test("Alt+Enter retype and untouched default merge keep validated intent", async () => {
   const note = taskNote();
   const plugin = makePluginWithDestination(async () => ({
     kind: "new",
     name: "WRITE",
-    themeIntent: { deliberate: true, linkOnce: true, shown: WRITE_SHOWN },
+    themeIntent: { deliberate: true, retype: true, shown: WRITE_SHOWN },
   }), { files: { [note.path]: note.text } });
   const first = await openPicker(plugin, taskAwareModel([note]));
   assert.equal(await first.modal.retargetRowsForDestination(), true);
   assert.deepEqual(first.modal.destinationOverrides.get("opaque:task/0").themeIntent, {
-    deliberate: false,
-    linkOnce: true,
+    deliberate: true,
+    retype: true,
     shown: WRITE_SHOWN,
   });
   first.modal.close();
@@ -694,13 +694,13 @@ test("Alt+Enter link-once and untouched preselection keep validated intent", asy
     entryLine: 2,
     entryText: "- [ ] () — WRITE",
     title: "WRITE",
-    themeIntent: { deliberate: false, linkOnce: false, shown: WRITE_SHOWN },
+    themeIntent: { deliberate: false, retype: false, shown: WRITE_SHOWN },
   }), { files: { [note.path]: note.text } });
   const second = await openPicker(untouched, taskAwareModel([note]));
   assert.equal(await second.modal.retargetRowsForDestination(), true);
   assert.deepEqual(second.modal.destinationOverrides.get("opaque:task/0").themeIntent, {
     deliberate: false,
-    linkOnce: false,
+    retype: false,
     shown: WRITE_SHOWN,
   });
   second.modal.close();

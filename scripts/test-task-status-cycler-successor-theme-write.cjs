@@ -94,6 +94,29 @@ function stubPlanRetype(options = {}) {
   return { kind: "set", key: destinationKey, name: candidates[0].toUpperCase() };
 }
 
+function stubPlanLanding(options = {}) {
+  const plan = stubPlanRetype(options);
+  if (options.retype !== true && (plan.kind === "set" || plan.kind === "clear")) {
+    const base = String(options.destination || "").trim();
+    const effective = options.effective && options.effective.theme;
+    const type = effective && (effective.name || effective.key);
+    return { kind: "merge", name: `${base} + ${String(type || "").toUpperCase()}` };
+  }
+  return plan;
+}
+
+function stubMergeNames(base, others) {
+  const parts = [];
+  const seen = new Set();
+  for (const name of [base, ...(Array.isArray(others) ? others : [])]) {
+    for (const part of String(name || "").split("+").map((item) => item.trim()).filter(Boolean)) {
+      const key = part.toLowerCase();
+      if (!seen.has(key)) { seen.add(key); parts.push(part); }
+    }
+  }
+  return parts.join(" + ");
+}
+
 function stubThemesApi(suggestion, catalog = null) {
   return {
     version: 1,
@@ -102,6 +125,9 @@ function stubThemesApi(suggestion, catalog = null) {
     setTaskTheme: stubSetTaskTheme,
     clearTaskTheme: stubClearTaskTheme,
     planRetype: stubPlanRetype,
+    planLanding: stubPlanLanding,
+    mergeNames: stubMergeNames,
+    isMeetName: (name) => String(name || "").trim().toLowerCase() === "meet",
     effectiveTypeFor: ({ line, text }) => {
       const sourceLine = String(text || "").split(/\r?\n/)[Number(line) - 1] || "";
       const field = stubTaskThemeOf(sourceLine);
@@ -223,6 +249,31 @@ test("successor default placement creates a typed entry when needed", () => {
   assert.deepEqual(plan.placements[0].override, { kind: "new", name: "WRITE" });
 });
 
+test("successor retarget Enter merges the task type into the destination", () => {
+  const notes = {
+    "sase.md": "- [?] #task Fix apollo [id:: sase__fix-apollo] ^fix-apollo\n- [?] #task Follower [dependsOn:: sase__fix-apollo] ^follower",
+  };
+  const shown = noteSuggestion();
+  const key = offerKeyFor(planFixture({ day: FIX_DAY, notes, closed: FIX_CLOSED }).plan, "follower");
+  const { plan } = planFixture({
+    day: FIX_DAY, notes, closed: FIX_CLOSED,
+    options: {
+      selection: [key],
+      destinations: new Map([[key, {
+        kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX",
+        themeIntent: { deliberate: false, retype: false, shown },
+      }]]),
+      successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
+    },
+  });
+  const row = plan.unblocked.find((item) => item.block_id === "follower");
+  assert.equal(row.theme_changed || false, false);
+  assert.equal(row.link.entry_name, "FIX + WRITE");
+  assert.equal(plan.placements[0].override.mergedName, "FIX + WRITE");
+  const inserted = helpers.planSuccessorInsertions(FIX_DAY, plan.placements, {});
+  assert.match(inserted.text, /— FIX \+ WRITE/);
+});
+
 // Set via an existing bucket.
 test("successor retarget to existing FIX writes [type:: FIX]", () => {
   const notes = {
@@ -235,7 +286,7 @@ test("successor retarget to existing FIX writes [type:: FIX]", () => {
     day: FIX_DAY, notes, closed: FIX_CLOSED,
     options: {
       selection: [key],
-      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, retype: true, shown } }]]),
       successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
     },
   });
@@ -261,7 +312,7 @@ test("successor retarget selecting the inherited key clears the field", () => {
     day: FIX_DAY, notes, closed: FIX_CLOSED,
     options: {
       selection: [key],
-      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, linkOnce: false, shown: withInherited } }]]),
+      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, retype: true, shown: withInherited } }]]),
       successorTheme: { themesApi: stubThemesApi(withInherited), ledgerApi: stubLedgerApi() },
     },
   });
@@ -272,7 +323,7 @@ test("successor retarget selecting the inherited key clears the field", () => {
     day: FIX_DAY, notes, closed: FIX_CLOSED,
     options: {
       selection: [key2],
-      destinations: new Map([[key2, { kind: "existing", entryLine: 5, entryText: "- [ ] () — WRITE", themeIntent: { deliberate: true, linkOnce: false, shown: withInherited } }]]),
+      destinations: new Map([[key2, { kind: "existing", entryLine: 5, entryText: "- [ ] () — WRITE", themeIntent: { deliberate: true, retype: true, shown: withInherited } }]]),
       successorTheme: { themesApi: stubThemesApi(withInherited), ledgerApi: stubLedgerApi() },
     },
   });
@@ -296,7 +347,7 @@ test("same-key successor retarget is a byte-preserving no-op", () => {
     day: FIX_DAY, notes, closed: FIX_CLOSED,
     options: {
       selection: [key],
-      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, retype: true, shown } }]]),
       successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
     },
   });
@@ -317,7 +368,7 @@ test("invalid theme field repairs to the retarget destination", () => {
     day: FIX_DAY, notes, closed: FIX_CLOSED,
     options: {
       selection: [key],
-      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, retype: true, shown } }]]),
       successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
     },
   });
@@ -338,7 +389,7 @@ test("successor retarget to a new WRITE bucket writes the new name", () => {
     day: FIX_DAY, notes, closed: FIX_CLOSED,
     options: {
       selection: [key],
-      destinations: new Map([[key, { kind: "new", name: "WRITE", themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+      destinations: new Map([[key, { kind: "new", name: "WRITE", themeIntent: { deliberate: true, retype: true, shown } }]]),
       successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
     },
   });
@@ -361,7 +412,7 @@ test("PLAN+BUILD retarget writes BUILD (PLAN is exempt)", () => {
     day, notes, closed: FIX_CLOSED,
     options: {
       selection: [key],
-      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — PLAN+BUILD", themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — PLAN+BUILD", themeIntent: { deliberate: true, retype: true, shown } }]]),
       successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
     },
   });
@@ -389,7 +440,7 @@ test("unnamed, all-exempt, and composite destinations never write a theme", () =
     day: unnamedDay, notes, closed: FIX_CLOSED,
     options: {
       selection: [unnamedKey],
-      destinations: new Map([[unnamedKey, { ...cases[0], entryLine: 3, entryText: "- [ ] ()", themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+      destinations: new Map([[unnamedKey, { ...cases[0], entryLine: 3, entryText: "- [ ] ()", themeIntent: { deliberate: true, retype: true, shown } }]]),
       successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
     },
   });
@@ -400,7 +451,7 @@ test("unnamed, all-exempt, and composite destinations never write a theme", () =
       day: FIX_DAY, notes, closed: FIX_CLOSED,
       options: {
         selection: [key],
-        destinations: new Map([[key, { ...destination, themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+        destinations: new Map([[key, { ...destination, themeIntent: { deliberate: true, retype: true, shown } }]]),
         successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
       },
     });
@@ -420,8 +471,8 @@ test("two retargeted successors remember different themes", () => {
   const keyTwo = offerKeyFor(offered.plan, "two");
   // One defaults to WRITE and retargets to FIX; two defaults to FIX and retargets to WRITE.
   const destinations = new Map([
-    [keyOne, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, linkOnce: false, shown: shownWrite } }],
-    [keyTwo, { kind: "existing", entryLine: 5, entryText: "- [ ] () — WRITE", themeIntent: { deliberate: true, linkOnce: false, shown: shownFix } }],
+    [keyOne, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, retype: true, shown: shownWrite } }],
+    [keyTwo, { kind: "existing", entryLine: 5, entryText: "- [ ] () — WRITE", themeIntent: { deliberate: true, retype: true, shown: shownFix } }],
   ]);
   const themesApi = {
     ...stubThemesApi(shownWrite),
@@ -458,7 +509,7 @@ test("no suggestion, missing API, and guard refusals never write", () => {
     day: FIX_DAY, notes, closed: FIX_CLOSED,
     options: {
       selection: [key],
-      destinations: new Map([[key, dest({ deliberate: true, linkOnce: false, shown })]]),
+      destinations: new Map([[key, dest({ deliberate: true, retype: true, shown })]]),
       successorTheme: { themesApi: stubThemesApi(null), ledgerApi: stubLedgerApi() },
     },
   });
@@ -471,27 +522,32 @@ test("no suggestion, missing API, and guard refusals never write", () => {
     day: FIX_DAY, notes, closed: FIX_CLOSED,
     options: {
       selection: [key],
-      destinations: new Map([[key, dest({ deliberate: true, linkOnce: false, shown })]]),
+      destinations: new Map([[key, dest({ deliberate: true, retype: true, shown })]]),
       successorTheme: null,
     },
   });
   assert.equal(missing.unblocked.find((item) => item.block_id === "follower").theme_changed || false, false);
-  // Guard refusals: linkOnce, non-deliberate, missing shown, and default placement.
-  for (const intent of [
-    { deliberate: true, linkOnce: true, shown },
-    { deliberate: false, linkOnce: false, shown },
-    { deliberate: true, linkOnce: false, shown: null },
-  ]) {
-    const { plan } = planFixture({
-      day: FIX_DAY, notes, closed: FIX_CLOSED,
-      options: {
-        selection: [key],
-        destinations: new Map([[key, dest(intent)]]),
-        successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
-      },
-    });
-    assert.equal(plan.unblocked.find((item) => item.block_id === "follower").theme_changed || false, false, JSON.stringify(intent));
-  }
+// A valid unretargeted intent follows the default merge path even when the
+// destination picker kept its initial selection. Missing shown data still
+// cannot enable a theme write.
+  const { plan: defaultMerge } = planFixture({
+    day: FIX_DAY, notes, closed: FIX_CLOSED,
+    options: {
+      selection: [key],
+      destinations: new Map([[key, dest({ deliberate: false, retype: false, shown })]]),
+      successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
+    },
+  });
+  assert.equal(defaultMerge.unblocked.find((item) => item.block_id === "follower").link.entry_name, "FIX + WRITE");
+  const { plan: missingShown } = planFixture({
+    day: FIX_DAY, notes, closed: FIX_CLOSED,
+    options: {
+      selection: [key],
+      destinations: new Map([[key, dest({ deliberate: true, retype: false, shown: null })]]),
+      successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
+    },
+  });
+  assert.equal(missingShown.unblocked.find((item) => item.block_id === "follower").theme_changed || false, false);
   // Default placement (no override) never writes even with APIs present.
   const { plan: fallback } = planFixture({
     day: FIX_DAY, notes, closed: FIX_CLOSED,
@@ -527,7 +583,7 @@ test("stale task, suggestion, and destination skip the theme edit", () => {
     basenameCounts: { sase: 1 },
     noteTexts: staleNotes,
     selection: [key],
-    destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+    destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, retype: true, shown } }]]),
     successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
   });
   const staleRow = staleTaskPlan.unblocked.find((item) => item.block_id === "follower");
@@ -538,7 +594,7 @@ test("stale task, suggestion, and destination skip the theme edit", () => {
     day: FIX_DAY, notes, closed: FIX_CLOSED,
     options: {
       selection: [key],
-      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, retype: true, shown } }]]),
       successorTheme: { themesApi: stubThemesApi(current), ledgerApi: stubLedgerApi() },
     },
   });
@@ -561,7 +617,7 @@ test("stale task, suggestion, and destination skip the theme edit", () => {
       day, notes, closed: FIX_CLOSED,
       options: {
         selection: [badKey],
-        destinations: new Map([[badKey, { ...bad, themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+        destinations: new Map([[badKey, { ...bad, themeIntent: { deliberate: true, retype: true, shown } }]]),
         successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
       },
     });
@@ -580,7 +636,7 @@ test("theme edit persists when the daily insertion later fails", () => {
     day: FIX_DAY, notes, closed: FIX_CLOSED,
     options: {
       selection: [key],
-      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+      destinations: new Map([[key, { kind: "existing", entryLine: 3, entryText: "- [ ] () — FIX", themeIntent: { deliberate: true, retype: true, shown } }]]),
       successorTheme: { themesApi: stubThemesApi(shown), ledgerApi: stubLedgerApi() },
     },
   });
@@ -643,7 +699,7 @@ test("daily-note successors use the daily snapshot for suggestFor", () => {
     basenameCounts: {},
     noteTexts: { "sase.md": notes["sase.md"], [DAILY_PATH]: day },
     selection: [target.offer.key],
-    destinations: new Map([[target.offer.key, { kind: "new", name: "FIX", themeIntent: { deliberate: true, linkOnce: false, shown } }]]),
+    destinations: new Map([[target.offer.key, { kind: "new", name: "FIX", themeIntent: { deliberate: true, retype: true, shown } }]]),
     successorTheme: { themesApi, ledgerApi: stubLedgerApi() },
   });
   const row = planned.unblocked.find((item) => item.block_id === "local");

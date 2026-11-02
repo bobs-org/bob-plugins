@@ -55146,8 +55146,8 @@ function pomodoroThemeSuggestWithDiagnostics(options = {}) {
   return inherited;
 }
 // ---- src/279-plugin-task-type-routing.js ----
-// --- Task type routing: pure JS mirror of bob-cli routing.rs (D4-D8) ---
-// Agreement, retype, placement, and relocation planners over plain data.
+// --- Task type routing: pure JS mirror of bob-cli routing.rs (D4-D8, R2) ---
+// Agreement, landing, placement, relocation, merge, and shed planners over plain data.
 // Vocabulary, exempt, and inventory ride the `sources` argument as raw name
 // lists (`{ vocab, exempt, inventory }`); a null or empty `vocab` means no
 // configured vocabulary. Vectors in
@@ -55227,12 +55227,9 @@ function taskTypeStripSelector(raw) {
   return text;
 }
 
-// How a link landing in Pomodoro D retypes its task (D6). `effectiveKey` is
-// the task's current effective type and `inheritedKey` the same cascade
-// without the task field; `selector` is the authored `#NAME` / `=name`
-// text, `keepType` the keep-type merge path, and `tabPick` the cycled
-// composite choice.
-function planRetype(input, sources) {
+// Legacy explicit task-field selection (D6). `planLanding` below is the
+// default link/move behavior; this helper stays for explicit type editors.
+function planExplicitRetype(input, sources) {
   const opts = input && typeof input === "object" ? input : {};
   const sets = normalizeTaskTypeSources(sources);
   const destination = String(opts.destination == null ? "" : opts.destination);
@@ -55252,11 +55249,6 @@ function planRetype(input, sources) {
     if (entryKeys.has(effectiveKey)) {
       return { kind: "consistent" };
     }
-  }
-  if (opts.keepType === true) {
-    const current = opts.effectiveName || opts.effectiveKey || "";
-    const canonical = pomodoroThemeCanonicalName(current) || String(current || "");
-    return { kind: "merge", name: `${destination.trim()} + ${canonical}` };
   }
   const candidates = components.filter((item) => item.isType);
   if (candidates.length === 0) {
@@ -55286,6 +55278,97 @@ function planRetype(input, sources) {
     return { kind: "clear" };
   }
   return { kind: "set", name: chosen.name, key: chosen.key };
+}
+
+function taskTypeIsMeetName(name) {
+  return pomodoroThemeNormalizeKey(name) === "meet";
+}
+
+// Default Task Link landing (R2). A named destination merges the task's
+// effective type into its name unless the gesture explicitly requests a
+// field retype or the destination is calendar-owned MEET.
+function planLanding(input, sources) {
+  const opts = input && typeof input === "object" ? input : {};
+  const destination = String(opts.destination == null ? "" : opts.destination);
+  const components = typeComponents(destination, sources);
+  if (components.every((item) => !item.isType)) {
+    return { kind: "container" };
+  }
+  const effectiveKey = opts.effectiveKey == null || opts.effectiveKey === ""
+    ? null
+    : pomodoroThemeNormalizeKey(opts.effectiveKey);
+  if (!effectiveKey) {
+    return { kind: "consistent" };
+  }
+  const entryKeys = new Set(
+    pomodoroThemeSplitComponents(destination).map((component) =>
+      pomodoroThemeNormalizeKey(component),
+    ),
+  );
+  if (entryKeys.has(effectiveKey)) {
+    return { kind: "consistent" };
+  }
+  if (opts.retype !== true && !taskTypeIsMeetName(destination)) {
+    const current = opts.effectiveName || opts.effectiveKey || "";
+    const canonical = pomodoroThemeCanonicalName(current) || String(current || "");
+    return { kind: "merge", name: `${destination.trim()} + ${canonical}` };
+  }
+  return planExplicitRetype(opts, sources);
+}
+
+// Version-1 compatibility alias: retype is the explicit `planLanding` mode.
+function planRetype(input, sources) {
+  return planLanding({ ...(input && typeof input === "object" ? input : {}), retype: true }, sources);
+}
+
+// Deduplicating component join (R5): base order first, followed by each
+// other name's components in order. First spelling wins and labels remain.
+function mergeNames(base, others) {
+  const seen = new Set();
+  const parts = [];
+  const names = [base, ...(Array.isArray(others) ? others : [])];
+  for (const name of names) {
+    for (const component of pomodoroThemeSplitComponents(String(name || ""))) {
+      const key = pomodoroThemeNormalizeKey(component);
+      if (!seen.has(key)) {
+        seen.add(key);
+        parts.push(component);
+      }
+    }
+  }
+  return parts.join(" + ");
+}
+
+// Shed merged-in types whose last Task Link left. Types with no prior links,
+// labels, and the base type survive. MEET is calendar-owned and immutable.
+function shed(name, beforeKeys, afterKeys, sources) {
+  const rawName = String(name == null ? "" : name);
+  if (taskTypeIsMeetName(rawName)) {
+    return rawName;
+  }
+  const classified = typeComponents(rawName, sources);
+  const types = classified.filter((item) => item.isType);
+  if (types.length < 2) {
+    return rawName;
+  }
+  const before = new Set(
+    (Array.isArray(beforeKeys) ? beforeKeys : [])
+      .map((key) => pomodoroThemeNormalizeKey(key)).filter(Boolean),
+  );
+  const after = new Set(
+    (Array.isArray(afterKeys) ? afterKeys : [])
+      .map((key) => pomodoroThemeNormalizeKey(key)).filter(Boolean),
+  );
+  const drop = new Set(types
+    .filter((item) => before.has(item.key) && !after.has(item.key))
+    .map((item) => item.key));
+  if (types.every((item) => drop.has(item.key))) {
+    drop.delete(types[0].key);
+  }
+  return classified
+    .filter((item) => !item.isType || !drop.has(item.key))
+    .map((item) => item.name)
+    .join(" + ");
 }
 
 function taskTypeIsExactEntry(name, key, exempt) {
@@ -60925,6 +61008,10 @@ class BobLedgerToolsTaskThemeApiMixin {
       typeComponentsOf: (name) => this.taskTypeComponentsOf(name),
       typeAgrees: (taskKey, entryName) => this.taskTypeAgrees(taskKey, entryName),
       planRetype: (options) => this.taskTypePlanRetype(options),
+      planLanding: (options) => this.taskTypePlanLanding(options),
+      mergeNames: (base, others) => mergeNames(base, others),
+      shed: (name, before, after) => this.taskTypeShed(name, before, after),
+      isMeetName: (name) => taskTypeIsMeetName(name),
       planPlacement: (options) => this.taskTypePlanPlacement(options),
       planRelocation: (options) => this.taskTypePlanRelocation(options),
       isKnownTheme: (key) => this.pomodoroThemeIsKnown(key),
@@ -61002,6 +61089,41 @@ class BobLedgerToolsTaskThemeApiMixin {
       );
     } catch (error) {
       return null;
+    }
+  }
+
+  taskTypePlanLanding(options) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      const effective = opts.effective !== undefined ? opts.effective : opts.suggestion;
+      const inherited = opts.inheritedKey !== undefined ? opts.inheritedKey : opts.inherited;
+      return planLanding(
+        {
+          field: opts.field,
+          effectiveKey: effective && typeof effective === "object"
+            ? pomodoroThemeKeyOf(effective.theme || effective)
+            : effective,
+          effectiveName: taskTypeThemeNameOf(effective),
+          inheritedKey: inherited && typeof inherited === "object"
+            ? pomodoroThemeKeyOf(inherited.theme || inherited)
+            : inherited,
+          destination: opts.destination !== undefined ? opts.destination : opts.destinationName,
+          selector: opts.selector,
+          retype: opts.retype,
+          tabPick: opts.tabPick,
+        },
+        opts.sources !== undefined ? opts.sources : this.taskTypeSources(),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskTypeShed(name, before, after) {
+    try {
+      return shed(name, before, after, this.taskTypeSources());
+    } catch (error) {
+      return typeof name === "string" ? name : "";
     }
   }
 
@@ -77160,6 +77282,10 @@ module.exports.helpers = {
   typeComponents,
   typeAgrees,
   planRetype,
+  planLanding,
+  mergeNames,
+  shed,
+  taskTypeIsMeetName,
   planPlacement,
   planRelocation,
   replaceTypeComponents,

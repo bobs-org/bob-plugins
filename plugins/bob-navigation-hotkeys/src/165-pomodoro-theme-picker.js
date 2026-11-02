@@ -15,8 +15,8 @@ const POMODORO_BULLET_MOVE_HINTS = [
   { keys: ["↑", "↓"], label: "Navigate" },
   { keys: ["^N", "^P"], label: "Move" },
   { keys: ["^D"], label: "Hide / undo" },
-  { keys: ["↵"], label: "Move" },
-  { keys: ["⌥↵"], label: "Keep types" },
+  { keys: ["↵"], label: "Move · merge types" },
+  { keys: ["⌥↵"], label: "Retype task types" },
   { keys: ["⇥"], label: "Cycle type" },
   { keys: ["esc"], label: "Dismiss" },
 ];

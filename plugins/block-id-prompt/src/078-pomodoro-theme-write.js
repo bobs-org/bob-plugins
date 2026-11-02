@@ -1,6 +1,6 @@
-// Task-type write for Link to today (plan:202610/task_types.md
-// link-picker-retype). Pure helpers: revalidate the shown suggestion, apply
-// planRetype, merge a keep-type destination name, and attach notice metadata.
+// Task-type write for Link to today. Pure helpers: revalidate the shown
+// suggestion, apply the R2 landing plan, merge destination names, and attach
+// notice metadata.
 // The 120 mixin stays a thin call site.
 function pomodoroPlanDestinationName(pomodoroPlan) {
   try {
@@ -261,7 +261,7 @@ function resolvePomodoroLinkThemeWrite(plugin, source, target, taskContent) {
     if (
       !themesApi ||
       typeof themesApi.suggestFor !== "function" ||
-      typeof themesApi.planRetype !== "function" ||
+      typeof themesApi.planLanding !== "function" ||
       typeof themesApi.setTaskTheme !== "function" ||
       typeof themesApi.clearTaskTheme !== "function"
     ) {
@@ -294,11 +294,11 @@ function resolvePomodoroLinkThemeWrite(plugin, source, target, taskContent) {
     const inherited = pomodoroThemeWriteInherited(effective);
     let outcome = null;
     try {
-      outcome = themesApi.planRetype({
+      outcome = themesApi.planLanding({
         effective,
         inherited,
         destination: destinationName,
-        keepType: intent.linkOnce === true,
+        retype: intent.retype === true,
         tabPick: intent.tabPick,
       });
     } catch (_error) {
@@ -388,9 +388,21 @@ function rewritePomodoroEntryNameLine(lineText, newName) {
   const line = hasCR ? raw.slice(0, -1) : raw;
   const dash = " — ";
   const index = line.indexOf(dash);
-  const next = index >= 0
-    ? `${line.slice(0, index + dash.length)}${newName}`
-    : `${line.replace(/[ \t]+$/, "")}${dash}${newName}`;
+  let next;
+  if (index >= 0) {
+    next = `${line.slice(0, index + dash.length)}${newName}`;
+  } else {
+    const taskPrefix = /^([ \t]*[-*][ \t]+\[[^\]\r\n]\][ \t]*)/.exec(line);
+    const bodyStart = taskPrefix ? taskPrefix[0].length : 0;
+    const body = line.slice(bodyStart);
+    const paren = /\([^)]*\)/.exec(body);
+    const label = paren ? body.slice(0, paren.index).replace(/[ \t]+$/, "") : "";
+    if (paren && label) {
+      next = `${line.slice(0, bodyStart)}${newName} ${body.slice(paren.index)}`;
+    } else {
+      next = `${line.replace(/[ \t]+$/, "")}${dash}${newName}`;
+    }
+  }
   return hasCR ? `${next}\r` : next;
 }
 
@@ -475,6 +487,9 @@ function formatPomodoroThemeLinkChip(plan) {
     }
     if (plan.themeChanged === true && plan.themeAction === "set" && plan.themeName) {
       return ` · type ${plan.themeName}`;
+    }
+    if (plan.themeMergeName && plan.themeKeepsName) {
+      return ` · merged ${plan.themeKeepsName}`;
     }
     if (plan.themeKeepsName) {
       return ` · keeps ${plan.themeKeepsName}`;

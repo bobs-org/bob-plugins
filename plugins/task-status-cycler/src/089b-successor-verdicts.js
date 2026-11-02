@@ -2,6 +2,57 @@
 // §12.4 PICK, §12.5 reporting). Pure code: no vault reads, no editor writes.
 // Extracted from 089 so both fragments stay ≤1000 lines. Shared scope.
 
+function successorRenamePomodoroEntryLine(lineText, name) {
+  const line = String(lineText || "");
+  const parsed = parsePomodoroEntryLineParts(line);
+  if (!parsed || typeof name !== "string" || !name.trim()) return null;
+  const marker = line.match(/[ \t]*—[ \t]*/);
+  return marker
+    ? `${line.slice(0, marker.index)}${marker[0]}${name}`
+    : `${line.replace(/[ \t]+$/, "")} — ${name}`;
+}
+
+function coalesceSuccessorLandingNames(placements, rows, themesApi) {
+  if (!Array.isArray(placements) || !themesApi || typeof themesApi.mergeNames !== "function") {
+    return;
+  }
+  const groups = new Map();
+  for (const placement of placements) {
+    const override = placement && placement.override;
+    const mergeName = placement && placement.mergeName;
+    if (!override || typeof mergeName !== "string" || !mergeName) continue;
+    const key = override.kind === "existing"
+      ? `existing:${override.entryLine}`
+      : `new:${String(placement.mergeBaseName || override.name || "").toLowerCase()}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { placements: [], names: [] };
+      groups.set(key, group);
+    }
+    group.placements.push(placement);
+    group.names.push(mergeName);
+  }
+  for (const group of groups.values()) {
+    let mergedName = group.names[0];
+    try {
+      mergedName = themesApi.mergeNames(mergedName, group.names.slice(1));
+    } catch (_error) {
+      continue;
+    }
+    if (typeof mergedName !== "string" || !mergedName) continue;
+    for (const placement of group.placements) {
+      placement.mergeName = mergedName;
+      if (placement.override.kind === "existing") {
+        placement.override = { ...placement.override, mergedName };
+      } else {
+        placement.override = { ...placement.override, name: mergedName };
+      }
+      const row = rows[placement.rowIndex];
+      if (row && row.link) row.link.entry_name = mergedName;
+    }
+  }
+}
+
 function applySuccessorVerdicts(context) {
   const recovers = Array.isArray(context.recovers) ? context.recovers : [];
   const successorMarks = Array.isArray(context.successorMarks) ? context.successorMarks : [];
@@ -332,6 +383,8 @@ function applySuccessorVerdicts(context) {
     let successorThemeName = null;
     let successorThemeSuggestionChanged = false;
     let successorThemeDestinationName = null;
+    let successorThemeMergeName = null;
+    let successorThemeMergeBaseName = null;
     const successorEarlyOverride = (() => {
       try {
         return normalizeSuccessorPickDestination(destinations.get(String(key)));
@@ -365,6 +418,12 @@ function applySuccessorVerdicts(context) {
       }
       if (write.suggestionChanged === true) {
         successorThemeSuggestionChanged = true;
+        return raised;
+      }
+      if (typeof write.mergeName === "string" && write.mergeName) {
+        successorThemeMergeName = write.mergeName;
+        successorThemeMergeBaseName = write.mergeBaseName || null;
+        successorThemeDestinationName = write.destinationThemeName || write.mergeName;
         return raised;
       }
       if (write.themeEdit && typeof write.themeEdit.apply === "function") {
@@ -471,6 +530,9 @@ function applySuccessorVerdicts(context) {
     // passed the stamped line, so the edit is already consolidated. For
     // pullIn picks the rewrite+stamp line is likewise consolidated.)
     if (rowIndex != null) {
+      if (successorThemeMergeName && rows[rowIndex].link) {
+        rows[rowIndex].link.entry_name = successorThemeMergeName;
+      }
       if (successorThemeChanged || successorThemeSuggestionChanged) {
         rows[rowIndex].theme_changed = successorThemeChanged === true;
         rows[rowIndex].theme_action = successorThemeAction;
@@ -493,7 +555,15 @@ function applySuccessorVerdicts(context) {
         || normalizeSuccessorPickDestination(destinations.get(String(key)))
         || typedDefaultDestinations.get(String(key));
       if (override) {
-        placement.override = override;
+        placement.override = successorThemeMergeName
+          ? (override.kind === "existing"
+            ? { ...override, mergedName: successorThemeMergeName }
+            : { ...override, mergedName: successorThemeMergeName })
+          : override;
+      }
+      if (successorThemeMergeName) {
+        placement.mergeName = successorThemeMergeName;
+        placement.mergeBaseName = successorThemeMergeBaseName;
       }
       placements.push(placement);
     }
@@ -501,6 +571,7 @@ function applySuccessorVerdicts(context) {
 
   // Placements already in ORDER (offers sorted); keep that order for the
   // insertion planner.
+  coalesceSuccessorLandingNames(placements, rows, successorThemesApi);
   return {
     unblocked,
     keep_moving,

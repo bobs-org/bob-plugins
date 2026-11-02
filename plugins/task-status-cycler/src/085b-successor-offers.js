@@ -370,8 +370,8 @@ function buildSuccessorPickerModel(options = {}) {
 
 // Strict validation for additive themeIntent on a destination override.
 // Malformed intent is dropped so it can never enable a write; absent
-// intent keeps the legacy destination shape. linkOnce always wins over
-// deliberate.
+// intent keeps the legacy destination shape; retype is an explicit
+// alternative to the default merge landing.
 function normalizeSuccessorThemeIntent(intent) {
   try {
     if (!intent || typeof intent !== "object" || Array.isArray(intent)) {
@@ -380,7 +380,7 @@ function normalizeSuccessorThemeIntent(intent) {
     if (typeof intent.deliberate !== "boolean") {
       return null;
     }
-    if (typeof intent.linkOnce !== "boolean") {
+    if (typeof intent.retype !== "boolean") {
       return null;
     }
     let shown = null;
@@ -398,10 +398,9 @@ function normalizeSuccessorThemeIntent(intent) {
       }
       shown = intent.shown;
     }
-    const linkOnce = intent.linkOnce === true;
     return {
-      deliberate: linkOnce ? false : intent.deliberate,
-      linkOnce,
+      deliberate: intent.deliberate,
+      retype: intent.retype,
       shown,
     };
   } catch (error) {

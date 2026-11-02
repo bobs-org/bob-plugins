@@ -748,7 +748,7 @@ test("planPomodoroEntryRename renames closed and cancelled entries the same way 
 
 test("Pomodoro rename preview counts retyped tasks and reports containers", () => {
   const api = {
-    planRetype: ({ field }) => field && field.container
+    planLanding: ({ field }) => field && field.container
       ? { kind: "container" }
       : field && field.clear
         ? { kind: "clear" }
@@ -778,7 +778,7 @@ test("Pomodoro rename preview counts retyped tasks and reports containers", () =
     helpers.pomodoroEntryRenameTypeConsequence({
       renameTypePreviewState: "ready",
       renameTypePreview: {
-        api: { planRetype: () => ({ kind: "container" }) },
+        api: { planLanding: () => ({ kind: "container" }) },
         candidates: 1,
         unresolved: 0,
         records: [{ field: { container: true } }],
@@ -938,7 +938,14 @@ test("planPomodoroEntryMerge handles empty placeholders, unnamed entries, equal 
     selectedEntryLine: 3,
   });
   assert.equal(equalPlan.valid, true);
-  assert.equal(equalPlan.finalName, "SAME + SAME");
+  assert.equal(equalPlan.finalName, "SAME");
+
+  const overlappingNames = helpers.planPomodoroEntryMerge(
+    "## Pomodoros\n- [ ] () — BASE + BUILD\n\t- source\n- [ ] () — BUILD + WRAP\n\t- dest",
+    { invokedEntryLine: 1, selectedEntryLine: 3 },
+  );
+  assert.equal(overlappingNames.valid, true);
+  assert.equal(overlappingNames.finalName, "BUILD + WRAP + BASE");
 
   const exact = helpers.planPomodoroEntryMerge(
     [
@@ -1000,6 +1007,12 @@ test("planPomodoroEntryMerge refuses stale, ineligible, two-timed, unsupported, 
       ].join("\n"),
       options: { invokedEntryLine: 1, selectedEntryLine: 2 },
       pattern: /Two timed Pomodoros/,
+    },
+    {
+      label: "calendar-owned MEET",
+      content: "## Pomodoros\n- [ ] () — MEET\n\t- one\n- [ ] () — BUILD\n\t- two",
+      options: { invokedEntryLine: 1, selectedEntryLine: 3 },
+      pattern: /calendar-owned/,
     },
     {
       label: "unsupported tail",

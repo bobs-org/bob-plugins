@@ -9352,16 +9352,16 @@ function describePomodoroTypeFooterSource(target, short) {
   }
 }
 
-function callPomodoroPlanRetype(planRetype, shown, inherited, destination, keepType, tabPick) {
-  if (typeof planRetype !== "function") {
+function callPomodoroPlanLanding(planLanding, shown, inherited, destination, retype, tabPick) {
+  if (typeof planLanding !== "function") {
     return null;
   }
   try {
-    return planRetype({
+    return planLanding({
       effective: shown,
       inherited,
       destination,
-      keepType: keepType === true,
+      retype: retype === true,
       tabPick: tabPick || undefined,
     });
   } catch (_error) {
@@ -9369,10 +9369,9 @@ function callPomodoroPlanRetype(planRetype, shown, inherited, destination, keepT
   }
 }
 
-// D10 consequence line for the highlighted Link to today row. Always stated
-// before Enter; silence is a bug. `⇥ …` appears only for a composite with
-// two or more type components. planRetype comes from Ledger Tools; every
-// failure degrades to no preview.
+// Consequence line for the highlighted Link to today row. Enter merges by
+// default; Alt+Enter explicitly retypes. `⇥ …` appears only for a composite
+// with two or more type components. Every failure degrades to no preview.
 function describePomodoroThemeFooterPreview(input = {}) {
   try {
     const opts = input && typeof input === "object" ? input : {};
@@ -9386,8 +9385,8 @@ function describePomodoroThemeFooterPreview(input = {}) {
     if (!effectiveName) {
       return null;
     }
-    const enterPlan = callPomodoroPlanRetype(
-      opts.planRetype,
+    const enterPlan = callPomodoroPlanLanding(
+      opts.planLanding,
       shown,
       inherited,
       rowName,
@@ -9400,7 +9399,10 @@ function describePomodoroThemeFooterPreview(input = {}) {
     let arrow = rowName;
     let consequence = `keeps ${effectiveName}`;
     let source = "";
-    if (enterPlan.kind === "set" && typeof enterPlan.name === "string" && enterPlan.name) {
+    if (enterPlan.kind === "merge" && typeof enterPlan.name === "string" && enterPlan.name) {
+      arrow = enterPlan.name;
+      consequence = `keeps ${effectiveName}`;
+    } else if (enterPlan.kind === "set" && typeof enterPlan.name === "string" && enterPlan.name) {
       arrow = enterPlan.name;
       consequence = `task becomes ${enterPlan.name}`;
       source = describePomodoroTypeFooterSource(inherited || shown, false);
@@ -9419,23 +9421,23 @@ function describePomodoroThemeFooterPreview(input = {}) {
     } else if (enterPlan.kind === "container" || enterPlan.kind === "consistent") {
       arrow = rowName;
       consequence = `keeps ${effectiveName}`;
-    } else if (enterPlan.kind === "merge" && typeof enterPlan.name === "string" && enterPlan.name) {
-      arrow = enterPlan.name;
-      consequence = `keeps ${effectiveName}`;
     } else {
       return null;
     }
-    const keepPlan = callPomodoroPlanRetype(
-      opts.planRetype,
+    const retypePlan = callPomodoroPlanLanding(
+      opts.planLanding,
       shown,
       inherited,
       rowName,
       true,
       opts.tabPick,
     );
-    const keep = keepPlan && keepPlan.kind === "merge" && typeof keepPlan.name === "string" && keepPlan.name
-      ? `⌥↵ keep ${effectiveName} (${keepPlan.name})`
-      : "";
+    let retype = "";
+    if (retypePlan && retypePlan.kind === "set" && typeof retypePlan.name === "string" && retypePlan.name) {
+      retype = `⌥↵ retype to ${retypePlan.name}`;
+    } else if (retypePlan && retypePlan.kind === "clear") {
+      retype = "⌥↵ clear type";
+    }
     const candidates = pomodoroTypeComponentCandidates(opts.themesApi, rowName);
     let tab = "";
     if (candidates.length >= 2) {
@@ -9451,7 +9453,7 @@ function describePomodoroThemeFooterPreview(input = {}) {
         tab = `⇥ ${next.name}`;
       }
     }
-    return [`→ ${arrow}`, consequence, source, keep, tab].filter(Boolean).join(" · ");
+    return [`→ ${arrow}`, consequence, source, retype, tab].filter(Boolean).join(" · ");
   } catch (_error) {
     return null;
   }
@@ -9468,7 +9470,7 @@ function normalizePomodoroLinkPickerThemeIntent(intent) {
     if (typeof intent.deliberate !== "boolean") {
       return null;
     }
-    if (typeof intent.linkOnce !== "boolean") {
+    if (typeof intent.retype !== "boolean") {
       return null;
     }
     const tabPick = typeof intent.tabPick === "string" && intent.tabPick
@@ -9476,7 +9478,7 @@ function normalizePomodoroLinkPickerThemeIntent(intent) {
       : null;
     const withTab = (base) => (tabPick ? { ...base, tabPick } : base);
     if (intent.shown === undefined || intent.shown === null) {
-      return withTab({ deliberate: intent.deliberate, linkOnce: intent.linkOnce, shown: null });
+      return withTab({ deliberate: intent.deliberate, retype: intent.retype, shown: null });
     }
     if (typeof intent.shown !== "object") {
       return null;
@@ -9490,7 +9492,7 @@ function normalizePomodoroLinkPickerThemeIntent(intent) {
     }
     return withTab({
       deliberate: intent.deliberate,
-      linkOnce: intent.linkOnce,
+      retype: intent.retype,
       shown: intent.shown,
     });
   } catch (_error) {
@@ -9498,9 +9500,9 @@ function normalizePomodoroLinkPickerThemeIntent(intent) {
   }
 }
 // ---- src/078-pomodoro-theme-write.js ----
-// Task-type write for Link to today (plan:202610/task_types.md
-// link-picker-retype). Pure helpers: revalidate the shown suggestion, apply
-// planRetype, merge a keep-type destination name, and attach notice metadata.
+// Task-type write for Link to today. Pure helpers: revalidate the shown
+// suggestion, apply the R2 landing plan, merge destination names, and attach
+// notice metadata.
 // The 120 mixin stays a thin call site.
 function pomodoroPlanDestinationName(pomodoroPlan) {
   try {
@@ -9761,7 +9763,7 @@ function resolvePomodoroLinkThemeWrite(plugin, source, target, taskContent) {
     if (
       !themesApi ||
       typeof themesApi.suggestFor !== "function" ||
-      typeof themesApi.planRetype !== "function" ||
+      typeof themesApi.planLanding !== "function" ||
       typeof themesApi.setTaskTheme !== "function" ||
       typeof themesApi.clearTaskTheme !== "function"
     ) {
@@ -9794,11 +9796,11 @@ function resolvePomodoroLinkThemeWrite(plugin, source, target, taskContent) {
     const inherited = pomodoroThemeWriteInherited(effective);
     let outcome = null;
     try {
-      outcome = themesApi.planRetype({
+      outcome = themesApi.planLanding({
         effective,
         inherited,
         destination: destinationName,
-        keepType: intent.linkOnce === true,
+        retype: intent.retype === true,
         tabPick: intent.tabPick,
       });
     } catch (_error) {
@@ -9888,9 +9890,21 @@ function rewritePomodoroEntryNameLine(lineText, newName) {
   const line = hasCR ? raw.slice(0, -1) : raw;
   const dash = " — ";
   const index = line.indexOf(dash);
-  const next = index >= 0
-    ? `${line.slice(0, index + dash.length)}${newName}`
-    : `${line.replace(/[ \t]+$/, "")}${dash}${newName}`;
+  let next;
+  if (index >= 0) {
+    next = `${line.slice(0, index + dash.length)}${newName}`;
+  } else {
+    const taskPrefix = /^([ \t]*[-*][ \t]+\[[^\]\r\n]\][ \t]*)/.exec(line);
+    const bodyStart = taskPrefix ? taskPrefix[0].length : 0;
+    const body = line.slice(bodyStart);
+    const paren = /\([^)]*\)/.exec(body);
+    const label = paren ? body.slice(0, paren.index).replace(/[ \t]+$/, "") : "";
+    if (paren && label) {
+      next = `${line.slice(0, bodyStart)}${newName} ${body.slice(paren.index)}`;
+    } else {
+      next = `${line.replace(/[ \t]+$/, "")}${dash}${newName}`;
+    }
+  }
   return hasCR ? `${next}\r` : next;
 }
 
@@ -9975,6 +9989,9 @@ function formatPomodoroThemeLinkChip(plan) {
     }
     if (plan.themeChanged === true && plan.themeAction === "set" && plan.themeName) {
       return ` · type ${plan.themeName}`;
+    }
+    if (plan.themeMergeName && plan.themeKeepsName) {
+      return ` · merged ${plan.themeKeepsName}`;
     }
     if (plan.themeKeepsName) {
       return ` · keeps ${plan.themeKeepsName}`;
@@ -10840,6 +10857,7 @@ class PomodoroLinkPickerModal extends Modal {
     const hintsEl = footerEl.createDiv({ cls: "bid-ppk-hints" });
     this.renderHint(hintsEl, ["↑↓"], "select");
     this.renderHint(hintsEl, ["↵"], "link");
+    this.renderHint(hintsEl, ["⌥↵"], "retype");
     this.renderHint(hintsEl, ["⌃D"], "hide / undo");
     this.shiftHintEl = this.renderHint(hintsEl, ["⇧↵"], "new NAME");
     this.renderHint(hintsEl, ["esc"], "cancel");
@@ -10852,7 +10870,7 @@ class PomodoroLinkPickerModal extends Modal {
         attr: { "aria-live": "polite" },
       });
     }
-    // Second footer line: the live D10 retype consequence. It is refreshed
+    // Second footer line: the live merge/retype consequence. It is refreshed
     // on every selection/query/refresh/Tab change.
     this.themeFooterEl = footerEl.createDiv({
       cls: "bid-ppk-theme-footer",
@@ -10869,11 +10887,11 @@ class PomodoroLinkPickerModal extends Modal {
     return this.deliberateForRow(this.rows[this.selectedIndex]);
   }
 
-  withTaskIntent(choice, deliberate, linkOnce) {
+  withTaskIntent(choice, deliberate, retype) {
     if (choice && this.taskAware) {
       choice.themeIntent = {
         deliberate: deliberate === true,
-        linkOnce: linkOnce === true,
+        retype: retype === true,
         shown: this.shownSuggestion,
         ...(this.tabPickKey ? { tabPick: this.tabPickKey } : {}),
       };
@@ -10881,7 +10899,7 @@ class PomodoroLinkPickerModal extends Modal {
     return choice;
   }
 
-  choiceForRow(row, deliberate, linkOnce) {
+  choiceForRow(row, deliberate, retype) {
     let choice = null;
     if (!row) {
       return null;
@@ -10902,7 +10920,7 @@ class PomodoroLinkPickerModal extends Modal {
         title: row.entry.title,
       };
     }
-    return this.withTaskIntent(choice, deliberate, linkOnce);
+    return this.withTaskIntent(choice, deliberate, retype);
   }
 
   updateThemeFooter() {
@@ -10916,10 +10934,10 @@ class PomodoroLinkPickerModal extends Modal {
         tabPick: this.tabPickKey,
         exemptKeys: (this.model && this.model.themeSnapshot && this.model.themeSnapshot.exemptKeys) || [],
         themesApi: this.themesApi,
-        planRetype: (options) => {
+        planLanding: (options) => {
           try {
-            return this.themesApi && typeof this.themesApi.planRetype === "function"
-              ? this.themesApi.planRetype(options)
+            return this.themesApi && typeof this.themesApi.planLanding === "function"
+              ? this.themesApi.planLanding(options)
               : null;
           } catch (_error) {
             return null;
@@ -10975,11 +10993,11 @@ class PomodoroLinkPickerModal extends Modal {
     if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
-      // Alt+Enter keeps the type and merges it into the destination name.
-      // A habitual double tap links to the current/next Pomodoro, so
-      // Ctrl+Shift+Enter commits exactly like Enter — before the Shift branch.
+      // Alt+Enter explicitly retypes the task. A habitual double tap links
+      // to the current/next Pomodoro, so Ctrl+Shift+Enter commits exactly
+      // like Enter — before the Shift branch.
       if (event.altKey) {
-        this.commitLinkOnce();
+        this.commitRetype();
       } else if (event.shiftKey && !event.ctrlKey) {
         this.commitCreateIntent();
       } else {
@@ -11450,14 +11468,13 @@ class PomodoroLinkPickerModal extends Modal {
     this.settleChoice(this.choiceForRow(row, deliberate, false));
   }
 
-  // Alt+Enter keeps the current type: link plus a D6 merge, no field write.
-  // Container and already-agreeing destinations equal Enter.
-  commitLinkOnce() {
+  // Alt+Enter explicitly requests the task-field Set/Clear path.
+  commitRetype() {
     const row = this.rows[this.selectedIndex];
     if (!row || !row.selectable) {
       return;
     }
-    this.settleChoice(this.choiceForRow(row, false, true));
+    this.settleChoice(this.choiceForRow(row, true, true));
   }
 
   // ⇧↵ creates from the typed text even when other rows match; an exact
@@ -17281,7 +17298,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     if (shown && typeof shown === "object" && shown.theme) {
       target.themeIntent = {
         deliberate: true,
-        linkOnce: false,
+        retype: false,
         shown: clonePomodoroThemeSuggestion(shown),
       };
     }
@@ -17315,6 +17332,8 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
         typeClause = `type becomes ${write.destinationThemeName}`;
       } else if (write.retypeKind === "clear") {
         typeClause = `type cleared (inherits ${write.destinationThemeName || write.keepsName || "the note type"})`;
+      } else if (write.retypeKind === "merge" && write.keepsName) {
+        typeClause = `merges ${write.keepsName} into this Pomodoro`;
       } else if (write.retypeKind && write.keepsName) {
         typeClause = `keeps ${write.keepsName}`;
       }
@@ -17644,6 +17663,25 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       prepared.target,
       prepared.content,
     );
+    let pomodoroNameMerge = null;
+    if (
+      themeWrite.mergeName && source.editor &&
+      typeof source.editor.getLine === "function" &&
+      typeof source.editor.replaceRange === "function"
+    ) {
+      const ownerLine = prepared.context.ownerLine;
+      const currentLine = source.editor.getLine(ownerLine) || "";
+      if (currentLine !== prepared.context.entryText) {
+        new Notice("Task link stopped: the source Pomodoro changed");
+        return { stale: true };
+      }
+      const nextLine = rewritePomodoroEntryNameLine(currentLine, themeWrite.mergeName);
+      if (nextLine === currentLine) {
+        new Notice("Task link stopped: the source Pomodoro name could not be merged");
+        return { stale: true };
+      }
+      pomodoroNameMerge = { line: ownerLine, before: currentLine, after: nextLine };
+    }
     const plan = planTargetTaskUpdate(prepared.content, prepared.task.line, {
       activationEligible: true,
       forceNext: true,
@@ -17688,9 +17726,22 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       new Notice(`Task ${parts.length ? parts.join(", ") : "updated"}, but the source link changed before completion`);
       return { stale: true };
     }
+    if (pomodoroNameMerge) {
+      if (source.editor.getLine(pomodoroNameMerge.line) !== pomodoroNameMerge.before) {
+        plan.themeMergeName = null;
+        new Notice("Task linked, but its type was not merged because the source Pomodoro changed");
+      } else {
+        source.editor.replaceRange(
+          pomodoroNameMerge.after,
+          { line: pomodoroNameMerge.line, ch: 0 },
+          { line: pomodoroNameMerge.line, ch: pomodoroNameMerge.before.length },
+        );
+      }
+    }
     this.refreshTaskWikilinkNote(prepared.task.notePath, plan.content);
     const themeChip = formatPomodoroThemeLinkChip(plan);
-    const entryName = pomodoroTargetDestinationName(prepared.target) || prepared.context.title;
+    const entryName = themeWrite.destinationThemeName ||
+      pomodoroTargetDestinationName(prepared.target) || prepared.context.title;
     const dailyContent = source.editor && typeof source.editor.getValue === "function"
       ? source.editor.getValue()
       : null;

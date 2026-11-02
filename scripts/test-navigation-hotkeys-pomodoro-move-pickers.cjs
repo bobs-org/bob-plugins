@@ -54,6 +54,12 @@ function createThemesApi(initialThemes) {
         .slice(0, limit);
     },
     hueFor: (key) => ({ hue: String(key).startsWith("focus") ? "aqua" : "blue" }),
+    typeComponentsOf: (name) => String(name || "").split("+").map((raw) => raw.trim()).filter(Boolean)
+      .map((component) => ({ name: component, key: component.toLowerCase(), isType: true })),
+    planLanding: () => ({ kind: "container" }),
+    planRetype: () => ({ kind: "container" }),
+    effectiveTypeFor: () => null,
+    taskThemeOf: () => ({ state: "none" }),
     similarTo: (name) => String(name).toLowerCase() === "focus" ? ["Focus Flow"] : [],
     onChange: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
     hide: (name) => {
@@ -101,7 +107,7 @@ function movePickerEntries(content) {
 }
 
 function createTaskTypeApi(defaults = {}) {
-  const vocabulary = ["BUILD", "FIX", "PLAN", "READ", "WRITE"];
+  const vocabulary = ["BASE", "BUILD", "FIX", "MEET", "PLAN", "READ", "WRITE"];
   const keyOf = (name) => String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
   const nameOf = new Map(vocabulary.map((name) => [keyOf(name), name]));
   const taskField = (line) => {
@@ -144,7 +150,7 @@ function createTaskTypeApi(defaults = {}) {
       ...(field.state === "set" ? { inherited } : {}),
     };
   };
-  const planRetype = ({ field, effective, inherited, destination, keepType, tabPick }) => {
+  const planLanding = ({ field, effective, inherited, destination, retype, tabPick }) => {
     const components = typeComponentsOf(destination);
     const candidates = components.filter((component) => component.isType);
     if (!candidates.length) return { kind: "container" };
@@ -152,7 +158,7 @@ function createTaskTypeApi(defaults = {}) {
     if (effectiveKey && components.some((component) => component.key === effectiveKey)) {
       return { kind: "consistent" };
     }
-    if (keepType) {
+    if (retype !== true && keyOf(destination) !== keyOf("MEET")) {
       const currentName = effective?.theme?.name || "";
       return currentName
         ? { kind: "merge", name: `${String(destination).trim()} + ${currentName}` }
@@ -171,7 +177,29 @@ function createTaskTypeApi(defaults = {}) {
     typeComponentsOf,
     taskThemeOf: taskField,
     effectiveTypeFor,
-    planRetype,
+    planLanding,
+    planRetype: (options) => planLanding({ ...options, retype: true }),
+    mergeNames: (base, others) => {
+      const parts = [];
+      const seen = new Set();
+      for (const value of [base, ...(Array.isArray(others) ? others : [])]) {
+        for (const part of String(value || "").split("+").map((item) => item.trim()).filter(Boolean)) {
+          const key = keyOf(part);
+          if (!seen.has(key)) { seen.add(key); parts.push(part); }
+        }
+      }
+      return parts.join(" + ");
+    },
+    shed: (name, beforeKeys, afterKeys) => {
+      const before = new Set(beforeKeys || []);
+      const after = new Set(afterKeys || []);
+      const components = typeComponentsOf(name);
+      const types = components.filter((component) => component.isType);
+      const drop = new Set(types.filter((component) => before.has(component.key) && !after.has(component.key))
+        .map((component) => component.key));
+      if (types.every((component) => drop.has(component.key))) drop.delete(types[0]?.key);
+      return components.filter((component) => !drop.has(component.key)).map((component) => component.name).join(" + ");
+    },
     setTaskTheme: setField,
     clearTaskTheme: clearField,
     isConfigured: (key) => nameOf.has(keyOf(key)),
@@ -787,7 +815,7 @@ test("task move picker closes before commit while other pickers retain delayed c
   }
 });
 
-test("Pomodoro move picker previews the type, keep-type merge, and Tab component live", async () => {
+test("Pomodoro move picker previews the default merge, retype alternative, and Tab component live", async () => {
   const sourceContent = [
     "## Pomodoros",
     "- [ ] () — SOURCE",
@@ -813,7 +841,7 @@ test("Pomodoro move picker previews the type, keep-type merge, and Tab component
   assert.equal(picker.moveTypePreview.records.length, 1);
   assert.match(
     textOf(picker.footerEl),
-    /→ BUILD · task becomes BUILD · dev suggests READ · ⌥↵ keep READ \(BUILD \+ FIX \+ READ\) · ⇥ FIX/,
+    /→ BUILD \+ FIX \+ READ · keeps READ · ⌥↵ retype to BUILD · ⇥ FIX/,
   );
 
   const event = {
@@ -829,12 +857,12 @@ test("Pomodoro move picker previews the type, keep-type merge, and Tab component
   assert.equal(event.prevented, true);
   assert.match(
     textOf(picker.footerEl),
-    /→ FIX · task becomes FIX · dev suggests READ · ⌥↵ keep READ \(BUILD \+ FIX \+ READ\) · ⇥ BUILD/,
+    /→ BUILD \+ FIX \+ READ · keeps READ · ⌥↵ retype to FIX · ⇥ BUILD/,
   );
   picker.close();
 });
 
-test("Pomodoro move Enter retypes an open linked task with a checked closed-note write", async () => {
+test("Pomodoro move Enter merges the type into the destination without a task-field write", async () => {
   const fixture = createTaskTypeMoveFixture();
   const destination = fixture.session.entries.find((entry) => entry.name === "FIX");
   assert.ok(destination);
@@ -845,13 +873,13 @@ test("Pomodoro move Enter retypes an open linked task with a checked closed-note
   );
 
   assert.equal(applied, true);
-  assert.match(fixture.notes.get("Tasks.md"), /\[type:: FIX\]/);
-  assert.deepEqual(fixture.processCalls, ["Tasks.md"]);
+  assert.equal(fixture.notes.get("Tasks.md"), "- [ ] #task One ^one");
+  assert.deepEqual(fixture.processCalls, []);
   assert.match(fixture.editor.getValue(), /\t- \[\[Tasks#\^one\]\]/);
-  assert.equal(notices.at(-1), "Moved 1 bullet to FIX · 1 task now FIX");
+  assert.equal(notices.at(-1), "Moved 1 bullet to FIX + BUILD · keeps BUILD");
 });
 
-test("Pomodoro move Alt+Enter merges missing moved task types in move order and leaves fields alone", async () => {
+test("Pomodoro move Enter merges missing task types in move order and leaves fields alone", async () => {
   const sourceContent = [
     "## Pomodoros",
     "- [ ] () — SOURCE",
@@ -870,7 +898,7 @@ test("Pomodoro move Alt+Enter merges missing moved task types in move order and 
   const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
     fixture.session,
     { kind: "existing", entry: destination },
-    { typeMode: "keepType", typePreviewState: "ready" },
+    { typeMode: "merge", typePreviewState: "ready" },
   );
 
   assert.equal(applied, true);
@@ -880,7 +908,27 @@ test("Pomodoro move Alt+Enter merges missing moved task types in move order and 
   assert.equal(notices.at(-1), "Moved 2 bullets to FIX + BUILD + WRITE · keeps task types");
 });
 
-test("Pomodoro move applies a multi-bullet retype in one closed-note write", async () => {
+test("moving the last linked merged-in type sheds it from the source Pomodoro", async () => {
+  const sourceContent = [
+    "## Pomodoros",
+    "- [ ] () — BASE + BUILD",
+    "\t- [[Tasks#^one]]",
+    "- [ ] () — FIX",
+    "\t- destination work",
+  ].join("\n");
+  const fixture = createTaskTypeMoveFixture({ sourceContent, defaults: { one: "BUILD" } });
+  const destination = fixture.session.entries.find((entry) => entry.name === "FIX");
+  const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
+    fixture.session,
+    { kind: "existing", entry: destination },
+    { typePreviewState: "ready" },
+  );
+  assert.equal(applied, true);
+  assert.match(fixture.editor.getValue(), /— BASE\n/);
+  assert.match(fixture.editor.getValue(), /— FIX \+ BUILD/);
+});
+
+test("Pomodoro move Alt+Enter applies a multi-bullet retype in one closed-note write", async () => {
   const sourceContent = [
     "## Pomodoros",
     "- [ ] () — SOURCE",
@@ -899,7 +947,7 @@ test("Pomodoro move applies a multi-bullet retype in one closed-note write", asy
   const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
     fixture.session,
     { kind: "existing", entry: destination },
-    { typePreviewState: "ready" },
+    { typeMode: "retype", typePreviewState: "ready" },
   );
 
   assert.equal(applied, true);
@@ -956,7 +1004,7 @@ test("Pomodoro move preserves types under labels and unnamed containers, and all
     const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
       fixture.session,
       { kind: "existing", entry: destination },
-      { typePreviewState: "ready" },
+      { typeMode: destinationName === "PLAN" ? "retype" : "merge", typePreviewState: "ready" },
     );
     assert.equal(applied, true, destinationName || "unnamed");
     if (destinationName === "PLAN") {
@@ -968,7 +1016,27 @@ test("Pomodoro move preserves types under labels and unnamed containers, and all
   }
 });
 
-test("Pomodoro move to a new named entry retypes the linked task", async () => {
+test("Pomodoro move landing in MEET retypes even on the default Enter path", async () => {
+  const sourceContent = [
+    "## Pomodoros",
+    "- [ ] () — SOURCE",
+    "\t- [[Tasks#^one]]",
+    "- [ ] () — MEET",
+    "\t- meeting work",
+  ].join("\n");
+  const fixture = createTaskTypeMoveFixture({ sourceContent, defaults: { one: "BUILD" } });
+  const destination = fixture.session.entries.find((entry) => entry.name === "MEET");
+  const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
+    fixture.session,
+    { kind: "existing", entry: destination },
+    { typePreviewState: "ready" },
+  );
+  assert.equal(applied, true);
+  assert.equal(fixture.notes.get("Tasks.md"), "- [ ] #task One [type:: MEET] ^one");
+  assert.doesNotMatch(fixture.editor.getValue(), /MEET \+ BUILD/);
+});
+
+test("Pomodoro move to a new named entry merges by default", async () => {
   const fixture = createTaskTypeMoveFixture();
   const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
     fixture.session,
@@ -976,8 +1044,8 @@ test("Pomodoro move to a new named entry retypes the linked task", async () => {
     { typePreviewState: "ready" },
   );
   assert.equal(applied, true);
-  assert.match(fixture.editor.getValue(), /— WRITE/);
-  assert.match(fixture.notes.get("Tasks.md"), /\[type:: WRITE\]/);
+  assert.match(fixture.editor.getValue(), /— WRITE \+ BUILD/);
+  assert.equal(fixture.notes.get("Tasks.md"), "- [ ] #task One ^one");
 });
 
 test("Pomodoro move clears an explicit type that matches the inherited destination", async () => {
@@ -989,7 +1057,7 @@ test("Pomodoro move clears an explicit type that matches the inherited destinati
   const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
     fixture.session,
     { kind: "existing", entry: destination },
-    { typePreviewState: "ready" },
+    { typeMode: "retype", typePreviewState: "ready" },
   );
   assert.equal(applied, true);
   assert.equal(fixture.notes.get("Tasks.md"), "- [ ] #task One ^one");

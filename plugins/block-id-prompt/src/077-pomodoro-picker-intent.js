@@ -252,16 +252,16 @@ function describePomodoroTypeFooterSource(target, short) {
   }
 }
 
-function callPomodoroPlanRetype(planRetype, shown, inherited, destination, keepType, tabPick) {
-  if (typeof planRetype !== "function") {
+function callPomodoroPlanLanding(planLanding, shown, inherited, destination, retype, tabPick) {
+  if (typeof planLanding !== "function") {
     return null;
   }
   try {
-    return planRetype({
+    return planLanding({
       effective: shown,
       inherited,
       destination,
-      keepType: keepType === true,
+      retype: retype === true,
       tabPick: tabPick || undefined,
     });
   } catch (_error) {
@@ -269,10 +269,9 @@ function callPomodoroPlanRetype(planRetype, shown, inherited, destination, keepT
   }
 }
 
-// D10 consequence line for the highlighted Link to today row. Always stated
-// before Enter; silence is a bug. `⇥ …` appears only for a composite with
-// two or more type components. planRetype comes from Ledger Tools; every
-// failure degrades to no preview.
+// Consequence line for the highlighted Link to today row. Enter merges by
+// default; Alt+Enter explicitly retypes. `⇥ …` appears only for a composite
+// with two or more type components. Every failure degrades to no preview.
 function describePomodoroThemeFooterPreview(input = {}) {
   try {
     const opts = input && typeof input === "object" ? input : {};
@@ -286,8 +285,8 @@ function describePomodoroThemeFooterPreview(input = {}) {
     if (!effectiveName) {
       return null;
     }
-    const enterPlan = callPomodoroPlanRetype(
-      opts.planRetype,
+    const enterPlan = callPomodoroPlanLanding(
+      opts.planLanding,
       shown,
       inherited,
       rowName,
@@ -300,7 +299,10 @@ function describePomodoroThemeFooterPreview(input = {}) {
     let arrow = rowName;
     let consequence = `keeps ${effectiveName}`;
     let source = "";
-    if (enterPlan.kind === "set" && typeof enterPlan.name === "string" && enterPlan.name) {
+    if (enterPlan.kind === "merge" && typeof enterPlan.name === "string" && enterPlan.name) {
+      arrow = enterPlan.name;
+      consequence = `keeps ${effectiveName}`;
+    } else if (enterPlan.kind === "set" && typeof enterPlan.name === "string" && enterPlan.name) {
       arrow = enterPlan.name;
       consequence = `task becomes ${enterPlan.name}`;
       source = describePomodoroTypeFooterSource(inherited || shown, false);
@@ -319,23 +321,23 @@ function describePomodoroThemeFooterPreview(input = {}) {
     } else if (enterPlan.kind === "container" || enterPlan.kind === "consistent") {
       arrow = rowName;
       consequence = `keeps ${effectiveName}`;
-    } else if (enterPlan.kind === "merge" && typeof enterPlan.name === "string" && enterPlan.name) {
-      arrow = enterPlan.name;
-      consequence = `keeps ${effectiveName}`;
     } else {
       return null;
     }
-    const keepPlan = callPomodoroPlanRetype(
-      opts.planRetype,
+    const retypePlan = callPomodoroPlanLanding(
+      opts.planLanding,
       shown,
       inherited,
       rowName,
       true,
       opts.tabPick,
     );
-    const keep = keepPlan && keepPlan.kind === "merge" && typeof keepPlan.name === "string" && keepPlan.name
-      ? `⌥↵ keep ${effectiveName} (${keepPlan.name})`
-      : "";
+    let retype = "";
+    if (retypePlan && retypePlan.kind === "set" && typeof retypePlan.name === "string" && retypePlan.name) {
+      retype = `⌥↵ retype to ${retypePlan.name}`;
+    } else if (retypePlan && retypePlan.kind === "clear") {
+      retype = "⌥↵ clear type";
+    }
     const candidates = pomodoroTypeComponentCandidates(opts.themesApi, rowName);
     let tab = "";
     if (candidates.length >= 2) {
@@ -351,7 +353,7 @@ function describePomodoroThemeFooterPreview(input = {}) {
         tab = `⇥ ${next.name}`;
       }
     }
-    return [`→ ${arrow}`, consequence, source, keep, tab].filter(Boolean).join(" · ");
+    return [`→ ${arrow}`, consequence, source, retype, tab].filter(Boolean).join(" · ");
   } catch (_error) {
     return null;
   }
@@ -368,7 +370,7 @@ function normalizePomodoroLinkPickerThemeIntent(intent) {
     if (typeof intent.deliberate !== "boolean") {
       return null;
     }
-    if (typeof intent.linkOnce !== "boolean") {
+    if (typeof intent.retype !== "boolean") {
       return null;
     }
     const tabPick = typeof intent.tabPick === "string" && intent.tabPick
@@ -376,7 +378,7 @@ function normalizePomodoroLinkPickerThemeIntent(intent) {
       : null;
     const withTab = (base) => (tabPick ? { ...base, tabPick } : base);
     if (intent.shown === undefined || intent.shown === null) {
-      return withTab({ deliberate: intent.deliberate, linkOnce: intent.linkOnce, shown: null });
+      return withTab({ deliberate: intent.deliberate, retype: intent.retype, shown: null });
     }
     if (typeof intent.shown !== "object") {
       return null;
@@ -390,7 +392,7 @@ function normalizePomodoroLinkPickerThemeIntent(intent) {
     }
     return withTab({
       deliberate: intent.deliberate,
-      linkOnce: intent.linkOnce,
+      retype: intent.retype,
       shown: intent.shown,
     });
   } catch (_error) {

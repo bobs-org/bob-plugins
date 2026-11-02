@@ -594,7 +594,7 @@ function validatePomodoroEntryMergeHeader(lineText, roleLabel) {
   return null;
 }
 
-function buildPomodoroEntryMergeOptions(session, row) {
+function buildPomodoroEntryMergeOptions(session, row, themesApi = null) {
   const sourceContent = session && typeof session.sourceContent === "string"
     ? session.sourceContent
     : "";
@@ -615,7 +615,30 @@ function buildPomodoroEntryMergeOptions(session, row) {
     selectedEntryLine,
     selectedRawLine:
       selectedEntryLine >= 0 ? String(lines[selectedEntryLine] || "") : undefined,
+    ...(themesApi && typeof themesApi.mergeNames === "function"
+      ? { mergeNames: (base, others) => themesApi.mergeNames(base, others) }
+      : {}),
+    ...(themesApi && typeof themesApi.isMeetName === "function"
+      ? { isMeetName: (name) => themesApi.isMeetName(name) }
+      : {}),
   });
+}
+
+function navigationPomodoroMergeNames(base, others) {
+  const seen = new Set();
+  const parts = [];
+  for (const name of [base, ...(Array.isArray(others) ? others : [])]) {
+    for (const component of String(name || "").split(/\s*\+\s*/)) {
+      const trimmed = component.trim();
+      if (!trimmed) continue;
+      const key = trimmed.replace(/\s+/g, " ").toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        parts.push(trimmed);
+      }
+    }
+  }
+  return parts.join(" + ");
 }
 
 function planPomodoroEntryMerge(content, options = {}) {
@@ -714,9 +737,21 @@ function planPomodoroEntryMerge(content, options = {}) {
     return invalid(absorbedName.error);
   }
 
-  const finalName = [survivorName.name, absorbedName.name]
-    .filter(Boolean)
-    .join(" + ");
+  const isMeet = typeof options.isMeetName === "function"
+    ? options.isMeetName
+    : (name) => String(name || "").replace(/\s+/g, " ").trim().toLowerCase() === "meet";
+  if (isMeet(survivorName.name) || isMeet(absorbedName.name)) {
+    return invalid("MEET Pomodoros are calendar-owned and cannot be merged");
+  }
+
+  let finalName = "";
+  try {
+    finalName = typeof options.mergeNames === "function"
+      ? options.mergeNames(survivorName.name, [absorbedName.name])
+      : navigationPomodoroMergeNames(survivorName.name, [absorbedName.name]);
+  } catch (_error) {
+    return invalid("Pomodoro names could not be merged");
+  }
   if (finalName) {
     const finalNameResult = normalizePomodoroName(finalName);
     if (!finalNameResult.valid || finalNameResult.name !== finalName) {

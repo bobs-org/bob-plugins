@@ -7892,8 +7892,8 @@ function buildSuccessorPickerModel(options = {}) {
 
 // Strict validation for additive themeIntent on a destination override.
 // Malformed intent is dropped so it can never enable a write; absent
-// intent keeps the legacy destination shape. linkOnce always wins over
-// deliberate.
+// intent keeps the legacy destination shape; retype is an explicit
+// alternative to the default merge landing.
 function normalizeSuccessorThemeIntent(intent) {
   try {
     if (!intent || typeof intent !== "object" || Array.isArray(intent)) {
@@ -7902,7 +7902,7 @@ function normalizeSuccessorThemeIntent(intent) {
     if (typeof intent.deliberate !== "boolean") {
       return null;
     }
-    if (typeof intent.linkOnce !== "boolean") {
+    if (typeof intent.retype !== "boolean") {
       return null;
     }
     let shown = null;
@@ -7920,10 +7920,9 @@ function normalizeSuccessorThemeIntent(intent) {
       }
       shown = intent.shown;
     }
-    const linkOnce = intent.linkOnce === true;
     return {
-      deliberate: linkOnce ? false : intent.deliberate,
-      linkOnce,
+      deliberate: intent.deliberate,
+      retype: intent.retype,
       shown,
     };
   } catch (error) {
@@ -8411,7 +8410,7 @@ function successorThemeNormalizeKey(value) {
 }
 
 function emptySuccessorThemeWrite() {
-  return { themeEdit: null, suggestionChanged: false, destinationThemeName: null };
+  return { themeEdit: null, suggestionChanged: false, destinationThemeName: null, mergeName: null };
 }
 
 // Pick each successor's default entry by its effective task type (D7).
@@ -8810,18 +8809,16 @@ function getSuccessorTaskLedgerApi(app) {
   }
 }
 
-// Pure guarded decision for one explicitly picked successor with a retarget
-// override. Only a deliberate non-linkOnce intent with a shown suggestion can
-// write; default anchor/implicit placements (no override), unpicked offers,
-// missing APIs, unnamed/all-exempt/composite destinations, stale tasks, and
-// changed suggestions never write. The caller owns the guarded vault write.
+// Pure guarded landing for one explicitly picked successor with a retarget
+// override. Default link behavior merges; Alt+Enter requests a task-field
+// retype. The caller owns the guarded task and ledger writes.
 function resolveSuccessorThemeWrite(options = {}) {
   try {
     const opts = options && typeof options === "object" ? options : {};
     const override = opts.override && typeof opts.override === "object" ? opts.override : null;
     const rawIntent = override && override.themeIntent !== undefined ? override.themeIntent : opts.intent;
     const intent = normalizeSuccessorThemeIntent(rawIntent);
-    if (!override || !intent || intent.linkOnce === true || intent.deliberate !== true || !intent.shown) {
+    if (!override || !intent || !intent.shown) {
       return emptySuccessorThemeWrite();
     }
     const task = opts.task && typeof opts.task === "object" ? opts.task : null;
@@ -8845,7 +8842,7 @@ function resolveSuccessorThemeWrite(options = {}) {
     if (
       !themesApi ||
       typeof themesApi.effectiveTypeFor !== "function" ||
-      typeof themesApi.planRetype !== "function" ||
+      typeof themesApi.planLanding !== "function" ||
       typeof themesApi.setTaskTheme !== "function" ||
       typeof themesApi.clearTaskTheme !== "function"
     ) {
@@ -8899,15 +8896,36 @@ function resolveSuccessorThemeWrite(options = {}) {
     const inherited = successorThemeWriteInherited(intent.shown);
     let change = null;
     try {
-      change = themesApi.planRetype({
+      change = themesApi.planLanding({
         effective: current,
         inherited,
         destination: destinationName,
+        retype: intent.retype === true,
       });
     } catch (_error) {
       return emptySuccessorThemeWrite();
     }
-    if (!change || (change.kind !== "set" && change.kind !== "clear")) {
+    if (!change) {
+      return emptySuccessorThemeWrite();
+    }
+    if (change.kind === "merge") {
+      return {
+        themeEdit: null,
+        suggestionChanged: false,
+        destinationThemeName: change.name,
+        mergeName: change.name,
+        mergeBaseName: destinationName,
+      };
+    }
+    if (change.kind === "container" || change.kind === "consistent") {
+      return {
+        themeEdit: null,
+        suggestionChanged: false,
+        destinationThemeName: destinationName,
+        mergeName: null,
+      };
+    }
+    if (change.kind !== "set" && change.kind !== "clear") {
       return emptySuccessorThemeWrite();
     }
     if (change.kind === "set") {
@@ -8923,6 +8941,7 @@ function resolveSuccessorThemeWrite(options = {}) {
         },
         suggestionChanged: false,
         destinationThemeName: name,
+        mergeName: null,
       };
     }
     const inheritedTheme = inherited && inherited.theme && typeof inherited.theme === "object"
@@ -8941,6 +8960,7 @@ function resolveSuccessorThemeWrite(options = {}) {
       },
       suggestionChanged: false,
       destinationThemeName,
+      mergeName: null,
     };
   } catch (_error) {
     return emptySuccessorThemeWrite();
@@ -9635,6 +9655,14 @@ function planSuccessorInsertions(dailyLines, placements, options = {}) {
     if (!target || !target.open) {
       fail("destination-closed");
       continue;
+    }
+    if (typeof pick.mergedName === "string" && pick.mergedName) {
+      const renamed = successorRenamePomodoroEntryLine(lines[targetLine], pick.mergedName);
+      if (!renamed) { fail("destination-rename-failed"); continue; }
+      if (renamed !== lines[targetLine]) {
+        lines[targetLine] = renamed;
+        ops.push({ at: targetLine, deleteCount: 1, lines: [renamed], seq: seq++, marks: [] });
+      }
     }
     insertOverrideChildren(targetLine, items);
   }
@@ -11648,6 +11676,57 @@ function projectPullInRewriteLine(before, rank, options = {}) {
 // §12.4 PICK, §12.5 reporting). Pure code: no vault reads, no editor writes.
 // Extracted from 089 so both fragments stay ≤1000 lines. Shared scope.
 
+function successorRenamePomodoroEntryLine(lineText, name) {
+  const line = String(lineText || "");
+  const parsed = parsePomodoroEntryLineParts(line);
+  if (!parsed || typeof name !== "string" || !name.trim()) return null;
+  const marker = line.match(/[ \t]*—[ \t]*/);
+  return marker
+    ? `${line.slice(0, marker.index)}${marker[0]}${name}`
+    : `${line.replace(/[ \t]+$/, "")} — ${name}`;
+}
+
+function coalesceSuccessorLandingNames(placements, rows, themesApi) {
+  if (!Array.isArray(placements) || !themesApi || typeof themesApi.mergeNames !== "function") {
+    return;
+  }
+  const groups = new Map();
+  for (const placement of placements) {
+    const override = placement && placement.override;
+    const mergeName = placement && placement.mergeName;
+    if (!override || typeof mergeName !== "string" || !mergeName) continue;
+    const key = override.kind === "existing"
+      ? `existing:${override.entryLine}`
+      : `new:${String(placement.mergeBaseName || override.name || "").toLowerCase()}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { placements: [], names: [] };
+      groups.set(key, group);
+    }
+    group.placements.push(placement);
+    group.names.push(mergeName);
+  }
+  for (const group of groups.values()) {
+    let mergedName = group.names[0];
+    try {
+      mergedName = themesApi.mergeNames(mergedName, group.names.slice(1));
+    } catch (_error) {
+      continue;
+    }
+    if (typeof mergedName !== "string" || !mergedName) continue;
+    for (const placement of group.placements) {
+      placement.mergeName = mergedName;
+      if (placement.override.kind === "existing") {
+        placement.override = { ...placement.override, mergedName };
+      } else {
+        placement.override = { ...placement.override, name: mergedName };
+      }
+      const row = rows[placement.rowIndex];
+      if (row && row.link) row.link.entry_name = mergedName;
+    }
+  }
+}
+
 function applySuccessorVerdicts(context) {
   const recovers = Array.isArray(context.recovers) ? context.recovers : [];
   const successorMarks = Array.isArray(context.successorMarks) ? context.successorMarks : [];
@@ -11978,6 +12057,8 @@ function applySuccessorVerdicts(context) {
     let successorThemeName = null;
     let successorThemeSuggestionChanged = false;
     let successorThemeDestinationName = null;
+    let successorThemeMergeName = null;
+    let successorThemeMergeBaseName = null;
     const successorEarlyOverride = (() => {
       try {
         return normalizeSuccessorPickDestination(destinations.get(String(key)));
@@ -12011,6 +12092,12 @@ function applySuccessorVerdicts(context) {
       }
       if (write.suggestionChanged === true) {
         successorThemeSuggestionChanged = true;
+        return raised;
+      }
+      if (typeof write.mergeName === "string" && write.mergeName) {
+        successorThemeMergeName = write.mergeName;
+        successorThemeMergeBaseName = write.mergeBaseName || null;
+        successorThemeDestinationName = write.destinationThemeName || write.mergeName;
         return raised;
       }
       if (write.themeEdit && typeof write.themeEdit.apply === "function") {
@@ -12117,6 +12204,9 @@ function applySuccessorVerdicts(context) {
     // passed the stamped line, so the edit is already consolidated. For
     // pullIn picks the rewrite+stamp line is likewise consolidated.)
     if (rowIndex != null) {
+      if (successorThemeMergeName && rows[rowIndex].link) {
+        rows[rowIndex].link.entry_name = successorThemeMergeName;
+      }
       if (successorThemeChanged || successorThemeSuggestionChanged) {
         rows[rowIndex].theme_changed = successorThemeChanged === true;
         rows[rowIndex].theme_action = successorThemeAction;
@@ -12139,7 +12229,15 @@ function applySuccessorVerdicts(context) {
         || normalizeSuccessorPickDestination(destinations.get(String(key)))
         || typedDefaultDestinations.get(String(key));
       if (override) {
-        placement.override = override;
+        placement.override = successorThemeMergeName
+          ? (override.kind === "existing"
+            ? { ...override, mergedName: successorThemeMergeName }
+            : { ...override, mergedName: successorThemeMergeName })
+          : override;
+      }
+      if (successorThemeMergeName) {
+        placement.mergeName = successorThemeMergeName;
+        placement.mergeBaseName = successorThemeMergeBaseName;
       }
       placements.push(placement);
     }
@@ -12147,6 +12245,7 @@ function applySuccessorVerdicts(context) {
 
   // Placements already in ORDER (offers sorted); keep that order for the
   // insertion planner.
+  coalesceSuccessorLandingNames(placements, rows, successorThemesApi);
   return {
     unblocked,
     keep_moving,

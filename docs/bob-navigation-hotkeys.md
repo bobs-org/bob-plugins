@@ -183,8 +183,9 @@ open Pomodoro keeps the existing whole-entry move/delete behavior, typing a new
 name renames the entry in place, and `Ctrl+X` on a highlighted open
 current/future Pomodoro merges entries in one undoable edit (a current timed
 entry survives and absorbs the selected future one; names combine
-survivor-first with ` + ` up to 48 characters). Any count is accepted but
-ignored since the operation is whole-entry.
+survivor-first by component, de-duplicating matching components while keeping
+the first spelling; calendar-owned MEET entries cannot be merged. Any count
+is accepted but ignored since the operation is whole-entry.
 
 Both pickers keep today's open Pomodoros first and offer recent task types for
 new destinations or renames when the Ledger Tools type catalog is available.
@@ -195,11 +196,11 @@ A type that today's ledger uses only on a done or cancelled Pomodoro still
 shows as a Recent row; only types of the open Today rows (and, for rename,
 the entry being renamed) are left out.
 
-When `Ctrl+Shift+M` moves bullets, the selected row's footer previews how each
-resolved open Task Link's type will change. Enter applies those changes with
-the ledger move; Tab cycles the chosen type component for a composite name.
-Alt+Enter keeps every moved task's current type and merges any missing types
-into the destination's Pomodoro name.
+When `Ctrl+Shift+M` moves bullets, Enter keeps each moved task's current type
+and merges any missing types into the destination's Pomodoro name. Alt+Enter
+retypes the moved tasks to the destination's type; Tab cycles the chosen type
+component for a composite name. When the last Task Link of a type leaves a
+merged source Pomodoro, its name sheds that type and keeps the base type.
 
 The **Bob: Task types** command (no default hotkey) opens the type manager,
 with Active, Hidden, Possible duplicates, and All views on `Tab`.
@@ -394,8 +395,9 @@ highlighted row opens one picker for that task. Multiple marked rows
 open one picker per target, in displayed order, so each task sees its
 own suggestion. A cancelled pick, a missing or changed source note, or
 closing the successor picker while a destination picker is open leaves
-the previous overrides, marks, and selection unchanged. Older
-destination pickers still retarget without writing a type field.
+the previous overrides, marks, and selection unchanged. Enter merges the
+task's type into the destination name; Alt+Enter explicitly retypes the task.
+Older destination pickers still retarget without changing the task type.
 
 `Alt+N`, the Task Card property rows, and `Ctrl+Shift+M` moves stamp every
 rewritten open task through the ledger-tools stamper. The Task Card's Review

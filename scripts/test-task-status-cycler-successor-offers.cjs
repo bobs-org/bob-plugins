@@ -256,7 +256,7 @@ test("themeIntent and preserveSpelling survive cycler pick normalization", () =>
           kind: "new",
           name: "Write",
           preserveSpelling: true,
-          themeIntent: { deliberate: true, linkOnce: false, shown },
+          themeIntent: { deliberate: true, retype: false, shown },
         },
       },
       {
@@ -266,7 +266,7 @@ test("themeIntent and preserveSpelling survive cycler pick normalization", () =>
           entryLine: 4,
           entryText: "- [ ] () — DEEP",
           title: "DEEP",
-          themeIntent: { deliberate: true, linkOnce: true, shown: null },
+          themeIntent: { deliberate: true, retype: true, shown: null },
         },
       },
       { key: "c", destination: { kind: "new", name: "PLAN", themeIntent: { deliberate: true } } },
@@ -276,10 +276,10 @@ test("themeIntent and preserveSpelling survive cycler pick normalization", () =>
     kind: "new",
     name: "Write",
     preserveSpelling: true,
-    themeIntent: { deliberate: true, linkOnce: false, shown },
+    themeIntent: { deliberate: true, retype: false, shown },
   });
-  assert.equal(picks[1].destination.themeIntent.deliberate, false);
-  assert.equal(picks[1].destination.themeIntent.linkOnce, true);
+  assert.equal(picks[1].destination.themeIntent.deliberate, true);
+  assert.equal(picks[1].destination.themeIntent.retype, true);
   assert.equal(picks[1].destination.title, "DEEP");
   assert.deepEqual(picks[2].destination, { kind: "new", name: "PLAN" });
 });

@@ -5,8 +5,8 @@
 
 // Strict validation for additive themeIntent on a destination override.
 // Malformed intent is dropped so it can never enable a write; absent
-// intent keeps the legacy destination shape. linkOnce always wins over
-// deliberate, matching the picker (Alt+Enter is never a theme write).
+// intent keeps the legacy destination shape. An explicit retype is carried
+// separately from the default merge landing.
 function normalizeSuccessorThemeIntent(intent) {
   try {
     if (!intent || typeof intent !== "object" || Array.isArray(intent)) {
@@ -15,7 +15,7 @@ function normalizeSuccessorThemeIntent(intent) {
     if (typeof intent.deliberate !== "boolean") {
       return null;
     }
-    if (typeof intent.linkOnce !== "boolean") {
+    if (typeof intent.retype !== "boolean") {
       return null;
     }
     let shown = null;
@@ -33,10 +33,9 @@ function normalizeSuccessorThemeIntent(intent) {
       }
       shown = intent.shown;
     }
-    const linkOnce = intent.linkOnce === true;
     return Object.freeze({
-      deliberate: linkOnce ? false : intent.deliberate,
-      linkOnce,
+      deliberate: intent.deliberate,
+      retype: intent.retype,
       shown,
     });
   } catch (_error) {

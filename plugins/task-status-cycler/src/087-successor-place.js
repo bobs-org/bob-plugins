@@ -242,6 +242,14 @@ function planSuccessorInsertions(dailyLines, placements, options = {}) {
       fail("destination-closed");
       continue;
     }
+    if (typeof pick.mergedName === "string" && pick.mergedName) {
+      const renamed = successorRenamePomodoroEntryLine(lines[targetLine], pick.mergedName);
+      if (!renamed) { fail("destination-rename-failed"); continue; }
+      if (renamed !== lines[targetLine]) {
+        lines[targetLine] = renamed;
+        ops.push({ at: targetLine, deleteCount: 1, lines: [renamed], seq: seq++, marks: [] });
+      }
+    }
     insertOverrideChildren(targetLine, items);
   }
 

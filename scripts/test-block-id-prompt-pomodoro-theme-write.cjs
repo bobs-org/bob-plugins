@@ -128,7 +128,7 @@ function suggestionNameOf(value) {
   return key ? key.toUpperCase() : "";
 }
 
-function stubPlanRetype(options = {}) {
+function stubPlanLanding(options = {}) {
   const destination = String(options.destination || options.destinationName || "");
   const parts = destination.split("+").map((part) => part.trim()).filter(Boolean);
   const typeParts = parts.filter((part) => part.toLowerCase() !== "later");
@@ -140,7 +140,7 @@ function stubPlanRetype(options = {}) {
   if (effectiveKey && destKeys.includes(effectiveKey)) {
     return { kind: "consistent" };
   }
-  if (options.keepType === true) {
+  if (options.retype !== true) {
     return { kind: "merge", name: `${destination.trim()} + ${suggestionNameOf(options.effective || options.suggestion)}` };
   }
   let chosen = null;
@@ -162,13 +162,13 @@ function stubPlanRetype(options = {}) {
   return { kind: "set", name: chosen.toUpperCase(), key: chosen.toLowerCase() };
 }
 
-function realPlanRetype(options = {}, catalog = [], exempt = ["PLAN"]) {
-  return LedgerThemeHelpers.planRetype({
+function realPlanLanding(options = {}, catalog = [], exempt = ["PLAN"]) {
+  return LedgerThemeHelpers.planLanding({
     effectiveKey: suggestionKeyOf(options.effective || options.suggestion),
     effectiveName: suggestionNameOf(options.effective || options.suggestion),
     inheritedKey: suggestionKeyOf(options.inherited),
     destination: options.destination || options.destinationName,
-    keepType: options.keepType === true,
+    retype: options.retype === true,
     tabPick: options.tabPick,
   }, {
     vocab: catalog.map((theme) => theme.key),
@@ -236,9 +236,9 @@ function installThemeWriteApis(plugin, options = {}) {
               ? LedgerThemeHelpers.pomodoroThemeClearTaskTheme(text)
               : stubClearTaskTheme(text);
           },
-          planRetype: options.planRetype || ((opts) => (options.useRealHelpers
-            ? realPlanRetype(opts, catalog, options.exempt || ["PLAN"])
-            : stubPlanRetype(opts))),
+          planLanding: options.planLanding || ((opts) => (options.useRealHelpers
+            ? realPlanLanding(opts, catalog, options.exempt || ["PLAN"])
+            : stubPlanLanding(opts))),
           typeComponentsOf: (name) => String(name || "")
             .split("+")
             .map((raw) => raw.trim())
@@ -281,7 +281,7 @@ function taskFieldSuggestion(name, inherited = noteSuggestion()) {
 }
 
 function deliberateIntent(shown = noteSuggestion()) {
-  return { deliberate: true, linkOnce: false, shown };
+  return { deliberate: true, retype: true, shown };
 }
 
 async function linkWithIntent({
@@ -672,26 +672,26 @@ test("decorative catalog metadata on a live suggestion does not skip the write",
   assert.equal(editor.getValue(), "- [*] #task Ship it [type:: FIX] ^ship");
 });
 
-test("Alt+Enter keep-type merges the current type into the destination name", async () => {
+test("Enter merges the current type into the destination name", async () => {
   const { result, editor, setterCalls, writes } = await linkWithIntent({
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: namedDaily("FIX"),
-    intent: { deliberate: false, linkOnce: true, shown: noteSuggestion() },
+    intent: { deliberate: false, retype: false, shown: noteSuggestion() },
   });
   assert.equal(result, true);
   assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
   assert.equal(setterCalls.length, 0);
   assert.ok(writes[0].content.includes("— FIX + WRITE"));
   assert.ok(writes[0].content.includes("[[Tasks#^ship]]"));
-  assert.equal(lastNotice(), "Linked under FIX + WRITE · stays Next · keeps WRITE");
+  assert.equal(lastNotice(), "Linked under FIX + WRITE · stays Next · merged WRITE");
 });
 
-test("Alt+Enter on a container equals Enter and keeps the type", async () => {
+test("a container keeps the type on the default landing", async () => {
   const { result, editor, setterCalls, writes } = await linkWithIntent({
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: namedDaily("LATER"),
     destination: "LATER",
-    intent: { deliberate: false, linkOnce: true, shown: noteSuggestion() },
+    intent: { deliberate: false, retype: false, shown: noteSuggestion() },
   });
   assert.equal(result, true);
   assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
@@ -706,7 +706,7 @@ test("untouched default (not deliberate) links without storing a field", async (
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: namedDaily("WRITE"),
     destination: "WRITE",
-    intent: { deliberate: false, linkOnce: false, shown: noteSuggestion() },
+    intent: { deliberate: false, retype: false, shown: noteSuggestion() },
   });
   assert.equal(result, true);
   assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
@@ -817,14 +817,14 @@ test("a failed daily write after a saved theme reports the theme and the link fa
   assert.equal(lastNotice(), "Type FIX set, but Daily.md could not be updated");
 });
 
-test("catalog spelling wins over a canonical planRetype name", async () => {
+test("catalog spelling wins over a canonical landing name", async () => {
   const { editor } = await linkWithIntent({
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: namedDaily("FIX"),
     intent: deliberateIntent(),
     apis: {
       catalog: [{ key: "fix", name: "Fix" }],
-      planRetype: () => ({ kind: "set", name: "FIX", key: "fix" }),
+      planLanding: () => ({ kind: "set", name: "FIX", key: "fix" }),
     },
   });
   assert.equal(editor.getValue(), "- [*] #task Ship it [type:: Fix] ^ship");
@@ -861,7 +861,7 @@ test("a routed inbox task retypes from the destination suggestion", async () => 
   source.inboxRouteGate = { kind: "move", path: "Areas/sase_blog.md", name: "sase_blog" };
   source.pomodoroTarget = existingTarget("FIX", {
     deliberate: true,
-    linkOnce: false,
+    retype: true,
     shown: null,
   });
   const result = await h.plugin.applyPomodoroTaskLink(source, "ship", false);
@@ -923,7 +923,7 @@ test("the inbox and the destination inherit different types, and the user picks 
   source.inboxRouteGate = { kind: "move", path: "Areas/sase_blog.md", name: "sase_blog" };
   source.pomodoroTarget = existingTarget("FIX", {
     deliberate: true,
-    linkOnce: false,
+    retype: false,
     shown: destinationSuggestion,
   });
   void inboxSuggestion;
@@ -972,7 +972,7 @@ test("a routed link that picks a different type writes the field", async () => {
   source.inboxRouteGate = { kind: "move", path: "Areas/sase_blog.md", name: "sase_blog" };
   source.pomodoroTarget = existingTarget("BUILD", {
     deliberate: true,
-    linkOnce: false,
+    retype: true,
     shown: destinationSuggestion,
   });
   const result = await h.plugin.applyPomodoroTaskLink(source, "ship", false);
@@ -985,7 +985,7 @@ test("malformed themeIntent never enables a write", async () => {
   const { result, editor, setterCalls } = await linkWithIntent({
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: namedDaily("FIX"),
-    intent: { deliberate: true, linkOnce: false, shown: { theme: { key: "" } } },
+    intent: { deliberate: true, retype: false, shown: { theme: { key: "" } } },
   });
   assert.equal(result, true);
   assert.equal(editor.getValue(), "- [*] #task Ship it ^ship");
@@ -998,12 +998,12 @@ test("themeIntent survives normalizePomodoroLinkPickerChoice for a later consume
     helpers.normalizePomodoroLinkPickerChoice({
       kind: "new",
       name: "FIX",
-      themeIntent: { deliberate: true, linkOnce: false, shown, tabPick: "fix" },
+      themeIntent: { deliberate: true, retype: false, shown, tabPick: "fix" },
     }),
     {
       kind: "new",
       name: "FIX",
-      themeIntent: { deliberate: true, linkOnce: false, shown, tabPick: "fix" },
+      themeIntent: { deliberate: true, retype: false, shown, tabPick: "fix" },
     },
   );
 });
@@ -1013,7 +1013,7 @@ test("Tab pick chooses that type component of a composite destination", async ()
     taskContent: "- [*] #task Ship it ^ship",
     dailyContent: namedDaily("FIX + BUILD"),
     destination: "FIX + BUILD",
-    intent: { deliberate: true, linkOnce: false, shown: noteSuggestion(), tabPick: "build" },
+    intent: { deliberate: true, retype: true, shown: noteSuggestion(), tabPick: "build" },
   });
   assert.equal(result, true);
   assert.equal(editor.getValue(), "- [*] #task Ship it [type:: BUILD] ^ship");

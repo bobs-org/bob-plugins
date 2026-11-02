@@ -549,7 +549,7 @@ test("ID-less (( selection names the task and completes through the shared Pomod
   assert.match(lastNotice(), /removed future schedule/);
 });
 
-test("Pomodoro commit retypes, raises Ready, pulls a future schedule forward, logs it, and includes notices", async () => {
+test("Pomodoro commit merges the task type into the Pomodoro, pulls a future schedule forward, and includes notices", async () => {
   resetNotices();
   const daily = [
     "## Pomodoros",
@@ -573,7 +573,7 @@ test("Pomodoro commit retypes, raises Ready, pulls a future schedule forward, lo
       themes: {
         version: 1,
         suggestFor: () => suggestion,
-        planRetype: () => ({ kind: "set", name: "FIX", key: "fix" }),
+        planLanding: () => ({ kind: "merge", name: "Current + FIX" }),
         setTaskTheme: (line, name) => {
           const id = line.match(/([ \t]+\^[A-Za-z0-9-]+)$/);
           return id
@@ -586,15 +586,22 @@ test("Pomodoro commit retypes, raises Ready, pulls a future schedule forward, lo
   };
   const source = sourceForWikilink(h.editor, 2);
   const row = taskRow("Tasks.md", tasks, "ship");
+  const preview = h.plugin.taskWikilinkPomodoroThemePreview(
+    row,
+    h.plugin.taskWikilinkPomodoroContext(source),
+  );
+  assert.equal(preview.typeClause, "merges FIX into this Pomodoro");
 
   const result = await h.plugin.taskWikilinkPomodoroCommit(source, row, { id: "ship" });
 
   assert.deepEqual(result, { ok: true, completed: true });
-  assert.match(h.store["Tasks.md"], /^- \[\*\] #task Ship it \[type:: FIX\] \[fresh:: 2026-10-30\] \^ship/m);
+  assert.match(h.store["Tasks.md"], /^- \[\*\] #task Ship it \[fresh:: 2026-10-30\] \^ship/m);
+  assert.doesNotMatch(h.store["Tasks.md"], /\[type::/);
+  assert.match(h.editor.getValue(), /^- \[ \] Current \+ FIX \(09:20-09:50\)$/m);
   assert.doesNotMatch(h.store["Tasks.md"], /scheduled::/);
   assert.match(h.store["Tasks.md"], /_2026-11-04 → 2026-10-30_ — 🍅 pulled into today's Pomodoro/);
   assert.match(h.editor.getValue(), /\[\[Tasks#\^ship\]\]/);
-  assert.match(lastNotice(), /type FIX/);
+  assert.match(lastNotice(), /merged FIX/);
   assert.match(lastNotice(), /removed future schedule/);
   assert.match(lastNotice(), /set Next/);
   assert.match(lastNotice(), /logged schedule change/);

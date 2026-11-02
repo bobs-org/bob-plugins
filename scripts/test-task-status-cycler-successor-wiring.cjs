@@ -149,6 +149,23 @@ function installRealTaskThemeApi(plugin, suggestFor) {
         tabPick: options.tabPick,
       }, sources);
     },
+    planLanding: (options = {}) => {
+      const effective = options.effective !== undefined ? options.effective : options.suggestion;
+      const inherited = options.inheritedKey !== undefined ? options.inheritedKey : options.inherited;
+      return ledgerThemeHelpers.planLanding({
+        field: options.field,
+        effectiveKey: keyOf(effective),
+        effectiveName: ledgerThemeHelpers.taskTypeThemeNameOf(effective),
+        inheritedKey: keyOf(inherited),
+        destination: options.destination !== undefined ? options.destination : options.destinationName,
+        selector: options.selector,
+        retype: options.retype,
+        tabPick: options.tabPick,
+      }, sources);
+    },
+    mergeNames: (base, others) => ledgerThemeHelpers.mergeNames(base, others),
+    shed: (name, before, after) => ledgerThemeHelpers.shed(name, before, after, sources),
+    isMeetName: (name) => ledgerThemeHelpers.taskTypeIsMeetName(name),
     planPlacement: (options = {}) => ledgerThemeHelpers.planPlacement({
       typeKey: options.typeKey !== undefined ? options.typeKey : options.type,
       typeName: options.typeName,
@@ -351,7 +368,7 @@ test("Ctrl+Enter carries per-task theme intents through both pick normalizers an
           ...chosen,
           themeIntent: {
             deliberate: true,
-            linkOnce: false,
+            retype: true,
             shown: shown[taskPath],
           },
         };
@@ -387,6 +404,64 @@ test("Ctrl+Enter carries per-task theme intents through both pick normalizers an
   assert.equal(seen.length, 1);
   assert.equal(finalized.successors.unblocked.filter((row) => row.theme_changed).length, 3);
   assert.equal(finalized.successors.failure, null);
+});
+
+test("successor retarget Enter merges the destination header and preserves the task field", async () => {
+  notices.length = 0;
+  const closeLine = "- [ ] #task Finish the release [id:: work__finish] ^finish";
+  const follower = "- [?] #task Write the docs [dependsOn:: work__finish] ^docs";
+  const day = [
+    `# ${TODAY}`,
+    "",
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "\t- [[work#^finish]]",
+    "- [ ] () — BUILD",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "work.md": closeLine,
+    "a.md": follower,
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(closeLine, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "work.md");
+  installTasksCloseCommand(plugin, editor);
+  const shown = {
+    theme: { key: "write", name: "WRITE", known: true },
+    source: "note",
+    label: "from a",
+  };
+  installRealTaskThemeApi(plugin, () => shown);
+  const seen = [];
+  installNavStub(plugin, seen, async (model) => {
+    const row = model.groups.flatMap((group) => group.rows || []).find(
+      (item) => item && item.selectable && item.task && item.task.path === "a.md",
+    );
+    assert.ok(row);
+    const destination = navigationHelpers.normalizeSuccessorDestinationOverride({
+      kind: "existing",
+      entryLine: 5,
+      entryText: "- [ ] () — BUILD",
+      themeIntent: { deliberate: false, retype: false, shown },
+    });
+    return { picks: [{ key: row.key, destination }] };
+  });
+  let finalized = null;
+  const finalize = plugin.finalizeClosedTasks.bind(plugin);
+  plugin.finalizeClosedTasks = async (...args) => {
+    finalized = await finalize(...args);
+    return finalized;
+  };
+
+  await pressCtrlEnterAndSettle(plugin, editor);
+
+  assert.doesNotMatch(harness.getSource("a.md"), /\[type::/);
+  assert.match(harness.getSource("a.md"), /^- \[\*\]/);
+  assert.match(harness.getSource(DAILY_PATH), /— BUILD \+ WRITE/);
+  assert.match(harness.getSource(DAILY_PATH), /\t- \[\[a#\^docs\]\]/);
+  const row = finalized.successors.unblocked.find((item) => item.block_id === "docs");
+  assert.equal(row.theme_changed || false, false);
+  assert.equal(row.link.entry_name, "BUILD + WRITE");
 });
 
 test("default placement and a changed suggestion still link selected successors without retargeting themes", async () => {
@@ -432,7 +507,7 @@ test("default placement and a changed suggestion still link selected successors 
             kind: "existing",
             entryLine: 5,
             entryText: "- [ ] () — BUILD",
-            themeIntent: { deliberate: true, linkOnce: false, shown: oldSuggestion },
+            themeIntent: { deliberate: true, retype: false, shown: oldSuggestion },
           });
           picks.push({ key: row.key, destination });
         } else {
@@ -519,7 +594,7 @@ test("project-finished successor writes its selected theme with real task-theme 
       kind: "existing",
       entryLine: 5,
       entryText: "- [ ] () — BUILD",
-      themeIntent: { deliberate: true, linkOnce: false, shown },
+      themeIntent: { deliberate: true, retype: true, shown },
     });
     return { picks: [{ key: row.key, destination }] };
   });
@@ -582,7 +657,7 @@ test("successor theme save remains truthful when the later daily-link write fail
       kind: "existing",
       entryLine: 5,
       entryText: "- [ ] () — BUILD",
-      themeIntent: { deliberate: true, linkOnce: false, shown },
+      themeIntent: { deliberate: true, retype: true, shown },
     });
     return { picks: [{ key: row.key, destination }] };
   });

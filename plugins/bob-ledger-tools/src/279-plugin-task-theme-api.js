@@ -27,6 +27,10 @@ class BobLedgerToolsTaskThemeApiMixin {
       typeComponentsOf: (name) => this.taskTypeComponentsOf(name),
       typeAgrees: (taskKey, entryName) => this.taskTypeAgrees(taskKey, entryName),
       planRetype: (options) => this.taskTypePlanRetype(options),
+      planLanding: (options) => this.taskTypePlanLanding(options),
+      mergeNames: (base, others) => mergeNames(base, others),
+      shed: (name, before, after) => this.taskTypeShed(name, before, after),
+      isMeetName: (name) => taskTypeIsMeetName(name),
       planPlacement: (options) => this.taskTypePlanPlacement(options),
       planRelocation: (options) => this.taskTypePlanRelocation(options),
       isKnownTheme: (key) => this.pomodoroThemeIsKnown(key),
@@ -104,6 +108,41 @@ class BobLedgerToolsTaskThemeApiMixin {
       );
     } catch (error) {
       return null;
+    }
+  }
+
+  taskTypePlanLanding(options) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      const effective = opts.effective !== undefined ? opts.effective : opts.suggestion;
+      const inherited = opts.inheritedKey !== undefined ? opts.inheritedKey : opts.inherited;
+      return planLanding(
+        {
+          field: opts.field,
+          effectiveKey: effective && typeof effective === "object"
+            ? pomodoroThemeKeyOf(effective.theme || effective)
+            : effective,
+          effectiveName: taskTypeThemeNameOf(effective),
+          inheritedKey: inherited && typeof inherited === "object"
+            ? pomodoroThemeKeyOf(inherited.theme || inherited)
+            : inherited,
+          destination: opts.destination !== undefined ? opts.destination : opts.destinationName,
+          selector: opts.selector,
+          retype: opts.retype,
+          tabPick: opts.tabPick,
+        },
+        opts.sources !== undefined ? opts.sources : this.taskTypeSources(),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskTypeShed(name, before, after) {
+    try {
+      return shed(name, before, after, this.taskTypeSources());
+    } catch (error) {
+      return typeof name === "string" ? name : "";
     }
   }
 

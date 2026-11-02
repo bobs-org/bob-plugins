@@ -62,6 +62,25 @@ function collectPomodoroBulletMoveTaskLinks(session) {
   return [...byIdentity.values()];
 }
 
+function collectPomodoroEntryTaskLinks(session) {
+  const content = String(session && session.sourceContent || "");
+  const lines = splitMarkdownContent(content).lines;
+  const context = session && session.discovery && session.discovery.context;
+  const entry = context && context.entry;
+  if (!entry) return [];
+  const byIdentity = new Map();
+  for (let line = entry.childStartLine; line < entry.childEndLineExclusive; line += 1) {
+    const rawLine = String(lines[line] || "");
+    const link = parseLinkPickerTaskLink(rawLine);
+    if (!link) continue;
+    const identity = `${link.target}\u0000${link.blockId}`;
+    if (!byIdentity.has(identity)) {
+      byIdentity.set(identity, Object.freeze({ line, rawLine, link }));
+    }
+  }
+  return [...byIdentity.values()];
+}
+
 function pomodoroBulletMoveTaskTypeParts(effective, field) {
   const inherited = effective && effective.inherited
     ? effective.inherited
@@ -84,12 +103,16 @@ function pomodoroBulletMoveTaskTypeParts(effective, field) {
 
 async function resolvePomodoroBulletMoveTypePreview(plugin, session) {
   const links = collectPomodoroBulletMoveTaskLinks(session);
+  const sourceLinks = collectPomodoroEntryTaskLinks(session);
   const api = getNavigationPomodoroThemesApi(plugin && plugin.app);
   const preview = {
     api,
     candidates: links.length,
     unresolved: 0,
     records: [],
+    sourceRecords: [],
+    sourceUnresolved: 0,
+    sourceTypesComplete: true,
     error: null,
   };
   if (links.length === 0) {
@@ -99,15 +122,22 @@ async function resolvePomodoroBulletMoveTypePreview(plugin, session) {
     !api ||
     typeof api.effectiveTypeFor !== "function" ||
     typeof api.taskThemeOf !== "function" ||
-    typeof api.planRetype !== "function"
+    typeof api.planLanding !== "function"
   ) {
     preview.error = "Task type routing is unavailable";
     return preview;
   }
 
+  const selectedIdentities = new Set(links.map((candidate) =>
+    `${candidate.link.target}\u0000${candidate.link.blockId}`,
+  ));
   const noteContents = new Map();
   const records = [];
-  for (const candidate of links) {
+  const sourceRecords = [];
+  const sourceFailures = new Set();
+  const sourceResolved = new Set();
+  for (const candidate of sourceLinks) {
+    const identity = `${candidate.link.target}\u0000${candidate.link.blockId}`;
     const linkTarget = `${candidate.link.target}#^${candidate.link.blockId}`;
     let file = null;
     try {
@@ -116,12 +146,12 @@ async function resolvePomodoroBulletMoveTypePreview(plugin, session) {
       file = null;
     }
     if (!file || !plugin.isMarkdownFile(file)) {
-      preview.unresolved += 1;
+      sourceFailures.add(identity);
       continue;
     }
     const path = normalizeVaultRelativePath(file.path);
     if (!path) {
-      preview.unresolved += 1;
+      sourceFailures.add(identity);
       continue;
     }
     let content;
@@ -141,7 +171,7 @@ async function resolvePomodoroBulletMoveTypePreview(plugin, session) {
       }
     }
     if (typeof content !== "string") {
-      preview.unresolved += 1;
+      sourceFailures.add(identity);
       continue;
     }
     const resolved = findUniqueLinkPickerTargetLine(
@@ -150,7 +180,7 @@ async function resolvePomodoroBulletMoveTypePreview(plugin, session) {
       { allowClosed: true },
     );
     if (!resolved.valid || !isOpenObsidianTaskLine(resolved.rawLine)) {
-      preview.unresolved += 1;
+      sourceFailures.add(identity);
       continue;
     }
 
@@ -172,36 +202,45 @@ async function resolvePomodoroBulletMoveTypePreview(plugin, session) {
       return preview;
     }
     const type = pomodoroBulletMoveTaskTypeParts(effective, field);
-    records.push(Object.freeze({
+    const record = Object.freeze({
       path,
       file,
       content,
       line: resolved.line,
       rawLine: resolved.rawLine,
       blockId: candidate.link.blockId,
+      linkIdentity: identity,
       field,
       effective,
       inherited: type.inherited,
       typeKey: type.key,
       typeName: type.name,
-    }));
+    });
+    sourceRecords.push(record);
+    sourceResolved.add(identity);
+    if (selectedIdentities.has(identity)) records.push(record);
   }
+  preview.unresolved = [...selectedIdentities].filter((identity) => !sourceResolved.has(identity)).length;
+  preview.sourceUnresolved = sourceFailures.size;
+  preview.sourceTypesComplete = sourceFailures.size === 0;
   preview.records = records;
+  preview.sourceRecords = sourceRecords;
   return preview;
 }
 
 function planPomodoroBulletMoveRetypes(api, records, destinationName, tabPick) {
-  if (!api || typeof api.planRetype !== "function") {
+  if (!api || typeof api.planLanding !== "function") {
     return [];
   }
   return (Array.isArray(records) ? records : []).map((record) => {
     let plan = null;
     try {
-      plan = api.planRetype({
+      plan = api.planLanding({
         field: record.field,
         effective: record.effective,
         inherited: record.inherited,
         destination: destinationName,
+        retype: true,
         ...(tabPick ? { tabPick } : {}),
       });
     } catch (_error) {
@@ -237,12 +276,12 @@ function mergePomodoroBulletMoveTaskTypes(api, records, destinationName) {
   for (const record of Array.isArray(records) ? records : []) {
     let outcome = null;
     try {
-      outcome = api.planRetype({
+      outcome = api.planLanding({
         field: record.field,
         effective: record.effective,
         inherited: record.inherited,
-        destination: destinationName,
-        keepType: true,
+        destination: name,
+        retype: false,
       });
     } catch (_error) {
       outcome = null;
@@ -258,14 +297,12 @@ function mergePomodoroBulletMoveTaskTypes(api, records, destinationName) {
     } catch (_error) {
       currentKeys = new Set();
     }
-    if (currentKeys.has(record.typeKey)) {
-      continue;
-    }
+    if (currentKeys.has(record.typeKey)) continue;
     const typeName = pomodoroBulletMoveTypeName(record.effective);
-    if (!typeName) {
-      continue;
-    }
-    name = name ? `${name} + ${typeName}` : typeName;
+    if (!typeName) continue;
+    name = typeof api.mergeNames === "function"
+      ? api.mergeNames(name, [outcome.name])
+      : outcome.name;
     appended.push(typeName);
   }
   return Object.freeze({ name, appended: Object.freeze(appended) });
@@ -291,9 +328,9 @@ function pomodoroBulletMovePickerTabPick(modal, row) {
 function pomodoroBulletMovePickerCommitOptions(modal, row) {
   return {
     typePreviewState: modal && modal.moveTypePreviewState,
-    typeMode: modal && modal.pendingMoveTypeMode === "keepType"
-      ? "keepType"
-      : "retype",
+    typeMode: modal && modal.pendingMoveTypeMode === "retype"
+      ? "retype"
+      : "merge",
     tabPick: pomodoroBulletMovePickerTabPick(modal, row),
     typePreview: modal && modal.moveTypePreview,
   };
@@ -319,69 +356,38 @@ function pomodoroBulletMovePickerConsequence(modal, row) {
   }
   if (records.length === 0) {
     const unresolved = preview.unresolved > 0
-      ? ` · ${preview.unresolved} links not retyped`
+      ? ` · ${preview.unresolved} links unresolved`
       : "";
-    return `${destinationName} · no open task types change${unresolved}`;
+    return `${destinationName} · no task types to merge${unresolved}`;
   }
 
   const selectedPick = pomodoroBulletMovePickerTabPick(modal, row);
-  const plans = planPomodoroBulletMoveRetypes(
+  const merged = mergePomodoroBulletMoveTaskTypes(preview.api, records, destinationName);
+  const typeNames = [...new Set(records.map((record) => record.typeName).filter(Boolean))];
+  let consequence = merged.name !== destinationName
+    ? `→ ${merged.name} · keeps ${typeNames.length === 1 ? typeNames[0] : "task types"}`
+    : `→ ${destinationName} · types already match`;
+
+  const retypePlans = planPomodoroBulletMoveRetypes(
     preview.api,
     records,
     destinationName,
     selectedPick,
   );
-  const changes = plans.filter((item) =>
+  const changes = retypePlans.filter((item) =>
     item.plan && (item.plan.kind === "set" || item.plan.kind === "clear"),
   );
-  let targetLabel = destinationName;
   const setNames = [...new Set(changes
     .filter((item) => item.plan.kind === "set")
     .map((item) => item.plan.name)
     .filter(Boolean))];
   const clearCount = changes.filter((item) => item.plan.kind === "clear").length;
   if (setNames.length === 1 && clearCount === 0) {
-    targetLabel = setNames[0];
-  } else if (setNames.length === 0 && clearCount > 0) {
-    const inheritedName = changes.find((item) => item.plan.kind === "clear")
-      ?.record.inherited;
-    targetLabel = pomodoroBulletMoveTypeName(inheritedName) || destinationName;
-  }
-  let consequence;
-  if (changes.length === 0) {
-    const kept = [...new Set(records.map((record) => record.typeName).filter(Boolean))];
-    consequence = kept.length === 1
-      ? `→ ${destinationName} · keeps ${kept[0]}`
-      : `→ ${destinationName} · keeps task types`;
-  } else if (clearCount > 0 && setNames.length === 0 && changes.length === 1) {
-    const inherited = changes[0].record.inherited;
-    const label = String(inherited && inherited.label || "").trim();
-    consequence = `→ ${targetLabel} · type cleared${label ? ` · ${label}` : ""}`;
-  } else if (setNames.length === 1 && clearCount === 0) {
-    const taskCount = changes.length === 1 ? "task" : `${changes.length} tasks`;
-    consequence = `→ ${targetLabel} · ${taskCount} become${changes.length === 1 ? "s" : ""} ${targetLabel}`;
-    if (changes.length === 1) {
-      const suggestion = pomodoroBulletMoveSuggestionText(changes[0].record.effective);
-      if (suggestion) {
-        consequence += ` · ${suggestion}`;
-      }
-    }
-  } else {
-    consequence = `→ ${destinationName} · ${changes.length} task types change`;
-  }
-
-  const merged = mergePomodoroBulletMoveTaskTypes(
-    preview.api,
-    records,
-    destinationName,
-  );
-  if (merged.name && merged.name !== destinationName) {
-    const names = [...new Set(records.map((record) => record.typeName).filter(Boolean))];
-    if (records.length === 1 && names.length === 1) {
-      consequence += ` · ⌥↵ keep ${names[0]} (${merged.name})`;
-    } else {
-      consequence += ` · ⌥↵ keep types (${merged.name})`;
-    }
+    consequence += ` · ⌥↵ retype to ${setNames[0]}`;
+  } else if (clearCount > 0 && setNames.length === 0) {
+    consequence += ` · ⌥↵ clear ${clearCount === 1 ? "type" : "types"}`;
+  } else if (changes.length > 0) {
+    consequence += ` · ⌥↵ retype ${changes.length} task types`;
   }
   if (candidates.length > 1) {
     const currentKey = selectedPick || pomodoroBulletMoveRetypeDefaultKey(
@@ -396,7 +402,7 @@ function pomodoroBulletMovePickerConsequence(modal, row) {
     }
   }
   if (preview.unresolved > 0) {
-    consequence += ` · ${preview.unresolved} links not retyped`;
+    consequence += ` · ${preview.unresolved} links unresolved`;
   }
   return consequence;
 }
@@ -543,7 +549,7 @@ function installPomodoroBulletMoveTypePicker() {
       ? { api, candidates: 0, unresolved: 0, records: [], error: null }
       : null;
     this.moveTypePicks = new Map();
-    this.pendingMoveTypeMode = "retype";
+    this.pendingMoveTypeMode = "merge";
     originalOnOpen.call(this);
     if (candidates.length === 0) {
       return;
@@ -601,7 +607,7 @@ function installPomodoroBulletMoveTypePicker() {
       event.preventDefault();
       event.stopPropagation();
       if (!this.opening) {
-        this.pendingMoveTypeMode = "keepType";
+        this.pendingMoveTypeMode = "retype";
         this.openSelectedItem();
       }
       return;

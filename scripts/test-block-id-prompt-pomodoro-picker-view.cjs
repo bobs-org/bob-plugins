@@ -180,7 +180,7 @@ function suggestionNameOf(value) {
   return key ? key.toUpperCase() : "";
 }
 
-function stubPlanRetype(options = {}) {
+function stubPlanLanding(options = {}) {
   const destination = String(options.destination || options.destinationName || "");
   const parts = destination.split("+").map((part) => part.trim()).filter(Boolean);
   const typeParts = parts.filter((part) => part.toLowerCase() !== "later");
@@ -192,7 +192,7 @@ function stubPlanRetype(options = {}) {
   if (effectiveKey && destKeys.includes(effectiveKey)) {
     return { kind: "consistent" };
   }
-  if (options.keepType === true) {
+  if (options.retype !== true) {
     return {
       kind: "merge",
       name: `${destination.trim()} + ${suggestionNameOf(options.effective || options.suggestion)}`,
@@ -254,7 +254,7 @@ function createThemesApi(initialThemes, extra = {}) {
     },
     hueFor: (key) => ({ hue: String(key).startsWith("focus") ? "aqua" : "blue", hue_source: "test" }),
     similarTo: (name) => String(name).toLowerCase().startsWith("fix") ? ["FIXES"] : [],
-    planRetype: stubPlanRetype,
+    planLanding: stubPlanLanding,
     typeComponentsOf: stubTypeComponentsOf,
     onChange: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
     hide: (name) => {
@@ -1052,7 +1052,7 @@ function openSuggestedEntryPicker({ suggestion = noteSuggestion(), lineText = "-
   });
   const themesApi = createThemesApi(themes, {
     taskThemeOf: stubTaskThemeOf,
-    planRetype: stubPlanRetype,
+    planLanding: stubPlanLanding,
     typeComponentsOf: stubTypeComponentsOf,
     ...extra,
   });
@@ -1113,7 +1113,7 @@ test("reading and note suggestions render their own reasons and footer phrases",
   };
   const probe = helpers.buildPomodoroLinkPickerModel(DAILY, { now: NOW });
   const snapshot = makeThemeSnapshot(probe, { suggestion: note, choice: { kind: "entry", index: 0 } });
-  const themesApi = createThemesApi([], { taskThemeOf: stubTaskThemeOf, planRetype: stubPlanRetype });
+  const themesApi = createThemesApi([], { taskThemeOf: stubTaskThemeOf, planLanding: stubPlanLanding });
   const noteModal = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
   const noteRows = findAllByClass(noteModal.contentEl, "bid-ppk-row");
   assert.match(textOf(findByClass(noteRows[0], "bid-ppk-suggest")), /Suggested · from\s+.*gtd_daily/);
@@ -1121,14 +1121,14 @@ test("reading and note suggestions render their own reasons and footer phrases",
   noteModal.close();
 });
 
-test("footer previews the pending set and clear with the suggestion source", () => {
+test("footer previews the default merge and the explicit retype with suggestion context", () => {
   const modal = openSuggestedEntryPicker();
   type(modal, "capture");
   const shown = footerText(modal);
   assert.equal(shown.hidden, false);
   assert.equal(
     shown.text,
-    "→ CAPTURE · task becomes CAPTURE · sase_blog suggests WRITE · ⌥↵ keep WRITE (CAPTURE + WRITE)",
+    "→ CAPTURE + WRITE · keeps WRITE · ⌥↵ retype to CAPTURE",
   );
   modal.close();
 
@@ -1141,7 +1141,7 @@ test("footer previews the pending set and clear with the suggestion source", () 
   assert.equal(cleared.hidden, false);
   assert.equal(
     cleared.text,
-    "→ WRITE · type cleared · from sase_blog · ⌥↵ keep FIX (WRITE + FIX)",
+    "→ WRITE + FIX · keeps FIX · ⌥↵ clear type",
   );
   clearModal.close();
 });
@@ -1191,7 +1191,7 @@ test("footer previews PLAN, LATER, and Tab cycling on a composite", () => {
     daily: planDaily,
     themesApi: createThemesApi([], {
       taskThemeOf: stubTaskThemeOf,
-      planRetype: stubPlanRetype,
+      planLanding: stubPlanLanding,
       typeComponentsOf: stubTypeComponentsOf,
     }),
     lineText: "- [*] #task Ship it",
@@ -1200,13 +1200,13 @@ test("footer previews PLAN, LATER, and Tab cycling on a composite", () => {
   assert.equal(selectedTitle(planModal), "PLAN + FIX");
   assert.equal(
     footerText(planModal).text,
-    "→ FIX · task becomes FIX · sase_blog suggests WRITE · ⌥↵ keep WRITE (PLAN + FIX + WRITE) · ⇥ PLAN",
+    "→ PLAN + FIX + WRITE · keeps WRITE · ⌥↵ retype to FIX · ⇥ PLAN",
   );
   pressKey(planModal, "Tab");
   assert.equal(planModal.tabPickKey, "plan");
   assert.equal(
     footerText(planModal).text,
-    "→ PLAN · task becomes PLAN · sase_blog suggests WRITE · ⌥↵ keep WRITE (PLAN + FIX + WRITE) · ⇥ FIX",
+    "→ PLAN + FIX + WRITE · keeps WRITE · ⌥↵ retype to PLAN · ⇥ FIX",
   );
   planModal.close();
 
@@ -1220,7 +1220,7 @@ test("footer previews PLAN, LATER, and Tab cycling on a composite", () => {
     daily: compositeDaily,
     themesApi: createThemesApi([], {
       taskThemeOf: stubTaskThemeOf,
-      planRetype: stubPlanRetype,
+      planLanding: stubPlanLanding,
       typeComponentsOf: stubTypeComponentsOf,
     }),
     lineText: "- [*] #task Ship it",
@@ -1229,13 +1229,13 @@ test("footer previews PLAN, LATER, and Tab cycling on a composite", () => {
   assert.equal(selectedTitle(composite), "FIX + BUILD");
   assert.equal(
     footerText(composite).text,
-    "→ FIX · task becomes FIX · sase_blog suggests WRITE · ⌥↵ keep WRITE (FIX + BUILD + WRITE) · ⇥ BUILD",
+    "→ FIX + BUILD + WRITE · keeps WRITE · ⌥↵ retype to FIX · ⇥ BUILD",
   );
   pressKey(composite, "Tab");
   assert.equal(composite.tabPickKey, "build");
   assert.equal(
     footerText(composite).text,
-    "→ BUILD · task becomes BUILD · sase_blog suggests WRITE · ⌥↵ keep WRITE (FIX + BUILD + WRITE) · ⇥ FIX",
+    "→ FIX + BUILD + WRITE · keeps WRITE · ⌥↵ retype to BUILD · ⇥ FIX",
   );
   composite.close();
 });
@@ -1276,7 +1276,7 @@ test("untouched refresh preserves a still-eligible suggested entry; arrivals ado
   const emptyDaily = ["## Pomodoros", "- [x] () — DONE"].join("\n");
   let catalog = [];
   let emit = null;
-  const api = createThemesApi([], { taskThemeOf: stubTaskThemeOf, planRetype: stubPlanRetype });
+  const api = createThemesApi([], { taskThemeOf: stubTaskThemeOf, planLanding: stubPlanLanding });
   api.historyRows = ({ query = "", limit = 5, exclusions = new Set() } = {}) => {
     const needle = String(query).trim().toLowerCase();
     return catalog
@@ -1323,7 +1323,7 @@ test("refresh after typing preserves the user's position and initial key", async
   pressKey(modal, "Enter");
   const choice = await choicePromise;
   assert.equal(choice.themeIntent.deliberate, true, "a typed query is deliberate");
-  assert.equal(choice.themeIntent.linkOnce, false);
+  assert.equal(choice.themeIntent.retype, false);
 });
 
 test("removed rows fall back deterministically without clearing interaction", async () => {
@@ -1363,7 +1363,7 @@ test("suggestion never recomputes on refresh and survives API changes", async ()
     [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2 }],
     {
       taskThemeOf: stubTaskThemeOf,
-      planRetype: stubPlanRetype,
+      planLanding: stubPlanLanding,
       suggestFor: () => {
         suggestCalls += 1;
         throw new Error("suggestFor must not run on refresh");
@@ -1404,7 +1404,7 @@ test("deferred fetch makes an unknown suggestion eligible and settles the untouc
   let suggestCalls = 0;
   const themesApi = createThemesApi([], {
     taskThemeOf: stubTaskThemeOf,
-    planRetype: stubPlanRetype,
+    planLanding: stubPlanLanding,
     suggestFor: () => {
       suggestCalls += 1;
       return noteSuggestion();
@@ -1463,7 +1463,7 @@ test("deferred fetch makes an unknown suggestion eligible and settles the untouc
     kind: "new",
     name: "Write",
     preserveSpelling: true,
-    themeIntent: { deliberate: false, linkOnce: false, shown: modal.shownSuggestion },
+    themeIntent: { deliberate: false, retype: false, shown: modal.shownSuggestion },
   });
   assert.equal(suggestCalls, 0, "refresh does not rerun task suggestion resolution");
   const rowsAfterClose = modal.rows;
@@ -1489,7 +1489,7 @@ test("onChange adopts a newly eligible existing match only before interaction", 
   let emit = null;
   const themesApi = createThemesApi([], {
     taskThemeOf: stubTaskThemeOf,
-    planRetype: stubPlanRetype,
+    planLanding: stubPlanLanding,
     isKnownTheme: (key) => key === "write" && known,
     historyRows: ({ exclusions = new Set() } = {}) => catalog.filter((row) => !exclusions.has(row.key)),
     onChange: (listener) => { emit = listener; return () => {}; },
@@ -1523,7 +1523,7 @@ test("refresh after arrows and after typing then clearing keeps the settled user
   let emit = null;
   const themesApi = createThemesApi([], {
     taskThemeOf: stubTaskThemeOf,
-    planRetype: stubPlanRetype,
+    planLanding: stubPlanLanding,
     isKnownTheme: (key) => key === "write" && known,
     onChange: (listener) => { emit = listener; return () => {}; },
   });
@@ -1553,7 +1553,7 @@ test("typed theme suggestion decorates the final Recent row without changing PT7
   const catalog = [{ key: "write", name: "Write", last_used: "2026-08-15", days_used: 2 }];
   const themesApi = createThemesApi(catalog, {
     taskThemeOf: stubTaskThemeOf,
-    planRetype: stubPlanRetype,
+    planLanding: stubPlanLanding,
   });
   const plain = openPicker({ themesApi });
   type(plain, "wri");
@@ -1599,7 +1599,7 @@ test("typed theme suggestion decorates the final Recent row without changing PT7
   fallback.close();
 });
 
-test("Alt+Enter links once without remembering; plain commits carry deliberate intent", async () => {
+test("Alt+Enter explicitly requests retype; plain commits keep the default merge", async () => {
   const modal = openSuggestedEntryPicker();
   modal.moveSelection(1);
   assert.equal(modal.rows[modal.selectedIndex].entry.name, "LATER");
@@ -1608,8 +1608,8 @@ test("Alt+Enter links once without remembering; plain commits carry deliberate i
   const choice = await promise;
   assert.equal(choice.kind, "existing");
   assert.deepEqual(choice.themeIntent, {
-    deliberate: false,
-    linkOnce: true,
+    deliberate: true,
+    retype: true,
     shown: noteSuggestion(),
   });
 });
@@ -1620,7 +1620,7 @@ test("Enter, click, and Ctrl+Shift+Enter share the deliberate rule", async () =>
   pressKey(untouched, "Enter");
   assert.deepEqual((await untouchedPromise).themeIntent, {
     deliberate: false,
-    linkOnce: false,
+    retype: false,
     shown: noteSuggestion(),
   });
 
@@ -1638,7 +1638,7 @@ test("Enter, click, and Ctrl+Shift+Enter share the deliberate rule", async () =>
   assert.equal(movedChoice.kind, "existing");
   assert.equal(movedChoice.title, "LATER");
   assert.equal(movedChoice.themeIntent.deliberate, true);
-  assert.equal(movedChoice.themeIntent.linkOnce, false);
+  assert.equal(movedChoice.themeIntent.retype, false);
 
   const tapped = openSuggestedEntryPicker();
   const tappedPromise = tapped.waitForChoice();
@@ -1658,7 +1658,7 @@ test("Shift+Enter named commits are always deliberate", async () => {
   assert.deepEqual(createChoice, {
     kind: "new",
     name: "FOCUS",
-    themeIntent: { deliberate: true, linkOnce: false, shown: noteSuggestion() },
+    themeIntent: { deliberate: true, retype: false, shown: noteSuggestion() },
   });
 
   const exact = openSuggestedEntryPicker();
@@ -1686,7 +1686,7 @@ test("Ctrl+D on the suggested create row is consumed without writes", async () =
   });
   const themesApi = createThemesApi(
     [{ key: "write", name: "WRITE", last_used: "2026-08-15", days_used: 2, hidden: true }],
-    { taskThemeOf: stubTaskThemeOf, planRetype: stubPlanRetype },
+    { taskThemeOf: stubTaskThemeOf, planLanding: stubPlanLanding },
   );
   const modal = openPicker({ themesApi, lineText: "- [*] #task Ship it", themeSnapshot: snapshot });
   assert.equal(modal.rows[modal.selectedIndex].suggestedCreate, true);

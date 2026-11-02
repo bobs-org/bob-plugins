@@ -28,18 +28,16 @@ Navigation Hotkeys uses this picker for successor offers. An optional
 task-aware preselection: `line` is one-based and `text` is the full live
 Markdown note. Calls without it keep the generic successor picker. `pick()`
 itself does not write a task type. Task-aware picks carry an additive
-`themeIntent: { deliberate, linkOnce, shown, tabPick? }` on the committed choice:
+`themeIntent: { deliberate, retype, shown, tabPick? }` on the committed choice:
 `deliberate` is true when the committed row differs from the suggested default
-or a query is typed (Shift+Enter named commits are always deliberate, Alt+Enter
-keep-type commits never are), `linkOnce` is true only for Alt+Enter, `shown`
-is the suggestion actually presented (or null), and `tabPick` is the cycled
-composite type key after Tab. Ctrl+Shift+Enter consumes that intent in the
-existing task-line edit after revalidating a present `shown` against a fresh
-`suggestFor`; a missing `shown` retypes from the live suggestion. Enter applies
-`planRetype`. Alt+Enter is the keep-type merge and does not write a field. A
-stale shown suggestion skips the field. Picks without task context keep the
-legacy shape, and a malformed optional intent is dropped so it can never
-enable a write. The namespace version stays 1.
+or a query is typed, `retype` is true only for Alt+Enter, `shown` is the
+suggestion actually presented (or null), and `tabPick` is the cycled composite
+type key after Tab. Ctrl+Shift+Enter consumes that intent in the existing
+task-line and ledger edit after revalidating `shown` against a fresh
+`suggestFor`. Enter applies `planLanding`'s default merge; Alt+Enter requests
+its explicit retype path. A stale shown suggestion skips the type and name
+change. Picks without task context keep the legacy shape, and a malformed
+optional intent is dropped. The namespace version stays 1.
 
 ## Bob Ledger Tools
 
@@ -204,7 +202,8 @@ The v1 namespace also exposes synchronous task-theme helpers:
 plus the additive
 task-type routing surface: `effectiveTypeFor(request)`,
 `typeComponentsOf(name)`, `typeAgrees(taskKey, entryName)`,
-`planRetype(options)`, `planPlacement(options)`, and
+`planRetype(options)`, `planLanding(options)`, `mergeNames(base, others)`,
+`shed(name, beforeKeys, afterKeys)`, `planPlacement(options)`, and
 `planRelocation(options)`. `suggestFor` uses a
 vault-relative `path`, a one-based integer line number, and optional full live
 Markdown text. When `text` is omitted it reads that line only from an open
@@ -238,10 +237,18 @@ setters return rewritten strings and do not write the vault.
 reading task, note defaults, then `plan.default_type`) and returns the full
 suggestion or `null`. `typeComponentsOf(name)` returns `{ name, key, isType }`
 rows per D4. `typeAgrees(taskKey, entryName)` answers the D5 invariant; a
-missing type always agrees. `planRetype({ effective, effectiveName?,
-inherited, destination, selector?, keepType?, tabPick?, sources? })` returns
-`{ kind }` with `container`, `consistent`, `merge`, `set`, or `clear`
-outcomes per D6; `effective` and `inherited` accept suggestion objects or keys.
+missing type always agrees. `planLanding({ effective, inherited,
+destination, retype?, selector?, tabPick?, sources? })` returns `container`,
+`consistent`, `merge`, `set`, or `clear` per R2. `merge` preserves the task
+type and returns the merged destination name; `retype: true` takes the
+explicit task-field path. MEET uses that path regardless of `retype`.
+`planRetype({ effective, effectiveName?, inherited, destination, selector?,
+tabPick?, sources? })` remains as a v1 alias for `planLanding` with
+`retype: true`. `mergeNames(base, others)` joins components
+in order and keeps the first spelling of duplicates. `shed(name, beforeKeys,
+afterKeys)` removes merged-in types whose last Task Link left, while retaining
+the base type, labels, and unlinked types. `effective` and `inherited` accept
+suggestion objects or keys.
 `planPlacement({ type, typeName?, entries, alreadyQueued?, exempt? })`
 returns `entry`, `create`, `alreadyQueued`, or `noType` per D7, and
 `planRelocation({ entries, liveLink, type, typeName?, sources? })` returns
@@ -321,13 +328,12 @@ preimage }` so `Ctrl+Shift+Enter` can retarget through
 `pomodoroLinkPicker.pick({ task })`. `line` is one-based and `text` is
 the full matching note; `preimage` is the original task line used to
 refuse a changed or missing source before the nested picker. Older rows
-without `task` still retarget, without permission to edit a task type.
+without `task` still retarget without changing a task type.
 Destination overrides may carry additive `themeIntent` and
 `preserveSpelling`. Both navigation's
 `normalizeSuccessorDestinationOverride` and the cycler's
 `normalizeSuccessorPickDestination` keep a valid intent, drop a
-malformed one without rejecting the destination, and let `linkOnce`
-override `deliberate`. Marked-row retargets run one picker per target
+malformed one without rejecting the destination. Marked-row retargets run one picker per target
 in displayed order and publish overrides only when every pick succeeds.
 The context transport and nested picker never mutate a task field. For a
 successor's default destination, the cycler resolves the task's effective
@@ -336,10 +342,11 @@ open Pomodoro, select another matching entry, or create the typed entry.
 Strict-cap refusal leaves a requested successor unlinked. Default placement
 does not edit the task field. An explicit retarget carries a valid deliberate
 `themeIntent`; the cycler revalidates `shown` against a fresh
-`effectiveTypeFor`, delegates to `planRetype`, and applies
-`setTaskTheme`/`clearTaskTheme` after status recovery and before
-block-ID/freshness assembly. Link-once, untouched preselection, missing or
-changed suggestions, and stale or refused destinations skip the field edit.
+`effectiveTypeFor` and delegates to `planLanding`. The default merge updates
+the destination Pomodoro name alongside the new Task Link; Alt+Enter delegates
+to `setTaskTheme`/`clearTaskTheme` after status recovery and before
+block-ID/freshness assembly. Untouched preselection, missing or changed
+suggestions, and stale or refused destinations skip the type and name change.
 `successors` v2 (keep-moving, `docs/task-dependencies.md` §12.13 and
 §12.15 in bob-cli) adds a fourth group, `keep_moving`, which offers a
 leaf project's ready tasks when a close drains its last planned task. A

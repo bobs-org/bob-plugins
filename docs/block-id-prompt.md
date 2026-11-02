@@ -12,7 +12,7 @@ Block ID Prompt helps create and manage stable block identifiers and task links 
 | --- | --- |
 | Name | Block ID Prompt |
 | ID | `block-id-prompt` |
-| Version | 1.35.0 |
+| Version | 1.36.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Typing (( opens the Task Wikilink Picker to insert a [[note#^id]] link to any vault task. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, a Ctrl+Shift+Enter link asks where the task goes first, and Link to today then suggests the destination's type; an unlink asks right before writing, then moves it with the toggle applied (nav inboxRoute v1). Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = suggested, else current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent task types with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. |
@@ -48,18 +48,16 @@ Recent row; only types of the open Today rows are left out.
 When Ledger Tools can suggest a type for the cursor task, empty search
 preselects that Pomodoro in place (or offers a new one when creation is
 allowed) and labels the row `Suggested · this task`, `Suggested · reading
-task`, or `Suggested · from ● <stem>`. A second footer line always states
-the retype consequence, for example `→ FIX · task becomes FIX · sase_blog
-suggests WRITE · ⌥↵ keep WRITE (FIX + WRITE)`. Tab cycles the chosen type
-on a composite (`⇥ BUILD`). Enter applies `planRetype`: a named destination
-writes or clears `[type:: X]`, a matching destination keeps the type, and a
-container such as LATER keeps it too. The notice reads `Linked under FIX ·
-type FIX`, `Linked under WRITE · type cleared`, or `Linked under LATER ·
-keeps WRITE`. `Alt+Enter` keeps the current type and merges it into the
-destination name (`FIX + WRITE`) without a field write. If the suggestion's
-write-relevant identity changed since the picker opened, the link still
-happens and the notice ends `· type unchanged (suggestion changed)`. A routed
-inbox link retypes from the destination's `suggestFor`
+task`, or `Suggested · from ● <stem>`. A second footer line shows the landing
+result, for example `→ FIX + WRITE · keeps WRITE · ⌥↵ retype to FIX`. Tab
+cycles the chosen type on a composite (`⇥ BUILD`). Enter merges a missing
+task type into the named destination without changing the task field; a
+matching destination and a container such as LATER keep the type. `Alt+Enter`
+explicitly retypes the task to the destination's selected type, writing or
+clearing `[type:: X]`. The notice reports the merged type or retyped value. If
+the suggestion's write-relevant identity changed since the
+picker opened, the link still happens and the notice ends `· type unchanged
+(suggestion changed)`. A routed inbox link retypes from the destination's `suggestFor`
 (`{ path: <dest>, line: 1, text: <task line> }`), so picking the suggested
 Pomodoro writes no `[type::]` field.
 

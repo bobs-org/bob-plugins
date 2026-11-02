@@ -99,6 +99,9 @@ const {
   typeComponents,
   typeAgrees,
   planRetype,
+  planLanding,
+  mergeNames,
+  shed,
   planPlacement,
   planRelocation,
 } = LedgerToolsPlugin.helpers;
@@ -107,7 +110,12 @@ const fixturePath = path.join(
   __dirname,
   "../plugins/bob-ledger-tools/scripts/fixtures/pomodoro_themes/vectors.json",
 );
+const rootFixturePath = path.join(__dirname, "fixtures/pomodoro_themes/vectors.json");
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+
+test("root and Ledger Tools vector copies stay byte-identical", () => {
+  assert.equal(fs.readFileSync(rootFixturePath, "utf8"), fs.readFileSync(fixturePath, "utf8"));
+});
 
 test("theme vectors: components split and key like bob", () => {
   assert.ok(fixture.components.length > 0, "vectors carry components cases");
@@ -665,13 +673,13 @@ test("type vectors: agreement answers the D5 invariant", () => {
   }
 });
 
-test("type vectors: retype keeps agreement with the D6 rule", () => {
-  assert.ok(fixture.retype.length > 0, "vectors carry retype cases");
-  for (const item of fixture.retype) {
+test("type vectors: landing mirrors the R2 merge/retype rule", () => {
+  assert.ok(fixture.land.length > 0, "vectors carry land cases");
+  for (const item of fixture.land) {
     if (item.rust_only) {
       continue;
     }
-    const got = planRetype(
+    const got = planLanding(
       {
         field: item.field,
         effectiveKey: item.effective,
@@ -679,18 +687,37 @@ test("type vectors: retype keeps agreement with the D6 rule", () => {
         inheritedKey: item.inherited,
         destination: item.destination,
         selector: item.selector,
-        keepType: item.keep_type,
+        retype: item.retype,
         tabPick: item.tab_pick,
       },
       routingSources(item),
     );
-    assert.equal(got.kind, item.expected.kind, `retype kind: ${item.name}`);
+    assert.equal(got.kind, item.expected.kind, `land kind: ${item.name}`);
     if (item.expected.name !== undefined) {
-      assert.equal(got.name, item.expected.name, `retype name: ${item.name}`);
+      assert.equal(got.name, item.expected.name, `land name: ${item.name}`);
     }
     if (item.expected.key !== undefined) {
-      assert.equal(got.key, item.expected.key, `retype key: ${item.name}`);
+      assert.equal(got.key, item.expected.key, `land key: ${item.name}`);
     }
+  }
+});
+
+test("type vectors: merged names dedupe components in first-spelling order", () => {
+  assert.ok(fixture.merge.length > 0, "vectors carry merge cases");
+  for (const item of fixture.merge) {
+    assert.equal(mergeNames(item.base, item.others), item.expected, `merge: ${item.name}`);
+  }
+});
+
+test("type vectors: shed removes only types whose final link left", () => {
+  assert.ok(fixture.shed.length > 0, "vectors carry shed cases");
+  for (const item of fixture.shed) {
+    if (item.rust_only) continue;
+    assert.equal(
+      shed(item.entry, item.before, item.after, routingSources(item)),
+      item.expected,
+      `shed: ${item.name}`,
+    );
   }
 });
 
@@ -840,7 +867,7 @@ test("task-theme API is additive, synchronous, path-bound, and read-only", () =>
     "available", "fetch", "snapshot", "isConfigured", "hueFor", "componentsOf",
     "historyRows", "similarTo", "hide", "unhide", "color", "rename", "onChange",
     "suggestFor", "taskThemeOf", "setTaskTheme", "clearTaskTheme", "isKnownTheme",
-    "effectiveTypeFor", "typeComponentsOf", "typeAgrees", "planRetype", "planPlacement", "planRelocation",
+    "effectiveTypeFor", "typeComponentsOf", "typeAgrees", "planRetype", "planLanding", "mergeNames", "shed", "isMeetName", "planPlacement", "planRelocation",
   ]) {
     assert.equal(typeof api[member], "function", `themes.${member} is present`);
   }
@@ -989,7 +1016,7 @@ test("suggestion cascade falls through to plan.default_type", () => {
   );
 });
 
-test("themes routing API answers agreement, retype, placement, and relocation", () => {
+test("themes routing API answers agreement, landing, merge, shed, placement, and relocation", () => {
   const plugin = new LedgerToolsPlugin({});
   plugin.pomodoroThemesCache = {
     report: {
@@ -1022,6 +1049,17 @@ test("themes routing API answers agreement, retype, placement, and relocation", 
     }),
     { kind: "set", name: "BUILD", key: "build" },
   );
+  assert.deepEqual(
+    api.planLanding({
+      effective: { theme: { key: "write", name: "WRITE" } },
+      inherited: { theme: { key: "chore", name: "CHORE" } },
+      destination: "BUILD + FIX",
+      sources,
+    }),
+    { kind: "merge", name: "BUILD + FIX + WRITE" },
+  );
+  assert.equal(api.mergeNames("BUILD + FIX", ["Fix + READ"]), "BUILD + FIX + READ");
+  assert.equal(api.shed("BUILD + FIX", ["build", "fix"], ["build"]), "BUILD");
   assert.deepEqual(
     api.planPlacement({
       type: "chore",

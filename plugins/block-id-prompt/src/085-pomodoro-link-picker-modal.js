@@ -297,6 +297,7 @@ class PomodoroLinkPickerModal extends Modal {
     const hintsEl = footerEl.createDiv({ cls: "bid-ppk-hints" });
     this.renderHint(hintsEl, ["↑↓"], "select");
     this.renderHint(hintsEl, ["↵"], "link");
+    this.renderHint(hintsEl, ["⌥↵"], "retype");
     this.renderHint(hintsEl, ["⌃D"], "hide / undo");
     this.shiftHintEl = this.renderHint(hintsEl, ["⇧↵"], "new NAME");
     this.renderHint(hintsEl, ["esc"], "cancel");
@@ -309,7 +310,7 @@ class PomodoroLinkPickerModal extends Modal {
         attr: { "aria-live": "polite" },
       });
     }
-    // Second footer line: the live D10 retype consequence. It is refreshed
+    // Second footer line: the live merge/retype consequence. It is refreshed
     // on every selection/query/refresh/Tab change.
     this.themeFooterEl = footerEl.createDiv({
       cls: "bid-ppk-theme-footer",
@@ -326,11 +327,11 @@ class PomodoroLinkPickerModal extends Modal {
     return this.deliberateForRow(this.rows[this.selectedIndex]);
   }
 
-  withTaskIntent(choice, deliberate, linkOnce) {
+  withTaskIntent(choice, deliberate, retype) {
     if (choice && this.taskAware) {
       choice.themeIntent = {
         deliberate: deliberate === true,
-        linkOnce: linkOnce === true,
+        retype: retype === true,
         shown: this.shownSuggestion,
         ...(this.tabPickKey ? { tabPick: this.tabPickKey } : {}),
       };
@@ -338,7 +339,7 @@ class PomodoroLinkPickerModal extends Modal {
     return choice;
   }
 
-  choiceForRow(row, deliberate, linkOnce) {
+  choiceForRow(row, deliberate, retype) {
     let choice = null;
     if (!row) {
       return null;
@@ -359,7 +360,7 @@ class PomodoroLinkPickerModal extends Modal {
         title: row.entry.title,
       };
     }
-    return this.withTaskIntent(choice, deliberate, linkOnce);
+    return this.withTaskIntent(choice, deliberate, retype);
   }
 
   updateThemeFooter() {
@@ -373,10 +374,10 @@ class PomodoroLinkPickerModal extends Modal {
         tabPick: this.tabPickKey,
         exemptKeys: (this.model && this.model.themeSnapshot && this.model.themeSnapshot.exemptKeys) || [],
         themesApi: this.themesApi,
-        planRetype: (options) => {
+        planLanding: (options) => {
           try {
-            return this.themesApi && typeof this.themesApi.planRetype === "function"
-              ? this.themesApi.planRetype(options)
+            return this.themesApi && typeof this.themesApi.planLanding === "function"
+              ? this.themesApi.planLanding(options)
               : null;
           } catch (_error) {
             return null;
@@ -432,11 +433,11 @@ class PomodoroLinkPickerModal extends Modal {
     if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
-      // Alt+Enter keeps the type and merges it into the destination name.
-      // A habitual double tap links to the current/next Pomodoro, so
-      // Ctrl+Shift+Enter commits exactly like Enter — before the Shift branch.
+      // Alt+Enter explicitly retypes the task. A habitual double tap links
+      // to the current/next Pomodoro, so Ctrl+Shift+Enter commits exactly
+      // like Enter — before the Shift branch.
       if (event.altKey) {
-        this.commitLinkOnce();
+        this.commitRetype();
       } else if (event.shiftKey && !event.ctrlKey) {
         this.commitCreateIntent();
       } else {
@@ -907,14 +908,13 @@ class PomodoroLinkPickerModal extends Modal {
     this.settleChoice(this.choiceForRow(row, deliberate, false));
   }
 
-  // Alt+Enter keeps the current type: link plus a D6 merge, no field write.
-  // Container and already-agreeing destinations equal Enter.
-  commitLinkOnce() {
+  // Alt+Enter explicitly requests the task-field Set/Clear path.
+  commitRetype() {
     const row = this.rows[this.selectedIndex];
     if (!row || !row.selectable) {
       return;
     }
-    this.settleChoice(this.choiceForRow(row, false, true));
+    this.settleChoice(this.choiceForRow(row, true, true));
   }
 
   // ⇧↵ creates from the typed text even when other rows match; an exact

@@ -625,7 +625,7 @@ class PomodoroBulletMovePickerModal extends FilteredPickerModal {
           options,
         );
         if (modal) {
-          modal.pendingMoveTypeMode = "retype";
+          modal.pendingMoveTypeMode = "merge";
         }
         return result;
       },
@@ -795,7 +795,11 @@ class PomodoroEntryMovePickerModal extends FilteredPickerModal {
 
     const plan = planPomodoroEntryMerge(
       this.session && this.session.sourceContent,
-      buildPomodoroEntryMergeOptions(this.session, row),
+      buildPomodoroEntryMergeOptions(
+        this.session,
+        row,
+        getNavigationPomodoroThemesApi(this.app),
+      ),
     );
     if (!plan.valid) {
       new Notice(`${plan.error}; nothing was merged`);

@@ -102,7 +102,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
     if (shown && typeof shown === "object" && shown.theme) {
       target.themeIntent = {
         deliberate: true,
-        linkOnce: false,
+        retype: false,
         shown: clonePomodoroThemeSuggestion(shown),
       };
     }
@@ -136,6 +136,8 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
         typeClause = `type becomes ${write.destinationThemeName}`;
       } else if (write.retypeKind === "clear") {
         typeClause = `type cleared (inherits ${write.destinationThemeName || write.keepsName || "the note type"})`;
+      } else if (write.retypeKind === "merge" && write.keepsName) {
+        typeClause = `merges ${write.keepsName} into this Pomodoro`;
       } else if (write.retypeKind && write.keepsName) {
         typeClause = `keeps ${write.keepsName}`;
       }
@@ -465,6 +467,25 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       prepared.target,
       prepared.content,
     );
+    let pomodoroNameMerge = null;
+    if (
+      themeWrite.mergeName && source.editor &&
+      typeof source.editor.getLine === "function" &&
+      typeof source.editor.replaceRange === "function"
+    ) {
+      const ownerLine = prepared.context.ownerLine;
+      const currentLine = source.editor.getLine(ownerLine) || "";
+      if (currentLine !== prepared.context.entryText) {
+        new Notice("Task link stopped: the source Pomodoro changed");
+        return { stale: true };
+      }
+      const nextLine = rewritePomodoroEntryNameLine(currentLine, themeWrite.mergeName);
+      if (nextLine === currentLine) {
+        new Notice("Task link stopped: the source Pomodoro name could not be merged");
+        return { stale: true };
+      }
+      pomodoroNameMerge = { line: ownerLine, before: currentLine, after: nextLine };
+    }
     const plan = planTargetTaskUpdate(prepared.content, prepared.task.line, {
       activationEligible: true,
       forceNext: true,
@@ -509,9 +530,22 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       new Notice(`Task ${parts.length ? parts.join(", ") : "updated"}, but the source link changed before completion`);
       return { stale: true };
     }
+    if (pomodoroNameMerge) {
+      if (source.editor.getLine(pomodoroNameMerge.line) !== pomodoroNameMerge.before) {
+        plan.themeMergeName = null;
+        new Notice("Task linked, but its type was not merged because the source Pomodoro changed");
+      } else {
+        source.editor.replaceRange(
+          pomodoroNameMerge.after,
+          { line: pomodoroNameMerge.line, ch: 0 },
+          { line: pomodoroNameMerge.line, ch: pomodoroNameMerge.before.length },
+        );
+      }
+    }
     this.refreshTaskWikilinkNote(prepared.task.notePath, plan.content);
     const themeChip = formatPomodoroThemeLinkChip(plan);
-    const entryName = pomodoroTargetDestinationName(prepared.target) || prepared.context.title;
+    const entryName = themeWrite.destinationThemeName ||
+      pomodoroTargetDestinationName(prepared.target) || prepared.context.title;
     const dailyContent = source.editor && typeof source.editor.getValue === "function"
       ? source.editor.getValue()
       : null;

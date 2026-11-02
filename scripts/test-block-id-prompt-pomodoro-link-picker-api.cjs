@@ -196,14 +196,14 @@ test("task-aware choices retain a valid themeIntent; absent intent keeps the leg
       entryLine: 4,
       entryText: "- [ ] () — DEEP",
       title: "DEEP",
-      themeIntent: { deliberate: false, linkOnce: true, shown },
+      themeIntent: { deliberate: false, retype: true, shown },
     }),
     {
       kind: "existing",
       entryLine: 4,
       entryText: "- [ ] () — DEEP",
       title: "DEEP",
-      themeIntent: { deliberate: false, linkOnce: true, shown },
+      themeIntent: { deliberate: false, retype: true, shown },
     },
   );
   assert.deepEqual(
@@ -211,13 +211,13 @@ test("task-aware choices retain a valid themeIntent; absent intent keeps the leg
       kind: "new",
       name: "WRITE",
       preserveSpelling: true,
-      themeIntent: { deliberate: true, linkOnce: false, shown: null, tabPick: "write" },
+      themeIntent: { deliberate: true, retype: false, shown: null, tabPick: "write" },
     }),
     {
       kind: "new",
       name: "WRITE",
       preserveSpelling: true,
-      themeIntent: { deliberate: true, linkOnce: false, shown: null, tabPick: "write" },
+      themeIntent: { deliberate: true, retype: false, shown: null, tabPick: "write" },
     },
   );
 });
@@ -225,12 +225,12 @@ test("task-aware choices retain a valid themeIntent; absent intent keeps the leg
 test("malformed themeIntent is dropped so it can never enable a write", () => {
   const { normalizePomodoroLinkPickerChoice } = helpers;
   const malformed = [
-    { deliberate: "yes", linkOnce: false, shown: null },
-    { deliberate: true, linkOnce: 1, shown: null },
-    { deliberate: true, linkOnce: false, shown: "write" },
-    { deliberate: true, linkOnce: false, shown: {} },
-    { deliberate: true, linkOnce: false, shown: { theme: {} } },
-    { deliberate: true, linkOnce: false, shown: { theme: { key: "" } } },
+    { deliberate: "yes", retype: false, shown: null },
+    { deliberate: true, retype: 1, shown: null },
+    { deliberate: true, retype: false, shown: "write" },
+    { deliberate: true, retype: false, shown: {} },
+    { deliberate: true, retype: false, shown: { theme: {} } },
+    { deliberate: true, retype: false, shown: { theme: { key: "" } } },
     "intent",
     42,
   ];

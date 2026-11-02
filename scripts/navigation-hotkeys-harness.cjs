@@ -314,6 +314,7 @@ function createPomodoroMovePickerHarness(harnessOptions = {}) {
         available: themes.available || (() => ({ available: false })),
         taskThemeOf: themes.taskThemeOf || (() => ({ state: "none" })),
         effectiveTypeFor: themes.effectiveTypeFor || (() => null),
+        planLanding: themes.planLanding || (() => ({ kind: "container" })),
         planRetype: themes.planRetype || (() => ({ kind: "container" })),
         ...(themes.typeComponentsOf
           ? { typeComponentsOf: themes.typeComponentsOf }

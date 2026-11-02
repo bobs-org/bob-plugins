@@ -11,7 +11,7 @@ function successorThemeNormalizeKey(value) {
 }
 
 function emptySuccessorThemeWrite() {
-  return { themeEdit: null, suggestionChanged: false, destinationThemeName: null };
+  return { themeEdit: null, suggestionChanged: false, destinationThemeName: null, mergeName: null };
 }
 
 // Pick each successor's default entry by its effective task type (D7).
@@ -410,18 +410,16 @@ function getSuccessorTaskLedgerApi(app) {
   }
 }
 
-// Pure guarded decision for one explicitly picked successor with a retarget
-// override. Only a deliberate non-linkOnce intent with a shown suggestion can
-// write; default anchor/implicit placements (no override), unpicked offers,
-// missing APIs, unnamed/all-exempt/composite destinations, stale tasks, and
-// changed suggestions never write. The caller owns the guarded vault write.
+// Pure guarded landing for one explicitly picked successor with a retarget
+// override. Default link behavior merges; Alt+Enter requests a task-field
+// retype. The caller owns the guarded task and ledger writes.
 function resolveSuccessorThemeWrite(options = {}) {
   try {
     const opts = options && typeof options === "object" ? options : {};
     const override = opts.override && typeof opts.override === "object" ? opts.override : null;
     const rawIntent = override && override.themeIntent !== undefined ? override.themeIntent : opts.intent;
     const intent = normalizeSuccessorThemeIntent(rawIntent);
-    if (!override || !intent || intent.linkOnce === true || intent.deliberate !== true || !intent.shown) {
+    if (!override || !intent || !intent.shown) {
       return emptySuccessorThemeWrite();
     }
     const task = opts.task && typeof opts.task === "object" ? opts.task : null;
@@ -445,7 +443,7 @@ function resolveSuccessorThemeWrite(options = {}) {
     if (
       !themesApi ||
       typeof themesApi.effectiveTypeFor !== "function" ||
-      typeof themesApi.planRetype !== "function" ||
+      typeof themesApi.planLanding !== "function" ||
       typeof themesApi.setTaskTheme !== "function" ||
       typeof themesApi.clearTaskTheme !== "function"
     ) {
@@ -499,15 +497,36 @@ function resolveSuccessorThemeWrite(options = {}) {
     const inherited = successorThemeWriteInherited(intent.shown);
     let change = null;
     try {
-      change = themesApi.planRetype({
+      change = themesApi.planLanding({
         effective: current,
         inherited,
         destination: destinationName,
+        retype: intent.retype === true,
       });
     } catch (_error) {
       return emptySuccessorThemeWrite();
     }
-    if (!change || (change.kind !== "set" && change.kind !== "clear")) {
+    if (!change) {
+      return emptySuccessorThemeWrite();
+    }
+    if (change.kind === "merge") {
+      return {
+        themeEdit: null,
+        suggestionChanged: false,
+        destinationThemeName: change.name,
+        mergeName: change.name,
+        mergeBaseName: destinationName,
+      };
+    }
+    if (change.kind === "container" || change.kind === "consistent") {
+      return {
+        themeEdit: null,
+        suggestionChanged: false,
+        destinationThemeName: destinationName,
+        mergeName: null,
+      };
+    }
+    if (change.kind !== "set" && change.kind !== "clear") {
       return emptySuccessorThemeWrite();
     }
     if (change.kind === "set") {
@@ -523,6 +542,7 @@ function resolveSuccessorThemeWrite(options = {}) {
         },
         suggestionChanged: false,
         destinationThemeName: name,
+        mergeName: null,
       };
     }
     const inheritedTheme = inherited && inherited.theme && typeof inherited.theme === "object"
@@ -541,6 +561,7 @@ function resolveSuccessorThemeWrite(options = {}) {
       },
       suggestionChanged: false,
       destinationThemeName,
+      mergeName: null,
     };
   } catch (_error) {
     return emptySuccessorThemeWrite();

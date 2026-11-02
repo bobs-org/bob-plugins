@@ -289,7 +289,11 @@ class BobNavigationHotkeysMoveCommitMixin {
 
     const plan = planPomodoroEntryMerge(
       session.sourceContent,
-      buildPomodoroEntryMergeOptions(session, row),
+      buildPomodoroEntryMergeOptions(
+        session,
+        row,
+        getNavigationPomodoroThemesApi(this.app),
+      ),
     );
     if (!plan.valid) {
       new Notice(`${plan.error}; nothing was merged`);

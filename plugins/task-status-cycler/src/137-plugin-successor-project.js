@@ -29,6 +29,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
         failure: null,
       };
       const identities = gate.identities || [];
+      const relationLookupIdentities = successorRelationLookupIdentities(
+        identities,
+        active,
+      );
+      const relationEventKind = active.relationEventKind === "parked" ? "parked" : "done";
+      const parkedSlot = active.parkedSlot && typeof active.parkedSlot === "object"
+        ? active.parkedSlot
+        : null;
       const closedTaskIds = new Set(
         identities.filter((identity) => identity.taskId).map((identity) =>
           String(identity.taskId)
@@ -44,7 +52,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       );
       const linkUnblocked = relationRuntime.linkUnblocked;
       const relationPreflight = this.preflightSuccessorRelationIndex(
-        identities,
+        relationLookupIdentities,
         relationRuntime,
       );
       const relationUnavailableGate = () => {
@@ -73,7 +81,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       } catch (error) {
         today = formatLocalDate();
       }
-      for (const identity of identities) {
+      for (const identity of [...identities, ...relationLookupIdentities]) {
         if (identity && identity.path && !cache.has(identity.path)) {
           await this.readSuccessorNoteText(identity.path, active, cache);
         }
@@ -174,6 +182,15 @@ class TaskStatusCyclerSuccessorProjectMixin {
         hint.line < dailyBefore.length
       ) {
         planClosingEntry = hint.line;
+      } else if (
+        planClosingEntry == null &&
+        parkedSlot &&
+        parkedSlot.entryDeleted !== true &&
+        Number.isInteger(parkedSlot.entryLine) &&
+        parkedSlot.entryLine >= 0 &&
+        parkedSlot.entryLine < dailyBefore.length
+      ) {
+        planClosingEntry = parkedSlot.entryLine;
       }
       const keepMovingBaseline = dailyBefore.slice();
       const dayBaselineText = keepMovingBaseline.join("\n");
@@ -278,11 +295,13 @@ class TaskStatusCyclerSuccessorProjectMixin {
           active,
           cache,
           noteTexts,
-          identities,
+          identities: relationLookupIdentities,
           baselineDay: dailyBefore,
           currentDay: dailyAfter,
           dailyPath: dailyPath || "",
           closingEntry: planClosingEntry,
+          eventKind: relationEventKind,
+          slot: parkedSlot,
         });
         relationPlanOptions = relationNotes.options || {};
         for (const [path, text] of relationNotes.noteTexts || []) {
@@ -630,7 +649,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
             cancelledClose ? null : getSuccessorPickerApi(this.app),
           );
           const freshRelationPreflight = this.preflightSuccessorRelationIndex(
-            identities,
+            relationLookupIdentities,
             freshRelationRuntime,
           );
           let freshRelationOptions = {};
@@ -647,11 +666,13 @@ class TaskStatusCyclerSuccessorProjectMixin {
               active,
               cache,
               noteTexts: freshNoteTexts,
-              identities,
+              identities: relationLookupIdentities,
               baselineDay: freshBefore,
               currentDay: dailyFreshLines,
               dailyPath: dailyPath || "",
               closingEntry: freshClosing,
+              eventKind: relationEventKind,
+              slot: parkedSlot,
             });
             freshRelationOptions = freshRelation.options || {};
             for (const [path, text] of freshRelation.noteTexts || []) {

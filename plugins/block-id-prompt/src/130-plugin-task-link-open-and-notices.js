@@ -1,3 +1,49 @@
+function parkedSuccessorSlotFromCleanup(cleanupPlan) {
+  const recorded = cleanupPlan && cleanupPlan.firstRemoved;
+  if (recorded && typeof recorded === "object") {
+    return {
+      entryLine: Number.isInteger(recorded.entryLine) ? recorded.entryLine : null,
+      bulletLine: Number.isInteger(recorded.bulletLine) ? recorded.bulletLine : null,
+      entryDeleted: recorded.entryDeleted === true,
+    };
+  }
+  const references = cleanupPlan && Array.isArray(cleanupPlan.references)
+    ? cleanupPlan.references
+    : [];
+  const first = references[0];
+  if (!first || !Number.isInteger(first.line)) {
+    return null;
+  }
+  const ranges = cleanupPlan && Array.isArray(cleanupPlan.ranges)
+    ? cleanupPlan.ranges
+    : [];
+  const range = ranges.find((item) =>
+    Number.isInteger(item && item.entryLine) &&
+    first.line >= item.entryLine &&
+    Number.isInteger(item.endLine) &&
+    first.line <= item.endLine,
+  ) || ranges.find((item) =>
+    Number.isInteger(item && item.startLine) &&
+    first.line >= item.startLine &&
+    Number.isInteger(item.endLine) &&
+    first.line <= item.endLine,
+  );
+  const entryLine = range && Number.isInteger(range.entryLine) ? range.entryLine : null;
+  return {
+    entryLine,
+    bulletLine: first.line,
+    entryDeleted: Number(cleanupPlan && cleanupPlan.removedEntryCount) > 0 &&
+      ranges.filter((item) =>
+        (cleanupPlan.references || []).some((reference) =>
+          Number.isInteger(reference.line) &&
+          Number.isInteger(item.entryLine) &&
+          reference.line >= item.entryLine &&
+          reference.line <= item.endLine,
+        ),
+      ).length <= 1,
+  };
+}
+
 class BlockIdPromptTaskLinkOpenAndNoticesMixin {
   // Delete the selected Task Link and today's open-Pomodoro duplicates,
   // never writing the checkbox. Everything is re-validated first (link line,
@@ -220,6 +266,15 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     }
 
     this.reportTaskLinkOpenOutcome(target, workLogPlan, dailyPostContent);
+    await this.offerParkedSuccessorsAfterUnlink({
+      path: target.path,
+      blockId: target.id,
+      text: target.displayText,
+    }, {
+      status: target.status,
+      removedCount: cleanup.removedCount,
+      slot: parkedSuccessorSlotFromCleanup(cleanup),
+    });
     return true;
   }
 
@@ -295,6 +350,52 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
   // task-status-cycler lookup): the nav version check plus a versioned
   // reviewWalk member with callable capture and continue. Never throws;
   // null means today's behavior.
+  // cycler api v4 `offerParkedSuccessors` feature detection: the version
+  // check plus a callable parked-offer method. Never throws; null means
+  // silence (older cyclers, missing plugin).
+  getParkedSuccessorApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["task-status-cycler"];
+      const api = holder && holder.api;
+      if (!api || !(Number(api.version) >= 4)) {
+        return null;
+      }
+      if (typeof api.offerParkedSuccessors !== "function") {
+        return null;
+      }
+      return api;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  // After an Unlink task prompt settles and the unlink write commits, offer
+  // starts-after successors for a Pending task whose last live link was
+  // removed. Esc, non-Pending lanes, and older cyclers stay silent.
+  async offerParkedSuccessorsAfterUnlink(identity, options = {}) {
+    try {
+      if (!identity || !identity.path || !identity.blockId) {
+        return;
+      }
+      if (String(options.status || "") !== "/") {
+        return;
+      }
+      if (!(Number(options.removedCount) > 0)) {
+        return;
+      }
+      const api = this.getParkedSuccessorApi();
+      if (!api) {
+        return;
+      }
+      await api.offerParkedSuccessors([identity], {
+        slot: options.slot && typeof options.slot === "object" ? options.slot : null,
+      });
+    } catch (_error) {
+      // Best effort: the unlink already landed.
+    }
+  }
+
   getReviewWalkApi() {
     try {
       const plugins = this.app && this.app.plugins && this.app.plugins.plugins;

@@ -557,12 +557,25 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
     return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
   }
 
+  const first = matches[0];
+  const firstRange = first && first.pomodoroRange;
+  const blockStart = firstRange ? lineStartIndexFromLines(lines, firstRange.entryLine) : 0;
+  const blockEnd = firstRange && firstRange.endLine + 1 < lines.length
+    ? lineStartIndexFromLines(lines, firstRange.endLine + 1)
+    : snapshot.length;
   return {
     edits,
     removedCount: matches.length,
     removedEntryCount: emptied.removedEntryCount,
     entryEdits: emptied.edits,
     references: matches.map(({ reference }) => reference),
+    firstRemoved: firstRange ? {
+      entryLine: firstRange.entryLine,
+      bulletLine: first.reference.line,
+      entryDeleted: (emptied.edits || []).some((edit) =>
+        edit && edit.start < blockEnd && edit.end > blockStart,
+      ),
+    } : null,
   };
 }
 
@@ -616,6 +629,7 @@ function planAllOpenPomodoroLinkCleanup(content, options = {}) {
     removedEntryCount: cleanup.removedEntryCount,
     entryEdits: cleanup.entryEdits,
     references: cleanup.references || [],
+    firstRemoved: cleanup.firstRemoved || null,
     content: cleanup.edits.length > 0 ? applyTextEdits(snapshot, cleanup.edits) : snapshot,
     hasChanges: cleanup.edits.length > 0,
   };

@@ -427,7 +427,7 @@ than rejecting. `taskLinkLane.matches` is synchronous and
 
 ## Task Status Cycler
 
-`task-status-cycler.api` is version 3:
+`task-status-cycler.api` is version 4:
 
 - `recoverBlockedDependents(identities, context?)` runs the same
   dependent recovery as task completion without retiring references. It
@@ -454,6 +454,14 @@ than rejecting. `taskLinkLane.matches` is synchronous and
   the Unblocked notice, and the successor picker. It resolves to
   `{ reopened, retired, recoveryFailures, retirementFailures, successors,
   successorNotice }` and never throws.
+- `offerParkedSuccessors(identities, { slot }?)` plans relation-only
+  successor offers for Pending (`[/]`) tasks that have no live Task Link
+  left on today's daily note. It presents the nav picker with
+  `event: parked`, applies picks, and shows the notice. `slot` is the
+  removed link's `{ entryLine, bulletLine, entryDeleted }`. The method
+  never throws; it resolves `{ offered, picked }`. Still-linked,
+  non-Pending, and empty identities are silence (`{ offered: 0, picked: 0 }`).
+  Consumers feature-detect `api.version >= 4` and the method.
 
 ## Bob Command Mode
 

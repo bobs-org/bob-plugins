@@ -99,6 +99,7 @@ module.exports.helpers = {
   pomodoroRunProgress,
   parseStrictCalendarDate,
   partitionTaskPickerItems,
+  parkedSuccessorSlotFromCleanup,
   planAllOpenPomodoroLinkCleanup,
   planFuturePomodoroLinkCleanup,
   planPomodoroLinkCleanupForRanges,

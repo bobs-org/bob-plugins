@@ -187,6 +187,39 @@ function successorRelationHeldNoticeRows(rows) {
   return notices;
 }
 
+function successorRelationLookupIdentities(identities, active) {
+  const parked = active && Array.isArray(active.parkedIdentities)
+    ? active.parkedIdentities
+    : [];
+  const filtered = parked.filter((item) => item && item.path && item.blockId);
+  return filtered.length > 0 ? filtered : (Array.isArray(identities) ? identities : []);
+}
+
+function successorParkedEventAnchor(slot, eventKind, computed, currentDay) {
+  if (eventKind !== "parked") {
+    return computed || null;
+  }
+  if (!slot || typeof slot !== "object") {
+    return computed || null;
+  }
+  const entryDeleted = slot.entryDeleted === true;
+  const entryLine = Number.isInteger(slot.entryLine) ? slot.entryLine : null;
+  const bulletLine = Number.isInteger(slot.bulletLine) ? slot.bulletLine : null;
+  if (entryDeleted) {
+    const implicit = typeof resolveSuccessorImplicitDestination === "function"
+      ? resolveSuccessorImplicitDestination(Array.isArray(currentDay) ? currentDay : [])
+      : null;
+    if (!implicit) {
+      return { kind: "implicit", entryLine: null, bulletLine: null };
+    }
+    return { kind: "implicit", entryLine: implicit.entryLine, bulletLine: null };
+  }
+  if (entryLine == null) {
+    return computed || null;
+  }
+  return { kind: "slot", entryLine, bulletLine };
+}
+
 function successorRelationNoticeText(model, baseNotice) {
   const source = model && typeof model === "object" ? model : {};
   const base = String(baseNotice || "");
@@ -375,13 +408,16 @@ class TaskStatusCyclerRelationSuccessorRuntimeMixin {
         const identity = options.identities[indexOfIdentity];
         anchorByKey.set(relationIdentityKey(identity.path, identity.blockId), anchors[indexOfIdentity]);
       }
+      const eventKind = options.eventKind === "parked" ? "parked" : "done";
+      const requiredStatuses = eventKind === "parked" ? ["/"] : ["x", "X"];
+      const currentDay = Array.isArray(options.currentDay) ? options.currentDay : [];
       const eventsByKey = new Map();
       for (const [key, identity] of eventTargets) {
         const targetPath = normalizeDependencyMarkdownPath(identity.path);
         const targetTask = relationLookupTask(targetPath, identity.blockId, null, noteTexts);
-        if (!targetTask || !["x", "X"].includes(String(targetTask.status || ""))) continue;
+        if (!targetTask || !requiredStatuses.includes(String(targetTask.status || ""))) continue;
         eventsByKey.set(key, {
-          event: "done",
+          event: eventKind,
           target: {
             path: targetPath,
             blockId: String(identity.blockId),
@@ -389,7 +425,12 @@ class TaskStatusCyclerRelationSuccessorRuntimeMixin {
             text: String(targetTask.lineText || identity.text || ""),
             status: String(targetTask.status),
           },
-          anchor: anchorByKey.get(key) || null,
+          anchor: successorParkedEventAnchor(
+            options.slot,
+            eventKind,
+            anchorByKey.get(key) || null,
+            currentDay,
+          ),
         });
       }
       if (eventsByKey.size === 0) return { options: {}, noteTexts, readPaths, unavailable: false };

@@ -16131,7 +16131,7 @@ class TaskStatusCyclerPlugin extends Plugin {
     // Cross-plugin surface (plugins never import one another's `main.js`).
     // Keep the shape additive: bump `version` whenever a method is added.
     this.api = Object.freeze({
-      version: 3,
+      version: 4,
       recoverBlockedDependents: (closedIdentities, context) =>
         this.recoverBlockedDependents(closedIdentities, context),
       completeTaskAtCursor: (editor) => this.completeTaskAtCursor(editor),
@@ -16139,6 +16139,8 @@ class TaskStatusCyclerPlugin extends Plugin {
         this.completeTaskLineText(lineText, options),
       finalizeClosedTasks: (closedIdentities, context) =>
         this.finalizeClosedTasks(closedIdentities, context),
+      offerParkedSuccessors: (identities, options) =>
+        this.offerParkedSuccessors(identities, options),
     });
 
     this.addCommand({
@@ -19227,6 +19229,14 @@ class TaskStatusCyclerSuccessorProjectMixin {
         failure: null,
       };
       const identities = gate.identities || [];
+      const relationLookupIdentities = successorRelationLookupIdentities(
+        identities,
+        active,
+      );
+      const relationEventKind = active.relationEventKind === "parked" ? "parked" : "done";
+      const parkedSlot = active.parkedSlot && typeof active.parkedSlot === "object"
+        ? active.parkedSlot
+        : null;
       const closedTaskIds = new Set(
         identities.filter((identity) => identity.taskId).map((identity) =>
           String(identity.taskId)
@@ -19242,7 +19252,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       );
       const linkUnblocked = relationRuntime.linkUnblocked;
       const relationPreflight = this.preflightSuccessorRelationIndex(
-        identities,
+        relationLookupIdentities,
         relationRuntime,
       );
       const relationUnavailableGate = () => {
@@ -19271,7 +19281,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       } catch (error) {
         today = formatLocalDate();
       }
-      for (const identity of identities) {
+      for (const identity of [...identities, ...relationLookupIdentities]) {
         if (identity && identity.path && !cache.has(identity.path)) {
           await this.readSuccessorNoteText(identity.path, active, cache);
         }
@@ -19372,6 +19382,15 @@ class TaskStatusCyclerSuccessorProjectMixin {
         hint.line < dailyBefore.length
       ) {
         planClosingEntry = hint.line;
+      } else if (
+        planClosingEntry == null &&
+        parkedSlot &&
+        parkedSlot.entryDeleted !== true &&
+        Number.isInteger(parkedSlot.entryLine) &&
+        parkedSlot.entryLine >= 0 &&
+        parkedSlot.entryLine < dailyBefore.length
+      ) {
+        planClosingEntry = parkedSlot.entryLine;
       }
       const keepMovingBaseline = dailyBefore.slice();
       const dayBaselineText = keepMovingBaseline.join("\n");
@@ -19476,11 +19495,13 @@ class TaskStatusCyclerSuccessorProjectMixin {
           active,
           cache,
           noteTexts,
-          identities,
+          identities: relationLookupIdentities,
           baselineDay: dailyBefore,
           currentDay: dailyAfter,
           dailyPath: dailyPath || "",
           closingEntry: planClosingEntry,
+          eventKind: relationEventKind,
+          slot: parkedSlot,
         });
         relationPlanOptions = relationNotes.options || {};
         for (const [path, text] of relationNotes.noteTexts || []) {
@@ -19828,7 +19849,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
             cancelledClose ? null : getSuccessorPickerApi(this.app),
           );
           const freshRelationPreflight = this.preflightSuccessorRelationIndex(
-            identities,
+            relationLookupIdentities,
             freshRelationRuntime,
           );
           let freshRelationOptions = {};
@@ -19845,11 +19866,13 @@ class TaskStatusCyclerSuccessorProjectMixin {
               active,
               cache,
               noteTexts: freshNoteTexts,
-              identities,
+              identities: relationLookupIdentities,
               baselineDay: freshBefore,
               currentDay: dailyFreshLines,
               dailyPath: dailyPath || "",
               closingEntry: freshClosing,
+              eventKind: relationEventKind,
+              slot: parkedSlot,
             });
             freshRelationOptions = freshRelation.options || {};
             for (const [path, text] of freshRelation.noteTexts || []) {
@@ -20329,6 +20352,39 @@ function successorRelationHeldNoticeRows(rows) {
   return notices;
 }
 
+function successorRelationLookupIdentities(identities, active) {
+  const parked = active && Array.isArray(active.parkedIdentities)
+    ? active.parkedIdentities
+    : [];
+  const filtered = parked.filter((item) => item && item.path && item.blockId);
+  return filtered.length > 0 ? filtered : (Array.isArray(identities) ? identities : []);
+}
+
+function successorParkedEventAnchor(slot, eventKind, computed, currentDay) {
+  if (eventKind !== "parked") {
+    return computed || null;
+  }
+  if (!slot || typeof slot !== "object") {
+    return computed || null;
+  }
+  const entryDeleted = slot.entryDeleted === true;
+  const entryLine = Number.isInteger(slot.entryLine) ? slot.entryLine : null;
+  const bulletLine = Number.isInteger(slot.bulletLine) ? slot.bulletLine : null;
+  if (entryDeleted) {
+    const implicit = typeof resolveSuccessorImplicitDestination === "function"
+      ? resolveSuccessorImplicitDestination(Array.isArray(currentDay) ? currentDay : [])
+      : null;
+    if (!implicit) {
+      return { kind: "implicit", entryLine: null, bulletLine: null };
+    }
+    return { kind: "implicit", entryLine: implicit.entryLine, bulletLine: null };
+  }
+  if (entryLine == null) {
+    return computed || null;
+  }
+  return { kind: "slot", entryLine, bulletLine };
+}
+
 function successorRelationNoticeText(model, baseNotice) {
   const source = model && typeof model === "object" ? model : {};
   const base = String(baseNotice || "");
@@ -20517,13 +20573,16 @@ class TaskStatusCyclerRelationSuccessorRuntimeMixin {
         const identity = options.identities[indexOfIdentity];
         anchorByKey.set(relationIdentityKey(identity.path, identity.blockId), anchors[indexOfIdentity]);
       }
+      const eventKind = options.eventKind === "parked" ? "parked" : "done";
+      const requiredStatuses = eventKind === "parked" ? ["/"] : ["x", "X"];
+      const currentDay = Array.isArray(options.currentDay) ? options.currentDay : [];
       const eventsByKey = new Map();
       for (const [key, identity] of eventTargets) {
         const targetPath = normalizeDependencyMarkdownPath(identity.path);
         const targetTask = relationLookupTask(targetPath, identity.blockId, null, noteTexts);
-        if (!targetTask || !["x", "X"].includes(String(targetTask.status || ""))) continue;
+        if (!targetTask || !requiredStatuses.includes(String(targetTask.status || ""))) continue;
         eventsByKey.set(key, {
-          event: "done",
+          event: eventKind,
           target: {
             path: targetPath,
             blockId: String(identity.blockId),
@@ -20531,7 +20590,12 @@ class TaskStatusCyclerRelationSuccessorRuntimeMixin {
             text: String(targetTask.lineText || identity.text || ""),
             status: String(targetTask.status),
           },
-          anchor: anchorByKey.get(key) || null,
+          anchor: successorParkedEventAnchor(
+            options.slot,
+            eventKind,
+            anchorByKey.get(key) || null,
+            currentDay,
+          ),
         });
       }
       if (eventsByKey.size === 0) return { options: {}, noteTexts, readPaths, unavailable: false };
@@ -20649,6 +20713,136 @@ class TaskStatusCyclerRelationSuccessorRuntimeMixin {
     } catch (_error) {
       return unavailable({ noteTexts, readPaths });
     }
+  }
+}
+// ---- src/139-plugin-successor-parked.js ----
+// Parked-event successor API for unlink hand-offs
+// (plan:202611/starts_after_relation.md phase obsidian_unlink).
+// offerParkedSuccessors is additive on cycler api v4: relation-only offers
+// with event: parked, never throws, resolves {offered, picked}.
+
+function parkedSuccessorIdentityIsLiveLinked(identity, dailyLines, dailyPath) {
+  const entries = typeof findLiveLinks === "function"
+    ? findLiveLinks(dailyLines)
+    : [];
+  if (!Array.isArray(entries)) {
+    return false;
+  }
+  for (const entry of entries) {
+    const links = entry && Array.isArray(entry.links) ? entry.links : [];
+    if (links.some((link) => successorLinkMatchesIdentity(link, identity, dailyPath))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function parkedSuccessorCounts(model) {
+  if (!model || typeof model !== "object" || model.gated === true) {
+    return { offered: 0, picked: 0 };
+  }
+  const rows = Array.isArray(model.relation_successors) ? model.relation_successors : [];
+  const offered = rows.length;
+  const picked = rows.filter((row) => row && row.link && !row.not_linked).length;
+  return { offered, picked };
+}
+
+function parkedSuccessorPendingTask(noteText, path, blockId) {
+  if (typeof noteText !== "string" || !path || !blockId) {
+    return null;
+  }
+  if (typeof parseTaskDependencyDocument !== "function") {
+    return null;
+  }
+  try {
+    const tasks = parseTaskDependencyDocument(noteText, path);
+    return tasks.find((task) => String(task.blockId || "") === String(blockId)) || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+class TaskStatusCyclerSuccessorParkedMixin {
+  // Versioned cross-plugin API for keymaps that park a Pending task by
+  // removing its last live Task Link (block-id-prompt Unlink task). Plans
+  // relation-only offers with event: parked, presents the nav picker, and
+  // never throws. Resolves `{offered, picked}`. Empty, still-linked, and
+  // non-Pending identities are silence.
+  offerParkedSuccessors(identities, options = {}) {
+    const run = async () => {
+      try {
+        return await this.offerParkedSuccessorsNow(identities, options || {});
+      } catch (_error) {
+        return { offered: 0, picked: 0 };
+      }
+    };
+    if (typeof this.enqueueTaskReferenceMutation === "function") {
+      return this.enqueueTaskReferenceMutation(run);
+    }
+    return run();
+  }
+
+  async offerParkedSuccessorsNow(identities, options) {
+    const quiet = { offered: 0, picked: 0 };
+    const list = Array.isArray(identities)
+      ? identities.filter((item) => item && item.path && item.blockId)
+      : [];
+    if (list.length === 0) {
+      return quiet;
+    }
+    const active = options && typeof options === "object" ? options : {};
+    const cache = new Map();
+    let dailyPath = typeof active.dailyPath === "string" && active.dailyPath
+      ? active.dailyPath
+      : null;
+    if (!dailyPath) {
+      try {
+        dailyPath = todayDailyPath(this.app);
+      } catch (_error) {
+        dailyPath = null;
+      }
+    }
+    let dailyText = null;
+    if (dailyPath) {
+      dailyText = await this.readSuccessorNoteText(dailyPath, active, cache);
+    }
+    const dailyLines = typeof dailyText === "string" ? dailyText.split(/\r?\n/) : [];
+    const eligible = [];
+    for (const identity of list) {
+      const noteText = await this.readSuccessorNoteText(identity.path, active, cache);
+      const task = parkedSuccessorPendingTask(noteText, identity.path, identity.blockId);
+      if (!task || String(task.status || "") !== "/") {
+        continue;
+      }
+      if (parkedSuccessorIdentityIsLiveLinked(identity, dailyLines, dailyPath || "")) {
+        continue;
+      }
+      eligible.push({
+        path: String(identity.path),
+        blockId: String(identity.blockId),
+        ...(identity.taskId ? { taskId: String(identity.taskId) } : {}),
+        text: identity.text
+          ? String(identity.text)
+          : String(task.text || task.lineText || ""),
+      });
+    }
+    if (eligible.length === 0) {
+      return quiet;
+    }
+    const slot = active.slot && typeof active.slot === "object" ? active.slot : null;
+    const model = await this.planAndApplySuccessorsNow([], {
+      ...active,
+      parkedIdentities: eligible,
+      relationEventKind: "parked",
+      parkedSlot: slot,
+      dailyPath: dailyPath || active.dailyPath || "",
+    });
+    try {
+      this.presentSuccessorModel(model, active);
+    } catch (_error) {
+      // Best effort: the unlink already landed.
+    }
+    return parkedSuccessorCounts(model);
   }
 }
 // ---- src/140-plugin-vim.js ----
@@ -26185,6 +26379,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerSuccessorReceiptMixin,
   TaskStatusCyclerSuccessorProjectMixin,
   TaskStatusCyclerRelationSuccessorRuntimeMixin,
+  TaskStatusCyclerSuccessorParkedMixin,
   TaskStatusCyclerVimMixin,
   TaskStatusCyclerCommandsMixin,
   TaskStatusCyclerCompletionMixin,

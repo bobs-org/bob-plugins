@@ -142,8 +142,18 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       workLogPlan || {},
       status,
     );
+    const offerParked = () => this.offerParkedSuccessorsAfterUnlink({
+      path: source && source.sourcePath,
+      blockId: source && source.task && source.task.existingId,
+      text: source && source.task && source.task.displayText,
+    }, {
+      status,
+      removedCount: cleanupPlan && cleanupPlan.removedCount,
+      slot: parkedSuccessorSlotFromCleanup(cleanupPlan),
+    });
     if (!routeGate || routeGate.kind !== "move") {
       new Notice(unlinkText);
+      await offerParked();
       return true;
     }
     // No-op guard: only a real ledger/Work Log change may move. An unlink
@@ -154,8 +164,10 @@ class BlockIdPromptPomodoroInboxRouteMixin {
       (workLogPlan && workLogPlan.hasChanges === true);
     if (unlinkWroteAny !== true) {
       new Notice(unlinkText);
+      await offerParked();
       return true;
     }
+    await offerParked();
     const existingId = source.task && source.task.existingId;
     const expected = existingId
       ? [{ line: source.line, raw: source.task.rawLine, blockId: existingId }]

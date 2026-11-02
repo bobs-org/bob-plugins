@@ -12,10 +12,10 @@ Block ID Prompt helps create and manage stable block identifiers and task links 
 | --- | --- |
 | Name | Block ID Prompt |
 | ID | `block-id-prompt` |
-| Version | 1.36.0 |
+| Version | 1.37.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Typing (( opens the Task Wikilink Picker to insert a [[note#^id]] link to any vault task. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, a Ctrl+Shift+Enter link asks where the task goes first, and Link to today then suggests the destination's type; an unlink asks right before writing, then moves it with the toggle applied (nav inboxRoute v1). Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = suggested, else current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent task types with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. |
+| Description | Prompt for custom block IDs and complete wiki block links to open tasks, with a plan-budget suffix. Typing (( opens the Task Wikilink Picker to insert a [[note#^id]] link to any vault task. Ctrl+Shift+Enter refuses Depends-On ⛓️ **DEPENDS ON:** dependency lines. On inbox notes, a Ctrl+Shift+Enter link asks where the task goes first, and Link to today then suggests the destination's type; an unlink asks right before writing, then moves it with the toggle applied (nav inboxRoute v1). Unlinking an In Progress task with no live link left today offers configured starts-after successors through task-status-cycler api v4. Ctrl+Shift+Enter asks which of today's Pomodoros to link into (↵ = suggested, else current/next, type to filter or name a new one). Project Schedule comes from the ^prj task; a future-scheduled ^prj link is refused only when its date is the sole remaining reason, dependency reasons are reported first, and a direct link raises a Ready ^prj to Next. A tagged #prj_is_blocked ^prj is refused as blocked by its parent project without raising prerequisites. Ctrl+Shift+Enter refuses LINKS with the relation notice and LINKED FROM with the generated-line notice; Pomodoro cleanup skips both. Link to today also offers recent task types with component swatches and near-duplicate hints; Ctrl+D hides or restores Recent suggestions only. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -81,7 +81,12 @@ local minute it was written, such as `*2026-08-15 14:32* — Added coverage`,
 under a tab-indented managed `🛠️ **WORK LOG**` child bullet. The prompt's
 preview shows the stamp live, but the written stamp is read once at commit
 (Enter), so a prompt left open across midnight stamps the commit time. Older
-date-only entries are never rewritten.
+date-only entries are never rewritten. After that prompt settles and the
+unlink write commits, a Pending task with no live Task Link left today
+offers its configured starts-after successors through task-status-cycler
+`api.offerParkedSuccessors` (api v4), passing the removed link's entry and
+position as `slot`. Escape that cancels the prompt offers nothing. Next and
+Ready unlinks stay silent, as do older cyclers.
 
 ## Linking any task with `((`
 
@@ -148,7 +153,9 @@ children go with it.
 
 Deleting a Task Link never changes the lane: Next, In Progress, Ready, and
 Blocked all stay as they are. An In Progress target goes through the same
-optional `Unlink task` Work Log prompt.
+optional `Unlink task` Work Log prompt. After that prompt settles and the
+write commits, a Pending target with no live open-Pomodoro link left today
+offers its starts-after successors the same way as a task-line unlink.
 
 ## Guards
 

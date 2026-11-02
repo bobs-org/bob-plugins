@@ -219,3 +219,59 @@ function calendarEventPaintBufferWings(row, timeEl, modelRow, hue) {
     return false;
   }
 }
+
+// Off-clock chip for Live Preview: one dashed `timer-off` chip per Event
+// Task tag. CodeMirror splits a highest-precedence mark at Obsidian's tag
+// spans, so a mark paints two pills; a replace widget paints one. The text
+// is the tag's own spelling without the `#`, the same as Reading view.
+function buildCalendarEventOffClockChip(doc, text) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") return null;
+    const label = String(text || "");
+    if (!label) return null;
+    const el = doc.createElement("span");
+    el.className = "bob-calendar-event-off-clock";
+    el.textContent = label;
+    el.setAttribute("data-off-clock", "true");
+    el.setAttribute("title", GCAL_EVENTS_OFF_CLOCK_TITLE);
+    return el;
+  } catch (error) {
+    return null;
+  }
+}
+
+let CalendarEventOffClockChipWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  CalendarEventOffClockChipWidget = class extends WidgetType {
+    constructor(text) {
+      super();
+      this.text = String(text || "");
+    }
+
+    eq(other) {
+      return Boolean(
+        other &&
+          other instanceof CalendarEventOffClockChipWidget &&
+          other.text === this.text,
+      );
+    }
+
+    toDOM(view) {
+      const doc = typeof document !== "undefined" ? document : null;
+      const dom = buildCalendarEventOffClockChip(doc, this.text);
+      if (dom) {
+        try {
+          if (typeof addTaskTagMarkReveal === "function") addTaskTagMarkReveal(dom, view);
+        } catch (error) {
+          // A listener-free chip still renders.
+        }
+        return dom;
+      }
+      try {
+        return doc ? doc.createElement("span") : null;
+      } catch (error) {
+        return null;
+      }
+    }
+  };
+}

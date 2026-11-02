@@ -6,6 +6,51 @@ class TestPlugin {
   constructor(app) { this.app = app; }
 }
 
+const editorInfoField = { _gcalField: "info" };
+const editorLivePreviewField = { _gcalField: "live" };
+
+class StubWidgetType {}
+
+class StubRangeSetBuilder {
+  constructor() {
+    this.adds = [];
+  }
+
+  add(from, to, value) {
+    this.adds.push({ from, to, value });
+  }
+
+  finish() {
+    return { _decorations: true, adds: this.adds.slice() };
+  }
+}
+
+const StubDecoration = {
+  none: { _decorationNone: true },
+  mark: (spec) => ({ _decorationMark: true, ...spec }),
+  replace: (spec) => ({ _decorationReplace: true, ...spec }),
+  line: (spec) => ({ _decorationLine: true, ...spec }),
+  widget: (spec) => ({ _decorationWidget: true, ...spec }),
+};
+
+const StubStateEffect = {
+  define() {
+    const type = {};
+    type.of = (value) => {
+      const effect = { value, _effectType: type };
+      effect.is = (other) => other === type;
+      return effect;
+    };
+    return type;
+  },
+};
+
+const StubViewPlugin = {
+  fromClass(cls, options) {
+    return { _viewPlugin: true, cls, options };
+  },
+};
+
 const originalLoad = Module._load;
 Module._load = function loadObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
@@ -16,10 +61,29 @@ Module._load = function loadObsidianStubs(request, parent, isMain) {
       Plugin: TestPlugin,
       normalizePath: (value) => value,
       parseYaml: () => ({}),
+      editorInfoField,
+      editorLivePreviewField,
     };
   }
-  if (request === "@codemirror/state") return { Prec: { highest: (value) => value } };
-  if (request === "@codemirror/view") return {};
+  if (request === "@codemirror/state") {
+    return {
+      Prec: { highest: (value) => value },
+      StateEffect: StubStateEffect,
+      RangeSetBuilder: StubRangeSetBuilder,
+    };
+  }
+  if (request === "@codemirror/view") {
+    return {
+      EditorView: class {},
+      keymap: { of: (value) => value },
+      ViewPlugin: StubViewPlugin,
+      Decoration: StubDecoration,
+      WidgetType: StubWidgetType,
+    };
+  }
+  if (request === "@codemirror/language") {
+    return { syntaxTree: () => ({ resolveInner: () => null }) };
+  }
   return originalLoad.call(this, request, parent, isMain);
 };
 
@@ -42,6 +106,9 @@ const {
   gcalEventsWingModel,
   buildCalendarEventBufferWing,
   calendarEventPaintBufferWings,
+  buildCalendarEventOffClockChip,
+  CalendarEventOffClockChipWidget,
+  GCAL_EVENTS_OFF_CLOCK_TITLE,
   gcalEventsWaitForPomodoros,
   GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES,
   todayDailyPath,
@@ -329,4 +396,182 @@ test("calendar paint teardown clears the clock refresh interval", () => {
     if (originalWindow === undefined) delete global.window;
     else global.window = originalWindow;
   }
+});
+
+function gcalMakeDoc(lines) {
+  const text = lines.join("\n");
+  return {
+    _text: text,
+    toString() {
+      return this._text;
+    },
+  };
+}
+
+function gcalMakeView({ lines, selection = [], path = null, live = true, doc = null }) {
+  const resolvedPath = path || todayDailyPath(new Date());
+  const stateDoc = doc || gcalMakeDoc(lines);
+  return {
+    state: {
+      doc: stateDoc,
+      selection: { ranges: selection },
+      field: (field) => {
+        if (field === editorLivePreviewField) return live;
+        if (field === editorInfoField) return { file: { path: resolvedPath } };
+        return null;
+      },
+    },
+  };
+}
+
+function gcalPlugin() {
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = { internalPlugins: { plugins: {} } };
+  plugin.calendarEventsPaintEnabled = true;
+  plugin.calendarEventScanCache = null;
+  return plugin;
+}
+
+function gcalLineOffsets(lines, index) {
+  let offset = 0;
+  for (let i = 0; i < index; i += 1) offset += lines[i].length + 1;
+  return offset;
+}
+
+test("off-clock Live Preview paints one chip widget and no split marks", () => {
+  const lines = [
+    "## Events",
+    "- [*] #task **0800-0815** Swings! [📅](https://example.test/e) #offclock [root:: love] ^swings",
+    "## Pomodoros",
+  ];
+  const plugin = gcalPlugin();
+  const built = plugin.buildCalendarEventDecorations(gcalMakeView({ lines }));
+  const adds = built.adds;
+  const tagStart = lines[1].indexOf("#offclock");
+  const base = gcalLineOffsets(lines, 1);
+  const offClock = adds.filter(
+    (add) => add.from === base + tagStart && add.to === base + tagStart + "#offclock".length,
+  );
+  assert.equal(offClock.length, 1);
+  assert.equal(offClock[0].value._decorationReplace, true);
+  assert.ok(offClock[0].value.widget instanceof StubWidgetType);
+  assert.equal(offClock[0].value.widget.text, "offclock");
+  const marks = adds.filter(
+    (add) => add.value && (add.value.class === "bob-calendar-event-off-clock"
+      || add.value.class === "bob-calendar-event-off-clock-hash"),
+  );
+  assert.equal(marks.length, 0);
+});
+
+test("off-clock chip preserves alias spelling and case", () => {
+  for (const [tag, label] of [["#Untracked", "Untracked"], ["#off-clock", "off-clock"]]) {
+    const lines = [
+      "## Events",
+      `- [*] #task **0800-0815** Swings! [📅](https://example.test/e) ${tag} ^swings`,
+      "## Pomodoros",
+    ];
+    const plugin = gcalPlugin();
+    const built = plugin.buildCalendarEventDecorations(gcalMakeView({ lines }));
+    const tagStart = lines[1].indexOf(tag);
+    const base = gcalLineOffsets(lines, 1);
+    const found = built.adds.filter(
+      (add) => add.from === base + tagStart && add.to === base + tagStart + tag.length,
+    );
+    assert.equal(found.length, 1, tag);
+    assert.equal(found[0].value.widget.text, label, tag);
+  }
+});
+
+test("off-clock chip reveals the raw tag while the cursor is on the line", () => {
+  const lines = [
+    "## Events",
+    "- [*] #task **0800-0815** Swings! [📅](https://example.test/e) #offclock [root:: love] ^swings",
+    "## Pomodoros",
+  ];
+  const plugin = gcalPlugin();
+  const base = gcalLineOffsets(lines, 1);
+  const built = plugin.buildCalendarEventDecorations(
+    gcalMakeView({ lines, selection: [{ from: base, to: base }] }),
+  );
+  const offClock = built.adds.filter(
+    (add) => add.value && add.value.widget instanceof StubWidgetType,
+  );
+  assert.equal(offClock.length, 0);
+  const time = built.adds.filter(
+    (add) => add.value && add.value.class === "bob-calendar-event-time",
+  );
+  assert.ok(time.length >= 1);
+  assert.equal(time[0].value.attributes["data-off-clock"], "true");
+});
+
+test("buffer and off-clock decorations stay sorted and disjoint", () => {
+  const lines = [
+    "## Events",
+    "- [*] #task **1200-1300** Lunch #offclock [buffer:: -30m +15m] [root:: love] ^lunch",
+    "## Pomodoros",
+  ];
+  const plugin = gcalPlugin();
+  let built;
+  assert.doesNotThrow(() => {
+    built = plugin.buildCalendarEventDecorations(gcalMakeView({ lines }));
+  });
+  const adds = built.adds;
+  for (let i = 1; i < adds.length; i += 1) {
+    assert.ok(
+      adds[i - 1].from < adds[i].from
+        || (adds[i - 1].from === adds[i].from && adds[i - 1].to <= adds[i].to),
+      `out of order at ${i}`,
+    );
+  }
+  const tagStart = lines[1].indexOf("#offclock");
+  const base = gcalLineOffsets(lines, 1);
+  const replace = adds.find(
+    (add) => add.from === base + tagStart && add.value && add.value._decorationReplace,
+  );
+  assert.ok(replace);
+  for (const add of adds) {
+    if (add === replace) continue;
+    if (!add.value || add.value._decorationLine) continue;
+    const cls = add.value.class || "";
+    if (cls !== "bob-calendar-event-time" && cls !== "bob-calendar-event-buffer-field") continue;
+    assert.ok(
+      replace.to <= add.from || replace.from >= add.to,
+      `off-clock replace overlaps ${cls}`,
+    );
+  }
+});
+
+test("a selection-only update reuses the cached scan", () => {
+  const lines = [
+    "## Events",
+    "- [*] #task **0800-0815** Swings! [📅](https://example.test/e) #offclock ^swings",
+    "## Pomodoros",
+  ];
+  const plugin = gcalPlugin();
+  const doc = gcalMakeDoc(lines);
+  plugin.buildCalendarEventDecorations(gcalMakeView({ lines, doc }));
+  const first = plugin.calendarEventScanCache;
+  assert.ok(first);
+  const other = gcalLineOffsets(lines, 2);
+  plugin.buildCalendarEventDecorations(
+    gcalMakeView({ lines, doc, selection: [{ from: other, to: other }] }),
+  );
+  assert.equal(plugin.calendarEventScanCache, first);
+});
+
+test("the off-clock chip DOM carries the class, marker, and title", () => {
+  const attrs = new Map();
+  const doc = {
+    createElement: () => ({
+      className: "",
+      textContent: "",
+      setAttribute: (name, value) => attrs.set(name, String(value)),
+    }),
+  };
+  const el = buildCalendarEventOffClockChip(doc, "offclock");
+  assert.equal(el.className, "bob-calendar-event-off-clock");
+  assert.equal(el.textContent, "offclock");
+  assert.equal(attrs.get("data-off-clock"), "true");
+  assert.equal(attrs.get("title"), GCAL_EVENTS_OFF_CLOCK_TITLE);
+  assert.equal(GCAL_EVENTS_OFF_CLOCK_TITLE, "Off-clock · on the calendar, off the clock");
 });

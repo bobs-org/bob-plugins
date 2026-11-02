@@ -4875,8 +4875,7 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme
 }
 
 .bob-calendar-events .bob-calendar-event-off-clock,
-.bob-calendar-events .bob-calendar-event-off-clock.cm-hashtag,
-.bob-calendar-events .bob-calendar-event-off-clock .cm-hashtag {
+.bob-calendar-events a.tag.bob-calendar-event-off-clock {
   display: inline-flex;
   align-items: center;
   gap: 0.28em;
@@ -4904,14 +4903,14 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme
   mask: var(--bob-calendar-off-clock-icon) center / contain no-repeat;
 }
 
-.bob-calendar-events .cm-line:not(.cm-active) .bob-calendar-event-off-clock-hash,
 .bob-calendar-events a.bob-calendar-event-off-clock .bob-calendar-event-off-clock-hash {
   display: none;
 }
 
-/* `[buffer::]` is Google-owned metadata: hide it on inactive lines, like
-   the `#` of `#offclock`. Dataview's inline-field for `buffer` stays
-   hidden in Reading view. Shown while the cursor is on the line. */
+/* `[buffer::]` is Google-owned metadata: hide it on inactive lines (the
+   off-clock chip widget replaces its tag in Live Preview). Dataview's
+   inline-field for `buffer` stays hidden in Reading view. Shown while the
+   cursor is on the line. */
 .bob-calendar-events .cm-line:not(.cm-active) .bob-calendar-event-buffer-field,
 .bob-calendar-events .bob-calendar-event-buffer-field[data-buffer-field="true"],
 .bob-calendar-events .dataview.inline-field:has([data-dv-key="buffer" i]),

@@ -72823,13 +72823,38 @@ class BobLedgerToolsGcalEventsMixin {
           const requested = (update.transactions || []).some((transaction) =>
             (transaction.effects || []).some((effect) => refresh && effect && typeof effect.is === "function" && effect.is(refresh)),
           );
-          if (update.docChanged || update.viewportChanged || requested) this.decorations = plugin.buildCalendarEventDecorations(update.view);
+          if (update.docChanged || update.viewportChanged || update.selectionSet || requested) this.decorations = plugin.buildCalendarEventDecorations(update.view);
         }
       };
       return Prec.highest(ViewPlugin.fromClass(viewPlugin, { decorations: (value) => value.decorations }));
     } catch (error) {
       return null;
     }
+  }
+
+  calendarEventScanForView(view, lines, isToday, nowMinutes) {
+    try {
+      const doc = view && view.state && view.state.doc ? view.state.doc : null;
+      const cache = this.calendarEventScanCache;
+      if (cache && cache.doc === doc && cache.isToday === isToday && cache.nowMinutes === nowMinutes) {
+        return cache;
+      }
+    } catch (error) {
+      // A cache miss rescans below.
+    }
+    const scanned = gcalEventsScanMarkdown(lines, { isToday, nowMinutes });
+    const starts = [];
+    let offset = 0;
+    for (const line of lines) { starts.push(offset); offset += line.length + 1; }
+    const entry = {
+      doc: view && view.state && view.state.doc ? view.state.doc : null,
+      isToday,
+      nowMinutes,
+      scanned,
+      starts,
+    };
+    this.calendarEventScanCache = entry;
+    return entry;
   }
 
   buildCalendarEventDecorations(view) {
@@ -72842,11 +72867,17 @@ class BobLedgerToolsGcalEventsMixin {
       const lines = view.state.doc.toString().split("\n");
       const today = isTodayDailyFile(this.app, info.file);
       const now = new Date();
-      const scanned = gcalEventsScanMarkdown(lines, { isToday: today, nowMinutes: now.getHours() * 60 + now.getMinutes() });
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const cached = this.calendarEventScanForView(view, lines, today, nowMinutes);
+      const scanned = cached.scanned;
+      const starts = cached.starts;
       if (!scanned.rows.length && !scanned.stamp) return Decoration.none;
-      const starts = [];
-      let offset = 0;
-      for (const line of lines) { starts.push(offset); offset += line.length + 1; }
+      let selectionRanges = [];
+      try {
+        selectionRanges = (view.state.selection && view.state.selection.ranges) || [];
+      } catch (error) {
+        selectionRanges = [];
+      }
       const decorations = [];
       const hue = this.calendarEventMeetHue();
       if (scanned.stamp && typeof Decoration.line === "function") {
@@ -72872,19 +72903,36 @@ class BobLedgerToolsGcalEventsMixin {
         }
         if (row.offClockTag) {
           const { start, end } = row.offClockTag;
-          decorations.push({
-            from: base + start,
-            to: base + end,
-            decoration: Decoration.mark({
-              class: "bob-calendar-event-off-clock",
-              attributes: { title: GCAL_EVENTS_OFF_CLOCK_TITLE, "data-off-clock": "true" },
-            }),
-          });
-          decorations.push({
-            from: base + start,
-            to: base + start + 1,
-            decoration: Decoration.mark({ class: "bob-calendar-event-off-clock-hash" }),
-          });
+          const lineStart = base;
+          const lineEnd = base + String(lines[row.line] || "").length;
+          let revealed = false;
+          for (const selection of selectionRanges) {
+            try {
+              if (
+                selection &&
+                typeof selection.from === "number" &&
+                typeof selection.to === "number" &&
+                selection.from <= lineEnd &&
+                selection.to >= lineStart
+              ) {
+                revealed = true;
+                break;
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+          if (!revealed && CalendarEventOffClockChipWidget && typeof Decoration.replace === "function") {
+            const raw = String(lines[row.line] || "").slice(start, end);
+            const label = raw.startsWith("#") ? raw.slice(1) : raw;
+            decorations.push({
+              from: base + start,
+              to: base + end,
+              decoration: Decoration.replace({
+                widget: new CalendarEventOffClockChipWidget(label),
+              }),
+            });
+          }
         }
         for (const tag of row.tags) {
           decorations.push({ from: base + tag.start, to: base + tag.end, decoration: Decoration.mark({ class: "bob-calendar-event-tag", attributes: { "data-tag": tag.name } }) });
@@ -73378,6 +73426,62 @@ function calendarEventPaintBufferWings(row, timeEl, modelRow, hue) {
   } catch (error) {
     return false;
   }
+}
+
+// Off-clock chip for Live Preview: one dashed `timer-off` chip per Event
+// Task tag. CodeMirror splits a highest-precedence mark at Obsidian's tag
+// spans, so a mark paints two pills; a replace widget paints one. The text
+// is the tag's own spelling without the `#`, the same as Reading view.
+function buildCalendarEventOffClockChip(doc, text) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") return null;
+    const label = String(text || "");
+    if (!label) return null;
+    const el = doc.createElement("span");
+    el.className = "bob-calendar-event-off-clock";
+    el.textContent = label;
+    el.setAttribute("data-off-clock", "true");
+    el.setAttribute("title", GCAL_EVENTS_OFF_CLOCK_TITLE);
+    return el;
+  } catch (error) {
+    return null;
+  }
+}
+
+let CalendarEventOffClockChipWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  CalendarEventOffClockChipWidget = class extends WidgetType {
+    constructor(text) {
+      super();
+      this.text = String(text || "");
+    }
+
+    eq(other) {
+      return Boolean(
+        other &&
+          other instanceof CalendarEventOffClockChipWidget &&
+          other.text === this.text,
+      );
+    }
+
+    toDOM(view) {
+      const doc = typeof document !== "undefined" ? document : null;
+      const dom = buildCalendarEventOffClockChip(doc, this.text);
+      if (dom) {
+        try {
+          if (typeof addTaskTagMarkReveal === "function") addTaskTagMarkReveal(dom, view);
+        } catch (error) {
+          // A listener-free chip still renders.
+        }
+        return dom;
+      }
+      try {
+        return doc ? doc.createElement("span") : null;
+      } catch (error) {
+        return null;
+      }
+    }
+  };
 }
 // ---- src/292-keep-inbox-model.js ----
 // Keep inbox indicator model (keep-indicator-view): pure view model for the
@@ -78584,6 +78688,9 @@ module.exports.helpers = {
   gcalEventsBufferDecorations,
   buildCalendarEventBufferWing,
   calendarEventPaintBufferWings,
+  buildCalendarEventOffClockChip,
+  CalendarEventOffClockChipWidget,
+  GCAL_EVENTS_OFF_CLOCK_TITLE,
   gcalEventsStampState,
   gcalEventsShouldSyncCreatedFile,
   gcalEventsWaitForPomodoros,

@@ -420,10 +420,12 @@ and never changes it.
 An Event Task carrying a standalone `#offclock` tag (aliases `#off-clock` and
 `#untracked`, case-insensitive; sync writes the canonical spelling for a Google
 event tagged with any of them, and hand-written rows may carry it too) is *off
-the clock*: its tag paints as a quiet mark (a `timer-off` icon in muted ink with
-a dashed outline, tooltip "Off-clock · on the calendar, off the clock") and its
-time pill switches to a dashed outline, in Live Preview and Reading view. The
-`#` is folded away unless the cursor is on the line. A tag inside a code span or
+the clock*: in Live Preview its tag becomes a single chip that shows the tag
+name without `#` (a `timer-off` icon in muted ink with a dashed outline,
+tooltip "Off-clock · on the calendar, off the clock"), and the raw `#offclock`
+returns while the cursor is on the line; in Reading view its tag paints as a
+quiet mark with the same icon, outline, and tooltip. Its time pill switches to
+a dashed outline in both views. A tag inside a code span or
 Markdown link, or a nested `#offclock/x`, is not a tag. The session that links
 such an event is written with `[off:: Nm]` instead of `[t::]`, so its Pomodoro
 home chip is dashed too, with its minutes, and its tooltip reads `love · 60m off

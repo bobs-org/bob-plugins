@@ -1167,3 +1167,124 @@ test("Ctrl+Enter applies narrowed closed and shed continuation names", async () 
   assert.match(result, /^- \[x\] \(\) — FIX \+ READ$/m);
   assert.match(result, /^- \[ \] \(\) — BUILD \+ FIX$/m);
 });
+
+test("MEET continuations follow the last open block and keep the cursor on next work", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] (**0800-0815**) — mEeT",
+    "  - [[#^ended]]",
+    "  - [[#^later]]#",
+    "- [ ] () — BUILD",
+    "  - [[#^build]]",
+    "- [ ] () — PLAN",
+    "  - plan note",
+    "",
+    "    - nested plan note",
+    "- [x] (**0700-0730**) — DONE",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  const insert = plan.edits.find((edit) => edit.type === "insertLines");
+
+  assert.equal(plan.placedLast, true);
+  assert.equal(plan.createdPomodoroName, "mEeT");
+  assert.equal(insert.line, 10);
+  assert.equal(plan.cursorTargetLine, 3);
+
+  const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  assert.equal(plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor()), true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "## Pomodoros",
+      "- [x] (**0800-0815**) — mEeT",
+      "  - 🍅 [[#^ended]]",
+      "- [ ] () — BUILD",
+      "  - [[#^build]]",
+      "- [ ] () — PLAN",
+      "  - plan note",
+      "",
+      "    - nested plan note",
+      "- [ ] () — mEeT",
+      "  - [[#^ended]]",
+      "  - [[#^later]]",
+      "- [x] (**0700-0730**) — DONE",
+    ].join("\n"),
+  );
+  assert.equal(editor.getCursor().line, 3);
+});
+
+test("deferred-only MEET continuations go last and successor relocation finds them", () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] (**0800-0815**) — MEET",
+    "  - [[#^later]]#",
+    "- [ ] () — BUILD",
+    "  - [[#^build]]",
+    "- [ ] () — PLAN",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
+  assert.equal(plan.deferredOnlyClose, true);
+  assert.equal(plan.placedLast, true);
+  assert.equal(plan.edits.find((edit) => edit.type === "insertLines").line, 6);
+  assert.equal(plan.cursorTargetLine, 1);
+
+  const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  assert.equal(plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor()), true);
+  assert.equal(
+    editor.getValue(),
+    [
+      "## Pomodoros",
+      "- [ ] () — BUILD",
+      "  - [[#^build]]",
+      "- [ ] () — PLAN",
+      "- [ ] () — MEET",
+      "  - [[#^later]]",
+    ].join("\n"),
+  );
+  assert.equal(editor.getCursor().line, 1);
+  assert.equal(
+    plugin.relocateSuccessorClosingEntry(editor.getValue().split("\n"), {
+      line: 1,
+      deletedClosedEntry: true,
+      createdLineText: "- [ ] () — MEET",
+    }),
+    4,
+  );
+});
+
+test("MEET without an open entry below and non-MEET closes keep the immediate slot", () => {
+  const noAnchor = [
+    "## Pomodoros",
+    "- [ ] () — BUILD",
+    "- [ ] () — MEET",
+    "  - [[#^carry]]",
+    "- [x] (**0700-0730**) — DONE",
+  ];
+  const noAnchorPlan = helpers.buildPomodoroCompletionPlan(
+    noAnchor,
+    helpers.findPomodorosSectionInLines(noAnchor),
+    2,
+  );
+  assert.equal(noAnchorPlan.placedLast, false);
+  assert.equal(noAnchorPlan.edits.find((edit) => edit.type === "insertLines").line, 4);
+
+  const build = [
+    "## Pomodoros",
+    "- [ ] () — BUILD",
+    "  - [[#^carry]]",
+    "- [ ] () — PLAN",
+  ];
+  const buildPlan = helpers.buildPomodoroCompletionPlan(
+    build,
+    helpers.findPomodorosSectionInLines(build),
+    1,
+  );
+  assert.equal(buildPlan.placedLast, false);
+  assert.equal(buildPlan.edits.find((edit) => edit.type === "insertLines").line, 3);
+});

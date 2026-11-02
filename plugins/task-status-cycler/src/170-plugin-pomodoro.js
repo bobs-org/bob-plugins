@@ -456,8 +456,8 @@ class TaskStatusCyclerPomodoroMixin {
         }
         // A deferred-only close deletes the closed entry, so the relocation
         // pass cannot find its `[x]` headline afterward: hand it the exact
-        // inserted placeholder headline, which lands at the entry's former
-        // start, instead.
+        // inserted placeholder headline, which may now sit after the last
+        // open Pomodoro.
         let createdLineText = null;
         if (plan.deferredOnlyClose === true && Array.isArray(plan.edits)) {
           try {

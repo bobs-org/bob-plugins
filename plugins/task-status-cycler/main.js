@@ -4259,19 +4259,9 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
       });
     }
   }
-  // Only insert a fresh placeholder Pomodoro when there is something to carry
-  // forward (an ordinary copyable link or a move-only link) or when this is the
-  // last Pomodoro in the section. When a later Pomodoro already exists and
-  // there is nothing to carry, complete in place and jump the cursor to that
-  // existing next Pomodoro instead of leaving an empty placeholder between
-  // them. A created placeholder is inserted directly below the completed
-  // Pomodoro's own sub-bullet block; existing lower Pomodoros are left untouched
-  // and pushed down by the insertion.
-  //
-  // Carried links are grouped worked-on (copyable) links first, then deferred
-  // (#-marked, move-only) links second, each group kept in its own source
-  // order: the fresh Pomodoro reads as "keep going on what you were working
-  // on, then pick up what you deferred".
+  // Create a placeholder for carried links or the last entry. MEET continuations
+  // with an open entry below go after the last such entry; other closes keep the
+  // immediate slot. Worked-on links precede deferred links in source order.
   const copyableBulletLines = [
     ...sourceBullets.copyableTaskLinkBullets
       .slice()
@@ -4286,7 +4276,20 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
   const shouldCreatePomodoro = copyableBulletLines.length > 0 || isLastPomodoro;
   const removedLineCountBefore = (line) =>
     [...movedSourceLines, ...deferredExtraLines].filter((removedLine) => removedLine < line).length;
-  const insertLine = fullEntryEndLine + 1;
+  const continuationName = options &&
+    typeof options.continuationName === "string"
+    ? options.continuationName
+    : createdPomodoroName;
+  const continuationPlacement = shouldCreatePomodoro
+    ? getPomodoroContinuationPlacement(
+      lines,
+      section,
+      pomodoroLine,
+      fullEntryEndLine,
+      continuationName,
+    )
+    : { insertLine: fullEntryEndLine + 1, placedLast: false, firstOpenLine: null };
+  const insertLine = continuationPlacement.insertLine;
 
   let createdPomodoro = false;
   let plannedCreatedPomodoroName = null;
@@ -4297,10 +4300,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
 
   if (shouldCreatePomodoro) {
     createdPomodoro = true;
-    plannedCreatedPomodoroName = options &&
-      typeof options.continuationName === "string"
-      ? options.continuationName
-      : createdPomodoroName;
+    plannedCreatedPomodoroName = continuationName;
     copiedBulletLines = copyableBulletLines;
     edits.push({
       type: "insertLines",
@@ -4312,11 +4312,12 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
           : [EMPTY_POMODORO_SUB_BULLET_LINE]),
       ],
     });
-    cursorTargetLine = deferredOnlyClose
-      // The entry line and its whole block are deleted, so the descending
-      // applier lands the inserted placeholder exactly at the entry's former
-      // start. The insert offset itself needs no fixup: it still addresses
-      // the pre-edit full-block end.
+    cursorTargetLine = continuationPlacement.placedLast
+      ? continuationPlacement.firstOpenLine -
+        removedLineCountBefore(continuationPlacement.firstOpenLine) -
+        (deferredOnlyClose ? 1 : 0)
+      : deferredOnlyClose
+      // The deleted entry's old line becomes the placeholder's final line.
       ? pomodoroLine
       : insertLine - removedLineCountBefore(insertLine);
   }
@@ -4327,6 +4328,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
     sourceBullets,
     nextPomodoroLine,
     createdPomodoro,
+    placedLast: continuationPlacement.placedLast,
     createdPomodoroName: plannedCreatedPomodoroName,
     cursorTargetLine,
     copiedBulletLines,
@@ -4340,6 +4342,52 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
   };
 }
 
+// ---- src/060a-pomodoro-placement.js ----
+function getPomodoroContinuationPlacement(
+  lines,
+  section,
+  closedLine,
+  closedEndLine,
+  continuationName,
+) {
+  const immediateInsertLine = closedEndLine + 1;
+  const normalizedName = String(continuationName || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (normalizedName !== "meet" || !section) {
+    return { insertLine: immediateInsertLine, placedLast: false, firstOpenLine: null };
+  }
+
+  let firstOpenLine = null;
+  let lastOpenLine = null;
+  for (let line = closedLine + 1; line <= section.endLine; line += 1) {
+    if (!isPomodoroTaskLine(lines, section, line)) {
+      continue;
+    }
+    if (!parsePomodoroEntryLineParts(lines[line])) {
+      continue;
+    }
+    const status = getTaskStatusForLine(lines[line], line);
+    if (!status || status.symbol !== " ") {
+      continue;
+    }
+    if (firstOpenLine == null) {
+      firstOpenLine = line;
+    }
+    lastOpenLine = line;
+  }
+  if (lastOpenLine == null) {
+    return { insertLine: immediateInsertLine, placedLast: false, firstOpenLine: null };
+  }
+
+  return {
+    insertLine: getFullPomodoroEntryEndLine(lines, lastOpenLine, section) + 1,
+    placedLast: true,
+    firstOpenLine,
+  };
+}
 // ---- src/061-event-task-clock.js ----
 // Event Task clock close (plan:202610/bob_gcal_daily_events.md, phase
 // event-close-js). Mirrors bob-cli's `src/native/event_task.rs` and the clock
@@ -9873,7 +9921,7 @@ function successorEntryNameAt(lines, entryLine) {
 // children (one tab in): the created continuation
 // (`options.createdEntry = { line }`), else the first open same-name entry
 // after the closed one, else a new `- [ ] () — NAME` placeholder right
-// after the closed entry's sub-bullet range (successors count as carried).
+// directly below the closed entry (successors count as carried).
 // A lone stub child is replaced. `dailyLines` is text or an array;
 // `options.closingEntry` is the 0-based closed-entry line. Returns
 // `{ text, splices, links, skipped }`: `splices` apply in array order
@@ -23962,8 +24010,8 @@ class TaskStatusCyclerPomodoroMixin {
         }
         // A deferred-only close deletes the closed entry, so the relocation
         // pass cannot find its `[x]` headline afterward: hand it the exact
-        // inserted placeholder headline, which lands at the entry's former
-        // start, instead.
+        // inserted placeholder headline, which may now sit after the last
+        // open Pomodoro.
         let createdLineText = null;
         if (plan.deferredOnlyClose === true && Array.isArray(plan.edits)) {
           try {

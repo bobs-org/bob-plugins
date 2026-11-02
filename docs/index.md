@@ -26,7 +26,7 @@ See [plugin deployment](https://bobs-org.github.io/develop/plugins/deployment/) 
 | [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) | 2.69.0 | 1.8.7 | No |
 | [Bob Project Tasks](bob-project-tasks.md) | 1.1.0 | 1.8.7 | No |
 | [Bob Vim Surround](bob-vim-surround.md) | 1.5.2 | 1.8.7 | No |
-| [Task Status Cycler](task-status-cycler.md) | 1.47.0 | 1.8.7 | No |
+| [Task Status Cycler](task-status-cycler.md) | 1.48.0 | 1.8.7 | No |
 <!-- END GENERATED: inventory -->
 
 ## Shared reference topics

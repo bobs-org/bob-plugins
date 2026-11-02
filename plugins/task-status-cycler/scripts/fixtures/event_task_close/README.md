@@ -10,3 +10,7 @@ Pin: `buffered-event-classifies-by-its-meeting-span` was added with the
 `[buffer::]` field in bob-cli. A buffer never widens a close: the clock class
 comes from the bare meeting span, so a MEET closed when lunch ends still
 completes lunch even though its `+15` buffer runs on.
+
+The vectors were refreshed from bob-cli's `feat(capture): place MEET
+continuation after last open Pomodoro` change; carried MEET continuations now
+follow the last open Pomodoro.

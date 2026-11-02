@@ -19,7 +19,7 @@ function successorEntryNameAt(lines, entryLine) {
 // children (one tab in): the created continuation
 // (`options.createdEntry = { line }`), else the first open same-name entry
 // after the closed one, else a new `- [ ] () — NAME` placeholder right
-// after the closed entry's sub-bullet range (successors count as carried).
+// directly below the closed entry (successors count as carried).
 // A lone stub child is replaced. `dailyLines` is text or an array;
 // `options.closingEntry` is the 0-based closed-entry line. Returns
 // `{ text, splices, links, skipped }`: `splices` apply in array order

@@ -900,7 +900,7 @@ function resolveFreshnessDecayEnterLevel(property, enterLabel) {
 }
 
 // P0 entry: the first configured level in ladder order with
-// `min_days > effective interval`. A valid fixed `enter` level overrides the
+// `min_days >= effective interval`. A valid fixed `enter` level overrides the
 // scan. Returns `{ level }` or `{ unavailable, reason }`. Never shortens the
 // lease, never picks the last level silently, never cancels.
 function resolveFreshnessDecayP0EntryLevel(property, intervalDays, enterLabel) {
@@ -928,7 +928,7 @@ function resolveFreshnessDecayP0EntryLevel(property, intervalDays, enterLabel) {
       Number.isInteger(level.minDays) &&
       Number.isInteger(level.maxDays) &&
       level.minDays <= level.maxDays &&
-      level.minDays > interval,
+      level.minDays >= interval,
   );
   if (!entry) {
     return {

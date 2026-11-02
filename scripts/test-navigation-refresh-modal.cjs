@@ -61,6 +61,7 @@ for (const startDays of [90, 120, 180]) {
       line: 0,
       rawLine: taskLine,
       filePath: "a.md",
+      config: { properties: [] },
       plan: {
         lessOften: {
           mode: "picker",

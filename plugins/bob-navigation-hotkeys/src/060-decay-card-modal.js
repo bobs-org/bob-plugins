@@ -56,21 +56,21 @@ class FreshnessDecayCardModal extends Modal {
     this.renderRows();
     contentEl.createDiv({
       cls: "bob-decay-card-footer bob-key-card-footer",
-      text: "Esc changes nothing · D / X drops · 1–4 pick a P-level instead",
+      text: buildFreshnessDecayCardFooter(this.decayRows),
     });
     contentEl.addEventListener("keydown", (event) => this.handleKey(event));
     window.setTimeout(() => {
-      this.focusKeepRowOrFirst();
+      this.focusRecommendedRowOrFirst();
     }, 0);
   }
 
-  focusKeepRowOrFirst() {
-    const keepIndex = this.decayRows.findIndex(
-      (row) => row && row.action === "keep" && row.available,
+  focusRecommendedRowOrFirst() {
+    const recommendedIndex = this.decayRows.findIndex(
+      (row) => row && row.recommended && row.available,
     );
     const ordered =
-      keepIndex >= 0
-        ? [this.rowEls[keepIndex], ...this.rowEls]
+      recommendedIndex >= 0
+        ? [this.rowEls[recommendedIndex], ...this.rowEls]
         : this.rowEls;
     for (const rowEl of ordered) {
       if (rowEl && typeof rowEl.focus === "function") {
@@ -175,7 +175,7 @@ class FreshnessDecayCardModal extends Modal {
     this.keepStageActive = false;
     this.renderRows();
     window.setTimeout(() => {
-      this.focusKeepRowOrFirst();
+      this.focusRecommendedRowOrFirst();
     }, 0);
     return true;
   }
@@ -271,7 +271,10 @@ class FreshnessDecayCardModal extends Modal {
     if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
-      this.choose("notNow");
+      const recommended = this.decayRows.find(
+        (row) => row && row.recommended && row.available,
+      );
+      this.choose(recommended ? recommended.action : "notNow");
       return;
     }
     if (key === "l") {

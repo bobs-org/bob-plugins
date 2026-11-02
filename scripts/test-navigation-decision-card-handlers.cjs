@@ -134,6 +134,54 @@ function decayConfig() {
   return config;
 }
 
+function decayYaml(options = {}) {
+  const levels = options.levels || [
+    { label: "P1", value: "high", min_days: 2, max_days: 7 },
+    { label: "P2", value: "medium", min_days: 8, max_days: 30 },
+    { label: "P3", value: "low", min_days: 31, max_days: 90 },
+    { label: "P4", value: "lowest", min_days: 91, max_days: 365 },
+  ];
+  return JSON.stringify({
+    properties: [
+      { name: "scheduled", values: "date" },
+      {
+        name: "priority",
+        values: "priority",
+        schedules: "scheduled",
+        levels,
+      },
+    ],
+  });
+}
+
+function decayLoadOptions(state = {}) {
+  const holder = {
+    yaml: decayYaml(),
+    missing: false,
+    unreadable: false,
+    parseYaml: JSON.parse,
+    ...state,
+  };
+  return {
+    configPath: "/tmp/bob/config.yml",
+    fsModule: {
+      readFileSync: () => {
+        if (holder.missing) {
+          const error = new Error("ENOENT");
+          error.code = "ENOENT";
+          throw error;
+        }
+        if (holder.unreadable) {
+          throw new Error("EACCES");
+        }
+        return holder.yaml;
+      },
+    },
+    parseYaml: (...args) => holder.parseYaml(...args),
+    holder,
+  };
+}
+
 const realKeep = (line, dateText, options) =>
   ledgerHelpers.freshnessKeepLine(line, dateText || DATE, options).line;
 const realStamp = (line, dateText) =>
@@ -296,7 +344,7 @@ function makePlugin({ filePath, editor, freshness, dateText = DATE }) {
     workspace: { getActiveViewOfType: () => view },
     vault: { getAbstractFileByPath: () => null },
   };
-  plugin.config = decayConfig();
+  plugin.freshnessDecayConfigLoadOptions = decayLoadOptions();
   plugin.reviewAnchor = null;
   plugin.view = view;
   plugin.laneReleaseDateText = () => dateText;
@@ -470,16 +518,12 @@ test("stale decay-config change writes nothing", async () => {
 test("stale priority-ladder config writes nothing", async () => {
   const { editor, plugin } = await openCard();
   const cardCtx = plugin.openedCards[0];
-  const levels = [
-    { label: "P1", value: "high", min_days: 2, max_days: 7 },
-    { label: "P2", value: "medium", min_days: 8, max_days: 45 },
-    { label: "P3", value: "low", min_days: 46, max_days: 90 },
-    { label: "P4", value: "lowest", min_days: 91, max_days: 365 },
-  ];
-  plugin.config = helpers.validateBulletPropertyConfig({
-    properties: [
-      { name: "scheduled", values: "date" },
-      { name: "priority", values: "priority", schedules: "scheduled", levels },
+  plugin.freshnessDecayConfigLoadOptions.holder.yaml = decayYaml({
+    levels: [
+      { label: "P1", value: "high", min_days: 2, max_days: 7 },
+      { label: "P2", value: "medium", min_days: 8, max_days: 45 },
+      { label: "P3", value: "low", min_days: 46, max_days: 90 },
+      { label: "P4", value: "lowest", min_days: 91, max_days: 365 },
     ],
   });
   const before = editor.state.lines.join("\n");
@@ -870,4 +914,105 @@ test("counted session with every target skipped writes nothing", async () => {
   assert.equal(ok, true);
   assert.equal(editor.state.lines.join("\n"), content);
   assert.match(notices[notices.length - 1], /need a decision/);
+});
+
+// --- 11. real config loader (no plugin.config injection) ---
+
+function bryanDecayYaml() {
+  return decayYaml({
+    levels: [
+      { label: "P1", value: "high", min_days: 3, max_days: 8 },
+      { label: "P2", value: "medium", min_days: 9, max_days: 31 },
+      { label: "P3", value: "low", min_days: 32, max_days: 100 },
+      { label: "P4", value: "lowest", min_days: 101, max_days: 365 },
+    ],
+  });
+}
+
+test("real config loader offers P1 for Bryan's ladder without plugin.config", async () => {
+  clearNotices();
+  openedModals.length = 0;
+  const content = ["# Tasks", "", ROTTEN_AT_LIMIT].join("\n");
+  const editor = makeEditor(content, 2);
+  const entry = rottenEntry({ line: 3, originalMarkdown: ROTTEN_AT_LIMIT });
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessCapable([entry], BASE_COUNTS, {
+      extra: {
+        config: () => ({
+          interval: 3,
+          invalid: false,
+          decay: { enabled: true, keeps: 3, enter: null },
+        }),
+      },
+    }),
+    dateText: DATE,
+  });
+  plugin.freshnessDecayConfigLoadOptions = decayLoadOptions({ yaml: bryanDecayYaml() });
+  assert.equal(plugin.config, undefined);
+  const ok = await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  assert.equal(ok, true);
+  const cardCtx = plugin.openedCards[0];
+  assert.ok(cardCtx.plan.notNow.available);
+  assert.equal(cardCtx.plan.notNow.levelLabel, "P1");
+  const notNow = cardCtx.rows.find((row) => row.action === "notNow");
+  assert.equal(notNow.recommended, true);
+  assert.match(notNow.detail, /P0 → P1/);
+});
+
+test("missing config file uses distinct copy and recommends Keep", async () => {
+  const { plugin } = singleAtLimitFixture();
+  plugin.freshnessDecayConfigLoadOptions = decayLoadOptions({ missing: true });
+  const ok = await plugin.refreshTaskFreshness(plugin.app.workspace.getActiveViewOfType().editor, {
+    dateText: DATE,
+  });
+  assert.equal(ok, true);
+  const cardCtx = plugin.openedCards[0];
+  assert.equal(cardCtx.plan.notNow.available, false);
+  assert.equal(cardCtx.plan.notNow.unavailableReason, "config file missing");
+  const keep = cardCtx.rows.find((row) => row.action === "keep");
+  assert.equal(keep.recommended, true);
+});
+
+test("unreadable config file uses distinct copy", async () => {
+  const { plugin } = singleAtLimitFixture();
+  plugin.freshnessDecayConfigLoadOptions = decayLoadOptions({ unreadable: true });
+  await plugin.refreshTaskFreshness(plugin.app.workspace.getActiveViewOfType().editor, {
+    dateText: DATE,
+  });
+  const cardCtx = plugin.openedCards[0];
+  assert.equal(cardCtx.plan.notNow.unavailableReason, "config unreadable");
+});
+
+test("malformed config uses distinct copy", async () => {
+  const { plugin } = singleAtLimitFixture();
+  plugin.freshnessDecayConfigLoadOptions = decayLoadOptions({
+    yaml: "not-json",
+    parseYaml: () => {
+      throw new Error("malformed yaml");
+    },
+  });
+  await plugin.refreshTaskFreshness(plugin.app.workspace.getActiveViewOfType().editor, {
+    dateText: DATE,
+  });
+  const cardCtx = plugin.openedCards[0];
+  assert.equal(cardCtx.plan.notNow.unavailableReason, "config invalid");
+});
+
+test("config without a priority property uses distinct copy", async () => {
+  const { plugin } = singleAtLimitFixture();
+  plugin.freshnessDecayConfigLoadOptions = decayLoadOptions({
+    yaml: JSON.stringify({
+      properties: [{ name: "scheduled", values: "date" }],
+    }),
+  });
+  await plugin.refreshTaskFreshness(plugin.app.workspace.getActiveViewOfType().editor, {
+    dateText: DATE,
+  });
+  const cardCtx = plugin.openedCards[0];
+  assert.equal(
+    cardCtx.plan.notNow.unavailableReason,
+    "no `priority` property in bob/config.yml",
+  );
 });

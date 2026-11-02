@@ -129,13 +129,17 @@ function loadRelationsLinkedFromMentionsEnabled(options = {}) {
 }
 
 function loadBulletPropertyConfig(options = {}) {
+  const detailed = options.detailed === true;
+  const fail = (error, notice) => {
+    showBulletPropertyNotice(notice, options);
+    return detailed ? Object.freeze({ config: null, error }) : null;
+  };
   const fsModule =
     options.fsModule === undefined
       ? requireOptionalNodeModule("fs")
       : options.fsModule;
   if (!fsModule || typeof fsModule.readFileSync !== "function") {
-    showBulletPropertyNotice(BULLET_PROPERTY_CONFIG_MOBILE_NOTICE, options);
-    return null;
+    return fail("unreadable", BULLET_PROPERTY_CONFIG_MOBILE_NOTICE);
   }
 
   const configPath =
@@ -149,48 +153,48 @@ function loadBulletPropertyConfig(options = {}) {
     rawConfig = fsModule.readFileSync(configPath, "utf8");
   } catch (error) {
     if (error && error.code === "ENOENT") {
-      showBulletPropertyNotice(
+      return fail(
+        "missing",
         `Bullet property config not found: ${configPath}. Run chezmoi apply ~/.config/bob/config.yml.`,
-        options,
-      );
-    } else {
-      showBulletPropertyNotice(
-        `Could not read bullet property config: ${
-          error && error.message ? error.message : String(error)
-        }`,
-        options,
       );
     }
-    return null;
+    return fail(
+      "unreadable",
+      `Could not read bullet property config: ${
+        error && error.message ? error.message : String(error)
+      }`,
+    );
   }
 
   const yamlParser =
     options.parseYaml === undefined ? parseYaml : options.parseYaml;
   if (typeof yamlParser !== "function") {
-    showBulletPropertyNotice(
-      "Bullet property config parser is unavailable",
-      options,
-    );
-    return null;
+    return fail("unreadable", "Bullet property config parser is unavailable");
   }
 
   let parsedConfig;
   try {
     parsedConfig = yamlParser(rawConfig);
   } catch (error) {
-    showBulletPropertyNotice(
+    return fail(
+      "invalid",
       `Could not parse bullet property config: ${
         error && error.message ? error.message : String(error)
       }`,
-      options,
     );
-    return null;
   }
 
-  return validateBulletPropertyConfig(parsedConfig, {
+  const config = validateBulletPropertyConfig(parsedConfig, {
     ...options,
     configPath,
   });
+  if (detailed) {
+    return Object.freeze({
+      config: config || null,
+      error: config ? null : "invalid",
+    });
+  }
+  return config;
 }
 
 function isBulletLine(line) {

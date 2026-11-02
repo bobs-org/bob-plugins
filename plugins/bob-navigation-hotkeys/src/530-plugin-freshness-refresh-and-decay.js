@@ -135,6 +135,17 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     return fallback;
   }
 
+  // Load the priority ladder through the real config file, never
+  // `this.config`. Tests stub `freshnessDecayConfigLoadOptions`.
+  loadFreshnessDecayPrioritySnapshot() {
+    const options =
+      this.freshnessDecayConfigLoadOptions &&
+      typeof this.freshnessDecayConfigLoadOptions === "object"
+        ? this.freshnessDecayConfigLoadOptions
+        : {};
+    return loadFreshnessDecayPrioritySnapshot(options);
+  }
+
   // Build the card context for one resolved single-task trigger, or null
   // when the card cannot render (mixed versions, unusable plan) so the
   // caller falls back to counting. Never throws.
@@ -154,7 +165,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       const match = resolved.match;
       const entry = match && match.entry ? match.entry : null;
       const decay = this.readFreshnessDecayPolicy(api);
-      const property = findFreshnessDecayPriorityProperty(this.config);
+      const snapshot = this.loadFreshnessDecayPrioritySnapshot();
+      const property = snapshot.property;
       const keeps = parseKeepsCount(raw);
       const intervalDays = resolveFreshnessDecayIntervalDays(api, entry, raw, content);
       const schedulesName =
@@ -181,6 +193,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           invalid: decay.invalid,
         },
         property,
+        priorityLoadError: snapshot.loadError,
         baseDate: new Date(),
         random: Math.random,
         currentScheduled,
@@ -194,7 +207,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         String(content || ""),
         line,
       );
-      const priorityConfig = serializeFreshnessDecayPriorityProperty(property);
+      const priorityConfig = snapshot.priorityConfig;
       const taskText = cleanTaskDisplayText(raw);
       const noteBase = String(filePath || "").split("/").pop() || String(filePath || "");
       const createdField = findBulletPropertyField(raw, "created");
@@ -225,7 +238,10 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         currentScheduled,
         currentValue,
         childBlock,
+        config: snapshot.config,
+        property,
         priorityConfig,
+        priorityLoadError: snapshot.loadError,
         decay,
         plan,
         rows: buildFreshnessDecayCardRows(plan),
@@ -362,7 +378,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       ) {
         return stale("interval");
       }
-      const property = findFreshnessDecayPriorityProperty(this.config);
+      const snapshot = this.loadFreshnessDecayPrioritySnapshot();
+      const property = snapshot.property;
       const schedulesName =
         property && typeof property.schedules === "string" ? property.schedules : "";
       const scheduledField =
@@ -384,8 +401,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         return stale("priority");
       }
       if (
-        serializeFreshnessDecayPriorityProperty(property) !==
-        cardCtx.priorityConfig
+        snapshot.loadError !== cardCtx.priorityLoadError ||
+        snapshot.priorityConfig !== cardCtx.priorityConfig
       ) {
         return stale("priority-config");
       }
@@ -553,9 +570,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
 
   // Resolve a previewed deferral pick to its configured level. Unknown
   // labels (or a missing ladder) refuse rather than inventing a level.
-  resolveFreshnessDecayCardLevel(pick) {
+  resolveFreshnessDecayCardLevel(pick, property) {
     try {
-      const property = findFreshnessDecayPriorityProperty(this.config);
       if (!property || !Array.isArray(property.levels)) {
         return null;
       }
@@ -586,12 +602,14 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         new Notice("That choice is unavailable; nothing was written");
         return false;
       }
-      const property = findFreshnessDecayPriorityProperty(this.config);
+      const property = cardCtx.property;
       if (!property) {
-        new Notice("No priority ladder is configured; nothing was written");
+        new Notice(
+          `${cardCtx.priorityLoadError || "no `priority` property in bob/config.yml"}; nothing was written`,
+        );
         return false;
       }
-      const level = this.resolveFreshnessDecayCardLevel(pick);
+      const level = this.resolveFreshnessDecayCardLevel(pick, property);
       if (!level) {
         new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
         return false;

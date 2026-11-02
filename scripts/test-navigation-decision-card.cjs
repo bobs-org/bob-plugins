@@ -63,6 +63,7 @@ const { helpers } = NavigationHotkeysPlugin;
 Module._load = originalLoad;
 
 const {
+  buildFreshnessDecayCardFooter,
   buildFreshnessDecayCardRows,
   createDependencyNavApi,
   findFreshnessDecayPriorityProperty,
@@ -262,6 +263,34 @@ test("rows: P0 entry shows the recommended Not now with a clean window", () => {
   );
 });
 
+test("rows: unavailable Not now recommends Keep", () => {
+  const card = planFreshnessDecayCard({
+    keeps: 3,
+    intervalDays: 7,
+    freshnessDecay: { ...decayPolicy(), invalid: true },
+    property: decayProperty(),
+    baseDate: new Date(2026, 9, 20),
+    random: () => 0,
+    currentScheduled: "2026-10-01",
+  });
+  const rows = buildFreshnessDecayCardRows(card);
+  assert.equal(rows.find((row) => row.action === "notNow").recommended, false);
+  assert.equal(rows.find((row) => row.action === "keep").recommended, true);
+  assert.equal(
+    buildFreshnessDecayCardFooter(rows),
+    "Esc changes nothing · D / X drops · 1–4 pick a P-level instead",
+  );
+});
+
+test("footer omits 1–4 when no level rows exist", () => {
+  const footer = buildFreshnessDecayCardFooter([
+    { key: "Enter", action: "notNow", available: false, recommended: false },
+    { key: "D", action: "drop", available: true, recommended: false },
+    { key: "Alt+F", action: "keep", available: true, recommended: true },
+  ]);
+  assert.equal(footer, "Esc changes nothing · D / X drops");
+});
+
 test("rows: invalid priority config disables Not now and levels, keeps safe rows", () => {
   const card = planFreshnessDecayCard({
     keeps: 3,
@@ -389,6 +418,17 @@ test("modal: Enter approves once; later keys cannot approve again", () => {
   modal.handleKey(fakeKey({ key: "Enter" }));
   modal.handleKey(fakeKey({ key: "d" }));
   assert.deepEqual(chosen, ["notNow"]);
+});
+
+test("modal: Enter follows the recommended row when Keep is recommended", () => {
+  const rows = testRows().map((row) => ({
+    ...row,
+    recommended: row.action === "keep",
+    available: row.action === "notNow" ? false : row.available,
+  }));
+  const { modal, chosen } = openTestCard({ rows });
+  modal.handleKey(fakeKey({ key: "Enter" }));
+  assert.deepEqual(chosen, ["keep"]);
 });
 
 test("modal: letter keys, Alt+F, Ctrl+Alt+F, and 1-4 activate the same actions as click", () => {

@@ -1506,13 +1506,17 @@ function loadRelationsLinkedFromMentionsEnabled(options = {}) {
 }
 
 function loadBulletPropertyConfig(options = {}) {
+  const detailed = options.detailed === true;
+  const fail = (error, notice) => {
+    showBulletPropertyNotice(notice, options);
+    return detailed ? Object.freeze({ config: null, error }) : null;
+  };
   const fsModule =
     options.fsModule === undefined
       ? requireOptionalNodeModule("fs")
       : options.fsModule;
   if (!fsModule || typeof fsModule.readFileSync !== "function") {
-    showBulletPropertyNotice(BULLET_PROPERTY_CONFIG_MOBILE_NOTICE, options);
-    return null;
+    return fail("unreadable", BULLET_PROPERTY_CONFIG_MOBILE_NOTICE);
   }
 
   const configPath =
@@ -1526,48 +1530,48 @@ function loadBulletPropertyConfig(options = {}) {
     rawConfig = fsModule.readFileSync(configPath, "utf8");
   } catch (error) {
     if (error && error.code === "ENOENT") {
-      showBulletPropertyNotice(
+      return fail(
+        "missing",
         `Bullet property config not found: ${configPath}. Run chezmoi apply ~/.config/bob/config.yml.`,
-        options,
-      );
-    } else {
-      showBulletPropertyNotice(
-        `Could not read bullet property config: ${
-          error && error.message ? error.message : String(error)
-        }`,
-        options,
       );
     }
-    return null;
+    return fail(
+      "unreadable",
+      `Could not read bullet property config: ${
+        error && error.message ? error.message : String(error)
+      }`,
+    );
   }
 
   const yamlParser =
     options.parseYaml === undefined ? parseYaml : options.parseYaml;
   if (typeof yamlParser !== "function") {
-    showBulletPropertyNotice(
-      "Bullet property config parser is unavailable",
-      options,
-    );
-    return null;
+    return fail("unreadable", "Bullet property config parser is unavailable");
   }
 
   let parsedConfig;
   try {
     parsedConfig = yamlParser(rawConfig);
   } catch (error) {
-    showBulletPropertyNotice(
+    return fail(
+      "invalid",
       `Could not parse bullet property config: ${
         error && error.message ? error.message : String(error)
       }`,
-      options,
     );
-    return null;
   }
 
-  return validateBulletPropertyConfig(parsedConfig, {
+  const config = validateBulletPropertyConfig(parsedConfig, {
     ...options,
     configPath,
   });
+  if (detailed) {
+    return Object.freeze({
+      config: config || null,
+      error: config ? null : "invalid",
+    });
+  }
+  return config;
 }
 
 function isBulletLine(line) {
@@ -4617,7 +4621,7 @@ function resolveFreshnessDecayEnterLevel(property, enterLabel) {
 }
 
 // P0 entry: the first configured level in ladder order with
-// `min_days > effective interval`. A valid fixed `enter` level overrides the
+// `min_days >= effective interval`. A valid fixed `enter` level overrides the
 // scan. Returns `{ level }` or `{ unavailable, reason }`. Never shortens the
 // lease, never picks the last level silently, never cancels.
 function resolveFreshnessDecayP0EntryLevel(property, intervalDays, enterLabel) {
@@ -4645,7 +4649,7 @@ function resolveFreshnessDecayP0EntryLevel(property, intervalDays, enterLabel) {
       Number.isInteger(level.minDays) &&
       Number.isInteger(level.maxDays) &&
       level.minDays <= level.maxDays &&
-      level.minDays > interval,
+      level.minDays >= interval,
   );
   if (!entry) {
     return {
@@ -4824,6 +4828,10 @@ function planFreshnessDecayCard(options = {}) {
   const decayEnabled = decay.enabled !== false;
   const property = options.property || null;
   const hasPriorityLadder = Boolean(property && property.values === "priority");
+  const priorityLoadError =
+    typeof options.priorityLoadError === "string" && options.priorityLoadError
+      ? options.priorityLoadError
+      : "no `priority` property in bob/config.yml";
   const baseDate = options.baseDate instanceof Date ? options.baseDate : new Date();
   const random = typeof options.random === "function" ? options.random : Math.random;
   const todayText = formatBulletPropertyDate(getLocalDateStart(baseDate));
@@ -4869,7 +4877,7 @@ function planFreshnessDecayCard(options = {}) {
   } else if (!decayEnabled) {
     notNow = unavailable("decay is off");
   } else if (!hasPriorityLadder) {
-    notNow = unavailable("no priority ladder is configured");
+    notNow = unavailable(priorityLoadError);
   } else if (!currentValue) {
     const entry = resolveFreshnessDecayP0EntryLevel(property, intervalDays, enterLabel);
     if (entry.unavailable) {
@@ -5095,7 +5103,7 @@ function planFreshnessDecayCard(options = {}) {
           available: false,
           unavailableReason: decayInvalid
             ? "priority config is invalid"
-            : "no priority ladder is configured",
+            : priorityLoadError,
           date: "",
           offset: null,
           reason: "",
@@ -5503,7 +5511,8 @@ function buildFreshnessDecayCardRows(plan) {
     };
     const rows = [];
     const notNow = source.notNow && typeof source.notNow === "object" ? source.notNow : {};
-    if (notNow.available === true) {
+    const notNowAvailable = notNow.available === true;
+    if (notNowAvailable) {
       rows.push(
         Object.freeze({
           key: "Enter",
@@ -5596,7 +5605,7 @@ function buildFreshnessDecayCardRows(plan) {
         detail: "say why · logs 🥀 · asks again next review",
         available: true,
         unavailableReason: null,
-        recommended: false,
+        recommended: !notNowAvailable,
       }),
     );
     const levels = Array.isArray(source.levels) ? source.levels : [];
@@ -5642,6 +5651,81 @@ function buildFreshnessDecayCardRows(plan) {
 // or apply twice — and the card never opens nested cards. Selection,
 // mouse, and keyboard activate the same action. Never throws out of the
 // callbacks; dismissal writes nothing.
+// ---- src/051-decay-priority-snapshot.js ----
+// Snapshot the priority ladder from bob/config.yml for the decay card.
+// Never reads `this.config` on the plugin: the picker is the only owner of
+// that field. Distinct load errors replace the single "no priority ladder
+// is configured" dead end.
+
+const FRESHNESS_DECAY_PRIORITY_LOAD_ERRORS = Object.freeze({
+  missing: "config file missing",
+  unreadable: "config unreadable",
+  invalid: "config invalid",
+  noProperty: "no `priority` property in bob/config.yml",
+});
+
+function freezeFreshnessDecayPrioritySnapshot(fields) {
+  const property = fields && fields.property ? fields.property : null;
+  return Object.freeze({
+    config: fields && fields.config ? fields.config : null,
+    property,
+    loadError: fields && fields.loadError ? fields.loadError : null,
+    priorityConfig:
+      fields && typeof fields.priorityConfig === "string"
+        ? fields.priorityConfig
+        : serializeFreshnessDecayPriorityProperty(property),
+  });
+}
+
+function loadFreshnessDecayPrioritySnapshot(options = {}) {
+  const loaded = loadBulletPropertyConfig({
+    ...options,
+    detailed: true,
+    showNotice:
+      typeof options.showNotice === "function" ? options.showNotice : () => {},
+  });
+  const error = loaded && loaded.error ? loaded.error : null;
+  const config = loaded && loaded.config ? loaded.config : null;
+  if (error === "missing") {
+    return freezeFreshnessDecayPrioritySnapshot({
+      loadError: FRESHNESS_DECAY_PRIORITY_LOAD_ERRORS.missing,
+    });
+  }
+  if (error === "unreadable") {
+    return freezeFreshnessDecayPrioritySnapshot({
+      loadError: FRESHNESS_DECAY_PRIORITY_LOAD_ERRORS.unreadable,
+    });
+  }
+  if (error === "invalid" || !config) {
+    return freezeFreshnessDecayPrioritySnapshot({
+      loadError: FRESHNESS_DECAY_PRIORITY_LOAD_ERRORS.invalid,
+    });
+  }
+  const property = findFreshnessDecayPriorityProperty(config);
+  if (!property) {
+    return freezeFreshnessDecayPrioritySnapshot({
+      config,
+      loadError: FRESHNESS_DECAY_PRIORITY_LOAD_ERRORS.noProperty,
+    });
+  }
+  return freezeFreshnessDecayPrioritySnapshot({ config, property });
+}
+
+function buildFreshnessDecayCardFooter(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const parts = ["Esc changes nothing"];
+  if (list.some((row) => row && row.action === "drop")) {
+    parts.push("D / X drops");
+  }
+  if (
+    list.some(
+      (row) => row && typeof row.action === "string" && row.action.startsWith("level:"),
+    )
+  ) {
+    parts.push("1–4 pick a P-level instead");
+  }
+  return parts.join(" · ");
+}
 // ---- src/060-decay-card-modal.js ----
 class FreshnessDecayCardModal extends Modal {
   constructor(app, options) {
@@ -5701,21 +5785,21 @@ class FreshnessDecayCardModal extends Modal {
     this.renderRows();
     contentEl.createDiv({
       cls: "bob-decay-card-footer bob-key-card-footer",
-      text: "Esc changes nothing · D / X drops · 1–4 pick a P-level instead",
+      text: buildFreshnessDecayCardFooter(this.decayRows),
     });
     contentEl.addEventListener("keydown", (event) => this.handleKey(event));
     window.setTimeout(() => {
-      this.focusKeepRowOrFirst();
+      this.focusRecommendedRowOrFirst();
     }, 0);
   }
 
-  focusKeepRowOrFirst() {
-    const keepIndex = this.decayRows.findIndex(
-      (row) => row && row.action === "keep" && row.available,
+  focusRecommendedRowOrFirst() {
+    const recommendedIndex = this.decayRows.findIndex(
+      (row) => row && row.recommended && row.available,
     );
     const ordered =
-      keepIndex >= 0
-        ? [this.rowEls[keepIndex], ...this.rowEls]
+      recommendedIndex >= 0
+        ? [this.rowEls[recommendedIndex], ...this.rowEls]
         : this.rowEls;
     for (const rowEl of ordered) {
       if (rowEl && typeof rowEl.focus === "function") {
@@ -5820,7 +5904,7 @@ class FreshnessDecayCardModal extends Modal {
     this.keepStageActive = false;
     this.renderRows();
     window.setTimeout(() => {
-      this.focusKeepRowOrFirst();
+      this.focusRecommendedRowOrFirst();
     }, 0);
     return true;
   }
@@ -5916,7 +6000,10 @@ class FreshnessDecayCardModal extends Modal {
     if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
-      this.choose("notNow");
+      const recommended = this.decayRows.find(
+        (row) => row && row.recommended && row.available,
+      );
+      this.choose(recommended ? recommended.action : "notNow");
       return;
     }
     if (key === "l") {
@@ -72777,6 +72864,17 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     return fallback;
   }
 
+  // Load the priority ladder through the real config file, never
+  // `this.config`. Tests stub `freshnessDecayConfigLoadOptions`.
+  loadFreshnessDecayPrioritySnapshot() {
+    const options =
+      this.freshnessDecayConfigLoadOptions &&
+      typeof this.freshnessDecayConfigLoadOptions === "object"
+        ? this.freshnessDecayConfigLoadOptions
+        : {};
+    return loadFreshnessDecayPrioritySnapshot(options);
+  }
+
   // Build the card context for one resolved single-task trigger, or null
   // when the card cannot render (mixed versions, unusable plan) so the
   // caller falls back to counting. Never throws.
@@ -72796,7 +72894,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       const match = resolved.match;
       const entry = match && match.entry ? match.entry : null;
       const decay = this.readFreshnessDecayPolicy(api);
-      const property = findFreshnessDecayPriorityProperty(this.config);
+      const snapshot = this.loadFreshnessDecayPrioritySnapshot();
+      const property = snapshot.property;
       const keeps = parseKeepsCount(raw);
       const intervalDays = resolveFreshnessDecayIntervalDays(api, entry, raw, content);
       const schedulesName =
@@ -72823,6 +72922,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           invalid: decay.invalid,
         },
         property,
+        priorityLoadError: snapshot.loadError,
         baseDate: new Date(),
         random: Math.random,
         currentScheduled,
@@ -72836,7 +72936,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         String(content || ""),
         line,
       );
-      const priorityConfig = serializeFreshnessDecayPriorityProperty(property);
+      const priorityConfig = snapshot.priorityConfig;
       const taskText = cleanTaskDisplayText(raw);
       const noteBase = String(filePath || "").split("/").pop() || String(filePath || "");
       const createdField = findBulletPropertyField(raw, "created");
@@ -72867,7 +72967,10 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         currentScheduled,
         currentValue,
         childBlock,
+        config: snapshot.config,
+        property,
         priorityConfig,
+        priorityLoadError: snapshot.loadError,
         decay,
         plan,
         rows: buildFreshnessDecayCardRows(plan),
@@ -73004,7 +73107,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       ) {
         return stale("interval");
       }
-      const property = findFreshnessDecayPriorityProperty(this.config);
+      const snapshot = this.loadFreshnessDecayPrioritySnapshot();
+      const property = snapshot.property;
       const schedulesName =
         property && typeof property.schedules === "string" ? property.schedules : "";
       const scheduledField =
@@ -73026,8 +73130,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         return stale("priority");
       }
       if (
-        serializeFreshnessDecayPriorityProperty(property) !==
-        cardCtx.priorityConfig
+        snapshot.loadError !== cardCtx.priorityLoadError ||
+        snapshot.priorityConfig !== cardCtx.priorityConfig
       ) {
         return stale("priority-config");
       }
@@ -73195,9 +73299,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
 
   // Resolve a previewed deferral pick to its configured level. Unknown
   // labels (or a missing ladder) refuse rather than inventing a level.
-  resolveFreshnessDecayCardLevel(pick) {
+  resolveFreshnessDecayCardLevel(pick, property) {
     try {
-      const property = findFreshnessDecayPriorityProperty(this.config);
       if (!property || !Array.isArray(property.levels)) {
         return null;
       }
@@ -73228,12 +73331,14 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         new Notice("That choice is unavailable; nothing was written");
         return false;
       }
-      const property = findFreshnessDecayPriorityProperty(this.config);
+      const property = cardCtx.property;
       if (!property) {
-        new Notice("No priority ladder is configured; nothing was written");
+        new Notice(
+          `${cardCtx.priorityLoadError || "no `priority` property in bob/config.yml"}; nothing was written`,
+        );
         return false;
       }
-      const level = this.resolveFreshnessDecayCardLevel(pick);
+      const level = this.resolveFreshnessDecayCardLevel(pick, property);
       if (!level) {
         new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
         return false;
@@ -77885,7 +77990,7 @@ class BobNavigationHotkeysDecayCancelMixin {
         cardCtx.cm,
         { line: cardCtx.line, ch: 0 },
         liveLine,
-        this.config,
+        cardCtx.config || { properties: [] },
         {
           filePath: cardCtx.filePath,
           baseDate: getLocalDateStart(new Date()),
@@ -103146,4 +103251,13 @@ Object.assign(module.exports.helpers, {
   relationNoticeTitleFromRows,
   relationNoticeReceiptFromRows,
   relationNoticeUncertaintyLine,
+});
+// ---- src/707-decay-hotfix-exports.js ----
+// Decay-card hotfix helpers. Sibling fragment so src/700-exports.js stays
+// under the 1000-line cap.
+Object.assign(module.exports.helpers, {
+  FRESHNESS_DECAY_PRIORITY_LOAD_ERRORS,
+  freezeFreshnessDecayPrioritySnapshot,
+  loadFreshnessDecayPrioritySnapshot,
+  buildFreshnessDecayCardFooter,
 });

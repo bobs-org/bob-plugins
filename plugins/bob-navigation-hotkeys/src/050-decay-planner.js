@@ -151,6 +151,10 @@ function planFreshnessDecayCard(options = {}) {
   const decayEnabled = decay.enabled !== false;
   const property = options.property || null;
   const hasPriorityLadder = Boolean(property && property.values === "priority");
+  const priorityLoadError =
+    typeof options.priorityLoadError === "string" && options.priorityLoadError
+      ? options.priorityLoadError
+      : "no `priority` property in bob/config.yml";
   const baseDate = options.baseDate instanceof Date ? options.baseDate : new Date();
   const random = typeof options.random === "function" ? options.random : Math.random;
   const todayText = formatBulletPropertyDate(getLocalDateStart(baseDate));
@@ -196,7 +200,7 @@ function planFreshnessDecayCard(options = {}) {
   } else if (!decayEnabled) {
     notNow = unavailable("decay is off");
   } else if (!hasPriorityLadder) {
-    notNow = unavailable("no priority ladder is configured");
+    notNow = unavailable(priorityLoadError);
   } else if (!currentValue) {
     const entry = resolveFreshnessDecayP0EntryLevel(property, intervalDays, enterLabel);
     if (entry.unavailable) {
@@ -422,7 +426,7 @@ function planFreshnessDecayCard(options = {}) {
           available: false,
           unavailableReason: decayInvalid
             ? "priority config is invalid"
-            : "no priority ladder is configured",
+            : priorityLoadError,
           date: "",
           offset: null,
           reason: "",
@@ -830,7 +834,8 @@ function buildFreshnessDecayCardRows(plan) {
     };
     const rows = [];
     const notNow = source.notNow && typeof source.notNow === "object" ? source.notNow : {};
-    if (notNow.available === true) {
+    const notNowAvailable = notNow.available === true;
+    if (notNowAvailable) {
       rows.push(
         Object.freeze({
           key: "Enter",
@@ -923,7 +928,7 @@ function buildFreshnessDecayCardRows(plan) {
         detail: "say why · logs 🥀 · asks again next review",
         available: true,
         unavailableReason: null,
-        recommended: false,
+        recommended: !notNowAvailable,
       }),
     );
     const levels = Array.isArray(source.levels) ? source.levels : [];

@@ -135,6 +135,27 @@ function planCard(overrides = {}) {
   });
 }
 
+test("P0 at interval 3 on Bryan's ladder enters P1", () => {
+  const property = decayProperty({
+    levels: [
+      { label: "P1", value: "high", min_days: 3, max_days: 8 },
+      { label: "P2", value: "medium", min_days: 9, max_days: 31 },
+      { label: "P3", value: "low", min_days: 32, max_days: 100 },
+      { label: "P4", value: "lowest", min_days: 101, max_days: 365 },
+    ],
+  });
+  const card = planCard({ property, currentValue: "", intervalDays: 3 });
+  assert.ok(card.notNow.available);
+  assert.equal(card.notNow.levelLabel, "P1");
+  const entry = helpers.resolveFreshnessDecayP0EntryLevel(property, 3, "");
+  assert.equal(entry.level.label, "P1");
+});
+
+test("P0 at interval 7 still enters P2 on the default 2–7 / 8–30 ladder", () => {
+  const entry = helpers.resolveFreshnessDecayP0EntryLevel(decayProperty(), 7, "");
+  assert.equal(entry.level.label, "P2");
+});
+
 test("P0 at interval 7 enters P2 with a previewed decay date and kept tail", () => {
   const card = planCard({ currentValue: "" });
   assert.equal(card.fromLabel, "P0");
@@ -446,4 +467,50 @@ test("card model is deeply frozen", () => {
   assert.ok(Object.isFrozen(card.notNow));
   assert.ok(Object.isFrozen(card.lessOften));
   assert.ok(Object.isFrozen(card.levels));
+});
+
+test("priority snapshot reports distinct load errors", () => {
+  const missing = helpers.loadFreshnessDecayPrioritySnapshot({
+    configPath: "/missing.yml",
+    fsModule: {
+      readFileSync: () => {
+        const error = new Error("ENOENT");
+        error.code = "ENOENT";
+        throw error;
+      },
+    },
+    parseYaml: JSON.parse,
+  });
+  assert.equal(missing.loadError, "config file missing");
+  assert.equal(missing.priorityConfig, "null");
+
+  const unreadable = helpers.loadFreshnessDecayPrioritySnapshot({
+    configPath: "/denied.yml",
+    fsModule: {
+      readFileSync: () => {
+        throw new Error("EACCES");
+      },
+    },
+    parseYaml: JSON.parse,
+  });
+  assert.equal(unreadable.loadError, "config unreadable");
+
+  const invalid = helpers.loadFreshnessDecayPrioritySnapshot({
+    configPath: "/bad.yml",
+    fsModule: { readFileSync: () => "nope" },
+    parseYaml: () => {
+      throw new Error("malformed");
+    },
+  });
+  assert.equal(invalid.loadError, "config invalid");
+
+  const noProperty = helpers.loadFreshnessDecayPrioritySnapshot({
+    configPath: "/noprop.yml",
+    fsModule: {
+      readFileSync: () =>
+        JSON.stringify({ properties: [{ name: "scheduled", values: "date" }] }),
+    },
+    parseYaml: JSON.parse,
+  });
+  assert.equal(noProperty.loadError, "no `priority` property in bob/config.yml");
 });

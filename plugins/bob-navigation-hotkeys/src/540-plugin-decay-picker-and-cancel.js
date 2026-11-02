@@ -21,7 +21,7 @@ class BobNavigationHotkeysDecayCancelMixin {
         cardCtx.cm,
         { line: cardCtx.line, ch: 0 },
         liveLine,
-        this.config,
+        cardCtx.config || { properties: [] },
         {
           filePath: cardCtx.filePath,
           baseDate: getLocalDateStart(new Date()),

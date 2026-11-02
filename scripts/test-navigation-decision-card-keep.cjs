@@ -117,6 +117,25 @@ function decayConfig() {
   return config;
 }
 
+function decayYaml() {
+  return JSON.stringify({
+    properties: [
+      { name: "scheduled", values: "date" },
+      {
+        name: "priority",
+        values: "priority",
+        schedules: "scheduled",
+        levels: [
+          { label: "P1", value: "high", min_days: 2, max_days: 7 },
+          { label: "P2", value: "medium", min_days: 8, max_days: 30 },
+          { label: "P3", value: "low", min_days: 31, max_days: 90 },
+          { label: "P4", value: "lowest", min_days: 91, max_days: 365 },
+        ],
+      },
+    ],
+  });
+}
+
 const realKeep = (line, dateText, options) =>
   ledgerHelpers.freshnessKeepLine(line, dateText || DATE, options).line;
 const realStamp = (line, dateText) =>
@@ -288,7 +307,11 @@ function makePlugin({ filePath, editor, freshness, dateText = DATE }) {
     workspace: { getActiveViewOfType: () => view },
     vault: { getAbstractFileByPath: () => null },
   };
-  plugin.config = decayConfig();
+  plugin.freshnessDecayConfigLoadOptions = {
+    configPath: "/tmp/bob/config.yml",
+    fsModule: { readFileSync: () => decayYaml() },
+    parseYaml: JSON.parse,
+  };
   plugin.reviewAnchor = null;
   plugin.view = view;
   plugin.laneReleaseDateText = () => dateText;

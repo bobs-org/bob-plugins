@@ -7,6 +7,7 @@
   "030-bullet-blocks-and-logs.js",
   "040-priority-roll.js",
   "050-decay-planner.js",
+  "051-decay-priority-snapshot.js",
   "060-decay-card-modal.js",
   "070-recommended-roll-batch.js",
   "080-dependency-identity.js",
@@ -183,5 +184,6 @@
   "703-successor-keep-moving-exports.js",
   "704-pomodoro-split-exports.js",
   "705-relation-successor-exports.js",
-  "706-successor-relation-exports.js"
+  "706-successor-relation-exports.js",
+  "707-decay-hotfix-exports.js"
 ]

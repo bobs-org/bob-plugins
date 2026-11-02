@@ -6909,51 +6909,8 @@ function computeSuccessorAnchors(closedIdentities, dailyLines, options = {}) {
   );
 }
 
-function successorHasHideTag(rawLine) {
-  return String(rawLine || "")
-    .split(/\s+/)
-    .some((token) => token === "#hide");
-}
-
-function successorIsProjectTask(blockId) {
-  return typeof blockId === "string" && blockId.toLowerCase() === "prj";
-}
-
-function successorIsDonePath(path) {
-  return String(path || "")
-    .split("/")
-    .some((segment) => segment === "done");
-}
-
-// Row display text: the mint-pipeline cleaning of the body after the status
-// box (mirroring Rust's `clean_description` row text).
-function successorDisplayText(task, globalFilter = "#task") {
-  if (!task) {
-    return "";
-  }
-  const filter = globalFilter === "#task" && task.globalFilter
-    ? task.globalFilter
-    : globalFilter;
-  if (task.rawLine) {
-    return cleanDescription(
-      successorBodyAfterStatusBox(task.rawLine),
-      filter,
-      task.blockId || null,
-    );
-  }
-  return String(task.text || "");
-}
-
-function collectSuccessorUsedIds(noteText) {
-  const used = new Set();
-  for (const line of successorNormalizeLines(noteText)) {
-    const id = getTrailingBlockId(line);
-    if (id) {
-      used.add(String(id));
-    }
-  }
-  return used;
-}
+// Display + identity helpers live in 085d-successor-relation-merge.js
+// (shared scope) so this fragment stays under the 1000-line cap.
 
 // Default inbox check: `inbox.md` at the vault root (the root case of nav's
 // `isInboxNotePath`). Pass a richer `isInbox` when vault frontmatter is
@@ -7194,9 +7151,32 @@ function planSuccessors(options = {}) {
       ? new Map(extra.foldedByProject)
       : new Map();
     for (const [path, counts] of keepMoving.foldedByProject) folded.set(path, counts);
+    // Relation offers (offer_pipeline): pure R1-R7 on post-recovery state.
+    // Inactive unless the caller supplies relation inputs (done_runtime wires them).
+    let relationMarks = [];
+    let relationHeld = [];
+    let relationCheck = null;
+    let relationScan = false;
+    if (typeof successorRelationHasInputs === "function" && successorRelationHasInputs(options)) {
+      try {
+        const result = planSuccessorRelationForContext({
+          options, recovers, stillBlocked, noteTexts,
+          dailyBefore, dailyAfter, dailyPath, today, linkUnblocked, cancelled: cancelledClose,
+        });
+        if (result && (result.scan === true || result.relation_check === "unavailable")) {
+          relationMarks = Array.isArray(result.marks) ? result.marks : [];
+          relationHeld = Array.isArray(result.held) ? result.held : [];
+          relationCheck = result.relation_check || null;
+          relationScan = result.scan === true;
+        }
+      } catch (_error) {
+        relationMarks = [];
+        relationHeld = [];
+      }
+    }
     return applySuccessorVerdicts({
       recovers,
-      successorMarks: [...successorMarks, ...keepMoving.marks],
+      successorMarks: [...successorMarks, ...keepMoving.marks, ...relationMarks],
       stillBlocked,
       projectTagStripEdits,
       dailyPath,
@@ -7217,11 +7197,16 @@ function planSuccessors(options = {}) {
       foldedByProject: folded,
       projectHeaders: extra.projectHeaders || new Map(),
       successorTheme,
+      relationHeld,
+      relationCheck,
+      relationScan,
     });
   };
-  // GATE: no `[id::]` in C and no pull-in candidate → nothing.
-  // A `[?]` R pull-in still recovers N's residents via the same
-  // project-recovery wiring as the id branch (P3).
+  // GATE: no `[id::]` in C and no pull-in candidate → nothing, unless
+  // relation candidates/unavailable checks can reach the common result
+  // (offer_pipeline idless fix for SA26 zero-id lookups).
+  const hasRelationGate = typeof successorRelationHasInputs === "function" &&
+    successorRelationHasInputs(options);
   if (closedTaskIds.size === 0) {
     if (!pullIns.hasCandidates) {
       const keepMovingPlan = planSuccessorKeepMoving({
@@ -7237,6 +7222,10 @@ function planSuccessors(options = {}) {
           : null),
         closingEntry,
       });
+      if (!keepMovingPlan.marks.length && !hasRelationGate) return empty;
+      if (!keepMovingPlan.marks.length && hasRelationGate) {
+        return applyContext([], [], [], [], () => false, { keepMovingPlan });
+      }
       if (!keepMovingPlan.marks.length) return empty;
       return applyContext([], [], [], [], () => false, { keepMovingPlan });
     }
@@ -7773,9 +7762,12 @@ function buildSuccessorPickerModel(options = {}) {
     ? options.headers
     : new Map(Object.entries(options.headers || {}));
   const byGroup = new Map();
-  const ensureGroup = (group, project) => {
-    const key = `${group}\0${project || ""}`;
-    if (!byGroup.has(key)) {
+  const relationHeld = Array.isArray(options.relationHeld) ? options.relationHeld : [];
+  const ensureGroup = (group, project, extra = {}) => {
+    const relationKey = group === "relation"
+      ? `${group}\0${extra.after || ""}\0${extra.labelKey || extra.label || ""}`
+      : `${group}\0${project || ""}`;
+    if (!byGroup.has(relationKey)) {
       let header = "";
       if (group === "hand_off") {
         header = "Hand-offs";
@@ -7786,25 +7778,77 @@ function buildSuccessorPickerModel(options = {}) {
       } else if (group === "keep_moving") {
         const stem = String(project || "").split("/").pop().replace(/\.md$/i, "") || String(project || "");
         header = `Keep ‹${stem}› moving`;
+      } else if (group === "relation") {
+        const label = String(extra.label || "");
+        const target = String(extra.afterText || "");
+        try {
+          header = typeof relationCopyGroupTitle === "function" && label
+            ? relationCopyGroupTitle(label, target)
+            : `${label} \u201c${target}\u201d`;
+        } catch (_error) {
+          header = `${label} \u201c${target}\u201d`;
+        }
       }
-      byGroup.set(key, {
+      const entry = {
         group,
-        ...(project ? { project } : {}),
+        ...(project && group !== "relation" ? { project } : {}),
         header,
-        ...(group === "keep_moving" ? {
-          caption: "",
-          tag: `ready in ${String(project || "").split("/").pop().replace(/\.md$/i, "")} · not dependents`,
-        } : {}),
         rows: [],
-      });
+      };
+      if (group === "keep_moving") {
+        entry.caption = "";
+        entry.tag = `ready in ${String(project || "").split("/").pop().replace(/\.md$/i, "")} · not dependents`;
+      }
+      if (group === "relation") {
+        let caption = "";
+        let tag = "";
+        try {
+          caption = typeof relationCopyWhy === "function"
+            ? relationCopyWhy(extra.afterText || "", extra.event || "")
+            : "";
+          tag = typeof relationCopyTag === "function" ? relationCopyTag() : "your links \u00b7 not dependents";
+        } catch (_error) {
+          caption = "";
+          tag = "your links \u00b7 not dependents";
+        }
+        entry.caption = caption;
+        entry.tag = tag;
+        entry.after = {
+          notePath: String((extra.afterParts && extra.afterParts.notePath) || ""),
+          blockId: String((extra.afterParts && extra.afterParts.blockId) || ""),
+          text: String(extra.afterText || ""),
+        };
+        entry.event = String(extra.event || "");
+        entry.label = String(extra.label || "");
+        entry.foldText = "";
+      }
+      byGroup.set(relationKey, entry);
     }
-    return byGroup.get(key);
+    return byGroup.get(relationKey);
   };
   for (const offer of offers) {
     if (!offer || !offer.key) {
       continue;
     }
-    const entry = ensureGroup(offer.group || "hand_off", offer.project || null);
+    const groupName = offer.group || "hand_off";
+    let afterParts = null;
+    if (groupName === "relation" && offer.after) {
+      const raw = String(offer.after);
+      const hash = raw.indexOf("#^");
+      if (hash >= 0) {
+        afterParts = { notePath: raw.slice(0, hash), blockId: raw.slice(hash + 2) };
+      } else {
+        afterParts = { notePath: raw, blockId: "" };
+      }
+    }
+    const entry = ensureGroup(groupName, offer.project || null, {
+      after: offer.after || "",
+      afterParts,
+      afterText: offer.afterText || "",
+      event: offer.event || "",
+      label: offer.label || "",
+      labelKey: offer.labelKey || "",
+    });
     const row = {
       key: String(offer.key),
       text: String(offer.text || ""),
@@ -7814,6 +7858,22 @@ function buildSuccessorPickerModel(options = {}) {
       needsBlockId: offer.needsBlockId === true,
       selectable: true,
     };
+    if (groupName === "relation") {
+      const lane = String(offer.lane || (offer.status === "*" ? "Next" : "Ready"));
+      if (lane) row.lane = lane;
+      if (offer.suffix) row.suffix = String(offer.suffix);
+      if (offer.reason) row.reason = String(offer.reason);
+      else if (offer.label && offer.afterText) {
+        try {
+          row.reason = typeof relationCopyReason === "function"
+            ? relationCopyReason(offer.label, offer.afterText)
+            : `· ${offer.label} \u201c${offer.afterText}\u201d`;
+        } catch (_error) {}
+      }
+    }
+    if (offer.reason && groupName !== "relation") {
+      row.reason = String(offer.reason);
+    }
     if (entry.group === "keep_moving") {
       row.lane = successorKeepMovingLaneName(offer.status) || successorStatusName(offer.status);
       const preds = Array.isArray(offer.predecessorRows) ? offer.predecessorRows : [];
@@ -7858,21 +7918,89 @@ function buildSuccessorPickerModel(options = {}) {
       mutedReason: String(row.reason || "project"),
     });
   }
-  const groups = [];
-  for (const group of ["hand_off", "project", "project_finished"]) {
-    for (const entry of byGroup.values()) {
-      if (entry.group !== group) {
-        continue;
-      }
-      const folded = foldedByProject.get(entry.project || "") || null;
-      if (folded && (folded.hidden > 0 || folded.alreadyPlanned > 0 || folded.subProjects > 0)) {
-        entry.folded = {
-          hidden: folded.hidden || 0,
-          alreadyPlanned: folded.alreadyPlanned || 0,
-          subProjects: folded.subProjects || 0,
-          ...(folded.blocked > 0 ? { blocked: folded.blocked } : {}),
-          ...(folded.scheduled > 0 ? { scheduled: folded.scheduled } : {}),
+  // Attach held counts + fold text to relation groups (offer_pipeline v3).
+  for (const entry of byGroup.values()) {
+    if (entry.group !== "relation") continue;
+    const afterKey = `${entry.after && entry.after.notePath || ""}#^${entry.after && entry.after.blockId || ""}`;
+    const labelKey = String(entry.label || "").toLowerCase();
+    const heldForGroup = relationHeld.filter((held) => {
+      if (!held || typeof held !== "object") return false;
+      const heldAfter = String(held.after || (held.relation && held.relation.after && held.relation.after[0] && `${held.relation.after[0].note_path}#^${held.relation.after[0].block_id}`) || "");
+      const heldLabel = String(held.labelKey || held.label || (held.relation && (held.relation.key || held.relation.label)) || "").toLowerCase();
+      // Match by after target + label; fall back to label-only when after is empty.
+      if (afterKey && afterKey !== "#^" && heldAfter) return heldAfter === afterKey && heldLabel === labelKey;
+      return heldLabel === labelKey;
+    });
+    let hidden = 0;
+    let blocked = 0;
+    let alreadyStarted = 0;
+    let waitsFor = 0;
+    let alreadyPlanned = 0;
+    for (const held of heldForGroup) {
+      if (held.reason === "hidden") hidden += 1;
+      else if (held.reason === "blocked") blocked += 1;
+      else if (held.reason === "already_started") alreadyStarted += 1;
+      else if (held.reason === "waits_for") waitsFor += Array.isArray(held.waits_for) && held.waits_for.length > 0 ? held.waits_for.length : 1;
+      else if (held.reason === "already_planned") alreadyPlanned += 1;
+    }
+    entry.folded = {
+      hidden,
+      alreadyPlanned,
+      subProjects: 0,
+      blocked,
+      scheduled: 0,
+      alreadyStarted,
+      waitsFor,
+    };
+    // Fold text via shared copy (ui style); omit when no held rows apply.
+    if (heldForGroup.length > 0) {
+      try {
+        const first = heldForGroup[0] || {};
+        const foldInput = {
+          waits_for: (first.waits_for || []).map((key) => {
+            // Map waits_for target keys to display text when notes allow; fall back to key.
+            return String(key).split("#^").pop() || String(key);
+          }),
+          source: String(first.text || first.source || ""),
+          already_started: alreadyStarted,
+          blocked,
+          hidden,
+          target: String(entry.after && entry.after.text || ""),
         };
+        const fold = typeof relationCopyFold === "function" ? relationCopyFold(foldInput, "ui") : "";
+        if (fold) entry.foldText = fold;
+      } catch (_error) {}
+    }
+    // Rows within a relation group sort Next before Ready, then path/line (SA vectors).
+    entry.rows.sort((left, right) => {
+      const laneRank = (lane) => (lane === "Next" ? 0 : 1);
+      return laneRank(left.lane) - laneRank(right.lane) ||
+        String(left.notePath || "").localeCompare(String(right.notePath || "")) ||
+        0;
+    });
+  }
+  const groups = [];
+  for (const group of ["hand_off", "relation", "project", "project_finished"]) {
+    // Relation groups sort by T anchor position, then T path/line, then label key.
+    const entries = [...byGroup.values()].filter((entry) => entry.group === group);
+    if (group === "relation") {
+      entries.sort((left, right) =>
+        String(left.after && left.after.notePath || "").localeCompare(String(right.after && right.after.notePath || "")) ||
+        String(left.after && left.after.blockId || "").localeCompare(String(right.after && right.after.blockId || "")) ||
+        String(left.label || "").localeCompare(String(right.label || "")));
+    }
+    for (const entry of entries) {
+      if (group !== "relation") {
+        const folded = foldedByProject.get(entry.project || "") || null;
+        if (folded && (folded.hidden > 0 || folded.alreadyPlanned > 0 || folded.subProjects > 0)) {
+          entry.folded = {
+            hidden: folded.hidden || 0,
+            alreadyPlanned: folded.alreadyPlanned || 0,
+            subProjects: folded.subProjects || 0,
+            ...(folded.blocked > 0 ? { blocked: folded.blocked } : {}),
+            ...(folded.scheduled > 0 ? { scheduled: folded.scheduled } : {}),
+          };
+        }
       }
       groups.push(entry);
     }
@@ -7890,14 +8018,37 @@ function buildSuccessorPickerModel(options = {}) {
     groups.push(entry);
   }
   const keepOnly = groups.length > 0 && groups.every((entry) => entry.group === "keep_moving");
+  const relationOnly = groups.length > 0 && groups.every((entry) => entry.group === "relation");
   const keepProjects = [...new Set(groups.filter((entry) => entry.group === "keep_moving").map((entry) => entry.project))];
   const keepTitle = keepProjects.length === 1
     ? `Keep ‹${String(keepProjects[0]).split("/").pop().replace(/\.md$/i, "")}› moving`
     : `Keep ${keepProjects.length} projects moving`;
+  let relationTitle = "";
+  if (relationOnly) {
+    try {
+      const first = groups[0] || {};
+      const label = String(first.label || "starts after");
+      const target = String(first.after && first.after.text || "");
+      const count = groups.reduce((sum, group) => sum + ((group.rows && group.rows.length) || 0), 0);
+      if (groups.length === 1 && target) {
+        relationTitle = typeof relationCopyGroupTitle === "function"
+          ? relationCopyGroupTitle(label, target)
+          : `${label} \u201c${target}\u201d`;
+      } else {
+        relationTitle = typeof relationCopyPickerTitle === "function"
+          ? relationCopyPickerTitle({ label, count, targets: groups.map((group) => group.after && group.after.text).filter(Boolean) })
+          : `${label} ${count} tasks`;
+      }
+    } catch (_error) {
+      relationTitle = "";
+    }
+  }
   const model = {
     title: keepOnly
       ? keepTitle
-      : predecessors.length === 1
+      : relationOnly && relationTitle
+        ? relationTitle
+        : predecessors.length === 1
       ? `Pull in successors of ${predecessors[0].text || "task"}`
       : `Pull in successors (${predecessors.length} closed)`,
     predecessors: predecessors.map((pred) => ({
@@ -8263,21 +8414,69 @@ function computeProjectFoldedAndHeaders(projectInfoByPath, projectRecoveryPaths,
 
 // Group order for §12.2 ORDER: hand_off, project, project_finished.
 function successorGroupOrder(group) {
-  if (group === "hand_off") {
-    return 0;
-  }
-  if (group === "project") {
-    return 1;
-  }
-  if (group === "project_finished") {
-    return 2;
-  }
-  return group === "keep_moving" ? 3 : 2;
+  if (group === "hand_off") return 0;
+  if (group === "relation") return 1;
+  if (group === "project") return 2;
+  if (group === "project_finished") return 3;
+  if (group === "keep_moving") return 4;
+  return 3;
+}
+
+function successorRelationTargetKey(mark) {
+  try {
+    if (mark && typeof mark.after === "string" && mark.after) return String(mark.after);
+    const rel = mark && mark.relation;
+    if (rel && Array.isArray(rel.after) && rel.after[0]) {
+      const first = rel.after[0];
+      const path = String(first.path || "");
+      const blockId = String(first.blockId || first.block_id || "");
+      if (path && blockId) return `${path}#^${blockId}`;
+      if (path) return path;
+    }
+    const unblocked = mark && (mark.unblocked_by || mark.predecessorRows);
+    if (Array.isArray(unblocked) && unblocked[0]) {
+      const first = unblocked[0];
+      const path = String(first.note_path || first.path || "");
+      const blockId = String(first.block_id || first.blockId || "");
+      if (path && blockId) return `${path}#^${blockId}`;
+      if (path) return path;
+    }
+  } catch (_error) {}
+  return "";
+}
+
+function successorRelationLaneRank(status) {
+  if (status === "*") return 0;
+  return 1;
 }
 
 function successorOfferOrderCompare(left, right) {
-  const groupOrder = successorGroupOrder(left.group) - successorGroupOrder(right.group);
+  const groupOrder = successorGroupOrder(left.group || (left.pullIn ? "project_finished" : "hand_off")) - successorGroupOrder(right.group || (right.pullIn ? "project_finished" : "hand_off"));
   if (groupOrder) return groupOrder;
+  const leftIsRelation = (left.group || (left.pullIn ? "project_finished" : "hand_off")) === "relation";
+  const rightIsRelation = (right.group || (right.pullIn ? "project_finished" : "hand_off")) === "relation";
+  if (leftIsRelation || rightIsRelation) {
+    const anchorOrder = successorAnchorPosition(left.anchor) - successorAnchorPosition(right.anchor);
+    if (anchorOrder) return anchorOrder;
+    const bulletOrder = (left.anchor.bulletLine ?? -1) - (right.anchor.bulletLine ?? -1);
+    if (bulletOrder) return bulletOrder;
+    // Relation groups sort by T identity then label key (SA12/SA18).
+    const leftTarget = successorRelationTargetKey(left);
+    const rightTarget = successorRelationTargetKey(right);
+    const targetOrder = String(leftTarget).localeCompare(String(rightTarget));
+    if (targetOrder) return targetOrder;
+    const leftLabel = String(left.key || (left.relation && left.relation.key) || "");
+    const rightLabel = String(right.key || (right.relation && right.relation.key) || "");
+    const labelOrder = leftLabel.localeCompare(rightLabel);
+    if (labelOrder) return labelOrder;
+    // Rows within a relation group: Next before Ready, then path and line.
+    const leftLane = successorRelationLaneRank(left.task && left.task.status);
+    const rightLane = successorRelationLaneRank(right.task && right.task.status);
+    if (leftLane !== rightLane) return leftLane - rightLane;
+    const pathOrder = String(left.task && left.task.path || left.notePath || "").localeCompare(String(right.task && right.task.path || right.notePath || ""));
+    if (pathOrder) return pathOrder;
+    return (Number((left.task && left.task.line) ?? left.line) || 0) - (Number((right.task && right.task.line) ?? right.line) || 0);
+  }
   const anchorOrder = successorAnchorPosition(left.anchor) - successorAnchorPosition(right.anchor);
   if (anchorOrder) return anchorOrder;
   if (left.group === "keep_moving" || right.group === "keep_moving") {
@@ -8301,125 +8500,6 @@ function successorOfferOrderCompare(left, right) {
 // descriptor consumed by planSuccessors' candidate loop; never throws.
 // `ctx` carries { openIdsAfter, today, hasLiveLinkBefore, cancelledClose,
 // linkUnblocked, anchorOf, dailyBefore }.
-function decideProjectResidentVerdict(task, project, unblocking, ctx = {}) {
-  const openIdsAfter = ctx.openIdsAfter instanceof Set ? ctx.openIdsAfter : new Set();
-  const today = typeof ctx.today === "string" ? ctx.today : formatLocalDate();
-  const hasLiveLinkBefore = typeof ctx.hasLiveLinkBefore === "function" ? ctx.hasLiveLinkBefore : () => false;
-  const cancelledClose = ctx.cancelledClose === true;
-  const linkUnblocked = ctx.linkUnblocked !== false;
-  const anchorOf = typeof ctx.anchorOf === "function" ? ctx.anchorOf : () => ({ kind: "none", entryLine: null, bulletLine: null });
-  const dailyBefore = ctx.dailyBefore || [];
-  const projectPredecessors = unblocking.map((identity) => ({
-    note_path: String(identity.path || ""),
-    block_id: String(identity.blockId || ""),
-    text: String(identity.text || ""),
-  }));
-  const ownOpen = (task.dependsOn || []).filter((id) => openIdsAfter.has(String(id)));
-  let ownFuture = null;
-  try {
-    ownFuture = task.rawLine ? findSingleFutureScheduledField(task.rawLine, today) : null;
-  } catch (error) {
-    ownFuture = null;
-  }
-  if (ownOpen.length > 0 || ownFuture) {
-    return {
-      kind: "stillBlocked",
-      row: {
-        note_path: task.path,
-        block_id: task.blockId || "",
-        line: task.line,
-        text: successorDisplayText(task),
-        status_symbol: task.status,
-        reason: ownFuture && ownOpen.length === 0 ? "scheduled" : "waits_on",
-        waits_on: ownOpen.length,
-        scheduled: ownFuture ? ownFuture.value : null,
-        project: String(task.path || ""),
-        mutedProject: true,
-        trigger: "dependency",
-      },
-    };
-  }
-  if (task.hidden === true || (task.rawLine && successorHasHideTag(task.rawLine))) {
-    return { kind: "recover", reason: "hidden", predecessorRows: projectPredecessors, foldedProject: String(task.path || "") };
-  }
-  if (hasLiveLinkBefore(task)) {
-    return { kind: "recover", reason: "already_planned", predecessorRows: projectPredecessors, foldedProject: String(task.path || "") };
-  }
-  if (cancelledClose || linkUnblocked === false) {
-    return { kind: "recover", reason: cancelledClose ? "cancelled" : "disabled", predecessorRows: projectPredecessors };
-  }
-  const predAnchors = unblocking.map((identity) => ({ identity, anchor: anchorOf(identity) }))
-    .filter((entry) => entry.anchor.kind !== "none")
-    .sort((l, r) => successorAnchorPosition(l.anchor) - successorAnchorPosition(r.anchor) ||
-      (l.anchor.bulletLine ?? -1) - (r.anchor.bulletLine ?? -1));
-  if (predAnchors.length > 0) {
-    return {
-      kind: "offer",
-      anchor: predAnchors[0].anchor,
-      predecessorRows: projectPredecessors,
-      group: "project",
-      project: String(task.path || ""),
-    };
-  }
-  const implicitResident = resolveSuccessorImplicitDestination(dailyBefore);
-  if (!implicitResident) {
-    return { kind: "recover", reason: "no_destination", predecessorRows: projectPredecessors };
-  }
-  return {
-    kind: "offer",
-    anchor: { kind: "implicit", entryLine: implicitResident.entryLine, bulletLine: null },
-    implicit: implicitResident,
-    predecessorRows: projectPredecessors,
-    group: "project",
-    project: String(task.path || ""),
-  };
-}
-
-// Destination object for an offer (§12.5): { day_file, entry_name,
-// entry_role, fallback }. entry_role is slot|closing|implicit|created;
-// fallback true when the implicit path was used because no §12.3 anchor
-// existed. `anchor` is the offer's anchor; `implicit` is the resolved
-// implicit entry when anchor.kind === "implicit".
-function successorOfferDestination(anchor, implicit, dailyLines, dailyPath) {
-  const dayFile = String(dailyPath || "");
-  try {
-    if (anchor && anchor.kind === "implicit" && implicit) {
-      const name = typeof implicit.name === "string" ? implicit.name : successorEntryNameAt(successorNormalizeLines(dailyLines), implicit.entryLine);
-      return { day_file: dayFile, entry_name: String(name || ""), entry_role: "implicit", fallback: true };
-    }
-    if (anchor && anchor.kind === "closing") {
-      const name = successorEntryNameAt(successorNormalizeLines(dailyLines), anchor.entryLine);
-      return { day_file: dayFile, entry_name: String(name || ""), entry_role: "closing", fallback: false };
-    }
-    if (anchor && anchor.entryLine != null) {
-      const name = successorEntryNameAt(successorNormalizeLines(dailyLines), anchor.entryLine);
-      const role = anchor.kind === "inherit" ? "slot" : "slot";
-      return { day_file: dayFile, entry_name: String(name || ""), entry_role: role, fallback: false };
-    }
-  } catch (error) {
-    // Fall through.
-  }
-  return { day_file: dayFile, entry_name: "", entry_role: "implicit", fallback: true };
-}
-
-// Defensive feature detection for nav api.successors v1 (§12.13).
-function getSuccessorPickerApi(app) {
-  try {
-    const plugins = (app && app.plugins && app.plugins.plugins) || {};
-    const nav = plugins["bob-navigation-hotkeys"];
-    const api = nav && nav.api;
-    const successors = api && api.successors;
-    if (!successors || !(Number(successors.version) >= 1)) {
-      return null;
-    }
-    if (typeof successors.pick !== "function") {
-      return null;
-    }
-    return successors;
-  } catch (error) {
-    return null;
-  }
-}
 // ---- src/085c-successor-theme-write.js ----
 // Guarded successor theme writes (plan:202610/task_card_successor_themes.md
 // successor-theme-write). Pure planner + runtime adapters. Shared scope with
@@ -9024,6 +9104,309 @@ function successorThemePartialFailureClause(row) {
     }
     return "task type saved";
   } catch (_error) {
+    return null;
+  }
+}
+// ---- src/085d-successor-relation-merge.js ----
+// Relation merge helpers for the pure successor pipeline
+// (docs/task-dependencies.md §12.18, §12.2). Shared scope with
+// 085-successor-plan.js / 089b-successor-verdicts.js. Pure code only.
+// Moved display helpers live here so 085 stays under the 1000-line cap.
+
+function successorHasHideTag(rawLine) {
+  return String(rawLine || "")
+    .split(/\s+/)
+    .some((token) => token === "#hide");
+}
+
+function successorIsProjectTask(blockId) {
+  return typeof blockId === "string" && blockId.toLowerCase() === "prj";
+}
+
+function successorIsDonePath(path) {
+  return String(path || "")
+    .split("/")
+    .some((segment) => segment === "done");
+}
+
+// Row display text: the mint-pipeline cleaning of the body after the status
+// box (mirroring Rust's `clean_description` row text).
+function successorDisplayText(task, globalFilter = "#task") {
+  if (!task) {
+    return "";
+  }
+  const filter = globalFilter === "#task" && task.globalFilter
+    ? task.globalFilter
+    : globalFilter;
+  if (task.rawLine) {
+    return cleanDescription(
+      successorBodyAfterStatusBox(task.rawLine),
+      filter,
+      task.blockId || null,
+    );
+  }
+  return String(task.text || "");
+}
+
+function collectSuccessorUsedIds(noteText) {
+  const used = new Set();
+  for (const line of successorNormalizeLines(noteText)) {
+    const id = getTrailingBlockId(line);
+    if (id) {
+      used.add(String(id));
+    }
+  }
+  return used;
+}
+
+// Whether the caller supplied any relation inputs for the pure pipeline.
+// Runtime (137) stays dormant: without these options no relation fields
+// are emitted and disabled gestures stay unchanged.
+function successorRelationHasInputs(options = {}) {
+  return options.relationEvents !== undefined ||
+    options.relationCandidates !== undefined ||
+    options.relationOutgoing !== undefined ||
+    options.relationSuccessorLabels !== undefined ||
+    options.relationIndexReady !== undefined ||
+    options.navSuccessorsVersion !== undefined ||
+    options.relationBaselineLive !== undefined ||
+    options.relationCurrentLive !== undefined ||
+    options.relationParkedIdentities !== undefined;
+}
+
+function successorRelationLabelsFromOptions(options = {}) {
+  const supplied = options.relationSuccessorLabels;
+  if (supplied && typeof supplied === "object" && Array.isArray(supplied.keys)) {
+    const labels = supplied.labels && typeof supplied.labels === "object" ? supplied.labels : {};
+    const keys = supplied.keys.map((key) => relationLabelKey(key)).filter(Boolean);
+    const seen = new Set();
+    const ordered = [];
+    const table = {};
+    for (const key of keys) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ordered.push(key);
+      table[key] = labels[key] || key;
+    }
+    return Object.freeze({ keys: Object.freeze(ordered), labels: Object.freeze({ ...table }) });
+  }
+  if (Array.isArray(supplied)) {
+    const labels = {};
+    const keys = [];
+    for (const entry of supplied) {
+      const normalized = typeof normalizeRelationLabel === "function"
+        ? normalizeRelationLabel(entry)
+        : String(entry || "").trim();
+      if (!normalized) continue;
+      const key = relationLabelKey(normalized);
+      if (!key || keys.includes(key)) continue;
+      keys.push(key);
+      labels[key] = normalized;
+    }
+    return Object.freeze({ keys: Object.freeze(keys), labels: Object.freeze({ ...labels }) });
+  }
+  return emptyRelationLabelList();
+}
+
+// Build the classifier's recoveries map from the post-recovery pipeline
+// state (recovers + stillBlocked). Keys are relation identities so the
+// pure R1-R7 rule sees the effective post-recovery state while the write
+// guard keeps exact preimage lines from noteTexts.
+function buildSuccessorRelationRecoveries(recovers, stillBlocked) {
+  const table = {};
+  for (const recover of Array.isArray(recovers) ? recovers : []) {
+    const task = recover && recover.task;
+    if (!task || !task.path) continue;
+    const key = relationIdentityKey(task.path, task.blockId, task.line);
+    if (!key) continue;
+    if (!table[key]) table[key] = {};
+    table[key].recovered = true;
+    if (recover.foldedProject) table[key].project = String(recover.foldedProject);
+  }
+  for (const row of Array.isArray(stillBlocked) ? stillBlocked : []) {
+    if (!row || !row.note_path) continue;
+    const key = relationIdentityKey(row.note_path, row.block_id, row.line);
+    if (!key) continue;
+    const entry = table[key] || {};
+    if (row.reason === "project") {
+      entry.projectBlocked = true;
+      if (row.project) entry.project = String(row.project);
+    }
+    if (row.reason === "waits_on") entry.openPrerequisites = Number(row.waits_on) || 0;
+    if (row.scheduled) entry.scheduled = String(row.scheduled);
+    table[key] = entry;
+  }
+  return table;
+}
+
+// Run the pure R1-R7 classifier for the merged pipeline. Returns the
+// classifier result (marks/held/groups/relation_check/scan/warnings) or
+// an empty non-scanning result when the gate is off.
+function planSuccessorRelationForContext(context = {}) {
+  const options = context.options || {};
+  const recovers = context.recovers || [];
+  const stillBlocked = context.stillBlocked || [];
+  const successorLabels = successorRelationLabelsFromOptions(options);
+  const events = Array.isArray(options.relationEvents) ? options.relationEvents : [];
+  const candidates = Array.isArray(options.relationCandidates) ? options.relationCandidates : [];
+  const outgoing = Array.isArray(options.relationOutgoing)
+    ? options.relationOutgoing
+    : candidates;
+  if (typeof planSuccessorRelations !== "function") {
+    return { marks: [], held: [], groups: [], relation_check: null, scan: false, warnings: [] };
+  }
+  const recoveries = {
+    ...buildSuccessorRelationRecoveries(recovers, stillBlocked),
+    ...((options.relationRecoveries && typeof options.relationRecoveries === "object")
+      ? options.relationRecoveries
+      : {}),
+  };
+  try {
+    return planSuccessorRelations({
+      events,
+      candidates,
+      outgoing,
+      noteTexts: context.noteTexts || {},
+      baselineDay: context.dailyBefore,
+      currentDay: context.dailyAfter,
+      dailyPath: context.dailyPath || "",
+      today: context.today || "",
+      previousDailyPath: options.relationPreviousDailyPath,
+      successorLabels,
+      linkUnblocked: context.linkUnblocked !== false,
+      cancelled: context.cancelled === true,
+      navSuccessorsVersion: options.navSuccessorsVersion,
+      relationIndexReady: options.relationIndexReady,
+      dependencySnapshotAvailable: options.dependencySnapshotAvailable,
+      recoveries,
+      parkedIdentities: options.relationParkedIdentities,
+      baselineLive: options.relationBaselineLive,
+      currentLive: options.relationCurrentLive,
+    });
+  } catch (_error) {
+    return { marks: [], held: [], groups: [], relation_check: null, scan: false, warnings: [] };
+  }
+}
+// ---- src/085e-successor-project-verdict.js ----
+// Project-resident verdict + destination + picker API (moved from 085b to keep
+// 085b under the 1000-line cap; shared scope).
+
+function decideProjectResidentVerdict(task, project, unblocking, ctx = {}) {
+  const openIdsAfter = ctx.openIdsAfter instanceof Set ? ctx.openIdsAfter : new Set();
+  const today = typeof ctx.today === "string" ? ctx.today : formatLocalDate();
+  const hasLiveLinkBefore = typeof ctx.hasLiveLinkBefore === "function" ? ctx.hasLiveLinkBefore : () => false;
+  const cancelledClose = ctx.cancelledClose === true;
+  const linkUnblocked = ctx.linkUnblocked !== false;
+  const anchorOf = typeof ctx.anchorOf === "function" ? ctx.anchorOf : () => ({ kind: "none", entryLine: null, bulletLine: null });
+  const dailyBefore = ctx.dailyBefore || [];
+  const projectPredecessors = unblocking.map((identity) => ({
+    note_path: String(identity.path || ""),
+    block_id: String(identity.blockId || ""),
+    text: String(identity.text || ""),
+  }));
+  const ownOpen = (task.dependsOn || []).filter((id) => openIdsAfter.has(String(id)));
+  let ownFuture = null;
+  try {
+    ownFuture = task.rawLine ? findSingleFutureScheduledField(task.rawLine, today) : null;
+  } catch (error) {
+    ownFuture = null;
+  }
+  if (ownOpen.length > 0 || ownFuture) {
+    return {
+      kind: "stillBlocked",
+      row: {
+        note_path: task.path,
+        block_id: task.blockId || "",
+        line: task.line,
+        text: successorDisplayText(task),
+        status_symbol: task.status,
+        reason: ownFuture && ownOpen.length === 0 ? "scheduled" : "waits_on",
+        waits_on: ownOpen.length,
+        scheduled: ownFuture ? ownFuture.value : null,
+        project: String(task.path || ""),
+        mutedProject: true,
+        trigger: "dependency",
+      },
+    };
+  }
+  if (task.hidden === true || (task.rawLine && successorHasHideTag(task.rawLine))) {
+    return { kind: "recover", reason: "hidden", predecessorRows: projectPredecessors, foldedProject: String(task.path || "") };
+  }
+  if (hasLiveLinkBefore(task)) {
+    return { kind: "recover", reason: "already_planned", predecessorRows: projectPredecessors, foldedProject: String(task.path || "") };
+  }
+  if (cancelledClose || linkUnblocked === false) {
+    return { kind: "recover", reason: cancelledClose ? "cancelled" : "disabled", predecessorRows: projectPredecessors };
+  }
+  const predAnchors = unblocking.map((identity) => ({ identity, anchor: anchorOf(identity) }))
+    .filter((entry) => entry.anchor.kind !== "none")
+    .sort((l, r) => successorAnchorPosition(l.anchor) - successorAnchorPosition(r.anchor) ||
+      (l.anchor.bulletLine ?? -1) - (r.anchor.bulletLine ?? -1));
+  if (predAnchors.length > 0) {
+    return {
+      kind: "offer",
+      anchor: predAnchors[0].anchor,
+      predecessorRows: projectPredecessors,
+      group: "project",
+      project: String(task.path || ""),
+    };
+  }
+  const implicitResident = resolveSuccessorImplicitDestination(dailyBefore);
+  if (!implicitResident) {
+    return { kind: "recover", reason: "no_destination", predecessorRows: projectPredecessors };
+  }
+  return {
+    kind: "offer",
+    anchor: { kind: "implicit", entryLine: implicitResident.entryLine, bulletLine: null },
+    implicit: implicitResident,
+    predecessorRows: projectPredecessors,
+    group: "project",
+    project: String(task.path || ""),
+  };
+}
+
+// Destination object for an offer (§12.5): { day_file, entry_name,
+// entry_role, fallback }. entry_role is slot|closing|implicit|created;
+// fallback true when the implicit path was used because no §12.3 anchor
+// existed. `anchor` is the offer's anchor; `implicit` is the resolved
+// implicit entry when anchor.kind === "implicit".
+function successorOfferDestination(anchor, implicit, dailyLines, dailyPath) {
+  const dayFile = String(dailyPath || "");
+  try {
+    if (anchor && anchor.kind === "implicit" && implicit) {
+      const name = typeof implicit.name === "string" ? implicit.name : successorEntryNameAt(successorNormalizeLines(dailyLines), implicit.entryLine);
+      return { day_file: dayFile, entry_name: String(name || ""), entry_role: "implicit", fallback: true };
+    }
+    if (anchor && anchor.kind === "closing") {
+      const name = successorEntryNameAt(successorNormalizeLines(dailyLines), anchor.entryLine);
+      return { day_file: dayFile, entry_name: String(name || ""), entry_role: "closing", fallback: false };
+    }
+    if (anchor && anchor.entryLine != null) {
+      const name = successorEntryNameAt(successorNormalizeLines(dailyLines), anchor.entryLine);
+      const role = anchor.kind === "inherit" ? "slot" : "slot";
+      return { day_file: dayFile, entry_name: String(name || ""), entry_role: role, fallback: false };
+    }
+  } catch (error) {
+    // Fall through.
+  }
+  return { day_file: dayFile, entry_name: "", entry_role: "implicit", fallback: true };
+}
+
+// Defensive feature detection for nav api.successors v1 (§12.13).
+function getSuccessorPickerApi(app) {
+  try {
+    const plugins = (app && app.plugins && app.plugins.plugins) || {};
+    const nav = plugins["bob-navigation-hotkeys"];
+    const api = nav && nav.api;
+    const successors = api && api.successors;
+    if (!successors || !(Number(successors.version) >= 1)) {
+      return null;
+    }
+    if (typeof successors.pick !== "function") {
+      return null;
+    }
+    return successors;
+  } catch (error) {
     return null;
   }
 }
@@ -11784,22 +12167,59 @@ function applySuccessorVerdicts(context) {
 
   const unblocked = [];
   const keep_moving = [];
+  const relation_successors = [];
   const rows = [];
   let placements = [];
+  const relationHeldInput = Array.isArray(context.relationHeld) ? context.relationHeld : [];
+  const relationCheckInput = typeof context.relationCheck === "string" ? context.relationCheck : null;
+  const relationScanInput = context.relationScan === true;
 
-  // DEDUP (§12.2): one row per task identity; a resident also directly
-  // dependent appears once in hand_off, merging causes.
+  // DEDUP (§12.2): one row per task identity with hand_off > relation >
+  // project > project_finished > keep_moving. Surviving rows keep every
+  // offered reason, recovery flag, and triggering identity (SA14/SA15).
   const deduped = new Map();
   const priorityOf = (mark) => {
     const group = mark.group || (mark.pullIn ? "project_finished" : "hand_off");
-    if (group === "hand_off") {
-      return 0;
+    if (group === "hand_off") return 0;
+    if (group === "relation") return 1;
+    if (group === "project") return 2;
+    if (group === "project_finished") return 3;
+    if (group === "keep_moving") return 4;
+    return 3;
+  };
+  const mergePredecessorRows = (left, right) => {
+    const merged = [...(left || [])];
+    for (const row of right || []) {
+      if (!row || typeof row !== "object") continue;
+      if (!merged.some((candidate) => candidate.note_path === row.note_path && candidate.block_id === row.block_id)) {
+        merged.push(row);
+      }
     }
-    if (group === "project") {
-      return 1;
+    return merged;
+  };
+  const mergeRelationMarks = (winner, loser) => {
+    const mergedPredecessors = mergePredecessorRows(
+      winner.predecessorRows || winner.unblocked_by,
+      loser.predecessorRows || loser.unblocked_by,
+    );
+    const merged = { ...winner, predecessorRows: mergedPredecessors };
+    if (loser.unblocked_by && !winner.unblocked_by) merged.unblocked_by = loser.unblocked_by;
+    else if (winner.unblocked_by && loser.unblocked_by) {
+      merged.unblocked_by = mergePredecessorRows(winner.unblocked_by, loser.unblocked_by);
+    } else if (winner.predecessorRows && !merged.unblocked_by && winner.group === "relation") {
+      merged.unblocked_by = winner.predecessorRows;
     }
-    if (group === "project_finished") return 2;
-    return group === "keep_moving" ? 3 : 2;
+    // Second reasons survive in both directions (SA14 hand_off keeps relation).
+    if (!merged.relation && loser.relation) merged.relation = loser.relation;
+    if (!merged.relation && winner.relation) merged.relation = winner.relation;
+    if (loser.recovered === true) merged.recovered = true;
+    if (winner.recovered === true) merged.recovered = true;
+    if (!merged.suffix && loser.suffix) merged.suffix = loser.suffix;
+    if (!merged.after && loser.after) merged.after = loser.after;
+    if (!merged.label && loser.label) merged.label = loser.label;
+    if (!merged.key && loser.key) merged.key = loser.key;
+    if (!merged.event && loser.event) merged.event = loser.event;
+    return merged;
   };
   for (const mark of successorMarks) {
     if (!mark || !mark.task || !mark.task.path) {
@@ -11812,21 +12232,9 @@ function applySuccessorVerdicts(context) {
       continue;
     }
     if (priorityOf(mark) < priorityOf(existing)) {
-      const mergedRows = [...(existing.predecessorRows || [])];
-      for (const row of mark.predecessorRows || []) {
-        if (!mergedRows.some((candidate) => candidate.note_path === row.note_path && candidate.block_id === row.block_id)) {
-          mergedRows.push(row);
-        }
-      }
-      deduped.set(location, { ...mark, predecessorRows: mergedRows });
+      deduped.set(location, mergeRelationMarks(mark, existing));
     } else {
-      const mergedRows = [...(existing.predecessorRows || [])];
-      for (const row of mark.predecessorRows || []) {
-        if (!mergedRows.some((candidate) => candidate.note_path === row.note_path && candidate.block_id === row.block_id)) {
-          mergedRows.push(row);
-        }
-      }
-      existing.predecessorRows = mergedRows;
+      deduped.set(location, mergeRelationMarks(existing, mark));
     }
   }
   const uniqueMarks = [...deduped.values()];
@@ -11864,7 +12272,9 @@ function applySuccessorVerdicts(context) {
 
   const appendRow = (row, group) => {
     rows.push(row);
-    (group === "keep_moving" ? keep_moving : unblocked).push(row);
+    if (group === "keep_moving") keep_moving.push(row);
+    else if (group === "relation") relation_successors.push(row);
+    else unblocked.push(row);
     return rows.length - 1;
   };
   const pushRow = (task, rank, extra) => {
@@ -11902,6 +12312,7 @@ function applySuccessorVerdicts(context) {
     const text = pullIn
       ? projectPullInDisplayText(task, after != null ? after : before)
       : successorDisplayText(task);
+    const isRelation = extra.group === "relation" || (extra.offer && extra.offer.group === "relation");
     const row = {
       note_path: task.path,
       block_id: extra.blockId || task.blockId || "",
@@ -11912,15 +12323,21 @@ function applySuccessorVerdicts(context) {
       status_symbol: rank,
       status_name: successorStatusName(rank),
       inbox: typeof isInbox === "function" ? isInbox(task.path) === true : false,
-      unblocked_by: extra.predecessorRows || [],
+      unblocked_by: extra.predecessorRows || extra.unblocked_by || [],
       link: extra.link || null,
       not_linked: extra.not_linked == null ? null : extra.not_linked,
-      trigger: extra.trigger || (pullIn ? "project_empty" : "dependency"),
+      trigger: extra.trigger || (pullIn ? "project_empty" : (isRelation ? "relation" : "dependency")),
       hide_removed: hideRemoved,
     };
     if (isOffer) {
       row.offer = extra.offer;
     }
+    if (extra.relation) row.relation = extra.relation;
+    if (extra.relationAfter && isRelation) row.after = extra.relationAfter;
+    else if (extra.after && isRelation && typeof extra.after === "string" && extra.after.includes("#^")) row.after = extra.after;
+    if (extra.suffix) row.suffix = extra.suffix;
+    if (extra.lane) row.lane = extra.lane;
+    if (extra.recovered === true) row.recovered = true;
     return appendRow(row, extra.group || (extra.offer && extra.offer.group));
   };
 
@@ -11940,7 +12357,30 @@ function applySuccessorVerdicts(context) {
     });
   };
 
+  // Relation recovery merge (SA15): a project/dependency recovery for a task
+  // also offered via relation collapses into the relation offer with
+  // recovered:true so no behavior is lost and no duplicate row appears.
+  const offeredLocations = new Set(
+    uniqueMarks.map((mark) => mark && mark.task && `${mark.task.path}\0${mark.task.line}`),
+  );
   for (const recover of recovers) {
+    const location = recover && recover.task && `${recover.task.path}\0${recover.task.line}`;
+    const offered = uniqueMarks.find((mark) => mark && mark.task && `${mark.task.path}\0${mark.task.line}` === location);
+    if (offered && offered.group === "relation") {
+      offered.recovered = true;
+      if (recover.foldedProject && !offered.foldedProject) offered.foldedProject = recover.foldedProject;
+      const extraPredecessors = recover.predecessorRows || [];
+      const base = offered.predecessorRows || offered.unblocked_by || [];
+      const merged = [...base];
+      for (const row of extraPredecessors) {
+        if (!merged.some((candidate) => candidate.note_path === row.note_path && candidate.block_id === row.block_id)) {
+          merged.push(row);
+        }
+      }
+      offered.predecessorRows = merged;
+      continue;
+    }
+    if (offered) continue;
     pushRecover(recover, false);
   }
 
@@ -11969,6 +12409,17 @@ function applySuccessorVerdicts(context) {
       typedDefaultDestinations.set(String(key), placement.placementOverride);
     }
     const needsBlockId = !task.blockId;
+    const isRelationMark = group === "relation";
+    const relationAfterText = isRelationMark
+      ? (mark.afterText || (mark.relation && mark.relation.after && mark.relation.after[0] && mark.relation.after[0].text) || (mark.unblocked_by && mark.unblocked_by[0] && mark.unblocked_by[0].text) || "")
+      : null;
+    const relationAfter = isRelationMark
+      ? (mark.after || (mark.relation && mark.relation.after && mark.relation.after[0]
+        ? `${mark.relation.after[0].path}#^${mark.relation.after[0].blockId}`
+        : (mark.unblocked_by && mark.unblocked_by[0]
+          ? `${mark.unblocked_by[0].note_path}#^${mark.unblocked_by[0].block_id}`
+          : null)))
+      : null;
     const offer = {
       key: String(key),
       n: offerNumberByKey.get(key) || 0,
@@ -11977,14 +12428,53 @@ function applySuccessorVerdicts(context) {
       destination,
       selected,
       block_id_needed: needsBlockId,
+      ...(isRelationMark && relationAfter ? { after: relationAfter } : {}),
+      ...(isRelationMark && mark.event ? { event: mark.event } : {}),
+      ...(isRelationMark && (mark.label || (mark.relation && mark.relation.label)) ? { label: mark.label || mark.relation.label } : {}),
+      ...(isRelationMark && mark.key ? { labelKey: mark.key } : {}),
+      ...(isRelationMark && relationAfterText ? { afterText: relationAfterText } : {}),
+      ...(!isRelationMark && mark.relation && (mark.relation.label || mark.label) ? {
+        reason: (() => {
+          try {
+            const label = mark.relation.label || mark.label || "";
+            const target = mark.afterText || (mark.relation.after && mark.relation.after[0] && mark.relation.after[0].text) || (mark.unblocked_by && mark.unblocked_by[0] && mark.unblocked_by[0].text) || "";
+            if (typeof relationCopyReason === "function" && label && target) return relationCopyReason(label, target);
+            return label && target ? `· ${label} \u201c${target}\u201d` : null;
+          } catch (_error) { return null; }
+        })(),
+      } : {}),
     };
     offers.push({
       key: offer.key, text: successorDisplayText(task), notePath: task.path, status: task.status,
       destination, needsBlockId, group, project: offer.project || null,
-      anchor: mark.anchor, implicit: mark.implicit || null, predecessorRows: mark.predecessorRows || [],
+      anchor: mark.anchor, implicit: mark.implicit || null, predecessorRows: mark.predecessorRows || mark.unblocked_by || [],
       task, line: task.line,
       placementRefusal: placement.refusal,
       ...(noteText ? { noteText } : {}),
+      ...(isRelationMark ? {
+        after: relationAfter,
+        afterText: relationAfterText,
+        event: mark.event || (mark.relation && mark.relation.event) || null,
+        label: mark.label || (mark.relation && mark.relation.label) || null,
+        labelKey: mark.key || (mark.relation && mark.relation.key) || null,
+        suffix: mark.suffix || null,
+        lane: mark.lane || (task.status === "*" ? "Next" : "Ready"),
+        reason: mark.relation ? `· ${mark.relation.label || mark.label || ""} \u201c${mark.afterText || relationAfterText || ""}\u201d` : (mark.label && relationAfterText ? `· ${mark.label} \u201c${relationAfterText}\u201d` : null),
+        relation: mark.relation || null,
+      } : {}),
+      ...(mark.recovered === true ? { recovered: true } : {}),
+      ...(mark.suffix ? { suffix: mark.suffix } : {}),
+      ...(!isRelationMark && mark.relation ? {
+        reason: (() => {
+          try {
+            const label = mark.relation.label || mark.label || "";
+            const target = mark.afterText || (mark.relation.after && mark.relation.after[0] && mark.relation.after[0].text) || "";
+            if (typeof relationCopyReason === "function" && label && target) return relationCopyReason(label, target);
+            return null;
+          } catch (_error) { return null; }
+        })(),
+        relation: mark.relation,
+      } : {}),
     });
     if (!selected) {
       if (group === "keep_moving") {
@@ -12037,7 +12527,8 @@ function applySuccessorVerdicts(context) {
         edits.push({ path: task.path, line: task.line, before, after });
       }
       const text = mark.pullIn ? projectPullInDisplayText(task, after != null ? after : before) : successorDisplayText(task);
-      appendRow({
+      const isRelationUnpicked = group === "relation";
+      const unpickedRow = {
         note_path: task.path,
         block_id: task.blockId || "",
         line: task.line,
@@ -12047,13 +12538,48 @@ function applySuccessorVerdicts(context) {
         status_symbol: rank,
         status_name: successorStatusName(rank),
         inbox: typeof isInbox === "function" ? isInbox(task.path) === true : false,
-        unblocked_by: mark.predecessorRows || [],
+        unblocked_by: mark.predecessorRows || mark.unblocked_by || [],
         link: null,
         not_linked: requested && placement.refusal ? placement.refusal : "not_selected",
-        trigger: mark.pullIn ? "project_empty" : (mark.trigger || "dependency"),
+        trigger: mark.pullIn ? "project_empty" : (isRelationUnpicked ? "relation" : (mark.trigger || "dependency")),
         hide_removed: hideRemoved,
         offer: { ...offer, selected: false },
-      }, group);
+      };
+      // Relation-only unselected rows write no mint/link/stamp; recovery
+      // edits above are retained (SA15) and the row lives in
+      // relation_successors with its relation identity for the picker.
+      if (isRelationUnpicked) {
+        if (mark.relation) unpickedRow.relation = mark.relation;
+        else if (mark.label || mark.key || mark.event || mark.after) {
+          unpickedRow.relation = {
+            label: mark.label || "",
+            key: mark.key || "",
+            event: mark.event || "",
+            after: mark.relation && mark.relation.after ? mark.relation.after : (mark.after ? [{ path: String(mark.after).split("#^")[0] || "", blockId: String(mark.after).split("#^")[1] || "", text: mark.afterText || "" }] : []),
+          };
+        }
+        if (offer.after) unpickedRow.after = offer.after;
+        else if (mark.after) unpickedRow.after = mark.after;
+        if (mark.suffix) unpickedRow.suffix = mark.suffix;
+        if (mark.lane) unpickedRow.lane = mark.lane;
+        else unpickedRow.lane = task.status === "*" ? "Next" : "Ready";
+        if (mark.recovered === true) unpickedRow.recovered = true;
+        // Relation unselected never mints: drop any recovery edit that
+        // would create a block ID (SA26 idless sources stay idless).
+        for (let index = edits.length - 1; index >= 0; index -= 1) {
+          const edit = edits[index];
+          if (edit && edit.path === task.path && edit.line === task.line && typeof edit.after === "string" && /\^[A-Za-z0-9_-]+\s*$/.test(edit.after) && !/\^[A-Za-z0-9_-]+\s*$/.test(task.rawLine || "")) {
+            // Keep project-tag recovery but drop minted IDs on unpicked relation rows.
+            const stripped = String(edit.after).replace(/\s*\^[A-Za-z0-9_-]+\s*$/, "");
+            if (stripped !== String(task.rawLine || "")) edit.after = stripped;
+            else edits.splice(index, 1);
+          }
+        }
+      } else if (mark.relation) {
+        // Second reason survives on non-relation rows (SA14 hand_off keeps relation).
+        unpickedRow.relation = mark.relation;
+      }
+      appendRow(unpickedRow, group);
       continue;
     }
     // Picked (§12.4 PICK): raise Ready/Blocked to Next without demoting
@@ -12205,11 +12731,17 @@ function applySuccessorVerdicts(context) {
     const rowIndex = pushRow(task, rank, {
       pullIn: mark.pullIn === true,
       group,
-      trigger: mark.trigger,
+      trigger: mark.trigger || (group === "relation" ? "relation" : undefined),
       linked: true,
       after,
       blockId,
-      predecessorRows: mark.predecessorRows,
+      predecessorRows: mark.predecessorRows || mark.unblocked_by,
+      unblocked_by: mark.unblocked_by || mark.predecessorRows,
+      relation: mark.relation || undefined,
+      relationAfter: mark.after,
+      suffix: mark.suffix,
+      lane: mark.lane,
+      recovered: mark.recovered,
       not_linked: null,
       link: {
         day_file: dailyPath,
@@ -12228,6 +12760,14 @@ function applySuccessorVerdicts(context) {
     // passed the stamped line, so the edit is already consolidated. For
     // pullIn picks the rewrite+stamp line is likewise consolidated.)
     if (rowIndex != null) {
+      if (mark.relation && !rows[rowIndex].relation) rows[rowIndex].relation = mark.relation;
+      if (group === "relation") {
+        if (offer.after && !rows[rowIndex].after) rows[rowIndex].after = offer.after;
+        else if (mark.after && !rows[rowIndex].after) rows[rowIndex].after = mark.after;
+        if (mark.suffix && !rows[rowIndex].suffix) rows[rowIndex].suffix = mark.suffix;
+        if (!rows[rowIndex].lane) rows[rowIndex].lane = task.status === "*" ? "Next" : "Ready";
+        if (mark.recovered === true) rows[rowIndex].recovered = true;
+      }
       if (successorThemeMergeName && rows[rowIndex].link) {
         rows[rowIndex].link.entry_name = successorThemeMergeName;
       }
@@ -12270,7 +12810,7 @@ function applySuccessorVerdicts(context) {
   // Placements already in ORDER (offers sorted); keep that order for the
   // insertion planner.
   coalesceSuccessorLandingNames(placements, rows, successorThemesApi);
-  return {
+  const result = {
     unblocked,
     keep_moving,
     rows,
@@ -12282,6 +12822,108 @@ function applySuccessorVerdicts(context) {
     foldedByProject,
     projectHeaders,
   };
+  // Relation fields are additive and omitted when the gate did not run or
+  // no relation row applies (§12.5). Unavailable is reported even with no rows.
+  if (relationScanInput || relationCheckInput === "unavailable") {
+    // Expand projected held (key/reason/label/after/event) into full
+    // relation_held rows with task identity and relation objects for the
+    // v3 picker and notice layers (§12.5, §12.18). already_planned stays
+    // display:false (JSON-only, silent in UI).
+    const buildRelationHeldRows = (projected) => {
+      const out = [];
+      for (const entry of Array.isArray(projected) ? projected : []) {
+        if (!entry || !entry.key) continue;
+        let parsed = null;
+        try {
+          parsed = typeof relationParseIdentityKey === "function"
+            ? relationParseIdentityKey(entry.key)
+            : null;
+        } catch (_error) { parsed = null; }
+        const notePath = (parsed && parsed.path) || String(entry.key).split("#")[0] || "";
+        const blockId = (parsed && parsed.blockId) || "";
+        const line = parsed && Number.isInteger(parsed.line) ? parsed.line : null;
+        let targetPath = "";
+        let targetBlockId = "";
+        let targetText = "";
+        if (typeof entry.after === "string" && entry.after) {
+          try {
+            const target = typeof relationParseIdentityKey === "function"
+              ? relationParseIdentityKey(entry.after)
+              : null;
+            if (target) {
+              targetPath = target.path || "";
+              targetBlockId = target.blockId || "";
+            }
+          } catch (_error) {}
+          if (!targetPath) {
+            const hash = String(entry.after).indexOf("#^");
+            if (hash >= 0) {
+              targetPath = String(entry.after).slice(0, hash);
+              targetBlockId = String(entry.after).slice(hash + 2);
+            } else {
+              targetPath = String(entry.after);
+            }
+          }
+          // Resolve target display text from the staged notes when possible.
+          try {
+            if (typeof relationLookupTask === "function" && targetPath) {
+              const found = relationLookupTask(targetPath, targetBlockId, null, noteTexts);
+              if (found && found.lineText) {
+                targetText = typeof successorDisplayText === "function"
+                  ? successorDisplayText(found)
+                  : String(found.lineText || "");
+              }
+            }
+          } catch (_error) {}
+          if (!targetText) {
+            for (const mark of uniqueMarks) {
+              if (mark && mark.group === "relation" && mark.after === entry.after && mark.afterText) {
+                targetText = String(mark.afterText);
+                break;
+              }
+            }
+          }
+        }
+        const row = {
+          note_path: notePath,
+          block_id: blockId,
+          ...(Number.isInteger(line) ? { line } : {}),
+          text: String(entry.text || ""),
+          reason: String(entry.reason || ""),
+          ...(entry.display === false ? { display: false } : {}),
+          ...(entry.waits_on != null ? { waits_on: entry.waits_on } : {}),
+          ...(entry.scheduled ? { scheduled: entry.scheduled } : {}),
+          ...(entry.project ? { project: entry.project } : {}),
+          ...(Array.isArray(entry.waits_for) ? { waits_for: entry.waits_for.slice() } : {}),
+          relation: {
+            label: String(entry.label || ""),
+            key: String(entry.labelKey || entry.label || "").toLowerCase(),
+            event: String(entry.event || ""),
+            after: targetPath ? [{ note_path: targetPath, block_id: targetBlockId, text: targetText }] : [],
+          },
+        };
+        out.push(row);
+      }
+      return out;
+    };
+    const fullHeld = buildRelationHeldRows(relationHeldInput);
+    if (relation_successors.length > 0) result.relation_successors = relation_successors;
+    else if (relationCheckInput === "unavailable") result.relation_successors = [];
+    if (fullHeld.length > 0) result.relation_held = fullHeld;
+    else if (relationCheckInput === "unavailable") result.relation_held = [];
+    else if (relation_successors.length === 0 && fullHeld.length === 0) {
+      // Edge-free gestures omit relation fields entirely.
+    } else {
+      result.relation_held = fullHeld;
+    }
+    if (relationCheckInput === "unavailable") result.relation_check = "unavailable";
+    else if (relation_successors.length > 0 || fullHeld.length > 0) result.relation_check = "checked";
+    if (result.relation_check && !result.relation_successors && !result.relation_held && relation_successors.length === 0 && relationCheckInput !== "unavailable") {
+      delete result.relation_held;
+      delete result.relation_check;
+    }
+  }
+  return result;
 }
 // ---- src/089c-successor-keep-moving.js ----
 // Leaf-project keep-moving offers (docs/task-dependencies.md §12.15–§12.17).
@@ -13419,6 +14061,15 @@ function planSuccessorRelations(options = {}) {
     if (row.scheduled) projected.scheduled = row.scheduled;
     if (row.project && row.project !== true) projected.project = row.project;
     if (Array.isArray(row.waits_for)) projected.waits_for = row.waits_for.slice();
+    // Group identity for the merged pipeline picker (offer_pipeline): label,
+    // key, after target, and event survive projection so relation groups can
+    // carry held counts and fold text. Independent classifier tests ignore
+    // these additive fields via subset matching.
+    if (row.label) projected.label = row.label;
+    if (row.labelKey) projected.labelKey = row.labelKey;
+    if (row.after) projected.after = row.after;
+    if (row.event) projected.event = row.event;
+    if (row.text) projected.text = row.text;
     return projected;
   });
 

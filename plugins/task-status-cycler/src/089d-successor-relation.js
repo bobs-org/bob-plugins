@@ -739,6 +739,15 @@ function planSuccessorRelations(options = {}) {
     if (row.scheduled) projected.scheduled = row.scheduled;
     if (row.project && row.project !== true) projected.project = row.project;
     if (Array.isArray(row.waits_for)) projected.waits_for = row.waits_for.slice();
+    // Group identity for the merged pipeline picker (offer_pipeline): label,
+    // key, after target, and event survive projection so relation groups can
+    // carry held counts and fold text. Independent classifier tests ignore
+    // these additive fields via subset matching.
+    if (row.label) projected.label = row.label;
+    if (row.labelKey) projected.labelKey = row.labelKey;
+    if (row.after) projected.after = row.after;
+    if (row.event) projected.event = row.event;
+    if (row.text) projected.text = row.text;
     return projected;
   });
 

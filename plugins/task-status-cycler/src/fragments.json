@@ -15,6 +15,8 @@
   "085-successor-plan.js",
   "085b-successor-offers.js",
   "085c-successor-theme-write.js",
+  "085d-successor-relation-merge.js",
+  "085e-successor-project-verdict.js",
   "086-successor-ids.js",
   "087-successor-place.js",
   "088-project-blocking.js",

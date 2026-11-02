@@ -357,51 +357,8 @@ function computeSuccessorAnchors(closedIdentities, dailyLines, options = {}) {
   );
 }
 
-function successorHasHideTag(rawLine) {
-  return String(rawLine || "")
-    .split(/\s+/)
-    .some((token) => token === "#hide");
-}
-
-function successorIsProjectTask(blockId) {
-  return typeof blockId === "string" && blockId.toLowerCase() === "prj";
-}
-
-function successorIsDonePath(path) {
-  return String(path || "")
-    .split("/")
-    .some((segment) => segment === "done");
-}
-
-// Row display text: the mint-pipeline cleaning of the body after the status
-// box (mirroring Rust's `clean_description` row text).
-function successorDisplayText(task, globalFilter = "#task") {
-  if (!task) {
-    return "";
-  }
-  const filter = globalFilter === "#task" && task.globalFilter
-    ? task.globalFilter
-    : globalFilter;
-  if (task.rawLine) {
-    return cleanDescription(
-      successorBodyAfterStatusBox(task.rawLine),
-      filter,
-      task.blockId || null,
-    );
-  }
-  return String(task.text || "");
-}
-
-function collectSuccessorUsedIds(noteText) {
-  const used = new Set();
-  for (const line of successorNormalizeLines(noteText)) {
-    const id = getTrailingBlockId(line);
-    if (id) {
-      used.add(String(id));
-    }
-  }
-  return used;
-}
+// Display + identity helpers live in 085d-successor-relation-merge.js
+// (shared scope) so this fragment stays under the 1000-line cap.
 
 // Default inbox check: `inbox.md` at the vault root (the root case of nav's
 // `isInboxNotePath`). Pass a richer `isInbox` when vault frontmatter is
@@ -642,9 +599,32 @@ function planSuccessors(options = {}) {
       ? new Map(extra.foldedByProject)
       : new Map();
     for (const [path, counts] of keepMoving.foldedByProject) folded.set(path, counts);
+    // Relation offers (offer_pipeline): pure R1-R7 on post-recovery state.
+    // Inactive unless the caller supplies relation inputs (done_runtime wires them).
+    let relationMarks = [];
+    let relationHeld = [];
+    let relationCheck = null;
+    let relationScan = false;
+    if (typeof successorRelationHasInputs === "function" && successorRelationHasInputs(options)) {
+      try {
+        const result = planSuccessorRelationForContext({
+          options, recovers, stillBlocked, noteTexts,
+          dailyBefore, dailyAfter, dailyPath, today, linkUnblocked, cancelled: cancelledClose,
+        });
+        if (result && (result.scan === true || result.relation_check === "unavailable")) {
+          relationMarks = Array.isArray(result.marks) ? result.marks : [];
+          relationHeld = Array.isArray(result.held) ? result.held : [];
+          relationCheck = result.relation_check || null;
+          relationScan = result.scan === true;
+        }
+      } catch (_error) {
+        relationMarks = [];
+        relationHeld = [];
+      }
+    }
     return applySuccessorVerdicts({
       recovers,
-      successorMarks: [...successorMarks, ...keepMoving.marks],
+      successorMarks: [...successorMarks, ...keepMoving.marks, ...relationMarks],
       stillBlocked,
       projectTagStripEdits,
       dailyPath,
@@ -665,11 +645,16 @@ function planSuccessors(options = {}) {
       foldedByProject: folded,
       projectHeaders: extra.projectHeaders || new Map(),
       successorTheme,
+      relationHeld,
+      relationCheck,
+      relationScan,
     });
   };
-  // GATE: no `[id::]` in C and no pull-in candidate → nothing.
-  // A `[?]` R pull-in still recovers N's residents via the same
-  // project-recovery wiring as the id branch (P3).
+  // GATE: no `[id::]` in C and no pull-in candidate → nothing, unless
+  // relation candidates/unavailable checks can reach the common result
+  // (offer_pipeline idless fix for SA26 zero-id lookups).
+  const hasRelationGate = typeof successorRelationHasInputs === "function" &&
+    successorRelationHasInputs(options);
   if (closedTaskIds.size === 0) {
     if (!pullIns.hasCandidates) {
       const keepMovingPlan = planSuccessorKeepMoving({
@@ -685,6 +670,10 @@ function planSuccessors(options = {}) {
           : null),
         closingEntry,
       });
+      if (!keepMovingPlan.marks.length && !hasRelationGate) return empty;
+      if (!keepMovingPlan.marks.length && hasRelationGate) {
+        return applyContext([], [], [], [], () => false, { keepMovingPlan });
+      }
       if (!keepMovingPlan.marks.length) return empty;
       return applyContext([], [], [], [], () => false, { keepMovingPlan });
     }

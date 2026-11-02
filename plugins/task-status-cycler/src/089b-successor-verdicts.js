@@ -86,22 +86,59 @@ function applySuccessorVerdicts(context) {
 
   const unblocked = [];
   const keep_moving = [];
+  const relation_successors = [];
   const rows = [];
   let placements = [];
+  const relationHeldInput = Array.isArray(context.relationHeld) ? context.relationHeld : [];
+  const relationCheckInput = typeof context.relationCheck === "string" ? context.relationCheck : null;
+  const relationScanInput = context.relationScan === true;
 
-  // DEDUP (§12.2): one row per task identity; a resident also directly
-  // dependent appears once in hand_off, merging causes.
+  // DEDUP (§12.2): one row per task identity with hand_off > relation >
+  // project > project_finished > keep_moving. Surviving rows keep every
+  // offered reason, recovery flag, and triggering identity (SA14/SA15).
   const deduped = new Map();
   const priorityOf = (mark) => {
     const group = mark.group || (mark.pullIn ? "project_finished" : "hand_off");
-    if (group === "hand_off") {
-      return 0;
+    if (group === "hand_off") return 0;
+    if (group === "relation") return 1;
+    if (group === "project") return 2;
+    if (group === "project_finished") return 3;
+    if (group === "keep_moving") return 4;
+    return 3;
+  };
+  const mergePredecessorRows = (left, right) => {
+    const merged = [...(left || [])];
+    for (const row of right || []) {
+      if (!row || typeof row !== "object") continue;
+      if (!merged.some((candidate) => candidate.note_path === row.note_path && candidate.block_id === row.block_id)) {
+        merged.push(row);
+      }
     }
-    if (group === "project") {
-      return 1;
+    return merged;
+  };
+  const mergeRelationMarks = (winner, loser) => {
+    const mergedPredecessors = mergePredecessorRows(
+      winner.predecessorRows || winner.unblocked_by,
+      loser.predecessorRows || loser.unblocked_by,
+    );
+    const merged = { ...winner, predecessorRows: mergedPredecessors };
+    if (loser.unblocked_by && !winner.unblocked_by) merged.unblocked_by = loser.unblocked_by;
+    else if (winner.unblocked_by && loser.unblocked_by) {
+      merged.unblocked_by = mergePredecessorRows(winner.unblocked_by, loser.unblocked_by);
+    } else if (winner.predecessorRows && !merged.unblocked_by && winner.group === "relation") {
+      merged.unblocked_by = winner.predecessorRows;
     }
-    if (group === "project_finished") return 2;
-    return group === "keep_moving" ? 3 : 2;
+    // Second reasons survive in both directions (SA14 hand_off keeps relation).
+    if (!merged.relation && loser.relation) merged.relation = loser.relation;
+    if (!merged.relation && winner.relation) merged.relation = winner.relation;
+    if (loser.recovered === true) merged.recovered = true;
+    if (winner.recovered === true) merged.recovered = true;
+    if (!merged.suffix && loser.suffix) merged.suffix = loser.suffix;
+    if (!merged.after && loser.after) merged.after = loser.after;
+    if (!merged.label && loser.label) merged.label = loser.label;
+    if (!merged.key && loser.key) merged.key = loser.key;
+    if (!merged.event && loser.event) merged.event = loser.event;
+    return merged;
   };
   for (const mark of successorMarks) {
     if (!mark || !mark.task || !mark.task.path) {
@@ -114,21 +151,9 @@ function applySuccessorVerdicts(context) {
       continue;
     }
     if (priorityOf(mark) < priorityOf(existing)) {
-      const mergedRows = [...(existing.predecessorRows || [])];
-      for (const row of mark.predecessorRows || []) {
-        if (!mergedRows.some((candidate) => candidate.note_path === row.note_path && candidate.block_id === row.block_id)) {
-          mergedRows.push(row);
-        }
-      }
-      deduped.set(location, { ...mark, predecessorRows: mergedRows });
+      deduped.set(location, mergeRelationMarks(mark, existing));
     } else {
-      const mergedRows = [...(existing.predecessorRows || [])];
-      for (const row of mark.predecessorRows || []) {
-        if (!mergedRows.some((candidate) => candidate.note_path === row.note_path && candidate.block_id === row.block_id)) {
-          mergedRows.push(row);
-        }
-      }
-      existing.predecessorRows = mergedRows;
+      deduped.set(location, mergeRelationMarks(existing, mark));
     }
   }
   const uniqueMarks = [...deduped.values()];
@@ -166,7 +191,9 @@ function applySuccessorVerdicts(context) {
 
   const appendRow = (row, group) => {
     rows.push(row);
-    (group === "keep_moving" ? keep_moving : unblocked).push(row);
+    if (group === "keep_moving") keep_moving.push(row);
+    else if (group === "relation") relation_successors.push(row);
+    else unblocked.push(row);
     return rows.length - 1;
   };
   const pushRow = (task, rank, extra) => {
@@ -204,6 +231,7 @@ function applySuccessorVerdicts(context) {
     const text = pullIn
       ? projectPullInDisplayText(task, after != null ? after : before)
       : successorDisplayText(task);
+    const isRelation = extra.group === "relation" || (extra.offer && extra.offer.group === "relation");
     const row = {
       note_path: task.path,
       block_id: extra.blockId || task.blockId || "",
@@ -214,15 +242,21 @@ function applySuccessorVerdicts(context) {
       status_symbol: rank,
       status_name: successorStatusName(rank),
       inbox: typeof isInbox === "function" ? isInbox(task.path) === true : false,
-      unblocked_by: extra.predecessorRows || [],
+      unblocked_by: extra.predecessorRows || extra.unblocked_by || [],
       link: extra.link || null,
       not_linked: extra.not_linked == null ? null : extra.not_linked,
-      trigger: extra.trigger || (pullIn ? "project_empty" : "dependency"),
+      trigger: extra.trigger || (pullIn ? "project_empty" : (isRelation ? "relation" : "dependency")),
       hide_removed: hideRemoved,
     };
     if (isOffer) {
       row.offer = extra.offer;
     }
+    if (extra.relation) row.relation = extra.relation;
+    if (extra.relationAfter && isRelation) row.after = extra.relationAfter;
+    else if (extra.after && isRelation && typeof extra.after === "string" && extra.after.includes("#^")) row.after = extra.after;
+    if (extra.suffix) row.suffix = extra.suffix;
+    if (extra.lane) row.lane = extra.lane;
+    if (extra.recovered === true) row.recovered = true;
     return appendRow(row, extra.group || (extra.offer && extra.offer.group));
   };
 
@@ -242,7 +276,30 @@ function applySuccessorVerdicts(context) {
     });
   };
 
+  // Relation recovery merge (SA15): a project/dependency recovery for a task
+  // also offered via relation collapses into the relation offer with
+  // recovered:true so no behavior is lost and no duplicate row appears.
+  const offeredLocations = new Set(
+    uniqueMarks.map((mark) => mark && mark.task && `${mark.task.path}\0${mark.task.line}`),
+  );
   for (const recover of recovers) {
+    const location = recover && recover.task && `${recover.task.path}\0${recover.task.line}`;
+    const offered = uniqueMarks.find((mark) => mark && mark.task && `${mark.task.path}\0${mark.task.line}` === location);
+    if (offered && offered.group === "relation") {
+      offered.recovered = true;
+      if (recover.foldedProject && !offered.foldedProject) offered.foldedProject = recover.foldedProject;
+      const extraPredecessors = recover.predecessorRows || [];
+      const base = offered.predecessorRows || offered.unblocked_by || [];
+      const merged = [...base];
+      for (const row of extraPredecessors) {
+        if (!merged.some((candidate) => candidate.note_path === row.note_path && candidate.block_id === row.block_id)) {
+          merged.push(row);
+        }
+      }
+      offered.predecessorRows = merged;
+      continue;
+    }
+    if (offered) continue;
     pushRecover(recover, false);
   }
 
@@ -271,6 +328,17 @@ function applySuccessorVerdicts(context) {
       typedDefaultDestinations.set(String(key), placement.placementOverride);
     }
     const needsBlockId = !task.blockId;
+    const isRelationMark = group === "relation";
+    const relationAfterText = isRelationMark
+      ? (mark.afterText || (mark.relation && mark.relation.after && mark.relation.after[0] && mark.relation.after[0].text) || (mark.unblocked_by && mark.unblocked_by[0] && mark.unblocked_by[0].text) || "")
+      : null;
+    const relationAfter = isRelationMark
+      ? (mark.after || (mark.relation && mark.relation.after && mark.relation.after[0]
+        ? `${mark.relation.after[0].path}#^${mark.relation.after[0].blockId}`
+        : (mark.unblocked_by && mark.unblocked_by[0]
+          ? `${mark.unblocked_by[0].note_path}#^${mark.unblocked_by[0].block_id}`
+          : null)))
+      : null;
     const offer = {
       key: String(key),
       n: offerNumberByKey.get(key) || 0,
@@ -279,14 +347,53 @@ function applySuccessorVerdicts(context) {
       destination,
       selected,
       block_id_needed: needsBlockId,
+      ...(isRelationMark && relationAfter ? { after: relationAfter } : {}),
+      ...(isRelationMark && mark.event ? { event: mark.event } : {}),
+      ...(isRelationMark && (mark.label || (mark.relation && mark.relation.label)) ? { label: mark.label || mark.relation.label } : {}),
+      ...(isRelationMark && mark.key ? { labelKey: mark.key } : {}),
+      ...(isRelationMark && relationAfterText ? { afterText: relationAfterText } : {}),
+      ...(!isRelationMark && mark.relation && (mark.relation.label || mark.label) ? {
+        reason: (() => {
+          try {
+            const label = mark.relation.label || mark.label || "";
+            const target = mark.afterText || (mark.relation.after && mark.relation.after[0] && mark.relation.after[0].text) || (mark.unblocked_by && mark.unblocked_by[0] && mark.unblocked_by[0].text) || "";
+            if (typeof relationCopyReason === "function" && label && target) return relationCopyReason(label, target);
+            return label && target ? `· ${label} \u201c${target}\u201d` : null;
+          } catch (_error) { return null; }
+        })(),
+      } : {}),
     };
     offers.push({
       key: offer.key, text: successorDisplayText(task), notePath: task.path, status: task.status,
       destination, needsBlockId, group, project: offer.project || null,
-      anchor: mark.anchor, implicit: mark.implicit || null, predecessorRows: mark.predecessorRows || [],
+      anchor: mark.anchor, implicit: mark.implicit || null, predecessorRows: mark.predecessorRows || mark.unblocked_by || [],
       task, line: task.line,
       placementRefusal: placement.refusal,
       ...(noteText ? { noteText } : {}),
+      ...(isRelationMark ? {
+        after: relationAfter,
+        afterText: relationAfterText,
+        event: mark.event || (mark.relation && mark.relation.event) || null,
+        label: mark.label || (mark.relation && mark.relation.label) || null,
+        labelKey: mark.key || (mark.relation && mark.relation.key) || null,
+        suffix: mark.suffix || null,
+        lane: mark.lane || (task.status === "*" ? "Next" : "Ready"),
+        reason: mark.relation ? `· ${mark.relation.label || mark.label || ""} \u201c${mark.afterText || relationAfterText || ""}\u201d` : (mark.label && relationAfterText ? `· ${mark.label} \u201c${relationAfterText}\u201d` : null),
+        relation: mark.relation || null,
+      } : {}),
+      ...(mark.recovered === true ? { recovered: true } : {}),
+      ...(mark.suffix ? { suffix: mark.suffix } : {}),
+      ...(!isRelationMark && mark.relation ? {
+        reason: (() => {
+          try {
+            const label = mark.relation.label || mark.label || "";
+            const target = mark.afterText || (mark.relation.after && mark.relation.after[0] && mark.relation.after[0].text) || "";
+            if (typeof relationCopyReason === "function" && label && target) return relationCopyReason(label, target);
+            return null;
+          } catch (_error) { return null; }
+        })(),
+        relation: mark.relation,
+      } : {}),
     });
     if (!selected) {
       if (group === "keep_moving") {
@@ -339,7 +446,8 @@ function applySuccessorVerdicts(context) {
         edits.push({ path: task.path, line: task.line, before, after });
       }
       const text = mark.pullIn ? projectPullInDisplayText(task, after != null ? after : before) : successorDisplayText(task);
-      appendRow({
+      const isRelationUnpicked = group === "relation";
+      const unpickedRow = {
         note_path: task.path,
         block_id: task.blockId || "",
         line: task.line,
@@ -349,13 +457,48 @@ function applySuccessorVerdicts(context) {
         status_symbol: rank,
         status_name: successorStatusName(rank),
         inbox: typeof isInbox === "function" ? isInbox(task.path) === true : false,
-        unblocked_by: mark.predecessorRows || [],
+        unblocked_by: mark.predecessorRows || mark.unblocked_by || [],
         link: null,
         not_linked: requested && placement.refusal ? placement.refusal : "not_selected",
-        trigger: mark.pullIn ? "project_empty" : (mark.trigger || "dependency"),
+        trigger: mark.pullIn ? "project_empty" : (isRelationUnpicked ? "relation" : (mark.trigger || "dependency")),
         hide_removed: hideRemoved,
         offer: { ...offer, selected: false },
-      }, group);
+      };
+      // Relation-only unselected rows write no mint/link/stamp; recovery
+      // edits above are retained (SA15) and the row lives in
+      // relation_successors with its relation identity for the picker.
+      if (isRelationUnpicked) {
+        if (mark.relation) unpickedRow.relation = mark.relation;
+        else if (mark.label || mark.key || mark.event || mark.after) {
+          unpickedRow.relation = {
+            label: mark.label || "",
+            key: mark.key || "",
+            event: mark.event || "",
+            after: mark.relation && mark.relation.after ? mark.relation.after : (mark.after ? [{ path: String(mark.after).split("#^")[0] || "", blockId: String(mark.after).split("#^")[1] || "", text: mark.afterText || "" }] : []),
+          };
+        }
+        if (offer.after) unpickedRow.after = offer.after;
+        else if (mark.after) unpickedRow.after = mark.after;
+        if (mark.suffix) unpickedRow.suffix = mark.suffix;
+        if (mark.lane) unpickedRow.lane = mark.lane;
+        else unpickedRow.lane = task.status === "*" ? "Next" : "Ready";
+        if (mark.recovered === true) unpickedRow.recovered = true;
+        // Relation unselected never mints: drop any recovery edit that
+        // would create a block ID (SA26 idless sources stay idless).
+        for (let index = edits.length - 1; index >= 0; index -= 1) {
+          const edit = edits[index];
+          if (edit && edit.path === task.path && edit.line === task.line && typeof edit.after === "string" && /\^[A-Za-z0-9_-]+\s*$/.test(edit.after) && !/\^[A-Za-z0-9_-]+\s*$/.test(task.rawLine || "")) {
+            // Keep project-tag recovery but drop minted IDs on unpicked relation rows.
+            const stripped = String(edit.after).replace(/\s*\^[A-Za-z0-9_-]+\s*$/, "");
+            if (stripped !== String(task.rawLine || "")) edit.after = stripped;
+            else edits.splice(index, 1);
+          }
+        }
+      } else if (mark.relation) {
+        // Second reason survives on non-relation rows (SA14 hand_off keeps relation).
+        unpickedRow.relation = mark.relation;
+      }
+      appendRow(unpickedRow, group);
       continue;
     }
     // Picked (§12.4 PICK): raise Ready/Blocked to Next without demoting
@@ -507,11 +650,17 @@ function applySuccessorVerdicts(context) {
     const rowIndex = pushRow(task, rank, {
       pullIn: mark.pullIn === true,
       group,
-      trigger: mark.trigger,
+      trigger: mark.trigger || (group === "relation" ? "relation" : undefined),
       linked: true,
       after,
       blockId,
-      predecessorRows: mark.predecessorRows,
+      predecessorRows: mark.predecessorRows || mark.unblocked_by,
+      unblocked_by: mark.unblocked_by || mark.predecessorRows,
+      relation: mark.relation || undefined,
+      relationAfter: mark.after,
+      suffix: mark.suffix,
+      lane: mark.lane,
+      recovered: mark.recovered,
       not_linked: null,
       link: {
         day_file: dailyPath,
@@ -530,6 +679,14 @@ function applySuccessorVerdicts(context) {
     // passed the stamped line, so the edit is already consolidated. For
     // pullIn picks the rewrite+stamp line is likewise consolidated.)
     if (rowIndex != null) {
+      if (mark.relation && !rows[rowIndex].relation) rows[rowIndex].relation = mark.relation;
+      if (group === "relation") {
+        if (offer.after && !rows[rowIndex].after) rows[rowIndex].after = offer.after;
+        else if (mark.after && !rows[rowIndex].after) rows[rowIndex].after = mark.after;
+        if (mark.suffix && !rows[rowIndex].suffix) rows[rowIndex].suffix = mark.suffix;
+        if (!rows[rowIndex].lane) rows[rowIndex].lane = task.status === "*" ? "Next" : "Ready";
+        if (mark.recovered === true) rows[rowIndex].recovered = true;
+      }
       if (successorThemeMergeName && rows[rowIndex].link) {
         rows[rowIndex].link.entry_name = successorThemeMergeName;
       }
@@ -572,7 +729,7 @@ function applySuccessorVerdicts(context) {
   // Placements already in ORDER (offers sorted); keep that order for the
   // insertion planner.
   coalesceSuccessorLandingNames(placements, rows, successorThemesApi);
-  return {
+  const result = {
     unblocked,
     keep_moving,
     rows,
@@ -584,4 +741,106 @@ function applySuccessorVerdicts(context) {
     foldedByProject,
     projectHeaders,
   };
+  // Relation fields are additive and omitted when the gate did not run or
+  // no relation row applies (§12.5). Unavailable is reported even with no rows.
+  if (relationScanInput || relationCheckInput === "unavailable") {
+    // Expand projected held (key/reason/label/after/event) into full
+    // relation_held rows with task identity and relation objects for the
+    // v3 picker and notice layers (§12.5, §12.18). already_planned stays
+    // display:false (JSON-only, silent in UI).
+    const buildRelationHeldRows = (projected) => {
+      const out = [];
+      for (const entry of Array.isArray(projected) ? projected : []) {
+        if (!entry || !entry.key) continue;
+        let parsed = null;
+        try {
+          parsed = typeof relationParseIdentityKey === "function"
+            ? relationParseIdentityKey(entry.key)
+            : null;
+        } catch (_error) { parsed = null; }
+        const notePath = (parsed && parsed.path) || String(entry.key).split("#")[0] || "";
+        const blockId = (parsed && parsed.blockId) || "";
+        const line = parsed && Number.isInteger(parsed.line) ? parsed.line : null;
+        let targetPath = "";
+        let targetBlockId = "";
+        let targetText = "";
+        if (typeof entry.after === "string" && entry.after) {
+          try {
+            const target = typeof relationParseIdentityKey === "function"
+              ? relationParseIdentityKey(entry.after)
+              : null;
+            if (target) {
+              targetPath = target.path || "";
+              targetBlockId = target.blockId || "";
+            }
+          } catch (_error) {}
+          if (!targetPath) {
+            const hash = String(entry.after).indexOf("#^");
+            if (hash >= 0) {
+              targetPath = String(entry.after).slice(0, hash);
+              targetBlockId = String(entry.after).slice(hash + 2);
+            } else {
+              targetPath = String(entry.after);
+            }
+          }
+          // Resolve target display text from the staged notes when possible.
+          try {
+            if (typeof relationLookupTask === "function" && targetPath) {
+              const found = relationLookupTask(targetPath, targetBlockId, null, noteTexts);
+              if (found && found.lineText) {
+                targetText = typeof successorDisplayText === "function"
+                  ? successorDisplayText(found)
+                  : String(found.lineText || "");
+              }
+            }
+          } catch (_error) {}
+          if (!targetText) {
+            for (const mark of uniqueMarks) {
+              if (mark && mark.group === "relation" && mark.after === entry.after && mark.afterText) {
+                targetText = String(mark.afterText);
+                break;
+              }
+            }
+          }
+        }
+        const row = {
+          note_path: notePath,
+          block_id: blockId,
+          ...(Number.isInteger(line) ? { line } : {}),
+          text: String(entry.text || ""),
+          reason: String(entry.reason || ""),
+          ...(entry.display === false ? { display: false } : {}),
+          ...(entry.waits_on != null ? { waits_on: entry.waits_on } : {}),
+          ...(entry.scheduled ? { scheduled: entry.scheduled } : {}),
+          ...(entry.project ? { project: entry.project } : {}),
+          ...(Array.isArray(entry.waits_for) ? { waits_for: entry.waits_for.slice() } : {}),
+          relation: {
+            label: String(entry.label || ""),
+            key: String(entry.labelKey || entry.label || "").toLowerCase(),
+            event: String(entry.event || ""),
+            after: targetPath ? [{ note_path: targetPath, block_id: targetBlockId, text: targetText }] : [],
+          },
+        };
+        out.push(row);
+      }
+      return out;
+    };
+    const fullHeld = buildRelationHeldRows(relationHeldInput);
+    if (relation_successors.length > 0) result.relation_successors = relation_successors;
+    else if (relationCheckInput === "unavailable") result.relation_successors = [];
+    if (fullHeld.length > 0) result.relation_held = fullHeld;
+    else if (relationCheckInput === "unavailable") result.relation_held = [];
+    else if (relation_successors.length === 0 && fullHeld.length === 0) {
+      // Edge-free gestures omit relation fields entirely.
+    } else {
+      result.relation_held = fullHeld;
+    }
+    if (relationCheckInput === "unavailable") result.relation_check = "unavailable";
+    else if (relation_successors.length > 0 || fullHeld.length > 0) result.relation_check = "checked";
+    if (result.relation_check && !result.relation_successors && !result.relation_held && relation_successors.length === 0 && relationCheckInput !== "unavailable") {
+      delete result.relation_held;
+      delete result.relation_check;
+    }
+  }
+  return result;
 }

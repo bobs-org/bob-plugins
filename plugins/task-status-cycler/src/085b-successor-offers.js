@@ -227,9 +227,12 @@ function buildSuccessorPickerModel(options = {}) {
     ? options.headers
     : new Map(Object.entries(options.headers || {}));
   const byGroup = new Map();
-  const ensureGroup = (group, project) => {
-    const key = `${group}\0${project || ""}`;
-    if (!byGroup.has(key)) {
+  const relationHeld = Array.isArray(options.relationHeld) ? options.relationHeld : [];
+  const ensureGroup = (group, project, extra = {}) => {
+    const relationKey = group === "relation"
+      ? `${group}\0${extra.after || ""}\0${extra.labelKey || extra.label || ""}`
+      : `${group}\0${project || ""}`;
+    if (!byGroup.has(relationKey)) {
       let header = "";
       if (group === "hand_off") {
         header = "Hand-offs";
@@ -240,25 +243,77 @@ function buildSuccessorPickerModel(options = {}) {
       } else if (group === "keep_moving") {
         const stem = String(project || "").split("/").pop().replace(/\.md$/i, "") || String(project || "");
         header = `Keep ‹${stem}› moving`;
+      } else if (group === "relation") {
+        const label = String(extra.label || "");
+        const target = String(extra.afterText || "");
+        try {
+          header = typeof relationCopyGroupTitle === "function" && label
+            ? relationCopyGroupTitle(label, target)
+            : `${label} \u201c${target}\u201d`;
+        } catch (_error) {
+          header = `${label} \u201c${target}\u201d`;
+        }
       }
-      byGroup.set(key, {
+      const entry = {
         group,
-        ...(project ? { project } : {}),
+        ...(project && group !== "relation" ? { project } : {}),
         header,
-        ...(group === "keep_moving" ? {
-          caption: "",
-          tag: `ready in ${String(project || "").split("/").pop().replace(/\.md$/i, "")} · not dependents`,
-        } : {}),
         rows: [],
-      });
+      };
+      if (group === "keep_moving") {
+        entry.caption = "";
+        entry.tag = `ready in ${String(project || "").split("/").pop().replace(/\.md$/i, "")} · not dependents`;
+      }
+      if (group === "relation") {
+        let caption = "";
+        let tag = "";
+        try {
+          caption = typeof relationCopyWhy === "function"
+            ? relationCopyWhy(extra.afterText || "", extra.event || "")
+            : "";
+          tag = typeof relationCopyTag === "function" ? relationCopyTag() : "your links \u00b7 not dependents";
+        } catch (_error) {
+          caption = "";
+          tag = "your links \u00b7 not dependents";
+        }
+        entry.caption = caption;
+        entry.tag = tag;
+        entry.after = {
+          notePath: String((extra.afterParts && extra.afterParts.notePath) || ""),
+          blockId: String((extra.afterParts && extra.afterParts.blockId) || ""),
+          text: String(extra.afterText || ""),
+        };
+        entry.event = String(extra.event || "");
+        entry.label = String(extra.label || "");
+        entry.foldText = "";
+      }
+      byGroup.set(relationKey, entry);
     }
-    return byGroup.get(key);
+    return byGroup.get(relationKey);
   };
   for (const offer of offers) {
     if (!offer || !offer.key) {
       continue;
     }
-    const entry = ensureGroup(offer.group || "hand_off", offer.project || null);
+    const groupName = offer.group || "hand_off";
+    let afterParts = null;
+    if (groupName === "relation" && offer.after) {
+      const raw = String(offer.after);
+      const hash = raw.indexOf("#^");
+      if (hash >= 0) {
+        afterParts = { notePath: raw.slice(0, hash), blockId: raw.slice(hash + 2) };
+      } else {
+        afterParts = { notePath: raw, blockId: "" };
+      }
+    }
+    const entry = ensureGroup(groupName, offer.project || null, {
+      after: offer.after || "",
+      afterParts,
+      afterText: offer.afterText || "",
+      event: offer.event || "",
+      label: offer.label || "",
+      labelKey: offer.labelKey || "",
+    });
     const row = {
       key: String(offer.key),
       text: String(offer.text || ""),
@@ -268,6 +323,22 @@ function buildSuccessorPickerModel(options = {}) {
       needsBlockId: offer.needsBlockId === true,
       selectable: true,
     };
+    if (groupName === "relation") {
+      const lane = String(offer.lane || (offer.status === "*" ? "Next" : "Ready"));
+      if (lane) row.lane = lane;
+      if (offer.suffix) row.suffix = String(offer.suffix);
+      if (offer.reason) row.reason = String(offer.reason);
+      else if (offer.label && offer.afterText) {
+        try {
+          row.reason = typeof relationCopyReason === "function"
+            ? relationCopyReason(offer.label, offer.afterText)
+            : `· ${offer.label} \u201c${offer.afterText}\u201d`;
+        } catch (_error) {}
+      }
+    }
+    if (offer.reason && groupName !== "relation") {
+      row.reason = String(offer.reason);
+    }
     if (entry.group === "keep_moving") {
       row.lane = successorKeepMovingLaneName(offer.status) || successorStatusName(offer.status);
       const preds = Array.isArray(offer.predecessorRows) ? offer.predecessorRows : [];
@@ -312,21 +383,89 @@ function buildSuccessorPickerModel(options = {}) {
       mutedReason: String(row.reason || "project"),
     });
   }
-  const groups = [];
-  for (const group of ["hand_off", "project", "project_finished"]) {
-    for (const entry of byGroup.values()) {
-      if (entry.group !== group) {
-        continue;
-      }
-      const folded = foldedByProject.get(entry.project || "") || null;
-      if (folded && (folded.hidden > 0 || folded.alreadyPlanned > 0 || folded.subProjects > 0)) {
-        entry.folded = {
-          hidden: folded.hidden || 0,
-          alreadyPlanned: folded.alreadyPlanned || 0,
-          subProjects: folded.subProjects || 0,
-          ...(folded.blocked > 0 ? { blocked: folded.blocked } : {}),
-          ...(folded.scheduled > 0 ? { scheduled: folded.scheduled } : {}),
+  // Attach held counts + fold text to relation groups (offer_pipeline v3).
+  for (const entry of byGroup.values()) {
+    if (entry.group !== "relation") continue;
+    const afterKey = `${entry.after && entry.after.notePath || ""}#^${entry.after && entry.after.blockId || ""}`;
+    const labelKey = String(entry.label || "").toLowerCase();
+    const heldForGroup = relationHeld.filter((held) => {
+      if (!held || typeof held !== "object") return false;
+      const heldAfter = String(held.after || (held.relation && held.relation.after && held.relation.after[0] && `${held.relation.after[0].note_path}#^${held.relation.after[0].block_id}`) || "");
+      const heldLabel = String(held.labelKey || held.label || (held.relation && (held.relation.key || held.relation.label)) || "").toLowerCase();
+      // Match by after target + label; fall back to label-only when after is empty.
+      if (afterKey && afterKey !== "#^" && heldAfter) return heldAfter === afterKey && heldLabel === labelKey;
+      return heldLabel === labelKey;
+    });
+    let hidden = 0;
+    let blocked = 0;
+    let alreadyStarted = 0;
+    let waitsFor = 0;
+    let alreadyPlanned = 0;
+    for (const held of heldForGroup) {
+      if (held.reason === "hidden") hidden += 1;
+      else if (held.reason === "blocked") blocked += 1;
+      else if (held.reason === "already_started") alreadyStarted += 1;
+      else if (held.reason === "waits_for") waitsFor += Array.isArray(held.waits_for) && held.waits_for.length > 0 ? held.waits_for.length : 1;
+      else if (held.reason === "already_planned") alreadyPlanned += 1;
+    }
+    entry.folded = {
+      hidden,
+      alreadyPlanned,
+      subProjects: 0,
+      blocked,
+      scheduled: 0,
+      alreadyStarted,
+      waitsFor,
+    };
+    // Fold text via shared copy (ui style); omit when no held rows apply.
+    if (heldForGroup.length > 0) {
+      try {
+        const first = heldForGroup[0] || {};
+        const foldInput = {
+          waits_for: (first.waits_for || []).map((key) => {
+            // Map waits_for target keys to display text when notes allow; fall back to key.
+            return String(key).split("#^").pop() || String(key);
+          }),
+          source: String(first.text || first.source || ""),
+          already_started: alreadyStarted,
+          blocked,
+          hidden,
+          target: String(entry.after && entry.after.text || ""),
         };
+        const fold = typeof relationCopyFold === "function" ? relationCopyFold(foldInput, "ui") : "";
+        if (fold) entry.foldText = fold;
+      } catch (_error) {}
+    }
+    // Rows within a relation group sort Next before Ready, then path/line (SA vectors).
+    entry.rows.sort((left, right) => {
+      const laneRank = (lane) => (lane === "Next" ? 0 : 1);
+      return laneRank(left.lane) - laneRank(right.lane) ||
+        String(left.notePath || "").localeCompare(String(right.notePath || "")) ||
+        0;
+    });
+  }
+  const groups = [];
+  for (const group of ["hand_off", "relation", "project", "project_finished"]) {
+    // Relation groups sort by T anchor position, then T path/line, then label key.
+    const entries = [...byGroup.values()].filter((entry) => entry.group === group);
+    if (group === "relation") {
+      entries.sort((left, right) =>
+        String(left.after && left.after.notePath || "").localeCompare(String(right.after && right.after.notePath || "")) ||
+        String(left.after && left.after.blockId || "").localeCompare(String(right.after && right.after.blockId || "")) ||
+        String(left.label || "").localeCompare(String(right.label || "")));
+    }
+    for (const entry of entries) {
+      if (group !== "relation") {
+        const folded = foldedByProject.get(entry.project || "") || null;
+        if (folded && (folded.hidden > 0 || folded.alreadyPlanned > 0 || folded.subProjects > 0)) {
+          entry.folded = {
+            hidden: folded.hidden || 0,
+            alreadyPlanned: folded.alreadyPlanned || 0,
+            subProjects: folded.subProjects || 0,
+            ...(folded.blocked > 0 ? { blocked: folded.blocked } : {}),
+            ...(folded.scheduled > 0 ? { scheduled: folded.scheduled } : {}),
+          };
+        }
       }
       groups.push(entry);
     }
@@ -344,14 +483,37 @@ function buildSuccessorPickerModel(options = {}) {
     groups.push(entry);
   }
   const keepOnly = groups.length > 0 && groups.every((entry) => entry.group === "keep_moving");
+  const relationOnly = groups.length > 0 && groups.every((entry) => entry.group === "relation");
   const keepProjects = [...new Set(groups.filter((entry) => entry.group === "keep_moving").map((entry) => entry.project))];
   const keepTitle = keepProjects.length === 1
     ? `Keep ‹${String(keepProjects[0]).split("/").pop().replace(/\.md$/i, "")}› moving`
     : `Keep ${keepProjects.length} projects moving`;
+  let relationTitle = "";
+  if (relationOnly) {
+    try {
+      const first = groups[0] || {};
+      const label = String(first.label || "starts after");
+      const target = String(first.after && first.after.text || "");
+      const count = groups.reduce((sum, group) => sum + ((group.rows && group.rows.length) || 0), 0);
+      if (groups.length === 1 && target) {
+        relationTitle = typeof relationCopyGroupTitle === "function"
+          ? relationCopyGroupTitle(label, target)
+          : `${label} \u201c${target}\u201d`;
+      } else {
+        relationTitle = typeof relationCopyPickerTitle === "function"
+          ? relationCopyPickerTitle({ label, count, targets: groups.map((group) => group.after && group.after.text).filter(Boolean) })
+          : `${label} ${count} tasks`;
+      }
+    } catch (_error) {
+      relationTitle = "";
+    }
+  }
   const model = {
     title: keepOnly
       ? keepTitle
-      : predecessors.length === 1
+      : relationOnly && relationTitle
+        ? relationTitle
+        : predecessors.length === 1
       ? `Pull in successors of ${predecessors[0].text || "task"}`
       : `Pull in successors (${predecessors.length} closed)`,
     predecessors: predecessors.map((pred) => ({
@@ -717,21 +879,69 @@ function computeProjectFoldedAndHeaders(projectInfoByPath, projectRecoveryPaths,
 
 // Group order for §12.2 ORDER: hand_off, project, project_finished.
 function successorGroupOrder(group) {
-  if (group === "hand_off") {
-    return 0;
-  }
-  if (group === "project") {
-    return 1;
-  }
-  if (group === "project_finished") {
-    return 2;
-  }
-  return group === "keep_moving" ? 3 : 2;
+  if (group === "hand_off") return 0;
+  if (group === "relation") return 1;
+  if (group === "project") return 2;
+  if (group === "project_finished") return 3;
+  if (group === "keep_moving") return 4;
+  return 3;
+}
+
+function successorRelationTargetKey(mark) {
+  try {
+    if (mark && typeof mark.after === "string" && mark.after) return String(mark.after);
+    const rel = mark && mark.relation;
+    if (rel && Array.isArray(rel.after) && rel.after[0]) {
+      const first = rel.after[0];
+      const path = String(first.path || "");
+      const blockId = String(first.blockId || first.block_id || "");
+      if (path && blockId) return `${path}#^${blockId}`;
+      if (path) return path;
+    }
+    const unblocked = mark && (mark.unblocked_by || mark.predecessorRows);
+    if (Array.isArray(unblocked) && unblocked[0]) {
+      const first = unblocked[0];
+      const path = String(first.note_path || first.path || "");
+      const blockId = String(first.block_id || first.blockId || "");
+      if (path && blockId) return `${path}#^${blockId}`;
+      if (path) return path;
+    }
+  } catch (_error) {}
+  return "";
+}
+
+function successorRelationLaneRank(status) {
+  if (status === "*") return 0;
+  return 1;
 }
 
 function successorOfferOrderCompare(left, right) {
-  const groupOrder = successorGroupOrder(left.group) - successorGroupOrder(right.group);
+  const groupOrder = successorGroupOrder(left.group || (left.pullIn ? "project_finished" : "hand_off")) - successorGroupOrder(right.group || (right.pullIn ? "project_finished" : "hand_off"));
   if (groupOrder) return groupOrder;
+  const leftIsRelation = (left.group || (left.pullIn ? "project_finished" : "hand_off")) === "relation";
+  const rightIsRelation = (right.group || (right.pullIn ? "project_finished" : "hand_off")) === "relation";
+  if (leftIsRelation || rightIsRelation) {
+    const anchorOrder = successorAnchorPosition(left.anchor) - successorAnchorPosition(right.anchor);
+    if (anchorOrder) return anchorOrder;
+    const bulletOrder = (left.anchor.bulletLine ?? -1) - (right.anchor.bulletLine ?? -1);
+    if (bulletOrder) return bulletOrder;
+    // Relation groups sort by T identity then label key (SA12/SA18).
+    const leftTarget = successorRelationTargetKey(left);
+    const rightTarget = successorRelationTargetKey(right);
+    const targetOrder = String(leftTarget).localeCompare(String(rightTarget));
+    if (targetOrder) return targetOrder;
+    const leftLabel = String(left.key || (left.relation && left.relation.key) || "");
+    const rightLabel = String(right.key || (right.relation && right.relation.key) || "");
+    const labelOrder = leftLabel.localeCompare(rightLabel);
+    if (labelOrder) return labelOrder;
+    // Rows within a relation group: Next before Ready, then path and line.
+    const leftLane = successorRelationLaneRank(left.task && left.task.status);
+    const rightLane = successorRelationLaneRank(right.task && right.task.status);
+    if (leftLane !== rightLane) return leftLane - rightLane;
+    const pathOrder = String(left.task && left.task.path || left.notePath || "").localeCompare(String(right.task && right.task.path || right.notePath || ""));
+    if (pathOrder) return pathOrder;
+    return (Number((left.task && left.task.line) ?? left.line) || 0) - (Number((right.task && right.task.line) ?? right.line) || 0);
+  }
   const anchorOrder = successorAnchorPosition(left.anchor) - successorAnchorPosition(right.anchor);
   if (anchorOrder) return anchorOrder;
   if (left.group === "keep_moving" || right.group === "keep_moving") {
@@ -755,122 +965,3 @@ function successorOfferOrderCompare(left, right) {
 // descriptor consumed by planSuccessors' candidate loop; never throws.
 // `ctx` carries { openIdsAfter, today, hasLiveLinkBefore, cancelledClose,
 // linkUnblocked, anchorOf, dailyBefore }.
-function decideProjectResidentVerdict(task, project, unblocking, ctx = {}) {
-  const openIdsAfter = ctx.openIdsAfter instanceof Set ? ctx.openIdsAfter : new Set();
-  const today = typeof ctx.today === "string" ? ctx.today : formatLocalDate();
-  const hasLiveLinkBefore = typeof ctx.hasLiveLinkBefore === "function" ? ctx.hasLiveLinkBefore : () => false;
-  const cancelledClose = ctx.cancelledClose === true;
-  const linkUnblocked = ctx.linkUnblocked !== false;
-  const anchorOf = typeof ctx.anchorOf === "function" ? ctx.anchorOf : () => ({ kind: "none", entryLine: null, bulletLine: null });
-  const dailyBefore = ctx.dailyBefore || [];
-  const projectPredecessors = unblocking.map((identity) => ({
-    note_path: String(identity.path || ""),
-    block_id: String(identity.blockId || ""),
-    text: String(identity.text || ""),
-  }));
-  const ownOpen = (task.dependsOn || []).filter((id) => openIdsAfter.has(String(id)));
-  let ownFuture = null;
-  try {
-    ownFuture = task.rawLine ? findSingleFutureScheduledField(task.rawLine, today) : null;
-  } catch (error) {
-    ownFuture = null;
-  }
-  if (ownOpen.length > 0 || ownFuture) {
-    return {
-      kind: "stillBlocked",
-      row: {
-        note_path: task.path,
-        block_id: task.blockId || "",
-        line: task.line,
-        text: successorDisplayText(task),
-        status_symbol: task.status,
-        reason: ownFuture && ownOpen.length === 0 ? "scheduled" : "waits_on",
-        waits_on: ownOpen.length,
-        scheduled: ownFuture ? ownFuture.value : null,
-        project: String(task.path || ""),
-        mutedProject: true,
-        trigger: "dependency",
-      },
-    };
-  }
-  if (task.hidden === true || (task.rawLine && successorHasHideTag(task.rawLine))) {
-    return { kind: "recover", reason: "hidden", predecessorRows: projectPredecessors, foldedProject: String(task.path || "") };
-  }
-  if (hasLiveLinkBefore(task)) {
-    return { kind: "recover", reason: "already_planned", predecessorRows: projectPredecessors, foldedProject: String(task.path || "") };
-  }
-  if (cancelledClose || linkUnblocked === false) {
-    return { kind: "recover", reason: cancelledClose ? "cancelled" : "disabled", predecessorRows: projectPredecessors };
-  }
-  const predAnchors = unblocking.map((identity) => ({ identity, anchor: anchorOf(identity) }))
-    .filter((entry) => entry.anchor.kind !== "none")
-    .sort((l, r) => successorAnchorPosition(l.anchor) - successorAnchorPosition(r.anchor) ||
-      (l.anchor.bulletLine ?? -1) - (r.anchor.bulletLine ?? -1));
-  if (predAnchors.length > 0) {
-    return {
-      kind: "offer",
-      anchor: predAnchors[0].anchor,
-      predecessorRows: projectPredecessors,
-      group: "project",
-      project: String(task.path || ""),
-    };
-  }
-  const implicitResident = resolveSuccessorImplicitDestination(dailyBefore);
-  if (!implicitResident) {
-    return { kind: "recover", reason: "no_destination", predecessorRows: projectPredecessors };
-  }
-  return {
-    kind: "offer",
-    anchor: { kind: "implicit", entryLine: implicitResident.entryLine, bulletLine: null },
-    implicit: implicitResident,
-    predecessorRows: projectPredecessors,
-    group: "project",
-    project: String(task.path || ""),
-  };
-}
-
-// Destination object for an offer (§12.5): { day_file, entry_name,
-// entry_role, fallback }. entry_role is slot|closing|implicit|created;
-// fallback true when the implicit path was used because no §12.3 anchor
-// existed. `anchor` is the offer's anchor; `implicit` is the resolved
-// implicit entry when anchor.kind === "implicit".
-function successorOfferDestination(anchor, implicit, dailyLines, dailyPath) {
-  const dayFile = String(dailyPath || "");
-  try {
-    if (anchor && anchor.kind === "implicit" && implicit) {
-      const name = typeof implicit.name === "string" ? implicit.name : successorEntryNameAt(successorNormalizeLines(dailyLines), implicit.entryLine);
-      return { day_file: dayFile, entry_name: String(name || ""), entry_role: "implicit", fallback: true };
-    }
-    if (anchor && anchor.kind === "closing") {
-      const name = successorEntryNameAt(successorNormalizeLines(dailyLines), anchor.entryLine);
-      return { day_file: dayFile, entry_name: String(name || ""), entry_role: "closing", fallback: false };
-    }
-    if (anchor && anchor.entryLine != null) {
-      const name = successorEntryNameAt(successorNormalizeLines(dailyLines), anchor.entryLine);
-      const role = anchor.kind === "inherit" ? "slot" : "slot";
-      return { day_file: dayFile, entry_name: String(name || ""), entry_role: role, fallback: false };
-    }
-  } catch (error) {
-    // Fall through.
-  }
-  return { day_file: dayFile, entry_name: "", entry_role: "implicit", fallback: true };
-}
-
-// Defensive feature detection for nav api.successors v1 (§12.13).
-function getSuccessorPickerApi(app) {
-  try {
-    const plugins = (app && app.plugins && app.plugins.plugins) || {};
-    const nav = plugins["bob-navigation-hotkeys"];
-    const api = nav && nav.api;
-    const successors = api && api.successors;
-    if (!successors || !(Number(successors.version) >= 1)) {
-      return null;
-    }
-    if (typeof successors.pick !== "function") {
-      return null;
-    }
-    return successors;
-  } catch (error) {
-    return null;
-  }
-}

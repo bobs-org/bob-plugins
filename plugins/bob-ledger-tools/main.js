@@ -35942,33 +35942,113 @@ function statsPanelSummaryEntry(entry) {
     value: statsFinite(safe.value) ? safe.value : null,
     display: typeof safe.display === "string" && safe.display ? safe.display : "–",
     share: typeof safe.share === "string" ? safe.share : "",
+    off_clock: statsFinite(safe.off_clock) ? safe.off_clock : null,
+    clock_breakdown: typeof statsClockBreakdown === "function"
+      ? statsClockBreakdown(safe.clock_breakdown)
+      : null,
   };
+}
+
+function statsPanelClockName(metric, report) {
+  const clock = typeof statsMetricEffectiveClock === "function"
+    ? statsMetricEffectiveClock(metric, report)
+    : null;
+  if (!clock) return "";
+  try {
+    const options = report && report.clock && Array.isArray(report.clock.options) ? report.clock.options : [];
+    const option = options.find((item) => item && item.value === clock && typeof item.label === "string" && item.label.trim());
+    if (option) return option.label;
+  } catch (error) {
+    // Use the canonical label for older or malformed reports.
+  }
+  return clock === "off-clock" ? "Off-clock" : clock === "total" ? "Total" : "Worked";
+}
+
+function statsPanelClockText(metric, report, breakdown, display) {
+  const value = typeof display === "string" ? display.trim() : "";
+  if (!value) return "";
+  const clock = typeof statsMetricEffectiveClock === "function"
+    ? statsMetricEffectiveClock(metric, report)
+    : null;
+  if (!clock) return value;
+  const name = statsPanelClockName(metric, report) || "Worked";
+  const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(breakdown) : null;
+  if (clock === "total" && split) {
+    return value + " " + name + " · " + split.worked.display + " worked · " + split.off_clock.display + " off-clock";
+  }
+  if (clock === "worked" && split && split.off_clock.value > 0) {
+    return value + " " + name + " · " + split.off_clock.display + " off-clock excluded";
+  }
+  return value + " " + name;
+}
+
+function statsPanelPartClockBreakdown(part, point, dimension, key) {
+  let raw = part && typeof part === "object" ? part.clock_breakdown : null;
+  if (point && typeof point === "object") {
+    const dimensions = point.parts_clock_breakdown && typeof point.parts_clock_breakdown === "object"
+      ? point.parts_clock_breakdown
+      : {};
+    const entries = dimensions[dimension] && typeof dimensions[dimension] === "object"
+      ? dimensions[dimension]
+      : {};
+    raw = entries[key];
+  }
+  return typeof statsClockBreakdown === "function" ? statsClockBreakdown(raw) : null;
+}
+
+function statsPanelSessionIsOffClock(session) {
+  const safe = session && typeof session === "object" ? session : {};
+  const owns = (value, key) => value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, key);
+  if (owns(safe, "off_clock")) return safe.off_clock === true;
+  const homes = safe.homes && typeof safe.homes === "object" ? safe.homes : {};
+  if (owns(homes, "off_clock")) return homes.off_clock === true;
+  if (owns(homes, "untracked")) return homes.untracked === true;
+  return safe.untracked === true;
 }
 
 // Ranked theme rows for pomodoro metrics plus the supplied period total.
 // JSON keeps every theme; older bob still supplies top-five-plus-other.
 // This preserves supplied order for ties and sorts strictly by value
 // otherwise.
-function statsPanelThemeRows(metric, point) {
+function statsPanelThemeRows(metric, point, report) {
   const safe = metric && typeof metric === "object" ? metric : {};
   const summary = safe.parts_summary && typeof safe.parts_summary === "object" ? safe.parts_summary : {};
-  const raw = point && point.parts && point.parts.theme && typeof point.parts.theme === "object" && !Array.isArray(point.parts.theme)
+  const hasPointParts = point && point.parts && point.parts.theme && typeof point.parts.theme === "object" && !Array.isArray(point.parts.theme);
+  const raw = hasPointParts
     ? Object.entries(point.parts.theme).map(([key, value]) => ({
       key,
       value,
       display: point.parts_display && point.parts_display.theme && point.parts_display.theme[key],
       share: "",
     }))
-    : Array.isArray(summary.theme) ? summary.theme : [];
-  const rows = raw.map(statsPanelSummaryEntry).filter(Boolean);
+    : point ? [] : Array.isArray(summary.theme) ? summary.theme : [];
+  const rows = raw.map((part) => {
+    const row = statsPanelSummaryEntry(part);
+    if (!row) return null;
+    const breakdown = statsPanelPartClockBreakdown(part, point, "theme", row.key);
+    const offClock = row.off_clock === null && breakdown ? breakdown.off_clock.value : row.off_clock;
+    return {
+      ...row,
+      off_clock: offClock,
+      clock_breakdown: breakdown,
+      clock: typeof statsMetricEffectiveClock === "function" ? statsMetricEffectiveClock(metric, report) : null,
+      clock_text: statsPanelClockText(metric, report, breakdown, row.display),
+    };
+  }).filter(Boolean);
   rows.sort((a, b) => (b.value === null ? -1 : a.value === null ? 1 : 0) || ((b.value || 0) - (a.value || 0)));
   const total = point && typeof point.display === "string" && point.display
     ? point.display
     : safe.summary && typeof safe.summary === "object" && safe.summary.total && typeof safe.summary.total.display === "string"
       ? safe.summary.total.display
       : "";
+  const totalBreakdown = point
+    ? point.clock_breakdown
+    : safe.summary && typeof safe.summary === "object" ? safe.summary.total_clock_breakdown : null;
   return {
     total,
+    total_clock_breakdown: typeof statsClockBreakdown === "function" ? statsClockBreakdown(totalBreakdown) : null,
+    total_clock_text: statsPanelClockText(metric, report, totalBreakdown, total),
+    clock: typeof statsMetricEffectiveClock === "function" ? statsMetricEffectiveClock(metric, report) : null,
     rows,
   };
 }
@@ -36125,10 +36205,11 @@ function statsPanelFormatMinutes(value) {
   return minutes + "m";
 }
 
-function statsPanelHomeRows(metric, report, dimension, point) {
+function statsPanelHomeRows(metric, report, dimension, point, clockPresentation = false) {
   const safe = metric && typeof metric === "object" ? metric : {};
   const summary = safe.parts_summary && typeof safe.parts_summary === "object" ? safe.parts_summary : {};
-  const raw = point && point.parts && point.parts[dimension] && typeof point.parts[dimension] === "object"
+  const hasPointParts = point && point.parts && point.parts[dimension] && typeof point.parts[dimension] === "object" && !Array.isArray(point.parts[dimension]);
+  const raw = hasPointParts
     ? Object.entries(point.parts[dimension]).map(([key, value]) => ({
       key,
       value,
@@ -36136,18 +36217,29 @@ function statsPanelHomeRows(metric, report, dimension, point) {
       apportioned: point.apportioned && point.apportioned[dimension] && point.apportioned[dimension][key],
       label: null,
     }))
-    : Array.isArray(summary[dimension]) ? summary[dimension] : [];
+    : point ? [] : Array.isArray(summary[dimension]) ? summary[dimension] : [];
   const rows = raw.map((part) => {
     if (!part || typeof part.key !== "string" || !part.key || !statsFinite(part.value)) return null;
     const value = part.value;
     const apportioned = statsFinite(part.apportioned) ? Math.max(0, Math.min(value, part.apportioned)) : 0;
+    const breakdown = statsPanelPartClockBreakdown(part, point, dimension, part.key);
+    const offClock = statsFinite(part.off_clock)
+      ? part.off_clock
+      : breakdown ? breakdown.off_clock.value : null;
+    const display = typeof part.display === "string" && part.display
+      ? part.display
+      : safe.unit === "minutes" ? statsPanelFormatMinutes(value) : String(value);
     return {
       key: part.key,
       value,
-      display: typeof part.display === "string" && part.display
-        ? part.display
-        : safe.unit === "minutes" ? statsPanelFormatMinutes(value) : String(value),
+      display,
       share: typeof part.share === "string" ? part.share : "",
+      off_clock: offClock,
+      clock_breakdown: breakdown,
+      ...(clockPresentation ? {
+        clock: typeof statsMetricEffectiveClock === "function" ? statsMetricEffectiveClock(metric, report) : null,
+        clock_text: statsPanelClockText(metric, report, breakdown, display),
+      } : {}),
       apportioned,
       apportionedDisplay: typeof part.apportioned_display === "string" && part.apportioned_display
         ? part.apportioned_display
@@ -36275,9 +36367,9 @@ function statsPanelHomeSessions(report, dimension, key, point) {
     String(a.path || "").localeCompare(String(b.path || "")) || (b.line || 0) - (a.line || 0));
 }
 
-function statsPanelRootSubRows(metric, report, rootKey, point) {
+function statsPanelRootSubRows(metric, report, rootKey, point, clockPresentation = false) {
   const catalog = statsPanelHomeCatalog(report);
-  const leaves = statsPanelHomeRows(metric, report, "project", point).filter((row) => {
+  const leaves = statsPanelHomeRows(metric, report, "project", point, clockPresentation).filter((row) => {
     const entry = catalog[row.key] && typeof catalog[row.key] === "object" ? catalog[row.key] : null;
     return Boolean(entry && entry.root_parent === rootKey) || row.key === rootKey;
   });
@@ -36772,7 +36864,7 @@ class BobLedgerToolsStatsPanelsMixin {
       section.appendChild(this.statsPanelNote(doc, "Update bob for areas & projects."));
     }
     const point = statsPanelSelectedHomePoint(metric, report, viewModel.state);
-    const model = statsPanelThemeRows(metric, point);
+    const model = statsPanelThemeRows(metric, point, report);
     if (!model.rows.length) {
       section.appendChild(this.statsPanelNote(doc, "No type breakdown is in this report."));
       return true;
@@ -36793,21 +36885,51 @@ class BobLedgerToolsStatsPanelsMixin {
       ? model.rows.slice(0, cap)
       : model.rows;
     for (const row of visible) {
-      const item = statsEl(doc, "li", { class: "bob-stats-panel-bar-row" });
-      const track = statsEl(doc, "span", { class: "bob-stats-panel-bar-track bob-stats-panel-bar-thin", "aria-hidden": "true" });
+      const amount = (row.clock_text || row.display) + (row.share ? " (" + row.share + ")" : "");
+      const item = statsEl(doc, "li", {
+        class: "bob-stats-panel-bar-row",
+        "aria-label": row.key + ": " + amount,
+        title: amount,
+      });
+      const track = statsEl(doc, "span", {
+        class: "bob-stats-panel-bar-track bob-stats-panel-bar-thin",
+        "data-clock": model.clock || null,
+        "aria-hidden": "true",
+      });
       const ref = typeof statsThemeRef === "function"
         ? statsThemeRef(report, row.key, fallback)
         : { key: row.key, label: row.key, hue: "gray", gray: true };
-      const fill = statsEl(doc, "span", { class: "bob-stats-panel-bar-fill bob-stats-theme-bar-" + (ref.gray ? "gray" : ref.hue), "aria-hidden": "true" });
+      const fill = statsEl(doc, "span", {
+        class: "bob-stats-panel-bar-fill bob-stats-theme-bar-" + (ref.gray ? "gray" : ref.hue),
+        "data-clock": model.clock || null,
+        "data-unit": metric.unit || null,
+        title: amount,
+        "aria-hidden": "true",
+      });
       try {
         fill.setAttribute("style", "width: " + (max > 0 && statsFinite(row.value) ? Math.max(4, Math.round((row.value / max) * 100)) : 0) + "%");
       } catch (error) {
         // Bar width is best-effort.
       }
+      const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(row.clock_breakdown) : null;
+      if (model.clock === "total" && split) {
+        const splitTotal = split.worked.value + split.off_clock.value;
+        if (splitTotal > 0) {
+          fill.appendChild(statsEl(doc, "span", {
+            class: "bob-stats-panel-bar-worked",
+            style: "width: " + (split.worked.value / splitTotal * 100) + "%",
+          }));
+          fill.appendChild(statsEl(doc, "span", {
+            class: "bob-stats-panel-bar-off-clock-tail",
+            style: "width: " + (split.off_clock.value / splitTotal * 100) + "%",
+            title: split.off_clock.display + " off-clock",
+          }));
+        }
+      }
       track.appendChild(fill);
       item.appendChild(track);
       const share = row.share ? " (" + row.share + ")" : "";
-      item.appendChild(statsEl(doc, "span", { class: "bob-stats-panel-bar-text" }, ref.label + " — " + row.display + share));
+      item.appendChild(statsEl(doc, "span", { class: "bob-stats-panel-bar-text" }, ref.label + " — " + (row.clock_text || row.display) + share));
       list.appendChild(item);
     }
     section.appendChild(list);
@@ -37420,7 +37542,11 @@ class BobLedgerToolsStatsHomesMixin {
     const total = point && typeof point.display === "string"
       ? point.display
       : statsPanelTotalDisplay(metric);
-    const title = "Where the time went · " + statsPanelHomeSpan(point, report) + " · " + (total || "–");
+    const totalBreakdown = point
+      ? point.clock_breakdown
+      : metric.summary && typeof metric.summary === "object" ? metric.summary.total_clock_breakdown : null;
+    const totalText = statsPanelClockText(metric, report, totalBreakdown, total) || total || "–";
+    const title = "Where the time went · " + statsPanelHomeSpan(point, report) + " · " + totalText;
     const header = statsEl(doc, "div", { class: "bob-stats-home-header" });
     header.appendChild(this.statsPanelTitle(doc, title));
     const controls = statsEl(doc, "div", {
@@ -37536,13 +37662,20 @@ class BobLedgerToolsStatsHomesMixin {
       }).join(" · ");
       const name = session.name || (session.homes && session.homes.label) || "(unnamed)";
       const range = session.time_range || "time unavailable";
-      const text = [session.date || "date unavailable", range, session.minutes_display || "–", name, shares]
+      const offClock = typeof statsPanelSessionIsOffClock === "function"
+        ? statsPanelSessionIsOffClock(session)
+        : session.off_clock === true;
+      const clockText = offClock ? "◌ off-clock" : "";
+      const text = [clockText, session.date || "date unavailable", range, session.minutes_display || "–", name, shares]
         .filter(Boolean).join(" · ");
-      const item = statsEl(doc, "li", { class: "bob-stats-home-session-item" });
+      const item = statsEl(doc, "li", {
+        class: "bob-stats-home-session-item" + (offClock ? " bob-stats-home-session-off-clock" : ""),
+        "data-clock": offClock ? "off-clock" : "worked",
+      });
       const open = statsEl(doc, "button", {
         class: "bob-stats-home-session-link",
         type: "button",
-        "aria-label": "Open " + name + " on " + (session.date || "unknown date") + " at line " + (session.line || 1),
+        "aria-label": (offClock ? "Off-clock session. " : "Worked session. ") + "Open " + name + " on " + (session.date || "unknown date") + " at line " + (session.line || 1),
         "data-stats-focus-key": "panel-home-session-" + id + "-" + index,
       }, text);
       open.addEventListener("click", () => this.statsPanelOpenSession(session, view));
@@ -37573,11 +37706,14 @@ class BobLedgerToolsStatsHomesMixin {
     const group = statsEl(doc, "div", {
       class: "bob-stats-home-row " + (dimension === "area" ? "bob-stats-home-area-row" : "bob-stats-home-project-row") +
         (isBucket ? " bob-stats-home-bucket" : "") + " bob-stats-home-" + hue,
+      "data-clock": row.clock || null,
+      title: row.clock_text || null,
+      "aria-label": row.label + ": " + (row.clock_text || row.display) + (row.share ? " · " + row.share : ""),
     });
     const dot = statsEl(doc, "span", { class: "bob-stats-home-dot", "aria-hidden": "true" });
     group.appendChild(dot);
     group.appendChild(this.statsPanelHomeLink(doc, view, row, dimension));
-    const amount = row.display + (row.share ? " · " + row.share : "");
+    const amount = (row.clock_text || row.display) + (row.share ? " · " + row.share : "");
     group.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, amount));
     const sessions = metric.kind === "pomodoro"
       ? this.statsPanelHomeSessionButton(doc, view, report, metric, dimension, row, point)
@@ -37603,9 +37739,16 @@ class BobLedgerToolsStatsHomesMixin {
     const apportionedShare = row.value > 0 ? (apportioned / row.value) * 100 : 0;
     const outer = statsEl(doc, "span", {
       class: "bob-stats-home-mini-track bob-stats-home-" + (row.hue || "gray"),
+      "data-clock": row.clock || null,
+      title: row.clock_text || null,
       "aria-hidden": "true",
     });
-    const bar = statsEl(doc, "span", { class: "bob-stats-home-mini-fill", style: "width: " + width + "%" });
+    const bar = statsEl(doc, "span", {
+      class: "bob-stats-home-mini-fill",
+      style: "width: " + width + "%",
+      "data-clock": row.clock || null,
+      "data-unit": metric && metric.unit || null,
+    });
     bar.appendChild(statsEl(doc, "span", { class: "bob-stats-home-mini-direct", style: "width: " + directShare + "%" }));
     if (apportioned > 0) {
       bar.appendChild(statsEl(doc, "span", {
@@ -37613,15 +37756,40 @@ class BobLedgerToolsStatsHomesMixin {
         style: "width: " + apportionedShare + "%",
       }));
     }
+    const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(row.clock_breakdown) : null;
+    if (row.clock === "total" && split) {
+      const splitTotal = split.worked.value + split.off_clock.value;
+      if (splitTotal > 0) {
+        const overlay = statsEl(doc, "span", { class: "bob-stats-home-mini-clock", "aria-hidden": "true" });
+        overlay.appendChild(statsEl(doc, "span", {
+          class: "bob-stats-home-mini-worked",
+          style: "width: " + (split.worked.value / splitTotal * 100) + "%",
+        }));
+        overlay.appendChild(statsEl(doc, "span", {
+          class: "bob-stats-home-mini-off-clock-tail",
+          style: "width: " + (split.off_clock.value / splitTotal * 100) + "%",
+          title: split.off_clock.display + " off-clock",
+        }));
+        bar.appendChild(overlay);
+      }
+    }
     outer.appendChild(bar);
     return outer;
   }
 
   statsPanelHomeProjectRow(doc, view, report, metric, row, point, maxValue, tint) {
-    const item = statsEl(doc, "div", { class: "bob-stats-home-project" + (row.key.startsWith("@") ? " bob-stats-home-bucket" : "") });
-    const top = statsEl(doc, "div", { class: "bob-stats-home-project-top bob-stats-home-" + (row.hue || "gray") });
+    const item = statsEl(doc, "div", {
+      class: "bob-stats-home-project" + (row.key.startsWith("@") ? " bob-stats-home-bucket" : ""),
+      "data-clock": row.clock || null,
+      title: row.clock_text || null,
+    });
+    const top = statsEl(doc, "div", {
+      class: "bob-stats-home-project-top bob-stats-home-" + (row.hue || "gray"),
+      "data-clock": row.clock || null,
+      "aria-label": row.label + ": " + (row.clock_text || row.display) + (row.share ? " · " + row.share : ""),
+    });
     top.appendChild(this.statsPanelHomeLink(doc, view, row, "project"));
-    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, row.display + (row.share ? " · " + row.share : "")));
+    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, (row.clock_text || row.display) + (row.share ? " · " + row.share : "")));
     const sessions = metric.kind === "pomodoro"
       ? this.statsPanelHomeSessionButton(doc, view, report, metric, "project", row, point)
       : null;
@@ -37646,7 +37814,7 @@ class BobLedgerToolsStatsHomesMixin {
     const ordered = statsPanelHomeAreaRows(rows, report);
     const total = ordered.reduce((sum, row) => sum + Math.max(0, row.value || 0), 0);
     const wrap = statsEl(doc, "div", { class: "bob-stats-home-area-bar-wrap" });
-    const summary = ordered.map((row) => row.label + " " + row.display + (row.share ? " (" + row.share + ")" : ""));
+    const summary = ordered.map((row) => row.label + " " + (row.clock_text || row.display) + (row.share ? " (" + row.share + ")" : ""));
     const bar = statsEl(doc, "div", {
       class: "bob-stats-home-area-bar",
       role: "img",
@@ -37659,11 +37827,24 @@ class BobLedgerToolsStatsHomesMixin {
       const segment = statsEl(doc, "span", {
         class: "bob-stats-home-area-segment bob-stats-home-" + hue,
         style: "flex-basis: " + percent + "%",
-        title: row.label + " · " + row.display + (row.share ? " · " + row.share : ""),
+        title: row.label + " · " + (row.clock_text || row.display) + (row.share ? " · " + row.share : ""),
+        "data-clock": row.clock || null,
+        "data-unit": metric && metric.unit || null,
       });
-      const estimatedTextWidth = row.label.length * 6.5 + row.display.length * 5.5 + 22;
+      const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(row.clock_breakdown) : null;
+      if (row.clock === "total" && split) {
+        const splitTotal = split.worked.value + split.off_clock.value;
+        if (splitTotal > 0) {
+          segment.appendChild(statsEl(doc, "span", {
+            class: "bob-stats-home-area-off-clock-tail",
+            style: "width: " + (split.off_clock.value / splitTotal * 100) + "%",
+            title: split.off_clock.display + " off-clock",
+          }));
+        }
+      }
+      const estimatedTextWidth = row.label.length * 6.5 + (row.clock_text || row.display).length * 5.5 + 22;
       if (width * (percent / 100) >= estimatedTextWidth) {
-        segment.appendChild(statsEl(doc, "span", { class: "bob-stats-home-area-segment-label" }, row.label + " · " + row.display));
+        segment.appendChild(statsEl(doc, "span", { class: "bob-stats-home-area-segment-label" }, row.label + " · " + (row.clock_text || row.display)));
       }
       segment.setAttribute("data-order", String(index));
       bar.appendChild(segment);
@@ -37674,10 +37855,18 @@ class BobLedgerToolsStatsHomesMixin {
 
   statsPanelRootRow(doc, view, report, metric, row, point, maxValue, tint) {
     const isBucket = row.key.startsWith("@");
-    const item = statsEl(doc, "div", { class: "bob-stats-home-project" + (isBucket ? " bob-stats-home-bucket" : "") });
-    const top = statsEl(doc, "div", { class: "bob-stats-home-project-top bob-stats-home-" + (row.hue || "gray") });
+    const item = statsEl(doc, "div", {
+      class: "bob-stats-home-project" + (isBucket ? " bob-stats-home-bucket" : ""),
+      "data-clock": row.clock || null,
+      title: row.clock_text || null,
+    });
+    const top = statsEl(doc, "div", {
+      class: "bob-stats-home-project-top bob-stats-home-" + (row.hue || "gray"),
+      "data-clock": row.clock || null,
+      "aria-label": row.label + ": " + (row.clock_text || row.display) + (row.share ? " · " + row.share : ""),
+    });
     top.appendChild(this.statsPanelHomeLink(doc, view, row, "root_parent"));
-    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, row.display + (row.share ? " · " + row.share : "")));
+    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, (row.clock_text || row.display) + (row.share ? " · " + row.share : "")));
     const sessions = metric.kind === "pomodoro"
       ? this.statsPanelHomeSessionButton(doc, view, report, metric, "root_parent", row, point)
       : null;
@@ -37703,7 +37892,7 @@ class BobLedgerToolsStatsHomesMixin {
     const entry = catalog[root.key] && typeof catalog[root.key] === "object" ? catalog[root.key] : null;
     if (!entry || entry.kind !== "project") return null;
     const leaves = typeof statsPanelRootSubRows === "function"
-      ? statsPanelRootSubRows(metric, report, root.key, point)
+      ? statsPanelRootSubRows(metric, report, root.key, point, true)
       : [];
     const others = leaves.filter((leaf) => leaf.key !== root.key);
     if (!others.length) return null;
@@ -37729,9 +37918,15 @@ class BobLedgerToolsStatsHomesMixin {
     for (const leaf of leaves) {
       leaf.hue = rootHue;
       const row = statsEl(doc, "div", { class: "bob-stats-home-sub-leaf" + (leaf.key.startsWith("@") ? " bob-stats-home-bucket" : "") });
-      const top = statsEl(doc, "div", { class: "bob-stats-home-sub-top bob-stats-home-" + rootHue });
+      row.setAttribute("data-clock", leaf.clock || "");
+      row.setAttribute("title", leaf.clock_text || leaf.display);
+      const top = statsEl(doc, "div", {
+        class: "bob-stats-home-sub-top bob-stats-home-" + rootHue,
+        "data-clock": leaf.clock || null,
+        "aria-label": leaf.label + ": " + (leaf.clock_text || leaf.display) + (leaf.share ? " · " + leaf.share : ""),
+      });
       top.appendChild(this.statsPanelHomeLink(doc, view, leaf, "project"));
-      top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, leaf.display + (leaf.share ? " · " + leaf.share : "")));
+      top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, (leaf.clock_text || leaf.display) + (leaf.share ? " · " + leaf.share : "")));
       row.appendChild(top);
       const bar = this.statsPanelHomeMiniBar(doc, leaf, maxValue, metric, false);
       if (bar) row.appendChild(bar);
@@ -37744,8 +37939,8 @@ class BobLedgerToolsStatsHomesMixin {
   statsPanelRootTable(doc, view, report, metric, section, options = {}) {
     const state = this.statsViewStateFor(view && view.sourcePath);
     const point = statsPanelSelectedHomePoint(metric, report, state);
-    const areaRows = statsPanelHomeRows(metric, report, "area", point);
-    const rootRows = statsPanelHomeRows(metric, report, "root_parent", point);
+    const areaRows = statsPanelHomeRows(metric, report, "area", point, true);
+    const rootRows = statsPanelHomeRows(metric, report, "root_parent", point, true);
     const distinctHues = typeof statsPanelDistinctHues === "function"
       ? statsPanelDistinctHues(rootRows, report)
       : new Map();
@@ -37850,8 +38045,8 @@ class BobLedgerToolsStatsHomesMixin {
     }
     const state = this.statsViewStateFor(view && view.sourcePath);
     const point = statsPanelSelectedHomePoint(metric, report, state);
-    const areaRows = statsPanelHomeRows(metric, report, "area", point);
-    const projectRows = statsPanelHomeRows(metric, report, "project", point);
+    const areaRows = statsPanelHomeRows(metric, report, "area", point, true);
+    const projectRows = statsPanelHomeRows(metric, report, "project", point, true);
     const tint = metric.unit === "minutes";
     if (options.title) {
       section.appendChild(this.statsPanelTitle(doc, (metric.label || metric.id) + " by area & project"));
@@ -37946,7 +38141,8 @@ function timeLaneSegmentTitle(segment) {
   const label = segment && typeof segment.label === "string" ? segment.label : "";
   const display = segment && typeof segment.display === "string" ? segment.display : "";
   const share = segment && typeof segment.share === "string" ? segment.share : "";
-  const parts = [label, display, share].filter(Boolean);
+  const clockText = segment && typeof segment.clock_text === "string" ? segment.clock_text : "";
+  const parts = [label, clockText || display, share].filter(Boolean);
   let title = parts.join(" · ");
   if (segment && segment.unconfigured) title += " · not in your types";
   return title;
@@ -37973,6 +38169,12 @@ function timeLaneRootSegments(report, dimension, rows) {
       tone,
       bucket: typeof row.key === "string" && row.key.startsWith("@"),
       unconfigured: false,
+      ...(row.clock ? {
+        clock: row.clock,
+        off_clock: statsFinite(row.off_clock) ? row.off_clock : null,
+        clock_breakdown: typeof statsClockBreakdown === "function" ? statsClockBreakdown(row.clock_breakdown) : null,
+        clock_text: typeof row.clock_text === "string" ? row.clock_text : "",
+      } : {}),
     };
     segment.title = timeLaneSegmentTitle(segment);
     return segment;
@@ -38000,6 +38202,12 @@ function timeLaneThemeSegments(report, entries, fallback) {
       gray,
       hue_source: typeof ref.hue_source === "string" ? ref.hue_source : "",
       unconfigured: timeLaneThemeUnconfigured(ref) || timeLaneThemeUnconfigured(entry),
+      ...(entry.clock ? {
+        clock: entry.clock,
+        off_clock: statsFinite(entry.off_clock) ? entry.off_clock : null,
+        clock_breakdown: typeof statsClockBreakdown === "function" ? statsClockBreakdown(entry.clock_breakdown) : null,
+        clock_text: typeof entry.clock_text === "string" ? entry.clock_text : "",
+      } : {}),
     });
   }
   const coloured = list.filter((entry) => !entry.gray);
@@ -38044,6 +38252,12 @@ function timeLaneThemeSegments(report, entries, fallback) {
       tone: timeLaneThemeTone(entry.key, entry.gray),
       bucket: entry.gray,
       unconfigured: Boolean(entry.unconfigured),
+      ...(entry.clock ? {
+        clock: entry.clock,
+        off_clock: entry.off_clock,
+        clock_breakdown: entry.clock_breakdown,
+        clock_text: entry.clock_text,
+      } : {}),
     };
     segment.title = timeLaneSegmentTitle(segment);
     return segment;
@@ -38099,6 +38313,13 @@ function timeLaneLegend(report, dimension, segments) {
       shade: segment.shade,
       bucket: segment.bucket,
       rank: segment.rank || 0,
+      ...(segment.clock ? {
+        clock: segment.clock,
+        off_clock: segment.off_clock,
+        clock_breakdown: segment.clock_breakdown,
+        clock_text: segment.clock_text,
+        title: segment.title,
+      } : {}),
     };
   });
   const overflow = ranked.filter((segment) => (rankOf.get(segment.key) || 0) > 3);
@@ -38152,19 +38373,39 @@ function statsWindowTotal(worked) {
   const value = typeof total.value === "number" && Number.isFinite(total.value) ? total.value : null;
   const display = typeof total.display === "string" && total.display ? total.display : "";
   if (value === null && !display) return null;
-  return { value, display };
+  return {
+    value,
+    display,
+    clock_breakdown: typeof statsClockBreakdown === "function"
+      ? statsClockBreakdown(summary.total_clock_breakdown)
+      : null,
+  };
 }
 
-function statsWindowThemeEntries(worked) {
+function statsWindowThemeEntries(worked, report) {
   const summary = worked && worked.parts_summary && typeof worked.parts_summary === "object"
     ? worked.parts_summary
     : {};
   const raw = Array.isArray(summary.theme) ? summary.theme : [];
-  return raw.filter((part) => part && typeof part.key === "string" && timeLanePositive(part.value));
+  return raw.filter((part) => part && typeof part.key === "string" && timeLanePositive(part.value)).map((part) => {
+    const row = typeof statsPanelSummaryEntry === "function" ? statsPanelSummaryEntry(part) : part;
+    if (!row) return null;
+    const breakdown = typeof statsClockBreakdown === "function" ? statsClockBreakdown(row.clock_breakdown) : null;
+    return {
+      ...row,
+      off_clock: row.off_clock === null && breakdown ? breakdown.off_clock.value : row.off_clock,
+      clock: typeof statsMetricEffectiveClock === "function" ? statsMetricEffectiveClock(worked, report) : null,
+      clock_breakdown: breakdown,
+      clock_text: typeof statsPanelClockText === "function"
+        ? statsPanelClockText(worked, report, breakdown, row.display)
+        : row.display,
+    };
+  }).filter(Boolean);
 }
 
 function statsWindowLaneAria(sentence, span, segments) {
   const listed = (Array.isArray(segments) ? segments : []).map((segment) => {
+    if (segment && typeof segment.title === "string" && segment.title) return segment.title;
     const share = segment.share ? " (" + segment.share + ")" : "";
     return segment.label + " " + segment.display + share;
   }).join(", ");
@@ -38208,23 +38449,33 @@ function statsWindowLanesModel(report, context) {
     if (!worked || worked.unit !== "minutes") return statsWindowLanesOmitted();
     const total = statsWindowTotal(worked);
     if (!total) return statsWindowLanesOmitted();
+    const clock = typeof statsMetricEffectiveClock === "function"
+      ? statsMetricEffectiveClock(worked, safeReport) || "worked"
+      : "worked";
+    const clockName = typeof statsPanelClockName === "function"
+      ? statsPanelClockName(worked, safeReport) || "Worked"
+      : "Worked";
+    const totalClockText = typeof statsPanelClockText === "function"
+      ? statsPanelClockText(worked, safeReport, total.clock_breakdown, total.display)
+      : total.display;
     const range = safeReport.range && typeof safeReport.range === "object" ? safeReport.range : {};
     const span = typeof range.label === "string" ? range.label : "";
-    const windowKey = String(range.start || "") + ".." + String(range.end || "");
-    const metaTitle = "Worked" + (span ? " " + span : "") +
+    const windowKey = String(range.start || "") + ".." + String(range.end || "") + "::" + clock;
+    const metricLabel = typeof worked.label === "string" && worked.label.trim() ? worked.label : clockName;
+    const metaTitle = metricLabel + (span ? " " + span : "") +
       (range.includes_today ? " · complete days; today is not included" : "");
     const meta = {
-      text: (total.display || "0m") + " worked",
+      text: totalClockText || (total.display || "0m") + " " + metricLabel,
       title: metaTitle,
     };
-    const ariaLabel = "Where the time went" + (span ? ", " + span : "");
+    const ariaLabel = "Where the time went · " + metricLabel + (span ? ", " + span : "");
     if (total.value === 0) {
       const roots = statsWindowLaneEmpty("root_parent", {
         omitted: false,
         empty: true,
-        sentence: "Time by root parent",
+        sentence: clockName + " by root parent",
         panelView: "roots",
-        ariaLabel: statsWindowLaneAria("Time by root parent", span, []),
+        ariaLabel: statsWindowLaneAria(clockName + " by root parent", span, []),
       });
       return {
         state: "ready",
@@ -38244,7 +38495,7 @@ function statsWindowLanesModel(report, context) {
     let roots = statsWindowLaneEmpty(rootDimension || "root_parent");
     if (rootDimension) {
       const rows = typeof statsPanelHomeRows === "function"
-        ? statsPanelHomeRows(worked, safeReport, rootDimension, null)
+        ? statsPanelHomeRows(worked, safeReport, rootDimension, null, true)
         : [];
       const positive = (Array.isArray(rows) ? rows : []).filter((row) => row && timeLanePositive(row.value));
       if (positive.length) {
@@ -38252,24 +38503,26 @@ function statsWindowLanesModel(report, context) {
           ? statsPanelHomeAreaRows(positive, safeReport)
           : positive;
         const segments = timeLaneRootSegments(safeReport, rootDimension, ordered);
-        const sentence = rootDimension === "area" ? "Time by area" : "Time by root parent";
+        const sentence = rootDimension === "area" ? clockName + " by area" : clockName + " by root parent";
         const panelView = rootDimension === "area" ? "areas" : "roots";
         roots = statsWindowBuildLane(safeReport, worked, rootDimension, sentence, panelView, segments, span);
       }
     }
     let themes = statsWindowLaneEmpty("theme");
-    const themeEntries = statsWindowThemeEntries(worked);
+    const themeEntries = statsWindowThemeEntries(worked, safeReport);
     if (themeEntries.length) {
       const fallback = context && typeof context.themeHueFor === "function" ? context.themeHueFor : null;
       const segments = timeLaneThemeSegments(safeReport, themeEntries, fallback);
       if (segments.length) {
-        themes = statsWindowBuildLane(safeReport, worked, "theme", "Time by type", "themes", segments, span);
+        themes = statsWindowBuildLane(safeReport, worked, "theme", clockName + " by type", "themes", segments, span);
       }
     }
     if (roots.omitted && themes.omitted) return statsWindowLanesOmitted();
     return {
       state: "ready",
       windowKey,
+      clock,
+      clockName,
       span,
       meta,
       roots,
@@ -40466,6 +40719,24 @@ function statsWindowLanesPaintLegend(doc, laneModel, laneName, skeleton) {
     : (laneModel && Array.isArray(laneModel.legend) ? laneModel.legend : []);
   for (const entry of entries) {
     const item = dayStripLegendItem(doc, entry, laneName);
+    if (!skeleton && item && entry && entry.clock) {
+      item.setAttribute("data-clock", entry.clock);
+      const mark = item.children && item.children[0];
+      if (mark) {
+        mark.setAttribute("data-clock", entry.clock);
+        const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(entry.clock_breakdown) : null;
+        if (entry.clock === "total" && split) {
+          const total = split.worked.value + split.off_clock.value;
+          if (total > 0) {
+            mark.appendChild(statsEl(doc, "span", {
+              class: "bob-stats-lane-legend-off-clock-tail",
+              style: "width: " + (split.off_clock.value / total * 100) + "%",
+              "aria-hidden": "true",
+            }));
+          }
+        }
+      }
+    }
     if (!skeleton && entry && typeof entry.rank === "number" && entry.rank > 3 && item) {
       item.setAttribute("hidden", "true");
     }
@@ -40499,9 +40770,28 @@ function statsWindowLanesPaintBar(doc, laneModel, laneName, oldPairs, morph) {
       title: segment.title || (segment.label + " · " + segment.display),
       "data-key": segment.key,
       "data-tone": segment.tone || "hue",
+      "data-clock": segment.clock || null,
     });
     if (part && themes && typeof segment.shade === "number" && segment.shade > 0) {
       part.setAttribute("data-shade", String(segment.shade));
+    }
+    const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(segment.clock_breakdown) : null;
+    if (segment.clock === "total" && split) {
+      const splitTotal = split.worked.value + split.off_clock.value;
+      if (splitTotal > 0) {
+        part.setAttribute("data-clock-split", "true");
+        part.appendChild(statsEl(doc, "span", {
+          class: "bob-stats-lane-worked-span",
+          style: "flex: 0 0 " + (split.worked.value / splitTotal * 100) + "%",
+          "aria-hidden": "true",
+        }));
+        part.appendChild(statsEl(doc, "span", {
+          class: "bob-stats-lane-off-clock-tail",
+          style: "flex: 0 0 " + (split.off_clock.value / splitTotal * 100) + "%",
+          title: split.off_clock.display + " off-clock",
+          "aria-hidden": "true",
+        }));
+      }
     }
     const start = morph ? statsLanesOldValue(oldPairs, segment.key) : segment.value;
     statsLanesSetGrow(part, start === null || start === undefined ? 0 : start);
@@ -40599,6 +40889,7 @@ function paintStatsWindowLanes(host, model, handlers, memory) {
     host.setAttribute("class", "bob-stats-lanes");
     host.setAttribute("role", "group");
     host.setAttribute("aria-label", model.ariaLabel || "Where the time went");
+    if (model.clock) host.setAttribute("data-clock", model.clock);
   } catch (error) {
     // Best-effort.
   }

@@ -28,7 +28,11 @@ class BobLedgerToolsStatsHomesMixin {
     const total = point && typeof point.display === "string"
       ? point.display
       : statsPanelTotalDisplay(metric);
-    const title = "Where the time went · " + statsPanelHomeSpan(point, report) + " · " + (total || "–");
+    const totalBreakdown = point
+      ? point.clock_breakdown
+      : metric.summary && typeof metric.summary === "object" ? metric.summary.total_clock_breakdown : null;
+    const totalText = statsPanelClockText(metric, report, totalBreakdown, total) || total || "–";
+    const title = "Where the time went · " + statsPanelHomeSpan(point, report) + " · " + totalText;
     const header = statsEl(doc, "div", { class: "bob-stats-home-header" });
     header.appendChild(this.statsPanelTitle(doc, title));
     const controls = statsEl(doc, "div", {
@@ -144,13 +148,20 @@ class BobLedgerToolsStatsHomesMixin {
       }).join(" · ");
       const name = session.name || (session.homes && session.homes.label) || "(unnamed)";
       const range = session.time_range || "time unavailable";
-      const text = [session.date || "date unavailable", range, session.minutes_display || "–", name, shares]
+      const offClock = typeof statsPanelSessionIsOffClock === "function"
+        ? statsPanelSessionIsOffClock(session)
+        : session.off_clock === true;
+      const clockText = offClock ? "◌ off-clock" : "";
+      const text = [clockText, session.date || "date unavailable", range, session.minutes_display || "–", name, shares]
         .filter(Boolean).join(" · ");
-      const item = statsEl(doc, "li", { class: "bob-stats-home-session-item" });
+      const item = statsEl(doc, "li", {
+        class: "bob-stats-home-session-item" + (offClock ? " bob-stats-home-session-off-clock" : ""),
+        "data-clock": offClock ? "off-clock" : "worked",
+      });
       const open = statsEl(doc, "button", {
         class: "bob-stats-home-session-link",
         type: "button",
-        "aria-label": "Open " + name + " on " + (session.date || "unknown date") + " at line " + (session.line || 1),
+        "aria-label": (offClock ? "Off-clock session. " : "Worked session. ") + "Open " + name + " on " + (session.date || "unknown date") + " at line " + (session.line || 1),
         "data-stats-focus-key": "panel-home-session-" + id + "-" + index,
       }, text);
       open.addEventListener("click", () => this.statsPanelOpenSession(session, view));
@@ -181,11 +192,14 @@ class BobLedgerToolsStatsHomesMixin {
     const group = statsEl(doc, "div", {
       class: "bob-stats-home-row " + (dimension === "area" ? "bob-stats-home-area-row" : "bob-stats-home-project-row") +
         (isBucket ? " bob-stats-home-bucket" : "") + " bob-stats-home-" + hue,
+      "data-clock": row.clock || null,
+      title: row.clock_text || null,
+      "aria-label": row.label + ": " + (row.clock_text || row.display) + (row.share ? " · " + row.share : ""),
     });
     const dot = statsEl(doc, "span", { class: "bob-stats-home-dot", "aria-hidden": "true" });
     group.appendChild(dot);
     group.appendChild(this.statsPanelHomeLink(doc, view, row, dimension));
-    const amount = row.display + (row.share ? " · " + row.share : "");
+    const amount = (row.clock_text || row.display) + (row.share ? " · " + row.share : "");
     group.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, amount));
     const sessions = metric.kind === "pomodoro"
       ? this.statsPanelHomeSessionButton(doc, view, report, metric, dimension, row, point)
@@ -211,9 +225,16 @@ class BobLedgerToolsStatsHomesMixin {
     const apportionedShare = row.value > 0 ? (apportioned / row.value) * 100 : 0;
     const outer = statsEl(doc, "span", {
       class: "bob-stats-home-mini-track bob-stats-home-" + (row.hue || "gray"),
+      "data-clock": row.clock || null,
+      title: row.clock_text || null,
       "aria-hidden": "true",
     });
-    const bar = statsEl(doc, "span", { class: "bob-stats-home-mini-fill", style: "width: " + width + "%" });
+    const bar = statsEl(doc, "span", {
+      class: "bob-stats-home-mini-fill",
+      style: "width: " + width + "%",
+      "data-clock": row.clock || null,
+      "data-unit": metric && metric.unit || null,
+    });
     bar.appendChild(statsEl(doc, "span", { class: "bob-stats-home-mini-direct", style: "width: " + directShare + "%" }));
     if (apportioned > 0) {
       bar.appendChild(statsEl(doc, "span", {
@@ -221,15 +242,40 @@ class BobLedgerToolsStatsHomesMixin {
         style: "width: " + apportionedShare + "%",
       }));
     }
+    const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(row.clock_breakdown) : null;
+    if (row.clock === "total" && split) {
+      const splitTotal = split.worked.value + split.off_clock.value;
+      if (splitTotal > 0) {
+        const overlay = statsEl(doc, "span", { class: "bob-stats-home-mini-clock", "aria-hidden": "true" });
+        overlay.appendChild(statsEl(doc, "span", {
+          class: "bob-stats-home-mini-worked",
+          style: "width: " + (split.worked.value / splitTotal * 100) + "%",
+        }));
+        overlay.appendChild(statsEl(doc, "span", {
+          class: "bob-stats-home-mini-off-clock-tail",
+          style: "width: " + (split.off_clock.value / splitTotal * 100) + "%",
+          title: split.off_clock.display + " off-clock",
+        }));
+        bar.appendChild(overlay);
+      }
+    }
     outer.appendChild(bar);
     return outer;
   }
 
   statsPanelHomeProjectRow(doc, view, report, metric, row, point, maxValue, tint) {
-    const item = statsEl(doc, "div", { class: "bob-stats-home-project" + (row.key.startsWith("@") ? " bob-stats-home-bucket" : "") });
-    const top = statsEl(doc, "div", { class: "bob-stats-home-project-top bob-stats-home-" + (row.hue || "gray") });
+    const item = statsEl(doc, "div", {
+      class: "bob-stats-home-project" + (row.key.startsWith("@") ? " bob-stats-home-bucket" : ""),
+      "data-clock": row.clock || null,
+      title: row.clock_text || null,
+    });
+    const top = statsEl(doc, "div", {
+      class: "bob-stats-home-project-top bob-stats-home-" + (row.hue || "gray"),
+      "data-clock": row.clock || null,
+      "aria-label": row.label + ": " + (row.clock_text || row.display) + (row.share ? " · " + row.share : ""),
+    });
     top.appendChild(this.statsPanelHomeLink(doc, view, row, "project"));
-    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, row.display + (row.share ? " · " + row.share : "")));
+    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, (row.clock_text || row.display) + (row.share ? " · " + row.share : "")));
     const sessions = metric.kind === "pomodoro"
       ? this.statsPanelHomeSessionButton(doc, view, report, metric, "project", row, point)
       : null;
@@ -254,7 +300,7 @@ class BobLedgerToolsStatsHomesMixin {
     const ordered = statsPanelHomeAreaRows(rows, report);
     const total = ordered.reduce((sum, row) => sum + Math.max(0, row.value || 0), 0);
     const wrap = statsEl(doc, "div", { class: "bob-stats-home-area-bar-wrap" });
-    const summary = ordered.map((row) => row.label + " " + row.display + (row.share ? " (" + row.share + ")" : ""));
+    const summary = ordered.map((row) => row.label + " " + (row.clock_text || row.display) + (row.share ? " (" + row.share + ")" : ""));
     const bar = statsEl(doc, "div", {
       class: "bob-stats-home-area-bar",
       role: "img",
@@ -267,11 +313,24 @@ class BobLedgerToolsStatsHomesMixin {
       const segment = statsEl(doc, "span", {
         class: "bob-stats-home-area-segment bob-stats-home-" + hue,
         style: "flex-basis: " + percent + "%",
-        title: row.label + " · " + row.display + (row.share ? " · " + row.share : ""),
+        title: row.label + " · " + (row.clock_text || row.display) + (row.share ? " · " + row.share : ""),
+        "data-clock": row.clock || null,
+        "data-unit": metric && metric.unit || null,
       });
-      const estimatedTextWidth = row.label.length * 6.5 + row.display.length * 5.5 + 22;
+      const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(row.clock_breakdown) : null;
+      if (row.clock === "total" && split) {
+        const splitTotal = split.worked.value + split.off_clock.value;
+        if (splitTotal > 0) {
+          segment.appendChild(statsEl(doc, "span", {
+            class: "bob-stats-home-area-off-clock-tail",
+            style: "width: " + (split.off_clock.value / splitTotal * 100) + "%",
+            title: split.off_clock.display + " off-clock",
+          }));
+        }
+      }
+      const estimatedTextWidth = row.label.length * 6.5 + (row.clock_text || row.display).length * 5.5 + 22;
       if (width * (percent / 100) >= estimatedTextWidth) {
-        segment.appendChild(statsEl(doc, "span", { class: "bob-stats-home-area-segment-label" }, row.label + " · " + row.display));
+        segment.appendChild(statsEl(doc, "span", { class: "bob-stats-home-area-segment-label" }, row.label + " · " + (row.clock_text || row.display)));
       }
       segment.setAttribute("data-order", String(index));
       bar.appendChild(segment);
@@ -282,10 +341,18 @@ class BobLedgerToolsStatsHomesMixin {
 
   statsPanelRootRow(doc, view, report, metric, row, point, maxValue, tint) {
     const isBucket = row.key.startsWith("@");
-    const item = statsEl(doc, "div", { class: "bob-stats-home-project" + (isBucket ? " bob-stats-home-bucket" : "") });
-    const top = statsEl(doc, "div", { class: "bob-stats-home-project-top bob-stats-home-" + (row.hue || "gray") });
+    const item = statsEl(doc, "div", {
+      class: "bob-stats-home-project" + (isBucket ? " bob-stats-home-bucket" : ""),
+      "data-clock": row.clock || null,
+      title: row.clock_text || null,
+    });
+    const top = statsEl(doc, "div", {
+      class: "bob-stats-home-project-top bob-stats-home-" + (row.hue || "gray"),
+      "data-clock": row.clock || null,
+      "aria-label": row.label + ": " + (row.clock_text || row.display) + (row.share ? " · " + row.share : ""),
+    });
     top.appendChild(this.statsPanelHomeLink(doc, view, row, "root_parent"));
-    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, row.display + (row.share ? " · " + row.share : "")));
+    top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, (row.clock_text || row.display) + (row.share ? " · " + row.share : "")));
     const sessions = metric.kind === "pomodoro"
       ? this.statsPanelHomeSessionButton(doc, view, report, metric, "root_parent", row, point)
       : null;
@@ -311,7 +378,7 @@ class BobLedgerToolsStatsHomesMixin {
     const entry = catalog[root.key] && typeof catalog[root.key] === "object" ? catalog[root.key] : null;
     if (!entry || entry.kind !== "project") return null;
     const leaves = typeof statsPanelRootSubRows === "function"
-      ? statsPanelRootSubRows(metric, report, root.key, point)
+      ? statsPanelRootSubRows(metric, report, root.key, point, true)
       : [];
     const others = leaves.filter((leaf) => leaf.key !== root.key);
     if (!others.length) return null;
@@ -337,9 +404,15 @@ class BobLedgerToolsStatsHomesMixin {
     for (const leaf of leaves) {
       leaf.hue = rootHue;
       const row = statsEl(doc, "div", { class: "bob-stats-home-sub-leaf" + (leaf.key.startsWith("@") ? " bob-stats-home-bucket" : "") });
-      const top = statsEl(doc, "div", { class: "bob-stats-home-sub-top bob-stats-home-" + rootHue });
+      row.setAttribute("data-clock", leaf.clock || "");
+      row.setAttribute("title", leaf.clock_text || leaf.display);
+      const top = statsEl(doc, "div", {
+        class: "bob-stats-home-sub-top bob-stats-home-" + rootHue,
+        "data-clock": leaf.clock || null,
+        "aria-label": leaf.label + ": " + (leaf.clock_text || leaf.display) + (leaf.share ? " · " + leaf.share : ""),
+      });
       top.appendChild(this.statsPanelHomeLink(doc, view, leaf, "project"));
-      top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, leaf.display + (leaf.share ? " · " + leaf.share : "")));
+      top.appendChild(statsEl(doc, "span", { class: "bob-stats-home-value" }, (leaf.clock_text || leaf.display) + (leaf.share ? " · " + leaf.share : "")));
       row.appendChild(top);
       const bar = this.statsPanelHomeMiniBar(doc, leaf, maxValue, metric, false);
       if (bar) row.appendChild(bar);
@@ -352,8 +425,8 @@ class BobLedgerToolsStatsHomesMixin {
   statsPanelRootTable(doc, view, report, metric, section, options = {}) {
     const state = this.statsViewStateFor(view && view.sourcePath);
     const point = statsPanelSelectedHomePoint(metric, report, state);
-    const areaRows = statsPanelHomeRows(metric, report, "area", point);
-    const rootRows = statsPanelHomeRows(metric, report, "root_parent", point);
+    const areaRows = statsPanelHomeRows(metric, report, "area", point, true);
+    const rootRows = statsPanelHomeRows(metric, report, "root_parent", point, true);
     const distinctHues = typeof statsPanelDistinctHues === "function"
       ? statsPanelDistinctHues(rootRows, report)
       : new Map();
@@ -458,8 +531,8 @@ class BobLedgerToolsStatsHomesMixin {
     }
     const state = this.statsViewStateFor(view && view.sourcePath);
     const point = statsPanelSelectedHomePoint(metric, report, state);
-    const areaRows = statsPanelHomeRows(metric, report, "area", point);
-    const projectRows = statsPanelHomeRows(metric, report, "project", point);
+    const areaRows = statsPanelHomeRows(metric, report, "area", point, true);
+    const projectRows = statsPanelHomeRows(metric, report, "project", point, true);
     const tint = metric.unit === "minutes";
     if (options.title) {
       section.appendChild(this.statsPanelTitle(doc, (metric.label || metric.id) + " by area & project"));

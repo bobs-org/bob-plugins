@@ -51,33 +51,113 @@ function statsPanelSummaryEntry(entry) {
     value: statsFinite(safe.value) ? safe.value : null,
     display: typeof safe.display === "string" && safe.display ? safe.display : "–",
     share: typeof safe.share === "string" ? safe.share : "",
+    off_clock: statsFinite(safe.off_clock) ? safe.off_clock : null,
+    clock_breakdown: typeof statsClockBreakdown === "function"
+      ? statsClockBreakdown(safe.clock_breakdown)
+      : null,
   };
+}
+
+function statsPanelClockName(metric, report) {
+  const clock = typeof statsMetricEffectiveClock === "function"
+    ? statsMetricEffectiveClock(metric, report)
+    : null;
+  if (!clock) return "";
+  try {
+    const options = report && report.clock && Array.isArray(report.clock.options) ? report.clock.options : [];
+    const option = options.find((item) => item && item.value === clock && typeof item.label === "string" && item.label.trim());
+    if (option) return option.label;
+  } catch (error) {
+    // Use the canonical label for older or malformed reports.
+  }
+  return clock === "off-clock" ? "Off-clock" : clock === "total" ? "Total" : "Worked";
+}
+
+function statsPanelClockText(metric, report, breakdown, display) {
+  const value = typeof display === "string" ? display.trim() : "";
+  if (!value) return "";
+  const clock = typeof statsMetricEffectiveClock === "function"
+    ? statsMetricEffectiveClock(metric, report)
+    : null;
+  if (!clock) return value;
+  const name = statsPanelClockName(metric, report) || "Worked";
+  const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(breakdown) : null;
+  if (clock === "total" && split) {
+    return value + " " + name + " · " + split.worked.display + " worked · " + split.off_clock.display + " off-clock";
+  }
+  if (clock === "worked" && split && split.off_clock.value > 0) {
+    return value + " " + name + " · " + split.off_clock.display + " off-clock excluded";
+  }
+  return value + " " + name;
+}
+
+function statsPanelPartClockBreakdown(part, point, dimension, key) {
+  let raw = part && typeof part === "object" ? part.clock_breakdown : null;
+  if (point && typeof point === "object") {
+    const dimensions = point.parts_clock_breakdown && typeof point.parts_clock_breakdown === "object"
+      ? point.parts_clock_breakdown
+      : {};
+    const entries = dimensions[dimension] && typeof dimensions[dimension] === "object"
+      ? dimensions[dimension]
+      : {};
+    raw = entries[key];
+  }
+  return typeof statsClockBreakdown === "function" ? statsClockBreakdown(raw) : null;
+}
+
+function statsPanelSessionIsOffClock(session) {
+  const safe = session && typeof session === "object" ? session : {};
+  const owns = (value, key) => value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, key);
+  if (owns(safe, "off_clock")) return safe.off_clock === true;
+  const homes = safe.homes && typeof safe.homes === "object" ? safe.homes : {};
+  if (owns(homes, "off_clock")) return homes.off_clock === true;
+  if (owns(homes, "untracked")) return homes.untracked === true;
+  return safe.untracked === true;
 }
 
 // Ranked theme rows for pomodoro metrics plus the supplied period total.
 // JSON keeps every theme; older bob still supplies top-five-plus-other.
 // This preserves supplied order for ties and sorts strictly by value
 // otherwise.
-function statsPanelThemeRows(metric, point) {
+function statsPanelThemeRows(metric, point, report) {
   const safe = metric && typeof metric === "object" ? metric : {};
   const summary = safe.parts_summary && typeof safe.parts_summary === "object" ? safe.parts_summary : {};
-  const raw = point && point.parts && point.parts.theme && typeof point.parts.theme === "object" && !Array.isArray(point.parts.theme)
+  const hasPointParts = point && point.parts && point.parts.theme && typeof point.parts.theme === "object" && !Array.isArray(point.parts.theme);
+  const raw = hasPointParts
     ? Object.entries(point.parts.theme).map(([key, value]) => ({
       key,
       value,
       display: point.parts_display && point.parts_display.theme && point.parts_display.theme[key],
       share: "",
     }))
-    : Array.isArray(summary.theme) ? summary.theme : [];
-  const rows = raw.map(statsPanelSummaryEntry).filter(Boolean);
+    : point ? [] : Array.isArray(summary.theme) ? summary.theme : [];
+  const rows = raw.map((part) => {
+    const row = statsPanelSummaryEntry(part);
+    if (!row) return null;
+    const breakdown = statsPanelPartClockBreakdown(part, point, "theme", row.key);
+    const offClock = row.off_clock === null && breakdown ? breakdown.off_clock.value : row.off_clock;
+    return {
+      ...row,
+      off_clock: offClock,
+      clock_breakdown: breakdown,
+      clock: typeof statsMetricEffectiveClock === "function" ? statsMetricEffectiveClock(metric, report) : null,
+      clock_text: statsPanelClockText(metric, report, breakdown, row.display),
+    };
+  }).filter(Boolean);
   rows.sort((a, b) => (b.value === null ? -1 : a.value === null ? 1 : 0) || ((b.value || 0) - (a.value || 0)));
   const total = point && typeof point.display === "string" && point.display
     ? point.display
     : safe.summary && typeof safe.summary === "object" && safe.summary.total && typeof safe.summary.total.display === "string"
       ? safe.summary.total.display
       : "";
+  const totalBreakdown = point
+    ? point.clock_breakdown
+    : safe.summary && typeof safe.summary === "object" ? safe.summary.total_clock_breakdown : null;
   return {
     total,
+    total_clock_breakdown: typeof statsClockBreakdown === "function" ? statsClockBreakdown(totalBreakdown) : null,
+    total_clock_text: statsPanelClockText(metric, report, totalBreakdown, total),
+    clock: typeof statsMetricEffectiveClock === "function" ? statsMetricEffectiveClock(metric, report) : null,
     rows,
   };
 }
@@ -234,10 +314,11 @@ function statsPanelFormatMinutes(value) {
   return minutes + "m";
 }
 
-function statsPanelHomeRows(metric, report, dimension, point) {
+function statsPanelHomeRows(metric, report, dimension, point, clockPresentation = false) {
   const safe = metric && typeof metric === "object" ? metric : {};
   const summary = safe.parts_summary && typeof safe.parts_summary === "object" ? safe.parts_summary : {};
-  const raw = point && point.parts && point.parts[dimension] && typeof point.parts[dimension] === "object"
+  const hasPointParts = point && point.parts && point.parts[dimension] && typeof point.parts[dimension] === "object" && !Array.isArray(point.parts[dimension]);
+  const raw = hasPointParts
     ? Object.entries(point.parts[dimension]).map(([key, value]) => ({
       key,
       value,
@@ -245,18 +326,29 @@ function statsPanelHomeRows(metric, report, dimension, point) {
       apportioned: point.apportioned && point.apportioned[dimension] && point.apportioned[dimension][key],
       label: null,
     }))
-    : Array.isArray(summary[dimension]) ? summary[dimension] : [];
+    : point ? [] : Array.isArray(summary[dimension]) ? summary[dimension] : [];
   const rows = raw.map((part) => {
     if (!part || typeof part.key !== "string" || !part.key || !statsFinite(part.value)) return null;
     const value = part.value;
     const apportioned = statsFinite(part.apportioned) ? Math.max(0, Math.min(value, part.apportioned)) : 0;
+    const breakdown = statsPanelPartClockBreakdown(part, point, dimension, part.key);
+    const offClock = statsFinite(part.off_clock)
+      ? part.off_clock
+      : breakdown ? breakdown.off_clock.value : null;
+    const display = typeof part.display === "string" && part.display
+      ? part.display
+      : safe.unit === "minutes" ? statsPanelFormatMinutes(value) : String(value);
     return {
       key: part.key,
       value,
-      display: typeof part.display === "string" && part.display
-        ? part.display
-        : safe.unit === "minutes" ? statsPanelFormatMinutes(value) : String(value),
+      display,
       share: typeof part.share === "string" ? part.share : "",
+      off_clock: offClock,
+      clock_breakdown: breakdown,
+      ...(clockPresentation ? {
+        clock: typeof statsMetricEffectiveClock === "function" ? statsMetricEffectiveClock(metric, report) : null,
+        clock_text: statsPanelClockText(metric, report, breakdown, display),
+      } : {}),
       apportioned,
       apportionedDisplay: typeof part.apportioned_display === "string" && part.apportioned_display
         ? part.apportioned_display
@@ -384,9 +476,9 @@ function statsPanelHomeSessions(report, dimension, key, point) {
     String(a.path || "").localeCompare(String(b.path || "")) || (b.line || 0) - (a.line || 0));
 }
 
-function statsPanelRootSubRows(metric, report, rootKey, point) {
+function statsPanelRootSubRows(metric, report, rootKey, point, clockPresentation = false) {
   const catalog = statsPanelHomeCatalog(report);
-  const leaves = statsPanelHomeRows(metric, report, "project", point).filter((row) => {
+  const leaves = statsPanelHomeRows(metric, report, "project", point, clockPresentation).filter((row) => {
     const entry = catalog[row.key] && typeof catalog[row.key] === "object" ? catalog[row.key] : null;
     return Boolean(entry && entry.root_parent === rootKey) || row.key === rootKey;
   });

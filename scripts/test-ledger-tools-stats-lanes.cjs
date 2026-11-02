@@ -12,6 +12,7 @@ const {
 
 const helpers = LedgerToolsPlugin.helpers;
 const lanesFixture = require("../plugins/bob-ledger-tools/scripts/fixtures/stats/synthetic-lanes.json");
+const clockFixtures = require("../plugins/bob-ledger-tools/scripts/fixtures/stats/synthetic-clocks.json");
 
 function hideNodeFields(node, fields) {
   for (const field of fields) {
@@ -214,7 +215,7 @@ test("window lanes model matches panel root order and distinct hues", () => {
   const hues = helpers.statsPanelDistinctHues(ordered, report);
   const model = helpers.statsWindowLanesModel(report);
   assert.equal(model.state, "ready");
-  assert.equal(model.windowKey, "2026-09-30..2026-10-27");
+  assert.equal(model.windowKey, "2026-09-30..2026-10-27::worked");
   assert.deepEqual(model.roots.segments.map((segment) => segment.key), ordered.map((row) => row.key));
   assert.deepEqual(model.roots.segments.map((segment) => segment.hue), ordered.map((row) => hues.get(row.key)));
 });
@@ -281,10 +282,10 @@ test("ranks, overflow, titles, meta, and area fallback", () => {
   assert.ok(model.roots.segments.every((segment) => segment.rank >= 1));
   assert.equal(model.roots.overflowDefault.count, Math.max(0, model.roots.segments.length - 3));
   const bob = model.roots.segments.find((segment) => segment.key === "bob.md");
-  assert.match(bob.title, /bob · 28h 36m · 23%/);
+  assert.match(bob.title, /bob · 28h 36m Worked · 23%/);
   const vibe = model.themes.segments.find((segment) => segment.key === "VIBE");
   assert.match(vibe.title, /not in your types/);
-  assert.equal(model.meta.text, "122h 55m worked");
+  assert.equal(model.meta.text, "122h 55m Worked");
   assert.match(model.meta.title, /Worked Sep 30 – Oct 27/);
   assert.match(model.meta.title, /complete days; today is not included/);
   const noToday = laneReport({ range: { includes_today: false } });
@@ -294,8 +295,123 @@ test("ranks, overflow, titles, meta, and area fallback", () => {
   delete areaOnly.metrics[0].parts_summary.root_parent;
   const fallback = helpers.statsWindowLanesModel(areaOnly);
   assert.equal(fallback.roots.dimension, "area");
-  assert.equal(fallback.roots.sentence, "Time by area");
+  assert.equal(fallback.roots.sentence, "Worked by area");
   assert.equal(fallback.roots.panelView, "areas");
+});
+
+test("clock lane and home models retain report splits and use the exact selected point", () => {
+  for (const clock of ["worked", "off-clock", "total"]) {
+    const report = clone(clockFixtures[clock]);
+    report.range.start = "2026-10-09";
+    report.range.end = "2026-10-10";
+    const metric = report.metrics.find((item) => item.id === "worked");
+    const rows = helpers.statsPanelHomeRows(metric, report, "root_parent", null, true);
+    const model = helpers.statsWindowLanesModel(report);
+    assert.equal(model.clock, clock);
+    assert.match(model.meta.text, new RegExp(metric.label));
+    assert.ok(model.windowKey.endsWith("::" + clock));
+    assert.ok(rows.every((row) => row.clock === clock));
+
+    if (clock === "total") {
+      const lifeWindow = rows.find((row) => row.key === "life.md");
+      assert.deepEqual(lifeWindow.clock_breakdown, {
+        worked: { value: 30, display: "30m" },
+        off_clock: { value: 25, display: "25m" },
+      });
+      assert.equal(lifeWindow.off_clock, 25);
+      const firstDay = metric.points[0];
+      const pinnedDay = helpers.statsPanelSelectedHomePoint(metric, report, { pinnedDay: firstDay.date });
+      const lifeDay = helpers.statsPanelHomeRows(metric, report, "root_parent", pinnedDay, true)
+        .find((row) => row.key === "life.md");
+      assert.deepEqual(lifeDay.clock_breakdown, firstDay.parts_clock_breakdown.root_parent["life.md"]);
+      assert.equal(lifeDay.off_clock, 20);
+      assert.notDeepEqual(lifeDay.clock_breakdown, lifeWindow.clock_breakdown);
+
+      const week = clone(metric.points[1]);
+      week.date = "2026-10-05";
+      week.end = "2026-10-11";
+      metric.points.push(week);
+      const pinnedWeek = helpers.statsPanelSelectedHomePoint(metric, report, {
+        pinnedBucket: { start: week.date, end: week.end },
+      });
+      assert.equal(pinnedWeek, week);
+      const lifeWeek = helpers.statsPanelHomeRows(metric, report, "root_parent", pinnedWeek, true)
+        .find((row) => row.key === "life.md");
+      assert.deepEqual(lifeWeek.clock_breakdown, week.parts_clock_breakdown.root_parent["life.md"]);
+      assert.notDeepEqual(lifeWeek.clock_breakdown, lifeWindow.clock_breakdown);
+
+      const themes = helpers.statsPanelThemeRows(metric, firstDay, report);
+      assert.deepEqual(themes.rows.find((row) => row.key === "LIFE").clock_breakdown, firstDay.parts_clock_breakdown.theme.LIFE);
+      const lifeSegment = model.themes.segments.find((segment) => segment.key === "LIFE");
+      assert.equal(lifeSegment.clock, "total");
+      assert.match(lifeSegment.title, /30m worked · 25m off-clock/);
+    } else if (clock === "off-clock") {
+      assert.equal(rows[0].clock_breakdown, null);
+      assert.match(rows[0].clock_text, /Off-clock/);
+      assert.equal(model.roots.segments[0].clock, "off-clock");
+    }
+  }
+});
+
+test("clock labels keep count units and absent detail never invents a split", () => {
+  const report = {
+    clock: { value: "total", options: [{ value: "total", label: "Total" }] },
+    homes: {},
+  };
+  const metric = {
+    id: "sessions",
+    kind: "pomodoro",
+    unit: "count",
+    label: "Total sessions",
+    parameters: { clock: "total" },
+    parts_summary: { theme: [{
+      key: "WORK",
+      value: 3,
+      display: "3",
+      share: "100%",
+      clock_breakdown: {
+        worked: { value: 2, display: "2" },
+        off_clock: { value: 1, display: "1" },
+      },
+    }] },
+  };
+  const row = helpers.statsPanelHomeRows(metric, report, "theme", null, true)[0];
+  assert.equal(row.display, "3");
+  assert.equal(row.clock_text, "3 Total · 2 worked · 1 off-clock");
+  assert.equal(row.off_clock, 1);
+  const missing = helpers.statsPanelHomeRows(metric, report, "theme", {
+    parts: { theme: { WORK: 3 } },
+    parts_display: { theme: { WORK: "3" } },
+  }, true)[0];
+  assert.equal(missing.clock_breakdown, null);
+  assert.equal(missing.clock_text, "3 Total");
+});
+
+test("Total lane paint draws the supplied tail and same-window clock changes morph", () => {
+  const report = clone(clockFixtures.total);
+  const model = helpers.statsWindowLanesModel(report);
+  const { host } = paintHost(model);
+  assert.equal(host.getAttribute("data-clock"), "total");
+  const segment = byAttr(host, "data-key", "project.md").find((node) =>
+    (node.getAttribute("class") || "").includes("bob-stats-lane-segment"));
+  assert.ok(segment);
+  assert.equal(segment.getAttribute("data-clock-split"), "true");
+  assert.equal(segment.querySelector(".bob-stats-lane-off-clock-tail").getAttribute("title"), "15m off-clock");
+  const legend = byAttr(host, "data-key", "project.md").find((node) =>
+    (node.getAttribute("class") || "").includes("bob-day-strip-legend-item"));
+  assert.equal(legend.getAttribute("data-clock"), "total");
+  assert.match(legend.getAttribute("title"), /50m worked · 15m off-clock/);
+
+  const worked = helpers.statsWindowLanesModel(clone(clockFixtures.worked));
+  const memory = {
+    windowKey: worked.windowKey,
+    roots: [],
+    themes: [],
+  };
+  const morphHost = paintHost(model, {}, memory);
+  assert.ok(morphHost.host.getAttribute("class").includes("bob-stats-lanes-morph"));
+  const reduced = paintHost(model, {}, memory, { reducedMotion: true });
+  assert.equal(reduced.host.getAttribute("class").includes("bob-stats-lanes-morph"), false);
 });
 
 test("omitted and empty states, and a pin never changes the model", () => {
@@ -316,7 +432,7 @@ test("omitted and empty states, and a pin never changes the model", () => {
   assert.equal(empty.state, "ready");
   assert.equal(empty.roots.empty, true);
   assert.equal(empty.themes.omitted, true);
-  assert.equal(empty.meta.text, "0m worked");
+  assert.equal(empty.meta.text, "0m Worked");
   const noRoots = laneReport();
   noRoots.metrics[0].parts_summary.root_parent = [];
   noRoots.metrics[0].parts_summary.area = [];
@@ -364,7 +480,7 @@ test("legend is a keyboard stop, bar is aria-hidden, and activation does not fet
       const legend = byAttr(el, "data-stats-focus-key", "lanes-themes")[0];
       assert.equal(legend.getAttribute("role"), "button");
       assert.equal(legend.getAttribute("tabindex"), "0");
-      assert.match(legend.getAttribute("aria-label"), /Time by type/);
+      assert.match(legend.getAttribute("aria-label"), /Worked by type/);
       const bar = byClass(el, "bob-stats-lane-bar").find((node) =>
         (node.getAttribute("class") || "").includes("bob-stats-lane-themes"));
       assert.equal(bar.getAttribute("aria-hidden"), "true");

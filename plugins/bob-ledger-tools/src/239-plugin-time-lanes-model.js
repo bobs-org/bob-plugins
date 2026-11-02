@@ -30,7 +30,8 @@ function timeLaneSegmentTitle(segment) {
   const label = segment && typeof segment.label === "string" ? segment.label : "";
   const display = segment && typeof segment.display === "string" ? segment.display : "";
   const share = segment && typeof segment.share === "string" ? segment.share : "";
-  const parts = [label, display, share].filter(Boolean);
+  const clockText = segment && typeof segment.clock_text === "string" ? segment.clock_text : "";
+  const parts = [label, clockText || display, share].filter(Boolean);
   let title = parts.join(" · ");
   if (segment && segment.unconfigured) title += " · not in your types";
   return title;
@@ -57,6 +58,12 @@ function timeLaneRootSegments(report, dimension, rows) {
       tone,
       bucket: typeof row.key === "string" && row.key.startsWith("@"),
       unconfigured: false,
+      ...(row.clock ? {
+        clock: row.clock,
+        off_clock: statsFinite(row.off_clock) ? row.off_clock : null,
+        clock_breakdown: typeof statsClockBreakdown === "function" ? statsClockBreakdown(row.clock_breakdown) : null,
+        clock_text: typeof row.clock_text === "string" ? row.clock_text : "",
+      } : {}),
     };
     segment.title = timeLaneSegmentTitle(segment);
     return segment;
@@ -84,6 +91,12 @@ function timeLaneThemeSegments(report, entries, fallback) {
       gray,
       hue_source: typeof ref.hue_source === "string" ? ref.hue_source : "",
       unconfigured: timeLaneThemeUnconfigured(ref) || timeLaneThemeUnconfigured(entry),
+      ...(entry.clock ? {
+        clock: entry.clock,
+        off_clock: statsFinite(entry.off_clock) ? entry.off_clock : null,
+        clock_breakdown: typeof statsClockBreakdown === "function" ? statsClockBreakdown(entry.clock_breakdown) : null,
+        clock_text: typeof entry.clock_text === "string" ? entry.clock_text : "",
+      } : {}),
     });
   }
   const coloured = list.filter((entry) => !entry.gray);
@@ -128,6 +141,12 @@ function timeLaneThemeSegments(report, entries, fallback) {
       tone: timeLaneThemeTone(entry.key, entry.gray),
       bucket: entry.gray,
       unconfigured: Boolean(entry.unconfigured),
+      ...(entry.clock ? {
+        clock: entry.clock,
+        off_clock: entry.off_clock,
+        clock_breakdown: entry.clock_breakdown,
+        clock_text: entry.clock_text,
+      } : {}),
     };
     segment.title = timeLaneSegmentTitle(segment);
     return segment;
@@ -183,6 +202,13 @@ function timeLaneLegend(report, dimension, segments) {
       shade: segment.shade,
       bucket: segment.bucket,
       rank: segment.rank || 0,
+      ...(segment.clock ? {
+        clock: segment.clock,
+        off_clock: segment.off_clock,
+        clock_breakdown: segment.clock_breakdown,
+        clock_text: segment.clock_text,
+        title: segment.title,
+      } : {}),
     };
   });
   const overflow = ranked.filter((segment) => (rankOf.get(segment.key) || 0) > 3);
@@ -236,19 +262,39 @@ function statsWindowTotal(worked) {
   const value = typeof total.value === "number" && Number.isFinite(total.value) ? total.value : null;
   const display = typeof total.display === "string" && total.display ? total.display : "";
   if (value === null && !display) return null;
-  return { value, display };
+  return {
+    value,
+    display,
+    clock_breakdown: typeof statsClockBreakdown === "function"
+      ? statsClockBreakdown(summary.total_clock_breakdown)
+      : null,
+  };
 }
 
-function statsWindowThemeEntries(worked) {
+function statsWindowThemeEntries(worked, report) {
   const summary = worked && worked.parts_summary && typeof worked.parts_summary === "object"
     ? worked.parts_summary
     : {};
   const raw = Array.isArray(summary.theme) ? summary.theme : [];
-  return raw.filter((part) => part && typeof part.key === "string" && timeLanePositive(part.value));
+  return raw.filter((part) => part && typeof part.key === "string" && timeLanePositive(part.value)).map((part) => {
+    const row = typeof statsPanelSummaryEntry === "function" ? statsPanelSummaryEntry(part) : part;
+    if (!row) return null;
+    const breakdown = typeof statsClockBreakdown === "function" ? statsClockBreakdown(row.clock_breakdown) : null;
+    return {
+      ...row,
+      off_clock: row.off_clock === null && breakdown ? breakdown.off_clock.value : row.off_clock,
+      clock: typeof statsMetricEffectiveClock === "function" ? statsMetricEffectiveClock(worked, report) : null,
+      clock_breakdown: breakdown,
+      clock_text: typeof statsPanelClockText === "function"
+        ? statsPanelClockText(worked, report, breakdown, row.display)
+        : row.display,
+    };
+  }).filter(Boolean);
 }
 
 function statsWindowLaneAria(sentence, span, segments) {
   const listed = (Array.isArray(segments) ? segments : []).map((segment) => {
+    if (segment && typeof segment.title === "string" && segment.title) return segment.title;
     const share = segment.share ? " (" + segment.share + ")" : "";
     return segment.label + " " + segment.display + share;
   }).join(", ");
@@ -292,23 +338,33 @@ function statsWindowLanesModel(report, context) {
     if (!worked || worked.unit !== "minutes") return statsWindowLanesOmitted();
     const total = statsWindowTotal(worked);
     if (!total) return statsWindowLanesOmitted();
+    const clock = typeof statsMetricEffectiveClock === "function"
+      ? statsMetricEffectiveClock(worked, safeReport) || "worked"
+      : "worked";
+    const clockName = typeof statsPanelClockName === "function"
+      ? statsPanelClockName(worked, safeReport) || "Worked"
+      : "Worked";
+    const totalClockText = typeof statsPanelClockText === "function"
+      ? statsPanelClockText(worked, safeReport, total.clock_breakdown, total.display)
+      : total.display;
     const range = safeReport.range && typeof safeReport.range === "object" ? safeReport.range : {};
     const span = typeof range.label === "string" ? range.label : "";
-    const windowKey = String(range.start || "") + ".." + String(range.end || "");
-    const metaTitle = "Worked" + (span ? " " + span : "") +
+    const windowKey = String(range.start || "") + ".." + String(range.end || "") + "::" + clock;
+    const metricLabel = typeof worked.label === "string" && worked.label.trim() ? worked.label : clockName;
+    const metaTitle = metricLabel + (span ? " " + span : "") +
       (range.includes_today ? " · complete days; today is not included" : "");
     const meta = {
-      text: (total.display || "0m") + " worked",
+      text: totalClockText || (total.display || "0m") + " " + metricLabel,
       title: metaTitle,
     };
-    const ariaLabel = "Where the time went" + (span ? ", " + span : "");
+    const ariaLabel = "Where the time went · " + metricLabel + (span ? ", " + span : "");
     if (total.value === 0) {
       const roots = statsWindowLaneEmpty("root_parent", {
         omitted: false,
         empty: true,
-        sentence: "Time by root parent",
+        sentence: clockName + " by root parent",
         panelView: "roots",
-        ariaLabel: statsWindowLaneAria("Time by root parent", span, []),
+        ariaLabel: statsWindowLaneAria(clockName + " by root parent", span, []),
       });
       return {
         state: "ready",
@@ -328,7 +384,7 @@ function statsWindowLanesModel(report, context) {
     let roots = statsWindowLaneEmpty(rootDimension || "root_parent");
     if (rootDimension) {
       const rows = typeof statsPanelHomeRows === "function"
-        ? statsPanelHomeRows(worked, safeReport, rootDimension, null)
+        ? statsPanelHomeRows(worked, safeReport, rootDimension, null, true)
         : [];
       const positive = (Array.isArray(rows) ? rows : []).filter((row) => row && timeLanePositive(row.value));
       if (positive.length) {
@@ -336,24 +392,26 @@ function statsWindowLanesModel(report, context) {
           ? statsPanelHomeAreaRows(positive, safeReport)
           : positive;
         const segments = timeLaneRootSegments(safeReport, rootDimension, ordered);
-        const sentence = rootDimension === "area" ? "Time by area" : "Time by root parent";
+        const sentence = rootDimension === "area" ? clockName + " by area" : clockName + " by root parent";
         const panelView = rootDimension === "area" ? "areas" : "roots";
         roots = statsWindowBuildLane(safeReport, worked, rootDimension, sentence, panelView, segments, span);
       }
     }
     let themes = statsWindowLaneEmpty("theme");
-    const themeEntries = statsWindowThemeEntries(worked);
+    const themeEntries = statsWindowThemeEntries(worked, safeReport);
     if (themeEntries.length) {
       const fallback = context && typeof context.themeHueFor === "function" ? context.themeHueFor : null;
       const segments = timeLaneThemeSegments(safeReport, themeEntries, fallback);
       if (segments.length) {
-        themes = statsWindowBuildLane(safeReport, worked, "theme", "Time by type", "themes", segments, span);
+        themes = statsWindowBuildLane(safeReport, worked, "theme", clockName + " by type", "themes", segments, span);
       }
     }
     if (roots.omitted && themes.omitted) return statsWindowLanesOmitted();
     return {
       state: "ready",
       windowKey,
+      clock,
+      clockName,
       span,
       meta,
       roots,

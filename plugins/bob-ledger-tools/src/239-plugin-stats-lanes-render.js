@@ -247,6 +247,24 @@ function statsWindowLanesPaintLegend(doc, laneModel, laneName, skeleton) {
     : (laneModel && Array.isArray(laneModel.legend) ? laneModel.legend : []);
   for (const entry of entries) {
     const item = dayStripLegendItem(doc, entry, laneName);
+    if (!skeleton && item && entry && entry.clock) {
+      item.setAttribute("data-clock", entry.clock);
+      const mark = item.children && item.children[0];
+      if (mark) {
+        mark.setAttribute("data-clock", entry.clock);
+        const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(entry.clock_breakdown) : null;
+        if (entry.clock === "total" && split) {
+          const total = split.worked.value + split.off_clock.value;
+          if (total > 0) {
+            mark.appendChild(statsEl(doc, "span", {
+              class: "bob-stats-lane-legend-off-clock-tail",
+              style: "width: " + (split.off_clock.value / total * 100) + "%",
+              "aria-hidden": "true",
+            }));
+          }
+        }
+      }
+    }
     if (!skeleton && entry && typeof entry.rank === "number" && entry.rank > 3 && item) {
       item.setAttribute("hidden", "true");
     }
@@ -280,9 +298,28 @@ function statsWindowLanesPaintBar(doc, laneModel, laneName, oldPairs, morph) {
       title: segment.title || (segment.label + " · " + segment.display),
       "data-key": segment.key,
       "data-tone": segment.tone || "hue",
+      "data-clock": segment.clock || null,
     });
     if (part && themes && typeof segment.shade === "number" && segment.shade > 0) {
       part.setAttribute("data-shade", String(segment.shade));
+    }
+    const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(segment.clock_breakdown) : null;
+    if (segment.clock === "total" && split) {
+      const splitTotal = split.worked.value + split.off_clock.value;
+      if (splitTotal > 0) {
+        part.setAttribute("data-clock-split", "true");
+        part.appendChild(statsEl(doc, "span", {
+          class: "bob-stats-lane-worked-span",
+          style: "flex: 0 0 " + (split.worked.value / splitTotal * 100) + "%",
+          "aria-hidden": "true",
+        }));
+        part.appendChild(statsEl(doc, "span", {
+          class: "bob-stats-lane-off-clock-tail",
+          style: "flex: 0 0 " + (split.off_clock.value / splitTotal * 100) + "%",
+          title: split.off_clock.display + " off-clock",
+          "aria-hidden": "true",
+        }));
+      }
     }
     const start = morph ? statsLanesOldValue(oldPairs, segment.key) : segment.value;
     statsLanesSetGrow(part, start === null || start === undefined ? 0 : start);
@@ -380,6 +417,7 @@ function paintStatsWindowLanes(host, model, handlers, memory) {
     host.setAttribute("class", "bob-stats-lanes");
     host.setAttribute("role", "group");
     host.setAttribute("aria-label", model.ariaLabel || "Where the time went");
+    if (model.clock) host.setAttribute("data-clock", model.clock);
   } catch (error) {
     // Best-effort.
   }

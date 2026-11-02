@@ -5,6 +5,7 @@ const {
   makeFreshnessApp,
   withMissingConfig,
 } = require("./ledger-tools-harness.cjs");
+const clockFixtures = require("../plugins/bob-ledger-tools/scripts/fixtures/stats/synthetic-clocks.json");
 
 const helpers = LedgerToolsPlugin.helpers;
 
@@ -501,7 +502,7 @@ test("pomodoro panel shows the supplied total, shares, hue, and safe text", asyn
       assert.ok(panel, "custom pomodoro metrics get a panel");
       assert.match(el.text, /Where the time went.*1m/);
       assert.match(el.text, /Update bob for areas & projects/);
-      assert.match(el.text, /GTD — 1m \(100%\)/);
+      assert.match(el.text, /GTD — 1m Worked \(100%\)/);
       assert.ok(el.querySelector(".bob-stats-hue-orange"), "the selected metric hue is used");
       assert.match(el.text, /Evil <img src=x>/);
       assert.equal(findTag(el.querySelector(".bob-stats"), "img"), null, "metric text is never HTML");
@@ -549,6 +550,90 @@ test("home parts use the report catalog for labels, hue slots, and pinned values
   assert.ok(helpers.statsChartParts(point, report).includes("project: job_2026_apply_29 · 12m"));
   const done = report.metrics.find((metric) => metric.id === "done");
   assert.equal(helpers.statsTableRows(done, undefined, report)[0].topParts[0].label, "dev");
+});
+
+test("session drill-down labels off-clock rows and prefers the current session flag", async () => {
+  await withMissingConfig(async () => {
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
+    plugin.onload();
+    try {
+      const report = homesPanelReport();
+      const [offClock, legacy] = report.sessions;
+      offClock.off_clock = true;
+      offClock.homes.untracked = false;
+      legacy.off_clock = false;
+      legacy.homes.untracked = true;
+      const metric = report.metrics.find((item) => item.id === "worked");
+      const rows = helpers.statsPanelHomeRows(metric, report, "root_parent", null, true);
+      const offClockRow = rows.find((row) => row.key === "sase.md");
+      const legacyRow = rows.find((row) => row.key === "job_2026_apply_29.md");
+      const state = plugin.statsViewStateFor("dash_stats.md");
+      state.homeSessionsExpanded = {
+        "root_parent:sase.md": true,
+        "root_parent:job_2026_apply_29.md": true,
+      };
+      const doc = fakeDoc();
+      const view = { el: fakeContainer(doc), sourcePath: "dash_stats.md" };
+
+      const offClockList = plugin.statsPanelHomeSessionButton(
+        doc, view, report, metric, "root_parent", offClockRow, null,
+      ).list;
+      const offClockItem = offClockList.children[0];
+      const offClockButton = offClockItem.children[0];
+      assert.equal(offClockItem.getAttribute("data-clock"), "off-clock");
+      assert.match(offClockItem.getAttribute("class"), /bob-stats-home-session-off-clock/);
+      assert.match(offClockButton.textContent, /off-clock/);
+      assert.match(offClockButton.getAttribute("aria-label"), /^Off-clock session/);
+
+      const currentFlagList = plugin.statsPanelHomeSessionButton(
+        doc, view, report, metric, "root_parent", legacyRow, null,
+      ).list;
+      const currentFlagItem = currentFlagList.children[0];
+      assert.equal(currentFlagItem.getAttribute("data-clock"), "worked");
+      assert.equal((currentFlagItem.getAttribute("class") || "").includes("bob-stats-home-session-off-clock"), false);
+
+      delete legacy.off_clock;
+      const legacyFallbackList = plugin.statsPanelHomeSessionButton(
+        doc, view, report, metric, "root_parent", legacyRow, null,
+      ).list;
+      assert.equal(legacyFallbackList.children[0].getAttribute("data-clock"), "off-clock");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("Total home and type panels render supplied worked spans and dashed tails", async () => {
+  await withMissingConfig(async () => {
+    const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks: [] }), {});
+    plugin.onload();
+    try {
+      const report = clockFixtures.total;
+      const metric = report.metrics.find((item) => item.id === "worked");
+      const doc = fakeDoc();
+      const view = { el: fakeContainer(doc), sourcePath: "dash_stats.md" };
+      const state = plugin.statsViewStateFor(view.sourcePath);
+      state.homesView = "roots";
+      const roots = fakeContainer(doc);
+      plugin.statsPanelPomodoro(doc, view, report, metric, roots);
+      const miniTail = roots.querySelector(".bob-stats-home-mini-off-clock-tail");
+      const rootTail = roots.querySelector(".bob-stats-home-area-off-clock-tail");
+      assert.ok(miniTail);
+      assert.ok(rootTail);
+      assert.match(miniTail.getAttribute("title"), /off-clock/);
+      assert.match(roots.text, /Total.*worked.*off-clock/);
+
+      state.homesView = "themes";
+      const themes = fakeContainer(doc);
+      plugin.statsPanelPomodoro(doc, view, report, metric, themes);
+      const themeTail = themes.querySelector(".bob-stats-panel-bar-off-clock-tail");
+      assert.ok(themeTail);
+      assert.match(themeTail.getAttribute("title"), /off-clock/);
+      assert.match(themes.text, /Total · .*worked · .*off-clock/);
+    } finally {
+      plugin.onunload();
+    }
+  });
 });
 
 test("roots panel toggles Themes, pins spans, discloses sub-projects, and opens home links", async () => {

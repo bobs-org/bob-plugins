@@ -216,7 +216,7 @@ class BobLedgerToolsStatsPanelsMixin {
       section.appendChild(this.statsPanelNote(doc, "Update bob for areas & projects."));
     }
     const point = statsPanelSelectedHomePoint(metric, report, viewModel.state);
-    const model = statsPanelThemeRows(metric, point);
+    const model = statsPanelThemeRows(metric, point, report);
     if (!model.rows.length) {
       section.appendChild(this.statsPanelNote(doc, "No type breakdown is in this report."));
       return true;
@@ -237,21 +237,51 @@ class BobLedgerToolsStatsPanelsMixin {
       ? model.rows.slice(0, cap)
       : model.rows;
     for (const row of visible) {
-      const item = statsEl(doc, "li", { class: "bob-stats-panel-bar-row" });
-      const track = statsEl(doc, "span", { class: "bob-stats-panel-bar-track bob-stats-panel-bar-thin", "aria-hidden": "true" });
+      const amount = (row.clock_text || row.display) + (row.share ? " (" + row.share + ")" : "");
+      const item = statsEl(doc, "li", {
+        class: "bob-stats-panel-bar-row",
+        "aria-label": row.key + ": " + amount,
+        title: amount,
+      });
+      const track = statsEl(doc, "span", {
+        class: "bob-stats-panel-bar-track bob-stats-panel-bar-thin",
+        "data-clock": model.clock || null,
+        "aria-hidden": "true",
+      });
       const ref = typeof statsThemeRef === "function"
         ? statsThemeRef(report, row.key, fallback)
         : { key: row.key, label: row.key, hue: "gray", gray: true };
-      const fill = statsEl(doc, "span", { class: "bob-stats-panel-bar-fill bob-stats-theme-bar-" + (ref.gray ? "gray" : ref.hue), "aria-hidden": "true" });
+      const fill = statsEl(doc, "span", {
+        class: "bob-stats-panel-bar-fill bob-stats-theme-bar-" + (ref.gray ? "gray" : ref.hue),
+        "data-clock": model.clock || null,
+        "data-unit": metric.unit || null,
+        title: amount,
+        "aria-hidden": "true",
+      });
       try {
         fill.setAttribute("style", "width: " + (max > 0 && statsFinite(row.value) ? Math.max(4, Math.round((row.value / max) * 100)) : 0) + "%");
       } catch (error) {
         // Bar width is best-effort.
       }
+      const split = typeof statsClockBreakdown === "function" ? statsClockBreakdown(row.clock_breakdown) : null;
+      if (model.clock === "total" && split) {
+        const splitTotal = split.worked.value + split.off_clock.value;
+        if (splitTotal > 0) {
+          fill.appendChild(statsEl(doc, "span", {
+            class: "bob-stats-panel-bar-worked",
+            style: "width: " + (split.worked.value / splitTotal * 100) + "%",
+          }));
+          fill.appendChild(statsEl(doc, "span", {
+            class: "bob-stats-panel-bar-off-clock-tail",
+            style: "width: " + (split.off_clock.value / splitTotal * 100) + "%",
+            title: split.off_clock.display + " off-clock",
+          }));
+        }
+      }
       track.appendChild(fill);
       item.appendChild(track);
       const share = row.share ? " (" + row.share + ")" : "";
-      item.appendChild(statsEl(doc, "span", { class: "bob-stats-panel-bar-text" }, ref.label + " — " + row.display + share));
+      item.appendChild(statsEl(doc, "span", { class: "bob-stats-panel-bar-text" }, ref.label + " — " + (row.clock_text || row.display) + share));
       list.appendChild(item);
     }
     section.appendChild(list);

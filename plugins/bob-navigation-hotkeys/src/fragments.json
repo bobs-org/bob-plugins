@@ -24,6 +24,7 @@
   "130-fences-and-status.js",
   "140-scheduled-recovery.js",
   "150-pomodoro-capture.js",
+  "151-pomodoro-type-split.js",
   "160-pomodoro-reorder.js",
   "165-pomodoro-theme-picker.js",
   "170-open-task-jump.js",
@@ -157,6 +158,7 @@
   "640-plugin-notes-and-task-move.js",
   "650-plugin-move-commit.js",
   "651-pomodoro-bullet-type-move-commit.js",
+  "652-pomodoro-split.js",
   "655-plugin-inbox-route.js",
   "660-plugin-project-notes.js",
   "665-plugin-project-conversion.js",
@@ -175,5 +177,6 @@
   "700-exports.js",
   "701-exports-parent-change.js",
   "702-relation-mention-exports.js",
-  "703-successor-keep-moving-exports.js"
+  "703-successor-keep-moving-exports.js",
+  "704-pomodoro-split-exports.js"
 ]

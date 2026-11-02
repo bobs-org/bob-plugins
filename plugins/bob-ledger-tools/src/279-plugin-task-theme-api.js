@@ -28,6 +28,7 @@ class BobLedgerToolsTaskThemeApiMixin {
       typeAgrees: (taskKey, entryName) => this.taskTypeAgrees(taskKey, entryName),
       planRetype: (options) => this.taskTypePlanRetype(options),
       planLanding: (options) => this.taskTypePlanLanding(options),
+      planSplit: (options) => this.taskTypePlanSplit(options),
       mergeNames: (base, others) => mergeNames(base, others),
       shed: (name, before, after) => this.taskTypeShed(name, before, after),
       isMeetName: (name) => taskTypeIsMeetName(name),
@@ -172,6 +173,25 @@ class BobLedgerToolsTaskThemeApiMixin {
         typeName: opts.typeName,
         sources: opts.sources !== undefined ? opts.sources : this.taskTypeSources(),
       });
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskTypePlanSplit(options) {
+    try {
+      const opts = options && typeof options === "object" ? options : {};
+      const rawSplit =
+        opts.splitSelectors !== undefined ? opts.splitSelectors : opts.split;
+      return planSplit(
+        {
+          name: opts.name !== undefined ? opts.name : opts.entry,
+          open: opts.open,
+          linkKeys: opts.linkKeys !== undefined ? opts.linkKeys : opts.link_keys,
+          splitSelectors: rawSplit,
+        },
+        opts.sources !== undefined ? opts.sources : this.taskTypeSources(),
+      );
     } catch (error) {
       return null;
     }

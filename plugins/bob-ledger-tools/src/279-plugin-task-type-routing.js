@@ -383,3 +383,155 @@ function planRelocation(input) {
   }
   return { kind: "createBelow", from, name: typeName };
 }
+
+// Parse one R4 split selector: bare `build`, `#build`, `=build`, or a
+// quoted literal `#"SASE V18"` (whole-key match only). Mirrors Rust
+// `routing::parse_type_selector`.
+function parseSplitSelector(raw) {
+  let text = String(raw == null ? "" : raw).trim();
+  if (text.startsWith("#") || text.startsWith("=")) {
+    text = text.slice(1);
+  }
+  text = text.trim();
+  const literal =
+    text.length >= 2 && text.startsWith('"') && text.endsWith('"');
+  const inner = literal ? text.slice(1, -1) : text;
+  return {
+    raw: inner,
+    key: pomodoroThemeNormalizeKey(inner),
+    literal,
+  };
+}
+
+// Match one parsed split selector against the merged-in type items.
+// Exact key wins; otherwise a unique key-prefix match wins unless the
+// selector is a quoted literal. Returns the matched item or null.
+function matchSplitType(parsed, mergedIn) {
+  const exact = (Array.isArray(mergedIn) ? mergedIn : []).find(
+    (item) => item && item.key === parsed.key,
+  );
+  if (exact) {
+    return exact;
+  }
+  if (!parsed || parsed.literal) {
+    return null;
+  }
+  const prefixed = (Array.isArray(mergedIn) ? mergedIn : []).filter(
+    (item) => item && typeof item.key === "string" && item.key.startsWith(parsed.key),
+  );
+  return prefixed.length === 1 ? prefixed[0] : null;
+}
+
+// Resolve an explicit R4 split set over the base and merged-in items.
+// Returns `{ ok, items }` or `{ ok: false, code, name, selector }`.
+// `items` are in name order (their position in `mergedIn`).
+function resolveSplitTypes(selectors, base, mergedIn) {
+  const list = Array.isArray(mergedIn) ? mergedIn : [];
+  const chosen = [];
+  const seen = new Set();
+  for (const selector of Array.isArray(selectors) ? selectors : []) {
+    const parsed = parseSplitSelector(selector);
+    if (!parsed.key) {
+      return {
+        ok: false,
+        code: "split_type_unknown",
+        selector: String(selector == null ? "" : selector),
+      };
+    }
+    if (
+      parsed.key === base.key ||
+      (!parsed.literal &&
+        typeof base.key === "string" &&
+        base.key.startsWith(parsed.key))
+    ) {
+      return { ok: false, code: "split_base_type", name: base.name };
+    }
+    const resolved = matchSplitType(parsed, list);
+    if (!resolved) {
+      return {
+        ok: false,
+        code: "split_type_unknown",
+        selector: String(selector == null ? "" : selector),
+      };
+    }
+    if (seen.has(resolved.key)) {
+      return { ok: false, code: "split_type_repeated", name: resolved.name };
+    }
+    seen.add(resolved.key);
+    chosen.push(resolved);
+  }
+  chosen.sort(
+    (left, right) =>
+      list.findIndex((item) => item.key === left.key) -
+      list.findIndex((item) => item.key === right.key),
+  );
+  return { ok: true, items: chosen };
+}
+
+// Partition an open merged Pomodoro by type (R4). `linkKeys` is each
+// top-level Task Link's effective type, in child order; `null`/empty
+// entries never move. `splitSelectors` is null/empty for "split every
+// merged-in type", else an explicit non-empty selector list. Mirrors
+// Rust `merged::split_plan` and passes the shared `split` vectors.
+function planSplit(input, sources) {
+  const opts = input && typeof input === "object" ? input : {};
+  const name = String(opts.name == null ? "" : opts.name);
+  const open = opts.open === true;
+  const linkKeys = Array.isArray(opts.linkKeys) ? opts.linkKeys : [];
+  const rawSplit = opts.splitSelectors !== undefined ? opts.splitSelectors : opts.split;
+  const hasExplicit =
+    Array.isArray(rawSplit) ? rawSplit.length > 0 : rawSplit !== undefined && rawSplit !== null;
+  const selectors = Array.isArray(rawSplit) ? rawSplit : null;
+
+  if (!open) {
+    return { kind: "error", code: "split_closed" };
+  }
+  if (taskTypeIsMeetName(name)) {
+    return { kind: "error", code: "split_meet" };
+  }
+  const classified = typeComponents(name, sources);
+  const types = classified.filter((item) => item && item.isType === true);
+  if (types.length < 2) {
+    return { kind: "error", code: "split_not_merged" };
+  }
+  const base = types[0];
+  const mergedIn = types.slice(1);
+  let selected;
+  if (!hasExplicit) {
+    selected = mergedIn.slice();
+  } else {
+    if (types.length === 2) {
+      return { kind: "error", code: "split_type_not_needed" };
+    }
+    const resolved = resolveSplitTypes(selectors || [], base, mergedIn);
+    if (!resolved.ok) {
+      if (resolved.code === "split_base_type") {
+        return { kind: "error", code: resolved.code, name: resolved.name };
+      }
+      if (resolved.code === "split_type_repeated") {
+        return { kind: "error", code: resolved.code, name: resolved.name };
+      }
+      return { kind: "error", code: resolved.code, selector: resolved.selector };
+    }
+    selected = resolved.items;
+  }
+  const selectedKeys = new Set(selected.map((item) => item.key));
+  const remaining = classified
+    .filter((item) => !item.isType || !selectedKeys.has(item.key))
+    .map((item) => item.name)
+    .join(" + ");
+  const created = selected.map((item) => ({
+    name: item.name,
+    link_indices: linkKeys
+      .map((key, index) => ({ key, index }))
+      .filter(
+        ({ key }) =>
+          key !== null &&
+          key !== undefined &&
+          key !== "" &&
+          pomodoroThemeNormalizeKey(key) === item.key,
+      )
+      .map(({ index }) => index),
+  }));
+  return { kind: "ok", remaining, created };
+}

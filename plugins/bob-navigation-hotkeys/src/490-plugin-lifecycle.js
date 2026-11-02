@@ -540,6 +540,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerCountedTransclusionToggleInputListeners();
     this.registerCountedBulletPropertyInputListeners();
     this.registerCountedTaskMoveInputListeners();
+    this.registerPomodoroSplitCommand();
+    this.registerPomodoroSplitInputListeners();
+    this.wrapPomodoroSplitSaveCommand();
     this.registerCountedLaneToggleInputListeners();
     this.registerClearSearchHighlightInputListeners();
 

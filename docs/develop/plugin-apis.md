@@ -202,7 +202,8 @@ The v1 namespace also exposes synchronous task-theme helpers:
 plus the additive
 task-type routing surface: `effectiveTypeFor(request)`,
 `typeComponentsOf(name)`, `typeAgrees(taskKey, entryName)`,
-`planRetype(options)`, `planLanding(options)`, `mergeNames(base, others)`,
+`planRetype(options)`, `planLanding(options)`, `planSplit(options)`,
+`mergeNames(base, others)`,
 `shed(name, beforeKeys, afterKeys)`, `planPlacement(options)`, and
 `planRelocation(options)`. `suggestFor` uses a
 vault-relative `path`, a one-based integer line number, and optional full live
@@ -244,7 +245,12 @@ type and returns the merged destination name; `retype: true` takes the
 explicit task-field path. MEET uses that path regardless of `retype`.
 `planRetype({ effective, effectiveName?, inherited, destination, selector?,
 tabPick?, sources? })` remains as a v1 alias for `planLanding` with
-`retype: true`. `mergeNames(base, others)` joins components
+`retype: true`. `planSplit({ name, open, linkKeys, splitSelectors?, sources? })`
+partitions an open merged Pomodoro by type per R4, returning `ok` with the
+remaining name and one created entry per split type (each with its moved
+link indices, name-ordered, still created when empty) or an `error` with a
+`split_*` code; a null or empty selector set splits every merged-in type.
+`mergeNames(base, others)` joins components
 in order and keeps the first spelling of duplicates. `shed(name, beforeKeys,
 afterKeys)` removes merged-in types whose last Task Link left, while retaining
 the base type, labels, and unlinked types. `effective` and `inherited` accept

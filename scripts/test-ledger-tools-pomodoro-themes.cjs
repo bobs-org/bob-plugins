@@ -100,6 +100,7 @@ const {
   typeAgrees,
   planRetype,
   planLanding,
+  planSplit,
   mergeNames,
   shed,
   planPlacement,
@@ -721,6 +722,31 @@ test("type vectors: shed removes only types whose final link left", () => {
   }
 });
 
+test("type vectors: split partitions a merged Pomodoro by type", () => {
+  assert.ok(fixture.split.length > 0, "vectors carry split cases");
+  for (const item of fixture.split) {
+    if (item.rust_only) {
+      continue;
+    }
+    const got = planSplit(
+      {
+        name: item.entry,
+        open: item.open,
+        linkKeys: item.link_keys,
+        splitSelectors: item.split,
+      },
+      routingSources(item),
+    );
+    assert.equal(got.kind, item.expected.kind, `split kind: ${item.name}`);
+    if (item.expected.kind === "ok") {
+      assert.equal(got.remaining, item.expected.remaining, `split remaining: ${item.name}`);
+      assert.deepEqual(got.created, item.expected.created, `split created: ${item.name}`);
+    } else {
+      assert.equal(got.code, item.expected.code, `split code: ${item.name}`);
+    }
+  }
+});
+
 test("type vectors: placement picks the Pomodoro for a type", () => {
   assert.ok(fixture.place.length > 0, "vectors carry place cases");
   const kinds = {
@@ -867,7 +893,7 @@ test("task-theme API is additive, synchronous, path-bound, and read-only", () =>
     "available", "fetch", "snapshot", "isConfigured", "hueFor", "componentsOf",
     "historyRows", "similarTo", "hide", "unhide", "color", "rename", "onChange",
     "suggestFor", "taskThemeOf", "setTaskTheme", "clearTaskTheme", "isKnownTheme",
-    "effectiveTypeFor", "typeComponentsOf", "typeAgrees", "planRetype", "planLanding", "mergeNames", "shed", "isMeetName", "planPlacement", "planRelocation",
+    "effectiveTypeFor", "typeComponentsOf", "typeAgrees", "planRetype", "planLanding", "planSplit", "mergeNames", "shed", "isMeetName", "planPlacement", "planRelocation",
   ]) {
     assert.equal(typeof api[member], "function", `themes.${member} is present`);
   }

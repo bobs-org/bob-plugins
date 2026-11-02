@@ -2654,6 +2654,343 @@ body.bob-today-marks-off .bob-today-mark {
   }
 }
 
+/* Blocked-reason marks (BM) paint: begin.
+   Owned by bob-cli `docs/blocked-marks.md`. Everything in this section is
+   gated by `body.bob-block-marks` and wins over the vault snippet by
+   specificity, never `!important`. Per-box `--bob-block-ink` lives on the
+   owned checkbox/miniature itself, never on the row, so a marked parent can
+   never repaint an unmarked nested child's glyph or ink. Reading rows match
+   only their own checkbox through the child combinator; a Live Preview line
+   holds exactly one box. */
+
+body {
+  --bob-block-ink-anchor: color-mix(in srgb, var(--color-red) 72%, var(--text-normal));
+  --bob-block-ink-1: var(--bob-block-ink-anchor); /* P1, hand date */
+  --bob-block-ink-2: color-mix(in srgb, var(--bob-block-ink-anchor) 68%, var(--text-muted));
+  --bob-block-ink-3: color-mix(in srgb, var(--bob-block-ink-anchor) 38%, var(--text-muted));
+  --bob-block-ink-4: color-mix(in srgb, var(--bob-block-ink-anchor) 12%, var(--text-muted)); /* P4, recurrence loop */
+  --bob-block-glyph-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 10.25 8 6.25l4 4' fill='none' stroke='black' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* Local held-fill darkening so a white glyph meets 4.5:1 on the default
+   solid red without redefining the global blocked color. Dark needs more. */
+body.bob-block-marks {
+  --bob-block-held-fill: color-mix(in srgb, black 14%, var(--task-status-blocked, var(--color-red, #c65367)));
+}
+
+.theme-light.bob-block-marks {
+  --bob-block-held-fill: color-mix(in srgb, black 4%, var(--task-status-blocked, var(--color-red, #c65367)));
+}
+
+/* Held rows keep today's 13% tint and 2px rail, drawn explicitly so marked
+   boxes look right even without the vault snippet. */
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="dep"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="prj"] {
+  background-color: color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 13%, transparent);
+  border-inline-start: 2px solid var(--task-status-blocked, var(--color-red, #c65367));
+}
+
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="dep"],
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="prj"] {
+  border-radius: 4px;
+  background: linear-gradient(to right, var(--task-status-blocked, var(--color-red, #c65367)) 0 2px, color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 13%, transparent) 2px 100%);
+}
+
+/* Waiting rows are quieter: a 5.5% tint with the rail at 45%. */
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p1"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p2"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p3"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p4"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="repeat"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="date"] {
+  background-color: color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 5.5%, transparent);
+  border-inline-start: 2px solid color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 45%, transparent);
+}
+
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p1"],
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p2"],
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p3"],
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p4"],
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="repeat"],
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="date"] {
+  border-radius: 4px;
+  background: linear-gradient(to right, color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 45%, transparent) 0 2px, color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 5.5%, transparent) 2px 100%);
+}
+
+/* Stale rows carry no wash, tint, or rail. */
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="stale"] {
+  background-color: transparent;
+  border-inline-start: 2px solid transparent;
+}
+
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="stale"] {
+  border-radius: 4px;
+  background: transparent;
+}
+
+/* Owned checkboxes and miniatures share one box geometry. The pip needs
+   visible overflow and a positioned box; hit area and row height stay
+   at the platform defaults. */
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block] > .task-list-item-checkbox,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block] input.task-list-item-checkbox,
+body.bob-block-marks span.bob-block-mark[data-bob-block] {
+  position: relative;
+  overflow: visible;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+/* Miniature box: a listener-free checkbox replica for chips and cards. */
+body.bob-block-marks span.bob-block-mark[data-bob-block] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--checkbox-size, 15px);
+  height: var(--checkbox-size, 15px);
+  border-radius: var(--checkbox-radius, 4px);
+  pointer-events: none;
+}
+
+body.bob-block-marks span.bob-block-mark[data-bob-block]::before {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-interface);
+  font-size: 0.75em;
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* Held boxes: solid local fill with a white glyph. */
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="dep"] > .task-list-item-checkbox:checked,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="dep"] input.task-list-item-checkbox:checked,
+body.bob-block-marks span.bob-block-mark[data-bob-block="dep"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="prj"] > .task-list-item-checkbox:checked,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="prj"] input.task-list-item-checkbox:checked,
+body.bob-block-marks span.bob-block-mark[data-bob-block="prj"] {
+  --bob-block-ink: #ffffff;
+  border-color: var(--bob-block-held-fill);
+  background-color: var(--bob-block-held-fill);
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="dep"] > .task-list-item-checkbox:checked::after,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="dep"] input.task-list-item-checkbox:checked::after {
+  content: "&";
+  color: #ffffff;
+}
+
+body.bob-block-marks span.bob-block-mark[data-bob-block="dep"]::before {
+  content: "&";
+  color: #ffffff;
+}
+
+/* The project chevron is a 16x16 stroked mask (`M4 10.25 8 6.25l4 4`,
+   ~2.1 stroke, round caps and joins), never the `^` character, which sits
+   too high in the interface font. */
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="prj"] > .task-list-item-checkbox:checked::after,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="prj"] input.task-list-item-checkbox:checked::after,
+body.bob-block-marks span.bob-block-mark[data-bob-block="prj"]::before {
+  content: "";
+  background-color: #ffffff;
+  -webkit-mask-image: var(--bob-block-glyph-chevron);
+  mask-image: var(--bob-block-glyph-chevron);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+/* Waiting boxes: a 1.5px ink border with a 12% wash of the same ink. */
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p1"] > .task-list-item-checkbox:checked,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p1"] input.task-list-item-checkbox:checked,
+body.bob-block-marks span.bob-block-mark[data-bob-block="p1"] {
+  --bob-block-ink: var(--bob-block-ink-1);
+  border: 1.5px solid var(--bob-block-ink);
+  background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p2"] > .task-list-item-checkbox:checked,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p2"] input.task-list-item-checkbox:checked,
+body.bob-block-marks span.bob-block-mark[data-bob-block="p2"] {
+  --bob-block-ink: var(--bob-block-ink-2);
+  border: 1.5px solid var(--bob-block-ink);
+  background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p3"] > .task-list-item-checkbox:checked,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p3"] input.task-list-item-checkbox:checked,
+body.bob-block-marks span.bob-block-mark[data-bob-block="p3"] {
+  --bob-block-ink: var(--bob-block-ink-3);
+  border: 1.5px solid var(--bob-block-ink);
+  background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p4"] > .task-list-item-checkbox:checked,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p4"] input.task-list-item-checkbox:checked,
+body.bob-block-marks span.bob-block-mark[data-bob-block="p4"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="repeat"] > .task-list-item-checkbox:checked,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="repeat"] input.task-list-item-checkbox:checked,
+body.bob-block-marks span.bob-block-mark[data-bob-block="repeat"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="date"] > .task-list-item-checkbox:checked,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="date"] input.task-list-item-checkbox:checked,
+body.bob-block-marks span.bob-block-mark[data-bob-block="date"] {
+  --bob-block-ink: var(--bob-block-ink-4);
+  border: 1.5px solid var(--bob-block-ink);
+  background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="date"] > .task-list-item-checkbox:checked,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="date"] input.task-list-item-checkbox:checked,
+body.bob-block-marks span.bob-block-mark[data-bob-block="date"] {
+  --bob-block-ink: var(--bob-block-ink-1);
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p1"] > .task-list-item-checkbox:checked::after,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p1"] input.task-list-item-checkbox:checked::after,
+body.bob-block-marks span.bob-block-mark[data-bob-block="p1"]::before {
+  content: "1";
+  color: var(--bob-block-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p2"] > .task-list-item-checkbox:checked::after,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p2"] input.task-list-item-checkbox:checked::after,
+body.bob-block-marks span.bob-block-mark[data-bob-block="p2"]::before {
+  content: "2";
+  color: var(--bob-block-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p3"] > .task-list-item-checkbox:checked::after,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p3"] input.task-list-item-checkbox:checked::after,
+body.bob-block-marks span.bob-block-mark[data-bob-block="p3"]::before {
+  content: "3";
+  color: var(--bob-block-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p4"] > .task-list-item-checkbox:checked::after,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p4"] input.task-list-item-checkbox:checked::after,
+body.bob-block-marks span.bob-block-mark[data-bob-block="p4"]::before {
+  content: "4";
+  color: var(--bob-block-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The recurrence loop reuses the date-mark repeat mask so the checkbox
+   loop matches the recurrence mark on the same line. */
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="repeat"] > .task-list-item-checkbox:checked::after,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="repeat"] input.task-list-item-checkbox:checked::after,
+body.bob-block-marks span.bob-block-mark[data-bob-block="repeat"]::before {
+  content: "";
+  background-color: var(--bob-block-ink);
+  -webkit-mask-image: var(--bob-date-glyph-repeat);
+  mask-image: var(--bob-date-glyph-repeat);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="date"] > .task-list-item-checkbox:checked::after,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="date"] input.task-list-item-checkbox:checked::after,
+body.bob-block-marks span.bob-block-mark[data-bob-block="date"]::before {
+  content: "?";
+  color: var(--bob-block-ink);
+}
+
+/* Stale boxes: a dashed muted border with a muted glyph, no wash. */
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="stale"] > .task-list-item-checkbox:checked,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="stale"] input.task-list-item-checkbox:checked,
+body.bob-block-marks span.bob-block-mark[data-bob-block="stale"] {
+  --bob-block-ink: var(--text-muted);
+  border: 1.5px dashed var(--bob-block-ink);
+  background-color: transparent;
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="stale"] > .task-list-item-checkbox:checked::after,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="stale"] input.task-list-item-checkbox:checked::after,
+body.bob-block-marks span.bob-block-mark[data-bob-block="stale"]::before {
+  content: "?";
+  color: var(--bob-block-ink);
+}
+
+/* Corner pip: a 6px dot at the box's top-right corner for the highest
+   losing reason, ringed 1.5px in the page background. It never takes
+   layout space, never sees the pointer, and never changes the box. */
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block-more="dep"] > .task-list-item-checkbox,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block-more="dep"] input.task-list-item-checkbox,
+body.bob-block-marks span.bob-block-mark[data-bob-block-more="dep"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block-more="prj"] > .task-list-item-checkbox,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block-more="prj"] input.task-list-item-checkbox,
+body.bob-block-marks span.bob-block-mark[data-bob-block-more="prj"] {
+  --bob-block-pip-ink: var(--bob-block-held-fill);
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block-more="p1"] > .task-list-item-checkbox,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block-more="p1"] input.task-list-item-checkbox,
+body.bob-block-marks span.bob-block-mark[data-bob-block-more="p1"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block-more="date"] > .task-list-item-checkbox,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block-more="date"] input.task-list-item-checkbox,
+body.bob-block-marks span.bob-block-mark[data-bob-block-more="date"] {
+  --bob-block-pip-ink: var(--bob-block-ink-1);
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block-more="p2"] > .task-list-item-checkbox,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block-more="p2"] input.task-list-item-checkbox,
+body.bob-block-marks span.bob-block-mark[data-bob-block-more="p2"] {
+  --bob-block-pip-ink: var(--bob-block-ink-2);
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block-more="p3"] > .task-list-item-checkbox,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block-more="p3"] input.task-list-item-checkbox,
+body.bob-block-marks span.bob-block-mark[data-bob-block-more="p3"] {
+  --bob-block-pip-ink: var(--bob-block-ink-3);
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block-more="p4"] > .task-list-item-checkbox,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block-more="p4"] input.task-list-item-checkbox,
+body.bob-block-marks span.bob-block-mark[data-bob-block-more="p4"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block-more="repeat"] > .task-list-item-checkbox,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block-more="repeat"] input.task-list-item-checkbox,
+body.bob-block-marks span.bob-block-mark[data-bob-block-more="repeat"] {
+  --bob-block-pip-ink: var(--bob-block-ink-4);
+}
+
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block][data-bob-block-more] > .task-list-item-checkbox:checked::before,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block][data-bob-block-more] input.task-list-item-checkbox:checked::before,
+body.bob-block-marks span.bob-block-mark[data-bob-block][data-bob-block-more]::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--bob-block-pip-ink);
+  box-shadow: 0 0 0 1.5px var(--background-primary);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block] > .task-list-item-checkbox,
+  body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block] input.task-list-item-checkbox,
+  body.bob-block-marks span.bob-block-mark[data-bob-block] {
+    transition: none;
+  }
+}
+
+/* Blocked-reason marks (BM) paint: end. */
+
 /* Daily Stats page block (bob-cli-6l page): `.bob-stats` root emitted by
    the `bob-stats` code block processor. Header range chips, tile row,
    table view, footer, and honest states. All text uses Obsidian text
@@ -6139,3 +6476,4 @@ body:not(.bob-root-marks) .bob-root-mark-native {
     color: HighlightText;
   }
 }
+

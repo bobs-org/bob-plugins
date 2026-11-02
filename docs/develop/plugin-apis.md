@@ -292,8 +292,15 @@ note, never from a dashboard path, and never put `::` in `aria-label` or
 `render(host, value, { decorative?, inheritColor? })`.
 `blockMarks.model(lineText, { path })` returns the frozen mark model for an eligible
 Blocked `#task` line, or `null` when the line is ineligible or its prerequisite state
-cannot be proven from the Tasks cache. It is synchronous, display-only, and never
-throws; the namespace currently exposes only `model`.
+cannot be proven from the Tasks cache. `blockMarks.render(host, model,
+{ decorative? })` appends one listener-free `span.bob-block-mark` carrying the same
+`data-bob-block`, `data-bob-block-family`, and `data-bob-block-more` attributes as a
+marked row and returns it, or `null` for invalid input, a disabled gate, or an
+unavailable DOM. Meaningful miniatures get `role="img"` plus the model tooltip as
+`aria-label`; `decorative` miniatures get `aria-hidden="true"`. The renderer accepts
+synthetic digit models (for example a Task Card `{ key: "p2", family: "waiting" }`)
+and never requires a source task. Every function is synchronous, display-only, and
+never throws.
 `dateMarks` exposes `model(field, dateText)` and
 `render(host, field, dateText, { decorative?, inheritColor? })`;
 its fields are `created`, `scheduled`,

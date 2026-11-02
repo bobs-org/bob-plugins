@@ -92,7 +92,8 @@ class BobLedgerToolsBlockMarksMixin {
   }
 
   // The shared model used by source-note surfaces and api.blockMarks v1.
-  // This phase adds no decorations; the next phase owns visible rendering.
+  // Paint and the miniature renderer ship with this phase; editor and
+  // reading-view decorations follow in later phases.
   blockMarkModelForLine(path, lineText) {
     try {
       if (this.blockMarksEnabled === false) return null;
@@ -138,6 +139,13 @@ class BobLedgerToolsBlockMarksMixin {
               String(settings.path || ""),
               String(lineText || ""),
             );
+          } catch (error) {
+            return null;
+          }
+        },
+        render: (host, model, options) => {
+          try {
+            return plugin.blockMarkRender(host, model, options);
           } catch (error) {
             return null;
           }

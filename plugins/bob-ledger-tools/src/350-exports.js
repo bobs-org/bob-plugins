@@ -366,6 +366,7 @@ module.exports.helpers = {
   blockMarkTooltip,
   blockMarkModel,
   blockMarkDateWords,
+  buildBlockMarkElement,
   blockMarkDependencyFacts,
   buildPriorityMarkElement,
   ensurePriorityMarksRefresh,

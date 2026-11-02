@@ -1,13 +1,14 @@
 // --- Calendar-aware Pomodoro starts: pure mirror of bob capture -----------
-// The MEET event run, the `#untracked` trackedness rule, `[buffer::]`
-// occupied spans, and the run-past-event notice. Shared contracts:
-// bob-cli's tests/fixtures/meet_event_run/vectors.json and
-// tests/fixtures/event_buffer/vectors.json (copied byte-for-byte under
+// The MEET event run, the `#offclock` clock rule, `[buffer::]` occupied
+// spans, and the run-past-event notice. Shared contracts: bob-cli's
+// tests/fixtures/meet_event_run/vectors.json,
+// tests/fixtures/event_buffer/vectors.json, and
+// tests/fixtures/pomodoro_clock/vectors.json (copied byte-for-byte under
 // scripts/fixtures/). Everything here reads lines and returns text or
 // messages; it never touches the editor.
 //
-// A timed ledger row WITH `[t:: Nm]` is tracked; a timed row WITHOUT it is an
-// untracked session: on the calendar, off the clock. A `[buffer::]` field
+// A timed ledger row carries `[t:: Nm]` (on the clock) or `[off:: Nm]` (an
+// Off-Clock Pomodoro: recorded, but off the work clock). A `[buffer::]` field
 // widens the span the event occupies; the meeting span stays the bold clock.
 
 const EVENT_RUN_FAR_MINUTES = 25;
@@ -240,29 +241,40 @@ function eventRunMaskCodeAndLinks(line) {
   return out.join("");
 }
 
-// Offsets of the first standalone `#untracked` token (case-insensitive,
-// whitespace-bounded, not inside a code span or Markdown link), or null.
-function eventTaskUntrackedTagRange(line) {
+// `#offclock` is canonical; `#off-clock` and `#untracked` are permanent
+// aliases (mirror of bob's `line_has_off_clock_tag`).
+const OFF_CLOCK_TAGS = Object.freeze(["#offclock", "#off-clock", "#untracked"]);
+
+// Offsets of the first standalone off-clock tag token (any spelling,
+// case-insensitive, whitespace-bounded on the left and followed by whitespace,
+// end of line, or one of `])}:.,;!?`, not inside a code span or Markdown
+// link), or null. A nested tag such as `#offclock/x` does not qualify.
+function eventTaskOffClockTagRange(line) {
   const masked = eventRunMaskCodeAndLinks(line);
   const lower = eventRunAsciiLower(masked);
-  const needle = "#untracked";
-  let search = 0;
-  while (search <= lower.length) {
-    const at = lower.indexOf(needle, search);
-    if (at < 0) return null;
-    const end = at + needle.length;
-    const before = at > 0 ? masked[at - 1] : null;
-    const after = end < masked.length ? masked[end] : null;
-    const leftOk = before === null || /\s/.test(before);
-    const rightOk = after === null || /\s/.test(after) || "])}:.,;!?".includes(after);
-    if (leftOk && rightOk) return { start: at, end };
-    search = at + 1;
+  let best = null;
+  for (const needle of OFF_CLOCK_TAGS) {
+    let search = 0;
+    while (search <= lower.length) {
+      const at = lower.indexOf(needle, search);
+      if (at < 0) break;
+      const end = at + needle.length;
+      const before = at > 0 ? masked[at - 1] : null;
+      const after = end < masked.length ? masked[end] : null;
+      const leftOk = before === null || /\s/.test(before);
+      const rightOk = after === null || /\s/.test(after) || "])}:.,;!?".includes(after);
+      if (leftOk && rightOk) {
+        if (best === null || at < best.start) best = { start: at, end };
+        break;
+      }
+      search = at + 1;
+    }
   }
-  return null;
+  return best;
 }
 
-function eventTaskLineIsUntracked(line) {
-  return eventTaskUntrackedTagRange(line) !== null;
+function eventTaskLineIsOffClock(line) {
+  return eventTaskOffClockTagRange(line) !== null;
 }
 
 function eventRunStripTrailingField(title) {
@@ -272,12 +284,19 @@ function eventRunStripTrailingField(title) {
   return trimmed.slice(0, open).trimEnd();
 }
 
-function eventRunStripTrailingUntracked(title) {
+// Strips a trailing off-clock tag (any spelling, with the sentence
+// punctuation Rust allows after it) from a title.
+function eventRunStripTrailingOffClock(title) {
   const trimmed = title.trimEnd();
-  const start = eventRunAsciiLower(trimmed).lastIndexOf("#untracked");
-  if (start < 0 || start + "#untracked".length !== trimmed.length) return trimmed;
-  if (start > 0 && !/\s/.test(trimmed[start - 1])) return trimmed;
-  return trimmed.slice(0, start).trimEnd();
+  const candidate = trimmed.replace(/[.,;:!?]+$/, "");
+  const lower = eventRunAsciiLower(candidate);
+  for (const tag of OFF_CLOCK_TAGS) {
+    const start = lower.lastIndexOf(tag);
+    if (start < 0 || start + tag.length !== candidate.length) continue;
+    if (start > 0 && !/\s/.test(candidate[start - 1])) continue;
+    return candidate.slice(0, start).trimEnd();
+  }
+  return trimmed;
 }
 
 function eventRunStripTrailingMarkdownLink(title) {
@@ -287,8 +306,8 @@ function eventRunStripTrailingMarkdownLink(title) {
   return trimmed.slice(0, open).trimEnd();
 }
 
-// Mirror of event_task.rs `clean_event_title`: strip trailing fields,
-// `#untracked`, and Markdown links in any interleaving until nothing
+// Mirror of event_task.rs `clean_event_title`: strip trailing fields, any
+// off-clock tag, and Markdown links in any interleaving until nothing
 // changes, so `[buffer::]` never leaks into a title.
 function eventRunCleanTitle(after) {
   let title = String(after || "").trim();
@@ -297,7 +316,7 @@ function eventRunCleanTitle(after) {
   for (;;) {
     const before = title.length;
     title = eventRunStripTrailingField(title);
-    title = eventRunStripTrailingUntracked(title);
+    title = eventRunStripTrailingOffClock(title);
     title = eventRunStripTrailingMarkdownLink(title);
     if (title.length === before) break;
   }
@@ -351,7 +370,7 @@ function eventRunEventRows(lines) {
       bufferedStartMin: occupied.startMin,
       bufferedEndOnTimeline: occupied.endOnTimeline,
       bufferedTimeRange: occupied.timeRange,
-      untracked: eventTaskLineIsUntracked(line),
+      offClock: eventTaskLineIsOffClock(line),
       blockId: idMatch ? idMatch[1] : null,
       title: eventRunCleanTitle(line.slice(match[0].length)),
       timeRange: `${match[2]}-${match[3]}`,
@@ -411,7 +430,7 @@ function eventRunIsMeetName(name) {
 
 // The event run of the MEET session headlined at `entryIndex`: its earliest
 // open, not-yet-ended lineup Event Task plus every following one that touches
-// or overlaps it and shares its trackedness. Null when the lineup has none.
+// or overlaps it and shares its clock. Null when the lineup has none.
 function computeMeetEventRun(lines, entryIndex, nowMinutes, rows = eventRunEventRows(lines)) {
   const seen = new Set();
   const candidates = [];
@@ -435,11 +454,11 @@ function computeMeetEventRun(lines, entryIndex, nowMinutes, rows = eventRunEvent
   const events = [candidates[0]];
   let endMin = first.bufferedEndOnTimeline;
   for (const next of candidates.slice(1)) {
-    if (next.event.bufferedStartMin > endMin || next.event.untracked !== first.untracked) break;
+    if (next.event.bufferedStartMin > endMin || next.event.offClock !== first.offClock) break;
     endMin = Math.max(endMin, next.event.bufferedEndOnTimeline);
     events.push(next);
   }
-  return { startMin: first.bufferedStartMin, endMin, untracked: first.untracked, events };
+  return { startMin: first.bufferedStartMin, endMin, offClock: first.offClock, events };
 }
 
 // End, on the day's timeline, of today's latest closed timed session.
@@ -664,12 +683,15 @@ function eventRunRewriteNotice(lines, lineIndex, kind, oldRange, newRange) {
   }
 }
 
-// Apply bob capture's MEET and run-past-event rules to an `se<X>` expansion
-// on the ledger line `lineIndex` of `lines` (the document before the
-// expansion). Returns { expansion, notices, tracked, eventRun }; the
-// expansion is unchanged unless the line is a MEET with an event run.
-function applyEventRunToExpansion(lines, lineIndex, expansion, now = new Date()) {
-  const result = { expansion, notices: [], tracked: true, eventRun: null };
+// Apply bob capture's MEET, clock, and run-past-event rules to an `se<X>`
+// expansion on the ledger line `lineIndex` of `lines` (the document before the
+// expansion). Returns { expansion, notices, offClock, eventRun }. A MEET with
+// an event run takes that run's span and clock; every other session (and a
+// MEET with no run) keeps its span and takes the clock of its counted lineup.
+// `options.resolveTask(link)` returns the full line of another note's task
+// (or null), so the rule can read other-note Task Links.
+function applyEventRunToExpansion(lines, lineIndex, expansion, now = new Date(), options = {}) {
+  const result = { expansion, notices: [], offClock: false, eventRun: null };
   try {
     if (!expansion || !Array.isArray(lines) || typeof expansion.range !== "string") return result;
     const trigger = parseTrigger(expansion.trigger);
@@ -683,53 +705,67 @@ function applyEventRunToExpansion(lines, lineIndex, expansion, now = new Date())
     const base = computeRange(now, trigger.durationMultiplier, trigger.offsetMultiplier, trigger.dashPresent);
     const written = lineText.slice(0, expansion.fromCh) + expansion.replacement + lineText.slice(expansion.toCh);
     const name = eventRunLineName(written);
+    const suffix = expansion.replacement.slice(expansion.range.length);
     if (eventRunIsMeetName(name)) {
       const run = computeMeetEventRun(lines, lineIndex, nowMinutes);
-      if (!run) return result;
-      result.tracked = !run.untracked;
-      let startMinutes = base.startMinutes;
-      let endMinutes = base.endMinutes;
-      let durationMinutes = base.durationMinutes;
-      let source = "explicit";
-      if (expansion.trigger === "se") {
-        const closedEnd = eventRunLatestClosedEnd(lines);
-        startMinutes = closedEnd !== null && closedEnd > run.startMin && closedEnd < run.endMin ? closedEnd : run.startMin;
-        endMinutes = run.endMin;
-        durationMinutes = endMinutes - startMinutes;
-        source = "calendar";
-        if (startMinutes - nowMinutes > EVENT_RUN_FAR_MINUTES) {
-          const firstEvent = run.events[0].event;
-          const title = eventBufferIsEmpty(firstEvent.buffer)
-            ? firstEvent.title
-            : eventRunWithBufferLabel(firstEvent.title, firstEvent.timeRange, firstEvent.buffer);
-          result.notices.push({
-            code: "pomodoro_event_run_later",
-            message: `MEET's next event, ${title}, starts at ${eventRunHhmm(startMinutes)} (${eventRunHumanize(startMinutes - nowMinutes)} from now) · type \`se5\` to start 25 minutes now`,
-          });
+      if (run) {
+        result.offClock = run.offClock;
+        let startMinutes = base.startMinutes;
+        let endMinutes = base.endMinutes;
+        let durationMinutes = base.durationMinutes;
+        let source = "explicit";
+        if (expansion.trigger === "se") {
+          const closedEnd = eventRunLatestClosedEnd(lines);
+          startMinutes = closedEnd !== null && closedEnd > run.startMin && closedEnd < run.endMin ? closedEnd : run.startMin;
+          endMinutes = run.endMin;
+          durationMinutes = endMinutes - startMinutes;
+          source = "calendar";
+          if (startMinutes - nowMinutes > EVENT_RUN_FAR_MINUTES) {
+            const firstEvent = run.events[0].event;
+            const title = eventBufferIsEmpty(firstEvent.buffer)
+              ? firstEvent.title
+              : eventRunWithBufferLabel(firstEvent.title, firstEvent.timeRange, firstEvent.buffer);
+            result.notices.push({
+              code: "pomodoro_event_run_later",
+              message: `MEET's next event, ${title}, starts at ${eventRunHhmm(startMinutes)} (${eventRunHumanize(startMinutes - nowMinutes)} from now) · type \`se5\` to start 25 minutes now`,
+            });
+          }
         }
+        const metadata = ` ${run.offClock ? formatOffClockField(durationMinutes) : formatDurationField(durationMinutes)}`;
+        const range = formatTimeRange(startMinutes, endMinutes, "compact", metadata);
+        result.expansion = { ...expansion, range, replacement: range + suffix };
+        result.eventRun = {
+          timeRange: `${eventRunHhmm(startMinutes)}-${eventRunHhmm(endMinutes)}`,
+          offClock: run.offClock,
+          source,
+        };
+        return result;
       }
-      const metadata = result.tracked ? ` ${formatDurationField(durationMinutes)}` : "";
-      const range = formatTimeRange(startMinutes, endMinutes, "compact", metadata);
-      const suffix = expansion.replacement.slice(expansion.range.length);
-      result.expansion = { ...expansion, range, replacement: range + suffix };
-      result.eventRun = {
-        timeRange: `${eventRunHhmm(startMinutes)}-${eventRunHhmm(endMinutes)}`,
-        untracked: run.untracked,
-        source,
-      };
-      return result;
     }
-    const rest = lineText.slice(0, expansion.fromCh) + lineText.slice(expansion.toCh);
-    const previous = parseTimeRange(rest);
-    const old = previous ? eventRunSpan(previous.startMinutes, previous.endMinutes) : null;
-    const span = eventRunSpan(base.startMinutes, base.endMinutes);
-    const crossed = eventRunNewCrossings(lines, lineIndex, span, old);
-    if (crossed.length > 0) {
-      const fit = eventRunFitToken("start", span, old, crossed[0], trigger.offsetMultiplier);
-      result.notices.push(eventRunConflictNotice(name, span, crossed, fit));
+    // MEET sessions never warn about running into an event; every other
+    // session does when it newly crosses one.
+    if (!eventRunIsMeetName(name)) {
+      const rest = lineText.slice(0, expansion.fromCh) + lineText.slice(expansion.toCh);
+      const previous = parseTimeRange(rest);
+      const old = previous ? eventRunSpan(previous.startMinutes, previous.endMinutes) : null;
+      const span = eventRunSpan(base.startMinutes, base.endMinutes);
+      const crossed = eventRunNewCrossings(lines, lineIndex, span, old);
+      if (crossed.length > 0) {
+        const fit = eventRunFitToken("start", span, old, crossed[0], trigger.offsetMultiplier);
+        result.notices.push(eventRunConflictNotice(name, span, crossed, fit));
+      }
+    }
+    // Which clock the lineup puts this session on: all #offclock links write
+    // [off::]; an unlinked, mixed, or unresolved lineup stays worked.
+    const lineup = pomodoroLineupClock(lines, lineIndex, options.resolveTask, name);
+    if (lineup.notice) result.notices.push(lineup.notice);
+    if (lineup.offClock) {
+      result.offClock = true;
+      const range = formatTimeRange(base.startMinutes, base.endMinutes, "compact", ` ${formatOffClockField(base.durationMinutes)}`);
+      result.expansion = { ...expansion, range, replacement: range + suffix };
     }
     return result;
   } catch (error) {
-    return { expansion, notices: [], tracked: true, eventRun: null };
+    return { expansion, notices: [], offClock: false, eventRun: null };
   }
 }

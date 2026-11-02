@@ -318,6 +318,22 @@ class TaskStatusCyclerPomodoroMixin {
       }
     }
 
+    // Which clock the closed row belongs on (062-pomodoro-clock.js): the
+    // counted links the entry keeps, after the by-the-clock rewrites above.
+    // Read before the completions below touch any linked note.
+    const closeClock = await this.resolvePomodoroCloseClock(
+      lines,
+      context.pomodoroLine,
+      { editor, activePath: sourcePath, originPath: sourcePath },
+    );
+    if (closeClock && closeClock.message) {
+      try {
+        new Notice(closeClock.message);
+      } catch (error) {
+        // Notices are advisory.
+      }
+    }
+
     const subBulletRange = getSubBulletBlockRange(
       lines,
       context.pomodoroLine,
@@ -355,6 +371,7 @@ class TaskStatusCyclerPomodoroMixin {
       lines,
       section,
       context.pomodoroLine,
+      closeClock ? { sessionClock: closeClock.clock } : {},
     );
     if (!plan) {
       return false;
@@ -374,7 +391,12 @@ class TaskStatusCyclerPomodoroMixin {
         context.pomodoroLine >= 0 &&
         context.pomodoroLine < lines.length
       ) {
-        const headline = String(lines[context.pomodoroLine] || "");
+        // The relocation pass matches the closed headline, so hand it the
+        // headline as the restamped close will write it.
+        const headline = stampPomodoroClosedLineClock(
+          String(lines[context.pomodoroLine] || ""),
+          closeClock ? closeClock.clock : null,
+        );
         let name = "";
         try {
           const parts = parsePomodoroEntryLineParts(headline);

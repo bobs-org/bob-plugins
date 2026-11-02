@@ -7,7 +7,7 @@ function gcalEventsTimeAttributes(row, hue) {
   const attributes = { "data-time": row.time };
   if (row.state) attributes["data-state"] = row.state;
   if (row.state === "running" && hue) attributes["data-theme-hue"] = hue;
-  if (row.untracked) attributes["data-untracked"] = "true";
+  if (row.offClock) attributes["data-off-clock"] = "true";
   if (row.buffer && row.buffer.beforeMin) attributes["data-buffer-before"] = String(row.buffer.beforeMin);
   if (row.buffer && row.buffer.afterMin) attributes["data-buffer-after"] = String(row.buffer.afterMin);
   if (row.bufferPhase) attributes["data-buffer-phase"] = row.bufferPhase;
@@ -39,7 +39,7 @@ function gcalEventsWingModel(row, side, hue) {
     minutes,
     label: `${minutes}m`,
     hue: hue || null,
-    untracked: Boolean(row.untracked),
+    offClock: Boolean(row.offClock),
     phase,
     tooltip: eventRunBufferTooltip(
       row.buffer,
@@ -60,7 +60,7 @@ function buildCalendarEventBufferWing(doc, model) {
   el.setAttribute("data-side", model.side);
   el.setAttribute("data-minutes", String(model.minutes));
   if (model.hue) el.setAttribute("data-theme-hue", model.hue);
-  if (model.untracked) el.setAttribute("data-untracked", "true");
+  if (model.offClock) el.setAttribute("data-off-clock", "true");
   if (model.phase) el.setAttribute("data-buffer-phase", model.phase);
   if (model.tooltip) el.setAttribute("title", model.tooltip);
   el.setAttribute("aria-hidden", "true");
@@ -77,7 +77,7 @@ if (WidgetType && typeof WidgetType === "function") {
         model && model.side,
         model && model.minutes,
         model && model.hue,
-        model && model.untracked ? "u" : "",
+        model && model.offClock ? "o" : "",
         model && model.phase,
       ].join("|");
     }

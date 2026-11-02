@@ -792,7 +792,16 @@ function getBlockLinkTargetKeysFromLine(lineText) {
   ]);
 }
 
-function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
+// `options.sessionClock` ("worked" | "off-clock") stamps the closed row's key
+// from the counted-links rule (062-pomodoro-clock.js); leaving it out keeps
+// the headline's metadata untouched.
+function stampPomodoroClosedLineClock(lineText, sessionClock) {
+  return sessionClock === "worked" || sessionClock === "off-clock"
+    ? setPomodoroLineClock(lineText, sessionClock)
+    : lineText;
+}
+
+function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {}) {
   if (!isPomodoroTaskLine(lines, section, pomodoroLine)) {
     return null;
   }
@@ -849,7 +858,10 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine) {
         type: "replaceLine",
         line: pomodoroLine,
         sourceLineText: String(lines[pomodoroLine] || ""),
-        lineText: replaceTaskStatusSymbol(lines[pomodoroLine], "x"),
+        lineText: stampPomodoroClosedLineClock(
+          replaceTaskStatusSymbol(lines[pomodoroLine], "x"),
+          options && options.sessionClock,
+        ),
       },
   ];
   for (let line = sourceRange.startLine; line < sourceRange.endLine; line += 1) {

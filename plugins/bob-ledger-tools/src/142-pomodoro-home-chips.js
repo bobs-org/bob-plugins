@@ -271,21 +271,44 @@ function pomodoroHomeNameMatchesRoots(name, groups) {
   return names.size === labels.size && Array.from(names).every((item) => labels.has(item));
 }
 
-function pomodoroHomeLineIsUntracked(line, timeRange) {
-  return Boolean(timeRange) && !durationField(line);
+// The clock and recorded minutes of an entry line (mirror of bob's
+// `session_clock`): `[t:: Nm]` is worked, `[off:: Nm]` is an Off-Clock
+// Pomodoro with its real minutes, a bare timed span is an older off-clock
+// session counted by its span, and both keys read as worked. Untimed
+// placeholders have no minutes. `stampedOnly` (Reading view, where the line is
+// rebuilt from rendered text) reports off-clock only for an explicit
+// `[off::]`, so a field the rendering dropped never dashes a worked session.
+function pomodoroHomeLineClock(line, timeRange, options = {}) {
+  if (!timeRange) {
+    return { offClock: false, minutes: null };
+  }
+  let clock = pomodoroSessionClock(line);
+  if (clock.kind === "placeholder") {
+    // The plan parser read a range the time-range parser did not: the span.
+    clock = { kind: "off-clock", minutes: pomodoroHomeDuration(timeRange), stamped: false };
+  }
+  const minutes = Number.isInteger(clock.minutes) ? clock.minutes : 0;
+  const offClock = clock.kind === "off-clock" && (!options.stampedOnly || clock.stamped);
+  return { offClock, minutes };
 }
 
-function pomodoroHomeLineMinutes(line, timeRange) {
-  const field = durationField(line);
-  if (field) {
-    const fieldMinutes = parseDurationMinutes(field.value);
-    if (fieldMinutes !== null) {
-      return fieldMinutes;
-    }
+function pomodoroHomeLineIsOffClock(line, timeRange, options = {}) {
+  return pomodoroHomeLineClock(line, timeRange, options).offClock;
+}
+
+function pomodoroHomeLineMinutes(line, timeRange, options = {}) {
+  return pomodoroHomeLineClock(line, timeRange, options).minutes;
+}
+
+// "1h 30m" / "45m": the recorded minutes an off-clock chip shows.
+function pomodoroHomeMinutesLabel(minutes) {
+  const value = Math.max(0, Math.floor(Number(minutes) || 0));
+  const hours = Math.floor(value / 60);
+  const rest = value % 60;
+  if (hours === 0) {
+    return `${rest}m`;
   }
-  // A timed row without [t::] is untracked: 0 minutes. The clock span is
-  // not a duration. Untimed placeholders stay null.
-  return timeRange ? 0 : null;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 }
 
 function pomodoroHomeCacheFor(file, metadataCache, vault) {
@@ -621,12 +644,13 @@ function pomodoroHomeParseEntries(content) {
           }
         }
       }
+      const clock = pomodoroHomeLineClock(lines[index], leading.timeRange);
       entries.push({
         line: index,
         status: parsed.state,
         name: name || "",
-        minutes: pomodoroHomeLineMinutes(lines[index], leading.timeRange),
-        untracked: pomodoroHomeLineIsUntracked(lines[index], leading.timeRange),
+        minutes: clock.minutes,
+        offClock: clock.offClock,
         links,
       });
     }
@@ -864,12 +888,22 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnin
     label,
     chip,
     hue: leadRoot ? leadRoot.hue : null,
-    ...(entry.untracked ? { untracked: true } : {}),
+    ...(entry.offClock ? { off_clock: true } : {}),
+    // An Off-Clock Pomodoro's chip carries its recorded minutes.
+    ...(entry.offClock && minutesKnown ? { minutes: entry.minutes } : {}),
     parts: parts.map(({ _order, _root, _rootLabel, ...part }) => part),
     lead_home: lead ? lead.key : "@unlinked",
     tooltip: pomodoroHomeRankRoots(roots)
       .filter((group) => group.tasks > 0)
-      .map((group) => `${group.label} · ${group.tasks} ${group.tasks === 1 ? "task" : "tasks"}${attributed ? ` · ${group.minutes}m` : ""}`)
+      .map((group) => {
+        const tasks = `${group.tasks} ${group.tasks === 1 ? "task" : "tasks"}`;
+        if (entry.offClock) {
+          return attributed
+            ? `${group.label} · ${group.minutes}m off the clock`
+            : `${group.label} · ${tasks} · off the clock`;
+        }
+        return `${group.label} · ${tasks}${attributed ? ` · ${group.minutes}m` : ""}`;
+      })
       .join("\n"),
   };
 }
@@ -904,22 +938,20 @@ function buildPomodoroHomeChipElement(doc, model) {
     chip.setAttribute("role", "img");
     chip.setAttribute(
       "aria-label",
-      `Pomodoro home: ${model.label}${model.untracked ? " (untracked)" : ""}`,
+      `Pomodoro home: ${model.label}${model.off_clock ? " (off-clock)" : ""}`,
     );
     chip.setAttribute("data-home-state", model.state || "forecast");
     if (model.hue) {
       chip.setAttribute("data-home-hue", model.hue);
     }
-    // An untracked session is on the calendar and off the clock: the chip
-    // is outlined with a dashed line and says so in its tooltip.
-    if (model.untracked) {
-      chip.setAttribute("data-home-untracked", "true");
+    // An Off-Clock Pomodoro is recorded but off the work clock: the chip is
+    // outlined with a dashed line, shows its minutes, and says so in its
+    // tooltip (`love · 60m off the clock`).
+    if (model.off_clock) {
+      chip.setAttribute("data-home-off-clock", "true");
     }
-    const tooltip = [model.untracked ? "untracked · not counted" : "", model.tooltip || ""]
-      .filter(Boolean)
-      .join("\n");
-    if (tooltip) {
-      chip.setAttribute("title", tooltip);
+    if (model.tooltip) {
+      chip.setAttribute("title", model.tooltip);
     }
     const dot = doc.createElement("span");
     dot.setAttribute("class", "bob-pomodoro-home-dot");
@@ -929,6 +961,12 @@ function buildPomodoroHomeChipElement(doc, model) {
     label.textContent = model.chip;
     chip.appendChild(dot);
     chip.appendChild(label);
+    if (model.off_clock && Number.isInteger(model.minutes)) {
+      const minutes = doc.createElement("span");
+      minutes.setAttribute("class", "bob-pomodoro-home-minutes");
+      minutes.textContent = pomodoroHomeMinutesLabel(model.minutes);
+      chip.appendChild(minutes);
+    }
     return chip;
   } catch (error) {
     return null;

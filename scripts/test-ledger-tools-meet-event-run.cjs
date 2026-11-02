@@ -53,8 +53,8 @@ function parseNow(text) {
 // Vectors whose gesture has no Obsidian counterpart, with the reason.
 const CAPTURE_ONLY = {
   "drop-removes-an-event-from-the-run": "`~K` drops are capture grammar; Obsidian edits the lineup by hand",
-  "kept-swap-into-untracked-meet-drops-t": "kept-ledger swaps are capture-only; se<X> never swaps sessions",
-  "kept-swap-out-of-untracked-meet-restores-t": "kept-ledger swaps are capture-only; se<X> never swaps sessions",
+  "kept-swap-into-off-clock-meet-moves-key": "kept-ledger swaps are capture-only; se<X> never swaps sessions",
+  "kept-swap-out-of-off-clock-meet-restores-worked-key": "kept-ledger swaps are capture-only; se<X> never swaps sessions",
 };
 
 // The line the capture token starts, and the `se<X>` gesture that mirrors it.
@@ -108,8 +108,9 @@ for (const vector of fixture.cases) {
     const expectedLine = expectedDay.find((item) => item.endsWith(`— ${name}`));
     assert.equal(line, expectedLine);
     assert.ok(line.includes(`**${vector.expected_span}**`), "expected span");
-    assert.equal(/\[t::/.test(line), vector.expected_tracked);
-    assert.equal(adjusted.tracked, vector.expected_tracked);
+    assert.equal(/\[off::/.test(line), vector.expected_off_clock);
+    assert.equal(/\[t::/.test(line), !vector.expected_off_clock);
+    assert.equal(adjusted.offClock, vector.expected_off_clock);
     const codes = adjusted.notices.map((notice) => notice.code);
     if (vector.expected_warning) {
       assert.ok(codes.includes(vector.expected_warning), `${codes} lacks warning`);
@@ -129,20 +130,37 @@ test("every vector is either mirrored or listed as capture-only", () => {
   for (const id of Object.keys(CAPTURE_ONLY)) assert.ok(ids.includes(id), id);
 });
 
-test("#untracked tag detection mirrors bob's Rust rules", () => {
-  const tag = helpers.eventTaskUntrackedTagRange;
+test("off-clock tag detection mirrors bob's Rust rules for every spelling", () => {
+  const tag = helpers.eventTaskOffClockTagRange;
   assert.deepEqual(tag("- [*] #task **1200-1300** Lunch #untracked [root:: love]"), {
     start: 32,
     end: 42,
   });
-  assert.ok(helpers.eventTaskLineIsUntracked("- [*] #task **1200-1300** Lunch #UNTRACKED."));
-  assert.ok(!helpers.eventTaskLineIsUntracked("- [*] #task **1200-1300** `#untracked` in code"));
-  assert.ok(!helpers.eventTaskLineIsUntracked("- [*] #task **1200-1300** [see #untracked](https://example.com)"));
-  assert.ok(!helpers.eventTaskLineIsUntracked("- [*] #task **1200-1300** lunch#untracked glued"));
-  assert.ok(!helpers.eventTaskLineIsUntracked("- [*] #task **1200-1300** #untrackedly"));
+  assert.deepEqual(tag("- [*] #task **1200-1300** Lunch #offclock [root:: love]"), {
+    start: 32,
+    end: 41,
+  });
+  assert.deepEqual(tag("- [*] #task **1200-1300** Lunch #Off-Clock)"), { start: 32, end: 42 });
+  assert.ok(helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** Lunch #UNTRACKED."));
+  assert.ok(helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** Lunch #OFFCLOCK."));
+  assert.ok(helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** #offclock Lunch"));
+  assert.ok(!helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** `#untracked` in code"));
+  assert.ok(!helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** [see #offclock](https://example.com)"));
+  assert.ok(!helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** lunch#untracked glued"));
+  assert.ok(!helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** #untrackedly"));
+  assert.ok(!helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** Lunch #offclock/nested"));
+  assert.ok(!helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** Lunch #off-clocked"));
 });
 
-test("Event rows carry status, trackedness, ids, and clean titles", () => {
+test("clean titles strip every off-clock spelling and its sentence punctuation", () => {
+  for (const tag of ["#offclock", "#OFF-CLOCK.", "#untracked!"]) {
+    assert.equal(helpers.eventRunCleanTitle(` Lunch ${tag}`), "Lunch");
+  }
+  assert.equal(helpers.eventRunCleanTitle(" Lunch #offclock [buffer:: +15m] ^lunch"), "Lunch");
+  assert.equal(helpers.eventRunCleanTitle(" Plan#offclock"), "Plan#offclock");
+});
+
+test("Event rows carry status, clock, ids, and clean titles", () => {
   const rows = helpers.eventRunEventRows([
     "## Events",
     "- [ ] #task **1200-1300** Lunch with Kelly [📅](https://x.test/e) #untracked [root:: love] [type:: MEET] ^lunch",
@@ -155,7 +173,7 @@ test("Event rows carry status, trackedness, ids, and clean titles", () => {
     "- [ ] #task **1600-1630** outside ^outside",
   ]);
   assert.deepEqual(
-    rows.map((row) => [row.title, row.open, row.untracked, row.blockId, row.timeRange]),
+    rows.map((row) => [row.title, row.open, row.offClock, row.blockId, row.timeRange]),
     [
       ["Lunch with Kelly", true, true, "lunch", "1200-1300"],
       ["Done", false, false, "done", "1300-1330"],
@@ -163,20 +181,64 @@ test("Event rows carry status, trackedness, ids, and clean titles", () => {
   );
 });
 
-test("N\\p and N\\P keep an untracked row untracked; tracked rows keep [t::]", () => {
-  const untracked = "- [ ] (**1200-1300**) — MEET";
-  assert.equal(helpers.changePomodoroLineUnits(untracked, 2), "- [ ] (**1200-1310**) — MEET");
-  assert.equal(helpers.changePomodoroLineUnits(untracked, -3), "- [ ] (**1200-1245**) — MEET");
+test("N\\p and N\\P keep the row's key; a bare span is stamped [off::]; a conflict resolves to [t::]", () => {
+  const offClock = "- [ ] (**1200-1300** [off:: 60m]) — MEET";
+  assert.equal(helpers.changePomodoroLineUnits(offClock, 2), "- [ ] (**1200-1310** [off:: 70m]) — MEET");
+  assert.equal(helpers.changePomodoroLineUnits(offClock, -3), "- [ ] (**1200-1245** [off:: 45m]) — MEET");
+  const bare = "- [ ] (**1200-1300**) — MEET";
+  assert.equal(helpers.changePomodoroLineUnits(bare, 2), "- [ ] (**1200-1310** [off:: 70m]) — MEET");
+  assert.equal(helpers.changePomodoroLineUnits(bare, -3), "- [ ] (**1200-1245** [off:: 45m]) — MEET");
   const withOther = "- [ ] (**1200-1300** [foo:: 1]) — MEET";
-  assert.equal(helpers.changePomodoroLineUnits(withOther, 1), "- [ ] (**1200-1305** [foo:: 1]) — MEET");
+  assert.equal(helpers.changePomodoroLineUnits(withOther, 1), "- [ ] (**1200-1305** [off:: 65m] [foo:: 1]) — MEET");
   const tracked = "- [ ] (**1200-1225** [t:: 25m]) — BOB";
   assert.equal(helpers.changePomodoroLineUnits(tracked, 1), "- [ ] (**1200-1230** [t:: 30m]) — BOB");
+  const keysUpper = "- [ ] (**1200-1225** [OFF:: 25m] [foo:: 1]) — BOB";
+  assert.equal(helpers.changePomodoroLineUnits(keysUpper, 1), "- [ ] (**1200-1230** [off:: 30m] [foo:: 1]) — BOB");
+  const conflict = "- [ ] (**1200-1225** [t:: 25m] [off:: 40m]) — BOB";
+  assert.equal(helpers.changePomodoroLineUnits(conflict, 1), "- [ ] (**1200-1230** [t:: 30m]) — BOB");
+  const hours = "- [ ] (**1200-1330** [off:: 1h 30m]) — BOB";
+  assert.equal(helpers.changePomodoroLineUnits(hours, 1), "- [ ] (**1200-1335** [off:: 95m]) — BOB");
 });
 
-test("N\\o and N\\O keep an untracked row untracked", () => {
-  const untracked = "- [ ] (**1200-1300**) — MEET";
-  assert.equal(helpers.offsetPomodoroLineRange(untracked, 10), "- [ ] (**1210-1310**) — MEET");
-  assert.equal(helpers.offsetPomodoroLineRange(untracked, -10), "- [ ] (**1150-1250**) — MEET");
+test("N\\o and N\\O keep every key and field byte-for-byte", () => {
+  const bare = "- [ ] (**1200-1300**) — MEET";
+  assert.equal(helpers.offsetPomodoroLineRange(bare, 10), "- [ ] (**1210-1310**) — MEET");
+  assert.equal(helpers.offsetPomodoroLineRange(bare, -10), "- [ ] (**1150-1250**) — MEET");
+  const offClock = "- [ ] (**1200-1300** [off:: 60m] [foo:: 1]) — MEET";
+  assert.equal(helpers.offsetPomodoroLineRange(offClock, 10), "- [ ] (**1210-1310** [off:: 60m] [foo:: 1]) — MEET");
+  assert.equal(helpers.offsetPomodoroLineRange(offClock, -10), "- [ ] (**1150-1250** [off:: 60m] [foo:: 1]) — MEET");
+  const worked = "- [ ] (**1200-1225** [t:: 25m]) — BOB";
+  assert.equal(helpers.offsetPomodoroLineRange(worked, 10), "- [ ] (**1210-1235** [t:: 25m]) — BOB");
+});
+
+test("pomodoroSessionClock reads all five row shapes like Rust session_clock", () => {
+  const clock = (line) => helpers.pomodoroSessionClock(line);
+  assert.deepEqual(clock("- [x] (**1030-1055** [t:: 25m]) — BUILD"), { kind: "worked", minutes: 25, stamped: true, conflict: false });
+  assert.deepEqual(clock("- [x] (**1030-1055** [T:: 1h 30m]) — BUILD"), { kind: "worked", minutes: 90, stamped: true, conflict: false });
+  assert.deepEqual(clock("- [x] (**1030-1055** \u23f1 20m) — BUILD"), { kind: "worked", minutes: 20, stamped: true, conflict: false });
+  assert.deepEqual(clock("- [x] (**1200-1300** [off:: 42m]) — MEET"), { kind: "off-clock", minutes: 42, stamped: true, conflict: false });
+  assert.deepEqual(clock("- [x] (**1200-1300** [OFF:: 1h 30m]) — MEET"), { kind: "off-clock", minutes: 90, stamped: true, conflict: false });
+  assert.deepEqual(clock("- [x] (**1200-1300**) — MEET"), { kind: "off-clock", minutes: 60, stamped: false, conflict: false });
+  assert.deepEqual(clock("- [x] (**2330-0030**) — MEET"), { kind: "off-clock", minutes: 60, stamped: false, conflict: false });
+  assert.deepEqual(clock("- [x] (**1200-1300** [t:: 25m] [off:: 42m]) — MEET"), { kind: "worked", minutes: 25, stamped: true, conflict: true });
+  assert.deepEqual(clock("- [ ] () — MEET"), { kind: "placeholder", minutes: null, stamped: false, conflict: false });
+  // A key without a readable number counts the span.
+  assert.deepEqual(clock("- [x] (**1200-1300** [off:: soon]) — MEET"), { kind: "off-clock", minutes: 60, stamped: true, conflict: false });
+});
+
+test("setPomodoroLineClock moves the recorded minutes between keys like Rust set_ledger_clock", () => {
+  const set = helpers.setPomodoroLineClock;
+  assert.equal(set("- [x] (**1200-1300** [t:: 60m]) — MEET", "off-clock"), "- [x] (**1200-1300** [off:: 60m]) — MEET");
+  assert.equal(set("- [x] (**1200-1300** [off:: 45m] [foo:: 1]) — MEET", "worked"), "- [x] (**1200-1300** [t:: 45m] [foo:: 1]) — MEET");
+  assert.equal(set("- [x] (**0800-0900**) — WALK", "off-clock"), "- [x] (**0800-0900** [off:: 60m]) — WALK");
+  assert.equal(set("- [x] (**0800-0900**) — WALK", "worked"), "- [x] (**0800-0900** [t:: 60m]) — WALK");
+  assert.equal(set("- [x] (**0800-0900** [t:: 60m] [off:: 30m]) — WALK", "off-clock"), "- [x] (**0800-0900** [off:: 60m]) — WALK");
+  assert.equal(set("- [x] (**0800-0900** [t:: 60m] [off:: 30m]) — WALK", "worked"), "- [x] (**0800-0900** [t:: 60m]) — WALK");
+  assert.equal(set("- [x] (**0800-0900** \u23f1 20m) — WALK", "off-clock"), "- [x] (**0800-0900** [off:: 20m]) — WALK");
+  // Already on the target clock, or untimed: untouched.
+  assert.equal(set("- [x] (**0800-0900** [t:: 25m]) — WALK", "worked"), "- [x] (**0800-0900** [t:: 25m]) — WALK");
+  assert.equal(set("- [x] (**0800-0900** [off:: 25m]) — WALK", "off-clock"), "- [x] (**0800-0900** [off:: 25m]) — WALK");
+  assert.equal(set("- [ ] () — WALK", "off-clock"), "- [ ] () — WALK");
 });
 
 const WARN_DAY = [
@@ -401,22 +463,27 @@ test("a lead-out start names the after buffer and offers no fit", () => {
   );
 });
 
-test("an Event Task with a typed #untracked tag is painted by the Event scan", () => {
+test("an Event Task with a typed off-clock tag is painted by the Event scan", () => {
   const scan = helpers.gcalEventsScanMarkdown([
     "## Events",
     "- [*] #task **1200-1300** Lunch #untracked [root:: love] ^lunch",
     "- [*] #task **1400-1430** Standup ^standup",
     "- **1500-1530** Context #untracked",
+    "- [*] #task **1600-1630** Gym #offclock ^gym",
+    "- [*] #task **1700-1730** Pickup #Off-Clock ^pickup",
   ]);
   assert.deepEqual(
-    scan.rows.map((row) => [row.time, row.untracked]),
+    scan.rows.map((row) => [row.time, row.offClock]),
     [
       ["1200-1300", true],
       ["1400-1430", false],
       ["1500-1530", false],
+      ["1600-1630", true],
+      ["1700-1730", true],
     ],
   );
-  assert.deepEqual(scan.rows[0].untrackedTag, { start: 32, end: 42 });
+  assert.deepEqual(scan.rows[0].offClockTag, { start: 32, end: 42 });
+  assert.deepEqual(scan.rows[3].offClockTag, { start: 30, end: 39 });
 });
 
 function fakeDoc() {
@@ -436,25 +503,37 @@ function fakeDoc() {
   return { createElement: make };
 }
 
-test("an untracked session's home chip is dashed and says it is not counted", () => {
+test("an off-clock session's home chip is dashed, shows its minutes, and says so", () => {
   const model = {
     state: "attributed",
     label: "sase",
     chip: "sase",
     hue: "blue",
-    untracked: true,
-    tooltip: "sase · 1 task · 0m",
+    off_clock: true,
+    minutes: 90,
+    tooltip: "sase · 90m off the clock",
   };
   const chip = helpers.buildPomodoroHomeChipElement(fakeDoc(), model);
-  assert.equal(chip.getAttribute("data-home-untracked"), "true");
-  assert.equal(chip.getAttribute("title"), "untracked · not counted\nsase · 1 task · 0m");
-  assert.equal(chip.getAttribute("aria-label"), "Pomodoro home: sase (untracked)");
-  const tracked = helpers.buildPomodoroHomeChipElement(fakeDoc(), { ...model, untracked: false });
-  assert.equal(tracked.getAttribute("data-home-untracked"), null);
-  assert.equal(tracked.getAttribute("title"), "sase · 1 task · 0m");
+  assert.equal(chip.getAttribute("data-home-off-clock"), "true");
+  assert.equal(chip.getAttribute("title"), "sase · 90m off the clock");
+  assert.equal(chip.getAttribute("aria-label"), "Pomodoro home: sase (off-clock)");
+  assert.equal(chip.children.length, 3);
+  assert.equal(chip.children[1].textContent, "sase");
+  assert.equal(chip.children[2].getAttribute("class"), "bob-pomodoro-home-minutes");
+  assert.equal(chip.children[2].textContent, "1h 30m");
+  const worked = helpers.buildPomodoroHomeChipElement(fakeDoc(), {
+    ...model,
+    off_clock: false,
+    minutes: undefined,
+    tooltip: "sase · 1 task · 25m",
+  });
+  assert.equal(worked.getAttribute("data-home-off-clock"), null);
+  assert.equal(worked.getAttribute("title"), "sase · 1 task · 25m");
+  assert.equal(worked.getAttribute("aria-label"), "Pomodoro home: sase");
+  assert.equal(worked.children.length, 2);
 });
 
-test("Reading view marks the #untracked tag link and dashes the row's time pill", () => {
+test("Reading view marks the off-clock tag link and dashes the row's time pill", () => {
   const attrs = (initial = {}) => {
     const map = new Map(Object.entries(initial));
     return {
@@ -481,24 +560,53 @@ test("Reading view marks the #untracked tag link and dashes the row's time pill"
   const other = {
     ...attrs(),
     textContent: "#task",
-    classList: { add: () => assert.fail("only #untracked is marked") },
+    classList: { add: () => assert.fail("only off-clock tags are marked") },
   };
   const row = { querySelectorAll: () => [other, tag] };
   const timeAttrs = attrs();
   const timeEl = { ...timeAttrs };
-  const painted = LedgerToolsPlugin.prototype.calendarEventPaintUntrackedTag.call({}, row, timeEl);
+  const painted = LedgerToolsPlugin.prototype.calendarEventPaintOffClockTag.call({}, row, timeEl);
   assert.equal(painted, true);
-  assert.ok(classes.has("bob-calendar-event-untracked"));
-  assert.equal(tag.getAttribute("data-untracked"), "true");
-  assert.equal(tag.getAttribute("title"), "Untracked · on the calendar, off the clock");
-  assert.equal(timeEl.getAttribute("data-untracked"), "true");
-  assert.equal(tag.children[0].className, "bob-calendar-event-untracked-hash");
+  assert.ok(classes.has("bob-calendar-event-off-clock"));
+  assert.equal(tag.getAttribute("data-off-clock"), "true");
+  assert.equal(tag.getAttribute("title"), "Off-clock · on the calendar, off the clock");
+  assert.equal(timeEl.getAttribute("data-off-clock"), "true");
+  assert.equal(tag.children[0].className, "bob-calendar-event-off-clock-hash");
   assert.equal(tag.children[0].textContent, "#");
   assert.equal(tag.children[1].text, "Untracked");
 
   const plainRow = { querySelectorAll: () => [other] };
   assert.equal(
-    LedgerToolsPlugin.prototype.calendarEventPaintUntrackedTag.call({}, plainRow, { ...attrs() }),
+    LedgerToolsPlugin.prototype.calendarEventPaintOffClockTag.call({}, plainRow, { ...attrs() }),
     false,
   );
+});
+
+test("Reading view marks every off-clock tag spelling and nothing else", () => {
+  const paint = LedgerToolsPlugin.prototype.calendarEventPaintOffClockTag;
+  for (const [text, painted] of [
+    ["#offclock", true],
+    ["#OffClock", true],
+    ["#off-clock", true],
+    ["#untracked", true],
+    ["#off-clocked", false],
+    ["#offclock/nested", false],
+    ["#task", false],
+  ]) {
+    const map = new Map();
+    const timeMap = new Map();
+    const tag = {
+      textContent: text,
+      ownerDocument: null,
+      classList: { add: () => {} },
+      setAttribute: (name, value) => map.set(name, String(value)),
+      getAttribute: (name) => (map.has(name) ? map.get(name) : null),
+    };
+    const timeEl = {
+      setAttribute: (name, value) => timeMap.set(name, String(value)),
+      getAttribute: (name) => (timeMap.has(name) ? timeMap.get(name) : null),
+    };
+    assert.equal(paint.call({}, { querySelectorAll: () => [tag] }, timeEl), painted, text);
+    assert.equal(timeEl.getAttribute("data-off-clock"), painted ? "true" : null, text);
+  }
 });

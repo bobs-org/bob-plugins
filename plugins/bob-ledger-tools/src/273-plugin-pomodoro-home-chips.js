@@ -23,7 +23,7 @@ if (WidgetType && typeof WidgetType === "function") {
     constructor(model) {
       super();
       this.model = model || {};
-      this.key = `${this.model.chip || ""}|${this.model.state || ""}|${this.model.hue || ""}|${this.model.untracked ? "untracked" : ""}|${this.model.tooltip || ""}`;
+      this.key = `${this.model.chip || ""}|${this.model.state || ""}|${this.model.hue || ""}|${this.model.off_clock ? `off-clock:${this.model.minutes}` : ""}|${this.model.tooltip || ""}`;
     }
 
     eq(other) {
@@ -154,6 +154,36 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
         this.taskThemeRequestSourceText(path);
       }
       return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // The full line of the task another note's Task Link names, for the session
+  // clock rule (`se<X>` starts). Null when the link or its note text is not
+  // resolvable yet, which the rule reads as unresolved (the session stays
+  // worked); the source-text request fills the cache for the next gesture.
+  pomodoroClockResolveTaskLine(link) {
+    try {
+      const app = this.app || {};
+      const workspace = app.workspace;
+      const active =
+        workspace && typeof workspace.getActiveFile === "function" ? workspace.getActiveFile() : null;
+      const sourcePath = active && typeof active.path === "string" ? active.path : "";
+      if (!sourcePath || !link || !link.blockId) {
+        return null;
+      }
+      const file = pomodoroHomeResolveFile(
+        link.pathPart,
+        sourcePath,
+        sourcePath,
+        app.metadataCache,
+        app.vault,
+      );
+      if (!file || typeof file.path !== "string") {
+        return null;
+      }
+      return this.pomodoroHomeChipTaskLineForBlock(file.path, link.blockId);
     } catch (error) {
       return null;
     }

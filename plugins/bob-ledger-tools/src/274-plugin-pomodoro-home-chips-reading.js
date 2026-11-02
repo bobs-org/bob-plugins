@@ -88,6 +88,42 @@ class BobLedgerToolsPomodoroHomeChipsReadingMixin {
     }
   }
 
+  // A Dataview inline field Reading view rendered from `[t:: 25m]` or
+  // `[off:: 60m]`, put back as source text; null for any other node.
+  pomodoroHomeReadingInlineField(node) {
+    try {
+      const classes = String(
+        typeof node.getAttribute === "function" ? node.getAttribute("class") || "" : "",
+      ).split(/\s+/);
+      if (!classes.includes("dataview") || !classes.includes("inline-field")) {
+        return null;
+      }
+      let key = "";
+      let value = null;
+      const stack = Array.from(node.childNodes || []);
+      let guard = 0;
+      while (stack.length > 0 && guard < 200) {
+        guard += 1;
+        const current = stack.shift();
+        if (!current || current.nodeType !== 1) {
+          continue;
+        }
+        const getAttr = typeof current.getAttribute === "function"
+          ? (name) => current.getAttribute(name)
+          : () => null;
+        key = key || String(getAttr("data-dv-norm-key") || getAttr("data-dv-key") || "").toLowerCase();
+        const own = String(getAttr("class") || "").split(/\s+/);
+        if (value === null && (own.includes("inline-field-value") || own.includes("inline-field-standalone-value"))) {
+          value = String(current.textContent || "").trim();
+        }
+        stack.push(...Array.from(current.childNodes || []));
+      }
+      return (key === "t" || key === "off") && value ? `[${key}:: ${value}]` : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
   pomodoroHomeReadingEntry(li, dailyPath) {
     try {
       if (!li || li.nodeType !== 1 || !this.pomodoroHomeChipDailyPath(dailyPath)) {
@@ -149,6 +185,10 @@ class BobLedgerToolsPomodoroHomeChipsReadingMixin {
         ) {
           return "";
         }
+        const field = this.pomodoroHomeReadingInlineField(node);
+        if (field) {
+          return field;
+        }
         return Array.from(node.childNodes || []).map(sourceText).join("");
       };
       for (const child of li.childNodes || []) {
@@ -182,11 +222,19 @@ class BobLedgerToolsPomodoroHomeChipsReadingMixin {
           }
         }
       }
+      // The row is rebuilt from rendered text, so only an explicit `[off::]`
+      // marks it off the clock (see pomodoroHomeLineClock).
+      const clock = pomodoroHomeLineClock(
+        `- [${status}] ${ownText.trim()}`,
+        leading.timeRange,
+        { stampedOnly: true },
+      );
       return {
         entry: {
           status: parsed.state,
           name,
-          minutes: pomodoroHomeLineMinutes(`- [${status}] ${ownText.trim()}`, leading.timeRange),
+          minutes: clock.minutes,
+          offClock: clock.offClock,
           links,
         },
         listElement,

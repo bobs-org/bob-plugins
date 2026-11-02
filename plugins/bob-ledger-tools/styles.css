@@ -4232,23 +4232,24 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme
 .bob-calendar-events .bob-calendar-event-time[data-theme-hue="violet"] { --bob-calendar-event-hue: var(--bob-hue-violet); }
 .bob-calendar-events .bob-calendar-event-time[data-theme-hue="red"] { --bob-calendar-event-hue: var(--bob-hue-red); }
 
-/* Dashed means off the clock: an #untracked Event Task is on the calendar
-   but its session writes no [t::]. The time pill, the mark, and the home
-   chip of such a session share one dashed outline. */
-.bob-calendar-events .bob-calendar-event-time[data-untracked="true"] {
+/* Dashed means off the clock: an #offclock Event Task (aliases #off-clock,
+   #untracked) is on the calendar but its session is recorded as [off::]
+   rather than [t::]. The time pill, the mark, and the home chip of such a
+   session share one dashed outline. */
+.bob-calendar-events .bob-calendar-event-time[data-off-clock="true"] {
   outline: 1px dashed color-mix(in srgb, var(--text-muted) 70%, transparent);
   outline-offset: 1px;
   background: transparent;
 }
 
-.bob-calendar-events .bob-calendar-event-time[data-untracked="true"][data-state="running"] {
+.bob-calendar-events .bob-calendar-event-time[data-off-clock="true"][data-state="running"] {
   outline-color: color-mix(in srgb, var(--bob-calendar-event-hue, var(--interactive-accent)) 78%, transparent);
   background: color-mix(in srgb, var(--bob-calendar-event-hue, var(--interactive-accent)) 10%, transparent);
 }
 
-.bob-calendar-events .bob-calendar-event-untracked,
-.bob-calendar-events .bob-calendar-event-untracked.cm-hashtag,
-.bob-calendar-events .bob-calendar-event-untracked .cm-hashtag {
+.bob-calendar-events .bob-calendar-event-off-clock,
+.bob-calendar-events .bob-calendar-event-off-clock.cm-hashtag,
+.bob-calendar-events .bob-calendar-event-off-clock .cm-hashtag {
   display: inline-flex;
   align-items: center;
   gap: 0.28em;
@@ -4265,24 +4266,24 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme
   white-space: nowrap;
 }
 
-.bob-calendar-events .bob-calendar-event-untracked::before {
+.bob-calendar-events .bob-calendar-event-off-clock::before {
   content: "";
   display: inline-block;
   flex: 0 0 auto;
   width: 0.95em;
   height: 0.95em;
   background-color: currentColor;
-  -webkit-mask: var(--bob-calendar-untracked-icon) center / contain no-repeat;
-  mask: var(--bob-calendar-untracked-icon) center / contain no-repeat;
+  -webkit-mask: var(--bob-calendar-off-clock-icon) center / contain no-repeat;
+  mask: var(--bob-calendar-off-clock-icon) center / contain no-repeat;
 }
 
-.bob-calendar-events .cm-line:not(.cm-active) .bob-calendar-event-untracked-hash,
-.bob-calendar-events a.bob-calendar-event-untracked .bob-calendar-event-untracked-hash {
+.bob-calendar-events .cm-line:not(.cm-active) .bob-calendar-event-off-clock-hash,
+.bob-calendar-events a.bob-calendar-event-off-clock .bob-calendar-event-off-clock-hash {
   display: none;
 }
 
 /* `[buffer::]` is Google-owned metadata: hide it on inactive lines, like
-   the `#` of `#untracked`. Dataview's inline-field for `buffer` stays
+   the `#` of `#offclock`. Dataview's inline-field for `buffer` stays
    hidden in Reading view. Shown while the cursor is on the line. */
 .bob-calendar-events .cm-line:not(.cm-active) .bob-calendar-event-buffer-field,
 .bob-calendar-events .bob-calendar-event-buffer-field[data-buffer-field="true"],
@@ -4338,7 +4339,7 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme
   border-bottom-right-radius: 0;
 }
 
-.bob-calendar-events .bob-calendar-event-buffer[data-untracked="true"] {
+.bob-calendar-events .bob-calendar-event-buffer[data-off-clock="true"] {
   outline: 1px dashed color-mix(in srgb, var(--text-muted) 70%, transparent);
   outline-offset: -1px;
   background-color: transparent;
@@ -4367,7 +4368,7 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme
 
 .bob-calendar-events {
   /* Lucide timer-off, drawn as a mask so it follows the ink color. */
-  --bob-calendar-untracked-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 2h4'/%3E%3Cpath d='M4.6 11a8 8 0 0 0 1.7 8.7 8 8 0 0 0 8.7 1.7'/%3E%3Cpath d='M7.4 7.4a8 8 0 0 1 10.3 1 8 8 0 0 1 .9 10.2'/%3E%3Cpath d='m2 2 20 20'/%3E%3Cpath d='M12 12v-2'/%3E%3C/svg%3E");
+  --bob-calendar-off-clock-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 2h4'/%3E%3Cpath d='M4.6 11a8 8 0 0 0 1.7 8.7 8 8 0 0 0 8.7 1.7'/%3E%3Cpath d='M7.4 7.4a8 8 0 0 1 10.3 1 8 8 0 0 1 .9 10.2'/%3E%3Cpath d='m2 2 20 20'/%3E%3Cpath d='M12 12v-2'/%3E%3C/svg%3E");
 }
 
 .bob-calendar-events .bob-calendar-event-context {
@@ -4556,11 +4557,26 @@ body.bob-task-theme-marks .markdown-source-view.is-live-preview .dataview.inline
   vertical-align: baseline;
 }
 
-.bob-pomodoro-home-chips .bob-pomodoro-home-chip[data-home-untracked="true"] {
+.bob-pomodoro-home-chips .bob-pomodoro-home-chip[data-home-off-clock="true"] {
   border-radius: 999px;
   padding-inline: 0.4em;
   outline: 1px dashed color-mix(in srgb, var(--text-muted) 55%, transparent);
   outline-offset: -1px;
+}
+
+/* An Off-Clock Pomodoro's chip shows its recorded minutes after the home. */
+.bob-pomodoro-home-chips .bob-pomodoro-home-chip .bob-pomodoro-home-minutes {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+/* The dash is the border style, not a color, so it survives forced colors. */
+@media (forced-colors: active) {
+  .bob-pomodoro-home-chips .bob-pomodoro-home-chip[data-home-off-clock="true"],
+  .bob-calendar-events .bob-calendar-event-time[data-off-clock="true"],
+  .bob-calendar-events .bob-calendar-event-off-clock {
+    outline-style: dashed;
+  }
 }
 
 .bob-pomodoro-home-chips .bob-pomodoro-home-dot {

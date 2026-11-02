@@ -272,6 +272,10 @@ const COMPACT_TIME_RANGE_RE =
   /\((\*\*)?(\d\d)(\d\d)\s*-\s*(\d\d)(\d\d)(\*\*)?(\s+[^)]*)?\)/;
 const DURATION_FIELD_RE = /\[t::\s*([^\]]*?)\s*\]/i;
 const DURATION_FIELD_GLOBAL_RE = /\[t::\s*[^\]]*?\s*\]/gi;
+// `[off:: Nm]` is the off-clock counterpart of `[t:: Nm]`: a timed row carries
+// exactly one of the two keys (a bare timed row is an older off-clock span).
+const OFF_CLOCK_FIELD_RE = /\[off::\s*([^\]]*?)\s*\]/i;
+const OFF_CLOCK_FIELD_GLOBAL_RE = /\[off::\s*[^\]]*?\s*\]/gi;
 const LEGACY_STOPWATCH_DURATION_RE =
   /\u23f1\ufe0f?\s*((?:(?:\d+\s*h)\s*)?(?:\d+\s*m)|(?:\d+\s*h))/i;
 const LEGACY_STOPWATCH_DURATION_GLOBAL_RE =

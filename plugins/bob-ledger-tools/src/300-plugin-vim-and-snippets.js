@@ -362,9 +362,10 @@ class BobLedgerToolsVimSnippetsMixin {
     return this.applyEventRunToEditorExpansion(editor, located);
   }
 
-  // `se<X>` on a MEET follows the session's event run and the [t::] rule; on
-  // any other session it only raises the run-past-event notice. Anything
-  // that goes wrong leaves the plain expansion alone.
+  // `se<X>` on a MEET follows the session's event run and its clock; on any
+  // other session it raises the run-past-event notice and writes [off::] when
+  // every counted Task Link is #offclock. Anything that goes wrong leaves the
+  // plain expansion alone.
   applyEventRunToEditorExpansion(editor, located) {
     try {
       if (!/^se/.test(String(located.trigger || ""))) {
@@ -374,7 +375,9 @@ class BobLedgerToolsVimSnippetsMixin {
       if (!lines) {
         return located;
       }
-      const adjusted = applyEventRunToExpansion(lines, located.line, located, new Date());
+      const adjusted = applyEventRunToExpansion(lines, located.line, located, new Date(), {
+        resolveTask: (link) => this.pomodoroClockResolveTaskLine(link),
+      });
       return {
         ...adjusted.expansion,
         line: located.line,

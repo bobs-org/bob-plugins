@@ -1002,9 +1002,11 @@ test("Pomodoro-line close keeps the closing anchor after the picker re-plan", as
 
   assert.equal(completed, true);
   const value = editor.getValue();
+  // The bare closed span is restamped by the counted-links rule (its linked
+  // task is on the clock), and the relocation pass still finds the entry.
   assert.match(
     value,
-    /^- \[x\] \(09:00-09:25\) — FIX\n\t- .*\n- \[ \] \(\) — FIX\n\t- \[\[sase#\^relaunch-failed\]\]\n- \[ \] \(10:00-10:25\) — OTHER\n\t- $/m,
+    /^- \[x\] \(\*\*09:00-09:25\*\* \[t:: 25m\]\) — FIX\n\t- .*\n- \[ \] \(\) — FIX\n\t- \[\[sase#\^relaunch-failed\]\]\n- \[ \] \(10:00-10:25\) — OTHER\n\t- $/m,
   );
   assert.equal(seen.length, 1);
   const row = seen[0].unblocked[0];

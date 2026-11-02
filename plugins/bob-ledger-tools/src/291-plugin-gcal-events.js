@@ -9,7 +9,9 @@ const GCAL_EVENTS_REFRESH_MS = 60000;
 // so age never paints it stale.
 const GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES = null;
 const GCAL_EVENTS_STAMP_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const GCAL_EVENTS_UNTRACKED_TITLE = "Untracked · on the calendar, off the clock";
+const GCAL_EVENTS_OFF_CLOCK_TITLE = "Off-clock · on the calendar, off the clock";
+// `#offclock` is canonical; `#off-clock` and `#untracked` are permanent aliases.
+const GCAL_EVENTS_OFF_CLOCK_TAG_RE = /^#(?:offclock|off-clock|untracked)$/i;
 const GCAL_EVENTS_PALETTE = [
   "blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red",
 ];
@@ -259,9 +261,10 @@ function gcalEventsScanMarkdown(lines, options = {}) {
       const at = line.indexOf(badge);
       if (at >= 0) badges.push({ badge, start: at, end: at + badge.length });
     }
-    // `#untracked` marks an Event Task whose session is off the clock; only
-    // task rows carry it (context rows are stripped of the token by sync).
-    const untrackedTag = isTask ? eventTaskUntrackedTagRange(line) : null;
+    // `#offclock` (or an alias) marks an Event Task whose session is off the
+    // clock; only task rows carry it (context rows are stripped of the token
+    // by sync).
+    const offClockTag = isTask ? eventTaskOffClockTagRange(line) : null;
     const bufferField = isTask ? eventRunBufferFieldRange(line) : null;
     const buffer = bufferField && bufferField.parsed ? bufferField.parsed : EVENT_BUFFER_EMPTY;
     const occupied = Number.isFinite(startMinutes) && Number.isFinite(endMinutes)
@@ -290,8 +293,8 @@ function gcalEventsScanMarkdown(lines, options = {}) {
       bufferPhase: gcalEventsBufferPhase(time, opts.nowMinutes, opts.isToday === true, isTask, buffer),
       tags,
       badges,
-      untracked: untrackedTag !== null,
-      untrackedTag,
+      offClock: offClockTag !== null,
+      offClockTag,
     });
   }
   return { section, rows, stamp };
@@ -604,20 +607,20 @@ class BobLedgerToolsGcalEventsMixin {
           decorations.push({ from: base + row.timeStart, to: base + row.timeEnd, decoration: Decoration.mark({ class: "bob-calendar-event-time", attributes }) });
           for (const extra of gcalEventsBufferDecorations(row, base, hue)) decorations.push(extra);
         }
-        if (row.untrackedTag) {
-          const { start, end } = row.untrackedTag;
+        if (row.offClockTag) {
+          const { start, end } = row.offClockTag;
           decorations.push({
             from: base + start,
             to: base + end,
             decoration: Decoration.mark({
-              class: "bob-calendar-event-untracked",
-              attributes: { title: GCAL_EVENTS_UNTRACKED_TITLE, "data-untracked": "true" },
+              class: "bob-calendar-event-off-clock",
+              attributes: { title: GCAL_EVENTS_OFF_CLOCK_TITLE, "data-off-clock": "true" },
             }),
           });
           decorations.push({
             from: base + start,
             to: base + start + 1,
-            decoration: Decoration.mark({ class: "bob-calendar-event-untracked-hash" }),
+            decoration: Decoration.mark({ class: "bob-calendar-event-off-clock-hash" }),
           });
         }
         for (const tag of row.tags) {
@@ -650,7 +653,7 @@ class BobLedgerToolsGcalEventsMixin {
         state,
         buffer: eventBufferIsEmpty(buffer) ? null : buffer,
         bufferPhase,
-        untracked: record.untracked,
+        offClock: record.offClock,
         startMinutes: record.startMinutes,
         endMinutes: record.endMinutes,
         bufferedStartMinutes: record.bufferedStartMinutes,
@@ -762,7 +765,7 @@ class BobLedgerToolsGcalEventsMixin {
           for (const link of links || []) {
             if (/[📅📹📍]/.test(String(link.textContent || "")) && link.classList) link.classList.add("bob-calendar-event-badge");
           }
-          if (isTask) this.calendarEventPaintUntrackedTag(row, timeEl);
+          if (isTask) this.calendarEventPaintOffClockTag(row, timeEl);
           const painted = this.calendarEventRowFromReading(row, ctx, time, isTask);
           const record = {
             path: sourcePath,
@@ -770,7 +773,7 @@ class BobLedgerToolsGcalEventsMixin {
             isTask,
             timeEl,
             rowEl: row,
-            untracked: Boolean(timeEl.getAttribute && timeEl.getAttribute("data-untracked")),
+            offClock: Boolean(timeEl.getAttribute && timeEl.getAttribute("data-off-clock")),
             buffer: painted && painted.buffer,
             startMinutes: painted && painted.startMinutes,
             endMinutes: painted && painted.endMinutes,
@@ -822,25 +825,26 @@ class BobLedgerToolsGcalEventsMixin {
     }
   }
 
-  // Reading view renders `#untracked` as a tag link. Mark it, fold its `#`
-  // into a hidden span, and dash the row's time pill. The note is untouched.
-  calendarEventPaintUntrackedTag(row, timeEl) {
+  // Reading view renders `#offclock` (or an alias) as a tag link. Mark it,
+  // fold its `#` into a hidden span, and dash the row's time pill. The note
+  // is untouched.
+  calendarEventPaintOffClockTag(row, timeEl) {
     try {
       const tags = row.querySelectorAll ? row.querySelectorAll("a.tag") : [];
       for (const tag of tags || []) {
         const text = String(tag.textContent || "").trim();
-        if (!/^#untracked$/i.test(text)) continue;
-        if (tag.classList) tag.classList.add("bob-calendar-event-untracked");
-        tag.setAttribute("data-untracked", "true");
-        tag.setAttribute("title", GCAL_EVENTS_UNTRACKED_TITLE);
+        if (!GCAL_EVENTS_OFF_CLOCK_TAG_RE.test(text)) continue;
+        if (tag.classList) tag.classList.add("bob-calendar-event-off-clock");
+        tag.setAttribute("data-off-clock", "true");
+        tag.setAttribute("title", GCAL_EVENTS_OFF_CLOCK_TITLE);
         const doc = tag.ownerDocument;
         if (doc && typeof doc.createElement === "function" && typeof tag.replaceChildren === "function") {
           const hash = doc.createElement("span");
-          hash.className = "bob-calendar-event-untracked-hash";
+          hash.className = "bob-calendar-event-off-clock-hash";
           hash.textContent = "#";
           tag.replaceChildren(hash, doc.createTextNode(text.slice(1)));
         }
-        if (timeEl) timeEl.setAttribute("data-untracked", "true");
+        if (timeEl) timeEl.setAttribute("data-off-clock", "true");
         return true;
       }
     } catch (error) {}

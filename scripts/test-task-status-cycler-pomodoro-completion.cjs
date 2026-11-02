@@ -967,7 +967,7 @@ test("deferred-only successor relocation uses the inserted placeholder", () => {
 });
 
 
-test("Ctrl+Enter closes an untracked Pomodoro without adding [t::] or touching its span", () => {
+test("the completion plan leaves a timed headline's key and span alone unless a session clock is given", () => {
   const lines = [
     "## Pomodoros",
     "- [ ] (**1200-1300**) — MEET",

@@ -488,6 +488,20 @@ function durationField(rangeText) {
   };
 }
 
+function offClockField(rangeText) {
+  const match = OFF_CLOCK_FIELD_RE.exec(String(rangeText || ""));
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    startCh: match.index,
+    endCh: match.index + match[0].length,
+    value: match[1],
+  };
+}
+
 function legacyStopwatchDuration(rangeText) {
   const match = LEGACY_STOPWATCH_DURATION_RE.exec(String(rangeText || ""));
 
@@ -532,6 +546,12 @@ function formatDurationField(minutes) {
   return `[t:: ${safeMinutes}m]`;
 }
 
+// `[off:: Nm]` is the exact off-clock counterpart of `[t:: Nm]`.
+function formatOffClockField(minutes) {
+  const safeMinutes = Math.max(0, Math.floor(numericOrDefault(minutes, 0)));
+  return `[off:: ${safeMinutes}m]`;
+}
+
 function rangeDurationMinutes(range) {
   if (!range) {
     return null;
@@ -543,16 +563,83 @@ function rangeDurationMinutes(range) {
 function removeDurationMetadata(metadata) {
   return String(metadata || "")
     .replace(DURATION_FIELD_GLOBAL_RE, "")
+    .replace(OFF_CLOCK_FIELD_GLOBAL_RE, "")
     .replace(LEGACY_STOPWATCH_DURATION_GLOBAL_RE, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function durationMetadata(minutes, metadata) {
+// The row's metadata with its recorded minutes under `key` ("t" or "off");
+// every other field is kept.
+function durationMetadata(minutes, metadata, key = "t") {
   const rest = removeDurationMetadata(metadata);
-  return rest
-    ? ` ${formatDurationField(minutes)} ${rest}`
-    : ` ${formatDurationField(minutes)}`;
+  const field = key === "off" ? formatOffClockField(minutes) : formatDurationField(minutes);
+  return rest ? ` ${field} ${rest}` : ` ${field}`;
+}
+
+// Which clock a timed row belongs to (mirror of bob's `session_clock`):
+// `[t::]` or the legacy stopwatch is worked, `[off::]` is off the clock, and
+// a bare timed span is an older off-clock session counted by its span. A row
+// holding both keys is a conflict and reads as worked. `kind` is "placeholder"
+// for an untimed `()` row.
+function pomodoroSessionClock(line, range = parseTimeRange(line)) {
+  if (!range) {
+    return { kind: "placeholder", minutes: null, stamped: false, conflict: false };
+  }
+  const rangeText = String(line || "").slice(range.startCh, range.endCh);
+  const span = rangeDurationMinutes(range);
+  const worked = durationField(rangeText);
+  const off = offClockField(rangeText);
+  const legacy = legacyStopwatchDuration(rangeText);
+  const workedValue = worked ? parseDurationMinutes(worked.value) : null;
+  const legacyValue = legacy ? parseDurationMinutes(legacy.value) : null;
+  const workedMinutes = workedValue !== null ? workedValue : legacyValue;
+  const conflict = Boolean(worked && off);
+  if (worked) {
+    return { kind: "worked", minutes: workedMinutes !== null ? workedMinutes : span, stamped: true, conflict };
+  }
+  if (off) {
+    const offMinutes = parseDurationMinutes(off.value);
+    return { kind: "off-clock", minutes: offMinutes !== null ? offMinutes : span, stamped: true, conflict: false };
+  }
+  if (workedMinutes !== null) {
+    return { kind: "worked", minutes: workedMinutes, stamped: true, conflict: false };
+  }
+  return { kind: "off-clock", minutes: span, stamped: false, conflict: false };
+}
+
+// The key a retimed row keeps: its own, `[t::]` for a conflict or the legacy
+// stopwatch, and `[off::]` for a bare span (never a bare timed row again).
+function pomodoroClockKeyForRange(rangeText) {
+  if (durationField(rangeText)) {
+    return "t";
+  }
+  if (offClockField(rangeText)) {
+    return "off";
+  }
+  return legacyStopwatchDuration(rangeText) ? "t" : "off";
+}
+
+// Move a timed row between clocks ("worked" | "off-clock"), keeping its
+// recorded minutes and other metadata (mirror of bob's `set_ledger_clock`).
+// A bare row takes its span as minutes; a conflict resolves to the target.
+function setPomodoroLineClock(line, clock) {
+  const text = String(line || "");
+  const range = parseTimeRange(text);
+  if (!range) {
+    return text;
+  }
+  const current = pomodoroSessionClock(text, range);
+  if (
+    !current.conflict &&
+    ((current.kind === "worked" && clock === "worked") ||
+      (current.kind === "off-clock" && current.stamped && clock === "off-clock"))
+  ) {
+    return text;
+  }
+  const metadata = durationMetadata(current.minutes, range.metadata, clock === "off-clock" ? "off" : "t");
+  const next = formatTimeRange(range.startMinutes, range.endMinutes, range.style, metadata);
+  return text.slice(0, range.startCh) + next + text.slice(range.endCh);
 }
 
 function pomodoroDurationMinutes(line, range) {
@@ -566,6 +653,14 @@ function pomodoroDurationMinutes(line, range) {
     const fieldMinutes = parseDurationMinutes(field.value);
     if (fieldMinutes !== null) {
       return fieldMinutes;
+    }
+  }
+
+  const offField = offClockField(rangeText);
+  if (offField) {
+    const offMinutes = parseDurationMinutes(offField.value);
+    if (offMinutes !== null) {
+      return offMinutes;
     }
   }
 
@@ -596,13 +691,15 @@ function changePomodoroLineUnits(line, units) {
     0,
     currentMinutes + numericOrDefault(units, 0) * STEP_MINUTES,
   );
-  // A timed row without [t::] (or the legacy stopwatch) is an untracked
-  // session: it stays untracked, so its other metadata is left untouched.
+  // The row keeps its key and updates the recorded minutes: [t::] stays
+  // [t::], [off::] stays [off::], a bare span is stamped [off::], and a
+  // conflict row resolves to [t::].
   const rangeText = String(line || "").slice(range.startCh, range.endCh);
-  const untracked = !durationField(rangeText) && !legacyStopwatchDuration(rangeText);
-  const metadata = untracked
-    ? range.metadata
-    : durationMetadata(nextMinutes, range.metadata);
+  const metadata = durationMetadata(
+    nextMinutes,
+    range.metadata,
+    pomodoroClockKeyForRange(rangeText),
+  );
   const nextEndMinutes = addMinutes(range.startMinutes, nextMinutes);
   const text = String(line || "");
   const newRange = formatTimeRange(

@@ -257,9 +257,8 @@ function expectedEntry(entry) {
     label: entry.label,
     chip: entry.chip,
     hue: entry.hue,
-    ...(Object.prototype.hasOwnProperty.call(entry, "untracked")
-      ? { untracked: entry.untracked }
-      : {}),
+    // The vectors still carry the deprecated `untracked` key beside `off_clock`.
+    ...(entry.off_clock ? { off_clock: true, untracked: true } : {}),
     parts: entry.parts.map((part) => {
       const copy = {};
       for (const key of [
@@ -999,4 +998,102 @@ test("root marks and chips resolve the same root parent", () => {
     rootMarkRootPath("unfiled.md", "2026/20261018.md", metadataCache, vault, [], new Set()),
     null,
   );
+});
+
+test("an Off-Clock Pomodoro's home model carries its real minutes and an off-the-clock tooltip", () => {
+  const { metadataCache, vault } = fakeVault(fixture.notes);
+  const model = (pomodoros) =>
+    pomodoroHomeModels(
+      `## Pomodoros\n${pomodoros}`,
+      "2026/20261018.md",
+      metadataCache,
+      vault,
+      taskLineForBlock(fixture.notes),
+    ).entries;
+  const closed = model("- [x] (**1200-1300** [off:: 42m]) — MEET\n  - [[sase#^a]]\n")[0];
+  assert.equal(closed.off_clock, true);
+  assert.equal(closed.minutes, 42);
+  assert.equal(closed.parts[0].minutes, 42);
+  assert.equal(closed.tooltip, "sase · 42m off the clock");
+
+  // A running Off-Clock Pomodoro is a forecast: no minutes yet.
+  const running = model("- [ ] (**1200-1300** [off:: 60m]) — MEET\n  - [[sase#^a]]\n")[0];
+  assert.equal(running.off_clock, true);
+  assert.equal("minutes" in running, false);
+  assert.equal(running.tooltip, "sase · 1 task · off the clock");
+
+  // A worked row, a conflict row, and a placeholder are never off the clock.
+  for (const row of [
+    "- [x] (**1200-1300** [t:: 25m]) — MEET\n  - [[sase#^a]]\n",
+    "- [x] (**1200-1300** [t:: 25m] [off:: 42m]) — MEET\n  - [[sase#^a]]\n",
+    "- [ ] () — MEET\n  - [[sase#^a]]\n",
+  ]) {
+    const entry = model(row)[0];
+    assert.equal("off_clock" in entry, false, row);
+    assert.equal("minutes" in entry, false, row);
+  }
+  // A bare closed span is an older off-clock session counted by its span.
+  const bare = model("- [x] (**1200-1300**) — MEET\n  - [[sase#^a]]\n")[0];
+  assert.equal(bare.off_clock, true);
+  assert.equal(bare.parts[0].minutes, 60);
+});
+
+test("an off-clock chip shows its minutes only when they are recorded", () => {
+  function element(tagName) {
+    return {
+      tagName,
+      attributes: {},
+      children: [],
+      textContent: "",
+      setAttribute(name, value) {
+        this.attributes[name] = String(value);
+      },
+      appendChild(child) {
+        this.children.push(child);
+      },
+    };
+  }
+  const doc = { createElement: element };
+  const base = { state: "attributed", label: "love", chip: "love", hue: "red", off_clock: true };
+  const recorded = buildPomodoroHomeChipElement(doc, { ...base, minutes: 60, tooltip: "love · 60m off the clock" });
+  assert.equal(recorded.attributes["data-home-off-clock"], "true");
+  assert.equal(recorded.attributes["aria-label"], "Pomodoro home: love (off-clock)");
+  assert.equal(recorded.attributes.title, "love · 60m off the clock");
+  assert.equal(recorded.children[2].textContent, "1h");
+  assert.equal(recorded.children[2].attributes.class, "bob-pomodoro-home-minutes");
+  const forecast = buildPomodoroHomeChipElement(doc, { ...base, state: "forecast", tooltip: "love · 1 task · off the clock" });
+  assert.equal(forecast.attributes["data-home-off-clock"], "true");
+  assert.equal(forecast.children.length, 2);
+  const worked = buildPomodoroHomeChipElement(doc, { ...base, off_clock: false, minutes: 60 });
+  assert.equal(worked.attributes["data-home-off-clock"], undefined);
+  assert.equal(worked.attributes["aria-label"], "Pomodoro home: love");
+  assert.equal(worked.children.length, 2);
+});
+
+test("Reading view rebuilds Dataview inline fields and flags only an explicit [off::]", () => {
+  const { pomodoroHomeLineClock } = LedgerToolsPlugin.helpers;
+  const node = (classes, attrs, children = [], text = "") => ({
+    nodeType: 1,
+    childNodes: children,
+    textContent: text || children.map((child) => child.textContent).join(""),
+    getAttribute: (name) => (name === "class" ? classes : attrs[name] || null),
+  });
+  const field = (key, value) =>
+    node("dataview inline-field", {}, [
+      node("dataview inline-field-key", { "data-dv-norm-key": key }, [], key),
+      node("dataview inline-field-value", {}, [], value),
+    ]);
+  const read = LedgerToolsPlugin.prototype.pomodoroHomeReadingInlineField;
+  assert.equal(read.call({}, field("off", "60m")), "[off:: 60m]");
+  assert.equal(read.call({}, field("t", "25m")), "[t:: 25m]");
+  assert.equal(read.call({}, field("buffer", "+15m")), null);
+  assert.equal(read.call({}, node("plain", {})), null);
+
+  const stamped = pomodoroHomeLineClock("- [x] (1200-1300 [off:: 60m]) — MEET", "1200-1300", { stampedOnly: true });
+  assert.deepEqual(stamped, { offClock: true, minutes: 60 });
+  // A rendering that dropped the field never dashes a row it cannot read.
+  const dropped = pomodoroHomeLineClock("- [x] (1200-1300) — MEET", "1200-1300", { stampedOnly: true });
+  assert.deepEqual(dropped, { offClock: false, minutes: 60 });
+  const bare = pomodoroHomeLineClock("- [x] (1200-1300) — MEET", "1200-1300");
+  assert.deepEqual(bare, { offClock: true, minutes: 60 });
 });

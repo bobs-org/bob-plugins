@@ -161,7 +161,7 @@ test("calendar scan reads [buffer::] and exposes wing data", () => {
   const scan = gcalEventsScanMarkdown(
     [
       "## Events",
-      "- [*] #task **1200-1300** Lunch #untracked [buffer:: -30m +15m] [root:: love] ^lunch",
+      "- [*] #task **1200-1300** Lunch #offclock [buffer:: -30m +15m] [root:: love] ^lunch",
       "- [*] #task **1400-1430** Standup ^standup",
       "- **1500-1530** Context [buffer:: -15m]",
     ],
@@ -181,7 +181,7 @@ test("calendar scan reads [buffer::] and exposes wing data", () => {
   const before = gcalEventsWingModel(scan.rows[0], "before", "blue");
   assert.equal(before.label, "30m");
   assert.equal(before.phase, "lead-in");
-  assert.equal(before.untracked, true);
+  assert.equal(before.offClock, true);
   const after = gcalEventsWingModel(scan.rows[0], "after", "blue");
   assert.equal(after.label, "15m");
   assert.equal(after.phase, null);
@@ -233,7 +233,7 @@ test("Reading view inserts hatched buffer wings beside the time pill", () => {
   const model = {
     buffer: { beforeMin: 30, afterMin: 15 },
     bufferPhase: "lead-in",
-    untracked: true,
+    offClock: true,
     bufferedStartMinutes: 11 * 60 + 30,
     bufferedEndMinutes: 13 * 60 + 15,
     bufferedTimeRange: "1130-1315",
@@ -243,7 +243,7 @@ test("Reading view inserts hatched buffer wings beside the time pill", () => {
   assert.equal(children[0].textContent, "30m");
   assert.equal(children[0].getAttribute("data-side"), "before");
   assert.equal(children[0].getAttribute("data-buffer-phase"), "lead-in");
-  assert.equal(children[0].getAttribute("data-untracked"), "true");
+  assert.equal(children[0].getAttribute("data-off-clock"), "true");
   assert.equal(children[2].getAttribute("data-side"), "after");
   assert.equal(children[2].textContent, "15m");
 });

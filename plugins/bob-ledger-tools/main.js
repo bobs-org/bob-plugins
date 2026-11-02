@@ -55638,25 +55638,80 @@ class BobLedgerToolsProgressMarksReadingMixin {
         return null;
       }
       const includeStruck = Boolean(options && options.includeStruck);
+      const ledgerMarkClass = (node) => {
+        try {
+          return String(
+            typeof node.getAttribute === "function"
+              ? node.getAttribute("class") || ""
+              : node.className || "",
+          )
+            .split(/\s+/)
+            .some((name) =>
+              [
+                "bob-task-link-mark",
+                "bob-progress-mark",
+                "bob-unblocked-glyph",
+                "bob-frees-mark",
+                "bob-today-mark",
+                "list-bullet",
+                "list-collapse-indicator",
+                "collapse-icon",
+              ].includes(name),
+            );
+        } catch (error) {
+          return false;
+        }
+      };
+      const tomatoOrSpace = (value) => /^[\s\u{1F345}\uFE0F]*$/u.test(value);
       let linkContainer = anchor;
+      let scanRoot = li;
       // Reading view wraps optional Markdown strike-through in a del/s
-      // element. Task link mark filtering also examines struck ledger
-      // rows, while progress marks keep their original exclusion.
+      // element, and a loose list item's content in one `<p>`. Task
+      // link mark filtering also examines struck ledger rows, while
+      // progress marks keep their original exclusion.
       try {
         if (anchor.parentNode !== li) {
-          const wrapper = anchor.parentNode || null;
+          let wrapper = anchor.parentNode || null;
           const wrapperTag = tagOf(wrapper);
           const wrapperChildren = (wrapper && wrapper.childNodes) || [];
           if (
-            !includeStruck ||
-            !["S", "DEL", "STRIKE"].includes(wrapperTag) ||
-            wrapper.parentNode !== li ||
-            wrapperChildren.length !== 1 ||
-            wrapperChildren[0] !== anchor
+            includeStruck &&
+            ["S", "DEL", "STRIKE"].includes(wrapperTag) &&
+            wrapperChildren.length === 1 &&
+            wrapperChildren[0] === anchor
           ) {
+            linkContainer = wrapper;
+            wrapper = wrapper.parentNode || null;
+          }
+          if (tagOf(wrapper) === "P" && wrapper.parentNode === li) {
+            for (const child of (li && li.childNodes) || []) {
+              if (child === wrapper) {
+                continue;
+              }
+              const nodeType = child && child.nodeType;
+              if (nodeType === 3) {
+                const value =
+                  typeof child.nodeValue === "string"
+                    ? child.nodeValue
+                    : typeof child.textContent === "string"
+                      ? child.textContent
+                      : "";
+                if (!tomatoOrSpace(value)) {
+                  return null;
+                }
+                continue;
+              }
+              if (nodeType === 1 && ledgerMarkClass(child)) {
+                continue;
+              }
+              if (nodeType === 1) {
+                return null;
+              }
+            }
+            scanRoot = wrapper;
+          } else if (wrapper && wrapper !== li) {
             return null;
           }
-          linkContainer = wrapper;
         }
       } catch (error) {
         return null;
@@ -55706,8 +55761,10 @@ class BobLedgerToolsProgressMarksReadingMixin {
       }
       // The row's own content is exactly the link: an optional 🍅
       // prefix, then the anchor, then an optional trailing `#`.
+      // Display-only ledger mark hosts (rings, ◐, 🔓, 🔑, today)
+      // sit beside the link and must not disqualify it.
       try {
-        const children = (li && li.childNodes) || [];
+        const children = (scanRoot && scanRoot.childNodes) || [];
         let seenAnchor = false;
         let beforeText = "";
         let afterText = "";
@@ -55736,25 +55793,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
             // link, formatting) means the body is not exactly one
             // link. The anchor itself already continued above.
             if (nodeType === 1) {
-              let classes = "";
-              try {
-                classes = String(
-                  typeof child.getAttribute === "function"
-                    ? child.getAttribute("class") || ""
-                    : child.className || "",
-                );
-              } catch (error) {
-                classes = "";
-              }
-              if (
-                options &&
-                options.allowLedgerMarks &&
-                classes
-                  .split(/\s+/)
-                  .some((name) =>
-                    ["bob-unblocked-glyph", "bob-frees-mark"].includes(name),
-                  )
-              ) {
+              if (ledgerMarkClass(child)) {
                 continue;
               }
               return null;
@@ -55766,7 +55805,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
         if (!seenAnchor) {
           return null;
         }
-        if (!/^[\s\u{1F345}\uFE0F]*$/u.test(beforeText)) {
+        if (!tomatoOrSpace(beforeText)) {
           return null;
         }
         if (!/^[\s]*#?[\s]*$/.test(afterText)) {
@@ -55809,40 +55848,75 @@ class BobLedgerToolsProgressMarksReadingMixin {
           return null;
         }
         // The entry's top-level list lives under a `## Pomodoros`
-        // heading: the nearest preceding heading sibling names it.
-        let sibling = topList.previousSibling || null;
-        let guard = 0;
+        // heading. Reading view may wrap that heading (and the list)
+        // in `div.el-h2` / `div.el-ul`, so walk previous siblings and
+        // look through one wrapper, then climb to the list's parent.
+        const headingFrom = (node) => {
+          const nodeTag = tagOf(node);
+          if (/^H[1-6]$/.test(nodeTag)) {
+            return node;
+          }
+          if (node && typeof node.querySelector === "function") {
+            try {
+              const found = node.querySelector("h1, h2, h3, h4, h5, h6");
+              if (found) {
+                return found;
+              }
+            } catch (error) {
+              // Fall through to a child walk.
+            }
+          }
+          for (const child of (node && node.childNodes) || []) {
+            if (child && child.nodeType === 1 && /^H[1-6]$/.test(tagOf(child))) {
+              return child;
+            }
+          }
+          return null;
+        };
+        let start = topList;
         let pomodoros = false;
         let decided = false;
-        while (sibling && guard < 100) {
-          guard += 1;
-          try {
-            if (!sibling) {
+        let climb = 0;
+        while (start && !decided && climb < 20) {
+          climb += 1;
+          let sibling = start.previousSibling || null;
+          let guard = 0;
+          while (sibling && guard < 100) {
+            guard += 1;
+            try {
+              if (sibling.nodeType !== 1) {
+                sibling = sibling.previousSibling || null;
+                continue;
+              }
+              const heading = headingFrom(sibling);
+              if (heading) {
+                const headingTag = tagOf(heading);
+                const text =
+                  typeof heading.textContent === "string"
+                    ? heading.textContent
+                    : "";
+                pomodoros =
+                  headingTag === "H2" &&
+                  text.trim().split(/\s+/)[0] === "Pomodoros";
+                decided = true;
+                break;
+              }
+              sibling = sibling.previousSibling || null;
+            } catch (error) {
               break;
             }
-            if (sibling.nodeType === 3) {
-              sibling = sibling.previousSibling || null;
-              continue;
-            }
-            if (sibling.nodeType !== 1) {
-              sibling = sibling.previousSibling || null;
-              continue;
-            }
-            const tag = tagOf(sibling);
-            if (/^H[1-6]$/.test(tag)) {
-              const text =
-                typeof sibling.textContent === "string"
-                  ? sibling.textContent
-                  : "";
-              pomodoros =
-                tag === "H2" &&
-                text.trim().split(/\s+/)[0] === "Pomodoros";
-              decided = true;
+          }
+          if (!decided) {
+            const parent = start.parentNode || null;
+            if (
+              !parent ||
+              tagOf(parent) === "LI" ||
+              tagOf(parent) === "BODY" ||
+              tagOf(parent) === "HTML"
+            ) {
               break;
             }
-            sibling = sibling.previousSibling || null;
-          } catch (error) {
-            break;
+            start = parent;
           }
         }
         if (!decided || !pomodoros) {
@@ -57344,6 +57418,24 @@ class BobLedgerToolsUnblockedGlyphMixin {
       } catch (error) {
         // Reading-view glyphs are best-effort.
       }
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (
+          workspace &&
+          typeof workspace.on === "function" &&
+          typeof this.registerEvent === "function" &&
+          !this.unblockedGlyphLayoutHooked
+        ) {
+          this.unblockedGlyphLayoutHooked = true;
+          this.registerEvent(
+            workspace.on("layout-change", () =>
+              this.scheduleUnblockedGlyphRefresh(),
+            ),
+          );
+        }
+      } catch (error) {
+        // Layout-change refresh is best-effort.
+      }
     } catch (error) {
       // Glyph setup never throws.
     }
@@ -57766,6 +57858,11 @@ class BobLedgerToolsUnblockedGlyphMixin {
         } catch (error) {
           // Refresh is best-effort.
         }
+        try {
+          self.refreshUnblockedGlyphReadingViews();
+        } catch (error) {
+          // Reading refresh is best-effort.
+        }
       }, 150);
     } catch (error) {
       // No timer host; nothing to schedule.
@@ -57834,6 +57931,51 @@ class BobLedgerToolsUnblockedGlyphMixin {
         // Editor refresh is best-effort.
       }
       return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshUnblockedGlyphReadingViews() {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return false;
+      }
+      const leaves = workspace.getLeavesOfType("markdown") || [];
+      let refreshed = false;
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view ? leaf.view : null;
+          const sourcePath =
+            view && view.file && typeof view.file.path === "string"
+              ? view.file.path
+              : "";
+          if (!sourcePath) {
+            continue;
+          }
+          const container =
+            (view.previewMode && view.previewMode.containerEl) ||
+            view.contentEl ||
+            view.containerEl ||
+            null;
+          if (!container || typeof container.querySelector !== "function") {
+            continue;
+          }
+          const root =
+            container.querySelector(
+              ".markdown-preview-view, .markdown-reading-view",
+            ) || container;
+          if (!root) {
+            continue;
+          }
+          this.renderUnblockedGlyphIn(root, { sourcePath });
+          refreshed = true;
+        } catch (error) {
+          continue;
+        }
+      }
+      return refreshed;
     } catch (error) {
       return false;
     }
@@ -57962,7 +58104,15 @@ class BobLedgerToolsUnblockedGlyphMixin {
             continue;
           }
           try {
-            li.insertBefore(glyph, context.anchor.nextSibling || null);
+            const parent =
+              (context.anchor && context.anchor.parentNode) || li;
+            if (!parent || typeof parent.insertBefore !== "function") {
+              continue;
+            }
+            parent.insertBefore(
+              glyph,
+              context.anchor.nextSibling || null,
+            );
           } catch (error) {
             continue;
           }
@@ -58091,6 +58241,22 @@ class BobLedgerToolsFreesMarksMixin {
         }
       } catch (error) {
         // The daily-note hook is best-effort.
+      }
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (
+          workspace &&
+          typeof workspace.on === "function" &&
+          typeof this.registerEvent === "function" &&
+          !this.freesMarksLayoutHooked
+        ) {
+          this.freesMarksLayoutHooked = true;
+          this.registerEvent(
+            workspace.on("layout-change", () => this.scheduleFreesMarksRefresh()),
+          );
+        }
+      } catch (error) {
+        // Layout-change refresh is best-effort.
       }
       try {
         if (
@@ -58556,6 +58722,11 @@ class BobLedgerToolsFreesMarksMixin {
       const record = { el, ctx, sourcePath: ctx.sourcePath };
       this.freesMarksReadingViews.set(el, record);
       this.sweepFreesMarksReadingView(record);
+      try {
+        this.scheduleFreesMarksRefresh();
+      } catch (error) {
+        // A follow-up sweep covers a section that was still detaching.
+      }
       if (typeof ctx.addChild === "function") {
         let child = null;
         try {
@@ -58590,18 +58761,68 @@ class BobLedgerToolsFreesMarksMixin {
     }
   }
 
-  refreshFreesMarksReadingViews() {
+  freesMarkPreviewRecords() {
+    const records = [];
     try {
-      if (!(this.freesMarksReadingViews instanceof Map)) {
-        return false;
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return records;
       }
-      let refreshed = false;
-      for (const [el, record] of Array.from(this.freesMarksReadingViews.entries())) {
+      const leaves = workspace.getLeavesOfType("markdown") || [];
+      for (const leaf of leaves) {
         try {
-          if (!el) {
-            this.freesMarksReadingViews.delete(el);
+          const view = leaf && leaf.view ? leaf.view : null;
+          const sourcePath =
+            view && view.file && typeof view.file.path === "string"
+              ? view.file.path
+              : "";
+          if (!sourcePath) {
             continue;
           }
+          const container =
+            (view.previewMode && view.previewMode.containerEl) ||
+            view.contentEl ||
+            view.containerEl ||
+            null;
+          if (!container || typeof container.querySelector !== "function") {
+            continue;
+          }
+          const root =
+            container.querySelector(
+              ".markdown-preview-view, .markdown-reading-view",
+            ) || container;
+          if (root) {
+            records.push({ el: root, sourcePath });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      return records;
+    }
+    return records;
+  }
+
+  refreshFreesMarksReadingViews() {
+    try {
+      let refreshed = false;
+      if (this.freesMarksReadingViews instanceof Map) {
+        for (const [el, record] of Array.from(this.freesMarksReadingViews.entries())) {
+          try {
+            if (!el) {
+              this.freesMarksReadingViews.delete(el);
+              continue;
+            }
+            this.sweepFreesMarksReadingView(record);
+            refreshed = true;
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+      for (const record of this.freesMarkPreviewRecords()) {
+        try {
           this.sweepFreesMarksReadingView(record);
           refreshed = true;
         } catch (error) {

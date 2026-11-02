@@ -57,6 +57,24 @@ class BobLedgerToolsUnblockedGlyphMixin {
       } catch (error) {
         // Reading-view glyphs are best-effort.
       }
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (
+          workspace &&
+          typeof workspace.on === "function" &&
+          typeof this.registerEvent === "function" &&
+          !this.unblockedGlyphLayoutHooked
+        ) {
+          this.unblockedGlyphLayoutHooked = true;
+          this.registerEvent(
+            workspace.on("layout-change", () =>
+              this.scheduleUnblockedGlyphRefresh(),
+            ),
+          );
+        }
+      } catch (error) {
+        // Layout-change refresh is best-effort.
+      }
     } catch (error) {
       // Glyph setup never throws.
     }
@@ -479,6 +497,11 @@ class BobLedgerToolsUnblockedGlyphMixin {
         } catch (error) {
           // Refresh is best-effort.
         }
+        try {
+          self.refreshUnblockedGlyphReadingViews();
+        } catch (error) {
+          // Reading refresh is best-effort.
+        }
       }, 150);
     } catch (error) {
       // No timer host; nothing to schedule.
@@ -547,6 +570,51 @@ class BobLedgerToolsUnblockedGlyphMixin {
         // Editor refresh is best-effort.
       }
       return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshUnblockedGlyphReadingViews() {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return false;
+      }
+      const leaves = workspace.getLeavesOfType("markdown") || [];
+      let refreshed = false;
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view ? leaf.view : null;
+          const sourcePath =
+            view && view.file && typeof view.file.path === "string"
+              ? view.file.path
+              : "";
+          if (!sourcePath) {
+            continue;
+          }
+          const container =
+            (view.previewMode && view.previewMode.containerEl) ||
+            view.contentEl ||
+            view.containerEl ||
+            null;
+          if (!container || typeof container.querySelector !== "function") {
+            continue;
+          }
+          const root =
+            container.querySelector(
+              ".markdown-preview-view, .markdown-reading-view",
+            ) || container;
+          if (!root) {
+            continue;
+          }
+          this.renderUnblockedGlyphIn(root, { sourcePath });
+          refreshed = true;
+        } catch (error) {
+          continue;
+        }
+      }
+      return refreshed;
     } catch (error) {
       return false;
     }
@@ -675,7 +743,15 @@ class BobLedgerToolsUnblockedGlyphMixin {
             continue;
           }
           try {
-            li.insertBefore(glyph, context.anchor.nextSibling || null);
+            const parent =
+              (context.anchor && context.anchor.parentNode) || li;
+            if (!parent || typeof parent.insertBefore !== "function") {
+              continue;
+            }
+            parent.insertBefore(
+              glyph,
+              context.anchor.nextSibling || null,
+            );
           } catch (error) {
             continue;
           }

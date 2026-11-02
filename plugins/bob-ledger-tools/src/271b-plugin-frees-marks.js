@@ -72,6 +72,22 @@ class BobLedgerToolsFreesMarksMixin {
         // The daily-note hook is best-effort.
       }
       try {
+        const workspace = this.app && this.app.workspace;
+        if (
+          workspace &&
+          typeof workspace.on === "function" &&
+          typeof this.registerEvent === "function" &&
+          !this.freesMarksLayoutHooked
+        ) {
+          this.freesMarksLayoutHooked = true;
+          this.registerEvent(
+            workspace.on("layout-change", () => this.scheduleFreesMarksRefresh()),
+          );
+        }
+      } catch (error) {
+        // Layout-change refresh is best-effort.
+      }
+      try {
         if (
           this.freesMarksRolloverTimer === null &&
           typeof this.registerInterval === "function"
@@ -535,6 +551,11 @@ class BobLedgerToolsFreesMarksMixin {
       const record = { el, ctx, sourcePath: ctx.sourcePath };
       this.freesMarksReadingViews.set(el, record);
       this.sweepFreesMarksReadingView(record);
+      try {
+        this.scheduleFreesMarksRefresh();
+      } catch (error) {
+        // A follow-up sweep covers a section that was still detaching.
+      }
       if (typeof ctx.addChild === "function") {
         let child = null;
         try {
@@ -569,18 +590,68 @@ class BobLedgerToolsFreesMarksMixin {
     }
   }
 
-  refreshFreesMarksReadingViews() {
+  freesMarkPreviewRecords() {
+    const records = [];
     try {
-      if (!(this.freesMarksReadingViews instanceof Map)) {
-        return false;
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return records;
       }
-      let refreshed = false;
-      for (const [el, record] of Array.from(this.freesMarksReadingViews.entries())) {
+      const leaves = workspace.getLeavesOfType("markdown") || [];
+      for (const leaf of leaves) {
         try {
-          if (!el) {
-            this.freesMarksReadingViews.delete(el);
+          const view = leaf && leaf.view ? leaf.view : null;
+          const sourcePath =
+            view && view.file && typeof view.file.path === "string"
+              ? view.file.path
+              : "";
+          if (!sourcePath) {
             continue;
           }
+          const container =
+            (view.previewMode && view.previewMode.containerEl) ||
+            view.contentEl ||
+            view.containerEl ||
+            null;
+          if (!container || typeof container.querySelector !== "function") {
+            continue;
+          }
+          const root =
+            container.querySelector(
+              ".markdown-preview-view, .markdown-reading-view",
+            ) || container;
+          if (root) {
+            records.push({ el: root, sourcePath });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      return records;
+    }
+    return records;
+  }
+
+  refreshFreesMarksReadingViews() {
+    try {
+      let refreshed = false;
+      if (this.freesMarksReadingViews instanceof Map) {
+        for (const [el, record] of Array.from(this.freesMarksReadingViews.entries())) {
+          try {
+            if (!el) {
+              this.freesMarksReadingViews.delete(el);
+              continue;
+            }
+            this.sweepFreesMarksReadingView(record);
+            refreshed = true;
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+      for (const record of this.freesMarkPreviewRecords()) {
+        try {
           this.sweepFreesMarksReadingView(record);
           refreshed = true;
         } catch (error) {

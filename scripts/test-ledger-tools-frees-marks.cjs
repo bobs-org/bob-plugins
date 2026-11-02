@@ -666,6 +666,54 @@ function readingRoot(withUnblocked) {
   return root;
 }
 
+function readingLedgerRoot({ withUnblocked = false, withTaskLinkMark = false, wrapP = false } = {}) {
+  const doc = {
+    createElement: (tag) => new DomNode(tag, "", doc),
+    createTextNode: (value) => {
+      const node = new DomNode("#text", "", doc, 3);
+      node.nodeValue = String(value);
+      node.textContent = String(value);
+      return node;
+    },
+  };
+  const root = new DomNode("DIV", "", doc);
+  root.ownerDocument = doc;
+  const head = new DomNode("H2", "", doc);
+  head.appendChild(doc.createTextNode("Pomodoros"));
+  root.appendChild(head);
+  const top = new DomNode("UL", "", doc);
+  root.appendChild(top);
+  const entry = new DomNode("LI", "", doc);
+  entry.setAttribute("data-task", " ");
+  top.appendChild(entry);
+  const inner = new DomNode("UL", "", doc);
+  entry.appendChild(inner);
+  const li = new DomNode("LI", "", doc);
+  inner.appendChild(li);
+  const content = wrapP ? new DomNode("P", "", doc) : li;
+  if (wrapP) li.appendChild(content);
+  if (withTaskLinkMark) {
+    const ring = new DomNode("SPAN", "bob-task-link-mark", doc);
+    ring.setAttribute("class", "bob-task-link-mark");
+    content.appendChild(ring);
+  }
+  const anchor = new DomNode("A", "internal-link", doc);
+  anchor.setAttribute("class", "internal-link");
+  anchor.setAttribute("data-href", "sase#^a");
+  content.appendChild(anchor);
+  let glyph = null;
+  if (withUnblocked) {
+    glyph = new DomNode("SPAN", "bob-unblocked-glyph", doc);
+    glyph.setAttribute("class", "bob-unblocked-glyph");
+    content.appendChild(glyph);
+  }
+  root.li = li;
+  root.anchor = anchor;
+  root.glyph = glyph;
+  root.content = content;
+  return root;
+}
+
 test("FP3-FP4: Reading view inserts after the link or after 🔓", () => {
   for (const hasGlyph of [false, true]) {
     const tasks = [ownerTask(), dependent()];
@@ -684,6 +732,28 @@ test("FP3-FP4: Reading view inserts after the link or after 🔓", () => {
       assert.deepEqual(root.li.childNodes.map((node) => node.className), ["internal-link", "bob-frees-mark"]);
     }
   }
+});
+
+test("Reading view inserts beside a task-link-mark sibling and through one wrapping p", () => {
+  const tasks = [ownerTask(), dependent()];
+  const { plugin } = makePlugin(tasks);
+  const ringRoot = readingLedgerRoot({ withTaskLinkMark: true });
+  plugin.sweepFreesMarksReadingView({ el: ringRoot, sourcePath: TODAY_PATH });
+  const ringMark = ringRoot.querySelectorAll(".bob-frees-mark")[0];
+  assert.ok(ringMark, "task-link-mark sibling must not hide the frees mark");
+  assert.deepEqual(
+    ringRoot.li.childNodes.map((node) => node.className),
+    ["bob-task-link-mark", "internal-link", "bob-frees-mark"],
+  );
+
+  const wrapRoot = readingLedgerRoot({ withTaskLinkMark: true, wrapP: true, withUnblocked: true });
+  plugin.sweepFreesMarksReadingView({ el: wrapRoot, sourcePath: TODAY_PATH });
+  const wrapMark = wrapRoot.querySelectorAll(".bob-frees-mark")[0];
+  assert.ok(wrapMark, "a wrapping p must not hide the frees mark");
+  assert.deepEqual(
+    wrapRoot.content.childNodes.map((node) => node.className),
+    ["bob-task-link-mark", "internal-link", "bob-unblocked-glyph", "bob-frees-mark"],
+  );
 });
 
 test("FT element and widget keep accessible attributes without a title", () => {

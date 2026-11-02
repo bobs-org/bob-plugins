@@ -961,6 +961,114 @@ test("Reading view allows the 🍅 prefix and the trailing # marker", () => {
   );
 });
 
+function innerLinkRow(root) {
+  return root
+    .querySelectorAll("li")
+    .find((li) => !li.getAttribute("data-task") && li.querySelectorAll("a.internal-link").length);
+}
+
+test("Reading context ignores display-only ledger marks and one wrapping p", () => {
+  const plugin = makeProgressPlugin(tasksWithStatus("/"));
+  const ringDoc = readingDoc();
+  const ringRoot = readingSection(ringDoc, {
+    rows: [
+      (d) => {
+        const li = d.createElement("li");
+        const bullet = d.createElement("div");
+        bullet.setAttribute("class", "list-bullet");
+        const ring = d.createElement("span");
+        ring.setAttribute("class", "bob-task-link-mark");
+        li.appendChild(bullet);
+        li.appendChild(ring);
+        li.appendChild(readingLink(d, "T#^fix"));
+        return li;
+      },
+    ],
+  });
+  const ringContext = plugin.progressMarkReadingContext(
+    innerLinkRow(ringRoot),
+    ringRoot,
+    { allowLedgerMarks: true },
+  );
+  assert.ok(ringContext);
+  assert.equal(ringContext.blockId, "fix");
+  assert.equal(ringContext.target, "T");
+
+  const wrapDoc = readingDoc();
+  const wrapRoot = readingSection(wrapDoc, {
+    rows: [
+      (d) => {
+        const li = d.createElement("li");
+        const p = d.createElement("p");
+        const ring = d.createElement("span");
+        ring.setAttribute("class", "bob-task-link-mark");
+        p.appendChild(ring);
+        p.appendChild(readingLink(d, "T#^fix"));
+        li.appendChild(p);
+        return li;
+      },
+    ],
+  });
+  const wrapContext = plugin.progressMarkReadingContext(
+    innerLinkRow(wrapRoot),
+    wrapRoot,
+    { allowLedgerMarks: true },
+  );
+  assert.ok(wrapContext);
+  assert.equal(wrapContext.blockId, "fix");
+
+  const divDoc = readingDoc();
+  const divRoot = readingSection(divDoc, {
+    rows: [
+      (d) => {
+        const li = d.createElement("li");
+        const extra = d.createElement("div");
+        extra.appendChild(readingLink(d, "T#^fix"));
+        li.appendChild(extra);
+        return li;
+      },
+    ],
+  });
+  assert.equal(
+    plugin.progressMarkReadingContext(innerLinkRow(divRoot), divRoot),
+    null,
+  );
+
+  const wrapHeadDoc = readingDoc();
+  const wrapHeadRoot = readingEl("div");
+  wrapHeadRoot.ownerDocument = wrapHeadDoc;
+  const headWrap = wrapHeadDoc.createElement("div");
+  headWrap.setAttribute("class", "el-h2");
+  const head = wrapHeadDoc.createElement("h2");
+  head.appendChild(wrapHeadDoc.createTextNode("Pomodoros"));
+  headWrap.appendChild(head);
+  wrapHeadRoot.appendChild(headWrap);
+  const listWrap = wrapHeadDoc.createElement("div");
+  listWrap.setAttribute("class", "el-ul");
+  wrapHeadRoot.appendChild(listWrap);
+  const top = wrapHeadDoc.createElement("ul");
+  listWrap.appendChild(top);
+  const entry = wrapHeadDoc.createElement("li");
+  entry.setAttribute("data-task", " ");
+  top.appendChild(entry);
+  const inner = wrapHeadDoc.createElement("ul");
+  entry.appendChild(inner);
+  const row = wrapHeadDoc.createElement("li");
+  const bullet = wrapHeadDoc.createElement("span");
+  bullet.setAttribute("class", "list-bullet");
+  row.appendChild(bullet);
+  const ring = wrapHeadDoc.createElement("span");
+  ring.setAttribute("class", "bob-task-link-mark");
+  row.appendChild(ring);
+  row.appendChild(readingLink(wrapHeadDoc, "T#^fix"));
+  inner.appendChild(row);
+  const wrapped = plugin.progressMarkReadingContext(row, wrapHeadRoot, {
+    allowLedgerMarks: true,
+  });
+  assert.ok(wrapped);
+  assert.equal(wrapped.blockId, "fix");
+});
+
 // --- api, toggle, and wiring ------------------------------------------------
 
 test("api.progressMarks v1 is additive, sync, and never throwing", () => {

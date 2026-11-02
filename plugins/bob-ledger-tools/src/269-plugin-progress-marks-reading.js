@@ -73,25 +73,80 @@ class BobLedgerToolsProgressMarksReadingMixin {
         return null;
       }
       const includeStruck = Boolean(options && options.includeStruck);
+      const ledgerMarkClass = (node) => {
+        try {
+          return String(
+            typeof node.getAttribute === "function"
+              ? node.getAttribute("class") || ""
+              : node.className || "",
+          )
+            .split(/\s+/)
+            .some((name) =>
+              [
+                "bob-task-link-mark",
+                "bob-progress-mark",
+                "bob-unblocked-glyph",
+                "bob-frees-mark",
+                "bob-today-mark",
+                "list-bullet",
+                "list-collapse-indicator",
+                "collapse-icon",
+              ].includes(name),
+            );
+        } catch (error) {
+          return false;
+        }
+      };
+      const tomatoOrSpace = (value) => /^[\s\u{1F345}\uFE0F]*$/u.test(value);
       let linkContainer = anchor;
+      let scanRoot = li;
       // Reading view wraps optional Markdown strike-through in a del/s
-      // element. Task link mark filtering also examines struck ledger
-      // rows, while progress marks keep their original exclusion.
+      // element, and a loose list item's content in one `<p>`. Task
+      // link mark filtering also examines struck ledger rows, while
+      // progress marks keep their original exclusion.
       try {
         if (anchor.parentNode !== li) {
-          const wrapper = anchor.parentNode || null;
+          let wrapper = anchor.parentNode || null;
           const wrapperTag = tagOf(wrapper);
           const wrapperChildren = (wrapper && wrapper.childNodes) || [];
           if (
-            !includeStruck ||
-            !["S", "DEL", "STRIKE"].includes(wrapperTag) ||
-            wrapper.parentNode !== li ||
-            wrapperChildren.length !== 1 ||
-            wrapperChildren[0] !== anchor
+            includeStruck &&
+            ["S", "DEL", "STRIKE"].includes(wrapperTag) &&
+            wrapperChildren.length === 1 &&
+            wrapperChildren[0] === anchor
           ) {
+            linkContainer = wrapper;
+            wrapper = wrapper.parentNode || null;
+          }
+          if (tagOf(wrapper) === "P" && wrapper.parentNode === li) {
+            for (const child of (li && li.childNodes) || []) {
+              if (child === wrapper) {
+                continue;
+              }
+              const nodeType = child && child.nodeType;
+              if (nodeType === 3) {
+                const value =
+                  typeof child.nodeValue === "string"
+                    ? child.nodeValue
+                    : typeof child.textContent === "string"
+                      ? child.textContent
+                      : "";
+                if (!tomatoOrSpace(value)) {
+                  return null;
+                }
+                continue;
+              }
+              if (nodeType === 1 && ledgerMarkClass(child)) {
+                continue;
+              }
+              if (nodeType === 1) {
+                return null;
+              }
+            }
+            scanRoot = wrapper;
+          } else if (wrapper && wrapper !== li) {
             return null;
           }
-          linkContainer = wrapper;
         }
       } catch (error) {
         return null;
@@ -141,8 +196,10 @@ class BobLedgerToolsProgressMarksReadingMixin {
       }
       // The row's own content is exactly the link: an optional 🍅
       // prefix, then the anchor, then an optional trailing `#`.
+      // Display-only ledger mark hosts (rings, ◐, 🔓, 🔑, today)
+      // sit beside the link and must not disqualify it.
       try {
-        const children = (li && li.childNodes) || [];
+        const children = (scanRoot && scanRoot.childNodes) || [];
         let seenAnchor = false;
         let beforeText = "";
         let afterText = "";
@@ -171,25 +228,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
             // link, formatting) means the body is not exactly one
             // link. The anchor itself already continued above.
             if (nodeType === 1) {
-              let classes = "";
-              try {
-                classes = String(
-                  typeof child.getAttribute === "function"
-                    ? child.getAttribute("class") || ""
-                    : child.className || "",
-                );
-              } catch (error) {
-                classes = "";
-              }
-              if (
-                options &&
-                options.allowLedgerMarks &&
-                classes
-                  .split(/\s+/)
-                  .some((name) =>
-                    ["bob-unblocked-glyph", "bob-frees-mark"].includes(name),
-                  )
-              ) {
+              if (ledgerMarkClass(child)) {
                 continue;
               }
               return null;
@@ -201,7 +240,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
         if (!seenAnchor) {
           return null;
         }
-        if (!/^[\s\u{1F345}\uFE0F]*$/u.test(beforeText)) {
+        if (!tomatoOrSpace(beforeText)) {
           return null;
         }
         if (!/^[\s]*#?[\s]*$/.test(afterText)) {
@@ -244,40 +283,75 @@ class BobLedgerToolsProgressMarksReadingMixin {
           return null;
         }
         // The entry's top-level list lives under a `## Pomodoros`
-        // heading: the nearest preceding heading sibling names it.
-        let sibling = topList.previousSibling || null;
-        let guard = 0;
+        // heading. Reading view may wrap that heading (and the list)
+        // in `div.el-h2` / `div.el-ul`, so walk previous siblings and
+        // look through one wrapper, then climb to the list's parent.
+        const headingFrom = (node) => {
+          const nodeTag = tagOf(node);
+          if (/^H[1-6]$/.test(nodeTag)) {
+            return node;
+          }
+          if (node && typeof node.querySelector === "function") {
+            try {
+              const found = node.querySelector("h1, h2, h3, h4, h5, h6");
+              if (found) {
+                return found;
+              }
+            } catch (error) {
+              // Fall through to a child walk.
+            }
+          }
+          for (const child of (node && node.childNodes) || []) {
+            if (child && child.nodeType === 1 && /^H[1-6]$/.test(tagOf(child))) {
+              return child;
+            }
+          }
+          return null;
+        };
+        let start = topList;
         let pomodoros = false;
         let decided = false;
-        while (sibling && guard < 100) {
-          guard += 1;
-          try {
-            if (!sibling) {
+        let climb = 0;
+        while (start && !decided && climb < 20) {
+          climb += 1;
+          let sibling = start.previousSibling || null;
+          let guard = 0;
+          while (sibling && guard < 100) {
+            guard += 1;
+            try {
+              if (sibling.nodeType !== 1) {
+                sibling = sibling.previousSibling || null;
+                continue;
+              }
+              const heading = headingFrom(sibling);
+              if (heading) {
+                const headingTag = tagOf(heading);
+                const text =
+                  typeof heading.textContent === "string"
+                    ? heading.textContent
+                    : "";
+                pomodoros =
+                  headingTag === "H2" &&
+                  text.trim().split(/\s+/)[0] === "Pomodoros";
+                decided = true;
+                break;
+              }
+              sibling = sibling.previousSibling || null;
+            } catch (error) {
               break;
             }
-            if (sibling.nodeType === 3) {
-              sibling = sibling.previousSibling || null;
-              continue;
-            }
-            if (sibling.nodeType !== 1) {
-              sibling = sibling.previousSibling || null;
-              continue;
-            }
-            const tag = tagOf(sibling);
-            if (/^H[1-6]$/.test(tag)) {
-              const text =
-                typeof sibling.textContent === "string"
-                  ? sibling.textContent
-                  : "";
-              pomodoros =
-                tag === "H2" &&
-                text.trim().split(/\s+/)[0] === "Pomodoros";
-              decided = true;
+          }
+          if (!decided) {
+            const parent = start.parentNode || null;
+            if (
+              !parent ||
+              tagOf(parent) === "LI" ||
+              tagOf(parent) === "BODY" ||
+              tagOf(parent) === "HTML"
+            ) {
               break;
             }
-            sibling = sibling.previousSibling || null;
-          } catch (error) {
-            break;
+            start = parent;
           }
         }
         if (!decided || !pomodoros) {

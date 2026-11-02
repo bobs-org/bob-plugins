@@ -17,7 +17,7 @@ cargo run --locked --quiet -- stats show -a -f json -r 4w \
 
 The captured report has `schema_version: 1`. `canonical.meta.json` pins its fixture
 version, bob-cli version/revision, clock, and requested range; its source is the
-committed golden vault. The renderer is `bob-ledger-tools@1.84.0`. The canonical
+committed golden vault. The renderer is `bob-ledger-tools@1.88.0`. The canonical
 golden has no off-clock adoption evidence, so it also checks the new renderer's
 clockless compatibility path. `synthetic-clocks.json` contains consistent
 Worked, Off-clock, and Total reports plus empty Off-clock, pre-adoption
@@ -60,8 +60,8 @@ today in progress, a past day, no Pomodoros, all-unlinked time, not-tracked and 
 points, seven areas, an old-bob report without `root_parent`, same-area roots get distinct hues, seven
 roots with `+N`, a redefined `worked`, long labels (with a long `job_2026_apply_29`
 root), wide values (`10h 05m`, three-digit counts, `not yet`), a week-grouped daily
-series, a canonical-shaped default `4w` report, and an explicit eight-day `-g day`
-report. Every report carries `root_parent` parts, displays, and catalog entries
+series, a canonical-shaped default `4w` report, an explicit eight-day `-g day`
+report, and off-clock hint cases (supplied display, raw numeric fallback, zero, and redefined worked). Every report carries `root_parent` parts, displays, and catalog entries
 except `areaOnly` (the old-bob fallback) and `redefinedWorked`. These
 reports exist only to exercise the view and are not captured vault data or tests of
 `bob stats` calculations.

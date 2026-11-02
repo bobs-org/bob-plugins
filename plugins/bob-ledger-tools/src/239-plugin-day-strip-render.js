@@ -289,6 +289,32 @@ function dayStripRenderRef(doc, fact) {
   return node;
 }
 
+function dayStripRenderHint(doc, fact, model, handlers) {
+  try {
+    if (!fact || !fact.hint || model.state === "skeleton") return null;
+    const hint = fact.hint;
+    if (!hint || typeof hint.display !== "string" || !hint.display.trim()) return null;
+    const day = model.day || "";
+    const text = "◌ +" + hint.display.trim() + " off-clock";
+    const label = "Off-clock " + hint.display.trim() + " on " + day + ", open Stats";
+    const title = "Open Stats on " + day + " off-clock";
+    const node = dayStripLink(doc, "bob-day-strip-hint", label, title);
+    if (!node) return null;
+    if (node.setAttribute) {
+      node.setAttribute("data-day-strip-hint", fact.id || "worked");
+    }
+    dayStripAppend(node, statsEl(doc, "span", { class: "bob-day-strip-hint-text" }, text));
+    dayStripActivate(node, (newLeaf) => {
+      if (typeof handlers.openStats === "function") {
+        handlers.openStats({ day: model.day, metric: fact.id || "worked", panel: "homes", clock: "off-clock", newLeaf });
+      }
+    });
+    return node;
+  } catch (error) {
+    return null;
+  }
+}
+
 function dayStripRenderFact(doc, fact, model, handlers, arrive) {
   const skeleton = model.state === "skeleton";
   const node = dayStripLink(
@@ -336,9 +362,17 @@ function dayStripRenderFact(doc, fact, model, handlers, arrive) {
   dayStripAppend(node, dayStripRenderRef(doc, fact));
   dayStripActivate(node, (newLeaf) => {
     if (typeof handlers.openStats === "function") {
-      handlers.openStats({ day: model.day, metric: fact.id, newLeaf });
+      handlers.openStats({ day: model.day, metric: fact.id, panel: undefined, clock: "worked", newLeaf });
     }
   });
+  const hintNode = dayStripRenderHint(doc, fact, model, handlers);
+  if (hintNode) {
+    const wrap = statsEl(doc, "div", { class: "bob-day-strip-fact-wrap" });
+    if (!wrap) return node;
+    dayStripAppend(wrap, node);
+    dayStripAppend(wrap, hintNode);
+    return wrap;
+  }
   return node;
 }
 
@@ -439,7 +473,7 @@ function dayStripRenderMix(doc, model, handlers, lane) {
   dayStripAppend(node, legend);
   const panel = dayStripLanePanel(lane);
   dayStripActivate(node, (newLeaf) => {
-    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, newLeaf });
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, clock: "worked", newLeaf });
   });
   return node;
 }
@@ -477,7 +511,7 @@ function dayStripRenderBar(doc, model, handlers, lane) {
   }
   const panel = dayStripLanePanel(lane);
   dayStripBarActivate(node, (newLeaf) => {
-    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, newLeaf });
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, clock: "worked", newLeaf });
   });
   return node;
 }

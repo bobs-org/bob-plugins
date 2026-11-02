@@ -97,6 +97,12 @@ class BobLedgerToolsDayStripFenceMixin {
   // window when it already shows D (else a 28-day window ending on D),
   // scroll a requested panel into view on first paint, repaint a mounted
   // view, then reveal the open leaf or open it like a link click.
+  // An explicit `clock` ("worked", "off-clock", "total") selects that
+  // lens for this navigation through the Stats clock controller and
+  // persists it as the device preference; calls without one retain the
+  // saved dash preference. Ordinary Day strip facts and lanes pass
+  // `clock: "worked"` so a remembered Off-clock choice never changes
+  // their meaning. Never clears the pin while capability resolves.
   // Returns true when Stats was revealed or opened. Never throws.
   async openStatsForDay(options) {
     const opts = options && typeof options === "object" ? options : {};
@@ -130,6 +136,37 @@ class BobLedgerToolsDayStripFenceMixin {
       state.pinnedBucket = null;
       if (typeof opts.metric === "string" && opts.metric) {
         state.focus = opts.metric;
+      }
+      try {
+        const explicit = typeof statsNormalizeClock === "function"
+          ? statsNormalizeClock(opts.clock, null)
+          : (typeof opts.clock === "string" && (opts.clock === "worked" || opts.clock === "off-clock" || opts.clock === "total") ? opts.clock : null);
+        if (explicit) {
+          state.clock = explicit;
+          try {
+            this.statsClockPreference = explicit;
+            this.statsClockPreferenceLoaded = true;
+            const app = this.app;
+            if (app && typeof app.saveLocalStorage === "function") {
+              app.saveLocalStorage(STATS_CLOCK_STORAGE_KEY, explicit);
+            }
+          } catch (error) {
+            // Preference persistence is best-effort.
+          }
+          try {
+            if (this.statsBlockViews instanceof Set) {
+              for (const view of this.statsBlockViews) {
+                if (view && view.sourcePath === dashPath) {
+                  view.statsClockPreferenceApplied = true;
+                }
+              }
+            }
+          } catch (error) {
+            // Preference-applied marking is best-effort.
+          }
+        }
+      } catch (error) {
+        // Explicit clock handling never breaks the hand-off.
       }
       let inside = false;
       try {

@@ -396,6 +396,7 @@ class BobLedgerToolsDayStripMixin {
                 typeof safe.day === "string" && safe.day ? safe.day : day,
               metric: safe.metric,
               panel: safe.panel,
+              clock: safe.clock,
               newLeaf: safe.newLeaf,
               sourcePath: record.path,
             });
@@ -438,11 +439,13 @@ class BobLedgerToolsDayStripMixin {
             model.error ? model.error.code : "",
             (model.facts || []).map((fact) => {
               const ref = fact && fact.ref && typeof fact.ref === "object" ? fact.ref : {};
+              const hint = fact && fact.hint && typeof fact.hint === "object" ? fact.hint : null;
               return [
                 fact.display,
                 ref.state || "",
                 ref.mark || "",
                 ref.display || "",
+                hint && typeof hint.display === "string" ? hint.display : "",
               ].join(":");
             }).join(","),
             themeSig,

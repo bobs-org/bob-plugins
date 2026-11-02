@@ -147,6 +147,54 @@ function dayStripRef(unit, point) {
   }
 }
 
+// Off-clock hint for the Day strip WORKED fact. Bob owns every value:
+// prefer the supplied `clock_breakdown.off_clock.display`; when only the
+// numeric `off_clock` survives (an intermediate report), fall back to an
+// explicitly labelled raw `Nm` string with no arithmetic. Missing, zero,
+// invalid, non-minutes, not_tracked, and missing values show no hint.
+// Never throws.
+function dayStripOffClockHint(worked, report, day) {
+  try {
+    if (!worked || typeof worked !== "object") return null;
+    if (worked.id !== "worked") return null;
+    if (worked.unit !== "minutes") return null;
+    if (worked.kind !== undefined && worked.kind !== "pomodoro") return null;
+    const points = dayStripMetricPoints(worked, report);
+    const point = points.find((candidate) => candidate && candidate.date === day) || null;
+    if (!point || typeof point !== "object") return null;
+    const quality = typeof point.quality === "string" ? point.quality : "missing";
+    if (quality === "missing" || quality === "not_tracked") return null;
+    if (typeof point.value !== "number" || !Number.isFinite(point.value)) return null;
+    const off = point.off_clock;
+    if (typeof off !== "number" || !Number.isFinite(off) || off <= 0) return null;
+    let display = "";
+    try {
+      const breakdown = typeof statsClockBreakdown === "function"
+        ? statsClockBreakdown(point.clock_breakdown)
+        : null;
+      const supplied = breakdown && breakdown.off_clock && typeof breakdown.off_clock.display === "string"
+        ? breakdown.off_clock.display.trim()
+        : "";
+      if (supplied) {
+        display = supplied;
+      } else if (point.clock_breakdown && typeof point.clock_breakdown === "object") {
+        const direct = point.clock_breakdown.off_clock;
+        if (direct && typeof direct.display === "string" && direct.display.trim()) {
+          display = direct.display.trim();
+        }
+      }
+    } catch (error) {
+      display = "";
+    }
+    if (!display) {
+      display = String(Math.round(off)) + "m";
+    }
+    return { display, offClock: off };
+  } catch (error) {
+    return null;
+  }
+}
+
 function dayStripBuildFact(metric, report, day, dateWords) {
   const points = dayStripMetricPoints(metric, report);
   const point = points.find((candidate) => candidate && candidate.date === day) || null;
@@ -191,6 +239,7 @@ function dayStripBuildFact(metric, report, day, dateWords) {
     unit,
     mark,
     ref,
+    hint: null,
     value: point && typeof point.value === "number" ? point.value : null,
     provisional: Boolean(point && point.provisional === true),
   };
@@ -425,6 +474,7 @@ function dayStripModel(report, day, context) {
         unit: id === "review_closed" ? "bool" : "",
         mark: null,
         ref: dayStripBlankRef(),
+        hint: null,
         value: null,
         provisional: false,
       }));
@@ -444,6 +494,17 @@ function dayStripModel(report, day, context) {
     const facts = DAY_STRIP_METRIC_IDS.map((id) => metrics.find((metric) => metric && metric.id === id)).filter(Boolean)
       .map((metric) => dayStripBuildFact(metric, safeReport, day, dateWords));
     const worked = metrics.find((metric) => metric && metric.id === "worked") || null;
+    try {
+      const hint = dayStripOffClockHint(worked, safeReport, day);
+      if (hint) {
+        const workedFact = facts.find((fact) => fact && fact.id === "worked");
+        if (workedFact) {
+          workedFact.hint = hint;
+        }
+      }
+    } catch (error) {
+      // A hint failure never breaks the strip.
+    }
     const mix = dayStripMix(safeReport, worked, day);
     const themes = typeof dayStripThemeMix === "function"
       ? dayStripThemeMix(safeReport, worked, day, safeContext)

@@ -334,16 +334,16 @@ test("facts, mix, and Retry preserve day, focus, and new-leaf modifiers", () => 
   assert.equal(fact.getAttribute("role"), "link");
   assert.equal(fact.getAttribute("tabindex"), "0");
   fact.dispatch("click", { button: 0, ctrlKey: true });
-  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", newLeaf: true });
+  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", panel: undefined, clock: "worked", newLeaf: true });
 
   byClass(root, "bob-day-strip-mix")[0].dispatch("auxclick", { button: 1 });
-  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", panel: "homes", newLeaf: true });
+  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", panel: "homes", clock: "worked", newLeaf: true });
 
   const keydownFact = byAttribute(root, "data-day-strip-metric", "done")[0];
   keydownFact.dispatch("keydown", { key: "Enter" });
-  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "done", newLeaf: false });
+  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "done", panel: undefined, clock: "worked", newLeaf: false });
   keydownFact.dispatch("keydown", { key: " " });
-  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "done", newLeaf: false });
+  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "done", panel: undefined, clock: "worked", newLeaf: false });
 
   const mousedown = fact.dispatch("mousedown", { button: 0 });
   assert.equal(mousedown.defaultPrevented, true);
@@ -404,9 +404,9 @@ test("bar click opens Stats homes with day and new-leaf modifiers", () => {
   assert.ok(bar, "bar renders with several roots");
   bar.dispatch("mousedown", { button: 0 });
   bar.dispatch("click", { button: 0, ctrlKey: true });
-  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", panel: "homes", newLeaf: true });
+  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", panel: "homes", clock: "worked", newLeaf: true });
   bar.dispatch("auxclick", { button: 1 });
-  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", panel: "homes", newLeaf: true });
+  assert.deepEqual(calls.pop(), { day: fixture.day, metric: "worked", panel: "homes", clock: "worked", newLeaf: true });
   const keydownBefore = calls.length;
   for (const node of findAll(bar, () => true)) {
     if (typeof node.dispatch === "function") node.dispatch("keydown", { key: "Enter" });
@@ -975,4 +975,87 @@ test("typical line is aria-hidden, reserved, and never a tab stop", () => {
   for (const fact of byClass(oldRoot, "bob-day-strip-fact")) {
     assert.equal(byClass(fact, "bob-day-strip-ref")[0].getAttribute("data-ref-state"), "blank");
   }
+});
+
+test("off-clock hint prefers Bob's display and falls back to raw Nm without arithmetic", () => {
+  const withBreakdown = modelFor(fixtures.offClockHint);
+  const worked = withBreakdown.facts.find((fact) => fact.id === "worked");
+  assert.ok(worked.hint, "worked fact carries a hint");
+  assert.equal(worked.hint.display, "1h 30m");
+  assert.equal(helpers.dayStripOffClockHint(
+    fixtures.offClockHint.report.metrics.find((metric) => metric.id === "worked"),
+    fixtures.offClockHint.report,
+    fixtures.offClockHint.day,
+  ).display, "1h 30m");
+
+  const raw = modelFor(fixtures.offClockRaw);
+  const rawWorked = raw.facts.find((fact) => fact.id === "worked");
+  assert.ok(rawWorked.hint, "numeric-only off-clock still hints");
+  assert.equal(rawWorked.hint.display, "95m");
+
+  const zero = modelFor(fixtures.offClockZero);
+  assert.equal(zero.facts.find((fact) => fact.id === "worked").hint, null, "zero off-clock shows no hint");
+
+  const plain = modelFor(fixtures.past);
+  assert.equal(plain.facts.find((fact) => fact.id === "worked").hint, null, "no off-clock shows no hint");
+
+  const redefined = modelFor(fixtures.offClockRedefined);
+  assert.equal(redefined.facts.find((fact) => fact.id === "worked").hint, null, "redefined worked shows no hint");
+
+  const old = modelFor(fixtures.oldBob);
+  assert.equal(old.facts.find((fact) => fact.id === "worked").hint, null, "old bob without off-clock shows no hint");
+
+  const skeleton = helpers.dayStripModel(null, fixtures.today.day, { localToday: fixtures.today.localToday });
+  assert.equal(skeleton.facts.find((fact) => fact.id === "worked").hint, null, "skeleton shows no hint");
+
+  const stale = modelFor(fixtures.offClockHint, { stale: true });
+  assert.ok(stale.facts.find((fact) => fact.id === "worked").hint, "stale cached frame keeps the hint");
+});
+
+test("hint renders below WORKED beside the typical line as its own activation target", () => {
+  const model = modelFor(fixtures.offClockHint);
+  const { root } = paint(model);
+  const factNodes = byClass(root, "bob-day-strip-fact");
+  assert.equal(factNodes.length, model.facts.length, "still five facts, not six");
+  const hints = byClass(root, "bob-day-strip-hint");
+  assert.equal(hints.length, 1, "one hint");
+  const hint = hints[0];
+  assert.equal(hint.getAttribute("role"), "link");
+  assert.equal(hint.getAttribute("tabindex"), "0");
+  assert.ok(hint.textContent.includes("◌ +1h 30m off-clock"), `hint text is ${JSON.stringify(hint.textContent)}`);
+  assert.equal(hint.getAttribute("aria-label"), `Off-clock 1h 30m on ${model.day}, open Stats`);
+
+  const workedFact = byAttribute(root, "data-day-strip-metric", "worked")[0];
+  assert.equal(workedFact.getAttribute("role"), "link", "WORKED stays a link");
+  assert.ok(byClass(workedFact, "bob-day-strip-ref").length === 1, "typical line stays");
+  assert.equal(findAll(workedFact, (node) => (node.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-hint")).length, 0, "hint is not nested inside WORKED");
+  assert.equal(hint.parentNode, workedFact.parentNode, "hint sits beside WORKED in its wrap");
+  assert.ok((hint.parentNode.getAttribute("class") || "").split(/\s+/).includes("bob-day-strip-fact-wrap"), "wrap groups WORKED and its hint");
+
+  const calls = [];
+  const { root: interactive } = paint(model, { openStats: (options) => calls.push(options) });
+  const liveHint = byClass(interactive, "bob-day-strip-hint")[0];
+  liveHint.dispatch("click", { button: 0 });
+  assert.deepEqual(calls.pop(), { day: model.day, metric: "worked", panel: "homes", clock: "off-clock", newLeaf: false });
+  const liveWorked = byAttribute(interactive, "data-day-strip-metric", "worked")[0];
+  liveWorked.dispatch("click", { button: 0, ctrlKey: true });
+  assert.deepEqual(calls.pop(), { day: model.day, metric: "worked", panel: undefined, clock: "worked", newLeaf: true });
+  liveWorked.dispatch("keydown", { key: "Enter" });
+  assert.deepEqual(calls.pop(), { day: model.day, metric: "worked", panel: undefined, clock: "worked", newLeaf: false });
+  liveHint.dispatch("keydown", { key: " " });
+  assert.deepEqual(calls.pop(), { day: model.day, metric: "worked", panel: "homes", clock: "off-clock", newLeaf: false });
+
+  const plainRoot = paint(modelFor(fixtures.past)).root;
+  assert.equal(byClass(plainRoot, "bob-day-strip-hint").length, 0, "no hint without off-clock");
+  assert.equal(byClass(plainRoot, "bob-day-strip-fact-wrap").length, 0, "no wrap without a hint");
+});
+
+test("lane legends and bars keep Worked meaning while the hint opens Off-clock", () => {
+  const model = modelFor(fixtures.offClockHint);
+  const calls = [];
+  const { root } = paint(model, { openStats: (options) => calls.push(options) });
+  byClass(root, "bob-day-strip-mix")[0].dispatch("click", { button: 0 });
+  assert.deepEqual(calls.pop(), { day: model.day, metric: "worked", panel: "homes", clock: "worked", newLeaf: false });
+  const bars = byClass(root, "bob-day-strip-bar");
+  assert.ok(bars.length >= 1);
 });

@@ -5956,7 +5956,8 @@ body:not(.bob-root-marks) .bob-root-mark-native {
     grid-auto-flow: row;
     grid-template-columns: repeat(3, auto);
   }
-  .bob-day-strip-fact:nth-child(3n + 1)::before {
+  .bob-day-strip-fact:nth-child(3n + 1)::before,
+  .bob-day-strip-fact-wrap:nth-child(3n + 1)::before {
     display: none;
   }
 }
@@ -5971,7 +5972,10 @@ body:not(.bob-root-marks) .bob-root-mark-native {
   border-radius: var(--radius-s);
   cursor: pointer;
 }
-.bob-day-strip-fact + .bob-day-strip-fact::before {
+.bob-day-strip-fact + .bob-day-strip-fact::before,
+.bob-day-strip-fact-wrap + .bob-day-strip-fact::before,
+.bob-day-strip-fact + .bob-day-strip-fact-wrap::before,
+.bob-day-strip-fact-wrap + .bob-day-strip-fact-wrap::before {
   content: "";
   position: absolute;
   top: 0.45em;
@@ -5980,6 +5984,58 @@ body:not(.bob-root-marks) .bob-root-mark-native {
   width: 1px;
   background: var(--background-modifier-border);
   pointer-events: none;
+}
+.bob-day-strip-fact-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-width: 0;
+  gap: 0;
+  padding: 0;
+  border-radius: var(--radius-s);
+}
+.bob-day-strip-fact-wrap > .bob-day-strip-fact {
+  padding: 0.25em 0.7em 0;
+  border-radius: var(--radius-s) var(--radius-s) 0 0;
+}
+.bob-day-strip-hint {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3em;
+  height: 1.25em;
+  margin-top: 0.15em;
+  padding: 0 0.7em 0.3em;
+  width: auto;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.72em;
+  font-weight: 450;
+  line-height: 1.25;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums lining-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: 0 0 var(--radius-s) var(--radius-s);
+}
+.bob-day-strip-hint-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bob-day-strip-hint:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.bob-day-strip-hint:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+@media (forced-colors: active) {
+  .bob-day-strip-hint {
+    color: CanvasText;
+  }
 }
 .bob-day-strip-fact:hover {
   background: var(--background-modifier-hover);

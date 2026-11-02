@@ -40372,6 +40372,54 @@ function dayStripRef(unit, point) {
   }
 }
 
+// Off-clock hint for the Day strip WORKED fact. Bob owns every value:
+// prefer the supplied `clock_breakdown.off_clock.display`; when only the
+// numeric `off_clock` survives (an intermediate report), fall back to an
+// explicitly labelled raw `Nm` string with no arithmetic. Missing, zero,
+// invalid, non-minutes, not_tracked, and missing values show no hint.
+// Never throws.
+function dayStripOffClockHint(worked, report, day) {
+  try {
+    if (!worked || typeof worked !== "object") return null;
+    if (worked.id !== "worked") return null;
+    if (worked.unit !== "minutes") return null;
+    if (worked.kind !== undefined && worked.kind !== "pomodoro") return null;
+    const points = dayStripMetricPoints(worked, report);
+    const point = points.find((candidate) => candidate && candidate.date === day) || null;
+    if (!point || typeof point !== "object") return null;
+    const quality = typeof point.quality === "string" ? point.quality : "missing";
+    if (quality === "missing" || quality === "not_tracked") return null;
+    if (typeof point.value !== "number" || !Number.isFinite(point.value)) return null;
+    const off = point.off_clock;
+    if (typeof off !== "number" || !Number.isFinite(off) || off <= 0) return null;
+    let display = "";
+    try {
+      const breakdown = typeof statsClockBreakdown === "function"
+        ? statsClockBreakdown(point.clock_breakdown)
+        : null;
+      const supplied = breakdown && breakdown.off_clock && typeof breakdown.off_clock.display === "string"
+        ? breakdown.off_clock.display.trim()
+        : "";
+      if (supplied) {
+        display = supplied;
+      } else if (point.clock_breakdown && typeof point.clock_breakdown === "object") {
+        const direct = point.clock_breakdown.off_clock;
+        if (direct && typeof direct.display === "string" && direct.display.trim()) {
+          display = direct.display.trim();
+        }
+      }
+    } catch (error) {
+      display = "";
+    }
+    if (!display) {
+      display = String(Math.round(off)) + "m";
+    }
+    return { display, offClock: off };
+  } catch (error) {
+    return null;
+  }
+}
+
 function dayStripBuildFact(metric, report, day, dateWords) {
   const points = dayStripMetricPoints(metric, report);
   const point = points.find((candidate) => candidate && candidate.date === day) || null;
@@ -40416,6 +40464,7 @@ function dayStripBuildFact(metric, report, day, dateWords) {
     unit,
     mark,
     ref,
+    hint: null,
     value: point && typeof point.value === "number" ? point.value : null,
     provisional: Boolean(point && point.provisional === true),
   };
@@ -40650,6 +40699,7 @@ function dayStripModel(report, day, context) {
         unit: id === "review_closed" ? "bool" : "",
         mark: null,
         ref: dayStripBlankRef(),
+        hint: null,
         value: null,
         provisional: false,
       }));
@@ -40669,6 +40719,17 @@ function dayStripModel(report, day, context) {
     const facts = DAY_STRIP_METRIC_IDS.map((id) => metrics.find((metric) => metric && metric.id === id)).filter(Boolean)
       .map((metric) => dayStripBuildFact(metric, safeReport, day, dateWords));
     const worked = metrics.find((metric) => metric && metric.id === "worked") || null;
+    try {
+      const hint = dayStripOffClockHint(worked, safeReport, day);
+      if (hint) {
+        const workedFact = facts.find((fact) => fact && fact.id === "worked");
+        if (workedFact) {
+          workedFact.hint = hint;
+        }
+      }
+    } catch (error) {
+      // A hint failure never breaks the strip.
+    }
     const mix = dayStripMix(safeReport, worked, day);
     const themes = typeof dayStripThemeMix === "function"
       ? dayStripThemeMix(safeReport, worked, day, safeContext)
@@ -41306,6 +41367,32 @@ function dayStripRenderRef(doc, fact) {
   return node;
 }
 
+function dayStripRenderHint(doc, fact, model, handlers) {
+  try {
+    if (!fact || !fact.hint || model.state === "skeleton") return null;
+    const hint = fact.hint;
+    if (!hint || typeof hint.display !== "string" || !hint.display.trim()) return null;
+    const day = model.day || "";
+    const text = "◌ +" + hint.display.trim() + " off-clock";
+    const label = "Off-clock " + hint.display.trim() + " on " + day + ", open Stats";
+    const title = "Open Stats on " + day + " off-clock";
+    const node = dayStripLink(doc, "bob-day-strip-hint", label, title);
+    if (!node) return null;
+    if (node.setAttribute) {
+      node.setAttribute("data-day-strip-hint", fact.id || "worked");
+    }
+    dayStripAppend(node, statsEl(doc, "span", { class: "bob-day-strip-hint-text" }, text));
+    dayStripActivate(node, (newLeaf) => {
+      if (typeof handlers.openStats === "function") {
+        handlers.openStats({ day: model.day, metric: fact.id || "worked", panel: "homes", clock: "off-clock", newLeaf });
+      }
+    });
+    return node;
+  } catch (error) {
+    return null;
+  }
+}
+
 function dayStripRenderFact(doc, fact, model, handlers, arrive) {
   const skeleton = model.state === "skeleton";
   const node = dayStripLink(
@@ -41353,9 +41440,17 @@ function dayStripRenderFact(doc, fact, model, handlers, arrive) {
   dayStripAppend(node, dayStripRenderRef(doc, fact));
   dayStripActivate(node, (newLeaf) => {
     if (typeof handlers.openStats === "function") {
-      handlers.openStats({ day: model.day, metric: fact.id, newLeaf });
+      handlers.openStats({ day: model.day, metric: fact.id, panel: undefined, clock: "worked", newLeaf });
     }
   });
+  const hintNode = dayStripRenderHint(doc, fact, model, handlers);
+  if (hintNode) {
+    const wrap = statsEl(doc, "div", { class: "bob-day-strip-fact-wrap" });
+    if (!wrap) return node;
+    dayStripAppend(wrap, node);
+    dayStripAppend(wrap, hintNode);
+    return wrap;
+  }
   return node;
 }
 
@@ -41456,7 +41551,7 @@ function dayStripRenderMix(doc, model, handlers, lane) {
   dayStripAppend(node, legend);
   const panel = dayStripLanePanel(lane);
   dayStripActivate(node, (newLeaf) => {
-    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, newLeaf });
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, clock: "worked", newLeaf });
   });
   return node;
 }
@@ -41494,7 +41589,7 @@ function dayStripRenderBar(doc, model, handlers, lane) {
   }
   const panel = dayStripLanePanel(lane);
   dayStripBarActivate(node, (newLeaf) => {
-    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, newLeaf });
+    if (typeof handlers.openStats === "function") handlers.openStats({ day: model.day, metric: "worked", panel, clock: "worked", newLeaf });
   });
   return node;
 }
@@ -43349,6 +43444,7 @@ class BobLedgerToolsDayStripMixin {
                 typeof safe.day === "string" && safe.day ? safe.day : day,
               metric: safe.metric,
               panel: safe.panel,
+              clock: safe.clock,
               newLeaf: safe.newLeaf,
               sourcePath: record.path,
             });
@@ -43391,11 +43487,13 @@ class BobLedgerToolsDayStripMixin {
             model.error ? model.error.code : "",
             (model.facts || []).map((fact) => {
               const ref = fact && fact.ref && typeof fact.ref === "object" ? fact.ref : {};
+              const hint = fact && fact.hint && typeof fact.hint === "object" ? fact.hint : null;
               return [
                 fact.display,
                 ref.state || "",
                 ref.mark || "",
                 ref.display || "",
+                hint && typeof hint.display === "string" ? hint.display : "",
               ].join(":");
             }).join(","),
             themeSig,
@@ -44020,6 +44118,12 @@ class BobLedgerToolsDayStripFenceMixin {
   // window when it already shows D (else a 28-day window ending on D),
   // scroll a requested panel into view on first paint, repaint a mounted
   // view, then reveal the open leaf or open it like a link click.
+  // An explicit `clock` ("worked", "off-clock", "total") selects that
+  // lens for this navigation through the Stats clock controller and
+  // persists it as the device preference; calls without one retain the
+  // saved dash preference. Ordinary Day strip facts and lanes pass
+  // `clock: "worked"` so a remembered Off-clock choice never changes
+  // their meaning. Never clears the pin while capability resolves.
   // Returns true when Stats was revealed or opened. Never throws.
   async openStatsForDay(options) {
     const opts = options && typeof options === "object" ? options : {};
@@ -44053,6 +44157,37 @@ class BobLedgerToolsDayStripFenceMixin {
       state.pinnedBucket = null;
       if (typeof opts.metric === "string" && opts.metric) {
         state.focus = opts.metric;
+      }
+      try {
+        const explicit = typeof statsNormalizeClock === "function"
+          ? statsNormalizeClock(opts.clock, null)
+          : (typeof opts.clock === "string" && (opts.clock === "worked" || opts.clock === "off-clock" || opts.clock === "total") ? opts.clock : null);
+        if (explicit) {
+          state.clock = explicit;
+          try {
+            this.statsClockPreference = explicit;
+            this.statsClockPreferenceLoaded = true;
+            const app = this.app;
+            if (app && typeof app.saveLocalStorage === "function") {
+              app.saveLocalStorage(STATS_CLOCK_STORAGE_KEY, explicit);
+            }
+          } catch (error) {
+            // Preference persistence is best-effort.
+          }
+          try {
+            if (this.statsBlockViews instanceof Set) {
+              for (const view of this.statsBlockViews) {
+                if (view && view.sourcePath === dashPath) {
+                  view.statsClockPreferenceApplied = true;
+                }
+              }
+            }
+          } catch (error) {
+            // Preference-applied marking is best-effort.
+          }
+        }
+      } catch (error) {
+        // Explicit clock handling never breaks the hand-off.
       }
       let inside = false;
       try {
@@ -81034,6 +81169,8 @@ module.exports.helpers = {
   dayStripValueRuns,
   dayStripMarkState,
   dayStripRef,
+  dayStripOffClockHint,
+  dayStripRenderHint,
   paintDayStrip,
   dayStripDayForPath,
   dayStripLocalToday,

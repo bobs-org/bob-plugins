@@ -679,6 +679,8 @@ module.exports.helpers = {
   dayStripValueRuns,
   dayStripMarkState,
   dayStripRef,
+  dayStripOffClockHint,
+  dayStripRenderHint,
   paintDayStrip,
   dayStripDayForPath,
   dayStripLocalToday,

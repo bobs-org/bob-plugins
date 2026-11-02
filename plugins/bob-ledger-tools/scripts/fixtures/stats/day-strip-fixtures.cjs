@@ -280,11 +280,34 @@ function makeReport(options = {}) {
         partsDisplay = { ...partsDisplay, theme: { ...(partsDisplay.theme || {}), BOB: minutesDisplay(bob) } };
       }
     }
-    return dailyPoint(date, value, options.redefinedWorked ? String(value) : value === 0 ? "0m" : `${Math.floor(value / 60)}h ${String(value % 60).padStart(2, "0")}m`, {
+    const display = options.redefinedWorked ? String(value) : value === 0 ? "0m" : `${Math.floor(value / 60)}h ${String(value % 60).padStart(2, "0")}m`;
+    const point = dailyPoint(date, value, display, {
       provisional: date === day && options.provisional !== false && day === today,
       parts,
       parts_display: partsDisplay,
     });
+    if (date === day && !options.redefinedWorked && typeof options.offClockMinutes === "number") {
+      const off = options.offClockMinutes;
+      if (Number.isFinite(off) && off > 0) {
+        point.off_clock = Math.round(off);
+        if (!options.rawOffClock) {
+          point.clock_breakdown = {
+            worked: { value, display },
+            off_clock: { value: Math.round(off), display: minutesDisplay(Math.round(off)) },
+          };
+        }
+      } else if (off === 0) {
+        point.off_clock = 0;
+      }
+    }
+    if (date === day && typeof options.offClockQuality === "string") {
+      point.quality = options.offClockQuality;
+      if (options.offClockQuality === "not_tracked" || options.offClockQuality === "missing") {
+        point.value = null;
+        point.display = "–";
+      }
+    }
+    return point;
   });
 
   const reviewedPoints = dates.map((date, index) => {
@@ -428,6 +451,11 @@ const fixtures = {
   explicitDay8: fixture("explicit -g day eight-day report", { count: 8 }),
   shortHistory: fixture("short typical history", { shortHistory: true, provisional: false }),
   oldBob: fixture("old bob without typical", { noTypical: true, provisional: false }),
+  offClockHint: fixture("off-clock hint below WORKED", { offClockMinutes: 90, provisional: false }),
+  offClockHintToday: fixture("off-clock hint on today in progress", { offClockMinutes: 45, provisional: true }),
+  offClockRaw: fixture("off-clock hint from numeric fallback", { offClockMinutes: 95, rawOffClock: true, provisional: false }),
+  offClockZero: fixture("no hint when off-clock is zero", { offClockMinutes: 0, provisional: false }),
+  offClockRedefined: fixture("no hint for redefined worked", { redefinedWorked: true, offClockMinutes: 30, provisional: false }),
 };
 
 module.exports = { ...fixtures, createReport: makeReport };

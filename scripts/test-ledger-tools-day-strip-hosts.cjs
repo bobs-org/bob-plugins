@@ -1542,3 +1542,70 @@ test("missing ResizeObserver is harmless", () => {
     if (prior !== undefined) globalThis.ResizeObserver = prior;
   }
 });
+
+test("openStatsForDay explicit clock selects the lens, pins the day, and persists the preference", async () => {
+  await withMissingConfig(async () => {
+    const app = makeApp();
+    app.workspace.openLinkText = async () => {};
+    app.metadataCache.getFirstLinkpathDest = () => ({ path: "dash_stats.md" });
+    const plugin = await makePlugin(app);
+    try {
+      const today = plugin.dayStripLocalNow();
+      const day = shiftDay(today, -2);
+      const ok = await plugin.openStatsForDay({
+        day,
+        metric: "worked",
+        panel: "homes",
+        clock: "off-clock",
+        sourcePath: "2026/20261024.md",
+      });
+      assert.equal(ok, true);
+      const state = plugin.statsViewStateFor("dash_stats.md");
+      assert.equal(state.pinnedDay, day);
+      assert.equal(state.pinnedBucket, null);
+      assert.equal(state.focus, "worked");
+      assert.equal(state.clock, "off-clock");
+      assert.equal(state.homesView, "roots");
+      assert.equal(app.__store.get("bob-ledger-tools-stats-clock"), "off-clock");
+
+      const keep = await plugin.openStatsForDay({
+        day,
+        metric: "done",
+        sourcePath: "2026/20261024.md",
+      });
+      assert.equal(keep, true);
+      const kept = plugin.statsViewStateFor("dash_stats.md");
+      assert.equal(kept.clock, "off-clock", "calls without a clock retain the saved preference");
+      assert.equal(kept.pinnedDay, day);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("openStatsForDay explicit worked survives a remembered off-clock preference", async () => {
+  await withMissingConfig(async () => {
+    const app = makeApp();
+    app.workspace.openLinkText = async () => {};
+    app.metadataCache.getFirstLinkpathDest = () => ({ path: "dash_stats.md" });
+    const plugin = await makePlugin(app);
+    try {
+      const today = plugin.dayStripLocalNow();
+      const day = shiftDay(today, -2);
+      plugin.statsClockPreference = "off-clock";
+      plugin.statsClockPreferenceLoaded = true;
+      const ok = await plugin.openStatsForDay({
+        day,
+        metric: "worked",
+        clock: "worked",
+        sourcePath: "2026/20261024.md",
+      });
+      assert.equal(ok, true);
+      const state = plugin.statsViewStateFor("dash_stats.md");
+      assert.equal(state.clock, "worked", "ordinary WORKED facts explicitly open Worked");
+      assert.equal(state.pinnedDay, day);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});

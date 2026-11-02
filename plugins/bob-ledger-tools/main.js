@@ -17214,6 +17214,457 @@ function buildBlocksChipElement(doc, model, options) {
     return null;
   }
 }
+// ---- src/142c-block-marks-model.js ----
+// --- Blocked-reason marks: pure model ------------------------------------
+// Owned by bob-cli `docs/blocked-marks.md`. These helpers only classify a
+// canonical Blocked #task line; they do not render or write anything. Keep
+// every helper synchronous and defensive, and reuse the existing date,
+// recurrence, priority, dependency, and Tasks-status parsers.
+
+const BLOCK_MARK_DEFAULT_DIGITS = Object.freeze({
+  high: 1,
+  medium: 2,
+  low: 3,
+  lowest: 4,
+});
+
+const BLOCK_MARK_DEPENDENCY_HINT = "Ctrl+Shift+B to edit prerequisites";
+const BLOCK_MARK_RESCHEDULE_HINT = "Ctrl+Shift+P to reschedule";
+const BLOCK_MARK_PRIORITY_HINT =
+  "Ctrl+Shift+P to reschedule or change priority";
+
+// Replace inline code spans with spaces while preserving UTF-16 offsets. The
+// matching delimiter must have the same number of backticks, as in Markdown.
+// An unmatched delimiter is literal text. Never throws.
+function blockMarkMaskInlineCode(lineText) {
+  try {
+    const text = String(lineText || "");
+    const chars = text.split("");
+    const escapedAt = (index) => {
+      let slashes = 0;
+      for (let at = index - 1; at >= 0 && text[at] === "\\"; at -= 1) {
+        slashes += 1;
+      }
+      return slashes % 2 === 1;
+    };
+    let index = 0;
+    while (index < text.length) {
+      if (text[index] !== "`" || escapedAt(index)) {
+        index += 1;
+        continue;
+      }
+      let delimiterEnd = index + 1;
+      while (text[delimiterEnd] === "`") delimiterEnd += 1;
+      const delimiterLength = delimiterEnd - index;
+      let closeStart = -1;
+      let searchAt = delimiterEnd;
+      while (searchAt < text.length) {
+        const next = text.indexOf("`", searchAt);
+        if (next === -1) break;
+        let nextEnd = next + 1;
+        while (text[nextEnd] === "`") nextEnd += 1;
+        if (
+          nextEnd - next === delimiterLength &&
+          (next === 0 || text[next - 1] !== "`") &&
+          (nextEnd === text.length || text[nextEnd] !== "`")
+        ) {
+          closeStart = next;
+          break;
+        }
+        searchAt = nextEnd;
+      }
+      if (closeStart === -1) {
+        index = delimiterEnd;
+        continue;
+      }
+      let closeEnd = closeStart + delimiterLength;
+      for (let at = index; at < closeEnd; at += 1) chars[at] = " ";
+      index = closeEnd;
+    }
+    return chars.join("");
+  } catch (error) {
+    return String(lineText || "");
+  }
+}
+
+// True only for a `[?]` task carrying the exact #task token. The status
+// parser handles quoted task prefixes; masking excludes inline code from the
+// tag check. Live Preview callers also use the shared syntax-tree code guard
+// for surrounding fenced blocks.
+function blockMarkEligible(lineText) {
+  try {
+    if (typeof lineText !== "string" || freshnessTaskStatus(lineText) !== "?") {
+      return false;
+    }
+    const visible = blockMarkMaskInlineCode(lineText);
+    return /(?:^|\s)#task(?![A-Za-z0-9_/-])/.test(visible);
+  } catch (error) {
+    return false;
+  }
+}
+
+// Comma-separated IDs from canonical square or parenthesized Depends-On
+// fields. IDs inside inline code are ignored and repeated IDs collapse in
+// first-seen order. Never throws.
+function blockMarkDependsOnIds(lineText) {
+  try {
+    const visible = blockMarkMaskInlineCode(lineText);
+    const ids = [];
+    const seen = new Set();
+    const fields = /\[[ \t]*dependsOn[ \t]*::[ \t]*([^\]\r\n]*)\]|\([ \t]*dependsOn[ \t]*::[ \t]*([^\)\r\n]*)\)/g;
+    let match = fields.exec(visible);
+    while (match !== null) {
+      const value = match[1] !== undefined ? match[1] : match[2];
+      for (const id of blocksTaskIds(value)) {
+        if (!seen.has(id)) {
+          seen.add(id);
+          ids.push(id);
+        }
+      }
+      match = fields.exec(visible);
+    }
+    return Object.freeze(ids);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+// The teaching digit for a canonical stored priority. A configured P1–P4
+// label wins; any other label or an unknown ladder uses the standard map.
+// Never throws.
+function blockMarkDigit(value, ladder) {
+  try {
+    const fallback = BLOCK_MARK_DEFAULT_DIGITS[value];
+    if (fallback === undefined) return null;
+    if (Array.isArray(ladder)) {
+      for (const level of ladder) {
+        if (!level || level.value !== value) continue;
+        const match = /^P([1-4])$/.exec(String(level.label || ""));
+        if (match) return Number(match[1]);
+        break;
+      }
+    }
+    return fallback;
+  } catch (error) {
+    return null;
+  }
+}
+
+function blockMarkReason(kind, key, text) {
+  return Object.freeze({
+    kind,
+    key,
+    text: String(text || ""),
+  });
+}
+
+// Resolve the precedence decision selected by this epic: own open
+// prerequisite, project, then future date. Unknown prerequisites remain
+// neutral because they could outrank either later reason. Never throws.
+function blockMarkClassify(inputs) {
+  try {
+    const value = inputs && typeof inputs === "object" ? inputs : {};
+    const dependencyState = value.dependencyState;
+    if (dependencyState === "unknown") return null;
+
+    const dependencies = Array.isArray(value.dependencies)
+      ? value.dependencies
+          .map((entry) => String(entry && entry.text || "").trim())
+          .filter(Boolean)
+      : [];
+    const project = value.project && typeof value.project === "object"
+      ? value.project
+      : null;
+    const date = value.date && typeof value.date === "object" ? value.date : null;
+    const projectBlocked = Boolean(project && project.blocked);
+    const dateKey = date && ["p1", "p2", "p3", "p4", "repeat", "date"].includes(date.key)
+      ? date.key
+      : null;
+
+    const reasons = [];
+    if (dependencyState === "open" && dependencies.length > 0) {
+      for (const text of dependencies) {
+        reasons.push(blockMarkReason("dep", "dep", text));
+      }
+    }
+    if (projectBlocked) {
+      reasons.push(blockMarkReason("prj", "prj", project.text || "project"));
+    }
+    if (dateKey) {
+      reasons.push(blockMarkReason("date", dateKey, date.date));
+    }
+
+    let key = "stale";
+    let family = "stale";
+    let digit = null;
+    if (dependencyState === "open" && dependencies.length > 0) {
+      key = "dep";
+      family = "held";
+    } else if (projectBlocked) {
+      key = "prj";
+      family = "held";
+    } else if (dateKey) {
+      key = dateKey;
+      family = "waiting";
+      digit = Number.isInteger(date.digit) ? date.digit : null;
+    }
+
+    let more = null;
+    if (key === "dep") {
+      const losingProject = projectBlocked;
+      const losingDate = Boolean(dateKey);
+      more = losingProject ? "prj" : losingDate ? dateKey : null;
+    } else if (key === "prj" && dateKey) {
+      more = dateKey;
+    }
+
+    return Object.freeze({
+      key,
+      family,
+      digit,
+      more,
+      reasons: Object.freeze(reasons),
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+function blockMarkDateWords(dateText, todayText) {
+  try {
+    const date = String(dateText || "");
+    const today = String(todayText || "");
+    const model = dateMarkModel("scheduled", date, today);
+    if (!model) return null;
+    return Object.freeze({
+      date,
+      short: freshnessShortDate(date, today) || date,
+      relative: dateMarkRelativePhrase(model.delta),
+      delta: model.delta,
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+// Build tooltip copy from the classifier result and the line-local facts.
+// The copy deliberately avoids inline-field syntax (`::`). Never throws.
+function blockMarkTooltip(model, facts) {
+  try {
+    if (!model || typeof model !== "object") return "";
+    const value = facts && typeof facts === "object" ? facts : {};
+    const reasons = Array.isArray(model.reasons) ? model.reasons : [];
+    const dependencies = reasons.filter((reason) => reason && reason.kind === "dep");
+    const project = reasons.find((reason) => reason && reason.kind === "prj") || null;
+    const date = reasons.find((reason) => reason && reason.kind === "date") || null;
+    const dateWords = date
+      ? blockMarkDateWords(date.text, value.today)
+      : null;
+    const datePhrase = dateWords
+      ? dateWords.short + " · " + dateWords.relative
+      : date
+        ? String(date.text || "")
+        : "";
+    const lines = [];
+
+    if (model.key === "dep") {
+      const first = dependencies[0] && dependencies[0].text || "another task";
+      lines.push(
+        "Blocked · after " +
+          first +
+          (dependencies.length > 1 ? " +" + (dependencies.length - 1) : ""),
+      );
+      lines.push(BLOCK_MARK_DEPENDENCY_HINT);
+    } else if (model.key === "prj") {
+      const stem = project && project.text || value.projectStem || "project";
+      lines.push("Blocked · via project " + stem);
+      const projectReason = String(value.projectReason || "").trim();
+      if (projectReason) lines.push(projectReason);
+    } else if (["p1", "p2", "p3", "p4"].includes(model.key)) {
+      lines.push(
+        "Blocked · P" +
+          String(model.digit) +
+          " deferral · until " +
+          datePhrase,
+      );
+      lines.push(BLOCK_MARK_PRIORITY_HINT);
+    } else if (model.key === "date") {
+      lines.push("Blocked · until " + datePhrase);
+      lines.push(BLOCK_MARK_RESCHEDULE_HINT);
+    } else if (model.key === "repeat") {
+      lines.push("Recurring · next run " + datePhrase);
+    } else {
+      lines.push("Blocked, but no reason is left");
+      lines.push("Clears on the next reconcile");
+    }
+
+    if (model.key !== "prj" && project) {
+      lines.push("Also via project " + (project.text || value.projectStem || "project"));
+    }
+    if (date && model.key !== date.key) {
+      lines.push("Also scheduled " + datePhrase);
+    }
+    return lines.join("\n");
+  } catch (error) {
+    return "";
+  }
+}
+
+function blockMarkDependencyFacts(ids, lookupId) {
+  try {
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return Object.freeze({ state: "closed", dependencies: Object.freeze([]) });
+    }
+    if (typeof lookupId !== "function") {
+      return Object.freeze({ state: "unknown", dependencies: Object.freeze([]) });
+    }
+    let unresolved = false;
+    const dependencies = [];
+    for (const id of ids) {
+      let matches = null;
+      try {
+        matches = lookupId(id);
+      } catch (error) {
+        matches = null;
+      }
+      if (matches === null || matches === undefined) {
+        return Object.freeze({ state: "unknown", dependencies: Object.freeze([]) });
+      }
+      const tasks = Array.isArray(matches) ? matches : [];
+      if (tasks.length === 0) {
+        unresolved = true;
+        continue;
+      }
+      let open = null;
+      for (const task of tasks) {
+        if (blocksTaskIsOpen(task)) {
+          open = task;
+          break;
+        }
+      }
+      if (open) {
+        const clean = dependencyCleanTaskText(planTaskDescription(open) || "");
+        dependencies.push(clean || "another task");
+      }
+    }
+    if (dependencies.length > 0) {
+      return Object.freeze({
+        state: "open",
+        dependencies: Object.freeze(dependencies),
+      });
+    }
+    return Object.freeze({
+      state: unresolved ? "unknown" : "closed",
+      dependencies: Object.freeze([]),
+    });
+  } catch (error) {
+    return Object.freeze({ state: "unknown", dependencies: Object.freeze([]) });
+  }
+}
+
+function blockMarkDateFacts(lineText, today, ladder) {
+  try {
+    const visible = blockMarkMaskInlineCode(lineText);
+    const scheduled = dateMarkCanonicalFields(visible).find(
+      (field) => field.field === "scheduled",
+    );
+    if (!scheduled) return Object.freeze({ date: null, invalidToday: false });
+    const dateModel = dateMarkModel("scheduled", scheduled.date, today);
+    if (!dateModel) return Object.freeze({ date: null, invalidToday: true });
+    if (dateModel.delta <= 0) {
+      return Object.freeze({ date: null, invalidToday: false });
+    }
+
+    let key = "date";
+    let digit = null;
+    const recurrence = recurrenceMarkCanonicalField(visible);
+    const recurrenceParts = recurrence
+      ? recurrenceRuleParts(recurrence.rule)
+      : null;
+    if (recurrence && recurrenceParts) {
+      key = "repeat";
+    } else {
+      const priority = priorityMarkCanonicalField(visible);
+      const priorityDigit = priority
+        ? blockMarkDigit(priority.value, ladder)
+        : null;
+      if (priorityDigit !== null) {
+        digit = priorityDigit;
+        key = "p" + String(priorityDigit);
+      }
+    }
+    return Object.freeze({
+      date: Object.freeze({
+        key,
+        digit,
+        date: scheduled.date,
+      }),
+      invalidToday: false,
+    });
+  } catch (error) {
+    return Object.freeze({ date: null, invalidToday: false });
+  }
+}
+
+// Pure classifier for one line. `lookupId` returns task[] when the Tasks
+// cache is ready, [] for a missing ID, and null while the cache is cold.
+// `projectReason` is intentionally one-hop and optional. Never throws.
+function blockMarkModel(lineText, ctx) {
+  try {
+    if (!blockMarkEligible(lineText)) return null;
+    const context = ctx && typeof ctx === "object" ? ctx : {};
+    const visible = blockMarkMaskInlineCode(lineText);
+    const ids = blockMarkDependsOnIds(visible);
+    const dependency = blockMarkDependencyFacts(ids, context.lookupId);
+    const projectBlocked = /(?:^|\s)#prj_is_blocked(?![A-Za-z0-9_/-])/.test(visible);
+    const notePath = String(context.notePath || "");
+    const projectStem = notePath.split("/").pop().replace(/\.md$/i, "") || "project";
+    const projectReason = projectBlocked && typeof context.projectReason === "function"
+      ? context.projectReason(notePath)
+      : null;
+    const dateFacts = blockMarkDateFacts(lineText, context.today, context.ladder);
+    if (dateFacts.invalidToday) return null;
+    const result = blockMarkClassify({
+      dependencyState: dependency.state,
+      dependencies: dependency.dependencies.map((text) => ({ text })),
+      project: projectBlocked
+        ? { blocked: true, text: projectStem }
+        : null,
+      date: dateFacts.date,
+    });
+    if (!result) return null;
+
+    let tooltip = "";
+    try {
+      tooltip = blockMarkTooltip(result, {
+        today: context.today,
+        projectStem,
+        projectReason,
+      });
+    } catch (error) {
+      tooltip = "";
+    }
+    const modelKey = JSON.stringify([
+      result.key,
+      result.family,
+      result.digit,
+      result.more,
+      result.reasons.map((reason) => [reason.kind, reason.key, reason.text]),
+      tooltip,
+    ]);
+    return Object.freeze({
+      key: result.key,
+      family: result.family,
+      digit: result.digit,
+      more: result.more,
+      reasons: result.reasons,
+      tooltip,
+      modelKey,
+    });
+  } catch (error) {
+    return null;
+  }
+}
 // ---- src/142-pomodoro-home-chips.js ----
 // --- Pomodoro home chips: pure mirror of bob-cli pomodoro homes -----------
 // The shared Rust contract and vectors live in bob-cli. This mirror only
@@ -23709,6 +24160,7 @@ class BobLedgerToolsPlugin extends Plugin {
     // tiered review queue plus status bar.
     this.freshnessMemo = null;
     this.freshnessFrontGen = 0;
+    this.blockMarksEnabled = true;
     // Freshness config snapshot cache (`{ path, statKey, checkedAt,
     // config, invalid }`): the file is stat-checked at most once per
     // 60-second tick and reparsed only on change.
@@ -24079,6 +24531,9 @@ class BobLedgerToolsPlugin extends Plugin {
       // never throws: guard calls with try/catch as well as
       // optional chaining.
       priorityMarks: this.priorityMarksApi(),
+      // Blocked-reason classifier (bob-cli `docs/blocked-marks.md`), api v1.
+      // This phase exposes only the pure model; rendering lands separately.
+      blockMarks: this.blockMarksApi(),
       // Task date marks (bob-cli-53 date-marks, dateMarks namespace
       // v1): display-only calendar-label glyphs for the canonical
       // `created` / `scheduled` / `completion` / `cancelled` dates,
@@ -52616,6 +53071,157 @@ function blocksOwnerTaskLineAtDoc(doc, lineNumber) {
     return null;
   }
 }
+// ---- src/272c-plugin-block-marks.js ----
+class BobLedgerToolsBlockMarksMixin {
+  // The index is memo-local so it follows the freshness memo's Tasks cache
+  // invalidation. A cold or empty Tasks cache is represented by null.
+  blockMarksIdIndex() {
+    try {
+      const memo = this.freshnessEnsureMemo();
+      if (!memo || typeof memo !== "object") return null;
+      if (Object.prototype.hasOwnProperty.call(memo, "blockMarksIdIndex")) {
+        return memo.blockMarksIdIndex instanceof Map
+          ? memo.blockMarksIdIndex
+          : null;
+      }
+
+      const tasks = planBlockTasks(this.app);
+      if (!Array.isArray(tasks) || tasks.length === 0) {
+        try {
+          memo.blockMarksIdIndex = null;
+        } catch (error) {
+          // A frozen memo can still report that this cache is unavailable.
+        }
+        return null;
+      }
+
+      const index = new Map();
+      for (const task of tasks) {
+        try {
+          for (const id of blocksTaskIds(task && task.id)) {
+            let rows = index.get(id);
+            if (!rows) {
+              rows = [];
+              index.set(id, rows);
+            }
+            if (!rows.includes(task)) rows.push(task);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      try {
+        for (const [id, rows] of index) index.set(id, Object.freeze(rows));
+        memo.blockMarksIdIndex = index;
+      } catch (error) {
+        // The returned index remains useful even if the memo is frozen.
+      }
+      return index;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // One-hop context for a `#prj_is_blocked` row: the project's own open
+  // prerequisite or future date, then an inherited parent-project reason.
+  blockMarkProjectReason(notePath) {
+    try {
+      const path = String(notePath || "");
+      if (!path) return null;
+      const memo = this.freshnessEnsureMemo();
+      const index = this.blockMarksIdIndex();
+      if (!index) return null;
+      const tasks = Array.isArray(memo && memo.tasks) ? memo.tasks : [];
+      const projectTask = tasks.find((task) =>
+        planTaskPath(task) === path && planTaskBlockId(task) === "prj",
+      );
+      if (!projectTask) return null;
+
+      const line = planTaskDescription(projectTask) || "";
+      const ids = blockMarkDependsOnIds(line);
+      const dependency = blockMarkDependencyFacts(ids, (id) => index.get(id) || []);
+      if (dependency.state === "unknown") return null;
+      if (dependency.state === "open" && dependency.dependencies.length > 0) {
+        return "after " + dependency.dependencies[0];
+      }
+
+      const today = this.dateMarksToday();
+      const ladderSnapshot = this.priorityLadderSnapshot();
+      const ladder = ladderSnapshot && ladderSnapshot.ladder;
+      const dateFacts = blockMarkDateFacts(line, today, ladder);
+      if (dateFacts.invalidToday) return null;
+      if (dateFacts.date) {
+        const words = blockMarkDateWords(dateFacts.date.date, today);
+        if (words) return "until " + words.short + " · " + words.relative;
+      }
+
+      const visible = blockMarkMaskInlineCode(line);
+      if (/(?:^|\s)#prj_is_blocked(?![A-Za-z0-9_/-])/.test(visible)) {
+        return "via a parent project";
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // The shared model used by source-note surfaces and api.blockMarks v1.
+  // This phase adds no decorations; the next phase owns visible rendering.
+  blockMarkModelForLine(path, lineText) {
+    try {
+      if (this.blockMarksEnabled === false) return null;
+      const index = this.blockMarksIdIndex();
+      let ladder = null;
+      try {
+        const snapshot = this.priorityLadderSnapshot();
+        ladder = snapshot && snapshot.ladder;
+      } catch (error) {
+        ladder = null;
+      }
+      let today = null;
+      try {
+        today = this.dateMarksToday();
+      } catch (error) {
+        today = null;
+      }
+      return blockMarkModel(String(lineText || ""), {
+        today,
+        ladder,
+        notePath: String(path || ""),
+        lookupId: index
+          ? (id) => index.get(String(id || "")) || []
+          : () => null,
+        projectReason: (notePath) => this.blockMarkProjectReason(notePath),
+      });
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Additive api.blockMarks v1 model. The namespace and every call are
+  // synchronous, frozen where public, and never throw.
+  blockMarksApi() {
+    try {
+      const plugin = this;
+      return Object.freeze({
+        version: 1,
+        model: (lineText, options) => {
+          try {
+            const settings = options && typeof options === "object" ? options : {};
+            return plugin.blockMarkModelForLine(
+              String(settings.path || ""),
+              String(lineText || ""),
+            );
+          } catch (error) {
+            return null;
+          }
+        },
+      });
+    } catch (error) {
+      return Object.freeze({ version: 1, model: () => null });
+    }
+  }
+}
 // ---- src/271-plugin-unblocked-glyph.js ----
 // --- Unblocked hand-off glyph: Live Preview, Reading view, api ---------
 // `BobLedgerToolsUnblockedGlyphMixin`, installed in
@@ -75275,6 +75881,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsRelationIndexMixin,
   BobLedgerToolsRelationModelMixin,
   BobLedgerToolsBlocksModelMixin,
+  BobLedgerToolsBlockMarksMixin,
   BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,
@@ -77607,6 +78214,15 @@ module.exports.helpers = {
   priorityMarkSourceInText,
   coercePriorityLadder,
   priorityMarkModel,
+  blockMarkMaskInlineCode,
+  blockMarkEligible,
+  blockMarkDependsOnIds,
+  blockMarkDigit,
+  blockMarkClassify,
+  blockMarkTooltip,
+  blockMarkModel,
+  blockMarkDateWords,
+  blockMarkDependencyFacts,
   buildPriorityMarkElement,
   ensurePriorityMarksRefresh,
   DATE_MARK_FIELDS,

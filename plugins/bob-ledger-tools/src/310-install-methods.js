@@ -66,6 +66,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsRelationIndexMixin,
   BobLedgerToolsRelationModelMixin,
   BobLedgerToolsBlocksModelMixin,
+  BobLedgerToolsBlockMarksMixin,
   BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,

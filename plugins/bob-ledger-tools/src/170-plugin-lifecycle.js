@@ -16,6 +16,7 @@ class BobLedgerToolsPlugin extends Plugin {
     // tiered review queue plus status bar.
     this.freshnessMemo = null;
     this.freshnessFrontGen = 0;
+    this.blockMarksEnabled = true;
     // Freshness config snapshot cache (`{ path, statKey, checkedAt,
     // config, invalid }`): the file is stat-checked at most once per
     // 60-second tick and reparsed only on change.
@@ -386,6 +387,9 @@ class BobLedgerToolsPlugin extends Plugin {
       // never throws: guard calls with try/catch as well as
       // optional chaining.
       priorityMarks: this.priorityMarksApi(),
+      // Blocked-reason classifier (bob-cli `docs/blocked-marks.md`), api v1.
+      // This phase exposes only the pure model; rendering lands separately.
+      blockMarks: this.blockMarksApi(),
       // Task date marks (bob-cli-53 date-marks, dateMarks namespace
       // v1): display-only calendar-label glyphs for the canonical
       // `created` / `scheduled` / `completion` / `cancelled` dates,

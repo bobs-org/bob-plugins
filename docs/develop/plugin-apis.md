@@ -65,6 +65,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | `dashboardCollections` | 1 | Snapshot or render PROJECTS and REFERENCES badges. |
 | `laneWalk` | 2 | Serve the Pending/Next/Ready-off-Today walk list behind `]w` / `[w` and `]W` / `[W`. |
 | `priorityMarks` | 1 | Model and render priority marks. |
+| `blockMarks` | 1 | Classify a canonical Blocked task line and explain its display mark. |
 | `dateMarks` | 1 | Model and render canonical date marks. |
 | `progressMarks` | 1 | Refresh the display-only In Progress Task Link mark. |
 | `unblockedGlyph` | 1 | Refresh the display-only unblocked hand-off glyph. |
@@ -289,6 +290,10 @@ note, never from a dashboard path, and never put `::` in `aria-label` or
 
 `priorityMarks` exposes `model(value)` and
 `render(host, value, { decorative?, inheritColor? })`.
+`blockMarks.model(lineText, { path })` returns the frozen mark model for an eligible
+Blocked `#task` line, or `null` when the line is ineligible or its prerequisite state
+cannot be proven from the Tasks cache. It is synchronous, display-only, and never
+throws; the namespace currently exposes only `model`.
 `dateMarks` exposes `model(field, dateText)` and
 `render(host, field, dateText, { decorative?, inheritColor? })`;
 its fields are `created`, `scheduled`,

@@ -90,6 +90,10 @@
       instance.statsPaintGens = new Map();
       instance.statsCache = new Map();
       instance.apiStatsFetch = async () => { fetchCount += 1; return { report: null }; };
+      for (const [clock, report] of Object.entries(fixtureReports.clocks || {})) {
+        const request = StatsPlugin.helpers.statsRequestFor({ clock });
+        instance.statsCacheSet(request.key, report, 0);
+      }
       return instance;
     }
 
@@ -136,6 +140,10 @@
       document.querySelector("#preview-root").appendChild(card);
       const view = { el: container, sourcePath: `preview/${name}.md`, fence: {} };
       const state = plugin.statsViewStateFor(view.sourcePath);
+      const clockCapability = StatsPlugin.helpers.statsClockCapability(report);
+      view.statsClockSupported = Boolean(clockCapability);
+      view.statsClockPreferenceApplied = Boolean(clockCapability);
+      if (clockCapability) state.clock = report.clock.value;
       state.focus = focus;
       state.table = settings.table === true;
       state.definitionOpen = settings.definitionOpen === true;
@@ -169,6 +177,9 @@
       const oldBob = stripRootParents(canonical);
       const cases = [
         ["worked", canonical, "worked", { title: "Where the time went · Root parents default, chart, definition, tooltip, and table", table: true, definitionOpen: true }],
+        ["clock-worked", fixtureReports.clockWorked, "worked", { title: "Worked clock · report-driven control" }],
+        ["clock-off-clock", fixtureReports.clockOffClock, "worked", { title: "Off-clock lens · report-driven control" }],
+        ["clock-total", fixtureReports.clockTotal, "worked", { title: "Total lens · report-driven control" }],
         ["tasks", canonical, "done", { title: "Task breakdown · by root parent" }],
         ["homes-long-stem", fixtureReports.homes, "worked", { title: "Synthetic homes · long stems, hue slots, apportionment, and sessions" }],
         ["roots-open", fixtureReports.homes, "worked", { title: "Synthetic roots · sub-project disclosure open", subsOpen: "sase.md" }],

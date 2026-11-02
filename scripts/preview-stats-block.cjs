@@ -180,6 +180,7 @@ async function main() {
   fs.mkdirSync(args.out, { recursive: true });
   const manifest = readJson(path.join(pluginRoot, "manifest.json"));
   const fixtureMetadata = readJson(path.join(fixturesDir, "canonical.meta.json"));
+  const clockReports = readJson(path.join(fixturesDir, "synthetic-clocks.json"));
   const fixtures = {
     canonical: readJson(path.join(fixturesDir, "canonical.json")),
     month: readJson(path.join(fixturesDir, "synthetic-presentation.json")),
@@ -189,6 +190,10 @@ async function main() {
     lanes: readJson(path.join(fixturesDir, "synthetic-lanes.json")),
     empty: readJson(path.join(fixturesDir, "synthetic-empty.json")),
     allNull: readJson(path.join(fixturesDir, "synthetic-all-null.json")),
+    clocks: clockReports,
+    clockWorked: clockReports.worked,
+    clockOffClock: clockReports["off-clock"],
+    clockTotal: clockReports.total,
   };
   const pluginSource = fs.readFileSync(path.join(pluginRoot, "main.js"), "utf8");
   const css = fs.readFileSync(path.join(pluginRoot, "styles.css"), "utf8");
@@ -309,6 +314,44 @@ async function main() {
     await key(client, "t");
     check("t keyboard shortcut toggles the table locally", Boolean(await client.evaluate("window.statsPreview.shell.querySelector('.bob-stats-table')")) && await client.evaluate("window.statsPreview.fetchCount") === 0);
 
+    await client.evaluate("window.statsPreview.renderSingle('clockWorked', 'worked', 1000, 'light')");
+    const clockInitial = await client.evaluate(`(() => {
+      const radios = Array.from(document.querySelectorAll('.bob-stats-clock-control input[type="radio"]'));
+      return { count: radios.length, checked: radios.filter((radio) => radio.checked).map((radio) => radio.value), first: radios[0] && radios[0].getAttribute('data-stats-focus-key') };
+    })()`);
+    check("report-driven clock group starts with one checked native radio", clockInitial.count === 3 && clockInitial.checked[0] === "worked", JSON.stringify(clockInitial));
+    await client.evaluate(`document.querySelector('[data-stats-focus-key="clock-worked"]').focus()`);
+    const cursorBeforeClockKeys = await client.evaluate("window.statsPreview.stateFor(window.statsPreview.views[0]).cursorDay || null");
+    await key(client, "ArrowRight");
+    await sleep(30);
+    const afterClockArrow = await client.evaluate(`(() => ({
+      clock: window.statsPreview.stateFor(window.statsPreview.views[0]).clock,
+      reportClock: window.statsPreview.views[0].report.clock.value,
+      focus: document.activeElement && document.activeElement.getAttribute('data-stats-focus-key'),
+      cursor: window.statsPreview.stateFor(window.statsPreview.views[0]).cursorDay || null,
+      fetchCount: window.statsPreview.fetchCount
+    }))()`);
+    check("radio arrow selects Off-clock, preserves focus, and does not move chart days", afterClockArrow.clock === "off-clock" && afterClockArrow.reportClock === "off-clock" && afterClockArrow.focus === "clock-off-clock" && afterClockArrow.cursor === cursorBeforeClockKeys && afterClockArrow.fetchCount === 0, JSON.stringify(afterClockArrow));
+    await client.evaluate("document.querySelector('[data-stats-focus-key=\\\"clock-total\\\"]').focus()");
+    await key(client, " ", "Space");
+    await sleep(30);
+    const afterClockSpace = await client.evaluate(`(() => ({
+      clock: window.statsPreview.stateFor(window.statsPreview.views[0]).clock,
+      reportClock: window.statsPreview.views[0].report.clock.value,
+      focus: document.activeElement && document.activeElement.getAttribute('data-stats-focus-key'),
+      fetchCount: window.statsPreview.fetchCount
+    }))()`);
+    check("Space selects Total and preserves radio focus without spawning", afterClockSpace.clock === "total" && afterClockSpace.reportClock === "total" && afterClockSpace.focus === "clock-total" && afterClockSpace.fetchCount === 0, JSON.stringify(afterClockSpace));
+    await key(client, "ArrowRight");
+    await sleep(30);
+    check("native radio arrows wrap from Total to Worked", await client.evaluate("window.statsPreview.stateFor(window.statsPreview.views[0]).clock") === "worked");
+    await client.evaluate("window.statsPreview.shell.querySelector('.bob-stats').focus()");
+    await key(client, "c");
+    check("c cycles the report-supported clock from the dash surface", await client.evaluate("window.statsPreview.stateFor(window.statsPreview.views[0]).clock") === "off-clock");
+    await client.evaluate("document.querySelector('[data-stats-focus-key=\\\"clock-off-clock\\\"]').focus()");
+    await key(client, "c");
+    check("c is ignored while a native radio owns focus", await client.evaluate("window.statsPreview.stateFor(window.statsPreview.views[0]).clock") === "off-clock");
+
     const definitionRect = await client.evaluate(`(() => { const n=document.querySelector('.bob-stats-definition-toggle'); const r=n.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}; })()`);
     await clickAt(client, definitionRect);
     check("definition disclosure opens", Boolean(await client.evaluate("window.statsPreview.shell.querySelector('.bob-stats-definition-panel')")));
@@ -413,7 +456,7 @@ async function main() {
       `- Fixture: ${fixtureMetadata.fixture_version}; schema ${fixtureMetadata.schema_version}; bob-cli@${fixtureMetadata.bob_cli_version} (${fixtureMetadata.bob_cli_revision}); SHA-256 ${fixtureHash}.`,
       `- Canonical source: ${fixtureMetadata.source}; BOB_NOW=${fixtureMetadata.bob_now}; requested range ${fixtureMetadata.requested_range}.`,
       `- Browser: ${browserVersion.product} (${browserVersion.revision}).`,
-      `- Synthetic fixtures: month, week, empty, and all-null presentation cases; no synthetic values represent vault metrics.`,
+      `- Synthetic fixtures: internally consistent Worked / Off-clock / Total reports plus month, week, empty, and all-null presentation cases; none represent vault data.`,
       "- Families rendered: Pomodoro themes, task breakdown, signed task flow, review answers, Keep rate, checklist calendar/chore grid.",
       "- Each screenshot contains all family views plus the table, open definition, and hover tooltip states.",
       "",

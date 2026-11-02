@@ -8,10 +8,7 @@ set `BOB_PLUGINS_CHECKOUT` to the path printed by `sase repo open bob-plugins`:
 
 ```sh
 cd /path/to/bob-cli
-cfg="$(mktemp)"
-trap 'rm -f "$cfg"' EXIT
-printf 'stats:\n  range: 4w\n' > "$cfg"
-BOB_CONFIG_FILE="$cfg" \
+BOB_CONFIG_FILE=/dev/null \
 BOB_DIR="$PWD/tests/fixtures/stats/homes_vault" \
 BOB_NOW='2026-10-18 12:00:00' \
 cargo run --locked --quiet -- stats show -a -f json -r 4w \
@@ -20,19 +17,26 @@ cargo run --locked --quiet -- stats show -a -f json -r 4w \
 
 The captured report has `schema_version: 1`. `canonical.meta.json` pins its fixture
 version, bob-cli version/revision, clock, and requested range; its source is the
-committed golden vault. The renderer is `bob-ledger-tools@1.58.0`.
+committed golden vault. The renderer is `bob-ledger-tools@1.84.0`. The canonical
+golden has no off-clock adoption evidence, so it also checks the new renderer's
+clockless compatibility path. `synthetic-clocks.json` contains consistent
+Worked, Off-clock, and Total reports; `stats-clock-fixtures.cjs` is the reusable
+constructor for later Stats rendering tests.
 
 The `synthetic-*.json` files are explicitly synthetic **presentation** fixtures. They
 cover week/month groups, signed values, populated rolling medians and prior ticks, long
-theme/chore names, grouped daily drill-down, and empty/all-null states. The
+theme/chore names, grouped daily drill-down, and empty/all-null states. Except for
+`synthetic-clocks.json`, synthetic report values and summaries are intentionally not
+internally consistent and must never be treated as tests of Stats metric semantics. The
 `synthetic-homes.json` fixture adds the long `job_2026_apply_29` stem, many area hues,
 an all-bucket split, and expandable project groups. `synthetic-lanes.json` is a
 presentation-only 4W-shaped report for the Stats window bars: about 13 roots
 including `@unlinked` and `@unfiled`, and about 22 themes with
 config, pin, exempt, unconfigured, and `(unnamed)` hues plus long hour
-displays. Synthetic values and summaries are
-intentionally not internally consistent and must never be treated as vault results or
-as tests of Stats metric semantics.
+displays. These synthetic fixtures must never be treated as vault results.
+`synthetic-clocks.json` is the internally consistent exception: its Worked,
+Off-clock, and Total reports keep every point and part split aligned, and their
+summary totals exclude the provisional day.
 
 Generate the standalone browser page and screenshot matrix from the linked bob-plugins
 checkout with:

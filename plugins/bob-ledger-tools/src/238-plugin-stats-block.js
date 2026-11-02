@@ -22,6 +22,7 @@ class BobLedgerToolsStatsBlockMixin {
   }
 
   setupStatsBlock() {
+    this.statsLoadClockPreference();
     try {
       if (this.statsChangeGen === null || this.statsChangeGen === undefined) {
         this.statsChangeGen = 0;
@@ -208,9 +209,12 @@ class BobLedgerToolsStatsBlockMixin {
           if (viewKey !== key) {
             continue;
           }
+          if (view.statsForegroundKey === key) {
+            continue;
+          }
           if (statsBlockViewIsShown(view)) {
             view.needsRevalidate = false;
-            this.paintStatsBlock(view);
+            this.paintStatsBlock(view, { prefetchClock: false });
           } else {
             view.needsRevalidate = true;
           }
@@ -249,6 +253,7 @@ class BobLedgerToolsStatsBlockMixin {
   }
 
   teardownStatsBlock() {
+    this.statsCancelClockPrefetch();
     try {
       if (typeof this.teardownDayStripHosts === "function") {
         this.teardownDayStripHosts();
@@ -357,7 +362,13 @@ class BobLedgerToolsStatsBlockMixin {
       this.statsBlockViews = new Set();
     }
     const fence = statsParseFenceOptions(source);
-    const view = { el, sourcePath, fence };
+    const view = {
+      el,
+      sourcePath,
+      fence,
+      statsClockSupported: false,
+      statsClockPreferenceApplied: false,
+    };
     this.statsBlockViews.add(view);
     if (ctx && typeof ctx.addChild === "function") {
       let child = null;
@@ -407,10 +418,11 @@ class BobLedgerToolsStatsBlockMixin {
       range,
       offset: range === "all" ? 0 : state.offset || 0,
       compare: state.compare === true,
+      clock: view && view.statsClockSupported === true ? statsNormalizeClock(state.clock) : "worked",
     };
   }
 
-  paintStatsBlock(view) {
+  paintStatsBlock(view, options = {}) {
     if (!view || !view.el) {
       return;
     }
@@ -421,39 +433,58 @@ class BobLedgerToolsStatsBlockMixin {
     const paintGen = (this.statsPaintGens.get(view.el) || 0) + 1;
     this.statsPaintGens.set(view.el, paintGen);
     this.paintStatsSkeleton(view);
+    const args = this.statsFetchArgsFor(view);
+    const request = statsRequestFor(args);
+    const allowPrefetch = options.prefetchClock !== false;
+    const settle = (result) => {
+      if (this.statsPaintGens.get(view.el) !== paintGen) {
+        return;
+      }
+      if (view.statsForegroundKey === request.key) {
+        view.statsForegroundKey = null;
+      }
+      const resolved = result || { report: null };
+      if (resolved.report) {
+        const clockAction = this.statsClockObserveReport(view, resolved.report, args.clock);
+        if (clockAction === "retry") {
+          this.paintStatsBlock(view, { prefetchClock: allowPrefetch });
+          return;
+        }
+      } else if (args.clock !== "worked" && view.statsClockSupported === true) {
+        view.statsClockSupported = false;
+        this.paintStatsBlock(view, { prefetchClock: allowPrefetch });
+        return;
+      }
+      this.renderStatsResult(view, resolved);
+      statsChartRestoreFocus(view.el, view.pendingStatsFocusKey);
+      view.pendingStatsFocusKey = null;
+      this.statsScheduleClockPrefetch(view, resolved.report, request, allowPrefetch);
+    };
+    const fail = (error) => settle({
+      report: null,
+      stale: false,
+      error: {
+        code: "failed",
+        message: String((error && error.message) || error),
+        detail: "",
+      },
+    });
+    const cached = typeof this.statsPeek === "function" ? this.statsPeek(args) : null;
+    if (cached) {
+      settle({ report: cached.report, stale: cached.dirty, error: null });
+      if (!cached.dirty) {
+        return;
+      }
+    }
+    view.statsForegroundKey = request.key;
     // A rejecting fetch still renders an error card, never an empty block.
     Promise.resolve()
       .then(() =>
         typeof this.apiStatsFetch === "function"
-          ? this.apiStatsFetch(this.statsFetchArgsFor(view))
+          ? this.apiStatsFetch(args)
           : { report: null, stale: false, error: { code: "unavailable" } },
       )
-      .then(
-        (result) => {
-          if (this.statsPaintGens.get(view.el) !== paintGen) {
-            return;
-          }
-          this.renderStatsResult(view, result || { report: null });
-          statsChartRestoreFocus(view.el, view.pendingStatsFocusKey);
-          view.pendingStatsFocusKey = null;
-        },
-        (error) => {
-          if (this.statsPaintGens.get(view.el) !== paintGen) {
-            return;
-          }
-          this.renderStatsResult(view, {
-            report: null,
-            stale: false,
-            error: {
-              code: "failed",
-              message: String((error && error.message) || error),
-              detail: "",
-            },
-          });
-          statsChartRestoreFocus(view.el, view.pendingStatsFocusKey);
-          view.pendingStatsFocusKey = null;
-        },
-      );
+      .then(settle, fail);
   }
 
   repaintStatsBlocks() {
@@ -633,6 +664,7 @@ class BobLedgerToolsStatsBlockMixin {
         root.appendChild(this.statsTable(doc, view, report));
       }
       this.statsInstallChartKeyboard(root, view, report);
+      this.statsInstallClockShortcut(root, view, report);
       root.appendChild(this.statsFooter(doc, report));
     } catch (error) {
       // A failed render never leaves an empty block: fall back to text.
@@ -722,6 +754,8 @@ class BobLedgerToolsStatsBlockMixin {
     });
     controls.appendChild(table);
     header.appendChild(controls);
+    const clockControl = this.statsClockControl(doc, view, report);
+    if (clockControl) header.appendChild(clockControl);
     const windowLabel = statsEl(doc, "div", { class: "bob-stats-window" }, statsWindowLabel(report));
     header.appendChild(windowLabel);
     return header;

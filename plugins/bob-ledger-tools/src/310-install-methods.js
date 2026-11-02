@@ -27,6 +27,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsJournalMixin,
   BobLedgerToolsStatsDataMixin,
   BobLedgerToolsStatsCacheMixin,
+  BobLedgerToolsStatsClockMixin,
   BobLedgerToolsReadingBoardDataMixin,
   BobLedgerToolsReadingBoardBlockMixin,
   BobLedgerToolsStatsBlockMixin,

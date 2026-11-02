@@ -179,10 +179,33 @@ class BobLedgerToolsStatsCacheMixin {
         for (const waiter of entry.waiters) {
           existing.waiters.push(waiter);
         }
+        // A user-selected request promotes a queued idle prefetch in place.
+        if (entry.prefetch !== true && existing.prefetch === true) {
+          existing.prefetch = false;
+          const index = queue.indexOf(existing);
+          if (index >= 0) {
+            queue.splice(index, 1);
+            const firstPrefetch = queue.findIndex((queued) => queued && queued.prefetch === true);
+            queue.splice(firstPrefetch < 0 ? queue.length : firstPrefetch, 0, existing);
+          }
+        }
         return existing;
       }
+      if (entry.prefetch === true && queue.length >= STATS_MAX_PENDING_KEYS &&
+          !queue.some((queued) => queued && queued.prefetch === true)) {
+        const cancelled = statsCancelledResult();
+        for (const waiter of entry.waiters.splice(0)) {
+          try {
+            waiter(cancelled);
+          } catch (error) {
+            // Waiter delivery is best-effort.
+          }
+        }
+        return entry;
+      }
       while (queue.length >= STATS_MAX_PENDING_KEYS) {
-        const dropped = queue.shift();
+        const prefetchIndex = queue.findIndex((queued) => queued && queued.prefetch === true);
+        const dropped = queue.splice(prefetchIndex >= 0 ? prefetchIndex : 0, 1)[0];
         try {
           byKey.delete(dropped.key);
         } catch (error) {
@@ -197,7 +220,12 @@ class BobLedgerToolsStatsCacheMixin {
           }
         }
       }
-      queue.push(entry);
+      if (entry.prefetch === true) {
+        queue.push(entry);
+      } else {
+        const firstPrefetch = queue.findIndex((queued) => queued && queued.prefetch === true);
+        queue.splice(firstPrefetch < 0 ? queue.length : firstPrefetch, 0, entry);
+      }
       byKey.set(entry.key, entry);
       try {
         this.statsPumpQueue();
@@ -228,7 +256,14 @@ class BobLedgerToolsStatsCacheMixin {
       if (this.statsPendingByKeyStore().has(key)) {
         return;
       }
-      this.statsEnqueueFetch({ key, args, opts: { ...opts }, waiters: [], hadCached: true });
+      this.statsEnqueueFetch({
+        key,
+        args,
+        opts: { ...opts },
+        waiters: [],
+        hadCached: true,
+        prefetch: opts && opts.prefetch === true,
+      });
     } catch (error) {
       // Background refresh is best-effort.
     }
@@ -254,7 +289,7 @@ class BobLedgerToolsStatsCacheMixin {
         // Map cleanup is best-effort.
       }
       const startGen = this.statsChangeGenValue();
-      const flight = { key: entry.key, promise: null, waiters: entry.waiters };
+      const flight = { key: entry.key, promise: null, waiters: entry.waiters, prefetch: entry.prefetch === true };
       this.statsFlight = flight;
       this.statsPendingFetch = null;
       try {

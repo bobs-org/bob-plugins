@@ -2704,6 +2704,54 @@ body.bob-today-marks-off .bob-today-mark {
   gap: 0.3rem;
 }
 
+.bob-stats-clock-control {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.65rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.bob-stats-clock-legend {
+  margin: 0;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 0.78em;
+}
+
+.bob-stats-clock-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  color: var(--text-muted);
+  font-size: 0.8em;
+  cursor: pointer;
+}
+
+.bob-stats-clock-option input {
+  margin: 0;
+  accent-color: var(--interactive-accent);
+}
+
+.bob-stats-clock-option:focus-within {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.bob-stats-clock-glyph {
+  color: var(--text-normal);
+}
+
+.bob-stats-clock-display {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
 .bob-stats-chip,
 .bob-stats-nav,
 .bob-stats-toggle {

@@ -144,6 +144,7 @@ function statsDefaultViewState() {
   return {
     range: null,
     offset: 0,
+    clock: "worked",
     focus: null,
     compare: false,
     table: false,

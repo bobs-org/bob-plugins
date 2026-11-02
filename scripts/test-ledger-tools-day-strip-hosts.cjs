@@ -1178,8 +1178,11 @@ test("openStatsForDay keeps the page window when it already shows D", async () =
       assert.equal(state.pinnedDay, day);
       assert.equal(state.focus, "done");
       assert.equal(state.range, null);
-      assert.equal(state.revealPanel, "homes");
+      assert.equal(state.revealPanel, null, "the synchronous cached paint consumes the first-paint reveal");
       assert.equal(state.homesView, "roots");
+      const [statsView] = Array.from(plugin.statsBlockViews);
+      const contextPanel = statsView.el.querySelector(".bob-stats-panel");
+      assert.deepEqual(contextPanel && contextPanel.scrolls, [{ block: "start" }]);
       assert.equal(revealed.length, 1, "the open leaf is revealed and reused");
       assert.deepEqual(seen, [], "no new tab opens when a leaf is reused");
       assert.ok(spawns.length >= 1, "the mounted view repaints");
@@ -1232,8 +1235,11 @@ test("openStatsForDay panel themes selects the Themes view", async () => {
       const state = plugin.statsViewStateFor("dash_stats.md");
       assert.equal(state.pinnedDay, day);
       assert.equal(state.focus, "worked");
-      assert.equal(state.revealPanel, "homes");
+      assert.equal(state.revealPanel, null, "the synchronous cached paint consumes the first-paint reveal");
       assert.equal(state.homesView, "themes");
+      const [statsView] = Array.from(plugin.statsBlockViews);
+      const contextPanel = statsView.el.querySelector(".bob-stats-panel");
+      assert.deepEqual(contextPanel && contextPanel.scrolls, [{ block: "start" }]);
       assert.equal(revealed.length, 1, "the open leaf is revealed and reused");
     } finally {
       plugin.onunload();

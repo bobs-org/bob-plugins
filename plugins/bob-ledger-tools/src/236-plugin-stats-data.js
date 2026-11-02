@@ -272,6 +272,10 @@ function statsBuildArgs(options = {}) {
   if (group) {
     args.push("-g", group);
   }
+  const clock = statsNormalizeClock(options.clock);
+  if (clock !== "worked") {
+    args.push("-k", clock);
+  }
   if (Array.isArray(options.metrics) && options.metrics.length > 0) {
     for (const id of options.metrics) {
       if (typeof id === "string" && id.trim()) {
@@ -768,7 +772,14 @@ class BobLedgerToolsStatsDataMixin {
         queued.waiters.push(resolve);
       });
     }
-    const entry = { key, args, opts: { ...opts }, waiters: [], hadCached: false };
+    const entry = {
+      key,
+      args,
+      opts: { ...opts },
+      waiters: [],
+      hadCached: false,
+      prefetch: opts.prefetch === true,
+    };
     const promise = new Promise((resolve) => {
       entry.waiters.push(resolve);
     });

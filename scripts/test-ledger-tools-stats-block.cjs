@@ -300,6 +300,7 @@ test("stats view state is session-only and per source path", async () => {
       assert.deepEqual(first, {
         range: null,
         offset: 0,
+        clock: "worked",
         focus: null,
         compare: false,
         table: false,

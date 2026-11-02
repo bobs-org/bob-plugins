@@ -3048,3 +3048,348 @@ test("assign batch preview carries set P1 for the banner", () => {
   assert.match(preview.action, /1 set P1/);
   assert.equal(preview.footerLabel, "Apply 1 recommendation");
 });
+
+// Blocked-reason Task Card (bob-cli-ft task_card): these tests run the
+// header and the renderer through the real api.blockMarks v1 — the real
+// classifier for `model` and the real miniature builder for `render` —
+// with a fixed today, ladder, and Tasks cache.
+const BLOCK_TODAY = "2026-11-01";
+const BLOCK_LADDER = Object.freeze([
+  Object.freeze({ label: "P1", value: "high", minDays: 2, maxDays: 7 }),
+  Object.freeze({ label: "P2", value: "medium", minDays: 8, maxDays: 30 }),
+  Object.freeze({ label: "P3", value: "low", minDays: 31, maxDays: 90 }),
+  Object.freeze({ label: "P4", value: "lowest", minDays: 91, maxDays: 365 }),
+]);
+const BLOCK_TASKS = Object.freeze([
+  Object.freeze({
+    id: "x",
+    status: Object.freeze({ type: "TODO" }),
+    path: "Projects/Prerequisites.md",
+    blockId: "x",
+    description: "Finish the battery #task [id:: x]",
+  }),
+  Object.freeze({
+    id: "y",
+    status: Object.freeze({ type: "IN_PROGRESS" }),
+    path: "Projects/Prerequisites.md",
+    blockId: "y",
+    description: "Review the plan #task [id:: y]",
+  }),
+  Object.freeze({
+    id: "w",
+    status: Object.freeze({ type: "TODO" }),
+    path: "Projects/Prerequisites.md",
+    blockId: "w",
+    description: "Write the summary #task [id:: w]",
+  }),
+  Object.freeze({
+    id: "z",
+    status: Object.freeze({ type: "TODO" }),
+    path: "Projects/Prerequisites.md",
+    blockId: "z",
+    description: "Polish the appendix #task [id:: z]",
+  }),
+  Object.freeze({
+    id: "d",
+    status: Object.freeze({ type: "DONE" }),
+    path: "Projects/Archive.md",
+    blockId: "d",
+    description: "Closed item #task [id:: d]",
+  }),
+]);
+
+function blockMarksApiFor(tasks = BLOCK_TASKS) {
+  const memo = { tasks };
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = {
+    plugins: {
+      plugins: {
+        "obsidian-tasks-plugin": { getTasks: () => tasks },
+      },
+    },
+  };
+  plugin.freshnessEnsureMemo = () => memo;
+  plugin.priorityLadderCache = { ladder: BLOCK_LADDER };
+  plugin.dateMarksToday = () => BLOCK_TODAY;
+  plugin.blockMarksEnabled = true;
+  return plugin.blockMarksApi();
+}
+
+function blockedCardModel(overrides = {}) {
+  const content =
+    overrides.content ||
+    "- [?] #task A [priority:: medium] [scheduled:: 2026-11-20]";
+  return planTaskCard({
+    config: buildConfig(),
+    content,
+    lineText: content.split(/\r?\n/)[0],
+    cursorLine: 0,
+    filePath: "Projects/Example.md",
+    propertyContext: { isObsidianTask: true },
+    baseDate: new Date(2026, 10, 1),
+    random: sequence([0.1, 0.35, 0.6, 0.8, 0.95, 0.2, 0.45, 0.7]),
+    freshnessApi: freshnessApi(),
+    blockMarks: blockMarksApiFor(),
+    ...overrides,
+  });
+}
+
+// The shared miniature renderer resolves the host's own document, which
+// does not exist under node. Provide a minimal one for the render call.
+function renderCardWithDocument(root, model, options) {
+  const prior = global.document;
+  global.document = {
+    createElement: (tag) => new ElementStub({ tag: tag || "div" }),
+  };
+  try {
+    return renderTaskCardView(root, model, options);
+  } finally {
+    if (prior === undefined) {
+      delete global.document;
+    } else {
+      global.document = prior;
+    }
+  }
+}
+
+function miniatureSpans(root) {
+  return descendants(root).filter((element) =>
+    String(element.getAttribute("class") || "")
+      .split(/\s+/)
+      .includes("bob-block-mark"),
+  );
+}
+
+function blockedChip(root) {
+  return byClass(root, "bob-task-card-chip").find(
+    (element) => element.textContent === "BLOCKED",
+  );
+}
+
+function reasonTexts(root) {
+  const list = byClass(root, "bob-task-card-block-reasons")[0];
+  return list ? list.children.map((child) => child.textContent) : null;
+}
+
+test("task card BLOCKED chip renders the miniature mark with a reason list", () => {
+  const cases = [
+    {
+      content: "- [?] #task D [dependsOn:: x]",
+      key: "dep",
+      family: "held",
+      reasons: ["after Finish the battery"],
+    },
+    {
+      content: "- [?] #task E #prj_is_blocked",
+      key: "prj",
+      family: "held",
+      reasons: ["via project Example"],
+    },
+    {
+      content: "- [?] #task A [priority:: medium] [scheduled:: 2026-11-20]",
+      key: "p2",
+      family: "waiting",
+      reasons: ["until Fri, Nov 20 · in 19 days"],
+    },
+    {
+      content: "- [?] #task C [repeat:: every day when done] [scheduled:: 2026-11-02]",
+      key: "repeat",
+      family: "waiting",
+      reasons: ["until Mon, Nov 2 · tomorrow"],
+    },
+    {
+      content: "- [?] #task B [scheduled:: 2026-11-04]",
+      key: "date",
+      family: "waiting",
+      reasons: ["until Wed, Nov 4 · in 3 days"],
+    },
+  ];
+  for (const { content, key, family, reasons } of cases) {
+    const api = blockMarksApiFor();
+    const model = blockedCardModel({ content, blockMarks: api });
+    assert.equal(model.header.lane, "BLOCKED");
+    assert.equal(model.header.blocked.key, key);
+    assert.deepEqual(model.header.blocked.reasonLines, reasons);
+    const root = new ElementStub();
+    renderCardWithDocument(root, model, { blockMarks: api });
+    const chip = blockedChip(root);
+    assert.ok(chip, `expected a BLOCKED chip for ${key}`);
+    const marks = miniatureSpans(chip);
+    assert.equal(marks.length, 1, `expected one miniature for ${key}`);
+    assert.equal(marks[0].getAttribute("data-bob-block"), key);
+    assert.equal(marks[0].getAttribute("data-bob-block-family"), family);
+    assert.equal(marks[0].getAttribute("role"), "img");
+    assert.equal(chip.getAttribute("title"), model.header.blocked.tooltip);
+    assert.deepEqual(reasonTexts(root), reasons);
+    assert.match(flattenText(root), /BLOCKED/);
+  }
+});
+
+test("task card stale chip renders the dashed mark with no reason list", () => {
+  const api = blockMarksApiFor();
+  const model = blockedCardModel({
+    content: "- [?] #task D [dependsOn:: d]",
+    blockMarks: api,
+  });
+  assert.equal(model.header.blocked.key, "stale");
+  assert.deepEqual(model.header.blocked.reasonLines, []);
+  const root = new ElementStub();
+  renderCardWithDocument(root, model, { blockMarks: api });
+  const chip = blockedChip(root);
+  assert.ok(chip);
+  const marks = miniatureSpans(chip);
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0].getAttribute("data-bob-block"), "stale");
+  assert.equal(marks[0].getAttribute("data-bob-block-family"), "stale");
+  assert.equal(byClass(root, "bob-task-card-block-reasons").length, 0);
+});
+
+test("task card lists up to three prerequisites then a +N overflow line", () => {
+  const api = blockMarksApiFor();
+  const model = blockedCardModel({
+    content: "- [?] #task F [dependsOn:: x, y, w, z]",
+    blockMarks: api,
+  });
+  assert.equal(model.header.blocked.key, "dep");
+  assert.deepEqual(model.header.blocked.reasonLines, [
+    "after Finish the battery",
+    "after Review the plan",
+    "after Write the summary",
+    "+1 more",
+  ]);
+  const root = new ElementStub();
+  renderCardWithDocument(root, model, { blockMarks: api });
+  assert.deepEqual(reasonTexts(root), [
+    "after Finish the battery",
+    "after Review the plan",
+    "after Write the summary",
+    "+1 more",
+  ]);
+});
+
+test("task card mixed counted batch keeps the plain BLOCKED chip", () => {
+  const api = blockMarksApiFor();
+  const depLine = "- [?] #task D [dependsOn:: x]";
+  const dateLine = "- [?] #task A [priority:: medium] [scheduled:: 2026-11-20]";
+  const model = blockedCardModel({
+    content: `${depLine}\n${dateLine}`,
+    lineText: depLine,
+    taskSession: {
+      valid: true,
+      explicit: true,
+      targets: [
+        { line: 0, rawLine: depLine },
+        { line: 1, rawLine: dateLine },
+      ],
+    },
+    blockMarks: api,
+  });
+  assert.equal(model.session.type, "counted");
+  assert.equal(model.header.lane, "BLOCKED");
+  assert.equal(model.header.blocked, null);
+  const root = new ElementStub();
+  renderCardWithDocument(root, model, { blockMarks: api });
+  assert.ok(blockedChip(root));
+  assert.equal(miniatureSpans(blockedChip(root)).length, 0);
+  assert.equal(byClass(root, "bob-task-card-block-reasons").length, 0);
+});
+
+test("task card teaching digit sits beside each P1-P4 level's bars", () => {
+  const api = blockMarksApiFor();
+  const priorityMarks = {
+    version: 1,
+    model: (value) => ({ value }),
+    render: (host, value) => {
+      const el = host.createSpan({ cls: "bob-priority-mark-stub" });
+      el.setAttribute("data-priority", value);
+      return el;
+    },
+  };
+  const model = blockedCardModel({ blockMarks: api });
+  const root = new ElementStub();
+  renderCardWithDocument(root, model, { blockMarks: api, priorityMarks });
+  const digits = byClass(root, "bob-task-card-level-digit");
+  assert.equal(digits.length, 4);
+  const keys = digits.map(
+    (digit) => miniatureSpans(digit)[0].getAttribute("data-bob-block"),
+  );
+  assert.deepEqual(keys, ["p1", "p2", "p3", "p4"]);
+  for (const digit of digits) {
+    const mark = miniatureSpans(digit)[0];
+    assert.equal(mark.getAttribute("data-bob-block-family"), "waiting");
+    assert.equal(mark.getAttribute("aria-hidden"), "true");
+  }
+  const labels = byClass(root, "bob-task-card-level-label");
+  for (const label of labels.slice(0, 4)) {
+    const order = label.children.map((child) =>
+      child.classes.includes("bob-task-card-level-glyph")
+        ? "bars"
+        : child.classes.includes("bob-task-card-level-digit")
+          ? "digit"
+          : "text",
+    );
+    assert.deepEqual(order, ["bars", "digit", "text"]);
+  }
+});
+
+test("task card resolves the block api from options.app", () => {
+  const api = blockMarksApiFor();
+  const model = blockedCardModel({ blockMarks: api });
+  const app = {
+    plugins: { plugins: { "bob-ledger-tools": { api: { blockMarks: api } } } },
+  };
+  const root = new ElementStub();
+  renderCardWithDocument(root, model, { app });
+  assert.equal(miniatureSpans(blockedChip(root)).length, 1);
+  assert.equal(byClass(root, "bob-task-card-level-digit").length, 4);
+});
+
+test("task card is unchanged without the block marks api", () => {
+  const model = blockedCardModel({ blockMarks: null });
+  assert.equal(model.header.lane, "BLOCKED");
+  assert.equal(model.header.blocked, null);
+  const expected = flattenText((() => {
+    const root = new ElementStub();
+    renderTaskCardView(root, model);
+    return root;
+  })());
+
+  const api = blockMarksApiFor();
+  for (const options of [
+    undefined,
+    {},
+    { app: {} },
+    { blockMarks: null },
+    { blockMarks: { version: 0, render: () => { throw new Error("unused"); } } },
+    { blockMarks: { version: 1 } },
+    { blockMarks: { version: 1, model: () => null } },
+    {
+      blockMarks: {
+        version: 1,
+        model: () => { throw new Error("classifier failed"); },
+        render: () => { throw new Error("miniature failed"); },
+      },
+    },
+  ]) {
+    const root = new ElementStub();
+    if (options === undefined) {
+      renderTaskCardView(root, model);
+    } else {
+      renderCardWithDocument(root, model, options);
+    }
+    assert.equal(miniatureSpans(root).length, 0);
+    assert.equal(byClass(root, "bob-task-card-block-reasons").length, 0);
+    assert.equal(byClass(root, "bob-task-card-level-digit").length, 0);
+    assert.equal(flattenText(root), expected);
+  }
+
+  // A model planned with the api still falls back cleanly when the view
+  // has no api to render through.
+  const marked = blockedCardModel({ blockMarks: api });
+  assert.ok(marked.header.blocked);
+  const fallback = new ElementStub();
+  renderTaskCardView(fallback, marked);
+  assert.equal(miniatureSpans(fallback).length, 0);
+  assert.equal(byClass(fallback, "bob-task-card-block-reasons").length, 0);
+  assert.equal(flattenText(fallback), expected);
+});

@@ -2237,6 +2237,26 @@
   color: var(--text-faint, var(--text-muted));
 }
 
+.bob-task-card-chip-mark {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-right: 5px;
+}
+
+.bob-task-card-block-reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.bob-task-card-block-reason {
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
 .bob-task-card-error {
   color: var(--text-error);
   font-size: var(--font-ui-smaller);
@@ -2396,6 +2416,13 @@
   align-items: center;
   flex: 0 0 auto;
   color: var(--text-muted);
+}
+
+.bob-task-card-level-digit {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: 6px;
 }
 
 .bob-task-card-level-date,

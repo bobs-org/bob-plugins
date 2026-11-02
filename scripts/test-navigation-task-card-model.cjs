@@ -1001,3 +1001,201 @@ test("unprioritized single task recommends assign P1 with dated preview", () => 
   assert.ok(mixed.recommendation);
   assert.equal(mixed.recommendation.effects.assign, 1);
 });
+
+// Blocked-reason header (bob-cli-ft task_card): canned api.blockMarks v1
+// models keep these header tests independent of the ledger classifier,
+// which owns its own vectors. The view tests run the same header through
+// the real api.
+function stubBlockMarkModel(mark) {
+  const calls = [];
+  return {
+    calls,
+    api: {
+      version: 1,
+      model: (lineText, options) => {
+        calls.push({ lineText, options });
+        return mark;
+      },
+      render: () => null,
+    },
+  };
+}
+
+const BLOCKED_DEP_MARK = Object.freeze({
+  key: "dep",
+  family: "held",
+  digit: null,
+  more: "p3",
+  reasons: Object.freeze([
+    Object.freeze({ kind: "dep", key: "dep", text: "Finish the battery" }),
+    Object.freeze({ kind: "date", key: "p3", text: "2026-12-20" }),
+  ]),
+  tooltip: "Blocked · after Finish the battery\nCtrl+Shift+B to edit prerequisites\nAlso scheduled Sun, Dec 20 · in 49 days",
+});
+
+const BLOCKED_MARKS_BY_FAMILY = Object.freeze({
+  dep: BLOCKED_DEP_MARK,
+  prj: Object.freeze({
+    key: "prj",
+    family: "held",
+    digit: null,
+    more: null,
+    reasons: Object.freeze([
+      Object.freeze({ kind: "prj", key: "prj", text: "Example" }),
+    ]),
+    tooltip: "Blocked · via project Example",
+  }),
+  p2: Object.freeze({
+    key: "p2",
+    family: "waiting",
+    digit: 2,
+    more: null,
+    reasons: Object.freeze([
+      Object.freeze({ kind: "date", key: "p2", text: "2026-11-20" }),
+    ]),
+    tooltip: "Blocked · P2 deferral · until Fri, Nov 20 · in 19 days\nCtrl+Shift+P to reschedule or change priority",
+  }),
+  repeat: Object.freeze({
+    key: "repeat",
+    family: "waiting",
+    digit: null,
+    more: null,
+    reasons: Object.freeze([
+      Object.freeze({ kind: "date", key: "repeat", text: "2026-11-02" }),
+    ]),
+    tooltip: "Recurring · next run Mon, Nov 2 · tomorrow",
+  }),
+  date: Object.freeze({
+    key: "date",
+    family: "waiting",
+    digit: null,
+    more: null,
+    reasons: Object.freeze([
+      Object.freeze({ kind: "date", key: "date", text: "2026-11-04" }),
+    ]),
+    tooltip: "Blocked · until Wed, Nov 4 · in 3 days\nCtrl+Shift+P to reschedule",
+  }),
+  stale: Object.freeze({
+    key: "stale",
+    family: "stale",
+    digit: null,
+    more: null,
+    reasons: Object.freeze([]),
+    tooltip: "Blocked, but no reason is left\nClears on the next reconcile",
+  }),
+});
+
+const BLOCKED_REASON_LINES = Object.freeze({
+  dep: Object.freeze(["after Finish the battery", "until Sun, Dec 20 · in 49 days"]),
+  prj: Object.freeze(["via project Example"]),
+  p2: Object.freeze(["until Fri, Nov 20 · in 19 days"]),
+  repeat: Object.freeze(["until Mon, Nov 2 · tomorrow"]),
+  date: Object.freeze(["until Wed, Nov 4 · in 3 days"]),
+  stale: Object.freeze([]),
+});
+
+function blockedHeaderModel(family) {
+  const stub = stubBlockMarkModel(BLOCKED_MARKS_BY_FAMILY[family]);
+  const lineText = "- [?] #task D [dependsOn:: x]";
+  const model = makeModel({
+    content: lineText,
+    lineText,
+    filePath: "Projects/Example.md",
+    blockMarks: stub.api,
+  });
+  assert.equal(model.header.lane, "BLOCKED");
+  assert.equal(stub.calls.length, 1);
+  assert.equal(stub.calls[0].lineText, lineText);
+  assert.equal(stub.calls[0].options.path, "Projects/Example.md");
+  return model.header.blocked;
+}
+
+test("task card header stores the block mark and reason lines for each family", () => {
+  for (const family of ["dep", "prj", "p2", "repeat", "date", "stale"]) {
+    const blocked = blockedHeaderModel(family);
+    assert.ok(blocked, `expected a block mark for ${family}`);
+    assert.ok(Object.isFrozen(blocked), `block mark is frozen for ${family}`);
+    const mark = BLOCKED_MARKS_BY_FAMILY[family];
+    assert.equal(blocked.key, mark.key);
+    assert.equal(blocked.family, mark.family);
+    assert.equal(blocked.digit, mark.digit);
+    assert.equal(blocked.more, mark.more);
+    assert.equal(blocked.tooltip, mark.tooltip);
+    assert.deepEqual(blocked.reasonLines, BLOCKED_REASON_LINES[family]);
+  }
+});
+
+test("task card header caps the prerequisite reason lines with a +N overflow", () => {
+  const stub = stubBlockMarkModel(Object.freeze({
+    key: "dep",
+    family: "held",
+    digit: null,
+    more: null,
+    reasons: Object.freeze([
+      Object.freeze({ kind: "dep", key: "dep", text: "First" }),
+      Object.freeze({ kind: "dep", key: "dep", text: "Second" }),
+      Object.freeze({ kind: "dep", key: "dep", text: "Third" }),
+      Object.freeze({ kind: "dep", key: "dep", text: "Fourth" }),
+    ]),
+    tooltip: "Blocked · after First +3\nCtrl+Shift+B to edit prerequisites",
+  }));
+  const lineText = "- [?] #task D [dependsOn:: a, b, c, d]";
+  const model = makeModel({
+    content: lineText,
+    lineText,
+    filePath: "Projects/Example.md",
+    blockMarks: stub.api,
+  });
+  assert.deepEqual(model.header.blocked.reasonLines, [
+    "after First",
+    "after Second",
+    "after Third",
+    "+1 more",
+  ]);
+});
+
+test("task card header keeps a null block mark for batches, other lanes, and fallback", () => {
+  const stub = stubBlockMarkModel(BLOCKED_MARKS_BY_FAMILY.dep);
+  const counted = makeModel({
+    content: "- [?] #task D [dependsOn:: x]\n- [?] #task E [dependsOn:: x]",
+    lineText: "- [?] #task D [dependsOn:: x]",
+    cursorLine: 0,
+    taskSession: {
+      valid: true,
+      explicit: true,
+      targets: [
+        { line: 0, rawLine: "- [?] #task D [dependsOn:: x]" },
+        { line: 1, rawLine: "- [?] #task E [dependsOn:: x]" },
+      ],
+    },
+    filePath: "Projects/Example.md",
+    blockMarks: stub.api,
+  });
+  assert.equal(counted.session.type, "counted");
+  assert.equal(counted.header.lane, "BLOCKED");
+  assert.equal(counted.header.blocked, null);
+  assert.equal(stub.calls.length, 0);
+
+  const ready = makeModel({
+    content: "- [ ] #task Ship report",
+    lineText: "- [ ] #task Ship report",
+    blockMarks: stub.api,
+  });
+  assert.equal(ready.header.lane, "READY");
+  assert.equal(ready.header.blocked, null);
+
+  const noApi = makeModel({
+    content: "- [?] #task D [dependsOn:: x]",
+    lineText: "- [?] #task D [dependsOn:: x]",
+  });
+  assert.equal(noApi.header.lane, "BLOCKED");
+  assert.equal(noApi.header.blocked, null);
+  assert.ok(noApi.header.chips.includes("BLOCKED"));
+
+  const neutral = makeModel({
+    content: "- [?] #task D [dependsOn:: x]",
+    lineText: "- [?] #task D [dependsOn:: x]",
+    blockMarks: stubBlockMarkModel(null).api,
+  });
+  assert.equal(neutral.header.blocked, null);
+});

@@ -83,6 +83,7 @@
   "315-task-card-theme-stage.js",
   "316-task-card-type-relocation.js",
   "320-task-card-header.js",
+  "321-task-card-block-marks.js",
   "330-task-card-view.js",
   "340-picker-core.js",
   "350-picker-task-card.js",

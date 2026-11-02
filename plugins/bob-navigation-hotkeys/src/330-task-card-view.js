@@ -151,6 +151,13 @@ function renderTaskCardView(container, model, options = {}) {
     attr: { "aria-label": "Task metadata" },
   });
   const chips = Array.isArray(headerModel.chips) ? headerModel.chips : [];
+  const blockedMark =
+    headerModel.blocked &&
+    typeof headerModel.blocked === "object" &&
+    headerModel.blocked.key
+      ? headerModel.blocked
+      : null;
+  let blockedChipMarked = false;
   if (chips.length === 0) {
     meta.createSpan({
       cls: "bob-task-card-chip is-muted",
@@ -199,7 +206,15 @@ function renderTaskCardView(container, model, options = {}) {
           // Tooltip is best-effort.
         }
       }
+      if (text === "BLOCKED" && blockedMark && !blockedChipMarked) {
+        if (renderTaskCardBlockedChipMark(chipEl, blockedMark, options)) {
+          blockedChipMarked = true;
+        }
+      }
     }
+  }
+  if (blockedChipMarked) {
+    renderTaskCardBlockReasonList(container, blockedMark);
   }
   if (headerModel.error) {
     const errorEl = container.createDiv({
@@ -418,6 +433,7 @@ function renderTaskCardView(container, model, options = {}) {
       const body = levelEl.createDiv({ cls: "bob-task-card-level-body" });
       const labelEl = body.createDiv({ cls: "bob-task-card-level-label" });
       renderTaskCardLevelGlyph(labelEl, level.value, options);
+      renderTaskCardBlockDigit(labelEl, level.value, options);
       labelEl.appendText(level.label ?? "");
       body.createDiv({
         cls: "bob-task-card-level-date",

@@ -86,6 +86,18 @@ Counted sessions identify their N+1-item scope and mixed values. Task Links
 show `via Task Link` and name their target notes. Each priority level shows
 its exact ISO date; batches show a date span and per-target details.
 
+For a single Blocked target, the header's BLOCKED lane chip carries the
+shared blocked-reason miniature (through the bob-ledger-tools
+`api.blockMarks` v1 namespace) with the tooltip words on hover, and a
+compact reason list below the chips names every reason, winner first, in
+`after <text>` (one line per open prerequisite, up to 3, then `+N more`),
+`via project <stem>`, and `until <short date> · <relative>` words. Each
+P1–P4 level also shows a decorative hollow digit box beside its signal
+bars, teaching which checkbox digit that priority earns. Counted batches
+with mixed marks keep today's plain BLOCKED chip. Without the ledger api
+the card looks exactly as it does today. This card is the touch and mobile
+path, where hover tooltips do not exist.
+
 A type edit writes the `[type:: ...]` field through the Ledger Tools setters
 with guarded identity and a revalidated default, then relocates the task's
 live Task Link (D8, `running_retype = absorb`) as a checked ledger step that

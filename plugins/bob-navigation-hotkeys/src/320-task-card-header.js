@@ -49,6 +49,11 @@ function buildTaskCardHeader(details = {}) {
       mixed: false,
     });
   }
+  const blocked = buildTaskCardBlockedHeader(
+    session,
+    filePath,
+    details.blockMarks || null,
+  );
   const scheduleProjection = details.schedule || null;
   let schedule = Object.freeze({ available: false, label: "unavailable" });
   if (scheduleProjection && scheduleProjection.enabled !== false) {
@@ -157,6 +162,7 @@ function buildTaskCardHeader(details = {}) {
       : null,
     lane,
     laneMixed: lane === "mixed",
+    blocked,
     priority,
     schedule,
     theme: buildTaskCardThemeHeader(details.themeProjection),

@@ -640,6 +640,7 @@ function planTaskCard(context = {}) {
     session,
     lineText: session.lineText,
     filePath: context.filePath || "",
+    blockMarks: context.blockMarks || null,
     schedule: scheduleProjection,
     priorityStrip,
     mixedMetadata: frozenMixedMetadata,

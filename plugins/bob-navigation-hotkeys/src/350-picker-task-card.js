@@ -61,6 +61,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       baseDate: this.fixedValueBaseDate || this.valueBaseDate,
       random: this.priorityRandom,
       freshnessApi: this.getTaskCardFreshnessApi(),
+      blockMarks: getLedgerBlockMarksApi(this.app),
       frozenRecommendation: this.getTaskCardFrozenRecommendation(),
       selectedRowId: this.taskCardSelectedRowId,
       taskCache,

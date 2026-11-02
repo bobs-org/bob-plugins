@@ -438,6 +438,27 @@ function relationBlockedDetails(source, recovery, snapshotAvailable, today) {
   return null;
 }
 
+function relationProjectBlockedDetails(source, noteTexts, openIds, closedIds, snapshotAvailable, today) {
+  if (typeof project089Info !== "function" || typeof projectIsBlockedAfter !== "function") return null;
+  const project = project089Info(relationNoteText(noteTexts, source.path), source.path);
+  if (!project) return null;
+  if (!snapshotAvailable && Array.isArray(project.dependencyIds) && project.dependencyIds.length > 0) {
+    return {
+      reason: "blocked",
+      project: String(source.path || ""),
+      waits_on: project.dependencyIds.length,
+    };
+  }
+  if (!projectIsBlockedAfter(project, openIds, today, closedIds)) return null;
+  return {
+    reason: "blocked",
+    project: String(source.path || ""),
+    ...(typeof projectHasFutureSchedule === "function" && projectHasFutureSchedule(project, today)
+      ? { scheduled: project.scheduled }
+      : {}),
+  };
+}
+
 function relationEmptyResult(overrides = {}) {
   return Object.freeze({
     marks: Object.freeze([]),
@@ -478,6 +499,14 @@ function planSuccessorRelations(options = {}) {
     relationIdentityKey(event.target.path, event.target.blockId, event.target.line),
   ));
   const snapshotAvailable = options.dependencySnapshotAvailable !== false;
+  const closedIds = new Set((Array.isArray(options.closedTaskIds) ? options.closedTaskIds : []).map(String));
+  const openIds = new Set();
+  for (const task of Array.isArray(options.dependencyTasks) ? options.dependencyTasks : []) {
+    if (task && task.taskId && DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
+        !closedIds.has(String(task.taskId))) {
+      openIds.add(String(task.taskId));
+    }
+  }
   const recoveries = options.recoveries && typeof options.recoveries === "object"
     ? options.recoveries
     : {};
@@ -531,8 +560,12 @@ function planSuccessorRelations(options = {}) {
         edge.source.line,
       );
       if (!sourceKey || sourceKey === targetKey) continue;
-      const source = relationSourceTask(edge, noteTexts);
-      const sourceIdentity = relationIdentityKey(source.path, source.blockId, source.line);
+      const foundSource = relationSourceTask(edge, noteTexts);
+      const sourceIdentity = relationIdentityKey(foundSource.path, foundSource.blockId, foundSource.line);
+      const recovery = recoveries[sourceIdentity] || recoveries[sourceKey] || {};
+      const source = recovery.effectiveStatus
+        ? { ...foundSource, status: recovery.effectiveStatus }
+        : foundSource;
       const line = source.rawLine || source.text || "";
       const isOpenTask = RELATION_SUCCESSOR_OPEN_STATUSES.has(source.status) &&
         (typeof lineMatchesTasksGlobalFilterText === "function"
@@ -542,7 +575,6 @@ function planSuccessorRelations(options = {}) {
           relationIsPreviousDaily(source.path, previousDailyPath, today)) {
         continue;
       }
-      const recovery = recoveries[sourceIdentity] || recoveries[sourceKey] || {};
       const configuredLabel = successorLabels.labels && successorLabels.labels[edge.key]
         ? successorLabels.labels[edge.key]
         : edge.label;
@@ -582,7 +614,15 @@ function planSuccessorRelations(options = {}) {
         pushHeld({ ...baseHeld, reason: "already_started" });
         continue;
       }
-      const blocked = relationBlockedDetails(source, recovery, snapshotAvailable, today);
+      const openPrerequisites = snapshotAvailable && Array.isArray(options.dependencyTasks) &&
+        Array.isArray(source.dependsOn) && source.dependsOn.length > 0
+        ? source.dependsOn.filter((id) => openIds.has(String(id))).length
+        : null;
+      const effectiveRecovery = openPrerequisites == null
+        ? recovery
+        : { ...recovery, openPrerequisites };
+      const blocked = relationBlockedDetails(source, effectiveRecovery, snapshotAvailable, today) ||
+        relationProjectBlockedDetails(source, noteTexts, openIds, closedIds, snapshotAvailable, today);
       if (blocked) {
         pushHeld({ ...baseHeld, ...blocked });
         continue;
@@ -606,6 +646,14 @@ function planSuccessorRelations(options = {}) {
           waits_for: otherTargets.map((out) =>
             relationIdentityKey(out.target.path, out.target.blockId, out.target.line),
           ),
+          waits_for_text: otherTargets.map((out) => {
+            const task = relationLookupTask(out.target.path, out.target.blockId, out.target.line, noteTexts);
+            const raw = task && task.lineText || out.target.text || "";
+            const display = typeof successorDisplayText === "function"
+              ? successorDisplayText({ rawLine: raw, blockId: out.target.blockId })
+              : String(raw);
+            return display || String(out.target.path || "").split("/").pop().replace(/\.md$/i, "") || "task";
+          }),
         });
         continue;
       }
@@ -626,8 +674,11 @@ function planSuccessorRelations(options = {}) {
         if (recovery.recovered) existing.recovered = true;
       } else {
         offeredBySource.set(sourceIdentity, {
-          source,
+          // Classification uses the effective post-recovery status above;
+          // writes and receipts retain the original parsed task line/status.
+          source: foundSource,
           sourceIdentity,
+          effectiveStatus: source.status,
           recovered: recovery.recovered === true,
           triggers: [trigger],
         });
@@ -642,7 +693,7 @@ function planSuccessorRelations(options = {}) {
     const groupId = `${first.targetKey}\0${first.labelKey}`;
     const targetTexts = row.triggers.map((trigger) => trigger.targetText).filter(Boolean);
     const suffix = targetTexts.length > 1 ? relationCopySuffix(targetTexts) : "";
-    const lane = first && row.source.status === "*" ? "Next" : "Ready";
+    const lane = first && row.effectiveStatus === "*" ? "Next" : "Ready";
     const mark = {
       task: row.source,
       group: "relation",

@@ -608,8 +608,10 @@ function planSuccessors(options = {}) {
     if (typeof successorRelationHasInputs === "function" && successorRelationHasInputs(options)) {
       try {
         const result = planSuccessorRelationForContext({
-          options, recovers, stillBlocked, noteTexts,
+          options, recovers, successorMarks, stillBlocked, noteTexts,
           dailyBefore, dailyAfter, dailyPath, today, linkUnblocked, cancelled: cancelledClose,
+          dependencyTasks: index.tasks,
+          closedTaskIds: [...closedTaskIds],
         });
         if (result && (result.scan === true || result.relation_check === "unavailable")) {
           relationMarks = Array.isArray(result.marks) ? result.marks : [];

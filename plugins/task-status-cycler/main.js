@@ -7160,8 +7160,10 @@ function planSuccessors(options = {}) {
     if (typeof successorRelationHasInputs === "function" && successorRelationHasInputs(options)) {
       try {
         const result = planSuccessorRelationForContext({
-          options, recovers, stillBlocked, noteTexts,
+          options, recovers, successorMarks, stillBlocked, noteTexts,
           dailyBefore, dailyAfter, dailyPath, today, linkUnblocked, cancelled: cancelledClose,
+          dependencyTasks: index.tasks,
+          closedTaskIds: [...closedTaskIds],
         });
         if (result && (result.scan === true || result.relation_check === "unavailable")) {
           relationMarks = Array.isArray(result.marks) ? result.marks : [];
@@ -7964,10 +7966,9 @@ function buildSuccessorPickerModel(options = {}) {
       try {
         const first = heldForGroup[0] || {};
         const foldInput = {
-          waits_for: (first.waits_for || []).map((key) => {
-            // Map waits_for target keys to display text when notes allow; fall back to key.
-            return String(key).split("#^").pop() || String(key);
-          }),
+          waits_for: (first.waits_for_text || first.waits_for || []).map((value) =>
+            String(value || "task"),
+          ),
           source: String(first.text || first.source || ""),
           already_started: alreadyStarted,
           blocked,
@@ -9145,9 +9146,10 @@ function successorDisplayText(task, globalFilter = "#task") {
   const filter = globalFilter === "#task" && task.globalFilter
     ? task.globalFilter
     : globalFilter;
-  if (task.rawLine) {
+  const rawLine = task.rawLine || task.lineText;
+  if (rawLine) {
     return cleanDescription(
-      successorBodyAfterStatusBox(task.rawLine),
+      successorBodyAfterStatusBox(rawLine),
       filter,
       task.blockId || null,
     );
@@ -9219,8 +9221,9 @@ function successorRelationLabelsFromOptions(options = {}) {
 // state (recovers + stillBlocked). Keys are relation identities so the
 // pure R1-R7 rule sees the effective post-recovery state while the write
 // guard keeps exact preimage lines from noteTexts.
-function buildSuccessorRelationRecoveries(recovers, stillBlocked) {
+function buildSuccessorRelationRecoveries(recovers, successorMarks, stillBlocked, context = {}) {
   const table = {};
+  const currentLive = relationLiveIdentitySet(context.dailyAfter, context.dailyPath || "");
   for (const recover of Array.isArray(recovers) ? recovers : []) {
     const task = recover && recover.task;
     if (!task || !task.path) continue;
@@ -9228,7 +9231,24 @@ function buildSuccessorRelationRecoveries(recovers, stillBlocked) {
     if (!key) continue;
     if (!table[key]) table[key] = {};
     table[key].recovered = true;
+    if (task.status === "?") {
+      table[key].effectiveStatus = recover.raiseToNext === true || currentLive.has(key)
+        ? "*"
+        : " ";
+    }
     if (recover.foldedProject) table[key].project = String(recover.foldedProject);
+  }
+  // A hand-off/project mark is also a real recovery: an unpicked offer still
+  // releases the blocked task to its post-close lane. Feed that effective
+  // status to R4 so a relation reason can merge without causing recovery.
+  for (const mark of Array.isArray(successorMarks) ? successorMarks : []) {
+    const task = mark && mark.task;
+    if (!task || !task.path || task.status !== "?") continue;
+    const key = relationIdentityKey(task.path, task.blockId, task.line);
+    if (!key) continue;
+    if (!table[key]) table[key] = {};
+    table[key].recovered = true;
+    table[key].effectiveStatus = currentLive.has(key) ? "*" : " ";
   }
   for (const row of Array.isArray(stillBlocked) ? stillBlocked : []) {
     if (!row || !row.note_path) continue;
@@ -9252,6 +9272,7 @@ function buildSuccessorRelationRecoveries(recovers, stillBlocked) {
 function planSuccessorRelationForContext(context = {}) {
   const options = context.options || {};
   const recovers = context.recovers || [];
+  const successorMarks = context.successorMarks || [];
   const stillBlocked = context.stillBlocked || [];
   const successorLabels = successorRelationLabelsFromOptions(options);
   const events = Array.isArray(options.relationEvents) ? options.relationEvents : [];
@@ -9263,7 +9284,10 @@ function planSuccessorRelationForContext(context = {}) {
     return { marks: [], held: [], groups: [], relation_check: null, scan: false, warnings: [] };
   }
   const recoveries = {
-    ...buildSuccessorRelationRecoveries(recovers, stillBlocked),
+    ...buildSuccessorRelationRecoveries(recovers, successorMarks, stillBlocked, {
+      dailyAfter: context.dailyAfter,
+      dailyPath: context.dailyPath,
+    }),
     ...((options.relationRecoveries && typeof options.relationRecoveries === "object")
       ? options.relationRecoveries
       : {}),
@@ -9285,6 +9309,8 @@ function planSuccessorRelationForContext(context = {}) {
       navSuccessorsVersion: options.navSuccessorsVersion,
       relationIndexReady: options.relationIndexReady,
       dependencySnapshotAvailable: options.dependencySnapshotAvailable,
+      dependencyTasks: Array.isArray(context.dependencyTasks) ? context.dependencyTasks : [],
+      closedTaskIds: Array.isArray(context.closedTaskIds) ? context.closedTaskIds : [],
       recoveries,
       parkedIdentities: options.relationParkedIdentities,
       baselineLive: options.relationBaselineLive,
@@ -12892,6 +12918,20 @@ function applySuccessorVerdicts(context) {
             }
           }
         }
+        const waitsForText = Array.isArray(entry.waits_for_text)
+          ? entry.waits_for_text.slice()
+          : (Array.isArray(entry.waits_for) ? entry.waits_for.map((key) => {
+            try {
+              const identity = relationParseIdentityKey(String(key));
+              const target = identity && relationLookupTask(identity.path, identity.blockId, identity.line, noteTexts);
+              const text = target && target.lineText
+                ? successorDisplayText(target)
+                : "";
+              return text || String(identity && identity.path || key).split("/").pop().replace(/\.md$/i, "") || "task";
+            } catch (_error) {
+              return String(key || "task").split("/").pop().replace(/\.md$/i, "") || "task";
+            }
+          }) : []);
         const row = {
           note_path: notePath,
           block_id: blockId,
@@ -12903,6 +12943,7 @@ function applySuccessorVerdicts(context) {
           ...(entry.scheduled ? { scheduled: entry.scheduled } : {}),
           ...(entry.project ? { project: entry.project } : {}),
           ...(Array.isArray(entry.waits_for) ? { waits_for: entry.waits_for.slice() } : {}),
+          ...(waitsForText.length > 0 ? { waits_for_text: waitsForText } : {}),
           relation: {
             label: String(entry.label || ""),
             key: String(entry.labelKey || entry.label || "").toLowerCase(),
@@ -13290,8 +13331,12 @@ function planSuccessorKeepMoving(options = {}) {
 
 function successorPlanRows(plan) {
   if (plan && Array.isArray(plan.rows)) return plan.rows;
-  if (plan && Array.isArray(plan.keep_moving)) return [...(plan.unblocked || []), ...plan.keep_moving];
-  return plan && Array.isArray(plan.unblocked) ? plan.unblocked : [];
+  if (!plan) return [];
+  return [
+    ...(Array.isArray(plan.unblocked) ? plan.unblocked : []),
+    ...(Array.isArray(plan.keep_moving) ? plan.keep_moving : []),
+    ...(Array.isArray(plan.relation_successors) ? plan.relation_successors : []),
+  ];
 }
 
 function successorKeepMovingNoticeText(model, baseNotice) {
@@ -13771,6 +13816,27 @@ function relationBlockedDetails(source, recovery, snapshotAvailable, today) {
   return null;
 }
 
+function relationProjectBlockedDetails(source, noteTexts, openIds, closedIds, snapshotAvailable, today) {
+  if (typeof project089Info !== "function" || typeof projectIsBlockedAfter !== "function") return null;
+  const project = project089Info(relationNoteText(noteTexts, source.path), source.path);
+  if (!project) return null;
+  if (!snapshotAvailable && Array.isArray(project.dependencyIds) && project.dependencyIds.length > 0) {
+    return {
+      reason: "blocked",
+      project: String(source.path || ""),
+      waits_on: project.dependencyIds.length,
+    };
+  }
+  if (!projectIsBlockedAfter(project, openIds, today, closedIds)) return null;
+  return {
+    reason: "blocked",
+    project: String(source.path || ""),
+    ...(typeof projectHasFutureSchedule === "function" && projectHasFutureSchedule(project, today)
+      ? { scheduled: project.scheduled }
+      : {}),
+  };
+}
+
 function relationEmptyResult(overrides = {}) {
   return Object.freeze({
     marks: Object.freeze([]),
@@ -13811,6 +13877,14 @@ function planSuccessorRelations(options = {}) {
     relationIdentityKey(event.target.path, event.target.blockId, event.target.line),
   ));
   const snapshotAvailable = options.dependencySnapshotAvailable !== false;
+  const closedIds = new Set((Array.isArray(options.closedTaskIds) ? options.closedTaskIds : []).map(String));
+  const openIds = new Set();
+  for (const task of Array.isArray(options.dependencyTasks) ? options.dependencyTasks : []) {
+    if (task && task.taskId && DEPENDENCY_OPEN_TASK_SYMBOLS.has(task.status) &&
+        !closedIds.has(String(task.taskId))) {
+      openIds.add(String(task.taskId));
+    }
+  }
   const recoveries = options.recoveries && typeof options.recoveries === "object"
     ? options.recoveries
     : {};
@@ -13864,8 +13938,12 @@ function planSuccessorRelations(options = {}) {
         edge.source.line,
       );
       if (!sourceKey || sourceKey === targetKey) continue;
-      const source = relationSourceTask(edge, noteTexts);
-      const sourceIdentity = relationIdentityKey(source.path, source.blockId, source.line);
+      const foundSource = relationSourceTask(edge, noteTexts);
+      const sourceIdentity = relationIdentityKey(foundSource.path, foundSource.blockId, foundSource.line);
+      const recovery = recoveries[sourceIdentity] || recoveries[sourceKey] || {};
+      const source = recovery.effectiveStatus
+        ? { ...foundSource, status: recovery.effectiveStatus }
+        : foundSource;
       const line = source.rawLine || source.text || "";
       const isOpenTask = RELATION_SUCCESSOR_OPEN_STATUSES.has(source.status) &&
         (typeof lineMatchesTasksGlobalFilterText === "function"
@@ -13875,7 +13953,6 @@ function planSuccessorRelations(options = {}) {
           relationIsPreviousDaily(source.path, previousDailyPath, today)) {
         continue;
       }
-      const recovery = recoveries[sourceIdentity] || recoveries[sourceKey] || {};
       const configuredLabel = successorLabels.labels && successorLabels.labels[edge.key]
         ? successorLabels.labels[edge.key]
         : edge.label;
@@ -13915,7 +13992,15 @@ function planSuccessorRelations(options = {}) {
         pushHeld({ ...baseHeld, reason: "already_started" });
         continue;
       }
-      const blocked = relationBlockedDetails(source, recovery, snapshotAvailable, today);
+      const openPrerequisites = snapshotAvailable && Array.isArray(options.dependencyTasks) &&
+        Array.isArray(source.dependsOn) && source.dependsOn.length > 0
+        ? source.dependsOn.filter((id) => openIds.has(String(id))).length
+        : null;
+      const effectiveRecovery = openPrerequisites == null
+        ? recovery
+        : { ...recovery, openPrerequisites };
+      const blocked = relationBlockedDetails(source, effectiveRecovery, snapshotAvailable, today) ||
+        relationProjectBlockedDetails(source, noteTexts, openIds, closedIds, snapshotAvailable, today);
       if (blocked) {
         pushHeld({ ...baseHeld, ...blocked });
         continue;
@@ -13939,6 +14024,14 @@ function planSuccessorRelations(options = {}) {
           waits_for: otherTargets.map((out) =>
             relationIdentityKey(out.target.path, out.target.blockId, out.target.line),
           ),
+          waits_for_text: otherTargets.map((out) => {
+            const task = relationLookupTask(out.target.path, out.target.blockId, out.target.line, noteTexts);
+            const raw = task && task.lineText || out.target.text || "";
+            const display = typeof successorDisplayText === "function"
+              ? successorDisplayText({ rawLine: raw, blockId: out.target.blockId })
+              : String(raw);
+            return display || String(out.target.path || "").split("/").pop().replace(/\.md$/i, "") || "task";
+          }),
         });
         continue;
       }
@@ -13959,8 +14052,11 @@ function planSuccessorRelations(options = {}) {
         if (recovery.recovered) existing.recovered = true;
       } else {
         offeredBySource.set(sourceIdentity, {
-          source,
+          // Classification uses the effective post-recovery status above;
+          // writes and receipts retain the original parsed task line/status.
+          source: foundSource,
           sourceIdentity,
+          effectiveStatus: source.status,
           recovered: recovery.recovered === true,
           triggers: [trigger],
         });
@@ -13975,7 +14071,7 @@ function planSuccessorRelations(options = {}) {
     const groupId = `${first.targetKey}\0${first.labelKey}`;
     const targetTexts = row.triggers.map((trigger) => trigger.targetText).filter(Boolean);
     const suffix = targetTexts.length > 1 ? relationCopySuffix(targetTexts) : "";
-    const lane = first && row.source.status === "*" ? "Next" : "Ready";
+    const lane = first && row.effectiveStatus === "*" ? "Next" : "Ready";
     const mark = {
       task: row.source,
       group: "relation",
@@ -16835,8 +16931,14 @@ class TaskStatusCyclerReferencesMixin {
       let recoveryFailures = [];
       if (successors && successors.gated === true) {
         successors = null;
-      } else if (successors && Array.isArray(successors.unblocked)) {
-        for (const row of successors.unblocked) {
+      } else if (
+        successors && (
+          Array.isArray(successors.unblocked) ||
+          Array.isArray(successors.keep_moving) ||
+          Array.isArray(successors.relation_successors)
+        )
+      ) {
+        for (const row of successorPlanRows(successors)) {
           if (
             row && row.previous_status_symbol === "?" &&
             row.status_symbol !== "?" && row.not_linked !== "failed"
@@ -19385,6 +19487,38 @@ class TaskStatusCyclerSuccessorProjectMixin {
           if (typeof text === "string") noteTexts.set(path, text);
         }
       }
+      // Relation candidates are discovered in-memory first. Only a positive
+      // incoming lookup whose source or project carries dependency fields
+      // needs the existing dependency snapshot; edge-free Done gestures keep
+      // their zero-extra-read path, including idless predecessors.
+      if (!needsDependents &&
+          successorRelationInputsNeedDependencySnapshot(relationPlanOptions, noteTexts)) {
+        const freshRelationTexts = new Map(noteTexts);
+        const pool = await this.buildSuccessorPool(closedTaskIds, active, cache);
+        let refreshedTasks = [];
+        let refreshedNotes = new Map();
+        if (pool.warm) {
+          refreshedTasks = pool.tasks;
+          refreshedNotes = pool.noteTexts;
+          dependencySnapshotAvailable = true;
+        } else {
+          const cold = await this.readSuccessorColdDocuments(active, cache);
+          refreshedTasks = tasksFromDocuments(cold.documents);
+          refreshedNotes = new Map(cold.documents.map((document) => [document.path, document.text]));
+          for (const [path, text] of pool.noteTexts) {
+            if (!refreshedNotes.has(path)) refreshedNotes.set(path, text);
+          }
+          dependencySnapshotAvailable = cold.complete === true;
+        }
+        for (const [path, text] of Object.entries(closedNoteTexts)) refreshedNotes.set(path, text);
+        for (const [path, text] of freshRelationTexts) refreshedNotes.set(path, text);
+        const overlayPaths = new Set(freshRelationTexts.keys());
+        tasks = refreshedTasks.filter((task) => !overlayPaths.has(String(task && task.path || "")));
+        for (const [path, text] of freshRelationTexts) {
+          tasks.push(...tasksFromDocuments([{ path, text }]));
+        }
+        noteTexts = refreshedNotes;
+      }
       let basenameCounts = countSuccessorBasenames(
         this.app,
         tasks,
@@ -19608,9 +19742,11 @@ class TaskStatusCyclerSuccessorProjectMixin {
           // stale cache locations (warm) or fresh overlay (cold). No new
           // full-vault scan on a warm pass.
           let freshTasks = tasks;
+          let freshDependencySnapshotAvailable = false;
           try {
             const freshCache = typeof this.readSuccessorTasksCache === "function" ? this.readSuccessorTasksCache() : { ready: false, tasks: [] };
             if (freshCache && freshCache.ready) {
+              freshDependencySnapshotAvailable = true;
               const freshBuffered = new Set(freshNoteTexts.keys());
               const base = [];
               for (const task of freshCache.tasks || []) {
@@ -19722,6 +19858,12 @@ class TaskStatusCyclerSuccessorProjectMixin {
                 affected.add(path);
               }
             }
+          }
+          if (successorRelationInputsNeedDependencySnapshot(freshRelationOptions, freshNoteTexts)) {
+            // A relation's own prerequisite or project may have changed while
+            // the picker was open. Trust only the refreshed warm Tasks pool;
+            // otherwise the classifier conservatively holds the candidate.
+            dependencySnapshotAvailable = freshDependencySnapshotAvailable;
           }
           freshNotesObj = {};
           for (const [path, text] of freshNoteTexts) freshNotesObj[path] = text;
@@ -19949,7 +20091,8 @@ class TaskStatusCyclerSuccessorProjectMixin {
       let dailyContent = null;
       if (
         dailyPath &&
-        (plan.unblocked.length > 0 || (plan.keep_moving || []).length > 0 || noteOutcome.failed > 0)
+        (plan.unblocked.length > 0 || (plan.keep_moving || []).length > 0 ||
+          (plan.relation_successors || []).length > 0 || noteOutcome.failed > 0)
       ) {
         try {
           cache.delete(dailyPath);
@@ -19981,6 +20124,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         ...(Array.isArray(plan.relation_labels)
           ? { relation_labels: plan.relation_labels }
           : {}),
+        relation_picker_opened: pickerOpened,
         daily_path: dailyPath || "",
         daily_content: dailyContent,
         failure: noteOutcome.failed > 0
@@ -20035,6 +20179,35 @@ function successorRelationEdgeKey(edge) {
     relationLabelKey(edge.label),
     relationIdentityKey(target.path, target.blockId, target.line),
   ].join("\0");
+}
+
+function successorRelationInputsNeedDependencySnapshot(options = {}, noteTexts = new Map()) {
+  const candidates = Array.isArray(options.relationCandidates) ? options.relationCandidates : [];
+  for (const edge of candidates) {
+    const normalized = relationNormalizeEdge(edge);
+    if (!normalized) continue;
+    const source = relationLookupTask(
+      normalized.source.path,
+      normalized.source.blockId,
+      normalized.source.line,
+      noteTexts,
+    );
+    if (!source) continue;
+    if ((Array.isArray(source.dependsOn) && source.dependsOn.length > 0) ||
+        /\[dependsOn::/i.test(source.lineText || "")) {
+      return true;
+    }
+    if (typeof project089Info === "function") {
+      const project = project089Info(relationNoteText(noteTexts, normalized.source.path), normalized.source.path);
+      if (project && (
+        (Array.isArray(project.dependencyIds) && project.dependencyIds.length > 0) ||
+        /\[dependsOn::/i.test(project.projectTask && project.projectTask.lineText || "")
+      )) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function successorRelationResolveLinkPath(app, note, sourcePath, noteTexts) {
@@ -20148,7 +20321,7 @@ function successorRelationHeldNoticeRows(rows) {
       target: target.text || "task",
       reason: row.reason,
       waits_on: row.waits_on,
-      other_target: (row.waits_for || []).map((key) => String(key).split("#^").pop()).join(", "),
+      other_target: (row.waits_for_text || row.waits_for || []).map((value) => String(value || "task")).join(", "),
       date: row.scheduled,
     }, row.reason);
     if (notice) notices.push(notice);

@@ -351,8 +351,12 @@ function planSuccessorKeepMoving(options = {}) {
 
 function successorPlanRows(plan) {
   if (plan && Array.isArray(plan.rows)) return plan.rows;
-  if (plan && Array.isArray(plan.keep_moving)) return [...(plan.unblocked || []), ...plan.keep_moving];
-  return plan && Array.isArray(plan.unblocked) ? plan.unblocked : [];
+  if (!plan) return [];
+  return [
+    ...(Array.isArray(plan.unblocked) ? plan.unblocked : []),
+    ...(Array.isArray(plan.keep_moving) ? plan.keep_moving : []),
+    ...(Array.isArray(plan.relation_successors) ? plan.relation_successors : []),
+  ];
 }
 
 function successorKeepMovingNoticeText(model, baseNotice) {

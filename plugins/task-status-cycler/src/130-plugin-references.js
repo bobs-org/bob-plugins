@@ -85,8 +85,14 @@ class TaskStatusCyclerReferencesMixin {
       let recoveryFailures = [];
       if (successors && successors.gated === true) {
         successors = null;
-      } else if (successors && Array.isArray(successors.unblocked)) {
-        for (const row of successors.unblocked) {
+      } else if (
+        successors && (
+          Array.isArray(successors.unblocked) ||
+          Array.isArray(successors.keep_moving) ||
+          Array.isArray(successors.relation_successors)
+        )
+      ) {
+        for (const row of successorPlanRows(successors)) {
           if (
             row && row.previous_status_symbol === "?" &&
             row.status_symbol !== "?" && row.not_linked !== "failed"

@@ -289,6 +289,38 @@ class TaskStatusCyclerSuccessorProjectMixin {
           if (typeof text === "string") noteTexts.set(path, text);
         }
       }
+      // Relation candidates are discovered in-memory first. Only a positive
+      // incoming lookup whose source or project carries dependency fields
+      // needs the existing dependency snapshot; edge-free Done gestures keep
+      // their zero-extra-read path, including idless predecessors.
+      if (!needsDependents &&
+          successorRelationInputsNeedDependencySnapshot(relationPlanOptions, noteTexts)) {
+        const freshRelationTexts = new Map(noteTexts);
+        const pool = await this.buildSuccessorPool(closedTaskIds, active, cache);
+        let refreshedTasks = [];
+        let refreshedNotes = new Map();
+        if (pool.warm) {
+          refreshedTasks = pool.tasks;
+          refreshedNotes = pool.noteTexts;
+          dependencySnapshotAvailable = true;
+        } else {
+          const cold = await this.readSuccessorColdDocuments(active, cache);
+          refreshedTasks = tasksFromDocuments(cold.documents);
+          refreshedNotes = new Map(cold.documents.map((document) => [document.path, document.text]));
+          for (const [path, text] of pool.noteTexts) {
+            if (!refreshedNotes.has(path)) refreshedNotes.set(path, text);
+          }
+          dependencySnapshotAvailable = cold.complete === true;
+        }
+        for (const [path, text] of Object.entries(closedNoteTexts)) refreshedNotes.set(path, text);
+        for (const [path, text] of freshRelationTexts) refreshedNotes.set(path, text);
+        const overlayPaths = new Set(freshRelationTexts.keys());
+        tasks = refreshedTasks.filter((task) => !overlayPaths.has(String(task && task.path || "")));
+        for (const [path, text] of freshRelationTexts) {
+          tasks.push(...tasksFromDocuments([{ path, text }]));
+        }
+        noteTexts = refreshedNotes;
+      }
       let basenameCounts = countSuccessorBasenames(
         this.app,
         tasks,
@@ -512,9 +544,11 @@ class TaskStatusCyclerSuccessorProjectMixin {
           // stale cache locations (warm) or fresh overlay (cold). No new
           // full-vault scan on a warm pass.
           let freshTasks = tasks;
+          let freshDependencySnapshotAvailable = false;
           try {
             const freshCache = typeof this.readSuccessorTasksCache === "function" ? this.readSuccessorTasksCache() : { ready: false, tasks: [] };
             if (freshCache && freshCache.ready) {
+              freshDependencySnapshotAvailable = true;
               const freshBuffered = new Set(freshNoteTexts.keys());
               const base = [];
               for (const task of freshCache.tasks || []) {
@@ -626,6 +660,12 @@ class TaskStatusCyclerSuccessorProjectMixin {
                 affected.add(path);
               }
             }
+          }
+          if (successorRelationInputsNeedDependencySnapshot(freshRelationOptions, freshNoteTexts)) {
+            // A relation's own prerequisite or project may have changed while
+            // the picker was open. Trust only the refreshed warm Tasks pool;
+            // otherwise the classifier conservatively holds the candidate.
+            dependencySnapshotAvailable = freshDependencySnapshotAvailable;
           }
           freshNotesObj = {};
           for (const [path, text] of freshNoteTexts) freshNotesObj[path] = text;
@@ -853,7 +893,8 @@ class TaskStatusCyclerSuccessorProjectMixin {
       let dailyContent = null;
       if (
         dailyPath &&
-        (plan.unblocked.length > 0 || (plan.keep_moving || []).length > 0 || noteOutcome.failed > 0)
+        (plan.unblocked.length > 0 || (plan.keep_moving || []).length > 0 ||
+          (plan.relation_successors || []).length > 0 || noteOutcome.failed > 0)
       ) {
         try {
           cache.delete(dailyPath);
@@ -885,6 +926,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         ...(Array.isArray(plan.relation_labels)
           ? { relation_labels: plan.relation_labels }
           : {}),
+        relation_picker_opened: pickerOpened,
         daily_path: dailyPath || "",
         daily_content: dailyContent,
         failure: noteOutcome.failed > 0

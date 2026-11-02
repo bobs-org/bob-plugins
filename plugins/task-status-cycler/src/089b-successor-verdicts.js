@@ -803,6 +803,20 @@ function applySuccessorVerdicts(context) {
             }
           }
         }
+        const waitsForText = Array.isArray(entry.waits_for_text)
+          ? entry.waits_for_text.slice()
+          : (Array.isArray(entry.waits_for) ? entry.waits_for.map((key) => {
+            try {
+              const identity = relationParseIdentityKey(String(key));
+              const target = identity && relationLookupTask(identity.path, identity.blockId, identity.line, noteTexts);
+              const text = target && target.lineText
+                ? successorDisplayText(target)
+                : "";
+              return text || String(identity && identity.path || key).split("/").pop().replace(/\.md$/i, "") || "task";
+            } catch (_error) {
+              return String(key || "task").split("/").pop().replace(/\.md$/i, "") || "task";
+            }
+          }) : []);
         const row = {
           note_path: notePath,
           block_id: blockId,
@@ -814,6 +828,7 @@ function applySuccessorVerdicts(context) {
           ...(entry.scheduled ? { scheduled: entry.scheduled } : {}),
           ...(entry.project ? { project: entry.project } : {}),
           ...(Array.isArray(entry.waits_for) ? { waits_for: entry.waits_for.slice() } : {}),
+          ...(waitsForText.length > 0 ? { waits_for_text: waitsForText } : {}),
           relation: {
             label: String(entry.label || ""),
             key: String(entry.labelKey || entry.label || "").toLowerCase(),

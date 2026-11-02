@@ -39,6 +39,35 @@ function successorRelationEdgeKey(edge) {
   ].join("\0");
 }
 
+function successorRelationInputsNeedDependencySnapshot(options = {}, noteTexts = new Map()) {
+  const candidates = Array.isArray(options.relationCandidates) ? options.relationCandidates : [];
+  for (const edge of candidates) {
+    const normalized = relationNormalizeEdge(edge);
+    if (!normalized) continue;
+    const source = relationLookupTask(
+      normalized.source.path,
+      normalized.source.blockId,
+      normalized.source.line,
+      noteTexts,
+    );
+    if (!source) continue;
+    if ((Array.isArray(source.dependsOn) && source.dependsOn.length > 0) ||
+        /\[dependsOn::/i.test(source.lineText || "")) {
+      return true;
+    }
+    if (typeof project089Info === "function") {
+      const project = project089Info(relationNoteText(noteTexts, normalized.source.path), normalized.source.path);
+      if (project && (
+        (Array.isArray(project.dependencyIds) && project.dependencyIds.length > 0) ||
+        /\[dependsOn::/i.test(project.projectTask && project.projectTask.lineText || "")
+      )) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function successorRelationResolveLinkPath(app, note, sourcePath, noteTexts) {
   const raw = String(note || "").split("|")[0].split("#")[0].trim();
   if (!raw) return sourcePath;
@@ -150,7 +179,7 @@ function successorRelationHeldNoticeRows(rows) {
       target: target.text || "task",
       reason: row.reason,
       waits_on: row.waits_on,
-      other_target: (row.waits_for || []).map((key) => String(key).split("#^").pop()).join(", "),
+      other_target: (row.waits_for_text || row.waits_for || []).map((value) => String(value || "task")).join(", "),
       date: row.scheduled,
     }, row.reason);
     if (notice) notices.push(notice);

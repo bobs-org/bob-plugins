@@ -422,10 +422,9 @@ function buildSuccessorPickerModel(options = {}) {
       try {
         const first = heldForGroup[0] || {};
         const foldInput = {
-          waits_for: (first.waits_for || []).map((key) => {
-            // Map waits_for target keys to display text when notes allow; fall back to key.
-            return String(key).split("#^").pop() || String(key);
-          }),
+          waits_for: (first.waits_for_text || first.waits_for || []).map((value) =>
+            String(value || "task"),
+          ),
           source: String(first.text || first.source || ""),
           already_started: alreadyStarted,
           blocked,

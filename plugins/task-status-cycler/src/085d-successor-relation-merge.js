@@ -28,9 +28,10 @@ function successorDisplayText(task, globalFilter = "#task") {
   const filter = globalFilter === "#task" && task.globalFilter
     ? task.globalFilter
     : globalFilter;
-  if (task.rawLine) {
+  const rawLine = task.rawLine || task.lineText;
+  if (rawLine) {
     return cleanDescription(
-      successorBodyAfterStatusBox(task.rawLine),
+      successorBodyAfterStatusBox(rawLine),
       filter,
       task.blockId || null,
     );
@@ -102,8 +103,9 @@ function successorRelationLabelsFromOptions(options = {}) {
 // state (recovers + stillBlocked). Keys are relation identities so the
 // pure R1-R7 rule sees the effective post-recovery state while the write
 // guard keeps exact preimage lines from noteTexts.
-function buildSuccessorRelationRecoveries(recovers, stillBlocked) {
+function buildSuccessorRelationRecoveries(recovers, successorMarks, stillBlocked, context = {}) {
   const table = {};
+  const currentLive = relationLiveIdentitySet(context.dailyAfter, context.dailyPath || "");
   for (const recover of Array.isArray(recovers) ? recovers : []) {
     const task = recover && recover.task;
     if (!task || !task.path) continue;
@@ -111,7 +113,24 @@ function buildSuccessorRelationRecoveries(recovers, stillBlocked) {
     if (!key) continue;
     if (!table[key]) table[key] = {};
     table[key].recovered = true;
+    if (task.status === "?") {
+      table[key].effectiveStatus = recover.raiseToNext === true || currentLive.has(key)
+        ? "*"
+        : " ";
+    }
     if (recover.foldedProject) table[key].project = String(recover.foldedProject);
+  }
+  // A hand-off/project mark is also a real recovery: an unpicked offer still
+  // releases the blocked task to its post-close lane. Feed that effective
+  // status to R4 so a relation reason can merge without causing recovery.
+  for (const mark of Array.isArray(successorMarks) ? successorMarks : []) {
+    const task = mark && mark.task;
+    if (!task || !task.path || task.status !== "?") continue;
+    const key = relationIdentityKey(task.path, task.blockId, task.line);
+    if (!key) continue;
+    if (!table[key]) table[key] = {};
+    table[key].recovered = true;
+    table[key].effectiveStatus = currentLive.has(key) ? "*" : " ";
   }
   for (const row of Array.isArray(stillBlocked) ? stillBlocked : []) {
     if (!row || !row.note_path) continue;
@@ -135,6 +154,7 @@ function buildSuccessorRelationRecoveries(recovers, stillBlocked) {
 function planSuccessorRelationForContext(context = {}) {
   const options = context.options || {};
   const recovers = context.recovers || [];
+  const successorMarks = context.successorMarks || [];
   const stillBlocked = context.stillBlocked || [];
   const successorLabels = successorRelationLabelsFromOptions(options);
   const events = Array.isArray(options.relationEvents) ? options.relationEvents : [];
@@ -146,7 +166,10 @@ function planSuccessorRelationForContext(context = {}) {
     return { marks: [], held: [], groups: [], relation_check: null, scan: false, warnings: [] };
   }
   const recoveries = {
-    ...buildSuccessorRelationRecoveries(recovers, stillBlocked),
+    ...buildSuccessorRelationRecoveries(recovers, successorMarks, stillBlocked, {
+      dailyAfter: context.dailyAfter,
+      dailyPath: context.dailyPath,
+    }),
     ...((options.relationRecoveries && typeof options.relationRecoveries === "object")
       ? options.relationRecoveries
       : {}),
@@ -168,6 +191,8 @@ function planSuccessorRelationForContext(context = {}) {
       navSuccessorsVersion: options.navSuccessorsVersion,
       relationIndexReady: options.relationIndexReady,
       dependencySnapshotAvailable: options.dependencySnapshotAvailable,
+      dependencyTasks: Array.isArray(context.dependencyTasks) ? context.dependencyTasks : [],
+      closedTaskIds: Array.isArray(context.closedTaskIds) ? context.closedTaskIds : [],
       recoveries,
       parkedIdentities: options.relationParkedIdentities,
       baselineLive: options.relationBaselineLive,

@@ -1460,3 +1460,410 @@ test("relation close honors the link_unblocked kill switch and cancellation with
   assert.equal(queried, 0, "relationIndex is not consulted unless picker API v3 is available");
   assert.doesNotMatch(oldPicker.harness.getSource("source.md"), /^- \[\*\] #task Write follow-up/m);
 });
+
+test("Esc after a relation picker suppresses held-only notices", async () => {
+  notices.length = 0;
+  const fixture = makeRelationCloseFixture({
+    sourceText: [
+      "- [ ] #task Write follow-up ^followup",
+      "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+      "- [/] #task Already started ^started",
+      "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+    ].join("\n"),
+    picker: async () => ({ picks: [] }),
+    noticeVersion: 2,
+  });
+  await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+    editor: fixture.editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+  assert.deepEqual(notices, [], "Esc is silent after the picker showed the held fold");
+});
+
+test("actual recovered dependent retains its relation reason", async () => {
+  const fixture = makeRelationCloseFixture({
+    sourceText: [
+      "- [?] #task Write follow-up [dependsOn:: done__finish] [id:: followup] ^followup",
+      "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+    ].join("\n"),
+  });
+  const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+    editor: fixture.editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+  const row = result.successors.unblocked.find((entry) => entry.block_id === "followup");
+  assert.ok(row && row.link, "dependency recovery should still link when picked");
+  assert.equal(row.relation?.label, "starts after", "hand-off keeps relation as its second reason");
+});
+
+test("idless predecessor with a satisfied dependent source uses an available snapshot", async () => {
+  let pickerCount = 0;
+  const fixture = makeRelationCloseFixture({
+    sourceText: [
+      "- [ ] #task Write follow-up [dependsOn:: old__done] ^followup",
+      "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+      "- [x] #task Old prerequisite [id:: old__done] ^old",
+    ].join("\n"),
+    picker: async (model) => {
+      pickerCount += 1;
+      return { picks: model.groups.flatMap((group) => group.rows)
+        .filter((row) => row.selectable).map((row) => ({ key: row.key })) };
+    },
+  });
+  const closedText = "- [x] #task Finish prerequisite ^finish";
+  await fixture.harness.app.vault.modify(
+    fixture.harness.app.vault.getAbstractFileByPath("done.md"),
+    closedText,
+  );
+  fixture.closed.taskId = null;
+  const sources = { "source.md": fixture.source, "done.md": closedText, [DAILY_PATH]: fixture.day };
+  installTasksStub(fixture.plugin, relationTasksFromSources(sources));
+  const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+    editor: fixture.editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+  assert.equal(pickerCount, 1, JSON.stringify(result.successors));
+});
+
+test("relation-only successful result returns current daily content", async () => {
+  const fixture = makeRelationCloseFixture();
+  const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+    editor: fixture.editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+  assert.match(result.successors.daily_content || "", /\[\[source#\^followup\]\]/);
+});
+
+test("warm dependency snapshot holds a source with an open own prerequisite", async () => {
+  let pickerCount = 0;
+  const fixture = makeRelationCloseFixture({
+    sourceText: [
+      "- [ ] #task Write follow-up [dependsOn:: other__open] ^followup",
+      "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+      "- [ ] #task Open prerequisite [id:: other__open] ^other",
+    ].join("\n"),
+    picker: async () => { pickerCount += 1; return { picks: [] }; },
+  });
+  const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+    editor: fixture.editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+  assert.equal(pickerCount, 0, JSON.stringify(result.successors));
+  assert.equal(result.successors.relation_held?.[0]?.reason, "blocked");
+});
+
+test("unreconciled Ready resident of a blocked project is held", async () => {
+  let pickerCount = 0;
+  const fixture = makeRelationCloseFixture({
+    sourceText: [
+      "---", 'type: "[[project]]"', "---",
+      "- [?] #task Project [scheduled:: 2099-01-01] ^prj",
+      "- [ ] #task Write follow-up ^followup",
+      "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+    ].join("\n"),
+    picker: async () => { pickerCount += 1; return { picks: [] }; },
+  });
+  const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+    editor: fixture.editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+  assert.equal(pickerCount, 0, JSON.stringify(result.successors));
+  assert.equal(result.successors.relation_held?.[0]?.reason, "blocked");
+});
+
+test("real project recovery stays independent when relation successor is picked or dismissed", async () => {
+  for (const pick of [true, false]) {
+    const projectText = [
+      "---", 'type: "[[project]]"', "status: wip", "---",
+      "- [?] #task Project [dependsOn:: done__finish] [id:: project__prj] ^prj",
+      "- [?] #task Write follow-up #prj_is_blocked [id:: followup__task] ^followup",
+      "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+    ].join("\n");
+    const fixture = makeRelationCloseFixture({
+      sourceText: projectText,
+      picker: async (model) => ({ picks: pick
+        ? model.groups.flatMap((group) => group.rows).filter((row) => row.selectable)
+          .map((row) => ({ key: row.key }))
+        : [] }),
+    });
+    const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+      editor: fixture.editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH,
+      relationConfig: fixture.config,
+    });
+    const resident = result.successors.relation_successors.find((row) => row.block_id === "followup");
+    assert.ok(resident, JSON.stringify(result.successors));
+    assert.equal(result.reopened, 2, JSON.stringify(result));
+    assert.equal(!!resident.link, pick);
+    if (!pick) {
+      assert.match(fixture.harness.getSource("source.md"), /^- \[ \] #task Write follow-up/m);
+      assert.doesNotMatch(fixture.editor.getValue(), /\[\[source#\^followup\]\]/);
+    }
+  }
+});
+
+test("post-picker revalidation refreshes relation state without opening a second picker", async () => {
+  const replaceEditorText = (editor, value) => editor.replaceRange(
+    value,
+    { line: 0, ch: 0 },
+    { line: editor.lineCount() - 1, ch: editor.getLine(editor.lineCount() - 1).length },
+  );
+  const attachEditors = (fixture, entries) => {
+    const leaves = [
+      { view: { file: { path: DAILY_PATH }, editor: fixture.editor } },
+      ...entries.map(([path, editor]) => ({ view: { file: { path }, editor } })),
+    ];
+    fixture.harness.app.workspace = { getLeavesOfType: () => leaves };
+  };
+  const pickedKeys = (model) => model.groups.flatMap((group) => group.rows || [])
+    .filter((row) => row.selectable).map((row) => ({ key: row.key }));
+
+  for (const scenario of [
+    "own-prerequisite",
+    "project-schedule",
+    "new-live-link",
+    "target-not-done",
+    "config-disabled",
+    "index-unready",
+    "new-outgoing-target",
+  ]) {
+    let fixture;
+    let pickerCalls = 0;
+    let sourceEditor = null;
+    let targetEditor = null;
+    let labels = ["starts after"];
+    let configRevision = 1;
+    fixture = makeRelationCloseFixture({
+      sourceText: scenario === "project-schedule"
+        ? [
+          "---", 'type: "[[project]]"', "---",
+          "- [ ] #task Project [id:: project__prj] ^prj",
+          "- [ ] #task Write follow-up ^followup",
+          "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+        ].join("\n")
+        : scenario === "new-outgoing-target"
+          ? [
+            "- [ ] #task Write follow-up ^followup",
+            "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+            "- [ ] #task Wait for review ^wait",
+          ].join("\n")
+          : undefined,
+      picker: async (model) => {
+        pickerCalls += 1;
+        const picks = pickedKeys(model);
+        sourceEditor = createTextEditor(fixture.source);
+        if (scenario === "own-prerequisite") {
+          const updated = fixture.source.replace(
+            "#task Write follow-up ^followup",
+            "#task Write follow-up [dependsOn:: open__pre] ^followup",
+          ) + "\n- [ ] #task Open prerequisite [id:: open__pre] ^pre";
+          replaceEditorText(sourceEditor, updated);
+          const sources = { "source.md": updated, "done.md": fixture.closedText || "- [x] #task Finish prerequisite [id:: done__finish] ^finish", [DAILY_PATH]: fixture.day };
+          installTasksStub(fixture.plugin, relationTasksFromSources(sources));
+          attachEditors(fixture, [["source.md", sourceEditor]]);
+        } else if (scenario === "project-schedule") {
+          const updated = fixture.source.replace(
+            "#task Project [id:: project__prj] ^prj",
+            "#task Project [scheduled:: 2099-01-01] [id:: project__prj] ^prj",
+          ).replace("- [ ] #task Project", "- [?] #task Project");
+          replaceEditorText(sourceEditor, updated);
+          attachEditors(fixture, [["source.md", sourceEditor]]);
+        } else if (scenario === "new-live-link") {
+          replaceEditorText(
+            fixture.editor,
+            fixture.day.replace("- [ ] () — WRITE", "- [ ] () — WRITE\n\t- [[source#^followup]]"),
+          );
+          attachEditors(fixture, []);
+        } else if (scenario === "target-not-done") {
+          targetEditor = createTextEditor("- [ ] #task Finish prerequisite [id:: done__finish] ^finish");
+          attachEditors(fixture, [["done.md", targetEditor]]);
+          installTasksStub(fixture.plugin, relationTasksFromSources({
+            "source.md": fixture.source,
+            "done.md": targetEditor.getValue(),
+            [DAILY_PATH]: fixture.day,
+          }));
+        } else if (scenario === "config-disabled") {
+          fixture.config.fsModule.statSync = () => ({ mtimeMs: configRevision, size: labels.length });
+          fixture.config.parseYaml = () => ({ relations: { successor_labels: labels } });
+          labels = [];
+          configRevision += 1;
+        } else if (scenario === "index-unready") {
+          const index = fixture.plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex;
+          fixture.plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex = {
+            ...index,
+            ready: () => false,
+          };
+        } else if (scenario === "new-outgoing-target") {
+          const updated = fixture.source.replace(
+            "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+            "  - 🪢 **LINKS:** starts after [[done#^finish]]\n  - 🪢 **LINKS:** starts after [[source#^wait]]",
+          );
+          replaceEditorText(sourceEditor, updated);
+          const sources = { "source.md": updated, "done.md": fixture.closedText || "- [x] #task Finish prerequisite [id:: done__finish] ^finish", [DAILY_PATH]: fixture.day };
+          const index = helpers.buildFakeRelationIndex(sources);
+          fixture.plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex = { version: 2, ...index };
+          installTasksStub(fixture.plugin, relationTasksFromSources(sources));
+          attachEditors(fixture, [["source.md", sourceEditor]]);
+        }
+        return { picks };
+      },
+    });
+    // The task identity text is the immutable gesture target for the test.
+    fixture.closedText = "- [x] #task Finish prerequisite [id:: done__finish] ^finish";
+    if (scenario === "config-disabled") {
+      fixture.config.fsModule.statSync = () => ({ mtimeMs: configRevision, size: labels.length });
+      fixture.config.parseYaml = () => ({ relations: { successor_labels: labels } });
+    }
+    const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+      editor: fixture.editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH,
+      relationConfig: fixture.config,
+    });
+    assert.equal(pickerCalls, 1, `${scenario}: one picker only`);
+    assert.doesNotMatch(fixture.harness.getSource("source.md"), /^- \[\*\] #task Write follow-up/m,
+      `${scenario}: stale pick must not create a successor link`);
+    if (scenario === "own-prerequisite" || scenario === "project-schedule" || scenario === "new-outgoing-target") {
+      assert.equal(result.successors.relation_held?.[0]?.reason,
+        scenario === "new-outgoing-target" ? "waits_for" : "blocked",
+        `${scenario}: ${JSON.stringify(result.successors)}`);
+      if (scenario === "new-outgoing-target") {
+        assert.match(result.successors.relation_held[0].waits_for_text[0], /Wait for review/);
+        assert.doesNotMatch(result.successors.relation_held[0].waits_for_text[0], /\^wait/);
+      }
+    }
+  }
+});
+
+test("post-picker replan refuses stale picks individually and leaves new offers unselected", async () => {
+  let fixture;
+  let pickerCalls = 0;
+  let sourceEditor;
+  const initialSource = [
+    "- [ ] #task Follow-up one ^one",
+    "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+    "- [ ] #task Follow-up two ^two",
+    "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+  ].join("\n");
+  fixture = makeRelationCloseFixture({
+    sourceText: initialSource,
+    picker: async (model) => {
+      pickerCalls += 1;
+      const picks = model.groups.flatMap((group) => group.rows || [])
+        .filter((row) => row.selectable).map((row) => ({ key: row.key }));
+      sourceEditor = createTextEditor(initialSource);
+      const updated = [
+        "- [ ] #task Follow-up one ^one",
+        "  - unrelated note",
+        "- [ ] #task Follow-up two ^two",
+        "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+        "- [ ] #task Follow-up three ^three",
+        "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+      ].join("\n");
+      sourceEditor.replaceRange(updated, { line: 0, ch: 0 }, {
+        line: sourceEditor.lineCount() - 1,
+        ch: sourceEditor.getLine(sourceEditor.lineCount() - 1).length,
+      });
+      const sources = { "source.md": updated, "done.md": "- [x] #task Finish prerequisite [id:: done__finish] ^finish", [DAILY_PATH]: fixture.day };
+      fixture.plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex = {
+        version: 2,
+        ...helpers.buildFakeRelationIndex(sources),
+      };
+      installTasksStub(fixture.plugin, relationTasksFromSources(sources));
+      fixture.harness.app.workspace = {
+        getLeavesOfType: () => [{ view: { file: { path: "source.md" }, editor: sourceEditor } }],
+      };
+      return { picks };
+    },
+  });
+  const result = await fixture.plugin.finalizeClosedTasks([fixture.closed], {
+    editor: fixture.editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+  });
+  const rows = result.successors.relation_successors;
+  assert.equal(pickerCalls, 1);
+  assert.equal(rows.find((row) => row.block_id === "one"), undefined);
+  assert.ok(rows.find((row) => row.block_id === "two")?.link);
+  assert.equal(rows.find((row) => row.block_id === "three")?.link, null,
+    "a newly appearing offer is never substituted for a stale selected row");
+  assert.equal(rows.find((row) => row.block_id === "three")?.not_linked, "not_selected");
+});
+
+test("review walk holds the pending picker lock and advances once after relation selection", async () => {
+  let resolvePicker;
+  let pickerCalls = 0;
+  let captures = 0;
+  let continues = 0;
+  let walkBusy = false;
+  const doneText = "- [ ] #task Finish prerequisite [id:: done__finish] ^finish";
+  const sourceText = [
+    "- [ ] #task Write follow-up ^followup",
+    "  - 🪢 **LINKS:** starts after [[done#^finish]]",
+  ].join("\n");
+  const day = [
+    `# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX",
+    "\t- [[done#^finish]]", "- [ ] () — WRITE",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "done.md": doneText,
+    "source.md": sourceText,
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(doneText, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "done.md");
+  const file = harness.app.vault.getAbstractFileByPath("done.md");
+  harness.app.workspace = {
+    getActiveViewOfType: () => ({ file, editor }),
+    getActiveFile: () => file,
+    getLeavesOfType: () => [],
+  };
+  installRelationRuntime(plugin, [], () => {
+    pickerCalls += 1;
+    return new Promise((resolve) => { resolvePicker = resolve; });
+  });
+  const relationConfigForWalk = relationConfig();
+  const prepareRelationRuntime = plugin.prepareSuccessorRelationRuntime;
+  plugin.prepareSuccessorRelationRuntime = function (active, cancelled, pickerApi) {
+    return prepareRelationRuntime.call(
+      this,
+      { ...active, relationConfig: relationConfigForWalk },
+      cancelled,
+      pickerApi,
+    );
+  };
+  const sources = { "done.md": doneText, "source.md": sourceText, [DAILY_PATH]: day };
+  installTasksStub(plugin, relationTasksFromSources(sources));
+  plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex = {
+    version: 2,
+    ...helpers.buildFakeRelationIndex(sources),
+  };
+  const outcomes = [];
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.reviewWalk = {
+    version: 1,
+    capture() {
+      captures += 1;
+      if (walkBusy) return { busy: true };
+      walkBusy = true;
+      return { key: "row", seq: 7, epoch: 3 };
+    },
+    continue(origin, outcome) {
+      continues += 1;
+      outcomes.push({ origin, outcome });
+      walkBusy = false;
+      return Promise.resolve({ ok: true, advanced: true, stopped: false });
+    },
+  };
+  plugin.handleVimTaskToggleOpenDone();
+  for (let round = 0; round < 12 && pickerCalls === 0; round += 1) await flushAsyncActions();
+  assert.equal(pickerCalls, 1, "the relation picker is pending for the walk landing");
+  plugin.handleVimTaskToggleOpenDone();
+  await flushAsyncActions();
+  assert.equal(captures, 2);
+  assert.equal(continues, 0, "the busy duplicate does not release or advance the origin");
+  resolvePicker({ picks: [{ key: "source.md#^followup" }] });
+  for (let round = 0; round < 20 && continues === 0; round += 1) await flushAsyncActions();
+  assert.equal(pickerCalls, 1);
+  assert.equal(continues, 1);
+  assert.equal(outcomes[0].outcome.kind, "complete");
+  assert.match(outcomes[0].outcome.notice || "", /starts after/);
+  assert.match(editor.getLine(0), /^- \[x\] #task Finish prerequisite/);
+  assert.match(harness.getSource("source.md"), /^- \[\*\] #task Write follow-up/m);
+  assert.match(harness.getSource(DAILY_PATH), /\[\[source#\^followup\]\]/);
+});

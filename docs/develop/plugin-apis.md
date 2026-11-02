@@ -204,7 +204,8 @@ task-type routing surface: `effectiveTypeFor(request)`,
 `typeComponentsOf(name)`, `typeAgrees(taskKey, entryName)`,
 `planRetype(options)`, `planLanding(options)`, `planSplit(options)`,
 `mergeNames(base, others)`,
-`shed(name, beforeKeys, afterKeys)`, `planPlacement(options)`, and
+`narrowClosed(name, workedKeys)`, `shed(name, beforeKeys, afterKeys)`,
+`planPlacement(options)`, and
 `planRelocation(options)`. `suggestFor` uses a
 vault-relative `path`, a one-based integer line number, and optional full live
 Markdown text. When `text` is omitted it reads that line only from an open
@@ -251,9 +252,11 @@ remaining name and one created entry per split type (each with its moved
 link indices, name-ordered, still created when empty) or an `error` with a
 `split_*` code; a null or empty selector set splits every merged-in type.
 `mergeNames(base, others)` joins components
-in order and keeps the first spelling of duplicates. `shed(name, beforeKeys,
-afterKeys)` removes merged-in types whose last Task Link left, while retaining
-the base type, labels, and unlinked types. `effective` and `inherited` accept
+in order and keeps the first spelling of duplicates. `narrowClosed(name,
+workedKeys)` narrows a closed merged Pomodoro to the worked type components,
+retaining labels and source order. `shed(name, beforeKeys, afterKeys)` removes
+merged-in types whose last Task Link left, while retaining the base type,
+labels, and unlinked types. `effective` and `inherited` accept
 suggestion objects or keys.
 `planPlacement({ type, typeName?, entries, alreadyQueued?, exempt? })`
 returns `entry`, `create`, `alreadyQueued`, or `noType` per D7, and

@@ -739,6 +739,7 @@ module.exports.helpers = {
   planLanding,
   planSplit,
   mergeNames,
+  narrowClosed,
   shed,
   taskTypeIsMeetName,
   planPlacement,

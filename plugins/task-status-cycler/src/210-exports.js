@@ -83,6 +83,7 @@ module.exports.helpers = {
   parseEventTaskClockSessionRange,
   parseEventTaskClockSpan,
   parsePomodoroEntryLineParts,
+  replacePomodoroEntryName,
   parseScheduleLogMarkerLine,
   parseStrictCalendarDate,
   parseWorkLogMarkerLine,

@@ -30,6 +30,7 @@ class BobLedgerToolsTaskThemeApiMixin {
       planLanding: (options) => this.taskTypePlanLanding(options),
       planSplit: (options) => this.taskTypePlanSplit(options),
       mergeNames: (base, others) => mergeNames(base, others),
+      narrowClosed: (name, worked) => this.taskTypeNarrowClosed(name, worked),
       shed: (name, before, after) => this.taskTypeShed(name, before, after),
       isMeetName: (name) => taskTypeIsMeetName(name),
       planPlacement: (options) => this.taskTypePlanPlacement(options),
@@ -142,6 +143,14 @@ class BobLedgerToolsTaskThemeApiMixin {
   taskTypeShed(name, before, after) {
     try {
       return shed(name, before, after, this.taskTypeSources());
+    } catch (error) {
+      return typeof name === "string" ? name : "";
+    }
+  }
+
+  taskTypeNarrowClosed(name, worked) {
+    try {
+      return narrowClosed(name, worked, this.taskTypeSources());
     } catch (error) {
       return typeof name === "string" ? name : "";
     }

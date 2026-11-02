@@ -256,6 +256,19 @@ function formatPomodoroPlaceholderLine(name) {
   return `${POMODORO_PLACEHOLDER_LINE} ${POMODORO_NAME_SEPARATOR} ${trimmedName}`;
 }
 
+function replacePomodoroEntryName(lineText, name) {
+  const line = String(lineText || "");
+  const parsed = parsePomodoroEntryLineParts(line);
+  if (!parsed || !parsed.name || typeof name !== "string") {
+    return line;
+  }
+  const separator = line.indexOf(POMODORO_NAME_SEPARATOR);
+  if (separator < 0) {
+    return line;
+  }
+  return `${line.slice(0, separator + POMODORO_NAME_SEPARATOR.length)} ${name}`;
+}
+
 function getSubBulletBlockRange(lines, pomodoroLine, section = null) {
   if (!Array.isArray(lines) || !Number.isInteger(pomodoroLine)) {
     return null;
@@ -858,9 +871,12 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
         type: "replaceLine",
         line: pomodoroLine,
         sourceLineText: String(lines[pomodoroLine] || ""),
-        lineText: stampPomodoroClosedLineClock(
-          replaceTaskStatusSymbol(lines[pomodoroLine], "x"),
-          options && options.sessionClock,
+        lineText: replacePomodoroEntryName(
+          stampPomodoroClosedLineClock(
+            replaceTaskStatusSymbol(lines[pomodoroLine], "x"),
+            options && options.sessionClock,
+          ),
+          options && options.closedName,
         ),
       },
   ];
@@ -936,13 +952,16 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
 
   if (shouldCreatePomodoro) {
     createdPomodoro = true;
-    plannedCreatedPomodoroName = createdPomodoroName;
+    plannedCreatedPomodoroName = options &&
+      typeof options.continuationName === "string"
+      ? options.continuationName
+      : createdPomodoroName;
     copiedBulletLines = copyableBulletLines;
     edits.push({
       type: "insertLines",
       line: insertLine,
       lines: [
-        formatPomodoroPlaceholderLine(createdPomodoroName),
+        formatPomodoroPlaceholderLine(plannedCreatedPomodoroName),
         ...(copiedBulletLines.length > 0
           ? copiedBulletLines
           : [EMPTY_POMODORO_SUB_BULLET_LINE]),
@@ -968,6 +987,11 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
     copiedBulletLines,
     edits,
     deferredOnlyClose,
+    closedName: !deferredOnlyClose && options &&
+      typeof options.closedName === "string"
+      ? options.closedName
+      : createdPomodoroName,
+    shed: options && Array.isArray(options.shed) ? options.shed.slice() : [],
   };
 }
 

@@ -986,3 +986,184 @@ test("the completion plan leaves a timed headline's key and span alone unless a 
     assert.equal(text.includes("[t::"), false);
   }
 });
+
+test("Ctrl+Enter close names use pre-close Task Link types and R6 outcomes", async () => {
+  const lines = [
+    "## Pomodoros",
+    "- [ ] () — BUILD + FIX + READ",
+    "\t- [[Tasks#^fix]]",
+    "\t- [[Tasks#^build]]#",
+    "\t- ![[Tasks#^read]]",
+  ];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const bullets = helpers.classifyPomodoroSubBullets(
+    lines,
+    { startLine: 2, endLine: 5 },
+  );
+  const calls = {};
+  const typeParts = (name) => String(name || "")
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => ({ name: part, key: part.toLowerCase(), isType: true }));
+  const themes = {
+    version: 1,
+    effectiveTypeFor({ line, text }) {
+      const taskLine = String(text || "").split("\n")[line - 1] || "";
+      const match = /#(build|fix|read)\b/i.exec(taskLine);
+      return match ? { theme: { key: match[1].toLowerCase() } } : null;
+    },
+    isMeetName: (name) => String(name || "").trim().toLowerCase() === "meet",
+    typeComponentsOf: typeParts,
+    narrowClosed(name, worked) {
+      calls.narrow = { name, worked: worked.slice() };
+      return "FIX + READ";
+    },
+    shed(name, before, after) {
+      calls.shed = { name, before: before.slice(), after: after.slice() };
+      return "BUILD + FIX";
+    },
+  };
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.app = { plugins: { plugins: { "bob-ledger-tools": { api: { themes } } } } };
+  plugin.resolveTranscludedBlockTarget = async (target) => {
+    const type = target.blockId;
+    return {
+      file: { path: "Tasks.md" },
+      line: 0,
+      sourceText: `- [ ] #${type} ${type} work ^${type}`,
+    };
+  };
+
+  const names = await plugin.resolvePomodoroCloseNames(
+    lines,
+    section,
+    1,
+    { activePath: "Daily.md", originPath: "Daily.md" },
+    bullets,
+  );
+  assert.deepEqual(calls.narrow, {
+    name: "BUILD + FIX + READ",
+    worked: ["fix", "read"],
+  });
+  assert.deepEqual(calls.shed, {
+    name: "BUILD + FIX + READ",
+    before: ["fix", "build", "read"],
+    after: ["fix", "build"],
+  });
+  assert.deepEqual(names, {
+    closedName: "FIX + READ",
+    continuationName: "BUILD + FIX",
+    shed: ["READ"],
+  });
+
+  const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1, names);
+  const closeEdit = plan.edits.find((edit) => edit.type === "replaceLine" && edit.line === 1);
+  const createEdit = plan.edits.find((edit) => edit.type === "insertLines");
+  assert.equal(closeEdit.lineText, "- [x] () — FIX + READ");
+  assert.equal(createEdit.lines[0], "- [ ] () — BUILD + FIX");
+});
+
+test("MEET close names are passed through without resolving or shedding types", async () => {
+  const lines = ["## Pomodoros", "- [ ] () — MEET"];
+  const section = helpers.findPomodorosSectionInLines(lines);
+  const plugin = new TaskStatusCyclerPlugin();
+  let resolved = 0;
+  plugin.app = {
+    plugins: {
+      plugins: {
+        "bob-ledger-tools": {
+          api: { themes: {
+            version: 1,
+            isMeetName: (name) => String(name).toLowerCase() === "meet",
+            effectiveTypeFor: () => { resolved += 1; return null; },
+            narrowClosed: () => { resolved += 1; return "changed"; },
+            shed: () => { resolved += 1; return "changed"; },
+          } },
+        },
+      },
+    },
+  };
+  const names = await plugin.resolvePomodoroCloseNames(
+    lines,
+    section,
+    1,
+    { activePath: "Daily.md", originPath: "Daily.md" },
+  );
+  assert.deepEqual(names, { closedName: "MEET", continuationName: "MEET", shed: [] });
+  assert.equal(resolved, 0);
+});
+
+test("Ctrl+Enter applies narrowed closed and shed continuation names", async () => {
+  const daily = [
+    "## Pomodoros",
+    "- [ ] () — BUILD + FIX + READ",
+    "\t- [[Tasks#^fix]]",
+    "\t- [[Tasks#^build]]#",
+    "\t- ![[Tasks#^read]]",
+  ].join("\n");
+  const harness = createInMemoryObsidianApp({ "Daily.md": daily });
+  const editor = createTextEditor(daily, { line: 1, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  plugin.scheduleCenterEditorLineInView = () => {};
+  attachActiveMarkdownView(plugin, harness, editor);
+  const parts = (name) => String(name || "")
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => ({ name: part, key: part.toLowerCase(), isType: true }));
+  harness.app.plugins.plugins["bob-ledger-tools"].api.themes = {
+    version: 1,
+    effectiveTypeFor({ line, text }) {
+      const body = String(text || "").split("\n")[line - 1] || "";
+      const match = /#(build|fix|read)\b/i.exec(body);
+      return match ? { theme: { key: match[1].toLowerCase() } } : null;
+    },
+    isMeetName: (name) => String(name || "").trim().toLowerCase() === "meet",
+    typeComponentsOf: parts,
+    narrowClosed(name, worked) {
+      const selected = new Set(worked);
+      return parts(name)
+        .filter((part) => selected.has(part.key))
+        .map((part) => part.name)
+        .join(" + ");
+    },
+    shed(name, before, after) {
+      const prior = new Set(before);
+      const carried = new Set(after);
+      const original = parts(name);
+      const drop = new Set(original
+        .filter((part) => prior.has(part.key) && !carried.has(part.key))
+        .map((part) => part.key));
+      if (original.every((part) => drop.has(part.key))) {
+        drop.delete(original[0].key);
+      }
+      return original
+        .filter((part) => !drop.has(part.key))
+        .map((part) => part.name)
+        .join(" + ");
+    },
+  };
+  plugin.resolveTranscludedBlockTarget = async (target) => ({
+    file: { path: "Tasks.md" },
+    line: 0,
+    sourceText: `- [ ] #${target.blockId} work ^${target.blockId}`,
+    blockId: target.blockId,
+  });
+  plugin.resolvePomodoroCloseClock = async () => null;
+  plugin.completePomodoroTranscludedTaskBullets = async () => [];
+  plugin.startPomodoroNonTranscludedTaskBullets = async () => {};
+  plugin.finalizeClosedTasks = async () => {};
+
+  assert.equal(
+    await plugin.completeActivePomodoroTask(
+      editor,
+      harness.app.vault.getAbstractFileByPath("Daily.md"),
+      { pomodoroLine: 1 },
+    ),
+    true,
+  );
+  const result = editor.getValue();
+  assert.match(result, /^- \[x\] \(\) — FIX \+ READ$/m);
+  assert.match(result, /^- \[ \] \(\) — BUILD \+ FIX$/m);
+});

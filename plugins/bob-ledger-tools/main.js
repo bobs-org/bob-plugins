@@ -55339,6 +55339,32 @@ function mergeNames(base, others) {
   return parts.join(" + ");
 }
 
+// Narrow a closed merged Pomodoro to the types that had worked links (R6).
+// Labels stay in place, as do every type component when no component was
+// worked. Single-type and calendar-owned MEET entries never change.
+function narrowClosed(name, workedKeys, sources) {
+  const rawName = String(name == null ? "" : name);
+  if (taskTypeIsMeetName(rawName)) {
+    return rawName;
+  }
+  const classified = typeComponents(rawName, sources);
+  const types = classified.filter((item) => item.isType);
+  if (types.length < 2) {
+    return rawName;
+  }
+  const worked = new Set(
+    (Array.isArray(workedKeys) ? workedKeys : [])
+      .map((key) => pomodoroThemeNormalizeKey(key)).filter(Boolean),
+  );
+  if (!types.some((item) => worked.has(item.key))) {
+    return rawName;
+  }
+  return classified
+    .filter((item) => !item.isType || worked.has(item.key))
+    .map((item) => item.name)
+    .join(" + ");
+}
+
 // Shed merged-in types whose last Task Link left. Types with no prior links,
 // labels, and the base type survive. MEET is calendar-owned and immutable.
 function shed(name, beforeKeys, afterKeys, sources) {
@@ -61163,6 +61189,7 @@ class BobLedgerToolsTaskThemeApiMixin {
       planLanding: (options) => this.taskTypePlanLanding(options),
       planSplit: (options) => this.taskTypePlanSplit(options),
       mergeNames: (base, others) => mergeNames(base, others),
+      narrowClosed: (name, worked) => this.taskTypeNarrowClosed(name, worked),
       shed: (name, before, after) => this.taskTypeShed(name, before, after),
       isMeetName: (name) => taskTypeIsMeetName(name),
       planPlacement: (options) => this.taskTypePlanPlacement(options),
@@ -61275,6 +61302,14 @@ class BobLedgerToolsTaskThemeApiMixin {
   taskTypeShed(name, before, after) {
     try {
       return shed(name, before, after, this.taskTypeSources());
+    } catch (error) {
+      return typeof name === "string" ? name : "";
+    }
+  }
+
+  taskTypeNarrowClosed(name, worked) {
+    try {
+      return narrowClosed(name, worked, this.taskTypeSources());
     } catch (error) {
       return typeof name === "string" ? name : "";
     }
@@ -77457,6 +77492,7 @@ module.exports.helpers = {
   planLanding,
   planSplit,
   mergeNames,
+  narrowClosed,
   shed,
   taskTypeIsMeetName,
   planPlacement,

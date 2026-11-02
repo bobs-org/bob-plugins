@@ -1,3 +1,39 @@
+function pomodoroCompletionThemesApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const api = plugins && plugins["bob-ledger-tools"] &&
+      plugins["bob-ledger-tools"].api;
+    const themes = api && api.themes;
+    return themes && themes.version >= 1 ? themes : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function pomodoroCompletionThemeKey(suggestion) {
+  if (!suggestion || typeof suggestion !== "object") {
+    return null;
+  }
+  const theme = suggestion.theme && typeof suggestion.theme === "object"
+    ? suggestion.theme
+    : suggestion;
+  return typeof theme.key === "string" && theme.key.trim()
+    ? theme.key.trim()
+    : null;
+}
+
+function pomodoroStruckTaskLinkTarget(lineText) {
+  const stripped = stripPomodoroMarkersFromLine(lineText);
+  const target = getPomodoroWorkLogTaskLinkTarget(stripped);
+  if (!target || target.embedded === true) {
+    return null;
+  }
+  const struck = getStrikethroughSpans(stripped).some((span) =>
+    span.start === target.startIndex && span.end === target.endIndex
+  );
+  return struck ? target : null;
+}
+
 class TaskStatusCyclerPomodoroMixin {
   // Resolves and writes every collected Task Link note group from a Pomodoro
   // close. Runs after applyPomodoroCompletionPlan has succeeded: resolution
@@ -340,6 +376,13 @@ class TaskStatusCyclerPomodoroMixin {
       section,
     );
     const subBullets = classifyPomodoroSubBullets(lines, subBulletRange);
+    const closeNames = await this.resolvePomodoroCloseNames(
+      lines,
+      section,
+      context.pomodoroLine,
+      { editor, activePath: sourcePath, originPath: sourcePath },
+      subBullets,
+    );
     // Captured from this same pre-edit `lines` snapshot: the plan's marker
     // rewriting below can alter a descendant line that happens to contain a
     // link, so the note payload must be taken before any edits happen.
@@ -371,7 +414,10 @@ class TaskStatusCyclerPomodoroMixin {
       lines,
       section,
       context.pomodoroLine,
-      closeClock ? { sessionClock: closeClock.clock } : {},
+      {
+        ...(closeClock ? { sessionClock: closeClock.clock } : {}),
+        ...(closeNames || {}),
+      },
     );
     if (!plan) {
       return false;
@@ -393,9 +439,13 @@ class TaskStatusCyclerPomodoroMixin {
       ) {
         // The relocation pass matches the closed headline, so hand it the
         // headline as the restamped close will write it.
-        const headline = stampPomodoroClosedLineClock(
+        const stampedHeadline = stampPomodoroClosedLineClock(
           String(lines[context.pomodoroLine] || ""),
           closeClock ? closeClock.clock : null,
+        );
+        const headline = replacePomodoroEntryName(
+          stampedHeadline,
+          closeNames && closeNames.closedName,
         );
         let name = "";
         try {
@@ -637,6 +687,117 @@ class TaskStatusCyclerPomodoroMixin {
           // Best effort: one broken link should not block Pomodoro completion.
         }
       }
+    }
+  }
+
+  // Resolve every numbered Task Link's effective type from the pre-close
+  // task lines, then ask Ledger Tools to mirror bob's R6 closed/continuation
+  // names. This runs before Ctrl+Enter completes or starts any linked task.
+  async resolvePomodoroCloseNames(lines, section, pomodoroLine, context, bullets) {
+    try {
+      if (!isPomodoroTaskLine(lines, section, pomodoroLine)) {
+        return null;
+      }
+      const parts = parsePomodoroEntryLineParts(lines[pomodoroLine]);
+      const name = parts && typeof parts.name === "string" ? parts.name : "";
+      if (!name) {
+        return null;
+      }
+      const themes = pomodoroCompletionThemesApi(this.app);
+      if (
+        !themes ||
+        typeof themes.effectiveTypeFor !== "function" ||
+        typeof themes.narrowClosed !== "function" ||
+        typeof themes.shed !== "function"
+      ) {
+        return null;
+      }
+      if (typeof themes.isMeetName === "function" && themes.isMeetName(name)) {
+        return { closedName: name, continuationName: name, shed: [] };
+      }
+
+      const classified = bullets || classifyPomodoroSubBullets(
+        lines,
+        getSubBulletBlockRange(lines, pomodoroLine, section),
+      );
+      const groups = [
+        { bullets: classified.copyableTaskLinkBullets, outcome: "in_progress" },
+        { bullets: classified.moveOnlyTaskLinkBullets, outcome: "deferred" },
+        { bullets: classified.transcludedTaskLinkBullets, outcome: "complete" },
+        {
+          bullets: (classified.noteBullets || [])
+            .map((bullet) => {
+              const target = pomodoroStruckTaskLinkTarget(bullet.lineText);
+              return target ? { targets: [target] } : null;
+            })
+            .filter(Boolean),
+          outcome: "complete",
+        },
+      ];
+      const typeCache = new Map();
+      const typedLinks = [];
+      for (const group of groups) {
+        for (const bullet of Array.isArray(group.bullets) ? group.bullets : []) {
+          for (const target of Array.isArray(bullet.targets) ? bullet.targets : []) {
+            const targetKey = `${String(target.pathPart || "")}#^${String(target.blockId || "")}`;
+            let typeKey = typeCache.get(targetKey);
+            if (typeKey === undefined) {
+              typeKey = null;
+              try {
+                const resolved = await this.resolveTranscludedBlockTarget(
+                  target,
+                  context,
+                  { taskStatusPredicate: () => true },
+                );
+                if (resolved && resolved.file && Number.isInteger(resolved.line)) {
+                  const suggestion = themes.effectiveTypeFor({
+                    path: resolved.file.path,
+                    line: resolved.line + 1,
+                    text: resolved.sourceText,
+                  });
+                  typeKey = pomodoroCompletionThemeKey(suggestion);
+                }
+              } catch (_error) {
+                typeKey = null;
+              }
+              typeCache.set(targetKey, typeKey);
+            }
+            if (typeKey) {
+              typedLinks.push({ key: typeKey, outcome: group.outcome });
+            }
+          }
+        }
+      }
+
+      const before = typedLinks.map((link) => link.key);
+      const worked = typedLinks
+        .filter((link) => ["in_progress", "parked", "complete"].includes(link.outcome))
+        .map((link) => link.key);
+      const carried = typedLinks
+        .filter((link) => ["in_progress", "deferred"].includes(link.outcome))
+        .map((link) => link.key);
+      const closedName = themes.narrowClosed(name, worked);
+      const continuationName = themes.shed(name, before, carried);
+      const originalTypes = typeof themes.typeComponentsOf === "function"
+        ? themes.typeComponentsOf(name).filter((item) => item && item.isType)
+        : [];
+      const remaining = new Set(
+        typeof themes.typeComponentsOf === "function"
+          ? themes.typeComponentsOf(continuationName)
+            .filter((item) => item && item.isType)
+            .map((item) => item.key)
+          : [],
+      );
+      const shed = originalTypes
+        .filter((item) => item.key && !remaining.has(item.key))
+        .map((item) => item.name);
+      return {
+        closedName: typeof closedName === "string" ? closedName : name,
+        continuationName: typeof continuationName === "string" ? continuationName : name,
+        shed,
+      };
+    } catch (_error) {
+      return null;
     }
   }
 

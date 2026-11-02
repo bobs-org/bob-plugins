@@ -102,6 +102,7 @@ const {
   planLanding,
   planSplit,
   mergeNames,
+  narrowClosed,
   shed,
   planPlacement,
   planRelocation,
@@ -722,6 +723,18 @@ test("type vectors: shed removes only types whose final link left", () => {
   }
 });
 
+test("type vectors: close narrows to worked types while preserving labels and order", () => {
+  assert.ok(fixture.narrow.length > 0, "vectors carry narrow cases");
+  for (const item of fixture.narrow) {
+    if (item.rust_only) continue;
+    assert.equal(
+      narrowClosed(item.entry, item.worked, routingSources(item)),
+      item.expected,
+      `narrow: ${item.name}`,
+    );
+  }
+});
+
 test("type vectors: split partitions a merged Pomodoro by type", () => {
   assert.ok(fixture.split.length > 0, "vectors carry split cases");
   for (const item of fixture.split) {
@@ -893,7 +906,7 @@ test("task-theme API is additive, synchronous, path-bound, and read-only", () =>
     "available", "fetch", "snapshot", "isConfigured", "hueFor", "componentsOf",
     "historyRows", "similarTo", "hide", "unhide", "color", "rename", "onChange",
     "suggestFor", "taskThemeOf", "setTaskTheme", "clearTaskTheme", "isKnownTheme",
-    "effectiveTypeFor", "typeComponentsOf", "typeAgrees", "planRetype", "planLanding", "planSplit", "mergeNames", "shed", "isMeetName", "planPlacement", "planRelocation",
+    "effectiveTypeFor", "typeComponentsOf", "typeAgrees", "planRetype", "planLanding", "planSplit", "mergeNames", "narrowClosed", "shed", "isMeetName", "planPlacement", "planRelocation",
   ]) {
     assert.equal(typeof api[member], "function", `themes.${member} is present`);
   }
@@ -1085,6 +1098,7 @@ test("themes routing API answers agreement, landing, merge, shed, placement, and
     { kind: "merge", name: "BUILD + FIX + WRITE" },
   );
   assert.equal(api.mergeNames("BUILD + FIX", ["Fix + READ"]), "BUILD + FIX + READ");
+  assert.equal(api.narrowClosed("BUILD + FIX", ["fix"]), "FIX");
   assert.equal(api.shed("BUILD + FIX", ["build", "fix"], ["build"]), "BUILD");
   assert.deepEqual(
     api.planPlacement({

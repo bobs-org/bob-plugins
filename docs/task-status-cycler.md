@@ -12,10 +12,10 @@ Task Status Cycler changes task and Pomodoro states in Bob's workflow.
 | --- | --- |
 | Name | Task Status Cycler |
 | ID | `task-status-cycler` |
-| Version | 1.45.0 |
+| Version | 1.46.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Complete Pomodoros while carrying worked-on/deferred links, narrowing the closed name to worked types and shedding uncarried types from the created Pomodoro, and copying each Task Link sub-bullet's sub-sub-bullets into the linked task's Work Log, toggle empty Pomodoro placeholders/sub-bullets with Ctrl+Alt+] including named placeholders, toggle Obsidian tasks with Ctrl+Shift+] (a Vim count N<Ctrl+Shift+]> toggles the cursor item and the next N sibling items together, prompting at most once and sending the whole group to one section) — always prompting for promotion destinations when exact Tasks exists (Enter defaults to Tasks conversion, including in place when already there; typing creates a new section; non-Tasks stays plain; empty non-Tasks source sections are removed) and for demotions from Tasks — cycle Blocked tasks out with option+[/option+], recover affected Blocked dependents, propagate Ctrl+Enter to embedded task transclusions, and preserve embedded-task behavior. Ctrl+Enter on a Task Link closes the linked task and strikes the link, embedded or plain. A versioned `api.recoverBlockedDependents` lets other plugins recover Blocked dependents without retiring references; dependents with a strictly future `scheduled` date stay Blocked, and Ctrl+Enter on a Task Link to a Cancelled task shows a notice instead of completing the owning Pomodoro. Depends-On lines (managed ⛓️ **DEPENDS ON:** child bullets) are never struck, restored, reformatted, or tree-closed: Ctrl+Enter closes or reopens the linked prerequisite only, and Alt+[ / Alt+] cycle the link under the cursor. Ctrl+Enter on the PRE/POST row the bob-navigation-hotkeys review walk just landed on hands off to nav api v2, which completes the row and advances within its group when another live row remains. Alt+[ / Alt+] on a Pomodoro Task Link instead toggles the linked task between Next and In Progress through the nav api.taskLinkLane v1 namespace, never reformatting the bullet. Closing a planned task recovers what it unblocked and offers successor choices through nav `api.successors` v2 (hand-offs, project residents, project-finished pull-ins, and leaf-project keep-moving rows when `plan.keep_moving` is enabled) — gated on `[id::]`, through open editors or preimage-checked vault writes, honouring `plan.link_unblocked` — and reports the result through nav `api.notice` v2 for keep-moving rows, the existing Unblocked card for other rows, the walk toast on review landings, or a plain notice without a compatible nav API. Reopening the predecessor the same day through Ctrl+Enter takes back untouched successor links and restores their statuses from an in-memory receipt; Alt+]/Alt+[ moves into Done join the same pass, while moves into Cancelled recover only. Project Schedule comes from the ^prj task; tagged #prj_is_blocked residents stay Blocked until project recovery, which strips the tag from every open resident including those that remain Blocked for their own reasons, never edits closed lines, and records [unblocked::] through ledger-tools v12 when available (otherwise it recovers with a console warning, including on the successor apply path). Alt+] / Alt+[ on a [?] ^prj that leaves the project with no remaining reason — a future date or an open Depends-On target resolved against the vault; a missing id never blocks — recover those open residents in the same gesture, including when Alt+[ cancels ^prj so the note is no longer project(T), and when the cycled ^prj is transcluded from another note. A tagged #prj_is_blocked ^prj inherits its parent project’s Blocked reason and cannot be cycled; closing its last open sub-project pulls in the parent ^prj. LINKS and LINKED FROM rows are not Pomodoro Task Links; Ctrl+Enter and Alt+] / Alt+[ act on their target root-only without formatting the row. Ctrl+Enter on a timed Pomodoro stamps the closed row `[off:: Nm]` when every Task Link it keeps is `#offclock` (aliases `#off-clock`, `#untracked`) and `[t:: Nm]` otherwise, with a notice when a session stays on the clock while linking an off-clock task. |
+| Description | Complete Pomodoros while carrying worked-on/deferred links, narrowing the closed name to worked types and shedding uncarried types from the created Pomodoro, and copying each Task Link sub-bullet's sub-sub-bullets into the linked task's Work Log, toggle empty Pomodoro placeholders/sub-bullets with Ctrl+Alt+] including named placeholders, toggle Obsidian tasks with Ctrl+Shift+] (a Vim count N<Ctrl+Shift+]> toggles the cursor item and the next N sibling items together, prompting at most once and sending the whole group to one section) — always prompting for promotion destinations when exact Tasks exists (Enter defaults to Tasks conversion, including in place when already there; typing creates a new section; non-Tasks stays plain; empty non-Tasks source sections are removed) and for demotions from Tasks — cycle Blocked tasks out with option+[/option+], recover affected Blocked dependents, propagate Ctrl+Enter to embedded task transclusions, and preserve embedded-task behavior. Ctrl+Enter on a Task Link closes the linked task and strikes the link, embedded or plain. A versioned `api.recoverBlockedDependents` lets other plugins recover Blocked dependents without retiring references; dependents with a strictly future `scheduled` date stay Blocked, and Ctrl+Enter on a Task Link to a Cancelled task shows a notice instead of completing the owning Pomodoro. Depends-On lines (managed ⛓️ **DEPENDS ON:** child bullets) are never struck, restored, reformatted, or tree-closed: Ctrl+Enter closes or reopens the linked prerequisite only, and Alt+[ / Alt+] cycle the link under the cursor. Ctrl+Enter on the PRE/POST row the bob-navigation-hotkeys review walk just landed on hands off to nav api v2, which completes the row and advances within its group when another live row remains. Alt+[ / Alt+] on a Pomodoro Task Link instead toggles the linked task between Next and In Progress through the nav api.taskLinkLane v1 namespace, never reformatting the bullet. Closing a planned task recovers what it unblocked and offers successor choices through nav `api.successors` v3 (hand-offs, project residents, project-finished pull-ins, leaf-project keep-moving rows when `plan.keep_moving` is enabled, and configured `relations.successor_labels` standing offers on managed Done) — dependency and project offers gated on `[id::]`, relation offers from accepted LINKS even without ids — through open editors or preimage-checked vault writes, honouring `plan.link_unblocked` — and reports the result through nav `api.notice` v3 for relation and keep-moving rows (plain relation copy when notice is older than v3), the existing Unblocked card for other rows, the walk toast on review landings, or a plain notice without a compatible nav API. Reopening the predecessor the same day through Ctrl+Enter takes back untouched successor links and restores their statuses from an in-memory receipt; Alt+]/Alt+[ moves into Done join the same pass, while moves into Cancelled recover only. Project Schedule comes from the ^prj task; tagged #prj_is_blocked residents stay Blocked until project recovery, which strips the tag from every open resident including those that remain Blocked for their own reasons, never edits closed lines, and records [unblocked::] through ledger-tools v12 when available (otherwise it recovers with a console warning, including on the successor apply path). Alt+] / Alt+[ on a [?] ^prj that leaves the project with no remaining reason — a future date or an open Depends-On target resolved against the vault; a missing id never blocks — recover those open residents in the same gesture, including when Alt+[ cancels ^prj so the note is no longer project(T), and when the cycled ^prj is transcluded from another note. A tagged #prj_is_blocked ^prj inherits its parent project’s Blocked reason and cannot be cycled; closing its last open sub-project pulls in the parent ^prj. LINKS and LINKED FROM rows are not Pomodoro Task Links; Ctrl+Enter and Alt+] / Alt+[ act on their target root-only without formatting the row. Ctrl+Enter on a timed Pomodoro stamps the closed row `[off:: Nm]` when every Task Link it keeps is `#offclock` (aliases `#off-clock`, `#untracked`) and `[t:: Nm]` otherwise, with a notice when a session stays on the clock while linking an off-clock task. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -124,11 +124,11 @@ never struck, restored, tree-closed, or reformatted.
 ## Successor offers and take-backs
 
 Closing a planned task recovers what it unblocked and offers to pull in
-successors (hand-offs, project residents, project-finished pull-ins): the
-Unblocked card, the walk toast on review landings, or a plain not-pulled-in
-notice reports the outcome exactly once. Successor picks carrying a destination
-override insert at the verified existing entry or a created `- [ ] () — NAME`
-placeholder.
+successors (hand-offs, project residents, project-finished pull-ins, and
+configured relation-label standing offers): the Unblocked card, the walk toast
+on review landings, or a plain not-pulled-in notice reports the outcome
+exactly once. Successor picks carrying a destination override insert at the
+verified existing entry or a created `- [ ] () — NAME` placeholder.
 
 With `plan.keep_moving` enabled, closing the last live planned task in a leaf
 project can offer that project's Pending, Next, and Ready residents in a
@@ -138,6 +138,29 @@ The project root task counts as planned work, while child-project tasks stay
 outside the offer. Picking a row raises it to Next, stamps freshness, and adds
 its Task Link; leaving it unpicked does not edit it.
 
+When `relations.successor_labels` is configured (for example `starts after`),
+every managed Done gesture — `Ctrl+Enter` on a task, Task Link,
+transclusion or tree, Pomodoro embedded completion, `Alt+]` into Done,
+complete-label commits through `finalizeClosedTasks`, and PRE/POST walk
+completion — also offers Ready and Next sources whose accepted `🪢 **LINKS:**`
+entries use one of those labels to point at the completed task. Relation
+offers do not need `[id::]` and never read generated `LINKED FROM`. They never
+auto-link: only an explicit pick writes S (Ready becomes Next, Next stays
+Next, mint a missing block ID, stamp freshness, and insert a Task Link). Esc
+and an empty selection leave relation-only rows unchanged. Dependency and
+project recovery still run even when a relation row wins the picker or
+nothing is picked. Held rows (already started, blocked, hidden, waiting for
+another successor target) appear only when no picker opened; already-planned
+rows stay silent. If ledger-tools `api.relationIndex` is missing or not ready
+after the feature is gated on, the close still succeeds and reports
+`🪢 Couldn't check ‹label› links · nothing offered` (several labels:
+`relation links`). Relation groups go to nav `api.successors` v3 and
+`api.notice` v3; older notice APIs still get the same plain copy. A
+relation-only picker titles `Starts after “T”` with caption `“T” is done` and
+tag `your links · not dependents`; mixed pickers keep their existing title. A
+picked notice reads `🪢 Next in DEST: S · label “T”` (or the plural linked
+form). Cancel recovers dependents and never consults the relation index.
+
 Successor offers use the selected task's effective type to choose a destination.
 An explicit retarget applies the retype rule to keep its field and live Task Link
 in agreement. Default placements, unpicked offers, stale tasks, and stale
@@ -146,8 +169,9 @@ task's committed type change, and a same-day take-back restores the consolidated
 post-image consistently.
 
 Reopening the predecessor the same day through `Ctrl+Enter` takes back
-untouched successor links and restores their statuses from an in-memory receipt
-— nothing is stored — deleting every open entry the take-back empties.
+untouched successor links — including successful relation picks — and restores
+their statuses from an in-memory receipt — nothing is stored — deleting every
+open entry the take-back empties. Edited links and next-day reopens stay put.
 `Alt+]` / `Alt+[` moves into Done join the same pass, while moves into
 Cancelled recover only.
 
@@ -199,7 +223,11 @@ This plugin adds no settings tab and reads no per-plugin settings. Lane,
 schedule, and freshness inputs come from the task lines themselves. The
 shared Bob config file controls successor offers: `plan.keep_moving` defaults
 to `true` and disables only the leaf-project keep-moving group when `false`;
-`plan.link_unblocked` controls successor offers generally.
+`plan.link_unblocked` controls successor offers generally, including relation
+standing offers. `relations.successor_labels` defaults to an empty list (no
+relation offers). Invalid entries warn and skip; a label in more than one of
+`cancel_labels`, `complete_labels`, and `successor_labels` is dropped from
+every list.
 
 ## Related
 
@@ -207,6 +235,8 @@ to `true` and disables only the leaf-project keep-moving group when `false`;
   completion reconciles lanes and dependencies.
 - [Task dependencies](https://bobs-org.github.io/task-dependencies/) — the
   Depends-On lines this plugin guards.
+- [Task relations](task-relations.md) — LINKS labels, including successor
+  standing offers.
 - [Projects](https://bobs-org.github.io/projects/) — project blocking and
   `^prj` schedules.
 - [Freshness](https://bobs-org.github.io/freshness/) — the stamps completion

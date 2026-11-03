@@ -332,6 +332,8 @@ Daily notes without a `bob-plan` block show no strip. To place one explicitly,
 add a `bob-day-stats` code fence in any note, optionally with `day: YYYY-MM-DD`.
 A fence placed inside a daily note simply renders its own strip.
 
+The **period stats strip** (`bob-stats-strip`) is the week member of the same family. In a week note it shows the five facts with quiet typical-week lines (marked only once closed), the lanes with the shared bars switch, and a seven-day parts row stacked by root parent with closeout marks, captions, and values. Future days are dashed ghosts, pre-ledger days hatched, and the current day shows `so far`. Arrows move across the row, Enter opens the day, Alt+Enter pins Stats to it. Data is `bob periods show` JSON cached per period; rendering never writes the note. A daily path (or `day:` line) renders the Day strip; a future week shows one quiet line; failures stay muted with Retry.
+
 `DEPENDS ON` lines render as live dependency chips plus generated `BLOCKS` rows
 with live dependents, last-blocker 🔑 badges, stale-entry styling, and `frees
 N` summaries. Blocked chips draw the target's miniature block mark and reason

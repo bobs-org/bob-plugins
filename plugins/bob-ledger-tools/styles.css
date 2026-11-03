@@ -7109,3 +7109,232 @@ body:not(.bob-root-marks) .bob-root-mark-native {
   border: none;
   padding: 0;
 }
+
+/* Period stats strip (`bob-stats-strip`), week member. Same family as the Day
+ * strip: facts row, quiet typical line, lanes, and a seven-day parts row.
+ * No cards, borders, backgrounds, shadows, or buttons. */
+.bob-period-strip {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin: 0.5rem 0 0;
+  container-type: inline-size;
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  font-size: 0.875em;
+  line-height: 1.45;
+}
+.bob-period-strip-facts {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: auto;
+  min-width: 0;
+  row-gap: 0.25em;
+}
+@container (max-width: 34em) {
+  .bob-period-strip-facts {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(3, auto);
+  }
+}
+.bob-period-strip-fact {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.12em;
+  padding: 0.2em 0.7em 0.25em;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+.bob-period-strip-fact:hover {
+  background: var(--background-modifier-hover);
+}
+.bob-period-strip-fact:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+.bob-period-strip-head {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 1.3em;
+  gap: 0.35em;
+  color: var(--text-muted);
+  font-size: 0.7em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.bob-period-strip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bob-period-strip-value {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: 1.5em;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bob-period-strip-num { font-weight: 650; }
+.bob-period-strip-unit {
+  margin-left: 0.04em;
+  color: var(--text-muted);
+  font-size: 0.6em;
+  font-weight: 600;
+}
+.bob-period-strip-value-word .bob-period-strip-word {
+  font-size: 0.66em;
+  font-weight: 600;
+}
+.bob-period-strip-value-empty { color: var(--text-muted); }
+.bob-period-strip-ref {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  color: var(--text-muted);
+  font-size: 0.72em;
+  min-height: 1.25em;
+}
+.bob-period-strip-ref-mark {
+  width: 0.7em;
+  height: 0.7em;
+  fill: currentColor;
+}
+.bob-period-strip-ref-word { opacity: 0.9; }
+.bob-period-strip-ref-num { font-variant-numeric: tabular-nums; }
+.bob-period-strip-hint {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3em;
+  height: 1.25em;
+  margin-top: 0.15em;
+  padding: 0 0.7em 0.3em;
+  color: var(--text-muted);
+  font-size: 0.72em;
+  cursor: pointer;
+  border-radius: 0 0 var(--radius-s) var(--radius-s);
+}
+.bob-period-strip-hint:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.bob-period-strip-hint:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+.bob-period-strip-lanes-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.3em 0.9em;
+  margin-top: 0.25em;
+  color: var(--text-muted);
+  font-size: 0.78em;
+}
+.bob-period-strip-meta { font-variant-numeric: tabular-nums; }
+.bob-period-strip-stale { color: var(--text-muted); }
+.bob-period-strip-mix { cursor: pointer; border-radius: var(--radius-s); }
+.bob-period-strip-mix:hover { background: var(--background-modifier-hover); }
+.bob-period-strip-mix:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+.bob-period-strip-legend { display: inline-flex; align-items: baseline; gap: 0.6em; }
+.bob-period-strip-legend-item { display: inline-flex; align-items: baseline; gap: 0.3em; }
+.bob-period-strip-legend-dot {
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 50%;
+  background: var(--bob-day-strip-hue, var(--text-faint));
+}
+.bob-period-strip-legend-swatch {
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 2px;
+  background: var(--bob-day-strip-hue, var(--text-faint));
+}
+.bob-period-strip-legend-value { font-variant-numeric: tabular-nums; color: var(--text-normal); }
+.bob-period-strip-overflow { color: var(--text-muted); }
+.bob-period-strip-lanes-switch { display: inline-block; width: 1.2em; height: 0.7em; border-radius: 999px; background: var(--background-modifier-border); cursor: pointer; }
+.bob-period-strip-parts-host { margin-top: 0.3em; }
+.bob-period-strip-parts {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 6px;
+  min-height: 48px;
+}
+.bob-period-strip-column {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  gap: 2px;
+  padding: 2px 1px 0;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+.bob-period-strip-column:hover { background: var(--background-modifier-hover); }
+.bob-period-strip-column:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+.bob-period-strip-column-bar {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-start;
+  gap: 1px;
+  width: 100%;
+  height: 48px;
+  background: transparent;
+}
+.bob-period-strip-column-piece {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--bob-day-strip-hue, var(--text-faint));
+}
+.bob-period-strip-column-missing .bob-period-strip-column-bar,
+.bob-period-strip-column-future .bob-period-strip-column-bar {
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 2px;
+  background: repeating-linear-gradient(45deg, transparent 0 3px, color-mix(in srgb, var(--text-faint) 18%, transparent) 3px 5px);
+  opacity: 0.65;
+}
+.bob-period-strip-column-current .bob-period-strip-column-bar {
+  outline: 1px dashed var(--background-modifier-border);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+.bob-period-strip-column-mark {
+  height: 1em;
+  font-size: 0.75em;
+  line-height: 1;
+  color: var(--text-muted);
+}
+.bob-period-strip-column-caption {
+  font-size: 0.7em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.bob-period-strip-column-value {
+  font-size: 0.75em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-normal);
+  white-space: nowrap;
+}
+.bob-period-strip-future,
+.bob-period-strip-note {
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
+.bob-period-strip-fence-note {
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
+.bob-period-strip-retry { cursor: pointer; color: var(--text-muted); }
+.bob-period-strip-retry:hover { color: var(--text-normal); }

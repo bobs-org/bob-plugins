@@ -128,6 +128,13 @@ class BobLedgerToolsStatsBlockMixin {
       // Day strip setup is best-effort.
     }
     try {
+      if (typeof this.setupPeriodStripHosts === "function") {
+        this.setupPeriodStripHosts();
+      }
+    } catch (error) {
+      // Period strip setup is best-effort.
+    }
+    try {
       // The page repaint after a revalidation is a cache subscriber, so
       // every mounted view reading the updated key repaints in place.
       if (typeof this.statsOnCacheUpdate === "function") {
@@ -260,6 +267,13 @@ class BobLedgerToolsStatsBlockMixin {
       }
     } catch (error) {
       // Day strip teardown is best-effort.
+    }
+    try {
+      if (typeof this.teardownPeriodStripHosts === "function") {
+        this.teardownPeriodStripHosts();
+      }
+    } catch (error) {
+      // Period strip teardown is best-effort.
     }
     try {
       if (this.statsRevalidateTimer !== null && this.statsRevalidateTimer !== undefined) {

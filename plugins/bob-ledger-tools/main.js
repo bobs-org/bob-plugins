@@ -37247,6 +37247,13 @@ class BobLedgerToolsStatsBlockMixin {
       // Day strip setup is best-effort.
     }
     try {
+      if (typeof this.setupPeriodStripHosts === "function") {
+        this.setupPeriodStripHosts();
+      }
+    } catch (error) {
+      // Period strip setup is best-effort.
+    }
+    try {
       // The page repaint after a revalidation is a cache subscriber, so
       // every mounted view reading the updated key repaints in place.
       if (typeof this.statsOnCacheUpdate === "function") {
@@ -37379,6 +37386,13 @@ class BobLedgerToolsStatsBlockMixin {
       }
     } catch (error) {
       // Day strip teardown is best-effort.
+    }
+    try {
+      if (typeof this.teardownPeriodStripHosts === "function") {
+        this.teardownPeriodStripHosts();
+      }
+    } catch (error) {
+      // Period strip teardown is best-effort.
     }
     try {
       if (this.statsRevalidateTimer !== null && this.statsRevalidateTimer !== undefined) {
@@ -46925,6 +46939,1800 @@ class BobLedgerToolsDayStripPlanHostMixin {
   // Legacy alias: the host used to sit after the badges.
   dayStripPlanHostPlacePlanFirst(el, container, host) {
     return this.dayStripPlanHostPlacePlanAfter(el, container, host);
+  }
+}
+// ---- src/239-plugin-period-strip-model.js ----
+// Pure model for the week member of the period stats strip (`bob-stats-strip`).
+// Bob owns every value; this model only selects the requested week's points and
+// arranges their supplied labels, lanes, and columns for the painter. Built on the
+// Day strip's shared lane builders so hues, ordering, and legends stay one family.
+const PERIOD_STRIP_METRIC_IDS = ["worked", "reviewed", "done", "created", "review_closed"];
+const PERIOD_STRIP_LABELS = {
+  worked: "Worked",
+  reviewed: "Reviewed",
+  done: "Done",
+  created: "Created",
+  review_closed: "Review closed",
+};
+const PERIOD_STRIP_SKELETON_DISPLAYS = {
+  worked: "0h 00m",
+  reviewed: "00",
+  done: "00",
+  created: "00",
+  review_closed: "not yet",
+};
+
+// Parse a period id from a fence body (`period: 2026-W45`), a note path
+// (`2026/2026-W45.md`, `2026.md`, `all_time.md`), or a bare day line.
+// Returns `{ kind, id }` or null. Week-only for the strip phase: quarter, year,
+// and all time parse but select the parts-phase fallback. Never throws.
+function periodStripParseFencePeriod(source, sourcePath) {
+  try {
+    let text = "";
+    if (typeof source === "string" && source.trim()) {
+      let parsed = null;
+      try {
+        if (typeof parseYaml === "function") parsed = parseYaml(source);
+      } catch (error) {
+        parsed = null;
+      }
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        for (const key of ["period", "Period", "PERIOD"]) {
+          if (parsed[key] !== undefined && parsed[key] !== null && String(parsed[key]).trim()) {
+            text = String(parsed[key]).trim();
+            break;
+          }
+        }
+        if (!text) {
+          for (const key of ["day", "Day", "DAY"]) {
+            if (parsed[key] !== undefined && parsed[key] !== null && String(parsed[key]).trim()) {
+              return { kind: "day", id: String(parsed[key]).trim().replace(/^["']|["']$/g, "") };
+            }
+          }
+        }
+      }
+      if (!text) {
+        const match = /(?:^|\n)\s*period\s*:\s*([^\s#]+)/i.exec(source);
+        if (match) text = match[1].trim().replace(/^["']|["']$/g, "");
+      }
+      if (!text) {
+        const dayMatch = /(?:^|\n)\s*day\s*:\s*([^\s#]+)/i.exec(source);
+        if (dayMatch) {
+          return { kind: "day", id: dayMatch[1].trim().replace(/^["']|["']$/g, "") };
+        }
+      }
+    }
+    if (text) return periodStripClassifyId(text);
+    const path = typeof sourcePath === "string" ? sourcePath : "";
+    if (path) {
+      const parsed = periodStripClassifyId(path.replace(/\.md$/, ""));
+      if (parsed) return parsed;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Classify a bare id or vault-relative path into a period kind.
+// Accepts `2026-W45`, `2026/2026-W45`, `2026-Q4`, `2026`, `all_time` (and
+// `all-time` / `all`), plus a canonical daily path which classifies as a day.
+// Returns `{ kind, id }` with canonical `id`, or null. Never throws.
+function periodStripClassifyId(raw) {
+  try {
+    const text = String(raw === undefined || raw === null ? "" : raw).trim();
+    if (!text) return null;
+    const base = text.split("/").pop().replace(/\.md$/, "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(base)) {
+      return dayStripDateParts(base) ? { kind: "day", id: base } : null;
+    }
+    if (/^\d{8}$/.test(base)) {
+      const day = base.slice(0, 4) + "-" + base.slice(4, 6) + "-" + base.slice(6, 8);
+      return dayStripDateParts(day) ? { kind: "day", id: day } : null;
+    }
+    const lowered = base.toLowerCase();
+    if (lowered === "all_time" || lowered === "all-time" || lowered === "all") {
+      return { kind: "all", id: "all" };
+    }
+    let match = /^(\d{4})-w(\d{2})$/i.exec(base);
+    if (match) {
+      const week = Number(match[2]);
+      if (week >= 1 && week <= 53) return { kind: "week", id: match[1] + "-W" + String(week).padStart(2, "0") };
+      return null;
+    }
+    match = /^(\d{4})-q([1-4])$/i.exec(base);
+    if (match) return { kind: "quarter", id: match[1] + "-Q" + match[2] };
+    if (/^\d{4}$/.test(base)) {
+      const year = Number(base);
+      if (year >= 1970 && year <= 2999) return { kind: "year", id: base };
+      return null;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function periodStripBlankTypical() {
+  return { state: "blank", mark: null, display: "", words: "", detail: "" };
+}
+
+// Typical for a period fact: bob's sentence builders, reused verbatim. The mark
+// (▲/▼/=) is set only when bob gives a `relation` on a closed period; open
+// periods and short history never mark. Never throws.
+function periodStripTypical(fact) {
+  try {
+    const typical = fact && typeof fact.typical === "object" ? fact.typical : null;
+    if (!typical || typeof typical.display !== "string") return periodStripBlankTypical();
+    const short = typical.value === null || typical.value === undefined;
+    const relation = typical.relation;
+    const closed = fact && fact.so_far !== true;
+    const mark = (!short && closed && (relation === "above" || relation === "below" || relation === "equal")) ? relation : null;
+    return {
+      state: short ? "short" : "ready",
+      mark,
+      display: typical.display,
+      words: typeof typical.words === "string" ? typical.words : "",
+      detail: typeof typical.detail === "string" ? typical.detail : "",
+    };
+  } catch (error) {
+    return periodStripBlankTypical();
+  }
+}
+
+function periodStripAsOf(fetchedAt) {
+  if (fetchedAt === null || fetchedAt === undefined || fetchedAt === "") return "";
+  try {
+    const value = fetchedAt instanceof Date ? fetchedAt : new Date(fetchedAt);
+    if (!Number.isFinite(value.getTime())) return "";
+    return String(value.getHours()).padStart(2, "0") + ":" + String(value.getMinutes()).padStart(2, "0");
+  } catch (error) {
+    return "";
+  }
+}
+
+// Meta text for the top lane row: open reads coverage plus fetch time, a closed
+// period with gaps reads bob's coverage display, a full closed period reads
+// nothing, and all time reads `since <start>`. Never throws.
+function periodStripMetaText(report, fetchedAt) {
+  try {
+    if (!report || typeof report !== "object") return "";
+    const period = report.period && typeof report.period === "object" ? report.period : {};
+    const kind = typeof period.kind === "string" ? period.kind : "";
+    const state = typeof period.state === "string" ? period.state : "";
+    const coverage = period.coverage && typeof period.coverage === "object" ? period.coverage : {};
+    const display = typeof coverage.display === "string" ? coverage.display.trim() : "";
+    if (kind === "all") {
+      const start = typeof period.start === "string" ? period.start : "";
+      const words = periodStripAllSince(start);
+      return words || display;
+    }
+    if (state === "future") return display;
+    if (state === "current") {
+      const asOf = periodStripAsOf(fetchedAt);
+      if (display && asOf) return display + " · " + asOf;
+      return display || (asOf ? "so far · " + asOf : "so far");
+    }
+    return display;
+  } catch (error) {
+    return "";
+  }
+}
+
+function periodStripAllSince(start) {
+  try {
+    const parts = dayStripDateParts(start);
+    if (!parts) return "";
+    const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    return "since " + months[parts.month - 1].slice(0, 3) + " " + parts.date + ", " + parts.year;
+  } catch (error) {
+    return "";
+  }
+}
+
+function periodStripBuildFact(fact) {
+  const metric = typeof fact.metric === "string" ? fact.metric : "";
+  const label = (typeof fact.label === "string" && fact.label) || PERIOD_STRIP_LABELS[metric] || metric || "Metric";
+  const display = typeof fact.display === "string" ? fact.display : "–";
+  const soFar = fact.so_far === true;
+  const ref = periodStripTypical(fact);
+  const quality = typeof fact.quality === "string" ? fact.quality : "ok";
+  const tooltip = [
+    (ref.state === "ready" || ref.state === "short") && ref.detail ? ref.detail : "",
+    quality === "not_tracked" ? "Not tracked in this period." : "",
+  ].filter(Boolean).join("\n");
+  const ariaLabel = (ref.state === "ready" || ref.state === "short") && ref.words
+    ? label + " " + display + (soFar ? " so far" : "") + ", " + ref.words
+    : label + " " + display + (soFar ? " so far" : "");
+  return {
+    id: metric,
+    label,
+    display,
+    quality,
+    soFar,
+    ref,
+    tooltip,
+    ariaLabel,
+    value: typeof fact.value === "number" ? fact.value : null,
+    offClock: fact && typeof fact.offclock === "object" ? fact.offclock : null,
+    unit: typeof fact.unit === "string" ? fact.unit : "",
+  };
+}
+
+// Lanes from a periods report: roots and types share one hue family. Hue comes
+// from the same catalogs as `bob stats` (homes + theme_hues) so a root keeps
+// one hue in the lanes and in the parts row. Built through the shared
+// time-lane builders. Never throws.
+function periodStripLane(report, dimension, context) {
+  const empty = (extra) => ({
+    segments: [],
+    legend: [],
+    overflow: [],
+    overflowDefault: { count: 0, title: "" },
+    empty: false,
+    omitted: true,
+    dimension,
+    title: "",
+    ...(extra || {}),
+  });
+  try {
+    const lanes = report && typeof report.lanes === "object" ? report.lanes : null;
+    const rows = lanes && Array.isArray(lanes[dimension]) ? lanes[dimension] : null;
+    if (!rows) return empty();
+    const normalized = rows
+      .filter((row) => row && typeof row.key === "string" && row.key)
+      .map((row) => ({
+        key: row.key,
+        label: typeof row.label === "string" && row.label ? row.label : row.key,
+        value: typeof row.minutes === "number" ? row.minutes : (typeof row.value === "number" ? row.value : 0),
+        display: typeof row.display === "string" ? row.display : "",
+        share: typeof row.share === "string" ? row.share : "",
+      }))
+      .filter((row) => row.value > 0);
+    if (!normalized.length) return empty({ omitted: true });
+    const fallback = context && typeof context.themeHueFor === "function" ? context.themeHueFor : null;
+    let segments = [];
+    if (dimension === "theme") {
+      const entries = normalized.map((row) => ({ key: row.key, label: row.label, value: row.value, display: row.display, share: row.share }));
+      segments = typeof timeLaneThemeSegments === "function" ? timeLaneThemeSegments(report, entries, fallback) : [];
+    } else {
+      segments = typeof timeLaneRootSegments === "function" ? timeLaneRootSegments(report, dimension, normalized) : [];
+    }
+    const built = typeof timeLaneLegend === "function" ? timeLaneLegend(report, dimension, segments) : { segments, legend: segments, overflow: [], overflowDefault: { count: 0, title: "" } };
+    const sentence = dimension === "theme" ? "Time by type" : "Time by root parent";
+    return {
+      segments: built.segments,
+      legend: built.legend,
+      overflow: built.overflow,
+      overflowDefault: built.overflowDefault,
+      empty: false,
+      omitted: false,
+      dimension,
+      title: [sentence, ...built.segments.map((segment) => segment.label + " " + segment.display)].join("\n"),
+    };
+  } catch (error) {
+    return empty();
+  }
+}
+
+// Column model for the week parts row: seven day columns bottom-aligned on a
+// hairline, each stacking root-parent minutes in lane order. States: future is
+// a dashed outline ghost, a missing/workless closed column is a hatched
+// not-tracked ghost, the current column is data plus a dashed outline to full
+// height with `so far` in its caption, and a 6/7 caption marks partial weeks.
+// Never throws.
+function periodStripWeekColumns(report) {
+  try {
+    const raw = Array.isArray(report.columns) ? report.columns : [];
+    const lanes = report && typeof report.lanes === "object" ? report.lanes : null;
+    const roots = lanes && Array.isArray(lanes.root_parent) ? lanes.root_parent : [];
+    const order = new Map(roots.map((row, index) => [row.key, index]));
+    const hueByKey = new Map();
+    try {
+      const built = typeof timeLaneRootSegments === "function" ? timeLaneRootSegments(report, "root_parent", roots.map((row) => ({
+        key: row.key,
+        label: row.label,
+        value: typeof row.minutes === "number" ? row.minutes : 0,
+        display: row.display,
+        share: row.share,
+      }))) : [];
+      for (const segment of built) hueByKey.set(segment.key, segment.hue);
+    } catch (error) {
+      // Hue sharing is best-effort; columns still render without it.
+    }
+    let tallest = 0;
+    for (const column of raw) {
+      const worked = column && typeof column.worked === "object" ? column.worked : null;
+      const value = worked && typeof worked.value === "number" ? worked.value : 0;
+      if (value > tallest) tallest = value;
+    }
+    return raw.map((column) => {
+      if (!column || typeof column !== "object") return null;
+      const state = typeof column.state === "string" ? column.state : "closed";
+      const stackRaw = Array.isArray(column.stack) ? column.stack : [];
+      const stack = stackRaw
+        .filter((entry) => entry && typeof entry.key === "string" && typeof entry.minutes === "number" && entry.minutes > 0)
+        .map((entry) => ({
+          key: entry.key,
+          minutes: entry.minutes,
+          hue: hueByKey.get(entry.key) || "gray",
+          rank: order.has(entry.key) ? order.get(entry.key) : 999,
+        }))
+        .sort((a, b) => a.rank - b.rank);
+      const worked = column.worked && typeof column.worked === "object" ? column.worked : null;
+      const value = worked && typeof worked.value === "number" ? worked.value : null;
+      const quality = worked && typeof worked.quality === "string" ? worked.quality : "";
+      const missing = value === null || quality === "missing" || quality === "not_tracked";
+      const height = tallest > 0 && typeof value === "number" ? value / tallest : 0;
+      const mark = typeof column.mark === "string" ? column.mark : null;
+      const caption = typeof column.caption === "string" ? column.caption : "";
+      const soFar = state === "current";
+      const tooltip = periodStripColumnTooltip(column, missing);
+      return {
+        id: typeof column.id === "string" ? column.id : "",
+        kind: typeof column.kind === "string" ? column.kind : "day",
+        label: typeof column.label === "string" ? column.label : "",
+        caption,
+        path: typeof column.path === "string" ? column.path : "",
+        start: typeof column.start === "string" ? column.start : "",
+        end: typeof column.end === "string" ? column.end : "",
+        state,
+        partial: column.partial === true || typeof column.partial === "string" ? column.partial : null,
+        worked: worked ? { display: worked.display, value, quality, soFar: worked.so_far === true || soFar } : null,
+        missing,
+        height,
+        stack,
+        mark,
+        tick: typeof column.tick === "string" ? column.tick : null,
+        group: column.group === null || column.group === undefined ? null : column.group,
+        tooltip,
+      };
+    }).filter(Boolean);
+  } catch (error) {
+    return [];
+  }
+}
+
+function periodStripColumnTooltip(column, missing) {
+  try {
+    const label = typeof column.label === "string" ? column.label : "";
+    const worked = column.worked && typeof column.worked === "object" ? column.worked : null;
+    const display = worked && typeof worked.display === "string" ? worked.display : "–";
+    const state = typeof column.state === "string" ? column.state : "";
+    const soFar = state === "current" ? " so far" : "";
+    const reviewWords = periodStripColumnReviewWords(column.mark, state);
+    const lines = [(label ? label + " · " : "") + "Worked " + display + soFar + (reviewWords ? " · " + reviewWords : "")];
+    const stack = Array.isArray(column.stack) ? column.stack : [];
+    for (const entry of stack) {
+      if (!entry || typeof entry.key !== "string") continue;
+      lines.push(entry.key + " " + periodStripFormatMinutes(entry.minutes));
+    }
+    if (missing) lines.push("not tracked");
+    return lines.join("\n");
+  } catch (error) {
+    return "";
+  }
+}
+
+function periodStripColumnReviewWords(mark, state) {
+  if (state === "future") return "upcoming";
+  if (mark === "met") return "review closed";
+  if (mark === "missed") return "review open";
+  if (mark === "open") return "today";
+  return "";
+}
+
+function periodStripFormatMinutes(minutes) {
+  try {
+    if (typeof statsPanelFormatMinutes === "function") return statsPanelFormatMinutes(minutes);
+  } catch (error) {
+    // Fall through to the local fallback.
+  }
+  const value = Math.round(Number(minutes) || 0);
+  const hours = Math.floor(value / 60);
+  const rest = value % 60;
+  if (hours <= 0) return rest + "m";
+  return hours + "h " + String(rest).padStart(2, "0") + "m";
+}
+
+function periodStripErrorInfo(error) {
+  if (!error || typeof error !== "object") return null;
+  if (typeof error.title === "string") {
+    return { code: error.code || "failed", title: error.title, hint: typeof error.hint === "string" ? error.hint : "" };
+  }
+  try {
+    const model = statsErrorModel(error);
+    return { code: model.code, title: model.title, hint: model.hint };
+  } catch (caught) {
+    return { code: typeof error.code === "string" ? error.code : "failed", title: typeof error.message === "string" ? error.message : "bob periods failed", hint: "" };
+  }
+}
+
+// Week member model: ready | skeleton | future | unavailable | hidden | queued.
+// `queued` is the narrow-year style fallback placeholder the parts phase fills
+// for quarter/year/all; the strip phase never emits it for weeks. Never throws.
+function periodStripModel(report, periodId, context) {
+  try {
+    const safeContext = context && typeof context === "object" ? context : {};
+    const laneView = typeof dayStripLaneViewOf === "function"
+      ? dayStripLaneViewOf(safeContext.laneView)
+      : (safeContext.laneView === "roots" || safeContext.laneView === "themes" || safeContext.laneView === "both" ? safeContext.laneView : "both");
+    const classified = periodStripClassifyId(periodId);
+    if (!classified || classified.kind === "day") {
+      return { state: "hidden", periodId: typeof periodId === "string" ? periodId : "", kind: (classified && classified.kind) || "", lanes: { view: laneView, shown: [], switchable: false } };
+    }
+    if (classified.kind !== "week") {
+      return { state: "queued", periodId: classified.id, kind: classified.kind, lanes: { view: laneView, shown: [], switchable: false } };
+    }
+    const error = periodStripErrorInfo(safeContext.error);
+    if (!report) {
+      if (error) {
+        const code = String(error.code || "");
+        if (code === "bob-not-found" || /older-bob|unknown[\s_-]*subcommand|schema-mismatch/.test(code + " " + String(error.title || ""))) {
+          return { state: "older-bob", periodId: classified.id, kind: "week", lanes: { view: laneView, shown: [], switchable: false }, error };
+        }
+        return { state: "unavailable", periodId: classified.id, kind: "week", lanes: { view: laneView, shown: [], switchable: false }, ariaLabel: "Period stats unavailable — " + error.title + ".", error };
+      }
+      const facts = PERIOD_STRIP_METRIC_IDS.map((id) => ({
+        id,
+        label: PERIOD_STRIP_LABELS[id],
+        display: PERIOD_STRIP_SKELETON_DISPLAYS[id] || "00",
+        quality: "skeleton",
+        soFar: false,
+        ref: periodStripBlankTypical(),
+        tooltip: "",
+        ariaLabel: PERIOD_STRIP_LABELS[id] + ", loading",
+        value: null,
+        offClock: null,
+        unit: "",
+      }));
+      return { state: "skeleton", periodId: classified.id, kind: "week", facts, columns: [], lanes: { view: laneView, shown: ["roots", "themes"], switchable: true }, roots: null, themes: null, metaText: "", stale: false, error: null, ariaLabel: "Week stats for " + classified.id + ". Loading." };
+    }
+    const period = report.period && typeof report.period === "object" ? report.period : {};
+    if (period.state === "future") {
+      return { state: "future", periodId: classified.id, kind: "week", period, lanes: { view: laneView, shown: [], switchable: false }, metaText: periodStripMetaText(report, safeContext.fetchedAt), stale: false, error: null };
+    }
+    const facts = (Array.isArray(report.facts) ? report.facts : []).map(periodStripBuildFact);
+    const roots = periodStripLane(report, "root_parent", safeContext);
+    const themes = periodStripLane(report, "theme", safeContext);
+    const columns = periodStripWeekColumns(report);
+    const stale = safeContext.stale === true;
+    const lanes = typeof dayStripLaneLayout === "function"
+      ? dayStripLaneLayout({ state: stale ? "stale" : "ready", mix: { ...roots, dimension: roots.dimension === "theme" ? "theme" : "root_parent" }, themes, view: laneView })
+      : { view: laneView, shown: ["roots", "themes"], switchable: true };
+    const metaText = periodStripMetaText(report, safeContext.fetchedAt);
+    const asOf = periodStripAsOf(safeContext.fetchedAt);
+    const staleTitle = stale ? ((error && error.title) || "Refresh failed") + " · showing the " + (asOf || "cached") + " report" : "";
+    const title = typeof period.title === "string" ? period.title : classified.id;
+    const ariaLabel = "Week stats for " + title + (period.state === "current" ? ", so far" : "") + ": " + facts.map((fact) => fact.label + " " + fact.display).join(", ") + ".";
+    return {
+      state: "ready",
+      periodId: classified.id,
+      kind: "week",
+      period,
+      facts,
+      roots,
+      themes,
+      columns,
+      lanes,
+      metaText,
+      asOf,
+      stale,
+      staleTitle,
+      error,
+      ariaLabel,
+    };
+  } catch (error) {
+    return { state: "unavailable", periodId: typeof periodId === "string" ? periodId : "", kind: "week", lanes: { view: "both", shown: [], switchable: false }, ariaLabel: "Period stats unavailable — bob periods failed.", error: { code: "model-error", title: "bob periods failed", hint: "" } };
+  }
+}
+// ---- src/239-plugin-period-strip-parts.js ----
+// Week parts-row renderer: seven day columns bottom-aligned on a hairline,
+// each stacking root-parent minutes in lane order with 1 px note-background
+// gaps, plus captions, closeout marks, and roving-tabindex keyboard. Hues come
+// from the model so lanes and columns share one assignment per strip.
+function periodStripPartsActivate(node, action) {
+  if (!node || typeof action !== "function" || typeof node.addEventListener !== "function") return;
+  const invoke = (event, forcedNewLeaf, alt) => {
+    if (event && event.preventDefault && event.type === "mousedown") event.preventDefault();
+    const newLeaf = forcedNewLeaf || Boolean(event && (event.ctrlKey || event.metaKey || event.button === 1));
+    const useAlt = alt || Boolean(event && event.altKey);
+    action(newLeaf, useAlt);
+  };
+  node.addEventListener("mousedown", (event) => {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  });
+  node.addEventListener("click", (event) => invoke(event, false, false));
+  node.addEventListener("auxclick", (event) => {
+    if (event && event.button === 1) {
+      if (event.preventDefault) event.preventDefault();
+      invoke(event, true, false);
+    }
+  });
+  node.addEventListener("keydown", (event) => {
+    if (!event) return;
+    if (event.key === "Enter" && event.altKey) {
+      if (event.preventDefault) event.preventDefault();
+      invoke(event, false, true);
+      return;
+    }
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (event.preventDefault) event.preventDefault();
+    invoke(event, false, false);
+  });
+}
+
+function periodStripCloseoutGlyph(mark) {
+  if (mark === "met") return "✓";
+  if (mark === "missed") return "✕";
+  if (mark === "open") return "◐";
+  return "";
+}
+
+function periodStripColumnBar(doc, column, tallest) {
+  const bar = statsEl(doc, "span", { class: "bob-period-strip-column-bar", "aria-hidden": "true" });
+  if (!bar) return null;
+  if (column.missing || column.state === "future" || !column.worked || typeof column.worked.value !== "number" || tallest <= 0) {
+    return bar;
+  }
+  const total = column.worked.value;
+  for (const entry of column.stack) {
+    const height = total > 0 ? (entry.minutes / tallest) * 100 : 0;
+    const piece = statsEl(doc, "span", {
+      class: "bob-period-strip-column-piece bob-day-strip-hue-" + (entry.hue || "gray"),
+      "data-key": entry.key,
+    });
+    if (piece && piece.style) {
+      try {
+        piece.style.height = String(Math.max(0, height)) + "%";
+      } catch (error) {
+        // Height is best-effort.
+      }
+    }
+    if (bar.appendChild && piece) bar.appendChild(piece);
+  }
+  return bar;
+}
+
+// One column: a roving-tabindex link with the bar, closeout mark, caption,
+// and value. Future columns are dashed outline ghosts, missing columns are
+// hatched ghosts, and the current column carries a dashed full-height outline
+// with `so far` in its caption. Never a <button>. Never throws.
+function periodStripRenderColumn(doc, column, index, model, handlers) {
+  const state = column.state || "closed";
+  const label = (column.label || column.id || "Day") + " · Worked " + ((column.worked && column.worked.display) || "–") + (state === "current" ? " so far" : "");
+  const node = statsEl(doc, "span", {
+    class: "bob-period-strip-column"
+      + (column.missing ? " bob-period-strip-column-missing" : "")
+      + (state === "future" ? " bob-period-strip-column-future" : "")
+      + (state === "current" ? " bob-period-strip-column-current" : ""),
+    role: "link",
+    tabindex: index === 0 ? "0" : "-1",
+    title: column.tooltip || null,
+    "aria-label": label,
+    "data-period-strip-column": column.id || "",
+    "data-column-state": state,
+  });
+  if (!node) return null;
+  const bar = periodStripColumnBar(doc, column, periodStripTallest(model));
+  if (bar && node.appendChild) node.appendChild(bar);
+  const glyph = periodStripCloseoutGlyph(column.mark);
+  const markText = state === "future" ? "" : glyph;
+  const mark = statsEl(doc, "span", {
+    class: "bob-period-strip-column-mark",
+    "data-mark": column.mark || "none",
+    "aria-hidden": "true",
+  }, markText);
+  if (mark && node.appendChild) node.appendChild(mark);
+  const caption = statsEl(doc, "span", { class: "bob-period-strip-column-caption" },
+    (column.caption || "") + (state === "current" ? " · so far" : "") + (column.partial ? " · " + column.partial : ""));
+  if (caption && node.appendChild) node.appendChild(caption);
+  const value = statsEl(doc, "span", { class: "bob-period-strip-column-value" },
+    (column.worked && column.worked.display) || (state === "future" ? "" : "–"));
+  if (value && node.appendChild) node.appendChild(value);
+  periodStripPartsActivate(node, (newLeaf, alt) => {
+    if (alt) {
+      if (handlers && typeof handlers.openStatsForColumn === "function") handlers.openStatsForColumn(column, newLeaf);
+      return;
+    }
+    if (handlers && typeof handlers.openColumn === "function") handlers.openColumn(column, newLeaf);
+  });
+  return node;
+}
+
+function periodStripTallest(model) {
+  try {
+    let tallest = 0;
+    for (const column of (model && model.columns) || []) {
+      const value = column && column.worked && typeof column.worked.value === "number" ? column.worked.value : 0;
+      if (value > tallest) tallest = value;
+    }
+    return tallest;
+  } catch (error) {
+    return 0;
+  }
+}
+
+// The week parts row: one roving-tabindex group. ←/→ move, Home/End jump,
+// Enter opens the day note, Alt+Enter opens Stats pinned to that day. Never
+// throws.
+function periodStripRenderWeekRow(doc, model, handlers) {
+  const row = statsEl(doc, "span", {
+    class: "bob-period-strip-parts",
+    role: "group",
+    "aria-label": "Days of " + ((model && model.periodId) || "week"),
+    "data-period-parts": "week",
+  });
+  if (!row) return null;
+  const columns = (model && Array.isArray(model.columns) ? model.columns : []).filter(Boolean);
+  const rendered = [];
+  columns.forEach((column, index) => {
+    const node = periodStripRenderColumn(doc, column, index, model, handlers);
+    if (node && row.appendChild) {
+      row.appendChild(node);
+      rendered.push(node);
+    }
+  });
+  if (row.addEventListener) {
+    row.addEventListener("keydown", (event) => {
+      try {
+        if (!event || !event.target) return;
+        const current = rendered.indexOf(event.target);
+        if (current < 0) return;
+        let next = -1;
+        if (event.key === "ArrowRight") next = Math.min(rendered.length - 1, current + 1);
+        else if (event.key === "ArrowLeft") next = Math.max(0, current - 1);
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = rendered.length - 1;
+        else return;
+        if (event.preventDefault) event.preventDefault();
+        for (const node of rendered) {
+          try {
+            if (node.setAttribute) node.setAttribute("tabindex", "-1");
+          } catch (error) {
+            // Tabindex reset is best-effort.
+          }
+        }
+        const target = rendered[next];
+        try {
+          if (target.setAttribute) target.setAttribute("tabindex", "0");
+          if (target.focus) target.focus();
+        } catch (error) {
+          // Focus is best-effort.
+        }
+      } catch (error) {
+        // Roving is best-effort.
+      }
+    });
+  }
+  return row;
+}
+
+function paintPeriodStripParts(doc, host, model, handlers) {
+  try {
+    if (!host || !model) return null;
+    const row = periodStripRenderWeekRow(doc, model, handlers || {});
+    if (!row) return null;
+    if (typeof host.appendChild === "function") host.appendChild(row);
+    return row;
+  } catch (error) {
+    return null;
+  }
+}
+// ---- src/239-plugin-period-strip-render.js ----
+// DOM painter for the week member of the period stats strip. The host element
+// stays stable; each update replaces only its children from the current model.
+// Interactive targets are spans with role="link": Obsidian's global button rules
+// must never be able to resize the strip again. Facts and lanes reuse the Day
+// strip's shared builders; the parts row is painted by
+// `paintPeriodStripParts`.
+function periodStripLink(doc, className, label, title) {
+  return statsEl(doc, "span", {
+    class: className,
+    role: "link",
+    tabindex: "0",
+    title: title || null,
+    "aria-label": label,
+  });
+}
+
+function periodStripActivate(node, action) {
+  if (!node || typeof node.addEventListener !== "function") return;
+  const invoke = (event, forcedNewLeaf) => {
+    if (event && event.preventDefault && event.type === "mousedown") event.preventDefault();
+    const newLeaf = forcedNewLeaf || Boolean(event && (event.ctrlKey || event.metaKey || event.button === 1));
+    if (typeof action === "function") action(newLeaf);
+  };
+  node.addEventListener("mousedown", (event) => {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  });
+  node.addEventListener("click", (event) => invoke(event, false));
+  node.addEventListener("auxclick", (event) => {
+    if (event && event.button === 1) {
+      if (event.preventDefault) event.preventDefault();
+      invoke(event, true);
+    }
+  });
+  node.addEventListener("keydown", (event) => {
+    if (!event || (event.key !== "Enter" && event.key !== " ")) return;
+    if (event.preventDefault) event.preventDefault();
+    invoke(event, false);
+  });
+}
+
+function periodStripRefMark(doc, mark) {
+  if (mark !== "above" && mark !== "below" && mark !== "equal") return null;
+  if (typeof dayStripRenderRefMark === "function") {
+    try {
+      const host = { facts: [{ ref: { mark } }] };
+      void host;
+    } catch (error) {
+      // Fall through to the local mark.
+    }
+  }
+  const svg = statsSvgEl(doc, "svg", {
+    class: "bob-period-strip-ref-mark",
+    viewBox: "0 0 10 10",
+    "aria-hidden": "true",
+    focusable: "false",
+  });
+  if (!svg) return null;
+  const append = (child) => {
+    try {
+      if (svg.appendChild && child) svg.appendChild(child);
+    } catch (error) {
+      // Best-effort.
+    }
+  };
+  if (mark === "above") append(statsSvgEl(doc, "path", { d: "M5 1.6 L8.8 8 H1.2 Z" }));
+  else if (mark === "below") append(statsSvgEl(doc, "path", { d: "M1.2 2 H8.8 L5 8.4 Z" }));
+  else append(statsSvgEl(doc, "path", { d: "M1.5 2.9h7v1.5h-7z M1.5 5.6h7v1.5h-7z" }));
+  return svg;
+}
+
+function periodStripRenderRef(doc, fact) {
+  const ref = fact && fact.ref && typeof fact.ref === "object" ? fact.ref : { state: "blank" };
+  const state = ref.state === "ready" || ref.state === "short" ? ref.state : "blank";
+  const node = statsEl(doc, "span", { class: "bob-period-strip-ref", "aria-hidden": "true" });
+  if (!node) return null;
+  if (node.setAttribute) {
+    node.setAttribute("data-ref-state", state);
+    if (ref.mark) node.setAttribute("data-ref-mark", ref.mark);
+  }
+  if (state === "ready" || state === "short") {
+    if (state === "ready") {
+      const markNode = periodStripRefMark(doc, ref.mark);
+      if (markNode && node.appendChild) node.appendChild(markNode);
+    }
+    if (node.appendChild) {
+      node.appendChild(statsEl(doc, "span", { class: "bob-period-strip-ref-word" }, "typical"));
+      node.appendChild(statsEl(doc, "span", { class: "bob-period-strip-ref-num" }, ref.display));
+    }
+  }
+  return node;
+}
+
+function periodStripRenderFact(doc, fact, model, handlers) {
+  const skeleton = model.state === "skeleton";
+  const node = periodStripLink(
+    doc,
+    "bob-period-strip-fact" + (skeleton ? " bob-period-strip-fact-skeleton" : ""),
+    fact.ariaLabel || (skeleton ? fact.label + ", loading" : fact.label + " " + fact.display),
+    fact.tooltip,
+  );
+  if (!node) return null;
+  if (node.setAttribute) node.setAttribute("data-period-strip-metric", fact.id);
+  const head = statsEl(doc, "span", { class: "bob-period-strip-head" });
+  if (head) {
+    head.appendChild(statsEl(doc, "span", { class: "bob-period-strip-label" }, fact.label));
+    node.appendChild(head);
+  }
+  const runs = typeof dayStripValueRuns === "function" ? dayStripValueRuns(fact.display) : [{ kind: "word", text: fact.display }];
+  const isWord = runs.length === 1 && runs[0].kind === "word";
+  const value = statsEl(doc, "span", {
+    class: "bob-period-strip-value"
+      + (fact.display === "–" && !skeleton ? " bob-period-strip-value-empty" : isWord ? " bob-period-strip-value-word" : "")
+      + (skeleton ? " bob-period-strip-value-skeleton" : ""),
+  });
+  if (value) {
+    for (const run of runs) {
+      value.appendChild(statsEl(doc, "span", { class: "bob-period-strip-" + run.kind }, run.text));
+    }
+    if (fact.soFar) value.appendChild(statsEl(doc, "span", { class: "bob-period-strip-so-far", "aria-hidden": "true" }, " so far"));
+    node.appendChild(value);
+  }
+  const ref = periodStripRenderRef(doc, fact);
+  if (ref) node.appendChild(ref);
+  periodStripActivate(node, (newLeaf) => {
+    if (handlers && typeof handlers.openStats === "function") {
+      handlers.openStats({ metric: fact.id, panel: undefined, newLeaf });
+    }
+  });
+  const hint = periodStripRenderOffClock(doc, fact, model, handlers);
+  if (hint) {
+    const wrap = statsEl(doc, "div", { class: "bob-period-strip-fact-wrap" });
+    if (!wrap) return node;
+    wrap.appendChild(node);
+    wrap.appendChild(hint);
+    return wrap;
+  }
+  return node;
+}
+
+function periodStripRenderOffClock(doc, fact, model, handlers) {
+  try {
+    if (!fact || fact.id !== "worked" || model.state === "skeleton") return null;
+    const off = fact.offClock && typeof fact.offClock === "object" ? fact.offClock : null;
+    const display = off && typeof off.display === "string" ? off.display.trim() : "";
+    const value = off && typeof off.value === "number" ? off.value : 0;
+    if (!display || !(value > 0)) return null;
+    const label = "Off-clock " + display + " in " + (model.periodId || "this week") + ", open Stats";
+    const node = periodStripLink(doc, "bob-period-strip-hint", label, "Open Stats on " + (model.periodId || "this week") + " off-clock");
+    if (!node) return null;
+    if (node.setAttribute) node.setAttribute("data-period-strip-hint", "worked");
+    node.appendChild(statsEl(doc, "span", { class: "bob-period-strip-hint-text" }, "◌ +" + display + " off-clock"));
+    periodStripActivate(node, (newLeaf) => {
+      if (handlers && typeof handlers.openStats === "function") {
+        handlers.openStats({ metric: "worked", panel: "homes", clock: "off-clock", newLeaf });
+      }
+    });
+    return node;
+  } catch (error) {
+    return null;
+  }
+}
+
+function periodStripLegendItem(doc, entry, lane) {
+  const rank = entry && typeof entry.rank === "number" ? entry.rank : 0;
+  const key = entry && typeof entry.key === "string" ? entry.key : "";
+  const text = entry ? ((typeof entry.legendLabel === "string" && entry.legendLabel) || entry.label || "") : "";
+  const title = entry && typeof entry.title === "string" && entry.title ? entry.title : (entry ? entry.label + " " + entry.display : null);
+  const item = statsEl(doc, "span", { class: "bob-period-strip-legend-item", title });
+  if (!item) return null;
+  if (rank) item.setAttribute("data-rank", String(rank));
+  if (key) item.setAttribute("data-key", key);
+  const themes = lane === "themes";
+  const markClass = themes
+    ? "bob-period-strip-legend-swatch" + (entry ? " bob-period-strip-theme-hue-" + entry.hue : "")
+    : "bob-period-strip-legend-dot" + (entry ? " bob-period-strip-hue-" + entry.hue : "");
+  const mark = statsEl(doc, "span", { class: markClass, "aria-hidden": "true" });
+  if (mark && themes && entry && typeof entry.shade === "number" && entry.shade > 0) mark.setAttribute("data-shade", String(entry.shade));
+  if (mark && entry && typeof entry.tone === "string" && entry.tone) mark.setAttribute("data-tone", entry.tone);
+  item.appendChild(mark);
+  item.appendChild(statsEl(doc, "span", { class: "bob-period-strip-legend-label" }, text || ""));
+  item.appendChild(statsEl(doc, "span", { class: "bob-period-strip-legend-value" }, entry ? entry.display : ""));
+  if (!entry) item.setAttribute("hidden", "true");
+  return item;
+}
+
+function periodStripRenderMix(doc, model, handlers, lane) {
+  const mix = lane === "themes" ? model.themes : model.roots;
+  const skeleton = model.state === "skeleton";
+  const sentence = lane === "themes" ? "Time by type" : "Time by root parent";
+  const node = periodStripLink(doc, "bob-period-strip-mix", sentence, (mix && mix.title) || sentence);
+  if (!node) return null;
+  const legend = statsEl(doc, "span", { class: "bob-period-strip-legend" });
+  if (legend) {
+    const entries = (mix && Array.isArray(mix.legend) ? mix.legend : []).slice(0, 3);
+    for (const entry of entries) {
+      const item = periodStripLegendItem(doc, entry, lane);
+      if (item) legend.appendChild(item);
+    }
+    const overflow = mix && mix.overflowDefault && typeof mix.overflowDefault.count === "number" ? mix.overflowDefault.count : 0;
+    if (overflow > 0 && !skeleton) {
+      legend.appendChild(statsEl(doc, "span", { class: "bob-period-strip-overflow", title: (mix.overflowDefault && mix.overflowDefault.title) || null }, "+" + overflow));
+    }
+    node.appendChild(legend);
+  }
+  periodStripActivate(node, (newLeaf) => {
+    if (handlers && typeof handlers.openStats === "function") {
+      handlers.openStats({ metric: "worked", panel: lane === "themes" ? "themes" : "homes", newLeaf });
+    }
+  });
+  return node;
+}
+
+// Paint the week member: facts, typical lines, meta + lanes switch on the top
+// row, both lanes, then the seven-day parts row. No cards, borders,
+// backgrounds, shadows, or buttons; hue appears only in bars and stacks.
+// Never throws.
+function paintPeriodStrip(host, model, handlers) {
+  try {
+    if (!host || !model) return null;
+    const doc = host.ownerDocument || (typeof document !== "undefined" ? document : null);
+    if (!doc) return null;
+    while (host.firstChild) host.removeChild(host.firstChild);
+    const root = statsEl(doc, "div", {
+      class: "bob-period-strip bob-period-strip-kind-week bob-period-strip-state-" + model.state,
+      "aria-label": model.ariaLabel || ("Week stats for " + (model.periodId || "week")),
+    });
+    if (!root) return null;
+    host.appendChild(root);
+    if (model.state === "hidden") return root;
+    if (model.state === "future") {
+      const line = statsEl(doc, "div", { class: "bob-period-strip-future" }, "Starts " + periodStripFutureWords(model));
+      if (line) root.appendChild(line);
+      return root;
+    }
+    if (model.state === "older-bob") {
+      const line = statsEl(doc, "div", { class: "bob-period-strip-note" }, "Period stats need a newer bob (bob periods not found).");
+      if (line) root.appendChild(line);
+      return root;
+    }
+    if (model.state === "queued") {
+      const line = statsEl(doc, "div", { class: "bob-period-strip-note" }, "Quarter, year, and all-time strips arrive with the parts phase.");
+      if (line) root.appendChild(line);
+      return root;
+    }
+    if (model.state === "unavailable") {
+      const error = model.error || {};
+      const line = statsEl(doc, "div", { class: "bob-period-strip-note" }, "Period stats unavailable — " + (error.title || "bob periods failed") + ".");
+      if (line) root.appendChild(line);
+      if (error.hint) {
+        const retry = periodStripLink(doc, "bob-period-strip-retry", "Retry period stats", error.hint);
+        if (retry) {
+          retry.appendChild(statsEl(doc, "span", {}, "Retry"));
+          periodStripActivate(retry, () => {
+            if (handlers && typeof handlers.retry === "function") handlers.retry();
+          });
+          root.appendChild(retry);
+        }
+      } else {
+        const retry = periodStripLink(doc, "bob-period-strip-retry", "Retry period stats", "Retry");
+        if (retry) {
+          retry.appendChild(statsEl(doc, "span", {}, "Retry"));
+          periodStripActivate(retry, () => {
+            if (handlers && typeof handlers.retry === "function") handlers.retry();
+          });
+          root.appendChild(retry);
+        }
+      }
+      return root;
+    }
+    const facts = statsEl(doc, "div", { class: "bob-period-strip-facts" });
+    if (facts) {
+      for (const fact of model.facts || []) {
+        const node = periodStripRenderFact(doc, fact, model, handlers || {});
+        if (node) facts.appendChild(node);
+      }
+      root.appendChild(facts);
+    }
+    const lanesRow = statsEl(doc, "div", { class: "bob-period-strip-lanes-row" });
+    if (lanesRow) {
+      if (model.metaText) lanesRow.appendChild(statsEl(doc, "span", { class: "bob-period-strip-meta" }, model.metaText));
+      if (model.stale) lanesRow.appendChild(statsEl(doc, "span", { class: "bob-period-strip-stale", title: model.staleTitle || "Refresh failed" }, "refresh failed"));
+      const shown = (model.lanes && Array.isArray(model.lanes.shown) ? model.lanes.shown : ["roots", "themes"]);
+      for (const lane of shown) {
+        const node = periodStripRenderMix(doc, model, handlers || {}, lane);
+        if (node) lanesRow.appendChild(node);
+      }
+      const view = model.lanes && typeof model.lanes.view === "string" ? model.lanes.view : "both";
+      const switchable = Boolean(model.lanes && model.lanes.switchable);
+      if (switchable) {
+        const sw = statsEl(doc, "span", {
+          class: "bob-period-strip-lanes-switch",
+          role: "button",
+          tabindex: "0",
+          title: (model.lanes && model.lanes.title) || "Cycle period bars",
+          "aria-label": (model.lanes && model.lanes.ariaLabel) || "Period stats bars",
+          "data-view": view,
+        });
+        if (sw) {
+          const activate = () => {
+            if (handlers && typeof handlers.cycleLanes === "function") handlers.cycleLanes({});
+          };
+          sw.addEventListener("mousedown", (event) => {
+            if (event && typeof event.preventDefault === "function") event.preventDefault();
+          });
+          sw.addEventListener("click", activate);
+          sw.addEventListener("keydown", (event) => {
+            if (!event || (event.key !== "Enter" && event.key !== " ")) return;
+            if (event.preventDefault) event.preventDefault();
+            activate();
+          });
+          lanesRow.appendChild(sw);
+        }
+      }
+      root.appendChild(lanesRow);
+    }
+    const partsHost = statsEl(doc, "div", { class: "bob-period-strip-parts-host" });
+    if (partsHost) {
+      root.appendChild(partsHost);
+      try {
+        paintPeriodStripParts(doc, partsHost, model, {
+          openColumn: (column, newLeaf) => {
+            if (handlers && typeof handlers.openColumn === "function") handlers.openColumn(column, newLeaf);
+          },
+          openStatsForColumn: (column, newLeaf) => {
+            if (handlers && typeof handlers.openStatsForColumn === "function") handlers.openStatsForColumn(column, newLeaf);
+          },
+        });
+      } catch (error) {
+        // Parts are best-effort; facts and lanes already painted.
+      }
+    }
+    return root;
+  } catch (error) {
+    return null;
+  }
+}
+
+function periodStripFutureWords(model) {
+  try {
+    const period = model && typeof model.period === "object" ? model.period : {};
+    const start = typeof period.start === "string" ? period.start : "";
+    const parts = dayStripDateParts(start);
+    if (!parts) return "soon";
+    const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return weekdays[parts.value.getDay()] + " " + months[parts.month - 1] + " " + parts.date;
+  } catch (error) {
+    return "soon";
+  }
+}
+// ---- src/239-plugin-period-strip-fence.js ----
+// `bob-stats-strip` fence, registry, cache, and `openStatsForPeriod` for the
+// week member of the period stats strip. A period note path (or a `period:`
+// line) selects the period member; a canonical daily note path (or a `day:`
+// line) renders the Day strip; anything else gets a muted line. Data is
+// `bob periods show <id> -f json`, cached per period id and shared with the
+// parts table, gated by visibility. Rendering never writes the note.
+const PERIOD_STRIP_TODAY_MIN_AGE_MS = 30 * 1000;
+const PERIOD_STRIP_PAST_MIN_AGE_MS = 10 * 60 * 1000;
+const PERIOD_STRIP_FETCH_TIMEOUT_MS = 20000;
+
+function periodStripDecodeShow(stdout, stderr) {
+  let body = null;
+  try {
+    body = JSON.parse(String(stdout === undefined || stdout === null ? "" : stdout));
+  } catch (error) {
+    return { ok: false, code: "bad-json", message: "bob periods show returned invalid JSON.", detail: statsFirstLine(stderr) };
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body) || body.schema_version !== 1) {
+    return { ok: false, code: "bad-shape", message: "bob periods show returned an unexpected JSON shape.", detail: statsFirstLine(stderr) };
+  }
+  if (body.ok === true) return { ok: true, report: body };
+  if (body.ok === false) {
+    const failure = body.error && typeof body.error === "object" ? body.error : {};
+    return {
+      ok: false,
+      code: typeof failure.code === "string" && failure.code ? failure.code : "bob-error",
+      message: typeof failure.message === "string" && failure.message ? failure.message : "bob periods show failed.",
+      detail: (typeof failure.hint === "string" && failure.hint) || statsFirstLine(stderr),
+    };
+  }
+  return { ok: false, code: "bad-shape", message: "bob periods show returned an unexpected report.", detail: statsFirstLine(stderr) };
+}
+
+function periodStripShowArgs(periodId) {
+  return ["periods", "show", String(periodId), "-f", "json"];
+}
+
+function periodStripPeriodIdForRecord(record) {
+  try {
+    if (record && typeof record.periodId === "string" && record.periodId) return record.periodId;
+  } catch (error) {
+    // Fall through.
+  }
+  return "";
+}
+
+class BobLedgerToolsPeriodStripMixin {
+  periodStripViewsStore() {
+    if (!(this.periodStripViews instanceof Set)) this.periodStripViews = new Set();
+    return this.periodStripViews;
+  }
+
+  periodStripCacheStore() {
+    if (!(this.periodStripCache instanceof Map)) this.periodStripCache = new Map();
+    return this.periodStripCache;
+  }
+
+  periodStripPendingStore() {
+    if (!(this.periodStripPending instanceof Map)) this.periodStripPending = new Map();
+    return this.periodStripPending;
+  }
+
+  periodStripCanSpawn() {
+    try {
+      if (typeof this.dayStripCanSpawn === "function") return this.dayStripCanSpawn();
+    } catch (error) {
+      // Fall through to the local check.
+    }
+    try {
+      if (typeof Platform !== "undefined" && Platform && Platform.isDesktopApp === false) return false;
+    } catch (error) {
+      return false;
+    }
+    try {
+      const childProcess = planRequireOptionalNodeModule("child_process");
+      if (!childProcess || typeof childProcess.execFile !== "function") return false;
+    } catch (error) {
+      return false;
+    }
+    return true;
+  }
+
+  periodStripLocalNow() {
+    try {
+      if (typeof this.dayStripLocalNow === "function") return this.dayStripLocalNow();
+    } catch (error) {
+      // Fall through.
+    }
+    try {
+      return dayStripLocalToday(new Date());
+    } catch (error) {
+      return "";
+    }
+  }
+
+  setupPeriodStripHosts() {
+    try {
+      this.periodStripViewsStore();
+    } catch (error) {
+      // Registry init is best-effort.
+    }
+    try {
+      if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
+        this.registerMarkdownCodeBlockProcessor("bob-stats-strip", (source, el, ctx) =>
+          this.renderPeriodStripFence(el, ctx, source),
+        );
+      }
+    } catch (error) {
+      // Fence registration is best-effort.
+    }
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.on === "function") {
+        this.registerEvent(metadataCache.on("changed", () => this.periodStripNoteChange()));
+      }
+    } catch (error) {
+      // Revalidation wiring is best-effort.
+    }
+    try {
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.on === "function") {
+        for (const event of ["create", "delete", "rename"]) {
+          this.registerEvent(vault.on(event, () => this.periodStripNoteChange()));
+        }
+      }
+    } catch (error) {
+      // Revalidation wiring is best-effort.
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.on === "function") {
+        this.registerEvent(workspace.on("active-leaf-change", () => {
+          try {
+            this.periodStripCheckAll();
+          } catch (error) {
+            // Visibility flush is best-effort.
+          }
+        }));
+        this.registerEvent(workspace.on("layout-change", () => {
+          try {
+            this.periodStripCheckAll();
+          } catch (error) {
+            // Visibility flush is best-effort.
+          }
+        }));
+      }
+    } catch (error) {
+      // Visibility wiring is best-effort.
+    }
+  }
+
+  teardownPeriodStripHosts() {
+    try {
+      for (const record of Array.from(this.periodStripViewsStore())) {
+        try {
+          this.periodStripReleaseRecord(record);
+        } catch (error) {
+          // One stale strip never breaks the others.
+        }
+      }
+      this.periodStripViewsStore().clear();
+    } catch (error) {
+      // Registry cleanup is best-effort.
+    }
+  }
+
+  // Shared cache peek by period id for the strip and the parts table. Never
+  // throws; returns `{ report, fetchedAt, stale, error }` or null.
+  periodStripPeek(periodId) {
+    try {
+      const store = this.periodStripCacheStore();
+      const entry = store.get(String(periodId));
+      if (!entry) return null;
+      store.delete(String(periodId));
+      store.set(String(periodId), entry);
+      return { report: entry.report || null, fetchedAt: entry.fetchedAt, stale: entry.stale === true, error: entry.error || null };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  periodStripCacheSet(periodId, report, error) {
+    try {
+      const store = this.periodStripCacheStore();
+      const key = String(periodId);
+      if (store.has(key)) store.delete(key);
+      let fetchedAt = null;
+      try {
+        fetchedAt = Date.now();
+      } catch (error) {
+        fetchedAt = 0;
+      }
+      store.set(key, { report: report || null, fetchedAt, stale: false, error: error || null });
+      while (store.size > 16) {
+        const oldest = store.keys().next();
+        if (oldest.done) break;
+        store.delete(oldest.value);
+      }
+      return fetchedAt;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  periodStripSpawnShow(periodId) {
+    try {
+      return bobSpawnJson(periodStripShowArgs(periodId), periodStripDecodeShow, {
+        commandLabel: "bob periods show",
+        resolveBobPath: () =>
+          typeof this.apiStatsBobPath === "function" ? this.apiStatsBobPath() : { path: "bob", source: "path" },
+        getVaultPath: () => (typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null),
+        timeout: PERIOD_STRIP_FETCH_TIMEOUT_MS,
+      });
+    } catch (error) {
+      return Promise.resolve({ ok: false, code: "spawn-failed", message: "bob periods show failed to run.", detail: "" });
+    }
+  }
+
+  periodStripFetch(record) {
+    try {
+      const periodId = periodStripPeriodIdForRecord(record);
+      if (!periodId) return;
+      const pending = this.periodStripPendingStore();
+      const existing = pending.get(periodId);
+      if (existing) {
+        existing.waiters.push((result) => this.periodStripSettled(record, result));
+        return;
+      }
+      const waiters = [(result) => this.periodStripSettled(record, result)];
+      pending.set(periodId, { waiters });
+      void this.periodStripSpawnShow(periodId).then((result) => {
+        let entry = null;
+        try {
+          entry = pending.get(periodId);
+          pending.delete(periodId);
+        } catch (error) {
+          entry = null;
+        }
+        if (result && result.ok) {
+          try {
+            this.periodStripCacheSet(periodId, result.report, null);
+          } catch (error) {
+            // Cache write is best-effort.
+          }
+        }
+        const settled = result && result.ok
+          ? { report: result.report, fetchedAt: this.periodStripPeek(periodId)?.fetchedAt, stale: false, error: null }
+          : { report: this.periodStripPeek(periodId)?.report || null, fetchedAt: this.periodStripPeek(periodId)?.fetchedAt, stale: true, error: result };
+        const list = (entry && entry.waiters) || waiters;
+        for (const waiter of list.splice(0)) {
+          try {
+            waiter(settled);
+          } catch (error) {
+            // Waiter delivery is best-effort.
+          }
+        }
+      });
+    } catch (error) {
+      // Fetching is best-effort.
+    }
+  }
+
+  periodStripSettled(record, result) {
+    try {
+      if (!record) return;
+      try {
+        if (!this.periodStripViewsStore().has(record)) return;
+      } catch (error) {
+        return;
+      }
+      this.periodStripPaint(record, result || { report: null });
+    } catch (error) {
+      // Settling is best-effort.
+    }
+  }
+
+  periodStripNoteChange() {
+    try {
+      this.periodStripCheckAll();
+    } catch (error) {
+      // Scheduling is best-effort.
+    }
+  }
+
+  periodStripCheckAll() {
+    try {
+      for (const record of Array.from(this.periodStripViewsStore())) {
+        try {
+          this.periodStripCheck(record);
+        } catch (error) {
+          // One stale strip never breaks the others.
+        }
+      }
+    } catch (error) {
+      // Checking is best-effort.
+    }
+  }
+
+  periodStripRecordIsShown(record) {
+    try {
+      if (record && record.visible === false) return false;
+    } catch (error) {
+      // Fall through.
+    }
+    try {
+      return statsBlockViewIsShown({ el: record && record.el });
+    } catch (error) {
+      return true;
+    }
+  }
+
+  periodStripPaint(record, result) {
+    try {
+      if (!record || !record.el) return null;
+      if (record.day) {
+        return this.periodStripPaintDay(record, result);
+      }
+      const periodId = periodStripPeriodIdForRecord(record);
+      let laneView = "both";
+      try {
+        laneView = typeof this.dayStripLaneViewCurrent === "function" ? this.dayStripLaneViewCurrent() : dayStripLaneViewOf(this.dayStripLaneView);
+      } catch (error) {
+        laneView = "both";
+      }
+      const handlers = {
+        openStats: (opts) => {
+          try {
+            const safe = opts && typeof opts === "object" ? opts : {};
+            void this.openStatsForPeriod({
+              period: periodId,
+              metric: safe.metric,
+              panel: safe.panel,
+              clock: safe.clock,
+              newLeaf: safe.newLeaf,
+              sourcePath: record.path,
+            });
+          } catch (error) {
+            // Opening Stats is best-effort.
+          }
+        },
+        openColumn: (column, newLeaf) => {
+          try {
+            this.periodStripOpenColumn(column, record, newLeaf);
+          } catch (error) {
+            // Navigation is best-effort.
+          }
+        },
+        openStatsForColumn: (column, newLeaf) => {
+          try {
+            const day = column && typeof column.start === "string" ? column.start : (column && column.id) || "";
+            void this.openStatsForDay({ day, newLeaf, sourcePath: record.path });
+          } catch (error) {
+            // Opening Stats is best-effort.
+          }
+        },
+        retry: () => {
+          try {
+            this.periodStripCheck(record, { force: true });
+          } catch (error) {
+            // Retry is best-effort.
+          }
+        },
+        cycleLanes: () => {
+          try {
+            if (typeof this.dayStripCycleLaneView === "function") this.dayStripCycleLaneView({});
+          } catch (error) {
+            // Cycling is best-effort.
+          }
+        },
+      };
+      const snapshot = result && typeof result === "object" && ("report" in result || "error" in result) ? result : null;
+      let report = null;
+      let fetchedAt = null;
+      let stale = false;
+      let error = null;
+      if (snapshot) {
+        report = snapshot.report || null;
+        fetchedAt = snapshot.fetchedAt;
+        stale = snapshot.stale === true;
+        error = snapshot.error || null;
+      } else {
+        const peek = this.periodStripPeek(periodId);
+        report = (peek && peek.report) || null;
+        fetchedAt = peek ? peek.fetchedAt : null;
+        stale = peek ? peek.stale === true : false;
+      }
+      if (!report) {
+        const model = periodStripModel(null, periodId, { laneView, fetchedAt, stale, error });
+        return this.periodStripFinishPaint(record, model, handlers, fetchedAt);
+      }
+      const model = periodStripModel(report, periodId, {
+        laneView,
+        fetchedAt,
+        stale,
+        error,
+        themeHueFor: (key, name) => {
+          try {
+            return typeof this.pomodoroThemeHueFor === "function" ? this.pomodoroThemeHueFor(key, name) : "gray";
+          } catch (error) {
+            return "gray";
+          }
+        },
+      });
+      return this.periodStripFinishPaint(record, model, handlers, fetchedAt);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  periodStripFinishPaint(record, model, handlers, stamp) {
+    try {
+      const key = [
+        model.state,
+        model.periodId,
+        String(stamp === undefined ? "" : stamp),
+        model.stale,
+        model.error ? model.error.code : "",
+        (model.facts || []).map((fact) => [fact.display, (fact.ref && fact.ref.mark) || "", (fact.ref && fact.ref.display) || ""].join(":")).join(","),
+        (model.columns || []).map((column) => [column.id, column.state, (column.worked && column.worked.display) || "", column.mark || ""].join(":")).join(","),
+      ].join("|");
+      if (record.paintedKey === key) return model;
+      record.paintedKey = key;
+      paintPeriodStrip(record.el, model, handlers);
+    } catch (error) {
+      // Painting is best-effort.
+    }
+    return model;
+  }
+
+  // Day delegation for `bob-stats-strip` on a canonical daily note (or a
+  // `day:` line): reuse the Day strip's model and painter on the same
+  // element so the fence stays one family. Never throws.
+  periodStripPaintDay(record, result) {
+    try {
+      if (typeof this.dayStripPaint === "function") {
+        const dayRecord = { el: record.el, day: record.day, path: record.path, kind: "fence", observer: record.observer || null, visible: record.visible, paintedKey: record.paintedKey };
+        const out = this.dayStripPaint(dayRecord, result);
+        try {
+          record.paintedKey = dayRecord.paintedKey;
+        } catch (error) {
+          // Painted-key sync is best-effort.
+        }
+        return out;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  periodStripCheck(record, opts) {
+    try {
+      const force = Boolean(opts && opts.force === true);
+      if (!record || !record.el) return;
+      if (!this.periodStripCanSpawn()) return;
+      if (record.day) {
+        if (typeof this.dayStripCheck === "function") {
+          const dayRecord = { el: record.el, day: record.day, path: record.path, kind: "fence", observer: record.observer || null, visible: record.visible };
+          this.dayStripCheck(dayRecord, opts);
+        } else {
+          this.periodStripPaint(record);
+        }
+        return;
+      }
+      const periodId = periodStripPeriodIdForRecord(record);
+      if (!periodId) {
+        this.periodStripPaint(record);
+        return;
+      }
+      if (!this.periodStripRecordIsShown(record)) return;
+      const peek = this.periodStripPeek(periodId);
+      if (!peek || !peek.report) {
+        this.periodStripFetch(record);
+        return;
+      }
+      let now = 0;
+      try {
+        now = Date.now();
+      } catch (error) {
+        now = 0;
+      }
+      const classified = periodStripClassifyId(periodId);
+      const age = now - Number(peek.fetchedAt);
+      const isCurrent = peek.report && peek.report.period && peek.report.period.state === "current";
+      const minAge = isCurrent ? PERIOD_STRIP_TODAY_MIN_AGE_MS : PERIOD_STRIP_PAST_MIN_AGE_MS;
+      void classified;
+      if (force || (Number.isFinite(age) && age >= minAge)) {
+        this.periodStripFetch(record);
+      }
+    } catch (error) {
+      // Checking is best-effort.
+    }
+  }
+
+  periodStripOpenColumn(column, record, newLeaf) {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.openLinkText !== "function") return;
+      const path = column && typeof column.path === "string" ? column.path : "";
+      if (!path) return;
+      const link = path.replace(/\.md$/, "");
+      void workspace.openLinkText(link, (record && record.path) || "", newLeaf === true);
+    } catch (error) {
+      // Navigation is best-effort.
+    }
+  }
+
+  // The `bob-stats-strip` fence: a period note path (or a `period:` line)
+  // selects the period member; a canonical daily note path (or a `day:` line)
+  // renders the Day strip; anything else gets a muted line. Nothing on
+  // mobile or wherever `bob` cannot spawn. Never throws.
+  renderPeriodStripFence(el, ctx, source) {
+    if (!el) return;
+    try {
+      try {
+        if (el.closest && typeof el.closest === "function") {
+          if (el.closest(".hover-popover, .markdown-embed")) return;
+        }
+      } catch (error) {
+        // Hover/embed detection is best-effort.
+      }
+      const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      const parsed = periodStripParseFencePeriod(source, sourcePath);
+      if (!parsed) {
+        try {
+          if (typeof el.empty === "function") el.empty();
+          else el.textContent = "";
+          const doc = statsDocFor(el);
+          const note = statsEl(doc, "div", { class: "bob-period-strip-fence-note" }, "bob-stats-strip needs a period note, a daily note, or a period: / day: line.");
+          if (note) el.appendChild(note);
+        } catch (error) {
+          // Muted-line fallback is best-effort.
+        }
+        return;
+      }
+      if (parsed.kind === "day") {
+        const day = dayStripDateParts(parsed.id) ? parsed.id : dayStripDayForPath(sourcePath);
+        if (!day) {
+          try {
+            if (typeof el.empty === "function") el.empty();
+            else el.textContent = "";
+            const doc = statsDocFor(el);
+            const note = statsEl(doc, "div", { class: "bob-period-strip-fence-note" }, "bob-stats-strip needs a period note, a daily note, or a period: / day: line.");
+            if (note) el.appendChild(note);
+          } catch (error) {
+            // Muted-line fallback is best-effort.
+          }
+          return;
+        }
+        if (!this.periodStripCanSpawn()) return;
+        const record = { el, day, path: sourcePath, kind: "fence", observer: null, visible: true };
+        this.periodStripViewsStore().add(record);
+        this.periodStripObserve(record);
+        this.periodStripPaint(record);
+        this.periodStripCheck(record);
+        return;
+      }
+      if (!this.periodStripCanSpawn()) return;
+      const record = { el, periodId: parsed.id, kind: parsed.kind, path: sourcePath, observer: null, visible: true };
+      this.periodStripViewsStore().add(record);
+      if (ctx && typeof ctx.addChild === "function") {
+        let child = null;
+        try {
+          if (typeof MarkdownRenderChild === "function") {
+            child = new MarkdownRenderChild(el);
+            child.onunload = () => {
+              this.periodStripReleaseRecord(record);
+            };
+          }
+        } catch (error) {
+          child = null;
+        }
+        if (!child) {
+          child = {
+            unload: () => {
+              this.periodStripReleaseRecord(record);
+            },
+          };
+        }
+        try {
+          ctx.addChild(child);
+        } catch (error) {
+          // Older hosts may reject the child.
+        }
+      }
+      this.periodStripObserve(record);
+      this.periodStripPaint(record);
+      this.periodStripCheck(record);
+    } catch (error) {
+      // Fence rendering never breaks the note.
+    }
+  }
+
+  // Open Stats with the period's exact dates: range = start..end, grouping by
+  // kind (day for week, week for quarter/year, month for all time), the focus
+  // metric, and the panel; clears pinnedDay and pinnedBucket. Plain click
+  // reuses an open Stats tab; Ctrl/Cmd-click and middle-click open a new one.
+  // Never clears the pin while capability resolves. Never throws.
+  async openStatsForPeriod(options) {
+    const opts = options && typeof options === "object" ? options : {};
+    const periodId = typeof opts.period === "string" ? opts.period : "";
+    const start = typeof opts.start === "string" ? opts.start : "";
+    const end = typeof opts.end === "string" ? opts.end : "";
+    const kind = typeof opts.kind === "string" ? opts.kind : "";
+    const sourcePath = typeof opts.sourcePath === "string" ? opts.sourcePath : "";
+    try {
+      const classified = periodStripClassifyId(periodId);
+      if (!classified) throw new Error("Period strip needs a valid period to open Stats.");
+      let period = { start, end, kind: kind || classified.kind };
+      const peek = this.periodStripPeek(periodId);
+      if (peek && peek.report && peek.report.period) {
+        const cached = peek.report.period;
+        period = {
+          start: start || cached.start || "",
+          end: end || cached.end || "",
+          kind: kind || cached.kind || classified.kind,
+        };
+      }
+      if (!period.start || !period.end) {
+        const result = await this.periodStripSpawnShow(periodId);
+        if (result && result.ok && result.report && result.report.period) {
+          period = {
+            start: result.report.period.start || period.start,
+            end: result.report.period.end || period.end,
+            kind: result.report.period.kind || period.kind,
+          };
+          try {
+            this.periodStripCacheSet(periodId, result.report, null);
+          } catch (error) {
+            // Cache write is best-effort.
+          }
+        }
+      }
+      if (!period.start || !period.end) throw new Error("Period strip needs a valid period to open Stats.");
+      const group = period.kind === "week" ? "day" : period.kind === "all" ? "month" : "week";
+      let dashPath = "dash_stats";
+      try {
+        const metadataCache = this.app && this.app.metadataCache;
+        if (metadataCache && typeof metadataCache.getFirstLinkpathDest === "function") {
+          const dest = metadataCache.getFirstLinkpathDest("dash_stats", sourcePath);
+          if (dest && typeof dest.path === "string" && dest.path) dashPath = dest.path;
+        }
+      } catch (error) {
+        // Link resolution is best-effort.
+      }
+      const state = this.statsViewStateFor(dashPath);
+      state.range = period.start + ".." + period.end;
+      state.offset = 0;
+      state.group = group;
+      state.pinnedDay = null;
+      state.pinnedBucket = null;
+      if (typeof opts.metric === "string" && opts.metric) state.focus = opts.metric;
+      if (opts.panel === "themes") {
+        state.revealPanel = "homes";
+        state.homesView = "themes";
+      } else if (opts.panel === "homes") {
+        state.revealPanel = "homes";
+        state.homesView = "roots";
+      }
+      try {
+        if (this.statsBlockViews instanceof Set) {
+          for (const view of Array.from(this.statsBlockViews)) {
+            if (view && view.sourcePath === dashPath) {
+              try {
+                this.paintStatsBlock(view);
+              } catch (error) {
+                // One stale block never breaks the hand-off.
+              }
+            }
+          }
+        }
+      } catch (error) {
+        // Repaint is best-effort.
+      }
+      const workspace = this.app && this.app.workspace;
+      let leaf = null;
+      try {
+        leaf = findOpenMarkdownLeafByPath(this.app, dashPath);
+      } catch (error) {
+        leaf = null;
+      }
+      if (leaf && workspace && opts.newLeaf !== true) {
+        try {
+          if (typeof workspace.revealLeaf === "function") await workspace.revealLeaf(leaf);
+          if (typeof workspace.setActiveLeaf === "function") await workspace.setActiveLeaf(leaf, { focus: true });
+          return true;
+        } catch (error) {
+          // Fall through to openLinkText below.
+        }
+      }
+      if (workspace && typeof workspace.openLinkText === "function") {
+        await workspace.openLinkText("dash_stats", sourcePath, opts.newLeaf === true);
+        return true;
+      }
+      throw new Error("Stats cannot be opened from here.");
+    } catch (error) {
+      try {
+        new Notice("Could not open Stats");
+      } catch (inner) {
+        // Notice is best-effort.
+      }
+      return false;
+    }
+  }
+
+  periodStripReleaseRecord(record) {
+    try {
+      try {
+        if (record && record.observer && typeof record.observer.disconnect === "function") {
+          record.observer.disconnect();
+        }
+      } catch (error) {
+        // Observer cleanup is best-effort.
+      }
+      if (record) record.observer = null;
+      this.periodStripViewsStore().delete(record);
+    } catch (error) {
+      // Release is best-effort.
+    }
+  }
+
+  periodStripObserve(record) {
+    try {
+      if (!record) return;
+      let Observer = null;
+      try {
+        Observer = typeof IntersectionObserver !== "undefined" ? IntersectionObserver : null;
+      } catch (error) {
+        Observer = null;
+      }
+      if (typeof Observer !== "function") {
+        record.visible = true;
+        return;
+      }
+      try {
+        if (record.observer && typeof record.observer.disconnect === "function") record.observer.disconnect();
+      } catch (error) {
+        // Observer reset is best-effort.
+      }
+      const observer = new Observer((entries) => {
+        try {
+          const list = Array.isArray(entries) ? entries : [];
+          for (const entry of list) {
+            if (entry && typeof entry.isIntersecting === "boolean") record.visible = entry.isIntersecting;
+          }
+          if (record.visible !== false) {
+            record.visible = true;
+            this.periodStripCheck(record);
+          }
+        } catch (error) {
+          // Observation is best-effort.
+        }
+      });
+      record.observer = observer;
+      if (record.el && typeof observer.observe === "function") observer.observe(record.el);
+    } catch (error) {
+      try {
+        record.visible = true;
+      } catch (inner) {
+        // Visibility is best-effort.
+      }
+    }
   }
 }
 // ---- src/240-plugin-freshness-status.js ----
@@ -87517,6 +89325,14 @@ module.exports.helpers = {
   dayStripRequestFor,
   dayStripDayInReportWindow,
   dayStripDefaultReportCovers,
+  PERIOD_STRIP_METRIC_IDS,
+  periodStripParseFencePeriod,
+  periodStripClassifyId,
+  periodStripModel,
+  periodStripWeekColumns,
+  paintPeriodStripParts,
+  paintPeriodStrip,
+  periodStripShowArgs,
   DAY_STRIP_RECHECK_DEBOUNCE_MS,
   DAY_STRIP_TODAY_MIN_AGE_MS,
   DAY_STRIP_PAST_MIN_AGE_MS,

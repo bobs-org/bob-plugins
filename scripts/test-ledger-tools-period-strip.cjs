@@ -1,0 +1,212 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+const { LedgerToolsPlugin } = require("./ledger-tools-harness.cjs");
+
+const helpers = LedgerToolsPlugin.helpers;
+const fixtureDir = path.join(__dirname, "..", "plugins/bob-ledger-tools/scripts/fixtures/stats");
+const current = JSON.parse(fs.readFileSync(path.join(fixtureDir, "period-strip-current-week.json"), "utf8"));
+const closed = JSON.parse(fs.readFileSync(path.join(fixtureDir, "period-strip-closed-week.json"), "utf8"));
+const preLedger = JSON.parse(fs.readFileSync(path.join(fixtureDir, "period-strip-pre-ledger-week.json"), "utf8"));
+const future = JSON.parse(fs.readFileSync(path.join(fixtureDir, "period-strip-future-week.json"), "utf8"));
+
+function hideNodeFields(node, fields) {
+  for (const field of fields) {
+    Object.defineProperty(node, field, { enumerable: false, configurable: true, writable: true });
+  }
+}
+
+class FakeNode {
+  constructor(tagName, ownerDocument) {
+    this.tagName = String(tagName).toUpperCase();
+    this.ownerDocument = ownerDocument;
+    this.parentNode = null;
+    this.children = [];
+    this.attrs = new Map();
+    this.listeners = new Map();
+    this.style = {};
+    this._text = "";
+    hideNodeFields(this, ["ownerDocument", "parentNode"]);
+  }
+  set textContent(value) {
+    this._text = String(value);
+    for (const child of this.children) child.parentNode = null;
+    this.children = [];
+  }
+  get textContent() {
+    return [this._text, ...this.children.map((child) => child.textContent)].filter(Boolean).join("");
+  }
+  setAttribute(name, value) { this.attrs.set(name, String(value)); }
+  getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
+  appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+  addEventListener(type, handler) {
+    if (!this.listeners.has(type)) this.listeners.set(type, []);
+    this.listeners.get(type).push(handler);
+  }
+  dispatch(type, init = {}) {
+    const event = { type, target: this, currentTarget: null, ...init, preventDefault() {}, stopPropagation() {} };
+    let node = this;
+    while (node) {
+      event.currentTarget = node;
+      for (const handler of node.listeners.get(type) || []) handler(event);
+      node = node.parentNode;
+    }
+    return event;
+  }
+}
+
+function fakeDocument() {
+  return {
+    createElement(tag) { return new FakeNode(tag, null); },
+    createElementNS(ns, tag) { return new FakeNode(tag, null); },
+  };
+}
+
+function findAll(root, predicate, result = []) {
+  if (predicate(root)) result.push(root);
+  for (const child of root.children) findAll(child, predicate, result);
+  return result;
+}
+
+function byClass(root, name) {
+  return findAll(root, (node) => (node.getAttribute("class") || "").split(/\s+/).includes(name));
+}
+
+function paint(model, handlers = {}) {
+  const doc = fakeDocument();
+  const root = new FakeNode("div", doc);
+  root.ownerDocument = doc;
+  return { root, returned: helpers.paintPeriodStrip(root, model, handlers) };
+}
+
+test("period ids classify week, quarter, year, all time, day, and junk", () => {
+  assert.deepEqual(helpers.periodStripClassifyId("2026-W45"), { kind: "week", id: "2026-W45" });
+  assert.deepEqual(helpers.periodStripClassifyId("2026/2026-W45.md"), { kind: "week", id: "2026-W45" });
+  assert.deepEqual(helpers.periodStripClassifyId("2026-Q4"), { kind: "quarter", id: "2026-Q4" });
+  assert.deepEqual(helpers.periodStripClassifyId("2026"), { kind: "year", id: "2026" });
+  assert.deepEqual(helpers.periodStripClassifyId("all_time.md"), { kind: "all", id: "all" });
+  assert.deepEqual(helpers.periodStripClassifyId("2026/20261103.md"), { kind: "day", id: "2026-11-03" });
+  assert.equal(helpers.periodStripClassifyId("2026-W99"), null);
+  assert.equal(helpers.periodStripClassifyId("notes.md"), null);
+});
+
+test("fence parsing selects period, day, or the muted line", () => {
+  assert.deepEqual(helpers.periodStripParseFencePeriod("period: 2026-W45", "2026/2026-W45.md"), { kind: "week", id: "2026-W45" });
+  assert.deepEqual(helpers.periodStripParseFencePeriod("day: 2026-11-03", ""), { kind: "day", id: "2026-11-03" });
+  assert.deepEqual(helpers.periodStripParseFencePeriod("", "2026/2026-W45.md"), { kind: "week", id: "2026-W45" });
+  assert.deepEqual(helpers.periodStripParseFencePeriod("", "2026/20261103.md"), { kind: "day", id: "2026-11-03" });
+  assert.equal(helpers.periodStripParseFencePeriod("", "random/note.md"), null);
+  assert.equal(helpers.periodStripParseFencePeriod("unrelated: yes", "random/note.md"), null);
+});
+
+test("week model maps bob facts with typical marks only when closed", () => {
+  const openModel = helpers.periodStripModel(current, "2026-W45", { laneView: "both", fetchedAt: current.generated_at });
+  assert.equal(openModel.state, "ready");
+  assert.equal(openModel.periodId, "2026-W45");
+  assert.deepEqual(openModel.facts.map((fact) => fact.id), ["worked", "reviewed", "done", "created", "review_closed"]);
+  for (const fact of openModel.facts) {
+    const source = current.facts.find((entry) => entry.metric === fact.id);
+    assert.equal(fact.display, source.display);
+    if (fact.ref.state === "ready") assert.equal(fact.ref.mark, null, `${fact.id} open week never marks`);
+  }
+  const closedModel = helpers.periodStripModel(closed, "2026-W44", { laneView: "both" });
+  assert.equal(closedModel.state, "ready");
+  const worked = closedModel.facts.find((fact) => fact.id === "worked");
+  assert.equal(worked.ref.state, "ready");
+  assert.equal(worked.ref.mark, "below");
+  assert.match(worked.tooltip, /Typical/);
+});
+
+test("week meta covers open, closed gaps, and future", () => {
+  const openModel = helpers.periodStripModel(current, "2026-W45", { laneView: "both", fetchedAt: current.generated_at });
+  assert.match(openModel.metaText, /so far/);
+  const closedModel = helpers.periodStripModel(closed, "2026-W44", { laneView: "both" });
+  assert.equal(closedModel.metaText, "");
+  const gapsModel = helpers.periodStripModel(preLedger, "2026-W22", { laneView: "both" });
+  assert.match(gapsModel.metaText, /logged/);
+  const futureModel = helpers.periodStripModel(future, "2026-W46", { laneView: "both" });
+  assert.equal(futureModel.state, "future");
+  assert.match(futureModel.metaText, /Starts/);
+});
+
+test("lanes and columns share one hue per root", () => {
+  const model = helpers.periodStripModel(current, "2026-W45", { laneView: "both" });
+  const laneHues = new Map(model.roots.segments.map((segment) => [segment.key, segment.hue]));
+  assert.ok(laneHues.size > 0);
+  for (const column of model.columns) {
+    if (column.missing) continue;
+    for (const entry of column.stack) {
+      assert.equal(entry.hue, laneHues.get(entry.key), `${entry.key} keeps one hue in lanes and columns`);
+    }
+  }
+});
+
+test("week columns carry closed, current, future, and missing states", () => {
+  const model = helpers.periodStripModel(current, "2026-W45", { laneView: "both" });
+  assert.equal(model.columns.length, 7);
+  const byId = Object.fromEntries(model.columns.map((column) => [column.id, column]));
+  assert.equal(byId["2026-11-02"].state, "closed");
+  assert.equal(byId["2026-11-02"].mark, "met");
+  assert.equal(byId["2026-11-03"].state, "current");
+  assert.equal(byId["2026-11-04"].state, "future");
+  assert.equal(byId["2026-11-04"].worked, null);
+  const gaps = helpers.periodStripModel(preLedger, "2026-W22", { laneView: "both" });
+  const missing = gaps.columns.find((column) => column.id === "2026-05-25");
+  assert.equal(missing.missing, true);
+  assert.match(missing.tooltip, /not tracked/);
+});
+
+test("states: skeleton, unavailable, older-bob, hidden, and queued", () => {
+  assert.equal(helpers.periodStripModel(null, "2026-W45", { laneView: "both" }).state, "skeleton");
+  const unavailable = helpers.periodStripModel(null, "2026-W45", { laneView: "both", error: { code: "timeout", title: "bob periods timed out" } });
+  assert.equal(unavailable.state, "unavailable");
+  const older = helpers.periodStripModel(null, "2026-W45", { laneView: "both", error: { code: "bob-not-found", title: "bob was not found" } });
+  assert.equal(older.state, "older-bob");
+  assert.equal(helpers.periodStripModel(null, "not-a-period", { laneView: "both" }).state, "hidden");
+  assert.equal(helpers.periodStripModel(current, "2026-Q4", { laneView: "both" }).state, "queued");
+});
+
+test("paint renders facts, lanes, and the seven-day parts row with no buttons", () => {
+  const model = helpers.periodStripModel(closed, "2026-W44", { laneView: "both" });
+  const { root } = paint(model);
+  assert.equal(byClass(root, "bob-period-strip-fact").length, 5);
+  assert.ok(byClass(root, "bob-period-strip-parts").length >= 1);
+  assert.equal(byClass(root, "bob-period-strip-column").length, 7);
+  assert.equal(findAll(root, (node) => node.tagName === "BUTTON").length, 0);
+  const paintedFuture = paint(helpers.periodStripModel(future, "2026-W46", { laneView: "both" })).root;
+  assert.match(paintedFuture.textContent, /Starts/);
+  assert.equal(byClass(paintedFuture, "bob-period-strip-column").length, 0);
+});
+
+test("parts row is one roving-tabindex group with tooltips", () => {
+  const model = helpers.periodStripModel(closed, "2026-W44", { laneView: "both" });
+  const { root } = paint(model);
+  const columns = byClass(root, "bob-period-strip-column");
+  assert.equal(columns[0].getAttribute("tabindex"), "0");
+  for (const column of columns.slice(1)) assert.equal(column.getAttribute("tabindex"), "-1");
+  for (const column of columns) assert.match(column.getAttribute("title") || "", /Worked/);
+});
+
+test("clicks reach the day note and Stats hand-offs, never a spawn on future", () => {
+  const model = helpers.periodStripModel(closed, "2026-W44", { laneView: "both" });
+  let opened = null;
+  let statsForColumn = null;
+  const { root } = paint(model, {
+    openColumn: (column, newLeaf) => { opened = { id: column.id, newLeaf }; },
+    openStatsForColumn: (column, newLeaf) => { statsForColumn = { id: column.id, newLeaf }; },
+  });
+  const first = byClass(root, "bob-period-strip-column")[0];
+  first.dispatch("click", { ctrlKey: false, metaKey: false, button: 0, altKey: false });
+  assert.equal(opened.id, "2026-10-26");
+  first.dispatch("keydown", { key: "Enter", altKey: true, preventDefault() {} });
+  assert.equal(statsForColumn.id, "2026-10-26");
+  let factStats = null;
+  const { root: factsRoot } = paint(model, { openStats: (opts) => { factStats = opts; } });
+  byClass(factsRoot, "bob-period-strip-fact")[0].dispatch("click", {});
+  assert.equal(factStats.metric, "worked");
+});
+
+test("period show args are one audited call per period", () => {
+  assert.deepEqual(helpers.periodStripShowArgs("2026-W45"), ["periods", "show", "2026-W45", "-f", "json"]);
+});

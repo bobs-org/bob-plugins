@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bob period strip preview matrix</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body { font: 16px/1.45 system-ui, sans-serif; padding: 0 0 24px; }
+    body.theme-light {
+      color-scheme: light; --background-primary: #fff; --background-secondary: #f6f5f2;
+      --background-modifier-border: #d8d5cf; --background-modifier-hover: #eeece8;
+      --text-normal: #262521; --text-muted: #6f6c65; --text-faint: #a7a39b;
+      --text-accent: #5143ad; --interactive-accent: #6556c8;
+      --radius-s: 4px; --font-interface: system-ui, sans-serif;
+      --bob-area-blue: #3979c5; --bob-area-orange: #d66d36; --bob-area-aqua: #268d97;
+      --bob-area-yellow: #ae8c1e; --bob-area-magenta: #b04c85; --bob-area-green: #4c8b57;
+      --bob-area-violet: #765eb8; --bob-area-red: #bf5c54;
+      --bob-hue-blue: var(--bob-area-blue); --bob-hue-orange: var(--bob-area-orange); --bob-hue-aqua: var(--bob-area-aqua);
+      --bob-hue-yellow: var(--bob-area-yellow); --bob-hue-magenta: var(--bob-area-magenta); --bob-hue-green: var(--bob-area-green);
+      --bob-hue-violet: var(--bob-area-violet); --bob-hue-red: var(--bob-area-red);
+      background: #eeece8; color: var(--text-normal);
+    }
+    body.theme-dark {
+      color-scheme: dark; --background-primary: #202124; --background-secondary: #292a2e;
+      --background-modifier-border: #45464c; --background-modifier-hover: #34363b;
+      --text-normal: #e7e6e2; --text-muted: #a4a3a0; --text-faint: #74757a;
+      --text-accent: #b2a9ff; --interactive-accent: #9a8cf0;
+      --radius-s: 4px; --font-interface: system-ui, sans-serif;
+      --bob-area-blue: #68a4ee; --bob-area-orange: #e17a4a; --bob-area-aqua: #55b8c3;
+      --bob-area-yellow: #d0b24c; --bob-area-magenta: #d172a7; --bob-area-green: #75b87e;
+      --bob-area-violet: #a18ce4; --bob-area-red: #df817a;
+      --bob-hue-blue: var(--bob-area-blue); --bob-hue-orange: var(--bob-area-orange); --bob-hue-aqua: var(--bob-area-aqua);
+      --bob-hue-yellow: var(--bob-area-yellow); --bob-hue-magenta: var(--bob-area-magenta); --bob-hue-green: var(--bob-area-green);
+      --bob-hue-violet: var(--bob-area-violet); --bob-hue-red: var(--bob-area-red);
+      background: #17181a; color: var(--text-normal);
+    }
+    #preview-root { margin: 0 auto; width: 100%; padding: 12px; }
+    .preview-case { min-width: 0; margin: 0 0 18px; }
+    .preview-case-title { margin: 0 0 5px; color: var(--text-muted); font-size: 12px; font-weight: 650; }
+    .preview-note {
+      min-width: 0; width: 100%; padding: 8px 12px 8px;
+      border: 1px solid var(--background-modifier-border); border-radius: 6px;
+      background: var(--background-primary); color: var(--text-normal);
+      font: 16px/1.45 var(--font-interface);
+    }
+    .preview-strip { width: 100%; min-width: 0; }
+    .preview-report { margin-top: 16px; color: var(--text-muted); font-size: 12px; }
+  </style>
+  <style id="obsidian-baseline">__OBSIDIAN_BASELINE_CSS__</style>
+  <style id="production-css">__PRODUCTION_CSS__</style>
+</head>
+<body class="theme-light">
+  <main id="preview-root"></main>
+  <script>
+  window.__previewError = "";
+  (() => {
+    "use strict";
+    const pluginSource = __PLUGIN_SOURCE_JSON__;
+    const fixtures = __FIXTURES_JSON__;
+    const moduleObject = { exports: {} };
+    const modules = {
+      obsidian: { Plugin: class {}, MarkdownRenderChild: class {}, MarkdownView: class {}, Notice: class {}, Platform: { isDesktopApp: false }, normalizePath: (value) => value, parseYaml: () => ({}) },
+      "@codemirror/state": { Prec: { highest: (value) => value } },
+      "@codemirror/view": { EditorView: { updateListener: { of: (listener) => ({ listener }) } }, keymap: { of: (value) => value } },
+    };
+    new Function("require", "module", "exports", "process", pluginSource)(
+      (name) => modules[name] || {}, moduleObject, moduleObject.exports, { env: { HOME: "/" } },
+    );
+    const helpers = moduleObject.exports.helpers;
+    const cases = [
+      { id: "current", title: "Current week · so far", report: "current" },
+      { id: "closed", title: "Closed week with gaps", report: "closed" },
+      { id: "pre-ledger", title: "Pre-ledger week · hatched", report: "pre-ledger" },
+      { id: "future", title: "Future week · quiet line", report: "future" },
+      { id: "skeleton", title: "First load · skeleton", report: null },
+    ];
+    function statsDocFor(el) { return (el && el.ownerDocument) || document; }
+    function statsElShim(doc, tag, attrs, text) {
+      const el = doc.createElement(tag);
+      for (const [key, value] of Object.entries(attrs || {})) {
+        if (value === null || value === undefined) continue;
+        el.setAttribute(key, String(value));
+      }
+      if (text !== undefined && text !== null) el.textContent = String(text);
+      return el;
+    }
+    window.periodStripPreview = {
+      renderMatrix(width, theme) {
+        document.body.className = "theme-" + theme;
+        const root = document.getElementById("preview-root");
+        root.innerHTML = "";
+        root.style.width = width + "px";
+        const measurements = [];
+        for (const entry of cases) {
+          const wrap = document.createElement("section");
+          wrap.className = "preview-case";
+          wrap.id = "case-" + entry.id;
+          const heading = document.createElement("h2");
+          heading.className = "preview-case-title";
+          heading.textContent = entry.title;
+          wrap.appendChild(heading);
+          const note = document.createElement("div");
+          note.className = "preview-note";
+          const host = document.createElement("div");
+          host.className = "preview-strip";
+          note.appendChild(host);
+          wrap.appendChild(note);
+          root.appendChild(wrap);
+          const report = entry.report ? fixtures[entry.report] : null;
+          const periodId = entry.report ? fixtures[entry.report].period.id : "2026-W45";
+          const model = helpers.periodStripModel(report, periodId, { laneView: "both", fetchedAt: (report && report.generated_at) || null });
+          helpers.paintPeriodStrip(host, model, {});
+          const rect = host.getBoundingClientRect();
+          measurements.push({ state: entry.id, stripHeight: Math.ceil(rect.height), periodId });
+        }
+        return { measurements };
+      },
+    };
+    window.__periodStripStage = "ready";
+  })();
+  </script>
+</body>
+</html>

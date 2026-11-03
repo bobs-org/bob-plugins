@@ -710,6 +710,11 @@ class BobLedgerToolsHeadingReviewMixin {
       // One missed schedule never breaks the fan-out.
     }
     try {
+      this.scheduleOffClockLinkChipsRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
       this.scheduleTodayMarksRefresh();
     } catch (error) {
       // One missed schedule never breaks the fan-out.

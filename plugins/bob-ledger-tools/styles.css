@@ -5244,7 +5244,8 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme
 }
 
 .bob-calendar-events .bob-calendar-event-off-clock,
-.bob-calendar-events a.tag.bob-calendar-event-off-clock {
+.bob-calendar-events a.tag.bob-calendar-event-off-clock,
+.bob-off-clock-link-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.28em;
@@ -5261,15 +5262,29 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme
   white-space: nowrap;
 }
 
-.bob-calendar-events .bob-calendar-event-off-clock::before {
+.bob-calendar-events .bob-calendar-event-off-clock::before,
+.bob-off-clock-link-chip::before {
   content: "";
   display: inline-block;
   flex: 0 0 auto;
   width: 0.95em;
   height: 0.95em;
   background-color: currentColor;
-  -webkit-mask: var(--bob-calendar-off-clock-icon) center / contain no-repeat;
-  mask: var(--bob-calendar-off-clock-icon) center / contain no-repeat;
+  -webkit-mask: var(--bob-off-clock-icon) center / contain no-repeat;
+  mask: var(--bob-off-clock-icon) center / contain no-repeat;
+}
+
+.bob-off-clock-link-chip {
+  margin-inline-start: 0.4em;
+  vertical-align: baseline;
+  user-select: none;
+  cursor: default;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+body:not(.bob-off-clock-link-chips) .bob-off-clock-link-chip {
+  display: none;
 }
 
 .bob-calendar-events a.bob-calendar-event-off-clock .bob-calendar-event-off-clock-hash {
@@ -5361,9 +5376,9 @@ body.theme-dark .bob-pomo-theme-colors .bob-pomo-theme-muted:not(.bob-pomo-theme
   }
 }
 
-.bob-calendar-events {
+body {
   /* Lucide timer-off, drawn as a mask so it follows the ink color. */
-  --bob-calendar-off-clock-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 2h4'/%3E%3Cpath d='M4.6 11a8 8 0 0 0 1.7 8.7 8 8 0 0 0 8.7 1.7'/%3E%3Cpath d='M7.4 7.4a8 8 0 0 1 10.3 1 8 8 0 0 1 .9 10.2'/%3E%3Cpath d='m2 2 20 20'/%3E%3Cpath d='M12 12v-2'/%3E%3C/svg%3E");
+  --bob-off-clock-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 2h4'/%3E%3Cpath d='M4.6 11a8 8 0 0 0 1.7 8.7 8 8 0 0 0 8.7 1.7'/%3E%3Cpath d='M7.4 7.4a8 8 0 0 1 10.3 1 8 8 0 0 1 .9 10.2'/%3E%3Cpath d='m2 2 20 20'/%3E%3Cpath d='M12 12v-2'/%3E%3C/svg%3E");
 }
 
 .bob-calendar-events .bob-calendar-event-context {
@@ -5569,7 +5584,8 @@ body.bob-task-theme-marks .markdown-source-view.is-live-preview .dataview.inline
 @media (forced-colors: active) {
   .bob-pomodoro-home-chips .bob-pomodoro-home-chip[data-home-off-clock="true"],
   .bob-calendar-events .bob-calendar-event-time[data-off-clock="true"],
-  .bob-calendar-events .bob-calendar-event-off-clock {
+  .bob-calendar-events .bob-calendar-event-off-clock,
+  .bob-off-clock-link-chip {
     outline-style: dashed;
   }
 }

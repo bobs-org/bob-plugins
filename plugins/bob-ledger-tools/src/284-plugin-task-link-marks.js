@@ -29,6 +29,7 @@ class BobLedgerToolsTaskLinkMarksMixin {
     this.setupLedgerTypeMarks();
     this.setupTodayMarks();
     this.setupTaskLinkMarks();
+    this.setupOffClockLinkChips();
     this.setupBlockMarks();
   }
 

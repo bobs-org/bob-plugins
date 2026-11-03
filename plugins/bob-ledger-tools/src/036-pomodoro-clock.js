@@ -164,17 +164,18 @@ function pomodoroClockTaskLabel(lineText) {
 function pomodoroClockLinkFacts(lines, links, resolveTask, resolveClock) {
   const rows = eventRunEventRows(lines);
   return links.map((link) => {
-    const fact = { token: link.token, offClock: null, text: null };
+    const fact = { token: link.token, offClock: null, text: null, lineText: null };
     if (link.pathPart === "") {
       const event = eventRunById(rows, link.blockId);
       if (event) {
-        const resolution = pomodoroClockResolveLine(lines[event.lineIndex], resolveClock, link);
-        return { ...fact, ...resolution, resolution, text: event.title };
+        const lineText = String(lines[event.lineIndex] || "");
+        const resolution = pomodoroClockResolveLine(lineText, resolveClock, link);
+        return { ...fact, ...resolution, resolution, text: event.title, lineText };
       }
       const line = pomodoroClockTaskLineText(lines, link.blockId);
       if (line === null) return fact;
       const resolution = pomodoroClockResolveLine(line, resolveClock, link);
-      return { ...fact, ...resolution, resolution, text: pomodoroClockTaskLabel(line) };
+      return { ...fact, ...resolution, resolution, text: pomodoroClockTaskLabel(line), lineText: line };
     }
     let line = null;
     try {
@@ -185,7 +186,7 @@ function pomodoroClockLinkFacts(lines, links, resolveTask, resolveClock) {
     const lineText = line && typeof line === "object" ? line.lineText : line;
     if (typeof lineText !== "string" || !POMODORO_CLOCK_TASK_LINE_RE.test(lineText)) return fact;
     const resolution = pomodoroClockResolveLine(lineText, resolveClock, link);
-    return { ...fact, ...resolution, resolution, text: pomodoroClockTaskLabel(lineText) };
+    return { ...fact, ...resolution, resolution, text: pomodoroClockTaskLabel(lineText), lineText };
   });
 }
 

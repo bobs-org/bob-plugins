@@ -516,6 +516,13 @@ class BobLedgerToolsTaskThemeApiMixin {
           } catch (error) {
             // Home chips may be disabled or unavailable.
           }
+          try {
+            if (typeof self.scheduleOffClockLinkChipsRefresh === "function") {
+              self.scheduleOffClockLinkChipsRefresh();
+            }
+          } catch (error) {
+            // Off-clock link chips may be disabled or unavailable.
+          }
         })
         .catch(() => {
           try {

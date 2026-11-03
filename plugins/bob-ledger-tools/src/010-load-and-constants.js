@@ -202,6 +202,18 @@ function ensureFreesMarksRefresh() {
   }
   return freesMarksRefresh;
 }
+let offClockLinkChipsRefresh = null;
+function ensureOffClockLinkChipsRefresh() {
+  if (offClockLinkChipsRefresh) return offClockLinkChipsRefresh;
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      offClockLinkChipsRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    offClockLinkChipsRefresh = null;
+  }
+  return offClockLinkChipsRefresh;
+}
 // Today marks (bob-cli-9r mark_core): a StateEffect the
 // consolidated live-refresh fan-out dispatches so Live Preview Today
 // widgets rebuild without a doc change. Defined lazily on first

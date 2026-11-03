@@ -204,6 +204,18 @@ function ensureFreesMarksRefresh() {
   }
   return freesMarksRefresh;
 }
+let offClockLinkChipsRefresh = null;
+function ensureOffClockLinkChipsRefresh() {
+  if (offClockLinkChipsRefresh) return offClockLinkChipsRefresh;
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      offClockLinkChipsRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    offClockLinkChipsRefresh = null;
+  }
+  return offClockLinkChipsRefresh;
+}
 // Today marks (bob-cli-9r mark_core): a StateEffect the
 // consolidated live-refresh fan-out dispatches so Live Preview Today
 // widgets rebuild without a doc change. Defined lazily on first
@@ -2370,17 +2382,18 @@ function pomodoroClockTaskLabel(lineText) {
 function pomodoroClockLinkFacts(lines, links, resolveTask, resolveClock) {
   const rows = eventRunEventRows(lines);
   return links.map((link) => {
-    const fact = { token: link.token, offClock: null, text: null };
+    const fact = { token: link.token, offClock: null, text: null, lineText: null };
     if (link.pathPart === "") {
       const event = eventRunById(rows, link.blockId);
       if (event) {
-        const resolution = pomodoroClockResolveLine(lines[event.lineIndex], resolveClock, link);
-        return { ...fact, ...resolution, resolution, text: event.title };
+        const lineText = String(lines[event.lineIndex] || "");
+        const resolution = pomodoroClockResolveLine(lineText, resolveClock, link);
+        return { ...fact, ...resolution, resolution, text: event.title, lineText };
       }
       const line = pomodoroClockTaskLineText(lines, link.blockId);
       if (line === null) return fact;
       const resolution = pomodoroClockResolveLine(line, resolveClock, link);
-      return { ...fact, ...resolution, resolution, text: pomodoroClockTaskLabel(line) };
+      return { ...fact, ...resolution, resolution, text: pomodoroClockTaskLabel(line), lineText: line };
     }
     let line = null;
     try {
@@ -2391,7 +2404,7 @@ function pomodoroClockLinkFacts(lines, links, resolveTask, resolveClock) {
     const lineText = line && typeof line === "object" ? line.lineText : line;
     if (typeof lineText !== "string" || !POMODORO_CLOCK_TASK_LINE_RE.test(lineText)) return fact;
     const resolution = pomodoroClockResolveLine(lineText, resolveClock, link);
-    return { ...fact, ...resolution, resolution, text: pomodoroClockTaskLabel(lineText) };
+    return { ...fact, ...resolution, resolution, text: pomodoroClockTaskLabel(lineText), lineText };
   });
 }
 
@@ -18234,6 +18247,188 @@ if (WidgetType && typeof WidgetType === "function") {
     }
   };
 }
+// ---- src/141c-off-clock-link-chips.js ----
+// --- Off-clock Task Link chips: pure display core -------------------------
+// Mirrors the Pomodoro session clock for dedicated ledger Task Links. The
+// chip is display-only: it never writes the task tag or session clock.
+
+// One frozen item for each exact ledger row accepted by the task-link mark
+// parser. `ch` lands after `]]` or the closing `~~`, before a trailing ` #`.
+function offClockLinkChipLinks(lines, path, options) {
+  try {
+    const rows = Array.isArray(lines) ? lines : [];
+    const sourcePath = String(path || "");
+    if (!sourcePath || !PLAN_DAILY_PATH_RE.test(sourcePath)) return Object.freeze([]);
+    const opts = options && typeof options === "object" ? options : {};
+    const context = taskLinkMarkDocContext(rows, sourcePath);
+    const section = planSectionRange(rows);
+    if (!section) return Object.freeze([]);
+    const fenced = planFencedLines(rows, section.start, section.end);
+    const result = [];
+    let owner = null;
+    let childIndent = null;
+    for (let index = section.start; index <= section.end; index += 1) {
+      try {
+        const line = String(rows[index] || "");
+        // A fenced child does not end the entry's child range, matching the
+        // ledger-row classifier; it simply cannot itself become a link.
+        if (fenced.has(index)) continue;
+        if (line.trim() === "") {
+          owner = null;
+          childIndent = null;
+          continue;
+        }
+        if (!line.startsWith(" ") && !line.startsWith("\t")) {
+          const entry = planParseEntry(line);
+          owner = entry ? { open: entry.state === "open" } : null;
+          childIndent = null;
+          continue;
+        }
+        if (!todayIsSubBulletLine(line)) {
+          owner = null;
+          childIndent = null;
+          continue;
+        }
+        if (!owner) continue;
+        if (childIndent === null) childIndent = todayIndentLen(line);
+        if (todayIndentLen(line) !== childIndent || context.inert(index)) continue;
+        const bullet = todayBulletBody(line);
+        if (!bullet || !taskLinkMarkLedgerBodyIsDedicated(bullet.body)) continue;
+        const tokens = todayWikilinkTokens(line);
+        if (!Array.isArray(tokens) || tokens.length !== 1) continue;
+        const token = tokens[0];
+        if (!token || token.embedded || !Number.isInteger(token.start) || !Number.isInteger(token.end)) continue;
+        if (opts.openOnly && !owner.open) continue;
+        let ch = token.end;
+        const closingStrike = /^[ \t]*~~/.exec(line.slice(ch));
+        if (closingStrike) ch += closingStrike[0].length;
+        result.push(Object.freeze({
+          line: index,
+          ch,
+          pathPart: String(token.pathPart || ""),
+          blockId: String(token.blockId || ""),
+          token: line.slice(token.start, token.end),
+          entryOpen: owner.open,
+        }));
+      } catch (error) {
+        continue;
+      }
+    }
+    return Object.freeze(result);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+function offClockLinkChipTooltip(model) {
+  try {
+    if (!model || typeof model !== "object") return "";
+    let value = "";
+    if (model.source === "off_tag") {
+      value = `Off-clock · tagged ${String(model.spelling || "#off")}`;
+    } else if (model.source === "note") {
+      value = typeof gcalEventsFromNoteTitle === "function"
+        ? gcalEventsFromNoteTitle(model.notePath)
+        : `Off-clock · from ${String(model.notePath || "note").replace(/\.md$/i, "")}`;
+    }
+    return value.replace(/::/g, ":");
+  } catch (error) {
+    return "";
+  }
+}
+
+function offClockLinkChipModel(fact) {
+  try {
+    if (!fact || fact.offClock !== true) return null;
+    const source = fact.source === "off_tag" ? "off_tag" : fact.source === "note" ? "note" : null;
+    if (!source) return null;
+    const lineText = typeof fact.lineText === "string" ? fact.lineText : "";
+    const tag = source === "off_tag" && typeof eventTaskOffClockTagRange === "function"
+      ? eventTaskOffClockTagRange(lineText)
+      : null;
+    const spelling = tag ? lineText.slice(tag.start, tag.end) : source === "off_tag" ? "#off" : null;
+    const model = {
+      text: "off",
+      source,
+      notePath: source === "note" ? String(fact.note || "") : null,
+      spelling,
+      blockId: String(fact.blockId || ""),
+    };
+    model.tooltip = offClockLinkChipTooltip(model);
+    return model;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Listener-free shared host builder. Live Preview adds its interaction in
+// the widget; Reading view uses this exact same accessible element.
+function buildOffClockLinkChipElement(doc, model) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || !model || !model.tooltip) return null;
+    const host = doc.createElement("span");
+    host.setAttribute("class", "bob-off-clock-link-chip");
+    host.setAttribute("role", "img");
+    host.setAttribute("aria-label", String(model.tooltip));
+    host.setAttribute("data-tooltip-position", "top");
+    host.setAttribute("data-clock-source", String(model.source || ""));
+    host.setAttribute("data-block-id", String(model.blockId || ""));
+    host.textContent = "off";
+    return host;
+  } catch (error) {
+    return null;
+  }
+}
+
+let OffClockLinkChipWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  OffClockLinkChipWidget = class extends WidgetType {
+    constructor(model, sourcePath, linktext, workspace) {
+      super();
+      this.model = model && typeof model === "object" ? { ...model } : {};
+      this.tooltip = String(this.model.tooltip || offClockLinkChipTooltip(this.model));
+      this.source = String(this.model.source || "");
+      this.sourcePath = String(sourcePath || "");
+      this.linktext = String(linktext || "");
+      this.workspace = workspace || null;
+    }
+
+    eq(other) {
+      return Boolean(
+        other && other instanceof OffClockLinkChipWidget &&
+        other.tooltip === this.tooltip && other.source === this.source &&
+        other.sourcePath === this.sourcePath && other.linktext === this.linktext &&
+        other.model.blockId === this.model.blockId,
+      );
+    }
+
+    toDOM(view) {
+      const doc = typeof document !== "undefined" ? document : null;
+      const dom = buildOffClockLinkChipElement(doc, this.model);
+      if (!dom || typeof dom.addEventListener !== "function") return dom;
+      dom.addEventListener("mousedown", (event) => {
+        try {
+          if (event && typeof event.button === "number" && event.button !== 0) return;
+          if (event && typeof event.preventDefault === "function") event.preventDefault();
+          if (event && (event.metaKey || event.ctrlKey)) {
+            if (this.workspace && typeof this.workspace.openLinkText === "function") {
+              this.workspace.openLinkText(this.linktext, this.sourcePath, "tab");
+            }
+            return;
+          }
+          const anchor = view && typeof view.posAtDOM === "function" ? view.posAtDOM(dom) : null;
+          if (typeof anchor === "number" && view && typeof view.dispatch === "function") {
+            view.dispatch({ selection: { anchor } });
+          }
+          if (view && typeof view.focus === "function") view.focus();
+        } catch (error) {
+          // Read-only cursor placement and navigation are best-effort.
+        }
+      });
+      return dom;
+    }
+  };
+}
 // ---- src/142c-block-marks-model.js ----
 // --- Blocked-reason marks: pure model ------------------------------------
 // Owned by bob-cli `docs/blocked-marks.md`. These helpers only classify a
@@ -33367,6 +33562,11 @@ class BobLedgerToolsHeadingReviewMixin {
     }
     try {
       this.scheduleFreesMarksRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleOffClockLinkChipsRefresh();
     } catch (error) {
       // One missed schedule never breaks the fan-out.
     }
@@ -56149,6 +56349,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
                 "bob-progress-mark",
                 "bob-unblocked-glyph",
                 "bob-frees-mark",
+                "bob-off-clock-link-chip",
                 "bob-today-mark",
                 "list-bullet",
                 "list-collapse-indicator",
@@ -59617,6 +59818,484 @@ class BobLedgerToolsFreesMarksMixin {
     }
   }
 }
+// ---- src/271c-plugin-off-clock-link-chips.js ----
+// --- Off-clock Task Link chips: Live Preview, toggle, and liveness ---------
+// Reads the same per-link clock facts as `se<X>` and never writes vault text.
+class BobLedgerToolsOffClockLinkChipsMixin {
+  setupOffClockLinkChips() {
+    try {
+      if (typeof this.offClockLinkChipsEnabled !== "boolean") this.offClockLinkChipsEnabled = true;
+      if (!(this.offClockLinkChipsReadingViews instanceof Map)) this.offClockLinkChipsReadingViews = new Map();
+      this.applyMarkGateClass("bob-off-clock-link-chips", this.offClockLinkChipsEnabled);
+      this.registerMarkGatePopoutSync("bob-off-clock-link-chips", () => this.offClockLinkChipsEnabled);
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-off-clock-link-chips",
+            name: "Toggle Task Link off-clock chips",
+            callback: () => this.toggleOffClockLinkChips(),
+          });
+        }
+      } catch (error) {
+        // The toggle is best-effort.
+      }
+      try {
+        const extension = this.createOffClockLinkChipsExtension();
+        if (extension && typeof this.registerEditorExtension === "function") this.registerEditorExtension(extension);
+      } catch (error) {
+        // Live Preview is best-effort.
+      }
+      try {
+        if (typeof this.setupOffClockLinkChipsReading === "function") this.setupOffClockLinkChipsReading();
+      } catch (error) {
+        // Reading view is best-effort.
+      }
+      this.setupOffClockLinkChipListeners();
+      if (typeof this.register === "function") this.register(() => this.teardownOffClockLinkChips());
+    } catch (error) {
+      // Display-only setup never blocks plugin startup.
+    }
+  }
+
+  setupOffClockLinkChipListeners() {
+    try {
+      if (typeof this.registerEvent !== "function") return;
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.on === "function") {
+        this.registerEvent(metadataCache.on("changed", (file, data) => this.offClockLinkChipsSourceChanged(file, data)));
+        this.registerEvent(metadataCache.on("resolved", () => this.scheduleOffClockLinkChipsRefresh()));
+      }
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.on === "function") {
+        this.registerEvent(vault.on("rename", (file, oldPath) => {
+          try {
+            const cache = this.taskThemeSourceCacheStore();
+            const old = normalizeVaultPath(String(oldPath || ""));
+            if (cache instanceof Map && old) cache.delete(old);
+          } catch (error) {
+            // A moved note is re-read on demand.
+          }
+          this.scheduleOffClockLinkChipsRefresh();
+        }));
+        this.registerEvent(vault.on("delete", (file) => {
+          try {
+            const cache = this.taskThemeSourceCacheStore();
+            const path = normalizeVaultPath(String(file && file.path || ""));
+            if (cache instanceof Map && path) cache.delete(path);
+          } catch (error) {
+            // Cache cleanup is best-effort.
+          }
+          this.scheduleOffClockLinkChipsRefresh();
+        }));
+      }
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.on === "function") {
+        this.registerEvent(workspace.on("layout-change", () => this.scheduleOffClockLinkChipsRefresh()));
+      }
+    } catch (error) {
+      // Liveness listeners are best-effort.
+    }
+  }
+
+  offClockLinkChipsSourceChanged(file, data) {
+    try {
+      const path = normalizeVaultPath(String(file && file.path || ""));
+      const cache = this.taskThemeSourceCacheStore();
+      if (path && typeof data === "string" && cache instanceof Map && cache.has(path)) {
+        // Refresh an existing entry only; cache events never grow the LRU.
+        this.taskThemeRememberSourceText(path, data);
+      }
+    } catch (error) {
+      // Source-cache freshness is a best-effort mirror of Obsidian's event.
+    }
+    this.scheduleOffClockLinkChipsRefresh();
+  }
+
+  offClockLinkChipFactModel(lines, link, sourcePath, memo) {
+    try {
+      const key = `${String(link.pathPart || "")}\u0000${String(link.blockId || "")}`;
+      if (memo && memo.has(key)) return memo.get(key);
+      const facts = pomodoroClockLinkFacts(
+        lines,
+        [link],
+        (item) => this.pomodoroClockResolveTaskLineFrom(item, sourcePath),
+        (item, line) => this.pomodoroClockResolveLinkClockFrom(item, line, sourcePath),
+      );
+      const fact = facts && facts[0] ? { ...facts[0], blockId: link.blockId } : null;
+      const model = offClockLinkChipModel(fact);
+      if (memo) memo.set(key, model);
+      return model;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  offClockLinkChipsAvailable() {
+    try {
+      return Boolean(ViewPlugin && Decoration && WidgetType && StateEffect &&
+        typeof StateEffect.define === "function" && RangeSetBuilder && editorInfoField &&
+        editorLivePreviewField && OffClockLinkChipWidget);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createOffClockLinkChipsExtension() {
+    try {
+      if (!this.offClockLinkChipsAvailable() || !ViewPlugin || typeof ViewPlugin.fromClass !== "function" || !Prec || typeof Prec.highest !== "function") return null;
+      const plugin = this;
+      const ChipPluginClass = class {
+        constructor(view) {
+          try { this.decorations = plugin.buildOffClockLinkChipDecorations(view); }
+          catch (error) { this.decorations = Decoration.none; }
+        }
+        update(update) {
+          try {
+            if (plugin.offClockLinkChipsShouldRebuild(update)) {
+              this.decorations = plugin.buildOffClockLinkChipDecorations(update.view);
+            }
+          } catch (error) {
+            // Keep the last good decoration set.
+          }
+        }
+      };
+      return Prec.highest(ViewPlugin.fromClass(ChipPluginClass, { decorations: (value) => value.decorations }));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  offClockLinkChipsShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") return false;
+      if (update.docChanged || update.viewportChanged) return true;
+      const refresh = ensureOffClockLinkChipsRefresh();
+      for (const transaction of update.transactions || []) {
+        for (const effect of (transaction && transaction.effects)
+          ? (Array.isArray(transaction.effects) ? transaction.effects : [transaction.effects]) : []) {
+          if (effect === refresh || (refresh && effect && typeof effect.is === "function" && effect.is(refresh))) return true;
+        }
+      }
+      if (editorLivePreviewField && update.startState && update.state &&
+        update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField)) return true;
+      if (editorInfoField && update.startState && update.state) {
+        const before = update.startState.field(editorInfoField);
+        const after = update.state.field(editorInfoField);
+        if ((before && before.file && before.file.path) !== (after && after.file && after.file.path)) return true;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildOffClockLinkChipDecorations(view) {
+    try {
+      if (!this.offClockLinkChipsEnabled || !Decoration || !RangeSetBuilder || !OffClockLinkChipWidget || !editorInfoField || !editorLivePreviewField) return Decoration.none;
+      if (!view || !view.state || !view.state.field(editorLivePreviewField)) return Decoration.none;
+      const info = view.state.field(editorInfoField);
+      const sourcePath = info && info.file && typeof info.file.path === "string" ? info.file.path : "";
+      if (!sourcePath || !PLAN_DAILY_PATH_RE.test(sourcePath)) return Decoration.none;
+      const doc = view.state.doc;
+      if (!doc || typeof doc.toString !== "function" || typeof doc.line !== "function") return Decoration.none;
+      const lines = doc.toString().split(/\r?\n/);
+      const links = offClockLinkChipLinks(lines, sourcePath);
+      const ranges = view.visibleRanges || [];
+      const builder = new RangeSetBuilder();
+      const memo = new Map();
+      for (const link of links) {
+        try {
+          const line = doc.line(link.line + 1);
+          if (!line || typeof line.from !== "number") continue;
+          const pos = line.from + link.ch;
+          if (!ranges.some((range) => range && typeof range.from === "number" && typeof range.to === "number" && pos >= range.from && pos <= range.to)) continue;
+          const model = this.offClockLinkChipFactModel(lines, link, sourcePath, memo);
+          if (!model) continue;
+          const linktext = `${link.pathPart ? link.pathPart : ""}#^${link.blockId}`;
+          builder.add(pos, pos, Decoration.widget({
+            widget: new OffClockLinkChipWidget(model, sourcePath, linktext, this.app && this.app.workspace),
+            side: 3,
+          }));
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try { return Decoration.none; } catch (inner) { return null; }
+    }
+  }
+
+  toggleOffClockLinkChips() {
+    try {
+      this.offClockLinkChipsEnabled = !this.offClockLinkChipsEnabled;
+      this.applyMarkGateClass("bob-off-clock-link-chips", this.offClockLinkChipsEnabled);
+      this.refreshOffClockLinkChipsEditors();
+      this.refreshOffClockLinkChipsReadingViews();
+      return this.offClockLinkChipsEnabled;
+    } catch (error) {
+      return Boolean(this.offClockLinkChipsEnabled);
+    }
+  }
+
+  refreshOffClockLinkChipsEditors() {
+    try {
+      const refresh = ensureOffClockLinkChipsRefresh();
+      const workspace = this.app && this.app.workspace;
+      const leaves = workspace && typeof workspace.getLeavesOfType === "function" ? workspace.getLeavesOfType("markdown") || [] : [];
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view;
+          const path = view && view.file && view.file.path;
+          const cm = view && view.editor && view.editor.cm;
+          if (path && PLAN_DAILY_PATH_RE.test(path) && cm && typeof cm.dispatch === "function" && refresh) cm.dispatch({ effects: refresh.of(null) });
+        } catch (error) { continue; }
+      }
+    } catch (error) {
+      // Editor refresh is best-effort.
+    }
+  }
+
+  scheduleOffClockLinkChipsRefresh() {
+    try {
+      if (this.offClockLinkChipsTimer !== null && this.offClockLinkChipsTimer !== undefined) return;
+      const schedule = typeof window !== "undefined" && typeof window.setTimeout === "function" ? window.setTimeout.bind(window) : setTimeout;
+      this.offClockLinkChipsTimer = schedule(() => {
+        this.offClockLinkChipsTimer = null;
+        this.refreshOffClockLinkChipsEditors();
+        this.refreshOffClockLinkChipsReadingViews();
+      }, 120);
+    } catch (error) {
+      // No timer host; nothing to schedule.
+    }
+  }
+
+  refreshOffClockLinkChipsForSourceText() {
+    this.scheduleOffClockLinkChipsRefresh();
+  }
+
+  teardownOffClockLinkChips() {
+    try {
+      if (this.offClockLinkChipsTimer !== null && this.offClockLinkChipsTimer !== undefined) clearTimeout(this.offClockLinkChipsTimer);
+      this.offClockLinkChipsTimer = null;
+      if (this.offClockLinkChipsReadingViews instanceof Map) this.offClockLinkChipsReadingViews.clear();
+      this.applyMarkGateClass("bob-off-clock-link-chips", false);
+    } catch (error) {
+      // Timer and body-gate cleanup are best-effort.
+    }
+  }
+}
+// ---- src/271d-plugin-off-clock-link-chips-reading.js ----
+// --- Off-clock Task Link chips: Reading view sweeps -----------------------
+// Reconciles display-only chip hosts against the current note text and clock
+// facts. It records roots from every window and also discovers open leaves.
+class BobLedgerToolsOffClockLinkChipsReadingMixin {
+  setupOffClockLinkChipsReading() {
+    try {
+      if (!(this.offClockLinkChipsReadingViews instanceof Map)) this.offClockLinkChipsReadingViews = new Map();
+      if (typeof this.registerMarkdownPostProcessor === "function") {
+        this.registerMarkdownPostProcessor((el, ctx) => this.renderOffClockLinkChipsIn(el, ctx), 61);
+      }
+    } catch (error) {
+      // Reading-view setup is best-effort.
+    }
+  }
+
+  renderOffClockLinkChipsIn(el, ctx) {
+    try {
+      const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      if (!el || !sourcePath || !PLAN_DAILY_PATH_RE.test(sourcePath)) return;
+      if (!(this.offClockLinkChipsReadingViews instanceof Map)) this.offClockLinkChipsReadingViews = new Map();
+      const record = { el, sourcePath };
+      this.offClockLinkChipsReadingViews.set(el, record);
+      this.sweepOffClockLinkChipsReadingView(record);
+      if (ctx && typeof ctx.addChild === "function") {
+        let child = null;
+        try {
+          if (typeof MarkdownRenderChild === "function") {
+            child = new MarkdownRenderChild(el);
+            child.onunload = () => this.offClockLinkChipsReadingViews && this.offClockLinkChipsReadingViews.delete(el);
+          }
+        } catch (error) { child = null; }
+        if (!child) child = { unload: () => this.offClockLinkChipsReadingViews && this.offClockLinkChipsReadingViews.delete(el) };
+        try { ctx.addChild(child); } catch (error) { /* Optional cleanup hook. */ }
+      }
+    } catch (error) {
+      // A Reading-view chip failure never affects Markdown rendering.
+    }
+  }
+
+  offClockLinkChipPreviewRecords() {
+    const records = [];
+    try {
+      const workspace = this.app && this.app.workspace;
+      const leaves = workspace && typeof workspace.getLeavesOfType === "function" ? workspace.getLeavesOfType("markdown") || [] : [];
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view;
+          const sourcePath = view && view.file && typeof view.file.path === "string" ? view.file.path : "";
+          if (!sourcePath || !PLAN_DAILY_PATH_RE.test(sourcePath)) continue;
+          const container = (view.previewMode && view.previewMode.containerEl) || view.contentEl || view.containerEl || null;
+          if (!container || typeof container.querySelector !== "function") continue;
+          const root = container.querySelector(".markdown-preview-view, .markdown-reading-view") || container;
+          if (root) records.push({ el: root, sourcePath });
+        } catch (error) { continue; }
+      }
+    } catch (error) {
+      return records;
+    }
+    return records;
+  }
+
+  refreshOffClockLinkChipsReadingViews() {
+    try {
+      let refreshed = false;
+      if (this.offClockLinkChipsReadingViews instanceof Map) {
+        for (const [el, record] of Array.from(this.offClockLinkChipsReadingViews.entries())) {
+          if (!el) { this.offClockLinkChipsReadingViews.delete(el); continue; }
+          this.sweepOffClockLinkChipsReadingView(record);
+          refreshed = true;
+        }
+      }
+      for (const record of this.offClockLinkChipPreviewRecords()) {
+        this.sweepOffClockLinkChipsReadingView(record);
+        refreshed = true;
+      }
+      return refreshed;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  offClockLinkChipReadingOwnedHosts(li, root) {
+    try {
+      const found = li && typeof li.querySelectorAll === "function" ? li.querySelectorAll(".bob-off-clock-link-chip") : [];
+      const hosts = [];
+      for (const host of found || []) {
+        let node = host && host.parentNode;
+        let owner = null;
+        let guard = 0;
+        while (node && node !== root && guard++ < 100) {
+          if (String(node.tagName || node.nodeName || "").toUpperCase() === "LI") { owner = node; break; }
+          node = node.parentNode || null;
+        }
+        if (owner === li) hosts.push(host);
+      }
+      return hosts;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  removeOffClockLinkChipHost(host) {
+    try {
+      if (host && host.parentNode && typeof host.parentNode.removeChild === "function") host.parentNode.removeChild(host);
+    } catch (error) {
+      // A stale read-time host is harmless.
+    }
+  }
+
+  paintOffClockLinkChipHost(host, model) {
+    try {
+      if (!host || !model || !model.tooltip) return false;
+      host.setAttribute("class", "bob-off-clock-link-chip");
+      host.setAttribute("role", "img");
+      host.setAttribute("aria-label", model.tooltip);
+      host.setAttribute("data-tooltip-position", "top");
+      host.setAttribute("data-clock-source", model.source);
+      host.setAttribute("data-block-id", model.blockId || "");
+      if (typeof host.removeAttribute === "function") host.removeAttribute("title");
+      host.textContent = "off";
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  offClockLinkChipReadingInsertAfter(anchor) {
+    try {
+      if (!anchor) return null;
+      let after = anchor;
+      const wrapper = anchor.parentNode || null;
+      const wrapperTag = String(wrapper && (wrapper.tagName || wrapper.nodeName) || "").toUpperCase();
+      const children = wrapper && wrapper.childNodes || [];
+      if (["DEL", "S", "STRIKE"].includes(wrapperTag) && children.length === 1 && children[0] === anchor) after = wrapper;
+      const markClasses = new Set(["bob-unblocked-glyph", "bob-frees-mark"]);
+      let next = after.nextSibling || null;
+      let guard = 0;
+      while (next && guard++ < 20) {
+        const names = String(next.className || (next.getAttribute && next.getAttribute("class")) || "").split(/\s+/);
+        if (names.includes("bob-off-clock-link-chip")) { next = next.nextSibling || null; continue; }
+        if (!names.some((name) => markClasses.has(name))) break;
+        after = next;
+        next = after.nextSibling || null;
+      }
+      return after;
+    } catch (error) {
+      return anchor || null;
+    }
+  }
+
+  sweepOffClockLinkChipsReadingView(record) {
+    try {
+      const root = record && record.el;
+      const sourcePath = String(record && record.sourcePath || "");
+      if (!root || !sourcePath) return false;
+      const doc = root.ownerDocument || (typeof document !== "undefined" ? document : null);
+      if (!doc) return false;
+      const allHosts = typeof root.querySelectorAll === "function" ? Array.from(root.querySelectorAll(".bob-off-clock-link-chip")) : [];
+      const removeAll = () => { for (const host of allHosts) this.removeOffClockLinkChipHost(host); };
+      if (!this.offClockLinkChipsEnabled || !PLAN_DAILY_PATH_RE.test(sourcePath)) { removeAll(); return true; }
+      let content = null;
+      try { content = this.taskThemeSourceTextFor(sourcePath); } catch (error) { content = null; }
+      if (typeof content !== "string") {
+        try { this.taskThemeRequestSourceText(sourcePath); } catch (error) { /* cache fill is best-effort */ }
+        removeAll();
+        return true;
+      }
+      const lines = content.split(/\r?\n/);
+      const memo = new Map();
+      const seenHosts = new Set();
+      const items = typeof root.querySelectorAll === "function" ? Array.from(root.querySelectorAll("li")) : [];
+      for (const li of items) {
+        try {
+          const existing = this.offClockLinkChipReadingOwnedHosts(li, root);
+          let context = null;
+          try {
+            context = this.progressMarkReadingContext(li, root, {
+              includeStruck: true,
+              includeClosedEntry: true,
+              allowLedgerMarks: true,
+            });
+          } catch (error) { context = null; }
+          let model = null;
+          if (context && context.blockId) {
+            const link = { pathPart: String(context.target || ""), blockId: String(context.blockId), token: "" };
+            model = this.offClockLinkChipFactModel(lines, link, sourcePath, memo);
+          }
+          if (!model) {
+            for (const host of existing) this.removeOffClockLinkChipHost(host);
+            continue;
+          }
+          let host = existing[0] || buildOffClockLinkChipElement(doc, model);
+          if (!host) continue;
+          if (existing.length) this.paintOffClockLinkChipHost(host, model);
+          const after = this.offClockLinkChipReadingInsertAfter(context.anchor);
+          const parent = after && after.parentNode;
+          if (parent && typeof parent.insertBefore === "function" && (host.parentNode !== parent || host.previousSibling !== after)) {
+            parent.insertBefore(host, after.nextSibling || null);
+          }
+          seenHosts.add(host);
+          for (const duplicate of existing.slice(1)) this.removeOffClockLinkChipHost(duplicate);
+        } catch (error) { continue; }
+      }
+      for (const host of allHosts) if (!seenHosts.has(host)) this.removeOffClockLinkChipHost(host);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+}
 // ---- src/273-plugin-pomodoro-home-chips.js ----
 // --- Pomodoro home chips: Live Preview and lifecycle ---------------------
 // The pure resolver is in 142-pomodoro-home-chips.js; this mixin renders its
@@ -59804,13 +60483,21 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
       const active =
         workspace && typeof workspace.getActiveFile === "function" ? workspace.getActiveFile() : null;
       const sourcePath = active && typeof active.path === "string" ? active.path : "";
-      if (!sourcePath || !link || !link.blockId) {
-        return null;
-      }
+      return this.pomodoroClockResolveTaskLineFrom(link, sourcePath);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  pomodoroClockResolveTaskLineFrom(link, sourcePath) {
+    try {
+      const app = this.app || {};
+      const path = String(sourcePath || "");
+      if (!path || !link || !link.blockId) return null;
       const file = pomodoroHomeResolveFile(
         link.pathPart,
-        sourcePath,
-        sourcePath,
+        path,
+        path,
         app.metadataCache,
         app.vault,
       );
@@ -59833,10 +60520,22 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
         ? workspace.getActiveFile()
         : null;
       const sourcePath = active && typeof active.path === "string" ? active.path : "";
-      if (!sourcePath) return pomodoroClockTagOnlyResolution(line);
+      return this.pomodoroClockResolveLinkClockFrom(link, line, sourcePath);
+    } catch (error) {
+      return pomodoroClockTagOnlyResolution(line);
+    }
+  }
+
+  pomodoroClockResolveLinkClockFrom(link, line, sourcePath) {
+    try {
+      const app = this.app || {};
+      const path = String(sourcePath || "");
+      if (!path) return pomodoroClockTagOnlyResolution(line);
       const file = link && link.pathPart
-        ? pomodoroHomeResolveFile(link.pathPart, sourcePath, sourcePath, app.metadataCache, app.vault)
-        : active;
+        ? pomodoroHomeResolveFile(link.pathPart, path, path, app.metadataCache, app.vault)
+        : (app.vault && typeof app.vault.getAbstractFileByPath === "function"
+          ? app.vault.getAbstractFileByPath(path)
+          : { path });
       if (!file || typeof file.path !== "string") return pomodoroClockTagOnlyResolution(line);
       return taskEffectiveClockResolution(file.path, line, app.metadataCache, app.vault);
     } catch (error) {
@@ -68472,6 +69171,13 @@ class BobLedgerToolsTaskThemeApiMixin {
           } catch (error) {
             // Home chips may be disabled or unavailable.
           }
+          try {
+            if (typeof self.scheduleOffClockLinkChipsRefresh === "function") {
+              self.scheduleOffClockLinkChipsRefresh();
+            }
+          } catch (error) {
+            // Off-clock link chips may be disabled or unavailable.
+          }
         })
         .catch(() => {
           try {
@@ -74562,6 +75268,7 @@ class BobLedgerToolsTaskLinkMarksMixin {
     this.setupLedgerTypeMarks();
     this.setupTodayMarks();
     this.setupTaskLinkMarks();
+    this.setupOffClockLinkChips();
     this.setupBlockMarks();
   }
 
@@ -81935,6 +82642,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBlockMarkFoldsMixin,
   BobLedgerToolsUnblockedGlyphMixin,
   BobLedgerToolsFreesMarksMixin,
+  BobLedgerToolsOffClockLinkChipsMixin,
+  BobLedgerToolsOffClockLinkChipsReadingMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,
   BobLedgerToolsRelationRenderMixin,
@@ -84372,6 +85081,12 @@ module.exports.helpers = {
   buildFreesMarkElement,
   FreesMarkWidget,
   ensureFreesMarksRefresh,
+  offClockLinkChipLinks,
+  offClockLinkChipTooltip,
+  offClockLinkChipModel,
+  buildOffClockLinkChipElement,
+  OffClockLinkChipWidget,
+  ensureOffClockLinkChipsRefresh,
   TODAY_MARK_OPEN_STATUSES,
   todayMarkTrailingBlockId,
   todayMarkBodyStart,

@@ -184,13 +184,21 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
       const active =
         workspace && typeof workspace.getActiveFile === "function" ? workspace.getActiveFile() : null;
       const sourcePath = active && typeof active.path === "string" ? active.path : "";
-      if (!sourcePath || !link || !link.blockId) {
-        return null;
-      }
+      return this.pomodoroClockResolveTaskLineFrom(link, sourcePath);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  pomodoroClockResolveTaskLineFrom(link, sourcePath) {
+    try {
+      const app = this.app || {};
+      const path = String(sourcePath || "");
+      if (!path || !link || !link.blockId) return null;
       const file = pomodoroHomeResolveFile(
         link.pathPart,
-        sourcePath,
-        sourcePath,
+        path,
+        path,
         app.metadataCache,
         app.vault,
       );
@@ -213,10 +221,22 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
         ? workspace.getActiveFile()
         : null;
       const sourcePath = active && typeof active.path === "string" ? active.path : "";
-      if (!sourcePath) return pomodoroClockTagOnlyResolution(line);
+      return this.pomodoroClockResolveLinkClockFrom(link, line, sourcePath);
+    } catch (error) {
+      return pomodoroClockTagOnlyResolution(line);
+    }
+  }
+
+  pomodoroClockResolveLinkClockFrom(link, line, sourcePath) {
+    try {
+      const app = this.app || {};
+      const path = String(sourcePath || "");
+      if (!path) return pomodoroClockTagOnlyResolution(line);
       const file = link && link.pathPart
-        ? pomodoroHomeResolveFile(link.pathPart, sourcePath, sourcePath, app.metadataCache, app.vault)
-        : active;
+        ? pomodoroHomeResolveFile(link.pathPart, path, path, app.metadataCache, app.vault)
+        : (app.vault && typeof app.vault.getAbstractFileByPath === "function"
+          ? app.vault.getAbstractFileByPath(path)
+          : { path });
       if (!file || typeof file.path !== "string") return pomodoroClockTagOnlyResolution(line);
       return taskEffectiveClockResolution(file.path, line, app.metadataCache, app.vault);
     } catch (error) {

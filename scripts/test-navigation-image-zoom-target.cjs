@@ -132,6 +132,16 @@ test("parser finds vault embed with size hint", () => {
   assert.equal(plugin.isImageZoomCandidate(ref), true);
 });
 
+test("resolved target preserves the picked source span for the restore gesture", () => {
+  const { plugin } = makeResolver({ "img/x.png": {} });
+  const line = "before ![[img/x.png|400]] after";
+  const target = resolveOn(plugin, line, 12, "notes/source.md");
+  assert.equal(target.kind, "image");
+  assert.equal(target.start, line.indexOf("![["));
+  assert.equal(target.end, line.indexOf("]]", target.start) + 2);
+  assert.equal(line.slice(target.start, target.end), "![[img/x.png|400]]");
+});
+
 test("parser finds plain image wikilink and blockquoted embed", () => {
   const plugin = Object.create(NavigationHotkeysPlugin.prototype);
   const plain = plugin.findImageZoomRefs("See [[img/vim_veteran_redir.png]]");

@@ -3086,6 +3086,131 @@
   color: rgba(255, 255, 255, 0.8);
 }
 
+.bob-image-zoom-origin {
+  position: absolute;
+  top: 44px;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  padding: 0 16px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.bob-image-zoom-origin.is-visible {
+  opacity: 1;
+}
+
+.bob-image-zoom-origin-state {
+  padding-left: 6px;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.bob-image-zoom-footer {
+  flex-wrap: wrap;
+  gap: 6px 9px;
+  max-height: 3.6em;
+  overflow: hidden;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.bob-image-zoom-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.bob-image-zoom-chip kbd {
+  padding: 0 5px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.92);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.55;
+}
+
+.bob-image-zoom-chip-label,
+.bob-image-zoom-divider {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.bob-image-zoom-divider {
+  padding: 0 2px;
+}
+
+.bob-image-zoom-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 66px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(88vw, 760px);
+  padding: 6px 13px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.94);
+  background: rgba(0, 0, 0, 0.72);
+  font-size: var(--font-ui-small);
+  white-space: nowrap;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  user-select: none;
+}
+
+.bob-image-zoom-toast.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.bob-image-zoom-toast.is-fading {
+  opacity: 0;
+}
+
+.bob-image-zoom-toast-mark {
+  flex: 0 0 auto;
+  color: var(--color-green);
+  font-weight: var(--font-bold);
+}
+
+.bob-image-zoom-toast.is-error .bob-image-zoom-toast-mark {
+  color: var(--color-orange);
+}
+
+.bob-image-zoom-toast-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bob-image-zoom-origin,
+  .bob-image-zoom-toast {
+    transition: opacity 120ms ease, transform 160ms ease;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-image-zoom-origin,
+  .bob-image-zoom-toast {
+    transition: none;
+  }
+}
+
 /* Keep reasons share the command prompt layout in both modal hosts. */
 .bob-rotten-icon {
   background: color-mix(in srgb, var(--color-red) 14%, transparent);

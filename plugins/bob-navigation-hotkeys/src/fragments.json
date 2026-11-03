@@ -47,6 +47,7 @@
   "206b-successor-relation-copy.js",
   "206-successor-picker-modal.js",
   "207-image-zoom-modal.js",
+  "207a-image-zoom-origin.js",
   "208-parent-note-picker-model.js",
   "209-parent-note-picker-modal.js",
   "210-rename-and-line-context.js",
@@ -187,5 +188,6 @@
   "704-pomodoro-split-exports.js",
   "705-relation-successor-exports.js",
   "706-successor-relation-exports.js",
-  "707-decay-hotfix-exports.js"
+  "707-decay-hotfix-exports.js",
+  "708-image-zoom-origin-exports.js"
 ]

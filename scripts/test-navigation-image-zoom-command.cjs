@@ -68,6 +68,7 @@ function makeRuntime(content = "![[img/x.png]]", options = {}) {
   const fileMap = new Map([["img/x.png", makeFile("img/x.png")] ]);
   const writes = [];
   const app = {
+    plugins: { plugins: {} },
     metadataCache: {
       getFirstLinkpathDest: (lookup, sourcePath) => {
         assert.equal(sourcePath, file.path);
@@ -75,6 +76,7 @@ function makeRuntime(content = "![[img/x.png]]", options = {}) {
       },
     },
     vault: {
+      adapter: { getBasePath: () => "/vault" },
       getResourcePath: (resolved) => `resource://${resolved.path}`,
       read: () => { writes.push("read"); throw new Error("unexpected vault read"); },
       cachedRead: () => { writes.push("cachedRead"); throw new Error("unexpected vault read"); },
@@ -87,6 +89,9 @@ function makeRuntime(content = "![[img/x.png]]", options = {}) {
       getActiveViewOfType: () => activeView,
     },
   };
+  if (options.attachmentsApi) {
+    app.plugins.plugins["bob-ledger-tools"] = { api: { attachments: options.attachmentsApi } };
+  }
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = app;
   plugin.taskCardPluginUnloading = false;
@@ -169,6 +174,47 @@ test("an embed and a plain image link open the resolved vault resource", () => {
     modal.close();
     assert.deepEqual(runtime.writes, []);
   }
+});
+
+test("vault image viewer receives origin lookup and a guarded restore snapshot", () => {
+  const calls = [];
+  const origin = Promise.resolve({
+    ok: true,
+    schema_version: 1,
+    path: "img/x.png",
+    origin: {
+      source: "/Users/bryan/tmp/x.png",
+      display: "~/tmp/x.png",
+      host: "athena",
+      via: "capture",
+      state: "present",
+    },
+  });
+  const runtime = makeRuntime("![[img/x.png|400]]", {
+    ch: 4,
+    attachmentsApi: {
+      version: 1,
+      origin(path) {
+        calls.push(path);
+        return origin;
+      },
+      import() {},
+    },
+  });
+  const modal = openModal(runtime.plugin, runtime.editor, runtime.view);
+  assert.deepEqual(calls, ["img/x.png"]);
+  assert.equal(modal.imageZoomContext.kind, "vault");
+  assert.equal(modal.imageZoomContext.vaultPath, "img/x.png");
+  assert.equal(modal.imageZoomContext.absolutePath, "/vault/img/x.png");
+  assert.equal(modal.imageZoomContext.url, "");
+  assert.equal(modal.imageZoomContext.restore.view, runtime.view);
+  assert.equal(modal.imageZoomContext.restore.editor, runtime.editor);
+  assert.equal(modal.imageZoomContext.restore.filePath, "notes/source.md");
+  assert.equal(modal.imageZoomContext.restore.line, 0);
+  assert.equal(modal.imageZoomContext.restore.lineText, "![[img/x.png|400]]");
+  assert.equal(modal.imageZoomContext.restore.start, 0);
+  assert.equal(modal.imageZoomContext.restore.end, "![[img/x.png|400]]".length);
+  modal.close();
 });
 
 test("no image, a missing image, and Reading view show notices without opening", () => {

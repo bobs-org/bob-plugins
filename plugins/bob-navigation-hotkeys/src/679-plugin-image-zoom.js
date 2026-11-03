@@ -24,6 +24,20 @@ function unescapeImageZoomDestination(value) {
   );
 }
 
+function getNavigationAttachmentsApi(app) {
+  try {
+    const holder = app && app.plugins && app.plugins.plugins
+      ? app.plugins.plugins["bob-ledger-tools"]
+      : null;
+    const api = holder && holder.api && holder.api.attachments;
+    return api && api.version === 1 && typeof api.origin === "function" && typeof api.import === "function"
+      ? api
+      : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
 class BobNavigationHotkeysImageZoomMixin {
   zoomImageOnLine(editor, view) {
     if (
@@ -69,6 +83,10 @@ class BobNavigationHotkeysImageZoomMixin {
       view,
       filePath: view.file.path,
       editor,
+      line: head.line,
+      lineText,
+      start: target.start,
+      end: target.end,
       anchor: { line: anchor.line, ch: anchor.ch },
       head: { line: head.line, ch: head.ch },
       scroll:
@@ -76,10 +94,40 @@ class BobNavigationHotkeysImageZoomMixin {
           ? editor.getScrollInfo()
           : null,
     };
+    const context = target.source === "vault"
+      ? {
+          kind: "vault",
+          vaultPath: target.path,
+          absolutePath: this.getVaultBasePath()
+            ? `${this.getVaultBasePath().replace(/\/+$/, "")}/${target.path}`
+            : "",
+          url: "",
+          restore: snapshot,
+          origin: (() => {
+            const api = getNavigationAttachmentsApi(this.app);
+            if (!api) return null;
+            try {
+              return api.origin(target.path);
+            } catch (_error) {
+              return null;
+            }
+          })(),
+          justImported: false,
+        }
+      : {
+          kind: "url",
+          vaultPath: "",
+          absolutePath: "",
+          url: target.src,
+          restore: null,
+          origin: null,
+          justImported: false,
+        };
     let modal = null;
     modal = new ImageZoomModal(this.app, {
       src: target.src,
       title: target.title,
+      context,
       onClosed: () => {
         if (this.activeImageZoomModal === modal) {
           this.activeImageZoomModal = null;
@@ -121,6 +169,9 @@ class BobNavigationHotkeysImageZoomMixin {
       }
 
       const editor = snapshot.editor;
+      const restorePosition = snapshot.restoreCursor || null;
+      const restoreAnchor = restorePosition || snapshot.anchor;
+      const restoreHead = restorePosition || snapshot.head;
       const samePosition = (left, right) =>
         Boolean(
           left &&
@@ -132,11 +183,11 @@ class BobNavigationHotkeysImageZoomMixin {
         const anchor = editor.getCursor("anchor");
         const head = editor.getCursor("head");
         if (
-          (!samePosition(anchor, snapshot.anchor) ||
-            !samePosition(head, snapshot.head)) &&
+          (!samePosition(anchor, restoreAnchor) ||
+            !samePosition(head, restoreHead)) &&
           typeof editor.setSelection === "function"
         ) {
-          editor.setSelection(snapshot.anchor, snapshot.head);
+          editor.setSelection(restoreAnchor, restoreHead);
         }
       }
       if (snapshot.scroll && typeof editor.getScrollInfo === "function") {
@@ -438,6 +489,8 @@ class BobNavigationHotkeysImageZoomMixin {
           source: "url",
           src,
           title,
+          start: picked.start,
+          end: picked.end,
         });
       }
       // The vault target is already normalized once in buildImageZoomRef, so
@@ -487,6 +540,8 @@ class BobNavigationHotkeysImageZoomMixin {
         path: filePath,
         src,
         title,
+        start: picked.start,
+        end: picked.end,
       });
     }
     for (const ref of refs) {

@@ -419,6 +419,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // the root api stays v3 while this index evolves under its own v1.
       relationIndex: this.relationIndexApi(),
       relationLabels: this.relationLabelsApi(),
+      attachments: this.attachmentsApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
       this.registerMarkdownCodeBlockProcessor("bob-plan", (source, el, ctx) =>

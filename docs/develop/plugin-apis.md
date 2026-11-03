@@ -71,6 +71,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | `unblockedGlyph` | 1 | Refresh the display-only unblocked hand-off glyph. |
 | `relationIndex` | 1 | Read the live, source-authoritative task relation index and label suggestions. |
 | `relationLabels` | 1 | Read the relation-label catalog and delegate hide, unhide, and previewed rename writes to bob. |
+| `attachments` | 1 | Look up recorded image origins and delegate image imports to bob. |
 
 `relationIndex.ready()` reports whether the chunked initial scan is complete;
 `generation` increases whenever a complete pair of forward and reverse maps
@@ -103,6 +104,14 @@ catalog and folded hidden preferences. `hide(name)`, `unhide(name)`, and
 report? }` without rejecting. Writes spawn bob with `--via` and refresh the
 read-only journal fold; rename previews return the dry-run report without
 writing.
+
+`attachments.origin(vaultPath)` resolves to `{ ok, schema_version, path,
+origin, warnings }`; `origin` is a recorded source and state or `null`.
+`attachments.import(path, { via })` resolves to `{ ok, schema_version,
+attachments }`, with bob's saved path, embed, reuse result, and source details.
+Both methods return `{ ok: false, code, message }` on failure and refuse to
+spawn bob outside the desktop app. The namespace version is 1; the root api
+version stays unchanged.
 
 - Register `vault` `create` / `modify` listeners inside `workspace.onLayoutReady`,
   because Obsidian replays `create` for every vault file (PDFs included) during load.

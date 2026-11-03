@@ -3,9 +3,6 @@ const IMAGE_ZOOM_PADDING = 32;
 const IMAGE_ZOOM_MAX_FACTOR = 8;
 const IMAGE_ZOOM_PAN_FRACTION = 0.15;
 const IMAGE_ZOOM_DRAG_THRESHOLD_PX = 4;
-const IMAGE_ZOOM_FOOTER_HINT =
-  "Esc · q · Z close   + / − zoom   0 fit   1 actual   hjkl pan";
-
 function defaultImageZoomDefer(callback) {
   if (typeof window !== "undefined" && typeof window.setTimeout === "function") {
     return window.setTimeout(callback, 0);
@@ -126,6 +123,12 @@ function imageZoomKeyAction(event) {
   if (key === "Z" && !ctrl && !meta && !alt) {
     return Object.freeze({ action: "close" });
   }
+  if (key.toLowerCase() === "y" && !ctrl && !meta && !alt && !shift && !event.repeat) {
+    return Object.freeze({ action: "copySource" });
+  }
+  if (key.toLowerCase() === "r" && !ctrl && !meta && !alt && !shift && !event.repeat) {
+    return Object.freeze({ action: "restoreSource" });
+  }
   if (ctrl || meta || alt) {
     return Object.freeze({ action: "ignore" });
   }
@@ -230,6 +233,22 @@ class ImageZoomModal extends Modal {
     const settings = options && typeof options === "object" ? options : {};
     this.imageSrc = String(settings.src || "");
     this.imageTitle = String(settings.title || "");
+    this.imageZoomContext = settings.context && typeof settings.context === "object"
+      ? settings.context
+      : {};
+    this.imageZoomOrigin = null;
+    this.imageZoomOriginResolved = false;
+    this.imageZoomOriginPromise = null;
+    this.imageZoomOriginEl = null;
+    this.imageZoomFooterEl = null;
+    this.imageZoomToastEl = null;
+    this.imageZoomToastTimers = [];
+    this.imageZoomSetTimeout = typeof settings.setTimeout === "function"
+      ? settings.setTimeout
+      : (callback, delay) => setTimeout(callback, delay);
+    this.imageZoomClearTimeout = typeof settings.clearTimeout === "function"
+      ? settings.clearTimeout
+      : (timer) => clearTimeout(timer);
     this.onClosed = typeof settings.onClosed === "function" ? settings.onClosed : null;
     this.defer =
       typeof settings.defer === "function" ? settings.defer : defaultImageZoomDefer;
@@ -286,6 +305,8 @@ class ImageZoomModal extends Modal {
       cls: "bob-image-zoom-readout",
       text: "Loading…",
     });
+    this.imageZoomOriginEl = contentEl.createDiv({ cls: "bob-image-zoom-origin" });
+    this.imageZoomToastEl = contentEl.createDiv({ cls: "bob-image-zoom-toast" });
 
     this.viewportEl = contentEl.createDiv({
       cls: "bob-image-zoom-viewport",
@@ -295,10 +316,11 @@ class ImageZoomModal extends Modal {
       cls: "bob-image-zoom-img",
       attr: { draggable: "false", alt: this.imageTitle },
     });
-    contentEl.createDiv({
-      cls: "bob-image-zoom-footer",
-      text: IMAGE_ZOOM_FOOTER_HINT,
-    });
+    this.imageZoomFooterEl = contentEl.createDiv({ cls: "bob-image-zoom-footer" });
+    this.renderImageZoomOrigin();
+    this.renderImageZoomFooter();
+    this.resolveImageZoomOrigin();
+    this.showImageZoomImportedToast();
 
     if (this.scope && typeof this.scope.register === "function") {
       this.scopeHandler = this.scope.register(null, null, (evt) => {
@@ -395,6 +417,12 @@ class ImageZoomModal extends Modal {
       this.close();
       return;
     }
+    if (mapped.action === "copySource") {
+      return this.copyImageZoomSource();
+    }
+    if (mapped.action === "restoreSource") {
+      return this.restoreImageZoomSource();
+    }
     if (!this.natural || mapped.action === "ignore") {
       return;
     }
@@ -440,12 +468,12 @@ class ImageZoomModal extends Modal {
     if (this.imageZoomClosed) {
       return;
     }
+    this.close();
     try {
       new Notice(`Could not load image: ${this.imageTitle}`);
     } catch (_error) {
-      // Notices are best effort.
+      // Notices are best effort after the viewer has closed.
     }
-    this.close();
   }
 
   handleImageZoomWheel(event) {
@@ -726,6 +754,7 @@ class ImageZoomModal extends Modal {
       // Best effort.
     }
     this.scopeHandler = null;
+    this.clearImageZoomToast();
     try {
       if (this.imgEl && typeof this.imgEl.removeAttribute === "function") {
         this.imgEl.removeAttribute("src");

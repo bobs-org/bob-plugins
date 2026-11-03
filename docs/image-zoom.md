@@ -1,6 +1,6 @@
 ---
 title: "Zoom an image on the cursor line"
-description: "Inspect an image on the current line in a read-only full-window viewer."
+description: "Inspect images and copy or restore their recorded original paths."
 ---
 
 In Source mode, the **Zoom image on cursor line** command opens an image
@@ -26,15 +26,26 @@ The viewer opens fitted without enlarging a small image. `1` shows device-pixel
 | `0` / `1` | Fit / device-pixel 1:1 |
 | `h` / `j` / `k` / `l`, arrow keys | Pan left / down / up / right |
 | `Shift` + pan key | Pan three times farther |
+| `y` | Copy the recorded original path, or the vault file path / URL when none is recorded |
+| `r` | Restore the picked vault image link to its present recorded original path |
 | Wheel or trackpad pinch | Zoom toward the pointer |
 | Drag | Pan when the image overflows the window |
 | Double-click | Toggle fit and 1:1 at the pointer |
 | Click outside the image | Close |
 
-The command and viewer never write the vault. Native image click,
-double-click, and Zoom-button behavior still own embedded images and Reading
-view. Obsidian's `g+`, `g-`, and `:image grow` resize embeds and write `|width`
-into the note; this viewer does neither.
+The viewer shows a recorded origin below the title, with a state suffix when the
+source is missing, changed, or recorded on another host. `y` copies the journal's
+display path (for example, `~/tmp/photo.png`) even when the source is missing or
+changed. Without a recorded origin, it copies the vault file's absolute path; for
+web images it copies the URL. Copying shows a pill in the viewer.
+
+`r` is available when the original source is present. It replaces only the picked
+image link with the recorded display path in one undoable editor change, closes
+the viewer, and confirms that the vault copy remains. A changed, missing, or
+elsewhere origin shows a refusal pill; web images have no restore action. Native
+image click, double-click, and Zoom-button behavior still own embedded images
+and Reading view. Obsidian's `g+`, `g-`, and `:image grow` resize embeds and write
+`|width` into the note; this viewer does neither.
 
 Galleries, counted `NZ`, PDFs (`Cmd+Enter` opens reading PDFs in Highlights),
 transcluded notes, and mobile are out of scope.

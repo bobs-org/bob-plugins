@@ -229,7 +229,7 @@ function decayPolicy(overrides = {}) {
   return { enabled: true, keeps: 3, enter: null, ...overrides };
 }
 
-test("rows: P0 entry shows the recommended Not now with a clean window", () => {
+test("rows: Ready offers Step, Stay, Reword, Drop, Less often, and level picks", () => {
   const card = planFreshnessDecayCard({
     keeps: 3,
     intervalDays: 7,
@@ -240,19 +240,19 @@ test("rows: P0 entry shows the recommended Not now with a clean window", () => {
     currentScheduled: "2026-10-01",
   });
   const rows = buildFreshnessDecayCardRows(card);
-  const notNow = rows.find((row) => row.action === "notNow");
-  assert.equal(notNow.key, "Enter");
-  assert.equal(notNow.available, true);
-  assert.equal(notNow.recommended, true);
-  assert.ok(notNow.detail.startsWith("P0 → P2 · back in 8 days (8–30)"));
-  assert.ok(!notNow.detail.includes("**"));
-  assert.ok(!notNow.detail.includes("**"));
-  const keep = rows.find((row) => row.action === "keep");
-  assert.equal(keep.detail, "say why · logs 🥀 · asks again next review");
+  const step = rows.find((row) => row.action === "step");
+  assert.equal(step.key, "Enter");
+  assert.equal(step.available, true);
+  assert.equal(step.recommended, true);
+  assert.ok(step.detail.startsWith("Ready → P2 · back in 8 days (8–30)"));
+  assert.ok(!step.detail.includes("**"));
+  const stay = rows.find((row) => row.action === "stay");
+  assert.equal(stay.key, "Alt+F");
+  assert.match(stay.detail, /count starts over/);
   const drop = rows.find((row) => row.action === "drop");
   assert.equal(drop.detail, "cancel · dropped after 3 keeps");
   const reword = rows.find((row) => row.action === "reword");
-  assert.equal(reword.detail, "edit the task · start the count over");
+  assert.equal(reword.detail, "edit the task · count starts over");
   const lessOften = rows.find((row) => row.action === "lessOften");
   assert.equal(lessOften.detail, "review every 14 days instead of 7");
   const picks = rows.filter((row) => row.action.startsWith("level:"));
@@ -263,7 +263,7 @@ test("rows: P0 entry shows the recommended Not now with a clean window", () => {
   );
 });
 
-test("rows: unavailable Not now recommends Keep", () => {
+test("rows: unavailable Step recommends Stay", () => {
   const card = planFreshnessDecayCard({
     keeps: 3,
     intervalDays: 7,
@@ -274,24 +274,24 @@ test("rows: unavailable Not now recommends Keep", () => {
     currentScheduled: "2026-10-01",
   });
   const rows = buildFreshnessDecayCardRows(card);
-  assert.equal(rows.find((row) => row.action === "notNow").recommended, false);
-  assert.equal(rows.find((row) => row.action === "keep").recommended, true);
+  assert.equal(rows.find((row) => row.action === "step").recommended, false);
+  assert.equal(rows.find((row) => row.action === "stay").recommended, true);
   assert.equal(
     buildFreshnessDecayCardFooter(rows),
-    "Esc changes nothing · D / X drops · 1–4 pick a P-level instead",
+    "Esc changes nothing · ↵ never drops · Alt+F stays · L less often · E rewords · D / X drops · 1–4 pick a P-level · Ctrl+Z undoes",
   );
 });
 
 test("footer omits 1–4 when no level rows exist", () => {
   const footer = buildFreshnessDecayCardFooter([
-    { key: "Enter", action: "notNow", available: false, recommended: false },
+    { key: "Enter", action: "step", available: false, recommended: false },
     { key: "D", action: "drop", available: true, recommended: false },
-    { key: "Alt+F", action: "keep", available: true, recommended: true },
+    { key: "Alt+F", action: "stay", available: true, recommended: true },
   ]);
-  assert.equal(footer, "Esc changes nothing · D / X drops");
+  assert.equal(footer, "Esc changes nothing · ↵ never drops · Alt+F stays · D / X drops · Ctrl+Z undoes");
 });
 
-test("rows: invalid priority config disables Not now and levels, keeps safe rows", () => {
+test("rows: invalid priority config disables Step and levels, keeps safe rows", () => {
   const card = planFreshnessDecayCard({
     keeps: 3,
     intervalDays: 7,
@@ -302,13 +302,13 @@ test("rows: invalid priority config disables Not now and levels, keeps safe rows
     currentScheduled: "2026-10-01",
   });
   const rows = buildFreshnessDecayCardRows(card);
-  const notNow = rows.find((row) => row.action === "notNow");
-  assert.equal(notNow.available, false);
-  assert.ok(notNow.detail.includes("priority config is invalid"));
+  const step = rows.find((row) => row.action === "step");
+  assert.equal(step.available, false);
+  assert.ok(step.detail.includes("priority config is invalid"));
   for (const row of rows.filter((item) => item.action.startsWith("level:"))) {
     assert.equal(row.available, false);
   }
-  for (const action of ["lessOften", "reword", "drop", "keep"]) {
+  for (const action of ["lessOften", "reword", "drop", "stay"]) {
     assert.equal(
       rows.find((row) => row.action === action).available,
       true,
@@ -348,7 +348,7 @@ test("rows: picker-mode Less often and 365-day cap", () => {
   assert.ok(cappedRow.detail.includes("365"));
 });
 
-test("rows: terminal ladder keeps Enter available and never cancels", () => {
+test("rows: terminal ladder steps with a same-level roll", () => {
   const card = planFreshnessDecayCard({
     keeps: 3,
     intervalDays: 7,
@@ -362,20 +362,47 @@ test("rows: terminal ladder keeps Enter available and never cancels", () => {
   });
   assert.equal(card.notNow.kind, "card-roll");
   const rows = buildFreshnessDecayCardRows(card);
-  const notNow = rows.find((row) => row.action === "notNow");
-  assert.equal(notNow.available, true);
-  assert.ok(notNow.detail.includes("P4"));
+  const step = rows.find((row) => row.action === "step");
+  assert.equal(step.available, true);
+  assert.equal(step.label, "Roll again at P4");
+});
+
+test("rows: lane and priority cards keep lane-only choices off the row set", () => {
+  for (const [rung, expected] of [["WIP", "Next"], ["Next", "Ready"], ["P2", "P3"]]) {
+    const card = planFreshnessDecayCard({
+      keeps: 3,
+      intervalDays: 7,
+      freshnessDecay: decayPolicy(),
+      property: decayProperty(),
+      rung,
+      currentValue: rung === "P2" ? "medium" : "",
+      baseDate: new Date(2026, 9, 20),
+      random: () => 0,
+      currentScheduled: "2026-10-01",
+    });
+    const rows = buildFreshnessDecayCardRows(card);
+    assert.equal(rows.find((row) => row.action === "step").available, true, rung);
+    const step = rows.find((row) => row.action === "step");
+    assert.equal(
+      rung === "WIP" || rung === "Next"
+        ? step.label.includes(expected)
+        : step.detail.includes(`${rung} → ${expected}`),
+      true,
+      rung,
+    );
+    assert.deepEqual(rows.map((row) => row.action), ["step", "stay", "reword", "drop"], rung);
+  }
 });
 
 // --- Modal interaction ---
 
 function testRows() {
   return [
-    { key: "Enter", action: "notNow", label: "Not now", detail: "P0 → P2", available: true, unavailableReason: null, recommended: true },
+    { key: "Enter", action: "step", label: "Step down", detail: "Ready → P2", available: true, unavailableReason: null, recommended: true },
     { key: "L", action: "lessOften", label: "Less often", detail: "longer", available: true, unavailableReason: null, recommended: false },
     { key: "E", action: "reword", label: "Reword", detail: "edit", available: true, unavailableReason: null, recommended: false },
     { key: "D", action: "drop", label: "Drop", detail: "cancel", available: true, unavailableReason: null, recommended: false },
-    { key: "Alt+F", action: "keep", label: "Keep", detail: "still right", available: true, unavailableReason: null, recommended: false },
+    { key: "Alt+F", action: "stay", label: "Stay in Ready", detail: "count starts over", available: true, unavailableReason: null, recommended: false },
   ];
 }
 
@@ -383,9 +410,10 @@ function openTestCard(overrides = {}) {
   const chosen = [];
   let dismissed = 0;
   const modal = new FreshnessDecayCardModal(null, {
-    title: "Kept 3 reviews in a row",
+    title: "Kept 3× in Ready",
     subtitle: "Rename queue input · a.md",
     rows: overrides.rows || testRows(),
+    openingKeys: overrides.openingKeys || [],
     onChoose: (action) => chosen.push(action),
     onDismiss: () => {
       dismissed += 1;
@@ -413,22 +441,22 @@ function fakeKey(overrides = {}) {
 test("modal: Enter approves once; later keys cannot approve again", () => {
   const { modal, chosen } = openTestCard();
   modal.handleKey(fakeKey({ key: "Enter" }));
-  assert.deepEqual(chosen, ["notNow"]);
+  assert.deepEqual(chosen, ["step"]);
   assert.equal(modal.settled, true);
   modal.handleKey(fakeKey({ key: "Enter" }));
   modal.handleKey(fakeKey({ key: "d" }));
-  assert.deepEqual(chosen, ["notNow"]);
+  assert.deepEqual(chosen, ["step"]);
 });
 
-test("modal: Enter follows the recommended row when Keep is recommended", () => {
+test("modal: Enter follows the recommended Stay row when Step is unavailable", () => {
   const rows = testRows().map((row) => ({
     ...row,
-    recommended: row.action === "keep",
-    available: row.action === "notNow" ? false : row.available,
+    recommended: row.action === "stay",
+    available: row.action === "step" ? false : row.available,
   }));
   const { modal, chosen } = openTestCard({ rows });
   modal.handleKey(fakeKey({ key: "Enter" }));
-  assert.deepEqual(chosen, ["keep"]);
+  assert.deepEqual(chosen, ["stay"]);
 });
 
 test("modal: letter keys, Alt+F, Ctrl+Alt+F, and 1-4 activate the same actions as click", () => {
@@ -437,8 +465,8 @@ test("modal: letter keys, Alt+F, Ctrl+Alt+F, and 1-4 activate the same actions a
     [fakeKey({ key: "E" }), "reword"],
     [fakeKey({ key: "d" }), "drop"],
     [fakeKey({ key: "x" }), "drop"],
-    [fakeKey({ key: "f", code: "KeyF", altKey: true }), "keep"],
-    [fakeKey({ key: "f", code: "KeyF", altKey: true, ctrlKey: true }), "keep"],
+    [fakeKey({ key: "f", code: "KeyF", altKey: true }), "stay"],
+    [fakeKey({ key: "f", code: "KeyF", altKey: true, ctrlKey: true }), "stay"],
   ]) {
     const opened = openTestCard();
     opened.modal.handleKey(keyEvent);
@@ -496,6 +524,18 @@ test("modal: key repeat and modified keys never approve", () => {
   assert.equal(repeated.modal.isOpen, true);
 });
 
+test("modal: the opening chord must be fully released before approval", () => {
+  const { modal, chosen } = openTestCard({ openingKeys: ["alt", "f"] });
+  modal.handleKey(fakeKey({ key: "Enter" }));
+  assert.deepEqual(chosen, []);
+  modal.releaseOpeningChordKey(fakeKey({ key: "f" }));
+  modal.handleKey(fakeKey({ key: "Enter" }));
+  assert.deepEqual(chosen, []);
+  modal.releaseOpeningChordKey(fakeKey({ key: "Alt" }));
+  modal.handleKey(fakeKey({ key: "Enter" }));
+  assert.deepEqual(chosen, ["step"]);
+});
+
 test("modal: Esc changes nothing — dismiss without a choice", () => {
   const { modal, chosen, dismissed } = openTestCard();
   modal.handleKey(fakeKey({ key: "Escape" }));
@@ -506,16 +546,16 @@ test("modal: Esc changes nothing — dismiss without a choice", () => {
 
 test("modal: unavailable actions cannot be chosen", () => {
   const rows = testRows().map((row) =>
-    row.action === "notNow"
+    row.action === "step"
       ? { ...row, available: false, unavailableReason: "no future date" }
       : row,
   );
   const { modal, chosen } = openTestCard({ rows });
-  modal.choose("notNow");
+  modal.choose("step");
   assert.deepEqual(chosen, []);
   assert.equal(modal.settled, false);
-  modal.choose("keep");
-  assert.deepEqual(chosen, ["keep"]);
+  modal.choose("stay");
+  assert.deepEqual(chosen, ["stay"]);
 });
 
 test("modal: a double callback applies once", () => {

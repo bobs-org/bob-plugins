@@ -87,6 +87,8 @@ test("review answer outcome vectors map to the schema vocabulary", () => {
     ["link-today", "today"],
     ["card", "card"],
     ["keep", "keep"],
+    ["decay:step", "decay:step"],
+    ["decay:stay", "decay:stay"],
     ["decay:notNow", "decay:notNow"],
     ["decay:level:0", "decay:level:0"],
     ["decay:lessOften", "decay:lessOften"],

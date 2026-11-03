@@ -651,6 +651,108 @@ test("Keep with a reason logs that reason in the Rotten Log entry", async () => 
   );
 });
 
+test("Stay stamps the task, clears keeps, and records the prior rung count once", async () => {
+  clearNotices();
+  const editor = makeEditor(["# Tasks", "", ROTTEN_AT_LIMIT].join("\n"), 2);
+  const entry = rottenEntry({ line: 3, originalMarkdown: ROTTEN_AT_LIMIT });
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessCapable([entry], BASE_COUNTS),
+    dateText: DATE,
+  });
+  await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const cardCtx = plugin.openedCards[0];
+  const ok = await plugin.applyFreshnessDecayCardChoice(cardCtx, "stay", {
+    reason: "still useful",
+  });
+  assert.equal(ok, true);
+  assert.equal(editor.state.transactions.length, 1, JSON.stringify({ lines: editor.state.lines, notices }));
+  assert.doesNotMatch(editor.state.lines[2], /keeps::/);
+  assert.match(editor.state.lines[2], /\[fresh:: 2026-10-20\]/);
+  const history = helpers.readRottenLog(editor.state.lines.join("\n"), 2);
+  assert.equal(history.entries.length, 1, editor.state.lines.join("\n"));
+  assert.equal(history.entries[0].kind, "stayed");
+  assert.equal(history.entries[0].keeps, 3);
+  assert.equal(history.entries[0].reason, "still useful");
+  assert.equal(history.entries[0].keeps, 3);
+});
+
+test("WIP Step releases to Next and logs the transition in one transaction", async () => {
+  clearNotices();
+  const line = "- [/] #task Review outline [fresh:: 2026-10-01] [keeps:: 2]";
+  const editor = makeEditor(["# Tasks", "", line].join("\n"), 2);
+  const entry = rottenEntry({
+    line: 3,
+    originalMarkdown: line,
+    lane: "pending",
+    keeps: 2,
+  });
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessCapable([entry], BASE_COUNTS),
+    dateText: DATE,
+  });
+  const cardCtx = {
+    cm: editor,
+    filePath: "a.md",
+    line: 2,
+    rawLine: line,
+    invokeCh: 0,
+    dateText: DATE,
+    rung: "WIP",
+    keeps: 2,
+    advance: false,
+    plan: { step: { available: true, kind: "lane", toLabel: "Next" } },
+  };
+  const ok = await plugin.applyFreshnessDecayCardStep(cardCtx, {
+    content: editor.getValue(),
+    lineText: line,
+  });
+  assert.equal(ok, true);
+  assert.equal(editor.state.transactions.length, 1, JSON.stringify({ lines: editor.state.lines, notices }));
+  assert.match(editor.state.lines[2], /^- \[\*\]/);
+  assert.match(editor.state.lines[2], /\[fresh:: 2026-10-20\]/);
+  const history = helpers.readRottenLog(editor.state.lines.join("\n"), 2);
+  assert.equal(history.entries.length, 1, editor.state.lines.join("\n"));
+  assert.equal(history.entries[0].kind, "step");
+  assert.equal(history.entries[0].rung, "WIP");
+  assert.match(history.entries[0].reason, /🍂 WIP → Next/);
+  assert.equal(history.entries[0].keeps, 2);
+});
+
+test("Ready Step writes priority, Schedule Log, and Rotten Log in one transaction", async () => {
+  clearNotices();
+  const editor = makeEditor(["# Tasks", "", ROTTEN_AT_LIMIT].join("\n"), 2);
+  const entry = rottenEntry({ line: 3, originalMarkdown: ROTTEN_AT_LIMIT });
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessCapable([entry], BASE_COUNTS),
+    dateText: DATE,
+  });
+  await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  const cardCtx = plugin.openedCards[0];
+  const step = cardCtx.plan.step;
+  assert.equal(step.available, true);
+  const ok = await plugin.applyFreshnessDecayCardChoice(cardCtx, "step");
+  assert.equal(ok, true);
+  assert.equal(editor.state.transactions.length, 1);
+  const content = editor.state.lines.join("\n");
+  assert.match(editor.state.lines[2], /\[priority:: medium\]/);
+  assert.match(editor.state.lines[2], /\[scheduled::/);
+  assert.doesNotMatch(editor.state.lines[2], /keeps::/);
+  assert.match(content, /SCHEDULE LOG/);
+  assert.match(content, /ROTTEN LOG/);
+  assert.match(content, /🎲 P0 → P2 decay · .*kept 3× in Ready/);
+  const history = helpers.readRottenLog(content, 2);
+  assert.equal(history.entries.length, 1);
+  assert.equal(history.entries[0].kind, "step");
+  assert.equal(history.entries[0].reason, "🍂 Ready → P2");
+  assert.equal(history.entries[0].keeps, 3);
+});
+
 test("Keep carries the logged history and preview keeps in its context", async () => {
   clearNotices();
   const editor = makeEditor(["# Tasks", "", ROTTEN_AT_LIMIT].join("\n"), 2);
@@ -744,7 +846,7 @@ test("Reword stamps, clears, logs, and never advances", async () => {
   assert.doesNotMatch(editor.state.lines[2], /keeps::/);
   assert.match(editor.state.lines[2], /\[fresh:: 2026-10-20\]/);
   const after = editor.state.lines.join("\n");
-  assert.match(after, /🎲 reword · kept 3×/);
+  assert.match(after, /🎲 reword · kept 3× in Ready/);
   const placed = editor.state.cursorSet[editor.state.cursorSet.length - 1];
   const expectedCh = helpers.freshnessDecayRewordCursorCh(editor.state.lines[2]);
   assert.equal(placed.line, 2);
@@ -769,13 +871,46 @@ test("Drop cancels with the dropped-after-keeps reason and keeps history", async
   assert.match(cardCtx.plan.drop.reason, /dropped after 3 keeps/);
   const seen = [];
   plugin.applyTaskCancelFromPicker = async (picker, options) => {
-    seen.push({ picker: { ...picker, editor: undefined }, reason: options.reason });
+    seen.push({
+      picker: { ...picker, editor: undefined },
+      reason: options.reason,
+      rottenLogBody: options.rottenLogBody,
+    });
     return true;
   };
   const ok = await plugin.applyFreshnessDecayCardChoice(cardCtx, "drop");
   assert.equal(ok, true);
   assert.equal(seen.length, 1);
   assert.match(seen[0].reason, /🍂 dropped after 3 keeps/);
+  assert.match(seen[0].rottenLogBody, /Ready → dropped · after 3 keeps/);
+});
+
+test("Drop writes Cancel Log and Rotten Log in one transaction", async () => {
+  clearNotices();
+  const editor = makeEditor(["# Tasks", "", ROTTEN_AT_LIMIT].join("\n"), 2);
+  const entry = rottenEntry({ line: 3, originalMarkdown: ROTTEN_AT_LIMIT });
+  const plugin = makePlugin({
+    filePath: "a.md",
+    editor,
+    freshness: freshnessCapable([entry], BASE_COUNTS),
+    dateText: DATE,
+  });
+  await plugin.refreshTaskFreshness(editor, { dateText: DATE });
+  plugin.finishTaskCancelNotice = async () => true;
+  const ok = await plugin.applyFreshnessDecayCardDrop(plugin.openedCards[0], {
+    content: editor.getValue(),
+    lineText: ROTTEN_AT_LIMIT,
+  });
+  assert.equal(ok, true);
+  assert.equal(editor.state.transactions.length, 1, JSON.stringify({ lines: editor.state.lines, notices }));
+  const content = editor.state.lines.join("\n");
+  assert.match(content, /\[-\].*\[cancelled::/);
+  assert.match(content, /CANCEL LOG/);
+  const history = helpers.readRottenLog(content, 2);
+  assert.equal(history.entries.length, 1);
+  assert.equal(history.entries[0].kind, "drop");
+  assert.match(history.entries[0].reason, /🍂 Ready → dropped/);
+  assert.equal(history.entries[0].keeps, 3);
 });
 
 // --- 8. Less often at 90+ opens the picker; dismiss writes nothing ---
@@ -956,12 +1091,12 @@ test("real config loader offers P1 for Bryan's ladder without plugin.config", as
   const cardCtx = plugin.openedCards[0];
   assert.ok(cardCtx.plan.notNow.available);
   assert.equal(cardCtx.plan.notNow.levelLabel, "P1");
-  const notNow = cardCtx.rows.find((row) => row.action === "notNow");
-  assert.equal(notNow.recommended, true);
-  assert.match(notNow.detail, /P0 → P1/);
+  const step = cardCtx.rows.find((row) => row.action === "step");
+  assert.equal(step.recommended, true);
+  assert.match(step.detail, /Ready → P1/);
 });
 
-test("missing config file uses distinct copy and recommends Keep", async () => {
+test("missing config file disables Step and recommends Stay", async () => {
   const { plugin } = singleAtLimitFixture();
   plugin.freshnessDecayConfigLoadOptions = decayLoadOptions({ missing: true });
   const ok = await plugin.refreshTaskFreshness(plugin.app.workspace.getActiveViewOfType().editor, {
@@ -971,8 +1106,10 @@ test("missing config file uses distinct copy and recommends Keep", async () => {
   const cardCtx = plugin.openedCards[0];
   assert.equal(cardCtx.plan.notNow.available, false);
   assert.equal(cardCtx.plan.notNow.unavailableReason, "config file missing");
-  const keep = cardCtx.rows.find((row) => row.action === "keep");
-  assert.equal(keep.recommended, true);
+  const step = cardCtx.rows.find((row) => row.action === "step");
+  const stay = cardCtx.rows.find((row) => row.action === "stay");
+  assert.equal(step.available, false);
+  assert.equal(stay.recommended, true);
 });
 
 test("unreadable config file uses distinct copy", async () => {

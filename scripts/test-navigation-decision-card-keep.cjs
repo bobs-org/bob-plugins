@@ -1,6 +1,6 @@
-// Card Keep stage tests: the decay card's Keep swaps the row list for the
-// in-card keep-reason stage and commits stamp, increment, and one Rotten Log
-// entry in a single editor transaction. Uses the DOM modal harness because
+// Card Stay stage tests: the decay card's Stay swaps the row list for the
+// in-card reason stage and commits a reset stamp plus one Rotten Log entry
+// in a single editor transaction. Uses the DOM modal harness because
 // the stage owns rendered input, focus, and key routing.
 const assert = require("node:assert/strict");
 const Module = require("node:module");
@@ -377,12 +377,12 @@ async function settle() {
 
 // --- Opening and Esc write nothing ---
 
-test("opening the card writes nothing and shows the Keep row detail", async () => {
+test("opening the card writes nothing and shows the Stay row detail", async () => {
   const { editor, modal, before } = await openCardAtLimit();
   assert.equal(editor.getValue(), before);
   assert.equal(editor.state.transactions.length, 0);
   assert.equal(modal.keepStageActive, false);
-  assert.match(text(modal.contentEl), /say why · logs 🥀 · asks again next review/);
+  assert.match(text(modal.contentEl), /Stay in Ready say why · logs 🥀 · count starts over/);
 });
 
 test("Esc on the rows closes the card and writes nothing", async () => {
@@ -394,9 +394,9 @@ test("Esc on the rows closes the card and writes nothing", async () => {
   assert.equal(plugin.jumpCalls, 0);
 });
 
-// --- Keep stage: enter without flash, Esc returns, second Esc writes nothing ---
+// --- Stay stage: enter without flash, Esc returns, second Esc writes nothing ---
 
-test("Keep swaps the rows for the reason stage without closing", async () => {
+test("Stay swaps the rows for the reason stage without closing", async () => {
   const { editor, modal, before } = await openCardAtLimit();
   pressAltF(modal);
   assert.equal(modal.isOpen, true);
@@ -406,7 +406,7 @@ test("Keep swaps the rows for the reason stage without closing", async () => {
   assert.equal(harness.activeElement, modal.keepStage.inputEl);
   assert.equal(editor.getValue(), before);
   assert.equal(editor.state.transactions.length, 0);
-  assert.match(text(modal.contentEl), /Why keep it in Ready\?/);
+  assert.match(text(modal.contentEl), /Stay in Ready\?/);
 });
 
 test("repeat Alt+F never enters or submits the stage", async () => {
@@ -436,35 +436,35 @@ test("Esc in the stage returns to the rows; a second Esc writes nothing", async 
   assert.equal(plugin.jumpCalls, 0);
 });
 
-// --- Keep stage: Enter commits stamp, increment, and entry in one undo ---
+// --- Stay stage: Enter commits reset stamp and entry in one undo ---
 
-test("Keep stage Enter logs the reason with one transaction; one undo restores", async () => {
+test("Stay stage Enter logs the reason with one transaction; one undo restores", async () => {
   const { editor, modal, before } = await openCardAtLimit();
   pressAltF(modal);
   modal.keepStage.inputEl.value = "still needed";
   modal.keepStage.inputEl.listeners.input();
-  assert.match(text(modal.contentEl), /still needed · kept 4×/);
+  assert.match(text(modal.contentEl), /still needed · stayed in Ready after 3 keeps/);
   pressKey(modal, "Enter");
   await settle();
   assert.equal(modal.isOpen, false);
   assert.equal(editor.state.transactions.length, 1);
   const after = editor.getValue();
-  assert.match(after.split("\n")[2], /\[keeps:: 4\]/);
-  assert.match(after, /\*2026-10-20\* — still needed · kept 4×/);
+  assert.doesNotMatch(after.split("\n")[2], /keeps::/);
+  assert.match(after, /\*2026-10-20\*\s+—\s+still needed · stayed in Ready after 3 keeps/);
   assert.equal(helpers.readRottenLog(after, 2).entries.length, 1);
-  assert.match(notices.join("\n"), /Kept 4× · Rotten Log updated · next review asks/);
+  assert.match(notices.join("\n"), /Stay in Ready · count restarted/);
   editor.undo();
   assert.equal(editor.getValue(), before);
 });
 
-test("blank Keep stage Enter logs no reason given", async () => {
+test("blank Stay stage Enter logs no reason given", async () => {
   const { editor, modal } = await openCardAtLimit();
   pressAltF(modal);
-  assert.match(text(modal.contentEl), /🤷 no reason given · kept 4×/);
+  assert.match(text(modal.contentEl), /🤷 no reason given · stayed in Ready after 3 keeps/);
   pressKey(modal, "Enter");
   await settle();
   assert.equal(editor.state.transactions.length, 1);
-  assert.match(editor.getValue(), /🤷 no reason given · kept 4×/);
+  assert.match(editor.getValue(), /🤷 no reason given · stayed in Ready after 3 keeps/);
 });
 
 test("a double Enter submits once", async () => {
@@ -525,7 +525,7 @@ test("an unreadable log shows the header even with no countable entries", () => 
   );
 });
 
-test("the decay card Keep stage uses the reviews streak copy", () => {
+test("the decay card Stay stage explains that the count restarts", () => {
   const base = {
     raw: ROTTEN_AT_LIMIT,
     entry: rottenEntry(),
@@ -537,13 +537,13 @@ test("the decay card Keep stage uses the reviews streak copy", () => {
   const card = helpers.buildRottenKeepPromptModel({ ...base, decayCard: true });
   assert.equal(
     card.subtitleLines[1],
-    "keep 4 of 3 in Ready · the next due keep opens the decay card · none logged yet",
+    "stay in Ready after 3 keeps · count starts over · none logged yet",
   );
   const modal = helpers.buildRottenKeepPromptModel(base);
   assert.equal(modal.subtitleLines[1], "keep 4 of 3 in Ready · the next due keep opens the decay card · none logged yet");
 });
 
-test("ambiguous Rotten Logs refuse the Keep write", async () => {
+test("ambiguous Rotten Logs refuse the Stay write", async () => {
   clearNotices();
   modals.length = 0;
   const ambiguous =

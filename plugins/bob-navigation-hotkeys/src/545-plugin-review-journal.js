@@ -66,7 +66,7 @@ function reviewJournalOutcomeToken(raw) {
   if (Object.prototype.hasOwnProperty.call(outcomes, token)) {
     return outcomes[token];
   }
-  if (/^decay:(?:notNow|level:\d+|lessOften|reword|drop|keep)$/.test(token)) {
+  if (/^decay:(?:step|stay|notNow|level:\d+|lessOften|reword|drop|keep)$/.test(token)) {
     return token;
   }
   return null;

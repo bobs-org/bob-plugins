@@ -842,28 +842,37 @@ function buildBatchPriorityRollPreviewModel(summary) {
 //   explicit human decisions, not roll events.
 // - Drop writes `🍂 dropped after N keep(s)` to the Cancel Log and preserves
 //   keeps history on the closed line.
-function formatKeptCountTail(keeps) {
+function formatKeptCountTail(keeps, rung) {
   const count = Number.isInteger(keeps) && keeps >= 0 ? keeps : 0;
-  return ` · kept ${count}×`;
+  const target = normalizeBulletPropertyValue(rung);
+  const location = target
+    ? ` ${rottenKeepRungPreposition(target)} ${target}`
+    : "";
+  return ` · kept ${count}×${location}`;
 }
 
-function formatFreshnessDecayReasonWithKeptTail(baseReason, keeps) {
-  return `${normalizeBulletPropertyValue(baseReason)}${formatKeptCountTail(keeps)}`;
+function formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, rung) {
+  return `${normalizeBulletPropertyValue(baseReason)}${formatKeptCountTail(keeps, rung)}`;
 }
 
 function formatFreshnessDecisionLessOftenReason(details = {}) {
   const before = Math.floor(numericOrDefault(details.beforeDays, NaN));
   const after = Math.floor(numericOrDefault(details.afterDays, NaN));
   const keeps = Number.isInteger(details.keeps) && details.keeps >= 0 ? details.keeps : 0;
+  const rung = normalizeBulletPropertyValue(details.rung);
   if (!Number.isInteger(before) || !Number.isInteger(after)) {
     return "";
   }
-  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} less often${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}every ${before} → ${after} days${formatKeptCountTail(keeps)}`;
+  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} less often${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}every ${before} → ${after} days${formatKeptCountTail(keeps, rung)}`;
 }
 
 function formatFreshnessDecisionRewordReason(details = {}) {
   const keeps = Number.isInteger(details.keeps) && details.keeps >= 0 ? details.keeps : 0;
-  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} reword${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}kept ${keeps}×`;
+  const rung = normalizeBulletPropertyValue(details.rung);
+  const location = rung
+    ? ` ${rottenKeepRungPreposition(rung)} ${rung}`
+    : "";
+  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} reword${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}kept ${keeps}×${location}`;
 }
 
 function formatFreshnessDecisionDropCancelReason(details = {}) {

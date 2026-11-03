@@ -159,7 +159,7 @@ test("P0 at interval 7 still enters P2 on the default 2–7 / 8–30 ladder", ()
 test("P0 at interval 7 enters P2 with a previewed decay date and kept tail", () => {
   const card = planCard({ currentValue: "" });
   assert.equal(card.fromLabel, "P0");
-  assert.equal(card.title, "Kept 3 reviews in a row");
+  assert.equal(card.title, "Kept 3× in Ready");
   assert.ok(card.notNow.available);
   assert.equal(card.notNow.kind, "entry");
   assert.equal(card.notNow.levelLabel, "P2");
@@ -168,7 +168,7 @@ test("P0 at interval 7 enters P2 with a previewed decay date and kept tail", () 
   assert.equal(card.notNow.date, "2026-10-16");
   assert.equal(
     card.notNow.reason,
-    "🎲 P0 → P2 decay · in **8** (8–30) days · kept 3×",
+    "🎲 P0 → P2 decay · in **8** (8–30) days · kept 3× in Ready",
   );
   assert.ok(card.notNow.scheduleLog);
   assert.equal(card.notNow.scheduleLog.to, "2026-10-16");
@@ -182,7 +182,7 @@ test("P0 at interval 30 enters P3", () => {
   assert.equal(card.notNow.date, "2026-11-08");
   assert.equal(
     card.notNow.reason,
-    "🎲 P0 → P3 decay · in **31** (31–90) days · kept 3×",
+    "🎲 P0 → P3 decay · in **31** (31–90) days · kept 3× in Ready",
   );
 });
 
@@ -195,7 +195,7 @@ test("fixed enter overrides the interval scan", () => {
   assert.equal(card.notNow.levelLabel, "P1");
   assert.equal(
     card.notNow.reason,
-    "🎲 P0 → P1 decay · in **2** (2–7) days · kept 3×",
+    "🎲 P0 → P1 decay · in **2** (2–7) days · kept 3× in Ready",
   );
 });
 
@@ -248,7 +248,7 @@ test("prioritized P2 below its roll limit stays on the same level", () => {
   assert.equal(card.notNow.kind, "roll");
   assert.equal(card.notNow.levelLabel, "P2");
   assert.match(card.notNow.reason, /🎲 P2 roll · /);
-  assert.match(card.notNow.reason, / · kept 3×$/);
+  assert.match(card.notNow.reason, / · kept 3× at P2$/);
 });
 
 test("P2 at its roll limit decays to P3", () => {
@@ -257,7 +257,7 @@ test("P2 at its roll limit decays to P3", () => {
   assert.equal(card.notNow.kind, "decay");
   assert.equal(card.notNow.levelLabel, "P3");
   assert.match(card.notNow.reason, /🎲 P2 → P3 decay · /);
-  assert.match(card.notNow.reason, / · kept 3×$/);
+  assert.match(card.notNow.reason, / · kept 3× at P2$/);
 });
 
 function contentWithLog(reasons) {
@@ -324,7 +324,7 @@ test("terminal cancel substitutes a truthful same-level card roll", () => {
   // The substituted reason is a same-level roll with the kept tail: it must
   // not claim the terminal cancellation.
   assert.match(card.notNow.reason, /🎲 P4 roll · /);
-  assert.match(card.notNow.reason, / · kept 3×$/);
+  assert.match(card.notNow.reason, / · kept 3× at P4$/);
   assert.doesNotMatch(card.notNow.reason, /decayed past/);
 });
 
@@ -342,6 +342,33 @@ test("no future date in the window refuses Not now", () => {
   assert.match(card.notNow.unavailableReason, /no future date/);
 });
 
+test("card Step moves one rung and terminal priority rolls in place", () => {
+  const wip = planCard({ rung: "WIP", property: null });
+  assert.equal(wip.step.available, true);
+  assert.equal(wip.step.kind, "lane");
+  assert.equal(wip.step.toLabel, "Next");
+
+  const next = planCard({ rung: "Next", property: null });
+  assert.equal(next.step.available, true);
+  assert.equal(next.step.toLabel, "Ready");
+
+  const ready = planCard({ rung: "Ready", currentValue: "", intervalDays: 7 });
+  assert.equal(ready.step.available, true);
+  assert.equal(ready.step.kind, "entry");
+  assert.equal(ready.step.toLabel, "P2");
+  assert.match(ready.step.reason, /kept 3× in Ready$/);
+
+  const p2 = planCard({ rung: "P2", currentValue: "medium", streak: 99 });
+  assert.equal(p2.step.kind, "decay");
+  assert.equal(p2.step.toLabel, "P3");
+  assert.match(p2.step.reason, /kept 3× at P2$/);
+
+  const p4 = planCard({ rung: "P4", currentValue: "lowest" });
+  assert.equal(p4.step.kind, "roll");
+  assert.equal(p4.step.toLabel, "P4");
+  assert.match(p4.step.reason, /🎲 P4 roll · .*kept 3× at P4$/);
+});
+
 test("Less often steps 7/14/30 to the next preset with a decision reason", () => {
   for (const [before, after] of [[7, 14], [14, 30], [30, 90]]) {
     const card = planCard({ intervalDays: before });
@@ -351,7 +378,7 @@ test("Less often steps 7/14/30 to the next preset with a decision reason", () =>
     assert.equal(card.lessOften.afterDays, after);
     assert.equal(
       card.lessOften.reason,
-      `🎲 less often · every ${before} → ${after} days · kept 3×`,
+      `🎲 less often · every ${before} → ${after} days · kept 3× in Ready`,
     );
   }
 });
@@ -387,7 +414,7 @@ test("Keep saturates at 999 and Drop preserves keeps history", () => {
   assert.equal(saturated.drop.reason, "🍂 dropped after 999 keeps");
 
   const singular = planCard({ keeps: 1 });
-  assert.equal(singular.title, "Kept 1 review in a row");
+  assert.equal(singular.title, "Kept 1× in Ready");
   assert.equal(singular.drop.reason, "🍂 dropped after 1 keep");
 });
 
@@ -412,7 +439,7 @@ test("kept tails preserve roll classification; decisions break it deliberately",
   );
   assert.equal(
     card.reword.reason,
-    "🎲 reword · kept 3×",
+    "🎲 reword · kept 3× at P2",
   );
   // The explicit decisions still plan Schedule Log entries without
   // fabricating a scheduled date change.
@@ -456,7 +483,7 @@ test("explicit level picks cover the ladder with previewed rolls", () => {
   assert.deepEqual(labels, ["P1", "P2", "P3", "P4"]);
   for (const pick of card.levels) {
     assert.ok(pick.available);
-    assert.match(pick.reason, / · kept 3×$/);
+    assert.match(pick.reason, / · kept 3× in Ready$/);
   }
   assert.equal(card.levels[0].date, "2026-10-10");
 });

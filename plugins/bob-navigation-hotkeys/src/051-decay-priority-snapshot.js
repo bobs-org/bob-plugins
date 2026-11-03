@@ -60,15 +60,15 @@ function loadFreshnessDecayPrioritySnapshot(options = {}) {
 function buildFreshnessDecayCardFooter(rows) {
   const list = Array.isArray(rows) ? rows : [];
   const parts = ["Esc changes nothing"];
-  if (list.some((row) => row && row.action === "drop")) {
-    parts.push("D / X drops");
+  const has = (action) => list.some((row) => row && row.action === action);
+  if (has("step")) parts.push("↵ never drops");
+  if (has("stay")) parts.push("Alt+F stays");
+  if (has("lessOften")) parts.push("L less often");
+  if (has("reword")) parts.push("E rewords");
+  if (has("drop")) parts.push("D / X drops");
+  if (list.some((row) => row && String(row.action || "").startsWith("level:"))) {
+    parts.push("1–4 pick a P-level");
   }
-  if (
-    list.some(
-      (row) => row && typeof row.action === "string" && row.action.startsWith("level:"),
-    )
-  ) {
-    parts.push("1–4 pick a P-level instead");
-  }
+  if (has("step") || has("stay")) parts.push("Ctrl+Z undoes");
   return parts.join(" · ");
 }

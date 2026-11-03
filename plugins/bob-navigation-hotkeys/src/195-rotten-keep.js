@@ -1,14 +1,14 @@
 // The rung a keep counts on: WIP for `[/]`, Next for `[*]`, the priority
 // level label for a prioritized `[ ]`, else Ready. A Blocked `[?]`
 // follows its queue lane. Blocked is an overlay, never a rung.
-function rottenKeepRungForTarget(raw, entry) {
+function rottenKeepRungForTarget(raw, entry, priorityName = "priority") {
   const status = getObsidianTaskCheckboxStatus(String(raw || ""));
   if (status === "/") return "WIP";
   if (status === "*") return "Next";
   if (status === "?" && entry && entry.lane === "pending") return "WIP";
   if (status === "?" && entry && entry.lane === "next") return "Next";
   const field = typeof findBulletPropertyField === "function"
-    ? findBulletPropertyField(raw, "priority")
+    ? findBulletPropertyField(raw, priorityName)
     : null;
   const value = field ? normalizeBulletPropertyValue(field.value) : "";
   return value || "Ready";
@@ -140,6 +140,59 @@ function formatRottenLogEntryText({ date, reason, keeps, lane, rung }) {
   const count = Math.floor(numericOrDefault(keeps, 0));
   if (count < 1 || count > 999) return "";
   return "*" + day + "*" + SCHEDULE_LOG_SEPARATOR + safeReason + " · kept " + count + "×";
+}
+
+// Rung-changing card answers are task-local Rotten Log events. A Stay uses
+// the human's reason (or 🤷); a step, terminal P4 re-roll, or drop is machine
+// copy. The parser in 010 accepts this shared grammar.
+function formatFreshnessDecayRottenLogBody({ kind, rung, toRung, keeps, reason } = {}) {
+  const from = normalizeBulletPropertyValue(rung);
+  const to = normalizeBulletPropertyValue(toRung);
+  const count = Math.floor(numericOrDefault(keeps, Number.NaN));
+  if (!from || !Number.isInteger(count) || count < 1 || count > 999) return "";
+  const after = `after ${count} ${count === 1 ? "keep" : "keeps"}`;
+  if (kind === "stay") {
+    const normalized = normalizeScheduleReasonText(reason);
+    const safeReason = normalized.empty ? SCHEDULE_LOG_SKIPPED_REASON_TEXT : normalized.reason;
+    const noun = count === 1 ? "keep" : "keeps";
+    return `${safeReason} · stayed ${rottenKeepRungPreposition(from)} ${from} after ${count} ${noun}`;
+  }
+  if (kind === "step") {
+    return from === to
+      ? `${PRIORITY_DECAY_CANCEL_EMOJI} rolled again at ${from} · ${after}`
+      : to
+        ? `${PRIORITY_DECAY_CANCEL_EMOJI} ${from} → ${to} · ${after}`
+        : "";
+  }
+  if (kind === "drop") {
+    return `${PRIORITY_DECAY_CANCEL_EMOJI} ${from} → dropped · ${after}`;
+  }
+  return "";
+}
+
+// Compose one validated card event beneath the task's Rotten Log marker.
+// Duplicate/ambiguous markers refuse the entire caller transaction.
+function appendFreshnessDecayRottenLogEntry(content, taskLine, dateText, body) {
+  const day = String(dateText || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return Object.freeze({ ok: false, refusal: "rotten-log-invalid", content: String(content || "") });
+  }
+  const insertion = planManagedTaskLogEntry(content, taskLine, {
+    kind: MANAGED_TASK_LOG_KIND_ROTTEN,
+    entryText: `*${day}*${SCHEDULE_LOG_SEPARATOR}${String(body || "").trim()}`,
+  });
+  if (!insertion.valid) {
+    return Object.freeze({
+      ok: false,
+      refusal: insertion.reason === "ambiguous-markers" ? "rotten-log-ambiguous" : "rotten-log-invalid",
+      content: String(content || ""),
+    });
+  }
+  const split = splitMarkdownContent(content);
+  if (applyManagedTaskLogEntryToLines(split.lines, insertion) < 1) {
+    return Object.freeze({ ok: false, refusal: "rotten-log-invalid", content: String(content || "") });
+  }
+  return Object.freeze({ ok: true, refusal: null, content: split.lines.join(split.lineEnding) });
 }
 
 // Normalize one validated `ROTTEN_LOG_ENTRY_RE` count group (1-999),
@@ -371,19 +424,27 @@ function buildRottenKeepPromptModel(options = {}) {
     (options.lane === "next" ? "Next" : null) ||
     rottenKeepRungForTarget(options.raw || "", entry) || "Ready";
   const prep = rottenKeepRungPreposition(rung);
+  const decayCard = options.decayCard === true;
   const subtitle = [cleanTaskDisplayText(options.raw || entry.originalMarkdown || entry.text || ""),
     String(entry.tierLabel || entry.tier || rung).toUpperCase(),
     age === null ? "" : `${age}d`].filter(Boolean).join(" · ");
   const reason = normalizeLaneWorkSummary(options.reason);
-  const allowance = rottenKeepAllowanceSubtitle(rung, keepsAfter, options.allowance,
-    options.laneCard === true ||
-    (typeof freshnessDecayLaneCardAvailable === "function" && freshnessDecayLaneCardAvailable()));
-  const previewEntryText = formatRottenLogEntryText({ date: options.dateText, reason,
-    keeps: keepsAfter, rung });
+  const allowance = decayCard
+    ? `stay ${prep} ${rung} after ${keepsBefore} ${keepsBefore === 1 ? "keep" : "keeps"} · count starts over`
+    : rottenKeepAllowanceSubtitle(rung, keepsAfter, options.allowance,
+        options.laneCard === true ||
+        (typeof freshnessDecayLaneCardAvailable === "function" && freshnessDecayLaneCardAvailable()));
+  const previewBody = decayCard
+    ? formatFreshnessDecayRottenLogBody({ kind: "stay", rung, keeps: keepsBefore, reason })
+    : "";
+  const previewEntryText = decayCard
+    ? `*${String(options.dateText || "")}* ${SCHEDULE_LOG_SEPARATOR} ${previewBody}`
+    : formatRottenLogEntryText({ date: options.dateText, reason,
+      keeps: keepsAfter, rung });
   return {
-    title: `Why keep it ${prep} ${rung}?`,
+    title: decayCard ? `Stay ${prep} ${rung}?` : `Why keep it ${prep} ${rung}?`,
     subtitleLines: [subtitle, [allowance, logged].filter(Boolean).join(" · ")],
-    placeholder: `Why keep it ${prep} ${rung}? (optional · ↵ logs 🤷)`,
+    placeholder: `${decayCard ? "Why stay" : "Why keep it"} ${prep} ${rung}? (optional · ↵ logs 🤷)`,
     previewEntryText,
     empty: !reason,
     previewTitle: previewEntryText,
@@ -402,7 +463,9 @@ function buildRottenKeepPromptModel(options = {}) {
       empty: item.reason === SCHEDULE_LOG_SKIPPED_REASON_TEXT,
     })),
     olderCount: Math.max(0, entries.length - 3),
-    enterHint: options.advance ? "Keep, log & next" : "Keep & log",
+    enterHint: decayCard
+      ? options.advance ? "Stay, log & next" : "Stay & log"
+      : options.advance ? "Keep, log & next" : "Keep & log",
     escapeHint: "Cancel",
     disabled: ambiguous,
   };
@@ -424,11 +487,11 @@ class RottenKeepReasonStage {
     const inputWrap = this.root.createDiv({ cls: "bob-cnp-search" });
     inputWrap.createDiv({ cls: "bob-cnp-search-icon", text: "✎" });
     this.inputEl = inputWrap.createEl("input", { cls: "bob-cnp-input", attr: {
-      type: "text", "aria-label": "Keep reason", placeholder: model.placeholder,
+      type: "text", "aria-label": options.decayCard === true ? "Stay reason" : "Keep reason", placeholder: model.placeholder,
     } });
     this.previewEl = this.root.createDiv({ cls: "bob-cnp-results", attr: { "aria-live": "polite" } });
     if (model.historyRows.length) {
-      this.root.createDiv({ cls: "bob-rotten-history-title", text: "EARLIER KEEPS" });
+      this.root.createDiv({ cls: "bob-rotten-history-title", text: options.decayCard === true ? "EARLIER DECISIONS" : "EARLIER KEEPS" });
       const history = this.root.createDiv({ cls: "bob-rotten-history", attr: { role: "list" } });
       for (const item of model.historyRows) {
         const row = history.createDiv({ cls: `bob-rotten-history-row${item.empty ? " is-empty" : ""}`, attr: { role: "listitem" } });

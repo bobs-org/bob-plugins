@@ -5,4 +5,6 @@ Object.assign(module.exports.helpers, {
   freezeFreshnessDecayPrioritySnapshot,
   loadFreshnessDecayPrioritySnapshot,
   buildFreshnessDecayCardFooter,
+  formatFreshnessDecayRottenLogBody,
+  appendFreshnessDecayRottenLogEntry,
 });

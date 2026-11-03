@@ -414,7 +414,7 @@ test("Next keep model always logs with its rung tail and gates unreadable histor
   const blank = h.buildRottenKeepPromptModel(base);
   assert.equal(blank.title, "Why keep it in Next?");
   assert.match(blank.subtitleLines[0], /NEXT · 9d/);
-  assert.equal(blank.subtitleLines[1], "keep 3 of 2 in Next · none logged yet");
+  assert.equal(blank.subtitleLines[1], "keep 3 of 2 in Next · the next due keep opens the decay card · none logged yet");
   assert.equal(blank.placeholder, "Why keep it in Next? (optional · ↵ logs 🤷)");
   assert.equal(blank.previewTitle, "*2026-10-23* — 🤷 no reason given · kept 3× in Next");
   assert.equal(blank.enterHint, "Keep & log");

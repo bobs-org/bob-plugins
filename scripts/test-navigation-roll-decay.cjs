@@ -1371,7 +1371,7 @@ test("freshness decay card output is unchanged for P0", () => {
   assert.equal(card.notNow.date, "2026-10-16");
   assert.equal(
     card.notNow.reason,
-    "🎲 P0 → P2 decay · in **8** (8–30) days · kept 3×",
+    "🎲 P0 → P2 decay · in **8** (8–30) days · kept 3× in Ready",
   );
 });
 

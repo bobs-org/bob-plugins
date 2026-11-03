@@ -1,3 +1,10 @@
+function normalizeFreshnessDecayCardKey(value) {
+  const key = String(value || "").toLowerCase();
+  if (key === "control") return "ctrl";
+  if (key === "altgraph") return "alt";
+  return key;
+}
+
 class FreshnessDecayCardModal extends Modal {
   constructor(app, options) {
     super(app);
@@ -9,10 +16,17 @@ class FreshnessDecayCardModal extends Modal {
       typeof settings.onChoose === "function" ? settings.onChoose : null;
     this.onDismiss =
       typeof settings.onDismiss === "function" ? settings.onDismiss : null;
-    this.onKeepReason =
-      typeof settings.onKeepReason === "function"
+    this.onStayReason = typeof settings.onStayReason === "function"
+      ? settings.onStayReason
+      : typeof settings.onKeepReason === "function"
         ? settings.onKeepReason
         : null;
+    this.openingChordKeys = new Set(
+      (Array.isArray(settings.openingKeys) ? settings.openingKeys : [])
+        .map(normalizeFreshnessDecayCardKey)
+        .filter(Boolean),
+    );
+    this.openingChordKeyupHandler = null;
     this.rottenHeader =
       typeof settings.rottenHeader === "string" ? settings.rottenHeader : "";
     this.rottenKeep =
@@ -30,6 +44,11 @@ class FreshnessDecayCardModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     this.modalEl.addClass("bob-decay-card-modal");
+    if (typeof this.modalEl.setAttribute === "function") {
+      this.modalEl.setAttribute("role", "dialog");
+      this.modalEl.setAttribute("aria-modal", "true");
+      this.modalEl.setAttribute("aria-label", this.decayTitle);
+    }
     contentEl.addClass("bob-decay-card");
     contentEl.addClass("bob-key-card");
     const header = contentEl.createDiv({ cls: "bob-decay-card-header" });
@@ -59,6 +78,10 @@ class FreshnessDecayCardModal extends Modal {
       text: buildFreshnessDecayCardFooter(this.decayRows),
     });
     contentEl.addEventListener("keydown", (event) => this.handleKey(event));
+    this.openingChordKeyupHandler = (event) => this.releaseOpeningChordKey(event);
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("keyup", this.openingChordKeyupHandler, true);
+    }
     window.setTimeout(() => {
       this.focusRecommendedRowOrFirst();
     }, 0);
@@ -78,6 +101,15 @@ class FreshnessDecayCardModal extends Modal {
         return;
       }
     }
+  }
+
+  awaitingOpeningChordRelease() {
+    return this.openingChordKeys instanceof Set && this.openingChordKeys.size > 0;
+  }
+
+  releaseOpeningChordKey(event) {
+    if (!event || !(this.openingChordKeys instanceof Set)) return;
+    this.openingChordKeys.delete(normalizeFreshnessDecayCardKey(event.key));
   }
 
   renderRows() {
@@ -127,6 +159,7 @@ class FreshnessDecayCardModal extends Modal {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             event.stopPropagation();
+            if (this.awaitingOpeningChordRelease()) return;
             this.choose(row.action);
           }
         });
@@ -136,7 +169,7 @@ class FreshnessDecayCardModal extends Modal {
   }
 
   canKeepStage() {
-    return Boolean(this.rottenKeep && this.onKeepReason && !this.settled);
+    return Boolean(this.rottenKeep && this.onStayReason && !this.settled);
   }
 
   showKeepStage() {
@@ -196,10 +229,10 @@ class FreshnessDecayCardModal extends Modal {
       return;
     }
     this.settled = true;
-    const callback = this.onKeepReason;
+    const callback = this.onStayReason;
     this.onChoose = null;
     this.onDismiss = null;
-    this.onKeepReason = null;
+    this.onStayReason = null;
     try {
       if (typeof callback === "function") {
         callback(value);
@@ -211,6 +244,11 @@ class FreshnessDecayCardModal extends Modal {
 
   handleKey(event) {
     if (!event || this.settled) {
+      return;
+    }
+    if (this.awaitingOpeningChordRelease()) {
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
     if (this.keepStageActive) {
@@ -248,7 +286,7 @@ class FreshnessDecayCardModal extends Modal {
       return;
     }
     // The opening refresh chord (and any held-key repeat) must not approve:
-    // only a fresh, non-repeat supported Alt+F / Ctrl+Alt+F press chooses Keep.
+    // only a fresh, non-repeat supported Alt+F / Ctrl+Alt+F press chooses Stay.
     if (
       isReviewRefreshKeydown(event, false) ||
       isReviewRefreshKeydown(event, true)
@@ -258,7 +296,7 @@ class FreshnessDecayCardModal extends Modal {
       if (event.repeat) {
         return;
       }
-      this.choose("keep");
+      this.choose("stay");
       return;
     }
     if (event.altKey || event.ctrlKey || event.metaKey) {
@@ -274,7 +312,7 @@ class FreshnessDecayCardModal extends Modal {
       const recommended = this.decayRows.find(
         (row) => row && row.recommended && row.available,
       );
-      this.choose(recommended ? recommended.action : "notNow");
+      this.choose(recommended ? recommended.action : "stay");
       return;
     }
     if (key === "l") {
@@ -306,14 +344,15 @@ class FreshnessDecayCardModal extends Modal {
     if (this.settled) {
       return;
     }
-    if (action === "keep" && this.keepStageActive) {
+    const chosenAction = action === "keep" ? "stay" : action;
+    if (chosenAction === "stay" && this.keepStageActive) {
       return;
     }
-    if (action === "keep" && this.canKeepStage()) {
+    if (chosenAction === "stay" && this.canKeepStage()) {
       this.showKeepStage();
       return;
     }
-    const row = this.decayRows.find((candidate) => candidate && candidate.action === action);
+    const row = this.decayRows.find((candidate) => candidate && candidate.action === chosenAction);
     if (!row || !row.available) {
       return;
     }
@@ -321,10 +360,10 @@ class FreshnessDecayCardModal extends Modal {
     const callback = this.onChoose;
     this.onChoose = null;
     this.onDismiss = null;
-    this.onKeepReason = null;
+    this.onStayReason = null;
     try {
       if (typeof callback === "function") {
-        callback(action);
+        callback(chosenAction);
       }
     } finally {
       this.close();
@@ -341,6 +380,10 @@ class FreshnessDecayCardModal extends Modal {
     }
     this.keepStage = null;
     this.keepStageActive = false;
+    if (this.openingChordKeyupHandler && typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+      window.removeEventListener("keyup", this.openingChordKeyupHandler, true);
+    }
+    this.openingChordKeyupHandler = null;
     contentElCleanup(this.contentEl);
     if (!this.settled && typeof this.onDismiss === "function") {
       try {
@@ -351,6 +394,6 @@ class FreshnessDecayCardModal extends Modal {
     }
     this.onChoose = null;
     this.onDismiss = null;
-    this.onKeepReason = null;
+    this.onStayReason = null;
   }
 }

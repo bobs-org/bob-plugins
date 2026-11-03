@@ -4573,28 +4573,37 @@ function buildBatchPriorityRollPreviewModel(summary) {
 //   explicit human decisions, not roll events.
 // - Drop writes `🍂 dropped after N keep(s)` to the Cancel Log and preserves
 //   keeps history on the closed line.
-function formatKeptCountTail(keeps) {
+function formatKeptCountTail(keeps, rung) {
   const count = Number.isInteger(keeps) && keeps >= 0 ? keeps : 0;
-  return ` · kept ${count}×`;
+  const target = normalizeBulletPropertyValue(rung);
+  const location = target
+    ? ` ${rottenKeepRungPreposition(target)} ${target}`
+    : "";
+  return ` · kept ${count}×${location}`;
 }
 
-function formatFreshnessDecayReasonWithKeptTail(baseReason, keeps) {
-  return `${normalizeBulletPropertyValue(baseReason)}${formatKeptCountTail(keeps)}`;
+function formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, rung) {
+  return `${normalizeBulletPropertyValue(baseReason)}${formatKeptCountTail(keeps, rung)}`;
 }
 
 function formatFreshnessDecisionLessOftenReason(details = {}) {
   const before = Math.floor(numericOrDefault(details.beforeDays, NaN));
   const after = Math.floor(numericOrDefault(details.afterDays, NaN));
   const keeps = Number.isInteger(details.keeps) && details.keeps >= 0 ? details.keeps : 0;
+  const rung = normalizeBulletPropertyValue(details.rung);
   if (!Number.isInteger(before) || !Number.isInteger(after)) {
     return "";
   }
-  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} less often${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}every ${before} → ${after} days${formatKeptCountTail(keeps)}`;
+  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} less often${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}every ${before} → ${after} days${formatKeptCountTail(keeps, rung)}`;
 }
 
 function formatFreshnessDecisionRewordReason(details = {}) {
   const keeps = Number.isInteger(details.keeps) && details.keeps >= 0 ? details.keeps : 0;
-  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} reword${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}kept ${keeps}×`;
+  const rung = normalizeBulletPropertyValue(details.rung);
+  const location = rung
+    ? ` ${rottenKeepRungPreposition(rung)} ${rung}`
+    : "";
+  return `${SCHEDULE_LOG_AUTO_REASON_EMOJI} reword${SCHEDULE_LOG_AUTO_REASON_SEPARATOR}kept ${keeps}×${location}`;
 }
 
 function formatFreshnessDecisionDropCancelReason(details = {}) {
@@ -4811,7 +4820,7 @@ function planFreshnessDecayExplicitLevelPicks(options = {}) {
       date: formatBulletPropertyDate(rolled.date),
       offset: rolled.offset,
       windowText,
-      reason: formatFreshnessDecayReasonWithKeptTail(baseReason, keeps),
+      reason: formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, "Ready"),
     });
   });
   return Object.freeze(picks);
@@ -4826,7 +4835,7 @@ function planFreshnessDecayCard(options = {}) {
   const decay = options.freshnessDecay && typeof options.freshnessDecay === "object"
     ? options.freshnessDecay
     : {};
-  const limit = Number.isInteger(decay.keeps) && decay.keeps >= 0
+  const fallbackLimit = Number.isInteger(decay.keeps) && decay.keeps >= 0
     ? decay.keeps
     : Number.isInteger(limitRaw) && limitRaw >= 0
       ? limitRaw
@@ -4865,12 +4874,26 @@ function planFreshnessDecayCard(options = {}) {
       currentValue = "";
     }
   }
+  const status = getObsidianTaskCheckboxStatus(rawLine);
+  const rung = normalizeBulletPropertyValue(options.rung) ||
+    (status === "/" ? "WIP" : status === "*" ? "Next" : currentValue
+      ? getPriorityRollFromLevelLabel(property, currentValue)
+      : "Ready");
+  const rungLimit = rung === "WIP"
+    ? decay.pending
+    : rung === "Next"
+      ? decay.next
+      : decay.ready;
+  const limit = rungLimit === false
+    ? false
+    : Number.isInteger(rungLimit) && rungLimit >= 0
+      ? rungLimit
+      : fallbackLimit;
   const currentScheduled = normalizeBulletPropertyValue(options.currentScheduled);
   const fromLabel = currentValue
     ? getPriorityRollFromLevelLabel(property, currentValue)
     : IMPLICIT_PRIORITY_LEVEL_LABEL;
-  const reviewNoun = keeps === 1 ? "review" : "reviews";
-  const title = `Kept ${keeps} ${reviewNoun} in a row`;
+  const title = `Kept ${keeps}× ${rottenKeepRungPreposition(rung)} ${rung}`;
 
   const unavailable = (reason) =>
     Object.freeze({
@@ -4906,7 +4929,7 @@ function planFreshnessDecayCard(options = {}) {
         if (!baseReason) {
           notNow = unavailable("cannot describe the P0 entry");
         } else {
-          const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps);
+          const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, rung);
           notNow = Object.freeze({
             available: true,
             unavailableReason: null,
@@ -4957,7 +4980,7 @@ function planFreshnessDecayCard(options = {}) {
         if (!Number.isInteger(planned.offset) || planned.offset < 1 || !planned.date) {
           notNow = unavailable("no future date in this level's window");
         } else {
-          const reason = formatFreshnessDecayReasonWithKeptTail(planned.reason, keeps);
+          const reason = formatFreshnessDecayReasonWithKeptTail(planned.reason, keeps, rung);
           const payload = planned.kind === "decay"
             ? buildPriorityDecayScheduleLogPayload(currentScheduled, planned.date, reason)
             : shouldWriteAutomaticScheduleLog(currentScheduled, planned.date)
@@ -5000,7 +5023,7 @@ function planFreshnessDecayCard(options = {}) {
             level,
             rolledDays: rolled.offset,
           });
-          const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps);
+          const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, rung);
           notNow = Object.freeze({
             available: true,
             unavailableReason: null,
@@ -5035,6 +5058,7 @@ function planFreshnessDecayCard(options = {}) {
       beforeDays: lessOften.beforeDays,
       afterDays: lessOften.afterDays,
       keeps,
+      rung,
     });
     let scheduleLogPlan = null;
     if (content !== null && taskLine !== null) {
@@ -5061,7 +5085,7 @@ function planFreshnessDecayCard(options = {}) {
     });
   }
 
-  const rewordReason = formatFreshnessDecisionRewordReason({ keeps });
+  const rewordReason = formatFreshnessDecisionRewordReason({ keeps, rung });
   let rewordScheduleLogPlan = null;
   if (content !== null && taskLine !== null) {
     try {
@@ -5104,6 +5128,21 @@ function planFreshnessDecayCard(options = {}) {
     nextKeeps: Math.min(999, keeps + 1),
   });
 
+  const step = planFreshnessDecayCardStep({
+    rung,
+    keeps,
+    intervalDays,
+    currentValue,
+    currentScheduled,
+    property,
+    priorityLoadError,
+    decayInvalid,
+    decayEnabled,
+    enterLabel,
+    baseDate,
+    random,
+  });
+
   const levels = decayInvalid || !hasPriorityLadder
     ? Object.freeze(
       (property && Array.isArray(property.levels) ? property.levels : []).map((level, index) =>
@@ -5134,11 +5173,13 @@ function planFreshnessDecayCard(options = {}) {
     error: null,
     keeps,
     limit,
+    rung,
     enterLabel,
     fromLabel,
     title,
     todayText,
     intervalDays: intervalValid ? intervalDays : null,
+    step,
     notNow,
     lessOften,
     reword,
@@ -5157,12 +5198,10 @@ function planFreshnessDecayCard(options = {}) {
 // noted; never throws.
 
 // The review-walk decision-card capability ledger-tools feature-detects
-// (`api.freshnessDecayCard.version >= 2`). Exposed on the plugin api at
+// (`api.freshnessDecayCard.version >= 3`). Exposed on the plugin api at
 // load; removed again on unload so marks cannot promise an absent card.
-// Version 2 is the ungated handler contract: cards are available as
-// soon as decay is enabled. Bumped only for a breaking card-contract
-// change.
-const FRESHNESS_DECAY_CARD_VERSION = 2;
+// Version 3 adds lane-rung cards and rung-changing card answers.
+const FRESHNESS_DECAY_CARD_VERSION = 3;
 const FRESHNESS_DECAY_CARD_CAPABILITY = Object.freeze({
   version: FRESHNESS_DECAY_CARD_VERSION,
 });
@@ -5500,158 +5539,56 @@ function resolveFreshnessDecayIntervalDays(api, entry, rawLine, content) {
   return 7;
 }
 
-// One decision-card row: `{ key, action, label, detail, available,
-// unavailableReason, recommended }`. `action` is the commit key the
-// modal hands back (`notNow`, `lessOften`, `reword`, `drop`, `keep`,
-// or `level:N`). Pure; never throws.
+// Rows use the card's task rung. Less often and explicit level picks exist
+// only on Ready; every rung has Step, Stay, Reword, and Drop.
 function buildFreshnessDecayCardRows(plan) {
   try {
     const source = plan && typeof plan === "object" ? plan : {};
     const keeps = normalizeFreshnessDecayKeepsCount(source.keeps);
     const keepNoun = keeps === 1 ? "keep" : "keeps";
+    const rung = normalizeBulletPropertyValue(source.rung) || "Ready";
+    const prep = rottenKeepRungPreposition(rung);
+    const makeRow = (key, action, label, detail, available = true, recommended = false) =>
+      Object.freeze({
+        key, action, label, detail, available,
+        unavailableReason: available ? null : detail,
+        recommended,
+      });
     const backPhrase = (windowText, offset) => {
-      const clean = normalizeBulletPropertyValue(windowText).replace(
-        /\*\*/g,
-        "",
-      );
+      const clean = normalizeBulletPropertyValue(windowText).replace(/\*\*/g, "");
       const windowed = /^in (\d+) (\([^)]*\)) days$/.exec(clean);
-      if (windowed) {
-        return `back in ${windowed[1]} days ${windowed[2]}`;
-      }
-      if (clean) {
-        return `back ${clean}`;
-      }
+      if (windowed) return `back in ${windowed[1]} days ${windowed[2]}`;
+      if (clean) return `back ${clean}`;
       return Number.isInteger(offset) ? `back in ${offset} days` : "back";
     };
     const rows = [];
-    const notNow = source.notNow && typeof source.notNow === "object" ? source.notNow : {};
-    const notNowAvailable = notNow.available === true;
-    if (notNowAvailable) {
-      rows.push(
-        Object.freeze({
-          key: "Enter",
-          action: "notNow",
-          label: "Not now",
-          detail: `${normalizeBulletPropertyValue(notNow.fromLabel) || "P0"} → ${normalizeBulletPropertyValue(notNow.levelLabel)} · ${backPhrase(notNow.windowText, notNow.offset)}`,
-          available: true,
-          unavailableReason: null,
-          recommended: true,
-        }),
-      );
-    } else {
-      rows.push(
-        Object.freeze({
-          key: "Enter",
-          action: "notNow",
-          label: "Not now",
-          detail: normalizeBulletPropertyValue(notNow.unavailableReason) || "Not now is unavailable",
-          available: false,
-          unavailableReason: normalizeBulletPropertyValue(notNow.unavailableReason) || "Not now is unavailable",
-          recommended: false,
-        }),
-      );
+    const step = source.step && typeof source.step === "object" ? source.step : {};
+    const stepAvailable = step.available === true;
+    rows.push(makeRow("Enter", "step", step.label || "Step down",
+      step.detail || step.unavailableReason || "Step unavailable", stepAvailable, stepAvailable));
+    rows.push(makeRow("Alt+F", "stay", `Stay ${prep} ${rung}`,
+      "say why · logs 🥀 · count starts over", true, !stepAvailable));
+    if (rung === "Ready") {
+      const lessOften = source.lessOften && typeof source.lessOften === "object" ? source.lessOften : {};
+      const lessDetail = lessOften.mode === "refresh"
+        ? `review every ${lessOften.afterDays} days instead of ${lessOften.beforeDays}`
+        : lessOften.mode === "picker"
+          ? `choose every ${lessOften.minDays}–${lessOften.maxDays} days…`
+          : normalizeBulletPropertyValue(lessOften.unavailableReason) || "Less often is unavailable";
+      rows.push(makeRow("L", "lessOften", "Less often", lessDetail, lessOften.available === true));
     }
-    const lessOften = source.lessOften && typeof source.lessOften === "object" ? source.lessOften : {};
-    if (lessOften.available === true && lessOften.mode === "refresh") {
-      rows.push(
-        Object.freeze({
-          key: "L",
-          action: "lessOften",
-          label: "Less often",
-          detail: `review every ${lessOften.afterDays} days instead of ${lessOften.beforeDays}`,
-          available: true,
-          unavailableReason: null,
-          recommended: false,
-        }),
-      );
-    } else if (lessOften.available === true && lessOften.mode === "picker") {
-      rows.push(
-        Object.freeze({
-          key: "L",
-          action: "lessOften",
-          label: "Less often",
-          detail: `choose every ${lessOften.minDays}–${lessOften.maxDays} days…`,
-          available: true,
-          unavailableReason: null,
-          recommended: false,
-        }),
-      );
-    } else {
-      rows.push(
-        Object.freeze({
-          key: "L",
-          action: "lessOften",
-          label: "Less often",
-          detail: normalizeBulletPropertyValue(lessOften.unavailableReason) || "Less often is unavailable",
-          available: false,
-          unavailableReason: normalizeBulletPropertyValue(lessOften.unavailableReason) || "Less often is unavailable",
-          recommended: false,
-        }),
-      );
+    rows.push(makeRow("E", "reword", "Reword", "edit the task · count starts over"));
+    rows.push(makeRow("D", "drop", "Drop", `cancel · dropped after ${keeps} ${keepNoun}`));
+    if (rung === "Ready") {
+      (Array.isArray(source.levels) ? source.levels : []).forEach((pick, index) => {
+        const item = pick && typeof pick === "object" ? pick : {};
+        const label = normalizeBulletPropertyValue(item.label) || `P${index + 1}`;
+        const detail = item.available === true
+          ? backPhrase(item.windowText, item.offset)
+          : normalizeBulletPropertyValue(item.unavailableReason) || `${label} is unavailable`;
+        rows.push(makeRow(String(index + 1), `level:${index}`, label, detail, item.available === true));
+      });
     }
-    rows.push(
-      Object.freeze({
-        key: "E",
-        action: "reword",
-        label: "Reword",
-        detail: "edit the task · start the count over",
-        available: true,
-        unavailableReason: null,
-        recommended: false,
-      }),
-    );
-    rows.push(
-      Object.freeze({
-        key: "D",
-        action: "drop",
-        label: "Drop",
-        detail: `cancel · dropped after ${keeps} ${keepNoun}`,
-        available: true,
-        unavailableReason: null,
-        recommended: false,
-      }),
-    );
-    rows.push(
-      Object.freeze({
-        key: "Alt+F",
-        action: "keep",
-        label: "Keep",
-        detail: "say why · logs 🥀 · asks again next review",
-        available: true,
-        unavailableReason: null,
-        recommended: !notNowAvailable,
-      }),
-    );
-    const levels = Array.isArray(source.levels) ? source.levels : [];
-    levels.forEach((pick, index) => {
-      const entry = pick && typeof pick === "object" ? pick : {};
-      const label = normalizeBulletPropertyValue(entry.label) || `P${index + 1}`;
-      if (entry.available === true) {
-        rows.push(
-          Object.freeze({
-            key: String(index + 1),
-            action: `level:${index}`,
-            label,
-            detail: backPhrase(entry.windowText, entry.offset),
-            available: true,
-            unavailableReason: null,
-            recommended: false,
-          }),
-        );
-      } else {
-        rows.push(
-          Object.freeze({
-            key: String(index + 1),
-            action: `level:${index}`,
-            label,
-            detail: normalizeBulletPropertyValue(entry.unavailableReason) || `${label} is unavailable`,
-            available: false,
-            unavailableReason: normalizeBulletPropertyValue(entry.unavailableReason) || `${label} is unavailable`,
-            recommended: false,
-          }),
-        );
-      }
-    });
     return Object.freeze(rows);
   } catch (error) {
     return Object.freeze([]);
@@ -5659,8 +5596,8 @@ function buildFreshnessDecayCardRows(plan) {
 }
 
 // The review-walk decision card (`docs/freshness.md` §2a): a small
-// keyboard-first modal over one due Ready task at its keep limit. Enter
-// defers but never cancels; Esc changes nothing. The opening gesture is
+// keyboard-first modal over one due task at its rung's keep limit. Enter
+// steps one rung or stays when that step is unavailable; Esc changes nothing. The opening gesture is
 // consumed — key repeat, bubbling, and a double callback cannot approve
 // or apply twice — and the card never opens nested cards. Selection,
 // mouse, and keyboard activate the same action. Never throws out of the
@@ -5728,19 +5665,192 @@ function loadFreshnessDecayPrioritySnapshot(options = {}) {
 function buildFreshnessDecayCardFooter(rows) {
   const list = Array.isArray(rows) ? rows : [];
   const parts = ["Esc changes nothing"];
-  if (list.some((row) => row && row.action === "drop")) {
-    parts.push("D / X drops");
+  const has = (action) => list.some((row) => row && row.action === action);
+  if (has("step")) parts.push("↵ never drops");
+  if (has("stay")) parts.push("Alt+F stays");
+  if (has("lessOften")) parts.push("L less often");
+  if (has("reword")) parts.push("E rewords");
+  if (has("drop")) parts.push("D / X drops");
+  if (list.some((row) => row && String(row.action || "").startsWith("level:"))) {
+    parts.push("1–4 pick a P-level");
   }
-  if (
-    list.some(
-      (row) => row && typeof row.action === "string" && row.action.startsWith("level:"),
-    )
-  ) {
-    parts.push("1–4 pick a P-level instead");
-  }
+  if (has("step") || has("stay")) parts.push("Ctrl+Z undoes");
   return parts.join(" · ");
 }
+// ---- src/052-decay-ladder-step-planner.js ----
+// Plan the card's one-rung Enter action. Lane steps do not need priority
+// config. Priority steps choose their destination directly and deliberately
+// bypass the Schedule Log roll-streak recommendation.
+function freshnessDecayCardStepBackPhrase(windowText, offset) {
+  const clean = normalizeBulletPropertyValue(windowText).replace(/\*\*/g, "");
+  const match = /^in (\d+) (\([^)]*\)) days$/.exec(clean);
+  if (match) return `back in ${match[1]} days ${match[2]}`;
+  if (clean) return `back ${clean}`;
+  return Number.isInteger(offset) ? `back in ${offset} days` : "back";
+}
+
+function planFreshnessDecayCardStep(options = {}) {
+  const rung = normalizeBulletPropertyValue(options.rung) || "Ready";
+  const keeps = normalizeFreshnessDecayKeepsCount(options.keeps);
+  const unavailable = (reason) => Object.freeze({
+    available: false,
+    unavailableReason: reason,
+    kind: "unavailable",
+    fromLabel: rung,
+    toLabel: "",
+    label: "",
+    detail: normalizeBulletPropertyValue(reason),
+    date: "",
+    offset: null,
+    windowText: "",
+    reason: "",
+    scheduleLog: null,
+  });
+
+  if (rung === "WIP") {
+    return Object.freeze({
+      available: true,
+      unavailableReason: null,
+      kind: "lane",
+      fromLabel: "WIP",
+      toLabel: "Next",
+      label: "Move to Next",
+      detail: "[/] → [*] · still planned, no longer in progress",
+      date: "",
+      offset: null,
+      windowText: "",
+      reason: "",
+      scheduleLog: null,
+    });
+  }
+  if (rung === "Next") {
+    return Object.freeze({
+      available: true,
+      unavailableReason: null,
+      kind: "lane",
+      fromLabel: "Next",
+      toLabel: "Ready",
+      label: "Move to Ready",
+      detail: "[*] → [ ] · back in the Ready backlog",
+      date: "",
+      offset: null,
+      windowText: "",
+      reason: "",
+      scheduleLog: null,
+    });
+  }
+
+  if (options.decayInvalid === true) return unavailable("priority config is invalid");
+  if (options.decayEnabled === false) return unavailable("decay is off");
+  const property = options.property || null;
+  if (!property || property.values !== "priority") {
+    return unavailable(options.priorityLoadError || "no `priority` property in bob/config.yml");
+  }
+
+  const baseDate = options.baseDate instanceof Date ? options.baseDate : new Date();
+  const random = typeof options.random === "function" ? options.random : Math.random;
+  const currentScheduled = normalizeBulletPropertyValue(options.currentScheduled);
+  const currentValue = normalizeBulletPropertyValue(options.currentValue);
+  let level = null;
+  let toLevel = null;
+  let kind = "decay";
+  let baseReason = "";
+
+  if (rung === "Ready") {
+    const entry = resolveFreshnessDecayP0EntryLevel(
+      property,
+      Number(options.intervalDays),
+      options.enterLabel,
+    );
+    if (!entry || entry.unavailable || !entry.level) {
+      return unavailable(entry && entry.reason ? entry.reason : "no priority entry level is available");
+    }
+    toLevel = entry.level;
+    kind = "entry";
+    const rolled = rollPriorityRecommendationDate(toLevel, baseDate, random, currentScheduled);
+    const windowText = formatPriorityRollChosenWindowText(toLevel, rolled && rolled.offset);
+    if (!isFutureDatedRollResult(rolled) || !windowText) {
+      return unavailable("no future date in this level's window");
+    }
+    baseReason = formatPriorityDecayScheduleReason({
+      fromLevel: { label: IMPLICIT_PRIORITY_LEVEL_LABEL },
+      toLevel,
+      rolledDays: rolled.offset,
+    });
+    if (!baseReason) return unavailable("cannot describe the P0 entry");
+    const date = formatBulletPropertyDate(rolled.date);
+    const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, rung);
+    return Object.freeze({
+      available: true,
+      unavailableReason: null,
+      kind,
+      fromLabel: rung,
+      toLabel: normalizeBulletPropertyValue(toLevel.label),
+      label: `Defer to ${normalizeBulletPropertyValue(toLevel.label)}`,
+      detail: `${rung} → ${normalizeBulletPropertyValue(toLevel.label)} · ${freshnessDecayCardStepBackPhrase(windowText, rolled.offset)}`,
+      levelLabel: normalizeBulletPropertyValue(toLevel.label),
+      date,
+      offset: rolled.offset,
+      windowText,
+      reason,
+      scheduleLog: buildPriorityDecayScheduleLogPayload(currentScheduled, date, reason),
+    });
+  }
+
+  const levels = Array.isArray(property.levels) ? property.levels : [];
+  const currentIndex = levels.findIndex((candidate) => candidate && candidate.value === currentValue);
+  if (currentIndex < 0) {
+    return unavailable(currentValue ? `unknown priority "${currentValue}"` : "priority level is missing");
+  }
+  level = levels[currentIndex];
+  const terminal = currentIndex === levels.length - 1;
+  toLevel = terminal ? level : levels[currentIndex + 1];
+  if (!toLevel) return unavailable("no next priority level is configured");
+  kind = terminal ? "roll" : "decay";
+  const rolled = rollPriorityRecommendationDate(toLevel, baseDate, random, currentScheduled);
+  const windowText = formatPriorityRollChosenWindowText(toLevel, rolled && rolled.offset);
+  if (!isFutureDatedRollResult(rolled) || !windowText) {
+    return unavailable("no future date in this level's window");
+  }
+  baseReason = terminal
+    ? formatPriorityRollScheduleReason({ source: "scheduled", level: toLevel, rolledDays: rolled.offset })
+    : formatPriorityDecayScheduleReason({
+      fromLevel: { label: rung },
+      toLevel,
+      rolledDays: rolled.offset,
+    });
+  if (!baseReason) return unavailable("cannot describe this priority step");
+  const date = formatBulletPropertyDate(rolled.date);
+  const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, rung);
+  const target = normalizeBulletPropertyValue(toLevel.label);
+  const label = terminal ? `Roll again at ${target}` : `Defer to ${target}`;
+  const detail = terminal
+    ? `bottom of the ladder · ${freshnessDecayCardStepBackPhrase(windowText, rolled.offset)}`
+    : `${rung} → ${target} · ${freshnessDecayCardStepBackPhrase(windowText, rolled.offset)}`;
+  return Object.freeze({
+    available: true,
+    unavailableReason: null,
+    kind,
+    fromLabel: rung,
+    toLabel: target,
+    label,
+    detail,
+    levelLabel: target,
+    date,
+    offset: rolled.offset,
+    windowText,
+    reason,
+    scheduleLog: buildPriorityDecayScheduleLogPayload(currentScheduled, date, reason),
+  });
+}
 // ---- src/060-decay-card-modal.js ----
+function normalizeFreshnessDecayCardKey(value) {
+  const key = String(value || "").toLowerCase();
+  if (key === "control") return "ctrl";
+  if (key === "altgraph") return "alt";
+  return key;
+}
+
 class FreshnessDecayCardModal extends Modal {
   constructor(app, options) {
     super(app);
@@ -5752,10 +5862,17 @@ class FreshnessDecayCardModal extends Modal {
       typeof settings.onChoose === "function" ? settings.onChoose : null;
     this.onDismiss =
       typeof settings.onDismiss === "function" ? settings.onDismiss : null;
-    this.onKeepReason =
-      typeof settings.onKeepReason === "function"
+    this.onStayReason = typeof settings.onStayReason === "function"
+      ? settings.onStayReason
+      : typeof settings.onKeepReason === "function"
         ? settings.onKeepReason
         : null;
+    this.openingChordKeys = new Set(
+      (Array.isArray(settings.openingKeys) ? settings.openingKeys : [])
+        .map(normalizeFreshnessDecayCardKey)
+        .filter(Boolean),
+    );
+    this.openingChordKeyupHandler = null;
     this.rottenHeader =
       typeof settings.rottenHeader === "string" ? settings.rottenHeader : "";
     this.rottenKeep =
@@ -5773,6 +5890,11 @@ class FreshnessDecayCardModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     this.modalEl.addClass("bob-decay-card-modal");
+    if (typeof this.modalEl.setAttribute === "function") {
+      this.modalEl.setAttribute("role", "dialog");
+      this.modalEl.setAttribute("aria-modal", "true");
+      this.modalEl.setAttribute("aria-label", this.decayTitle);
+    }
     contentEl.addClass("bob-decay-card");
     contentEl.addClass("bob-key-card");
     const header = contentEl.createDiv({ cls: "bob-decay-card-header" });
@@ -5802,6 +5924,10 @@ class FreshnessDecayCardModal extends Modal {
       text: buildFreshnessDecayCardFooter(this.decayRows),
     });
     contentEl.addEventListener("keydown", (event) => this.handleKey(event));
+    this.openingChordKeyupHandler = (event) => this.releaseOpeningChordKey(event);
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("keyup", this.openingChordKeyupHandler, true);
+    }
     window.setTimeout(() => {
       this.focusRecommendedRowOrFirst();
     }, 0);
@@ -5821,6 +5947,15 @@ class FreshnessDecayCardModal extends Modal {
         return;
       }
     }
+  }
+
+  awaitingOpeningChordRelease() {
+    return this.openingChordKeys instanceof Set && this.openingChordKeys.size > 0;
+  }
+
+  releaseOpeningChordKey(event) {
+    if (!event || !(this.openingChordKeys instanceof Set)) return;
+    this.openingChordKeys.delete(normalizeFreshnessDecayCardKey(event.key));
   }
 
   renderRows() {
@@ -5870,6 +6005,7 @@ class FreshnessDecayCardModal extends Modal {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             event.stopPropagation();
+            if (this.awaitingOpeningChordRelease()) return;
             this.choose(row.action);
           }
         });
@@ -5879,7 +6015,7 @@ class FreshnessDecayCardModal extends Modal {
   }
 
   canKeepStage() {
-    return Boolean(this.rottenKeep && this.onKeepReason && !this.settled);
+    return Boolean(this.rottenKeep && this.onStayReason && !this.settled);
   }
 
   showKeepStage() {
@@ -5939,10 +6075,10 @@ class FreshnessDecayCardModal extends Modal {
       return;
     }
     this.settled = true;
-    const callback = this.onKeepReason;
+    const callback = this.onStayReason;
     this.onChoose = null;
     this.onDismiss = null;
-    this.onKeepReason = null;
+    this.onStayReason = null;
     try {
       if (typeof callback === "function") {
         callback(value);
@@ -5954,6 +6090,11 @@ class FreshnessDecayCardModal extends Modal {
 
   handleKey(event) {
     if (!event || this.settled) {
+      return;
+    }
+    if (this.awaitingOpeningChordRelease()) {
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
     if (this.keepStageActive) {
@@ -5991,7 +6132,7 @@ class FreshnessDecayCardModal extends Modal {
       return;
     }
     // The opening refresh chord (and any held-key repeat) must not approve:
-    // only a fresh, non-repeat supported Alt+F / Ctrl+Alt+F press chooses Keep.
+    // only a fresh, non-repeat supported Alt+F / Ctrl+Alt+F press chooses Stay.
     if (
       isReviewRefreshKeydown(event, false) ||
       isReviewRefreshKeydown(event, true)
@@ -6001,7 +6142,7 @@ class FreshnessDecayCardModal extends Modal {
       if (event.repeat) {
         return;
       }
-      this.choose("keep");
+      this.choose("stay");
       return;
     }
     if (event.altKey || event.ctrlKey || event.metaKey) {
@@ -6017,7 +6158,7 @@ class FreshnessDecayCardModal extends Modal {
       const recommended = this.decayRows.find(
         (row) => row && row.recommended && row.available,
       );
-      this.choose(recommended ? recommended.action : "notNow");
+      this.choose(recommended ? recommended.action : "stay");
       return;
     }
     if (key === "l") {
@@ -6049,14 +6190,15 @@ class FreshnessDecayCardModal extends Modal {
     if (this.settled) {
       return;
     }
-    if (action === "keep" && this.keepStageActive) {
+    const chosenAction = action === "keep" ? "stay" : action;
+    if (chosenAction === "stay" && this.keepStageActive) {
       return;
     }
-    if (action === "keep" && this.canKeepStage()) {
+    if (chosenAction === "stay" && this.canKeepStage()) {
       this.showKeepStage();
       return;
     }
-    const row = this.decayRows.find((candidate) => candidate && candidate.action === action);
+    const row = this.decayRows.find((candidate) => candidate && candidate.action === chosenAction);
     if (!row || !row.available) {
       return;
     }
@@ -6064,10 +6206,10 @@ class FreshnessDecayCardModal extends Modal {
     const callback = this.onChoose;
     this.onChoose = null;
     this.onDismiss = null;
-    this.onKeepReason = null;
+    this.onStayReason = null;
     try {
       if (typeof callback === "function") {
-        callback(action);
+        callback(chosenAction);
       }
     } finally {
       this.close();
@@ -6084,6 +6226,10 @@ class FreshnessDecayCardModal extends Modal {
     }
     this.keepStage = null;
     this.keepStageActive = false;
+    if (this.openingChordKeyupHandler && typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+      window.removeEventListener("keyup", this.openingChordKeyupHandler, true);
+    }
+    this.openingChordKeyupHandler = null;
     contentElCleanup(this.contentEl);
     if (!this.settled && typeof this.onDismiss === "function") {
       try {
@@ -6094,7 +6240,7 @@ class FreshnessDecayCardModal extends Modal {
     }
     this.onChoose = null;
     this.onDismiss = null;
-    this.onKeepReason = null;
+    this.onStayReason = null;
   }
 }
 // ---- src/070-recommended-roll-batch.js ----
@@ -22056,14 +22202,14 @@ class FreshnessRefreshSummaryModal extends Modal {
 // The rung a keep counts on: WIP for `[/]`, Next for `[*]`, the priority
 // level label for a prioritized `[ ]`, else Ready. A Blocked `[?]`
 // follows its queue lane. Blocked is an overlay, never a rung.
-function rottenKeepRungForTarget(raw, entry) {
+function rottenKeepRungForTarget(raw, entry, priorityName = "priority") {
   const status = getObsidianTaskCheckboxStatus(String(raw || ""));
   if (status === "/") return "WIP";
   if (status === "*") return "Next";
   if (status === "?" && entry && entry.lane === "pending") return "WIP";
   if (status === "?" && entry && entry.lane === "next") return "Next";
   const field = typeof findBulletPropertyField === "function"
-    ? findBulletPropertyField(raw, "priority")
+    ? findBulletPropertyField(raw, priorityName)
     : null;
   const value = field ? normalizeBulletPropertyValue(field.value) : "";
   return value || "Ready";
@@ -22195,6 +22341,59 @@ function formatRottenLogEntryText({ date, reason, keeps, lane, rung }) {
   const count = Math.floor(numericOrDefault(keeps, 0));
   if (count < 1 || count > 999) return "";
   return "*" + day + "*" + SCHEDULE_LOG_SEPARATOR + safeReason + " · kept " + count + "×";
+}
+
+// Rung-changing card answers are task-local Rotten Log events. A Stay uses
+// the human's reason (or 🤷); a step, terminal P4 re-roll, or drop is machine
+// copy. The parser in 010 accepts this shared grammar.
+function formatFreshnessDecayRottenLogBody({ kind, rung, toRung, keeps, reason } = {}) {
+  const from = normalizeBulletPropertyValue(rung);
+  const to = normalizeBulletPropertyValue(toRung);
+  const count = Math.floor(numericOrDefault(keeps, Number.NaN));
+  if (!from || !Number.isInteger(count) || count < 1 || count > 999) return "";
+  const after = `after ${count} ${count === 1 ? "keep" : "keeps"}`;
+  if (kind === "stay") {
+    const normalized = normalizeScheduleReasonText(reason);
+    const safeReason = normalized.empty ? SCHEDULE_LOG_SKIPPED_REASON_TEXT : normalized.reason;
+    const noun = count === 1 ? "keep" : "keeps";
+    return `${safeReason} · stayed ${rottenKeepRungPreposition(from)} ${from} after ${count} ${noun}`;
+  }
+  if (kind === "step") {
+    return from === to
+      ? `${PRIORITY_DECAY_CANCEL_EMOJI} rolled again at ${from} · ${after}`
+      : to
+        ? `${PRIORITY_DECAY_CANCEL_EMOJI} ${from} → ${to} · ${after}`
+        : "";
+  }
+  if (kind === "drop") {
+    return `${PRIORITY_DECAY_CANCEL_EMOJI} ${from} → dropped · ${after}`;
+  }
+  return "";
+}
+
+// Compose one validated card event beneath the task's Rotten Log marker.
+// Duplicate/ambiguous markers refuse the entire caller transaction.
+function appendFreshnessDecayRottenLogEntry(content, taskLine, dateText, body) {
+  const day = String(dateText || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return Object.freeze({ ok: false, refusal: "rotten-log-invalid", content: String(content || "") });
+  }
+  const insertion = planManagedTaskLogEntry(content, taskLine, {
+    kind: MANAGED_TASK_LOG_KIND_ROTTEN,
+    entryText: `*${day}*${SCHEDULE_LOG_SEPARATOR}${String(body || "").trim()}`,
+  });
+  if (!insertion.valid) {
+    return Object.freeze({
+      ok: false,
+      refusal: insertion.reason === "ambiguous-markers" ? "rotten-log-ambiguous" : "rotten-log-invalid",
+      content: String(content || ""),
+    });
+  }
+  const split = splitMarkdownContent(content);
+  if (applyManagedTaskLogEntryToLines(split.lines, insertion) < 1) {
+    return Object.freeze({ ok: false, refusal: "rotten-log-invalid", content: String(content || "") });
+  }
+  return Object.freeze({ ok: true, refusal: null, content: split.lines.join(split.lineEnding) });
 }
 
 // Normalize one validated `ROTTEN_LOG_ENTRY_RE` count group (1-999),
@@ -22426,19 +22625,27 @@ function buildRottenKeepPromptModel(options = {}) {
     (options.lane === "next" ? "Next" : null) ||
     rottenKeepRungForTarget(options.raw || "", entry) || "Ready";
   const prep = rottenKeepRungPreposition(rung);
+  const decayCard = options.decayCard === true;
   const subtitle = [cleanTaskDisplayText(options.raw || entry.originalMarkdown || entry.text || ""),
     String(entry.tierLabel || entry.tier || rung).toUpperCase(),
     age === null ? "" : `${age}d`].filter(Boolean).join(" · ");
   const reason = normalizeLaneWorkSummary(options.reason);
-  const allowance = rottenKeepAllowanceSubtitle(rung, keepsAfter, options.allowance,
-    options.laneCard === true ||
-    (typeof freshnessDecayLaneCardAvailable === "function" && freshnessDecayLaneCardAvailable()));
-  const previewEntryText = formatRottenLogEntryText({ date: options.dateText, reason,
-    keeps: keepsAfter, rung });
+  const allowance = decayCard
+    ? `stay ${prep} ${rung} after ${keepsBefore} ${keepsBefore === 1 ? "keep" : "keeps"} · count starts over`
+    : rottenKeepAllowanceSubtitle(rung, keepsAfter, options.allowance,
+        options.laneCard === true ||
+        (typeof freshnessDecayLaneCardAvailable === "function" && freshnessDecayLaneCardAvailable()));
+  const previewBody = decayCard
+    ? formatFreshnessDecayRottenLogBody({ kind: "stay", rung, keeps: keepsBefore, reason })
+    : "";
+  const previewEntryText = decayCard
+    ? `*${String(options.dateText || "")}* ${SCHEDULE_LOG_SEPARATOR} ${previewBody}`
+    : formatRottenLogEntryText({ date: options.dateText, reason,
+      keeps: keepsAfter, rung });
   return {
-    title: `Why keep it ${prep} ${rung}?`,
+    title: decayCard ? `Stay ${prep} ${rung}?` : `Why keep it ${prep} ${rung}?`,
     subtitleLines: [subtitle, [allowance, logged].filter(Boolean).join(" · ")],
-    placeholder: `Why keep it ${prep} ${rung}? (optional · ↵ logs 🤷)`,
+    placeholder: `${decayCard ? "Why stay" : "Why keep it"} ${prep} ${rung}? (optional · ↵ logs 🤷)`,
     previewEntryText,
     empty: !reason,
     previewTitle: previewEntryText,
@@ -22457,7 +22664,9 @@ function buildRottenKeepPromptModel(options = {}) {
       empty: item.reason === SCHEDULE_LOG_SKIPPED_REASON_TEXT,
     })),
     olderCount: Math.max(0, entries.length - 3),
-    enterHint: options.advance ? "Keep, log & next" : "Keep & log",
+    enterHint: decayCard
+      ? options.advance ? "Stay, log & next" : "Stay & log"
+      : options.advance ? "Keep, log & next" : "Keep & log",
     escapeHint: "Cancel",
     disabled: ambiguous,
   };
@@ -22479,11 +22688,11 @@ class RottenKeepReasonStage {
     const inputWrap = this.root.createDiv({ cls: "bob-cnp-search" });
     inputWrap.createDiv({ cls: "bob-cnp-search-icon", text: "✎" });
     this.inputEl = inputWrap.createEl("input", { cls: "bob-cnp-input", attr: {
-      type: "text", "aria-label": "Keep reason", placeholder: model.placeholder,
+      type: "text", "aria-label": options.decayCard === true ? "Stay reason" : "Keep reason", placeholder: model.placeholder,
     } });
     this.previewEl = this.root.createDiv({ cls: "bob-cnp-results", attr: { "aria-live": "polite" } });
     if (model.historyRows.length) {
-      this.root.createDiv({ cls: "bob-rotten-history-title", text: "EARLIER KEEPS" });
+      this.root.createDiv({ cls: "bob-rotten-history-title", text: options.decayCard === true ? "EARLIER DECISIONS" : "EARLIER KEEPS" });
       const history = this.root.createDiv({ cls: "bob-rotten-history", attr: { role: "list" } });
       for (const item of model.historyRows) {
         const row = history.createDiv({ cls: `bob-rotten-history-row${item.empty ? " is-empty" : ""}`, attr: { role: "listitem" } });
@@ -33779,7 +33988,51 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
 
     let scheduleLogOutcome = null;
     let workLogWritten = false;
-    if (foldedDailyContent !== null) {
+    const decayRottenLogBody = normalizeBulletPropertyValue(options.decayRottenLogBody);
+    if (decayRottenLogBody) {
+      const baseContent = foldedDailyContent !== null
+        ? foldedDailyContent
+        : writeContext.content;
+      const source = splitMarkdownContent(baseContent);
+      const mutable = source.lines.slice();
+      if (foldedDailyContent === null && hasTaskLineChange) {
+        mutable[cursor.line] = nextLine;
+      }
+      if (preplannedScheduleLog && preplannedScheduleLog.valid) {
+        applyScheduleLogEntryToLines(mutable, preplannedScheduleLog);
+      }
+      if (wantsWorkLog && workLogSummary) {
+        workLogWritten = insertLaneWorkLogEntry(
+          mutable,
+          effectiveCursorLine,
+          workLogSummary,
+          workLogStampText,
+        );
+      }
+      const inserted = appendFreshnessDecayRottenLogEntry(
+        mutable.join(source.lineEnding),
+        effectiveCursorLine,
+        options.decayRottenLogDateText,
+        decayRottenLogBody,
+      );
+      if (!inserted.ok) {
+        new Notice(freshStampRefusalNotice(inserted.refusal));
+        return false;
+      }
+      scheduleLogOutcome = preplannedScheduleLog
+        ? getScheduleLogWriteOutcome(preplannedScheduleLog, preplannedScheduleLog.valid)
+        : null;
+      const finalContent = inserted.content;
+      if (finalContent !== writeContext.content && !applyEditorContentTransaction(
+        cm,
+        writeContext.content,
+        finalContent,
+        finalCursor,
+      )) {
+        new Notice("Could not update bullet property");
+        return false;
+      }
+    } else if (foldedDailyContent !== null) {
       let finalContent = foldedDailyContent;
       const folded = splitMarkdownContent(foldedDailyContent);
       const mutable = folded.lines.slice();
@@ -33944,7 +34197,9 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
       stillBlocked: recoveryOutcome === "still-blocked" ? 1 : 0,
       deferred: recoveryOutcome === "deferred" ? 1 : 0,
     };
-    if (typeof options.buildNotice === "function") {
+    if (typeof options.noticeOverride === "string" && options.noticeOverride) {
+      new Notice(options.noticeOverride);
+    } else if (typeof options.buildNotice === "function") {
       showPriorityNotice(
         options.buildNotice({
           blocked,
@@ -72942,6 +73197,14 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     return loadFreshnessDecayPrioritySnapshot(options);
   }
 
+  getFreshnessDecayCardOpeningKeys(advance) {
+    const held = this.reviewRefreshHeldKeys instanceof Set
+      ? this.reviewRefreshHeldKeys
+      : new Set();
+    const required = advance === true ? ["ctrl", "alt", "f"] : ["alt", "f"];
+    return Object.freeze(required.filter((key) => held.has(key)));
+  }
+
   // Build the card context for one resolved single-task trigger, or null
   // when the card cannot render (mixed versions, unusable plan) so the
   // caller falls back to counting. Never throws.
@@ -72963,7 +73226,9 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       const decay = this.readFreshnessDecayPolicy(api);
       const snapshot = this.loadFreshnessDecayPrioritySnapshot();
       const property = snapshot.property;
+      const rung = rottenKeepRungForTarget(raw, entry, property && property.name);
       const keeps = parseKeepsCount(raw);
+      const limit = this.freshnessDecayAllowanceFor(decay, rung);
       const intervalDays = resolveFreshnessDecayIntervalDays(api, entry, raw, content);
       const schedulesName =
         property && typeof property.schedules === "string" ? property.schedules : "";
@@ -72985,9 +73250,13 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         freshnessDecay: {
           enabled: decay.enabled,
           keeps: decay.keeps,
+          pending: decay.pending,
+          next: decay.next,
+          ready: decay.ready,
           enter: decay.enter,
           invalid: decay.invalid,
         },
+        rung,
         property,
         priorityLoadError: snapshot.loadError,
         baseDate: new Date(),
@@ -73029,7 +73298,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         keeps,
         keepsAfter,
         rottenHistory,
-        limit: decay.keeps,
+        limit,
+        rung,
         intervalDays,
         currentScheduled,
         currentValue,
@@ -73039,6 +73309,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         priorityConfig,
         priorityLoadError: snapshot.loadError,
         decay,
+        openingKeys: this.getFreshnessDecayCardOpeningKeys(settings.advance === true),
         plan,
         rows: buildFreshnessDecayCardRows(plan),
         subtitle,
@@ -73084,6 +73355,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         title: cardCtx.plan.title || `Kept ${cardCtx.keeps} reviews in a row`,
         subtitle: cardCtx.subtitle,
         rows: cardCtx.rows,
+        openingKeys: cardCtx.openingKeys,
         rottenHeader: buildFreshnessDecayRottenHeaderLine(cardCtx.rottenHistory),
         rotten: {
           raw: cardCtx.rawLine,
@@ -73098,11 +73370,11 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           this.activeFreshnessDecayCard = null;
           void this.applyFreshnessDecayCardChoice(cardCtx, action);
         },
-        onKeepReason: (reason) => {
-          // The Keep stage submits asynchronously, so the card context is
+        onStayReason: (reason) => {
+          // The Stay stage submits asynchronously, so the card context is
           // revalidated again at submit inside the choice path.
           this.activeFreshnessDecayCard = null;
-          void this.applyFreshnessDecayCardChoice(cardCtx, "keep", {
+          void this.applyFreshnessDecayCardChoice(cardCtx, "stay", {
             reason,
           });
         },
@@ -73151,6 +73423,9 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       if (
         decay.enabled !== cardCtx.decay.enabled ||
         decay.keeps !== cardCtx.decay.keeps ||
+        decay.pending !== cardCtx.decay.pending ||
+        decay.next !== cardCtx.decay.next ||
+        decay.ready !== cardCtx.decay.ready ||
         decay.enter !== cardCtx.decay.enter ||
         decay.invalid !== cardCtx.decay.invalid
       ) {
@@ -73164,6 +73439,9 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       });
       if (match.ok !== true || !isFreshnessDecayDecisionEntry(match.entry)) {
         return stale("eligibility");
+      }
+      if (rottenKeepRungForTarget(liveLine, match.entry, cardCtx.property && cardCtx.property.name) !== cardCtx.rung) {
+        return stale("rung");
       }
       if (parseKeepsCount(liveLine) !== cardCtx.keeps) {
         return stale("keeps");
@@ -73281,7 +73559,12 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       }
       const key = String(action || "");
       let applied = false;
-      if (key === "notNow") {
+      if (key === "step") {
+        applied = await this.applyFreshnessDecayCardStep(cardCtx, check.live);
+      } else if (key === "stay") {
+        const reason = options && typeof options.reason === "string" ? options.reason : "";
+        applied = await this.applyFreshnessDecayCardStay(cardCtx, check.live, reason);
+      } else if (key === "notNow") {
         applied = await this.applyFreshnessDecayCardDeferral(
           cardCtx,
           check.live,
@@ -73386,7 +73669,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     }
   }
 
-  // Not now (Enter) and explicit 1–4 picks: preview and apply a deferral
+  // Ready priority picks: preview and apply a deferral
   // through the existing priority writer. The previewed date persists
   // (what you see is what you get); Enter never cancels, including past
   // the last ladder level, where the planner already substituted a
@@ -73489,6 +73772,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         beforeDays,
         afterDays: days,
         keeps: cardCtx.keeps,
+        rung: cardCtx.rung,
       });
       if (!reason) {
         new Notice("Could not update task; no tasks were updated");
@@ -78157,6 +78441,7 @@ class BobNavigationHotkeysDecayCancelMixin {
       );
       const reason = formatFreshnessDecisionRewordReason({
         keeps: cardCtx.keeps,
+        rung: cardCtx.rung,
       });
       if (reason !== cardCtx.plan.reword.reason) {
         new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
@@ -78218,7 +78503,14 @@ class BobNavigationHotkeysDecayCancelMixin {
           lineText: cardCtx.rawLine,
           valueBaseDate: getLocalDateStart(new Date()),
         },
-        { reason },
+        {
+          reason,
+          rottenLogBody: formatFreshnessDecayRottenLogBody({
+            kind: "drop",
+            rung: cardCtx.rung,
+            keeps: cardCtx.keeps,
+          }),
+        },
       );
       if (!ok) {
         return false;
@@ -78330,8 +78622,14 @@ class BobNavigationHotkeysDecayCancelMixin {
   // counted Alt+N route, and Ctrl+Alt+F selects refresh-and-advance.
   registerReviewRefreshInputListeners() {
     this.handledReviewRefreshEvents = new WeakSet();
+    this.reviewRefreshHeldKeys = new Set();
     const keydownHandler = (event) =>
       this.handleReviewRefreshPhysicalKeydown(event);
+    const keyupHandler = (event) => {
+      if (this.reviewRefreshHeldKeys instanceof Set) {
+        this.reviewRefreshHeldKeys.delete(normalizeFreshnessDecayCardKey(event && event.key));
+      }
+    };
     const targets = [];
     if (typeof window !== "undefined") {
       targets.push(window);
@@ -78344,13 +78642,21 @@ class BobNavigationHotkeysDecayCancelMixin {
         continue;
       }
       target.addEventListener("keydown", keydownHandler, true);
+      target.addEventListener("keyup", keyupHandler, true);
       this.register(() => {
         target.removeEventListener("keydown", keydownHandler, true);
+        target.removeEventListener("keyup", keyupHandler, true);
       });
     }
   }
 
   handleReviewRefreshPhysicalKeydown(event) {
+    if (event && this.reviewRefreshHeldKeys instanceof Set) {
+      const key = normalizeFreshnessDecayCardKey(event.key);
+      if (key) this.reviewRefreshHeldKeys.add(key);
+      if (event.altKey) this.reviewRefreshHeldKeys.add("alt");
+      if (event.ctrlKey) this.reviewRefreshHeldKeys.add("ctrl");
+    }
     if (event && event.repeat) {
       return false;
     }
@@ -78714,7 +79020,13 @@ class BobNavigationHotkeysDecayCancelMixin {
         ? picker.valueBaseDate
         : getLocalDateStart(new Date());
     const dateText = formatBulletPropertyDate(baseDate);
-    const cancel = { reason, fallbackReason, baseDate, dateText };
+    const cancel = {
+      reason,
+      fallbackReason,
+      baseDate,
+      dateText,
+      rottenLogBody: String(options.rottenLogBody || "").trim(),
+    };
     if (
       picker.linkSession &&
       picker.linkSession.kind === "task-link" &&
@@ -78804,6 +79116,22 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
 
     let finalContent = plan.content;
+    if (cancel.rottenLogBody) {
+      const target = plan.cancelled[0];
+      const logged = target
+        ? appendFreshnessDecayRottenLogEntry(
+            finalContent,
+            target.originalLine,
+            cancel.dateText,
+            cancel.rottenLogBody,
+          )
+        : { ok: false, refusal: "rotten-log-invalid" };
+      if (!logged.ok) {
+        new Notice(`${freshStampRefusalNotice(logged.refusal)}; no tasks were updated`);
+        return false;
+      }
+      finalContent = logged.content;
+    }
     let finalCursorLine = plan.cursorLineShift(cursor.line);
     let pomodoroSnapshot = null;
     let dailyCleanupPlan = null;
@@ -78912,6 +79240,194 @@ class BobNavigationHotkeysDecayCancelMixin {
     });
   }
 }
+// ---- src/548-decay-card-writers.js ----
+class BobNavigationHotkeysDecayCardWriterMixin {
+  freshnessDecayCardWriteSession(cardCtx, live) {
+    return Object.freeze({
+      valid: true,
+      explicit: false,
+      targets: Object.freeze([Object.freeze({
+        line: cardCtx.line,
+        rawLine: live.lineText,
+      })]),
+    });
+  }
+
+  appendFreshnessDecayCardLog(content, cardCtx, kind, reason, toRung) {
+    const body = formatFreshnessDecayRottenLogBody({
+      kind,
+      rung: cardCtx.rung,
+      toRung,
+      keeps: cardCtx.keeps,
+      reason,
+    });
+    return appendFreshnessDecayRottenLogEntry(
+      content,
+      cardCtx.line,
+      cardCtx.dateText,
+      body,
+    );
+  }
+
+  async applyFreshnessDecayCardLinePlan(cardCtx, live, content, noticeText, action) {
+    try {
+      if (typeof content !== "string" || content === live.content) {
+        new Notice("Could not update task; no tasks were updated");
+        return false;
+      }
+      const line = String(splitMarkdownContent(content).lines[cardCtx.line] || "");
+      if (!applyEditorContentTransaction(
+        cardCtx.cm,
+        live.content,
+        content,
+        { line: cardCtx.line, ch: Math.min(Math.max(cardCtx.invokeCh || 0, 0), line.length) },
+      )) {
+        new Notice("Could not update task; no tasks were updated");
+        return false;
+      }
+      this.rememberFreshnessDecayCardAnchor(cardCtx);
+      new Notice(noticeText);
+      await this.maybeAdvanceFreshnessDecayWalk(cardCtx, action);
+      return true;
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+  }
+
+  async applyFreshnessDecayCardStep(cardCtx, live) {
+    try {
+      const step = cardCtx && cardCtx.plan ? cardCtx.plan.step : null;
+      if (!step || step.available !== true) {
+        new Notice(`${step && step.unavailableReason ? step.unavailableReason : "Step unavailable"}; nothing was written`);
+        return false;
+      }
+      const session = this.freshnessDecayCardWriteSession(cardCtx, live);
+      const stampLine = this.getFreshnessStampLine();
+      const common = {
+        dateText: cardCtx.dateText,
+        stampLine,
+        freshDateText: cardCtx.dateText,
+      };
+      if (cardCtx.rung === "WIP" || cardCtx.rung === "Next") {
+        const plan = cardCtx.rung === "WIP"
+          ? planTaskLinkLaneBatch(live.content, session, { ...common, mode: "pause" })
+          : planTaskLaneBatch(live.content, session, common);
+        if (!plan.valid) {
+          new Notice(plan.stale ? REVIEW_QUEUE_CHANGED_NOTICE : `${plan.error}; no tasks were updated`);
+          return false;
+        }
+        const logged = this.appendFreshnessDecayCardLog(
+          plan.content,
+          cardCtx,
+          "step",
+          "",
+          step.toLabel,
+        );
+        if (!logged.ok) {
+          new Notice(freshStampRefusalNotice(logged.refusal));
+          return false;
+        }
+        return this.applyFreshnessDecayCardLinePlan(
+          cardCtx,
+          live,
+          logged.content,
+          `${cardCtx.rung} → ${step.toLabel} · Ctrl+Z undoes`,
+          "step",
+        );
+      }
+
+      const property = cardCtx.property;
+      const level = this.resolveFreshnessDecayCardLevel(step, property);
+      if (!property || !level || !step.date || !Number.isInteger(step.offset)) {
+        new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
+        return false;
+      }
+      const noticeText = cardCtx.rung === step.toLabel && step.kind === "roll"
+        ? `${step.label} · Ctrl+Z undoes`
+        : `${cardCtx.rung} → ${step.toLabel} · Ctrl+Z undoes`;
+      const ok = await this.setBulletPriorityValue(
+        cardCtx.cm,
+        { line: cardCtx.line, ch: 0 },
+        cardCtx.filePath,
+        cardCtx.rawLine,
+        property,
+        level,
+        {
+          baseDate: getLocalDateStart(new Date()),
+          precomputedRoll: { date: step.date, offset: step.offset },
+          scheduleReasonOverride: step.reason,
+          decayRottenLogBody: this.appendFreshnessDecayCardLogBody(
+            cardCtx,
+            "step",
+            "",
+            step.toLabel,
+          ),
+          decayRottenLogDateText: cardCtx.dateText,
+          noticeOverride: noticeText,
+        },
+      );
+      if (!ok) return false;
+      this.rememberFreshnessDecayCardAnchor(cardCtx);
+      await this.maybeAdvanceFreshnessDecayWalk(cardCtx, "step");
+      return true;
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+  }
+
+  appendFreshnessDecayCardLogBody(cardCtx, kind, reason, toRung) {
+    return formatFreshnessDecayRottenLogBody({
+      kind,
+      rung: cardCtx.rung,
+      toRung,
+      keeps: cardCtx.keeps,
+      reason,
+    });
+  }
+
+  async applyFreshnessDecayCardStay(cardCtx, live, reason = "") {
+    try {
+      const stamper = this.getFreshnessStampLine();
+      if (typeof stamper !== "function") {
+        new Notice(REVIEW_FRESHNESS_API_REQUIRED_NOTICE);
+        return false;
+      }
+      const plan = planFreshStampBatch(
+        live.content,
+        [{ line: cardCtx.line, path: cardCtx.filePath, raw: live.lineText }],
+        stamper,
+        cardCtx.dateText,
+      );
+      if (!plan.ok) {
+        new Notice(freshStampRefusalNotice(plan.refusal));
+        return false;
+      }
+      const logged = this.appendFreshnessDecayCardLog(
+        plan.content,
+        cardCtx,
+        "stay",
+        reason,
+        "",
+      );
+      if (!logged.ok) {
+        new Notice(freshStampRefusalNotice(logged.refusal));
+        return false;
+      }
+      return this.applyFreshnessDecayCardLinePlan(
+        cardCtx,
+        live,
+        logged.content,
+        `Stay ${rottenKeepRungPreposition(cardCtx.rung)} ${cardCtx.rung} · count restarted · Ctrl+Z undoes`,
+        "stay",
+      );
+    } catch (error) {
+      new Notice("Could not update task; no tasks were updated");
+      return false;
+    }
+  }
+}
 // ---- src/545-plugin-review-journal.js ----
 const REVIEW_JOURNAL_OUTCOMES = new Set([
   "keep",
@@ -78981,7 +79497,7 @@ function reviewJournalOutcomeToken(raw) {
   if (Object.prototype.hasOwnProperty.call(outcomes, token)) {
     return outcomes[token];
   }
-  if (/^decay:(?:notNow|level:\d+|lessOften|reword|drop|keep)$/.test(token)) {
+  if (/^decay:(?:step|stay|notNow|level:\d+|lessOften|reword|drop|keep)$/.test(token)) {
     return token;
   }
   return null;
@@ -82956,7 +83472,9 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       stillBlocked: plan.stillBlockedTaskCount,
       deferred: plan.deferredRecoveryTaskCount,
     };
-    if (typeof options.buildNotice === "function") {
+    if (typeof options.noticeOverride === "string" && options.noticeOverride) {
+      new Notice(options.noticeOverride);
+    } else if (typeof options.buildNotice === "function") {
       showPriorityNotice(
         withSubtreePassNotice(
           options.buildNotice({
@@ -83245,6 +83763,9 @@ class BobNavigationHotkeysPropertyDependencyMixin {
                 from: expectedScheduledValue,
                 to: rolledValue,
               }),
+          decayRottenLogBody: context.decayRottenLogBody,
+          decayRottenLogDateText: context.decayRottenLogDateText,
+          noticeOverride: context.noticeOverride,
           schedulingWorkLog: schedulingWorkLogForPriority,
           buildNotice: (outcome) =>
             buildPriorityNoticeModel({
@@ -83295,6 +83816,9 @@ class BobNavigationHotkeysPropertyDependencyMixin {
               from: (findBulletPropertyField(currentLine, property.schedules) || {}).value || "",
               to: rolledValue,
             }),
+        decayRottenLogBody: context.decayRottenLogBody,
+        decayRottenLogDateText: context.decayRottenLogDateText,
+        noticeOverride: context.noticeOverride,
         schedulingWorkLog: schedulingWorkLogForPriority,
         buildNotice: (outcome) =>
           buildPriorityNoticeModel({
@@ -102140,6 +102664,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysReviewReturnMixin,
   BobNavigationHotkeysReviewJournalMixin,
   BobNavigationHotkeysDecayCancelMixin,
+  BobNavigationHotkeysDecayCardWriterMixin,
   BobNavigationHotkeysPostCancelEffectsMixin,
   BobNavigationHotkeysCancelPropertyMixin,
   BobNavigationHotkeysCountedRollMixin,
@@ -103323,4 +103848,6 @@ Object.assign(module.exports.helpers, {
   freezeFreshnessDecayPrioritySnapshot,
   loadFreshnessDecayPrioritySnapshot,
   buildFreshnessDecayCardFooter,
+  formatFreshnessDecayRottenLogBody,
+  appendFreshnessDecayRottenLogEntry,
 });

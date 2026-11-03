@@ -279,7 +279,51 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
 
     let scheduleLogOutcome = null;
     let workLogWritten = false;
-    if (foldedDailyContent !== null) {
+    const decayRottenLogBody = normalizeBulletPropertyValue(options.decayRottenLogBody);
+    if (decayRottenLogBody) {
+      const baseContent = foldedDailyContent !== null
+        ? foldedDailyContent
+        : writeContext.content;
+      const source = splitMarkdownContent(baseContent);
+      const mutable = source.lines.slice();
+      if (foldedDailyContent === null && hasTaskLineChange) {
+        mutable[cursor.line] = nextLine;
+      }
+      if (preplannedScheduleLog && preplannedScheduleLog.valid) {
+        applyScheduleLogEntryToLines(mutable, preplannedScheduleLog);
+      }
+      if (wantsWorkLog && workLogSummary) {
+        workLogWritten = insertLaneWorkLogEntry(
+          mutable,
+          effectiveCursorLine,
+          workLogSummary,
+          workLogStampText,
+        );
+      }
+      const inserted = appendFreshnessDecayRottenLogEntry(
+        mutable.join(source.lineEnding),
+        effectiveCursorLine,
+        options.decayRottenLogDateText,
+        decayRottenLogBody,
+      );
+      if (!inserted.ok) {
+        new Notice(freshStampRefusalNotice(inserted.refusal));
+        return false;
+      }
+      scheduleLogOutcome = preplannedScheduleLog
+        ? getScheduleLogWriteOutcome(preplannedScheduleLog, preplannedScheduleLog.valid)
+        : null;
+      const finalContent = inserted.content;
+      if (finalContent !== writeContext.content && !applyEditorContentTransaction(
+        cm,
+        writeContext.content,
+        finalContent,
+        finalCursor,
+      )) {
+        new Notice("Could not update bullet property");
+        return false;
+      }
+    } else if (foldedDailyContent !== null) {
       let finalContent = foldedDailyContent;
       const folded = splitMarkdownContent(foldedDailyContent);
       const mutable = folded.lines.slice();
@@ -444,7 +488,9 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
       stillBlocked: recoveryOutcome === "still-blocked" ? 1 : 0,
       deferred: recoveryOutcome === "deferred" ? 1 : 0,
     };
-    if (typeof options.buildNotice === "function") {
+    if (typeof options.noticeOverride === "string" && options.noticeOverride) {
+      new Notice(options.noticeOverride);
+    } else if (typeof options.buildNotice === "function") {
       showPriorityNotice(
         options.buildNotice({
           blocked,

@@ -179,10 +179,10 @@ cannot be undone from the daily note with one `Ctrl+Z`.
 Direct Depends-On or BLOCKS-line entries, dependency chips, the dependency
 palette command, and decay-card **Less often** entries open their stage
 without first showing the Task Card. The decay card accepts `x` as
-an alias for `d` (Drop). Freshness-decay `Alt+F` cards
-are a separate surface: their header shows the logged keeps, and Keep swaps
-the rows for an in-card reason stage that commits the stamp, increment, and
-Rotten Log entry in one undo.
+an alias for `d` (Drop). Freshness-decay cards are a separate surface: Enter
+steps one rung, Alt+F opens the in-card Stay reason stage, and Step, Stay, and
+Drop write rung-qualified Rotten Log events with the task change in one undo.
+The header shows the logged keeps; Stay stamps and clears the keep count.
 
 ## Related
 

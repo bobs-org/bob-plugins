@@ -957,7 +957,9 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       stillBlocked: plan.stillBlockedTaskCount,
       deferred: plan.deferredRecoveryTaskCount,
     };
-    if (typeof options.buildNotice === "function") {
+    if (typeof options.noticeOverride === "string" && options.noticeOverride) {
+      new Notice(options.noticeOverride);
+    } else if (typeof options.buildNotice === "function") {
       showPriorityNotice(
         withSubtreePassNotice(
           options.buildNotice({

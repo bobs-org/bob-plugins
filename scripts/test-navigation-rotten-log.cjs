@@ -111,6 +111,26 @@ test("entry parsing accepts legacy entries and per-rung tallies", () => {
   }
 });
 
+test("decay-card Step, Stay, and Drop bodies parse as rung history", () => {
+  const cases = [
+    ["step", { rung: "Next", toRung: "Ready", keeps: 3 }, "🍂 Next → Ready · after 3 keeps", "step"],
+    ["stay", { rung: "P2", keeps: 2, reason: "still useful" }, "still useful · stayed at P2 after 2 keeps", "stayed"],
+    ["drop", { rung: "WIP", keeps: 1 }, "🍂 WIP → dropped · after 1 keep", "drop"],
+    ["step", { rung: "P4", toRung: "P4", keeps: 4 }, "🍂 rolled again at P4 · after 4 keeps", "reroll"],
+  ];
+  for (const [kind, details, body, expectedKind] of cases) {
+    assert.equal(h.formatFreshnessDecayRottenLogBody({ kind, ...details }), body);
+    const parsed = h.parseRottenLogEntryBullet(`\t\t- *2026-10-20* — ${body}`);
+    assert.ok(parsed, body);
+    assert.equal(parsed.kind, expectedKind, body);
+    assert.equal(parsed.rung, details.rung, body);
+  }
+  assert.equal(
+    h.formatFreshnessDecayRottenLogBody({ kind: "stay", rung: "Ready", keeps: 1 }),
+    "🤷 no reason given · stayed in Ready after 1 keep",
+  );
+});
+
 test("readRottenLog statuses cover missing, empty, ok, and unknown", () => {
   const missing = h.readRottenLog("- [ ] #task T\n\t- child\n", 0);
   assert.equal(missing.status, "missing");

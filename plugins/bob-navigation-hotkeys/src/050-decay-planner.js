@@ -124,7 +124,7 @@ function planFreshnessDecayExplicitLevelPicks(options = {}) {
       date: formatBulletPropertyDate(rolled.date),
       offset: rolled.offset,
       windowText,
-      reason: formatFreshnessDecayReasonWithKeptTail(baseReason, keeps),
+      reason: formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, "Ready"),
     });
   });
   return Object.freeze(picks);
@@ -139,7 +139,7 @@ function planFreshnessDecayCard(options = {}) {
   const decay = options.freshnessDecay && typeof options.freshnessDecay === "object"
     ? options.freshnessDecay
     : {};
-  const limit = Number.isInteger(decay.keeps) && decay.keeps >= 0
+  const fallbackLimit = Number.isInteger(decay.keeps) && decay.keeps >= 0
     ? decay.keeps
     : Number.isInteger(limitRaw) && limitRaw >= 0
       ? limitRaw
@@ -178,12 +178,26 @@ function planFreshnessDecayCard(options = {}) {
       currentValue = "";
     }
   }
+  const status = getObsidianTaskCheckboxStatus(rawLine);
+  const rung = normalizeBulletPropertyValue(options.rung) ||
+    (status === "/" ? "WIP" : status === "*" ? "Next" : currentValue
+      ? getPriorityRollFromLevelLabel(property, currentValue)
+      : "Ready");
+  const rungLimit = rung === "WIP"
+    ? decay.pending
+    : rung === "Next"
+      ? decay.next
+      : decay.ready;
+  const limit = rungLimit === false
+    ? false
+    : Number.isInteger(rungLimit) && rungLimit >= 0
+      ? rungLimit
+      : fallbackLimit;
   const currentScheduled = normalizeBulletPropertyValue(options.currentScheduled);
   const fromLabel = currentValue
     ? getPriorityRollFromLevelLabel(property, currentValue)
     : IMPLICIT_PRIORITY_LEVEL_LABEL;
-  const reviewNoun = keeps === 1 ? "review" : "reviews";
-  const title = `Kept ${keeps} ${reviewNoun} in a row`;
+  const title = `Kept ${keeps}× ${rottenKeepRungPreposition(rung)} ${rung}`;
 
   const unavailable = (reason) =>
     Object.freeze({
@@ -219,7 +233,7 @@ function planFreshnessDecayCard(options = {}) {
         if (!baseReason) {
           notNow = unavailable("cannot describe the P0 entry");
         } else {
-          const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps);
+          const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, rung);
           notNow = Object.freeze({
             available: true,
             unavailableReason: null,
@@ -270,7 +284,7 @@ function planFreshnessDecayCard(options = {}) {
         if (!Number.isInteger(planned.offset) || planned.offset < 1 || !planned.date) {
           notNow = unavailable("no future date in this level's window");
         } else {
-          const reason = formatFreshnessDecayReasonWithKeptTail(planned.reason, keeps);
+          const reason = formatFreshnessDecayReasonWithKeptTail(planned.reason, keeps, rung);
           const payload = planned.kind === "decay"
             ? buildPriorityDecayScheduleLogPayload(currentScheduled, planned.date, reason)
             : shouldWriteAutomaticScheduleLog(currentScheduled, planned.date)
@@ -313,7 +327,7 @@ function planFreshnessDecayCard(options = {}) {
             level,
             rolledDays: rolled.offset,
           });
-          const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps);
+          const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, rung);
           notNow = Object.freeze({
             available: true,
             unavailableReason: null,
@@ -348,6 +362,7 @@ function planFreshnessDecayCard(options = {}) {
       beforeDays: lessOften.beforeDays,
       afterDays: lessOften.afterDays,
       keeps,
+      rung,
     });
     let scheduleLogPlan = null;
     if (content !== null && taskLine !== null) {
@@ -374,7 +389,7 @@ function planFreshnessDecayCard(options = {}) {
     });
   }
 
-  const rewordReason = formatFreshnessDecisionRewordReason({ keeps });
+  const rewordReason = formatFreshnessDecisionRewordReason({ keeps, rung });
   let rewordScheduleLogPlan = null;
   if (content !== null && taskLine !== null) {
     try {
@@ -417,6 +432,21 @@ function planFreshnessDecayCard(options = {}) {
     nextKeeps: Math.min(999, keeps + 1),
   });
 
+  const step = planFreshnessDecayCardStep({
+    rung,
+    keeps,
+    intervalDays,
+    currentValue,
+    currentScheduled,
+    property,
+    priorityLoadError,
+    decayInvalid,
+    decayEnabled,
+    enterLabel,
+    baseDate,
+    random,
+  });
+
   const levels = decayInvalid || !hasPriorityLadder
     ? Object.freeze(
       (property && Array.isArray(property.levels) ? property.levels : []).map((level, index) =>
@@ -447,11 +477,13 @@ function planFreshnessDecayCard(options = {}) {
     error: null,
     keeps,
     limit,
+    rung,
     enterLabel,
     fromLabel,
     title,
     todayText,
     intervalDays: intervalValid ? intervalDays : null,
+    step,
     notNow,
     lessOften,
     reword,
@@ -470,12 +502,10 @@ function planFreshnessDecayCard(options = {}) {
 // noted; never throws.
 
 // The review-walk decision-card capability ledger-tools feature-detects
-// (`api.freshnessDecayCard.version >= 2`). Exposed on the plugin api at
+// (`api.freshnessDecayCard.version >= 3`). Exposed on the plugin api at
 // load; removed again on unload so marks cannot promise an absent card.
-// Version 2 is the ungated handler contract: cards are available as
-// soon as decay is enabled. Bumped only for a breaking card-contract
-// change.
-const FRESHNESS_DECAY_CARD_VERSION = 2;
+// Version 3 adds lane-rung cards and rung-changing card answers.
+const FRESHNESS_DECAY_CARD_VERSION = 3;
 const FRESHNESS_DECAY_CARD_CAPABILITY = Object.freeze({
   version: FRESHNESS_DECAY_CARD_VERSION,
 });
@@ -813,158 +843,56 @@ function resolveFreshnessDecayIntervalDays(api, entry, rawLine, content) {
   return 7;
 }
 
-// One decision-card row: `{ key, action, label, detail, available,
-// unavailableReason, recommended }`. `action` is the commit key the
-// modal hands back (`notNow`, `lessOften`, `reword`, `drop`, `keep`,
-// or `level:N`). Pure; never throws.
+// Rows use the card's task rung. Less often and explicit level picks exist
+// only on Ready; every rung has Step, Stay, Reword, and Drop.
 function buildFreshnessDecayCardRows(plan) {
   try {
     const source = plan && typeof plan === "object" ? plan : {};
     const keeps = normalizeFreshnessDecayKeepsCount(source.keeps);
     const keepNoun = keeps === 1 ? "keep" : "keeps";
+    const rung = normalizeBulletPropertyValue(source.rung) || "Ready";
+    const prep = rottenKeepRungPreposition(rung);
+    const makeRow = (key, action, label, detail, available = true, recommended = false) =>
+      Object.freeze({
+        key, action, label, detail, available,
+        unavailableReason: available ? null : detail,
+        recommended,
+      });
     const backPhrase = (windowText, offset) => {
-      const clean = normalizeBulletPropertyValue(windowText).replace(
-        /\*\*/g,
-        "",
-      );
+      const clean = normalizeBulletPropertyValue(windowText).replace(/\*\*/g, "");
       const windowed = /^in (\d+) (\([^)]*\)) days$/.exec(clean);
-      if (windowed) {
-        return `back in ${windowed[1]} days ${windowed[2]}`;
-      }
-      if (clean) {
-        return `back ${clean}`;
-      }
+      if (windowed) return `back in ${windowed[1]} days ${windowed[2]}`;
+      if (clean) return `back ${clean}`;
       return Number.isInteger(offset) ? `back in ${offset} days` : "back";
     };
     const rows = [];
-    const notNow = source.notNow && typeof source.notNow === "object" ? source.notNow : {};
-    const notNowAvailable = notNow.available === true;
-    if (notNowAvailable) {
-      rows.push(
-        Object.freeze({
-          key: "Enter",
-          action: "notNow",
-          label: "Not now",
-          detail: `${normalizeBulletPropertyValue(notNow.fromLabel) || "P0"} → ${normalizeBulletPropertyValue(notNow.levelLabel)} · ${backPhrase(notNow.windowText, notNow.offset)}`,
-          available: true,
-          unavailableReason: null,
-          recommended: true,
-        }),
-      );
-    } else {
-      rows.push(
-        Object.freeze({
-          key: "Enter",
-          action: "notNow",
-          label: "Not now",
-          detail: normalizeBulletPropertyValue(notNow.unavailableReason) || "Not now is unavailable",
-          available: false,
-          unavailableReason: normalizeBulletPropertyValue(notNow.unavailableReason) || "Not now is unavailable",
-          recommended: false,
-        }),
-      );
+    const step = source.step && typeof source.step === "object" ? source.step : {};
+    const stepAvailable = step.available === true;
+    rows.push(makeRow("Enter", "step", step.label || "Step down",
+      step.detail || step.unavailableReason || "Step unavailable", stepAvailable, stepAvailable));
+    rows.push(makeRow("Alt+F", "stay", `Stay ${prep} ${rung}`,
+      "say why · logs 🥀 · count starts over", true, !stepAvailable));
+    if (rung === "Ready") {
+      const lessOften = source.lessOften && typeof source.lessOften === "object" ? source.lessOften : {};
+      const lessDetail = lessOften.mode === "refresh"
+        ? `review every ${lessOften.afterDays} days instead of ${lessOften.beforeDays}`
+        : lessOften.mode === "picker"
+          ? `choose every ${lessOften.minDays}–${lessOften.maxDays} days…`
+          : normalizeBulletPropertyValue(lessOften.unavailableReason) || "Less often is unavailable";
+      rows.push(makeRow("L", "lessOften", "Less often", lessDetail, lessOften.available === true));
     }
-    const lessOften = source.lessOften && typeof source.lessOften === "object" ? source.lessOften : {};
-    if (lessOften.available === true && lessOften.mode === "refresh") {
-      rows.push(
-        Object.freeze({
-          key: "L",
-          action: "lessOften",
-          label: "Less often",
-          detail: `review every ${lessOften.afterDays} days instead of ${lessOften.beforeDays}`,
-          available: true,
-          unavailableReason: null,
-          recommended: false,
-        }),
-      );
-    } else if (lessOften.available === true && lessOften.mode === "picker") {
-      rows.push(
-        Object.freeze({
-          key: "L",
-          action: "lessOften",
-          label: "Less often",
-          detail: `choose every ${lessOften.minDays}–${lessOften.maxDays} days…`,
-          available: true,
-          unavailableReason: null,
-          recommended: false,
-        }),
-      );
-    } else {
-      rows.push(
-        Object.freeze({
-          key: "L",
-          action: "lessOften",
-          label: "Less often",
-          detail: normalizeBulletPropertyValue(lessOften.unavailableReason) || "Less often is unavailable",
-          available: false,
-          unavailableReason: normalizeBulletPropertyValue(lessOften.unavailableReason) || "Less often is unavailable",
-          recommended: false,
-        }),
-      );
+    rows.push(makeRow("E", "reword", "Reword", "edit the task · count starts over"));
+    rows.push(makeRow("D", "drop", "Drop", `cancel · dropped after ${keeps} ${keepNoun}`));
+    if (rung === "Ready") {
+      (Array.isArray(source.levels) ? source.levels : []).forEach((pick, index) => {
+        const item = pick && typeof pick === "object" ? pick : {};
+        const label = normalizeBulletPropertyValue(item.label) || `P${index + 1}`;
+        const detail = item.available === true
+          ? backPhrase(item.windowText, item.offset)
+          : normalizeBulletPropertyValue(item.unavailableReason) || `${label} is unavailable`;
+        rows.push(makeRow(String(index + 1), `level:${index}`, label, detail, item.available === true));
+      });
     }
-    rows.push(
-      Object.freeze({
-        key: "E",
-        action: "reword",
-        label: "Reword",
-        detail: "edit the task · start the count over",
-        available: true,
-        unavailableReason: null,
-        recommended: false,
-      }),
-    );
-    rows.push(
-      Object.freeze({
-        key: "D",
-        action: "drop",
-        label: "Drop",
-        detail: `cancel · dropped after ${keeps} ${keepNoun}`,
-        available: true,
-        unavailableReason: null,
-        recommended: false,
-      }),
-    );
-    rows.push(
-      Object.freeze({
-        key: "Alt+F",
-        action: "keep",
-        label: "Keep",
-        detail: "say why · logs 🥀 · asks again next review",
-        available: true,
-        unavailableReason: null,
-        recommended: !notNowAvailable,
-      }),
-    );
-    const levels = Array.isArray(source.levels) ? source.levels : [];
-    levels.forEach((pick, index) => {
-      const entry = pick && typeof pick === "object" ? pick : {};
-      const label = normalizeBulletPropertyValue(entry.label) || `P${index + 1}`;
-      if (entry.available === true) {
-        rows.push(
-          Object.freeze({
-            key: String(index + 1),
-            action: `level:${index}`,
-            label,
-            detail: backPhrase(entry.windowText, entry.offset),
-            available: true,
-            unavailableReason: null,
-            recommended: false,
-          }),
-        );
-      } else {
-        rows.push(
-          Object.freeze({
-            key: String(index + 1),
-            action: `level:${index}`,
-            label,
-            detail: normalizeBulletPropertyValue(entry.unavailableReason) || `${label} is unavailable`,
-            available: false,
-            unavailableReason: normalizeBulletPropertyValue(entry.unavailableReason) || `${label} is unavailable`,
-            recommended: false,
-          }),
-        );
-      }
-    });
     return Object.freeze(rows);
   } catch (error) {
     return Object.freeze([]);
@@ -972,8 +900,8 @@ function buildFreshnessDecayCardRows(plan) {
 }
 
 // The review-walk decision card (`docs/freshness.md` §2a): a small
-// keyboard-first modal over one due Ready task at its keep limit. Enter
-// defers but never cancels; Esc changes nothing. The opening gesture is
+// keyboard-first modal over one due task at its rung's keep limit. Enter
+// steps one rung or stays when that step is unavailable; Esc changes nothing. The opening gesture is
 // consumed — key repeat, bubbling, and a double callback cannot approve
 // or apply twice — and the card never opens nested cards. Selection,
 // mouse, and keyboard activate the same action. Never throws out of the

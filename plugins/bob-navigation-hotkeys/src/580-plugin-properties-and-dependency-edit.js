@@ -248,6 +248,9 @@ class BobNavigationHotkeysPropertyDependencyMixin {
                 from: expectedScheduledValue,
                 to: rolledValue,
               }),
+          decayRottenLogBody: context.decayRottenLogBody,
+          decayRottenLogDateText: context.decayRottenLogDateText,
+          noticeOverride: context.noticeOverride,
           schedulingWorkLog: schedulingWorkLogForPriority,
           buildNotice: (outcome) =>
             buildPriorityNoticeModel({
@@ -298,6 +301,9 @@ class BobNavigationHotkeysPropertyDependencyMixin {
               from: (findBulletPropertyField(currentLine, property.schedules) || {}).value || "",
               to: rolledValue,
             }),
+        decayRottenLogBody: context.decayRottenLogBody,
+        decayRottenLogDateText: context.decayRottenLogDateText,
+        noticeOverride: context.noticeOverride,
         schedulingWorkLog: schedulingWorkLogForPriority,
         buildNotice: (outcome) =>
           buildPriorityNoticeModel({

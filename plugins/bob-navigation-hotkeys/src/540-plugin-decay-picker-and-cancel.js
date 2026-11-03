@@ -125,6 +125,7 @@ class BobNavigationHotkeysDecayCancelMixin {
       );
       const reason = formatFreshnessDecisionRewordReason({
         keeps: cardCtx.keeps,
+        rung: cardCtx.rung,
       });
       if (reason !== cardCtx.plan.reword.reason) {
         new Notice(REVIEW_QUEUE_CHANGED_NOTICE);
@@ -186,7 +187,14 @@ class BobNavigationHotkeysDecayCancelMixin {
           lineText: cardCtx.rawLine,
           valueBaseDate: getLocalDateStart(new Date()),
         },
-        { reason },
+        {
+          reason,
+          rottenLogBody: formatFreshnessDecayRottenLogBody({
+            kind: "drop",
+            rung: cardCtx.rung,
+            keeps: cardCtx.keeps,
+          }),
+        },
       );
       if (!ok) {
         return false;
@@ -298,8 +306,14 @@ class BobNavigationHotkeysDecayCancelMixin {
   // counted Alt+N route, and Ctrl+Alt+F selects refresh-and-advance.
   registerReviewRefreshInputListeners() {
     this.handledReviewRefreshEvents = new WeakSet();
+    this.reviewRefreshHeldKeys = new Set();
     const keydownHandler = (event) =>
       this.handleReviewRefreshPhysicalKeydown(event);
+    const keyupHandler = (event) => {
+      if (this.reviewRefreshHeldKeys instanceof Set) {
+        this.reviewRefreshHeldKeys.delete(normalizeFreshnessDecayCardKey(event && event.key));
+      }
+    };
     const targets = [];
     if (typeof window !== "undefined") {
       targets.push(window);
@@ -312,13 +326,21 @@ class BobNavigationHotkeysDecayCancelMixin {
         continue;
       }
       target.addEventListener("keydown", keydownHandler, true);
+      target.addEventListener("keyup", keyupHandler, true);
       this.register(() => {
         target.removeEventListener("keydown", keydownHandler, true);
+        target.removeEventListener("keyup", keyupHandler, true);
       });
     }
   }
 
   handleReviewRefreshPhysicalKeydown(event) {
+    if (event && this.reviewRefreshHeldKeys instanceof Set) {
+      const key = normalizeFreshnessDecayCardKey(event.key);
+      if (key) this.reviewRefreshHeldKeys.add(key);
+      if (event.altKey) this.reviewRefreshHeldKeys.add("alt");
+      if (event.ctrlKey) this.reviewRefreshHeldKeys.add("ctrl");
+    }
     if (event && event.repeat) {
       return false;
     }
@@ -682,7 +704,13 @@ class BobNavigationHotkeysDecayCancelMixin {
         ? picker.valueBaseDate
         : getLocalDateStart(new Date());
     const dateText = formatBulletPropertyDate(baseDate);
-    const cancel = { reason, fallbackReason, baseDate, dateText };
+    const cancel = {
+      reason,
+      fallbackReason,
+      baseDate,
+      dateText,
+      rottenLogBody: String(options.rottenLogBody || "").trim(),
+    };
     if (
       picker.linkSession &&
       picker.linkSession.kind === "task-link" &&
@@ -772,6 +800,22 @@ class BobNavigationHotkeysDecayCancelMixin {
     }
 
     let finalContent = plan.content;
+    if (cancel.rottenLogBody) {
+      const target = plan.cancelled[0];
+      const logged = target
+        ? appendFreshnessDecayRottenLogEntry(
+            finalContent,
+            target.originalLine,
+            cancel.dateText,
+            cancel.rottenLogBody,
+          )
+        : { ok: false, refusal: "rotten-log-invalid" };
+      if (!logged.ok) {
+        new Notice(`${freshStampRefusalNotice(logged.refusal)}; no tasks were updated`);
+        return false;
+      }
+      finalContent = logged.content;
+    }
     let finalCursorLine = plan.cursorLineShift(cursor.line);
     let pomodoroSnapshot = null;
     let dailyCleanupPlan = null;

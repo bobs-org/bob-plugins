@@ -182,6 +182,14 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     return loadFreshnessDecayPrioritySnapshot(options);
   }
 
+  getFreshnessDecayCardOpeningKeys(advance) {
+    const held = this.reviewRefreshHeldKeys instanceof Set
+      ? this.reviewRefreshHeldKeys
+      : new Set();
+    const required = advance === true ? ["ctrl", "alt", "f"] : ["alt", "f"];
+    return Object.freeze(required.filter((key) => held.has(key)));
+  }
+
   // Build the card context for one resolved single-task trigger, or null
   // when the card cannot render (mixed versions, unusable plan) so the
   // caller falls back to counting. Never throws.
@@ -203,7 +211,9 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       const decay = this.readFreshnessDecayPolicy(api);
       const snapshot = this.loadFreshnessDecayPrioritySnapshot();
       const property = snapshot.property;
+      const rung = rottenKeepRungForTarget(raw, entry, property && property.name);
       const keeps = parseKeepsCount(raw);
+      const limit = this.freshnessDecayAllowanceFor(decay, rung);
       const intervalDays = resolveFreshnessDecayIntervalDays(api, entry, raw, content);
       const schedulesName =
         property && typeof property.schedules === "string" ? property.schedules : "";
@@ -225,9 +235,13 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         freshnessDecay: {
           enabled: decay.enabled,
           keeps: decay.keeps,
+          pending: decay.pending,
+          next: decay.next,
+          ready: decay.ready,
           enter: decay.enter,
           invalid: decay.invalid,
         },
+        rung,
         property,
         priorityLoadError: snapshot.loadError,
         baseDate: new Date(),
@@ -269,7 +283,8 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         keeps,
         keepsAfter,
         rottenHistory,
-        limit: decay.keeps,
+        limit,
+        rung,
         intervalDays,
         currentScheduled,
         currentValue,
@@ -279,6 +294,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         priorityConfig,
         priorityLoadError: snapshot.loadError,
         decay,
+        openingKeys: this.getFreshnessDecayCardOpeningKeys(settings.advance === true),
         plan,
         rows: buildFreshnessDecayCardRows(plan),
         subtitle,
@@ -324,6 +340,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         title: cardCtx.plan.title || `Kept ${cardCtx.keeps} reviews in a row`,
         subtitle: cardCtx.subtitle,
         rows: cardCtx.rows,
+        openingKeys: cardCtx.openingKeys,
         rottenHeader: buildFreshnessDecayRottenHeaderLine(cardCtx.rottenHistory),
         rotten: {
           raw: cardCtx.rawLine,
@@ -338,11 +355,11 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           this.activeFreshnessDecayCard = null;
           void this.applyFreshnessDecayCardChoice(cardCtx, action);
         },
-        onKeepReason: (reason) => {
-          // The Keep stage submits asynchronously, so the card context is
+        onStayReason: (reason) => {
+          // The Stay stage submits asynchronously, so the card context is
           // revalidated again at submit inside the choice path.
           this.activeFreshnessDecayCard = null;
-          void this.applyFreshnessDecayCardChoice(cardCtx, "keep", {
+          void this.applyFreshnessDecayCardChoice(cardCtx, "stay", {
             reason,
           });
         },
@@ -391,6 +408,9 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       if (
         decay.enabled !== cardCtx.decay.enabled ||
         decay.keeps !== cardCtx.decay.keeps ||
+        decay.pending !== cardCtx.decay.pending ||
+        decay.next !== cardCtx.decay.next ||
+        decay.ready !== cardCtx.decay.ready ||
         decay.enter !== cardCtx.decay.enter ||
         decay.invalid !== cardCtx.decay.invalid
       ) {
@@ -404,6 +424,9 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       });
       if (match.ok !== true || !isFreshnessDecayDecisionEntry(match.entry)) {
         return stale("eligibility");
+      }
+      if (rottenKeepRungForTarget(liveLine, match.entry, cardCtx.property && cardCtx.property.name) !== cardCtx.rung) {
+        return stale("rung");
       }
       if (parseKeepsCount(liveLine) !== cardCtx.keeps) {
         return stale("keeps");
@@ -521,7 +544,12 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       }
       const key = String(action || "");
       let applied = false;
-      if (key === "notNow") {
+      if (key === "step") {
+        applied = await this.applyFreshnessDecayCardStep(cardCtx, check.live);
+      } else if (key === "stay") {
+        const reason = options && typeof options.reason === "string" ? options.reason : "";
+        applied = await this.applyFreshnessDecayCardStay(cardCtx, check.live, reason);
+      } else if (key === "notNow") {
         applied = await this.applyFreshnessDecayCardDeferral(
           cardCtx,
           check.live,
@@ -626,7 +654,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
     }
   }
 
-  // Not now (Enter) and explicit 1–4 picks: preview and apply a deferral
+  // Ready priority picks: preview and apply a deferral
   // through the existing priority writer. The previewed date persists
   // (what you see is what you get); Enter never cancels, including past
   // the last ladder level, where the planner already substituted a
@@ -729,6 +757,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
         beforeDays,
         afterDays: days,
         keeps: cardCtx.keeps,
+        rung: cardCtx.rung,
       });
       if (!reason) {
         new Notice("Could not update task; no tasks were updated");

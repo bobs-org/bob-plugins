@@ -166,11 +166,17 @@ function copyPluginFiles(sourceDir, targetDir) {
 }
 
 function findTasksPluginSource() {
-  const candidates = [path.join(os.homedir(), "bob", ".obsidian", "plugins", "obsidian-tasks-plugin")];
+  const configured = process.env.BOB_E2E_TASKS_PLUGIN_DIR;
+  const candidates = configured
+    ? [path.resolve(configured)]
+    : [path.join(os.homedir(), "bob", ".obsidian", "plugins", "obsidian-tasks-plugin")];
   for (const candidate of candidates) {
     if (fs.existsSync(path.join(candidate, "main.js")) && fs.existsSync(path.join(candidate, "manifest.json"))) {
       return candidate;
     }
+  }
+  if (configured) {
+    throw new Error(`BOB_E2E_TASKS_PLUGIN_DIR does not contain main.js and manifest.json: ${path.resolve(configured)}`);
   }
   return null;
 }
@@ -368,10 +374,27 @@ const VAULT_PATH_PROBE = `(() => { try {
 } catch { return null; } })()`;
 
 const CARD_PROBE = `(() => { try {
-  const modal = document.querySelector(".bob-decay-card-modal, .modal.bob-decay-card-modal");
-  const card = document.querySelector(".bob-decay-card");
+  const app = window.app;
+  const appDocument = app && app.workspace && app.workspace.containerEl && app.workspace.containerEl.ownerDocument;
+  const nav = app && app.plugins && app.plugins.plugins && app.plugins.plugins["bob-navigation-hotkeys"];
+  const activeModal = nav && nav.activeFreshnessDecayCard;
+  const modalDocument = activeModal && activeModal.containerEl && activeModal.containerEl.ownerDocument;
+  const ownerDocumentMatchesApp = Boolean(modalDocument && modalDocument === appDocument);
+  const documentContext = {
+    currentUrl: String(document.URL || ""),
+    currentIsApp: Boolean(appDocument && document === appDocument),
+    appUrl: String(appDocument && appDocument.URL || ""),
+    appWindowIsCurrent: Boolean(appDocument && appDocument.defaultView === window),
+    modalUrl: String(modalDocument && modalDocument.URL || ""),
+    modalIsCurrent: Boolean(modalDocument && modalDocument === document),
+    currentModalCount: document.querySelectorAll(".bob-decay-card-modal, .modal.bob-decay-card-modal").length,
+    appModalCount: appDocument && appDocument.querySelectorAll ? appDocument.querySelectorAll(".bob-decay-card-modal, .modal.bob-decay-card-modal").length : null,
+  };
+  const queryDocument = appDocument || document;
+  const modal = queryDocument.querySelector(".bob-decay-card-modal, .modal.bob-decay-card-modal");
+  const card = queryDocument.querySelector(".bob-decay-card");
   const root = card || (modal && modal.querySelector && modal.querySelector(".bob-decay-card")) || modal;
-  if (!root) return { open: false };
+  if (!root) return { open: false, ownerDocumentMatchesApp, documentContext };
   const title = (root.querySelector(".bob-decay-card-title") || {}).textContent || "";
   const subtitle = (root.querySelector(".bob-decay-card-subtitle") || {}).textContent || "";
   const rotten = (root.querySelector(".bob-decay-card-rotten") || {}).textContent || "";
@@ -391,7 +414,7 @@ const CARD_PROBE = `(() => { try {
     else if (/^[1-4]/.test(key)) action = "level";
     return { key, label, detail, recommended, action, available: !row.classList.contains("is-unavailable") };
   });
-  return { open: true, title: String(title).trim(), subtitle: String(subtitle).trim(), rotten: String(rotten).trim(), footer: String(footer).trim(), stayStage, rows };
+  return { open: ownerDocumentMatchesApp, ownerDocumentMatchesApp, documentContext, title: String(title).trim(), subtitle: String(subtitle).trim(), rotten: String(rotten).trim(), footer: String(footer).trim(), stayStage, rows };
 } catch (e) { return { open: false, error: String(e && e.message || e) }; } })()`;
 
 function runSelfTest() {
@@ -440,6 +463,9 @@ function runSelfTest() {
     if (asserts.skipNotice(2) !== "2 need a decision") throw new Error("skip 2");
     const skipOk = asserts.assertSkipNotice("stamped 0 · 2 need a decision", 2);
     if (!skipOk.ok) throw new Error(skipOk.reason);
+    const skipTaskNotice = asserts.assertSkipNotice("2 tasks need a decision · the review walk reaches it later", 2);
+    if (!skipTaskNotice.ok) throw new Error(skipTaskNotice.reason);
+    if (asserts.assertSkipNotice("12 tasks need a decision", 2).ok) throw new Error("skip count must match exactly");
     const skipBad = asserts.assertSkipNotice("ok", 2);
     if (skipBad.ok) throw new Error("empty skip notice must fail");
 
@@ -502,6 +528,16 @@ function runSelfTest() {
     if (!source.includes("theme-light")) throw new Error("e2e must capture light theme");
     if (!source.includes("undoEditor") && !source.includes("editor.undo")) throw new Error("e2e must undo");
     if (!source.includes("countExplicit")) throw new Error("e2e must cover counted batch skip");
+    if (!source.includes("view.save") || !source.includes("waitForFreshnessQueueLine")) {
+      throw new Error("e2e must save editor writes and wait for the refreshed freshness queue");
+    }
+    if (!source.includes("Input.dispatchKeyEvent") || !source.includes("waitForEditorTask")) {
+      throw new Error("e2e must send real card key input and wait for each task write");
+    }
+    if (!source.includes("BOB_E2E_TASKS_PLUGIN_DIR")) {
+      throw new Error("e2e must support an isolated Tasks plugin source without reading the live vault");
+    }
+    if (!source.includes("MutationObserver")) throw new Error("e2e must capture transient batch notices");
     if (!source.includes("CARD_TITLES.p4") && !source.includes("Kept 2× at P4")) {
       throw new Error("e2e must capture the P4 card");
     }
@@ -509,6 +545,16 @@ function runSelfTest() {
     if (!source.includes("altKey: true")) throw new Error("e2e must dispatch Alt+F on the card");
     if (!source.includes("freshnessDecayConfigLoadOptions")) {
       throw new Error("e2e must pin the priority-ladder config path");
+    }
+    const altChord = buildKeyDispatchEvents({ key: "f", code: "KeyF", alt: true });
+    const altEvents = altChord.map(({ key, type, modifiers }) => ({ key, type, modifiers }));
+    if (JSON.stringify(altEvents) !== JSON.stringify([
+      { key: "Alt", type: "keyDown", modifiers: 1 },
+      { key: "f", type: "keyDown", modifiers: 1 },
+      { key: "f", type: "keyUp", modifiers: 1 },
+      { key: "Alt", type: "keyUp", modifiers: 0 },
+    ])) {
+      throw new Error("Alt chord input must dispatch a real modifier keyup");
     }
     console.log("offline self-test complete (not an Obsidian pass)");
   } finally {
@@ -652,6 +698,7 @@ async function pinToday(client, dateText, configPath) {
         if (options && typeof options.dateText === "string" && options.dateText) return String(options.dateText);
         return day;
       };
+      nav.getFreshnessDateText = () => day;
       if (configPath) nav.freshnessDecayConfigLoadOptions = { configPath };
     }
     try { Math.random = () => 0; } catch (error) {}
@@ -666,6 +713,119 @@ async function editorContent(client) {
     if (!editor || typeof editor.getValue !== "function") return { ok: false, error: "no editor" };
     return { ok: true, value: editor.getValue() };
   })()`);
+}
+
+async function saveActiveEditor(client) {
+  const result = await client.evaluate(`(() => (async () => {
+    const leaf = window.app.workspace.activeLeaf;
+    const view = leaf && leaf.view;
+    if (!view || typeof view.save !== "function") return { ok: false, error: "no markdown view save" };
+    await view.save();
+    return { ok: true, path: view.file && view.file.path || "" };
+  })())()`, 15_000);
+  if (!result || result.ok !== true) {
+    throw new Error(`could not save the active editor: ${JSON.stringify(result)}`);
+  }
+  return result;
+}
+
+async function currentTaskLine(client, description) {
+  const current = await editorContent(client);
+  if (!current || current.ok !== true) throw new Error("cannot read active editor after write");
+  const line = asserts.extractTaskLine(current.value, description);
+  if (typeof line !== "string" || !line) throw new Error(`missing task line after write: ${description}`);
+  return line;
+}
+
+async function waitForEditorTask(client, description, predicate, timeoutMs = 8_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = "";
+  while (Date.now() < deadline) {
+    const current = await editorContent(client).catch(() => null);
+    last = current && current.ok
+      ? asserts.extractTaskLine(current.value, description)
+      : "editor content unavailable";
+    if (last && predicate(asserts.parseTaskLine(last))) return last;
+    await sleep(100);
+  }
+  return null;
+}
+
+async function waitForTaskCacheLine(client, description, expectedLine, timeoutMs = 10_000) {
+  const expression = `(() => {
+    const leaf = window.app.workspace.activeLeaf;
+    const filePath = leaf && leaf.view && leaf.view.file && leaf.view.file.path || "";
+    const plugins = window.app.plugins.plugins;
+    const holder = plugins && plugins["obsidian-tasks-plugin"];
+    const api = [holder && holder.apiV1, holder && holder.api, holder]
+      .find((candidate) => candidate && typeof candidate.getTasks === "function");
+    if (!api || typeof api.getTasks !== "function") return { ready: false, error: "Tasks API unavailable" };
+    let tasks = [];
+    try { tasks = api.getTasks(); } catch (error) { return { ready: false, error: String(error) }; }
+    if (!Array.isArray(tasks)) return { ready: false, error: "Tasks cache is not an array" };
+    const expected = ${JSON.stringify(expectedLine)};
+    const row = tasks.find((task) => task && task.path === filePath && String(task.originalMarkdown || "") === expected);
+    return { ready: Boolean(row), filePath, cached: row && row.originalMarkdown || "", count: tasks.length };
+  })()`;
+  return waitFor(client, expression, (value) => value && value.ready === true,
+    `Tasks cache line for ${description}`, timeoutMs);
+}
+
+async function flushAndWaitForTaskCache(client, description) {
+  await saveActiveEditor(client);
+  const line = await currentTaskLine(client, description);
+  return waitForTaskCacheLine(client, description, line);
+}
+
+async function waitForFreshnessQueueLine(client, description, timeoutMs = 10_000) {
+  const line = await currentTaskLine(client, description);
+  const expression = `(() => {
+    const leaf = window.app.workspace.activeLeaf;
+    const filePath = leaf && leaf.view && leaf.view.file && leaf.view.file.path || "";
+    const holder = window.app.plugins.plugins["bob-ledger-tools"];
+    const api = holder && holder.api && holder.api.freshness;
+    if (!api || typeof api.queue !== "function") return { ready: false, error: "freshness queue unavailable" };
+    const queue = api.queue();
+    const expected = ${JSON.stringify(line)};
+    const row = Array.isArray(queue) && queue.find((task) => task && task.path === filePath && String(task.originalMarkdown || "") === expected);
+    return { ready: Boolean(row), filePath, queued: row && row.originalMarkdown || "", count: Array.isArray(queue) ? queue.length : 0 };
+  })()`;
+  return waitFor(client, expression, (value) => value && value.ready === true,
+    `freshness queue line for ${description}`, timeoutMs);
+}
+
+async function beginNoticeCapture(client) {
+  return client.evaluate(`(() => {
+    if (window.__bobDecayNoticeObserver) window.__bobDecayNoticeObserver.disconnect();
+    const seen = [];
+    const remember = (node) => {
+      if (!(node instanceof Element)) return;
+      const notices = [];
+      if (node.matches(".notice")) notices.push(node);
+      notices.push(...node.querySelectorAll(".notice"));
+      for (const notice of notices) {
+        const text = String(notice.textContent || "").trim();
+        if (text) seen.push(text);
+      }
+    };
+    const observer = new MutationObserver((records) => {
+      for (const record of records) for (const node of record.addedNodes) remember(node);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.__bobDecayNoticeCapture = seen;
+    window.__bobDecayNoticeObserver = observer;
+    return { ok: true };
+  })()`);
+}
+
+async function endNoticeCapture(client) {
+  return client.evaluate(`(() => {
+    if (window.__bobDecayNoticeObserver) window.__bobDecayNoticeObserver.disconnect();
+    const all = Array.isArray(window.__bobDecayNoticeCapture) ? window.__bobDecayNoticeCapture.slice() : [];
+    delete window.__bobDecayNoticeObserver;
+    delete window.__bobDecayNoticeCapture;
+    return { text: all[all.length - 1] || "", all };
+  })()`).catch(() => ({ text: "", all: [] }));
 }
 
 async function placeCursor(client, description) {
@@ -713,6 +873,53 @@ async function refreshKeep(client, options) {
   );
 }
 
+async function startRefreshKeep(client, options) {
+  const payload = {
+    dateText: options.dateText,
+    keepReason: options.keepReason,
+    countExplicit: options.countExplicit === true,
+    additionalTaskCount: options.additionalTaskCount || 0,
+  };
+  return client.evaluate(`(() => {
+    const nav = window.app.plugins.plugins["bob-navigation-hotkeys"];
+    const leaf = window.app.workspace.activeLeaf;
+    const editor = leaf && leaf.view && leaf.view.editor;
+    if (!nav || !editor) return { ok: false, error: "missing plugin or editor" };
+    const opts = ${JSON.stringify(payload)};
+    window.__bobDecayE2ePendingRefresh = nav.refreshTaskFreshness(editor, opts);
+    return {
+      ok: true,
+      activeCard: Boolean(nav.activeFreshnessDecayCard),
+    };
+  })()`);
+}
+
+async function finishRefreshKeep(client) {
+  return client.evaluate(`(() => (async () => {
+    const pending = window.__bobDecayE2ePendingRefresh;
+    if (!pending) return { ok: false, error: "refresh was not started" };
+    try {
+      const result = await pending;
+      return { ok: true, result };
+    } finally {
+      delete window.__bobDecayE2ePendingRefresh;
+    }
+  })())()`, 30_000);
+}
+
+async function cancelPendingRefreshModal(client) {
+  return client.evaluate(`(() => {
+    const stack = window.app.workspace.modalStack;
+    const nav = window.app.plugins.plugins["bob-navigation-hotkeys"];
+    const modal = nav && nav.activeFreshnessDecayCard || (Array.isArray(stack) ? stack[stack.length - 1] : null);
+    if (modal && typeof modal.close === "function") {
+      modal.close();
+      return { closed: true, name: modal.constructor && modal.constructor.name || "Modal" };
+    }
+    return { closed: false, count: Array.isArray(stack) ? stack.length : null };
+  })()`);
+}
+
 async function undoEditor(client) {
   return client.evaluate(`(() => {
     const leaf = window.app.workspace.activeLeaf;
@@ -728,21 +935,87 @@ async function cardKey(client, options) {
   const code = options && options.code
     ? String(options.code)
     : key === "Enter" ? "Enter" : key.length === 1 ? `Key${key.toUpperCase()}` : key;
-  return client.evaluate(`(() => {
-    const card = document.querySelector(".bob-decay-card");
-    if (!card) return { ok: false, error: "no card" };
-    const init = {
-      key: ${JSON.stringify(key)},
-      code: ${JSON.stringify(code)},
-      altKey: ${options && options.alt === true},
-      ctrlKey: ${options && options.ctrl === true},
-      bubbles: true,
-      cancelable: true,
+  const focus = await client.evaluate(`(() => {
+    const app = window.app;
+    const appDocument = app && app.workspace && app.workspace.containerEl && app.workspace.containerEl.ownerDocument;
+    const nav = app && app.plugins && app.plugins.plugins && app.plugins.plugins["bob-navigation-hotkeys"];
+    const modal = nav && nav.activeFreshnessDecayCard;
+    const card = appDocument && appDocument.querySelector(".bob-decay-card");
+    if (!card) return { ok: false, error: "no card in the app document" };
+    const input = card.querySelector("input, textarea");
+    const row = ${JSON.stringify(key)} === "Enter"
+      ? card.querySelector(".bob-decay-card-recommended")?.closest(".bob-decay-card-row")
+        || card.querySelector(".bob-decay-card-row[tabindex='0']")
+      : card.querySelector(".bob-decay-card-row[tabindex='0']");
+    const target = ${JSON.stringify(key)} === "Enter" && input ? input : row;
+    if (target && typeof target.focus === "function") target.focus();
+    return {
+      ok: true,
+      currentIsApp: document === appDocument,
+      ownerDocumentMatchesApp: card.ownerDocument === appDocument,
+      focused: Boolean(target && appDocument.activeElement === target),
+      rowLabel: row && row.querySelector(".bob-decay-card-label") && row.querySelector(".bob-decay-card-label").textContent || "",
+      rowAction: row && Array.from(card.querySelectorAll(".bob-decay-card-row")).indexOf(row),
+      openingKeys: Array.from(modal && modal.openingChordKeys || []),
     };
-    card.dispatchEvent(new KeyboardEvent("keydown", init));
-    card.dispatchEvent(new KeyboardEvent("keyup", init));
-    return { ok: true, key: init.key, altKey: init.altKey };
   })()`);
+  if (!focus || focus.ok !== true || focus.currentIsApp !== true || focus.ownerDocumentMatchesApp !== true || focus.focused !== true) {
+    return { ok: false, error: "cannot target decay card keyboard input", focus };
+  }
+  try {
+    const events = buildKeyDispatchEvents(options);
+    for (const event of events) {
+      await client.call("Input.dispatchKeyEvent", event, 5000);
+    }
+    const modifiers = events.find((event) => event.key === key && event.type === "keyDown")?.modifiers || 0;
+    return { ok: true, key, modifiers, focus };
+  } catch (error) {
+    return { ok: false, error: String(error && error.message || error), focus };
+  }
+}
+
+function buildKeyDispatchEvents(options) {
+  const settings = options && typeof options === "object" ? options : {};
+  const key = settings.key != null ? String(settings.key) : "";
+  const code = settings.code
+    ? String(settings.code)
+    : key === "Enter" ? "Enter" : key.length === 1 ? `Key${key.toUpperCase()}` : key;
+  const modifiers = [
+    { enabled: settings.ctrl === true, bit: 2, key: "Control", code: "ControlLeft", vk: 17 },
+    { enabled: settings.alt === true, bit: 1, key: "Alt", code: "AltLeft", vk: 18 },
+    { enabled: settings.shift === true, bit: 8, key: "Shift", code: "ShiftLeft", vk: 16 },
+    { enabled: settings.meta === true, bit: 4, key: "Meta", code: "MetaLeft", vk: 91 },
+  ].filter((item) => item.enabled);
+  const keyCode = key === "Enter" ? 13 : key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0;
+  let mask = 0;
+  const events = [];
+  for (const modifier of modifiers) {
+    mask |= modifier.bit;
+    events.push({
+      type: "keyDown",
+      key: modifier.key,
+      code: modifier.code,
+      modifiers: mask,
+      windowsVirtualKeyCode: modifier.vk,
+      nativeVirtualKeyCode: modifier.vk,
+    });
+  }
+  events.push(
+    { type: "keyDown", key, code, modifiers: mask, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode },
+    { type: "keyUp", key, code, modifiers: mask, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode },
+  );
+  for (const modifier of modifiers.slice().reverse()) {
+    mask &= ~modifier.bit;
+    events.push({
+      type: "keyUp",
+      key: modifier.key,
+      code: modifier.code,
+      modifiers: mask,
+      windowsVirtualKeyCode: modifier.vk,
+      nativeVirtualKeyCode: modifier.vk,
+    });
+  }
+  return events;
 }
 
 async function submitStayReason(client, reason) {
@@ -912,7 +1185,9 @@ async function runE2e(parsed) {
     for (let i = 0; i < 48; i += 1) {
       tasksReady = await client.evaluate(`(() => { try {
         const tasksPlugin = window.app.plugins.plugins["obsidian-tasks-plugin"];
-        const all = tasksPlugin && typeof tasksPlugin.getTasks === "function" ? tasksPlugin.getTasks() : null;
+        const tasksApi = [tasksPlugin && tasksPlugin.apiV1, tasksPlugin && tasksPlugin.api, tasksPlugin]
+          .find((candidate) => candidate && typeof candidate.getTasks === "function");
+        const all = tasksApi ? tasksApi.getTasks() : null;
         const ids = Array.isArray(all) ? all.map((task) => String((task && (task.id || task.taskId)) || "")).filter(Boolean) : [];
         const want = ["wip-1", "next-1", "ready-1", "p4-1", "skip-a", "skip-b"];
         const missing = want.filter((id) => !ids.includes(id));
@@ -938,7 +1213,7 @@ async function runE2e(parsed) {
     const configPath = fixture.configPath;
     async function keepOn(description, dateText, reason, extra) {
       await pinToday(client, dateText, configPath);
-      await sleep(200);
+      await waitForFreshnessQueueLine(client, description);
       const cursor = await placeCursor(client, description);
       if (!cursor || !cursor.ok) return { ok: false, error: cursor && cursor.error || "cursor", cursor };
       const result = await refreshKeep(client, {
@@ -947,18 +1222,36 @@ async function runE2e(parsed) {
         countExplicit: extra && extra.countExplicit,
         additionalTaskCount: extra && extra.additionalTaskCount,
       });
-      await sleep(400);
+      if (result && result.ok) await flushAndWaitForTaskCache(client, description);
       return { ok: Boolean(result && result.ok), result, cursor, content: await contentOf() };
     }
 
     async function openCardOn(description, dateText) {
       await pinToday(client, dateText, configPath);
-      await sleep(200);
+      await waitForFreshnessQueueLine(client, description);
       const cursor = await placeCursor(client, description);
       if (!cursor || !cursor.ok) return { ok: false, error: cursor && cursor.error || "cursor" };
-      const pending = refreshKeep(client, { dateText });
-      const card = await waitForCard(client, 10_000).catch((error) => ({ open: false, error: error.message }));
-      return { pending, card, cursor };
+      const started = await startRefreshKeep(client, { dateText });
+      if (!started || started.ok !== true) {
+        return { card: { open: false, error: started && started.error || "refresh did not start" }, cursor };
+      }
+      let card = null;
+      const probeDeadline = Date.now() + 10_000;
+      while (Date.now() < probeDeadline) {
+        card = await client.evaluate(CARD_PROBE).catch((error) => ({ open: false, error: String(error) }));
+        if (card && card.open === true) break;
+        await sleep(100);
+      }
+      if (!card || card.open !== true) {
+        await cancelPendingRefreshModal(client).catch(() => ({ closed: false }));
+        await finishRefreshKeep(client).catch(() => ({ ok: false }));
+        card = {
+          ...(card || {}),
+          open: false,
+          error: card && card.error || "timed out waiting for decay card in the app document",
+        };
+      }
+      return { finish: () => finishRefreshKeep(client), card, cursor };
     }
 
     // --- WIP: keep 1, keep 2, card, step, undo, drop ---
@@ -990,14 +1283,19 @@ async function runE2e(parsed) {
       stepLabel: asserts.CARD_STEP_LABELS.wip,
       omitLevels: true,
     });
-    record("wip-card-open", wipCardAssert.ok, wipCardAssert.reason || JSON.stringify(wipCard.card).slice(0, 240));
+    record("wip-card-open", wipCardAssert.ok, wipCardAssert.reason
+      ? wipCardAssert.reason
+      : JSON.stringify(wipCard.card).slice(0, 240));
     if (wipCard.card && wipCard.card.open) {
       await captureCard(client, outDir, "wip", report);
       record("wip-card-screenshots", true, "light+dark");
-      await cardKey(client, { key: "Enter" });
-      await waitForCardClosed(client, 8_000).catch(() => ({ open: true }));
-      await (wipCard.pending || Promise.resolve());
-      await sleep(400);
+      const input = await cardKey(client, { key: "Enter" });
+      record("wip-step-input", input.ok, JSON.stringify(input).slice(0, 2400));
+      const closed = await waitForCardClosed(client, 8_000).catch(() => null);
+      if (!closed || closed.open === true) await cancelPendingRefreshModal(client).catch(() => ({ closed: false }));
+      await wipCard.finish();
+      await waitForEditorTask(client, T.wip.description, (task) => task.status === "*" && task.fresh === d.day3);
+      await flushAndWaitForTaskCache(client, T.wip.description);
     }
     const wipStepped = await contentOf();
     record("wip-step-line", asserts.assertTaskFields(asserts.extractTaskLine(wipStepped, T.wip.description), {
@@ -1011,19 +1309,22 @@ async function runE2e(parsed) {
     record("wip-step-no-work-log", asserts.assertNoWorkLog(wipStepped).ok, "");
 
     const undone = await undoEditor(client);
-    await sleep(200);
+    await flushAndWaitForTaskCache(client, T.wip.description);
     const wipUndone = undone && undone.value || await contentOf();
     record("wip-undo-restores", asserts.assertTaskFields(asserts.extractTaskLine(wipUndone, T.wip.description), {
       status: "/", fresh: d.day2, keeps: 2, id: T.wip.id,
     }).ok, asserts.extractTaskLine(wipUndone, T.wip.description));
 
     const wipDropCard = await openCardOn(T.wip.description, d.day3);
-    record("wip-drop-card-open", Boolean(wipDropCard.card && wipDropCard.card.open), JSON.stringify(wipDropCard.card).slice(0, 160));
+    record("wip-drop-card-open", Boolean(wipDropCard.card && wipDropCard.card.open), wipDropCard.card && wipDropCard.card.documentContext && wipDropCard.card.documentContext.currentUrl || "card unavailable");
     if (wipDropCard.card && wipDropCard.card.open) {
-      await cardKey(client, { key: "d", code: "KeyD" });
-      await waitForCardClosed(client, 8_000).catch(() => ({ open: true }));
-      await (wipDropCard.pending || Promise.resolve());
-      await sleep(400);
+      const input = await cardKey(client, { key: "d", code: "KeyD" });
+      record("wip-drop-input", input.ok, JSON.stringify(input).slice(0, 240));
+      const closed = await waitForCardClosed(client, 8_000).catch(() => null);
+      if (!closed || closed.open === true) await cancelPendingRefreshModal(client).catch(() => ({ closed: false }));
+      await wipDropCard.finish();
+      await waitForEditorTask(client, T.wip.description, (task) => task.status === "-");
+      await flushAndWaitForTaskCache(client, T.wip.description);
     }
     const wipDropped = await contentOf();
     record("wip-drop-line", asserts.assertTaskFields(asserts.extractTaskLine(wipDropped, T.wip.description), {
@@ -1052,17 +1353,23 @@ async function runE2e(parsed) {
       stepLabel: asserts.CARD_STEP_LABELS.next,
       omitLevels: true,
     });
-    record("next-card-open", nextCardAssert.ok, nextCardAssert.reason || JSON.stringify(nextCard.card).slice(0, 200));
+    record("next-card-open", nextCardAssert.ok, nextCardAssert.reason
+      ? nextCardAssert.reason
+      : JSON.stringify(nextCard.card).slice(0, 200));
     if (nextCard.card && nextCard.card.open) {
-      await cardKey(client, { key: "f", code: "KeyF", alt: true });
+      const input = await cardKey(client, { key: "f", code: "KeyF", alt: true });
+      record("next-stay-input", input.ok, JSON.stringify(input).slice(0, 240));
       await sleep(300);
       const stayReady = await waitFor(client, CARD_PROBE, (value) => value && value.stayStage === true, "stay-stage", 6_000).catch(() => ({ stayStage: false }));
       record("next-stay-stage", Boolean(stayReady && stayReady.stayStage), JSON.stringify(stayReady).slice(0, 160));
       await submitStayReason(client, "still the next thing");
-      await cardKey(client, { key: "Enter" });
-      await waitForCardClosed(client, 8_000).catch(() => ({ open: true }));
-      await (nextCard.pending || Promise.resolve());
-      await sleep(400);
+      const submitted = await cardKey(client, { key: "Enter" });
+      record("next-stay-submit-input", submitted.ok, JSON.stringify(submitted).slice(0, 240));
+      const closed = await waitForCardClosed(client, 8_000).catch(() => null);
+      if (!closed || closed.open === true) await cancelPendingRefreshModal(client).catch(() => ({ closed: false }));
+      await nextCard.finish();
+      await waitForEditorTask(client, T.next.description, (task) => task.status === "*" && task.fresh === d.day3 && task.keeps == null);
+      await flushAndWaitForTaskCache(client, T.next.description);
     }
     const nextStayed = await contentOf();
     record("next-stay-line", asserts.assertTaskFields(asserts.extractTaskLine(nextStayed, T.next.description), {
@@ -1094,19 +1401,24 @@ async function runE2e(parsed) {
       title: asserts.CARD_TITLES.ready,
       stepLabel: asserts.CARD_STEP_LABELS.ready,
     });
-    record("ready-card-open", readyCardAssert.ok, readyCardAssert.reason || JSON.stringify(readyCard.card).slice(0, 240));
+    record("ready-card-open", readyCardAssert.ok, readyCardAssert.reason
+      ? readyCardAssert.reason
+      : JSON.stringify(readyCard.card).slice(0, 240));
     if (readyCard.card && readyCard.card.open) {
       await captureCard(client, outDir, "ready", report);
       record("ready-card-screenshots", true, "light+dark");
-      await cardKey(client, { key: "Enter" });
-      await waitForCardClosed(client, 8_000).catch(() => ({ open: true }));
-      await (readyCard.pending || Promise.resolve());
-      await sleep(400);
+      const input = await cardKey(client, { key: "Enter" });
+      record("ready-step-input", input.ok, JSON.stringify(input).slice(0, 240));
+      const closed = await waitForCardClosed(client, 8_000).catch(() => null);
+      if (!closed || closed.open === true) await cancelPendingRefreshModal(client).catch(() => ({ closed: false }));
+      await readyCard.finish();
+      await waitForEditorTask(client, T.ready.description, (task) => task.status === " " && task.priority === "high" && task.fresh === d.day3);
+      await flushAndWaitForTaskCache(client, T.ready.description);
     }
     const readyStepped = await contentOf();
     const readyLine = asserts.extractTaskLine(readyStepped, T.ready.description);
     const readyFields = asserts.parseTaskLine(readyLine);
-    record("ready-step-line", readyFields.status === " " && readyFields.priority === "high" && readyFields.fresh === d.day3 && readyFields.keeps == null, readyLine);
+    record("ready-step-line", readyFields.status === "?" && readyFields.priority === "high" && readyFields.fresh === d.day3 && readyFields.keeps == null, readyLine);
     record("ready-step-p1-window", asserts.inP1Window(readyFields.scheduled, d.day3) || asserts.inP1Window(readyFields.scheduled, dates.today), `scheduled=${readyFields.scheduled}`);
     record("ready-step-log", asserts.extractRottenLogBodies(readyStepped, T.ready.description).some((row) => row.body === asserts.stepBody("Ready", "P1", 2)), JSON.stringify(asserts.extractRottenLogBodies(readyStepped, T.ready.description)));
 
@@ -1115,46 +1427,60 @@ async function runE2e(parsed) {
     record("p4-keep-1-line", asserts.assertTaskFields(asserts.extractTaskLine(p4Keep1.content, T.p4.description), {
       status: " ", fresh: d.day1, keeps: 1, id: T.p4.id, priority: "lowest",
     }).ok, asserts.extractTaskLine(p4Keep1.content, T.p4.description));
+    record("p4-keep-1-log", asserts.assertLogBodies(p4Keep1.content, T.p4.description, [
+      { date: d.day1, body: asserts.keptBody("bottom of the ladder", 1, "P4") },
+    ]).ok, JSON.stringify(asserts.extractRottenLogBodies(p4Keep1.content, T.p4.description)));
     const p4Keep2 = await keepOn(T.p4.description, d.day2, "");
     record("p4-keep-2-line", asserts.assertTaskFields(asserts.extractTaskLine(p4Keep2.content, T.p4.description), {
       status: " ", fresh: d.day2, keeps: 2, id: T.p4.id, priority: "lowest",
     }).ok, asserts.extractTaskLine(p4Keep2.content, T.p4.description));
+    record("p4-keep-2-log", asserts.assertLogBodies(p4Keep2.content, T.p4.description, [
+      { date: d.day2, body: asserts.keptBody("", 2, "P4") },
+      { date: d.day1, body: asserts.keptBody("bottom of the ladder", 1, "P4") },
+    ]).ok, JSON.stringify(asserts.extractRottenLogBodies(p4Keep2.content, T.p4.description)));
 
     const p4Card = await openCardOn(T.p4.description, d.day3);
     const p4CardAssert = asserts.assertCardProbe(p4Card.card, {
       title: asserts.CARD_TITLES.p4,
       stepLabel: asserts.CARD_STEP_LABELS.p4,
     });
-    record("p4-card-open", p4CardAssert.ok, p4CardAssert.reason || JSON.stringify(p4Card.card).slice(0, 240));
+    record("p4-card-open", p4CardAssert.ok, p4CardAssert.reason
+      ? p4CardAssert.reason
+      : JSON.stringify(p4Card.card).slice(0, 240));
     if (p4Card.card && p4Card.card.open) {
       await captureCard(client, outDir, "p4", report);
       record("p4-card-screenshots", true, "light+dark");
-      await cardKey(client, { key: "Enter" });
-      await waitForCardClosed(client, 8_000).catch(() => ({ open: true }));
-      await (p4Card.pending || Promise.resolve());
-      await sleep(400);
+      const input = await cardKey(client, { key: "Enter" });
+      record("p4-roll-input", input.ok, JSON.stringify(input).slice(0, 240));
+      const closed = await waitForCardClosed(client, 8_000).catch(() => null);
+      if (!closed || closed.open === true) await cancelPendingRefreshModal(client).catch(() => ({ closed: false }));
+      await p4Card.finish();
+      await waitForEditorTask(client, T.p4.description, (task) => task.status === " " && task.priority === "lowest" && task.fresh === d.day3);
+      await flushAndWaitForTaskCache(client, T.p4.description);
     }
     const p4Rolled = await contentOf();
     const p4Line = asserts.extractTaskLine(p4Rolled, T.p4.description);
     const p4Fields = asserts.parseTaskLine(p4Line);
-    record("p4-roll-line", p4Fields.status === " " && p4Fields.priority === "lowest" && p4Fields.fresh === d.day3 && p4Fields.keeps == null, p4Line);
-    record("p4-roll-log", asserts.extractRottenLogBodies(p4Rolled, T.p4.description).some((row) => row.body === asserts.stepBody("P4", "P4", 2)), JSON.stringify(asserts.extractRottenLogBodies(p4Rolled, T.p4.description)));
+    record("p4-roll-line", p4Fields.status === "?" && p4Fields.priority === "lowest" && p4Fields.fresh === d.day3 && p4Fields.keeps == null, p4Line);
+    record("p4-roll-log", asserts.extractRottenLogBodies(p4Rolled, T.p4.description).some((row) => row.body === "🍂 rolled again at P4 · after 2 keeps"), JSON.stringify(asserts.extractRottenLogBodies(p4Rolled, T.p4.description)));
 
     // --- Batch skip at-limit Ready targets ---
     const beforeSkip = await contentOf();
     const skipABefore = asserts.extractTaskLine(beforeSkip, T.skipA.description);
     const skipBBefore = asserts.extractTaskLine(beforeSkip, T.skipB.description);
     await pinToday(client, d.day1, configPath);
+    await waitForFreshnessQueueLine(client, T.skipA.description);
     await placeCursor(client, T.skipA.description);
+    await beginNoticeCapture(client);
     const skippedBatch = await refreshKeep(client, {
       dateText: d.day1,
       keepReason: "should not apply",
       countExplicit: true,
       additionalTaskCount: 1,
     });
-    await sleep(400);
+    await sleep(100);
     const afterSkip = await contentOf();
-    const notice = await lastNotice(client);
+    const notice = await endNoticeCapture(client);
     record("batch-skip-no-write", asserts.extractTaskLine(afterSkip, T.skipA.description) === skipABefore && asserts.extractTaskLine(afterSkip, T.skipB.description) === skipBBefore, `A ${asserts.extractTaskLine(afterSkip, T.skipA.description)} B ${asserts.extractTaskLine(afterSkip, T.skipB.description)}`);
     record("batch-skip-notice", asserts.assertSkipNotice(notice.text + " " + (notice.all || []).join(" "), 2).ok || asserts.assertSkipNotice(JSON.stringify(skippedBatch), 2).ok, JSON.stringify(notice).slice(0, 220));
 

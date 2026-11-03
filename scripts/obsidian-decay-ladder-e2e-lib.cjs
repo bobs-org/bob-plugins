@@ -420,9 +420,11 @@ function skipNotice(count) {
 }
 
 function assertSkipNotice(text, count) {
-  const needle = skipNotice(count);
-  if (!String(text || "").includes(needle)) {
-    return { ok: false, reason: `notice ${JSON.stringify(text)} missing ${JSON.stringify(needle)}` };
+  const n = Number(count);
+  const notice = String(text || "");
+  const pattern = new RegExp(`(?:^|\\D)${n}(?:\\s+tasks?)?\\s+needs?\\s+a decision(?:$|\\D)`, "i");
+  if (!pattern.test(notice)) {
+    return { ok: false, reason: `notice ${JSON.stringify(notice)} missing a decision count for ${n}` };
   }
   return { ok: true };
 }

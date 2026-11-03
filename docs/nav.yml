@@ -22,6 +22,8 @@
   path: task-relations.md
 - title: Task Card
   path: task-card.md
+- title: Decay ladder live verification
+  path: decay-ladder.md
 - title: Go to task URI
   path: goto-task-uri.md
 - title: Open notes URI

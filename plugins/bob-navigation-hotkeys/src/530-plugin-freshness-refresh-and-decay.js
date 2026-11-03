@@ -211,7 +211,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       const decay = this.readFreshnessDecayPolicy(api);
       const snapshot = this.loadFreshnessDecayPrioritySnapshot();
       const property = snapshot.property;
-      const rung = rottenKeepRungForTarget(raw, entry, property && property.name);
+      const rung = rottenKeepRungForTarget(raw, entry, property);
       const keeps = parseKeepsCount(raw);
       const limit = this.freshnessDecayAllowanceFor(decay, rung);
       const intervalDays = resolveFreshnessDecayIntervalDays(api, entry, raw, content);
@@ -371,6 +371,14 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       });
       this.activeFreshnessDecayCard = modal;
       modal.open();
+      if (
+        this.app && this.app.workspace && this.app.workspace.containerEl &&
+        !moveFreshnessDecayModalToAppDocument(modal, this.app)
+      ) {
+        modal.close();
+        this.activeFreshnessDecayCard = null;
+        return false;
+      }
       return true;
     } catch (error) {
       this.activeFreshnessDecayCard = null;
@@ -425,7 +433,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       if (match.ok !== true || !isFreshnessDecayDecisionEntry(match.entry)) {
         return stale("eligibility");
       }
-      if (rottenKeepRungForTarget(liveLine, match.entry, cardCtx.property && cardCtx.property.name) !== cardCtx.rung) {
+      if (rottenKeepRungForTarget(liveLine, match.entry, cardCtx.property) !== cardCtx.rung) {
         return stale("rung");
       }
       if (parseKeepsCount(liveLine) !== cardCtx.keeps) {

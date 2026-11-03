@@ -241,7 +241,11 @@ class BobNavigationHotkeysDecayCancelMixin {
         ],
         stamper,
         cardCtx.dateText,
-        { keepReason, rottenLines: [cardCtx.line] },
+        {
+          keepReason,
+          rottenLines: [cardCtx.line],
+          priorityProperty: cardCtx.property,
+        },
       );
       if (!plan.ok) {
         new Notice(freshStampRefusalNotice(plan.refusal));

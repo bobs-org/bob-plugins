@@ -534,6 +534,12 @@ class BobNavigationHotkeysLaneReviewMixin {
     const singleKeep = options.countExplicit !== true && safeTargets.length === 1;
     const keepsSupported = freshnessSupportsKeeps(api);
     const decayPolicy = this.readFreshnessDecayPolicy(api);
+    const prioritySnapshot = keepsSupported
+      ? this.loadFreshnessDecayPrioritySnapshot()
+      : null;
+    const priorityProperty = prioritySnapshot && prioritySnapshot.property
+      ? prioritySnapshot.property
+      : null;
     let cardFallback = false;
     const resolved = deduplicateFreshStampTargets(
       safeTargets.map((target) => ({
@@ -550,7 +556,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       });
       const isToday = match.ok === true ? freshnessTargetIsToday(api, match.entry) : false;
       const keep = keepsSupported
-        ? classifyRottenKeepTarget({ match, raw, stamper: options.stamper, dateText: options.dateText, isToday })
+        ? classifyRottenKeepTarget({ match, raw, stamper: options.stamper, dateText: options.dateText, isToday, priorityProperty })
         : { counted: false, keepsBefore: parseKeepsCount(raw), keepsAfter: parseKeepsCount(raw), rung: null };
       const status = getObsidianTaskCheckboxStatus(raw);
       const laneRow = status === "/" || status === "*";
@@ -789,6 +795,7 @@ class BobNavigationHotkeysLaneReviewMixin {
         keepReason,
         rottenTargets: rottenTargets.map((item) => ({ line: item.target.line, rung: item.keep.rung })),
         laneTargets: laneTargets.map((item) => ({ line: item.target.line, rung: item.keep.rung })),
+        priorityProperty,
       },
     );
     if (!plan.ok) {

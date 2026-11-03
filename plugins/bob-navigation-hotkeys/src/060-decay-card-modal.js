@@ -5,6 +5,36 @@ function normalizeFreshnessDecayCardKey(value) {
   return key;
 }
 
+function moveFreshnessDecayModalToAppDocument(modal, app) {
+  const modalEl = modal && modal.containerEl;
+  const workspace = app && app.workspace && app.workspace.containerEl;
+  const appDocument = workspace && workspace.ownerDocument;
+  if (!modalEl || !appDocument) return false;
+  if (modalEl.ownerDocument !== appDocument) {
+    const body = appDocument.body;
+    if (!body || typeof body.appendChild !== "function") return false;
+    const modalContainer = modalEl.parentElement || modalEl.parentNode;
+    const root = modalContainer && /(?:^|\s)modal-container(?:\s|$)/.test(
+      String(modalContainer.className || ""),
+    )
+      ? modalContainer
+      : modalEl;
+    try {
+      if (typeof appDocument.adoptNode === "function") appDocument.adoptNode(root);
+      body.appendChild(root);
+    } catch (error) {
+      return false;
+    }
+  }
+  return modalEl.ownerDocument === appDocument;
+}
+
+function freshnessDecayCardWindow(modal) {
+  const modalDocument = modal && modal.containerEl && modal.containerEl.ownerDocument;
+  if (modalDocument && modalDocument.defaultView) return modalDocument.defaultView;
+  return typeof window !== "undefined" ? window : null;
+}
+
 class FreshnessDecayCardModal extends Modal {
   constructor(app, options) {
     super(app);
@@ -79,10 +109,11 @@ class FreshnessDecayCardModal extends Modal {
     });
     contentEl.addEventListener("keydown", (event) => this.handleKey(event));
     this.openingChordKeyupHandler = (event) => this.releaseOpeningChordKey(event);
-    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-      window.addEventListener("keyup", this.openingChordKeyupHandler, true);
+    const modalWindow = freshnessDecayCardWindow(this);
+    if (modalWindow && typeof modalWindow.addEventListener === "function") {
+      modalWindow.addEventListener("keyup", this.openingChordKeyupHandler, true);
     }
-    window.setTimeout(() => {
+    if (modalWindow && typeof modalWindow.setTimeout === "function") modalWindow.setTimeout(() => {
       this.focusRecommendedRowOrFirst();
     }, 0);
   }
@@ -185,7 +216,8 @@ class FreshnessDecayCardModal extends Modal {
       onSubmit: (reason) => this.submitKeepStage(reason),
       onCancel: () => this.showRows(),
     });
-    window.setTimeout(() => {
+    const modalWindow = freshnessDecayCardWindow(this);
+    if (modalWindow && typeof modalWindow.setTimeout === "function") modalWindow.setTimeout(() => {
       if (this.keepStage) {
         this.keepStage.focus();
       }
@@ -207,7 +239,8 @@ class FreshnessDecayCardModal extends Modal {
     this.keepStage = null;
     this.keepStageActive = false;
     this.renderRows();
-    window.setTimeout(() => {
+    const modalWindow = freshnessDecayCardWindow(this);
+    if (modalWindow && typeof modalWindow.setTimeout === "function") modalWindow.setTimeout(() => {
       this.focusRecommendedRowOrFirst();
     }, 0);
     return true;
@@ -380,8 +413,9 @@ class FreshnessDecayCardModal extends Modal {
     }
     this.keepStage = null;
     this.keepStageActive = false;
-    if (this.openingChordKeyupHandler && typeof window !== "undefined" && typeof window.removeEventListener === "function") {
-      window.removeEventListener("keyup", this.openingChordKeyupHandler, true);
+    const modalWindow = freshnessDecayCardWindow(this);
+    if (this.openingChordKeyupHandler && modalWindow && typeof modalWindow.removeEventListener === "function") {
+      modalWindow.removeEventListener("keyup", this.openingChordKeyupHandler, true);
     }
     this.openingChordKeyupHandler = null;
     contentElCleanup(this.contentEl);

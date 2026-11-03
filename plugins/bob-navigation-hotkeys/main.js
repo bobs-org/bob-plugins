@@ -5803,6 +5803,7 @@ function planFreshnessDecayCardStep(options = {}) {
     return unavailable(currentValue ? `unknown priority "${currentValue}"` : "priority level is missing");
   }
   level = levels[currentIndex];
+  const fromLabel = normalizeBulletPropertyValue(level.label) || rung;
   const terminal = currentIndex === levels.length - 1;
   toLevel = terminal ? level : levels[currentIndex + 1];
   if (!toLevel) return unavailable("no next priority level is configured");
@@ -5815,23 +5816,23 @@ function planFreshnessDecayCardStep(options = {}) {
   baseReason = terminal
     ? formatPriorityRollScheduleReason({ source: "scheduled", level: toLevel, rolledDays: rolled.offset })
     : formatPriorityDecayScheduleReason({
-      fromLevel: { label: rung },
+      fromLevel: { label: fromLabel },
       toLevel,
       rolledDays: rolled.offset,
     });
   if (!baseReason) return unavailable("cannot describe this priority step");
   const date = formatBulletPropertyDate(rolled.date);
-  const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, rung);
+  const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, fromLabel);
   const target = normalizeBulletPropertyValue(toLevel.label);
   const label = terminal ? `Roll again at ${target}` : `Defer to ${target}`;
   const detail = terminal
     ? `bottom of the ladder · ${freshnessDecayCardStepBackPhrase(windowText, rolled.offset)}`
-    : `${rung} → ${target} · ${freshnessDecayCardStepBackPhrase(windowText, rolled.offset)}`;
+    : `${fromLabel} → ${target} · ${freshnessDecayCardStepBackPhrase(windowText, rolled.offset)}`;
   return Object.freeze({
     available: true,
     unavailableReason: null,
     kind,
-    fromLabel: rung,
+    fromLabel,
     toLabel: target,
     label,
     detail,
@@ -5849,6 +5850,36 @@ function normalizeFreshnessDecayCardKey(value) {
   if (key === "control") return "ctrl";
   if (key === "altgraph") return "alt";
   return key;
+}
+
+function moveFreshnessDecayModalToAppDocument(modal, app) {
+  const modalEl = modal && modal.containerEl;
+  const workspace = app && app.workspace && app.workspace.containerEl;
+  const appDocument = workspace && workspace.ownerDocument;
+  if (!modalEl || !appDocument) return false;
+  if (modalEl.ownerDocument !== appDocument) {
+    const body = appDocument.body;
+    if (!body || typeof body.appendChild !== "function") return false;
+    const modalContainer = modalEl.parentElement || modalEl.parentNode;
+    const root = modalContainer && /(?:^|\s)modal-container(?:\s|$)/.test(
+      String(modalContainer.className || ""),
+    )
+      ? modalContainer
+      : modalEl;
+    try {
+      if (typeof appDocument.adoptNode === "function") appDocument.adoptNode(root);
+      body.appendChild(root);
+    } catch (error) {
+      return false;
+    }
+  }
+  return modalEl.ownerDocument === appDocument;
+}
+
+function freshnessDecayCardWindow(modal) {
+  const modalDocument = modal && modal.containerEl && modal.containerEl.ownerDocument;
+  if (modalDocument && modalDocument.defaultView) return modalDocument.defaultView;
+  return typeof window !== "undefined" ? window : null;
 }
 
 class FreshnessDecayCardModal extends Modal {
@@ -5925,10 +5956,11 @@ class FreshnessDecayCardModal extends Modal {
     });
     contentEl.addEventListener("keydown", (event) => this.handleKey(event));
     this.openingChordKeyupHandler = (event) => this.releaseOpeningChordKey(event);
-    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-      window.addEventListener("keyup", this.openingChordKeyupHandler, true);
+    const modalWindow = freshnessDecayCardWindow(this);
+    if (modalWindow && typeof modalWindow.addEventListener === "function") {
+      modalWindow.addEventListener("keyup", this.openingChordKeyupHandler, true);
     }
-    window.setTimeout(() => {
+    if (modalWindow && typeof modalWindow.setTimeout === "function") modalWindow.setTimeout(() => {
       this.focusRecommendedRowOrFirst();
     }, 0);
   }
@@ -6031,7 +6063,8 @@ class FreshnessDecayCardModal extends Modal {
       onSubmit: (reason) => this.submitKeepStage(reason),
       onCancel: () => this.showRows(),
     });
-    window.setTimeout(() => {
+    const modalWindow = freshnessDecayCardWindow(this);
+    if (modalWindow && typeof modalWindow.setTimeout === "function") modalWindow.setTimeout(() => {
       if (this.keepStage) {
         this.keepStage.focus();
       }
@@ -6053,7 +6086,8 @@ class FreshnessDecayCardModal extends Modal {
     this.keepStage = null;
     this.keepStageActive = false;
     this.renderRows();
-    window.setTimeout(() => {
+    const modalWindow = freshnessDecayCardWindow(this);
+    if (modalWindow && typeof modalWindow.setTimeout === "function") modalWindow.setTimeout(() => {
       this.focusRecommendedRowOrFirst();
     }, 0);
     return true;
@@ -6226,8 +6260,9 @@ class FreshnessDecayCardModal extends Modal {
     }
     this.keepStage = null;
     this.keepStageActive = false;
-    if (this.openingChordKeyupHandler && typeof window !== "undefined" && typeof window.removeEventListener === "function") {
-      window.removeEventListener("keyup", this.openingChordKeyupHandler, true);
+    const modalWindow = freshnessDecayCardWindow(this);
+    if (this.openingChordKeyupHandler && modalWindow && typeof modalWindow.removeEventListener === "function") {
+      modalWindow.removeEventListener("keyup", this.openingChordKeyupHandler, true);
     }
     this.openingChordKeyupHandler = null;
     contentElCleanup(this.contentEl);
@@ -22199,20 +22234,30 @@ class FreshnessRefreshSummaryModal extends Modal {
 }
 
 // ---- src/195-rotten-keep.js ----
-// The rung a keep counts on: WIP for `[/]`, Next for `[*]`, the priority
-// level label for a prioritized `[ ]`, else Ready. A Blocked `[?]`
+// The rung a keep counts on: WIP for `[/]`, Next for `[*]`, the configured
+// priority level label for a prioritized `[ ]`, else Ready. A Blocked `[?]`
 // follows its queue lane. Blocked is an overlay, never a rung.
-function rottenKeepRungForTarget(raw, entry, priorityName = "priority") {
+function rottenKeepRungForTarget(raw, entry, priorityProperty = null) {
   const status = getObsidianTaskCheckboxStatus(String(raw || ""));
   if (status === "/") return "WIP";
   if (status === "*") return "Next";
   if (status === "?" && entry && entry.lane === "pending") return "WIP";
   if (status === "?" && entry && entry.lane === "next") return "Next";
+  const property = priorityProperty && priorityProperty.values === "priority"
+    ? priorityProperty
+    : null;
+  const priorityName = property && typeof property.name === "string"
+    ? property.name
+    : "priority";
   const field = typeof findBulletPropertyField === "function"
     ? findBulletPropertyField(raw, priorityName)
     : null;
   const value = field ? normalizeBulletPropertyValue(field.value) : "";
-  return value || "Ready";
+  if (!value) return "Ready";
+  const levels = Array.isArray(property && property.levels) ? property.levels : [];
+  const level = levels.find((candidate) => candidate &&
+    normalizeBulletPropertyValue(candidate.value) === value);
+  return normalizeBulletPropertyValue(level && level.label) || value;
 }
 
 // Lanes and Ready use "in", P-levels use "at".
@@ -22296,7 +22341,7 @@ function freshnessQuietNotCountedNotice(raw, dateText) {
 // the existing path and preserve the streak. `isToday` is Today
 // membership for the row (a Task Link under today's open Pomodoros);
 // pass true to keep Today-linked rows uncounted.
-function classifyRottenKeepTarget({ match, raw, stamper, dateText, isToday } = {}) {
+function classifyRottenKeepTarget({ match, raw, stamper, dateText, isToday, priorityProperty } = {}) {
   const keepsBefore = parseKeepsCount(raw);
   const uncounted = { counted: false, keepsBefore, keepsAfter: keepsBefore, rung: null };
   if (isPomodoroFreshnessLedgerLine(raw)) return uncounted;
@@ -22305,7 +22350,7 @@ function classifyRottenKeepTarget({ match, raw, stamper, dateText, isToday } = {
   if (match.entry.returnedBy === "unblocked" || isToday === true ||
       freshStampLineHasToday(raw, dateText) ||
       !classifyFreshStampTarget(raw).ok) return uncounted;
-  const rung = rottenKeepRungForTarget(raw, match.entry);
+  const rung = rottenKeepRungForTarget(raw, match.entry, priorityProperty);
   try {
     const after = String(stamper(raw, dateText, { counted: true }) ?? raw);
     const keepsAfter = parseKeepsCount(after);
@@ -22529,7 +22574,9 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
     if (!rungForLine.has(line)) {
       const entries = plan.stamped.filter((entry) => entry.line === line);
       if (entries.length !== 1) return refuse("rotten-keep-mismatch");
-      rungForLine.set(line, rottenKeepRungForTarget(entries[0].before, null));
+      rungForLine.set(line, rottenKeepRungForTarget(
+        entries[0].before, null, options.priorityProperty,
+      ));
     }
   }
   for (const line of options.laneLines || []) {
@@ -22623,7 +22670,7 @@ function buildRottenKeepPromptModel(options = {}) {
     : today !== null && fresh !== null ? Math.max(0, today - fresh) : null;
   const rung = options.rung ||
     (options.lane === "next" ? "Next" : null) ||
-    rottenKeepRungForTarget(options.raw || "", entry) || "Ready";
+    rottenKeepRungForTarget(options.raw || "", entry, options.priorityProperty) || "Ready";
   const prep = rottenKeepRungPreposition(rung);
   const decayCard = options.decayCard === true;
   const subtitle = [cleanTaskDisplayText(options.raw || entry.originalMarkdown || entry.text || ""),
@@ -72335,6 +72382,12 @@ class BobNavigationHotkeysLaneReviewMixin {
     const singleKeep = options.countExplicit !== true && safeTargets.length === 1;
     const keepsSupported = freshnessSupportsKeeps(api);
     const decayPolicy = this.readFreshnessDecayPolicy(api);
+    const prioritySnapshot = keepsSupported
+      ? this.loadFreshnessDecayPrioritySnapshot()
+      : null;
+    const priorityProperty = prioritySnapshot && prioritySnapshot.property
+      ? prioritySnapshot.property
+      : null;
     let cardFallback = false;
     const resolved = deduplicateFreshStampTargets(
       safeTargets.map((target) => ({
@@ -72351,7 +72404,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       });
       const isToday = match.ok === true ? freshnessTargetIsToday(api, match.entry) : false;
       const keep = keepsSupported
-        ? classifyRottenKeepTarget({ match, raw, stamper: options.stamper, dateText: options.dateText, isToday })
+        ? classifyRottenKeepTarget({ match, raw, stamper: options.stamper, dateText: options.dateText, isToday, priorityProperty })
         : { counted: false, keepsBefore: parseKeepsCount(raw), keepsAfter: parseKeepsCount(raw), rung: null };
       const status = getObsidianTaskCheckboxStatus(raw);
       const laneRow = status === "/" || status === "*";
@@ -72590,6 +72643,7 @@ class BobNavigationHotkeysLaneReviewMixin {
         keepReason,
         rottenTargets: rottenTargets.map((item) => ({ line: item.target.line, rung: item.keep.rung })),
         laneTargets: laneTargets.map((item) => ({ line: item.target.line, rung: item.keep.rung })),
+        priorityProperty,
       },
     );
     if (!plan.ok) {
@@ -73226,7 +73280,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       const decay = this.readFreshnessDecayPolicy(api);
       const snapshot = this.loadFreshnessDecayPrioritySnapshot();
       const property = snapshot.property;
-      const rung = rottenKeepRungForTarget(raw, entry, property && property.name);
+      const rung = rottenKeepRungForTarget(raw, entry, property);
       const keeps = parseKeepsCount(raw);
       const limit = this.freshnessDecayAllowanceFor(decay, rung);
       const intervalDays = resolveFreshnessDecayIntervalDays(api, entry, raw, content);
@@ -73386,6 +73440,14 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       });
       this.activeFreshnessDecayCard = modal;
       modal.open();
+      if (
+        this.app && this.app.workspace && this.app.workspace.containerEl &&
+        !moveFreshnessDecayModalToAppDocument(modal, this.app)
+      ) {
+        modal.close();
+        this.activeFreshnessDecayCard = null;
+        return false;
+      }
       return true;
     } catch (error) {
       this.activeFreshnessDecayCard = null;
@@ -73440,7 +73502,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       if (match.ok !== true || !isFreshnessDecayDecisionEntry(match.entry)) {
         return stale("eligibility");
       }
-      if (rottenKeepRungForTarget(liveLine, match.entry, cardCtx.property && cardCtx.property.name) !== cardCtx.rung) {
+      if (rottenKeepRungForTarget(liveLine, match.entry, cardCtx.property) !== cardCtx.rung) {
         return stale("rung");
       }
       if (parseKeepsCount(liveLine) !== cardCtx.keeps) {
@@ -73881,6 +73943,12 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
     }
     const localDayBefore = this.laneReleaseDateText();
     const canCountKeeps = freshnessSupportsKeeps(api);
+    const prioritySnapshot = canCountKeeps
+      ? this.loadFreshnessDecayPrioritySnapshot()
+      : null;
+    const priorityProperty = prioritySnapshot && prioritySnapshot.property
+      ? prioritySnapshot.property
+      : null;
     // Task Link sessions never open cards — even a single link. Exact
     // at-limit Ready targets skip without changing fresh/count; below
     // threshold they count normally. Lane rows count and log until the
@@ -73911,6 +73979,7 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
                   stamper: options.stamper,
                   dateText: options.dateText,
                   isToday,
+                  priorityProperty,
                 })
               : { counted: false, keepsBefore: parseKeepsCount(raw), keepsAfter: parseKeepsCount(raw), rung: null };
             const status = getObsidianTaskCheckboxStatus(raw);
@@ -74079,6 +74148,7 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
           keepReason,
           rottenTargets: groupRottenTargets,
           laneTargets: groupLaneTargets,
+          priorityProperty,
         },
       );
       if (!plan.ok) {
@@ -78557,7 +78627,11 @@ class BobNavigationHotkeysDecayCancelMixin {
         ],
         stamper,
         cardCtx.dateText,
-        { keepReason, rottenLines: [cardCtx.line] },
+        {
+          keepReason,
+          rottenLines: [cardCtx.line],
+          priorityProperty: cardCtx.property,
+        },
       );
       if (!plan.ok) {
         new Notice(freshStampRefusalNotice(plan.refusal));
@@ -103844,6 +103918,7 @@ Object.assign(module.exports.helpers, {
 // Decay-card hotfix helpers. Sibling fragment so src/700-exports.js stays
 // under the 1000-line cap.
 Object.assign(module.exports.helpers, {
+  moveFreshnessDecayModalToAppDocument,
   FRESHNESS_DECAY_PRIORITY_LOAD_ERRORS,
   freezeFreshnessDecayPrioritySnapshot,
   loadFreshnessDecayPrioritySnapshot,

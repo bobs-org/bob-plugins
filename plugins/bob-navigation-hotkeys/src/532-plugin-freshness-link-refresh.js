@@ -52,6 +52,12 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
     }
     const localDayBefore = this.laneReleaseDateText();
     const canCountKeeps = freshnessSupportsKeeps(api);
+    const prioritySnapshot = canCountKeeps
+      ? this.loadFreshnessDecayPrioritySnapshot()
+      : null;
+    const priorityProperty = prioritySnapshot && prioritySnapshot.property
+      ? prioritySnapshot.property
+      : null;
     // Task Link sessions never open cards — even a single link. Exact
     // at-limit Ready targets skip without changing fresh/count; below
     // threshold they count normally. Lane rows count and log until the
@@ -82,6 +88,7 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
                   stamper: options.stamper,
                   dateText: options.dateText,
                   isToday,
+                  priorityProperty,
                 })
               : { counted: false, keepsBefore: parseKeepsCount(raw), keepsAfter: parseKeepsCount(raw), rung: null };
             const status = getObsidianTaskCheckboxStatus(raw);
@@ -250,6 +257,7 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
           keepReason,
           rottenTargets: groupRottenTargets,
           laneTargets: groupLaneTargets,
+          priorityProperty,
         },
       );
       if (!plan.ok) {

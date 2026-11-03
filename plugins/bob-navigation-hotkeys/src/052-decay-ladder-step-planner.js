@@ -123,6 +123,7 @@ function planFreshnessDecayCardStep(options = {}) {
     return unavailable(currentValue ? `unknown priority "${currentValue}"` : "priority level is missing");
   }
   level = levels[currentIndex];
+  const fromLabel = normalizeBulletPropertyValue(level.label) || rung;
   const terminal = currentIndex === levels.length - 1;
   toLevel = terminal ? level : levels[currentIndex + 1];
   if (!toLevel) return unavailable("no next priority level is configured");
@@ -135,23 +136,23 @@ function planFreshnessDecayCardStep(options = {}) {
   baseReason = terminal
     ? formatPriorityRollScheduleReason({ source: "scheduled", level: toLevel, rolledDays: rolled.offset })
     : formatPriorityDecayScheduleReason({
-      fromLevel: { label: rung },
+      fromLevel: { label: fromLabel },
       toLevel,
       rolledDays: rolled.offset,
     });
   if (!baseReason) return unavailable("cannot describe this priority step");
   const date = formatBulletPropertyDate(rolled.date);
-  const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, rung);
+  const reason = formatFreshnessDecayReasonWithKeptTail(baseReason, keeps, fromLabel);
   const target = normalizeBulletPropertyValue(toLevel.label);
   const label = terminal ? `Roll again at ${target}` : `Defer to ${target}`;
   const detail = terminal
     ? `bottom of the ladder · ${freshnessDecayCardStepBackPhrase(windowText, rolled.offset)}`
-    : `${rung} → ${target} · ${freshnessDecayCardStepBackPhrase(windowText, rolled.offset)}`;
+    : `${fromLabel} → ${target} · ${freshnessDecayCardStepBackPhrase(windowText, rolled.offset)}`;
   return Object.freeze({
     available: true,
     unavailableReason: null,
     kind,
-    fromLabel: rung,
+    fromLabel,
     toLabel: target,
     label,
     detail,

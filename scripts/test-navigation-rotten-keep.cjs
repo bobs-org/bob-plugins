@@ -24,6 +24,16 @@ const DATE = "2026-10-23";
 const RAW = "- [ ] #task Read primer #ref [fresh:: 2026-10-14] [keeps:: 2] ^primer";
 const keep = (raw, date, options) => ledger.freshnessKeepLine(raw, date, options).line;
 const stamp = (raw, date) => ledger.freshnessStampLine(raw, date).line;
+const bryanPriority = Object.freeze({
+  name: "priority",
+  values: "priority",
+  levels: Object.freeze([
+    Object.freeze({ label: "P1", value: "high" }),
+    Object.freeze({ label: "P2", value: "medium" }),
+    Object.freeze({ label: "P3", value: "low" }),
+    Object.freeze({ label: "P4", value: "lowest" }),
+  ]),
+});
 function row(raw = RAW, overrides = {}) {
   return { path: "a.md", line: 1, key: "a.md:1", originalMarkdown: raw,
     text: "Read primer", fresh: "2026-10-14", tier: "rotten", tierLabel: "ROTTEN",
@@ -363,6 +373,12 @@ test("rung classification follows status, lane, and priority", () => {
   assert.equal(h.rottenKeepRungForTarget("- [ ] #task P [priority:: P2]", { lane: "ready" }), "P2");
   assert.equal(h.rottenKeepRungForTarget("- [?] #task B", { lane: "pending" }), "WIP");
   assert.equal(h.rottenKeepRungForTarget("- [?] #task B", { lane: "next" }), "Next");
+  for (const [label, value] of [["P1", "high"], ["P2", "medium"], ["P3", "low"], ["P4", "lowest"]]) {
+    assert.equal(
+      h.rottenKeepRungForTarget(`- [ ] #task ${label} [priority:: ${value}]`, { lane: "ready" }, bryanPriority),
+      label,
+    );
+  }
   assert.equal(h.rottenKeepIsDueRung("pending", "pending"), true);
   assert.equal(h.rottenKeepIsDueRung("next", "next"), true);
   assert.equal(h.rottenKeepIsDueRung("ready", "rotten"), true);
@@ -380,6 +396,47 @@ test("rung classification follows status, lane, and priority", () => {
   ]);
   assert.equal(tallies, "WIP 1 · Next 2 · Ready 1");
   assert.equal(h.formatRottenLogRungTallies([]), "");
+});
+
+test("P-level keep classification, prompt, and batch log use configured labels", () => {
+  const raw = "- [ ] #task Prioritized task [priority:: high] [fresh:: 2026-10-14] [keeps:: 0]";
+  const entry = row(raw, { tier: "rotten", lane: "ready", state: "rotten", keeps: 0 });
+  const match = h.matchFreshStampExactEntry([entry], { path: "a.md", line: 0, raw });
+  const classified = h.classifyRottenKeepTarget({
+    match, raw, stamper: keep, dateText: DATE, priorityProperty: bryanPriority,
+  });
+  assert.equal(classified.counted, true);
+  assert.equal(classified.rung, "P1");
+
+  const prompt = h.buildRottenKeepPromptModel({
+    raw, entry, dateText: DATE, keepsBefore: 0, keepsAfter: 1,
+    rung: classified.rung, allowance: 2,
+  });
+  assert.equal(prompt.title, "Why keep it at P1?");
+  assert.equal(prompt.previewEntryText, "*2026-10-23* — 🤷 no reason given · kept 1× at P1");
+
+  const batch = h.planFreshStampBatchWithLogs(
+    raw, [{ line: 0, counted: true }], keep, DATE,
+    { rottenLines: [0], keepReason: "still needed", priorityProperty: bryanPriority },
+  );
+  assert.equal(batch.ok, true);
+  assert.match(batch.content, /still needed · kept 1× at P1/);
+  assert.equal(h.readRottenLog(batch.content, 0).entries[0].rung, "P1");
+});
+
+test("decay card Rotten Log bodies use configured P-level labels", () => {
+  assert.equal(
+    h.formatFreshnessDecayRottenLogBody({ kind: "step", rung: "P1", toRung: "P2", keeps: 2 }),
+    "🍂 P1 → P2 · after 2 keeps",
+  );
+  assert.equal(
+    h.formatFreshnessDecayRottenLogBody({ kind: "stay", rung: "P1", keeps: 2, reason: "" }),
+    "🤷 no reason given · stayed at P1 after 2 keeps",
+  );
+  assert.equal(
+    h.formatFreshnessDecayRottenLogBody({ kind: "step", rung: "P4", toRung: "P4", keeps: 2 }),
+    "🍂 rolled again at P4 · after 2 keeps",
+  );
 });
 
 test("prompt copy shows the rung question, allowance, and tallies", () => {

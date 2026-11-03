@@ -86,6 +86,59 @@ Module._load = originalLoad;
 const BASE_DATE = new Date(2026, 9, 8);
 const ZERO_RANDOM = () => 0;
 
+test("opened decay modal and its modal container are adopted into the active workspace document", () => {
+  const foreignDocument = { URL: "about:blank" };
+  const appDocument = {
+    URL: "app://obsidian.md/index.html",
+    adoptNode(root) {
+      const setDocument = (node) => {
+        node.ownerDocument = appDocument;
+        for (const child of node.children || []) setDocument(child);
+      };
+      if (root.parentNode) {
+        root.parentNode.children = root.parentNode.children.filter((child) => child !== root);
+      }
+      root.parentNode = null;
+      setDocument(root);
+      return root;
+    },
+    body: {
+      children: [],
+      appendChild(container) {
+        if (container.parentNode) {
+          container.parentNode.children = container.parentNode.children.filter((child) => child !== container);
+        }
+        container.parentNode = this;
+        this.children.push(container);
+        container.ownerDocument = appDocument;
+        for (const child of container.children || []) child.ownerDocument = appDocument;
+      },
+    },
+  };
+  const modalContainer = {
+    className: "modal-container mod-dim",
+    ownerDocument: foreignDocument,
+    parentNode: { children: [] },
+    children: [],
+  };
+  const modalEl = {
+    className: "modal bob-decay-card-modal",
+    ownerDocument: foreignDocument,
+    parentNode: modalContainer,
+    children: [],
+  };
+  modalContainer.children.push(modalEl);
+  modalContainer.parentNode.children.push(modalContainer);
+  const modal = { containerEl: modalEl };
+  const app = { workspace: { containerEl: { ownerDocument: appDocument } } };
+
+  assert.equal(helpers.moveFreshnessDecayModalToAppDocument(modal, app), true);
+  assert.equal(modalEl.ownerDocument, appDocument);
+  assert.equal(modalContainer.ownerDocument, appDocument);
+  assert.equal(modalContainer.parentNode, appDocument.body);
+  assert.equal(modalEl.parentNode, modalContainer);
+});
+
 function buildDecayConfig(options = {}) {
   const levels = [
     { label: "P1", value: "high", min_days: 2, max_days: 7 },
@@ -363,10 +416,25 @@ test("card Step moves one rung and terminal priority rolls in place", () => {
   assert.equal(p2.step.toLabel, "P3");
   assert.match(p2.step.reason, /kept 3× at P2$/);
 
+  const p1 = planCard({ rung: "P1", currentValue: "high", keeps: 2 });
+  assert.equal(p1.title, "Kept 2× at P1");
+  assert.equal(p1.step.fromLabel, "P1");
+  assert.equal(p1.step.toLabel, "P2");
+  assert.match(p1.step.detail, /^P1 → P2/);
+  assert.match(p1.step.reason, / · kept 2× at P1$/);
+  assert.equal(p1.step.scheduleLog.reason, p1.step.reason);
+
   const p4 = planCard({ rung: "P4", currentValue: "lowest" });
   assert.equal(p4.step.kind, "roll");
   assert.equal(p4.step.toLabel, "P4");
   assert.match(p4.step.reason, /🎲 P4 roll · .*kept 3× at P4$/);
+});
+
+test("every configured P-level label uses the Ready keep allowance", () => {
+  const plugin = Object.create(NavigationHotkeysPlugin.prototype);
+  for (const rung of ["P1", "P2", "P3", "P4"]) {
+    assert.equal(plugin.freshnessDecayAllowanceFor({ ready: 2, keeps: 3 }, rung), 2);
+  }
 });
 
 test("Less often steps 7/14/30 to the next preset with a decision reason", () => {

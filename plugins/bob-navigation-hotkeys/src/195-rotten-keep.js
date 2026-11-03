@@ -1,17 +1,27 @@
-// The rung a keep counts on: WIP for `[/]`, Next for `[*]`, the priority
-// level label for a prioritized `[ ]`, else Ready. A Blocked `[?]`
+// The rung a keep counts on: WIP for `[/]`, Next for `[*]`, the configured
+// priority level label for a prioritized `[ ]`, else Ready. A Blocked `[?]`
 // follows its queue lane. Blocked is an overlay, never a rung.
-function rottenKeepRungForTarget(raw, entry, priorityName = "priority") {
+function rottenKeepRungForTarget(raw, entry, priorityProperty = null) {
   const status = getObsidianTaskCheckboxStatus(String(raw || ""));
   if (status === "/") return "WIP";
   if (status === "*") return "Next";
   if (status === "?" && entry && entry.lane === "pending") return "WIP";
   if (status === "?" && entry && entry.lane === "next") return "Next";
+  const property = priorityProperty && priorityProperty.values === "priority"
+    ? priorityProperty
+    : null;
+  const priorityName = property && typeof property.name === "string"
+    ? property.name
+    : "priority";
   const field = typeof findBulletPropertyField === "function"
     ? findBulletPropertyField(raw, priorityName)
     : null;
   const value = field ? normalizeBulletPropertyValue(field.value) : "";
-  return value || "Ready";
+  if (!value) return "Ready";
+  const levels = Array.isArray(property && property.levels) ? property.levels : [];
+  const level = levels.find((candidate) => candidate &&
+    normalizeBulletPropertyValue(candidate.value) === value);
+  return normalizeBulletPropertyValue(level && level.label) || value;
 }
 
 // Lanes and Ready use "in", P-levels use "at".
@@ -95,7 +105,7 @@ function freshnessQuietNotCountedNotice(raw, dateText) {
 // the existing path and preserve the streak. `isToday` is Today
 // membership for the row (a Task Link under today's open Pomodoros);
 // pass true to keep Today-linked rows uncounted.
-function classifyRottenKeepTarget({ match, raw, stamper, dateText, isToday } = {}) {
+function classifyRottenKeepTarget({ match, raw, stamper, dateText, isToday, priorityProperty } = {}) {
   const keepsBefore = parseKeepsCount(raw);
   const uncounted = { counted: false, keepsBefore, keepsAfter: keepsBefore, rung: null };
   if (isPomodoroFreshnessLedgerLine(raw)) return uncounted;
@@ -104,7 +114,7 @@ function classifyRottenKeepTarget({ match, raw, stamper, dateText, isToday } = {
   if (match.entry.returnedBy === "unblocked" || isToday === true ||
       freshStampLineHasToday(raw, dateText) ||
       !classifyFreshStampTarget(raw).ok) return uncounted;
-  const rung = rottenKeepRungForTarget(raw, match.entry);
+  const rung = rottenKeepRungForTarget(raw, match.entry, priorityProperty);
   try {
     const after = String(stamper(raw, dateText, { counted: true }) ?? raw);
     const keepsAfter = parseKeepsCount(after);
@@ -328,7 +338,9 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
     if (!rungForLine.has(line)) {
       const entries = plan.stamped.filter((entry) => entry.line === line);
       if (entries.length !== 1) return refuse("rotten-keep-mismatch");
-      rungForLine.set(line, rottenKeepRungForTarget(entries[0].before, null));
+      rungForLine.set(line, rottenKeepRungForTarget(
+        entries[0].before, null, options.priorityProperty,
+      ));
     }
   }
   for (const line of options.laneLines || []) {
@@ -422,7 +434,7 @@ function buildRottenKeepPromptModel(options = {}) {
     : today !== null && fresh !== null ? Math.max(0, today - fresh) : null;
   const rung = options.rung ||
     (options.lane === "next" ? "Next" : null) ||
-    rottenKeepRungForTarget(options.raw || "", entry) || "Ready";
+    rottenKeepRungForTarget(options.raw || "", entry, options.priorityProperty) || "Ready";
   const prep = rottenKeepRungPreposition(rung);
   const decayCard = options.decayCard === true;
   const subtitle = [cleanTaskDisplayText(options.raw || entry.originalMarkdown || entry.text || ""),

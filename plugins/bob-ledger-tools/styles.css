@@ -7084,3 +7084,28 @@ body:not(.bob-root-marks) .bob-root-mark-native {
   }
 }
 
+
+/* Period-note agent callouts (`> [!agent]- ...`): one quiet folded line.
+ * No tinted background; a small muted title; the expanded body reads in the
+ * normal text colour so long instructions stay legible. */
+.callout[data-callout="agent"] {
+  --callout-color: var(--text-muted);
+  --callout-icon: lucide-bot;
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+.callout[data-callout="agent"] > .callout-title {
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+  font-weight: var(--font-normal);
+  background-color: transparent;
+  padding: 0;
+}
+.callout[data-callout="agent"] > .callout-content {
+  color: var(--text-normal);
+  background-color: transparent;
+  border: none;
+  padding: 0;
+}

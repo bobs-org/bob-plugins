@@ -351,6 +351,13 @@ function ensureGcalEventsRefreshEffect() {
 class BobLedgerToolsGcalEventsMixin {
   setupGcalEvents() {
     this.setupGcalSyncOnCreate();
+    // Period notes share the create-hook lifecycle: same daily-note file
+    // test and the same adopt-before-write discipline as calendar sync.
+    try {
+      if (typeof this.setupPeriodNotes === "function") this.setupPeriodNotes();
+    } catch (error) {
+      // The period-notes hook is best-effort.
+    }
     this.setupCalendarEventPainting();
     try {
       if (typeof this.setupEventLinkTimes === "function") this.setupEventLinkTimes();
@@ -482,6 +489,11 @@ class BobLedgerToolsGcalEventsMixin {
       if (typeof this.teardownEventLinkTimes === "function") this.teardownEventLinkTimes();
     } catch (error) {
       // Link pill teardown is best-effort.
+    }
+    try {
+      if (typeof this.teardownPeriodNotes === "function") this.teardownPeriodNotes();
+    } catch (error) {
+      // Period-notes teardown is best-effort.
     }
     const timer = this.calendarEventRefreshTimer;
     if (timer === null || timer === undefined) return;

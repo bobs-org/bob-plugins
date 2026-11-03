@@ -146,6 +146,7 @@
   "291f-plugin-event-link-times-reading.js",
   "292-keep-inbox-model.js",
   "292a-keep-inbox-tree.js",
+  "292b-plugin-period-notes.js",
   "293-keep-inbox-render.js",
   "294-keep-inbox-indicator.js",
   "295-keep-inbox-actions.js",

@@ -30,6 +30,7 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | Jump to current Pomodoro line | `jump-to-current-pomodoro` | Ctrl+9 |
 | Open Reading Board | `open-reading-board` | — |
 | Open Stats | `open-stats` | — |
+| Open this week's note | `open-this-weeks-note` | — |
 | Open today's daily note | `open-today-daily-note` | — |
 | Toggle Day stats | `toggle-day-stats` | — |
 | Toggle Google Calendar sync on daily-note creation | `toggle-gcal-sync-on-create` | — |
@@ -550,6 +551,28 @@ other main-area tabs, pinned sidebar tabs, and other sidebar tabs.
 When the current tab is a lower-ranked copy of today's daily note, `Ctrl+9`
 switches to the best-ranked tab first; it jumps to the current Pomodoro only
 when pressed again on that home tab.
+
+## Period Notes
+
+The hook stays inert until the vault adopts period notes (an `all_time.md`
+next to `org.md`); without it, nothing spawns and **Open this week's note**
+shows a Notice naming `bob periods migrate`. Once adopted, Ledger Tools runs
+`bob periods ensure -q -f json` (15 s timeout) on today's daily-note creation,
+once per local day after layout loads, and on the first 5-second tick after
+local midnight, so the week → quarter → year → all_time tree exists before
+anything reads it. Bob remains the only writer.
+
+An older bob without `periods` logs one `console.warn` per session. A
+`lock_busy` run retries once after 60 seconds. Any other failure shows at most
+one Notice per local day: `Period notes could not be created — <message>`.
+
+**Open this week's note** opens `GGGG/GGGG-Www.md` for the current week,
+running ensure first when the note is missing. Without adoption it shows the
+`bob periods migrate` Notice instead of opening anything.
+
+Agent instruction callouts (`> [!agent]- ...`) render as one quiet folded
+line: no tinted background, a small muted title, and the expanded body in the
+normal text colour.
 
 ## Command-mode run refresh
 

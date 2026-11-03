@@ -91,6 +91,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsTaskLinkMarksResolveMixin,
   BobLedgerToolsTaskLinkMarksReadingMixin,
   BobLedgerToolsGcalEventsMixin,
+  BobLedgerToolsPeriodNotesMixin,
   BobLedgerToolsEventLinkTimesMixin,
   BobLedgerToolsEventLinkTimesReadingMixin,
   BobLedgerToolsVimSnippetsMixin,

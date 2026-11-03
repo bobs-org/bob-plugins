@@ -14275,6 +14275,25 @@ function getNoteTemplateSelection(kind) {
   return NOTE_TEMPLATE_SELECTIONS[kind] || NOTE_TEMPLATE_SELECTIONS.default;
 }
 
+// Week, quarter, year, and all-time note paths (bob-cli docs/periods.md
+// §1). bob creates these from a deterministic scaffold, so link-following
+// never creates one from a template.
+function isPeriodNoteCreationPath(path) {
+  const normalizedPath = normalizeVaultRelativePath(path);
+  if (normalizedPath === "all_time.md" || YEARLY_NOTE_CREATION_PATH_RE.test(normalizedPath)) {
+    return true;
+  }
+  const match = /^(\d{4})\/(\d{4})-(?:W(\d{2})|Q([1-4]))\.md$/.exec(normalizedPath);
+  if (!match || match[1] !== match[2]) {
+    return false;
+  }
+  if (match[3] === undefined) {
+    return true;
+  }
+  const week = parseIntegerText(match[3]);
+  return week >= 1 && week <= 53;
+}
+
 function getNoteTemplateForCreationPath(path) {
   const normalizedPath = normalizeVaultRelativePath(path);
   const dailyMatch = normalizedPath.match(DAILY_NOTE_CREATION_PATH_RE);
@@ -94047,6 +94066,10 @@ class BobNavigationHotkeysNotesMoveMixin {
       );
     }
 
+    if (isPeriodNoteCreationPath(creation.path)) {
+      return this.openPeriodNoteThroughBob(creation);
+    }
+
     const templaterPlugin = this.getTemplaterPlugin();
     if (!templaterPlugin) {
       new Notice("Templater is not available");
@@ -99487,6 +99510,40 @@ class BobNavigationHotkeysProjectFileMixin {
     await this.openOrCreateLinkTarget(link, file.path, notFoundMessage, link);
   }
 
+  // A missing week, quarter, year, or all-time note is bob's to create
+  // (bob-cli docs/periods.md): ask bob-ledger-tools `api.periodNotes` v1 to
+  // run `bob periods ensure` for it, then open it. Never a template.
+  async openPeriodNoteThroughBob(creation) {
+    const name = creation && creation.basename ? creation.basename : "period";
+    let api = null;
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const ledger = plugins && plugins["bob-ledger-tools"];
+      const candidate = ledger && ledger.api && ledger.api.periodNotes;
+      if (candidate && candidate.version >= 1 && typeof candidate.ensureNote === "function") {
+        api = candidate;
+      }
+    } catch (error) {
+      api = null;
+    }
+    if (!api) {
+      new Notice(`No ${name} note yet — bob periods ensure creates period notes (enable Bob Ledger Tools)`);
+      return false;
+    }
+    let result = null;
+    try {
+      result = await api.ensureNote(creation.path);
+    } catch (error) {
+      result = null;
+    }
+    if (!result || result.ok !== true || !this.isMarkdownFile(result.file)) {
+      const reason = result && result.message ? result.message : "bob periods ensure failed";
+      new Notice(`Could not create ${name} — ${reason}`);
+      return false;
+    }
+    return this.openMarkdownFileWithLeafReuse(result.file, "Could not open note");
+  }
+
   async openLabeledBodyLink(label) {
     const context = await this.getActiveMarkdownContext();
     if (!context) {
@@ -102352,6 +102409,20 @@ class BobNavigationHotkeysImageZoomMixin {
   }
 }
 // ---- src/680-plugin-link-parse.js ----
+// Does a rendered link label answer `]n` (`next`) or `[n` (`prev`)? The
+// exact word (daily notes: `[[…|prev]] · [[…|next]]`), or an arrow label:
+// previous starts with `‹` or `<` (period notes: `‹ W44`); next ends or
+// starts with `›` or `>` (`W46 ›`). Other labels match only exactly.
+function renderedLinkMatchesNavLabel(renderedText, label) {
+  const text = String(renderedText === undefined || renderedText === null ? "" : renderedText).trim();
+  const wanted = String(label === undefined || label === null ? "" : label).trim();
+  if (!text) return false;
+  if (text === wanted) return true;
+  if (wanted === "prev") return /^[‹<]/.test(text);
+  if (wanted === "next") return /^[›>]/.test(text) || /[›>]$/.test(text);
+  return false;
+}
+
 class BobNavigationHotkeysLinkParseMixin {
 
   findFirstRenderedLinkInLine(line, label) {
@@ -102376,7 +102447,7 @@ class BobNavigationHotkeysLinkParseMixin {
         continue;
       }
 
-      if (link.renderedText.trim() === label) {
+      if (renderedLinkMatchesNavLabel(link.renderedText, label)) {
         return link;
       }
 
@@ -104149,6 +104220,9 @@ Object.assign(module.exports.helpers, {
   isConflictsNotePath,
   isGeneratedNotePath,
   isChildNotePickerExcludedPath,
+  // Period-note links: `]n` / `[n` labels and bob-owned creation.
+  isPeriodNoteCreationPath,
+  renderedLinkMatchesNavLabel,
 });
 // ---- src/702-relation-mention-exports.js ----
 // §19 text-mention exports (`docs/task-relations.md` §19). Kept in this

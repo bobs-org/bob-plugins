@@ -8,13 +8,21 @@
 const PERIOD_NOTES_ENSURE_TIMEOUT_MS = 15000;
 const PERIOD_NOTES_MIDNIGHT_TICK_MS = 5000;
 const PERIOD_NOTES_LOCK_RETRY_MS = 60000;
+// Templater fills a new empty note ~300 ms after creation; wait past that
+// before reading a created period note, so bob fills the stub it leaves.
+const PERIOD_NOTES_STUB_SETTLE_MS = 1500;
+// How long a navigation waits for Obsidian to index a note bob just made.
+const PERIOD_NOTES_INDEX_WAIT_MS = 3000;
 const PERIOD_NOTES_ADOPTION_PATH = "all_time.md";
 const PERIOD_NOTES_MIGRATE_COMMAND = "bob periods migrate";
 
-// Fresh argv for `bob periods ensure -q -f json`. A function so no caller can
-// mutate a shared array that another spawn reuses.
-function periodNotesEnsureArgs() {
-  return ["periods", "ensure", "-q", "-f", "json"];
+// Fresh argv for `bob periods ensure -q -f json`, plus `-d DATE` when a
+// period other than today's is wanted. A function so no caller can mutate a
+// shared array that another spawn reuses.
+function periodNotesEnsureArgs(date) {
+  const args = ["periods", "ensure", "-q", "-f", "json"];
+  if (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) args.push("-d", date);
+  return args;
 }
 
 function periodNotesAdoptionPath() {
@@ -78,6 +86,64 @@ function periodNotesWeekNotePath(value) {
   } catch (error) {
     return null;
   }
+}
+
+// Local YYYY-MM-DD of the Monday that opens ISO week `week` of `isoYear`,
+// or null when that week does not exist (W53 only in 53-week years).
+function periodNotesIsoWeekMonday(isoYear, week) {
+  try {
+    if (!Number.isInteger(isoYear) || !Number.isInteger(week) || week < 1 || week > 53) return null;
+    const jan4 = new Date(isoYear, 0, 4);
+    const monday = new Date(isoYear, 0, 4 - ((jan4.getDay() + 6) % 7) + (week - 1) * 7);
+    const parts = periodNotesIsoWeekYear(monday);
+    if (!parts || parts.isoYear !== isoYear || parts.week !== week) return null;
+    return formatLocalDate(monday);
+  } catch (error) {
+    return null;
+  }
+}
+
+// The period a vault path names (bob-cli docs/periods.md §1), with the date
+// `bob periods ensure -d` needs to create it: `{ id, kind, date }` for
+// `YYYY/YYYY-Www.md`, `YYYY/YYYY-Qn.md`, `YYYY.md`, and `all_time.md` (date
+// null: today's chain already holds it). Null for any other path.
+function periodNotesPeriodForPath(path) {
+  try {
+    const text = String(path || "").replace(/^\/+/, "");
+    if (text === PERIOD_NOTES_ADOPTION_PATH) return { id: "all", kind: "all", date: null };
+    let match = /^(\d{4})\/(\d{4})-W(\d{2})\.md$/.exec(text);
+    if (match && match[1] === match[2]) {
+      const date = periodNotesIsoWeekMonday(Number(match[2]), Number(match[3]));
+      return date ? { id: `${match[2]}-W${match[3]}`, kind: "week", date } : null;
+    }
+    match = /^(\d{4})\/(\d{4})-Q([1-4])\.md$/.exec(text);
+    if (match && match[1] === match[2]) {
+      const date = periodNotesIsoWeekMonday(Number(match[2]), (Number(match[3]) - 1) * 13 + 1);
+      return date ? { id: `${match[2]}-Q${match[3]}`, kind: "quarter", date } : null;
+    }
+    match = /^(\d{4})\.md$/.exec(text);
+    if (match && Number(match[1]) >= 1970 && Number(match[1]) <= 2999) {
+      const date = periodNotesIsoWeekMonday(Number(match[1]), 1);
+      return date ? { id: match[1], kind: "year", date } : null;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// True when a period note holds nothing bob must preserve: blank, or only a
+// closed frontmatter block (the Templater stub a clicked dangling link
+// leaves). Mirrors `periods::note::is_unfilled` in bob-cli.
+function periodNotesIsUnfilled(contents) {
+  const text = String(contents === undefined || contents === null ? "" : contents);
+  if (!text.trim()) return true;
+  const lines = text.split(/\r?\n/);
+  if (lines[0].trim() !== "---") return false;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index].trim() === "---") return lines.slice(index + 1).every((line) => !line.trim());
+  }
+  return false;
 }
 
 function periodNotesDecodeEnsure(stdout, stderr, exitCode) {
@@ -255,11 +321,12 @@ class BobLedgerToolsPeriodNotesMixin {
     }
   }
 
-  // Create-trigger entry point. Returns true when an ensure was started.
+  // Create-trigger entry point. Returns true when an ensure was started (or,
+  // for a period-note path, scheduled).
   periodNotesHandleCreate(file) {
     try {
       if (!periodNotesShouldSyncCreatedFile(this.periodNotesOnCreateEnabled, file, this.app)) {
-        return false;
+        return this.periodNotesHandlePeriodCreate(file);
       }
       const key = file && typeof file.path === "string" ? file.path : "";
       if (!key) return false;
@@ -271,6 +338,92 @@ class BobLedgerToolsPeriodNotesMixin {
     } catch (error) {
       return false;
     }
+  }
+
+  // A period note that appears in Obsidian (a clicked dangling `W46 ›` link,
+  // which Templater stubs with frontmatter): once Templater settles, ask bob
+  // to fill it. bob's own scaffolds have a body and are skipped, so the
+  // look-ahead notes ensure creates never cascade into more ensures.
+  periodNotesHandlePeriodCreate(file) {
+    try {
+      if (this.periodNotesOnCreateEnabled === false) return false;
+      const path = file && typeof file.path === "string" ? file.path : "";
+      if (!periodNotesPeriodForPath(path) || !this.periodNotesIsAdopted()) return false;
+      if (!this.periodNotesStubPaths) this.periodNotesStubPaths = new Set();
+      if (this.periodNotesStubPaths.has(path)) return false;
+      this.periodNotesStubPaths.add(path);
+      const settleMs = Number.isFinite(this.periodNotesStubSettleMs)
+        ? this.periodNotesStubSettleMs
+        : PERIOD_NOTES_STUB_SETTLE_MS;
+      setTimeout(() => {
+        void this.periodNotesFillStub(path).finally(() => {
+          this.periodNotesStubPaths.delete(path);
+        });
+      }, settleMs);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Fill one period-note stub through bob. Resolves true when ensure ran.
+  async periodNotesFillStub(path) {
+    try {
+      const vault = this.app && this.app.vault;
+      const file = vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+      if (!file) return false;
+      const contents = typeof vault.read === "function" ? await vault.read(file) : await vault.cachedRead(file);
+      if (!periodNotesIsUnfilled(contents)) return false;
+      const result = await this.periodNotesEnsureForPath(path, { waitMs: 0 });
+      return Boolean(result && result.ok);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Create one period note through bob — `bob periods ensure -d <its first
+  // day>` is create-only and fills stubs — then resolve the file once
+  // Obsidian indexes it. Resolves `{ ok, file, code, message }`; never rejects.
+  async periodNotesEnsureForPath(path, options = {}) {
+    const opts = options && typeof options === "object" ? options : {};
+    const fail = (code, message) => ({ ok: false, file: null, code, message });
+    try {
+      const period = periodNotesPeriodForPath(path);
+      if (!period) return fail("not-period", "Not a period note path.");
+      if (!this.periodNotesIsAdopted()) return fail("not-adopted", periodNotesNotAdoptedText());
+      const result = await this.periodNotesRunEnsure("open-period", { ...opts, date: period.date || undefined });
+      if (!result || result.ok !== true) {
+        return fail((result && result.code) || "failed", (result && result.message) || "bob periods ensure failed.");
+      }
+      const file = await this.periodNotesWaitForFile(path, opts.waitMs);
+      return file ? { ok: true, file, code: null, message: "" } : fail("not-indexed", `${path} did not appear in the vault.`);
+    } catch (error) {
+      return fail("failed", error && error.message ? String(error.message) : "bob periods ensure failed.");
+    }
+  }
+
+  async periodNotesWaitForFile(path, waitMs) {
+    const vault = this.app && this.app.vault;
+    if (!vault || typeof vault.getAbstractFileByPath !== "function") return null;
+    const limit = Number.isFinite(waitMs) ? waitMs : PERIOD_NOTES_INDEX_WAIT_MS;
+    for (let waited = 0; ; waited += 50) {
+      const file = vault.getAbstractFileByPath(path) || null;
+      if (file || waited >= limit) return file;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  // `api.periodNotes` v1: sibling plugins (bob-navigation-hotkeys) open a
+  // missing period note through bob instead of a Templater template.
+  // Additive: the top-level api stays v3. Members never throw.
+  periodNotesApi() {
+    return Object.freeze({
+      version: 1,
+      periodForPath: (path) => periodNotesPeriodForPath(path),
+      ensureNote: (path, options) => this.periodNotesEnsureForPath(path, options),
+    });
   }
 
   // Once-per-local-day entry point shared by the layout-ready trigger and the
@@ -299,12 +452,15 @@ class BobLedgerToolsPeriodNotesMixin {
         // The midnight ensure is best-effort.
       }
     };
+    // Only a host that can register (and so clear on unload) the ticker gets
+    // one, like every other Ledger Tools interval: an unregistered interval
+    // would outlive the plugin and keep test hosts' processes alive.
+    if (typeof this.registerInterval !== "function") {
+      this.periodNotesMidnightWatched = false;
+      return;
+    }
     try {
-      if (typeof this.registerInterval === "function") {
-        this.registerInterval(setInterval(tick, PERIOD_NOTES_MIDNIGHT_TICK_MS));
-      } else {
-        setInterval(tick, PERIOD_NOTES_MIDNIGHT_TICK_MS);
-      }
+      this.registerInterval(setInterval(tick, PERIOD_NOTES_MIDNIGHT_TICK_MS));
     } catch (error) {
       this.periodNotesMidnightWatched = false;
     }
@@ -327,8 +483,8 @@ class BobLedgerToolsPeriodNotesMixin {
     }
   }
 
-  periodNotesSpawnEnsure() {
-    return this.periodNotesRunSpawn(periodNotesEnsureArgs(), periodNotesDecodeEnsure, {
+  periodNotesSpawnEnsure(date) {
+    return this.periodNotesRunSpawn(periodNotesEnsureArgs(date), periodNotesDecodeEnsure, {
       commandLabel: "bob periods ensure",
       resolveBobPath: () =>
         typeof this.apiStatsBobPath === "function"
@@ -396,7 +552,7 @@ class BobLedgerToolsPeriodNotesMixin {
       }
       let result = null;
       try {
-        result = await this.periodNotesSpawnEnsure();
+        result = await this.periodNotesSpawnEnsure(opts.date);
       } catch (error) {
         result = {
           ok: false,

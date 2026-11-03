@@ -1,3 +1,17 @@
+// Does a rendered link label answer `]n` (`next`) or `[n` (`prev`)? The
+// exact word (daily notes: `[[…|prev]] · [[…|next]]`), or an arrow label:
+// previous starts with `‹` or `<` (period notes: `‹ W44`); next ends or
+// starts with `›` or `>` (`W46 ›`). Other labels match only exactly.
+function renderedLinkMatchesNavLabel(renderedText, label) {
+  const text = String(renderedText === undefined || renderedText === null ? "" : renderedText).trim();
+  const wanted = String(label === undefined || label === null ? "" : label).trim();
+  if (!text) return false;
+  if (text === wanted) return true;
+  if (wanted === "prev") return /^[‹<]/.test(text);
+  if (wanted === "next") return /^[›>]/.test(text) || /[›>]$/.test(text);
+  return false;
+}
+
 class BobNavigationHotkeysLinkParseMixin {
 
   findFirstRenderedLinkInLine(line, label) {
@@ -22,7 +36,7 @@ class BobNavigationHotkeysLinkParseMixin {
         continue;
       }
 
-      if (link.renderedText.trim() === label) {
+      if (renderedLinkMatchesNavLabel(link.renderedText, label)) {
         return link;
       }
 

@@ -268,10 +268,10 @@ class BobLedgerToolsPlugin extends Plugin {
         bobPath: () => this.apiStatsBobPath(),
       }),
       pomodoroClock: this.pomodoroClockApi(),
-      // Themes namespace v1: cached history, sync hue/history/
-      // near-duplicate mirrors, journal writers. Unavailable on mobile.
-      // Additive: api stays v3.
+      // Themes namespace v1: cached history, sync hue/history/near-duplicate
+      // mirrors, journal writers. Unavailable on mobile. Additive: api stays v3.
       themes: this.pomodoroThemesApi(),
+      periodNotes: this.periodNotesApi(), // v1: open missing period notes through bob
       // Work badge tones (workBadges namespace v2 adds the magenta exact-cap
       // tone): shared count-to-limit colors for TODAY, PENDING, NEXT, and READY.
       // Additive: top-level api stays v3. Every member is synchronous

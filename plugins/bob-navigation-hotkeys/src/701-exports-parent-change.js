@@ -12,4 +12,7 @@ Object.assign(module.exports.helpers, {
   isConflictsNotePath,
   isGeneratedNotePath,
   isChildNotePickerExcludedPath,
+  // Period-note links: `]n` / `[n` labels and bob-owned creation.
+  isPeriodNoteCreationPath,
+  renderedLinkMatchesNavLabel,
 });

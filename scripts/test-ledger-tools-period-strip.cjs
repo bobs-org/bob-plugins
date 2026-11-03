@@ -2,7 +2,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
-const { LedgerToolsPlugin } = require("./ledger-tools-harness.cjs");
+const { LedgerToolsPlugin, makeFreshnessApp } = require("./ledger-tools-harness.cjs");
+const { periodPartsFixtures } = require("../plugins/bob-ledger-tools/scripts/fixtures/stats/period-parts-fixtures.cjs");
 
 const helpers = LedgerToolsPlugin.helpers;
 const fixtureDir = path.join(__dirname, "..", "plugins/bob-ledger-tools/scripts/fixtures/stats");
@@ -40,6 +41,13 @@ class FakeNode {
   setAttribute(name, value) { this.attrs.set(name, String(value)); }
   getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
   appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+  get firstChild() { return this.children[0] || null; }
+  removeChild(child) {
+    const index = this.children.indexOf(child);
+    if (index >= 0) this.children.splice(index, 1);
+    child.parentNode = null;
+    return child;
+  }
   addEventListener(type, handler) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
     this.listeners.get(type).push(handler);
@@ -209,4 +217,61 @@ test("clicks reach the day note and Stats hand-offs, never a spawn on future", (
 
 test("period show args are one audited call per period", () => {
   assert.deepEqual(helpers.periodStripShowArgs("2026-W45"), ["periods", "show", "2026-W45", "-f", "json"]);
+});
+
+// The fences live on the real plugin, not just the helpers: a mixin that is
+// defined but never installed leaves `bob-stats-strip` and `bob-period-parts`
+// as plain code blocks in every period note.
+function loadedPlugin() {
+  const store = new Map();
+  const app = makeFreshnessApp({ tasks: [] });
+  app.loadLocalStorage = (key) => (store.has(key) ? store.get(key) : null);
+  app.saveLocalStorage = (key, value) => {
+    store.set(key, value);
+  };
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.onload();
+  return plugin;
+}
+
+function mountFence(plugin, language, sourcePath) {
+  const doc = fakeDocument();
+  const el = new FakeNode("div", doc);
+  el.ownerDocument = doc;
+  const added = [];
+  plugin.codeBlocks[language]("", el, { sourcePath, addChild: (child) => added.push(child) });
+  return { el, added };
+}
+
+async function settle(ms = 20) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+test("onload registers the bob-stats-strip and bob-period-parts fences", () => {
+  const plugin = loadedPlugin();
+  assert.equal(typeof plugin.setupPeriodStripHosts, "function");
+  assert.equal(typeof plugin.openStatsForPeriod, "function");
+  assert.equal(typeof plugin.codeBlocks["bob-stats-strip"], "function");
+  assert.equal(typeof plugin.codeBlocks["bob-period-parts"], "function");
+});
+
+test("period-note fences fetch once per period and paint the strip and the parts table", async () => {
+  const plugin = loadedPlugin();
+  const quarter = periodPartsFixtures(closed).closedQuarter;
+  const reports = { "2026-W44": closed, "2026-Q2": quarter };
+  const spawns = [];
+  plugin.periodStripSpawnShow = async (periodId) => {
+    spawns.push(periodId);
+    return { ok: true, report: reports[periodId] };
+  };
+  const strip = mountFence(plugin, "bob-stats-strip", "2026/2026-W44.md");
+  assert.equal(strip.added.length, 1, "the strip registers a render child for cleanup");
+  await settle();
+  assert.equal(byClass(strip.el, "bob-period-strip-fact").length, 5);
+  assert.equal(byClass(strip.el, "bob-period-strip-column").length, 7);
+  const table = mountFence(plugin, "bob-period-parts", "2026/2026-Q2.md");
+  await settle();
+  assert.ok(byClass(table.el, "bob-period-parts-table").length >= 1);
+  assert.equal(byClass(table.el, "bob-period-parts-row").length, 1 + quarter.children.length);
+  assert.deepEqual(spawns, ["2026-W44", "2026-Q2"]);
 });

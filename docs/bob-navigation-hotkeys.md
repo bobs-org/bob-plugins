@@ -505,6 +505,19 @@ to reach the current or next review task and `[[` to step backward. `N]]` and
 `N[w`). Repeat delegates synchronously, leaving the pending Vim count for the
 walk to consume. Link type `n` follows `]n` / `[n` behavior and ignores counts.
 
+`]n` / `[n` open the first body link (outside frontmatter and code fences)
+whose label is exactly `next` / `prev` — the daily-note nav line — or is an
+arrow label: previous starts with `‹` or `<`, and next ends or starts with `›`
+or `>`. That covers the period-note nav line
+`[[2026/2026-W44|‹ W44]] · [[2026/2026-Q4|↑ 2026-Q4]] · [[2026/2026-W46|W46 ›]]`
+in week, quarter, and year notes. Following any link (Enter, `]n`, `[n`) to a
+week, quarter, year, or all-time note that does not exist yet asks bob to
+create it through the bob-ledger-tools `api.periodNotes` v1 namespace
+(`bob periods ensure -d <its first day>`), then opens it; it never applies a
+Templater template to a period note. Without that namespace it shows
+`No <name> note yet — bob periods ensure creates period notes` and creates
+nothing.
+
 The selected type is stored in device-local Obsidian local storage. It is per
 device and per vault, and survives plugin reloads and Obsidian restarts. With
 no saved or used type, either repeat key shows

@@ -114,6 +114,40 @@ class BobNavigationHotkeysProjectFileMixin {
     await this.openOrCreateLinkTarget(link, file.path, notFoundMessage, link);
   }
 
+  // A missing week, quarter, year, or all-time note is bob's to create
+  // (bob-cli docs/periods.md): ask bob-ledger-tools `api.periodNotes` v1 to
+  // run `bob periods ensure` for it, then open it. Never a template.
+  async openPeriodNoteThroughBob(creation) {
+    const name = creation && creation.basename ? creation.basename : "period";
+    let api = null;
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const ledger = plugins && plugins["bob-ledger-tools"];
+      const candidate = ledger && ledger.api && ledger.api.periodNotes;
+      if (candidate && candidate.version >= 1 && typeof candidate.ensureNote === "function") {
+        api = candidate;
+      }
+    } catch (error) {
+      api = null;
+    }
+    if (!api) {
+      new Notice(`No ${name} note yet — bob periods ensure creates period notes (enable Bob Ledger Tools)`);
+      return false;
+    }
+    let result = null;
+    try {
+      result = await api.ensureNote(creation.path);
+    } catch (error) {
+      result = null;
+    }
+    if (!result || result.ok !== true || !this.isMarkdownFile(result.file)) {
+      const reason = result && result.message ? result.message : "bob periods ensure failed";
+      new Notice(`Could not create ${name} — ${reason}`);
+      return false;
+    }
+    return this.openMarkdownFileWithLeafReuse(result.file, "Could not open note");
+  }
+
   async openLabeledBodyLink(label) {
     const context = await this.getActiveMarkdownContext();
     if (!context) {

@@ -59,6 +59,9 @@ const {
   PERIOD_NOTES_ENSURE_TIMEOUT_MS,
   PERIOD_NOTES_MIDNIGHT_TICK_MS,
   PERIOD_NOTES_LOCK_RETRY_MS,
+  periodNotesIsoWeekMonday,
+  periodNotesPeriodForPath,
+  periodNotesIsUnfilled,
   todayDailyPath,
 } = LedgerToolsPlugin.helpers;
 
@@ -78,6 +81,7 @@ function makeHarness({ vaultPaths = {}, spawn = null } = {}) {
     },
     vault: {
       getAbstractFileByPath: (path) => vaultFiles.get(path) || null,
+      read: async (file) => (file && typeof file.contents === "string" ? file.contents : ""),
       on(event, callback) {
         callbacks[event] = callback;
         return { event, callback };
@@ -362,4 +366,82 @@ test("setup registers the open-week command and teardown clears the retry timer"
   assert.equal(cleared, 424242);
   assert.equal(harnessed.plugin.periodNotesRetryTimer, null);
   assert.match(periodNotesNotAdoptedText(), /bob periods migrate/);
+});
+
+test("period paths map to the date bob periods ensure -d needs", () => {
+  assert.equal(periodNotesIsoWeekMonday(2026, 1), "2025-12-29");
+  assert.equal(periodNotesIsoWeekMonday(2026, 53), "2026-12-28");
+  assert.equal(periodNotesIsoWeekMonday(2027, 53), null, "2027 has 52 weeks");
+  assert.deepEqual(periodNotesPeriodForPath("2026/2026-W47.md"), { id: "2026-W47", kind: "week", date: "2026-11-16" });
+  assert.deepEqual(periodNotesPeriodForPath("2026/2026-Q4.md"), { id: "2026-Q4", kind: "quarter", date: "2026-09-28" });
+  assert.deepEqual(periodNotesPeriodForPath("2027.md"), { id: "2027", kind: "year", date: "2027-01-04" });
+  assert.deepEqual(periodNotesPeriodForPath("all_time.md"), { id: "all", kind: "all", date: null });
+  for (const path of ["2026/20261103.md", "2025/2026-W01.md", "2027/2027-W53.md", "2026/2026-Q5.md", "notes/2026.md", "org.md"]) {
+    assert.equal(periodNotesPeriodForPath(path), null, path);
+  }
+});
+
+test("unfilled period notes are blank or a frontmatter-only Templater stub", () => {
+  assert.equal(periodNotesIsUnfilled(""), true);
+  assert.equal(periodNotesIsUnfilled("---\nparent: \"[[org]]\"\ncreated: 2026-11-03\n---\n"), true);
+  assert.equal(periodNotesIsUnfilled("---\nparent: x\n---\n\nwords\n"), false);
+  assert.equal(periodNotesIsUnfilled("---\nparent: x\n"), false);
+});
+
+test("a stubbed period note is filled once through ensure -d; bob scaffolds never cascade", async () => {
+  const stub = { path: "2026/2026-W47.md", contents: "---\nparent: \"[[2026/2026-W46]]\"\ncreated: 2026-11-03\n---\n" };
+  const scaffold = { path: "2026/2026-W48.md", contents: "---\nid: 2026-W48\n---\n\n# 2026-W48 · Nov 23 – 29\n" };
+  const harnessed = makeHarness({ vaultPaths: { "all_time.md": { path: "all_time.md" }, [stub.path]: stub, [scaffold.path]: scaffold } });
+  harnessed.plugin.periodNotesStubSettleMs = 5;
+  assert.equal(harnessed.plugin.periodNotesHandleCreate(stub), true);
+  assert.equal(harnessed.plugin.periodNotesHandleCreate(stub), false, "one fill per settle window");
+  assert.equal(harnessed.plugin.periodNotesHandleCreate(scaffold), true);
+  assert.equal(harnessed.plugin.periodNotesHandleCreate({ path: "Notes/idea.md" }), false);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.deepEqual(harnessed.spawns.map((spawn) => spawn.args), [["periods", "ensure", "-q", "-f", "json", "-d", "2026-11-16"]]);
+});
+
+test("api.periodNotes.ensureNote creates a missing period note through bob, never a template", async () => {
+  const harnessed = makeHarness({
+    vaultPaths: { "all_time.md": { path: "all_time.md" } },
+    spawn: ({ vaultFiles }) => {
+      vaultFiles.set("2027.md", { path: "2027.md" });
+      return okReport();
+    },
+  });
+  const api = harnessed.plugin.periodNotesApi();
+  assert.equal(api.version, 1);
+  assert.deepEqual(api.periodForPath("2027.md"), { id: "2027", kind: "year", date: "2027-01-04" });
+  const created = await api.ensureNote("2027.md");
+  assert.equal(created.ok, true);
+  assert.equal(created.file.path, "2027.md");
+  assert.deepEqual(harnessed.spawns[0].args, ["periods", "ensure", "-q", "-f", "json", "-d", "2027-01-04"]);
+  const refused = await api.ensureNote("Notes/idea.md");
+  assert.equal(refused.code, "not-period");
+  const unadopted = makeHarness({ vaultPaths: {} }).plugin.periodNotesApi();
+  assert.equal((await unadopted.ensureNote("2027.md")).code, "not-adopted");
+});
+
+test("the midnight ticker starts only on hosts that can register it", () => {
+  const originalSetInterval = global.setInterval;
+  let started = 0;
+  global.setInterval = (...args) => {
+    started += 1;
+    const handle = originalSetInterval(...args);
+    clearInterval(handle);
+    return handle;
+  };
+  try {
+    const bare = makeHarness({ vaultPaths: {} });
+    bare.plugin.registerInterval = undefined;
+    bare.plugin.periodNotesWatchMidnight();
+    assert.equal(started, 0, "no unregistered interval outlives the plugin");
+    assert.equal(bare.plugin.periodNotesMidnightWatched, false);
+    const hosted = makeHarness({ vaultPaths: {} });
+    hosted.plugin.periodNotesWatchMidnight();
+    assert.equal(started, 1);
+    assert.equal(hosted.plugin.periodNotesMidnightWatched, true);
+  } finally {
+    global.setInterval = originalSetInterval;
+  }
 });

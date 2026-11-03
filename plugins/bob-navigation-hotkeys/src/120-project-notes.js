@@ -599,6 +599,25 @@ function getNoteTemplateSelection(kind) {
   return NOTE_TEMPLATE_SELECTIONS[kind] || NOTE_TEMPLATE_SELECTIONS.default;
 }
 
+// Week, quarter, year, and all-time note paths (bob-cli docs/periods.md
+// §1). bob creates these from a deterministic scaffold, so link-following
+// never creates one from a template.
+function isPeriodNoteCreationPath(path) {
+  const normalizedPath = normalizeVaultRelativePath(path);
+  if (normalizedPath === "all_time.md" || YEARLY_NOTE_CREATION_PATH_RE.test(normalizedPath)) {
+    return true;
+  }
+  const match = /^(\d{4})\/(\d{4})-(?:W(\d{2})|Q([1-4]))\.md$/.exec(normalizedPath);
+  if (!match || match[1] !== match[2]) {
+    return false;
+  }
+  if (match[3] === undefined) {
+    return true;
+  }
+  const week = parseIntegerText(match[3]);
+  return week >= 1 && week <= 53;
+}
+
 function getNoteTemplateForCreationPath(path) {
   const normalizedPath = normalizeVaultRelativePath(path);
   const dailyMatch = normalizedPath.match(DAILY_NOTE_CREATION_PATH_RE);

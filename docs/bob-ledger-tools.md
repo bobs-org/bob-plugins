@@ -572,6 +572,10 @@ one Notice per local day: `Period notes could not be created — <message>`.
 running ensure first when the note is missing. Without adoption it shows the
 `bob periods migrate` Notice instead of opening anything.
 
+A clicked dangling period link (a Templater frontmatter stub) is filled by
+`bob periods ensure -d <first day>`; `api.periodNotes` v1 lets
+bob-navigation-hotkeys do the same.
+
 Agent instruction callouts (`> [!agent]- ...`) render as one quiet folded
 line: no tinted background, a small muted title, and the expanded body in the
 normal text colour.

@@ -403,6 +403,10 @@ class BobNavigationHotkeysNotesMoveMixin {
       );
     }
 
+    if (isPeriodNoteCreationPath(creation.path)) {
+      return this.openPeriodNoteThroughBob(creation);
+    }
+
     const templaterPlugin = this.getTemplaterPlugin();
     if (!templaterPlugin) {
       new Notice("Templater is not available");

@@ -280,3 +280,31 @@ test("parity comparator accepts a mixin-split helper class but not a changed met
     ),
   );
 });
+
+// A mixin class that no install fragment lists never reaches the plugin
+// prototype, so its methods (and the hooks that probe for them with
+// `typeof this.method === "function"`) silently do nothing. That is how the
+// period stats strip shipped without its `bob-stats-strip` fence.
+test("every committed plugin installs each mixin class its fragments define", () => {
+  const pluginsRoot = path.join(__dirname, "..", "plugins");
+  const { readdirSync } = require("node:fs");
+  let checked = 0;
+  for (const plugin of readdirSync(pluginsRoot)) {
+    const srcRoot = path.join(pluginsRoot, plugin, "src");
+    const manifestPath = path.join(srcRoot, "fragments.json");
+    if (!existsSync(manifestPath)) continue;
+    const fragments = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const defined = new Set();
+    let installSource = "";
+    for (const fragment of fragments) {
+      const source = readFileSync(path.join(srcRoot, ...fragment.split("/")), "utf8");
+      for (const match of source.matchAll(/^class ([A-Za-z0-9_]+Mixin)\b/gm)) defined.add(match[1]);
+      if (/install/i.test(path.basename(fragment))) installSource += "\n" + source;
+    }
+    if (!defined.size) continue;
+    checked += 1;
+    const missing = [...defined].filter((name) => !new RegExp("\\b" + name + "\\b").test(installSource));
+    assert.deepEqual(missing, [], `${plugin} defines mixins that no install fragment lists`);
+  }
+  assert.ok(checked >= 1, "at least one plugin defines mixins");
+});

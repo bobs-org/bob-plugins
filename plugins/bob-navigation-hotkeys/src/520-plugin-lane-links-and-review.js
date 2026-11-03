@@ -413,11 +413,6 @@ class BobNavigationHotkeysLaneReviewMixin {
     return false;
   }
 
-  async requestFreshnessRefreshSummary(options = {}) {
-    const result = await this.requestFreshnessRefreshAnswers(options);
-    return { cancelled: result.cancelled, ...(result.failed ? { failed: true } : {}), summary: result.summary };
-  }
-
   async requestFreshnessRefreshAnswers(options = {}) {
     const keepMode = Boolean(options.keep);
     const batchMode = Array.isArray(options.keepTargets);
@@ -530,11 +525,15 @@ class BobNavigationHotkeysLaneReviewMixin {
     const queueBefore = this.readFreshnessQueue(api);
     const countsBefore = this.readFreshnessCounts(api);
     // Resolve every target exactly against the pre-write queue: only an
-    // exact due-Ready ROTTEN/TICKLER row counts (`docs/freshness.md` §2a).
+    // exact due row on its rung's tier counts (`docs/freshness.md` §2a).
     // Every other explicit keep still goes through `keepLine` uncounted so
-    // the streak is preserved, never reset.
+    // the streak is preserved, never reset. Early and Today-linked lane
+    // keeps stamp quietly with an "early · not counted" notice: no
+    // prompt and no Rotten Log entry (`early_keeps = quiet`).
     const localDayBefore = this.laneReleaseDateText();
     const singleKeep = options.countExplicit !== true && safeTargets.length === 1;
+    const keepsSupported = freshnessSupportsKeeps(api);
+    const decayPolicy = this.readFreshnessDecayPolicy(api);
     let cardFallback = false;
     const resolved = deduplicateFreshStampTargets(
       safeTargets.map((target) => ({
@@ -549,16 +548,22 @@ class BobNavigationHotkeysLaneReviewMixin {
         line: target.line,
         raw,
       });
-      const keep = freshnessSupportsKeeps(api)
-        ? classifyRottenKeepTarget({ match, raw, stamper: options.stamper, dateText: options.dateText })
-        : { counted: false };
+      const isToday = match.ok === true ? freshnessTargetIsToday(api, match.entry) : false;
+      const keep = keepsSupported
+        ? classifyRottenKeepTarget({ match, raw, stamper: options.stamper, dateText: options.dateText, isToday })
+        : { counted: false, keepsBefore: parseKeepsCount(raw), keepsAfter: parseKeepsCount(raw), rung: null };
+      const status = getObsidianTaskCheckboxStatus(raw);
+      const laneRow = status === "/" || status === "*";
       return Object.freeze({
         keep,
+        isToday,
+        laneRow,
+        rung: keep.counted === true ? keep.rung : null,
         target: Object.freeze({
           line: target.line,
           path: target.path,
           raw,
-          counted: singleKeep ? keep.counted : match.ok,
+          counted: singleKeep ? keep.counted === true : keepsSupported ? keep.counted === true : match.ok,
         }),
         match,
       });
@@ -609,13 +614,16 @@ class BobNavigationHotkeysLaneReviewMixin {
     // Single source-task trigger: one requested target outside a counted
     // session, exact eligible with a due choice, opens the card and writes
     // nothing. A press moving below-limit to limit simply stamps; the next
-    // due press asks.
+    // due press asks. Lane rows count and log until the rung-aware card
+    // ships: no card for them while `freshnessDecayLaneCardAvailable`
+    // is false.
     if (
       freshnessSupportsDecayDecisions(api) &&
       options.countExplicit !== true &&
       resolved.length === 1 &&
       resolved[0].match.ok === true &&
-      isFreshnessDecayDecisionEntry(resolved[0].match.entry)
+      isFreshnessDecayDecisionEntry(resolved[0].match.entry) &&
+      freshnessDecayDecisionSkipsLane(resolved[0].match.entry.lane)
     ) {
       const opened = await this.maybeOpenFreshnessDecayCard(
         cm,
@@ -674,42 +682,44 @@ class BobNavigationHotkeysLaneReviewMixin {
         return false;
       }
     }
-    const eligibleTargets = keepTargets.filter((target) =>
-      isPendingWorkLogTargetRawLine(target.raw),
-    );
+    // Only counted keeps prompt: counted Ready/P-level keeps log with
+    // their rung tail, and counted due lane keeps log too. Early,
+    // same-day, and otherwise uncounted lane rows stamp quietly below
+    // with no prompt and no entry.
     const rottenTargets = resolved
-      .filter((item) => item.keep.counted &&
+      .filter((item) => item.keep.counted === true && !item.laneRow &&
         keepTargets.some((target) => target.line === item.target.line))
       .map((item) => ({
         ...item,
         history: readRottenLog(content, item.target.line),
       }));
-    const laneTargets = keepTargets
-      .filter((target) => isNextRottenLogTargetRawLine(target.raw))
-      .map((target) => {
-        const item = resolved.find((candidate) => candidate.target.line === target.line);
-        return {
-          raw: target.raw,
-          entry: item && item.match && item.match.ok ? item.match.entry : null,
-          history: readRottenLog(content, target.line),
-          target,
-        };
-      });
+    const laneTargets = resolved
+      .filter((item) => item.keep.counted === true && item.laneRow &&
+        keepTargets.some((target) => target.line === item.target.line))
+      .map((item) => ({
+        raw: item.target.raw,
+        entry: item.match.entry,
+        keep: item.keep,
+        rung: item.keep.rung,
+        history: readRottenLog(content, item.target.line),
+        target: item.target,
+      }));
     const promptPlan = planFreshnessRefreshPrompt({
       singleKeep,
       rottenTargets: rottenTargets.map((item) => ({
         raw: item.target.raw,
         entry: item.match.entry,
         keep: item.keep,
+        rung: item.keep.rung,
         history: item.history,
       })),
-      workTargets: eligibleTargets,
       laneTargets,
     });
     let keepReason = "";
-    let summary = "";
     if (promptPlan.kind === "single-rotten" || promptPlan.kind === "single-lane") {
       const item = promptPlan.keepTargets[0];
+      const rung = item.rung || (item.keep && item.keep.rung) ||
+        (item.kind === "lane" ? "Next" : "Ready");
       const result = await this.requestFreshnessRefreshAnswers({
         keepReason: options.keepReason,
         dateText: options.dateText,
@@ -718,8 +728,10 @@ class BobNavigationHotkeysLaneReviewMixin {
           raw: item.raw,
           entry: item.entry,
           ...item.keep,
+          rung,
+          allowance: this.freshnessDecayAllowanceFor(decayPolicy, rung),
           history: item.history,
-          ...(item.kind === "lane" ? { lane: "next" } : {}),
+          ...(item.kind === "lane" && !item.rung && !(item.keep && item.keep.rung) ? { lane: "next" } : {}),
           advance: options.advance === true,
         },
       });
@@ -732,39 +744,18 @@ class BobNavigationHotkeysLaneReviewMixin {
     } else if (promptPlan.kind === "batch") {
       const result = await this.requestFreshnessRefreshAnswers({
         keepTargets: promptPlan.keepTargets,
-        showWorkField: promptPlan.showWorkField,
+        showWorkField: false,
         keepReason: options.keepReason,
-        ...(promptPlan.showWorkField ? { summary: options.summary } : {}),
         dateText: options.dateText,
         now: options.now,
         totalCount: keepTargets.length,
-        eligibleCount: eligibleTargets.length,
       });
       if (result.failed) {
-        new Notice(promptPlan.showWorkField
-          ? "Could not open combined refresh prompt; no tasks were updated"
-          : "Could not open Keep reason prompt; no tasks were updated");
+        new Notice("Could not open Keep reason prompt; no tasks were updated");
         return false;
       }
       if (result.cancelled) return false;
       keepReason = result.keepReason;
-      summary = result.summary;
-    } else if (promptPlan.kind === "work-only") {
-      const result = await this.requestFreshnessRefreshSummary({
-        summary: options.summary,
-        dateText: options.dateText,
-        now: options.now,
-        totalCount: keepTargets.length,
-        eligibleCount: eligibleTargets.length,
-      });
-      if (result.failed) {
-        new Notice("Could not open Work Log prompt; no tasks were updated");
-        return false;
-      }
-      if (result.cancelled) {
-        return false;
-      }
-      summary = result.summary;
     }
     if (promptPlan.kind !== "none") {
       if (this.laneReleaseDateText() !== localDayBefore) {
@@ -795,17 +786,26 @@ class BobNavigationHotkeysLaneReviewMixin {
       options.stamper,
       options.dateText,
       {
-        workSummary: summary,
-        workLogStampText: options.workLogStampText || options.stampText,
-        now: options.now,
         keepReason,
-        rottenLines: rottenTargets.map((item) => item.target.line),
-        laneLines: laneTargets.map((item) => item.target.line),
+        rottenTargets: rottenTargets.map((item) => ({ line: item.target.line, rung: item.keep.rung })),
+        laneTargets: laneTargets.map((item) => ({ line: item.target.line, rung: item.keep.rung })),
       },
     );
     if (!plan.ok) {
       new Notice(freshStampRefusalNotice(plan.refusal));
       return false;
+    }
+    // Uncounted lane rows with a prior-day stamp kept quietly: one
+    // shared "early · not counted" tail on the stamp notice.
+    let quietTail = "";
+    for (const entry of plan.stamped) {
+      if (entry.counted !== false) continue;
+      const status = getObsidianTaskCheckboxStatus(entry.before);
+      if (status !== "/" && status !== "*") continue;
+      if (freshnessQuietNotCountedNotice(entry.before, options.dateText)) {
+        quietTail = freshnessQuietNotCountedNotice(entry.before, options.dateText);
+        break;
+      }
     }
     if (plan.content !== content) {
       const nextLines = plan.content.split(/\r?\n/);
@@ -834,7 +834,7 @@ class BobNavigationHotkeysLaneReviewMixin {
       plan.stamped,
       options.dateText,
       {
-        skipTail,
+        skipTail: skipTail + quietTail,
         workLogWrittenCount: plan.workLogWrittenCount,
         rottenLogWrittenCount: plan.rottenLogWrittenCount,
         deferNotice: options.advance === true,

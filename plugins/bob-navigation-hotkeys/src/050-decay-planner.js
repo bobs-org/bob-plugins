@@ -521,11 +521,15 @@ function partitionFreshStampDecisionSkips(resolved, options) {
     const skipped = [];
     for (const item of Array.isArray(resolved) ? resolved : []) {
       const match = item ? item.match : null;
+      const lane = match && match.entry && typeof match.entry.lane === "string"
+        ? match.entry.lane
+        : null;
       if (
         skipDecisions &&
         match &&
         match.ok === true &&
-        isFreshnessDecayDecisionEntry(match.entry)
+        isFreshnessDecayDecisionEntry(match.entry) &&
+        freshnessDecayDecisionSkipsLane(lane)
       ) {
         skipped.push(item.target);
       } else {

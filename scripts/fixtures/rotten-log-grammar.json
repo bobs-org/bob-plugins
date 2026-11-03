@@ -1,0 +1,266 @@
+{
+  "version": 1,
+  "note": "Shared Rotten Log grammar fixture for task decay (bob-cli docs/freshness.md §2a). Mirrored byte-for-byte by navigation's ROTTEN_LOG_ENTRY_RE/formatRottenLogEntryText/parseRottenLogEntryBullet and ledger-tools' FRESHNESS_ROTTEN_ENTRY_RE/freshnessRottenParseEntry. Rung is WIP, Next, Ready, or a priority level label; lanes and Ready use 'in', P-levels use 'at'. Legacy 'kept N×' reads as Ready; legacy 'kept in Next' reads as an uncounted Next keep.",
+  "format": [
+    {
+      "input": {
+        "date": "2026-11-04",
+        "reason": "still mid-refactor",
+        "keeps": 1,
+        "rung": "WIP"
+      },
+      "text": "*2026-11-04* — still mid-refactor · kept 1× in WIP"
+    },
+    {
+      "input": {
+        "date": "2026-11-08",
+        "reason": "waiting on Alice's review",
+        "keeps": 1,
+        "rung": "Next"
+      },
+      "text": "*2026-11-08* — waiting on Alice's review · kept 1× in Next"
+    },
+    {
+      "input": {
+        "date": "2026-11-02",
+        "reason": "still the primer",
+        "keeps": 3,
+        "rung": "Ready"
+      },
+      "text": "*2026-11-02* — still the primer · kept 3× in Ready"
+    },
+    {
+      "input": {
+        "date": "2026-11-07",
+        "reason": "defer a week",
+        "keeps": 1,
+        "rung": "P2"
+      },
+      "text": "*2026-11-07* — defer a week · kept 1× at P2"
+    },
+    {
+      "input": {
+        "date": "2026-11-08",
+        "reason": "",
+        "keeps": 2,
+        "rung": "WIP"
+      },
+      "text": "*2026-11-08* — 🤷 no reason given · kept 2× in WIP"
+    },
+    {
+      "input": {
+        "date": "2026-11-08",
+        "reason": "",
+        "keeps": 2,
+        "rung": "Next"
+      },
+      "text": "*2026-11-08* — 🤷 no reason given · kept 2× in Next"
+    },
+    {
+      "input": {
+        "date": "2026-11-02",
+        "reason": "",
+        "keeps": 3,
+        "rung": "Ready"
+      },
+      "text": "*2026-11-02* — 🤷 no reason given · kept 3× in Ready"
+    },
+    {
+      "input": {
+        "date": "2026-11-07",
+        "reason": "",
+        "keeps": 2,
+        "rung": "P4"
+      },
+      "text": "*2026-11-07* — 🤷 no reason given · kept 2× at P4"
+    }
+  ],
+  "parse": [
+    {
+      "line": "\t\t- *2026-11-04* — still mid-refactor · kept 1× in WIP",
+      "entry": {
+        "date": "2026-11-04",
+        "reason": "still mid-refactor",
+        "keeps": 1,
+        "rung": "WIP",
+        "lane": null,
+        "kind": "kept"
+      }
+    },
+    {
+      "line": "\t\t- *2026-11-08* — waiting on Alice's review · kept 1× in Next",
+      "entry": {
+        "date": "2026-11-08",
+        "reason": "waiting on Alice's review",
+        "keeps": 1,
+        "rung": "Next",
+        "lane": "next",
+        "kind": "kept"
+      }
+    },
+    {
+      "line": "\t\t- *2026-11-02* — still the primer · kept 3× in Ready",
+      "entry": {
+        "date": "2026-11-02",
+        "reason": "still the primer",
+        "keeps": 3,
+        "rung": "Ready",
+        "lane": null,
+        "kind": "kept"
+      }
+    },
+    {
+      "line": "\t\t- *2026-11-07* — defer a week · kept 1× at P2",
+      "entry": {
+        "date": "2026-11-07",
+        "reason": "defer a week",
+        "keeps": 1,
+        "rung": "P2",
+        "lane": null,
+        "kind": "kept"
+      }
+    },
+    {
+      "line": "\t\t- *2026-11-08* — 🤷 no reason given · kept 2× in WIP",
+      "entry": {
+        "date": "2026-11-08",
+        "reason": "🤷 no reason given",
+        "keeps": 2,
+        "rung": "WIP",
+        "lane": null,
+        "kind": "kept"
+      }
+    },
+    {
+      "line": "\t\t- *2026-11-09* — 🍂 WIP → Next · after 2 keeps",
+      "entry": {
+        "date": "2026-11-09",
+        "reason": "🍂 WIP → Next",
+        "keeps": 2,
+        "rung": "WIP",
+        "lane": null,
+        "kind": "step"
+      }
+    },
+    {
+      "line": "\t\t- *2026-11-09* — 🍂 Ready → P1 · after 1 keep",
+      "entry": {
+        "date": "2026-11-09",
+        "reason": "🍂 Ready → P1",
+        "keeps": 1,
+        "rung": "Ready",
+        "lane": null,
+        "kind": "step"
+      }
+    },
+    {
+      "line": "\t\t- *2026-11-09* — 🍂 P2 → P3 · after 2 keeps",
+      "entry": {
+        "date": "2026-11-09",
+        "reason": "🍂 P2 → P3",
+        "keeps": 2,
+        "rung": "P2",
+        "lane": null,
+        "kind": "step"
+      }
+    },
+    {
+      "line": "\t\t- *2026-11-09* — 🍂 rolled again at P4 · after 2 keeps",
+      "entry": {
+        "date": "2026-11-09",
+        "reason": "🍂 rolled again at P4",
+        "keeps": 2,
+        "rung": "P4",
+        "lane": null,
+        "kind": "reroll"
+      }
+    },
+    {
+      "line": "\t\t- *2026-11-09* — 🍂 Next → dropped · after 2 keeps",
+      "entry": {
+        "date": "2026-11-09",
+        "reason": "🍂 Next → dropped",
+        "keeps": 2,
+        "rung": "Next",
+        "lane": "next",
+        "kind": "drop"
+      }
+    },
+    {
+      "line": "\t\t- *2026-11-08* — still the next thing · stayed in Next after 2 keeps",
+      "entry": {
+        "date": "2026-11-08",
+        "reason": "still the next thing",
+        "keeps": 2,
+        "rung": "Next",
+        "lane": "next",
+        "kind": "stayed"
+      }
+    },
+    {
+      "line": "\t\t- *2026-11-08* — holding · stayed at P1 after 1 keep",
+      "entry": {
+        "date": "2026-11-08",
+        "reason": "holding",
+        "keeps": 1,
+        "rung": "P1",
+        "lane": null,
+        "kind": "stayed"
+      }
+    },
+    {
+      "line": "\t\t- *2026-10-16* — old reason · kept 2×",
+      "entry": {
+        "date": "2026-10-16",
+        "reason": "old reason",
+        "keeps": 2,
+        "rung": "Ready",
+        "lane": null,
+        "kind": "kept"
+      }
+    },
+    {
+      "line": "\t\t- *2026-10-16* — still needed · kept in Next",
+      "entry": {
+        "date": "2026-10-16",
+        "reason": "still needed",
+        "keeps": null,
+        "rung": "Next",
+        "lane": "next",
+        "kind": "kept"
+      }
+    }
+  ],
+  "reject": [
+    "\t\t- *2026-10-16* — old reason · kept 0×",
+    "\t\t- *2026-10-16* — old reason · kept 1000×",
+    "\t\t- *2026-10-16* — old reason · kept 2x",
+    "\t\t- *2026-10-16* — old reason · kept in WIP",
+    "\t\t- *2026-10-16* — old reason · kept 2× in Nowhere",
+    "\t\t- *2026-10-16* — old reason · stayed in Next after 0 keeps",
+    "\t\t- *2026-10-16* — old reason",
+    "\t\t- 2026-10-16 — old reason · kept 2× in Ready",
+    "\t\t- *2026-10-16* - old reason · kept 2× in Ready"
+  ],
+  "tallies": [
+    {
+      "lines": [
+        "\t\t- *2026-11-09* — 🍂 Next → Ready · after 2 keeps",
+        "\t\t- *2026-11-08* — 🤷 no reason given · kept 2× in Next",
+        "\t\t- *2026-11-07* — waiting on Alice's review · kept 1× in Next",
+        "\t\t- *2026-11-06* — 🍂 WIP → Next · after 2 keeps",
+        "\t\t- *2026-11-05* — 🤷 no reason given · kept 2× in WIP",
+        "\t\t- *2026-11-04* — still mid-refactor · kept 1× in WIP"
+      ],
+      "text": "WIP 3 · Next 3"
+    },
+    {
+      "lines": [
+        "\t\t- *2026-11-09* — 🍂 Ready → P1 · after 2 keeps",
+        "\t\t- *2026-11-02* — still the primer · kept 3× in Ready",
+        "\t\t- *2026-10-16* — old reason · kept 2×"
+      ],
+      "text": "Ready 3"
+    }
+  ]
+}

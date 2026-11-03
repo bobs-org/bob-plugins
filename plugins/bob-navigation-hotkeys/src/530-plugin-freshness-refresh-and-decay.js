@@ -101,11 +101,26 @@ class BobNavigationHotkeysFreshnessDecayMixin {
   // Stale inputs write nothing and rebuild for a fresh choice.
 
   // Normalized decay policy from the ledger api, with counting defaults
-  // when the namespace is old or throwing. Never throws.
+  // when the namespace is old or throwing. Per-rung allowances resolve
+  // through the `keeps` fallback, mirroring `freshnessDecayLimitFor`
+  // in ledger-tools. Never throws.
   readFreshnessDecayPolicy(api) {
+    const rungLimit = (decay, key, fallback) => {
+      try {
+        const value = decay ? decay[key] : undefined;
+        if (value === false) return false;
+        if (Number.isInteger(value) && value >= 0 && value <= 999) return value;
+        return fallback;
+      } catch (error) {
+        return fallback;
+      }
+    };
     const fallback = Object.freeze({
       enabled: true,
       keeps: 3,
+      pending: 3,
+      next: 3,
+      ready: 3,
       enter: null,
       invalid: false,
     });
@@ -116,12 +131,15 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           config && config.decay && typeof config.decay === "object"
             ? config.decay
             : {};
+        const keeps = Number.isInteger(decay.keeps) && decay.keeps >= 0 && decay.keeps <= 999
+          ? decay.keeps
+          : 3;
         return Object.freeze({
           enabled: decay.enabled !== false,
-          keeps:
-            Number.isInteger(decay.keeps) && decay.keeps >= 0
-              ? decay.keeps
-              : 3,
+          keeps,
+          pending: rungLimit(decay, "pending", keeps),
+          next: rungLimit(decay, "next", keeps),
+          ready: rungLimit(decay, "ready", keeps),
           enter:
             typeof decay.enter === "string" && decay.enter !== ""
               ? decay.enter
@@ -133,6 +151,24 @@ class BobNavigationHotkeysFreshnessDecayMixin {
       // Fall through to the counting defaults below.
     }
     return fallback;
+  }
+
+  // One rung's effective keep allowance out of a normalized decay
+  // policy: an integer 0-999 ("ask at N") or false (count and log,
+  // never ask). `rung` is WIP, Next, Ready, or a P-level label.
+  // Never throws.
+  freshnessDecayAllowanceFor(policy, rung) {
+    try {
+      const safe = policy && typeof policy === "object" ? policy : {};
+      const fallback = Number.isInteger(safe.keeps) && safe.keeps >= 0 ? safe.keeps : 3;
+      const key = rung === "WIP" ? "pending" : rung === "Next" ? "next" : "ready";
+      const value = safe[key];
+      if (value === false) return false;
+      if (Number.isInteger(value) && value >= 0 && value <= 999) return value;
+      return fallback;
+    } catch (error) {
+      return 3;
+    }
   }
 
   // Load the priority ladder through the real config file, never

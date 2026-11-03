@@ -730,6 +730,18 @@ class BobLedgerToolsFreshnessApiMixin {
     }
   }
 
+  // Today membership for `{ path, blockId }` (a Task Link under today's
+  // open Pomodoros). Additive under namespace v13: navigation keeps
+  // Today-linked rows uncounted (`docs/freshness.md` §2a). Never throws.
+  apiFreshnessIsToday(ref) {
+    try {
+      if (typeof this.isTodayTask !== "function") return false;
+      return this.isTodayTask(ref) === true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   apiFreshnessTier(task) {
     try {
       const evaluated = this.freshnessEvaluatedFor(task);

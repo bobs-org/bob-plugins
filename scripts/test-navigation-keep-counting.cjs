@@ -200,26 +200,34 @@ test("exact eligibility refuses every stale-cache shape", () => {
   );
 });
 
-test("exact eligibility refuses non-Ready and non-due rows", () => {
+test("exact eligibility authorizes due rows on every rung and refuses the rest", () => {
   const raw = "- [ ] #task Buy milk [fresh:: 2026-09-30] [keeps:: 2]";
   const ref = { path: "a.md", line: 2, raw };
-  assert.equal(
-    helpers.matchFreshStampExactEntry(
-      [rottenEntry({ lane: "pending", tier: "pending" })],
-      ref,
-    ).reason,
-    "lane",
-  );
-  assert.equal(
-    helpers.matchFreshStampExactEntry(
-      [rottenEntry({ lane: "next", tier: "next" })],
-      ref,
-    ).reason,
-    "lane",
-  );
+  for (const [lane, tier] of [["pending", "pending"], ["next", "next"], ["ready", "rotten"], ["ready", "tickler"]]) {
+    assert.equal(
+      helpers.matchFreshStampExactEntry([rottenEntry({ lane, tier })], ref).ok,
+      true,
+      `${lane}/${tier} authorizes`,
+    );
+  }
   assert.equal(
     helpers.matchFreshStampExactEntry(
       [rottenEntry({ lane: "ready", tier: "new", state: "new" })],
+      ref,
+    ).reason,
+    "tier",
+  );
+  // A lane row outside its rung's due tier refuses with `tier`.
+  assert.equal(
+    helpers.matchFreshStampExactEntry(
+      [rottenEntry({ lane: "pending", tier: "next" })],
+      ref,
+    ).reason,
+    "tier",
+  );
+  assert.equal(
+    helpers.matchFreshStampExactEntry(
+      [rottenEntry({ lane: "ready", tier: "pending" })],
       ref,
     ).reason,
     "tier",
@@ -232,13 +240,6 @@ test("exact eligibility refuses non-Ready and non-due rows", () => {
       ref,
     ).reason,
     "tier",
-  );
-  assert.equal(
-    helpers.matchFreshStampExactEntry(
-      [rottenEntry({ lane: "ready", tier: "rotten", state: "rotten" })],
-      ref,
-    ).ok,
-    true,
   );
   // Legacy v3 rows without a lane never authorize.
   assert.equal(
@@ -682,7 +683,7 @@ test("same-day repeat stays identical and counts nothing", async () => {
   assert.doesNotMatch(notices[notices.length - 1], /kept \d+×/);
 });
 
-test("Pending Alt+F writes its summary with the stamp in one edit", async () => {
+test("WIP Alt+F without prior fresh stamps with no Work Log prompt", async () => {
   clearNotices();
   const editor = makeEditor("- [/] #task Pending work", 0);
   const plugin = makePlugin({
@@ -690,6 +691,11 @@ test("Pending Alt+F writes its summary with the stamp in one edit", async () => 
     editor,
     freshness: freshnessV5([], BASE_COUNTS),
   });
+  let prompted = false;
+  plugin.requestFreshnessRefreshAnswers = async () => {
+    prompted = true;
+    return { cancelled: false, keepReason: "Should not be asked" };
+  };
   const ok = await plugin.refreshTaskFreshness(editor, {
     keepReason: "", dateText: DATE,
     now: new Date(2026, 9, 8, 14, 32),
@@ -697,19 +703,16 @@ test("Pending Alt+F writes its summary with the stamp in one edit", async () => 
     summary: "Finished the review",
   });
   assert.equal(ok, true);
+  assert.equal(prompted, false);
   assert.equal(editor.state.transactions.length, 1);
   assert.equal(
     editor.state.lines.join("\n"),
-    [
-      "- [/] #task Pending work [fresh:: 2026-10-08]",
-      "\t- 🛠️ **WORK LOG**",
-      "\t\t- *2026-10-08 14:32* — Finished the review",
-    ].join("\n"),
+    "- [/] #task Pending work [fresh:: 2026-10-08]",
   );
-  assert.match(notices[notices.length - 1], /1 Work Log/);
+  assert.doesNotMatch(notices[notices.length - 1], /Work Log/);
 });
 
-test("counted Pending refresh shares one summary only with Pending targets", async () => {
+test("uncounted lane refresh stamps quietly with no Work Log", async () => {
   clearNotices();
   const editor = makeEditor(
     ["- [/] #task Pending", "- [*] #task Next"].join("\n"),
@@ -728,13 +731,12 @@ test("counted Pending refresh shares one summary only with Pending targets", asy
   });
   assert.equal(ok, true);
   const after = editor.state.lines.join("\n");
-  assert.match(after, /\[\/\] #task Pending \[fresh:: 2026-10-08\][\s\S]*WORK LOG/);
+  assert.match(after, /\[\/\] #task Pending \[fresh:: 2026-10-08\]/);
   assert.match(after, /\[\*\] #task Next \[fresh:: 2026-10-08\]/);
-  assert.equal((after.match(/Shared work/g) || []).length, 1);
-  assert.match(notices[notices.length - 1], /1 Work Log/);
+  assert.doesNotMatch(after, /Shared work|WORK LOG|ROTTEN LOG/);
 });
 
-test("a refusing counted target refuses before the Pending Work Log prompt", async () => {
+test("a refusing counted target refuses before the Rotten Log prompt", async () => {
   clearNotices();
   const original = [
     "- [/] #task Pending",
@@ -747,9 +749,9 @@ test("a refusing counted target refuses before the Pending Work Log prompt", asy
     freshness: freshnessV5([], BASE_COUNTS),
   });
   let prompted = false;
-  plugin.requestFreshnessRefreshSummary = async () => {
+  plugin.requestFreshnessRefreshAnswers = async () => {
     prompted = true;
-    return { cancelled: false, summary: "Should not be asked" };
+    return { cancelled: false, keepReason: "Should not be asked" };
   };
   const ok = await plugin.refreshTaskFreshness(editor, {
     keepReason: "", dateText: DATE,
@@ -762,7 +764,7 @@ test("a refusing counted target refuses before the Pending Work Log prompt", asy
   assert.equal(notices[notices.length - 1], "recurring · not reviewed");
 });
 
-test("blank Pending refresh advances; cancelled or stale prompts write nothing", async () => {
+test("quiet WIP refresh advances; cancelled or stale keep prompts write nothing", async () => {
   clearNotices();
   const blankEditor = makeEditor("- [/] #task Pending work", 0);
   const blankPlugin = makePlugin({
@@ -788,27 +790,34 @@ test("blank Pending refresh advances; cancelled or stale prompts write nothing",
   assert.match(blankEditor.state.lines[0], /\[fresh:: 2026-10-08\]/);
   assert.doesNotMatch(blankEditor.state.lines.join("\n"), /WORK LOG|🤷/);
 
+  const dueRaw = "- [/] #task Due WIP [fresh:: 2026-10-07]";
   for (const mode of ["cancel", "stale", "failed"]) {
-    const editor = makeEditor("- [/] #task Pending work", 0);
+    const editor = makeEditor(dueRaw, 0);
     const plugin = makePlugin({
       filePath: "a.md",
       editor,
-      freshness: freshnessV5([], BASE_COUNTS),
+      freshness: freshnessV5([
+        rottenEntry({
+          key: "a.md:1", path: "a.md", line: 1, originalMarkdown: dueRaw,
+          text: "Due WIP", state: "pending", tier: "pending", tierLabel: "PENDING",
+          lane: "pending", fresh: "2026-10-07", keeps: 0,
+        }),
+      ], BASE_COUNTS),
     });
     let advanced = false;
     plugin.jumpToDueTask = async () => {
       advanced = true;
       return true;
     };
-    plugin.requestFreshnessRefreshSummary = async () => {
+    plugin.requestFreshnessRefreshAnswers = async () => {
       if (mode === "stale") {
         editor.state.lines[0] = "- [/] #task Changed while prompt was open";
-        return { cancelled: false, summary: "Finished" };
+        return { cancelled: false, keepReason: "still going" };
       }
       if (mode === "failed") {
-        return { failed: true, summary: "" };
+        return { failed: true, keepReason: "" };
       }
-      return { cancelled: true, summary: "" };
+      return { cancelled: true, keepReason: "" };
     };
     const ok = await plugin.refreshTaskFreshness(editor, {
       keepReason: "", dateText: DATE,
@@ -817,7 +826,7 @@ test("blank Pending refresh advances; cancelled or stale prompts write nothing",
     assert.equal(ok, false, mode);
     assert.equal(advanced, false, mode);
     assert.equal(editor.state.transactions.length, 0, mode);
-    assert.doesNotMatch(editor.state.lines.join("\n"), /fresh::|WORK LOG/, mode);
+    assert.doesNotMatch(editor.state.lines.join("\n"), /ROTTEN LOG/, mode);
   }
 });
 
@@ -1159,12 +1168,11 @@ test("counted Task Link sessions route Pending, counted, and Next answers to sep
   const originalPrompt = plugin.requestFreshnessRefreshAnswers.bind(plugin);
   plugin.requestFreshnessRefreshAnswers = async (options) => {
     promptCalls += 1;
-    assert.equal(options.showWorkField, true);
+    assert.equal(options.showWorkField, false);
     assert.equal(options.keepTargets.length, 2);
     assert.deepEqual(options.keepTargets.map((target) => target.kind), ["counted", "lane"]);
     return await originalPrompt({
       ...options,
-      summary: "Reviewed the intro",
       keepReason: "still useful",
     });
   };
@@ -1174,17 +1182,17 @@ test("counted Task Link sessions route Pending, counted, and Next answers to sep
   assert.equal(ok, true);
   assert.equal(promptCalls, 1);
   const after = noteMap.get("Target.md");
-  assert.equal((after.match(/Reviewed the intro/g) || []).length, 1);
-  assert.equal((after.match(/still useful · kept 3×/g) || []).length, 1);
-  assert.match(after, /still useful · kept in Next/);
-  assert.match(after, /\[\*\] #task Next linked work \[fresh:: 2026-10-08\] \[keeps:: 2\] \^n/);
-  assert.match(after, /WORK LOG/);
+  assert.equal((after.match(/still useful · kept 3× in Ready/g) || []).length, 1);
+  assert.equal((after.match(/still useful · kept 3× in Next/g) || []).length, 1);
+  assert.match(after, /\[\*\] #task Next linked work \[fresh:: 2026-10-08\] \[keeps:: 3\] \^n/);
+  assert.match(after, /\[\/\] #task Pending linked work \[fresh:: 2026-10-08\] \^p/);
+  assert.doesNotMatch(after, /WORK LOG/);
   assert.match(after, /ROTTEN LOG/);
   assert.equal(helpers.readRottenLog(after, after.split("\n").findIndex((line) => line.includes("^n"))).entries[0].lane, "next");
   assert.equal(plugin.writes.length, 1);
 });
 
-test("counted Task Links dedupe targets and log only the Pending target", async () => {
+test("counted Task Links dedupe targets and stamp with no Work Log prompt", async () => {
   clearNotices();
   const pendingLink = "- [ ] [[Target#^p]]";
   const noteMap = new Map([
@@ -1206,6 +1214,11 @@ test("counted Task Links dedupe targets and log only the Pending target", async 
     noteMap,
     freshness: freshnessV5([], BASE_COUNTS),
   });
+  let prompted = false;
+  plugin.requestFreshnessRefreshAnswers = async () => {
+    prompted = true;
+    return { cancelled: false, keepReason: "Should not be asked" };
+  };
   const ok = await plugin.refreshTaskFreshness(plugin.view.editor, {
     keepReason: "", dateText: DATE,
     countExplicit: true,
@@ -1213,13 +1226,12 @@ test("counted Task Links dedupe targets and log only the Pending target", async 
     summary: "Linked work",
   });
   assert.equal(ok, true);
+  assert.equal(prompted, false);
   const after = noteMap.get("Target.md");
   assert.match(after, /\[\/\] #task Pending linked task \[fresh:: 2026-10-08\] \^p/);
   assert.match(after, /\[\*\] #task Next linked task \[fresh:: 2026-10-08\] \^n/);
-  assert.equal((after.match(/Linked work/g) || []).length, 1);
-  assert.equal((after.match(/WORK LOG/g) || []).length, 1);
+  assert.doesNotMatch(after, /Linked work|WORK LOG|ROTTEN LOG/);
   assert.equal(plugin.writes.length, 1);
-  assert.match(notices[notices.length - 1], /1 Work Log/);
 });
 
 test("multi-note stale preimage refuses with no writes", async () => {
@@ -1575,13 +1587,20 @@ async function waitForPrompt(getCalls) {
   assert.equal(getCalls(), 1);
 }
 
-test("live Ctrl+Alt+F double dispatch asks once on a Pending task", async () => {
+test("live Ctrl+Alt+F double dispatch asks once on a due WIP task", async () => {
   clearNotices();
-  const editor = makeEditor("- [/] #task Pending work", 0);
+  const dueRaw = "- [/] #task Pending work [fresh:: 2026-10-07]";
+  const editor = makeEditor(dueRaw, 0);
   const plugin = makePlugin({
     filePath: "a.md",
     editor,
-    freshness: freshnessV5([], BASE_COUNTS),
+    freshness: freshnessV5([
+      rottenEntry({
+        key: "a.md:1", path: "a.md", line: 1, originalMarkdown: dueRaw,
+        text: "Pending work", state: "pending", tier: "pending", tierLabel: "PENDING",
+        lane: "pending", fresh: "2026-10-07", keeps: 0,
+      }),
+    ], BASE_COUNTS),
   });
   attachReviewRefreshCapture(plugin);
   let advances = 0;
@@ -1591,7 +1610,7 @@ test("live Ctrl+Alt+F double dispatch asks once on a Pending task", async () => 
   };
   let promptCalls = 0;
   let resolvePrompt = null;
-  plugin.requestFreshnessRefreshSummary = () => {
+  plugin.requestFreshnessRefreshAnswers = () => {
     promptCalls += 1;
     return new Promise((resolve) => {
       resolvePrompt = resolve;
@@ -1624,23 +1643,30 @@ test("live Ctrl+Alt+F double dispatch asks once on a Pending task", async () => 
   assert.equal(promptCalls, 1);
   assert.equal(prevented, 0);
   assert.equal(stopped, 0);
-  resolvePrompt({ cancelled: false, summary: "Did the review" });
+  resolvePrompt({ cancelled: false, keepReason: "Did the review" });
   assert.equal(await pending, true);
   assert.equal(promptCalls, 1);
   assert.equal(advances, 1);
   const after = editor.state.lines.join("\n");
-  assert.match(after, /\[fresh:: 2026-10-08\]/);
-  assert.equal((after.match(/WORK LOG/g) || []).length, 1);
-  assert.equal((after.match(/Did the review/g) || []).length, 1);
+  assert.match(after, /\[fresh:: 2026-10-08\] \[keeps:: 1\]/);
+  assert.doesNotMatch(after, /WORK LOG/);
+  assert.equal((after.match(/Did the review · kept 1× in WIP/g) || []).length, 1);
 });
 
-test("live Alt+F double dispatch asks once on a Pending task", async () => {
+test("live Alt+F double dispatch asks once on a due WIP task", async () => {
   clearNotices();
-  const editor = makeEditor("- [/] #task Pending work", 0);
+  const dueRaw = "- [/] #task Pending work [fresh:: 2026-10-07]";
+  const editor = makeEditor(dueRaw, 0);
   const plugin = makePlugin({
     filePath: "a.md",
     editor,
-    freshness: freshnessV5([], BASE_COUNTS),
+    freshness: freshnessV5([
+      rottenEntry({
+        key: "a.md:1", path: "a.md", line: 1, originalMarkdown: dueRaw,
+        text: "Pending work", state: "pending", tier: "pending", tierLabel: "PENDING",
+        lane: "pending", fresh: "2026-10-07", keeps: 0,
+      }),
+    ], BASE_COUNTS),
   });
   attachReviewRefreshCapture(plugin);
   let advances = 0;
@@ -1650,7 +1676,7 @@ test("live Alt+F double dispatch asks once on a Pending task", async () => {
   };
   let promptCalls = 0;
   let resolvePrompt = null;
-  plugin.requestFreshnessRefreshSummary = () => {
+  plugin.requestFreshnessRefreshAnswers = () => {
     promptCalls += 1;
     return new Promise((resolve) => {
       resolvePrompt = resolve;
@@ -1661,14 +1687,14 @@ test("live Alt+F double dispatch asks once on a Pending task", async () => {
   const event = reviewRefreshKeyEvent({ defaultPrevented: true });
   assert.equal(plugin.handleReviewRefreshPhysicalKeydown(event), false);
   assert.equal(promptCalls, 1);
-  resolvePrompt({ cancelled: false, summary: "Did the review" });
+  resolvePrompt({ cancelled: false, keepReason: "Did the review" });
   assert.equal(await pending, true);
   assert.equal(promptCalls, 1);
   assert.equal(advances, 0);
   const after = editor.state.lines.join("\n");
-  assert.match(after, /\[fresh:: 2026-10-08\]/);
-  assert.equal((after.match(/WORK LOG/g) || []).length, 1);
-  assert.equal((after.match(/Did the review/g) || []).length, 1);
+  assert.match(after, /\[fresh:: 2026-10-08\] \[keeps:: 1\]/);
+  assert.doesNotMatch(after, /WORK LOG/);
+  assert.equal((after.match(/Did the review · kept 1× in WIP/g) || []).length, 1);
 });
 
 test("already-handled refresh keydown leaves Vim state alone", async () => {

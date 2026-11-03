@@ -420,7 +420,7 @@ test("a throwing stamper refuses the fresh stamp batch", () => {
   assert.equal(plan.refusal, "stamp");
 });
 
-test("fresh stamp plus Work Log prepends only stamped Pending targets", () => {
+test("fresh stamp ignores the legacy Work Log summary", () => {
   const content = [
     "- [/] #task Parent [fresh:: 2026-10-08] ^parent",
     "  - 🗓️ **SCHEDULE LOG**",
@@ -441,23 +441,8 @@ test("fresh stamp plus Work Log prepends only stamped Pending targets", () => {
     { workLogStampText: "2026-10-08 14:32", now: new Date(2026, 9, 8, 14, 32) },
   );
   assert.equal(plan.ok, true);
-  assert.equal(plan.workLogWrittenCount, 2);
-  assert.equal(
-    plan.content,
-    [
-      "- [/] #task Parent [fresh:: 2026-10-08] ^parent",
-      "  - 🗓️ **SCHEDULE LOG**",
-      "    - *2026-10-07* — moved the date",
-      "  - 🛠️ **WORK LOG**",
-      "    + *2026-10-08 14:32* — Finished parent :: note",
-      "    + *2026-10-06* — older parent work",
-      "  - [/] #task Child ^child",
-      "    - 🛠️ **WORK LOG**",
-      "      - *2026-10-08 14:32* — Finished parent :: note",
-      "      - *2026-10-05* — child work",
-      "- [*] #task Next",
-    ].join("\r\n"),
-  );
+  assert.equal(plan.workLogWrittenCount, 0);
+  assert.equal(plan.content, content);
   assert.doesNotMatch(plan.content, /[^\r]\n/);
 });
 

@@ -403,8 +403,18 @@ const ROTTEN_LOG_PARENT_RE = buildManagedTaskLogParentRe(
   `${ROTTEN_LOG_EMOJI}\\uFE0F?`,
   [ROTTEN_LOG_LABEL, "Rotten log"],
 );
+// Managed Rotten Log entry grammar (`docs/freshness.md` §2a): one rung
+// event per line — a counted keep (`kept N× in <Rung>` / `kept N× at
+// <Level>`), a Stay (`stayed in <Rung> after N keeps`), a step
+// (`🍂 <From> → <To> · after N keeps`), a P4 re-roll (`🍂 rolled again
+// at <Level> · after N keeps`), or a drop (`🍂 <Rung> → dropped ·
+// after N keeps`). Lanes and Ready use "in", P-levels use "at"; "after
+// 1 keep" is singular. Legacy `kept N×` reads as Ready and legacy
+// `kept in Next` as an uncounted Next keep. The shared vectors live in
+// `scripts/fixtures/rotten-log-grammar.json`; ledger-tools mirrors
+// this byte-for-byte in `FRESHNESS_ROTTEN_ENTRY_RE`.
 const ROTTEN_LOG_ENTRY_RE = new RegExp(
-  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+\\*(?<date>\\d{4}-\\d{2}-\\d{2})\\*${SCHEDULE_LOG_SEPARATOR}(?<reason>.+) · (?:kept (?<keeps>\\d{1,3})×|kept in (?<lane>Next))$`,
+  `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+\\*(?<date>\\d{4}-\\d{2}-\\d{2})\\*${SCHEDULE_LOG_SEPARATOR}(?:(?<keptReason>.+) · kept (?<keptCount>\\d{1,3})× in (?<keptRung>WIP|Next|Ready)|(?<keptAtReason>.+) · kept (?<keptAtCount>\\d{1,3})× at (?<keptAtRung>[^·\\n]+?)|(?<legacyReason>.+) · kept (?<legacyCount>\\d{1,3})×|(?<nextReason>.+) · kept in (?<lane>Next)|(?<stayReason>.+) · stayed in (?<stayRung>WIP|Next|Ready) after (?<stayCount>\\d{1,3}) keeps?|(?<stayAtReason>.+) · stayed at (?<stayAtRung>[^·\\n]+?) after (?<stayAtCount>\\d{1,3}) keeps?|${PRIORITY_DECAY_CANCEL_EMOJI}\\uFE0F? rolled again at (?<rerollAt>[^·\\n]+?) · after (?<rerollCount>\\d{1,3}) keeps?|${PRIORITY_DECAY_CANCEL_EMOJI}\\uFE0F? (?<dropFrom>.+?) → dropped · after (?<dropCount>\\d{1,3}) keeps?|${PRIORITY_DECAY_CANCEL_EMOJI}\\uFE0F? (?<stepFrom>.+?) → (?<stepTo>.+?) · after (?<stepCount>\\d{1,3}) keeps?)$`,
 );
 const SCHEDULE_LOG_ENTRY_RE = new RegExp(
   `^(?<indent>\\s*(?:>\\s*)*)(?<marker>(?:[-*+]|\\d+[.)]))[ \\t]+(?<emphasis>\\*\\*?)(?:(?<from>.+?)${SCHEDULE_LOG_TRANSITION})?(?<to>.+?)\\k<emphasis>${SCHEDULE_LOG_SEPARATOR}(?<reason>.+)$`,

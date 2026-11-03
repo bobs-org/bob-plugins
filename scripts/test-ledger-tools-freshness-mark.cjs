@@ -88,7 +88,31 @@ const {
   freshnessMarkRottenLogHistory,
   freshnessMarkRottenLogLine,
   freshnessMarkRottenLogSummary,
+  freshnessMarkRottenLogTallies,
+  freshnessRottenParseEntry,
 } = helpers;
+
+const grammarFixture = require("./fixtures/rotten-log-grammar.json");
+
+test("shared grammar fixture round-trips parse vectors and tallies", () => {
+  for (const vector of grammarFixture.parse) {
+    const parsed = freshnessRottenParseEntry(vector.line);
+    assert.ok(parsed, "parses: " + vector.line);
+    assert.deepEqual(
+      { date: parsed.date, reason: parsed.reason, keeps: parsed.keeps, rung: parsed.rung, lane: parsed.lane, kind: parsed.kind },
+      vector.entry,
+      "fields: " + vector.line,
+    );
+  }
+  for (const line of grammarFixture.reject) {
+    assert.equal(freshnessRottenParseEntry(line), null, "rejects: " + line);
+  }
+  for (const tally of grammarFixture.tallies) {
+    const entries = tally.lines.map((line) => freshnessRottenParseEntry(line));
+    assert.ok(entries.every(Boolean));
+    assert.equal(freshnessMarkRottenLogTallies(entries), tally.text);
+  }
+});
 
 const D = "2026-10-08";
 const CFG = {
@@ -736,6 +760,17 @@ test("rotten line wording covers 0, 1, and many entries", () => {
     "2026-10-23",
   );
   assert.equal(many, "🥀 3 keeps logged · last Oct 16 — newest");
+  const runged = freshnessMarkRottenLogLine(
+    {
+      status: "ok",
+      entries: [
+        { date: "2026-10-16", reason: "newest", keeps: 2, rung: "Next" },
+        { date: "2026-10-10", reason: "older", keeps: 1, rung: "WIP" },
+      ],
+    },
+    "2026-10-23",
+  );
+  assert.equal(runged, "🥀 WIP 1 · Next 1 · last Oct 16 — newest");
 });
 
 test("rotten line date format includes the year only when it differs", () => {
@@ -821,17 +856,23 @@ test("rotten marker vectors reject mismatched emoji and missing spaces", () => {
   const good = "- [ ] #task T [fresh:: 2026-10-01]\n\t- 🥀 **ROTTEN LOG**\n\t\t- *2026-10-16* — old reason · kept 2×\n";
   assert.equal(
     freshnessMarkRottenLogSummary(good.split("\n"), 0, "2026-10-23"),
-    "🥀 1 keep logged · last Oct 16 — old reason",
+    "🥀 Ready 1 · last Oct 16 — old reason",
   );
   const next = "- [ ] #task T [fresh:: 2026-10-01]\n\t- 🥀 **ROTTEN LOG**\n\t\t- *2026-10-16* — still needed · kept in Next\n";
   const nextHistory = freshnessMarkRottenLogHistory(next.split("\n"), 0);
   assert.equal(nextHistory.status, "ok");
   assert.deepEqual(nextHistory.entries[0], {
-    date: "2026-10-16", reason: "still needed", keeps: null, lane: "next",
+    date: "2026-10-16", reason: "still needed", keeps: null,
+    rung: "Next", lane: "next", kind: "kept",
   });
   assert.equal(
     freshnessMarkRottenLogSummary(next.split("\n"), 0, "2026-10-23"),
-    "🥀 1 keep logged · last Oct 16 — still needed",
+    "🥀 Next 1 · last Oct 16 — still needed",
+  );
+  const mixed = "- [ ] #task T [fresh:: 2026-10-01]\n\t- 🥀 **ROTTEN LOG**\n\t\t- *2026-10-16* — newest · kept 1× in Next\n\t\t- *2026-10-10* — mid · kept 1× in WIP\n\t\t- *2026-10-01* — oldest · kept 2×\n";
+  assert.equal(
+    freshnessMarkRottenLogSummary(mixed.split("\n"), 0, "2026-10-23"),
+    "🥀 WIP 1 · Next 1 · Ready 1 · last Oct 16 — newest",
   );
 });
 

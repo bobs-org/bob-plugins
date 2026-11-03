@@ -1,18 +1,115 @@
+// The rung a keep counts on: WIP for `[/]`, Next for `[*]`, the priority
+// level label for a prioritized `[ ]`, else Ready. A Blocked `[?]`
+// follows its queue lane. Blocked is an overlay, never a rung.
+function rottenKeepRungForTarget(raw, entry) {
+  const status = getObsidianTaskCheckboxStatus(String(raw || ""));
+  if (status === "/") return "WIP";
+  if (status === "*") return "Next";
+  if (status === "?" && entry && entry.lane === "pending") return "WIP";
+  if (status === "?" && entry && entry.lane === "next") return "Next";
+  const field = typeof findBulletPropertyField === "function"
+    ? findBulletPropertyField(raw, "priority")
+    : null;
+  const value = field ? normalizeBulletPropertyValue(field.value) : "";
+  return value || "Ready";
+}
+
+// Lanes and Ready use "in", P-levels use "at".
+function rottenKeepRungPreposition(rung) {
+  return rung === "WIP" || rung === "Next" || rung === "Ready" ? "in" : "at";
+}
+
+// Whether the row is on its rung's due tier: PENDING for WIP, NEXT for
+// Next, ROTTEN/TICKLER for Ready and P-levels (`docs/freshness.md` §2a).
+function rottenKeepIsDueRung(lane, tier) {
+  if (lane === "pending") return tier === "pending";
+  if (lane === "next") return tier === "next";
+  if (lane === "ready") return tier === "rotten" || tier === "tickler";
+  return false;
+}
+
+// Whether the decay card handles lane rungs (WIP, Next): version 3,
+// when the rung-aware card ships. Until then lane rows with
+// `decide: true` count and log like any keep — no card and no batch
+// skip — so a newer ledger never promises a card this nav cannot
+// open. Gate every lane-card behavior on this (never on a pasted `3`)
+// so the version bump alone flips it.
+function freshnessDecayLaneCardAvailable() {
+  try {
+    return FRESHNESS_DECAY_CARD_VERSION >= 3;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Whether an at-limit row on `lane` skips the stamp for a later card
+// decision: Ready rows always skip once decisions are enabled, while
+// lane rows skip only behind the rung-aware card. Never throws.
+function freshnessDecayDecisionSkipsLane(lane) {
+  try {
+    if (lane !== "pending" && lane !== "next") return true;
+    return freshnessDecayLaneCardAvailable();
+  } catch (error) {
+    return false;
+  }
+}
+
+// Today membership for a matched queue entry (a Task Link under today's
+// open Pomodoros): Today-linked rows never count (`docs/freshness.md`
+// §2a). Best-effort — false when the namespace predates `isToday` or
+// the row carries no block ID. Never throws.
+function freshnessTargetIsToday(api, entry) {
+  try {
+    if (!api || typeof api.isToday !== "function" || !entry || typeof entry !== "object") {
+      return false;
+    }
+    return api.isToday({ path: entry.path, blockId: entry.blockId }) === true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// The quiet notice for an uncounted lane keep that already carries a
+// prior-day stamp (early or Today-linked): "early · not counted".
+// Same-day repeats and brand-new rows stamp silently. Never throws.
+function freshnessQuietNotCountedNotice(raw, dateText) {
+  try {
+    const text = String(raw || "");
+    const day = String(dateText || "").trim();
+    if (!day) return "";
+    if (freshStampLineHasToday(text, day)) return "";
+    const fresh = /[\[(]fresh\s*::\s*(\d{4}-\d{2}-\d{2})/.exec(text);
+    if (!fresh || fresh[1] === day) return "";
+    return " · early · not counted";
+  } catch (error) {
+    return "";
+  }
+}
+
 // A counted keep is predicted by the same pure helper that will stamp it.
 // Callers gate this on freshnessSupportsKeeps; legacy stampers never log.
-function classifyRottenKeepTarget({ match, raw, stamper, dateText } = {}) {
+// Counts exact due rows on every rung (WIP, Next, Ready, P-levels) and
+// returns the rung plus the before/after keeps. NEW, early/FRESH,
+// same-day, Today-linked, PROJECTS, recurring, checklist, unblock
+// tickler, unresolved-cache, and Pomodoro rows stamp uncounted through
+// the existing path and preserve the streak. `isToday` is Today
+// membership for the row (a Task Link under today's open Pomodoros);
+// pass true to keep Today-linked rows uncounted.
+function classifyRottenKeepTarget({ match, raw, stamper, dateText, isToday } = {}) {
   const keepsBefore = parseKeepsCount(raw);
-  const uncounted = { counted: false, keepsBefore, keepsAfter: keepsBefore };
+  const uncounted = { counted: false, keepsBefore, keepsAfter: keepsBefore, rung: null };
   if (isPomodoroFreshnessLedgerLine(raw)) return uncounted;
-  if (!match || !match.ok || !match.entry || match.entry.lane !== "ready" ||
-      !["rotten", "tickler"].includes(reviewEntryMachineTier(match.entry)) ||
-      match.entry.returnedBy === "unblocked" || freshStampLineHasToday(raw, dateText) ||
-      !classifyFreshStampTarget(raw).ok || typeof stamper !== "function") return uncounted;
+  if (!match || !match.ok || !match.entry || typeof stamper !== "function") return uncounted;
+  if (!rottenKeepIsDueRung(match.entry.lane, reviewEntryMachineTier(match.entry))) return uncounted;
+  if (match.entry.returnedBy === "unblocked" || isToday === true ||
+      freshStampLineHasToday(raw, dateText) ||
+      !classifyFreshStampTarget(raw).ok) return uncounted;
+  const rung = rottenKeepRungForTarget(raw, match.entry);
   try {
     const after = String(stamper(raw, dateText, { counted: true }) ?? raw);
     const keepsAfter = parseKeepsCount(after);
     return after !== raw && keepsAfter === Math.min(keepsBefore + 1, 999)
-      ? { counted: true, keepsBefore, keepsAfter } : uncounted;
+      ? { counted: true, keepsBefore, keepsAfter, rung } : uncounted;
   } catch (error) {
     return uncounted;
   }
@@ -20,11 +117,22 @@ function classifyRottenKeepTarget({ match, raw, stamper, dateText } = {}) {
 
 // Stamps and child entries form a single plan. No caller can commit a stamp
 // when its predicted keep cannot be logged. Line coordinates are pre-write.
-function formatRottenLogEntryText({ date, reason, keeps, lane }) {
+function formatRottenLogEntryText({ date, reason, keeps, lane, rung }) {
   const day = String(date || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "";
   const normalized = normalizeScheduleReasonText(reason);
+  const targetRung = rung || (lane === "next" ? "Next" : null);
+  if (targetRung) {
+    // Every counted keep writes a rung-qualified entry; a blank reason
+    // always logs 🤷 (`docs/freshness.md` §2a).
+    const safeReason = normalized.empty ? SCHEDULE_LOG_SKIPPED_REASON_TEXT : normalized.reason;
+    const count = Math.floor(numericOrDefault(keeps, 0));
+    if (count < 1 || count > 999) return "";
+    return "*" + day + "*" + SCHEDULE_LOG_SEPARATOR + safeReason +
+      " · kept " + count + "× " + rottenKeepRungPreposition(targetRung) + " " + targetRung;
+  }
   if (lane === "next") {
+    // Legacy uncounted Next form, kept for old callers only.
     if (normalized.empty) return "";
     return "*" + day + "*" + SCHEDULE_LOG_SEPARATOR + normalized.reason + " · kept in Next";
   }
@@ -34,23 +142,146 @@ function formatRottenLogEntryText({ date, reason, keeps, lane }) {
   return "*" + day + "*" + SCHEDULE_LOG_SEPARATOR + safeReason + " · kept " + count + "×";
 }
 
+// Normalize one validated `ROTTEN_LOG_ENTRY_RE` count group (1-999),
+// or null when absent or out of range.
+function rottenLogEntryCount(value) {
+  if (value === undefined || value === null) return null;
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1 || count > 999) return null;
+  return count;
+}
+
 function parseRottenLogEntryBullet(line) {
   const match = ROTTEN_LOG_ENTRY_RE.exec(String(line || ""));
   if (!match) return null;
-  const { indent, marker, date, reason, keeps, lane } = match.groups;
-  const count = keeps === undefined ? null : Number(keeps);
-  if (count !== null && (count < 1 || count > 999)) return null;
-  return Object.freeze({ indent, marker, date, reason, keeps: count, lane: lane === "Next" ? "next" : null });
+  const groups = match.groups || {};
+  const { indent, marker, date } = groups;
+  const base = { indent, marker, date };
+  const kept = (reason, count, rung) => {
+    if (count === null) return null;
+    return Object.freeze({ ...base, reason, keeps: count, rung,
+      lane: rung === "Next" ? "next" : null, kind: "kept" });
+  };
+  if (groups.keptRung !== undefined) {
+    return kept(groups.keptReason, rottenLogEntryCount(groups.keptCount), groups.keptRung);
+  }
+  if (groups.keptAtRung !== undefined) {
+    const rung = String(groups.keptAtRung || "").trim();
+    if (!rung) return null;
+    return kept(groups.keptAtReason, rottenLogEntryCount(groups.keptAtCount), rung);
+  }
+  if (groups.legacyCount !== undefined) {
+    return kept(groups.legacyReason, rottenLogEntryCount(groups.legacyCount), "Ready");
+  }
+  if (groups.lane !== undefined) {
+    return Object.freeze({ ...base, reason: groups.nextReason, keeps: null,
+      rung: "Next", lane: "next", kind: "kept" });
+  }
+  const stayed = (reason, count, rung) => {
+    if (count === null) return null;
+    return Object.freeze({ ...base, reason, keeps: count, rung,
+      lane: rung === "Next" ? "next" : null, kind: "stayed" });
+  };
+  if (groups.stayRung !== undefined) {
+    return stayed(groups.stayReason, rottenLogEntryCount(groups.stayCount), groups.stayRung);
+  }
+  if (groups.stayAtRung !== undefined) {
+    const rung = String(groups.stayAtRung || "").trim();
+    if (!rung) return null;
+    return stayed(groups.stayAtReason, rottenLogEntryCount(groups.stayAtCount), rung);
+  }
+  if (groups.rerollAt !== undefined) {
+    const rung = String(groups.rerollAt || "").trim();
+    const count = rottenLogEntryCount(groups.rerollCount);
+    if (!rung || count === null) return null;
+    return Object.freeze({ ...base, reason: `${PRIORITY_DECAY_CANCEL_EMOJI} rolled again at ${rung}`,
+      keeps: count, rung, lane: rung === "Next" ? "next" : null, kind: "reroll" });
+  }
+  if (groups.dropFrom !== undefined) {
+    const from = String(groups.dropFrom || "").trim();
+    const count = rottenLogEntryCount(groups.dropCount);
+    if (!from || count === null) return null;
+    const rung = from;
+    return Object.freeze({ ...base, reason: `${PRIORITY_DECAY_CANCEL_EMOJI} ${from} → dropped`,
+      keeps: count, rung, lane: rung === "Next" ? "next" : null, kind: "drop" });
+  }
+  if (groups.stepFrom !== undefined) {
+    const from = String(groups.stepFrom || "").trim();
+    const to = String(groups.stepTo || "").trim();
+    const count = rottenLogEntryCount(groups.stepCount);
+    if (!from || !to || count === null) return null;
+    return Object.freeze({ ...base, reason: `${PRIORITY_DECAY_CANCEL_EMOJI} ${from} → ${to}`,
+      keeps: count, rung: from, lane: from === "Next" ? "next" : null, kind: "step" });
+  }
+  return null;
 }
 
+// Per-rung keep tallies over a Rotten Log history's entries (legacy
+// entries included): `[{ rung, count }]` in ladder order (WIP, Next,
+// Ready, then level labels sorted), answering "how many times was it
+// kept in each status" without a stored field. Never throws.
+function rottenLogRungTallies(entries) {
+  try {
+    const counts = new Map();
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      const rung = entry && typeof entry.rung === "string" ? entry.rung : null;
+      if (!rung) continue;
+      counts.set(rung, (counts.get(rung) || 0) + 1);
+    }
+    const order = (rung) => rung === "WIP" ? 0 : rung === "Next" ? 1 : rung === "Ready" ? 2 : 3;
+    return Object.freeze([...counts.entries()]
+      .sort((left, right) => order(left[0]) - order(right[0]) ||
+        (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0))
+      .map(([rung, count]) => Object.freeze({ rung, count })));
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+// Display-only tallies: `WIP 2 · Next 1 · Ready 3`, or "" when nothing
+// is tallied. Shared in spirit with ledger-tools'
+// `freshnessMarkRottenLogTallies`. Never throws.
+function formatRottenLogRungTallies(entries) {
+  try {
+    return rottenLogRungTallies(entries)
+      .map(({ rung, count }) => `${rung} ${count}`)
+      .join(" · ");
+  } catch (error) {
+    return "";
+  }
+}
+
+// One Rotten Log entry per counted keep: `rottenTargets` are
+// `{ line, rung }` for counted Ready/P-level keeps and `laneTargets`
+// are `{ line, rung }` for counted due lane keeps. Early, same-day,
+// and otherwise uncounted rows are never passed here, so they stamp
+// without an entry. A refused entry (duplicate markers, unreadable
+// history) refuses the whole answer: nothing is written. The Work Log
+// keeps its real writers elsewhere; freshness gestures never write it.
 function planFreshStampBatchWithLogs(content, targets, stamper, dateText, options = {}) {
   const plan = planFreshStampBatch(content, targets, stamper, dateText);
   const refuse = (refusal) => ({ ok: false, refusal, content, stamped: [],
     workLogWrittenCount: 0, rottenLogWrittenCount: 0 });
   if (!plan.ok) return { ...plan, workLogWrittenCount: 0, rottenLogWrittenCount: 0 };
-  const rottenLines = new Set(options.rottenLines || []);
-  const laneLines = new Set(options.laneLines || []);
-  for (const line of rottenLines) {
+  const rungForLine = new Map();
+  for (const target of [...(options.rottenTargets || []), ...(options.laneTargets || [])]) {
+    if (target && Number.isInteger(target.line) && typeof target.rung === "string" && target.rung) {
+      rungForLine.set(target.line, target.rung);
+    }
+  }
+  // Backwards compatibility for callers that still pass line sets: a
+  // bare line defaults to a Ready rung (Ready keeps) or Next (lane).
+  for (const line of options.rottenLines || []) {
+    if (!rungForLine.has(line)) {
+      const entries = plan.stamped.filter((entry) => entry.line === line);
+      if (entries.length !== 1) return refuse("rotten-keep-mismatch");
+      rungForLine.set(line, rottenKeepRungForTarget(entries[0].before, null));
+    }
+  }
+  for (const line of options.laneLines || []) {
+    if (!rungForLine.has(line)) rungForLine.set(line, "Next");
+  }
+  for (const line of rungForLine.keys()) {
     const entries = plan.stamped.filter((entry) => entry.line === line);
     if (entries.length !== 1 || entries[0].before === entries[0].after ||
         freshStampLineHasToday(entries[0].before, dateText) ||
@@ -58,76 +289,76 @@ function planFreshStampBatchWithLogs(content, targets, stamper, dateText, option
         countFreshStampKept(entries) !== 1) return refuse("rotten-keep-mismatch");
   }
   const { lines, lineEnding } = splitMarkdownContent(plan.content);
-  const summary = normalizeLaneWorkSummary(options.workSummary);
-  const workLogStamp =
-    typeof options.workLogStampText === "string" &&
-    options.workLogStampText
-      ? String(options.workLogStampText)
-      : typeof options.stampText === "string" && options.stampText
-        ? String(options.stampText)
-        : options.now instanceof Date
-          ? formatWorkLogStamp(options.now)
-          : options.workSummary
-            ? formatWorkLogStamp(new Date())
-            : String(dateText || "");
-  let workLogWrittenCount = 0;
   let rottenLogWrittenCount = 0;
   const entries = [...plan.stamped].sort((a, b) => b.line - a.line);
   const seen = new Set();
   for (const entry of entries) {
     if (seen.has(entry.line)) continue;
     seen.add(entry.line);
-    if (rottenLines.has(entry.line)) {
-      const insertion = planManagedTaskLogEntry(lines.join(lineEnding), entry.line, {
-        kind: MANAGED_TASK_LOG_KIND_ROTTEN,
-        entryText: formatRottenLogEntryText({ date: dateText, reason: options.keepReason,
-          keeps: parseKeepsCount(entry.after) }),
-      });
-      if (!insertion.valid) return refuse(insertion.reason === "ambiguous-markers"
-        ? "rotten-log-ambiguous" : "rotten-log-invalid");
-      if (!applyManagedTaskLogEntryToLines(lines, insertion)) return refuse("rotten-log-invalid");
-      rottenLogWrittenCount += 1;
-    } else if (laneLines.has(entry.line) && !rottenLines.has(entry.line) &&
-        isNextRottenLogTargetRawLine(entry.before)) {
-      const entryText = formatRottenLogEntryText({
-        date: dateText, reason: options.keepReason, lane: "next",
-      });
-      if (!entryText) continue;
-      const insertion = planManagedTaskLogEntry(lines.join(lineEnding), entry.line, {
-        kind: MANAGED_TASK_LOG_KIND_ROTTEN,
-        entryText,
-      });
-      if (!insertion.valid) return refuse(insertion.reason === "ambiguous-markers"
-        ? "rotten-log-ambiguous" : "rotten-log-invalid");
-      if (!applyManagedTaskLogEntryToLines(lines, insertion)) return refuse("rotten-log-invalid");
-      rottenLogWrittenCount += 1;
-    } else if (summary && isPendingWorkLogTargetRawLine(entry.before)) {
-      if (insertLaneWorkLogEntry(lines, entry.line, summary, workLogStamp))
-        workLogWrittenCount += 1;
-    }
+    if (!rungForLine.has(entry.line)) continue;
+    const insertion = planManagedTaskLogEntry(lines.join(lineEnding), entry.line, {
+      kind: MANAGED_TASK_LOG_KIND_ROTTEN,
+      entryText: formatRottenLogEntryText({ date: dateText, reason: options.keepReason,
+        keeps: parseKeepsCount(entry.after), rung: rungForLine.get(entry.line) }),
+    });
+    if (!insertion.valid) return refuse(insertion.reason === "ambiguous-markers"
+      ? "rotten-log-ambiguous" : "rotten-log-invalid");
+    if (!applyManagedTaskLogEntryToLines(lines, insertion)) return refuse("rotten-log-invalid");
+    rottenLogWrittenCount += 1;
   }
-  return { ...plan, content: lines.join(lineEnding), workLogWrittenCount, rottenLogWrittenCount };
+  return { ...plan, content: lines.join(lineEnding), workLogWrittenCount: 0, rottenLogWrittenCount };
 }
 
-// Display-only card header for the logged keeps, or "" when nothing is
-// logged. Ambiguous markers report unreadable; the stage submit stays
-// disabled because the planner would refuse anyway.
+// Display-only card header for the logged keeps: per-rung tallies plus
+// the newest entry, or "" when nothing is logged. Ambiguous markers
+// report unreadable; the stage submit stays disabled because the
+// planner would refuse anyway.
 function buildFreshnessDecayRottenHeaderLine(history) {
   if (history && (history.status === "unknown" || history.status === "ambiguous")) return "🥀 log unreadable";
   const entries = history && Array.isArray(history.entries) ? history.entries : [];
   if (entries.length === 0) return "";
-  const count = entries.length;
+  const tallies = formatRottenLogRungTallies(entries);
   const last = entries[0] || {};
-  return `🥀 ${count} ${count === 1 ? "keep" : "keeps"} logged · last ${reviewShortDate(last.date)} — ${last.reason}`;
+  const tail = tallies ? `🥀 ${tallies} · last ` : "🥀 last ";
+  return `${tail}${reviewShortDate(last.date)} — ${last.reason}`;
+}
+
+// One rung's allowance subtitle: `keep 1 of 2 in Next`, `keep 2 of 2
+// in Next · the next due keep opens the decay card`, or `keep 3 in
+// Next · decay off for Next` when that rung never asks. `allowance`
+// is the rung's effective keep limit (integer 0-999) or false. Lane
+// rungs omit the card promise until the rung-aware card ships
+// (`freshnessDecayLaneCardAvailable`). Never throws.
+function rottenKeepAllowanceSubtitle(rung, keepsAfter, allowance, laneCard) {
+  try {
+    const target = String(rung || "Ready");
+    const prep = rottenKeepRungPreposition(target);
+    const count = Math.max(1, Math.floor(numericOrDefault(keepsAfter, 1)));
+    if (allowance === false) {
+      return `keep ${count} ${prep} ${target} · decay off for ${target}`;
+    }
+    const limit = Math.floor(numericOrDefault(allowance, 3));
+    if (!(limit >= 0)) {
+      return `keep ${count} ${prep} ${target}`;
+    }
+    if (limit === 0) {
+      return `keep ${count} ${prep} ${target} · every due keep asks`;
+    }
+    if (count >= limit && (target === "Ready" || prep === "at" || laneCard === true)) {
+      return `keep ${count} of ${limit} ${prep} ${target} · the next due keep opens the decay card`;
+    }
+    return `keep ${count} of ${limit} ${prep} ${target}`;
+  } catch (error) {
+    return "";
+  }
 }
 
 function buildRottenKeepPromptModel(options = {}) {
   const history = options.history || { status: "missing", entries: [] };
   const entries = history.entries || [];
   const ambiguous = history.status === "unknown" || history.status === "ambiguous";
-  const count = entries.length;
-  const logged = ambiguous ? "log unreadable" : count === 0 ? "none logged yet"
-    : `${count} ${count === 1 ? "keep" : "keeps"} logged`;
+  const tallies = formatRottenLogRungTallies(entries);
+  const logged = ambiguous ? "log unreadable" : tallies || "none logged yet";
   const keepsBefore = options.keepsBefore || 0;
   const keepsAfter = options.keepsAfter || Math.min(keepsBefore + 1, 999);
   const entry = options.entry || {};
@@ -136,44 +367,44 @@ function buildRottenKeepPromptModel(options = {}) {
   const fresh = reviewParseDayNumber(entry.fresh || (rawFresh && rawFresh[1]));
   const age = Number.isFinite(entry.ageDays) ? entry.ageDays
     : today !== null && fresh !== null ? Math.max(0, today - fresh) : null;
-  const lane = options.lane === "next";
+  const rung = options.rung ||
+    (options.lane === "next" ? "Next" : null) ||
+    rottenKeepRungForTarget(options.raw || "", entry) || "Ready";
+  const prep = rottenKeepRungPreposition(rung);
   const subtitle = [cleanTaskDisplayText(options.raw || entry.originalMarkdown || entry.text || ""),
-    lane ? "NEXT" : String(entry.tierLabel || entry.tier || "ROTTEN").toUpperCase(),
+    String(entry.tierLabel || entry.tier || rung).toUpperCase(),
     age === null ? "" : `${age}d`].filter(Boolean).join(" · ");
   const reason = normalizeLaneWorkSummary(options.reason);
-  const streak = lane ? "" : options.decayCard
-    ? `Kept ${keepsBefore} reviews in a row · this keep makes ${keepsAfter}`
-    : keepsBefore ? `kept ${keepsBefore} in a row` : "";
+  const allowance = rottenKeepAllowanceSubtitle(rung, keepsAfter, options.allowance,
+    options.laneCard === true ||
+    (typeof freshnessDecayLaneCardAvailable === "function" && freshnessDecayLaneCardAvailable()));
   const previewEntryText = formatRottenLogEntryText({ date: options.dateText, reason,
-    keeps: keepsAfter, lane: lane ? "next" : undefined });
+    keeps: keepsAfter, rung });
   return {
-    title: lane ? "Keep in Next?" : "Keep as written?",
-    subtitleLines: [subtitle, [streak, logged].filter(Boolean).join(" · ")],
-    placeholder: lane ? "Why keep it in Next? (optional · ↵ to skip)"
-      : "Why keep it as written? (optional · ↵ logs 🤷)",
+    title: `Why keep it ${prep} ${rung}?`,
+    subtitleLines: [subtitle, [allowance, logged].filter(Boolean).join(" · ")],
+    placeholder: `Why keep it ${prep} ${rung}? (optional · ↵ logs 🤷)`,
     previewEntryText,
     empty: !reason,
-    previewTitle: lane && !reason ? "No entry" : previewEntryText,
-    previewDestination: lane && !reason
-      ? "Refresh only; no Rotten Log entry"
-      : history.status === "missing" || history.status === "none"
-        ? "Adds 🥀 ROTTEN LOG as the task's last child"
-        : "Prepends under 🥀 ROTTEN LOG",
+    previewTitle: previewEntryText,
+    previewDestination: history.status === "missing" || history.status === "none"
+      ? "Adds 🥀 ROTTEN LOG as the task's last child"
+      : "Prepends under 🥀 ROTTEN LOG",
     warning: reason.includes("::") ? '"::" creates a Dataview inline field on this bullet' : "",
     destinationText: history.status === "missing" || history.status === "none"
       ? "Adds 🥀 ROTTEN LOG as the task's last child" : "Prepends under 🥀 ROTTEN LOG",
     historyRows: entries.slice(0, 3).map((item) => ({
       date: reviewShortDate(item.date), reason: item.reason,
-      kept: item.lane === "next" ? "kept in Next" : `kept ${item.keeps ?? item.kept}×`,
+      kept: item.kind === "stayed" ? `stayed in ${item.rung} after ${item.keeps} keep${item.keeps === 1 ? "" : "s"}`
+        : item.kind === "step" || item.kind === "reroll" || item.kind === "drop" ? item.reason
+        : item.keeps === null || item.keeps === undefined ? `kept in ${item.rung || "Next"}`
+        : `kept ${item.keeps}× ${rottenKeepRungPreposition(item.rung || "Ready")} ${item.rung || "Ready"}`,
       empty: item.reason === SCHEDULE_LOG_SKIPPED_REASON_TEXT,
     })),
-    olderCount: Math.max(0, count - 3),
-    enterHint: lane
-      ? options.advance ? (reason ? "Keep, log & next" : "Keep & next")
-        : (reason ? "Keep & log" : "Keep")
-      : options.advance ? "Keep, log & next" : "Keep & log",
+    olderCount: Math.max(0, entries.length - 3),
+    enterHint: options.advance ? "Keep, log & next" : "Keep & log",
     escapeHint: "Cancel",
-    disabled: lane ? Boolean(reason) && ambiguous : ambiguous,
+    disabled: ambiguous,
   };
 }
 

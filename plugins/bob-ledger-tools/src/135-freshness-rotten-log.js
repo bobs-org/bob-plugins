@@ -10,7 +10,7 @@
 const FRESHNESS_ROTTEN_PARENT_RE =
   /^(?<indent>\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+(?<emoji>🥀\uFE0F?[ \t]+)?\*\*(?<label>ROTTEN LOG|Rotten log):?\*\*[ \t]*$/;
 const FRESHNESS_ROTTEN_ENTRY_RE =
-  /^(?<indent>\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+\*(?<date>\d{4}-\d{2}-\d{2})\* — (?<reason>.+) · (?:kept (?<keeps>\d{1,3})×|kept in (?<lane>Next))$/;
+  /^(?<indent>\s*(?:>\s*)*)(?<marker>(?:[-*+]|\d+[.)]))[ \t]+\*(?<date>\d{4}-\d{2}-\d{2})\* — (?:(?<keptReason>.+) · kept (?<keptCount>\d{1,3})× in (?<keptRung>WIP|Next|Ready)|(?<keptAtReason>.+) · kept (?<keptAtCount>\d{1,3})× at (?<keptAtRung>[^·\n]+?)|(?<legacyReason>.+) · kept (?<legacyCount>\d{1,3})×|(?<nextReason>.+) · kept in (?<lane>Next)|(?<stayReason>.+) · stayed in (?<stayRung>WIP|Next|Ready) after (?<stayCount>\d{1,3}) keeps?|(?<stayAtReason>.+) · stayed at (?<stayAtRung>[^·\n]+?) after (?<stayAtCount>\d{1,3}) keeps?|🍂\uFE0F? rolled again at (?<rerollAt>[^·\n]+?) · after (?<rerollCount>\d{1,3}) keeps?|🍂\uFE0F? (?<dropFrom>.+?) → dropped · after (?<dropCount>\d{1,3}) keeps?|🍂\uFE0F? (?<stepFrom>.+?) → (?<stepTo>.+?) · after (?<stepCount>\d{1,3}) keeps?)$/;
 const FRESHNESS_ROTTEN_LIST_ITEM_RE =
   /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s/;
 
@@ -96,18 +96,99 @@ function freshnessRottenParseMarker(line) {
   }
 }
 
+function freshnessRottenEntryCount(value) {
+  if (value === undefined || value === null) return null;
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1 || count > 999) return null;
+  return count;
+}
+
 function freshnessRottenParseEntry(line) {
   try {
     const match = FRESHNESS_ROTTEN_ENTRY_RE.exec(String(line || ""));
     if (!match) return null;
     const groups = (match && match.groups) || {};
-    const count = groups.keeps === undefined ? null : Number(groups.keeps);
-    if (count !== null && (!Number.isInteger(count) || count < 1 || count > 999)) return null;
-    const reason = String(groups.reason || "").trim();
-    if (!reason) return null;
-    return { date: groups.date, reason, keeps: count, lane: groups.lane === "Next" ? "next" : null };
+    const kept = (reason, count, rung) => {
+      if (count === null || !reason) return null;
+      return { date: groups.date, reason, keeps: count, rung,
+        lane: rung === "Next" ? "next" : null, kind: "kept" };
+    };
+    if (groups.keptRung !== undefined) {
+      return kept(groups.keptReason, freshnessRottenEntryCount(groups.keptCount), groups.keptRung);
+    }
+    if (groups.keptAtRung !== undefined) {
+      const rung = String(groups.keptAtRung || "").trim();
+      if (!rung) return null;
+      return kept(groups.keptAtReason, freshnessRottenEntryCount(groups.keptAtCount), rung);
+    }
+    if (groups.legacyCount !== undefined) {
+      return kept(groups.legacyReason, freshnessRottenEntryCount(groups.legacyCount), "Ready");
+    }
+    if (groups.lane !== undefined) {
+      const reason = String(groups.nextReason || "").trim();
+      if (!reason) return null;
+      return { date: groups.date, reason, keeps: null, rung: "Next", lane: "next", kind: "kept" };
+    }
+    const stayed = (reason, count, rung) => {
+      if (count === null || !reason) return null;
+      return { date: groups.date, reason, keeps: count, rung,
+        lane: rung === "Next" ? "next" : null, kind: "stayed" };
+    };
+    if (groups.stayRung !== undefined) {
+      return stayed(groups.stayReason, freshnessRottenEntryCount(groups.stayCount), groups.stayRung);
+    }
+    if (groups.stayAtRung !== undefined) {
+      const rung = String(groups.stayAtRung || "").trim();
+      if (!rung) return null;
+      return stayed(groups.stayAtReason, freshnessRottenEntryCount(groups.stayAtCount), rung);
+    }
+    if (groups.rerollAt !== undefined) {
+      const rung = String(groups.rerollAt || "").trim();
+      const count = freshnessRottenEntryCount(groups.rerollCount);
+      if (!rung || count === null) return null;
+      return { date: groups.date, reason: `🍂 rolled again at ${rung}`, keeps: count, rung,
+        lane: rung === "Next" ? "next" : null, kind: "reroll" };
+    }
+    if (groups.dropFrom !== undefined) {
+      const from = String(groups.dropFrom || "").trim();
+      const count = freshnessRottenEntryCount(groups.dropCount);
+      if (!from || count === null) return null;
+      return { date: groups.date, reason: `🍂 ${from} → dropped`, keeps: count, rung: from,
+        lane: from === "Next" ? "next" : null, kind: "drop" };
+    }
+    if (groups.stepFrom !== undefined) {
+      const from = String(groups.stepFrom || "").trim();
+      const to = String(groups.stepTo || "").trim();
+      const count = freshnessRottenEntryCount(groups.stepCount);
+      if (!from || !to || count === null) return null;
+      return { date: groups.date, reason: `🍂 ${from} → ${to}`, keeps: count, rung: from,
+        lane: from === "Next" ? "next" : null, kind: "step" };
+    }
+    return null;
   } catch (error) {
     return null;
+  }
+}
+
+// Per-rung keep tallies over Rotten Log entries (legacy included):
+// `WIP 2 · Next 1 · Ready 3`, or "" when nothing is tallied. Shared
+// in spirit with navigation's `formatRottenLogRungTallies`. Never throws.
+function freshnessMarkRottenLogTallies(entries) {
+  try {
+    const counts = new Map();
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      const rung = entry && typeof entry.rung === "string" ? entry.rung : null;
+      if (!rung) continue;
+      counts.set(rung, (counts.get(rung) || 0) + 1);
+    }
+    const order = (rung) => rung === "WIP" ? 0 : rung === "Next" ? 1 : rung === "Ready" ? 2 : 3;
+    return [...counts.entries()]
+      .sort((left, right) => order(left[0]) - order(right[0]) ||
+        (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0))
+      .map(([rung, count]) => `${rung} ${count}`)
+      .join(" · ");
+  } catch (error) {
+    return "";
   }
 }
 
@@ -189,12 +270,11 @@ function freshnessMarkRottenTruncateReason(reason) {
   }
 }
 
-// Display-only rotten line for a history:
-// `🥀 N keeps logged · last <date> — <reason>`, or
-// `🥀 1 keep logged · …` for one entry. `<date>` is `Oct 16`
-// (with `, YYYY` when the year differs from today's); the newest
-// entry's reason truncates to 48 characters plus `…`;
-// `🤷 no reason given` shows as is. Returns null when there is
+// Display-only rotten line for a history: per-rung tallies plus the
+// newest entry (`🥀 WIP 2 · Next 1 · last Oct 16 — <reason>`).
+// `<date>` is `Oct 16` (with `, YYYY` when the year differs from
+// today's); the newest entry's reason truncates to 48 characters plus
+// `…`; `🤷 no reason given` shows as is. Returns null when there is
 // nothing to show (missing, empty, or unknown/ambiguous logs).
 // Never throws.
 function freshnessMarkRottenLogLine(history, today) {
@@ -210,8 +290,9 @@ function freshnessMarkRottenLogLine(history, today) {
     if (!date) return null;
     const rawReason = String(latest.reason || "").trim() || "🤷 no reason given";
     const reason = freshnessMarkRottenTruncateReason(rawReason);
-    const count = entries.length;
-    const head = count === 1 ? "1 keep logged" : `${count} keeps logged`;
+    const tallies = freshnessMarkRottenLogTallies(entries);
+    const head = tallies ||
+      (entries.length === 1 ? "1 keep logged" : `${entries.length} keeps logged`);
     return `🥀 ${head} · last ${date} — ${reason}`;
   } catch (error) {
     return null;
@@ -286,16 +367,13 @@ function freshnessMarkRottenLogSummaryFromListItem(taskItem, todayText) {
       for (const item of Array.from(list.children || [])) {
         if (!/^(LI)$/i.test(item.tagName || "")) continue;
         const text = String(item.textContent || "").trim();
-        const match = text.match(
-          /^(\d{4}-\d{2}-\d{2})\s+—\s+(.+?)\s+·\s+(?:kept\s+(\d{1,3})×|kept in (Next))$/,
+        const parts = text.split("—");
+        const parsed = parts.length < 2 ? null : freshnessRottenParseEntry(
+          `- *${String(parts[0] || "").trim()}* — ${parts.slice(1).join("—").trim()}`,
         );
-        if (!match) continue;
-        const count = match[3] === undefined ? null : Number(match[3]);
-        if (count !== null && (!Number.isInteger(count) || count < 1 || count > 999)) continue;
-        const reason = String(match[2] || "").trim();
-        if (!reason) continue;
-        if (!freshnessRottenEntryHasEmphasis(item, match[1])) continue;
-        entries.push({ date: match[1], reason, keeps: count, lane: match[4] === "Next" ? "next" : null });
+        if (!parsed) continue;
+        if (!freshnessRottenEntryHasEmphasis(item, parsed.date)) continue;
+        entries.push(parsed);
       }
     }
     if (!entries.length) return null;

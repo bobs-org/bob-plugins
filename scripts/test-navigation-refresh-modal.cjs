@@ -120,7 +120,7 @@ test("renderFooter skips malformed hints and retains valid structured hints", ()
   assert.match(flattenText(footer), /Close or dismiss/);
 });
 
-test("Pending refresh modal previews the dated Work Log and confirms once", () => {
+test("prompt with no keep target closes without writing", () => {
   openedModals.length = 0;
   const results = [];
   const modal = new NavigationHotkeysPlugin.helpers.FreshnessRefreshSummaryModal(
@@ -129,47 +129,28 @@ test("Pending refresh modal previews the dated Work Log and confirms once", () =
       dateText: "2026-10-08",
       now: new Date(2026, 9, 8, 14, 32),
       totalCount: 3,
-      eligibleCount: 1,
       onDone: (value) => results.push(value),
     },
   );
   modal.open();
-  assert.equal(modal.attached, true);
-  assert.match(flattenText(modal.contentEl), /Refresh 3 tasks/);
-  assert.match(flattenText(modal.contentEl), /1 of 3 tasks qualify/);
-  assert.match(flattenText(modal.contentEl), /nothing written yet/);
-  assert.equal(
-    modal.inputEl.getAttribute("placeholder"),
-    "What did you get done? (optional · ↵ to skip)",
-  );
-
-  modal.inputEl.value = "Checked the API :: field";
-  modal.inputEl.listeners.input();
-  assert.match(flattenText(modal.previewEl), /\*2026-10-08 14:32\* — Checked the API :: field/);
-  assert.match(flattenText(modal.previewEl), /Dataview inline field/);
-  assert.match(flattenText(modal.previewEl), /WORK LOG/);
-  assert.match(flattenText(modal.hintsEl), /Refresh & log summary/);
-
-  modal.inputEl.listeners.keydown({
-    key: "Enter",
-    preventDefault() {},
-    stopPropagation() {},
-  });
-  modal.submit();
-  assert.deepEqual(results, ["Checked the API :: field"]);
+  assert.deepEqual(results, [null]);
   assert.equal(modal.attached, false);
 });
 
-test("dismissing the Pending refresh modal cancels without a summary", () => {
+test("dismissing a keep batch cancels without an entry", () => {
   const results = [];
   const modal = new NavigationHotkeysPlugin.helpers.FreshnessRefreshSummaryModal(
     {},
-    { dateText: "2026-10-08", onDone: (value) => results.push(value) },
+    {
+      dateText: "2026-10-08",
+      keepTargets: [{
+        kind: "counted", raw: "- [ ] #task T", history: { status: "ok", entries: [] },
+      }],
+      onDone: (value) => results.push(value),
+    },
   );
   modal.open();
-  assert.match(flattenText(modal.previewEl), /Refresh only; no Work Log entry/);
-  assert.match(flattenText(modal.hintsEl), /Refresh without a summary/);
-  modal.inputEl.listeners.keydown({
+  modal.keepInputEl.listeners.keydown({
     key: "Escape",
     preventDefault() {},
     stopPropagation() {},
@@ -178,25 +159,23 @@ test("dismissing the Pending refresh modal cancels without a summary", () => {
   assert.equal(modal.attached, false);
 });
 
-test("shared prompt planner routes counted, Pending, and Next target combinations", () => {
+test("shared prompt planner routes counted and lane target combinations", () => {
   const modes = ["single", "counted", "task-link"];
   for (const mode of modes) {
-    for (let bits = 0; bits < 8; bits += 1) {
+    for (let bits = 0; bits < 4; bits += 1) {
       const hasCounted = Boolean(bits & 1);
-      const hasWork = Boolean(bits & 2);
-      const hasNext = Boolean(bits & 4);
+      const hasNext = Boolean(bits & 2);
       const plan = h.planFreshnessRefreshPrompt({
         singleKeep: mode === "single",
         rottenTargets: hasCounted ? [{ raw: "counted" }] : [],
-        workTargets: hasWork ? [{ raw: "pending" }] : [],
         laneTargets: hasNext ? [{ raw: "next" }] : [],
       });
       const keepCount = Number(hasCounted) + Number(hasNext);
-      const expectedKind = mode === "single" && keepCount === 1 && !hasWork
+      const expectedKind = mode === "single" && keepCount === 1
         ? hasCounted ? "single-rotten" : "single-lane"
-        : keepCount ? "batch" : hasWork ? "work-only" : "none";
+        : keepCount ? "batch" : "none";
       assert.equal(plan.kind, expectedKind, `${mode} bits=${bits}`);
-      assert.equal(plan.showWorkField, hasWork, `${mode} bits=${bits}`);
+      assert.equal(plan.showWorkField, false, `${mode} bits=${bits}`);
       assert.deepEqual(plan.keepTargets.map((target) => target.kind), [
         ...(hasCounted ? ["counted"] : []), ...(hasNext ? ["lane"] : []),
       ]);
@@ -204,14 +183,15 @@ test("shared prompt planner routes counted, Pending, and Next target combination
   }
 });
 
-test("single Next prompt changes preview, Enter hint, and unreadable-history gate", () => {
+test("single Next prompt always logs and gates unreadable history", () => {
   const results = [];
   const modal = new NavigationHotkeysPlugin.helpers.FreshnessRefreshSummaryModal(
     {},
     {
       dateText: "2026-10-23",
       keep: {
-        lane: "next",
+        rung: "Next",
+        allowance: 2,
         raw: "- [*] #task Read next [fresh:: 2026-10-14]",
         entry: { fresh: "2026-10-14", ageDays: 9, tierLabel: "NEXT" },
         history: { status: "ambiguous", entries: [] },
@@ -221,31 +201,31 @@ test("single Next prompt changes preview, Enter hint, and unreadable-history gat
     },
   );
   modal.open();
-  assert.match(flattenText(modal.contentEl), /Keep in Next\?/);
-  assert.equal(modal.inputEl.getAttribute("placeholder"), "Why keep it in Next? (optional · ↵ to skip)");
-  assert.match(flattenText(modal.previewEl), /No entry/);
-  assert.match(flattenText(modal.previewEl), /Refresh only; no Rotten Log entry/);
-  assert.equal(modal.refreshButton.textContent, "Keep & next");
-  assert.equal(modal.refreshButton.disabled, false);
+  assert.match(flattenText(modal.contentEl), /Why keep it in Next\?/);
+  assert.equal(modal.inputEl.getAttribute("placeholder"), "Why keep it in Next? (optional · ↵ logs 🤷)");
+  assert.match(flattenText(modal.previewEl), /🤷 no reason given · kept 1× in Next/);
+  assert.equal(modal.refreshButton.textContent, "Keep, log & next");
+  assert.equal(modal.refreshButton.disabled, true);
 
   modal.inputEl.value = "still needed";
   modal.inputEl.listeners.input();
-  assert.match(flattenText(modal.previewEl), /\*2026-10-23\* — still needed · kept in Next/);
+  assert.match(flattenText(modal.previewEl), /\*2026-10-23\* — still needed · kept 1× in Next/);
   assert.equal(modal.refreshButton.textContent, "Keep, log & next");
   assert.equal(modal.refreshButton.disabled, true);
-  modal.inputEl.value = "";
-  modal.inputEl.listeners.input();
   modal.inputEl.listeners.keydown({ key: "Enter", preventDefault() {}, stopPropagation() {} });
-  assert.deepEqual(results, [""]);
+  assert.deepEqual(results, []);
+  modal.inputEl.listeners.keydown({ key: "Escape", preventDefault() {}, stopPropagation() {} });
+  assert.deepEqual(results, [null]);
 });
 
-test("Next batch preview counts only entries with a nonblank reason", () => {
+test("Next batch preview always logs one entry per target", () => {
   const modal = new NavigationHotkeysPlugin.helpers.FreshnessRefreshSummaryModal(
     {},
     {
       dateText: "2026-10-23",
       keepTargets: [{
-        kind: "lane", raw: "- [*] #task Next", history: { status: "ok", entries: [] },
+        kind: "lane", raw: "- [*] #task Next", rung: "Next",
+        keep: { keepsAfter: 3 }, history: { status: "ok", entries: [] },
       }],
       showWorkField: false,
       totalCount: 1,
@@ -253,14 +233,14 @@ test("Next batch preview counts only entries with a nonblank reason", () => {
     },
   );
   modal.open();
-  assert.equal(modal.keepInputEl.getAttribute("placeholder"), "Why keep them in Next? (optional · ↵ to skip)");
-  assert.match(flattenText(modal.keepPreviewEl), /Next · 0 logged/);
-  assert.match(flattenText(modal.keepPreviewEl), /no entry \(blank reason\)/);
-  assert.match(flattenText(modal.keepPreviewEl), /Refresh only; no Rotten Log entry/);
-  assert.equal(modal.refreshButton.textContent, "Keep");
+  assert.equal(modal.keepInputEl.getAttribute("placeholder"), "Why keep them? (optional · ↵ logs 🤷)");
+  assert.match(flattenText(modal.keepPreviewEl), /Next · none logged yet/);
+  assert.match(flattenText(modal.keepPreviewEl), /🤷 no reason given · kept 3× in Next/);
+  assert.match(flattenText(modal.keepPreviewEl), /Writes one entry.*1 qualifying task/);
+  assert.equal(modal.refreshButton.textContent, "Keep & log");
   modal.keepInputEl.value = "stay here";
   modal.keepInputEl.listeners.input();
-  assert.match(flattenText(modal.keepPreviewEl), /kept in Next/);
+  assert.match(flattenText(modal.keepPreviewEl), /stay here · kept 3× in Next/);
   assert.match(flattenText(modal.keepPreviewEl), /Writes one entry.*1 qualifying task/);
   assert.equal(modal.refreshButton.textContent, "Keep & log");
   assert.equal(modal.refreshButton.disabled, false);

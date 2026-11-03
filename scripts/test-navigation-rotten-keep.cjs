@@ -109,8 +109,8 @@ for (const [label, overrides, raw, expected] of [
   ["scheduled tickler", { tier: "tickler", returnedBy: "scheduled" }, RAW, true],
   ["unblock tickler", { tier: "tickler", returnedBy: "unblocked" }, RAW, false],
   ["new", { tier: "new" }, RAW.replace(/ \[fresh:: [^\]]+\]/, ""), false],
-  ["Pending", { tier: "pending", lane: "pending" }, RAW.replace("[ ]", "[/]"), false],
-  ["Next", { tier: "next", lane: "next" }, RAW.replace("[ ]", "[*]"), false],
+  ["Pending", { tier: "pending", lane: "pending" }, RAW.replace("[ ]", "[/]"), true],
+  ["Next", { tier: "next", lane: "next" }, RAW.replace("[ ]", "[*]"), true],
   ["PROJECTS", { tier: "projects" }, RAW, false],
   ["recurring", {}, RAW + " 🔁 every day", false],
   ["checklist", { tier: "pre" }, RAW.replace("#task", "#gtd #pre"), false],
@@ -134,18 +134,34 @@ test("scheduled tickler logs; unblocked and legacy keeps never prompt", async ()
   }
 });
 
-test("Pending retains its Work summary prompt", async () => {
+test("due WIP keep asks why and logs a WIP entry with the stamp in one undo", async () => {
   const raw = RAW.replace("[ ]", "[/]");
-  const f = fixture({ content: raw, entry: row(raw, { tier: "pending", lane: "pending" }) });
+  const f = fixture({ content: raw, entry: row(raw, { tier: "pending", tierLabel: "PENDING", lane: "pending", state: "pending" }) });
   const pending = f.run(); const modal = modals.at(-1);
-  assert.equal(modal.inputEl.getAttribute("aria-label"), "Work summary");
-  modal.inputEl.value = "Read intro"; pressKey(modal, "Enter");
-  assert.equal(await pending, true); assert.match(f.editor.content, /WORK LOG/);
-  assert.doesNotMatch(f.editor.content, /ROTTEN LOG/);
+  assert.match(text(modal.contentEl), /Why keep it in WIP\?/);
+  assert.equal(modal.inputEl.getAttribute("aria-label"), "Keep reason");
+  modal.inputEl.value = "still in progress"; modal.inputEl.listeners.input();
+  assert.match(text(modal.previewEl), /still in progress · kept 3× in WIP/);
+  pressKey(modal, "Enter"); modal.submit();
+  assert.equal(await pending, true);
+  assert.equal(f.editor.transactions.length, 1);
+  assert.match(f.editor.content, /\[fresh:: 2026-10-23\]/);
+  assert.match(f.editor.content, /\[keeps:: 3\]/);
+  assert.match(f.editor.content, /\*2026-10-23\* — still in progress · kept 3× in WIP/);
+  assert.doesNotMatch(f.editor.content, /WORK LOG/);
+  f.editor.undo(); assert.equal(f.editor.content, raw);
+});
+
+test("blank WIP keep logs 🤷 with its rung tail", async () => {
+  const raw = RAW.replace("[ ]", "[/]");
+  const f = fixture({ content: raw, entry: row(raw, { tier: "pending", tierLabel: "PENDING", lane: "pending", state: "pending" }) });
+  const pending = f.run({ keepReason: "" });
+  assert.equal(await pending, true);
+  assert.match(f.editor.content, /🤷 no reason given · kept 3× in WIP/);
 });
 
 for (const reason of ["", "still useful in Next"]) {
-  test(`single Next keep ${reason || "with a blank reason"} stamps and preserves the streak`, async () => {
+  test(`single Next keep ${reason || "with a blank reason"} counts and always logs`, async () => {
     const raw = RAW.replace("[ ]", "[*]");
     const nextEntry = row(raw, {
       lane: "next", tier: "next", tierLabel: "NEXT", state: "fresh",
@@ -153,39 +169,35 @@ for (const reason of ["", "still useful in Next"]) {
     const f = fixture({ content: raw, entry: nextEntry });
     const pending = f.run();
     const modal = modals.at(-1);
-    assert.match(text(modal.contentEl), /Keep in Next\?/);
-    assert.equal(modal.inputEl.getAttribute("placeholder"), "Why keep it in Next? (optional · ↵ to skip)");
+    assert.match(text(modal.contentEl), /Why keep it in Next\?/);
+    assert.equal(modal.inputEl.getAttribute("placeholder"), "Why keep it in Next? (optional · ↵ logs 🤷)");
     modal.inputEl.value = reason;
     modal.inputEl.listeners.input();
-    if (!reason) {
-      assert.match(text(modal.previewEl), /No entry/);
-      assert.match(text(modal.previewEl), /Refresh only; no Rotten Log entry/);
-      assert.equal(modal.refreshButton.textContent, "Keep");
-    } else {
-      assert.match(text(modal.previewEl), /still useful in Next · kept in Next/);
-      assert.equal(modal.refreshButton.textContent, "Keep & log");
-    }
+    assert.match(text(modal.previewEl), reason ? /still useful in Next · kept 3× in Next/ : /🤷 no reason given · kept 3× in Next/);
+    assert.equal(modal.refreshButton.textContent, "Keep & log");
     pressKey(modal, "Enter");
     assert.equal(await pending, true);
     assert.equal(f.editor.transactions.length, 1);
     assert.match(f.editor.content, /\[fresh:: 2026-10-23\]/);
-    assert.match(f.editor.content, /\[keeps:: 2\]/);
+    assert.match(f.editor.content, /\[keeps:: 3\]/);
     const history = h.readRottenLog(f.editor.content, 0);
-    assert.equal(history.entries.length, reason ? 1 : 0);
-    if (reason) assert.equal(history.entries[0].lane, "next");
-    else assert.equal(history.status, "missing");
+    assert.equal(history.entries.length, 1);
+    assert.equal(history.entries[0].lane, "next");
+    assert.equal(history.entries[0].rung, "Next");
+    assert.equal(history.entries[0].keeps, 3);
   });
 }
 
-test("early Next task prompts without a queue entry; Ctrl+Alt+F logs then advances", async () => {
+test("early Next task stamps quietly with no prompt; Ctrl+Alt+F logs then advances", async () => {
   const raw = RAW.replace("[ ]", "[*]");
   const early = fixture({ content: raw, entry: null });
-  const earlyPending = early.run();
-  assert.equal(modals.length, 1);
-  assert.match(text(modals[0].contentEl), /Keep in Next\?/);
-  pressKey(modals[0], "Escape");
-  assert.equal(await earlyPending, false);
-  assert.equal(early.editor.transactions.length, 0);
+  assert.equal(await early.run(), true);
+  assert.equal(modals.length, 0);
+  assert.equal(early.editor.transactions.length, 1);
+  assert.match(early.editor.content, /\[fresh:: 2026-10-23\]/);
+  assert.match(early.editor.content, /\[keeps:: 2\]/);
+  assert.doesNotMatch(early.editor.content, /ROTTEN LOG/);
+  assert.match(notices.at(-1), /early · not counted/);
 
   const nextEntry = row(raw, { lane: "next", tier: "next", tierLabel: "NEXT", state: "fresh" });
   const f = fixture({ content: raw, entry: nextEntry });
@@ -193,14 +205,14 @@ test("early Next task prompts without a queue entry; Ctrl+Alt+F logs then advanc
   f.plugin.jumpToDueTask = async () => { advances += 1; return true; };
   const pending = f.run({ advance: true });
   const modal = modals.at(-1);
-  assert.equal(modal.refreshButton.textContent, "Keep & next");
+  assert.equal(modal.refreshButton.textContent, "Keep, log & next");
   modal.inputEl.value = "stays in the lane";
   modal.inputEl.listeners.input();
   assert.equal(modal.refreshButton.textContent, "Keep, log & next");
   pressKey(modal, "Enter");
   assert.equal(await pending, true);
   assert.equal(advances, 1);
-  assert.match(f.editor.content, /stays in the lane · kept in Next/);
+  assert.match(f.editor.content, /stays in the lane · kept 3× in Next/);
 });
 
 test("Esc on a Next keep writes nothing and does not advance", async () => {
@@ -216,44 +228,35 @@ test("Esc on a Next keep writes nothing and does not advance", async () => {
   assert.equal(advances, 0);
 });
 
-test("counted mixed sessions use one Work-first prompt and route each answer to its log", async () => {
-  const pendingRaw = "- [/] #task Finish intro ^pending";
+test("counted mixed sessions use one Rotten prompt and log each rung tail", async () => {
+  const pendingRaw = "- [/] #task Finish intro [fresh:: 2026-10-14] ^pending";
   const content = [pendingRaw, RAW].join("\n");
   const f = fixture({ content, entry: null });
   f.freshness.queue = () => [
     row(pendingRaw, {
       key: "a.md:1", line: 1, tier: "pending", tierLabel: "PENDING",
-      state: "pending", lane: "pending", fresh: null, keeps: 0,
+      state: "pending", lane: "pending", fresh: "2026-10-14", keeps: 0,
     }),
     row(RAW, { key: "a.md:2", line: 2 }),
   ];
   const pending = f.run({ countExplicit: true, additionalTaskCount: 1 });
   assert.equal(modals.length, 1);
   const modal = modals[0];
-  assert.ok(modal.workInputEl);
+  assert.equal(modal.workInputEl, undefined);
   assert.ok(modal.keepInputEl);
-  assert.equal(modal.workInputEl.getAttribute("aria-label"), "Work summary");
   assert.equal(modal.keepInputEl.getAttribute("aria-label"), "Keep reason");
-  assert.match(text(modal.keepPreviewEl), /Read primer #ref · kept 3× · 0 logged/);
-  assert.equal(modal.workInputEl.focused, true);
+  assert.match(text(modal.keepPreviewEl), /Read primer #ref · Ready · none logged yet/);
+  assert.match(text(modal.keepPreviewEl), /Finish intro · WIP · none logged yet/);
 
-  modal.workInputEl.value = "Finished the intro";
-  modal.workInputEl.listeners.input();
-  modal.keepInputEl.value = "still the primer";
+  modal.keepInputEl.value = "still going";
   modal.keepInputEl.listeners.input();
-  const tab = pressKey(modal, "Tab");
-  assert.equal(tab.defaultPrevented, true);
-  assert.equal(modal.keepInputEl.focused, true);
-  const reverseTab = pressKey(modal, "Tab", { shiftKey: true });
-  assert.equal(reverseTab.defaultPrevented, true);
-  assert.equal(modal.workInputEl.focused, true);
-  modal.keepInputEl.focus();
   pressKey(modal, "Enter");
 
   assert.equal(await pending, true);
   assert.equal(f.editor.transactions.length, 1);
-  assert.match(f.editor.content, /\n\t- 🛠️ \*\*WORK LOG\*\*\n\t\t- \*2026-10-23 14:32\* — Finished the intro/);
-  assert.match(f.editor.content, /\n\t- 🥀 \*\*ROTTEN LOG\*\*\n\t\t- \*2026-10-23\* — still the primer · kept 3×/);
+  assert.doesNotMatch(f.editor.content, /WORK LOG/);
+  assert.match(f.editor.content, /\*2026-10-23\* — still going · kept 1× in WIP/);
+  assert.match(f.editor.content, /\*2026-10-23\* — still going · kept 3× in Ready/);
 });
 
 test("counted at-limit Rotten targets skip without opening a prompt or logging", async () => {
@@ -303,106 +306,133 @@ test("ambiguous Rotten markers disable the prompt and refuse even a bypass", asy
   modal.submit(); assert.equal(f.editor.content, content);
   pressKey(modal, "Escape"); assert.equal(await pending, false);
   assert.equal(await f.run({ keepReason: "bypass" }), false);
-  assert.equal(f.editor.content, content); assert.match(notices.at(-1), /Multiple Rotten Logs/);
+  assert.equal(f.editor.content, content); assert.match(notices.at(-1), /Repair the duplicate/);
 });
 
 test("combined planner inserts nested targets bottom-up and preserves CRLF", () => {
   const child = "  " + RAW.replace("primer", "child");
   const content = [RAW, child, "    - existing child", "- [/] #task Pending", ""].join("\r\n");
   const plan = h.planFreshStampBatchWithLogs(content, [0, 1, 3].map((line) => ({ line, counted: line !== 3 })), keep, DATE,
-    { rottenLines: [0, 1], keepReason: "still useful", workSummary: "made progress" });
-  assert.equal(plan.ok, true); assert.equal(plan.rottenLogWrittenCount, 2); assert.equal(plan.workLogWrittenCount, 1);
+    { rottenTargets: [{ line: 0, rung: "Ready" }, { line: 1, rung: "Ready" }], keepReason: "still useful" });
+  assert.equal(plan.ok, true); assert.equal(plan.rottenLogWrittenCount, 2); assert.equal(plan.workLogWrittenCount, 0);
   assert.equal(h.readRottenLog(plan.content, 0).entries.length, 1);
   assert.equal(h.readRottenLog(plan.content, 1).entries.length, 1);
-  assert.match(plan.content, /WORK LOG/); assert.doesNotMatch(plan.content, /(?<!\r)\n/);
+  assert.doesNotMatch(plan.content, /WORK LOG/); assert.doesNotMatch(plan.content, /(?<!\r)\n/);
   assert.match(plan.content, /existing child/);
+  assert.match(plan.content, /still useful · kept 3× in Ready/);
 });
 
-test("Next lane logs are optional, uncounted, and refuse only a requested ambiguous entry", () => {
+test("lane keeps always log with their rung tail and refuse ambiguous markers", () => {
   const next = "- [*] #task Next task [fresh:: 2026-10-14] [keeps:: 2]";
-  const blank = h.planFreshStampBatchWithLogs(next, [{ line: 0 }], keep, DATE,
-    { laneLines: [0], keepReason: "" });
-  assert.equal(blank.ok, true);
-  assert.equal(blank.rottenLogWrittenCount, 0);
-  assert.doesNotMatch(blank.content, /ROTTEN LOG/);
-  assert.match(blank.content, /\[keeps:: 2\]/);
-  assert.match(blank.content, /\[fresh:: 2026-10-23\]/);
-
-  const logged = h.planFreshStampBatchWithLogs(next, [{ line: 0 }], keep, DATE,
-    { laneLines: [0], keepReason: "still needed" });
-  assert.equal(logged.ok, true);
-  assert.equal(logged.rottenLogWrittenCount, 1);
-  assert.match(logged.content, /\*2026-10-23\* — still needed · kept in Next/);
-  assert.match(logged.content, /\[keeps:: 2\]/);
+  for (const reason of ["", "still needed"]) {
+    const planned = h.planFreshStampBatchWithLogs(next, [{ line: 0, counted: true }], keep, DATE,
+      { laneTargets: [{ line: 0, rung: "Next" }], keepReason: reason });
+    assert.equal(planned.ok, true);
+    assert.equal(planned.rottenLogWrittenCount, 1);
+    assert.match(planned.content, reason
+      ? /\*2026-10-23\* — still needed · kept 3× in Next/
+      : /\*2026-10-23\* — 🤷 no reason given · kept 3× in Next/);
+    assert.match(planned.content, /\[keeps:: 3\]/);
+  }
+  const logged = h.planFreshStampBatchWithLogs(next, [{ line: 0, counted: true }], keep, DATE,
+    { laneTargets: [{ line: 0, rung: "Next" }], keepReason: "still needed" });
   assert.deepEqual(h.readRottenLog(logged.content, 0).entries[0], {
     indent: "\t\t", marker: "-", date: "2026-10-23", reason: "still needed",
-    keeps: null, lane: "next",
+    keeps: 3, rung: "Next", lane: "next", kind: "kept",
   });
 
   const existing = next + "\n\t- 🥀 **ROTTEN LOG**\n\t\t- *2026-10-16* — old · kept 1×";
-  const reused = h.planFreshStampBatchWithLogs(existing, [{ line: 0 }], keep, DATE,
-    { laneLines: [0], keepReason: "still useful" });
+  const reused = h.planFreshStampBatchWithLogs(existing, [{ line: 0, counted: true }], keep, DATE,
+    { laneTargets: [{ line: 0, rung: "Next" }], keepReason: "still useful" });
   assert.equal(reused.ok, true);
   assert.equal((reused.content.match(/🥀 \*\*ROTTEN LOG\*\*/g) || []).length, 1);
-  assert.match(reused.content, /\*2026-10-23\* — still useful · kept in Next/);
+  assert.match(reused.content, /\*2026-10-23\* — still useful · kept 3× in Next/);
 
   const ambiguous = next + "\n\t- 🥀 **ROTTEN LOG**\n\t- 🥀 **ROTTEN LOG**";
-  const blankAmbiguous = h.planFreshStampBatchWithLogs(ambiguous, [{ line: 0 }], keep, DATE,
-    { laneLines: [0], keepReason: "" });
-  assert.equal(blankAmbiguous.ok, true);
-  assert.equal(blankAmbiguous.rottenLogWrittenCount, 0);
-  const refused = h.planFreshStampBatchWithLogs(ambiguous, [{ line: 0 }], keep, DATE,
-    { laneLines: [0], keepReason: "still useful" });
+  const refused = h.planFreshStampBatchWithLogs(ambiguous, [{ line: 0, counted: true }], keep, DATE,
+    { laneTargets: [{ line: 0, rung: "Next" }], keepReason: "still useful" });
   assert.equal(refused.ok, false);
   assert.equal(refused.refusal, "rotten-log-ambiguous");
   assert.equal(refused.rottenLogWrittenCount, 0);
 });
 
-test("prompt copy separates streak from history and previews exact formatter output", () => {
-  const base = { raw: RAW, entry: row(), dateText: DATE, keepsBefore: 2, keepsAfter: 3 };
-  const empty = h.buildRottenKeepPromptModel(base);
-  assert.match(empty.subtitleLines[0], /ROTTEN · 9d/);
-  assert.equal(empty.subtitleLines[1], "kept 2 in a row · none logged yet");
-  assert.match(empty.destinationText, /last child/);
-  assert.equal(empty.previewEntryText, h.formatRottenLogEntryText({ date: DATE, reason: "", keeps: 3 }));
-  const entry = { date: "2026-10-16", reason: "🤷 no reason given", keeps: 2 };
-  const one = h.buildRottenKeepPromptModel({ ...base, keepsBefore: 0, history: { status: "ok", entries: [entry] } });
-  assert.equal(one.subtitleLines[1], "1 keep logged"); assert.equal(one.historyRows[0].date, "Oct 16");
-  const many = h.buildRottenKeepPromptModel({ ...base, history: { status: "ok", entries: Array(5).fill(entry) }, advance: true });
-  assert.equal(many.historyRows.length, 3); assert.equal(many.olderCount, 2);
-  assert.match(many.subtitleLines[1], /5 keeps logged/); assert.equal(many.enterHint, "Keep, log & next");
+test("rung classification follows status, lane, and priority", () => {
+  assert.equal(h.rottenKeepRungForTarget("- [/] #task W", { lane: "pending" }), "WIP");
+  assert.equal(h.rottenKeepRungForTarget("- [*] #task N", { lane: "next" }), "Next");
+  assert.equal(h.rottenKeepRungForTarget("- [ ] #task R", { lane: "ready" }), "Ready");
+  assert.equal(h.rottenKeepRungForTarget("- [ ] #task P [priority:: P2]", { lane: "ready" }), "P2");
+  assert.equal(h.rottenKeepRungForTarget("- [?] #task B", { lane: "pending" }), "WIP");
+  assert.equal(h.rottenKeepRungForTarget("- [?] #task B", { lane: "next" }), "Next");
+  assert.equal(h.rottenKeepIsDueRung("pending", "pending"), true);
+  assert.equal(h.rottenKeepIsDueRung("next", "next"), true);
+  assert.equal(h.rottenKeepIsDueRung("ready", "rotten"), true);
+  assert.equal(h.rottenKeepIsDueRung("ready", "tickler"), true);
+  assert.equal(h.rottenKeepIsDueRung("pending", "next"), false);
+  assert.equal(h.rottenKeepIsDueRung("ready", "next"), false);
+  assert.equal(h.rottenKeepAllowanceSubtitle("Next", 1, 2, false), "keep 1 of 2 in Next");
+  assert.equal(h.rottenKeepAllowanceSubtitle("Next", 2, 2, false), "keep 2 of 2 in Next");
+  assert.equal(h.rottenKeepAllowanceSubtitle("Ready", 2, 2, false), "keep 2 of 2 in Ready · the next due keep opens the decay card");
+  assert.equal(h.rottenKeepAllowanceSubtitle("P2", 2, 2, false), "keep 2 of 2 at P2 · the next due keep opens the decay card");
+  assert.equal(h.rottenKeepAllowanceSubtitle("Next", 3, false, false), "keep 3 in Next · decay off for Next");
+  const tallies = h.formatRottenLogRungTallies([
+    { rung: "Next", keeps: 2 }, { rung: "WIP", keeps: 1 }, { rung: "Next", keeps: 1 },
+    { rung: "Ready", keeps: 3 }, { rung: null },
+  ]);
+  assert.equal(tallies, "WIP 1 · Next 2 · Ready 1");
+  assert.equal(h.formatRottenLogRungTallies([]), "");
 });
 
-test("Next keep model skips blank entries, has no streak, and gates unreadable typed history", () => {
+test("prompt copy shows the rung question, allowance, and tallies", () => {
+  const base = { raw: RAW, entry: row(), dateText: DATE, keepsBefore: 2, keepsAfter: 3, rung: "Ready", allowance: 2 };
+  const empty = h.buildRottenKeepPromptModel(base);
+  assert.equal(empty.title, "Why keep it in Ready?");
+  assert.match(empty.subtitleLines[0], /ROTTEN · 9d/);
+  assert.equal(empty.subtitleLines[1], "keep 3 of 2 in Ready · the next due keep opens the decay card · none logged yet");
+  assert.equal(empty.placeholder, "Why keep it in Ready? (optional · ↵ logs 🤷)");
+  assert.match(empty.destinationText, /last child/);
+  assert.equal(empty.previewEntryText, h.formatRottenLogEntryText({ date: DATE, reason: "", keeps: 3, rung: "Ready" }));
+  assert.equal(empty.enterHint, "Keep & log");
+  const entry = { date: "2026-10-16", reason: "🤷 no reason given", keeps: 2, rung: "Ready", lane: null, kind: "kept" };
+  const one = h.buildRottenKeepPromptModel({ ...base, keepsBefore: 0, keepsAfter: 1, allowance: 3, history: { status: "ok", entries: [entry] } });
+  assert.equal(one.subtitleLines[1], "keep 1 of 3 in Ready · Ready 1");
+  assert.equal(one.historyRows[0].date, "Oct 16");
+  assert.equal(one.historyRows[0].kept, "kept 2× in Ready");
+  const many = h.buildRottenKeepPromptModel({ ...base, history: { status: "ok", entries: Array(5).fill(entry) }, advance: true });
+  assert.equal(many.historyRows.length, 3); assert.equal(many.olderCount, 2);
+  assert.match(many.subtitleLines[1], /Ready 5/); assert.equal(many.enterHint, "Keep, log & next");
+  const off = h.buildRottenKeepPromptModel({ ...base, allowance: false });
+  assert.equal(off.subtitleLines[1], "keep 3 in Ready · decay off for Ready · none logged yet");
+});
+
+test("Next keep model always logs with its rung tail and gates unreadable history", () => {
   const base = {
     raw: "- [*] #task Keep next [fresh:: 2026-10-14] [keeps:: 2]",
-    lane: "next", dateText: DATE,
+    rung: "Next", allowance: 2, dateText: DATE, keepsBefore: 2,
     entry: { fresh: "2026-10-14", ageDays: 9, tierLabel: "NEXT" },
     history: { status: "missing", entries: [] },
   };
   const blank = h.buildRottenKeepPromptModel(base);
-  assert.equal(blank.title, "Keep in Next?");
+  assert.equal(blank.title, "Why keep it in Next?");
   assert.match(blank.subtitleLines[0], /NEXT · 9d/);
-  assert.equal(blank.subtitleLines[1], "none logged yet");
-  assert.equal(blank.placeholder, "Why keep it in Next? (optional · ↵ to skip)");
-  assert.equal(blank.previewTitle, "No entry");
-  assert.equal(blank.previewDestination, "Refresh only; no Rotten Log entry");
-  assert.equal(blank.enterHint, "Keep");
-  assert.equal(h.buildRottenKeepPromptModel({ ...base, advance: true }).enterHint, "Keep & next");
+  assert.equal(blank.subtitleLines[1], "keep 3 of 2 in Next · none logged yet");
+  assert.equal(blank.placeholder, "Why keep it in Next? (optional · ↵ logs 🤷)");
+  assert.equal(blank.previewTitle, "*2026-10-23* — 🤷 no reason given · kept 3× in Next");
+  assert.equal(blank.enterHint, "Keep & log");
+  assert.equal(h.buildRottenKeepPromptModel({ ...base, advance: true }).enterHint, "Keep, log & next");
 
-  const typed = h.buildRottenKeepPromptModel({ ...base, reason: "still needed" });
-  assert.equal(typed.previewEntryText, "*2026-10-23* — still needed · kept in Next");
+  const typed = h.buildRottenKeepPromptModel({ ...base, reason: "still needed", keepsAfter: 3 });
+  assert.equal(typed.previewEntryText, "*2026-10-23* — still needed · kept 3× in Next");
   assert.equal(typed.enterHint, "Keep & log");
   assert.equal(h.buildRottenKeepPromptModel({ ...base, reason: "still needed", advance: true }).enterHint, "Keep, log & next");
 
   const unreadable = { ...base, history: { status: "ambiguous", entries: [] } };
-  assert.equal(h.buildRottenKeepPromptModel(unreadable).disabled, false);
-  assert.equal(h.buildRottenKeepPromptModel({ ...unreadable, reason: "still needed" }).disabled, true);
-  const nextEntry = { date: "2026-10-16", reason: "keep in lane", keeps: null, lane: "next" };
+  assert.equal(h.buildRottenKeepPromptModel(unreadable).disabled, true);
+  const nextEntry = { date: "2026-10-16", reason: "keep in lane", keeps: null, rung: "Next", lane: "next", kind: "kept" };
   const earlier = h.buildRottenKeepPromptModel({
     ...base, history: { status: "ok", entries: [nextEntry] },
   });
   assert.equal(earlier.historyRows[0].kept, "kept in Next");
+  assert.match(earlier.subtitleLines[1], /Next 1/);
 });
 
 test("keep stage warns for inline fields, ignores IME Enter, and swallows both keep chords", async () => {

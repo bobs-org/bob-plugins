@@ -494,7 +494,7 @@ function classifyFreshStampTarget(rawLine) {
 
 function freshStampRefusalNotice(refusal) {
   if (refusal === "rotten-keep-mismatch") return REVIEW_QUEUE_CHANGED_NOTICE;
-  if (refusal === "rotten-log-ambiguous") return "Multiple Rotten Logs found; no tasks were updated";
+  if (refusal === "rotten-log-ambiguous") return "Repair the duplicate 🥀 ROTTEN LOG markers first; nothing was written";
   if (refusal === "rotten-log-invalid") return "Could not update Rotten Log; no tasks were updated";
   if (refusal === "recurring") {
     return "recurring · not reviewed";
@@ -612,13 +612,13 @@ function planFreshStampBatch(content, targetLines, stamper, dateText) {
   });
 }
 
-// Pure freshness refresh plan with an optional Pending Work Log summary.
-// Every target is stamped first, preserving the planner's all-or-nothing
-// refusal behavior, then one entry is prepended for each stamped pre-write
-// Pending (`[/]`) task. The shared inserter preserves marker ownership,
-// indentation, line endings, and existing child blocks.
+// Backwards-compatible freshness refresh plan: the legacy `summary`
+// argument is ignored — freshness gestures never write the Work Log
+// (`docs/freshness.md` §2a). Every target is stamped through the shared
+// planner, preserving its all-or-nothing refusal behavior.
 function planFreshStampBatchWithWorkLogs(content, targetLines, stamper, dateText, summary, options = {}) {
-  return planFreshStampBatchWithLogs(content, targetLines, stamper, dateText, { workSummary: summary, ...(options && typeof options === "object" ? options : {}) });
+  void summary;
+  return planFreshStampBatchWithLogs(content, targetLines, stamper, dateText, { ...(options && typeof options === "object" ? options : {}) });
 }
 
 // True when the line already carries today's stamp (re-stamping it repairs
@@ -783,8 +783,9 @@ function freshnessSupportsDecayDecisions(freshnessApi) {
 // §2a): `ref` (`{ path, line, raw }` with the pre-write 0-based editor line)
 // authorizes counting only when the pre-write queue holds exactly one row
 // with `entry.path === path`, `entry.line === editorLine + 1`,
-// `entry.originalMarkdown === rawLine`, `lane === 'ready'`, and
-// `tier in {'rotten','tickler'}`. Line-only or raw-only matches, age,
+// `entry.originalMarkdown === rawLine`, and the row on its rung's due
+// tier (PENDING for pending, NEXT for next, ROTTEN/TICKLER for
+// ready). Line-only or raw-only matches, age,
 // glyph, bucket alone, block ID alone, a changed line number, or a selected
 // DOM row never authorize. Anything else stamps uncounted through
 // `keepLine` and preserves the streak. Returns `{ ok, entry, reason }`
@@ -816,11 +817,14 @@ function matchFreshStampExactEntry(queueBefore, ref) {
     return missing("ambiguous");
   }
   const entry = candidates[0];
-  if (entry.lane !== "ready") {
+  if (entry.lane !== "pending" && entry.lane !== "next" && entry.lane !== "ready") {
     return Object.freeze({ ok: false, entry, reason: "lane" });
   }
   const tier = reviewEntryMachineTier(entry);
-  if (tier !== "rotten" && tier !== "tickler") {
+  const due = typeof rottenKeepIsDueRung === "function"
+    ? rottenKeepIsDueRung(entry.lane, tier)
+    : entry.lane === "ready" && (tier === "rotten" || tier === "tickler");
+  if (!due) {
     return Object.freeze({ ok: false, entry, reason: "tier" });
   }
   return Object.freeze({ ok: true, entry, reason: "ok" });

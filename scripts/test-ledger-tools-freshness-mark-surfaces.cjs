@@ -885,10 +885,10 @@ test("Live Preview reads only the child block and never calls doc.toString", () 
     source,
   });
   assert.ok(model);
-  assert.match(model.tooltip, /🥀 1 keep logged · last Oct 16 — old reason/);
+  assert.match(model.tooltip, /🥀 Ready 1 · last Oct 16 — old reason/);
   assert.match(model.tooltip, /Alt\+F to confirm$/);
   const lines = model.tooltip.split("\n");
-  assert.equal(lines[lines.length - 2], "🥀 1 keep logged · last Oct 16 — old reason");
+  assert.equal(lines[lines.length - 2], "🥀 Ready 1 · last Oct 16 — old reason");
   assert.equal(toStringCalls, 0);
 });
 
@@ -998,7 +998,7 @@ test("reading-view DOM history counts a Next lane entry", () => {
   const task = { children: [taskList] };
   assert.equal(
     freshnessMarkRottenLogSummaryFromListItem(task, "2026-10-23"),
-    "🥀 1 keep logged · last Oct 16 — still needed",
+    "🥀 Next 1 · last Oct 16 — still needed",
   );
 });
 

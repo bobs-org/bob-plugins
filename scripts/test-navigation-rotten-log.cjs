@@ -68,47 +68,47 @@ test("marker vectors match the Rust Rotten cases", () => {
   }
 });
 
-test("entry parsing accepts valid entries and rejects bad counts", () => {
+const grammarFixture = require("./fixtures/rotten-log-grammar.json");
+
+test("shared grammar fixture round-trips format and parse vectors", () => {
+  for (const vector of grammarFixture.format) {
+    assert.equal(
+      h.formatRottenLogEntryText(vector.input),
+      vector.text,
+      "formats: " + vector.text,
+    );
+  }
+  for (const vector of grammarFixture.parse) {
+    const parsed = h.parseRottenLogEntryBullet(vector.line);
+    assert.ok(parsed, "parses: " + vector.line);
+    assert.deepEqual(
+      { date: parsed.date, reason: parsed.reason, keeps: parsed.keeps, rung: parsed.rung, lane: parsed.lane, kind: parsed.kind },
+      vector.entry,
+      "fields: " + vector.line,
+    );
+  }
+  for (const line of grammarFixture.reject) {
+    assert.equal(h.parseRottenLogEntryBullet(line), null, "rejects: " + line);
+  }
+  assert.equal(h.formatRottenLogEntryText({
+    date: "2026-10-16", reason: "  ", lane: "next",
+  }), "", "a blank legacy Next reason does not create a log entry");
+});
+
+test("entry parsing accepts legacy entries and per-rung tallies", () => {
   const good = h.parseRottenLogEntryBullet(
     "\t\t- *2026-10-16* — old reason · kept 2×",
   );
   assert.ok(good);
   assert.equal(good.date, "2026-10-16");
   assert.equal(good.keeps, 2);
+  assert.equal(good.rung, "Ready");
   assert.equal(good.lane, null);
-  const nextText = h.formatRottenLogEntryText({
-    date: "2026-10-16", reason: "still important", lane: "next",
-  });
-  assert.equal(nextText, "*2026-10-16* — still important · kept in Next");
-  assert.deepEqual(
-    h.parseRottenLogEntryBullet("\t- " + nextText),
-    { indent: "\t", marker: "-", date: "2026-10-16", reason: "still important", keeps: null, lane: "next" },
-  );
-  assert.equal(h.formatRottenLogEntryText({
-    date: "2026-10-16", reason: "  ", lane: "next",
-  }), "", "a blank Next reason does not create a log entry");
-  for (const invalid of ["kept in next", "kept in Pending", "kept 0×"]) {
-    assert.equal(
-      h.parseRottenLogEntryBullet("\t- *2026-10-16* — r · " + invalid),
-      null,
-      invalid + " is rejected",
-    );
+  for (const tally of grammarFixture.tallies) {
+    const entries = tally.lines.map((line) => h.parseRottenLogEntryBullet(line));
+    assert.ok(entries.every(Boolean));
+    assert.equal(h.formatRottenLogRungTallies(entries), tally.text);
   }
-  assert.equal(
-    h.parseRottenLogEntryBullet("\t- *2026-10-16* — r · kept 0×"),
-    null,
-    "kept 0× is rejected",
-  );
-  assert.equal(
-    h.parseRottenLogEntryBullet("\t- *2026-10-16* — r · kept 1000×"),
-    null,
-    "kept 1000× is rejected",
-  );
-  assert.equal(
-    h.parseRottenLogEntryBullet("\t- *2026-10-16* — r"),
-    null,
-    "a missing tail is rejected",
-  );
 });
 
 test("readRottenLog statuses cover missing, empty, ok, and unknown", () => {

@@ -293,8 +293,7 @@ class BobLedgerToolsPlugin extends Plugin {
           }
         },
       }),
-      // Task freshness (v13 `perRungDecay` + lane `decide`; v9 adds the
-      // RECURRING tier, `byTier.recurring`, and `recurringDue`; v8
+      // Task freshness (v13 `perRungDecay` + lane `decide` + `isToday`; v9 adds the
       // renamed the `returned` tier to `tickler`; v7 added checklist
       // tiers to the same read-time
       // queue without changing buckets or stamps; date-independent
@@ -350,6 +349,7 @@ class BobLedgerToolsPlugin extends Plugin {
           this.apiFreshnessIntervalForLine(line, noteRefreshRaw),
         queue: () => this.apiFreshnessQueue(),
         counts: () => this.apiFreshnessCounts(),
+        isToday: (ref) => this.apiFreshnessIsToday(ref),
         lints: () => this.apiFreshnessLints(),
         reviewEntryView: (entry, viewOptions) =>
           this.apiFreshnessReviewEntryView(entry, viewOptions),

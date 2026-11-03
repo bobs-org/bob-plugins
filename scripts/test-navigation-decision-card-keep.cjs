@@ -406,7 +406,7 @@ test("Keep swaps the rows for the reason stage without closing", async () => {
   assert.equal(harness.activeElement, modal.keepStage.inputEl);
   assert.equal(editor.getValue(), before);
   assert.equal(editor.state.transactions.length, 0);
-  assert.match(text(modal.contentEl), /Keep as written\?/);
+  assert.match(text(modal.contentEl), /Why keep it in Ready\?/);
 });
 
 test("repeat Alt+F never enters or submits the stage", async () => {
@@ -502,12 +502,12 @@ test("the card header shows the logged count and last reason", async () => {
   });
   assert.match(
     text(modal.contentEl),
-    /🥀 1 keep logged · last Oct 16 — old reason/,
+    /🥀 Ready 1 · last Oct 16 — old reason/,
   );
   const header = helpers.buildFreshnessDecayRottenHeaderLine(
     modal.rottenKeep.history,
   );
-  assert.equal(header, "🥀 1 keep logged · last Oct 16 — old reason");
+  assert.equal(header, "🥀 Ready 1 · last Oct 16 — old reason");
 });
 
 test("an unreadable log shows the header even with no countable entries", () => {
@@ -537,10 +537,10 @@ test("the decay card Keep stage uses the reviews streak copy", () => {
   const card = helpers.buildRottenKeepPromptModel({ ...base, decayCard: true });
   assert.equal(
     card.subtitleLines[1],
-    "Kept 3 reviews in a row · this keep makes 4 · none logged yet",
+    "keep 4 of 3 in Ready · the next due keep opens the decay card · none logged yet",
   );
   const modal = helpers.buildRottenKeepPromptModel(base);
-  assert.equal(modal.subtitleLines[1], "kept 3 in a row · none logged yet");
+  assert.equal(modal.subtitleLines[1], "keep 4 of 3 in Ready · the next due keep opens the decay card · none logged yet");
 });
 
 test("ambiguous Rotten Logs refuse the Keep write", async () => {
@@ -574,5 +574,5 @@ test("ambiguous Rotten Logs refuse the Keep write", async () => {
   });
   assert.equal(ok, false);
   assert.equal(editor.getValue(), before);
-  assert.match(notices.join("\n"), /Multiple Rotten Logs found/);
+  assert.match(notices.join("\n"), /Repair the duplicate/);
 });

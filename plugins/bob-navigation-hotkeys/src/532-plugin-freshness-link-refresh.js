@@ -53,9 +53,11 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
     const localDayBefore = this.laneReleaseDateText();
     const canCountKeeps = freshnessSupportsKeeps(api);
     // Task Link sessions never open cards — even a single link. Exact
-    // at-limit targets skip without changing fresh/count; below
-    // threshold they count normally. Skipped targets stay due for the
-    // walk and never enter anchor exclusions.
+    // at-limit Ready targets skip without changing fresh/count; below
+    // threshold they count normally. Lane rows count and log until the
+    // rung-aware card ships (no batch skip for them). Skipped targets
+    // stay due for the walk and never enter anchor exclusions. Early
+    // lane rows stamp quietly with no prompt and no entry.
     const linkResolved = groups.map((group) => {
       const groupLines = splitMarkdownContent(group.content).lines;
       return {
@@ -72,22 +74,28 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
               line: target.line,
               raw,
             });
+            const isToday = match.ok === true ? freshnessTargetIsToday(api, match.entry) : false;
             const keep = canCountKeeps
               ? classifyRottenKeepTarget({
                   match,
                   raw,
                   stamper: options.stamper,
                   dateText: options.dateText,
+                  isToday,
                 })
-              : { counted: false };
+              : { counted: false, keepsBefore: parseKeepsCount(raw), keepsAfter: parseKeepsCount(raw), rung: null };
+            const status = getObsidianTaskCheckboxStatus(raw);
             return Object.freeze({
               target: Object.freeze({
                 line: target.line,
                 path: group.path,
                 raw,
-                counted: match.ok,
+                counted: canCountKeeps ? keep.counted === true : match.ok,
               }),
               keep,
+              isToday,
+              laneRow: status === "/" || status === "*",
+              rung: keep.counted === true ? keep.rung : null,
               match,
             });
           }),
@@ -143,81 +151,58 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
         }
       }
     }
-    const eligibleTargets = stampTargetsByGroup.flatMap(({ targets }) =>
-      targets.filter((target) => isPendingWorkLogTargetRawLine(target.raw)),
-    );
     const rottenTargets = linkResolved.flatMap(({ group, resolved }) => {
       const stampGroup = stampTargetsByGroup.find((item) => item.group === group);
       const stampLines = new Set((stampGroup && stampGroup.targets || []).map((target) => target.line));
       return resolved
-        .filter((item) => item.keep.counted && stampLines.has(item.target.line))
+        .filter((item) => item.keep.counted === true && !item.laneRow && stampLines.has(item.target.line))
         .map((item) => ({
           ...item,
           group,
           history: readRottenLog(group.content, item.target.line),
         }));
     });
-    const laneTargets = stampTargetsByGroup.flatMap(({ group, targets }) =>
-      targets.filter((target) => isNextRottenLogTargetRawLine(target.raw)).map((target) => {
-        const resolvedGroup = linkResolved.find((item) => item.group === group);
-        const item = (resolvedGroup && resolvedGroup.resolved || [])
-          .find((candidate) => candidate.target.line === target.line);
-        return {
-          raw: target.raw,
-          entry: item && item.match && item.match.ok ? item.match.entry : null,
-          history: readRottenLog(group.content, target.line),
-          target,
+    const laneTargets = linkResolved.flatMap(({ group, resolved }) => {
+      const stampGroup = stampTargetsByGroup.find((item) => item.group === group);
+      const stampLines = new Set((stampGroup && stampGroup.targets || []).map((target) => target.line));
+      return resolved
+        .filter((item) => item.keep.counted === true && item.laneRow && stampLines.has(item.target.line))
+        .map((item) => ({
+          raw: item.target.raw,
+          entry: item.match.entry,
+          keep: item.keep,
+          rung: item.keep.rung,
+          history: readRottenLog(group.content, item.target.line),
+          target: item.target,
           group,
-        };
-      }),
-    );
+        }));
+    });
     const promptPlan = planFreshnessRefreshPrompt({
       singleKeep: false,
       rottenTargets: rottenTargets.map((item) => ({
         raw: item.target.raw,
         entry: item.match.entry,
         keep: item.keep,
+        rung: item.keep.rung,
         history: item.history,
       })),
-      workTargets: eligibleTargets,
       laneTargets,
     });
-    let summary = "";
     let keepReason = "";
     if (promptPlan.kind === "batch") {
       const result = await this.requestFreshnessRefreshAnswers({
         keepTargets: promptPlan.keepTargets,
-        showWorkField: promptPlan.showWorkField,
-        ...(promptPlan.showWorkField ? { summary: options.summary } : {}),
+        showWorkField: false,
         keepReason: options.keepReason,
         dateText: options.dateText,
         totalCount: linkStamped,
-        eligibleCount: eligibleTargets.length,
       });
       if (result.failed) {
-        new Notice(promptPlan.showWorkField
-          ? "Could not open combined refresh prompt; no tasks were updated"
-          : "Could not open Keep reason prompt; no tasks were updated");
+        new Notice("Could not open Keep reason prompt; no tasks were updated");
         return false;
       }
       if (result.cancelled) return false;
-      summary = result.summary;
       keepReason = result.keepReason;
-    } else if (promptPlan.kind === "work-only") {
-      const result = await this.requestFreshnessRefreshSummary({
-        summary: options.summary,
-        dateText: options.dateText,
-        totalCount: linkStamped,
-        eligibleCount: eligibleTargets.length,
-      });
-      if (result.failed) {
-        new Notice("Could not open Work Log prompt; no tasks were updated");
-        return false;
-      }
-      if (result.cancelled) {
-        return false;
-      }
-      summary = result.summary;
     }
     const promptShown = promptPlan.kind !== "none";
     if (promptShown) {
@@ -250,22 +235,21 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
     let workLogWrittenCount = 0;
     let rottenLogWrittenCount = 0;
     for (const { group, targets } of stampTargetsByGroup) {
-      const groupRottenLines = rottenTargets
+      const groupRottenTargets = rottenTargets
         .filter((item) => item.group === group)
-        .map((item) => item.target.line);
-      const groupLaneLines = laneTargets
+        .map((item) => ({ line: item.target.line, rung: item.keep.rung }));
+      const groupLaneTargets = laneTargets
         .filter((item) => item.group === group)
-        .map((item) => item.target.line);
+        .map((item) => ({ line: item.target.line, rung: item.keep.rung }));
       const plan = planFreshStampBatchWithLogs(
         group.content,
         targets,
         options.stamper,
         options.dateText,
         {
-          workSummary: summary,
           keepReason,
-          rottenLines: groupRottenLines,
-          laneLines: groupLaneLines,
+          rottenTargets: groupRottenTargets,
+          laneTargets: groupLaneTargets,
         },
       );
       if (!plan.ok) {
@@ -293,6 +277,18 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
         return false;
       }
     }
+    // Uncounted lane rows with a prior-day stamp kept quietly: one
+    // shared "early · not counted" tail on the stamp notice.
+    let quietTail = "";
+    for (const entry of stampedAll) {
+      if (entry.counted !== false) continue;
+      const status = getObsidianTaskCheckboxStatus(entry.before);
+      if (status !== "/" && status !== "*") continue;
+      if (freshnessQuietNotCountedNotice(entry.before, options.dateText)) {
+        quietTail = freshnessQuietNotCountedNotice(entry.before, options.dateText);
+        break;
+      }
+    }
     // Ctrl+Alt+F advances through the shared tail with the stamp text
     // as its preamble, giving one composed toast.
     const linkPreamble = this.finishFreshStamp(
@@ -302,7 +298,7 @@ async function refreshTaskFreshnessOnLinks(cm, cursor, content, options = {}) {
       stampedAll,
       options.dateText,
       {
-        skipTail: linkSkipTail,
+        skipTail: linkSkipTail + quietTail,
         workLogWrittenCount,
         rottenLogWrittenCount,
         deferNotice: options.advance === true,

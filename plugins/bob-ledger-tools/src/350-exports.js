@@ -319,6 +319,8 @@ module.exports.helpers = {
   freshnessShortDate,
   freshnessMarkRottenLogHistory,
   freshnessMarkRottenLogLine,
+  freshnessMarkRottenLogTallies,
+  freshnessRottenParseEntry,
   freshnessMarkRottenLogSummary,
   freshnessMarkRottenLogSummaryFromListItem,
   freshnessMarkRottenLogShortDate,

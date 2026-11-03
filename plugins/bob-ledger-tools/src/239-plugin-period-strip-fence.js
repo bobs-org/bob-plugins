@@ -104,6 +104,9 @@ class BobLedgerToolsPeriodStripMixin {
         this.registerMarkdownCodeBlockProcessor("bob-stats-strip", (source, el, ctx) =>
           this.renderPeriodStripFence(el, ctx, source),
         );
+        this.registerMarkdownCodeBlockProcessor("bob-period-parts", (source, el, ctx) =>
+          this.renderPeriodStripFence(el, ctx, source, "table"),
+        );
       }
     } catch (error) {
       // Fence registration is best-effort.
@@ -410,6 +413,7 @@ class BobLedgerToolsPeriodStripMixin {
   periodStripFinishPaint(record, model, handlers, stamp) {
     try {
       const key = [
+        record.surface || "strip",
         model.state,
         model.periodId,
         String(stamp === undefined ? "" : stamp),
@@ -417,10 +421,12 @@ class BobLedgerToolsPeriodStripMixin {
         model.error ? model.error.code : "",
         (model.facts || []).map((fact) => [fact.display, (fact.ref && fact.ref.mark) || "", (fact.ref && fact.ref.display) || ""].join(":")).join(","),
         (model.columns || []).map((column) => [column.id, column.state, (column.worked && column.worked.display) || "", column.mark || ""].join(":")).join(","),
+        (model.children || []).map((child) => [child.id, child.state, (child.worked && child.worked.display) || "", child.headline || "", child.mostly || ""].join(":")).join(","),
       ].join("|");
       if (record.paintedKey === key) return model;
       record.paintedKey = key;
-      paintPeriodStrip(record.el, model, handlers);
+      if (record.surface === "table") paintPeriodPartsTable(record.el, model);
+      else paintPeriodStrip(record.el, model, handlers);
     } catch (error) {
       // Painting is best-effort.
     }
@@ -509,7 +515,7 @@ class BobLedgerToolsPeriodStripMixin {
   // selects the period member; a canonical daily note path (or a `day:` line)
   // renders the Day strip; anything else gets a muted line. Nothing on
   // mobile or wherever `bob` cannot spawn. Never throws.
-  renderPeriodStripFence(el, ctx, source) {
+  renderPeriodStripFence(el, ctx, source, surface) {
     if (!el) return;
     try {
       try {
@@ -527,6 +533,18 @@ class BobLedgerToolsPeriodStripMixin {
           else el.textContent = "";
           const doc = statsDocFor(el);
           const note = statsEl(doc, "div", { class: "bob-period-strip-fence-note" }, "bob-stats-strip needs a period note, a daily note, or a period: / day: line.");
+          if (note) el.appendChild(note);
+        } catch (error) {
+          // Muted-line fallback is best-effort.
+        }
+        return;
+      }
+      if (surface === "table" && parsed.kind === "day") {
+        try {
+          if (typeof el.empty === "function") el.empty();
+          else el.textContent = "";
+          const doc = statsDocFor(el);
+          const note = statsEl(doc, "div", { class: "bob-period-parts-note" }, "bob-period-parts needs a period note.");
           if (note) el.appendChild(note);
         } catch (error) {
           // Muted-line fallback is best-effort.
@@ -556,7 +574,7 @@ class BobLedgerToolsPeriodStripMixin {
         return;
       }
       if (!this.periodStripCanSpawn()) return;
-      const record = { el, periodId: parsed.id, kind: parsed.kind, path: sourcePath, observer: null, visible: true };
+      const record = { el, periodId: parsed.id, kind: parsed.kind, surface: surface === "table" ? "table" : "strip", path: sourcePath, observer: null, visible: true };
       this.periodStripViewsStore().add(record);
       if (ctx && typeof ctx.addChild === "function") {
         let child = null;

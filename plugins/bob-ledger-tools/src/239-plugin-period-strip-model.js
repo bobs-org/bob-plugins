@@ -280,6 +280,7 @@ function periodStripLane(report, dimension, context) {
 function periodStripWeekColumns(report) {
   try {
     const raw = Array.isArray(report.columns) ? report.columns : [];
+    const periodKind = report && report.period && typeof report.period.kind === "string" ? report.period.kind : "";
     const lanes = report && typeof report.lanes === "object" ? report.lanes : null;
     const roots = lanes && Array.isArray(lanes.root_parent) ? lanes.root_parent : [];
     const order = new Map(roots.map((row, index) => [row.key, index]));
@@ -318,10 +319,12 @@ function periodStripWeekColumns(report) {
       const worked = column.worked && typeof column.worked === "object" ? column.worked : null;
       const value = worked && typeof worked.value === "number" ? worked.value : null;
       const quality = worked && typeof worked.quality === "string" ? worked.quality : "";
-      const missing = value === null || quality === "missing" || quality === "not_tracked";
+      const missing = state !== "future" && (quality === "missing" || quality === "not_tracked");
       const height = tallest > 0 && typeof value === "number" ? value / tallest : 0;
       const mark = typeof column.mark === "string" ? column.mark : null;
-      const caption = typeof column.caption === "string" ? column.caption : "";
+      let caption = typeof column.caption === "string" ? column.caption : "";
+      if (periodKind === "quarter" && typeof column.kind === "string" && column.kind === "week") caption = caption.replace(/^W/i, "");
+      if (periodKind === "year" && column.group) caption = "";
       const soFar = state === "current";
       const tooltip = periodStripColumnTooltip(column, missing);
       return {
@@ -333,7 +336,7 @@ function periodStripWeekColumns(report) {
         start: typeof column.start === "string" ? column.start : "",
         end: typeof column.end === "string" ? column.end : "",
         state,
-        partial: column.partial === true || typeof column.partial === "string" ? column.partial : null,
+        partial: periodStripPartialCaption(column),
         worked: worked ? { display: worked.display, value, quality, soFar: worked.so_far === true || soFar } : null,
         missing,
         height,
@@ -346,6 +349,20 @@ function periodStripWeekColumns(report) {
     }).filter(Boolean);
   } catch (error) {
     return [];
+  }
+}
+
+function periodStripPartialCaption(column) {
+  if (!column || !column.partial) return null;
+  if (typeof column.partial === "string") return column.partial;
+  try {
+    const start = dayStripDateParts(column.start);
+    const end = dayStripDateParts(column.end);
+    if (!start || !end) return null;
+    const days = Math.round((Date.UTC(end.year, end.month - 1, end.date) - Date.UTC(start.year, start.month - 1, start.date)) / 86400000) + 1;
+    return days >= 1 && days < 7 ? days + "/7" : null;
+  } catch (error) {
+    return null;
   }
 }
 
@@ -372,6 +389,9 @@ function periodStripColumnTooltip(column, missing) {
 
 function periodStripColumnReviewWords(mark, state) {
   if (state === "future") return "upcoming";
+  if (mark === "reflected") return "reflected";
+  if (mark === "drafted") return "drafted";
+  if (mark === "edited") return "edited";
   if (mark === "met") return "review closed";
   if (mark === "missed") return "review open";
   if (mark === "open") return "today";
@@ -404,9 +424,8 @@ function periodStripErrorInfo(error) {
   }
 }
 
-// Week member model: ready | skeleton | future | unavailable | hidden | queued.
-// `queued` is the narrow-year style fallback placeholder the parts phase fills
-// for quarter/year/all; the strip phase never emits it for weeks. Never throws.
+// Period member model: ready | skeleton | future | unavailable | hidden.
+// The same report feeds the week, quarter, year, and all-time members.
 function periodStripModel(report, periodId, context) {
   try {
     const safeContext = context && typeof context === "object" ? context : {};
@@ -417,17 +436,15 @@ function periodStripModel(report, periodId, context) {
     if (!classified || classified.kind === "day") {
       return { state: "hidden", periodId: typeof periodId === "string" ? periodId : "", kind: (classified && classified.kind) || "", lanes: { view: laneView, shown: [], switchable: false } };
     }
-    if (classified.kind !== "week") {
-      return { state: "queued", periodId: classified.id, kind: classified.kind, lanes: { view: laneView, shown: [], switchable: false } };
-    }
+    const kind = classified.kind;
     const error = periodStripErrorInfo(safeContext.error);
     if (!report) {
       if (error) {
         const code = String(error.code || "");
         if (code === "bob-not-found" || /older-bob|unknown[\s_-]*subcommand|schema-mismatch/.test(code + " " + String(error.title || ""))) {
-          return { state: "older-bob", periodId: classified.id, kind: "week", lanes: { view: laneView, shown: [], switchable: false }, error };
+          return { state: "older-bob", periodId: classified.id, kind, lanes: { view: laneView, shown: [], switchable: false }, error };
         }
-        return { state: "unavailable", periodId: classified.id, kind: "week", lanes: { view: laneView, shown: [], switchable: false }, ariaLabel: "Period stats unavailable — " + error.title + ".", error };
+        return { state: "unavailable", periodId: classified.id, kind, lanes: { view: laneView, shown: [], switchable: false }, ariaLabel: "Period stats unavailable — " + error.title + ".", error };
       }
       const facts = PERIOD_STRIP_METRIC_IDS.map((id) => ({
         id,
@@ -442,16 +459,19 @@ function periodStripModel(report, periodId, context) {
         offClock: null,
         unit: "",
       }));
-      return { state: "skeleton", periodId: classified.id, kind: "week", facts, columns: [], lanes: { view: laneView, shown: ["roots", "themes"], switchable: true }, roots: null, themes: null, metaText: "", stale: false, error: null, ariaLabel: "Week stats for " + classified.id + ". Loading." };
+      return { state: "skeleton", periodId: classified.id, kind, facts, columns: [], children: [], groups: [], lanes: { view: laneView, shown: ["roots", "themes"], switchable: true }, roots: null, themes: null, metaText: "", stale: false, error: null, ariaLabel: periodStripKindTitle(kind) + " stats for " + classified.id + ". Loading." };
     }
     const period = report.period && typeof report.period === "object" ? report.period : {};
     if (period.state === "future") {
-      return { state: "future", periodId: classified.id, kind: "week", period, lanes: { view: laneView, shown: [], switchable: false }, metaText: periodStripMetaText(report, safeContext.fetchedAt), stale: false, error: null };
+      return { state: "future", periodId: classified.id, kind, period, columns: periodStripWeekColumns(report), children: periodStripTableRows(report), groups: Array.isArray(report.groups) ? report.groups : [], lanes: { view: laneView, shown: [], switchable: false }, metaText: periodStripMetaText(report, safeContext.fetchedAt), stale: false, error: null };
     }
     const facts = (Array.isArray(report.facts) ? report.facts : []).map(periodStripBuildFact);
     const roots = periodStripLane(report, "root_parent", safeContext);
     const themes = periodStripLane(report, "theme", safeContext);
     const columns = periodStripWeekColumns(report);
+    const children = periodStripTableRows(report);
+    const groups = Array.isArray(report.groups) ? report.groups : [];
+    const quarterFallbackColumns = kind === "year" ? periodStripYearQuarterColumns(children) : [];
     const stale = safeContext.stale === true;
     const lanes = typeof dayStripLaneLayout === "function"
       ? dayStripLaneLayout({ state: stale ? "stale" : "ready", mix: { ...roots, dimension: roots.dimension === "theme" ? "theme" : "root_parent" }, themes, view: laneView })
@@ -460,16 +480,19 @@ function periodStripModel(report, periodId, context) {
     const asOf = periodStripAsOf(safeContext.fetchedAt);
     const staleTitle = stale ? ((error && error.title) || "Refresh failed") + " · showing the " + (asOf || "cached") + " report" : "";
     const title = typeof period.title === "string" ? period.title : classified.id;
-    const ariaLabel = "Week stats for " + title + (period.state === "current" ? ", so far" : "") + ": " + facts.map((fact) => fact.label + " " + fact.display).join(", ") + ".";
+    const ariaLabel = periodStripKindTitle(kind) + " stats for " + title + (period.state === "current" ? ", so far" : "") + ": " + facts.map((fact) => fact.label + " " + fact.display).join(", ") + ".";
     return {
       state: "ready",
       periodId: classified.id,
-      kind: "week",
+      kind,
       period,
       facts,
       roots,
       themes,
       columns,
+      children,
+      groups,
+      quarterFallbackColumns,
       lanes,
       metaText,
       asOf,
@@ -479,6 +502,74 @@ function periodStripModel(report, periodId, context) {
       ariaLabel,
     };
   } catch (error) {
-    return { state: "unavailable", periodId: typeof periodId === "string" ? periodId : "", kind: "week", lanes: { view: "both", shown: [], switchable: false }, ariaLabel: "Period stats unavailable — bob periods failed.", error: { code: "model-error", title: "bob periods failed", hint: "" } };
+    return { state: "unavailable", periodId: typeof periodId === "string" ? periodId : "", kind: "", lanes: { view: "both", shown: [], switchable: false }, ariaLabel: "Period stats unavailable — bob periods failed.", error: { code: "model-error", title: "bob periods failed", hint: "" } };
+  }
+}
+
+function periodStripYearQuarterColumns(children) {
+  try {
+    return (Array.isArray(children) ? children : []).filter((row) => row && row.kind === "quarter").map((row) => ({
+      id: row.id,
+      kind: "quarter",
+      label: row.label,
+      caption: row.label,
+      path: row.path,
+      start: "",
+      end: "",
+      state: row.state,
+      worked: row.worked,
+      missing: Boolean(row.worked && row.worked.quality === "not_tracked"),
+      height: 0,
+      stack: row.stack,
+      mark: null,
+      tick: null,
+      group: null,
+      tooltip: (row.label || row.id) + " · Worked " + ((row.worked && row.worked.display) || "–"),
+    }));
+  } catch (error) {
+    return [];
+  }
+}
+
+function periodStripKindTitle(kind) {
+  return ({ week: "Week", quarter: "Quarter", year: "Year", all: "All-time" })[kind] || "Period";
+}
+
+// Narrative children supplied by bob for the live parts table. Keeping this
+// as a shallow projection ensures the table never recalculates period values.
+function periodStripTableRows(report) {
+  try {
+    const raw = Array.isArray(report && report.children) ? report.children : [];
+    const roots = report && report.lanes && Array.isArray(report.lanes.root_parent) ? report.lanes.root_parent : [];
+    const order = new Map(roots.map((row, index) => [row.key, index]));
+    const hues = new Map();
+    const segments = typeof timeLaneRootSegments === "function"
+      ? timeLaneRootSegments(report, "root_parent", roots.map((row) => ({ key: row.key, label: row.label, value: Number(row.minutes) || 0, display: row.display, share: row.share })))
+      : [];
+    for (const segment of segments) hues.set(segment.key, segment.hue);
+    return raw.filter((row) => row && typeof row === "object").map((row) => {
+      const worked = row.worked && typeof row.worked === "object" ? row.worked : null;
+      const stack = (Array.isArray(row.stack) ? row.stack : []).filter((entry) => entry && typeof entry.key === "string" && typeof entry.minutes === "number" && entry.minutes > 0)
+        .map((entry) => ({ key: entry.key, minutes: entry.minutes, hue: hues.get(entry.key) || "gray", rank: order.has(entry.key) ? order.get(entry.key) : 999 }))
+        .sort((a, b) => a.rank - b.rank);
+      return {
+        id: typeof row.id === "string" ? row.id : "",
+        kind: typeof row.kind === "string" ? row.kind : "",
+        label: typeof row.label === "string" ? row.label : (typeof row.id === "string" ? row.id : ""),
+        rangeLabel: typeof row.range_label === "string" ? row.range_label : "",
+        path: typeof row.path === "string" ? row.path : "",
+        exists: row.exists === true,
+        state: typeof row.state === "string" ? row.state : "closed",
+        worked: worked ? { value: typeof worked.value === "number" ? worked.value : null, display: typeof worked.display === "string" ? worked.display : "–", quality: typeof worked.quality === "string" ? worked.quality : "", soFar: worked.so_far === true } : null,
+        done: row.done && typeof row.done === "object" ? row.done : null,
+        review: row.review && typeof row.review === "object" ? row.review : null,
+        closeout: typeof row.closeout === "string" ? row.closeout : null,
+        headline: row.review && typeof row.review.headline === "string" ? row.review.headline : "",
+        mostly: typeof row.mostly_display === "string" ? row.mostly_display : "",
+        stack,
+      };
+    });
+  } catch (error) {
+    return [];
   }
 }

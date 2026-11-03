@@ -1,4 +1,4 @@
-// DOM painter for the week member of the period stats strip. The host element
+// DOM painter for the period stats strip family. The host element
 // stays stable; each update replaces only its children from the current model.
 // Interactive targets are spans with role="link": Obsidian's global button rules
 // must never be able to resize the strip again. Facts and lanes reuse the Day
@@ -220,9 +220,10 @@ function paintPeriodStrip(host, model, handlers) {
     const doc = host.ownerDocument || (typeof document !== "undefined" ? document : null);
     if (!doc) return null;
     while (host.firstChild) host.removeChild(host.firstChild);
+    const kind = model.kind || "week";
     const root = statsEl(doc, "div", {
-      class: "bob-period-strip bob-period-strip-kind-week bob-period-strip-state-" + model.state,
-      "aria-label": model.ariaLabel || ("Week stats for " + (model.periodId || "week")),
+      class: "bob-period-strip bob-period-strip-kind-" + kind + " bob-period-strip-state-" + model.state,
+      "aria-label": model.ariaLabel || ((typeof periodStripKindTitle === "function" ? periodStripKindTitle(kind) : "Period") + " stats for " + (model.periodId || "period")),
     });
     if (!root) return null;
     host.appendChild(root);
@@ -234,11 +235,6 @@ function paintPeriodStrip(host, model, handlers) {
     }
     if (model.state === "older-bob") {
       const line = statsEl(doc, "div", { class: "bob-period-strip-note" }, "Period stats need a newer bob (bob periods not found).");
-      if (line) root.appendChild(line);
-      return root;
-    }
-    if (model.state === "queued") {
-      const line = statsEl(doc, "div", { class: "bob-period-strip-note" }, "Quarter, year, and all-time strips arrive with the parts phase.");
       if (line) root.appendChild(line);
       return root;
     }

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// Render the production week-member period strip in Chromium under an Obsidian
-// baseline stylesheet. Mirrors preview-day-strip.cjs. Height budget at a 16 px
-// base: week members stay at or under 240 px with facts on one line.
+// Render the production period strip and parts table in Chromium under an
+// Obsidian baseline stylesheet. Mirrors preview-day-strip.cjs.
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -66,7 +65,11 @@ function safeJson(value) {
 function loadFixtures() {
   const dir = path.join(pluginRoot, "scripts/fixtures/stats");
   const read = (name) => JSON.parse(fs.readFileSync(path.join(dir, `period-strip-${name}-week.json`), "utf8"));
-  return { current: read("current"), closed: read("closed"), "pre-ledger": read("pre-ledger"), future: read("future") };
+  const parts = require(path.join(dir, "period-parts-fixtures.cjs")).periodPartsFixtures(read("closed"));
+  return {
+    current: read("current"), closed: read("closed"), "pre-ledger": read("pre-ledger"), future: read("future"),
+    "current-quarter": parts.currentQuarter, "closed-quarter": parts.closedQuarter, year: parts.year, all: parts.all,
+  };
 }
 
 function makeHtml({ pluginSource, css, fixtures }) {
@@ -171,7 +174,7 @@ async function main() {
     await sleep(1500);
     const failures = [];
     const rows = [];
-    for (const width of [410, 700]) {
+    for (const width of [130, 410, 700]) {
       for (const theme of ["light", "dark"]) {
         await client.call("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: false });
         await sleep(300);
@@ -179,18 +182,19 @@ async function main() {
         for (const item of result.measurements) {
           rows.push({ width, theme, ...item });
           const budget = width <= 410 ? PERIOD_STRIP_HEIGHT_WEEK_WRAPPED : PERIOD_STRIP_HEIGHT_WEEK;
-          if (["current", "closed", "pre-ledger"].includes(item.state) && item.stripHeight > budget + 0.5) {
+          if (width >= 300 && ["current", "closed", "pre-ledger"].includes(item.state) && item.stripHeight > budget + 0.5) {
             failures.push(`${item.state} ${width}px ${theme}: height ${item.stripHeight}px over the ${budget}px budget`);
           }
+          if (item.kind === "year" && width <= 150 && !item.yearFallback) failures.push(`year ${width}px ${theme}: narrow quarter fallback did not render`);
         }
       }
     }
     const report = [
-      "# Period strip preview",
+      "# Period strip and parts table preview",
       "",
-      ...rows.map((item) => `- ${item.width}px ${item.theme} ${item.state}: ${item.stripHeight}px`),
+      ...rows.map((item) => `- ${item.width}px ${item.theme} ${item.state} (${item.kind}): strip ${item.stripHeight}px, table ${item.tableHeight}px${item.kind === "year" ? (item.yearFallback ? ", quarter fallback" : ", week detail") : ""}`),
       "",
-      failures.length ? `FAIL: ${failures.join("; ")}` : "All measured week members fit the 240 px budget.",
+      failures.length ? `FAIL: ${failures.join("; ")}` : "The period preview matrix rendered without layout errors.",
     ].join("\n");
     fs.writeFileSync(path.join(args.out, "report.md"), report + "\n");
     console.log(report);

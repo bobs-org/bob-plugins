@@ -65,3 +65,8 @@ report, and off-clock hint cases (supplied display, raw numeric fallback, zero, 
 except `areaOnly` (the old-bob fallback) and `redefinedWorked`. These
 reports exist only to exercise the view and are not captured vault data or tests of
 `bob stats` calculations.
+
+`period-parts-fixtures.cjs` builds presentation examples for the current and closed
+quarter, the 53-week year, and all time. The period strip preview renders each at narrow
+and wide widths in light and dark themes; the narrow year checks the quarter fallback.
+These are UI fixtures, not period totals from a vault.

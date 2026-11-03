@@ -47224,6 +47224,7 @@ function periodStripLane(report, dimension, context) {
 function periodStripWeekColumns(report) {
   try {
     const raw = Array.isArray(report.columns) ? report.columns : [];
+    const periodKind = report && report.period && typeof report.period.kind === "string" ? report.period.kind : "";
     const lanes = report && typeof report.lanes === "object" ? report.lanes : null;
     const roots = lanes && Array.isArray(lanes.root_parent) ? lanes.root_parent : [];
     const order = new Map(roots.map((row, index) => [row.key, index]));
@@ -47262,10 +47263,12 @@ function periodStripWeekColumns(report) {
       const worked = column.worked && typeof column.worked === "object" ? column.worked : null;
       const value = worked && typeof worked.value === "number" ? worked.value : null;
       const quality = worked && typeof worked.quality === "string" ? worked.quality : "";
-      const missing = value === null || quality === "missing" || quality === "not_tracked";
+      const missing = state !== "future" && (quality === "missing" || quality === "not_tracked");
       const height = tallest > 0 && typeof value === "number" ? value / tallest : 0;
       const mark = typeof column.mark === "string" ? column.mark : null;
-      const caption = typeof column.caption === "string" ? column.caption : "";
+      let caption = typeof column.caption === "string" ? column.caption : "";
+      if (periodKind === "quarter" && typeof column.kind === "string" && column.kind === "week") caption = caption.replace(/^W/i, "");
+      if (periodKind === "year" && column.group) caption = "";
       const soFar = state === "current";
       const tooltip = periodStripColumnTooltip(column, missing);
       return {
@@ -47277,7 +47280,7 @@ function periodStripWeekColumns(report) {
         start: typeof column.start === "string" ? column.start : "",
         end: typeof column.end === "string" ? column.end : "",
         state,
-        partial: column.partial === true || typeof column.partial === "string" ? column.partial : null,
+        partial: periodStripPartialCaption(column),
         worked: worked ? { display: worked.display, value, quality, soFar: worked.so_far === true || soFar } : null,
         missing,
         height,
@@ -47290,6 +47293,20 @@ function periodStripWeekColumns(report) {
     }).filter(Boolean);
   } catch (error) {
     return [];
+  }
+}
+
+function periodStripPartialCaption(column) {
+  if (!column || !column.partial) return null;
+  if (typeof column.partial === "string") return column.partial;
+  try {
+    const start = dayStripDateParts(column.start);
+    const end = dayStripDateParts(column.end);
+    if (!start || !end) return null;
+    const days = Math.round((Date.UTC(end.year, end.month - 1, end.date) - Date.UTC(start.year, start.month - 1, start.date)) / 86400000) + 1;
+    return days >= 1 && days < 7 ? days + "/7" : null;
+  } catch (error) {
+    return null;
   }
 }
 
@@ -47316,6 +47333,9 @@ function periodStripColumnTooltip(column, missing) {
 
 function periodStripColumnReviewWords(mark, state) {
   if (state === "future") return "upcoming";
+  if (mark === "reflected") return "reflected";
+  if (mark === "drafted") return "drafted";
+  if (mark === "edited") return "edited";
   if (mark === "met") return "review closed";
   if (mark === "missed") return "review open";
   if (mark === "open") return "today";
@@ -47348,9 +47368,8 @@ function periodStripErrorInfo(error) {
   }
 }
 
-// Week member model: ready | skeleton | future | unavailable | hidden | queued.
-// `queued` is the narrow-year style fallback placeholder the parts phase fills
-// for quarter/year/all; the strip phase never emits it for weeks. Never throws.
+// Period member model: ready | skeleton | future | unavailable | hidden.
+// The same report feeds the week, quarter, year, and all-time members.
 function periodStripModel(report, periodId, context) {
   try {
     const safeContext = context && typeof context === "object" ? context : {};
@@ -47361,17 +47380,15 @@ function periodStripModel(report, periodId, context) {
     if (!classified || classified.kind === "day") {
       return { state: "hidden", periodId: typeof periodId === "string" ? periodId : "", kind: (classified && classified.kind) || "", lanes: { view: laneView, shown: [], switchable: false } };
     }
-    if (classified.kind !== "week") {
-      return { state: "queued", periodId: classified.id, kind: classified.kind, lanes: { view: laneView, shown: [], switchable: false } };
-    }
+    const kind = classified.kind;
     const error = periodStripErrorInfo(safeContext.error);
     if (!report) {
       if (error) {
         const code = String(error.code || "");
         if (code === "bob-not-found" || /older-bob|unknown[\s_-]*subcommand|schema-mismatch/.test(code + " " + String(error.title || ""))) {
-          return { state: "older-bob", periodId: classified.id, kind: "week", lanes: { view: laneView, shown: [], switchable: false }, error };
+          return { state: "older-bob", periodId: classified.id, kind, lanes: { view: laneView, shown: [], switchable: false }, error };
         }
-        return { state: "unavailable", periodId: classified.id, kind: "week", lanes: { view: laneView, shown: [], switchable: false }, ariaLabel: "Period stats unavailable — " + error.title + ".", error };
+        return { state: "unavailable", periodId: classified.id, kind, lanes: { view: laneView, shown: [], switchable: false }, ariaLabel: "Period stats unavailable — " + error.title + ".", error };
       }
       const facts = PERIOD_STRIP_METRIC_IDS.map((id) => ({
         id,
@@ -47386,16 +47403,19 @@ function periodStripModel(report, periodId, context) {
         offClock: null,
         unit: "",
       }));
-      return { state: "skeleton", periodId: classified.id, kind: "week", facts, columns: [], lanes: { view: laneView, shown: ["roots", "themes"], switchable: true }, roots: null, themes: null, metaText: "", stale: false, error: null, ariaLabel: "Week stats for " + classified.id + ". Loading." };
+      return { state: "skeleton", periodId: classified.id, kind, facts, columns: [], children: [], groups: [], lanes: { view: laneView, shown: ["roots", "themes"], switchable: true }, roots: null, themes: null, metaText: "", stale: false, error: null, ariaLabel: periodStripKindTitle(kind) + " stats for " + classified.id + ". Loading." };
     }
     const period = report.period && typeof report.period === "object" ? report.period : {};
     if (period.state === "future") {
-      return { state: "future", periodId: classified.id, kind: "week", period, lanes: { view: laneView, shown: [], switchable: false }, metaText: periodStripMetaText(report, safeContext.fetchedAt), stale: false, error: null };
+      return { state: "future", periodId: classified.id, kind, period, columns: periodStripWeekColumns(report), children: periodStripTableRows(report), groups: Array.isArray(report.groups) ? report.groups : [], lanes: { view: laneView, shown: [], switchable: false }, metaText: periodStripMetaText(report, safeContext.fetchedAt), stale: false, error: null };
     }
     const facts = (Array.isArray(report.facts) ? report.facts : []).map(periodStripBuildFact);
     const roots = periodStripLane(report, "root_parent", safeContext);
     const themes = periodStripLane(report, "theme", safeContext);
     const columns = periodStripWeekColumns(report);
+    const children = periodStripTableRows(report);
+    const groups = Array.isArray(report.groups) ? report.groups : [];
+    const quarterFallbackColumns = kind === "year" ? periodStripYearQuarterColumns(children) : [];
     const stale = safeContext.stale === true;
     const lanes = typeof dayStripLaneLayout === "function"
       ? dayStripLaneLayout({ state: stale ? "stale" : "ready", mix: { ...roots, dimension: roots.dimension === "theme" ? "theme" : "root_parent" }, themes, view: laneView })
@@ -47404,16 +47424,19 @@ function periodStripModel(report, periodId, context) {
     const asOf = periodStripAsOf(safeContext.fetchedAt);
     const staleTitle = stale ? ((error && error.title) || "Refresh failed") + " · showing the " + (asOf || "cached") + " report" : "";
     const title = typeof period.title === "string" ? period.title : classified.id;
-    const ariaLabel = "Week stats for " + title + (period.state === "current" ? ", so far" : "") + ": " + facts.map((fact) => fact.label + " " + fact.display).join(", ") + ".";
+    const ariaLabel = periodStripKindTitle(kind) + " stats for " + title + (period.state === "current" ? ", so far" : "") + ": " + facts.map((fact) => fact.label + " " + fact.display).join(", ") + ".";
     return {
       state: "ready",
       periodId: classified.id,
-      kind: "week",
+      kind,
       period,
       facts,
       roots,
       themes,
       columns,
+      children,
+      groups,
+      quarterFallbackColumns,
       lanes,
       metaText,
       asOf,
@@ -47423,7 +47446,75 @@ function periodStripModel(report, periodId, context) {
       ariaLabel,
     };
   } catch (error) {
-    return { state: "unavailable", periodId: typeof periodId === "string" ? periodId : "", kind: "week", lanes: { view: "both", shown: [], switchable: false }, ariaLabel: "Period stats unavailable — bob periods failed.", error: { code: "model-error", title: "bob periods failed", hint: "" } };
+    return { state: "unavailable", periodId: typeof periodId === "string" ? periodId : "", kind: "", lanes: { view: "both", shown: [], switchable: false }, ariaLabel: "Period stats unavailable — bob periods failed.", error: { code: "model-error", title: "bob periods failed", hint: "" } };
+  }
+}
+
+function periodStripYearQuarterColumns(children) {
+  try {
+    return (Array.isArray(children) ? children : []).filter((row) => row && row.kind === "quarter").map((row) => ({
+      id: row.id,
+      kind: "quarter",
+      label: row.label,
+      caption: row.label,
+      path: row.path,
+      start: "",
+      end: "",
+      state: row.state,
+      worked: row.worked,
+      missing: Boolean(row.worked && row.worked.quality === "not_tracked"),
+      height: 0,
+      stack: row.stack,
+      mark: null,
+      tick: null,
+      group: null,
+      tooltip: (row.label || row.id) + " · Worked " + ((row.worked && row.worked.display) || "–"),
+    }));
+  } catch (error) {
+    return [];
+  }
+}
+
+function periodStripKindTitle(kind) {
+  return ({ week: "Week", quarter: "Quarter", year: "Year", all: "All-time" })[kind] || "Period";
+}
+
+// Narrative children supplied by bob for the live parts table. Keeping this
+// as a shallow projection ensures the table never recalculates period values.
+function periodStripTableRows(report) {
+  try {
+    const raw = Array.isArray(report && report.children) ? report.children : [];
+    const roots = report && report.lanes && Array.isArray(report.lanes.root_parent) ? report.lanes.root_parent : [];
+    const order = new Map(roots.map((row, index) => [row.key, index]));
+    const hues = new Map();
+    const segments = typeof timeLaneRootSegments === "function"
+      ? timeLaneRootSegments(report, "root_parent", roots.map((row) => ({ key: row.key, label: row.label, value: Number(row.minutes) || 0, display: row.display, share: row.share })))
+      : [];
+    for (const segment of segments) hues.set(segment.key, segment.hue);
+    return raw.filter((row) => row && typeof row === "object").map((row) => {
+      const worked = row.worked && typeof row.worked === "object" ? row.worked : null;
+      const stack = (Array.isArray(row.stack) ? row.stack : []).filter((entry) => entry && typeof entry.key === "string" && typeof entry.minutes === "number" && entry.minutes > 0)
+        .map((entry) => ({ key: entry.key, minutes: entry.minutes, hue: hues.get(entry.key) || "gray", rank: order.has(entry.key) ? order.get(entry.key) : 999 }))
+        .sort((a, b) => a.rank - b.rank);
+      return {
+        id: typeof row.id === "string" ? row.id : "",
+        kind: typeof row.kind === "string" ? row.kind : "",
+        label: typeof row.label === "string" ? row.label : (typeof row.id === "string" ? row.id : ""),
+        rangeLabel: typeof row.range_label === "string" ? row.range_label : "",
+        path: typeof row.path === "string" ? row.path : "",
+        exists: row.exists === true,
+        state: typeof row.state === "string" ? row.state : "closed",
+        worked: worked ? { value: typeof worked.value === "number" ? worked.value : null, display: typeof worked.display === "string" ? worked.display : "–", quality: typeof worked.quality === "string" ? worked.quality : "", soFar: worked.so_far === true } : null,
+        done: row.done && typeof row.done === "object" ? row.done : null,
+        review: row.review && typeof row.review === "object" ? row.review : null,
+        closeout: typeof row.closeout === "string" ? row.closeout : null,
+        headline: row.review && typeof row.review.headline === "string" ? row.review.headline : "",
+        mostly: typeof row.mostly_display === "string" ? row.mostly_display : "",
+        stack,
+      };
+    });
+  } catch (error) {
+    return [];
   }
 }
 // ---- src/239-plugin-period-strip-parts.js ----
@@ -47466,6 +47557,8 @@ function periodStripCloseoutGlyph(mark) {
   if (mark === "met") return "✓";
   if (mark === "missed") return "✕";
   if (mark === "open") return "◐";
+  if (mark === "reflected") return "✓";
+  if (mark === "drafted" || mark === "edited") return "·";
   return "";
 }
 
@@ -47514,12 +47607,20 @@ function periodStripRenderColumn(doc, column, index, model, handlers) {
     "data-column-state": state,
   });
   if (!node) return null;
+  if (column.tick) {
+    const tick = statsEl(doc, "span", { class: "bob-period-strip-column-tick", "aria-hidden": "true" });
+    if (tick) {
+      tick.appendChild(statsEl(doc, "span", { class: "bob-period-strip-column-tick-rule" }));
+      tick.appendChild(statsEl(doc, "span", {}, column.tick));
+      node.appendChild(tick);
+    }
+  }
   const bar = periodStripColumnBar(doc, column, periodStripTallest(model));
   if (bar && node.appendChild) node.appendChild(bar);
   const glyph = periodStripCloseoutGlyph(column.mark);
   const markText = state === "future" ? "" : glyph;
   const mark = statsEl(doc, "span", {
-    class: "bob-period-strip-column-mark",
+    class: "bob-period-strip-column-mark" + (column.mark === "drafted" || column.mark === "edited" ? " bob-period-strip-column-mark-draft" : ""),
     "data-mark": column.mark || "none",
     "aria-hidden": "true",
   }, markText);
@@ -47608,19 +47709,214 @@ function periodStripRenderWeekRow(doc, model, handlers) {
   return row;
 }
 
+function periodStripGroupedColumns(columns, groups) {
+  const grouped = new Map();
+  for (const column of columns || []) {
+    const key = column && column.group !== null && column.group !== undefined ? String(column.group) : "";
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(column);
+  }
+  if (!grouped.has("")) return Array.from(grouped.entries());
+  return Array.from(grouped.entries());
+}
+
+function periodStripGroupCaption(group, groups, kind) {
+  const key = String(group || "");
+  const found = (groups || []).find((row) => row && String(row.key) === key);
+  if (kind === "year" || kind === "all") {
+    const label = found && typeof found.label === "string" ? found.label : key;
+    const worked = found && typeof found.worked_display === "string" ? found.worked_display : "";
+    return label + (worked && worked !== "–" ? " · " + worked : "");
+  }
+  return key;
+}
+
+// Quarter/year/all-time share one row painter. Group labels come directly
+// from bob's `groups`; columns only scale their supplied root-parent stacks.
+function periodStripRenderGroupedRow(doc, model, handlers, opts) {
+  const options = opts || {};
+  const kind = options.kind || model.kind;
+  const row = statsEl(doc, "span", {
+    class: "bob-period-strip-parts bob-period-strip-parts-" + kind + (options.fallback ? " bob-period-strip-parts-fallback" : " bob-period-strip-parts-detailed"),
+    role: "group",
+    "aria-label": (kind === "quarter" ? "Weeks of " : kind === "year" ? "Weeks of " : "Quarters of ") + ((model && model.periodId) || "period"),
+    "data-period-parts": kind,
+  });
+  if (!row) return null;
+  const columns = Array.isArray(options.columns) ? options.columns : (Array.isArray(model.columns) ? model.columns : []);
+  const layoutModel = options.columns ? { ...model, columns } : model;
+  const groups = periodStripGroupedColumns(columns, model.groups);
+  let tabIndex = 0;
+  const rendered = [];
+  for (const [key, groupColumns] of groups) {
+    const isGrouped = Boolean(key) && (kind === "year" || kind === "all");
+    const group = isGrouped ? statsEl(doc, "span", { class: "bob-period-strip-column-group", "data-group": key }) : row;
+    if (!group) continue;
+    const columnWrap = isGrouped ? statsEl(doc, "span", { class: "bob-period-strip-column-group-columns" }) : group;
+    if (!columnWrap) continue;
+    for (const column of groupColumns) {
+      const node = periodStripRenderColumn(doc, column, tabIndex++, layoutModel, handlers);
+      if (!node) continue;
+      if (columnWrap.appendChild) columnWrap.appendChild(node);
+      rendered.push(node);
+    }
+    if (isGrouped) {
+      group.appendChild(columnWrap);
+      const caption = periodStripGroupCaption(key, model.groups, kind);
+      const groupLabel = statsEl(doc, "span", { class: "bob-period-strip-group-caption" }, caption);
+      if (groupLabel && group.appendChild) group.appendChild(groupLabel);
+      if (row.appendChild) row.appendChild(group);
+    }
+  }
+  if (row.addEventListener) {
+    row.addEventListener("keydown", (event) => {
+      try {
+        if (!event || !event.target) return;
+        const current = rendered.indexOf(event.target);
+        if (current < 0) return;
+        let next = -1;
+        if (event.key === "ArrowRight") next = Math.min(rendered.length - 1, current + 1);
+        else if (event.key === "ArrowLeft") next = Math.max(0, current - 1);
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = rendered.length - 1;
+        else return;
+        if (event.preventDefault) event.preventDefault();
+        for (const node of rendered) if (node.setAttribute) node.setAttribute("tabindex", "-1");
+        const target = rendered[next];
+        if (target && target.setAttribute) target.setAttribute("tabindex", "0");
+        if (target && target.focus) target.focus();
+      } catch (error) {
+        // Roving is best-effort.
+      }
+    });
+  }
+  return row;
+}
+
 function paintPeriodStripParts(doc, host, model, handlers) {
   try {
     if (!host || !model) return null;
-    const row = periodStripRenderWeekRow(doc, model, handlers || {});
-    if (!row) return null;
-    if (typeof host.appendChild === "function") host.appendChild(row);
+    if (model.kind === "week") {
+      const row = periodStripRenderWeekRow(doc, model, handlers || {});
+      if (!row) return null;
+      if (typeof host.appendChild === "function") host.appendChild(row);
+      return row;
+    }
+    const frame = statsEl(doc, "div", { class: "bob-period-strip-parts-frame" });
+    if (!frame || typeof host.appendChild !== "function") return null;
+    host.appendChild(frame);
+    const row = periodStripRenderGroupedRow(doc, model, handlers || {}, { kind: model.kind });
+    if (row) frame.appendChild(row);
+    if (model.kind === "year" && Array.isArray(model.quarterFallbackColumns) && model.quarterFallbackColumns.length) {
+      const fallback = periodStripRenderGroupedRow(doc, model, handlers || {}, { kind: "year", columns: model.quarterFallbackColumns, fallback: true });
+      if (fallback) frame.appendChild(fallback);
+    }
     return row;
   } catch (error) {
     return null;
   }
 }
+
+function periodPartsTableMiniBar(doc, row, tallest) {
+  const bar = statsEl(doc, "span", { class: "bob-period-parts-mini-bar", "aria-hidden": "true" });
+  if (!bar || !row || !row.worked || !Array.isArray(row.stack) || tallest <= 0 || !(row.worked.value > 0)) return bar;
+  if (bar.style) bar.style.width = String(Math.max(0, Math.min(100, row.worked.value / tallest * 100))) + "%";
+  for (const entry of row.stack) {
+    const piece = statsEl(doc, "span", { class: "bob-period-strip-column-piece bob-day-strip-hue-" + (entry.hue || "gray"), "data-key": entry.key });
+    if (piece && piece.style && row.worked.value > 0) {
+      piece.style.flex = "0 0 " + String(Math.max(0, entry.minutes / row.worked.value * 100)) + "%";
+      piece.style.height = "3px";
+    }
+    if (piece && bar.appendChild) bar.appendChild(piece);
+  }
+  return bar;
+}
+
+function periodPartsReviewText(row) {
+  if (row.kind === "day") return periodStripCloseoutGlyph(row.closeout) || "–";
+  const state = row.review && typeof row.review.state === "string" ? row.review.state : "";
+  if (state === "reflected") return "✓ reflected";
+  if (state === "drafted") return "drafted";
+  if (state === "edited") return "edited";
+  return "–";
+}
+
+function periodPartsIsNotTracked(row) {
+  return Boolean(row && row.state !== "future" && row.worked && row.worked.quality === "not_tracked");
+}
+
+function periodPartsChildLink(doc, row, model, handlers) {
+  const isPreAdoptionYear = model.kind === "all" && row.kind === "year" && !row.exists;
+  if (!row.path || isPreAdoptionYear) return statsEl(doc, "span", { class: "bob-period-parts-child-label" }, row.label || row.id);
+  const target = row.path.replace(/\.md$/, "");
+  const link = statsEl(doc, "a", {
+    class: "internal-link bob-period-parts-child-link",
+    href: target,
+    "data-href": target,
+    "aria-label": (row.label || row.id) + (row.rangeLabel ? ", " + row.rangeLabel : ""),
+  }, row.label || row.id);
+  if (link && row.path) {
+    try { link.setAttribute("data-tooltip-position", "top"); } catch (error) { /* best-effort */ }
+  }
+  void handlers;
+  return link;
+}
+
+// Paint bob-period-parts as a semantic, live table. It uses bob's report strings
+// and the same hue catalog as the strip; future rows intentionally stop after
+// Child and Dates.
+function paintPeriodPartsTable(host, model) {
+  try {
+    if (!host || !model) return null;
+    const doc = host.ownerDocument || (typeof document !== "undefined" ? document : null);
+    if (!doc) return null;
+    while (host.firstChild) host.removeChild(host.firstChild);
+    const root = statsEl(doc, "div", { class: "bob-period-parts-table-host" });
+    if (!root) return null;
+    host.appendChild(root);
+    if (model.state === "unavailable" || model.state === "older-bob") {
+      root.appendChild(statsEl(doc, "div", { class: "bob-period-parts-note" }, model.state === "older-bob" ? "Period parts need a newer bob." : "Period parts unavailable — " + ((model.error && model.error.title) || "bob periods failed") + "."));
+      return root;
+    }
+    if (model.stale) root.appendChild(statsEl(doc, "div", { class: "bob-period-parts-note", title: model.staleTitle || "Refresh failed" }, "refresh failed"));
+    if (model.state === "skeleton") root.appendChild(statsEl(doc, "div", { class: "bob-period-parts-note" }, "Loading period parts…"));
+    const rows = Array.isArray(model.children) ? model.children : [];
+    const hasDone = model.kind === "week";
+    const columns = ["Child", "Dates", "Worked", ...(hasDone ? ["Done"] : []), "Review", "Summary"];
+    const table = statsEl(doc, "div", { class: "bob-period-parts-table bob-period-parts-table-kind-" + model.kind, role: "table", "aria-label": "Parts of " + (model.periodId || "period") });
+    const header = statsEl(doc, "div", { class: "bob-period-parts-row bob-period-parts-header", role: "row" });
+    for (const name of columns) header.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-" + name.toLowerCase(), role: "columnheader" }, name));
+    table.appendChild(header);
+    const numeric = rows.map((row) => row.worked && typeof row.worked.value === "number" ? row.worked.value : 0);
+    const tallest = Math.max(0, ...numeric);
+    for (const row of rows) {
+      const future = row.state === "future";
+      const notTracked = periodPartsIsNotTracked(row);
+      const line = statsEl(doc, "div", { class: "bob-period-parts-row" + (future ? " bob-period-parts-row-future" : "") + (notTracked ? " bob-period-parts-row-not-tracked" : ""), role: "row", "data-state": row.state });
+      line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-child", role: "cell" }));
+      const childCell = line.children[line.children.length - 1];
+      childCell.appendChild(periodPartsChildLink(doc, row, model));
+      line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-dates", role: "cell" }, row.rangeLabel || ""));
+      if (!future) {
+        const workedText = notTracked ? "not tracked" : ((row.worked && row.worked.display) || "–") + (row.worked && row.worked.soFar ? " so far" : "");
+        const workedCell = statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-worked", role: "cell", title: workedText });
+        workedCell.appendChild(statsEl(doc, "span", { class: "bob-period-parts-worked-value" }, workedText));
+        workedCell.appendChild(periodPartsTableMiniBar(doc, row, tallest));
+        line.appendChild(workedCell);
+        if (hasDone) line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-done", role: "cell" }, row.done && typeof row.done.display === "string" ? row.done.display : "–"));
+        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-review", role: "cell" }, periodPartsReviewText(row)));
+        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-summary " + (row.headline ? "bob-period-parts-summary-headline" : "bob-period-parts-summary-mostly"), role: "cell" }, row.headline || row.mostly || ""));
+      }
+      table.appendChild(line);
+    }
+    root.appendChild(table);
+    return root;
+  } catch (error) {
+    return null;
+  }
+}
 // ---- src/239-plugin-period-strip-render.js ----
-// DOM painter for the week member of the period stats strip. The host element
+// DOM painter for the period stats strip family. The host element
 // stays stable; each update replaces only its children from the current model.
 // Interactive targets are spans with role="link": Obsidian's global button rules
 // must never be able to resize the strip again. Facts and lanes reuse the Day
@@ -47842,9 +48138,10 @@ function paintPeriodStrip(host, model, handlers) {
     const doc = host.ownerDocument || (typeof document !== "undefined" ? document : null);
     if (!doc) return null;
     while (host.firstChild) host.removeChild(host.firstChild);
+    const kind = model.kind || "week";
     const root = statsEl(doc, "div", {
-      class: "bob-period-strip bob-period-strip-kind-week bob-period-strip-state-" + model.state,
-      "aria-label": model.ariaLabel || ("Week stats for " + (model.periodId || "week")),
+      class: "bob-period-strip bob-period-strip-kind-" + kind + " bob-period-strip-state-" + model.state,
+      "aria-label": model.ariaLabel || ((typeof periodStripKindTitle === "function" ? periodStripKindTitle(kind) : "Period") + " stats for " + (model.periodId || "period")),
     });
     if (!root) return null;
     host.appendChild(root);
@@ -47856,11 +48153,6 @@ function paintPeriodStrip(host, model, handlers) {
     }
     if (model.state === "older-bob") {
       const line = statsEl(doc, "div", { class: "bob-period-strip-note" }, "Period stats need a newer bob (bob periods not found).");
-      if (line) root.appendChild(line);
-      return root;
-    }
-    if (model.state === "queued") {
-      const line = statsEl(doc, "div", { class: "bob-period-strip-note" }, "Quarter, year, and all-time strips arrive with the parts phase.");
       if (line) root.appendChild(line);
       return root;
     }
@@ -48076,6 +48368,9 @@ class BobLedgerToolsPeriodStripMixin {
       if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
         this.registerMarkdownCodeBlockProcessor("bob-stats-strip", (source, el, ctx) =>
           this.renderPeriodStripFence(el, ctx, source),
+        );
+        this.registerMarkdownCodeBlockProcessor("bob-period-parts", (source, el, ctx) =>
+          this.renderPeriodStripFence(el, ctx, source, "table"),
         );
       }
     } catch (error) {
@@ -48383,6 +48678,7 @@ class BobLedgerToolsPeriodStripMixin {
   periodStripFinishPaint(record, model, handlers, stamp) {
     try {
       const key = [
+        record.surface || "strip",
         model.state,
         model.periodId,
         String(stamp === undefined ? "" : stamp),
@@ -48390,10 +48686,12 @@ class BobLedgerToolsPeriodStripMixin {
         model.error ? model.error.code : "",
         (model.facts || []).map((fact) => [fact.display, (fact.ref && fact.ref.mark) || "", (fact.ref && fact.ref.display) || ""].join(":")).join(","),
         (model.columns || []).map((column) => [column.id, column.state, (column.worked && column.worked.display) || "", column.mark || ""].join(":")).join(","),
+        (model.children || []).map((child) => [child.id, child.state, (child.worked && child.worked.display) || "", child.headline || "", child.mostly || ""].join(":")).join(","),
       ].join("|");
       if (record.paintedKey === key) return model;
       record.paintedKey = key;
-      paintPeriodStrip(record.el, model, handlers);
+      if (record.surface === "table") paintPeriodPartsTable(record.el, model);
+      else paintPeriodStrip(record.el, model, handlers);
     } catch (error) {
       // Painting is best-effort.
     }
@@ -48482,7 +48780,7 @@ class BobLedgerToolsPeriodStripMixin {
   // selects the period member; a canonical daily note path (or a `day:` line)
   // renders the Day strip; anything else gets a muted line. Nothing on
   // mobile or wherever `bob` cannot spawn. Never throws.
-  renderPeriodStripFence(el, ctx, source) {
+  renderPeriodStripFence(el, ctx, source, surface) {
     if (!el) return;
     try {
       try {
@@ -48500,6 +48798,18 @@ class BobLedgerToolsPeriodStripMixin {
           else el.textContent = "";
           const doc = statsDocFor(el);
           const note = statsEl(doc, "div", { class: "bob-period-strip-fence-note" }, "bob-stats-strip needs a period note, a daily note, or a period: / day: line.");
+          if (note) el.appendChild(note);
+        } catch (error) {
+          // Muted-line fallback is best-effort.
+        }
+        return;
+      }
+      if (surface === "table" && parsed.kind === "day") {
+        try {
+          if (typeof el.empty === "function") el.empty();
+          else el.textContent = "";
+          const doc = statsDocFor(el);
+          const note = statsEl(doc, "div", { class: "bob-period-parts-note" }, "bob-period-parts needs a period note.");
           if (note) el.appendChild(note);
         } catch (error) {
           // Muted-line fallback is best-effort.
@@ -48529,7 +48839,7 @@ class BobLedgerToolsPeriodStripMixin {
         return;
       }
       if (!this.periodStripCanSpawn()) return;
-      const record = { el, periodId: parsed.id, kind: parsed.kind, path: sourcePath, observer: null, visible: true };
+      const record = { el, periodId: parsed.id, kind: parsed.kind, surface: surface === "table" ? "table" : "strip", path: sourcePath, observer: null, visible: true };
       this.periodStripViewsStore().add(record);
       if (ctx && typeof ctx.addChild === "function") {
         let child = null;
@@ -89330,7 +89640,10 @@ module.exports.helpers = {
   periodStripClassifyId,
   periodStripModel,
   periodStripWeekColumns,
+  periodStripTableRows,
+  periodStripYearQuarterColumns,
   paintPeriodStripParts,
+  paintPeriodPartsTable,
   paintPeriodStrip,
   periodStripShowArgs,
   DAY_STRIP_RECHECK_DEBOUNCE_MS,

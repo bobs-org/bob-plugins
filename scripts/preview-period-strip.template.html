@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bob period strip preview matrix</title>
+  <title>Bob period strip and parts table preview matrix</title>
   <style>
     :root { color-scheme: light; }
     * { box-sizing: border-box; }
@@ -47,6 +47,7 @@
       font: 16px/1.45 var(--font-interface);
     }
     .preview-strip { width: 100%; min-width: 0; }
+    .preview-table { width: 100%; min-width: 0; }
     .preview-report { margin-top: 16px; color: var(--text-muted); font-size: 12px; }
   </style>
   <style id="obsidian-baseline">__OBSIDIAN_BASELINE_CSS__</style>
@@ -75,6 +76,10 @@
       { id: "closed", title: "Closed week with gaps", report: "closed" },
       { id: "pre-ledger", title: "Pre-ledger week · hatched", report: "pre-ledger" },
       { id: "future", title: "Future week · quiet line", report: "future" },
+      { id: "current-quarter", title: "Current quarter · 14 weeks", report: "current-quarter" },
+      { id: "closed-quarter", title: "Closed quarter", report: "closed-quarter" },
+      { id: "year", title: "2026 · 53 weeks", report: "year" },
+      { id: "all", title: "All time · quarters by year", report: "all" },
       { id: "skeleton", title: "First load · skeleton", report: null },
     ];
     function statsDocFor(el) { return (el && el.ownerDocument) || document; }
@@ -107,14 +112,20 @@
           const host = document.createElement("div");
           host.className = "preview-strip";
           note.appendChild(host);
+          const tableHost = document.createElement("div");
+          tableHost.className = "preview-table";
+          note.appendChild(tableHost);
           wrap.appendChild(note);
           root.appendChild(wrap);
           const report = entry.report ? fixtures[entry.report] : null;
           const periodId = entry.report ? fixtures[entry.report].period.id : "2026-W45";
           const model = helpers.periodStripModel(report, periodId, { laneView: "both", fetchedAt: (report && report.generated_at) || null });
           helpers.paintPeriodStrip(host, model, {});
+          helpers.paintPeriodPartsTable(tableHost, model);
           const rect = host.getBoundingClientRect();
-          measurements.push({ state: entry.id, stripHeight: Math.ceil(rect.height), periodId });
+          const fallback = host.querySelector(".bob-period-strip-parts-fallback");
+          const tableRect = tableHost.getBoundingClientRect();
+          measurements.push({ state: entry.id, kind: model.kind, stripHeight: Math.ceil(rect.height), tableHeight: Math.ceil(tableRect.height), yearFallback: Boolean(fallback && getComputedStyle(fallback).display !== "none"), periodId });
         }
         return { measurements };
       },

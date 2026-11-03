@@ -157,14 +157,14 @@ test("week columns carry closed, current, future, and missing states", () => {
   assert.match(missing.tooltip, /not tracked/);
 });
 
-test("states: skeleton, unavailable, older-bob, hidden, and queued", () => {
+test("states: skeleton, unavailable, older-bob, and hidden", () => {
   assert.equal(helpers.periodStripModel(null, "2026-W45", { laneView: "both" }).state, "skeleton");
   const unavailable = helpers.periodStripModel(null, "2026-W45", { laneView: "both", error: { code: "timeout", title: "bob periods timed out" } });
   assert.equal(unavailable.state, "unavailable");
   const older = helpers.periodStripModel(null, "2026-W45", { laneView: "both", error: { code: "bob-not-found", title: "bob was not found" } });
   assert.equal(older.state, "older-bob");
   assert.equal(helpers.periodStripModel(null, "not-a-period", { laneView: "both" }).state, "hidden");
-  assert.equal(helpers.periodStripModel(current, "2026-Q4", { laneView: "both" }).state, "queued");
+  assert.equal(helpers.periodStripModel(null, "2026-Q4", { laneView: "both" }).state, "skeleton");
 });
 
 test("paint renders facts, lanes, and the seven-day parts row with no buttons", () => {

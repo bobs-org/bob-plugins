@@ -423,6 +423,7 @@ class DomNode {
       if (selector === "li") return node.tagName === "LI";
       if (selector === "a.internal-link") return node.tagName === "A" && node.className.split(/\s+/).includes("internal-link");
       if (selector === ".bob-event-link-time") return node.className.split(/\s+/).includes("bob-event-link-time");
+      if (selector === ".bob-off-clock-link-chip") return node.className.split(/\s+/).includes("bob-off-clock-link-chip");
       if (selector === ".bob-progress-mark") return node.className.split(/\s+/).includes("bob-progress-mark");
       return false;
     };
@@ -840,6 +841,68 @@ test("EP3 — the pill lands before the link container beside a trailing chip", 
   assert.ok(host);
   plugin.eventLinkTimeReadingPlace(root.anchor, host);
   assert.deepEqual(childClasses(root.content), ["bob-event-link-time", "internal-link", "bob-off-clock-link-chip"]);
+});
+
+// Both production Reading sweeps must coexist on an off-clock Event Task
+// Task Link. Run each order and a further refresh to catch placement churn
+// and duplicate hosts, while exercising the real clock resolver for tags,
+// inherited root defaults, and #on overrides.
+test("EP3/OC — Reading sweeps preserve pill/link/marks/chip order and clock parity", () => {
+  const cases = [
+    { id: "explicit", task: "- [ ] #task **0945-1015** Explicit #off [root:: bob] [type:: MEET] ^explicit", off: true },
+    { id: "inherited", task: "- [ ] #task **0945-1015** Inherited [root:: abby] [type:: MEET] ^inherited", off: true },
+    { id: "override", task: "- [ ] #task **0945-1015** Override #on [root:: abby] [type:: MEET] ^override", off: false },
+  ];
+  for (const item of cases) {
+    const { plugin } = makePlugin();
+    plugin.calendarEventsPaintEnabled = true;
+    plugin.offClockLinkChipsEnabled = true;
+    const note = ["## Events", item.task, "## Pomodoros", "- [ ] () — MEET", `  - [[#^${item.id}]]`];
+    plugin.calendarEventSourceLines = () => note;
+    plugin.taskThemeSourceTextFor = () => note.join("\n");
+    // Keep target lookup realistic while the clock result comes from the
+    // production taskEffectiveClockResolution path and fixture metadata.
+    plugin.pomodoroClockResolveTaskLineFrom = (link) => link.blockId === item.id ? item.task : null;
+    const root = readingLedgerRoot({ blockHref: `#^${item.id}`, withProgress: true });
+    const record = { el: root, ctx: { sourcePath: TODAY_PATH }, sourcePath: TODAY_PATH };
+    const chipSweep = () => plugin.sweepOffClockLinkChipsReadingView(record);
+    const pillSweep = () => plugin.sweepEventLinkTimesReadingView(record);
+    const orders = [[pillSweep, chipSweep], [chipSweep, pillSweep]];
+    for (const order of orders) {
+      for (const sweep of order) assert.equal(sweep(), true);
+      assert.equal(innerPillAttrs(pillHost(root))["data-off-clock"] === "true", item.off, item.id);
+      assert.equal(root.querySelectorAll(".bob-off-clock-link-chip").length, item.off ? 1 : 0, item.id);
+      const context = plugin.progressMarkReadingContext(root.li, root, {
+        includeStruck: true, includeClosedEntry: true, allowLedgerMarks: true,
+      });
+      assert.ok(context, `${item.id}: both hosts preserve ledger context`);
+      assert.deepEqual(context, { anchor: root.anchor, target: "", blockId: item.id });
+      if (item.off) {
+        assert.deepEqual(childClasses(root.content), [
+          "bob-event-link-time", "bob-progress-mark", "internal-link", "bob-off-clock-link-chip",
+        ]);
+      }
+    }
+    // A repeated paired refresh is stable and never duplicates either host.
+    pillSweep(); chipSweep();
+    assert.equal(root.querySelectorAll(".bob-event-link-time").length, 1);
+    assert.equal(root.querySelectorAll(".bob-off-clock-link-chip").length, item.off ? 1 : 0);
+    if (item.off) assert.deepEqual(childClasses(root.content), [
+      "bob-event-link-time", "bob-progress-mark", "internal-link", "bob-off-clock-link-chip",
+    ]);
+
+    // Each feature's gate can remove its own host without disturbing the other.
+    plugin.eventLinkTimesEnabled = false;
+    pillSweep();
+    assert.equal(root.querySelectorAll(".bob-event-link-time").length, 0);
+    assert.equal(root.querySelectorAll(".bob-off-clock-link-chip").length, item.off ? 1 : 0);
+    plugin.eventLinkTimesEnabled = true;
+    pillSweep();
+    plugin.offClockLinkChipsEnabled = false;
+    chipSweep();
+    assert.equal(root.querySelectorAll(".bob-off-clock-link-chip").length, 0);
+    assert.equal(root.querySelectorAll(".bob-event-link-time").length, 1);
+  }
 });
 
 // EP7: the strike never runs through the pill, in either view.
